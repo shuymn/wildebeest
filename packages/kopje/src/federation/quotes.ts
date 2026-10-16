@@ -20,20 +20,17 @@ import { withinJsonBounds } from '../platform/json-bounds'
 import { callStore, type StoreStub } from '../platform/store-client'
 import { StoreUnavailableError } from '../platform/store-errors'
 
-// The Worker's part of verifying a received quote (domain/quotes.ts, Mastodon's ActivityPub::VerifyQuoteService): it
-// fetches what the Store's work names, through the safe loader (NET-1) within a fetch budget (RES-6) that counts every
-// fetch and redirect hop, and hands each document to the Store, which keeps what it completed and decides in one
-// transaction. Three stages of one document each: the quoted status when it is not stored, that status's author when
-// the Store does not have it, and the stamp (QuoteAuthorization). Each stage fits one budget, so a stage started with a
-// whole budget always finishes, and a quote whose stages need more than one budget goes on from where the last round
-// stopped. The stamp's embedded objects are never trusted: only their ids are read. Nothing of this instance's origin
-// is fetched.
-//
-// The inbox request that stored a quote runs its work inline (federation/inbound.ts) with what is left of its budget;
-// the job rounds (jobs/queue.ts, after the Store's inbound jobs, from the Queue and cron) take the rest, QUOTE_ROUND
-// quotes oldest due first, each with a budget of its own. Either way each fetch is signed with the key of the work's
-// rechecked fetch_as (a local recipient of the quoting status, or a local follower of its author) or else the instance
-// actor's (DATA-7).
+// The Worker's part of verifying a received quote (domain/quotes.ts, Mastodon's ActivityPub::VerifyQuoteService), run
+// only by the job rounds (jobs/queue.ts, after the Store's inbound jobs, from the Queue and cron; an inbox request that
+// made work due asks the Queue for one). A round claims QUOTE_ROUND quotes oldest due first, leasing them, and goes
+// through each one's stages: the quoted status when it is not stored, that status's author when the Store does not have
+// it, the status again once its author is stored, and the stamp (QuoteAuthorization), one document each, fetched
+// through the safe loader (NET-1) within a whole fetch budget of its own (RES-6: every fetch and redirect hop counts),
+// signed with the key of the work's rechecked fetch_as (a local recipient of the quoting status, or a local follower of
+// its author) or else the instance actor's (DATA-7). The Store keeps what each stage completed and decides in one
+// transaction; every failure of a stage is charged (a budget or deadline that ran out included), so a stage that never
+// fits a budget is given up after the last attempt. The stamp's embedded objects are never trusted: only their ids are
+// read. Nothing of this instance's origin is fetched.
 
 const AS_CONTEXT = 'https://www.w3.org/ns/activitystreams'
 
@@ -130,19 +127,17 @@ type Rpc = <T>(call: (store: StoreStub) => Promise<T>) => Promise<T>
 // One quote's work, a stage at a time (quoteWork: the quoted status, its author, the status again once its author is
 // stored, the stamp): each stage fetches one document through loaders of its own (`loadersFor(signer)`, signer the
 // work's rechecked fetch_as, a username, or null), so nothing one stage fetched answers another's fetch, and hands it
-// to the Store, which applies it only to the generation of the work it read. Inline (the inbox request), every stage is
-// best effort: what does not finish is left due for a job round, uncharged. In a round each stage has a whole budget,
-// and every failure of it is charged (a budget or deadline that ran out included), so a stage that never fits is given
-// up after the last attempt. Returns whether work is left due now: this quote's (unfinished), or another's (a quoted
-// status it stored has a quote of its own), for a later round.
-export async function verifyQuote(
+// to the Store, which applies it only to the generation, stage and fetch address of the work it read. Returns whether
+// work is left due now: this quote's (unfinished), or another's (a quoted status it stored has a quote of its own), for
+// a later round.
+async function verifyQuote(
 	rpc: Rpc,
 	build: string,
 	origin: string,
 	statusId: string,
 	loadersFor: (signer: string | null) => RemoteLoaders,
 	now: () => number,
-	run: { inline: boolean; generation?: number; state: FederationState }
+	run: { generation?: number; state: FederationState }
 ): Promise<boolean> {
 	// The quoted status, its author, the status again (now storable), the stamp, and the decision.
 	for (let stage = 0; stage < 5; stage++) {
@@ -162,7 +157,6 @@ export async function verifyQuote(
 			generation,
 			stage: work.stage,
 			fetch: work.fetch,
-			inline: run.inline,
 		}
 		if (work.stage === 'quoted' && work.fetch !== null) {
 			input.quoted = await loadStatus(work.fetch, origin, loaders.document)
@@ -180,15 +174,12 @@ export async function verifyQuote(
 		try {
 			result = await rpc((s) => s.completeQuote(build, { ...input, now: now() }))
 		} catch (error) {
-			// What the Store could not apply (a document it cannot store) fails this quote alone: charged in a round, left
-			// due for one inline; maintenance still stops the round.
+			// What the Store could not apply (a document it cannot store) fails this quote alone, charged; maintenance still
+			// stops the round.
 			if (error instanceof StoreUnavailableError) {
 				throw error
 			}
 			console.error({ event: 'kopje.quote.stage.failed', ...errorFields(error) })
-			if (run.inline) {
-				return true
-			}
 			await rpc((s) => s.chargeQuote(build, { statusId, generation, stage: work.stage, fetch: work.fetch, now: now() }))
 			return false
 		}
@@ -231,7 +222,6 @@ export async function verifyQuotes(env: Env, deps: InboxDeps): Promise<boolean> 
 	let more = claimed.more
 	for (const [i, id] of claimed.ids.entries()) {
 		const left = await verifyQuote(rpc, build, origin, id, loadersFor, deps.now, {
-			inline: false,
 			generation: claimed.generations[i],
 			state,
 		})

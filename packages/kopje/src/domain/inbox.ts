@@ -22,10 +22,9 @@ import { pushSequence } from './push'
 import {
 	continueRevocations,
 	NEW_GENERATION,
-	otherQuotesDue,
 	promoteQuote,
+	quotesDue,
 	quoteArrival,
-	madeDue,
 	recheckStamp,
 	revokeStamp,
 } from './quotes'
@@ -217,9 +216,6 @@ export type ReceiveResult = {
 	need?: { kind: 'status' | 'actor'; uri: string; signer?: FollowerSigner | 'instance' }
 	// Nothing changed, and the activity may apply later (its retraction could not be recorded): answered 503.
 	retry?: boolean
-	// The status whose quote has verification work due now, which the Worker runs inline within what is left of the
-	// request's fetch budget (federation/quotes.ts); what it leaves is taken by the job rounds.
-	verify?: string
 }
 
 function ignored(reason: string): ReceiveResult {
@@ -1729,8 +1725,7 @@ const relayedDelete: Handler<'RelayedDelete'> = (db, actor, activity, { now }) =
 		return ignored('not-a-stamp')
 	}
 	if (!activity.proven) {
-		const rechecked = recheckStamp(db, actor, activity.object, now)
-		return rechecked === null ? ignored('unknown-stamp') : { ...applied('stamp-rechecked'), verify: rechecked }
+		return recheckStamp(db, actor, activity.object, now) ? applied('stamp-rechecked') : ignored('unknown-stamp')
 	}
 	return retractUnknown(db, actor, activity.object, now)
 }
@@ -1823,21 +1818,11 @@ function outcome(result: { applied: boolean; reason: string }): ReceiveResult {
 	return result.applied ? applied(result.reason) : ignored(result.reason)
 }
 
-// The outcome, with the status whose quote this transaction made due itself, for the Worker to verify inline (never work
-// that was already due, backed off or leased when the activity arrived: quotes.ts madeDue).
-function withVerify(db: Db, result: ReceiveResult, statusId: string | undefined): ReceiveResult {
-	return statusId !== undefined && madeDue(db, statusId) ? { ...result, verify: statusId } : result
-}
+const create: Handler<'Create'> = (db, actor, activity, input) =>
+	outcome(storeRemoteStatus(db, actor, activity.object, storeContext(db, input)))
 
-const create: Handler<'Create'> = (db, actor, activity, input) => {
-	const stored = storeRemoteStatus(db, actor, activity.object, storeContext(db, input))
-	return withVerify(db, outcome(stored), stored.statusId)
-}
-
-const updateStatus: Handler<'UpdateStatus'> = (db, actor, activity, input) => {
-	const updated = updateRemoteStatus(db, actor, activity.object, storeContext(db, input))
-	return withVerify(db, outcome(updated), updated.statusId)
-}
+const updateStatus: Handler<'UpdateStatus'> = (db, actor, activity, input) =>
+	outcome(updateRemoteStatus(db, actor, activity.object, storeContext(db, input)))
 
 // What an inbound Like or Announce of a status requires of its actor: that it may see the status by itself (canView, as
 // a remote viewer). So an author who blocks the actor (VIS-13) or its domain (VIS-15) refuses both. Mastodon's Like and
@@ -2065,7 +2050,7 @@ const announce: Handler<'Announce'> = (db, actor, activity, input) => {
 	recountStatus(db, originalId)
 	// The local author hears of the boost only if they may see it (notify applies the rule to the wrapper too).
 	notify(db, { recipientId: original.account_id, type: 'reblog', fromId: actor.id, statusId: originalId, now })
-	return withVerify(db, applied('boosted'), originalId)
+	return applied('boosted')
 }
 
 // Whether the remote account `id` deleted itself (its tombstone, as isDeletedActor).
@@ -2210,7 +2195,7 @@ const add: Handler<'Add'> = (db, actor, activity, input) => {
 	}
 	// A pinned status arrives as a root, cached or not: a cached one's quote is promoted (quotes.ts).
 	promoteQuote(db, status.id, quoteArrival(db, actor.id, null), input.now)
-	return withVerify(db, applied('pinned'), status.id)
+	return applied('pinned')
 }
 
 const remove: Handler<'Remove'> = (db, actor, activity) => {
@@ -2295,10 +2280,9 @@ function receive(db: Db, input: ReceiveInput): ReceiveResult {
 	}
 	const handler = HANDLERS[activity.type] as Handler<typeof activity.type>
 	const result = handler(db, actor, activity, input)
-	// A sync of the actor's collections was asked for, or quotes other than the one verified inline have work due (a
-	// status this activity stored was the target of unresolved quotes): the Worker asks the Queue for a round (cron runs
-	// one regardless).
-	const waiting = ('syncWaiting' in actor && actor.syncWaiting) || otherQuotesDue(db, now, result.verify ?? null)
+	// A sync of the actor's collections was asked for, or quotes have verification work due (only the job rounds verify
+	// them): the Worker asks the Queue for a round (cron runs one regardless).
+	const waiting = ('syncWaiting' in actor && actor.syncWaiting) || quotesDue(db, now)
 	return waiting ? { ...result, jobsPending: true } : result
 }
 

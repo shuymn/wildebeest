@@ -5,8 +5,7 @@ import { CryptographicKey, Delete, Multikey, Person } from '@fedify/vocab'
 import { describe, expect, it } from 'vitest'
 
 import { sql } from './api-helpers'
-import { harness, inboxDeps, NOW } from './app-helpers'
-import { fixtureKeyGen } from './federation-helpers'
+import { inboxDeps, NOW } from './app-helpers'
 import { BUILD } from './helpers'
 import {
 	LOCAL,
@@ -16,7 +15,6 @@ import {
 	MISSKEY_CONTEXT,
 	type RemoteWeb,
 	type TestActor,
-	signedInit,
 } from './inbox-helpers'
 import {
 	ALICE,
@@ -144,9 +142,22 @@ function quoting(actor: TestActor, target: string, stamp: string | null, extra: 
 	})
 }
 
+// The app, where each inbox request is followed by the job rounds it asks the Queue for (only rounds verify quotes);
+// postOnly posts without them.
+async function settled(clock = { now: NOW }) {
+	const t = await setup(clock)
+	const postOnly = t.post
+	const post = async (...args: Parameters<typeof postOnly>) => {
+		const status = await postOnly(...args)
+		await rounds(t, clock.now)
+		return status
+	}
+	return Object.assign(t, { post, postOnly })
+}
+
 // bob (followed by alice) and carol, a quoted author on another server.
 async function world(clock = { now: NOW }) {
-	const t = await setup(clock)
+	const t = await settled(clock)
 	const bob = await mastodonActor(t.web, 'bob')
 	await followed(t, bob)
 	const carol = await mastodonActor(t.web, 'carol', { origin: OTHER, key: 2 })
@@ -305,8 +316,8 @@ describe('storing and verifying a received quote (VerifyQuoteService)', () => {
 		const flaky = quotedPair(t, bob, carol)
 		const served = t.web.served.get(flaky.stamp)!
 		t.web.fail(flaky.stamp, 503)
-		expect(await t.post(bob, create(bob, flaky.quote))).toBe(202)
-		// Inline verification is best effort: nothing is charged, the work is left due for a round, which charges it.
+		// The inbox request only records the work; the round it asks for charges the failure.
+		expect(await t.postOnly(bob, create(bob, flaky.quote))).toBe(202)
 		expect(await quoteOf(t, flaky.quote.id)).toMatchObject({ state: 'pending', attempts: 0, verify_after: NOW })
 		expect(await rounds(t, NOW)).toBe(1)
 		expect(await quoteOf(t, flaky.quote.id)).toMatchObject({
@@ -326,10 +337,9 @@ describe('storing and verifying a received quote (VerifyQuoteService)', () => {
 		const { t, bob, carol } = await world()
 		const pair = quotedPair(t, bob, carol)
 		t.web.fail(pair.stamp, 503)
+		// The round after the inbox request is the first try; five retries follow.
 		expect(await t.post(bob, create(bob, pair.quote))).toBe(202)
-		// The inline try charged nothing; the rounds are the first try and five retries.
 		let at = NOW
-		await rounds(t, at)
 		for (const delay of QUOTE_BACKOFF_MS) {
 			at += delay
 			await rounds(t, at)
@@ -341,12 +351,12 @@ describe('storing and verifying a received quote (VerifyQuoteService)', () => {
 			verify_after: null,
 		})
 		// Delivered again (a root), it starts over.
-		expect(await t.post(bob, create(bob, pair.quote))).toBe(202)
+		expect(await t.postOnly(bob, create(bob, pair.quote))).toBe(202)
 		expect(await quoteOf(t, pair.quote.id)).toMatchObject({ attempts: 0, verify_after: NOW, hops: QUOTE_HOPS })
 	})
 
 	it('stores a legacy quote (no quote property) pending, and accepts it only as a self-quote', async () => {
-		const t = await setup()
+		const t = await settled()
 		const neko = await misskeyActor(t.web, '9abcdefghi', 'neko')
 		await followed(t, neko)
 		const own = misskeyNote(neko, { _misskey_quote: undefined, quoteUrl: undefined, quoteUri: undefined })
@@ -419,11 +429,10 @@ describe('storing and verifying a received quote (VerifyQuoteService)', () => {
 })
 
 describe('durable work on every ingestion path', () => {
-	it('records due work with the status, which a round completes if the Worker never verifies inline', async () => {
+	it('leaves an inbox Create’s quote due and asks for a round, which verifies it', async () => {
 		const { t, bob, carol } = await world()
 		const { target, quote } = quotedPair(t, bob, carol)
-		const bobId = (await sql<{ id: string }>(t.store, 'SELECT id FROM accounts WHERE uri = ?', bob.uri))[0]!.id
-		// The Store's transaction alone, as a Worker that died after it would leave it.
+		// The Store's part: the work is recorded with the status, and a job round asked for.
 		const result = await t.store.receiveActivity(BUILD, {
 			now: NOW,
 			origin: LOCAL,
@@ -431,23 +440,32 @@ describe('durable work on every ingestion path', () => {
 			actor: null,
 			activity: { type: 'Create', id: `${quote.id}/activity`, object: parseRemoteStatus(quote)! },
 		})
-		expect(result).toMatchObject({ applied: true, verify: expect.any(String) })
+		expect(result).toMatchObject({ applied: true, jobsPending: true })
 		expect(await quoteOf(t, quote.id)).toMatchObject({
 			state: 'pending',
 			verify_after: NOW,
 			hops: QUOTE_HOPS,
 			fetch_as: ALICE,
 		})
-		expect(bobId).toBeDefined()
+		// Through the inbox: nothing is fetched for the quote in the request; the Queue is asked for a round.
+		const other = quotedPair(t, bob, carol)
+		t.send.mockClear()
+		t.web.fetched.length = 0
+		expect(await t.postOnly(bob, create(bob, other.quote))).toBe(202)
+		expect(t.web.fetched).not.toContain(other.stamp)
+		expect(await quoteOf(t, other.quote.id)).toMatchObject({ state: 'pending', verify_after: NOW, attempts: 0 })
+		expect(t.send).toHaveBeenCalledWith({ kind: 'inbound-jobs' }, expect.anything())
 		await rounds(t, NOW)
 		expect(await quoteOf(t, quote.id)).toMatchObject({ state: 'accepted', verify_after: null })
+		expect(await quoteOf(t, other.quote.id)).toMatchObject({ state: 'accepted', verify_after: null })
 		expect(await quotesCount(t, target.id)).toBe(1)
+		expect(await quotesCount(t, other.target.id)).toBe(1)
 	})
 
 	it('records work for a boosted original and a search result, and asks for a round', async () => {
 		const { t, bob, carol } = await world()
 		const pair = quotedPair(t, bob, carol)
-		// dave's boost of bob's quote, the original fetched: verified inline with what the request has left.
+		// erin's boost of bob's quote, the original fetched: verified by the round the request asks for.
 		const erin = await mastodonActor(t.web, 'erin', { key: 3 })
 		await followed(t, erin)
 		t.web.serve(pair.quote.id, { '@context': AS, ...pair.quote })
@@ -475,12 +493,9 @@ describe('durable work on every ingestion path', () => {
 		t.web.signedOnly.set(own.id, `${ALICE_URI}#main-key`)
 		t.web.fail(`${own.id}x`, 404)
 		const quote = quoting(bob, own.id, null, { to: [followers], cc: [] })
-		// The first fetch fails in a way that may pass: the work stays, with alice (whose inbox received it) to fetch.
-		const served = t.web.served.get(own.id)!
-		t.web.fail(own.id, 503)
-		expect(await t.post(bob, create(bob, quote), { path: '/ap/users/alice/inbox' })).toBe(202)
+		// Received at alice's inbox: the work is due, with alice to fetch it.
+		expect(await t.postOnly(bob, create(bob, quote), { path: '/ap/users/alice/inbox' })).toBe(202)
 		expect(await quoteOf(t, quote.id)).toMatchObject({ state: 'pending', verify_after: NOW, fetch_as: ALICE })
-		t.web.served.set(own.id, served)
 		t.web.signers.length = 0
 		t.web.fetched.length = 0
 		await rounds(t, NOW)
@@ -961,16 +976,12 @@ describe('review round 1 regressions', () => {
 			},
 			2
 		)
-		expect(await t.post(bob, create(bob, heavy))).toBe(202)
-		// The request got as far as its budget allowed (the status, its author's address); nothing is charged inline.
-		expect(await quoteOf(t, heavy.id)).toMatchObject({ state: 'pending', verify_after: NOW, attempts: 0 })
-		expect(await sql(t.store, 'SELECT need_author FROM quotes')).toEqual([{ need_author: erin.uri }])
-		// A healthy self-quote of bob's whose inline try failed, due too.
+		expect(await t.postOnly(bob, create(bob, heavy))).toBe(202)
+		// A healthy self-quote of bob's, due too, behind the heavy one.
 		const own = mastodonNote(bob)
 		const healthy = quoting(bob, own.id, null)
-		t.web.fail(own.id, 503)
-		expect(await t.post(bob, create(bob, healthy))).toBe(202)
 		t.web.serve(own.id, { '@context': AS, ...own })
+		expect(await t.postOnly(bob, create(bob, healthy))).toBe(202)
 		const deps = { ...inboxDeps(() => t.store, t.web.loader), now: () => NOW }
 		// One round, each stage with a whole budget: the heavy quote (due first) is accepted, and the healthy one beside it.
 		await verifyQuotes(t.env, deps)
@@ -991,7 +1002,7 @@ describe('review round 1 regressions', () => {
 		})
 		redirected(t.web, erin.uri, erin.document, 5)
 		const pair = quotedPair(t, bob, erin)
-		expect(await t.post(bob, create(bob, pair.quote))).toBe(202)
+		expect(await t.postOnly(bob, create(bob, pair.quote))).toBe(202)
 		expect(await quoteOf(t, pair.quote.id)).toMatchObject({ attempts: 0, verify_after: NOW })
 		let at = NOW
 		const round = () => verifyQuotes(t.env, { ...inboxDeps(() => t.store, t.web.loader), now: () => at })
@@ -1014,11 +1025,10 @@ describe('review round 1 regressions', () => {
 		const erin = await mastodonActor(t.web, 'erin', { origin: OTHER, key: 7 })
 		const pair = quotedPair(t, bob, erin)
 		t.web.fail(erin.uri, 503)
+		// The round after the inbox request is the first try; five retries follow.
 		expect(await t.post(bob, create(bob, pair.quote))).toBe(202)
-		expect(await quoteOf(t, pair.quote.id)).toMatchObject({ state: 'pending', attempts: 0, verify_after: NOW })
-		// The inline try charged nothing; the rounds are the first try and five retries.
+		expect(await quoteOf(t, pair.quote.id)).toMatchObject({ state: 'pending', attempts: 1 })
 		let at = NOW
-		await rounds(t, at)
 		for (const delay of QUOTE_BACKOFF_MS) {
 			at += delay
 			await rounds(t, at)
@@ -1031,7 +1041,7 @@ describe('review round 1 regressions', () => {
 		expect(await sql(t.store, 'SELECT count(*) AS n FROM quotes WHERE need_author IS NOT NULL')).toEqual([{ n: 0 }])
 	})
 
-	it('verifies inline with the local follower’s key a followers-only self-quote received at the shared inbox', async () => {
+	it('verifies with the local follower’s key a followers-only self-quote received at the shared inbox', async () => {
 		const { t, bob } = await world()
 		const followers = `${bob.uri}/followers`
 		const own = mastodonNote(bob, { to: [followers], cc: [] })
@@ -1117,12 +1127,12 @@ describe('review round 1 regressions', () => {
 		// The status is public when first fetched; its author cannot be fetched yet.
 		t.web.fail(erin.uri, 503)
 		expect(await t.post(bob, create(bob, pair.quote))).toBe(202)
-		expect(await quoteOf(t, pair.quote.id)).toMatchObject({ state: 'pending', attempts: 0 })
+		expect(await quoteOf(t, pair.quote.id)).toMatchObject({ state: 'pending', attempts: 1 })
 		expect(await sql(t.store, 'SELECT need_author FROM quotes')).toEqual([{ need_author: erin.uri }])
 		// Before the next round its server makes it followers-only (and keeps the stamp).
 		t.web.serve(erin.uri, erin.document)
 		t.web.serve(pair.target.id, { '@context': AS, ...pair.target, to: [`${erin.uri}/followers`], cc: [] })
-		await rounds(t, NOW)
+		await rounds(t, NOW + QUOTE_BACKOFF_MS[0]!)
 		expect(await quoteOf(t, pair.quote.id)).toMatchObject({ state: 'pending', verify_after: null })
 		expect(await statusRow(t.store, pair.target.id)).toBeUndefined()
 		expect(await quotesCount(t, pair.target.id)).toBeUndefined()
@@ -1168,25 +1178,6 @@ describe('review round 1 regressions', () => {
 			verify_after: null,
 		})
 	})
-
-	it('charges no attempt when the bytes run out on a context, though fetches are left', async () => {
-		const { t, bob } = await world()
-		// erin's document names three JSON-LD contexts of about 900 KiB each: no more than two fit a budget's bytes.
-		const contexts = [1, 2, 3].map((n) => `${OTHER}/contexts/${n}.jsonld`)
-		for (const url of contexts) {
-			t.web.serve(url, { '@context': { pad: `${OTHER}/terms/${'p'.repeat(900 * 1024)}` } }, 'application/ld+json')
-		}
-		const erin = await mastodonActor(t.web, 'erin', {
-			origin: OTHER,
-			key: 7,
-			extra: { '@context': ['https://www.w3.org/ns/activitystreams', 'https://w3id.org/security/v1', ...contexts] },
-		})
-		const pair = quotedPair(t, bob, erin)
-		expect(await t.post(bob, create(bob, pair.quote))).toBe(202)
-		expect(await quoteOf(t, pair.quote.id)).toMatchObject({ state: 'pending', attempts: 0, verify_after: NOW })
-		await rounds(t, NOW)
-		expect(await quoteOf(t, pair.quote.id)).toMatchObject({ state: 'accepted', attempts: 0 })
-	}, 60_000)
 
 	it('takes an embedded target an Update brings for a quote it does not change', async () => {
 		const { t, bob } = await world()
@@ -1248,7 +1239,6 @@ describe('review round 1 regressions', () => {
 				statusId: id,
 				now: NOW,
 				origin: LOCAL,
-				inline: false,
 				quotedUri: read.quotedUri,
 				approvalUri: read.approvalUri,
 				generation: read.generation,
@@ -1270,7 +1260,11 @@ describe('review round 1 regressions', () => {
 		const fetching = await work()
 		expect(fetching).toMatchObject({ stage: 'author', fetch: erin.uri })
 		// While that verifier fetches erin, another request stores her: the stage is now the quoted status again.
-		await followed(t, erin)
+		await sql(
+			t.store,
+			"INSERT INTO accounts (id, uri, username, domain) VALUES ('977000000000000001', ?, 'erin', 'other.example')",
+			erin.uri
+		)
 		expect(await work()).toMatchObject({ stage: 'quoted', generation: fetching.generation })
 		// Its late 404 for erin is an outcome of a stage the work left: discarded, the work due.
 		await complete(fetching, { author: { kind: 'gone' } })
@@ -1302,7 +1296,6 @@ describe('review round 1 regressions', () => {
 			statusId: id,
 			now: NOW,
 			origin: LOCAL,
-			inline: false,
 			quotedUri: old.quotedUri,
 			approvalUri: old.approvalUri,
 			generation: old.generation,
@@ -1403,189 +1396,114 @@ describe('review round 1 regressions', () => {
 		expect(await quoteOf(t, quote.id)).toMatchObject({ state: 'pending', attempts: 0 })
 	})
 
-	it('coalesces replayed unproven Deletes: a genuine 404 revokes within a bounded number of rounds', async () => {
-		const { t, bob, carol } = await world()
-		const pair = quotedPair(t, bob, carol)
-		expect(await t.post(bob, create(bob, pair.quote))).toBe(202)
-		expect(await quoteOf(t, pair.quote.id)).toMatchObject({ state: 'accepted' })
-		const replay = () =>
-			t.store.receiveActivity(BUILD, {
-				now: NOW,
-				origin: LOCAL,
-				actorUri: carol.uri,
-				actor: null,
-				activity: { type: 'RelayedDelete', id: `${carol.uri}#delete-${nextId()}`, object: pair.stamp, proven: false },
-			})
-		// A third party replays the unproven Delete during every fetch of the stamp, which is gone now.
-		t.web.fail(pair.stamp, 404)
-		let replays = 0
+	type Work = {
+		verify_after: number | null
+		lease_until: number | null
+		generation: number
+		attempts: number
+		recheck: number
+	}
+	const workOf = async (t: Setup, uri: string) =>
+		(
+			await sql<Work>(
+				t.store,
+				`SELECT q.verify_after, q.lease_until, q.generation, q.attempts, q.recheck
+				FROM quotes q JOIN statuses s ON s.id = q.status_id WHERE s.uri = ?`,
+				uri
+			)
+		)[0]!
+
+	// An accepted quote, and an unproven relay of carol's Delete of its stamp through the inbox (dan relays it).
+	async function relayed() {
+		const w = await world()
+		const pair = quotedPair(w.t, w.bob, w.carol)
+		expect(await w.t.post(w.bob, create(w.bob, pair.quote))).toBe(202)
+		expect(await quoteOf(w.t, pair.quote.id)).toMatchObject({ state: 'accepted', verify_after: null })
+		const dan = await mastodonActor(w.t.web, 'dan', { origin: RELAY, key: 6 })
+		const replay = async () =>
+			expect(
+				await w.t.postOnly(dan, {
+					'@context': AS,
+					id: `${w.carol.uri}#delete-${nextId()}`,
+					type: 'Delete',
+					actor: w.carol.uri,
+					object: pair.stamp,
+				})
+			).toBe(202)
+		return { ...w, ...pair, replay }
+	}
+
+	// A round whose every fetch of the stamp first runs `during` (the work leased), then answers as the web does.
+	function roundWith(t: Setup, stamp: string, during: () => Promise<void>, now = NOW) {
 		const loader = {
 			...t.web.loader,
 			fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
 				const url = new URL(input instanceof Request ? input.url : input.toString())
-				if (url.href === pair.stamp) {
-					replays++
-					await replay()
+				if (url.href === stamp) {
+					await during()
 				}
 				return t.web.fetch(input, init)
 			}) as typeof fetch,
 		}
+		return () => verifyQuotes(t.env, { ...inboxDeps(() => t.store, loader), now: () => now })
+	}
+
+	it('coalesces replayed unproven Deletes: a 404 revokes, whatever is replayed during each fetch', async () => {
+		const { t, quote, stamp, replay } = await relayed()
+		// The first relay renews the idle check.
 		await replay()
-		const deps = { ...inboxDeps(() => t.store, loader), now: () => NOW }
-		let rounds = 0
-		while ((await quoteOf(t, pair.quote.id))?.state === 'accepted' && rounds < 5) {
-			await verifyQuotes(t.env, deps)
-			rounds++
+		const due = await workOf(t, quote.id)
+		expect(due).toMatchObject({ verify_after: NOW, attempts: 0, recheck: 0 })
+		// Replays while it is due change nothing.
+		await replay()
+		expect(await workOf(t, quote.id)).toEqual(due)
+		// Each round's fetch is preceded by a replay, which leaves the lease, generation and due time as they were and only
+		// marks the recheck. The first round's fetch fails in a way that may pass; the second finds the stamp gone.
+		let leased: Work | undefined
+		const during = async () => {
+			const before = await workOf(t, quote.id)
+			expect(before.lease_until).not.toBeNull()
+			expect(before.verify_after).toBe(before.lease_until)
+			await replay()
+			const after = await workOf(t, quote.id)
+			expect(after).toEqual({ ...before, recheck: 1 })
+			leased = after
 		}
-		expect(await quoteOf(t, pair.quote.id)).toMatchObject({ state: 'revoked', verify_after: null })
-		expect(rounds).toBe(1)
-		expect(replays).toBe(1)
+		t.web.fail(stamp, 503)
+		await roundWith(t, stamp, during)()
+		expect(leased?.generation).toBe(due.generation)
+		expect(await quoteOf(t, quote.id)).toMatchObject({
+			state: 'accepted',
+			attempts: 1,
+			verify_after: NOW + QUOTE_BACKOFF_MS[0]!,
+		})
+		// Backing off, a replay changes nothing either.
+		const backingOff = await workOf(t, quote.id)
+		await replay()
+		expect(await workOf(t, quote.id)).toEqual(backingOff)
+		t.web.fail(stamp, 404)
+		await roundWith(t, stamp, during, NOW + QUOTE_BACKOFF_MS[0]!)()
+		expect(await quoteOf(t, quote.id)).toMatchObject({ state: 'revoked', verify_after: null })
 	})
 
-	it('checks a valid stamp once more when a relayed Delete raced its fetch, and then stops', async () => {
-		const { t, bob, carol } = await world()
-		const pair = quotedPair(t, bob, carol)
-		expect(await t.post(bob, create(bob, pair.quote))).toBe(202)
-		const replay = () =>
-			t.store.receiveActivity(BUILD, {
-				now: NOW,
-				origin: LOCAL,
-				actorUri: carol.uri,
-				actor: null,
-				activity: { type: 'RelayedDelete', id: `${carol.uri}#delete-${nextId()}`, object: pair.stamp, proven: false },
-			})
+	it('checks a valid stamp once more when a relayed Delete raced its leased fetch, and then stops', async () => {
+		const { t, quote, stamp, replay } = await relayed()
+		await replay()
 		let raced = false
-		const loader = {
-			...t.web.loader,
-			fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
-				const url = new URL(input instanceof Request ? input.url : input.toString())
-				if (url.href === pair.stamp && !raced) {
-					raced = true
-					await replay()
-				}
-				return t.web.fetch(input, init)
-			}) as typeof fetch,
-		}
-		await replay()
-		const deps = { ...inboxDeps(() => t.store, loader), now: () => NOW }
+		const round = roundWith(t, stamp, async () => {
+			if (!raced) {
+				raced = true
+				const before = await workOf(t, quote.id)
+				await replay()
+				expect(await workOf(t, quote.id)).toEqual({ ...before, recheck: 1 })
+			}
+		})
 		// The round's fetch finds the stamp valid; the Delete that raced it asks for one more check, due at once.
-		expect(await verifyQuotes(t.env, deps)).toBe(true)
-		expect(await quoteOf(t, pair.quote.id)).toMatchObject({ state: 'accepted', verify_after: NOW, attempts: 0 })
-		expect(await verifyQuotes(t.env, deps)).toBe(false)
-		expect(await quoteOf(t, pair.quote.id)).toMatchObject({ state: 'accepted', verify_after: null })
-	})
-
-	// The app over the test's Store with a fetch of the test's own, for driving the inbox's inline verification.
-	function appWith(t: Setup, fetch: typeof globalThis.fetch) {
-		const app = harness(t.store, {}, undefined, {
-			keygen: fixtureKeyGen,
-			loader: { fetch, checkHost: () => Promise.resolve() },
-		})
-		return async (actor: TestActor, activity: unknown) =>
-			(await app.request('/inbox', await signedInit(actor, '/inbox', activity, { at: NOW }))).status
-	}
-
-	function deferred() {
-		let resolve!: () => void
-		const promise = new Promise<void>((r) => {
-			resolve = r
-		})
-		return { promise, resolve }
-	}
-
-	const urlOf = (input: RequestInfo | URL) => new URL(input instanceof Request ? input.url : input.toString()).href
-
-	function relay(actor: TestActor, object: string) {
-		return { '@context': AS, id: `${actor.uri}#delete-${nextId()}`, type: 'Delete', actor: actor.uri, object }
-	}
-
-	it('discards an inline outcome once a round has leased the work, so the round’s 404 revokes', async () => {
-		const { t, bob, carol } = await world()
-		const pair = quotedPair(t, bob, carol)
-		expect(await t.post(bob, create(bob, pair.quote))).toBe(202)
-		const dan = await mastodonActor(t.web, 'dan', { origin: RELAY, key: 6 })
-		const inlineFetching = deferred()
-		const roundFetching = deferred()
-		// The inline verifier's stamp fetch waits for the round's claim and then fails in a way that may pass; the round's
-		// fetch waits until the inline verifier has finished, then finds the stamp gone.
-		let inlineDone = false
-		const inlineFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-			if (urlOf(input) === pair.stamp) {
-				inlineFetching.resolve()
-				await roundFetching.promise
-				return new Response('busy', { status: 503 })
-			}
-			return t.web.fetch(input, init)
-		}) as typeof fetch
-		const post = appWith(t, inlineFetch)
-		// An unproven relay of carol's Delete renews the idle check and verifies it inline.
-		const request = post(dan, relay(carol, pair.stamp)).then((status) => {
-			inlineDone = true
-			return status
-		})
-		await inlineFetching.promise
-		let request_: Promise<number> | undefined = request
-		const roundFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-			if (urlOf(input) === pair.stamp) {
-				roundFetching.resolve()
-				await request_
-				expect(inlineDone).toBe(true)
-				return new Response('gone', { status: 404 })
-			}
-			return t.web.fetch(input, init)
-		}) as typeof fetch
-		await verifyQuotes(t.env, {
-			...inboxDeps(() => t.store, { fetch: roundFetch, checkHost: () => Promise.resolve() }),
-			now: () => NOW,
-		})
-		request_ = undefined
-		expect(await request).toBe(202)
-		expect(await quoteOf(t, pair.quote.id)).toMatchObject({ state: 'revoked', verify_after: null })
-	})
-
-	it('starts no inline verifier for work that is already due or leased: replays during a fetch cannot stop a 404', async () => {
-		const { t, bob, carol } = await world()
-		const pair = quotedPair(t, bob, carol)
-		expect(await t.post(bob, create(bob, pair.quote))).toBe(202)
-		const dan = await mastodonActor(t.web, 'dan', { origin: RELAY, key: 6 })
-		// Inline fetches of the stamp are counted: the replays must start none.
-		let inlineStampFetches = 0
-		const post = appWith(t, ((input: RequestInfo | URL, init?: RequestInit) => {
-			if (urlOf(input) === pair.stamp) {
-				inlineStampFetches++
-			}
-			return t.web.fetch(input, init)
-		}) as typeof fetch)
-		// The first relay renews the idle check; its inline fetch finds the stamp still valid... once.
-		expect(await post(dan, relay(carol, pair.stamp))).toBe(202)
-		expect(inlineStampFetches).toBe(1)
-		expect(await quoteOf(t, pair.quote.id)).toMatchObject({ state: 'accepted', verify_after: null })
-		// Now the stamp is gone. A relay renews the check, then replays arrive while it is due and during the round's
-		// fetch (the work leased), each through the inbox.
-		t.web.fail(pair.stamp, 404)
-		const renewal = appWith(t, ((input: RequestInfo | URL, init?: RequestInit) =>
-			urlOf(input) === pair.stamp
-				? Promise.reject(new TypeError('network connection lost'))
-				: t.web.fetch(input, init)) as typeof fetch)
-		expect(await renewal(dan, relay(carol, pair.stamp))).toBe(202)
-		expect(await quoteOf(t, pair.quote.id)).toMatchObject({ state: 'accepted', verify_after: NOW, attempts: 0 })
-		inlineStampFetches = 0
-		expect(await post(dan, relay(carol, pair.stamp))).toBe(202)
-		expect(inlineStampFetches).toBe(0)
-		let replays = 0
-		const roundFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-			if (urlOf(input) === pair.stamp) {
-				replays++
-				expect(await post(dan, relay(carol, pair.stamp))).toBe(202)
-			}
-			return t.web.fetch(input, init)
-		}) as typeof fetch
-		await verifyQuotes(t.env, {
-			...inboxDeps(() => t.store, { fetch: roundFetch, checkHost: () => Promise.resolve() }),
-			now: () => NOW,
-		})
-		expect(replays).toBe(1)
-		expect(inlineStampFetches).toBe(0)
-		expect(await quoteOf(t, pair.quote.id)).toMatchObject({ state: 'revoked', verify_after: null })
+		expect(await round()).toBe(true)
+		expect(raced).toBe(true)
+		expect(await quoteOf(t, quote.id)).toMatchObject({ state: 'accepted', verify_after: NOW, attempts: 0 })
+		expect((await workOf(t, quote.id)).recheck).toBe(0)
+		expect(await round()).toBe(false)
+		expect(await quoteOf(t, quote.id)).toMatchObject({ state: 'accepted', verify_after: null })
 	})
 })

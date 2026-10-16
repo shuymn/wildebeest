@@ -1281,9 +1281,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   of its own, so no stage reads another's fetch; between stages only the author's address is kept, never a fetched
   document, so the status is stored only from a fresh fetch. Each stage's outcome applies only to the generation of
   the work it read (a number drawn anew whenever the quote's target, stamp, stage or outcome changes), so a late or
-  concurrent outcome is discarded. Inline in the inbox request a quote is verified best effort with what is left of the
-  request's budget and never charged: what does not finish is left due. A job round (Queue or cron) verifies at most
-  10 quotes, each stage with a whole budget of its own (8 fetches, redirect hops and contexts included), so a heavy or
+  concurrent outcome is discarded. Only job rounds verify quotes: an inbox request that makes work due only asks the
+  Queue for a round, and a round leases what it claims, so nothing else touches the work meanwhile; a relayed `Delete`
+  without the author's proof renews only idle work, leaves work that is due or backing off as it is, and only marks a
+  leased one to be checked once more, so replays never keep a genuine 404 from applying. A job round (Queue or cron)
+  verifies at most 10 quotes, each stage with a whole budget of its own (8 fetches, redirect hops and contexts included), so a heavy or
   failing quote starves no other, and charges every failure of a stage, a budget or deadline that ran out included, as
   it does a stage the Store cannot apply: a stage that never fits a budget is given up after the last attempt, and a
   round that only failed asks for no other (the backoff says when the work is due). A status stored for a

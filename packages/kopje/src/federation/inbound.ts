@@ -15,7 +15,6 @@ import {
 	requestBudget,
 	requireObjectRoot,
 } from './loader'
-import { verifyQuote } from './quotes'
 import { fetchActor } from './remote-actor'
 import {
 	ACTOR_TYPES,
@@ -26,7 +25,6 @@ import {
 	typeIs,
 } from './remote-status'
 import type { ActivityRef, InboundActivity, Prefetched, ReceiveResult, RemoteActorInput } from '../domain/inbox'
-import { errorFields } from '../platform/error-message'
 import { withinJsonBounds } from '../platform/json-bounds'
 import { isActivityPubMediaType, parseMediaType } from '../platform/media-type'
 import { callStore } from '../platform/store-client'
@@ -50,8 +48,6 @@ import { importPublicKeyPem } from '../security/key-wrap'
 //   6. The Store applies it. It may answer that it needs a document first (the original of a boost it does not have,
 //      or that original's author): the Worker fetches it within the request's budget, signed as the request's other
 //      fetches are (NET-4), and asks again with it (at most MAX_STORE_ROUNDS times).
-//   7. A quote the activity stored, or made due, is verified inline with what is left of the request's budget
-//      (federation/quotes.ts); what that leaves due goes to the job rounds.
 //
 // Effects are idempotent by natural keys and retractions (ID-7); a refused activity reserves and records nothing.
 
@@ -550,7 +546,7 @@ type Application = {
 	budget: FetchBudget
 }
 
-// Steps 5 to 7: what the type needs, the Store, and the quote it made due.
+// Steps 5 and 6: what the type needs, and the Store.
 async function apply(deps: InboundDeps, application: Application): Promise<InboxOutcome> {
 	const { target, actorUri, actor, origin, loaders, state, budget } = application
 	const activity = application.activity
@@ -601,44 +597,7 @@ async function apply(deps: InboundDeps, application: Application): Promise<Inbox
 	if (result.retry === true) {
 		return { status: 503, reason: result.reason }
 	}
-	const verifying =
-		result.verify === undefined ? false : await verifyInline(deps, result.verify, origin, { state, budget })
-	return {
-		status: 202,
-		reason: result.reason,
-		jobsPending: result.jobsPending || verifying,
-		delivers: result.delivers === true,
-	}
-}
-
-// The quote the activity made due, verified with what is left of the request's budget, each stage signed as its work's
-// fetch_as says (that account's key, else the instance actor's: a followers-only status a local follower may see is
-// fetched with that follower's key, as a round would). Best effort: nothing here charges the quote an attempt, and
-// whatever does not finish (the budget ran out, a fetch may pass later, the Store refused) is left due for the job
-// rounds, so a failure here never fails the activity. Returns whether work is left due now.
-async function verifyInline(
-	deps: InboundDeps,
-	statusId: string,
-	origin: string,
-	request: { state: FederationState; budget: FetchBudget }
-): Promise<boolean> {
-	const { state, budget } = request
-	// Fresh loaders for each stage, so a stage never reads another's fetch from the memo; all draw on the request's budget.
-	const loadersFor = (signer: string | null) => createRemoteLoaders(deps, state, signer, budget)
-	try {
-		return await verifyQuote(
-			(call) => callStore(() => call(deps.store())),
-			deps.build,
-			origin,
-			statusId,
-			loadersFor,
-			deps.now,
-			{ inline: true, state }
-		)
-	} catch (error) {
-		console.error({ event: 'kopje.quote.verify.failed', ...errorFields(error) })
-		return true
-	}
+	return { status: 202, reason: result.reason, jobsPending: result.jobsPending, delivers: result.delivers === true }
 }
 
 // A document the Store asked for, fetched through the request's loaders: a status (null if it cannot be one) or an

@@ -69,8 +69,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
     - A quote is accepted when it quotes its own author's post, or when the quoted author's approval (the stamp, a
       `QuoteAuthorization` fetched from its own server) names exactly that quote of exactly that post. Other quotes stay
       pending, as Mastodon keeps them; one whose stamp is gone is rejected. Verification fetches the quoted post and its
-      author when Kopje does not have them, runs with the delivery when its fetch budget allows and otherwise in the
-      background rounds, signed by a local recipient or follower when there is one, and is retried five times over
+      author when Kopje does not have them, runs in the background rounds the delivery asks for (seconds later, or at
+      the next cron run), signed by a local recipient or follower when there is one, and is retried five times over
       about 15 hours; a verification that needs more fetches than a round allows goes on in the next round from where
       it stopped. A post first stored only as the target of a quote is verified like any other once it is delivered,
       boosted, searched for or pinned for itself.

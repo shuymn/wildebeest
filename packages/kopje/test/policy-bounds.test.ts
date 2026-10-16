@@ -4840,7 +4840,7 @@ describe('received quotes cost their work a bounded read (RES-7)', () => {
 			{ state: 'rejected', n: 2 },
 			{ state: 'revoked', n: 1 },
 		])
-		expect(outputs.recheck!.output).toBe(FIRST)
+		expect(outputs.recheck!.output).toBe(true)
 		expect(outputs.link!.linked).toEqual([{ n: MAX_LINKED_QUOTES }])
 		expect(outputs.work!.output).toMatchObject({ quotedUri: TARGET_URI, approvalUri: STAMP })
 	}, 120_000)
