@@ -1,5 +1,5 @@
 import { fieldSources } from './accounts'
-import { followersUri, recordOutbound } from './activities'
+import { featuredUri, followersUri, recordOutbound } from './activities'
 import { PUBLIC_COLLECTION } from './audience'
 import { allocateLocalId } from './ids'
 import { renderFieldValue } from './status-text'
@@ -74,7 +74,7 @@ export function actorDocument(db: Db, accountId: string): Record<string, unknown
 		outbox: `${row.uri}/outbox`,
 		followers: followersUri(row.uri),
 		following: `${row.uri}/following`,
-		featured: `${row.uri}/collections/featured`,
+		featured: featuredUri(row.uri),
 		featuredTags: `${row.uri}/collections/tags`,
 		endpoints: { sharedInbox: `${origin}/inbox` },
 		publicKey: { id: `${row.uri}#main-key`, owner: row.uri, publicKeyPem: row.pubkey },
@@ -117,9 +117,24 @@ export function recordActorUpdate(db: Db, accountId: string, before: string | nu
 		},
 		now
 	)
-	// The document carries the featured collections, so the Add or Remove of a featured hashtag needs no Update first.
+	// The document carries the featured collections, so the Add or Remove of a pin or a featured hashtag needs no
+	// Update first (announceFeatured).
 	db.run('UPDATE local_accounts SET featured_announced = 1 WHERE account_id = ? AND featured_announced = 0', accountId)
 	return true
+}
+
+// Announces the featured collections once, before the account's first Add or Remove of a pin or a featured hashtag:
+// Mastodon's ActivityPub::Activity::Add and Remove act only when the target is the `featured` (or `featuredTags`) of
+// the actor it has stored, so servers that stored the actor before it published them are sent an Update of the actor
+// first, once (local_accounts.featured_announced; any Update of the actor sets it).
+export function announceFeatured(db: Db, accountId: string, now: number): void {
+	const announced = db.first<{ featured_announced: number }>(
+		'SELECT featured_announced FROM local_accounts WHERE account_id = ?',
+		accountId
+	)
+	if (announced?.featured_announced === 0) {
+		recordActorUpdate(db, accountId, null, now)
+	}
 }
 
 // At publication, in its transaction: the local accounts whose avatar or header a cutover conversion changed

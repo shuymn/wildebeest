@@ -809,6 +809,31 @@ describe('second review: deletion, keys and generations', () => {
 		expect(await accountId(t.store, bob.uri)).toBeUndefined()
 	})
 
+	it('deletes the pins of a remote status with it, by Delete and by purge, never by cascade alone', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		await t.post(bob, follow(bob))
+		await seedStatuses(t.store, bob.uri, 2)
+		// Only an author pins through the API; a row naming a remote status still goes with it.
+		await sql(t.store, 'INSERT INTO status_pins (account_id, status_id) SELECT ?, id FROM statuses', ALICE)
+		const pinned = () => count(t.store, 'SELECT 1 FROM status_pins')
+		const deletion = {
+			'@context': AS,
+			id: nextId(bob),
+			type: 'Delete',
+			actor: bob.uri,
+			object: `${bob.uri}/statuses/1`,
+		}
+		expect(await t.post(bob, deletion)).toBe(202)
+		expect(await count(t.store, 'SELECT 1 FROM statuses')).toBe(1)
+		expect(await pinned()).toBe(1)
+		t.web.fail(bob.uri, 410)
+		expect(await t.post(bob, deleteSelf(bob))).toBe(202)
+		await runScheduledJobs({ ...t.env, MAINTENANCE: 'off' } as Env, t.deps)
+		expect([await pinned(), await count(t.store, 'SELECT 1 FROM statuses')]).toEqual([0, 0])
+		expect(await accountId(t.store, bob.uri)).toBeUndefined()
+	})
+
 	it('purges relationships and notifications in bounded batches too (RES-6)', async () => {
 		const t = await setup()
 		const bob = await mastodonActor(t.web, 'bob')

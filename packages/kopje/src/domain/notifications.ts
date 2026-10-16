@@ -1,5 +1,5 @@
 import { type Account, edgeRangeSql, type Page, type PageQuery, type Present, presentAccountsById } from './accounts'
-import { shownSql, statusReads, type WithVisibleStatus } from './audience'
+import { notifiedSql, statusReads, type WithVisibleStatus } from './audience'
 import { type UserContext, userReadOperation, userWriteOperation } from './auth'
 import { addToConversation } from './conversations'
 import { presentStatuses, type Status } from './status-presenter'
@@ -12,8 +12,9 @@ import type { Db } from '../db/sql'
 // status. A mention is also left out when its status mentions or replies to an account the recipient blocks or mutes
 // with notifications (Mastodon's FeedManager#filter_from_mentions), and a post notification (`status`) when home would
 // leave its status out (FeedInsertWorker), which includes a sender the recipient mutes. Only a local recipient is
-// written one. A new notification also records a push for each of the recipient's Web Push subscriptions that wants
-// it; domain/push.ts checks this rule again, at its own time, before each is sent (PUSH-3).
+// written one, and none about a status in a conversation the recipient mutes (R31); one written before the mute stays.
+// A new notification also records a push for each of the recipient's Web Push subscriptions that wants it;
+// domain/push.ts checks this rule again, at its own time, before each is sent (PUSH-3).
 // A favourite, a boost or a follow also records the group it joins in the API v2's grouped notifications
 // (group_key, which v1 shows too); notification-groups.ts reads them.
 
@@ -38,10 +39,23 @@ export type NotifyInput = {
 	now: number
 }
 
-// Writes a notification if the rule lets it through. The natural key makes a repeat a no-op, except for `update`:
-// every edit notifies again, so the previous one is replaced (and gets a newer id).
+// Writes a notification if the rule lets it through (notifiedSql: R15, and not in a conversation the recipient mutes,
+// R31). The natural key makes a repeat a no-op, except for `update`:
+// every edit notifies again, so the previous one is replaced (and gets a newer id). The replacement is judged first:
+// an edit the rule refuses (its conversation muted since) leaves the previous one as it is, as a mute keeps the
+// notifications written before it.
 export function notify(db: Db, input: NotifyInput): void {
 	if (input.type === 'update') {
+		const eligible = db.first(
+			`SELECT 1 AS ok WHERE ${notifiedSql('?1', "'update'", '?2', '?3', '?4')}`,
+			input.recipientId,
+			input.fromId,
+			input.statusId,
+			new Date(input.now).toISOString()
+		)
+		if (eligible === undefined) {
+			return
+		}
 		db.run(
 			`DELETE FROM notifications WHERE account_id = ? AND type = 'update' AND from_account_id = ? AND status_id = ?`,
 			input.recipientId,
@@ -52,7 +66,7 @@ export function notify(db: Db, input: NotifyInput): void {
 	const inserted = db.all<{ id: number }>(
 		`INSERT INTO notifications (account_id, type, from_account_id, status_id, created_at, group_key)
 		SELECT ?1, ?2, ?3, ?4, ?5, ?6
-		WHERE EXISTS (SELECT 1 FROM local_accounts WHERE account_id = ?1) AND ${shownSql('?1', '?2', '?3', '?4', '?5')}
+		WHERE EXISTS (SELECT 1 FROM local_accounts WHERE account_id = ?1) AND ${notifiedSql('?1', '?2', '?3', '?4', '?5')}
 		ON CONFLICT DO NOTHING RETURNING id`,
 		input.recipientId,
 		input.type,

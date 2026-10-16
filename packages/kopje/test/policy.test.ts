@@ -136,6 +136,15 @@ const RULES: readonly Rule[] = [
 		},
 	},
 	{
+		// R31: a conversation mute is its owner's alone; only the policy module reads it (conversationMutedSql).
+		name: 'reads conversation_mutes',
+		pattern: reads('conversation_mutes'),
+		allowed: {
+			...POLICY_ONLY,
+			'../src/domain/status-actions.ts': 'unmuting deletes the viewer’s own mute',
+		},
+	},
+	{
 		// R26: nothing of a scheduled status is shown, notified or delivered before it is published.
 		name: 'reads or writes scheduled_statuses',
 		pattern: new RegExp(`\\b(?:FROM|JOIN|INTO|UPDATE)\\s+${table(['scheduled_statuses'])}`, 'i'),

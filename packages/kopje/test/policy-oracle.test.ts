@@ -13,6 +13,7 @@ import {
 	blockedSql,
 	blocksSql,
 	canView,
+	conversationMutedSql,
 	domainBlocksSql,
 	endorsementListedSql,
 	endorsementsShownSql,
@@ -26,6 +27,7 @@ import {
 	listableSql,
 	listedForSql,
 	mentionableBySql,
+	notifiedSql,
 	shownSql,
 	visibleSql,
 } from '../src/domain/audience'
@@ -285,36 +287,61 @@ describe('the policy fragments agree with the model of their rules', () => {
 				)
 		))
 
-	// Every (recipient, type, sender, status or none) a local recipient is shown, at the world's time.
-	it('shownSql (R15)', () =>
+	// Every (recipient, type, sender, status or none) a local recipient is shown, at the world's time; and, as notify
+	// writes them, without those about a status of a conversation the recipient mutes.
+	for (const [title, fragment, rule] of [
+		['shownSql (R15)', shownSql, 'shown'],
+		['notifiedSql (R15, R31)', notifiedSql, 'notified'],
+	] as const) {
+		it(title, () =>
+			agree(
+				(db, world) => {
+					const named = namer(world)
+					return db
+						.all<{ r: string; type: string; sender: string; status: string | null }>(
+							`SELECT nr0.account_id AS r, nt.value AS type, nf.id AS sender, ns.id AS status
+							FROM local_accounts nr0 CROSS JOIN json_each(?1) nt CROSS JOIN accounts nf
+							CROSS JOIN (SELECT id FROM statuses UNION ALL SELECT NULL) ns
+							WHERE ${fragment('nr0.account_id', 'nt.value', 'nf.id', 'ns.id', '?2')}`,
+							JSON.stringify(NOTIFICATION_TYPES),
+							world.now
+						)
+						.map(
+							(row) =>
+								`${named(row.r)} ${row.type} ${named(row.sender)} ${row.status === null ? '-' : named(row.status)}`
+						)
+				},
+				(m) =>
+					accounts(m.world)
+						.filter((r) => m.world.accounts[r]?.local === true)
+						.flatMap((r) =>
+							NOTIFICATION_TYPES.flatMap((type) =>
+								accounts(m.world).flatMap((from) =>
+									[null, ...statuses(m.world)].flatMap((s) =>
+										m[rule](r, type, from, s)
+											? [`${name(m.world, r)} ${type} ${name(m.world, from)} ${s === null ? '-' : m.status(s).name}`]
+											: []
+									)
+								)
+							)
+						)
+			)
+		)
+	}
+
+	// Every (local account, status) whose conversation the account mutes.
+	it('conversationMutedSql (R31)', () =>
 		agree(
-			(db, world) => {
-				const named = namer(world)
-				return db
-					.all<{ r: string; type: string; sender: string; status: string | null }>(
-						`SELECT nr0.account_id AS r, nt.value AS type, nf.id AS sender, ns.id AS status
-						FROM local_accounts nr0 CROSS JOIN json_each(?1) nt CROSS JOIN accounts nf
-						CROSS JOIN (SELECT id FROM statuses UNION ALL SELECT NULL) ns
-						WHERE ${shownSql('nr0.account_id', 'nt.value', 'nf.id', 'ns.id', '?2')}`,
-						JSON.stringify(NOTIFICATION_TYPES),
-						world.now
-					)
-					.map(
-						(row) => `${named(row.r)} ${row.type} ${named(row.sender)} ${row.status === null ? '-' : named(row.status)}`
-					)
-			},
+			pairs(
+				`SELECT cr.account_id AS x, cs.id AS y FROM local_accounts cr CROSS JOIN statuses cs
+				WHERE ${conversationMutedSql('cr.account_id', 'cs.thread')}`
+			),
 			(m) =>
 				accounts(m.world)
 					.filter((r) => m.world.accounts[r]?.local === true)
 					.flatMap((r) =>
-						NOTIFICATION_TYPES.flatMap((type) =>
-							accounts(m.world).flatMap((from) =>
-								[null, ...statuses(m.world)].flatMap((s) =>
-									m.shown(r, type, from, s)
-										? [`${name(m.world, r)} ${type} ${name(m.world, from)} ${s === null ? '-' : m.status(s).name}`]
-										: []
-								)
-							)
+						statuses(m.world).flatMap((s) =>
+							m.conversationMuted(r, s) ? [`${name(m.world, r)} ${m.status(s).name}`] : []
 						)
 					)
 		))

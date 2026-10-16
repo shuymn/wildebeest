@@ -16,6 +16,7 @@ import {
 	Hashtag,
 	Image,
 	Note,
+	type Object as ApObject,
 	Organization,
 	Person,
 	PropertyValue,
@@ -35,6 +36,7 @@ import {
 	type RequestSigner,
 	requireObjectRoot,
 } from './loader'
+import type { FeaturedItem } from '../domain/activities'
 import {
 	type CollectionKind,
 	type CollectionPage,
@@ -323,18 +325,38 @@ export function createKopjeFederation(deps: FederationDeps, state: FederationSta
 			})
 	}
 
-	// The featured collection (Mastodon's ActivityPub::CollectionsController `featured`): the pinned statuses, which
-	// Kopje does not have, so it is empty. It is the target Mastodon names in the Add and Remove of a featured hashtag
-	// (domain/featured-tags.ts), and receivers act on those only when the actor publishes it.
-	const featuredOwner = async (identifier: string) => {
-		const actor = await localActor(identifier)
-		return actor !== null && actor.username === identifier && !actor.suspended
-	}
-	federation
-		.setFeaturedDispatcher('/ap/users/{identifier}/collections/featured', async (_ctx, identifier) =>
-			(await featuredOwner(identifier)) ? { items: [] } : null
+	// The featured collection (ActivityPub::CollectionsController, `featured`): the pinned statuses, newest pin first,
+	// all in the collection itself, as Mastodon's OrderedCollection without pages: the Note of a public or unlisted one
+	// (as the object endpoint serves it, VIS-4), the uri alone of any other, and their count (totalItems). It is also the
+	// target Mastodon names in the Add and Remove of a pin and of a featured hashtag (domain/status-actions.ts,
+	// domain/featured-tags.ts), which receivers act on only when the actor publishes it. An unknown or suspended actor
+	// has none.
+	const pins = new Map<string, Promise<FeaturedItem[] | null>>()
+	const featuredOf = (username: string) =>
+		memo(pins, username, async () =>
+			(await localActor(username))?.username === username ? rpc((s) => s.featured(build, { username })) : null
 		)
-		.setCounter(async (_ctx, identifier) => ((await featuredOwner(identifier)) ? 0 : null))
+	federation
+		.setFeaturedDispatcher('/ap/users/{identifier}/collections/featured', async (ctx, identifier, cursor) => {
+			const featured = cursor === null ? await featuredOf(identifier) : null
+			if (featured === null) {
+				return null
+			}
+			const items = await Promise.all(
+				featured.map(async ({ uri, note }): Promise<ApObject | URL> => {
+					if (note === null) {
+						return new URL(uri)
+					}
+					const json = JSON.parse(note) as { type?: unknown }
+					return json.type === 'Question'
+						? Question.fromJsonLd(json, { contextLoader: ctx.contextLoader })
+						: Note.fromJsonLd(json, { contextLoader: ctx.contextLoader })
+				})
+			)
+			// Fedify serves a URL item as the uri it is (filterCollectionItems), though the dispatcher's type names objects.
+			return { items: items as ApObject[] }
+		})
+		.setCounter(async (_ctx, identifier) => (await featuredOf(identifier))?.length ?? null)
 	// The featuredTags collection (`tags`): the actor's featured hashtags, at most ten, in one collection.
 	const featuredTags = new Map<string, Promise<Hashtag[] | null>>()
 	const hashtags = (identifier: string) =>

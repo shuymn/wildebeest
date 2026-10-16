@@ -15,7 +15,7 @@ import { listNotifications } from '../src/domain/notifications'
 import { resolveSearch } from '../src/domain/remote-statuses'
 import { search } from '../src/domain/search'
 import type { Status } from '../src/domain/status-presenter'
-import { getStatus, interactors, statusContext } from '../src/domain/statuses'
+import { getStatus, getStatuses, interactors, MAX_STATUSES_BY_ID, statusContext } from '../src/domain/statuses'
 import {
 	accountStatuses,
 	bookmarks,
@@ -200,12 +200,14 @@ describe('the status read endpoints agree with the model of their rules', () => 
 				'home through a followed hashtag only',
 				'list',
 				'notifications',
+				'pinned statuses',
 				'public',
 				'reblogged_by',
 				'resolve account',
 				'resolve status',
 				'status',
 				'status search',
+				'statuses by id',
 				'tag',
 			].sort()
 		)
@@ -453,7 +455,44 @@ function check(sql: SqlStorage, c: Case): string[] {
 				)
 			})
 			equal(`account statuses of ${world.accounts[a]?.name}`, viewer, actual, newestFirst(expected))
+			// pinned=true: of those, the account's pins, newest pin first (a pin is of an original, so the boost terms
+			// never apply).
+			const pinned = (
+				ok<Page<Status> | null>(
+					run(accountStatuses, {
+						...optional(viewer),
+						account: accountId(a),
+						page: { limit: 40 },
+						onlyMedia: false,
+						excludeReplies: false,
+						excludeReblogs: false,
+						pinned: true,
+						tagged: null,
+						present: PRESENT,
+					}),
+					'pinned statuses'
+				)?.items ?? []
+			).map((value) => status('pinned statuses', viewer, value, () => true))
+			const pins = world.pins.flatMap((p) => (p.account === a && expected.includes(p.status) ? [p.status] : []))
+			equal(`pinned statuses of ${world.accounts[a]?.name}`, viewer, pinned, pins.reverse())
 		})
+
+		// Statuses by id, MAX_STATUSES_BY_ID at a time, newest first: exactly those the list rule allows (R8), in the
+		// order asked.
+		const asked = newestFirst(all)
+		for (let i = 0; i < asked.length; i += MAX_STATUSES_BY_ID) {
+			const chunk = asked.slice(i, i + MAX_STATUSES_BY_ID)
+			const byId = ok<Status[]>(
+				run(getStatuses, { ...optional(viewer), ids: chunk.map(statusId), present: PRESENT }),
+				'statuses by id'
+			).map((value) => status('statuses by id', viewer, value, () => true))
+			equal(
+				'statuses by id',
+				viewer,
+				byId,
+				chunk.filter((s) => m.listable(s, viewer))
+			)
+		}
 
 		// Followers and following of every account: exactly the accepted follows the list rule (R13) shows the viewer,
 		// newest follow first.
