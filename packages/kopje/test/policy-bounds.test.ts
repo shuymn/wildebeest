@@ -30,6 +30,7 @@ import { inboxOwnerExists } from '../src/domain/inbox'
 import { listAccounts } from '../src/domain/lists'
 import { getMarkers, MARKER_TIMELINES } from '../src/domain/markers'
 import {
+	dismissNotificationGroup,
 	getNotificationGroup,
 	GROUP_COUNT,
 	GROUP_WALK,
@@ -47,7 +48,7 @@ import {
 	notificationRequestsMerged,
 	runNotificationRequestJobs,
 } from '../src/domain/notification-requests'
-import { listNotifications } from '../src/domain/notifications'
+import { clearNotifications, listNotifications, REMOVAL_BATCHES, REMOVAL_WINDOW } from '../src/domain/notifications'
 import { getPoll, vote } from '../src/domain/polls'
 import { dueScheduled, listScheduled, publishScheduled } from '../src/domain/scheduled-statuses'
 import { search } from '../src/domain/search'
@@ -3342,4 +3343,239 @@ describe('the profile directory reads a window, however many accounts the instan
 		expect(many.shown).toBe(0)
 		expect(many.rows).toBeLessThanOrEqual(few.rows + ALLOWANCE)
 	}, 120_000)
+})
+
+// Clearing notifications and dismissing a group (R15's clears and dismissals) hide any number of notifications at once
+// and delete them in bounded batches: the request and each round of the jobs touch the same rows with 2,500 or 5,000
+// notifications to remove, and until the rounds are done, a read starts above what a clear hides (the lists, the
+// grouped notifications, the unread counts) or above what a group's dismissal hides (the group's own reads), so it
+// reads the same rows however many are hidden.
+describe('clearing and dismissing touch a bounded batch, and reads skip what they hide (RES-7)', () => {
+	const VIEWER_ID = '690000000000000000'
+	const STATUS_ID = '691000000000000000'
+	const SENDER_BASE = 692000000000000000n
+	const CLEAR_TOKEN = 'clear-token'
+	const FAVOURITES = `favourite-${STATUS_ID}-1`
+	// The follows and follow requests newer than the favourites, shown above them.
+	const FOLLOWS = 50
+	const REQUESTS = 5
+	const credential = (scope: string) => ({ tokenHash: CLEAR_TOKEN, scope, now: NOW }) as const
+	// What a request removes at most.
+	const IN_REQUEST = REMOVAL_WINDOW * REMOVAL_BATCHES
+
+	// The viewer's status favourited `count` times in one group, then FOLLOWS follows and REQUESTS follow requests;
+	// with `removal`, the favourites hidden as a clear or the group's dismissal records them, none deleted yet.
+	async function removing(count: number, removal: 'clear' | 'dismissal' | null): Promise<StoreStub> {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username) VALUES (?, 'https://kopje.test/ap/users/viewer', 'viewer')",
+				VIEWER_ID
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'viewer@example.com', X'00', X'00', 'test')",
+				VIEWER_ID
+			)
+			sql.exec(
+				`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+				VALUES (?, 'https://kopje.test/ap/o/s', ?, 'public', '<p>s</p>', ?)`,
+				STATUS_ID,
+				VIEWER_ID,
+				new Date(NOW).toISOString()
+			)
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+				INSERT INTO accounts (id, uri, username, domain)
+				SELECT CAST(?2 + i AS TEXT), 'https://far' || (i % 10) || '.example/users/u' || i, 'u' || i,
+					'far' || (i % 10) || '.example'
+				FROM n`,
+				count,
+				String(SENDER_BASE)
+			)
+			sql.exec(
+				`INSERT INTO notifications (account_id, type, from_account_id, status_id, group_key)
+				SELECT ?1, 'favourite', id, ?2, ?3 FROM accounts WHERE id <> ?1 ORDER BY id`,
+				VIEWER_ID,
+				STATUS_ID,
+				FAVOURITES
+			)
+			if (removal === 'clear') {
+				sql.exec('INSERT INTO notification_clears (account_id, max_id) SELECT ?, max(id) FROM notifications', VIEWER_ID)
+			} else if (removal === 'dismissal') {
+				sql.exec(
+					'INSERT INTO notification_dismissals (account_id, group_key, max_id) SELECT ?, ?, max(id) FROM notifications',
+					VIEWER_ID,
+					FAVOURITES
+				)
+			}
+			sql.exec(
+				`INSERT INTO notifications (account_id, type, from_account_id, group_key)
+				SELECT ?1, 'follow', id, 'follow-1' FROM accounts WHERE id <> ?1 ORDER BY id LIMIT ?2`,
+				VIEWER_ID,
+				FOLLOWS
+			)
+			sql.exec(
+				`INSERT INTO notifications (account_id, type, from_account_id) SELECT ?1, 'follow_request', id FROM accounts
+				WHERE id <> ?1 ORDER BY id DESC LIMIT ?2`,
+				VIEWER_ID,
+				REQUESTS
+			)
+			sql.exec(
+				"INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('clearing', 'secret', 'clearing', 'urn:ietf:wg:oauth:2.0:oob', 'read write')"
+			)
+			sql.exec(
+				"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES (?, 'access', 'clearing', ?, 'read write')",
+				CLEAR_TOKEN,
+				VIEWER_ID
+			)
+		})
+		return store
+	}
+
+	const pendingIn = (store: StoreStub) =>
+		runInDurableObject(store, (_instance, state) =>
+			state.storage.sql
+				.exec<{ n: number }>(
+					'SELECT (SELECT count(*) FROM notification_clears) + (SELECT count(*) FROM notification_dismissals) AS n'
+				)
+				.one()
+		)
+	const stored = (store: StoreStub) =>
+		runInDurableObject(
+			store,
+			(_instance, state) => state.storage.sql.exec<{ n: number }>('SELECT count(*) AS n FROM notifications').one().n
+		)
+
+	it('touches the same rows in the request and in a round with 2,500 or 5,000 notifications to remove', async () => {
+		const grown: string[] = []
+		for (const [name, operation, input] of [
+			['clear', clearNotifications, { credential: credential('write') }],
+			['dismiss', dismissNotificationGroup, { credential: credential('write'), groupKey: FAVOURITES }],
+		] as [string, StoreOperation<never, unknown>, unknown][]) {
+			const touched = async (count: number) => {
+				const store = await removing(count, null)
+				const rows = await rowsTouched(store, operation, input as never)
+				// Not vacuous: the request removed its batches and left the rest for the rounds.
+				expect([name, count, await stored(store), await pendingIn(store)]).toEqual([
+					name,
+					count,
+					count + FOLLOWS + REQUESTS - IN_REQUEST,
+					{ n: 1 },
+				])
+				return rows
+			}
+			const fewRows = await touched(2500)
+			const manyRows = await touched(5000)
+			if (manyRows > fewRows + ALLOWANCE) {
+				grown.push(`${name}: ${fewRows} -> ${manyRows}`)
+			}
+		}
+		for (const removal of ['clear', 'dismissal'] as const) {
+			const round = async (count: number) => {
+				const store = await removing(count, removal)
+				const rows = await rowsTouched(store, runNotificationRequestJobs, { now: NOW } as never)
+				expect([removal, count, await stored(store)]).toEqual([removal, count, count + FOLLOWS + REQUESTS - IN_REQUEST])
+				return rows
+			}
+			const fewRows = await round(2500)
+			const manyRows = await round(5000)
+			if (manyRows > fewRows + ALLOWANCE) {
+				grown.push(`${removal} round: ${fewRows} -> ${manyRows}`)
+			}
+		}
+		expect(grown).toEqual([])
+	}, 240_000)
+
+	it('reads the same rows with 2,500 or 5,000 notifications hidden and not yet deleted', async () => {
+		const read = credential('read')
+		const list = {
+			credential: read,
+			types: [],
+			excludeTypes: [],
+			accountId: null,
+			includeFiltered: false,
+			present: PRESENT,
+		}
+		const groups = {
+			credential: read,
+			types: [],
+			excludeTypes: [],
+			groupedTypes: null,
+			includeFiltered: false,
+			expandAccounts: 'full',
+			present: PRESENT,
+		}
+		const counts = {
+			credential: read,
+			limit: 100,
+			types: [],
+			excludeTypes: [],
+			accountId: null,
+			groupedTypes: null,
+			includeFiltered: false,
+		}
+		// The newest page, and pages reaching down into what is hidden: below the follows by max_id, and above it by
+		// min_id; the unread counts walk up from the oldest (no marker).
+		const below = { ...PAGE, maxId: String(1e9) }
+		const reads = (count: number): [string, StoreOperation<never, unknown>, unknown][] => {
+			const firstFollow = String(count + 1)
+			return [
+				...[PAGE, { ...PAGE, maxId: firstFollow }, { ...PAGE, minId: '0' }].flatMap(
+					(page): [string, StoreOperation<never, unknown>, unknown][] => [
+						[`notifications ${JSON.stringify(page)}`, listNotifications, { ...list, page }],
+						[`grouped notifications ${JSON.stringify(page)}`, listGroupedNotifications, { ...groups, page }],
+					]
+				),
+				['unread count', unreadCount, counts],
+				['unread group count', unreadGroupCount, counts],
+				['notification group', getNotificationGroup, { credential: read, groupKey: FAVOURITES, present: PRESENT }],
+				[
+					'notification group accounts',
+					notificationGroupAccounts,
+					{ credential: read, groupKey: FAVOURITES, page: below, present: PRESENT },
+				],
+			]
+		}
+		// What a read showed, by its name, the same at either size.
+		const showing = (output: unknown) => {
+			const value = (output as { value: unknown }).value
+			return value === null ? 0 : shown(output)
+		}
+		// Under a dismissal, the reads of the group itself; the walks of every group check each row's group by its key.
+		const groupReads = new Set(['notification group', 'notification group accounts'])
+		for (const removal of ['clear', 'dismissal'] as const) {
+			const few = await removing(2500, removal)
+			const many = await removing(5000, removal)
+			const grown: string[] = []
+			const shownAt = (store: StoreStub, operation: StoreOperation<never, unknown>, input: unknown) =>
+				runInDurableObject(store, (_instance, state) => showing(operation.run(state.storage.sql, input as never)))
+			const fewReads = reads(2500)
+			const manyReads = reads(5000)
+			for (const [i, [name, operation, fewInput]] of fewReads.entries()) {
+				if (removal === 'dismissal' && !groupReads.has(name)) {
+					continue
+				}
+				const manyInput = manyReads[i]![2]
+				const fewShown = await shownAt(few, operation, fewInput)
+				expect([removal, name, await shownAt(many, operation, manyInput)]).toEqual([removal, name, fewShown])
+				const fewRows = await rowsRead({ store: few }, operation, fewInput as never)
+				const manyRows = await rowsRead({ store: many }, operation, manyInput as never)
+				if (manyRows > fewRows + ALLOWANCE) {
+					grown.push(`${name}: ${fewRows} -> ${manyRows}`)
+				}
+			}
+			expect([removal, grown]).toEqual([removal, []])
+			// Not vacuous: the newest page shows the follow requests and the follows, and nothing of the favourites.
+			const newest = await runInDurableObject(few, (_instance, state) =>
+				listNotifications.run(state.storage.sql, { ...list, page: { limit: 80 } } as never)
+			)
+			expect(
+				(newest as { value: { items: { type: string }[] } }).value.items
+					.map((n) => n.type)
+					.filter((t) => t === 'favourite')
+			).toEqual([])
+			expect((newest as { value: { items: unknown[] } }).value.items).toHaveLength(FOLLOWS + REQUESTS)
+		}
+	}, 240_000)
 })
