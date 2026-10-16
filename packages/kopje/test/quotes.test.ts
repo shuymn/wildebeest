@@ -41,6 +41,8 @@ import {
 	MAX_LINKED_QUOTES,
 	QUOTE_BACKOFF_MS,
 	QUOTE_HOPS,
+	QUOTE_LEASE_MS,
+	QUOTE_ROUND,
 	type QuoteVerification,
 	type QuoteWork,
 } from '../src/domain/quotes'
@@ -1471,7 +1473,8 @@ describe('review round 1 regressions', () => {
 		}
 		t.web.fail(stamp, 503)
 		await roundWith(t, stamp, during)()
-		expect(leased?.generation).toBe(due.generation)
+		// The claim drew a new generation; the replay during the fetch kept it.
+		expect(leased?.generation).not.toBe(due.generation)
 		expect(await quoteOf(t, quote.id)).toMatchObject({
 			state: 'accepted',
 			attempts: 1,
@@ -1505,5 +1508,108 @@ describe('review round 1 regressions', () => {
 		expect((await workOf(t, quote.id)).recheck).toBe(0)
 		expect(await round()).toBe(false)
 		expect(await quoteOf(t, quote.id)).toMatchObject({ state: 'accepted', verify_after: null })
+	})
+
+	function deferred() {
+		let resolve!: () => void
+		const promise = new Promise<void>((r) => {
+			resolve = r
+		})
+		return { promise, resolve }
+	}
+
+	// A pending quote of carol's (known) status, stored with its work due and no round run yet.
+	async function pendingQuote() {
+		const w = await world()
+		await followed(w.t, w.carol)
+		const pair = quotedPair(w.t, w.bob, w.carol)
+		expect(await w.t.postOnly(w.bob, create(w.bob, pair.quote))).toBe(202)
+		expect(await quoteOf(w.t, pair.quote.id)).toMatchObject({
+			state: 'pending',
+			quoted_status_id: null,
+			verify_after: NOW,
+		})
+		return { ...w, ...pair }
+	}
+
+	it('keeps a round’s lease when its own stage stores the quoted status and links the quote', async () => {
+		const { t, quote, stamp } = await pendingQuote()
+		let checked = false
+		await roundWith(t, stamp, async () => {
+			// The round's first stage stored the quoted status, which linked this quote: the lease still holds, and no other
+			// round can claim the work.
+			expect(await quoteOf(t, quote.id)).toMatchObject({ quoted_status_id: expect.any(String) })
+			const work = await workOf(t, quote.id)
+			expect(work.lease_until).not.toBeNull()
+			expect(work.verify_after).toBe(work.lease_until)
+			expect(await t.store.claimQuotes(BUILD, { now: NOW, limit: QUOTE_ROUND })).toMatchObject({ ids: [] })
+			checked = true
+		})()
+		expect(checked).toBe(true)
+		expect(await quoteOf(t, quote.id)).toMatchObject({ state: 'accepted', verify_after: null })
+	})
+
+	it('discards the late outcome of a round whose lease expired and whose work another round claimed', async () => {
+		const { t, quote, stamp } = await pendingQuote()
+		const later = NOW + QUOTE_LEASE_MS + 1
+		const claimedAgain = deferred()
+		const firstDone = deferred()
+		let second: Promise<boolean> | undefined
+		// The second round claims the work once the first's lease has expired, and its fetch finds the stamp gone, but only
+		// after the first round, whose fetch found it valid, has finished.
+		const secondRound = roundWith(
+			t,
+			stamp,
+			async () => {
+				claimedAgain.resolve()
+				await firstDone.promise
+				t.web.fail(stamp, 404)
+			},
+			later
+		)
+		await roundWith(t, stamp, async () => {
+			const before = await workOf(t, quote.id)
+			second = secondRound()
+			await claimedAgain.promise
+			// Claimed again: a new generation and a new lease.
+			const after = await workOf(t, quote.id)
+			expect(after.generation).not.toBe(before.generation)
+			expect(after.lease_until).toBe(later + QUOTE_LEASE_MS)
+		})()
+		// The first round's valid stamp was for a generation that is gone: nothing changed.
+		expect(await quoteOf(t, quote.id)).toMatchObject({ state: 'pending', verify_after: later + QUOTE_LEASE_MS })
+		firstDone.resolve()
+		await second
+		expect(await quoteOf(t, quote.id)).toMatchObject({ state: 'rejected', verify_after: null })
+	})
+
+	it('checks a pending quote once more when a relayed Delete raced its first stamp fetch', async () => {
+		const { t, carol, quote, stamp } = await pendingQuote()
+		const dan = await mastodonActor(t.web, 'dan', { origin: RELAY, key: 6 })
+		let raced = false
+		const round = roundWith(t, stamp, async () => {
+			if (raced) {
+				return
+			}
+			raced = true
+			const before = await workOf(t, quote.id)
+			const relay = {
+				'@context': AS,
+				id: `${carol.uri}#delete-${nextId()}`,
+				type: 'Delete',
+				actor: carol.uri,
+				object: stamp,
+			}
+			expect(await t.postOnly(dan, relay)).toBe(202)
+			// Leased: the generation, lease and due time are kept; only the recheck is marked.
+			expect(await workOf(t, quote.id)).toEqual({ ...before, recheck: 1 })
+		})
+		// The fetch found the stamp valid: accepted, and checked once more at once.
+		expect(await round()).toBe(true)
+		expect(raced).toBe(true)
+		expect(await quoteOf(t, quote.id)).toMatchObject({ state: 'accepted', verify_after: NOW })
+		t.web.fail(stamp, 404)
+		await round()
+		expect(await quoteOf(t, quote.id)).toMatchObject({ state: 'revoked', verify_after: null })
 	})
 })

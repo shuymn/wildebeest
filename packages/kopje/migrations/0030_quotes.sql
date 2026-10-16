@@ -23,10 +23,12 @@
 --   The rule: every write that changes what the work is or what it may conclude draws a new random generation (a new
 --   or replaced quote, a target linked or detached, a stage advanced or an author address recorded, a renewal that
 --   makes idle work due anew or changes fetch_as: a promotion, a relayed Delete's check of idle work, a stage another
---   path moved on; and every outcome applied, a revocation's included). Kept: a round's claim, which only leases the
---   work, and a relayed Delete's check that finds the work already due or backing off (its next fetch is fresh anyway)
---   or leased (the fetch in flight completes and only sets recheck: an outcome that finds the stamp valid then makes
---   the work due once more, attempts kept). Every outcome carries the generation and the stage and fetch address it
+--   path moved on; a round's claim, so a round whose lease expired and was claimed again has its late outcome
+--   discarded; and every outcome applied, a revocation's included). Kept: a relayed Delete's check that finds the work
+--   (accepted or pending) already due or backing off (its next fetch is fresh anyway) or leased (the fetch in flight
+--   completes and only sets recheck: an outcome that finds the stamp valid then makes the work due once more, attempts
+--   kept). A write that links the quote to its target while a round leases it (the round's own stage stored the target)
+--   draws a generation but keeps the lease; the round goes on with the next stage's fresh read. Every outcome carries the generation and the stage and fetch address it
 --   was computed for, and applies only while all three still hold (src/domain/quotes.ts); anything else is discarded.
 -- - quote_revocations records, for good, every stamp whose Delete by an author revoked a stored quote of that author's
 --   status: the stamp never verifies a quote of that author's statuses again, whatever later happens to the quote row.

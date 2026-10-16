@@ -43,6 +43,9 @@ export const MAX_LINKED_QUOTES = 100
 
 export type QuoteState = 'pending' | 'accepted' | 'rejected' | 'revoked' | 'deleted'
 
+// Whether a round holds a quote's work: its claim's lease, which lasts only while verify_after still equals it.
+const LEASED = '(lease_until IS NOT NULL AND verify_after = lease_until AND lease_until > ?3)'
+
 // A new generation of a quote's work: drawn by every write the rule at the column names (migration 0030_quotes).
 export const NEW_GENERATION = '(abs(random()) % 9007199254740991)'
 
@@ -224,12 +227,14 @@ export function promoteQuote(db: Db, statusId: string, arrival: QuoteArrival, no
 }
 
 // A newly stored status is the target of the unresolved quotes that name its uri: at most MAX_LINKED_QUOTES are linked,
-// and those with a work budget left are due again.
+// and those with a work budget left are due again, except one a round holds (the quote whose verification stored the
+// status, say): its lease stays, and the round goes on with the next stage's fresh read.
 export function linkQuotes(db: Db, status: { id: string; uri: string }, now: number): void {
 	db.run(
 		`UPDATE quotes SET quoted_status_id = ?1, quoted_account_id = (SELECT account_id FROM statuses WHERE id = ?1),
-			need_author = NULL, generation = ${NEW_GENERATION}, verify_after = CASE WHEN hops > 0 THEN ?3 ELSE verify_after END,
-			attempts = CASE WHEN hops > 0 THEN 0 ELSE attempts END, updated_at = ?4
+			need_author = NULL, generation = ${NEW_GENERATION},
+			verify_after = CASE WHEN ${LEASED} THEN verify_after WHEN hops > 0 THEN ?3 ELSE verify_after END,
+			attempts = CASE WHEN ${LEASED} OR hops <= 0 THEN attempts ELSE 0 END, updated_at = ?4
 		WHERE status_id IN (SELECT status_id FROM quotes
 			WHERE quoted_uri = ?2 AND quoted_status_id IS NULL AND state = 'pending' AND status_id <> ?1 LIMIT ?5)`,
 		status.id,
@@ -634,24 +639,32 @@ export const chargeQuote = writeOperation<
 	}
 })
 
-// A job round's claim: the quotes due first, at most `limit`, each with the generation of its work, held from other
-// rounds for QUOTE_LEASE_MS (a round that dies leaves them to a later one). more: others are due too.
+// A job round's claim: the quotes due first, at most `limit`, each with the new generation the claim drew, held from
+// other rounds for QUOTE_LEASE_MS (a round that dies leaves them to a later one). more: others are due too.
 export const claimQuotes = writeOperation<
 	{ now: number; limit: number },
 	{ ids: string[]; generations: number[]; more: boolean }
 >((db, { now, limit }) => {
-	const rows = db.all<{ status_id: string; generation: number }>(
-		'SELECT status_id, generation FROM quotes WHERE verify_after <= ? ORDER BY verify_after LIMIT ?',
-		now,
-		limit
+	const ids = db
+		.all<{ status_id: string }>(
+			'SELECT status_id FROM quotes WHERE verify_after <= ? ORDER BY verify_after LIMIT ?',
+			now,
+			limit
+		)
+		.map((row) => row.status_id)
+	// The claim draws a new generation: a round whose lease expired, and whose work another round claimed, has its late
+	// outcome discarded.
+	const claimed = new Map(
+		db
+			.all<{ status_id: string; generation: number }>(
+				`UPDATE quotes SET verify_after = ?1, lease_until = ?1, generation = ${NEW_GENERATION}
+				WHERE status_id IN (SELECT value FROM json_each(?2)) RETURNING status_id, generation`,
+				now + QUOTE_LEASE_MS,
+				JSON.stringify(ids)
+			)
+			.map((row) => [row.status_id, row.generation])
 	)
-	const ids = rows.map((row) => row.status_id)
-	db.run(
-		'UPDATE quotes SET verify_after = ?1, lease_until = ?1 WHERE status_id IN (SELECT value FROM json_each(?2))',
-		now + QUOTE_LEASE_MS,
-		JSON.stringify(ids)
-	)
-	return { ids, generations: rows.map((row) => row.generation), more: quotesDue(db, now) }
+	return { ids, generations: ids.map((id) => claimed.get(id)!), more: quotesDue(db, now) }
 })
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -748,39 +761,46 @@ export function continueRevocations(db: Db, left: () => number, now: number): bo
 	return false
 }
 
+// The quotes of an author's statuses naming a stamp that one relayed Delete looks at, accepted ones first (the index's
+// order), so its cost does not grow with the quotes others name the stamp in.
+export const RECHECK_WINDOW = 100
+
 // A Delete of a stamp relayed by another server without the author's proof (federation/inbound.ts): nothing is revoked
-// on its word, but the accepted quote of the actor's status that names the stamp (one: a valid stamp names exactly one
-// quoting status, by its unique uri) is checked again, its state unchanged until then, so a stamp that is gone revokes
-// it. Replays coalesce: idle work is renewed (due now, attempts reset, a new generation); work already due or backing
-// off is left as it is (its next fetch is fresh anyway); work a round has leased keeps its generation, so the fetch in
-// flight still applies, and is marked to be checked once more if that fetch finds the stamp valid. A round's 404 thus
-// always applies, and a Delete that races a fetch is never lost. Returns whether such a quote exists.
+// on its word, but the quotes of the actor's statuses that name the stamp and could still be accepted by it are checked
+// again, their state unchanged until then, so a stamp that is gone revokes or rejects them. Replays coalesce: an idle
+// accepted quote is renewed (due now, attempts reset, a new generation); work already due or backing off, accepted or
+// pending, is left as it is (its next fetch is fresh anyway); work a round has leased, accepted or pending (its first
+// verification), keeps its generation, so the fetch in flight still applies, and is marked to be checked once more if
+// that fetch finds the stamp valid. A round's 404 thus always applies, and a Delete that races a fetch is never lost.
+// Returns whether such a quote exists.
 export function recheckStamp(db: Db, actor: { id: string }, approvalUri: string, now: number): boolean {
-	const row = db.first<{ status_id: string; verify_after: number | null; lease_until: number | null }>(
-		`SELECT status_id, verify_after, lease_until FROM quotes
-		WHERE approval_uri = ?1 AND quoted_account_id = ?2 AND state = 'accepted' LIMIT 1`,
+	const rows = db.all<{
+		status_id: string
+		state: QuoteState
+		verify_after: number | null
+		lease_until: number | null
+	}>(
+		`SELECT status_id, state, verify_after, lease_until FROM quotes
+		WHERE approval_uri = ?1 AND quoted_account_id = ?2 AND state IN ('accepted', 'pending') LIMIT ?3`,
 		approvalUri,
-		actor.id
+		actor.id,
+		RECHECK_WINDOW
 	)
-	if (row === undefined) {
-		return false
+	for (const row of rows) {
+		if (row.lease_until !== null && row.verify_after === row.lease_until && row.lease_until > now) {
+			db.run('UPDATE quotes SET recheck = 1 WHERE status_id = ?', row.status_id)
+		} else if (row.state === 'accepted' && row.verify_after === null) {
+			db.run(
+				`UPDATE quotes SET verify_after = ?2, attempts = 0, hops = max(hops, 1), updated_at = ?3,
+					generation = ${NEW_GENERATION}
+				WHERE status_id = ?1`,
+				row.status_id,
+				now,
+				iso(now)
+			)
+		}
 	}
-	if (row.lease_until !== null && row.verify_after === row.lease_until && row.lease_until > now) {
-		db.run('UPDATE quotes SET recheck = 1 WHERE status_id = ?', row.status_id)
-		return true
-	}
-	if (row.verify_after !== null) {
-		return true
-	}
-	db.run(
-		`UPDATE quotes SET verify_after = ?2, attempts = 0, hops = max(hops, 1), updated_at = ?3,
-			generation = ${NEW_GENERATION}
-		WHERE status_id = ?1`,
-		row.status_id,
-		now,
-		iso(now)
-	)
-	return true
+	return rows.length > 0
 }
 
 // ---------------------------------------------------------------------------------------------------------------
