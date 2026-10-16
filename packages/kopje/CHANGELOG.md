@@ -8,6 +8,38 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+### Added
+
+- The streaming API's `list` stream (`read` or `read:statuses`, with `list` naming one of the account's lists) carries
+  the list's timeline: `update` and `status.update` when a status enters it or one in it is edited (as
+  `GET /api/v1/timelines/list/:id` would show it at its place), and `delete` when a status or boost it held is deleted.
+  The stream is echoed as `["list", "<id>"]`. A missing `list` answers `Missing list name parameter`, another
+  account's list `Not authorized to stream this list` (401), as Mastodon; a value that is not a list id answers
+  `Invalid parameter` (400).
+- The `direct` stream (`read` or `read:statuses`) carries `conversation` whenever one of the account's conversations
+  changes (a new status, read or unread, its last status deleted), as the conversation list presents it. Deleting a
+  conversation sends nothing, as in Mastodon. Where Kopje differs: after a burst (accepting a request that adds many
+  conversations at once) only the 20 newest changes are sent; the conversation list shows the rest.
+- `notifications_merged` (payload `"1"`) is sent on `user` (with `read` or `read:notifications`) and
+  `user:notification` when the account's last pending accepted notification request has had its notifications
+  unfiltered, or a dismiss replaces it, as Mastodon's. Where Kopje differs: nothing is sent when the sender's purge
+  cancels the job.
+- `public*` and `hashtag*` still answer `{"error":"Unknown stream type","status":400}`.
+
+### Instance changes
+
+- Store schema: adds one migration, applied on the first request after the deploy; a rollback to an earlier version
+  needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
+    - `0032_streaming_lists`: rebuilds the streaming journal (at most a 4,096-id span of rows) to admit conversation
+      events, adds a column of the streaming position, lets a list subscription journal statuses and edits (the
+      journal's triggers recreated), adds the per-account conversation mark table (left out of dumps and backups, as the
+      other streaming tables are), a `stream_seq` column on conversations with a constant default and an index on it,
+      and recreates the trigger that moves a conversation's last status back so it also takes the owner's next change
+      sequence. It reads each conversation once, for the index, and the journal's rows; nothing else: on a benchmark
+      store of 1,000,000 accounts, 3,000,000 follows and 2,000,000 statuses its upgrade took 2.3 seconds in workerd's
+      local Durable Object SQLite.
+- `wrangler.jsonc`: unchanged.
+
 ## [0.1.0-rc.10] - 2026-10-16
 
 A tenth release candidate of the first release, published under the npm dist-tag `next`.

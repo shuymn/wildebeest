@@ -1522,14 +1522,15 @@ export const STATUS_CHILDREN: readonly { table: string; column: string; remove: 
 	},
 	// The conversations holding the status (migration 0009_conversations): one row per conversation, which a status
 	// can join again under other participants after an Update, so any number. Each delete fires the trigger
-	// conversation_statuses_removed, which writes that conversation once (AccountConversation.remove_status), so a
-	// batch takes half the rows left.
+	// conversation_statuses_removed, which writes that conversation once (AccountConversation.remove_status) and, when
+	// its owner streams `direct`, the owner's mark before it and the mark's journal row (migration 0032_streaming_lists),
+	// so a batch takes a fourth of the rows left.
 	{
 		table: 'conversation_statuses',
 		column: 'status_id',
 		remove: [
 			`DELETE FROM conversation_statuses WHERE status_id = ?1
-			AND conversation_id IN (SELECT conversation_id FROM conversation_statuses WHERE status_id = ?1 LIMIT CAST(?2 / 2 AS INTEGER))`,
+			AND conversation_id IN (SELECT conversation_id FROM conversation_statuses WHERE status_id = ?1 LIMIT CAST(?2 / 4 AS INTEGER))`,
 		],
 	},
 ]

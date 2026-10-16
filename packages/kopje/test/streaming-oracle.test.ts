@@ -5,12 +5,14 @@ import { beforeAll, describe, expect, it } from 'vitest'
 
 import { NOW } from './app-helpers'
 import { migratedStore } from './helpers'
-import { accountId, runs, statusId, type World, worldArb, writeWorld } from './policy-world'
+import { accountId, listId, runs, statusId, type World, worldArb, writeWorld } from './policy-world'
+import { Db } from '../src/db/sql'
 import type { Page, PageQuery } from '../src/domain/accounts'
+import { addToConversation, type Conversation, listConversations } from '../src/domain/conversations'
 import { listNotifications, type Notification } from '../src/domain/notifications'
 import type { Status } from '../src/domain/status-presenter'
 import { streamUnit } from '../src/domain/streaming'
-import { homeTimeline } from '../src/domain/timelines'
+import { homeTimeline, listTimeline } from '../src/domain/timelines'
 import type { StoreStub } from '../src/platform/store-client'
 import type { StoreOperation } from '../src/platform/store-kernel'
 
@@ -127,8 +129,43 @@ function check(sql: SqlStorage, c: Case): string[] {
 			}
 			page = { limit: 40, maxId: listed.oldest }
 		}
+		// Every list of the world, the viewer's or another owner's, by its read positioned at each status.
+		const listPositioned = (l: number, id: string) =>
+			(
+				ok<Page<Status> | null>(
+					run(listTimeline, {
+						credential,
+						id: listId(l),
+						page: { limit: 1, maxId: String(BigInt(id) + 1n) },
+						present: PRESENT,
+					}),
+					'list'
+				) as Page<Status> | null
+			)?.items[0]?.id === id
 		world.statuses.forEach((_, s) => {
 			const id = statusId(s)
+			for (const [l] of world.lists.entries()) {
+				const positionedInList = listPositioned(l, id)
+				for (const kind of ['status', 'edit']) {
+					const made = run<{ streams: { stream: string }[] }>(streamUnit, {
+						kind,
+						subject: id,
+						accountId: accountId(viewer),
+						tokenHashes: [tokenOf(viewer, 'statuses')],
+						lists: [listId(l)],
+						now,
+					})
+					const onList = made.streams.some(({ stream }) => stream === `list:${listId(l)}`)
+					if (onList !== positionedInList) {
+						problems.push(
+							`${kind} on list ${l} ${world.accounts[viewer]?.name} ${world.statuses[s]?.name}: sent ${onList}, the list read ${positionedInList}`
+						)
+					}
+				}
+				if (positionedInList) {
+					shown.add('list')
+				}
+			}
 			const positioned =
 				ok<Page<Status>>(
 					run(homeTimeline, {
@@ -204,7 +241,7 @@ describe('R33: the streamed statuses agree with their references', () => {
 			}),
 			runs(CASES)
 		)
-		expect([...shown].sort()).toEqual(['home', 'mention only'])
+		expect([...shown].sort()).toEqual(['home', 'list', 'mention only'])
 	}, 120_000)
 })
 
@@ -331,5 +368,125 @@ describe('R33: positioned membership and the followed-hashtag windows', () => {
 		expect(await home(store, { limit: 20 })).toEqual([])
 		expect(await home(store, { limit: 1, maxId: justAbove(s) })).toEqual([])
 		expect(await streamed(store, s)).toBe('')
+	})
+})
+
+// The conversation oracle (design §7): `conversation` on `direct` for (V, C) is sent exactly when C is in V's relation,
+// with V's presentation of it: compared against V's whole conversation list read in one page, never against a status
+// position. The world's direct originals join the conversations of their local author and mentioned local accounts,
+// as storing them and notifying the mentions does.
+describe('R33: the streamed conversation agrees with the conversation relation', () => {
+	let store: StoreStub
+	beforeAll(async () => {
+		store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			state.storage.sql.exec("INSERT INTO instance_settings (name, value) VALUES ('domain', 'kopje.test')")
+			state.storage.sql.exec(
+				"INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('oracle', 'secret', 'oracle', 'urn:ietf:wg:oauth:2.0:oob', 'read')"
+			)
+		})
+	})
+
+	function checkConversations(sql: SqlStorage, c: Case): string[] {
+		writeCase(sql, c)
+		const { world } = c
+		const db = new Db(sql)
+		world.statuses.forEach((status, s) => {
+			if (status.reblogOf !== null || status.visibility !== 'direct') {
+				return
+			}
+			for (const x of new Set([status.author, ...status.mentions.map((m) => m.account)])) {
+				if (world.accounts[x]?.local) {
+					addToConversation(db, accountId(x), statusId(s))
+				}
+			}
+		})
+		const all = sql.exec<{ id: string }>('SELECT CAST(id AS TEXT) AS id FROM conversations ORDER BY id').toArray()
+		const now = Date.parse(world.now)
+		const problems: string[] = []
+		world.accounts.forEach((account, viewer) => {
+			if (!account.local || account.suspended) {
+				return
+			}
+			const credential = { tokenHash: tokenOf(viewer, 'read'), scope: 'read', now } as const
+			const listed = new Map(
+				ok<Page<Conversation>>(
+					listConversations.run(sql, { credential, page: { limit: 1000 }, present: PRESENT }),
+					'conversations'
+				).items.map((conversation) => [conversation.id, conversation])
+			)
+			for (const { id } of all) {
+				const made = streamUnit.run(sql, {
+					kind: 'conversation',
+					subject: id,
+					accountId: accountId(viewer),
+					tokenHashes: [tokenOf(viewer, 'statuses')],
+					now,
+				})
+				const expected = listed.get(id)
+				const actual = made.event === 'conversation' ? made.payload : undefined
+				if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+					problems.push(
+						`conversation ${id} for ${account.name}: sent ${JSON.stringify(actual)}, listed ${JSON.stringify(expected)}`
+					)
+				}
+				if (expected !== undefined) {
+					shownConversations.add(expected.last_status === null ? 'hidden last status' : 'shown')
+				}
+			}
+		})
+		return problems
+	}
+
+	const shownConversations = new Set<string>()
+
+	it("sends a conversation to its owner alone, as the owner's list presents it", async () => {
+		await fc.assert(
+			fc.asyncProperty(caseArb, async (c) => {
+				const problems = await runInDurableObject(store, (_instance, state) => checkConversations(state.storage.sql, c))
+				expect(problems).toEqual([])
+			}),
+			runs(CASES)
+		)
+		expect(shownConversations.has('shown')).toBe(true)
+	}, 120_000)
+
+	it('returns each of two conversations sharing a last status alone', async () => {
+		const problems = await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			const world = fc.sample(worldArb, { numRuns: 1, seed: 7 })[0]!
+			writeCase(sql, { world, filtered: [] })
+			const owner = world.accounts.findIndex((account) => account.local && !account.suspended)
+			sql.exec(
+				`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+				VALUES ('290000000000000000', 'https://kopje.test/ap/o/shared', ?, 'direct', '<p>x</p>', ?)`,
+				accountId(owner),
+				world.now
+			)
+			const ids = ['a', 'b'].map(
+				(participant) =>
+					sql
+						.exec<{ id: string }>(
+							`INSERT INTO conversations (account_id, thread, participants, last_status_id, unread)
+							VALUES (?, 'shared', ?, '290000000000000000', 1) RETURNING CAST(id AS TEXT) AS id`,
+							accountId(owner),
+							JSON.stringify([participant === 'a' ? accountId(owner) : '199999999999999999'])
+						)
+						.one().id
+			)
+			return ids.map(
+				(id) =>
+					(
+						streamUnit.run(sql, {
+							kind: 'conversation',
+							subject: id,
+							accountId: accountId(owner),
+							tokenHashes: [tokenOf(owner, 'read')],
+							now: Date.parse(world.now),
+						}).payload as Conversation
+					).id === id
+			)
+		})
+		expect(problems).toEqual([true, true])
 	})
 })

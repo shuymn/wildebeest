@@ -14,6 +14,7 @@ import { addToConversation } from './conversations'
 import { MAX_MEANINGFUL_COUNT, REMOVAL_BATCHES, runRemovals } from './notifications'
 import { writeOperation } from './operation'
 import { presentStatuses, type Status } from './status-presenter'
+import { streamMerged } from './streaming'
 import type { Db } from '../db/sql'
 
 // Notification policies and requests (Mastodon 4.5's NotificationPolicy, NotificationRequest and
@@ -273,6 +274,9 @@ function jobBatch(db: Db, job: Job, now: string): void {
 	}
 	if (low === null || (window?.walked ?? 0) < REQUEST_JOB_WINDOW) {
 		db.run('DELETE FROM notification_request_jobs WHERE id = ?', job.id)
+		if (job.kind === 'accept') {
+			mergedIfDone(db, job.account_id, now)
+		}
 	} else {
 		db.run('UPDATE notification_request_jobs SET cursor = ? WHERE id = ?', low, job.id)
 	}
@@ -302,9 +306,15 @@ function runJobs(db: Db, ids: readonly number[] | null, batches: number, now: st
 // row). Returns its id, or null when no notification is stored at all. A recipient and sender have one job at most:
 // the latest answer replaces a job an earlier one left, and applies to all of the pair's filtered notifications that
 // remain, so the outcome does not depend on the order the rounds would run two jobs in.
+// A dismiss that replaces the recipient's last accept job ends their pending merge (mergedIfDone); an accept replacing
+// one does not.
 function startJob(db: Db, kind: Job['kind'], accountId: string, fromId: string, now: string): number | null {
-	db.run('DELETE FROM notification_request_jobs WHERE account_id = ? AND from_account_id = ?', accountId, fromId)
-	return (
+	const replaced = db.first<{ kind: Job['kind'] }>(
+		'DELETE FROM notification_request_jobs WHERE account_id = ? AND from_account_id = ? RETURNING kind',
+		accountId,
+		fromId
+	)
+	const id =
 		db.first<{ id: number }>(
 			`INSERT INTO notification_request_jobs (account_id, from_account_id, kind, cursor, created_at)
 			SELECT ?1, ?2, ?3, n.id + 1, ?4 FROM (SELECT id FROM notifications ORDER BY id DESC LIMIT 1) n RETURNING id`,
@@ -313,6 +323,27 @@ function startJob(db: Db, kind: Job['kind'], accountId: string, fromId: string, 
 			kind,
 			now
 		)?.id ?? null
+	if (replaced?.kind === 'accept' && kind === 'dismiss') {
+		mergedIfDone(db, accountId, now)
+	}
+	return id
+}
+
+// The streaming API's `notifications_merged` (UnfilterNotificationsWorker#notify_streaming!): on the recipient's
+// transition to no pending accept job, as `merged` turns true. Cancellation by the sender's purge (inbox.ts) emits
+// nothing.
+function mergedIfDone(db: Db, accountId: string, now: string): void {
+	if (!pendingAccept(db, accountId)) {
+		streamMerged(db, accountId, now)
+	}
+}
+
+function pendingAccept(db: Db, accountId: string): boolean {
+	return (
+		db.first(
+			"SELECT 1 AS x FROM notification_request_jobs WHERE account_id = ? AND kind = 'accept' LIMIT 1",
+			accountId
+		) !== undefined
 	)
 }
 
@@ -392,13 +423,7 @@ export const dismissNotificationRequests = userWriteOperation<{ ids: string[] },
 // GET /api/v1/notifications/requests/merged: whether every request the viewer accepted has had its notifications
 // unfiltered (no accept job left).
 export const notificationRequestsMerged = userReadOperation<object, { merged: boolean }>(
-	(db, _input, { accountId }) => ({
-		merged:
-			db.first(
-				"SELECT 1 AS x FROM notification_request_jobs WHERE account_id = ? AND kind = 'accept' LIMIT 1",
-				accountId
-			) === undefined,
-	})
+	(db, _input, { accountId }) => ({ merged: !pendingAccept(db, accountId) })
 )
 
 // A round of the jobs, oldest first, at most REQUEST_JOB_BATCHES batches, and of the removals cleared notifications
