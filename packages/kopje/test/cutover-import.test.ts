@@ -114,11 +114,11 @@ describe('cutover import of a converted legacy export', () => {
 				description: 'a wildebeest',
 			}),
 		])
-		// Its Hashtag and legacy's recorded names, as Kopje names them.
+		// Its Hashtag and legacy's recorded names, as Kopje names them: number signs dropped.
 		expect(status.tags).toEqual([
-			expect.objectContaining({ name: '#foo' }),
-			expect.objectContaining({ name: '#hash' }),
-			expect.objectContaining({ name: '#wide' }),
+			expect.objectContaining({ name: 'foo' }),
+			expect.objectContaining({ name: 'hash' }),
+			expect.objectContaining({ name: 'wide' }),
 			expect.objectContaining({ name: 'wildebeest' }),
 		])
 		expect(status.favourites_count).toBe(2)

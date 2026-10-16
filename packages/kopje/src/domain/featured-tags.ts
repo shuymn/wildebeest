@@ -161,7 +161,7 @@ export const createFeaturedTag = userWriteOperation<
 	const errors: string[] = []
 	if (display === '') {
 		errors.push("Name can't be blank")
-	} else if (!isHashtagName(display)) {
+	} else if (!isHashtagName(display) || name === '') {
 		errors.push('Name is invalid')
 	}
 	if (existing !== undefined) {

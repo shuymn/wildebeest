@@ -88,8 +88,11 @@ function pushEntities(text: string, out: Segment[]): void {
 		}
 		if (username !== undefined) {
 			out.push({ kind: 'mention', username, domain: domain === undefined ? null : normalizeDomain(domain), text: raw })
-		} else if (tag !== undefined) {
+		} else if (tag !== undefined && normalizeTag(tag) !== '') {
 			out.push({ kind: 'tag', name: tag, text: raw })
+		} else {
+			// A name of characters a hashtag cannot hold (a lone combining mark) normalizes to nothing: it is text.
+			out.push({ kind: 'text', text: raw })
 		}
 		at = match.index + raw.length
 	}
