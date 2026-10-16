@@ -61,6 +61,7 @@ import {
 	MAX_STATUSES_BY_ID,
 	statusContext,
 } from '../src/domain/statuses'
+import { streamAccept, streamEvents, streamNotificationUnit, streamTokens } from '../src/domain/streaming'
 import { featuredTagSuggestions, followedTags, MAX_FOLLOWED_TAGS } from '../src/domain/tags'
 import {
 	accountStatuses,
@@ -3027,7 +3028,7 @@ describe('filtered notifications and requests cost a read nothing (RES-7)', () =
 			expect(grown).toEqual([])
 			// The viewer's lists show the follow requests and the follows alone.
 			const newest = await runInDurableObject(few, (_instance, state) =>
-				listNotifications.run(state.storage.sql, { ...list, page: { limit: 40 } } as never)
+				listNotifications.run(state.storage.sql, { ...list, page: { limit: 40 } })
 			)
 			expect(
 				(newest as { value: { items: { type: string }[] } }).value.items
@@ -3117,7 +3118,7 @@ describe('pending request jobs cost merged and a round a bounded read (RES-7)', 
 		}
 		expect(grown).toEqual([])
 		const merged = await runInDurableObject(many, (_instance, state) =>
-			notificationRequestsMerged.run(state.storage.sql, { credential } as never)
+			notificationRequestsMerged.run(state.storage.sql, { credential })
 		)
 		expect(merged).toEqual({ status: 'ok', value: { merged: false } })
 	}, 120_000)
@@ -3622,7 +3623,7 @@ describe('clearing and dismissing touch a bounded batch, and reads skip what the
 		for (const removal of ['clear', 'dismissal'] as const) {
 			const round = async (count: number) => {
 				const store = await removing(count, removal)
-				const rows = await rowsTouched(store, runNotificationRequestJobs, { now: NOW } as never)
+				const rows = await rowsTouched(store, runNotificationRequestJobs, { now: NOW })
 				expect([removal, count, await stored(store)]).toEqual([removal, count, count + FOLLOWS + REQUESTS - IN_REQUEST])
 				return rows
 			}
@@ -3726,4 +3727,140 @@ describe('clearing and dismissing touch a bounded batch, and reads skip what the
 			expect((newest as { value: { items: unknown[] } }).value.items).toHaveLength(FOLLOWS + REQUESTS)
 		}
 	}, 240_000)
+})
+
+describe('a streamed notification reads its item, however many notifications there are (RES-7)', () => {
+	const VIEWER_ID = '693000000000000000'
+	const OTHER_ID = '693000000000000001'
+	const SENDER_BASE = 694000000000000000n
+	const TOKEN = 'stream-token'
+
+	// The viewer and another local account, each with `count` notifications from as many remote senders, the viewer's
+	// policy filtering some (every third), and a token of the viewer's.
+	async function notified(count: number): Promise<StoreStub> {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			sql.exec("INSERT INTO instance_settings (name, value) VALUES ('domain', 'kopje.test')")
+			for (const [id, name] of [
+				[VIEWER_ID, 'viewer'],
+				[OTHER_ID, 'other'],
+			]) {
+				sql.exec(
+					'INSERT INTO accounts (id, uri, username) VALUES (?, ?, ?)',
+					id,
+					`https://kopje.test/ap/users/${name}`,
+					name
+				)
+				sql.exec(
+					"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, ?, X'00', X'00', 'test')",
+					id,
+					`${name}@example.com`
+				)
+			}
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+				INSERT INTO accounts (id, uri, username, domain)
+				SELECT CAST(?2 + i AS TEXT), 'https://far' || (i % 10) || '.example/users/u' || i, 'u' || i,
+					'far' || (i % 10) || '.example'
+				FROM n`,
+				count,
+				String(SENDER_BASE)
+			)
+			for (const recipient of [VIEWER_ID, OTHER_ID]) {
+				sql.exec(
+					`INSERT INTO notifications (account_id, type, from_account_id, filtered)
+					SELECT ?1, 'follow', id, CAST(id AS INTEGER) % 3 = 0 FROM accounts WHERE domain IS NOT NULL ORDER BY id`,
+					recipient
+				)
+			}
+			sql.exec(
+				"INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('streaming', 'secret', 'streaming', 'urn:ietf:wg:oauth:2.0:oob', 'read')"
+			)
+			sql.exec(
+				"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES (?, 'access', 'streaming', ?, 'read')",
+				TOKEN,
+				VIEWER_ID
+			)
+		})
+		return store
+	}
+
+	// The viewer's newest, a middle and the oldest notification shown, and a filtered one.
+	async function targets(store: StoreStub): Promise<string[]> {
+		return runInDurableObject(store, (_instance, state) => {
+			const rows = state.storage.sql
+				.exec<{ id: number; filtered: number }>(
+					'SELECT id, filtered FROM notifications WHERE account_id = ? ORDER BY id DESC',
+					VIEWER_ID
+				)
+				.toArray()
+			const kept = rows.filter((row) => row.filtered === 0)
+			return [kept[0], kept[Math.floor(kept.length / 2)], kept.at(-1), rows.find((row) => row.filtered === 1)].map(
+				(row) => String(row!.id)
+			)
+		})
+	}
+
+	it('reads the same rows with 20 or 2,000 notifications of the viewer and of another account', async () => {
+		const few = await notified(20)
+		const many = await notified(2000)
+		const unit = (notificationId: string) => ({
+			accountId: VIEWER_ID,
+			tokenHashes: [TOKEN],
+			notificationId,
+			now: NOW,
+		})
+		const grown: string[] = []
+		const fewTargets = await targets(few)
+		const manyTargets = await targets(many)
+		for (const [i, name] of ['newest', 'middle', 'oldest', 'filtered'].entries()) {
+			const fewInput = unit(fewTargets[i]!)
+			const manyInput = unit(manyTargets[i]!)
+			// Not vacuous: the shown ones are presented, the filtered one is not.
+			const made = await runInDurableObject(many, (_instance, state) =>
+				streamNotificationUnit.run(state.storage.sql, manyInput)
+			)
+			expect([name, made.notification?.type ?? null]).toEqual([name, name === 'filtered' ? null : 'follow'])
+			const fewRows = await rowsRead({ store: few }, streamNotificationUnit, fewInput)
+			const manyRows = await rowsRead({ store: many }, streamNotificationUnit, manyInput)
+			if (manyRows > fewRows + ALLOWANCE) {
+				grown.push(`${name}: ${fewRows} -> ${manyRows}`)
+			}
+		}
+		expect(grown).toEqual([])
+	}, 120_000)
+
+	it("reads a window of the journal, however long it is and whatever the viewer's history", async () => {
+		const journal = async (count: number) => {
+			const store = await notified(count)
+			// Every notification journaled, the position at the start.
+			await runInDurableObject(store, (_instance, state) => {
+				state.storage.sql.exec(
+					"INSERT INTO stream_events (kind, subject, created_at) SELECT 'notification', CAST(id AS TEXT), created_at FROM notifications ORDER BY id"
+				)
+			})
+			return store
+		}
+		const few = await journal(100)
+		const many = await journal(2000)
+		const scan = { limit: 64 }
+		const events = await runInDurableObject(many, (_instance, state) => streamEvents.run(state.storage.sql, scan))
+		expect(events.events).toHaveLength(64)
+		// The scan, and the upgrade's and the turn's token checks, which read the journal's head.
+		const reads: [string, StoreOperation<never, unknown>, unknown][] = [
+			['scan', streamEvents, scan],
+			['accept', streamAccept, { tokenHash: TOKEN, now: NOW }],
+			['tokens', streamTokens, { sockets: [{ tokenHash: TOKEN, accountId: VIEWER_ID }], now: NOW }],
+		]
+		const grown: string[] = []
+		for (const [name, operation, input] of reads) {
+			const fewRows = await rowsRead({ store: few }, operation, input as never)
+			const manyRows = await rowsRead({ store: many }, operation, input as never)
+			if (manyRows > fewRows + ALLOWANCE) {
+				grown.push(`${name}: ${fewRows} -> ${manyRows}`)
+			}
+		}
+		expect(grown).toEqual([])
+	}, 120_000)
 })

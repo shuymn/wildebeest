@@ -174,8 +174,9 @@ describe('admin endpoints', () => {
 		expect(capacity.databaseSize).toBeGreaterThan(0)
 		expect(capacity.tables).toContainEqual({ name: 'statuses', rows: 3 })
 		expect(capacity.tables).toContainEqual({ name: 'mutes', rows: 1 })
-		// The AUTOINCREMENT counters of the seeded notifications and mutes.
-		expect(capacity.tables).toContainEqual({ name: 'sqlite_sequence', rows: 2 })
+		// The AUTOINCREMENT counters of the seeded notifications and mutes, and the streaming journal's, which SQLite
+		// starts at 0 when a notification insert runs its trigger (migration 0026_streaming), whether or not it records.
+		expect(capacity.tables).toContainEqual({ name: 'sqlite_sequence', rows: 3 })
 		expect(capacity.tables.some((t) => t.name.startsWith('_cf_'))).toBe(false)
 		expect(await (await as(adminClaims(), '/admin/spool')).json()).toEqual({
 			parts: 1,

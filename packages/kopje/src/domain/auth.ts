@@ -90,6 +90,24 @@ function contextOf<A extends string | null>(accountId: A, now: number): ViewerCo
 	return { accountId, now: new Date(now).toISOString() }
 }
 
+// The tokens of one account's streaming sockets (domain/streaming.ts), checked in the transaction that makes a message
+// (R33, VIS-26): the scopes of each token still valid and still the account's, and the account's context when any is.
+export function authorizeStream(
+	db: Db,
+	accountId: string,
+	tokenHashes: readonly string[],
+	now: number
+): { scopes: Map<string, string[]>; context: UserContext | null } {
+	const scopes = new Map<string, string[]>()
+	for (const tokenHash of tokenHashes) {
+		const auth = authorize(db, { tokenHash, scope: null, now })
+		if (auth.status === 'ok' && auth.viewer.accountId === accountId) {
+			scopes.set(tokenHash, auth.viewer.scopes)
+		}
+	}
+	return { scopes, context: scopes.size === 0 ? null : contextOf(accountId, now) }
+}
+
 type Declare = typeof readOperation
 
 function guarded(declare: Declare) {

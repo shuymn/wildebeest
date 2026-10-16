@@ -62,6 +62,7 @@ function excluded(name) {
 		name === 'kopje_migrations' ||
 		name === 'media_orphans' ||
 		name === 'backup_media' ||
+		name.startsWith('stream_') ||
 		name.startsWith('_cf_') ||
 		(name.startsWith('sqlite_') && name !== 'sqlite_sequence')
 	)

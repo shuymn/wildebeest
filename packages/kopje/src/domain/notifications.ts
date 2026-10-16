@@ -355,6 +355,24 @@ export const getNotification = userReadOperation<{ id: string; present: Present 
 	}
 )
 
+// R33 for a `notification` event (domain/streaming.ts): the viewer's notification list positioned at notification
+// `id`, which is the list read (R15, unfiltered and kept, any type) restricted to that id, since ids are unique; and
+// its presentation. Null when the list would not show it now.
+export function streamedNotification(db: Db, viewer: UserContext, id: string, present: Present): Notification | null {
+	if (!NOTIFICATION_ID.test(id)) {
+		return null
+	}
+	const read = statusReads(viewer, { viewer: '?1', now: '?3' })
+	const rows = read.notifications<Omit<NotificationRow, 'status_id'>>(
+		db,
+		{ where: 'n.id = CAST(?2 AS INTEGER)', columns: NOTIFICATION_COLUMNS, includeFiltered: false },
+		viewer.accountId,
+		id,
+		viewer.now
+	)
+	return presentNotifications(db, rows, viewer, present)[0] ?? null
+}
+
 export const dismissNotification = userWriteOperation<{ id: string }, boolean>((db, { id }, { accountId }) => {
 	if (!NOTIFICATION_ID.test(id)) {
 		return false

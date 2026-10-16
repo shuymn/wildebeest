@@ -103,6 +103,19 @@ describe('log redaction', () => {
 		])
 	})
 
+	it("logs a failed streaming upgrade by its route, never the query's access_token", async () => {
+		const logs = captureLogs()
+		const response = await harness(failingStore).request(
+			'/api/v1/streaming?access_token=kopje-dummy-token-0123&stream=dummy-query-secret',
+			{ headers: { upgrade: 'websocket' } }
+		)
+		expect(response.status).toBe(500)
+		logs.expectNoSecrets()
+		expect(logs.lines.map((line) => JSON.parse(line) as unknown)).toEqual([
+			[{ event: 'kopje.error', method: 'GET', route: '/api/v1/streaming', status: 500, error: 'Error' }],
+		])
+	})
+
 	// workerd refuses methods outside its own list, so an extension method it knows (WebDAV's PROPFIND) stands in for any
 	// method outside the standard set.
 	it('logs a non-standard method as OTHER', async () => {

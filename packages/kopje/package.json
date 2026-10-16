@@ -60,7 +60,7 @@
 	},
 	"scripts": {
 		"lint": "eslint src test cli test-node --quiet",
-		"test": "vitest run && vitest run -c vitest.node.config.ts",
+		"test": "vitest run && vitest run -c vitest.streaming.config.ts --max-workers=1 --no-isolate && vitest run -c vitest.node.config.ts",
 		"typecheck": "tsc --noEmit && tsc -p cli && tsc -p test-node",
 		"types": "wrangler types --include-runtime=false",
 		"build": "node scripts/build-package.mjs",
