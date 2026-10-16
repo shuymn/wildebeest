@@ -104,8 +104,14 @@ function presentTag(db: Db, name: string, viewerId: string | null, present: Pres
 // GET /api/v1/tags/:id. Null for a name that is not a hashtag.
 export const getTag = optionalUserReadOperation<{ name: string; now: number; present: Present }, Tag | null>(
 	(db, { name, now, present }, { accountId: viewerId }) =>
-		isHashtagName(name) ? presentTag(db, normalizeTag(name), viewerId, present, now) : null
+		isTagName(name) ? presentTag(db, normalizeTag(name), viewerId, present, now) : null
 )
+
+// Whether `name`, as the request names it, is a hashtag: a hashtag name (Tag::HASHTAG_NAME_RE) that leaves a name
+// when normalized (a lone combining mark leaves none).
+function isTagName(name: string): boolean {
+	return isHashtagName(name) && normalizeTag(name) !== ''
+}
 
 export type TagInput = { name: string; now: number; present: Present }
 
@@ -121,7 +127,7 @@ function tagWrite(
 	) => { status: 'ok' } | { status: 'invalid'; errors: string[] }
 ) {
 	return userWriteOperation<TagInput, TagResult>((db, input, { accountId }) => {
-		if (!isHashtagName(input.name)) {
+		if (!isTagName(input.name)) {
 			return { status: 'not_found' }
 		}
 		const tag = normalizeTag(input.name)

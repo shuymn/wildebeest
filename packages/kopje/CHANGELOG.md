@@ -156,6 +156,14 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   are no longer read to show its empty profile.
 - A page of a list's members (`GET /api/v1/lists/:id/accounts` with `max_id` or `min_id`) is read from its cursor, not
   from the newest member.
+- Hashtags are normalized as Mastodon 4.5 normalizes them (HashtagNormalizer): NFKC, lowercase, Latin letters with
+  diacritics folded to ASCII by Mastodon's table, and the characters a hashtag cannot hold dropped. `#Café`, `#cafe`
+  and `#CAFÉ` are one hashtag, as on Mastodon, wherever a hashtag is named: in a posted or received status (a received
+  `Hashtag` loses every `#` with the rest), on hashtag timelines, in home through a followed hashtag, in search, on
+  the tagged profile page, and among featured hashtags, so featuring `blahaj` after `BLÅHAJ` is refused as taken.
+  A hashtag in status text that leaves nothing once normalized (a lone combining mark) stays text, and hashtag search
+  drops the spaces of its query rather than finding nothing. The cutover and `verify-conversion` name hashtags the same
+  way.
 
 ### Fixed
 
