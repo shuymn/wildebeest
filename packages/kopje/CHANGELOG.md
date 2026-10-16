@@ -8,6 +8,24 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+### Added
+
+- The Mastodon admin API's 63 routes (`/api/v1/admin/*` and `GET /api/v2/admin/accounts`) are routed, each with its
+  admin scope and an optional token, as Mastodon's. None is served yet: each answers as Mastodon answers a caller whose
+  role lacks the route's permission.
+    - `GET /api/v1/admin/trends/tags`, `/links` and `/statuses` answer `[]`, as the public trends do.
+    - `GET`, `PUT`, `PATCH` and `DELETE` of one domain block, domain allow, IP block, email domain block or canonical
+      email block answer 404 `Record not found`: Kopje stores none.
+    - Every other route answers 403 `This action is not allowed`, to everyone, the admin included.
+    - A token sent must be valid, or the answer is 401. It must cover the route's scope, or the answer is 403
+      `This action is outside the authorized scopes`. An app token is let through, as by Mastodon.
+    - The admin these routes will serve is the one local account whose email equals `admin_email`, compared trimmed
+      and lowercased. There is none when `admin_email` is unset or empty, when no local account matches, when the match
+      is suspended, or when two accounts match; nothing is picked then. The match is read in each request, so existing
+      tokens follow a change of `admin_email` at once. `/setup` after bootstrap uses the same match.
+    - `GET /admin/health` (Access only) shows `oauthAdmin`: `status` (`ok`, `unset`, `none`, `suspended` or
+      `ambiguous`) and the matched `username`.
+
 ## [0.1.0-rc.9] - 2026-10-16
 
 A ninth release candidate of the first release, published under the npm dist-tag `next`.

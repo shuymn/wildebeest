@@ -1,3 +1,4 @@
+import { adminAccountId } from './admin-authority'
 import type { ViewerContext } from './audience'
 import { mediaDeleteOperation, readOperation, sessionOperation, writeOperation } from './operation'
 import type { Db } from '../db/sql'
@@ -33,6 +34,9 @@ export type AuthFailure =
 	| { status: 'suspended' }
 	| { status: 'insufficient_scope' }
 	| { status: 'user_required' }
+	// An admin operation's refusal (adminReadOperation): the caller is not the OAuth admin, or Kopje does not grant the
+	// route's permission. Mastodon's 403 "This action is not allowed".
+	| { status: 'forbidden' }
 
 export type Authorized<O> = AuthFailure | { status: 'ok'; value: O }
 
@@ -161,3 +165,59 @@ export function optionalUserReadOperation<I, O>(
 		return { status: 'ok', value: run(db, input, contextOf(auth.viewer.accountId, now)) }
 	})
 }
+
+// Mastodon's permission bits (app/models/user_role.rb) of the admin API's route groups.
+export const ADMIN_PERMISSION = {
+	viewDashboard: 8,
+	manageReports: 16,
+	manageFederation: 32,
+	manageBlocks: 128,
+	manageTaxonomies: 256,
+	manageUsers: 1024,
+	deleteUserData: 524288,
+} as const
+
+export type AdminPermission = (typeof ADMIN_PERMISSION)[keyof typeof ADMIN_PERMISSION]
+
+// The permissions of the OAuth admin's role: the bits of the route groups Kopje serves. A group's bit is set only
+// once the whole group is served; until then its routes refuse the admin as they refuse everyone.
+export const ADMIN_PERMISSIONS = 0
+
+// The OAuth admin acting through an admin route: its account, the client it acts through, and the request time.
+export type Admin = { accountId: string; clientId: string; now: number }
+
+// Operations of the Mastodon admin API (R37, VIS-29). The route's token is optional (Mastodon's
+// authorize_if_got_token!): a token sent must be valid and cover the route's admin scope, and then, in the same
+// transaction, the caller must be the OAuth admin (adminAccountId, read here, so tokens follow the current match) and
+// `granted` must hold the route's permission. Anyone else, an anonymous caller and an app token included, is refused
+// with `forbidden`, as Mastodon's policies refuse a role without the permission. `granted` is ADMIN_PERMISSIONS
+// outside tests.
+export function adminGuarded(declare: Declare, granted: number) {
+	return <I, O>(
+		permission: AdminPermission,
+		run: (db: Db, input: I, admin: Admin) => O
+	): StoreOperation<I & { credential: UserCredential | null }, Authorized<O>> =>
+		declare<I & { credential: UserCredential | null }, Authorized<O>>((db, input) => {
+			if (input.credential === null) {
+				return { status: 'forbidden' }
+			}
+			const auth = authorize(db, input.credential)
+			if (auth.status === 'user_required') {
+				return { status: 'forbidden' }
+			}
+			if (auth.status !== 'ok') {
+				return auth
+			}
+			const { viewer } = auth
+			if (viewer.accountId === null || viewer.accountId !== adminAccountId(db) || (granted & permission) === 0) {
+				return { status: 'forbidden' }
+			}
+			return {
+				status: 'ok',
+				value: run(db, input, { accountId: viewer.accountId, clientId: viewer.client.id, now: viewer.now }),
+			}
+		})
+}
+
+export const adminReadOperation = adminGuarded(readOperation, ADMIN_PERMISSIONS)
+export const adminWriteOperation = adminGuarded(writeOperation, ADMIN_PERMISSIONS)

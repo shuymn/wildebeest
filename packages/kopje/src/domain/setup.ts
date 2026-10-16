@@ -1,3 +1,4 @@
+import { oauthAdmin } from './admin-authority'
 import { authorize, type UserCredential } from './auth'
 import { allocateLocalId } from './ids'
 import { chargeInstanceTransforms } from './media'
@@ -146,21 +147,15 @@ function sessionNames(db: Db, order: 'ASC' | 'DESC'): string[] {
 		.map((row) => row.name)
 }
 
-// The admin behind a web session: a live token of the web client whose account's email is admin_email.
-// It is checked at the operation's own time, not the time the request began.
+// The admin behind a web session: a live token of the web client of the OAuth admin (adminAccountId, the same
+// fail-closed match as the admin API's). It is checked at the operation's own time, not the time the request began.
 function adminAccount(db: Db, credential: UserCredential, now: number): { username: string } | null {
 	const auth = authorize(db, { ...credential, now })
 	if (auth.status !== 'ok' || auth.viewer.accountId === null || auth.viewer.client.id !== webClientId(db)) {
 		return null
 	}
-	const adminEmail = setting(db, ACCESS_SETTINGS.adminEmail)
-	const row = db.first<{ email: string; username: string }>(
-		'SELECT l.email, a.username FROM local_accounts l JOIN accounts a ON a.id = l.account_id WHERE l.account_id = ?',
-		auth.viewer.accountId
-	)
-	return adminEmail !== null && row !== undefined && row.email.toLowerCase() === adminEmail.trim().toLowerCase()
-		? { username: row.username }
-		: null
+	const admin = oauthAdmin(db)
+	return admin.accountId === auth.viewer.accountId && admin.username !== null ? { username: admin.username } : null
 }
 
 // Whether the authority may act now: a live setup session before bootstrap, the admin after it (SETUP-2).
@@ -176,19 +171,12 @@ function holderOf(authority: SetupAuthority): string {
 }
 
 function instanceConfig(db: Db): InstanceConfig {
-	const adminEmail = setting(db, ACCESS_SETTINGS.adminEmail)
-	const admin =
-		adminEmail === null
-			? undefined
-			: db.first<{ username: string }>(
-					'SELECT a.username FROM local_accounts l JOIN accounts a ON a.id = l.account_id WHERE lower(l.email) = lower(?)',
-					adminEmail.trim()
-				)
+	const admin = oauthAdmin(db)
 	return {
 		domain: setting(db, 'domain'),
 		teamDomain: setting(db, ACCESS_SETTINGS.teamDomain),
-		adminEmail,
-		adminUsername: admin?.username ?? null,
+		adminEmail: setting(db, ACCESS_SETTINGS.adminEmail),
+		adminUsername: admin.accountId === null ? null : admin.username,
 		serviceTokenClientId: setting(db, ACCESS_SETTINGS.serviceTokenClientId),
 	}
 }
