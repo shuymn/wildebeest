@@ -90,7 +90,10 @@ async function readers(h: ApiHarness, alice: User, favourites: string, oneId: st
 		v1: await length('/api/v1/notifications?limit=80'),
 		filtered: await length('/api/v1/notifications?limit=80&include_filtered=true'),
 		sender: await length(`/api/v1/notifications?account_id=${sender(1)}`),
-		one: (await getJson(h, `/api/v1/notifications/${oneId}`, alice.token)).status,
+		one: [
+			(await getJson(h, `/api/v1/notifications/${oneId}`, alice.token)).status,
+			(await getJson(h, `/api/v2/notifications/ungrouped-${oneId}`, alice.token)).status,
+		],
 		grouped: grouped.body.notification_groups.map((g) => [g.group_key, g.notifications_count]),
 		group: group.status === 200 ? group.body.notification_groups[0]?.notifications_count : group.status,
 		accounts: await length(`/api/v2/notifications/${favourites}/accounts?limit=80`),
@@ -140,16 +143,19 @@ const dismiss = (h: ApiHarness, user: User, key: string) =>
 describe('clearing notifications', () => {
 	it('hides every notification from every reader at once, and the rounds delete them', async () => {
 		const { h, alice, status, favourites } = await scene()
-		const { id: oneId } = await one(sql<{ id: number }>(h.store, 'SELECT max(id) AS id FROM notifications'))
+		const { id: newest } = await one(sql<{ id: number }>(h.store, 'SELECT max(id) AS id FROM notifications'))
+		// The oldest notification, which the request leaves for the rounds: read by id, it must be hidden by the mark.
+		const { id: oneId } = await one(sql<{ id: number }>(h.store, 'SELECT min(id) AS id FROM notifications'))
 		const before = await readers(h, alice, favourites, String(oneId))
-		expect(before).toMatchObject({ v1: 80, filtered: 80, sender: 2, one: 200, group: 400, accounts: 80 })
+		expect(before).toMatchObject({ v1: 80, filtered: 80, sender: 2, one: [200, 200], group: 400, accounts: 80 })
 		const total = FAVOURITES + FOLLOWS + 1
 		const response = await clear(h, alice)
 		expect({ status: response.status, body: await response.json() }).toEqual({ status: 200, body: {} })
 		// The request deleted its batches, newest first; the rest is still stored, and hidden.
 		expect(await count(h)).toBe(total - IN_REQUEST)
-		expect(await pending(h)).toEqual([{ kind: 'clear', account_id: alice.id, group_key: null, max_id: oneId }])
-		const gone = { v1: 0, filtered: 0, sender: 0, one: 404, grouped: [], group: 404, accounts: 0, unread: 0 }
+		expect(await pending(h)).toEqual([{ kind: 'clear', account_id: alice.id, group_key: null, max_id: newest }])
+		expect(await count(h, 'id = ?', oneId)).toBe(1)
+		const gone = { v1: 0, filtered: 0, sender: 0, one: [404, 404], grouped: [], group: 404, accounts: 0, unread: 0 }
 		expect(await readers(h, alice, favourites, String(oneId))).toEqual({ ...gone, unreadGroups: 0 })
 		// A notification written after the clear shows, in a group of its own kind (the cleared one is not joined).
 		await runInDurableObject(h.store, (_instance, state) =>
@@ -165,7 +171,7 @@ describe('clearing notifications', () => {
 		expect(after).toMatchObject({ v1: 1, grouped: [[favourites, 1]], group: 1, accounts: 1, unread: 1 })
 		expect(await rounds(h)).toBe(Math.ceil((total - IN_REQUEST + 1) / IN_REQUEST))
 		expect(await count(h)).toBe(1)
-		expect(await count(h, 'id > ?', oneId)).toBe(1)
+		expect(await count(h, 'id > ?', newest)).toBe(1)
 		expect(await pending(h)).toEqual([])
 		expect(await readers(h, alice, favourites, String(oneId))).toEqual(after)
 	}, 120_000)
@@ -260,19 +266,24 @@ describe('dismissing a group', () => {
 		expect(await pending(h)).toEqual([
 			{ kind: 'dismissal', account_id: alice.id, group_key: favourites, max_id: newest },
 		])
+		// The group's oldest notification, which the request leaves for the rounds: read by id, it must be hidden.
+		const { id: oldest } = await one(
+			sql<{ id: number }>(h.store, 'SELECT min(id) AS id FROM notifications WHERE group_key = ?', favourites)
+		)
+		expect(await count(h, 'id = ? AND group_key = ?', oldest, favourites)).toBe(1)
 		// The follows and the filtered follow request stay; nothing of the group shows.
 		const hidden = {
 			v1: FOLLOWS,
 			filtered: FOLLOWS + 1,
 			sender: 1,
-			one: 404,
+			one: [404, 404],
 			grouped: [[`follow-${BUCKET}`, FOLLOWS]],
 			group: 404,
 			accounts: 0,
 			unread: FOLLOWS,
 			unreadGroups: 1,
 		}
-		expect(await readers(h, alice, favourites, String(newest))).toEqual(hidden)
+		expect(await readers(h, alice, favourites, String(oldest))).toEqual(hidden)
 		// A favourite in the same hour after the dismissal shows, under the same key, alone.
 		await runInDurableObject(h.store, (_instance, state) =>
 			notifyAt.run(state.storage.sql, {
@@ -283,13 +294,13 @@ describe('dismissing a group', () => {
 				now: NOW,
 			})
 		)
-		const after = await readers(h, alice, favourites, String(newest))
+		const after = await readers(h, alice, favourites, String(oldest))
 		expect(after).toMatchObject({ v1: FOLLOWS + 1, group: 1, accounts: 1, unread: FOLLOWS + 1, unreadGroups: 2 })
 		expect(await rounds(h)).toBe(Math.ceil((FAVOURITES - IN_REQUEST + 1) / IN_REQUEST))
 		expect(await count(h, 'group_key = ?', favourites)).toBe(1)
 		expect(await count(h)).toBe(FOLLOWS + 2)
 		expect(await pending(h)).toEqual([])
-		expect(await readers(h, alice, favourites, String(newest))).toEqual(after)
+		expect(await readers(h, alice, favourites, String(oldest))).toEqual(after)
 	}, 120_000)
 
 	it('starts a new group for a later favourite within its hours, as when it was deleted', async () => {
