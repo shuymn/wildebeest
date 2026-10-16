@@ -255,6 +255,7 @@ ${DISTRIBUTABLE_SQL}`, never the literals.
 | R27 polls                    | `viewableStatusId` (R3) for a poll's status in `getPoll`, `vote` and the presenter's callers; `mayVoteSql` (R3, and the voter blocks neither the author nor its domain) for a local vote and a received one; `poll_votes` read in `polls.ts` alone, only the viewer's own.                                                                                                                                                         |
 | R28 endorsements, notes      | `endorsementsShownSql` and `endorsementListedSql` in `endorsedPage` (`endorsements.ts`): an account's endorsements, to anyone, and the viewer's own. A private note is its author's alone: read only in the viewer's relationships (`relationshipsOf` in `accounts.ts`).                                                                                                                                                           |
 | R31 pins, conversation mutes | Pins: `accountStatuses` with `pinned` (R11 over the account's pins), `getFeatured` in `activities.ts` (R4: the Note of a public or unlisted pin, the uri of any other). Conversation mutes: `conversationMutedSql`, read only in `audience.ts`, for the viewer's `muted` (the presenter) and in `notifiedSql`, which `notify` applies (R15 at write time).                                                                         |
+| R34 reports                  | `reports` read and written only in `reports.ts` (the reporter's own report, answered once) and deleted by a remote account's purge (`inbox.ts`); a reported status passes `accountStatusIds` in `timelines.ts` (R11 less the reporter's own block of the account, as Mastodon's `AccountStatusesFilter`); the Flag of a forwarded report goes to `reportForwardees` (R23), signed by the instance actor.                           |
 
 Pins and conversation mutes (`src/domain/status-actions.ts`, Mastodon's `StatusPin` and `ConversationMute`, migration
 `0018_status_pins_and_conversation_mutes`) act on a status the viewer may see by itself (R3; anything else is not
@@ -320,6 +321,17 @@ author's own poll the one notification from oneself). Its `Question` goes to its
 Update of counts also to the remote voters of a public or unlisted status; a local vote in a remote poll goes to the
 poll's author alone.
 
+A report (`src/domain/reports.ts`, Mastodon's `Report` and `ReportService`, migration `0022_reports`) is its
+reporter's (R34): it is stored for the instance's moderation and answered once, to its reporter, and nothing else reads
+it (the architecture test below); Kopje has no admin view of it yet. It names an available account (any other is not
+found) and only statuses of that account the reporter may see by the account statuses rule (R11, `accountStatusIds`):
+one they may not see, or of another account, makes the whole report not found, as Mastodon's `.find` does. Unlike the
+profile read, the reporter's own block of the account hides nothing there, as `AccountStatusesFilter#blocked?` is the
+account's block of the reporter alone. Forwarded, the report becomes a `Flag` from the instance actor (so it names no
+local account), carrying the reporter's comment and the uris of the account and its reported statuses, to the
+servers Mastodon chooses (`reportForwardees`, R23, below). A reported status deleted later stays named by its id;
+a remote account's purge deletes the reports of it.
+
 ## Filters
 
 A viewer's filters (`src/domain/filters.ts`, Mastodon's `CustomFilter`) are applied after the rules above, to what that
@@ -353,6 +365,11 @@ A retraction also reaches every inbox that received what it withdraws, or may st
 the delivery rows and unexpanded targets of earlier activities about it (`receiversOf` in `deliveries.ts`). So a
 `Delete` reaches a follower who has left or been blocked since, and the `Undo` of a boost names and reaches the
 original's author even when the booster blocks them or their domain (its `Announce` left them out).
+
+A `Flag` (a forwarded report, kind other) is addressed to the accounts `reportForwardees` gives, as Mastodon's
+`ReportService` chooses them: the reported remote account when its domain is among `forward_to_domains` (by default its
+own), and the remote accounts on those domains that the reported statuses reply to, less any whose inbox is one of the
+reported account's. It is the one activity signed by the instance actor rather than its lane's account (DATA-7).
 
 The rule for activities that are neither content nor retractions is Mastodon 4.5's: none of them is filtered by
 block or domain block. `FavouriteService`, `FollowService`, `BlockService` and `RejectFollowService` send to the
@@ -473,6 +490,8 @@ module:
   own mute (R31).
 - reads `account_notes` outside `accounts.ts`, which reads only the viewer's own (R28) and writes them, and `inbox.ts`,
   whose actor purge deletes the notes on the account.
+- reads or writes `reports` outside `reports.ts`, which writes the reporter's report and answers it once (R34), and
+  `inbox.ts`, whose actor purge deletes the reports of the account.
 
 An allowed file that no longer matches fails the test too, so the list does not outlive its reason.
 

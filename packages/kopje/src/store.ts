@@ -40,6 +40,7 @@ import * as oauth from './domain/oauth'
 import * as polls from './domain/polls'
 import * as push from './domain/push'
 import { resolveSearch } from './domain/remote-statuses'
+import * as reports from './domain/reports'
 import * as scheduled from './domain/scheduled-statuses'
 import { search } from './domain/search'
 import * as setup from './domain/setup'
@@ -664,6 +665,10 @@ export class Store extends DurableObject<Env> {
 
 	setNote(callerBuild: string, input: OperationInput<typeof accounts.setNote>) {
 		return this.#kernel.execute(callerBuild, accounts.setNote, input)
+	}
+
+	createReport(callerBuild: string, input: OperationInput<typeof reports.createReport>) {
+		return this.#kernel.execute(callerBuild, reports.createReport, input)
 	}
 
 	endorse(callerBuild: string, input: OperationInput<typeof endorsements.endorse>) {

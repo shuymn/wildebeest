@@ -967,6 +967,36 @@ export function addresses(db: Db, kind: OutboundKind, signerId: string, accountI
 	)
 }
 
+// R23 for a forwarded report (R34): the accounts its Flag is addressed to, as Mastodon's ReportService chooses them
+// (app/services/report_service.rb:53-79) for a remote reported account `target` whose report the reporter asked to
+// forward. These are the reported account when its domain is among `domains` (forward_to_origin?), and the remote
+// accounts on those domains that the reported statuses `statusIds` reply to (in_reply_to_account_id), less those whose
+// inbox is one of the reported account's (forward_to_replied_to!: `inboxes - [inbox_url, shared_inbox_url]`). The
+// statuses are read by key, so the work is bounded by the report's statuses.
+export function reportForwardees(
+	db: Db,
+	target: string,
+	statusIds: readonly string[],
+	domains: readonly string[]
+): string[] {
+	return db
+		.all<{ id: string }>(
+			`SELECT t.id FROM main.accounts t
+			WHERE t.id = ?1 AND t.domain IS NOT NULL AND t.domain IN (SELECT value FROM json_each(?3))
+			UNION
+			SELECT a.id FROM main.accounts t CROSS JOIN main.statuses s JOIN main.accounts a ON a.id = s.in_reply_to_account_id
+			WHERE t.id = ?1 AND s.id IN (SELECT value FROM json_each(?2))
+				AND a.domain IS NOT NULL AND a.domain IN (SELECT value FROM json_each(?3))
+				AND COALESCE(NULLIF(a.shared_inbox_url, ''), a.inbox_url) IS NOT NULLIF(t.inbox_url, '')
+				AND COALESCE(NULLIF(a.shared_inbox_url, ''), a.inbox_url) IS NOT NULLIF(t.shared_inbox_url, '')
+			ORDER BY 1`,
+			target,
+			JSON.stringify(statusIds),
+			JSON.stringify(domains)
+		)
+		.map((row) => row.id)
+}
+
 // A remote account an activity is addressed to, with its inboxes ('' read as none).
 export type AddressedAccount = { uri: string; inbox_url: string | null; shared_inbox_url: string | null }
 

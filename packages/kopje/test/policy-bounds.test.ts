@@ -50,6 +50,7 @@ import {
 } from '../src/domain/notification-requests'
 import { clearNotifications, listNotifications, REMOVAL_BATCHES, REMOVAL_WINDOW } from '../src/domain/notifications'
 import { getPoll, vote } from '../src/domain/polls'
+import { createReport } from '../src/domain/reports'
 import { dueScheduled, listScheduled, publishScheduled } from '../src/domain/scheduled-statuses'
 import { search } from '../src/domain/search'
 import {
@@ -3342,6 +3343,120 @@ describe('the profile directory reads a window, however many accounts the instan
 		expect(few.shown).toBe(0)
 		expect(many.shown).toBe(0)
 		expect(many.rows).toBeLessThanOrEqual(few.rows + ALLOWANCE)
+	}, 120_000)
+})
+
+describe("a report reads its statuses by key, however long the account's history (RES-7)", () => {
+	const VIEWER_ID = '690000000000000000'
+	const TARGET_ID = '690000000000000001'
+	const ACCOUNT_BASE = 692000000000000000n
+	const STATUS_BASE = 691000000000000000n
+	const REPORTED = '699000000000000000'
+	const REPORT_TOKEN = 'report-token'
+
+	// The reported account's history: `count` public statuses, each replying to an account of its own on the listed
+	// domain, and as many earlier reports of it; the report names its newest status, a reply to one more account there.
+	async function history(count: number): Promise<StoreStub> {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			sql.exec("INSERT INTO instance_settings (name, value) VALUES ('domain', 'kopje.test')")
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username) VALUES (?, 'https://kopje.test/ap/users/viewer', 'viewer')",
+				VIEWER_ID
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'viewer@example.com', X'00', X'00', 'test')",
+				VIEWER_ID
+			)
+			sql.exec(
+				`INSERT INTO accounts (id, uri, username, domain, inbox_url, shared_inbox_url)
+				VALUES (?, 'https://far.example/users/target', 'target', 'far.example', 'https://far.example/users/target/inbox',
+					'https://far.example/inbox')`,
+				TARGET_ID
+			)
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+				INSERT INTO accounts (id, uri, username, domain, inbox_url)
+				SELECT CAST(?2 + i AS TEXT), 'https://p' || i || '.example/users/p', 'p', 'p' || i || '.example',
+					'https://p' || i || '.example/users/p/inbox' FROM n`,
+				count,
+				String(ACCOUNT_BASE)
+			)
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+				INSERT INTO statuses (id, uri, account_id, in_reply_to_account_id, visibility, content, published_at)
+				SELECT CAST(?2 + i AS TEXT), 'https://far.example/objects/s' || i, ?3, CAST(?4 + i AS TEXT), 'public',
+					'<p>x</p>', ?5 FROM n`,
+				count,
+				String(STATUS_BASE),
+				TARGET_ID,
+				String(ACCOUNT_BASE),
+				new Date(NOW).toISOString()
+			)
+			sql.exec(
+				`INSERT INTO statuses (id, uri, account_id, in_reply_to_account_id, visibility, content, published_at)
+				VALUES (?, 'https://far.example/objects/reported', ?, ?, 'public', '<p>x</p>', ?)`,
+				REPORTED,
+				TARGET_ID,
+				String(ACCOUNT_BASE + BigInt(count)),
+				new Date(NOW).toISOString()
+			)
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+				INSERT INTO reports (account_id, target_account_id, status_ids, uri, created_at)
+				SELECT ?2, ?3, json_array(CAST(?4 + i AS TEXT)), 'https://kopje.test/actor#reports/' || i, ?5 FROM n`,
+				count,
+				VIEWER_ID,
+				TARGET_ID,
+				String(STATUS_BASE),
+				new Date(NOW).toISOString()
+			)
+			sql.exec(
+				"INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('report', 'secret', 'report', 'urn:ietf:wg:oauth:2.0:oob', 'write')"
+			)
+			sql.exec(
+				"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES (?, 'access', 'report', ?, 'write')",
+				REPORT_TOKEN,
+				VIEWER_ID
+			)
+		})
+		return store
+	}
+
+	it('reads the same rows with 20 or 2,000 statuses, replied-to accounts and reports of the account', async () => {
+		const input = {
+			credential: { tokenHash: REPORT_TOKEN, scope: 'write:reports', now: NOW } as const,
+			account: TARGET_ID,
+			statusIds: [REPORTED],
+			comment: 'spam',
+			category: undefined,
+			ruleIds: [],
+			forward: true,
+			forwardToDomains: ['far.example', `p20.example`, 'p2000.example'],
+			present: PRESENT,
+			now: NOW,
+		}
+		const few = await history(20)
+		const many = await history(2000)
+		// Each forwards the report to the account's server and the one its reported status replies to.
+		for (const [store, partner] of [
+			[few, 'p20.example'],
+			[many, 'p2000.example'],
+		] as const) {
+			const answer = await runInDurableObject(store, (_instance, state) => createReport.run(state.storage.sql, input))
+			expect(answer).toMatchObject({ status: 'ok', value: { status: 'ok', report: { forwarded: true } } })
+			const inboxes = await runInDurableObject(store, (_instance, state) =>
+				state.storage.sql.exec<{ inbox_url: string }>('SELECT inbox_url FROM deliveries ORDER BY inbox_url').toArray()
+			)
+			expect(inboxes.map((row) => row.inbox_url)).toEqual([
+				'https://far.example/inbox',
+				`https://${partner}/users/p/inbox`,
+			])
+		}
+		const fewRows = await rowsRead({ store: few }, createReport, input)
+		const manyRows = await rowsRead({ store: many }, createReport, input)
+		expect(manyRows).toBeLessThanOrEqual(fewRows + ALLOWANCE)
 	}, 120_000)
 })
 

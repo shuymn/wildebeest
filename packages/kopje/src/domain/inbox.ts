@@ -1275,6 +1275,9 @@ function purgeRelationships(db: Db, id: string, budget: Budget): void {
 			WHERE id IN (SELECT id FROM notification_request_jobs WHERE from_account_id = ? LIMIT ?)`,
 		id
 	)
+	// The local users' reports of the account (migration 0022_reports), as Mastodon's DeleteAccountService destroys an
+	// account's targeted_reports.
+	spend(db, budget, 'DELETE FROM reports WHERE id IN (SELECT id FROM reports WHERE target_account_id = ? LIMIT ?)', id)
 	// Its votes (the polls keep their counts).
 	deleteAccountVotes(db, id, budget.left())
 	spend(
@@ -1536,6 +1539,7 @@ export const PURGED_ACCOUNT_CHILDREN: readonly { table: string; check: string; f
 	{ table: 'media_attachments', check: 'account_id = ?1' },
 	{ table: 'remote_keys', check: 'account_id = ?1' },
 	{ table: 'inbound_jobs', check: 'target_account_id = ?1' },
+	{ table: 'reports', check: 'target_account_id = ?1' },
 ]
 
 const ACCOUNT_CHILDREN_EXIST = PURGED_ACCOUNT_CHILDREN.map((child) => {

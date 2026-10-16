@@ -57,6 +57,7 @@ const SCHEMA_TABLES = [
 	'push_deliveries',
 	'push_subscriptions',
 	'remote_keys',
+	'reports',
 	'scheduled_statuses',
 	'status_edits',
 	'status_pins',
@@ -1267,6 +1268,105 @@ describe('Store migration runner', () => {
 			sql.exec('DELETE FROM local_accounts WHERE account_id = ?', id(1))
 			expect(pins()).toEqual([{ account_id: id(2), status_id: id(12) }])
 			expect(sql.exec('SELECT account_id FROM conversation_mutes').toArray()).toEqual([{ account_id: id(2) }])
+			expect(sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
+		})
+	})
+
+	it('upgrades a Store with 0022_reports: a report goes with its reporter and its account, not with a status', async () => {
+		const at = NAMES.indexOf('0022_reports')
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, MIGRATIONS.slice(0, at)).upgrade()).toMatchObject({ ok: true })
+			expect(tableNames(sql)).not.toContain('reports')
+			const id = (n: number) => String(100000000000000000n + BigInt(n))
+			for (const n of [1, 2]) {
+				sql.exec(
+					'INSERT INTO accounts (id, uri, username) VALUES (?, ?, ?)',
+					id(n),
+					`https://kopje.test/ap/users/u${n}`,
+					`u${n}`
+				)
+				sql.exec(
+					"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, ?, X'00', X'00', 'k')",
+					id(n),
+					`u${n}@example.com`
+				)
+			}
+			for (const n of [3, 4]) {
+				sql.exec(
+					"INSERT INTO accounts (id, uri, username, domain) VALUES (?, ?, ?, 'remote.example')",
+					id(n),
+					`https://remote.example/users/r${n}`,
+					`r${n}`
+				)
+			}
+			sql.exec(
+				`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+				VALUES (?, 'https://remote.example/objects/10', ?, 'public', '', '2026-10-01T00:00:00.000Z')`,
+				id(10),
+				id(3)
+			)
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({
+				ok: true,
+				applied: ['0022_reports'],
+			})
+			let n = 0
+			const report = (reporter: string, target: string, columns: Record<string, SqlStorageValue> = {}) =>
+				sql.exec(
+					`INSERT INTO reports (account_id, target_account_id, uri, created_at${Object.keys(columns)
+						.map((c) => `, ${c}`)
+						.join('')})
+					VALUES (?, ?, ?, '2026-10-12T00:00:00.000Z'${Object.keys(columns)
+						.map(() => ', ?')
+						.join('')})`,
+					reporter,
+					target,
+					`https://kopje.test/actor#reports/${++n}`,
+					...Object.values(columns)
+				)
+			report(id(1), id(3), { status_ids: JSON.stringify([id(10)]) })
+			report(id(1), id(4))
+			report(id(2), id(3), { category: 'violation', rule_ids: '["1"]' })
+			expect(
+				sql
+					.exec(
+						'SELECT status_ids, comment, category, rule_ids, forwarded FROM reports WHERE account_id = ? AND target_account_id = ?',
+						id(1),
+						id(4)
+					)
+					.one()
+			).toEqual({
+				status_ids: '[]',
+				comment: '',
+				category: 'other',
+				rule_ids: null,
+				forwarded: 0,
+			})
+			// Only a local account reports, in Mastodon's categories, with arrays of ids and a Flag id of its own.
+			expect(() => report(id(3), id(4))).toThrow(/FOREIGN KEY/)
+			expect(() => report(id(1), id(3), { category: 'rude' })).toThrow(/CHECK/)
+			expect(() => report(id(1), id(3), { status_ids: '{}' })).toThrow(/CHECK/)
+			expect(() => report(id(1), id(3), { rule_ids: '"1"' })).toThrow(/CHECK/)
+			expect(() =>
+				sql.exec(
+					"INSERT INTO reports (account_id, target_account_id, uri, created_at) VALUES (?, ?, 'https://kopje.test/actor#reports/1', '')",
+					id(1),
+					id(3)
+				)
+			).toThrow(/UNIQUE/)
+			const reports = () =>
+				sql.exec('SELECT account_id, target_account_id, status_ids FROM reports ORDER BY id').toArray()
+			// A deleted status stays named; the reported account's delete and the reporter's take their reports.
+			sql.exec('DELETE FROM statuses WHERE id = ?', id(10))
+			expect(reports()).toHaveLength(3)
+			sql.exec('DELETE FROM accounts WHERE id = ?', id(4))
+			expect(reports()).toEqual([
+				{ account_id: id(1), target_account_id: id(3), status_ids: JSON.stringify([id(10)]) },
+				{ account_id: id(2), target_account_id: id(3), status_ids: '[]' },
+			])
+			sql.exec('DELETE FROM local_accounts WHERE account_id = ?', id(1))
+			expect(reports()).toEqual([{ account_id: id(2), target_account_id: id(3), status_ids: '[]' }])
 			expect(sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
 		})
 	})
