@@ -340,17 +340,13 @@ export class StreamHub {
 			if (ws.readyState !== WebSocket.OPEN) {
 				return []
 			}
-			const at = peek(ws)
-			if (at === null) {
-				close(ws, 1011, 'invalid state')
-				// Its account is unknown: the next turn rebuilds the registry.
-				this.#reconciled = false
-				return []
-			}
-			return [{ ws, at }]
+			const at = this.#restore(ws)
+			return at === null ? [] : [{ ws, at }]
 		})
 	}
 
+	// A socket's attachment, or null after closing it (1011) for one that does not validate: its account is unknown, so
+	// the next turn rebuilds the registry.
 	#restore(ws: WebSocket): Attachment | null {
 		const at = peek(ws)
 		if (at === null) {
@@ -524,6 +520,8 @@ export class StreamHub {
 		}
 		const revoked: Socket[] = []
 		const messages: { ws: WebSocket; text: string }[] = []
+		// One envelope per stream: every socket of the unit is sent the same presentation.
+		const envelopes = new Map<ServedStream, string>()
 		for (const socket of unit.sockets) {
 			const grant = made.grants[socket.at.tokenHash]
 			if (grant === undefined) {
@@ -533,7 +531,12 @@ export class StreamHub {
 			if (payload !== null) {
 				for (const sub of socket.at.subs) {
 					if (carriesNotifications(grant, sub)) {
-						messages.push({ ws: socket.ws, text: envelope(sub, 'notification', payload) })
+						let text = envelopes.get(sub)
+						if (text === undefined) {
+							text = envelope(sub, 'notification', payload)
+							envelopes.set(sub, text)
+						}
+						messages.push({ ws: socket.ws, text })
 					}
 				}
 			}

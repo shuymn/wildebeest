@@ -128,20 +128,11 @@ export const streamEvents = readOperation<
 		limit,
 		position.account
 	)
-	const events = rows.flatMap((row): StreamEvent[] => {
-		const viewers = row.recipient === null ? [] : [row.recipient]
-		if (row.id < position.event || (row.id === position.event && position.account === null)) {
-			return []
-		}
+	const events = rows.map((row): StreamEvent => {
+		// Within the position's event, only the viewers after its account.
 		const after = row.id === position.event ? position.account : null
-		return [
-			{
-				id: row.id,
-				kind: row.kind,
-				subject: row.subject,
-				viewers: viewers.filter((viewer) => after === null || viewer > after).sort(),
-			},
-		]
+		const viewers = row.recipient !== null && (after === null || row.recipient > after) ? [row.recipient] : []
+		return { id: row.id, kind: row.kind, subject: row.subject, viewers }
 	})
 	// Each bound its own subquery: one seek each (min and max together would scan the journal).
 	const span = db.first<{ head: number | null; tail: number | null }>(

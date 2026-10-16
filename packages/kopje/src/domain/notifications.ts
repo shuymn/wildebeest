@@ -333,39 +333,33 @@ export const listNotifications = userReadOperation<ListNotificationsInput, Page<
 export const NOTIFICATION_ID = /^\d{1,19}$/
 
 export const getNotification = userReadOperation<{ id: string; present: Present }, Notification | null>(
-	(db, { id, present }, _viewer, viewer) => {
-		const { accountId: viewerId, now } = viewer
-		if (!NOTIFICATION_ID.test(id)) {
-			return null
-		}
-		const read = statusReads(viewer, { viewer: '?1', now: '?3' })
-		const rows = read.notifications<Omit<NotificationRow, 'status_id'>>(
-			db,
-			// Api::V1::NotificationsController#show finds any of the viewer's notifications, filtered or not.
-			{
-				where: 'n.account_id = ?1 AND n.id = CAST(?2 AS INTEGER)',
-				columns: NOTIFICATION_COLUMNS,
-				includeFiltered: true,
-			},
-			viewerId,
-			id,
-			now
-		)
-		return presentNotifications(db, rows, viewer, present)[0] ?? null
-	}
+	// Api::V1::NotificationsController#show finds any of the viewer's notifications, filtered or not.
+	(db, { id, present }, _viewer, viewer) => notificationById(db, viewer, id, present, true)
 )
 
 // R33 for a `notification` event (domain/streaming.ts): the viewer's notification list positioned at notification
 // `id`, which is the list read (R15, unfiltered and kept, any type) restricted to that id, since ids are unique; and
 // its presentation. Null when the list would not show it now.
 export function streamedNotification(db: Db, viewer: UserContext, id: string, present: Present): Notification | null {
+	return notificationById(db, viewer, id, present, false)
+}
+
+// The viewer's notification `id` as the notification read shows it (R15, kept; filtered ones only with
+// `includeFiltered`), presented; null for anything else.
+function notificationById(
+	db: Db,
+	viewer: UserContext,
+	id: string,
+	present: Present,
+	includeFiltered: boolean
+): Notification | null {
 	if (!NOTIFICATION_ID.test(id)) {
 		return null
 	}
 	const read = statusReads(viewer, { viewer: '?1', now: '?3' })
 	const rows = read.notifications<Omit<NotificationRow, 'status_id'>>(
 		db,
-		{ where: 'n.id = CAST(?2 AS INTEGER)', columns: NOTIFICATION_COLUMNS, includeFiltered: false },
+		{ where: 'n.id = CAST(?2 AS INTEGER)', columns: NOTIFICATION_COLUMNS, includeFiltered },
 		viewer.accountId,
 		id,
 		viewer.now
