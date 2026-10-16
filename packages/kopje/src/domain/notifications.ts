@@ -2,6 +2,7 @@ import { type Account, type Page, type PageQuery, type Present, presentAccountsB
 import {
 	FILTERABLE_TYPES,
 	keptFloorSql,
+	keptSql,
 	notificationPolicySql,
 	notifiedSql,
 	type PolicyChoice,
@@ -93,6 +94,17 @@ export function notify(db: Db, input: NotifyInput): void {
 		return
 	}
 	const filtered = policy === 'filter'
+	// A row of the natural key that a clear or its group's dismissal hides is deleted, one row by the natural key, so
+	// the notification is written again with a new id rather than lost to the conflict while the rounds have yet to
+	// delete it.
+	db.run(
+		`DELETE FROM notifications WHERE account_id = ?1 AND type = ?2 AND from_account_id = ?3
+			AND IFNULL(status_id, '') = IFNULL(?4, '') AND NOT ${keptSql('notifications')}`,
+		input.recipientId,
+		input.type,
+		input.fromId,
+		input.statusId
+	)
 	const inserted = db.all<{ id: number }>(
 		`INSERT INTO notifications (account_id, type, from_account_id, status_id, created_at, group_key, filtered)
 		SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7

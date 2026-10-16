@@ -375,3 +375,53 @@ describe('accepting a request after a clear', () => {
 		expect(await count(h)).toBe(0)
 	}, 120_000)
 })
+
+describe('a notification again after a clear, its old row not yet deleted', () => {
+	it('replaces the hidden row with a new one, shown', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const bob = await remoteAccount(h.store, 'bob')
+		await sql(
+			h.store,
+			`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+			VALUES ('800000000000000001', 'https://remote.example/o/1', ?, 'public', '', '2026-10-01T00:00:00.000Z')`,
+			bob
+		)
+		await sql(h.store, "INSERT INTO status_mentions (status_id, account_id) VALUES ('800000000000000001', ?)", alice.id)
+		// Bob's mention, the oldest, then more follows than the request deletes, so the mention stays for the rounds.
+		await sql(
+			h.store,
+			"INSERT INTO notifications (account_id, type, from_account_id, status_id) VALUES (?, 'mention', ?, '800000000000000001')",
+			alice.id,
+			bob
+		)
+		await sql(
+			h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO accounts (id, uri, username, domain)
+			SELECT printf('7%017d', i), 'https://far.example/users/u' || i, 'u' || i, 'far.example' FROM n`,
+			IN_REQUEST + 10
+		)
+		await sql(
+			h.store,
+			"INSERT INTO notifications (account_id, type, from_account_id) SELECT ?, 'follow', id FROM accounts WHERE domain = 'far.example'",
+			alice.id
+		)
+		await clear(h, alice)
+		expect(await count(h, "type = 'mention'")).toBe(1)
+		// Bob's Update mentions alice again (updateRemoteStatus notifies her).
+		await runInDurableObject(h.store, (_instance, state) =>
+			notifyAt.run(state.storage.sql, {
+				recipientId: alice.id,
+				type: 'mention',
+				fromId: bob,
+				statusId: '800000000000000001',
+				now: NOW,
+			})
+		)
+		const { body } = await getJson<{ type: string }[]>(h, '/api/v1/notifications', alice.token)
+		expect(body.map((n) => n.type)).toEqual(['mention'])
+		await rounds(h)
+		expect(await count(h)).toBe(1)
+	}, 120_000)
+})

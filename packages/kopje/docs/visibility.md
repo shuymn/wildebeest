@@ -187,7 +187,8 @@ index walk starts above what is hidden and never reads it; a read of every group
 dismissal by its key. The push target and an accepted request's job check both by key (`keptSql`), so a cleared
 notification is not pushed, unfiltered or added to a conversation. A notification written later has a higher id
 (notification ids are never reused) and shows as usual; `notify` does not join a group with no notification above them
-(a dismissed group is not remembered, as when its rows were deleted). The hidden rows are then deleted in bounded
+(a dismissed group is not remembered, as when its rows were deleted). A notification whose natural key a hidden row still holds
+replaces that row (`notify` deletes it first), so it is not lost to the conflict. The hidden rows are then deleted in bounded
 batches, newest first (`removeNotifications` in `src/domain/notifications.ts`), the first in the request and the rest
 with the inbound jobs; the record goes with the last of them. An `ungrouped-<id>` key and a single dismissal
 (`POST /api/v1/notifications/:id/dismiss`) delete their one notification at once.
