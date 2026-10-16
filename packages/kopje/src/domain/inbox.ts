@@ -1551,7 +1551,7 @@ export const STATUS_CHILDREN: readonly { table: string; column: string; remove: 
 			AND conversation_id IN (SELECT conversation_id FROM conversation_statuses WHERE status_id = ?1 LIMIT CAST(?2 / 4 AS INTEGER))`,
 		],
 	},
-	// Quotes of the status (migration 0030_quotes): any number, of any accounts. Each is detached, an accepted one
+	// Quotes of the status (migration 0033_quotes): any number, of any accounts. Each is detached, an accepted one
 	// becoming deleted in the same statement (the quotes CHECK refuses an accepted quote without its target), its work
 	// ended; an accepted one also takes itself off this status's count (the trigger quotes_count_changed), so a batch
 	// takes half the rows left.

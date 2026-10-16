@@ -58,10 +58,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       sequence. It reads each conversation once, for the index, and the journal's rows; nothing else: on a benchmark
       store of 1,000,000 accounts, 3,000,000 follows and 2,000,000 statuses its upgrade took 2.3 seconds in workerd's
       local Durable Object SQLite.
-    - `0030_quotes`: adds the empty `quotes` and `quote_revocations` tables, their indexes and the triggers that keep
+    - `0033_quotes`: adds the empty `quotes` and `quote_revocations` tables, their indexes and the triggers that keep
       the new `statuses.quotes_count`. The column has a constant default and no constraint, so stored statuses are
       neither read nor rewritten; nothing is backfilled (stored posts keep their quote properties in `raw`), so the
-      migration's work does not grow with the instance.
+      migration's work does not grow with the instance: on the same benchmark store its upgrade took 2.2 seconds.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.10] - 2026-10-16

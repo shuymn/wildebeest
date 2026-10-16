@@ -1,4 +1,4 @@
--- Kopje Store schema 0030: quote posts received from remote servers, and their verification. Never edit after release
+-- Kopje Store schema 0033: quote posts received from remote servers, and their verification. Never edit after release
 -- (checksummed).
 --
 -- Mastodon 4.5 stores a quote as a row keyed by the quoting status (Quote, status_id unique) with the quoted status,

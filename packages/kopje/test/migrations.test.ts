@@ -3609,8 +3609,8 @@ describe('0032_streaming_lists', () => {
 	}, 120_000)
 })
 
-describe('0030_quotes', () => {
-	const NAME = '0030_quotes'
+describe('0033_quotes', () => {
+	const NAME = '0033_quotes'
 	const id = (n: number) => String(100000000000000000n + BigInt(n))
 
 	// The file's statements, a trigger whole (its body holds semicolons of its own).

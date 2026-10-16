@@ -14,14 +14,14 @@ import type { Db } from '../db/sql'
 
 // Quote posts received from remote servers (Mastodon 4.5's Quote, ActivityPub::Parser::StatusParser's quote
 // properties, ActivityPub::VerifyQuoteService and the Delete of a QuoteAuthorization), stored and verified in the rows
-// of migration 0030_quotes. Nothing reads them for a client yet.
+// of migration 0033_quotes. Nothing reads them for a client yet.
 //
 // A quote is stored with the status that makes it (recordQuote, from storeRemoteStatus and updateRemoteStatus, so every
 // path that stores a remote status records it), in the same transaction, with its verification work: verify_after
 // says it is due. Only the Worker's job rounds verify it (federation/quotes.ts, claimQuotes): the inbox request that
 // made work due asks the Queue for a round, and cron runs one too, so a Worker that dies after the commit only delays
 // it. A round leases what it claims, so the generation, the lease and the recheck flag (the rule at the column,
-// migration 0030_quotes) are the only concurrency to reason about.
+// migration 0033_quotes) are the only concurrency to reason about.
 //
 // Verification (verifyQuote's checks in completeQuote) follows FEP-044f and Mastodon: a quote is accepted only when it
 // quotes its own author's status (a self-quote), or when the quoted author's stamp (QuoteAuthorization) fetched from
@@ -56,7 +56,7 @@ export type QuoteState = 'pending' | 'accepted' | 'rejected' | 'revoked' | 'dele
 // Null-safe (IS), so NOT of it holds for work with no due time.
 const LEASED = '(lease_until IS NOT NULL AND verify_after IS lease_until AND lease_until > ?3)'
 
-// A new generation of a quote's work: drawn by every write the rule at the column names (migration 0030_quotes).
+// A new generation of a quote's work: drawn by every write the rule at the column names (migration 0033_quotes).
 export const NEW_GENERATION = '(abs(random()) % 9007199254740991)'
 
 // How a status came: hops is its work's budget (QUOTE_HOPS for a root), fetchAs the local account whose key may fetch
