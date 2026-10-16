@@ -4,7 +4,7 @@
 //      and the source map (with its sources) are present, and no sources are shipped;
 //   3. installs the tarball into a copy of the deploy/ template (the package has no dependencies, so installing it is
 //      unpacking it into node_modules/kopje), dry-runs the template's `wrangler deploy`, and compares it with the
-//      in-repo build: under 1 MiB gzipped, within 1% of each other, the same assets by content, and the same runtime
+//      in-repo build: under 1.5 MiB gzipped, within 1% of each other, the same assets by content, and the same runtime
 //      settings and bindings as packages/kopje/wrangler.jsonc;
 //   4. runs the template in workerd (wrangler's test harness): the Store starts and applies its migrations, a fetch,
 //      an asset, the scheduled and queue handlers, and the packaged version as the Store reports it;
@@ -30,7 +30,9 @@ import { createTestHarness, experimental_readRawConfig as readRawConfig } from '
 
 import { withManifestVersion } from './kopje-release-lib.mjs'
 
-const LIMIT_KIB = 1024
+// The gzipped bundle's budget. Kopje needs the Workers Paid plan, whose limit is 10 MiB; this budget only catches
+// accidental growth (a new dependency, an inlined asset), so it is raised deliberately as features add code.
+const LIMIT_KIB = 1536
 const TOLERANCE = 0.01
 const UNVERSIONED = '0.0.0'
 const CHECK_VERSION = '0.0.1-check'
