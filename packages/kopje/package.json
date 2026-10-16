@@ -60,7 +60,7 @@
 	},
 	"scripts": {
 		"lint": "eslint src test cli test-node --quiet",
-		"test": "vitest run && vitest run -c vitest.node.config.ts",
+		"test": "vitest run && vitest run -c vitest.streaming.config.ts --max-workers=1 --no-isolate && vitest run -c vitest.node.config.ts",
 		"typecheck": "tsc --noEmit && tsc -p cli && tsc -p test-node",
 		"types": "wrangler types --include-runtime=false",
 		"build": "node scripts/build-package.mjs",
@@ -68,7 +68,7 @@
 	},
 	"devDependencies": {
 		"@cloudflare/vitest-plugin": "1.4.0",
-		"@cloudflare/workers-types": "5.20261012.1",
+		"@cloudflare/workers-types": "5.20261013.1",
 		"@fedify/fedify": "2.4.4",
 		"@fedify/testing": "2.4.4",
 		"@fedify/vocab": "2.4.4",

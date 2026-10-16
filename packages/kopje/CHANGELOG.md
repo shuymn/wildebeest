@@ -10,6 +10,21 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Added
 
+- The Mastodon admin API's 63 routes (`/api/v1/admin/*` and `GET /api/v2/admin/accounts`) are routed, each with its
+  admin scope and an optional token, as Mastodon's. None is served yet: each answers as Mastodon answers a caller whose
+  role lacks the route's permission.
+    - `GET /api/v1/admin/trends/tags`, `/links` and `/statuses` answer `[]`, as the public trends do.
+    - `GET`, `PUT`, `PATCH` and `DELETE` of one domain block, domain allow, IP block, email domain block or canonical
+      email block answer 404 `Record not found`: Kopje stores none.
+    - Every other route answers 403 `This action is not allowed`, to everyone, the admin included.
+    - A token sent must be valid, or the answer is 401. It must cover the route's scope, or the answer is 403
+      `This action is outside the authorized scopes`. An app token is let through, as by Mastodon.
+    - The admin these routes will serve is the one local account whose email equals `admin_email`, compared trimmed
+      and lowercased. There is none when `admin_email` is unset or empty, when no local account matches, when the match
+      is suspended, or when two accounts match; nothing is picked then. The match is read in each request, so existing
+      tokens follow a change of `admin_email` at once. `/setup` after bootstrap uses the same match.
+    - `GET /admin/health` (Access only) shows `oauthAdmin`: `status` (`ok`, `unset`, `none`, `suspended` or
+      `ambiguous`) and the matched `username`.
 - Quote posts received from other servers are stored and verified, as Mastodon 4.5 does (FEP-044f). Nothing shows them
   yet: the API, the web pages and the notifications are unchanged, and a quote is still seen as its `RE:` link.
     - A post that quotes another (Mastodon's `quote`, or Misskey's and Fedibird's `_misskey_quote`, `quoteUrl` and
@@ -27,6 +42,23 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       Data Signature or an FEP-8b32 proof); without one, Kopje only checks the stamp again.
     - Kopje's own posts now say that nobody but their author may quote them (`interactionPolicy.canQuote`), as Mastodon
       already assumes of a post without a policy.
+
+### Instance changes
+
+- Store schema: adds a migration, applied on the first request after the deploy; a rollback to an earlier version needs
+  the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
+    - `0027_quotes`: adds the empty `quotes` and `quote_revocations` tables, their indexes and the triggers that keep
+      the new `statuses.quotes_count`. The column has a constant default and no constraint, so stored statuses are
+      neither read nor rewritten; nothing is backfilled (stored posts keep their quote properties in `raw`), so the
+      migration's work does not grow with the instance.
+- `wrangler.jsonc`: unchanged.
+
+## [0.1.0-rc.9] - 2026-10-16
+
+A ninth release candidate of the first release, published under the npm dist-tag `next`.
+
+### Added
+
 - A remote account's pinned posts, featured hashtags and hidden network, learned as Mastodon 4.5 learns them:
   `GET /api/v1/accounts/:id/statuses?pinned=true` and `GET /api/v1/accounts/:id/featured_tags` now show a remote
   account's, and its `hide_collections` is shown and hides its followers and following lists as a local account's
@@ -55,22 +87,44 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       ordered as the collection lists it (the first is the newest); and a remote account's featured hashtag links to
       `/@username@domain/tagged/:tag`, which leads to its profile on its server (Mastodon's link,
       `/@username/tagged/:tag`, names a local account of the same username).
+- The streaming API's WebSocket, as Mastodon 4.5's streaming server serves it, for the notifications: clients open
+  `wss://<domain>/api/v1/streaming` (any path below it is taken too) with the token as the subprotocol (echoed, as
+  masto.js needs) or in the `Authorization` header, then send
+  `{"type":"subscribe","stream":"user:notification"}` (or `user`, or `?stream=` on connect). `user:notification`
+  (`read` or `read:notifications`) and `user` (`read` or `read:statuses`, with notifications only if the token also has
+  `read:notifications`) carry `notification` events: each new notification the recipient's list shows, as REST
+  presents it, and not one their notification policy filtered, as Mastodon. Other streams (`public*`, `hashtag*`,
+  `list`, `direct`, and a name Mastodon does not know) answer `{"error":"Unknown stream type","status":400}`, and
+  `user` carries no `update`, `status.update` or `delete` yet. `GET /api/v1/streaming/health` answers `OK`. SSE is not
+  served (a request that is not an upgrade answers 404); no surveyed client uses it.
+    - Delivery is at most once and live, with no replay: a client reads REST again after a gap, as with Mastodon.
+    - A socket closes when its token is revoked, its web session signed out or its account suspended (at the next
+      write), and when the token expires (within 5 minutes); every socket closes on each deploy, as Durable Objects
+      drop WebSockets then, and clients reconnect.
+    - Limits: 16 sockets per account (429 `Too many connections`), 256 per instance (503), 16 subscriptions per
+      socket (`Too many subscriptions`), and incoming messages of text only (1003), at most 4 KiB and 120 a minute
+      (1008).
+    - Where Kopje differs from Mastodon: there is no protocol ping every 30 seconds (hibernated sockets are answered by
+      the platform without waking the Store); the message rate counts every message a socket sends; and the token is
+      not taken from an `access_token` query parameter, which would reach the platform's request logs (masto.js and
+      Ice Cubes send it as the subprotocol), so a request with only that answers 401 `Missing access token`.
 
 ### Instance changes
 
-- Store schema: adds a migration, applied on the first request after the deploy; a rollback to an earlier version needs
-  the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
+- Store schema: adds two migrations, applied in order on the first request after the deploy; a rollback to an earlier
+  version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0025_remote_collections`: lets `status_pins` and `featured_tags` hold any account's rows (each table is rebuilt
       and its rows copied), adds `accounts.hide_collections`, and adds the empty `collection_syncs` and
       `collection_pins_pending` tables. Only local accounts have pins and featured hashtags until then, at most five and
       ten each, so its work grows with the local accounts alone (about four rows read per pin or featured hashtag). The
       new column has no default and no constraint, so the remote accounts and their statuses are neither read nor
       rewritten.
-    - `0027_quotes`: adds the empty `quotes` and `quote_revocations` tables, their indexes and the triggers that keep
-      the new `statuses.quotes_count`. The column has a constant default and no constraint, so stored statuses are
-      neither read nor rewritten; nothing is backfilled (stored posts keep their quote properties in `raw`), so the
-      migration's work does not grow with the instance.
-- `wrangler.jsonc`: unchanged.
+    - `0026_streaming`: adds the streaming API's registry of subscriptions, journal of events and position, and a
+      trigger that journals a new unfiltered notification while its recipient has a subscription. It only creates
+      empty tables (and the position's row) and the trigger, so its work does not grow with the Store. The three
+      tables are left out of dumps and backups: they describe one object's open sockets.
+- `wrangler.jsonc`: unchanged. The sockets live in the Store, which already exists, so no Durable Object migration
+  (and no rollback barrier) is added.
 
 ## [0.1.0-rc.8] - 2026-10-16
 

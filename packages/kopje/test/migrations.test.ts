@@ -67,6 +67,9 @@ const SCHEMA_TABLES = [
 	'status_mentions',
 	'status_tags',
 	'statuses',
+	'stream_cursor',
+	'stream_events',
+	'stream_subscriptions',
 ]
 
 const countSettings = readOperation<void, number>(
@@ -3006,6 +3009,80 @@ describe('0025_remote_collections', () => {
 		expect(locals - few).toBeLessThanOrEqual(4 * 2 * (1000 - 100) * 5)
 		expect(each - few).toBeLessThanOrEqual(4 * 2 * 100 * (50 - 5))
 	}, 120_000)
+})
+
+describe('0026_streaming', () => {
+	it('records an unfiltered notification for a recipient with a subscription, and stops at the span', async () => {
+		const at = NAMES.indexOf('0026_streaming')
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, MIGRATIONS.slice(0, at)).upgrade()).toMatchObject({ ok: true })
+			const [alice, bob] = ['100000000000000001', '100000000000000002']
+			for (const [id, name] of [
+				[alice, 'alice'],
+				[bob, 'bob'],
+			] as const) {
+				sql.exec(
+					'INSERT INTO accounts (id, uri, username) VALUES (?, ?, ?)',
+					id,
+					`https://kopje.test/ap/users/${name}`,
+					name
+				)
+				sql.exec(
+					"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, ?, X'00', X'00', 'k')",
+					id,
+					`${name}@example.com`
+				)
+			}
+			sql.exec("INSERT INTO notifications (account_id, type, from_account_id) VALUES (?, 'follow', ?)", alice, bob)
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({
+				ok: true,
+				applied: ['0026_streaming'],
+			})
+			// Nothing is journaled for what was written before, nor without a subscription.
+			expect(sql.exec('SELECT count(*) AS n FROM stream_events').one().n).toBe(0)
+			expect(sql.exec('SELECT event_id, account_id FROM stream_cursor').toArray()).toEqual([
+				{ event_id: 0, account_id: null },
+			])
+			sql.exec("INSERT INTO notifications (account_id, type, from_account_id) VALUES (?, 'follow', ?)", bob, alice)
+			expect(sql.exec('SELECT count(*) AS n FROM stream_events').one().n).toBe(0)
+			sql.exec("INSERT INTO stream_subscriptions (account_id, stream_key, sockets) VALUES (?, 'user', 1)", alice)
+			// Filtered, then unfiltered: only the second is journaled, and another account's never.
+			sql.exec(
+				"INSERT INTO notifications (account_id, type, from_account_id, filtered) VALUES (?, 'mention', ?, 1)",
+				alice,
+				bob
+			)
+			const id = sql
+				.exec<{ id: number }>(
+					"INSERT INTO notifications (account_id, type, from_account_id) VALUES (?, 'favourite', ?) RETURNING id",
+					alice,
+					bob
+				)
+				.one().id
+			sql.exec("INSERT INTO notifications (account_id, type, from_account_id) VALUES (?, 'reblog', ?)", bob, alice)
+			expect(sql.exec('SELECT kind, subject FROM stream_events').toArray()).toEqual([
+				{ kind: 'notification', subject: String(id) },
+			])
+			// Once the journal spans 4,096 ids, nothing more is recorded.
+			sql.exec(
+				"INSERT INTO stream_events (id, kind, subject, created_at) SELECT max(id) + 4095, 'notification', '0', '2026-10-12T00:00:00.000Z' FROM stream_events"
+			)
+			sql.exec(
+				"INSERT INTO notifications (account_id, type, from_account_id) VALUES (?, 'follow_request', ?)",
+				alice,
+				bob
+			)
+			expect(sql.exec('SELECT count(*) AS n FROM stream_events').one().n).toBe(3)
+			sql.exec("INSERT INTO notifications (account_id, type, from_account_id) VALUES (?, 'poll', ?)", alice, bob)
+			expect(sql.exec('SELECT count(*) AS n FROM stream_events').one().n).toBe(3)
+			expect(() => sql.exec('INSERT INTO stream_cursor (id, event_id) VALUES (2, 0)')).toThrow(
+				/CHECK constraint failed/
+			)
+			expect(sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
+		})
+	})
 })
 
 describe('0027_quotes', () => {

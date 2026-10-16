@@ -24,6 +24,7 @@ import m0022 from '../../migrations/0022_reports.sql'
 import m0023 from '../../migrations/0023_notification_clears.sql'
 import m0024 from '../../migrations/0024_attribution_domains.sql'
 import m0025 from '../../migrations/0025_remote_collections.sql'
+import m0026 from '../../migrations/0026_streaming.sql'
 import m0027 from '../../migrations/0027_quotes.sql'
 
 // Store migrations in apply order. Append only: an applied file is recorded by name and checksum and must
@@ -55,5 +56,6 @@ export const MIGRATIONS: readonly { name: string; sql: string }[] = [
 	{ name: '0023_notification_clears', sql: m0023 },
 	{ name: '0024_attribution_domains', sql: m0024 },
 	{ name: '0025_remote_collections', sql: m0025 },
+	{ name: '0026_streaming', sql: m0026 },
 	{ name: '0027_quotes', sql: m0027 },
 ]

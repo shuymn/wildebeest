@@ -18,6 +18,7 @@ import { rescueFromSnapshot } from '../federation/snapshot'
 import { createAdmission, INBOX_BODY_LIMIT, spoolInbox } from '../federation/spool'
 import { maintenanceError, mastodonError } from '../mastodon/errors'
 import { mastodonApi } from '../mastodon/routes'
+import { streamingRoutes } from '../mastodon/streaming'
 import { readBackupConfig } from '../platform/backup-config'
 import { readBoundedBody } from '../platform/body'
 import { readConfig } from '../platform/config'
@@ -184,6 +185,7 @@ export function createApp({
 	}
 	app.get(MEDIA_ROUTE, serveMedia)
 	app.route('/', authorizeRoutes({ ...apiDeps, fetch: (input, init) => fetch(input, init) }))
+	app.route('/', streamingRoutes(apiDeps))
 	app.route('/', mastodonApi(apiDeps))
 	app.route('/', setupRoutes({ ...apiDeps, fetch: (input, init) => fetch(input, init), keygen }))
 	app.route('/', webRoutes({ ...apiDeps, dispatch: (request, env, ctx) => app.fetch(request, env, ctx) }))

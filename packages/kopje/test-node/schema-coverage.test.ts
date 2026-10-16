@@ -21,6 +21,9 @@ const NOT_DUMPED: Record<string, string> = {
 	backup_media: "the backup's media index for one bucket; a restored Store starts a fresh media baseline",
 	kopje_migrations: 'the dump header carries the applied migrations; the target records its own',
 	media_orphans: 'tombstones of R2 objects to delete; a restored Store must not delete what it restores',
+	stream_cursor: "the streaming fan-out's position, over the journal of one object",
+	stream_events: 'the streaming journal of one object; a restored Store has no sockets to send it to',
+	stream_subscriptions: 'the streaming registry, derived from the open sockets of one object',
 }
 
 // Tables the cutover never carries: the converter writes nothing to them (docs/cutover.md, "Clients and settings").
@@ -70,6 +73,9 @@ const NOT_CARRIED: Record<string, string> = {
 	scheduled_statuses: 'posts scheduled in Kopje; legacy Wildebeest has no scheduled statuses',
 	status_pins:
 		'legacy never wrote its status_pins table, and a legacy row there stops the conversion (UNUSED_LEGACY_TABLES)',
+	stream_cursor: 'streaming state of one object; legacy has no streaming',
+	stream_events: 'streaming state of one object; legacy has no streaming',
+	stream_subscriptions: 'streaming state of one object; legacy has no streaming',
 	tag_follows:
 		'legacy never wrote its followed_tags table, and a legacy row there stops the conversion (UNUSED_LEGACY_TABLES)',
 	featured_tags:

@@ -1,4 +1,13 @@
-import { type ApiContext, type ApiDeps, type ApiHandler, authorized, credential, present, storeCall } from './context'
+import {
+	type ApiContext,
+	type ApiDeps,
+	type ApiHandler,
+	authorized,
+	checkOptionalToken,
+	credential,
+	present,
+	storeCall,
+} from './context'
 import { mastodonError } from './errors'
 import { grantsAny } from '../security/scopes'
 
@@ -56,13 +65,7 @@ export const announcement = forUser(RECORD_NOT_FOUND)
 // read:statuses; an app token is let through). Kopje has no link trends. require_user! applies only when a topic feed
 // is not public, which is Mastodon's default and Kopje's only setting.
 export const linkTimeline: ApiHandler = async (c, deps) => {
-	if (c.get('credential') !== null) {
-		const value = credential(c, deps)
-		const result = await storeCall(c, deps, (s, b) => s.checkCredential(b, value))
-		if (result.status !== 'user_required') {
-			authorized(result)
-		}
-	}
+	await checkOptionalToken(c, deps)
 	return RECORD_NOT_FOUND()
 }
 

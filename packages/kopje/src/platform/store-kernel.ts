@@ -79,6 +79,8 @@ export type KernelOptions = {
 	transaction?: <T>(fn: () => T) => T
 	inject?: (phase: UpgradePhase | 'hold') => void
 	log?: (entry: Record<string, unknown>) => void
+	// Called after an operation that is not a read has committed (the streaming API's turns start here).
+	afterCommit?: (operation: StoreOperation<never, unknown>) => void
 }
 
 // A response body kept for the rescue path: the last good actor document, WebFinger or NodeInfo payload. Stored in
@@ -119,6 +121,7 @@ export class StoreKernel {
 	readonly #transaction: <T>(fn: () => T) => T
 	readonly #inject: (phase: UpgradePhase | 'hold') => void
 	readonly #log: (entry: Record<string, unknown>) => void
+	readonly #afterCommit: (operation: StoreOperation<never, unknown>) => void
 	#expected: Promise<ExpectedMigration[]> | undefined
 	#state: KernelState | undefined
 
@@ -131,6 +134,7 @@ export class StoreKernel {
 		this.#transaction = options.transaction ?? ((fn) => ctx.storage.transactionSync(fn))
 		this.#inject = options.inject ?? (() => {})
 		this.#log = options.log ?? ((entry) => console.log(entry))
+		this.#afterCommit = options.afterCommit ?? (() => {})
 	}
 
 	// Runs a domain operation if this Store can serve its kind: same build as the caller, schema current, and the
@@ -141,11 +145,15 @@ export class StoreKernel {
 			throw storeMaintenanceError('version-mismatch')
 		}
 		const loaded = await this.#currentState()
-		return this.#transaction(() => {
+		const output = this.#transaction(() => {
 			admit(this.#state ?? loaded, operation.kind)
 			admitFlags(readFlags(this.#sql), operation.kind, this.#now())
 			return operation.run(this.#sql, input)
 		})
+		if (operation.kind !== 'read') {
+			this.#afterCommit(operation)
+		}
+		return output
 	}
 
 	// Rescue RPC: available in every state and for any caller build.
