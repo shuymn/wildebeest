@@ -42,8 +42,9 @@ export async function deliveryRound(env: Env, deps: DeliveryDeps): Promise<Round
 	}
 	const config = readConfig(env)
 	const keyring = createKeyring(config.ok ? userKek(config.config) : '')
-	// Each author's key is unwrapped once for this round and dropped with it (DATA-1). An activity is signed only by
-	// its author, never by the instance actor (DATA-7).
+	// Each signer's key is unwrapped once for this round and dropped with it (DATA-1). An activity is signed by its
+	// author, the lane's account; only one recorded as the instance actor's (a report's Flag) is signed by the instance
+	// key (DATA-7).
 	const signers = new Map<string, Promise<Signer | null>>()
 	const signerOf = (accountId: string) => {
 		let signer = signers.get(accountId)
@@ -64,7 +65,7 @@ export async function deliveryRound(env: Env, deps: DeliveryDeps): Promise<Round
 		}
 		return signer
 	}
-	// Every signer is a local actor, on the instance's origin.
+	// Every signer is a local actor or the instance actor, on the instance's origin.
 	const origin = new URL(Object.values(claim.signers)[0]?.actorUri ?? 'https://invalid.').origin
 	const post: PostDeps = {
 		fetch: deps.fetch,
