@@ -12,7 +12,7 @@ import {
 	visibleSql,
 } from './audience'
 import { optionalUserReadOperation, type UserContext, userReadOperation } from './auth'
-import { ownList, type RepliesPolicy } from './lists'
+import { holdingSql, ownList, type RepliesPolicy } from './lists'
 import { presentStatuses, type Status } from './status-presenter'
 import { statusCursor } from './statuses'
 import { normalizeTag } from './tag-name'
@@ -106,9 +106,7 @@ const FOLLOWED = `SELECT target_account_id AS account_id FROM follows WHERE acco
 const FOLLOWED_AUTHOR = `SELECT hf.target_account_id AS account_id FROM follows hf
 	WHERE hf.account_id = ?1 AND hf.state = 'accepted'
 		AND hf.target_account_id = (SELECT ha.account_id FROM statuses ha WHERE ha.id = ?7)
-		AND NOT EXISTS (SELECT 1 FROM lists el CROSS JOIN list_accounts ela
-			ON ela.list_id = el.id AND ela.account_id = hf.target_account_id
-			WHERE el.account_id = ?1 AND el.exclusive = 1)`
+		AND NOT EXISTS (SELECT 1 FROM lists l WHERE l.exclusive = 1 AND ${holdingSql('?1', 'hf.target_account_id')})`
 
 // Home (Mastodon's FeedManager#filter_from_home): the viewer's own statuses and those of accounts they follow,
 // public, unlisted and private; direct and limited statuses of their own, and of followed accounts that address

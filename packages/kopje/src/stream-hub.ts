@@ -552,10 +552,16 @@ export class StreamHub {
 	// The units an event's candidates make, in order: each viewer with an open socket that opened before the event and
 	// has a subscription that may carry it.
 	#units(event: StreamEvent, candidates: readonly { viewer: string; subject: StreamSubject }[]): Unit[] {
+		// A viewer's sockets are selected once for all its subjects (a delete has up to 41 each).
+		const selected = new Map<string, Socket[]>()
 		return candidates.flatMap(({ viewer, subject }) => {
-			const sockets = this.#open(accountTag(viewer)).filter(
-				({ at }) => at.since < event.id && at.subs.some((sub) => mayCarry(event.kind, at.grant, sub))
-			)
+			let sockets = selected.get(viewer)
+			if (sockets === undefined) {
+				sockets = this.#open(accountTag(viewer)).filter(
+					({ at }) => at.since < event.id && at.subs.some((sub) => mayCarry(event.kind, at.grant, sub))
+				)
+				selected.set(viewer, sockets)
+			}
 			return sockets.length === 0 ? [] : [{ subject, viewer, sockets }]
 		})
 	}

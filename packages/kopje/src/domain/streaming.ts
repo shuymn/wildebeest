@@ -100,8 +100,8 @@ export function mayCarry(kind: string, grant: StreamGrant, stream: ServedStream)
 const REAL_TIME_WINDOW = '-6 hours'
 
 // A delete's capture (R32): at most this many boosts per viewer, and a viewer row of at most this many bytes. A row
-// over it (only a change of these caps could make one) drops boosts, newest first, then its list ids, and is logged; the
-// capture never fails the delete. Tests lower viewerBytes.
+// over it (only a change of these caps could make one) drops boosts, newest first, and is logged; the capture never
+// fails the delete. Tests lower viewerBytes.
 export const CAPTURE_LIMITS = { boosts: 40, viewerBytes: 16 * 1024 }
 
 // The journal stops recording once it spans this many ids: the fan-out stalled, and REST is authoritative.
@@ -367,10 +367,7 @@ export function streamDelete(db: Db, statusId: string, now: number): void {
 		new Date(now).toISOString()
 	)!.id
 	for (const viewer of audience) {
-		const row = captureRow(
-			viewer.boosts.map((boost) => [boost, []]),
-			[]
-		)
+		const row = captureRow(viewer.boosts.map((boost) => [boost, []]))
 		db.run(
 			'INSERT INTO stream_delete_viewers (event_id, account_id, lists, boosts) VALUES (?, ?, ?, ?)',
 			event,
@@ -381,24 +378,21 @@ export function streamDelete(db: Db, statusId: string, now: number): void {
 	}
 }
 
-// A viewer's capture as its row's JSON, within CAPTURE_LIMITS.viewerBytes: boosts dropped from the newest, then the
-// list ids, while it is over (logged once).
-function captureRow(boosts: [string, string[]][], lists: string[]): { lists: string; boosts: string } {
-	const kept = { boosts: [...boosts], lists: [...lists] }
-	const size = () => JSON.stringify(kept.boosts).length + JSON.stringify(kept.lists).length
+// A viewer's capture as its row's JSON, within CAPTURE_LIMITS.viewerBytes: boosts dropped from the newest while it is
+// over (logged once). Its list ids are none until lists stream.
+function captureRow(boosts: [string, string[]][]): { lists: string; boosts: string } {
+	const lists = '[]'
+	const kept = [...boosts]
+	const size = () => JSON.stringify(kept).length + lists.length
 	let truncated = false
-	while (size() > CAPTURE_LIMITS.viewerBytes && (kept.boosts.length > 0 || kept.lists.length > 0)) {
+	while (size() > CAPTURE_LIMITS.viewerBytes && kept.length > 0) {
 		truncated = true
-		if (kept.boosts.length > 0) {
-			kept.boosts.pop()
-		} else {
-			kept.lists.pop()
-		}
+		kept.pop()
 	}
 	if (truncated) {
-		console.warn({ event: 'kopje.stream.capture-truncated', boosts: kept.boosts.length, lists: kept.lists.length })
+		console.warn({ event: 'kopje.stream.capture-truncated', boosts: kept.length, lists: 0 })
 	}
-	return { lists: JSON.stringify(kept.lists), boosts: JSON.stringify(kept.boosts) }
+	return { lists, boosts: JSON.stringify(kept) }
 }
 
 // Moves the position from `from` to `to` if it is still at `from`: false when another turn moved it first.
