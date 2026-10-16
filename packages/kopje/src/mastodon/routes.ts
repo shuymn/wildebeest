@@ -67,6 +67,19 @@ export const ROUTES: readonly Route[] = [
 	{ method: 'GET', path: '/api/v1/instance/languages', access: 'public', handler: instance.languages },
 	{ method: 'GET', path: '/api/v1/instance/privacy_policy', access: 'public', handler: instance.notConfigured },
 	{ method: 'GET', path: '/api/v1/instance/terms_of_service', access: 'public', handler: instance.notConfigured },
+	{
+		method: 'GET',
+		path: '/api/v1/instance/terms_of_service/:date',
+		access: 'public',
+		handler: instance.notConfigured,
+	},
+	{
+		method: 'GET',
+		path: '/api/v1/instance/translation_languages',
+		access: 'public',
+		handler: instance.translationLanguages,
+	},
+	{ method: 'GET', path: '/api/v1/peers/search', access: 'public', handler: instance.searchPeers },
 	{ method: 'GET', path: '/api/v1/instance/activity', access: 'public', handler: instance.notConfigured },
 	{ method: 'GET', path: '/api/v1/instance/domain_blocks', access: 'public', handler: instance.notConfigured },
 	{ method: 'GET', path: '/api/v1/preferences', access: { scope: 'read:accounts' }, handler: accounts.preferences },
@@ -120,6 +133,30 @@ export const ROUTES: readonly Route[] = [
 		handler: accounts.endorsements,
 	},
 	{ method: 'GET', path: '/api/v1/announcements', access: 'token', handler: placeholders.emptyUserList },
+	{
+		method: 'POST',
+		path: '/api/v1/announcements/:id/dismiss',
+		access: { scope: 'write:accounts' },
+		handler: placeholders.announcement,
+	},
+	{
+		method: 'PUT',
+		path: '/api/v1/announcements/:announcement_id/reactions/:id',
+		access: { scope: 'write:favourites' },
+		handler: placeholders.announcement,
+	},
+	{
+		method: 'PATCH',
+		path: '/api/v1/announcements/:announcement_id/reactions/:id',
+		access: { scope: 'write:favourites' },
+		handler: placeholders.announcement,
+	},
+	{
+		method: 'DELETE',
+		path: '/api/v1/announcements/:announcement_id/reactions/:id',
+		access: { scope: 'write:favourites' },
+		handler: placeholders.announcement,
+	},
 	{ method: 'GET', path: '/api/v1/trends', access: 'public', handler: placeholders.emptyList },
 	{ method: 'GET', path: '/api/v1/trends/tags', access: 'public', handler: placeholders.emptyList },
 	{ method: 'GET', path: '/api/v1/trends/statuses', access: 'public', handler: placeholders.emptyList },
@@ -131,10 +168,50 @@ export const ROUTES: readonly Route[] = [
 		handler: placeholders.emptyUserList,
 	},
 	{
+		method: 'DELETE',
+		path: '/api/v1/suggestions/:id',
+		access: { scope: 'write:accounts' },
+		handler: placeholders.removeSuggestion,
+	},
+	{
 		method: 'GET',
 		path: '/api/v2/suggestions',
 		access: { scope: 'read:accounts' },
 		handler: placeholders.emptyUserList,
+	},
+	{
+		method: 'GET',
+		path: '/api/v1/annual_reports',
+		access: { scope: 'read:accounts' },
+		handler: placeholders.annualReports,
+	},
+	{
+		method: 'GET',
+		path: '/api/v1/annual_reports/:id',
+		// As Mastodon's: every action but index asks write:accounts.
+		access: { scope: 'write:accounts' },
+		handler: placeholders.annualReport,
+	},
+	{
+		method: 'POST',
+		path: '/api/v1/annual_reports/:id/read',
+		access: { scope: 'write:accounts' },
+		handler: placeholders.annualReport,
+	},
+	// E-mail confirmation (any token at the route: placeholders.resendConfirmation checks write:accounts, since Mastodon
+	// takes app tokens there), and async refreshes, which Kopje never starts.
+	{ method: 'POST', path: '/api/v1/emails/confirmations', access: 'token', handler: placeholders.resendConfirmation },
+	{
+		method: 'GET',
+		path: '/api/v1/emails/check_confirmation',
+		access: { scope: 'read:accounts' },
+		handler: placeholders.checkConfirmation,
+	},
+	{
+		method: 'GET',
+		path: '/api/v1_alpha/async_refreshes/:id',
+		access: { scope: 'read' },
+		handler: placeholders.asyncRefresh,
 	},
 
 	{
@@ -384,6 +461,12 @@ export const ROUTES: readonly Route[] = [
 		access: { scope: 'write:mutes' },
 		handler: statuses.unmuteConversation,
 	},
+	{
+		method: 'POST',
+		path: '/api/v1/statuses/:id/translate',
+		access: { scope: 'read:statuses' },
+		handler: placeholders.translateStatus,
+	},
 
 	{ method: 'GET', path: '/api/v1/timelines/home', access: { scope: 'read:statuses' }, handler: timelines.home },
 	{
@@ -403,6 +486,12 @@ export const ROUTES: readonly Route[] = [
 		path: '/api/v1/timelines/tag/:hashtag',
 		access: { scope: 'read:statuses', optional: true },
 		handler: timelines.tagTimeline,
+	},
+	{
+		method: 'GET',
+		path: '/api/v1/timelines/link',
+		access: { scope: 'read:statuses', optional: true },
+		handler: placeholders.linkTimeline,
 	},
 	{ method: 'GET', path: '/api/v1/bookmarks', access: { scope: 'read:bookmarks' }, handler: timelines.bookmarks },
 	{ method: 'GET', path: '/api/v1/favourites', access: { scope: 'read:favourites' }, handler: timelines.favourites },
@@ -663,6 +752,7 @@ export const ROUTES: readonly Route[] = [
 	{ method: 'POST', path: '/api/v1/push/subscription', access: { scope: 'push' }, handler: push.createSubscription },
 	{ method: 'GET', path: '/api/v1/push/subscription', access: { scope: 'push' }, handler: push.getSubscription },
 	{ method: 'PUT', path: '/api/v1/push/subscription', access: { scope: 'push' }, handler: push.updateSubscription },
+	{ method: 'PATCH', path: '/api/v1/push/subscription', access: { scope: 'push' }, handler: push.updateSubscription },
 	{ method: 'DELETE', path: '/api/v1/push/subscription', access: { scope: 'push' }, handler: push.deleteSubscription },
 ]
 
