@@ -28,7 +28,8 @@ CREATE TABLE stream_subscriptions (
 ) WITHOUT ROWID;
 
 CREATE TABLE stream_events (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id INTEGER PRIMARY KEY,         -- the newest row is never pruned, so an id is never given twice (no AUTOINCREMENT:
+                                  -- its counter would be started by every notification insert, and not dumped)
   kind TEXT NOT NULL CHECK (kind IN ('status', 'edit', 'notification', 'delete', 'merged')),
   subject TEXT NOT NULL,           -- the notification id, as text
   created_at TEXT NOT NULL

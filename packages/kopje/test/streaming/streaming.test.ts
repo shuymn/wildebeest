@@ -234,7 +234,8 @@ describe('what a notification stream does not carry', () => {
 		await h.store.streamTick(BUILD)
 		await drained(h, inbox)
 		expect(inbox.rest()).toEqual([])
-		expect(await sql(h.store, 'SELECT count(*) AS n FROM stream_events')).toEqual([{ n: 0 }])
+		// Pruned behind the position, but for the newest row, which keeps ids from being given twice.
+		expect(await sql(h.store, 'SELECT count(*) AS n FROM stream_events')).toEqual([{ n: 1 }])
 	})
 })
 
@@ -409,8 +410,8 @@ describe('hibernation and turns', () => {
 		expect(ids).toEqual(stored.map((row) => row.id))
 		// At most 64 presentations a turn: three turns at least.
 		expect(turns - before).toBeGreaterThanOrEqual(Math.ceil(count / 64))
-		// The journal is pruned behind the position.
-		expect(await sql(h.store, 'SELECT count(*) AS n FROM stream_events')).toEqual([{ n: 0 }])
+		// Pruned behind the position, but for the newest row, which keeps ids from being given twice.
+		expect(await sql(h.store, 'SELECT count(*) AS n FROM stream_events')).toEqual([{ n: 1 }])
 	})
 })
 

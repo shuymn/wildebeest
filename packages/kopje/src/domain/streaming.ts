@@ -179,10 +179,12 @@ export const streamAdvance = sessionOperation<{ from: StreamPosition; to: Stream
 		) === 1
 )
 
-// Deletes at most PRUNE_BATCH journal rows at or below `upTo`, a finished event; returns how many.
+// Deletes at most PRUNE_BATCH journal rows at or below `upTo`, a finished event, but the newest row: it keeps the next
+// id above every id given (the journal has no AUTOINCREMENT counter). Returns how many.
 export const streamPrune = sessionOperation<{ upTo: number }, number>((db, { upTo }) =>
 	db.run(
-		'DELETE FROM stream_events WHERE id IN (SELECT id FROM stream_events WHERE id <= ? ORDER BY id LIMIT ?)',
+		`DELETE FROM stream_events WHERE id IN (SELECT id FROM stream_events
+			WHERE id <= ?1 AND id < (SELECT max(id) FROM stream_events) ORDER BY id LIMIT ?2)`,
 		upTo,
 		PRUNE_BATCH
 	)

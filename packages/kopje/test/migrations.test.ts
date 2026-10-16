@@ -2868,9 +2868,8 @@ describe('0026_streaming', () => {
 				{ kind: 'notification', subject: String(id) },
 			])
 			// Once the journal spans 4,096 ids, nothing more is recorded.
-			sql.exec("UPDATE sqlite_sequence SET seq = seq + 4094 WHERE name = 'stream_events'")
 			sql.exec(
-				"INSERT INTO stream_events (kind, subject, created_at) VALUES ('notification', '0', '2026-10-12T00:00:00.000Z')"
+				"INSERT INTO stream_events (id, kind, subject, created_at) SELECT max(id) + 4095, 'notification', '0', '2026-10-12T00:00:00.000Z' FROM stream_events"
 			)
 			sql.exec(
 				"INSERT INTO notifications (account_id, type, from_account_id) VALUES (?, 'follow_request', ?)",
