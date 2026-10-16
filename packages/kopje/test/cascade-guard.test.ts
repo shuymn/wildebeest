@@ -59,17 +59,28 @@ const WRITING_TRIGGERS: Record<string, string> = {
 		'one account row per status hidden: deleteStatusBatch hides a status only with two rows left',
 	stream_notification_inserted:
 		'fires on a notification insert, which no batched delete or purge makes (the exact-budget cases below run with a listener too)',
+	stream_status_inserted:
+		'fires on a status insert, which no batched delete or purge makes (the exact-budget cases below run with a listener too)',
+	stream_status_edited:
+		'fires only when edited_at changes, which no batched delete or purge does: hiding a status writes its visibility and content (the exact-budget cases below run with a listener too)',
 }
 
-// A streaming subscription of the account, which arms the journal trigger (migration 0026_streaming).
+// Streaming subscriptions of the account on `user` and `user:notification`, which arm every journal trigger
+// (migrations 0026_streaming and 0028_streaming_home).
 async function listen(store: StoreStub, listening: boolean, accountId: string): Promise<void> {
 	if (listening) {
 		await sql(
 			store,
-			"INSERT INTO stream_subscriptions (account_id, stream_key, sockets) VALUES (?, 'user', 1)",
+			"INSERT INTO stream_subscriptions (account_id, stream_key, sockets) VALUES (?, 'user', 1), (?, 'user:notification', 1)",
+			accountId,
 			accountId
 		)
 	}
+}
+
+// The journal's rows: a batch, armed or not, journals nothing.
+async function journaled(store: StoreStub): Promise<unknown> {
+	return sql(store, 'SELECT count(*) AS n FROM stream_events')
 }
 
 type ForeignKey = { from: string; table: string; column: string; onDelete: string }
@@ -254,7 +265,8 @@ describe("a status's own delete within a batch", () => {
 	// A purge reaches the account's newest status, a reply with a poll, after its children left the batch exactly the
 	// rows the delete used to reserve: the status, its poll, the parent's recount, and the account's last status, which
 	// the trigger of migration 0021_directory moves back, one row more.
-	// With a streaming listener the journal trigger is armed (migration 0026_streaming); the batch writes the same rows.
+	// With a streaming listener the journal triggers are armed (migrations 0026_streaming and 0028_streaming_home); the
+	// batch writes the same rows and journals nothing.
 	it.each([false, true])(
 		'stays within PURGE_BATCH when the status is the newest of its account (listening: %s)',
 		async (listening) => {
@@ -282,6 +294,9 @@ describe("a status's own delete within a batch", () => {
 			expect(await sql(h.store, 'SELECT last_status_id AS id FROM accounts WHERE id = ?', remote)).toEqual([
 				{ id: reply },
 			])
+			// The statuses' own inserts are journaled with a listener; the batches add nothing.
+			const before = await journaled(h.store)
+			expect(before).toEqual([{ n: listening ? 2 : 0 }])
 			const batches: number[] = []
 			for (let i = 0; i < 10; i++) {
 				const { wrote, remaining } = await runInDurableObject(h.store, (_instance, state) => {
@@ -300,6 +315,7 @@ describe("a status's own delete within a batch", () => {
 			expect(batches[0]).toBe(PURGE_BATCH - 3)
 			expect(batches.every((wrote) => wrote <= PURGE_BATCH)).toBe(true)
 			expect(await sql(h.store, 'SELECT count(*) AS n FROM accounts WHERE id = ?', remote)).toEqual([{ n: 0 }])
+			expect(await journaled(h.store)).toEqual(before)
 		}
 	)
 
@@ -310,6 +326,9 @@ describe("a status's own delete within a batch", () => {
 			await listen(h.store, listening, h.users.alice.id)
 			const remote = await remoteAccount(h.store, 'carol')
 			const status = await seedStatus(h.store, { accountId: remote, visibility: 'public' })
+			// The status's own insert is journaled with a listener; the batches add nothing.
+			const before = await journaled(h.store)
+			expect(before).toEqual([{ n: listening ? 1 : 0 }])
 			await sql(
 				h.store,
 				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
@@ -342,6 +361,7 @@ describe("a status's own delete within a batch", () => {
 			expect(await sql(h.store, 'SELECT last_status_id AS id FROM accounts WHERE id = ?', remote)).toEqual([
 				{ id: null },
 			])
+			expect(await journaled(h.store)).toEqual(before)
 		}
 	)
 })

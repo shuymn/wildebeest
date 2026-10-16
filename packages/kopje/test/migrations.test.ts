@@ -67,6 +67,7 @@ const SCHEMA_TABLES = [
 	'status_tags',
 	'statuses',
 	'stream_cursor',
+	'stream_delete_viewers',
 	'stream_events',
 	'stream_subscriptions',
 ]
@@ -3079,6 +3080,89 @@ describe('0026_streaming', () => {
 			expect(() => sql.exec('INSERT INTO stream_cursor (id, event_id) VALUES (2, 0)')).toThrow(
 				/CHECK constraint failed/
 			)
+			expect(sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
+		})
+	})
+})
+
+describe('0028_streaming_home', () => {
+	it('journals statuses and edits while some account listens, stops at the span, and keeps captures with their event', async () => {
+		const at = NAMES.indexOf('0028_streaming_home')
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, MIGRATIONS.slice(0, at)).upgrade()).toMatchObject({ ok: true })
+			const alice = '100000000000000001'
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username) VALUES (?, 'https://kopje.test/ap/users/alice', 'alice')",
+				alice
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'alice@example.com', X'00', X'00', 'k')",
+				alice
+			)
+			// A position mid-event and a registry row, as a Store running 0026 may hold them.
+			sql.exec('UPDATE stream_cursor SET event_id = 7, account_id = ?', alice)
+			sql.exec(
+				"INSERT INTO stream_subscriptions (account_id, stream_key, sockets) VALUES (?, 'user:notification', 1)",
+				alice
+			)
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({
+				ok: true,
+				applied: ['0028_streaming_home'],
+			})
+			expect(sql.exec('SELECT event_id, subject, account_id FROM stream_cursor').toArray()).toEqual([
+				{ event_id: 7, subject: 0, account_id: alice },
+			])
+			const status = (id: string) =>
+				sql.exec(
+					`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+					VALUES (?, ?, ?, 'public', '<p>x</p>', '2026-10-12T00:00:00.000Z')`,
+					id,
+					`https://kopje.test/ap/o/${id}`,
+					alice
+				)
+			const edit = (id: string, editedAt: string | null) =>
+				sql.exec('UPDATE statuses SET edited_at = ? WHERE id = ?', editedAt, id)
+			const journal = () => sql.exec('SELECT kind, subject FROM stream_events ORDER BY id').toArray()
+			// Only `user:notification`: an edit is journaled (the mention reference), an insert is not.
+			status('200000000000000001')
+			edit('200000000000000001', '2026-10-12T01:00:00.000Z')
+			expect(journal()).toEqual([{ kind: 'edit', subject: '200000000000000001' }])
+			sql.exec('DELETE FROM stream_events')
+			// With `user`: both; an update that leaves edited_at as it was, or clears it, is no edit.
+			sql.exec("INSERT INTO stream_subscriptions (account_id, stream_key, sockets) VALUES (?, 'user', 1)", alice)
+			status('200000000000000002')
+			edit('200000000000000002', '2026-10-12T01:00:00.000Z')
+			edit('200000000000000002', '2026-10-12T01:00:00.000Z')
+			sql.exec("UPDATE statuses SET content = '<p>y</p>' WHERE id = '200000000000000002'")
+			edit('200000000000000002', null)
+			expect(journal()).toEqual([
+				{ kind: 'status', subject: '200000000000000002' },
+				{ kind: 'edit', subject: '200000000000000002' },
+			])
+			// A capture names its journal row by id only: the row's delete leaves it to streamPrune.
+			const event = sql
+				.exec<{ id: number }>(
+					"INSERT INTO stream_events (kind, subject, created_at) VALUES ('delete', '200000000000000002', '2026-10-12T00:00:00.000Z') RETURNING id"
+				)
+				.one().id
+			sql.exec(
+				"INSERT INTO stream_delete_viewers (event_id, account_id, lists, boosts) VALUES (?, ?, '[]', '[]')",
+				event,
+				alice
+			)
+			sql.exec('DELETE FROM stream_events WHERE id = ?', event)
+			expect(sql.exec('SELECT count(*) AS n FROM stream_delete_viewers').one().n).toBe(1)
+			sql.exec('DELETE FROM stream_delete_viewers')
+			// Once the journal spans 4,096 ids, nothing more is recorded.
+			sql.exec(
+				"INSERT INTO stream_events (id, kind, subject, created_at) SELECT max(id) + 4095, 'status', '0', '2026-10-12T00:00:00.000Z' FROM stream_events"
+			)
+			const before = journal().length
+			status('200000000000000003')
+			edit('200000000000000003', '2026-10-12T01:00:00.000Z')
+			expect(journal()).toHaveLength(before)
 			expect(sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
 		})
 	})
