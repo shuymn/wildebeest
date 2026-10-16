@@ -513,6 +513,37 @@ describe('reading a remote account’s collections', () => {
 		expect(await pinned(t, bobId, null)).toEqual([old.id, unknown.id, stored.id])
 	})
 
+	it('counts pending pins toward MAX_REMOTE_PINS, and an Add of a pending status takes its slot', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const bobId = await followed(t, bob)
+		const stored = Array.from({ length: MAX_REMOTE_PINS - 2 }, () => mastodonNote(bob))
+		const [extra, unknown, added] = [mastodonNote(bob), mastodonNote(bob), mastodonNote(bob)]
+		for (const note of [...stored, extra]) {
+			expect(await t.post(bob, create(bob, note))).toBe(202)
+		}
+		t.web.serve(unknown.id, { '@context': AS, ...unknown })
+		t.web.serve(added.id, { '@context': AS, ...added })
+		// 18 stored and 2 pending: every slot is taken once the read ends.
+		await servedCollections(t, bob, [...stored.map((note) => note.id), unknown.id, added.id], [])
+		const store = storeWithHook(t, 'completeCollectionRead', async () => {
+			expect(await rows(t, 'collection_pins_pending')).toEqual([{ n: 2 }])
+			// Another stored status finds no slot; the Add of a pending one converts its slot (and is fetched for it).
+			expect(await t.post(bob, addOrRemove('Add', bob, extra.id))).toBe(202)
+			expect(await t.post(bob, addOrRemove('Add', bob, added.id))).toBe(202)
+			expect(await rows(t, 'collection_pins_pending')).toEqual([{ n: 1 }])
+		})
+		const hooked = { ...deps(t), store: () => store }
+		for (let round = 0; round < 5 && (await syncCollections(t.env, hooked)); round++) {
+			// Until no sync is due.
+		}
+		const shown = await pinned(t, bobId, null)
+		expect(shown).toHaveLength(MAX_REMOTE_PINS)
+		expect(shown).toContain(unknown.id)
+		expect(shown).toContain(added.id)
+		expect(shown).not.toContain(extra.id)
+	})
+
 	it('pins no pending status the actor removed before it was fetched, or while it was', async () => {
 		const t = await setup()
 		const bob = await mastodonActor(t.web, 'bob')

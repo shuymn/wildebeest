@@ -117,10 +117,10 @@ export function collectionOf(db: Db, accountId: string, target: string): 'featur
 	return target === collections.featured ? 'featured' : target === collections.featuredTags ? 'featuredTags' : null
 }
 
-type Pinnable = { id: string; account_id: string; reblog_of_id: string | null; visibility: Visibility }
+type Pinnable = { id: string; uri: string; account_id: string; reblog_of_id: string | null; visibility: Visibility }
 
 // Whether the account may pin the status (StatusPinValidator): its own original, neither direct nor limited.
-function pinnable(status: Pinnable | undefined, accountId: string): status is Pinnable {
+function pinnable<T extends Omit<Pinnable, 'uri'>>(status: T | undefined, accountId: string): status is T {
 	return (
 		status !== undefined &&
 		status.account_id === accountId &&
@@ -130,18 +130,18 @@ function pinnable(status: Pinnable | undefined, accountId: string): status is Pi
 }
 
 function pinnableStatus(db: Db, statusId: string): Pinnable | undefined {
-	return db.first<Pinnable>('SELECT id, account_id, reblog_of_id, visibility FROM statuses WHERE id = ?', statusId)
+	return db.first<Pinnable>('SELECT id, uri, account_id, reblog_of_id, visibility FROM statuses WHERE id = ?', statusId)
 }
 
 // Add#add_featured: the account pins its stored status, unless it pins it already or keeps MAX_REMOTE_PINS. Whether a
 // pin was written.
+// A pin a sync left pending for the same status becomes this pin: its slot is converted, not added to.
 export function pinRemote(db: Db, accountId: string, statusId: string, now: number): boolean {
-	if (!pinnable(pinnableStatus(db, statusId), accountId)) {
+	const status = pinnableStatus(db, statusId)
+	if (!pinnable(status, accountId) || !pinsBelowCap(db, accountId, status.uri)) {
 		return false
 	}
-	if (!pinsBelowCap(db, accountId)) {
-		return false
-	}
+	db.run('DELETE FROM collection_pins_pending WHERE account_id = ? AND uri = ?', accountId, status.uri)
 	return (
 		db.run(
 			'INSERT INTO status_pins (account_id, status_id, created_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING',
@@ -152,14 +152,18 @@ export function pinRemote(db: Db, accountId: string, statusId: string, now: numb
 	)
 }
 
-// Whether the account pins fewer than MAX_REMOTE_PINS statuses.
-function pinsBelowCap(db: Db, accountId: string): boolean {
-	const pins = db.first<{ n: number }>(
-		'SELECT count(*) AS n FROM (SELECT 1 FROM status_pins WHERE account_id = ? LIMIT ?)',
+// Whether the account's pins, stored and pending, leave a slot below MAX_REMOTE_PINS for the status `uri`: the slot
+// a pending pin of that very status holds counts as free, since pinning it converts that slot. Each count reads at most
+// MAX_REMOTE_PINS rows.
+function pinsBelowCap(db: Db, accountId: string, uri: string): boolean {
+	const used = db.first<{ n: number }>(
+		`SELECT (SELECT count(*) FROM (SELECT 1 FROM status_pins WHERE account_id = ?1 LIMIT ?3))
+			+ (SELECT count(*) FROM (SELECT 1 FROM collection_pins_pending WHERE account_id = ?1 AND uri <> ?2 LIMIT ?3)) AS n`,
 		accountId,
+		uri,
 		MAX_REMOTE_PINS
 	)
-	return (pins?.n ?? 0) < MAX_REMOTE_PINS
+	return (used?.n ?? 0) < MAX_REMOTE_PINS
 }
 
 // Remove#remove_featured: the account's pin of its status, if any.
@@ -436,7 +440,7 @@ export const completePinFetches = writeOperation<PinFetchesInput, boolean>((db, 
 				fetched: true,
 			})
 			const status = stored.statusId === undefined ? undefined : statusByUri(db, uri)
-			if (status !== undefined && pinnable(status, account.id) && pinsBelowCap(db, account.id)) {
+			if (status !== undefined && pinnable(status, account.id) && pinsBelowCap(db, account.id, uri)) {
 				db.run(
 					'INSERT INTO status_pins (account_id, status_id, created_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING',
 					account.id,
