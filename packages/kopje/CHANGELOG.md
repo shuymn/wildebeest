@@ -8,6 +8,39 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+### Added
+
+- The streaming API's WebSocket, as Mastodon 4.5's streaming server serves it, for the notifications: clients open
+  `wss://<domain>/api/v1/streaming` (any path below it is taken too) with the token as the subprotocol (echoed, as
+  masto.js needs), in the `Authorization` header or in `access_token`, then send
+  `{"type":"subscribe","stream":"user:notification"}` (or `user`, or `?stream=` on connect). `user:notification`
+  (`read` or `read:notifications`) and `user` (`read` or `read:statuses`, with notifications only if the token also has
+  `read:notifications`) carry `notification` events: each new notification the recipient's list shows, as REST
+  presents it, and not one their notification policy filtered, as Mastodon. Other streams (`public*`, `hashtag*`,
+  `list`, `direct`, and a name Mastodon does not know) answer `{"error":"Unknown stream type","status":400}`, and
+  `user` carries no `update`, `status.update` or `delete` yet. `GET /api/v1/streaming/health` answers `OK`. SSE is not
+  served (a request that is not an upgrade answers 404); no surveyed client uses it.
+    - Delivery is at most once and live, with no replay: a client reads REST again after a gap, as with Mastodon.
+    - A socket closes when its token is revoked, its web session signed out or its account suspended (at the next
+      write), and when the token expires (within 5 minutes); every socket closes on each deploy, as Durable Objects
+      drop WebSockets then, and clients reconnect.
+    - Limits: 16 sockets per account (429 `Too many connections`), 256 per instance (503), 16 subscriptions per
+      socket (`Too many subscriptions`), and incoming messages of text only (1003), at most 4 KiB and 120 a minute
+      (1008).
+    - Where Kopje differs from Mastodon: there is no protocol ping every 30 seconds (hibernated sockets are answered by
+      the platform without waking the Store); the message rate counts every message a socket sends.
+
+### Instance changes
+
+- Store schema: adds one migration, applied on the first request after the deploy; a rollback to an earlier version
+  needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
+    - `0026_streaming`: adds the streaming API's registry of subscriptions, journal of events and position, and a
+      trigger that journals a new unfiltered notification while its recipient has a subscription. It only creates
+      empty tables (and the position's row) and the trigger, so its work does not grow with the Store. The three
+      tables are left out of dumps and backups: they describe one object's open sockets.
+- `wrangler.jsonc`: unchanged. The sockets live in the Store, which already exists, so no Durable Object migration
+  (and no rollback barrier) is added.
+
 ## [0.1.0-rc.8] - 2026-10-16
 
 An eighth release candidate of the first release, published under the npm dist-tag `next`.
