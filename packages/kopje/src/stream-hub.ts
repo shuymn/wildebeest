@@ -14,6 +14,7 @@ import {
 	streamCaughtUp,
 	streamConversations,
 	streamDeleteUnits,
+	streamEnterConversation,
 	type StreamEvent,
 	type StreamGrant,
 	streamEvents,
@@ -100,7 +101,7 @@ type Socket = { ws: WebSocket; at: Attachment }
 type Unit = { subject: StreamSubject; viewer: string; sockets: Socket[]; lists: string[] }
 
 // A scan's walk: the position as this turn moved it, and an event passed over whose position write is pending.
-type Walk = { from: StreamPosition; skipTo: StreamPosition | null }
+type Walk = { from: StreamPosition; skipTo: StreamPosition | null; ceiling: number }
 
 // A delete's units are read this many viewers at a time (at most 41 units each).
 const DELETE_PAGE = 8
@@ -499,7 +500,7 @@ export class StreamHub {
 				full = true
 				console.warn({ event: 'kopje.stream.journal-full', head: scan.head, tail: scan.tail })
 			}
-			const state: Walk = { from: scan.position, skipTo: null }
+			const state: Walk = { from: scan.position, skipTo: null, ceiling: scan.ceiling }
 			for (const event of scan.events) {
 				const outcome = await this.#event(event, state, budget)
 				if (outcome !== 'next') {
@@ -550,8 +551,30 @@ export class StreamHub {
 				if (!budget.covers(UNIT_WORST)) {
 					return stop()
 				}
-				units = await this.#conversationUnits(event.subject, after)
-				budget.charge({ checks: 1 })
+				const sockets = this.#directSockets(event.subject)
+				units = []
+				if (sockets.length > 0) {
+					if (after === null) {
+						// Entering the event fixes its ceiling; a change after it goes to the owner's next row.
+						if (!(await this.#flush(state))) {
+							return 'lost'
+						}
+						const ceiling = await this.#run(streamEnterConversation, {
+							from: state.from,
+							eventId: event.id,
+							owner: event.subject,
+						})
+						if (ceiling === null) {
+							return 'lost'
+						}
+						state.from = { event: event.id, subject: 0, account: event.subject }
+						state.ceiling = ceiling
+						after = { account: event.subject, subject: 0 }
+					}
+					units = await this.#conversationUnits(event.subject, sockets, after.subject, state.ceiling)
+					budget.charge({ checks: 1 })
+				}
+				after = null
 				more = false
 			} else {
 				units = this.#units(
@@ -629,21 +652,17 @@ export class StreamHub {
 	}
 
 	// A conversation event's units (its subject is the owner): the owner's newest changes (CONVERSATIONS_PER_TURN, older
-	// ones skipped) above the lowest convSeq of its `direct` sockets and above the position within the event, oldest of
-	// them first, each one conversation, its subject index the change's sequence. A unit goes to the sockets whose
+	// ones skipped) above the lowest convSeq of its `direct` sockets and above the position within the event, and at
+	// most the event's ceiling (fixed when the fan-out entered it, so a turn that resumes the event never reads a change
+	// written since: that one has the owner's next row), oldest of them first, each one conversation, its subject index the change's sequence. A unit goes to the sockets whose
 	// convSeq is below its change. A socket's `since` does not apply: its convSeq, set from the owner's mark when it
 	// subscribed, says what it has been sent, and a change written after it opened may join a row journaled before.
-	async #conversationUnits(owner: string, after: StreamUnitAfter): Promise<Unit[]> {
-		const sockets = this.#open(accountTag(owner)).filter(
-			({ at }) => mayCarry('conversation', at.grant, 'direct') && at.subs.includes('direct')
-		)
-		if (sockets.length === 0) {
-			return []
-		}
-		const lowest = Math.min(...sockets.map(({ at }) => at.convSeq), Number.MAX_SAFE_INTEGER)
+	async #conversationUnits(owner: string, sockets: Socket[], position: number, ceiling: number): Promise<Unit[]> {
+		const lowest = Math.min(...sockets.map(({ at }) => at.convSeq))
 		const changes = await this.#run(streamConversations, {
 			accountId: owner,
-			after: Math.max(lowest, after?.account === owner ? after.subject : 0),
+			after: Math.max(lowest, position),
+			upTo: ceiling,
 			limit: CONVERSATIONS_PER_TURN,
 		})
 		return changes
@@ -654,6 +673,13 @@ export class StreamHub {
 				lists: [],
 			}))
 			.filter((unit) => unit.sockets.length > 0)
+	}
+
+	// The owner's open sockets subscribed to `direct`.
+	#directSockets(owner: string): Socket[] {
+		return this.#open(accountTag(owner)).filter(
+			({ at }) => mayCarry('conversation', at.grant, 'direct') && at.subs.includes('direct')
+		)
 	}
 
 	// One unit of the journal: made, the position moved past it (and, for a conversation, the convSeq of the sockets it

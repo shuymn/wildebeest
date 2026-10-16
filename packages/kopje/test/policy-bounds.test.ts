@@ -4678,7 +4678,7 @@ describe("streamed lists and conversations read their items, however large the l
 			streams('conversation', await conversation(store, size.conversations), 'conversation', ['direct']),
 			streams('conversation', await conversation(store, 1), 'conversation', ['direct']),
 			['owned', streamListOwned, { accountId: VIEWER_ID, listId: LIST_ID }, true],
-			['changes', streamConversations, { accountId: VIEWER_ID, after: 0, limit: 20 }, 20],
+			['changes', streamConversations, { accountId: VIEWER_ID, after: 0, upTo: size.conversations, limit: 20 }, 20],
 		]
 	}
 

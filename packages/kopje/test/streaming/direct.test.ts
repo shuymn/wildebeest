@@ -266,6 +266,66 @@ describe('conversations at the caps', () => {
 		}
 	}, 120_000)
 
+	// 10 owners with 16 sockets each, every socket its own token: a turn sweeps 160 tokens and a conversation unit checks
+	// 16, so one turn sends fewer than 20 of an owner's changes and the busy owner's event spans turns. Between turns the
+	// busy owner writes 20 more changes: they go to its next row, behind the other owners', and the event in progress
+	// ends at the ceiling fixed when the fan-out entered it.
+	it("ends an owner's event at its ceiling while the owner keeps changing, so the owners after it are served", async () => {
+		const h = await community(['alice'])
+		const ids = await owners(h, 10)
+		const [busy, ...others] = ids
+		const inboxes = new Map<string, Inbox[]>()
+		for (const id of ids) {
+			const sockets: Inbox[] = []
+			for (let k = 0; k < 16; k++) {
+				await sql(
+					h.store,
+					"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) SELECT ?, 'access', client_id, ?, 'read' FROM oauth_tokens LIMIT 1",
+					await sha256Hex(`cap-${id}-${k}`),
+					id
+				)
+				const inbox = await connect(h, `cap-${id}-${k}`)
+				inbox.send({ type: 'subscribe', stream: 'direct' })
+				sockets.push(inbox)
+			}
+			inboxes.set(id, sockets)
+		}
+		for (const inbox of [...inboxes.values()].flat()) {
+			await echo(inbox)
+		}
+		await drained(h)
+		const first = await changed(h, Array<string>(20).fill(busy!))
+		const statuses = await changed(h, others)
+		const turn = async () => {
+			const response = await h.store.fetch('https://store.internal/stream/turn', { method: 'POST' })
+			await response.body?.cancel()
+		}
+		STREAM_FAULTS.dropContinuation = () => {}
+		try {
+			for (let i = 0; i < 6; i++) {
+				await turn()
+				await changed(h, Array<string>(20).fill(busy!))
+			}
+		} finally {
+			STREAM_FAULTS.dropContinuation = null
+		}
+		for (const inbox of [...inboxes.values()].flat()) {
+			await echo(inbox)
+		}
+		// Every other owner's sockets got its conversation within those turns, with no drain barrier asking for more.
+		others.forEach((id, i) => {
+			for (const inbox of inboxes.get(id)!) {
+				expect(inbox.messages.filter(sentStatus(statuses[i]!))).toHaveLength(1)
+			}
+		})
+		// The busy owner's first event sent its 20 changes once each.
+		for (const inbox of inboxes.get(busy!)!) {
+			for (const status of first) {
+				expect(inbox.messages.filter(sentStatus(status))).toHaveLength(1)
+			}
+		}
+	}, 120_000)
+
 	it('resumes after a failed continuation and hibernation, from the cron, past the owners already sent', async () => {
 		const h = await community(['alice'])
 		const ids = await owners(h, 256)

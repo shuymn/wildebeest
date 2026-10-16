@@ -16,6 +16,9 @@
 --   stream_events            rebuilt to admit the kind 'conversation' (its CHECK names the kinds), with the same rows
 --                            and ids, and the triggers that write it made again; stream_events_conversation indexes
 --                            the conversation rows by owner.
+--   stream_cursor.ceiling   the highest change a conversation event sends, fixed when the fan-out enters the event (the
+--                            owner's mark then, in the same write): later changes go to the owner's next row, so the
+--                            event ends after at most 20 units however fast the owner's conversations change.
 --   stream_conversation_changed a trigger that journals a 'conversation' event for the owner when its mark moves,
 --                            unless the owner has one after the fan-out's position (not yet consumed): a burst of
 --                            changes is one row, and a change after the row was consumed is a new row at the end.
@@ -30,6 +33,8 @@
 --
 -- Adding a column with a constant default reads nothing, and the triggers read no row when made. The index reads each
 -- conversation once; the journal's copy reads its rows, at most a 4,096-id span; nothing else of the Store is read.
+
+ALTER TABLE stream_cursor ADD COLUMN ceiling INTEGER;
 
 CREATE TABLE stream_conversation_marks (
   account_id TEXT PRIMARY KEY REFERENCES accounts (id) ON DELETE CASCADE,

@@ -1281,8 +1281,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   _Implemented on branch `kopje/streaming-3`:_ a delete's capture also holds each viewer's lists (at most 16 for the
   status and each boost, within the same 16 KiB); a list's check is one narrowed read. A conversation's change moves its owner's mark,
   which journals one 'conversation' event for the owner unless one is still ahead of the position, so a burst is one
-  row and a busy owner waits behind the others (FIFO); its units are the owner's newest 20 changes, read through an
-  index, each its own unit under the persisted position, older ones skipped. A conversation's last status moved back by
+  row and a busy owner waits behind the others (FIFO); its units are the owner's newest 20 changes up to a
+  ceiling fixed (with the position) when the fan-out enters the event, read through an index, each its own unit under
+  the persisted position, older ones skipped; a change written after that goes to the owner's next row, so an event
+  ends however fast its owner writes. A conversation's last status moved back by
   a status's removal writes the owner's mark and that journal row too, so the batched delete of a status's conversation
   links takes a fourth of the rows left (`LIMIT ?2 / 4`). `notifications_merged` is one journal
   row per transition, under the span. `src/stream-hub.ts`, `src/domain/streaming.ts`;

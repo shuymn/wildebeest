@@ -205,7 +205,7 @@ export type StreamEvent = { id: number; kind: string; subject: string; viewers: 
 // finished one is not, so a full window means more may follow. Also the journal's span.
 export const streamEvents = readOperation<
 	{ limit: number },
-	{ position: StreamPosition; events: StreamEvent[]; head: number; tail: number }
+	{ position: StreamPosition; ceiling: number; events: StreamEvent[]; head: number; tail: number }
 >((db, { limit }) => {
 	const position = readPosition(db)
 	const rows = db.all<{ id: number; kind: string; subject: string; recipient: string | null }>(
@@ -263,7 +263,7 @@ export const streamEvents = readOperation<
 	const span = db.first<{ head: number | null; tail: number | null }>(
 		'SELECT (SELECT max(id) FROM stream_events) AS head, (SELECT min(id) FROM stream_events) AS tail'
 	)
-	return { position, events, head: span?.head ?? 0, tail: span?.tail ?? 0 }
+	return { position, ceiling: readCeiling(db), events, head: span?.head ?? 0, tail: span?.tail ?? 0 }
 })
 
 // Where a page of a delete's units starts: after the unit (account, subject), or at the start.
@@ -542,6 +542,28 @@ export const streamAdvance = sessionOperation<{ from: StreamPosition; to: Stream
 		) === 1
 )
 
+// Moves the position from `from` into the conversation event `eventId` of `owner`, before its first unit, if it is
+// still at `from`, and fixes the event's ceiling: the owner's mark now. The same write makes the trigger
+// stream_conversation_changed journal any later change of the owner in a new row (the position is at this event), so
+// the event sends changes up to the ceiling only and ends after at most CONVERSATIONS_PER_TURN units. Returns the
+// ceiling, or null when another turn moved the position first.
+export const streamEnterConversation = sessionOperation<
+	{ from: StreamPosition; eventId: number; owner: string },
+	number | null
+>((db, { from, eventId, owner }) => {
+	const row = db.first<{ ceiling: number | null }>(
+		`UPDATE stream_cursor SET event_id = ?4, subject = 0, account_id = ?5,
+			ceiling = coalesce((SELECT seq FROM stream_conversation_marks WHERE account_id = ?5), 0)
+		WHERE id = 1 AND event_id = ?1 AND subject = ?2 AND account_id IS ?3 RETURNING ceiling`,
+		from.event,
+		from.subject,
+		from.account,
+		eventId,
+		owner
+	)
+	return row === undefined ? null : (row.ceiling ?? 0)
+})
+
 // Deletes at most PRUNE_BATCH rows in all at or below `upTo`, a finished event, but the newest journal row: it keeps the
 // next id above every id given (the journal has no AUTOINCREMENT counter). Journal rows go first, so the journal's span
 // shrinks as soon as the fan-out passes them; then, with what is left of the batch, the capture rows of finished
@@ -609,19 +631,21 @@ export const streamListOwned = readOperation<{ accountId: string; listId: string
 )
 
 // An owner's conversation changes above `after` (the lowest convSeq of its `direct` sockets, or the position within
-// the event): the newest `limit`, by conversations_stream, oldest of them first, so they are sent in order and each
+// the event) and at most `upTo` (the event's ceiling): the newest `limit`, by conversations_stream, oldest of them first, so they are sent in order and each
 // socket's convSeq rises with each. Older changes are skipped.
 export const streamConversations = readOperation<
-	{ accountId: string; after: number; limit: number },
+	{ accountId: string; after: number; upTo: number; limit: number },
 	{ id: string; seq: number }[]
->((db, { accountId, after, limit }) =>
+>((db, { accountId, after, upTo, limit }) =>
 	db
 		.all<{ id: string; seq: number }>(
 			`SELECT CAST(id AS TEXT) AS id, stream_seq AS seq FROM conversations WHERE account_id = ?1 AND stream_seq > ?2
+				AND stream_seq <= ?4
 			ORDER BY stream_seq DESC LIMIT ?3`,
 			accountId,
 			after,
-			limit
+			limit,
+			upTo
 		)
 		.reverse()
 )
@@ -666,6 +690,7 @@ export const streamCaughtUp = readOperation<void, boolean>((db) => {
 // The operations the hub runs for itself: their commits start no turn.
 export const STREAM_OPERATIONS: ReadonlySet<StoreOperation<never, unknown>> = new Set<StoreOperation<never, unknown>>([
 	streamAdvance,
+	streamEnterConversation,
 	streamPrune,
 	streamRegister,
 	streamReconcile,
@@ -680,6 +705,11 @@ function insertKeys(db: Db, accountId: string, keys: StreamKeys): void {
 			sockets
 		)
 	}
+}
+
+// The ceiling of the conversation event the position is within (streamEnterConversation); meaningless elsewhere.
+function readCeiling(db: Db): number {
+	return db.first<{ ceiling: number | null }>('SELECT ceiling FROM stream_cursor WHERE id = 1')?.ceiling ?? 0
 }
 
 function readPosition(db: Db): StreamPosition {
