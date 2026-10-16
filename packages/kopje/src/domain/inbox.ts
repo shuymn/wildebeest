@@ -1344,6 +1344,89 @@ function withdrawLocalBoosts(
 	}
 }
 
+// The tables whose rows name a status (a foreign key to statuses.id that cascades or sets null), each with its
+// column and its bounded delete or detach statements, in order: `?1` the status id, `?2` the row limit.
+// deleteStatusWithin spends each statement and deletes the status only once none of these tables names it, so a new
+// child table goes here, or its rows would go in the status's delete unbounded; test/cascade-guard.test.ts checks the
+// list against the schema. Votes (deletePollVotes) and the status's replies and boosts have their own steps.
+export const STATUS_CHILDREN: readonly { table: string; column: string; remove: readonly string[] }[] = [
+	{
+		table: 'status_edits',
+		column: 'status_id',
+		remove: ['DELETE FROM status_edits WHERE id IN (SELECT id FROM status_edits WHERE status_id = ? LIMIT ?)'],
+	},
+	// Local uploads, also those an edit dropped, are detached for the media sweep, which deletes their R2 objects
+	// (gc_at the epoch: due at once); remote rows only name URLs.
+	{
+		table: 'media_attachments',
+		column: 'status_id',
+		remove: [
+			`UPDATE media_attachments SET status_id = NULL, position = 0, shown = 1, gc_at = '1970-01-01T00:00:00.000Z'
+			WHERE id IN (SELECT id FROM media_attachments WHERE status_id = ?1 AND file_token IS NOT NULL LIMIT ?2)`,
+			'DELETE FROM media_attachments WHERE id IN (SELECT id FROM media_attachments WHERE status_id = ? AND file_token IS NULL LIMIT ?)',
+		],
+	},
+	{
+		table: 'status_mentions',
+		column: 'status_id',
+		remove: [
+			`DELETE FROM status_mentions WHERE status_id = ?1
+			AND account_id IN (SELECT account_id FROM status_mentions WHERE status_id = ?1 LIMIT ?2)`,
+		],
+	},
+	{
+		table: 'status_tags',
+		column: 'status_id',
+		remove: [
+			'DELETE FROM status_tags WHERE status_id = ?1 AND name IN (SELECT name FROM status_tags WHERE status_id = ?1 LIMIT ?2)',
+		],
+	},
+	{
+		table: 'favourites',
+		column: 'status_id',
+		remove: ['DELETE FROM favourites WHERE id IN (SELECT id FROM favourites WHERE status_id = ? LIMIT ?)'],
+	},
+	{
+		table: 'bookmarks',
+		column: 'status_id',
+		remove: ['DELETE FROM bookmarks WHERE id IN (SELECT id FROM bookmarks WHERE status_id = ? LIMIT ?)'],
+	},
+	{
+		table: 'notifications',
+		column: 'status_id',
+		remove: ['DELETE FROM notifications WHERE id IN (SELECT id FROM notifications WHERE status_id = ? LIMIT ?)'],
+	},
+	// Pins of the status (migration 0018_status_pins_and_conversation_mutes): only its author pins it, so a remote
+	// status has none, but none outlives it.
+	{
+		table: 'status_pins',
+		column: 'status_id',
+		remove: [
+			`DELETE FROM status_pins WHERE status_id = ?1
+			AND account_id IN (SELECT account_id FROM status_pins WHERE status_id = ?1 LIMIT ?2)`,
+		],
+	},
+	// Filters naming the status (migration 0012_filters): any number of them, of any accounts.
+	{
+		table: 'filter_statuses',
+		column: 'status_id',
+		remove: ['DELETE FROM filter_statuses WHERE id IN (SELECT id FROM filter_statuses WHERE status_id = ? LIMIT ?)'],
+	},
+	// Receipts of a withdrawn local boost are deleted here, a batch at a time, after its Undo has taken them as targets.
+	{
+		table: 'outbound_receipts',
+		column: 'status_id',
+		remove: [
+			`DELETE FROM outbound_receipts WHERE status_id = ?1
+			AND inbox_url IN (SELECT inbox_url FROM outbound_receipts WHERE status_id = ?1 LIMIT ?2)`,
+		],
+	},
+]
+
+const STATUS_CHILDREN_EXIST = STATUS_CHILDREN.map(
+	(child) => `EXISTS (SELECT 1 FROM ${child.table} WHERE ${child.column} = ?1)`
+).join(' OR ')
+
 // Deletes a status's children within the budget, and the status itself once none remain (so nothing cascades).
 // `after` is how many rows the caller writes once the status is gone. Returns whether the status is gone.
 function deleteStatusWithin(db: Db, statusId: string, budget: Budget, after = 0): boolean {
@@ -1354,85 +1437,13 @@ function deleteStatusWithin(db: Db, statusId: string, budget: Budget, after = 0)
 	if (row === undefined) {
 		return true
 	}
-	spend(
-		db,
-		budget,
-		'DELETE FROM status_edits WHERE id IN (SELECT id FROM status_edits WHERE status_id = ? LIMIT ?)',
-		statusId
-	)
 	// The votes in its poll; the poll itself, one row, goes with the status.
 	deletePollVotes(db, statusId, budget.left())
-	// Local uploads, also those an edit dropped, are detached for the media sweep, which deletes their R2 objects;
-	// remote rows only name URLs.
-	spend(
-		db,
-		budget,
-		`UPDATE media_attachments SET status_id = NULL, position = 0, shown = 1, gc_at = ?1
-		WHERE id IN (SELECT id FROM media_attachments WHERE status_id = ?2 AND file_token IS NOT NULL LIMIT ?3)`,
-		new Date(0).toISOString(),
-		statusId
-	)
-	spend(
-		db,
-		budget,
-		'DELETE FROM media_attachments WHERE id IN (SELECT id FROM media_attachments WHERE status_id = ? AND file_token IS NULL LIMIT ?)',
-		statusId
-	)
-	spend(
-		db,
-		budget,
-		`DELETE FROM status_mentions WHERE status_id = ?1
-			AND account_id IN (SELECT account_id FROM status_mentions WHERE status_id = ?1 LIMIT ?2)`,
-		statusId
-	)
-	spend(
-		db,
-		budget,
-		'DELETE FROM status_tags WHERE status_id = ?1 AND name IN (SELECT name FROM status_tags WHERE status_id = ?1 LIMIT ?2)',
-		statusId
-	)
-	spend(
-		db,
-		budget,
-		'DELETE FROM favourites WHERE id IN (SELECT id FROM favourites WHERE status_id = ? LIMIT ?)',
-		statusId
-	)
-	spend(
-		db,
-		budget,
-		'DELETE FROM bookmarks WHERE id IN (SELECT id FROM bookmarks WHERE status_id = ? LIMIT ?)',
-		statusId
-	)
-	spend(
-		db,
-		budget,
-		'DELETE FROM notifications WHERE id IN (SELECT id FROM notifications WHERE status_id = ? LIMIT ?)',
-		statusId
-	)
-	// Pins of the status (migration 0018_status_pins_and_conversation_mutes): only its author pins it, so a remote
-	// status has none, but none outlives it.
-	spend(
-		db,
-		budget,
-		`DELETE FROM status_pins WHERE status_id = ?1
-			AND account_id IN (SELECT account_id FROM status_pins WHERE status_id = ?1 LIMIT ?2)`,
-		statusId
-	)
-	// Filters naming the status (migration 0012_filters): any number of them, of any accounts.
-	spend(
-		db,
-		budget,
-		'DELETE FROM filter_statuses WHERE id IN (SELECT id FROM filter_statuses WHERE status_id = ? LIMIT ?)',
-		statusId
-	)
-	// Receipts of a withdrawn local boost are deleted here, a batch at a time, after its Undo has taken them as targets.
-	spend(
-		db,
-		budget,
-		`DELETE FROM outbound_receipts WHERE status_id = ?1
-			AND inbox_url IN (SELECT inbox_url FROM outbound_receipts WHERE status_id = ?1 LIMIT ?2)`,
-		statusId
-	)
+	for (const child of STATUS_CHILDREN) {
+		for (const sql of child.remove) {
+			spend(db, budget, sql, statusId)
+		}
+	}
 	spend(
 		db,
 		budget,
@@ -1440,16 +1451,7 @@ function deleteStatusWithin(db: Db, statusId: string, budget: Budget, after = 0)
 		statusId
 	)
 	const children = db.first(
-		`SELECT 1 AS x WHERE EXISTS (SELECT 1 FROM status_edits WHERE status_id = ?1)
-			OR EXISTS (SELECT 1 FROM media_attachments WHERE status_id = ?1)
-			OR EXISTS (SELECT 1 FROM status_mentions WHERE status_id = ?1)
-			OR EXISTS (SELECT 1 FROM status_tags WHERE status_id = ?1)
-			OR EXISTS (SELECT 1 FROM favourites WHERE status_id = ?1)
-			OR EXISTS (SELECT 1 FROM bookmarks WHERE status_id = ?1)
-			OR EXISTS (SELECT 1 FROM notifications WHERE status_id = ?1)
-			OR EXISTS (SELECT 1 FROM filter_statuses WHERE status_id = ?1)
-			OR EXISTS (SELECT 1 FROM status_pins WHERE status_id = ?1)
-			OR EXISTS (SELECT 1 FROM outbound_receipts WHERE status_id = ?1)
+		`SELECT 1 AS x WHERE ${STATUS_CHILDREN_EXIST}
 			OR EXISTS (SELECT 1 FROM statuses WHERE in_reply_to_id = ?1 OR reblog_of_id = ?1)`,
 		statusId
 	)
@@ -1463,28 +1465,38 @@ function deleteStatusWithin(db: Db, statusId: string, budget: Budget, after = 0)
 	return true
 }
 
+// What of a remote account its purge removes before the account row (a foreign key to accounts.id that cascades or
+// sets null), each with the condition on `?1`, the account id, that finds a row left. accountHasRows tests them all,
+// and the purge deletes the account only once none holds, so a new table naming accounts goes here, or its rows would
+// go in the account's delete unbounded; test/cascade-guard.test.ts checks the list against the schema. `filter`
+// marks the blocks and mutes, which go last (see purgeBatch). Votes are checked apart (hasPollVotes).
+export const PURGED_ACCOUNT_CHILDREN: readonly { table: string; check: string; filter?: true }[] = [
+	{ table: 'statuses', check: 'account_id = ?1' },
+	{ table: 'favourites', check: 'account_id = ?1' },
+	{ table: 'follows', check: 'account_id = ?1 OR target_account_id = ?1' },
+	{ table: 'blocks', check: 'account_id = ?1 OR target_account_id = ?1', filter: true },
+	{ table: 'mutes', check: 'target_account_id = ?1', filter: true },
+	{ table: 'list_accounts', check: 'account_id = ?1' },
+	{ table: 'account_pins', check: 'target_account_id = ?1' },
+	{ table: 'account_notes', check: 'target_account_id = ?1' },
+	{ table: 'notifications', check: 'from_account_id = ?1' },
+	{ table: 'status_mentions', check: 'account_id = ?1' },
+	{ table: 'statuses', check: 'in_reply_to_account_id = ?1' },
+	{ table: 'media_attachments', check: 'account_id = ?1' },
+	{ table: 'remote_keys', check: 'account_id = ?1' },
+	{ table: 'inbound_jobs', check: 'target_account_id = ?1' },
+]
+
+const ACCOUNT_CHILDREN_EXIST = PURGED_ACCOUNT_CHILDREN.map((child) => {
+	const exists = `EXISTS (SELECT 1 FROM ${child.table} WHERE ${child.check})`
+	return child.filter ? `(?2 AND ${exists})` : exists
+}).join(' OR ')
+
 // Whether rows of the account remain; with filters false, rows other than its blocks and mutes.
 function accountHasRows(db: Db, id: string, filters = true): boolean {
 	return (
 		hasPollVotes(db, { accountId: id }) ||
-		db.first(
-			`SELECT 1 AS x WHERE EXISTS (SELECT 1 FROM statuses WHERE account_id = ?1)
-				OR EXISTS (SELECT 1 FROM favourites WHERE account_id = ?1)
-				OR EXISTS (SELECT 1 FROM follows WHERE account_id = ?1 OR target_account_id = ?1)
-				OR (?2 AND EXISTS (SELECT 1 FROM blocks WHERE account_id = ?1 OR target_account_id = ?1))
-				OR (?2 AND EXISTS (SELECT 1 FROM mutes WHERE target_account_id = ?1))
-				OR EXISTS (SELECT 1 FROM list_accounts WHERE account_id = ?1)
-				OR EXISTS (SELECT 1 FROM account_pins WHERE target_account_id = ?1)
-				OR EXISTS (SELECT 1 FROM account_notes WHERE target_account_id = ?1)
-				OR EXISTS (SELECT 1 FROM notifications WHERE from_account_id = ?1)
-				OR EXISTS (SELECT 1 FROM status_mentions WHERE account_id = ?1)
-				OR EXISTS (SELECT 1 FROM statuses WHERE in_reply_to_account_id = ?1)
-				OR EXISTS (SELECT 1 FROM media_attachments WHERE account_id = ?1)
-				OR EXISTS (SELECT 1 FROM remote_keys WHERE account_id = ?1)
-				OR EXISTS (SELECT 1 FROM inbound_jobs WHERE target_account_id = ?1)`,
-			id,
-			filters ? 1 : 0
-		) !== undefined
+		db.first(`SELECT 1 AS x WHERE ${ACCOUNT_CHILDREN_EXIST}`, id, filters ? 1 : 0) !== undefined
 	)
 }
 
