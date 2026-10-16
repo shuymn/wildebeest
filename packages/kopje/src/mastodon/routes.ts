@@ -663,6 +663,7 @@ export const ROUTES: readonly Route[] = [
 	{ method: 'POST', path: '/api/v1/push/subscription', access: { scope: 'push' }, handler: push.createSubscription },
 	{ method: 'GET', path: '/api/v1/push/subscription', access: { scope: 'push' }, handler: push.getSubscription },
 	{ method: 'PUT', path: '/api/v1/push/subscription', access: { scope: 'push' }, handler: push.updateSubscription },
+	{ method: 'PATCH', path: '/api/v1/push/subscription', access: { scope: 'push' }, handler: push.updateSubscription },
 	{ method: 'DELETE', path: '/api/v1/push/subscription', access: { scope: 'push' }, handler: push.deleteSubscription },
 ]
 
