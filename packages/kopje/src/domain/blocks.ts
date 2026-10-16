@@ -157,6 +157,8 @@ export const block = userWriteOperation<RelationInput, RelationshipResult>((db, 
 		endFollow(db, viewer, target, input.now)
 		endFollow(db, target, viewer, input.now)
 		leaveConversationsWith(db, viewer.id, target.id)
+		// AfterBlockService#clear_notification_requests!: the request of the blocked account's filtered mentions goes.
+		db.run('DELETE FROM notification_requests WHERE account_id = ? AND from_account_id = ?', viewer.id, target.id)
 		const edge = db.first<{ id: string }>(
 			`INSERT INTO blocks (account_id, target_account_id, created_at) VALUES (?, ?, ?)
 			RETURNING CAST(id AS TEXT) AS id`,

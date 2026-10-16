@@ -5,7 +5,18 @@ import { describe, expect, it } from 'vitest'
 import { type ApiHarness, bearer, form, json, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { BUILD } from './helpers'
-import { act, community, follow, getJson, ids, post, remoteAccount, type Status, type User } from './status-helpers'
+import {
+	act,
+	community,
+	follow,
+	getJson,
+	ids,
+	mute,
+	post,
+	remoteAccount,
+	type Status,
+	type User,
+} from './status-helpers'
 import { Db } from '../src/db/sql'
 import { PRIVATE_MENTION_WALK } from '../src/domain/audience'
 import { deleteStatusBatch, purgeBatch } from '../src/domain/inbox'
@@ -685,6 +696,25 @@ describe('notification requests', () => {
 			(await h.request('/api/v1/notifications/requests/accept', bearer(alice.token, json({ id: many.slice(1) }))))
 				.status
 		).toBe(200)
+	})
+
+	it('shows a request’s last status only while its mention is shown, and a block deletes the request', async () => {
+		const { h, alice, bob, carol, last } = await scene()
+		const lastOf = async (sender: string) => {
+			const [request] = (await requests(h, alice)).filter((r) => r.account.id === sender)
+			const shown = await getJson<Request>(h, `/api/v1/notifications/requests/${request!.id}`, alice.token)
+			return [request!.last_status?.id ?? null, shown.body.last_status?.id ?? null]
+		}
+		expect(await lastOf(bob.id)).toEqual([last.id, last.id])
+		// Muting bob with notifications hides his mention (R15), though alice may still see the status (R2).
+		await mute(h.store, alice.id, bob.id)
+		expect(await lastOf(bob.id)).toEqual([null, null])
+		expect((await getJson(h, `/api/v1/statuses/${last.id}`, alice.token)).status).toBe(200)
+		// Blocking carol deletes her request, as Mastodon's AfterBlockService does.
+		const [request] = (await requests(h, alice)).filter((r) => r.account.id === carol.id)
+		expect((await act(h, alice, `/api/v1/accounts/${carol.id}/block`)).status).toBe(200)
+		expect((await requests(h, alice)).some((r) => r.account.id === carol.id)).toBe(false)
+		expect((await getJson(h, `/api/v1/notifications/requests/${request!.id}`, alice.token)).status).toBe(404)
 	})
 
 	it('needs the notification scopes', async () => {

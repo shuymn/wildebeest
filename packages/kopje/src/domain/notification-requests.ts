@@ -5,6 +5,7 @@ import {
 	POLICY_DEFAULTS,
 	type PolicyChoice,
 	type PolicyColumn,
+	shownSql,
 	statusReads,
 } from './audience'
 import { userReadOperation, userWriteOperation } from './auth'
@@ -106,7 +107,8 @@ export const updateNotificationPolicy = userWriteOperation<{ changes: Partial<Po
 )
 
 // REST::NotificationRequestSerializer: the id and the count as strings, the sender as `account`, and the last status
-// (null when it is gone, or when the viewer may no longer see it).
+// (null when it is gone, or when the notification rule no longer shows its mention to the viewer). A block deletes the
+// pair's request (AfterBlockService#clear_notification_requests!, blocks.ts).
 export type NotificationRequest = {
 	id: string
 	created_at: string
@@ -139,13 +141,20 @@ function presentRequests(
 		rows.map((row) => row.from_account_id),
 		present
 	)
-	const statusIds = rows.flatMap((row) => (row.last_status_id === null ? [] : [row.last_status_id]))
-	const visible = statusReads(viewer, { viewer: '?1' }).select(
+	// The last status of each request whose mention the notification rule still shows the viewer (R15 at the time of
+	// the read, which includes R2): not after the viewer blocks or mutes its sender, or one it mentions.
+	const visible = statusReads(viewer, { viewer: '?1', now: '?3' }).select(
 		db,
 		'visible',
-		{ where: 's.id IN (SELECT value FROM json_each(?2))' },
+		{
+			from: 'main.notification_requests r JOIN',
+			join: 'ON s.id = r.last_status_id',
+			where: 'r.account_id = ?1 AND r.id IN (SELECT CAST(value AS INTEGER) FROM json_each(?2))',
+			and: shownSql('?1', "'mention'", 'r.from_account_id', 's.id', '?3'),
+		},
 		viewer.accountId,
-		JSON.stringify(statusIds)
+		JSON.stringify(rows.map((row) => row.id)),
+		viewer.now
 	)
 	const statuses = new Map(
 		presentStatuses(
