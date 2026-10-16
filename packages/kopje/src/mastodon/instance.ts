@@ -91,9 +91,15 @@ export const instanceV2: ApiHandler = async (c, deps) => {
 		// Kopje ships no app icons (Mastodon lists its own defaults).
 		icon: [],
 		configuration: {
-			// No status page, privacy policy or terms of service (the last two answer 404 at /api/v1/instance/*). Kopje
-			// has no about page either, so Mastodon's about URL is left out rather than pointing at a missing page.
-			urls: { streaming: `wss://${domain}`, status: null, privacy_policy: null, terms_of_service: null },
+			// The about page is /about (app/web.tsx). No status page, privacy policy or terms of service (the last two
+			// answer 404 at /api/v1/instance/*).
+			urls: {
+				streaming: `wss://${domain}`,
+				status: null,
+				about: `https://${domain}/about`,
+				privacy_policy: null,
+				terms_of_service: null,
+			},
 			vapid: { public_key: vapidKey(c.env) },
 			...CONFIGURATION,
 			accounts: { ...CONFIGURATION.accounts, max_pinned_statuses: PIN_LIMIT },

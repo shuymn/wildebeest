@@ -88,7 +88,13 @@ describe('instance contract', () => {
 			icon: [],
 			languages: [],
 			configuration: {
-				urls: { streaming: 'wss://kopje.test', status: null, privacy_policy: null, terms_of_service: null },
+				urls: {
+					streaming: 'wss://kopje.test',
+					status: null,
+					about: 'https://kopje.test/about',
+					privacy_policy: null,
+					terms_of_service: null,
+				},
 				vapid: { public_key: VAPID_PUBLIC_KEY },
 				...CONFIGURATION,
 				accounts: { max_featured_tags: 10, max_pinned_statuses: 5 },

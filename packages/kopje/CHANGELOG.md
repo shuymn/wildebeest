@@ -27,6 +27,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   dropped) and validated with its messages (each a domain name, at most 100). The credential account shows them in
   `source.attribution_domains` (`[]` when none), and the actor document publishes them as `attributionDomains` when
   there is one, which reaches other servers with the account's Update.
+- An about page at `/about`: the server's title (else its domain), description, rules and contact address, as the
+  instance endpoints give them. `/api/v2/instance` names it as `configuration.urls.about`, and the instance actor's
+  `url` already pointed there.
 
 ### Changed
 
@@ -40,10 +43,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
     - The official iOS app also shows a default quote policy in its privacy settings at 6. Kopje ignores it: no one can
       quote a Kopje post whatever it says.
     - `/api/v2/instance` has Mastodon 4.4's other fields with Kopje's values: `icon` (none), `configuration.urls`
-      `status`, `privacy_policy` and `terms_of_service` (null), `configuration.accounts.max_pinned_statuses` (5),
-      `configuration.media_attachments.description_limit` (1500), `configuration.limited_federation` (false), and
-      `registrations.reason_required` (false), `min_age` and `url` (null). `configuration.urls.about` is left out:
-      Kopje has no about page.
+      `about` (the about page), `status`, `privacy_policy` and `terms_of_service` (null),
+      `configuration.accounts.max_pinned_statuses` (5), `configuration.media_attachments.description_limit` (1500),
+      `configuration.limited_federation` (false), and `registrations.reason_required` (false), `min_age` and `url`
+      (null).
 
 ### Instance changes
 
