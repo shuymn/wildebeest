@@ -20,6 +20,15 @@ import { readOperation, writeOperation } from './operation'
 import { deleteAccountVotes, deletePollVotes, hasPollVotes } from './polls'
 import { pushSequence } from './push'
 import {
+	continueRevocations,
+	NEW_GENERATION,
+	promoteQuote,
+	quotesDue,
+	quoteArrival,
+	recheckStamp,
+	revokeStamp,
+} from './quotes'
+import {
 	actorCollections,
 	collectionOf,
 	featureRemote,
@@ -64,7 +73,13 @@ import { hostDomain } from '../platform/domain-name'
 //   Update       of an actor: the object is the actor itself; of a status: the stored status's author is the actor
 //                (and a local status never is, ID-3)
 //   Delete       of an actor: the object is the actor itself; of a status or boost: its author is the actor; of
-//                anything else of the actor's origin: recorded as a retraction (ID-7)
+//                anything else of the actor's origin: recorded as a retraction (ID-7); of a quote's stamp
+//                (QuoteAuthorization): the quoted status's author is the actor, and only the quotes naming that stamp
+//                and quoting the actor's statuses are revoked (quotes.ts revokeStamp; test/quotes.test.ts)
+//   Delete       relayed by another server (its HTTP signer is not the actor, ID-1's one exception): only of what is
+//                neither an actor, a status nor a boost, so of a stamp at most; with the actor's own proof
+//                (RsaSignature2017 or FEP-8b32, federation/author-proof.ts) applied as the actor's revocation, without
+//                one only a reason to verify the accepted quote naming it again (relayedDelete; test/quotes.test.ts)
 //   Create       the object has the actor's origin and names no other author (attributedTo)
 //   Like         the object is a local status the actor may see (VIS-1); the actor is the one who likes it
 //   Announce     the actor is the booster; the original is public, unlisted or the actor's own (VIS-6)
@@ -142,6 +157,9 @@ export type InboundActivity =
 	| { type: 'UpdateActor'; id: string }
 	| { type: 'DeleteActor'; id: string }
 	| { type: 'Delete'; id: string; object: string }
+	// A Delete another server relayed (its HTTP signer is not the actor). proven: it carries the actor's own proof,
+	// verified by the Worker (federation/author-proof.ts).
+	| { type: 'RelayedDelete'; id: string; object: string; proven: boolean }
 	| { type: 'Create'; id: string; object: RemoteStatusInput }
 	| { type: 'UpdateStatus'; id: string; object: RemoteStatusInput }
 	// A Like, a Misskey reaction (Like with _misskey_reaction) or an EmojiReact: a favourite of `object`.
@@ -1533,6 +1551,29 @@ export const STATUS_CHILDREN: readonly { table: string; column: string; remove: 
 			AND conversation_id IN (SELECT conversation_id FROM conversation_statuses WHERE status_id = ?1 LIMIT CAST(?2 / 4 AS INTEGER))`,
 		],
 	},
+	// Quotes of the status (migration 0033_quotes): any number, of any accounts. Each is detached, an accepted one
+	// becoming deleted in the same statement (the quotes CHECK refuses an accepted quote without its target), its work
+	// ended; an accepted one also takes itself off this status's count (the trigger quotes_count_changed), so a batch
+	// takes half the rows left.
+	{
+		table: 'quotes',
+		column: 'quoted_status_id',
+		remove: [
+			`UPDATE quotes SET quoted_status_id = NULL, quoted_account_id = NULL, generation = ${NEW_GENERATION}, lease_until = NULL,
+				state = CASE state WHEN 'accepted' THEN 'deleted' ELSE state END, verify_after = NULL
+			WHERE status_id IN (SELECT status_id FROM quotes WHERE quoted_status_id = ?1 LIMIT CAST(?2 / 2 AS INTEGER))`,
+		],
+	},
+	// The status's own quote, one row at most: deleted before the status, so it never cascades, with the count of its
+	// target when it was accepted (the trigger quotes_count_deleted), so it takes half the rows left. With one row left
+	// it deletes nothing, and the next batch takes it.
+	{
+		table: 'quotes',
+		column: 'status_id',
+		remove: [
+			`DELETE FROM quotes WHERE status_id IN (SELECT status_id FROM quotes WHERE status_id = ?1 LIMIT CAST(?2 / 2 AS INTEGER))`,
+		],
+	},
 ]
 
 const STATUS_CHILDREN_EXIST = STATUS_CHILDREN.map(
@@ -1640,7 +1681,7 @@ const deleteObject: Handler<'Delete'> = (db, actor, activity, { now }) => {
 		return ignored('not-author')
 	}
 	if (status === undefined) {
-		return retract(db, actor.uri, activity.object, now) ? applied('retraction-recorded') : ignored('retraction-cap')
+		return retractUnknown(db, actor, activity.object, now)
 	}
 	if (!retract(db, actor.uri, activity.object, now)) {
 		return retryLater('retraction-cap')
@@ -1666,6 +1707,41 @@ const deleteObject: Handler<'Delete'> = (db, actor, activity, { now }) => {
 		streamDelete(db, status.id, now)
 	}
 	return applied('status-deleted', deleteStatusBatch(db, status.id, now))
+}
+
+// A Delete relayed by another server (federation/inbound.ts, ID-1's one exception): applied only to what can be a
+// stamp, never to an actor, a status or a boost. With the actor's own proof it revokes as the actor's Delete does;
+// without one it changes no state and only has the accepted quote naming the stamp verified again (Mastodon drops such
+// a relay; Kopje lets the stamp's own server answer).
+const relayedDelete: Handler<'RelayedDelete'> = (db, actor, activity, { now }) => {
+	if (originOf(activity.object) !== originOf(actor.uri)) {
+		return ignored('foreign-object')
+	}
+	if (
+		db.first(
+			'SELECT 1 AS x FROM statuses WHERE uri = ?1 UNION ALL SELECT 1 FROM accounts WHERE uri = ?1 LIMIT 1',
+			activity.object
+		) !== undefined
+	) {
+		return ignored('not-a-stamp')
+	}
+	if (!activity.proven) {
+		return recheckStamp(db, actor, activity.object, now) ? applied('stamp-rechecked') : ignored('unknown-stamp')
+	}
+	return retractUnknown(db, actor, activity.object, now)
+}
+
+// The actor's Delete of an object Kopje holds no status of: recorded as a retraction (ID-7) and, when it is the stamp
+// of a quote of the actor's status, as a revocation for good whether or not the retraction could be (quote_revocations
+// is bounded by the quotes stored), its first batch within PURGE_BATCH (quotes.ts revokeStamp).
+function retractUnknown(db: Db, actor: { id: string; uri: string }, object: string, now: number): ReceiveResult {
+	const recorded = retract(db, actor.uri, object, now)
+	const budget = new Budget(db, PURGE_BATCH)
+	const revocation = revokeStamp(db, actor, object, () => budget.left(), now)
+	if (revocation !== null) {
+		return applied('stamp-revoked', revocation)
+	}
+	return recorded ? applied('retraction-recorded') : ignored('retraction-cap')
 }
 
 // One batch of a deleted remote status's removal (Mastodon's RemoveStatusService, RES-6), at most PURGE_BATCH rows
@@ -1930,6 +2006,11 @@ const announce: Handler<'Announce'> = (db, actor, activity, input) => {
 	) {
 		return ignored('duplicate')
 	}
+	// A boosted original arrives as a root, cached or not: a cached one's quote is promoted here (a new one's work was
+	// recorded as it was stored).
+	if (original.local !== 1) {
+		promoteQuote(db, originalId, quoteArrival(db, original.account_id, null), now)
+	}
 	const published = Date.parse(activity.published ?? '')
 	const publishedAt = new Date(Number.isNaN(published) || published > now ? now : published).toISOString()
 	const boostId = insertWithFreshId(
@@ -2110,7 +2191,12 @@ const add: Handler<'Add'> = (db, actor, activity, input) => {
 	if (status === undefined) {
 		return ignored('unknown-object')
 	}
-	return pinRemote(db, actor.id, status.id, input.now) ? applied('pinned') : ignored('not-pinned')
+	if (!pinRemote(db, actor.id, status.id, input.now)) {
+		return ignored('not-pinned')
+	}
+	// A pinned status arrives as a root, cached or not: a cached one's quote is promoted (quotes.ts).
+	promoteQuote(db, status.id, quoteArrival(db, actor.id, null), input.now)
+	return applied('pinned')
 }
 
 const remove: Handler<'Remove'> = (db, actor, activity) => {
@@ -2138,6 +2224,7 @@ const HANDLERS: { [T in InboundActivity['type']]: Handler<T> } = {
 	UpdateActor: updateActor,
 	DeleteActor: deleteActor,
 	Delete: deleteObject,
+	RelayedDelete: relayedDelete,
 	Create: create,
 	UpdateStatus: updateStatus,
 	Like: like,
@@ -2194,8 +2281,10 @@ function receive(db: Db, input: ReceiveInput): ReceiveResult {
 	}
 	const handler = HANDLERS[activity.type] as Handler<typeof activity.type>
 	const result = handler(db, actor, activity, input)
-	// A sync of the actor's collections was asked for: the Worker asks the Queue for a round (cron runs one regardless).
-	return 'syncWaiting' in actor && actor.syncWaiting ? { ...result, jobsPending: true } : result
+	// A sync of the actor's collections was asked for, or quotes have verification work due (only the job rounds verify
+	// them): the Worker asks the Queue for a round (cron runs one regardless).
+	const waiting = ('syncWaiting' in actor && actor.syncWaiting) || quotesDue(db, now)
+	return waiting ? { ...result, jobsPending: true } : result
 }
 
 function pendingPurge(db: Db, uri: string): boolean {
@@ -2225,8 +2314,11 @@ export const runInboundJobs = writeOperation<{ now: number }, { pending: boolean
 				moveBatch(db, job.key, now)
 			}
 		}
+		// A batch of the stamp revocations still being applied (quotes.ts), within PURGE_BATCH rows.
+		const budget = new Budget(db, PURGE_BATCH)
+		const revoking = continueRevocations(db, () => budget.left(), now)
 		return {
-			pending: db.first('SELECT 1 AS x FROM inbound_jobs WHERE done_at IS NULL') !== undefined,
+			pending: revoking || db.first('SELECT 1 AS x FROM inbound_jobs WHERE done_at IS NULL') !== undefined,
 			delivers: outboundSince(db, before),
 		}
 	}

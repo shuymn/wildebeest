@@ -42,17 +42,39 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
     - Every stream Mastodon's streaming server knows is now served. Only other names (Ice Cubes' `local`, for one)
       answer `{"error":"Unknown stream type","status":400}`; announcements and server-sent events are still not
       served.
+- Quote posts received from other servers are stored and verified, as Mastodon 4.5 does (FEP-044f). Nothing shows them
+  yet: the API, the web pages and the notifications are unchanged, and a quote is still seen as its `RE:` link.
+    - A post that quotes another (Mastodon's `quote`, or Misskey's and Fedibird's `_misskey_quote`, `quoteUrl` and
+      `quoteUri`) keeps its quote, with every path that stores a post: delivered, boosted, found by search or fetched
+      as a pin. A quote of a deleted post (a `Tombstone`) is kept as deleted. A quoted post embedded by its own author
+      is taken as embedded, so a followers-only self-quote its server serves to nobody is still verified.
+    - A quote is accepted when it quotes its own author's post, or when the quoted author's approval (the stamp, a
+      `QuoteAuthorization` fetched from its own server) names exactly that quote of exactly that post. Other quotes stay
+      pending, as Mastodon keeps them; one whose stamp is gone is rejected. Verification fetches the quoted post and its
+      author when Kopje does not have them, runs in the background rounds the delivery asks for (seconds later, or at
+      the next cron run), signed by a local recipient or follower when there is one, and is retried five times over
+      about 15 hours; a verification that needs more fetches than a round allows goes on in the next round from where
+      it stopped. A post first stored only as the target of a quote is verified like any other once it is delivered,
+      boosted, searched for or pinned for itself.
+    - The quoted author's `Delete` of a stamp revokes the quotes of their posts approved by it, for good; nobody else's
+      `Delete` of the same address revokes anything of theirs. The same `Delete` relayed by
+      another server (the quoting server forwards it) is applied when it carries the author's own signature (a Linked
+      Data Signature or an FEP-8b32 proof); without one, Kopje only checks the stamp again.
+    - Kopje's own posts now say that nobody but their author may quote them (`interactionPolicy.canQuote`), as Mastodon
+      already assumes of a post without a policy.
 
 ### Fixed
 
-- A streaming turn that resumed a status or notification event part-way (more listeners than one turn's budget) moved
-  the event's position back when it finished, so the next turn sent the rest of the event again, and again; it now
-  goes on to the next event.
+- The streaming API no longer sends a status (`update`) or an edit (`status.update`) over and over, with turns that
+  never end, when it reaches more listeners than one turn of the fan-out serves (a status in the home timelines of more
+  than 64 listening accounts, for one): the turn that went on with the event's remaining listeners moved its position
+  back to where it resumed, so the next turn sent them the event again. Each listener now receives it once. A
+  notification, which has one recipient, was not affected.
 
 ### Instance changes
 
-- Store schema: adds two migrations, applied on the first request after the deploy; a rollback to an earlier version
-  needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
+- Store schema: adds three migrations, applied in order on the first request after the deploy; a rollback to an
+  earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0032_streaming_lists`: rebuilds the streaming journal (at most a 4,096-id span of rows) to admit conversation
       events, adds a column of the streaming position, lets a list subscription journal statuses and edits (the
       journal's triggers recreated), adds the per-account conversation mark table (left out of dumps and backups, as the
@@ -61,6 +83,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       sequence. It reads each conversation once, for the index, and the journal's rows; nothing else: on a benchmark
       store of 1,000,000 accounts, 3,000,000 follows and 2,000,000 statuses its upgrade took 2.3 seconds in workerd's
       local Durable Object SQLite.
+    - `0033_quotes`: adds the empty `quotes` and `quote_revocations` tables, their indexes and the triggers that keep
+      the new `statuses.quotes_count`. The column has a constant default and no constraint, so stored statuses are
+      neither read nor rewritten; nothing is backfilled (stored posts keep their quote properties in `raw`), so the
+      migration's work does not grow with the instance: on the same benchmark store its upgrade took 2.2 seconds.
     - `0033_streaming_public`: lets a `public*` or hashtag subscription journal public statuses that are not boosts,
       and their edits (the journal's status triggers recreated), and adds the table of a deleted public status's
       streaming tombstone (left out of dumps and backups, as the other streaming tables are). It creates a table and

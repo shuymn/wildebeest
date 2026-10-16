@@ -43,6 +43,7 @@ import * as notifications from './domain/notifications'
 import * as oauth from './domain/oauth'
 import * as polls from './domain/polls'
 import * as push from './domain/push'
+import * as quotes from './domain/quotes'
 import * as remoteCollections from './domain/remote-collections'
 import { resolveSearch } from './domain/remote-statuses'
 import * as reports from './domain/reports'
@@ -494,6 +495,24 @@ export class Store extends DurableObject<Env> {
 
 	completePinFetches(callerBuild: string, input: OperationInput<typeof remoteCollections.completePinFetches>) {
 		return this.#kernel.execute(callerBuild, remoteCollections.completePinFetches, input)
+	}
+
+	// Verification of received quotes (domain/quotes.ts): the work read, applied and claimed by the Worker's job rounds
+	// (federation/quotes.ts).
+	quoteWork(callerBuild: string, input: OperationInput<typeof quotes.quoteWork>) {
+		return this.#kernel.execute(callerBuild, quotes.quoteWork, input)
+	}
+
+	completeQuote(callerBuild: string, input: OperationInput<typeof quotes.completeQuote>) {
+		return this.#kernel.execute(callerBuild, quotes.completeQuote, input)
+	}
+
+	chargeQuote(callerBuild: string, input: OperationInput<typeof quotes.chargeQuote>) {
+		return this.#kernel.execute(callerBuild, quotes.chargeQuote, input)
+	}
+
+	claimQuotes(callerBuild: string, input: OperationInput<typeof quotes.claimQuotes>) {
+		return this.#kernel.execute(callerBuild, quotes.claimQuotes, input)
 	}
 
 	remoteKey(callerBuild: string, input: OperationInput<typeof inbox.getRemoteKey>) {

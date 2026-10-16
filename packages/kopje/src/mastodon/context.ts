@@ -22,6 +22,8 @@ export type ApiDeps = {
 	images: (env: Env) => ImageCodec
 	// Fetches a URL or user@domain for search with resolve=true (federation/resolve.ts); none: answered locally.
 	resolve?: (env: Env, query: string) => Promise<Resolved>
+	// Asks the Queue for a round of the Store's jobs (a resolved status's quote to verify); cron runs one regardless.
+	requestJobs?: (env: Env) => Promise<unknown>
 }
 
 // The bearer token's digest and the scope the route declares, set by the access middleware (mastodon/access.ts) on

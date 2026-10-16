@@ -542,6 +542,9 @@ module:
 - reads or writes `reports` outside `reports.ts`, which writes the reporter's report and answers it once (R34) and
   serves the OAuth admin's reads and actions (R37), and `inbox.ts`, whose actor purge deletes the reports of the
   account.
+- reads or writes `quotes` or `quote_revocations` outside `quotes.ts`, which stores and verifies received quotes and
+  applies the `Delete` of a stamp (ID-6), and `inbox.ts`, whose batched delete of a status detaches the quotes of it and
+  deletes its own. No rule shows a quote to anyone yet: no read path presents one.
 
 An allowed file that no longer matches fails the test too, so the list does not outlive its reason.
 
