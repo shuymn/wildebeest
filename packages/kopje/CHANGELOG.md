@@ -52,11 +52,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       category is answered 422 where Mastodon fails.
     - The reporter's report shows `action_taken` once it is resolved.
     - `GET /api/v1/accounts/verify_credentials` shows the admin's role as `Owner` (id 3) with the permissions
-      served (`16`); every other account keeps the default role.
-- The admin API's accounts, for the admin once Kopje grants the role `manage_users`, which it does with local
-  suspension (until then these routes still answer 403 to everyone, the admin included): `GET /api/v1/admin/accounts`,
-  `GET /api/v2/admin/accounts` and `GET /api/v1/admin/accounts/:id`, and `POST .../enable`, `unsilence`,
-  `unsensitive`, `approve` and `reject`.
+      served (`1040`: manage_reports and manage_users); every other account keeps the default role.
+- The admin API's accounts are served to that admin (the role's `manage_users`): `GET /api/v1/admin/accounts`,
+  `GET /api/v2/admin/accounts` and `GET /api/v1/admin/accounts/:id`, `POST .../action` and `unsuspend` (below), and
+  `POST .../enable`, `unsilence`, `unsensitive`, `approve` and `reject`. Everyone else is still answered 403.
     - The lists take Mastodon's filters: v1's names and defaults (active local accounts unless `remote` or a state is
       sent; the last state sent wins; `staff`), and v2's `origin`, `status`, `permissions=staff` and `role_ids`
       (one or many), with `username` (a prefix, a leading `@` dropped), `display_name` (a prefix), `email` (a
@@ -75,6 +74,29 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       as wildcards) and compare letters case-insensitively in ASCII only.
     - `enable`, `unsilence` and `unsensitive` change nothing, log the action and return the account (`enable` needs a
       local account); `approve` and `reject` are answered 403, as Mastodon answers them for an approved user.
+- Local suspension through the admin API: `POST /api/v1/admin/accounts/:id/action` with `type` `suspend` suspends a
+  local account, and `none` resolves the report named by `report_id`, if any; the answer is `{}`.
+  `POST /api/v1/admin/accounts/:id/unsuspend` lifts a local suspension and returns the account.
+    - A suspended account is unavailable at once: hidden as before, and every access token, web session, unused
+      authorization code and push subscription it had is refused from that moment, also after it is unsuspended, so
+      the user signs in again. Its tokens are deleted afterwards, in the background.
+    - Its unresolved reports filed before the suspension are resolved, in the background, unless the admin changed one
+      since; a report filed later stays open.
+    - Other servers are sent an `Update` of its actor, redacted and marked `suspended`, and on unsuspension one of the
+      full actor, as Mastodon sends them: to its remote followers, the remote accounts its posts of the two days
+      before the suspension mention, and those it followed or asked to follow in those days. The audience is gathered
+      in the background, in bounded rounds, so the `Update` leaves within minutes rather than at once.
+    - While suspended, the account's posts, boosts and other activities still waiting for delivery are dropped, not
+      sent later; only its retractions (deletes, undos) and the suspension's `Update` go out. A delivery already in
+      flight when the suspension commits may still be sent.
+    - Where Kopje differs from Mastodon: `disable`, `sensitive` and `silence` are answered 422
+      `Validation failed: Type is not included in the list`, as an unknown type is (Kopje has none of these states);
+      `suspend` of a remote account is answered 422 for now; `text` and `warning_preset_id` are accepted and dropped
+      (Kopje keeps no warnings and sends no email); no action may target the admin's own account (403), as Mastodon
+      refuses the Owner acting on the Owner; and report resolution and the `Update`s finish in background rounds.
+- `POST /admin/accounts/unsuspend` and `kopje-admin account unsuspend <username>` (Access only) unsuspend a local
+  account as the admin API does, logged with the Access identity. It recovers a suspended admin, whom no admin can
+  unsuspend.
 - The moderation log: every admin write through the admin API, and every account repair through `/admin`, is
   recorded with who made it (the admin's account and client, or the Access identity), in the write's transaction.
   It keeps the newest 10,000 entries. `GET /admin/moderation-log` and `kopje-admin moderation-log` show it, to
@@ -85,7 +107,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds three migrations, applied in order on the first request after the deploy; a rollback to an earlier
+- Store schema: adds five migrations, applied in order on the first request after the deploy; a rollback to an earlier
   version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0028_streaming_home`: adds the triggers that journal a status inserted while an account subscribes to `user`,
       and an edit while one subscribes to `user` or `user:notification`, the empty `stream_delete_viewers` table (a
@@ -101,6 +123,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
     - `0031_admin_accounts_available`: adds an index of the accounts whose deletion has not started, by id, so the
       admin's list of active accounts skips none awaiting their purge. It reads only the accounts: on the same
       benchmark store its upgrade took 2.8 seconds.
+    - `0032_admin_suspension`: adds the token fence column to the local accounts and the empty tables of the
+      moderation jobs and their staged audience. It reads no row: on the same benchmark store its upgrade took
+      3.0 seconds (4.1 in a first run on a busier machine), the kernel's own fixed cost.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.9] - 2026-10-16

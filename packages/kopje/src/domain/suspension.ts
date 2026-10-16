@@ -1,7 +1,8 @@
 import { moderationUpdate } from './actor-update'
+import { type ReachedAccount, reachFollowers, reachFollowing, reachMentioned } from './audience'
 import { beginStagedUpdate, endStaging, isDeliverableInbox, stageTargets } from './deliveries'
 import { writeOperation } from './operation'
-import { resolveSuspensionReports } from './reports'
+import { reportBound, resolveSuspensionReports } from './reports'
 import { forgetActorSnapshots } from './snapshot'
 import type { Db } from '../db/sql'
 
@@ -88,8 +89,9 @@ type JobState = {
 
 const iso = (ms: number) => new Date(ms).toISOString()
 
-function maxId(db: Db, table: 'reports' | 'follows'): number {
-	return db.first<{ id: number | null }>(`SELECT max(id) AS id FROM ${table}`)?.id ?? 0
+// The newest follow, which bounds the followers and follows a job reads.
+function followBound(db: Db): number {
+	return db.first<{ id: number | null }>('SELECT max(id) AS id FROM follows')?.id ?? 0
 }
 
 function insertJob(db: Db, job: Omit<Job, 'id' | 'state'>, now: number): void {
@@ -161,8 +163,8 @@ export function suspendLocal(db: Db, accountId: string, by: string | null, now: 
 			generation: at,
 			actor_account_id: by,
 			intent_id: beginStagedUpdate(db, accountId, update, now),
-			report_bound: maxId(db, 'reports'),
-			follow_bound: maxId(db, 'follows'),
+			report_bound: reportBound(db),
+			follow_bound: followBound(db),
 			cutoff: iso(Date.parse(at) - RECENT_MS),
 			phase: 'reports',
 		},
@@ -193,7 +195,7 @@ export function unsuspendLocal(db: Db, accountId: string, now: number): boolean 
 			actor_account_id: null,
 			intent_id: beginStagedUpdate(db, accountId, update, now),
 			report_bound: null,
-			follow_bound: maxId(db, 'follows'),
+			follow_bound: followBound(db),
 			cutoff: iso(Date.parse(state.suspended_at) - RECENT_MS),
 			phase: 'followers',
 		},
@@ -292,10 +294,8 @@ function current(db: Db, job: Job): boolean {
 		: state.suspended_at === null && state.tokens_valid_after === job.generation
 }
 
-type Reached = { domain: string | null; inbox: string | null }
-
 // Stages the inboxes of remote accounts; returns how many rows it wrote.
-function stage(db: Db, job: Job, rows: readonly Reached[]): number {
+function stage(db: Db, job: Job, rows: readonly ReachedAccount[]): number {
 	const inboxes = [
 		...new Set(
 			rows.filter((row) => row.domain !== null && isDeliverableInbox(row.inbox)).map((row) => row.inbox as string)
@@ -310,8 +310,6 @@ function stage(db: Db, job: Job, rows: readonly Reached[]): number {
 		JSON.stringify(inboxes)
 	)
 }
-
-const INBOX = "COALESCE(NULLIF(a.shared_inbox_url, ''), a.inbox_url)"
 
 const NEXT: Record<'followers' | 'mentions' | 'following', Phase> = {
 	followers: 'mentions',
@@ -343,16 +341,7 @@ function reachRound(db: Db, job: Job, state: JobState, now: number): boolean {
 		}
 		case 'followers': {
 			// The accepted followers up to the frozen bound, in id order (follows_target's range for the account and state).
-			const rows = db.all<Reached & { id: number }>(
-				`SELECT f.id, a.domain, ${INBOX} AS inbox FROM follows f INDEXED BY follows_target
-				JOIN accounts a ON a.id = f.account_id
-				WHERE f.target_account_id = ?1 AND f.state = 'accepted' AND f.id > ?2 AND f.id <= ?3
-				ORDER BY f.id LIMIT ?4`,
-				job.account_id,
-				Number(state.cursor ?? 0),
-				job.follow_bound ?? 0,
-				REACH_ROUND
-			)
+			const rows = reachFollowers(db, job.account_id, Number(state.cursor ?? 0), job.follow_bound ?? 0, REACH_ROUND)
 			stage(db, job, rows)
 			next(db, job, 'followers', rows.length < REACH_ROUND, { cursor: rows.at(-1)?.id ?? state.cursor ?? 0 })
 			return false
@@ -363,14 +352,7 @@ function reachRound(db: Db, job: Job, state: JobState, now: number): boolean {
 		case 'following': {
 			// The account's own follows and requests, in target order (follows_pair), of which those since the cutoff and
 			// up to the frozen bound count, each state up to RECENT_LIMIT.
-			const rows = db.all<Reached & { id: number; target: string; state: string; created_at: string }>(
-				`SELECT f.id, f.target_account_id AS target, f.state, f.created_at, a.domain, ${INBOX} AS inbox
-				FROM follows f INDEXED BY follows_pair JOIN accounts a ON a.id = f.target_account_id
-				WHERE f.account_id = ?1 AND f.target_account_id > ?2 ORDER BY f.target_account_id LIMIT ?3`,
-				job.account_id,
-				String(state.cursor ?? ''),
-				REACH_ROUND
-			)
+			const rows = reachFollowing(db, job.account_id, String(state.cursor ?? ''), REACH_ROUND)
 			let accepted = state.accepted ?? 0
 			let pending = state.pending ?? 0
 			const kept = rows.filter((row) => {
@@ -505,13 +487,7 @@ function mentionsRound(db: Db, job: Job, state: JobState): void {
 			statuses++
 		}
 		const want = Math.min(budget, RECENT_LIMIT - taken)
-		const rows = db.all<Reached & { account_id: string }>(
-			`SELECT m.account_id, a.domain, ${INBOX} AS inbox FROM status_mentions m JOIN accounts a ON a.id = m.account_id
-			WHERE m.status_id = ? AND m.account_id > ? ORDER BY m.account_id LIMIT ?`,
-			status,
-			mention ?? '',
-			want
-		)
+		const rows = reachMentioned(db, status, mention ?? '', want)
 		stage(db, job, rows)
 		budget -= rows.length
 		taken += rows.length

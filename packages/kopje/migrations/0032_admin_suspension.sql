@@ -31,6 +31,10 @@
 -- cascade: a job deletes its rows in rounds before itself.
 --
 -- Cost: an ALTER without a CHECK on an operator-sized table, and two new tables; nothing is read or written.
+-- Measured on the benchmark store of test/bench/migration-cost.ts (1,000,000 accounts, 3,000,000 follows,
+-- 2,000,000 statuses with their mentions and tags, 10,000 reports, 20 local accounts) in workerd's local Durable
+-- Object SQLite: 2,974 ms for the upgrade of this file through the kernel (its bookmark, transaction and schema
+-- verification; a first run on a busier machine took 4,134 ms), within the 5,000 ms each migration file may take.
 
 ALTER TABLE local_accounts ADD COLUMN tokens_valid_after TEXT;
 

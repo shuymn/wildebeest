@@ -1146,3 +1146,66 @@ export function recipientsFor(
 					.map((row) => row.inbox)
 	return { followerInboxes, accounts, voterInboxes }
 }
+
+// R23 for the Update of a local actor that its suspension or unsuspension sends (AccountReachFinder, run by the
+// moderation jobs in suspension.ts): its sources, each an indexed range read a page at a time, with each account's
+// inbox (its shared inbox when it has one) and its domain (null: local, which reads the Store and is sent nothing).
+// The Update is neither content nor a retraction, so no one is left out (as Mastodon's reach finder leaves out no one).
+export type ReachedAccount = { domain: string | null; inbox: string | null }
+
+const REACH_INBOX = "COALESCE(NULLIF(a.shared_inbox_url, ''), a.inbox_url)"
+
+// The account's accepted followers with follows.id in (after, bound], in id order (follows_target's range).
+export function reachFollowers(
+	db: Db,
+	accountId: string,
+	after: number,
+	bound: number,
+	limit: number
+): (ReachedAccount & { id: number })[] {
+	return db.all<ReachedAccount & { id: number }>(
+		`SELECT f.id, a.domain, ${REACH_INBOX} AS inbox FROM main.follows f INDEXED BY follows_target
+		JOIN main.accounts a ON a.id = f.account_id
+		WHERE f.target_account_id = ?1 AND f.state = 'accepted' AND f.id > ?2 AND f.id <= ?3
+		ORDER BY f.id LIMIT ?4`,
+		accountId,
+		after,
+		bound,
+		limit
+	)
+}
+
+// The account's own follows and requests after the target `after`, in target order (follows_pair), with their id,
+// state and time, which the caller bounds.
+export function reachFollowing(
+	db: Db,
+	accountId: string,
+	after: string,
+	limit: number
+): (ReachedAccount & { id: number; target: string; state: string; created_at: string })[] {
+	return db.all<ReachedAccount & { id: number; target: string; state: string; created_at: string }>(
+		`SELECT f.id, f.target_account_id AS target, f.state, f.created_at, a.domain, ${REACH_INBOX} AS inbox
+		FROM main.follows f INDEXED BY follows_pair JOIN main.accounts a ON a.id = f.target_account_id
+		WHERE f.account_id = ?1 AND f.target_account_id > ?2 ORDER BY f.target_account_id LIMIT ?3`,
+		accountId,
+		after,
+		limit
+	)
+}
+
+// The accounts a status mentions after the account `after`, in key order (status_mentions).
+export function reachMentioned(
+	db: Db,
+	statusId: string,
+	after: string,
+	limit: number
+): (ReachedAccount & { account_id: string })[] {
+	return db.all<ReachedAccount & { account_id: string }>(
+		`SELECT m.account_id, a.domain, ${REACH_INBOX} AS inbox FROM main.status_mentions m
+		JOIN main.accounts a ON a.id = m.account_id
+		WHERE m.status_id = ?1 AND m.account_id > ?2 ORDER BY m.account_id LIMIT ?3`,
+		statusId,
+		after,
+		limit
+	)
+}

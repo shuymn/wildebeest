@@ -1,4 +1,4 @@
-import { isActorObject, outboundKind, recipientsFor } from './audience'
+import { availableLocalSql, isActorObject, outboundKind, recipientsFor } from './audience'
 import { readOperation, writeOperation } from './operation'
 import type { Db } from '../db/sql'
 
@@ -818,7 +818,7 @@ function refusedSender(db: Db, row: LaneRow): boolean {
 	return (
 		db.first(
 			`SELECT 1 AS x FROM local_accounts l, outbound_activities o
-			WHERE l.account_id = ?1 AND l.suspended_at IS NOT NULL AND o.id = CAST(?2 AS INTEGER) AND o.retracts = 0
+			WHERE l.account_id = ?1 AND NOT ${availableLocalSql('l')} AND o.id = CAST(?2 AS INTEGER) AND o.retracts = 0
 				AND NOT (json_extract(o.body, '$.activity.type') = 'Update'
 					AND json_extract(o.body, '$.activity.object.suspended') IS 1
 					AND json_extract(o.body, '$.activity.object.id') = json_extract(o.body, '$.activity.actor'))`,

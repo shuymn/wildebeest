@@ -514,6 +514,11 @@ export const updateAdminReport = adminWriteOperation<
 	return presented(db, updated, admin, present)
 })
 
+// The newest report, which bounds the reports a local suspension resolves (domain/suspension.ts).
+export function reportBound(db: Db): number {
+	return db.first<{ id: number | null }>('SELECT max(id) AS id FROM reports')?.id ?? 0
+}
+
 // A local suspension's resolution of the reports on the account (Admin::AccountAction#process_reports!, which resolves
 // every unresolved report on the target): a round of the suspension job (domain/suspension.ts), at most `limit`
 // reports after `cursor` (a report id), through reports_target_state in id order. Only the reports frozen at the
