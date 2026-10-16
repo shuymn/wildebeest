@@ -717,6 +717,22 @@ describe('notification requests', () => {
 		expect((await getJson(h, `/api/v1/notifications/requests/${request!.id}`, alice.token)).status).toBe(404)
 	})
 
+	it('shows no last status whose own mention the rule refuses, whatever other statuses it would show', async () => {
+		const h = await community(['alice', 'bob', 'carol'])
+		const { alice, bob, carol } = h.users
+		// Bob's private mention of alice and carol, filtered; alice then blocks carol, so the rule refuses that mention
+		// (it names an account she blocks), while bob's other statuses and the status itself stay visible to her.
+		const dm = await post(h, bob, { status: '@alice @carol hi', visibility: 'direct' })
+		await post(h, bob, { status: 'public' })
+		await act(h, alice, `/api/v1/accounts/${carol.id}/block`)
+		expect((await getJson(h, `/api/v1/statuses/${dm.id}`, alice.token)).status).toBe(200)
+		const [request] = await requests(h, alice)
+		expect(request).toMatchObject({ account: { id: bob.id }, last_status: null })
+		expect(
+			(await getJson<Request>(h, `/api/v1/notifications/requests/${request!.id}`, alice.token)).body.last_status
+		).toBeNull()
+	})
+
 	it('takes back the permission of an accepted request when the recipient blocks its sender', async () => {
 		const { h, alice, bob } = await scene()
 		const [request] = (await requests(h, alice)).filter((r) => r.account.id === bob.id)

@@ -3086,3 +3086,100 @@ describe('pending request jobs cost merged and a round a bounded read (RES-7)', 
 		expect(merged).toEqual({ status: 'ok', value: { merged: false } })
 	}, 120_000)
 })
+
+// A request's last status is judged by the notification rule over that status alone: listing or showing the request
+// reads the same rows with 1,000 or 5,000 statuses of other accounts the viewer may not see, stored before it.
+describe("a request's last status costs a read nothing else (RES-7)", () => {
+	const VIEWER_ID = '680000000000000000'
+	const SENDER_ID = '680000000000000001'
+	const OTHER_ID = '680000000000000002'
+	const STATUS_BASE = 681000000000000000n
+	const REQUEST_TOKEN = 'request-token'
+
+	async function hidden(count: number): Promise<StoreStub> {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username) VALUES (?, 'https://kopje.test/ap/users/viewer', 'viewer')",
+				VIEWER_ID
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'viewer@example.com', X'00', X'00', 'test')",
+				VIEWER_ID
+			)
+			for (const [id, name] of [
+				[SENDER_ID, 'sender'],
+				[OTHER_ID, 'other'],
+			]) {
+				sql.exec(
+					"INSERT INTO accounts (id, uri, username, domain) VALUES (?, ?, ?, 'far.example')",
+					id,
+					`https://far.example/users/${name}`,
+					name
+				)
+			}
+			// The other account's private statuses, which the viewer (no follower) may not see, stored first.
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+				INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+				SELECT CAST(?2 + i AS TEXT), 'https://far.example/objects/p' || i, ?3, 'private', '<p>x</p>', ?4 FROM n`,
+				count,
+				String(STATUS_BASE),
+				OTHER_ID,
+				new Date(NOW).toISOString()
+			)
+			sql.exec(
+				`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+				VALUES ('689000000000000000', 'https://far.example/objects/dm', ?, 'direct', '<p>hi</p>', ?)`,
+				SENDER_ID,
+				new Date(NOW).toISOString()
+			)
+			sql.exec("INSERT INTO status_mentions (status_id, account_id) VALUES ('689000000000000000', ?)", VIEWER_ID)
+			sql.exec(
+				`INSERT INTO notifications (account_id, type, from_account_id, status_id, filtered)
+				VALUES (?, 'mention', ?, '689000000000000000', 1)`,
+				VIEWER_ID,
+				SENDER_ID
+			)
+			sql.exec(
+				`INSERT INTO notification_requests (account_id, from_account_id, last_status_id, notifications_count)
+				VALUES (?, ?, '689000000000000000', 1)`,
+				VIEWER_ID,
+				SENDER_ID
+			)
+			sql.exec(
+				"INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('request', 'secret', 'request', 'urn:ietf:wg:oauth:2.0:oob', 'read')"
+			)
+			sql.exec(
+				"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES (?, 'access', 'request', ?, 'read')",
+				REQUEST_TOKEN,
+				VIEWER_ID
+			)
+		})
+		return store
+	}
+
+	it('reads the same rows with 1,000 or 5,000 statuses the viewer may not see', async () => {
+		const few = await hidden(1000)
+		const many = await hidden(5000)
+		const credential = { tokenHash: REQUEST_TOKEN, scope: 'read', now: NOW } as const
+		const grown: string[] = []
+		for (const [name, operation, input] of [
+			['requests', listNotificationRequests, { credential, page: PAGE, present: PRESENT }],
+			['request', getNotificationRequest, { credential, id: '1', present: PRESENT }],
+		] as [string, StoreOperation<never, unknown>, unknown][]) {
+			const shownBy = async (store: StoreStub) =>
+				runInDurableObject(store, (_instance, state) => operation.run(state.storage.sql, input as never))
+			const output = JSON.stringify(await shownBy(few))
+			// The request shows its last status at either size.
+			expect([name, output.includes('"last_status":{')]).toEqual([name, true])
+			const fewRows = await rowsRead({ store: few }, operation, input as never)
+			const manyRows = await rowsRead({ store: many }, operation, input as never)
+			if (manyRows > fewRows + ALLOWANCE) {
+				grown.push(`${name}: ${fewRows} -> ${manyRows}`)
+			}
+		}
+		expect(grown).toEqual([])
+	}, 120_000)
+})

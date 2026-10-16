@@ -150,7 +150,9 @@ function presentRequests(
 			from: 'main.notification_requests r JOIN',
 			join: 'ON s.id = r.last_status_id',
 			where: 'r.account_id = ?1 AND r.id IN (SELECT CAST(value AS INTEGER) FROM json_each(?2))',
-			and: shownSql('?1', "'mention'", 'r.from_account_id', 's.id', '?3'),
+			// The request's own column, not `s.id`: shownSql names its own `statuses s`, inside which `s.id` would be that
+			// status and not this one.
+			and: shownSql('?1', "'mention'", 'r.from_account_id', 'r.last_status_id', '?3'),
 		},
 		viewer.accountId,
 		JSON.stringify(rows.map((row) => row.id)),
