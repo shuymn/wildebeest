@@ -19,11 +19,25 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       Mastodon sends edits to the accounts a post mentioned.
     - As Mastodon, a post published more than 6 hours before it arrived (a remote post fetched late) is not sent as
       `update`.
-    - `public*`, `hashtag*`, `list` and `direct` still answer `{"error":"Unknown stream type","status":400}`.
     - Where Kopje differs from Mastodon: at most 40 boosts of a deleted status are deleted on each account's stream,
       those by the account and by accounts it follows; nothing is sent when an account is purged; and a post of a
       followed hashtag is sent even when a page of home read from the top would leave it out behind 40 or more newer
       posts the account's home hides (`max_id` paging shows it at its place).
+- The streaming API's `list` stream (`read` or `read:statuses`, with `list` naming one of the account's lists) carries
+  the list's timeline: `update` and `status.update` when a status enters it or one in it is edited (as
+  `GET /api/v1/timelines/list/:id` would show it at its place), and `delete` when a status or boost it held is deleted.
+  The stream is echoed as `["list", "<id>"]`. A missing `list` answers `Missing list name parameter`, another
+  account's list `Not authorized to stream this list` (401), as Mastodon; a value that is not a list id answers
+  `Invalid parameter` (400).
+- The `direct` stream (`read` or `read:statuses`) carries `conversation` whenever one of the account's conversations
+  changes (a new status, read or unread, its last status deleted), as the conversation list presents it. Deleting a
+  conversation sends nothing, as in Mastodon. Where Kopje differs: after a burst (accepting a request that adds many
+  conversations at once) only the 20 newest changes are sent; the conversation list shows the rest.
+- `notifications_merged` (payload `"1"`) is sent on `user` (with `read` or `read:notifications`) and
+  `user:notification` when the account's last pending accepted notification request has had its notifications
+  unfiltered, or a dismiss replaces it, as Mastodon's. Where Kopje differs: nothing is sent when the sender's purge
+  cancels the job.
+- `public*` and `hashtag*` still answer `{"error":"Unknown stream type","status":400}`.
 - The Mastodon admin API's 63 routes (`/api/v1/admin/*` and `GET /api/v2/admin/accounts`) are routed, each with its
   admin scope and an optional token, as Mastodon's. None is served yet: each answers as Mastodon answers a caller whose
   role lacks the route's permission.
@@ -63,7 +77,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds two migrations, applied in order on the first request after the deploy; a rollback to an earlier
+- Store schema: adds three migrations, applied in order on the first request after the deploy; a rollback to an earlier
   version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0028_streaming_home`: adds the triggers that journal a status inserted while an account subscribes to `user`,
       and an edit while one subscribes to `user` or `user:notification`, the empty `stream_delete_viewers` table (a
@@ -74,6 +88,11 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       the last change) and their indexes, replacing two, and the moderation log table. It reads only the reports: on a
       benchmark store of 1,000,000 accounts, 3,000,000 follows, 2,000,000 statuses and 10,000 reports its upgrade took
       2.3 seconds in workerd's local Durable Object SQLite.
+    - `0033_streaming_lists`: lets a list subscription journal statuses and edits (the two triggers recreated), adds
+      the per-account conversation mark table (left out of dumps and backups, as the other streaming tables are), a
+      `stream_seq` column on conversations with a constant default and an index on it, and recreates the trigger that
+      moves a conversation's last status back so it also takes the owner's next change sequence. It reads each
+      conversation once, for the index, and nothing else.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.9] - 2026-10-16

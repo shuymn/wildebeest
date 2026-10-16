@@ -282,40 +282,68 @@ function repliesPolicySql(policy: RepliesPolicy): string {
 // the viewer's.
 export const listTimeline = userReadOperation<{ id: string; page: PageQuery; present: Present }, Page<Status> | null>(
 	(db, { id, page, present }, _viewer, viewer) => {
-		const { accountId, now } = viewer
-		const list = ownList(db, accountId, id)
+		const list = ownList(db, viewer.accountId, id)
 		if (list === undefined) {
 			return null
 		}
 		const cursor = statusPage(page)
-		const read = statusReads(viewer, { viewer: '?1', now: '?5' })
-		const order = cursor.ascending ? 'ASC' : 'DESC'
-		const rows = read.union(
-			db,
-			'homeFilter',
-			{
-				all: true,
-				branches: [
-					{
-						authors: `SELECT la.account_id FROM list_accounts la WHERE la.list_id = ?6
-							AND (la.account_id = ?1 OR EXISTS (SELECT 1 FROM follows lf
-								WHERE lf.account_id = ?1 AND lf.target_account_id = la.account_id AND lf.state = 'accepted'))`,
-						where: `${FEED} AND ${rangeSql('s.id')}`,
-						and: followOptionsSql(repliesPolicySql(list.replies_policy)),
-						tail: `ORDER BY s.id ${order} LIMIT ?4`,
-					},
-				],
-				tail: `ORDER BY id ${order} LIMIT ?4`,
-			},
-			accountId,
-			...rangeParams(cursor),
-			cursor.limit,
-			now,
-			list.id
-		)
-		return statusesPage(db, ids(rows), cursor, viewer, present)
+		return statusesPage(db, ids(listRows(db, viewer, list, cursor, null)), cursor, viewer, present)
 	}
 )
+
+// R33 for `update` and `status.update` on a `list` stream (streaming.ts): the list `listId` positioned at the status
+// `statusId`, narrowed to it as homeStatus narrows home: the list must be the viewer's (ownList), and its members are
+// cut to the status's author, read through the (list_id, account_id) key, so the work does not grow with the list's
+// members or anyone's statuses. The status, if that read returns it.
+export function listStatus(db: Db, viewer: UserContext, listId: string, statusId: string) {
+	if (!/^\d{18}$/.test(statusId)) {
+		return null
+	}
+	const list = ownList(db, viewer.accountId, listId)
+	if (list === undefined) {
+		return null
+	}
+	const cursor: Cursor = { max: statusCursor(String(BigInt(statusId) + 1n)), min: null, ascending: false, limit: 1 }
+	return listRows(db, viewer, list, cursor, statusId)[0]?.id ?? null
+}
+
+// A list's statuses from the cursor, or, with `only`, the read narrowed to that status.
+function listRows(
+	db: Db,
+	viewer: UserContext,
+	list: { id: string; replies_policy: RepliesPolicy },
+	cursor: Cursor,
+	only: string | null
+) {
+	const read = statusReads(viewer, { viewer: '?1', now: '?5', ...(only === null ? {} : { only: '?7' }) })
+	const order = cursor.ascending ? 'ASC' : 'DESC'
+	// Narrowed, the member is the status's author, found by the list's key.
+	const member = only === null ? '' : 'AND la.account_id = (SELECT lx.account_id FROM statuses lx WHERE lx.id = ?7)'
+	return read.union(
+		db,
+		'homeFilter',
+		{
+			all: true,
+			branches: [
+				{
+					authors: `SELECT la.account_id FROM list_accounts la WHERE la.list_id = ?6 ${member}
+						AND (la.account_id = ?1 OR EXISTS (SELECT 1 FROM follows lf
+							WHERE lf.account_id = ?1 AND lf.target_account_id = la.account_id AND lf.state = 'accepted'))`,
+					where: `${FEED} AND ${rangeSql('s.id')}`,
+					and: followOptionsSql(repliesPolicySql(list.replies_policy)),
+					tail: `ORDER BY s.id ${order} LIMIT ?4`,
+				},
+			],
+			tail: `ORDER BY id ${order} LIMIT ?4`,
+		},
+		viewer.accountId,
+		...rangeParams(cursor),
+		cursor.limit,
+		viewer.now,
+		list.id,
+		...(only === null ? [] : [only])
+	)
+}
 
 export type PublicTimelineInput = {
 	page: PageQuery

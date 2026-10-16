@@ -69,7 +69,17 @@ import {
 	MAX_STATUSES_BY_ID,
 	statusContext,
 } from '../src/domain/statuses'
-import { streamAccept, streamDeleteUnits, streamEvents, streamTokens, streamUnit } from '../src/domain/streaming'
+import {
+	streamAccept,
+	streamCaughtUp,
+	streamConversations,
+	streamDelete,
+	streamDeleteUnits,
+	streamEvents,
+	streamListOwned,
+	streamTokens,
+	streamUnit,
+} from '../src/domain/streaming'
 import { featuredTagSuggestions, followedTags, MAX_FOLLOWED_TAGS } from '../src/domain/tags'
 import {
 	accountStatuses,
@@ -4513,6 +4523,222 @@ describe("R32: a delete's capture reads the smaller of the status's boosts and e
 		// Per listener: its view check and its follows (ten and the author).
 		expect(past).toBeLessThanOrEqual(CAPTURE_BOOST_SCAN + 1 + 4 * (11 + 2 * ALLOWANCE))
 		expect(far).toBeLessThanOrEqual(past + ALLOWANCE)
+	}, 120_000)
+})
+
+// The `list` and `direct` streams' reads (design "Kopje streaming API" PR 3): a list's check (listStatus, narrowed to the
+// status's author), a delete's capture of the lists, the ownership check of a subscription, and the conversation reads
+// (the owner's newest changes, a conversation's unit, the drain barrier's check) read the same rows however long the
+// members' histories, however large the list and however many conversations the owner has.
+describe("streamed lists and conversations read their items, however large the list and the owner's history (RES-7)", () => {
+	const VIEWER_ID = '665000000000000000'
+	const AUTHOR_ID = '665000000000000001'
+	const MEMBERS = 666000000000000000n
+	const AUTHOR_STATUSES = 760000000000000000n
+	const MEMBER_STATUSES = 761000000000000000n
+	const CONVERSATION_STATUSES = 762000000000000000n
+	const LIST_ID = '667000000000000000'
+	const TOKEN = 'stream-list-token'
+
+	type Size = { perAuthor: number; members: number; conversations: number }
+
+	// The viewer follows the author and `members` other accounts (each with a status), all in its list LIST_ID, and
+	// listens on the list; the author has `perAuthor` public statuses; the viewer has `conversations` conversations, each
+	// with its own direct status and change sequence, and its mark at the highest.
+	async function world(size: Size): Promise<StoreStub> {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			const at = new Date(NOW).toISOString()
+			sql.exec("INSERT INTO instance_settings (name, value) VALUES ('domain', 'kopje.test')")
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username) VALUES (?, 'https://kopje.test/ap/users/viewer', 'viewer')",
+				VIEWER_ID
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'viewer@example.com', X'00', X'00', 'test')",
+				VIEWER_ID
+			)
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username, domain) VALUES (?, 'https://far.example/users/author', 'author', 'far.example')",
+				AUTHOR_ID
+			)
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+				INSERT INTO accounts (id, uri, username, domain)
+				SELECT CAST(?2 + i AS TEXT), 'https://many.example/users/m' || i, 'm' || i, 'many.example' FROM n WHERE ?1 > 0`,
+				size.members,
+				String(MEMBERS)
+			)
+			sql.exec(
+				`INSERT INTO follows (account_id, target_account_id, state, created_at)
+				SELECT ?1, id, 'accepted', ?2 FROM accounts WHERE id <> ?1`,
+				VIEWER_ID,
+				at
+			)
+			sql.exec("INSERT INTO lists (id, account_id, title) VALUES (?, ?, 'list')", LIST_ID, VIEWER_ID)
+			sql.exec(
+				'INSERT INTO list_accounts (list_id, account_id) SELECT ?1, id FROM accounts WHERE id <> ?2',
+				LIST_ID,
+				VIEWER_ID
+			)
+			const statuses = (base: bigint, author: string, count: number, visibility: string) =>
+				sql.exec(
+					`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+					INSERT INTO statuses (id, uri, account_id, visibility, content, published_at, created_at)
+					SELECT CAST(?2 + i AS TEXT), 'https://far.example/objects/' || (?2 + i), ?3, ?4, '<p>x</p>', ?5, ?5 FROM n`,
+					count,
+					String(base),
+					author,
+					visibility,
+					at
+				)
+			statuses(AUTHOR_STATUSES, AUTHOR_ID, size.perAuthor, 'public')
+			sql.exec(
+				`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at, created_at)
+				SELECT CAST(?1 + CAST(id AS INTEGER) - ?2 AS TEXT), 'https://many.example/objects/' || id, id, 'public',
+					'<p>x</p>', ?3, ?3
+				FROM accounts WHERE id GLOB '666*'`,
+				String(MEMBER_STATUSES),
+				String(MEMBERS),
+				at
+			)
+			statuses(CONVERSATION_STATUSES, VIEWER_ID, size.conversations, 'direct')
+			sql.exec(
+				`INSERT INTO conversations (account_id, thread, participants, last_status_id, unread, stream_seq)
+				SELECT account_id, thread, '[]', id, 0, CAST(id AS INTEGER) - ?2 + 1 FROM statuses WHERE account_id = ?1
+				AND visibility = 'direct'`,
+				VIEWER_ID,
+				String(CONVERSATION_STATUSES)
+			)
+			sql.exec(
+				'INSERT INTO conversation_statuses (conversation_id, status_id) SELECT id, last_status_id FROM conversations'
+			)
+			sql.exec('INSERT INTO stream_conversation_marks (account_id, seq) VALUES (?, ?)', VIEWER_ID, size.conversations)
+			sql.exec(
+				"INSERT INTO stream_subscriptions (account_id, stream_key, sockets) VALUES (?, ?, 1), (?, 'direct', 1)",
+				VIEWER_ID,
+				`list:${LIST_ID}`,
+				VIEWER_ID
+			)
+			sql.exec(
+				"INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('stream-list', 'secret', 'stream-list', 'urn:ietf:wg:oauth:2.0:oob', 'read')"
+			)
+			sql.exec(
+				"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES (?, 'access', 'stream-list', ?, 'read')",
+				TOKEN,
+				VIEWER_ID
+			)
+		})
+		return store
+	}
+
+	const conversation = async (store: StoreStub, seq: number) =>
+		(
+			await runInDurableObject(store, (_instance, state) =>
+				state.storage.sql
+					.exec<{ id: string }>(
+						'SELECT CAST(id AS TEXT) AS id FROM conversations WHERE account_id = ? AND stream_seq = ?',
+						VIEWER_ID,
+						seq
+					)
+					.one()
+			)
+		).id
+
+	// The reads, by name: [operation, input, what it must return in the grown world].
+	async function reads(
+		store: StoreStub,
+		size: Size
+	): Promise<[string, StoreOperation<never, unknown>, unknown, unknown][]> {
+		const author = (i: number) => String(AUTHOR_STATUSES + BigInt(i))
+		const unit = (kind: string, subject: string) => ({
+			kind,
+			subject,
+			accountId: VIEWER_ID,
+			tokenHashes: [TOKEN],
+			lists: [LIST_ID],
+			now: NOW,
+		})
+		const streams = (
+			kind: string,
+			subject: string,
+			event: string,
+			keys: string[]
+		): [string, StoreOperation<never, unknown>, unknown, unknown] => [
+			`${kind} ${subject}`,
+			streamUnit,
+			unit(kind, subject),
+			{ event, streams: keys },
+		]
+		return [
+			streams('status', author(size.perAuthor - 1), 'update', ['user', `list:${LIST_ID}`]),
+			streams('status', author(0), 'update', ['user', `list:${LIST_ID}`]),
+			streams('status', String(MEMBER_STATUSES + BigInt(size.members - 1)), 'update', ['user', `list:${LIST_ID}`]),
+			streams('edit', author(0), 'status.update', ['user', `list:${LIST_ID}`]),
+			streams('conversation', await conversation(store, size.conversations), 'conversation', ['direct']),
+			streams('conversation', await conversation(store, 1), 'conversation', ['direct']),
+			['owned', streamListOwned, { accountId: VIEWER_ID, listId: LIST_ID }, true],
+			['changes', streamConversations, { accountId: VIEWER_ID, after: 0, limit: 20 }, 20],
+			['caught up', streamCaughtUp, { owners: [{ accountId: VIEWER_ID, after: size.conversations }] }, true],
+		]
+	}
+
+	// What a read returned, reduced to what `reads` names.
+	function summary(result: unknown): unknown {
+		if (Array.isArray(result)) {
+			return result.length
+		}
+		if (typeof result === 'object' && result !== null && 'streams' in result) {
+			const made = result as { event: string; streams: { stream: string }[] }
+			return { event: made.event, streams: made.streams.map((s) => s.stream) }
+		}
+		return result
+	}
+
+	it('reads the same rows with 20 or 2,000 statuses per author, 10 or 1,000 list members, 20 or 2,000 conversations', async () => {
+		const small: Size = { perAuthor: 20, members: 10, conversations: 20 }
+		const large: Size = { perAuthor: 2000, members: 1000, conversations: 2000 }
+		const few = await world(small)
+		const many = await world(large)
+		const fewReads = await reads(few, small)
+		const grown: string[] = []
+		for (const [i, [name, operation, input, expected]] of (await reads(many, large)).entries()) {
+			// Not vacuous: each read in the grown world returns what it must.
+			const result = await runInDurableObject(many, (_instance, state) =>
+				operation.run(state.storage.sql, input as never)
+			)
+			expect([name, summary(result)]).toEqual([name, expected])
+			const fewRows = await rowsRead({ store: few }, operation, fewReads[i]![2] as never)
+			const manyRows = await rowsRead({ store: many }, operation, input as never)
+			if (manyRows > fewRows + ALLOWANCE) {
+				grown.push(`${name}: ${fewRows} -> ${manyRows}`)
+			}
+		}
+		expect(grown).toEqual([])
+	}, 120_000)
+
+	it("captures a delete's lists in the same rows, however large the list and the author's history", async () => {
+		const capture = readOperation<{ statusId: string }, null>((db, { statusId }) => {
+			streamDelete(db, statusId, NOW)
+			return null
+		})
+		const measure = async (size: Size) => {
+			const store = await world(size)
+			const statusId = String(AUTHOR_STATUSES + BigInt(size.perAuthor - 1))
+			const rows = await rowsRead({ store }, capture, { statusId })
+			// Not vacuous: the viewer is captured with the list.
+			expect(
+				await runInDurableObject(store, (_instance, state) =>
+					state.storage.sql.exec('SELECT lists FROM stream_delete_viewers').toArray()
+				)
+			).toEqual([{ lists: JSON.stringify([LIST_ID]) }])
+			return rows
+		}
+		const few = await measure({ perAuthor: 20, members: 10, conversations: 20 })
+		const many = await measure({ perAuthor: 2000, members: 1000, conversations: 20 })
+		// The capture's view check reads the viewer's follows of the boosters (none here) and its list read is narrowed.
+		expect(many).toBeLessThanOrEqual(few + ALLOWANCE)
 	}, 120_000)
 })
 

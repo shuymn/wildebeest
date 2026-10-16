@@ -212,6 +212,67 @@ describe("R32: a status's boosts in its capture", () => {
 		expect(sizes.every((row) => row.size <= 120)).toBe(true)
 	})
 
+	// alice's 16 lists (her every key), each holding dave and every booster: the status and each boost are in all.
+	async function listed(t: Setup): Promise<string[]> {
+		await sql(
+			t.store,
+			"INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'accepted')",
+			ALICE,
+			DAVE
+		)
+		const lists = Array.from({ length: 16 }, (_, i) => String(900000000000000000n + BigInt(i)))
+		for (const list of lists) {
+			await sql(t.store, "INSERT INTO lists (id, account_id, title) VALUES (?, ?, 'l')", list, ALICE)
+			await sql(
+				t.store,
+				`INSERT INTO list_accounts (list_id, account_id) SELECT ?1, target_account_id FROM follows
+				WHERE account_id = ?2 AND state = 'accepted'`,
+				list,
+				ALICE
+			)
+			await sql(
+				t.store,
+				'INSERT INTO stream_subscriptions (account_id, stream_key, sockets) VALUES (?, ?, 1)',
+				ALICE,
+				`list:${list}`
+			)
+		}
+		await sql(t.store, "DELETE FROM stream_subscriptions WHERE account_id = ? AND stream_key = 'user'", ALICE)
+		return lists
+	}
+
+	it('holds, at its maxima, the lists whose read held the status and each boost, within the row bound', async () => {
+		const { t, status, ids } = await boosted(45)
+		const lists = await listed(t)
+		await deleteAsDave(t, status.id)
+		const [row] = await sql<{ lists: string; boosts: string }>(
+			t.store,
+			'SELECT lists, boosts FROM stream_delete_viewers WHERE account_id = ?',
+			ALICE
+		)
+		expect(JSON.parse(row!.lists)).toEqual(lists)
+		expect(JSON.parse(row!.boosts)).toEqual(ids.slice(0, 40).map((id) => [id, lists]))
+		expect(row!.lists.length + row!.boosts.length).toBeLessThanOrEqual(LIMITS.viewerBytes)
+	})
+
+	it('truncates the boosts, then the lists, of a row over its bound, and still deletes', async () => {
+		const { t, status } = await boosted(10)
+		const lists = await listed(t)
+		CAPTURE_LIMITS.viewerBytes = 200
+		await deleteAsDave(t, status.id)
+		expect(await sql(t.store, 'SELECT count(*) AS n FROM statuses WHERE id = ?', status.id)).toEqual([{ n: 0 }])
+		const [row] = await sql<{ lists: string; boosts: string }>(
+			t.store,
+			'SELECT lists, boosts FROM stream_delete_viewers WHERE account_id = ?',
+			ALICE
+		)
+		expect(JSON.parse(row!.boosts)).toEqual([])
+		const kept = JSON.parse(row!.lists) as string[]
+		expect(kept).toEqual(lists.slice(0, kept.length))
+		expect(kept.length).toBeLessThan(lists.length)
+		expect(row!.lists.length + row!.boosts.length).toBeLessThanOrEqual(200)
+	})
+
 	it('captures nothing while nobody listening may view the status', async () => {
 		const t = await setup()
 		const status = await localStatus(t, { status: 'unheard', visibility: 'public' }, 'dave')

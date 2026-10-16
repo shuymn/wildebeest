@@ -19,6 +19,8 @@ import type { Db } from '../db/sql'
 // last status back, or deletes it when it has none left (AccountConversation.remove_status). A block ends the
 // blocker's conversations with the blocked account (AfterBlockService#clear_conversations!).
 //
+// Each write of a row also takes its owner's next streaming change sequence while the owner has a mark (nextStreamSeq),
+// so the `direct` stream sends the changed conversation.
 // Reading shows the owner's rows only (anyone else's is not found), newest last status first. The last status is
 // shown only if the owner may still see it (R2, through statusReads): one whose author is suspended or blocks the owner
 // is shown as null, as Mastodon shows a last status it can no longer load. The accounts are the other participants
@@ -59,18 +61,34 @@ export function addToConversation(db: Db, ownerId: string, statusId: string): vo
 		return
 	}
 	const row = db.first<{ id: number }>(
-		`INSERT INTO conversations (account_id, thread, participants, last_status_id, unread) VALUES (?1, ?2, ?3, ?4, ?5)
+		`INSERT INTO conversations (account_id, thread, participants, last_status_id, unread, stream_seq)
+		VALUES (?1, ?2, ?3, ?4, ?5, coalesce(?6, 0))
 		ON CONFLICT (account_id, thread, participants)
-			DO UPDATE SET last_status_id = max(last_status_id, excluded.last_status_id), unread = excluded.unread
+			DO UPDATE SET last_status_id = max(last_status_id, excluded.last_status_id), unread = excluded.unread,
+				stream_seq = coalesce(?6, stream_seq)
 		RETURNING id`,
 		...key,
 		statusId,
-		status.account_id === ownerId ? 0 : 1
+		status.account_id === ownerId ? 0 : 1,
+		nextStreamSeq(db, ownerId)
 	)
 	if (row === undefined) {
 		throw new Error('the conversation was not written')
 	}
 	db.run('INSERT INTO conversation_statuses (conversation_id, status_id) VALUES (?, ?)', row.id, statusId)
+}
+
+// The streaming API's change sequence (`direct`, migration 0033_streaming_lists): the owner's mark moved to its next
+// value, which the conversation write stores in stream_seq, or null when the owner never subscribed to `direct` (then
+// nothing more is written). The mark is never lowered, so a turn sends each change once (stream-hub.ts). Every writer
+// of a conversation row takes it: addToConversation, markConversation, and the trigger conversation_statuses_removed.
+function nextStreamSeq(db: Db, ownerId: string): number | null {
+	return (
+		db.first<{ seq: number }>(
+			'UPDATE stream_conversation_marks SET seq = seq + 1 WHERE account_id = ? RETURNING seq',
+			ownerId
+		)?.seq ?? null
+	)
 }
 
 // AfterBlockService#clear_conversations!: the owner's conversations with the account go. Reads the owner's
@@ -148,6 +166,26 @@ export const listConversations = userReadOperation<{ page: PageQuery; present: P
 	}
 )
 
+// R33 for `conversation` on the `direct` stream (streaming.ts): the conversation relation, the row `id` of the viewer
+// (the owner predicate of listConversations), read by its key, presented as the list presents it (its last status only
+// if the viewer may see it, R25). Null when it is gone or not the viewer's.
+export function streamedConversation(
+	db: Db,
+	viewer: ViewerContext & { readonly accountId: string },
+	id: string,
+	present: Present
+): Conversation | null {
+	if (!CONVERSATION_ID.test(id)) {
+		return null
+	}
+	const row = db.first<ConversationRow>(
+		`SELECT ${COLUMNS} FROM conversations WHERE id = CAST(?1 AS INTEGER) AND account_id = ?2`,
+		id,
+		viewer.accountId
+	)
+	return row === undefined ? null : (presentConversations(db, [row], viewer, present)[0] ?? null)
+}
+
 // POST /api/v1/conversations/:id/read and /unread: the viewer's conversation, marked; null when it is not theirs.
 export const markConversation = userWriteOperation<
 	{ id: string; unread: boolean; present: Present },
@@ -156,11 +194,22 @@ export const markConversation = userWriteOperation<
 	if (!CONVERSATION_ID.test(id)) {
 		return null
 	}
+	if (
+		db.first(
+			'SELECT 1 AS x FROM conversations WHERE id = CAST(? AS INTEGER) AND account_id = ?',
+			id,
+			viewer.accountId
+		) === undefined
+	) {
+		return null
+	}
 	const row = db.first<ConversationRow>(
-		`UPDATE conversations SET unread = ?3 WHERE id = CAST(?1 AS INTEGER) AND account_id = ?2 RETURNING ${COLUMNS}`,
+		`UPDATE conversations SET unread = ?3, stream_seq = coalesce(?4, stream_seq)
+		WHERE id = CAST(?1 AS INTEGER) AND account_id = ?2 RETURNING ${COLUMNS}`,
 		id,
 		viewer.accountId,
-		unread ? 1 : 0
+		unread ? 1 : 0,
+		nextStreamSeq(db, viewer.accountId)
 	)
 	return row === undefined ? null : (presentConversations(db, [row], viewer, present)[0] ?? null)
 })

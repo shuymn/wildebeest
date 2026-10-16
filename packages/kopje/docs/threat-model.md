@@ -554,7 +554,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `Authorization` header or the subprotocol, never from the URL, which the platform's invocation logs record (Mastodon
   also takes `access_token`; a query token alone answers 401 as none does); the Worker sends only its sha256 to the
   Store, which validates it (DATA-5). Each subscription
-  needs its stream's scope (`read:statuses` for `user`, `read:notifications` for `user:notification`), and notifications
+  needs its stream's scope (`read:statuses` for `user`, `list` and `direct`, `read:notifications` for
+  `user:notification`), a `list` subscription the viewer's own list, and notifications
   go on `user` only with `read:notifications` too. A write records ids only (`stream_events`, by a trigger); each
   message is made later in its own transaction, which authorizes the socket's token again and runs the reference for
   its event and stream (R33): for a `notification` on `user` or `user:notification`, the recipient's notification
@@ -562,16 +563,20 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   REST presents it; for an `update` on `user`, home positioned at the status (R9, the read with `max_id` just above it,
   narrowed to it), for a status published within 6 hours of its arrival; for a `status.update`, home positioned at it
   or, only with `read:notifications`, the viewer's mention notification of it (R15), and on `user:notification` the
-  mention alone. A `delete` is the one message judged at write time (R32): captured once, before anything changes the
+  mention alone; on `list:<id>`, the list positioned at the status, which must still be the viewer's; for a
+  `conversation` on `direct`, the viewer's own conversation row, presented as the list presents it (R25); for
+  `notifications_merged`, a notification scope. A `delete` is the one message judged at write time (R32): captured once, before anything changes the
   status's audience (a local delete or unboost, a remote `Delete` when its job is created and before its first batch
-  removes the mentions, a remote `Delete` or `Undo` of a boost), it names only the accounts listening on `user` that
-  could view the status, and each one's boosts of it that it could view, at most 40, in rows of proven size that a
+  removes the mentions, a remote `Delete` or `Undo` of a boost), it names only the accounts listening on `user` or a
+  list that could view the status, each one's boosts of it that it could view, at most 40, and the lists whose read
+  held each, sent on a list only while it is still the viewer's, in rows of proven size that a
   truncation keeps within bounds without failing the delete. Nothing authorized is kept across units. Each unit is sent at most once: the position past it is
   persisted by compare-and-set before its messages go, and a send that fails closes the sockets left without it
   (1011), whose clients read REST again. Every turn checks every open socket's token again, so the socket of a revoked
   token, a signed-out web session or a suspended account closes (1008) at the next turn, which any write starts, and an
-  expired token's at the cron's turn within 5 minutes. The other streams (`public*`, `hashtag*`, `list`, `direct`)
-  answer `Unknown stream type` for now. The work is bounded (RES-6, RES-7). _Implemented on branch
+  expired token's at the cron's turn within 5 minutes. A conversation's change is sent at most once to each socket:
+  its convSeq is raised and written before the send. The other streams (`public*`, `hashtag*`) answer `Unknown stream
+type` for now. The work is bounded (RES-6, RES-7). _Implemented on branch
   `kopje/streaming-1`:_ `src/mastodon/streaming.ts`, `src/stream-hub.ts`, `src/domain/streaming.ts`,
   `authorizeStream` in `src/domain/auth.ts`, `streamedNotification` in `src/domain/notifications.ts`, migration
   `0026_streaming`; `test/streaming/streaming.test.ts`, `test/policy-bounds.test.ts`, `test/log-redaction.test.ts`,
@@ -580,6 +585,12 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `src/domain/notifications.ts`, `deleteAudience` in `src/domain/audience.ts`, `streamUnit` and `streamDelete` in
   `src/domain/streaming.ts`, migration `0028_streaming_home`; `test/streaming/home.test.ts`,
   `test/streaming-oracle.test.ts`, `test/stream-delete.test.ts`, `test/layering.test.ts`,
+  `test/policy-bounds.test.ts`, `test/migrations.test.ts`, `test/cascade-guard.test.ts`. _Implemented on branch
+  `kopje/streaming-3`:_ lists, direct and merged: `listStatus` in `src/domain/timelines.ts`, `streamedConversation`
+  and the change sequence in `src/domain/conversations.ts`, the merge transition in
+  `src/domain/notification-requests.ts`, `streamUnit`, `streamDelete` and `streamConversations` in
+  `src/domain/streaming.ts`, migration `0033_streaming_lists`; `test/streaming/lists.test.ts`,
+  `test/streaming/direct.test.ts`, `test/streaming-oracle.test.ts`, `test/stream-delete.test.ts`,
   `test/policy-bounds.test.ts`, `test/migrations.test.ts`, `test/cascade-guard.test.ts`.
 
 - **VIS-29: admin views and actions disclose and change only through the admin account.** Only the OAuth admin,
@@ -1256,7 +1267,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   (`Too many subscriptions`, 429); incoming messages text only (1003), at most 4 KiB and 120 a minute (1008). The
   fan-out runs in turns, one at a time, each an incoming request to the Store's own stub, which restores the CPU
   allowance: a turn spends at most 512 checks, 64 presentations, 4 MiB of presented payload and 4,096 sends, runs a
-  unit only while what is left covers a unit's worst case (33 checks, one presentation, 256 sends) and leaves the
+  unit only while what is left covers a unit's worst case (34 checks: 16 tokens, home, the mention and 16 lists; one
+  presentation, 256 sends) and leaves the
   rest to the next turn; a payload over 512 KiB is skipped and logged. The journal records nothing once it spans 4,096
   ids, and is pruned behind the position, at most 500 rows a call: the finished journal rows first, so the span shrinks
   at once, then a delete's capture rows, in further turns until none is left. A turn that read anything moves the
@@ -1265,7 +1277,13 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   each at most 16 KiB (40 boosts); a row over it drops boosts, then list ids, and is logged, and the delete goes on.
   A unit is one subject (the status, or one captured boost) for one viewer, so a delete with 40 boosts is 41 units for
   each viewer, each within a unit's worst case; the position names the viewer and the subject within the event. The status and edit
-  triggers write one journal row per status write, under the same span, and no batched delete or purge fires them. `src/stream-hub.ts`, `src/domain/streaming.ts`;
+  triggers write one journal row per status write, under the same span, and no batched delete or purge fires them.
+  _Implemented on branch `kopje/streaming-3`:_ a delete's capture also holds each viewer's lists (at most 16 for the
+  status and each boost, within the same 16 KiB); a list's check is one narrowed read. Conversations are not
+  journaled: each owner's newest 20 changes are read a turn through an index, each its own unit, older ones skipped. A
+  conversation's last status moved back by a status's removal writes the owner's mark too, so the batched delete of a
+  status's conversation links takes a third of the rows left (`LIMIT ?2 / 3`). `notifications_merged` is one journal
+  row per transition, under the span. `src/stream-hub.ts`, `src/domain/streaming.ts`;
   `test/streaming/streaming.test.ts`. _Gap:_ the budgets count work, not CPU time; a turn at the limits is to be
   measured on a deployed instance, as is how long a hibernated idle socket stays open.
 - **RES-7: query work is bounded, not only the rows returned.** Feeds apply visibility and filters in the query before

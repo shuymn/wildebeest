@@ -1,10 +1,12 @@
 import { deleteAudience } from './audience'
-import { authorize, authorizeStream } from './auth'
+import { authorize, authorizeStream, listenerContext, type UserContext } from './auth'
+import { streamedConversation } from './conversations'
+import { ownList } from './lists'
 import { mentionedStatus, streamedNotification } from './notifications'
 import { readOperation, sessionOperation } from './operation'
 import { instanceOrigin } from './push'
 import { presentStatus } from './status-presenter'
-import { homeStatus } from './timelines'
+import { homeStatus, listStatus } from './timelines'
 import type { Db } from '../db/sql'
 import { storeMaintenanceError } from '../platform/store-errors'
 import type { StoreOperation } from '../platform/store-kernel'
@@ -23,13 +25,24 @@ import { grantsAny } from '../security/scopes'
 //       of its arrival (Mastodon's real-time window);
 //     - `status.update` on `user`: home positioned at x or, with a notification scope, the mention reference (V's
 //       notification read restricted to V's mention of x: mentionedStatus in notifications.ts); on
-//       `user:notification`, the mention reference alone.
+//       `user:notification`, the mention reference alone;
+//     - `update` and `status.update` on `list:<id>`: the list's read positioned at x, which includes that the list is
+//       V's (listStatus in timelines.ts), with the same real-time window for `update`;
+//     - `conversation` on `direct`: the conversation relation, V's row x, presented as the list presents it
+//       (streamedConversation in conversations.ts, R25);
+//     - `notifications_merged` on `user` (with a notification scope) and `user:notification`: V's transition to no
+//       pending accept job (streamMerged, written by notification-requests.ts).
 //   Each status is presented as REST presents it to V (presentStatus).
 //
 //   R32 (stream delete): a `delete` of x (a status, or a boost of it) reaches (V, k) only if, in the transaction that
-//   first changes the status's audience, V was listening on `user` and could view x (R3), and k is `user`. The
-//   capture (streamDelete) is taken once, before that change, in bounded rows (stream_delete_viewers, migration
-//   0028_streaming_home); the unit re-checks only V's tokens.
+//   first changes the status's audience, V was listening on `user` or a list and could view x (R3), and k is `user`,
+//   or `list:<id>` when that list's read positioned at x returned x then and the list is still V's when it is sent.
+//   The capture (streamDelete) is taken once, before that change, in bounded rows (stream_delete_viewers, migration
+//   0028_streaming_home); the unit re-checks V's tokens and the lists' owner.
+//
+// Conversations are not journaled: each write of a conversation takes its owner's next change sequence
+// (conversations.ts nextStreamSeq, migration 0033_streaming_lists), and a turn sends each owner's newest changes above
+// what its sockets were sent (streamConversations).
 //
 // A unit is one subject for one viewer. Units go in a stable order (event id, then viewer account id ascending, then
 // the subject within the viewer's units: 0 for the status, then a delete's captured boosts by id), and the position
@@ -53,8 +66,19 @@ export const STREAM_NAMES: readonly string[] = [
 ]
 
 // The streams Kopje serves; the others answer Unknown stream type until they are.
-export type ServedStream = 'user' | 'user:notification'
-export const SERVED_STREAMS: readonly ServedStream[] = ['user', 'user:notification']
+export type ServedStream = 'user' | 'user:notification' | 'list' | 'direct'
+export const SERVED_STREAMS: readonly ServedStream[] = ['user', 'user:notification', 'list', 'direct']
+
+// A subscription's key, as the registry (stream_subscriptions) and a socket's attachment hold it: the stream's name, or
+// `list:<id>` for a list.
+export function listKey(listId: string): string {
+	return `list:${listId}`
+}
+
+// The list id of a key, or null for any other stream.
+export function keyList(key: string): string | null {
+	return key.startsWith('list:') ? key.slice('list:'.length) : null
+}
 
 // What a token may stream (streaming/index.js checkScopes and channelsForUserStream): `user` and the other timelines
 // need `read:statuses`, `user:notification` and the notifications on `user` need `read:notifications` (`read`
@@ -73,23 +97,34 @@ export function maySubscribe(grant: StreamGrant, stream: string): boolean {
 	return stream === 'user:notification' ? grant.notifications : grant.statuses
 }
 
-// Whether a subscription to `stream` carries notifications for a token with `grant`.
-export function carriesNotifications(grant: StreamGrant, stream: ServedStream): boolean {
-	return stream === 'user:notification' ? grant.notifications : grant.statuses && grant.notifications
+// Whether a subscription with the key `key` carries notifications for a token with `grant`.
+export function carriesNotifications(grant: StreamGrant, key: string): boolean {
+	switch (key) {
+		case 'user:notification':
+			return grant.notifications
+		case 'user':
+			return grant.statuses && grant.notifications
+		default:
+			return false
+	}
 }
 
-// Whether a subscription to `stream` may carry an event of `kind` (the journal's: a notification inserted, a status
-// inserted, a status edited, a delete captured) for a token with `grant`, before any reference is
-// read: the streams and scopes each event goes to.
-export function mayCarry(kind: string, grant: StreamGrant, stream: ServedStream): boolean {
+// Whether a subscription with the key `key` may carry an event of `kind` (the journal's: a notification inserted, a
+// status inserted, a status edited, a delete captured, a merge done; or a conversation changed) for a token with
+// `grant`, before any reference is read: the streams and scopes each event goes to.
+export function mayCarry(kind: string, grant: StreamGrant, key: string): boolean {
+	const timeline = key === 'user' || keyList(key) !== null
 	switch (kind) {
 		case 'notification':
-			return carriesNotifications(grant, stream)
+		case 'merged':
+			return carriesNotifications(grant, key)
 		case 'status':
 		case 'delete':
-			return stream === 'user' && grant.statuses
+			return timeline && grant.statuses
 		case 'edit':
-			return stream === 'user' ? grant.statuses : grant.notifications
+			return timeline ? grant.statuses : key === 'user:notification' && grant.notifications
+		case 'conversation':
+			return key === 'direct' && grant.statuses
 		default:
 			return false
 	}
@@ -106,6 +141,9 @@ export const CAPTURE_LIMITS = { boosts: 40, viewerBytes: 16 * 1024 }
 
 // The journal stops recording once it spans this many ids: the fan-out stalled, and REST is authoritative.
 export const JOURNAL_SPAN = 4096
+
+// The conversation changes of one owner a turn reads, the newest; older ones are skipped (REST is authoritative).
+export const CONVERSATIONS_PER_TURN = 20
 
 // Journal rows pruned per call, at or below the finished position.
 export const PRUNE_BATCH = 500
@@ -159,9 +197,9 @@ export type StreamSubject = { index: number; id: string }
 export type StreamEvent = { id: number; kind: string; subject: string; viewers: string[] }
 
 // The journal after `position`, oldest first, at most `limit` events, each with the accounts that may be sent it in
-// unit order: for a notification, its recipient while it exists; for a status, every account listening on `user`, and
-// for an edit on `user` or `user:notification` (the registry's, at most 256, read once a scan). A delete's units are
-// not read here. The event of a position within an event is read again (for its units after the position's), and a
+// unit order: for a notification, its recipient while it exists; for a merge, its recipient; for a status, every
+// account listening on `user` or a list, and for an edit on `user`, `user:notification` or a list (the registry's, at
+// most 256, read once a scan). A delete's units are not read here. The event of a position within an event is read again (for its units after the position's), and a
 // finished one is not, so a full window means more may follow. Also the journal's span.
 export const streamEvents = readOperation<
 	{ limit: number },
@@ -184,7 +222,8 @@ export const streamEvents = readOperation<
 			accounts = db
 				.all<{ account_id: string }>(
 					`SELECT DISTINCT account_id FROM stream_subscriptions
-					WHERE stream_key IN (SELECT value FROM json_each(?)) ORDER BY account_id`,
+					WHERE stream_key IN (SELECT value FROM json_each(?)) OR (stream_key > 'list:' AND stream_key < 'list;')
+					ORDER BY account_id`,
 					JSON.stringify(keys)
 				)
 				.map((row) => row.account_id)
@@ -197,6 +236,9 @@ export const streamEvents = readOperation<
 		switch (row.kind) {
 			case 'notification':
 				viewers = row.recipient === null ? [] : [row.recipient]
+				break
+			case 'merged':
+				viewers = [row.subject]
 				break
 			case 'status':
 				viewers = listening(['user'])
@@ -225,22 +267,23 @@ export const streamEvents = readOperation<
 export type StreamUnitAfter = { account: string; subject: number } | null
 
 // A page of a delete event's units after `after`: at most `rows` viewers' captures (stream_delete_viewers, by its key),
-// each viewer's status (subject 0) then its captured boosts oldest first, so the units read at once never exceed
-// `rows` × 41 however many viewers the capture holds; and where the next page starts, or null after the last.
+// each viewer's status (subject 0) then its captured boosts oldest first, each with the lists its capture allowed, so
+// the units read at once never exceed `rows` × 41 however many viewers the capture holds; and where the next page
+// starts, or null after the last.
 export const streamDeleteUnits = readOperation<
 	{ eventId: number; statusId: string; after: StreamUnitAfter; rows: number },
-	{ units: { viewer: string; subject: StreamSubject }[]; next: StreamUnitAfter }
+	{ units: { viewer: string; subject: StreamSubject; lists: string[] }[]; next: StreamUnitAfter }
 >((db, { eventId, statusId, after, rows }) => {
-	const captured = db.all<{ account_id: string; boosts: string }>(
-		`SELECT account_id, boosts FROM stream_delete_viewers WHERE event_id = ?1 AND account_id >= ?2
+	const captured = db.all<{ account_id: string; lists: string; boosts: string }>(
+		`SELECT account_id, lists, boosts FROM stream_delete_viewers WHERE event_id = ?1 AND account_id >= ?2
 		ORDER BY account_id LIMIT ?3`,
 		eventId,
 		after?.account ?? '',
 		rows
 	)
 	const units = captured.flatMap((row) =>
-		[statusId, ...(JSON.parse(row.boosts) as [string, string[]][]).map(([boost]) => boost)]
-			.map((id, index) => ({ viewer: row.account_id, subject: { index, id } }))
+		[[statusId, JSON.parse(row.lists) as string[]] as const, ...(JSON.parse(row.boosts) as [string, string[]][])]
+			.map(([id, lists], index) => ({ viewer: row.account_id, subject: { index, id }, lists: [...lists] }))
 			.filter((unit) => after === null || unit.viewer > after.account || unit.subject.index > after.subject)
 	)
 	const last = captured.at(-1)
@@ -253,13 +296,13 @@ export const streamDeleteUnits = readOperation<
 	}
 })
 
-// What a unit sends: one event, its payload (presented once), and the streams it goes on, each with the scopes a
-// socket's token needs for it; and the reference reads it made.
+// What a unit sends: one event, its payload (presented once), and the streams it goes on (by key), each with the
+// scopes a socket's token needs for it; and the reference reads it made.
 export type StreamUnit = {
 	grants: Record<string, StreamGrant>
 	event: string
 	payload: unknown
-	streams: { stream: ServedStream; needs: StreamGrant }[]
+	streams: { stream: string; needs: StreamGrant }[]
 	checks: number
 }
 
@@ -269,11 +312,21 @@ const BOTH: StreamGrant = { statuses: true, notifications: true }
 
 // One unit: the viewer's tokens checked (each one's grant, while valid), then the reference reads of the event for the
 // viewer's streams (R33), and the subject presented once if any reference returns it; for a delete, what its capture
-// allowed (R32). Nothing is sent when no token is valid. Each token is a check, and so is each reference read.
+// allowed (R32), with each captured list still the viewer's. `lists` are the list ids the unit may go on: those the
+// viewer's sockets subscribe to (for a delete, of those its capture allowed). Nothing is sent when no token is valid.
+// Each token is a check, and so is each reference read (at most 16 lists, home and the mention: UNIT_WORST in
+// stream-hub.ts).
 export const streamUnit = readOperation<
-	{ kind: string; subject: string; accountId: string; tokenHashes: readonly string[]; now: number },
+	{
+		kind: string
+		subject: string
+		accountId: string
+		tokenHashes: readonly string[]
+		lists?: readonly string[]
+		now: number
+	},
 	StreamUnit
->((db, { kind, subject, accountId, tokenHashes, now }) => {
+>((db, { kind, subject, accountId, tokenHashes, lists = [], now }) => {
 	const { scopes, context } = authorizeStream(db, accountId, tokenHashes, now)
 	const grants = Object.fromEntries([...scopes].map(([hash, granted]) => [hash, streamGrant(granted)]))
 	const none = { grants, event: '', payload: null, streams: [], checks: 0 }
@@ -305,59 +358,122 @@ export const streamUnit = readOperation<
 					WHERE id = ? AND published_at >= strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '${REAL_TIME_WINDOW}')`,
 					subject
 				) !== undefined
-			const shown = fresh ? homeStatus(db, context, subject) : null
+			const home = fresh ? homeStatus(db, context, subject) : null
+			const listed = fresh ? listedIn(db, context, lists, subject) : []
+			const shown = home ?? listed[0]?.status ?? null
 			const status = shown === null ? null : presentStatus(db, shown, { origin, viewer: context })
-			return status === null
-				? { ...none, checks: fresh ? 1 : 0 }
-				: { grants, event: 'update', payload: status, streams: [{ stream: 'user', needs: STATUSES }], checks: 1 }
+			const checks = fresh ? 1 + lists.length : 0
+			if (status === null) {
+				return { ...none, checks }
+			}
+			const streams: StreamUnit['streams'] = home === null ? [] : [{ stream: 'user', needs: STATUSES }]
+			return { grants, event: 'update', payload: status, streams: [...streams, ...listStreams(listed)], checks }
 		}
 		case 'edit': {
 			const home = homeStatus(db, context, subject)
 			const mention = notified ? mentionedStatus(db, context, subject) : null
-			const shown = home ?? mention
+			const listed = listedIn(db, context, lists, subject)
+			const shown = home ?? mention ?? listed[0]?.status ?? null
 			const status = shown === null ? null : presentStatus(db, shown, { origin, viewer: context })
-			const checks = notified ? 2 : 1
+			const checks = (notified ? 2 : 1) + lists.length
 			if (status === null) {
 				return { ...none, checks }
 			}
-			const streams: StreamUnit['streams'] = [{ stream: 'user', needs: home !== null ? STATUSES : BOTH }]
+			const streams: StreamUnit['streams'] = []
+			if (home !== null || mention !== null) {
+				streams.push({ stream: 'user', needs: home !== null ? STATUSES : BOTH })
+			}
 			if (mention !== null) {
 				streams.push({ stream: 'user:notification', needs: NOTIFICATIONS })
 			}
-			return { grants, event: 'status.update', payload: status, streams, checks }
+			return { grants, event: 'status.update', payload: status, streams: [...streams, ...listStreams(listed)], checks }
 		}
-		case 'delete':
-			return { grants, event: 'delete', payload: subject, streams: [{ stream: 'user', needs: STATUSES }], checks: 0 }
+		case 'delete': {
+			// The captured lists still the viewer's (R32: a list deleted since receives nothing).
+			const owned = lists.filter((id) => ownList(db, accountId, id) !== undefined)
+			return {
+				grants,
+				event: 'delete',
+				payload: subject,
+				streams: [
+					{ stream: 'user', needs: STATUSES },
+					...owned.map((id) => ({ stream: listKey(id), needs: STATUSES })),
+				],
+				checks: lists.length,
+			}
+		}
+		case 'merged':
+			// No reference to read: the transition was judged when it was written (notification-requests.ts).
+			return notified
+				? {
+						grants,
+						event: 'notifications_merged',
+						payload: '1',
+						streams: [
+							{ stream: 'user', needs: BOTH },
+							{ stream: 'user:notification', needs: NOTIFICATIONS },
+						],
+						checks: 0,
+					}
+				: none
+		case 'conversation': {
+			const conversation = streamedConversation(db, context, subject, { origin })
+			return conversation === null
+				? { ...none, checks: 1 }
+				: {
+						grants,
+						event: 'conversation',
+						payload: conversation,
+						streams: [{ stream: 'direct', needs: STATUSES }],
+						checks: 1,
+					}
+		}
 		default:
 			return none
 	}
 })
 
+// The lists among `lists` whose read positioned at the status returns it, each with the status.
+function listedIn(db: Db, viewer: UserContext, lists: readonly string[], statusId: string) {
+	return lists.flatMap((id) => {
+		const status = listStatus(db, viewer, id, statusId)
+		return status === null ? [] : [{ id, status }]
+	})
+}
+
+function listStreams(listed: readonly { id: string }[]): StreamUnit['streams'] {
+	return listed.map(({ id }) => ({ stream: listKey(id), needs: STATUSES }))
+}
+
 // R32's capture of the delete of the status (or boost) `statusId`, made once, before the first change to its audience
 // (the four sites: deleteStatus and unreblog in statuses.ts, a remote Delete when its job is created and a remote
 // Delete or Undo of a boost in inbox.ts): a 'delete' event in the journal, with one row per account listening on `user`
-// that may view the status (R3), holding the boosts of it the account may view (deleteAudience in audience.ts, at most
-// CAPTURE_LIMITS.boosts). Nothing is written when nobody listening may view it, or when the journal is full (the
-// fan-out stalled; logged as the triggers' events are). The rows are at most 1 + 256 (the registry's accounts), each
-// within CAPTURE_LIMITS.viewerBytes; a row over it is truncated and logged, never refused, so the capture never fails
-// the delete.
+// or a list that may view the status (R3), holding the boosts of it the account may view (deleteAudience in
+// audience.ts, at most CAPTURE_LIMITS.boosts), and for the status and each boost the account's subscribed lists whose
+// read positioned at it returns it (listStatus: at most 16 lists, each a narrowed read). Nothing is written when nobody
+// listening may view it, or when the journal is full (the fan-out stalled; logged as the triggers' events are). The rows
+// are at most 1 + 256 (the registry's accounts), each within CAPTURE_LIMITS.viewerBytes; a row over it is truncated and
+// logged, never refused, so the capture never fails the delete.
 export function streamDelete(db: Db, statusId: string, now: number): void {
-	const listeners = db
-		.all<{ account_id: string }>(
-			"SELECT account_id FROM stream_subscriptions WHERE stream_key = 'user' ORDER BY account_id"
-		)
-		.map((row) => row.account_id)
-	if (listeners.length === 0) {
+	const listening = new Map<string, string[]>()
+	for (const row of db.all<{ account_id: string; stream_key: string }>(
+		`SELECT account_id, stream_key FROM stream_subscriptions
+		WHERE stream_key = 'user' OR (stream_key > 'list:' AND stream_key < 'list;') ORDER BY account_id`
+	)) {
+		const lists = listening.get(row.account_id) ?? []
+		const list = keyList(row.stream_key)
+		if (list !== null) {
+			lists.push(list)
+		}
+		listening.set(row.account_id, lists)
+	}
+	if (listening.size === 0) {
 		return
 	}
-	const span = db.first<{ span: number }>(
-		'SELECT coalesce((SELECT max(id) FROM stream_events) - (SELECT min(id) FROM stream_events), 0) AS span'
-	)
-	if ((span?.span ?? 0) >= JOURNAL_SPAN) {
-		console.warn({ event: 'kopje.stream.journal-full', kind: 'delete' })
+	if (journalFull(db, 'delete')) {
 		return
 	}
-	const audience = deleteAudience(db, statusId, listeners, CAPTURE_LIMITS.boosts)
+	const audience = deleteAudience(db, statusId, [...listening.keys()], CAPTURE_LIMITS.boosts)
 	if (audience.length === 0) {
 		return
 	}
@@ -367,7 +483,13 @@ export function streamDelete(db: Db, statusId: string, now: number): void {
 		new Date(now).toISOString()
 	)!.id
 	for (const viewer of audience) {
-		const row = captureRow(viewer.boosts.map((boost) => [boost, []]))
+		const subscribed = listening.get(viewer.accountId) ?? []
+		const context = listenerContext(viewer.accountId, now)
+		const lists = (id: string) => subscribed.filter((list) => listStatus(db, context, list, id) !== null)
+		const row = captureRow(
+			lists(statusId),
+			viewer.boosts.map((boost) => [boost, lists(boost)])
+		)
 		db.run(
 			'INSERT INTO stream_delete_viewers (event_id, account_id, lists, boosts) VALUES (?, ?, ?, ?)',
 			event,
@@ -379,20 +501,27 @@ export function streamDelete(db: Db, statusId: string, now: number): void {
 }
 
 // A viewer's capture as its row's JSON, within CAPTURE_LIMITS.viewerBytes: boosts dropped from the newest while it is
-// over (logged once). Its list ids are none until lists stream.
-function captureRow(boosts: [string, string[]][]): { lists: string; boosts: string } {
-	const lists = '[]'
-	const kept = [...boosts]
-	const size = () => JSON.stringify(kept).length + lists.length
+// over, then the status's list ids (logged once).
+function captureRow(lists: string[], boosts: [string, string[]][]): { lists: string; boosts: string } {
+	const kept = { lists: [...lists], boosts: [...boosts] }
+	const size = () => JSON.stringify(kept.boosts).length + JSON.stringify(kept.lists).length
 	let truncated = false
-	while (size() > CAPTURE_LIMITS.viewerBytes && kept.length > 0) {
+	while (size() > CAPTURE_LIMITS.viewerBytes && (kept.boosts.length > 0 || kept.lists.length > 0)) {
 		truncated = true
-		kept.pop()
+		if (kept.boosts.length > 0) {
+			kept.boosts.pop()
+		} else {
+			kept.lists.pop()
+		}
 	}
 	if (truncated) {
-		console.warn({ event: 'kopje.stream.capture-truncated', boosts: kept.length, lists: 0 })
+		console.warn({
+			event: 'kopje.stream.capture-truncated',
+			boosts: kept.boosts.length,
+			lists: kept.lists.length,
+		})
 	}
-	return { lists, boosts: JSON.stringify(kept) }
+	return { lists: JSON.stringify(kept.lists), boosts: JSON.stringify(kept.boosts) }
 }
 
 // Moves the position from `from` to `to` if it is still at `from`: false when another turn moved it first.
@@ -447,14 +576,69 @@ export const streamPrune = sessionOperation<{ upTo: number }, { pruned: number; 
 export type StreamKeys = readonly { key: string; sockets: number }[]
 
 // The stream keys an account's open sockets subscribe to, replacing what was recorded: written on subscribe,
-// unsubscribe and close.
-export const streamRegister = sessionOperation<{ accountId: string; keys: StreamKeys }, null>(
+// unsubscribe and close. With `direct`, the account's conversation mark, made on its first subscription from the highest
+// stream_seq of its conversations (one seek of conversations_stream), never lowered; returned as where a socket that
+// subscribes now starts (its convSeq).
+export const streamRegister = sessionOperation<{ accountId: string; keys: StreamKeys }, { convSeq: number | null }>(
 	(db, { accountId, keys }) => {
 		db.run('DELETE FROM stream_subscriptions WHERE account_id = ?', accountId)
 		insertKeys(db, accountId, keys)
-		return null
+		if (!keys.some(({ key }) => key === 'direct')) {
+			return { convSeq: null }
+		}
+		db.run(
+			`INSERT INTO stream_conversation_marks (account_id, seq)
+			SELECT ?1, coalesce((SELECT max(stream_seq) FROM conversations WHERE account_id = ?1), 0)
+			ON CONFLICT (account_id) DO NOTHING`,
+			accountId
+		)
+		return {
+			convSeq: db.first<{ seq: number }>('SELECT seq FROM stream_conversation_marks WHERE account_id = ?', accountId)!
+				.seq,
+		}
 	}
 )
+
+// Whether the list `listId` is the account's: a `list` subscription needs it (Mastodon's authorizeListAccess), and each
+// message checks it again (listStatus, or a delete's ownList).
+export const streamListOwned = readOperation<{ accountId: string; listId: string }, boolean>(
+	(db, { accountId, listId }) => ownList(db, accountId, listId) !== undefined
+)
+
+// An owner's conversation changes above `after` (the lowest convSeq of its `direct` sockets): the newest `limit`, by
+// conversations_stream, oldest of them first, so a turn sends them in order and each socket's convSeq rises with each.
+// Older changes are skipped.
+export const streamConversations = readOperation<
+	{ accountId: string; after: number; limit: number },
+	{ id: string; seq: number }[]
+>((db, { accountId, after, limit }) =>
+	db
+		.all<{ id: string; seq: number }>(
+			`SELECT CAST(id AS TEXT) AS id, stream_seq AS seq FROM conversations WHERE account_id = ?1 AND stream_seq > ?2
+			ORDER BY stream_seq DESC LIMIT ?3`,
+			accountId,
+			after,
+			limit
+		)
+		.reverse()
+)
+
+// The streaming API's `notifications_merged` for the account (notification-requests.ts calls it on its transition to
+// no pending accept job): a 'merged' event in the journal, while the account listens on `user` or `user:notification`
+// (the scope is checked when it is sent) and the journal is not full.
+export function streamMerged(db: Db, accountId: string, now: string): void {
+	const listening = db.first(
+		"SELECT 1 AS x FROM stream_subscriptions WHERE account_id = ? AND stream_key IN ('user', 'user:notification')",
+		accountId
+	)
+	if (listening === undefined) {
+		return
+	}
+	if (journalFull(db, 'merged')) {
+		return
+	}
+	db.run("INSERT INTO stream_events (kind, subject, created_at) VALUES ('merged', ?, ?)", accountId, now)
+}
 
 // The whole registry rebuilt from the open sockets, by the first turn after the Store starts (sockets closed while it
 // was not running left their rows).
@@ -468,12 +652,23 @@ export const streamReconcile = sessionOperation<{ accounts: readonly { accountId
 	}
 )
 
-// Whether the fan-out has reached the journal's head (the drain barrier of the streaming tests).
-export const streamCaughtUp = readOperation<void, boolean>((db) => {
-	const position = readPosition(db)
-	const head = journalHead(db)
-	return head === 0 || (position.event >= head && position.account === null)
-})
+// Whether the fan-out has reached the journal's head and, for each owner with `direct` sockets, has no conversation
+// change above the lowest convSeq of those sockets (the drain barrier of the streaming tests).
+export const streamCaughtUp = readOperation<{ owners: readonly { accountId: string; after: number }[] }, boolean>(
+	(db, { owners }) => {
+		const position = readPosition(db)
+		const head = journalHead(db)
+		const pending = owners.some(
+			({ accountId, after }) =>
+				db.first(
+					'SELECT 1 AS x FROM conversations WHERE account_id = ? AND stream_seq > ? LIMIT 1',
+					accountId,
+					after
+				) !== undefined
+		)
+		return !pending && (head === 0 || (position.event >= head && position.account === null))
+	}
+)
 
 // The operations the hub runs for itself: their commits start no turn.
 export const STREAM_OPERATIONS: ReadonlySet<StoreOperation<never, unknown>> = new Set<StoreOperation<never, unknown>>([
@@ -499,6 +694,18 @@ function readPosition(db: Db): StreamPosition {
 		'SELECT event_id, subject, account_id FROM stream_cursor WHERE id = 1'
 	)
 	return { event: row?.event_id ?? 0, subject: row?.subject ?? 0, account: row?.account_id ?? null }
+}
+
+// Whether the journal spans JOURNAL_SPAN ids (the fan-out stalled), logged for an event of `kind` it then refuses.
+function journalFull(db: Db, kind: string): boolean {
+	const span = db.first<{ span: number }>(
+		'SELECT coalesce((SELECT max(id) FROM stream_events) - (SELECT min(id) FROM stream_events), 0) AS span'
+	)
+	if ((span?.span ?? 0) < JOURNAL_SPAN) {
+		return false
+	}
+	console.warn({ event: 'kopje.stream.journal-full', kind })
+	return true
 }
 
 function journalHead(db: Db): number {

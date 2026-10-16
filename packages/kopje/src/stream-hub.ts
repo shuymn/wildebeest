@@ -1,5 +1,8 @@
 import {
+	CONVERSATIONS_PER_TURN,
 	JOURNAL_SPAN,
+	keyList,
+	listKey,
 	mayCarry,
 	maySubscribe,
 	SERVED_STREAMS,
@@ -9,11 +12,13 @@ import {
 	streamAccept,
 	streamAdvance,
 	streamCaughtUp,
+	streamConversations,
 	streamDeleteUnits,
 	type StreamEvent,
 	type StreamGrant,
 	streamEvents,
 	type StreamKeys,
+	streamListOwned,
 	type StreamPosition,
 	streamPrune,
 	type StreamSubject,
@@ -58,11 +63,12 @@ export const STREAM_LIMITS = {
 
 type Charge = { checks: number; presentations: number; bytes: number; sends: number }
 
-// What one turn may do, and what one unit may do at most: 16 token checks and the reference reads of 16 keys and a
-// mention (design §4.4; this release reads at most two: home and the mention), one presentation, and a send to each
-// of 16 subscriptions on each of 16 sockets.
+// What one turn may do, and what one unit may do at most: 16 token checks and the reference reads of an edit (home, the
+// mention, and up to 16 lists: an account has at most 16 keys, all of them lists at most, and an edit reads home and
+// the mention whatever it subscribes to), one presentation, and a send to each of 16 subscriptions on each of 16
+// sockets.
 export const TURN_BUDGET: Charge = { checks: 512, presentations: 64, bytes: 4 * 1024 * 1024, sends: 4096 }
-const UNIT_WORST: Charge = { checks: 33, presentations: 1, bytes: STREAM_LIMITS.payloadBytes, sends: 256 }
+const UNIT_WORST: Charge = { checks: 34, presentations: 1, bytes: STREAM_LIMITS.payloadBytes, sends: 256 }
 
 // Journal events read per scan of a turn.
 const SCAN = 64
@@ -70,22 +76,24 @@ const SCAN = 64
 const TURN_URL = 'https://store.internal/stream/turn'
 const TURN_HEADER = 'x-kopje-turn'
 
-// A socket's state (design §4.5). since: the journal head when it opened (it receives later events only); rate: the
-// minute its message count started; subs: its subscriptions, in order.
+// A socket's state (design §4.5). since: the journal head when it opened (it receives later events only); convSeq: the
+// highest conversation change sent or skipped on `direct` (raised, and written, before a conversation is sent); rate:
+// the minute its message count started; subs: its subscriptions' keys (a stream's name, or `list:<id>`), in order.
 type Attachment = {
 	v: 1
 	tokenHash: string
 	accountId: string
 	grant: StreamGrant
 	since: number
+	convSeq: number
 	rate: { window: number; count: number }
-	subs: ServedStream[]
+	subs: string[]
 }
 
 type Socket = { ws: WebSocket; at: Attachment }
 
-// One subject of an event for one viewer, with the viewer's sockets that may carry it.
-type Unit = { subject: StreamSubject; viewer: string; sockets: Socket[] }
+// One subject of an event for one viewer, with the viewer's sockets that may carry it and the list ids it may go on.
+type Unit = { subject: StreamSubject; viewer: string; sockets: Socket[]; lists: string[] }
 
 // A scan's walk: the position as this turn moved it, and an event passed over whose position write is pending.
 type Walk = { from: StreamPosition; skipTo: StreamPosition | null }
@@ -165,7 +173,7 @@ export class StreamHub {
 				if (this.#failed) {
 					throw new Error('the last stream turn failed')
 				}
-				if (await this.#run(streamCaughtUp, undefined)) {
+				if (await this.#run(streamCaughtUp, { owners: this.#owners() })) {
 					return { turns: this.#turns }
 				}
 				this.#request()
@@ -249,6 +257,7 @@ export class StreamHub {
 			accountId,
 			grant: accepted.grant,
 			since: accepted.since,
+			convSeq: 0,
 			rate: { window: Date.now(), count: 0 },
 			subs: [],
 		}
@@ -265,8 +274,9 @@ export class StreamHub {
 		return new Response(null, { status: 101, webSocket: client })
 	}
 
-	// Mastodon's order (subscribeWebsocketToChannel): the scope first, then the stream, and a stream already subscribed
-	// is ignored. There is no acknowledgement; a refusal is an error message.
+	// Mastodon's order (subscribeWebsocketToChannel): the scope first, then the stream and its parameter (a list must be
+	// the account's), and a stream already subscribed is ignored. There is no acknowledgement; a refusal is an error
+	// message.
 	async #subscribe(ws: WebSocket, at: Attachment, json: Record<string, unknown>): Promise<void> {
 		const name = firstParam(json.stream)
 		if (!maySubscribe(at.grant, name)) {
@@ -276,10 +286,20 @@ export class StreamHub {
 		if (stream === undefined) {
 			return send(ws, { error: 'Unknown stream type', status: 400 })
 		}
-		if (at.subs.includes(stream)) {
+		let key: string = stream
+		if (stream === 'list') {
+			if (json.list === undefined || json.list === null || json.list === '') {
+				return send(ws, { error: 'Missing list name parameter', status: 400 })
+			}
+			if (typeof json.list !== 'string' || !LIST_ID.test(json.list)) {
+				return send(ws, { error: 'Invalid parameter', status: 400 })
+			}
+			key = listKey(json.list)
+		}
+		if (at.subs.includes(key)) {
 			return
 		}
-		const next: Attachment = { ...at, subs: [...at.subs, stream] }
+		const next: Attachment = { ...at, subs: [...at.subs, key] }
 		// The account's keys with this socket's as they would be.
 		const keys = this.#keys(at.accountId, ws)
 		for (const sub of next.subs) {
@@ -295,13 +315,23 @@ export class StreamHub {
 		// The registry first: a subscription it does not hold would journal nothing for the account. A refused write (a
 		// dump's freeze, maintenance) leaves the socket unsubscribed and says so, as Mastodon answers an unexpected
 		// failure, so the client subscribes again.
+		let registered
 		try {
-			await this.#run(streamRegister, { accountId: at.accountId, keys: keysOf(keys) })
+			const list = keyList(key)
+			if (list !== null && !(await this.#run(streamListOwned, { accountId: at.accountId, listId: list }))) {
+				return send(ws, { error: 'Not authorized to stream this list', status: 401 })
+			}
+			registered = await this.#run(streamRegister, { accountId: at.accountId, keys: keysOf(keys) })
 		} catch (error) {
 			console.warn({ event: 'kopje.stream.register-failed', ...errorFields(error) })
 			return send(ws, { error: 'An unexpected error occurred', status: 500 })
 		}
-		ws.serializeAttachment(next)
+		// On the attachment as it is now (a turn may have raised its convSeq meanwhile); `direct` starts at the mark.
+		this.#update(ws, (current) => ({
+			...current,
+			subs: current.subs.includes(key) ? current.subs : [...current.subs, key],
+			convSeq: key === 'direct' ? (registered.convSeq ?? 0) : current.convSeq,
+		}))
 	}
 
 	// Mastodon's unsubscribeWebsocketFromChannel: a stream it cannot resolve answers its one unsubscribe error.
@@ -311,11 +341,20 @@ export class StreamHub {
 		if (!STREAM_NAMES.includes(name) || missing) {
 			return send(ws, { error: 'Error unsubscribing from channel' })
 		}
-		if (!at.subs.some((sub) => sub === name)) {
+		const key = name === 'list' ? listKey(String(json.list)) : name
+		if (!at.subs.includes(key)) {
 			return
 		}
-		ws.serializeAttachment({ ...at, subs: at.subs.filter((sub) => sub !== name) })
+		this.#update(ws, (current) => ({ ...current, subs: current.subs.filter((sub) => sub !== key) }))
 		await this.#sync(at.accountId)
+	}
+
+	// Rewrites a socket's attachment from its current one (an await may have let another handler or a turn write it).
+	#update(ws: WebSocket, change: (at: Attachment) => Attachment): void {
+		const current = peek(ws)
+		if (current !== null) {
+			ws.serializeAttachment(change(current))
+		}
 	}
 
 	async #drop(ws: WebSocket, at: Attachment, code: number, reason: string): Promise<void> {
@@ -466,9 +505,55 @@ export class StreamHub {
 				const { from } = state
 				const finished = from.account === null ? from.event : from.event - 1
 				// What is left to prune takes further turns, a bounded batch each.
-				return (await this.#run(streamPrune, { upTo: finished })).more
+				const pruning = (await this.#run(streamPrune, { upTo: finished })).more
+				return (await this.#conversations(budget)) || pruning
 			}
 		}
+	}
+
+	// The `direct` sockets' owners, each with the lowest convSeq of its sockets.
+	#owners(): { accountId: string; after: number }[] {
+		const owners = new Map<string, number>()
+		for (const { at } of this.#open()) {
+			if (at.subs.includes('direct')) {
+				owners.set(at.accountId, Math.min(owners.get(at.accountId) ?? at.convSeq, at.convSeq))
+			}
+		}
+		return [...owners].sort(([a], [b]) => (a < b ? -1 : 1)).map(([accountId, after]) => ({ accountId, after }))
+	}
+
+	// The conversation units, after the journal's: for each owner with `direct` sockets, its newest changes above the
+	// lowest convSeq of those sockets (at most CONVERSATIONS_PER_TURN, older ones skipped), oldest of them first, each
+	// one subject for the owner. Before a change is sent, the convSeq of each socket it goes to is raised to it and
+	// written, so it is sent at most once; a socket's convSeq at or above it already had it, or skipped it. Every owner
+	// whose changes were read moves its sockets' convSeq. Returns whether the budget stopped the walk.
+	async #conversations(budget: Budget): Promise<boolean> {
+		for (const { accountId, after } of this.#owners()) {
+			if (!budget.covers(UNIT_WORST)) {
+				return true
+			}
+			const changes = await this.#run(streamConversations, { accountId, after, limit: CONVERSATIONS_PER_TURN })
+			budget.charge({ checks: 1 })
+			for (const { id, seq } of changes) {
+				if (!budget.covers(UNIT_WORST)) {
+					return true
+				}
+				const sockets = this.#open(accountTag(accountId)).filter(
+					({ at }) => at.subs.includes('direct') && at.convSeq < seq
+				)
+				if (sockets.length === 0) {
+					continue
+				}
+				const unit: Unit = { subject: { index: 0, id }, viewer: accountId, sockets, lists: [] }
+				await this.#deliver('conversation', unit, budget, () => {
+					for (const { ws } of sockets) {
+						this.#update(ws, (at) => ({ ...at, convSeq: Math.max(at.convSeq, seq) }))
+					}
+					return Promise.resolve(true)
+				})
+			}
+		}
+		return false
 	}
 
 	// The units of one event, sent in order from the position. A delete's are read a page of viewers at a time, each
@@ -550,37 +635,46 @@ export class StreamHub {
 	}
 
 	// The units an event's candidates make, in order: each viewer with an open socket that opened before the event and
-	// has a subscription that may carry it.
-	#units(event: StreamEvent, candidates: readonly { viewer: string; subject: StreamSubject }[]): Unit[] {
+	// has a subscription that may carry it, with the lists those sockets subscribe to (of a delete's, those its capture
+	// allowed).
+	#units(
+		event: StreamEvent,
+		candidates: readonly { viewer: string; subject: StreamSubject; lists?: readonly string[] }[]
+	): Unit[] {
 		// A viewer's sockets are selected once for all its subjects (a delete has up to 41 each).
-		const selected = new Map<string, Socket[]>()
-		return candidates.flatMap(({ viewer, subject }) => {
-			let sockets = selected.get(viewer)
-			if (sockets === undefined) {
-				sockets = this.#open(accountTag(viewer)).filter(
+		const selected = new Map<string, { sockets: Socket[]; lists: Set<string> }>()
+		return candidates.flatMap(({ viewer, subject, lists }) => {
+			let found = selected.get(viewer)
+			if (found === undefined) {
+				const sockets = this.#open(accountTag(viewer)).filter(
 					({ at }) => at.since < event.id && at.subs.some((sub) => mayCarry(event.kind, at.grant, sub))
 				)
-				selected.set(viewer, sockets)
+				const subscribed = sockets.flatMap(({ at }) => at.subs.flatMap((sub) => keyList(sub) ?? []))
+				found = { sockets, lists: new Set(subscribed) }
+				selected.set(viewer, found)
 			}
-			return sockets.length === 0 ? [] : [{ subject, viewer, sockets }]
+			const { sockets, lists: subscribed } = found
+			const unitLists = lists === undefined ? [...subscribed] : lists.filter((list) => subscribed.has(list))
+			return sockets.length === 0 ? [] : [{ subject, viewer, sockets, lists: unitLists.sort() }]
 		})
 	}
 
-	// One unit: made in its own transaction (tokens checked, the reference reads, the presentation), the position moved
-	// past it, then sent. Returns false when another turn moved the position first.
-	async #unit(
-		event: StreamEvent,
-		unit: Unit,
-		from: StreamPosition,
-		to: StreamPosition,
-		budget: Budget
-	): Promise<boolean> {
+	// One unit of the journal: made, the position moved past it, then sent. Returns false when another turn moved the
+	// position first.
+	#unit(event: StreamEvent, unit: Unit, from: StreamPosition, to: StreamPosition, budget: Budget): Promise<boolean> {
+		return this.#deliver(event.kind, unit, budget, () => this.#run(streamAdvance, { from, to }))
+	}
+
+	// One unit: made in its own transaction (tokens checked, the reference reads, the presentation), its progress
+	// persisted (`commit`: the position, or the sockets' convSeq), then sent. Returns false when `commit` refuses.
+	async #deliver(kind: string, unit: Unit, budget: Budget, commit: () => Promise<boolean>): Promise<boolean> {
 		const tokenHashes = [...new Set(unit.sockets.map(({ at }) => at.tokenHash))]
 		const made = await this.#run(streamUnit, {
-			kind: event.kind,
+			kind,
 			subject: unit.subject.id,
 			accountId: unit.viewer,
 			tokenHashes,
+			lists: unit.lists,
 			now: Date.now(),
 		})
 		budget.charge({ checks: tokenHashes.length + made.checks })
@@ -591,14 +685,14 @@ export class StreamHub {
 				budget.charge({ presentations: 1, bytes: payload.length })
 			}
 			if (exceeds(payload, STREAM_LIMITS.payloadBytes)) {
-				console.warn({ event: 'kopje.stream.payload-skipped', kind: event.kind })
+				console.warn({ event: 'kopje.stream.payload-skipped', kind })
 				payload = null
 			}
 		}
 		const revoked: Socket[] = []
 		const messages: { ws: WebSocket; text: string }[] = []
 		// One envelope per stream: every socket of the unit is sent the same presentation.
-		const envelopes = new Map<ServedStream, string>()
+		const envelopes = new Map<string, string>()
 		for (const socket of unit.sockets) {
 			const grant = made.grants[socket.at.tokenHash]
 			if (grant === undefined) {
@@ -619,7 +713,7 @@ export class StreamHub {
 				}
 			}
 		}
-		if (!(await this.#run(streamAdvance, { from, to }))) {
+		if (!(await commit())) {
 			return false
 		}
 		let sent = 0
@@ -722,6 +816,7 @@ function peek(ws: WebSocket): Attachment | null {
 		typeof grant.statuses === 'boolean' &&
 		typeof grant.notifications === 'boolean' &&
 		Number.isSafeInteger(at.since) &&
+		Number.isSafeInteger(at.convSeq) &&
 		typeof rate === 'object' &&
 		rate !== null &&
 		Number.isFinite(rate.window) &&
@@ -729,8 +824,17 @@ function peek(ws: WebSocket): Attachment | null {
 		Array.isArray(subs) &&
 		subs.length <= STREAM_LIMITS.subscriptionsPerSocket &&
 		new Set(subs).size === subs.length &&
-		subs.every((sub) => SERVED_STREAMS.includes(sub as ServedStream))
+		subs.every((sub) => typeof sub === 'string' && validKey(sub))
 	return valid ? (value as Attachment) : null
+}
+
+// A list id as a `list` parameter may name one (Kopje's are 18 digits; Mastodon's at most 19).
+const LIST_ID = /^\d{1,19}$/
+
+// Whether `key` is a subscription key Kopje serves: a served stream's name, or `list:<id>`.
+function validKey(key: string): boolean {
+	const list = keyList(key)
+	return list === null ? SERVED_STREAMS.includes(key as ServedStream) && key !== 'list' : LIST_ID.test(list)
 }
 
 // A message's `stream`: its first element if it is an array (streaming/utils.js firstParam), as a string.
@@ -751,10 +855,12 @@ function parseObject(text: string): Record<string, unknown> | null {
 	}
 }
 
-// An outgoing message (streaming/index.js streamToWs): the stream as the client named it, the event, and the payload,
-// a JSON string already encoded once for all envelopes.
-function envelope(stream: ServedStream, event: string, encodedPayload: string): string {
-	return `{"stream":${JSON.stringify([stream])},"event":${JSON.stringify(event)},"payload":${encodedPayload}}`
+// An outgoing message (streaming/index.js streamToWs): the stream as the client named it (a list's as `["list", id]`,
+// the id as the client sent it), the event, and the payload, a JSON string already encoded once for all envelopes.
+function envelope(key: string, event: string, encodedPayload: string): string {
+	const list = keyList(key)
+	const stream = list === null ? [key] : ['list', list]
+	return `{"stream":${JSON.stringify(stream)},"event":${JSON.stringify(event)},"payload":${encodedPayload}}`
 }
 
 function send(ws: WebSocket, message: Record<string, unknown>): void {
