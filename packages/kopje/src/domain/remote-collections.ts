@@ -234,11 +234,12 @@ export function localFollower(db: Db, accountId: string): string | null {
 
 // A sync a round claimed: the account, the collections its stored document names, the phase, the pending statuses
 // (phase pins, in order), and the local follower whose key signs the fetches (FetchFeaturedCollectionService#
-// local_follower: the first available one), or null for the instance actor. generation: the request the round read,
-// which it hands back. pending: another sync is due.
+// local_follower: the first available one), or null for the instance actor. generation: the request the round read;
+// token: the claim, unique to this round. Both are handed back. pending: another sync is due.
 export type CollectionSync = ActorCollections & {
 	accountUri: string
 	generation: number
+	token: string
 	phase: 'read' | 'pins'
 	uris: string[]
 	signer: string | null
@@ -293,14 +294,17 @@ export const claimCollectionSync = writeOperation<{ now: number }, CollectionSyn
 			dropSync(db, row.account_id)
 			continue
 		}
+		const token = crypto.randomUUID()
 		db.run(
-			'UPDATE collection_syncs SET due_at = ?, attempts = attempts + 1 WHERE account_id = ?',
+			'UPDATE collection_syncs SET due_at = ?, token = ?, attempts = attempts + 1 WHERE account_id = ?',
 			now + SYNC_LEASE_MS,
+			token,
 			row.account_id
 		)
 		return {
 			accountUri: account.uri,
 			generation: row.generation,
+			token,
 			phase: read ? 'read' : 'pins',
 			uris,
 			...actorCollections(account.raw),
@@ -325,7 +329,8 @@ function endRound(db: Db, accountId: string, generation: number, progressed: boo
 	} else if (row !== undefined) {
 		const renewed = progressed || row.generation !== generation
 		db.run(
-			`UPDATE collection_syncs SET due_at = ?, attempts = CASE WHEN ? THEN 0 ELSE attempts END WHERE account_id = ?`,
+			`UPDATE collection_syncs SET due_at = ?, token = NULL, attempts = CASE WHEN ? THEN 0 ELSE attempts END
+			WHERE account_id = ?`,
 			renewed ? now : now + SYNC_RETRY_MS,
 			renewed ? 1 : 0,
 			accountId
@@ -334,12 +339,17 @@ function endRound(db: Db, accountId: string, generation: number, progressed: boo
 	return claimable(db, now) !== undefined
 }
 
-type RoundInput = { now: number; origin: string; accountUri: string; generation: number }
+type RoundInput = { now: number; origin: string; accountUri: string; generation: number; token: string }
 
-// The account of a round's end, while it is an available remote account; a sync of one that is not is dropped.
+// The account of a round's end, while its claim is the current one (else the round's lease ended and another round
+// took the sync, or the sync was deleted and asked for anew: nothing changes) and it is an available remote account
+// (a sync of one that is not is dropped).
 function roundAccount(db: Db, input: RoundInput): { id: string; uri: string } | null {
 	const account = db.first<{ id: string; uri: string; available: number }>(
-		`SELECT id, uri, ${availableSql('accounts.id')} AS available FROM accounts WHERE uri = ? AND domain IS NOT NULL`,
+		`SELECT a.id, a.uri, ${availableSql('a.id')} AS available
+		FROM accounts a JOIN collection_syncs c ON c.account_id = a.id AND c.token = ?
+		WHERE a.uri = ? AND a.domain IS NOT NULL`,
+		input.token,
 		input.accountUri
 	)
 	if (account === undefined) {

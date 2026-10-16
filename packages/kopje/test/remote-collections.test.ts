@@ -21,7 +21,7 @@ import {
 	update,
 } from './inbox-status-helpers'
 import { FEATURED_COUNT_WINDOW, MAX_FEATURED_TAGS } from '../src/domain/featured-tags'
-import { MAX_REMOTE_PINS, SYNC_RETRY_MS } from '../src/domain/remote-collections'
+import { MAX_REMOTE_PINS, SYNC_LEASE_MS, SYNC_RETRY_MS } from '../src/domain/remote-collections'
 import { COLLECTION_SYNCS_PER_ROUND, MAX_FEATURED_TAG_PAGES, syncCollections } from '../src/federation/collections'
 import { REQUEST_MAX_FETCHES } from '../src/federation/loader'
 
@@ -582,5 +582,50 @@ describe('reading a remote account’s collections', () => {
 		await syncCollections(t.env, deps(t))
 		expect((await t.api<Account>(`/api/v1/accounts/${bobId}`, null)).body.hide_collections).toBe(true)
 		expect((await t.api<Account[]>(`/api/v1/accounts/${bobId}/followers`, null)).body).toEqual([])
+	})
+})
+
+describe('a round’s claim of a sync', () => {
+	const ORIGIN = 'https://kopje.test'
+	const read = (tags: string[]) => ({ pins: null, tags, hideCollections: null, unfinished: false })
+	const claim = async (t: Setup, now: number) => {
+		const sync = await t.store.claimCollectionSync(BUILD, { now })
+		expect(sync).not.toBeNull()
+		return sync!
+	}
+	const complete = (t: Setup, sync: Awaited<ReturnType<typeof claim>>, now: number, tags: string[]) =>
+		t.store.completeCollectionRead(BUILD, {
+			now,
+			origin: ORIGIN,
+			accountUri: sync.accountUri,
+			generation: sync.generation,
+			token: sync.token,
+			...read(tags),
+		})
+
+	it('lets only the current claim end it: a round whose lease ended, or whose sync was asked for anew, changes nothing', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const bobId = await followed(t, bob)
+		// Round A's lease ends before it finishes; round B takes the sync over and ends it first.
+		const a = await claim(t, NOW)
+		const b = await claim(t, NOW + SYNC_LEASE_MS)
+		expect(b.token).not.toBe(a.token)
+		await complete(t, b, NOW + SYNC_LEASE_MS, ['Newer'])
+		await complete(t, a, NOW + SYNC_LEASE_MS, ['Older'])
+		expect((await featuredTags(t, bobId)).map((tag) => tag.name)).toEqual(['Newer'])
+		expect(await rows(t, 'collection_syncs')).toEqual([{ n: 0 }])
+
+		// Round C's sync is deleted and asked for anew (the same generation): C's end changes nothing, and the new
+		// request still waits.
+		await sql(t.store, 'INSERT INTO collection_syncs (account_id, due_at) VALUES (?, ?)', bobId, NOW)
+		const c = await claim(t, NOW)
+		await sql(t.store, 'DELETE FROM collection_syncs')
+		await sql(t.store, 'INSERT INTO collection_syncs (account_id, due_at) VALUES (?, ?)', bobId, NOW)
+		await complete(t, c, NOW, ['Stale'])
+		expect((await featuredTags(t, bobId)).map((tag) => tag.name)).toEqual(['Newer'])
+		expect(await sql(t.store, 'SELECT generation, read_through FROM collection_syncs')).toEqual([
+			{ generation: 1, read_through: 0 },
+		])
 	})
 })

@@ -26,7 +26,10 @@
 --   the end of that round's lease, so that a round that died leaves it to a later one. A round seeks the earliest
 --   due_at at or before its time through collection_syncs_due, so syncs held by rounds are never read past.
 --   generation counts the requests and read_through is the last one read: a request while a round holds the sync (an
---   Update of the actor naming other collections) leaves it to be read again. Both tables go with their account
+--   Update of the actor naming other collections) leaves it to be read again. token is the claim of the round that
+--   took it last: a round's end changes the queue or the learned data only while its token is the current one, so a
+--   round whose lease ended (and was taken over), or whose sync was deleted and asked for anew, changes nothing. Both
+--   tables go with their account
 --   (purgeRelationships, and the cascade as a backstop).
 --
 -- Cost: the copies read and write each pin and featured hashtag once. Until now only local accounts have them, at
@@ -74,6 +77,7 @@ CREATE TABLE collection_syncs (
   due_at INTEGER NOT NULL,
   generation INTEGER NOT NULL DEFAULT 1,
   read_through INTEGER NOT NULL DEFAULT 0,
+  token TEXT,
   attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0)
 );
 

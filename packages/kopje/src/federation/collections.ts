@@ -254,7 +254,7 @@ export async function syncCollections(env: Env, deps: InboxDeps): Promise<boolea
 			sync.signer,
 			requestBudget(Date.now())
 		)
-		const round = { origin, accountUri: sync.accountUri, generation: sync.generation }
+		const round = { origin, accountUri: sync.accountUri, generation: sync.generation, token: sync.token }
 		if (sync.phase === 'read') {
 			const read = await readCollections(sync, loaders.document)
 			if (state.storeError !== null) {
