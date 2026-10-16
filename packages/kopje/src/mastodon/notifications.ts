@@ -1,9 +1,10 @@
 import { type ApiHandler, authorized, present, requestParams, storeCall, userCredential } from './context'
 import { mastodonError } from './errors'
 import { linkHeader, pageQuery } from './pagination'
+import { parseBoolean } from './params'
 
-// /api/v1/notifications (B4a, Mastodon 4.0.2 v1): the list with types[], exclude_types[] and account_id, one
-// notification, dismiss and clear.
+// /api/v1/notifications (B4a, Mastodon 4.0.2 v1): the list with types[], exclude_types[], account_id and
+// include_filtered (Mastodon 4.5), one notification, dismiss and clear.
 
 const NOT_FOUND = () => mastodonError(404, 'Record not found')
 
@@ -23,6 +24,7 @@ export const listNotifications: ApiHandler = async (c, deps) => {
 				types: p.getAll('types').filter((type) => type !== ''),
 				excludeTypes: p.getAll('exclude_types').filter((type) => type !== ''),
 				accountId: accountId === undefined || accountId === '' ? null : accountId,
+				includeFiltered: parseBoolean(p.get('include_filtered')) === true,
 				present: present(c),
 			})
 		)

@@ -392,6 +392,30 @@ export class PolicyModel {
 		return (s === null || !this.conversationMuted(r, s)) && this.shown(r, type, from, s)
 	}
 
+	// R15's policy part (NotifyService::FilterCondition) for a recipient with Mastodon's default policy and no
+	// permission, as every recipient of a generated world has (the worlds hold no notification_policies or
+	// notification_permissions rows; test/notification-policy.test.ts checks the other choices): a mention in a direct
+	// status from an account the recipient does not follow is filtered, unless it answers a private mention of the
+	// sender by the recipient. Walking up from the parent, the parent counts when it mentions the sender (not silently),
+	// an ancestor above it when the recipient wrote it and it mentions the sender; the first that counts answers when
+	// it is the recipient's direct status. The walk reads the parent and at most 100 statuses above it. Nothing is
+	// dropped by default.
+	filtered(r: number, type: NotificationType, from: number, s: number | null): boolean {
+		if (type !== 'mention' || s === null || this.follows(r, from) || this.status(s).visibility !== 'direct') {
+			return false
+		}
+		let parent = this.status(s).replyTo
+		for (let depth = 0; parent !== null && depth <= 100; depth++) {
+			const status = this.status(parent)
+			const mentionsSender = status.mentions.some((m) => m.account === from && !m.silent)
+			if (mentionsSender && (depth === 0 || status.author === r)) {
+				return !(status.author === r && status.visibility === 'direct')
+			}
+			parent = status.replyTo
+		}
+		return true
+	}
+
 	// The participants of a status for the owner of a conversation (AccountConversation.participants_from_status): its
 	// author and the accounts it mentions, not silently, less the owner, in id order.
 	participants(s: number, owner: number): number[] {
@@ -475,7 +499,7 @@ export class PolicyModel {
 	}
 
 	// R16: a push of a notification of `type` from `from` about `s` is recorded for the subscription: the notification
-	// is shown (R15) to a local, available recipient, the subscription's token is still valid, its alert for the type
+	// is shown (R15), and not filtered, to a local, available recipient, the subscription's token is still valid, its alert for the type
 	// is on, and its policy lets the sender through (followed: the recipient follows the sender; follower: the sender
 	// follows the recipient; none: nobody).
 	pushed(sub: ModelSubscription, type: NotificationType, from: number, s: number | null): boolean {
@@ -488,6 +512,7 @@ export class PolicyModel {
 			this.account(r).local &&
 			this.available(r) &&
 			this.shown(r, type, from, s) &&
+			!this.filtered(r, type, from, s) &&
 			(sub.tokenExpiresAt === null || sub.tokenExpiresAt > this.world.now) &&
 			sub.alerts.includes(type) &&
 			policy

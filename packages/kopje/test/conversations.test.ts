@@ -13,12 +13,12 @@ import {
 	mastodonNote,
 	remove,
 	type Setup,
-	setup,
+	setup as baseSetup,
 	statusRow,
 } from './inbox-status-helpers'
 import {
 	act,
-	community,
+	community as baseCommunity,
 	getJson,
 	mute,
 	post,
@@ -36,6 +36,29 @@ import { parseRemoteStatus } from '../src/federation/remote-status'
 // (AccountConversation.remove_status, AfterBlockService), the list with its pages, and read, unread and delete.
 
 const add = writeOperation<{ owner: string; id: string }, void>((db, { owner, id }) => addToConversation(db, owner, id))
+
+// The local accounts accept private mentions from anyone. Mastodon's default policy filters a direct status from an
+// account the recipient does not follow that answers none of theirs, and a filtered mention adds nothing to the
+// recipient's conversations until its request is accepted (test/notification-policy.test.ts); these tests are about
+// the conversations such statuses make.
+async function acceptPrivateMentions(store: ApiHarness['store']): Promise<void> {
+	await sql(
+		store,
+		"INSERT INTO notification_policies (account_id, for_private_mentions) SELECT account_id, 'accept' FROM local_accounts"
+	)
+}
+
+async function community<const N extends string>(names: readonly N[], scope?: string) {
+	const h = await baseCommunity(names, scope)
+	await acceptPrivateMentions(h.store)
+	return h
+}
+
+async function setup(): Promise<Setup> {
+	const t = await baseSetup()
+	await acceptPrivateMentions(t.store)
+	return t
+}
 
 // A direct status of a remote account to `to`, stored with its parent (a status stored, or a uri only) and added to the
 // recipient's conversation as a notified mention adds it.

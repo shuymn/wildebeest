@@ -10,7 +10,9 @@ import type { Db } from '../db/sql'
 // when it is written (notify in notifications.ts); a notification without one is a group of its own,
 // `ungrouped-<id>`. Every read goes through the notification rule (R15, statusReads(...).notifications), as the v1
 // list does: a group counts, samples and pages only the notifications v1 would show the viewer now, so a sender since
-// blocked or muted, or a status the viewer may no longer see, is neither shown nor counted.
+// blocked or muted, or a status the viewer may no longer see, is neither shown nor counted. A notification the
+// recipient's policy filtered is left out of the walk and the counts unless include_filtered asks for it; it has no
+// group, so a group never holds one.
 //
 // Mastodon walks the notifications newest first and keeps the first of each group until it has a page of groups, then
 // reads each group's notifications up to the page's upper end (NotificationGroup.load_groups_data): its count, its
@@ -70,10 +72,11 @@ export type ExpandAccounts = 'full' | 'partial_avatars'
 type ShownColumns = { id: string; type: string; from_account_id: string; created_at: string; group_key: string | null }
 
 // The viewer's notifications the rule shows them that match `where` (over the parameters: ?1 is the viewer, ?2 the
-// time of the read), in the order and number `tail` gives.
+// time of the read), in the order and number `tail` gives; filtered ones only with `includeFiltered`.
 function shownNotifications(
 	db: Db,
 	viewer: UserContext,
+	includeFiltered: boolean,
 	where: string,
 	tail: string,
 	...params: (string | number | null)[]
@@ -81,7 +84,7 @@ function shownNotifications(
 	const read = statusReads(viewer, { viewer: '?1', now: '?2' })
 	return read.notifications<ShownColumns>(
 		db,
-		{ where: `n.account_id = ?1 AND ${where}`, tail, columns: NOTIFICATION_COLUMNS },
+		{ where: `n.account_id = ?1 AND ${where}`, tail, columns: NOTIFICATION_COLUMNS, includeFiltered },
 		viewer.accountId,
 		viewer.now,
 		...params
@@ -102,6 +105,8 @@ type WalkInput = {
 	excludeTypes: string[]
 	// The types grouped: null for every groupable one.
 	groupedTypes: string[] | null
+	// include_filtered (Notification.browserable).
+	includeFiltered: boolean
 	limit: number
 }
 
@@ -140,6 +145,7 @@ function walkGroups(db: Db, viewer: UserContext, input: WalkInput): Walk {
 		const rows = shownNotifications(
 			db,
 			viewer,
+			input.includeFiltered,
 			`${edgeRangeSql('n.id', '?3', '?4')}
 			AND (?5 IS NULL OR n.type IN (SELECT value FROM json_each(?5)))
 			AND n.type NOT IN (SELECT value FROM json_each(?6))`,
@@ -190,6 +196,7 @@ function membersOf(db: Db, viewer: UserContext, group: Found, upper: string | nu
 	return shownNotifications(
 		db,
 		viewer,
+		false,
 		'n.group_key = ?3 AND n.id <= coalesce(CAST(?4 AS INTEGER), 1e19)',
 		'ORDER BY n.id DESC LIMIT ?5',
 		group.key,
@@ -207,6 +214,7 @@ function oldestOf(db: Db, viewer: UserContext, group: Found, lower: string | nul
 		shownNotifications(
 			db,
 			viewer,
+			false,
 			'n.group_key = ?3 AND n.id >= coalesce(CAST(?4 AS INTEGER), -1e19)',
 			'ORDER BY n.id ASC LIMIT 1',
 			group.key,
@@ -302,6 +310,7 @@ export type ListGroupedInput = {
 	types: string[]
 	excludeTypes: string[]
 	groupedTypes: string[] | null
+	includeFiltered: boolean
 	expandAccounts: ExpandAccounts
 	present: Present
 }
@@ -341,6 +350,7 @@ export const listGroupedNotifications = userReadOperation<ListGroupedInput, Grou
 			types: input.types,
 			excludeTypes: input.excludeTypes,
 			groupedTypes: input.groupedTypes,
+			includeFiltered: input.includeFiltered,
 			limit: page.limit,
 		})
 		const ordered = ascending ? walk.groups.toReversed() : walk.groups
@@ -369,15 +379,16 @@ export const listGroupedNotifications = userReadOperation<ListGroupedInput, Grou
 )
 
 // The shown notification a group key names (Notification.by_group_key): `ungrouped-<id>` by its id, any other key by
-// its group, the newest of it.
+// its group, the newest of it. Api::V2::NotificationsController#show reads any of the viewer's notifications, filtered
+// or not (no browserable); a filtered notification has no group, so only its `ungrouped-` key names it.
 function firstOfGroup(db: Db, viewer: UserContext, groupKey: string): Shown | undefined {
 	if (groupKey.startsWith('ungrouped-')) {
 		const id = groupKey.slice('ungrouped-'.length)
 		return NOTIFICATION_ID.test(id)
-			? shownNotifications(db, viewer, 'n.id = CAST(?3 AS INTEGER)', '', id)[0]
+			? shownNotifications(db, viewer, true, 'n.id = CAST(?3 AS INTEGER)', '', id)[0]
 			: undefined
 	}
-	return shownNotifications(db, viewer, 'n.group_key = ?3', 'ORDER BY n.id DESC LIMIT 1', groupKey)[0]
+	return shownNotifications(db, viewer, false, 'n.group_key = ?3', 'ORDER BY n.id DESC LIMIT 1', groupKey)[0]
 }
 
 // GET /api/v2/notifications/:group_key: the group with every notification of it shown (up to GROUP_COUNT, newest
@@ -392,7 +403,15 @@ export const getNotificationGroup = userReadOperation<
 	}
 	const grouped = first.group_key !== null && GROUPABLE_TYPES.some((type) => type === first.type)
 	const rows = grouped
-		? shownNotifications(db, viewer, 'n.group_key = ?3', 'ORDER BY n.id DESC LIMIT ?4', first.group_key, GROUP_COUNT)
+		? shownNotifications(
+				db,
+				viewer,
+				false,
+				'n.group_key = ?3',
+				'ORDER BY n.id DESC LIMIT ?4',
+				first.group_key,
+				GROUP_COUNT
+			)
 		: [first]
 	return presentGroups(db, viewer, [{ key: groupOf(first, GROUPABLE_TYPES), first, rows }], {
 		paged: false,
@@ -408,9 +427,11 @@ export const notificationGroupAccounts = userReadOperation<
 	{ groupKey: string; page: PageQuery; present: Present },
 	Page<Account>
 >((db, { groupKey, page, present }, _viewer, viewer) => {
+	// A group's notifications are never filtered (a filtered notification has no group).
 	const rows = shownNotifications(
 		db,
 		viewer,
+		false,
 		`n.group_key = ?3 AND ${edgeRangeSql('n.id', '?4', '?5')}`,
 		'ORDER BY n.id DESC LIMIT ?6',
 		groupKey,
@@ -467,6 +488,8 @@ export type UnreadCountInput = {
 	accountId: string | null
 	// v2 only: grouped_types[] (null: none sent).
 	groupedTypes: string[] | null
+	// include_filtered; in v1, a sender (account_id) shows filtered ones too (Notification.browserable).
+	includeFiltered: boolean
 }
 
 // GET /api/v1/notifications/unread_count: how many shown notifications are newer than the notifications marker's
@@ -478,6 +501,7 @@ export const unreadCount = userReadOperation<UnreadCountInput, { count: number }
 	const rows = shownNotifications(
 		db,
 		viewer,
+		input.includeFiltered || input.accountId !== null,
 		`${edgeRangeSql('n.id', 'NULL', '?3')}
 		AND (?4 IS NULL OR n.type IN (SELECT value FROM json_each(?4)))
 		AND n.type NOT IN (SELECT value FROM json_each(?5))
@@ -502,6 +526,7 @@ export const unreadGroupCount = userReadOperation<UnreadCountInput, { count: num
 		types: input.types,
 		excludeTypes: input.excludeTypes,
 		groupedTypes: input.groupedTypes,
+		includeFiltered: input.includeFiltered,
 		limit: input.limit,
 	})
 	return { count: walk.groups.length }

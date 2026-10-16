@@ -46,11 +46,18 @@ const LIMIT = 3
 const PRESENT = { origin: 'https://kopje.test' }
 
 // What a world adds for the endpoints: favourites (by any account), bookmarks (by local accounts) and notifications
-// (to local accounts), all of originals, by index into the world.
+// (to local accounts, some of them filtered by the recipient's notification policy), all of originals, by index into
+// the world.
 type Edges = {
 	favourites: { account: number; status: number }[]
 	bookmarks: { account: number; status: number }[]
-	notifications: { recipient: number; type: NotificationType; from: number; status: number | null }[]
+	notifications: {
+		recipient: number
+		type: NotificationType
+		from: number
+		status: number | null
+		filtered: boolean
+	}[]
 }
 
 // Each account's accounts.discoverable, by index (an account past the list's end is not discoverable).
@@ -67,6 +74,7 @@ const caseArb: fc.Arbitrary<Case> = fc
 				type: fc.constantFrom(...NOTIFICATION_TYPES),
 				from: fc.nat(),
 				status: fc.option(fc.nat()),
+				filtered: fc.boolean(),
 			}),
 			{ maxLength: 16, size: 'max' }
 		),
@@ -95,7 +103,7 @@ const caseArb: fc.Arbitrary<Case> = fc
 						const recipient = pick(locals, n.recipient)
 						const from = n.from % world.accounts.length
 						const status = n.status === null ? null : (pick(originals, n.status) ?? null)
-						return recipient === undefined ? [] : [{ recipient, type: n.type, from, status }]
+						return recipient === undefined ? [] : [{ recipient, type: n.type, from, status, filtered: n.filtered }]
 					}),
 					(n) => `${n.recipient}:${n.type}:${n.from}:${n.status}`
 				),
@@ -107,8 +115,12 @@ const tokenOf = (x: number) => `policy-endpoints-${x}`
 
 type SeededNotification = Edges['notifications'][number]
 
-// The group notify gives a seeded notification, all in one hour: a favourite or boost by status, a follow.
+// The group notify gives a seeded notification, all in one hour: a favourite or boost by status, a follow; none to a
+// filtered one.
 function groupKeyOf(n: SeededNotification): string | null {
+	if (n.filtered) {
+		return null
+	}
 	if (n.type === 'follow') {
 		return 'follow-1'
 	}
@@ -144,13 +156,14 @@ function writeCase(sql: SqlStorage, { world, edges, discoverable }: Case): Map<s
 	for (const n of edges.notifications) {
 		const { id } = sql
 			.exec<{ id: string }>(
-				`INSERT INTO notifications (account_id, type, from_account_id, status_id, group_key) VALUES (?, ?, ?, ?, ?)
-				RETURNING CAST(id AS TEXT) AS id`,
+				`INSERT INTO notifications (account_id, type, from_account_id, status_id, group_key, filtered)
+				VALUES (?, ?, ?, ?, ?, ?) RETURNING CAST(id AS TEXT) AS id`,
 				accountId(n.recipient),
 				n.type,
 				accountId(n.from),
 				n.status === null ? null : statusId(n.status),
-				groupKeyOf(n)
+				groupKeyOf(n),
+				n.filtered ? 1 : 0
 			)
 			.one()
 		notifications.set(id, n)
@@ -729,6 +742,10 @@ function check(sql: SqlStorage, c: Case): string[] {
 			}
 			if (from === undefined || !m.shown(viewer, notification.type, from, s)) {
 				problems.push(`notifications ${nameOf(viewer)}: ${notification.type} from ${notification.account.id}`)
+			}
+			// A filtered notification is shown only when asked for (include_filtered, account_id).
+			if (row?.filtered === true) {
+				problems.push(`notifications ${nameOf(viewer)}: ${notification.id} is filtered`)
 			}
 		}
 
