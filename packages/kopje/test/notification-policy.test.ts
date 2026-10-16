@@ -717,6 +717,21 @@ describe('notification requests', () => {
 		expect((await getJson(h, `/api/v1/notifications/requests/${request!.id}`, alice.token)).status).toBe(404)
 	})
 
+	it('takes back the permission of an accepted request when the recipient blocks its sender', async () => {
+		const { h, alice, bob } = await scene()
+		const [request] = (await requests(h, alice)).filter((r) => r.account.id === bob.id)
+		await h.request(`/api/v1/notifications/requests/${request!.id}/accept`, bearer(alice.token, form({})))
+		await setPolicy(h, alice, { for_not_following: 'drop', for_private_mentions: 'drop' })
+		const fromBob = async () => (await stored(h, alice)).filter(([, from]) => from === bob.id).length
+		await post(h, bob, { status: '@alice through', visibility: 'direct' })
+		expect(await fromBob()).toBe(3)
+		expect((await act(h, alice, `/api/v1/accounts/${bob.id}/block`)).status).toBe(200)
+		expect((await act(h, alice, `/api/v1/accounts/${bob.id}/unblock`)).status).toBe(200)
+		expect(await sql(h.store, 'SELECT count(*) AS n FROM notification_permissions')).toEqual([{ n: 0 }])
+		await post(h, bob, { status: '@alice dropped', visibility: 'direct' })
+		expect(await fromBob()).toBe(3)
+	})
+
 	it('needs the notification scopes', async () => {
 		const h = await community(['alice'], 'read:notifications')
 		const { alice } = h.users

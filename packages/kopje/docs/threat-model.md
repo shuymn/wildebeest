@@ -508,7 +508,9 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   accepted. A request (`NotificationRequest`) names the sender, how many of its mentions were filtered (at most 100)
   and the last one's status, shown only if the owner may still see it (R2); it, the policy, its permissions
   (`NotificationPermission`) and the work an answer leaves are read and answered only by their owner, and anyone
-  else's request is not found. Nothing of them is federated: the sender cannot tell a filtered or dropped notification
+  else's request is not found. Blocking the sender deletes the pair's request and permission (Mastodon's
+  `BlockService` and `AfterBlockService`); a domain block keeps the permissions, which a sender there cannot use while
+  the block lasts (R15). Nothing of them is federated: the sender cannot tell a filtered or dropped notification
   from a shown one. Their cost is bounded (RES-6, RES-7): the lists and counts read the partial index of unfiltered
   notifications (`notifications_unfiltered`), so a sender's filtered notifications cost them nothing; the requests are
   paged by their index and the summary reads at most 100; a request's count is kept as it is written; the private

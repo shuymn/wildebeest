@@ -28,6 +28,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       notifications and both unread counts unless you ask with `include_filtered=true` (or, in v1, `account_id`); it is
       not pushed, joins no group, and a private mention does not reach your conversations. A filtered mention opens or
       updates a request for its sender, which counts up to 100 of them.
+    - Blocking an account deletes its request and the permission you gave it by accepting one.
     - Accepting a request lets its sender through from then on, shows the sender's filtered notifications, and adds
       the private mentions among them to your conversations. Dismissing one deletes the sender's filtered notifications.
       Both happen in the request for up to 2,000 of the sender's notifications and in the background rounds for the
@@ -38,7 +39,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       does not lower it and the request stays until it is answered; the summary looks at 100 requests at most (Mastodon
       names that limit, but its query counts all of them); a v2 value other than `accept`, `filter`, `drop` or 0 to 2
       answers 422 (`'x' is not a valid for_not_following`) and changes nothing, where Mastodon answers 500; a v1 form
-      value of `false` or `0` accepts, where Mastodon filters for any value sent; the bulk forms take at most 100 ids
+      value of `false` or `0` accepts, where Mastodon filters for any value sent; a domain block keeps the permissions of accepted requests from accounts there (Mastodon's
+      AfterBlockDomainFromAccountService deletes them), so after an unblock those senders pass your policy again; the bulk
+      forms take at most 100 ids
       (more answer 422); and `merged` reflects the work an accepted request has left, which Kopje runs in rounds a few
       minutes apart rather than at once. As on Mastodon, the bulk dismiss deletes the requests alone and leaves their
       filtered notifications, and `GET /api/v1/notifications/:id` and `GET /api/v2/notifications/ungrouped-:id` show a
