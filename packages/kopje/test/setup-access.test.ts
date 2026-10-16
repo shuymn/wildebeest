@@ -2,7 +2,7 @@ import { runInDurableObject } from 'cloudflare:test'
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { sql } from './api-helpers'
+import { seedAccount, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { BUILD } from './helpers'
 import {
@@ -579,6 +579,13 @@ describe('/setup Access after bootstrap: the admin’s runs', () => {
 			'is suspended',
 			async (h: SetupHarness) => {
 				await sql(h.store, "UPDATE local_accounts SET suspended_at = '2026-10-12T00:00:00.000Z'")
+			},
+		],
+		[
+			// The OAuth admin's fail-closed match (adminAccountId): a second account whose email differs only in case.
+			'stops being the only match for admin_email',
+			async (h: SetupHarness) => {
+				await seedAccount(h.store, { username: 'twin', email: ADMIN.toUpperCase() })
 			},
 		],
 	] as const) {

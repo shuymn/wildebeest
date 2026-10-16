@@ -84,6 +84,7 @@ const AUTH_ERRORS: Record<AuthFailure['status'], { status: 401 | 403 | 422; mess
 	suspended: { status: 403, message: 'Your login is currently disabled' },
 	insufficient_scope: { status: 403, message: 'This action is outside the authorized scopes' },
 	user_required: { status: 422, message: 'This method requires an authenticated user' },
+	forbidden: { status: 403, message: 'This action is not allowed' },
 }
 
 // The value of an authorized Store operation; an authorization failure becomes Mastodon's error answer.
@@ -109,6 +110,18 @@ export async function refuseAfterAuth(c: ApiContext, deps: ApiDeps, response: Re
 		authorized(await storeCall(c, deps, (s, b) => s.checkCredential(b, value)))
 	}
 	return response
+}
+
+// Mastodon's authorize_if_got_token!: a token sent must be valid and cover the route's scope; an app token is let
+// through.
+export async function checkOptionalToken(c: ApiContext, deps: ApiDeps): Promise<void> {
+	if (c.get('credential') !== null) {
+		const value = credential(c, deps)
+		const result = await storeCall(c, deps, (s, b) => s.checkCredential(b, value))
+		if (result.status !== 'user_required') {
+			authorized(result)
+		}
+	}
 }
 
 // The request's parameters, or the error answer for an unreadable body (after authentication, as Mastodon orders it).
