@@ -674,6 +674,25 @@ describe('reading a remote account’s collections', () => {
 		expect(await rows(t, 'collection_syncs')).toEqual([{ n: 0 }])
 	})
 
+	it('starts a round with another unread part after one without progress, so a failing part starves none', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		// The network collections redirect once each, and the following one then fails (four fetches each round, read
+		// never); the featuredTags collection is the largest, each document redirected once (the whole budget).
+		await largestRead(
+			t,
+			bob,
+			(url) => url.startsWith(`${bob.uri}/collections/tags`) || url.endsWith('/followers') || url.endsWith('/following')
+		)
+		t.web.fail(`${bob.uri}/following?moved`, 503)
+		const bobId = await followed(t, bob)
+		for (let round = 0; round <= MAX_SYNC_ATTEMPTS + 1; round++) {
+			await sql(t.store, 'UPDATE collection_syncs SET due_at = ?', NOW)
+			await syncCollections(t.env, deps(t))
+		}
+		expect((await featuredTags(t, bobId)).length).toBe(MAX_FEATURED_TAG_PAGES)
+	})
+
 	it('reads each part through even with a redirect on every one of its documents', async () => {
 		const t = await setup()
 		const bob = await mastodonActor(t.web, 'bob')

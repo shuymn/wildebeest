@@ -228,40 +228,59 @@ async function readFeaturedTags(
 	return names
 }
 
-// Phase 1: what a round reads of one account's collections. unfinished: something may be read later (a fetch that may
-// pass, the budget spent), so the read is tried again.
-export async function readCollections(
-	sync: CollectionSync,
-	loader: DocumentLoader
-): Promise<Pick<CollectionReadInput, 'parts' | 'pins' | 'tags' | 'hideCollections'>> {
-	const origin = originOf(sync.accountUri)
-	const out: Pick<CollectionReadInput, 'parts' | 'pins' | 'tags' | 'hideCollections'> = {
-		parts: 0,
-		pins: null,
-		tags: null,
-		hideCollections: null,
-	}
-	// The featured collection: its pins, and its hashtags for an actor without a featuredTags collection (that part
-	// is read with it). One that cannot be read at all is read through: nothing changes, as with Mastodon.
-	if ((sync.parts & PART_FEATURED) === 0) {
-		const read = sync.featured === null ? null : await readFeatured(sync, origin, loader)
-		if (read !== 'transient') {
-			out.parts |= PART_FEATURED | (sync.featuredTags === null ? PART_TAGS : 0)
-			out.pins = read === null ? null : { uris: read.uris }
-			out.tags = sync.featuredTags === null ? (read?.hashtags ?? null) : null
-		}
-	}
+type ReadOut = Pick<CollectionReadInput, 'parts' | 'pins' | 'tags' | 'hideCollections'>
+
+// Each part's read, which records in `out` what it read through.
+const PART_READS: [
+	number,
+	(sync: CollectionSync, origin: string | null, loader: DocumentLoader, out: ReadOut) => Promise<void>,
+][] = [
+	// The featured collection: its pins, and its hashtags for an actor without a featuredTags collection (that part is
+	// read with it). One that cannot be read at all is read through: nothing changes, as with Mastodon.
+	[
+		PART_FEATURED,
+		async (sync, origin, loader, out) => {
+			const read = sync.featured === null ? null : await readFeatured(sync, origin, loader)
+			if (read !== 'transient') {
+				out.parts |= PART_FEATURED | (sync.featuredTags === null ? PART_TAGS : 0)
+				out.pins = read === null ? null : { uris: read.uris }
+				out.tags = sync.featuredTags === null ? (read?.hashtags ?? null) : out.tags
+			}
+		},
+	],
 	// hidesCollections is null only when a collection may be read later.
-	if ((sync.parts & PART_NETWORK) === 0) {
-		out.hideCollections = await hidesCollections(sync, origin, loader)
-		out.parts |= out.hideCollections === null ? 0 : PART_NETWORK
-	}
-	if ((sync.parts & PART_TAGS) === 0 && sync.featuredTags !== null) {
-		const listed = await readFeaturedTags(sync, origin, loader)
-		if (listed !== 'transient') {
-			out.parts |= PART_TAGS
-			out.tags = listed
-		}
+	[
+		PART_NETWORK,
+		async (sync, origin, loader, out) => {
+			out.hideCollections = await hidesCollections(sync, origin, loader)
+			out.parts |= out.hideCollections === null ? 0 : PART_NETWORK
+		},
+	],
+	[
+		PART_TAGS,
+		async (sync, origin, loader, out) => {
+			const listed = await readFeaturedTags(sync, origin, loader)
+			if (listed !== 'transient') {
+				out.parts |= PART_TAGS
+				out.tags = listed
+			}
+		},
+	],
+]
+
+// Phase 1: what a round reads of one account's collections: the parts not read through yet, in the order featured,
+// network, featuredTags, starting from the one the round's attempt names. A round after one without progress starts
+// with the next unread part, so each gets a round where it goes first with the whole budget (a part that keeps failing
+// does not spend every round's budget before a healthy one) before MAX_SYNC_ATTEMPTS gives the read up.
+export async function readCollections(sync: CollectionSync, loader: DocumentLoader): Promise<ReadOut> {
+	const origin = originOf(sync.accountUri)
+	const out: ReadOut = { parts: 0, pins: null, tags: null, hideCollections: null }
+	const unread = PART_READS.filter(
+		([part]) => (sync.parts & part) === 0 && !(part === PART_TAGS && sync.featuredTags === null)
+	)
+	const first = unread.length === 0 ? 0 : (Math.max(sync.attempt, 1) - 1) % unread.length
+	for (const [, read] of [...unread.slice(first), ...unread.slice(0, first)]) {
+		await read(sync, origin, loader, out)
 	}
 	return out
 }

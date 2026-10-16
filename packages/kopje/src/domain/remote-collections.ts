@@ -260,6 +260,9 @@ export type CollectionSync = ActorCollections & {
 	phase: 'read' | 'pins'
 	// Phase read: the parts already read for this generation (PART_*), which the round does not read again.
 	parts: number
+	// The round's claim among those since the sync last made progress (1 for the first), which picks the part a read
+	// starts with.
+	attempt: number
 	uris: string[]
 	signer: FollowerSigner | null
 	pending: boolean
@@ -337,6 +340,7 @@ export const claimCollectionSync = writeOperation<{ now: number }, CollectionSyn
 			token,
 			phase: read ? 'read' : 'pins',
 			parts: row.parts_read,
+			attempt: row.attempts + 1,
 			uris,
 			...actorCollections(account.raw),
 			signer: localFollower(db, row.account_id),
