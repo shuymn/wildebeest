@@ -14,6 +14,7 @@ import { getFeatured, getLocalNote, getOutbox } from '../src/domain/activities'
 import { canView, visibleSql, type Visibility } from '../src/domain/audience'
 import { backfillConversations } from '../src/domain/conversation-rows'
 import { listConversations } from '../src/domain/conversations'
+import { directory, DIRECTORY_WINDOW } from '../src/domain/directory'
 import { accountEndorsements, listEndorsements } from '../src/domain/endorsements'
 import { accountFeaturedTags, listFeaturedTags } from '../src/domain/featured-tags'
 import {
@@ -3181,5 +3182,164 @@ describe("a request's last status costs a read nothing else (RES-7)", () => {
 			}
 		}
 		expect(grown).toEqual([])
+	}, 120_000)
+})
+
+// The profile directory adds a dimension: the accounts the instance knows. A page reads a window of the partial index of
+// discoverable accounts by its order, from the start, and judges each entry by key (R12: the viewer's blocks, mutes and
+// domain blocks, and the entry's blocks of the viewer), so it reads the same rows whether the instance knows 20 or 2,000
+// accounts of each kind it never lists first: accounts that are not discoverable (with the newest statuses), and
+// discoverable ones with older statuses and older ids, available or not, that the viewer blocks, mutes or domain-blocks,
+// that block the viewer, or that nothing hides. In front of them, 10 discoverable accounts the viewer is shown and 3 it
+// is not, newer by status and by id. A last case grows the hidden accounts in front instead: the page reads its window
+// and no further, so it shows nothing past it.
+describe('the profile directory reads a window, however many accounts the instance knows (RES-7)', () => {
+	const VIEWER_ID = '890000000000000000'
+	const DIRECTORY_TOKEN = 'directory-token'
+	const FRONT = 10
+	const KINDS = ['undiscoverable', 'listed', 'blocked', 'muted', 'blocking', 'domain', 'suspended'] as const
+
+	async function store(grown: number, hiddenInFront = 3): Promise<StoreStub> {
+		const stub = await migratedStore()
+		await runInDurableObject(stub, (_instance, state) => {
+			const sql = state.storage.sql
+			const account = (id: string, name: string, domain: string | null, discoverable: number | null) =>
+				sql.exec(
+					'INSERT INTO accounts (id, uri, username, domain, discoverable) VALUES (?, ?, ?, ?, ?)',
+					id,
+					domain === null ? `https://kopje.test/ap/users/${name}` : `https://${domain}/users/${name}`,
+					name,
+					domain,
+					discoverable
+				)
+			const local = (id: string, suspended = false) =>
+				sql.exec(
+					`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey, suspended_at)
+					VALUES (?, ?, X'00', X'00', 'test', ?)`,
+					id,
+					`${id}@example.com`,
+					suspended ? '2026-01-01T00:00:00.000Z' : null
+				)
+			const status = (id: string, author: string) =>
+				sql.exec(
+					`INSERT INTO statuses (id, uri, account_id, visibility, published_at)
+					VALUES (?, ?, ?, 'public', '2026-10-01T00:00:00.000Z')`,
+					id,
+					`https://kopje.test/o/${id}`,
+					author
+				)
+			account(VIEWER_ID, 'viewer', null, 1)
+			local(VIEWER_ID)
+			sql.exec("INSERT INTO domain_blocks (account_id, domain) VALUES (?, 'blocked.example')", VIEWER_ID)
+			// In front: FRONT shown accounts, local and remote, and the hidden ones, the newest by status and by id.
+			for (let i = 0; i < FRONT + hiddenInFront; i++) {
+				const id = String(880000000000000000n + BigInt(i))
+				const hidden = i >= FRONT
+				account(id, `front${i}`, i % 2 === 0 ? null : 'front.example', 1)
+				if (i % 2 === 0) {
+					local(id)
+				}
+				status(String(870000000000000000n + BigInt(i)), id)
+				if (hidden) {
+					sql.exec('INSERT INTO blocks (account_id, target_account_id) VALUES (?, ?)', VIEWER_ID, id)
+				}
+			}
+			// The grown accounts, older by status and by id; those that are not discoverable post the newest statuses.
+			KINDS.forEach((kind, k) => {
+				for (let i = 0; i < grown; i++) {
+					const id = String(300000000000000000n + BigInt(k * 100_000 + i))
+					const isLocal = kind === 'suspended' || (kind === 'listed' && i % 2 === 0)
+					const domain = isLocal ? null : kind === 'domain' ? 'blocked.example' : 'grown.example'
+					account(id, `${kind}${i}`, domain, kind === 'undiscoverable' ? (i % 2 === 0 ? 0 : null) : 1)
+					if (isLocal) {
+						local(id, kind === 'suspended')
+					}
+					status(
+						String((kind === 'undiscoverable' ? 990000000000000000n : 400000000000000000n) + BigInt(k * 100_000 + i)),
+						id
+					)
+					if (kind === 'blocked') {
+						sql.exec('INSERT INTO blocks (account_id, target_account_id) VALUES (?, ?)', VIEWER_ID, id)
+					} else if (kind === 'muted') {
+						sql.exec('INSERT INTO mutes (account_id, target_account_id) VALUES (?, ?)', VIEWER_ID, id)
+					} else if (kind === 'blocking') {
+						sql.exec('INSERT INTO blocks (account_id, target_account_id) VALUES (?, ?)', id, VIEWER_ID)
+					}
+				}
+			})
+			sql.exec(
+				"INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('directory', 'secret', 'directory', 'urn:ietf:wg:oauth:2.0:oob', 'read')"
+			)
+			sql.exec(
+				"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES (?, 'access', 'directory', ?, 'read')",
+				DIRECTORY_TOKEN,
+				VIEWER_ID
+			)
+		})
+		return stub
+	}
+
+	const credential = { tokenHash: DIRECTORY_TOKEN, scope: 'read', now: NOW } as const
+	const inputs = (['active', 'new'] as const).flatMap((order) =>
+		[false, true].flatMap((local) =>
+			[
+				{ credential, now: NOW, order, local, offset: 0, limit: FRONT, present: PRESENT },
+				{ credential: null, now: NOW, order, local, offset: 0, limit: FRONT, present: PRESENT },
+			].map((input) => ({
+				name: `${order}${local ? ' local' : ''}${input.credential === null ? ' anonymous' : ''}`,
+				input,
+			}))
+		)
+	)
+
+	const measure = async (stub: StoreStub) => {
+		const out: Record<string, { shown: string[]; rows: number }> = {}
+		for (const { name, input } of inputs) {
+			const accounts = await runInDurableObject(stub, (_instance, state) => directory.run(state.storage.sql, input))
+			out[name] = {
+				shown: (accounts.status === 'ok' ? accounts.value : []).map((account) => account.id),
+				rows: await rowsRead({ store: stub }, directory, input),
+			}
+		}
+		return out
+	}
+
+	it('reads the same rows with 20 or 2,000 accounts of each kind behind the page', async () => {
+		const few = await measure(await store(20))
+		const many = await measure(await store(2000))
+		const grown: string[] = []
+		for (const { name } of inputs) {
+			const a = few[name]!
+			const b = many[name]!
+			// Not vacuous: the signed-in page is the shown accounts in front, the newest first.
+			if (name === 'active') {
+				expect(a.shown).toEqual(
+					Array.from({ length: FRONT }, (_, i) => String(880000000000000000n + BigInt(FRONT - 1 - i)))
+				)
+			}
+			expect(a.shown.length).toBeGreaterThan(0)
+			expect(b.shown).toEqual(a.shown)
+			if (b.rows > a.rows + ALLOWANCE) {
+				grown.push(`${name}: ${a.rows} -> ${b.rows}`)
+			}
+		}
+		expect(grown).toEqual([])
+	}, 120_000)
+
+	it('reads its window and no further, however many hidden accounts are in front', async () => {
+		const window = DIRECTORY_WINDOW * FRONT
+		const input = inputs.find(({ name }) => name === 'active')!.input
+		const rowsWith = async (hidden: number) => {
+			const stub = await store(20, hidden)
+			const accounts = await runInDurableObject(stub, (_instance, state) => directory.run(state.storage.sql, input))
+			return { shown: shown(accounts), rows: await rowsRead({ store: stub }, directory, input) }
+		}
+		// Half the window hidden: the shown accounts behind them fill the page.
+		expect((await rowsWith(FRONT)).shown).toBe(FRONT)
+		const few = await rowsWith(window)
+		const many = await rowsWith(2000)
+		expect(few.shown).toBe(0)
+		expect(many.shown).toBe(0)
+		expect(many.rows).toBeLessThanOrEqual(few.rows + ALLOWANCE)
 	}, 120_000)
 })

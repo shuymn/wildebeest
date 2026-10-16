@@ -22,6 +22,7 @@ import { checkCredential, type Credential, type UserCredential } from './domain/
 import * as blocks from './domain/blocks'
 import * as conversations from './domain/conversations'
 import * as deliveries from './domain/deliveries'
+import { directory } from './domain/directory'
 import * as endorsements from './domain/endorsements'
 import * as featuredTags from './domain/featured-tags'
 import { kvCas, kvDelete, kvGet, kvList, kvSet } from './domain/fedify-kv'
@@ -679,6 +680,11 @@ export class Store extends DurableObject<Env> {
 
 	accountEndorsements(callerBuild: string, input: OperationInput<typeof endorsements.accountEndorsements>) {
 		return this.#kernel.execute(callerBuild, endorsements.accountEndorsements, input)
+	}
+
+	// The profile directory (domain/directory.ts).
+	directory(callerBuild: string, input: OperationInput<typeof directory>) {
+		return this.#kernel.execute(callerBuild, directory, input)
 	}
 
 	removeFromFollowers(callerBuild: string, input: OperationInput<typeof blocks.removeFromFollowers>) {
