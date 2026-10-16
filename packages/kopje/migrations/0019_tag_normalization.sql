@@ -273,13 +273,11 @@ DELETE FROM featured_tags WHERE id IN (
 UPDATE featured_tags SET name = (SELECT r.new_name FROM tag_renames r WHERE r.name = featured_tags.name)
 WHERE name IN (SELECT name FROM tag_renames);
 
-UPDATE featured_tags SET
-  statuses_count = (SELECT count(*) FROM statuses s
+UPDATE featured_tags SET (statuses_count, last_status_at) = (
+  SELECT c.n, (SELECT published_at FROM statuses WHERE id = c.last_id)
+  FROM (SELECT count(*) AS n, max(s.id) AS last_id FROM statuses s
     WHERE s.account_id = featured_tags.account_id AND s.reblog_of_id IS NULL AND s.visibility IN ('public', 'unlisted')
-      AND EXISTS (SELECT 1 FROM status_tags t WHERE t.status_id = s.id AND t.name = featured_tags.name)),
-  last_status_at = (SELECT published_at FROM statuses WHERE id = (SELECT max(s.id) FROM statuses s
-    WHERE s.account_id = featured_tags.account_id AND s.reblog_of_id IS NULL AND s.visibility IN ('public', 'unlisted')
-      AND EXISTS (SELECT 1 FROM status_tags t WHERE t.status_id = s.id AND t.name = featured_tags.name)))
+      AND EXISTS (SELECT 1 FROM status_tags t WHERE t.status_id = s.id AND t.name = featured_tags.name)) c)
 WHERE name IN (SELECT new_name FROM tag_renames);
 
 DROP TABLE tag_renames;
