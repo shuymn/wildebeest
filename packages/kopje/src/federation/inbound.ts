@@ -117,7 +117,7 @@ export function originOf(uri: string | null): string | null {
 	}
 }
 
-function hasActivityStreamsContext(context: unknown): boolean {
+export function hasActivityStreamsContext(context: unknown): boolean {
 	// An exact comparison with the context and each listed context, not a substring match.
 	return context === AS_CONTEXT || (Array.isArray(context) && context.some((c) => c === AS_CONTEXT))
 }

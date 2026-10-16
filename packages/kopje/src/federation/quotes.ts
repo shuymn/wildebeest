@@ -1,6 +1,7 @@
 import { type DocumentLoader, FetchError } from '@fedify/fedify'
 
 import { createRemoteLoaders, type FederationDeps, type FederationState, type RemoteLoaders } from './federation'
+import { hasActivityStreamsContext } from './inbound'
 import type { InboxDeps } from './inbox'
 import { isTransientLoadError, REQUEST_DEADLINE_MS, requestBudget } from './loader'
 import { fetchActor } from './remote-actor'
@@ -39,8 +40,6 @@ export const QUOTE_ROUND_WORST_MS = QUOTE_ROUND * QUOTE_STAGES * REQUEST_DEADLIN
 if (QUOTE_LEASE_MS < 2 * QUOTE_ROUND_WORST_MS) {
 	throw new Error('QUOTE_LEASE_MS must be at least twice a round of QUOTE_ROUND quotes of QUOTE_STAGES stages')
 }
-
-const AS_CONTEXT = 'https://www.w3.org/ns/activitystreams'
 
 type Json = Record<string, unknown>
 
@@ -94,13 +93,12 @@ export function stampOf(document: unknown): StampInput | null {
 	if (!isObject(document)) {
 		return null
 	}
-	const context = document['@context']
 	const types = (Array.isArray(document.type) ? document.type : [document.type]).filter(
 		(type): type is string => typeof type === 'string'
 	)
 	const first = (value: unknown) => idOf(Array.isArray(value) ? value[0] : value)
 	return {
-		context: context === AS_CONTEXT || (Array.isArray(context) && context.includes(AS_CONTEXT)),
+		context: hasActivityStreamsContext(document['@context']),
 		types,
 		id: typeof document.id === 'string' ? document.id : null,
 		attributedTo: first(document.attributedTo),
