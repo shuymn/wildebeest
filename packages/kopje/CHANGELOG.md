@@ -8,6 +8,42 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+### Added
+
+- The notification policy and notification requests, as Mastodon 4.5 has them: `GET`, `PATCH` and `PUT` of
+  `/api/v1/notifications/policy` (`filter_not_following`, `filter_not_followers`, `filter_new_accounts`,
+  `filter_private_mentions`, each true for filter and false for accept) and `/api/v2/notifications/policy`
+  (`for_not_following`, `for_not_followers`, `for_new_accounts`, `for_private_mentions`, `for_limited_accounts`, each
+  `accept`, `filter` or `drop`), with the `summary` of pending requests; `GET /api/v1/notifications/requests` (40 by
+  default, at most 80, with Link headers), `GET /api/v1/notifications/requests/:id`,
+  `POST /api/v1/notifications/requests/:id/accept` and `/dismiss`, the bulk `POST /api/v1/notifications/requests/accept`
+  and `/dismiss` (`id[]`), and `GET /api/v1/notifications/requests/merged`. Scopes are `read:notifications` and
+  `write:notifications` (or `read` and `write`).
+    - A notification from an account you do not follow, from one that has not followed you for three days, from an
+      account younger than 30 days you do not follow, or a private mention from an account you do not follow that
+      answers none of your private mentions of it, is accepted, filtered or dropped as your policy chooses. Mentions,
+      favourites, boosts, follows and follow requests are filtered or dropped; posts, edits and poll ends never are.
+      By default, as on Mastodon, private mentions are filtered and the rest accepted.
+    - A dropped notification is not written. A filtered one is written but left out of the notifications, the grouped
+      notifications and both unread counts unless you ask with `include_filtered=true` (or, in v1, `account_id`); it is
+      not pushed, joins no group, and a private mention does not reach your conversations. A filtered mention opens or
+      updates a request for its sender, which counts up to 100 of them.
+    - Accepting a request lets its sender through from then on, shows the sender's filtered notifications, and adds
+      the private mentions among them to your conversations. Dismissing one deletes the sender's filtered notifications.
+      Both happen in the request for up to 2,000 of the sender's notifications and in the background rounds for the
+      rest; `merged` answers false until an accepted request's notifications are all shown.
+    - Where Kopje differs from Mastodon: Kopje has no silenced accounts, so `for_limited_accounts` is kept but never
+      matches, and no staff role that bypasses blocks, so no sender is exempt as staff; a follow counts from when it was
+      requested, not when it was accepted; a request's count is kept as its mentions arrive, so deleting one of them
+      does not lower it and the request stays until it is answered; the summary looks at 100 requests at most (Mastodon
+      names that limit, but its query counts all of them); a v2 value other than `accept`, `filter`, `drop` or 0 to 2
+      answers 422 (`'x' is not a valid for_not_following`) and changes nothing, where Mastodon answers 500; a v1 form
+      value of `false` or `0` accepts, where Mastodon filters for any value sent; the bulk forms take at most 100 ids
+      (more answer 422); and `merged` reflects the work an accepted request has left, which Kopje runs in rounds a few
+      minutes apart rather than at once. As on Mastodon, the bulk dismiss deletes the requests alone and leaves their
+      filtered notifications, and `GET /api/v1/notifications/:id` and `GET /api/v2/notifications/ungrouped-:id` show a
+      filtered notification.
+
 ### Changed
 
 - Hashtags are normalized as Mastodon 4.5 normalizes them (HashtagNormalizer): NFKC, lowercase, Latin letters with
@@ -21,7 +57,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds one migration, applied on the first request after the deploy; a rollback to an earlier version
+- Store schema: adds two migrations, applied on the first request after the deploy; a rollback to an earlier version
   needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0019_tag_normalization`: renames the stored hashtags (`status_tags`, `tag_follows`, `featured_tags`) to
       Mastodon's normalization. Names that become one are merged: a status keeps one row of the hashtag, an account
@@ -32,6 +68,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       it from a typed `ς`. It reads each table once to find the names with a character other than `a`–`z`, `0`–`9`
       and `_`, walks each such distinct name's characters, and rewrites the rows of the renamed names through indexes,
       so its work grows linearly with the hashtag rows stored.
+    - `0020_notification_policies`: adds `notifications.filtered` (every stored notification stays shown), the
+      partial index of unfiltered notifications the lists read, and the tables of notification policies, permissions,
+      requests and their background work. Adding the column reads no row; building the index reads each stored
+      notification once and writes an entry for each, so its work grows linearly with the notifications stored.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.6] - 2026-10-16
