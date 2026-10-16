@@ -11,7 +11,14 @@ import { rowsRead } from './read-helpers'
 import { Db } from '../src/db/sql'
 import { getAccounts, listFollows, type PageQuery, relationships, userinfo } from '../src/domain/accounts'
 import { getFeatured, getLocalNote, getOutbox } from '../src/domain/activities'
+import {
+	ADMIN_ACCOUNT_CANDIDATES,
+	type AdminAccountFilter,
+	type AdminAccountList,
+	adminAccountOperations,
+} from '../src/domain/admin-accounts'
 import { CAPTURE_BOOST_SCAN, canView, deleteAudience, visibleSql, type Visibility } from '../src/domain/audience'
+import { ADMIN_PERMISSION, ADMIN_PERMISSIONS, adminGuarded } from '../src/domain/auth'
 import { backfillConversations } from '../src/domain/conversation-rows'
 import { listConversations } from '../src/domain/conversations'
 import { directory, DIRECTORY_WINDOW } from '../src/domain/directory'
@@ -4696,4 +4703,299 @@ describe("the admin's report list reads a page, however many reports do not matc
 		}
 		expect(grown).toEqual([])
 	}, 300_000)
+})
+
+// The admin's list of accounts (R37, GET /api/v{1,2}/admin/accounts; design §5): the first rule of the filter drives
+// the read. The local accounts (origin=local, email, staff or roles) are an operator-sized set; a username, display
+// name or domain search reads one index range of at most ADMIN_ACCOUNT_CANDIDATES candidates; status=suspended reads
+// the suspended local accounts and the accounts_deleted range in id order; anything else walks the primary key, newest
+// first, skipping only local accounts (remote) or unavailable ones (active). Each case holds the same matches among 20
+// or 2,000 times as many accounts that do not match (or, for the walks, that all match), and reads the same rows on
+// the newest page, a middle one and the final one. Tested with manage_users granted (adminGuarded), as Kopje grants it
+// once local suspension is served.
+describe("the admin's account list reads a page, however many accounts do not match (RES-7)", () => {
+	const ADMIN_ID = '690000000000000000'
+	const ADMIN_TOKEN = 'admin-accounts-token'
+	const FEW = 30
+	const LIMIT = 10
+	const GRANTED = ADMIN_PERMISSIONS | ADMIN_PERMISSION.manageUsers
+	const { listAdminAccounts } = adminAccountOperations(
+		adminGuarded(readOperation, GRANTED),
+		adminGuarded(writeOperation, GRANTED)
+	)
+	const NONE: AdminAccountFilter = {
+		origin: null,
+		status: null,
+		roleIds: null,
+		username: null,
+		byDomain: null,
+		displayName: null,
+		email: null,
+		ip: null,
+		invitedBy: null,
+	}
+
+	// An account kind: a username (and display name) prefix, a domain (null: local), and whether its deletion started.
+	type Kind = { username: string; domain: string | null; display: string; deleted?: boolean }
+	// `matching` selects the case's matches in SQL over `accounts a LEFT JOIN local_accounts l`.
+	type Case = { name: string; filter: Partial<AdminAccountFilter>; match: Kind; bulk: Kind[]; matching: string }
+
+	const remote = (username: string, domain = 'far.example', display = 'Bulk'): Kind => ({ username, domain, display })
+	const CASES: Case[] = [
+		{
+			name: 'origin=local',
+			filter: { origin: 'local' },
+			match: { username: 'loc', domain: null, display: 'Loc' },
+			bulk: [remote('rem')],
+			matching: 'a.domain IS NULL',
+		},
+		{
+			name: 'email',
+			filter: { email: 'LOC' },
+			match: { username: 'loc', domain: null, display: 'Loc' },
+			bulk: [remote('rem')],
+			matching: "l.email LIKE 'loc%'",
+		},
+		{
+			name: 'staff',
+			filter: { roleIds: ['3'] },
+			match: { username: 'loc', domain: null, display: 'Loc' },
+			bulk: [remote('rem')],
+			matching: `a.id = '${ADMIN_ID}'`,
+		},
+		{
+			name: 'username',
+			filter: { username: 'Match' },
+			match: remote('match'),
+			bulk: [remote('bulk'), remote('other')],
+			matching: "a.username LIKE 'match%'",
+		},
+		{
+			name: 'username within a domain',
+			filter: { username: 'match', byDomain: 'm.example' },
+			match: remote('match', 'm.example'),
+			bulk: [remote('match', 'o.example'), remote('bulk', 'm.example')],
+			matching: "a.username LIKE 'match%' AND a.domain = 'm.example'",
+		},
+		{
+			name: 'display_name',
+			filter: { displayName: 'match' },
+			match: remote('r', 'far.example', 'Match'),
+			bulk: [remote('r', 'far.example', 'Bulk')],
+			matching: "a.display_name LIKE 'Match%'",
+		},
+		{
+			name: 'by_domain',
+			filter: { byDomain: 'm.example' },
+			match: remote('r', 'm.example'),
+			bulk: [remote('r', 'o.example'), remote('r', 'p.example')],
+			matching: "a.domain = 'm.example'",
+		},
+		{
+			name: 'status=suspended',
+			filter: { status: 'suspended' },
+			match: { ...remote('gone'), deleted: true },
+			bulk: [remote('r')],
+			matching: 'a.deleted_at IS NOT NULL OR l.suspended_at IS NOT NULL',
+		},
+		{
+			name: 'status=pending (nothing to read)',
+			filter: { status: 'pending' },
+			match: remote('r'),
+			bulk: [remote('r')],
+			matching: '0',
+		},
+		{ name: 'no filter', filter: {}, match: remote('r'), bulk: [remote('r')], matching: '1' },
+		{
+			name: 'origin=remote',
+			filter: { origin: 'remote' },
+			match: remote('r'),
+			bulk: [remote('r')],
+			matching: 'a.domain IS NOT NULL',
+		},
+		{
+			name: 'status=active',
+			filter: { status: 'active' },
+			match: remote('r'),
+			bulk: [remote('r')],
+			matching: 'a.deleted_at IS NULL AND l.suspended_at IS NULL',
+		},
+		// The active walks among many remote accounts whose deletion has started (awaiting their purge).
+		{
+			name: 'status=active among accounts being deleted',
+			filter: { status: 'active' },
+			match: remote('r'),
+			bulk: [{ ...remote('gone'), deleted: true }],
+			matching: 'a.deleted_at IS NULL AND l.suspended_at IS NULL',
+		},
+		{
+			name: 'origin=remote, status=active among accounts being deleted',
+			filter: { origin: 'remote', status: 'active' },
+			match: remote('r'),
+			bulk: [{ ...remote('gone'), deleted: true }],
+			matching: 'a.domain IS NOT NULL AND a.deleted_at IS NULL',
+		},
+	]
+
+	// The admin, then `few` accounts of the matching kind among `bulk` of the other kinds: each match after bulk / few of
+	// them in id order (interleaved), or all of them first.
+	async function accountsStore(
+		c: Pick<Case, 'match' | 'bulk'>,
+		bulk: number,
+		few = FEW,
+		interleaved = true
+	): Promise<StoreStub> {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			sql.exec("INSERT INTO instance_settings (name, value) VALUES ('admin_email', 'admin@example.com')")
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username) VALUES (?, 'https://kopje.test/ap/users/admin', 'admin')",
+				ADMIN_ID
+			)
+			const per = interleaved ? bulk / few : 0
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1),
+				kinds(k, username, domain, display, deleted) AS (SELECT key, value ->> '$.username', value ->> '$.domain',
+					value ->> '$.display', value ->> '$.deleted' FROM json_each(?2))
+				INSERT INTO accounts (id, uri, username, domain, display_name, deleted_at)
+				SELECT printf('%018d', 691000000000000000 + n.i),
+					'https://' || coalesce(kinds.domain, 'kopje.test') || '/users/x' || n.i, kinds.username || n.i, kinds.domain,
+					kinds.display || ' ' || n.i, CASE WHEN kinds.deleted THEN ?3 END
+				FROM n JOIN kinds ON kinds.k = CASE
+					WHEN ?7 THEN CASE WHEN n.i % (?4 + 1) = ?4 THEN ?5 ELSE n.i % ?5 END
+					ELSE CASE WHEN n.i < ?6 THEN ?5 ELSE n.i % ?5 END END`,
+				interleaved ? few * (per + 1) : bulk + few,
+				JSON.stringify([...c.bulk, c.match]),
+				new Date(NOW).toISOString(),
+				per,
+				c.bulk.length,
+				few,
+				interleaved ? 1 : 0
+			)
+			sql.exec(
+				`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey)
+				SELECT id, username || '@example.com', X'00', X'00', 'test' FROM accounts WHERE domain IS NULL`
+			)
+			sql.exec(
+				"INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('admin', 'secret', 'admin', 'urn:ietf:wg:oauth:2.0:oob', 'admin:read')"
+			)
+			sql.exec(
+				"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES (?, 'access', 'admin', ?, 'admin:read')",
+				ADMIN_TOKEN,
+				ADMIN_ID
+			)
+		})
+		return store
+	}
+
+	const credential = { tokenHash: ADMIN_TOKEN, scope: 'admin:read:accounts', now: NOW } as const
+	const inputOf = (filter: Partial<AdminAccountFilter>, maxId?: string) => ({
+		credential,
+		filter: { ...NONE, ...filter },
+		page: { limit: LIMIT, maxId },
+		present: PRESENT,
+	})
+
+	async function list(
+		store: StoreStub,
+		filter: Partial<AdminAccountFilter>,
+		maxId?: string
+	): Promise<AdminAccountList> {
+		const answer = await runInDurableObject(store, (_instance, state) =>
+			listAdminAccounts.run(state.storage.sql, inputOf(filter, maxId))
+		)
+		if (answer.status !== 'ok') {
+			throw new Error(answer.status)
+		}
+		return answer.value
+	}
+
+	const matchIds = async (store: StoreStub, matching: string) =>
+		(
+			await runInDurableObject(store, (_instance, state) =>
+				state.storage.sql
+					.exec<{ id: string }>(
+						`SELECT a.id FROM accounts a LEFT JOIN local_accounts l ON l.account_id = a.id WHERE ${matching} ORDER BY a.id DESC`
+					)
+					.toArray()
+			)
+		).map((row) => row.id)
+
+	it('reads the same rows with 20 or 2,000 times as many accounts, on the newest, a middle and the final page', async () => {
+		const grown: string[] = []
+		for (const c of CASES) {
+			const few = await accountsStore(c, 20 * FEW)
+			const many = await accountsStore(c, 2000 * FEW)
+			// The few store's pages, following next: full until the last, the cursor strictly decreasing.
+			const all = await matchIds(few, c.matching)
+			const walked: string[] = []
+			let maxId: string | undefined
+			for (;;) {
+				const page = await list(few, c.filter, maxId)
+				expect(page.status, c.name).toBe('ok')
+				if (page.status !== 'ok') {
+					break
+				}
+				const ids = page.items.map((account) => account.id)
+				walked.push(...ids)
+				if (!page.more) {
+					expect(walked.length, c.name).toBe(all.length)
+					break
+				}
+				expect(ids.length, c.name).toBe(LIMIT)
+				expect(maxId === undefined || page.oldest! < maxId, c.name).toBe(true)
+				maxId = page.oldest!
+			}
+			expect(walked, c.name).toEqual(all)
+			// The newest, a middle and the final page of each store: the expected accounts, and the same rows read.
+			const read: number[][] = []
+			for (const store of [few, many]) {
+				const ids = store === few ? all : await matchIds(many, c.matching)
+				const cursors = ids.length < 5 ? [undefined] : [undefined, ids[Math.floor(ids.length / 2)], ids.at(-5)]
+				const rows: number[] = []
+				for (const cursor of cursors) {
+					const from = cursor === undefined ? 0 : ids.indexOf(cursor) + 1
+					const page = await list(store, c.filter, cursor)
+					expect(page, c.name).toMatchObject({ status: 'ok', more: from + LIMIT < ids.length })
+					expect(page.status === 'ok' ? page.items.map((account) => account.id) : page.status, c.name).toEqual(
+						ids.slice(from, from + LIMIT)
+					)
+					rows.push(await rowsRead({ store }, listAdminAccounts, inputOf(c.filter, cursor)))
+				}
+				read.push(rows)
+			}
+			for (const [n, manyRows] of read[1]!.entries()) {
+				const fewRows = read[0]![n]!
+				if (manyRows > fewRows + ALLOWANCE) {
+					grown.push(`${c.name}, cursor ${n}: ${fewRows} -> ${manyRows}`)
+				}
+			}
+		}
+		expect(grown).toEqual([])
+	}, 600_000)
+
+	it('answers a search of zero or one match, and more than ADMIN_ACCOUNT_CANDIDATES as too broad', async () => {
+		const searches: [string, Partial<AdminAccountFilter>][] = [
+			['username', { username: 'match' }],
+			['username within a domain', { username: 'match', byDomain: 'm.example' }],
+			['display_name', { displayName: 'Match' }],
+			['by_domain', { byDomain: 'm.example' }],
+		]
+		const kinds = { match: remote('match', 'm.example', 'Match'), bulk: [remote('bulk', 'o.example')] }
+		for (const count of [0, 1, ADMIN_ACCOUNT_CANDIDATES + 1]) {
+			const store = await accountsStore(kinds, 2000, count, false)
+			for (const [name, filter] of searches) {
+				const answer = await runInDurableObject(store, (_instance, state) =>
+					listAdminAccounts.run(state.storage.sql, inputOf(filter))
+				)
+				if (count > ADMIN_ACCOUNT_CANDIDATES) {
+					expect(answer, name).toEqual({ status: 'ok', value: { status: 'too_broad' } })
+				} else {
+					expect(answer, name).toMatchObject({ status: 'ok', value: { status: 'ok', more: false } })
+					expect(answer.status === 'ok' && answer.value.status === 'ok' && answer.value.items.length, name).toBe(count)
+				}
+			}
+		}
+	}, 120_000)
 })
