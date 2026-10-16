@@ -98,14 +98,19 @@ async function showsItems(
 	return collection !== null && collection.first !== undefined && collection.first !== null
 }
 
-// hide_collections = following_private? || followers_private?, the followers not read once the following hides.
+// hide_collections = following_private? || followers_private?, the followers not read once the following hides:
+// hidden as soon as either collection is known to hide its items, shown when both are known to show them, and unknown
+// (null: left as it was) only when neither tells.
 async function hidesCollections(sync: CollectionSync, origin: string | null, loader: DocumentLoader) {
 	const following = await showsItems(sync.following, origin, loader)
 	if (following === false) {
 		return true
 	}
 	const followers = await showsItems(sync.followers, origin, loader)
-	return following === undefined || followers === undefined ? null : !followers
+	if (followers === false) {
+		return true
+	}
+	return following === true && followers === true ? false : null
 }
 
 // FetchFeaturedCollectionService: the first MAX_REMOTE_PINS items of the first page, or null when it cannot be read.

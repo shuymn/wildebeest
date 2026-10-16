@@ -305,8 +305,12 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   by. Familiar followers show no followers of an account that hides its network, to anyone, the account itself included,
   and leave out a follower that hides its own (Mastodon's `FamiliarFollowersPresenter`). The ActivityPub followers and
   following collections of a suspended actor answer 404, and those of an actor that hides its network show `totalItems`
-  only and answer a page with 403. Kopje does not learn a remote account's setting, so a remote account's lists are
-  never hidden. _Implemented on branch `kopje/account-lists`:_ `followListsShownSql` and `followListedSql` in
+  only and answer a page with 403. A remote account's setting is learned as Mastodon's ProcessAccountService learns
+  it (its followers or following collection shows no first page) and hides its lists the same way; one Kopje has not
+  learned yet hides nothing, and a collection that cannot be read for now leaves what was learned unless the other
+  one is known to hide its items (`src/federation/collections.ts`, `accounts.hide_collections`;
+  `test/remote-collections.test.ts`). _Implemented on branch `kopje/account-lists`:_ `followListsShownSql` and
+  `followListedSql` in
   `src/domain/audience.ts`, `listFollows` and `familiarFollowers` in `src/domain/accounts.ts`, `getCollection` in
   `src/domain/actors.ts`; `test/accounts.test.ts` ("follower lists for the viewer (R13)"), `test/account-reads.test.ts`
   ("shows no followers of an account that hides its network"), `test/federation.test.ts` ("shows only the size of the
