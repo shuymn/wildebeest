@@ -26,6 +26,14 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   cancels the job.
 - `public*` and `hashtag*` still answer `{"error":"Unknown stream type","status":400}`.
 
+### Fixed
+
+- The streaming API no longer sends a status (`update`) or an edit (`status.update`) over and over, with turns that
+  never end, when it reaches more listeners than one turn of the fan-out serves (a status in the home timelines of more
+  than 64 listening accounts, for one): the turn that went on with the event's remaining listeners moved its position
+  back to where it resumed, so the next turn sent them the event again. Each listener now receives it once. A
+  notification, which has one recipient, was not affected.
+
 ### Instance changes
 
 - Store schema: adds one migration, applied on the first request after the deploy; a rollback to an earlier version
