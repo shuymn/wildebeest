@@ -3736,8 +3736,8 @@ describe('0033_quotes', () => {
 	}, 120_000)
 })
 
-describe('0032_admin_suspension', () => {
-	const at = NAMES.indexOf('0032_admin_suspension')
+describe('0034_admin_suspension', () => {
+	const at = NAMES.indexOf('0034_admin_suspension')
 	const id = (n: number) => String(100000000000000000n + BigInt(n))
 
 	// `locals` local accounts, each with `tokens` access tokens and a follow of the next account.
@@ -3775,7 +3775,7 @@ describe('0032_admin_suspension', () => {
 			seed(sql, 2, 1)
 			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({
 				ok: true,
-				applied: ['0032_admin_suspension'],
+				applied: ['0034_admin_suspension'],
 			})
 			expect(sql.exec('SELECT DISTINCT epoch FROM oauth_tokens').toArray()).toEqual([{ epoch: 0 }])
 			expect(sql.exec('SELECT credential_epoch FROM local_accounts').toArray()).toEqual([

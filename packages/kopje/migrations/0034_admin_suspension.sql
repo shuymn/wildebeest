@@ -1,4 +1,4 @@
--- Kopje Store schema 0032: the admin API's local suspension. Never edit after release (checksummed).
+-- Kopje Store schema 0034: the admin API's local suspension. Never edit after release (checksummed).
 --
 -- The OAuth admin suspends and unsuspends local accounts through the Mastodon admin API, and the Access admin
 -- unsuspends them through /admin (src/domain/suspension.ts, R37, VIS-29). A suspension commits in one bounded
@@ -36,9 +36,9 @@
 -- Cost: two ALTERs adding a column with a constant default and no CHECK (a change of the schema alone, whatever the
 -- number of local accounts or tokens), and two new tables; nothing is read or written. Measured on the benchmark
 -- store of test/bench/migration-cost.ts (1,000,000 accounts, 3,000,000 follows, 2,000,000 statuses with their
--- mentions and tags, 10,000 reports, 20 local accounts) in workerd's local Durable Object SQLite: 2,266 ms for the
--- upgrade of this file through the kernel (its bookmark, transaction and schema verification), within the 5,000 ms
--- each migration file may take.
+-- mentions and tags, 10,000 reports, 20 local accounts) in workerd's local Durable Object SQLite: 2,219 ms for the
+-- upgrade of this file through the kernel (its bookmark, transaction and schema verification; 2,659 ms in a second
+-- run), within the 5,000 ms each migration file may take.
 
 ALTER TABLE local_accounts ADD COLUMN credential_epoch INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE oauth_tokens ADD COLUMN epoch INTEGER NOT NULL DEFAULT 0;

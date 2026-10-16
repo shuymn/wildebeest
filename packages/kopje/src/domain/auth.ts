@@ -40,7 +40,7 @@ export type AuthFailure =
 
 export type Authorized<O> = AuthFailure | { status: 'ok'; value: O }
 
-// The credential epoch (migration 0032_admin_suspension): whether the credential `t` (an oauth_tokens row: an access
+// The credential epoch (migration 0034_admin_suspension): whether the credential `t` (an oauth_tokens row: an access
 // token, a code or a web session) was issued in its account's current epoch, local_accounts.credential_epoch, read by
 // key. Every insert stamps the account's epoch (CREDENTIAL_EPOCH_SQL) and a suspension increments it, in their
 // transactions, so every credential issued before a suspension is refused from its commit on, also after an

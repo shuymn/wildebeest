@@ -102,9 +102,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       the new `statuses.quotes_count`. The column has a constant default and no constraint, so stored statuses are
       neither read nor rewritten; nothing is backfilled (stored posts keep their quote properties in `raw`), so the
       migration's work does not grow with the instance: on the same benchmark store its upgrade took 2.2 seconds.
-    - `0032_admin_suspension`: adds the credential epoch columns to the local accounts and the OAuth tokens, and the
+    - `0034_admin_suspension`: adds the credential epoch columns to the local accounts and the OAuth tokens, and the
       empty tables of the moderation jobs and their staged audience. The columns have a constant default, so it reads
-      no row: on the same benchmark store its upgrade took 2.3 seconds.
+      no row: on the same benchmark store its upgrade took 2.2 seconds (2.7 in a second run).
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.10] - 2026-10-16

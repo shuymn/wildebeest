@@ -7,7 +7,7 @@ import { forgetActorSnapshots } from './snapshot'
 import type { Db } from '../db/sql'
 
 // Local suspension (Mastodon's Admin::AccountAction with type suspend, SuspendAccountService and Admin::
-// SuspensionWorker; UnsuspendAccountService for the unsuspension), migration 0032_admin_suspension. The OAuth admin
+// SuspensionWorker; UnsuspendAccountService for the unsuspension), migration 0034_admin_suspension. The OAuth admin
 // suspends and unsuspends through the Mastodon admin API (admin-accounts.ts), the Access admin unsuspends through
 // /admin; both call suspendLocal and unsuspendLocal here.
 //
@@ -176,7 +176,7 @@ export function unsuspendLocal(db: Db, accountId: string, now: number): boolean 
 	if (state?.suspended_at == null) {
 		return false
 	}
-	// A suspension from before the epoch existed (0032_admin_suspension) never moved it: it moves once now, so the
+	// A suspension from before the epoch existed (0034_admin_suspension) never moved it: it moves once now, so the
 	// credentials from before that suspension end too.
 	const epoch = db.first<{ epoch: number }>(
 		`UPDATE local_accounts SET suspended_at = NULL,
