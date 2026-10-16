@@ -1690,6 +1690,75 @@ describe('Store migration runner', () => {
 		expect(large - small).toBeLessThanOrEqual(10 * added)
 	}, 120_000)
 
+	it('0019_tag_normalization merges many spellings of one name for many accounts in linear work', async () => {
+		const index = NAMES.indexOf('0019_tag_normalization')
+		const statements = (MIGRATIONS[index]?.sql ?? '')
+			.split('\n')
+			.filter((line) => !line.startsWith('--'))
+			.join('\n')
+			.split(';')
+			.filter((statement) => statement.trim() !== '')
+		// `accounts` accounts, each following dogs and then one of `spellings` names that all become cafe (two combining
+		// marks, which a hashtag cannot hold, between caf and e), each name also on a status: a merge that looked up every
+		// spelling of the new name for each follow would grow with their product.
+		const measure = async (accounts: number, spellings: number) => {
+			const store = freshStore()
+			return runInDurableObject(store, async (_instance, state) => {
+				const sql = state.storage.sql
+				await kernel(state, MIGRATIONS.slice(0, index)).upgrade()
+				sql.exec(
+					`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+					INSERT INTO accounts (id, uri, username, domain) SELECT CAST(100000000000000000 + i AS TEXT),
+						'https://kopje.test/ap/users/u' || i, 'u' || i, NULL FROM n`,
+					accounts
+				)
+				sql.exec(
+					`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey)
+					SELECT id, id || '@example.com', X'00', X'00', 'k' FROM accounts`
+				)
+				const spelling = (i: string) => `'caf' || char(0x0300 + ${i} % 16) || char(0x0300 + ${i} / 16) || 'e'`
+				sql.exec(
+					`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+					INSERT INTO statuses (id, uri, account_id, visibility, published_at)
+					SELECT CAST(200000000000000000 + i AS TEXT), 'https://kopje.test/ap/o/' || i, '100000000000000001', 'public',
+						'2026-10-01T00:00:00.000Z' FROM n`,
+					spellings
+				)
+				sql.exec(
+					`INSERT INTO status_tags (status_id, name, public)
+					SELECT id, ${spelling('(CAST(id AS INTEGER) - 200000000000000000)')}, 1 FROM statuses`
+				)
+				sql.exec("INSERT INTO tag_follows (account_id, name) SELECT id, 'dogs' FROM accounts ORDER BY id")
+				sql.exec(
+					`INSERT INTO tag_follows (account_id, name)
+					SELECT id, ${spelling('(CAST(id AS INTEGER) % ?1)')} FROM accounts ORDER BY id`,
+					spellings
+				)
+				let read = 0
+				for (const statement of statements) {
+					const cursor = sql.exec(statement)
+					cursor.toArray()
+					read += cursor.rowsRead
+				}
+				expect(
+					sql
+						.exec(
+							`SELECT (SELECT count(DISTINCT name) FROM status_tags) AS names,
+								(SELECT count(*) FROM tag_follows WHERE name = 'cafe') AS followed`
+						)
+						.one()
+				).toEqual({ names: 1, followed: accounts })
+				return read
+			})
+		}
+		const small = await measure(400, 16)
+		const large = await measure(4000, 160)
+		// Per account added: two follows; per spelling added: a status, its hashtag row and the spelling's rename, each
+		// read a few times with lookups by index.
+		const added = 2 * (4000 - 400) + 3 * (160 - 16)
+		expect(large - small).toBeLessThanOrEqual(10 * added)
+	}, 120_000)
+
 	it('upgrades a Store with 0011_scheduled_statuses: uploads stay as they were, and scheduled statuses hold theirs and go with their account', async () => {
 		const index = NAMES.indexOf('0011_scheduled_statuses')
 		const store = freshStore()

@@ -250,7 +250,7 @@ DELETE FROM status_tags WHERE name IN (SELECT name FROM tag_renames);
 DELETE FROM tag_follows WHERE id IN (
   SELECT f.id FROM tag_follows f JOIN tag_renames r ON r.name = f.name
   WHERE r.new_name = '' OR EXISTS (SELECT 1 FROM tag_follows g WHERE g.account_id = f.account_id AND g.id < f.id
-    AND (g.name = r.new_name OR g.name IN (SELECT o.name FROM tag_renames o WHERE o.new_name = r.new_name)))
+    AND (g.name = r.new_name OR EXISTS (SELECT 1 FROM tag_renames o WHERE o.name = g.name AND o.new_name = r.new_name)))
   UNION ALL
   SELECT g.id FROM tag_follows f JOIN tag_renames r ON r.name = f.name
     JOIN tag_follows g ON g.account_id = f.account_id AND g.name = r.new_name
@@ -263,7 +263,7 @@ WHERE name IN (SELECT name FROM tag_renames);
 DELETE FROM featured_tags WHERE id IN (
   SELECT f.id FROM featured_tags f JOIN tag_renames r ON r.name = f.name
   WHERE r.new_name = '' OR EXISTS (SELECT 1 FROM featured_tags g WHERE g.account_id = f.account_id AND g.id < f.id
-    AND (g.name = r.new_name OR g.name IN (SELECT o.name FROM tag_renames o WHERE o.new_name = r.new_name)))
+    AND (g.name = r.new_name OR EXISTS (SELECT 1 FROM tag_renames o WHERE o.name = g.name AND o.new_name = r.new_name)))
   UNION ALL
   SELECT g.id FROM featured_tags f JOIN tag_renames r ON r.name = f.name
     JOIN featured_tags g ON g.account_id = f.account_id AND g.name = r.new_name
