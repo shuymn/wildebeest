@@ -33,7 +33,7 @@ Accounts (always over an account id, never over a status or a follow row):
 | `blocksSql(owner, x)`, `domainBlocksSql(owner, x)`, `blockedSql(owner, x)` | `owner` blocks `x`, blocks its domain, or either.                                                                                                                                                     |
 | `inDomainSql(a, domain)`                                                   | The account row `a` lives on `domain`: its stored domain or the host of its actor id, exactly.                                                                                                        |
 | `filteredForSql(x, viewer, now)`                                           | R7: the viewer blocks `x`, mutes it while the mute applies, or blocks its domain. Nobody filters themselves; an anonymous viewer filters nothing.                                                     |
-| `listedForSql(x, viewer, now)`                                             | R12: `x` may be listed among others (who favourited or boosted): available, not filtered, and not blocking the viewer.                                                                                |
+| `listedForSql(x, viewer, now)`                                             | R12: `x` may be listed among others (who favourited or boosted, the profile directory): available, not filtered, and not blocking the viewer.                                                         |
 | `followListsShownSql(owner, viewer)`                                       | R13: the viewer is shown the owner's followers and following: the owner is available and, unless the viewer is the owner, neither hides its network (`hide_collections`) nor blocks the viewer.       |
 | `followListedSql(x, owner, viewer, now)`                                   | R13: `x` is listed among the owner's followers or following: to an anonymous viewer and the owner, always; to anyone else, unless they block or mute `x` (while the mute applies) or `x` blocks them. |
 | `endorsementsShownSql(owner)`, `endorsementListedSql(x)`                   | R28: the accounts the owner endorses are listed, to anyone, while the owner is available; an endorsed account is listed while it is available.                                                        |
@@ -219,7 +219,7 @@ ${DISTRIBUTABLE_SQL}`, never the literals.
 | R9 home                      | `homeFilterSql` in `homeTimeline`, with its membership, the follow's options (boosts, languages, reply partners) and the viewer's exclusive lists.                                                                                                                                                                                                                                                                                 |
 | R10 public and tag feeds     | `publicConditions` in `timelines.ts` on `listableSql`; the tag feed and a tag's history take their candidates from the hashtags of public statuses (`status_tags.public`, written with `tagPublicSql`).                                                                                                                                                                                                                            |
 | R11 account statuses         | `visibleSql`, `blocksSql` (the viewer blocks the account), and `visibleSql` with `filteredForSql` for a boosted original.                                                                                                                                                                                                                                                                                                          |
-| R12 listed accounts          | `listedForSql` in `favourited_by` and `reblogged_by` (`DISTRIBUTABLE_SQL` boosts only).                                                                                                                                                                                                                                                                                                                                            |
+| R12 listed accounts          | `listedForSql` in `favourited_by` and `reblogged_by` (`DISTRIBUTABLE_SQL` boosts only), and in the profile directory (`directory` in `directory.ts`) over the discoverable accounts.                                                                                                                                                                                                                                               |
 | R13 follower lists           | `followListsShownSql` and `followListedSql` in `listFollows` (`GET /api/v1/accounts/:id/followers` and `/following`); `hidesCollectionsSql` in familiar followers (none for an account that hides its network, whoever asks; no follower that hides its own); `followListsShownSql` with no viewer in the ActivityPub followers and following collections: a hidden network shows `totalItems` only, and a page of it answers 403. |
 | R14 account search           | `findableBySql` in `findAccounts` and for an account answered by search resolution. Mastodon's account search leaves out suspended accounts only; Kopje also leaves out those on a domain the viewer blocks.                                                                                                                                                                                                                       |
 | R15 notifications            | `shownSql` in `notify` (through `notifiedSql`, which adds R31, with `notificationPolicySql`, the recipient's policy), `listNotifications`, `getNotification`, the grouped reads and unread counts (`notification-groups.ts`) and the push target, each leaving out filtered notifications (`UNFILTERED_SQL`) unless asked for.                                                                                                     |
@@ -263,6 +263,21 @@ ones (`Account.without_suspended`). No block, mute or hidden network changes the
 `Accounts::EndorsementsController` checks none. They are not federated: Mastodon 4.5's actor has no endorsements
 collection. A private note (`account_notes`, Mastodon's `AccountNote`) is shown only to its author, as the `note` of
 their Relationship with the account; no other path reads it (the architecture test below).
+
+The profile directory (`src/domain/directory.ts`, `GET /api/v1/directory`, Mastodon's `Api::V1::DirectoriesController`)
+lists the discoverable accounts that R12 lists to the viewer: `accounts.discoverable` is 1, a local account's setting
+(`update_credentials`) or what a remote actor published (an actor that published nothing is not listed), and
+`listedForSql` leaves out an unavailable account (R1) and, for a signed-in viewer, one they block or mute (while the
+mute applies), one on a domain they block, and one that blocks them: Mastodon's `Account.discoverable` with
+`not_excluded_by_account` and `not_domain_blocked_by_account` (Kopje has no silenced accounts and does not record that an account moved). A local account
+is never on a blocked domain, so `local=true` changes nothing there, as in Mastodon. `order=active` orders by the
+account's newest public, unlisted or private status (`accounts.last_status_id`, which the triggers of migration
+`0021_directory` keep as statuses are stored, deleted or hidden), accounts without one last, then by id; `order=new` by
+id. A page reads the partial index of its order (discoverable accounts only, all or local) from the start, a window of
+`DIRECTORY_WINDOW` (2) times offset plus limit entries, judges each by key, and answers those R12 lists from the offset:
+so it never reads an account that is not discoverable nor one below the window, and when more than half the window is
+hidden from the viewer the page comes back short (a slice of the full directory, since the window is a prefix of it).
+An offset above `MAX_DIRECTORY_OFFSET` (400) answers no accounts.
 
 A scheduled status (`src/domain/scheduled-statuses.ts`, migration `0011_scheduled_statuses`) is not a status: it is
 a row of `scheduled_statuses` with the post's parameters, and its owner's alone (R26, `scheduledOwnSql`). No read,
@@ -537,6 +552,12 @@ A last case grows the histories the viewer never sees, from 20 statuses each to 
 does not follow sending them direct statuses, which home must not read, and an account that blocks the viewer, one the
 viewer blocks, a suspended one and one being deleted, whose statuses the account statuses endpoint must not read. Home
 must show a full page and the account statuses none, reading at most 10 rows more.
+A case grows the accounts the profile directory never lists first, from 20 to 2,000 of each kind: accounts that are not
+discoverable (with the newest statuses), and discoverable ones behind the page, with older statuses and ids, that the
+viewer blocks, mutes or domain-blocks, that block the viewer, that are suspended, or that nothing hides, with the
+viewer's blocks and mutes of them; in front, 10 accounts the viewer is shown and 3 it is not. The newest page of each
+order, all and local, for the viewer and anonymously, must show the same and read at most 10 rows more. Another grows
+the hidden accounts in front from a window's worth to 2,000: the page reads its window and no further.
 Another case grows the accounts with timeline markers from 10 to 2,000: the viewer's markers read at most 10 rows
 more. The world gives every original status a poll of four choices with the viewer's vote, and the unrelated accounts
 polls and votes of their own and votes in the target's poll (rows only); the target's poll (`GET /api/v1/polls/:id`) is
@@ -587,6 +608,7 @@ boost must come with its own original (never `reblog: null` on a read), which th
 | grouped notifications, unread counts                       | the groups of exactly the notifications the list shows, each counting and sampling its own, newest first; the unread counts count those notifications and groups                                                                                        |
 | followers, following (of every account)                    | exactly the accepted follows the list rule shows (R13), newest first, over pages of 3                                                                                                                                                                   |
 | account search                                             | exactly the accounts the viewer may find (R14)                                                                                                                                                                                                          |
+| profile directory (both orders, all and local)             | exactly the discoverable accounts R12 lists to the viewer in the order's window, in order, from each offset (pages of 3 and one of 40), each account's `discoverable` generated as 1, 0 or unset                                                        |
 | conversations                                              | exactly the viewer's conversations the model makes of the direct statuses and the mentions seeded (R25), newest last status first, both ways over pages; each last status only if the viewer may see it (R2), else null; another account's is not found |
 | pinned statuses (of every account)                         | exactly the account statuses the model allows that the account pins, newest pin first (R11, R31)                                                                                                                                                        |
 | statuses by id (every status, 20 at a time)                | exactly the listable statuses (R8), in the order asked                                                                                                                                                                                                  |

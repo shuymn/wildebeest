@@ -128,6 +128,8 @@ export const ROUTES: readonly Route[] = [
 		access: 'public',
 		handler: tags.accountFeaturedTags,
 	},
+	// The profile directory: optional token, no scope (Api::V1::DirectoriesController).
+	{ method: 'GET', path: '/api/v1/directory', access: { optional: true }, handler: accounts.directory },
 	{
 		method: 'GET',
 		path: '/api/v1/endorsements',

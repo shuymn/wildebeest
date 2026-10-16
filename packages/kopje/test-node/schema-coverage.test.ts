@@ -90,6 +90,7 @@ const DEFAULT = 'left at its default by the converter (NOT_CONVERTED)'
 const NOT_CONVERTED: Record<string, string> = {
 	'accounts.confirmed_username': 'set when Kopje confirms a WebFinger domain; legacy has none',
 	'accounts.deleted_at': 'set when a remote actor deletes itself in Kopje; legacy has no account being deleted',
+	'accounts.last_status_id': 'written by the triggers of 0021_directory as the carried statuses are inserted',
 	'blocks.id': ASSIGNED,
 	'bookmarks.id': ASSIGNED,
 	'domain_blocks.id': ASSIGNED,
@@ -130,6 +131,7 @@ const NOT_VERIFIED: Record<string, string> = {
 	'accounts.followers_count': COUNTER,
 	'accounts.following_count': COUNTER,
 	'accounts.inbox_url': FROM_RAW,
+	'accounts.last_status_id': 'derived by triggers from the statuses, which are compared',
 	'accounts.search_text': SEARCH,
 	'accounts.shared_inbox_url': FROM_RAW,
 	'accounts.statuses_count': COUNTER,

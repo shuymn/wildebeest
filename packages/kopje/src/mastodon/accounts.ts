@@ -4,6 +4,7 @@ import {
 	authorized,
 	credential as tokenCredential,
 	optionalCredential,
+	optionalTokenCredential,
 	present,
 	refuseAfterAuth,
 	requestParams,
@@ -25,6 +26,7 @@ import {
 	type RelationshipResult,
 	type Visibility,
 } from '../domain/accounts'
+import { DIRECTORY_DEFAULT_LIMIT, DIRECTORY_MAX_LIMIT } from '../domain/directory'
 import type { ProfileImage } from '../domain/media'
 import { grantsAny } from '../security/scopes'
 
@@ -319,6 +321,39 @@ export const endorsements: ApiHandler = async (c, deps) => {
 	const input = { credential: userCredential(c, deps), page, present: present(c) }
 	const result = authorized(await storeCall(c, deps, (s, b) => s.listEndorsements(b, input)))
 	return page === null ? c.json(result.items) : pageResponse(c, result, page.limit)
+}
+
+// GET /api/v1/directory (Api::V1::DirectoriesController#show, domain/directory.ts). Parameters as Mastodon reads them:
+// `order` new or active (the default; Kopje reads any other value as active, where Mastodon fails), `local` as a
+// Rails boolean, `offset` (a negative or unreadable one is 0), and `limit` as limit_param (the absolute value, at
+// most 80; 0 or an unreadable one answers no accounts). Without a token, the answer may be cached by anyone for 15
+// seconds (cache_if_unauthenticated!), varying by Authorization as every Mastodon API answer does.
+export const directory: ApiHandler = async (c, deps) => {
+	const p = await requestParams(c, deps)
+	if (p instanceof Response) {
+		return p
+	}
+	const credential = optionalTokenCredential(c, deps)
+	const limit = p.get('limit')
+	const input = {
+		credential,
+		order: p.get('order') === 'new' ? ('new' as const) : ('active' as const),
+		local: parseBoolean(p.get('local')) ?? false,
+		offset: Math.max(Number.parseInt(p.get('offset') ?? '0', 10) || 0, 0),
+		limit:
+			limit === undefined
+				? DIRECTORY_DEFAULT_LIMIT
+				: Math.min(Math.abs(Number.parseInt(limit, 10) || 0), DIRECTORY_MAX_LIMIT),
+		now: deps.now(),
+		present: present(c),
+	}
+	const accounts = authorized(await storeCall(c, deps, (s, b) => s.directory(b, input)))
+	return credential === null
+		? c.json(accounts, 200, {
+				'cache-control': 'public, max-age=15, stale-while-revalidate=30, stale-if-error=86400',
+				vary: 'Authorization',
+			})
+		: c.json(accounts)
 }
 
 // GET /api/v1/accounts/:id/endorsements (Accounts::EndorsementsController#index): public.
