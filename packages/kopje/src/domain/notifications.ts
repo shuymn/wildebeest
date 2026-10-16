@@ -449,13 +449,15 @@ function removalBatch(db: Db, removal: Removal): boolean {
 	return false
 }
 
-// At most `batches` batches of the pending removals, the clears first, each oldest first. Returns whether one is left.
+// At most `batches` batches of the pending removals, each kind oldest first, taking turns: a clear, then a group's
+// dismissal, then a clear, so neither kind waits while the other has work. Returns whether one is left.
 export function runRemovals(db: Db, batches: number): boolean {
+	const clear = () =>
+		db.first<Removal>('SELECT account_id, NULL AS group_key, max_id FROM notification_clears ORDER BY rowid LIMIT 1')
+	const dismissal = () =>
+		db.first<Removal>('SELECT account_id, group_key, max_id FROM notification_dismissals ORDER BY rowid LIMIT 1')
 	for (let batch = 0; batch < batches; batch++) {
-		const removal =
-			db.first<Removal>(
-				'SELECT account_id, NULL AS group_key, max_id FROM notification_clears ORDER BY rowid LIMIT 1'
-			) ?? db.first<Removal>('SELECT account_id, group_key, max_id FROM notification_dismissals ORDER BY rowid LIMIT 1')
+		const removal = batch % 2 === 0 ? (clear() ?? dismissal()) : (dismissal() ?? clear())
 		if (removal === undefined) {
 			return false
 		}

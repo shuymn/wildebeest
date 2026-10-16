@@ -425,3 +425,65 @@ describe('a notification again after a clear, its old row not yet deleted', () =
 		expect(await count(h)).toBe(1)
 	}, 120_000)
 })
+
+describe('the rounds share their batches between clears and dismissals', () => {
+	it("deletes a dismissed group while other accounts' clears keep arriving, within the round's batches", async () => {
+		const h = await community(['alice', 'bob'])
+		const { alice, bob } = h.users
+		const GROUP = 3 * IN_REQUEST
+		await sql(
+			h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO accounts (id, uri, username, domain)
+			SELECT printf('7%017d', i), 'https://far.example/users/u' || i, 'u' || i, 'far.example' FROM n`,
+			GROUP
+		)
+		// Bob's group, dismissed, and alice's follows, cleared, each pending with more than a round deletes.
+		await sql(
+			h.store,
+			`INSERT INTO notifications (account_id, type, from_account_id, group_key)
+			SELECT ?, 'follow', id, 'follow-1' FROM accounts WHERE domain = 'far.example'`,
+			bob.id
+		)
+		await sql(
+			h.store,
+			`INSERT INTO notification_dismissals (account_id, group_key, max_id)
+			SELECT ?, 'follow-1', max(id) FROM notifications`,
+			bob.id
+		)
+		const clearMore = async () => {
+			await sql(
+				h.store,
+				`INSERT INTO notifications (account_id, type, from_account_id)
+				SELECT ?1, 'follow_request', id FROM accounts WHERE domain = 'far.example' ORDER BY id LIMIT ?2
+				ON CONFLICT DO NOTHING`,
+				alice.id,
+				IN_REQUEST * 2
+			)
+			await sql(
+				h.store,
+				`INSERT INTO notification_clears (account_id, max_id) SELECT ?1, max(id) FROM notifications WHERE account_id = ?1
+				ON CONFLICT (account_id) DO UPDATE SET max_id = excluded.max_id`,
+				alice.id
+			)
+		}
+		const left = async () => [await count(h, 'account_id = ?', alice.id), await count(h, 'account_id = ?', bob.id)]
+		await clearMore()
+		// Bob's group takes half of each round's batches: six rounds, and a seventh finds it done.
+		for (let round = 0; round < 7; round++) {
+			const [aliceBefore, bobBefore] = await left()
+			expect((await h.store.runInboundJobs(BUILD, { now: NOW })).pending).toBe(true)
+			const [aliceAfter, bobAfter] = await left()
+			// The round's batches, shared: no more than they delete in all, and some of each.
+			expect(aliceBefore! - aliceAfter! + (bobBefore! - bobAfter!)).toBeLessThanOrEqual(IN_REQUEST)
+			if (bobBefore! > 0) {
+				expect(bobAfter).toBeLessThan(bobBefore!)
+			}
+			// Alice's clear is never done: her follow requests come back, cleared again.
+			await sql(h.store, "DELETE FROM notifications WHERE account_id = ? AND type = 'follow_request'", alice.id)
+			await clearMore()
+		}
+		expect((await left())[1]).toBe(0)
+		expect(await pending(h)).toEqual([expect.objectContaining({ kind: 'clear' })])
+	}, 120_000)
+})
