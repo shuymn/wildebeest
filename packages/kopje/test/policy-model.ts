@@ -145,10 +145,7 @@ export class PolicyModel {
 	// the owner, neither hides its network nor blocks the viewer.
 	followListsShown(owner: number, viewer: Viewer): boolean {
 		const account = this.account(owner)
-		return (
-			this.available(owner) &&
-			(owner === viewer || (!(account.local && account.hidesCollections) && !this.blocks(owner, viewer)))
-		)
+		return this.available(owner) && (owner === viewer || (!account.hidesCollections && !this.blocks(owner, viewer)))
 	}
 
 	// R13: x is listed among the owner's followers or following to the viewer: an anonymous viewer and the owner see

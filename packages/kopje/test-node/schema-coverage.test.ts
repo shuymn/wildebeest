@@ -33,6 +33,8 @@ const NOT_CARRIED: Record<string, string> = {
 	account_pins:
 		'legacy never wrote its endorsements table, and a legacy row there stops the conversion (UNUSED_LEGACY_TABLES)',
 	backup_media: 'the backup media index of one bucket; a converted Store starts a fresh baseline',
+	collection_syncs: "work Kopje asks for when it stores a remote account's document; legacy has none",
+	collection_pins_pending: 'pinned statuses a sync of Kopje has yet to fetch; legacy has none',
 	conversation_mutes:
 		'legacy never wrote its conversation_mutes table, and a legacy row there stops the conversion (UNUSED_LEGACY_TABLES)',
 	deliveries: 'outbound queue; legacy queues are not carried',
@@ -98,6 +100,7 @@ const DEFAULT = 'left at its default by the converter (NOT_CONVERTED)'
 const NOT_CONVERTED: Record<string, string> = {
 	'accounts.confirmed_username': 'set when Kopje confirms a WebFinger domain; legacy has none',
 	'accounts.deleted_at': 'set when a remote actor deletes itself in Kopje; legacy has no account being deleted',
+	'accounts.hide_collections': "learned when Kopje reads a remote account's collections; legacy learned none",
 	'accounts.last_status_id': 'written by the triggers of 0021_directory as the carried statuses are inserted',
 	'blocks.id': ASSIGNED,
 	'bookmarks.id': ASSIGNED,
@@ -139,6 +142,7 @@ const NOT_VERIFIED: Record<string, string> = {
 	'accounts.fetched_at': TIME,
 	'accounts.followers_count': COUNTER,
 	'accounts.following_count': COUNTER,
+	'accounts.hide_collections': DEFAULT,
 	'accounts.inbox_url': FROM_RAW,
 	'accounts.last_status_id': 'derived by triggers from the statuses, which are compared',
 	'accounts.search_text': SEARCH,

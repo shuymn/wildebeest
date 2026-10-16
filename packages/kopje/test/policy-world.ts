@@ -6,7 +6,8 @@ import type { RepliesPolicy } from '../src/domain/lists'
 
 // A generated world for the policy oracle (test/policy-oracle.test.ts) and the bounds harness
 // (test/policy-bounds.test.ts): local accounts (one of them may be suspended, some may hide their network), remote
-// accounts on two domains (one of them may be being deleted, its statuses and edges still stored), statuses of every
+// accounts on two domains (one of them may be being deleted, its statuses and edges still stored, and some may hide
+// their network, as Kopje learned of them), statuses of every
 // visibility with mentions (some silent), boosts and replies (some to a status never stored, and some continuing such
 // a reply, as a purge leaves a reply to the account it removes), and the edges the rules read: follows (pending and
 // accepted), blocks both ways, mutes with and without an expiry and with and without notifications, and domain blocks
@@ -57,7 +58,7 @@ type WorldAccount = {
 	suspended: boolean
 	// Remote accounts only: its deletion has started (accounts.deleted_at), and its purge has removed nothing yet.
 	deleting: boolean
-	// Local accounts only: hide_collections.
+	// hide_collections: a local account's setting, or what Kopje learned of a remote account's.
 	hidesCollections: boolean
 	// Remote accounts only: the stored domain. The actor id's host may differ from it (see HOSTS).
 	domain: string | null
@@ -114,7 +115,8 @@ export type World = {
 	mutes: { from: number; to: number; expiresAt: string | null; hideNotifications: boolean }[]
 	domainBlocks: { owner: number; domain: string }[]
 	lists: WorldList[]
-	// Local accounts' pins of their own originals that are not direct or limited, as the API makes them.
+	// Pins of accounts' own originals that are not direct or limited, as the API makes them for a local account and
+	// Kopje learns them of a remote one.
 	pins: { account: number; status: number }[]
 	// Local accounts' conversation mutes, each of a thread (statuses.thread) of the world's statuses.
 	conversationMutes: { account: number; thread: string }[]
@@ -252,7 +254,8 @@ export const worldArb: fc.Arbitrary<World> = fc
 				local: false,
 				suspended: false,
 				deleting: raw.deleting !== null && raw.deleting % raw.remotes.length === i,
-				hidesCollections: false,
+				// Drawn from bits already drawn, as tagFollowers below: about one remote account in four.
+				hidesCollections: raw.follows[LOCALS + i]?.showReblogs === true && raw.follows[LOCALS + i]?.notify === true,
 				domain: remote.domain,
 				uri: `https://${actorHost(remote.host, remote.domain)}/users/r${i}`,
 			})
@@ -332,8 +335,17 @@ export const worldArb: fc.Arbitrary<World> = fc
 				return { ...list, owner, members: [...new Set(members)] }
 			}),
 			pins: unique(
-				raw.pins.flatMap((p) => {
-					const account = p.account % LOCALS
+				[
+					...raw.pins.map((p) => ({ account: p.account % LOCALS, status: p.status })),
+					// Remote accounts' pins, drawn from the same bits (a new field would change the worlds the fixed seeds of
+					// the other properties give): each draw with an even status also pins one of a remote account's.
+					...raw.pins.flatMap((p) =>
+						p.status % 2 === 0
+							? [{ account: LOCALS + (p.account % raw.remotes.length), status: Math.floor(p.status / 2) }]
+							: []
+					),
+				].flatMap((p) => {
+					const account = p.account
 					const pinnable = statuses.flatMap((status, s) =>
 						status.author === account &&
 						status.reblogOf === null &&
@@ -398,13 +410,16 @@ export function writeWorld(sql: SqlStorage, world: World): void {
 		const username = account.name.toLowerCase()
 		// Every account's search text holds "account", so an account search for it reads them all.
 		sql.exec(
-			'INSERT INTO accounts (id, uri, username, domain, search_text, deleted_at) VALUES (?, ?, ?, ?, ?, ?)',
+			`INSERT INTO accounts (id, uri, username, domain, search_text, deleted_at, hide_collections)
+			VALUES (?, ?, ?, ?, ?, ?, ?)`,
 			accountId(i),
 			account.uri,
 			username,
 			account.domain,
 			`account ${account.domain === null ? username : `${username}@${account.domain}`}`,
-			account.deleting ? '2026-01-01T00:00:00.000Z' : null
+			account.deleting ? '2026-01-01T00:00:00.000Z' : null,
+			// A remote account Kopje has not learned of hides nothing, as one that shows its network.
+			account.local || !account.hidesCollections ? null : 1
 		)
 		if (account.local) {
 			sql.exec(

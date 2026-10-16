@@ -15,11 +15,14 @@ import type { Db } from '../db/sql'
 // it and when the newest was published. Those two are kept as the account's statuses are written, edited and deleted
 // (countFeaturedTags, uncountFeaturedTags), as FeaturedTag#increment and #decrement keep them, so a read never counts.
 // Featuring or unfeaturing sends the account's followers an Add or a Remove of the Hashtag (CreateFeaturedTagService,
-// RemoveFeaturedTagService), and the actor's featuredTags collection lists them (federation.ts). Kopje does not read
-// the featured hashtags of remote accounts.
+// RemoveFeaturedTagService), and the actor's featuredTags collection lists them (federation.ts). A remote account's
+// featured hashtags are learned into the same rows (remote-collections.ts) and shown by the same read, but its counts
+// are not kept: others write its history, so the read counts its newest FEATURED_COUNT_WINDOW statuses instead.
 
 // FeaturedTag::LIMIT, and its message (featured_tags.errors.limit).
 export const MAX_FEATURED_TAGS = 10
+// The newest statuses of a remote account Kopje holds that a read of its featured hashtags counts.
+export const FEATURED_COUNT_WINDOW = 200
 const TOO_MANY = 'You have already featured the maximum number of hashtags'
 
 // REST::FeaturedTagSerializer.
@@ -38,21 +41,38 @@ type FeaturedRow = {
 	statuses_count: number
 	last_status_at: string | null
 	username: string
+	domain: string | null
 }
 
-const FEATURED_COLUMNS = `f.id, f.name, f.display_name, f.statuses_count, f.last_status_at, a.username`
+// A remote account's statuses within its window that count for the featured hashtag `f`: its newest
+// FEATURED_COUNT_WINDOW (by statuses_account) that are public or unlisted originals with the hashtag, each a key lookup.
+// A read shows at most MAX_FEATURED_TAGS of an account, so it reads at most that many windows.
+const REMOTE_COUNTED = `FROM statuses s
+	WHERE s.id IN (SELECT id FROM statuses WHERE account_id = f.account_id ORDER BY id DESC LIMIT ${FEATURED_COUNT_WINDOW})
+		AND s.reblog_of_id IS NULL AND s.visibility IN ${DISTRIBUTABLE_SQL}
+		AND EXISTS (SELECT 1 FROM status_tags t WHERE t.status_id = s.id AND t.name = f.name)`
+
+// A local account's counts as they are kept; a remote account's counted at read time over its window.
+const FEATURED_COLUMNS = `f.id, f.name, f.display_name,
+	CASE WHEN a.domain IS NULL THEN f.statuses_count ELSE (SELECT count(*) ${REMOTE_COUNTED}) END AS statuses_count,
+	CASE WHEN a.domain IS NULL THEN f.last_status_at
+		ELSE (SELECT s.published_at ${REMOTE_COUNTED} ORDER BY s.id DESC LIMIT 1) END AS last_status_at,
+	a.username, a.domain`
 const FEATURED_FROM = 'FROM featured_tags f JOIN accounts a ON a.id = f.account_id'
 
-// The URL of the account's statuses with the hashtag (Mastodon's short_account_tag_url): its profile, tagged.
-export function taggedUrl(origin: string, username: string, name: string): string {
-	return `${origin}/@${username}/tagged/${encodeURIComponent(name)}`
+// The URL of the account's statuses with the hashtag (Mastodon's short_account_tag_url): its profile, tagged. A remote
+// account's is named by its address (/@username@domain/tagged/:tag, Mastodon's account_with_domain route), which the
+// web answers with a redirect to its profile; Mastodon's REST::FeaturedTagSerializer builds /@username/tagged/:tag for
+// it too, which names a local account of the same username.
+export function taggedUrl(origin: string, username: string, name: string, domain: string | null = null): string {
+	return `${origin}/@${domain === null ? username : `${username}@${domain}`}/tagged/${encodeURIComponent(name)}`
 }
 
 function presentFeatured(row: FeaturedRow, origin: string): FeaturedTag {
 	return {
 		id: row.id,
 		name: row.display_name,
-		url: taggedUrl(origin, row.username, row.name),
+		url: taggedUrl(origin, row.username, row.name, row.domain),
 		statuses_count: String(row.statuses_count),
 		// Mastodon shows the date of the newest status only (last_status_at.to_date.iso8601).
 		last_status_at: row.last_status_at?.slice(0, 10) ?? null,
@@ -99,9 +119,14 @@ export function featuredTagNamed(db: Db, accountId: string, name: string): Featu
 	)
 }
 
-// Whether the account features MAX_FEATURED_TAGS hashtags already (FeaturedTag#validate_featured_tags_limit).
-function featuresMost(db: Db, accountId: string): boolean {
-	const featured = db.first<{ n: number }>('SELECT count(*) AS n FROM featured_tags WHERE account_id = ?', accountId)
+// Whether the account features MAX_FEATURED_TAGS hashtags already (FeaturedTag#validate_featured_tags_limit), counting
+// no further than that.
+export function featuresMost(db: Db, accountId: string): boolean {
+	const featured = db.first<{ n: number }>(
+		'SELECT count(*) AS n FROM (SELECT 1 FROM featured_tags WHERE account_id = ? LIMIT ?)',
+		accountId,
+		MAX_FEATURED_TAGS
+	)
 	return (featured?.n ?? 0) >= MAX_FEATURED_TAGS
 }
 
@@ -109,17 +134,29 @@ function featuresMost(db: Db, accountId: string): boolean {
 // account's statuses as FeaturedTag#reset_data reads them, and the Add its followers are sent. The caller has checked
 // that it is not featured yet and that the account may feature one more (featuresMost).
 function insertFeatured(db: Db, accountId: string, display: string, now: number, origin: string): FeaturedRow {
+	const row = writeFeatured(db, accountId, display, now)
+	recordFeaturedChange(db, accountId, 'Add', row, now, origin)
+	return row
+}
+
+// The row of a featured hashtag `display` (a valid hashtag name) of any account, local or remote: a local account's
+// with its counts read from its statuses as FeaturedTag#reset_data reads them; a remote account's without (the read
+// counts them). Nothing is sent. The caller has checked that the account does not feature it yet.
+export function writeFeatured(db: Db, accountId: string, display: string, now: number): FeaturedRow {
 	const name = normalizeTag(display)
+	const local = db.first('SELECT 1 AS x FROM local_accounts WHERE account_id = ?', accountId) !== undefined
 	// The account's public and unlisted statuses with the hashtag, and the newest (by id, as Mastodon's default order
 	// picks it). A walk of the account's own statuses, once, when the account features the hashtag.
-	const counted = db.first<{ n: number; last: string | null }>(
-		`SELECT c.n, (SELECT published_at FROM statuses WHERE id = c.last_id) AS last
+	const counted = !local
+		? undefined
+		: db.first<{ n: number; last: string | null }>(
+				`SELECT c.n, (SELECT published_at FROM statuses WHERE id = c.last_id) AS last
 		FROM (SELECT count(*) AS n, max(s.id) AS last_id FROM statuses s
 			WHERE s.account_id = ?1 AND s.reblog_of_id IS NULL AND s.visibility IN ${DISTRIBUTABLE_SQL}
 				AND EXISTS (SELECT 1 FROM status_tags t WHERE t.status_id = s.id AND t.name = ?2)) c`,
-		accountId,
-		name
-	)
+				accountId,
+				name
+			)
 	db.run(
 		`INSERT INTO featured_tags (id, account_id, name, display_name, statuses_count, last_status_at, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -135,12 +172,11 @@ function insertFeatured(db: Db, accountId: string, display: string, now: number,
 	if (row === undefined) {
 		throw new Error('the featured hashtag was not written')
 	}
-	recordFeaturedChange(db, accountId, 'Add', row, now, origin)
 	return row
 }
 
 // FeaturedTag's normalization of a name: surrounding whitespace and one leading # dropped.
-function displayName(name: string): string {
+export function displayName(name: string): string {
 	return name.trim().replace(/^#/, '')
 }
 
@@ -266,13 +302,14 @@ function recordFeaturedChange(
 // unlisted, and carries the hashtag (FeaturedTag#visible_tagged_account_statuses: distributable_visibility).
 
 // The status's author, its publication time, and the names of its hashtags its author features, if it counts (none
-// when it does not, or when its author features none of them).
+// when it does not, or when its author features none of them). A remote author's counts are not kept (the read counts
+// them), so its statuses count for none here.
 export type FeaturedOfStatus = { accountId: string; publishedAt: string; id: string; names: string[] }
 
 export function featuredOfStatus(db: Db, statusId: string): FeaturedOfStatus | null {
 	const status = db.first<{ account_id: string; published_at: string; counted: number }>(
-		`SELECT account_id, published_at, reblog_of_id IS NULL AND visibility IN ${DISTRIBUTABLE_SQL} AS counted
-		FROM statuses WHERE id = ?`,
+		`SELECT s.account_id, s.published_at, s.reblog_of_id IS NULL AND s.visibility IN ${DISTRIBUTABLE_SQL} AS counted
+		FROM statuses s JOIN local_accounts l ON l.account_id = s.account_id WHERE s.id = ?`,
 		statusId
 	)
 	if (status === undefined || status.counted !== 1) {

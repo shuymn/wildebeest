@@ -300,7 +300,8 @@ describe('spool consumer', () => {
 		const healthy = await migratedStore()
 		await completeSetup(healthy)
 		await consume({ ...env, MAINTENANCE: 'off' } as Env, () => healthy)
-		expect(queue.pending).toEqual([])
+		// The spooled request is gone; the Follow stored its actor, whose collections a round of jobs reads.
+		expect(queue.pending.map((m) => m.body)).toEqual([{ kind: 'inbound-jobs' }])
 		expect(queue.retries).toBe(0)
 	})
 

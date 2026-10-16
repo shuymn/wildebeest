@@ -306,8 +306,12 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   by. Familiar followers show no followers of an account that hides its network, to anyone, the account itself included,
   and leave out a follower that hides its own (Mastodon's `FamiliarFollowersPresenter`). The ActivityPub followers and
   following collections of a suspended actor answer 404, and those of an actor that hides its network show `totalItems`
-  only and answer a page with 403. Kopje does not learn a remote account's setting, so a remote account's lists are
-  never hidden. _Implemented on branch `kopje/account-lists`:_ `followListsShownSql` and `followListedSql` in
+  only and answer a page with 403. A remote account's setting is learned as Mastodon's ProcessAccountService learns
+  it (its followers or following collection shows no first page) and hides its lists the same way; one Kopje has not
+  learned yet hides nothing, and a collection that cannot be read for now leaves what was learned unless the other
+  one is known to hide its items (`src/federation/collections.ts`, `accounts.hide_collections`;
+  `test/remote-collections.test.ts`). _Implemented on branch `kopje/account-lists`:_ `followListsShownSql` and
+  `followListedSql` in
   `src/domain/audience.ts`, `listFollows` and `familiarFollowers` in `src/domain/accounts.ts`, `getCollection` in
   `src/domain/actors.ts`; `test/accounts.test.ts` ("follower lists for the viewer (R13)"), `test/account-reads.test.ts`
   ("shows no followers of an account that hides its network"), `test/federation.test.ts` ("shows only the size of the
@@ -1316,6 +1320,13 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   for status cursors: `statusCursor` in `src/domain/statuses.ts` (_Gap: untested_).
 - **DATA-7: the instance key signs only recipient-neutral fetches and the instance actor's own activities.** Fetches
   without a specific recipient are signed by the instance actor; fetches for a personal inbox by the recipient's key;
+  fetches on a remote account's behalf (a sync of its featured and featuredTags collections in the background job
+  rounds, and the pinned status an `Add` names) by the key of a local account that follows it, as Mastodon signs them
+  with `local_follower`, else by the instance actor, never by a personal inbox's recipient. The follower is named by
+  its account id and the remote account's, and its key is loaded only while it is available and still follows the
+  remote account, which is checked again then; otherwise the instance actor signs (`localFollower` in
+  `src/domain/remote-collections.ts`, `getFollowerKey` in `src/domain/actors.ts`, `src/federation/collections.ts`,
+  `receiveInbound` in `src/federation/inbound.ts`; `test/remote-collections.test.ts`);
   activities by their author's key. The instance key never signs an activity attributed to a user: the one activity it
   signs is a forwarded report's `Flag`, whose actor is the instance actor (Mastodon's `Account.representative`).
   _Enforced (main)_ for fetches: `src/federation/federation.ts`; `test/signed-fetch.test.ts` ("signed fetches").

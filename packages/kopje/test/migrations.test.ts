@@ -23,6 +23,7 @@ const SCHEMA_TABLES = [
 	'accounts',
 	'blocks',
 	'bookmarks',
+	'collection_syncs',
 	'conversation_mutes',
 	'conversation_statuses',
 	'conversations',
@@ -2811,6 +2812,201 @@ describe('0024_attribution_domains', () => {
 			expect(sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
 		})
 	})
+})
+
+describe('0025_remote_collections', () => {
+	const NAME = '0025_remote_collections'
+	const id = (n: number) => String(100000000000000000n + BigInt(n))
+
+	// The file's statements (it has no trigger).
+	function statements(): string[] {
+		const out: string[] = []
+		let current = ''
+		for (const line of (MIGRATIONS.find((m) => m.name === NAME)?.sql ?? '').split('\n')) {
+			if (line.startsWith('--') || line.trim() === '') {
+				continue
+			}
+			current += `${line}\n`
+			if (line.endsWith(';')) {
+				out.push(current)
+				current = ''
+			}
+		}
+		return out
+	}
+
+	it(`upgrades a Store with ${NAME}: local pins and featured hashtags kept, and any account's taken from now on`, async () => {
+		const at = NAMES.indexOf(NAME)
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, MIGRATIONS.slice(0, at)).upgrade()).toMatchObject({ ok: true })
+			const [alice, bob] = [id(1), id(2)]
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username) VALUES (?, 'https://kopje.test/ap/users/alice', 'alice')",
+				alice
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey, hide_collections) VALUES (?, 'a@example.com', X'00', X'00', 'k', 1)",
+				alice
+			)
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username, domain) VALUES (?, 'https://remote.example/users/bob', 'bob', 'remote.example')",
+				bob
+			)
+			for (const [n, author] of [
+				[11, alice],
+				[12, alice],
+				[21, bob],
+			] as const) {
+				sql.exec(
+					"INSERT INTO statuses (id, uri, account_id, visibility, published_at) VALUES (?, ?, ?, 'public', '2026-10-01T00:00:00.000Z')",
+					id(n),
+					`https://example/o/${n}`,
+					author
+				)
+			}
+			sql.exec(
+				"INSERT INTO status_pins (account_id, status_id, created_at) VALUES (?1, ?2, '2026-10-01T00:00:00.000Z'), (?1, ?3, '2026-10-02T00:00:00.000Z')",
+				alice,
+				id(11),
+				id(12)
+			)
+			sql.exec(
+				`INSERT INTO featured_tags (id, account_id, name, display_name, statuses_count, last_status_at, created_at)
+				VALUES (?, ?, 'cats', 'Cats', 2, '2026-10-01T00:00:00.000Z', '2026-10-03T00:00:00.000Z')`,
+				id(31),
+				alice
+			)
+			// A remote account's rows were refused before.
+			expect(() => sql.exec('INSERT INTO status_pins (account_id, status_id) VALUES (?, ?)', bob, id(21))).toThrow(
+				/FOREIGN KEY/
+			)
+			const pins = () => sql.exec('SELECT account_id, status_id, created_at FROM status_pins ORDER BY 1, 2').toArray()
+			const featured = () => sql.exec('SELECT * FROM featured_tags ORDER BY id').toArray()
+			const [pinsBefore, featuredBefore] = [pins(), featured()]
+
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+			expect(pins()).toEqual(pinsBefore)
+			expect(featured()).toEqual(featuredBefore)
+			expect(
+				sql
+					.exec("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'status_pins' AND sql IS NOT NULL")
+					.toArray()
+			).toEqual([{ name: 'status_pins_status' }])
+			expect(sql.exec('SELECT id, hide_collections FROM accounts ORDER BY id').toArray()).toEqual([
+				{ id: alice, hide_collections: null },
+				{ id: bob, hide_collections: null },
+			])
+			expect(sql.exec('SELECT count(*) AS n FROM collection_syncs').one()).toEqual({ n: 0 })
+
+			// Now a remote account pins, features, hides and waits for a sync; an unknown account still cannot.
+			sql.exec('INSERT INTO status_pins (account_id, status_id) VALUES (?, ?)', bob, id(21))
+			sql.exec(
+				"INSERT INTO featured_tags (id, account_id, name, display_name) VALUES (?, ?, 'dogs', 'Dogs')",
+				id(32),
+				bob
+			)
+			sql.exec('UPDATE accounts SET hide_collections = 1 WHERE id = ?', bob)
+			// The column has no constraint, so adding it checked no stored account (SQLite validates existing rows against
+			// a CHECK, NOT NULL or foreign key of an added column).
+			const column = sql
+				.exec<{ sql: string }>("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'accounts'")
+				.one()
+				.sql.match(/hide_collections[^,)]*/)?.[0]
+			expect(column).toBe('hide_collections INTEGER')
+			sql.exec('INSERT INTO collection_syncs (account_id, due_at) VALUES (?, 1)', bob)
+			expect(() => sql.exec('INSERT INTO status_pins (account_id, status_id) VALUES (?, ?)', id(9), id(21))).toThrow(
+				/FOREIGN KEY/
+			)
+			expect(() => sql.exec('INSERT INTO collection_syncs (account_id, due_at) VALUES (?, 1)', id(9))).toThrow(
+				/FOREIGN KEY/
+			)
+			expect(() =>
+				sql.exec(
+					"INSERT INTO featured_tags (id, account_id, name, display_name) VALUES (?, ?, 'dogs', 'x')",
+					id(33),
+					bob
+				)
+			).toThrow(/UNIQUE/)
+			// They go with their status and their account.
+			sql.exec('DELETE FROM statuses WHERE id = ?', id(11))
+			expect(pins()).toEqual([pinsBefore[1], expect.objectContaining({ account_id: bob, status_id: id(21) })])
+			sql.exec('DELETE FROM accounts WHERE id = ?', bob)
+			expect(pins()).toEqual([pinsBefore[1]])
+			expect(featured()).toEqual(featuredBefore)
+			expect(sql.exec('SELECT count(*) AS n FROM collection_syncs').one()).toEqual({ n: 0 })
+			expect(sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
+		})
+	})
+
+	it('reads each pin and featured hashtag a bounded number of times, and nothing remote', async () => {
+		const at = NAMES.indexOf(NAME)
+		// `locals` local accounts with `each` pins and featured hashtags each, and `remotes` remote accounts, each with a
+		// stored document of about 2 KB and ten statuses.
+		const measure = async (locals: number, each: number, remotes: number) => {
+			const store = freshStore()
+			return runInDurableObject(store, async (_instance, state) => {
+				const sql = state.storage.sql
+				await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+				sql.exec(
+					`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+					INSERT INTO accounts (id, uri, username, domain)
+					SELECT CAST(100000000000000000 + i AS TEXT), 'https://kopje.test/ap/users/u' || i, 'u' || i, NULL FROM n`,
+					locals
+				)
+				sql.exec(
+					`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey)
+					SELECT id, username || '@example.com', X'00', X'00', 'k' FROM accounts`
+				)
+				sql.exec(
+					`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+					INSERT INTO accounts (id, uri, username, domain, raw)
+					SELECT CAST(300000000000000000 + i AS TEXT), 'https://remote.example/users/r' || i, 'r' || i, 'remote.example',
+						json_object('summary', hex(randomblob(1000)))
+					FROM n`,
+					remotes
+				)
+				sql.exec(
+					`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+					INSERT INTO statuses (id, uri, account_id, visibility, published_at)
+					SELECT CAST(CAST(a.id AS INTEGER) + 100000000000000000 + n.i * 1000000 AS TEXT), a.uri || '/s/' || n.i, a.id,
+						'public', '2026-10-01T00:00:00.000Z'
+					FROM accounts a CROSS JOIN n WHERE a.domain IS NOT NULL OR n.i < ?2`,
+					Math.max(each, 10),
+					each
+				)
+				sql.exec(
+					`INSERT INTO status_pins (account_id, status_id)
+					SELECT s.account_id, s.id FROM statuses s JOIN local_accounts l ON l.account_id = s.account_id`
+				)
+				sql.exec(
+					`INSERT INTO featured_tags (id, account_id, name, display_name)
+					SELECT CAST(CAST(s.id AS INTEGER) + 100000000000000000 AS TEXT), s.account_id, 't' || s.id, 't' || s.id
+					FROM statuses s JOIN local_accounts l ON l.account_id = s.account_id`
+				)
+				let read = 0
+				for (const statement of statements()) {
+					const cursor = sql.exec(statement)
+					cursor.toArray()
+					read += cursor.rowsRead
+				}
+				// Not vacuous: every row was copied.
+				expect(
+					sql.exec('SELECT (SELECT count(*) FROM status_pins) + (SELECT count(*) FROM featured_tags) AS n').one()
+				).toEqual({ n: 2 * locals * each })
+				return read
+			})
+		}
+		const few = await measure(100, 5, 0)
+		const remote = await measure(100, 5, 5000)
+		const locals = await measure(1000, 5, 0)
+		const each = await measure(100, 50, 0)
+		// The remote accounts and their statuses are not read; each pin and featured hashtag a few times.
+		expect(remote).toBeLessThanOrEqual(few + 10)
+		expect(locals - few).toBeLessThanOrEqual(4 * 2 * (1000 - 100) * 5)
+		expect(each - few).toBeLessThanOrEqual(4 * 2 * 100 * (50 - 5))
+	}, 120_000)
 })
 
 describe('0026_streaming', () => {

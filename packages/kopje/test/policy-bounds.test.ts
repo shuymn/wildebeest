@@ -16,7 +16,7 @@ import { backfillConversations } from '../src/domain/conversation-rows'
 import { listConversations } from '../src/domain/conversations'
 import { directory, DIRECTORY_WINDOW } from '../src/domain/directory'
 import { accountEndorsements, listEndorsements } from '../src/domain/endorsements'
-import { accountFeaturedTags, listFeaturedTags } from '../src/domain/featured-tags'
+import { accountFeaturedTags, FEATURED_COUNT_WINDOW, listFeaturedTags } from '../src/domain/featured-tags'
 import {
 	getFilter,
 	listFilterKeywords,
@@ -49,7 +49,15 @@ import {
 	runNotificationRequestJobs,
 } from '../src/domain/notification-requests'
 import { clearNotifications, listNotifications, REMOVAL_BATCHES, REMOVAL_WINDOW } from '../src/domain/notifications'
+import { writeOperation } from '../src/domain/operation'
 import { getPoll, vote } from '../src/domain/polls'
+import {
+	claimCollectionSync,
+	featureRemote,
+	MAX_REMOTE_PINS,
+	SYNC_LEASE_MS,
+	unfeatureRemote,
+} from '../src/domain/remote-collections'
 import { createReport } from '../src/domain/reports'
 import { dueScheduled, listScheduled, publishScheduled } from '../src/domain/scheduled-statuses'
 import { search } from '../src/domain/search'
@@ -3727,6 +3735,258 @@ describe('clearing and dismissing touch a bounded batch, and reads skip what the
 			expect((newest as { value: { items: unknown[] } }).value.items).toHaveLength(FOLLOWS + REQUESTS)
 		}
 	}, 240_000)
+})
+
+// What Kopje learned of a remote account's collections (migration 0025_remote_collections) is read like a local
+// account's: its pins by their key (at most MAX_REMOTE_PINS), its featured hashtags (at most MAX_FEATURED_TAGS), and
+// whether it hides its network by a key lookup. Each read, and a round's claim of the oldest waiting sync, reads the
+// same rows however many statuses the account has, however many accounts follow it, and however many other remote
+// accounts have pins, featured hashtags and syncs waiting or held by rounds.
+describe("a remote account's learned collections cost a bounded read (RES-7)", () => {
+	const OWNER = '930000000000000000'
+	const OWNER_URI = 'https://far.example/users/owner'
+	const OTHER_BASE = 931000000000000000n
+	const STATUS_BASE = 940000000000000000n
+	const FEATURED_BASE = 950000000000000000n
+
+	async function learned(count: number): Promise<StoreStub> {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			const raw = JSON.stringify({
+				id: OWNER_URI,
+				featured: `${OWNER_URI}/collections/featured`,
+				featuredTags: `${OWNER_URI}/collections/tags`,
+				followers: `${OWNER_URI}/followers`,
+				following: `${OWNER_URI}/following`,
+			})
+			sql.exec(
+				`INSERT INTO accounts (id, uri, username, domain, raw, hide_collections)
+				VALUES (?, ?, 'owner', 'far.example', ?, 1)`,
+				OWNER,
+				OWNER_URI,
+				raw
+			)
+			// Other remote accounts, each following the owner, with a pinned status, a featured hashtag and a sync waiting
+			// behind the owner's, or in front of it and held by rounds.
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+				INSERT INTO accounts (id, uri, username, domain)
+				SELECT CAST(?2 + i AS TEXT), 'https://far' || (i % 10) || '.example/users/o' || i, 'o' || i,
+					'far' || (i % 10) || '.example' FROM n`,
+				count,
+				String(OTHER_BASE)
+			)
+			sql.exec(
+				`INSERT INTO follows (account_id, target_account_id, state)
+				SELECT id, ?, 'accepted' FROM accounts WHERE id <> ?1 AND domain IS NOT NULL`,
+				OWNER
+			)
+			// The owner's statuses: MAX_REMOTE_PINS pinned, then FEATURED_COUNT_WINDOW and `count` more (a full window for the featured hashtags' count); the others' one each, pinned.
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+				INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+				SELECT CAST(?2 + i AS TEXT), CASE WHEN i < ?3 THEN ?4 || '/statuses/pinned' || i ELSE ?4 || '/statuses/' || i END,
+					?5, 'public', '<p>s</p>', '2026-10-01T00:00:00.000Z' FROM n`,
+				MAX_REMOTE_PINS + FEATURED_COUNT_WINDOW + count,
+				String(STATUS_BASE),
+				MAX_REMOTE_PINS,
+				OWNER_URI,
+				OWNER
+			)
+			sql.exec(
+				`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+				SELECT CAST(CAST(id AS INTEGER) + 5000000 AS TEXT), uri || '/statuses/1', id, 'public', '<p>o</p>',
+					'2026-10-01T00:00:00.000Z'
+				FROM accounts WHERE id <> ? AND domain IS NOT NULL`,
+				OWNER
+			)
+			sql.exec(
+				`INSERT INTO status_pins (account_id, status_id)
+				SELECT account_id, id FROM statuses WHERE account_id <> ?1 OR uri GLOB ?2`,
+				OWNER,
+				`${OWNER_URI}/statuses/pinned*`
+			)
+			sql.exec(
+				`INSERT INTO featured_tags (id, account_id, name, display_name)
+				SELECT CAST(?1 + CAST(id AS INTEGER) - ?2 AS TEXT), id, 'tag', 'Tag' FROM accounts WHERE domain IS NOT NULL`,
+				String(FEATURED_BASE),
+				String(OTHER_BASE - 10_000_000n)
+			)
+			sql.exec(
+				`INSERT INTO collection_syncs (account_id, due_at)
+				SELECT id, CASE WHEN id = ?1 THEN 10 ELSE 100 END FROM accounts WHERE domain IS NOT NULL`,
+				OWNER
+			)
+			// Half of the others asked for theirs first, and rounds hold them (their leases end after NOW).
+			sql.exec(
+				`UPDATE collection_syncs SET due_at = ?1
+				WHERE account_id IN (SELECT id FROM accounts WHERE id <> ?2 AND domain IS NOT NULL ORDER BY id LIMIT ?3 / 2)`,
+				NOW + SYNC_LEASE_MS,
+				OWNER,
+				count
+			)
+		})
+		return store
+	}
+
+	it('reads the same rows with 20 or 2,000 statuses, followers and other accounts with learned collections', async () => {
+		const few = await learned(20)
+		const many = await learned(2000)
+		const statuses = {
+			credential: null,
+			now: NOW,
+			account: OWNER,
+			page: PAGE,
+			onlyMedia: false,
+			excludeReplies: false,
+			excludeReblogs: false,
+			pinned: true,
+			tagged: null,
+			present: PRESENT,
+		}
+		const follows = { credential: null, now: NOW, account: OWNER, page: PAGE, present: PRESENT }
+		const reads: [string, StoreOperation<never, unknown>, unknown, (output: unknown) => void][] = [
+			[
+				'pinned statuses',
+				accountStatuses,
+				statuses,
+				(output) => expect((output as { value: { items: unknown[] } }).value.items).toHaveLength(PAGE.limit),
+			],
+			[
+				'featured tags',
+				accountFeaturedTags,
+				{ id: OWNER, present: PRESENT },
+				(output) => expect(output).toEqual([expect.objectContaining({ name: 'Tag' })]),
+			],
+			[
+				'followers',
+				listFollows,
+				{ ...follows, direction: 'followers' },
+				(output) => expect((output as { value: { items: unknown[] } }).value.items).toEqual([]),
+			],
+			[
+				'claim',
+				claimCollectionSync,
+				{ now: NOW },
+				(output) => expect(output).toMatchObject({ accountUri: OWNER_URI, pending: true }),
+			],
+		]
+		const grown: string[] = []
+		for (const [name, operation, input, check] of reads) {
+			for (const store of [few, many]) {
+				check(await runInDurableObject(store, (_instance, state) => operation.run(state.storage.sql, input as never)))
+			}
+			// The claim was taken above: measured on fresh copies.
+			const [a, b] = name === 'claim' ? [await learned(20), await learned(2000)] : [few, many]
+			const fewRows = await rowsRead({ store: a }, operation, input as never)
+			const manyRows = await rowsRead({ store: b }, operation, input as never)
+			if (manyRows > fewRows + ALLOWANCE) {
+				grown.push(`${name}: ${fewRows} -> ${manyRows}`)
+			}
+		}
+		expect(grown).toEqual([])
+	}, 120_000)
+})
+
+// A remote account's featured hashtags are counted at read time over its newest FEATURED_COUNT_WINDOW statuses Kopje
+// holds (featured-tags.ts), never kept: learning one, featuring and unfeaturing it again and again, and reading them with
+// matches sparse among many statuses (and as many statuses of others with the hashtag) touch the same rows whether the
+// account has 400 statuses stored or 4,000, since its history is never walked past the window.
+describe("a remote account's featured hashtags cost a window of its statuses (RES-7)", () => {
+	const OWNER = '960000000000000000'
+	const OTHER = '960000000000000001'
+	const STATUS_BASE = 961000000000000000n
+	const OTHER_BASE = 962000000000000000n
+	const newest = (count: number) => String(STATUS_BASE + BigInt(count - 1))
+
+	// The owner's `count` public statuses: the oldest and the newest carry #cats, none between.
+	async function history(count: number, featured: boolean): Promise<StoreStub> {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username, domain) VALUES (?, 'https://far.example/users/owner', 'owner', 'far.example')",
+				OWNER
+			)
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+				INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+				SELECT CAST(?2 + i AS TEXT), 'https://far.example/s/' || i, ?3, 'public', '<p>s</p>',
+					strftime('%Y-%m-%dT%H:%M:%fZ', '2026-01-01', '+' || i || ' minutes') FROM n`,
+				count,
+				String(STATUS_BASE),
+				OWNER
+			)
+			sql.exec(
+				"INSERT INTO status_tags (status_id, name, public) VALUES (?, 'cats', 1), (?, 'cats', 1)",
+				String(STATUS_BASE),
+				newest(count)
+			)
+			// As many statuses with #cats by another account, so a walk of the hashtag grows as well.
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username, domain) VALUES (?, 'https://far.example/users/other', 'other', 'far.example')",
+				OTHER
+			)
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+				INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+				SELECT CAST(?2 + i AS TEXT), 'https://far.example/o/' || i, ?3, 'public', '<p>o</p>', '2026-01-02T00:00:00.000Z'
+				FROM n`,
+				count,
+				String(OTHER_BASE),
+				OTHER
+			)
+			sql.exec(
+				"INSERT INTO status_tags (status_id, name, public) SELECT id, 'cats', 1 FROM statuses WHERE account_id = ?",
+				OTHER
+			)
+			if (featured) {
+				sql.exec(
+					`INSERT INTO featured_tags (id, account_id, name, display_name, statuses_count, last_status_at)
+					SELECT '970000000000000000', ?1, 'cats', 'cats', 2, published_at FROM statuses WHERE id = ?2`,
+					OWNER,
+					newest(count)
+				)
+			}
+		})
+		return store
+	}
+
+	const learn = writeOperation<{ now: number }, void>((db, { now }) => {
+		featureRemote(db, OWNER, '#cats', now)
+	})
+	const toggle = writeOperation<{ now: number }, void>((db, { now }) => {
+		for (let i = 0; i < 5; i++) {
+			unfeatureRemote(db, OWNER, 'cats')
+			featureRemote(db, OWNER, '#cats', now)
+		}
+	})
+
+	it('reads the same rows with 400 or 4,000 statuses: learning, featuring again and again, and reading', async () => {
+		expect(FEATURED_COUNT_WINDOW).toBeLessThan(400)
+		const grown: string[] = []
+		const cases: [string, boolean, StoreOperation<never, unknown>, (count: number) => unknown][] = [
+			['learn', false, learn, () => ({ now: NOW })],
+			['feature again', true, toggle, () => ({ now: NOW })],
+			['read', true, accountFeaturedTags, () => ({ id: OWNER, present: PRESENT })],
+		]
+		for (const [name, featured, operation, input] of cases) {
+			const few = await rowsTouched(await history(400, featured), operation, input(400) as never)
+			const many = await rowsTouched(await history(4000, featured), operation, input(4000) as never)
+			if (many > few + ALLOWANCE) {
+				grown.push(`${name}: ${few} -> ${many}`)
+			}
+		}
+		expect(grown).toEqual([])
+		// Not vacuous: the read counts the newest status, the only one with the hashtag in the window.
+		const store = await history(4000, false)
+		await runInDurableObject(store, (_instance, state) => learn.run(state.storage.sql, { now: NOW }))
+		const read = await runInDurableObject(store, (_instance, state) =>
+			accountFeaturedTags.run(state.storage.sql, { id: OWNER, present: PRESENT })
+		)
+		expect(read).toEqual([expect.objectContaining({ statuses_count: '1', last_status_at: '2026-01-03' })])
+	}, 120_000)
 })
 
 describe('a streamed notification reads its item, however many notifications there are (RES-7)', () => {
