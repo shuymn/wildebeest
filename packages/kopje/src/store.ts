@@ -39,6 +39,7 @@ import * as notifications from './domain/notifications'
 import * as oauth from './domain/oauth'
 import * as polls from './domain/polls'
 import * as push from './domain/push'
+import * as remoteCollections from './domain/remote-collections'
 import { resolveSearch } from './domain/remote-statuses'
 import * as reports from './domain/reports'
 import * as scheduled from './domain/scheduled-statuses'
@@ -416,6 +417,20 @@ export class Store extends DurableObject<Env> {
 			pending: inbound.pending || cleanups.pending || requests.pending,
 			delivers: inbound.delivers || cleanups.delivers,
 		}
+	}
+
+	// Syncs of remote accounts' collections (domain/remote-collections.ts): claimed and applied by the Worker's job
+	// rounds (federation/collections.ts).
+	claimCollectionSync(callerBuild: string, input: OperationInput<typeof remoteCollections.claimCollectionSync>) {
+		return this.#kernel.execute(callerBuild, remoteCollections.claimCollectionSync, input)
+	}
+
+	storedStatusUris(callerBuild: string, input: OperationInput<typeof remoteCollections.storedStatusUris>) {
+		return this.#kernel.execute(callerBuild, remoteCollections.storedStatusUris, input)
+	}
+
+	applyCollectionSync(callerBuild: string, input: OperationInput<typeof remoteCollections.applyCollectionSync>) {
+		return this.#kernel.execute(callerBuild, remoteCollections.applyCollectionSync, input)
 	}
 
 	remoteKey(callerBuild: string, input: OperationInput<typeof inbox.getRemoteKey>) {

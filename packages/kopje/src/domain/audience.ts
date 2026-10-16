@@ -190,10 +190,12 @@ export function findableBySql(x: string, viewer: string): string {
 	return `(${availableSql(x)} AND NOT ${domainBlocksSql(viewer, x)})`
 }
 
-// Whether the account `x` hides its network (Account#hide_collections). Only a local account stores the setting; Kopje
-// does not learn a remote account's, so a remote account hides nothing.
+// Whether the account `x` hides its network (Account#hide_collections): a local account's setting
+// (local_accounts.hide_collections), or what Kopje learned of a remote account's (accounts.hide_collections, migration
+// 0025_remote_collections; a remote account it has not learned hides nothing). Two key lookups.
 export function hidesCollectionsSql(x: string): string {
-	return `EXISTS (SELECT 1 FROM main.local_accounts ph WHERE ph.account_id = ${x} AND ph.hide_collections = 1)`
+	return `(EXISTS (SELECT 1 FROM main.local_accounts ph WHERE ph.account_id = ${x} AND ph.hide_collections = 1)
+		OR EXISTS (SELECT 1 FROM main.accounts pha WHERE pha.id = ${x} AND pha.hide_collections = 1))`
 }
 
 // R13 (FollowerAccountsController#hide_results?): whether `viewer` (NULL: anonymous) is shown the followers and

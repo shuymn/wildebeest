@@ -13,12 +13,22 @@ import {
 	type Visibility,
 } from './audience'
 import { stageRetraction } from './deliveries'
+import { uncountFeaturedTags } from './featured-tags'
 import { insertWithFreshId, remoteId } from './ids'
 import { listsHolding } from './lists'
 import { notify } from './notifications'
 import { readOperation, writeOperation } from './operation'
 import { deleteAccountVotes, deletePollVotes, hasPollVotes } from './polls'
 import { pushSequence } from './push'
+import {
+	actorCollections,
+	collectionOf,
+	featureRemote,
+	pinRemote,
+	requestCollectionSync,
+	unfeatureRemote,
+	unpinRemote,
+} from './remote-collections'
 import {
 	followersUri,
 	hasLocalFollowers,
@@ -56,6 +66,8 @@ import { hostDomain } from '../platform/domain-name'
 //   Create       the object has the actor's origin and names no other author (attributedTo)
 //   Like         the object is a local status the actor may see (VIS-1); the actor is the one who likes it
 //   Announce     the actor is the booster; the original is public, unlisted or the actor's own (VIS-6)
+//   Add, Remove  the target is the actor's own featured or featuredTags collection, on its origin; a pinned status
+//                is the actor's own (remote-collections.ts; test/remote-collections.test.ts)
 // B1b-2's rows (Create, Update and Delete of statuses, Like, Announce) are applied in domain/remote-statuses.ts and
 // below; test/inbox-statuses.test.ts has one negative test per row.
 // The activity id has the actor's origin (checked by the Worker before anything is written, and again here).
@@ -132,6 +144,9 @@ export type InboundActivity =
 	| { type: 'UpdateStatus'; id: string; object: RemoteStatusInput }
 	// A Like, a Misskey reaction (Like with _misskey_reaction) or an EmojiReact: a favourite of `object`.
 	| { type: 'Like'; id: string; object: string }
+	// An Add or Remove of a status (by its id) or of a Hashtag (by its name) to or from the collection `target`.
+	| { type: 'Add'; id: string; target: string; object: CollectionItem }
+	| { type: 'Remove'; id: string; target: string; object: CollectionItem }
 	// embedded: the object as the Announce carried it (used only for the actor's own status, as Mastodon does).
 	| {
 			type: 'Announce'
@@ -143,6 +158,9 @@ export type InboundActivity =
 			published: string | null
 			raw: string
 	  }
+
+// What an Add or Remove names: a status by its id, or a Hashtag by its name.
+export type CollectionItem = { status: string } | { hashtag: string }
 
 // Documents the Worker fetched because the Store asked for them (ReceiveResult.need), by the uri asked for: a parsed
 // status or actor, or null when it could not be fetched or used.
@@ -283,8 +301,15 @@ export function accountDomain(
 }
 
 // Inserts or refreshes a remote account and its keys from its document. Never touches a local row (ID-3): a URI on
-// this instance's origin, or one a local account holds, is refused, and so is a deleted actor.
-export function upsertRemoteActor(db: Db, actor: RemoteActorInput, origin: string, now: number): RemoteRow | undefined {
+// this instance's origin, or one a local account holds, is refused, and so is a deleted actor. A document that names
+// any of its collections asks for them to be read (remote-collections.ts, as ActivityPub::ProcessAccountService
+// schedules its syncs each time it processes the account); syncWaiting: a request waits for a round.
+export function upsertRemoteActor(
+	db: Db,
+	actor: RemoteActorInput,
+	origin: string,
+	now: number
+): (RemoteRow & { syncWaiting: boolean }) | undefined {
 	if (
 		originOf(actor.uri) === origin ||
 		db.first('SELECT 1 AS x FROM accounts WHERE uri = ? AND domain IS NULL', actor.uri) !== undefined ||
@@ -359,7 +384,12 @@ export function upsertRemoteActor(db: Db, actor: RemoteActorInput, origin: strin
 			)
 		}
 	}
-	return row
+	if (row === undefined) {
+		return undefined
+	}
+	const collections = actorCollections(actor.raw)
+	const named = Object.values(collections).some((url) => url !== null)
+	return { ...row, syncWaiting: named && requestCollectionSync(db, row.id, now) }
 }
 
 export type StoredRemoteKey = { owner: string; pem: string; fresh: boolean }
@@ -1278,6 +1308,27 @@ function purgeRelationships(db: Db, id: string, budget: Budget): void {
 	// The local users' reports of the account (migration 0022_reports), as Mastodon's DeleteAccountService destroys an
 	// account's targeted_reports.
 	spend(db, budget, 'DELETE FROM reports WHERE id IN (SELECT id FROM reports WHERE target_account_id = ? LIMIT ?)', id)
+	// Its pins and featured hashtags, at most MAX_REMOTE_PINS and MAX_FEATURED_TAGS, and the sync of them that waits
+	// (migration 0025_remote_collections).
+	spend(
+		db,
+		budget,
+		`DELETE FROM status_pins WHERE account_id = ?1
+			AND status_id IN (SELECT status_id FROM status_pins WHERE account_id = ?1 LIMIT ?2)`,
+		id
+	)
+	spend(
+		db,
+		budget,
+		'DELETE FROM featured_tags WHERE id IN (SELECT id FROM featured_tags WHERE account_id = ? LIMIT ?)',
+		id
+	)
+	spend(
+		db,
+		budget,
+		'DELETE FROM collection_syncs WHERE account_id IN (SELECT account_id FROM collection_syncs WHERE account_id = ? LIMIT ?)',
+		id
+	)
 	// Its votes (the polls keep their counts).
 	deleteAccountVotes(db, id, budget.left())
 	spend(
@@ -1422,8 +1473,8 @@ export const STATUS_CHILDREN: readonly { table: string; column: string; remove: 
 		column: 'status_id',
 		remove: ['DELETE FROM notifications WHERE id IN (SELECT id FROM notifications WHERE status_id = ? LIMIT ?)'],
 	},
-	// Pins of the status (migration 0018_status_pins_and_conversation_mutes): only its author pins it, so a remote
-	// status has none, but none outlives it.
+	// Pins of the status (migrations 0018_status_pins_and_conversation_mutes and 0025_remote_collections): only its
+	// author pins it, so one row at most.
 	{
 		table: 'status_pins',
 		column: 'status_id',
@@ -1540,6 +1591,9 @@ export const PURGED_ACCOUNT_CHILDREN: readonly { table: string; check: string; f
 	{ table: 'remote_keys', check: 'account_id = ?1' },
 	{ table: 'inbound_jobs', check: 'target_account_id = ?1' },
 	{ table: 'reports', check: 'target_account_id = ?1' },
+	{ table: 'status_pins', check: 'account_id = ?1' },
+	{ table: 'featured_tags', check: 'account_id = ?1' },
+	{ table: 'collection_syncs', check: 'account_id = ?1' },
 ]
 
 const ACCOUNT_CHILDREN_EXIST = PURGED_ACCOUNT_CHILDREN.map((child) => {
@@ -1612,6 +1666,9 @@ export function deleteStatusBatch(db: Db, statusId: string, now: number): boolea
 	)
 	// Hiding writes the status and the account's last status, which the trigger of migration 0021_directory moves back.
 	if (budget.left() >= 2) {
+		// The author's featured hashtags no longer count it (RemoveStatusService#remove_from_hashtags), once: hidden, it
+		// counts for none. At most MAX_FEATURED_TAGS rows, which the budget counts.
+		uncountFeaturedTags(db, statusId)
 		db.run(
 			`UPDATE statuses SET visibility = 'direct', content = '', spoiler_text = '', search_text = NULL
 			WHERE id = ? AND (visibility <> 'direct' OR content <> '' OR spoiler_text <> '' OR search_text IS NOT NULL)`,
@@ -1985,6 +2042,66 @@ function undoInteraction(db: Db, actor: RemoteRow, ref: ActivityRef & { id: stri
 	return favourite !== undefined || boost !== undefined ? applied('undone') : applied('retraction-recorded')
 }
 
+// Mastodon's ActivityPub::Activity::Add and Remove (remote-collections.ts): the target is the actor's own featured
+// collection (a status, or a Hashtag) or featuredTags collection (a Hashtag; Mastodon sends a featured hashtag's Add to
+// the featured collection, Kopje accepts either), on its own origin; anything else is ignored. A status is the actor's
+// own on its origin; one not stored yet is fetched (Add#status_from_object) only for an actor with local followers.
+const add: Handler<'Add'> = (db, actor, activity, input) => {
+	const collection = collectionOf(db, actor.id, activity.target)
+	const { object } = activity
+	if ('hashtag' in object) {
+		if (collection === null) {
+			return ignored('not-collection')
+		}
+		return featureRemote(db, actor.id, object.hashtag, input.now) ? applied('featured') : ignored('not-featured')
+	}
+	if (collection !== 'featured') {
+		return ignored('not-collection')
+	}
+	if (originOf(object.status) !== originOf(actor.uri)) {
+		return ignored('foreign-object')
+	}
+	let status = statusByUri(db, object.status)
+	if (status === undefined) {
+		if (!hasLocalFollowers(db, actor.id)) {
+			return ignored('unrelated')
+		}
+		const fetched = input.prefetched?.statuses[object.status]
+		if (fetched === undefined) {
+			return { ...ignored('need-object'), need: { kind: 'status', uri: object.status } }
+		}
+		if (fetched === null) {
+			return ignored('unfetchable')
+		}
+		const stored = storeRemoteStatus(db, actor, fetched, {
+			now: input.now,
+			origin: input.origin,
+			deliveredTo: null,
+			fetched: true,
+		})
+		status = stored.statusId === undefined ? undefined : statusByUri(db, object.status)
+	}
+	if (status === undefined) {
+		return ignored('unknown-object')
+	}
+	return pinRemote(db, actor.id, status.id, input.now) ? applied('pinned') : ignored('not-pinned')
+}
+
+const remove: Handler<'Remove'> = (db, actor, activity) => {
+	const collection = collectionOf(db, actor.id, activity.target)
+	const { object } = activity
+	if ('hashtag' in object) {
+		if (collection === null) {
+			return ignored('not-collection')
+		}
+		return unfeatureRemote(db, actor.id, object.hashtag) ? applied('unfeatured') : ignored('not-featured')
+	}
+	if (collection !== 'featured') {
+		return ignored('not-collection')
+	}
+	return unpinRemote(db, actor.id, object.status) ? applied('unpinned') : ignored('not-pinned')
+}
+
 const HANDLERS: { [T in InboundActivity['type']]: Handler<T> } = {
 	Follow: follow,
 	Accept: accept,
@@ -1999,6 +2116,8 @@ const HANDLERS: { [T in InboundActivity['type']]: Handler<T> } = {
 	UpdateStatus: updateStatus,
 	Like: like,
 	Announce: announce,
+	Add: add,
+	Remove: remove,
 }
 
 export const receiveActivity = writeOperation<ReceiveInput, ReceiveResult>((db, input) => {
@@ -2048,7 +2167,9 @@ function receive(db: Db, input: ReceiveInput): ReceiveResult {
 		return ignored('unknown-actor')
 	}
 	const handler = HANDLERS[activity.type] as Handler<typeof activity.type>
-	return handler(db, actor, activity as never, input)
+	const result = handler(db, actor, activity, input)
+	// A sync of the actor's collections was asked for: the Worker asks the Queue for a round (cron runs one regardless).
+	return 'syncWaiting' in actor && actor.syncWaiting ? { ...result, jobsPending: true } : result
 }
 
 function pendingPurge(db: Db, uri: string): boolean {

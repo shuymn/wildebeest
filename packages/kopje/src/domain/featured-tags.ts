@@ -15,8 +15,8 @@ import type { Db } from '../db/sql'
 // it and when the newest was published. Those two are kept as the account's statuses are written, edited and deleted
 // (countFeaturedTags, uncountFeaturedTags), as FeaturedTag#increment and #decrement keep them, so a read never counts.
 // Featuring or unfeaturing sends the account's followers an Add or a Remove of the Hashtag (CreateFeaturedTagService,
-// RemoveFeaturedTagService), and the actor's featuredTags collection lists them (federation.ts). Kopje does not read
-// the featured hashtags of remote accounts.
+// RemoveFeaturedTagService), and the actor's featuredTags collection lists them (federation.ts). A remote account's
+// featured hashtags are learned into the same rows (remote-collections.ts) and shown by the same read.
 
 // FeaturedTag::LIMIT, and its message (featured_tags.errors.limit).
 export const MAX_FEATURED_TAGS = 10
@@ -109,6 +109,15 @@ function featuresMost(db: Db, accountId: string): boolean {
 // account's statuses as FeaturedTag#reset_data reads them, and the Add its followers are sent. The caller has checked
 // that it is not featured yet and that the account may feature one more (featuresMost).
 function insertFeatured(db: Db, accountId: string, display: string, now: number, origin: string): FeaturedRow {
+	const row = writeFeatured(db, accountId, display, now)
+	recordFeaturedChange(db, accountId, 'Add', row, now, origin)
+	return row
+}
+
+// The row of a featured hashtag `display` (a valid hashtag name) of any account, local or remote, with its counts read
+// from the account's statuses as FeaturedTag#reset_data reads them. Nothing is sent. The caller has checked that the
+// account does not feature it yet.
+export function writeFeatured(db: Db, accountId: string, display: string, now: number): FeaturedRow {
 	const name = normalizeTag(display)
 	// The account's public and unlisted statuses with the hashtag, and the newest (by id, as Mastodon's default order
 	// picks it). A walk of the account's own statuses, once, when the account features the hashtag.
@@ -135,12 +144,11 @@ function insertFeatured(db: Db, accountId: string, display: string, now: number,
 	if (row === undefined) {
 		throw new Error('the featured hashtag was not written')
 	}
-	recordFeaturedChange(db, accountId, 'Add', row, now, origin)
 	return row
 }
 
 // FeaturedTag's normalization of a name: surrounding whitespace and one leading # dropped.
-function displayName(name: string): string {
+export function displayName(name: string): string {
 	return name.trim().replace(/^#/, '')
 }
 

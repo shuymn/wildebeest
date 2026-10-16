@@ -50,6 +50,7 @@ import {
 } from '../src/domain/notification-requests'
 import { clearNotifications, listNotifications, REMOVAL_BATCHES, REMOVAL_WINDOW } from '../src/domain/notifications'
 import { getPoll, vote } from '../src/domain/polls'
+import { claimCollectionSync, MAX_REMOTE_PINS, storedStatusUris } from '../src/domain/remote-collections'
 import { createReport } from '../src/domain/reports'
 import { dueScheduled, listScheduled, publishScheduled } from '../src/domain/scheduled-statuses'
 import { search } from '../src/domain/search'
@@ -3726,4 +3727,161 @@ describe('clearing and dismissing touch a bounded batch, and reads skip what the
 			expect((newest as { value: { items: unknown[] } }).value.items).toHaveLength(FOLLOWS + REQUESTS)
 		}
 	}, 240_000)
+})
+
+// What Kopje learned of a remote account's collections (migration 0025_remote_collections) is read like a local
+// account's: its pins by their key (at most MAX_REMOTE_PINS), its featured hashtags (at most MAX_FEATURED_TAGS), and
+// whether it hides its network by a key lookup. Each read, and a round's claim of the oldest waiting sync and its look
+// up of the pinned statuses Kopje has, reads the same rows however many statuses the account has, however many
+// accounts follow it, and however many other remote accounts have pins, featured hashtags and syncs waiting.
+describe("a remote account's learned collections cost a bounded read (RES-7)", () => {
+	const OWNER = '930000000000000000'
+	const OWNER_URI = 'https://far.example/users/owner'
+	const OTHER_BASE = 931000000000000000n
+	const STATUS_BASE = 940000000000000000n
+	const FEATURED_BASE = 950000000000000000n
+	const pinnedUri = (i: number) => `${OWNER_URI}/statuses/pinned${i}`
+
+	async function learned(count: number): Promise<StoreStub> {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			const raw = JSON.stringify({
+				id: OWNER_URI,
+				featured: `${OWNER_URI}/collections/featured`,
+				featuredTags: `${OWNER_URI}/collections/tags`,
+				followers: `${OWNER_URI}/followers`,
+				following: `${OWNER_URI}/following`,
+			})
+			sql.exec(
+				`INSERT INTO accounts (id, uri, username, domain, raw, hide_collections)
+				VALUES (?, ?, 'owner', 'far.example', ?, 1)`,
+				OWNER,
+				OWNER_URI,
+				raw
+			)
+			// Other remote accounts, each following the owner, with a pinned status, a featured hashtag and a sync waiting
+			// behind the owner's (and the three in front of it a round holds).
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+				INSERT INTO accounts (id, uri, username, domain)
+				SELECT CAST(?2 + i AS TEXT), 'https://far' || (i % 10) || '.example/users/o' || i, 'o' || i,
+					'far' || (i % 10) || '.example' FROM n`,
+				count,
+				String(OTHER_BASE)
+			)
+			sql.exec(
+				`INSERT INTO follows (account_id, target_account_id, state)
+				SELECT id, ?, 'accepted' FROM accounts WHERE id <> ?1 AND domain IS NOT NULL`,
+				OWNER
+			)
+			// The owner's statuses: MAX_REMOTE_PINS pinned, then `count` more; the others' one each, pinned.
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+				INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+				SELECT CAST(?2 + i AS TEXT), CASE WHEN i < ?3 THEN ?4 || '/statuses/pinned' || i ELSE ?4 || '/statuses/' || i END,
+					?5, 'public', '<p>s</p>', '2026-10-01T00:00:00.000Z' FROM n`,
+				MAX_REMOTE_PINS + count,
+				String(STATUS_BASE),
+				MAX_REMOTE_PINS,
+				OWNER_URI,
+				OWNER
+			)
+			sql.exec(
+				`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+				SELECT CAST(CAST(id AS INTEGER) + 5000000 AS TEXT), uri || '/statuses/1', id, 'public', '<p>o</p>',
+					'2026-10-01T00:00:00.000Z'
+				FROM accounts WHERE id <> ? AND domain IS NOT NULL`,
+				OWNER
+			)
+			sql.exec(
+				`INSERT INTO status_pins (account_id, status_id)
+				SELECT account_id, id FROM statuses WHERE account_id <> ?1 OR uri GLOB ?2`,
+				OWNER,
+				`${OWNER_URI}/statuses/pinned*`
+			)
+			sql.exec(
+				`INSERT INTO featured_tags (id, account_id, name, display_name)
+				SELECT CAST(?1 + CAST(id AS INTEGER) - ?2 AS TEXT), id, 'tag', 'Tag' FROM accounts WHERE domain IS NOT NULL`,
+				String(FEATURED_BASE),
+				String(OTHER_BASE - 10_000_000n)
+			)
+			sql.exec(
+				`INSERT INTO collection_syncs (account_id, requested_at, claimed_at)
+				SELECT id, CASE WHEN id = ?1 THEN 10 ELSE 100 END, NULL FROM accounts WHERE domain IS NOT NULL`,
+				OWNER
+			)
+			sql.exec(
+				`UPDATE collection_syncs SET requested_at = 1, claimed_at = ?
+				WHERE account_id IN (SELECT id FROM accounts WHERE id <> ? AND domain IS NOT NULL ORDER BY id LIMIT 3)`,
+				NOW,
+				OWNER
+			)
+		})
+		return store
+	}
+
+	it('reads the same rows with 20 or 2,000 statuses, followers and other accounts with learned collections', async () => {
+		const few = await learned(20)
+		const many = await learned(2000)
+		const statuses = {
+			credential: null,
+			now: NOW,
+			account: OWNER,
+			page: PAGE,
+			onlyMedia: false,
+			excludeReplies: false,
+			excludeReblogs: false,
+			pinned: true,
+			tagged: null,
+			present: PRESENT,
+		}
+		const follows = { credential: null, now: NOW, account: OWNER, page: PAGE, present: PRESENT }
+		const reads: [string, StoreOperation<never, unknown>, unknown, (output: unknown) => void][] = [
+			[
+				'pinned statuses',
+				accountStatuses,
+				statuses,
+				(output) => expect((output as { value: { items: unknown[] } }).value.items).toHaveLength(PAGE.limit),
+			],
+			[
+				'featured tags',
+				accountFeaturedTags,
+				{ id: OWNER, present: PRESENT },
+				(output) => expect(output).toEqual([expect.objectContaining({ name: 'Tag' })]),
+			],
+			[
+				'followers',
+				listFollows,
+				{ ...follows, direction: 'followers' },
+				(output) => expect((output as { value: { items: unknown[] } }).value.items).toEqual([]),
+			],
+			[
+				'stored pins',
+				storedStatusUris,
+				{ uris: Array.from({ length: MAX_REMOTE_PINS }, (_, i) => pinnedUri(i)) },
+				(output) => expect(output).toHaveLength(MAX_REMOTE_PINS),
+			],
+			[
+				'claim',
+				claimCollectionSync,
+				{ now: NOW },
+				(output) => expect(output).toMatchObject({ accountUri: OWNER_URI, pending: true }),
+			],
+		]
+		const grown: string[] = []
+		for (const [name, operation, input, check] of reads) {
+			for (const store of [few, many]) {
+				check(await runInDurableObject(store, (_instance, state) => operation.run(state.storage.sql, input as never)))
+			}
+			// The claim was taken above: measured on fresh copies.
+			const [a, b] = name === 'claim' ? [await learned(20), await learned(2000)] : [few, many]
+			const fewRows = await rowsRead({ store: a }, operation, input as never)
+			const manyRows = await rowsRead({ store: b }, operation, input as never)
+			if (manyRows > fewRows + ALLOWANCE) {
+				grown.push(`${name}: ${fewRows} -> ${manyRows}`)
+			}
+		}
+		expect(grown).toEqual([])
+	}, 120_000)
 })

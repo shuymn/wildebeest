@@ -118,7 +118,7 @@ function hasActivityStreamsContext(context: unknown): boolean {
 }
 
 // The activity as Mastodon reads it: compacted JSON with the ActivityStreams context, ids as strings or objects with
-// an id. Other types (Flag, Add, Remove, ...) and objects Kopje does not store are 'unsupported'.
+// an id. Other types (Flag, ...) and objects Kopje does not store are 'unsupported'.
 // The envelope every activity must have before anything reads it: the ActivityStreams context, a string id and type,
 // and an actor with an http(s) origin. Shared by the inbox and the cutover rollback's drain, so neither hands on an
 // activity the other would ignore.
@@ -223,6 +223,19 @@ function activityOf(
 		case 'Like':
 		case 'EmojiReact':
 			return object === null ? null : { type: 'Like', id, object }
+		// The target is matched against the actor's own collections by the Store. A Hashtag is named by its name; anything
+		// else by its id, as a status (Mastodon's Add and Remove read any other object as one).
+		case 'Add':
+		case 'Remove': {
+			const target = idOf(json.target)
+			if (target === null) {
+				return null
+			}
+			if (isObject(json.object) && json.object.type === 'Hashtag') {
+				return typeof json.object.name === 'string' ? { type, id, target, object: { hashtag: json.object.name } } : null
+			}
+			return object === null ? null : { type, id, target, object: { status: object } }
+		}
 		case 'Announce':
 			return object === null
 				? null

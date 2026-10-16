@@ -51,8 +51,8 @@ export type Account = {
 	following_count: number
 	statuses_count: number
 	last_status_at: string | null
-	// Whether the account hides its network (Account#hide_collections): set by a local account; null for a remote
-	// account, whose setting Kopje does not learn.
+	// Whether the account hides its network (Account#hide_collections): set by a local account, learned of a remote one
+	// (remote-collections.ts); null for a remote account Kopje has not learned it of.
 	hide_collections: boolean | null
 	emojis: []
 	fields: Field[]
@@ -130,7 +130,8 @@ export type AccountRow = {
 	// A remote account whose deletion has started; null otherwise.
 	deleted_at: string | null
 	last_status_at: string | null
-	// local_accounts.fields and hide_collections; null for a remote account.
+	// local_accounts.fields; null for a remote account. hide_collections: local_accounts' for a local account,
+	// accounts' (null until learned) for a remote one.
 	local_fields: string | null
 	hide_collections: number | null
 	// A remote account's `attachment`, as JSON (fields are read from raw, as the design keeps them).
@@ -143,7 +144,7 @@ export const ACCOUNT_COLUMNS = `a.id, a.uri, a.username, a.domain, a.actor_type,
 	(SELECT substr(s.published_at, 1, 10) FROM statuses s
 		WHERE s.account_id = a.id AND s.visibility IN ${REACHES_FOLLOWERS_SQL} ORDER BY s.id DESC LIMIT 1)
 		AS last_status_at,
-	l.fields AS local_fields, l.hide_collections,
+	l.fields AS local_fields, COALESCE(l.hide_collections, a.hide_collections) AS hide_collections,
 	CASE WHEN a.domain IS NOT NULL THEN a.raw -> '$.attachment' END AS attachment`
 
 export const ACCOUNT_FROM = 'accounts a LEFT JOIN local_accounts l ON l.account_id = a.id'
