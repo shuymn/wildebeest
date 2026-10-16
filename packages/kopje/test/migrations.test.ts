@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { BUILD, freshStore, rejectionOf, tableNames, testKernel as kernel } from './helpers'
 import { MIGRATIONS } from '../src/db/migrations'
 import { Db } from '../src/db/sql'
-import { DISTRIBUTABLE_SQL, REQUIRES_MENTION_SQL } from '../src/domain/audience'
+import { DISTRIBUTABLE_SQL, REACHES_FOLLOWERS_SQL, REQUIRES_MENTION_SQL } from '../src/domain/audience'
 import { CONVERSATIONS_BACKFILL } from '../src/domain/conversation-rows'
 import { readOperation, sessionOperation, writeOperation } from '../src/domain/operation'
 import { storeRemoteStatus } from '../src/domain/remote-statuses'
@@ -2317,4 +2317,161 @@ describe('Store migration runner', () => {
 			await expect(k.execute(BUILD, countSettings, undefined)).rejects.toThrow('schema-diverged')
 		})
 	})
+})
+
+describe('0021_directory', () => {
+	const NAME = '0021_directory'
+	const id = (n: number) => String(100000000000000000n + BigInt(n))
+
+	// The file's statements, a trigger's body kept whole.
+	function statements(): string[] {
+		const out: string[] = []
+		let current = ''
+		for (const line of (MIGRATIONS.find((m) => m.name === NAME)?.sql ?? '').split('\n')) {
+			if (line.startsWith('--') || line.trim() === '') {
+				continue
+			}
+			current += `${line}\n`
+			if (/^CREATE TRIGGER/.test(current) ? /^END;$/.test(line) : line.endsWith(';')) {
+				out.push(current)
+				current = ''
+			}
+		}
+		return out
+	}
+
+	// `accounts` remote accounts, each with `statuses` statuses: public, then private, unlisted and direct in turn, the
+	// newest direct when there are four or more; and one account without statuses.
+	function seed(sql: SqlStorage, accounts: number, statuses: number): void {
+		sql.exec(
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO accounts (id, uri, username, domain)
+			SELECT CAST(100000000000000000 + i AS TEXT), 'https://remote.example/users/u' || i, 'u' || i, 'remote.example'
+			FROM n`,
+			accounts + 1
+		)
+		sql.exec(
+			`WITH RECURSIVE a(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM a WHERE i < ?1),
+				n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?2 - 1)
+			INSERT INTO statuses (id, uri, account_id, visibility, published_at)
+			SELECT CAST(200000000000000000 + a.i * 1000 + n.i AS TEXT), 'https://remote.example/o/' || a.i || '/' || n.i,
+				CAST(100000000000000000 + a.i AS TEXT),
+				CASE WHEN n.i = 0 THEN 'public' WHEN n.i % 3 = 1 THEN 'private' WHEN n.i % 3 = 2 THEN 'unlisted' ELSE 'direct' END,
+				'2026-10-01T00:00:00.000Z'
+			FROM a CROSS JOIN n`,
+			accounts,
+			statuses
+		)
+	}
+
+	it(`upgrades a Store with ${NAME}: each account's newest public, unlisted or private status, kept by triggers`, async () => {
+		const at = NAMES.indexOf(NAME)
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, MIGRATIONS.slice(0, at)).upgrade()).toMatchObject({ ok: true })
+			for (const n of [1, 2, 3]) {
+				sql.exec(
+					"INSERT INTO accounts (id, uri, username, domain) VALUES (?, ?, ?, 'remote.example')",
+					id(n),
+					`https://remote.example/users/u${n}`,
+					`u${n}`
+				)
+			}
+			const status = (n: number, author: number, visibility: string) =>
+				sql.exec(
+					`INSERT INTO statuses (id, uri, account_id, visibility, published_at)
+					VALUES (?, ?, ?, ?, '2026-10-01T00:00:00.000Z')`,
+					id(1000 + n),
+					`https://remote.example/o/${n}`,
+					id(author),
+					visibility
+				)
+			status(1, 1, 'public')
+			status(2, 1, 'unlisted')
+			status(3, 1, 'direct')
+			status(4, 2, 'limited')
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+			const last = () =>
+				sql
+					.exec<{ id: string; last: string | null }>('SELECT id, last_status_id AS last FROM accounts ORDER BY id')
+					.toArray()
+			expect(last()).toEqual([
+				{ id: id(1), last: id(1002) },
+				{ id: id(2), last: null },
+				{ id: id(3), last: null },
+			])
+			// A newer status raises it, a direct one does not; an older one stored late does not lower it.
+			status(5, 2, 'private')
+			status(6, 2, 'direct')
+			sql.exec(
+				`INSERT INTO statuses (id, uri, account_id, visibility, published_at)
+				VALUES (?, 'https://remote.example/o/old', ?, 'public', '2026-10-01T00:00:00.000Z')`,
+				id(900),
+				id(2)
+			)
+			expect(last()[1]).toEqual({ id: id(2), last: id(1005) })
+			// Deleting or hiding the newest moves it back; deleting an older one changes nothing.
+			sql.exec('DELETE FROM statuses WHERE id = ?', id(1002))
+			expect(last()[0]).toEqual({ id: id(1), last: id(1001) })
+			sql.exec("UPDATE statuses SET visibility = 'direct' WHERE id = ?", id(1005))
+			expect(last()[1]).toEqual({ id: id(2), last: id(900) })
+			sql.exec('DELETE FROM statuses WHERE id = ?', id(900))
+			expect(last()[1]).toEqual({ id: id(2), last: null })
+			status(7, 3, 'public')
+			sql.exec('DELETE FROM statuses WHERE id = ?', id(1003))
+			expect(last()[0]).toEqual({ id: id(1), last: id(1001) })
+			// A status moved to another account (none does; the trigger covers it) leaves the first and joins the second.
+			sql.exec('UPDATE statuses SET account_id = ? WHERE id = ?', id(1), id(1007))
+			expect(last()).toEqual([
+				{ id: id(1), last: id(1007) },
+				{ id: id(2), last: null },
+				{ id: id(3), last: null },
+			])
+		})
+	})
+
+	it('counts the visibilities the policy names, in the order of statuses_feed', () => {
+		const migration = MIGRATIONS.find((m) => m.name === NAME)!
+		expect(migration.sql).toContain(`s.visibility IN ${REACHES_FOLLOWERS_SQL}`)
+		expect(migration.sql).toContain(`NEW.visibility IN ${REACHES_FOLLOWERS_SQL}`)
+		expect(migration.sql).toContain(`OLD.visibility IN ${REACHES_FOLLOWERS_SQL}`)
+		expect(migration.sql).not.toMatch(/visibility IN \((?!'public', 'unlisted', 'private'\))/)
+	})
+
+	it('reads each account a bounded number of times, however many statuses each has', async () => {
+		const at = NAMES.indexOf(NAME)
+		const measure = async (accounts: number, statusesEach: number) => {
+			const store = freshStore()
+			return runInDurableObject(store, async (_instance, state) => {
+				const sql = state.storage.sql
+				await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+				seed(sql, accounts, statusesEach)
+				let read = 0
+				for (const statement of statements()) {
+					const cursor = sql.exec(statement)
+					cursor.toArray()
+					read += cursor.rowsRead
+				}
+				// Not vacuous: the newest status that is not direct is each account's, and the last account has none.
+				const wrong = sql
+					.exec<{ n: number }>(
+						`SELECT count(*) AS n FROM accounts a WHERE last_status_id IS NOT (SELECT max(s.id) FROM statuses s
+							WHERE s.account_id = a.id AND s.visibility <> 'direct')`
+					)
+					.one().n
+				expect(wrong).toBe(0)
+				expect(sql.exec<{ n: number }>('SELECT count(*) AS n FROM accounts WHERE last_status_id IS NULL').one().n).toBe(
+					1
+				)
+				return read
+			})
+		}
+		const few = await measure(1000, 4)
+		const long = await measure(1000, 40)
+		const many = await measure(10_000, 4)
+		// Each account: its row for the column, one seek of its newest status, and a pass per index.
+		expect(long).toBeLessThanOrEqual(few + 10)
+		expect(many - few).toBeLessThanOrEqual(10 * (10_000 - 1000))
+	}, 120_000)
 })
