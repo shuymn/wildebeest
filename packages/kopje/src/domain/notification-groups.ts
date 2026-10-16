@@ -1,7 +1,7 @@
-import { type Account, edgeRangeSql, type Page, type PageQuery, type Present, presentAccountsById } from './accounts'
+import { type Account, type Page, type PageQuery, type Present, presentAccountsById } from './accounts'
 import { statusReads } from './audience'
 import { type UserContext, userReadOperation, userWriteOperation } from './auth'
-import { GROUPABLE_TYPES, NOTIFICATION_COLUMNS, NOTIFICATION_ID } from './notifications'
+import { GROUPABLE_TYPES, NOTIFICATION_COLUMNS, NOTIFICATION_ID, removeNotifications } from './notifications'
 import { presentStatuses, type Status } from './status-presenter'
 import type { Db } from '../db/sql'
 
@@ -23,7 +23,10 @@ import type { Db } from '../db/sql'
 // groups it has already found (in practice a status favourited by thousands within a few hours); its Link continues
 // from the last one read, so the walk goes on in the next page.
 //
-// Dismissing a group and clearing delete at once, in the request, as Mastodon's destroy_all and delete_all do.
+// Dismissing a group and clearing remove its notifications, or all of them, as Mastodon's destroy_all and delete_all
+// do: gone from every read at once (R15), and deleted in bounded batches in the request and the job rounds
+// (removeNotifications in notifications.ts). A read of one group starts above its dismissal in the group index; the
+// walk checks each notification's group by its key.
 
 // Api::V2::NotificationsController::DEFAULT_NOTIFICATIONS_COUNT_LIMIT and MAX_NOTIFICATIONS_COUNT_LIMIT, which the v1
 // controller shares.
@@ -71,12 +74,16 @@ export type ExpandAccounts = 'full' | 'partial_avatars'
 
 type ShownColumns = { id: string; type: string; from_account_id: string; created_at: string; group_key: string | null }
 
-// The viewer's notifications the rule shows them that match `where` (over the parameters: ?1 is the viewer, ?2 the
-// time of the read), in the order and number `tail` gives; filtered ones only with `includeFiltered`.
+// What a read of the viewer's notifications reads: filtered ones only with `includeFiltered`; within `range`, the
+// cursor (exclusive ids); of `group` alone (statusReads(...).notifications), each an expression over the parameters.
+type Scope = { includeFiltered: boolean; range?: { max: string; min: string }; group?: string }
+
+// The viewer's notifications the rule shows them in `scope` that match `where` (over the parameters: ?1 is the viewer,
+// ?2 the time of the read), in the order and number `tail` gives.
 function shownNotifications(
 	db: Db,
 	viewer: UserContext,
-	includeFiltered: boolean,
+	scope: Scope,
 	where: string,
 	tail: string,
 	...params: (string | number | null)[]
@@ -84,7 +91,7 @@ function shownNotifications(
 	const read = statusReads(viewer, { viewer: '?1', now: '?2' })
 	return read.notifications<ShownColumns>(
 		db,
-		{ where: `n.account_id = ?1 AND ${where}`, tail, columns: NOTIFICATION_COLUMNS, includeFiltered },
+		{ ...scope, where, tail, columns: NOTIFICATION_COLUMNS },
 		viewer.accountId,
 		viewer.now,
 		...params
@@ -145,9 +152,8 @@ function walkGroups(db: Db, viewer: UserContext, input: WalkInput): Walk {
 		const rows = shownNotifications(
 			db,
 			viewer,
-			input.includeFiltered,
-			`${edgeRangeSql('n.id', '?3', '?4')}
-			AND (?5 IS NULL OR n.type IN (SELECT value FROM json_each(?5)))
+			{ includeFiltered: input.includeFiltered, range: { max: '?3', min: '?4' } },
+			`(?5 IS NULL OR n.type IN (SELECT value FROM json_each(?5)))
 			AND n.type NOT IN (SELECT value FROM json_each(?6))`,
 			`ORDER BY n.id ${input.ascending ? 'ASC' : 'DESC'} LIMIT ?7`,
 			maxId,
@@ -196,8 +202,8 @@ function membersOf(db: Db, viewer: UserContext, group: Found, upper: string | nu
 	return shownNotifications(
 		db,
 		viewer,
-		false,
-		'n.group_key = ?3 AND n.id <= coalesce(CAST(?4 AS INTEGER), 1e19)',
+		{ includeFiltered: false, group: '?3' },
+		'n.id <= coalesce(CAST(?4 AS INTEGER), 1e19)',
 		'ORDER BY n.id DESC LIMIT ?5',
 		group.key,
 		upper,
@@ -214,8 +220,8 @@ function oldestOf(db: Db, viewer: UserContext, group: Found, lower: string | nul
 		shownNotifications(
 			db,
 			viewer,
-			false,
-			'n.group_key = ?3 AND n.id >= coalesce(CAST(?4 AS INTEGER), -1e19)',
+			{ includeFiltered: false, range: { max: 'NULL', min: 'CAST(?4 AS INTEGER) - 1' }, group: '?3' },
+			'',
 			'ORDER BY n.id ASC LIMIT 1',
 			group.key,
 			lower
@@ -385,10 +391,17 @@ function firstOfGroup(db: Db, viewer: UserContext, groupKey: string): Shown | un
 	if (groupKey.startsWith('ungrouped-')) {
 		const id = groupKey.slice('ungrouped-'.length)
 		return NOTIFICATION_ID.test(id)
-			? shownNotifications(db, viewer, true, 'n.id = CAST(?3 AS INTEGER)', '', id)[0]
+			? shownNotifications(db, viewer, { includeFiltered: true }, 'n.id = CAST(?3 AS INTEGER)', '', id)[0]
 			: undefined
 	}
-	return shownNotifications(db, viewer, false, 'n.group_key = ?3', 'ORDER BY n.id DESC LIMIT 1', groupKey)[0]
+	return shownNotifications(
+		db,
+		viewer,
+		{ includeFiltered: false, group: '?3' },
+		'',
+		'ORDER BY n.id DESC LIMIT 1',
+		groupKey
+	)[0]
 }
 
 // GET /api/v2/notifications/:group_key: the group with every notification of it shown (up to GROUP_COUNT, newest
@@ -406,8 +419,8 @@ export const getNotificationGroup = userReadOperation<
 		? shownNotifications(
 				db,
 				viewer,
-				false,
-				'n.group_key = ?3',
+				{ includeFiltered: false, group: '?3' },
+				'',
 				'ORDER BY n.id DESC LIMIT ?4',
 				first.group_key,
 				GROUP_COUNT
@@ -431,8 +444,8 @@ export const notificationGroupAccounts = userReadOperation<
 	const rows = shownNotifications(
 		db,
 		viewer,
-		false,
-		`n.group_key = ?3 AND ${edgeRangeSql('n.id', '?4', '?5')}`,
+		{ includeFiltered: false, range: { max: '?4', min: '?5' }, group: '?3' },
+		'',
 		'ORDER BY n.id DESC LIMIT ?6',
 		groupKey,
 		page.maxId ?? null,
@@ -454,8 +467,9 @@ export const notificationGroupAccounts = userReadOperation<
 	}
 })
 
-// POST /api/v2/notifications/:group_key/dismiss: deletes the viewer's notifications of the group, shown or not, as
-// Mastodon's destroy_all of by_group_key; nothing for a key that names none.
+// POST /api/v2/notifications/:group_key/dismiss: removes the viewer's notifications of the group, shown or not, as
+// Mastodon's destroy_all of by_group_key: gone from every read at once and deleted in batches (removeNotifications);
+// an `ungrouped-` key's one notification is deleted at once. Nothing for a key that names none.
 export const dismissNotificationGroup = userWriteOperation<{ groupKey: string }, null>(
 	(db, { groupKey }, { accountId }) => {
 		if (groupKey.startsWith('ungrouped-')) {
@@ -465,7 +479,7 @@ export const dismissNotificationGroup = userWriteOperation<{ groupKey: string },
 			}
 			return null
 		}
-		db.run('DELETE FROM notifications WHERE account_id = ? AND group_key = ?', accountId, groupKey)
+		removeNotifications(db, accountId, groupKey)
 		return null
 	}
 )
@@ -501,9 +515,8 @@ export const unreadCount = userReadOperation<UnreadCountInput, { count: number }
 	const rows = shownNotifications(
 		db,
 		viewer,
-		input.includeFiltered || input.accountId !== null,
-		`${edgeRangeSql('n.id', 'NULL', '?3')}
-		AND (?4 IS NULL OR n.type IN (SELECT value FROM json_each(?4)))
+		{ includeFiltered: input.includeFiltered || input.accountId !== null, range: { max: 'NULL', min: '?3' } },
+		`(?4 IS NULL OR n.type IN (SELECT value FROM json_each(?4)))
 		AND n.type NOT IN (SELECT value FROM json_each(?5))
 		AND (?6 IS NULL OR n.from_account_id = ?6)`,
 		'ORDER BY n.id ASC LIMIT ?7',

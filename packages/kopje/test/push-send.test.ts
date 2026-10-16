@@ -390,6 +390,22 @@ describe('PUSH-3: a push reveals no more than the notification', () => {
 			(h) => sql(h.store, "UPDATE push_subscriptions SET policy = 'none'"),
 		],
 		['the notification is dismissed', (h) => sql(h.store, 'DELETE FROM notifications')],
+		// Recorded as a clear and a group's dismissal record them, the notification still stored for the rounds.
+		[
+			'the notifications are cleared',
+			(h) =>
+				sql(h.store, 'INSERT INTO notification_clears (account_id, max_id) SELECT account_id, id FROM notifications'),
+		],
+		[
+			'its group is dismissed',
+			async (h) => {
+				await sql(h.store, "UPDATE notifications SET group_key = 'g'")
+				await sql(
+					h.store,
+					"INSERT INTO notification_dismissals (account_id, group_key, max_id) SELECT account_id, 'g', id FROM notifications"
+				)
+			},
+		],
 		[
 			'the recipient mutes the sender with notifications',
 			(h) => act(h, h.users.alice, `/api/v1/accounts/${h.users.bob.id}/mute`, { notifications: true }),

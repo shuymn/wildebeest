@@ -1,5 +1,5 @@
 import { presentAccountsById } from './accounts'
-import { availableLocalSql, shownSql, UNFILTERED_SQL } from './audience'
+import { availableLocalSql, keptSql, shownSql, UNFILTERED_SQL } from './audience'
 import { userReadOperation, userSessionOperation, userWriteOperation } from './auth'
 import { CLAIM_LIMIT, type DeliveryOutcome, LEASE_MS, MAX_ATTEMPTS, retryDelay } from './deliveries'
 import { pushWantedSql } from './notifications'
@@ -226,7 +226,7 @@ function target(db: Db, id: string, now: number): TargetRow | undefined {
 			LEFT JOIN statuses s ON s.id = n.status_id
 		WHERE d.id = CAST(?1 AS INTEGER) AND ${availableLocalSql('l')} AND n.created_at > ?3 AND ${UNFILTERED_SQL}
 			AND ${pushWantedSql('p', 't', 'n', '?2')}
-			AND ${shownSql('n.account_id', 'n.type', 'n.from_account_id', 'n.status_id', '?2')}`,
+			AND ${keptSql('n')} AND ${shownSql('n.account_id', 'n.type', 'n.from_account_id', 'n.status_id', '?2')}`,
 		id,
 		new Date(now).toISOString(),
 		new Date(now - PUSH_TTL_MS).toISOString()

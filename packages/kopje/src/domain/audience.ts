@@ -412,9 +412,13 @@ export type StatusReads = {
 		...params: SqlStorageValue[]
 	): boolean
 	// The viewer's notifications the notification rule (R15) shows them, which shows a status only if they may view it,
-	// and, unless `includeFiltered`, only those the recipient's policy did not filter (Notification.browserable):
+	// and, unless `includeFiltered`, only those the recipient's policy did not filter (Notification.browserable), above
+	// the viewer's last clear and their group's last dismissal (keptFloorSql). `range` is the page's cursor, `max` and
+	// `min` exclusive (expressions over the parameters, as edgeRangeSql's), and `group` the one group read (an
+	// expression over the parameters); the read starts above the clear (and the group's dismissal) whatever the cursor:
 	//   SELECT n.status_id AS status_id, <columns> FROM main.notifications n
-	//   WHERE (<where>) [AND (n.filtered = 0)] AND (<rule>) <tail>
+	//   WHERE (n.account_id = <viewer>) AND (<range above the floor>) AND (<the group, or above its dismissal>)
+	//     AND (<where>) [AND (n.filtered = 0)] AND (<rule>) <tail>
 	notifications<Extra extends Row>(
 		db: Db,
 		query: {
@@ -422,6 +426,8 @@ export type StatusReads = {
 			readonly tail?: string
 			readonly columns: Columns<Extra, 'status_id'>
 			readonly includeFiltered: boolean
+			readonly range?: { readonly max: string; readonly min: string }
+			readonly group?: string
 		},
 		...params: SqlStorageValue[]
 	): (Extra & { status_id: VisibleStatusId | null })[]
@@ -536,16 +542,24 @@ export function statusReads(
 				readonly tail?: string
 				readonly columns: Columns<Extra, 'status_id'>
 				readonly includeFiltered: boolean
+				readonly range?: { readonly max: string; readonly min: string }
+				readonly group?: string
 			},
 			...params: SqlStorageValue[]
 		) {
 			const rule = shownSql(at.viewer, 'n.type', 'n.from_account_id', 'n.status_id', now())
 			// A term of its own, so the plan reads the partial index of unfiltered notifications (notifications_unfiltered).
 			const unfiltered = query.includeFiltered ? undefined : UNFILTERED_SQL
+			// One lower bound on the id, the cursor's or the floor, whichever is higher, so the index walk starts above
+			// what a clear or the group's dismissal hides; a read of every group checks each row's group by its key.
+			const range = `n.id < coalesce(CAST(${query.range?.max ?? 'NULL'} AS INTEGER), 1e19)
+				AND n.id > max(coalesce(CAST(${query.range?.min ?? 'NULL'} AS INTEGER), 0), ${keptFloorSql(at.viewer, query.group ?? null)})`
+			const group =
+				query.group === undefined ? `n.id > ${dismissedSql(at.viewer, 'n.group_key')}` : `n.group_key = ${query.group}`
 			return run<Extra & { status_id: VisibleStatusId | null }>(
 				db,
 				`SELECT n.status_id AS status_id${columns(query.columns, 'status_id')} FROM main.notifications n
-				WHERE ${where(query.where, unfiltered, rule)} ${query.tail ?? ''}`,
+				WHERE ${where(`n.account_id = ${at.viewer}`, range, group, query.where, unfiltered, rule)} ${query.tail ?? ''}`,
 				params
 			)
 		},
@@ -640,6 +654,33 @@ export function notifiedSql(r: string, type: string, from: string, status: strin
 // and push unless the request asks for filtered ones (Notification.browserable: include_filtered, or account_id in
 // v1). statusReads(...).notifications adds this term unless asked; push.ts adds it to the push target.
 export const UNFILTERED_SQL = 'n.filtered = 0'
+
+// ---- Cleared notifications and dismissed groups (R15; migration 0023_notification_clears).
+
+// The id at or below which the notifications of the recipient `r` are hidden: the highest id when they last cleared
+// them (POST /api/v1/notifications/clear) and, with `group`, the highest of that group when they last dismissed it
+// (POST /api/v2/notifications/:group_key/dismiss); 0 for neither. Each is a key lookup. With `r` and `group` naming no
+// column of the notification read (parameters), it is a constant, so `n.id > <floor>` is a lower bound in the
+// (account_id, id) and group indexes: a read starts above what is hidden and never walks it. notifications.ts deletes
+// the rows hidden in batches, after.
+export function keptFloorSql(r: string, group: string | null): string {
+	const cleared = `coalesce((SELECT kc.max_id FROM main.notification_clears kc WHERE kc.account_id = ${r}), 0)`
+	return group === null ? cleared : `max(${cleared}, ${dismissedSql(r, group)})`
+}
+
+// The highest id of the group `group` of the recipient `r` when they last dismissed it (0 for none), a key lookup.
+function dismissedSql(r: string, group: string): string {
+	return `coalesce((SELECT kd.max_id FROM main.notification_dismissals kd
+		WHERE kd.account_id = ${r} AND kd.group_key = ${group}), 0)`
+}
+
+// Whether notification `n` (a table alias) is above its recipient's clear and its group's dismissal, by its own
+// columns: two key lookups, for a read of single notifications whatever their recipients (the push target, an
+// accepted request's job). statusReads(...).notifications applies the same as a bound.
+export function keptSql(n: string): string {
+	return `(${n}.id > ${keptFloorSql(`${n}.account_id`, null)}
+		AND ${n}.id > ${dismissedSql(`${n}.account_id`, `${n}.group_key`)})`
+}
 
 // The types a policy may filter or drop (Notification::PROPERTIES, app/models/notification.rb:37-83: `filterable`):
 // mention, reblog, follow, follow_request and favourite, and quote, which Kopje never notifies. A post notification
