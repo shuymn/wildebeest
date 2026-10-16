@@ -21,11 +21,17 @@ import {
 	update,
 } from './inbox-status-helpers'
 import { FEATURED_COUNT_WINDOW, MAX_FEATURED_TAGS } from '../src/domain/featured-tags'
-import { MAX_REMOTE_PINS, MAX_SYNC_ATTEMPTS, SYNC_LEASE_MS, SYNC_RETRY_MS } from '../src/domain/remote-collections'
+import {
+	ALL_PARTS,
+	MAX_REMOTE_PINS,
+	MAX_SYNC_ATTEMPTS,
+	SYNC_LEASE_MS,
+	SYNC_RETRY_MS,
+} from '../src/domain/remote-collections'
 import {
 	COLLECTION_SYNCS_PER_ROUND,
 	MAX_FEATURED_TAG_PAGES,
-	READ_FETCHES,
+	PART_DOCUMENTS,
 	syncCollections,
 } from '../src/federation/collections'
 import { REQUEST_MAX_FETCHES } from '../src/federation/loader'
@@ -595,17 +601,23 @@ describe('reading a remote account’s collections', () => {
 		expect(gone.map((uri) => t.web.fetched.filter((u) => u === uri).length)).toEqual(gone.map(() => 1))
 	})
 
-	it('reads healthy collections through in one round at their largest, and reaches the pinned statuses after', async () => {
-		expect(READ_FETCHES).toBeLessThanOrEqual(REQUEST_MAX_FETCHES)
-		const t = await setup()
-		const bob = await mastodonActor(t.web, 'bob')
+	// The largest read: public network collections, a featured root with a first page, and a featuredTags root with
+	// MAX_FEATURED_TAG_PAGES pages, each naming a next one; and one pinned status Kopje does not have. The documents
+	// `redirected` names answer with a same-origin redirect to where they are served.
+	async function largestRead(t: Setup, bob: TestActor, redirected: (url: string) => boolean) {
+		const serve = (url: string, body: Record<string, unknown>) => {
+			if (redirected(url)) {
+				t.web.redirect(url, `${url}#moved`.replace('#moved', url.includes('?') ? '&moved' : '?moved'))
+				t.web.serve(url.includes('?') ? `${url}&moved` : `${url}?moved`, body)
+			} else {
+				t.web.serve(url, body)
+			}
+		}
 		const note = mastodonNote(bob)
 		t.web.serve(note.id, { '@context': AS, ...note })
-		// The largest phase 1: public network collections, a featured root with a first page, and a featuredTags root
-		// with MAX_FEATURED_TAG_PAGES pages, each naming a next one.
 		const featured = featuredOf(bob)
-		t.web.serve(featured, { '@context': AS, id: featured, type: 'OrderedCollection', first: `${featured}?page=1` })
-		t.web.serve(`${featured}?page=1`, {
+		serve(featured, { '@context': AS, id: featured, type: 'OrderedCollection', first: `${featured}?page=1` })
+		serve(`${featured}?page=1`, {
 			'@context': AS,
 			id: `${featured}?page=1`,
 			type: 'OrderedCollectionPage',
@@ -613,9 +625,9 @@ describe('reading a remote account’s collections', () => {
 		})
 		const tags = `${bob.uri}/collections/tags`
 		const pageUrl = (n: number) => `${tags}?page=${n}`
-		t.web.serve(tags, { '@context': AS, id: tags, type: 'OrderedCollection', first: pageUrl(1) })
+		serve(tags, { '@context': AS, id: tags, type: 'OrderedCollection', first: pageUrl(1) })
 		for (let n = 1; n <= MAX_FEATURED_TAG_PAGES + 1; n++) {
-			t.web.serve(pageUrl(n), {
+			serve(pageUrl(n), {
 				'@context': AS,
 				id: pageUrl(n),
 				type: 'OrderedCollectionPage',
@@ -623,16 +635,55 @@ describe('reading a remote account’s collections', () => {
 				orderedItems: [hashtag(`page${n}`)],
 			})
 		}
-		t.web.serve(`${bob.uri}/followers`, followCollection(bob, 'followers', true))
-		t.web.serve(`${bob.uri}/following`, followCollection(bob, 'following', true))
+		serve(`${bob.uri}/followers`, followCollection(bob, 'followers', true))
+		serve(`${bob.uri}/following`, followCollection(bob, 'following', true))
+		return { note, tags }
+	}
+
+	it('reads the largest healthy collections through, a part at a time, and reaches the pinned statuses after', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		// One redirect makes the whole read cost more than a round's budget (2 + 2 + 1 + the pages, and the hop).
+		const { note } = await largestRead(t, bob, (url) => url === `${bob.uri}/collections/tags`)
+		expect(2 + 2 + 1 + MAX_FEATURED_TAG_PAGES + 1).toBeGreaterThan(REQUEST_MAX_FETCHES)
 		const bobId = await followed(t, bob)
-		// One call's two rounds: the first reads it all through, the second fetches the pinned status.
-		await syncCollections(t.env, deps(t))
-		expect(await rows(t, 'collection_syncs')).toEqual([{ n: 0 }])
+		await sync(t)
 		expect(await pinned(t, bobId, null)).toEqual([note.id])
 		expect((await featuredTags(t, bobId)).length).toBe(MAX_FEATURED_TAG_PAGES)
-		// The collections were read once, in the first round.
-		expect(t.web.fetched.filter((url) => url === tags)).toHaveLength(1)
+		expect((await t.api<Account>(`/api/v1/accounts/${bobId}`, null)).body.hide_collections).toBe(false)
+		// A part read through is not read again: the featured and network collections were asked for once (the
+		// featuredTags collection, cut short by the budget in the first round, again in the next).
+		for (const url of [featuredOf(bob), `${bob.uri}/followers`, `${bob.uri}/following`]) {
+			expect([url, t.web.fetched.filter((fetched) => fetched === url).length]).toEqual([url, 1])
+		}
+	})
+
+	it('fetches the pending statuses even when a part of the read never completes', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const note = mastodonNote(bob)
+		t.web.serve(note.id, { '@context': AS, ...note })
+		await servedCollections(t, bob, [note.id], [])
+		t.web.fail(`${bob.uri}/collections/tags`, 503)
+		const bobId = await followed(t, bob)
+		for (let round = 0; round <= MAX_SYNC_ATTEMPTS + 1; round++) {
+			await sql(t.store, 'UPDATE collection_syncs SET due_at = ?', NOW)
+			await syncCollections(t.env, deps(t))
+		}
+		expect(await pinned(t, bobId, null)).toEqual([note.id])
+		expect(await rows(t, 'collection_syncs')).toEqual([{ n: 0 }])
+	})
+
+	it('reads each part through even with a redirect on every one of its documents', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		expect(Math.max(...Object.values(PART_DOCUMENTS)) * 2).toBeLessThanOrEqual(REQUEST_MAX_FETCHES)
+		const { note } = await largestRead(t, bob, (url) => url.startsWith(bob.uri) && !url.includes('/statuses/'))
+		const bobId = await followed(t, bob)
+		await sync(t)
+		expect(await pinned(t, bobId, null)).toEqual([note.id])
+		expect((await featuredTags(t, bobId)).length).toBe(MAX_FEATURED_TAG_PAGES)
+		expect((await t.api<Account>(`/api/v1/accounts/${bobId}`, null)).body.hide_collections).toBe(false)
 	})
 
 	it('keeps the first MAX_REMOTE_PINS items and MAX_FEATURED_TAGS hashtags of an oversized collection', async () => {
@@ -734,7 +785,7 @@ describe('reading a remote account’s collections', () => {
 
 describe('a round’s claim of a sync', () => {
 	const ORIGIN = 'https://kopje.test'
-	const read = (tags: string[]) => ({ pins: null, tags, hideCollections: null, unfinished: false })
+	const read = (tags: string[]) => ({ parts: ALL_PARTS, pins: null, tags, hideCollections: null })
 	const claim = async (t: Setup, now: number) => {
 		const sync = await t.store.claimCollectionSync(BUILD, { now })
 		if (sync === null || sync === 'more') {
@@ -783,6 +834,8 @@ describe('a round’s claim of a sync', () => {
 		t.web.fail(featuredOf(bob), 503)
 		const bobId = await followed(t, bob)
 		// MAX_SYNC_ATTEMPTS rounds fail for now; the sync waits, out of attempts, for its retry.
+		// (The first round reads the other parts through and leaves the sync due; the same call's second round, and
+		// every round after, makes no progress.)
 		for (let round = 0; round < MAX_SYNC_ATTEMPTS; round++) {
 			await sql(t.store, 'UPDATE collection_syncs SET due_at = ?', NOW)
 			await syncCollections(t.env, deps(t))

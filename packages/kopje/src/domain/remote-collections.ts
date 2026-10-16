@@ -36,6 +36,15 @@ export const MAX_SYNC_ATTEMPTS = 3
 export const SYNC_LEASE_MS = 10 * 60 * 1000
 export const SYNC_RETRY_MS = 15 * 60 * 1000
 
+// The parts of a read (phase 1), each read and applied on its own and recorded in collection_syncs.parts_read once it
+// is, so a round that reads one part makes progress whatever the others cost, and a later round reads only the rest:
+// the featured collection (pins), the followers and following collections (hide_collections), and the featuredTags
+// collection (featured hashtags; read with the featured collection for an actor without one).
+export const PART_FEATURED = 1
+export const PART_NETWORK = 2
+export const PART_TAGS = 4
+export const ALL_PARTS = PART_FEATURED | PART_NETWORK | PART_TAGS
+
 // Asks for a sync of the account's collections (ProcessAccountService#check_featured_collection! and
 // #check_featured_tags_collection!, and the hide_collections it sets). One request per account waits at a time, as
 // Sidekiq's until_executed lock keeps one job; a request while a round holds it is a new generation, which the round's
@@ -46,7 +55,7 @@ export function requestCollectionSync(db: Db, accountId: string, now: number): b
 	// due, endRound): rounds that failed for the older one neither drop nor delay it.
 	const row = db.first<{ due: number }>(
 		`INSERT INTO collection_syncs (account_id, due_at) VALUES (?1, ?2)
-		ON CONFLICT (account_id) DO UPDATE SET generation = generation + 1, attempts = 0,
+		ON CONFLICT (account_id) DO UPDATE SET generation = generation + 1, parts_read = 0, attempts = 0,
 			due_at = CASE WHEN token IS NOT NULL AND due_at > ?2 THEN due_at ELSE min(due_at, ?2) END
 		RETURNING due_at <= ?2 AS due`,
 		accountId,
@@ -212,14 +221,15 @@ export function unfeatureRemote(db: Db, accountId: string, name: string): boolea
 
 // ---- Syncs
 //
-// A sync has two phases, each a round of its own with its own fetch budget, and durable state between them:
-//   1. read: the collections (hide_collections, the featured collection's first MAX_REMOTE_PINS items, the featured
-//      hashtags), applied at once: the featured hashtags, hide_collections, and the pins of the listed statuses Kopje
-//      stores; the listed statuses it does not store go in collection_pins_pending, in their order.
+// A sync has two phases, each run in rounds with their own fetch budgets, and durable state between them:
+//   1. read: three parts (PART_*), the featured collection's first MAX_REMOTE_PINS items (its pins), the followers and
+//      following collections (hide_collections) and the featuredTags collection (the featured hashtags), each applied
+//      as soon as a round has read it through and recorded in parts_read, so a later round reads only the parts left.
+//      The listed statuses Kopje stores are pinned at once; those it does not go in collection_pins_pending.
 //   2. pins: later rounds fetch the pending statuses within their budgets; one fetched is stored and pinned, one that
 //      cannot be used is dropped, and one that may be fetched later stays. The metadata is never read again for them.
-// A round makes progress when phase 1 reads everything or the pending statuses shrink; MAX_SYNC_ATTEMPTS claims
-// without progress drop the sync.
+// A round makes progress when it reads a part not read before or the pending statuses shrink; MAX_SYNC_ATTEMPTS
+// claims without progress give up the read (its pending statuses are still fetched) or drop the sync.
 
 // A local account whose key signs a fetch on a remote account's behalf (DATA-7): `follower` follows `of`. Both are
 // account ids, so the Worker's key load checks the follow and the follower's standing again (getFollowerKey in
@@ -248,17 +258,19 @@ export type CollectionSync = ActorCollections & {
 	generation: number
 	token: string
 	phase: 'read' | 'pins'
+	// Phase read: the parts already read for this generation (PART_*), which the round does not read again.
+	parts: number
 	uris: string[]
 	signer: FollowerSigner | null
 	pending: boolean
 }
 
-type SyncRow = { account_id: string; attempts: number; generation: number; read_through: number }
+type SyncRow = { account_id: string; attempts: number; generation: number; read_through: number; parts_read: number }
 
 // The sync due first, by a seek of collection_syncs_due: the syncs rounds hold are due later, so none is read.
 function claimable(db: Db, now: number): SyncRow | undefined {
 	return db.first<SyncRow>(
-		`SELECT account_id, attempts, generation, read_through FROM collection_syncs
+		`SELECT account_id, attempts, generation, read_through, parts_read FROM collection_syncs
 		WHERE due_at <= ? ORDER BY due_at LIMIT 1`,
 		now
 	)
@@ -296,7 +308,17 @@ export const claimCollectionSync = writeOperation<{ now: number }, CollectionSyn
 			`SELECT a.uri, a.raw FROM accounts a WHERE a.id = ?1 AND a.domain IS NOT NULL AND ${availableSql('?1')}`,
 			row.account_id
 		)
-		const read = row.generation > row.read_through
+		let read = row.generation > row.read_through
+		// A read that ran out of attempts with pinned statuses pending gives way to them: the read is given up, the
+		// pending statuses get attempts of their own.
+		if (read && row.attempts >= MAX_SYNC_ATTEMPTS && pendingUris(db, row.account_id).length > 0) {
+			db.run(
+				'UPDATE collection_syncs SET read_through = generation, parts_read = 0, attempts = 0 WHERE account_id = ?',
+				row.account_id
+			)
+			read = false
+			row.attempts = 0
+		}
 		const uris = read ? [] : pendingUris(db, row.account_id)
 		if (account === undefined || row.attempts >= MAX_SYNC_ATTEMPTS || (!read && uris.length === 0)) {
 			dropSync(db, row.account_id)
@@ -314,6 +336,7 @@ export const claimCollectionSync = writeOperation<{ now: number }, CollectionSyn
 			generation: row.generation,
 			token,
 			phase: read ? 'read' : 'pins',
+			parts: row.parts_read,
 			uris,
 			...actorCollections(account.raw),
 			signer: localFollower(db, row.account_id),
@@ -370,22 +393,24 @@ function roundAccount(db: Db, input: RoundInput): { id: string; uri: string } | 
 	return account
 }
 
-// What phase 1 read of the account's collections. null: that part could not be read, and stays as it is.
+// What a round of phase 1 read of the account's collections. parts: the parts it read through (PART_*); a part it
+// did not is read again later. null: that part's data was not read (or cannot be), and stays as it is.
 //   pins: the uris the featured collection lists (its first page, in its order).
 //   tags: the names of the Hashtags the featuredTags collection lists (or, for an actor without one, the featured
 //         collection: FetchFeaturedCollectionService with hashtag).
 //   hideCollections: whether its followers or following collection hides its items (no first page).
-//   unfinished: part of it may be read later (a fetch that may pass, or the budget spent): read again later.
 export type CollectionReadInput = RoundInput & {
+	parts: number
 	pins: { uris: string[] } | null
 	tags: string[] | null
 	hideCollections: boolean | null
-	unfinished: boolean
 }
 
 // Phase 1's end (FetchFeaturedCollectionService#process_note_items and #process_hashtag_items,
 // FetchFeaturedTagsCollectionService#process_items, ProcessAccountService#set_fetchable_attributes!): what was read is
-// applied, and the request is read through unless part of it may be read later. Returns whether a sync is due.
+// applied, and the parts read are recorded for the generation the round claimed (not for a newer request, whose parts
+// start over); once every part is, the request is read through. The round progressed when it read a part not read
+// before. Returns whether a sync is due.
 export const completeCollectionRead = writeOperation<CollectionReadInput, boolean>((db, input) => {
 	const account = roundAccount(db, input)
 	if (account === null) {
@@ -400,14 +425,24 @@ export const completeCollectionRead = writeOperation<CollectionReadInput, boolea
 	if (input.hideCollections !== null) {
 		db.run('UPDATE accounts SET hide_collections = ? WHERE id = ?', input.hideCollections ? 1 : 0, account.id)
 	}
-	if (!input.unfinished) {
+	const before = db.first<{ parts_read: number }>(
+		'SELECT parts_read FROM collection_syncs WHERE account_id = ? AND generation = ?',
+		account.id,
+		input.generation
+	)
+	const parts = (before?.parts_read ?? 0) | (input.parts & ALL_PARTS)
+	if (before !== undefined) {
 		db.run(
-			'UPDATE collection_syncs SET read_through = max(read_through, ?) WHERE account_id = ?',
-			input.generation,
-			account.id
+			`UPDATE collection_syncs SET parts_read = CASE WHEN ?1 = ?3 THEN 0 ELSE ?1 END,
+				read_through = CASE WHEN ?1 = ?3 THEN max(read_through, generation) ELSE read_through END
+			WHERE account_id = ?2`,
+			parts,
+			account.id,
+			ALL_PARTS
 		)
 	}
-	return endRound(db, account.id, input.generation, !input.unfinished, input.now)
+	const progressed = before !== undefined && parts !== before.parts_read
+	return endRound(db, account.id, input.generation, progressed, input.now)
 })
 
 // What phase 2 fetched of the pending statuses: a usable status, or null for one that is not (refused, gone, not a

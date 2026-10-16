@@ -5,7 +5,14 @@ import type { InboxDeps } from './inbox'
 import { isTransientLoadError, REQUEST_MAX_FETCHES, requestBudget } from './loader'
 import { fetchRemoteStatus, idOf } from './remote-status'
 import { MAX_FEATURED_TAGS } from '../domain/featured-tags'
-import { type CollectionReadInput, type CollectionSync, MAX_REMOTE_PINS } from '../domain/remote-collections'
+import {
+	type CollectionReadInput,
+	type CollectionSync,
+	MAX_REMOTE_PINS,
+	PART_FEATURED,
+	PART_NETWORK,
+	PART_TAGS,
+} from '../domain/remote-collections'
 import type { RemoteStatusInput } from '../domain/remote-statuses'
 import { readConfig, userKek } from '../platform/config'
 import { callStore } from '../platform/store-client'
@@ -27,12 +34,15 @@ export const COLLECTION_SYNCS_PER_ROUND = 2
 // Pages of a featuredTags collection read at most (FetchFeaturedTagsCollectionService reads pages until it has
 // FeaturedTag::LIMIT items or there is no next page).
 export const MAX_FEATURED_TAG_PAGES = 3
-// The most documents phase 1 fetches: the following and followers collections, the featured collection and its first
-// page, and the featuredTags collection and its pages. It fits one round's budget by construction, so healthy
-// collections are always read through in one round (a redirect hop spends a fetch too, and makes that part retried).
-export const READ_FETCHES = 2 + 2 + 1 + MAX_FEATURED_TAG_PAGES
-if (READ_FETCHES > REQUEST_MAX_FETCHES) {
-	throw new Error('phase 1 of a collection sync must fit one round of REQUEST_MAX_FETCHES')
+// The most documents each part of a read fetches (domain/remote-collections.ts PART_*): the featured collection and its
+// first page, the following and followers collections, and the featuredTags collection and its pages. A round reads
+// the parts not read yet in that order, and records each it reads through, so the parts together may cost more than
+// one budget. Each part alone fits a round's budget even with a redirect hop on each of its documents, checked as the
+// module loads: a part read first in its round always completes, so every round with a healthy part left makes
+// progress.
+export const PART_DOCUMENTS = { featured: 2, network: 2, tags: 1 + MAX_FEATURED_TAG_PAGES } as const
+if (Math.max(...Object.values(PART_DOCUMENTS)) * 2 > REQUEST_MAX_FETCHES) {
+	throw new Error('each part of a collection read must fit one round of REQUEST_MAX_FETCHES, a redirect each included')
 }
 
 type Json = Record<string, unknown>
@@ -223,20 +233,37 @@ async function readFeaturedTags(
 export async function readCollections(
 	sync: CollectionSync,
 	loader: DocumentLoader
-): Promise<Pick<CollectionReadInput, 'pins' | 'tags' | 'hideCollections' | 'unfinished'>> {
+): Promise<Pick<CollectionReadInput, 'parts' | 'pins' | 'tags' | 'hideCollections'>> {
 	const origin = originOf(sync.accountUri)
-	const hideCollections = await hidesCollections(sync, origin, loader)
-	const read = sync.featured === null ? null : await readFeatured(sync, origin, loader)
-	const featured = read === 'transient' ? null : read
-	const listed =
-		sync.featuredTags === null ? (featured?.hashtags ?? null) : await readFeaturedTags(sync, origin, loader)
-	return {
-		pins: featured === null ? null : { uris: featured.uris },
-		tags: listed === 'transient' ? null : listed,
-		hideCollections,
-		// hidesCollections is null only when a collection may be read later.
-		unfinished: hideCollections === null || read === 'transient' || listed === 'transient',
+	const out: Pick<CollectionReadInput, 'parts' | 'pins' | 'tags' | 'hideCollections'> = {
+		parts: 0,
+		pins: null,
+		tags: null,
+		hideCollections: null,
 	}
+	// The featured collection: its pins, and its hashtags for an actor without a featuredTags collection (that part
+	// is read with it). One that cannot be read at all is read through: nothing changes, as with Mastodon.
+	if ((sync.parts & PART_FEATURED) === 0) {
+		const read = sync.featured === null ? null : await readFeatured(sync, origin, loader)
+		if (read !== 'transient') {
+			out.parts |= PART_FEATURED | (sync.featuredTags === null ? PART_TAGS : 0)
+			out.pins = read === null ? null : { uris: read.uris }
+			out.tags = sync.featuredTags === null ? (read?.hashtags ?? null) : null
+		}
+	}
+	// hidesCollections is null only when a collection may be read later.
+	if ((sync.parts & PART_NETWORK) === 0) {
+		out.hideCollections = await hidesCollections(sync, origin, loader)
+		out.parts |= out.hideCollections === null ? 0 : PART_NETWORK
+	}
+	if ((sync.parts & PART_TAGS) === 0 && sync.featuredTags !== null) {
+		const listed = await readFeaturedTags(sync, origin, loader)
+		if (listed !== 'transient') {
+			out.parts |= PART_TAGS
+			out.tags = listed
+		}
+	}
+	return out
 }
 
 // One round: up to COLLECTION_SYNCS_PER_ROUND syncs, each claimed, its phase run and handed back. Returns whether another waits.

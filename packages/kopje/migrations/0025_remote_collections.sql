@@ -24,13 +24,15 @@
 --   row goes once the last request is read through and nothing is pending, or after MAX_SYNC_ATTEMPTS rounds without
 --   progress (attempts). due_at is when a round may take it: the time it was asked for, then, once a round takes it,
 --   the end of that round's lease, so that a round that died leaves it to a later one. A round seeks the earliest
---   due_at at or before its time through collection_syncs_due, so syncs held by rounds are never read past.
---   generation counts the requests and read_through is the last one read: a request while a round holds the sync (an
---   Update of the actor naming other collections) leaves it to be read again. token is the claim of the round that
---   took it last: a round's end changes the queue or the learned data only while its token is the current one, so a
---   round whose lease ended (and was taken over), or whose sync was deleted and asked for anew, changes nothing. Both
---   tables go with their account
---   (purgeRelationships, and the cascade as a backstop).
+--   due_at at or before its time through collection_syncs_due, so syncs held by rounds are never read past. A read has
+--   three parts (the featured, the network and the featuredTags collections), each read and applied on its own;
+--   parts_read holds those read for the current generation, so a round that reads one makes progress and a later one
+--   reads only the rest. generation counts the requests and read_through is the last one read through (a new request
+--   starts its parts over): a request while a round holds the sync (an Update of the actor naming other collections)
+--   leaves it to be read again. token is the claim of the round that took it last: a round's end changes the queue or
+--   the learned data only while its token is the current one, so a round whose lease ended (and was taken over), or
+--   whose sync was deleted and asked for anew, changes nothing. Both tables go with their account (purgeRelationships,
+--   and the cascade as a backstop).
 --
 -- Cost: the copies read and write each pin and featured hashtag once. Until now only local accounts have them, at
 -- most five pins (StatusPinValidator) and ten featured hashtags (FeaturedTag::LIMIT) each, so the work grows with the
@@ -77,6 +79,7 @@ CREATE TABLE collection_syncs (
   due_at INTEGER NOT NULL,
   generation INTEGER NOT NULL DEFAULT 1,
   read_through INTEGER NOT NULL DEFAULT 0,
+  parts_read INTEGER NOT NULL DEFAULT 0 CHECK (parts_read BETWEEN 0 AND 7),
   token TEXT,
   attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0)
 );

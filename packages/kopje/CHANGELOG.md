@@ -22,11 +22,13 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
     - Pins and featured hashtags are shown by the same rules as a local account's: a followers-only pin only to the
       account's followers, nothing of an account that blocks you. A featured hashtag counts, when it is shown, the
       account's public and unlisted posts with it among the newest 200 Kopje has of it.
-    - A sync reads the collections in one round and applies them at once; the pinned posts Kopje does not have are
-      fetched in later rounds, as many as each round's fetch budget allows, and one that cannot be fetched is dropped.
-      A collection that cannot be read for now (a timeout, a 5xx) is read again later, at most three times in a row
-      without progress, and leaves what was learned as it was meanwhile. A profile update while a sync runs is read
-      again afterwards, with its own three tries.
+    - A sync reads the featured collection, the followers and following collections, and the featuredTags collection
+      as three parts, each applied as soon as it is read; a round reads the parts not read yet, so one cut short by the
+      fetch budget is read in the next round. The pinned posts Kopje does not have are fetched in later rounds, as many
+      as each round's fetch budget allows, and one that cannot be fetched is dropped. A collection that cannot be read
+      for now (a timeout, a 5xx) is read again later, at most three times in a row without progress, and leaves what
+      was learned as it was meanwhile; the pending pinned posts are fetched even then. A profile update while a sync
+      runs is read again afterwards, with its own three tries.
     - Where Kopje differs from Mastodon: an account keeps at most 20 pins and 10 featured hashtags (Mastodon keeps any
       number for a remote account), from the first 20 items of its featured collection and the first three pages of its
       featuredTags collection; a collection is read only on the account's own server, and a pin only when it is the
