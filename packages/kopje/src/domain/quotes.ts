@@ -79,12 +79,13 @@ type QuoteRow = {
 	hops: number
 	fetch_as: string | null
 	need_author: string | null
+	generation: number
 }
 
 function quoteRow(db: Db, statusId: string): QuoteRow | undefined {
 	return db.first<QuoteRow>(
 		`SELECT q.status_id, s.uri AS status_uri, s.account_id, a.uri AS author_uri, q.quoted_uri, q.quoted_status_id,
-			q.state, q.legacy, q.approval_uri, q.attempts, q.hops, q.fetch_as, q.need_author
+			q.state, q.legacy, q.approval_uri, q.attempts, q.hops, q.fetch_as, q.need_author, q.generation
 		FROM quotes q JOIN statuses s ON s.id = q.status_id JOIN accounts a ON a.id = s.account_id
 		WHERE q.status_id = ?`,
 		statusId
@@ -156,14 +157,15 @@ export function recordQuote(
 	const work = !named.tombstone && arrival.hops > 0
 	db.run(
 		`INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, quoted_account_id, state, legacy, approval_uri,
-			verify_after, attempts, hops, fetch_as, updated_at)
-		SELECT ?1, ?2, t.id, t.account_id, CASE WHEN ?3 THEN 'deleted' ELSE 'pending' END, ?4, ?5, ?6, 0, ?7, ?8, ?9
+			verify_after, attempts, hops, fetch_as, generation, updated_at)
+		SELECT ?1, ?2, t.id, t.account_id, CASE WHEN ?3 THEN 'deleted' ELSE 'pending' END, ?4, ?5, ?6, 0, ?7, ?8,
+			(abs(random()) % 9007199254740991), ?9
 		FROM (SELECT NULL) LEFT JOIN statuses t ON NOT ?3 AND t.uri = ?2 AND t.reblog_of_id IS NULL AND t.id <> ?1
 		WHERE true
 		ON CONFLICT (status_id) DO UPDATE SET quoted_uri = excluded.quoted_uri, quoted_status_id = excluded.quoted_status_id,
 			quoted_account_id = excluded.quoted_account_id, state = excluded.state, legacy = excluded.legacy, approval_uri = excluded.approval_uri,
 			verify_after = excluded.verify_after, attempts = 0, hops = excluded.hops, fetch_as = excluded.fetch_as,
-			need_author = NULL, updated_at = excluded.updated_at`,
+			need_author = NULL, generation = excluded.generation, updated_at = excluded.updated_at`,
 		status.id,
 		named.uri,
 		named.tombstone ? 1 : 0,
@@ -217,7 +219,7 @@ export function promoteQuote(db: Db, statusId: string, arrival: QuoteArrival, no
 export function linkQuotes(db: Db, status: { id: string; uri: string }, now: number): void {
 	db.run(
 		`UPDATE quotes SET quoted_status_id = ?1, quoted_account_id = (SELECT account_id FROM statuses WHERE id = ?1),
-			need_author = NULL, verify_after = CASE WHEN hops > 0 THEN ?3 ELSE verify_after END,
+			need_author = NULL, generation = (abs(random()) % 9007199254740991), verify_after = CASE WHEN hops > 0 THEN ?3 ELSE verify_after END,
 			attempts = CASE WHEN hops > 0 THEN 0 ELSE attempts END, updated_at = ?4
 		WHERE status_id IN (SELECT status_id FROM quotes
 			WHERE quoted_uri = ?2 AND quoted_status_id IS NULL AND state = 'pending' AND status_id <> ?1 LIMIT ?5)`,
@@ -250,9 +252,8 @@ export function otherQuotesDue(db: Db, now: number, except: string | null): bool
 // ---------------------------------------------------------------------------------------------------------------
 
 // What the Worker fetched: a document, or why it has none. gone: 404 or 410; unusable: refused, or not what was asked
-// for; transient: may pass later (a retry); budget: the request's fetch budget ran out (due again at once).
-export type Fetched<T> =
-	{ kind: 'ok'; value: T } | { kind: 'gone' } | { kind: 'unusable' } | { kind: 'transient' } | { kind: 'budget' }
+// for; transient: may pass later (a fetch budget or deadline that ran out included).
+export type Fetched<T> = { kind: 'ok'; value: T } | { kind: 'gone' } | { kind: 'unusable' } | { kind: 'transient' }
 
 // A stamp as the Worker read it, ids only (an inlined object counts by its id, and is never trusted beyond it).
 export type StampInput = {
@@ -280,6 +281,8 @@ export type QuoteWork = {
 	// The username of the local account whose key fetches for this work (fetch_as, rechecked), or null for the instance
 	// actor.
 	signer: string | null
+	// The work's generation: the stage's outcome applies only while it is unchanged.
+	generation: number
 }
 
 type Linked = { id: string; uri: string; account_id: string; author_uri: string; visibility: Visibility; local: number }
@@ -357,6 +360,7 @@ export const quoteWork = readOperation<{ statusId: string }, QuoteWork | null>((
 		stage,
 		fetch,
 		signer: signer?.username ?? null,
+		generation: row.generation,
 	}
 })
 
@@ -368,6 +372,10 @@ export type QuoteVerification = {
 	// one has its own work).
 	quotedUri: string
 	approvalUri: string | null
+	// The generation the stage read (quoteWork, or the round's claim): a stale outcome is discarded.
+	generation: number
+	// Run inline by the inbox request: best effort, never charged; what fails is left due for a job round.
+	inline: boolean
 	// What the stage fetched: the quoted status, its author's document or the stamp.
 	quoted?: Fetched<RemoteStatusInput>
 	author?: Fetched<RemoteActorInput>
@@ -380,8 +388,9 @@ export type QuoteVerification = {
 export type QuoteVerified = { done: boolean; due: boolean; state: QuoteState | null; next: boolean }
 
 // The end of one verification: the state it leaves and its work: done (none left), retry (a failure that may pass:
-// the next attempt after QUOTE_BACKOFF_MS, none after the last; an attempt is charged) or again (due at once: the fetch
-// budget ran out, which charges nothing). The author address a stage recorded stays only while work is left.
+// the next attempt after QUOTE_BACKOFF_MS, none after the last; an attempt is charged) or again (due at once for a job
+// round: an inline stage that did not finish, which charges nothing). The author address a stage recorded stays only
+// while work is left. Every end draws a new generation, so no other verifier's outcome applies after it.
 function finish(
 	db: Db,
 	row: QuoteRow,
@@ -395,7 +404,8 @@ function finish(
 	const verifyAfter = work === 'again' ? now : delay === undefined ? null : now + delay
 	const fetched = work === 'done' || (work === 'retry' && delay === undefined) ? null : keep
 	db.run(
-		`UPDATE quotes SET state = ?2, verify_after = ?3, attempts = ?4, need_author = ?5, updated_at = ?6
+		`UPDATE quotes SET state = ?2, verify_after = ?3, attempts = ?4, need_author = ?5, updated_at = ?6,
+			generation = (abs(random()) % 9007199254740991)
 		WHERE status_id = ?1`,
 		row.status_id,
 		state,
@@ -407,13 +417,19 @@ function finish(
 	return { done: work !== 'again', due: otherQuotesDue(db, now, null), state, next: false }
 }
 
-// A failed fetch's outcome: gone or unusable end the work, transient charges an attempt, budget none.
-function failed(db: Db, row: QuoteRow, keep: QuoteState, fetched: Fetched<unknown>, now: number, held: string | null) {
-	return fetched.kind === 'budget'
-		? finish(db, row, keep, 'again', now, held)
-		: fetched.kind === 'transient'
-			? finish(db, row, keep, 'retry', now, held)
-			: finish(db, row, keep, 'done', now)
+// A failed fetch's outcome: gone or unusable end the work; one that may pass (a fetch budget or deadline that ran out
+// included) charges an attempt in a job round, where the stage had a whole budget, and nothing inline.
+function failed(
+	db: Db,
+	row: QuoteRow,
+	keep: QuoteState,
+	fetched: Fetched<unknown>,
+	input: QuoteVerification,
+	held: string | null
+) {
+	return fetched.kind !== 'transient'
+		? finish(db, row, keep, 'done', input.now)
+		: finish(db, row, keep, input.inline ? 'again' : 'retry', input.now, held)
 }
 
 // The stamp's checks (VerifyQuoteService#accept_quote! and FEP-044f "Verifying a quote"): a QuoteAuthorization with
@@ -441,12 +457,13 @@ function storeQuoted(db: Db, row: QuoteRow, input: QuoteVerification, keep: Quot
 	if (input.author !== undefined) {
 		const document = input.author
 		if (document.kind !== 'ok') {
-			return failed(db, row, keep, document, now, row.need_author)
+			return failed(db, row, keep, document, input, row.need_author)
 		}
 		if (document.value.uri !== row.need_author || isDeletedActor(db, document.value.uri, now)) {
 			return finish(db, row, keep, 'done', now)
 		}
 		upsertRemoteActor(db, document.value, origin, now)
+		db.run('UPDATE quotes SET generation = (abs(random()) % 9007199254740991) WHERE status_id = ?', row.status_id)
 		return { done: false, due: true, state: keep, next: true }
 	}
 	const fetched = input.quoted
@@ -454,7 +471,7 @@ function storeQuoted(db: Db, row: QuoteRow, input: QuoteVerification, keep: Quot
 		return finish(db, row, keep, 'again', now, row.need_author)
 	}
 	if (fetched.kind !== 'ok') {
-		return failed(db, row, keep, fetched, now, row.need_author)
+		return failed(db, row, keep, fetched, input, row.need_author)
 	}
 	const status = fetched.value
 	const authorUri = status.attributedTo
@@ -479,10 +496,10 @@ function storeQuoted(db: Db, row: QuoteRow, input: QuoteVerification, keep: Quot
 		}
 		// A status that names another author each time it is fetched pays for each change.
 		if (row.need_author !== null) {
-			return finish(db, row, keep, 'retry', now, authorUri)
+			return finish(db, row, keep, input.inline ? 'again' : 'retry', now, authorUri)
 		}
 		db.run(
-			'UPDATE quotes SET need_author = ?2, updated_at = ?3 WHERE status_id = ?1',
+			'UPDATE quotes SET need_author = ?2, generation = (abs(random()) % 9007199254740991), updated_at = ?3 WHERE status_id = ?1',
 			row.status_id,
 			authorUri,
 			iso(now)
@@ -493,7 +510,10 @@ function storeQuoted(db: Db, row: QuoteRow, input: QuoteVerification, keep: Quot
 	if (authorUri !== row.author_uri && !isDistributable(visibilityOf(status, followersUri(db, author.id)))) {
 		return finish(db, row, keep, 'done', now)
 	}
-	db.run('UPDATE quotes SET need_author = NULL WHERE status_id = ?', row.status_id)
+	db.run(
+		'UPDATE quotes SET need_author = NULL, generation = (abs(random()) % 9007199254740991) WHERE status_id = ?',
+		row.status_id
+	)
 	storeRemoteStatus(db, author, status, {
 		now,
 		origin,
@@ -516,6 +536,7 @@ export const completeQuote = writeOperation<QuoteVerification, QuoteVerified>((d
 	if (
 		row === undefined ||
 		(row.state !== 'pending' && row.state !== 'accepted') ||
+		row.generation !== input.generation ||
 		row.quoted_uri !== input.quotedUri ||
 		row.approval_uri !== input.approvalUri
 	) {
@@ -532,7 +553,8 @@ export const completeQuote = writeOperation<QuoteVerification, QuoteVerified>((d
 	const quoted = found
 	if (row.quoted_status_id !== quoted.id) {
 		db.run(
-			'UPDATE quotes SET quoted_status_id = ?2, quoted_account_id = ?3, need_author = NULL WHERE status_id = ?1',
+			`UPDATE quotes SET quoted_status_id = ?2, quoted_account_id = ?3, need_author = NULL, generation = (abs(random()) % 9007199254740991)
+			WHERE status_id = ?1`,
 			row.status_id,
 			quoted.id,
 			quoted.account_id
@@ -559,39 +581,42 @@ export const completeQuote = writeOperation<QuoteVerification, QuoteVerified>((d
 		return finish(db, row, lost(true), 'done', now)
 	}
 	if (stamp.kind !== 'ok') {
-		return failed(db, row, keep, stamp, now, null)
+		return failed(db, row, keep, stamp, input, null)
 	}
 	return finish(db, row, stampValid(stamp.value, row, quoted) ? 'accepted' : lost(false), 'done', now)
 })
 
-// A stage that failed in the Store itself (a document it could not store, as one past the row size limit): charged
-// as a failure that may pass, so it is given up after the last retry, and never stops the other quotes of a round.
-export const chargeQuote = writeOperation<{ statusId: string; now: number }, void>((db, { statusId, now }) => {
-	const row = quoteRow(db, statusId)
-	if (row !== undefined && (row.state === 'pending' || row.state === 'accepted')) {
-		finish(db, row, row.state, 'retry', now, row.need_author)
-	}
-})
-
-// A job round's claim: the quotes due first, at most `limit`, held from other rounds for QUOTE_LEASE_MS (a round that
-// dies leaves them to a later one). more: others are due too.
-export const claimQuotes = writeOperation<{ now: number; limit: number }, { ids: string[]; more: boolean }>(
-	(db, { now, limit }) => {
-		const ids = db
-			.all<{ status_id: string }>(
-				'SELECT status_id FROM quotes WHERE verify_after <= ? ORDER BY verify_after LIMIT ?',
-				now,
-				limit
-			)
-			.map((row) => row.status_id)
-		db.run(
-			'UPDATE quotes SET verify_after = ?1 WHERE status_id IN (SELECT value FROM json_each(?2))',
-			now + QUOTE_LEASE_MS,
-			JSON.stringify(ids)
-		)
-		return { ids, more: otherQuotesDue(db, now, null) }
+// A job round's stage that failed in the Store itself (a document it could not store, as one past the row size
+// limit): charged as a failure that may pass, so it is given up after the last retry, and never stops the other quotes
+// of a round. Only the work of the generation the stage read is charged: a quote replaced since is a new work.
+export const chargeQuote = writeOperation<{ statusId: string; generation: number; now: number }, void>(
+	(db, { statusId, generation, now }) => {
+		const row = quoteRow(db, statusId)
+		if (row !== undefined && row.generation === generation && (row.state === 'pending' || row.state === 'accepted')) {
+			finish(db, row, row.state, 'retry', now, row.need_author)
+		}
 	}
 )
+
+// A job round's claim: the quotes due first, at most `limit`, each with the generation of its work, held from other
+// rounds for QUOTE_LEASE_MS (a round that dies leaves them to a later one). more: others are due too.
+export const claimQuotes = writeOperation<
+	{ now: number; limit: number },
+	{ ids: string[]; generations: number[]; more: boolean }
+>((db, { now, limit }) => {
+	const rows = db.all<{ status_id: string; generation: number }>(
+		'SELECT status_id, generation FROM quotes WHERE verify_after <= ? ORDER BY verify_after LIMIT ?',
+		now,
+		limit
+	)
+	const ids = rows.map((row) => row.status_id)
+	db.run(
+		'UPDATE quotes SET verify_after = ?1 WHERE status_id IN (SELECT value FROM json_each(?2))',
+		now + QUOTE_LEASE_MS,
+		JSON.stringify(ids)
+	)
+	return { ids, generations: rows.map((row) => row.generation), more: otherQuotesDue(db, now, null) }
+})
 
 // ---------------------------------------------------------------------------------------------------------------
 // Revocation: the Delete of a stamp
@@ -714,7 +739,7 @@ export function recheckStamp(db: Db, actor: { id: string }, approvalUri: string,
 // gone), and its outgoing quote is deleted (the count trigger takes it off its target).
 export function detachQuotes(db: Db, statusId: string, now: number): void {
 	db.run(
-		`UPDATE quotes SET quoted_status_id = NULL, quoted_account_id = NULL,
+		`UPDATE quotes SET quoted_status_id = NULL, quoted_account_id = NULL, generation = (abs(random()) % 9007199254740991),
 			state = CASE state WHEN 'accepted' THEN 'deleted' ELSE state END, verify_after = NULL, updated_at = ?2
 		WHERE quoted_status_id = ?1`,
 		statusId,

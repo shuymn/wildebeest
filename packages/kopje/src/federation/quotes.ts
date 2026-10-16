@@ -2,7 +2,7 @@ import { type DocumentLoader, FetchError } from '@fedify/fedify'
 
 import { createRemoteLoaders, type FederationDeps, type FederationState, type RemoteLoaders } from './federation'
 import type { InboxDeps } from './inbox'
-import { BudgetExceededError, type FetchBudget, isTransientLoadError, loadFailureOf, requestBudget } from './loader'
+import { isTransientLoadError, requestBudget } from './loader'
 import { fetchActor } from './remote-actor'
 import { fetchRemoteStatus, idOf } from './remote-status'
 import type { RemoteActorInput } from '../domain/inbox'
@@ -52,9 +52,6 @@ function originOf(uri: string): string | null {
 }
 
 function failureOf(error: unknown): Exclude<Fetched<never>, { kind: 'ok' }> {
-	if (error instanceof BudgetExceededError) {
-		return { kind: 'budget' }
-	}
 	const status = error instanceof FetchError ? error.response?.status : undefined
 	if (status === 404 || status === 410) {
 		return { kind: 'gone' }
@@ -121,46 +118,31 @@ async function loadActor(uri: string, origin: string, loaders: RemoteLoaders): P
 	if (originOf(uri) === null || originOf(uri) === origin) {
 		return { kind: 'unusable' }
 	}
-	// fetchActor reports a spent budget as a failure that may pass: the loaders note it, the document's or a context's.
-	let exhausted = false
-	const watched =
-		(loader: DocumentLoader): DocumentLoader =>
-		async (url, options) => {
-			try {
-				return await loader(url, options)
-			} catch (error) {
-				exhausted ||= loadFailureOf(error) instanceof BudgetExceededError
-				throw error
-			}
-		}
-	const fetched = await fetchActor(uri, watched(loaders.document), watched(loaders.context))
+	const fetched = await fetchActor(uri, loaders.document, loaders.context)
 	if (fetched.kind === 'ok') {
 		return fetched.input === null ? { kind: 'unusable' } : { kind: 'ok', value: fetched.input }
 	}
-	return exhausted ? { kind: 'budget' } : { kind: fetched.kind }
+	return { kind: fetched.kind }
 }
 
 type Rpc = <T>(call: (store: StoreStub) => Promise<T>) => Promise<T>
 
-// The loaders a quote's fetches go through, and the budget they draw on (the request's, or the quote's own in a round).
-export type QuoteLoaders = { loaders: RemoteLoaders; budget: FetchBudget }
-
-function spent(budget: FetchBudget): boolean {
-	return budget.fetches <= 0 || budget.bytes <= 0 || Date.now() >= budget.deadline
-}
-
-// One quote's work, a stage at a time (quoteWork: the quoted status, its author, the stamp): each stage fetches one
-// document with `loadersFor(signer)` (signer: the work's rechecked fetch_as, a username, or null) and hands it to the
-// Store, which keeps what it completed, so a round that runs out of budget leaves the next round at the first stage not
-// done. Returns whether work is left due now: this quote's (unfinished), or another's (a quoted status it stored has a
-// quote of its own), for a later round.
+// One quote's work, a stage at a time (quoteWork: the quoted status, its author, the status again once its author is
+// stored, the stamp): each stage fetches one document through loaders of its own (`loadersFor(signer)`, signer the
+// work's rechecked fetch_as, a username, or null), so nothing one stage fetched answers another's fetch, and hands it
+// to the Store, which applies it only to the generation of the work it read. Inline (the inbox request), every stage is
+// best effort: what does not finish is left due for a job round, uncharged. In a round each stage has a whole budget,
+// and every failure of it is charged (a budget or deadline that ran out included), so a stage that never fits is given
+// up after the last attempt. Returns whether work is left due now: this quote's (unfinished), or another's (a quoted
+// status it stored has a quote of its own), for a later round.
 export async function verifyQuote(
 	rpc: Rpc,
 	build: string,
 	origin: string,
 	statusId: string,
-	loadersFor: (signer: string | null) => QuoteLoaders,
-	now: () => number
+	loadersFor: (signer: string | null) => RemoteLoaders,
+	now: () => number,
+	run: { inline: boolean; generation?: number }
 ): Promise<boolean> {
 	// The quoted status, its author, the status again (now storable), the stamp, and the decision.
 	for (let stage = 0; stage < 5; stage++) {
@@ -168,17 +150,19 @@ export async function verifyQuote(
 		if (work === null) {
 			return false
 		}
-		const { loaders, budget } = loadersFor(work.signer)
+		// The first stage is the claimed work's: if the quote changed since the claim, its outcome is discarded.
+		const generation = stage === 0 && run.generation !== undefined ? run.generation : work.generation
+		const loaders = loadersFor(work.signer)
 		const input: QuoteVerification = {
 			statusId,
 			now: now(),
 			origin,
 			quotedUri: work.quotedUri,
 			approvalUri: work.approvalUri,
+			generation,
+			inline: run.inline,
 		}
-		if (work.fetch !== null && spent(budget)) {
-			input[work.stage === 'quoted' ? 'quoted' : work.stage === 'author' ? 'author' : 'stamp'] = { kind: 'budget' }
-		} else if (work.stage === 'quoted' && work.fetch !== null) {
+		if (work.stage === 'quoted' && work.fetch !== null) {
 			input.quoted = await loadStatus(work.fetch, origin, loaders.document)
 		} else if (work.stage === 'author' && work.fetch !== null) {
 			input.author = await loadActor(work.fetch, origin, loaders)
@@ -189,13 +173,16 @@ export async function verifyQuote(
 		try {
 			result = await rpc((s) => s.completeQuote(build, { ...input, now: now() }))
 		} catch (error) {
-			// What the Store could not apply (a document it cannot store) fails this quote alone, charged as a failure
-			// that may pass; maintenance still stops the round.
+			// What the Store could not apply (a document it cannot store) fails this quote alone: charged in a round, left
+			// due for one inline; maintenance still stops the round.
 			if (error instanceof StoreUnavailableError) {
 				throw error
 			}
 			console.error({ event: 'kopje.quote.stage.failed', ...errorFields(error) })
-			await rpc((s) => s.chargeQuote(build, { statusId, now: now() }))
+			if (run.inline) {
+				return true
+			}
+			await rpc((s) => s.chargeQuote(build, { statusId, generation, now: now() }))
 			return false
 		}
 		if (!result.next) {
@@ -206,7 +193,7 @@ export async function verifyQuote(
 }
 
 // One job round (jobs/queue.ts): up to QUOTE_ROUND quotes whose work is due, oldest first, claimed for the round, each
-// within a request's fetch budget of its own. Returns whether more work is due. A Store refusal surfaces as
+// stage of each with a whole fetch budget of its own, so a heavy or failing quote starves no other. Returns whether more work is due. A Store refusal surfaces as
 // StoreUnavailableError for the caller; a claimed quote whose round died is claimed again after its lease.
 export async function verifyQuotes(env: Env, deps: InboxDeps): Promise<boolean> {
 	const build = deps.build(env)
@@ -231,23 +218,15 @@ export async function verifyQuotes(env: Env, deps: InboxDeps): Promise<boolean> 
 		loader: deps.loader,
 	}
 	const state: FederationState = { resolvedUsername: null, source: null, storeError: null }
-	// Each quote has a fetch budget of its own: a heavy or failing one never starves the others of the round.
-	const loadersOf = () => {
-		const budget = requestBudget(Date.now())
-		const bySigner = new Map<string | null, QuoteLoaders>()
-		return (signer: string | null) => {
-			let loaders = bySigner.get(signer)
-			if (loaders === undefined) {
-				loaders = { loaders: createRemoteLoaders(federation, state, signer, budget), budget }
-				bySigner.set(signer, loaders)
-			}
-			return loaders
-		}
-	}
+	const loadersFor = (signer: string | null) =>
+		createRemoteLoaders(federation, state, signer, requestBudget(Date.now()))
 	const rpc: Rpc = (call) => callStore(() => call(store()))
 	let more = claimed.more
-	for (const id of claimed.ids) {
-		const left = await verifyQuote(rpc, build, origin, id, loadersOf(), deps.now)
+	for (const [i, id] of claimed.ids.entries()) {
+		const left = await verifyQuote(rpc, build, origin, id, loadersFor, deps.now, {
+			inline: false,
+			generation: claimed.generations[i],
+		})
 		if (state.storeError !== null) {
 			throw state.storeError
 		}

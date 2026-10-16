@@ -1252,14 +1252,19 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   status) costs work proportional to its audience in every batch until it is staged. Receipt enumeration has this in
   common with follower enumeration.
   _Implemented on branch `kopje/quotes-1a`_ for received quotes: a quote's verification goes in stages of one
-  document each (the quoted status, its author when Kopje lacks it, the status again, the stamp); between stages only
-  the author's address is kept, never a fetched document, and the status is stored only from a fresh fetch, so a quote
-  whose stages need more than one budget (redirect hops count) goes on from the first stage not done; a stage the Store
-  cannot apply fails that quote alone, charged like any failure that may pass; it runs inline with
-  what is left of the request's budget, and a job round (Queue or cron) verifies at most 10 quotes, each with a budget
-  of its own, so a heavy or failing quote starves no other; a budget that runs out charges no attempt; a status stored for a verification gets one hop less of
-  work, so one traversal stops two levels below the status that arrived, however long a chain of quotes; a failed
-  verification is retried five times (1, 5, 30, 120 and 720 minutes later), then given up until its status arrives
+  document each (the quoted status, its author when Kopje lacks it, the status again, the stamp), each through loaders
+  of its own, so no stage reads another's fetch; between stages only the author's address is kept, never a fetched
+  document, so the status is stored only from a fresh fetch. Each stage's outcome applies only to the generation of
+  the work it read (a number drawn anew whenever the quote's target, stamp, stage or outcome changes), so a late or
+  concurrent outcome is discarded. Inline in the inbox request a quote is verified best effort with what is left of the
+  request's budget and never charged: what does not finish is left due. A job round (Queue or cron) verifies at most
+  10 quotes, each stage with a whole budget of its own (8 fetches, redirect hops and contexts included), so a heavy or
+  failing quote starves no other, and charges every failure of a stage, a budget or deadline that ran out included, as
+  it does a stage the Store cannot apply: a stage that never fits a budget is given up after the last attempt, and a
+  round that only failed asks for no other (the backoff says when the work is due). A status stored for a
+  verification gets one hop less of work, so one traversal stops two levels below the status that arrived, however
+  long a chain of quotes; a failed verification is retried five times (1, 5, 30, 120 and 720 minutes later), then given
+  up until its status arrives
   again. A stamp's `Delete` writes one `quote_revocations` row and changes the quotes naming it in batches of at most
   500 rows counted with `total_changes()` (a row and its count trigger), the first in the request and the rest in the
   inbound job rounds. A newly stored status links at most 100 unresolved quotes naming it. `src/domain/quotes.ts`,

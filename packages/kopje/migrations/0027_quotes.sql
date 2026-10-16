@@ -17,7 +17,9 @@
 --   root, one less for a status stored as a quoted target during verification), fetch_as (the local account
 --   whose key may fetch for it, rechecked before each use) and need_author (the author of the quoted status, learned
 --   from a fetch of it, when Kopje does not have that account yet: the next stage fetches the author, the one after
---   fetches the status again, now storable. Only this address is kept between stages, never a fetched document).
+--   fetches the status again, now storable. Only this address is kept between stages, never a fetched document), and
+--   generation (a random number drawn anew whenever the quote's target, stamp, stage or outcome changes: a verifier's
+--   outcome applies only to the generation it read, so a late or concurrent one is discarded).
 -- - quote_revocations records, for good, every stamp whose Delete by an author revoked a stored quote of that author's
 --   status: the stamp never verifies a quote of that author's statuses again, whatever later happens to the quote row.
 --   It is keyed by the stamp and the author, so nobody else's Delete of the same URI revokes anything of the author's. pending marks one whose matching quotes are still being
@@ -42,6 +44,7 @@ CREATE TABLE quotes (
   hops INTEGER NOT NULL DEFAULT 0 CHECK (hops BETWEEN 0 AND 2),
   fetch_as TEXT REFERENCES local_accounts (account_id) ON DELETE SET NULL,
   need_author TEXT CHECK (length(need_author) <= 2048),
+  generation INTEGER NOT NULL DEFAULT 0,
   updated_at TEXT NOT NULL,
   CHECK (state <> 'accepted' OR quoted_status_id IS NOT NULL),
   CHECK (quoted_uri IS NOT NULL OR state = 'deleted'),
