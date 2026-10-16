@@ -86,14 +86,16 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       full actor, as Mastodon sends them: to its remote followers, the remote accounts its posts of the two days
       before the suspension mention, and those it followed or asked to follow in those days. The audience is gathered
       in the background, in bounded rounds, so the `Update` leaves within minutes rather than at once.
-    - While suspended, the account's posts, boosts and other activities still waiting for delivery are dropped, not
-      sent later; only its retractions (deletes, undos) and the suspension's `Update` go out. A delivery already in
-      flight when the suspension commits may still be sent.
+    - While suspended, the account's posts, boosts and other activities still waiting for delivery are dropped when
+      the queue reaches them, which it does within moments; only its retractions (deletes, undos) and the
+      suspension's `Update` go out. A delivery already in flight when the suspension commits may still be sent.
     - Where Kopje differs from Mastodon: `disable`, `sensitive` and `silence` are answered 422
       `Validation failed: Type is not included in the list`, as an unknown type is (Kopje has none of these states);
       `suspend` of a remote account is answered 422 for now; `text` and `warning_preset_id` are accepted and dropped
       (Kopje keeps no warnings and sends no email); no action may target the admin's own account (403), as Mastodon
-      refuses the Owner acting on the Owner; and report resolution and the `Update`s finish in background rounds.
+      refuses the Owner acting on the Owner; report resolution and the `Update`s finish in background rounds; and the
+      `Update`s' recent mentions and follows count at most 2,000 inboxes each that no earlier source of the same
+      `Update` reached, where Mastodon counts each source's own distinct inboxes.
 - `POST /admin/accounts/unsuspend` and `kopje-admin account unsuspend <username>` (Access only) unsuspend a local
   account as the admin API does, logged with the Access identity. It recovers a suspended admin, whom no admin can
   unsuspend.

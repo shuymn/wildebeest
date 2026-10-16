@@ -32,6 +32,7 @@ import {
 	TOKEN_ROUND_ROWS,
 } from '../src/domain/suspension'
 import type { StoreStub } from '../src/platform/store-client'
+import { sha256Hex } from '../src/security/tokens'
 
 // Local suspension through the Mastodon admin API (R1, R37, VIS-29; Admin::AccountAction, SuspendAccountService,
 // UnsuspendAccountService and AccountReachFinder of Mastodon 4.5.11): who may act, the action's types, the token
@@ -90,11 +91,11 @@ async function settle(store: StoreStub): Promise<number> {
 type Sent = { type: string; inbox: string; suspended: boolean; object: unknown }
 
 // Claims and completes every delivery due, until nothing is left; what was sent, in order.
-async function drain(store: StoreStub): Promise<Sent[]> {
+async function drain(store: StoreStub, now = NOW): Promise<Sent[]> {
 	const sent: Sent[] = []
 	for (let round = 0; round < 200; round++) {
 		const leaseToken = `lease-${round}`
-		const claim = await store.claimDeliveries(BUILD, { now: NOW, leaseToken })
+		const claim = await store.claimDeliveries(BUILD, { now, leaseToken })
 		for (const delivery of claim.deliveries) {
 			const body = JSON.parse(delivery.body) as { type: string; object?: { suspended?: boolean } }
 			sent.push({
@@ -106,7 +107,7 @@ async function drain(store: StoreStub): Promise<Sent[]> {
 			await store.completeDelivery(BUILD, {
 				id: delivery.id,
 				leaseToken,
-				now: NOW,
+				now,
 				outcome: { kind: 'delivered', status: 202 },
 			})
 		}
@@ -406,20 +407,12 @@ describe('the tokens job (RES-6)', () => {
 		const { h, admin, alice, bob } = await world()
 		const client = (await sql<{ id: string }>(h.store, 'SELECT client_id AS id FROM oauth_tokens LIMIT 1'))[0]!.id
 		// 600 tokens of alice's from before the suspension, 250 of them with a subscription; the first subscription has 450
-		// pushes waiting (more than a round), 20 others 10 each. 5 tokens dated after the fence are not its to delete.
+		// pushes waiting (more than a round), 20 others 10 each.
 		await sql(
 			h.store,
 			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 600)
 			INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes, created_at)
 			SELECT printf('t%05d', i), 'access', ?1, ?2, 'read', '2026-01-01T00:00:00.000Z' FROM n`,
-			client,
-			alice.id
-		)
-		await sql(
-			h.store,
-			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 5)
-			INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes, created_at)
-			SELECT printf('u%05d', i), 'access', ?1, ?2, 'read', '2027-01-01T00:00:00.000Z' FROM n`,
 			client,
 			alice.id
 		)
@@ -452,6 +445,15 @@ describe('the tokens job (RES-6)', () => {
 		expect(await sql(h.store, 'SELECT count(*) AS n FROM push_deliveries')).toEqual([{ n: 650 }])
 
 		expect(await act(h, admin, alice.id, { type: 'suspend' })).toEqual({ status: 200, body: {} })
+		// 5 tokens issued after the suspension committed, dated after its fence, are not the job's to delete.
+		await sql(
+			h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 5)
+			INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes, created_at)
+			SELECT printf('u%05d', i), 'access', ?1, ?2, 'read', '2027-01-01T00:00:00.000Z' FROM n`,
+			client,
+			alice.id
+		)
 		const tokenRounds = (await rounds(h.store)).filter((round) => round.kind === 'tokens')
 		// 601 tokens (alice's sign-in included), 250 subscriptions and 650 pushes: several rounds, each within its budget.
 		expect(tokenRounds.length).toBeGreaterThanOrEqual(Math.ceil((601 + 250 + 650) / TOKEN_ROUND_ROWS))
@@ -694,7 +696,7 @@ describe('the sender rule (R1)', () => {
 		])
 		// Nothing is left in the lanes: the Create and the boost were dropped.
 		expect(await sql(h.store, 'SELECT count(*) AS n FROM deliveries')).toEqual([{ n: 0 }])
-		// Dropped, not delayed: nothing comes back after the unsuspension but its Update.
+		// Dropped at their claim while suspended: nothing comes back after the unsuspension but its Update.
 		expect((await unsuspend(h, admin, alice.id)).status).toBe(200)
 		await settle(h.store)
 		expect((await drain(h.store)).map((s) => [s.type, s.suspended])).toEqual([['Update', false]])
@@ -714,6 +716,171 @@ describe('the sender rule (R1)', () => {
 		expect((await drain(h.store)).map((s) => [s.type, s.suspended])).toEqual([
 			['Update', true],
 			['Update', true],
+		])
+	})
+})
+
+describe('review regressions (A3b round 1)', () => {
+	it('fences a token committed before the suspension whose caller clock stamped it later', async () => {
+		const { h, admin, alice } = await world()
+		const client = (await sql<{ id: string }>(h.store, 'SELECT client_id AS id FROM oauth_tokens LIMIT 1'))[0]!.id
+		// Issued by a caller whose clock runs a minute ahead of the admin's, committed before the suspension.
+		const late = 'late-token-0123456789abcdef'
+		await sql(
+			h.store,
+			"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes, created_at) VALUES (?, 'access', ?, ?, 'read', ?)",
+			await sha256Hex(late),
+			client,
+			alice.id,
+			new Date(NOW + 60_000).toISOString()
+		)
+		expect(await act(h, admin, alice.id, { type: 'suspend' })).toEqual({ status: 200, body: {} })
+		expect(await suspendedAt(h.store, alice.id)).toEqual({
+			suspended_at: new Date(NOW).toISOString(),
+			tokens_valid_after: new Date(NOW + 60_000).toISOString(),
+		})
+		h.now.mockReturnValue(NOW + 120_000)
+		expect((await unsuspend(h, admin, alice.id)).status).toBe(200)
+		expect((await h.request('/api/v1/accounts/verify_credentials', bearer(late))).status).toBe(401)
+		// The tokens job deletes it with the others; a sign-in after the fence works.
+		await settle(h.store)
+		expect(
+			await sql(h.store, 'SELECT count(*) AS n FROM oauth_tokens WHERE token_hash = ?', await sha256Hex(late))
+		).toEqual([{ n: 0 }])
+		const fresh = await userToken(h, 'alice@example.com', 'read')
+		expect((await h.request('/api/v1/accounts/verify_credentials', bearer(fresh))).status).toBe(200)
+	})
+
+	it("keeps the newer suspension's Update when the replaced one's job ends, its intent id reused", async () => {
+		const { h, admin, alice } = await world()
+		const fan = await remoteAccount(h.store, 'fan', 'fans.example')
+		await remoteFollows(h.store, fan, alice.id)
+		expect(await act(h, admin, alice.id, { type: 'suspend' })).toEqual({ status: 200, body: {} })
+		expect(await act(h, admin, alice.id, { type: 'suspend' })).toEqual({ status: 200, body: {} })
+		// The first Update had no targets yet, so superseding it deleted it, and the second took its id.
+		const intents = await sql<{ intent_id: number }>(
+			h.store,
+			"SELECT intent_id FROM moderation_jobs WHERE kind = 'suspension' ORDER BY id"
+		)
+		expect(intents).toHaveLength(2)
+		expect(intents[0]!.intent_id).toBe(intents[1]!.intent_id)
+		await settle(h.store)
+		expect((await drain(h.store)).map((sent) => [sent.type, sent.inbox, sent.suspended])).toEqual([
+			['Update', 'https://fans.example/inbox', true],
+		])
+	})
+
+	it('sends the restoration to a non-follower even when the profile is edited before it is staged', async () => {
+		const { h, admin, alice } = await world()
+		const fan = await remoteAccount(h.store, 'fan', 'fans.example')
+		await remoteFollows(h.store, fan, alice.id)
+		await remoteAccount(h.store, 'dan', 'dm.example')
+		await post(h, alice, { status: '@dan@dm.example just you', visibility: 'direct' })
+		await drain(h.store)
+		expect(await act(h, admin, alice.id, { type: 'suspend' })).toEqual({ status: 200, body: {} })
+		await settle(h.store)
+		await drain(h.store)
+		h.now.mockReturnValue(NOW + 1000)
+		expect((await unsuspend(h, admin, alice.id)).status).toBe(200)
+		// Signed in again, alice edits her profile before the restoration's audience is staged.
+		const token = await userToken(h, 'alice@example.com', 'read write')
+		const edited = await h.request(
+			'/api/v1/accounts/update_credentials',
+			bearer(token, form({ display_name: 'Alice again' }, { method: 'PATCH' }))
+		)
+		expect(edited.status).toBe(200)
+		await settle(h.store)
+		const sent = await drain(h.store, NOW + 1000)
+		const dm = sent.filter((s) => s.inbox === 'https://dm.example/inbox')
+		expect(dm.map((s) => [s.type, s.suspended])).toEqual([['Update', false]])
+		// It carries the edited profile, not the one from before the edit.
+		expect(dm[0]!.object).toMatchObject({ name: 'Alice again' })
+		expect(sent.filter((s) => s.inbox === 'https://fans.example/inbox').every((s) => !s.suspended)).toBe(true)
+	})
+
+	it('reads the next status mentions when the read budget runs out on the status itself', async () => {
+		const { h, admin, alice } = await world()
+		const [m1, m2] = [
+			await remoteAccount(h.store, 'm1', 'mention.example'),
+			await remoteAccount(h.store, 'm2', 'mention.example'),
+		]
+		const dan = await remoteAccount(h.store, 'dan', 'dm.example')
+		// 166 statuses of two mentions each read 3 rows apiece (498), an unmentioned one 1 more: finding the next
+		// status takes the round's last read, so its mentions are read in the next round.
+		for (let i = 0; i < 166; i++) {
+			await seedStatus(h.store, {
+				accountId: alice.id,
+				visibility: 'direct',
+				mentions: [{ accountId: m1 }, { accountId: m2 }],
+			})
+		}
+		await seedStatus(h.store, { accountId: alice.id, visibility: 'public' })
+		await seedStatus(h.store, { accountId: alice.id, visibility: 'direct', mentions: [{ accountId: dan }] })
+		expect(REACH_ROUND).toBe(500)
+		expect(await act(h, admin, alice.id, { type: 'suspend' })).toEqual({ status: 200, body: {} })
+		await settle(h.store)
+		expect((await drain(h.store)).map((sent) => sent.inbox).sort()).toEqual([
+			'https://dm.example/inbox',
+			'https://mention.example/inbox',
+		])
+	})
+
+	it('never resolves a report the admin touched in the millisecond of the suspension', async () => {
+		const { h, admin, alice } = await world()
+		const reporter = await userToken(h, 'bob@example.com', 'write:reports')
+		h.now.mockReturnValue(NOW - 1000)
+		const report = async () =>
+			(
+				await (
+					await h.request('/api/v1/reports', bearer(reporter, json({ account_id: alice.id })))
+				).json<{ id: string }>()
+			).id
+		const [untouched, reopened] = [await report(), await report()]
+		await h.request(`/api/v1/admin/reports/${reopened}/resolve`, bearer(admin, { method: 'POST' }))
+		h.now.mockReturnValue(NOW)
+		expect(await act(h, admin, alice.id, { type: 'suspend' })).toEqual({ status: 200, body: {} })
+		expect(
+			(await h.request(`/api/v1/admin/reports/${reopened}/reopen`, bearer(admin, { method: 'POST' }))).status
+		).toBe(200)
+		await settle(h.store)
+		expect(
+			await sql(
+				h.store,
+				'SELECT CAST(id AS TEXT) AS id, action_taken_at IS NOT NULL AS resolved FROM reports ORDER BY id'
+			)
+		).toEqual([
+			{ id: untouched, resolved: 1 },
+			{ id: reopened, resolved: 0 },
+		])
+	})
+
+	it('counts only the inboxes a capped source stages first', async () => {
+		const { h, admin, alice } = await world()
+		// 2,001 recent follows of accounts sharing one server's inbox, then one of another server: Mastodon counts the
+		// distinct inboxes, so the last one is reached.
+		await sql(
+			h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 2001)
+			INSERT INTO accounts (id, uri, username, domain, inbox_url, shared_inbox_url)
+			SELECT printf('%018d', 700000000000000000 + i), 'https://crowd.example/users/u' || i, 'u' || i, 'crowd.example',
+				'https://crowd.example/users/u' || i || '/inbox', 'https://crowd.example/inbox' FROM n`
+		)
+		// Its id is above the crowd's, so the walk in target order reaches it last.
+		await sql(
+			h.store,
+			"INSERT INTO accounts (id, uri, username, domain, inbox_url) VALUES ('800000000000000000', 'https://zz.example/users/zz', 'zz', 'zz.example', 'https://zz.example/users/zz/inbox')"
+		)
+		await sql(
+			h.store,
+			"INSERT INTO follows (account_id, target_account_id, state, created_at) SELECT ?1, id, 'accepted', ?2 FROM accounts WHERE domain IN ('crowd.example', 'zz.example')",
+			alice.id,
+			new Date(NOW - 60_000).toISOString()
+		)
+		expect(await act(h, admin, alice.id, { type: 'suspend' })).toEqual({ status: 200, body: {} })
+		await settle(h.store)
+		expect((await drain(h.store)).map((sent) => sent.inbox).sort()).toEqual([
+			'https://crowd.example/inbox',
+			'https://zz.example/users/zz/inbox',
 		])
 	})
 })

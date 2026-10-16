@@ -522,9 +522,9 @@ export function reportBound(db: Db): number {
 // A local suspension's resolution of the reports on the account (Admin::AccountAction#process_reports!, which resolves
 // every unresolved report on the target): a round of the suspension job (domain/suspension.ts), at most `limit`
 // reports after `cursor` (a report id), through reports_target_state in id order. Only the reports frozen at the
-// suspension are resolved: filed up to `bound`, still unresolved, and untouched since the suspension's time `since`
-// (updated_at, or created_at when never changed), so a report filed after the suspension, or one the admin reopened
-// or changed since, is never resolved by it. `by` is the admin who suspended (null: none names it). Returns the last
+// suspension are resolved: filed up to `bound`, still unresolved, and last touched before the suspension's time
+// `since` (updated_at, or created_at when never changed), so a report filed after the suspension, or one the admin
+// reopened or changed since, even within its millisecond, is never resolved by it. `by` is the admin who suspended (null: none names it). Returns the last
 // report read (null when none was) and how many were resolved; fewer than `limit` read means the range is done.
 export function resolveSuspensionReports(
 	db: Db,
@@ -546,7 +546,7 @@ export function resolveSuspensionReports(
 		bound,
 		limit
 	)
-	const frozen = rows.filter((row) => row.touched <= since).map((row) => row.id)
+	const frozen = rows.filter((row) => row.touched < since).map((row) => row.id)
 	if (frozen.length > 0) {
 		db.run(
 			`UPDATE reports SET action_taken_at = ?1, action_taken_by_account_id = ?2, updated_at = ?1

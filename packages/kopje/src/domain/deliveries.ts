@@ -294,6 +294,17 @@ export function enqueueActivity(
 	// Create to servers that lack the status, but for the inboxes of its poll's voters, which have it (they voted in it)
 	// and take its counts from an Update only (DistributePollUpdateWorker).
 	if (object !== null && envelope.activity.type === 'Update' && isActorObject(envelope.activity.object)) {
+		// A restoration Update still staging its audience carries the new document too, so a server it reaches after
+		// this Update is not left with the older profile. (No profile changes while the account is suspended, so a
+		// suspension's Update is never rewritten.)
+		db.run(
+			`UPDATE outbound_activities SET body = json_set(body, '$.activity.object', json(?3))
+			WHERE account_id = ?1 AND object_uri = ?2 AND retracts = 0 AND staged IS NOT NULL
+				AND json_extract(body, '$.activity.object.suspended') IS NOT 1`,
+			signerId,
+			object,
+			JSON.stringify(envelope.activity.object)
+		)
 		replaceWaiting(
 			db,
 			signerId,
@@ -326,18 +337,30 @@ export function enqueueActivity(
 	expandPending(db, now, EXPANSION_STEP)
 }
 
-const SUPERSEDED = `account_id = ? AND object_uri = ? AND (? OR json_extract(body, '$.activity.type') IN (SELECT value FROM json_each(?)))`
+// The earlier activities about an object that a new one supersedes. A moderation Update still staging (retracts 0,
+// staged set: beginStagedUpdate) is superseded only by another (`moderation`): a profile edit made while the
+// restoration's audience is staged must not cut that audience down to the followers.
+const SUPERSEDED = `account_id = ? AND object_uri = ? AND (? OR json_extract(body, '$.activity.type') IN (SELECT value FROM json_each(?)))
+	AND (? OR retracts = 1 OR staged IS NULL)`
 
 // Marks the earlier activities a new one about the object follows. A retraction still staging (stageRetraction) is
 // complete then: the new retraction targets every inbox it held or would have.
-function supersede(db: Db, signerId: string, object: string, retracts: boolean, types: string[] = []): void {
+function supersede(
+	db: Db,
+	signerId: string,
+	object: string,
+	retracts: boolean,
+	types: string[] = [],
+	moderation = false
+): void {
 	const stopped = db.all<{ id: string }>(
 		`UPDATE outbound_activities SET superseded = 1, staged = NULL WHERE ${SUPERSEDED}
 		RETURNING CAST(id AS TEXT) AS id`,
 		signerId,
 		object,
 		retracts ? 1 : 0,
-		JSON.stringify(types)
+		JSON.stringify(types),
+		moderation ? 1 : 0
 	)
 	for (const { id } of stopped) {
 		dropSettledActivity(db, id)
@@ -371,7 +394,8 @@ export function beginRetraction(
 					signerId,
 					object,
 					1,
-					'[]'
+					'[]',
+					0
 				)?.n ?? 0)
 	// Each superseded intent is updated and may be dropped; then the intent itself.
 	if (2 * superseded + 1 > maxRows) {
@@ -429,14 +453,15 @@ export function stageRetraction(db: Db, signerId: string, object: string, maxRow
 
 // An intent whose targets the moderation jobs stage (domain/suspension.ts): the Update of a local actor that a
 // suspension or an unsuspension sends to an audience read in bounded rounds (R1, AccountReachFinder). beginStagedUpdate
-// records it with no targets, superseding the earlier Updates of the actor (one still staging stops: it is complete
-// then, as a retraction superseded while it stages); while `staged` is set the intent is kept even with no rows.
+// records it with no targets, superseding the earlier Updates of the actor, a moderation one still staging included
+// (it stops: its generation has ended); a profile Update supersedes none still staging (SUPERSEDED). While `staged` is
+// set the intent is kept even with no rows.
 // stageTargets writes targets to it as chunks, which claims may expand at once; endStaging releases it. Returns the
 // intent's id. Its chunks come after those of intents recorded meanwhile.
 export function beginStagedUpdate(db: Db, signerId: string, envelope: DeliveryEnvelope, now: number): string {
 	const { object } = subjectOf(envelope.activity, false)
 	if (object !== null) {
-		supersede(db, signerId, object, false, supersededTypes(envelope.activity.type))
+		supersede(db, signerId, object, false, supersededTypes(envelope.activity.type), true)
 	}
 	return db.first<{ id: string }>(
 		`INSERT INTO outbound_activities (account_id, body, object_uri, retracts, staged, created_at)
@@ -810,10 +835,11 @@ export const INSTANCE_SIGNER = 'instance'
 
 // R1 for a suspended local sender: what its lane holds is dropped when claimed, not sent, except a retraction
 // (outboundKind: a Delete, an Undo, a Reject that withdraws, which VIS-3 sends to every earlier receiver) and the
-// suspension's own Update of its actor (the redacted document, `suspended: true`). Content queued before the
-// suspension is dropped, not delayed, so it never goes out after an unsuspension. The restoration's Update is recorded
-// once the account is no longer suspended, so it passes; one claimed after the account is suspended again does not.
-// The claim is the boundary: a row leased before the suspension committed may still be sent while its lease lasts.
+// suspension's own Update of its actor (the redacted document, `suspended: true`). Queued content is dropped when it is
+// claimed while the sender is suspended, which the queue does within moments of the suspension; a row not claimed by
+// the time of an unsuspension is sent then. The restoration's Update is recorded once the account is no longer
+// suspended, so it passes; one claimed after the account is suspended again does not. The claim is the boundary: a row
+// leased before the suspension committed may still be sent while its lease lasts.
 function refusedSender(db: Db, row: LaneRow): boolean {
 	return (
 		db.first(

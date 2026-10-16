@@ -28,8 +28,9 @@ import type { Db } from '../db/sql'
 // The audience is AccountReachFinder's (app/lib/account_reach_finder.rb), read from indexed ranges at most REACH_ROUND
 // rows per round into moderation_reach, so each inbox appears once: the accepted followers up to the frozen bound
 // (follows_target), the accounts mentioned by its newest STATUS_LIMIT statuses since the cutoff (statuses_account,
-// then status_mentions by key, at most RECENT_LIMIT mentions), and the accounts it followed or requested to follow
-// since the cutoff (follows_pair over its whole following, a round at a time, at most RECENT_LIMIT of each state). The
+// then status_mentions by key, at most RECENT_LIMIT inboxes), and the accounts it followed or requested to follow
+// since the cutoff (follows_pair over its whole following, a round at a time, at most RECENT_LIMIT inboxes of each
+// state). A capped source counts only the inboxes it stages first, as Mastodon caps each source's distinct inboxes. The
 // cutoff is two days before S, as Mastodon's for a locally suspended account; the restoration uses the same one. Kopje
 // has no relays, and its reporters are local, so neither adds inboxes. Then the inboxes are written as the Update's
 // targets in inbox order (deliveries.ts stageTargets), and their staging rows deleted, a round at a time.
@@ -138,13 +139,27 @@ export function suspendLocal(db: Db, accountId: string, by: string | null, now: 
 		return null
 	}
 	const at = generationAt(now, state.suspended_at, state.tokens_valid_after)
-	db.run('UPDATE local_accounts SET suspended_at = ?1, tokens_valid_after = ?1 WHERE account_id = ?2', at, accountId)
+	// The fence is S, or the newest credential of the account when a caller's clock stamped one later: every token, code
+	// and web session committed before this transaction is at or below it, whatever the clocks that stamped them. Push
+	// subscriptions are refused through their token. This reads the account's credentials (its own history), and
+	// writes nothing for them.
+	const newest = db.first<{ at: string | null }>(
+		'SELECT max(created_at) AS at FROM oauth_tokens INDEXED BY oauth_tokens_account WHERE account_id = ?',
+		accountId
+	)?.at
+	const fence = newest != null && newest > at ? newest : at
+	db.run(
+		'UPDATE local_accounts SET suspended_at = ?, tokens_valid_after = ? WHERE account_id = ?',
+		at,
+		fence,
+		accountId
+	)
 	insertJob(
 		db,
 		{
 			kind: 'tokens',
 			account_id: accountId,
-			generation: at,
+			generation: fence,
 			actor_account_id: null,
 			intent_id: null,
 			report_bound: null,
@@ -294,21 +309,17 @@ function current(db: Db, job: Job): boolean {
 		: state.suspended_at === null && state.tokens_valid_after === job.generation
 }
 
-// Stages the inboxes of remote accounts; returns how many rows it wrote.
+// Stages the inboxes of remote accounts; returns how many were not staged yet. A capped source counts only these, as
+// Mastodon's reach finder caps each source's distinct inboxes (an inbox another source staged first counts for none).
 function stage(db: Db, job: Job, rows: readonly ReachedAccount[]): number {
-	const inboxes = [
-		...new Set(
-			rows.filter((row) => row.domain !== null && isDeliverableInbox(row.inbox)).map((row) => row.inbox as string)
-		),
-	]
-	if (inboxes.length === 0) {
-		return 0
+	let staged = 0
+	for (const inbox of new Set(rows.filter((row) => row.domain !== null).map((row) => row.inbox))) {
+		if (isDeliverableInbox(inbox)) {
+			staged +=
+				db.run('INSERT OR IGNORE INTO moderation_reach (job_id, inbox) VALUES (?, ?)', job.id, inbox) > 0 ? 1 : 0
+		}
 	}
-	return db.run(
-		'INSERT OR IGNORE INTO moderation_reach (job_id, inbox) SELECT ?, value FROM json_each(?)',
-		job.id,
-		JSON.stringify(inboxes)
-	)
+	return staged
 }
 
 const NEXT: Record<'followers' | 'mentions' | 'following', Phase> = {
@@ -317,7 +328,8 @@ const NEXT: Record<'followers' | 'mentions' | 'following', Phase> = {
 	following: 'write',
 }
 
-// One round of a suspension or reach job. Returns whether it wrote targets to the Update.
+// One round of a suspension or reach job. Returns whether it wrote targets to the Update. The round checks its
+// generation first: a job whose generation ended writes nothing but the deletion of its own staging rows.
 function reachRound(db: Db, job: Job, state: JobState, now: number): boolean {
 	const phase = job.phase !== 'end' && !current(db, job) ? 'end' : job.phase
 	switch (phase) {
@@ -355,16 +367,16 @@ function reachRound(db: Db, job: Job, state: JobState, now: number): boolean {
 			const rows = reachFollowing(db, job.account_id, String(state.cursor ?? ''), REACH_ROUND)
 			let accepted = state.accepted ?? 0
 			let pending = state.pending ?? 0
-			const kept = rows.filter((row) => {
-				if (row.id > (job.follow_bound ?? 0) || row.created_at < (job.cutoff ?? '') || row.domain === null) {
-					return false
+			for (const row of rows) {
+				if (row.id > (job.follow_bound ?? 0) || row.created_at < (job.cutoff ?? '')) {
+					continue
 				}
-				if (row.state === 'accepted') {
-					return accepted < RECENT_LIMIT && ++accepted > 0
+				if (row.state === 'accepted' && accepted < RECENT_LIMIT) {
+					accepted += stage(db, job, [row])
+				} else if (row.state !== 'accepted' && pending < RECENT_LIMIT) {
+					pending += stage(db, job, [row])
 				}
-				return pending < RECENT_LIMIT && ++pending > 0
-			})
-			stage(db, job, kept)
+			}
 			const full = accepted >= RECENT_LIMIT && pending >= RECENT_LIMIT
 			next(db, job, 'following', rows.length < REACH_ROUND || full, {
 				cursor: rows.at(-1)?.target ?? state.cursor ?? '',
@@ -395,7 +407,10 @@ function reachRound(db: Db, job: Job, state: JobState, now: number): boolean {
 			return wrote > 0
 		}
 		case 'end': {
-			// The generation ended: the staged inboxes are deleted without being written.
+			// The generation ended: the job's own staged inboxes are deleted without being written, and it ends without
+			// touching its Update. The newer generation's Update superseded that one, and may since have been given
+			// the same id (outbound_activities ids are reused once the newest row is deleted), so releasing it here
+			// could drop the newer Update.
 			const rows = db.all<{ inbox: string }>(
 				'SELECT inbox FROM moderation_reach WHERE job_id = ? ORDER BY inbox LIMIT ?',
 				job.id,
@@ -403,7 +418,7 @@ function reachRound(db: Db, job: Job, state: JobState, now: number): boolean {
 			)
 			dropStaged(db, job, rows)
 			if (rows.length < REACH_ROUND) {
-				endJob(db, job)
+				finish(db, job)
 			} else if (job.phase !== 'end') {
 				save(db, job, 'end', {})
 			}
@@ -458,6 +473,7 @@ function mentionsRound(db: Db, job: Job, state: JobState): void {
 		save(db, job, 'following', {})
 		return
 	}
+	// The status being read, and its last mention read: '' when none is read yet, null when the status is done.
 	let status = state.cursor === undefined ? null : String(state.cursor)
 	let mention = state.mention ?? null
 	let statuses = state.statuses ?? 0
@@ -483,15 +499,20 @@ function mentionsRound(db: Db, job: Job, state: JobState): void {
 				break
 			}
 			status = found.id
-			mention = null
+			mention = ''
 			statuses++
+			if (budget === 0) {
+				break
+			}
 		}
-		const want = Math.min(budget, RECENT_LIMIT - taken)
-		const rows = reachMentioned(db, status, mention ?? '', want)
-		stage(db, job, rows)
+		const rows = reachMentioned(db, status, mention ?? '', budget)
 		budget -= rows.length
-		taken += rows.length
-		mention = rows.length === want ? (rows.at(-1)?.account_id ?? null) : null
+		for (const row of rows) {
+			if (taken < RECENT_LIMIT) {
+				taken += stage(db, job, [row])
+			}
+		}
+		mention = rows.length === 0 || budget > 0 ? null : rows.at(-1)!.account_id
 	}
 	if (done || taken >= RECENT_LIMIT) {
 		save(db, job, 'following', {})
