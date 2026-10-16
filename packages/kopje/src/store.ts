@@ -12,6 +12,7 @@ import {
 	getInstanceActorKey,
 	getInstanceDomain,
 	getLocalActor,
+	getFollowerKey,
 	getLocalKey,
 	getNodeInfoUsage,
 	listLocalKeys,
@@ -474,6 +475,10 @@ export class Store extends DurableObject<Env> {
 
 	localActor(callerBuild: string, input: OperationInput<typeof getLocalActor>) {
 		return this.#kernel.execute(callerBuild, getLocalActor, input)
+	}
+
+	followerKey(callerBuild: string, input: OperationInput<typeof getFollowerKey>) {
+		return this.#kernel.execute(callerBuild, getFollowerKey, input)
 	}
 
 	localKey(callerBuild: string, input: OperationInput<typeof getLocalKey>) {

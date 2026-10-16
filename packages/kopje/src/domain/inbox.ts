@@ -23,6 +23,7 @@ import {
 	actorCollections,
 	collectionOf,
 	featureRemote,
+	type FollowerSigner,
 	localFollower,
 	pinRemote,
 	requestCollectionSync,
@@ -191,8 +192,9 @@ export type ReceiveResult = {
 	reason: string
 	jobsPending: boolean
 	delivers?: boolean
-	// signer: the local account whose key signs the fetch (a follower of the status's author), else the inbox's own.
-	need?: { kind: 'status' | 'actor'; uri: string; signer?: string | null }
+	// signer: whose key signs the fetch: a local follower of the status's author, or 'instance' for the instance actor;
+	// absent, the inbox's own (the recipient's for a personal inbox).
+	need?: { kind: 'status' | 'actor'; uri: string; signer?: FollowerSigner | 'instance' }
 	// Nothing changed, and the activity may apply later (its retraction could not be recorded): answered 503.
 	retry?: boolean
 }
@@ -2078,7 +2080,7 @@ const add: Handler<'Add'> = (db, actor, activity, input) => {
 			// author's followers is served.
 			return {
 				...ignored('need-object'),
-				need: { kind: 'status', uri: object.status, signer: localFollower(db, actor.id) },
+				need: { kind: 'status', uri: object.status, signer: localFollower(db, actor.id) ?? 'instance' },
 			}
 		}
 		if (fetched === null) {

@@ -1,6 +1,6 @@
 import { type FieldSource, fieldSources } from './accounts'
 import { accessAdminRefusal } from './admin-authority'
-import { availableLocalSql, followListsShownSql } from './audience'
+import { availableLocalSql, availableSql, followListsShownSql } from './audience'
 import { taggedUrl } from './featured-tags'
 import { readOperation, writeOperation } from './operation'
 import type { Db } from '../db/sql'
@@ -97,6 +97,23 @@ function storedKey(row: KeyRow): StoredKey {
 export const getLocalKey = readOperation<{ username: string }, StoredKey | null>((db, { username }) => {
 	const row = db.first<KeyRow>(`SELECT a.username, l.privkey, l.privkey_salt, l.pubkey ${LOCAL_BY_USERNAME}`, username)
 	return row === undefined ? null : storedKey(row)
+})
+
+// The key of a local account that signs a fetch on a remote account's behalf (FollowerSigner in remote-collections.ts),
+// with its username, checked when it is loaded: the local account is available and follows the remote account (an
+// accepted follow), and the remote account is available. Null otherwise, and the fetch is signed by the instance actor.
+export const getFollowerKey = readOperation<
+	{ follower: string; of: string },
+	{ username: string; key: StoredKey } | null
+>((db, { follower, of }) => {
+	const row = db.first<KeyRow>(
+		`SELECT a.username, l.privkey, l.privkey_salt, l.pubkey FROM local_accounts l JOIN accounts a ON a.id = l.account_id
+		WHERE l.account_id = ?1 AND ${availableLocalSql('l')} AND ${availableSql('?2')}
+			AND EXISTS (SELECT 1 FROM follows f WHERE f.account_id = ?1 AND f.target_account_id = ?2 AND f.state = 'accepted')`,
+		follower,
+		of
+	)
+	return row === undefined ? null : { username: row.username, key: storedKey(row) }
 })
 
 // The instance actor's key pair, wrapped with the KEK, in instance_settings (base64 for the binary parts).

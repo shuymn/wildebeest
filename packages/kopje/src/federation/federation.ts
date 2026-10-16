@@ -46,6 +46,7 @@ import {
 	type NodeInfoUsage,
 	type StoredKey,
 } from '../domain/actors'
+import type { FollowerSigner } from '../domain/remote-collections'
 import type { SnapshotSource } from '../domain/snapshot'
 import { renderFieldValue } from '../domain/status-text'
 import { httpUrl } from '../platform/http-url'
@@ -144,6 +145,14 @@ function federationParts(deps: FederationDeps, state: FederationState) {
 	const instanceSigner = async () => keyring.signerFor(instanceOwner(await loadInstanceKey(), instanceKeyId))
 
 	// The signer of a local user by the stored spelling of the username, or null.
+	// The signer of a local account on a remote account's behalf, while it may sign for it (getFollowerKey), or null.
+	const followerSigner = async (signer: FollowerSigner): Promise<Signer | null> => {
+		const found = await rpc((s) => s.followerKey(build, signer))
+		return found === null
+			? null
+			: keyring.signerFor(userOwner(found.key, new URL(`/ap/users/${found.username}#main-key`, origin)))
+	}
+
 	const userSigner = async (username: string): Promise<Signer | null> => {
 		if ((await localActor(username))?.username !== username) {
 			return null
@@ -174,13 +183,15 @@ function federationParts(deps: FederationDeps, state: FederationState) {
 		loadInstanceKey,
 		instanceSigner,
 		userSigner,
+		followerSigner,
 		signedLoader,
 		contextLoader,
 	}
 }
 
-// The loaders of inbound processing (DATA-7): fetches for a personal inbox are signed with the recipient's key, all
-// others with the instance actor's. Documents are fetched anew, never from the 5-minute document cache, because key
+// The loaders of inbound processing (DATA-7): fetches for a personal inbox are signed with the recipient's key (a
+// username), fetches on a remote account's behalf with a local follower's (a FollowerSigner, checked when its key is
+// loaded), all others, and those whose signer may not sign, with the instance actor's. Documents are fetched anew, never from the 5-minute document cache, because key
 // material is judged on them (ID-1); within one request a URL is fetched once. Every fetch, contexts included, draws
 // on the request's budget (RES-6); cached contexts cost nothing. Every document must stay within the JSON bounds
 // (RES-2) before Fedify's JSON-LD processing or Kopje's own reading sees it. webfinger is unsigned, as WebFinger is.
@@ -189,7 +200,7 @@ export type RemoteLoaders = { document: DocumentLoader; context: DocumentLoader;
 export function createRemoteLoaders(
 	deps: FederationDeps,
 	state: FederationState,
-	recipient: string | null,
+	recipient: string | FollowerSigner | null,
 	budget: FetchBudget
 ): RemoteLoaders {
 	const parts = federationParts(deps, state)
@@ -198,7 +209,11 @@ export function createRemoteLoaders(
 	// Resolved on the first fetch only: a request refused before any fetch unwraps no key.
 	const signer = () =>
 		(resolved ??= (async () =>
-			(recipient === null ? null : await parts.userSigner(recipient)) ?? parts.instanceSigner())())
+			(recipient === null
+				? null
+				: typeof recipient === 'string'
+					? await parts.userSigner(recipient)
+					: await parts.followerSigner(recipient)) ?? parts.instanceSigner())())
 	const fetched = new Map<string, ReturnType<DocumentLoader>>()
 	const fresh = requireObjectRoot(async (url, options) => {
 		return withinBounds(await createSafeLoader(loaderDeps, (await signer()).sign)(url, options))

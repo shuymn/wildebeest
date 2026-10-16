@@ -120,6 +120,54 @@ describe('learning a remote account’s collections from Add and Remove', () => 
 		expect((await featuredTags(t, bobId)).map((tag) => tag.name)).toEqual(['Dogs'])
 	})
 
+	it('fetches an Add’s status as the instance actor, not the inbox’s recipient, when no follower may sign', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const bobId = await followed(t, bob)
+		// Alice, bob's one local follower, is suspended; the Add arrives at dave's personal inbox.
+		await sql(
+			t.store,
+			"UPDATE local_accounts SET suspended_at = '2026-01-01T00:00:00.000Z' WHERE account_id = ?",
+			ALICE
+		)
+		const note = mastodonNote(bob)
+		t.web.serve(note.id, { '@context': AS, ...note })
+		expect(await t.post(bob, addOrRemove('Add', bob, note.id), { path: '/ap/users/dave/inbox' })).toBe(202)
+		expect(t.web.signers[t.web.fetched.indexOf(note.id)]).toBe('https://kopje.test/actor#main-key')
+		expect(await pinned(t, bobId, null)).toEqual([note.id])
+	})
+
+	it('checks the follower again when it loads its key: one no longer eligible does not sign', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const note = mastodonNote(bob)
+		t.web.serve(note.id, { '@context': AS, ...note })
+		const featured = featuredOf(bob)
+		t.web.serve(featured, { '@context': AS, id: featured, type: 'OrderedCollection', orderedItems: [note.id] })
+		await followed(t, bob)
+		// Alice unfollows bob after the round claimed the sync (naming her), before her key is loaded.
+		const stub = t.store as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>
+		const store = new Proxy(t.store, {
+			get(_target, key: string) {
+				if (key === 'claimCollectionSync') {
+					return async (...args: unknown[]) => {
+						const claimed = await stub.claimCollectionSync!(...args)
+						await sql(t.store, 'DELETE FROM follows WHERE account_id = ?', ALICE)
+						return claimed
+					}
+				}
+				return (...args: unknown[]) => stub[key]!(...args)
+			},
+		})
+		const unfollowing = { ...deps(t), store: () => store }
+		for (let round = 0; round < 5 && (await syncCollections(t.env, unfollowing)); round++) {
+			// Until no sync is due.
+		}
+		const signed = t.web.fetched.flatMap((url, i) => (url === featured || url === note.id ? [t.web.signers[i]] : []))
+		expect(signed.length).toBeGreaterThan(0)
+		expect(signed.every((signer) => signer === 'https://kopje.test/actor#main-key')).toBe(true)
+	})
+
 	it('links a featured hashtag to the remote account, never to a local one of the same username', async () => {
 		const t = await setup()
 		// A remote alice, and the local alice, each featuring #cats.

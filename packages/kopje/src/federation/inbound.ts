@@ -459,12 +459,12 @@ export async function receiveInbound(deps: InboundDeps, request: InboundRequest)
 		if (need === undefined) {
 			break
 		}
-		// A document the Store wants signed by a local follower of its author (an Add's pinned status) is fetched with that
-		// follower's key, within the same budget (DATA-7).
+		// A document the Store wants signed otherwise (an Add's pinned status: by a local follower of its author, else by
+		// the instance actor, never the inbox's recipient) is fetched with that key, within the same budget (DATA-7).
 		const needLoaders =
-			need.signer === undefined || need.signer === null || need.signer === deps.recipient
+			need.signer === undefined
 				? loaders
-				: createRemoteLoaders(deps, state, need.signer, budget)
+				: createRemoteLoaders(deps, state, need.signer === 'instance' ? null : need.signer, budget)
 		const fetched = await fetchNeeded(need, origin, needLoaders)
 		rethrowStoreError(state)
 		if (fetched === 'transient') {

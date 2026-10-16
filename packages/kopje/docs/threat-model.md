@@ -1287,8 +1287,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   without a specific recipient are signed by the instance actor; fetches for a personal inbox by the recipient's key;
   fetches on a remote account's behalf (a sync of its featured and featuredTags collections in the background job
   rounds, and the pinned status an `Add` names) by the key of a local account that follows it, as Mastodon signs them
-  with `local_follower`, else by the instance actor (`localFollower` in `src/domain/remote-collections.ts`,
-  `src/federation/collections.ts`, `receiveInbound` in `src/federation/inbound.ts`; `test/remote-collections.test.ts`);
+  with `local_follower`, else by the instance actor, never by a personal inbox's recipient. The follower is named by
+  its account id and the remote account's, and its key is loaded only while it is available and still follows the
+  remote account, which is checked again then; otherwise the instance actor signs (`localFollower` in
+  `src/domain/remote-collections.ts`, `getFollowerKey` in `src/domain/actors.ts`, `src/federation/collections.ts`,
+  `receiveInbound` in `src/federation/inbound.ts`; `test/remote-collections.test.ts`);
   activities by their author's key. The instance key never signs an activity attributed to a user: the one activity it
   signs is a forwarded report's `Flag`, whose actor is the instance actor (Mastodon's `Account.representative`).
   _Enforced (main)_ for fetches: `src/federation/federation.ts`; `test/signed-fetch.test.ts` ("signed fetches").
