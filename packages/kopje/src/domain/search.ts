@@ -157,8 +157,10 @@ const PREFIX_END = '\u{10FFFF}'
 // Tags whose name starts with the query, from the statuses in the two windows that the viewer may see (see above), exact
 // match first, then shorter names.
 function searchHashtags(db: Db, input: SearchRequest, { accountId: viewerId, now }: UserContext): Hashtag[] {
+	// Tag.matches_name: the query normalized as a hashtag name, so spaces and other characters a hashtag cannot hold
+	// are dropped from it.
 	const prefix = normalizeTag(input.query.trim().replace(/^#/, ''))
-	if (prefix === '' || /\s/.test(prefix)) {
+	if (prefix === '') {
 		return []
 	}
 	const rows = db.all<{ name: string }>(

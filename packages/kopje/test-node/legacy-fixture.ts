@@ -512,9 +512,11 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		to: [PUBLIC],
 		cc: [r(0).followers],
 		mastodonId: snowflake(99, 7),
-		// Each name with the one # Kopje drops from a received Hashtag; other number signs are part of the name.
+		// Names Kopje normalizes as Mastodon does: every number sign (fullwidth and small ones after NFKC) dropped with the
+		// other characters no hashtag holds, and a Latin letter with a diacritic folded to ASCII.
 		tags: [
 			{ type: 'Hashtag', name: '#Cats', href: 'https://remote.example/tags/cats' },
+			{ type: 'Hashtag', name: '#Café', href: 'https://remote.example/tags/cafe' },
 			{ type: 'Hashtag', name: '#ＣＡＴＳ', href: 'https://remote.example/tags/cats' },
 			{ type: 'Hashtag', name: '＃Ｆｕｌｌ', href: 'https://remote.example/tags/full' },
 			{ type: 'Hashtag', name: '﹟Small', href: 'https://remote.example/tags/small' },
@@ -538,7 +540,7 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		attachment: [attachedImage],
 	})
 	if (has('note_hashtags')) {
-		// Names as legacy took them from the text after #: any number sign left in them is part of the name.
+		// Names as legacy took them from the text after #: a number sign left in them goes when the name is normalized.
 		for (const value of ['wildebeest', 'ＷＩＬＤＥＢＥＥＳＴ', '＃Wide', '﹟Foo', '#Hash']) {
 			insert('note_hashtags', { value, object_id: publicNote.id, cdate: cdate(110) })
 		}

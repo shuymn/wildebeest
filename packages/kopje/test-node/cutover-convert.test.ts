@@ -195,10 +195,10 @@ describe('convert and verify-conversion', () => {
 		})
 		expect(times('a reply to alice')).toEqual({ published_at: '2024-03-01T11:59:00.000Z', edited_at: null })
 		expect(times('lost its original id')).toMatchObject({ edited_at: '2024-03-01T12:15:00.000Z' })
-		// Hashtags as Kopje names them, once each: a received Hashtag's one leading # dropped, legacy's recorded names
-		// whole; then NFKC and lowercase.
+		// Hashtags as Kopje names them (Mastodon's HashtagNormalizer), once each: NFKC, lowercase, folded to ASCII, and
+		// every number sign dropped, from a received Hashtag's name and from legacy's recorded names alike.
 		expect(value('SELECT group_concat(name) FROM (SELECT name FROM status_tags ORDER BY name)')).toBe(
-			'#double,#foo,#full,#hash,#small,#wide,bare,cats,cats,wildebeest'
+			'bare,cafe,cats,cats,double,foo,full,hash,small,wide,wildebeest'
 		)
 		// A hashtag is listed on hashtag timelines exactly when its status is public.
 		expect(
@@ -363,8 +363,10 @@ describe('convert and verify-conversion', () => {
 				"UPDATE statuses SET edited_at = NULL WHERE content LIKE '%a DM to alice%'",
 				'statuses',
 			],
-			['a Hashtag keeps a second #', "UPDATE status_tags SET name = 'double' WHERE name = '#double'", 'statuses'],
-			['a recorded name loses its number sign', "UPDATE status_tags SET name = 'foo' WHERE name = '#foo'", 'statuses'],
+			// The names an NFKC and lowercase normalization gave, before Kopje normalized as Mastodon does.
+			['a Hashtag keeps a second #', "UPDATE status_tags SET name = '#double' WHERE name = 'double'", 'statuses'],
+			['a recorded name keeps its number sign', "UPDATE status_tags SET name = '#foo' WHERE name = 'foo'", 'statuses'],
+			['a hashtag keeps its diacritic', "UPDATE status_tags SET name = 'café' WHERE name = 'cafe'", 'statuses'],
 			[
 				'an unset local discoverable becomes unknown',
 				"UPDATE accounts SET discoverable = NULL WHERE uri LIKE '%/users/Bob'",

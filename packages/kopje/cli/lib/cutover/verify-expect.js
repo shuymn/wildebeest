@@ -100,12 +100,28 @@ function languageOf(p) {
 	return null
 }
 
-// A hashtag as status_tags names it: NFKC, lowercase. An ActivityPub Hashtag's name ("#name") loses its one leading #
-// first, as Kopje reads a received one (src/domain/tag-name.ts); legacy's note_hashtags hold the name without it (the
-// text after # in the status, getHashtags), so a fullwidth or small number sign there is part of the name. Empty is no
-// hashtag.
+// A hashtag as status_tags names it: Mastodon's HashtagNormalizer#normalize, written out here apart from Kopje's
+// (src/domain/tag-name.ts) so that verify-conversion checks the converter's names. NFKC; each code point lowercased
+// (String#downcase has no final-sigma rule); a letter of ASCIIFolding's table replaced by its ASCII letter; and only the
+// characters Tag::HASHTAG_INVALID_CHARS_RE does not match kept: Alphabetic, decimal digits, Thai U+0E47 to U+0E4E and
+// the separators _, U+00B7, U+30FB and U+200C. So a received Hashtag's # goes with the other characters no hashtag
+// holds, and so does a fullwidth or small number sign in legacy's note_hashtags (the text after # in the status,
+// getHashtags). Empty is no hashtag.
+const FOLDED_LETTERS =
+	'ÀÁÂÃÄÅàáâãäåĀāĂăĄąÇçĆćĈĉĊċČčÐðĎďĐđÈÉÊËèéêëĒēĔĕĖėĘęĚěĜĝĞğĠġĢģĤĥĦħÌÍÎÏìíîïĨĩĪīĬĭĮįİıĴĵĶķĸĹĺĻļĽľĿŀŁłÑñŃńŅņŇňŉŊŋÒÓÔÕÖØòóôõöøŌōŎŏŐőŔŕŖŗŘřŚśŜŝŞşŠšſŢţŤťŦŧÙÚÛÜùúûüŨũŪūŬŭŮůŰűŲųŴŵÝýÿŶŷŸŹźŻżŽž'
+const ASCII_LETTERS =
+	'AAAAAAaaaaaaAaAaAaCcCcCcCcCcDdDdDdEEEEeeeeEeEeEeEeEeGgGgGgGgHhHhIIIIiiiiIiIiIiIiIiJjKkkLlLlLlLlLlNnNnNnNnnNnOOOOOOooooooOoOoOoRrRrRrSsSsSsSssTtTtTtUUUUuuuuUuUuUuUuUuUuWwYyyYyYZzZzZz'
+const HASHTAG_CHARACTER = /^[\p{Alphabetic}\p{Nd}\u0E47-\u0E4E_\u00B7\u30FB\u200C]$/u
 /** @param {unknown} value */
-const hashtagName = (value) => text(value).normalize('NFKC').toLowerCase()
+const hashtagName = (value) =>
+	[...text(value).normalize('NFKC')]
+		.flatMap((c) => [...c.toLowerCase()])
+		.map((c) => {
+			const at = FOLDED_LETTERS.indexOf(c)
+			return at === -1 ? c : ASCII_LETTERS.charAt(at)
+		})
+		.filter((c) => HASHTAG_CHARACTER.test(c))
+		.join('')
 
 /** @param {unknown} value whether a legacy value is JSON text, as the Store requires of follows.languages */
 function isJsonText(value) {
@@ -519,7 +535,7 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 		const hashtags = [
 			...many(p.tag)
 				.filter((t) => typeof t === 'object' && t !== null && /** @type {Json} */ (t).type === 'Hashtag')
-				.map((t) => hashtagName(text(/** @type {Json} */ (t).name).replace(/^#/, ''))),
+				.map((t) => hashtagName(/** @type {Json} */ (t).name)),
 			...(recordedTags.get(id) ?? []),
 		]
 		// The audience, from the object's addressing and stored author as exported.
