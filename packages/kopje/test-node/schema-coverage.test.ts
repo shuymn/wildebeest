@@ -24,6 +24,7 @@ const NOT_DUMPED: Record<string, string> = {
 	stream_conversation_marks:
 		"the streaming conversation marks of one object; a restored Store makes them again from the conversations' stream_seq",
 	stream_cursor: "the streaming fan-out's position, over the journal of one object",
+	stream_delete_tombstones: 'captures of the streaming journal of one object, which a restored Store does not send',
 	stream_delete_viewers: 'captures of the streaming journal of one object, which a restored Store does not send',
 	stream_events: 'the streaming journal of one object; a restored Store has no sockets to send it to',
 	stream_subscriptions: 'the streaming registry, derived from the open sockets of one object',
@@ -77,6 +78,7 @@ const NOT_CARRIED: Record<string, string> = {
 		'legacy never wrote its status_pins table, and a legacy row there stops the conversion (UNUSED_LEGACY_TABLES)',
 	stream_conversation_marks: 'streaming state of one object; legacy has no streaming',
 	stream_cursor: 'streaming state of one object; legacy has no streaming',
+	stream_delete_tombstones: 'streaming state of one object; legacy has no streaming',
 	stream_delete_viewers: 'streaming state of one object; legacy has no streaming',
 	stream_events: 'streaming state of one object; legacy has no streaming',
 	stream_subscriptions: 'streaming state of one object; legacy has no streaming',
