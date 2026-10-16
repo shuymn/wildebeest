@@ -1356,7 +1356,8 @@ export const STATUS_CHILDREN: readonly { table: string; column: string; remove: 
 		remove: ['DELETE FROM status_edits WHERE id IN (SELECT id FROM status_edits WHERE status_id = ? LIMIT ?)'],
 	},
 	// Local uploads, also those an edit dropped, are detached for the media sweep, which deletes their R2 objects
-	// (gc_at the epoch: due at once); remote rows only name URLs.
+	// (gc_at the epoch: due at once; media.ts's DOOMED_AT written out, since media.ts reaches this module through
+	// accounts.ts and the list is built as the module loads); remote rows only name URLs.
 	{
 		table: 'media_attachments',
 		column: 'status_id',
