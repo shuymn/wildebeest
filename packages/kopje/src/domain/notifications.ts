@@ -417,23 +417,20 @@ function removalBatch(db: Db, removal: Removal): boolean {
 	const ids =
 		removal.group_key === null
 			? db.all<{ id: number }>(
-					'SELECT id FROM notifications WHERE account_id = ? AND id <= ? ORDER BY id DESC LIMIT ?',
+					`DELETE FROM notifications WHERE id IN (SELECT id FROM notifications WHERE account_id = ? AND id <= ?
+						ORDER BY id DESC LIMIT ?) RETURNING id`,
 					removal.account_id,
 					removal.max_id,
 					REMOVAL_WINDOW
 				)
 			: db.all<{ id: number }>(
-					`SELECT id FROM notifications WHERE account_id = ? AND group_key = ? AND group_key IS NOT NULL AND id <= ?
-					ORDER BY id DESC LIMIT ?`,
+					`DELETE FROM notifications WHERE id IN (SELECT id FROM notifications WHERE account_id = ? AND group_key = ?
+						AND group_key IS NOT NULL AND id <= ? ORDER BY id DESC LIMIT ?) RETURNING id`,
 					removal.account_id,
 					removal.group_key,
 					removal.max_id,
 					REMOVAL_WINDOW
 				)
-	db.run(
-		'DELETE FROM notifications WHERE id IN (SELECT CAST(value AS INTEGER) FROM json_each(?))',
-		JSON.stringify(ids.map((row) => row.id))
-	)
 	if (ids.length === REMOVAL_WINDOW) {
 		return true
 	}
