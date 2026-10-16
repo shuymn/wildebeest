@@ -87,11 +87,11 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       the new `statuses.quotes_count`. The column has a constant default and no constraint, so stored statuses are
       neither read nor rewritten; nothing is backfilled (stored posts keep their quote properties in `raw`), so the
       migration's work does not grow with the instance: on the same benchmark store its upgrade took 2.2 seconds.
-    - `0033_streaming_public`: lets a `public*` or hashtag subscription journal public statuses that are not boosts,
+    - `0035_streaming_public`: lets a `public*` or hashtag subscription journal public statuses that are not boosts,
       and their edits (the journal's status triggers recreated), and adds the table of a deleted public status's
       streaming tombstone (left out of dumps and backups, as the other streaming tables are). It creates a table and
       triggers and reads no row: on the same benchmark store its upgrade, with the kernel's bookmark and schema
-      verification, took 3.7 seconds in workerd's local Durable Object SQLite.
+      verification, took 2.2 seconds.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.10] - 2026-10-16

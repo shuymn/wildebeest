@@ -76,7 +76,7 @@ const WRITING_TRIGGERS: Record<string, string> = {
 
 // Streaming subscriptions of the account on `user`, `user:notification`, a list, `direct`, `public` and a hashtag, which
 // arm every journal trigger (migrations 0026_streaming, 0028_streaming_home, 0032_streaming_lists and
-// 0033_streaming_public), and its conversation mark, which makes every conversation write take a change sequence; or,
+// 0035_streaming_public), and its conversation mark, which makes every conversation write take a change sequence; or,
 // with 'feeds', on `public` and a hashtag alone, which arm the status triggers for public statuses only.
 async function listen(store: StoreStub, listening: boolean | 'feeds', accountId: string): Promise<void> {
 	if (listening === 'feeds') {
@@ -384,7 +384,7 @@ describe("a status's own delete within a batch", () => {
 	// the account's last status, which the trigger of migration 0021_directory moves back, one row more. Its quote went
 	// before it with the quoted status's count (the trigger quotes_count_deleted), two rows.
 	// With a streaming listener the journal triggers are armed (migrations 0026_streaming, 0028_streaming_home and
-	// 0033_streaming_public; the feeds alone arm them for these public statuses); the batch writes the same rows and
+	// 0035_streaming_public; the feeds alone arm them for these public statuses); the batch writes the same rows and
 	// journals nothing.
 	it.each([false, true, 'feeds'] as const)(
 		'stays within PURGE_BATCH when the status is the newest of its account (listening: %s)',

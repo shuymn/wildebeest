@@ -624,7 +624,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `test/policy-bounds.test.ts`, `test/migrations.test.ts`, `test/cascade-guard.test.ts`. _Implemented on branch
   `kopje/streaming-4`:_ public and hashtag: `publicStatus` and `tagStatus` in `src/domain/timelines.ts`,
   `mentionsFilteredFor` in `src/domain/audience.ts`, `streamUnit` and `streamDelete` (the tombstone) in
-  `src/domain/streaming.ts`, the hashtag subscription in `src/stream-hub.ts`, migration `0033_streaming_public`;
+  `src/domain/streaming.ts`, the hashtag subscription in `src/stream-hub.ts`, migration `0035_streaming_public`;
   `test/streaming/public.test.ts`, `test/streaming-oracle.test.ts`, `test/stream-delete.test.ts`,
   `test/policy-bounds.test.ts`, `test/migrations.test.ts`, `test/cascade-guard.test.ts`.
 

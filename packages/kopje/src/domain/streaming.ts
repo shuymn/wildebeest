@@ -45,7 +45,7 @@ import { grantsAny } from '../security/scopes'
 //   itself and never a boost, a `public*` or `hashtag*` key its tombstone matches: the status was public, local or
 //   remote, with media or not, and carried the key's hashtag, as Mastodon's RemoveStatusService publishes it. The
 //   capture (streamDelete) is taken once, before that change, in bounded rows (stream_delete_viewers, migration
-//   0028_streaming_home, and stream_delete_tombstones, migration 0033_streaming_public); the unit re-checks V's tokens
+//   0028_streaming_home, and stream_delete_tombstones, migration 0035_streaming_public); the unit re-checks V's tokens
 //   and the lists' owner.
 //
 // A conversation's write takes its owner's next change sequence (conversations.ts nextStreamSeq, migration

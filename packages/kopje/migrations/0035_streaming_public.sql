@@ -1,4 +1,4 @@
--- Kopje Store schema 0033: the streaming API's public and hashtag streams (`public[:local|:remote][:media]` and
+-- Kopje Store schema 0035: the streaming API's public and hashtag streams (`public[:local|:remote][:media]` and
 -- `hashtag[:local]`: update, status.update, delete). Never edit after release (checksummed).
 --
 -- Migrations 0026_streaming, 0028_streaming_home and 0032_streaming_lists made the journal (stream_events), its
