@@ -105,6 +105,24 @@ export function availableLocalSql(l: string): string {
 	return `${l}.suspended_at IS NULL`
 }
 
+// The same rule for an account `a` with its local_accounts row `l` LEFT JOINed (NULL for a remote account), read
+// from the two rows without a lookup: the admin's list of accounts (admin-accounts.ts) reads both rows anyway.
+export function availableJoinedSql(a: string, l: string): string {
+	return `(${availableLocalSql(l)} AND ${notDeletingSql(a)})`
+}
+
+// The remote accounts whose deletion has started, the entries of the partial index accounts_deleted: its range in id
+// order is what the admin's list of suspended accounts reads of them.
+export function deletingSql(a: string): string {
+	return `${a}.deleted_at IS NOT NULL`
+}
+
+// The accounts whose deletion has not started, the entries of the partial index accounts_available (migration
+// 0031_admin_accounts_available): its range in id order is what the admin's list of active accounts walks.
+export function notDeletingSql(a: string): string {
+	return `${a}.deleted_at IS NULL`
+}
+
 // Whether `owner` blocks the account `x`.
 export function blocksSql(owner: string, x: string): string {
 	return `EXISTS (SELECT 1 FROM main.blocks pb WHERE pb.account_id = ${owner} AND pb.target_account_id = ${x})`

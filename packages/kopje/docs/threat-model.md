@@ -67,7 +67,7 @@ against their own instance. TLS is assumed between all parties.
 | Outbound document fetches                                      | R1 answers | final URL and parsed id (ID-2)                                | main: `src/federation/loader.ts`                                                                                                                                                                                                      |
 | Deliveries, remote media fetches, Web Push POSTs               | R1 answers | sink policy (NET-3)                                           | main (deliveries, Web Push: `src/jobs/push.ts`); Planned (B4)                                                                                                                                                                         |
 | Mastodon API `/api/*`                                          | R2–R4, R7  | bearer token and route access                                 | main: `src/mastodon/*`, `src/domain/auth.ts`                                                                                                                                                                                          |
-| Mastodon admin API `/api/v1/admin/*`, `/api/v2/admin/*`        | R2–R4      | bearer token with an admin scope, of the OAuth admin (VIS-29) | `kopje/admin-a1`: `src/mastodon/admin.ts`, `src/domain/auth.ts`, `src/domain/admin-authority.ts`; `kopje/admin-a2`: `src/domain/reports.ts`, `src/domain/admin-accounts.ts`                                                           |
+| Mastodon admin API `/api/v1/admin/*`, `/api/v2/admin/*`        | R2–R4      | bearer token with an admin scope, of the OAuth admin (VIS-29) | `kopje/admin-a1`: `src/mastodon/admin.ts`, `src/domain/auth.ts`, `src/domain/admin-authority.ts`; `kopje/admin-a2`: `src/domain/reports.ts`, `src/domain/admin-accounts.ts`; `kopje/admin-a3a`: the accounts reads |
 | `/oauth/authorize`                                             | R2, R6, R7 | Access JWT, Origin, consent                                   | main: `src/app/authorize.tsx`                                                                                                                                                                                                         |
 | `/oauth/token`, `/oauth/revoke`                                | R2, R3     | client credentials                                            | main: `src/mastodon/oauth.ts`                                                                                                                                                                                                         |
 | `/oauth/userinfo`                                              | R2, R3     | bearer token with `profile`                                   | main: `src/mastodon/oauth.ts`                                                                                                                                                                                                         |
@@ -613,8 +613,17 @@ type` for now. The work is bounded (RES-6, RES-7). _Implemented on branch
   through Access (`GET /admin/moderation-log`). `listAdminReports`, `getAdminReport`, `updateAdminReport` and
   `actOnReport` in `src/domain/reports.ts`, `presentAdminAccounts` in `src/domain/admin-accounts.ts`,
   `src/domain/moderation-log.ts`, migration `0029_admin_reports`; `test/admin-reports.test.ts`,
-  `test/admin-api.test.ts`, `test/policy-bounds.test.ts`, `test/migrations.test.ts`. Self-protection and the token
-  fence: _Planned (admin API, PR A3)_, with the accounts routes.
+  `test/admin-api.test.ts`, `test/policy-bounds.test.ts`, `test/migrations.test.ts`. The accounts reads are
+  _implemented on branch `kopje/admin-a3a`_ behind manage_users, which is not granted yet (`ADMIN_PERMISSIONS` stays
+  16), so every caller, the OAuth admin included, is still refused before an account is read; with the bit, only the
+  OAuth admin lists every account, local and remote, with each local account's email, shows one, and logs the actions
+  that change nothing (`enable`, `unsilence`, `unsensitive`), while `approve` and `reject` are refused for every
+  account. Each list reads a bounded set (the local accounts, at most 2,000 search candidates, or an id-ordered range)
+  and answers 422 rather than an unordered or empty page. `listAdminAccounts`, `getAdminAccount` and
+  `actOnAdminAccount` in `src/domain/admin-accounts.ts`, `src/mastodon/admin.ts`, migrations `0030_admin_accounts` and
+  `0031_admin_accounts_available`; `test/admin-accounts.test.ts`, `test/policy-bounds.test.ts`,
+  `test/migrations.test.ts`. Granting manage_users, self-protection and the token fence: _Planned (admin API, PR A3b)_,
+  with local suspension.
 
 ### Authorization (AUTH)
 
