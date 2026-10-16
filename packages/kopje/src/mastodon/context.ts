@@ -112,6 +112,18 @@ export async function refuseAfterAuth(c: ApiContext, deps: ApiDeps, response: Re
 	return response
 }
 
+// Mastodon's authorize_if_got_token!: a token sent must be valid and cover the route's scope; an app token is let
+// through.
+export async function checkOptionalToken(c: ApiContext, deps: ApiDeps): Promise<void> {
+	if (c.get('credential') !== null) {
+		const value = credential(c, deps)
+		const result = await storeCall(c, deps, (s, b) => s.checkCredential(b, value))
+		if (result.status !== 'user_required') {
+			authorized(result)
+		}
+	}
+}
+
 // The request's parameters, or the error answer for an unreadable body (after authentication, as Mastodon orders it).
 export async function requestParams(c: ApiContext, deps: ApiDeps): Promise<Params | Response> {
 	const result = await readParams(c.req.raw)

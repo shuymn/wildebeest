@@ -1,4 +1,4 @@
-import { type ApiContext, type ApiDeps, type ApiHandler, authorized, credential, storeCall } from './context'
+import { type ApiContext, type ApiHandler, checkOptionalToken } from './context'
 import { mastodonError } from './errors'
 
 // The Mastodon admin API (/api/v1/admin/*, /api/v2/admin/*). Every route is Mastodon's authorize_if_got_token!: the
@@ -14,19 +14,6 @@ import { mastodonError } from './errors'
 // bits in ADMIN_PERMISSIONS to the OAuth admin.
 
 const NOT_ALLOWED = 'This action is not allowed'
-
-// The token, when one is sent: valid, covering the route's scope, an app token let through as Mastodon's
-// authorize_if_got_token! does.
-async function checkOptionalToken(c: ApiContext, deps: ApiDeps): Promise<void> {
-	if (c.get('credential') === null) {
-		return
-	}
-	const value = credential(c, deps)
-	const result = await storeCall(c, deps, (s, b) => s.checkCredential(b, value))
-	if (result.status !== 'user_required') {
-		authorized(result)
-	}
-}
 
 const afterToken =
 	(answer: (c: ApiContext) => Response): ApiHandler =>
