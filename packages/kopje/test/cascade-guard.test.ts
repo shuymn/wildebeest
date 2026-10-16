@@ -7,7 +7,13 @@ import { NOW } from './app-helpers'
 import { migratedStore } from './helpers'
 import { community, remoteAccount, seedStatus } from './status-helpers'
 import { Db } from '../src/db/sql'
-import { deleteStatusBatch, PURGE_BATCH, PURGED_ACCOUNT_CHILDREN, STATUS_CHILDREN } from '../src/domain/inbox'
+import {
+	deleteStatusBatch,
+	PURGE_BATCH,
+	purgeBatch,
+	PURGED_ACCOUNT_CHILDREN,
+	STATUS_CHILDREN,
+} from '../src/domain/inbox'
 
 // RES-6: a status's delete (deleteStatusWithin) and a remote account's purge (purgeBatch) remove the rows that name
 // their parent a batch at a time and delete the parent only once none is left, so the parent's delete cascades
@@ -152,5 +158,90 @@ describe('a status in many conversations', () => {
 		expect(batches.every((wrote) => wrote <= PURGE_BATCH)).toBe(true)
 		expect(await sql(h.store, 'SELECT count(*) AS n FROM statuses WHERE id = ?', status)).toEqual([{ n: 0 }])
 		expect(await sql(h.store, 'SELECT count(*) AS n FROM conversations')).toEqual([{ n: 0 }])
+	})
+})
+
+describe("a status's own delete within a batch", () => {
+	// A purge reaches the account's newest status, a reply with a poll, after its children left the batch exactly the
+	// rows the delete used to reserve: the status, its poll, the parent's recount, and the account's last status, which
+	// the trigger of migration 0021_directory moves back, one row more.
+	it('stays within PURGE_BATCH when the status is the newest of its account', async () => {
+		const h = await community(['alice'])
+		const parent = await seedStatus(h.store, { accountId: h.users.alice.id, visibility: 'public' })
+		const remote = await remoteAccount(h.store, 'carol')
+		const uri = 'https://remote.example/users/carol'
+		const reply = await seedStatus(h.store, { accountId: remote, visibility: 'public', inReplyToId: parent })
+		await sql(h.store, `INSERT INTO polls (status_id, options, tallies) VALUES (?, '["a","b"]', '[0,0]')`, reply)
+		// The mentions the batch deletes first: all of the budget but the 3 rows the delete used to reserve.
+		const mentions = PURGE_BATCH - 3
+		await sql(
+			h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO accounts (id, uri, username, domain)
+			SELECT printf('6%017d', i), 'https://many.example/users/m' || i, 'm' || i, 'many.example' FROM n`,
+			mentions
+		)
+		await sql(
+			h.store,
+			"INSERT INTO status_mentions (status_id, account_id) SELECT ?, id FROM accounts WHERE id GLOB '6*'",
+			reply
+		)
+		expect(await sql(h.store, 'SELECT last_status_id AS id FROM accounts WHERE id = ?', remote)).toEqual([
+			{ id: reply },
+		])
+		const batches: number[] = []
+		for (let i = 0; i < 10; i++) {
+			const { wrote, remaining } = await runInDurableObject(h.store, (_instance, state) => {
+				const db = new Db(state.storage.sql)
+				const changes = () => db.first<{ n: number }>('SELECT total_changes() AS n')!.n
+				const before = changes()
+				const more = state.storage.transactionSync(() => purgeBatch(db, uri, NOW))
+				return { wrote: changes() - before, remaining: more }
+			})
+			batches.push(wrote)
+			if (!remaining) {
+				break
+			}
+		}
+		expect(batches.length).toBeGreaterThan(1)
+		expect(batches[0]).toBe(PURGE_BATCH - 3)
+		expect(batches.every((wrote) => wrote <= PURGE_BATCH)).toBe(true)
+		expect(await sql(h.store, 'SELECT count(*) AS n FROM accounts WHERE id = ?', remote)).toEqual([{ n: 0 }])
+	})
+
+	it('hides a status within PURGE_BATCH when its mentions leave one row', async () => {
+		const h = await community(['alice'])
+		const remote = await remoteAccount(h.store, 'carol')
+		const status = await seedStatus(h.store, { accountId: remote, visibility: 'public' })
+		await sql(
+			h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO accounts (id, uri, username, domain)
+			SELECT printf('6%017d', i), 'https://many.example/users/m' || i, 'm' || i, 'many.example' FROM n`,
+			PURGE_BATCH - 1
+		)
+		await sql(
+			h.store,
+			"INSERT INTO status_mentions (status_id, account_id) SELECT ?, id FROM accounts WHERE id GLOB '6*'",
+			status
+		)
+		const batches: number[] = []
+		for (let i = 0; i < 10; i++) {
+			const { wrote, remaining } = await runInDurableObject(h.store, (_instance, state) => {
+				const db = new Db(state.storage.sql)
+				const changes = () => db.first<{ n: number }>('SELECT total_changes() AS n')!.n
+				const before = changes()
+				const more = state.storage.transactionSync(() => deleteStatusBatch(db, status, NOW))
+				return { wrote: changes() - before, remaining: more }
+			})
+			batches.push(wrote)
+			if (!remaining) {
+				break
+			}
+		}
+		expect(batches[0]).toBe(PURGE_BATCH - 1)
+		expect(batches.every((wrote) => wrote <= PURGE_BATCH)).toBe(true)
+		expect(await sql(h.store, 'SELECT count(*) AS n FROM statuses WHERE id = ?', status)).toEqual([{ n: 0 }])
+		expect(await sql(h.store, 'SELECT last_status_id AS id FROM accounts WHERE id = ?', remote)).toEqual([{ id: null }])
 	})
 })

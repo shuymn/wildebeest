@@ -1468,8 +1468,10 @@ function deleteStatusWithin(db: Db, statusId: string, budget: Budget, after = 0)
 			OR EXISTS (SELECT 1 FROM statuses WHERE in_reply_to_id = ?1 OR reblog_of_id = ?1)`,
 		statusId
 	)
-	// The status's delete (with its poll) and the recounts of its parent and original.
-	if (children !== undefined || hasPollVotes(db, { statusId }) || budget.left() < 3 + after) {
+	// The status's delete writes at most four rows: the status, its poll (cascaded), the account's last status (moved
+	// back by the trigger of migration 0021_directory when it is the account's newest), and the recount of its parent or
+	// of its original (a status is never both a reply and a boost); `after` is the caller's rows after it.
+	if (children !== undefined || hasPollVotes(db, { statusId }) || budget.left() < 4 + after) {
 		return false
 	}
 	db.run('DELETE FROM statuses WHERE id = ?', statusId)
@@ -1568,7 +1570,8 @@ export function deleteStatusBatch(db: Db, statusId: string, now: number): boolea
 			AND account_id IN (SELECT account_id FROM status_mentions WHERE status_id = ?1 LIMIT ?2)`,
 		statusId
 	)
-	if (budget.left() > 0) {
+	// Hiding writes the status and the account's last status, which the trigger of migration 0021_directory moves back.
+	if (budget.left() >= 2) {
 		db.run(
 			`UPDATE statuses SET visibility = 'direct', content = '', spoiler_text = '', search_text = NULL
 			WHERE id = ? AND (visibility <> 'direct' OR content <> '' OR spoiler_text <> '' OR search_text IS NOT NULL)`,
