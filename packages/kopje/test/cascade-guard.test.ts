@@ -14,6 +14,7 @@ import {
 	PURGED_ACCOUNT_CHILDREN,
 	STATUS_CHILDREN,
 } from '../src/domain/inbox'
+import { TOKEN_CHILDREN } from '../src/domain/suspension'
 import type { StoreStub } from '../src/platform/store-client'
 
 // RES-6: a status's delete (deleteStatusWithin) and a remote account's purge (purgeBatch) remove the rows that name
@@ -237,6 +238,35 @@ describe('cascade guard below local_accounts (RES-6)', () => {
 			/\bDELETE\s+FROM\s+(?:main\s*\.\s*)?["`[]?local_accounts\b/i.test(source)
 		)
 		expect(deletes.map(([file]) => file)).toEqual([])
+	})
+})
+
+describe('cascade guard below oauth_tokens (RES-6)', () => {
+	// The tokens job of a suspension (src/domain/suspension.ts) deletes the rows of a token of an earlier epoch child-first, in
+	// TOKEN_CHILDREN's order, and the token last, so no delete cascades and each round counts what it writes. A table
+	// that cascades from oauth_tokens but is missing there would be emptied by the token's delete, unbounded.
+	it('lists every table that cascades from oauth_tokens, each before the tables it cascades from', async () => {
+		await runInDurableObject(await migratedStore(), (_instance, state) => {
+			const keys = foreignKeys(state.storage.sql)
+			const found = cascadesFrom(keys, 'oauth_tokens', [])
+			expect(
+				found,
+				'these tables cascade from oauth_tokens: add each to TOKEN_CHILDREN in src/domain/suspension.ts, child first, and delete its rows in the tokens job'
+			).toEqual([...TOKEN_CHILDREN].sort())
+			// Child first: every parent a listed table cascades from, below oauth_tokens, comes after it.
+			TOKEN_CHILDREN.forEach((table, index) => {
+				const parents = keys
+					.filter((key) => key.from === table && ['CASCADE', 'SET NULL'].includes(key.onDelete))
+					.map((key) => key.table)
+					.filter((parent) => parent !== 'oauth_tokens' && found.includes(parent))
+				for (const parent of parents) {
+					expect(
+						TOKEN_CHILDREN.indexOf(parent as (typeof TOKEN_CHILDREN)[number]),
+						`${table} -> ${parent}`
+					).toBeGreaterThan(index)
+				}
+			})
+		})
 	})
 })
 

@@ -19,7 +19,15 @@ import {
 	listRewrapKeys,
 	rewrapLocalKey,
 } from './domain/actors'
-import { actOnAdminAccount, getAdminAccount, listAdminAccounts, setAccountEmail } from './domain/admin-accounts'
+import {
+	actOnAccount,
+	actOnAdminAccount,
+	getAdminAccount,
+	listAdminAccounts,
+	setAccountEmail,
+	unsuspendAccount,
+	unsuspendAdminAccount,
+} from './domain/admin-accounts'
 import { oauthAdminStatus } from './domain/admin-authority'
 import { checkCredential, type Credential, type UserCredential } from './domain/auth'
 import * as blocks from './domain/blocks'
@@ -53,6 +61,7 @@ import * as setup from './domain/setup'
 import { saveSnapshot } from './domain/snapshot'
 import * as statusActions from './domain/status-actions'
 import * as statuses from './domain/statuses'
+import { runModerationJobs, suspendAccount } from './domain/suspension'
 import * as tags from './domain/tags'
 import * as timelines from './domain/timelines'
 import * as webPages from './domain/web-pages'
@@ -390,6 +399,11 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, setAccountEmail, input)
 	}
 
+	// POST /admin/accounts/unsuspend: the Access admin's recovery of a suspended account (domain/admin-accounts.ts).
+	unsuspendAccount(callerBuild: string, input: OperationInput<typeof unsuspendAccount>) {
+		return this.#kernel.execute(callerBuild, unsuspendAccount, input)
+	}
+
 	// GET /admin/moderation-log (domain/moderation-log.ts).
 	moderationLog(callerBuild: string, input: OperationInput<typeof moderationLog>) {
 		return this.#kernel.execute(callerBuild, moderationLog, input)
@@ -471,15 +485,17 @@ export class Store extends DurableObject<Env> {
 		}
 	}
 
-	// A round of the inbound jobs, of the domain block cleanups (domain/blocks.ts) and of the jobs of answered
-	// notification requests (domain/notification-requests.ts), each in its own transaction.
+	// A round of the inbound jobs, of the domain block cleanups (domain/blocks.ts), of the jobs of answered
+	// notification requests (domain/notification-requests.ts) and of the moderation jobs (domain/suspension.ts), each in
+	// its own transaction.
 	async runInboundJobs(callerBuild: string, input: OperationInput<typeof inbox.runInboundJobs>) {
 		const inbound = await this.#kernel.execute(callerBuild, inbox.runInboundJobs, input)
 		const cleanups = await this.#kernel.execute(callerBuild, blocks.runDomainBlockCleanups, input)
 		const requests = await this.#kernel.execute(callerBuild, notificationRequests.runNotificationRequestJobs, input)
+		const moderation = await this.#kernel.execute(callerBuild, runModerationJobs, input)
 		return {
-			pending: inbound.pending || cleanups.pending || requests.pending,
-			delivers: inbound.delivers || cleanups.delivers,
+			pending: inbound.pending || cleanups.pending || requests.pending || moderation.pending,
+			delivers: inbound.delivers || cleanups.delivers || moderation.delivers,
 		}
 	}
 
@@ -686,7 +702,7 @@ export class Store extends DurableObject<Env> {
 	}
 
 	suspendAccount(callerBuild: string, input: { accountId: string; now: number }) {
-		return this.#kernel.execute(callerBuild, oauth.suspendAccount, input)
+		return this.#kernel.execute(callerBuild, suspendAccount, input)
 	}
 
 	instanceInfo(callerBuild: string) {
@@ -808,6 +824,14 @@ export class Store extends DurableObject<Env> {
 
 	actOnAdminAccount(callerBuild: string, input: OperationInput<typeof actOnAdminAccount>) {
 		return this.#kernel.execute(callerBuild, actOnAdminAccount, input)
+	}
+
+	adminAccountAction(callerBuild: string, input: OperationInput<typeof actOnAccount>) {
+		return this.#kernel.execute(callerBuild, actOnAccount, input)
+	}
+
+	unsuspendAdminAccount(callerBuild: string, input: OperationInput<typeof unsuspendAdminAccount>) {
+		return this.#kernel.execute(callerBuild, unsuspendAdminAccount, input)
 	}
 
 	endorse(callerBuild: string, input: OperationInput<typeof endorsements.endorse>) {

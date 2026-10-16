@@ -13,6 +13,7 @@ import type { Params } from './params'
 import { reportResponse } from './reports'
 import type { PageQuery } from '../domain/accounts'
 import {
+	type AccountActionResult,
 	ADMIN_ACCOUNTS_LIMIT,
 	type AdminAccountAction,
 	type AdminAccountFilter,
@@ -382,4 +383,39 @@ export function actOnAccount(action: AdminAccountAction): ApiHandler {
 		}
 		return accountResponse(authorized(await storeCall(c, deps, (s, b) => s.actOnAdminAccount(b, input))), c)
 	}
+}
+
+// POST /api/v1/admin/accounts/:account_id/action (Api::V1::Admin::AccountActionsController#create): type, report_id,
+// warning_preset_id, text and send_email_notification, as form fields (Fedilab) or JSON. A type or report_id sent blank
+// is not sent (`present?`). Answers an empty object (render_empty) once the action is done.
+export const accountAction: ApiHandler = async (c, deps) => {
+	const p = await requestParams(c, deps)
+	if (p instanceof Response) {
+		return p
+	}
+	const sent = (name: string) => {
+		const value = p.get(name)
+		return value === undefined || value.trim() === '' ? null : value
+	}
+	const input = {
+		credential: optionalCredential(c, deps),
+		id: c.req.param('account_id') ?? '',
+		type: sent('type'),
+		reportId: sent('report_id'),
+	}
+	const result: AccountActionResult = authorized(await storeCall(c, deps, (s, b) => s.adminAccountAction(b, input)))
+	switch (result.status) {
+		case 'ok':
+			return c.json({})
+		case 'invalid':
+			return mastodonError(422, result.error)
+		default:
+			return accountResponse(result, c)
+	}
+}
+
+// POST /api/v1/admin/accounts/:id/unsuspend.
+export const unsuspendAccount: ApiHandler = async (c, deps) => {
+	const input = { credential: optionalCredential(c, deps), id: c.req.param('id') ?? '', present: present(c) }
+	return accountResponse(authorized(await storeCall(c, deps, (s, b) => s.unsuspendAdminAccount(b, input))), c)
 }

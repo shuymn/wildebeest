@@ -46,6 +46,38 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
     - Kopje's own posts now say that nobody but their author may quote them (`interactionPolicy.canQuote`), as Mastodon
       already assumes of a post without a policy.
 
+- The admin API's accounts are served to the admin: the role's `manage_users` is granted with local suspension
+  (below), so `GET /api/v1/admin/accounts`, `GET /api/v2/admin/accounts` and `GET /api/v1/admin/accounts/:id`, and
+  `POST .../enable`, `unsilence`, `unsensitive`, `approve` and `reject`, as described for 0.1.0-rc.10, now answer the
+  admin; everyone else is still answered 403. `GET /api/v1/accounts/verify_credentials` shows the admin's role with
+  the permissions served (`1040`: manage_reports and manage_users).
+- Local suspension through the admin API: `POST /api/v1/admin/accounts/:id/action` with `type` `suspend` suspends a
+  local account, and `none` resolves the report named by `report_id`, if any; the answer is `{}`.
+  `POST /api/v1/admin/accounts/:id/unsuspend` lifts a local suspension and returns the account.
+    - A suspended account is unavailable at once: hidden as before, and every access token, web session, unused
+      authorization code and push subscription it had is refused from that moment, also after it is unsuspended, so
+      the user signs in again, which works as soon as it is unsuspended. This needs no clock: each credential carries
+      the account's credential epoch, which a suspension moves. Its tokens are deleted afterwards, in the background.
+    - Its unresolved reports filed before the suspension are resolved, in the background, unless the admin changed one
+      since, even in the suspension's own millisecond; a report filed later stays open.
+    - Other servers are sent an `Update` of its actor, redacted and marked `suspended`, and on unsuspension one of the
+      full actor, as Mastodon sends them: to its remote followers, the remote accounts its posts of the two days
+      before the suspension mention, and those it followed or asked to follow in those days. The audience is gathered
+      in the background, in bounded rounds, so the `Update` leaves within minutes rather than at once.
+    - While suspended, the account's posts, boosts and other activities still waiting for delivery are dropped when
+      the queue reaches them, which it does within moments; only its retractions (deletes, undos) and the
+      suspension's `Update` go out. A delivery already in flight when the suspension commits may still be sent.
+    - Where Kopje differs from Mastodon: `disable`, `sensitive` and `silence` are answered 422
+      `Validation failed: Type is not included in the list`, as an unknown type is (Kopje has none of these states);
+      `suspend` of a remote account is answered 422 for now; `text` and `warning_preset_id` are accepted and dropped
+      (Kopje keeps no warnings and sends no email); no action may target the admin's own account (403), as Mastodon
+      refuses the Owner acting on the Owner; report resolution and the `Update`s finish in background rounds; and the
+      `Update`s' recent mentions and follows count at most 2,000 inboxes each that no earlier source of the same
+      `Update` reached, where Mastodon counts each source's own distinct inboxes.
+- `POST /admin/accounts/unsuspend` and `kopje-admin account unsuspend <username>` (Access only) unsuspend a local
+  account as the admin API does, logged with the Access identity. It recovers a suspended admin, whom no admin can
+  unsuspend.
+
 ### Fixed
 
 - The streaming API no longer sends a status (`update`) or an edit (`status.update`) over and over, with turns that
@@ -56,7 +88,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds two migrations, applied in order on the first request after the deploy; a rollback to an
+- Store schema: adds three migrations, applied in order on the first request after the deploy; a rollback to an
   earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0032_streaming_lists`: rebuilds the streaming journal (at most a 4,096-id span of rows) to admit conversation
       events, adds a column of the streaming position, lets a list subscription journal statuses and edits (the
@@ -70,6 +102,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       the new `statuses.quotes_count`. The column has a constant default and no constraint, so stored statuses are
       neither read nor rewritten; nothing is backfilled (stored posts keep their quote properties in `raw`), so the
       migration's work does not grow with the instance: on the same benchmark store its upgrade took 2.2 seconds.
+    - `0034_admin_suspension`: adds the credential epoch columns to the local accounts and the OAuth tokens, and the
+      empty tables of the moderation jobs and their staged audience. The columns have a constant default, so it reads
+      no row: on the same benchmark store its upgrade took 2.2 seconds (2.7 in a second run).
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.10] - 2026-10-16

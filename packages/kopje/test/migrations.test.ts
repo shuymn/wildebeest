@@ -43,6 +43,8 @@ const SCHEMA_TABLES = [
 	'local_accounts',
 	'markers',
 	'media_attachments',
+	'moderation_jobs',
+	'moderation_reach',
 	'mutes',
 	'notification_clears',
 	'notification_dismissals',
@@ -3731,5 +3733,107 @@ describe('0033_quotes', () => {
 		const many = await measure(10_000)
 		expect(statements().length).toBeGreaterThan(5)
 		expect(many).toBeLessThanOrEqual(few + 10)
+	}, 120_000)
+})
+
+describe('0034_admin_suspension', () => {
+	const at = NAMES.indexOf('0034_admin_suspension')
+	const id = (n: number) => String(100000000000000000n + BigInt(n))
+
+	// `locals` local accounts, each with `tokens` access tokens and a follow of the next account.
+	function seed(sql: SqlStorage, locals: number, tokens = 0) {
+		sql.exec(
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO accounts (id, uri, username) SELECT CAST(100000000000000000 + i AS TEXT),
+				'https://kopje.test/ap/users/u' || i, 'u' || i FROM n`,
+			locals
+		)
+		sql.exec(
+			`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey)
+			SELECT id, username || '@example.com', X'00', X'00', 'k' FROM accounts`
+		)
+		sql.exec(
+			"INSERT INTO oauth_clients (id, secret, name, redirect_uris) VALUES ('c', 'x', 'c', 'urn:ietf:wg:oauth:2.0:oob')"
+		)
+		sql.exec(
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes)
+			SELECT a.id || '-' || n.i, 'access', 'c', a.id, 'read' FROM accounts a, n`,
+			tokens
+		)
+		sql.exec(
+			`INSERT INTO follows (account_id, target_account_id, state)
+			SELECT id, CAST(id + 1 AS TEXT), 'accepted' FROM accounts WHERE CAST(id + 1 AS TEXT) IN (SELECT id FROM accounts)`
+		)
+	}
+
+	it('adds the credential epochs and the jobs, whose staged audience a job deletes itself', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, MIGRATIONS.slice(0, at)).upgrade()).toMatchObject({ ok: true })
+			seed(sql, 2, 1)
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({
+				ok: true,
+				applied: ['0034_admin_suspension'],
+			})
+			expect(sql.exec('SELECT DISTINCT epoch FROM oauth_tokens').toArray()).toEqual([{ epoch: 0 }])
+			expect(sql.exec('SELECT credential_epoch FROM local_accounts').toArray()).toEqual([
+				{ credential_epoch: 0 },
+				{ credential_epoch: 0 },
+			])
+			sql.exec(
+				"INSERT INTO moderation_jobs (kind, account_id, generation, phase) VALUES ('suspension', ?, 1, 'reports')",
+				id(1)
+			)
+			expect(() =>
+				sql.exec(
+					"INSERT INTO moderation_jobs (kind, account_id, generation, phase) VALUES ('suspension', ?, 1, 'x')",
+					id(1)
+				)
+			).toThrow(/UNIQUE constraint failed/)
+			expect(() =>
+				sql.exec(
+					"INSERT INTO moderation_jobs (kind, account_id, generation, phase) VALUES ('silence', ?, 1, 'x')",
+					id(1)
+				)
+			).toThrow(/CHECK constraint failed/)
+			const job = sql.exec<{ id: number }>('SELECT id FROM moderation_jobs').one().id
+			sql.exec("INSERT INTO moderation_reach (job_id, inbox) VALUES (?, 'https://a.example/inbox')", job)
+			sql.exec("INSERT OR IGNORE INTO moderation_reach (job_id, inbox) VALUES (?, 'https://a.example/inbox')", job)
+			expect(sql.exec('SELECT count(*) AS n FROM moderation_reach').one().n).toBe(1)
+			// The staged rows do not cascade from their job: it deletes them before itself.
+			expect(() => sql.exec('DELETE FROM moderation_jobs WHERE id = ?', job)).toThrow(/FOREIGN KEY constraint failed/)
+			sql.exec('DELETE FROM moderation_reach WHERE job_id = ?', job)
+			sql.exec('DELETE FROM moderation_jobs WHERE id = ?', job)
+			expect(sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
+		})
+	})
+
+	it('reads no account, token or follow, however many there are', async () => {
+		const statements = (MIGRATIONS[at]?.sql ?? '')
+			.split('\n')
+			.filter((line) => !line.startsWith('--'))
+			.join('\n')
+			.split(';')
+			.filter((statement) => statement.trim() !== '')
+		const measure = async (locals: number, tokens: number) => {
+			const store = freshStore()
+			return runInDurableObject(store, async (_instance, state) => {
+				const sql = state.storage.sql
+				await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+				seed(sql, locals, tokens)
+				let read = 0
+				for (const statement of statements) {
+					const cursor = sql.exec(statement)
+					cursor.toArray()
+					read += cursor.rowsRead
+				}
+				return read
+			})
+		}
+		const few = await measure(2, 0)
+		const many = await measure(500, 20)
+		expect(many).toBe(few)
 	}, 120_000)
 })

@@ -21,6 +21,8 @@ import {
 } from './auth'
 import { logAction } from './moderation-log'
 import { writeOperation } from './operation'
+import { reportExists, resolveReport } from './reports'
+import { suspendLocal, unsuspendLocal } from './suspension'
 import type { Db } from '../db/sql'
 import type { ImportAuthority } from '../platform/store-admin'
 
@@ -143,11 +145,41 @@ export const setAccountEmail = writeOperation<
 	return { ok: true, username: account.username, email: value }
 })
 
+export type UnsuspendResult =
+	| { ok: true; username: string }
+	| { ok: false; code: 'wrong-authority' | 'account-not-found' | 'not-suspended'; message: string }
+
+// POST /admin/accounts/unsuspend (`kopje-admin account unsuspend`), Access only (AUTH-5): unsuspends a local account as
+// the admin API does (domain/suspension.ts unsuspendLocal; its credential epoch stays). It is how the operator
+// recovers a suspended OAuth admin, whom no OAuth admin can unsuspend. Logged in the moderation log with the Access
+// identity, in the same transaction.
+export const unsuspendAccount = writeOperation<
+	{ authority: ImportAuthority; username: string; now: number },
+	UnsuspendResult
+>((db, { authority, username, now }) => {
+	const refused = accessAdminRefusal(db, authority, 'only an Access admin unsuspends an account')
+	if (refused !== null || authority.kind !== 'access') {
+		return { ok: false, code: 'wrong-authority', message: refused ?? 'only an Access admin unsuspends an account' }
+	}
+	const name = username.replace(/^@/, '')
+	const account = db.first<{ id: string; username: string }>(
+		'SELECT a.id, a.username FROM accounts a JOIN local_accounts l ON l.account_id = a.id WHERE lower(a.username) = lower(?) AND a.domain IS NULL',
+		name
+	)
+	if (account === undefined) {
+		return { ok: false, code: 'account-not-found', message: `no local account @${name}` }
+	}
+	if (!unsuspendLocal(db, account.id, now)) {
+		return { ok: false, code: 'not-suspended', message: `@${account.username} is not suspended` }
+	}
+	logAction(db, authority, 'unsuspend', { type: 'Account', id: account.id }, { username: account.username }, now)
+	return { ok: true, username: account.username }
+})
+
 // ---- The admin's accounts (Api::V1::Admin::AccountsController and Api::V2::Admin::AccountsController, app/controllers/
-// api/v{1,2}/admin/accounts_controller.rb; AccountFilter, app/models/account_filter.rb). The routes need manage_users,
-// which ADMIN_PERMISSIONS does not hold yet: they refuse the OAuth admin as they refuse everyone until suspension is
-// served too (a group's bit is set only once the whole group is served). adminAccountOperations builds them over any
-// admin guard, so tests grant the bit (adminGuarded).
+// api/v{1,2}/admin/accounts_controller.rb; AccountFilter, app/models/account_filter.rb; Api::V1::Admin::
+// AccountActionsController and Admin::AccountAction). The routes need manage_users. adminAccountOperations builds them
+// over any admin guard (adminReadOperation and adminWriteOperation outside tests).
 
 export const ADMIN_ACCOUNTS_LIMIT = 100
 export const MAX_ADMIN_ACCOUNTS_LIMIT = 200
@@ -465,10 +497,81 @@ export function adminAccountOperations(read: AdminDeclare, write: AdminDeclare) 
 		}
 	)
 
-	return { listAdminAccounts, getAdminAccount, actOnAdminAccount }
+	// POST /api/v1/admin/accounts/:account_id/action (Admin::AccountAction#save!), in its order: the account (404), the
+	// type (422), the policy (403: no action targets the OAuth admin's own account, as Mastodon's role.overrides? refuses
+	// the Owner acting on the Owner), then the report named (404).
+	//   - none resolves the report named, if any (process_reports!); nothing else.
+	//   - suspend on a local account suspends it (domain/suspension.ts): its reports, frozen at the suspension, are
+	//     resolved by the suspension job, as process_reports! resolves every unresolved report on the target.
+	//   - suspend on a remote account answers 422: remote suspension is not served yet.
+	//   - disable, sensitive and silence answer 422 as a type outside the list would, so the client sees a failed action
+	//     rather than a silent no-op: Kopje has no disabling, sensitizing or silencing.
+	//   - text and warning_preset_id are accepted and dropped: Kopje keeps no strikes and sends no warning, as Mastodon
+	//     sends none to a remote target (warnable? is local only).
+	const actOnAccount = write<{ id: string; type: string | null; reportId: string | null }, AccountActionResult>(
+		ADMIN_PERMISSION.manageUsers,
+		(db, { id, type, reportId }, admin) => {
+			const account = db.first<{ id: string; domain: string | null }>(
+				'SELECT id, domain FROM accounts WHERE id = ?',
+				id
+			)
+			if (account === undefined) {
+				return { status: 'not_found' }
+			}
+			if (type === null) {
+				return { status: 'invalid', error: "Validation failed: Type can't be blank, Type is not included in the list" }
+			}
+			if (type !== 'none' && type !== 'suspend') {
+				return { status: 'invalid', error: 'Validation failed: Type is not included in the list' }
+			}
+			if (account.id === admin.accountId) {
+				return { status: 'not_allowed' }
+			}
+			if (type === 'suspend' && account.domain !== null) {
+				return { status: 'invalid', error: REMOTE_SUSPENSION }
+			}
+			if (type === 'none') {
+				// resolveReport writes nothing when the report is missing.
+				return reportId === null || resolveReport(db, reportId, admin) ? { status: 'ok' } : { status: 'not_found' }
+			}
+			if (reportId !== null && !reportExists(db, reportId)) {
+				return { status: 'not_found' }
+			}
+			const at = suspendLocal(db, account.id, admin.accountId, admin.now)
+			logAction(db, admin, 'suspend', { type: 'Account', id: account.id }, { suspended_at: at }, admin.now)
+			return { status: 'ok' }
+		}
+	)
+
+	// POST /api/v1/admin/accounts/:id/unsuspend (AccountPolicy#unsuspend?: a local suspension only): a remote account,
+	// or a local one that is not suspended, is refused (403). The OAuth admin is never suspended (it is no admin then).
+	const unsuspendAdminAccount = write<{ id: string; present: Present }, AdminAccountResult>(
+		ADMIN_PERMISSION.manageUsers,
+		(db, { id, present }, admin) => {
+			const found = db.first<{ domain: string | null }>('SELECT domain FROM accounts WHERE id = ?', id)
+			if (found === undefined) {
+				return { status: 'not_found' }
+			}
+			if (found.domain !== null || !unsuspendLocal(db, id, admin.now)) {
+				return { status: 'not_allowed' }
+			}
+			logAction(db, admin, 'unsuspend', { type: 'Account', id }, {}, admin.now)
+			return { status: 'ok', account: presentAdminAccounts(db, [id], admin.accountId, present).get(id)! }
+		}
+	)
+
+	return { listAdminAccounts, getAdminAccount, actOnAdminAccount, actOnAccount, unsuspendAdminAccount }
 }
 
-export const { listAdminAccounts, getAdminAccount, actOnAdminAccount } = adminAccountOperations(
-	adminReadOperation,
-	adminWriteOperation
-)
+// The answer to a suspend action on a remote account until remote suspension is served.
+export const REMOTE_SUSPENSION = 'Remote accounts cannot be suspended yet'
+
+export type AccountActionResult =
+	| { status: 'ok' }
+	| { status: 'not_found' }
+	| { status: 'not_allowed' }
+	// 422 with Mastodon's validation message.
+	| { status: 'invalid'; error: string }
+
+export const { listAdminAccounts, getAdminAccount, actOnAdminAccount, actOnAccount, unsuspendAdminAccount } =
+	adminAccountOperations(adminReadOperation, adminWriteOperation)

@@ -14,25 +14,25 @@ import type { StoreStub } from '../src/platform/store-client'
 
 // The Mastodon admin API's accounts (R37, VIS-29; Api::V1::Admin::AccountsController, Api::V2::Admin::AccountsController,
 // AccountFilter and REST::Admin::AccountSerializer of Mastodon 4.5.11). Their routes need manage_users, which Kopje
-// does not grant until local suspension is served: they refuse the OAuth admin as everyone. Here the bit is granted by
-// building the same operations over a guard that holds it (adminGuarded), and putting them in the Store's place.
+// grants now that local suspension is served (admin-suspension.test.ts). A role without it is refused: the same
+// operations built over a guard that lacks the bit (adminGuarded) are put in the Store's place to show it.
 
 const OWNER = 'owner@example.com'
 const SCOPES = 'read write admin:read admin:write'
 
-const GRANTED = ADMIN_PERMISSIONS | ADMIN_PERMISSION.manageUsers
-const granted = adminAccountOperations(adminGuarded(readOperation, GRANTED), adminGuarded(writeOperation, GRANTED))
+const WITHOUT = ADMIN_PERMISSIONS & ~ADMIN_PERMISSION.manageUsers
+const withoutUsers = adminAccountOperations(adminGuarded(readOperation, WITHOUT), adminGuarded(writeOperation, WITHOUT))
 
-// The Store with the accounts operations of a role that holds manage_users.
-function grant(store: StoreStub): StoreStub {
+// The Store with the accounts operations of a role that lacks manage_users.
+function revoke(store: StoreStub): StoreStub {
 	const via =
 		(operation: { run: (sql: SqlStorage, input: never) => unknown }) =>
 		(_build: unknown, input: unknown): Promise<unknown> =>
 			runInDurableObject(store, (_instance, state) => operation.run(state.storage.sql, input as never))
 	return storeWith(store, {
-		adminAccounts: via(granted.listAdminAccounts),
-		adminAccount: via(granted.getAdminAccount),
-		actOnAdminAccount: via(granted.actOnAdminAccount),
+		adminAccounts: via(withoutUsers.listAdminAccounts),
+		adminAccount: via(withoutUsers.getAdminAccount),
+		actOnAdminAccount: via(withoutUsers.actOnAdminAccount),
 	})
 }
 
@@ -67,9 +67,9 @@ async function call(h: ApiHarness, path: string, token: string | null, method = 
 }
 
 // The owner (the OAuth admin), alice and bob (local, holding admin scopes too), zed (local, suspended); carol and erin
-// on remote.example (erin's deletion has started), dave on other.example. `wrap` grants manage_users unless false.
-async function world(wrap = true) {
-	const h = await community(['owner', 'alice', 'bob'], 'read write', wrap ? { wrapStore: grant } : {})
+// on remote.example (erin's deletion has started), dave on other.example. `granted` false takes manage_users away.
+async function world(granted = true) {
+	const h = await community(['owner', 'alice', 'bob'], 'read write', granted ? {} : { wrapStore: revoke })
 	await setSetting(h.store, 'admin_email', OWNER)
 	const zed = await seedAccount(h.store, { username: 'zed', email: 'zed@example.com', displayName: 'Zed' })
 	await sql(
@@ -171,9 +171,9 @@ describe('admin account routes: who is answered', () => {
 		}
 	})
 
-	it('refuse the admin too while Kopje does not grant manage_users, reading and writing nothing', async () => {
+	it('refuse the admin too without manage_users, reading and writing nothing', async () => {
 		const { h, ids, admin } = await world(false)
-		expect(ADMIN_PERMISSIONS & ADMIN_PERMISSION.manageUsers).toBe(0)
+		expect(ADMIN_PERMISSIONS & ADMIN_PERMISSION.manageUsers).toBe(ADMIN_PERMISSION.manageUsers)
 		for (const route of ROUTES) {
 			expect(await call(h, route.path(ids.alice), admin, route.method)).toMatchObject({
 				status: 403,

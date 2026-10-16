@@ -52,6 +52,8 @@ export type AdminDeps = AccessDeps & {
 	loader: Omit<LoaderDeps, 'userAgent'>
 	// Rings the delivery doorbell after a retry, and after a publication that recorded profile Updates.
 	doorbell: (env: Env) => Promise<void>
+	// Asks for a round of the Store's jobs after an unsuspension, whose Update the moderation jobs stage.
+	jobs: (env: Env) => Promise<unknown>
 	// Re-encoding for the media rebuild.
 	images: (env: Env) => ImageCodec
 }
@@ -78,6 +80,7 @@ const STATUS: Record<string, ContentfulStatusCode> = {
 	'account-not-found': 404,
 	'invalid-email': 400,
 	'email-taken': 409,
+	'not-suspended': 409,
 	'not-bootstrap': 403,
 	'invalid-config': 400,
 	'invalid-op-id': 400,
@@ -152,7 +155,7 @@ function adminAllowed(identity: AccessIdentity, access: AccessSettings): string 
 	return adminRefusal(access, identity)
 }
 
-export function adminRoutes({ build, store, fetch, now, doorbell, loader, images }: AdminDeps) {
+export function adminRoutes({ build, store, fetch, now, doorbell, jobs, loader, images }: AdminDeps) {
 	const admin = new Hono<AdminEnv>()
 	const stub = (c: Context<AdminEnv>): StoreStub => store(c.env)
 
@@ -356,6 +359,20 @@ export function adminRoutes({ build, store, fetch, now, doorbell, loader, images
 			c,
 			await stub(c).setAccountEmail(build(c.env), { authority: c.get('auth'), username, email, now: now() })
 		)
+	})
+
+	// The Access admin's unsuspension of a local account (domain/admin-accounts.ts unsuspendAccount): how a suspended
+	// OAuth admin is recovered. Its Update is staged by the moderation jobs, which it asks for at once.
+	admin.post('/accounts/unsuspend', async (c) => {
+		const { username } = await jsonBody(c)
+		if (typeof username !== 'string' || username === '') {
+			return c.json({ error: 'expected {"username": string}' }, 400)
+		}
+		const result = await stub(c).unsuspendAccount(build(c.env), { authority: c.get('auth'), username, now: now() })
+		if (result.ok) {
+			await jobs(c.env).catch(() => {})
+		}
+		return reply(c, result)
 	})
 
 	// ---- media rebuild (mastodon/media-rebuild.ts): one bounded step under the Store's rebuild lease; the CLI follows

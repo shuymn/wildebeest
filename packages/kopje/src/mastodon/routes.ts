@@ -663,7 +663,7 @@ export const ROUTES: readonly Route[] = [
 		method: 'POST',
 		path: '/api/v1/admin/accounts/:account_id/action',
 		access: { scope: 'admin:write:accounts', optional: true },
-		handler: admin.notAllowed,
+		handler: admin.accountAction,
 	},
 	{
 		method: 'POST',
@@ -699,7 +699,7 @@ export const ROUTES: readonly Route[] = [
 		method: 'POST',
 		path: '/api/v1/admin/accounts/:id/unsuspend',
 		access: { scope: 'admin:write:accounts', optional: true },
-		handler: admin.notAllowed,
+		handler: admin.unsuspendAccount,
 	},
 	{
 		method: 'GET',
