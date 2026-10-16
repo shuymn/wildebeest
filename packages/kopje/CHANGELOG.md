@@ -24,11 +24,34 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   `user:notification` when the account's last pending accepted notification request has had its notifications
   unfiltered, or a dismiss replaces it, as Mastodon's. Where Kopje differs: nothing is sent when the sender's purge
   cancels the job.
-- `public*` and `hashtag*` still answer `{"error":"Unknown stream type","status":400}`.
+- The `public`, `public:local`, `public:remote`, `public:media`, `public:local:media` and `public:remote:media` streams,
+  and `hashtag` and `hashtag:local` (with `tag`), carry `update` and `status.update` (`read` or `read:statuses`) when a
+  public status that is not a boost is posted or edited, as `GET /api/v1/timelines/public` (with `local`, `remote` and
+  `only_media`) or `GET /api/v1/timelines/tag/:tag` (with `local`) would show it at its place, presented as REST
+  presents it to the account, with its matching filters in `filtered`. As Mastodon's: `public*` leaves out replies to
+  others and the hashtag streams keep them; a status whose author the account blocks, mutes or domain-blocks, whose
+  author blocks the account, or that mentions an account the account blocks or mutes, is not sent; a post published
+  more than 6 hours before it arrived is not sent as `update`; and `delete` (the id) is sent for a public status, never
+  a boost, on the streams it would have reached: its local or remote stream, the media streams if it had media, and
+  the hashtag streams of its hashtags (`hashtag:local` for a local status).
+    - The `tag` is echoed as the client sent it (`["hashtag", "#Cats"]`) and matched as Kopje normalizes hashtags, so
+      `#Cats` and `cats` are one subscription. A missing `tag` answers `Missing tag name parameter`; one over 256
+      bytes, as sent or normalized, answers `Invalid parameter` (400).
+    - Where Kopje differs from Mastodon: an account the status's author blocks is sent no `delete` of it; there are no
+      chosen languages or feed access settings to apply, and no silenced accounts.
+    - Every stream Mastodon's streaming server knows is now served. Only other names (Ice Cubes' `local`, for one)
+      answer `{"error":"Unknown stream type","status":400}`; announcements and server-sent events are still not
+      served.
+
+### Fixed
+
+- A streaming turn that resumed a status or notification event part-way (more listeners than one turn's budget) moved
+  the event's position back when it finished, so the next turn sent the rest of the event again, and again; it now
+  goes on to the next event.
 
 ### Instance changes
 
-- Store schema: adds one migration, applied on the first request after the deploy; a rollback to an earlier version
+- Store schema: adds two migrations, applied on the first request after the deploy; a rollback to an earlier version
   needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0032_streaming_lists`: rebuilds the streaming journal (at most a 4,096-id span of rows) to admit conversation
       events, adds a column of the streaming position, lets a list subscription journal statuses and edits (the
@@ -38,6 +61,11 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       sequence. It reads each conversation once, for the index, and the journal's rows; nothing else: on a benchmark
       store of 1,000,000 accounts, 3,000,000 follows and 2,000,000 statuses its upgrade took 2.3 seconds in workerd's
       local Durable Object SQLite.
+    - `0033_streaming_public`: lets a `public*` or hashtag subscription journal public statuses that are not boosts,
+      and their edits (the journal's status triggers recreated), and adds the table of a deleted public status's
+      streaming tombstone (left out of dumps and backups, as the other streaming tables are). It creates a table and
+      triggers and reads no row: on the same benchmark store its upgrade, with the kernel's bookmark and schema
+      verification, took 3.7 seconds in workerd's local Durable Object SQLite.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.10] - 2026-10-16
