@@ -12,6 +12,7 @@ import {
 	getInstanceActorKey,
 	getInstanceDomain,
 	getLocalActor,
+	getFollowerKey,
 	getLocalKey,
 	getNodeInfoUsage,
 	listLocalKeys,
@@ -39,6 +40,7 @@ import * as notifications from './domain/notifications'
 import * as oauth from './domain/oauth'
 import * as polls from './domain/polls'
 import * as push from './domain/push'
+import * as remoteCollections from './domain/remote-collections'
 import { resolveSearch } from './domain/remote-statuses'
 import * as reports from './domain/reports'
 import * as scheduled from './domain/scheduled-statuses'
@@ -418,6 +420,20 @@ export class Store extends DurableObject<Env> {
 		}
 	}
 
+	// Syncs of remote accounts' collections (domain/remote-collections.ts): claimed and applied by the Worker's job
+	// rounds (federation/collections.ts).
+	claimCollectionSync(callerBuild: string, input: OperationInput<typeof remoteCollections.claimCollectionSync>) {
+		return this.#kernel.execute(callerBuild, remoteCollections.claimCollectionSync, input)
+	}
+
+	completeCollectionRead(callerBuild: string, input: OperationInput<typeof remoteCollections.completeCollectionRead>) {
+		return this.#kernel.execute(callerBuild, remoteCollections.completeCollectionRead, input)
+	}
+
+	completePinFetches(callerBuild: string, input: OperationInput<typeof remoteCollections.completePinFetches>) {
+		return this.#kernel.execute(callerBuild, remoteCollections.completePinFetches, input)
+	}
+
 	remoteKey(callerBuild: string, input: OperationInput<typeof inbox.getRemoteKey>) {
 		return this.#kernel.execute(callerBuild, inbox.getRemoteKey, input)
 	}
@@ -459,6 +475,10 @@ export class Store extends DurableObject<Env> {
 
 	localActor(callerBuild: string, input: OperationInput<typeof getLocalActor>) {
 		return this.#kernel.execute(callerBuild, getLocalActor, input)
+	}
+
+	followerKey(callerBuild: string, input: OperationInput<typeof getFollowerKey>) {
+		return this.#kernel.execute(callerBuild, getFollowerKey, input)
 	}
 
 	localKey(callerBuild: string, input: OperationInput<typeof getLocalKey>) {

@@ -1,4 +1,5 @@
 import { type DeliveryDeps, handleDoorbells } from './deliver'
+import { syncCollections } from '../federation/collections'
 import { isDeliverMessage } from '../federation/delivery'
 import { type InboxDeps, type JobsMessage, processInbox, requestInboundJobs, ringDeliveries } from '../federation/inbox'
 import { encodeSpoolRecord, inflate, spoolDigest, type SpoolMessage, spoolMessageOptions } from '../federation/spool'
@@ -114,9 +115,10 @@ export async function handleQueue(batch: MessageBatch, env: Env, queueDeps: Queu
 	}
 }
 
-// A round of the Store's inbound jobs. The jobs and their progress are durable in the Store, so this message is only a
-// nudge: in maintenance it is dropped without a retry (cron resumes the jobs afterwards), and while jobs remain one
-// fresh message asks for the next round.
+// A round of the Store's inbound jobs, then of the syncs of remote accounts' collections (federation/collections.ts).
+// The jobs, the syncs and their progress are durable in the Store, so this message is only a nudge: in maintenance it
+// is dropped without a retry (cron resumes the jobs afterwards), and while jobs or syncs remain one fresh message asks
+// for the next round.
 async function runJobs(message: Message, env: Env, deps: InboxDeps, maintenance: boolean) {
 	if (maintenance) {
 		message.ack()
@@ -129,7 +131,8 @@ async function runJobs(message: Message, env: Env, deps: InboxDeps, maintenance:
 		if (delivers) {
 			await ringDeliveries(env.QUEUE)
 		}
-		if (pending) {
+		const syncing = await syncCollections(env, deps)
+		if (pending || syncing) {
 			await requestInboundJobs(env.QUEUE)
 		}
 		message.ack()
@@ -143,8 +146,8 @@ async function runJobs(message: Message, env: Env, deps: InboxDeps, maintenance:
 	}
 }
 
-// Cron: a round of inbound jobs every run, outside maintenance. This is what makes a purge or Move finish even if
-// every Queue message about it was lost.
+// Cron: a round of inbound jobs and collection syncs every run, outside maintenance. This is what makes a purge or Move
+// finish, and a sync run, even if every Queue message about it was lost.
 export async function runScheduledJobs(env: Env, deps: InboxDeps): Promise<void> {
 	const config = readConfig(env)
 	if (!config.ok || config.config.MAINTENANCE !== 'off') {
@@ -157,7 +160,8 @@ export async function runScheduledJobs(env: Env, deps: InboxDeps): Promise<void>
 		if (delivers) {
 			await ringDeliveries(env.QUEUE)
 		}
-		if (pending) {
+		const syncing = await syncCollections(env, deps)
+		if (pending || syncing) {
 			await requestInboundJobs(env.QUEUE)
 		}
 	} catch (error) {

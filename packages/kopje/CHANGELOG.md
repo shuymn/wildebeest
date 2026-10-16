@@ -8,6 +8,49 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+### Added
+
+- A remote account's pinned posts, featured hashtags and hidden network, learned as Mastodon 4.5 learns them:
+  `GET /api/v1/accounts/:id/statuses?pinned=true` and `GET /api/v1/accounts/:id/featured_tags` now show a remote
+  account's, and its `hide_collections` is shown and hides its followers and following lists as a local account's
+  setting does.
+    - Kopje reads the account's `featured` and `featuredTags` collections, and whether its `followers` or `following`
+      collection hides its items, each time it stores the account's profile, in the background rounds a few minutes
+      apart at most. A pinned post it does not have is fetched, signed by a local follower of the account if it has
+      one. An `Add` or `Remove` of a post or a hashtag to the account's own featured collection (or of a hashtag to its
+      featuredTags collection) changes one pin or featured hashtag at once.
+    - Pins and featured hashtags are shown by the same rules as a local account's: a followers-only pin only to the
+      account's followers, nothing of an account that blocks you. A featured hashtag counts, when it is shown, the
+      account's public and unlisted posts with it among the newest 200 Kopje has of it.
+    - A sync reads the featured collection, the followers and following collections, and the featuredTags collection
+      as three parts, each applied as soon as it is read; a round reads the parts not read yet, so one cut short by the
+      fetch budget is read in the next round. The pinned posts Kopje does not have are fetched in later rounds, as many
+      as each round's fetch budget allows, and one that cannot be fetched is dropped. A collection that cannot be read
+      for now (a timeout, a 5xx) is read again later, at most three times in a row without progress, and leaves what
+      was learned as it was meanwhile; the pending pinned posts are fetched even then. A profile update while a sync
+      runs is read again afterwards, with its own three tries.
+    - Where Kopje differs from Mastodon: an account keeps at most 20 pins and 10 featured hashtags (Mastodon keeps any
+      number for a remote account), from the first 20 items of its featured collection and the first three pages of its
+      featuredTags collection; a collection is read only on the account's own server, and a pin only when it is the
+      account's own post there; a followers or following collection that cannot be read for now hides nothing unless the
+      other one hides its items (Mastodon takes it as hidden); a featured hashtag of a remote account counts its posts
+      among the newest 200 Kopje has of it (Mastodon counts them all and keeps the count); a newly learned pin is
+      ordered as the collection lists it (the first is the newest); and a remote account's featured hashtag links to
+      `/@username@domain/tagged/:tag`, which leads to its profile on its server (Mastodon's link,
+      `/@username/tagged/:tag`, names a local account of the same username).
+
+### Instance changes
+
+- Store schema: adds a migration, applied on the first request after the deploy; a rollback to an earlier version needs
+  the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
+    - `0025_remote_collections`: lets `status_pins` and `featured_tags` hold any account's rows (each table is rebuilt
+      and its rows copied), adds `accounts.hide_collections`, and adds the empty `collection_syncs` and
+      `collection_pins_pending` tables. Only local accounts have pins and featured hashtags until then, at most five and
+      ten each, so its work grows with the local accounts alone (about four rows read per pin or featured hashtag). The
+      new column has no default and no constraint, so the remote accounts and their statuses are neither read nor
+      rewritten.
+- `wrangler.jsonc`: unchanged.
+
 ## [0.1.0-rc.8] - 2026-10-16
 
 An eighth release candidate of the first release, published under the npm dist-tag `next`.

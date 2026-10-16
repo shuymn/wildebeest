@@ -687,7 +687,8 @@ describe('the doorbell', () => {
 		const local = await localStatus(t, { status: 'like me', visibility: 'public' })
 		t.queue.pending.splice(0)
 		expect(await t.post(bob, like(bob, local.uri))).toBe(202)
-		expect(t.queue.pending.map((m) => m.body)).toEqual([{ kind: 'deliver' }])
+		// The doorbell, and a round of jobs for bob's collections (his document was stored now).
+		expect(t.queue.pending.map((m) => m.body)).toEqual([{ kind: 'deliver' }, { kind: 'inbound-jobs' }])
 		const { fetch, sent } = recordingFetch()
 		const deps = inboxDeps(() => t.store)
 		await t.queue.deliver((batch) =>
