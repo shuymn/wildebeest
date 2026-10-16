@@ -2871,7 +2871,13 @@ describe('0025_remote_collections', () => {
 				bob
 			)
 			sql.exec('UPDATE accounts SET hide_collections = 1 WHERE id = ?', bob)
-			expect(() => sql.exec('UPDATE accounts SET hide_collections = 2 WHERE id = ?', bob)).toThrow(/CHECK/)
+			// The column has no constraint, so adding it checked no stored account (SQLite validates existing rows against
+			// a CHECK, NOT NULL or foreign key of an added column).
+			const column = sql
+				.exec<{ sql: string }>("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'accounts'")
+				.one()
+				.sql.match(/hide_collections[^,)]*/)?.[0]
+			expect(column).toBe('hide_collections INTEGER')
 			sql.exec('INSERT INTO collection_syncs (account_id, requested_at) VALUES (?, 1)', bob)
 			expect(() => sql.exec('INSERT INTO status_pins (account_id, status_id) VALUES (?, ?)', id(9), id(21))).toThrow(
 				/FOREIGN KEY/
@@ -2899,8 +2905,8 @@ describe('0025_remote_collections', () => {
 
 	it('reads each pin and featured hashtag a bounded number of times, and nothing remote', async () => {
 		const at = NAMES.indexOf(NAME)
-		// `locals` local accounts with `each` pins and featured hashtags each, and `remotes` remote accounts with ten
-		// statuses each.
+		// `locals` local accounts with `each` pins and featured hashtags each, and `remotes` remote accounts, each with a
+		// stored document of about 2 KB and ten statuses.
 		const measure = async (locals: number, each: number, remotes: number) => {
 			const store = freshStore()
 			return runInDurableObject(store, async (_instance, state) => {
@@ -2918,8 +2924,9 @@ describe('0025_remote_collections', () => {
 				)
 				sql.exec(
 					`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
-					INSERT INTO accounts (id, uri, username, domain)
-					SELECT CAST(300000000000000000 + i AS TEXT), 'https://remote.example/users/r' || i, 'r' || i, 'remote.example'
+					INSERT INTO accounts (id, uri, username, domain, raw)
+					SELECT CAST(300000000000000000 + i AS TEXT), 'https://remote.example/users/r' || i, 'r' || i, 'remote.example',
+						json_object('summary', hex(randomblob(1000)))
 					FROM n`,
 					remotes
 				)
@@ -2955,7 +2962,7 @@ describe('0025_remote_collections', () => {
 			})
 		}
 		const few = await measure(100, 5, 0)
-		const remote = await measure(100, 5, 2000)
+		const remote = await measure(100, 5, 5000)
 		const locals = await measure(1000, 5, 0)
 		const each = await measure(100, 50, 0)
 		// The remote accounts and their statuses are not read; each pin and featured hashtag a few times.

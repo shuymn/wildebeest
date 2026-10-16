@@ -13,7 +13,9 @@
 --   foreign key, trigger or view names either table, so nothing else changes. A remote account's rows go in its purge,
 --   in batches (purgeRelationships in src/domain/inbox.ts); the cascade from accounts is only a backstop.
 -- - accounts.hide_collections is a remote account's hide_collections as Kopje last learned it (1 or 0), NULL until it
---   has learned it and for every local account, whose setting stays in local_accounts.hide_collections.
+--   has learned it and for every local account, whose setting stays in local_accounts.hide_collections. It has no CHECK:
+--   adding a column with one makes SQLite check every stored account against it, a scan of all remote accounts; its
+--   only writer (applyCollectionSync) writes 0 or 1.
 -- - collection_syncs holds the remote accounts whose collections are to be read again (Mastodon's
 --   SynchronizeFeaturedCollectionWorker and SynchronizeFeaturedTagsCollectionWorker), one row each, written when the
 --   account's document is stored and deleted once the Worker has read them (or after MAX_SYNC_ATTEMPTS claims that
@@ -22,8 +24,8 @@
 --
 -- Cost: the copies read and write each pin and featured hashtag once. Until now only local accounts have them, at
 -- most five pins (StatusPinValidator) and ten featured hashtags (FeaturedTag::LIMIT) each, so the work grows with the
--- number of local accounts and with nothing remote. The new column has no default and rewrites no row; the new table
--- is created empty.
+-- number of local accounts and with nothing remote. The new column has no default and no CHECK, so SQLite neither
+-- rewrites nor reads the accounts; the new table is created empty.
 
 CREATE TABLE status_pins_0025 (
   account_id TEXT NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,
@@ -58,7 +60,7 @@ DROP TABLE featured_tags;
 
 ALTER TABLE featured_tags_0025 RENAME TO featured_tags;
 
-ALTER TABLE accounts ADD COLUMN hide_collections INTEGER CHECK (hide_collections IN (0, 1));
+ALTER TABLE accounts ADD COLUMN hide_collections INTEGER;
 
 CREATE TABLE collection_syncs (
   account_id TEXT NOT NULL PRIMARY KEY REFERENCES accounts (id) ON DELETE CASCADE,
