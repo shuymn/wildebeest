@@ -44,7 +44,8 @@ export const MAX_LINKED_QUOTES = 100
 export type QuoteState = 'pending' | 'accepted' | 'rejected' | 'revoked' | 'deleted'
 
 // Whether a round holds a quote's work: its claim's lease, which lasts only while verify_after still equals it.
-const LEASED = '(lease_until IS NOT NULL AND verify_after = lease_until AND lease_until > ?3)'
+// Null-safe (IS), so NOT of it holds for work with no due time.
+const LEASED = '(lease_until IS NOT NULL AND verify_after IS lease_until AND lease_until > ?3)'
 
 // A new generation of a quote's work: drawn by every write the rule at the column names (migration 0030_quotes).
 export const NEW_GENERATION = '(abs(random()) % 9007199254740991)'
@@ -227,16 +228,16 @@ export function promoteQuote(db: Db, statusId: string, arrival: QuoteArrival, no
 }
 
 // A newly stored status is the target of the unresolved quotes that name its uri: at most MAX_LINKED_QUOTES are linked,
-// and those with a work budget left are due again, except one a round holds (the quote whose verification stored the
-// status, say): its lease stays, and the round goes on with the next stage's fresh read.
+// and those with a work budget left are due again. One a round holds is left alone: its round links it in its own stage
+// (completeQuote finds the target by its uri), and if the round dies, the next claim after the lease does.
 export function linkQuotes(db: Db, status: { id: string; uri: string }, now: number): void {
 	db.run(
 		`UPDATE quotes SET quoted_status_id = ?1, quoted_account_id = (SELECT account_id FROM statuses WHERE id = ?1),
-			need_author = NULL, generation = ${NEW_GENERATION},
-			verify_after = CASE WHEN ${LEASED} THEN verify_after WHEN hops > 0 THEN ?3 ELSE verify_after END,
-			attempts = CASE WHEN ${LEASED} OR hops <= 0 THEN attempts ELSE 0 END, updated_at = ?4
+			need_author = NULL, generation = ${NEW_GENERATION}, verify_after = CASE WHEN hops > 0 THEN ?3 ELSE verify_after END,
+			attempts = CASE WHEN hops > 0 THEN 0 ELSE attempts END, updated_at = ?4
 		WHERE status_id IN (SELECT status_id FROM quotes
-			WHERE quoted_uri = ?2 AND quoted_status_id IS NULL AND state = 'pending' AND status_id <> ?1 LIMIT ?5)`,
+			WHERE quoted_uri = ?2 AND quoted_status_id IS NULL AND state = 'pending' AND status_id <> ?1 AND NOT ${LEASED}
+			LIMIT ?5)`,
 		status.id,
 		status.uri,
 		now,
@@ -761,46 +762,50 @@ export function continueRevocations(db: Db, left: () => number, now: number): bo
 	return false
 }
 
-// The quotes of an author's statuses naming a stamp that one relayed Delete looks at, accepted ones first (the index's
-// order), so its cost does not grow with the quotes others name the stamp in.
-export const RECHECK_WINDOW = 100
+// Leased pending quotes one relayed Delete marks at most: a bound on its writes, as only quotes whose fetch is in flight
+// match (at most a round's claim each).
+export const MAX_RECHECKED = 100
 
 // A Delete of a stamp relayed by another server without the author's proof (federation/inbound.ts): nothing is revoked
 // on its word, but the quotes of the actor's statuses that name the stamp and could still be accepted by it are checked
-// again, their state unchanged until then, so a stamp that is gone revokes or rejects them. Replays coalesce: an idle
-// accepted quote is renewed (due now, attempts reset, a new generation); work already due or backing off, accepted or
-// pending, is left as it is (its next fetch is fresh anyway); work a round has leased, accepted or pending (its first
-// verification), keeps its generation, so the fetch in flight still applies, and is marked to be checked once more if
-// that fetch finds the stamp valid. A round's 404 thus always applies, and a Delete that races a fetch is never lost.
-// Returns whether such a quote exists.
+// again, their state unchanged until then, so a stamp that is gone revokes or rejects them. Replays coalesce:
+//   - the accepted quote (one at most: a valid stamp names exactly one quoting status) is renewed when idle (due now,
+//     attempts reset, a new generation), left as it is when due or backing off (its next fetch is fresh anyway), and
+//     marked when a round has leased it;
+//   - a pending quote is marked only when a round has leased it (its first stamp fetch is in flight); otherwise its next
+//     fetch is fresh anyway.
+// A marked quote keeps its generation, so the fetch in flight still applies, and is checked once more if that fetch
+// finds the stamp valid. A round's 404 thus always applies, and a Delete that races a fetch is never lost. Returns
+// whether such a quote exists.
 export function recheckStamp(db: Db, actor: { id: string }, approvalUri: string, now: number): boolean {
-	const rows = db.all<{
-		status_id: string
-		state: QuoteState
-		verify_after: number | null
-		lease_until: number | null
-	}>(
-		`SELECT status_id, state, verify_after, lease_until FROM quotes
-		WHERE approval_uri = ?1 AND quoted_account_id = ?2 AND state IN ('accepted', 'pending') LIMIT ?3`,
+	const accepted = db.first<{ status_id: string; verify_after: number | null; leased: number }>(
+		`SELECT status_id, verify_after, ${LEASED} AS leased FROM quotes
+		WHERE approval_uri = ?1 AND quoted_account_id = ?2 AND state = 'accepted' LIMIT 1`,
 		approvalUri,
 		actor.id,
-		RECHECK_WINDOW
+		now
 	)
-	for (const row of rows) {
-		if (row.lease_until !== null && row.verify_after === row.lease_until && row.lease_until > now) {
-			db.run('UPDATE quotes SET recheck = 1 WHERE status_id = ?', row.status_id)
-		} else if (row.state === 'accepted' && row.verify_after === null) {
-			db.run(
-				`UPDATE quotes SET verify_after = ?2, attempts = 0, hops = max(hops, 1), updated_at = ?3,
-					generation = ${NEW_GENERATION}
-				WHERE status_id = ?1`,
-				row.status_id,
-				now,
-				iso(now)
-			)
-		}
+	if (accepted?.leased === 1) {
+		db.run('UPDATE quotes SET recheck = 1 WHERE status_id = ?', accepted.status_id)
+	} else if (accepted !== undefined && accepted.verify_after === null) {
+		db.run(
+			`UPDATE quotes SET verify_after = ?2, attempts = 0, hops = max(hops, 1), updated_at = ?3,
+				generation = ${NEW_GENERATION}
+			WHERE status_id = ?1`,
+			accepted.status_id,
+			now,
+			iso(now)
+		)
 	}
-	return rows.length > 0
+	const marked = db.run(
+		`UPDATE quotes SET recheck = 1 WHERE status_id IN (SELECT status_id FROM quotes
+			WHERE approval_uri = ?1 AND quoted_account_id = ?2 AND state = 'pending' AND ${LEASED} LIMIT ?4)`,
+		approvalUri,
+		actor.id,
+		now,
+		MAX_RECHECKED
+	)
+	return accepted !== undefined || marked > 0
 }
 
 // ---------------------------------------------------------------------------------------------------------------

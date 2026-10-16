@@ -1612,4 +1612,81 @@ describe('review round 1 regressions', () => {
 		await round()
 		expect(await quoteOf(t, quote.id)).toMatchObject({ state: 'revoked', verify_after: null })
 	})
+
+	it('concludes two quotes of one claimed batch that name the same target, which the first one stores', async () => {
+		const { t, bob, carol } = await world()
+		await followed(t, carol)
+		const target = mastodonNote(carol)
+		t.web.serve(target.id, { '@context': AS, ...target })
+		const quotes = [0, 1].map(() => {
+			const stamp = stampUri(carol)
+			const quote = quoting(bob, target.id, stamp)
+			serveStamp(t.web, stamp, carol, quote.id, target.id)
+			return quote
+		})
+		for (const quote of quotes) {
+			expect(await t.postOnly(bob, create(bob, quote))).toBe(202)
+		}
+		// One round claims both; the first stores the target, and the second, held by the same round, is not stranded.
+		await verifyQuotes(t.env, { ...inboxDeps(() => t.store, t.web.loader), now: () => NOW })
+		for (const quote of quotes) {
+			expect(await quoteOf(t, quote.id)).toMatchObject({ state: 'accepted', verify_after: null })
+		}
+		expect(await quotesCount(t, target.id)).toBe(2)
+	})
+
+	it('marks a leased pending quote for a recheck however many idle pending quotes name the stamp', async () => {
+		const { t, bob, carol } = await world()
+		await followed(t, carol)
+		const carolId = (await sql<{ id: string }>(t.store, 'SELECT id FROM accounts WHERE uri = ?', carol.uri))[0]!.id
+		const bobId = (await sql<{ id: string }>(t.store, 'SELECT id FROM accounts WHERE uri = ?', bob.uri))[0]!.id
+		const pair = quotedPair(t, bob, carol)
+		// Before the quote arrives, 150 idle pending quotes of another of carol's statuses name the same stamp.
+		await sql(
+			t.store,
+			`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+			VALUES ('978000000000000000', ?, ?, 'public', '', '2026-10-11T12:00:00.000Z')`,
+			`${carol.uri}/statuses/other`,
+			carolId
+		)
+		await sql(
+			t.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 150)
+			INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+			SELECT printf('979%015d', i), ?1 || '/idle' || i, ?2, 'public', '', '2026-10-11T12:00:00.000Z' FROM n`,
+			`${bob.uri}/statuses`,
+			bobId
+		)
+		await sql(
+			t.store,
+			`INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, quoted_account_id, state, approval_uri, updated_at)
+			SELECT id, ?1, '978000000000000000', ?2, 'pending', ?3, '2026-10-11T12:00:00.000Z' FROM statuses WHERE id GLOB '979*'`,
+			`${carol.uri}/statuses/other`,
+			carolId,
+			pair.stamp
+		)
+		expect(await t.postOnly(bob, create(bob, pair.quote))).toBe(202)
+		const dan = await mastodonActor(t.web, 'dan', { origin: RELAY, key: 6 })
+		let marked = false
+		await roundWith(t, pair.stamp, async () => {
+			const relay = {
+				'@context': AS,
+				id: `${carol.uri}#delete-${nextId()}`,
+				type: 'Delete',
+				actor: carol.uri,
+				object: pair.stamp,
+			}
+			expect(await t.postOnly(dan, relay)).toBe(202)
+			marked = (await workOf(t, pair.quote.id)).recheck === 1
+		})()
+		expect(marked).toBe(true)
+		expect(await quoteOf(t, pair.quote.id)).toMatchObject({ state: 'accepted', verify_after: NOW })
+		// The idle ones are left as they were.
+		expect(
+			await sql(
+				t.store,
+				"SELECT count(*) AS n FROM quotes WHERE status_id GLOB '979*' AND recheck = 0 AND verify_after IS NULL"
+			)
+		).toEqual([{ n: 150 }])
+	})
 })

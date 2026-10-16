@@ -27,9 +27,9 @@
 --   discarded; and every outcome applied, a revocation's included). Kept: a relayed Delete's check that finds the work
 --   (accepted or pending) already due or backing off (its next fetch is fresh anyway) or leased (the fetch in flight
 --   completes and only sets recheck: an outcome that finds the stamp valid then makes the work due once more, attempts
---   kept). A write that links the quote to its target while a round leases it (the round's own stage stored the target)
---   draws a generation but keeps the lease; the round goes on with the next stage's fresh read. Every outcome carries the generation and the stage and fetch address it
---   was computed for, and applies only while all three still hold (src/domain/quotes.ts); anything else is discarded.
+--   kept). Linking a newly stored target to the quotes naming it leaves a leased one alone: its round links it in its
+--   own stage. Every outcome carries the generation and the stage and fetch address it was computed for, and applies
+--   only while all three still hold (src/domain/quotes.ts); anything else is discarded.
 -- - quote_revocations records, for good, every stamp whose Delete by an author revoked a stored quote of that author's
 --   status: the stamp never verifies a quote of that author's statuses again, whatever later happens to the quote row.
 --   It is keyed by the stamp and the author, so nobody else's Delete of the same URI revokes anything of the author's.
