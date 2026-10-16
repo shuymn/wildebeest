@@ -234,9 +234,16 @@ export async function syncCollections(env: Env, deps: InboxDeps): Promise<boolea
 	const config = readConfig(env)
 	let pending = false
 	for (let round = 0; round < COLLECTION_SYNCS_PER_ROUND; round++) {
-		const sync = await callStore(() => store().claimCollectionSync(build, { now: deps.now() }))
+		const sync = await callStore<CollectionSync | 'more' | null>(() =>
+			store().claimCollectionSync(build, { now: deps.now() })
+		)
 		if (sync === null) {
 			return false
+		}
+		if (sync === 'more') {
+			// The claim spent its allowance dropping syncs; more are due.
+			pending = true
+			continue
 		}
 		pending = sync.pending
 		const state: FederationState = { resolvedUsername: null, source: null, storeError: null }

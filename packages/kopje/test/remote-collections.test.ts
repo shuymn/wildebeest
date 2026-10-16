@@ -590,8 +590,10 @@ describe('a round’s claim of a sync', () => {
 	const read = (tags: string[]) => ({ pins: null, tags, hideCollections: null, unfinished: false })
 	const claim = async (t: Setup, now: number) => {
 		const sync = await t.store.claimCollectionSync(BUILD, { now })
-		expect(sync).not.toBeNull()
-		return sync!
+		if (sync === null || sync === 'more') {
+			throw new Error('no sync claimed')
+		}
+		return sync
 	}
 	const complete = (t: Setup, sync: Awaited<ReturnType<typeof claim>>, now: number, tags: string[]) =>
 		t.store.completeCollectionRead(BUILD, {
@@ -602,6 +604,31 @@ describe('a round’s claim of a sync', () => {
 			token: sync.token,
 			...read(tags),
 		})
+
+	it('goes on past syncs it drops, so one round still reaches a due sync behind them', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const tags = `${bob.uri}/collections/tags`
+		t.web.serve(tags, { '@context': AS, id: tags, type: 'Collection', items: [hashtag('Cats')] })
+		const bobId = await followed(t, bob)
+		// MAX_SYNC_ATTEMPTS + 1 syncs out of attempts, due before bob's.
+		await sql(
+			t.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO accounts (id, uri, username, domain)
+			SELECT CAST(980000000000000000 + i AS TEXT), 'https://far.example/users/x' || i, 'x' || i, 'far.example' FROM n`,
+			MAX_SYNC_ATTEMPTS + 1
+		)
+		await sql(
+			t.store,
+			`INSERT INTO collection_syncs (account_id, due_at, attempts)
+			SELECT id, 0, ? FROM accounts WHERE username GLOB 'x*'`,
+			MAX_SYNC_ATTEMPTS
+		)
+		await syncCollections(t.env, deps(t))
+		expect((await featuredTags(t, bobId)).map((tag) => tag.name)).toEqual(['Cats'])
+		expect(await rows(t, 'collection_syncs')).toEqual([{ n: 0 }])
+	})
 
 	it('gives a new request its own attempts, so rounds that failed for the older one do not drop it', async () => {
 		const t = await setup()

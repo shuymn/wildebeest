@@ -280,8 +280,9 @@ function dropSync(db: Db, accountId: string): void {
 // been read through, else phase pins while statuses are pending. One claimed MAX_SYNC_ATTEMPTS times without progress,
 // of an account that is no longer an available remote account (ProcessAccountService schedules none for a suspended
 // account, and the services return for one), or with nothing left to do, is dropped instead, and the next is taken;
-// at most MAX_SYNC_ATTEMPTS + 1 rows are read.
-export const claimCollectionSync = writeOperation<{ now: number }, CollectionSync | null>((db, { now }) => {
+// at most MAX_SYNC_ATTEMPTS + 1 rows are read. 'more': that many were dropped and another is due, for the next claim;
+// null: none is due.
+export const claimCollectionSync = writeOperation<{ now: number }, CollectionSync | 'more' | null>((db, { now }) => {
 	for (let round = 0; round <= MAX_SYNC_ATTEMPTS; round++) {
 		const row = claimable(db, now)
 		if (row === undefined) {
@@ -315,7 +316,7 @@ export const claimCollectionSync = writeOperation<{ now: number }, CollectionSyn
 			pending: claimable(db, now) !== undefined,
 		}
 	}
-	return null
+	return claimable(db, now) === undefined ? null : 'more'
 })
 
 // The end of a round of the account's sync: kept while a request is not read through or statuses are pending, due at
