@@ -1421,6 +1421,18 @@ export const STATUS_CHILDREN: readonly { table: string; column: string; remove: 
 			AND inbox_url IN (SELECT inbox_url FROM outbound_receipts WHERE status_id = ?1 LIMIT ?2)`,
 		],
 	},
+	// The conversations holding the status (migration 0009_conversations): one row per conversation, which a status
+	// can join again under other participants after an Update, so any number. Each delete fires the trigger
+	// conversation_statuses_removed, which writes that conversation once (AccountConversation.remove_status), so a
+	// batch takes half the rows left.
+	{
+		table: 'conversation_statuses',
+		column: 'status_id',
+		remove: [
+			`DELETE FROM conversation_statuses WHERE status_id = ?1
+			AND conversation_id IN (SELECT conversation_id FROM conversation_statuses WHERE status_id = ?1 LIMIT CAST(?2 / 2 AS INTEGER))`,
+		],
+	},
 ]
 
 const STATUS_CHILDREN_EXIST = STATUS_CHILDREN.map(
