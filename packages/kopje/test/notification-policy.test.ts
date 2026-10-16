@@ -785,6 +785,84 @@ describe('notification requests', () => {
 	}, 60_000)
 })
 
+describe('answering a pair again while its job is pending', () => {
+	const COUNT = REQUEST_JOB_WINDOW * REQUEST_JOB_BATCHES * 3
+	const rounds = async (h: ApiHarness) => {
+		while ((await h.store.runInboundJobs(BUILD, { now: NOW })).pending) {
+			// Each round is bounded; the loop runs them all.
+		}
+	}
+	// Bob's rows to alice as [filtered, how many].
+	const rows = async (h: ApiHarness, alice: User, bob: string) =>
+		(
+			await sql<{ filtered: number; n: number }>(
+				h.store,
+				'SELECT filtered, count(*) AS n FROM notifications WHERE account_id = ? AND from_account_id = ? GROUP BY filtered',
+				alice.id,
+				bob
+			)
+		).map((row) => [row.filtered, row.n])
+	const answer = async (h: ApiHarness, alice: User, how: 'accept' | 'dismiss') => {
+		const [request] = await requests(h, alice)
+		await h.request(`/api/v1/notifications/requests/${request!.id}/${how}`, bearer(alice.token, form({})))
+	}
+	// A new filtered mention from bob, opening a new request.
+	const mentionAgain = async (h: ApiHarness, alice: User, bob: string) => {
+		await sql(
+			h.store,
+			`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+			VALUES ('899999999999999999', 'https://remote.example/o/again', ?, 'direct', '', '2026-10-01T00:00:00.000Z')`,
+			bob
+		)
+		await sql(h.store, "INSERT INTO status_mentions (status_id, account_id) VALUES ('899999999999999999', ?)", alice.id)
+		await runInDurableObject(h.store, (_instance, state) =>
+			notifyOp.run(state.storage.sql, {
+				recipientId: alice.id,
+				type: 'mention',
+				fromId: bob,
+				statusId: '899999999999999999',
+			})
+		)
+		expect(await requests(h, alice)).toHaveLength(1)
+	}
+
+	it('accepts every remaining notification when an accept follows a dismiss', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const bob = await remoteAccount(h.store, 'bob')
+		await seedFilteredMentions(h, alice, bob, COUNT)
+		await answer(h, alice, 'dismiss')
+		const left = COUNT - REQUEST_JOB_WINDOW * REQUEST_JOB_BATCHES
+		expect(await rows(h, alice, bob)).toEqual([[1, left]])
+		await mentionAgain(h, alice, bob)
+		await answer(h, alice, 'accept')
+		await rounds(h)
+		expect(await rows(h, alice, bob)).toEqual([[0, left + 1]])
+		expect((await getJson(h, '/api/v1/notifications/requests/merged', alice.token)).body).toEqual({ merged: true })
+	}, 120_000)
+
+	it('dismisses every remaining notification when a dismiss follows an accept', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const bob = await remoteAccount(h.store, 'bob')
+		await seedFilteredMentions(h, alice, bob, COUNT)
+		await answer(h, alice, 'accept')
+		const done = REQUEST_JOB_WINDOW * REQUEST_JOB_BATCHES
+		expect(await rows(h, alice, bob)).toEqual([
+			[0, done],
+			[1, COUNT - done],
+		])
+		// The permission goes with a block, so bob's next mention is filtered again.
+		await act(h, alice, `/api/v1/accounts/${bob}/block`)
+		await act(h, alice, `/api/v1/accounts/${bob}/unblock`)
+		await mentionAgain(h, alice, bob)
+		await answer(h, alice, 'dismiss')
+		await rounds(h)
+		expect(await rows(h, alice, bob)).toEqual([[0, done]])
+		expect((await getJson(h, '/api/v1/notifications/requests/merged', alice.token)).body).toEqual({ merged: true })
+	}, 120_000)
+})
+
 describe('a remote sender’s purge and a status’s removal', () => {
 	it('deletes the sender’s requests, permissions and jobs in its batches, and clears a removed last status', async () => {
 		const h = await community(['alice', 'carol'])

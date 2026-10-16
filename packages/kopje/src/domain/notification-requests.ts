@@ -295,8 +295,11 @@ function runJobs(db: Db, ids: readonly number[] | null, batches: number, now: st
 }
 
 // Records the job of an answered request, from the newest notification stored on down (read by the primary key, one
-// row). Returns its id, or null when no notification is stored at all.
+// row). Returns its id, or null when no notification is stored at all. A recipient and sender have one job at most:
+// the latest answer replaces a job an earlier one left, and applies to all of the pair's filtered notifications that
+// remain, so the outcome does not depend on the order the rounds would run two jobs in.
 function startJob(db: Db, kind: Job['kind'], accountId: string, fromId: string, now: string): number | null {
+	db.run('DELETE FROM notification_request_jobs WHERE account_id = ? AND from_account_id = ?', accountId, fromId)
 	return (
 		db.first<{ id: number }>(
 			`INSERT INTO notification_request_jobs (account_id, from_account_id, kind, cursor, created_at)

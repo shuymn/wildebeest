@@ -25,8 +25,8 @@
 -- notification_request_jobs holds the work an accepted or dismissed request leaves for later batches: unfiltering
 -- the sender's filtered notifications (UnfilterNotificationsWorker) or deleting them
 -- (FilteredNotificationCleanupWorker), walking the sender's notifications by id, newest first, from the newest one
--- when the request was answered: `cursor` is the id below which the walk goes on. The first batches run in the
--- request; runNotificationRequestJobs runs the rest with the inbound jobs.
+-- when the request was answered: `cursor` is the id below which the walk goes on. A recipient and sender have one job
+-- at most. The first batches run in the request; runNotificationRequestJobs runs the rest with the inbound jobs.
 --
 -- The new column has a constant default, so adding it reads no row. The partial index is built in one pass over the
 -- notifications stored, every one of them unfiltered: its work grows linearly with the notifications stored, as
@@ -81,6 +81,8 @@ CREATE TABLE notification_request_jobs (
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
--- A recipient's pending unfiltering (`merged`); a sender's jobs, for its purge.
+-- One job per recipient and sender (the latest answer replaces an earlier one's); a recipient's pending unfiltering
+-- (`merged`); a sender's jobs, for its purge.
+CREATE UNIQUE INDEX notification_request_jobs_pair ON notification_request_jobs (account_id, from_account_id);
 CREATE INDEX notification_request_jobs_account ON notification_request_jobs (account_id, kind);
 CREATE INDEX notification_request_jobs_from ON notification_request_jobs (from_account_id);
