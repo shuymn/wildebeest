@@ -108,9 +108,9 @@ async function hidesCollections(sync: CollectionSync, origin: string | null, loa
 	return following === undefined || followers === undefined ? null : !followers
 }
 
-// FetchFeaturedCollectionService: the first page's items, or null when it cannot be read. Notes (or ids) of the
-// actor's origin are its pins, up to MAX_REMOTE_PINS; Hashtags are its featured hashtags when it has no featuredTags
-// collection.
+// FetchFeaturedCollectionService: the first MAX_REMOTE_PINS items of the first page, or null when it cannot be read.
+// Among them, Notes (or ids) of the actor's origin are its pins, and Hashtags its featured hashtags when it has no
+// featuredTags collection. The items past them are never looked at, whatever they are.
 async function readFeatured(
 	sync: CollectionSync,
 	origin: string | null,
@@ -121,7 +121,7 @@ async function readFeatured(
 		return null
 	}
 	const page = collection.first === undefined ? collection : await documentOn(collection.first, origin, loader)
-	const items = page === null || page === 'transient' ? null : itemsOf(page)
+	const items = page === null || page === 'transient' ? null : (itemsOf(page)?.slice(0, MAX_REMOTE_PINS) ?? null)
 	if (items === null) {
 		return null
 	}
@@ -132,7 +132,7 @@ async function readFeatured(
 				return uri !== null && originOf(uri) === origin ? [uri] : []
 			})
 		),
-	].slice(0, MAX_REMOTE_PINS)
+	]
 	return { uris, hashtags: hashtagNames(items).slice(0, MAX_FEATURED_TAGS) }
 }
 

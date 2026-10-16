@@ -300,6 +300,24 @@ describe('reading a remote account’s collections', () => {
 		)
 	})
 
+	it('looks at the first MAX_REMOTE_PINS items of the featured collection only, whatever they are', async () => {
+		const t = await setup()
+		// No featuredTags collection: the featured collection's Hashtags are its featured hashtags.
+		const bob = await mastodonActor(t.web, 'bob', { extra: { featuredTags: null } })
+		const own = mastodonNote(bob)
+		const late = mastodonNote(bob)
+		t.web.serve(late.id, { '@context': AS, ...late })
+		const foreign = Array.from({ length: MAX_REMOTE_PINS - 2 }, (_, i) => `${OTHER}/users/bob/statuses/${i}`)
+		await servedCollections(t, bob, [hashtag('Early'), ...foreign, own.id, late.id, hashtag('Late')], [])
+		const bobId = await followed(t, bob)
+		expect(await t.post(bob, create(bob, own))).toBe(202)
+		await sync(t)
+		// The 20th item is pinned; the 21st is not, nor fetched, and the hashtag after it is not featured.
+		expect(await pinned(t, bobId, null)).toEqual([own.id])
+		expect(t.web.fetched).not.toContain(late.id)
+		expect((await featuredTags(t, bobId)).map((tag) => tag.name)).toEqual(['Early'])
+	})
+
 	it('leaves what it learned as it was when a collection cannot be read for now', async () => {
 		const t = await setup()
 		const bob = await mastodonActor(t.web, 'bob')
