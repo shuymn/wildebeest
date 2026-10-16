@@ -1,6 +1,7 @@
 import { type Account, edgeRangeSql, type Page, type PageQuery, type Present, presentAccountsById } from './accounts'
 import {
 	availableSql,
+	keptSql,
 	notifiedSql,
 	POLICY_DEFAULTS,
 	type PolicyChoice,
@@ -10,7 +11,7 @@ import {
 } from './audience'
 import { userReadOperation, userWriteOperation } from './auth'
 import { addToConversation } from './conversations'
-import { MAX_MEANINGFUL_COUNT } from './notifications'
+import { MAX_MEANINGFUL_COUNT, REMOVAL_BATCHES, runRemovals } from './notifications'
 import { writeOperation } from './operation'
 import { presentStatuses, type Status } from './status-presenter'
 import type { Db } from '../db/sql'
@@ -231,9 +232,10 @@ type Job = { id: number; account_id: string; from_account_id: string; kind: 'acc
 // notify, so the rows read are bounded however few are the recipient's), of which the recipient's filtered ones are
 // unfiltered (accept: the direct mentions among them join the recipient's conversations first, as
 // UnfilterNotificationsWorker#push_to_conversations! adds them) or deleted (dismiss). An accept unfilters only what
-// the notification rule would let notify write now (notifiedSql, R15 at `now`): a batch that runs after the recipient
-// blocked or muted the sender, or muted a conversation, leaves those notifications filtered and adds none of them to a
-// conversation, so a later batch never brings back what a block cleared. The job is done when the walk reaches the
+// the notification rule would let notify write now (notifiedSql, R15 at `now`) and the recipient has not cleared
+// (keptSql): a batch that runs after the recipient blocked or muted the sender, or muted a conversation, leaves those
+// notifications filtered and adds none of them to a conversation, so a later batch never brings back what a block
+// cleared, and a mention the recipient cleared joins no conversation. The job is done when the walk reaches the
 // sender's first notification.
 function jobBatch(db: Db, job: Job, now: string): void {
 	const window = db.first<{ low: number | null; walked: number }>(
@@ -251,7 +253,7 @@ function jobBatch(db: Db, job: Job, now: string): void {
 			const shown = db.all<{ id: number; type: string; status_id: string | null }>(
 				`SELECT n.id, n.type, n.status_id FROM notifications n
 				WHERE n.from_account_id = ?1 AND n.id >= ?2 AND n.id < ?3 AND n.account_id = ?4 AND n.filtered = 1
-					AND ${notifiedSql('?4', 'n.type', 'n.from_account_id', 'n.status_id', '?5')}
+					AND ${keptSql('n')} AND ${notifiedSql('?4', 'n.type', 'n.from_account_id', 'n.status_id', '?5')}
 				ORDER BY n.id DESC`,
 				...params,
 				now
@@ -399,13 +401,15 @@ export const notificationRequestsMerged = userReadOperation<object, { merged: bo
 	})
 )
 
-// A round of the jobs, oldest first, at most REQUEST_JOB_BATCHES batches (the Queue and the cron run it with the
-// inbound jobs, store.ts). pending: a job has batches left.
+// A round of the jobs, oldest first, at most REQUEST_JOB_BATCHES batches, and of the removals cleared notifications
+// and dismissed groups leave (notifications.ts), at most REMOVAL_BATCHES (the Queue and the cron run it with the
+// inbound jobs, store.ts). pending: a job or a removal has batches left.
 export const runNotificationRequestJobs = writeOperation<{ now: number }, { pending: boolean; delivers: boolean }>(
 	(db, { now }) => {
 		runJobs(db, null, REQUEST_JOB_BATCHES, new Date(now).toISOString())
+		const removals = runRemovals(db, REMOVAL_BATCHES)
 		return {
-			pending: db.first('SELECT 1 AS x FROM notification_request_jobs LIMIT 1') !== undefined,
+			pending: removals || db.first('SELECT 1 AS x FROM notification_request_jobs LIMIT 1') !== undefined,
 			delivers: false,
 		}
 	}

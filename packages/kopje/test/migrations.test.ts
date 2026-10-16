@@ -42,6 +42,8 @@ const SCHEMA_TABLES = [
 	'markers',
 	'media_attachments',
 	'mutes',
+	'notification_clears',
+	'notification_dismissals',
 	'notification_permissions',
 	'notification_policies',
 	'notification_request_jobs',
@@ -2716,4 +2718,60 @@ describe('0021_directory', () => {
 		expect(long).toBeLessThanOrEqual(few + 10)
 		expect(many - few).toBeLessThanOrEqual(10 * (10_000 - 1000))
 	}, 120_000)
+})
+
+describe('0023_notification_clears', () => {
+	it('adds empty tables of clears and dismissals that go with their local account, and leaves stored notifications shown', async () => {
+		const at = NAMES.indexOf('0023_notification_clears')
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, MIGRATIONS.slice(0, at)).upgrade()).toMatchObject({ ok: true })
+			const alice = '100000000000000001'
+			const bob = '100000000000000002'
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username) VALUES (?, 'https://kopje.test/ap/users/alice', 'alice')",
+				alice
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'a@example.com', X'00', X'00', 'k')",
+				alice
+			)
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username, domain) VALUES (?, 'https://remote.example/users/bob', 'bob', 'remote.example')",
+				bob
+			)
+			sql.exec(
+				"INSERT INTO notifications (account_id, type, from_account_id, group_key) VALUES (?, 'follow', ?, 'follow-1')",
+				alice,
+				bob
+			)
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({
+				ok: true,
+				applied: ['0023_notification_clears'],
+			})
+			for (const table of ['notification_clears', 'notification_dismissals']) {
+				expect([table, sql.exec(`SELECT count(*) AS n FROM ${table}`).one()]).toEqual([table, { n: 0 }])
+			}
+			expect(sql.exec('SELECT type FROM notifications').toArray()).toEqual([{ type: 'follow' }])
+			// Only a local account clears or dismisses, one clear each and one dismissal per group.
+			expect(() => sql.exec('INSERT INTO notification_clears (account_id, max_id) VALUES (?, 1)', bob)).toThrow(
+				/FOREIGN KEY/
+			)
+			sql.exec('INSERT INTO notification_clears (account_id, max_id) VALUES (?, 1)', alice)
+			expect(() => sql.exec('INSERT INTO notification_clears (account_id, max_id) VALUES (?, 2)', alice)).toThrow(
+				/UNIQUE|PRIMARY KEY/
+			)
+			sql.exec("INSERT INTO notification_dismissals (account_id, group_key, max_id) VALUES (?, 'follow-1', 1)", alice)
+			expect(() =>
+				sql.exec("INSERT INTO notification_dismissals (account_id, group_key, max_id) VALUES (?, 'follow-1', 2)", alice)
+			).toThrow(/UNIQUE|PRIMARY KEY/)
+			sql.exec('DELETE FROM notifications')
+			sql.exec('DELETE FROM local_accounts WHERE account_id = ?', alice)
+			for (const table of ['notification_clears', 'notification_dismissals']) {
+				expect([table, sql.exec(`SELECT count(*) AS n FROM ${table}`).one()]).toEqual([table, { n: 0 }])
+			}
+			expect(sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
+		})
+	})
 })

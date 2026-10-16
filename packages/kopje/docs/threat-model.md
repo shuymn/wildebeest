@@ -1224,8 +1224,16 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   paged through the same index; so none grows with the notifications of one group (`test/policy-bounds.test.ts`,
   "however many notifications a group holds"). Accepted: a group of more than 400 counts 400, and a page whose walk
   meets more than 2,000 notifications of the groups it found (one group that large, in practice) ends with those groups,
-  its Link going on from the last notification read. Dismissing a group and clearing delete in the request, as Mastodon
-  does. Context traversal and edit history: _Planned (B4a fixes)._
+  its Link going on from the last notification read. Clearing notifications and dismissing a group hide what they
+  remove from every read at once and delete it in bounded batches: the request records the highest id removed
+  (migration `0023_notification_clears`) and deletes at most 2,000 notifications, newest first, and each round of the
+  inbound jobs up to 2,000 more; every read of an account's notifications starts above its clear, and every read of
+  one group above its dismissal (`keptFloorSql` in `src/domain/audience.ts`), so neither the request, a round nor such
+  a read grows with what is hidden (`test/policy-bounds.test.ts`, "touch a bounded batch";
+  `test/notification-clears.test.ts`). _Gap:_ until the rounds have deleted a dismissed group larger than the request
+  deletes, a walk of all the account's notifications (the lists, the grouped walk, the unread counts) that reaches what
+  is left of it passes over each with a key lookup, as it passes over notifications R15 hides for other reasons (a
+  muted sender's); a clear has no such gap. Context traversal and edit history: _Planned (B4a fixes)._
 
 ### Data and keys (DATA)
 

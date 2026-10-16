@@ -1,6 +1,8 @@
-import { type Account, edgeRangeSql, type Page, type PageQuery, type Present, presentAccountsById } from './accounts'
+import { type Account, type Page, type PageQuery, type Present, presentAccountsById } from './accounts'
 import {
 	FILTERABLE_TYPES,
+	keptFloorSql,
+	keptSql,
 	notificationPolicySql,
 	notifiedSql,
 	type PolicyChoice,
@@ -92,6 +94,17 @@ export function notify(db: Db, input: NotifyInput): void {
 		return
 	}
 	const filtered = policy === 'filter'
+	// A row of the natural key that a clear or its group's dismissal hides is deleted, one row by the natural key, so
+	// the notification is written again with a new id rather than lost to the conflict while the rounds have yet to
+	// delete it.
+	db.run(
+		`DELETE FROM notifications WHERE account_id = ?1 AND type = ?2 AND from_account_id = ?3
+			AND IFNULL(status_id, '') = IFNULL(?4, '') AND NOT ${keptSql('notifications')}`,
+		input.recipientId,
+		input.type,
+		input.fromId,
+		input.statusId
+	)
 	const inserted = db.all<{ id: number }>(
 		`INSERT INTO notifications (account_id, type, from_account_id, status_id, created_at, group_key, filtered)
 		SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7
@@ -153,8 +166,10 @@ const GROUP_SPAN_HOURS = 12
 
 // The group a new notification joins (Notification#set_group_key!): a favourite or boost of a status, or a follow,
 // by the hour it happens, joining the recipient's group of the same kind from up to 11 hours before. Mastodon keeps
-// the last hour of each kind in Redis; here it is the newest of those hours that still has a notification, found by
-// the group index, one seek per hour. Other types are not grouped (null).
+// the last hour of each kind in Redis; here it is the newest of those hours that still has a notification the
+// recipient has neither cleared nor dismissed (keptFloorSql), found by the group index, one seek per hour, so a
+// dismissed or cleared group is not joined, as it would not be once its rows are deleted. Other types are not grouped
+// (null).
 function groupKeyOf(db: Db, input: NotifyInput): string | null {
 	if (!GROUPABLE_TYPES.includes(input.type)) {
 		return null
@@ -164,7 +179,8 @@ function groupKeyOf(db: Db, input: NotifyInput): string | null {
 	const previous = db.first<{ hour: number }>(
 		`WITH RECURSIVE h(hour) AS (SELECT CAST(?3 AS INTEGER) UNION ALL SELECT hour - 1 FROM h WHERE hour > ?3 - ?4 + 1)
 		SELECT hour FROM h WHERE EXISTS (SELECT 1 FROM notifications
-			WHERE account_id = ?1 AND group_key = ?2 || '-' || h.hour AND group_key IS NOT NULL)
+			WHERE account_id = ?1 AND group_key = ?2 || '-' || h.hour AND group_key IS NOT NULL
+				AND id > ${keptFloorSql('?1', "?2 || '-' || h.hour")})
 		ORDER BY hour DESC LIMIT 1`,
 		input.recipientId,
 		kind,
@@ -286,11 +302,11 @@ export const listNotifications = userReadOperation<ListNotificationsInput, Page<
 			db,
 			{
 				where: `n.account_id = ?1
-					AND ${edgeRangeSql('n.id', '?2', '?3')}
 					AND (?4 IS NULL OR n.type IN (SELECT value FROM json_each(?4)))
 					AND n.type NOT IN (SELECT value FROM json_each(?5))
 					AND (?6 IS NULL OR n.from_account_id = ?6)`,
 				tail: `ORDER BY n.id ${ascending ? 'ASC' : 'DESC'} LIMIT ?7`,
+				range: { max: '?2', min: '?3' },
 				columns: NOTIFICATION_COLUMNS,
 				includeFiltered: input.includeFiltered || input.accountId !== null,
 			},
@@ -346,7 +362,107 @@ export const dismissNotification = userWriteOperation<{ id: string }, boolean>((
 	return db.run('DELETE FROM notifications WHERE account_id = ? AND id = CAST(? AS INTEGER)', accountId, id) > 0
 })
 
+// POST /api/v1/notifications/clear and /api/v2/notifications/clear (Mastodon's delete_all): every notification of the
+// viewer, shown or not, filtered or not, gone from every read at once and deleted in batches (removeNotifications).
 export const clearNotifications = userWriteOperation<object, null>((db, _input, { accountId }) => {
-	db.run('DELETE FROM notifications WHERE account_id = ?', accountId)
+	removeNotifications(db, accountId, null)
 	return null
 })
+
+// Clearing and dismissing a group (Mastodon's delete_all and destroy_all) delete any number of notifications, which
+// others write at will, so Kopje does it bounded (RES-6, RES-7), as the jobs of answered notification requests do
+// (notification-requests.ts): the request records the highest id of what it removes, the account's notifications
+// (notification_clears) or the group's (notification_dismissals), which R15 hides at once (keptFloorSql in
+// audience.ts), then deletes them REMOVAL_WINDOW at a time, newest first, REMOVAL_BATCHES windows in the request and
+// as many in each round of the inbound jobs (runNotificationRequestJobs), until none is left and the record goes. A
+// later clear or dismissal raises the id, and a notification written after it is above it, shown as usual.
+export const REMOVAL_WINDOW = 500
+export const REMOVAL_BATCHES = 4
+
+// What a removal deletes: the account's notifications (group_key null) or one group's, up to max_id.
+type Removal = { account_id: string; group_key: string | null; max_id: number }
+
+// Records the removal of the account's notifications (`groupKey` null) or of the group's, at its newest notification
+// now (one seek in the account's or the group's index), and runs its first batches. Nothing for none.
+export function removeNotifications(db: Db, accountId: string, groupKey: string | null): void {
+	const removal =
+		groupKey === null
+			? db.first<Removal>(
+					`INSERT INTO notification_clears (account_id, max_id)
+					SELECT ?1, id FROM (SELECT id FROM notifications WHERE account_id = ?1 ORDER BY id DESC LIMIT 1) WHERE true
+					ON CONFLICT (account_id) DO UPDATE SET max_id = max(max_id, excluded.max_id)
+					RETURNING account_id, NULL AS group_key, max_id`,
+					accountId
+				)
+			: db.first<Removal>(
+					`INSERT INTO notification_dismissals (account_id, group_key, max_id)
+					SELECT ?1, ?2, id FROM (SELECT id FROM notifications
+						WHERE account_id = ?1 AND group_key = ?2 AND group_key IS NOT NULL ORDER BY id DESC LIMIT 1) WHERE true
+					ON CONFLICT (account_id, group_key) DO UPDATE SET max_id = max(max_id, excluded.max_id)
+					RETURNING account_id, group_key, max_id`,
+					accountId,
+					groupKey
+				)
+	for (let batch = 0; removal !== undefined && batch < REMOVAL_BATCHES; batch++) {
+		if (!removalBatch(db, removal)) {
+			return
+		}
+	}
+}
+
+// One batch of a removal: its next REMOVAL_WINDOW notifications at or below its id, newest first, through the
+// account's or the group's index; the push deliveries of each go with it (ON DELETE CASCADE, at most
+// MAX_PUSH_BACKLOG in all). With fewer left, the removal is done and its record goes. Returns whether any is left.
+function removalBatch(db: Db, removal: Removal): boolean {
+	const ids =
+		removal.group_key === null
+			? db.all<{ id: number }>(
+					`DELETE FROM notifications WHERE id IN (SELECT id FROM notifications WHERE account_id = ? AND id <= ?
+						ORDER BY id DESC LIMIT ?) RETURNING id`,
+					removal.account_id,
+					removal.max_id,
+					REMOVAL_WINDOW
+				)
+			: db.all<{ id: number }>(
+					`DELETE FROM notifications WHERE id IN (SELECT id FROM notifications WHERE account_id = ? AND group_key = ?
+						AND group_key IS NOT NULL AND id <= ? ORDER BY id DESC LIMIT ?) RETURNING id`,
+					removal.account_id,
+					removal.group_key,
+					removal.max_id,
+					REMOVAL_WINDOW
+				)
+	if (ids.length === REMOVAL_WINDOW) {
+		return true
+	}
+	if (removal.group_key === null) {
+		db.run('DELETE FROM notification_clears WHERE account_id = ?', removal.account_id)
+	} else {
+		db.run(
+			'DELETE FROM notification_dismissals WHERE account_id = ? AND group_key = ?',
+			removal.account_id,
+			removal.group_key
+		)
+	}
+	return false
+}
+
+// At most `batches` batches of the pending removals, each kind oldest first, taking turns: a clear, then a group's
+// dismissal, then a clear, so neither kind waits while the other has work. Returns whether one is left.
+export function runRemovals(db: Db, batches: number): boolean {
+	const clear = () =>
+		db.first<Removal>('SELECT account_id, NULL AS group_key, max_id FROM notification_clears ORDER BY rowid LIMIT 1')
+	const dismissal = () =>
+		db.first<Removal>('SELECT account_id, group_key, max_id FROM notification_dismissals ORDER BY rowid LIMIT 1')
+	for (let batch = 0; batch < batches; batch++) {
+		const removal = batch % 2 === 0 ? (clear() ?? dismissal()) : (dismissal() ?? clear())
+		if (removal === undefined) {
+			return false
+		}
+		removalBatch(db, removal)
+	}
+	return (
+		db.first(
+			'SELECT 1 AS x WHERE EXISTS (SELECT 1 FROM notification_clears) OR EXISTS (SELECT 1 FROM notification_dismissals)'
+		) !== undefined
+	)
+}
