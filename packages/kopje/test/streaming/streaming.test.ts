@@ -370,6 +370,29 @@ describe("closing a token's sockets", () => {
 })
 
 describe('hibernation and turns', () => {
+	it('continues by itself until the journal is sent, from one request for a turn', async () => {
+		const h = await community(['alice'])
+		const inbox = await subscribed(h, h.users.alice.token, 'user:notification')
+		const count = 150
+		await sql(
+			h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO accounts (id, uri, username, domain)
+			SELECT printf('7%017d', i), 'https://many.example/users/u' || i, 'u' || i, 'many.example' FROM n`,
+			count
+		)
+		await sql(
+			h.store,
+			"INSERT INTO notifications (account_id, type, from_account_id) SELECT ?, 'follow', id FROM accounts WHERE domain = 'many.example' ORDER BY id",
+			h.users.alice.id
+		)
+		// One turn is asked for; nothing else starts one (no write, no drain barrier): the turns continue themselves.
+		await h.store.streamTick(BUILD)
+		for (let i = 0; i < count; i++) {
+			await inbox.next((m) => m.event === 'notification')
+		}
+	})
+
 	it('delivers after the Store is evicted, its sockets hibernated', async () => {
 		const h = await community(['alice', 'bob', 'carol'])
 		const inbox = await subscribed(h, h.users.alice.token, 'user:notification')

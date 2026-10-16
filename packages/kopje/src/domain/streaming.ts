@@ -112,7 +112,9 @@ export const streamTokens = readOperation<
 export type StreamEvent = { id: number; kind: string; subject: string; viewers: string[] }
 
 // The journal after `position`, oldest first, at most `limit` events, each with the accounts that may be sent it in
-// unit order: for a notification, its recipient while it exists. Also the journal's span.
+// unit order: for a notification, its recipient while it exists. The event of a position within an event is read again
+// (for its viewers after the position's), and a finished one is not, so a full window means more may follow. Also the
+// journal's span.
 export const streamEvents = readOperation<
 	{ limit: number },
 	{ position: StreamPosition; events: StreamEvent[]; head: number; tail: number }
@@ -121,9 +123,10 @@ export const streamEvents = readOperation<
 	const rows = db.all<{ id: number; kind: string; subject: string; recipient: string | null }>(
 		`SELECT e.id, e.kind, e.subject, n.account_id AS recipient FROM stream_events e
 			LEFT JOIN notifications n ON e.kind = 'notification' AND n.id = CAST(e.subject AS INTEGER)
-		WHERE e.id >= ?1 ORDER BY e.id LIMIT ?2`,
+		WHERE e.id > ?1 OR (e.id = ?1 AND ?3 IS NOT NULL) ORDER BY e.id LIMIT ?2`,
 		position.event,
-		limit
+		limit,
+		position.account
 	)
 	const events = rows.flatMap((row): StreamEvent[] => {
 		const viewers = row.recipient === null ? [] : [row.recipient]
