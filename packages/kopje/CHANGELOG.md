@@ -80,10 +80,15 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   A hashtag in status text that leaves nothing once normalized (a lone combining mark) stays text, and hashtag search
   drops the spaces of its query rather than finding nothing. The cutover and `verify-conversion` name hashtags the same
   way. Stored names are renormalized by the migration below.
+- Clearing notifications (`POST /api/v1/notifications/clear` and `/api/v2/notifications/clear`) and dismissing a group
+  (`POST /api/v2/notifications/:group_key/dismiss`) answer as before, and what they remove is gone at once from the
+  lists, a notification by id, the grouped notifications, both unread counts and the pushes waiting; the request
+  deletes up to 2,000 notifications and the background rounds delete the rest, so however many notifications others
+  sent, one request's work is bounded. A notification that arrives afterwards shows as usual.
 
 ### Instance changes
 
-- Store schema: adds three migrations, applied in order on the first request after the deploy; a rollback to an earlier
+- Store schema: adds four migrations, applied in order on the first request after the deploy; a rollback to an earlier
   version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0019_tag_normalization`: renames the stored hashtags (`status_tags`, `tag_follows`, `featured_tags`) to
       Mastodon's normalization. Names that become one are merged: a status keeps one row of the hashtag, an account
@@ -102,6 +107,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       by triggers as statuses are stored, deleted or hidden), fills it with one lookup per account through an index, and
       indexes the discoverable accounts by the directory's two orders. Its work grows linearly with the accounts
       stored, whatever the statuses.
+    - `0023_notification_clears`: adds the empty tables of cleared notifications and dismissed notification groups
+      waiting to be deleted. It reads no row.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.6] - 2026-10-16
@@ -254,7 +261,8 @@ A sixth release candidate of the first release, published under the npm dist-tag
       notifications, skipping those of the groups it has found, so a page ends early, with the groups found and a `next`
       link that goes on from there, only when its walk meets more than that of the groups it found (in practice a status
       favourited by thousands within a few hours). A dismissed group is not remembered, so a later notification within
-      its hours starts a new one. Dismissing a group and clearing delete at once, in the request.
+      its hours starts a new one. Dismissing a group and clearing hide its notifications, or all of them, from every
+      read at once; the request deletes up to 2,000 of them and the background rounds delete the rest.
     - Notifications stored before the upgrade stay ungrouped, each a group of its own, as Mastodon left those it
       stored before it grouped them.
 - `GET /api/v1/notifications/unread_count` and `GET /api/v2/notifications/unread_count`, as Mastodon 4.5 has them: the

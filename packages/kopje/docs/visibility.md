@@ -175,6 +175,23 @@ filtered notifications, adding its direct mentions to the recipient's conversati
 batches (`src/domain/notification-requests.ts`), the first in the request and the rest with the inbound jobs. Requests,
 the policy and permissions are their recipient's alone: only their owner reads or answers them.
 
+R15 also hides what its recipient cleared or dismissed (migration `0023_notification_clears`). Clearing
+(`POST /api/v1/notifications/clear` and its v2 form, Mastodon's `delete_all`) records the highest id of the
+recipient's notifications at the time (`notification_clears`), and dismissing a group
+(`POST /api/v2/notifications/:group_key/dismiss`, `destroy_all` of `by_group_key`) the highest id of that group's
+(`notification_dismissals`); a later one raises it. From then on, no reader shows a notification of the recipient at or
+below the clear, or of the group at or below its dismissal: `statusReads(...).notifications` (the lists, a
+notification by id, the grouped reads, both unread counts) takes the higher of the cursor and the clear (and, for a
+read of one group, its dismissal) as the lower bound on the id (`keptFloorSql`), a constant over key lookups, so the
+index walk starts above what is hidden and never reads it; a read of every group checks each notification's group
+dismissal by its key. The push target and an accepted request's job check both by key (`keptSql`), so a cleared
+notification is not pushed, unfiltered or added to a conversation. A notification written later has a higher id
+(notification ids are never reused) and shows as usual; `notify` does not join a group with no notification above them
+(a dismissed group is not remembered, as when its rows were deleted). The hidden rows are then deleted in bounded
+batches, newest first (`removeNotifications` in `src/domain/notifications.ts`), the first in the request and the rest
+with the inbound jobs; the record goes with the last of them. An `ungrouped-<id>` key and a single dismissal
+(`POST /api/v1/notifications/:id/dismiss`) delete their one notification at once.
+
 An account becomes unavailable when its deletion starts: a remote actor's `Delete` writes `accounts.deleted_at` in the
 transaction that writes its purge job (`deleteActor` in `src/domain/inbox.ts`), before the purge's batches remove its
 relationships, notifications and statuses, so none of them is shown while they are removed. Blocks and mutes of the
@@ -222,7 +239,7 @@ ${DISTRIBUTABLE_SQL}`, never the literals.
 | R12 listed accounts          | `listedForSql` in `favourited_by` and `reblogged_by` (`DISTRIBUTABLE_SQL` boosts only), and in the profile directory (`directory` in `directory.ts`) over the discoverable accounts.                                                                                                                                                                                                                                               |
 | R13 follower lists           | `followListsShownSql` and `followListedSql` in `listFollows` (`GET /api/v1/accounts/:id/followers` and `/following`); `hidesCollectionsSql` in familiar followers (none for an account that hides its network, whoever asks; no follower that hides its own); `followListsShownSql` with no viewer in the ActivityPub followers and following collections: a hidden network shows `totalItems` only, and a page of it answers 403. |
 | R14 account search           | `findableBySql` in `findAccounts` and for an account answered by search resolution. Mastodon's account search leaves out suspended accounts only; Kopje also leaves out those on a domain the viewer blocks.                                                                                                                                                                                                                       |
-| R15 notifications            | `shownSql` in `notify` (through `notifiedSql`, which adds R31, with `notificationPolicySql`, the recipient's policy), `listNotifications`, `getNotification`, the grouped reads and unread counts (`notification-groups.ts`) and the push target, each leaving out filtered notifications (`UNFILTERED_SQL`) unless asked for.                                                                                                     |
+| R15 notifications            | `shownSql` in `notify` (through `notifiedSql`, which adds R31, with `notificationPolicySql`, the recipient's policy), `listNotifications`, `getNotification`, the grouped reads and unread counts (`notification-groups.ts`) and the push target, each leaving out filtered notifications (`UNFILTERED_SQL`) unless asked for, and cleared or dismissed ones (`keptFloorSql`, `keptSql`).                                          |
 | R16 push                     | `shownSql` and `pushWantedSql` at record, claim and confirm time.                                                                                                                                                                                                                                                                                                                                                                  |
 | R17 mentionable              | `mentionableBySql` in `resolveMentions`; an edit drops mentions the author now blocks (`blockedSql`).                                                                                                                                                                                                                                                                                                                              |
 | R18 reblog, R19 favourite    | `canView` and `blocksAuthor` (`blocksSql`) in `statuses.ts`; for an inbound `Announce` or `Like`, `canView` of the actor (`mayInteract` in `inbox.ts`).                                                                                                                                                                                                                                                                            |
@@ -392,7 +409,9 @@ WHERE (<where>) AND (<rule over s>) AND (<and>) <tail>
   that author's statuses alone, which can then return nothing without reading them.
 
 - `notifications(db, parts)` selects `n.status_id` and further columns from `notifications n`, with `shownSql` (R15,
-  the viewer as the recipient, which shows a status only if they may view it) as the rule.
+  the viewer as the recipient, which shows a status only if they may view it) as the rule. It reads the viewer's
+  notifications only, within the parts' cursor (`range`) and above the viewer's clear, of one group (`group`) above its
+  dismissal, or of every group each above its own.
 
 The rule is a conjunct of the SELECT's own WHERE, over the `statuses s` whose id it selects, so no condition, subquery,
 join or `WITH` table of the caller's can stand in for it. The reader and the fragments name their tables with the
