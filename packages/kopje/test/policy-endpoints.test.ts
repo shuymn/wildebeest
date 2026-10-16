@@ -9,6 +9,7 @@ import { accountId, listId, runs, statusId, type World, worldArb, writeWorld } f
 import { type Account, listFollows, type Page, type PageQuery } from '../src/domain/accounts'
 import { backfillConversations } from '../src/domain/conversation-rows'
 import { type Conversation, listConversations, markConversation } from '../src/domain/conversations'
+import { directory, DIRECTORY_WINDOW } from '../src/domain/directory'
 import { listGroupedNotifications, unreadCount, unreadGroupCount } from '../src/domain/notification-groups'
 import type { NotificationType } from '../src/domain/notifications'
 import { listNotifications } from '../src/domain/notifications'
@@ -29,13 +30,14 @@ import type { StoreStub } from '../src/platform/store-client'
 import type { StoreOperation } from '../src/platform/store-kernel'
 
 // The endpoint oracle (docs/visibility.md, "The oracle and the bounds harness"): the status read endpoints, the
-// follower and following lists, account search and search resolution run on generated worlds (test/policy-world.ts)
-// for every available local viewer and, where the endpoint allows it, the anonymous one. No endpoint may show a status
-// (or a boosted original) or an account the model of its rule (test/policy-model.ts) does not allow the viewer. The
-// lists (home with exclusive lists, a list's timeline, public, tag, account statuses, favourites, bookmarks,
-// followers, following, account search) must also show exactly what the model allows of their members, in order, page
-// after page; search resolution must answer an account exactly when account search finds it, and a status exactly when
-// the single-status read shows it, unless the viewer blocks its author's domain.
+// follower and following lists, account search, the profile directory and search resolution run on generated worlds
+// (test/policy-world.ts) for every available local viewer and, where the endpoint allows it, the anonymous one. No
+// endpoint may show a status (or a boosted original) or an account the model of its rule (test/policy-model.ts) does
+// not allow the viewer. The lists (home with exclusive lists, a list's timeline, public, tag, account statuses,
+// favourites, bookmarks, followers, following, account search, the profile directory) must also show exactly what the
+// model allows of their members, in order, page after page; search resolution must answer an account exactly when
+// account search finds it, and a status exactly when the single-status read shows it, unless the viewer blocks its
+// author's domain.
 
 // Cases per property: each writes a world and runs every endpoint for every viewer.
 const CASES = 60
@@ -51,7 +53,8 @@ type Edges = {
 	notifications: { recipient: number; type: NotificationType; from: number; status: number | null }[]
 }
 
-type Case = { world: World; edges: Edges }
+// Each account's accounts.discoverable, by index (an account past the list's end is not discoverable).
+type Case = { world: World; edges: Edges; discoverable: (0 | 1 | null)[] }
 
 const caseArb: fc.Arbitrary<Case> = fc
 	.record({
@@ -67,8 +70,9 @@ const caseArb: fc.Arbitrary<Case> = fc
 			}),
 			{ maxLength: 16, size: 'max' }
 		),
+		discoverable: fc.array(fc.constantFrom<0 | 1 | null>(1, 1, 0, null), { minLength: 7, maxLength: 7 }),
 	})
-	.map(({ world, favourites, bookmarks, notifications }): Case => {
+	.map(({ world, favourites, bookmarks, notifications, discoverable }): Case => {
 		const locals = world.accounts.flatMap((account, x) => (account.local ? [x] : []))
 		const originals = world.statuses.flatMap((status, s) => (status.reblogOf === null ? [s] : []))
 		const pick = <T>(items: readonly T[], n: number): T | undefined => items[n % Math.max(items.length, 1)]
@@ -82,6 +86,7 @@ const caseArb: fc.Arbitrary<Case> = fc
 		const key = (e: { account: number; status: number }) => `${e.account}:${e.status}`
 		return {
 			world,
+			discoverable,
 			edges: {
 				favourites: unique(favourites.flatMap(edge(world.accounts.map((_, x) => x))), key),
 				bookmarks: unique(bookmarks.flatMap(edge(locals)), key),
@@ -113,9 +118,12 @@ function groupKeyOf(n: SeededNotification): string | null {
 }
 
 // Writes the case and returns the notifications it seeded, by id.
-function writeCase(sql: SqlStorage, { world, edges }: Case): Map<string, SeededNotification> {
+function writeCase(sql: SqlStorage, { world, edges, discoverable }: Case): Map<string, SeededNotification> {
 	sql.exec('DELETE FROM oauth_tokens')
 	writeWorld(sql, world)
+	world.accounts.forEach((_, x) => {
+		sql.exec('UPDATE accounts SET discoverable = ? WHERE id = ?', discoverable[x] ?? null, accountId(x))
+	})
 	world.accounts.forEach((account, x) => {
 		if (account.local) {
 			sql.exec(
@@ -191,6 +199,7 @@ describe('the status read endpoints agree with the model of their rules', () => 
 				'context',
 				'conversation without its last status',
 				'conversations',
+				'directory',
 				'favourited_by',
 				'favourites',
 				'followers',
@@ -608,6 +617,51 @@ function check(sql: SqlStorage, c: Case): string[] {
 			problems.push(
 				`account search ${nameOf(viewer)}: finds [${searched.map(nameOf).join(' ')}], the model [${findable.map(nameOf).join(' ')}]`
 			)
+		}
+
+		// The profile directory, every order, all or local accounts, page by page from each offset: of the discoverable
+		// accounts in the order's sequence (the newest public, unlisted or private status, accounts without one last, then
+		// the newest account; or the newest account), each page reads a window of twice offset plus limit and lists the
+		// accounts R12 lists to the viewer there, from the offset.
+		const lastStatus = (x: number) =>
+			world.statuses.reduce(
+				(last, status, s) => (status.author === x && !['direct', 'limited'].includes(status.visibility) ? s : last),
+				-1
+			)
+		for (const order of ['active', 'new'] as const) {
+			for (const local of [false, true]) {
+				const sequence = world.accounts
+					.flatMap((account, x) => (c.discoverable[x] === 1 && (!local || account.local) ? [x] : []))
+					.sort((a, b) => (order === 'active' ? lastStatus(b) - lastStatus(a) : 0) || b - a)
+				const modelPage = (offset: number, limit: number) =>
+					sequence
+						.slice(0, DIRECTORY_WINDOW * (offset + limit))
+						.filter((x) => m.listedFor(x, viewer))
+						.slice(offset, offset + limit)
+				const read = (offset: number, limit: number) =>
+					ok<Account[]>(
+						run(directory, { ...optional(viewer), order, local, offset, limit, present: PRESENT }),
+						'directory'
+					).map((account) => accountIndex.get(account.id) ?? -1)
+				for (const [offset, limit] of [
+					[0, 40],
+					[0, LIMIT],
+					[LIMIT, LIMIT],
+					[2 * LIMIT, LIMIT],
+					[1, 2],
+				] as const) {
+					const actual = read(offset, limit)
+					if (actual.length > 0) {
+						shown.add('directory')
+					}
+					const expected = modelPage(offset, limit)
+					if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+						problems.push(
+							`directory ${order}${local ? ' local' : ''} ${offset}+${limit} ${nameOf(viewer)}: lists [${actual.map(nameOf).join(' ')}], the model [${expected.map(nameOf).join(' ')}]`
+						)
+					}
+				}
+			}
 		}
 
 		// Search resolution of what is stored, by its uri: an account exactly when account search finds it (R14), a

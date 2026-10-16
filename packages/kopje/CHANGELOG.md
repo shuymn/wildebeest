@@ -19,6 +19,20 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   `POST /api/v1/statuses/:id/translate` and `GET /api/v1_alpha/async_refreshes/:id`; and 403 for
   `POST /api/v1/emails/confirmations`. `GET /api/v1/peers/search` finds up to 10 known peers by domain prefix, and
   `PATCH /api/v1/push/subscription` updates as `PUT` does.
+- The profile directory, `GET /api/v1/directory`, as Mastodon 4.5 has it (token optional, any scope): the discoverable
+  accounts, the most recently active first (`order=active`, the default; accounts that have not posted come last) or
+  the newest first (`order=new`), all of them or the local ones (`local=true`), 40 by default and at most 80 by `limit`,
+  from `offset`. A local account is listed when its owner made it discoverable, a remote account when its actor says
+  `discoverable: true`. Suspended accounts and accounts being deleted are never listed, and a signed-in viewer is not
+  shown the accounts they block or mute, those on domains they block, nor those that block them. An answer without a
+  token may be cached for 15 seconds, as Mastodon's.
+    - Where Kopje differs from Mastodon: an offset above 400 answers no accounts, and a page looks at most twice offset
+      plus limit accounts of the directory, so when more than half of them are hidden from you (accounts you block or
+      mute, say), that page comes back shorter; `order=active` goes by an account's newest public, unlisted or private
+      post or boost as stored, the one its `last_status_at` shows, so the account moves back when that post is deleted,
+      and accounts that have not posted are ordered newest first (Mastodon leaves their order open); an unknown `order`
+      reads as `active` (Mastodon fails); Kopje has no silenced accounts, and it does not record that an account moved, so a moved
+      account stays listed while its actor says it is discoverable.
 
 ### Changed
 
@@ -33,8 +47,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds one migration, applied on the first request after the deploy; a rollback to an earlier version
-  needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
+- Store schema: adds two migrations, applied in order on the first request after the deploy; a rollback to an earlier
+  version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0019_tag_normalization`: renames the stored hashtags (`status_tags`, `tag_follows`, `featured_tags`) to
       Mastodon's normalization. Names that become one are merged: a status keeps one row of the hashtag, an account
       keeps its earliest follow and its earliest featured hashtag (with its spelling), and the featured hashtags left
@@ -44,6 +58,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       it from a typed `ς`. It reads each table once to find the names with a character other than `a`–`z`, `0`–`9`
       and `_`, walks each such distinct name's characters, and rewrites the rows of the renamed names through indexes,
       so its work grows linearly with the hashtag rows stored.
+    - `0021_directory`: adds `accounts.last_status_id` (each account's newest public, unlisted or private status, kept
+      by triggers as statuses are stored, deleted or hidden), fills it with one lookup per account through an index, and
+      indexes the discoverable accounts by the directory's two orders. Its work grows linearly with the accounts
+      stored, whatever the statuses.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.6] - 2026-10-16
