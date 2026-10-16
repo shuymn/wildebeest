@@ -152,6 +152,29 @@ author's own conversation (its partner is the author; an unknown partner does no
 `homeFilterSql` passes for it, as Mastodon's `FeedInsertWorker` notifies only of what home shows: so a sender the recipient mutes, with or without
 notifications, sends none.
 
+R15 also has a policy part, the recipient's notification policy (`notificationPolicySql`, Mastodon's
+`NotifyService::DropCondition#drop?` and `FilterCondition#filter?`, migration `0020_notification_policies`), which
+`notify` applies as it writes: for each of its conditions the recipient chooses accept, filter or drop
+(`notification_policies`, Mastodon's defaults without a row: private mentions filtered, the rest accepted). The
+conditions are a sender the recipient does not follow; a sender that has not followed the recipient for three days; an
+account younger than 30 days the recipient does not follow; and a mention in a direct status from an account the
+recipient does not follow that answers none of the recipient's private mentions of the sender (the walk up the thread
+reads the parent and at most 100 statuses above it, as Mastodon's). Only mentions, boosts, favourites, follows and
+follow requests are filterable, and a sender the recipient accepted a request from (`notification_permissions`) is
+always accepted. A condition chosen as drop drops the notification (nothing is written); otherwise one chosen as filter
+filters it: it is written with `notifications.filtered` set and no group, is not pushed, does not join a conversation,
+and a mention opens or updates its sender's request (`notification_requests`). Kopje has no silenced accounts (the
+limited accounts condition never matches) and no staff role. Every read of notifications leaves a filtered one out
+unless the request asks for filtered ones (`include_filtered`, or `account_id` in v1, as Mastodon's
+`Notification.browserable`): `statusReads(...).notifications` takes `includeFiltered` and otherwise adds the term
+`n.filtered = 0`, which reads the partial index `notifications_unfiltered` of the unfiltered rows, so no list or count
+reads a filtered notification; a read by id (v1, and `ungrouped-<id>` in v2, as Mastodon's `show`) shows one. The push
+target leaves them out too (`UNFILTERED_SQL`). Accepting a request records the permission and unfilters the sender's
+filtered notifications, adding its direct mentions to the recipient's conversations, as Mastodon's
+`UnfilterNotificationsWorker` does; dismissing one deletes them; both walk the sender's notifications in bounded
+batches (`src/domain/notification-requests.ts`), the first in the request and the rest with the inbound jobs. Requests,
+the policy and permissions are their recipient's alone: only their owner reads or answers them.
+
 An account becomes unavailable when its deletion starts: a remote actor's `Delete` writes `accounts.deleted_at` in the
 transaction that writes its purge job (`deleteActor` in `src/domain/inbox.ts`), before the purge's batches remove its
 relationships, notifications and statuses, so none of them is shown while they are removed. Blocks and mutes of the
@@ -199,7 +222,7 @@ ${DISTRIBUTABLE_SQL}`, never the literals.
 | R12 listed accounts          | `listedForSql` in `favourited_by` and `reblogged_by` (`DISTRIBUTABLE_SQL` boosts only).                                                                                                                                                                                                                                                                                                                                            |
 | R13 follower lists           | `followListsShownSql` and `followListedSql` in `listFollows` (`GET /api/v1/accounts/:id/followers` and `/following`); `hidesCollectionsSql` in familiar followers (none for an account that hides its network, whoever asks; no follower that hides its own); `followListsShownSql` with no viewer in the ActivityPub followers and following collections: a hidden network shows `totalItems` only, and a page of it answers 403. |
 | R14 account search           | `findableBySql` in `findAccounts` and for an account answered by search resolution. Mastodon's account search leaves out suspended accounts only; Kopje also leaves out those on a domain the viewer blocks.                                                                                                                                                                                                                       |
-| R15 notifications            | `shownSql` in `notify` (through `notifiedSql`, which adds R31), `listNotifications`, `getNotification`, the grouped reads and unread counts (`notification-groups.ts`) and the push target.                                                                                                                                                                                                                                        |
+| R15 notifications            | `shownSql` in `notify` (through `notifiedSql`, which adds R31, with `notificationPolicySql`, the recipient's policy), `listNotifications`, `getNotification`, the grouped reads and unread counts (`notification-groups.ts`) and the push target, each leaving out filtered notifications (`UNFILTERED_SQL`) unless asked for.                                                                                                     |
 | R16 push                     | `shownSql` and `pushWantedSql` at record, claim and confirm time.                                                                                                                                                                                                                                                                                                                                                                  |
 | R17 mentionable              | `mentionableBySql` in `resolveMentions`; an edit drops mentions the author now blocks (`blockedSql`).                                                                                                                                                                                                                                                                                                                              |
 | R18 reblog, R19 favourite    | `canView` and `blocksAuthor` (`blocksSql`) in `statuses.ts`; for an inbound `Announce` or `Like`, `canView` of the actor (`mayInteract` in `inbox.ts`).                                                                                                                                                                                                                                                                            |
@@ -372,7 +395,7 @@ author. The callers:
 | public feed, bookmarks and favourites, context             | `select` under `listable`; the tag feed a `union` of its names under it                              |
 | account statuses                                           | `authorShown`, then `select` under `visible`, with `visibleSql` and `filteredForSql` for an original |
 | status search                                              | `select` under `listable`, with its candidates as a `WITH` table                                     |
-| notifications (list and one, groups, unread counts)        | `notifications`                                                                                      |
+| notifications (list and one, groups, unread counts)        | `notifications`, with `includeFiltered`                                                              |
 | web profile and status pages                               | `select` under `visible` with no viewer; the parent through `viewableStatusId`                       |
 | conversations (list, read, unread)                         | `select` under `visible` of each last status                                                         |
 | single status, history, actions (favourite, bookmark, ...) | `viewableStatusId`                                                                                   |
@@ -520,6 +543,12 @@ add no dimension). Another case grows the conversations the viewer mutes from 20
 of them muted) and a favourite of one (which notifies, or not, through `notifiedSql`) read at most 10 rows more. Another
 grows the remote boosts of one public pinned status from 20 to 2,000: its Note through the object endpoint, the outbox
 and the `featured` collection read at most 10 rows more.
+A last case grows the viewer's filtered notifications from 2,500 to 5,000 private mentions between older follows and
+newer follow requests, each from a sender of its own with a request, or all from one sender with one request: the
+newest page and the page below them of the notifications and of the grouped notifications, both unread counts, the
+newest page of requests, a request, the policy's summary and `merged` read at most 10 rows more, and so do accepting and
+dismissing a request (its batches walk at most 2,000 of the sender's notifications). Another grows the pending jobs of answered requests
+from 1,000 to 5,000: `merged` and a round of the jobs read at most 10 rows more.
 
 `test/policy-endpoints.test.ts` runs the read endpoints themselves on generated worlds, with favourites, bookmarks and
 notifications added, for each available local viewer and, where the endpoint answers without a token, the anonymous

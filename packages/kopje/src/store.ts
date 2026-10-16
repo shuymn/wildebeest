@@ -33,6 +33,7 @@ import * as markers from './domain/markers'
 import * as media from './domain/media'
 import * as mediaRebuild from './domain/media-rebuild'
 import * as notificationGroups from './domain/notification-groups'
+import * as notificationRequests from './domain/notification-requests'
 import * as notifications from './domain/notifications'
 import * as oauth from './domain/oauth'
 import * as polls from './domain/polls'
@@ -403,11 +404,16 @@ export class Store extends DurableObject<Env> {
 		}
 	}
 
-	// A round of the inbound jobs and of the domain block cleanups (domain/blocks.ts), each in its own transaction.
+	// A round of the inbound jobs, of the domain block cleanups (domain/blocks.ts) and of the jobs of answered
+	// notification requests (domain/notification-requests.ts), each in its own transaction.
 	async runInboundJobs(callerBuild: string, input: OperationInput<typeof inbox.runInboundJobs>) {
 		const inbound = await this.#kernel.execute(callerBuild, inbox.runInboundJobs, input)
 		const cleanups = await this.#kernel.execute(callerBuild, blocks.runDomainBlockCleanups, input)
-		return { pending: inbound.pending || cleanups.pending, delivers: inbound.delivers || cleanups.delivers }
+		const requests = await this.#kernel.execute(callerBuild, notificationRequests.runNotificationRequestJobs, input)
+		return {
+			pending: inbound.pending || cleanups.pending || requests.pending,
+			delivers: inbound.delivers || cleanups.delivers,
+		}
 	}
 
 	remoteKey(callerBuild: string, input: OperationInput<typeof inbox.getRemoteKey>) {
@@ -1134,6 +1140,67 @@ export class Store extends DurableObject<Env> {
 
 	unreadNotificationGroupCount(callerBuild: string, input: OperationInput<typeof notificationGroups.unreadGroupCount>) {
 		return this.#kernel.execute(callerBuild, notificationGroups.unreadGroupCount, input)
+	}
+
+	// The notification policy and notification requests.
+	getNotificationPolicy(callerBuild: string, input: OperationInput<typeof notificationRequests.getNotificationPolicy>) {
+		return this.#kernel.execute(callerBuild, notificationRequests.getNotificationPolicy, input)
+	}
+
+	updateNotificationPolicy(
+		callerBuild: string,
+		input: OperationInput<typeof notificationRequests.updateNotificationPolicy>
+	) {
+		return this.#kernel.execute(callerBuild, notificationRequests.updateNotificationPolicy, input)
+	}
+
+	listNotificationRequests(
+		callerBuild: string,
+		input: OperationInput<typeof notificationRequests.listNotificationRequests>
+	) {
+		return this.#kernel.execute(callerBuild, notificationRequests.listNotificationRequests, input)
+	}
+
+	getNotificationRequest(
+		callerBuild: string,
+		input: OperationInput<typeof notificationRequests.getNotificationRequest>
+	) {
+		return this.#kernel.execute(callerBuild, notificationRequests.getNotificationRequest, input)
+	}
+
+	acceptNotificationRequest(
+		callerBuild: string,
+		input: OperationInput<typeof notificationRequests.acceptNotificationRequest>
+	) {
+		return this.#kernel.execute(callerBuild, notificationRequests.acceptNotificationRequest, input)
+	}
+
+	dismissNotificationRequest(
+		callerBuild: string,
+		input: OperationInput<typeof notificationRequests.dismissNotificationRequest>
+	) {
+		return this.#kernel.execute(callerBuild, notificationRequests.dismissNotificationRequest, input)
+	}
+
+	acceptNotificationRequests(
+		callerBuild: string,
+		input: OperationInput<typeof notificationRequests.acceptNotificationRequests>
+	) {
+		return this.#kernel.execute(callerBuild, notificationRequests.acceptNotificationRequests, input)
+	}
+
+	dismissNotificationRequests(
+		callerBuild: string,
+		input: OperationInput<typeof notificationRequests.dismissNotificationRequests>
+	) {
+		return this.#kernel.execute(callerBuild, notificationRequests.dismissNotificationRequests, input)
+	}
+
+	notificationRequestsMerged(
+		callerBuild: string,
+		input: OperationInput<typeof notificationRequests.notificationRequestsMerged>
+	) {
+		return this.#kernel.execute(callerBuild, notificationRequests.notificationRequestsMerged, input)
 	}
 
 	// Web Push: the token's subscription, and the Worker's push rounds (jobs/push.ts).

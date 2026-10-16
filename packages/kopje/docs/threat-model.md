@@ -498,6 +498,31 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `src/domain/inbox.ts`, migration `0018_status_pins_and_conversation_mutes`; `test/status-actions.test.ts`,
   `test/inbox-regressions.test.ts`, `test/migrations.test.ts`, `test/policy-oracle.test.ts`,
   `test/policy-endpoints.test.ts`, `test/policy-bounds.test.ts`, `test/policy-writes.test.ts`.
+- **VIS-23: a notification policy only withholds from its owner, and its requests are its owner's alone.** A local
+  account's policy (`NotificationPolicy`) is applied as `notify` writes (R15, `notificationPolicySql`), after the rules
+  that refuse a notification (VIS-10, VIS-13, VIS-14): it can drop or filter a notification the recipient would be
+  shown, never show one they would not. A filtered notification reveals no more than a shown one would: it is
+  written only if R15 lets it through, it is left out of every list, grouped list and unread count unless its owner
+  asks for filtered ones (`include_filtered`, `account_id`), and every read of it still applies R15 at the time of the
+  read; it is never pushed (PUSH-3) and a filtered private mention joins no conversation until its request is
+  accepted. A request (`NotificationRequest`) names the sender, how many of its mentions were filtered (at most 100)
+  and the last one's status, shown only if the owner may still see it (R2); it, the policy, its permissions
+  (`NotificationPermission`) and the work an answer leaves are read and answered only by their owner, and anyone
+  else's request is not found. Blocking the sender deletes the pair's request and permission (Mastodon's
+  `BlockService` and `AfterBlockService`); a domain block keeps the permissions, which a sender there cannot use while
+  the block lasts (R15). Nothing of them is federated: the sender cannot tell a filtered or dropped notification
+  from a shown one. Their cost is bounded (RES-6, RES-7): the lists and counts read the partial index of unfiltered
+  notifications (`notifications_unfiltered`), so a sender's filtered notifications cost them nothing; the requests are
+  paged by their index and the summary reads at most 100; a request's count is kept as it is written; the private
+  mention walk reads at most 101 statuses; answering a request, or a bulk form of at most 100 ids, walks at most 2,000
+  of the senders' notifications in the request and the rest in the inbound job rounds; and a remote sender's purge
+  deletes its requests, permissions and jobs within its batches. _Implemented on branch `kopje/notification-policy`:_
+  `notificationPolicySql` and `UNFILTERED_SQL` in `src/domain/audience.ts`, `notify` in
+  `src/domain/notifications.ts`, `src/domain/notification-requests.ts`, `src/domain/notification-groups.ts`,
+  `src/domain/push.ts`, `purgeRelationships` and `STATUS_CHILDREN` in `src/domain/inbox.ts`, migration
+  `0020_notification_policies`; `test/notification-policy.test.ts`, `test/policy-endpoints.test.ts`,
+  `test/policy-writes.test.ts`, `test/policy-bounds.test.ts`, `test/migrations.test.ts`,
+  `test/cascade-guard.test.ts`.
 
 ### Authorization (AUTH)
 

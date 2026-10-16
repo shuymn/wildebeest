@@ -1,5 +1,12 @@
 import { type Account, edgeRangeSql, type Page, type PageQuery, type Present, presentAccountsById } from './accounts'
-import { notifiedSql, statusReads, type WithVisibleStatus } from './audience'
+import {
+	FILTERABLE_TYPES,
+	notificationPolicySql,
+	notifiedSql,
+	type PolicyChoice,
+	statusReads,
+	type WithVisibleStatus,
+} from './audience'
 import { type UserContext, userReadOperation, userWriteOperation } from './auth'
 import { addToConversation } from './conversations'
 import { presentStatuses, type Status } from './status-presenter'
@@ -15,6 +22,8 @@ import type { Db } from '../db/sql'
 // written one, and none about a status in a conversation the recipient mutes (R31); one written before the mute stays.
 // A new notification also records a push for each of the recipient's Web Push subscriptions that wants it;
 // domain/push.ts checks this rule again, at its own time, before each is sent (PUSH-3).
+// The recipient's notification policy (notification-requests.ts) drops or filters what it chooses when it is written:
+// a filtered notification is kept apart from the lists, counts and pushes until its request is accepted.
 // A favourite, a boost or a follow also records the group it joins in the API v2's grouped notifications
 // (group_key, which v1 shows too); notification-groups.ts reads them.
 
@@ -40,18 +49,23 @@ export type NotifyInput = {
 }
 
 // Writes a notification if the rule lets it through (notifiedSql: R15, and not in a conversation the recipient mutes,
-// R31). The natural key makes a repeat a no-op, except for `update`:
-// every edit notifies again, so the previous one is replaced (and gets a newer id). The replacement is judged first:
-// an edit the rule refuses (its conversation muted since) leaves the previous one as it is, as a mute keeps the
-// notifications written before it.
+// R31) and the recipient's policy does not drop it (notificationPolicySql, NotifyService#drop?). A notification the
+// policy filters (NotifyService#filter?) is written with `filtered` set and no group (Notification#set_group_key!
+// skips it): it is not pushed, does not join a conversation, and a mention opens or updates the request of its sender
+// (update_notification_request!, app/services/notify_service.rb:229-256); every read leaves it out unless asked.
+// The natural key makes a repeat a no-op, except for `update`: every edit notifies again, so the previous one is
+// replaced (and gets a newer id). The replacement is judged first: an edit the rule refuses (its conversation muted
+// since) leaves the previous one as it is, as a mute keeps the notifications written before it. An edit is never
+// filtered or dropped by the policy.
 export function notify(db: Db, input: NotifyInput): void {
+	const now = new Date(input.now).toISOString()
 	if (input.type === 'update') {
 		const eligible = db.first(
 			`SELECT 1 AS ok WHERE ${notifiedSql('?1', "'update'", '?2', '?3', '?4')}`,
 			input.recipientId,
 			input.fromId,
 			input.statusId,
-			new Date(input.now).toISOString()
+			now
 		)
 		if (eligible === undefined) {
 			return
@@ -63,26 +77,71 @@ export function notify(db: Db, input: NotifyInput): void {
 			input.statusId
 		)
 	}
+	// A type the policy never filters is accepted without reading it (notificationPolicySql's first arm).
+	const policy = !FILTERABLE_TYPES.includes(input.type)
+		? 'accept'
+		: (db.first<{ policy: PolicyChoice }>(
+				`SELECT ${notificationPolicySql('?1', '?2', '?3', '?4', '?5')} AS policy`,
+				input.recipientId,
+				input.type,
+				input.fromId,
+				input.statusId,
+				now
+			)?.policy ?? 'accept')
+	if (policy === 'drop') {
+		return
+	}
+	const filtered = policy === 'filter'
 	const inserted = db.all<{ id: number }>(
-		`INSERT INTO notifications (account_id, type, from_account_id, status_id, created_at, group_key)
-		SELECT ?1, ?2, ?3, ?4, ?5, ?6
+		`INSERT INTO notifications (account_id, type, from_account_id, status_id, created_at, group_key, filtered)
+		SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7
 		WHERE EXISTS (SELECT 1 FROM local_accounts WHERE account_id = ?1) AND ${notifiedSql('?1', '?2', '?3', '?4', '?5')}
 		ON CONFLICT DO NOTHING RETURNING id`,
 		input.recipientId,
 		input.type,
 		input.fromId,
 		input.statusId,
-		new Date(input.now).toISOString(),
-		groupKeyOf(db, input)
+		now,
+		filtered ? null : groupKeyOf(db, input),
+		filtered ? 1 : 0
 	)
-	// VIS-10: a push only for a row inserted now, never for a repeat.
 	for (const { id } of inserted) {
+		if (filtered) {
+			if (input.type === 'mention' && input.statusId !== null) {
+				openRequest(db, input.recipientId, input.fromId, input.statusId, now)
+			}
+			continue
+		}
+		// VIS-10: a push only for a row inserted now, never for a repeat.
 		queuePushes(db, id, input.now)
 		// NotifyService#push_to_conversation!: a direct status the recipient is notified of joins their conversation.
 		if (input.type === 'mention' && input.statusId !== null) {
 			addToConversation(db, input.recipientId, input.statusId)
 		}
 	}
+}
+
+// NotificationRequest::MAX_MEANINGFUL_COUNT: a request counts at most this many notifications, and the policy's
+// summary at most this many requests.
+export const MAX_MEANINGFUL_COUNT = 100
+
+// NotifyService#update_notification_request!: the request of the sender's filtered mentions, opened by the first and
+// updated by each later one, with its status as the last. Mastodon recounts the sender's filtered mentions on each
+// save (prepare_notifications_count, up to 100); Kopje counts each one as it is written, up to the same 100, so the
+// count does not read the sender's notifications.
+function openRequest(db: Db, recipientId: string, fromId: string, statusId: string, now: string): void {
+	db.run(
+		`INSERT INTO notification_requests (account_id, from_account_id, last_status_id, notifications_count, created_at,
+			updated_at)
+		VALUES (?1, ?2, ?3, 1, ?4, ?4)
+		ON CONFLICT (account_id, from_account_id) DO UPDATE SET last_status_id = excluded.last_status_id,
+			notifications_count = min(notifications_count + 1, ?5), updated_at = excluded.updated_at`,
+		recipientId,
+		fromId,
+		statusId,
+		now,
+		MAX_MEANINGFUL_COUNT
+	)
 }
 
 // The notification types grouped in the API v2 (Mastodon's Notification::GROUPABLE_NOTIFICATION_TYPES, less
@@ -212,6 +271,8 @@ export type ListNotificationsInput = {
 	types: string[]
 	excludeTypes: string[]
 	accountId: string | null
+	// include_filtered; a sender (account_id) shows filtered ones too (Notification.browserable).
+	includeFiltered: boolean
 	present: Present
 }
 
@@ -231,6 +292,7 @@ export const listNotifications = userReadOperation<ListNotificationsInput, Page<
 					AND (?6 IS NULL OR n.from_account_id = ?6)`,
 				tail: `ORDER BY n.id ${ascending ? 'ASC' : 'DESC'} LIMIT ?7`,
 				columns: NOTIFICATION_COLUMNS,
+				includeFiltered: input.includeFiltered || input.accountId !== null,
 			},
 			viewerId,
 			page.maxId ?? null,
@@ -263,7 +325,12 @@ export const getNotification = userReadOperation<{ id: string; present: Present 
 		const read = statusReads(viewer, { viewer: '?1', now: '?3' })
 		const rows = read.notifications<Omit<NotificationRow, 'status_id'>>(
 			db,
-			{ where: 'n.account_id = ?1 AND n.id = CAST(?2 AS INTEGER)', columns: NOTIFICATION_COLUMNS },
+			// Api::V1::NotificationsController#show finds any of the viewer's notifications, filtered or not.
+			{
+				where: 'n.account_id = ?1 AND n.id = CAST(?2 AS INTEGER)',
+				columns: NOTIFICATION_COLUMNS,
+				includeFiltered: true,
+			},
 			viewerId,
 			id,
 			now

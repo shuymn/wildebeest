@@ -11,6 +11,7 @@ import * as lists from './lists'
 import * as markers from './markers'
 import * as media from './media'
 import * as notificationGroups from './notification-groups'
+import * as notificationRequests from './notification-requests'
 import * as notifications from './notifications'
 import * as oauth from './oauth'
 import * as placeholders from './placeholders'
@@ -698,6 +699,85 @@ export const ROUTES: readonly Route[] = [
 		path: '/api/v1/notifications/unread_count',
 		access: { scope: 'read:notifications' },
 		handler: notificationGroups.unreadCount,
+	},
+	// The notification policy and requests (mastodon/notification-requests.ts), before the :id routes.
+	{
+		method: 'GET',
+		path: '/api/v1/notifications/policy',
+		access: { scope: 'read:notifications' },
+		handler: notificationRequests.getPolicyV1,
+	},
+	{
+		method: 'PATCH',
+		path: '/api/v1/notifications/policy',
+		access: { scope: 'write:notifications' },
+		handler: notificationRequests.updatePolicyV1,
+	},
+	{
+		method: 'PUT',
+		path: '/api/v1/notifications/policy',
+		access: { scope: 'write:notifications' },
+		handler: notificationRequests.updatePolicyV1,
+	},
+	{
+		method: 'GET',
+		path: '/api/v2/notifications/policy',
+		access: { scope: 'read:notifications' },
+		handler: notificationRequests.getPolicyV2,
+	},
+	{
+		method: 'PATCH',
+		path: '/api/v2/notifications/policy',
+		access: { scope: 'write:notifications' },
+		handler: notificationRequests.updatePolicyV2,
+	},
+	{
+		method: 'PUT',
+		path: '/api/v2/notifications/policy',
+		access: { scope: 'write:notifications' },
+		handler: notificationRequests.updatePolicyV2,
+	},
+	{
+		method: 'GET',
+		path: '/api/v1/notifications/requests',
+		access: { scope: 'read:notifications' },
+		handler: notificationRequests.listRequests,
+	},
+	{
+		method: 'GET',
+		path: '/api/v1/notifications/requests/merged',
+		access: { scope: 'read:notifications' },
+		handler: notificationRequests.merged,
+	},
+	{
+		method: 'POST',
+		path: '/api/v1/notifications/requests/accept',
+		access: { scope: 'write:notifications' },
+		handler: notificationRequests.acceptRequests,
+	},
+	{
+		method: 'POST',
+		path: '/api/v1/notifications/requests/dismiss',
+		access: { scope: 'write:notifications' },
+		handler: notificationRequests.dismissRequests,
+	},
+	{
+		method: 'GET',
+		path: '/api/v1/notifications/requests/:id',
+		access: { scope: 'read:notifications' },
+		handler: notificationRequests.getRequest,
+	},
+	{
+		method: 'POST',
+		path: '/api/v1/notifications/requests/:id/accept',
+		access: { scope: 'write:notifications' },
+		handler: notificationRequests.acceptRequest,
+	},
+	{
+		method: 'POST',
+		path: '/api/v1/notifications/requests/:id/dismiss',
+		access: { scope: 'write:notifications' },
+		handler: notificationRequests.dismissRequest,
 	},
 	{
 		method: 'GET',

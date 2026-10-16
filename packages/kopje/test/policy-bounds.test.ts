@@ -37,6 +37,15 @@ import {
 	unreadCount,
 	unreadGroupCount,
 } from '../src/domain/notification-groups'
+import {
+	acceptNotificationRequest,
+	dismissNotificationRequest,
+	getNotificationPolicy,
+	getNotificationRequest,
+	listNotificationRequests,
+	notificationRequestsMerged,
+	runNotificationRequestJobs,
+} from '../src/domain/notification-requests'
 import { listNotifications } from '../src/domain/notifications'
 import { getPoll, vote } from '../src/domain/polls'
 import { dueScheduled, listScheduled, publishScheduled } from '../src/domain/scheduled-statuses'
@@ -2779,4 +2788,398 @@ describe("a followed hashtag's hidden statuses cost home a bounded window (RES-7
 		expect(many.shown).toBe(few.shown)
 		expect(many.rows).toBeLessThanOrEqual(few.rows + ALLOWANCE)
 	}, 60_000)
+})
+
+// Filtered notifications add a dimension others control: a sender the viewer's policy filters writes as many as it
+// likes. Between the viewer's older follows and newer follow requests, `count` filtered mentions, each from a sender
+// of its own with a request (many senders) or all from one sender with one request (one sender): the lists, the
+// grouped list, both unread counts, the requests, a request, the policy's summary and `merged` read the same rows with
+// 2,500 or 5,000 of them, since the reads that leave filtered notifications out read the partial index of the
+// unfiltered ones (notifications_unfiltered), the requests are paged by their index and the summary reads at most 100;
+// answering a request walks at most REQUEST_JOB_BATCHES windows of the sender's notifications in the request.
+describe('filtered notifications and requests cost a read nothing (RES-7)', () => {
+	const VIEWER_ID = '660000000000000000'
+	const STATUS_BASE = 661000000000000000n
+	const SENDER_BASE = 662000000000000000n
+	const FILTER_TOKEN = 'filtered-token'
+	const FOLLOWS = 50
+	const REQUESTS = 5
+
+	async function filtering(count: number, senders: 'many' | 'one'): Promise<StoreStub> {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username) VALUES (?, 'https://kopje.test/ap/users/viewer', 'viewer')",
+				VIEWER_ID
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'viewer@example.com', X'00', X'00', 'test')",
+				VIEWER_ID
+			)
+			const accounts = senders === 'many' ? count : 1
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+				INSERT INTO accounts (id, uri, username, domain)
+				SELECT CAST(?2 + i AS TEXT), 'https://far' || (i % 10) || '.example/users/u' || i, 'u' || i,
+					'far' || (i % 10) || '.example'
+				FROM n`,
+				Math.max(accounts, FOLLOWS + REQUESTS),
+				String(SENDER_BASE)
+			)
+			// The direct statuses of the filtered mentions, each mentioning the viewer.
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+				INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+				SELECT CAST(?2 + i AS TEXT), 'https://far.example/objects/' || i,
+					CAST(?3 + CASE WHEN ?4 THEN i ELSE 0 END AS TEXT), 'direct', '<p>hi</p>', ?5
+				FROM n`,
+				count,
+				String(STATUS_BASE),
+				String(SENDER_BASE),
+				senders === 'many' ? 1 : 0,
+				new Date(NOW).toISOString()
+			)
+			sql.exec(
+				"INSERT INTO status_mentions (status_id, account_id) SELECT id, ? FROM statuses WHERE visibility = 'direct'",
+				VIEWER_ID
+			)
+			sql.exec(
+				`INSERT INTO notifications (account_id, type, from_account_id) SELECT ?1, 'follow', id FROM accounts
+				WHERE id <> ?1 ORDER BY id LIMIT ?2`,
+				VIEWER_ID,
+				FOLLOWS
+			)
+			sql.exec(
+				`INSERT INTO notifications (account_id, type, from_account_id, status_id, filtered)
+				SELECT ?, 'mention', account_id, id, 1 FROM statuses WHERE visibility = 'direct' ORDER BY id`,
+				VIEWER_ID
+			)
+			sql.exec(
+				`INSERT INTO notification_requests (account_id, from_account_id, last_status_id, notifications_count)
+				SELECT ?1, account_id, max(id), min(count(*), 100) FROM statuses WHERE visibility = 'direct'
+				GROUP BY account_id ORDER BY account_id`,
+				VIEWER_ID
+			)
+			sql.exec(
+				`INSERT INTO notifications (account_id, type, from_account_id) SELECT ?1, 'follow_request', id FROM accounts
+				WHERE id <> ?1 ORDER BY id DESC LIMIT ?2`,
+				VIEWER_ID,
+				REQUESTS
+			)
+			sql.exec(
+				"INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('filtering', 'secret', 'filtering', 'urn:ietf:wg:oauth:2.0:oob', 'read write')"
+			)
+			sql.exec(
+				"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES (?, 'access', 'filtering', ?, 'read write')",
+				FILTER_TOKEN,
+				VIEWER_ID
+			)
+		})
+		return store
+	}
+
+	// The id of the viewer's newest request.
+	const newestRequest = (store: StoreStub) =>
+		runInDurableObject(
+			store,
+			(_instance, state) =>
+				state.storage.sql.exec<{ id: number }>('SELECT max(id) AS id FROM notification_requests').one().id
+		)
+
+	// What a read showed: shown() for pages and counts; the summary for the policy, `merged` for its answer.
+	const showing = (output: unknown): unknown => {
+		const value = (output as { value: unknown }).value as Record<string, unknown>
+		if ('summary' in value) {
+			return value.summary
+		}
+		if ('merged' in value) {
+			return value
+		}
+		if ('notifications_count' in value) {
+			return value.notifications_count
+		}
+		return shown(output)
+	}
+
+	for (const senders of ['many', 'one'] as const) {
+		it(`reads the same rows with 2,500 or 5,000 filtered mentions from ${senders === 'many' ? 'as many senders' : 'one sender'}`, async () => {
+			const few = await filtering(2500, senders)
+			const many = await filtering(5000, senders)
+			const credential = { tokenHash: FILTER_TOKEN, scope: 'read', now: NOW } as const
+			const list = {
+				credential,
+				types: [],
+				excludeTypes: [],
+				accountId: null,
+				includeFiltered: false,
+				present: PRESENT,
+			}
+			const groups = {
+				credential,
+				types: [],
+				excludeTypes: [],
+				groupedTypes: null,
+				includeFiltered: false,
+				expandAccounts: 'full',
+				present: PRESENT,
+			}
+			const counts = {
+				credential,
+				limit: 100,
+				types: [],
+				excludeTypes: [],
+				accountId: null,
+				groupedTypes: null,
+				includeFiltered: false,
+			}
+			// The newest page, and the page below the filtered mentions (the follows), by max_id at the first mention.
+			const below = { ...PAGE, maxId: String(FOLLOWS + 1) }
+			const reads: [string, StoreOperation<never, unknown>, (store: StoreStub) => Promise<unknown>][] = [
+				...[PAGE, below].flatMap((page): [string, StoreOperation<never, unknown>, () => Promise<unknown>][] => [
+					[`notifications ${JSON.stringify(page)}`, listNotifications, async () => ({ ...list, page })],
+					[
+						`grouped notifications ${JSON.stringify(page)}`,
+						listGroupedNotifications,
+						async () => ({ ...groups, page }),
+					],
+				]),
+				['unread count', unreadCount, async () => counts],
+				['unread group count', unreadGroupCount, async () => counts],
+				['requests', listNotificationRequests, async () => ({ credential, page: PAGE, present: PRESENT })],
+				[
+					'request',
+					getNotificationRequest,
+					async (store) => ({ credential, id: String(await newestRequest(store)), present: PRESENT }),
+				],
+				['policy', getNotificationPolicy, async () => ({ credential })],
+				['merged', notificationRequestsMerged, async () => ({ credential })],
+			]
+			const grown: string[] = []
+			for (const [name, operation, inputOf] of reads) {
+				const shownBy = async (store: StoreStub) => {
+					const input = await inputOf(store)
+					return runInDurableObject(store, (_instance, state) =>
+						showing(operation.run(state.storage.sql, input as never))
+					)
+				}
+				const fewShown = await shownBy(few)
+				expect([name, fewShown !== 0]).toEqual([name, true])
+				expect([name, await shownBy(many)]).toEqual([name, fewShown])
+				const fewRows = await rowsRead({ store: few }, operation, (await inputOf(few)) as never)
+				const manyRows = await rowsRead({ store: many }, operation, (await inputOf(many)) as never)
+				if (manyRows > fewRows + ALLOWANCE) {
+					grown.push(`${name}: ${fewRows} -> ${manyRows}`)
+				}
+			}
+			// Answering the newest request, on a store of its own each: the request's batches, whatever the sender holds.
+			const write = { credential: { tokenHash: FILTER_TOKEN, scope: 'write', now: NOW }, now: NOW }
+			for (const [name, operation] of [
+				['accept', acceptNotificationRequest],
+				['dismiss', dismissNotificationRequest],
+			] as const) {
+				const rows = async (count: number) => {
+					const store = await filtering(count, senders)
+					return rowsRead({ store }, operation, { ...write, id: String(await newestRequest(store)) } as never)
+				}
+				const fewRows = await rows(2500)
+				const manyRows = await rows(5000)
+				if (manyRows > fewRows + ALLOWANCE) {
+					grown.push(`${name}: ${fewRows} -> ${manyRows}`)
+				}
+			}
+			expect(grown).toEqual([])
+			// The viewer's lists show the follow requests and the follows alone.
+			const newest = await runInDurableObject(few, (_instance, state) =>
+				listNotifications.run(state.storage.sql, { ...list, page: { limit: 40 } } as never)
+			)
+			expect(
+				(newest as { value: { items: { type: string }[] } }).value.items
+					.map((n) => n.type)
+					.filter((t) => t === 'mention')
+			).toEqual([])
+		}, 240_000)
+	}
+})
+
+// The work answered requests leave grows with how many senders are answered: `merged` and a round of the jobs read the
+// same rows with 1,000 or 5,000 pending jobs, the viewer's and others'.
+describe('pending request jobs cost merged and a round a bounded read (RES-7)', () => {
+	const VIEWER_ID = '670000000000000000'
+	const OTHER_ID = '670000000000000001'
+	const SENDER_BASE = 671000000000000000n
+	const JOB_TOKEN = 'jobs-token'
+
+	async function backlog(count: number): Promise<StoreStub> {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			for (const [id, name] of [
+				[VIEWER_ID, 'viewer'],
+				[OTHER_ID, 'other'],
+			]) {
+				sql.exec(
+					'INSERT INTO accounts (id, uri, username) VALUES (?, ?, ?)',
+					id,
+					`https://kopje.test/ap/users/${name}`,
+					name
+				)
+				sql.exec(
+					"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, ?, X'00', X'00', 'test')",
+					id,
+					`${name}@example.com`
+				)
+			}
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+				INSERT INTO accounts (id, uri, username, domain)
+				SELECT CAST(?2 + i AS TEXT), 'https://far.example/users/j' || i, 'j' || i, 'far.example' FROM n`,
+				count,
+				String(SENDER_BASE)
+			)
+			// Each sender has notifications (to someone else) for a batch to walk.
+			sql.exec(
+				`INSERT INTO notifications (account_id, type, from_account_id)
+				SELECT ?1, t.type, a.id FROM accounts a, (SELECT 'follow' AS type UNION ALL SELECT 'follow_request') t
+				WHERE a.domain = 'far.example'`,
+				OTHER_ID
+			)
+			sql.exec(
+				`INSERT INTO notification_request_jobs (account_id, from_account_id, kind, cursor)
+				SELECT CASE WHEN rowid % 2 = 0 THEN ?1 ELSE ?2 END, id, CASE WHEN rowid % 3 = 0 THEN 'accept' ELSE 'dismiss' END,
+					(SELECT max(id) + 1 FROM notifications)
+				FROM accounts WHERE domain = 'far.example'`,
+				OTHER_ID,
+				VIEWER_ID
+			)
+			sql.exec(
+				"INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('jobs', 'secret', 'jobs', 'urn:ietf:wg:oauth:2.0:oob', 'read')"
+			)
+			sql.exec(
+				"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES (?, 'access', 'jobs', ?, 'read')",
+				JOB_TOKEN,
+				VIEWER_ID
+			)
+		})
+		return store
+	}
+
+	it('reads the same rows with 1,000 or 5,000 pending jobs', async () => {
+		const few = await backlog(1000)
+		const many = await backlog(5000)
+		const credential = { tokenHash: JOB_TOKEN, scope: 'read', now: NOW } as const
+		const grown: string[] = []
+		for (const [name, operation, input] of [
+			['merged', notificationRequestsMerged, { credential }],
+			['round', runNotificationRequestJobs, { now: NOW }],
+		] as [string, StoreOperation<never, unknown>, unknown][]) {
+			const fewRows = await rowsRead({ store: few }, operation, input as never)
+			const manyRows = await rowsRead({ store: many }, operation, input as never)
+			if (manyRows > fewRows + ALLOWANCE) {
+				grown.push(`${name}: ${fewRows} -> ${manyRows}`)
+			}
+		}
+		expect(grown).toEqual([])
+		const merged = await runInDurableObject(many, (_instance, state) =>
+			notificationRequestsMerged.run(state.storage.sql, { credential } as never)
+		)
+		expect(merged).toEqual({ status: 'ok', value: { merged: false } })
+	}, 120_000)
+})
+
+// A request's last status is judged by the notification rule over that status alone: listing or showing the request
+// reads the same rows with 1,000 or 5,000 statuses of other accounts the viewer may not see, stored before it.
+describe("a request's last status costs a read nothing else (RES-7)", () => {
+	const VIEWER_ID = '680000000000000000'
+	const SENDER_ID = '680000000000000001'
+	const OTHER_ID = '680000000000000002'
+	const STATUS_BASE = 681000000000000000n
+	const REQUEST_TOKEN = 'request-token'
+
+	async function hidden(count: number): Promise<StoreStub> {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username) VALUES (?, 'https://kopje.test/ap/users/viewer', 'viewer')",
+				VIEWER_ID
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'viewer@example.com', X'00', X'00', 'test')",
+				VIEWER_ID
+			)
+			for (const [id, name] of [
+				[SENDER_ID, 'sender'],
+				[OTHER_ID, 'other'],
+			]) {
+				sql.exec(
+					"INSERT INTO accounts (id, uri, username, domain) VALUES (?, ?, ?, 'far.example')",
+					id,
+					`https://far.example/users/${name}`,
+					name
+				)
+			}
+			// The other account's private statuses, which the viewer (no follower) may not see, stored first.
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+				INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+				SELECT CAST(?2 + i AS TEXT), 'https://far.example/objects/p' || i, ?3, 'private', '<p>x</p>', ?4 FROM n`,
+				count,
+				String(STATUS_BASE),
+				OTHER_ID,
+				new Date(NOW).toISOString()
+			)
+			sql.exec(
+				`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+				VALUES ('689000000000000000', 'https://far.example/objects/dm', ?, 'direct', '<p>hi</p>', ?)`,
+				SENDER_ID,
+				new Date(NOW).toISOString()
+			)
+			sql.exec("INSERT INTO status_mentions (status_id, account_id) VALUES ('689000000000000000', ?)", VIEWER_ID)
+			sql.exec(
+				`INSERT INTO notifications (account_id, type, from_account_id, status_id, filtered)
+				VALUES (?, 'mention', ?, '689000000000000000', 1)`,
+				VIEWER_ID,
+				SENDER_ID
+			)
+			sql.exec(
+				`INSERT INTO notification_requests (account_id, from_account_id, last_status_id, notifications_count)
+				VALUES (?, ?, '689000000000000000', 1)`,
+				VIEWER_ID,
+				SENDER_ID
+			)
+			sql.exec(
+				"INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('request', 'secret', 'request', 'urn:ietf:wg:oauth:2.0:oob', 'read')"
+			)
+			sql.exec(
+				"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES (?, 'access', 'request', ?, 'read')",
+				REQUEST_TOKEN,
+				VIEWER_ID
+			)
+		})
+		return store
+	}
+
+	it('reads the same rows with 1,000 or 5,000 statuses the viewer may not see', async () => {
+		const few = await hidden(1000)
+		const many = await hidden(5000)
+		const credential = { tokenHash: REQUEST_TOKEN, scope: 'read', now: NOW } as const
+		const grown: string[] = []
+		for (const [name, operation, input] of [
+			['requests', listNotificationRequests, { credential, page: PAGE, present: PRESENT }],
+			['request', getNotificationRequest, { credential, id: '1', present: PRESENT }],
+		] as [string, StoreOperation<never, unknown>, unknown][]) {
+			const shownBy = async (store: StoreStub) =>
+				runInDurableObject(store, (_instance, state) => operation.run(state.storage.sql, input as never))
+			const output = JSON.stringify(await shownBy(few))
+			// The request shows its last status at either size.
+			expect([name, output.includes('"last_status":{')]).toEqual([name, true])
+			const fewRows = await rowsRead({ store: few }, operation, input as never)
+			const manyRows = await rowsRead({ store: many }, operation, input as never)
+			if (manyRows > fewRows + ALLOWANCE) {
+				grown.push(`${name}: ${fewRows} -> ${manyRows}`)
+			}
+		}
+		expect(grown).toEqual([])
+	}, 120_000)
 })

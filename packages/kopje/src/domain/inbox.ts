@@ -1253,6 +1253,28 @@ function purgeRelationships(db: Db, id: string, budget: Budget): void {
 		'DELETE FROM notifications WHERE id IN (SELECT id FROM notifications WHERE from_account_id = ? LIMIT ?)',
 		id
 	)
+	// The local users' notification permissions for the account, its requests to them and the jobs of those answered
+	// (migration 0020_notification_policies), any number of each.
+	spend(
+		db,
+		budget,
+		`DELETE FROM notification_permissions WHERE from_account_id = ?1
+			AND account_id IN (SELECT account_id FROM notification_permissions WHERE from_account_id = ?1 LIMIT ?2)`,
+		id
+	)
+	spend(
+		db,
+		budget,
+		'DELETE FROM notification_requests WHERE id IN (SELECT id FROM notification_requests WHERE from_account_id = ? LIMIT ?)',
+		id
+	)
+	spend(
+		db,
+		budget,
+		`DELETE FROM notification_request_jobs
+			WHERE id IN (SELECT id FROM notification_request_jobs WHERE from_account_id = ? LIMIT ?)`,
+		id
+	)
 	// Its votes (the polls keep their counts).
 	deleteAccountVotes(db, id, budget.left())
 	spend(
@@ -1413,6 +1435,17 @@ export const STATUS_CHILDREN: readonly { table: string; column: string; remove: 
 		column: 'status_id',
 		remove: ['DELETE FROM filter_statuses WHERE id IN (SELECT id FROM filter_statuses WHERE status_id = ? LIMIT ?)'],
 	},
+	// Notification requests whose last status it is (migration 0020_notification_policies): one per recipient and
+	// sender, any number of recipients; the request stays, without a last status (ON DELETE SET NULL, as Mastodon's
+	// foreign key nullifies it).
+	{
+		table: 'notification_requests',
+		column: 'last_status_id',
+		remove: [
+			`UPDATE notification_requests SET last_status_id = NULL
+			WHERE id IN (SELECT id FROM notification_requests WHERE last_status_id = ? LIMIT ?)`,
+		],
+	},
 	// Receipts of a withdrawn local boost are deleted here, a batch at a time, after its Undo has taken them as targets.
 	{
 		table: 'outbound_receipts',
@@ -1493,6 +1526,9 @@ export const PURGED_ACCOUNT_CHILDREN: readonly { table: string; check: string; f
 	{ table: 'account_pins', check: 'target_account_id = ?1' },
 	{ table: 'account_notes', check: 'target_account_id = ?1' },
 	{ table: 'notifications', check: 'from_account_id = ?1' },
+	{ table: 'notification_permissions', check: 'from_account_id = ?1' },
+	{ table: 'notification_requests', check: 'from_account_id = ?1' },
+	{ table: 'notification_request_jobs', check: 'from_account_id = ?1' },
 	{ table: 'status_mentions', check: 'account_id = ?1' },
 	{ table: 'statuses', check: 'in_reply_to_account_id = ?1' },
 	{ table: 'media_attachments', check: 'account_id = ?1' },

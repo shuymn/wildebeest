@@ -9,13 +9,16 @@ import {
 } from './context'
 import { mastodonError } from './errors'
 import { linkHeader, pageQuery, pageResponse } from './pagination'
-import type { Params } from './params'
+import { type Params, parseBoolean } from './params'
 import { DEFAULT_UNREAD_LIMIT, type ExpandAccounts, MAX_UNREAD_LIMIT } from '../domain/notification-groups'
 
 // Grouped notifications (Mastodon 4.5's /api/v2/notifications) and the unread counts of /api/v1 and /api/v2; the Store
 // does the work (domain/notification-groups.ts).
 
 const types = (p: Params, name: string) => p.getAll(name).filter((type) => type !== '')
+
+// include_filtered (truthy_param?, Rails' boolean casting): filtered notifications too.
+const includeFiltered = (p: Params) => parseBoolean(p.get('include_filtered')) === true
 
 // grouped_types[]: null when not sent (every groupable type), else the types sent.
 const groupedTypes = (p: Params) => (p.has('grouped_types') ? p.getAll('grouped_types') : null)
@@ -32,8 +35,8 @@ function unreadLimit(p: Params): number {
 	return limit === undefined ? DEFAULT_UNREAD_LIMIT : Math.min(Math.abs(rubyInteger(limit)), MAX_UNREAD_LIMIT)
 }
 
-// GET /api/v2/notifications: types[], exclude_types[], grouped_types[], expand_accounts, and the page (40 groups by
-// default, at most 80). Mastodon's v2 reads no account_id.
+// GET /api/v2/notifications: types[], exclude_types[], grouped_types[], include_filtered, expand_accounts, and the
+// page (40 groups by default, at most 80). Mastodon's v2 reads no account_id.
 export const listGroupedNotifications: ApiHandler = async (c, deps) => {
 	const p = await requestParams(c, deps)
 	if (p instanceof Response) {
@@ -60,6 +63,7 @@ export const listGroupedNotifications: ApiHandler = async (c, deps) => {
 				types: types(p, 'types'),
 				excludeTypes: types(p, 'exclude_types'),
 				groupedTypes: groupedTypes(p),
+				includeFiltered: includeFiltered(p),
 				expandAccounts: (expand ?? 'full') as ExpandAccounts,
 				present: present(c),
 			})
@@ -106,8 +110,8 @@ export const dismissNotificationGroup: ApiHandler = async (c, deps) => {
 	return c.json({})
 }
 
-// GET /api/v1/notifications/unread_count: types[], exclude_types[], account_id and limit (100 by default, at most
-// 1,000).
+// GET /api/v1/notifications/unread_count: types[], exclude_types[], account_id, include_filtered and limit (100 by
+// default, at most 1,000).
 export const unreadCount: ApiHandler = async (c, deps) => {
 	const p = await requestParams(c, deps)
 	if (p instanceof Response) {
@@ -122,12 +126,13 @@ export const unreadCount: ApiHandler = async (c, deps) => {
 		excludeTypes: types(p, 'exclude_types'),
 		accountId: accountId === undefined || accountId === '' ? null : accountId,
 		groupedTypes: null,
+		includeFiltered: includeFiltered(p),
 	}
 	return c.json(authorized(await storeCall(c, deps, (s, b) => s.unreadNotificationCount(b, input))))
 }
 
-// GET /api/v2/notifications/unread_count: types[], exclude_types[], grouped_types[] and limit (100 by default, at most
-// 1,000).
+// GET /api/v2/notifications/unread_count: types[], exclude_types[], grouped_types[], include_filtered and limit (100
+// by default, at most 1,000).
 export const unreadGroupCount: ApiHandler = async (c, deps) => {
 	const p = await requestParams(c, deps)
 	if (p instanceof Response) {
@@ -141,6 +146,7 @@ export const unreadGroupCount: ApiHandler = async (c, deps) => {
 		excludeTypes: types(p, 'exclude_types'),
 		accountId: null,
 		groupedTypes: groupedTypes(p),
+		includeFiltered: includeFiltered(p),
 	}
 	return c.json(authorized(await storeCall(c, deps, (s, b) => s.unreadNotificationGroupCount(b, input))))
 }
