@@ -8,6 +8,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+## [0.1.0-rc.8] - 2026-10-16
+
+An eighth release candidate of the first release, published under the npm dist-tag `next`.
+
 ### Added
 
 - oEmbed, as Mastodon 4.5 has it: `GET /api/oembed?url=` (no token) answers a `rich` embed of a status, with
