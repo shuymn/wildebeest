@@ -79,6 +79,23 @@ async function sync(t: Setup, loader: Parameters<typeof inboxDeps>[1] = t.web.lo
 	expect(await rows(t, 'collection_syncs')).toEqual([{ n: 0 }])
 }
 
+// The Store, with `after` run once a call of `method` has returned (a point between two steps of a round).
+function storeWithHook(t: Setup, method: string, after: () => Promise<void>) {
+	const stub = t.store as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>
+	return new Proxy(t.store, {
+		get(_target, key: string) {
+			if (key === method) {
+				return async (...args: unknown[]) => {
+					const result = await stub[key]!(...args)
+					await after()
+					return result
+				}
+			}
+			return (...args: unknown[]) => stub[key]!(...args)
+		},
+	})
+}
+
 describe('learning a remote account’s collections from Add and Remove', () => {
 	it('pins and unpins its statuses and features its hashtags, shown with the audience rules', async () => {
 		const clock = { now: NOW }
@@ -146,18 +163,8 @@ describe('learning a remote account’s collections from Add and Remove', () => 
 		t.web.serve(featured, { '@context': AS, id: featured, type: 'OrderedCollection', orderedItems: [note.id] })
 		await followed(t, bob)
 		// Alice unfollows bob after the round claimed the sync (naming her), before her key is loaded.
-		const stub = t.store as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>
-		const store = new Proxy(t.store, {
-			get(_target, key: string) {
-				if (key === 'claimCollectionSync') {
-					return async (...args: unknown[]) => {
-						const claimed = await stub.claimCollectionSync!(...args)
-						await sql(t.store, 'DELETE FROM follows WHERE account_id = ?', ALICE)
-						return claimed
-					}
-				}
-				return (...args: unknown[]) => stub[key]!(...args)
-			},
+		const store = storeWithHook(t, 'claimCollectionSync', async () => {
+			await sql(t.store, 'DELETE FROM follows WHERE account_id = ?', ALICE)
 		})
 		const unfollowing = { ...deps(t), store: () => store }
 		for (let round = 0; round < 5 && (await syncCollections(t.env, unfollowing)); round++) {
@@ -485,6 +492,34 @@ describe('reading a remote account’s collections', () => {
 		expect((await pinned(t, bobId, null)).length).toBeLessThan(notes.length)
 		await sync(t)
 		expect(await pinned(t, bobId, null)).toEqual(notes.map((note) => note.id))
+	})
+
+	it('pins no pending status the actor removed before it was fetched, or while it was', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const [before, during] = [mastodonNote(bob), mastodonNote(bob)]
+		await servedCollections(t, bob, [before.id, during.id], [])
+		const bobId = await followed(t, bob)
+		// Bob removes `before` once the read left both pending, and `during` while its fetch is answered.
+		t.web.serve(before.id, { '@context': AS, ...before })
+		t.web.serve(during.id, { '@context': AS, ...during })
+		const removing = (async (input: RequestInfo | URL, init?: RequestInit) => {
+			if (new Request(input, init).url === during.id) {
+				expect(await t.post(bob, addOrRemove('Remove', bob, during.id))).toBe(202)
+			}
+			return t.web.fetch(input, init)
+		}) as typeof fetch
+		const store = storeWithHook(t, 'completeCollectionRead', async () => {
+			expect(await rows(t, 'collection_pins_pending')).toEqual([{ n: 2 }])
+			expect(await t.post(bob, addOrRemove('Remove', bob, before.id))).toBe(202)
+		})
+		const hooked = { ...deps(t, { ...t.web.loader, fetch: removing }), store: () => store }
+		for (let round = 0; round < 5 && (await syncCollections(t.env, hooked)); round++) {
+			// Until no sync is due.
+		}
+		expect(t.web.fetched).toContain(during.id)
+		expect(await pinned(t, bobId, null)).toEqual([])
+		expect(await rows(t, 'collection_pins_pending')).toEqual([{ n: 0 }])
 	})
 
 	it('drops pending statuses that cannot be used, and reaches those after them', async () => {

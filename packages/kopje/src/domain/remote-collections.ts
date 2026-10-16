@@ -163,15 +163,17 @@ function pinsBelowCap(db: Db, accountId: string): boolean {
 }
 
 // Remove#remove_featured: the account's pin of its status, if any.
+// A pin a sync left pending (its status not fetched yet) goes too, in the same transaction, so a later round does not
+// pin it again; a round that fetched it pins nothing once its pending row is gone (completePinFetches).
 export function unpinRemote(db: Db, accountId: string, statusUri: string): boolean {
-	return (
-		db.run(
-			`DELETE FROM status_pins WHERE account_id = ?1
-			AND status_id = (SELECT id FROM statuses WHERE uri = ?2 AND account_id = ?1)`,
-			accountId,
-			statusUri
-		) > 0
+	const pending = db.run('DELETE FROM collection_pins_pending WHERE account_id = ? AND uri = ?', accountId, statusUri)
+	const pinned = db.run(
+		`DELETE FROM status_pins WHERE account_id = ?1
+		AND status_id = (SELECT id FROM statuses WHERE uri = ?2 AND account_id = ?1)`,
+		accountId,
+		statusUri
 	)
+	return pending + pinned > 0
 }
 
 // FeaturedTag's normalization of a received name (a leading # dropped, surrounding whitespace too), or null when it is
