@@ -6,11 +6,12 @@
 --
 --   stream_status_inserted,  recreated so a status (or boost) inserted or edited is journaled while some account
 --   stream_status_edited     subscribes to a list (`list:<id>`) too, not only to `user` (or `user:notification`). Each
---                            message is still judged when it is made (R33), by the list's read positioned at the status.
+--                            message is still judged when it is made (R33), by the list's read positioned at the
+--                            status.
 --   stream_conversation_marks the per-owner high-water mark of conversation changes: created at the owner's first
 --                            `direct` subscription from the highest stream_seq of their conversations, never lowered or
---                            deleted (but with the account). Every write of a conversation of an owner with a mark takes
---                            the next value and stores it in the row's stream_seq, in the same write.
+--                            deleted (but with the account). Every write of a conversation of an owner with a mark
+--                            takes the next value and stores it in the row's stream_seq, in the same write.
 --   conversations.stream_seq the change sequence of the row (0 until its owner has a mark), and conversations_stream,
 --                            the index an owner's newest changes are read through (at most 20 an event).
 --   stream_events            rebuilt to admit the kind 'conversation' (its CHECK names the kinds), with the same rows

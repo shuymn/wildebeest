@@ -148,7 +148,7 @@ export function homeStatus(db: Db, viewer: UserContext, statusId: string) {
 	if (!/^\d{18}$/.test(statusId)) {
 		return null
 	}
-	const cursor: Cursor = { max: statusCursor(String(BigInt(statusId) + 1n)), min: null, ascending: false, limit: 1 }
+	const cursor = statusPage({ maxId: String(BigInt(statusId) + 1n), limit: 1 })
 	return homeRows(db, viewer, cursor, statusId)[0]?.id ?? null
 }
 
@@ -296,14 +296,22 @@ export const listTimeline = userReadOperation<{ id: string; page: PageQuery; pre
 // cut to the status's author, read through the (list_id, account_id) key, so the work does not grow with the list's
 // members or anyone's statuses. The status, if that read returns it.
 export function listStatus(db: Db, viewer: UserContext, listId: string, statusId: string) {
+	const list = ownList(db, viewer.accountId, listId)
+	return list === undefined ? null : ownListStatus(db, viewer, list, statusId)
+}
+
+// listStatus for a list already found to be the viewer's (ownList), as a delete's capture reads it for the status and
+// each of its boosts.
+export function ownListStatus(
+	db: Db,
+	viewer: UserContext,
+	list: { id: string; replies_policy: RepliesPolicy },
+	statusId: string
+) {
 	if (!/^\d{18}$/.test(statusId)) {
 		return null
 	}
-	const list = ownList(db, viewer.accountId, listId)
-	if (list === undefined) {
-		return null
-	}
-	const cursor: Cursor = { max: statusCursor(String(BigInt(statusId) + 1n)), min: null, ascending: false, limit: 1 }
+	const cursor = statusPage({ maxId: String(BigInt(statusId) + 1n), limit: 1 })
 	return listRows(db, viewer, list, cursor, statusId)[0]?.id ?? null
 }
 

@@ -652,11 +652,12 @@ export class StreamHub {
 	}
 
 	// A conversation event's units (its subject is the owner): the owner's newest changes (CONVERSATIONS_PER_TURN, older
-	// ones skipped) above the lowest convSeq of its `direct` sockets and above the position within the event, and at
-	// most the event's ceiling (fixed when the fan-out entered it, so a turn that resumes the event never reads a change
-	// written since: that one has the owner's next row), oldest of them first, each one conversation, its subject index the change's sequence. A unit goes to the sockets whose
-	// convSeq is below its change. A socket's `since` does not apply: its convSeq, set from the owner's mark when it
-	// subscribed, says what it has been sent, and a change written after it opened may join a row journaled before.
+	// ones skipped) above the lowest convSeq of its `direct` sockets and above the position within the event, and at most
+	// the event's ceiling (fixed when the fan-out entered it, so a turn that resumes the event never reads a change
+	// written since: that one has the owner's next row), oldest of them first, each one conversation, its subject index
+	// the change's sequence. A unit goes to the sockets whose convSeq is below its change. A socket's `since` does not
+	// apply: its convSeq, set from the owner's mark when it subscribed, says what it has been sent, and a change written
+	// after it opened may join a row journaled before.
 	async #conversationUnits(owner: string, sockets: Socket[], position: number, ceiling: number): Promise<Unit[]> {
 		const lowest = Math.min(...sockets.map(({ at }) => at.convSeq))
 		const changes = await this.#run(streamConversations, {
@@ -682,25 +683,17 @@ export class StreamHub {
 		)
 	}
 
-	// One unit of the journal: made, the position moved past it (and, for a conversation, the convSeq of the sockets it
-	// goes to raised to its change), then sent. Returns false when another turn moved the position first.
-	#unit(event: StreamEvent, unit: Unit, from: StreamPosition, to: StreamPosition, budget: Budget): Promise<boolean> {
-		return this.#deliver(event.kind, unit, budget, async () => {
-			if (!(await this.#run(streamAdvance, { from, to }))) {
-				return false
-			}
-			if (event.kind === 'conversation') {
-				for (const { ws } of unit.sockets) {
-					this.#update(ws, (at) => ({ ...at, convSeq: Math.max(at.convSeq, unit.subject.index) }))
-				}
-			}
-			return true
-		})
-	}
-
-	// One unit: made in its own transaction (tokens checked, the reference reads, the presentation), its progress
-	// persisted (`commit`: the position, or the sockets' convSeq), then sent. Returns false when `commit` refuses.
-	async #deliver(kind: string, unit: Unit, budget: Budget, commit: () => Promise<boolean>): Promise<boolean> {
+	// One unit: made in its own transaction (tokens checked, the reference reads, the presentation), the position moved
+	// past it (and, for a conversation, the convSeq of the sockets it goes to raised to its change), then sent. Returns
+	// false when another turn moved the position first.
+	async #unit(
+		event: StreamEvent,
+		unit: Unit,
+		from: StreamPosition,
+		to: StreamPosition,
+		budget: Budget
+	): Promise<boolean> {
+		const { kind } = event
 		const tokenHashes = [...new Set(unit.sockets.map(({ at }) => at.tokenHash))]
 		const made = await this.#run(streamUnit, {
 			kind,
@@ -746,8 +739,13 @@ export class StreamHub {
 				}
 			}
 		}
-		if (!(await commit())) {
+		if (!(await this.#run(streamAdvance, { from, to }))) {
 			return false
+		}
+		if (kind === 'conversation') {
+			for (const { ws } of unit.sockets) {
+				this.#update(ws, (at) => ({ ...at, convSeq: Math.max(at.convSeq, unit.subject.index) }))
+			}
 		}
 		let sent = 0
 		try {

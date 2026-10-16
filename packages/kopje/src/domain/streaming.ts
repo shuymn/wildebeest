@@ -6,7 +6,7 @@ import { mentionedStatus, streamedNotification } from './notifications'
 import { readOperation, sessionOperation } from './operation'
 import { instanceOrigin } from './push'
 import { presentStatus } from './status-presenter'
-import { homeStatus, listStatus } from './timelines'
+import { homeStatus, listStatus, ownListStatus } from './timelines'
 import type { Db } from '../db/sql'
 import { storeMaintenanceError } from '../platform/store-errors'
 import type { StoreOperation } from '../platform/store-kernel'
@@ -191,7 +191,7 @@ export const streamTokens = readOperation<
 })
 
 // A subject of a unit: its index among the viewer's units of the event (0 for the status, then a delete's captured
-// boosts by id), and its id.
+// boosts by id; for a conversation event, the change's sequence), and its id.
 export type StreamSubject = { index: number; id: string }
 
 // A journal event and, but for a delete (read a page at a time: streamDeleteUnits), the accounts that may be sent it in
@@ -201,13 +201,14 @@ export type StreamEvent = { id: number; kind: string; subject: string; viewers: 
 // The journal after `position`, oldest first, at most `limit` events, each with the accounts that may be sent it in
 // unit order: for a notification, its recipient while it exists; for a merge, its recipient; for a status, every
 // account listening on `user` or a list, and for an edit on `user`, `user:notification` or a list (the registry's, at
-// most 256, read once a scan). A delete's units are not read here. The event of a position within an event is read again (for its units after the position's), and a
-// finished one is not, so a full window means more may follow. Also the journal's span.
+// most 256, read once a scan). A delete's units are not read here. The event of a position within an event is read
+// again (for its units after the position's), and a finished one is not, so a full window means more may follow. Also
+// the journal's span.
 export const streamEvents = readOperation<
 	{ limit: number },
 	{ position: StreamPosition; ceiling: number; events: StreamEvent[]; head: number; tail: number }
 >((db, { limit }) => {
-	const position = readPosition(db)
+	const { position, ceiling } = readCursor(db)
 	const rows = db.all<{ id: number; kind: string; subject: string; recipient: string | null }>(
 		`SELECT e.id, e.kind, e.subject, n.account_id AS recipient FROM stream_events e
 			LEFT JOIN notifications n ON e.kind = 'notification' AND n.id = CAST(e.subject AS INTEGER)
@@ -252,7 +253,8 @@ export const streamEvents = readOperation<
 			default:
 				viewers = []
 		}
-		// Within the position's event, only the viewers after its account (these events have one unit per viewer).
+		// Within the position's event, only the viewers after its account (these events have one unit per viewer; a
+		// conversation event's units, all its owner's, are resumed by the hub from the position's subject).
 		const after = row.id === position.event ? position.account : null
 		if (after !== null) {
 			viewers = viewers.filter((viewer) => viewer > after)
@@ -263,7 +265,7 @@ export const streamEvents = readOperation<
 	const span = db.first<{ head: number | null; tail: number | null }>(
 		'SELECT (SELECT max(id) FROM stream_events) AS head, (SELECT min(id) FROM stream_events) AS tail'
 	)
-	return { position, ceiling: readCeiling(db), events, head: span?.head ?? 0, tail: span?.tail ?? 0 }
+	return { position, ceiling, events, head: span?.head ?? 0, tail: span?.tail ?? 0 }
 })
 
 // Where a page of a delete's units starts: after the unit (account, subject), or at the start.
@@ -454,9 +456,9 @@ function listStreams(listed: readonly { id: string }[]): StreamUnit['streams'] {
 // or a list that may view the status (R3), holding the boosts of it the account may view (deleteAudience in
 // audience.ts, at most CAPTURE_LIMITS.boosts), and for the status and each boost the account's subscribed lists whose
 // read positioned at it returns it (listStatus: at most 16 lists, each a narrowed read). Nothing is written when nobody
-// listening may view it, or when the journal is full (the fan-out stalled; logged as the triggers' events are). The rows
-// are at most 1 + 256 (the registry's accounts), each within CAPTURE_LIMITS.viewerBytes; a row over it is truncated and
-// logged, never refused, so the capture never fails the delete.
+// listening may view it, or when the journal is full (the fan-out stalled; logged as the triggers' events are). The
+// rows are at most 1 + 256 (the registry's accounts), each within CAPTURE_LIMITS.viewerBytes; a row over it is
+// truncated and logged, never refused, so the capture never fails the delete.
 export function streamDelete(db: Db, statusId: string, now: number): void {
 	const listening = new Map<string, string[]>()
 	for (const row of db.all<{ account_id: string; stream_key: string }>(
@@ -486,9 +488,11 @@ export function streamDelete(db: Db, statusId: string, now: number): void {
 		new Date(now).toISOString()
 	)!.id
 	for (const viewer of audience) {
-		const subscribed = listening.get(viewer.accountId) ?? []
+		// The viewer's subscribed lists that are its own, in order, each found once for the status and all its boosts.
+		const owned = (listening.get(viewer.accountId) ?? []).flatMap((id) => ownList(db, viewer.accountId, id) ?? [])
 		const context = listenerContext(viewer.accountId, now)
-		const lists = (id: string) => subscribed.filter((list) => listStatus(db, context, list, id) !== null)
+		const lists = (id: string) =>
+			owned.filter((list) => ownListStatus(db, context, list, id) !== null).map((list) => list.id)
 		const row = captureRow(
 			lists(statusId),
 			viewer.boosts.map((boost) => [boost, lists(boost)])
@@ -601,9 +605,9 @@ export const streamPrune = sessionOperation<{ upTo: number }, { pruned: number; 
 export type StreamKeys = readonly { key: string; sockets: number }[]
 
 // The stream keys an account's open sockets subscribe to, replacing what was recorded: written on subscribe,
-// unsubscribe and close. With `direct`, the account's conversation mark, made on its first subscription from the highest
-// stream_seq of its conversations (one seek of conversations_stream), never lowered; returned as where a socket that
-// subscribes now starts (its convSeq).
+// unsubscribe and close. With `direct`, the account's conversation mark, made on its first subscription from the
+// highest stream_seq of its conversations (one seek of conversations_stream), never lowered; returned as where a socket
+// that subscribes now starts (its convSeq).
 export const streamRegister = sessionOperation<{ accountId: string; keys: StreamKeys }, { convSeq: number | null }>(
 	(db, { accountId, keys }) => {
 		db.run('DELETE FROM stream_subscriptions WHERE account_id = ?', accountId)
@@ -630,9 +634,9 @@ export const streamListOwned = readOperation<{ accountId: string; listId: string
 	(db, { accountId, listId }) => ownList(db, accountId, listId) !== undefined
 )
 
-// An owner's conversation changes above `after` (the lowest convSeq of its `direct` sockets, or the position within
-// the event) and at most `upTo` (the event's ceiling): the newest `limit`, by conversations_stream, oldest of them first, so they are sent in order and each
-// socket's convSeq rises with each. Older changes are skipped.
+// An owner's conversation changes above `after` (the lowest convSeq of its `direct` sockets, or the position within the
+// event) and at most `upTo` (the event's ceiling): the newest `limit`, by conversations_stream, oldest of them first,
+// so they are sent in order and each socket's convSeq rises with each. Older changes are skipped.
 export const streamConversations = readOperation<
 	{ accountId: string; after: number; upTo: number; limit: number },
 	{ id: string; seq: number }[]
@@ -707,16 +711,20 @@ function insertKeys(db: Db, accountId: string, keys: StreamKeys): void {
 	}
 }
 
-// The ceiling of the conversation event the position is within (streamEnterConversation); meaningless elsewhere.
-function readCeiling(db: Db): number {
-	return db.first<{ ceiling: number | null }>('SELECT ceiling FROM stream_cursor WHERE id = 1')?.ceiling ?? 0
+// The position, and the ceiling of the conversation event it is within (streamEnterConversation; meaningless
+// elsewhere).
+function readCursor(db: Db): { position: StreamPosition; ceiling: number } {
+	const row = db.first<{ event_id: number; subject: number; account_id: string | null; ceiling: number | null }>(
+		'SELECT event_id, subject, account_id, ceiling FROM stream_cursor WHERE id = 1'
+	)
+	return {
+		position: { event: row?.event_id ?? 0, subject: row?.subject ?? 0, account: row?.account_id ?? null },
+		ceiling: row?.ceiling ?? 0,
+	}
 }
 
 function readPosition(db: Db): StreamPosition {
-	const row = db.first<{ event_id: number; subject: number; account_id: string | null }>(
-		'SELECT event_id, subject, account_id FROM stream_cursor WHERE id = 1'
-	)
-	return { event: row?.event_id ?? 0, subject: row?.subject ?? 0, account: row?.account_id ?? null }
+	return readCursor(db).position
 }
 
 // Whether the journal spans JOURNAL_SPAN ids (the fan-out stalled), logged for an event of `kind` it then refuses.
