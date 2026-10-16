@@ -124,6 +124,29 @@ describe('the subscribe protocol', () => {
 		expect(inbox.rest().map((m) => [m.stream, m.event])).toEqual([[['user:notification'], 'notification']])
 	})
 
+	it('refuses a subscription the registry cannot record (a dump freezes it), so the client subscribes again', async () => {
+		const h = await community(['alice', 'bob', 'carol'])
+		// A turn has run: the registry is not rebuilt from the sockets again.
+		const other = await subscribed(h, h.users.bob.token, 'user:notification')
+		await drained(h, other)
+		const inbox = await connect(h, h.users.alice.token)
+		const started = await h.store.dumpStart(BUILD)
+		if (!started.ok) {
+			throw new Error(started.message)
+		}
+		inbox.send({ type: 'subscribe', stream: 'user:notification' })
+		expect(await inbox.next()).toEqual({ error: 'An unexpected error occurred', status: 500 })
+		expect(await h.store.dumpFinish(BUILD, started.cursor, true)).toMatchObject({ ok: true })
+		await follow(h, h.users.bob, h.users.alice.id)
+		await drained(h, inbox)
+		expect(inbox.rest()).toEqual([])
+		inbox.send({ type: 'subscribe', stream: 'user:notification' })
+		await settled(h, inbox)
+		await follow(h, h.users.carol, h.users.alice.id)
+		await drained(h, inbox)
+		expect(notifications(inbox.rest(), 'user:notification')).toMatchObject([{ type: 'follow' }])
+	})
+
 	it('answers an unknown or unserved stream with Unknown stream type, and an unknown unsubscribe', async () => {
 		const h = await community(['alice'])
 		const inbox = await connect(h, h.users.alice.token)

@@ -268,8 +268,11 @@ export class StreamHub {
 			return
 		}
 		const next: Attachment = { ...at, subs: [...at.subs, stream] }
+		// The account's keys with this socket's as they would be.
 		const keys = this.#keys(at.accountId, ws)
-		keys.set(stream, (keys.get(stream) ?? 0) + 1)
+		for (const sub of next.subs) {
+			keys.set(sub, (keys.get(sub) ?? 0) + 1)
+		}
 		if (
 			next.subs.length > STREAM_LIMITS.subscriptionsPerSocket ||
 			keys.size > STREAM_LIMITS.keysPerAccount ||
@@ -277,8 +280,16 @@ export class StreamHub {
 		) {
 			return send(ws, { error: 'Too many subscriptions', status: 429 })
 		}
+		// The registry first: a subscription it does not hold would journal nothing for the account. A refused write (a
+		// dump's freeze, maintenance) leaves the socket unsubscribed and says so, as Mastodon answers an unexpected
+		// failure, so the client subscribes again.
+		try {
+			await this.#run(streamRegister, { accountId: at.accountId, keys: keysOf(keys) })
+		} catch (error) {
+			console.warn({ event: 'kopje.stream.register-failed', ...errorFields(error) })
+			return send(ws, { error: 'An unexpected error occurred', status: 500 })
+		}
 		ws.serializeAttachment(next)
-		await this.#sync(at.accountId)
 	}
 
 	// Mastodon's unsubscribeWebsocketFromChannel: a stream it cannot resolve answers its one unsubscribe error.
