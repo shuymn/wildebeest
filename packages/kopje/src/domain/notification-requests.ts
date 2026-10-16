@@ -390,8 +390,10 @@ export const dismissNotificationRequests = userWriteOperation<{ ids: string[] },
 export const notificationRequestsMerged = userReadOperation<object, { merged: boolean }>(
 	(db, _input, { accountId }) => ({
 		merged:
-			db.first("SELECT 1 AS x FROM notification_request_jobs WHERE account_id = ? AND kind = 'accept'", accountId) ===
-			undefined,
+			db.first(
+				"SELECT 1 AS x FROM notification_request_jobs WHERE account_id = ? AND kind = 'accept' LIMIT 1",
+				accountId
+			) === undefined,
 	})
 )
 
@@ -401,7 +403,7 @@ export const runNotificationRequestJobs = writeOperation<{ now: number }, { pend
 	(db, { now }) => {
 		runJobs(db, null, REQUEST_JOB_BATCHES, new Date(now).toISOString())
 		return {
-			pending: db.first('SELECT 1 AS x FROM notification_request_jobs') !== undefined,
+			pending: db.first('SELECT 1 AS x FROM notification_request_jobs LIMIT 1') !== undefined,
 			delivers: false,
 		}
 	}

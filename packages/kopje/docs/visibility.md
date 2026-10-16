@@ -547,7 +547,8 @@ A last case grows the viewer's filtered notifications from 2,500 to 5,000 privat
 newer follow requests, each from a sender of its own with a request, or all from one sender with one request: the
 newest page and the page below them of the notifications and of the grouped notifications, both unread counts, the
 newest page of requests, a request, the policy's summary and `merged` read at most 10 rows more, and so do accepting and
-dismissing a request (its batches walk at most 2,000 of the sender's notifications).
+dismissing a request (its batches walk at most 2,000 of the sender's notifications). Another grows the pending jobs of answered requests
+from 1,000 to 5,000: `merged` and a round of the jobs read at most 10 rows more.
 
 `test/policy-endpoints.test.ts` runs the read endpoints themselves on generated worlds, with favourites, bookmarks and
 notifications added, for each available local viewer and, where the endpoint answers without a token, the anonymous

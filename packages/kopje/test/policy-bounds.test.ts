@@ -44,6 +44,7 @@ import {
 	getNotificationRequest,
 	listNotificationRequests,
 	notificationRequestsMerged,
+	runNotificationRequestJobs,
 } from '../src/domain/notification-requests'
 import { listNotifications } from '../src/domain/notifications'
 import { getPoll, vote } from '../src/domain/polls'
@@ -2999,4 +3000,89 @@ describe('filtered notifications and requests cost a read nothing (RES-7)', () =
 			).toEqual([])
 		}, 240_000)
 	}
+})
+
+// The work answered requests leave grows with how many senders are answered: `merged` and a round of the jobs read the
+// same rows with 1,000 or 5,000 pending jobs, the viewer's and others'.
+describe('pending request jobs cost merged and a round a bounded read (RES-7)', () => {
+	const VIEWER_ID = '670000000000000000'
+	const OTHER_ID = '670000000000000001'
+	const SENDER_BASE = 671000000000000000n
+	const JOB_TOKEN = 'jobs-token'
+
+	async function backlog(count: number): Promise<StoreStub> {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			for (const [id, name] of [
+				[VIEWER_ID, 'viewer'],
+				[OTHER_ID, 'other'],
+			]) {
+				sql.exec(
+					'INSERT INTO accounts (id, uri, username) VALUES (?, ?, ?)',
+					id,
+					`https://kopje.test/ap/users/${name}`,
+					name
+				)
+				sql.exec(
+					"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, ?, X'00', X'00', 'test')",
+					id,
+					`${name}@example.com`
+				)
+			}
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+				INSERT INTO accounts (id, uri, username, domain)
+				SELECT CAST(?2 + i AS TEXT), 'https://far.example/users/j' || i, 'j' || i, 'far.example' FROM n`,
+				count,
+				String(SENDER_BASE)
+			)
+			// Each sender has notifications (to someone else) for a batch to walk.
+			sql.exec(
+				`INSERT INTO notifications (account_id, type, from_account_id)
+				SELECT ?1, t.type, a.id FROM accounts a, (SELECT 'follow' AS type UNION ALL SELECT 'follow_request') t
+				WHERE a.domain = 'far.example'`,
+				OTHER_ID
+			)
+			sql.exec(
+				`INSERT INTO notification_request_jobs (account_id, from_account_id, kind, cursor)
+				SELECT CASE WHEN rowid % 2 = 0 THEN ?1 ELSE ?2 END, id, CASE WHEN rowid % 3 = 0 THEN 'accept' ELSE 'dismiss' END,
+					(SELECT max(id) + 1 FROM notifications)
+				FROM accounts WHERE domain = 'far.example'`,
+				OTHER_ID,
+				VIEWER_ID
+			)
+			sql.exec(
+				"INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('jobs', 'secret', 'jobs', 'urn:ietf:wg:oauth:2.0:oob', 'read')"
+			)
+			sql.exec(
+				"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES (?, 'access', 'jobs', ?, 'read')",
+				JOB_TOKEN,
+				VIEWER_ID
+			)
+		})
+		return store
+	}
+
+	it('reads the same rows with 1,000 or 5,000 pending jobs', async () => {
+		const few = await backlog(1000)
+		const many = await backlog(5000)
+		const credential = { tokenHash: JOB_TOKEN, scope: 'read', now: NOW } as const
+		const grown: string[] = []
+		for (const [name, operation, input] of [
+			['merged', notificationRequestsMerged, { credential }],
+			['round', runNotificationRequestJobs, { now: NOW }],
+		] as [string, StoreOperation<never, unknown>, unknown][]) {
+			const fewRows = await rowsRead({ store: few }, operation, input as never)
+			const manyRows = await rowsRead({ store: many }, operation, input as never)
+			if (manyRows > fewRows + ALLOWANCE) {
+				grown.push(`${name}: ${fewRows} -> ${manyRows}`)
+			}
+		}
+		expect(grown).toEqual([])
+		const merged = await runInDurableObject(many, (_instance, state) =>
+			notificationRequestsMerged.run(state.storage.sql, { credential } as never)
+		)
+		expect(merged).toEqual({ status: 'ok', value: { merged: false } })
+	}, 120_000)
 })
