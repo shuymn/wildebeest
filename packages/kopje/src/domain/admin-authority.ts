@@ -37,8 +37,9 @@ export type OAuthAdmin = {
 // The OAuth admin (the Mastodon admin API's, and setup's after bootstrap): the single local account whose email equals
 // admin_email after trimming and lowercasing both. It fails closed: unset, no match, a suspended match or more than
 // one match gives no admin. It is read in the transaction of each operation that asks, so tokens follow the current
-// match when admin_email or an account changes. local_accounts is read without an index; its size is the operator's
-// (a deployment assumption of about 10 accounts), and LIMIT 2 is enough to tell one match from several.
+// match when admin_email or an account changes. Both sides are normalized here, not in SQL, whose trim() and lower()
+// cover only spaces and ASCII, so every normalized match is counted. local_accounts is read whole; its size is the
+// operator's (a deployment assumption of about 10 accounts).
 export function oauthAdmin(db: Db): OAuthAdmin {
 	const email = db.first<{ value: string }>(
 		'SELECT value FROM instance_settings WHERE name = ?',
@@ -47,13 +48,12 @@ export function oauthAdmin(db: Db): OAuthAdmin {
 	if (email === undefined || email.trim() === '') {
 		return { status: 'unset', username: null, accountId: null }
 	}
-	const rows = db.all<{ account_id: string; username: string; suspended_at: string | null }>(
-		`SELECT l.account_id, a.username, l.suspended_at
-		FROM local_accounts l JOIN accounts a ON a.id = l.account_id
-		WHERE lower(trim(l.email)) = lower(trim(?))
-		LIMIT 2`,
-		email
-	)
+	const wanted = normalizedEmail(email)
+	const rows = db
+		.all<{ account_id: string; email: string; username: string; suspended_at: string | null }>(
+			'SELECT l.account_id, l.email, a.username, l.suspended_at FROM local_accounts l JOIN accounts a ON a.id = l.account_id'
+		)
+		.filter((candidate) => normalizedEmail(candidate.email) === wanted)
 	const [row] = rows
 	if (row === undefined) {
 		return { status: 'none', username: null, accountId: null }
@@ -65,6 +65,10 @@ export function oauthAdmin(db: Db): OAuthAdmin {
 		return { status: 'suspended', username: row.username, accountId: null }
 	}
 	return { status: 'ok', username: row.username, accountId: row.account_id }
+}
+
+function normalizedEmail(email: string): string {
+	return email.trim().toLowerCase()
 }
 
 // The OAuth admin's account id, or null when there is none (see oauthAdmin).

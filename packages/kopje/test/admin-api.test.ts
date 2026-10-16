@@ -142,6 +142,16 @@ describe('the OAuth admin (adminAccountId)', () => {
 		expect(await run(h.store, reportsRead, token)).toEqual({ status: 'forbidden' })
 	})
 
+	it('normalizes both emails alike, beyond spaces and ASCII', async () => {
+		const h = await apiHarness()
+		const eve = await seedAccount(h.store, { username: 'eve', email: 'éve@example.com' })
+		await setSetting(h.store, 'admin_email', 'Éve@example.com')
+		expect(await matchOf(h.store)).toEqual({ status: 'ok', username: 'eve', accountId: eve })
+		// An imported email kept with surrounding whitespace is the same address: two matches, so nobody.
+		await seedAccount(h.store, { username: 'twin', email: '\téve@example.com\n' })
+		expect(await matchOf(h.store)).toEqual({ status: 'ambiguous', username: null, accountId: null })
+	})
+
 	it('follows admin_email when it changes: existing tokens lose or gain admin authority at once', async () => {
 		const h = await apiHarness()
 		const owner = await seedAccount(h.store, { username: 'owner', email: OWNER })
