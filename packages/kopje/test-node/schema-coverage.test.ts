@@ -46,6 +46,8 @@ const NOT_CARRIED: Record<string, string> = {
 	kopje_migrations: 'the target Store records its own migrations',
 	markers: 'legacy never wrote its markers table, and a legacy row there stops the conversion (UNUSED_LEGACY_TABLES)',
 	media_orphans: 'tombstones of R2 objects; a converted Store has none',
+	notification_clears: 'work of notifications cleared in Kopje; legacy deleted them at once',
+	notification_dismissals: 'work of notification groups dismissed in Kopje; legacy has no groups',
 	notification_permissions: 'legacy has no notification requests to accept: a converted Store has no permission',
 	notification_policies: 'legacy has no notification policy: every converted account has the defaults',
 	notification_request_jobs: 'work of requests answered in Kopje',
