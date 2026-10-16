@@ -143,6 +143,7 @@ const SCENARIOS = [
 	'conversation moves back to an earlier status',
 	'conversation of a recipient',
 	'endorsement leaves with the follow',
+	'filtered mention',
 	'list member leaves with the follow',
 	'notification',
 	'push',
@@ -306,11 +307,20 @@ const WITNESSES: { name: string; scenarios: Scenario[]; case: Case }[] = [
 			'conversation moves back to an earlier status',
 			'conversation goes with its last status',
 		],
-		case: witness(0, {}, [
+		// L1 follows L0, so L0's private mentions are not filtered by L1's (default) notification policy.
+		case: witness(0, { followers: [1] }, [
 			{ kind: 'post', visibility: 'direct', mentions: [1] },
 			{ kind: 'post', visibility: 'direct', mentions: [1], reply: true },
 			{ kind: 'delete', target: 1 },
 			{ kind: 'delete', target: 0 },
+		]),
+	},
+	{
+		name: 'a private mention from an account the recipient does not follow, and its answer',
+		scenarios: ['filtered mention'],
+		case: witness(0, {}, [
+			{ kind: 'post', visibility: 'direct', mentions: [1] },
+			{ kind: 'post', actor: 1, visibility: 'direct', mentions: [0], reply: true },
 		]),
 	},
 	{
@@ -1201,7 +1211,8 @@ function check(sql: SqlStorage, c: Case, saw: Set<Scenario>): string[] {
 				account.local &&
 				mentioned(after, x) &&
 				!(before.byId.has(id) && before.world.statuses[before.byId.get(id)!]!.mentions.some((m) => m.account === x)) &&
-				model.notified(x, 'mention', status.author, s)
+				model.notified(x, 'mention', status.author, s) &&
+				!model.filtered(x, 'mention', status.author, s)
 					? [x]
 					: []
 			)
@@ -1245,7 +1256,11 @@ function check(sql: SqlStorage, c: Case, saw: Set<Scenario>): string[] {
 				type: NotificationType
 				from_account_id: string
 				status_id: string | null
-			}>('SELECT id, account_id, type, from_account_id, status_id FROM notifications WHERE id > ?', marks.notifications)
+				filtered: number
+			}>(
+				'SELECT id, account_id, type, from_account_id, status_id, filtered FROM notifications WHERE id > ?',
+				marks.notifications
+			)
 			.toArray()
 		for (const n of notifications) {
 			saw.add('notification')
@@ -1254,6 +1269,15 @@ function check(sql: SqlStorage, c: Case, saw: Set<Scenario>): string[] {
 			const s = n.status_id === null ? null : (after.byId.get(n.status_id) ?? null)
 			if (!world.accounts[r]!.local || !model.notified(r, n.type, from, s)) {
 				problems.push(`${label}: notifies ${nameOf(r)} of ${n.type} from ${nameOf(from)}`)
+			}
+			// R15's policy part: filtered exactly when the recipient's (default) policy filters it.
+			if ((n.filtered === 1) !== model.filtered(r, n.type, from, s)) {
+				problems.push(
+					`${label}: ${n.filtered === 1 ? 'filters' : 'shows'} ${n.type} from ${nameOf(from)} to ${nameOf(r)}`
+				)
+			}
+			if (n.filtered === 1) {
+				saw.add('filtered mention')
 			}
 		}
 		// R16: every push recorded is wanted by its subscription, at the time of the action.

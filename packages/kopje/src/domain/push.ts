@@ -1,5 +1,5 @@
 import { presentAccountsById } from './accounts'
-import { availableLocalSql, shownSql } from './audience'
+import { availableLocalSql, shownSql, UNFILTERED_SQL } from './audience'
 import { userReadOperation, userSessionOperation, userWriteOperation } from './auth'
 import { CLAIM_LIMIT, type DeliveryOutcome, LEASE_MS, MAX_ATTEMPTS, retryDelay } from './deliveries'
 import { pushWantedSql } from './notifications'
@@ -18,9 +18,9 @@ import { remoteHtmlText } from '../security/html'
 //     retryDelay, and a row is given up after MAX_ATTEMPTS. A push that is sent or given up is deleted; a 4xx other
 //     than 408 and 429 deletes its subscription, as Mastodon 4.5 does.
 //   - PUSH-3: the claim, and again confirmPush right before the POST, check that the notification is still shown to
-//     its recipient (the notification rule, shownSql), that the subscription still wants it and its token is still
-//     valid, and that it is younger than PUSH_TTL_MS; otherwise the push is dropped unsent. What is sent is read at
-//     that last check. A deleted or replaced notification, or subscription, takes its pushes along.
+//     its recipient (the notification rule, shownSql, and not filtered by the recipient's policy, which notify never
+//     queues a push for), that the subscription still wants it and its token is still valid, and that it is younger
+//     than PUSH_TTL_MS; otherwise the push is dropped unsent. What is sent is read at that last check. A deleted or replaced notification, or subscription, takes its pushes along.
 //   - The payload is Mastodon's (Web::NotificationSerializer): the Store composes the title, body and icon; the Worker
 //     adds the access token, which the Store holds only sealed (AUTH-7, security/web-push.ts).
 
@@ -224,7 +224,7 @@ function target(db: Db, id: string, now: number): TargetRow | undefined {
 			JOIN notifications n ON n.id = d.notification_id
 			JOIN local_accounts l ON l.account_id = n.account_id
 			LEFT JOIN statuses s ON s.id = n.status_id
-		WHERE d.id = CAST(?1 AS INTEGER) AND ${availableLocalSql('l')} AND n.created_at > ?3
+		WHERE d.id = CAST(?1 AS INTEGER) AND ${availableLocalSql('l')} AND n.created_at > ?3 AND ${UNFILTERED_SQL}
 			AND ${pushWantedSql('p', 't', 'n', '?2')}
 			AND ${shownSql('n.account_id', 'n.type', 'n.from_account_id', 'n.status_id', '?2')}`,
 		id,

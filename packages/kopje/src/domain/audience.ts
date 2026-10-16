@@ -411,11 +411,18 @@ export type StatusReads = {
 		query: { readonly author: string; readonly and?: string },
 		...params: SqlStorageValue[]
 	): boolean
-	// The viewer's notifications the notification rule (R15) shows them, which shows a status only if they may view it:
-	//   SELECT n.status_id AS status_id, <columns> FROM main.notifications n WHERE (<where>) AND (<rule>) <tail>
+	// The viewer's notifications the notification rule (R15) shows them, which shows a status only if they may view it,
+	// and, unless `includeFiltered`, only those the recipient's policy did not filter (Notification.browserable):
+	//   SELECT n.status_id AS status_id, <columns> FROM main.notifications n
+	//   WHERE (<where>) [AND (n.filtered = 0)] AND (<rule>) <tail>
 	notifications<Extra extends Row>(
 		db: Db,
-		query: { readonly where: string; readonly tail?: string; readonly columns: Columns<Extra, 'status_id'> },
+		query: {
+			readonly where: string
+			readonly tail?: string
+			readonly columns: Columns<Extra, 'status_id'>
+			readonly includeFiltered: boolean
+		},
 		...params: SqlStorageValue[]
 	): (Extra & { status_id: VisibleStatusId | null })[]
 }
@@ -524,14 +531,21 @@ export function statusReads(
 		},
 		notifications<Extra extends Row>(
 			db: Db,
-			query: { readonly where: string; readonly tail?: string; readonly columns: Columns<Extra, 'status_id'> },
+			query: {
+				readonly where: string
+				readonly tail?: string
+				readonly columns: Columns<Extra, 'status_id'>
+				readonly includeFiltered: boolean
+			},
 			...params: SqlStorageValue[]
 		) {
 			const rule = shownSql(at.viewer, 'n.type', 'n.from_account_id', 'n.status_id', now())
+			// A term of its own, so the plan reads the partial index of unfiltered notifications (notifications_unfiltered).
+			const unfiltered = query.includeFiltered ? undefined : UNFILTERED_SQL
 			return run<Extra & { status_id: VisibleStatusId | null }>(
 				db,
 				`SELECT n.status_id AS status_id${columns(query.columns, 'status_id')} FROM main.notifications n
-				WHERE ${where(query.where, rule)} ${query.tail ?? ''}`,
+				WHERE ${where(query.where, unfiltered, rule)} ${query.tail ?? ''}`,
 				params
 			)
 		},
@@ -618,6 +632,128 @@ export function notifiedSql(r: string, type: string, from: string, status: strin
 	return `((${status} IS NULL OR NOT EXISTS (SELECT 1 FROM main.statuses nc WHERE nc.id = ${status}
 			AND ${conversationMutedSql(r, 'nc.thread')}))
 		AND ${shownSql(r, type, from, status, now)})`
+}
+
+// ---- Notification policies (R15 as notify writes; Mastodon 4.5's NotifyService::DropCondition and FilterCondition).
+
+// A notification the recipient's policy filtered (notifications.filtered) is written but left out of every list, count
+// and push unless the request asks for filtered ones (Notification.browserable: include_filtered, or account_id in
+// v1). statusReads(...).notifications adds this term unless asked; push.ts adds it to the push target.
+export const UNFILTERED_SQL = 'n.filtered = 0'
+
+// The types a policy may filter or drop (Notification::PROPERTIES, app/models/notification.rb:37-83: `filterable`):
+// mention, reblog, follow, follow_request and favourite, and quote, which Kopje never notifies. A post notification
+// (`status`), an edit (`update`) and a poll's end are never filtered.
+export const FILTERABLE_TYPES: readonly string[] = ['mention', 'reblog', 'follow', 'follow_request', 'favourite']
+
+// A policy's choice for a condition (NotificationPolicy's enums, app/models/notification_policy.rb:34-38).
+export type PolicyChoice = 'accept' | 'filter' | 'drop'
+
+// The policy's columns and Mastodon's defaults (the schema's, app/models/notification_policy.rb:11-15), which an
+// account without a notification_policies row has.
+export const POLICY_DEFAULTS = {
+	for_not_following: 'accept',
+	for_not_followers: 'accept',
+	for_new_accounts: 'accept',
+	for_private_mentions: 'filter',
+	for_limited_accounts: 'filter',
+} as const satisfies Record<string, PolicyChoice>
+
+export type PolicyColumn = keyof typeof POLICY_DEFAULTS
+
+// BaseCondition::NEW_FOLLOWER_THRESHOLD and NEW_ACCOUNT_THRESHOLD (app/services/notify_service.rb:20-22).
+const NEW_FOLLOWER_DAYS = 3
+const NEW_ACCOUNT_DAYS = 30
+
+// How far up a private mention's thread the reply exemption walks: the parent and this many statuses above it
+// (statuses_that_mention_sender's depth_limit, app/services/notify_service.rb:90 and :102).
+export const PRIVATE_MENTION_WALK = 100
+
+// The recipient `r`'s choice for `column`, or its default.
+function policyChoiceSql(r: string, column: PolicyColumn): string {
+	return `coalesce((SELECT pp.${column} FROM main.notification_policies pp WHERE pp.account_id = ${r}), '${POLICY_DEFAULTS[column]}')`
+}
+
+// The time `days` days before `now` (an ISO time), in the form the rows' times are stored in.
+function daysBeforeSql(now: string, days: number): string {
+	return `strftime('%Y-%m-%dT%H:%M:%fZ', ${now}, '-${days} days')`
+}
+
+// BaseCondition#not_following? (:47-49): the recipient does not follow the sender (an accepted follow).
+function notFollowingSql(r: string, from: string): string {
+	return `NOT EXISTS (SELECT 1 FROM main.follows pf WHERE pf.account_id = ${r} AND pf.target_account_id = ${from}
+		AND pf.state = 'accepted')`
+}
+
+// BaseCondition#not_follower? (:51-54): the sender does not follow the recipient, or has followed for less than
+// three days. Kopje keeps a follow's time from its request, so a follow accepted later counts from the request.
+function notFollowerSql(r: string, from: string, now: string): string {
+	return `NOT EXISTS (SELECT 1 FROM main.follows pr WHERE pr.account_id = ${from} AND pr.target_account_id = ${r}
+		AND pr.state = 'accepted' AND pr.created_at <= ${daysBeforeSql(now, NEW_FOLLOWER_DAYS)})`
+}
+
+// BaseCondition#new_account? (:56-58): the sender's account was created less than 30 days ago (a remote account's
+// time is the actor's `published`, as Mastodon's ProcessAccountService takes it, or when it was first stored).
+function newAccountSql(from: string, now: string): string {
+	return `EXISTS (SELECT 1 FROM main.accounts pn WHERE pn.id = ${from}
+		AND pn.created_at > ${daysBeforeSql(now, NEW_ACCOUNT_DAYS)})`
+}
+
+// BaseCondition#private_mention_not_in_response? (:76-109): a mention in a direct status that does not answer a
+// private mention of the sender by the recipient. Mastodon's statuses_that_mention_sender walks the thread up from the
+// status's parent: the parent counts when it mentions the sender (not silently), whoever wrote it, and an ancestor
+// above it when the recipient wrote it and it mentions the sender; the walk stops at the first that counts, or
+// PRIVATE_MENTION_WALK statuses above the parent, and the status answers the recipient when what it stopped at is the
+// recipient's own direct status. A status whose parent was never stored (no in_reply_to_id) answers nothing, as in
+// Mastodon.
+function privateMentionNotInResponseSql(r: string, type: string, from: string, status: string): string {
+	const mentionsSender = (s: string) => `EXISTS (SELECT 1 FROM main.status_mentions pm WHERE pm.status_id = ${s}.id
+		AND pm.account_id = ${from} AND pm.silent = 0)`
+	return `(${type} = 'mention' AND EXISTS (SELECT 1 FROM main.statuses pd WHERE pd.id = ${status}
+		AND pd.visibility = 'direct' AND NOT (pd.in_reply_to_id IS NOT NULL AND EXISTS (
+			WITH RECURSIVE pw(id, parent, hit, depth) AS (
+				SELECT ps.id, ps.in_reply_to_id, ${mentionsSender('ps')}, 0 FROM main.statuses ps
+				WHERE ps.id = (SELECT pq.in_reply_to_id FROM main.statuses pq WHERE pq.id = ${status})
+				UNION ALL
+				SELECT ps.id, ps.in_reply_to_id, ps.account_id = ${r} AND ${mentionsSender('ps')}, pw.depth + 1
+				FROM pw JOIN main.statuses ps ON ps.id = pw.parent
+				WHERE pw.hit = 0 AND pw.depth < ${PRIVATE_MENTION_WALK})
+			SELECT 1 FROM pw JOIN main.statuses pa ON pa.id = pw.id
+			WHERE pw.hit AND pa.account_id = ${r} AND pa.visibility = 'direct'))))`
+}
+
+// Whether a condition of the recipient's policy chose `choice` for the notification: Mastodon's
+// blocked_by_*_policy? (:154-172) for drop and filtered_by_*_policy? (:190-208) for filter. Kopje has no silenced
+// (limited) accounts, so for_limited_accounts is kept and shown but never matches.
+function policyMatchesSql(
+	choice: Exclude<PolicyChoice, 'accept'>,
+	r: string,
+	type: string,
+	from: string,
+	status: string,
+	now: string
+): string {
+	const is = (column: PolicyColumn) => `${policyChoiceSql(r, column)} = '${choice}'`
+	return `(${notFollowingSql(r, from)} AND (${is('for_not_following')}
+			OR (${is('for_new_accounts')} AND ${newAccountSql(from, now)})
+			OR (${is('for_private_mentions')} AND ${privateMentionNotInResponseSql(r, type, from, status)})))
+		OR (${is('for_not_followers')} AND ${notFollowerSql(r, from, now)})`
+}
+
+// R15, the policy part (NotifyService#drop? and #filter?, app/services/notify_service.rb:113-134 and :176-186): what
+// the recipient `r`'s policy makes of a notification of `type` from `from` about `status` at `now`, as 'accept',
+// 'filter' or 'drop'. A type that is not filterable, or a sender the recipient accepted a request from
+// (override_for_sender?, a notification_permissions row), is accepted; otherwise a condition whose choice is drop
+// drops it, else one whose choice is filter filters it. The blocks, mutes, domain blocks and conversation mutes that
+// drop a notification are notifiedSql's. Kopje has no staff role that bypasses blocks (from_staff? is false), and
+// no silenced accounts (from_limited? is false).
+export function notificationPolicySql(r: string, type: string, from: string, status: string, now: string): string {
+	return `(CASE WHEN ${type} NOT IN (${FILTERABLE_TYPES.map((t) => `'${t}'`).join(', ')})
+			OR EXISTS (SELECT 1 FROM main.notification_permissions pp WHERE pp.account_id = ${r} AND pp.from_account_id = ${from})
+		THEN 'accept'
+		WHEN ${policyMatchesSql('drop', r, type, from, status, now)} THEN 'drop'
+		WHEN ${policyMatchesSql('filter', r, type, from, status, now)} THEN 'filter'
+		ELSE 'accept' END)`
 }
 
 // ---------------------------------------------------------------------------------------------------------------
