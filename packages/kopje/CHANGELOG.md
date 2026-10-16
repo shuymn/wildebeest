@@ -10,6 +10,23 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Added
 
+- Quote posts received from other servers are stored and verified, as Mastodon 4.5 does (FEP-044f). Nothing shows them
+  yet: the API, the web pages and the notifications are unchanged, and a quote is still seen as its `RE:` link.
+    - A post that quotes another (Mastodon's `quote`, or Misskey's and Fedibird's `_misskey_quote`, `quoteUrl` and
+      `quoteUri`) keeps its quote, with every path that stores a post: delivered, boosted, found by search or fetched
+      as a pin. A quote of a deleted post (a `Tombstone`) is kept as deleted.
+    - A quote is accepted when it quotes its own author's post, or when the quoted author's approval (the stamp, a
+      `QuoteAuthorization` fetched from its own server) names exactly that quote of exactly that post. Other quotes stay
+      pending, as Mastodon keeps them; one whose stamp is gone is rejected. Verification fetches the quoted post and its
+      author when Kopje does not have them, runs with the delivery when its fetch budget allows and otherwise in the
+      background rounds, signed by a local recipient or follower when there is one, and is retried five times over
+      about 15 hours. A post first stored only as the target of a quote is verified like any other once it is delivered,
+      boosted or searched for itself.
+    - The quoted author's `Delete` of a stamp revokes the quotes approved by it, for good. The same `Delete` relayed by
+      another server (the quoting server forwards it) is applied when it carries the author's own signature (a Linked
+      Data Signature or an FEP-8b32 proof); without one, Kopje only checks the stamp again.
+    - Kopje's own posts now say that nobody but their author may quote them (`interactionPolicy.canQuote`), as Mastodon
+      already assumes of a post without a policy.
 - A remote account's pinned posts, featured hashtags and hidden network, learned as Mastodon 4.5 learns them:
   `GET /api/v1/accounts/:id/statuses?pinned=true` and `GET /api/v1/accounts/:id/featured_tags` now show a remote
   account's, and its `hide_collections` is shown and hides its followers and following lists as a local account's
@@ -49,6 +66,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       ten each, so its work grows with the local accounts alone (about four rows read per pin or featured hashtag). The
       new column has no default and no constraint, so the remote accounts and their statuses are neither read nor
       rewritten.
+    - `0027_quotes`: adds the empty `quotes` and `quote_revocations` tables, their indexes and the triggers that keep
+      the new `statuses.quotes_count`. The column has a constant default and no constraint, so stored statuses are
+      neither read nor rewritten; nothing is backfilled (stored posts keep their quote properties in `raw`), so the
+      migration's work does not grow with the instance.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.8] - 2026-10-16
