@@ -12,14 +12,15 @@ import { callStore } from '../platform/store-client'
 
 // The Worker's part of a sync of a remote account's collections (domain/remote-collections.ts): what Mastodon's
 // FetchFeaturedCollectionService, FetchFeaturedTagsCollectionService and ProcessAccountService#collection_info fetch,
-// read through the safe loader (NET-1) within one request's fetch budget per account (RES-6), signed by a local
+// read through the safe loader (NET-1) within one request's fetch budget per round (RES-6), signed by a local
 // follower of the account or else by the instance actor (as Mastodon signs with local_follower), and never from the
-// signed-document cache (NET-4). The jobs/queue.ts rounds run it after the Store's inbound jobs.
+// signed-document cache (NET-4). The jobs/queue.ts rounds run it after the Store's inbound jobs: a round runs one phase
+// of a sync, reading the collections or fetching the pinned statuses that reading left pending.
 //
 // Differences from Mastodon: a collection is read only on the actor's own origin (Mastodon checks the host for the
-// featured collections only); the featured collection's items are read up to MAX_REMOTE_PINS; a fetch that may pass
-// (a timeout, a 5xx, the budget) leaves that part as it was, where Mastodon retries the job or, for hide_collections,
-// reads the failure as a hidden collection.
+// featured collections only); the featured collection's first MAX_REMOTE_PINS items are read; a collection that may be
+// read later (a timeout, a 5xx, the budget) leaves that part as it was and is read again in a later round, where
+// Mastodon retries the job or, for hide_collections, reads the failure as a hidden collection.
 
 // Syncs one round runs, each with its own fetch budget.
 export const COLLECTION_SYNCS_PER_ROUND = 2

@@ -15,7 +15,7 @@
 -- - accounts.hide_collections is a remote account's hide_collections as Kopje last learned it (1 or 0), NULL until it
 --   has learned it and for every local account, whose setting stays in local_accounts.hide_collections. It has no CHECK:
 --   adding a column with one makes SQLite check every stored account against it, a scan of all remote accounts; its
---   only writer (applyCollectionSync) writes 0 or 1.
+--   only writer (completeCollectionRead) writes 0 or 1.
 -- - collection_syncs holds the remote accounts whose collections are to be read again (Mastodon's
 --   SynchronizeFeaturedCollectionWorker and SynchronizeFeaturedTagsCollectionWorker), one row each, written when the
 --   account's document is stored. A sync has two phases (src/domain/remote-collections.ts): a round reads the

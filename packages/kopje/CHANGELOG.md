@@ -20,18 +20,20 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       one. An `Add` or `Remove` of a post or a hashtag to the account's own featured collection (or of a hashtag to its
       featuredTags collection) changes one pin or featured hashtag at once.
     - Pins and featured hashtags are shown by the same rules as a local account's: a followers-only pin only to the
-      account's followers, nothing of an account that blocks you. A featured hashtag counts the account's public and
-      unlisted posts with it that Kopje has, and the count follows as they arrive and are deleted.
-    - A sync the fetch budget cuts short continues in later rounds; one whose collections cannot be read for now (a
-      timeout, a 5xx) is tried again later, at most three times in a row without progress, and leaves what was learned
-      as it was meanwhile. A profile update while a sync runs is read again afterwards.
+      account's followers, nothing of an account that blocks you. A featured hashtag counts, when it is shown, the
+      account's public and unlisted posts with it among the newest 200 Kopje has of it.
+    - A sync reads the collections in one round and applies them at once; the pinned posts Kopje does not have are
+      fetched in later rounds, as many as each round's fetch budget allows, and one that cannot be fetched is dropped.
+      A collection that cannot be read for now (a timeout, a 5xx) is read again later, at most three times in a row
+      without progress, and leaves what was learned as it was meanwhile. A profile update while a sync runs is read
+      again afterwards, with its own three tries.
     - Where Kopje differs from Mastodon: an account keeps at most 20 pins and 10 featured hashtags (Mastodon keeps any
       number for a remote account), from the first 20 items of its featured collection and the first four pages of its
       featuredTags collection; a collection is read only on the account's own server, and a pin only when it is the
-      account's own post there; a followers or following collection that cannot be read for now hides nothing unless
-      the other one hides its items (Mastodon takes it as hidden); a featured hashtag of a remote account counts its posts
-      among the newest 200 Kopje has of it (Mastodon counts them all); a newly learned pin is ordered as the collection
-      lists it (the first is the newest); and a remote account's featured hashtag links to
+      account's own post there; a followers or following collection that cannot be read for now hides nothing unless the
+      other one hides its items (Mastodon takes it as hidden); a featured hashtag of a remote account counts its posts
+      among the newest 200 Kopje has of it (Mastodon counts them all and keeps the count); a newly learned pin is
+      ordered as the collection lists it (the first is the newest); and a remote account's featured hashtag links to
       `/@username@domain/tagged/:tag`, which leads to its profile on its server (Mastodon's link,
       `/@username/tagged/:tag`, names a local account of the same username).
 
@@ -40,10 +42,11 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - Store schema: adds a migration, applied on the first request after the deploy; a rollback to an earlier version needs
   the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0025_remote_collections`: lets `status_pins` and `featured_tags` hold any account's rows (each table is rebuilt
-      and its rows copied), adds `accounts.hide_collections`, and adds the empty `collection_syncs` table. Only local
-      accounts have pins and featured hashtags until then, at most five and ten each, so its work grows with the local
-      accounts alone (about four rows read per pin or featured hashtag). The new column has no default and no
-      constraint, so the remote accounts and their statuses are neither read nor rewritten.
+      and its rows copied), adds `accounts.hide_collections`, and adds the empty `collection_syncs` and
+      `collection_pins_pending` tables. Only local accounts have pins and featured hashtags until then, at most five and
+      ten each, so its work grows with the local accounts alone (about four rows read per pin or featured hashtag). The
+      new column has no default and no constraint, so the remote accounts and their statuses are neither read nor
+      rewritten.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.8] - 2026-10-16

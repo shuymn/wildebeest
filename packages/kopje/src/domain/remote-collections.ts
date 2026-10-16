@@ -39,7 +39,7 @@ export const SYNC_RETRY_MS = 15 * 60 * 1000
 // Asks for a sync of the account's collections (ProcessAccountService#check_featured_collection! and
 // #check_featured_tags_collection!, and the hide_collections it sets). One request per account waits at a time, as
 // Sidekiq's until_executed lock keeps one job; a request while a round holds it is a new generation, which the round's
-// end leaves due (applyCollectionSync), so the round reading the older document does not end it. Whether a request is
+// end leaves due (endRound), so the round reading the older document does not end it. Whether a request is
 // due (no round holds it).
 export function requestCollectionSync(db: Db, accountId: string, now: number): boolean {
 	// A new request has its own MAX_SYNC_ATTEMPTS, and is due at once unless a round holds the sync (whose end leaves it
