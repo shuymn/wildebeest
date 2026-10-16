@@ -19,6 +19,7 @@ import {
 	listRewrapKeys,
 	rewrapLocalKey,
 } from './domain/actors'
+import { oauthAdminStatus } from './domain/admin-authority'
 import { checkCredential, type Credential, type UserCredential } from './domain/auth'
 import * as blocks from './domain/blocks'
 import * as conversations from './domain/conversations'
@@ -330,6 +331,11 @@ export class Store extends DurableObject<Env> {
 
 	setConfig(callerBuild: string, authority: ImportAuthority, values: unknown) {
 		return this.#admin.setConfig(callerBuild, authority, values)
+	}
+
+	// The OAuth admin's state for GET /admin/health, which shows it to Access only.
+	oauthAdmin(callerBuild: string) {
+		return this.#kernel.execute(callerBuild, oauthAdminStatus, undefined)
 	}
 
 	setupState(callerBuild: string) {

@@ -233,6 +233,20 @@ function mastodonRoute(method: string, path: string): MastodonRoute | undefined 
 const show = (access: Access) =>
 	`${access.token} token, scopes ${access.scopes?.join(' ') ?? 'any'}, ${access.user ? 'user required' : 'no user required'}`
 
+const ADMIN_PATH = /^\/api\/v[12]\/admin\//
+
+// What is left unresolved of a Mastodon route once a role policy of the admin API is set aside: on /api/v{1,2}/admin/*
+// a single Pundit authorize with verify_authorized decides by the caller's role (its permission bits), which Kopje
+// decides in the Store (adminReadOperation, domain/auth.ts) or answers alike to everyone (mastodon/admin.ts), so the
+// token, scopes and user are compared as read. Anything else unresolved stays.
+function unresolvedOf(route: MastodonRoute): string[] | undefined {
+	const role = ADMIN_PATH.test(route.path)
+		? (reason: string) => /^Pundit policy: authorize [^;]+; verify_authorized$/.test(reason)
+		: () => false
+	const left = route.unresolved?.filter((reason) => !role(reason))
+	return left === undefined || left.length === 0 ? undefined : left
+}
+
 // Both sides of a route as compared: Kopje's, and Mastodon's ('absent', or marked unresolved when it could not be read).
 // covers stands in for grants() in the check that the comparison sees a scope grants() lets through.
 function sides(route: (typeof ROUTES)[number], covers = grants) {
@@ -242,9 +256,10 @@ function sides(route: (typeof ROUTES)[number], covers = grants) {
 		return { kopje, mastodon: 'absent', source: `no such route in Mastodon v${mastodon.mastodon}` }
 	}
 	const access = show(mastodonAccess(theirs))
+	const unresolved = unresolvedOf(theirs)
 	return {
 		kopje,
-		mastodon: theirs.unresolved === undefined ? access : `unresolved (${theirs.unresolved.join('; ')}): ${access}`,
+		mastodon: unresolved === undefined ? access : `unresolved (${unresolved.join('; ')}): ${access}`,
 		source: `${theirs.controller}#${theirs.action}`,
 	}
 }
@@ -276,6 +291,32 @@ describe(`route access matches Mastodon v${mastodon.mastodon}`, () => {
 	it('lists exceptions only for routes of the table', () => {
 		const names = new Set(ROUTES.map((route) => `${route.method} ${route.path}`))
 		expect(Object.keys(EXCEPTIONS).filter((name) => !names.has(name))).toEqual([])
+	})
+
+	it('routes every admin API route of Mastodon', () => {
+		const admin = mastodon.routes.filter((route) => ADMIN_PATH.test(route.path))
+		expect(admin).toHaveLength(63)
+		const missing = admin.filter(
+			(theirs) =>
+				!ROUTES.some((route) => route.method === theirs.method && mastodonRoute(route.method, route.path) === theirs)
+		)
+		expect(missing.map((route) => `${route.method} ${route.path}`)).toEqual([])
+	})
+
+	it("sets aside only an admin route's role policy, so its scope is still compared", () => {
+		const show = ROUTES.find((route) => route.method === 'GET' && route.path === '/api/v1/admin/accounts/:id')
+		expect(show).toBeDefined()
+		expect(mastodonRoute('GET', '/api/v1/admin/accounts/:id')?.unresolved).toHaveLength(1)
+		const { kopje, mastodon: theirs } = sides(show!)
+		expect(kopje).toBe(theirs)
+		// A broader scope than Mastodon's is seen.
+		expect(sides({ ...show!, access: { scope: 'admin:read', optional: true } }).kopje).not.toBe(theirs)
+		// A required token is seen.
+		expect(sides({ ...show!, access: { scope: 'admin:read:accounts' } }).kopje).not.toBe(theirs)
+		// The same policy outside the admin API stays unresolved (StatusPolicy#show? has its exception).
+		expect(
+			sides(ROUTES.find((route) => route.method === 'GET' && route.path === '/api/v1/statuses/:id')!).mastodon
+		).toMatch(/^unresolved \(Pundit policy/)
 	})
 
 	it('reads the scopes a route accepts through the scope hierarchy', () => {

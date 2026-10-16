@@ -241,7 +241,16 @@ export function adminRoutes({ build, store, fetch, now, doorbell, loader, images
 			detail = { error: errorMessage(error) }
 		}
 		const maintenance = config.ok ? config.config.MAINTENANCE : null
-		return c.json({ ...report, maintenance, store: detail })
+		// Why there is, or is not, an OAuth admin (domain/admin-authority.ts): for Access only, not the import token.
+		let oauthAdmin: unknown
+		if (c.get('auth').kind === 'access') {
+			try {
+				oauthAdmin = await stub(c).oauthAdmin(b)
+			} catch (error) {
+				oauthAdmin = { error: errorMessage(error) }
+			}
+		}
+		return c.json({ ...report, maintenance, store: detail, ...(oauthAdmin === undefined ? {} : { oauthAdmin }) })
 	})
 
 	admin.get('/version', async (c) => {

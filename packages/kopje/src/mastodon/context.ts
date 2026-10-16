@@ -84,6 +84,7 @@ const AUTH_ERRORS: Record<AuthFailure['status'], { status: 401 | 403 | 422; mess
 	suspended: { status: 403, message: 'Your login is currently disabled' },
 	insufficient_scope: { status: 403, message: 'This action is outside the authorized scopes' },
 	user_required: { status: 422, message: 'This method requires an authenticated user' },
+	forbidden: { status: 403, message: 'This action is not allowed' },
 }
 
 // The value of an authorized Store operation; an authorization failure becomes Mastodon's error answer.
