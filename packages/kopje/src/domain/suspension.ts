@@ -36,7 +36,7 @@ import type { Db } from '../db/sql'
 // A suspended sender's queued content is dropped when claimed (deliveries.ts refusedSender), so only the Update and
 // retractions leave its lanes.
 
-// Rows a tokens round writes at most (push deliveries, subscriptions and tokens, cascades included).
+// Rows a tokens round writes at most (push deliveries, subscriptions and tokens, cascades included, and its job).
 export const TOKEN_ROUND_ROWS = 200
 // Reports a suspension round reads at most.
 export const REPORT_ROUND = 100
@@ -46,6 +46,9 @@ export const REACH_ROUND = 500
 export const STATUS_LIMIT = 200
 export const RECENT_LIMIT = 2_000
 export const RECENT_MS = 2 * 24 * 60 * 60 * 1000
+// Rows any round writes at most: REACH_ROUND staged inboxes (or their deletion), the chunks they make, and the job's own
+// rows (its update or delete, and its Update's release).
+export const MODERATION_ROUND_ROWS = 600
 // Rounds one runModerationJobs call runs at most.
 export const MODERATION_ROUNDS = 4
 
@@ -177,8 +180,9 @@ export function unsuspendLocal(db: Db, accountId: string, now: number): boolean 
 	if (state?.suspended_at == null) {
 		return false
 	}
-	db.run('UPDATE local_accounts SET suspended_at = NULL WHERE account_id = ?', accountId)
+	// A suspension from before the fence existed gets one at its time, so the reach job has a generation to hold to.
 	const fence = state.tokens_valid_after ?? state.suspended_at
+	db.run('UPDATE local_accounts SET suspended_at = NULL, tokens_valid_after = ? WHERE account_id = ?', fence, accountId)
 	const update = moderationUpdate(db, accountId, now)!
 	insertJob(
 		db,
@@ -224,7 +228,8 @@ function finish(db: Db, job: Job): void {
 // TOKEN_ROUND_ROWS rows, and the job ends once the walk reaches the last token.
 function tokensRound(db: Db, job: Job, state: JobState): void {
 	const start = totalChanges(db)
-	const room = () => TOKEN_ROUND_ROWS - (totalChanges(db) - start)
+	// What the round may still write, keeping one row for the job's own update or delete.
+	const room = () => TOKEN_ROUND_ROWS - 1 - (totalChanges(db) - start)
 	const tokens = db.all<{ token_hash: string; created_at: string }>(
 		`SELECT token_hash, created_at FROM oauth_tokens INDEXED BY oauth_tokens_account
 		WHERE account_id = ? AND token_hash > ? ORDER BY token_hash LIMIT ?`,
