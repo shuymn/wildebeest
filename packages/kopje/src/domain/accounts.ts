@@ -746,10 +746,14 @@ export function followLimit(counts: { following_count: number; followers_count: 
 
 // The validator's error for a new follow or request past the limit, or null while under it. It applies where Mastodon
 // creates a Follow or FollowRequest without bypass_limit: the follow API only. Authorizing a request (local or a remote
-// Accept) and a Move's follower transfer bypass it, as there.
+// Accept) and a Move's follower transfer bypass it, as there. The following count is derived from the viewer's accepted
+// follows (the partial index follows_accepted, the viewer's own rows only), not the cached following_count, so a stale
+// cache cannot let a follow through; followers_count, for the ratio, is read from the row.
 function followLimitError(db: Db, accountId: string): string | null {
 	const counts = db.first<{ following_count: number; followers_count: number }>(
-		'SELECT following_count, followers_count FROM accounts WHERE id = ?',
+		`SELECT (SELECT COUNT(*) FROM follows WHERE account_id = ?1 AND state = 'accepted') AS following_count,
+			followers_count
+		FROM accounts WHERE id = ?1`,
 		accountId
 	)
 	if (counts === undefined) {

@@ -59,6 +59,19 @@ describe('the follow limit', () => {
 		expect(await followingCount(h, alice.id)).toBe(7_500)
 	})
 
+	it('counts the accepted follows themselves, so an undercounted following_count does not let a follow through', async () => {
+		const h = await community(['alice', 'bob'])
+		const { alice, bob } = h.users
+		await seedFollows(h.store, alice.id, 7_500, FOLLOWING)
+		// As the authorize path before its recount fix could leave it.
+		await sql(h.store, 'UPDATE accounts SET following_count = 7499 WHERE id = ?', alice.id)
+		expect(await followResponse(h, alice, bob.id)).toEqual({
+			status: 422,
+			body: { error: 'Validation failed: You cannot follow more than 7500 people' },
+		})
+		expect(await edges(h, alice.id, bob.id)).toEqual([])
+	})
+
 	it("still changes an existing follow's options at the limit (the validator runs on create)", async () => {
 		const h = await community(['alice', 'bob'])
 		const { alice, bob } = h.users
