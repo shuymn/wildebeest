@@ -8,6 +8,18 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+### Added
+
+- Mastodon 4.5's remaining small endpoints, under Mastodon's scopes, answered as Mastodon answers when the feature has
+  nothing to show or is not configured: `GET /api/v1/annual_reports` (none),
+  `GET /api/v1/instance/translation_languages` (`{}`), `GET /api/v1/emails/check_confirmation` (`true`) and
+  `DELETE /api/v1/suggestions/:id` (`{}`); 404 for
+  `GET /api/v1/timelines/link`, `GET /api/v1/annual_reports/:id`, `POST /api/v1/annual_reports/:id/read`,
+  `POST /api/v1/announcements/:id/dismiss`, announcement reactions, `GET /api/v1/instance/terms_of_service/:date`,
+  `POST /api/v1/statuses/:id/translate` and `GET /api/v1_alpha/async_refreshes/:id`; and 403 for
+  `POST /api/v1/emails/confirmations`. `GET /api/v1/peers/search` finds up to 10 known peers by domain prefix, and
+  `PATCH /api/v1/push/subscription` updates as `PUT` does.
+
 ### Changed
 
 - Hashtags are normalized as Mastodon 4.5 normalizes them (HashtagNormalizer): NFKC, lowercase, Latin letters with

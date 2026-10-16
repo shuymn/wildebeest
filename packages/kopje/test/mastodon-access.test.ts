@@ -84,6 +84,12 @@ const EXCEPTIONS: Record<string, Exception> = {
 		reason:
 			'RouteAccess has no "scope without a user" form; accounts.register checks write:accounts, then that the token has no user',
 	},
+	'POST /api/v1/emails/confirmations': {
+		kopje: 'required token, scopes any, no user required',
+		mastodon: 'required token, scopes write write:accounts, no user required',
+		reason:
+			'RouteAccess has no "scope without a user" form; placeholders.resendConfirmation checks write:accounts, then refuses as Mastodon',
+	},
 	'GET /api/v1/statuses/:id/source': {
 		kopje: 'required token, scopes read read:statuses, user required',
 		mastodon:
@@ -171,6 +177,12 @@ const EXCEPTIONS: Record<string, Exception> = {
 		reason: 'anonymous search is refused (routes.ts); Mastodon allows it without resolve or offset',
 	},
 	'GET /api/v1/timelines/public': {
+		kopje: 'optional token, scopes read read:statuses, no user required',
+		mastodon:
+			'unresolved (require_user! if: "require_auth?"): required token, scopes read read:statuses, user required',
+		reason: 'open to anonymous callers; Mastodon requires a user if its feed setting says so',
+	},
+	'GET /api/v1/timelines/link': {
 		kopje: 'optional token, scopes read read:statuses, no user required',
 		mastodon:
 			'unresolved (require_user! if: "require_auth?"): required token, scopes read read:statuses, user required',
