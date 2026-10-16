@@ -116,7 +116,7 @@ async function resolve(c: Parameters<ApiHandler>[0], deps: Parameters<ApiHandler
 	}
 	const resolved = await deps.resolve(c.env, query)
 	try {
-		return authorized(
+		const found = authorized(
 			await storeCall(c, deps, (s, b) =>
 				s.resolveSearch(b, {
 					credential: userCredential(c, deps),
@@ -128,6 +128,11 @@ async function resolve(c: Parameters<ApiHandler>[0], deps: Parameters<ApiHandler
 				})
 			)
 		)
+		// The resolved status's quote is verified by the job rounds (federation/quotes.ts).
+		if (found.quotesDue) {
+			await deps.requestJobs?.(c.env)
+		}
+		return found
 	} catch (error) {
 		if (error instanceof StoreUnavailableError) {
 			return none

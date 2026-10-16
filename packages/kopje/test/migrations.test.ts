@@ -57,6 +57,8 @@ const SCHEMA_TABLES = [
 	'outbound_targets',
 	'push_deliveries',
 	'push_subscriptions',
+	'quote_revocations',
+	'quotes',
 	'remote_keys',
 	'reports',
 	'scheduled_statuses',
@@ -3003,5 +3005,130 @@ describe('0025_remote_collections', () => {
 		expect(remote).toBeLessThanOrEqual(few + 10)
 		expect(locals - few).toBeLessThanOrEqual(4 * 2 * (1000 - 100) * 5)
 		expect(each - few).toBeLessThanOrEqual(4 * 2 * 100 * (50 - 5))
+	}, 120_000)
+})
+
+describe('0027_quotes', () => {
+	const NAME = '0027_quotes'
+	const id = (n: number) => String(100000000000000000n + BigInt(n))
+
+	// The file's statements, a trigger whole (its body holds semicolons of its own).
+	function statements(): string[] {
+		const out: string[] = []
+		let current = ''
+		for (const line of (MIGRATIONS.find((m) => m.name === NAME)?.sql ?? '').split('\n')) {
+			if (line.startsWith('--') || line.trim() === '') {
+				continue
+			}
+			current += `${line}\n`
+			if (current.startsWith('CREATE TRIGGER') ? line === 'END;' : line.endsWith(';')) {
+				out.push(current)
+				current = ''
+			}
+		}
+		return out
+	}
+
+	it(`upgrades a Store with ${NAME}: stored statuses count no quote, and quotes keep their rules`, async () => {
+		const at = NAMES.indexOf(NAME)
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, MIGRATIONS.slice(0, at)).upgrade()).toMatchObject({ ok: true })
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username, domain) VALUES (?, 'https://remote.example/users/bob', 'bob', 'remote.example')",
+				id(1)
+			)
+			for (const n of [11, 12, 13]) {
+				sql.exec(
+					"INSERT INTO statuses (id, uri, account_id, visibility, published_at) VALUES (?, ?, ?, 'public', '2026-10-01T00:00:00.000Z')",
+					id(n),
+					`https://remote.example/users/bob/statuses/${n}`,
+					id(1)
+				)
+			}
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+			expect(sql.exec('SELECT DISTINCT quotes_count FROM statuses').toArray()).toEqual([{ quotes_count: 0 }])
+			const quote = (status: number, state_: string, quoted: number | null) =>
+				sql.exec(
+					`INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, quoted_account_id, state, updated_at)
+					VALUES (?, 'https://remote.example/users/bob/statuses/13', ?, ?, ?, '2026-10-12T00:00:00.000Z')`,
+					id(status),
+					quoted === null ? null : id(quoted),
+					quoted === null ? null : id(1),
+					state_
+				)
+			const count = () => sql.exec('SELECT quotes_count AS n FROM statuses WHERE id = ?', id(13)).one().n
+			// The count follows accepted quotes, by deltas.
+			quote(11, 'accepted', 13)
+			quote(12, 'pending', 13)
+			expect(count()).toBe(1)
+			sql.exec("UPDATE quotes SET state = 'accepted' WHERE status_id = ?", id(12))
+			expect(count()).toBe(2)
+			sql.exec("UPDATE quotes SET state = 'revoked' WHERE status_id = ?", id(11))
+			expect(count()).toBe(1)
+			sql.exec('DELETE FROM quotes WHERE status_id = ?', id(12))
+			expect(count()).toBe(0)
+			// An accepted quote needs its quoted status, its author goes with it, and work is only for a live quote.
+			expect(() => quote(12, 'accepted', null)).toThrow(/CHECK constraint failed/)
+			expect(() =>
+				sql.exec(
+					"INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, state, updated_at) VALUES (?, 'x', ?, 'pending', 'x')",
+					id(12),
+					id(13)
+				)
+			).toThrow(/CHECK constraint failed/)
+			expect(() =>
+				sql.exec(
+					"INSERT INTO quotes (status_id, quoted_uri, state, verify_after, updated_at) VALUES (?, NULL, 'deleted', 1, 'x')",
+					id(12)
+				)
+			).toThrow(/CHECK constraint failed/)
+			expect(() =>
+				sql.exec(
+					"INSERT INTO quotes (status_id, quoted_uri, state, updated_at) VALUES (?, NULL, 'pending', 'x')",
+					id(12)
+				)
+			).toThrow(/CHECK constraint failed/)
+			sql.exec("INSERT INTO quotes (status_id, quoted_uri, state, updated_at) VALUES (?, NULL, 'deleted', 'x')", id(12))
+			expect(sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
+		})
+	})
+
+	it('reads no stored status, however many there are', async () => {
+		const at = NAMES.indexOf(NAME)
+		const measure = async (statuses: number) => {
+			const store = freshStore()
+			return runInDurableObject(store, async (_instance, state) => {
+				const sql = state.storage.sql
+				await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+				sql.exec(
+					"INSERT INTO accounts (id, uri, username, domain) VALUES (?, 'https://remote.example/users/bob', 'bob', 'remote.example')",
+					id(1)
+				)
+				sql.exec(
+					`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+					INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+					SELECT CAST(200000000000000000 + i AS TEXT), 'https://remote.example/users/bob/statuses/' || i, ?2, 'public',
+						hex(randomblob(500)), '2026-10-01T00:00:00.000Z'
+					FROM n`,
+					statuses,
+					id(1)
+				)
+				let read = 0
+				for (const statement of statements()) {
+					const cursor = sql.exec(statement)
+					cursor.toArray()
+					read += cursor.rowsRead
+				}
+				// Not vacuous: the column is there for every status.
+				expect(sql.exec('SELECT count(*) AS n FROM statuses WHERE quotes_count = 0').one()).toEqual({ n: statuses })
+				return read
+			})
+		}
+		const few = await measure(100)
+		const many = await measure(10_000)
+		expect(statements().length).toBeGreaterThan(5)
+		expect(many).toBeLessThanOrEqual(few + 10)
 	}, 120_000)
 })

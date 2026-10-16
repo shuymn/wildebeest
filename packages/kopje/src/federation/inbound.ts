@@ -2,6 +2,7 @@ import { type DocumentLoader, exportSpki, FetchError, type KeyCache, verifyReque
 import { CryptographicKey } from '@fedify/vocab'
 import { Temporal } from 'temporal-polyfill'
 
+import { hasAuthorProof, verifyAuthorProof } from './author-proof'
 import { createRemoteLoaders, type FederationDeps, type FederationState, type RemoteLoaders } from './federation'
 import {
 	createContextLoader,
@@ -10,9 +11,11 @@ import {
 	type LoaderDeps,
 	loadFailureOf,
 	RefusedFetchError,
+	type FetchBudget,
 	requestBudget,
 	requireObjectRoot,
 } from './loader'
+import { verifyQuote } from './quotes'
 import { fetchActor } from './remote-actor'
 import {
 	ACTOR_TYPES,
@@ -23,6 +26,7 @@ import {
 	typeIs,
 } from './remote-status'
 import type { ActivityRef, InboundActivity, Prefetched, ReceiveResult, RemoteActorInput } from '../domain/inbox'
+import { errorFields } from '../platform/error-message'
 import { withinJsonBounds } from '../platform/json-bounds'
 import { isActivityPubMediaType, parseMediaType } from '../platform/media-type'
 import { callStore } from '../platform/store-client'
@@ -37,12 +41,17 @@ import { importPublicKeyPem } from '../security/key-wrap'
 //   3. The body is a JSON object with the ActivityStreams context, a type, an id and an actor (a string or array root
 //      is refused, ID-8).
 //   4. ID-1: the actor is not local, and it owns the verifying key: its document (fetched, or the stored one while
-//      fresh) lists the key id, and the key names no other owner. The activity id has the actor's origin.
+//      fresh) lists the key id, and the key names no other owner. The activity id has the actor's origin. One
+//      exception: a Delete another server relayed (a quoted author's revocation of a quote's stamp, forwarded by the
+//      quoting server) is signed by its relayer, who must own that key in the same way; it is applied as the actor's
+//      only with the actor's own proof (author-proof.ts), and without one it only has the stamp verified again.
 //   5. Per type, what the Store cannot fetch itself: a fresh actor document for Update, the Move target (ID-4), the
 //      object of a Create or Update given by id only.
 //   6. The Store applies it. It may answer that it needs a document first (the original of a boost it does not have,
 //      or that original's author): the Worker fetches it within the request's budget, signed as the request's other
 //      fetches are (NET-4), and asks again with it (at most MAX_STORE_ROUNDS times).
+//   7. A quote the activity stored, or made due, is verified inline with what is left of the request's budget
+//      (federation/quotes.ts); what that leaves due goes to the job rounds.
 //
 // Effects are idempotent by natural keys and retractions (ID-7); a refused activity reserves and records nothing.
 
@@ -405,38 +414,147 @@ export async function receiveInbound(deps: InboundDeps, request: InboundRequest)
 	if (originOf(actorUri) === origin) {
 		return { status: 401, reason: 'local-actor' }
 	}
-	if (key.id === null || (key.ownerId !== null && key.ownerId.href !== actorUri)) {
+	if (key.id === null) {
+		return { status: 401, reason: 'not-key-owner' }
+	}
+	// The key came from the Store: its owner is the account whose verified document listed it within 24 hours, or, for
+	// a gone actor's Delete, at any time. Otherwise the owner's current document, fetched anew, must list this very
+	// key: the same id and the same key material.
+	const fromStore = served.get(key.id.href)
+	const signerUri = fromStore !== undefined && fromStore.key === key ? fromStore.owner : (key.ownerId?.href ?? actorUri)
+	if (signerUri !== actorUri) {
+		return activity.type === 'Delete'
+			? relayed(deps, request, { activity, actorUri, signerUri, origin, key, pem, fromStore, loaders, state, budget })
+			: { status: 401, reason: 'not-key-owner' }
+	}
+	if (originOf(activity.id) !== originOf(actorUri)) {
+		return { status: 202, reason: 'foreign-id' }
+	}
+	let actor: RemoteActorInput | null = null
+	if (fromStore?.key !== key || activity.type === 'UpdateActor') {
+		const owned = await ownerDocument(actorUri, key, pem, loaders)
+		rethrowStoreError(state)
+		if ('status' in owned) {
+			return owned
+		}
+		actor = owned.input
+	}
+	return apply(deps, { activity, target: parsed.target, actorUri, actor, origin, loaders, state, budget })
+}
+
+// The current document of `uri`, fetched anew, if it lists this very key (the same id and the same key material).
+async function ownerDocument(
+	uri: string,
+	key: CryptographicKey,
+	pem: string,
+	loaders: RemoteLoaders
+): Promise<{ input: RemoteActorInput } | InboxOutcome> {
+	const fetched = await fetchActor(uri, loaders.document, loaders.context)
+	if (fetched.kind === 'transient') {
+		return { status: 503, reason: 'actor-unavailable' }
+	}
+	if (fetched.kind !== 'ok') {
+		return { status: 401, reason: 'actor-unusable' }
+	}
+	if (fetched.input === null) {
+		return { status: 202, reason: 'invalid-actor' }
+	}
+	const keys = withVerifiedReference(fetched.input.keys, fetched.actor.publicKeyIds, key, pem, uri)
+	if (!keys.some((listed) => listed.id === key.id?.href && listed.pem === pem)) {
+		return { status: 401, reason: 'not-key-owner' }
+	}
+	return { input: { ...fetched.input, keys } }
+}
+
+type Relay = {
+	activity: Extract<InboundActivity, { type: 'Delete' }>
+	actorUri: string
+	signerUri: string
+	origin: string
+	key: CryptographicKey
+	pem: string
+	fromStore: ServedKey | undefined
+	loaders: RemoteLoaders
+	state: FederationState
+	budget: FetchBudget
+}
+
+// A Delete relayed by another server: the HTTP signer is not the actor (Mastodon's forward of a stamp's Delete, signed
+// by a local sharer of the quoting status). The signer owns its key as any actor must (ID-1, judged on the signer).
+// With the actor's own proof, verified against a key the actor's current document embeds, it is applied as the actor's
+// Delete; without one it is handed on unproven, which can only have a stamp verified again. A proof that is present
+// but does not verify refuses it. Only the Store's relayedDelete applies either: never to an actor, a status or a boost.
+async function relayed(deps: InboundDeps, request: InboundRequest, relay: Relay): Promise<InboxOutcome> {
+	const { activity, actorUri, signerUri, origin, key, pem, fromStore, loaders, state, budget } = relay
+	if (originOf(signerUri) === null || originOf(signerUri) === origin) {
 		return { status: 401, reason: 'not-key-owner' }
 	}
 	if (originOf(activity.id) !== originOf(actorUri)) {
 		return { status: 202, reason: 'foreign-id' }
 	}
-	// The key came from the Store: its owner is the account whose verified document listed it within 24 hours, or, for
-	// a gone actor's Delete, at any time. Otherwise the actor's current document, fetched anew, must list this very
-	// key: the same id and the same key material.
-	const fromStore = served.get(key.id.href)
-	const storedOwner = fromStore !== undefined && fromStore.key === key && fromStore.owner === actorUri
+	if (fromStore?.key !== key) {
+		const owned = await ownerDocument(signerUri, key, pem, loaders)
+		rethrowStoreError(state)
+		if ('status' in owned) {
+			return owned
+		}
+	}
+	const json = JSON.parse(new TextDecoder().decode(request.body)) as Json
 	let actor: RemoteActorInput | null = null
-	if (!storedOwner || activity.type === 'UpdateActor') {
+	let proven = false
+	if (hasAuthorProof(json)) {
 		const fetched = await fetchActor(actorUri, loaders.document, loaders.context)
 		rethrowStoreError(state)
 		if (fetched.kind === 'transient') {
 			return { status: 503, reason: 'actor-unavailable' }
 		}
-		if (fetched.kind !== 'ok') {
+		if (fetched.kind !== 'ok' || fetched.input === null) {
 			return { status: 401, reason: 'actor-unusable' }
 		}
-		if (fetched.input === null) {
-			return { status: 202, reason: 'invalid-actor' }
+		const verdict = await verifyAuthorProof(
+			json,
+			{ id: activity.id, actor: actorUri, object: activity.object },
+			JSON.parse(fetched.input.raw) as unknown,
+			loaders.context
+		)
+		rethrowStoreError(state)
+		if (verdict === 'transient') {
+			return { status: 503, reason: 'proof-unavailable' }
 		}
-		const keys = withVerifiedReference(fetched.input.keys, fetched.actor.publicKeyIds, key, pem, actorUri)
-		if (!keys.some((listed) => listed.id === key.id?.href && listed.pem === pem)) {
-			return { status: 401, reason: 'not-key-owner' }
+		if (!verdict) {
+			return { status: 401, reason: 'proof-invalid' }
 		}
-		actor = { ...fetched.input, keys }
+		actor = fetched.input
+		proven = true
 	}
+	return apply(deps, {
+		activity: { type: 'RelayedDelete', id: activity.id, object: activity.object, proven },
+		target: null,
+		actorUri,
+		actor,
+		origin,
+		loaders,
+		state,
+		budget,
+	})
+}
 
-	const prepared = await prepare(activity, parsed.target, actorUri, origin, loaders)
+type Application = {
+	activity: InboundActivity | Dereference
+	target: string | null
+	actorUri: string
+	actor: RemoteActorInput | null
+	origin: string
+	loaders: RemoteLoaders
+	state: FederationState
+	budget: FetchBudget
+}
+
+// Steps 5 to 7: what the type needs, the Store, and the quote it made due.
+async function apply(deps: InboundDeps, application: Application): Promise<InboxOutcome> {
+	const { target, actorUri, actor, origin, loaders, state, budget } = application
+	const activity = application.activity
+	const prepared = await prepare(activity, target, actorUri, origin, loaders)
 	rethrowStoreError(state)
 	if (!('type' in prepared)) {
 		return prepared
@@ -483,7 +601,37 @@ export async function receiveInbound(deps: InboundDeps, request: InboundRequest)
 	if (result.retry === true) {
 		return { status: 503, reason: result.reason }
 	}
-	return { status: 202, reason: result.reason, jobsPending: result.jobsPending, delivers: result.delivers === true }
+	const verifying = result.verify === undefined ? false : await verifyInline(deps, result.verify, origin, loaders)
+	return {
+		status: 202,
+		reason: result.reason,
+		jobsPending: result.jobsPending || verifying,
+		delivers: result.delivers === true,
+	}
+}
+
+// The quote the activity made due, verified with the request's own loaders and what is left of its budget. Whatever
+// it leaves due (the budget ran out, a fetch may pass later, the Store refused) is the job rounds' to finish: the work
+// is durable, so a failure here never fails the activity. Returns whether work is left due now.
+async function verifyInline(
+	deps: InboundDeps,
+	statusId: string,
+	origin: string,
+	loaders: RemoteLoaders
+): Promise<boolean> {
+	try {
+		return await verifyQuote(
+			(call) => callStore(() => call(deps.store())),
+			deps.build,
+			origin,
+			statusId,
+			() => loaders,
+			deps.now
+		)
+	} catch (error) {
+		console.error({ event: 'kopje.quote.verify.failed', ...errorFields(error) })
+		return true
+	}
 }
 
 // A document the Store asked for, fetched through the request's loaders: a status (null if it cannot be one) or an

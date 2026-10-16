@@ -55,6 +55,7 @@ import { allocateLocalId } from './ids'
 import { DETACHED_GRACE_MS, DOOMED_AT, liveMediaSql } from './media'
 import { notify } from './notifications'
 import { editPoll, type PollInput, pollOptionsJson, writePoll } from './polls'
+import { detachQuotes } from './quotes'
 import { normalizeSearchText } from './search-text'
 import {
 	MEDIA_COLUMNS,
@@ -758,6 +759,8 @@ export const deleteStatus = userMediaDeleteOperation<
 	}
 	undoLocalBoosts(db, current.id, input.now)
 	uncountFeaturedTags(db, current.id)
+	// Quotes of it are detached, accepted ones becoming deleted, and its own quote goes (quotes.ts).
+	detachQuotes(db, current.id, input.now)
 	// Children cascade (mentions, tags, edits, favourites, bookmarks, notifications, boosts and their receipts);
 	// replies keep their in_reply_to_uri.
 	db.run('DELETE FROM statuses WHERE id = ?', current.id)

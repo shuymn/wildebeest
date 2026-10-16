@@ -56,6 +56,11 @@ const WRITING_TRIGGERS: Record<string, string> = {
 		"one account row per status deleted: deleteStatusWithin reserves it with the status's own delete",
 	statuses_last_status_changed:
 		'one account row per status hidden: deleteStatusBatch hides a status only with two rows left',
+	quotes_count_inserted: 'fires on a quote insert, which no batched delete or purge makes',
+	quotes_count_changed:
+		"one statuses row per quote entering or leaving accepted with its target: a detach (STATUS_CHILDREN's quoted_status_id entry) clears the target and fires none; a revocation batch (quotes.ts) takes half the rows left",
+	quotes_count_deleted:
+		"one statuses row per accepted quote deleted: STATUS_CHILDREN's status_id entry takes half the rows left",
 }
 
 type ForeignKey = { from: string; table: string; column: string; onDelete: string }
@@ -98,6 +103,15 @@ function unguarded(found: string[], listed: readonly { table: string }[], exempt
 	return found.filter((table) => !listed.some((child) => child.table === table) && exempt[table] === undefined)
 }
 
+// The foreign keys naming `root` itself that cascade or set null, as `table.column`: a table with two of them (quotes)
+// needs an entry for each, since each is removed by its own statement.
+function directKeys(keys: ForeignKey[], root: string): string[] {
+	return keys
+		.filter((key) => key.table === root && ['CASCADE', 'SET NULL'].includes(key.onDelete))
+		.map((key) => `${key.from}.${key.column}`)
+		.sort()
+}
+
 describe('cascade guard (RES-6)', () => {
 	it('lists or exempts every table that cascades from statuses', async () => {
 		await runInDurableObject(await migratedStore(), (_instance, state) => {
@@ -109,6 +123,18 @@ describe('cascade guard (RES-6)', () => {
 			// An exemption or entry for a table that no longer cascades is stale.
 			expect(Object.keys(STATUS_EXEMPT).filter((table) => !found.includes(table))).toEqual([])
 			expect(STATUS_CHILDREN.filter((child) => !found.includes(child.table))).toEqual([])
+		})
+	})
+
+	it('lists each foreign key naming statuses, not only its table', async () => {
+		await runInDurableObject(await migratedStore(), (_instance, state) => {
+			const direct = directKeys(foreignKeys(state.storage.sql), 'statuses')
+			const listed = STATUS_CHILDREN.map((child) => `${child.table}.${child.column}`)
+			expect(
+				direct.filter((key) => !listed.includes(key) && STATUS_EXEMPT[key.split('.')[0]!] === undefined),
+				'each of these foreign keys cascades from statuses: give it its own STATUS_CHILDREN entry in src/domain/inbox.ts'
+			).toEqual([])
+			expect(listed.filter((key) => !direct.includes(key))).toEqual([])
 		})
 	})
 
@@ -199,18 +225,29 @@ describe('a status in many conversations', () => {
 })
 
 describe("a status's own delete within a batch", () => {
-	// A purge reaches the account's newest status, a reply with a poll, after its children left the batch exactly the
-	// rows the delete used to reserve: the status, its poll, the parent's recount, and the account's last status, which
-	// the trigger of migration 0021_directory moves back, one row more.
+	// A purge reaches the account's newest status, a reply with a poll that quotes another status (accepted), after its
+	// children left the batch exactly the rows the delete used to reserve: the status, its poll, the parent's recount, and
+	// the account's last status, which the trigger of migration 0021_directory moves back, one row more. Its quote went
+	// before it with the quoted status's count (the trigger quotes_count_deleted), two rows.
 	it('stays within PURGE_BATCH when the status is the newest of its account', async () => {
 		const h = await community(['alice'])
 		const parent = await seedStatus(h.store, { accountId: h.users.alice.id, visibility: 'public' })
+		const quoted = await seedStatus(h.store, { accountId: h.users.alice.id, visibility: 'public' })
 		const remote = await remoteAccount(h.store, 'carol')
 		const uri = 'https://remote.example/users/carol'
 		const reply = await seedStatus(h.store, { accountId: remote, visibility: 'public', inReplyToId: parent })
 		await sql(h.store, `INSERT INTO polls (status_id, options, tallies) VALUES (?, '["a","b"]', '[0,0]')`, reply)
-		// The mentions the batch deletes first: all of the budget but the 3 rows the delete used to reserve.
-		const mentions = PURGE_BATCH - 3
+		await sql(
+			h.store,
+			`INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, quoted_account_id, state, updated_at)
+			SELECT ?1, uri, id, account_id, 'accepted', '2026-10-12T00:00:00.000Z' FROM statuses WHERE id = ?2`,
+			reply,
+			quoted
+		)
+		expect(await sql(h.store, 'SELECT quotes_count FROM statuses WHERE id = ?', quoted)).toEqual([{ quotes_count: 1 }])
+		// The mentions the batch deletes first: all of the budget but the 3 rows the delete used to reserve and the 2 of
+		// the quote.
+		const mentions = PURGE_BATCH - 5
 		await sql(
 			h.store,
 			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
@@ -244,6 +281,8 @@ describe("a status's own delete within a batch", () => {
 		expect(batches[0]).toBe(PURGE_BATCH - 3)
 		expect(batches.every((wrote) => wrote <= PURGE_BATCH)).toBe(true)
 		expect(await sql(h.store, 'SELECT count(*) AS n FROM accounts WHERE id = ?', remote)).toEqual([{ n: 0 }])
+		expect(await sql(h.store, 'SELECT count(*) AS n FROM quotes')).toEqual([{ n: 0 }])
+		expect(await sql(h.store, 'SELECT quotes_count FROM statuses WHERE id = ?', quoted)).toEqual([{ quotes_count: 0 }])
 	})
 
 	it('hides a status within PURGE_BATCH when its mentions leave one row', async () => {

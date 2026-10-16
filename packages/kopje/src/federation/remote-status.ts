@@ -14,6 +14,7 @@ import {
 	MAX_STATUS_TAGS,
 	MAX_TAG_LENGTH,
 	type RemoteMediaInput,
+	type RemoteQuoteInput,
 	type RemoteStatusInput,
 } from '../domain/remote-statuses'
 import { MAX_URL_LENGTH } from '../domain/status-text'
@@ -26,8 +27,9 @@ import { remoteHtmlText, sanitizeRemoteHtml } from '../security/html'
 // JSON with the ActivityStreams context, values as strings, objects with an id, or arrays of either. Note and Question
 // are statuses; Article, Page, Image, Audio, Video and Event are converted as Mastodon converts them (the name as a
 // heading, the summary, and a link to the url, with no content warning). Everything is bounded (RES-2, RES-4) and
-// sanitized (HTML-1); URLs are http(s) only (HTML-3). Misskey's extensions (_misskey_content, _misskey_quote,
-// quoteUrl, _misskey_summary) and everything else not read here stay in raw.
+// sanitized (HTML-1); URLs are http(s) only (HTML-3). Quotes are read from quote, _misskey_quote, quoteUrl and quoteUri
+// (quoteOf); Misskey's other extensions (_misskey_content, _misskey_summary) and everything else not read here stay in
+// raw.
 
 type Json = Record<string, unknown>
 
@@ -259,6 +261,39 @@ function pollOf(object: Json): RemotePollInput | null {
 	}
 }
 
+// The properties that name a quoted status, in the order Mastodon reads them (StatusParser#quote_uri).
+const QUOTE_PROPERTIES = ['quote', '_misskey_quote', 'quoteUrl', 'quoteUri'] as const
+
+function firstOf(object: Json, key: string): unknown {
+	return asArray(object[key])[0]
+}
+
+// StatusParser#quote_uri, #legacy_quote?, #deleted_quote? and #quote_approval_uri: the first http(s) URI the quote
+// properties name, in Mastodon's order; legacy when the Note has no `quote` (Misskey's and Fedibird's properties
+// only); a `quote` that is a Tombstone is a deleted quote whether or not it has an id (Mastodon's has none), its uri
+// its id or the first the other properties name. The stamp is the first quoteAuthorization, http(s) only (the Store
+// drops one of its own origin). null: the Note quotes nothing.
+function quoteOf(object: Json): RemoteQuoteInput | null {
+	const quote = firstOf(object, 'quote')
+	const uriOf = (value: unknown) => httpString(idOf(value))
+	if (isObject(quote) && typeIs(quote.type, ['Tombstone'])) {
+		const uri = [quote, ...QUOTE_PROPERTIES.slice(1).map((key) => firstOf(object, key))]
+			.map(uriOf)
+			.find((value) => value !== null)
+		return { uri: uri ?? null, legacy: false, tombstone: true, approvalUri: null }
+	}
+	const uri = QUOTE_PROPERTIES.map((key) => uriOf(firstOf(object, key))).find((value) => value !== null)
+	if (uri === undefined) {
+		return null
+	}
+	return {
+		uri,
+		legacy: quote === undefined || quote === null,
+		tombstone: false,
+		approvalUri: uriOf(firstOf(object, 'quoteAuthorization')),
+	}
+}
+
 // The status an object describes, or null if it is not one Kopje stores. `activity` supplies to and cc when the
 // object has none (StatusParser falls back to the activity's addressing).
 export function parseRemoteStatus(object: unknown, activity: Json | null = null): RemoteStatusInput | null {
@@ -313,6 +348,7 @@ export function parseRemoteStatus(object: unknown, activity: Json | null = null)
 		// A Note's name: in reply to a local poll, a vote (ActivityPub::Activity::Create#poll_vote?).
 		name: converted ? null : text(object.name),
 		poll: converted ? null : pollOf(object),
+		quote: quoteOf(object),
 		raw: JSON.stringify(object),
 	}
 }
