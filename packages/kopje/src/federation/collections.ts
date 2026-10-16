@@ -77,10 +77,18 @@ function itemsOf(collection: Json): unknown[] | null {
 	return items === undefined ? null : Array.isArray(items) ? items : items === null ? [] : [items]
 }
 
-function hashtagNames(items: readonly unknown[]): string[] {
-	return items.flatMap((item) =>
-		isObject(item) && item.type === 'Hashtag' && typeof item.name === 'string' ? [item.name] : []
-	)
+// The names of the Hashtags among `items`, in order, appended to `names` until it holds MAX_FEATURED_TAGS; the items
+// after that are not looked at.
+function hashtagNames(items: readonly unknown[], names: string[] = []): string[] {
+	for (const item of items) {
+		if (names.length >= MAX_FEATURED_TAGS) {
+			break
+		}
+		if (isObject(item) && item.type === 'Hashtag' && typeof item.name === 'string') {
+			names.push(item.name)
+		}
+	}
+	return names
 }
 
 // ProcessAccountService#collection_info: whether the collection shows its items (a first page). An actor without the
@@ -142,7 +150,7 @@ async function readFeatured(
 			})
 		),
 	]
-	return { uris, hashtags: hashtagNames(items).slice(0, MAX_FEATURED_TAGS) }
+	return { uris, hashtags: hashtagNames(items) }
 }
 
 // Phase 2: the pending statuses, fetched in order (FetchRemoteStatusService) while the budget lasts: a usable status, or
@@ -173,7 +181,9 @@ async function readFeaturedTags(
 	if (collection === null || collection === 'transient') {
 		return collection
 	}
-	const items: unknown[] = []
+	// The raw items read so far (the paging condition counts them), and the hashtags among them.
+	let listedItems = 0
+	const names: string[] = []
 	let page: Json | 'transient' | null =
 		collection.first === undefined ? collection : await documentOn(collection.first, origin, loader)
 	// The page limit is checked before the next page is fetched: page MAX_FEATURED_TAG_PAGES + 1 is never asked for.
@@ -182,9 +192,10 @@ async function readFeaturedTags(
 		if (listed === null || listed.length === 0) {
 			break
 		}
-		items.push(...listed)
+		listedItems += listed.length
+		hashtagNames(listed, names)
 		if (
-			items.length >= MAX_FEATURED_TAGS ||
+			listedItems >= MAX_FEATURED_TAGS ||
 			read >= MAX_FEATURED_TAG_PAGES ||
 			page.next === undefined ||
 			page.next === null
@@ -196,7 +207,7 @@ async function readFeaturedTags(
 	if (page === 'transient') {
 		return page
 	}
-	return hashtagNames(items).slice(0, MAX_FEATURED_TAGS)
+	return names
 }
 
 // Phase 1: what a round reads of one account's collections. unfinished: something may be read later (a fetch that may
