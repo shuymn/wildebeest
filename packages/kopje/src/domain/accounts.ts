@@ -892,7 +892,7 @@ function remoteFollow(db: Db, viewerId: string, target: TargetRow, edgeId: strin
 
 // Counts are recomputed from the edges in the transaction that changed them. A remote account's counts are the
 // cached values from its server and are left alone.
-function recountFollows(db: Db, viewerId: string, target: TargetRow): void {
+function recountFollows(db: Db, viewerId: string, target: Pick<TargetRow, 'id' | 'domain'>): void {
 	db.run(
 		`UPDATE accounts SET following_count =
 			(SELECT COUNT(*) FROM follows WHERE account_id = ?1 AND state = 'accepted') WHERE id = ?1`,
@@ -1091,17 +1091,14 @@ export const answerFollowRequest = userWriteOperation<
 			now
 		)
 	}
-	db.run(
-		`UPDATE accounts SET followers_count =
-			(SELECT COUNT(*) FROM follows WHERE target_account_id = ?1 AND state = 'accepted') WHERE id = ?1`,
-		viewerId
-	)
-	// A local requester follows one more account now (its following_count, which the follow limit reads).
+	// The viewer's followers changed; an authorized local requester also follows one more account now.
 	if (decision === 'authorize' && request.remote === 0) {
+		recountFollows(db, requesterId, { id: viewerId, domain: null })
+	} else {
 		db.run(
-			`UPDATE accounts SET following_count =
-				(SELECT COUNT(*) FROM follows WHERE account_id = ?1 AND state = 'accepted') WHERE id = ?1`,
-			requesterId
+			`UPDATE accounts SET followers_count =
+				(SELECT COUNT(*) FROM follows WHERE target_account_id = ?1 AND state = 'accepted') WHERE id = ?1`,
+			viewerId
 		)
 	}
 	return relationshipResult(db, viewerId, requesterId, now)
