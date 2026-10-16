@@ -96,7 +96,11 @@ which the writers of `status_mentions` copy from the status, migration `0008_sta
 reads a page of shown statuses per author however long each author's history; a followed account's direct and limited
 statuses to others are never read, and neither are the viewer's mentions in public, unlisted and private statuses or
 by accounts they do not follow. What a follow's options (boosts, languages, replies) and `homeFilterSql` leave out is
-still read on the way: an author whose recent statuses are mostly left out costs those rows.
+still read on the way: an author whose recent statuses are mostly left out costs those rows. The number of windows is
+the number of accounts the viewer follows (a list's active members are among them), which the follow API caps as
+Mastodon's `FollowLimitValidator` does: a new follow or request is refused (422) once the viewer follows 7,500 accounts,
+or past that 1.1 times their followers; pending requests do not count, and authorizing a request or a Move's follower
+transfer is not limited (`test/follow-limit.test.ts`).
 
 A list (`src/domain/lists.ts`) belongs to a local account and holds the owner or accounts the owner follows or has
 asked to follow (Mastodon's `ListAccount#validate_relationship`). A member leaves the owner's lists when that follow
