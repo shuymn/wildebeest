@@ -15,6 +15,7 @@ export const STRINGS = {
 	sensitiveMedia: 'Sensitive media',
 	showMore: 'Show content',
 	edited: 'edited',
+	viewOn: (domain: string) => `View on ${domain}`,
 	settings: 'Settings',
 	signIn: 'Sign in',
 	signInAs: "Sign in to this server's settings as",

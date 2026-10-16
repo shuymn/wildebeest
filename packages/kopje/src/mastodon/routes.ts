@@ -14,6 +14,7 @@ import * as notificationGroups from './notification-groups'
 import * as notificationRequests from './notification-requests'
 import * as notifications from './notifications'
 import * as oauth from './oauth'
+import * as oembed from './oembed'
 import * as placeholders from './placeholders'
 import * as polls from './polls'
 import * as push from './push'
@@ -54,6 +55,8 @@ export const ROUTES: readonly Route[] = [
 	{ method: 'GET', path: '/api/v1/instance', access: 'public', handler: instance.instanceV1 },
 	{ method: 'GET', path: '/api/v2/instance', access: 'public', handler: instance.instanceV2 },
 	{ method: 'GET', path: '/api/v1/custom_emojis', access: 'public', handler: instance.customEmojis },
+	// Api::OEmbedController: no token is read.
+	{ method: 'GET', path: '/api/oembed', access: 'public', handler: oembed.oembed },
 
 	// Reads clients make at startup (instance details, preferences, tags, familiar followers), and the empty answers of
 	// features Kopje has no data for yet (mastodon/placeholders.ts). Kept before the accounts routes, so

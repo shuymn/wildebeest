@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest'
 import { NOW } from './app-helpers'
 import { migratedStore } from './helpers'
 import { PolicyModel } from './policy-model'
-import { accountId, REMOTE_DOMAINS, statusId, type World, worldArb, writeWorld } from './policy-world'
+import { accountId, REMOTE_DOMAINS, statusId, statusUri, type World, worldArb, writeWorld } from './policy-world'
 import { rowsRead } from './read-helpers'
 import { Db } from '../src/db/sql'
 import { getAccounts, listFollows, type PageQuery, relationships, userinfo } from '../src/domain/accounts'
@@ -71,6 +71,7 @@ import {
 	publicTimeline,
 	tagTimeline,
 } from '../src/domain/timelines'
+import { embeddedStatus } from '../src/domain/web-pages'
 import type { StoreStub } from '../src/platform/store-client'
 import type { StoreOperation } from '../src/platform/store-kernel'
 
@@ -144,6 +145,17 @@ const AUTHOR = WORLD.accounts.map((_, x) => x).sort((a, b) => authored(b) - auth
 function authored(x: number): number {
 	return WORLD.statuses.filter((status) => status.author === x).length
 }
+
+// The status the oEmbed read finds: a public or unlisted original of a local account that is not suspended.
+const EMBEDDED = WORLD.statuses.findIndex((status) => {
+	const author = WORLD.accounts[status.author]
+	return (
+		(status.visibility === 'public' || status.visibility === 'unlisted') &&
+		status.reblogOf === null &&
+		author?.local === true &&
+		!author.suspended
+	)
+})
 
 const VIEWER_LIST = '700000000000000001'
 // The viewer's filter: warn, in every context, by keywords some of the world's statuses match and by the target status.
@@ -512,10 +524,16 @@ function writeUnrelated(sql: SqlStorage, remote: number): void {
 	}
 }
 
+// The instance's domain, which the oEmbed read takes a URL's host against.
+function writeDomain(sql: SqlStorage): void {
+	sql.exec("INSERT INTO instance_settings (name, value) VALUES ('domain', 'kopje.test')")
+}
+
 async function worldWith(unrelated: number): Promise<StoreStub> {
 	const store = await migratedStore()
 	await runInDurableObject(store, (_instance, state) => {
 		writeWorld(state.storage.sql, WORLD)
+		writeDomain(state.storage.sql)
 		writeViewer(state.storage.sql)
 		writeUnrelated(state.storage.sql, unrelated)
 		// The conversations of the direct statuses and mentions written, as migration 0009 makes them: the viewer's,
@@ -601,6 +619,7 @@ async function replicated(factor: number): Promise<StoreStub> {
 	const store = await migratedStore()
 	await runInDurableObject(store, (_instance, state) => {
 		writeWorld(state.storage.sql, WORLD)
+		writeDomain(state.storage.sql)
 		writeCopies(state.storage.sql, factor)
 		writeViewer(state.storage.sql)
 		// The conversations of the direct statuses and the viewer's mentions, copies included, as migration 0009 makes
@@ -733,6 +752,16 @@ const ENDPOINTS: [string, StoreOperation<never, unknown>, unknown, Paging?][] = 
 		},
 	],
 	['featured', getFeatured, { username: WORLD.accounts[VIEWER]?.name.toLowerCase() }],
+	[
+		'oembed',
+		embeddedStatus,
+		{
+			url: `https://kopje.test/@${WORLD.accounts[WORLD.statuses[EMBEDDED]?.author ?? -1]?.name ?? ''}/${statusId(EMBEDDED)}`,
+			present: PRESENT,
+			now: NOW,
+		},
+	],
+	['oembed by object URI', embeddedStatus, { url: statusUri(EMBEDDED), present: PRESENT, now: NOW }],
 ]
 
 // How many rows a read may add when the unrelated rows grow from none to UNRELATED: a few for a planner's choice, far
@@ -752,7 +781,7 @@ const UNRELATED_EXTRA: Record<string, { rows: number; why: string }> = {
 }
 
 // What an endpoint showed: the items of a page, the members of a context, the results of a search, the entries of a
-// list, the timelines of markers, or the account userinfo claims, through the operation's ok result.
+// list, one status, the timelines of markers, or the account userinfo claims, through the operation's ok result.
 function shown(output: unknown): number {
 	if (Array.isArray(output)) {
 		return output.length
@@ -778,6 +807,10 @@ function shown(output: unknown): number {
 	}
 	if (Array.isArray(value.descendants) && Array.isArray(value.ancestors)) {
 		return value.ancestors.length + value.descendants.length
+	}
+	// One status (the oEmbed read's).
+	if (typeof value.uri === 'string' && Array.isArray(value.media_attachments)) {
+		return 1
 	}
 	// A filter with its rules.
 	if (Array.isArray(value.keywords) && Array.isArray(value.statuses)) {
