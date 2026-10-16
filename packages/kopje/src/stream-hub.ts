@@ -133,6 +133,10 @@ export class StreamHub {
 	#turns = 0
 	// The registry is rebuilt from the open sockets by the first turn of this instance.
 	#reconciled = false
+	// The conversation walk's place (#conversations): the last owner whose changes the current pass read, null between
+	// passes. It lives as long as the chain of turns does: a turn stopped by its budget always requests the next, so the
+	// object is not evicted mid-pass, and a new instance (a deploy, which also closes the sockets) starts a new pass.
+	#ownerCursor: string | null = null
 	#idle: (() => void)[] = []
 
 	constructor(ctx: DurableObjectState, kernel: StoreKernel, turnRequest: (headers: HeadersInit) => Promise<Response>) {
@@ -525,10 +529,14 @@ export class StreamHub {
 	// The conversation units, after the journal's: for each owner with `direct` sockets, its newest changes above the
 	// lowest convSeq of those sockets (at most CONVERSATIONS_PER_TURN, older ones skipped), oldest of them first, each
 	// one subject for the owner. Before a change is sent, the convSeq of each socket it goes to is raised to it and
-	// written, so it is sent at most once; a socket's convSeq at or above it already had it, or skipped it. Every owner
-	// whose changes were read moves its sockets' convSeq. Returns whether the budget stopped the walk.
+	// written, so it is sent at most once; a socket's convSeq at or above it already had it, or skipped it.
+	// The owners are walked in account id order in passes that may span turns: a turn the budget stops resumes after the
+	// last owner it finished (#ownerCursor), whether or not that owner had changes, so every turn that reads an owner
+	// moves the walk and no owner waits behind a prefix the budget re-reads. A pass ends at the last owner; it then asks
+	// for no further turn (a change written meanwhile asks for its own). Returns whether the budget stopped the walk.
 	async #conversations(budget: Budget): Promise<boolean> {
-		for (const { accountId, after } of this.#owners()) {
+		const cursor = this.#ownerCursor
+		for (const { accountId, after } of this.#owners().filter((owner) => cursor === null || owner.accountId > cursor)) {
 			if (!budget.covers(UNIT_WORST)) {
 				return true
 			}
@@ -536,6 +544,7 @@ export class StreamHub {
 			budget.charge({ checks: 1 })
 			for (const { id, seq } of changes) {
 				if (!budget.covers(UNIT_WORST)) {
+					// This owner's sent changes raised its sockets' convSeq: the next turn reads it again, past them.
 					return true
 				}
 				const sockets = this.#open(accountTag(accountId)).filter(
@@ -552,7 +561,9 @@ export class StreamHub {
 					return Promise.resolve(true)
 				})
 			}
+			this.#ownerCursor = accountId
 		}
+		this.#ownerCursor = null
 		return false
 	}
 

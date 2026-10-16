@@ -2,13 +2,16 @@ import { runInDurableObject } from 'cloudflare:test'
 
 import { describe, expect, it } from 'vitest'
 
+import { Db } from '../../src/db/sql'
+import { addToConversation } from '../../src/domain/conversations'
+import { runNotificationRequestJobs } from '../../src/domain/notification-requests'
 import { type ApiHarness, bearer, sql } from '../api-helpers'
 import { NOW } from '../app-helpers'
 import { BUILD } from '../helpers'
 import { scopedToken } from '../read-helpers'
-import { act, community, follow, getJson, post, remoteAccount, type User } from '../status-helpers'
-import { drained, type Inbox, subscribed } from './stream-helpers'
-import { runNotificationRequestJobs } from '../../src/domain/notification-requests'
+import { act, community, follow, getJson, post, remoteAccount, seedStatus, type User } from '../status-helpers'
+import { connect, drained, echo, type Inbox, type StreamMessage, subscribed } from './stream-helpers'
+import { sha256Hex } from '../../src/security/tokens'
 
 // The `direct` stream and `notifications_merged` (design "Kopje streaming API" PR 3). `conversation` is sent when a
 // conversation of the viewer changes, as the conversation list presents it (R33: the row of the viewer, R25), by the
@@ -46,16 +49,17 @@ describe('conversation on direct', () => {
 		// Not on the notification socket.
 		expect(home.rest().filter((m) => m.event === 'conversation')).toEqual([])
 
+		// Each change observed before the next is written: the reply (unread), then the read.
+		const conversation = (m: StreamMessage) =>
+			m.event === 'conversation' ? (JSON.parse(m.payload!) as Conversation) : null
 		const reply = await post(h, h.users.bob, { status: '@alice again', visibility: 'direct', in_reply_to_id: first.id })
+		const unread = conversation(await inbox.next((m) => conversation(m)?.last_status?.id === reply.id))
+		expect([unread?.id, unread?.unread]).toEqual([listed.body[0]!.id, true])
 		expect((await act(h, h.users.alice, `/api/v1/conversations/${listed.body[0]!.id}/read`)).status).toBe(200)
+		const read = conversation(await inbox.next((m) => conversation(m)?.unread === false))
+		expect([read?.id, read?.last_status?.id]).toEqual([listed.body[0]!.id, reply.id])
 		await drained(h, inbox)
-		expect(conversations(inbox).map((c) => [c.id, c.last_status?.id, c.unread])).toEqual([
-			[listed.body[0]!.id, reply.id, true],
-			[listed.body[0]!.id, reply.id, false],
-		])
-		for (const _ of conversations(inbox)) {
-			await inbox.next((m) => m.event === 'conversation')
-		}
+		expect(inbox.rest()).toEqual([])
 
 		// The reply's delete moves the last status back (the trigger), which is a change; deleting the conversation
 		// sends nothing.
@@ -73,6 +77,34 @@ describe('conversation on direct', () => {
 		expect(inbox.rest()).toEqual([])
 	})
 
+	it('coalesces changes written before a turn into one message with the latest state', async () => {
+		const h = await community(['alice', 'bob'])
+		const inbox = await subscribed(h, h.users.alice.token, 'direct')
+		// Two statuses of one conversation join it with no turn between (written straight to the Store).
+		const first = await seedStatus(h.store, {
+			accountId: h.users.bob.id,
+			visibility: 'direct',
+			mentions: [{ accountId: h.users.alice.id }],
+		})
+		const second = await seedStatus(h.store, {
+			accountId: h.users.bob.id,
+			visibility: 'direct',
+			mentions: [{ accountId: h.users.alice.id }],
+			inReplyToId: first,
+		})
+		await runInDurableObject(h.store, (_instance, state) => {
+			const db = new Db(state.storage.sql)
+			state.storage.transactionSync(() => addToConversation(db, h.users.alice.id, first))
+			state.storage.transactionSync(() => addToConversation(db, h.users.alice.id, second))
+		})
+		expect(await sql(h.store, 'SELECT count(*) AS n, max(stream_seq) AS seq FROM conversations')).toEqual([
+			{ n: 1, seq: 2 },
+		])
+		await h.store.streamTick(BUILD)
+		await drained(h, inbox)
+		expect(conversations(inbox).map((c) => c.last_status?.id)).toEqual([second])
+	})
+
 	it("sends nothing of another owner's conversations, or of changes before the subscription", async () => {
 		const h = await community(['alice', 'bob', 'carol'])
 		await follow(h, h.users.alice, h.users.bob.id)
@@ -87,6 +119,69 @@ describe('conversation on direct', () => {
 		await drained(h, inbox)
 		expect(conversations(inbox).map((c) => c.last_status?.id)).toEqual([control.id])
 	})
+})
+
+describe('conversations at the caps', () => {
+	// 256 owners, each with a `direct` socket (the instance's cap): a turn's token sweep takes 256 checks of its 512, so
+	// one turn reads only some of the owners' changes. The walk resumes where the last turn stopped.
+	it('reaches the last of 256 owners, then asks for no further turn', async () => {
+		const h = await community(['alice'])
+		const owners = 256
+		await sql(
+			h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO accounts (id, uri, username) SELECT printf('4%017d', i), 'https://kopje.test/ap/users/o' || i, 'o' || i FROM n`,
+			owners
+		)
+		await sql(
+			h.store,
+			`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey)
+			SELECT id, username || '@mail.example', x'00', x'00', 'k' FROM accounts WHERE id GLOB '4*'`
+		)
+		const ids = Array.from({ length: owners }, (_, i) => `4${String(i + 1).padStart(17, '0')}`)
+		for (const id of ids) {
+			await sql(
+				h.store,
+				"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) SELECT ?, 'access', client_id, ?, 'read' FROM oauth_tokens LIMIT 1",
+				await sha256Hex(`cap-${id}`),
+				id
+			)
+		}
+		const inboxes: Inbox[] = []
+		for (const id of ids) {
+			const inbox = await connect(h, `cap-${id}`)
+			inbox.send({ type: 'subscribe', stream: 'direct' })
+			inboxes.push(inbox)
+		}
+		for (const inbox of inboxes) {
+			await echo(inbox)
+		}
+		await drained(h)
+		// A change of the first owner's and of the last owner's conversations, written with no turn.
+		for (const id of [ids[0]!, ids.at(-1)!]) {
+			await sql(
+				h.store,
+				`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+				VALUES (?1, 'https://kopje.test/ap/o/' || ?1, ?2, 'direct', '<p>x</p>', '2026-10-12T00:00:00.000Z')`,
+				`7${id.slice(1)}`,
+				id
+			)
+			await runInDurableObject(h.store, (_instance, state) => {
+				state.storage.transactionSync(() => addToConversation(new Db(state.storage.sql), id, `7${id.slice(1)}`))
+			})
+		}
+		await h.store.streamTick(BUILD)
+		for (const inbox of [inboxes[0]!, inboxes.at(-1)!]) {
+			const message = await inbox.next((m) => m.event === 'conversation')
+			expect((JSON.parse(message.payload!) as Conversation).last_status?.id).toMatch(/^7/)
+		}
+		// Quiescent: once nothing is left, no turn runs or is asked for, and asking again changes nothing.
+		const { turns } = await drained(h)
+		expect((await drained(h)).turns).toBe(turns)
+		for (const inbox of inboxes.slice(1, -1)) {
+			expect(inbox.rest().filter((m) => m.event === 'conversation')).toEqual([])
+		}
+	}, 120_000)
 })
 
 // `count` filtered mentions (direct statuses from `base`, each its own thread) from `sender` to `recipient`, and the

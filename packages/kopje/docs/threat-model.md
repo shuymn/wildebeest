@@ -1280,7 +1280,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   triggers write one journal row per status write, under the same span, and no batched delete or purge fires them.
   _Implemented on branch `kopje/streaming-3`:_ a delete's capture also holds each viewer's lists (at most 16 for the
   status and each boost, within the same 16 KiB); a list's check is one narrowed read. Conversations are not
-  journaled: each owner's newest 20 changes are read a turn through an index, each its own unit, older ones skipped. A
+  journaled: each owner's newest 20 changes are read through an index, each its own unit, older ones skipped; the owners
+  are walked in passes that resume across turns where the budget stopped, and a finished pass asks for no turn. A
   conversation's last status moved back by a status's removal writes the owner's mark too, so the batched delete of a
   status's conversation links takes a third of the rows left (`LIMIT ?2 / 3`). `notifications_merged` is one journal
   row per transition, under the span. `src/stream-hub.ts`, `src/domain/streaming.ts`;
