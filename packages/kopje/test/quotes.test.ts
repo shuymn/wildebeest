@@ -5,7 +5,8 @@ import { CryptographicKey, Delete, Multikey, Person } from '@fedify/vocab'
 import { describe, expect, it } from 'vitest'
 
 import { sql } from './api-helpers'
-import { inboxDeps, NOW } from './app-helpers'
+import { harness, inboxDeps, NOW } from './app-helpers'
+import { fixtureKeyGen } from './federation-helpers'
 import { BUILD } from './helpers'
 import {
 	LOCAL,
@@ -15,6 +16,7 @@ import {
 	MISSKEY_CONTEXT,
 	type RemoteWeb,
 	type TestActor,
+	signedInit,
 } from './inbox-helpers'
 import {
 	ALICE,
@@ -1471,5 +1473,119 @@ describe('review round 1 regressions', () => {
 		expect(await quoteOf(t, pair.quote.id)).toMatchObject({ state: 'accepted', verify_after: NOW, attempts: 0 })
 		expect(await verifyQuotes(t.env, deps)).toBe(false)
 		expect(await quoteOf(t, pair.quote.id)).toMatchObject({ state: 'accepted', verify_after: null })
+	})
+
+	// The app over the test's Store with a fetch of the test's own, for driving the inbox's inline verification.
+	function appWith(t: Setup, fetch: typeof globalThis.fetch) {
+		const app = harness(t.store, {}, undefined, {
+			keygen: fixtureKeyGen,
+			loader: { fetch, checkHost: () => Promise.resolve() },
+		})
+		return async (actor: TestActor, activity: unknown) =>
+			(await app.request('/inbox', await signedInit(actor, '/inbox', activity, { at: NOW }))).status
+	}
+
+	function deferred() {
+		let resolve!: () => void
+		const promise = new Promise<void>((r) => {
+			resolve = r
+		})
+		return { promise, resolve }
+	}
+
+	const urlOf = (input: RequestInfo | URL) => new URL(input instanceof Request ? input.url : input.toString()).href
+
+	function relay(actor: TestActor, object: string) {
+		return { '@context': AS, id: `${actor.uri}#delete-${nextId()}`, type: 'Delete', actor: actor.uri, object }
+	}
+
+	it('discards an inline outcome once a round has leased the work, so the round’s 404 revokes', async () => {
+		const { t, bob, carol } = await world()
+		const pair = quotedPair(t, bob, carol)
+		expect(await t.post(bob, create(bob, pair.quote))).toBe(202)
+		const dan = await mastodonActor(t.web, 'dan', { origin: RELAY, key: 6 })
+		const inlineFetching = deferred()
+		const roundFetching = deferred()
+		// The inline verifier's stamp fetch waits for the round's claim and then fails in a way that may pass; the round's
+		// fetch waits until the inline verifier has finished, then finds the stamp gone.
+		let inlineDone = false
+		const inlineFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+			if (urlOf(input) === pair.stamp) {
+				inlineFetching.resolve()
+				await roundFetching.promise
+				return new Response('busy', { status: 503 })
+			}
+			return t.web.fetch(input, init)
+		}) as typeof fetch
+		const post = appWith(t, inlineFetch)
+		// An unproven relay of carol's Delete renews the idle check and verifies it inline.
+		const request = post(dan, relay(carol, pair.stamp)).then((status) => {
+			inlineDone = true
+			return status
+		})
+		await inlineFetching.promise
+		let request_: Promise<number> | undefined = request
+		const roundFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+			if (urlOf(input) === pair.stamp) {
+				roundFetching.resolve()
+				await request_
+				expect(inlineDone).toBe(true)
+				return new Response('gone', { status: 404 })
+			}
+			return t.web.fetch(input, init)
+		}) as typeof fetch
+		await verifyQuotes(t.env, {
+			...inboxDeps(() => t.store, { fetch: roundFetch, checkHost: () => Promise.resolve() }),
+			now: () => NOW,
+		})
+		request_ = undefined
+		expect(await request).toBe(202)
+		expect(await quoteOf(t, pair.quote.id)).toMatchObject({ state: 'revoked', verify_after: null })
+	})
+
+	it('starts no inline verifier for work that is already due or leased: replays during a fetch cannot stop a 404', async () => {
+		const { t, bob, carol } = await world()
+		const pair = quotedPair(t, bob, carol)
+		expect(await t.post(bob, create(bob, pair.quote))).toBe(202)
+		const dan = await mastodonActor(t.web, 'dan', { origin: RELAY, key: 6 })
+		// Inline fetches of the stamp are counted: the replays must start none.
+		let inlineStampFetches = 0
+		const post = appWith(t, ((input: RequestInfo | URL, init?: RequestInit) => {
+			if (urlOf(input) === pair.stamp) {
+				inlineStampFetches++
+			}
+			return t.web.fetch(input, init)
+		}) as typeof fetch)
+		// The first relay renews the idle check; its inline fetch finds the stamp still valid... once.
+		expect(await post(dan, relay(carol, pair.stamp))).toBe(202)
+		expect(inlineStampFetches).toBe(1)
+		expect(await quoteOf(t, pair.quote.id)).toMatchObject({ state: 'accepted', verify_after: null })
+		// Now the stamp is gone. A relay renews the check, then replays arrive while it is due and during the round's
+		// fetch (the work leased), each through the inbox.
+		t.web.fail(pair.stamp, 404)
+		const renewal = appWith(t, ((input: RequestInfo | URL, init?: RequestInit) =>
+			urlOf(input) === pair.stamp
+				? Promise.reject(new TypeError('network connection lost'))
+				: t.web.fetch(input, init)) as typeof fetch)
+		expect(await renewal(dan, relay(carol, pair.stamp))).toBe(202)
+		expect(await quoteOf(t, pair.quote.id)).toMatchObject({ state: 'accepted', verify_after: NOW, attempts: 0 })
+		inlineStampFetches = 0
+		expect(await post(dan, relay(carol, pair.stamp))).toBe(202)
+		expect(inlineStampFetches).toBe(0)
+		let replays = 0
+		const roundFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+			if (urlOf(input) === pair.stamp) {
+				replays++
+				expect(await post(dan, relay(carol, pair.stamp))).toBe(202)
+			}
+			return t.web.fetch(input, init)
+		}) as typeof fetch
+		await verifyQuotes(t.env, {
+			...inboxDeps(() => t.store, { fetch: roundFetch, checkHost: () => Promise.resolve() }),
+			now: () => NOW,
+		})
+		expect(replays).toBe(1)
+		expect(inlineStampFetches).toBe(0)
+		expect(await quoteOf(t, pair.quote.id)).toMatchObject({ state: 'revoked', verify_after: null })
 	})
 })

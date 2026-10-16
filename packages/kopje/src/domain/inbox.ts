@@ -25,7 +25,7 @@ import {
 	otherQuotesDue,
 	promoteQuote,
 	quoteArrival,
-	quoteDue,
+	madeDue,
 	recheckStamp,
 	revokeStamp,
 } from './quotes'
@@ -1823,19 +1823,20 @@ function outcome(result: { applied: boolean; reason: string }): ReceiveResult {
 	return result.applied ? applied(result.reason) : ignored(result.reason)
 }
 
-// The outcome, with the status whose quote has work due now, for the Worker to verify inline.
-function withVerify(db: Db, result: ReceiveResult, statusId: string | undefined, now: number): ReceiveResult {
-	return statusId !== undefined && quoteDue(db, statusId, now) ? { ...result, verify: statusId } : result
+// The outcome, with the status whose quote this transaction made due itself, for the Worker to verify inline (never work
+// that was already due, backed off or leased when the activity arrived: quotes.ts madeDue).
+function withVerify(db: Db, result: ReceiveResult, statusId: string | undefined): ReceiveResult {
+	return statusId !== undefined && madeDue(db, statusId) ? { ...result, verify: statusId } : result
 }
 
 const create: Handler<'Create'> = (db, actor, activity, input) => {
 	const stored = storeRemoteStatus(db, actor, activity.object, storeContext(db, input))
-	return withVerify(db, outcome(stored), stored.statusId, input.now)
+	return withVerify(db, outcome(stored), stored.statusId)
 }
 
 const updateStatus: Handler<'UpdateStatus'> = (db, actor, activity, input) => {
 	const updated = updateRemoteStatus(db, actor, activity.object, storeContext(db, input))
-	return withVerify(db, outcome(updated), updated.statusId, input.now)
+	return withVerify(db, outcome(updated), updated.statusId)
 }
 
 // What an inbound Like or Announce of a status requires of its actor: that it may see the status by itself (canView, as
@@ -2064,7 +2065,7 @@ const announce: Handler<'Announce'> = (db, actor, activity, input) => {
 	recountStatus(db, originalId)
 	// The local author hears of the boost only if they may see it (notify applies the rule to the wrapper too).
 	notify(db, { recipientId: original.account_id, type: 'reblog', fromId: actor.id, statusId: originalId, now })
-	return withVerify(db, applied('boosted'), originalId, now)
+	return withVerify(db, applied('boosted'), originalId)
 }
 
 // Whether the remote account `id` deleted itself (its tombstone, as isDeletedActor).
@@ -2209,7 +2210,7 @@ const add: Handler<'Add'> = (db, actor, activity, input) => {
 	}
 	// A pinned status arrives as a root, cached or not: a cached one's quote is promoted (quotes.ts).
 	promoteQuote(db, status.id, quoteArrival(db, actor.id, null), input.now)
-	return withVerify(db, applied('pinned'), status.id, input.now)
+	return withVerify(db, applied('pinned'), status.id)
 }
 
 const remove: Handler<'Remove'> = (db, actor, activity) => {

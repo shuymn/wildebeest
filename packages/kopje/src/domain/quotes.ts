@@ -42,6 +42,22 @@ export const MAX_LINKED_QUOTES = 100
 
 export type QuoteState = 'pending' | 'accepted' | 'rejected' | 'revoked' | 'deleted'
 
+// The quotes whose work a transaction made due itself (a new or replaced quote with work, a promotion, an idle
+// work's renewal by a relayed Delete): only those are verified inline by the request (the rule at the column,
+// migration 0030_quotes). Keyed by the transaction's Db, so nothing outlives it.
+const madeDueIn = new WeakMap<Db, Set<string>>()
+
+function markDue(db: Db, statusId: string): void {
+	const set = madeDueIn.get(db) ?? new Set<string>()
+	set.add(statusId)
+	madeDueIn.set(db, set)
+}
+
+// Whether this transaction made the quote of `statusId` due itself, so its request may verify it inline.
+export function madeDue(db: Db, statusId: string): boolean {
+	return madeDueIn.get(db)?.has(statusId) === true
+}
+
 // A new generation of a quote's work: drawn by every write the rule at the column names (migration 0030_quotes).
 export const NEW_GENERATION = '(abs(random()) % 9007199254740991)'
 
@@ -84,12 +100,15 @@ type QuoteRow = {
 	need_author: string | null
 	generation: number
 	recheck: number
+	verify_after: number | null
+	lease_until: number | null
 }
 
 function quoteRow(db: Db, statusId: string): QuoteRow | undefined {
 	return db.first<QuoteRow>(
 		`SELECT q.status_id, s.uri AS status_uri, s.account_id, a.uri AS author_uri, q.quoted_uri, q.quoted_status_id,
-			q.state, q.legacy, q.approval_uri, q.attempts, q.hops, q.fetch_as, q.need_author, q.generation, q.recheck
+			q.state, q.legacy, q.approval_uri, q.attempts, q.hops, q.fetch_as, q.need_author, q.generation, q.recheck,
+			q.verify_after, q.lease_until
 		FROM quotes q JOIN statuses s ON s.id = q.status_id JOIN accounts a ON a.id = s.account_id
 		WHERE q.status_id = ?`,
 		statusId
@@ -180,6 +199,9 @@ export function recordQuote(
 		named.tombstone ? null : arrival.fetchAs,
 		iso(ctx.now)
 	)
+	if (work) {
+		markDue(db, status.id)
+	}
 }
 
 // ProcessStatusUpdateService#handle_implicit_update!: an Update that names no newer version never changes which status
@@ -207,7 +229,7 @@ export function promoteQuote(db: Db, statusId: string, arrival: QuoteArrival, no
 	if (arrival.hops < QUOTE_HOPS) {
 		return
 	}
-	db.run(
+	const promoted = db.run(
 		`UPDATE quotes SET hops = ?2, attempts = 0, verify_after = ?3, fetch_as = COALESCE(?4, fetch_as), updated_at = ?5,
 			generation = ${NEW_GENERATION}
 		WHERE status_id = ?1 AND state = 'pending' AND quoted_uri IS NOT NULL`,
@@ -217,6 +239,9 @@ export function promoteQuote(db: Db, statusId: string, arrival: QuoteArrival, no
 		arrival.fetchAs,
 		iso(now)
 	)
+	if (promoted > 0) {
+		markDue(db, statusId)
+	}
 }
 
 // A newly stored status is the target of the unresolved quotes that name its uri: at most MAX_LINKED_QUOTES are linked,
@@ -352,9 +377,27 @@ function current(db: Db, row: QuoteRow, expected: { generation: number; stage: Q
 }
 
 // An outcome for a stage the work has left: discarded, and the current stage left due (a renewal: a new generation).
-function moved(db: Db, row: QuoteRow, now: number): QuoteVerified {
-	db.run(`UPDATE quotes SET verify_after = ?2, generation = ${NEW_GENERATION} WHERE status_id = ?1`, row.status_id, now)
+// Inline, the work is due already (the request made it due), and nothing is written.
+function moved(db: Db, row: QuoteRow, now: number, inline: boolean): QuoteVerified {
+	if (!inline) {
+		db.run(
+			`UPDATE quotes SET verify_after = ?2, generation = ${NEW_GENERATION} WHERE status_id = ?1`,
+			row.status_id,
+			now
+		)
+	}
 	return { done: false, due: true, state: row.state, next: true }
+}
+
+// Whether a round holds the work: its claim's lease, which lasts only while verify_after still equals it.
+function leased(row: QuoteRow, now: number): boolean {
+	return row.lease_until !== null && row.verify_after === row.lease_until && row.lease_until > now
+}
+
+// The generation a stage's write leaves: a new one, except inline, where only a conclusion draws one (the rule at the
+// column, migration 0030_quotes).
+function regen(input: QuoteVerification): string {
+	return input.inline ? 'generation' : NEW_GENERATION
 }
 
 // The quote of `statusId` when it has work to do (pending, or accepted and being checked again), with the stage it is
@@ -436,14 +479,15 @@ function finish(
 	const fetched = work === 'done' || (work === 'retry' && delay === undefined) ? null : keep
 	db.run(
 		`UPDATE quotes SET state = ?2, verify_after = ?3, attempts = ?4, need_author = ?5, updated_at = ?6,
-			generation = ${NEW_GENERATION}, recheck = 0
+			generation = CASE WHEN ?7 THEN generation ELSE ${NEW_GENERATION} END, recheck = 0
 		WHERE status_id = ?1`,
 		row.status_id,
 		state,
 		verifyAfter,
 		attempts,
 		fetched,
-		iso(now)
+		iso(now),
+		work === 'again' ? 1 : 0
 	)
 	return { done: !again, due: otherQuotesDue(db, now, null), state, next: false }
 }
@@ -494,7 +538,7 @@ function storeQuoted(db: Db, row: QuoteRow, input: QuoteVerification, keep: Quot
 			return finish(db, row, keep, 'done', now)
 		}
 		upsertRemoteActor(db, document.value, origin, now)
-		db.run(`UPDATE quotes SET generation = ${NEW_GENERATION} WHERE status_id = ?`, row.status_id)
+		db.run(`UPDATE quotes SET generation = ${regen(input)} WHERE status_id = ?`, row.status_id)
 		return { done: false, due: true, state: keep, next: true }
 	}
 	const fetched = input.quoted
@@ -530,7 +574,7 @@ function storeQuoted(db: Db, row: QuoteRow, input: QuoteVerification, keep: Quot
 			return finish(db, row, keep, input.inline ? 'again' : 'retry', now, authorUri)
 		}
 		db.run(
-			`UPDATE quotes SET need_author = ?2, generation = ${NEW_GENERATION}, updated_at = ?3 WHERE status_id = ?1`,
+			`UPDATE quotes SET need_author = ?2, generation = ${regen(input)}, updated_at = ?3 WHERE status_id = ?1`,
 			row.status_id,
 			authorUri,
 			iso(now)
@@ -541,7 +585,7 @@ function storeQuoted(db: Db, row: QuoteRow, input: QuoteVerification, keep: Quot
 	if (authorUri !== row.author_uri && !isDistributable(visibilityOf(status, followersUri(db, author.id)))) {
 		return finish(db, row, keep, 'done', now)
 	}
-	db.run(`UPDATE quotes SET need_author = NULL, generation = ${NEW_GENERATION} WHERE status_id = ?`, row.status_id)
+	db.run(`UPDATE quotes SET need_author = NULL, generation = ${regen(input)} WHERE status_id = ?`, row.status_id)
 	storeRemoteStatus(db, author, status, {
 		now,
 		origin,
@@ -549,6 +593,10 @@ function storeQuoted(db: Db, row: QuoteRow, input: QuoteVerification, keep: Quot
 		fetched: true,
 		quoteHops: Math.max(0, row.hops - 1),
 	})
+	// Linking the stored status drew a new generation for this quote; inline, only a conclusion may.
+	if (input.inline) {
+		db.run('UPDATE quotes SET generation = ?2 WHERE status_id = ?1', row.status_id, row.generation)
+	}
 	return quotedOf(db, { ...row, quoted_status_id: null }) ?? finish(db, row, keep, 'done', now)
 }
 
@@ -570,8 +618,12 @@ export const completeQuote = writeOperation<QuoteVerification, QuoteVerified>((d
 	) {
 		return { done: true, due: otherQuotesDue(db, now, null), state: row?.state ?? null, next: false }
 	}
+	// An inline outcome never overrides a round: a round that leased the work since the inline verifier read it decides.
+	if (input.inline && leased(row, now)) {
+		return { done: true, due: false, state: row.state, next: false }
+	}
 	if (!current(db, row, input)) {
-		return moved(db, row, now)
+		return moved(db, row, now, input.inline)
 	}
 	const keep = row.state
 	// What a stamp that is gone or invalid leaves: a pending quote rejected (gone) or still pending, an accepted one
@@ -584,7 +636,7 @@ export const completeQuote = writeOperation<QuoteVerification, QuoteVerified>((d
 	const quoted = found
 	if (row.quoted_status_id !== quoted.id) {
 		db.run(
-			`UPDATE quotes SET quoted_status_id = ?2, quoted_account_id = ?3, need_author = NULL, generation = ${NEW_GENERATION}
+			`UPDATE quotes SET quoted_status_id = ?2, quoted_account_id = ?3, need_author = NULL, generation = ${regen(input)}
 			WHERE status_id = ?1`,
 			row.status_id,
 			quoted.id,
@@ -635,7 +687,7 @@ export const chargeQuote = writeOperation<
 	if (current(db, row, input)) {
 		finish(db, row, row.state, 'retry', input.now, row.need_author)
 	} else {
-		moved(db, row, input.now)
+		moved(db, row, input.now, false)
 	}
 })
 
@@ -758,8 +810,8 @@ export function continueRevocations(db: Db, left: () => number, now: number): bo
 // quoting status, by its unique uri) is checked again, its state unchanged until then, so a stamp that is gone revokes
 // it. Replays coalesce: idle work is renewed (due, a new generation); work already due is left as it is (its fetch is
 // fresh anyway); work a round has leased keeps its generation, so the fetch in flight still applies, and is marked to
-// be checked once more if that fetch finds the stamp valid. Returns the quoting status to verify inline now (idle or
-// due work), or null (none, or leased).
+// be checked once more if that fetch finds the stamp valid. Returns the quoting status this request renewed, to verify
+// inline, or null (none, or work that was already due, backed off or leased: never verified inline).
 export function recheckStamp(db: Db, actor: { id: string }, approvalUri: string, now: number): string | null {
 	const row = db.first<{ status_id: string; verify_after: number | null; lease_until: number | null }>(
 		`SELECT status_id, verify_after, lease_until FROM quotes
@@ -774,17 +826,19 @@ export function recheckStamp(db: Db, actor: { id: string }, approvalUri: string,
 		db.run('UPDATE quotes SET recheck = 1 WHERE status_id = ?', row.status_id)
 		return null
 	}
-	if (row.verify_after === null) {
-		db.run(
-			`UPDATE quotes SET verify_after = ?2, attempts = 0, hops = max(hops, 1), updated_at = ?3,
-				generation = ${NEW_GENERATION}
-			WHERE status_id = ?1`,
-			row.status_id,
-			now,
-			iso(now)
-		)
+	if (row.verify_after !== null) {
+		return null
 	}
-	return row.verify_after === null || row.verify_after <= now ? row.status_id : null
+	db.run(
+		`UPDATE quotes SET verify_after = ?2, attempts = 0, hops = max(hops, 1), updated_at = ?3,
+			generation = ${NEW_GENERATION}
+		WHERE status_id = ?1`,
+		row.status_id,
+		now,
+		iso(now)
+	)
+	markDue(db, row.status_id)
+	return row.status_id
 }
 
 // ---------------------------------------------------------------------------------------------------------------
