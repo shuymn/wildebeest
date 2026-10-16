@@ -321,7 +321,18 @@ describe('kopje-admin', () => {
 		expect(missing.code).toBe(1)
 		expect(missing.err).toContain('no local account @nobody')
 		expect((await cli(['account', 'set-email', 'alice'], { fetch })).code).toBe(2)
-		expect((await cli(['account', 'unsuspend', 'alice'], { fetch })).code).toBe(2)
+		const awake = await cli(['account', 'unsuspend', 'alice'], { fetch })
+		expect(awake.code).toBe(1)
+		expect(awake.err).toContain('@alice is not suspended')
+		await runInDurableObject(store, (_instance, state) => {
+			state.storage.sql.exec(
+				"UPDATE local_accounts SET suspended_at = '2026-10-01T00:00:00.000Z', tokens_valid_after = '2026-10-01T00:00:00.000Z' WHERE account_id = (SELECT id FROM accounts WHERE username = 'alice')"
+			)
+		})
+		expect(JSON.parse((await cli(['account', 'unsuspend', '@alice'], { fetch })).out)).toEqual({ username: 'alice' })
+		expect((await cli(['moderation-log'], { fetch })).out).toContain('"action": "unsuspend"')
+		expect((await cli(['account', 'unsuspend'], { fetch })).code).toBe(2)
+		expect((await cli(['account', 'unsuspend', 'alice', 'x'], { fetch })).code).toBe(2)
 		expect((await cli(['moderation-log', '--before', 'x'], { fetch })).code).toBe(2)
 	})
 

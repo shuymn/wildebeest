@@ -202,6 +202,7 @@ export async function apiHarness(
 	const testEnv = { ...env, ...overrides }
 	// Doorbells are recorded, never sent: the test pool's Queue would run the real consumer.
 	const doorbell = vi.fn(() => Promise.resolve())
+	const jobs = vi.fn(() => Promise.resolve())
 	const app = createApp({
 		build: () => env.CF_VERSION_METADATA.id,
 		now,
@@ -210,6 +211,7 @@ export async function apiHarness(
 		randomToken,
 		images: deps.images,
 		doorbell,
+		jobs,
 	})
 	// Work a response leaves running (waitUntil, such as the media sweep) settles before the request returns.
 	const request = async (path: string, init?: RequestInit): Promise<Response> => {
@@ -218,7 +220,7 @@ export async function apiHarness(
 		await waitOnExecutionContext(ctx)
 		return response
 	}
-	return { store, team, request, now, env: testEnv, doorbell }
+	return { store, team, request, now, env: testEnv, doorbell, jobs }
 }
 
 export function bearer(token: string, init: RequestInit = {}): RequestInit {

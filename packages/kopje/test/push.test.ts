@@ -212,6 +212,8 @@ describe('push subscription endpoints', () => {
 		expect(revoked.status).toBe(200)
 		expect(await count()).toBe(1)
 		await h.store.suspendAccount(h.env.CF_VERSION_METADATA.id, { accountId: h.users.alice.id, now: NOW })
+		// The tokens job deletes the subscription with its token (domain/suspension.ts).
+		await h.store.runInboundJobs(h.env.CF_VERSION_METADATA.id, { now: NOW })
 		expect(await count()).toBe(0)
 	})
 

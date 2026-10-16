@@ -40,8 +40,17 @@ export type AuthFailure =
 
 export type Authorized<O> = AuthFailure | { status: 'ok'; value: O }
 
+// The token fence (migration 0032_admin_suspension): whether the token `t` (an oauth_tokens row, access or code) was
+// created after its account's fence, local_accounts.tokens_valid_after, read by key. A suspension sets the fence to
+// its time, so every token and code issued before it is refused at once and after the account is unsuspended, while
+// the tokens job deletes them in rounds (domain/suspension.ts). An app token has no account and no fence.
+export function unfencedSql(t: string): string {
+	return `NOT EXISTS (SELECT 1 FROM main.local_accounts fl WHERE fl.account_id = ${t}.account_id
+		AND fl.tokens_valid_after IS NOT NULL AND ${t}.created_at <= fl.tokens_valid_after)`
+}
+
 // One indexed lookup by the token's sha256. A suspended account's tokens are refused even if one survived the
-// suspension.
+// suspension, and a token behind its account's fence is refused as invalid (unfencedSql).
 export function authorize(db: Db, credential: Credential): AuthFailure | { status: 'ok'; viewer: Viewer } {
 	const row = db.first<{
 		scopes: string
@@ -51,8 +60,10 @@ export function authorize(db: Db, credential: Credential): AuthFailure | { statu
 		name: string
 		website: string | null
 		suspended_at: string | null
+		fenced: number
 	}>(
-		`SELECT t.scopes, t.account_id, t.expires_at, c.id AS client_id, c.name, c.website, l.suspended_at
+		`SELECT t.scopes, t.account_id, t.expires_at, c.id AS client_id, c.name, c.website, l.suspended_at,
+			coalesce(t.created_at <= l.tokens_valid_after, 0) AS fenced
 		FROM oauth_tokens t
 		JOIN oauth_clients c ON c.id = t.client_id
 		LEFT JOIN local_accounts l ON l.account_id = t.account_id
@@ -64,6 +75,9 @@ export function authorize(db: Db, credential: Credential): AuthFailure | { statu
 	}
 	if (row.suspended_at !== null) {
 		return { status: 'suspended' }
+	}
+	if (row.fenced === 1) {
+		return { status: 'unauthenticated' }
 	}
 	const scopes = row.scopes.split(' ')
 	if (credential.scope !== null) {
@@ -181,9 +195,9 @@ export const ADMIN_PERMISSION = {
 export type AdminPermission = (typeof ADMIN_PERMISSION)[keyof typeof ADMIN_PERMISSION]
 
 // The permissions of the OAuth admin's role: the bits of the route groups Kopje serves. A group's bit is set only
-// once the whole group is served; until then its routes refuse the admin as they refuse everyone. Reports are served
-// (manage_reports); accounts (manage_users) come next.
-export const ADMIN_PERMISSIONS: number = ADMIN_PERMISSION.manageReports
+// once the whole group is served; until then its routes refuse the admin as they refuse everyone. Reports
+// (manage_reports) and accounts (manage_users, with local suspension) are served: 1040.
+export const ADMIN_PERMISSIONS: number = ADMIN_PERMISSION.manageReports | ADMIN_PERMISSION.manageUsers
 
 // A role as Mastodon's REST::RoleSerializer presents it (permissions is a string).
 export type Role = { id: string; name: string; permissions: string; color: string; highlighted: boolean }

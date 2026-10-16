@@ -294,7 +294,7 @@ describe('GET /api/v1/admin/reports/:id', () => {
 		expect(assigned.assigned_account).toMatchObject({
 			id: owner.id,
 			email: OWNER,
-			role: { id: '3', name: 'Owner', permissions: '16', color: '', highlighted: true },
+			role: { id: '3', name: 'Owner', permissions: '1040', color: '', highlighted: true },
 		})
 	})
 

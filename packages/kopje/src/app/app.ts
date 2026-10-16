@@ -9,7 +9,7 @@ import { publicHealth } from './health'
 import { setupRoutes } from './setup'
 import { webRoutes } from './web'
 import { ringDoorbell } from '../federation/delivery'
-import { inboxHandler, precheckInbox } from '../federation/inbox'
+import { inboxHandler, precheckInbox, requestInboundJobs } from '../federation/inbox'
 import { INBOX_ROUTES } from '../federation/inbox-request'
 import { createResolver } from '../federation/resolve'
 import { FEDERATION_GET_ROUTES, federationHandler, type FederationRouteDeps } from '../federation/routes'
@@ -43,7 +43,12 @@ export type AppDeps = {
 	images?: (env: Env) => ImageCodec
 	// Rings the delivery doorbell after an API write (default: a message on env.QUEUE).
 	doorbell?: (env: Env) => Promise<void>
+	// Asks for a round of the Store's jobs after an admin suspension or unsuspension (default: a message on env.QUEUE).
+	jobs?: (env: Env) => Promise<unknown>
 }
+
+// The admin API writes that leave moderation jobs (domain/suspension.ts): the action and the unsuspension of an account.
+const MODERATION_WRITE = /^\/api\/v1\/admin\/accounts\/[^/]+\/(?:action|unsuspend)$/
 
 const API_CORS_PATHS = [
 	'/api/*',
@@ -65,6 +70,7 @@ export function createApp({
 	fetch = globalThis.fetch,
 	federation = {},
 	doorbell = (env) => ringDoorbell(env.QUEUE),
+	jobs = (env) => requestInboundJobs(env.QUEUE),
 	...seams
 }: AppDeps) {
 	const app = new Hono<AppEnv>()
@@ -146,6 +152,10 @@ export function createApp({
 					console.error({ event: 'kopje.delivery.doorbell.failed', ...errorFields(error) })
 				})
 			)
+			// A suspension's jobs start at once rather than at the next cron (requestInboundJobs logs its own failure).
+			if (MODERATION_WRITE.test(c.req.path)) {
+				c.executionCtx.waitUntil(jobs(c.env))
+			}
 		}
 	})
 
@@ -157,7 +167,7 @@ export function createApp({
 
 	app.route(
 		ADMIN_PREFIX,
-		adminRoutes({ build, now, store, doorbell, loader, images, fetch: (input, init) => fetch(input, init) })
+		adminRoutes({ build, now, store, doorbell, jobs, loader, images, fetch: (input, init) => fetch(input, init) })
 	)
 
 	const setupGate = requireSetup(build, store)

@@ -1,5 +1,4 @@
 import { readOperation, sessionOperation, writeOperation } from './operation'
-import { forgetActorSnapshots } from './snapshot'
 import { sweepWebState } from './web-session'
 import type { Db } from '../db/sql'
 import { withinScopes } from '../security/scopes'
@@ -293,9 +292,10 @@ export function consumeCode(db: Db, input: CodeInput): { accountId: string; scop
 		redirect_uri: string
 		code_challenge: string | null
 		expires_at: string
+		created_at: string
 	}>(
 		`DELETE FROM oauth_tokens WHERE token_hash = ? AND kind = 'code'
-		RETURNING client_id, account_id, scopes, redirect_uri, code_challenge, expires_at`,
+		RETURNING client_id, account_id, scopes, redirect_uri, code_challenge, expires_at, created_at`,
 		input.codeHash
 	)
 	const nowIso = new Date(input.now).toISOString()
@@ -311,11 +311,13 @@ export function consumeCode(db: Db, input: CodeInput): { accountId: string; scop
 	) {
 		return null
 	}
-	const suspended = db.first<{ suspended_at: string | null }>(
-		'SELECT suspended_at FROM local_accounts WHERE account_id = ?',
+	// A code of a suspended account, or one issued before its account's token fence (unfencedSql), grants nothing.
+	const account = db.first<{ suspended_at: string | null; tokens_valid_after: string | null }>(
+		'SELECT suspended_at, tokens_valid_after FROM local_accounts WHERE account_id = ?',
 		code.account_id
 	)
-	return suspended?.suspended_at === null ? { accountId: code.account_id, scopes: code.scopes } : null
+	const fenced = account?.tokens_valid_after != null && code.created_at <= account.tokens_valid_after
+	return account?.suspended_at === null && !fenced ? { accountId: code.account_id, scopes: code.scopes } : null
 }
 
 export type AppTokenInput = {
@@ -376,23 +378,3 @@ export const revokeToken = sessionOperation<
 	)
 	return { status: 'ok' }
 })
-
-// Suspends a local account: records suspended_at once, deletes its access tokens and unused codes (with their
-// push subscriptions), and removes the rescue snapshots of its actor document, which the next live request saves again
-// redacted. Token validation and authorize refuse the account from then on. The owner console calls it in a later
-// stage.
-export const suspendAccount = writeOperation<{ accountId: string; now: number }, { suspended: boolean }>(
-	(db, { accountId, now }) => {
-		if (db.first('SELECT 1 AS found FROM local_accounts WHERE account_id = ?', accountId) === undefined) {
-			return { suspended: false }
-		}
-		db.run(
-			'UPDATE local_accounts SET suspended_at = COALESCE(suspended_at, ?) WHERE account_id = ?',
-			new Date(now).toISOString(),
-			accountId
-		)
-		db.run('DELETE FROM oauth_tokens WHERE account_id = ?', accountId)
-		forgetActorSnapshots(db, accountId)
-		return { suspended: true }
-	}
-)

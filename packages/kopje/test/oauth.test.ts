@@ -913,7 +913,7 @@ describe('scopes on routes', () => {
 })
 
 describe('suspension', () => {
-	it('deletes tokens and unused codes and refuses the account afterwards', async () => {
+	it('refuses the account and its tokens and unused codes at once, and deletes them in the jobs', async () => {
 		const h = await withAlice()
 		const { app, token } = await login(h)
 		const pending = await authorizationCode(h, app)
@@ -922,6 +922,12 @@ describe('suspension', () => {
 			h.store.suspendAccount(h.env.CF_VERSION_METADATA.id, { accountId: h.aliceId, now: NOW })
 		)
 		expect(result).toEqual({ suspended: true })
+		// The token and the code wait for the tokens job, refused meanwhile (below).
+		expect(await sql(h.store, 'SELECT kind FROM oauth_tokens ORDER BY kind')).toEqual([
+			{ kind: 'access' },
+			{ kind: 'code' },
+		])
+		await h.store.runInboundJobs(h.env.CF_VERSION_METADATA.id, { now: NOW })
 		expect(await sql(h.store, 'SELECT 1 FROM oauth_tokens')).toEqual([])
 		expect(await sql(h.store, 'SELECT suspended_at FROM local_accounts')).toEqual([
 			{ suspended_at: new Date(NOW).toISOString() },

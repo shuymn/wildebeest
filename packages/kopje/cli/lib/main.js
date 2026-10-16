@@ -20,6 +20,9 @@ Commands
                                 local account's email is the same after trimming and lowercasing. Repairs the Mastodon
                                 admin API's admin, the one local account whose email matches admin_email (health shows
                                 oauthAdmin); logged in the moderation log
+  account unsuspend <username>  unsuspend a local account as the Mastodon admin API does (its old tokens stay refused,
+                                so it signs in again). Recovers a suspended admin, whom no admin can unsuspend; logged
+                                in the moderation log
   maintenance on|off            enter or leave the Store's readonly maintenance
   upgrade retry                 re-run a failed schema upgrade for the current build
   media-rebuild [--dry-run]     make the served files of local media whose files are missing (a restore, the
@@ -690,8 +693,12 @@ export async function run({
 			}
 			case 'account': {
 				const [action, username, email] = rest
+				if (action === 'unsuspend' && username !== undefined && rest.length === 2) {
+					print(await client.post('/admin/accounts/unsuspend', { username }))
+					return 0
+				}
 				if (action !== 'set-email' || username === undefined || email === undefined || rest.length !== 3) {
-					throw new UsageError('account set-email <username> <email>')
+					throw new UsageError('account set-email <username> <email> | account unsuspend <username>')
 				}
 				print(await client.post('/admin/accounts/email', { username, email }))
 				return 0

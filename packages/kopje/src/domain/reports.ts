@@ -513,3 +513,61 @@ export const updateAdminReport = adminWriteOperation<
 	)
 	return presented(db, updated, admin, present)
 })
+
+// A local suspension's resolution of the reports on the account (Admin::AccountAction#process_reports!, which resolves
+// every unresolved report on the target): a round of the suspension job (domain/suspension.ts), at most `limit`
+// reports after `cursor` (a report id), through reports_target_state in id order. Only the reports frozen at the
+// suspension are resolved: filed up to `bound`, still unresolved, and untouched since the suspension's time `since`
+// (updated_at, or created_at when never changed), so a report filed after the suspension, or one the admin reopened
+// or changed since, is never resolved by it. `by` is the admin who suspended (null: none names it). Returns the last
+// report read (null when none was) and how many were resolved; fewer than `limit` read means the range is done.
+export function resolveSuspensionReports(
+	db: Db,
+	target: string,
+	bound: number,
+	since: string,
+	by: string | null,
+	cursor: number,
+	limit: number,
+	now: string
+): { last: number | null; read: number; resolved: number } {
+	const rows = db.all<{ id: number; touched: string }>(
+		`SELECT id, coalesce(updated_at, created_at) AS touched
+		FROM reports INDEXED BY reports_target_state
+		WHERE target_account_id = ?1 AND (action_taken_at IS NULL) = 1 AND id > ?2 AND id <= ?3
+		ORDER BY id LIMIT ?4`,
+		target,
+		cursor,
+		bound,
+		limit
+	)
+	const frozen = rows.filter((row) => row.touched <= since).map((row) => row.id)
+	if (frozen.length > 0) {
+		db.run(
+			`UPDATE reports SET action_taken_at = ?1, action_taken_by_account_id = ?2, updated_at = ?1
+			WHERE id IN (SELECT value FROM json_each(?3))`,
+			now,
+			by,
+			JSON.stringify(frozen)
+		)
+	}
+	return { last: rows.at(-1)?.id ?? null, read: rows.length, resolved: frozen.length }
+}
+
+// Whether `id` is a report's (Admin::AccountAction#report: Report.find, RecordNotFound otherwise).
+export function reportExists(db: Db, id: string): boolean {
+	return reportRow(db, id) !== undefined
+}
+
+// Admin::AccountAction with type none and a report_id (process_reports!): resolves that report, logged as Mastodon logs
+// it. false when `id` is no report's.
+export function resolveReport(db: Db, id: string, admin: Admin): boolean {
+	const row = reportRow(db, id)
+	if (row === undefined) {
+		return false
+	}
+	const now = new Date(admin.now).toISOString()
+	updateReport(db, row, ACTIONS.resolve.set(admin, now), now)
+	logAction(db, admin, ACTIONS.resolve.log, { type: 'Report', id: row.id }, {}, admin.now)
+	return true
+}

@@ -1,6 +1,7 @@
 import { fieldSources } from './accounts'
 import { featuredUri, followersUri, recordOutbound } from './activities'
 import { PUBLIC_COLLECTION } from './audience'
+import type { DeliveryEnvelope } from './deliveries'
 import { allocateLocalId } from './ids'
 import { renderFieldValue } from './status-text'
 import type { Db } from '../db/sql'
@@ -30,6 +31,9 @@ const CONTEXT = [
 	},
 ]
 
+// The context of a suspended actor's Update, which names `suspended` (toot:suspended) as Mastodon's context does.
+const SUSPENDED_CONTEXT = [CONTEXT[0], CONTEXT[1], { ...(CONTEXT[2] as object), suspended: 'toot:suspended' }]
+
 type ActorRow = {
 	uri: string
 	username: string
@@ -53,24 +57,26 @@ function image(stored: string | null): { type: 'Image'; url: string } | undefine
 	return url === null ? undefined : { type: 'Image', url: url.href }
 }
 
-// The local actor document of an account, or null for none (or a suspended one, which sends no Update).
-export function actorDocument(db: Db, accountId: string): Record<string, unknown> | null {
-	const row = db.first<ActorRow>(
+function actorRow(db: Db, accountId: string): ActorRow | undefined {
+	return db.first<ActorRow>(
 		`SELECT a.uri, a.username, a.actor_type, a.display_name, a.note, a.avatar_url, a.header_url, a.locked,
 			a.discoverable, l.also_known_as, l.fields, l.attribution_domains, l.pubkey, a.created_at, l.suspended_at
 		FROM accounts a JOIN local_accounts l ON l.account_id = a.id WHERE a.id = ?`,
 		accountId
 	)
-	if (row === undefined || row.suspended_at !== null) {
-		return null
-	}
+}
+
+// The document of an actor row. A suspended actor is presented as the actor endpoint presents it (federation.ts, as
+// Mastodon's ActivityPub::ActorSerializer): no name, summary, icon, image, aliases or fields, not locked or
+// discoverable, and `suspended: true`; its keys, inboxes and collections stay.
+function documentOf(row: ActorRow): Record<string, unknown> {
 	const origin = new URL(row.uri).origin
+	const suspended = row.suspended_at !== null
 	return {
 		id: row.uri,
 		type: row.actor_type,
 		preferredUsername: row.username,
-		name: row.display_name,
-		summary: row.note,
+		...(suspended ? {} : { name: row.display_name, summary: row.note }),
 		url: `${origin}/@${row.username}`,
 		inbox: `${row.uri}/inbox`,
 		outbox: `${row.uri}/outbox`,
@@ -80,18 +86,50 @@ export function actorDocument(db: Db, accountId: string): Record<string, unknown
 		featuredTags: `${row.uri}/collections/tags`,
 		endpoints: { sharedInbox: `${origin}/inbox` },
 		publicKey: { id: `${row.uri}#main-key`, owner: row.uri, publicKeyPem: row.pubkey },
-		manuallyApprovesFollowers: row.locked === 1,
-		discoverable: row.discoverable === null ? undefined : row.discoverable === 1,
 		published: row.created_at,
-		icon: image(row.avatar_url),
-		image: image(row.header_url),
-		alsoKnownAs: (JSON.parse(row.also_known_as) as string[]).flatMap((uri) => httpUrl(uri)?.href ?? []),
-		attachment: fieldSources(row.fields).map((field) => ({
-			type: 'PropertyValue',
-			name: field.name,
-			value: renderFieldValue(field.value),
-		})),
+		...(suspended
+			? { manuallyApprovesFollowers: false, discoverable: false, suspended: true }
+			: {
+					manuallyApprovesFollowers: row.locked === 1,
+					discoverable: row.discoverable === null ? undefined : row.discoverable === 1,
+					icon: image(row.avatar_url),
+					image: image(row.header_url),
+					alsoKnownAs: (JSON.parse(row.also_known_as) as string[]).flatMap((uri) => httpUrl(uri)?.href ?? []),
+					attachment: fieldSources(row.fields).map((field) => ({
+						type: 'PropertyValue',
+						name: field.name,
+						value: renderFieldValue(field.value),
+					})),
+				}),
 		...attributionDomainsOf(row.attribution_domains),
+	}
+}
+
+// The local actor document of an account, or null for none (or a suspended one, which sends no Update).
+export function actorDocument(db: Db, accountId: string): Record<string, unknown> | null {
+	const row = actorRow(db, accountId)
+	return row === undefined || row.suspended_at !== null ? null : documentOf(row)
+}
+
+// The Update of the account's actor that a suspension or an unsuspension sends (SuspendAccountService and
+// UnsuspendAccountService#distribute_update_actor!): the document as it is now, redacted while the account is
+// suspended. Its audience is not the followers alone (AccountReachFinder): the moderation jobs stage it
+// (domain/suspension.ts), so the envelope names none. null for an account that is not local.
+export function moderationUpdate(db: Db, accountId: string, now: number): DeliveryEnvelope | null {
+	const row = actorRow(db, accountId)
+	if (row === undefined) {
+		return null
+	}
+	return {
+		activity: {
+			'@context': row.suspended_at === null ? CONTEXT : SUSPENDED_CONTEXT,
+			id: `${row.uri}#updates/${allocateLocalId(db, now)}`,
+			type: 'Update',
+			actor: row.uri,
+			to: [PUBLIC_COLLECTION],
+			object: documentOf(row),
+		},
+		audience: { followers: false, accounts: [] },
 	}
 }
 
