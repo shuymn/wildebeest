@@ -42,8 +42,9 @@ const RULES = [
 	{ id: 'r2', text: 'No spam' },
 ]
 
-// Contract: the declared version stays 4.0.2 and api_versions is absent (design §4). Changing these payloads
-// changes what clients do; update this test only together with that decision.
+// Contract: the declared version is 4.4.0 and api_versions.mastodon is 6 (the reasoning is above MASTODON_VERSION in
+// src/mastodon/instance.ts). Changing these payloads changes what clients do; update this test only together with that
+// decision.
 describe('instance contract', () => {
 	it('freezes /api/v1/instance', async () => {
 		const h = await configured()
@@ -56,7 +57,7 @@ describe('instance contract', () => {
 			short_description: 'A test instance',
 			description: 'A test instance',
 			email: 'admin@kopje.test',
-			version: '4.0.2',
+			version: '4.4.0',
 			urls: { streaming_api: 'wss://kopje.test' },
 			stats: { user_count: 1, status_count: 0, domain_count: 1 },
 			thumbnail: null,
@@ -79,23 +80,44 @@ describe('instance contract', () => {
 		expect(body).toEqual({
 			domain: 'kopje.test',
 			title: 'Kopje Test',
-			version: '4.0.2',
+			version: '4.4.0',
 			source_url: 'https://github.com/shuymn/wildebeest',
 			description: 'A test instance',
 			usage: { users: { active_month: 1 } },
 			thumbnail: { url: 'https://kopje.test/assets/thumbnail.png' },
+			icon: [],
 			languages: [],
 			configuration: {
-				urls: { streaming: 'wss://kopje.test' },
+				urls: { streaming: 'wss://kopje.test', status: null, privacy_policy: null, terms_of_service: null },
 				vapid: { public_key: VAPID_PUBLIC_KEY },
 				...CONFIGURATION,
+				accounts: { max_featured_tags: 10, max_pinned_statuses: 5 },
+				media_attachments: { ...CONFIGURATION.media_attachments, description_limit: 1500 },
 				translation: { enabled: false },
+				limited_federation: false,
 			},
-			registrations: { enabled: false, approval_required: false, message: null },
+			registrations: {
+				enabled: false,
+				approval_required: false,
+				reason_required: false,
+				message: null,
+				min_age: null,
+				url: null,
+			},
+			api_versions: { mastodon: 6 },
 			contact: { email: 'admin@kopje.test', account: null },
 			rules: RULES,
 		})
-		expect(body).not.toHaveProperty('api_versions')
+	})
+
+	it('declares the same version on both endpoints, and api_versions on v2 only as Mastodon does', async () => {
+		const h = await configured()
+		const v1 = await (await h.request('/api/v1/instance')).json<Record<string, unknown>>()
+		const v2 = await (await h.request('/api/v2/instance')).json<Record<string, unknown>>()
+		expect(v1.version).toBe('4.4.0')
+		expect(v2.version).toBe(v1.version)
+		expect(v2.api_versions).toEqual({ mastodon: 6 })
+		expect(v1).not.toHaveProperty('api_versions')
 	})
 
 	it('falls back to the request host before setup and to no rules', async () => {

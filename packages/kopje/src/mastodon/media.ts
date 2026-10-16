@@ -39,7 +39,7 @@ import { StoreUnavailableError } from '../platform/store-errors'
 const NOT_FOUND = () => mastodonError(404, 'Record not found')
 
 // MediaAttachment::MAX_DESCRIPTION_LENGTH.
-const MAX_DESCRIPTION = 1500
+export const MAX_DESCRIPTION = 1500
 
 // The file plus the form's other fields (description, focus, an ignored thumbnail is not read past this bound).
 const MEDIA_BODY_LIMIT = IMAGE_SIZE_LIMIT + 64 * 1024

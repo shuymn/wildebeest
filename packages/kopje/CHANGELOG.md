@@ -22,6 +22,23 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       the HTML says "View on Kopje" without Mastodon's logo; the script is at `/assets/embed.js` (Mastodon:
       `/embed.js`) and frames only the `blockquote` embeds (not the older `iframe` ones).
 
+### Changed
+
+- `/api/v1/instance` and `/api/v2/instance` declare Mastodon `4.4.0` (was `4.0.2`), and `/api/v2/instance` adds
+  `api_versions: { "mastodon": 6 }`, the number Mastodon 4.4 sends. Clients choose APIs by these numbers, and every
+  API they switch on up to 6 is now served: grouped notifications (`/api/v2/notifications`), the notification policy,
+  the link timeline, `delete_media`, the `blur` filter action, featured hashtags and OAuth PKCE. With this, Phanpy,
+  Ice Cubes, Moshidon and the official iOS and Android apps use grouped notifications, Phanpy and Tusky offer the `blur`
+  filter action, the official Android app signs in with PKCE, and the official iOS app shows an account's featured
+  tab. Kopje stays below 7 (Mastodon 4.5) because 7 tells clients that quote posts are served, and they are not yet.
+    - The official iOS app also shows a default quote policy in its privacy settings at 6. Kopje ignores it: no one can
+      quote a Kopje post whatever it says.
+    - `/api/v2/instance` has Mastodon 4.4's other fields with Kopje's values: `icon` (none), `configuration.urls`
+      `status`, `privacy_policy` and `terms_of_service` (null), `configuration.accounts.max_pinned_statuses` (5),
+      `configuration.media_attachments.description_limit` (1500), `configuration.limited_federation` (false), and
+      `registrations.reason_required` (false), `min_age` and `url` (null). `configuration.urls.about` is left out:
+      Kopje has no about page.
+
 ## [0.1.0-rc.7] - 2026-10-16
 
 A seventh release candidate of the first release, published under the npm dist-tag `next`.
