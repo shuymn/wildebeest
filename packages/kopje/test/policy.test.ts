@@ -181,6 +181,17 @@ const RULES: readonly Rule[] = [
 			'../src/domain/inbox.ts': 'an actor purge deletes the reports of the account',
 		},
 	},
+	{
+		// Received quotes are verified in one place: only quotes.ts decides a quote's state (VerifyQuoteService, the
+		// Delete of a stamp), and nothing reads them for a client yet.
+		name: 'reads or writes quotes',
+		pattern: new RegExp(`\\b(?:FROM|JOIN|INTO|UPDATE)\\s+${table(['quotes', 'quote_revocations'])}`, 'i'),
+		allowed: {
+			'../src/domain/quotes.ts': 'received quotes, their verification work and revocations',
+			'../src/domain/inbox.ts':
+				'a status’s batched delete detaches the quotes of it and deletes its own (STATUS_CHILDREN), never a revocation',
+		},
+	},
 ]
 
 function violations(files: Record<string, string>, rules: readonly Rule[] = RULES): string[] {

@@ -9,7 +9,7 @@ import { publicHealth } from './health'
 import { setupRoutes } from './setup'
 import { webRoutes } from './web'
 import { ringDoorbell } from '../federation/delivery'
-import { inboxHandler, precheckInbox } from '../federation/inbox'
+import { inboxHandler, precheckInbox, requestInboundJobs } from '../federation/inbox'
 import { INBOX_ROUTES } from '../federation/inbox-request'
 import { createResolver } from '../federation/resolve'
 import { FEDERATION_GET_ROUTES, federationHandler, type FederationRouteDeps } from '../federation/routes'
@@ -181,6 +181,7 @@ export function createApp({
 		randomToken: seams.randomToken ?? randomToken,
 		images,
 		resolve: createResolver({ build, store, now, keygen, loader }),
+		requestJobs: (env: Env) => requestInboundJobs(env.QUEUE),
 	}
 	app.get(MEDIA_ROUTE, serveMedia)
 	app.route('/', authorizeRoutes({ ...apiDeps, fetch: (input, init) => fetch(input, init) }))

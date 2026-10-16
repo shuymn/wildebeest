@@ -33,7 +33,7 @@ import {
 	MAX_FILTER_KEYWORDS,
 	MAX_FILTERS,
 } from '../src/domain/filters'
-import { inboxOwnerExists } from '../src/domain/inbox'
+import { inboxOwnerExists, PURGE_BATCH } from '../src/domain/inbox'
 import { listAccounts } from '../src/domain/lists'
 import { getMarkers, MARKER_TIMELINES } from '../src/domain/markers'
 import {
@@ -58,6 +58,15 @@ import {
 import { clearNotifications, listNotifications, REMOVAL_BATCHES, REMOVAL_WINDOW } from '../src/domain/notifications'
 import { readOperation, writeOperation } from '../src/domain/operation'
 import { getPoll, vote } from '../src/domain/polls'
+import {
+	claimQuotes,
+	linkQuotes,
+	MAX_LINKED_QUOTES,
+	QUOTE_ROUND,
+	quoteWork,
+	recheckStamp,
+	revokeStamp,
+} from '../src/domain/quotes'
 import {
 	claimCollectionSync,
 	featureRemote,
@@ -5221,5 +5230,144 @@ describe("the admin's account list reads a page, however many accounts do not ma
 				}
 			}
 		}
+	}, 120_000)
+})
+
+// Received quotes (src/domain/quotes.ts) carry their verification work in their rows, and a stamp's Delete names them
+// by its URI: both are counts others control (any server may send quotes, and may name any stamp in them). A job
+// round's claim seeks the due work through quotes_due and takes QUOTE_ROUND; a stamp's Delete, revoking or (relayed
+// without the author's proof) checking again, seeks the quotes of its author's statuses through quotes_approval and
+// never reads the quotes of others naming the same stamp; a status stored links at most MAX_LINKED_QUOTES of the
+// unresolved quotes naming it; a quote's work reads its own row and its quoted status, however often that is quoted.
+describe('received quotes cost their work a bounded read (RES-7)', () => {
+	const CAROL = '970000000000000001'
+	const DAN = '970000000000000002'
+	const BOB = '970000000000000003'
+	const CAROL_URI = 'https://other.example/users/carol'
+	const TARGET = '971000000000000000'
+	const TARGET_URI = `${CAROL_URI}/statuses/target`
+	const LATER = '972000000000000000'
+	const LATER_URI = `${CAROL_URI}/statuses/later`
+	const STAMP = `${CAROL_URI}/quote_authorizations/1`
+	const QUOTING_BASE = 973000000000000000n
+	const FIRST = String(QUOTING_BASE)
+
+	// carol's status, quoted by bob three times naming carol's stamp (the first accepted: the quotes the Delete is about),
+	// and `count` more quotes by bob of each kind: of dan's status naming the same stamp, of carol's naming no stamp,
+	// with work due, with work held by a round's lease, and unresolved, naming the uri of carol's status stored later.
+	async function quoted(count: number): Promise<StoreStub> {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			for (const [id, name] of [
+				[CAROL, 'carol'],
+				[DAN, 'dan'],
+				[BOB, 'bob'],
+			] as const) {
+				sql.exec(
+					"INSERT INTO accounts (id, uri, username, domain) VALUES (?, ?, ?, 'other.example')",
+					id,
+					`https://other.example/users/${name}`,
+					name
+				)
+			}
+			sql.exec(
+				`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at) VALUES
+				(?1, ?2, ?3, 'public', '', '2026-10-01T00:00:00.000Z'),
+				('971000000000000001', 'https://other.example/users/dan/statuses/1', ?4, 'public', '', '2026-10-01T00:00:00.000Z')`,
+				TARGET,
+				TARGET_URI,
+				CAROL,
+				DAN
+			)
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 * 4 + 3 - 1)
+				INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+				SELECT CAST(?2 + i AS TEXT), 'https://other.example/users/bob/statuses/q' || i, ?3, 'public', '',
+					'2026-10-01T00:00:00.000Z' FROM n`,
+				count,
+				FIRST,
+				BOB
+			)
+			// k: 0 the three quotes of carol's status naming her stamp, then the other kinds in turn.
+			sql.exec(
+				`INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, quoted_account_id, state, approval_uri,
+					verify_after, updated_at)
+				SELECT id,
+					CASE k WHEN 1 THEN 'https://other.example/users/dan/statuses/1' WHEN 4 THEN ?9 ELSE ?1 END,
+					CASE k WHEN 1 THEN '971000000000000001' WHEN 4 THEN NULL ELSE ?2 END,
+					CASE k WHEN 1 THEN ?5 WHEN 4 THEN NULL ELSE ?3 END,
+					CASE WHEN n = 0 THEN 'accepted' ELSE 'pending' END,
+					CASE WHEN k IN (0, 1) THEN ?4 END,
+					CASE k WHEN 2 THEN ?6 WHEN 3 THEN ?7 END,
+					'2026-10-01T00:00:00.000Z'
+				FROM (SELECT id, n, CASE WHEN n < 3 THEN 0 ELSE (n - 3) % 4 + 1 END AS k
+					FROM (SELECT id, CAST(id AS INTEGER) - ?8 AS n FROM statuses WHERE account_id = ?10))`,
+				TARGET_URI,
+				TARGET,
+				CAROL,
+				STAMP,
+				DAN,
+				NOW - 1,
+				NOW + 60_000,
+				FIRST,
+				LATER_URI,
+				BOB
+			)
+			sql.exec(
+				"INSERT INTO statuses (id, uri, account_id, visibility, content, published_at) VALUES (?, ?, ?, 'public', '', '2026-10-01T00:00:00.000Z')",
+				LATER,
+				LATER_URI,
+				CAROL
+			)
+		})
+		return store
+	}
+
+	const revoke = writeOperation<void, unknown>((db) =>
+		revokeStamp(db, { id: CAROL, uri: CAROL_URI }, STAMP, () => PURGE_BATCH, NOW)
+	)
+	const recheck = writeOperation<void, unknown>((db) => recheckStamp(db, { id: CAROL }, STAMP, NOW))
+	const link = writeOperation<void, unknown>((db) => {
+		linkQuotes(db, { id: LATER, uri: LATER_URI }, NOW)
+	})
+
+	it('reads the same rows with 400 or 4,000 quotes of each kind', async () => {
+		const cases: [string, StoreOperation<never, unknown>, unknown][] = [
+			['claim', claimQuotes, { now: NOW, limit: QUOTE_ROUND }],
+			['revoke', revoke, undefined],
+			['recheck', recheck, undefined],
+			['link', link, undefined],
+			['work', quoteWork, { statusId: FIRST }],
+		]
+		const grown: string[] = []
+		const outputs: Record<string, { output: unknown; states: unknown[]; linked: unknown[] }> = {}
+		for (const [name, operation, input] of cases) {
+			const few = await rowsTouched(await quoted(400), operation, input as never)
+			const many = await rowsTouched(await quoted(4000), operation, input as never)
+			if (many > few + ALLOWANCE) {
+				grown.push(`${name}: ${few} -> ${many}`)
+			}
+			const store = await quoted(4000)
+			outputs[name] = await runInDurableObject(store, (_instance, state) => ({
+				output: operation.run(state.storage.sql, input as never),
+				states: state.storage.sql
+					.exec('SELECT state, count(*) AS n FROM quotes WHERE approval_uri IS NOT NULL GROUP BY state ORDER BY state')
+					.toArray(),
+				linked: state.storage.sql.exec('SELECT count(*) AS n FROM quotes WHERE quoted_status_id = ?', LATER).toArray(),
+			}))
+		}
+		expect(grown).toEqual([])
+		// Not vacuous: each did its work on the rows that concern it, and only those.
+		expect(outputs.claim!.output).toMatchObject({ ids: expect.any(Array), more: true })
+		expect((outputs.claim!.output as { ids: string[] }).ids).toHaveLength(QUOTE_ROUND)
+		expect(outputs.revoke!.states).toEqual([
+			{ state: 'pending', n: 4000 },
+			{ state: 'rejected', n: 2 },
+			{ state: 'revoked', n: 1 },
+		])
+		expect(outputs.recheck!.output).toBe(true)
+		expect(outputs.link!.linked).toEqual([{ n: MAX_LINKED_QUOTES }])
+		expect(outputs.work!.output).toMatchObject({ quotedUri: TARGET_URI, approvalUri: STAMP })
 	}, 120_000)
 })

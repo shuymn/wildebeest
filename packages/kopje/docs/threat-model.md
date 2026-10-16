@@ -97,7 +97,22 @@ against their own instance. TLS is assumed between all parties.
   its actor document both answer 404 or 410: it is verified with the stored key at any age. A live actor is never
   deleted with a key its current document does not list (401), and a transient failure answers 503. _Enforced (main):_ `receiveInbound` in `src/federation/inbound.ts`;
   `test/inbox.test.ts` ("ID-1: an inbound activity acts only for its signer"), `test/inbox-regressions.test.ts`
-  ("stored keys, rotation and ownership").
+  ("stored keys, rotation and ownership"). A second exception: a `Delete` another server relays (a quoting server
+  forwarding the quoted author's revocation of a quote's stamp, signed with its own key, as Mastodon forwards it). Its
+  HTTP signer must own its key by the same rule; the `Delete` is applied as its `actor`'s only when it carries that
+  actor's own proof, an RsaSignature2017 Linked Data Signature or an FEP-8b32 proof, which Fedify verifies against a key
+  the actor's current document embeds (no other key is ever loaded), and only when the proven activity is a `Delete`
+  with exactly the id, actor and object Kopje read. Applied, it reaches one handler, which acts only on what is neither
+  an actor, a status nor a boost (so on a stamp at most). A relay without a proof is applied as nothing but a reason to
+  verify the actor's accepted quote naming the stamp again; a proof that does not verify answers 401; any other
+  activity signed by a key its actor does not own still answers 401. Fedify 2.4.4 refuses `@graph`, `@included` and
+  `@reverse` (and their aliases) before and after compacting a signed document and verifies the compacted form it
+  parses, the class of Linked Data Signature bypass Mastodon fixed in 4.5.10 (GHSA-53m7-2wrh-q839). _Implemented on
+  branch `kopje/quotes-1a`:_ `relayed` in `src/federation/inbound.ts`, `src/federation/author-proof.ts`,
+  `relayedDelete` in `src/domain/inbox.ts`; `test/quotes.test.ts` ("relayed revocations (ID-1’s one exception)": a
+  missing proof, a forged signature, a proof by another actor's key, a proof covering another object, a valid proof on
+  another activity type and on the `Delete` of a status), `test/inbox.test.ts` ("records no retraction for input that
+  fails ID-1").
 - **ID-2: a fetched document is trusted only for its own origin.** The identity of a fetched object is its parsed `id`
   after JSON-LD processing, and it must have the origin of the final response URL. The loader's literal `id` check is a
   pre-filter. Cross-origin redirects are refused. _Enforced (main):_ `src/federation/loader.ts`;
@@ -130,7 +145,17 @@ against their own instance. TLS is assumed between all parties.
   (VIS-6); `Undo` of a `Like` or `Announce` the actor's own; `test/inbox-statuses.test.ts` ("ID-6: another actor of
   the same origin cannot update a status", "deletes the author’s status with its children, and nothing of anyone
   else’s (ID-6, ID-3)", "ID-6, ID-7: keeps an Undo that arrived before its Like", "ID-6, VIS-6: a boost of a private,
-  direct or unfetchable object stores nothing").
+  direct or unfetchable object stores nothing"). _Implemented on branch `kopje/quotes-1a`_ for the `Delete` of a quote's
+  stamp (FEP-044f's `QuoteAuthorization`, a row of the same table): only the quoted status's author revokes, and only
+  the quotes of that author's statuses that name the stamp; the revocation is recorded once, for good, under the stamp
+  and that author (`quote_revocations`), so the stamp never verifies a quote of that author's statuses again, and
+  another actor's `Delete` of the same URI revokes nothing of theirs, and a `Delete` that arrived before the quote wins
+  (ID-7). A received quote is accepted only as a self-quote or by a stamp fetched from its own id that passes every check
+  (the quoted author's, on that author's origin, naming exactly this quote of exactly that status); a local quoted status
+  is never accepted from outside. A quoted Note embedded in a status is taken only when it is that status's author's
+  own (its `attributedTo` the author, its id on the author's origin), with one hop less of work. `revokeStamp` and `completeQuote` in `src/domain/quotes.ts`; `test/quotes.test.ts`
+  ("is not taken from anyone but the quoted author", "leaves a quote pending when its stamp is …", "wins over a quote
+  that arrives after it").
 - **ID-7: replay changes nothing twice.** A repeated activity creates no second relationship, counter change,
   notification, push or outbound intent (natural keys). A valid `Delete` or `Undo` that arrives before its target is
   recorded for 30 days and prevents the target from appearing later. Input that fails ID-1 or ID-6 reserves no key and
@@ -1271,6 +1296,29 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   and sorts all the targets left, so a boost's withdrawal (by a purge, or by a remote author's `Delete` of the boosted
   status) costs work proportional to its audience in every batch until it is staged. Receipt enumeration has this in
   common with follower enumeration.
+  _Implemented on branch `kopje/quotes-1a`_ for received quotes: a quote's verification goes in stages of one
+  document each (the quoted status, its author when Kopje lacks it, the status again, the stamp), each through loaders
+  of its own, so no stage reads another's fetch; between stages only the author's address is kept, never a fetched
+  document, so the status is stored only from a fresh fetch. Each stage's outcome applies only to the generation of
+  the work it read (a number drawn anew whenever the quote's target, stamp, stage or outcome changes), so a late or
+  concurrent outcome is discarded. Only job rounds verify quotes: an inbox request that makes work due only asks the
+  Queue for a round, and a round leases what it claims, so nothing else touches the work meanwhile; a relayed `Delete`
+  without the author's proof renews only idle work, leaves work that is due or backing off as it is, and only marks a
+  leased one to be checked once more, so replays never keep a genuine 404 from applying. A job round (Queue or cron)
+  verifies at most 10 quotes, each stage with a whole budget of its own (8 fetches, redirect hops and contexts included), so a heavy or
+  failing quote starves no other, and charges every failure of a stage, a budget or deadline that ran out included, as
+  it does a stage the Store cannot apply: a stage that never fits a budget is given up after the last attempt, and a
+  round that only failed asks for no other (the backoff says when the work is due). A status stored for a
+  verification gets one hop less of work, so one traversal stops two levels below the status that arrived, however
+  long a chain of quotes; a failed verification is retried five times (1, 5, 30, 120 and 720 minutes later), then given
+  up until its status arrives
+  again. A stamp's `Delete` writes one `quote_revocations` row and changes the quotes naming it in batches of at most
+  500 rows counted with `total_changes()` (a row and its count trigger), the first in the request and the rest in the
+  inbound job rounds. A newly stored status links at most 100 unresolved quotes naming it. `src/domain/quotes.ts`,
+  `src/federation/quotes.ts`; `test/quotes.test.ts` ("verifies a chain two levels below the status that arrived",
+  "processes 3000 quotes naming the stamp in bounded batches"), `test/cascade-guard.test.ts` (a purged status's
+  accepted quote within the exact budget), `test/policy-bounds.test.ts` ("received quotes cost their work a bounded
+  read").
   Streaming (VIS-26): _Implemented on branch `kopje/streaming-1`:_ at most 16 sockets per account (429) and 256 per
   instance (503); 16 subscriptions per socket, 16 stream keys per account and a socket's attachment at most 12 KiB
   (`Too many subscriptions`, 429); incoming messages text only (1003), at most 4 KiB and 120 a minute (1008). The

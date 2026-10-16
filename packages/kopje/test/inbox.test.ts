@@ -917,7 +917,13 @@ describe('ID-7: replay changes nothing twice', () => {
 			actor: bob.uri,
 			object: `${bob.uri}/statuses/1`,
 		}
-		expect(await t.post(bob, deletion, { keyId: carol.keyId, privateKey: carol.privateKey })).toBe(401)
+		// Signed by another actor, a Delete is a relay (a stamp's revocation forwarded, test/quotes.test.ts): without bob's
+		// own proof it is applied to nothing, and records nothing.
+		expect(await t.post(bob, deletion, { keyId: carol.keyId, privateKey: carol.privateKey })).toBe(202)
+		await untouched(t.store)
+		expect(await t.post(bob, { ...deletion, type: 'Undo' }, { keyId: carol.keyId, privateKey: carol.privateKey })).toBe(
+			401
+		)
 		await untouched(t.store)
 	})
 

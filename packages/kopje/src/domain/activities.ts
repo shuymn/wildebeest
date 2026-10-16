@@ -34,7 +34,18 @@ const AS_CONTEXT = 'https://www.w3.org/ns/activitystreams'
 
 const CONTEXT = [AS_CONTEXT, { sensitive: 'as:sensitive', Hashtag: 'as:Hashtag' }] as const
 
-// The context of an activity carrying a poll: Mastodon's votersCount extension.
+// The terms of a status's interaction policy (GoToSocial's namespace, as Mastodon's interaction_policies context).
+const INTERACTION_POLICY = {
+	gts: 'https://gotosocial.org/ns#',
+	interactionPolicy: { '@id': 'gts:interactionPolicy', '@type': '@id' },
+	canQuote: { '@id': 'gts:canQuote', '@type': '@id' },
+	automaticApproval: { '@id': 'gts:automaticApproval', '@type': '@id' },
+} as const
+
+// The context of a status: its interaction policy's terms.
+const NOTE_CONTEXT = [AS_CONTEXT, { sensitive: 'as:sensitive', Hashtag: 'as:Hashtag', ...INTERACTION_POLICY }] as const
+
+// The context of a status carrying a poll: Mastodon's votersCount extension too.
 const POLL_CONTEXT = [
 	AS_CONTEXT,
 	{
@@ -42,11 +53,12 @@ const POLL_CONTEXT = [
 		Hashtag: 'as:Hashtag',
 		toot: 'http://joinmastodon.org/ns#',
 		votersCount: 'toot:votersCount',
+		...INTERACTION_POLICY,
 	},
 ] as const
 
 function contextOf(facts: StatusFacts) {
-	return facts.poll === null ? CONTEXT : POLL_CONTEXT
+	return facts.poll === null ? NOTE_CONTEXT : POLL_CONTEXT
 }
 
 // signedBy 'instance': signed by the instance actor rather than the lane's account (a report's Flag, deliveries.ts).
@@ -268,6 +280,9 @@ export function noteOf(facts: StatusFacts): Record<string, unknown> {
 			...facts.tags.map((t) => ({ type: 'Hashtag', href: t.href, name: `#${t.name}` })),
 		],
 		...(facts.poll === null ? {} : questionOf(facts.poll)),
+		// Nobody may quote it but its author, the way Mastodon writes the policy `nobody`: Kopje answers no QuoteRequest
+		// yet (FEP-044f; Mastodon refuses to quote a status without a policy anyway).
+		interactionPolicy: { canQuote: { automaticApproval: [facts.actorUri] } },
 	}
 }
 

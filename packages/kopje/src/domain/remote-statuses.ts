@@ -16,6 +16,7 @@ import { insertWithFreshId, remoteId } from './ids'
 import { isDeleted, type RemoteActorInput, upsertRemoteActor } from './inbox'
 import { notify } from './notifications'
 import { isLocalPoll, receiveVote, type RemotePollInput, remotePollChanges, storeRemotePoll } from './polls'
+import { linkQuotes, promoteQuote, QUOTE_HOPS, quoteArrival, quoteDue, recordQuote, refreshQuote } from './quotes'
 import { normalizeSearchText } from './search-text'
 import { presentStatus, type Status } from './status-presenter'
 import { MAX_STATUS_EDITS, recordEdit, recountStatus, writeTags } from './statuses'
@@ -84,8 +85,22 @@ export type RemoteStatusInput = {
 	// The Note's name (a vote names its choice), and the poll of a Question.
 	name?: string | null
 	poll?: RemotePollInput | null
+	// The quote the Note names (quote, _misskey_quote, quoteUrl or quoteUri), or null.
+	quote?: RemoteQuoteInput | null
 	// The object as received.
 	raw: string
+}
+
+// A quote as StatusParser reads it: the quoted status's uri (null only for a Tombstone without an id), whether the Note
+// had no `quote` property (a legacy quote: Misskey's _misskey_quote or quoteUrl, Fedibird's quoteUri), whether the
+// quote is a Tombstone (the quoted status is gone), and the stamp (quoteAuthorization) it names.
+export type RemoteQuoteInput = {
+	uri: string | null
+	legacy: boolean
+	tombstone: boolean
+	approvalUri: string | null
+	// The quoted Note as the quoting Note embeds it (one level, never trusted beyond what recordQuote checks), or null.
+	embedded?: RemoteStatusInput | null
 }
 
 export type StoreContext = {
@@ -96,6 +111,9 @@ export type StoreContext = {
 	// Fetched by Kopje (a boosted original, a search result) rather than delivered: Mastodon's fetch?, which needs no
 	// relation to a local account, and sends no notifications.
 	fetched: boolean
+	// The work budget of the status's quote (quotes.ts): QUOTE_HOPS when it arrives as a root, one less than its
+	// quoting status's when it is stored as a quoted target during verification.
+	quoteHops?: number
 }
 
 export type StatusOutcome = { applied: boolean; reason: string; statusId?: string }
@@ -335,6 +353,8 @@ export function storeRemoteStatus(db: Db, author: Author, input: RemoteStatusInp
 		if (existing.account_id !== author.id) {
 			return { applied: false, reason: 'not-author' }
 		}
+		// A known status arriving again as a root verifies its quote as any root does (quotes.ts promoteQuote).
+		promoteQuote(db, existing.id, arrivalOf(db, author, ctx), ctx.now)
 		return extendAudience(db, existing, ctx.deliveredTo)
 	}
 	const to = input.to.slice(0, MAX_STATUS_AUDIENCE)
@@ -427,6 +447,11 @@ export function storeRemoteStatus(db: Db, author: Author, input: RemoteStatusInp
 	recountStatus(db, parent?.id ?? null)
 	const isReply = input.inReplyTo !== null
 	linkReplies(db, { id, uri: input.uri, accountId: author.id, replyTarget, isReply })
+	// A new status has no quote to remove: only one it names is recorded.
+	if (input.quote !== undefined && input.quote !== null) {
+		recordQuote(db, { id, uri: input.uri, author }, input.quote, arrivalOf(db, author, ctx), ctx)
+	}
+	linkQuotes(db, { id, uri: input.uri }, ctx.now)
 	if (!ctx.fetched) {
 		notifyCreated(db, {
 			id,
@@ -440,6 +465,11 @@ export function storeRemoteStatus(db: Db, author: Author, input: RemoteStatusInp
 		})
 	}
 	return { applied: true, reason: 'created', statusId: id }
+}
+
+// How a status came, for its quote's work (quotes.ts).
+function arrivalOf(db: Db, author: Author, ctx: StoreContext) {
+	return quoteArrival(db, author.id, ctx.deliveredTo, ctx.quoteHops ?? QUOTE_HOPS)
 }
 
 // Replies that arrived before this status are linked to it now (a bounded number; the rest keep their uri).
@@ -579,13 +609,16 @@ export function updateRemoteStatus(db: Db, author: Author, input: RemoteStatusIn
 	if (version < stored) {
 		return { applied: false, reason: 'stale' }
 	}
+	const arrival = arrivalOf(db, author, ctx)
 	if (Number.isNaN(version) || version === stored) {
 		// ProcessStatusUpdateService#handle_implicit_update!: an Update that names no newer version (such as the Update of
 		// a poll's counts, which names none, or the same one) still refreshes the counts, the end and the voters of its
-		// poll.
+		// poll, and verifies a changed stamp of the same quote again; the quoted status itself changes only with a newer
+		// version.
+		refreshQuote(db, { id: existing.id, uri: input.uri, author }, input.quote, arrival, ctx)
 		return input.poll !== undefined && storeRemotePoll(db, existing.id, input.poll, false, ctx.now)
 			? { applied: true, reason: 'poll-updated', statusId: existing.id }
-			: { applied: false, reason: 'stale' }
+			: { applied: false, reason: 'stale', statusId: existing.id }
 	}
 	const editedAt = iso(Math.min(version, ctx.now))
 	const media = input.media.slice(0, MAX_STATUS_MEDIA)
@@ -634,6 +667,7 @@ export function updateRemoteStatus(db: Db, author: Author, input: RemoteStatusIn
 	}
 	writeTags(db, existing.id, input.tags.slice(0, MAX_STATUS_TAGS))
 	writeMedia(db, existing.id, author, media, ctx)
+	recordQuote(db, { id: existing.id, uri: input.uri, author }, input.quote, arrival, ctx)
 	if (significant) {
 		if (versions + (versions === 0 ? 2 : 1) > MAX_STATUS_EDITS) {
 			db.run('DELETE FROM status_edits WHERE id = (SELECT max(id) FROM status_edits WHERE status_id = ?)', existing.id)
@@ -740,7 +774,8 @@ export function isUrlQuery(query: string): boolean {
 
 export type ResolveInput = { query: string; resolved: Resolved; now: number; origin: string; present: Present }
 
-export type ResolveResult = { accounts: Account[]; statuses: Status[] }
+// quotesDue: the status found has a quote whose verification is due (the Worker asks the Queue for a job round).
+export type ResolveResult = { accounts: Account[]; statuses: Status[]; quotesDue?: boolean }
 
 // Stores what was resolved with the validation of inbound activities (ID-3, ID-7, HTML-1, HTML-3, RES-4), then answers
 // with it only if the viewer may see it (VIS-1): an account only if account search would find it (findableBySql, R14),
@@ -782,7 +817,10 @@ export const resolveSearch = userWriteOperation<ResolveInput, ResolveResult>((db
 				deliveredTo: null,
 				fetched: true,
 			})
-			return status(stored.statusId)
+			return {
+				...status(stored.statusId),
+				quotesDue: stored.statusId !== undefined && quoteDue(db, stored.statusId, now),
+			}
 		}
 		case 'none': {
 			const byUri = db.first<{ kind: string; id: string }>(
@@ -794,7 +832,15 @@ export const resolveSearch = userWriteOperation<ResolveInput, ResolveResult>((db
 			if (byUri === undefined) {
 				return { accounts: [], statuses: [] }
 			}
-			return byUri.kind === 'status' ? status(byUri.id) : account(byUri.id)
+			if (byUri.kind === 'account') {
+				return account(byUri.id)
+			}
+			// A stored status resolved by a local user arrives as a root: its quote is verified as any root's.
+			const author = db.first<{ account_id: string }>('SELECT account_id FROM statuses WHERE id = ?', byUri.id)
+			if (author !== undefined) {
+				promoteQuote(db, byUri.id, quoteArrival(db, author.account_id, null), now)
+			}
+			return { ...status(byUri.id), quotesDue: quoteDue(db, byUri.id, now) }
 		}
 	}
 })

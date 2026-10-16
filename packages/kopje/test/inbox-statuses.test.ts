@@ -210,8 +210,11 @@ describe('Create (Mastodon and Misskey)', () => {
 				note.id
 			)
 		).toEqual([{ mfm: 'にゃーん $[x2 big]', quote: `${MISSKEY}/notes/9quoted`, quote_url: `${MISSKEY}/notes/9quoted` }])
-		// Quotes are not a feature yet: the quoted note is not fetched.
+		// A legacy quote (no `quote` property): stored pending, never shown, its verification left to a job round.
 		expect(t.web.fetched).not.toContain(`${MISSKEY}/notes/9quoted`)
+		expect(
+			await sql(t.store, 'SELECT quoted_uri, state, legacy, verify_after FROM quotes WHERE status_id = ?', row.id)
+		).toEqual([{ quoted_uri: `${MISSKEY}/notes/9quoted`, state: 'pending', legacy: 1, verify_after: NOW }])
 	})
 
 	it('VIS-2: a Misskey specified note is limited: silent recipients see it as private, nobody else does', async () => {
