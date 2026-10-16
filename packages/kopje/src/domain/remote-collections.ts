@@ -1,6 +1,6 @@
 import { availableLocalSql, availableSql, requiresMention, type Visibility } from './audience'
 import { displayName, featuredTagNamed, MAX_FEATURED_TAGS, writeFeatured } from './featured-tags'
-import { readOperation, writeOperation } from './operation'
+import { writeOperation } from './operation'
 import { type RemoteStatusInput, statusByUri, storeRemoteStatus } from './remote-statuses'
 import { isHashtagName } from './status-text'
 import { normalizeTag } from './tag-name'
@@ -16,9 +16,10 @@ import { httpUrl } from '../platform/http-url'
 // a remote account through the same rules.
 //
 // When the account's document is stored (inbox.ts upsertRemoteActor, every path that stores one), a sync is
-// requested (collection_syncs, one row per account): the Worker's inbound job rounds (jobs/queue.ts) claim a few,
-// read the collections through the safe loader within one request's fetch budget each (federation/collections.ts),
-// and hand back what they read (applyCollectionSync). An Add or a Remove whose target is the actor's own featured or
+// requested (collection_syncs, one row per account): the Worker's inbound job rounds (jobs/queue.ts) claim a few, read
+// the collections and then fetch the pinned statuses Kopje does not have, through the safe loader within one request's
+// fetch budget each (federation/collections.ts), and hand back what they read (completeCollectionRead,
+// completePinFetches). An Add or a Remove whose target is the actor's own featured or
 // featuredTags collection changes one row (inbox.ts add and remove).
 //
 // Every input is the remote server's: a collection is read only on the actor's own host, an item only when it is the
@@ -136,12 +137,7 @@ export function pinRemote(db: Db, accountId: string, statusId: string, now: numb
 	if (!pinnable(pinnableStatus(db, statusId), accountId)) {
 		return false
 	}
-	const pins = db.first<{ n: number }>(
-		'SELECT count(*) AS n FROM (SELECT 1 FROM status_pins WHERE account_id = ? LIMIT ?)',
-		accountId,
-		MAX_REMOTE_PINS
-	)
-	if ((pins?.n ?? 0) >= MAX_REMOTE_PINS) {
+	if (!pinsBelowCap(db, accountId)) {
 		return false
 	}
 	return (
@@ -152,6 +148,16 @@ export function pinRemote(db: Db, accountId: string, statusId: string, now: numb
 			new Date(now).toISOString()
 		) > 0
 	)
+}
+
+// Whether the account pins fewer than MAX_REMOTE_PINS statuses.
+function pinsBelowCap(db: Db, accountId: string): boolean {
+	const pins = db.first<{ n: number }>(
+		'SELECT count(*) AS n FROM (SELECT 1 FROM status_pins WHERE account_id = ? LIMIT ?)',
+		accountId,
+		MAX_REMOTE_PINS
+	)
+	return (pins?.n ?? 0) < MAX_REMOTE_PINS
 }
 
 // Remove#remove_featured: the account's pin of its status, if any.
@@ -201,6 +207,15 @@ export function unfeatureRemote(db: Db, accountId: string, name: string): boolea
 }
 
 // ---- Syncs
+//
+// A sync has two phases, each a round of its own with its own fetch budget, and durable state between them:
+//   1. read: the collections (hide_collections, the featured collection's first MAX_REMOTE_PINS items, the featured
+//      hashtags), applied at once: the featured hashtags, hide_collections, and the pins of the listed statuses Kopje
+//      stores; the listed statuses it does not store go in collection_pins_pending, in their order.
+//   2. pins: later rounds fetch the pending statuses within their budgets; one fetched is stored and pinned, one that
+//      cannot be used is dropped, and one that may be fetched later stays. The metadata is never read again for them.
+// A round makes progress when phase 1 reads everything or the pending statuses shrink; MAX_SYNC_ATTEMPTS claims
+// without progress drop the sync.
 
 // The username of the first available local account that follows the account (Mastodon's local_follower), whose key
 // signs fetches on the account's behalf, or null. Walked from the local accounts, each a key lookup of its follow: the
@@ -217,29 +232,51 @@ export function localFollower(db: Db, accountId: string): string | null {
 	)
 }
 
-// A sync a round claimed: the account, the collections its stored document names, and the local follower whose key
-// signs the fetches (FetchFeaturedCollectionService#local_follower: the first available one), or null for the
-// instance actor. pending: another sync waits.
-// generation: the request the round read, which it hands back to applyCollectionSync.
+// A sync a round claimed: the account, the collections its stored document names, the phase, the pending statuses
+// (phase pins, in order), and the local follower whose key signs the fetches (FetchFeaturedCollectionService#
+// local_follower: the first available one), or null for the instance actor. generation: the request the round read,
+// which it hands back. pending: another sync is due.
 export type CollectionSync = ActorCollections & {
 	accountUri: string
 	generation: number
+	phase: 'read' | 'pins'
+	uris: string[]
 	signer: string | null
 	pending: boolean
 }
 
+type SyncRow = { account_id: string; attempts: number; generation: number; read_through: number }
+
 // The sync due first, by a seek of collection_syncs_due: the syncs rounds hold are due later, so none is read.
-function claimable(db: Db, now: number): { account_id: string; attempts: number; generation: number } | undefined {
-	return db.first<{ account_id: string; attempts: number; generation: number }>(
-		'SELECT account_id, attempts, generation FROM collection_syncs WHERE due_at <= ? ORDER BY due_at LIMIT 1',
+function claimable(db: Db, now: number): SyncRow | undefined {
+	return db.first<SyncRow>(
+		`SELECT account_id, attempts, generation, read_through FROM collection_syncs
+		WHERE due_at <= ? ORDER BY due_at LIMIT 1`,
 		now
 	)
 }
 
-// The sync due first, claimed for SYNC_LEASE_MS (due again when the lease ends). One claimed MAX_SYNC_ATTEMPTS times already, or of an
-// account that is no longer an available remote account, is dropped instead (ProcessAccountService schedules none
-// for a suspended account, and the services return for one), and the next is taken; at most MAX_SYNC_ATTEMPTS + 1
-// rows are read.
+// The account's pending statuses, in the collection's order (the first listed has the latest pin time).
+function pendingUris(db: Db, accountId: string): string[] {
+	return db
+		.all<{ uri: string }>(
+			'SELECT uri FROM collection_pins_pending WHERE account_id = ? ORDER BY pinned_at DESC LIMIT ?',
+			accountId,
+			MAX_REMOTE_PINS
+		)
+		.map((row) => row.uri)
+}
+
+function dropSync(db: Db, accountId: string): void {
+	db.run('DELETE FROM collection_pins_pending WHERE account_id = ?', accountId)
+	db.run('DELETE FROM collection_syncs WHERE account_id = ?', accountId)
+}
+
+// The sync due first, claimed for SYNC_LEASE_MS (due again when the lease ends): phase read while a request has not
+// been read through, else phase pins while statuses are pending. One claimed MAX_SYNC_ATTEMPTS times without progress,
+// of an account that is no longer an available remote account (ProcessAccountService schedules none for a suspended
+// account, and the services return for one), or with nothing left to do, is dropped instead, and the next is taken;
+// at most MAX_SYNC_ATTEMPTS + 1 rows are read.
 export const claimCollectionSync = writeOperation<{ now: number }, CollectionSync | null>((db, { now }) => {
 	for (let round = 0; round <= MAX_SYNC_ATTEMPTS; round++) {
 		const row = claimable(db, now)
@@ -250,8 +287,10 @@ export const claimCollectionSync = writeOperation<{ now: number }, CollectionSyn
 			`SELECT a.uri, a.raw FROM accounts a WHERE a.id = ?1 AND a.domain IS NOT NULL AND ${availableSql('?1')}`,
 			row.account_id
 		)
-		if (account === undefined || row.attempts >= MAX_SYNC_ATTEMPTS) {
-			db.run('DELETE FROM collection_syncs WHERE account_id = ?', row.account_id)
+		const read = row.generation > row.read_through
+		const uris = read ? [] : pendingUris(db, row.account_id)
+		if (account === undefined || row.attempts >= MAX_SYNC_ATTEMPTS || (!read && uris.length === 0)) {
+			dropSync(db, row.account_id)
 			continue
 		}
 		db.run(
@@ -262,6 +301,8 @@ export const claimCollectionSync = writeOperation<{ now: number }, CollectionSyn
 		return {
 			accountUri: account.uri,
 			generation: row.generation,
+			phase: read ? 'read' : 'pins',
+			uris,
 			...actorCollections(account.raw),
 			signer: localFollower(db, row.account_id),
 			pending: claimable(db, now) !== undefined,
@@ -270,80 +311,70 @@ export const claimCollectionSync = writeOperation<{ now: number }, CollectionSyn
 	return null
 })
 
-// The statuses among `uris` Kopje stores (the Worker fetches only the others). At most MAX_REMOTE_PINS are looked up,
-// each by its key.
-export const storedStatusUris = readOperation<{ uris: readonly string[] }, string[]>((db, { uris }) =>
-	db
-		.all<{ uri: string }>(
-			'SELECT uri FROM statuses WHERE uri IN (SELECT value FROM json_each(?))',
-			JSON.stringify(uris.slice(0, MAX_REMOTE_PINS))
+// The end of a round of the account's sync: kept while a request is not read through or statuses are pending, due at
+// once with a fresh count of attempts after progress (or a request since the round claimed it), else after
+// SYNC_RETRY_MS; deleted when nothing is left. Returns whether a sync is due.
+function endRound(db: Db, accountId: string, generation: number, progressed: boolean, now: number): boolean {
+	const row = db.first<{ generation: number; read_through: number }>(
+		'SELECT generation, read_through FROM collection_syncs WHERE account_id = ?',
+		accountId
+	)
+	const pinsLeft = db.first('SELECT 1 AS x FROM collection_pins_pending WHERE account_id = ?', accountId) !== undefined
+	if (row !== undefined && row.generation <= row.read_through && !pinsLeft) {
+		db.run('DELETE FROM collection_syncs WHERE account_id = ?', accountId)
+	} else if (row !== undefined) {
+		const renewed = progressed || row.generation !== generation
+		db.run(
+			`UPDATE collection_syncs SET due_at = ?, attempts = CASE WHEN ? THEN 0 ELSE attempts END WHERE account_id = ?`,
+			renewed ? now : now + SYNC_RETRY_MS,
+			renewed ? 1 : 0,
+			accountId
 		)
-		.map((row) => row.uri)
-)
-
-// What a round read of the account's collections. null: that part could not be read, and stays as it is.
-//   pins: the uris the featured collection lists (its first page, in its order), and the statuses fetched among them
-//         that Kopje did not store (null: fetched, and not usable).
-//   tags: the names of the Hashtags the featuredTags collection lists (or, for an actor without one, the featured
-//         collection: FetchFeaturedCollectionService with hashtag).
-//   hideCollections: whether its followers or following collection hides its items (no first page).
-//   unfinished: part of it may be read later (a fetch that may pass, or the budget spent), so the sync continues.
-//   progressed: the round fetched a pinned status, so a later one has less to do.
-export type CollectionSyncInput = {
-	now: number
-	origin: string
-	accountUri: string
-	generation: number
-	pins: { uris: string[]; fetched: Record<string, RemoteStatusInput | null> } | null
-	tags: string[] | null
-	hideCollections: boolean | null
-	unfinished: boolean
-	progressed: boolean
+	}
+	return claimable(db, now) !== undefined
 }
 
-// Applies what a round read (FetchFeaturedCollectionService#process_note_items and #process_hashtag_items,
-// FetchFeaturedTagsCollectionService#process_items, ProcessAccountService#set_fetchable_attributes!) and ends the sync.
-// Nothing is applied to an account that is gone or unavailable. The sync ends when the round read all of it. It is made
-// due at once, with its count of fruitless rounds reset, when it was asked for again since the round claimed it (a
-// newer generation) or when the round made progress (a pinned status fetched): unfinished work is not dropped for a
-// budget the collections spent, and only rounds that do nothing count toward MAX_SYNC_ATTEMPTS. A round that did
-// nothing leaves it due after SYNC_RETRY_MS. Returns whether a sync is due.
-export const applyCollectionSync = writeOperation<CollectionSyncInput, boolean>((db, input) => {
-	const account = db.first<{ id: string; uri: string }>(
-		'SELECT id, uri FROM accounts WHERE uri = ? AND domain IS NOT NULL',
+type RoundInput = { now: number; origin: string; accountUri: string; generation: number }
+
+// The account of a round's end, while it is an available remote account; a sync of one that is not is dropped.
+function roundAccount(db: Db, input: RoundInput): { id: string; uri: string } | null {
+	const account = db.first<{ id: string; uri: string; available: number }>(
+		`SELECT id, uri, ${availableSql('accounts.id')} AS available FROM accounts WHERE uri = ? AND domain IS NOT NULL`,
 		input.accountUri
 	)
 	if (account === undefined) {
+		return null
+	}
+	if (account.available !== 1) {
+		dropSync(db, account.id)
+		return null
+	}
+	return account
+}
+
+// What phase 1 read of the account's collections. null: that part could not be read, and stays as it is.
+//   pins: the uris the featured collection lists (its first page, in its order).
+//   tags: the names of the Hashtags the featuredTags collection lists (or, for an actor without one, the featured
+//         collection: FetchFeaturedCollectionService with hashtag).
+//   hideCollections: whether its followers or following collection hides its items (no first page).
+//   unfinished: part of it may be read later (a fetch that may pass, or the budget spent): read again later.
+export type CollectionReadInput = RoundInput & {
+	pins: { uris: string[] } | null
+	tags: string[] | null
+	hideCollections: boolean | null
+	unfinished: boolean
+}
+
+// Phase 1's end (FetchFeaturedCollectionService#process_note_items and #process_hashtag_items,
+// FetchFeaturedTagsCollectionService#process_items, ProcessAccountService#set_fetchable_attributes!): what was read is
+// applied, and the request is read through unless part of it may be read later. Returns whether a sync is due.
+export const completeCollectionRead = writeOperation<CollectionReadInput, boolean>((db, input) => {
+	const account = roundAccount(db, input)
+	if (account === null) {
 		return claimable(db, input.now) !== undefined
 	}
-	if (!input.unfinished) {
-		db.run('DELETE FROM collection_syncs WHERE account_id = ? AND generation = ?', account.id, input.generation)
-	}
-	const renewed =
-		input.progressed ||
-		db.first(
-			'SELECT 1 AS x FROM collection_syncs WHERE account_id = ? AND generation <> ?',
-			account.id,
-			input.generation
-		) !== undefined
-	db.run(
-		`UPDATE collection_syncs SET due_at = CASE WHEN ?3 THEN ?2 ELSE ?2 + ?4 END,
-			attempts = CASE WHEN ?3 THEN 0 ELSE attempts END
-		WHERE account_id = ?1`,
-		account.id,
-		input.now,
-		renewed ? 1 : 0,
-		SYNC_RETRY_MS
-	)
-	if (db.first(`SELECT 1 AS x WHERE ${availableSql('?1')}`, account.id) !== undefined) {
-		applyRead(db, account, input)
-	}
-	return claimable(db, input.now) !== undefined
-})
-
-function applyRead(db: Db, account: { id: string; uri: string }, input: CollectionSyncInput): void {
 	if (input.pins !== null) {
-		replacePins(db, account, input.pins, input)
+		replacePins(db, account, input.pins.uris, input.now)
 	}
 	if (input.tags !== null) {
 		replaceFeaturedTags(db, account.id, input.tags, input.now)
@@ -351,52 +382,102 @@ function applyRead(db: Db, account: { id: string; uri: string }, input: Collecti
 	if (input.hideCollections !== null) {
 		db.run('UPDATE accounts SET hide_collections = ? WHERE id = ?', input.hideCollections ? 1 : 0, account.id)
 	}
-}
+	if (!input.unfinished) {
+		db.run(
+			'UPDATE collection_syncs SET read_through = max(read_through, ?) WHERE account_id = ?',
+			input.generation,
+			account.id
+		)
+	}
+	return endRound(db, account.id, input.generation, !input.unfinished, input.now)
+})
 
-// The account's pins become the statuses the collection lists that are its own, pinnable, and stored (or fetched now,
-// stored as a fetched status: Mastodon's FetchRemoteStatusService with expected_actor_uri), the first MAX_REMOTE_PINS
-// of them; the others are unpinned. A pin kept keeps its time; a new one is timed so that the collection's order is
-// the profile's (the first listed is the newest pin).
-function replacePins(
-	db: Db,
-	account: { id: string; uri: string },
-	pins: NonNullable<CollectionSyncInput['pins']>,
-	input: CollectionSyncInput
-): void {
-	const origin = originOf(account.uri)
-	const ids: string[] = []
-	for (const uri of [...new Set(pins.uris)].slice(0, MAX_REMOTE_PINS)) {
-		if (originOf(uri) !== origin) {
+// What phase 2 fetched of the pending statuses: a usable status, or null for one that is not (refused, gone, not a
+// status). One that may be fetched later is left out.
+export type PinFetchesInput = RoundInput & { fetched: Record<string, RemoteStatusInput | null> }
+
+// Phase 2's end: each pending status fetched is stored as a fetched status (Mastodon's FetchRemoteStatusService with
+// expected_actor_uri) and pinned when it is the account's own and pinnable, with the time phase 1 gave it; one that
+// cannot be used is dropped. The round progressed when the pending statuses shrank. Returns whether a sync is due.
+export const completePinFetches = writeOperation<PinFetchesInput, boolean>((db, input) => {
+	const account = roundAccount(db, input)
+	if (account === null) {
+		return claimable(db, input.now) !== undefined
+	}
+	let done = 0
+	for (const [uri, fetched] of Object.entries(input.fetched)) {
+		const pending = db.first<{ pinned_at: string }>(
+			'SELECT pinned_at FROM collection_pins_pending WHERE account_id = ? AND uri = ?',
+			account.id,
+			uri
+		)
+		if (pending === undefined) {
 			continue
 		}
-		let status = statusByUri(db, uri)
-		const fetched = pins.fetched[uri]
-		if (status === undefined && fetched !== undefined && fetched !== null) {
+		if (fetched !== null && fetched.uri === uri) {
 			const stored = storeRemoteStatus(db, account, fetched, {
 				now: input.now,
 				origin: input.origin,
 				deliveredTo: null,
 				fetched: true,
 			})
-			status = stored.statusId === undefined ? undefined : statusByUri(db, uri)
+			const status = stored.statusId === undefined ? undefined : statusByUri(db, uri)
+			if (status !== undefined && pinnable(status, account.id) && pinsBelowCap(db, account.id)) {
+				db.run(
+					'INSERT INTO status_pins (account_id, status_id, created_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING',
+					account.id,
+					status.id,
+					pending.pinned_at
+				)
+			}
 		}
-		if (status !== undefined && pinnable(status, account.id)) {
-			ids.push(status.id)
-		}
+		done += db.run('DELETE FROM collection_pins_pending WHERE account_id = ? AND uri = ?', account.id, uri)
 	}
+	return endRound(db, account.id, input.generation, done > 0, input.now)
+})
+
+// The account's pins become the statuses the collection lists that are its own and pinnable, the first
+// MAX_REMOTE_PINS of them on its origin: those Kopje stores at once, those it does not left pending for phase 2; the
+// others are unpinned, and what was pending before is replaced. A pin kept keeps its time; a new one is timed so that
+// the collection's order is the profile's (the first listed is the newest pin).
+function replacePins(db: Db, account: { id: string; uri: string }, uris: readonly string[], now: number): void {
+	const origin = originOf(account.uri)
+	const pinned: { id: string; at: string }[] = []
+	const pending: { uri: string; at: string }[] = []
+	;[...new Set(uris)].slice(0, MAX_REMOTE_PINS).forEach((uri, i) => {
+		if (originOf(uri) !== origin) {
+			return
+		}
+		const at = new Date(now - i).toISOString()
+		const status = statusByUri(db, uri)
+		if (status === undefined) {
+			pending.push({ uri, at })
+		} else if (pinnable(status, account.id)) {
+			pinned.push({ id: status.id, at })
+		}
+	})
 	db.run(
 		'DELETE FROM status_pins WHERE account_id = ? AND status_id NOT IN (SELECT value FROM json_each(?))',
 		account.id,
-		JSON.stringify(ids)
+		JSON.stringify(pinned.map((pin) => pin.id))
 	)
-	ids.forEach((id, i) => {
+	for (const pin of pinned) {
 		db.run(
 			'INSERT INTO status_pins (account_id, status_id, created_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING',
 			account.id,
-			id,
-			new Date(input.now - i).toISOString()
+			pin.id,
+			pin.at
 		)
-	})
+	}
+	db.run('DELETE FROM collection_pins_pending WHERE account_id = ?', account.id)
+	for (const pin of pending) {
+		db.run(
+			'INSERT INTO collection_pins_pending (account_id, uri, pinned_at) VALUES (?, ?, ?)',
+			account.id,
+			pin.uri,
+			pin.at
+		)
+	}
 }
 
 // The account's featured hashtags become the valid names listed, the first MAX_FEATURED_TAGS of them: the others are

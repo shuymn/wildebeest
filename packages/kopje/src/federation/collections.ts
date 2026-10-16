@@ -5,7 +5,7 @@ import type { InboxDeps } from './inbox'
 import { isTransientLoadError, requestBudget } from './loader'
 import { fetchRemoteStatus, idOf } from './remote-status'
 import { MAX_FEATURED_TAGS } from '../domain/featured-tags'
-import { type CollectionSync, type CollectionSyncInput, MAX_REMOTE_PINS } from '../domain/remote-collections'
+import { type CollectionReadInput, type CollectionSync, MAX_REMOTE_PINS } from '../domain/remote-collections'
 import type { RemoteStatusInput } from '../domain/remote-statuses'
 import { readConfig, userKek } from '../platform/config'
 import { callStore } from '../platform/store-client'
@@ -145,26 +145,20 @@ async function readFeatured(
 	return { uris, hashtags: hashtagNames(items).slice(0, MAX_FEATURED_TAGS) }
 }
 
-// The pinned statuses the Store does not have, fetched (FetchRemoteStatusService): a usable status, or null for one
-// that is not; one that may be fetched later (the budget spent included) is left out, so it is not pinned this time,
-// and counted in `left`.
-async function fetchPinned(
-	uris: string[],
-	loader: DocumentLoader,
-	stored: (uris: string[]) => Promise<string[]>
-): Promise<{ fetched: Record<string, RemoteStatusInput | null>; left: number }> {
-	const known = new Set(uris.length === 0 ? [] : await stored(uris))
+// Phase 2: the pending statuses, fetched in order (FetchRemoteStatusService) while the budget lasts: a usable status, or
+// null for one that is not; one that may be fetched later (the budget spent included) is left out, for a later round.
+async function fetchPending(
+	uris: readonly string[],
+	loader: DocumentLoader
+): Promise<Record<string, RemoteStatusInput | null>> {
 	const fetched: Record<string, RemoteStatusInput | null> = {}
-	let left = 0
-	for (const uri of uris.filter((u) => !known.has(u))) {
+	for (const uri of uris) {
 		const status = await fetchRemoteStatus(uri, loader)
-		if (status.kind === 'transient') {
-			left++
-		} else {
+		if (status.kind !== 'transient') {
 			fetched[uri] = status.kind === 'ok' ? status.status : null
 		}
 	}
-	return { fetched, left }
+	return fetched
 }
 
 // FetchFeaturedTagsCollectionService: the Hashtags of its pages, until MAX_FEATURED_TAGS items, a page without items,
@@ -205,33 +199,28 @@ async function readFeaturedTags(
 	return hashtagNames(items).slice(0, MAX_FEATURED_TAGS)
 }
 
-// What a round reads of one account's collections: the collections first, then the pinned statuses to fetch, which
-// take what is left of the budget. unfinished: something may be read later (a fetch that may pass, the budget spent),
-// so the sync continues; progressed: a pinned status was fetched, so a later round has less to do.
+// Phase 1: what a round reads of one account's collections. unfinished: something may be read later (a fetch that may
+// pass, the budget spent), so the read is tried again.
 export async function readCollections(
 	sync: CollectionSync,
-	loader: DocumentLoader,
-	stored: (uris: string[]) => Promise<string[]>
-): Promise<Pick<CollectionSyncInput, 'pins' | 'tags' | 'hideCollections' | 'unfinished' | 'progressed'>> {
+	loader: DocumentLoader
+): Promise<Pick<CollectionReadInput, 'pins' | 'tags' | 'hideCollections' | 'unfinished'>> {
 	const origin = originOf(sync.accountUri)
 	const hideCollections = await hidesCollections(sync, origin, loader)
 	const read = sync.featured === null ? null : await readFeatured(sync, origin, loader)
 	const featured = read === 'transient' ? null : read
 	const listed =
 		sync.featuredTags === null ? (featured?.hashtags ?? null) : await readFeaturedTags(sync, origin, loader)
-	const tags = listed === 'transient' ? null : listed
-	const pinned = featured === null ? null : await fetchPinned(featured.uris, loader, stored)
 	return {
-		pins: featured === null || pinned === null ? null : { uris: featured.uris, fetched: pinned.fetched },
-		tags,
+		pins: featured === null ? null : { uris: featured.uris },
+		tags: listed === 'transient' ? null : listed,
 		hideCollections,
 		// hidesCollections is null only when a collection may be read later.
-		unfinished: hideCollections === null || read === 'transient' || listed === 'transient' || (pinned?.left ?? 0) > 0,
-		progressed: Object.keys(pinned?.fetched ?? {}).length > 0,
+		unfinished: hideCollections === null || read === 'transient' || listed === 'transient',
 	}
 }
 
-// One round: up to COLLECTION_SYNCS_PER_ROUND syncs, each claimed, read and applied. Returns whether another waits.
+// One round: up to COLLECTION_SYNCS_PER_ROUND syncs, each claimed, its phase run and handed back. Returns whether another waits.
 // A Store refusal (maintenance) surfaces as StoreUnavailableError for the caller; a claimed sync whose round died is
 // claimed again after its lease.
 export async function syncCollections(env: Env, deps: InboxDeps): Promise<boolean> {
@@ -265,21 +254,20 @@ export async function syncCollections(env: Env, deps: InboxDeps): Promise<boolea
 			sync.signer,
 			requestBudget(Date.now())
 		)
-		const read = await readCollections(sync, loaders.document, (uris) =>
-			callStore(() => store().storedStatusUris(build, { uris }))
-		)
-		if (state.storeError !== null) {
-			throw state.storeError
+		const round = { origin, accountUri: sync.accountUri, generation: sync.generation }
+		if (sync.phase === 'read') {
+			const read = await readCollections(sync, loaders.document)
+			if (state.storeError !== null) {
+				throw state.storeError
+			}
+			pending = await callStore(() => store().completeCollectionRead(build, { ...round, now: deps.now(), ...read }))
+		} else {
+			const fetched = await fetchPending(sync.uris, loaders.document)
+			if (state.storeError !== null) {
+				throw state.storeError
+			}
+			pending = await callStore(() => store().completePinFetches(build, { ...round, now: deps.now(), fetched }))
 		}
-		pending = await callStore(() =>
-			store().applyCollectionSync(build, {
-				now: deps.now(),
-				origin,
-				accountUri: sync.accountUri,
-				generation: sync.generation,
-				...read,
-			})
-		)
 	}
 	return pending
 }

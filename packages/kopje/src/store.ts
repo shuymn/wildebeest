@@ -425,12 +425,12 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, remoteCollections.claimCollectionSync, input)
 	}
 
-	storedStatusUris(callerBuild: string, input: OperationInput<typeof remoteCollections.storedStatusUris>) {
-		return this.#kernel.execute(callerBuild, remoteCollections.storedStatusUris, input)
+	completeCollectionRead(callerBuild: string, input: OperationInput<typeof remoteCollections.completeCollectionRead>) {
+		return this.#kernel.execute(callerBuild, remoteCollections.completeCollectionRead, input)
 	}
 
-	applyCollectionSync(callerBuild: string, input: OperationInput<typeof remoteCollections.applyCollectionSync>) {
-		return this.#kernel.execute(callerBuild, remoteCollections.applyCollectionSync, input)
+	completePinFetches(callerBuild: string, input: OperationInput<typeof remoteCollections.completePinFetches>) {
+		return this.#kernel.execute(callerBuild, remoteCollections.completePinFetches, input)
 	}
 
 	remoteKey(callerBuild: string, input: OperationInput<typeof inbox.getRemoteKey>) {

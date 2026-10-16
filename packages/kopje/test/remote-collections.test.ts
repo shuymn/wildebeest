@@ -439,6 +439,55 @@ describe('reading a remote account’s collections', () => {
 		expect(await pinned(t, bobId, null)).toEqual(notes.map((note) => note.id))
 	})
 
+	it('drops pending statuses that cannot be used, and reaches those after them', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		// More statuses that answer 404 than a round's budget, then ones that can be fetched.
+		const gone = Array.from({ length: REQUEST_MAX_FETCHES }, (_, i) => `${bob.uri}/statuses/gone${i}`)
+		const notes = Array.from({ length: 3 }, () => mastodonNote(bob))
+		for (const note of notes) {
+			t.web.serve(note.id, { '@context': AS, ...note })
+		}
+		await servedCollections(t, bob, [...gone, ...notes.map((note) => note.id)], [])
+		const bobId = await followed(t, bob)
+		await sync(t)
+		expect(await pinned(t, bobId, null)).toEqual(notes.map((note) => note.id))
+		expect(await rows(t, 'collection_pins_pending')).toEqual([{ n: 0 }])
+		// Each one that answered 404 was asked for once.
+		expect(gone.map((uri) => t.web.fetched.filter((u) => u === uri).length)).toEqual(gone.map(() => 1))
+	})
+
+	it('reaches the pinned statuses even when reading the collections spends a whole budget', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const note = mastodonNote(bob)
+		t.web.serve(note.id, { '@context': AS, ...note })
+		await servedCollections(t, bob, [note.id], [])
+		// Public network collections (two fetches), the inline featured collection (one), and a featuredTags root with
+		// MAX_FEATURED_TAG_PAGES pages (five): eight fetches, the whole budget, before any pinned status.
+		const tags = `${bob.uri}/collections/tags`
+		const pageUrl = (n: number) => `${tags}?page=${n}`
+		t.web.serve(tags, { '@context': AS, id: tags, type: 'OrderedCollection', first: pageUrl(1) })
+		for (let n = 1; n <= MAX_FEATURED_TAG_PAGES; n++) {
+			t.web.serve(pageUrl(n), {
+				'@context': AS,
+				id: pageUrl(n),
+				type: 'OrderedCollectionPage',
+				next: pageUrl(n + 1),
+				orderedItems: [hashtag(`page${n}`)],
+			})
+		}
+		t.web.serve(`${bob.uri}/followers`, followCollection(bob, 'followers', true))
+		t.web.serve(`${bob.uri}/following`, followCollection(bob, 'following', true))
+		expect(2 + 1 + 1 + MAX_FEATURED_TAG_PAGES).toBe(REQUEST_MAX_FETCHES)
+		const bobId = await followed(t, bob)
+		await sync(t)
+		expect(await pinned(t, bobId, null)).toEqual([note.id])
+		expect((await featuredTags(t, bobId)).length).toBe(MAX_FEATURED_TAG_PAGES)
+		// The collections were read once.
+		expect(t.web.fetched.filter((url) => url === tags)).toHaveLength(1)
+	})
+
 	it('keeps the first MAX_REMOTE_PINS items and MAX_FEATURED_TAGS hashtags of an oversized collection', async () => {
 		const t = await setup()
 		const bob = await mastodonActor(t.web, 'bob')

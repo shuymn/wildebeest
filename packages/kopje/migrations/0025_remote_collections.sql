@@ -18,14 +18,16 @@
 --   only writer (applyCollectionSync) writes 0 or 1.
 -- - collection_syncs holds the remote accounts whose collections are to be read again (Mastodon's
 --   SynchronizeFeaturedCollectionWorker and SynchronizeFeaturedTagsCollectionWorker), one row each, written when the
---   account's document is stored and deleted once the Worker has read all of them (or after MAX_SYNC_ATTEMPTS rounds
---   that did nothing: attempts counts those, and a round that fetched something leaves the rest due at once). due_at is when a round may take it: the time it was asked for, then, once a round takes it, the
---   end of that round's lease, so that a round that died leaves it to a later one. A round seeks the earliest due_at
---   at or before its time through collection_syncs_due, so syncs held by rounds are never read past. generation counts
---   the requests: a request while a round holds the sync (an Update of the actor naming other collections) raises it,
---   and the round's end deletes the sync only if the generation it claimed is still the one asked for, else makes it
---   due at once. It goes with its account (purgeRelationships, and
---   the cascade as a backstop).
+--   account's document is stored. A sync has two phases (src/domain/remote-collections.ts): a round reads the
+--   collections and applies them, leaving the pinned statuses Kopje does not store in collection_pins_pending (at most
+--   MAX_REMOTE_PINS per account, with the pin time the collection's order gives each); later rounds fetch those. The
+--   row goes once the last request is read through and nothing is pending, or after MAX_SYNC_ATTEMPTS rounds without
+--   progress (attempts). due_at is when a round may take it: the time it was asked for, then, once a round takes it,
+--   the end of that round's lease, so that a round that died leaves it to a later one. A round seeks the earliest
+--   due_at at or before its time through collection_syncs_due, so syncs held by rounds are never read past.
+--   generation counts the requests and read_through is the last one read: a request while a round holds the sync (an
+--   Update of the actor naming other collections) leaves it to be read again. Both tables go with their account
+--   (purgeRelationships, and the cascade as a backstop).
 --
 -- Cost: the copies read and write each pin and featured hashtag once. Until now only local accounts have them, at
 -- most five pins (StatusPinValidator) and ten featured hashtags (FeaturedTag::LIMIT) each, so the work grows with the
@@ -71,7 +73,17 @@ CREATE TABLE collection_syncs (
   account_id TEXT NOT NULL PRIMARY KEY REFERENCES accounts (id) ON DELETE CASCADE,
   due_at INTEGER NOT NULL,
   generation INTEGER NOT NULL DEFAULT 1,
+  read_through INTEGER NOT NULL DEFAULT 0,
   attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0)
 );
 
 CREATE INDEX collection_syncs_due ON collection_syncs (due_at);
+
+-- Pinned statuses a read listed that Kopje did not store yet, at most MAX_REMOTE_PINS per account, each with the pin
+-- time the collection's order gives it.
+CREATE TABLE collection_pins_pending (
+  account_id TEXT NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,
+  uri TEXT NOT NULL,
+  pinned_at TEXT NOT NULL,
+  PRIMARY KEY (account_id, uri)
+) WITHOUT ROWID;

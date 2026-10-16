@@ -1309,8 +1309,8 @@ function purgeRelationships(db: Db, id: string, budget: Budget): void {
 	// The local users' reports of the account (migration 0022_reports), as Mastodon's DeleteAccountService destroys an
 	// account's targeted_reports.
 	spend(db, budget, 'DELETE FROM reports WHERE id IN (SELECT id FROM reports WHERE target_account_id = ? LIMIT ?)', id)
-	// Its pins and featured hashtags, at most MAX_REMOTE_PINS and MAX_FEATURED_TAGS, and the sync of them that waits
-	// (migration 0025_remote_collections).
+	// Its pins and featured hashtags, at most MAX_REMOTE_PINS and MAX_FEATURED_TAGS, the sync of them that waits
+	// and its pending pinned statuses (migration 0025_remote_collections).
 	spend(
 		db,
 		budget,
@@ -1322,6 +1322,13 @@ function purgeRelationships(db: Db, id: string, budget: Budget): void {
 		db,
 		budget,
 		'DELETE FROM featured_tags WHERE id IN (SELECT id FROM featured_tags WHERE account_id = ? LIMIT ?)',
+		id
+	)
+	spend(
+		db,
+		budget,
+		`DELETE FROM collection_pins_pending WHERE account_id = ?1
+			AND uri IN (SELECT uri FROM collection_pins_pending WHERE account_id = ?1 LIMIT ?2)`,
 		id
 	)
 	spend(
@@ -1595,6 +1602,7 @@ export const PURGED_ACCOUNT_CHILDREN: readonly { table: string; check: string; f
 	{ table: 'status_pins', check: 'account_id = ?1' },
 	{ table: 'featured_tags', check: 'account_id = ?1' },
 	{ table: 'collection_syncs', check: 'account_id = ?1' },
+	{ table: 'collection_pins_pending', check: 'account_id = ?1' },
 ]
 
 const ACCOUNT_CHILDREN_EXIST = PURGED_ACCOUNT_CHILDREN.map((child) => {

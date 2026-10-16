@@ -55,7 +55,6 @@ import {
 	claimCollectionSync,
 	featureRemote,
 	MAX_REMOTE_PINS,
-	storedStatusUris,
 	SYNC_LEASE_MS,
 	unfeatureRemote,
 } from '../src/domain/remote-collections'
@@ -3739,16 +3738,15 @@ describe('clearing and dismissing touch a bounded batch, and reads skip what the
 
 // What Kopje learned of a remote account's collections (migration 0025_remote_collections) is read like a local
 // account's: its pins by their key (at most MAX_REMOTE_PINS), its featured hashtags (at most MAX_FEATURED_TAGS), and
-// whether it hides its network by a key lookup. Each read, and a round's claim of the oldest waiting sync and its look
-// up of the pinned statuses Kopje has, reads the same rows however many statuses the account has, however many
-// accounts follow it, and however many other remote accounts have pins, featured hashtags and syncs waiting or held by rounds.
+// whether it hides its network by a key lookup. Each read, and a round's claim of the oldest waiting sync, reads the
+// same rows however many statuses the account has, however many accounts follow it, and however many other remote
+// accounts have pins, featured hashtags and syncs waiting or held by rounds.
 describe("a remote account's learned collections cost a bounded read (RES-7)", () => {
 	const OWNER = '930000000000000000'
 	const OWNER_URI = 'https://far.example/users/owner'
 	const OTHER_BASE = 931000000000000000n
 	const STATUS_BASE = 940000000000000000n
 	const FEATURED_BASE = 950000000000000000n
-	const pinnedUri = (i: number) => `${OWNER_URI}/statuses/pinned${i}`
 
 	async function learned(count: number): Promise<StoreStub> {
 		const store = await migratedStore()
@@ -3865,12 +3863,6 @@ describe("a remote account's learned collections cost a bounded read (RES-7)", (
 				listFollows,
 				{ ...follows, direction: 'followers' },
 				(output) => expect((output as { value: { items: unknown[] } }).value.items).toEqual([]),
-			],
-			[
-				'stored pins',
-				storedStatusUris,
-				{ uris: Array.from({ length: MAX_REMOTE_PINS }, (_, i) => pinnedUri(i)) },
-				(output) => expect(output).toHaveLength(MAX_REMOTE_PINS),
 			],
 			[
 				'claim',

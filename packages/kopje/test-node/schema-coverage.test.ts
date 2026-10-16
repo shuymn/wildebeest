@@ -31,6 +31,7 @@ const NOT_CARRIED: Record<string, string> = {
 		'legacy never wrote its endorsements table, and a legacy row there stops the conversion (UNUSED_LEGACY_TABLES)',
 	backup_media: 'the backup media index of one bucket; a converted Store starts a fresh baseline',
 	collection_syncs: "work Kopje asks for when it stores a remote account's document; legacy has none",
+	collection_pins_pending: 'pinned statuses a sync of Kopje has yet to fetch; legacy has none',
 	conversation_mutes:
 		'legacy never wrote its conversation_mutes table, and a legacy row there stops the conversion (UNUSED_LEGACY_TABLES)',
 	deliveries: 'outbound queue; legacy queues are not carried',
