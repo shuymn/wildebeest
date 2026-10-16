@@ -1,5 +1,12 @@
 import { type Account, edgeRangeSql, type Page, type PageQuery, type Present, presentAccountsById } from './accounts'
-import { notificationPolicySql, notifiedSql, type PolicyChoice, statusReads, type WithVisibleStatus } from './audience'
+import {
+	FILTERABLE_TYPES,
+	notificationPolicySql,
+	notifiedSql,
+	type PolicyChoice,
+	statusReads,
+	type WithVisibleStatus,
+} from './audience'
 import { type UserContext, userReadOperation, userWriteOperation } from './auth'
 import { addToConversation } from './conversations'
 import { presentStatuses, type Status } from './status-presenter'
@@ -70,15 +77,17 @@ export function notify(db: Db, input: NotifyInput): void {
 			input.statusId
 		)
 	}
-	const policy =
-		db.first<{ policy: PolicyChoice }>(
-			`SELECT ${notificationPolicySql('?1', '?2', '?3', '?4', '?5')} AS policy`,
-			input.recipientId,
-			input.type,
-			input.fromId,
-			input.statusId,
-			now
-		)?.policy ?? 'accept'
+	// A type the policy never filters is accepted without reading it (notificationPolicySql's first arm).
+	const policy = !FILTERABLE_TYPES.includes(input.type)
+		? 'accept'
+		: (db.first<{ policy: PolicyChoice }>(
+				`SELECT ${notificationPolicySql('?1', '?2', '?3', '?4', '?5')} AS policy`,
+				input.recipientId,
+				input.type,
+				input.fromId,
+				input.statusId,
+				now
+			)?.policy ?? 'accept')
 	if (policy === 'drop') {
 		return
 	}

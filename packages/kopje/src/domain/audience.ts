@@ -713,7 +713,7 @@ function privateMentionNotInResponseSql(r: string, type: string, from: string, s
 		AND pd.visibility = 'direct' AND NOT (pd.in_reply_to_id IS NOT NULL AND EXISTS (
 			WITH RECURSIVE pw(id, parent, hit, depth) AS (
 				SELECT ps.id, ps.in_reply_to_id, ${mentionsSender('ps')}, 0 FROM main.statuses ps
-				WHERE ps.id = (SELECT pq.in_reply_to_id FROM main.statuses pq WHERE pq.id = ${status})
+				WHERE ps.id = pd.in_reply_to_id
 				UNION ALL
 				SELECT ps.id, ps.in_reply_to_id, ps.account_id = ${r} AND ${mentionsSender('ps')}, pw.depth + 1
 				FROM pw JOIN main.statuses ps ON ps.id = pw.parent
