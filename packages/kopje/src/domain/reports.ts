@@ -295,6 +295,7 @@ function presentAdminReports(db: Db, rows: readonly ReportRow[], admin: Admin, p
 			...(row.assigned_account_id === null ? [] : [row.assigned_account_id]),
 			...(row.action_taken_by_account_id === null ? [] : [row.action_taken_by_account_id]),
 		]),
+		admin.accountId,
 		present
 	)
 	const rules = rows.some((row) => row.rule_ids !== null) ? instanceRules(db) : []

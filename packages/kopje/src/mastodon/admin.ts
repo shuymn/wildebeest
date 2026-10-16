@@ -10,6 +10,7 @@ import {
 } from './context'
 import { mastodonError } from './errors'
 import type { Params } from './params'
+import { reportResponse } from './reports'
 import type { PageQuery } from '../domain/accounts'
 import { ADMIN_REPORTS_LIMIT, MAX_ADMIN_REPORTS_LIMIT, type ReportAction } from '../domain/reports'
 
@@ -124,20 +125,6 @@ export const reports: ApiHandler = async (c, deps) => {
 		c.header('Link', links.join(', '))
 	}
 	return c.json(result.items)
-}
-
-// An admin report operation's answer (domain/reports.ts, AdminReportResult as the RPC returns it).
-type ReportAnswer = { status: 'ok'; report: object } | { status: 'not_found' } | { status: 'invalid'; errors: string[] }
-
-function reportResponse(result: ReportAnswer, c: ApiContext): Response {
-	switch (result.status) {
-		case 'ok':
-			return c.json(result.report)
-		case 'not_found':
-			return mastodonError(404, 'Record not found')
-		case 'invalid':
-			return mastodonError(422, `Validation failed: ${result.errors.join(', ')}`)
-	}
 }
 
 // GET /api/v1/admin/reports/:id.

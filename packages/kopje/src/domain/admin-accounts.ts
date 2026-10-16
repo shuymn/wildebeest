@@ -1,5 +1,5 @@
 import { ACCOUNT_COLUMNS, ACCOUNT_FROM, type Account, type AccountRow, type Present, presentAccount } from './accounts'
-import { accessAdminRefusal, adminAccountId, normalizedEmail } from './admin-authority'
+import { accessAdminRefusal, normalizedEmail } from './admin-authority'
 import { EVERYONE_ROLE, OWNER_ROLE, type Role } from './auth'
 import { logAction } from './moderation-log'
 import { writeOperation } from './operation'
@@ -37,9 +37,14 @@ export type AdminAccount = {
 	role: Role | null
 }
 
-// The admin entities of `ids`, read in one query; an id with no account is left out.
-export function presentAdminAccounts(db: Db, ids: readonly string[], present: Present): Map<string, AdminAccount> {
-	const admin = adminAccountId(db)
+// The admin entities of `ids`, read in one query; an id with no account is left out. `adminId` is the OAuth admin the
+// calling admin operation has just checked (adminGuarded), whose account shows the admin role.
+export function presentAdminAccounts(
+	db: Db,
+	ids: readonly string[],
+	adminId: string,
+	present: Present
+): Map<string, AdminAccount> {
 	const rows = db.all<AccountRow & { email: string | null }>(
 		`SELECT ${ACCOUNT_COLUMNS}, l.email FROM ${ACCOUNT_FROM} WHERE a.id IN (SELECT value FROM json_each(?1))`,
 		JSON.stringify([...new Set(ids)])
@@ -67,7 +72,7 @@ export function presentAdminAccounts(db: Db, ids: readonly string[], present: Pr
 					invite_request: null,
 					ips: [],
 					account,
-					role: local ? (row.id === admin ? OWNER_ROLE : EVERYONE_ROLE) : null,
+					role: local ? (row.id === adminId ? OWNER_ROLE : EVERYONE_ROLE) : null,
 				},
 			]
 		})
