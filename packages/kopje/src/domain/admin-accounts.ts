@@ -215,7 +215,7 @@ export function prefixEnd(prefix: string): string | null {
 
 // The roles that match nothing in Kopje: every local account has one of '3' and '-99', and a remote account none.
 function noRole(roleIds: readonly string[]): boolean {
-	return !roleIds.includes('3') && !roleIds.includes('-99')
+	return !roleIds.includes(OWNER_ROLE.id) && !roleIds.includes(EVERYONE_ROLE.id)
 }
 
 // Whether no account can match, so the list answers [] without reading: no account is pending, disabled, silenced or
@@ -229,9 +229,10 @@ function matchesNothing(filter: AdminAccountFilter): boolean {
 	)
 }
 
-const startsWith = (value: string, prefix: string) => asciiLower(value).startsWith(asciiLower(prefix))
+// `prefix` is already folded (ordered folds the filter's prefixes once per set).
+const startsWith = (value: string, prefix: string) => asciiLower(value).startsWith(prefix)
 
-// AccountFilter's scopes in memory, over an account the plan read.
+// AccountFilter's scopes in memory, over an account the plan read, with the filter's prefixes folded (ordered).
 function matches(filter: AdminAccountFilter, adminId: string, row: Candidate): boolean {
 	const local = row.domain === null
 	return (
@@ -239,7 +240,8 @@ function matches(filter: AdminAccountFilter, adminId: string, row: Candidate): b
 		(filter.status === null ||
 			(filter.status === 'active' && row.unavailable === 0) ||
 			(filter.status === 'suspended' && row.unavailable === 1)) &&
-		(filter.roleIds === null || (local && filter.roleIds.includes(row.id === adminId ? '3' : '-99'))) &&
+		(filter.roleIds === null ||
+			(local && filter.roleIds.includes(row.id === adminId ? OWNER_ROLE.id : EVERYONE_ROLE.id))) &&
 		(filter.username === null || startsWith(row.username, filter.username)) &&
 		(filter.byDomain === null || row.domain === filter.byDomain) &&
 		(filter.displayName === null || startsWith(row.display_name, filter.displayName)) &&
@@ -274,8 +276,15 @@ const inBounds = (bounds: Bounds, id: string) =>
 
 // A complete set's matches inside the cursor, in the page's order.
 function ordered(rows: readonly Candidate[], filter: AdminAccountFilter, adminId: string, bounds: Bounds): Candidate[] {
+	const fold = (prefix: string | null) => (prefix === null ? null : asciiLower(prefix))
+	const folded = {
+		...filter,
+		username: fold(filter.username),
+		displayName: fold(filter.displayName),
+		email: fold(filter.email),
+	}
 	return rows
-		.filter((row) => inBounds(bounds, row.id) && matches(filter, adminId, row))
+		.filter((row) => inBounds(bounds, row.id) && matches(folded, adminId, row))
 		.sort((a, b) => (a.id < b.id === bounds.ascending ? -1 : 1))
 }
 

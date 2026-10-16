@@ -20,6 +20,7 @@ import {
 	type AdminAccountStatus,
 	MAX_ADMIN_ACCOUNTS_LIMIT,
 } from '../domain/admin-accounts'
+import { OWNER_ROLE } from '../domain/auth'
 import { ADMIN_REPORTS_LIMIT, MAX_ADMIN_REPORTS_LIMIT, type ReportAction } from '../domain/reports'
 
 // The Mastodon admin API (/api/v1/admin/*, /api/v2/admin/*). Every route is Mastodon's authorize_if_got_token!: the
@@ -276,7 +277,7 @@ export function accountFilter(version: 1 | 2, p: Params): ParsedAccountFilter {
 	if (version === 1) {
 		origin = sent('remote') !== undefined ? 'remote' : 'local'
 		status = V1_STATUSES.findLast((name) => sent(name) !== undefined) ?? 'active'
-		roleIds = sent('staff') !== undefined ? ['3'] : null
+		roleIds = sent('staff') !== undefined ? [OWNER_ROLE.id] : null
 		names = V1_ACCOUNT_PARAMS
 	} else {
 		const roles = arrayParam(p, 'role_ids')
@@ -284,7 +285,7 @@ export function accountFilter(version: 1 | 2, p: Params): ParsedAccountFilter {
 		if (v2) {
 			origin = sent('origin') ?? null
 			status = sent('status') ?? null
-			roleIds = sent('permissions') === 'staff' ? ['3'] : (roles ?? null)
+			roleIds = sent('permissions') === 'staff' ? [OWNER_ROLE.id] : (roles ?? null)
 			names = V2_ACCOUNT_PARAMS
 		} else {
 			const one = (candidates: readonly string[]) => {
@@ -293,7 +294,7 @@ export function accountFilter(version: 1 | 2, p: Params): ParsedAccountFilter {
 			}
 			origin = one(['local', 'remote'])
 			status = one(V1_STATUSES)
-			roleIds = sent('staff') !== undefined ? ['3'] : null
+			roleIds = sent('staff') !== undefined ? [OWNER_ROLE.id] : null
 			names = [...new Set([...V2_ACCOUNT_PARAMS, ...V1_ACCOUNT_PARAMS])]
 		}
 	}

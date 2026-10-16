@@ -108,7 +108,7 @@ export function availableLocalSql(l: string): string {
 // The same rule for an account `a` with its local_accounts row `l` LEFT JOINed (NULL for a remote account), read
 // from the two rows without a lookup: the admin's list of accounts (admin-accounts.ts) reads both rows anyway.
 export function availableJoinedSql(a: string, l: string): string {
-	return `(${l}.suspended_at IS NULL AND ${a}.deleted_at IS NULL)`
+	return `(${availableLocalSql(l)} AND ${notDeletingSql(a)})`
 }
 
 // The remote accounts whose deletion has started, the entries of the partial index accounts_deleted: its range in id
