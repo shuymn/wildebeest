@@ -90,6 +90,17 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       and accounts that have not posted are ordered newest first (Mastodon leaves their order open); an unknown `order`
       reads as `active` (Mastodon fails); Kopje has no silenced accounts, and it does not record that an account moved, so a moved
       account stays listed while its actor says it is discoverable.
+- oEmbed, as Mastodon 4.5 has it: `GET /api/oembed?url=` (no token) answers a `rich` embed of a status, with
+  `author_name`, `author_url`, `provider_name`, `provider_url`, `cache_age` (a day), `width` (`maxwidth`, 400 by
+  default) and `height` (`maxheight`, else null), and HTML that links to the status and loads `/assets/embed.js`. The
+  script replaces the link with an iframe of the status's embed page, `/@username/:id/embed`, sized to the post. A
+  status can be embedded exactly when its page shows it: a public or unlisted post, not a boost, of a local account that
+  is not suspended; anything else, and any URL that is not a status page or object URI of this instance, answers 404.
+  The embed page is the one page other sites may frame; every other page still refuses framing.
+    - Where Kopje differs from Mastodon: the URL must name the status's author (`/@alice/:id` of another account's
+      status answers 404, as its page does), and `/@alice@this.domain/:id` and the object URI (`/ap/o/...`) are taken;
+      the HTML says "View on Kopje" without Mastodon's logo; the script is at `/assets/embed.js` (Mastodon:
+      `/embed.js`) and frames only the `blockquote` embeds (not the older `iframe` ones).
 
 ### Changed
 
