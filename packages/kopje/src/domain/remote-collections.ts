@@ -44,16 +44,15 @@ export const SYNC_RETRY_MS = 15 * 60 * 1000
 export function requestCollectionSync(db: Db, accountId: string, now: number): boolean {
 	// A new request has its own MAX_SYNC_ATTEMPTS, and is due at once unless a round holds the sync (whose end leaves it
 	// due, endRound): rounds that failed for the older one neither drop nor delay it.
-	db.run(
+	const row = db.first<{ due: number }>(
 		`INSERT INTO collection_syncs (account_id, due_at) VALUES (?1, ?2)
 		ON CONFLICT (account_id) DO UPDATE SET generation = generation + 1, attempts = 0,
-			due_at = CASE WHEN token IS NOT NULL AND due_at > ?2 THEN due_at ELSE min(due_at, ?2) END`,
+			due_at = CASE WHEN token IS NOT NULL AND due_at > ?2 THEN due_at ELSE min(due_at, ?2) END
+		RETURNING due_at <= ?2 AS due`,
 		accountId,
 		now
 	)
-	return (
-		db.first('SELECT 1 AS x FROM collection_syncs WHERE account_id = ? AND due_at <= ?', accountId, now) !== undefined
-	)
+	return row?.due === 1
 }
 
 // The collections a stored actor document names, http(s) only, as strings (an id given as an object with an id too).
