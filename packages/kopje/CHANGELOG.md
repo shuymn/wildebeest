@@ -12,7 +12,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 - The streaming API's WebSocket, as Mastodon 4.5's streaming server serves it, for the notifications: clients open
   `wss://<domain>/api/v1/streaming` (any path below it is taken too) with the token as the subprotocol (echoed, as
-  masto.js needs), in the `Authorization` header or in `access_token`, then send
+  masto.js needs) or in the `Authorization` header, then send
   `{"type":"subscribe","stream":"user:notification"}` (or `user`, or `?stream=` on connect). `user:notification`
   (`read` or `read:notifications`) and `user` (`read` or `read:statuses`, with notifications only if the token also has
   `read:notifications`) carry `notification` events: each new notification the recipient's list shows, as REST
@@ -28,7 +28,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       socket (`Too many subscriptions`), and incoming messages of text only (1003), at most 4 KiB and 120 a minute
       (1008).
     - Where Kopje differs from Mastodon: there is no protocol ping every 30 seconds (hibernated sockets are answered by
-      the platform without waking the Store); the message rate counts every message a socket sends.
+      the platform without waking the Store); the message rate counts every message a socket sends; and the token is
+      not taken from an `access_token` query parameter, which would reach the platform's request logs (masto.js and
+      Ice Cubes send it as the subprotocol), so a request with only that answers 401 `Missing access token`.
 
 ### Instance changes
 

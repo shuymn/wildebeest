@@ -24,7 +24,7 @@ afterEach(() => {
 })
 
 describe('the upgrade', () => {
-	it.each(['protocol', 'header', 'query'] as const)('takes the token from the %s', async (via) => {
+	it.each(['protocol', 'header'] as const)('takes the token from the %s', async (via) => {
 		const h = await community(['alice'])
 		const response = await upgrade(h, h.users.alice.token, { via })
 		expect(response.status).toBe(101)
@@ -51,6 +51,9 @@ describe('the upgrade', () => {
 
 	it('answers 401 without a token, with a token that is not valid, and with an app token', async () => {
 		const h = await community(['alice'])
+		// A token in the query alone is not read (it would reach the platform's request logs): as none.
+		const query = await upgrade(h, h.users.alice.token, { via: 'query' })
+		expect([query.status, query.headers.get('x-error-message')]).toEqual([401, 'Missing access token'])
 		const missing = await upgrade(h, null)
 		expect([missing.status, missing.headers.get('x-error-message'), await missing.text()]).toEqual([
 			401,

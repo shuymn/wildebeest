@@ -103,12 +103,11 @@ describe('log redaction', () => {
 		])
 	})
 
-	it("logs a failed streaming upgrade by its route, never the query's access_token", async () => {
+	it('logs a failed streaming upgrade by its route, never its token or query', async () => {
 		const logs = captureLogs()
-		const response = await harness(failingStore).request(
-			'/api/v1/streaming?access_token=kopje-dummy-token-0123&stream=dummy-query-secret',
-			{ headers: { upgrade: 'websocket' } }
-		)
+		const response = await harness(failingStore).request('/api/v1/streaming?stream=dummy-query-secret', {
+			headers: { upgrade: 'websocket', 'sec-websocket-protocol': 'kopje-dummy-token-0123' },
+		})
 		expect(response.status).toBe(500)
 		logs.expectNoSecrets()
 		expect(logs.lines.map((line) => JSON.parse(line) as unknown)).toEqual([

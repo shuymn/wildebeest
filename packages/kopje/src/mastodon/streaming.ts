@@ -9,10 +9,11 @@ import { sha256Hex } from '../security/tokens'
 // any path below it, as Mastodon's server takes an upgrade on any path) and the health check. SSE is not served: no
 // surveyed client uses it, and a request that is not an upgrade answers 404.
 //
-// The token comes from the Authorization header, else the access_token query parameter, else Sec-WebSocket-Protocol
-// (streaming/index.js accountFromRequest); the subprotocol a client offered is echoed, or browsers fail the handshake.
-// Only the token's sha256 goes to the Store, which validates it. The query is never logged (app.ts logs the route
-// template only, DATA-5).
+// The token comes from the Authorization header, else Sec-WebSocket-Protocol (streaming/index.js accountFromRequest);
+// the subprotocol a client offered is echoed, or browsers fail the handshake. Unlike Mastodon, an access_token query
+// parameter is not read, as the REST API reads none (mastodon/access.ts): a URL reaches the platform's invocation logs,
+// and a token there would too (DATA-5). masto.js and Ice Cubes send the subprotocol. Only the token's sha256 goes to
+// the Store, which validates it.
 
 const STORE_UPGRADE = 'https://store.internal/stream/upgrade'
 
@@ -35,9 +36,7 @@ export function streamingRoutes(deps: Pick<ApiDeps, 'build' | 'now' | 'store'>) 
 		const url = new URL(request.url)
 		const protocol = request.headers.get('sec-websocket-protocol')?.split(',')[0]?.trim() || undefined
 		const authorization = request.headers.get('authorization')
-		const token = authorization
-			? authorization.replace(/^Bearer /, '')
-			: url.searchParams.get('access_token') || protocol
+		const token = authorization ? authorization.replace(/^Bearer /, '') : protocol
 		if (!token) {
 			return refusal(401, 'Missing access token')
 		}
