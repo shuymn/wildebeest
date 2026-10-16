@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { sql } from './api-helpers'
+import { seedFollows, sql } from './api-helpers'
 import { harness, inboxDeps, NOW } from './app-helpers'
 import { fixtureKeyGen, LEGACY_EMPTY_KEK, seedLocalAccount } from './federation-helpers'
 import { BUILD, completeSetup, migratedStore } from './helpers'
@@ -1245,5 +1245,54 @@ describe('endorsements and inbound activities', () => {
 		expect(await pins(t)).toEqual([])
 		expect(await sql(t.store, 'SELECT * FROM account_notes')).toEqual([])
 		expect(await accountId(t.store, bob.uri)).toBeUndefined()
+	})
+})
+
+// Mastodon's follow limit applies to the follow API only: a remote Accept (FollowRequest#authorize!) and a Move's
+// follower transfer (FollowMigrationService) bypass it, so they go through for a follower past it.
+describe('the follow limit and inbound activities', () => {
+	const MANY = { direction: 'following', domain: 'many.example', base: 700_000_000_000_000_000 } as const
+
+	it('does not stop a remote Accept of our request', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const bobId = await ourFollow(t, bob)
+		await seedFollows(t.store, ALICE, 7_500, MANY)
+		const accept = {
+			'@context': AS,
+			id: `${bob.uri}#accepts/follows/1`,
+			type: 'Accept',
+			actor: bob.uri,
+			object: { id: `${LOCAL}/some-follow`, type: 'Follow', actor: ALICE_URI, object: bob.uri },
+		}
+		expect(await t.post(bob, accept)).toBe(202)
+		expect((await follows(t.store)).find((f) => f.target_account_id === bobId)?.state).toBe('accepted')
+		expect((await counts(t.store, ALICE))?.following_count).toBe(7_501)
+	})
+
+	it("moves a follower past the limit to the Move's target", async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const bob2 = await mastodonActor(t.web, 'bob2', { origin: 'https://new.example', key: 2, extra: {} })
+		t.web.serve(bob2.uri, { ...bob2.document, alsoKnownAs: [bob.uri] })
+		const bobId = await ourFollow(t, bob)
+		await sql(t.store, "UPDATE follows SET state = 'accepted' WHERE account_id = ?", ALICE)
+		await seedFollows(t.store, ALICE, 7_499, MANY)
+		expect((await counts(t.store, ALICE))?.following_count).toBe(7_500)
+		const move = {
+			'@context': AS,
+			id: `${bob.uri}#moves/1`,
+			type: 'Move',
+			actor: bob.uri,
+			object: bob.uri,
+			target: bob2.uri,
+		}
+		expect(await t.post(bob, move)).toBe(202)
+		const bob2Id = (await accountId(t.store, bob2.uri))!
+		// The source is unfollowed and the target requested, though the request is past the limit.
+		const moved = (await follows(t.store)).filter(
+			(f) => f.account_id === ALICE && (f.target_account_id === bobId || f.target_account_id === bob2Id)
+		)
+		expect(moved).toMatchObject([{ target_account_id: bob2Id, state: 'pending' }])
 	})
 })
