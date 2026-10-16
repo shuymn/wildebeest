@@ -27,7 +27,7 @@ import * as featuredTags from './domain/featured-tags'
 import { kvCas, kvDelete, kvGet, kvList, kvSet } from './domain/fedify-kv'
 import * as filters from './domain/filters'
 import * as inbox from './domain/inbox'
-import { instanceInfo, instancePeers, instanceRules } from './domain/instance'
+import { instanceInfo, instancePeers, instanceRules, searchPeers } from './domain/instance'
 import * as lists from './domain/lists'
 import * as markers from './domain/markers'
 import * as media from './domain/media'
@@ -586,6 +586,10 @@ export class Store extends DurableObject<Env> {
 
 	instancePeers(callerBuild: string) {
 		return this.#kernel.execute(callerBuild, instancePeers, undefined)
+	}
+
+	searchPeers(callerBuild: string, input: { prefix: string }) {
+		return this.#kernel.execute(callerBuild, searchPeers, input)
 	}
 
 	getAccount(callerBuild: string, input: { id: string; present: accounts.Present }) {

@@ -93,3 +93,25 @@ export const instancePeers = readOperation<void, string[]>((db) =>
 		)
 		.map((row) => row.domain)
 )
+
+// GET /api/v1/peers/search returns at most this many domains, as Mastodon's Api::V1::Peers::SearchController::LIMIT.
+export const PEER_SEARCH_LIMIT = 10
+
+// The peers (instancePeers' set) whose domain starts with the prefix, in order. The same seek as instancePeers, started
+// at the prefix and stopped past it, so it reads at most one row more than it returns.
+export const searchPeers = readOperation<{ prefix: string }, string[]>((db, { prefix }) =>
+	db
+		.all<{ domain: string }>(
+			`WITH RECURSIVE peers(domain) AS (
+				SELECT (SELECT MIN(domain) FROM accounts WHERE domain >= ?1)
+				UNION ALL
+				SELECT (SELECT MIN(domain) FROM accounts WHERE domain > peers.domain) FROM peers
+				WHERE substr(peers.domain, 1, length(?1)) = ?1
+				LIMIT ?2 + 1
+			)
+			SELECT domain FROM peers WHERE substr(domain, 1, length(?1)) = ?1 LIMIT ?2`,
+			prefix,
+			PEER_SEARCH_LIMIT
+		)
+		.map((row) => row.domain)
+)

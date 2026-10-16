@@ -91,16 +91,44 @@ export const rules: ApiHandler = async (c, deps) => c.json(await storeCall(c, de
 
 export const peers: ApiHandler = async (c, deps) => c.json(await storeCall(c, deps, (s, b) => s.instancePeers(b)))
 
+// GET /api/v1/peers/search, as Mastodon's Api::V1::Peers::SearchController#index with the peers API on (its default):
+// null for a blank q (@domains is never set), else the peers whose domain starts with q as TagManager#normalize_domain
+// reads it (a host, lowercased and IDNA-encoded), and [] for a q that is no host (Addressable::URI::InvalidURIError).
+export const searchPeers: ApiHandler = async (c, deps) => {
+	const q = (c.req.query('q') ?? '').trim()
+	if (q === '') {
+		return c.json(null)
+	}
+	const prefix = normalizeDomain(q)
+	return c.json(prefix === null ? [] : await storeCall(c, deps, (s, b) => s.searchPeers(b, { prefix })))
+}
+
+function normalizeDomain(value: string): string | null {
+	const host = value.replace(/\/$/, '')
+	if (host === '') {
+		return ''
+	}
+	if (/[\s/?#@:\\]/.test(host)) {
+		return null
+	}
+	return URL.parse(`https://${host}/`)?.hostname ?? null
+}
+
 // No extended description is configured: Mastodon's answer when none is set.
 export const extendedDescription: ApiHandler = (c) => Promise.resolve(c.json({ updated_at: null, content: '' }))
 
 // Answered 404 as Mastodon answers when nothing is configured or the feature is off:
-//   - terms_of_service: none is published.
+//   - terms_of_service: none is published. For a /:date, Mastodon's Api::V1::Instances::TermsOfServicesController
+//     #set_terms_of_service raises RecordNotFound (find_by!), answered "Record not found".
 //   - privacy_policy: none is configured. Mastodon would serve its built-in template, which describes Mastodon's data
 //     handling and is not true of Kopje, so Kopje answers as for terms of service.
 //   - activity: Mastodon's weekly counts include logins, which Kopje does not record; the API is off.
 //   - domain_blocks: Kopje has no server-wide domain blocks to show; off, as Mastodon's default (show_domain_blocks
 //     disabled).
 export const notConfigured: ApiHandler = () => Promise.resolve(mastodonError(404, 'Record not found'))
+
+// GET /api/v1/instance/translation_languages: {} when no translation service is configured, as Mastodon's
+// Api::V1::Instances::TranslationLanguagesController#set_languages leaves it. Kopje has none.
+export const translationLanguages: ApiHandler = (c) => Promise.resolve(c.json({}))
 
 export const languages: ApiHandler = (c) => Promise.resolve(c.json(LANGUAGES))
