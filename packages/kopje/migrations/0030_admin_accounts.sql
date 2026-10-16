@@ -1,4 +1,4 @@
--- Kopje Store schema 0031: the admin API's display-name search. Never edit after release (checksummed).
+-- Kopje Store schema 0030: the admin API's display-name search. Never edit after release (checksummed).
 --
 -- The admin's list of accounts (GET /api/v1/admin/accounts and /api/v2/admin/accounts, src/domain/admin-accounts.ts,
 -- R37) searches display names by a case-insensitive prefix, as Mastodon's Account.matches_display_name does. It reads

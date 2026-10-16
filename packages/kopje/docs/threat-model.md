@@ -609,8 +609,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   that change nothing (`enable`, `unsilence`, `unsensitive`), while `approve` and `reject` are refused for every
   account. Each list reads a bounded set (the local accounts, at most 2,000 search candidates, or an id-ordered range)
   and answers 422 rather than an unordered or empty page. `listAdminAccounts`, `getAdminAccount` and
-  `actOnAdminAccount` in `src/domain/admin-accounts.ts`, `src/mastodon/admin.ts`, migrations `0031_admin_accounts` and
-  `0032_admin_accounts_available`; `test/admin-accounts.test.ts`, `test/policy-bounds.test.ts`,
+  `actOnAdminAccount` in `src/domain/admin-accounts.ts`, `src/mastodon/admin.ts`, migrations `0030_admin_accounts` and
+  `0031_admin_accounts_available`; `test/admin-accounts.test.ts`, `test/policy-bounds.test.ts`,
   `test/migrations.test.ts`. Granting manage_users, self-protection and the token fence: _Planned (admin API, PR A3b)_,
   with local suspension.
 

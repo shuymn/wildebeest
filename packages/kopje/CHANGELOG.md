@@ -96,9 +96,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       the last change) and their indexes, replacing two, and the moderation log table. It reads only the reports: on a
       benchmark store of 1,000,000 accounts, 3,000,000 follows, 2,000,000 statuses and 10,000 reports its upgrade took
       2.3 seconds in workerd's local Durable Object SQLite.
-    - `0031_admin_accounts`: adds an index of the accounts' lowercased display names, for the admin's display name
+    - `0030_admin_accounts`: adds an index of the accounts' lowercased display names, for the admin's display name
       search. It reads only the accounts: on the same benchmark store its upgrade took 2.8 seconds.
-    - `0032_admin_accounts_available`: adds an index of the accounts whose deletion has not started, by id, so the
+    - `0031_admin_accounts_available`: adds an index of the accounts whose deletion has not started, by id, so the
       admin's list of active accounts skips none awaiting their purge. It reads only the accounts: on the same
       benchmark store its upgrade took 2.8 seconds.
 - `wrangler.jsonc`: unchanged.

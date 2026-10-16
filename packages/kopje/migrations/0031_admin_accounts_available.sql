@@ -1,4 +1,4 @@
--- Kopje Store schema 0032: the admin API's list of active accounts. Never edit after release (checksummed).
+-- Kopje Store schema 0031: the admin API's list of active accounts. Never edit after release (checksummed).
 --
 -- The admin's list of accounts with status=active (GET /api/v1/admin/accounts by default, src/domain/admin-accounts.ts,
 -- R37) walks the accounts by id, newest first, and leaves out the unavailable ones (R1): the suspended local accounts

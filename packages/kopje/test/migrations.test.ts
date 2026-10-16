@@ -3316,8 +3316,8 @@ describe('0029_admin_reports', () => {
 	}, 120_000)
 })
 
-describe('0031_admin_accounts', () => {
-	const at = NAMES.indexOf('0031_admin_accounts')
+describe('0030_admin_accounts', () => {
+	const at = NAMES.indexOf('0030_admin_accounts')
 
 	// `accounts` remote accounts with display names, `follows` follows of each, and `statuses` statuses among them.
 	function seed(sql: SqlStorage, accounts: number, follows = 0, statuses = 0) {
@@ -3358,7 +3358,7 @@ describe('0031_admin_accounts', () => {
 			sql.exec("UPDATE accounts SET display_name = 'ALICE' WHERE username = 'u1'")
 			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({
 				ok: true,
-				applied: ['0031_admin_accounts'],
+				applied: ['0030_admin_accounts'],
 			})
 			const query =
 				"SELECT username FROM accounts INDEXED BY accounts_display_name WHERE lower(display_name) >= 'al' AND lower(display_name) < 'am'"
@@ -3404,8 +3404,8 @@ describe('0031_admin_accounts', () => {
 	}, 120_000)
 })
 
-describe('0032_admin_accounts_available', () => {
-	const at = NAMES.indexOf('0032_admin_accounts_available')
+describe('0031_admin_accounts_available', () => {
+	const at = NAMES.indexOf('0031_admin_accounts_available')
 
 	// `accounts` remote accounts, every `deleted`-th of them with its deletion started, and `follows` follows of each.
 	function seed(sql: SqlStorage, accounts: number, follows = 0, deleted = 0) {
@@ -3436,7 +3436,7 @@ describe('0032_admin_accounts_available', () => {
 			seed(sql, 6, 0, 2)
 			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({
 				ok: true,
-				applied: ['0032_admin_accounts_available'],
+				applied: ['0031_admin_accounts_available'],
 			})
 			const query =
 				'SELECT username FROM accounts INDEXED BY accounts_available WHERE deleted_at IS NULL ORDER BY id DESC'

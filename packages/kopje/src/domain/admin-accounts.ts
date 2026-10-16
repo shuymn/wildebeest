@@ -339,7 +339,7 @@ function readMatches(
 		return ordered([...local, ...deleting], filter, adminId, bounds).slice(0, limit + 1)
 	}
 	// No search: the accounts by id, newest first. Active accounts walk accounts_available (migration
-	// 0032_admin_accounts_available), which holds no account whose deletion has started, so the walk skips only the
+	// 0031_admin_accounts_available), which holds no account whose deletion has started, so the walk skips only the
 	// suspended local accounts; others walk the primary key. The residual skips the local accounts (remote) and the
 	// suspended local accounts (active), operator-sized sets.
 	const active = filter.status === 'active'
