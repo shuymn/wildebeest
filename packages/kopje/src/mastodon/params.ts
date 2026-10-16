@@ -63,6 +63,13 @@ export class Params {
 		return [...[...indexed].sort(([a], [b]) => Number(a) - Number(b)).map(([, object]) => object), ...sequential]
 	}
 
+	// Values of `name[]` only, or undefined when none was sent: an array parameter as Rails' strong parameters permit
+	// it (`name: []`), which drop a scalar `name`. An explicitly empty list reads as one blank value.
+	list(name: string): string[] | undefined {
+		const values = this.entries.filter(([key]) => key === `${name}[]`).map(([, value]) => value)
+		return values.length === 0 ? undefined : values
+	}
+
 	// Values of `name[]` and of a repeated `name`.
 	getAll(name: string): string[] {
 		return this.entries.filter(([key]) => key === name || key === `${name}[]`).map(([, value]) => value)

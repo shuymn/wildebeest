@@ -21,6 +21,12 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       status answers 404, as its page does), and `/@alice@this.domain/:id` and the object URI (`/ap/o/...`) are taken;
       the HTML says "View on Kopje" without Mastodon's logo; the script is at `/assets/embed.js` (Mastodon:
       `/embed.js`) and frames only the `blockquote` embeds (not the older `iframe` ones).
+- Attribution domains, as Mastodon 4.5 has them: `PATCH /api/v1/accounts/update_credentials` takes
+  `attribution_domains[]` (the websites allowed to credit the account as the author of their articles), normalized as
+  Mastodon does (surrounding whitespace and an `http://`, `https://` or `*.` prefix removed, blanks and duplicates
+  dropped) and validated with its messages (each a domain name, at most 100). The credential account shows them in
+  `source.attribution_domains` (`[]` when none), and the actor document publishes them as `attributionDomains` when
+  there is one, which reaches other servers with the account's Update.
 
 ### Changed
 
@@ -38,6 +44,14 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       `configuration.media_attachments.description_limit` (1500), `configuration.limited_federation` (false), and
       `registrations.reason_required` (false), `min_age` and `url` (null). `configuration.urls.about` is left out:
       Kopje has no about page.
+
+### Instance changes
+
+- Store schema: adds one migration, applied on the first request after the deploy; a rollback to an earlier version
+  needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
+    - `0024_attribution_domains`: adds `local_accounts.attribution_domains`, an empty list for every account. Adding a
+      column with a constant default reads no row, so its work does not grow with the Store.
+- `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.7] - 2026-10-16
 

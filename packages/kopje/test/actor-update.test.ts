@@ -113,6 +113,21 @@ describe('Update(Person)', () => {
 		}
 	})
 
+	it('sends attributionDomains when the account sets them, and an Update without them when it clears them', async () => {
+		const h = await setup()
+		expect((await patch(h, { attribution_domains: ['writer.example'] })).status).toBe(200)
+		let sent = await updates(h)
+		expect(sent.at(-1)?.activity.object.attributionDomains).toEqual(['writer.example'])
+		expect(JSON.stringify(sent.at(-1)?.activity['@context'])).toContain('toot:attributionDomains')
+		expect((await patch(h, { attribution_domains: [] })).status).toBe(200)
+		sent = await updates(h)
+		expect(sent.at(-1)?.activity.object).not.toHaveProperty('attributionDomains')
+		expect(sent.at(-1)?.activity.object).toMatchObject({ type: 'Person', preferredUsername: 'alice' })
+		// The same list again changes nothing published.
+		expect((await patch(h, { attribution_domains: [] })).status).toBe(200)
+		expect(await updates(h)).toHaveLength(sent.length)
+	})
+
 	it('sends the new avatar from the settings page', async () => {
 		const h = await setup()
 		const browser = await signIn(h)

@@ -147,6 +147,29 @@ describe('actor document', () => {
 		expect(body).not.toHaveProperty('alsoKnownAs')
 	})
 
+	it('publishes attributionDomains with its context term only when the account has one, as Mastodon does', async () => {
+		const { json, store } = await instance()
+		const none = (await json('/ap/users/Alice')).body as Record<string, unknown>
+		expect(none).not.toHaveProperty('attributionDomains')
+		expect(JSON.stringify(none['@context'])).not.toContain('attributionDomains')
+		await runInDurableObject(store, (_instance, state) => {
+			state.storage.sql.exec(
+				'UPDATE local_accounts SET attribution_domains = ? WHERE account_id = ?',
+				JSON.stringify(['writer.example', 'news.example']),
+				ALICE
+			)
+		})
+		const { status, body } = await json('/ap/users/Alice')
+		expect(status).toBe(200)
+		const document = body as Record<string, unknown>
+		expect(document.attributionDomains).toEqual(['writer.example', 'news.example'])
+		expect(document['@context']).toContainEqual({
+			toot: 'http://joinmastodon.org/ns#',
+			attributionDomains: { '@id': 'toot:attributionDomains', '@container': '@set' },
+		})
+		expect(document).toMatchObject({ id: 'https://social.example/ap/users/Alice', type: 'Person' })
+	})
+
 	it('answers 404 for an unknown actor and for a differently cased path', async () => {
 		const { request } = await instance()
 		expect((await request('/ap/users/nobody', AP)).status).toBe(404)
