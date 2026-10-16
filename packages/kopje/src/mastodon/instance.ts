@@ -111,7 +111,14 @@ function normalizeDomain(value: string): string | null {
 	if (/[\s/?#@:\\]/.test(host)) {
 		return null
 	}
-	return URL.parse(`https://${host}/`)?.hostname ?? null
+	const hostname = URL.parse(`https://${host}/`)?.hostname
+	if (hostname === undefined) {
+		return null
+	}
+	// Addressable keeps a host of numbers as written where WHATWG reads it as an IPv4 address (123 as 0.0.0.123), and
+	// drops a trailing dot.
+	const written = /^\d+(\.\d+){3}$/.test(hostname) && hostname !== host ? host.toLowerCase() : hostname
+	return written.replace(/\.$/, '')
 }
 
 // No extended description is configured: Mastodon's answer when none is set.

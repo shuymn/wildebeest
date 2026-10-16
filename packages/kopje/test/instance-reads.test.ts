@@ -72,6 +72,7 @@ describe('instance details', () => {
 			['dave', 'masto.example'],
 			['erin', 'misskey.example'],
 			['frank', 'xn--r8jz45g.example'],
+			['grace', '123.example'],
 		] as const) {
 			await seedAccount(h.store, { username, domain })
 		}
@@ -81,6 +82,9 @@ describe('instance details', () => {
 		expect(await search('  MASTODON.example/ ')).toEqual({ status: 200, body: ['mastodon.example'] })
 		expect(await search('例え')).toEqual({ status: 200, body: ['xn--r8jz45g.example'] })
 		expect(await search('pleroma')).toEqual({ status: 200, body: [] })
+		// As Addressable reads a host, not WHATWG: a trailing dot dropped, and numbers kept as written (not 0.0.0.123).
+		expect(await search('mastodon.example.')).toEqual({ status: 200, body: ['mastodon.example'] })
+		expect(await search('123')).toEqual({ status: 200, body: ['123.example'] })
 		// Not a host: Mastodon rescues Addressable's InvalidURIError with [].
 		expect(await search('masto/don')).toEqual({ status: 200, body: [] })
 		// A blank q leaves Mastodon's @domains unset: null.
