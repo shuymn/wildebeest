@@ -6,6 +6,7 @@ import type { Account, CredentialAccount } from '../domain/accounts'
 import type { Authorized, UserCredential } from '../domain/auth'
 import type { ProfileImage } from '../domain/media'
 import type { Status } from '../domain/status-presenter'
+import { localUsername } from '../domain/web-pages'
 import { SESSION_LIFETIME_MS, WEB_SCOPES } from '../domain/web-session'
 import { requireSetup } from '../federation/setup-gate'
 import { credentialChanges } from '../mastodon/accounts'
@@ -14,7 +15,7 @@ import { receiveImageUpload } from '../mastodon/media'
 import { type Params, readParams } from '../mastodon/params'
 import type { Scope } from '../security/scopes'
 import { pkceChallenge, sha256Hex } from '../security/tokens'
-import { MessagePage, ProfilePage, SettingsPage, StatusPage } from '../web/pages'
+import { EMBED_SCRIPT, EmbedPage, MessagePage, ProfilePage, SettingsPage, StatusPage } from '../web/pages'
 import {
 	csrfMatches,
 	csrfToken,
@@ -31,8 +32,9 @@ import { noticeOf, STRINGS } from '../web/strings'
 // The web UI (B5): public profiles and permalinks, sign-in through Access, and the settings page. Posting and reading
 // happen in Mastodon clients; this is all the instance serves as HTML besides the consent page.
 //
-//   - WEB-2: every page has a CSP with no script source, frame-ancestors 'none' and X-Frame-Options DENY; pages of a
-//     signed-in user are never cached (no-store); WEB-3: none of these routes sends CORS headers (only the API's
+//   - WEB-2: every page has a CSP with no script source, frame-ancestors 'none' and X-Frame-Options DENY, except the
+//     embed page, which any site may frame and which runs one script; pages of a signed-in user are never cached
+//     (no-store); WEB-3: none of these routes sends CORS headers (only the API's
 //     paths are opened in app.ts); WEB-5: every answer has its exact type and nosniff.
 //   - WEB-1, WEB-4: every POST checks Origin (missing, `null` and foreign answer 403) and the session's anti-forgery
 //     token before anything else is read or written; redirects go to validated local paths only.
@@ -58,6 +60,17 @@ const PUBLIC_HEADERS = {
 	'referrer-policy': 'same-origin',
 	'cache-control': 'public, max-age=60',
 	vary: 'Accept',
+}
+
+// The embed page (Mastodon's StatusesController#embed, which drops X-Frame-Options and frame-ancestors): any site may
+// frame it, so it has neither; its one script is named exactly. Kept 180 s, as Mastodon's (expires_in 180).
+function embedHeaders(domain: string) {
+	return {
+		'content-security-policy': `default-src 'none'; script-src https://${domain}${EMBED_SCRIPT}; style-src 'self'; img-src 'self' https:; form-action 'self'; base-uri 'none'`,
+		'x-content-type-options': 'nosniff',
+		'referrer-policy': 'same-origin',
+		'cache-control': 'public, max-age=180',
+	}
 }
 
 // Pages of a signed-in user, and every answer of the sign-in flow. `same-origin`, not `no-referrer`: under
@@ -102,16 +115,6 @@ function cookieOptions(maxAge: number) {
 const CLEARED = { prefix: 'host', path: '/', secure: true } as const
 
 const BACK = { href: '/settings', text: STRINGS.backToSettings }
-
-// `/@alice` or `/@alice@this.domain`; null for another server's account (only local profiles are served).
-function localUsername(handle: string, domain: string): string | null {
-	const name = handle.replace(/^@/, '')
-	const at = name.indexOf('@')
-	if (at === -1) {
-		return name
-	}
-	return name.slice(at + 1).toLowerCase() === domain ? name.slice(0, at) : null
-}
 
 export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 	const app = new Hono<WebEnv>()
@@ -200,6 +203,31 @@ export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 			200,
 			<StatusPage status={page.value as Status} parent={page.parent} domain={c.get('domain')} />
 		)
+	})
+
+	// The status page's status for an iframe (VIS-4, the same read): Mastodon's embed_short_account_status_url, which
+	// the oEmbed HTML names (mastodon/oembed.ts). Anything the status page would not show is the same 404, which, like
+	// every other page, may not be framed.
+	app.get('/:handle{@[^/]+}/:id/embed', setup, async (c) => {
+		const domain = c.get('domain')
+		const username = localUsername(c.req.param('handle'), domain)
+		const id = c.req.param('id')
+		if (username === null || username === '' || id.length > 64) {
+			return notFound(c)
+		}
+		const page = await storeCall(c, deps, (s, b) =>
+			s.statusPage(b, { username, id, present: present(c), now: deps.now() })
+		)
+		if (page.status === 'not_found') {
+			return notFound(c)
+		}
+		if (page.status === 'moved') {
+			return new Response(null, {
+				status: 301,
+				headers: { location: `/@${page.username}/${page.id}/embed`, 'cache-control': 'public, max-age=60' },
+			})
+		}
+		return c.html(<EmbedPage status={page.value as Status} domain={domain} />, 200, embedHeaders(domain))
 	})
 
 	// ---- sign-in (Access at /oauth/authorize) and sign-out

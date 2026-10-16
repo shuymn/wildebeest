@@ -326,3 +326,12 @@ button.danger {
 		grid-template-columns: 1fr;
 	}
 }
+
+/* The embed page (/@username/:id/embed): the status alone, filling the frame. */
+body.embed {
+	background: transparent;
+}
+
+body.embed .status {
+	margin: 0;
+}

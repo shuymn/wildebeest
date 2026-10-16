@@ -434,3 +434,39 @@ export const SettingsPage: FC<SettingsView> = ({ account, authorizations, csrf, 
 		</Layout>
 	)
 }
+
+// The script an embed page runs (public/assets/embed-status.js): it answers embed.js's height request.
+export const EMBED_SCRIPT = '/assets/embed-status.js'
+
+// The embed page (Mastodon's StatusesController#embed): the status page's status alone, for an iframe on another
+// site. Links open outside the frame (<base target>, which base-uri 'none' does not restrict: it names no URL); the
+// script answers the embedding page's height request and does nothing else.
+export const EmbedPage: FC<{ status: Status; domain: string }> = ({ status, domain }) => (
+	<html lang="en">
+		<head>
+			<meta charset="utf-8" />
+			<meta name="viewport" content="width=device-width, initial-scale=1" />
+			<meta name="color-scheme" content="light dark" />
+			<meta name="robots" content="noindex" />
+			<base target="_blank" />
+			<title>{`${displayName(status.account)} (${address(status.account, domain)})`}</title>
+			<link rel="stylesheet" href={STYLESHEET} />
+			<link rel="canonical" href={status.url ?? undefined} />
+			<script src={EMBED_SCRIPT} async />
+		</head>
+		<body class="embed">
+			<article class="status permalink">
+				<AccountHeader account={status.account} domain={domain} />
+				<StatusBody status={status} />
+				<p class="meta">
+					<a href={localPath(status.url)}>
+						<DateTime iso={status.created_at} />
+					</a>
+					{status.edited_at === null ? null : <span class="edited"> ({STRINGS.edited})</span>}
+					{' · '}
+					<a href={localPath(status.url)}>{STRINGS.viewOn(domain)}</a>
+				</p>
+			</article>
+		</body>
+	</html>
+)

@@ -580,6 +580,10 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, webPages.statusPage, input)
 	}
 
+	embeddedStatus(callerBuild: string, input: OperationInput<typeof webPages.embeddedStatus>) {
+		return this.#kernel.execute(callerBuild, webPages.embeddedStatus, input)
+	}
+
 	suspendAccount(callerBuild: string, input: { accountId: string; now: number }) {
 		return this.#kernel.execute(callerBuild, oauth.suspendAccount, input)
 	}
