@@ -497,8 +497,8 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, remoteCollections.completePinFetches, input)
 	}
 
-	// Verification of received quotes (domain/quotes.ts): the work read, applied and claimed by the Worker's inline
-	// verification and job rounds (federation/quotes.ts).
+	// Verification of received quotes (domain/quotes.ts): the work read, applied and claimed by the Worker's job rounds
+	// (federation/quotes.ts).
 	quoteWork(callerBuild: string, input: OperationInput<typeof quotes.quoteWork>) {
 		return this.#kernel.execute(callerBuild, quotes.quoteWork, input)
 	}

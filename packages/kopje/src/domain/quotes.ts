@@ -9,6 +9,7 @@ import {
 	storeRemoteStatus,
 	visibilityOf,
 } from './remote-statuses'
+import { iso } from './statuses'
 import type { Db } from '../db/sql'
 
 // Quote posts received from remote servers (Mastodon 4.5's Quote, ActivityPub::Parser::StatusParser's quote
@@ -77,10 +78,6 @@ function originOf(uri: string | null): string | null {
 	}
 }
 
-function iso(ms: number): string {
-	return new Date(ms).toISOString()
-}
-
 type QuoteRow = {
 	status_id: string
 	status_uri: string
@@ -89,7 +86,6 @@ type QuoteRow = {
 	quoted_uri: string | null
 	quoted_status_id: string | null
 	state: QuoteState
-	legacy: number
 	approval_uri: string | null
 	attempts: number
 	hops: number
@@ -97,15 +93,12 @@ type QuoteRow = {
 	need_author: string | null
 	generation: number
 	recheck: number
-	verify_after: number | null
-	lease_until: number | null
 }
 
 function quoteRow(db: Db, statusId: string): QuoteRow | undefined {
 	return db.first<QuoteRow>(
 		`SELECT q.status_id, s.uri AS status_uri, s.account_id, a.uri AS author_uri, q.quoted_uri, q.quoted_status_id,
-			q.state, q.legacy, q.approval_uri, q.attempts, q.hops, q.fetch_as, q.need_author, q.generation, q.recheck,
-			q.verify_after, q.lease_until
+			q.state, q.approval_uri, q.attempts, q.hops, q.fetch_as, q.need_author, q.generation, q.recheck
 		FROM quotes q JOIN statuses s ON s.id = q.status_id JOIN accounts a ON a.id = s.account_id
 		WHERE q.status_id = ?`,
 		statusId
@@ -113,11 +106,11 @@ function quoteRow(db: Db, statusId: string): QuoteRow | undefined {
 }
 
 // Mastodon's ActivityPub::Activity::Create#process_quote and ProcessStatusUpdateService#update_quote!: the quote a
-// stored status's Note names, written with its work. A Note that names none removes the status's quote; a Tombstone
-// is a deleted quote, with no work; a quote whose target or stamp changed starts over as pending (the count trigger
-// takes an accepted one off its target); an unchanged one is promoted when its status arrived as a root. A stamp of
-// this instance's origin is not a remote stamp, and is dropped (StatusParser#quote_approval_uri). A quoted Note embedded
-// in the status (design §5.1, Mastodon's safe_prefetched_embed) is stored first, with one hop less of work, only when it
+// stored status's Note names, written with its work. A Note that names none removes the status's quote; a Tombstone is
+// a deleted quote, with no work; a quote whose target or stamp changed starts over as pending (the count trigger takes
+// an accepted one off its target); an unchanged one is promoted when its status arrived as a root. A stamp of this
+// instance's origin is not a remote stamp, and is dropped (StatusParser#quote_approval_uri). A quoted Note embedded in
+// the status (design §5.1, Mastodon's safe_prefetched_embed) is stored first, with one hop less of work, only when it
 // is the status's author's own (its attributedTo is the author, its id on the author's origin): the author vouches for
 // it as for the status itself, so a private self-quote that its server serves nobody is still known.
 export function recordQuote(
@@ -284,9 +277,9 @@ export type StampInput = {
 	interactionTarget: string | null
 }
 
-// The stage a quote's verification is at, each one fetch of the Worker's (a stage fits one fetch budget, redirects
-// included, so a round always finishes the stage it starts): the quoted status (not stored yet), its author (the status
-// fetched and kept in need_author, its author unknown), the stamp; decide: nothing left to fetch.
+// The stage a quote's verification is at, each one fetch of the Worker's within a fetch budget of its own (redirects
+// included): the quoted status (not stored yet), its author (the address a fetch of the status recorded in need_author,
+// the author unknown), the stamp; decide: nothing left to fetch.
 export type QuoteStage = 'quoted' | 'author' | 'stamp' | 'decide'
 
 export type QuoteWork = {
@@ -343,8 +336,7 @@ function stampStage(db: Db, row: QuoteRow, quoted: Linked): boolean {
 
 // The stage a quote's work is at now, and the document it fetches. Derived from the row and from what the Store has
 // (the quoted status, its author), so it can move without the row changing: an outcome is checked against it too.
-function stageOf(db: Db, row: QuoteRow): { stage: QuoteStage; fetch: string | null } {
-	const quoted = quotedOf(db, row)
+function stageOf(db: Db, row: QuoteRow, quoted = quotedOf(db, row)): { stage: QuoteStage; fetch: string | null } {
 	if (quoted !== undefined) {
 		return stampStage(db, row, quoted) ? { stage: 'stamp', fetch: row.approval_uri } : { stage: 'decide', fetch: null }
 	}
@@ -356,11 +348,16 @@ function stageOf(db: Db, row: QuoteRow): { stage: QuoteStage; fetch: string | nu
 
 // Whether an outcome computed for `expected` still belongs to the work: the same generation, and the same stage and
 // fetch address (a stage another path moved on, as an author some other request stored, takes no outcome).
-function current(db: Db, row: QuoteRow, expected: { generation: number; stage: QuoteStage; fetch: string | null }) {
+function current(
+	db: Db,
+	row: QuoteRow,
+	expected: { generation: number; stage: QuoteStage; fetch: string | null },
+	quoted = quotedOf(db, row)
+) {
 	if (row.generation !== expected.generation) {
 		return false
 	}
-	const now = stageOf(db, row)
+	const now = stageOf(db, row, quoted)
 	return now.stage === expected.stage && now.fetch === expected.fetch
 }
 
@@ -492,7 +489,8 @@ function stampValid(stamp: StampInput, row: QuoteRow, quoted: Linked): boolean {
 
 // The quoted-status stages: a stage fetching the author it named stores that account and ends; one fetching the quoted
 // status stores it, from that fresh fetch, once its author is known, and otherwise records only the author's address
-// (need_author) for the next stage. Nothing fetched is kept between stages. Returns the linked status, or a stage's end.
+// (need_author) for the next stage. Nothing fetched is kept between stages. Returns the linked status, or a stage's
+// end.
 function storeQuoted(db: Db, row: QuoteRow, input: QuoteVerification, keep: QuoteState): Linked | QuoteVerified {
 	const { now, origin } = input
 	if (input.author !== undefined) {
@@ -551,7 +549,6 @@ function storeQuoted(db: Db, row: QuoteRow, input: QuoteVerification, keep: Quot
 	if (authorUri !== row.author_uri && !isDistributable(visibilityOf(status, followersUri(db, author.id)))) {
 		return finish(db, row, keep, 'done', now)
 	}
-	db.run(`UPDATE quotes SET need_author = NULL, generation = ${NEW_GENERATION} WHERE status_id = ?`, row.status_id)
 	storeRemoteStatus(db, author, status, {
 		now,
 		origin,
@@ -562,12 +559,12 @@ function storeQuoted(db: Db, row: QuoteRow, input: QuoteVerification, keep: Quot
 	return quotedOf(db, { ...row, quoted_status_id: null }) ?? finish(db, row, keep, 'done', now)
 }
 
-// Applies what the Worker fetched for one stage of a quote's work, in one transaction. A quoted status fetched is kept
-// until its author is known, then stored; a quote whose quoted status is stored (linked, or found by its uri and linked
-// now) is decided. Only a pending quote is accepted, and only for a self-quote or a valid stamp; an accepted one being
-// checked again is revoked only when its stamp is gone or no longer valid. A pending quote whose stamp is gone is
-// rejected (Mastodon's VerifyQuoteService); one that fails a check stays pending, its work done. Every failure that may
-// pass charges an attempt; a fetch budget that ran out charges none.
+// Applies what the Worker fetched for one stage of a quote's work, in one transaction. A quoted status fetched is
+// stored once its author is known (else only the author's address is recorded); a quote whose quoted status is stored
+// (linked, or found by its uri and linked now) is decided. Only a pending quote is accepted, and only for a self-quote
+// or a valid stamp; an accepted one being checked again is revoked only when its stamp is gone or no longer valid. A
+// pending quote whose stamp is gone is rejected (Mastodon's VerifyQuoteService); one that fails a check stays pending,
+// its work done. Every failure that may pass charges an attempt, a fetch budget or deadline that ran out included.
 export const completeQuote = writeOperation<QuoteVerification, QuoteVerified>((db, input) => {
 	const { now } = input
 	const row = quoteRow(db, input.statusId)
@@ -580,14 +577,15 @@ export const completeQuote = writeOperation<QuoteVerification, QuoteVerified>((d
 	) {
 		return { done: true, due: quotesDue(db, now), state: row?.state ?? null, next: false }
 	}
-	if (!current(db, row, input)) {
+	const target = quotedOf(db, row)
+	if (!current(db, row, input, target)) {
 		return moved(db, row, now)
 	}
 	const keep = row.state
 	// What a stamp that is gone or invalid leaves: a pending quote rejected (gone) or still pending, an accepted one
 	// revoked.
 	const lost = (gone: boolean): QuoteState => (keep === 'accepted' ? 'revoked' : gone ? 'rejected' : 'pending')
-	const found = quotedOf(db, row) ?? storeQuoted(db, row, input, keep)
+	const found = target ?? storeQuoted(db, row, input, keep)
 	if ('done' in found) {
 		return found
 	}
@@ -662,6 +660,9 @@ export const claimQuotes = writeOperation<
 			limit
 		)
 		.map((row) => row.status_id)
+	if (ids.length === 0) {
+		return { ids, generations: [], more: false }
+	}
 	// The claim draws a new generation: a round whose lease expired, and whose work another round claimed, has its late
 	// outcome discarded.
 	const claimed = new Map(
@@ -771,8 +772,8 @@ export function continueRevocations(db: Db, left: () => number, now: number): bo
 	return false
 }
 
-// Leased pending quotes one relayed Delete marks at most: a bound on its writes, as only quotes whose fetch is in flight
-// match (at most a round's claim each).
+// Leased pending quotes one relayed Delete marks at most: a bound on its writes, as only quotes whose fetch is in
+// flight match (at most a round's claim each).
 export const MAX_RECHECKED = 100
 
 // A Delete of a stamp relayed by another server without the author's proof (federation/inbound.ts): nothing is revoked
@@ -782,9 +783,9 @@ export const MAX_RECHECKED = 100
 //     self-quote, accepted without one, may name the stamp too and is passed over) is renewed when idle (due now,
 //     attempts reset, a new generation), left as it is when due or backing off (its next fetch is fresh anyway), and
 //     marked when a round has leased it;
-//   - a pending quote is marked only when a round has leased it (its first stamp fetch is in flight), matched by the stamp
-//     alone, since a round may not have linked its target yet (the target found by its uri); marking one of another
-//     author's costs at most one more check. Otherwise its next fetch is fresh anyway.
+//   - a pending quote is marked only when a round has leased it (its first stamp fetch is in flight), matched by the
+//     stamp alone, since a round may not have linked its target yet (the target found by its uri); marking one of
+//     another author's costs at most one more check. Otherwise its next fetch is fresh anyway.
 // A marked quote keeps its generation, so the fetch in flight still applies, and is checked once more if that fetch
 // finds the stamp valid. A round's 404 thus always applies, and a Delete that races a fetch is never lost. Returns
 // whether such a quote exists.

@@ -1730,9 +1730,9 @@ const relayedDelete: Handler<'RelayedDelete'> = (db, actor, activity, { now }) =
 	return retractUnknown(db, actor, activity.object, now)
 }
 
-// The actor's Delete of an object Kopje holds no status of: recorded as a retraction (ID-7) and, when it is the stamp of
-// a quote of the actor's status, as a revocation for good whether or not the retraction could be (quote_revocations is
-// bounded by the quotes stored), its first batch within PURGE_BATCH (quotes.ts revokeStamp).
+// The actor's Delete of an object Kopje holds no status of: recorded as a retraction (ID-7) and, when it is the stamp
+// of a quote of the actor's status, as a revocation for good whether or not the retraction could be (quote_revocations
+// is bounded by the quotes stored), its first batch within PURGE_BATCH (quotes.ts revokeStamp).
 function retractUnknown(db: Db, actor: { id: string; uri: string }, object: string, now: number): ReceiveResult {
 	const recorded = retract(db, actor.uri, object, now)
 	const budget = new Budget(db, PURGE_BATCH)

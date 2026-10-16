@@ -1,7 +1,7 @@
 import { availableLocalSql, availableSql, requiresMention, type Visibility } from './audience'
 import { displayName, featuredTagNamed, featuresMost, MAX_FEATURED_TAGS, writeFeatured } from './featured-tags'
 import { writeOperation } from './operation'
-import { promoteQuote, quoteArrival } from './quotes'
+import { promoteQuote, type QuoteArrival, quoteArrival } from './quotes'
 import { type RemoteStatusInput, statusByUri, storeRemoteStatus } from './remote-statuses'
 import { isHashtagName } from './status-text'
 import { normalizeTag } from './tag-name'
@@ -520,6 +520,8 @@ function replacePins(db: Db, account: { id: string; uri: string }, uris: readonl
 		account.id,
 		JSON.stringify(pinned.map((pin) => pin.id))
 	)
+	// The account's arrival, the same for every pin: read once, and only when there is one.
+	let arrival: QuoteArrival | undefined
 	for (const pin of pinned) {
 		db.run(
 			`INSERT INTO status_pins (account_id, status_id, created_at) VALUES (?, ?, ?)
@@ -529,7 +531,8 @@ function replacePins(db: Db, account: { id: string; uri: string }, uris: readonl
 			pin.at
 		)
 		// A pinned status arrives as a root, cached or not: a cached one's quote is promoted (quotes.ts).
-		promoteQuote(db, pin.id, quoteArrival(db, account.id, null), now)
+		arrival ??= quoteArrival(db, account.id, null)
+		promoteQuote(db, pin.id, arrival, now)
 	}
 	db.run('DELETE FROM collection_pins_pending WHERE account_id = ?', account.id)
 	for (const pin of pending) {

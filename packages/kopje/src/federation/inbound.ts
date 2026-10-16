@@ -478,8 +478,8 @@ type Relay = {
 // A Delete relayed by another server: the HTTP signer is not the actor (Mastodon's forward of a stamp's Delete, signed
 // by a local sharer of the quoting status). The signer owns its key as any actor must (ID-1, judged on the signer).
 // With the actor's own proof, verified against a key the actor's current document embeds, it is applied as the actor's
-// Delete; without one it is handed on unproven, which can only have a stamp verified again. A proof that is present
-// but does not verify refuses it. Only the Store's relayedDelete applies either: never to an actor, a status or a boost.
+// Delete; without one it is handed on unproven, which can only have a stamp verified again. A proof that is present but
+// does not verify refuses it. Only the Store's relayedDelete applies either: never to an actor, a status or a boost.
 async function relayed(deps: InboundDeps, request: InboundRequest, relay: Relay): Promise<InboxOutcome> {
 	const { activity, actorUri, signerUri, origin, key, pem, fromStore, loaders, state, budget } = relay
 	if (originOf(signerUri) === null || originOf(signerUri) === origin) {

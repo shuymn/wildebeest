@@ -447,7 +447,10 @@ export function storeRemoteStatus(db: Db, author: Author, input: RemoteStatusInp
 	recountStatus(db, parent?.id ?? null)
 	const isReply = input.inReplyTo !== null
 	linkReplies(db, { id, uri: input.uri, accountId: author.id, replyTarget, isReply })
-	recordQuote(db, { id, uri: input.uri, author }, input.quote, arrivalOf(db, author, ctx), ctx)
+	// A new status has no quote to remove: only one it names is recorded.
+	if (input.quote !== undefined && input.quote !== null) {
+		recordQuote(db, { id, uri: input.uri, author }, input.quote, arrivalOf(db, author, ctx), ctx)
+	}
 	linkQuotes(db, { id, uri: input.uri }, ctx.now)
 	if (!ctx.fetched) {
 		notifyCreated(db, {

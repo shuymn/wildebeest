@@ -145,7 +145,7 @@ async function verifyQuote(
 	statusId: string,
 	loadersFor: (signer: string | null) => RemoteLoaders,
 	now: () => number,
-	run: { generation?: number; state: FederationState }
+	run: { generation: number; state: FederationState }
 ): Promise<boolean> {
 	// The quoted status, its author, the status again (now storable), the stamp, and the decision.
 	for (let stage = 0; stage < QUOTE_STAGES; stage++) {
@@ -154,7 +154,7 @@ async function verifyQuote(
 			return false
 		}
 		// The first stage is the claimed work's: if the quote changed since the claim, its outcome is discarded.
-		const generation = stage === 0 && run.generation !== undefined ? run.generation : work.generation
+		const generation = stage === 0 ? run.generation : work.generation
 		const loaders = loadersFor(work.signer)
 		const input: QuoteVerification = {
 			statusId,
@@ -199,8 +199,9 @@ async function verifyQuote(
 }
 
 // One job round (jobs/queue.ts): up to QUOTE_ROUND quotes whose work is due, oldest first, claimed for the round, each
-// stage of each with a whole fetch budget of its own, so a heavy or failing quote starves no other. Returns whether more work is due. A Store refusal surfaces as
-// StoreUnavailableError for the caller; a claimed quote whose round died is claimed again after its lease.
+// stage of each with a whole fetch budget of its own, so a heavy or failing quote starves no other. Returns whether
+// more work is due. A Store refusal surfaces as StoreUnavailableError for the caller; a claimed quote whose round died
+// is claimed again after its lease.
 export async function verifyQuotes(env: Env, deps: InboxDeps): Promise<boolean> {
 	const build = deps.build(env)
 	const store = () => deps.store(env)
@@ -230,7 +231,7 @@ export async function verifyQuotes(env: Env, deps: InboxDeps): Promise<boolean> 
 	let more = claimed.more
 	for (const [i, id] of claimed.ids.entries()) {
 		const left = await verifyQuote(rpc, build, origin, id, loadersFor, deps.now, {
-			generation: claimed.generations[i],
+			generation: claimed.generations[i]!,
 			state,
 		})
 		if (state.storeError !== null) {
