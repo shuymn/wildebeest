@@ -39,6 +39,27 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
     - The reporter's report shows `action_taken` once it is resolved.
     - `GET /api/v1/accounts/verify_credentials` shows the admin's role as `Owner` (id 3) with the permissions
       served (`16`); every other account keeps the default role.
+- The admin API's accounts, for the admin once Kopje grants the role `manage_users`, which it does with local
+  suspension (until then these routes still answer 403 to everyone, the admin included): `GET /api/v1/admin/accounts`,
+  `GET /api/v2/admin/accounts` and `GET /api/v1/admin/accounts/:id`, and `POST .../enable`, `unsilence`,
+  `unsensitive`, `approve` and `reject`.
+    - The lists take Mastodon's filters: v1's names and defaults (active local accounts unless `remote` or a state is
+      sent; the last state sent wins; `staff`), and v2's `origin`, `status`, `permissions=staff` and `role_ids[]`,
+      with `username` (a prefix, a leading `@` dropped), `display_name` (a prefix), `email` (a prefix), `by_domain`,
+      `ip` and `invited_by`. An unknown `origin` or `status` is answered 400 `Unknown origin: x` or
+      `Unknown status: x`. Newest first, with `Link` headers; 100 accounts by default and at most 200.
+    - Unlike Mastodon, v2 reads the v1 names Fedilab sends it (`local`, `remote`, the five states, `staff`) when no
+      v2 filter name is sent: exactly one of `local` and `remote` gives the origin, exactly one state gives the
+      status, so Fedilab's "all" lists every account.
+    - No account is pending, disabled, silenced or sensitized, and no IP or invite is recorded: those filters, and
+      roles other than Owner (`3`) and the default role (`-99`), list nothing. An account being deleted is listed as
+      suspended, as its entity shows it.
+    - A username, display name or domain search reads at most 2,000 accounts: a broader one is answered 422
+      `search term too broad; add a filter or a longer prefix`, where Mastodon pages through it. A domain with more
+      than 2,000 known accounts needs a username prefix too. Prefixes are literal (Mastodon reads `_` and `%` in them
+      as wildcards) and compare letters case-insensitively in ASCII only.
+    - `enable`, `unsilence` and `unsensitive` change nothing, log the action and return the account (`enable` needs a
+      local account); `approve` and `reject` are answered 403, as Mastodon answers them for an approved user.
 - The moderation log: every admin write through the admin API, and every account repair through `/admin`, is
   recorded with who made it (the admin's account and client, or the Access identity), in the write's transaction.
   It keeps the newest 10,000 entries. `GET /admin/moderation-log` and `kopje-admin moderation-log` show it, to
@@ -53,6 +74,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   assignee, the time of the last change) and their indexes, replacing two, and the moderation log table. It reads
   only the reports: on a benchmark store of 1,000,000 accounts, 3,000,000 follows, 2,000,000 statuses and 10,000
   reports its upgrade took 2.3 seconds in workerd's local Durable Object SQLite. No `wrangler.jsonc` change.
+- Schema: migration `0031_admin_accounts` adds an index of the accounts' lowercased display names, for the admin's
+  display name search. It reads only the accounts: on the same benchmark store its upgrade took 2.8 seconds.
 
 ## [0.1.0-rc.9] - 2026-10-16
 
