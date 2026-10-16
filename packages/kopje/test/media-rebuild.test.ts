@@ -1,7 +1,7 @@
 import { runInDurableObject } from 'cloudflare:test'
 import { env } from 'cloudflare:workers'
 
-import { beforeEach, describe, expect, inject, it } from 'vitest'
+import { beforeEach, describe, expect, inject, it, vi } from 'vitest'
 
 import { type AccessTeam, adminClaims, adminHarness, adminTeam, serviceClaims, setTeamAccess } from './access-helpers'
 import { NOW } from './app-helpers'
@@ -813,6 +813,19 @@ describe('media rebuild only while nothing deletes media, one call at a time', (
 			release = resolve
 		})
 		let clock = NOW
+		// The lease answers the call gets, its heartbeat's renewals included, so the test waits for them rather than for
+		// a fixed time.
+		const answers: string[] = []
+		const store = new Proxy(h.store, {
+			get: (target, property, receiver) =>
+				property === 'mediaRebuildLease'
+					? async (...args: Parameters<StoreStub['mediaRebuildLease']>) => {
+							const answer = await target.mediaRebuildLease(...args)
+							answers.push(answer.status)
+							return answer
+						}
+					: (Reflect.get(target, property, receiver) as unknown),
+		})
 		const bucket = {
 			head: (key: string) => env.MEDIA.head(key),
 			get: (key: string, options?: R2GetOptions) => env.MEDIA.get(key, options),
@@ -828,7 +841,7 @@ describe('media rebuild only while nothing deletes media, one call at a time', (
 		const running = rebuildMedia(
 			{
 				build: BUILD,
-				store: h.store,
+				store,
 				bucket,
 				images: new TestCodec(),
 				now: () => clock,
@@ -843,8 +856,7 @@ describe('media rebuild only while nothing deletes media, one call at a time', (
 		// The call is far past its deadline; the write is still awaited and the lease renewed.
 		clock = NOW + 10 * REBUILD_LEASE_MS
 		const before = (await leaseRow(h.store))[0]?.until ?? 0
-		await new Promise((resolve) => setTimeout(resolve, 50))
-		expect((await leaseRow(h.store))[0]?.until).toBeGreaterThan(before)
+		await vi.waitFor(async () => expect((await leaseRow(h.store))[0]?.until).toBeGreaterThan(before))
 		expect(await lease(h.store, 'other', admin)).toMatchObject({ status: 'busy' })
 		// The lease is taken from it (as if it had expired): renewal fails while the write is pending.
 		await runInDurableObject(h.store, (_instance, state) => {
@@ -853,7 +865,9 @@ describe('media rebuild only while nothing deletes media, one call at a time', (
 				JSON.stringify({ holder: 'other', until: Date.now() + REBUILD_LEASE_MS })
 			)
 		})
-		await new Promise((resolve) => setTimeout(resolve, 50))
+		// A renewal after the takeover is refused, so the call knows it lost the lease before the write settles.
+		const taken = answers.length
+		await vi.waitFor(() => expect(answers.slice(taken)).toContain('busy'))
 		release()
 		const step = await running
 		expect(step).toMatchObject({ ok: true, stopped: 'lease-overrun', done: false })
