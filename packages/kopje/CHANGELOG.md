@@ -10,6 +10,34 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Added
 
+- The streaming API's `user` stream (`read` or `read:statuses`) carries the home timeline, as Mastodon 4.5's does:
+  `update` when a status or boost enters it (the account's own included), `status.update` when a status in it is
+  edited, and `delete` (the id) when a status or boost the account could see is deleted or unboosted. Each status is the
+  one `GET /api/v1/timelines/home` would show at its place, presented as REST presents it to the account.
+    - An edit of a post that mentions the account (one whose mention notification its list shows) is also sent as
+      `status.update` on `user` when the token has `read` or `read:notifications`, and on `user:notification`, as
+      Mastodon sends edits to the accounts a post mentioned.
+    - As Mastodon, a post published more than 6 hours before it arrived (a remote post fetched late) is not sent as
+      `update`.
+    - `public*`, `hashtag*`, `list` and `direct` still answer `{"error":"Unknown stream type","status":400}`.
+    - Where Kopje differs from Mastodon: at most 40 boosts of a deleted status are deleted on each account's stream,
+      those by the account and by accounts it follows; nothing is sent when an account is purged; and a post of a
+      followed hashtag is sent even when a page of home read from the top would leave it out behind 40 or more newer
+      posts the account's home hides (`max_id` paging shows it at its place).
+
+### Instance changes
+
+- Store schema: adds a migration, applied on the first request after the deploy; a rollback to an earlier version needs
+  the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
+    - `0028_streaming_home`: adds the triggers that journal a status inserted while an account subscribes to `user`,
+      and an edit while one subscribes to `user` or `user:notification`, the empty `stream_delete_viewers` table (a
+      delete's capture), a column of the streaming position and an index of the subscription registry. The registry
+      and the position hold only the open sockets' rows (every socket closes on the deploy), so its work does not grow
+      with the Store. The new table is left out of dumps and backups, as the other streaming tables are.
+- `wrangler.jsonc`: unchanged.
+
+### Added
+
 - A remote account's pinned posts, featured hashtags and hidden network, learned as Mastodon 4.5 learns them:
   `GET /api/v1/accounts/:id/statuses?pinned=true` and `GET /api/v1/accounts/:id/featured_tags` now show a remote
   account's, and its `hide_collections` is shown and hides its followers and following lists as a local account's
