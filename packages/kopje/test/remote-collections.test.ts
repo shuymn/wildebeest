@@ -22,7 +22,12 @@ import {
 } from './inbox-status-helpers'
 import { FEATURED_COUNT_WINDOW, MAX_FEATURED_TAGS } from '../src/domain/featured-tags'
 import { MAX_REMOTE_PINS, MAX_SYNC_ATTEMPTS, SYNC_LEASE_MS, SYNC_RETRY_MS } from '../src/domain/remote-collections'
-import { COLLECTION_SYNCS_PER_ROUND, MAX_FEATURED_TAG_PAGES, syncCollections } from '../src/federation/collections'
+import {
+	COLLECTION_SYNCS_PER_ROUND,
+	MAX_FEATURED_TAG_PAGES,
+	READ_FETCHES,
+	syncCollections,
+} from '../src/federation/collections'
 import { REQUEST_MAX_FETCHES } from '../src/federation/loader'
 
 // A remote account's pinned statuses, featured hashtags and hide_collections (Mastodon 4.5's ActivityPub::Activity::Add
@@ -590,18 +595,26 @@ describe('reading a remote account’s collections', () => {
 		expect(gone.map((uri) => t.web.fetched.filter((u) => u === uri).length)).toEqual(gone.map(() => 1))
 	})
 
-	it('reaches the pinned statuses even when reading the collections spends a whole budget', async () => {
+	it('reads healthy collections through in one round at their largest, and reaches the pinned statuses after', async () => {
+		expect(READ_FETCHES).toBeLessThanOrEqual(REQUEST_MAX_FETCHES)
 		const t = await setup()
 		const bob = await mastodonActor(t.web, 'bob')
 		const note = mastodonNote(bob)
 		t.web.serve(note.id, { '@context': AS, ...note })
-		await servedCollections(t, bob, [note.id], [])
-		// Public network collections (two fetches), the inline featured collection (one), and a featuredTags root with
-		// MAX_FEATURED_TAG_PAGES pages (five): eight fetches, the whole budget, before any pinned status.
+		// The largest phase 1: public network collections, a featured root with a first page, and a featuredTags root
+		// with MAX_FEATURED_TAG_PAGES pages, each naming a next one.
+		const featured = featuredOf(bob)
+		t.web.serve(featured, { '@context': AS, id: featured, type: 'OrderedCollection', first: `${featured}?page=1` })
+		t.web.serve(`${featured}?page=1`, {
+			'@context': AS,
+			id: `${featured}?page=1`,
+			type: 'OrderedCollectionPage',
+			orderedItems: [note.id],
+		})
 		const tags = `${bob.uri}/collections/tags`
 		const pageUrl = (n: number) => `${tags}?page=${n}`
 		t.web.serve(tags, { '@context': AS, id: tags, type: 'OrderedCollection', first: pageUrl(1) })
-		for (let n = 1; n <= MAX_FEATURED_TAG_PAGES; n++) {
+		for (let n = 1; n <= MAX_FEATURED_TAG_PAGES + 1; n++) {
 			t.web.serve(pageUrl(n), {
 				'@context': AS,
 				id: pageUrl(n),
@@ -612,12 +625,13 @@ describe('reading a remote account’s collections', () => {
 		}
 		t.web.serve(`${bob.uri}/followers`, followCollection(bob, 'followers', true))
 		t.web.serve(`${bob.uri}/following`, followCollection(bob, 'following', true))
-		expect(2 + 1 + 1 + MAX_FEATURED_TAG_PAGES).toBe(REQUEST_MAX_FETCHES)
 		const bobId = await followed(t, bob)
-		await sync(t)
+		// One call's two rounds: the first reads it all through, the second fetches the pinned status.
+		await syncCollections(t.env, deps(t))
+		expect(await rows(t, 'collection_syncs')).toEqual([{ n: 0 }])
 		expect(await pinned(t, bobId, null)).toEqual([note.id])
 		expect((await featuredTags(t, bobId)).length).toBe(MAX_FEATURED_TAG_PAGES)
-		// The collections were read once.
+		// The collections were read once, in the first round.
 		expect(t.web.fetched.filter((url) => url === tags)).toHaveLength(1)
 	})
 

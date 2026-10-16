@@ -28,7 +28,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       without progress, and leaves what was learned as it was meanwhile. A profile update while a sync runs is read
       again afterwards, with its own three tries.
     - Where Kopje differs from Mastodon: an account keeps at most 20 pins and 10 featured hashtags (Mastodon keeps any
-      number for a remote account), from the first 20 items of its featured collection and the first four pages of its
+      number for a remote account), from the first 20 items of its featured collection and the first three pages of its
       featuredTags collection; a collection is read only on the account's own server, and a pin only when it is the
       account's own post there; a followers or following collection that cannot be read for now hides nothing unless the
       other one hides its items (Mastodon takes it as hidden); a featured hashtag of a remote account counts its posts

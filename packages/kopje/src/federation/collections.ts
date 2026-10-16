@@ -2,7 +2,7 @@ import type { DocumentLoader } from '@fedify/fedify'
 
 import { createRemoteLoaders, type FederationState } from './federation'
 import type { InboxDeps } from './inbox'
-import { isTransientLoadError, requestBudget } from './loader'
+import { isTransientLoadError, REQUEST_MAX_FETCHES, requestBudget } from './loader'
 import { fetchRemoteStatus, idOf } from './remote-status'
 import { MAX_FEATURED_TAGS } from '../domain/featured-tags'
 import { type CollectionReadInput, type CollectionSync, MAX_REMOTE_PINS } from '../domain/remote-collections'
@@ -25,8 +25,15 @@ import { callStore } from '../platform/store-client'
 // Syncs one round runs, each with its own fetch budget.
 export const COLLECTION_SYNCS_PER_ROUND = 2
 // Pages of a featuredTags collection read at most (FetchFeaturedTagsCollectionService reads pages until it has
-// FeaturedTag::LIMIT items or there is no next page; the budget bounds it too).
-export const MAX_FEATURED_TAG_PAGES = 4
+// FeaturedTag::LIMIT items or there is no next page).
+export const MAX_FEATURED_TAG_PAGES = 3
+// The most documents phase 1 fetches: the following and followers collections, the featured collection and its first
+// page, and the featuredTags collection and its pages. It fits one round's budget by construction, so healthy
+// collections are always read through in one round (a redirect hop spends a fetch too, and makes that part retried).
+export const READ_FETCHES = 2 + 2 + 1 + MAX_FEATURED_TAG_PAGES
+if (READ_FETCHES > REQUEST_MAX_FETCHES) {
+	throw new Error('phase 1 of a collection sync must fit one round of REQUEST_MAX_FETCHES')
+}
 
 type Json = Record<string, unknown>
 
