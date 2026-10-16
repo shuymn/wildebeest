@@ -21,6 +21,8 @@ const NOT_DUMPED: Record<string, string> = {
 	backup_media: "the backup's media index for one bucket; a restored Store starts a fresh media baseline",
 	kopje_migrations: 'the dump header carries the applied migrations; the target records its own',
 	media_orphans: 'tombstones of R2 objects to delete; a restored Store must not delete what it restores',
+	stream_conversation_marks:
+		"the streaming conversation marks of one object; a restored Store makes them again from the conversations' stream_seq",
 	stream_cursor: "the streaming fan-out's position, over the journal of one object",
 	stream_delete_viewers: 'captures of the streaming journal of one object, which a restored Store does not send',
 	stream_events: 'the streaming journal of one object; a restored Store has no sockets to send it to',
@@ -75,6 +77,7 @@ const NOT_CARRIED: Record<string, string> = {
 	scheduled_statuses: 'posts scheduled in Kopje; legacy Wildebeest has no scheduled statuses',
 	status_pins:
 		'legacy never wrote its status_pins table, and a legacy row there stops the conversion (UNUSED_LEGACY_TABLES)',
+	stream_conversation_marks: 'streaming state of one object; legacy has no streaming',
 	stream_cursor: 'streaming state of one object; legacy has no streaming',
 	stream_delete_viewers: 'streaming state of one object; legacy has no streaming',
 	stream_events: 'streaming state of one object; legacy has no streaming',
@@ -156,6 +159,7 @@ const NOT_VERIFIED: Record<string, string> = {
 	'accounts.statuses_count': COUNTER,
 	'accounts.url': FROM_RAW,
 	'blocks.created_at': TIME,
+	'conversations.stream_seq': 'the streaming change sequence, 0 until the owner subscribes to `direct`',
 	'blocks.id': DEFAULT,
 	'bookmarks.created_at': TIME,
 	'bookmarks.id': DEFAULT,

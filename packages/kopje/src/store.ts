@@ -19,7 +19,7 @@ import {
 	listRewrapKeys,
 	rewrapLocalKey,
 } from './domain/actors'
-import { setAccountEmail } from './domain/admin-accounts'
+import { actOnAdminAccount, getAdminAccount, listAdminAccounts, setAccountEmail } from './domain/admin-accounts'
 import { oauthAdminStatus } from './domain/admin-authority'
 import { checkCredential, type Credential, type UserCredential } from './domain/auth'
 import * as blocks from './domain/blocks'
@@ -795,6 +795,19 @@ export class Store extends DurableObject<Env> {
 
 	actOnReport(callerBuild: string, input: OperationInput<typeof reports.actOnReport>) {
 		return this.#kernel.execute(callerBuild, reports.actOnReport, input)
+	}
+
+	// The Mastodon admin API's accounts (domain/admin-accounts.ts, R37).
+	adminAccounts(callerBuild: string, input: OperationInput<typeof listAdminAccounts>) {
+		return this.#kernel.execute(callerBuild, listAdminAccounts, input)
+	}
+
+	adminAccount(callerBuild: string, input: OperationInput<typeof getAdminAccount>) {
+		return this.#kernel.execute(callerBuild, getAdminAccount, input)
+	}
+
+	actOnAdminAccount(callerBuild: string, input: OperationInput<typeof actOnAdminAccount>) {
+		return this.#kernel.execute(callerBuild, actOnAdminAccount, input)
 	}
 
 	endorse(callerBuild: string, input: OperationInput<typeof endorsements.endorse>) {

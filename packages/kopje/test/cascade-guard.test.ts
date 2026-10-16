@@ -37,6 +37,8 @@ const STATUS_EXEMPT: Record<string, string> = {
 const ACCOUNT_EXEMPT: Record<string, string> = {
 	conversations: 'owned by a local account only; a remote account is the only one purged',
 	conversation_statuses: 'below conversations, owned by a local account only',
+	stream_conversation_marks:
+		"a local account's only (made at its `direct` subscription, one row); a remote account is the only one purged",
 	poll_votes: 'deleted a batch at a time by deleteAccountVotes, checked by hasPollVotes in accountHasRows',
 	push_deliveries: 'below notifications, which go a batch at a time; at most MAX_PUSH_BACKLOG (1,000) wait in all',
 }
@@ -52,7 +54,7 @@ const WRITING_TRIGGERS: Record<string, string> = {
 	account_pins_follow_ended:
 		"a follow's delete deletes the follower's endorsement of the account; the purge deletes the account's endorsements first (purgeRelationships), so then it writes none",
 	conversation_statuses_removed:
-		"one conversation written per link deleted: STATUS_CHILDREN's conversation_statuses entry takes half the rows left",
+		"one conversation and its owner's streaming mark written per link deleted, and the mark's journal row (stream_conversation_changed): STATUS_CHILDREN's conversation_statuses entry takes a fourth of the rows left (the listening case below)",
 	statuses_last_status_removed:
 		"one account row per status deleted: deleteStatusWithin reserves it with the status's own delete",
 	statuses_last_status_changed:
@@ -65,21 +67,25 @@ const WRITING_TRIGGERS: Record<string, string> = {
 	stream_notification_inserted:
 		'fires on a notification insert, which no batched delete or purge makes (the exact-budget cases below run with a listener too)',
 	stream_status_inserted:
-		'fires on a status insert, which no batched delete or purge makes (the exact-budget cases below run with a listener too)',
+		'fires on a status insert, which no batched delete or purge makes, whether `user` or a list arms it (the exact-budget cases below run with both listening)',
+	stream_conversation_changed:
+		"one journal row when an owner's mark moves, at most one per owner ahead of the position: counted with conversation_statuses_removed, a fourth row per link",
 	stream_status_edited:
-		'fires only when edited_at changes, which no batched delete or purge does: hiding a status writes its visibility and content (the exact-budget cases below run with a listener too)',
+		'fires only when edited_at changes, which no batched delete or purge does: hiding a status writes its visibility and content (the exact-budget cases below run with `user` and a list listening)',
 }
 
-// Streaming subscriptions of the account on `user` and `user:notification`, which arm every journal trigger
-// (migrations 0026_streaming and 0028_streaming_home).
+// Streaming subscriptions of the account on `user`, `user:notification`, a list and `direct`, which arm every journal
+// trigger (migrations 0026_streaming, 0028_streaming_home and 0032_streaming_lists), and its conversation mark, which
+// makes every conversation write take a change sequence.
 async function listen(store: StoreStub, listening: boolean, accountId: string): Promise<void> {
 	if (listening) {
 		await sql(
 			store,
-			"INSERT INTO stream_subscriptions (account_id, stream_key, sockets) VALUES (?, 'user', 1), (?, 'user:notification', 1)",
-			accountId,
+			`INSERT INTO stream_subscriptions (account_id, stream_key, sockets)
+			VALUES (?1, 'user', 1), (?1, 'user:notification', 1), (?1, 'list:100000000000000001', 1), (?1, 'direct', 1)`,
 			accountId
 		)
+		await sql(store, 'INSERT INTO stream_conversation_marks (account_id, seq) VALUES (?, 0)', accountId)
 	}
 }
 
@@ -285,6 +291,83 @@ describe('a status in many conversations', () => {
 		expect(await sql(h.store, 'SELECT count(*) AS n FROM statuses WHERE id = ?', status)).toEqual([{ n: 0 }])
 		expect(await sql(h.store, 'SELECT count(*) AS n FROM conversations')).toEqual([{ n: 0 }])
 	})
+})
+
+describe('a status in many conversations that keep an older one, their owners streaming `direct`', () => {
+	// Each link's delete moves its conversation's last status back to the older status: with the owner's mark, the
+	// trigger writes the mark, its journal row (the owner's first) and the conversation, at most four rows with the link
+	// (migration 0032_streaming_lists).
+	it.each([false, true])(
+		'stays within PURGE_BATCH, each mark and stream_seq advancing (listening: %s)',
+		async (listening) => {
+			const h = await community(['alice'])
+			const remote = await remoteAccount(h.store, 'carol')
+			const older = await seedStatus(h.store, { accountId: remote, visibility: 'direct', content: '<p>older</p>' })
+			const status = await seedStatus(h.store, { accountId: remote, visibility: 'direct', content: '<p>x</p>' })
+			await sql(
+				h.store,
+				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 12)
+			INSERT INTO accounts (id, uri, username) SELECT printf('5%017d', i), 'https://kopje.test/ap/users/c' || i, 'c' || i FROM n`
+			)
+			await sql(
+				h.store,
+				`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey)
+			SELECT id, username || '@mail.example', x'00', x'00', 'k' FROM accounts WHERE id GLOB '5*'`
+			)
+			const owners = await sql<{ id: string }>(h.store, "SELECT id FROM accounts WHERE id GLOB '5*' ORDER BY id")
+			for (const { id } of owners) {
+				await listen(h.store, listening, id)
+			}
+			// 600 conversations (12 owners, 50 sets of participants each) holding both statuses, the newer one last.
+			await sql(
+				h.store,
+				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 50)
+			INSERT INTO conversations (account_id, thread, participants, last_status_id, unread)
+			SELECT a.id, s.thread || '#' || i, json_array(s.account_id, printf('9%017d', i)), s.id, 1
+			FROM accounts a, n, statuses s WHERE a.id GLOB '5*' AND s.id = ?`,
+				status
+			)
+			await sql(
+				h.store,
+				'INSERT INTO conversation_statuses (conversation_id, status_id) SELECT id, ?1 FROM conversations UNION ALL SELECT id, ?2 FROM conversations',
+				status,
+				older
+			)
+			const batches: number[] = []
+			for (let i = 0; i < 20; i++) {
+				const { wrote, remaining } = await runInDurableObject(h.store, (_instance, state) => {
+					const db = new Db(state.storage.sql)
+					const changes = () => db.first<{ n: number }>('SELECT total_changes() AS n')!.n
+					const before = changes()
+					const more = state.storage.transactionSync(() => deleteStatusBatch(db, status, NOW))
+					return { wrote: changes() - before, remaining: more }
+				})
+				batches.push(wrote)
+				if (!remaining) {
+					break
+				}
+			}
+			expect(batches.length).toBeGreaterThan(1)
+			expect(batches.every((wrote) => wrote <= PURGE_BATCH)).toBe(true)
+			// The marks' moves journaled one row per owner, whatever the batches (the position never moved).
+			expect(await sql(h.store, "SELECT count(*) AS n FROM stream_events WHERE kind = 'conversation'")).toEqual([
+				{ n: listening ? owners.length : 0 },
+			])
+			expect(await sql(h.store, 'SELECT count(*) AS n FROM statuses WHERE id = ?', status)).toEqual([{ n: 0 }])
+			expect(await sql(h.store, 'SELECT count(*) AS n FROM conversations WHERE last_status_id = ?', older)).toEqual([
+				{ n: 600 },
+			])
+			expect(await sql(h.store, 'SELECT DISTINCT seq FROM stream_conversation_marks')).toEqual(
+				listening ? [{ seq: 50 }] : []
+			)
+			expect(
+				await sql(
+					h.store,
+					'SELECT count(DISTINCT stream_seq) AS seqs, min(stream_seq) AS low, max(stream_seq) AS high FROM conversations'
+				)
+			).toEqual([listening ? { seqs: 50, low: 1, high: 50 } : { seqs: 1, low: 0, high: 0 }])
+		}
+	)
 })
 
 describe("a status's own delete within a batch", () => {
