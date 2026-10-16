@@ -35,10 +35,13 @@ export const SYNC_LEASE_MS = 10 * 60 * 1000
 
 // Asks for a sync of the account's collections (ProcessAccountService#check_featured_collection! and
 // #check_featured_tags_collection!, and the hide_collections it sets). One request per account waits at a time, as
-// Sidekiq's until_executed lock keeps one job. Whether a request is due (no round holds it).
+// Sidekiq's until_executed lock keeps one job; a request while a round holds it is a new generation, which the round's
+// end leaves due (applyCollectionSync), so the round reading the older document does not end it. Whether a request is
+// due (no round holds it).
 export function requestCollectionSync(db: Db, accountId: string, now: number): boolean {
 	db.run(
-		'INSERT INTO collection_syncs (account_id, due_at) VALUES (?, ?) ON CONFLICT (account_id) DO NOTHING',
+		`INSERT INTO collection_syncs (account_id, due_at) VALUES (?, ?)
+		ON CONFLICT (account_id) DO UPDATE SET generation = generation + 1`,
 		accountId,
 		now
 	)
@@ -200,12 +203,18 @@ export function unfeatureRemote(db: Db, accountId: string, name: string): boolea
 // A sync a round claimed: the account, the collections its stored document names, and the local follower whose key
 // signs the fetches (FetchFeaturedCollectionService#local_follower: the first available one), or null for the
 // instance actor. pending: another sync waits.
-export type CollectionSync = ActorCollections & { accountUri: string; signer: string | null; pending: boolean }
+// generation: the request the round read, which it hands back to applyCollectionSync.
+export type CollectionSync = ActorCollections & {
+	accountUri: string
+	generation: number
+	signer: string | null
+	pending: boolean
+}
 
 // The sync due first, by a seek of collection_syncs_due: the syncs rounds hold are due later, so none is read.
-function claimable(db: Db, now: number): { account_id: string; attempts: number } | undefined {
-	return db.first<{ account_id: string; attempts: number }>(
-		'SELECT account_id, attempts FROM collection_syncs WHERE due_at <= ? ORDER BY due_at LIMIT 1',
+function claimable(db: Db, now: number): { account_id: string; attempts: number; generation: number } | undefined {
+	return db.first<{ account_id: string; attempts: number; generation: number }>(
+		'SELECT account_id, attempts, generation FROM collection_syncs WHERE due_at <= ? ORDER BY due_at LIMIT 1',
 		now
 	)
 }
@@ -244,6 +253,7 @@ export const claimCollectionSync = writeOperation<{ now: number }, CollectionSyn
 		)
 		return {
 			accountUri: account.uri,
+			generation: row.generation,
 			...actorCollections(account.raw),
 			signer: signer?.username ?? null,
 			pending: claimable(db, now) !== undefined,
@@ -273,6 +283,7 @@ export type CollectionSyncInput = {
 	now: number
 	origin: string
 	accountUri: string
+	generation: number
 	pins: { uris: string[]; fetched: Record<string, RemoteStatusInput | null> } | null
 	tags: string[] | null
 	hideCollections: boolean | null
@@ -280,19 +291,25 @@ export type CollectionSyncInput = {
 
 // Applies what a round read (FetchFeaturedCollectionService#process_note_items and #process_hashtag_items,
 // FetchFeaturedTagsCollectionService#process_items, ProcessAccountService#set_fetchable_attributes!) and ends the sync.
-// Nothing is applied to an account that is gone or unavailable.
-export const applyCollectionSync = writeOperation<CollectionSyncInput, void>((db, input) => {
+// Nothing is applied to an account that is gone or unavailable. A sync asked for again since the round claimed it (a
+// newer generation) is not ended but made due at once, to be read again. Returns whether a sync is due.
+export const applyCollectionSync = writeOperation<CollectionSyncInput, boolean>((db, input) => {
 	const account = db.first<{ id: string; uri: string }>(
 		'SELECT id, uri FROM accounts WHERE uri = ? AND domain IS NOT NULL',
 		input.accountUri
 	)
 	if (account === undefined) {
-		return
+		return claimable(db, input.now) !== undefined
 	}
-	db.run('DELETE FROM collection_syncs WHERE account_id = ?', account.id)
-	if (db.first(`SELECT 1 AS x WHERE ${availableSql('?1')}`, account.id) === undefined) {
-		return
+	db.run('DELETE FROM collection_syncs WHERE account_id = ? AND generation = ?', account.id, input.generation)
+	db.run('UPDATE collection_syncs SET due_at = ?, attempts = 0 WHERE account_id = ?', input.now, account.id)
+	if (db.first(`SELECT 1 AS x WHERE ${availableSql('?1')}`, account.id) !== undefined) {
+		applyRead(db, account, input)
 	}
+	return claimable(db, input.now) !== undefined
+})
+
+function applyRead(db: Db, account: { id: string; uri: string }, input: CollectionSyncInput): void {
 	if (input.pins !== null) {
 		replacePins(db, account, input.pins, input)
 	}
@@ -302,7 +319,7 @@ export const applyCollectionSync = writeOperation<CollectionSyncInput, void>((db
 	if (input.hideCollections !== null) {
 		db.run('UPDATE accounts SET hide_collections = ? WHERE id = ?', input.hideCollections ? 1 : 0, account.id)
 	}
-})
+}
 
 // The account's pins become the statuses the collection lists that are its own, pinnable, and stored (or fetched now,
 // stored as a fetched status: Mastodon's FetchRemoteStatusService with expected_actor_uri), the first MAX_REMOTE_PINS

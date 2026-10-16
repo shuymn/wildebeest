@@ -21,8 +21,11 @@
 --   account's document is stored and deleted once the Worker has read them (or after MAX_SYNC_ATTEMPTS claims that
 --   never finished). due_at is when a round may take it: the time it was asked for, then, once a round takes it, the
 --   end of that round's lease, so that a round that died leaves it to a later one. A round seeks the earliest due_at
---   at or before its time through collection_syncs_due, so syncs held by rounds are never read past. It goes with its
---   account (purgeRelationships, and the cascade as a backstop).
+--   at or before its time through collection_syncs_due, so syncs held by rounds are never read past. generation counts
+--   the requests: a request while a round holds the sync (an Update of the actor naming other collections) raises it,
+--   and the round's end deletes the sync only if the generation it claimed is still the one asked for, else makes it
+--   due at once. It goes with its account (purgeRelationships, and
+--   the cascade as a backstop).
 --
 -- Cost: the copies read and write each pin and featured hashtag once. Until now only local accounts have them, at
 -- most five pins (StatusPinValidator) and ten featured hashtags (FeaturedTag::LIMIT) each, so the work grows with the
@@ -67,6 +70,7 @@ ALTER TABLE accounts ADD COLUMN hide_collections INTEGER;
 CREATE TABLE collection_syncs (
   account_id TEXT NOT NULL PRIMARY KEY REFERENCES accounts (id) ON DELETE CASCADE,
   due_at INTEGER NOT NULL,
+  generation INTEGER NOT NULL DEFAULT 1,
   attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0)
 );
 

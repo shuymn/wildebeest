@@ -253,8 +253,14 @@ export async function syncCollections(env: Env, deps: InboxDeps): Promise<boolea
 		if (state.storeError !== null) {
 			throw state.storeError
 		}
-		await callStore(() =>
-			store().applyCollectionSync(build, { now: deps.now(), origin, accountUri: sync.accountUri, ...read })
+		pending = await callStore(() =>
+			store().applyCollectionSync(build, {
+				now: deps.now(),
+				origin,
+				accountUri: sync.accountUri,
+				generation: sync.generation,
+				...read,
+			})
 		)
 	}
 	return pending

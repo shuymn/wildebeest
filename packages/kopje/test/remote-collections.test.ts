@@ -65,8 +65,8 @@ async function featuredTags(t: Setup, accountId: string): Promise<FeaturedTag[]>
 const rows = (t: Setup, table: string) => sql<{ n: number }>(t.store, `SELECT count(*) AS n FROM ${table}`)
 
 // A round of jobs' syncs, as the Queue's and cron's rounds run them, until none waits.
-async function sync(t: Setup): Promise<void> {
-	const deps = inboxDeps(() => t.store, t.web.loader)
+async function sync(t: Setup, loader: Parameters<typeof inboxDeps>[1] = t.web.loader): Promise<void> {
+	const deps = inboxDeps(() => t.store, loader)
 	for (let round = 0; round < 5 && (await syncCollections(t.env, deps)); round++) {
 		// Another sync waits.
 	}
@@ -300,6 +300,34 @@ describe('reading a remote account’s collections', () => {
 			ALICE,
 		])
 		expect((await t.api<Account[]>(`/api/v1/accounts/${bobId}/following`, null)).body.map((a) => a.id)).toEqual([DAVE])
+	})
+
+	it('reads the collections again when the actor names others while a round reads the old ones', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const old = mastodonNote(bob)
+		const fresh = mastodonNote(bob)
+		await servedCollections(t, bob, [old.id], [hashtag('Old')])
+		const featured2 = `${bob.uri}/collections/featured2`
+		t.web.serve(featured2, { '@context': AS, id: featured2, type: 'OrderedCollection', orderedItems: [fresh.id] })
+		const bobId = await followed(t, bob)
+		expect(await t.post(bob, create(bob, old))).toBe(202)
+		expect(await t.post(bob, create(bob, fresh))).toBe(202)
+		// When the round asks for the old featured collection, bob's Update naming featured2 arrives first.
+		let updated = false
+		const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = new Request(input, init).url
+			if (url === featuredOf(bob) && !updated) {
+				updated = true
+				t.web.serve(bob.uri, { ...bob.document, featured: featured2 })
+				const update = { '@context': AS, id: `${bob.uri}#updates/${nextId()}`, type: 'Update', actor: bob.uri }
+				expect(await t.post(bob, { ...update, object: { ...bob.document, featured: featured2 } })).toBe(202)
+			}
+			return t.web.fetch(input, init)
+		}) as typeof fetch
+		await sync(t, { ...t.web.loader, fetch })
+		expect(updated).toBe(true)
+		expect(await pinned(t, bobId, null)).toEqual([fresh.id])
 	})
 
 	it('keeps the first MAX_REMOTE_PINS items and MAX_FEATURED_TAGS hashtags of an oversized collection', async () => {
