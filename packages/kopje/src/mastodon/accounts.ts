@@ -20,6 +20,7 @@ import {
 	type CredentialChanges,
 	type FieldSource,
 	MAX_ACCOUNTS_BY_ID,
+	MAX_ATTRIBUTION_DOMAINS,
 	MAX_FIELD_NAME,
 	MAX_FIELD_VALUE,
 	MAX_FIELDS,
@@ -99,12 +100,64 @@ export function credentialChanges(p: Params): { changes: CredentialChanges; prob
 		}
 		changes.fields = fields
 	}
+	const attribution = p.list('attribution_domains')
+	if (attribution !== undefined) {
+		const domains = normalizeAttributionDomains(attribution)
+		for (const domain of domains.filter((d) => !compliantDomain(d))) {
+			problems.push(`Attribution domains ${domain} is not a valid domain name`)
+		}
+		if (domains.length > MAX_ATTRIBUTION_DOMAINS) {
+			problems.push(`Attribution domains is too long (maximum is ${MAX_ATTRIBUTION_DOMAINS} characters)`)
+		}
+		changes.attributionDomains = domains
+	}
 	changes.locked = parseBoolean(p.get('locked'))
 	changes.bot = parseBoolean(p.get('bot'))
 	changes.discoverable = parseBoolean(p.get('discoverable'))
 	changes.hideCollections = parseBoolean(p.get('hide_collections'))
 	changes.sensitive = parseBoolean(p.get('source[sensitive]'))
 	return { changes, problems }
+}
+
+// Account::AttributionDomains' normalization: each value stripped of surrounding whitespace and of an http://,
+// https:// and *. prefix, blanks dropped, duplicates removed. Values are kept as written otherwise.
+export function normalizeAttributionDomains(values: readonly string[]): string[] {
+	const domains = values
+		.map((value) =>
+			value
+				.replace(/^[\t\n\v\f\r \0]+|[\t\n\v\f\r \0]+$/g, '')
+				.replace(/^http:\/\//, '')
+				.replace(/^https:\/\//, '')
+				.replace(/^\*\./, '')
+		)
+		.filter((value) => value !== '')
+	return [...new Set(domains)]
+}
+
+const MAX_DOMAIN_LENGTH = 256
+const DOMAIN_LABEL = /^[a-z0-9-]{1,63}$/
+
+// DomainValidator#compliant?: the host, lowercased and IDNA-encoded, shorter than 256 characters, of labels of 1 to 63
+// letters, digits and hyphens (a trailing dot is allowed, as Ruby's split drops the empty label after it). A value
+// with a character a host cannot hold (Addressable::URI::InvalidURIError) is not compliant.
+export function compliantDomain(value: string): boolean {
+	let host: string
+	if (/^[\x21-\x7e]*$/.test(value)) {
+		host = value.toLowerCase()
+	} else if ([...value].some((c) => c <= ' ' || c === '\x7f' || '/\\?#@:"<>{}'.includes(c))) {
+		return false
+	} else {
+		const hostname = URL.parse(`https://${value}/`)?.hostname
+		if (hostname === undefined) {
+			return false
+		}
+		host = hostname
+	}
+	const labels = host.split('.')
+	while (labels.length > 0 && labels.at(-1) === '') {
+		labels.pop()
+	}
+	return host.length < MAX_DOMAIN_LENGTH && labels.every((label) => DOMAIN_LABEL.test(label))
 }
 
 export const updateCredentials: ApiHandler = async (c, deps) => {

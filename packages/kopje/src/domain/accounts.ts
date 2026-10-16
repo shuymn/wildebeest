@@ -71,6 +71,9 @@ export const MAX_FIELDS = 4
 export const MAX_FIELD_NAME = 255
 export const MAX_FIELD_VALUE = 255
 
+// Account::AttributionDomains::ATTRIBUTION_DOMAINS_LIMIT.
+export const MAX_ATTRIBUTION_DOMAINS = 100
+
 export type Visibility = 'public' | 'unlisted' | 'private' | 'direct'
 
 export type CredentialAccount = Account & {
@@ -82,6 +85,7 @@ export type CredentialAccount = Account & {
 		fields: (FieldSource & { verified_at: null })[]
 		follow_requests_count: number
 		hide_collections: boolean
+		attribution_domains: string[]
 	}
 	role: { id: string; name: string; permissions: string; color: string; highlighted: boolean }
 }
@@ -332,13 +336,14 @@ type CredentialRow = {
 	default_visibility: Visibility
 	default_sensitive: number
 	default_language: string | null
+	attribution_domains: string
 	follow_requests_count: number
 }
 
 export function credentialAccount(db: Db, accountId: string, present: Present): CredentialAccount | null {
 	const row = accountRow(db, accountId)
 	const local = db.first<CredentialRow>(
-		`SELECT default_visibility, default_sensitive, default_language,
+		`SELECT default_visibility, default_sensitive, default_language, attribution_domains,
 			(SELECT COUNT(*) FROM follows WHERE target_account_id = ?1 AND state = 'pending') AS follow_requests_count
 		FROM local_accounts WHERE account_id = ?1`,
 		accountId
@@ -356,6 +361,7 @@ export function credentialAccount(db: Db, accountId: string, present: Present): 
 			fields: fieldSources(row.local_fields).map((field) => ({ ...field, verified_at: null })),
 			follow_requests_count: local.follow_requests_count,
 			hide_collections: row.hide_collections === 1,
+			attribution_domains: JSON.parse(local.attribution_domains) as string[],
 		},
 		// Every user has Mastodon's default role (id -99) until roles exist. permissions is a string (design §4).
 		role: { id: '-99', name: '', permissions: '0', color: '', highlighted: false },
@@ -404,7 +410,7 @@ export type Preferences = {
 }
 
 export const preferences = userReadOperation<object, Preferences | null>((db, _input, { accountId }) => {
-	const row = db.first<Omit<CredentialRow, 'follow_requests_count'>>(
+	const row = db.first<Omit<CredentialRow, 'follow_requests_count' | 'attribution_domains'>>(
 		'SELECT default_visibility, default_sensitive, default_language FROM local_accounts WHERE account_id = ?',
 		accountId
 	)
@@ -431,6 +437,8 @@ export type CredentialChanges = {
 	language?: string | null
 	// Replaces every field; lengths and count are validated by the caller.
 	fields?: FieldSource[]
+	// Replaces every attribution domain; normalized and validated by the caller.
+	attributionDomains?: string[]
 }
 
 // Lengths and values are validated by the caller. display_name and the note are plain text: display_name is stored
@@ -472,7 +480,8 @@ export const updateCredentials = userWriteOperation<
 		`UPDATE local_accounts SET default_visibility = COALESCE(?, default_visibility),
 			default_sensitive = COALESCE(?, default_sensitive),
 			default_language = CASE WHEN ? THEN ? ELSE default_language END,
-			fields = COALESCE(?, fields), hide_collections = COALESCE(?, hide_collections)
+			fields = COALESCE(?, fields), hide_collections = COALESCE(?, hide_collections),
+			attribution_domains = COALESCE(?, attribution_domains)
 		WHERE account_id = ?`,
 		changes.privacy ?? null,
 		bit(changes.sensitive),
@@ -480,6 +489,7 @@ export const updateCredentials = userWriteOperation<
 		changes.language ?? null,
 		changes.fields === undefined ? null : JSON.stringify(changes.fields.slice(0, MAX_FIELDS)),
 		hide,
+		changes.attributionDomains === undefined ? null : JSON.stringify(changes.attributionDomains),
 		accountId
 	)
 	// Other servers learn of the change (Update(Person)), only if the published document changed, or if the account

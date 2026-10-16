@@ -3,6 +3,7 @@ import type { Child, FC } from 'hono/jsx'
 import { type SafeHtml, plainText, sanitized, sanitizedField } from './safe-html'
 import { type Notice, STRINGS } from './strings'
 import type { Account, CredentialAccount, Visibility } from '../domain/accounts'
+import type { InstanceRule } from '../domain/instance'
 import type { MediaAttachment, Status } from '../domain/status-presenter'
 import type { ParentLink } from '../domain/web-pages'
 import type { Authorizations } from '../domain/web-session'
@@ -50,6 +51,50 @@ export const MessagePage: FC<{ title: string; message: string; link?: { href: st
 		{link === undefined ? null : (
 			<p>
 				<a href={link.href}>{link.text}</a>
+			</p>
+		)}
+	</Layout>
+)
+
+export type AboutView = {
+	title: string
+	domain: string
+	description: string
+	contactEmail: string
+	rules: InstanceRule[]
+}
+
+// /about, the page Mastodon's configuration.urls.about names and the instance actor's url: the server's title,
+// description, rules and contact address, as the instance endpoints give them. The address is text, not a mailto: link
+// (HTML-3).
+export const AboutPage: FC<AboutView> = ({ title, domain, description, contactEmail, rules }) => (
+	<Layout
+		title={title}
+		head={
+			<>
+				<meta name="description" content={description} />
+				<link rel="canonical" href={`https://${domain}/about`} />
+			</>
+		}
+	>
+		<h1>{title}</h1>
+		{description === '' ? null : <p class="about">{description}</p>}
+		{rules.length === 0 ? null : (
+			<>
+				<h2>{STRINGS.aboutRules}</h2>
+				<ol class="rules">
+					{rules.map((rule) => (
+						<li>
+							{rule.text}
+							{rule.hint === '' ? null : <p class="hint">{rule.hint}</p>}
+						</li>
+					))}
+				</ol>
+			</>
+		)}
+		{contactEmail === '' ? null : (
+			<p class="contact">
+				{STRINGS.aboutContact}: {contactEmail}
 			</p>
 		)}
 	</Layout>

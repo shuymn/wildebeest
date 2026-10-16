@@ -258,8 +258,8 @@ describe('POST /api/v1/reports', () => {
 		const { h, alice, carol } = await reporting()
 		await setSetting(h.store, 'rules', JSON.stringify([{ id: '7', text: 'Be kind' }, 'No spam']))
 		expect(await (await h.request('/api/v1/instance/rules')).json()).toEqual([
-			{ id: '7', text: 'Be kind' },
-			{ id: '2', text: 'No spam' },
+			{ id: '7', text: 'Be kind', hint: '', translations: {} },
+			{ id: '2', text: 'No spam', hint: '', translations: {} },
 		])
 		const forced = await report(h, alice, { account_id: carol, category: 'spam', rule_ids: ['7', '2'] })
 		expect([forced.status, forced.body.category, forced.body.rule_ids]).toEqual([200, 'violation', ['7', '2']])

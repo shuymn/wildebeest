@@ -29,11 +29,54 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   bound on what a home timeline reads.
     - Where Kopje differs from Mastodon: the limit and ratio are fixed (Mastodon reads `MAX_FOLLOWS_THRESHOLD` and
       `MAX_FOLLOWS_RATIO`).
+- Attribution domains, as Mastodon 4.5 has them: `PATCH /api/v1/accounts/update_credentials` takes
+  `attribution_domains[]` (the websites allowed to credit the account as the author of their articles), normalized as
+  Mastodon does (surrounding whitespace and an `http://`, `https://` or `*.` prefix removed, blanks and duplicates
+  dropped) and validated with its messages (each a domain name, at most 100). The credential account shows them in
+  `source.attribution_domains` (`[]` when none), and the actor document publishes them as `attributionDomains` when
+  there is one, which reaches other servers with the account's Update.
+- An about page at `/about`: the server's title (else its domain), description, rules and contact address, as the
+  instance endpoints give them. `/api/v2/instance` names it as `configuration.urls.about`, and the instance actor's
+  `url` already pointed there.
+
+### Changed
+
+- A full Tag (`/api/v1/tags/:id` and its `follow`, `unfollow`, `feature` and `unfeature`, `/api/v1/followed_tags`,
+  `/api/v1/featured_tags/suggestions` and the hashtags of `/api/v2/search`) has Mastodon's `id` (sent since 4.3.1).
+  Kopje has no table of hashtags, so the id is derived from the normalized name (its 64-bit FNV-1a hash cut to 63
+  bits, in decimal): the same on every endpoint and instance. No route takes it back; `/api/v1/tags/:id` still takes
+  the name, as in Mastodon.
+- Instance rules have Mastodon's `hint` and `translations` on every endpoint that shows them (`/api/v1/instance`,
+  `/api/v2/instance`, `/api/v1/instance/rules`): the hint is the `hint` of a rule given as an object in the `rules`
+  setting (else `""`), and `translations` is `{}`, since Kopje stores none. The about page shows the hint under its
+  rule.
+- `/api/v1/instance` and `/api/v2/instance` declare Mastodon `4.4.0` (was `4.0.2`), and `/api/v2/instance` adds
+  `api_versions: { "mastodon": 6 }`, the number Mastodon 4.4 sends. Clients choose APIs by these numbers, and every
+  API they switch on up to 6 is now served: grouped notifications (`/api/v2/notifications`), the notification policy,
+  the link timeline, `delete_media`, the `blur` filter action, featured hashtags and OAuth PKCE. With this, Phanpy,
+  Ice Cubes, Moshidon and the official iOS and Android apps use grouped notifications, Phanpy and Tusky offer the `blur`
+  filter action, the official Android app signs in with PKCE, and the official iOS app shows an account's featured
+  tab. Kopje stays below 7 (Mastodon 4.5) because 7 tells clients that quote posts are served, and they are not yet.
+    - The official iOS app also shows a default quote policy in its privacy settings at 6. Kopje ignores it: no one can
+      quote a Kopje post whatever it says.
+    - `/api/v2/instance` has Mastodon 4.4's other fields with Kopje's values: `icon` (none), `configuration.urls`
+      `about` (the about page), `status`, `privacy_policy` and `terms_of_service` (null),
+      `configuration.accounts.max_pinned_statuses` (5), `configuration.media_attachments.description_limit` (1500),
+      `configuration.limited_federation` (false), and `registrations.reason_required` (false), `min_age` and `url`
+      (null).
 
 ### Fixed
 
 - Authorizing a local account's follow request counts the follow in that account's `following_count` at once (it was
   counted only at the account's next follow change).
+
+### Instance changes
+
+- Store schema: adds one migration, applied on the first request after the deploy; a rollback to an earlier version
+  needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
+    - `0024_attribution_domains`: adds `local_accounts.attribution_domains`, an empty list for every account. Adding a
+      column with a constant default reads no row, so its work does not grow with the Store.
+- `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.7] - 2026-10-16
 

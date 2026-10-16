@@ -496,7 +496,7 @@ async function localActorObject(ctx: RequestContext<FederationState>, actor: Loc
 					(field) => new PropertyValue({ name: field.name, value: renderFieldValue(field.value) })
 				),
 			}
-	return new cls({
+	const object = new cls({
 		id,
 		preferredUsername: actor.username,
 		url: new URL(`/@${actor.username}`, ctx.canonicalOrigin),
@@ -516,6 +516,38 @@ async function localActorObject(ctx: RequestContext<FederationState>, actor: Loc
 		published: Temporal.Instant.from(actor.createdAt),
 		...profile,
 	})
+	return withAttributionDomains(object, actor.attributionDomains)
+}
+
+// Mastodon's `attributionDomains` (toot:attributionDomains), which Fedify's vocabulary does not have: added to the
+// compacted document with its context term, only when the account has one, as ActivityPub::ActorSerializer adds it
+// (a suspended account's too).
+const ATTRIBUTION_DOMAINS_CONTEXT = {
+	toot: 'http://joinmastodon.org/ns#',
+	attributionDomains: { '@id': 'toot:attributionDomains', '@container': '@set' },
+}
+
+function withAttributionDomains<T extends { toJsonLd(options?: object): Promise<unknown> }>(
+	object: T,
+	domains: string[]
+): T {
+	if (domains.length === 0) {
+		return object
+	}
+	const toJsonLd = object.toJsonLd.bind(object)
+	object.toJsonLd = async (options?: object) => {
+		const json = await toJsonLd(options)
+		if (typeof json !== 'object' || json === null || !('@context' in json)) {
+			return json
+		}
+		const context = (json as { '@context': unknown })['@context']
+		return {
+			...json,
+			'@context': [...(Array.isArray(context) ? context : [context]), ATTRIBUTION_DOMAINS_CONTEXT],
+			attributionDomains: domains,
+		}
+	}
+	return object
 }
 
 function image(stored: string | null): Image | null {
