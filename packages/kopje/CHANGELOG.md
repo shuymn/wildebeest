@@ -8,6 +8,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+## [0.1.0-rc.10] - 2026-10-16
+
+A tenth release candidate of the first release, published under the npm dist-tag `next`.
+
 ### Added
 
 - The streaming API's `user` stream (`read` or `read:statuses`) carries the home timeline, as Mastodon 4.5's does:
@@ -85,7 +89,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds three migrations, applied in order on the first request after the deploy; a rollback to an earlier
+- Store schema: adds four migrations, applied in order on the first request after the deploy; a rollback to an earlier
   version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0028_streaming_home`: adds the triggers that journal a status inserted while an account subscribes to `user`,
       and an edit while one subscribes to `user` or `user:notification`, the empty `stream_delete_viewers` table (a
