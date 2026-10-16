@@ -10,6 +10,20 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Added
 
+- The streaming API's `user` stream (`read` or `read:statuses`) carries the home timeline, as Mastodon 4.5's does:
+  `update` when a status or boost enters it (the account's own included), `status.update` when a status in it is
+  edited, and `delete` (the id) when a status or boost the account could see is deleted or unboosted. Each status is the
+  one `GET /api/v1/timelines/home` would show at its place, presented as REST presents it to the account.
+    - An edit of a post that mentions the account (one whose mention notification its list shows) is also sent as
+      `status.update` on `user` when the token has `read` or `read:notifications`, and on `user:notification`, as
+      Mastodon sends edits to the accounts a post mentioned.
+    - As Mastodon, a post published more than 6 hours before it arrived (a remote post fetched late) is not sent as
+      `update`.
+    - `public*`, `hashtag*`, `list` and `direct` still answer `{"error":"Unknown stream type","status":400}`.
+    - Where Kopje differs from Mastodon: at most 40 boosts of a deleted status are deleted on each account's stream,
+      those by the account and by accounts it follows; nothing is sent when an account is purged; and a post of a
+      followed hashtag is sent even when a page of home read from the top would leave it out behind 40 or more newer
+      posts the account's home hides (`max_id` paging shows it at its place).
 - The Mastodon admin API's 63 routes (`/api/v1/admin/*` and `GET /api/v2/admin/accounts`) are routed, each with its
   admin scope and an optional token, as Mastodon's. None is served yet: each answers as Mastodon answers a caller whose
   role lacks the route's permission.
@@ -25,6 +39,27 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       tokens follow a change of `admin_email` at once. `/setup` after bootstrap uses the same match.
     - `GET /admin/health` (Access only) shows `oauthAdmin`: `status` (`ok`, `unset`, `none`, `suspended` or
       `ambiguous`) and the matched `username`.
+- The admin API's reports are served to that admin (the role's `manage_reports`), as Mastodon 4.5 serves them:
+  `GET /api/v1/admin/reports` and `GET`, `PUT` and `PATCH /api/v1/admin/reports/:id`, and `POST .../assign_to_self`,
+  `unassign`, `resolve` and `reopen`. Everyone else is still answered 403, a missing report included.
+    - The list shows the unresolved reports, or with `resolved` (whatever its value, as Mastodon) the resolved ones,
+      by `account_id` (the reporter) and `target_account_id`, newest first, with `Link` headers. It holds 100 reports
+      by default and at most 200, and stops early, offering the next page, once its reports name 100 statuses.
+    - A report shows its reporter, reported account, assignee and resolver as admin accounts (a local account's email
+      and role; for a remote account the fields of a missing user are null), its rules, and the statuses it names
+      that its reporter may still see; Mastodon shows them all.
+    - `PUT` and `PATCH` change `category` and `rule_ids` with Mastodon's validations and messages; an unknown
+      category is answered 422 where Mastodon fails.
+    - The reporter's report shows `action_taken` once it is resolved.
+    - `GET /api/v1/accounts/verify_credentials` shows the admin's role as `Owner` (id 3) with the permissions
+      served (`16`); every other account keeps the default role.
+- The moderation log: every admin write through the admin API, and every account repair through `/admin`, is
+  recorded with who made it (the admin's account and client, or the Access identity), in the write's transaction.
+  It keeps the newest 10,000 entries. `GET /admin/moderation-log` and `kopje-admin moderation-log` show it, to
+  Access only. Dumps and backups carry it; the cutover has none to carry.
+- `POST /admin/accounts/email` and `kopje-admin account set-email <username> <email>` (Access only) set a local
+  account's email, refusing one another local account has after trimming and lowercasing. It repairs a missing or
+  ambiguous admin match.
 - Quote posts received from other servers are stored and verified, as Mastodon 4.5 does (FEP-044f). Nothing shows them
   yet: the API, the web pages and the notifications are unchanged, and a quote is still seen as its `RE:` link.
     - A post that quotes another (Mastodon's `quote`, or Misskey's and Fedibird's `_misskey_quote`, `quoteUrl` and
@@ -48,9 +83,18 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds a migration, applied on the first request after the deploy; a rollback to an earlier version needs
-  the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
-    - `0027_quotes`: adds the empty `quotes` and `quote_revocations` tables, their indexes and the triggers that keep
+- Store schema: adds three migrations, applied in order on the first request after the deploy; a rollback to an earlier
+  version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
+    - `0028_streaming_home`: adds the triggers that journal a status inserted while an account subscribes to `user`,
+      and an edit while one subscribes to `user` or `user:notification`, the empty `stream_delete_viewers` table (a
+      delete's capture), a column of the streaming position and an index of the subscription registry. The registry
+      and the position hold only the open sockets' rows (every socket closes on the deploy), so its work does not grow
+      with the Store. The new table is left out of dumps and backups, as the other streaming tables are.
+    - `0029_admin_reports`: adds the reports' moderation columns (when resolved and by whom, the assignee, the time of
+      the last change) and their indexes, replacing two, and the moderation log table. It reads only the reports: on a
+      benchmark store of 1,000,000 accounts, 3,000,000 follows, 2,000,000 statuses and 10,000 reports its upgrade took
+      2.3 seconds in workerd's local Durable Object SQLite.
+    - `0030_quotes`: adds the empty `quotes` and `quote_revocations` tables, their indexes and the triggers that keep
       the new `statuses.quotes_count`. The column has a constant default and no constraint, so stored statuses are
       neither read nor rewritten; nothing is backfilled (stored posts keep their quote properties in `raw`), so the
       migration's work does not grow with the instance.

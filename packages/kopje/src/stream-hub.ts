@@ -1,6 +1,6 @@
 import {
-	carriesNotifications,
 	JOURNAL_SPAN,
+	mayCarry,
 	maySubscribe,
 	SERVED_STREAMS,
 	type ServedStream,
@@ -9,16 +9,19 @@ import {
 	streamAccept,
 	streamAdvance,
 	streamCaughtUp,
+	streamDeleteUnits,
 	type StreamEvent,
 	type StreamGrant,
 	streamEvents,
 	type StreamKeys,
-	streamNotificationUnit,
 	type StreamPosition,
 	streamPrune,
+	type StreamSubject,
+	type StreamUnitAfter,
 	streamReconcile,
 	streamRegister,
 	streamTokens,
+	streamUnit,
 } from './domain/streaming'
 import { errorFields } from './platform/error-message'
 import { toStoreUnavailable } from './platform/store-errors'
@@ -56,8 +59,8 @@ export const STREAM_LIMITS = {
 type Charge = { checks: number; presentations: number; bytes: number; sends: number }
 
 // What one turn may do, and what one unit may do at most: 16 token checks and the reference reads of 16 keys and a
-// mention (design §4.4; this release reads one reference), one presentation, and a send to each of 16 subscriptions on
-// each of 16 sockets.
+// mention (design §4.4; this release reads at most two: home and the mention), one presentation, and a send to each
+// of 16 subscriptions on each of 16 sockets.
 export const TURN_BUDGET: Charge = { checks: 512, presentations: 64, bytes: 4 * 1024 * 1024, sends: 4096 }
 const UNIT_WORST: Charge = { checks: 33, presentations: 1, bytes: STREAM_LIMITS.payloadBytes, sends: 256 }
 
@@ -80,6 +83,15 @@ type Attachment = {
 }
 
 type Socket = { ws: WebSocket; at: Attachment }
+
+// One subject of an event for one viewer, with the viewer's sockets that may carry it.
+type Unit = { subject: StreamSubject; viewer: string; sockets: Socket[] }
+
+// A scan's walk: the position as this turn moved it, and an event passed over whose position write is pending.
+type Walk = { from: StreamPosition; skipTo: StreamPosition | null }
+
+// A delete's units are read this many viewers at a time (at most 41 units each).
+const DELETE_PAGE = 8
 
 class Budget {
 	readonly #left: Charge
@@ -440,79 +452,144 @@ export class StreamHub {
 				full = true
 				console.warn({ event: 'kopje.stream.journal-full', head: scan.head, tail: scan.tail })
 			}
-			let from = scan.position
-			// Events no open socket takes are passed over with one position write, before the next unit or at the end.
-			let skipTo: StreamPosition | null = null
+			const state: Walk = { from: scan.position, skipTo: null }
 			for (const event of scan.events) {
-				const units = this.#units(event)
-				if (units.length === 0) {
-					skipTo = { event: event.id, account: null }
-					continue
-				}
-				if (skipTo !== null) {
-					if (!(await this.#run(streamAdvance, { from, to: skipTo }))) {
-						return false
-					}
-					from = skipTo
-					skipTo = null
-				}
-				for (const [i, unit] of units.entries()) {
-					if (!budget.covers(UNIT_WORST)) {
-						return true
-					}
-					const to = { event: event.id, account: i === units.length - 1 ? null : unit.viewer }
-					if (!(await this.#unit(event, unit, from, to, budget))) {
-						return false
-					}
-					from = to
+				const outcome = await this.#event(event, state, budget)
+				if (outcome !== 'next') {
+					return outcome === 'budget'
 				}
 			}
-			if (skipTo !== null) {
-				if (!(await this.#run(streamAdvance, { from, to: skipTo }))) {
-					return false
-				}
-				from = skipTo
+			if (!(await this.#flush(state))) {
+				return false
 			}
 			if (scan.events.length < SCAN) {
+				const { from } = state
 				const finished = from.account === null ? from.event : from.event - 1
-				await this.#run(streamPrune, { upTo: finished })
-				return false
+				// What is left to prune takes further turns, a bounded batch each.
+				return (await this.#run(streamPrune, { upTo: finished })).more
 			}
 		}
 	}
 
-	// The units of an event in order: each viewer the journal names with an open socket that opened before the event
-	// and has a subscription that may carry it.
-	#units(event: StreamEvent): { viewer: string; sockets: Socket[] }[] {
-		return event.viewers.flatMap((viewer) => {
-			const sockets = this.#open(accountTag(viewer)).filter(
-				({ at }) => at.since < event.id && at.subs.some((sub) => carriesNotifications(at.grant, sub))
-			)
-			return sockets.length === 0 ? [] : [{ viewer, sockets }]
+	// The units of one event, sent in order from the position. A delete's are read a page of viewers at a time, each
+	// page charged to the turn, so neither the work nor the memory of a turn grows with the capture. What was read and
+	// had nothing to send (an event, or a page of a delete's viewers, whose viewers have no socket that takes it) is
+	// passed over by a pending position (`skipTo`), written before the next unit, at the end of the scan, and before the
+	// turn stops for its budget, so every turn that read something moves the position. Returns whether the walk goes on
+	// to the next event, stops for the budget, or lost the position to another turn.
+	async #event(event: StreamEvent, state: Walk, budget: Budget): Promise<'next' | 'budget' | 'lost'> {
+		const stop = async () => ((await this.#flush(state)) ? 'budget' : 'lost')
+		let after: StreamUnitAfter =
+			state.from.event === event.id && state.from.account !== null
+				? { account: state.from.account, subject: state.from.subject }
+				: null
+		for (let more = true; more;) {
+			let units: Unit[]
+			if (event.kind === 'delete') {
+				if (!budget.covers(UNIT_WORST)) {
+					return stop()
+				}
+				const page = await this.#run(streamDeleteUnits, {
+					eventId: event.id,
+					statusId: event.subject,
+					after,
+					rows: DELETE_PAGE,
+				})
+				budget.charge({ checks: 1 })
+				units = this.#units(event, page.units)
+				after = page.next
+				more = page.next !== null
+			} else {
+				units = this.#units(
+					event,
+					event.viewers.map((viewer) => ({ viewer, subject: { index: 0, id: event.subject } }))
+				)
+				more = false
+			}
+			for (const [i, unit] of units.entries()) {
+				if (!budget.covers(UNIT_WORST)) {
+					return stop()
+				}
+				if (!(await this.#flush(state))) {
+					return 'lost'
+				}
+				// The event's last unit moves the position past the event directly.
+				const last = !more && i === units.length - 1
+				const to = {
+					event: event.id,
+					subject: last ? 0 : unit.subject.index,
+					account: last ? null : unit.viewer,
+				}
+				if (!(await this.#unit(event, unit, state.from, to, budget))) {
+					return 'lost'
+				}
+				state.from = to
+			}
+			// The page's viewers are done: the next page starts after its last, sent to or not.
+			if (after !== null) {
+				state.skipTo = { event: event.id, subject: after.subject, account: after.account }
+			}
+		}
+		if (state.from.event !== event.id || state.from.account !== null) {
+			state.skipTo = { event: event.id, subject: 0, account: null }
+		}
+		return 'next'
+	}
+
+	// Writes the pending position, if any. False when another turn moved the position first.
+	async #flush(state: Walk): Promise<boolean> {
+		if (state.skipTo === null) {
+			return true
+		}
+		if (!(await this.#run(streamAdvance, { from: state.from, to: state.skipTo }))) {
+			return false
+		}
+		state.from = state.skipTo
+		state.skipTo = null
+		return true
+	}
+
+	// The units an event's candidates make, in order: each viewer with an open socket that opened before the event and
+	// has a subscription that may carry it.
+	#units(event: StreamEvent, candidates: readonly { viewer: string; subject: StreamSubject }[]): Unit[] {
+		// A viewer's sockets are selected once for all its subjects (a delete has up to 41 each).
+		const selected = new Map<string, Socket[]>()
+		return candidates.flatMap(({ viewer, subject }) => {
+			let sockets = selected.get(viewer)
+			if (sockets === undefined) {
+				sockets = this.#open(accountTag(viewer)).filter(
+					({ at }) => at.since < event.id && at.subs.some((sub) => mayCarry(event.kind, at.grant, sub))
+				)
+				selected.set(viewer, sockets)
+			}
+			return sockets.length === 0 ? [] : [{ subject, viewer, sockets }]
 		})
 	}
 
-	// One unit: made in its own transaction (tokens checked, the reference read, the presentation), the position moved
+	// One unit: made in its own transaction (tokens checked, the reference reads, the presentation), the position moved
 	// past it, then sent. Returns false when another turn moved the position first.
 	async #unit(
 		event: StreamEvent,
-		unit: { viewer: string; sockets: Socket[] },
+		unit: Unit,
 		from: StreamPosition,
 		to: StreamPosition,
 		budget: Budget
 	): Promise<boolean> {
 		const tokenHashes = [...new Set(unit.sockets.map(({ at }) => at.tokenHash))]
-		const made = await this.#run(streamNotificationUnit, {
+		const made = await this.#run(streamUnit, {
+			kind: event.kind,
+			subject: unit.subject.id,
 			accountId: unit.viewer,
 			tokenHashes,
-			notificationId: event.subject,
 			now: Date.now(),
 		})
-		budget.charge({ checks: tokenHashes.length + 1 })
+		budget.charge({ checks: tokenHashes.length + made.checks })
 		let payload: string | null = null
-		if (made.notification !== null) {
-			payload = JSON.stringify(JSON.stringify(made.notification))
-			budget.charge({ presentations: 1, bytes: payload.length })
+		if (made.streams.length > 0) {
+			payload = JSON.stringify(typeof made.payload === 'string' ? made.payload : JSON.stringify(made.payload))
+			if (typeof made.payload !== 'string') {
+				budget.charge({ presentations: 1, bytes: payload.length })
+			}
 			if (exceeds(payload, STREAM_LIMITS.payloadBytes)) {
 				console.warn({ event: 'kopje.stream.payload-skipped', kind: event.kind })
 				payload = null
@@ -530,10 +607,11 @@ export class StreamHub {
 			}
 			if (payload !== null) {
 				for (const sub of socket.at.subs) {
-					if (carriesNotifications(grant, sub)) {
+					const target = made.streams.find(({ stream }) => stream === sub)
+					if (target !== undefined && grants(grant, target.needs)) {
 						let text = envelopes.get(sub)
 						if (text === undefined) {
-							text = envelope(sub, 'notification', payload)
+							text = envelope(sub, made.event, payload)
 							envelopes.set(sub, text)
 						}
 						messages.push({ ws: socket.ws, text })
@@ -604,6 +682,11 @@ export class StreamHub {
 }
 
 const TOKEN_HASH = /^[0-9a-f]{64}$/
+
+// Whether a token's grant has every scope `needs` names.
+function grants(grant: StreamGrant, needs: StreamGrant): boolean {
+	return (!needs.statuses || grant.statuses) && (!needs.notifications || grant.notifications)
+}
 
 function accountTag(accountId: string): string {
 	return `a:${accountId}`

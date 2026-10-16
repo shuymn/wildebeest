@@ -21,6 +21,7 @@ const SCHEMA_TABLES = [
 	'account_notes',
 	'account_pins',
 	'accounts',
+	'admin_actions',
 	'blocks',
 	'bookmarks',
 	'collection_syncs',
@@ -68,6 +69,7 @@ const SCHEMA_TABLES = [
 	'status_tags',
 	'statuses',
 	'stream_cursor',
+	'stream_delete_viewers',
 	'stream_events',
 	'stream_subscriptions',
 ]
@@ -3085,8 +3087,239 @@ describe('0026_streaming', () => {
 	})
 })
 
-describe('0027_quotes', () => {
-	const NAME = '0027_quotes'
+describe('0028_streaming_home', () => {
+	it('journals statuses and edits while some account listens, stops at the span, and keeps captures with their event', async () => {
+		const at = NAMES.indexOf('0028_streaming_home')
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, MIGRATIONS.slice(0, at)).upgrade()).toMatchObject({ ok: true })
+			const alice = '100000000000000001'
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username) VALUES (?, 'https://kopje.test/ap/users/alice', 'alice')",
+				alice
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'alice@example.com', X'00', X'00', 'k')",
+				alice
+			)
+			// A position mid-event and a registry row, as a Store running 0026 may hold them.
+			sql.exec('UPDATE stream_cursor SET event_id = 7, account_id = ?', alice)
+			sql.exec(
+				"INSERT INTO stream_subscriptions (account_id, stream_key, sockets) VALUES (?, 'user:notification', 1)",
+				alice
+			)
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({
+				ok: true,
+				applied: ['0028_streaming_home'],
+			})
+			expect(sql.exec('SELECT event_id, subject, account_id FROM stream_cursor').toArray()).toEqual([
+				{ event_id: 7, subject: 0, account_id: alice },
+			])
+			const status = (id: string) =>
+				sql.exec(
+					`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+					VALUES (?, ?, ?, 'public', '<p>x</p>', '2026-10-12T00:00:00.000Z')`,
+					id,
+					`https://kopje.test/ap/o/${id}`,
+					alice
+				)
+			const edit = (id: string, editedAt: string | null) =>
+				sql.exec('UPDATE statuses SET edited_at = ? WHERE id = ?', editedAt, id)
+			const journal = () => sql.exec('SELECT kind, subject FROM stream_events ORDER BY id').toArray()
+			// Only `user:notification`: an edit is journaled (the mention reference), an insert is not.
+			status('200000000000000001')
+			edit('200000000000000001', '2026-10-12T01:00:00.000Z')
+			expect(journal()).toEqual([{ kind: 'edit', subject: '200000000000000001' }])
+			sql.exec('DELETE FROM stream_events')
+			// With `user`: both; an update that leaves edited_at as it was, or clears it, is no edit.
+			sql.exec("INSERT INTO stream_subscriptions (account_id, stream_key, sockets) VALUES (?, 'user', 1)", alice)
+			status('200000000000000002')
+			edit('200000000000000002', '2026-10-12T01:00:00.000Z')
+			edit('200000000000000002', '2026-10-12T01:00:00.000Z')
+			sql.exec("UPDATE statuses SET content = '<p>y</p>' WHERE id = '200000000000000002'")
+			edit('200000000000000002', null)
+			expect(journal()).toEqual([
+				{ kind: 'status', subject: '200000000000000002' },
+				{ kind: 'edit', subject: '200000000000000002' },
+			])
+			// A capture names its journal row by id only: the row's delete leaves it to streamPrune.
+			const event = sql
+				.exec<{ id: number }>(
+					"INSERT INTO stream_events (kind, subject, created_at) VALUES ('delete', '200000000000000002', '2026-10-12T00:00:00.000Z') RETURNING id"
+				)
+				.one().id
+			sql.exec(
+				"INSERT INTO stream_delete_viewers (event_id, account_id, lists, boosts) VALUES (?, ?, '[]', '[]')",
+				event,
+				alice
+			)
+			sql.exec('DELETE FROM stream_events WHERE id = ?', event)
+			expect(sql.exec('SELECT count(*) AS n FROM stream_delete_viewers').one().n).toBe(1)
+			sql.exec('DELETE FROM stream_delete_viewers')
+			// Once the journal spans 4,096 ids, nothing more is recorded.
+			sql.exec(
+				"INSERT INTO stream_events (id, kind, subject, created_at) SELECT max(id) + 4095, 'status', '0', '2026-10-12T00:00:00.000Z' FROM stream_events"
+			)
+			const before = journal().length
+			status('200000000000000003')
+			edit('200000000000000003', '2026-10-12T01:00:00.000Z')
+			expect(journal()).toHaveLength(before)
+			expect(sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
+		})
+	})
+})
+
+describe('0029_admin_reports', () => {
+	const at = NAMES.indexOf('0029_admin_reports')
+	const id = (n: number) => String(100000000000000000n + BigInt(n))
+
+	// Two local accounts, a remote one, and `reports` reports of the remote one by the first; `others` more remote
+	// accounts, each with a status and a follow of the first local account.
+	function seed(sql: SqlStorage, reports: number, others = 0) {
+		for (const n of [1, 2]) {
+			sql.exec(
+				'INSERT INTO accounts (id, uri, username) VALUES (?, ?, ?)',
+				id(n),
+				`https://kopje.test/ap/users/u${n}`,
+				`u${n}`
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, ?, X'00', X'00', 'k')",
+				id(n),
+				`u${n}@example.com`
+			)
+		}
+		sql.exec(
+			"INSERT INTO accounts (id, uri, username, domain) VALUES (?, 'https://remote.example/users/r', 'r', 'remote.example')",
+			id(3)
+		)
+		sql.exec(
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO reports (account_id, target_account_id, uri, created_at)
+			SELECT ?2, ?3, 'https://kopje.test/actor#reports/' || i, '2026-10-12T00:00:00.000Z' FROM n`,
+			reports,
+			id(1),
+			id(3)
+		)
+		if (others > 0) {
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+				INSERT INTO accounts (id, uri, username, domain) SELECT CAST(200000000000000000 + i AS TEXT),
+					'https://other.example/users/o' || i, 'o' || i, 'other.example' FROM n`,
+				others
+			)
+			sql.exec(
+				`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+				SELECT CAST(CAST(id AS INTEGER) + 100000000000000000 AS TEXT), uri || '/s', id, 'public', '', '2026-10-01T00:00:00.000Z'
+				FROM accounts WHERE domain = 'other.example'`
+			)
+			sql.exec(
+				"INSERT INTO follows (account_id, target_account_id, state) SELECT id, ?, 'accepted' FROM accounts WHERE domain = 'other.example'",
+				id(1)
+			)
+		}
+	}
+
+	it('adds the moderation columns, empty, the state indexes in place of the old ones, and the moderation log', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, MIGRATIONS.slice(0, at)).upgrade()).toMatchObject({ ok: true })
+			seed(sql, 3)
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({
+				ok: true,
+				applied: ['0029_admin_reports'],
+			})
+			expect(
+				sql
+					.exec(
+						'SELECT action_taken_at, action_taken_by_account_id, assigned_account_id, updated_at FROM reports GROUP BY 1, 2, 3, 4'
+					)
+					.toArray()
+			).toEqual([
+				{ action_taken_at: null, action_taken_by_account_id: null, assigned_account_id: null, updated_at: null },
+			])
+			const indexes = sql
+				.exec<{ name: string }>(
+					"SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'reports' AND sql IS NOT NULL ORDER BY name"
+				)
+				.toArray()
+				.map((row) => row.name)
+			expect(indexes).toEqual([
+				'reports_account_state',
+				'reports_action_taken_by',
+				'reports_assigned',
+				'reports_state',
+				'reports_target_state',
+			])
+			// The admin's account goes to NULL if it ever went; the reporter's reports go with the reporter.
+			sql.exec(
+				"UPDATE reports SET action_taken_at = '2026-10-13T00:00:00.000Z', action_taken_by_account_id = ?1, assigned_account_id = ?1",
+				id(2)
+			)
+			sql.exec('DELETE FROM local_accounts WHERE account_id = ?', id(2))
+			expect(
+				sql.exec('SELECT DISTINCT action_taken_by_account_id, assigned_account_id FROM reports').toArray()
+			).toEqual([{ action_taken_by_account_id: null, assigned_account_id: null }])
+			expect(() => sql.exec('UPDATE reports SET assigned_account_id = ?', id(3))).toThrow(
+				/FOREIGN KEY constraint failed/
+			)
+			// The log: an actor of two kinds, JSON detail, no foreign key.
+			sql.exec(
+				"INSERT INTO admin_actions (actor, account_id, action, target_type, target_id, created_at) VALUES ('oauth', ?, 'resolve', 'Report', '1', '2026-10-13T00:00:00.000Z')",
+				id(9)
+			)
+			expect(() =>
+				sql.exec(
+					"INSERT INTO admin_actions (actor, action, target_type, target_id, created_at) VALUES ('nobody', 'x', 'Report', '1', 'x')"
+				)
+			).toThrow(/CHECK constraint failed/)
+			expect(() =>
+				sql.exec(
+					"INSERT INTO admin_actions (actor, action, target_type, target_id, detail, created_at) VALUES ('access', 'x', 'Report', '1', '{', 'x')"
+				)
+			).toThrow(/CHECK constraint failed/)
+			sql.exec('DELETE FROM local_accounts WHERE account_id = ?', id(1))
+			expect(sql.exec('SELECT count(*) AS n FROM reports').one().n).toBe(0)
+			expect(sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
+		})
+	})
+
+	it('reads each report a bounded number of times, and no account, status or follow', async () => {
+		const statements = (MIGRATIONS[at]?.sql ?? '')
+			.split('\n')
+			.filter((line) => !line.startsWith('--'))
+			.join('\n')
+			.split(';')
+			.filter((statement) => statement.trim() !== '')
+		const measure = async (reports: number, others: number) => {
+			const store = freshStore()
+			return runInDurableObject(store, async (_instance, state) => {
+				const sql = state.storage.sql
+				await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+				seed(sql, reports, others)
+				let read = 0
+				for (const statement of statements) {
+					const cursor = sql.exec(statement)
+					cursor.toArray()
+					read += cursor.rowsRead
+				}
+				return read
+			})
+		}
+		const few = await measure(1000, 0)
+		const crowded = await measure(1000, 10_000)
+		const many = await measure(10_000, 0)
+		// Each of the five index builds reads the reports a bounded number of times; the accounts, statuses and follows
+		// are not read.
+		expect(crowded).toBeLessThanOrEqual(few + 10)
+		expect(many - few).toBeLessThanOrEqual(10 * (10_000 - 1000))
+	}, 120_000)
+})
+
+describe('0030_quotes', () => {
+	const NAME = '0030_quotes'
 	const id = (n: number) => String(100000000000000000n + BigInt(n))
 
 	// The file's statements, a trigger whole (its body holds semicolons of its own).

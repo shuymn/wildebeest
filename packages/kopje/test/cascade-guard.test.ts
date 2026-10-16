@@ -64,17 +64,28 @@ const WRITING_TRIGGERS: Record<string, string> = {
 		"one statuses row per accepted quote deleted: STATUS_CHILDREN's status_id entry takes half the rows left",
 	stream_notification_inserted:
 		'fires on a notification insert, which no batched delete or purge makes (the exact-budget cases below run with a listener too)',
+	stream_status_inserted:
+		'fires on a status insert, which no batched delete or purge makes (the exact-budget cases below run with a listener too)',
+	stream_status_edited:
+		'fires only when edited_at changes, which no batched delete or purge does: hiding a status writes its visibility and content (the exact-budget cases below run with a listener too)',
 }
 
-// A streaming subscription of the account, which arms the journal trigger (migration 0026_streaming).
+// Streaming subscriptions of the account on `user` and `user:notification`, which arm every journal trigger
+// (migrations 0026_streaming and 0028_streaming_home).
 async function listen(store: StoreStub, listening: boolean, accountId: string): Promise<void> {
 	if (listening) {
 		await sql(
 			store,
-			"INSERT INTO stream_subscriptions (account_id, stream_key, sockets) VALUES (?, 'user', 1)",
+			"INSERT INTO stream_subscriptions (account_id, stream_key, sockets) VALUES (?, 'user', 1), (?, 'user:notification', 1)",
+			accountId,
 			accountId
 		)
 	}
+}
+
+// The journal's rows: a batch, armed or not, journals nothing.
+async function journaled(store: StoreStub): Promise<unknown> {
+	return sql(store, 'SELECT count(*) AS n FROM stream_events')
 }
 
 type ForeignKey = { from: string; table: string; column: string; onDelete: string }
@@ -185,6 +196,44 @@ describe('cascade guard (RES-6)', () => {
 	})
 })
 
+// The tables that name local_accounts (a local user's own rows, and the moderation columns of migration
+// 0029_admin_reports) are never met by a batched delete or purge: local_accounts restricts its account's delete, and
+// no code deletes a local account. A foreign key to local_accounts that cascades or sets null is therefore bounded
+// only while that holds; this pins it, so a delete of local accounts cannot be added without bounding them first.
+const LOCAL_ACCOUNT_SOURCES = import.meta.glob<string>(['../src/**/*.ts', '!../src/**/*.d.ts'], {
+	query: '?raw',
+	import: 'default',
+	eager: true,
+})
+
+describe('cascade guard below local_accounts (RES-6)', () => {
+	it('meets nothing: local_accounts restricts the delete of its account, and nothing deletes a local account', async () => {
+		await runInDurableObject(await migratedStore(), (_instance, state) => {
+			const keys = foreignKeys(state.storage.sql)
+			expect(keys.filter((key) => key.from === 'local_accounts')).toEqual([
+				{ from: 'local_accounts', table: 'accounts', column: 'account_id', onDelete: 'RESTRICT' },
+			])
+			expect(cascadesFrom(keys, 'accounts', ['statuses'])).not.toContain('local_accounts')
+			// The report's moderation columns name the admin's account, and let go of it if it ever went.
+			expect(
+				keys
+					.filter((key) => key.table === 'local_accounts' && key.from === 'reports')
+					.map((key) => [key.column, key.onDelete])
+			).toEqual(
+				expect.arrayContaining([
+					['account_id', 'CASCADE'],
+					['assigned_account_id', 'SET NULL'],
+					['action_taken_by_account_id', 'SET NULL'],
+				])
+			)
+		})
+		const deletes = Object.entries(LOCAL_ACCOUNT_SOURCES).filter(([, source]) =>
+			/\bDELETE\s+FROM\s+(?:main\s*\.\s*)?["`[]?local_accounts\b/i.test(source)
+		)
+		expect(deletes.map(([file]) => file)).toEqual([])
+	})
+})
+
 describe('a status in many conversations', () => {
 	it('leaves them over batches, each within PURGE_BATCH, its conversations with them', async () => {
 		const h = await community(['alice'])
@@ -243,7 +292,8 @@ describe("a status's own delete within a batch", () => {
 	// children left the batch exactly the rows the delete used to reserve: the status, its poll, the parent's recount, and
 	// the account's last status, which the trigger of migration 0021_directory moves back, one row more. Its quote went
 	// before it with the quoted status's count (the trigger quotes_count_deleted), two rows.
-	// With a streaming listener the journal trigger is armed (migration 0026_streaming); the batch writes the same rows.
+	// With a streaming listener the journal triggers are armed (migrations 0026_streaming and 0028_streaming_home); the
+	// batch writes the same rows and journals nothing.
 	it.each([false, true])(
 		'stays within PURGE_BATCH when the status is the newest of its account (listening: %s)',
 		async (listening) => {
@@ -283,6 +333,9 @@ describe("a status's own delete within a batch", () => {
 			expect(await sql(h.store, 'SELECT last_status_id AS id FROM accounts WHERE id = ?', remote)).toEqual([
 				{ id: reply },
 			])
+			// The statuses' own inserts are journaled with a listener; the batches add nothing.
+			const before = await journaled(h.store)
+			expect(before).toEqual([{ n: listening ? 3 : 0 }])
 			const batches: number[] = []
 			for (let i = 0; i < 10; i++) {
 				const { wrote, remaining } = await runInDurableObject(h.store, (_instance, state) => {
@@ -305,6 +358,7 @@ describe("a status's own delete within a batch", () => {
 			expect(await sql(h.store, 'SELECT quotes_count FROM statuses WHERE id = ?', quoted)).toEqual([
 				{ quotes_count: 0 },
 			])
+			expect(await journaled(h.store)).toEqual(before)
 		}
 	)
 
@@ -315,6 +369,9 @@ describe("a status's own delete within a batch", () => {
 			await listen(h.store, listening, h.users.alice.id)
 			const remote = await remoteAccount(h.store, 'carol')
 			const status = await seedStatus(h.store, { accountId: remote, visibility: 'public' })
+			// The status's own insert is journaled with a listener; the batches add nothing.
+			const before = await journaled(h.store)
+			expect(before).toEqual([{ n: listening ? 1 : 0 }])
 			await sql(
 				h.store,
 				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
@@ -347,6 +404,7 @@ describe("a status's own delete within a batch", () => {
 			expect(await sql(h.store, 'SELECT last_status_id AS id FROM accounts WHERE id = ?', remote)).toEqual([
 				{ id: null },
 			])
+			expect(await journaled(h.store)).toEqual(before)
 		}
 	)
 })

@@ -70,6 +70,7 @@ import {
 	type Status,
 } from './status-presenter'
 import { exceedsRawLength, mentionKey, type MentionRef, parseStatusText, renderStatusHtml } from './status-text'
+import { streamDelete } from './streaming'
 import type { Db } from '../db/sql'
 
 // Statuses (B4a): posting, editing and deleting local statuses, the per-status reads, and favourite, reblog and
@@ -737,6 +738,8 @@ export const deleteStatus = userMediaDeleteOperation<
 	if (value === null) {
 		return { status: 'not_found' }
 	}
+	// R32: the streaming delete is captured before anything changes the status's audience.
+	streamDelete(db, current.id, input.now)
 	if (current.reblog_of_id !== null) {
 		removeReblog(db, accountId, current.id, current.reblog_of_id, input.now)
 		return { status: 'ok', value }
@@ -1354,6 +1357,8 @@ export const unreblog = userWriteOperation<ActionInput, Acted<Status>>((db, inpu
 		id
 	)
 	if (own !== undefined) {
+		// R32: the streaming delete of the boost, captured before it goes.
+		streamDelete(db, own.id, input.now)
 		removeReblog(db, accountId, own.id, id, input.now)
 	}
 	return presented(db, id, viewer, input.present)

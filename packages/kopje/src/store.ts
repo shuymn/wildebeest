@@ -19,6 +19,7 @@ import {
 	listRewrapKeys,
 	rewrapLocalKey,
 } from './domain/actors'
+import { setAccountEmail } from './domain/admin-accounts'
 import { oauthAdminStatus } from './domain/admin-authority'
 import { checkCredential, type Credential, type UserCredential } from './domain/auth'
 import * as blocks from './domain/blocks'
@@ -35,6 +36,7 @@ import * as lists from './domain/lists'
 import * as markers from './domain/markers'
 import * as media from './domain/media'
 import * as mediaRebuild from './domain/media-rebuild'
+import { moderationLog } from './domain/moderation-log'
 import * as notificationGroups from './domain/notification-groups'
 import * as notificationRequests from './domain/notification-requests'
 import * as notifications from './domain/notifications'
@@ -381,6 +383,16 @@ export class Store extends DurableObject<Env> {
 	// The OAuth admin's state for GET /admin/health, which shows it to Access only.
 	oauthAdmin(callerBuild: string) {
 		return this.#kernel.execute(callerBuild, oauthAdminStatus, undefined)
+	}
+
+	// POST /admin/accounts/email: the Access admin's repair of the OAuth admin's match (domain/admin-accounts.ts).
+	setAccountEmail(callerBuild: string, input: OperationInput<typeof setAccountEmail>) {
+		return this.#kernel.execute(callerBuild, setAccountEmail, input)
+	}
+
+	// GET /admin/moderation-log (domain/moderation-log.ts).
+	moderationLog(callerBuild: string, input: OperationInput<typeof moderationLog>) {
+		return this.#kernel.execute(callerBuild, moderationLog, input)
 	}
 
 	setupState(callerBuild: string) {
@@ -766,6 +778,23 @@ export class Store extends DurableObject<Env> {
 
 	createReport(callerBuild: string, input: OperationInput<typeof reports.createReport>) {
 		return this.#kernel.execute(callerBuild, reports.createReport, input)
+	}
+
+	// The Mastodon admin API's reports (domain/reports.ts, R37).
+	adminReports(callerBuild: string, input: OperationInput<typeof reports.listAdminReports>) {
+		return this.#kernel.execute(callerBuild, reports.listAdminReports, input)
+	}
+
+	adminReport(callerBuild: string, input: OperationInput<typeof reports.getAdminReport>) {
+		return this.#kernel.execute(callerBuild, reports.getAdminReport, input)
+	}
+
+	updateAdminReport(callerBuild: string, input: OperationInput<typeof reports.updateAdminReport>) {
+		return this.#kernel.execute(callerBuild, reports.updateAdminReport, input)
+	}
+
+	actOnReport(callerBuild: string, input: OperationInput<typeof reports.actOnReport>) {
+		return this.#kernel.execute(callerBuild, reports.actOnReport, input)
 	}
 
 	endorse(callerBuild: string, input: OperationInput<typeof endorsements.endorse>) {

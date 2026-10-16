@@ -53,6 +53,7 @@ import {
 } from './remote-statuses'
 import { accountSearchText } from './search-text'
 import { recountStatus, recountStatuses, withdrawLocalBoost } from './statuses'
+import { streamDelete } from './streaming'
 import type { Db } from '../db/sql'
 import { hostDomain } from '../platform/domain-name'
 
@@ -1552,7 +1553,7 @@ export const STATUS_CHILDREN: readonly { table: string; column: string; remove: 
 			AND conversation_id IN (SELECT conversation_id FROM conversation_statuses WHERE status_id = ?1 LIMIT CAST(?2 / 2 AS INTEGER))`,
 		],
 	},
-	// Quotes of the status (migration 0027_quotes): any number, of any accounts. Each is detached, an accepted one
+	// Quotes of the status (migration 0030_quotes): any number, of any accounts. Each is detached, an accepted one
 	// becoming deleted in the same statement (the quotes CHECK refuses an accepted quote without its target), its work
 	// ended; an accepted one also takes itself off this status's count (the trigger quotes_count_changed), so a batch
 	// takes half the rows left.
@@ -1689,15 +1690,24 @@ const deleteObject: Handler<'Delete'> = (db, actor, activity, { now }) => {
 	}
 	recordDeletedObject(db, activity.object, now)
 	if (status.reblog_of_id !== null) {
+		// R32: the streaming delete of the boost, captured before it goes.
+		streamDelete(db, status.id, now)
 		removeBoost(db, actor.id, { id: status.id, original: status.reblog_of_id })
 		return applied('boost-deleted')
 	}
-	db.run(
-		"INSERT INTO inbound_jobs (kind, key, actor_uri, created_at) VALUES ('delete', ?, ?, ?) ON CONFLICT DO NOTHING",
+	// R32: the streaming delete is captured when the job is created, before the first batch removes its mentions; the
+	// job row is the marker, so a Delete delivered again (or the later batches) captures nothing more. It writes outside
+	// the batch's budget, which deleteStatusBatch starts after it.
+	const created = db.first(
+		`INSERT INTO inbound_jobs (kind, key, actor_uri, created_at) VALUES ('delete', ?, ?, ?) ON CONFLICT DO NOTHING
+		RETURNING key`,
 		status.id,
 		actor.uri,
 		now
 	)
+	if (created !== undefined) {
+		streamDelete(db, status.id, now)
+	}
 	return applied('status-deleted', deleteStatusBatch(db, status.id, now))
 }
 
@@ -2136,6 +2146,8 @@ function undoInteraction(db: Db, actor: RemoteRow, ref: ActivityRef & { id: stri
 		removeFavourite(db, actor.id, favourite)
 	}
 	if (boost !== undefined) {
+		// R32: the streaming delete of the boost, captured before it goes.
+		streamDelete(db, boost.id, now)
 		removeBoost(db, actor.id, boost)
 	}
 	for (const uri of retracted) {

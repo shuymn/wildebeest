@@ -1,4 +1,12 @@
-import { type ApiHandler, authorized, present, requestParams, storeCall, userCredential } from './context'
+import {
+	type ApiContext,
+	type ApiHandler,
+	authorized,
+	present,
+	requestParams,
+	storeCall,
+	userCredential,
+} from './context'
 import { mastodonError } from './errors'
 import { parseBoolean } from './params'
 
@@ -24,7 +32,13 @@ export const createReport: ApiHandler = async (c, deps) => {
 		present: present(c),
 		now: deps.now(),
 	}
-	const result = authorized(await storeCall(c, deps, (s, b) => s.createReport(b, input)))
+	return reportResponse(authorized(await storeCall(c, deps, (s, b) => s.createReport(b, input))), c)
+}
+
+// A report operation's answer (domain/reports.ts), the user's or an admin's, as the RPC returns it.
+type ReportAnswer = { status: 'ok'; report: object } | { status: 'not_found' } | { status: 'invalid'; errors: string[] }
+
+export function reportResponse(result: ReportAnswer, c: ApiContext): Response {
 	switch (result.status) {
 		case 'ok':
 			return c.json(result.report)

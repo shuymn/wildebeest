@@ -22,6 +22,7 @@ const NOT_DUMPED: Record<string, string> = {
 	kopje_migrations: 'the dump header carries the applied migrations; the target records its own',
 	media_orphans: 'tombstones of R2 objects to delete; a restored Store must not delete what it restores',
 	stream_cursor: "the streaming fan-out's position, over the journal of one object",
+	stream_delete_viewers: 'captures of the streaming journal of one object, which a restored Store does not send',
 	stream_events: 'the streaming journal of one object; a restored Store has no sockets to send it to',
 	stream_subscriptions: 'the streaming registry, derived from the open sockets of one object',
 }
@@ -32,6 +33,7 @@ const NOT_CARRIED: Record<string, string> = {
 		'legacy never wrote its account_notes table, and a legacy row there stops the conversion (UNUSED_LEGACY_TABLES)',
 	account_pins:
 		'legacy never wrote its endorsements table, and a legacy row there stops the conversion (UNUSED_LEGACY_TABLES)',
+	admin_actions: 'the moderation log of Kopje; legacy Wildebeest has no admin API and logs no moderation',
 	backup_media: 'the backup media index of one bucket; a converted Store starts a fresh baseline',
 	collection_syncs: "work Kopje asks for when it stores a remote account's document; legacy has none",
 	collection_pins_pending: 'pinned statuses a sync of Kopje has yet to fetch; legacy has none',
@@ -74,6 +76,7 @@ const NOT_CARRIED: Record<string, string> = {
 	status_pins:
 		'legacy never wrote its status_pins table, and a legacy row there stops the conversion (UNUSED_LEGACY_TABLES)',
 	stream_cursor: 'streaming state of one object; legacy has no streaming',
+	stream_delete_viewers: 'streaming state of one object; legacy has no streaming',
 	stream_events: 'streaming state of one object; legacy has no streaming',
 	stream_subscriptions: 'streaming state of one object; legacy has no streaming',
 	tag_follows:

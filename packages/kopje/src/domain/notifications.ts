@@ -344,6 +344,30 @@ export function streamedNotification(db: Db, viewer: UserContext, id: string, pr
 	return notificationById(db, viewer, id, present, false)
 }
 
+// The mention reference of R33 (domain/streaming.ts), for `status.update` on `user` (with a notification scope) and on
+// `user:notification`: the viewer's notification read (R15: unfiltered, kept) restricted to their mention of the
+// status `statusId` (Mastodon's FanOutOnWriteService#notify_about_update! streams an edit to each account a mention
+// notified). The status, if that read shows the mention. The mention is found by its key (notifications_natural: the
+// viewer, the type, the status's author, the status), so the read does not grow with anyone's notifications.
+export function mentionedStatus(db: Db, viewer: UserContext, statusId: string) {
+	const read = statusReads(viewer, { viewer: '?1', now: '?3' })
+	const rows = read.notifications<{ id: number }>(
+		db,
+		{
+			where: `n.id = (SELECT nm.id FROM main.notifications nm WHERE nm.account_id = ?1 AND nm.type = 'mention'
+					AND nm.from_account_id = (SELECT ms.account_id FROM main.statuses ms WHERE ms.id = ?2)
+					AND IFNULL(nm.status_id, '') = ?2)
+				AND n.type = 'mention' AND n.status_id = ?2`,
+			columns: { id: 'n.id' },
+			includeFiltered: false,
+		},
+		viewer.accountId,
+		statusId,
+		viewer.now
+	)
+	return rows[0]?.status_id ?? null
+}
+
 // The viewer's notification `id` as the notification read shows it (R15, kept; filtered ones only with
 // `includeFiltered`), presented; null for anything else.
 function notificationById(

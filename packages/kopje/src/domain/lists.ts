@@ -258,7 +258,7 @@ export const accountLists = userReadOperation<{ account: string }, List[] | null
 // The lists `l` of `owner` that hold the account `x`: read from the owner's lists (lists_account, at most MAX_LISTS
 // through the API), each checked through the (list_id, account_id) key, so the reads do not grow with the lists of
 // other owners that hold the account.
-function holdingSql(owner: string, x: string): string {
+export function holdingSql(owner: string, x: string): string {
 	return `l.account_id = ${owner}
 		AND EXISTS (SELECT 1 FROM list_accounts lh WHERE lh.list_id = l.id AND lh.account_id = ${x})`
 }
