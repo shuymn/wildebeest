@@ -19,8 +19,10 @@
 -- - collection_syncs holds the remote accounts whose collections are to be read again (Mastodon's
 --   SynchronizeFeaturedCollectionWorker and SynchronizeFeaturedTagsCollectionWorker), one row each, written when the
 --   account's document is stored and deleted once the Worker has read them (or after MAX_SYNC_ATTEMPTS claims that
---   never finished). claimed_at is when a round took it, so that a round that died leaves it to the next one after a
---   lease. It goes with its account (purgeRelationships, and the cascade as a backstop).
+--   never finished). due_at is when a round may take it: the time it was asked for, then, once a round takes it, the
+--   end of that round's lease, so that a round that died leaves it to a later one. A round seeks the earliest due_at
+--   at or before its time through collection_syncs_due, so syncs held by rounds are never read past. It goes with its
+--   account (purgeRelationships, and the cascade as a backstop).
 --
 -- Cost: the copies read and write each pin and featured hashtag once. Until now only local accounts have them, at
 -- most five pins (StatusPinValidator) and ten featured hashtags (FeaturedTag::LIMIT) each, so the work grows with the
@@ -64,10 +66,8 @@ ALTER TABLE accounts ADD COLUMN hide_collections INTEGER;
 
 CREATE TABLE collection_syncs (
   account_id TEXT NOT NULL PRIMARY KEY REFERENCES accounts (id) ON DELETE CASCADE,
-  requested_at INTEGER NOT NULL,
-  claimed_at INTEGER,
+  due_at INTEGER NOT NULL,
   attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0)
 );
 
--- A round takes the oldest request first.
-CREATE INDEX collection_syncs_requested ON collection_syncs (requested_at);
+CREATE INDEX collection_syncs_due ON collection_syncs (due_at);

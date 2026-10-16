@@ -2878,11 +2878,11 @@ describe('0025_remote_collections', () => {
 				.one()
 				.sql.match(/hide_collections[^,)]*/)?.[0]
 			expect(column).toBe('hide_collections INTEGER')
-			sql.exec('INSERT INTO collection_syncs (account_id, requested_at) VALUES (?, 1)', bob)
+			sql.exec('INSERT INTO collection_syncs (account_id, due_at) VALUES (?, 1)', bob)
 			expect(() => sql.exec('INSERT INTO status_pins (account_id, status_id) VALUES (?, ?)', id(9), id(21))).toThrow(
 				/FOREIGN KEY/
 			)
-			expect(() => sql.exec('INSERT INTO collection_syncs (account_id, requested_at) VALUES (?, 1)', id(9))).toThrow(
+			expect(() => sql.exec('INSERT INTO collection_syncs (account_id, due_at) VALUES (?, 1)', id(9))).toThrow(
 				/FOREIGN KEY/
 			)
 			expect(() =>

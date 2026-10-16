@@ -35,15 +35,15 @@ export const SYNC_LEASE_MS = 10 * 60 * 1000
 
 // Asks for a sync of the account's collections (ProcessAccountService#check_featured_collection! and
 // #check_featured_tags_collection!, and the hide_collections it sets). One request per account waits at a time, as
-// Sidekiq's until_executed lock keeps one job. Whether a request waits that no round has claimed.
+// Sidekiq's until_executed lock keeps one job. Whether a request is due (no round holds it).
 export function requestCollectionSync(db: Db, accountId: string, now: number): boolean {
 	db.run(
-		'INSERT INTO collection_syncs (account_id, requested_at) VALUES (?, ?) ON CONFLICT (account_id) DO NOTHING',
+		'INSERT INTO collection_syncs (account_id, due_at) VALUES (?, ?) ON CONFLICT (account_id) DO NOTHING',
 		accountId,
 		now
 	)
 	return (
-		db.first('SELECT 1 AS x FROM collection_syncs WHERE account_id = ? AND claimed_at IS NULL', accountId) !== undefined
+		db.first('SELECT 1 AS x FROM collection_syncs WHERE account_id = ? AND due_at <= ?', accountId, now) !== undefined
 	)
 }
 
@@ -202,15 +202,15 @@ export function unfeatureRemote(db: Db, accountId: string, name: string): boolea
 // instance actor. pending: another sync waits.
 export type CollectionSync = ActorCollections & { accountUri: string; signer: string | null; pending: boolean }
 
+// The sync due first, by a seek of collection_syncs_due: the syncs rounds hold are due later, so none is read.
 function claimable(db: Db, now: number): { account_id: string; attempts: number } | undefined {
 	return db.first<{ account_id: string; attempts: number }>(
-		`SELECT account_id, attempts FROM collection_syncs
-		WHERE claimed_at IS NULL OR claimed_at <= ? ORDER BY requested_at LIMIT 1`,
-		now - SYNC_LEASE_MS
+		'SELECT account_id, attempts FROM collection_syncs WHERE due_at <= ? ORDER BY due_at LIMIT 1',
+		now
 	)
 }
 
-// The oldest sync no round holds, claimed for SYNC_LEASE_MS. One claimed MAX_SYNC_ATTEMPTS times already, or of an
+// The sync due first, claimed for SYNC_LEASE_MS (due again when the lease ends). One claimed MAX_SYNC_ATTEMPTS times already, or of an
 // account that is no longer an available remote account, is dropped instead (ProcessAccountService schedules none
 // for a suspended account, and the services return for one), and the next is taken; at most MAX_SYNC_ATTEMPTS + 1
 // rows are read.
@@ -229,8 +229,8 @@ export const claimCollectionSync = writeOperation<{ now: number }, CollectionSyn
 			continue
 		}
 		db.run(
-			'UPDATE collection_syncs SET claimed_at = ?, attempts = attempts + 1 WHERE account_id = ?',
-			now,
+			'UPDATE collection_syncs SET due_at = ?, attempts = attempts + 1 WHERE account_id = ?',
+			now + SYNC_LEASE_MS,
 			row.account_id
 		)
 		// Walked from the local accounts, each a key lookup of its follow: the account's remote followers, however many,

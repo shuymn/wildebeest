@@ -380,7 +380,7 @@ describe('reading a remote account’s collections', () => {
 		t.web.fail(featuredOf(bob), 503)
 		t.web.fail(`${bob.uri}/collections/tags`, 503)
 		t.web.fail(`${bob.uri}/following`, 503)
-		await sql(t.store, 'INSERT INTO collection_syncs (account_id, requested_at) VALUES (?, 0)', bobId)
+		await sql(t.store, 'INSERT INTO collection_syncs (account_id, due_at) VALUES (?, 0)', bobId)
 		await sync(t)
 		expect(await pinned(t, bobId, null)).toEqual([note.id])
 		expect((await featuredTags(t, bobId)).map((tag) => tag.name)).toEqual(['Cats'])
@@ -388,7 +388,7 @@ describe('reading a remote account’s collections', () => {
 
 		// The following collection still times out, but the followers collection now hides its items: hidden.
 		t.web.serve(`${bob.uri}/followers`, followCollection(bob, 'followers', false))
-		await sql(t.store, 'INSERT INTO collection_syncs (account_id, requested_at) VALUES (?, 0)', bobId)
+		await sql(t.store, 'INSERT INTO collection_syncs (account_id, due_at) VALUES (?, 0)', bobId)
 		await sync(t)
 		expect((await t.api<Account>(`/api/v1/accounts/${bobId}`, null)).body.hide_collections).toBe(true)
 		expect((await t.api<Account[]>(`/api/v1/accounts/${bobId}/followers`, null)).body).toEqual([])

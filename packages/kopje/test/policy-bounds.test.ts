@@ -50,7 +50,7 @@ import {
 } from '../src/domain/notification-requests'
 import { clearNotifications, listNotifications, REMOVAL_BATCHES, REMOVAL_WINDOW } from '../src/domain/notifications'
 import { getPoll, vote } from '../src/domain/polls'
-import { claimCollectionSync, MAX_REMOTE_PINS, storedStatusUris } from '../src/domain/remote-collections'
+import { claimCollectionSync, MAX_REMOTE_PINS, storedStatusUris, SYNC_LEASE_MS } from '../src/domain/remote-collections'
 import { createReport } from '../src/domain/reports'
 import { dueScheduled, listScheduled, publishScheduled } from '../src/domain/scheduled-statuses'
 import { search } from '../src/domain/search'
@@ -3733,7 +3733,7 @@ describe('clearing and dismissing touch a bounded batch, and reads skip what the
 // account's: its pins by their key (at most MAX_REMOTE_PINS), its featured hashtags (at most MAX_FEATURED_TAGS), and
 // whether it hides its network by a key lookup. Each read, and a round's claim of the oldest waiting sync and its look
 // up of the pinned statuses Kopje has, reads the same rows however many statuses the account has, however many
-// accounts follow it, and however many other remote accounts have pins, featured hashtags and syncs waiting.
+// accounts follow it, and however many other remote accounts have pins, featured hashtags and syncs waiting or held by rounds.
 describe("a remote account's learned collections cost a bounded read (RES-7)", () => {
 	const OWNER = '930000000000000000'
 	const OWNER_URI = 'https://far.example/users/owner'
@@ -3761,7 +3761,7 @@ describe("a remote account's learned collections cost a bounded read (RES-7)", (
 				raw
 			)
 			// Other remote accounts, each following the owner, with a pinned status, a featured hashtag and a sync waiting
-			// behind the owner's (and the three in front of it a round holds).
+			// behind the owner's, or in front of it and held by rounds.
 			sql.exec(
 				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
 				INSERT INTO accounts (id, uri, username, domain)
@@ -3807,15 +3807,17 @@ describe("a remote account's learned collections cost a bounded read (RES-7)", (
 				String(OTHER_BASE - 10_000_000n)
 			)
 			sql.exec(
-				`INSERT INTO collection_syncs (account_id, requested_at, claimed_at)
-				SELECT id, CASE WHEN id = ?1 THEN 10 ELSE 100 END, NULL FROM accounts WHERE domain IS NOT NULL`,
+				`INSERT INTO collection_syncs (account_id, due_at)
+				SELECT id, CASE WHEN id = ?1 THEN 10 ELSE 100 END FROM accounts WHERE domain IS NOT NULL`,
 				OWNER
 			)
+			// Half of the others asked for theirs first, and rounds hold them (their leases end after NOW).
 			sql.exec(
-				`UPDATE collection_syncs SET requested_at = 1, claimed_at = ?
-				WHERE account_id IN (SELECT id FROM accounts WHERE id <> ? AND domain IS NOT NULL ORDER BY id LIMIT 3)`,
-				NOW,
-				OWNER
+				`UPDATE collection_syncs SET due_at = ?1
+				WHERE account_id IN (SELECT id FROM accounts WHERE id <> ?2 AND domain IS NOT NULL ORDER BY id LIMIT ?3 / 2)`,
+				NOW + SYNC_LEASE_MS,
+				OWNER,
+				count
 			)
 		})
 		return store
