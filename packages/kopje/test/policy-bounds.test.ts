@@ -11,7 +11,7 @@ import { rowsRead } from './read-helpers'
 import { Db } from '../src/db/sql'
 import { getAccounts, listFollows, type PageQuery, relationships, userinfo } from '../src/domain/accounts'
 import { getFeatured, getLocalNote, getOutbox } from '../src/domain/activities'
-import { canView, deleteAudience, visibleSql, type Visibility } from '../src/domain/audience'
+import { CAPTURE_BOOST_SCAN, canView, deleteAudience, visibleSql, type Visibility } from '../src/domain/audience'
 import { backfillConversations } from '../src/domain/conversation-rows'
 import { listConversations } from '../src/domain/conversations'
 import { directory, DIRECTORY_WINDOW } from '../src/domain/directory'
@@ -69,7 +69,7 @@ import {
 	MAX_STATUSES_BY_ID,
 	statusContext,
 } from '../src/domain/statuses'
-import { streamAccept, streamEvents, streamTokens, streamUnit } from '../src/domain/streaming'
+import { streamAccept, streamDeleteUnits, streamEvents, streamTokens, streamUnit } from '../src/domain/streaming'
 import { featuredTagSuggestions, followedTags, MAX_FOLLOWED_TAGS } from '../src/domain/tags'
 import {
 	accountStatuses,
@@ -4364,21 +4364,154 @@ describe("a streamed status reads its item, however large the viewer's home and 
 		}
 		expect(grown).toEqual([])
 	}, 120_000)
+})
 
-	// R32's capture reads the viewer's own boost and their follows' (the follow limit caps those), never the status's
-	// other boosts.
-	it("captures a delete's boosts with the same rows with 20 or 2,000 unfollowed boosters", async () => {
-		const small: Size = { perAuthor: 20, follows: 10, exclusive: 0, tags: 0, notifications: 20, boosts: 20 }
-		const few = await home(small)
-		const many = await home({ ...small, boosts: 2000 })
-		const capture = readOperation<{ statusId: string }, { accountId: string; boosts: string[] }[]>((db, input) =>
-			deleteAudience(db, input.statusId, [VIEWER_ID], 40)
+describe("R32: a delete's capture reads the smaller of the status's boosts and each listener's follows (RES-7)", () => {
+	const STATUS_ID = '780000000000000000'
+	const AUTHOR_ID = '680000000000000000'
+	const LISTENERS = 681000000000000000n
+	const FOLLOWED = 682000000000000000n
+	const BOOSTERS = 683000000000000000n
+	const BOOSTS = 781000000000000000n
+
+	type Size = { listeners: number; follows: number; boosts: number }
+
+	// A public status; `listeners` local accounts, each following the same `follows` accounts (one of which boosted the
+	// status) and the author; `boosts` boosts by accounts nobody follows.
+	async function captured(size: Size): Promise<StoreStub> {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			const at = new Date(NOW).toISOString()
+			const accounts = (base: bigint, count: number, prefix: string, domain: string | null) =>
+				sql.exec(
+					`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+					INSERT INTO accounts (id, uri, username, domain)
+					SELECT CAST(?2 + i AS TEXT), 'https://' || coalesce(?4, 'kopje.test') || '/users/' || ?3 || i, ?3 || i, ?4
+					FROM n WHERE ?1 > 0`,
+					count,
+					String(base),
+					prefix,
+					domain
+				)
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username, domain) VALUES (?, 'https://far.example/users/author', 'author', 'far.example')",
+				AUTHOR_ID
+			)
+			accounts(LISTENERS, size.listeners, 'l', null)
+			sql.exec(
+				`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey)
+				SELECT id, username || '@example.com', X'00', X'00', 'test' FROM accounts WHERE id GLOB '681*'`
+			)
+			accounts(FOLLOWED, size.follows, 'f', 'many.example')
+			accounts(BOOSTERS, size.boosts, 'b', 'boost.example')
+			sql.exec(
+				`INSERT INTO follows (account_id, target_account_id, state, created_at)
+				SELECT l.id, t.id, 'accepted', ?1 FROM accounts l, accounts t
+				WHERE l.id GLOB '681*' AND (t.id GLOB '682*' OR t.id = ?2)`,
+				at,
+				AUTHOR_ID
+			)
+			sql.exec(
+				`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at, created_at)
+				VALUES (?, 'https://far.example/objects/s', ?, 'public', '<p>s</p>', ?, ?)`,
+				STATUS_ID,
+				AUTHOR_ID,
+				at,
+				at
+			)
+			// One followed account's boost, and the unfollowed boosters'.
+			sql.exec(
+				`INSERT INTO statuses (id, uri, account_id, reblog_of_id, visibility, content, published_at, created_at)
+				SELECT CAST(?1 + row_number() OVER (ORDER BY id) AS TEXT), 'https://boost.example/' || id, id, ?2, 'public', '',
+					?3, ?3
+				FROM (SELECT * FROM (SELECT id FROM accounts WHERE id GLOB '682*' ORDER BY id LIMIT 1)
+					UNION ALL SELECT id FROM accounts WHERE id GLOB '683*')`,
+				String(BOOSTS),
+				STATUS_ID,
+				at
+			)
+		})
+		return store
+	}
+
+	const capture = readOperation<{ listeners: number }, { accountId: string; boosts: string[] }[]>((db, input) =>
+		deleteAudience(
+			db,
+			STATUS_ID,
+			Array.from({ length: input.listeners }, (_, i) => String(LISTENERS + BigInt(i))),
+			40
 		)
-		const input = { statusId: String(AUTHOR_STATUSES + BigInt(small.perAuthor - 1)) }
-		const made = await runInDurableObject(many, (_instance, state) => capture.run(state.storage.sql, input))
-		expect(made.map((viewer) => viewer.boosts.length)).toEqual([5])
-		const fewRows = await rowsRead({ store: few }, capture, input)
-		const manyRows = await rowsRead({ store: many }, capture, input)
-		expect(manyRows).toBeLessThanOrEqual(fewRows + ALLOWANCE)
+	)
+
+	async function read(size: Size): Promise<number> {
+		const store = await captured(size)
+		const made = await runInDurableObject(store, (_instance, state) =>
+			capture.run(state.storage.sql, { listeners: size.listeners })
+		)
+		// Not vacuous: every listener is captured with the followed account's boost, whichever side is read.
+		expect(made.map((viewer) => viewer.boosts.length)).toEqual(Array(size.listeners).fill(size.follows > 0 ? 1 : 0))
+		return rowsRead({ store }, capture, { listeners: size.listeners })
+	}
+
+	it("reads the same rows with 10 or 1,000 follows per listener, and a constant per listener, when the status's boosts are few", async () => {
+		const few = await read({ listeners: 4, follows: 10, boosts: 0 })
+		const followed = await read({ listeners: 4, follows: 1000, boosts: 0 })
+		expect(followed).toBeLessThanOrEqual(few + ALLOWANCE)
+		const listeners = await read({ listeners: 40, follows: 1000, boosts: 0 })
+		// Each listener more costs the view check and its walk of the status's one boost, not its follows.
+		expect(listeners - followed).toBeLessThanOrEqual(36 * ALLOWANCE)
+	}, 120_000)
+
+	// A turn reads a delete's units a page at a time: the journal's scan reads no capture row, and a page reads its
+	// viewers' rows only, whether the capture holds 1 viewer or 256 with 40 boosts each.
+	it("reads a window of the journal and a page of a delete's units, however dense the captures", async () => {
+		const journal = async (viewers: number) => {
+			const store = await migratedStore()
+			await runInDurableObject(store, (_instance, state) => {
+				const sql = state.storage.sql
+				sql.exec(
+					`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 64)
+					INSERT INTO stream_events (id, kind, subject, created_at)
+					SELECT i, 'delete', ?, '2026-10-12T00:00:00.000Z' FROM n`,
+					STATUS_ID
+				)
+				const boosts = JSON.stringify(Array.from({ length: 40 }, (_, i) => [String(BOOSTS + BigInt(i)), []]))
+				sql.exec(
+					`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+					INSERT INTO stream_delete_viewers (event_id, account_id, lists, boosts)
+					SELECT e.id, CAST(?2 + n.i AS TEXT), '[]', ?3 FROM stream_events e, n`,
+					viewers,
+					String(LISTENERS),
+					boosts
+				)
+			})
+			return store
+		}
+		const few = await journal(1)
+		const many = await journal(256)
+		const page = { eventId: 1, statusId: STATUS_ID, after: null, rows: 8 }
+		const made = await runInDurableObject(many, (_instance, state) => streamDeleteUnits.run(state.storage.sql, page))
+		expect([made.units.length, made.next?.account]).toEqual([8 * 41, String(LISTENERS + 8n)])
+		const reads: [string, StoreOperation<never, unknown>, unknown][] = [
+			['scan', streamEvents, { limit: 64 }],
+			['page', streamDeleteUnits, page],
+		]
+		for (const [name, operation, input] of reads) {
+			const fewRows = await rowsRead({ store: few }, operation, input as never)
+			const manyRows = await rowsRead({ store: many }, operation, input as never)
+			expect(manyRows, name).toBeLessThanOrEqual(fewRows + ALLOWANCE)
+		}
+	}, 120_000)
+
+	it('reads a bounded scan, then each listener’s follows, however many unfollowed accounts boosted the status', async () => {
+		const within = await read({ listeners: 4, follows: 10, boosts: CAPTURE_BOOST_SCAN - 1 })
+		const past = await read({ listeners: 4, follows: 10, boosts: CAPTURE_BOOST_SCAN })
+		const far = await read({ listeners: 4, follows: 10, boosts: 10 * CAPTURE_BOOST_SCAN })
+		// Within the scan, each listener walks the boosts once; past it, the scan and the follows.
+		expect(within).toBeLessThanOrEqual(5 * (CAPTURE_BOOST_SCAN + ALLOWANCE))
+		// Per listener: its view check and its follows (ten and the author).
+		expect(past).toBeLessThanOrEqual(CAPTURE_BOOST_SCAN + 1 + 4 * (11 + 2 * ALLOWANCE))
+		expect(far).toBeLessThanOrEqual(past + ALLOWANCE)
 	}, 120_000)
 })

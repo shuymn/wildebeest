@@ -12,9 +12,10 @@
 --   stream_delete_viewers   the capture of a delete (R32): written once, before the first change to the status's
 --                           audience, one row per account listening on `user` that could view the status (R3), with
 --                           the boosts of it the account could view (at most 40), and with the list ids whose read
---                           returned it (empty until lists stream). It goes with its journal row.
---   stream_cursor.subject   the position within a delete event: the status is subject 0, the captured boosts follow
---                           by id, so a unit is one subject for one viewer.
+--                           returned it (empty until lists stream). streamPrune deletes these rows in bounded
+--                           chunks before their journal row; the foreign key's cascade is only a backstop.
+--   stream_cursor.subject   the position within a viewer's units of a delete event: the status is subject 0, the
+--                           viewer's captured boosts follow by id, so a unit is one subject for one viewer.
 --   stream_subscriptions_key the registry by stream key, so the triggers' guard and the capture seek a key's listeners
 --                           rather than scan every account's keys.
 --

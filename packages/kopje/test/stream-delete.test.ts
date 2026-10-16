@@ -9,7 +9,7 @@ import { ALICE, announce, DAVE, followed, localStatus, remove, type Setup, setup
 import { remoteAccount, seedStatus } from './status-helpers'
 import { Db } from '../src/db/sql'
 import { deleteStatusBatch, PURGE_BATCH } from '../src/domain/inbox'
-import { CAPTURE_LIMITS } from '../src/domain/streaming'
+import { CAPTURE_LIMITS, PRUNE_BATCH as STREAM_PRUNE_BATCH, streamPrune } from '../src/domain/streaming'
 
 // R32 (docs/visibility.md; design "Kopje streaming API" §4.3): a streaming `delete` is captured once, before the first
 // change to the status's audience, as a journal row and one row per account listening on `user` that could view the
@@ -220,5 +220,43 @@ describe("R32: a status's boosts in its capture", () => {
 		const hidden = await localStatus(t, { status: '@dave only', visibility: 'direct' }, 'dave')
 		await deleteAsDave(t, hidden.id)
 		expect(await deleteEvents(t)).toEqual([])
+	})
+})
+
+describe('R32: captures are pruned in bounded chunks', () => {
+	it('writes at most PRUNE_BATCH rows a call at the densest captures, and leaves the newest event', async () => {
+		const t = await setup()
+		// Three finished delete events, each with a row for each of the registry's 256 accounts, and a newer event.
+		await sql(
+			t.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 4)
+			INSERT INTO stream_events (id, kind, subject, created_at)
+			SELECT i, 'delete', '100000000000000000', '2026-10-12T00:00:00.000Z' FROM n`
+		)
+		await sql(
+			t.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 256)
+			INSERT INTO stream_delete_viewers (event_id, account_id, lists, boosts)
+			SELECT e.id, printf('7%017d', n.i), '[]', '[]' FROM stream_events e, n`
+		)
+		const calls: { wrote: number; pruned: number }[] = []
+		for (let i = 0; i < 10; i++) {
+			const call = await runInDurableObject(t.store, (_instance, state) => {
+				const db = new Db(state.storage.sql)
+				const changes = () => db.first<{ n: number }>('SELECT total_changes() AS n')!.n
+				const before = changes()
+				const pruned = state.storage.transactionSync(() => streamPrune.run(state.storage.sql, { upTo: 3 }))
+				return { wrote: changes() - before, pruned }
+			})
+			calls.push(call)
+			if (call.wrote === 0) {
+				break
+			}
+		}
+		expect(calls.length).toBeGreaterThan(2)
+		expect(calls.every((call) => call.wrote <= STREAM_PRUNE_BATCH)).toBe(true)
+		expect(calls[0]!.wrote).toBe(STREAM_PRUNE_BATCH)
+		expect(await sql(t.store, 'SELECT id FROM stream_events')).toEqual([{ id: 4 }])
+		expect(await sql(t.store, 'SELECT DISTINCT event_id FROM stream_delete_viewers')).toEqual([{ event_id: 4 }])
 	})
 })

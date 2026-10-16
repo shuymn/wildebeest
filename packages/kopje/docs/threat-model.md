@@ -1246,11 +1246,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   allowance: a turn spends at most 512 checks, 64 presentations, 4 MiB of presented payload and 4,096 sends, runs a
   unit only while what is left covers a unit's worst case (33 checks, one presentation, 256 sends) and leaves the
   rest to the next turn; a payload over 512 KiB is skipped and logged. The journal records nothing once it spans 4,096
-  ids, and is pruned 500 rows a turn behind the position, a delete's capture rows with it. _Implemented on branch
+  ids, and is pruned behind the position, at most 500 rows a call counting a delete's capture rows, which go first. _Implemented on branch
   `kopje/streaming-2`:_ a delete's capture is one journal row and at most one row per account in the registry (256),
   each at most 16 KiB (40 boosts); a row over it drops boosts, then list ids, and is logged, and the delete goes on.
   A unit is one subject (the status, or one captured boost) for one viewer, so a delete with 40 boosts is 41 units for
-  each viewer, each within a unit's worst case; the position names the subject within the event. The status and edit
+  each viewer, each within a unit's worst case; the position names the viewer and the subject within the event. The status and edit
   triggers write one journal row per status write, under the same span, and no batched delete or purge fires them. `src/stream-hub.ts`, `src/domain/streaming.ts`;
   `test/streaming/streaming.test.ts`. _Gap:_ the budgets count work, not CPU time; a turn at the limits is to be
   measured on a deployed instance, as is how long a hibernated idle socket stays open.
@@ -1320,9 +1320,12 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   and the viewer's followed hashtags among the status's own by key; the mention reference is one key lookup
   (`notifications_natural`). They read the same rows however many statuses an author has, however many accounts,
   exclusive-list members and hashtags the viewer follows, and however many notifications they have; a delete's
-  capture reads the viewer's own boost and its follows' by key, never the status's other boosts
-  (`test/policy-bounds.test.ts`, "a streamed status reads its item"). _Gap:_ the capture's reads grow with the
-  listening accounts' follows (at most 256 accounts, each within the follow limit).
+  capture reads, for each listening account, the smaller side: the status's boosts (read once, at most 2,000, each
+  booster checked against the account's follows by key), or past that the account's follows, one key lookup each
+  (`test/policy-bounds.test.ts`, "a streamed status reads its item" and "R32: a delete's capture"). A turn reads a
+  delete's units eight viewers at a time from the position, each page charged to the turn, never the whole capture.
+  _Gap:_ a status with more than 2,000 boosts costs each listening account its follows (at most 256 accounts, each
+  within the follow limit).
 
 ### Data and keys (DATA)
 

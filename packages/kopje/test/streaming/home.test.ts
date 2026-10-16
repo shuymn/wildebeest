@@ -1,11 +1,16 @@
+import { evictDurableObject, runInDurableObject } from 'cloudflare:test'
+
 import { describe, expect, it } from 'vitest'
 
-import { type ApiHarness, bearer, json, sql } from '../api-helpers'
+import { type ApiHarness, bearer, json, seedAccount, sql } from '../api-helpers'
 import { NOW } from '../app-helpers'
 import { BUILD } from '../helpers'
+import { token } from '../inbox-status-helpers'
 import { scopedToken } from '../read-helpers'
 import { act, community, follow, getJson, post, remoteAccount, type Status } from '../status-helpers'
 import { drained, type Inbox, type StreamMessage, subscribed } from './stream-helpers'
+import { Db } from '../../src/db/sql'
+import { streamDelete } from '../../src/domain/streaming'
 
 // The `user` stream's statuses (design "Kopje streaming API" PR 2): `update` when a status enters home (R33: home
 // positioned at it, within the real-time window), `status.update` when one is edited (home, or the viewer's mention of
@@ -268,5 +273,99 @@ describe('delete on user', () => {
 		await drained(h, inbox)
 		expect(await sql(h.store, "SELECT count(*) AS n FROM stream_events WHERE kind = 'delete'")).toEqual([{ n: 0 }])
 		expect(inbox.rest()).toEqual([])
+	})
+})
+
+describe('a delete across turns', () => {
+	const VIEWERS = 16
+	const BOOSTS = 40
+
+	// The author's public status, boosted by 40 remote accounts that each of 16 listening viewers follows: 16 × 41
+	// units, more than a turn's checks (512).
+	async function boostedForMany(): Promise<{
+		h: ApiHarness & { users: Record<'author', { id: string; token: string }> }
+		status: string
+		boosts: string[]
+		inboxes: Inbox[]
+	}> {
+		const h = await community(['author'])
+		const status = (await post(h, h.users.author, { status: 'boosted', visibility: 'public' })).id
+		const inboxes: Inbox[] = []
+		const viewers: string[] = []
+		for (let i = 0; i < VIEWERS; i++) {
+			const id = await seedAccount(h.store, { username: `viewer${i}`, email: `viewer${i}@example.com` })
+			viewers.push(id)
+			inboxes.push(await subscribed(h, await token(h.store, id), 'user'))
+		}
+		for (let i = 0; i < BOOSTS; i++) {
+			const booster = await remoteAccount(h.store, `booster${i}`)
+			await sql(
+				h.store,
+				`INSERT INTO statuses (id, uri, account_id, reblog_of_id, visibility, content, published_at, created_at)
+				VALUES (?, ?, ?, ?, 'public', '', ?, ?)`,
+				String(800000000000000000n + BigInt(i)),
+				`https://remote.example/boosts/${i}`,
+				booster,
+				status,
+				new Date(NOW).toISOString(),
+				new Date(NOW).toISOString()
+			)
+			for (const viewer of viewers) {
+				await sql(
+					h.store,
+					"INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'accepted')",
+					viewer,
+					booster
+				)
+			}
+		}
+		const boosts = Array.from({ length: BOOSTS }, (_, i) => String(800000000000000000n + BigInt(i)))
+		// The boosts' own inserts were journaled (sent as `update`); send them first.
+		await h.store.streamTick(BUILD)
+		await drained(h, ...inboxes)
+		return { h, status, boosts, inboxes }
+	}
+
+	const deletes = (inbox: Inbox) => inbox.rest().flatMap((m) => (m.event === 'delete' ? [m.payload] : []))
+
+	it('sends every viewer the status and its 40 boosts once, in order, over several turns', async () => {
+		const { h, status, boosts, inboxes } = await boostedForMany()
+		const before = (await drained(h)).turns
+		await remove(h, h.users.author.token, status)
+		const { turns } = await drained(h, ...inboxes)
+		for (const inbox of inboxes) {
+			expect(deletes(inbox)).toEqual([status, ...boosts])
+		}
+		expect(turns - before).toBeGreaterThanOrEqual(2)
+	})
+
+	it('resumes mid-event after the Store restarts, from the persisted position', async () => {
+		const { h, status, boosts, inboxes } = await boostedForMany()
+		// The capture, with no turn yet; then the position as a turn that sent units up to viewer 2's sixth subject left it.
+		await runInDurableObject(h.store, (_instance, state) => {
+			state.storage.transactionSync(() => streamDelete(new Db(state.storage.sql), status, NOW))
+		})
+		const viewers = await sql<{ account_id: string }>(
+			h.store,
+			'SELECT account_id FROM stream_delete_viewers ORDER BY account_id'
+		)
+		expect(viewers).toHaveLength(VIEWERS)
+		await sql(
+			h.store,
+			`UPDATE stream_cursor SET event_id = (SELECT max(id) FROM stream_events WHERE kind = 'delete'), subject = 5,
+				account_id = ?`,
+			viewers[2]!.account_id
+		)
+		// A new instance: its first turn (which the drain barrier asks for) starts from the persisted position.
+		await evictDurableObject(h.store)
+		const { turns } = await drained(h, ...inboxes)
+		const sent = inboxes.map(deletes)
+		// The sockets were opened in account id order (seedAccount allocates ascending ids).
+		expect(sent.slice(0, 2)).toEqual([[], []])
+		expect(sent[2]).toEqual(boosts.slice(5))
+		for (const rest of sent.slice(3)) {
+			expect(rest).toEqual([status, ...boosts])
+		}
+		expect(turns).toBeGreaterThanOrEqual(2)
 	})
 })

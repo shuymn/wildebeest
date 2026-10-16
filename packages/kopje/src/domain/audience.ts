@@ -585,34 +585,55 @@ export function statusReads(
 	}
 }
 
+// How many of a status's boosts R32's capture reads to find each viewer's (deleteAudience); a status with more is
+// read from each viewer's follows instead.
+export const CAPTURE_BOOST_SCAN = 2000
+
 // R32 (stream delete; streaming.ts streamDelete captures it): of `viewers`, those who may view the status `statusId`
 // by itself (R3: viewableSql on the status, so a boost whose booster is being purged is not viewable), each with the
 // boosts of it they may view by themselves that they or an account they follow (accepted) made, oldest first, at most
-// `boosts`: the boosts their home could have shown. The boosts are found from each viewer's own boost and follows, one
-// key lookup (statuses_reblog) each, never by walking the status's boosts, which others make.
+// `boosts`: the boosts their home could have shown. Each viewer's are found from the smaller side: the status's boosts
+// (statuses_reblog), read once up to `scan` with one more to tell an overflow, each booster checked against the
+// viewer's follows by key; or, past `scan`, the viewer's own boost and follows (follows_accepted), one key lookup of
+// statuses_reblog each. A status without boosts reads one index probe for all its viewers.
 export function deleteAudience(
 	db: Db,
 	statusId: string,
 	viewers: readonly string[],
-	boosts: number
+	boosts: number,
+	scan = CAPTURE_BOOST_SCAN
 ): { accountId: string; boosts: string[] }[] {
+	const found = db.all<{ id: string }>(
+		'SELECT id FROM main.statuses WHERE reblog_of_id = ? LIMIT ?',
+		statusId,
+		scan + 1
+	).length
+	const candidates =
+		found <= scan
+			? `SELECT r.id FROM main.statuses r WHERE r.reblog_of_id = ?2 AND (r.account_id = ?1
+				OR EXISTS (SELECT 1 FROM main.follows f
+					WHERE f.account_id = ?1 AND f.target_account_id = r.account_id AND f.state = 'accepted'))`
+			: `SELECT r.id FROM main.statuses r WHERE r.reblog_of_id = ?2 AND r.account_id = ?1
+				UNION SELECT r.id FROM main.follows f CROSS JOIN main.statuses r
+					ON r.reblog_of_id = ?2 AND r.account_id = f.target_account_id
+				WHERE f.account_id = ?1 AND f.state = 'accepted'`
 	return viewers.flatMap((viewerId) => {
 		if (!canView(db, viewerId, statusId)) {
 			return []
 		}
-		const ids = db
-			.all<{ id: string }>(
-				`SELECT b.id FROM (SELECT r.id FROM main.statuses r WHERE r.reblog_of_id = ?2 AND r.account_id = ?1
-					UNION SELECT r.id FROM main.follows f CROSS JOIN main.statuses r
-						ON r.reblog_of_id = ?2 AND r.account_id = f.target_account_id
-					WHERE f.account_id = ?1 AND f.state = 'accepted') b
-				WHERE EXISTS (SELECT 1 FROM main.statuses s WHERE s.id = b.id AND ${viewableSql('s', '?1')})
-				ORDER BY b.id LIMIT ?3`,
-				viewerId,
-				statusId,
-				boosts
-			)
-			.map((row) => row.id)
+		const ids =
+			found === 0
+				? []
+				: db
+						.all<{ id: string }>(
+							`SELECT b.id FROM (${candidates}) b
+							WHERE EXISTS (SELECT 1 FROM main.statuses s WHERE s.id = b.id AND ${viewableSql('s', '?1')})
+							ORDER BY b.id LIMIT ?3`,
+							viewerId,
+							statusId,
+							boosts
+						)
+						.map((row) => row.id)
 		return [{ accountId: viewerId, boosts: ids }]
 	})
 }

@@ -31,10 +31,10 @@ import { grantsAny } from '../security/scopes'
 //   capture (streamDelete) is taken once, before that change, in bounded rows (stream_delete_viewers, migration
 //   0028_streaming_home); the unit re-checks only V's tokens.
 //
-// A unit is one subject for one viewer. Units go in a stable order (event id, then the subject within the event: 0 for
-// the status, then a delete's captured boosts by id, then viewer account id ascending), and the position past a unit is
-// persisted by compare-and-set before its messages are sent, so none is sent twice (streamAdvance). Delivery is at most
-// once and live: REST is authoritative.
+// A unit is one subject for one viewer. Units go in a stable order (event id, then viewer account id ascending, then
+// the subject within the viewer's units: 0 for the status, then a delete's captured boosts by id), and the position
+// past a unit is persisted by compare-and-set before its messages are sent, so none is sent twice (streamAdvance).
+// Delivery is at most once and live: REST is authoritative.
 
 // The stream names Mastodon's streaming server knows (streaming/index.js channelNameToIds).
 export const STREAM_NAMES: readonly string[] = [
@@ -110,8 +110,8 @@ export const JOURNAL_SPAN = 4096
 // Journal rows pruned per call, at or below the finished position.
 export const PRUNE_BATCH = 500
 
-// The fan-out's position: the last unit sent, as (event id, subject index, viewer account id), the account null once
-// the event is done (the last unit of an event moves it there directly).
+// The fan-out's position: the last unit sent, as (event id, viewer account id, subject index within the viewer's
+// units), the account null once the event is done.
 export type StreamPosition = { event: number; subject: number; account: string | null }
 
 // The upgrade: the token is valid and a user's (Mastodon's accountFromToken joins users, so an app token fails), and
@@ -150,18 +150,19 @@ export const streamTokens = readOperation<
 	return valid
 })
 
-// One subject of an event (its index in the event's order, and its id) with the viewers that may be sent it, in unit
-// order.
-export type StreamSubject = { index: number; id: string; viewers: string[] }
+// A subject of a unit: its index among the viewer's units of the event (0 for the status, then a delete's captured
+// boosts by id), and its id.
+export type StreamSubject = { index: number; id: string }
 
-export type StreamEvent = { id: number; kind: string; subject: string; subjects: StreamSubject[] }
+// A journal event and, but for a delete (read a page at a time: streamDeleteUnits), the accounts that may be sent it in
+// unit order, after the position within it.
+export type StreamEvent = { id: number; kind: string; subject: string; viewers: string[] }
 
-// The journal after `position`, oldest first, at most `limit` events, each with its subjects and the accounts that may
-// be sent each, in unit order: for a notification, its recipient while it exists; for a status, every account listening
-// on `user`, and for an edit on `user` or `user:notification`; for a delete, the captured viewers, and for each boost
-// the viewers whose capture holds it. The event of a position within an event is read again (for its units after the
-// position's), and a finished one is not, so a full window means more may follow. Also the journal's span. Each
-// event's viewers are bounded by the registry's caps (256 accounts).
+// The journal after `position`, oldest first, at most `limit` events, each with the accounts that may be sent it in
+// unit order: for a notification, its recipient while it exists; for a status, every account listening on `user`, and
+// for an edit on `user` or `user:notification` (the registry's, at most 256, read once a scan). A delete's units are
+// not read here. The event of a position within an event is read again (for its units after the position's), and a
+// finished one is not, so a full window means more may follow. Also the journal's span.
 export const streamEvents = readOperation<
 	{ limit: number },
 	{ position: StreamPosition; events: StreamEvent[]; head: number; tail: number }
@@ -192,35 +193,26 @@ export const streamEvents = readOperation<
 		return accounts
 	}
 	const events = rows.map((row): StreamEvent => {
-		let subjects: StreamSubject[]
+		let viewers: string[]
 		switch (row.kind) {
 			case 'notification':
-				subjects = [{ index: 0, id: row.subject, viewers: row.recipient === null ? [] : [row.recipient] }]
+				viewers = row.recipient === null ? [] : [row.recipient]
 				break
 			case 'status':
-				subjects = [{ index: 0, id: row.subject, viewers: listening(['user']) }]
+				viewers = listening(['user'])
 				break
 			case 'edit':
-				subjects = [{ index: 0, id: row.subject, viewers: listening(['user', 'user:notification']) }]
-				break
-			case 'delete':
-				subjects = deleteSubjects(db, row.id, row.subject)
+				viewers = listening(['user', 'user:notification'])
 				break
 			default:
-				subjects = []
+				viewers = []
 		}
-		// Within the position's event, only the units after its own.
-		if (row.id === position.event && position.account !== null) {
-			const { subject, account } = position
-			subjects = subjects.flatMap((s) =>
-				s.index < subject
-					? []
-					: s.index > subject
-						? [s]
-						: [{ ...s, viewers: s.viewers.filter((viewer) => viewer > account) }]
-			)
+		// Within the position's event, only the viewers after its account (these events have one unit per viewer).
+		const after = row.id === position.event ? position.account : null
+		if (after !== null) {
+			viewers = viewers.filter((viewer) => viewer > after)
 		}
-		return { id: row.id, kind: row.kind, subject: row.subject, subjects }
+		return { id: row.id, kind: row.kind, subject: row.subject, viewers }
 	})
 	// Each bound its own subquery: one seek each (min and max together would scan the journal).
 	const span = db.first<{ head: number | null; tail: number | null }>(
@@ -229,26 +221,37 @@ export const streamEvents = readOperation<
 	return { position, events, head: span?.head ?? 0, tail: span?.tail ?? 0 }
 })
 
-// A delete event's subjects: the status (0) for every viewer captured, then each captured boost by id for the viewers
-// whose capture holds it.
-function deleteSubjects(db: Db, eventId: number, statusId: string): StreamSubject[] {
-	const rows = db.all<{ account_id: string; boosts: string }>(
-		'SELECT account_id, boosts FROM stream_delete_viewers WHERE event_id = ? ORDER BY account_id',
-		eventId
+// Where a page of a delete's units starts: after the unit (account, subject), or at the start.
+export type StreamUnitAfter = { account: string; subject: number } | null
+
+// A page of a delete event's units after `after`: at most `rows` viewers' captures (stream_delete_viewers, by its key),
+// each viewer's status (subject 0) then its captured boosts oldest first, so the units read at once never exceed
+// `rows` × 41 however many viewers the capture holds; and where the next page starts, or null after the last.
+export const streamDeleteUnits = readOperation<
+	{ eventId: number; statusId: string; after: StreamUnitAfter; rows: number },
+	{ units: { viewer: string; subject: StreamSubject }[]; next: StreamUnitAfter }
+>((db, { eventId, statusId, after, rows }) => {
+	const captured = db.all<{ account_id: string; boosts: string }>(
+		`SELECT account_id, boosts FROM stream_delete_viewers WHERE event_id = ?1 AND account_id >= ?2
+		ORDER BY account_id LIMIT ?3`,
+		eventId,
+		after?.account ?? '',
+		rows
 	)
-	const boosts = new Map<string, string[]>()
-	for (const row of rows) {
-		for (const [boost] of JSON.parse(row.boosts) as [string, string[]][]) {
-			boosts.set(boost, [...(boosts.get(boost) ?? []), row.account_id])
-		}
+	const units = captured.flatMap((row) =>
+		[statusId, ...(JSON.parse(row.boosts) as [string, string[]][]).map(([boost]) => boost)]
+			.map((id, index) => ({ viewer: row.account_id, subject: { index, id } }))
+			.filter((unit) => after === null || unit.viewer > after.account || unit.subject.index > after.subject)
+	)
+	const last = captured.at(-1)
+	return {
+		units,
+		next:
+			captured.length < rows || last === undefined
+				? null
+				: { account: last.account_id, subject: Number.MAX_SAFE_INTEGER },
 	}
-	return [
-		{ index: 0, id: statusId, viewers: rows.map((row) => row.account_id) },
-		...[...boosts]
-			.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-			.map(([id, viewers], i) => ({ index: i + 1, id, viewers })),
-	]
-}
+})
 
 // What a unit sends: one event, its payload (presented once), and the streams it goes on, each with the scopes a
 // socket's token needs for it; and the reference reads it made.
@@ -413,17 +416,33 @@ export const streamAdvance = sessionOperation<{ from: StreamPosition; to: Stream
 		) === 1
 )
 
-// Deletes at most PRUNE_BATCH journal rows at or below `upTo`, a finished event, but the newest row: it keeps the next
-// id above every id given (the journal has no AUTOINCREMENT counter). A delete's capture rows go with its row (at most
-// 256 each, the registry's accounts). Returns how many journal rows.
-export const streamPrune = sessionOperation<{ upTo: number }, number>((db, { upTo }) =>
+// Deletes at most PRUNE_BATCH rows in all at or below `upTo`, a finished event, but the newest journal row: it keeps the
+// next id above every id given (the journal has no AUTOINCREMENT counter). A delete's capture rows go first, oldest
+// event first, then the journal rows with none left, so the foreign key's cascade deletes nothing and a call never
+// writes more than PRUNE_BATCH rows however dense the captures; what is left goes in later calls. Returns how many
+// journal rows.
+export const streamPrune = sessionOperation<{ upTo: number }, number>((db, { upTo }) => {
 	db.run(
-		`DELETE FROM stream_events WHERE id IN (SELECT id FROM stream_events
-			WHERE id <= ?1 AND id < (SELECT max(id) FROM stream_events) ORDER BY id LIMIT ?2)`,
+		`DELETE FROM stream_delete_viewers WHERE (event_id, account_id) IN (SELECT event_id, account_id
+			FROM stream_delete_viewers WHERE event_id <= ?1 AND event_id < (SELECT max(id) FROM stream_events)
+			ORDER BY event_id, account_id LIMIT ?2)`,
 		upTo,
 		PRUNE_BATCH
 	)
-)
+	const left = PRUNE_BATCH - (db.first<{ n: number }>('SELECT changes() AS n')?.n ?? 0)
+	if (left === 0) {
+		return 0
+	}
+	db.run(
+		`DELETE FROM stream_events WHERE id IN (SELECT e.id FROM stream_events e
+			WHERE e.id <= ?1 AND e.id < (SELECT max(id) FROM stream_events)
+				AND NOT EXISTS (SELECT 1 FROM stream_delete_viewers v WHERE v.event_id = e.id)
+			ORDER BY e.id LIMIT ?2)`,
+		upTo,
+		left
+	)
+	return db.first<{ n: number }>('SELECT changes() AS n')?.n ?? 0
+})
 
 export type StreamKeys = readonly { key: string; sockets: number }[]
 

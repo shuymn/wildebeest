@@ -703,7 +703,9 @@ could read, at once, from 20 statuses per author to 2,000, 10 follows to 1,000, 
 none of 40 unrelated followed hashtags and 20 of the viewer's mention notifications to 2,000: the `update` of the
 author's newest, middle and oldest status, a followed account's, an exclusive member's (not sent) and a followed
 hashtag's newest and oldest, and the `status.update` of a status in home and of the newest and oldest mention, must
-each read at most 10 rows more. A delete's capture of the boosts reads the same with 20 or 2,000 unfollowed boosters.
+each read at most 10 rows more. A delete's capture reads the same with 10 or 1,000 follows per listening account when
+the status has few boosts, a constant per listening account, and, past 2,000 boosts by unfollowed accounts, the same
+with 2,000 or 20,000; the journal's scan and a page of a delete's units read the same with 1 or 256 captured viewers.
 `test/stream-delete.test.ts` checks R32's capture: once, when a remote `Delete`'s job is created, through every batch
 and a redelivery, for a direct status and a private one a mention authorizes; by its own id for a boost removed by
 `Delete` or `Undo`; without a booster whose purge has begun or one the viewer does not follow; at most 40 boosts, and a
