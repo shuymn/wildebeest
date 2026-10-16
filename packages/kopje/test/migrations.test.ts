@@ -3415,7 +3415,7 @@ describe('0033_streaming_lists', () => {
 				statement = ''
 			}
 		}
-		expect(statements).toHaveLength(9)
+		expect(statements).toHaveLength(17)
 		const measure = async (conversations: number, others: number) => {
 			const store = freshStore()
 			return runInDurableObject(store, async (_instance, state) => {

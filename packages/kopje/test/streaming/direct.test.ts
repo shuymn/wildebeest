@@ -1,4 +1,4 @@
-import { runInDurableObject } from 'cloudflare:test'
+import { evictDurableObject, runInDurableObject } from 'cloudflare:test'
 
 import { describe, expect, it } from 'vitest'
 
@@ -12,12 +12,14 @@ import { scopedToken } from '../read-helpers'
 import { act, community, follow, getJson, post, remoteAccount, seedStatus, type User } from '../status-helpers'
 import { connect, drained, echo, type Inbox, type StreamMessage, subscribed } from './stream-helpers'
 import { sha256Hex } from '../../src/security/tokens'
+import { STREAM_FAULTS } from '../../src/stream-hub'
 
 // The `direct` stream and `notifications_merged` (design "Kopje streaming API" PR 3). `conversation` is sent when a
 // conversation of the viewer changes, as the conversation list presents it (R33: the row of the viewer, R25), by the
-// owner's change sequence (conversations.stream_seq, from the owner's mark): at most 20 newest changes per owner a turn.
+// owner's change sequence (conversations.stream_seq, from the owner's mark), journaled as one 'conversation' event per
+// owner until it is sent: at most its 20 newest changes each.
 // `notifications_merged` is sent on the transition to no pending accept job, under a notification scope. Absence is
-// proved with the drain barrier, which also waits for every `direct` socket's pending conversation changes.
+// proved with the drain barrier.
 
 type Conversation = { id: string; unread: boolean; last_status: { id: string } | null }
 
@@ -121,65 +123,178 @@ describe('conversation on direct', () => {
 	})
 })
 
-describe('conversations at the caps', () => {
-	// 256 owners, each with a `direct` socket (the instance's cap): a turn's token sweep takes 256 checks of its 512, so
-	// one turn reads only some of the owners' changes. The walk resumes where the last turn stopped.
-	it('reaches the last of 256 owners, then asks for no further turn', async () => {
-		const h = await community(['alice'])
-		const owners = 256
+// `count` local accounts (ids 4 then 17 digits, from `start`), each with the token `cap-<id>` (read and write).
+async function owners(h: ApiHarness, count: number, start = 1): Promise<string[]> {
+	await sql(
+		h.store,
+		`WITH RECURSIVE n(i) AS (SELECT ?2 UNION ALL SELECT i + 1 FROM n WHERE i < ?2 + ?1 - 1)
+		INSERT INTO accounts (id, uri, username) SELECT printf('4%017d', i), 'https://kopje.test/ap/users/o' || i, 'o' || i FROM n`,
+		count,
+		start
+	)
+	await sql(
+		h.store,
+		`INSERT OR IGNORE INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey)
+		SELECT id, username || '@mail.example', x'00', x'00', 'k' FROM accounts WHERE id GLOB '4*'`
+	)
+	const ids = Array.from({ length: count }, (_, i) => `4${String(start + i).padStart(17, '0')}`)
+	for (const id of ids) {
 		await sql(
 			h.store,
-			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
-			INSERT INTO accounts (id, uri, username) SELECT printf('4%017d', i), 'https://kopje.test/ap/users/o' || i, 'o' || i FROM n`,
-			owners
+			"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) SELECT ?, 'access', client_id, ?, 'read write' FROM oauth_tokens LIMIT 1",
+			await sha256Hex(`cap-${id}`),
+			id
 		)
-		await sql(
-			h.store,
-			`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey)
-			SELECT id, username || '@mail.example', x'00', x'00', 'k' FROM accounts WHERE id GLOB '4*'`
-		)
-		const ids = Array.from({ length: owners }, (_, i) => `4${String(i + 1).padStart(17, '0')}`)
-		for (const id of ids) {
-			await sql(
-				h.store,
-				"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) SELECT ?, 'access', client_id, ?, 'read' FROM oauth_tokens LIMIT 1",
-				await sha256Hex(`cap-${id}`),
-				id
-			)
-		}
-		const inboxes: Inbox[] = []
-		for (const id of ids) {
+	}
+	return ids
+}
+
+// `perOwner` sockets of each owner, subscribed to `direct`, the subscriptions in effect.
+async function directSockets(h: ApiHarness, ids: readonly string[], perOwner = 1): Promise<Inbox[]> {
+	const inboxes: Inbox[] = []
+	for (const id of ids) {
+		for (let i = 0; i < perOwner; i++) {
 			const inbox = await connect(h, `cap-${id}`)
 			inbox.send({ type: 'subscribe', stream: 'direct' })
 			inboxes.push(inbox)
 		}
-		for (const inbox of inboxes) {
-			await echo(inbox)
-		}
-		await drained(h)
-		// A change of the first owner's and of the last owner's conversations, written with no turn.
-		for (const id of [ids[0]!, ids.at(-1)!]) {
-			await sql(
-				h.store,
-				`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
-				VALUES (?1, 'https://kopje.test/ap/o/' || ?1, ?2, 'direct', '<p>x</p>', '2026-10-12T00:00:00.000Z')`,
-				`7${id.slice(1)}`,
-				id
-			)
-			await runInDurableObject(h.store, (_instance, state) => {
-				state.storage.transactionSync(() => addToConversation(new Db(state.storage.sql), id, `7${id.slice(1)}`))
+	}
+	for (const inbox of inboxes) {
+		await echo(inbox)
+	}
+	await drained(h)
+	return inboxes
+}
+
+let nextStatus = 700000000000000000n
+
+// A new conversation of each owner, from a direct status of theirs, written with no turn (straight to the Store).
+// Returns the statuses' ids, by owner.
+async function changed(h: ApiHarness, ids: readonly string[]): Promise<string[]> {
+	const statuses = ids.map(() => String(nextStatus++))
+	await runInDurableObject(h.store, (_instance, state) => {
+		const db = new Db(state.storage.sql)
+		state.storage.transactionSync(() => {
+			ids.forEach((id, i) => {
+				db.run(
+					`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+					VALUES (?1, 'https://kopje.test/ap/o/' || ?1, ?2, 'direct', '<p>x</p>', '2026-10-12T00:00:00.000Z')`,
+					statuses[i]!,
+					id
+				)
+				addToConversation(db, id, statuses[i]!)
 			})
-		}
+		})
+	})
+	return statuses
+}
+
+const sentStatus = (status: string) => (m: StreamMessage) =>
+	m.event === 'conversation' && (JSON.parse(m.payload!) as Conversation).last_status?.id === status
+
+describe('conversations at the caps', () => {
+	// 256 owners, each with a `direct` socket (the instance's cap): a turn's token sweep takes 256 checks of its 512, so
+	// one turn sends only some of the owners' conversations; the journal's position carries the rest to the next.
+	it('reaches the last of 256 owners, then asks for no further turn', async () => {
+		const h = await community(['alice'])
+		const ids = await owners(h, 256)
+		const inboxes = await directSockets(h, ids)
+		const statuses = await changed(h, ids)
+		// One journal row per owner.
+		expect(await sql(h.store, "SELECT count(*) AS n FROM stream_events WHERE kind = 'conversation'")).toEqual([
+			{ n: 256 },
+		])
 		await h.store.streamTick(BUILD)
-		for (const inbox of [inboxes[0]!, inboxes.at(-1)!]) {
-			const message = await inbox.next((m) => m.event === 'conversation')
-			expect((JSON.parse(message.payload!) as Conversation).last_status?.id).toMatch(/^7/)
+		for (const [i, inbox] of inboxes.entries()) {
+			await inbox.next(sentStatus(statuses[i]!))
 		}
 		// Quiescent: once nothing is left, no turn runs or is asked for, and asking again changes nothing.
 		const { turns } = await drained(h)
 		expect((await drained(h)).turns).toBe(turns)
-		for (const inbox of inboxes.slice(1, -1)) {
-			expect(inbox.rest().filter((m) => m.event === 'conversation')).toEqual([])
+		expect(inboxes.flatMap((inbox) => inbox.rest())).toEqual([])
+	}, 120_000)
+
+	it('sends a change written while a continuation is pending, for an owner the fan-out already passed', async () => {
+		const h = await community(['alice'])
+		const ids = await owners(h, 256)
+		const inboxes = await directSockets(h, ids)
+		const statuses = await changed(h, ids)
+		await h.store.streamTick(BUILD)
+		// The first owner's conversation is sent by the first turn; the last owner's waits for a continuation.
+		await inboxes[0]!.next(sentStatus(statuses[0]!))
+		const [conversation] = await sql<{ id: string }>(
+			h.store,
+			'SELECT CAST(id AS TEXT) AS id FROM conversations WHERE account_id = ?',
+			ids[0]!
+		)
+		const read = await h.request(
+			`/api/v1/conversations/${conversation!.id}/read`,
+			bearer(`cap-${ids[0]!}`, { method: 'POST' })
+		)
+		expect(read.status).toBe(200)
+		// No drain barrier and no cron: the write's own wakeup and the continuations deliver both.
+		await inboxes.at(-1)!.next(sentStatus(statuses.at(-1)!))
+		const marked = await inboxes[0]!.next((m) => m.event === 'conversation')
+		expect((JSON.parse(marked.payload!) as Conversation).id).toBe(conversation!.id)
+	}, 120_000)
+
+	it('serves 240 owners in turn while one owner with 16 sockets keeps changing', async () => {
+		const h = await community(['alice'])
+		const [busy, ...others] = await owners(h, 241)
+		const busySockets = await directSockets(h, [busy!], 16)
+		const inboxes = await directSockets(h, others)
+		let writing = true
+		const steady = (async () => {
+			while (writing) {
+				await changed(h, [busy!])
+				await h.store.streamTick(BUILD)
+			}
+		})()
+		const statuses = await changed(h, others)
+		await h.store.streamTick(BUILD)
+		for (const [i, inbox] of inboxes.entries()) {
+			await inbox.next(sentStatus(statuses[i]!))
+		}
+		writing = false
+		await steady
+		await drained(h)
+		// Each of the busy owner's sockets was sent its changes too, each at most once.
+		for (const inbox of busySockets) {
+			const sent = inbox.rest().map((m) => (JSON.parse(m.payload!) as Conversation).id)
+			expect(sent.length).toBeGreaterThan(0)
+			expect(new Set(sent).size).toBe(sent.length)
+		}
+	}, 120_000)
+
+	it('resumes after a failed continuation and hibernation, from the cron, past the owners already sent', async () => {
+		const h = await community(['alice'])
+		const ids = await owners(h, 256)
+		const inboxes = await directSockets(h, ids)
+		const statuses = await changed(h, ids)
+		const last = inboxes.at(-1)!
+		const arrived = () => last.messages.some(sentStatus(statuses.at(-1)!))
+		let turns = 0
+		// Each turn's continuation fails; the object hibernates; the cron's turn (the same request to the Store's own
+		// stub, awaited here so the test knows it ended) runs again.
+		STREAM_FAULTS.dropContinuation = () => {}
+		try {
+			while (!arrived() && turns < 10) {
+				await evictDurableObject(h.store)
+				const response = await h.store.fetch('https://store.internal/stream/turn', { method: 'POST' })
+				await response.body?.cancel()
+				turns++
+				await echo(last)
+			}
+		} finally {
+			STREAM_FAULTS.dropContinuation = null
+		}
+		expect(arrived()).toBe(true)
+		expect(turns).toBeGreaterThan(1)
+		// Each cron turn went on from the persisted position: a few turns for 256 owners.
+		expect(turns).toBeLessThanOrEqual(5)
+		await drained(h)
+		for (const [i, inbox] of inboxes.entries()) {
+			expect(inbox.messages.filter(sentStatus(statuses[i]!))).toHaveLength(1)
 		}
 	}, 120_000)
 })

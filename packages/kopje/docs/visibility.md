@@ -279,7 +279,8 @@ accepted. R32 differs from Mastodon in two accepted ways: at most 40 boosts of a
 viewer's stream (those by the viewer and the accounts it follows), and an account's purge sends no `delete`. A list's
 read positioned at x (`listStatus`) cuts the list's members to x's author, read by the list's key; the list must be
 the viewer's. A conversation is not a status position: `conversation` is sent for the viewer's own row, by the owner's
-change sequence (`conversations.stream_seq`, from a mark that is never lowered), at most the 20 newest changes a turn.
+change sequence (`conversations.stream_seq`, from a mark that is never lowered), journaled as one event per owner
+until it is sent, at most the 20 newest changes each.
 
 Pins and conversation mutes (`src/domain/status-actions.ts`, Mastodon's `StatusPin` and `ConversationMute`, migration
 `0018_status_pins_and_conversation_mutes`) act on a status the viewer may see by itself (R3; anything else is not
@@ -722,8 +723,8 @@ checks, for every viewer and every conversation, that `conversation` is sent exa
 presentation of its whole conversation list read in one page; two conversations sharing a last status are each
 returned alone. `test/policy-bounds.test.ts` grows a list's members from 10 to 1,000, its author's statuses from 20 to
 2,000 and the owner's conversations from 20 to 2,000: a list's `update` and `status.update`, a delete's list capture,
-the subscription's ownership check, a conversation's unit, the read of an owner's newest changes and the drain
-barrier's check each read at most 10 rows more.
+the subscription's ownership check, a conversation's unit and the read of an owner's newest changes each read at most
+10 rows more.
 `test/stream-delete.test.ts` checks R32's capture: once, when a remote `Delete`'s job is created, through every batch
 and a redelivery, for a direct status and a private one a mention authorizes; by its own id for a boost removed by
 `Delete` or `Undo`; without a booster whose purge has begun or one the viewer does not follow; at most 40 boosts, and a

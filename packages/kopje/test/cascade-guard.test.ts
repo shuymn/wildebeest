@@ -54,7 +54,7 @@ const WRITING_TRIGGERS: Record<string, string> = {
 	account_pins_follow_ended:
 		"a follow's delete deletes the follower's endorsement of the account; the purge deletes the account's endorsements first (purgeRelationships), so then it writes none",
 	conversation_statuses_removed:
-		"one conversation and its owner's streaming mark written per link deleted: STATUS_CHILDREN's conversation_statuses entry takes a third of the rows left (the listening case below)",
+		"one conversation and its owner's streaming mark written per link deleted, and the mark's journal row (stream_conversation_changed): STATUS_CHILDREN's conversation_statuses entry takes a fourth of the rows left (the listening case below)",
 	statuses_last_status_removed:
 		"one account row per status deleted: deleteStatusWithin reserves it with the status's own delete",
 	statuses_last_status_changed:
@@ -63,6 +63,8 @@ const WRITING_TRIGGERS: Record<string, string> = {
 		'fires on a notification insert, which no batched delete or purge makes (the exact-budget cases below run with a listener too)',
 	stream_status_inserted:
 		'fires on a status insert, which no batched delete or purge makes, whether `user` or a list arms it (the exact-budget cases below run with both listening)',
+	stream_conversation_changed:
+		"one journal row when an owner's mark moves, at most one per owner ahead of the position: counted with conversation_statuses_removed, a fourth row per link",
 	stream_status_edited:
 		'fires only when edited_at changes, which no batched delete or purge does: hiding a status writes its visibility and content (the exact-budget cases below run with `user` and a list listening)',
 }
@@ -267,7 +269,7 @@ describe('a status in many conversations', () => {
 
 describe('a status in many conversations that keep an older one, their owners streaming `direct`', () => {
 	// Each link's delete moves its conversation's last status back to the older status: with the owner's mark, the
-	// trigger writes the mark and the conversation, three rows with the link (migration 0033_streaming_lists).
+	// trigger writes the mark, its journal row (the owner's first) and the conversation, at most four rows with the link (migration 0033_streaming_lists).
 	it.each([false, true])(
 		'stays within PURGE_BATCH, each mark and stream_seq advancing (listening: %s)',
 		async (listening) => {
@@ -320,10 +322,10 @@ describe('a status in many conversations that keep an older one, their owners st
 			}
 			expect(batches.length).toBeGreaterThan(1)
 			expect(batches.every((wrote) => wrote <= PURGE_BATCH)).toBe(true)
-			// With the marks, a batch's links each wrote three rows: the budget's whole third.
-			if (listening) {
-				expect(batches[0]).toBeGreaterThanOrEqual(3 * Math.floor(PURGE_BATCH / 3))
-			}
+			// The marks' moves journaled one row per owner, whatever the batches (the position never moved).
+			expect(await sql(h.store, "SELECT count(*) AS n FROM stream_events WHERE kind = 'conversation'")).toEqual([
+				{ n: listening ? owners.length : 0 },
+			])
 			expect(await sql(h.store, 'SELECT count(*) AS n FROM statuses WHERE id = ?', status)).toEqual([{ n: 0 }])
 			expect(await sql(h.store, 'SELECT count(*) AS n FROM conversations WHERE last_status_id = ?', older)).toEqual([
 				{ n: 600 },

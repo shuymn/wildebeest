@@ -40,9 +40,10 @@ import { grantsAny } from '../security/scopes'
 //   The capture (streamDelete) is taken once, before that change, in bounded rows (stream_delete_viewers, migration
 //   0028_streaming_home); the unit re-checks V's tokens and the lists' owner.
 //
-// Conversations are not journaled: each write of a conversation takes its owner's next change sequence
-// (conversations.ts nextStreamSeq, migration 0033_streaming_lists), and a turn sends each owner's newest changes above
-// what its sockets were sent (streamConversations).
+// A conversation's write takes its owner's next change sequence (conversations.ts nextStreamSeq, migration
+// 0033_streaming_lists), and the mark's move journals a 'conversation' event for the owner unless one is still ahead of
+// the position (one row per owner however many changes a burst makes). Its units are the owner's newest changes above
+// what its sockets were sent (streamConversations), at the event's place in the journal.
 //
 // A unit is one subject for one viewer. Units go in a stable order (event id, then viewer account id ascending, then
 // the subject within the viewer's units: 0 for the status, then a delete's captured boosts by id), and the position
@@ -142,7 +143,8 @@ export const CAPTURE_LIMITS = { boosts: 40, viewerBytes: 16 * 1024 }
 // The journal stops recording once it spans this many ids: the fan-out stalled, and REST is authoritative.
 export const JOURNAL_SPAN = 4096
 
-// The conversation changes of one owner a turn reads, the newest; older ones are skipped (REST is authoritative).
+// The conversation changes of one owner a conversation event sends, the newest; older ones are skipped (REST is
+// authoritative).
 export const CONVERSATIONS_PER_TURN = 20
 
 // Journal rows pruned per call, at or below the finished position.
@@ -238,6 +240,7 @@ export const streamEvents = readOperation<
 				viewers = row.recipient === null ? [] : [row.recipient]
 				break
 			case 'merged':
+			case 'conversation':
 				viewers = [row.subject]
 				break
 			case 'status':
@@ -605,9 +608,9 @@ export const streamListOwned = readOperation<{ accountId: string; listId: string
 	(db, { accountId, listId }) => ownList(db, accountId, listId) !== undefined
 )
 
-// An owner's conversation changes above `after` (the lowest convSeq of its `direct` sockets): the newest `limit`, by
-// conversations_stream, oldest of them first, so a turn sends them in order and each socket's convSeq rises with each.
-// Older changes are skipped.
+// An owner's conversation changes above `after` (the lowest convSeq of its `direct` sockets, or the position within
+// the event): the newest `limit`, by conversations_stream, oldest of them first, so they are sent in order and each
+// socket's convSeq rises with each. Older changes are skipped.
 export const streamConversations = readOperation<
 	{ accountId: string; after: number; limit: number },
 	{ id: string; seq: number }[]
@@ -652,23 +655,13 @@ export const streamReconcile = sessionOperation<{ accounts: readonly { accountId
 	}
 )
 
-// Whether the fan-out has reached the journal's head and, for each owner with `direct` sockets, has no conversation
-// change above the lowest convSeq of those sockets (the drain barrier of the streaming tests).
-export const streamCaughtUp = readOperation<{ owners: readonly { accountId: string; after: number }[] }, boolean>(
-	(db, { owners }) => {
-		const position = readPosition(db)
-		const head = journalHead(db)
-		const pending = owners.some(
-			({ accountId, after }) =>
-				db.first(
-					'SELECT 1 AS x FROM conversations WHERE account_id = ? AND stream_seq > ? LIMIT 1',
-					accountId,
-					after
-				) !== undefined
-		)
-		return !pending && (head === 0 || (position.event >= head && position.account === null))
-	}
-)
+// Whether the fan-out has reached the journal's head (the drain barrier of the streaming tests). Conversation changes
+// are journaled too, so this covers them.
+export const streamCaughtUp = readOperation<void, boolean>((db) => {
+	const position = readPosition(db)
+	const head = journalHead(db)
+	return head === 0 || (position.event >= head && position.account === null)
+})
 
 // The operations the hub runs for itself: their commits start no turn.
 export const STREAM_OPERATIONS: ReadonlySet<StoreOperation<never, unknown>> = new Set<StoreOperation<never, unknown>>([

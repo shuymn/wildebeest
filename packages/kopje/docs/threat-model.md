@@ -1279,11 +1279,12 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   each viewer, each within a unit's worst case; the position names the viewer and the subject within the event. The status and edit
   triggers write one journal row per status write, under the same span, and no batched delete or purge fires them.
   _Implemented on branch `kopje/streaming-3`:_ a delete's capture also holds each viewer's lists (at most 16 for the
-  status and each boost, within the same 16 KiB); a list's check is one narrowed read. Conversations are not
-  journaled: each owner's newest 20 changes are read through an index, each its own unit, older ones skipped; the owners
-  are walked in passes that resume across turns where the budget stopped, and a finished pass asks for no turn. A
-  conversation's last status moved back by a status's removal writes the owner's mark too, so the batched delete of a
-  status's conversation links takes a third of the rows left (`LIMIT ?2 / 3`). `notifications_merged` is one journal
+  status and each boost, within the same 16 KiB); a list's check is one narrowed read. A conversation's change moves its owner's mark,
+  which journals one 'conversation' event for the owner unless one is still ahead of the position, so a burst is one
+  row and a busy owner waits behind the others (FIFO); its units are the owner's newest 20 changes, read through an
+  index, each its own unit under the persisted position, older ones skipped. A conversation's last status moved back by
+  a status's removal writes the owner's mark and that journal row too, so the batched delete of a status's conversation
+  links takes a fourth of the rows left (`LIMIT ?2 / 4`). `notifications_merged` is one journal
   row per transition, under the span. `src/stream-hub.ts`, `src/domain/streaming.ts`;
   `test/streaming/streaming.test.ts`. _Gap:_ the budgets count work, not CPU time; a turn at the limits is to be
   measured on a deployed instance, as is how long a hibernated idle socket stays open.

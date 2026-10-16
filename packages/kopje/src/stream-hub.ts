@@ -61,6 +61,10 @@ export const STREAM_LIMITS = {
 	payloadBytes: 512 * 1024,
 }
 
+// Tests only: when set, a turn that leaves work requests no continuation and calls it instead, as a continuation whose
+// request failed (the cron's turn picks the work up).
+export const STREAM_FAULTS: { dropContinuation: (() => void) | null } = { dropContinuation: null }
+
 type Charge = { checks: number; presentations: number; bytes: number; sends: number }
 
 // What one turn may do, and what one unit may do at most: 16 token checks and the reference reads of an edit (home, the
@@ -133,10 +137,6 @@ export class StreamHub {
 	#turns = 0
 	// The registry is rebuilt from the open sockets by the first turn of this instance.
 	#reconciled = false
-	// The conversation walk's place (#conversations): the last owner whose changes the current pass read, null between
-	// passes. It lives as long as the chain of turns does: a turn stopped by its budget always requests the next, so the
-	// object is not evicted mid-pass, and a new instance (a deploy, which also closes the sockets) starts a new pass.
-	#ownerCursor: string | null = null
 	#idle: (() => void)[] = []
 
 	constructor(ctx: DurableObjectState, kernel: StoreKernel, turnRequest: (headers: HeadersInit) => Promise<Response>) {
@@ -177,7 +177,7 @@ export class StreamHub {
 				if (this.#failed) {
 					throw new Error('the last stream turn failed')
 				}
-				if (await this.#run(streamCaughtUp, { owners: this.#owners() })) {
+				if (await this.#run(streamCaughtUp, undefined)) {
 					return { turns: this.#turns }
 				}
 				this.#request()
@@ -472,7 +472,11 @@ export class StreamHub {
 			this.#running = false
 		}
 		if (more || this.#again) {
-			this.#request()
+			if (STREAM_FAULTS.dropContinuation === null) {
+				this.#request()
+			} else {
+				STREAM_FAULTS.dropContinuation()
+			}
 		}
 		this.#notify()
 		return new Response(null, { status: 204 })
@@ -509,62 +513,9 @@ export class StreamHub {
 				const { from } = state
 				const finished = from.account === null ? from.event : from.event - 1
 				// What is left to prune takes further turns, a bounded batch each.
-				const pruning = (await this.#run(streamPrune, { upTo: finished })).more
-				return (await this.#conversations(budget)) || pruning
+				return (await this.#run(streamPrune, { upTo: finished })).more
 			}
 		}
-	}
-
-	// The `direct` sockets' owners, each with the lowest convSeq of its sockets.
-	#owners(): { accountId: string; after: number }[] {
-		const owners = new Map<string, number>()
-		for (const { at } of this.#open()) {
-			if (at.subs.includes('direct')) {
-				owners.set(at.accountId, Math.min(owners.get(at.accountId) ?? at.convSeq, at.convSeq))
-			}
-		}
-		return [...owners].sort(([a], [b]) => (a < b ? -1 : 1)).map(([accountId, after]) => ({ accountId, after }))
-	}
-
-	// The conversation units, after the journal's: for each owner with `direct` sockets, its newest changes above the
-	// lowest convSeq of those sockets (at most CONVERSATIONS_PER_TURN, older ones skipped), oldest of them first, each
-	// one subject for the owner. Before a change is sent, the convSeq of each socket it goes to is raised to it and
-	// written, so it is sent at most once; a socket's convSeq at or above it already had it, or skipped it.
-	// The owners are walked in account id order in passes that may span turns: a turn the budget stops resumes after the
-	// last owner it finished (#ownerCursor), whether or not that owner had changes, so every turn that reads an owner
-	// moves the walk and no owner waits behind a prefix the budget re-reads. A pass ends at the last owner; it then asks
-	// for no further turn (a change written meanwhile asks for its own). Returns whether the budget stopped the walk.
-	async #conversations(budget: Budget): Promise<boolean> {
-		const cursor = this.#ownerCursor
-		for (const { accountId, after } of this.#owners().filter((owner) => cursor === null || owner.accountId > cursor)) {
-			if (!budget.covers(UNIT_WORST)) {
-				return true
-			}
-			const changes = await this.#run(streamConversations, { accountId, after, limit: CONVERSATIONS_PER_TURN })
-			budget.charge({ checks: 1 })
-			for (const { id, seq } of changes) {
-				if (!budget.covers(UNIT_WORST)) {
-					// This owner's sent changes raised its sockets' convSeq: the next turn reads it again, past them.
-					return true
-				}
-				const sockets = this.#open(accountTag(accountId)).filter(
-					({ at }) => at.subs.includes('direct') && at.convSeq < seq
-				)
-				if (sockets.length === 0) {
-					continue
-				}
-				const unit: Unit = { subject: { index: 0, id }, viewer: accountId, sockets, lists: [] }
-				await this.#deliver('conversation', unit, budget, () => {
-					for (const { ws } of sockets) {
-						this.#update(ws, (at) => ({ ...at, convSeq: Math.max(at.convSeq, seq) }))
-					}
-					return Promise.resolve(true)
-				})
-			}
-			this.#ownerCursor = accountId
-		}
-		this.#ownerCursor = null
-		return false
 	}
 
 	// The units of one event, sent in order from the position. A delete's are read a page of viewers at a time, each
@@ -595,6 +546,13 @@ export class StreamHub {
 				units = this.#units(event, page.units)
 				after = page.next
 				more = page.next !== null
+			} else if (event.kind === 'conversation') {
+				if (!budget.covers(UNIT_WORST)) {
+					return stop()
+				}
+				units = await this.#conversationUnits(event.subject, after)
+				budget.charge({ checks: 1 })
+				more = false
 			} else {
 				units = this.#units(
 					event,
@@ -670,10 +628,48 @@ export class StreamHub {
 		})
 	}
 
-	// One unit of the journal: made, the position moved past it, then sent. Returns false when another turn moved the
-	// position first.
+	// A conversation event's units (its subject is the owner): the owner's newest changes (CONVERSATIONS_PER_TURN, older
+	// ones skipped) above the lowest convSeq of its `direct` sockets and above the position within the event, oldest of
+	// them first, each one conversation, its subject index the change's sequence. A unit goes to the sockets whose
+	// convSeq is below its change. A socket's `since` does not apply: its convSeq, set from the owner's mark when it
+	// subscribed, says what it has been sent, and a change written after it opened may join a row journaled before.
+	async #conversationUnits(owner: string, after: StreamUnitAfter): Promise<Unit[]> {
+		const sockets = this.#open(accountTag(owner)).filter(
+			({ at }) => mayCarry('conversation', at.grant, 'direct') && at.subs.includes('direct')
+		)
+		if (sockets.length === 0) {
+			return []
+		}
+		const lowest = Math.min(...sockets.map(({ at }) => at.convSeq), Number.MAX_SAFE_INTEGER)
+		const changes = await this.#run(streamConversations, {
+			accountId: owner,
+			after: Math.max(lowest, after?.account === owner ? after.subject : 0),
+			limit: CONVERSATIONS_PER_TURN,
+		})
+		return changes
+			.map(({ id, seq }) => ({
+				subject: { index: seq, id },
+				viewer: owner,
+				sockets: sockets.filter(({ at }) => at.convSeq < seq),
+				lists: [],
+			}))
+			.filter((unit) => unit.sockets.length > 0)
+	}
+
+	// One unit of the journal: made, the position moved past it (and, for a conversation, the convSeq of the sockets it
+	// goes to raised to its change), then sent. Returns false when another turn moved the position first.
 	#unit(event: StreamEvent, unit: Unit, from: StreamPosition, to: StreamPosition, budget: Budget): Promise<boolean> {
-		return this.#deliver(event.kind, unit, budget, () => this.#run(streamAdvance, { from, to }))
+		return this.#deliver(event.kind, unit, budget, async () => {
+			if (!(await this.#run(streamAdvance, { from, to }))) {
+				return false
+			}
+			if (event.kind === 'conversation') {
+				for (const { ws } of unit.sockets) {
+					this.#update(ws, (at) => ({ ...at, convSeq: Math.max(at.convSeq, unit.subject.index) }))
+				}
+			}
+			return true
+		})
 	}
 
 	// One unit: made in its own transaction (tokens checked, the reference reads, the presentation), its progress

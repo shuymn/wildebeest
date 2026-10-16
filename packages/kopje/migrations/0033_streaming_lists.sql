@@ -12,17 +12,24 @@
 --                            deleted (but with the account). Every write of a conversation of an owner with a mark takes
 --                            the next value and stores it in the row's stream_seq, in the same write.
 --   conversations.stream_seq the change sequence of the row (0 until its owner has a mark), and conversations_stream,
---                            the index a turn reads an owner's newest changes through (at most 20 a turn).
+--                            the index an owner's newest changes are read through (at most 20 an event).
+--   stream_events            rebuilt to admit the kind 'conversation' (its CHECK names the kinds), with the same rows
+--                            and ids, and the triggers that write it made again; stream_events_conversation indexes
+--                            the conversation rows by owner.
+--   stream_conversation_changed a trigger that journals a 'conversation' event for the owner when its mark moves,
+--                            unless the owner has one after the fan-out's position (not yet consumed): a burst of
+--                            changes is one row, and a change after the row was consumed is a new row at the end.
 --   conversation_statuses_removed recreated: when a status's removal moves a conversation's last status back, the
 --                            owner's mark (if any) moves first, and the row takes its value. A link's delete therefore
---                            writes at most three rows (the link, the mark, the conversation), and the batched delete
---                            that removes links (STATUS_CHILDREN in src/domain/inbox.ts) takes a third of the rows left.
+--                            writes at most four rows (the link, the mark, its journal row, the conversation), and the
+--                            batched delete that removes links (STATUS_CHILDREN in src/domain/inbox.ts) takes a fourth
+--                            of the rows left.
 --
 -- The mark is streaming state of one object: dumps leave it out (stream_*, src/platform/dump-catalog.ts), and a
 -- restored Store makes it again from the restored stream_seq, so it never moves back.
 --
 -- Adding a column with a constant default reads nothing, and the triggers read no row when made. The index reads each
--- conversation once; nothing else of the Store is read.
+-- conversation once; the journal's copy reads its rows, at most a 4,096-id span; nothing else of the Store is read.
 
 CREATE TABLE stream_conversation_marks (
   account_id TEXT PRIMARY KEY REFERENCES accounts (id) ON DELETE CASCADE,
@@ -33,7 +40,32 @@ ALTER TABLE conversations ADD COLUMN stream_seq INTEGER NOT NULL DEFAULT 0;
 
 CREATE INDEX conversations_stream ON conversations (account_id, stream_seq);
 
+DROP TRIGGER stream_notification_inserted;
 DROP TRIGGER stream_status_inserted;
+DROP TRIGGER stream_status_edited;
+
+CREATE TABLE stream_events_next (
+  id INTEGER PRIMARY KEY,
+  kind TEXT NOT NULL CHECK (kind IN ('status', 'edit', 'notification', 'delete', 'merged', 'conversation')),
+  subject TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+INSERT INTO stream_events_next (id, kind, subject, created_at) SELECT id, kind, subject, created_at FROM stream_events;
+
+DROP TABLE stream_events;
+
+ALTER TABLE stream_events_next RENAME TO stream_events;
+
+CREATE INDEX stream_events_conversation ON stream_events (subject, id) WHERE kind = 'conversation';
+
+CREATE TRIGGER stream_notification_inserted AFTER INSERT ON notifications
+WHEN NEW.filtered = 0
+  AND EXISTS (SELECT 1 FROM stream_subscriptions WHERE account_id = NEW.account_id)
+  AND coalesce((SELECT max(id) FROM stream_events) - (SELECT min(id) FROM stream_events), 0) < 4096
+BEGIN
+  INSERT INTO stream_events (kind, subject, created_at) VALUES ('notification', CAST(NEW.id AS TEXT), NEW.created_at);
+END;
 
 CREATE TRIGGER stream_status_inserted AFTER INSERT ON statuses
 WHEN (EXISTS (SELECT 1 FROM stream_subscriptions WHERE stream_key = 'user')
@@ -43,8 +75,6 @@ BEGIN
   INSERT INTO stream_events (kind, subject, created_at) VALUES ('status', NEW.id, NEW.created_at);
 END;
 
-DROP TRIGGER stream_status_edited;
-
 CREATE TRIGGER stream_status_edited AFTER UPDATE OF edited_at ON statuses
 WHEN NEW.edited_at IS NOT NULL AND NEW.edited_at IS NOT OLD.edited_at
   AND (EXISTS (SELECT 1 FROM stream_subscriptions WHERE stream_key IN ('user', 'user:notification'))
@@ -52,6 +82,15 @@ WHEN NEW.edited_at IS NOT NULL AND NEW.edited_at IS NOT OLD.edited_at
   AND coalesce((SELECT max(id) FROM stream_events) - (SELECT min(id) FROM stream_events), 0) < 4096
 BEGIN
   INSERT INTO stream_events (kind, subject, created_at) VALUES ('edit', NEW.id, NEW.edited_at);
+END;
+
+CREATE TRIGGER stream_conversation_changed AFTER UPDATE OF seq ON stream_conversation_marks
+WHEN NOT EXISTS (SELECT 1 FROM stream_events WHERE kind = 'conversation' AND subject = NEW.account_id
+    AND id > (SELECT event_id FROM stream_cursor WHERE id = 1))
+  AND coalesce((SELECT max(id) FROM stream_events) - (SELECT min(id) FROM stream_events), 0) < 4096
+BEGIN
+  INSERT INTO stream_events (kind, subject, created_at)
+  VALUES ('conversation', NEW.account_id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
 END;
 
 DROP TRIGGER conversation_statuses_removed;

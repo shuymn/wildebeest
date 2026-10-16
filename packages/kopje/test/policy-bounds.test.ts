@@ -71,7 +71,6 @@ import {
 } from '../src/domain/statuses'
 import {
 	streamAccept,
-	streamCaughtUp,
 	streamConversations,
 	streamDelete,
 	streamDeleteUnits,
@@ -4528,7 +4527,7 @@ describe("R32: a delete's capture reads the smaller of the status's boosts and e
 
 // The `list` and `direct` streams' reads (design "Kopje streaming API" PR 3): a list's check (listStatus, narrowed to the
 // status's author), a delete's capture of the lists, the ownership check of a subscription, and the conversation reads
-// (the owner's newest changes, a conversation's unit, the drain barrier's check) read the same rows however long the
+// (the owner's newest changes, a conversation's unit) read the same rows however long the
 // members' histories, however large the list and however many conversations the owner has.
 describe("streamed lists and conversations read their items, however large the list and the owner's history (RES-7)", () => {
 	const VIEWER_ID = '665000000000000000'
@@ -4680,7 +4679,6 @@ describe("streamed lists and conversations read their items, however large the l
 			streams('conversation', await conversation(store, 1), 'conversation', ['direct']),
 			['owned', streamListOwned, { accountId: VIEWER_ID, listId: LIST_ID }, true],
 			['changes', streamConversations, { accountId: VIEWER_ID, after: 0, limit: 20 }, 20],
-			['caught up', streamCaughtUp, { owners: [{ accountId: VIEWER_ID, after: size.conversations }] }, true],
 		]
 	}
 

@@ -88,11 +88,12 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       the last change) and their indexes, replacing two, and the moderation log table. It reads only the reports: on a
       benchmark store of 1,000,000 accounts, 3,000,000 follows, 2,000,000 statuses and 10,000 reports its upgrade took
       2.3 seconds in workerd's local Durable Object SQLite.
-    - `0033_streaming_lists`: lets a list subscription journal statuses and edits (the two triggers recreated), adds
+    - `0033_streaming_lists`: rebuilds the streaming journal (at most a 4,096-id span of rows) to admit conversation
+      events, lets a list subscription journal statuses and edits (the journal's triggers recreated), adds
       the per-account conversation mark table (left out of dumps and backups, as the other streaming tables are), a
       `stream_seq` column on conversations with a constant default and an index on it, and recreates the trigger that
       moves a conversation's last status back so it also takes the owner's next change sequence. It reads each
-      conversation once, for the index, and nothing else.
+      conversation once, for the index, and the journal's rows; nothing else.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.9] - 2026-10-16
