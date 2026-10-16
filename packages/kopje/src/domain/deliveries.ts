@@ -40,6 +40,10 @@ import type { Db } from '../db/sql'
 //     status; none is written once the status is gone or a retraction of it is pending (one still staging its
 //     targets reads them from the receipts, so they are written until it is staged).
 //   - Claims and completions return nextDueAt, the earliest time any work is due, so the Worker can ring for it.
+//   - Signer: an activity is signed by its lane's account, its author, except one recorded as signed by the instance
+//     actor (signedBy 'instance', DATA-7): a forwarded report's Flag (reports.ts), which Mastodon sends from
+//     Account.representative. Its lane is still the reporter's, which owns the intent and orders it with the reporter's
+//     other activities to that server.
 
 export const LEASE_MS = 60_000
 export const MAX_ATTEMPTS = 15
@@ -151,6 +155,9 @@ export function isDeliverableInbox(value: string | null): value is string {
 }
 
 export type DeliveryAudience = { followers: boolean; accounts: string[]; pollVoters?: string }
+
+// What an intent records: the activity, its audience, and, for the one activity the instance actor signs, signedBy.
+export type DeliveryEnvelope = { activity: Activity; audience: DeliveryAudience; signedBy?: 'instance' }
 
 // The targets an activity goes to (NET-2), from the stored audience only, for the recipients the policy gives it
 // (recipientsFor in audience.ts):
@@ -265,7 +272,7 @@ function receiversOf(db: Db, signerId: string, object: string): string[] {
 export function enqueueActivity(
 	db: Db,
 	signerId: string,
-	envelope: { activity: Activity; audience: DeliveryAudience },
+	envelope: DeliveryEnvelope,
 	now: number,
 	options: { withdraws?: boolean } = {}
 ): void {
@@ -351,7 +358,7 @@ function supersede(db: Db, signerId: string, object: string, retracts: boolean, 
 export function beginRetraction(
 	db: Db,
 	signerId: string,
-	envelope: { activity: Activity; audience: DeliveryAudience },
+	envelope: DeliveryEnvelope,
 	now: number,
 	maxRows: number
 ): boolean {
@@ -463,7 +470,7 @@ function chunked(targets: Target[]): { json: string; last: number }[] {
 function insertIntent(
 	db: Db,
 	signerId: string,
-	envelope: { activity: Activity; audience: DeliveryAudience },
+	envelope: DeliveryEnvelope,
 	object: string | null,
 	retracts: boolean,
 	targets: Target[],
@@ -686,6 +693,8 @@ export type Claim = {
 	leaseUntil: number
 	deliveries: ClaimedDelivery[]
 	signers: Record<string, DeliverySigner>
+	// The instance actor's URI when a claimed delivery is the instance actor's (INSTANCE_SIGNER), else null.
+	instanceActor: string | null
 	nextDueAt: number | null
 }
 
@@ -749,6 +758,11 @@ function bodyFor(activity: string, addressee: string | null): string {
 	return JSON.stringify(parsed)
 }
 
+// The signer of a delivery the instance actor signs: no account id, which is 18 digits, can be it. Its key is not in
+// claim.signers; the Worker loads it, creating it if it does not exist yet (instanceActorKey in federation.ts), and
+// signs as claim.instanceActor.
+export const INSTANCE_SIGNER = 'instance'
+
 // Expands one step, then leases up to `limit` due lane heads (RES-6: a claim reads and returns a bounded number of
 // rows). An expired lease is due again; one that has used up its attempts is given up instead of claimed.
 export const claimDeliveries = writeOperation<{ now: number; leaseToken: string; limit?: number }, Claim>(
@@ -777,20 +791,24 @@ export const claimDeliveries = writeOperation<{ now: number; leaseToken: string;
 				now,
 				row.id
 			)
-			const body = db.first<{ activity: string }>(
-				"SELECT json_extract(body, '$.activity') AS activity FROM outbound_activities WHERE id = CAST(? AS INTEGER)",
+			const body = db.first<{ activity: string; signed_by: string | null }>(
+				`SELECT json_extract(body, '$.activity') AS activity, json_extract(body, '$.signedBy') AS signed_by
+				FROM outbound_activities WHERE id = CAST(? AS INTEGER)`,
 				row.activity_id
 			)
 			claimed.push({
 				id: row.id,
 				inbox: row.inbox_url,
-				signer: row.account_id,
+				signer: body?.signed_by === 'instance' ? INSTANCE_SIGNER : row.account_id,
 				activityId: row.activity_id,
 				body: bodyFor(body?.activity ?? '{}', row.addressee),
 			})
 		}
 		const signers: Record<string, DeliverySigner> = {}
 		for (const accountId of new Set(claimed.map((c) => c.signer))) {
+			if (accountId === INSTANCE_SIGNER) {
+				continue
+			}
 			const key = db.first<{ uri: string; privkey: ArrayBuffer; privkey_salt: ArrayBuffer; pubkey: string }>(
 				`SELECT a.uri, l.privkey, l.privkey_salt, l.pubkey FROM local_accounts l JOIN accounts a ON a.id = l.account_id
 				WHERE l.account_id = ?`,
@@ -805,7 +823,11 @@ export const claimDeliveries = writeOperation<{ now: number; leaseToken: string;
 				}
 			}
 		}
-		return { leaseToken, leaseUntil, deliveries: claimed, signers, nextDueAt: nextDueAt(db, now) }
+		const domain = claimed.some((c) => c.signer === INSTANCE_SIGNER)
+			? db.first<{ value: string }>("SELECT value FROM instance_settings WHERE name = 'domain'")?.value
+			: undefined
+		const instanceActor = domain === undefined ? null : `https://${domain}/actor`
+		return { leaseToken, leaseUntil, deliveries: claimed, signers, instanceActor, nextDueAt: nextDueAt(db, now) }
 	}
 )
 

@@ -60,6 +60,7 @@ const NOT_CARRIED: Record<string, string> = {
 	push_deliveries: 'push queue; legacy has no such data',
 	push_subscriptions: 'push subscriptions are not carried: clients register again',
 	remote_keys: 'fetched again on demand',
+	reports: 'reports made in Kopje; legacy Wildebeest has no reports',
 	scheduled_statuses: 'posts scheduled in Kopje; legacy Wildebeest has no scheduled statuses',
 	status_pins:
 		'legacy never wrote its status_pins table, and a legacy row there stops the conversion (UNUSED_LEGACY_TABLES)',

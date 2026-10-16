@@ -524,6 +524,24 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `test/policy-writes.test.ts`, `test/policy-bounds.test.ts`, `test/migrations.test.ts`,
   `test/cascade-guard.test.ts`.
 
+- **VIS-25: a report reveals to the servers it is forwarded to only what its reporter may see, and never its reporter.**
+  A report (`Report`) is its reporter's: it is read only where it is written and answered once to its reporter (R34,
+  `test/policy.test.ts`), and goes with the reported account's purge. It names an available account and only statuses of
+  that account the reporter may see by the account statuses rule (R11, VIS-1); any other status refuses the whole report
+  as not found, so a report cannot probe for a status the reporter may not see. Forwarded (only for a remote account and
+  `forward`), it is a `Flag` from the instance actor carrying the reporter's comment and the uris of the account and its
+  reported statuses, never the reporter's identity (DATA-7). It goes only to the inboxes Mastodon's `ReportService`
+  chooses (R23, `reportForwardees`): the account's server when its domain is listed (by default its own), and the
+  servers of the accounts the reported statuses reply to on the listed domains, less the account's own inboxes; by
+  Kopje's rule for an activity without `to`, each by shared inbox when it has one. A replied-to server may so learn the
+  uri of a status it was not sent, as with Mastodon; the uri carries no content, and the status is served, or not, by
+  its own server, the reported account's. The work is bounded (RES-7): at most 100 statuses and 100 domains, the
+  statuses and replied-to accounts read by key. _Implemented on branch `kopje/reports`:_ `src/domain/reports.ts`,
+  `accountStatusIds` in `src/domain/timelines.ts`, `reportForwardees` in `src/domain/audience.ts`, `flagActivity` in
+  `src/domain/activities.ts`, `purgeRelationships` and `PURGED_ACCOUNT_CHILDREN` in `src/domain/inbox.ts`, migration
+  `0022_reports`; `test/reports.test.ts`, `test/policy.test.ts`, `test/policy-bounds.test.ts`,
+  `test/migrations.test.ts`, `test/cascade-guard.test.ts`.
+
 ### Authorization (AUTH)
 
 - **AUTH-1: authorization happens inside the operation.** Token validity, expiry, revocation, scope and account
@@ -1247,11 +1265,19 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   client cursor is zero-padded first. _Enforced (main)_ for edges: `listFollows` in `src/domain/accounts.ts`;
   `test/accounts.test.ts` ("edge ids beyond 2^53", "keeps 18-digit ids exact"). _Enforced (main)_
   for status cursors: `statusCursor` in `src/domain/statuses.ts` (_Gap: untested_).
-- **DATA-7: the instance key signs only recipient-neutral fetches.** Fetches without a specific recipient are signed by
-  the instance actor; fetches for a personal inbox by the recipient's key; activities by their author's key. The
-  instance key never signs an activity attributed to a user. _Enforced (main)_ for fetches:
-  `src/federation/federation.ts`; `test/signed-fetch.test.ts` ("signed fetches"). Activities: _Enforced (main):_ a delivery is signed with the key of its lane's account, unwrapped once per round
-  (`src/jobs/deliver.ts`); `test/delivery-post.test.ts` ("signs the activity with its author key").
+- **DATA-7: the instance key signs only recipient-neutral fetches and the instance actor's own activities.** Fetches
+  without a specific recipient are signed by the instance actor; fetches for a personal inbox by the recipient's key;
+  activities by their author's key. The instance key never signs an activity attributed to a user: the one activity it
+  signs is a forwarded report's `Flag`, whose actor is the instance actor (Mastodon's `Account.representative`).
+  _Enforced (main)_ for fetches: `src/federation/federation.ts`; `test/signed-fetch.test.ts` ("signed fetches").
+  Activities: _Enforced (main):_ a delivery is signed with the key of its lane's account, unwrapped once per round
+  (`src/jobs/deliver.ts`); `test/delivery-post.test.ts` ("signs the activity with its author key"). _Implemented on
+  branch `kopje/reports`:_ an intent recorded with `signedBy: 'instance'` (only `flagActivity` in
+  `src/domain/activities.ts` makes one, with the instance actor as its actor) is signed with the instance key, which the
+  delivery round loads through `instanceActorKey` (`src/federation/federation.ts`, the race-safe initialization signed
+  fetches and `/actor` use), creating it if nothing has yet (`deliveryRound` in `src/jobs/deliver.ts`);
+  `test/reports.test.ts` ("posts the Flag signed with the instance actor's key", "creates the instance actor's key
+  when no fetch has yet").
 - **DATA-9: backup credentials stay out of the Store, logs and reports, and are scoped.** The S3 key is a Worker
   secret, read apart from the main config so a bad backup setting stops only the backup. Config issues name the
   variable, never its value. Failures are recorded and logged as fixed reason codes (`s3-<op>-<status|timeout>`,

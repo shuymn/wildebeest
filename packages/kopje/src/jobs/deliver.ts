@@ -1,12 +1,15 @@
 import { pushRound } from './push'
-import type { Completion } from '../domain/deliveries'
-import { CLAIM_LIMIT } from '../domain/deliveries'
+import { decodeKey } from '../domain/actors'
+import type { Completion, DeliverySigner } from '../domain/deliveries'
+import { CLAIM_LIMIT, INSTANCE_SIGNER } from '../domain/deliveries'
 import { COMPLETION_MARGIN_MS, type PostDeps, postActivity, ringDoorbell } from '../federation/delivery'
+import { instanceActorKey } from '../federation/federation'
 import { readConfig, userKek } from '../platform/config'
 import { errorFields } from '../platform/error-message'
 import { PACKAGE_VERSION } from '../platform/package-version'
 import { callStore, type StoreResolver } from '../platform/store-client'
 import { StoreUnavailableError } from '../platform/store-errors'
+import { generateRsaKeyPair, type KeyGen } from '../security/key-wrap'
 import { createKeyring, type Signer } from '../security/keyring'
 
 // The Worker's side of delivery (domain/deliveries.ts has the Store's). A round claims a bounded batch of due lane
@@ -25,6 +28,8 @@ export type DeliveryDeps = {
 	timeoutMs?: number
 	// A fresh lease token per claim.
 	leaseToken?: () => string
+	// Generates the instance actor's key if a Flag needs it before anything else has (default: RSA 4096).
+	keygen?: KeyGen
 }
 
 export type RoundResult = { claimed: number; settled: Completion['status'][]; nextDueAt: number | null }
@@ -41,31 +46,44 @@ export async function deliveryRound(env: Env, deps: DeliveryDeps): Promise<Round
 		return { claimed: 0, settled: [], nextDueAt: claim.nextDueAt }
 	}
 	const config = readConfig(env)
-	const keyring = createKeyring(config.ok ? userKek(config.config) : '')
-	// Each author's key is unwrapped once for this round and dropped with it (DATA-1). An activity is signed only by
-	// its author, never by the instance actor (DATA-7).
+	const kek = config.ok ? userKek(config.config) : ''
+	const keyring = createKeyring(kek)
+	// Each signer's key is unwrapped once for this round and dropped with it (DATA-1). An activity is signed by its
+	// author, the lane's account; only one recorded as the instance actor's (a report's Flag) is signed by the instance
+	// key (DATA-7), loaded through instanceActorKey, which creates it if no fetch or /actor request has yet.
+	const instanceKey = async (actorUri: string): Promise<DeliverySigner> => {
+		const key = decodeKey(
+			await instanceActorKey((call) => callStore(() => call(store)), build, kek, deps.keygen ?? generateRsaKeyPair)
+		)
+		return { actorUri, ...key }
+	}
 	const signers = new Map<string, Promise<Signer | null>>()
 	const signerOf = (accountId: string) => {
 		let signer = signers.get(accountId)
 		if (signer === undefined) {
-			const key = claim.signers[accountId]
-			signer =
-				key === undefined
-					? Promise.resolve(null)
-					: keyring
-							.signerFor({
-								keyId: new URL(`${key.actorUri}#main-key`),
-								privkey: key.privkey,
-								salt: key.salt,
-								pubkey: key.pubkey,
+			const stored = claim.signers[accountId]
+			const key =
+				accountId === INSTANCE_SIGNER && claim.instanceActor !== null
+					? instanceKey(claim.instanceActor)
+					: Promise.resolve(stored)
+			signer = key
+				.then((found) =>
+					found === undefined
+						? null
+						: keyring.signerFor({
+								keyId: new URL(`${found.actorUri}#main-key`),
+								privkey: found.privkey,
+								salt: found.salt,
+								pubkey: found.pubkey,
 							})
-							.catch(() => null)
+				)
+				.catch(() => null)
 			signers.set(accountId, signer)
 		}
 		return signer
 	}
-	// Every signer is a local actor, on the instance's origin.
-	const origin = new URL(Object.values(claim.signers)[0]?.actorUri ?? 'https://invalid.').origin
+	// Every signer is a local actor or the instance actor, on the instance's origin.
+	const origin = new URL(Object.values(claim.signers)[0]?.actorUri ?? claim.instanceActor ?? 'https://invalid.').origin
 	const post: PostDeps = {
 		fetch: deps.fetch,
 		checkHost: deps.checkHost,

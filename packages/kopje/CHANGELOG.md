@@ -46,6 +46,27 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       minutes apart rather than at once. As on Mastodon, the bulk dismiss deletes the requests alone and leaves their
       filtered notifications, and `GET /api/v1/notifications/:id` and `GET /api/v2/notifications/ungrouped-:id` show a
       filtered notification.
+- Reports, as Mastodon 4.5 has them: `POST /api/v1/reports` (`account_id`, `comment`, `category`, `rule_ids[]`,
+  `status_ids[]`, `forward`, `forward_to_domains[]`), under the `write:reports` scope (or `write`), answered as Mastodon's
+  Report entity. The report is stored for the instance's moderation; nothing else shows it yet.
+    - The reported account must be available, and each reported status one of its statuses you may see on its profile
+      (a private one only if you follow it, a direct one only if it mentions you); anything else answers 404, as on
+      Mastodon. Blocking the account does not stop you from naming its statuses.
+    - `rule_ids` make the category `violation` and must name rules of `GET /api/v1/instance/rules`, each once; a
+      comment is at most 1,000 characters. Errors answer 422 in Mastodon's words.
+    - With `forward` true, a report of a remote account is sent as a `Flag` from the instance actor (it does not name
+      you) to the account's server when its domain is in `forward_to_domains` (by default its own; `forwarded` says
+      whether it was), and to the servers of the accounts the reported posts reply to on the listed domains. It carries
+      your comment and the addresses of the account and the reported posts.
+    - A report stays when a reported post is deleted, naming it by its id; it goes with the reported account when a
+      remote account is deleted.
+    - Where Kopje differs from Mastodon: nobody is notified of a new report, as Kopje has no admin notification (no
+      staff notification or email); Kopje has no admin view of reports yet; a report names at most 100 posts and 100
+      forward domains (more answer 422, where Mastodon sets no limit); an unknown category answers 422
+      (`Category is not included in the list`), where Mastodon answers 500; the `Flag` goes to a server's shared inbox
+      when the account has one (as Kopje sends every activity without `to`), where Mastodon sends it to the reported
+      account's personal inbox; its id is `https://<domain>/actor#reports/<uuid>`; and the application a report was made
+      with is not kept.
 - Mastodon 4.5's remaining small endpoints, under Mastodon's scopes, answered as Mastodon answers when the feature has
   nothing to show or is not configured: `GET /api/v1/annual_reports` (none),
   `GET /api/v1/instance/translation_languages` (`{}`), `GET /api/v1/emails/check_confirmation` (`true`) and
@@ -83,7 +104,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds three migrations, applied in order on the first request after the deploy; a rollback to an earlier
+- Store schema: adds four migrations, applied in order on the first request after the deploy; a rollback to an earlier
   version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0019_tag_normalization`: renames the stored hashtags (`status_tags`, `tag_follows`, `featured_tags`) to
       Mastodon's normalization. Names that become one are merged: a status keeps one row of the hashtag, an account
@@ -102,6 +123,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       by triggers as statuses are stored, deleted or hidden), fills it with one lookup per account through an index, and
       indexes the discoverable accounts by the directory's two orders. Its work grows linearly with the accounts
       stored, whatever the statuses.
+    - `0022_reports`: adds the table of reports. It only creates an empty table and its indexes, so its work does not
+      grow with the Store.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.6] - 2026-10-16

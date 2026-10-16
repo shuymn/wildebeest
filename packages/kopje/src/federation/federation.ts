@@ -93,6 +93,28 @@ const ACTOR_CLASSES = { Person, Service, Group, Organization, Application } as c
 // v2: ActivityPub media types only and object roots only (ID-8).
 const SIGNED_DOCUMENT_PREFIX = ['_fedify', 'signedRemoteDocument', 'v2'] as const
 
+// The instance actor's key, created on first use (a write, so it needs a Store that accepts writes once). Racing first
+// uses agree on one key: ensureInstanceActorKey keeps the first stored and returns it. Federation (signed fetches, the
+// /actor document) and delivery (a report's Flag, jobs/deliver.ts) both get the key here.
+export async function instanceActorKey(
+	rpc: <T>(call: (store: StoreStub) => Promise<T>) => Promise<T>,
+	build: string,
+	kek: string,
+	keygen: KeyGen
+): Promise<EncodedKey> {
+	const stored = await rpc((s) => s.instanceActorKey(build))
+	if (stored !== null) {
+		return stored
+	}
+	const generated = await generateWrappedKey(kek, keygen)
+	const encoded = {
+		privkey: bytesToBase64(generated.privkey),
+		salt: bytesToBase64(generated.salt),
+		pubkey: generated.pubkey,
+	}
+	return rpc((s) => s.ensureInstanceActorKey(build, encoded))
+}
+
 // The pieces every federation use shares: Store RPCs that record a maintenance failure in the state, the KvStore, the
 // instance actor's key, and loaders signed and cached per signing key.
 function federationParts(deps: FederationDeps, state: FederationState) {
@@ -118,21 +140,7 @@ function federationParts(deps: FederationDeps, state: FederationState) {
 		memo(actors, username.toLowerCase(), () => rpc((s) => s.localActor(build, { username })))
 
 	let instanceKey: Promise<EncodedKey> | undefined
-	// The instance actor's key, created on first use (a write, so it needs a Store that accepts writes once).
-	const loadInstanceKey = () =>
-		(instanceKey ??= (async () => {
-			const stored = await rpc((s) => s.instanceActorKey(build))
-			if (stored !== null) {
-				return stored
-			}
-			const generated = await generateWrappedKey(deps.kek, deps.keygen)
-			const encoded = {
-				privkey: bytesToBase64(generated.privkey),
-				salt: bytesToBase64(generated.salt),
-				pubkey: generated.pubkey,
-			}
-			return rpc((s) => s.ensureInstanceActorKey(build, encoded))
-		})())
+	const loadInstanceKey = () => (instanceKey ??= instanceActorKey(rpc, build, deps.kek, deps.keygen))
 	const instanceSigner = async () => keyring.signerFor(instanceOwner(await loadInstanceKey(), instanceKeyId))
 
 	// The signer of a local user by the stored spelling of the username, or null.

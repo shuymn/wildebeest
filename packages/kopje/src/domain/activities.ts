@@ -49,7 +49,8 @@ function contextOf(facts: StatusFacts) {
 	return facts.poll === null ? CONTEXT : POLL_CONTEXT
 }
 
-export type OutboundEnvelope = { activity: Record<string, unknown>; audience: Audience }
+// signedBy 'instance': signed by the instance actor rather than the lane's account (a report's Flag, deliveries.ts).
+export type OutboundEnvelope = { activity: Record<string, unknown>; audience: Audience; signedBy?: 'instance' }
 
 // Records the intent and its target inboxes (domain/deliveries.ts), or nothing if no remote inbox needs it. As in
 // Mastodon, the followers are the current ones; a Delete also reaches every inbox that received the status or may
@@ -570,6 +571,40 @@ export function undoBlockActivity(input: BlockActivityInput) {
 			object: block,
 		},
 		audience: { followers: false, accounts: [input.targetId] },
+	} satisfies OutboundEnvelope
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Reports (Mastodon's ReportService#forward_to_origin! and #forward_to_replied_to!, app/services/report_service.rb:53-67):
+// a Flag of the reported account and statuses (ActivityPub::FlagSerializer, app/serializers/activitypub/
+// flag_serializer.rb:3-26), from the instance actor (Account.representative, report_service.rb:98-100), so the
+// reporter is not named. It has no to: it goes to each forwarded server's inbox as a Follow does (audienceTargets).
+// ---------------------------------------------------------------------------------------------------------------
+
+// The instance actor (federation.ts serves it at /actor).
+export function instanceActorUri(domain: string): string {
+	return `https://${domain}/actor`
+}
+
+export function flagActivity(input: {
+	id: string
+	actorUri: string
+	targetUri: string
+	statusUris: readonly string[]
+	comment: string
+	recipients: readonly string[]
+}) {
+	return {
+		activity: {
+			'@context': AS_CONTEXT,
+			id: input.id,
+			type: 'Flag',
+			actor: input.actorUri,
+			content: input.comment,
+			object: [input.targetUri, ...input.statusUris],
+		},
+		audience: { followers: false, accounts: [...input.recipients] },
+		signedBy: 'instance',
 	} satisfies OutboundEnvelope
 }
 
