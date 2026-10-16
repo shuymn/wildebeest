@@ -25,6 +25,34 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       tokens follow a change of `admin_email` at once. `/setup` after bootstrap uses the same match.
     - `GET /admin/health` (Access only) shows `oauthAdmin`: `status` (`ok`, `unset`, `none`, `suspended` or
       `ambiguous`) and the matched `username`.
+- The admin API's reports are served to that admin (the role's `manage_reports`), as Mastodon 4.5 serves them:
+  `GET /api/v1/admin/reports` and `GET`, `PUT` and `PATCH /api/v1/admin/reports/:id`, and `POST .../assign_to_self`,
+  `unassign`, `resolve` and `reopen`. Everyone else is still answered 403, a missing report included.
+    - The list shows the unresolved reports, or with `resolved` (whatever its value, as Mastodon) the resolved ones,
+      by `account_id` (the reporter) and `target_account_id`, newest first, with `Link` headers. It holds 100 reports
+      by default and at most 200, and stops early, offering the next page, once its reports name 400 statuses.
+    - A report shows its reporter, reported account, assignee and resolver as admin accounts (a local account's email
+      and role; for a remote account the fields of a missing user are null), its rules, and the statuses it names
+      that its reporter may still see; Mastodon shows them all.
+    - `PUT` and `PATCH` change `category` and `rule_ids` with Mastodon's validations and messages; an unknown
+      category is answered 422 where Mastodon fails.
+    - The reporter's report shows `action_taken` once it is resolved.
+    - `GET /api/v1/accounts/verify_credentials` shows the admin's role as `Owner` (id 3) with the permissions
+      served (`16`); every other account keeps the default role.
+- The moderation log: every admin write through the admin API, and every account repair through `/admin`, is
+  recorded with who made it (the admin's account and client, or the Access identity), in the write's transaction.
+  It keeps the newest 10,000 entries. `GET /admin/moderation-log` and `kopje-admin moderation-log` show it, to
+  Access only. Dumps and backups carry it; the cutover has none to carry.
+- `POST /admin/accounts/email` and `kopje-admin account set-email <username> <email>` (Access only) set a local
+  account's email, refusing one another local account has after trimming and lowercasing. It repairs a missing or
+  ambiguous admin match.
+
+### Instance changes
+
+- Schema: migration `0029_admin_reports` adds the reports' moderation columns (when resolved and by whom, the
+  assignee, the time of the last change) and their indexes, replacing two, and the moderation log table. It reads
+  only the reports: on a benchmark store of 1,000,000 accounts, 3,000,000 follows, 2,000,000 statuses and 10,000
+  reports its upgrade took 2.3 seconds in workerd's local Durable Object SQLite. No `wrangler.jsonc` change.
 
 ## [0.1.0-rc.9] - 2026-10-16
 
