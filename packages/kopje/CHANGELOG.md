@@ -29,15 +29,18 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   yet: the API, the web pages and the notifications are unchanged, and a quote is still seen as its `RE:` link.
     - A post that quotes another (Mastodon's `quote`, or Misskey's and Fedibird's `_misskey_quote`, `quoteUrl` and
       `quoteUri`) keeps its quote, with every path that stores a post: delivered, boosted, found by search or fetched
-      as a pin. A quote of a deleted post (a `Tombstone`) is kept as deleted.
+      as a pin. A quote of a deleted post (a `Tombstone`) is kept as deleted. A quoted post embedded by its own author
+      is taken as embedded, so a followers-only self-quote its server serves to nobody is still verified.
     - A quote is accepted when it quotes its own author's post, or when the quoted author's approval (the stamp, a
       `QuoteAuthorization` fetched from its own server) names exactly that quote of exactly that post. Other quotes stay
       pending, as Mastodon keeps them; one whose stamp is gone is rejected. Verification fetches the quoted post and its
       author when Kopje does not have them, runs with the delivery when its fetch budget allows and otherwise in the
       background rounds, signed by a local recipient or follower when there is one, and is retried five times over
-      about 15 hours. A post first stored only as the target of a quote is verified like any other once it is delivered,
-      boosted or searched for itself.
-    - The quoted author's `Delete` of a stamp revokes the quotes approved by it, for good. The same `Delete` relayed by
+      about 15 hours; a verification that needs more fetches than a round allows goes on in the next round from where
+      it stopped. A post first stored only as the target of a quote is verified like any other once it is delivered,
+      boosted, searched for or pinned for itself.
+    - The quoted author's `Delete` of a stamp revokes the quotes of their posts approved by it, for good; nobody else's
+      `Delete` of the same address revokes anything of theirs. The same `Delete` relayed by
       another server (the quoting server forwards it) is applied when it carries the author's own signature (a Linked
       Data Signature or an FEP-8b32 proof); without one, Kopje only checks the stamp again.
     - Kopje's own posts now say that nobody but their author may quote them (`interactionPolicy.canQuote`), as Mastodon

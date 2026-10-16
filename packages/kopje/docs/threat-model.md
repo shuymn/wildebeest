@@ -147,11 +147,13 @@ against their own instance. TLS is assumed between all parties.
   else’s (ID-6, ID-3)", "ID-6, ID-7: keeps an Undo that arrived before its Like", "ID-6, VIS-6: a boost of a private,
   direct or unfetchable object stores nothing"). _Implemented on branch `kopje/quotes-1a`_ for the `Delete` of a quote's
   stamp (FEP-044f's `QuoteAuthorization`, a row of the same table): only the quoted status's author revokes, and only
-  the quotes of that author's statuses that name the stamp; the revocation is recorded once, for good
-  (`quote_revocations`), so the stamp never verifies a quote again, and a `Delete` that arrived before the quote wins
+  the quotes of that author's statuses that name the stamp; the revocation is recorded once, for good, under the stamp
+  and that author (`quote_revocations`), so the stamp never verifies a quote of that author's statuses again, and
+  another actor's `Delete` of the same URI revokes nothing of theirs, and a `Delete` that arrived before the quote wins
   (ID-7). A received quote is accepted only as a self-quote or by a stamp fetched from its own id that passes every check
   (the quoted author's, on that author's origin, naming exactly this quote of exactly that status); a local quoted status
-  is never accepted from outside. `revokeStamp` and `completeQuote` in `src/domain/quotes.ts`; `test/quotes.test.ts`
+  is never accepted from outside. A quoted Note embedded in a status is taken only when it is that status's author's
+  own (its `attributedTo` the author, its id on the author's origin), with one hop less of work. `revokeStamp` and `completeQuote` in `src/domain/quotes.ts`; `test/quotes.test.ts`
   ("is not taken from anyone but the quoted author", "leaves a quote pending when its stamp is …", "wins over a quote
   that arrives after it").
 - **ID-7: replay changes nothing twice.** A repeated activity creates no second relationship, counter change,
@@ -1249,9 +1251,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   and sorts all the targets left, so a boost's withdrawal (by a purge, or by a remote author's `Delete` of the boosted
   status) costs work proportional to its audience in every batch until it is staged. Receipt enumeration has this in
   common with follower enumeration.
-  _Implemented on branch `kopje/quotes-1a`_ for received quotes: a quote's verification costs at most three fetches
-  (the quoted status, its author, the stamp) from the request's budget when it runs inline, and a job round (Queue or
-  cron) verifies at most 10 quotes within one request's budget; a status stored for a verification gets one hop less of
+  _Implemented on branch `kopje/quotes-1a`_ for received quotes: a quote's verification has three stages of one
+  document each (the quoted status, its author, the stamp), each kept by the Store when it completes, so a quote whose
+  stages need more than one budget (redirect hops count) goes on from the first stage not done; it runs inline with
+  what is left of the request's budget, and a job round (Queue or cron) verifies at most 10 quotes, each with a budget
+  of its own, so a heavy or failing quote starves no other; a budget that runs out charges no attempt; a status stored for a verification gets one hop less of
   work, so one traversal stops two levels below the status that arrived, however long a chain of quotes; a failed
   verification is retried five times (1, 5, 30, 120 and 720 minutes later), then given up until its status arrives
   again. A stamp's `Delete` writes one `quote_revocations` row and changes the quotes naming it in batches of at most
