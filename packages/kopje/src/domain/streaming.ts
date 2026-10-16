@@ -41,7 +41,7 @@ import { grantsAny } from '../security/scopes'
 //   0028_streaming_home); the unit re-checks V's tokens and the lists' owner.
 //
 // A conversation's write takes its owner's next change sequence (conversations.ts nextStreamSeq, migration
-// 0033_streaming_lists), and the mark's move journals a 'conversation' event for the owner unless one is still ahead of
+// 0032_streaming_lists), and the mark's move journals a 'conversation' event for the owner unless one is still ahead of
 // the position (one row per owner however many changes a burst makes). Its units are the owner's newest changes above
 // what its sockets were sent (streamConversations), at the event's place in the journal.
 //

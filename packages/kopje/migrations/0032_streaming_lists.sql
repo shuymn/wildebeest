@@ -1,4 +1,4 @@
--- Kopje Store schema 0033: the streaming API's lists and direct messages (`list`: update, status.update, delete;
+-- Kopje Store schema 0032: the streaming API's lists and direct messages (`list`: update, status.update, delete;
 -- `direct`: conversation). Never edit after release (checksummed).
 --
 -- Migrations 0026_streaming and 0028_streaming_home made the journal (stream_events) and its triggers for `user`. This

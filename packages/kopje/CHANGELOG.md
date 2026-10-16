@@ -30,13 +30,12 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 - Store schema: adds one migration, applied on the first request after the deploy; a rollback to an earlier version
   needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
-    - `0033_streaming_lists`: rebuilds the streaming journal (at most a 4,096-id span of rows) to admit conversation
+    - `0032_streaming_lists`: rebuilds the streaming journal (at most a 4,096-id span of rows) to admit conversation
       events, adds a column of the streaming position, lets a list subscription journal statuses and edits (the
-      journal's triggers recreated), adds
-      the per-account conversation mark table (left out of dumps and backups, as the other streaming tables are), a
-      `stream_seq` column on conversations with a constant default and an index on it, and recreates the trigger that
-      moves a conversation's last status back so it also takes the owner's next change sequence. It reads each
-      conversation once, for the index, and the journal's rows; nothing else.
+      journal's triggers recreated), adds the per-account conversation mark table (left out of dumps and backups, as the
+      other streaming tables are), a `stream_seq` column on conversations with a constant default and an index on it,
+      and recreates the trigger that moves a conversation's last status back so it also takes the owner's next change
+      sequence. It reads each conversation once, for the index, and the journal's rows; nothing else.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.10] - 2026-10-16

@@ -70,7 +70,7 @@ const WRITING_TRIGGERS: Record<string, string> = {
 }
 
 // Streaming subscriptions of the account on `user`, `user:notification`, a list and `direct`, which arm every journal
-// trigger (migrations 0026_streaming, 0028_streaming_home and 0033_streaming_lists), and its conversation mark, which
+// trigger (migrations 0026_streaming, 0028_streaming_home and 0032_streaming_lists), and its conversation mark, which
 // makes every conversation write take a change sequence.
 async function listen(store: StoreStub, listening: boolean, accountId: string): Promise<void> {
 	if (listening) {
@@ -269,7 +269,8 @@ describe('a status in many conversations', () => {
 
 describe('a status in many conversations that keep an older one, their owners streaming `direct`', () => {
 	// Each link's delete moves its conversation's last status back to the older status: with the owner's mark, the
-	// trigger writes the mark, its journal row (the owner's first) and the conversation, at most four rows with the link (migration 0033_streaming_lists).
+	// trigger writes the mark, its journal row (the owner's first) and the conversation, at most four rows with the link
+	// (migration 0032_streaming_lists).
 	it.each([false, true])(
 		'stays within PURGE_BATCH, each mark and stream_seq advancing (listening: %s)',
 		async (listening) => {

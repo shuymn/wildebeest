@@ -589,7 +589,7 @@ type` for now. The work is bounded (RES-6, RES-7). _Implemented on branch
   `kopje/streaming-3`:_ lists, direct and merged: `listStatus` in `src/domain/timelines.ts`, `streamedConversation`
   and the change sequence in `src/domain/conversations.ts`, the merge transition in
   `src/domain/notification-requests.ts`, `streamUnit`, `streamDelete` and `streamConversations` in
-  `src/domain/streaming.ts`, migration `0033_streaming_lists`; `test/streaming/lists.test.ts`,
+  `src/domain/streaming.ts`, migration `0032_streaming_lists`; `test/streaming/lists.test.ts`,
   `test/streaming/direct.test.ts`, `test/streaming-oracle.test.ts`, `test/stream-delete.test.ts`,
   `test/policy-bounds.test.ts`, `test/migrations.test.ts`, `test/cascade-guard.test.ts`.
 

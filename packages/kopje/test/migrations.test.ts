@@ -3482,8 +3482,8 @@ describe('0031_admin_accounts_available', () => {
 	}, 120_000)
 })
 
-describe('0033_streaming_lists', () => {
-	const at = NAMES.indexOf('0033_streaming_lists')
+describe('0032_streaming_lists', () => {
+	const at = NAMES.indexOf('0032_streaming_lists')
 	const id = (n: number) => String(100000000000000000n + BigInt(n))
 
 	// A local account with `conversations` conversations (each holding one status of its own), and `others` remote
@@ -3520,7 +3520,7 @@ describe('0033_streaming_lists', () => {
 			seed(sql, 1)
 			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({
 				ok: true,
-				applied: ['0033_streaming_lists'],
+				applied: ['0032_streaming_lists'],
 			})
 			expect(sql.exec('SELECT stream_seq FROM conversations').toArray()).toEqual([{ stream_seq: 0 }])
 			const journal = () => sql.exec('SELECT kind, subject FROM stream_events ORDER BY id').toArray()

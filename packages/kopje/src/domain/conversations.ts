@@ -78,7 +78,7 @@ export function addToConversation(db: Db, ownerId: string, statusId: string): vo
 	db.run('INSERT INTO conversation_statuses (conversation_id, status_id) VALUES (?, ?)', row.id, statusId)
 }
 
-// The streaming API's change sequence (`direct`, migration 0033_streaming_lists): the owner's mark moved to its next
+// The streaming API's change sequence (`direct`, migration 0032_streaming_lists): the owner's mark moved to its next
 // value, which the conversation write stores in stream_seq, or null when the owner never subscribed to `direct` (then
 // nothing more is written). The mark is never lowered, so a turn sends each change once (stream-hub.ts). Every writer
 // of a conversation row takes it: addToConversation, markConversation, and the trigger conversation_statuses_removed.
