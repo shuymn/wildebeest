@@ -62,6 +62,38 @@ async function requests(h: ApiHarness, user: User, query = ''): Promise<Request[
 	return body
 }
 
+// `count` direct statuses of `from` to the recipient, each a filtered mention, and the request they make.
+async function seedFilteredMentions(h: ApiHarness, recipient: User, from: string, count: number): Promise<void> {
+	await sql(
+		h.store,
+		`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+		INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+		SELECT printf('8%017d', i), 'https://remote.example/o/' || i, ?2, 'direct', '', '2026-10-01T00:00:00.000Z' FROM n`,
+		count,
+		from
+	)
+	await sql(
+		h.store,
+		'INSERT INTO status_mentions (status_id, account_id) SELECT id, ? FROM statuses WHERE account_id = ?',
+		recipient.id,
+		from
+	)
+	await sql(
+		h.store,
+		`INSERT INTO notifications (account_id, type, from_account_id, status_id, filtered)
+		SELECT ?, 'mention', ?, id, 1 FROM statuses WHERE account_id = ? ORDER BY id`,
+		recipient.id,
+		from,
+		from
+	)
+	await sql(
+		h.store,
+		'INSERT INTO notification_requests (account_id, from_account_id, notifications_count) VALUES (?, ?, 100)',
+		recipient.id,
+		from
+	)
+}
+
 const defaults = {
 	for_not_following: 'accept',
 	for_not_followers: 'accept',
@@ -670,39 +702,8 @@ describe('notification requests', () => {
 		const h = await community(['alice'])
 		const { alice } = h.users
 		const bob = await remoteAccount(h.store, 'bob')
-		const status = await post(h, alice, { status: 'hello' })
 		const count = REQUEST_JOB_WINDOW * REQUEST_JOB_BATCHES + 10
-		// Bob's filtered favourites of alice's status by many of his own boosts' worth of ids: one notification each,
-		// seeded with distinct statuses.
-		await sql(
-			h.store,
-			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
-			INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
-			SELECT printf('8%017d', i), 'https://remote.example/o/' || i, ?2, 'direct', '', '2026-10-01T00:00:00.000Z' FROM n`,
-			count,
-			bob
-		)
-		await sql(
-			h.store,
-			`INSERT INTO notifications (account_id, type, from_account_id, status_id, filtered)
-			SELECT ?, 'mention', ?, id, 1 FROM statuses WHERE account_id = ? ORDER BY id`,
-			alice.id,
-			bob,
-			bob
-		)
-		await sql(
-			h.store,
-			'INSERT INTO status_mentions (status_id, account_id) SELECT id, ? FROM statuses WHERE account_id = ?',
-			alice.id,
-			bob
-		)
-		await sql(
-			h.store,
-			'INSERT INTO notification_requests (account_id, from_account_id, notifications_count) VALUES (?, ?, 100)',
-			alice.id,
-			bob
-		)
-		expect(status.id).toBeDefined()
+		await seedFilteredMentions(h, alice, bob, count)
 		const [request] = await requests(h, alice)
 		await h.request(`/api/v1/notifications/requests/${request!.id}/accept`, bearer(alice.token, form({})))
 		const filtered = async () =>
@@ -716,6 +717,26 @@ describe('notification requests', () => {
 		expect(await sql(h.store, 'SELECT count(*) AS n FROM conversations WHERE account_id = ?', alice.id)).toEqual([
 			{ n: count },
 		])
+	}, 60_000)
+	it('leaves out of a later batch what a block since refuses, and adds none of it to a conversation', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const bob = await remoteAccount(h.store, 'bob')
+		await seedFilteredMentions(h, alice, bob, REQUEST_JOB_WINDOW * REQUEST_JOB_BATCHES + 10)
+		const [request] = await requests(h, alice)
+		await h.request(`/api/v1/notifications/requests/${request!.id}/accept`, bearer(alice.token, form({})))
+		const conversations = async () =>
+			(await sql<{ n: number }>(h.store, 'SELECT count(*) AS n FROM conversations WHERE account_id = ?', alice.id))[0]!
+				.n
+		expect(await conversations()).toBe(REQUEST_JOB_WINDOW * REQUEST_JOB_BATCHES)
+		// The block clears alice's conversations with bob; the round that follows brings none of them back.
+		expect((await act(h, alice, `/api/v1/accounts/${bob}/block`)).status).toBe(200)
+		expect(await conversations()).toBe(0)
+		expect(await h.store.runInboundJobs(BUILD, { now: NOW })).toMatchObject({ pending: false })
+		expect(await conversations()).toBe(0)
+		expect(
+			await sql(h.store, 'SELECT count(*) AS n FROM notifications WHERE filtered = 1 AND from_account_id = ?', bob)
+		).toEqual([{ n: 10 }])
 	}, 60_000)
 })
 

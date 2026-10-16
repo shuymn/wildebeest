@@ -1,5 +1,12 @@
 import { type Account, edgeRangeSql, type Page, type PageQuery, type Present, presentAccountsById } from './accounts'
-import { availableSql, POLICY_DEFAULTS, type PolicyChoice, type PolicyColumn, statusReads } from './audience'
+import {
+	availableSql,
+	notifiedSql,
+	POLICY_DEFAULTS,
+	type PolicyChoice,
+	type PolicyColumn,
+	statusReads,
+} from './audience'
 import { userReadOperation, userWriteOperation } from './auth'
 import { addToConversation } from './conversations'
 import { MAX_MEANINGFUL_COUNT } from './notifications'
@@ -212,9 +219,12 @@ type Job = { id: number; account_id: string; from_account_id: string; kind: 'acc
 // One batch of a job: the next REQUEST_JOB_WINDOW of the sender's notifications by id, newest first (whoever they
 // notify, so the rows read are bounded however few are the recipient's), of which the recipient's filtered ones are
 // unfiltered (accept: the direct mentions among them join the recipient's conversations first, as
-// UnfilterNotificationsWorker#push_to_conversations! adds them) or deleted (dismiss). The job is done when the walk
-// reaches the sender's first notification.
-function jobBatch(db: Db, job: Job): void {
+// UnfilterNotificationsWorker#push_to_conversations! adds them) or deleted (dismiss). An accept unfilters only what
+// the notification rule would let notify write now (notifiedSql, R15 at `now`): a batch that runs after the recipient
+// blocked or muted the sender, or muted a conversation, leaves those notifications filtered and adds none of them to a
+// conversation, so a later batch never brings back what a block cleared. The job is done when the walk reaches the
+// sender's first notification.
+function jobBatch(db: Db, job: Job, now: string): void {
 	const window = db.first<{ low: number | null; walked: number }>(
 		`SELECT min(id) AS low, count(*) AS walked FROM (
 			SELECT id FROM notifications WHERE from_account_id = ?1 AND id < ?2 ORDER BY id DESC LIMIT ?3)`,
@@ -227,15 +237,23 @@ function jobBatch(db: Db, job: Job): void {
 		const range = 'from_account_id = ?1 AND id >= ?2 AND id < ?3 AND account_id = ?4 AND filtered = 1'
 		const params = [job.from_account_id, low, job.cursor, job.account_id] as const
 		if (job.kind === 'accept') {
-			const mentions = db.all<{ status_id: string }>(
-				`SELECT status_id FROM notifications WHERE ${range} AND type = 'mention' AND status_id IS NOT NULL
-				ORDER BY id DESC`,
-				...params
+			const shown = db.all<{ id: number; type: string; status_id: string | null }>(
+				`SELECT n.id, n.type, n.status_id FROM notifications n
+				WHERE n.from_account_id = ?1 AND n.id >= ?2 AND n.id < ?3 AND n.account_id = ?4 AND n.filtered = 1
+					AND ${notifiedSql('?4', 'n.type', 'n.from_account_id', 'n.status_id', '?5')}
+				ORDER BY n.id DESC`,
+				...params,
+				now
 			)
-			for (const { status_id } of mentions) {
-				addToConversation(db, job.account_id, status_id)
+			for (const { type, status_id } of shown) {
+				if (type === 'mention' && status_id !== null) {
+					addToConversation(db, job.account_id, status_id)
+				}
 			}
-			db.run(`UPDATE notifications SET filtered = 0 WHERE ${range}`, ...params)
+			db.run(
+				'UPDATE notifications SET filtered = 0 WHERE id IN (SELECT CAST(value AS INTEGER) FROM json_each(?))',
+				JSON.stringify(shown.map((row) => row.id))
+			)
 		} else {
 			db.run(`DELETE FROM notifications WHERE ${range}`, ...params)
 		}
@@ -249,8 +267,8 @@ function jobBatch(db: Db, job: Job): void {
 
 const JOB_COLUMNS = 'id, account_id, from_account_id, kind, cursor'
 
-// Runs at most `batches` batches of the jobs `ids` (or of any job, oldest first, when null).
-function runJobs(db: Db, ids: readonly number[] | null, batches: number): void {
+// Runs at most `batches` batches of the jobs `ids` (or of any job, oldest first, when null), judged at `now`.
+function runJobs(db: Db, ids: readonly number[] | null, batches: number, now: string): void {
 	for (let batch = 0; batch < batches; batch++) {
 		const job =
 			ids === null
@@ -263,7 +281,7 @@ function runJobs(db: Db, ids: readonly number[] | null, batches: number): void {
 		if (job === undefined) {
 			return
 		}
-		jobBatch(db, job)
+		jobBatch(db, job, now)
 	}
 }
 
@@ -311,7 +329,7 @@ function accept(db: Db, accountId: string, requests: readonly Answered[], now: s
 			jobs.push(job)
 		}
 	}
-	runJobs(db, jobs, REQUEST_JOB_BATCHES)
+	runJobs(db, jobs, REQUEST_JOB_BATCHES, now)
 }
 
 // POST /api/v1/notifications/requests/:id/accept. Returns whether the request was the viewer's.
@@ -332,7 +350,7 @@ export const dismissNotificationRequest = userWriteOperation<{ id: string; now: 
 			const job = startJob(db, 'dismiss', accountId, from_account_id, new Date(now).toISOString())
 			return job === null ? [] : [job]
 		})
-		runJobs(db, jobs, REQUEST_JOB_BATCHES)
+		runJobs(db, jobs, REQUEST_JOB_BATCHES, new Date(now).toISOString())
 		return requests.length > 0
 	}
 )
@@ -368,8 +386,8 @@ export const notificationRequestsMerged = userReadOperation<object, { merged: bo
 // A round of the jobs, oldest first, at most REQUEST_JOB_BATCHES batches (the Queue and the cron run it with the
 // inbound jobs, store.ts). pending: a job has batches left.
 export const runNotificationRequestJobs = writeOperation<{ now: number }, { pending: boolean; delivers: boolean }>(
-	(db) => {
-		runJobs(db, null, REQUEST_JOB_BATCHES)
+	(db, { now }) => {
+		runJobs(db, null, REQUEST_JOB_BATCHES, new Date(now).toISOString())
 		return {
 			pending: db.first('SELECT 1 AS x FROM notification_request_jobs') !== undefined,
 			delivers: false,
