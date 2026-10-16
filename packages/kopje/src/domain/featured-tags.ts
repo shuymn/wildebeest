@@ -16,27 +16,13 @@ import type { Db } from '../db/sql'
 // (countFeaturedTags, uncountFeaturedTags), as FeaturedTag#increment and #decrement keep them, so a read never counts.
 // Featuring or unfeaturing sends the account's followers an Add or a Remove of the Hashtag (CreateFeaturedTagService,
 // RemoveFeaturedTagService), and the actor's featuredTags collection lists them (federation.ts). A remote account's
-// featured hashtags are learned into the same rows (remote-collections.ts) and shown by the same read.
+// featured hashtags are learned into the same rows (remote-collections.ts) and shown by the same read, but its counts
+// are not kept: others write its history, so the read counts its newest FEATURED_COUNT_WINDOW statuses instead.
 
 // FeaturedTag::LIMIT, and its message (featured_tags.errors.limit).
 export const MAX_FEATURED_TAGS = 10
-// The newest statuses of a remote account a featured hashtag's count reads (see writeFeatured).
+// The newest statuses of a remote account Kopje holds that a read of its featured hashtags counts.
 export const FEATURED_COUNT_WINDOW = 200
-
-// How many of the account's newest statuses a count or a search for its newest status with a hashtag reads: all of a
-// local account's (its own history, as Mastodon reads it), FEATURED_COUNT_WINDOW of a remote account's, whose history
-// others write and whose hashtags others Add and Remove at will (-1: no limit, as SQLite reads LIMIT -1).
-function countWindow(db: Db, accountId: string): number {
-	return db.first('SELECT 1 AS x FROM local_accounts WHERE account_id = ?', accountId) === undefined
-		? FEATURED_COUNT_WINDOW
-		: -1
-}
-
-// The account's newest statuses within its window, by statuses_account: `?1` the account, `window` the parameter
-// holding the window.
-function newestSql(window: string): string {
-	return `(SELECT id FROM statuses WHERE account_id = ?1 ORDER BY id DESC LIMIT ${window})`
-}
 const TOO_MANY = 'You have already featured the maximum number of hashtags'
 
 // REST::FeaturedTagSerializer.
@@ -58,7 +44,20 @@ type FeaturedRow = {
 	domain: string | null
 }
 
-const FEATURED_COLUMNS = `f.id, f.name, f.display_name, f.statuses_count, f.last_status_at, a.username, a.domain`
+// A remote account's statuses within its window that count for the featured hashtag `f`: its newest
+// FEATURED_COUNT_WINDOW (by statuses_account) that are public or unlisted originals with the hashtag, each a key lookup.
+// A read shows at most MAX_FEATURED_TAGS of an account, so it reads at most that many windows.
+const REMOTE_COUNTED = `FROM statuses s
+	WHERE s.id IN (SELECT id FROM statuses WHERE account_id = f.account_id ORDER BY id DESC LIMIT ${FEATURED_COUNT_WINDOW})
+		AND s.reblog_of_id IS NULL AND s.visibility IN ${DISTRIBUTABLE_SQL}
+		AND EXISTS (SELECT 1 FROM status_tags t WHERE t.status_id = s.id AND t.name = f.name)`
+
+// A local account's counts as they are kept; a remote account's counted at read time over its window.
+const FEATURED_COLUMNS = `f.id, f.name, f.display_name,
+	CASE WHEN a.domain IS NULL THEN f.statuses_count ELSE (SELECT count(*) ${REMOTE_COUNTED}) END AS statuses_count,
+	CASE WHEN a.domain IS NULL THEN f.last_status_at
+		ELSE (SELECT s.published_at ${REMOTE_COUNTED} ORDER BY s.id DESC LIMIT 1) END AS last_status_at,
+	a.username, a.domain`
 const FEATURED_FROM = 'FROM featured_tags f JOIN accounts a ON a.id = f.account_id'
 
 // The URL of the account's statuses with the hashtag (Mastodon's short_account_tag_url): its profile, tagged. A remote
@@ -135,24 +134,24 @@ function insertFeatured(db: Db, accountId: string, display: string, now: number,
 	return row
 }
 
-// The row of a featured hashtag `display` (a valid hashtag name) of any account, local or remote, with its counts read
-// from the account's statuses as FeaturedTag#reset_data reads them. Nothing is sent. The caller has checked that the
-// account does not feature it yet.
+// The row of a featured hashtag `display` (a valid hashtag name) of any account, local or remote: a local account's
+// with its counts read from its statuses as FeaturedTag#reset_data reads them; a remote account's without (the read
+// counts them). Nothing is sent. The caller has checked that the account does not feature it yet.
 export function writeFeatured(db: Db, accountId: string, display: string, now: number): FeaturedRow {
 	const name = normalizeTag(display)
+	const local = db.first('SELECT 1 AS x FROM local_accounts WHERE account_id = ?', accountId) !== undefined
 	// The account's public and unlisted statuses with the hashtag, and the newest (by id, as Mastodon's default order
-	// picks it): a walk of a local account's own statuses, once, when it features the hashtag; for a remote account, of
-	// its newest FEATURED_COUNT_WINDOW (countWindow), so learning a hashtag again and again costs no more however long
-	// its history. From then on the count moves by deltas as its statuses come and go.
-	const counted = db.first<{ n: number; last: string | null }>(
-		`SELECT c.n, (SELECT published_at FROM statuses WHERE id = c.last_id) AS last
-		FROM (SELECT count(*) AS n, max(s.id) AS last_id FROM ${newestSql('?3')} w CROSS JOIN statuses s ON s.id = w.id
-			WHERE s.reblog_of_id IS NULL AND s.visibility IN ${DISTRIBUTABLE_SQL}
+	// picks it). A walk of the account's own statuses, once, when the account features the hashtag.
+	const counted = !local
+		? undefined
+		: db.first<{ n: number; last: string | null }>(
+				`SELECT c.n, (SELECT published_at FROM statuses WHERE id = c.last_id) AS last
+		FROM (SELECT count(*) AS n, max(s.id) AS last_id FROM statuses s
+			WHERE s.account_id = ?1 AND s.reblog_of_id IS NULL AND s.visibility IN ${DISTRIBUTABLE_SQL}
 				AND EXISTS (SELECT 1 FROM status_tags t WHERE t.status_id = s.id AND t.name = ?2)) c`,
-		accountId,
-		name,
-		countWindow(db, accountId)
-	)
+				accountId,
+				name
+			)
 	db.run(
 		`INSERT INTO featured_tags (id, account_id, name, display_name, statuses_count, last_status_at, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -298,13 +297,14 @@ function recordFeaturedChange(
 // unlisted, and carries the hashtag (FeaturedTag#visible_tagged_account_statuses: distributable_visibility).
 
 // The status's author, its publication time, and the names of its hashtags its author features, if it counts (none
-// when it does not, or when its author features none of them).
+// when it does not, or when its author features none of them). A remote author's counts are not kept (the read counts
+// them), so its statuses count for none here.
 export type FeaturedOfStatus = { accountId: string; publishedAt: string; id: string; names: string[] }
 
 export function featuredOfStatus(db: Db, statusId: string): FeaturedOfStatus | null {
 	const status = db.first<{ account_id: string; published_at: string; counted: number }>(
-		`SELECT account_id, published_at, reblog_of_id IS NULL AND visibility IN ${DISTRIBUTABLE_SQL} AS counted
-		FROM statuses WHERE id = ?`,
+		`SELECT s.account_id, s.published_at, s.reblog_of_id IS NULL AND s.visibility IN ${DISTRIBUTABLE_SQL} AS counted
+		FROM statuses s JOIN local_accounts l ON l.account_id = s.account_id WHERE s.id = ?`,
 		statusId
 	)
 	if (status === undefined || status.counted !== 1) {
@@ -358,8 +358,7 @@ export function uncountFeaturedTags(db: Db, statusId: string): void {
 
 // FeaturedTag#decrement for the status's featured hashtags `names`: one less, and when no other status with the
 // hashtag is newer, the time of the newest left, found by walking the account's statuses from the newest and leaving
-// out this one (the work Mastodon also does there), so another status published at the same time still counts: within
-// the account's window (countWindow), past which a remote account's hashtag keeps its count and has no time. The last
+// out this one (the work Mastodon also does there), so another status published at the same time still counts. The last
 // one leaves the count at zero and no time.
 function decrement(db: Db, status: FeaturedOfStatus): void {
 	if (status.names.length === 0) {
@@ -370,8 +369,8 @@ function decrement(db: Db, status: FeaturedOfStatus): void {
 			last_status_at = CASE
 				WHEN statuses_count <= 1 THEN NULL
 				WHEN last_status_at > ?3 THEN last_status_at
-				ELSE (SELECT s.published_at FROM ${newestSql('?5')} w CROSS JOIN statuses s ON s.id = w.id
-					WHERE s.id <> ?4 AND s.reblog_of_id IS NULL AND s.visibility IN ${DISTRIBUTABLE_SQL}
+				ELSE (SELECT s.published_at FROM statuses s
+					WHERE s.account_id = ?1 AND s.id <> ?4 AND s.reblog_of_id IS NULL AND s.visibility IN ${DISTRIBUTABLE_SQL}
 						AND EXISTS (SELECT 1 FROM status_tags t WHERE t.status_id = s.id AND t.name = featured_tags.name)
 					ORDER BY s.id DESC LIMIT 1)
 			END
@@ -379,7 +378,6 @@ function decrement(db: Db, status: FeaturedOfStatus): void {
 		status.accountId,
 		JSON.stringify(status.names),
 		status.publishedAt,
-		status.id,
-		countWindow(db, status.accountId)
+		status.id
 	)
 }

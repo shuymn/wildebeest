@@ -16,12 +16,7 @@ import { backfillConversations } from '../src/domain/conversation-rows'
 import { listConversations } from '../src/domain/conversations'
 import { directory, DIRECTORY_WINDOW } from '../src/domain/directory'
 import { accountEndorsements, listEndorsements } from '../src/domain/endorsements'
-import {
-	accountFeaturedTags,
-	FEATURED_COUNT_WINDOW,
-	listFeaturedTags,
-	uncountFeaturedTags,
-} from '../src/domain/featured-tags'
+import { accountFeaturedTags, FEATURED_COUNT_WINDOW, listFeaturedTags } from '../src/domain/featured-tags'
 import {
 	getFilter,
 	listFilterKeywords,
@@ -3788,13 +3783,13 @@ describe("a remote account's learned collections cost a bounded read (RES-7)", (
 				SELECT id, ?, 'accepted' FROM accounts WHERE id <> ?1 AND domain IS NOT NULL`,
 				OWNER
 			)
-			// The owner's statuses: MAX_REMOTE_PINS pinned, then `count` more; the others' one each, pinned.
+			// The owner's statuses: MAX_REMOTE_PINS pinned, then FEATURED_COUNT_WINDOW and `count` more (a full window for the featured hashtags' count); the others' one each, pinned.
 			sql.exec(
 				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
 				INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
 				SELECT CAST(?2 + i AS TEXT), CASE WHEN i < ?3 THEN ?4 || '/statuses/pinned' || i ELSE ?4 || '/statuses/' || i END,
 					?5, 'public', '<p>s</p>', '2026-10-01T00:00:00.000Z' FROM n`,
-				MAX_REMOTE_PINS + count,
+				MAX_REMOTE_PINS + FEATURED_COUNT_WINDOW + count,
 				String(STATUS_BASE),
 				MAX_REMOTE_PINS,
 				OWNER_URI,
@@ -3901,11 +3896,10 @@ describe("a remote account's learned collections cost a bounded read (RES-7)", (
 	}, 120_000)
 })
 
-// A remote account's featured hashtag is counted from its newest FEATURED_COUNT_WINDOW statuses Kopje holds, and then
-// kept by deltas (featured-tags.ts): learning one, featuring and unfeaturing it again and again, and deleting its newest
-// status with older matches sparse among many statuses (and as many statuses of others with the hashtag) touch the same
-// rows whether the account has 400 statuses stored
-// or 4,000, since its history is never walked past the window.
+// A remote account's featured hashtags are counted at read time over its newest FEATURED_COUNT_WINDOW statuses Kopje
+// holds (featured-tags.ts), never kept: learning one, featuring and unfeaturing it again and again, and reading them with
+// matches sparse among many statuses (and as many statuses of others with the hashtag) touch the same rows whether the
+// account has 400 statuses stored or 4,000, since its history is never walked past the window.
 describe("a remote account's featured hashtags cost a window of its statuses (RES-7)", () => {
 	const OWNER = '960000000000000000'
 	const OTHER = '960000000000000001'
@@ -3975,15 +3969,14 @@ describe("a remote account's featured hashtags cost a window of its statuses (RE
 			featureRemote(db, OWNER, '#cats', now)
 		}
 	})
-	const uncount = writeOperation<{ id: string }, void>((db, { id }) => uncountFeaturedTags(db, id))
 
-	it('reads the same rows with 400 or 4,000 statuses: learning, featuring again and again, and a decrement', async () => {
+	it('reads the same rows with 400 or 4,000 statuses: learning, featuring again and again, and reading', async () => {
 		expect(FEATURED_COUNT_WINDOW).toBeLessThan(400)
 		const grown: string[] = []
 		const cases: [string, boolean, StoreOperation<never, unknown>, (count: number) => unknown][] = [
 			['learn', false, learn, () => ({ now: NOW })],
 			['feature again', true, toggle, () => ({ now: NOW })],
-			['decrement', true, uncount, (count) => ({ id: newest(count) })],
+			['read', true, accountFeaturedTags, () => ({ id: OWNER, present: PRESENT })],
 		]
 		for (const [name, featured, operation, input] of cases) {
 			const few = await rowsTouched(await history(400, featured), operation, input(400) as never)
@@ -3993,12 +3986,12 @@ describe("a remote account's featured hashtags cost a window of its statuses (RE
 			}
 		}
 		expect(grown).toEqual([])
-		// Not vacuous: the decrement keeps a count and finds no newer status in the window, the learn counts the newest.
+		// Not vacuous: the read counts the newest status, the only one with the hashtag in the window.
 		const store = await history(4000, false)
 		await runInDurableObject(store, (_instance, state) => learn.run(state.storage.sql, { now: NOW }))
-		const rows = await runInDurableObject(store, (_instance, state) =>
-			state.storage.sql.exec('SELECT statuses_count, last_status_at FROM featured_tags').toArray()
+		const read = await runInDurableObject(store, (_instance, state) =>
+			accountFeaturedTags.run(state.storage.sql, { id: OWNER, present: PRESENT })
 		)
-		expect(rows).toEqual([{ statuses_count: 1, last_status_at: expect.stringMatching(/^2026-01-03/) }])
+		expect(read).toEqual([expect.objectContaining({ statuses_count: '1', last_status_at: '2026-01-03' })])
 	}, 120_000)
 })

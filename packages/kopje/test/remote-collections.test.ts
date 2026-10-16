@@ -18,8 +18,9 @@ import {
 	remove,
 	type Setup,
 	setup,
+	update,
 } from './inbox-status-helpers'
-import { MAX_FEATURED_TAGS } from '../src/domain/featured-tags'
+import { FEATURED_COUNT_WINDOW, MAX_FEATURED_TAGS } from '../src/domain/featured-tags'
 import { MAX_REMOTE_PINS, SYNC_RETRY_MS } from '../src/domain/remote-collections'
 import { COLLECTION_SYNCS_PER_ROUND, MAX_FEATURED_TAG_PAGES, syncCollections } from '../src/federation/collections'
 import { REQUEST_MAX_FETCHES } from '../src/federation/loader'
@@ -189,6 +190,80 @@ describe('learning a remote account’s collections from Add and Remove', () => 
 		expect(await t.post(mallory, addOrRemove('Remove', mallory, bobs.id, featuredOf(bob)))).toBe(202)
 		expect(await t.post(mallory, addOrRemove('Remove', mallory, bobs.id))).toBe(202)
 		expect(await pinned(t, bobId, 'alice')).toEqual([bobs.id])
+	})
+
+	it('counts a remote featured hashtag over its newest stored statuses, whatever happened to them', async () => {
+		const clock = { now: NOW }
+		const t = await setup(clock)
+		const bob = await mastodonActor(t.web, 'bob')
+		const bobId = await followed(t, bob)
+		// The count computed apart: bob's newest FEATURED_COUNT_WINDOW statuses that are public or unlisted originals with
+		// #cats, and the date of the newest of them.
+		const expected = async () => {
+			const rows = await sql<{ id: string; visibility: string; reblog: number; at: string; cats: number }>(
+				t.store,
+				`SELECT id, visibility, reblog_of_id IS NOT NULL AS reblog, published_at AS at,
+					EXISTS (SELECT 1 FROM status_tags WHERE status_id = statuses.id AND name = 'cats') AS cats
+				FROM statuses WHERE account_id = ?`,
+				bobId
+			)
+			const window = rows.sort((a, b) => (BigInt(b.id) > BigInt(a.id) ? 1 : -1)).slice(0, FEATURED_COUNT_WINDOW)
+			const counted = window.filter(
+				(r) => r.cats === 1 && r.reblog === 0 && (r.visibility === 'public' || r.visibility === 'unlisted')
+			)
+			return {
+				name: 'cats',
+				statuses_count: String(counted.length),
+				last_status_at: counted[0]?.at.slice(0, 10) ?? null,
+			}
+		}
+		const shown = async () => {
+			const [tag] = await featuredTags(t, bobId)
+			return { name: tag?.name, statuses_count: tag?.statuses_count, last_status_at: tag?.last_status_at }
+		}
+		const notes = [
+			mastodonNote(bob, { tag: [hashtag('cats')], published: '2026-10-01T00:00:00Z' }),
+			mastodonNote(bob, { published: '2026-10-02T00:00:00Z' }),
+			mastodonNote(bob, { tag: [hashtag('cats')], published: '2026-10-03T00:00:00Z' }),
+			mastodonNote(bob, {
+				tag: [hashtag('cats')],
+				to: [`${bob.uri}/followers`],
+				cc: [],
+				published: '2026-10-04T00:00:00Z',
+			}),
+		]
+		for (const note of notes) {
+			expect(await t.post(bob, create(bob, note))).toBe(202)
+		}
+		expect(await t.post(bob, addOrRemove('Add', bob, hashtag('cats')))).toBe(202)
+		expect(await shown()).toEqual({ ...(await expected()), statuses_count: '2', last_status_at: '2026-10-03' })
+		// The newest counted status deleted.
+		expect(await t.post(bob, remove(bob, notes[2]!.id))).toBe(202)
+		expect(await shown()).toEqual(await expected())
+		// An edit takes #cats off the oldest, another gives it to the second.
+		clock.now += 60_000
+		expect(await t.post(bob, update(bob, { ...notes[0]!, tag: [] }, '2026-10-11T00:01:00Z'))).toBe(202)
+		expect(await t.post(bob, update(bob, { ...notes[1]!, tag: [hashtag('cats')] }, '2026-10-11T00:02:00Z'))).toBe(202)
+		expect(await shown()).toEqual({ ...(await expected()), statuses_count: '1', last_status_at: '2026-10-02' })
+		// FEATURED_COUNT_WINDOW newer statuses without it push the tagged one out of the window.
+		await sql(
+			t.store,
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+			INSERT INTO statuses (id, uri, account_id, visibility, published_at)
+			SELECT CAST(990000000000000000 + i AS TEXT), ?2 || '/statuses/w' || i, ?3, 'public', '2026-10-05T00:00:00.000Z' FROM n`,
+			FEATURED_COUNT_WINDOW,
+			bob.uri,
+			bobId
+		)
+		expect(await shown()).toEqual({ ...(await expected()), statuses_count: '0', last_status_at: null })
+		// Learned again, it reads the same.
+		expect(await t.post(bob, addOrRemove('Remove', bob, hashtag('cats')))).toBe(202)
+		expect(await t.post(bob, addOrRemove('Add', bob, hashtag('cats')))).toBe(202)
+		expect(await shown()).toEqual(await expected())
+		// Nothing is kept in the row: the read counts.
+		expect(await sql(t.store, 'SELECT statuses_count, last_status_at FROM featured_tags')).toEqual([
+			{ statuses_count: 0, last_status_at: null },
+		])
 	})
 
 	it('keeps at most MAX_REMOTE_PINS pins and MAX_FEATURED_TAGS hashtags', async () => {

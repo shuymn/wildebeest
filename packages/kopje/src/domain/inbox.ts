@@ -13,7 +13,6 @@ import {
 	type Visibility,
 } from './audience'
 import { stageRetraction } from './deliveries'
-import { uncountFeaturedTags } from './featured-tags'
 import { insertWithFreshId, remoteId } from './ids'
 import { listsHolding } from './lists'
 import { notify } from './notifications'
@@ -1668,9 +1667,6 @@ export function deleteStatusBatch(db: Db, statusId: string, now: number): boolea
 	)
 	// Hiding writes the status and the account's last status, which the trigger of migration 0021_directory moves back.
 	if (budget.left() >= 2) {
-		// The author's featured hashtags no longer count it (RemoveStatusService#remove_from_hashtags), once: hidden, it
-		// counts for none. At most MAX_FEATURED_TAGS rows, which the budget counts.
-		uncountFeaturedTags(db, statusId)
 		db.run(
 			`UPDATE statuses SET visibility = 'direct', content = '', spoiler_text = '', search_text = NULL
 			WHERE id = ? AND (visibility <> 'direct' OR content <> '' OR spoiler_text <> '' OR search_text IS NOT NULL)`,
