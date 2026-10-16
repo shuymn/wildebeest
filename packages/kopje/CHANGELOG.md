@@ -33,6 +33,11 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Changed
 
+- A full Tag (`/api/v1/tags/:id` and its `follow`, `unfollow`, `feature` and `unfeature`, `/api/v1/followed_tags`,
+  `/api/v1/featured_tags/suggestions` and the hashtags of `/api/v2/search`) has Mastodon's `id` (sent since 4.3.1).
+  Kopje has no table of hashtags, so the id is derived from the normalized name (its 64-bit FNV-1a hash cut to 63
+  bits, in decimal): the same on every endpoint and instance. No route takes it back; `/api/v1/tags/:id` still takes
+  the name, as in Mastodon.
 - Instance rules have Mastodon's `hint` and `translations` on every endpoint that shows them (`/api/v1/instance`,
   `/api/v2/instance`, `/api/v1/instance/rules`): the hint is the `hint` of a rule given as an object in the `rules`
   setting (else `""`), and `translations` is `{}`, since Kopje stores none. The about page shows the hint under its

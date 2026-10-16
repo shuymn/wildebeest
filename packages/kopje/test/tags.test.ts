@@ -4,17 +4,55 @@ import { type ApiHarness, apiHarness, bearer, seedAccount, sql } from './api-hel
 import { NOW } from './app-helpers'
 import { appToken, DAY_MS, rowsRead, scopedToken } from './read-helpers'
 import { community, getJson, seedStatus, type User } from './status-helpers'
-import { getTag } from '../src/domain/tags'
+import { getTag, tagId } from '../src/domain/tags'
 
 // GET /api/v1/tags/:id: the Tag entity, its history (VIS-12), the optional token (AUTH-2) and the work bound (RES-7).
 
 type Tag = {
+	id: string
 	name: string
 	url: string
 	history: { day: string; uses: string; accounts: string }[]
 	following?: boolean
 	featuring?: boolean
 }
+
+describe('tag ids', () => {
+	it('derives the id from the normalized name: FNV-1a 64 cut to 63 bits, in decimal', () => {
+		// FNV-1a 64 of "foobar" is 0x85944171f73967e8 (the published test vector); its low 63 bits are this.
+		expect(tagId('foobar')).toBe('402018224477661160')
+		expect(tagId('')).toBe('5472609002491880229')
+		expect(tagId('cats')).toBe('3848435355615332284')
+		expect(tagId('日本語')).toMatch(/^[1-9]\d{0,18}$/)
+		expect(tagId('cat')).not.toBe(tagId('cats'))
+	})
+
+	it('gives every endpoint that answers a full Tag the same id for the same hashtag', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const auth = (method = 'GET') => bearer(alice.token, { method })
+		const ids: string[] = []
+		const tag = async (path: string, method = 'GET') => {
+			const response = await h.request(path, auth(method))
+			expect(response.status, path).toBe(200)
+			return (await response.json()) as Tag | Tag[] | { hashtags: Tag[] }
+		}
+		await h.request(
+			'/api/v1/statuses',
+			bearer(alice.token, { method: 'POST', body: new URLSearchParams({ status: '#Cats' }) })
+		)
+		ids.push(((await tag('/api/v1/tags/Cats')) as Tag).id)
+		ids.push(((await tag('/api/v1/tags/cats/follow', 'POST')) as Tag).id)
+		ids.push(((await tag('/api/v1/followed_tags')) as Tag[])[0]?.id ?? '')
+		ids.push(((await tag('/api/v2/search?q=%23cats&type=hashtags')) as { hashtags: Tag[] }).hashtags[0]?.id ?? '')
+		ids.push(((await tag('/api/v1/featured_tags/suggestions')) as Tag[])[0]?.id ?? '')
+		ids.push(((await tag('/api/v1/tags/cats/feature', 'POST')) as Tag).id)
+		ids.push(((await tag('/api/v1/tags/cats/unfeature', 'POST')) as Tag).id)
+		ids.push(((await tag('/api/v1/tags/cats/unfollow', 'POST')) as Tag).id)
+		ids.push(((await (await h.request('/api/v1/tags/cats')).json()) as Tag).id)
+		expect(ids).toEqual(Array.from({ length: 9 }, () => '3848435355615332284'))
+	})
+})
 
 describe('tags', () => {
 	const day = (daysAgo: number) => String((NOW - daysAgo * DAY_MS) / 1000)
@@ -45,6 +83,7 @@ describe('tags', () => {
 		const { status, body } = await getJson<Tag>(h, '/api/v1/tags/Cats')
 		expect(status).toBe(200)
 		expect(body).toEqual({
+			id: '3848435355615332284',
 			name: 'cats',
 			url: 'https://kopje.test/tags/cats',
 			history: [
