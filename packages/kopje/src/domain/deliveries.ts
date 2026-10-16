@@ -823,9 +823,10 @@ export const claimDeliveries = writeOperation<{ now: number; leaseToken: string;
 				}
 			}
 		}
-		const domain = db.first<{ value: string }>("SELECT value FROM instance_settings WHERE name = 'domain'")?.value
-		const instanceActor =
-			domain !== undefined && claimed.some((c) => c.signer === INSTANCE_SIGNER) ? `https://${domain}/actor` : null
+		const domain = claimed.some((c) => c.signer === INSTANCE_SIGNER)
+			? db.first<{ value: string }>("SELECT value FROM instance_settings WHERE name = 'domain'")?.value
+			: undefined
+		const instanceActor = domain === undefined ? null : `https://${domain}/actor`
 		return { leaseToken, leaseUntil, deliveries: claimed, signers, instanceActor, nextDueAt: nextDueAt(db, now) }
 	}
 )

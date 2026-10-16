@@ -100,7 +100,9 @@ export const createReport = userWriteOperation<ReportInput, ReportResult>((db, i
 	if (bounds.length > 0) {
 		return { status: 'invalid', errors: bounds }
 	}
-	if (accountStatusIds(db, viewer, target, statusIds).length !== statusIds.length) {
+	// The reported statuses by id, with the uris a forwarded Flag names.
+	const statuses = accountStatusIds(db, viewer, target, statusIds)
+	if (statuses.length !== statusIds.length) {
 		return { status: 'not_found' }
 	}
 	const category = ruleIds.length > 0 ? 'violation' : blank(input.category) ? 'other' : (input.category as string)
@@ -135,12 +137,6 @@ export const createReport = userWriteOperation<ReportInput, ReportResult>((db, i
 	if (forward) {
 		const recipients = reportForwardees(db, target, statusIds, domains)
 		if (recipients.length > 0) {
-			const statusUris = db
-				.all<{ uri: string }>(
-					'SELECT uri FROM statuses WHERE id IN (SELECT value FROM json_each(?)) ORDER BY id',
-					JSON.stringify(statusIds)
-				)
-				.map((status) => status.uri)
 			recordOutbound(
 				db,
 				viewer.accountId,
@@ -148,7 +144,7 @@ export const createReport = userWriteOperation<ReportInput, ReportResult>((db, i
 					id: uri,
 					actorUri: instanceActorUri(domain),
 					targetUri: account.uri,
-					statusUris,
+					statusUris: statuses.map((status) => status.uri),
 					comment,
 					recipients,
 				}),
