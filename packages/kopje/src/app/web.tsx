@@ -127,7 +127,11 @@ export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 	// ---- public pages
 
 	const profile = async (c: WebContext, tag: string | null) => {
-		const username = localUsername(c.req.param('handle') ?? '', c.get('domain'))
+		const handle = c.req.param('handle') ?? ''
+		const username = localUsername(handle, c.get('domain'))
+		if (username === null && tag !== null) {
+			return remoteTagged(c, handle)
+		}
 		if (username === null || username === '') {
 			return notFound(c)
 		}
@@ -167,6 +171,19 @@ export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 				tag={tag}
 			/>
 		)
+	}
+	// A remote account's featured hashtag URL (/@username@domain/tagged/:tag, featured-tags.ts taggedUrl): its profile
+	// on its own server, while it is available; Kopje shows no remote account's posts by hashtag.
+	const remoteTagged = async (c: WebContext, handle: string) => {
+		const [username = '', domain = '', ...rest] = handle.replace(/^@/, '').split('@')
+		if (username === '' || domain === '' || rest.length > 0) {
+			return notFound(c)
+		}
+		const account = await storeCall(c, deps, (s, b) => s.lookupAccount(b, { username, domain, present: present(c) }))
+		if (account === null || account.suspended === true || account.acct === account.username) {
+			return notFound(c)
+		}
+		return new Response(null, { status: 302, headers: { location: account.url } })
 	}
 	app.get('/:handle{@[^/]+}', setup, (c) => profile(c, null))
 	// A featured hashtag's URL (Mastodon's short_account_tag_url): the profile's posts with the hashtag.

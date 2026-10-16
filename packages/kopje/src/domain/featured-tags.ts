@@ -38,21 +38,25 @@ type FeaturedRow = {
 	statuses_count: number
 	last_status_at: string | null
 	username: string
+	domain: string | null
 }
 
-const FEATURED_COLUMNS = `f.id, f.name, f.display_name, f.statuses_count, f.last_status_at, a.username`
+const FEATURED_COLUMNS = `f.id, f.name, f.display_name, f.statuses_count, f.last_status_at, a.username, a.domain`
 const FEATURED_FROM = 'FROM featured_tags f JOIN accounts a ON a.id = f.account_id'
 
-// The URL of the account's statuses with the hashtag (Mastodon's short_account_tag_url): its profile, tagged.
-export function taggedUrl(origin: string, username: string, name: string): string {
-	return `${origin}/@${username}/tagged/${encodeURIComponent(name)}`
+// The URL of the account's statuses with the hashtag (Mastodon's short_account_tag_url): its profile, tagged. A remote
+// account's is named by its address (/@username@domain/tagged/:tag, Mastodon's account_with_domain route), which the
+// web answers with a redirect to its profile; Mastodon's REST::FeaturedTagSerializer builds /@username/tagged/:tag for
+// it too, which names a local account of the same username.
+export function taggedUrl(origin: string, username: string, name: string, domain: string | null = null): string {
+	return `${origin}/@${domain === null ? username : `${username}@${domain}`}/tagged/${encodeURIComponent(name)}`
 }
 
 function presentFeatured(row: FeaturedRow, origin: string): FeaturedTag {
 	return {
 		id: row.id,
 		name: row.display_name,
-		url: taggedUrl(origin, row.username, row.name),
+		url: taggedUrl(origin, row.username, row.name, row.domain),
 		statuses_count: String(row.statuses_count),
 		// Mastodon shows the date of the newest status only (last_status_at.to_date.iso8601).
 		last_status_at: row.last_status_at?.slice(0, 10) ?? null,

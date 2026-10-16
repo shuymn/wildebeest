@@ -114,6 +114,29 @@ describe('learning a remote account’s collections from Add and Remove', () => 
 		expect((await featuredTags(t, bobId)).map((tag) => tag.name)).toEqual(['Dogs'])
 	})
 
+	it('links a featured hashtag to the remote account, never to a local one of the same username', async () => {
+		const t = await setup()
+		// A remote alice, and the local alice, each featuring #cats.
+		const remoteAlice = await mastodonActor(t.web, 'alice')
+		const remoteId = await followed(t, remoteAlice, DAVE)
+		expect(await t.post(remoteAlice, addOrRemove('Add', remoteAlice, hashtag('cats')))).toBe(202)
+		const local = await t.request('/api/v1/featured_tags', {
+			method: 'POST',
+			headers: { authorization: `Bearer ${t.tokens.alice}`, 'content-type': 'application/json' },
+			body: JSON.stringify({ name: 'cats' }),
+		})
+		expect(local.status).toBe(200)
+		const [remoteUrl] = (await featuredTags(t, remoteId)).map((tag) => (tag as FeaturedTag & { url: string }).url)
+		const [localUrl] = (await featuredTags(t, ALICE)).map((tag) => (tag as FeaturedTag & { url: string }).url)
+		expect(remoteUrl).toBe('https://kopje.test/@alice@mastodon.example/tagged/cats')
+		expect(localUrl).toBe('https://kopje.test/@alice/tagged/cats')
+		// The remote one leads to the remote profile; the local one is the local page.
+		const remote = await t.request(new URL(remoteUrl!).pathname)
+		expect([remote.status, remote.headers.get('location')]).toEqual([302, `${MASTODON}/@alice`])
+		expect((await t.request(new URL(localUrl!).pathname)).status).toBe(200)
+		expect((await t.request('/@nobody@mastodon.example/tagged/cats')).status).toBe(404)
+	})
+
 	it('fetches a status it does not have yet, for an actor with local followers', async () => {
 		const t = await setup()
 		const bob = await mastodonActor(t.web, 'bob')
