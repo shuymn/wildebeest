@@ -172,7 +172,14 @@ describe('followed hashtags', () => {
 		await followTag(h, alice, 'cats')
 		const { body } = await getJson<{ hashtags: Tag[] }>(h, '/api/v2/search?q=cats&type=hashtags', alice.token)
 		expect(body.hashtags).toEqual([
-			{ name: 'cats', url: 'https://kopje.test/tags/cats', history: [], following: true, featuring: false },
+			{
+				id: '3848435355615332284',
+				name: 'cats',
+				url: 'https://kopje.test/tags/cats',
+				history: [],
+				following: true,
+				featuring: false,
+			},
 		])
 	})
 })

@@ -4,6 +4,8 @@ export const STRINGS = {
 	siteName: 'Kopje',
 	notFoundTitle: 'Not found',
 	notFound: 'The page you are looking for is not here.',
+	aboutRules: 'Server rules',
+	aboutContact: 'Contact',
 	goneTitle: 'Account suspended',
 	gone: 'This account has been suspended.',
 	posts: 'Posts',

@@ -138,6 +138,7 @@ describe('GET /api/v2/search', () => {
 		const tags = (await search('#cat', '&type=hashtags')).hashtags
 		expect(tags.map((t) => t.name)).toEqual(['cat', 'cats', 'catsofkopje'])
 		expect(tags[0]).toEqual({
+			id: '8494641126322774823',
 			name: 'cat',
 			url: 'https://kopje.test/tags/cat',
 			history: [],

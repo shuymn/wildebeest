@@ -26,6 +26,7 @@ const CONTEXT = [
 		PropertyValue: 'schema:PropertyValue',
 		value: 'schema:value',
 		alsoKnownAs: { '@id': 'as:alsoKnownAs', '@type': '@id' },
+		attributionDomains: { '@id': 'toot:attributionDomains', '@container': '@set' },
 	},
 ]
 
@@ -41,6 +42,7 @@ type ActorRow = {
 	discoverable: number | null
 	also_known_as: string
 	fields: string
+	attribution_domains: string
 	pubkey: string
 	created_at: string
 	suspended_at: string | null
@@ -55,7 +57,7 @@ function image(stored: string | null): { type: 'Image'; url: string } | undefine
 export function actorDocument(db: Db, accountId: string): Record<string, unknown> | null {
 	const row = db.first<ActorRow>(
 		`SELECT a.uri, a.username, a.actor_type, a.display_name, a.note, a.avatar_url, a.header_url, a.locked,
-			a.discoverable, l.also_known_as, l.fields, l.pubkey, a.created_at, l.suspended_at
+			a.discoverable, l.also_known_as, l.fields, l.attribution_domains, l.pubkey, a.created_at, l.suspended_at
 		FROM accounts a JOIN local_accounts l ON l.account_id = a.id WHERE a.id = ?`,
 		accountId
 	)
@@ -89,7 +91,14 @@ export function actorDocument(db: Db, accountId: string): Record<string, unknown
 			name: field.name,
 			value: renderFieldValue(field.value),
 		})),
+		...attributionDomainsOf(row.attribution_domains),
 	}
+}
+
+// `attributionDomains`, as ActivityPub::ActorSerializer adds it: only when the account has one.
+export function attributionDomainsOf(stored: string): { attributionDomains?: string[] } {
+	const domains = JSON.parse(stored) as string[]
+	return domains.length === 0 ? {} : { attributionDomains: domains }
 }
 
 // Records an Update of the account's actor if its document changed since `before` (actorDocument's earlier value,

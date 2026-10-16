@@ -2775,3 +2775,37 @@ describe('0023_notification_clears', () => {
 		})
 	})
 })
+
+describe('0024_attribution_domains', () => {
+	it('gives every local account an empty list of attribution domains, and refuses a value that is not a JSON array', async () => {
+		const at = NAMES.indexOf('0024_attribution_domains')
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, MIGRATIONS.slice(0, at)).upgrade()).toMatchObject({ ok: true })
+			const alice = '100000000000000001'
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username) VALUES (?, 'https://kopje.test/ap/users/alice', 'alice')",
+				alice
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'a@example.com', X'00', X'00', 'k')",
+				alice
+			)
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({
+				ok: true,
+				applied: ['0024_attribution_domains'],
+			})
+			expect(sql.exec('SELECT account_id, attribution_domains FROM local_accounts').toArray()).toEqual([
+				{ account_id: alice, attribution_domains: '[]' },
+			])
+			for (const bad of ['not json', '{}', '"writer.example"']) {
+				expect(() => sql.exec('UPDATE local_accounts SET attribution_domains = ?', bad)).toThrow(
+					/CHECK constraint failed/
+				)
+			}
+			sql.exec('UPDATE local_accounts SET attribution_domains = ?', '["writer.example"]')
+			expect(sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
+		})
+	})
+})

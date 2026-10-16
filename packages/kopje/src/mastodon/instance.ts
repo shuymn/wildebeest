@@ -1,13 +1,31 @@
 import { type ApiContext, type ApiDeps, type ApiHandler, storeCall, vapidKey } from './context'
 import { mastodonError } from './errors'
 import { LANGUAGES } from './languages'
+import { MAX_DESCRIPTION } from './media'
+import { PIN_LIMIT } from '../domain/activities'
 import type { InstanceInfo } from '../domain/instance'
 
-// /api/v1/instance and /api/v2/instance in their Mastodon 4.0.2 shapes. The declared version stays 4.0.2 and
-// api_versions is not sent: clients switch to APIs Kopje does not have yet on 4.3+ or api_versions.mastodon >= 2
-// (design §4). The payloads are frozen by a contract test.
+// /api/v1/instance and /api/v2/instance in their Mastodon 4.4 shapes. The payloads are frozen by a contract test.
+//
+// Clients choose APIs by these two numbers, so they are the highest at which every feature a client switches on is
+// one Kopje serves or one whose missing parts the client gets past:
+//   - api_versions.mastodon (v2 only, as in Mastodon) is 6, Mastodon 4.4's. What each step up to it signals, all
+//     served: 2 grouped notifications (/api/v2/notifications); 3 attribution domains (update_credentials), and in the
+//     official Android app OAuth PKCE (S256); 4 delete_media and DELETE /api/v1/media/:id; 5 the blur filter action;
+//     6 featuring hashtags (POST /api/v1/tags/:id/feature). At 6 the official iOS app also shows a default quote
+//     policy in its privacy settings; Kopje ignores source[quote_policy] and no one can quote a Kopje post, so the
+//     setting has no effect and the save still succeeds.
+//   - 7 (Mastodon 4.5) is quote posts: clients would offer quoting in the composer and send quoted_status_id, which
+//     Kopje does not serve, so a quote would post as a plain status. Kopje stays below it until quotes exist.
+//   - version is 4.4.0, the release of api_versions 6. Ice Cubes reads it and switches on at 4.3 grouped
+//     notifications, the notification policy and the link timeline, all served; the official apps read only its major
+//     number; Phanpy reads it only when NodeInfo names the software "mastodon", and Kopje's says "kopje". Kopje had no
+//     build suffix and adds none: NodeInfo names it, as it names Pleroma, Akkoma and GoToSocial.
+// Streaming and translation are not chosen by either number: clients use configuration.urls.streaming and
+// configuration.translation.enabled (false).
 
-export const MASTODON_VERSION = '4.0.2'
+export const MASTODON_VERSION = '4.4.0'
+export const API_VERSIONS = { mastodon: 6 }
 
 const SOURCE_URL = 'https://github.com/shuymn/wildebeest'
 
@@ -70,13 +88,34 @@ export const instanceV2: ApiHandler = async (c, deps) => {
 		usage: { users: { active_month: info.userCount } },
 		thumbnail: { url: `${origin}${THUMBNAIL_PATH}` },
 		languages: [],
+		// Kopje ships no app icons (Mastodon lists its own defaults).
+		icon: [],
 		configuration: {
-			urls: { streaming: `wss://${domain}` },
+			// The about page is /about (app/web.tsx). No status page, privacy policy or terms of service (the last two
+			// answer 404 at /api/v1/instance/*).
+			urls: {
+				streaming: `wss://${domain}`,
+				status: null,
+				about: `https://${domain}/about`,
+				privacy_policy: null,
+				terms_of_service: null,
+			},
 			vapid: { public_key: vapidKey(c.env) },
 			...CONFIGURATION,
+			accounts: { ...CONFIGURATION.accounts, max_pinned_statuses: PIN_LIMIT },
+			media_attachments: { ...CONFIGURATION.media_attachments, description_limit: MAX_DESCRIPTION },
 			translation: { enabled: false },
+			limited_federation: false,
 		},
-		registrations: { enabled: false, approval_required: false, message: null },
+		registrations: {
+			enabled: false,
+			approval_required: false,
+			reason_required: false,
+			message: null,
+			min_age: null,
+			url: null,
+		},
+		api_versions: API_VERSIONS,
 		contact: { email: info.contactEmail ?? '', account: null },
 		rules: info.rules,
 	})

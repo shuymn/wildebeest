@@ -22,6 +22,8 @@ export type LocalActor = {
 	alsoKnownAs: string[]
 	// Profile fields as the owner wrote them; the actor document publishes them as PropertyValue attachments.
 	fields: FieldSource[]
+	// Mastodon's attribution domains, published as `attributionDomains` when there is one (federation.ts).
+	attributionDomains: string[]
 	// A suspended actor is published redacted (federation.ts).
 	suspended: boolean
 	pubkey: string
@@ -41,6 +43,7 @@ type ActorRow = {
 	discoverable: number | null
 	also_known_as: string
 	fields: string
+	attribution_domains: string
 	suspended_at: string | null
 	pubkey: string
 	created_at: string
@@ -57,7 +60,7 @@ export const getInstanceDomain = readOperation<void, string | null>(
 export function localActorOf(db: Db, username: string): LocalActor | null {
 	const row = db.first<ActorRow>(
 		`SELECT a.username, a.actor_type, a.display_name, a.note, a.avatar_url, a.header_url, a.locked, a.discoverable,
-			l.also_known_as, l.fields, l.suspended_at, l.pubkey, a.created_at ${LOCAL_BY_USERNAME}`,
+			l.also_known_as, l.fields, l.attribution_domains, l.suspended_at, l.pubkey, a.created_at ${LOCAL_BY_USERNAME}`,
 		username
 	)
 	if (row === undefined) {
@@ -74,6 +77,7 @@ export function localActorOf(db: Db, username: string): LocalActor | null {
 		discoverable: row.discoverable === null ? null : row.discoverable === 1,
 		alsoKnownAs: JSON.parse(row.also_known_as) as string[],
 		fields: fieldSources(row.fields),
+		attributionDomains: JSON.parse(row.attribution_domains) as string[],
 		suspended: row.suspended_at !== null,
 		pubkey: row.pubkey,
 		createdAt: row.created_at,

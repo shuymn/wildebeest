@@ -257,8 +257,8 @@ describe('cutover import of a converted legacy export', () => {
 		const instance = (await (await h.request('/api/v1/instance')).json()) as Record<string, unknown>
 		expect(instance).toMatchObject({ title: 'Fixture Herd', short_description: 'A synthetic legacy instance' })
 		expect(instance.rules).toEqual([
-			{ id: '1', text: 'No spam' },
-			{ id: '2', text: 'スパム禁止' },
+			{ id: '1', text: 'No spam', hint: '', translations: {} },
+			{ id: '2', text: 'スパム禁止', hint: '', translations: {} },
 		])
 	})
 })
