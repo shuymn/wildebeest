@@ -417,31 +417,37 @@ export const streamAdvance = sessionOperation<{ from: StreamPosition; to: Stream
 )
 
 // Deletes at most PRUNE_BATCH rows in all at or below `upTo`, a finished event, but the newest journal row: it keeps the
-// next id above every id given (the journal has no AUTOINCREMENT counter). A delete's capture rows go first, oldest
-// event first, then the journal rows with none left, so the foreign key's cascade deletes nothing and a call never
-// writes more than PRUNE_BATCH rows however dense the captures; what is left goes in later calls. Returns how many
-// journal rows.
-export const streamPrune = sessionOperation<{ upTo: number }, number>((db, { upTo }) => {
+// next id above every id given (the journal has no AUTOINCREMENT counter). Journal rows go first, so the journal's span
+// shrinks as soon as the fan-out passes them; then, with what is left of the batch, the capture rows of finished
+// deletes, oldest first (they name their event by id only, so nothing cascades). Returns how many journal rows went,
+// and whether prunable rows are left for another call.
+export const streamPrune = sessionOperation<{ upTo: number }, { pruned: number; more: boolean }>((db, { upTo }) => {
+	const changes = () => db.first<{ n: number }>('SELECT changes() AS n')?.n ?? 0
 	db.run(
-		`DELETE FROM stream_delete_viewers WHERE (event_id, account_id) IN (SELECT event_id, account_id
-			FROM stream_delete_viewers WHERE event_id <= ?1 AND event_id < (SELECT max(id) FROM stream_events)
-			ORDER BY event_id, account_id LIMIT ?2)`,
+		`DELETE FROM stream_events WHERE id IN (SELECT id FROM stream_events
+			WHERE id <= ?1 AND id < (SELECT max(id) FROM stream_events) ORDER BY id LIMIT ?2)`,
 		upTo,
 		PRUNE_BATCH
 	)
-	const left = PRUNE_BATCH - (db.first<{ n: number }>('SELECT changes() AS n')?.n ?? 0)
-	if (left === 0) {
-		return 0
+	const pruned = changes()
+	if (pruned < PRUNE_BATCH) {
+		db.run(
+			`DELETE FROM stream_delete_viewers WHERE (event_id, account_id) IN (SELECT event_id, account_id
+				FROM stream_delete_viewers WHERE event_id <= ?1 AND event_id < (SELECT max(id) FROM stream_events)
+				ORDER BY event_id, account_id LIMIT ?2)`,
+			upTo,
+			PRUNE_BATCH - pruned
+		)
 	}
-	db.run(
-		`DELETE FROM stream_events WHERE id IN (SELECT e.id FROM stream_events e
-			WHERE e.id <= ?1 AND e.id < (SELECT max(id) FROM stream_events)
-				AND NOT EXISTS (SELECT 1 FROM stream_delete_viewers v WHERE v.event_id = e.id)
-			ORDER BY e.id LIMIT ?2)`,
-		upTo,
-		left
-	)
-	return db.first<{ n: number }>('SELECT changes() AS n')?.n ?? 0
+	const more =
+		db.first(
+			`SELECT 1 AS x WHERE EXISTS (SELECT 1 FROM stream_events
+					WHERE id <= ?1 AND id < (SELECT max(id) FROM stream_events))
+				OR EXISTS (SELECT 1 FROM stream_delete_viewers
+					WHERE event_id <= ?1 AND event_id < (SELECT max(id) FROM stream_events))`,
+			upTo
+		) !== undefined
+	return { pruned, more }
 })
 
 export type StreamKeys = readonly { key: string; sockets: number }[]

@@ -1246,7 +1246,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   allowance: a turn spends at most 512 checks, 64 presentations, 4 MiB of presented payload and 4,096 sends, runs a
   unit only while what is left covers a unit's worst case (33 checks, one presentation, 256 sends) and leaves the
   rest to the next turn; a payload over 512 KiB is skipped and logged. The journal records nothing once it spans 4,096
-  ids, and is pruned behind the position, at most 500 rows a call counting a delete's capture rows, which go first. _Implemented on branch
+  ids, and is pruned behind the position, at most 500 rows a call: the finished journal rows first, so the span shrinks
+  at once, then a delete's capture rows, in further turns until none is left. A turn that read anything moves the
+  position, also past what it read with nothing to send, before it stops for its budget. _Implemented on branch
   `kopje/streaming-2`:_ a delete's capture is one journal row and at most one row per account in the registry (256),
   each at most 16 KiB (40 boosts); a row over it drops boosts, then list ids, and is logged, and the delete goes on.
   A unit is one subject (the status, or one captured boost) for one viewer, so a delete with 40 boosts is 41 units for

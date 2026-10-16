@@ -3140,7 +3140,7 @@ describe('0028_streaming_home', () => {
 				{ kind: 'status', subject: '200000000000000002' },
 				{ kind: 'edit', subject: '200000000000000002' },
 			])
-			// A capture goes with its journal row.
+			// A capture names its journal row by id only: the row's delete leaves it to streamPrune.
 			const event = sql
 				.exec<{ id: number }>(
 					"INSERT INTO stream_events (kind, subject, created_at) VALUES ('delete', '200000000000000002', '2026-10-12T00:00:00.000Z') RETURNING id"
@@ -3152,7 +3152,8 @@ describe('0028_streaming_home', () => {
 				alice
 			)
 			sql.exec('DELETE FROM stream_events WHERE id = ?', event)
-			expect(sql.exec('SELECT count(*) AS n FROM stream_delete_viewers').one().n).toBe(0)
+			expect(sql.exec('SELECT count(*) AS n FROM stream_delete_viewers').one().n).toBe(1)
+			sql.exec('DELETE FROM stream_delete_viewers')
 			// Once the journal spans 4,096 ids, nothing more is recorded.
 			sql.exec(
 				"INSERT INTO stream_events (id, kind, subject, created_at) SELECT max(id) + 4095, 'status', '0', '2026-10-12T00:00:00.000Z' FROM stream_events"

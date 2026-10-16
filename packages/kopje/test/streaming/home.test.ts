@@ -369,3 +369,55 @@ describe('a delete across turns', () => {
 		expect(turns).toBeGreaterThanOrEqual(2)
 	})
 })
+
+describe('turns over captures nobody can be sent', () => {
+	// `events` finished-or-pending delete events, each capturing `viewers` accounts that have no socket.
+	async function captures(h: ApiHarness, events: number, viewers: number): Promise<number> {
+		await sql(
+			h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO stream_events (kind, subject, created_at)
+			SELECT 'delete', '100000000000000000', '2026-10-12T00:00:00.000Z' FROM n`,
+			events
+		)
+		await sql(
+			h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO stream_delete_viewers (event_id, account_id, lists, boosts)
+			SELECT e.id, printf('7%017d', n.i), '[]', '[]' FROM stream_events e, n WHERE e.kind = 'delete'`,
+			viewers
+		)
+		return (await sql<{ head: number }>(h.store, 'SELECT max(id) AS head FROM stream_events'))[0]!.head
+	}
+
+	it('moves past dense captures whose viewers all left, though no page has anything to send', async () => {
+		const h = await community(['alice'])
+		const inbox = await subscribed(h, h.users.alice.token, 'user')
+		// 64 events of 256 viewers: 2,000 pages and more, several turns' checks.
+		const head = await captures(h, 64, 256)
+		await h.store.streamTick(BUILD)
+		const { turns } = await drained(h, inbox)
+		expect(await sql(h.store, 'SELECT event_id, account_id FROM stream_cursor')).toEqual([
+			{ event_id: head, account_id: null },
+		])
+		expect(inbox.rest()).toEqual([])
+		// The pages, then the pruning of 16,384 capture rows, 500 a turn.
+		expect(turns).toBeLessThanOrEqual(64)
+	})
+
+	it('prunes a dispatched dense journal down to its newest row in continuing turns, with no further write', async () => {
+		const h = await community(['alice'])
+		const inbox = await subscribed(h, h.users.alice.token, 'user')
+		const head = await captures(h, 600, 8)
+		// Already sent: the position is at the head.
+		await sql(h.store, 'UPDATE stream_cursor SET event_id = ?, subject = 0, account_id = NULL', head)
+		await h.store.streamTick(BUILD)
+		const { turns } = await drained(h, inbox)
+		expect(await sql(h.store, 'SELECT id FROM stream_events')).toEqual([{ id: head }])
+		expect(await sql(h.store, 'SELECT count(*) AS n FROM stream_delete_viewers WHERE event_id <> ?', head)).toEqual([
+			{ n: 0 },
+		])
+		// 599 journal rows and 4,792 capture rows, 500 a turn.
+		expect(turns).toBeLessThanOrEqual(Math.ceil((599 + 599 * 8) / 500) + 2)
+	})
+})

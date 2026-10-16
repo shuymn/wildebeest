@@ -12,8 +12,9 @@
 --   stream_delete_viewers   the capture of a delete (R32): written once, before the first change to the status's
 --                           audience, one row per account listening on `user` that could view the status (R3), with
 --                           the boosts of it the account could view (at most 40), and with the list ids whose read
---                           returned it (empty until lists stream). streamPrune deletes these rows in bounded
---                           chunks before their journal row; the foreign key's cascade is only a backstop.
+--                           returned it (empty until lists stream). It names its journal row by id only, with no
+--                           foreign key: streamPrune deletes a finished event's journal row at once, so the journal's
+--                           span shrinks, and its capture rows in bounded chunks after.
 --   stream_cursor.subject   the position within a viewer's units of a delete event: the status is subject 0, the
 --                           viewer's captured boosts follow by id, so a unit is one subject for one viewer.
 --   stream_subscriptions_key the registry by stream key, so the triggers' guard and the capture seek a key's listeners
@@ -31,7 +32,7 @@ CREATE INDEX stream_subscriptions_key ON stream_subscriptions (stream_key, accou
 ALTER TABLE stream_cursor ADD COLUMN subject INTEGER NOT NULL DEFAULT 0;
 
 CREATE TABLE stream_delete_viewers (
-  event_id INTEGER NOT NULL REFERENCES stream_events (id) ON DELETE CASCADE,
+  event_id INTEGER NOT NULL,
   account_id TEXT NOT NULL,
   lists TEXT NOT NULL,   -- JSON: subscribed list ids whose positioned read returned the status
   boosts TEXT NOT NULL,  -- JSON: [[boost id, [list ids]], ...], oldest first, at most 40

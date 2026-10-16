@@ -459,26 +459,26 @@ export class StreamHub {
 					return outcome === 'budget'
 				}
 			}
-			if (state.skipTo !== null) {
-				if (!(await this.#run(streamAdvance, { from: state.from, to: state.skipTo }))) {
-					return false
-				}
-				state.from = state.skipTo
+			if (!(await this.#flush(state))) {
+				return false
 			}
 			if (scan.events.length < SCAN) {
 				const { from } = state
 				const finished = from.account === null ? from.event : from.event - 1
-				await this.#run(streamPrune, { upTo: finished })
-				return false
+				// What is left to prune takes further turns, a bounded batch each.
+				return (await this.#run(streamPrune, { upTo: finished })).more
 			}
 		}
 	}
 
 	// The units of one event, sent in order from the position. A delete's are read a page of viewers at a time, each
-	// page charged to the turn, so neither the work nor the memory of a turn grows with the capture. An event left with
-	// no unit to send is passed over by a position write before the next unit or at the end of the scan (`skipTo`).
-	// Returns whether the walk goes on to the next event, stops for the budget, or lost the position to another turn.
+	// page charged to the turn, so neither the work nor the memory of a turn grows with the capture. What was read and
+	// had nothing to send (an event, or a page of a delete's viewers, whose viewers have no socket that takes it) is
+	// passed over by a pending position (`skipTo`), written before the next unit, at the end of the scan, and before the
+	// turn stops for its budget, so every turn that read something moves the position. Returns whether the walk goes on
+	// to the next event, stops for the budget, or lost the position to another turn.
 	async #event(event: StreamEvent, state: Walk, budget: Budget): Promise<'next' | 'budget' | 'lost'> {
+		const stop = async () => ((await this.#flush(state)) ? 'budget' : 'lost')
 		let after: StreamUnitAfter =
 			state.from.event === event.id && state.from.account !== null
 				? { account: state.from.account, subject: state.from.subject }
@@ -487,7 +487,7 @@ export class StreamHub {
 			let units: Unit[]
 			if (event.kind === 'delete') {
 				if (!budget.covers(UNIT_WORST)) {
-					return 'budget'
+					return stop()
 				}
 				const page = await this.#run(streamDeleteUnits, {
 					eventId: event.id,
@@ -508,14 +508,10 @@ export class StreamHub {
 			}
 			for (const [i, unit] of units.entries()) {
 				if (!budget.covers(UNIT_WORST)) {
-					return 'budget'
+					return stop()
 				}
-				if (state.skipTo !== null) {
-					if (!(await this.#run(streamAdvance, { from: state.from, to: state.skipTo }))) {
-						return 'lost'
-					}
-					state.from = state.skipTo
-					state.skipTo = null
+				if (!(await this.#flush(state))) {
+					return 'lost'
 				}
 				// The event's last unit moves the position past the event directly.
 				const last = !more && i === units.length - 1
@@ -529,11 +525,28 @@ export class StreamHub {
 				}
 				state.from = to
 			}
+			// The page's viewers are done: the next page starts after its last, sent to or not.
+			if (after !== null) {
+				state.skipTo = { event: event.id, subject: after.subject, account: after.account }
+			}
 		}
 		if (state.from.event !== event.id || state.from.account !== null) {
 			state.skipTo = { event: event.id, subject: 0, account: null }
 		}
 		return 'next'
+	}
+
+	// Writes the pending position, if any. False when another turn moved the position first.
+	async #flush(state: Walk): Promise<boolean> {
+		if (state.skipTo === null) {
+			return true
+		}
+		if (!(await this.#run(streamAdvance, { from: state.from, to: state.skipTo }))) {
+			return false
+		}
+		state.from = state.skipTo
+		state.skipTo = null
+		return true
 	}
 
 	// The units an event's candidates make, in order: each viewer with an open socket that opened before the event and

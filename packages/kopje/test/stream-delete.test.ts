@@ -239,23 +239,25 @@ describe('R32: captures are pruned in bounded chunks', () => {
 			INSERT INTO stream_delete_viewers (event_id, account_id, lists, boosts)
 			SELECT e.id, printf('7%017d', n.i), '[]', '[]' FROM stream_events e, n`
 		)
-		const calls: { wrote: number; pruned: number }[] = []
+		const calls: { wrote: number; pruned: number; more: boolean }[] = []
 		for (let i = 0; i < 10; i++) {
 			const call = await runInDurableObject(t.store, (_instance, state) => {
 				const db = new Db(state.storage.sql)
 				const changes = () => db.first<{ n: number }>('SELECT total_changes() AS n')!.n
 				const before = changes()
-				const pruned = state.storage.transactionSync(() => streamPrune.run(state.storage.sql, { upTo: 3 }))
-				return { wrote: changes() - before, pruned }
+				const done = state.storage.transactionSync(() => streamPrune.run(state.storage.sql, { upTo: 3 }))
+				return { wrote: changes() - before, ...done }
 			})
 			calls.push(call)
-			if (call.wrote === 0) {
+			if (!call.more) {
 				break
 			}
 		}
-		expect(calls.length).toBeGreaterThan(2)
+		expect(calls.length).toBeGreaterThan(1)
 		expect(calls.every((call) => call.wrote <= STREAM_PRUNE_BATCH)).toBe(true)
-		expect(calls[0]!.wrote).toBe(STREAM_PRUNE_BATCH)
+		// The finished journal rows go in the first call, so the span shrinks at once; their captures follow.
+		expect(calls[0]).toEqual({ wrote: STREAM_PRUNE_BATCH, pruned: 3, more: true })
+		expect(calls.at(-1)!.more).toBe(false)
 		expect(await sql(t.store, 'SELECT id FROM stream_events')).toEqual([{ id: 4 }])
 		expect(await sql(t.store, 'SELECT DISTINCT event_id FROM stream_delete_viewers')).toEqual([{ event_id: 4 }])
 	})
