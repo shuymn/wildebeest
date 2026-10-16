@@ -232,6 +232,12 @@ export function localRole(db: Db, accountId: string): Role {
 // admin as a viewer at that time.
 export type Admin = { accountId: string; clientId: string; now: number; context: UserContext }
 
+// R32's capture (streaming.ts streamDelete): an account listening on a list stream as a viewer at the time of the
+// delete, for its lists' reads positioned at the deleted status.
+export function listenerContext(accountId: string, now: number): UserContext {
+	return contextOf(accountId, now)
+}
+
 // R37: another account as a viewer at the admin's request time, for what the admin is shown only while that account
 // may still see it (the statuses a report names, as its reporter sees them: domain/reports.ts).
 export function viewerOf(admin: Admin, accountId: string): UserContext {

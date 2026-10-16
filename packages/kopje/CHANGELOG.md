@@ -10,6 +10,109 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Added
 
+- The streaming API's `list` stream (`read` or `read:statuses`, with `list` naming one of the account's lists) carries
+  the list's timeline: `update` and `status.update` when a status enters it or one in it is edited (as
+  `GET /api/v1/timelines/list/:id` would show it at its place), and `delete` when a status or boost it held is deleted.
+  The stream is echoed as `["list", "<id>"]`. A missing `list` answers `Missing list name parameter`, another
+  account's list `Not authorized to stream this list` (401), as Mastodon; a value that is not a list id answers
+  `Invalid parameter` (400).
+- The `direct` stream (`read` or `read:statuses`) carries `conversation` whenever one of the account's conversations
+  changes (a new status, read or unread, its last status deleted), as the conversation list presents it. Deleting a
+  conversation sends nothing, as in Mastodon. Where Kopje differs: after a burst (accepting a request that adds many
+  conversations at once) only the 20 newest changes are sent; the conversation list shows the rest.
+- `notifications_merged` (payload `"1"`) is sent on `user` (with `read` or `read:notifications`) and
+  `user:notification` when the account's last pending accepted notification request has had its notifications
+  unfiltered, or a dismiss replaces it, as Mastodon's. Where Kopje differs: nothing is sent when the sender's purge
+  cancels the job.
+- `public*` and `hashtag*` still answer `{"error":"Unknown stream type","status":400}`.
+- Quote posts received from other servers are stored and verified, as Mastodon 4.5 does (FEP-044f). Nothing shows them
+  yet: the API, the web pages and the notifications are unchanged, and a quote is still seen as its `RE:` link.
+    - A post that quotes another (Mastodon's `quote`, or Misskey's and Fedibird's `_misskey_quote`, `quoteUrl` and
+      `quoteUri`) keeps its quote, with every path that stores a post: delivered, boosted, found by search or fetched
+      as a pin. A quote of a deleted post (a `Tombstone`) is kept as deleted. A quoted post embedded by its own author
+      is taken as embedded, so a followers-only self-quote its server serves to nobody is still verified.
+    - A quote is accepted when it quotes its own author's post, or when the quoted author's approval (the stamp, a
+      `QuoteAuthorization` fetched from its own server) names exactly that quote of exactly that post. Other quotes stay
+      pending, as Mastodon keeps them; one whose stamp is gone is rejected. Verification fetches the quoted post and its
+      author when Kopje does not have them, runs in the background rounds the delivery asks for (seconds later, or at
+      the next cron run), signed by a local recipient or follower when there is one, and is retried five times over
+      about 15 hours; a verification that needs more fetches than a round allows goes on in the next round from where
+      it stopped. A post first stored only as the target of a quote is verified like any other once it is delivered,
+      boosted, searched for or pinned for itself.
+    - The quoted author's `Delete` of a stamp revokes the quotes of their posts approved by it, for good; nobody else's
+      `Delete` of the same address revokes anything of theirs. The same `Delete` relayed by
+      another server (the quoting server forwards it) is applied when it carries the author's own signature (a Linked
+      Data Signature or an FEP-8b32 proof); without one, Kopje only checks the stamp again.
+    - Kopje's own posts now say that nobody but their author may quote them (`interactionPolicy.canQuote`), as Mastodon
+      already assumes of a post without a policy.
+
+- The admin API's accounts are served to the admin: the role's `manage_users` is granted with local suspension
+  (below), so `GET /api/v1/admin/accounts`, `GET /api/v2/admin/accounts` and `GET /api/v1/admin/accounts/:id`, and
+  `POST .../enable`, `unsilence`, `unsensitive`, `approve` and `reject`, as described for 0.1.0-rc.10, now answer the
+  admin; everyone else is still answered 403. `GET /api/v1/accounts/verify_credentials` shows the admin's role with
+  the permissions served (`1040`: manage_reports and manage_users).
+- Local suspension through the admin API: `POST /api/v1/admin/accounts/:id/action` with `type` `suspend` suspends a
+  local account, and `none` resolves the report named by `report_id`, if any; the answer is `{}`.
+  `POST /api/v1/admin/accounts/:id/unsuspend` lifts a local suspension and returns the account.
+    - A suspended account is unavailable at once: hidden as before, and every access token, web session, unused
+      authorization code and push subscription it had is refused from that moment, also after it is unsuspended, so
+      the user signs in again, which works as soon as it is unsuspended. This needs no clock: each credential carries
+      the account's credential epoch, which a suspension moves. Its tokens are deleted afterwards, in the background.
+    - Its unresolved reports filed before the suspension are resolved, in the background, unless the admin changed one
+      since, even in the suspension's own millisecond; a report filed later stays open.
+    - Other servers are sent an `Update` of its actor, redacted and marked `suspended`, and on unsuspension one of the
+      full actor, as Mastodon sends them: to its remote followers, the remote accounts its posts of the two days
+      before the suspension mention, and those it followed or asked to follow in those days. The audience is gathered
+      in the background, in bounded rounds, so the `Update` leaves within minutes rather than at once.
+    - While suspended, the account's posts, boosts and other activities still waiting for delivery are dropped when
+      the queue reaches them, which it does within moments; only its retractions (deletes, undos) and the
+      suspension's `Update` go out. A delivery already in flight when the suspension commits may still be sent.
+    - Where Kopje differs from Mastodon: `disable`, `sensitive` and `silence` are answered 422
+      `Validation failed: Type is not included in the list`, as an unknown type is (Kopje has none of these states);
+      `suspend` of a remote account is answered 422 for now; `text` and `warning_preset_id` are accepted and dropped
+      (Kopje keeps no warnings and sends no email); no action may target the admin's own account (403), as Mastodon
+      refuses the Owner acting on the Owner; report resolution and the `Update`s finish in background rounds; and the
+      `Update`s' recent mentions and follows count at most 2,000 inboxes each that no earlier source of the same
+      `Update` reached, where Mastodon counts each source's own distinct inboxes.
+- `POST /admin/accounts/unsuspend` and `kopje-admin account unsuspend <username>` (Access only) unsuspend a local
+  account as the admin API does, logged with the Access identity. It recovers a suspended admin, whom no admin can
+  unsuspend.
+
+### Fixed
+
+- The streaming API no longer sends a status (`update`) or an edit (`status.update`) over and over, with turns that
+  never end, when it reaches more listeners than one turn of the fan-out serves (a status in the home timelines of more
+  than 64 listening accounts, for one): the turn that went on with the event's remaining listeners moved its position
+  back to where it resumed, so the next turn sent them the event again. Each listener now receives it once. A
+  notification, which has one recipient, was not affected.
+
+### Instance changes
+
+- Store schema: adds three migrations, applied in order on the first request after the deploy; a rollback to an
+  earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
+    - `0032_streaming_lists`: rebuilds the streaming journal (at most a 4,096-id span of rows) to admit conversation
+      events, adds a column of the streaming position, lets a list subscription journal statuses and edits (the
+      journal's triggers recreated), adds the per-account conversation mark table (left out of dumps and backups, as the
+      other streaming tables are), a `stream_seq` column on conversations with a constant default and an index on it,
+      and recreates the trigger that moves a conversation's last status back so it also takes the owner's next change
+      sequence. It reads each conversation once, for the index, and the journal's rows; nothing else: on a benchmark
+      store of 1,000,000 accounts, 3,000,000 follows and 2,000,000 statuses its upgrade took 2.3 seconds in workerd's
+      local Durable Object SQLite.
+    - `0033_quotes`: adds the empty `quotes` and `quote_revocations` tables, their indexes and the triggers that keep
+      the new `statuses.quotes_count`. The column has a constant default and no constraint, so stored statuses are
+      neither read nor rewritten; nothing is backfilled (stored posts keep their quote properties in `raw`), so the
+      migration's work does not grow with the instance: on the same benchmark store its upgrade took 2.2 seconds.
+    - `0032_admin_suspension`: adds the credential epoch columns to the local accounts and the OAuth tokens, and the
+      empty tables of the moderation jobs and their staged audience. The columns have a constant default, so it reads
+      no row: on the same benchmark store its upgrade took 2.3 seconds.
+- `wrangler.jsonc`: unchanged.
+
+## [0.1.0-rc.10] - 2026-10-16
+
+A tenth release candidate of the first release, published under the npm dist-tag `next`.
+
+### Added
+
 - The streaming API's `user` stream (`read` or `read:statuses`) carries the home timeline, as Mastodon 4.5's does:
   `update` when a status or boost enters it (the account's own included), `status.update` when a status in it is
   edited, and `delete` (the id) when a status or boost the account could see is deleted or unboosted. Each status is the
@@ -52,10 +155,11 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       category is answered 422 where Mastodon fails.
     - The reporter's report shows `action_taken` once it is resolved.
     - `GET /api/v1/accounts/verify_credentials` shows the admin's role as `Owner` (id 3) with the permissions
-      served (`1040`: manage_reports and manage_users); every other account keeps the default role.
-- The admin API's accounts are served to that admin (the role's `manage_users`): `GET /api/v1/admin/accounts`,
-  `GET /api/v2/admin/accounts` and `GET /api/v1/admin/accounts/:id`, `POST .../action` and `unsuspend` (below), and
-  `POST .../enable`, `unsilence`, `unsensitive`, `approve` and `reject`. Everyone else is still answered 403.
+      served (`16`); every other account keeps the default role.
+- The admin API's accounts, for the admin once Kopje grants the role `manage_users`, which it does with local
+  suspension (until then these routes still answer 403 to everyone, the admin included): `GET /api/v1/admin/accounts`,
+  `GET /api/v2/admin/accounts` and `GET /api/v1/admin/accounts/:id`, and `POST .../enable`, `unsilence`,
+  `unsensitive`, `approve` and `reject`.
     - The lists take Mastodon's filters: v1's names and defaults (active local accounts unless `remote` or a state is
       sent; the last state sent wins; `staff`), and v2's `origin`, `status`, `permissions=staff` and `role_ids`
       (one or many), with `username` (a prefix, a leading `@` dropped), `display_name` (a prefix), `email` (a
@@ -74,32 +178,6 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       as wildcards) and compare letters case-insensitively in ASCII only.
     - `enable`, `unsilence` and `unsensitive` change nothing, log the action and return the account (`enable` needs a
       local account); `approve` and `reject` are answered 403, as Mastodon answers them for an approved user.
-- Local suspension through the admin API: `POST /api/v1/admin/accounts/:id/action` with `type` `suspend` suspends a
-  local account, and `none` resolves the report named by `report_id`, if any; the answer is `{}`.
-  `POST /api/v1/admin/accounts/:id/unsuspend` lifts a local suspension and returns the account.
-    - A suspended account is unavailable at once: hidden as before, and every access token, web session, unused
-      authorization code and push subscription it had is refused from that moment, also after it is unsuspended, so
-      the user signs in again, which works as soon as it is unsuspended. This needs no clock: each credential carries
-      the account's credential epoch, which a suspension moves. Its tokens are deleted afterwards, in the background.
-    - Its unresolved reports filed before the suspension are resolved, in the background, unless the admin changed one
-      since, even in the suspension's own millisecond; a report filed later stays open.
-    - Other servers are sent an `Update` of its actor, redacted and marked `suspended`, and on unsuspension one of the
-      full actor, as Mastodon sends them: to its remote followers, the remote accounts its posts of the two days
-      before the suspension mention, and those it followed or asked to follow in those days. The audience is gathered
-      in the background, in bounded rounds, so the `Update` leaves within minutes rather than at once.
-    - While suspended, the account's posts, boosts and other activities still waiting for delivery are dropped when
-      the queue reaches them, which it does within moments; only its retractions (deletes, undos) and the
-      suspension's `Update` go out. A delivery already in flight when the suspension commits may still be sent.
-    - Where Kopje differs from Mastodon: `disable`, `sensitive` and `silence` are answered 422
-      `Validation failed: Type is not included in the list`, as an unknown type is (Kopje has none of these states);
-      `suspend` of a remote account is answered 422 for now; `text` and `warning_preset_id` are accepted and dropped
-      (Kopje keeps no warnings and sends no email); no action may target the admin's own account (403), as Mastodon
-      refuses the Owner acting on the Owner; report resolution and the `Update`s finish in background rounds; and the
-      `Update`s' recent mentions and follows count at most 2,000 inboxes each that no earlier source of the same
-      `Update` reached, where Mastodon counts each source's own distinct inboxes.
-- `POST /admin/accounts/unsuspend` and `kopje-admin account unsuspend <username>` (Access only) unsuspend a local
-  account as the admin API does, logged with the Access identity. It recovers a suspended admin, whom no admin can
-  unsuspend.
 - The moderation log: every admin write through the admin API, and every account repair through `/admin`, is
   recorded with who made it (the admin's account and client, or the Access identity), in the write's transaction.
   It keeps the newest 10,000 entries. `GET /admin/moderation-log` and `kopje-admin moderation-log` show it, to
@@ -110,7 +188,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds five migrations, applied in order on the first request after the deploy; a rollback to an earlier
+- Store schema: adds four migrations, applied in order on the first request after the deploy; a rollback to an earlier
   version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0028_streaming_home`: adds the triggers that journal a status inserted while an account subscribes to `user`,
       and an edit while one subscribes to `user` or `user:notification`, the empty `stream_delete_viewers` table (a
@@ -126,9 +204,6 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
     - `0031_admin_accounts_available`: adds an index of the accounts whose deletion has not started, by id, so the
       admin's list of active accounts skips none awaiting their purge. It reads only the accounts: on the same
       benchmark store its upgrade took 2.8 seconds.
-    - `0032_admin_suspension`: adds the credential epoch columns to the local accounts and the OAuth tokens, and the
-      empty tables of the moderation jobs and their staged audience. The columns have a constant default, so it reads
-      no row: on the same benchmark store its upgrade took 2.3 seconds.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.9] - 2026-10-16

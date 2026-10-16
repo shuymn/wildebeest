@@ -8,9 +8,10 @@ import { BUILD } from '../helpers'
 import { token } from '../inbox-status-helpers'
 import { scopedToken } from '../read-helpers'
 import { act, community, follow, getJson, post, remoteAccount, type Status } from '../status-helpers'
-import { drained, type Inbox, type StreamMessage, subscribed } from './stream-helpers'
+import { connect, drained, echo, type Inbox, type StreamMessage, subscribed } from './stream-helpers'
 import { Db } from '../../src/db/sql'
 import { streamDelete } from '../../src/domain/streaming'
+import { sha256Hex } from '../../src/security/tokens'
 
 // The `user` stream's statuses (design "Kopje streaming API" PR 2): `update` when a status enters home (R33: home
 // positioned at it, within the real-time window), `status.update` when one is edited (home, or the viewer's mention of
@@ -420,4 +421,57 @@ describe('turns over captures nobody can be sent', () => {
 		// 599 journal rows and 4,792 capture rows, 500 a turn.
 		expect(turns).toBeLessThanOrEqual(Math.ceil((599 + 599 * 8) / 500) + 2)
 	})
+})
+
+describe('a status event across turns', () => {
+	const VIEWERS = 100
+
+	// 100 local accounts following the author, each with a socket on `user` of its own token: one turn presents at most
+	// 64 statuses, so the event's units span two turns, the second resuming from the persisted account.
+	it('sends each listener the status once when the event resumes in a later turn, and the turns end', async () => {
+		const h = await community(['author'])
+		await sql(
+			h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO accounts (id, uri, username) SELECT printf('5%017d', i), 'https://kopje.test/ap/users/v' || i, 'v' || i FROM n`,
+			VIEWERS
+		)
+		await sql(
+			h.store,
+			`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey)
+			SELECT id, username || '@mail.example', x'00', x'00', 'k' FROM accounts WHERE id GLOB '5*'`
+		)
+		await sql(
+			h.store,
+			"INSERT INTO follows (account_id, target_account_id, state) SELECT id, ?, 'accepted' FROM accounts WHERE id GLOB '5*'",
+			h.users.author.id
+		)
+		const inboxes: Inbox[] = []
+		for (let i = 1; i <= VIEWERS; i++) {
+			const id = `5${String(i).padStart(17, '0')}`
+			await sql(
+				h.store,
+				"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) SELECT ?, 'access', client_id, ?, 'read' FROM oauth_tokens LIMIT 1",
+				await sha256Hex(`resume-${id}`),
+				id
+			)
+			const inbox = await connect(h, `resume-${id}`)
+			inbox.send({ type: 'subscribe', stream: 'user' })
+			inboxes.push(inbox)
+		}
+		for (const inbox of inboxes) {
+			await echo(inbox)
+		}
+		const before = (await drained(h)).turns
+		const status = await post(h, h.users.author, { status: 'for every follower', visibility: 'public' })
+		// Quiescent: the barrier resolves only once no turn runs or is asked for and the position is at the head.
+		const { turns } = await drained(h, ...inboxes)
+		for (const inbox of inboxes) {
+			expect(events(inbox)).toEqual([['user', 'update', status.id]])
+		}
+		expect(turns - before).toBeGreaterThanOrEqual(2)
+		// Asking again runs no further turn and sends nothing.
+		expect((await drained(h, ...inboxes)).turns).toBe(turns)
+		expect(inboxes.every((inbox) => inbox.rest().length === 1)).toBe(true)
+	}, 60_000)
 })

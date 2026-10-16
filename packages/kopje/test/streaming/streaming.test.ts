@@ -150,7 +150,7 @@ describe('the subscribe protocol', () => {
 	it('answers an unknown or unserved stream with Unknown stream type, and an unknown unsubscribe', async () => {
 		const h = await community(['alice'])
 		const inbox = await connect(h, h.users.alice.token)
-		for (const stream of ['local', 'public', 'public:local', 'hashtag', 'list', 'direct', 42]) {
+		for (const stream of ['local', 'public', 'public:local', 'hashtag', 42]) {
 			inbox.send({ type: 'subscribe', stream, tag: 'kopje', list: '1' })
 			expect(await inbox.next()).toEqual({ error: 'Unknown stream type', status: 400 })
 		}

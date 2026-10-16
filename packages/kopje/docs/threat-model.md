@@ -97,7 +97,22 @@ against their own instance. TLS is assumed between all parties.
   its actor document both answer 404 or 410: it is verified with the stored key at any age. A live actor is never
   deleted with a key its current document does not list (401), and a transient failure answers 503. _Enforced (main):_ `receiveInbound` in `src/federation/inbound.ts`;
   `test/inbox.test.ts` ("ID-1: an inbound activity acts only for its signer"), `test/inbox-regressions.test.ts`
-  ("stored keys, rotation and ownership").
+  ("stored keys, rotation and ownership"). A second exception: a `Delete` another server relays (a quoting server
+  forwarding the quoted author's revocation of a quote's stamp, signed with its own key, as Mastodon forwards it). Its
+  HTTP signer must own its key by the same rule; the `Delete` is applied as its `actor`'s only when it carries that
+  actor's own proof, an RsaSignature2017 Linked Data Signature or an FEP-8b32 proof, which Fedify verifies against a key
+  the actor's current document embeds (no other key is ever loaded), and only when the proven activity is a `Delete`
+  with exactly the id, actor and object Kopje read. Applied, it reaches one handler, which acts only on what is neither
+  an actor, a status nor a boost (so on a stamp at most). A relay without a proof is applied as nothing but a reason to
+  verify the actor's accepted quote naming the stamp again; a proof that does not verify answers 401; any other
+  activity signed by a key its actor does not own still answers 401. Fedify 2.4.4 refuses `@graph`, `@included` and
+  `@reverse` (and their aliases) before and after compacting a signed document and verifies the compacted form it
+  parses, the class of Linked Data Signature bypass Mastodon fixed in 4.5.10 (GHSA-53m7-2wrh-q839). _Implemented on
+  branch `kopje/quotes-1a`:_ `relayed` in `src/federation/inbound.ts`, `src/federation/author-proof.ts`,
+  `relayedDelete` in `src/domain/inbox.ts`; `test/quotes.test.ts` ("relayed revocations (ID-1’s one exception)": a
+  missing proof, a forged signature, a proof by another actor's key, a proof covering another object, a valid proof on
+  another activity type and on the `Delete` of a status), `test/inbox.test.ts` ("records no retraction for input that
+  fails ID-1").
 - **ID-2: a fetched document is trusted only for its own origin.** The identity of a fetched object is its parsed `id`
   after JSON-LD processing, and it must have the origin of the final response URL. The loader's literal `id` check is a
   pre-filter. Cross-origin redirects are refused. _Enforced (main):_ `src/federation/loader.ts`;
@@ -130,7 +145,17 @@ against their own instance. TLS is assumed between all parties.
   (VIS-6); `Undo` of a `Like` or `Announce` the actor's own; `test/inbox-statuses.test.ts` ("ID-6: another actor of
   the same origin cannot update a status", "deletes the author’s status with its children, and nothing of anyone
   else’s (ID-6, ID-3)", "ID-6, ID-7: keeps an Undo that arrived before its Like", "ID-6, VIS-6: a boost of a private,
-  direct or unfetchable object stores nothing").
+  direct or unfetchable object stores nothing"). _Implemented on branch `kopje/quotes-1a`_ for the `Delete` of a quote's
+  stamp (FEP-044f's `QuoteAuthorization`, a row of the same table): only the quoted status's author revokes, and only
+  the quotes of that author's statuses that name the stamp; the revocation is recorded once, for good, under the stamp
+  and that author (`quote_revocations`), so the stamp never verifies a quote of that author's statuses again, and
+  another actor's `Delete` of the same URI revokes nothing of theirs, and a `Delete` that arrived before the quote wins
+  (ID-7). A received quote is accepted only as a self-quote or by a stamp fetched from its own id that passes every check
+  (the quoted author's, on that author's origin, naming exactly this quote of exactly that status); a local quoted status
+  is never accepted from outside. A quoted Note embedded in a status is taken only when it is that status's author's
+  own (its `attributedTo` the author, its id on the author's origin), with one hop less of work. `revokeStamp` and `completeQuote` in `src/domain/quotes.ts`; `test/quotes.test.ts`
+  ("is not taken from anyone but the quoted author", "leaves a quote pending when its stamp is …", "wins over a quote
+  that arrives after it").
 - **ID-7: replay changes nothing twice.** A repeated activity creates no second relationship, counter change,
   notification, push or outbound intent (natural keys). A valid `Delete` or `Undo` that arrives before its target is
   recorded for 30 days and prevents the target from appearing later. Input that fails ID-1 or ID-6 reserves no key and
@@ -554,7 +579,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `Authorization` header or the subprotocol, never from the URL, which the platform's invocation logs record (Mastodon
   also takes `access_token`; a query token alone answers 401 as none does); the Worker sends only its sha256 to the
   Store, which validates it (DATA-5). Each subscription
-  needs its stream's scope (`read:statuses` for `user`, `read:notifications` for `user:notification`), and notifications
+  needs its stream's scope (`read:statuses` for `user`, `list` and `direct`, `read:notifications` for
+  `user:notification`), a `list` subscription the viewer's own list, and notifications
   go on `user` only with `read:notifications` too. A write records ids only (`stream_events`, by a trigger); each
   message is made later in its own transaction, which authorizes the socket's token again and runs the reference for
   its event and stream (R33): for a `notification` on `user` or `user:notification`, the recipient's notification
@@ -562,16 +588,20 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   REST presents it; for an `update` on `user`, home positioned at the status (R9, the read with `max_id` just above it,
   narrowed to it), for a status published within 6 hours of its arrival; for a `status.update`, home positioned at it
   or, only with `read:notifications`, the viewer's mention notification of it (R15), and on `user:notification` the
-  mention alone. A `delete` is the one message judged at write time (R32): captured once, before anything changes the
+  mention alone; on `list:<id>`, the list positioned at the status, which must still be the viewer's; for a
+  `conversation` on `direct`, the viewer's own conversation row, presented as the list presents it (R25); for
+  `notifications_merged`, a notification scope. A `delete` is the one message judged at write time (R32): captured once, before anything changes the
   status's audience (a local delete or unboost, a remote `Delete` when its job is created and before its first batch
-  removes the mentions, a remote `Delete` or `Undo` of a boost), it names only the accounts listening on `user` that
-  could view the status, and each one's boosts of it that it could view, at most 40, in rows of proven size that a
+  removes the mentions, a remote `Delete` or `Undo` of a boost), it names only the accounts listening on `user` or a
+  list that could view the status, each one's boosts of it that it could view, at most 40, and the lists whose read
+  held each, sent on a list only while it is still the viewer's, in rows of proven size that a
   truncation keeps within bounds without failing the delete. Nothing authorized is kept across units. Each unit is sent at most once: the position past it is
   persisted by compare-and-set before its messages go, and a send that fails closes the sockets left without it
   (1011), whose clients read REST again. Every turn checks every open socket's token again, so the socket of a revoked
   token, a signed-out web session or a suspended account closes (1008) at the next turn, which any write starts, and an
-  expired token's at the cron's turn within 5 minutes. The other streams (`public*`, `hashtag*`, `list`, `direct`)
-  answer `Unknown stream type` for now. The work is bounded (RES-6, RES-7). _Implemented on branch
+  expired token's at the cron's turn within 5 minutes. A conversation's change is sent at most once to each socket:
+  its convSeq is raised and written before the send. The other streams (`public*`, `hashtag*`) answer `Unknown stream
+type` for now. The work is bounded (RES-6, RES-7). _Implemented on branch
   `kopje/streaming-1`:_ `src/mastodon/streaming.ts`, `src/stream-hub.ts`, `src/domain/streaming.ts`,
   `authorizeStream` in `src/domain/auth.ts`, `streamedNotification` in `src/domain/notifications.ts`, migration
   `0026_streaming`; `test/streaming/streaming.test.ts`, `test/policy-bounds.test.ts`, `test/log-redaction.test.ts`,
@@ -580,6 +610,12 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `src/domain/notifications.ts`, `deleteAudience` in `src/domain/audience.ts`, `streamUnit` and `streamDelete` in
   `src/domain/streaming.ts`, migration `0028_streaming_home`; `test/streaming/home.test.ts`,
   `test/streaming-oracle.test.ts`, `test/stream-delete.test.ts`, `test/layering.test.ts`,
+  `test/policy-bounds.test.ts`, `test/migrations.test.ts`, `test/cascade-guard.test.ts`. _Implemented on branch
+  `kopje/streaming-3`:_ lists, direct and merged: `listStatus` in `src/domain/timelines.ts`, `streamedConversation`
+  and the change sequence in `src/domain/conversations.ts`, the merge transition in
+  `src/domain/notification-requests.ts`, `streamUnit`, `streamDelete` and `streamConversations` in
+  `src/domain/streaming.ts`, migration `0032_streaming_lists`; `test/streaming/lists.test.ts`,
+  `test/streaming/direct.test.ts`, `test/streaming-oracle.test.ts`, `test/stream-delete.test.ts`,
   `test/policy-bounds.test.ts`, `test/migrations.test.ts`, `test/cascade-guard.test.ts`.
 
 - **VIS-29: admin views and actions disclose and change only through the admin account.** Only the OAuth admin,
@@ -1293,12 +1329,36 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   and sorts all the targets left, so a boost's withdrawal (by a purge, or by a remote author's `Delete` of the boosted
   status) costs work proportional to its audience in every batch until it is staged. Receipt enumeration has this in
   common with follower enumeration.
+  _Implemented on branch `kopje/quotes-1a`_ for received quotes: a quote's verification goes in stages of one
+  document each (the quoted status, its author when Kopje lacks it, the status again, the stamp), each through loaders
+  of its own, so no stage reads another's fetch; between stages only the author's address is kept, never a fetched
+  document, so the status is stored only from a fresh fetch. Each stage's outcome applies only to the generation of
+  the work it read (a number drawn anew whenever the quote's target, stamp, stage or outcome changes), so a late or
+  concurrent outcome is discarded. Only job rounds verify quotes: an inbox request that makes work due only asks the
+  Queue for a round, and a round leases what it claims, so nothing else touches the work meanwhile; a relayed `Delete`
+  without the author's proof renews only idle work, leaves work that is due or backing off as it is, and only marks a
+  leased one to be checked once more, so replays never keep a genuine 404 from applying. A job round (Queue or cron)
+  verifies at most 10 quotes, each stage with a whole budget of its own (8 fetches, redirect hops and contexts included), so a heavy or
+  failing quote starves no other, and charges every failure of a stage, a budget or deadline that ran out included, as
+  it does a stage the Store cannot apply: a stage that never fits a budget is given up after the last attempt, and a
+  round that only failed asks for no other (the backoff says when the work is due). A status stored for a
+  verification gets one hop less of work, so one traversal stops two levels below the status that arrived, however
+  long a chain of quotes; a failed verification is retried five times (1, 5, 30, 120 and 720 minutes later), then given
+  up until its status arrives
+  again. A stamp's `Delete` writes one `quote_revocations` row and changes the quotes naming it in batches of at most
+  500 rows counted with `total_changes()` (a row and its count trigger), the first in the request and the rest in the
+  inbound job rounds. A newly stored status links at most 100 unresolved quotes naming it. `src/domain/quotes.ts`,
+  `src/federation/quotes.ts`; `test/quotes.test.ts` ("verifies a chain two levels below the status that arrived",
+  "processes 3000 quotes naming the stamp in bounded batches"), `test/cascade-guard.test.ts` (a purged status's
+  accepted quote within the exact budget), `test/policy-bounds.test.ts` ("received quotes cost their work a bounded
+  read").
   Streaming (VIS-26): _Implemented on branch `kopje/streaming-1`:_ at most 16 sockets per account (429) and 256 per
   instance (503); 16 subscriptions per socket, 16 stream keys per account and a socket's attachment at most 12 KiB
   (`Too many subscriptions`, 429); incoming messages text only (1003), at most 4 KiB and 120 a minute (1008). The
   fan-out runs in turns, one at a time, each an incoming request to the Store's own stub, which restores the CPU
   allowance: a turn spends at most 512 checks, 64 presentations, 4 MiB of presented payload and 4,096 sends, runs a
-  unit only while what is left covers a unit's worst case (33 checks, one presentation, 256 sends) and leaves the
+  unit only while what is left covers a unit's worst case (34 checks: 16 tokens, home, the mention and 16 lists; one
+  presentation, 256 sends) and leaves the
   rest to the next turn; a payload over 512 KiB is skipped and logged. The journal records nothing once it spans 4,096
   ids, and is pruned behind the position, at most 500 rows a call: the finished journal rows first, so the span shrinks
   at once, then a delete's capture rows, in further turns until none is left. A turn that read anything moves the
@@ -1307,7 +1367,17 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   each at most 16 KiB (40 boosts); a row over it drops boosts, then list ids, and is logged, and the delete goes on.
   A unit is one subject (the status, or one captured boost) for one viewer, so a delete with 40 boosts is 41 units for
   each viewer, each within a unit's worst case; the position names the viewer and the subject within the event. The status and edit
-  triggers write one journal row per status write, under the same span, and no batched delete or purge fires them. `src/stream-hub.ts`, `src/domain/streaming.ts`;
+  triggers write one journal row per status write, under the same span, and no batched delete or purge fires them.
+  _Implemented on branch `kopje/streaming-3`:_ a delete's capture also holds each viewer's lists (at most 16 for the
+  status and each boost, within the same 16 KiB); a list's check is one narrowed read. A conversation's change moves its owner's mark,
+  which journals one 'conversation' event for the owner unless one is still ahead of the position, so a burst is one
+  row and a busy owner waits behind the others (FIFO); its units are the owner's newest 20 changes up to a
+  ceiling fixed (with the position) when the fan-out enters the event, read through an index, each its own unit under
+  the persisted position, older ones skipped; a change written after that goes to the owner's next row, so an event
+  ends however fast its owner writes. A conversation's last status moved back by
+  a status's removal writes the owner's mark and that journal row too, so the batched delete of a status's conversation
+  links takes a fourth of the rows left (`LIMIT ?2 / 4`). `notifications_merged` is one journal
+  row per transition, under the span. `src/stream-hub.ts`, `src/domain/streaming.ts`;
   `test/streaming/streaming.test.ts`. _Gap:_ the budgets count work, not CPU time; a turn at the limits is to be
   measured on a deployed instance, as is how long a hibernated idle socket stays open.
 - **RES-7: query work is bounded, not only the rows returned.** Feeds apply visibility and filters in the query before

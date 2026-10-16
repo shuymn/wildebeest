@@ -32,7 +32,7 @@ import {
 	MAX_FILTER_KEYWORDS,
 	MAX_FILTERS,
 } from '../src/domain/filters'
-import { inboxOwnerExists } from '../src/domain/inbox'
+import { inboxOwnerExists, PURGE_BATCH } from '../src/domain/inbox'
 import { listAccounts } from '../src/domain/lists'
 import { getMarkers, MARKER_TIMELINES } from '../src/domain/markers'
 import {
@@ -58,6 +58,15 @@ import { clearNotifications, listNotifications, REMOVAL_BATCHES, REMOVAL_WINDOW 
 import { readOperation, writeOperation } from '../src/domain/operation'
 import { getPoll, vote } from '../src/domain/polls'
 import {
+	claimQuotes,
+	linkQuotes,
+	MAX_LINKED_QUOTES,
+	QUOTE_ROUND,
+	quoteWork,
+	recheckStamp,
+	revokeStamp,
+} from '../src/domain/quotes'
+import {
 	claimCollectionSync,
 	featureRemote,
 	MAX_REMOTE_PINS,
@@ -75,7 +84,16 @@ import {
 	MAX_STATUSES_BY_ID,
 	statusContext,
 } from '../src/domain/statuses'
-import { streamAccept, streamDeleteUnits, streamEvents, streamTokens, streamUnit } from '../src/domain/streaming'
+import {
+	streamAccept,
+	streamConversations,
+	streamDelete,
+	streamDeleteUnits,
+	streamEvents,
+	streamListOwned,
+	streamTokens,
+	streamUnit,
+} from '../src/domain/streaming'
 import { featuredTagSuggestions, followedTags, MAX_FOLLOWED_TAGS } from '../src/domain/tags'
 import {
 	accountStatuses,
@@ -4522,6 +4540,221 @@ describe("R32: a delete's capture reads the smaller of the status's boosts and e
 	}, 120_000)
 })
 
+// The `list` and `direct` streams' reads (design "Kopje streaming API" PR 3): a list's check (listStatus, narrowed to the
+// status's author), a delete's capture of the lists, the ownership check of a subscription, and the conversation reads
+// (the owner's newest changes, a conversation's unit) read the same rows however long the
+// members' histories, however large the list and however many conversations the owner has.
+describe("streamed lists and conversations read their items, however large the list and the owner's history (RES-7)", () => {
+	const VIEWER_ID = '665000000000000000'
+	const AUTHOR_ID = '665000000000000001'
+	const MEMBERS = 666000000000000000n
+	const AUTHOR_STATUSES = 760000000000000000n
+	const MEMBER_STATUSES = 761000000000000000n
+	const CONVERSATION_STATUSES = 762000000000000000n
+	const LIST_ID = '667000000000000000'
+	const TOKEN = 'stream-list-token'
+
+	type Size = { perAuthor: number; members: number; conversations: number }
+
+	// The viewer follows the author and `members` other accounts (each with a status), all in its list LIST_ID, and
+	// listens on the list; the author has `perAuthor` public statuses; the viewer has `conversations` conversations, each
+	// with its own direct status and change sequence, and its mark at the highest.
+	async function world(size: Size): Promise<StoreStub> {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			const at = new Date(NOW).toISOString()
+			sql.exec("INSERT INTO instance_settings (name, value) VALUES ('domain', 'kopje.test')")
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username) VALUES (?, 'https://kopje.test/ap/users/viewer', 'viewer')",
+				VIEWER_ID
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'viewer@example.com', X'00', X'00', 'test')",
+				VIEWER_ID
+			)
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username, domain) VALUES (?, 'https://far.example/users/author', 'author', 'far.example')",
+				AUTHOR_ID
+			)
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+				INSERT INTO accounts (id, uri, username, domain)
+				SELECT CAST(?2 + i AS TEXT), 'https://many.example/users/m' || i, 'm' || i, 'many.example' FROM n WHERE ?1 > 0`,
+				size.members,
+				String(MEMBERS)
+			)
+			sql.exec(
+				`INSERT INTO follows (account_id, target_account_id, state, created_at)
+				SELECT ?1, id, 'accepted', ?2 FROM accounts WHERE id <> ?1`,
+				VIEWER_ID,
+				at
+			)
+			sql.exec("INSERT INTO lists (id, account_id, title) VALUES (?, ?, 'list')", LIST_ID, VIEWER_ID)
+			sql.exec(
+				'INSERT INTO list_accounts (list_id, account_id) SELECT ?1, id FROM accounts WHERE id <> ?2',
+				LIST_ID,
+				VIEWER_ID
+			)
+			const statuses = (base: bigint, author: string, count: number, visibility: string) =>
+				sql.exec(
+					`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+					INSERT INTO statuses (id, uri, account_id, visibility, content, published_at, created_at)
+					SELECT CAST(?2 + i AS TEXT), 'https://far.example/objects/' || (?2 + i), ?3, ?4, '<p>x</p>', ?5, ?5 FROM n`,
+					count,
+					String(base),
+					author,
+					visibility,
+					at
+				)
+			statuses(AUTHOR_STATUSES, AUTHOR_ID, size.perAuthor, 'public')
+			sql.exec(
+				`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at, created_at)
+				SELECT CAST(?1 + CAST(id AS INTEGER) - ?2 AS TEXT), 'https://many.example/objects/' || id, id, 'public',
+					'<p>x</p>', ?3, ?3
+				FROM accounts WHERE id GLOB '666*'`,
+				String(MEMBER_STATUSES),
+				String(MEMBERS),
+				at
+			)
+			statuses(CONVERSATION_STATUSES, VIEWER_ID, size.conversations, 'direct')
+			sql.exec(
+				`INSERT INTO conversations (account_id, thread, participants, last_status_id, unread, stream_seq)
+				SELECT account_id, thread, '[]', id, 0, CAST(id AS INTEGER) - ?2 + 1 FROM statuses WHERE account_id = ?1
+				AND visibility = 'direct'`,
+				VIEWER_ID,
+				String(CONVERSATION_STATUSES)
+			)
+			sql.exec(
+				'INSERT INTO conversation_statuses (conversation_id, status_id) SELECT id, last_status_id FROM conversations'
+			)
+			sql.exec('INSERT INTO stream_conversation_marks (account_id, seq) VALUES (?, ?)', VIEWER_ID, size.conversations)
+			sql.exec(
+				"INSERT INTO stream_subscriptions (account_id, stream_key, sockets) VALUES (?, ?, 1), (?, 'direct', 1)",
+				VIEWER_ID,
+				`list:${LIST_ID}`,
+				VIEWER_ID
+			)
+			sql.exec(
+				"INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('stream-list', 'secret', 'stream-list', 'urn:ietf:wg:oauth:2.0:oob', 'read')"
+			)
+			sql.exec(
+				"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES (?, 'access', 'stream-list', ?, 'read')",
+				TOKEN,
+				VIEWER_ID
+			)
+		})
+		return store
+	}
+
+	const conversation = async (store: StoreStub, seq: number) =>
+		(
+			await runInDurableObject(store, (_instance, state) =>
+				state.storage.sql
+					.exec<{ id: string }>(
+						'SELECT CAST(id AS TEXT) AS id FROM conversations WHERE account_id = ? AND stream_seq = ?',
+						VIEWER_ID,
+						seq
+					)
+					.one()
+			)
+		).id
+
+	// The reads, by name: [operation, input, what it must return in the grown world].
+	async function reads(
+		store: StoreStub,
+		size: Size
+	): Promise<[string, StoreOperation<never, unknown>, unknown, unknown][]> {
+		const author = (i: number) => String(AUTHOR_STATUSES + BigInt(i))
+		const unit = (kind: string, subject: string) => ({
+			kind,
+			subject,
+			accountId: VIEWER_ID,
+			tokenHashes: [TOKEN],
+			lists: [LIST_ID],
+			now: NOW,
+		})
+		const streams = (
+			kind: string,
+			subject: string,
+			event: string,
+			keys: string[]
+		): [string, StoreOperation<never, unknown>, unknown, unknown] => [
+			`${kind} ${subject}`,
+			streamUnit,
+			unit(kind, subject),
+			{ event, streams: keys },
+		]
+		return [
+			streams('status', author(size.perAuthor - 1), 'update', ['user', `list:${LIST_ID}`]),
+			streams('status', author(0), 'update', ['user', `list:${LIST_ID}`]),
+			streams('status', String(MEMBER_STATUSES + BigInt(size.members - 1)), 'update', ['user', `list:${LIST_ID}`]),
+			streams('edit', author(0), 'status.update', ['user', `list:${LIST_ID}`]),
+			streams('conversation', await conversation(store, size.conversations), 'conversation', ['direct']),
+			streams('conversation', await conversation(store, 1), 'conversation', ['direct']),
+			['owned', streamListOwned, { accountId: VIEWER_ID, listId: LIST_ID }, true],
+			['changes', streamConversations, { accountId: VIEWER_ID, after: 0, upTo: size.conversations, limit: 20 }, 20],
+		]
+	}
+
+	// What a read returned, reduced to what `reads` names.
+	function summary(result: unknown): unknown {
+		if (Array.isArray(result)) {
+			return result.length
+		}
+		if (typeof result === 'object' && result !== null && 'streams' in result) {
+			const made = result as { event: string; streams: { stream: string }[] }
+			return { event: made.event, streams: made.streams.map((s) => s.stream) }
+		}
+		return result
+	}
+
+	it('reads the same rows with 20 or 2,000 statuses per author, 10 or 1,000 list members, 20 or 2,000 conversations', async () => {
+		const small: Size = { perAuthor: 20, members: 10, conversations: 20 }
+		const large: Size = { perAuthor: 2000, members: 1000, conversations: 2000 }
+		const few = await world(small)
+		const many = await world(large)
+		const fewReads = await reads(few, small)
+		const grown: string[] = []
+		for (const [i, [name, operation, input, expected]] of (await reads(many, large)).entries()) {
+			// Not vacuous: each read in the grown world returns what it must.
+			const result = await runInDurableObject(many, (_instance, state) =>
+				operation.run(state.storage.sql, input as never)
+			)
+			expect([name, summary(result)]).toEqual([name, expected])
+			const fewRows = await rowsRead({ store: few }, operation, fewReads[i]![2] as never)
+			const manyRows = await rowsRead({ store: many }, operation, input as never)
+			if (manyRows > fewRows + ALLOWANCE) {
+				grown.push(`${name}: ${fewRows} -> ${manyRows}`)
+			}
+		}
+		expect(grown).toEqual([])
+	}, 120_000)
+
+	it("captures a delete's lists in the same rows, however large the list and the author's history", async () => {
+		const capture = readOperation<{ statusId: string }, null>((db, { statusId }) => {
+			streamDelete(db, statusId, NOW)
+			return null
+		})
+		const measure = async (size: Size) => {
+			const store = await world(size)
+			const statusId = String(AUTHOR_STATUSES + BigInt(size.perAuthor - 1))
+			const rows = await rowsRead({ store }, capture, { statusId })
+			// Not vacuous: the viewer is captured with the list.
+			expect(
+				await runInDurableObject(store, (_instance, state) =>
+					state.storage.sql.exec('SELECT lists FROM stream_delete_viewers').toArray()
+				)
+			).toEqual([{ lists: JSON.stringify([LIST_ID]) }])
+			return rows
+		}
+		const few = await measure({ perAuthor: 20, members: 10, conversations: 20 })
+		const many = await measure({ perAuthor: 2000, members: 1000, conversations: 20 })
+		// The capture's view check reads the viewer's follows of the boosters (none here) and its list read is narrowed.
+		expect(many).toBeLessThanOrEqual(few + ALLOWANCE)
+	}, 120_000)
+})
+
 // The admin's list of reports (R37, GET /api/v1/admin/reports) reads one index range per filter, in id order: the
 // unresolved reports through reports_state, a reporter's through reports_account_state, a reported account's through
 // reports_target_state (with the reporter as a residual when both are given). Each case holds FEW matching reports,
@@ -4990,5 +5223,144 @@ describe("the admin's account list reads a page, however many accounts do not ma
 				}
 			}
 		}
+	}, 120_000)
+})
+
+// Received quotes (src/domain/quotes.ts) carry their verification work in their rows, and a stamp's Delete names them
+// by its URI: both are counts others control (any server may send quotes, and may name any stamp in them). A job
+// round's claim seeks the due work through quotes_due and takes QUOTE_ROUND; a stamp's Delete, revoking or (relayed
+// without the author's proof) checking again, seeks the quotes of its author's statuses through quotes_approval and
+// never reads the quotes of others naming the same stamp; a status stored links at most MAX_LINKED_QUOTES of the
+// unresolved quotes naming it; a quote's work reads its own row and its quoted status, however often that is quoted.
+describe('received quotes cost their work a bounded read (RES-7)', () => {
+	const CAROL = '970000000000000001'
+	const DAN = '970000000000000002'
+	const BOB = '970000000000000003'
+	const CAROL_URI = 'https://other.example/users/carol'
+	const TARGET = '971000000000000000'
+	const TARGET_URI = `${CAROL_URI}/statuses/target`
+	const LATER = '972000000000000000'
+	const LATER_URI = `${CAROL_URI}/statuses/later`
+	const STAMP = `${CAROL_URI}/quote_authorizations/1`
+	const QUOTING_BASE = 973000000000000000n
+	const FIRST = String(QUOTING_BASE)
+
+	// carol's status, quoted by bob three times naming carol's stamp (the first accepted: the quotes the Delete is about),
+	// and `count` more quotes by bob of each kind: of dan's status naming the same stamp, of carol's naming no stamp,
+	// with work due, with work held by a round's lease, and unresolved, naming the uri of carol's status stored later.
+	async function quoted(count: number): Promise<StoreStub> {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			for (const [id, name] of [
+				[CAROL, 'carol'],
+				[DAN, 'dan'],
+				[BOB, 'bob'],
+			] as const) {
+				sql.exec(
+					"INSERT INTO accounts (id, uri, username, domain) VALUES (?, ?, ?, 'other.example')",
+					id,
+					`https://other.example/users/${name}`,
+					name
+				)
+			}
+			sql.exec(
+				`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at) VALUES
+				(?1, ?2, ?3, 'public', '', '2026-10-01T00:00:00.000Z'),
+				('971000000000000001', 'https://other.example/users/dan/statuses/1', ?4, 'public', '', '2026-10-01T00:00:00.000Z')`,
+				TARGET,
+				TARGET_URI,
+				CAROL,
+				DAN
+			)
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 * 4 + 3 - 1)
+				INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+				SELECT CAST(?2 + i AS TEXT), 'https://other.example/users/bob/statuses/q' || i, ?3, 'public', '',
+					'2026-10-01T00:00:00.000Z' FROM n`,
+				count,
+				FIRST,
+				BOB
+			)
+			// k: 0 the three quotes of carol's status naming her stamp, then the other kinds in turn.
+			sql.exec(
+				`INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, quoted_account_id, state, approval_uri,
+					verify_after, updated_at)
+				SELECT id,
+					CASE k WHEN 1 THEN 'https://other.example/users/dan/statuses/1' WHEN 4 THEN ?9 ELSE ?1 END,
+					CASE k WHEN 1 THEN '971000000000000001' WHEN 4 THEN NULL ELSE ?2 END,
+					CASE k WHEN 1 THEN ?5 WHEN 4 THEN NULL ELSE ?3 END,
+					CASE WHEN n = 0 THEN 'accepted' ELSE 'pending' END,
+					CASE WHEN k IN (0, 1) THEN ?4 END,
+					CASE k WHEN 2 THEN ?6 WHEN 3 THEN ?7 END,
+					'2026-10-01T00:00:00.000Z'
+				FROM (SELECT id, n, CASE WHEN n < 3 THEN 0 ELSE (n - 3) % 4 + 1 END AS k
+					FROM (SELECT id, CAST(id AS INTEGER) - ?8 AS n FROM statuses WHERE account_id = ?10))`,
+				TARGET_URI,
+				TARGET,
+				CAROL,
+				STAMP,
+				DAN,
+				NOW - 1,
+				NOW + 60_000,
+				FIRST,
+				LATER_URI,
+				BOB
+			)
+			sql.exec(
+				"INSERT INTO statuses (id, uri, account_id, visibility, content, published_at) VALUES (?, ?, ?, 'public', '', '2026-10-01T00:00:00.000Z')",
+				LATER,
+				LATER_URI,
+				CAROL
+			)
+		})
+		return store
+	}
+
+	const revoke = writeOperation<void, unknown>((db) =>
+		revokeStamp(db, { id: CAROL, uri: CAROL_URI }, STAMP, () => PURGE_BATCH, NOW)
+	)
+	const recheck = writeOperation<void, unknown>((db) => recheckStamp(db, { id: CAROL }, STAMP, NOW))
+	const link = writeOperation<void, unknown>((db) => {
+		linkQuotes(db, { id: LATER, uri: LATER_URI }, NOW)
+	})
+
+	it('reads the same rows with 400 or 4,000 quotes of each kind', async () => {
+		const cases: [string, StoreOperation<never, unknown>, unknown][] = [
+			['claim', claimQuotes, { now: NOW, limit: QUOTE_ROUND }],
+			['revoke', revoke, undefined],
+			['recheck', recheck, undefined],
+			['link', link, undefined],
+			['work', quoteWork, { statusId: FIRST }],
+		]
+		const grown: string[] = []
+		const outputs: Record<string, { output: unknown; states: unknown[]; linked: unknown[] }> = {}
+		for (const [name, operation, input] of cases) {
+			const few = await rowsTouched(await quoted(400), operation, input as never)
+			const many = await rowsTouched(await quoted(4000), operation, input as never)
+			if (many > few + ALLOWANCE) {
+				grown.push(`${name}: ${few} -> ${many}`)
+			}
+			const store = await quoted(4000)
+			outputs[name] = await runInDurableObject(store, (_instance, state) => ({
+				output: operation.run(state.storage.sql, input as never),
+				states: state.storage.sql
+					.exec('SELECT state, count(*) AS n FROM quotes WHERE approval_uri IS NOT NULL GROUP BY state ORDER BY state')
+					.toArray(),
+				linked: state.storage.sql.exec('SELECT count(*) AS n FROM quotes WHERE quoted_status_id = ?', LATER).toArray(),
+			}))
+		}
+		expect(grown).toEqual([])
+		// Not vacuous: each did its work on the rows that concern it, and only those.
+		expect(outputs.claim!.output).toMatchObject({ ids: expect.any(Array), more: true })
+		expect((outputs.claim!.output as { ids: string[] }).ids).toHaveLength(QUOTE_ROUND)
+		expect(outputs.revoke!.states).toEqual([
+			{ state: 'pending', n: 4000 },
+			{ state: 'rejected', n: 2 },
+			{ state: 'revoked', n: 1 },
+		])
+		expect(outputs.recheck!.output).toBe(true)
+		expect(outputs.link!.linked).toEqual([{ n: MAX_LINKED_QUOTES }])
+		expect(outputs.work!.output).toMatchObject({ quotedUri: TARGET_URI, approvalUri: STAMP })
 	}, 120_000)
 })

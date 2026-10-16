@@ -192,6 +192,7 @@ export function createApp({
 		randomToken: seams.randomToken ?? randomToken,
 		images,
 		resolve: createResolver({ build, store, now, keygen, loader }),
+		requestJobs: (env: Env) => requestInboundJobs(env.QUEUE),
 	}
 	app.get(MEDIA_ROUTE, serveMedia)
 	app.route('/', authorizeRoutes({ ...apiDeps, fetch: (input, init) => fetch(input, init) }))

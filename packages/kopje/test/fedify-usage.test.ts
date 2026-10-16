@@ -39,6 +39,15 @@ describe('Fedify usage', () => {
 		expect(violations(sources)).toEqual([])
 	})
 
+	// A relayed revocation is applied on the author's proof (federation/author-proof.ts): Fedify's LD-signature and object
+	// proof verifiers run there only, against a key the author's own document embeds, and nowhere else decides on them.
+	it('verifies author proofs in author-proof.ts only', () => {
+		const verifying = Object.entries(sources)
+			.filter(([, source]) => /\b(verifyJsonLd|verifyObject|verifyProof|verifySignature)\b/.test(source))
+			.map(([file]) => file)
+		expect(verifying).toEqual(['../src/federation/author-proof.ts'])
+	})
+
 	it('detects each forbidden use', () => {
 		expect(
 			violations({

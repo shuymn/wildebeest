@@ -60,6 +60,8 @@ const SCHEMA_TABLES = [
 	'outbound_targets',
 	'push_deliveries',
 	'push_subscriptions',
+	'quote_revocations',
+	'quotes',
 	'remote_keys',
 	'reports',
 	'scheduled_statuses',
@@ -3481,6 +3483,256 @@ describe('0031_admin_accounts_available', () => {
 		expect(crowded).toBeLessThanOrEqual(few + 10)
 		expect(many - few).toBeLessThanOrEqual(3 * (10_000 - 1000))
 		expect(many).toBeGreaterThan(few)
+	}, 120_000)
+})
+
+describe('0032_streaming_lists', () => {
+	const at = NAMES.indexOf('0032_streaming_lists')
+	const id = (n: number) => String(100000000000000000n + BigInt(n))
+
+	// A local account with `conversations` conversations (each holding one status of its own), and `others` remote
+	// statuses nobody's conversation holds.
+	function seed(sql: SqlStorage, conversations: number, others = 0) {
+		sql.exec("INSERT INTO accounts (id, uri, username) VALUES (?, 'https://kopje.test/ap/users/alice', 'alice')", id(1))
+		sql.exec(
+			"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'alice@example.com', X'00', X'00', 'k')",
+			id(1)
+		)
+		sql.exec(
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+			SELECT CAST(200000000000000000 + i AS TEXT), 'https://kopje.test/ap/o/' || i, ?2, 'direct', '', '2026-10-12T00:00:00.000Z'
+			FROM n WHERE ?1 > 0`,
+			conversations + others,
+			id(1)
+		)
+		sql.exec(
+			`INSERT INTO conversations (account_id, thread, participants, last_status_id, unread)
+			SELECT account_id, thread, '[]', id, 0 FROM statuses ORDER BY id LIMIT ?`,
+			conversations
+		)
+		sql.exec(
+			'INSERT INTO conversation_statuses (conversation_id, status_id) SELECT id, last_status_id FROM conversations'
+		)
+	}
+
+	it('journals statuses for list listeners, and moves a mark with each conversation write the trigger makes', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, MIGRATIONS.slice(0, at)).upgrade()).toMatchObject({ ok: true })
+			seed(sql, 1)
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({
+				ok: true,
+				applied: ['0032_streaming_lists'],
+			})
+			expect(sql.exec('SELECT stream_seq FROM conversations').toArray()).toEqual([{ stream_seq: 0 }])
+			const journal = () => sql.exec('SELECT kind, subject FROM stream_events ORDER BY id').toArray()
+			const status = (n: number) =>
+				sql.exec(
+					`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+					VALUES (?, ?, ?, 'public', '<p>x</p>', '2026-10-12T00:00:00.000Z')`,
+					id(300 + n),
+					`https://kopje.test/ap/o/s${n}`,
+					id(1)
+				)
+			// Nobody listens: nothing; a list alone arms both triggers.
+			status(1)
+			expect(journal()).toEqual([])
+			sql.exec(
+				"INSERT INTO stream_subscriptions (account_id, stream_key, sockets) VALUES (?, 'list:100000000000000009', 1)",
+				id(1)
+			)
+			status(2)
+			sql.exec("UPDATE statuses SET edited_at = '2026-10-12T01:00:00.000Z' WHERE id = ?", id(302))
+			expect(journal()).toEqual([
+				{ kind: 'status', subject: id(302) },
+				{ kind: 'edit', subject: id(302) },
+			])
+			// The conversation gains a newer status, then loses it: without a mark, stream_seq stays; with one, the
+			// removal takes the next value.
+			const conversation = sql.exec<{ id: number }>('SELECT id FROM conversations').one().id
+			sql.exec('UPDATE conversations SET last_status_id = ? WHERE id = ?', id(302), conversation)
+			sql.exec('INSERT INTO conversation_statuses (conversation_id, status_id) VALUES (?, ?)', conversation, id(302))
+			sql.exec('DELETE FROM conversation_statuses WHERE status_id = ?', id(302))
+			expect(sql.exec('SELECT last_status_id, stream_seq FROM conversations').toArray()).toEqual([
+				{ last_status_id: '200000000000000001', stream_seq: 0 },
+			])
+			sql.exec('INSERT INTO stream_conversation_marks (account_id, seq) VALUES (?, 7)', id(1))
+			sql.exec('UPDATE conversations SET last_status_id = ? WHERE id = ?', id(302), conversation)
+			sql.exec('INSERT INTO conversation_statuses (conversation_id, status_id) VALUES (?, ?)', conversation, id(302))
+			sql.exec('DELETE FROM conversation_statuses WHERE status_id = ?', id(302))
+			expect(sql.exec('SELECT last_status_id, stream_seq FROM conversations').toArray()).toEqual([
+				{ last_status_id: '200000000000000001', stream_seq: 8 },
+			])
+			// The last link's delete deletes the conversation and leaves the mark where it was.
+			sql.exec('DELETE FROM conversation_statuses')
+			expect(sql.exec('SELECT count(*) AS n FROM conversations').one().n).toBe(0)
+			expect(sql.exec('SELECT seq FROM stream_conversation_marks').toArray()).toEqual([{ seq: 8 }])
+			expect(sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
+		})
+	})
+
+	it('reads each conversation a bounded number of times, and no status', async () => {
+		// The file's statements: a trigger's body holds statements of its own, and ends at END.
+		const statements: string[] = []
+		let statement = ''
+		for (const line of (MIGRATIONS[at]?.sql ?? '').split('\n').filter((line) => !line.startsWith('--'))) {
+			statement += `${line}\n`
+			const trigger = /^\s*CREATE TRIGGER/i.test(statement)
+			if (trigger ? /^END;\s*$/.test(line) : /;\s*$/.test(line)) {
+				statements.push(statement)
+				statement = ''
+			}
+		}
+		expect(statements).toHaveLength(18)
+		const measure = async (conversations: number, others: number) => {
+			const store = freshStore()
+			return runInDurableObject(store, async (_instance, state) => {
+				const sql = state.storage.sql
+				await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+				seed(sql, conversations, others)
+				let read = 0
+				for (const statement of statements) {
+					const cursor = sql.exec(statement)
+					cursor.toArray()
+					read += cursor.rowsRead
+				}
+				expect(sql.exec('SELECT count(*) AS n FROM conversations').one().n).toBe(conversations)
+				return read
+			})
+		}
+		const few = await measure(1000, 0)
+		const crowded = await measure(1000, 10_000)
+		const many = await measure(10_000, 0)
+		// The index reads the conversations once; the statuses and their links are not read.
+		expect(crowded).toBeLessThanOrEqual(few + 10)
+		expect(many - few).toBeLessThanOrEqual(3 * (10_000 - 1000))
+	}, 120_000)
+})
+
+describe('0033_quotes', () => {
+	const NAME = '0033_quotes'
+	const id = (n: number) => String(100000000000000000n + BigInt(n))
+
+	// The file's statements, a trigger whole (its body holds semicolons of its own).
+	function statements(): string[] {
+		const out: string[] = []
+		let current = ''
+		for (const line of (MIGRATIONS.find((m) => m.name === NAME)?.sql ?? '').split('\n')) {
+			if (line.startsWith('--') || line.trim() === '') {
+				continue
+			}
+			current += `${line}\n`
+			if (current.startsWith('CREATE TRIGGER') ? line === 'END;' : line.endsWith(';')) {
+				out.push(current)
+				current = ''
+			}
+		}
+		return out
+	}
+
+	it(`upgrades a Store with ${NAME}: stored statuses count no quote, and quotes keep their rules`, async () => {
+		const at = NAMES.indexOf(NAME)
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, MIGRATIONS.slice(0, at)).upgrade()).toMatchObject({ ok: true })
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username, domain) VALUES (?, 'https://remote.example/users/bob', 'bob', 'remote.example')",
+				id(1)
+			)
+			for (const n of [11, 12, 13]) {
+				sql.exec(
+					"INSERT INTO statuses (id, uri, account_id, visibility, published_at) VALUES (?, ?, ?, 'public', '2026-10-01T00:00:00.000Z')",
+					id(n),
+					`https://remote.example/users/bob/statuses/${n}`,
+					id(1)
+				)
+			}
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+			expect(sql.exec('SELECT DISTINCT quotes_count FROM statuses').toArray()).toEqual([{ quotes_count: 0 }])
+			const quote = (status: number, state_: string, quoted: number | null) =>
+				sql.exec(
+					`INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, quoted_account_id, state, updated_at)
+					VALUES (?, 'https://remote.example/users/bob/statuses/13', ?, ?, ?, '2026-10-12T00:00:00.000Z')`,
+					id(status),
+					quoted === null ? null : id(quoted),
+					quoted === null ? null : id(1),
+					state_
+				)
+			const count = () => sql.exec('SELECT quotes_count AS n FROM statuses WHERE id = ?', id(13)).one().n
+			// The count follows accepted quotes, by deltas.
+			quote(11, 'accepted', 13)
+			quote(12, 'pending', 13)
+			expect(count()).toBe(1)
+			sql.exec("UPDATE quotes SET state = 'accepted' WHERE status_id = ?", id(12))
+			expect(count()).toBe(2)
+			sql.exec("UPDATE quotes SET state = 'revoked' WHERE status_id = ?", id(11))
+			expect(count()).toBe(1)
+			sql.exec('DELETE FROM quotes WHERE status_id = ?', id(12))
+			expect(count()).toBe(0)
+			// An accepted quote needs its quoted status, its author goes with it, and work is only for a live quote.
+			expect(() => quote(12, 'accepted', null)).toThrow(/CHECK constraint failed/)
+			expect(() =>
+				sql.exec(
+					"INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, state, updated_at) VALUES (?, 'x', ?, 'pending', 'x')",
+					id(12),
+					id(13)
+				)
+			).toThrow(/CHECK constraint failed/)
+			expect(() =>
+				sql.exec(
+					"INSERT INTO quotes (status_id, quoted_uri, state, verify_after, updated_at) VALUES (?, NULL, 'deleted', 1, 'x')",
+					id(12)
+				)
+			).toThrow(/CHECK constraint failed/)
+			expect(() =>
+				sql.exec(
+					"INSERT INTO quotes (status_id, quoted_uri, state, updated_at) VALUES (?, NULL, 'pending', 'x')",
+					id(12)
+				)
+			).toThrow(/CHECK constraint failed/)
+			sql.exec("INSERT INTO quotes (status_id, quoted_uri, state, updated_at) VALUES (?, NULL, 'deleted', 'x')", id(12))
+			expect(sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
+		})
+	})
+
+	it('reads no stored status, however many there are', async () => {
+		const at = NAMES.indexOf(NAME)
+		const measure = async (statuses: number) => {
+			const store = freshStore()
+			return runInDurableObject(store, async (_instance, state) => {
+				const sql = state.storage.sql
+				await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+				sql.exec(
+					"INSERT INTO accounts (id, uri, username, domain) VALUES (?, 'https://remote.example/users/bob', 'bob', 'remote.example')",
+					id(1)
+				)
+				sql.exec(
+					`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+					INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+					SELECT CAST(200000000000000000 + i AS TEXT), 'https://remote.example/users/bob/statuses/' || i, ?2, 'public',
+						hex(randomblob(500)), '2026-10-01T00:00:00.000Z'
+					FROM n`,
+					statuses,
+					id(1)
+				)
+				let read = 0
+				for (const statement of statements()) {
+					const cursor = sql.exec(statement)
+					cursor.toArray()
+					read += cursor.rowsRead
+				}
+				// Not vacuous: the column is there for every status.
+				expect(sql.exec('SELECT count(*) AS n FROM statuses WHERE quotes_count = 0').one()).toEqual({ n: statuses })
+				return read
+			})
+		}
+		const few = await measure(100)
+		const many = await measure(10_000)
+		expect(statements().length).toBeGreaterThan(5)
+		expect(many).toBeLessThanOrEqual(few + 10)
 	}, 120_000)
 })
 
