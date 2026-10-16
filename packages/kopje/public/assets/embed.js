@@ -38,13 +38,16 @@
 	})
 
 	function embed(container) {
+		if (container.getAttribute('data-kopje-embedded') !== null) {
+			return
+		}
 		var url
 		try {
 			url = new URL(container.getAttribute('data-embed-url') || '')
 		} catch (e) {
 			return
 		}
-		if (!permitted(url) || container.getAttribute('data-kopje-embedded') !== null) {
+		if (!permitted(url)) {
 			return
 		}
 		// Each embed's HTML carries this script; whichever copy runs first frames the quote.

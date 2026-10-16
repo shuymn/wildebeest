@@ -1,5 +1,6 @@
 import { type ApiHandler, present, storeCall } from './context'
 import { mastodonError } from './errors'
+import { escapeHtml } from '../domain/plain-text'
 import type { Status } from '../domain/status-presenter'
 
 // oEmbed (Mastodon 4.5's Api::OEmbedController and OEmbedSerializer): a status of this instance as a `rich` embed, an
@@ -54,23 +55,14 @@ export function embedHtml(status: Status, domain: string): string {
 	const root = `https://${domain}/`
 	const path = `@${status.account.username}/${status.id}`
 	return [
-		`<blockquote class="mastodon-embed" data-embed-url="${escape(`${root}${path}/embed`)}" style="${STYLES.blockquote}">`,
-		`<a href="${escape(`${root}${path}`)}" target="_blank" style="${STYLES.statusLink}">`,
-		`<div style="${STYLES.divAccount}">Post by @${escape(status.account.username)}@${escape(domain)}</div>`,
+		`<blockquote class="mastodon-embed" data-embed-url="${escapeHtml(`${root}${path}/embed`)}" style="${STYLES.blockquote}">`,
+		`<a href="${escapeHtml(`${root}${path}`)}" target="_blank" style="${STYLES.statusLink}">`,
+		`<div style="${STYLES.divAccount}">Post by @${escapeHtml(status.account.username)}@${escapeHtml(domain)}</div>`,
 		`<div style="${STYLES.divView}">View on Kopje</div>`,
 		'</a>',
 		'</blockquote>',
-		`<script data-allowed-prefixes="${escape(root)}" async src="${escape(`${root}assets/embed.js`)}"></script>`,
+		`<script data-allowed-prefixes="${escapeHtml(root)}" async src="${escapeHtml(`${root}assets/embed.js`)}"></script>`,
 	].join(' ')
-}
-
-function escape(text: string): string {
-	return text
-		.replaceAll('&', '&amp;')
-		.replaceAll('<', '&lt;')
-		.replaceAll('>', '&gt;')
-		.replaceAll('"', '&quot;')
-		.replaceAll("'", '&#39;')
 }
 
 // Ruby's String#to_i: the leading integer (after whitespace, with a sign and underscores between digits), else 0.
