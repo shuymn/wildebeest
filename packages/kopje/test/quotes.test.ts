@@ -1400,4 +1400,76 @@ describe('review round 1 regressions', () => {
 		).rejects.toBeInstanceOf(StoreUnavailableError)
 		expect(await quoteOf(t, quote.id)).toMatchObject({ state: 'pending', attempts: 0 })
 	})
+
+	it('coalesces replayed unproven Deletes: a genuine 404 revokes within a bounded number of rounds', async () => {
+		const { t, bob, carol } = await world()
+		const pair = quotedPair(t, bob, carol)
+		expect(await t.post(bob, create(bob, pair.quote))).toBe(202)
+		expect(await quoteOf(t, pair.quote.id)).toMatchObject({ state: 'accepted' })
+		const replay = () =>
+			t.store.receiveActivity(BUILD, {
+				now: NOW,
+				origin: LOCAL,
+				actorUri: carol.uri,
+				actor: null,
+				activity: { type: 'RelayedDelete', id: `${carol.uri}#delete-${nextId()}`, object: pair.stamp, proven: false },
+			})
+		// A third party replays the unproven Delete during every fetch of the stamp, which is gone now.
+		t.web.fail(pair.stamp, 404)
+		let replays = 0
+		const loader = {
+			...t.web.loader,
+			fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+				const url = new URL(input instanceof Request ? input.url : input.toString())
+				if (url.href === pair.stamp) {
+					replays++
+					await replay()
+				}
+				return t.web.fetch(input, init)
+			}) as typeof fetch,
+		}
+		await replay()
+		const deps = { ...inboxDeps(() => t.store, loader), now: () => NOW }
+		let rounds = 0
+		while ((await quoteOf(t, pair.quote.id))?.state === 'accepted' && rounds < 5) {
+			await verifyQuotes(t.env, deps)
+			rounds++
+		}
+		expect(await quoteOf(t, pair.quote.id)).toMatchObject({ state: 'revoked', verify_after: null })
+		expect(rounds).toBe(1)
+		expect(replays).toBe(1)
+	})
+
+	it('checks a valid stamp once more when a relayed Delete raced its fetch, and then stops', async () => {
+		const { t, bob, carol } = await world()
+		const pair = quotedPair(t, bob, carol)
+		expect(await t.post(bob, create(bob, pair.quote))).toBe(202)
+		const replay = () =>
+			t.store.receiveActivity(BUILD, {
+				now: NOW,
+				origin: LOCAL,
+				actorUri: carol.uri,
+				actor: null,
+				activity: { type: 'RelayedDelete', id: `${carol.uri}#delete-${nextId()}`, object: pair.stamp, proven: false },
+			})
+		let raced = false
+		const loader = {
+			...t.web.loader,
+			fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+				const url = new URL(input instanceof Request ? input.url : input.toString())
+				if (url.href === pair.stamp && !raced) {
+					raced = true
+					await replay()
+				}
+				return t.web.fetch(input, init)
+			}) as typeof fetch,
+		}
+		await replay()
+		const deps = { ...inboxDeps(() => t.store, loader), now: () => NOW }
+		// The round's fetch finds the stamp valid; the Delete that raced it asks for one more check, due at once.
+		expect(await verifyQuotes(t.env, deps)).toBe(true)
+		expect(await quoteOf(t, pair.quote.id)).toMatchObject({ state: 'accepted', verify_after: NOW, attempts: 0 })
+		expect(await verifyQuotes(t.env, deps)).toBe(false)
+		expect(await quoteOf(t, pair.quote.id)).toMatchObject({ state: 'accepted', verify_after: null })
+	})
 })

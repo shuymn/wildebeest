@@ -21,8 +21,11 @@
 --   generation, the work's identity for its verifiers. The rule: every write that changes what the work is or what it
 --   may conclude draws a new random generation (a new or replaced quote, a target linked or detached, a stage advanced
 --   or an author address recorded, a renewal that makes the work due anew or changes fetch_as: a promotion, a relayed
---   Delete's check, a stage another path moved on; and every outcome applied, a revocation's included); a round's claim,
---   which only leases the work, keeps it. Every outcome carries the generation and the stage and fetch address it was
+--   Delete's check made while the work is idle, a stage another path moved on; and every outcome applied, a
+--   revocation's included); a round's claim, which only leases the work, keeps it, and so does a relayed Delete's
+--   check that finds the work already due (it fetches the stamp fresh anyway) or leased (the fetch in flight completes,
+--   and only sets recheck: an outcome that finds the stamp valid then makes the work due once more, attempts kept).
+--   lease_until is the claim's lease: it holds only while verify_after still equals it, so any later write ends it. Every outcome carries the generation and the stage and fetch address it was
 --   computed for, and applies only while all three still hold (src/domain/quotes.ts); anything else is discarded.
 -- - quote_revocations records, for good, every stamp whose Delete by an author revoked a stored quote of that author's
 --   status: the stamp never verifies a quote of that author's statuses again, whatever later happens to the quote row.
@@ -49,6 +52,8 @@ CREATE TABLE quotes (
   fetch_as TEXT REFERENCES local_accounts (account_id) ON DELETE SET NULL,
   need_author TEXT CHECK (length(need_author) <= 2048),
   generation INTEGER NOT NULL DEFAULT 0,
+  lease_until INTEGER,
+  recheck INTEGER NOT NULL DEFAULT 0 CHECK (recheck IN (0, 1)),
   updated_at TEXT NOT NULL,
   CHECK (state <> 'accepted' OR quoted_status_id IS NOT NULL),
   CHECK (quoted_uri IS NOT NULL OR state = 'deleted'),

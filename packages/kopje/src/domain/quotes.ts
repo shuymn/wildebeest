@@ -83,12 +83,13 @@ type QuoteRow = {
 	fetch_as: string | null
 	need_author: string | null
 	generation: number
+	recheck: number
 }
 
 function quoteRow(db: Db, statusId: string): QuoteRow | undefined {
 	return db.first<QuoteRow>(
 		`SELECT q.status_id, s.uri AS status_uri, s.account_id, a.uri AS author_uri, q.quoted_uri, q.quoted_status_id,
-			q.state, q.legacy, q.approval_uri, q.attempts, q.hops, q.fetch_as, q.need_author, q.generation
+			q.state, q.legacy, q.approval_uri, q.attempts, q.hops, q.fetch_as, q.need_author, q.generation, q.recheck
 		FROM quotes q JOIN statuses s ON s.id = q.status_id JOIN accounts a ON a.id = s.account_id
 		WHERE q.status_id = ?`,
 		statusId
@@ -168,7 +169,7 @@ export function recordQuote(
 		ON CONFLICT (status_id) DO UPDATE SET quoted_uri = excluded.quoted_uri, quoted_status_id = excluded.quoted_status_id,
 			quoted_account_id = excluded.quoted_account_id, state = excluded.state, legacy = excluded.legacy, approval_uri = excluded.approval_uri,
 			verify_after = excluded.verify_after, attempts = 0, hops = excluded.hops, fetch_as = excluded.fetch_as,
-			need_author = NULL, generation = excluded.generation, updated_at = excluded.updated_at`,
+			need_author = NULL, generation = excluded.generation, recheck = 0, updated_at = excluded.updated_at`,
 		status.id,
 		named.uri,
 		named.tombstone ? 1 : 0,
@@ -429,11 +430,13 @@ function finish(
 ): QuoteVerified {
 	const attempts = work === 'retry' ? row.attempts + 1 : row.attempts
 	const delay = work === 'retry' ? QUOTE_BACKOFF_MS[attempts - 1] : undefined
-	const verifyAfter = work === 'again' ? now : delay === undefined ? null : now + delay
+	// A relayed Delete raced this fetch (recheck): a stamp found valid is checked once more, at once.
+	const again = work === 'again' || (row.recheck === 1 && work === 'done' && state === 'accepted')
+	const verifyAfter = again ? now : delay === undefined ? null : now + delay
 	const fetched = work === 'done' || (work === 'retry' && delay === undefined) ? null : keep
 	db.run(
 		`UPDATE quotes SET state = ?2, verify_after = ?3, attempts = ?4, need_author = ?5, updated_at = ?6,
-			generation = ${NEW_GENERATION}
+			generation = ${NEW_GENERATION}, recheck = 0
 		WHERE status_id = ?1`,
 		row.status_id,
 		state,
@@ -442,7 +445,7 @@ function finish(
 		fetched,
 		iso(now)
 	)
-	return { done: work !== 'again', due: otherQuotesDue(db, now, null), state, next: false }
+	return { done: !again, due: otherQuotesDue(db, now, null), state, next: false }
 }
 
 // A failed fetch's outcome: gone or unusable end the work; one that may pass (a fetch budget or deadline that ran out
@@ -649,7 +652,7 @@ export const claimQuotes = writeOperation<
 	)
 	const ids = rows.map((row) => row.status_id)
 	db.run(
-		'UPDATE quotes SET verify_after = ?1 WHERE status_id IN (SELECT value FROM json_each(?2))',
+		'UPDATE quotes SET verify_after = ?1, lease_until = ?1 WHERE status_id IN (SELECT value FROM json_each(?2))',
 		now + QUOTE_LEASE_MS,
 		JSON.stringify(ids)
 	)
@@ -752,21 +755,36 @@ export function continueRevocations(db: Db, left: () => number, now: number): bo
 
 // A Delete of a stamp relayed by another server without the author's proof (federation/inbound.ts): nothing is revoked
 // on its word, but the accepted quote of the actor's status that names the stamp (one: a valid stamp names exactly one
-// quoting status, by its unique uri) is verified again, its state unchanged until then, so a stamp that is gone
-// revokes it. Returns the quoting status made due, or null.
+// quoting status, by its unique uri) is checked again, its state unchanged until then, so a stamp that is gone revokes
+// it. Replays coalesce: idle work is renewed (due, a new generation); work already due is left as it is (its fetch is
+// fresh anyway); work a round has leased keeps its generation, so the fetch in flight still applies, and is marked to
+// be checked once more if that fetch finds the stamp valid. Returns the quoting status to verify inline now (idle or
+// due work), or null (none, or leased).
 export function recheckStamp(db: Db, actor: { id: string }, approvalUri: string, now: number): string | null {
-	const row = db.first<{ status_id: string }>(
-		`UPDATE quotes SET verify_after = ?3, attempts = 0, hops = max(hops, 1), updated_at = ?4,
-			generation = ${NEW_GENERATION}
-		WHERE status_id IN (SELECT status_id FROM quotes
-			WHERE approval_uri = ?1 AND quoted_account_id = ?2 AND state = 'accepted' LIMIT 1)
-		RETURNING status_id`,
+	const row = db.first<{ status_id: string; verify_after: number | null; lease_until: number | null }>(
+		`SELECT status_id, verify_after, lease_until FROM quotes
+		WHERE approval_uri = ?1 AND quoted_account_id = ?2 AND state = 'accepted' LIMIT 1`,
 		approvalUri,
-		actor.id,
-		now,
-		iso(now)
+		actor.id
 	)
-	return row?.status_id ?? null
+	if (row === undefined) {
+		return null
+	}
+	if (row.lease_until !== null && row.verify_after === row.lease_until && row.lease_until > now) {
+		db.run('UPDATE quotes SET recheck = 1 WHERE status_id = ?', row.status_id)
+		return null
+	}
+	if (row.verify_after === null) {
+		db.run(
+			`UPDATE quotes SET verify_after = ?2, attempts = 0, hops = max(hops, 1), updated_at = ?3,
+				generation = ${NEW_GENERATION}
+			WHERE status_id = ?1`,
+			row.status_id,
+			now,
+			iso(now)
+		)
+	}
+	return row.verify_after === null || row.verify_after <= now ? row.status_id : null
 }
 
 // ---------------------------------------------------------------------------------------------------------------
