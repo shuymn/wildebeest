@@ -9,7 +9,7 @@ import {
 	presentAccount,
 } from './accounts'
 import { accessAdminRefusal, normalizedEmail } from './admin-authority'
-import { availableJoinedSql, availableLocalSql, deletingSql } from './audience'
+import { availableJoinedSql, availableLocalSql, deletingSql, notDeletingSql } from './audience'
 import {
 	ADMIN_PERMISSION,
 	adminGuarded,
@@ -329,14 +329,17 @@ function readMatches(
 		)
 		return ordered([...local, ...deleting], filter, adminId, bounds).slice(0, limit + 1)
 	}
-	// No search: the accounts by primary key, newest first. The residual skips the local accounts (remote), or the
-	// unavailable ones (active): the suspended local accounts and the remote ones whose deletion has started.
+	// No search: the accounts by id, newest first. Active accounts walk accounts_available (migration
+	// 0032_admin_accounts_available), which holds no account whose deletion has started, so the walk skips only the
+	// suspended local accounts; others walk the primary key. The residual skips the local accounts (remote) and the
+	// suspended local accounts (active), operator-sized sets.
+	const active = filter.status === 'active'
 	const residual = [
 		filter.origin === 'remote' ? 'a.domain IS NOT NULL' : '1',
-		filter.status === 'active' ? availableJoinedSql('a', 'l') : '1',
+		active ? `${notDeletingSql('a')} AND ${availableLocalSql('l')}` : '1',
 	].join(' AND ')
 	return db.all<Candidate>(
-		`SELECT ${CANDIDATE_COLUMNS} FROM accounts a INDEXED BY sqlite_autoindex_accounts_1
+		`SELECT ${CANDIDATE_COLUMNS} FROM accounts a INDEXED BY ${active ? 'accounts_available' : 'sqlite_autoindex_accounts_1'}
 		LEFT JOIN local_accounts l ON l.account_id = a.id
 		WHERE ${ID_RANGE} AND ${residual} ORDER BY a.id ${order} LIMIT ?3`,
 		bounds.max,

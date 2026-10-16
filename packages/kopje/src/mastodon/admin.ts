@@ -91,13 +91,22 @@ const REPORT_PAGINATION_PARAMS = ['limit', 'resolved', 'account_id', 'target_acc
 // The array parameters a Link URL carries (v2's role_ids[]).
 const ARRAY_PARAMS = new Set(['role_ids'])
 
+// An array parameter as Mastodon permits it in both forms (`name` and `name[]`) and reads it (Array(value)): every
+// value of `name[]` (an explicitly empty list is one blank value, still sent) and a `name` sent not blank; undefined
+// when neither was sent.
+function arrayParam(p: Params, name: string): string[] | undefined {
+	const scalar = p.get(name)
+	const values = [...(scalar !== undefined && scalar.trim() !== '' ? [scalar] : []), ...(p.list(name) ?? [])]
+	return values.length === 0 ? undefined : values
+}
+
 // A list's Link URL: `names` as the request sent them (an array parameter's values each as `name[]`) and the cursor.
 function listUrl(c: ApiContext, path: string, names: readonly string[], p: Params, cursor: Record<string, string>) {
 	const url = new URL(path, c.req.url)
 	const entries: [string, string][] = [
 		...names.flatMap((name): [string, string][] => {
 			if (ARRAY_PARAMS.has(name)) {
-				return (p.list(name) ?? []).map((value) => [`${name}[]`, value])
+				return (arrayParam(p, name) ?? []).map((value) => [`${name}[]`, value])
 			}
 			const value = p.get(name)
 			return value === undefined ? [] : [[name, value]]
@@ -270,7 +279,7 @@ export function accountFilter(version: 1 | 2, p: Params): ParsedAccountFilter {
 		roleIds = sent('staff') !== undefined ? ['3'] : null
 		names = V1_ACCOUNT_PARAMS
 	} else {
-		const roles = p.list('role_ids')
+		const roles = arrayParam(p, 'role_ids')
 		const v2 = [sent('origin'), sent('status'), sent('permissions'), roles].some((value) => value !== undefined)
 		if (v2) {
 			origin = sent('origin') ?? null
@@ -288,13 +297,14 @@ export function accountFilter(version: 1 | 2, p: Params): ParsedAccountFilter {
 			names = [...new Set([...V2_ACCOUNT_PARAMS, ...V1_ACCOUNT_PARAMS])]
 		}
 	}
-	// AccountFilter drops origin=remote when by_domain is sent (origin_is_remote_and_domain_present?), then checks
-	// origin before status (KEYS order); Mastodon::InvalidParameterError is 400.
-	if (origin === 'remote' && searches.byDomain !== null) {
-		origin = null
-	}
+	// AccountFilter checks origin before status (KEYS order); Mastodon::InvalidParameterError is 400. by_domain is
+	// applied after origin and replaces its condition on the domain (scope.merge!), so with by_domain a valid origin
+	// selects nothing more: v1's default local origin included.
 	if (origin !== null && origin !== 'local' && origin !== 'remote') {
 		return { error: `Unknown origin: ${origin}` }
+	}
+	if (searches.byDomain !== null) {
+		origin = null
 	}
 	if (status !== null && !STATUSES.includes(status)) {
 		return { error: `Unknown status: ${status}` }

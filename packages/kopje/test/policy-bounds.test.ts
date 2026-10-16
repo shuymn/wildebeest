@@ -4820,6 +4820,21 @@ describe("the admin's account list reads a page, however many accounts do not ma
 			bulk: [remote('r')],
 			matching: 'a.deleted_at IS NULL AND l.suspended_at IS NULL',
 		},
+		// The active walks among many remote accounts whose deletion has started (awaiting their purge).
+		{
+			name: 'status=active among accounts being deleted',
+			filter: { status: 'active' },
+			match: remote('r'),
+			bulk: [{ ...remote('gone'), deleted: true }],
+			matching: 'a.deleted_at IS NULL AND l.suspended_at IS NULL',
+		},
+		{
+			name: 'origin=remote, status=active among accounts being deleted',
+			filter: { origin: 'remote', status: 'active' },
+			match: remote('r'),
+			bulk: [{ ...remote('gone'), deleted: true }],
+			matching: 'a.domain IS NOT NULL AND a.deleted_at IS NULL',
+		},
 	]
 
 	// The admin, then `few` accounts of the matching kind among `bulk` of the other kinds: each match after bulk / few of

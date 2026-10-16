@@ -117,6 +117,12 @@ export function deletingSql(a: string): string {
 	return `${a}.deleted_at IS NOT NULL`
 }
 
+// The accounts whose deletion has not started, the entries of the partial index accounts_available (migration
+// 0032_admin_accounts_available): its range in id order is what the admin's list of active accounts walks.
+export function notDeletingSql(a: string): string {
+	return `${a}.deleted_at IS NULL`
+}
+
 // Whether `owner` blocks the account `x`.
 export function blocksSql(owner: string, x: string): string {
 	return `EXISTS (SELECT 1 FROM main.blocks pb WHERE pb.account_id = ${owner} AND pb.target_account_id = ${x})`

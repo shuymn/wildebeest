@@ -298,7 +298,11 @@ describe('the admin account list: filters (AccountFilter)', () => {
 		expect(await list('?ip=127.0.0.1')).toEqual([])
 		// by_domain within the remote accounts (origin=remote is dropped for it), and nothing local.
 		expect(await list('?remote=true&by_domain=Other.example')).toEqual(expected(ids, ['dave']))
-		expect(await list('?by_domain=other.example')).toEqual([])
+		// by_domain replaces the origin's condition on the domain (v1's default local one included): that domain's
+		// active accounts, or with a state, that state's.
+		expect(await list('?by_domain=other.example')).toEqual(expected(ids, ['dave']))
+		expect(await list('?by_domain=remote.example')).toEqual(expected(ids, ['carol']))
+		expect(await list('?local=true&by_domain=remote.example&suspended=true')).toEqual(expected(ids, ['erin']))
 		expect(await list('?remote=true&display_name=ali')).toEqual(expected(ids, ['dave']))
 	})
 
@@ -314,6 +318,21 @@ describe('the admin account list: filters (AccountFilter)', () => {
 		expect(await list('?permissions=other')).toEqual(all)
 		expect(await list('?role_ids[]=-99')).toEqual(expected(ids, ['alice', 'bob', 'zed']))
 		expect(await list('?role_ids[]=3&role_ids[]=-99')).toEqual(expected(ids, ['owner', 'alice', 'bob', 'zed']))
+		// role_ids as a scalar too (Array(value)), alone or with the array form.
+		expect(await list('?role_ids=3')).toEqual(expected(ids, ['owner']))
+		expect(await list('?role_ids=-99')).toEqual(expected(ids, ['alice', 'bob', 'zed']))
+		expect(await list('?role_ids=1')).toEqual([])
+		expect(await list('?role_ids=3&role_ids[]=-99')).toEqual(expected(ids, ['owner', 'alice', 'bob', 'zed']))
+		// A scalar role_ids is a v2 name: the v1 names sent with it are not read (else suspended would give zed alone).
+		expect(await list('?role_ids=-99&local=true&suspended=true')).toEqual(expected(ids, ['alice', 'bob', 'zed']))
+		expect(await list('?role_ids[]=-99&remote=true&suspended=true')).toEqual(expected(ids, ['alice', 'bob', 'zed']))
+		// by_domain replaces either origin's condition on the domain; an unknown origin is still refused.
+		expect(await list('?origin=local&by_domain=other.example')).toEqual(expected(ids, ['dave']))
+		expect(await list('?origin=remote&by_domain=other.example')).toEqual(expected(ids, ['dave']))
+		expect(await call(h, '/api/v2/admin/accounts?origin=elsewhere&by_domain=other.example', admin)).toMatchObject({
+			status: 400,
+			body: { error: 'Unknown origin: elsewhere' },
+		})
 		for (const nothing of ['?role_ids[]=1', '?status=sensitized', '?status=pending', '?ip=::1', '?invited_by=1']) {
 			expect(await list(nothing), nothing).toEqual([])
 		}
@@ -438,6 +457,17 @@ describe('the admin account list: pages', () => {
 
 	it("carries Fedilab's v1 names on v2's Link, and v1's own names on v1's", async () => {
 		const { h, admin } = await world()
+		// The effective roles: a scalar role_ids is carried as role_ids[].
+		const roles = await call(h, '/api/v2/admin/accounts?role_ids=-99&limit=1', admin)
+		const nextRoles = new URL(/<([^>]+)>; rel="next"/.exec(roles.link ?? '')![1]!)
+		expect([...nextRoles.searchParams.entries()]).toEqual([
+			['limit', '1'],
+			['max_id', idsOf(roles.body)[0]!],
+			['role_ids[]', '-99'],
+		])
+		const followed = await call(h, nextRoles.pathname + nextRoles.search, admin)
+		expect(followed.body as AdminAccountBody[]).toHaveLength(1)
+		expect((followed.body as AdminAccountBody[])[0]!.role).toMatchObject({ id: '-99' })
 		const v2 = await call(h, '/api/v2/admin/accounts?local=true&remote=true&active=true&limit=1', admin)
 		const next2 = new URL(/<([^>]+)>; rel="next"/.exec(v2.link ?? '')![1]!)
 		expect(next2.pathname).toBe('/api/v2/admin/accounts')

@@ -58,9 +58,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   `GET /api/v2/admin/accounts` and `GET /api/v1/admin/accounts/:id`, and `POST .../enable`, `unsilence`,
   `unsensitive`, `approve` and `reject`.
     - The lists take Mastodon's filters: v1's names and defaults (active local accounts unless `remote` or a state is
-      sent; the last state sent wins; `staff`), and v2's `origin`, `status`, `permissions=staff` and `role_ids[]`,
-      with `username` (a prefix, a leading `@` dropped), `display_name` (a prefix), `email` (a prefix), `by_domain`,
-      `ip` and `invited_by`. An unknown `origin` or `status` is answered 400 `Unknown origin: x` or
+      sent; the last state sent wins; `staff`), and v2's `origin`, `status`, `permissions=staff` and `role_ids`
+      (one or many), with `username` (a prefix, a leading `@` dropped), `display_name` (a prefix), `email` (a
+      prefix), `by_domain` (which replaces the origin, v1's default included, as in Mastodon), `ip` and
+      `invited_by`. An unknown `origin` or `status` is answered 400 `Unknown origin: x` or
       `Unknown status: x`. Newest first, with `Link` headers; 100 accounts by default and at most 200.
     - Unlike Mastodon, v2 reads the v1 names Fedilab sends it (`local`, `remote`, the five states, `staff`) when no
       v2 filter name is sent: exactly one of `local` and `remote` gives the origin, exactly one state gives the
@@ -97,6 +98,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       2.3 seconds in workerd's local Durable Object SQLite.
     - `0031_admin_accounts`: adds an index of the accounts' lowercased display names, for the admin's display name
       search. It reads only the accounts: on the same benchmark store its upgrade took 2.8 seconds.
+    - `0032_admin_accounts_available`: adds an index of the accounts whose deletion has not started, by id, so the
+      admin's list of active accounts skips none awaiting their purge. It reads only the accounts: on the same
+      benchmark store its upgrade took 2.8 seconds.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.9] - 2026-10-16
