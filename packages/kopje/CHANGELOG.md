@@ -8,6 +8,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+## [0.1.0-rc.9] - 2026-10-16
+
+A ninth release candidate of the first release, published under the npm dist-tag `next`.
+
 ### Added
 
 - A remote account's pinned posts, featured hashtags and hidden network, learned as Mastodon 4.5 learns them:
