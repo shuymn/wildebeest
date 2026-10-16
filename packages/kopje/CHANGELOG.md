@@ -30,7 +30,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   `unassign`, `resolve` and `reopen`. Everyone else is still answered 403, a missing report included.
     - The list shows the unresolved reports, or with `resolved` (whatever its value, as Mastodon) the resolved ones,
       by `account_id` (the reporter) and `target_account_id`, newest first, with `Link` headers. It holds 100 reports
-      by default and at most 200, and stops early, offering the next page, once its reports name 400 statuses.
+      by default and at most 200, and stops early, offering the next page, once its reports name 100 statuses.
     - A report shows its reporter, reported account, assignee and resolver as admin accounts (a local account's email
       and role; for a remote account the fields of a missing user are null), its rules, and the statuses it names
       that its reporter may still see; Mastodon shows them all.

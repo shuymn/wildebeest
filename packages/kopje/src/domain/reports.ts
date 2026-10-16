@@ -270,9 +270,10 @@ export type AdminReport = {
 // The index's page (reports_controller.rb:7, Api::BaseController#limit_param: 100 by default, at most twice that).
 export const ADMIN_REPORTS_LIMIT = 100
 export const MAX_ADMIN_REPORTS_LIMIT = 200
-// The statuses one page of the index presents at most: each report names up to MAX_REPORT_STATUSES, so a page stops
-// before a report that would pass this, after at least one, and offers the next page.
-export const ADMIN_REPORT_STATUS_BUDGET = 400
+// The statuses one page of the index presents at most: a page stops before a report that would pass this, after at
+// least one, and offers the next page. One report's worth (MAX_REPORT_STATUSES), so a page of remote statuses at their
+// size limits (content and poll options) stays well inside the Store's RPC response limit.
+export const ADMIN_REPORT_STATUS_BUDGET = MAX_REPORT_STATUSES
 
 // The rules of the instance, read once per response.
 function instanceRules(db: Db): InstanceRule[] {

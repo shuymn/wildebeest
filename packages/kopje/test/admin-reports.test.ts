@@ -457,11 +457,11 @@ describe('GET /api/v1/admin/reports: ReportFilter', () => {
 
 	it('stops a page at the status budget after at least one report, and offers the next page', async () => {
 		const { h, alice, carol, admin } = await world()
-		const named = Array.from({ length: 100 }, (_, i) => String(900000000000000000n + BigInt(i)))
-		await seedReports(h.store, alice.id, carol, 6, { statuses: named })
+		const named = Array.from({ length: 50 }, (_, i) => String(900000000000000000n + BigInt(i)))
+		await seedReports(h.store, alice.id, carol, 2 + ADMIN_REPORT_STATUS_BUDGET / 50, { statuses: named })
 		const first = await call(h, '/api/v1/admin/reports?limit=10', admin)
 		const page = first.body as AdminReportBody[]
-		expect(page).toHaveLength(ADMIN_REPORT_STATUS_BUDGET / 100)
+		expect(page).toHaveLength(ADMIN_REPORT_STATUS_BUDGET / 50)
 		const next = /<([^>]+)>; rel="next"/.exec(first.link ?? '')?.[1]
 		expect(next).toBe(`https://kopje.test/api/v1/admin/reports?limit=10&max_id=${page.at(-1)?.id}`)
 		const rest = await call(h, next!.replace('https://kopje.test', ''), admin)
