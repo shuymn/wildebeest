@@ -25,6 +25,13 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       tokens follow a change of `admin_email` at once. `/setup` after bootstrap uses the same match.
     - `GET /admin/health` (Access only) shows `oauthAdmin`: `status` (`ok`, `unset`, `none`, `suspended` or
       `ambiguous`) and the matched `username`.
+
+## [0.1.0-rc.9] - 2026-10-16
+
+A ninth release candidate of the first release, published under the npm dist-tag `next`.
+
+### Added
+
 - A remote account's pinned posts, featured hashtags and hidden network, learned as Mastodon 4.5 learns them:
   `GET /api/v1/accounts/:id/statuses?pinned=true` and `GET /api/v1/accounts/:id/featured_tags` now show a remote
   account's, and its `hide_collections` is shown and hides its followers and following lists as a local account's
