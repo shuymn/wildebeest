@@ -113,20 +113,24 @@ async function hidesCollections(sync: CollectionSync, origin: string | null, loa
 	return following === true && followers === true ? false : null
 }
 
-// FetchFeaturedCollectionService: the first MAX_REMOTE_PINS items of the first page, or null when it cannot be read.
+// FetchFeaturedCollectionService: the first MAX_REMOTE_PINS items of the first page, null when it cannot be read, or
+// 'transient' when it may be read later.
 // Among them, Notes (or ids) of the actor's origin are its pins, and Hashtags its featured hashtags when it has no
 // featuredTags collection. The items past them are never looked at, whatever they are.
 async function readFeatured(
 	sync: CollectionSync,
 	origin: string | null,
 	loader: DocumentLoader
-): Promise<{ uris: string[]; hashtags: string[] } | null> {
+): Promise<{ uris: string[]; hashtags: string[] } | 'transient' | null> {
 	const collection = await documentOn(sync.featured, origin, loader)
 	if (collection === null || collection === 'transient') {
-		return null
+		return collection
 	}
 	const page = collection.first === undefined ? collection : await documentOn(collection.first, origin, loader)
-	const items = page === null || page === 'transient' ? null : (itemsOf(page)?.slice(0, MAX_REMOTE_PINS) ?? null)
+	if (page === 'transient') {
+		return page
+	}
+	const items = page === null ? null : (itemsOf(page)?.slice(0, MAX_REMOTE_PINS) ?? null)
 	if (items === null) {
 		return null
 	}
@@ -142,34 +146,38 @@ async function readFeatured(
 }
 
 // The pinned statuses the Store does not have, fetched (FetchRemoteStatusService): a usable status, or null for one
-// that is not; one that may be fetched later (the budget spent included) is left out, so it is not pinned this time.
+// that is not; one that may be fetched later (the budget spent included) is left out, so it is not pinned this time,
+// and counted in `left`.
 async function fetchPinned(
 	uris: string[],
 	loader: DocumentLoader,
 	stored: (uris: string[]) => Promise<string[]>
-): Promise<Record<string, RemoteStatusInput | null>> {
+): Promise<{ fetched: Record<string, RemoteStatusInput | null>; left: number }> {
 	const known = new Set(uris.length === 0 ? [] : await stored(uris))
 	const fetched: Record<string, RemoteStatusInput | null> = {}
+	let left = 0
 	for (const uri of uris.filter((u) => !known.has(u))) {
 		const status = await fetchRemoteStatus(uri, loader)
-		if (status.kind !== 'transient') {
+		if (status.kind === 'transient') {
+			left++
+		} else {
 			fetched[uri] = status.kind === 'ok' ? status.status : null
 		}
 	}
-	return fetched
+	return { fetched, left }
 }
 
 // FetchFeaturedTagsCollectionService: the Hashtags of its pages, until MAX_FEATURED_TAGS items, a page without items,
-// or MAX_FEATURED_TAG_PAGES pages. null when a page may be read later (Mastodon retries the job) or the collection
-// cannot be read; a later page that cannot be read at all ends it with what was read.
+// or MAX_FEATURED_TAG_PAGES pages. 'transient' when a page may be read later (Mastodon retries the job), null when the
+// collection cannot be read; a later page that cannot be read at all ends it with what was read.
 async function readFeaturedTags(
 	sync: CollectionSync,
 	origin: string | null,
 	loader: DocumentLoader
-): Promise<string[] | null> {
+): Promise<string[] | 'transient' | null> {
 	const collection = await documentOn(sync.featuredTags, origin, loader)
 	if (collection === null || collection === 'transient') {
-		return null
+		return collection
 	}
 	const items: unknown[] = []
 	let page: Json | 'transient' | null =
@@ -192,25 +200,35 @@ async function readFeaturedTags(
 		page = await documentOn(page.next, origin, loader)
 	}
 	if (page === 'transient') {
-		return null
+		return page
 	}
 	return hashtagNames(items).slice(0, MAX_FEATURED_TAGS)
 }
 
 // What a round reads of one account's collections: the collections first, then the pinned statuses to fetch, which
-// take what is left of the budget.
+// take what is left of the budget. unfinished: something may be read later (a fetch that may pass, the budget spent),
+// so the sync continues; progressed: a pinned status was fetched, so a later round has less to do.
 export async function readCollections(
 	sync: CollectionSync,
 	loader: DocumentLoader,
 	stored: (uris: string[]) => Promise<string[]>
-): Promise<Pick<CollectionSyncInput, 'pins' | 'tags' | 'hideCollections'>> {
+): Promise<Pick<CollectionSyncInput, 'pins' | 'tags' | 'hideCollections' | 'unfinished' | 'progressed'>> {
 	const origin = originOf(sync.accountUri)
 	const hideCollections = await hidesCollections(sync, origin, loader)
-	const featured = sync.featured === null ? null : await readFeatured(sync, origin, loader)
-	const tags = sync.featuredTags === null ? (featured?.hashtags ?? null) : await readFeaturedTags(sync, origin, loader)
-	const pins =
-		featured === null ? null : { uris: featured.uris, fetched: await fetchPinned(featured.uris, loader, stored) }
-	return { pins, tags, hideCollections }
+	const read = sync.featured === null ? null : await readFeatured(sync, origin, loader)
+	const featured = read === 'transient' ? null : read
+	const listed =
+		sync.featuredTags === null ? (featured?.hashtags ?? null) : await readFeaturedTags(sync, origin, loader)
+	const tags = listed === 'transient' ? null : listed
+	const pinned = featured === null ? null : await fetchPinned(featured.uris, loader, stored)
+	return {
+		pins: featured === null || pinned === null ? null : { uris: featured.uris, fetched: pinned.fetched },
+		tags,
+		hideCollections,
+		// hidesCollections is null only when a collection may be read later.
+		unfinished: hideCollections === null || read === 'transient' || listed === 'transient' || (pinned?.left ?? 0) > 0,
+		progressed: Object.keys(pinned?.fetched ?? {}).length > 0,
+	}
 }
 
 // One round: up to COLLECTION_SYNCS_PER_ROUND syncs, each claimed, read and applied. Returns whether another waits.

@@ -29,9 +29,11 @@ import { httpUrl } from '../platform/http-url'
 // local accounts to five) but reads only the first page of the collection; Kopje bounds them, so the pinned read of a
 // remote profile stays bounded.
 export const MAX_REMOTE_PINS = 20
-// Claims of one sync before it is dropped, and how long a claim holds it from other rounds.
+// Rounds of one sync that end with nothing done before it is dropped, how long a claim holds it from other rounds, and
+// how long a round that did nothing leaves it before it is due again.
 export const MAX_SYNC_ATTEMPTS = 3
 export const SYNC_LEASE_MS = 10 * 60 * 1000
+export const SYNC_RETRY_MS = 15 * 60 * 1000
 
 // Asks for a sync of the account's collections (ProcessAccountService#check_featured_collection! and
 // #check_featured_tags_collection!, and the hide_collections it sets). One request per account waits at a time, as
@@ -279,6 +281,8 @@ export const storedStatusUris = readOperation<{ uris: readonly string[] }, strin
 //   tags: the names of the Hashtags the featuredTags collection lists (or, for an actor without one, the featured
 //         collection: FetchFeaturedCollectionService with hashtag).
 //   hideCollections: whether its followers or following collection hides its items (no first page).
+//   unfinished: part of it may be read later (a fetch that may pass, or the budget spent), so the sync continues.
+//   progressed: the round fetched a pinned status, so a later one has less to do.
 export type CollectionSyncInput = {
 	now: number
 	origin: string
@@ -287,12 +291,17 @@ export type CollectionSyncInput = {
 	pins: { uris: string[]; fetched: Record<string, RemoteStatusInput | null> } | null
 	tags: string[] | null
 	hideCollections: boolean | null
+	unfinished: boolean
+	progressed: boolean
 }
 
 // Applies what a round read (FetchFeaturedCollectionService#process_note_items and #process_hashtag_items,
 // FetchFeaturedTagsCollectionService#process_items, ProcessAccountService#set_fetchable_attributes!) and ends the sync.
-// Nothing is applied to an account that is gone or unavailable. A sync asked for again since the round claimed it (a
-// newer generation) is not ended but made due at once, to be read again. Returns whether a sync is due.
+// Nothing is applied to an account that is gone or unavailable. The sync ends when the round read all of it. It is made
+// due at once, with its count of fruitless rounds reset, when it was asked for again since the round claimed it (a
+// newer generation) or when the round made progress (a pinned status fetched): unfinished work is not dropped for a
+// budget the collections spent, and only rounds that do nothing count toward MAX_SYNC_ATTEMPTS. A round that did
+// nothing leaves it due after SYNC_RETRY_MS. Returns whether a sync is due.
 export const applyCollectionSync = writeOperation<CollectionSyncInput, boolean>((db, input) => {
 	const account = db.first<{ id: string; uri: string }>(
 		'SELECT id, uri FROM accounts WHERE uri = ? AND domain IS NOT NULL',
@@ -301,8 +310,25 @@ export const applyCollectionSync = writeOperation<CollectionSyncInput, boolean>(
 	if (account === undefined) {
 		return claimable(db, input.now) !== undefined
 	}
-	db.run('DELETE FROM collection_syncs WHERE account_id = ? AND generation = ?', account.id, input.generation)
-	db.run('UPDATE collection_syncs SET due_at = ?, attempts = 0 WHERE account_id = ?', input.now, account.id)
+	if (!input.unfinished) {
+		db.run('DELETE FROM collection_syncs WHERE account_id = ? AND generation = ?', account.id, input.generation)
+	}
+	const renewed =
+		input.progressed ||
+		db.first(
+			'SELECT 1 AS x FROM collection_syncs WHERE account_id = ? AND generation <> ?',
+			account.id,
+			input.generation
+		) !== undefined
+	db.run(
+		`UPDATE collection_syncs SET due_at = CASE WHEN ?3 THEN ?2 ELSE ?2 + ?4 END,
+			attempts = CASE WHEN ?3 THEN 0 ELSE attempts END
+		WHERE account_id = ?1`,
+		account.id,
+		input.now,
+		renewed ? 1 : 0,
+		SYNC_RETRY_MS
+	)
 	if (db.first(`SELECT 1 AS x WHERE ${availableSql('?1')}`, account.id) !== undefined) {
 		applyRead(db, account, input)
 	}

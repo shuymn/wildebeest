@@ -19,8 +19,9 @@ import {
 	setup,
 } from './inbox-status-helpers'
 import { MAX_FEATURED_TAGS } from '../src/domain/featured-tags'
-import { MAX_REMOTE_PINS } from '../src/domain/remote-collections'
-import { MAX_FEATURED_TAG_PAGES, syncCollections } from '../src/federation/collections'
+import { MAX_REMOTE_PINS, SYNC_RETRY_MS } from '../src/domain/remote-collections'
+import { COLLECTION_SYNCS_PER_ROUND, MAX_FEATURED_TAG_PAGES, syncCollections } from '../src/federation/collections'
+import { REQUEST_MAX_FETCHES } from '../src/federation/loader'
 
 // A remote account's pinned statuses, featured hashtags and hide_collections (Mastodon 4.5's ActivityPub::Activity::Add
 // and Remove, FetchFeaturedCollectionService, FetchFeaturedTagsCollectionService and
@@ -65,9 +66,12 @@ async function featuredTags(t: Setup, accountId: string): Promise<FeaturedTag[]>
 const rows = (t: Setup, table: string) => sql<{ n: number }>(t.store, `SELECT count(*) AS n FROM ${table}`)
 
 // A round of jobs' syncs, as the Queue's and cron's rounds run them, until none waits.
+function deps(t: Setup, loader: Parameters<typeof inboxDeps>[1] = t.web.loader) {
+	return inboxDeps(() => t.store, loader)
+}
+
 async function sync(t: Setup, loader: Parameters<typeof inboxDeps>[1] = t.web.loader): Promise<void> {
-	const deps = inboxDeps(() => t.store, loader)
-	for (let round = 0; round < 5 && (await syncCollections(t.env, deps)); round++) {
+	for (let round = 0; round < 5 && (await syncCollections(t.env, deps(t, loader))); round++) {
 		// Another sync waits.
 	}
 	expect(await rows(t, 'collection_syncs')).toEqual([{ n: 0 }])
@@ -315,7 +319,7 @@ describe('reading a remote account’s collections', () => {
 		expect(await t.post(bob, create(bob, fresh))).toBe(202)
 		// When the round asks for the old featured collection, bob's Update naming featured2 arrives first.
 		let updated = false
-		const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+		const intercepted = (async (input: RequestInfo | URL, init?: RequestInit) => {
 			const url = new Request(input, init).url
 			if (url === featuredOf(bob) && !updated) {
 				updated = true
@@ -325,9 +329,34 @@ describe('reading a remote account’s collections', () => {
 			}
 			return t.web.fetch(input, init)
 		}) as typeof fetch
-		await sync(t, { ...t.web.loader, fetch })
+		await sync(t, { ...t.web.loader, fetch: intercepted })
 		expect(updated).toBe(true)
 		expect(await pinned(t, bobId, null)).toEqual([fresh.id])
+	})
+
+	it('continues a sync the fetch budget cut short in later rounds, until every pin is fetched', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		// Four collections, then more pinned statuses Kopje does not have than the budgets of one call's rounds fetch.
+		const notes = Array.from({ length: MAX_REMOTE_PINS }, () => mastodonNote(bob))
+		expect(notes.length).toBeGreaterThan(COLLECTION_SYNCS_PER_ROUND * (REQUEST_MAX_FETCHES - 4))
+		for (const note of notes) {
+			t.web.serve(note.id, { '@context': AS, ...note })
+		}
+		await servedCollections(
+			t,
+			bob,
+			notes.map((note) => note.id),
+			[hashtag('Cats')]
+		)
+		t.web.serve(`${bob.uri}/followers`, followCollection(bob, 'followers', true))
+		t.web.serve(`${bob.uri}/following`, followCollection(bob, 'following', true))
+		const bobId = await followed(t, bob)
+		// A call's rounds fetch what their budgets allow and say another is due.
+		expect(await syncCollections(t.env, deps(t))).toBe(true)
+		expect((await pinned(t, bobId, null)).length).toBeLessThan(notes.length)
+		await sync(t)
+		expect(await pinned(t, bobId, null)).toEqual(notes.map((note) => note.id))
 	})
 
 	it('keeps the first MAX_REMOTE_PINS items and MAX_FEATURED_TAGS hashtags of an oversized collection', async () => {
@@ -409,15 +438,19 @@ describe('reading a remote account’s collections', () => {
 		t.web.fail(`${bob.uri}/collections/tags`, 503)
 		t.web.fail(`${bob.uri}/following`, 503)
 		await sql(t.store, 'INSERT INTO collection_syncs (account_id, due_at) VALUES (?, 0)', bobId)
-		await sync(t)
+		expect(await syncCollections(t.env, deps(t))).toBe(false)
 		expect(await pinned(t, bobId, null)).toEqual([note.id])
 		expect((await featuredTags(t, bobId)).map((tag) => tag.name)).toEqual(['Cats'])
 		expect((await t.api<Account>(`/api/v1/accounts/${bobId}`, null)).body.hide_collections).toBe(false)
+		// The sync waits to be tried again later; a round that did nothing counts toward MAX_SYNC_ATTEMPTS.
+		expect(await sql(t.store, 'SELECT due_at, attempts FROM collection_syncs')).toEqual([
+			{ due_at: NOW + SYNC_RETRY_MS, attempts: 1 },
+		])
 
 		// The following collection still times out, but the followers collection now hides its items: hidden.
 		t.web.serve(`${bob.uri}/followers`, followCollection(bob, 'followers', false))
-		await sql(t.store, 'INSERT INTO collection_syncs (account_id, due_at) VALUES (?, 0)', bobId)
-		await sync(t)
+		await sql(t.store, 'UPDATE collection_syncs SET due_at = 0')
+		await syncCollections(t.env, deps(t))
 		expect((await t.api<Account>(`/api/v1/accounts/${bobId}`, null)).body.hide_collections).toBe(true)
 		expect((await t.api<Account[]>(`/api/v1/accounts/${bobId}/followers`, null)).body).toEqual([])
 	})

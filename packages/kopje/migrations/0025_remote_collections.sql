@@ -18,8 +18,8 @@
 --   only writer (applyCollectionSync) writes 0 or 1.
 -- - collection_syncs holds the remote accounts whose collections are to be read again (Mastodon's
 --   SynchronizeFeaturedCollectionWorker and SynchronizeFeaturedTagsCollectionWorker), one row each, written when the
---   account's document is stored and deleted once the Worker has read them (or after MAX_SYNC_ATTEMPTS claims that
---   never finished). due_at is when a round may take it: the time it was asked for, then, once a round takes it, the
+--   account's document is stored and deleted once the Worker has read all of them (or after MAX_SYNC_ATTEMPTS rounds
+--   that did nothing: attempts counts those, and a round that fetched something leaves the rest due at once). due_at is when a round may take it: the time it was asked for, then, once a round takes it, the
 --   end of that round's lease, so that a round that died leaves it to a later one. A round seeks the earliest due_at
 --   at or before its time through collection_syncs_due, so syncs held by rounds are never read past. generation counts
 --   the requests: a request while a round holds the sync (an Update of the actor naming other collections) raises it,
