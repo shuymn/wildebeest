@@ -12,7 +12,7 @@ import { addToConversation, type Conversation, listConversations } from '../src/
 import { listNotifications, type Notification } from '../src/domain/notifications'
 import type { Status } from '../src/domain/status-presenter'
 import { streamUnit } from '../src/domain/streaming'
-import { homeTimeline, listTimeline } from '../src/domain/timelines'
+import { homeTimeline, listTimeline, publicTimeline, tagTimeline } from '../src/domain/timelines'
 import type { StoreStub } from '../src/platform/store-client'
 import type { StoreOperation } from '../src/platform/store-kernel'
 
@@ -22,7 +22,10 @@ import type { StoreOperation } from '../src/platform/store-kernel'
 //   - `update` on `user`: home positioned at the status (the read with max_id just above it and limit 1);
 //   - `status.update` on `user`: home positioned at it, or, with a notification scope, the mention reference (the
 //     viewer's notifications of type mention, listed in full, hold one of the status);
-//   - `status.update` on `user:notification`: the mention reference alone.
+//   - `status.update` on `user:notification`: the mention reference alone;
+//   - `update` and `status.update` on each `public*` stream and on `hashtag` and `hashtag:local` (#cats): the public or
+//     the hashtag's timeline positioned at the status, less a status that mentions (not silently) an account the
+//     viewer blocks or mutes (the streams' per-connection filter, read here from the world's own rows).
 // Then the window cases: what positioned membership means for home's followed-hashtag windows, which a page read from
 // the top cuts at tagCandidates candidates (the documented difference).
 
@@ -42,9 +45,36 @@ const caseArb: fc.Arbitrary<Case> = fc.record({
 	filtered: fc.array(fc.boolean(), { maxLength: 64 }),
 })
 
+// The `public*` streams with their timelines, and the hashtag streams of the world's hashtag.
+const PUBLIC_FEEDS = [
+	['public', { local: false, remote: false, onlyMedia: false }],
+	['public:local', { local: true, remote: false, onlyMedia: false }],
+	['public:remote', { local: false, remote: true, onlyMedia: false }],
+	['public:media', { local: false, remote: false, onlyMedia: true }],
+	['public:local:media', { local: true, remote: false, onlyMedia: true }],
+	['public:remote:media', { local: false, remote: true, onlyMedia: true }],
+] as const
+const HASHTAG_FEEDS = [
+	['hashtag:cats', false],
+	['hashtag:local:cats', true],
+] as const
+
 function writeCase(sql: SqlStorage, { world, filtered }: Case): void {
 	sql.exec('DELETE FROM oauth_tokens')
+	sql.exec('DELETE FROM media_attachments')
 	writeWorld(sql, world)
+	// Media: an attachment shown on every third original, and one not shown (an edit removed it) on the next.
+	world.statuses.forEach((status, s) => {
+		if (status.reblogOf === null && s % 3 !== 2) {
+			sql.exec(
+				"INSERT INTO media_attachments (id, account_id, status_id, type, url, shown) VALUES (?, ?, ?, 'image', 'https://kopje.test/m', ?)",
+				String(BigInt(statusId(s)) + 1n),
+				accountId(status.author),
+				statusId(s),
+				s % 3 === 0 ? 1 : 0
+			)
+		}
+	})
 	// Arrived as published: inside the real-time window.
 	sql.exec('UPDATE statuses SET created_at = published_at')
 	world.accounts.forEach((account, x) => {
@@ -216,12 +246,76 @@ function check(sql: SqlStorage, c: Case): string[] {
 			if (mention && !positioned) {
 				shown.add('mention only')
 			}
+			// The feeds: each timeline positioned at the status, less the per-connection filter.
+			const at = { limit: 1, maxId: String(BigInt(id) + 1n) }
+			const filteredOut =
+				sql
+					.exec(
+						`SELECT 1 FROM status_mentions m WHERE m.status_id = ?1 AND m.silent = 0
+							AND (m.account_id IN (SELECT target_account_id FROM blocks WHERE account_id = ?2)
+								OR m.account_id IN (SELECT target_account_id FROM mutes WHERE account_id = ?2
+									AND (expires_at IS NULL OR expires_at > ?3)))`,
+						id,
+						accountId(viewer),
+						world.now
+					)
+					.toArray().length > 0
+			const feeds = [
+				...PUBLIC_FEEDS.map(([key, feed]) => {
+					const page = ok<Page<Status>>(
+						run(publicTimeline, { credential, now, page: at, ...feed, present: PRESENT }),
+						key
+					)
+					return [key, page.items[0]?.id === id] as const
+				}),
+				...HASHTAG_FEEDS.map(([key, local]) => {
+					const page = ok<Page<Status>>(
+						run(tagTimeline, {
+							credential,
+							now,
+							page: at,
+							tag: 'cats',
+							any: [],
+							all: [],
+							none: [],
+							local,
+							remote: false,
+							onlyMedia: false,
+							present: PRESENT,
+						}),
+						key
+					)
+					return [key, page.items[0]?.id === id] as const
+				}),
+			]
+			const expectedFeeds = feeds.flatMap(([key, found]) => (found && !filteredOut ? [key] : []))
+			for (const kind of ['status', 'edit']) {
+				const made = run<{ streams: { stream: string }[] }>(streamUnit, {
+					kind,
+					subject: id,
+					accountId: accountId(viewer),
+					tokenHashes: [tokenOf(viewer, 'statuses')],
+					feeds: feeds.map(([key]) => key),
+					now,
+				})
+				const sent = made.streams.map(({ stream }) => stream).filter((stream) => /^(public|hashtag)/.test(stream))
+				if (JSON.stringify(sent) !== JSON.stringify(expectedFeeds)) {
+					problems.push(
+						`${kind} on feeds ${world.accounts[viewer]?.name} ${world.statuses[s]?.name}: sent [${sent.join(' ')}], the references [${expectedFeeds.join(' ')}]`
+					)
+				}
+			}
+			for (const [key, found] of feeds) {
+				if (found) {
+					shown.add(filteredOut ? 'feed filtered' : key)
+				}
+			}
 		})
 	})
 	return problems
 }
 
-describe('R33: the streamed statuses agree with their references', () => {
+describe('R33: the streamed statuses agree with their references (user, lists, public and hashtag)', () => {
 	let store: StoreStub
 	beforeAll(async () => {
 		store = await migratedStore()
@@ -241,8 +335,18 @@ describe('R33: the streamed statuses agree with their references', () => {
 			}),
 			runs(CASES)
 		)
-		expect([...shown].sort()).toEqual(['home', 'list', 'mention only'])
-	}, 120_000)
+		expect([...shown].sort()).toEqual(
+			[
+				'feed filtered',
+				'hashtag:cats',
+				'hashtag:local:cats',
+				'home',
+				'list',
+				'mention only',
+				...PUBLIC_FEEDS.map(([key]) => key),
+			].sort()
+		)
+	}, 240_000)
 })
 
 // Home's followed-hashtag windows (timelines.ts tagCandidates): a page from the top inspects 40 of a hashtag's public

@@ -4747,6 +4747,217 @@ describe("streamed lists and conversations read their items, however large the l
 	}, 120_000)
 })
 
+describe("streamed public and hashtag statuses read their items, however large the timelines and the viewer's filters (RES-7)", () => {
+	const VIEWER_ID = '699000000000000000'
+	const AUTHOR_ID = '699000000000000001'
+	const LOCAL_ID = '699000000000000002'
+	const MUTED_ID = '699000000000000003'
+	const OTHERS = 699100000000000000n
+	const FILTERED = 699200000000000000n
+	const AUTHOR_STATUSES = 796000000000000000n
+	const OTHER_STATUSES = 797000000000000000n
+	const FILTERED_STATUSES = 798000000000000000n
+	const MEDIA_STATUS = '799000000000000000'
+	const MENTION_STATUS = '799000000000000001'
+	const TOKEN = 'stream-feeds-token'
+	// Every feed a socket may subscribe to with the world's hashtag, as the hub passes them (sorted).
+	const FEEDS = [
+		'hashtag:cats',
+		'hashtag:local:cats',
+		'public',
+		'public:local',
+		'public:local:media',
+		'public:media',
+		'public:remote',
+		'public:remote:media',
+	]
+
+	type Size = { perAuthor: number; others: number; filtered: number }
+
+	// A remote author with `perAuthor` public #cats statuses; `others` remote accounts with one each; `filtered` remote
+	// accounts the viewer blocks, mutes or domain-blocks (a third each), with one each, all newer than the checked ones;
+	// a local account's public #cats status with media, and another mentioning an account the viewer mutes.
+	async function world(size: Size): Promise<StoreStub> {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			const at = new Date(NOW).toISOString()
+			sql.exec("INSERT INTO instance_settings (name, value) VALUES ('domain', 'kopje.test')")
+			for (const [id, name, domain] of [
+				[VIEWER_ID, 'viewer', null],
+				[AUTHOR_ID, 'author', 'far.example'],
+				[LOCAL_ID, 'local', null],
+				[MUTED_ID, 'muted', 'far.example'],
+			] as const) {
+				sql.exec(
+					'INSERT INTO accounts (id, uri, username, domain) VALUES (?, ?, ?, ?)',
+					id,
+					`https://${domain ?? 'kopje.test'}/users/${name}`,
+					name,
+					domain
+				)
+			}
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) SELECT id, username || '@example.com', X'00', X'00', 'test' FROM accounts WHERE domain IS NULL"
+			)
+			const accounts = (base: bigint, count: number, prefix: string) =>
+				sql.exec(
+					`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+					INSERT INTO accounts (id, uri, username, domain)
+					SELECT CAST(?2 + i AS TEXT), 'https://' || ?3 || i || '.example/users/x', 'x', ?3 || i || '.example' FROM n
+					WHERE ?1 > 0`,
+					count,
+					String(base),
+					prefix
+				)
+			accounts(OTHERS, size.others, 'o')
+			accounts(FILTERED, size.filtered, 'f')
+			const statuses = (base: bigint, count: number, author: string | null) =>
+				sql.exec(
+					`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+					INSERT INTO statuses (id, uri, account_id, visibility, content, published_at, created_at)
+					SELECT CAST(?2 + i AS TEXT), 'https://far.example/objects/' || (?2 + i),
+						coalesce(?3, CAST(?5 + i AS TEXT)), 'public', '<p>#cats</p>', ?4, ?4
+					FROM n WHERE ?1 > 0`,
+					count,
+					String(base),
+					author,
+					at,
+					String(author === null ? (base === OTHER_STATUSES ? OTHERS : FILTERED) : 0n)
+				)
+			statuses(AUTHOR_STATUSES, size.perAuthor, AUTHOR_ID)
+			statuses(OTHER_STATUSES, size.others, null)
+			statuses(FILTERED_STATUSES, size.filtered, null)
+			for (const [id, content] of [
+				[MEDIA_STATUS, '<p>#cats</p>'],
+				[MENTION_STATUS, '<p>#cats @muted</p>'],
+			]) {
+				sql.exec(
+					`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at, created_at)
+					VALUES (?, ?, ?, 'public', ?, ?, ?)`,
+					id,
+					`https://kopje.test/ap/o/${id}`,
+					LOCAL_ID,
+					content,
+					at,
+					at
+				)
+			}
+			sql.exec("INSERT INTO status_tags (status_id, name, public) SELECT id, 'cats', 1 FROM statuses")
+			sql.exec(
+				"INSERT INTO media_attachments (id, account_id, status_id, type, url) VALUES ('799100000000000000', ?, ?, 'image', 'https://kopje.test/m')",
+				LOCAL_ID,
+				MEDIA_STATUS
+			)
+			sql.exec('INSERT INTO status_mentions (status_id, account_id, silent) VALUES (?, ?, 0)', MENTION_STATUS, MUTED_ID)
+			sql.exec('INSERT INTO mutes (account_id, target_account_id) VALUES (?, ?)', VIEWER_ID, MUTED_ID)
+			// The filtered accounts: blocked, muted and domain-blocked, a third each.
+			sql.exec(
+				`INSERT INTO blocks (account_id, target_account_id) SELECT ?1, id FROM accounts WHERE id GLOB '6992*' AND CAST(id AS INTEGER) % 3 = 0`,
+				VIEWER_ID
+			)
+			sql.exec(
+				`INSERT INTO mutes (account_id, target_account_id) SELECT ?1, id FROM accounts WHERE id GLOB '6992*' AND CAST(id AS INTEGER) % 3 = 1`,
+				VIEWER_ID
+			)
+			sql.exec(
+				`INSERT INTO domain_blocks (account_id, domain) SELECT ?1, domain FROM accounts WHERE id GLOB '6992*' AND CAST(id AS INTEGER) % 3 = 2`,
+				VIEWER_ID
+			)
+			sql.exec(
+				"INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('stream-feeds', 'secret', 'stream-feeds', 'urn:ietf:wg:oauth:2.0:oob', 'read')"
+			)
+			sql.exec(
+				"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES (?, 'access', 'stream-feeds', ?, 'read')",
+				TOKEN,
+				VIEWER_ID
+			)
+		})
+		return store
+	}
+
+	// The checks: [name, kind, status id, the event and streams it must make in the grown world].
+	function checks(size: Size): [string, string, string, string, string[]][] {
+		const author = (i: number) => String(AUTHOR_STATUSES + BigInt(i))
+		const remote = ['hashtag:cats', 'public', 'public:remote']
+		return [
+			['newest of the author', 'status', author(size.perAuthor - 1), 'update', remote],
+			['oldest of the author', 'status', author(0), 'update', remote],
+			['an edit of the oldest', 'edit', author(0), 'status.update', remote],
+			[
+				'local with media',
+				'status',
+				MEDIA_STATUS,
+				'update',
+				['hashtag:cats', 'hashtag:local:cats', 'public', 'public:local', 'public:local:media', 'public:media'],
+			],
+			['a mention of a muted account', 'status', MENTION_STATUS, '', []],
+			['a blocked author', 'status', String(FILTERED_STATUSES), '', []],
+		]
+	}
+
+	it('reads the same rows with 20 or 2,000 statuses of the author, of others, and of accounts the viewer filters', async () => {
+		const small: Size = { perAuthor: 20, others: 20, filtered: 21 }
+		const large: Size = { perAuthor: 2000, others: 2000, filtered: 2001 }
+		const few = await world(small)
+		const many = await world(large)
+		const unit = (kind: string, subject: string) => ({
+			kind,
+			subject,
+			accountId: VIEWER_ID,
+			tokenHashes: [TOKEN],
+			feeds: FEEDS,
+			now: NOW,
+		})
+		const grown: string[] = []
+		const fewChecks = checks(small)
+		for (const [i, [name, kind, subject, event, streams]] of checks(large).entries()) {
+			// Not vacuous: each check in the grown world makes what it must.
+			const made = await runInDurableObject(many, (_instance, state) =>
+				streamUnit.run(state.storage.sql, unit(kind, subject))
+			)
+			expect([name, made.event, made.streams.map((s) => s.stream)]).toEqual([name, event, streams])
+			const fewRows = await rowsRead({ store: few }, streamUnit, unit(kind, fewChecks[i]![2]))
+			const manyRows = await rowsRead({ store: many }, streamUnit, unit(kind, subject))
+			if (manyRows > fewRows + ALLOWANCE) {
+				grown.push(`${name}: ${fewRows} -> ${manyRows}`)
+			}
+		}
+		expect(grown).toEqual([])
+	}, 120_000)
+
+	it("captures a public status's tombstone in the same rows, however large its hashtag's timeline", async () => {
+		const capture = readOperation<{ statusId: string }, null>((db, { statusId }) => {
+			streamDelete(db, statusId, NOW)
+			return null
+		})
+		const measure = async (size: Size) => {
+			const store = await world(size)
+			await runInDurableObject(store, (_instance, state) => {
+				state.storage.sql.exec(
+					"INSERT INTO stream_subscriptions (account_id, stream_key, sockets) VALUES (?1, 'public:local:media', 1), (?1, 'hashtag:cats', 1)",
+					VIEWER_ID
+				)
+			})
+			const rows = await rowsRead({ store }, capture, { statusId: MEDIA_STATUS })
+			// Not vacuous: the tombstone and the feed's listener are captured.
+			expect(
+				await runInDurableObject(store, (_instance, state) =>
+					state.storage.sql
+						.exec(
+							'SELECT t.local, t.media, t.tags, v.account_id FROM stream_delete_tombstones t JOIN stream_delete_viewers v USING (event_id)'
+						)
+						.toArray()
+				)
+			).toEqual([{ local: 1, media: 1, tags: '["cats"]', account_id: VIEWER_ID }])
+			return rows
+		}
+		const few = await measure({ perAuthor: 20, others: 20, filtered: 21 })
+		const many = await measure({ perAuthor: 2000, others: 2000, filtered: 2001 })
+		expect(many).toBeLessThanOrEqual(few + ALLOWANCE)
+	}, 120_000)
+})
+
 // The admin's list of reports (R37, GET /api/v1/admin/reports) reads one index range per filter, in id order: the
 // unresolved reports through reports_state, a reporter's through reports_account_state, a reported account's through
 // reports_target_state (with the reporter as a residual when both are given). Each case holds FEW matching reports,

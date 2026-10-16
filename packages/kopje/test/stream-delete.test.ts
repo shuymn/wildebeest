@@ -9,12 +9,14 @@ import { ALICE, announce, DAVE, followed, localStatus, remove, type Setup, setup
 import { remoteAccount, seedStatus } from './status-helpers'
 import { Db } from '../src/db/sql'
 import { deleteStatusBatch, PURGE_BATCH } from '../src/domain/inbox'
-import { CAPTURE_LIMITS, PRUNE_BATCH as STREAM_PRUNE_BATCH, streamPrune } from '../src/domain/streaming'
+import { CAPTURE_LIMITS, PRUNE_BATCH as STREAM_PRUNE_BATCH, streamDelete, streamPrune } from '../src/domain/streaming'
 
 // R32 (docs/visibility.md; design "Kopje streaming API" §4.3): a streaming `delete` is captured once, before the first
-// change to the status's audience, as a journal row and one row per account listening on `user` that could view the
-// status (R3), with the boosts of it the account could view. The sockets' side is test/streaming/home.test.ts; here the
-// capture itself: when it is taken, whom it names, and its bounds.
+// change to the status's audience, as a journal row and one row per listening account that could view the status (R3),
+// with the boosts of it the account could view (for `user` and list listeners), and, for a public status that is not a
+// boost, a tombstone of the facts the `public*` and `hashtag*` streams match. The sockets' side is
+// test/streaming/home.test.ts and public.test.ts; here the capture itself: when it is taken, whom it names, and its
+// bounds.
 
 const LIMITS = { ...CAPTURE_LIMITS }
 
@@ -321,5 +323,147 @@ describe('R32: captures are pruned in bounded chunks', () => {
 		expect(calls.at(-1)!.more).toBe(false)
 		expect(await sql(t.store, 'SELECT id FROM stream_events')).toEqual([{ id: 4 }])
 		expect(await sql(t.store, 'SELECT DISTINCT event_id FROM stream_delete_viewers')).toEqual([{ event_id: 4 }])
+	})
+})
+
+describe('R32: the tombstone of a public status', () => {
+	// Registry rows (no socket is needed for the capture).
+	async function keys(t: Setup, account: string, ...streamKeys: string[]): Promise<void> {
+		for (const key of streamKeys) {
+			await sql(
+				t.store,
+				'INSERT INTO stream_subscriptions (account_id, stream_key, sockets) VALUES (?, ?, 1)',
+				account,
+				key
+			)
+		}
+	}
+
+	async function capture(t: Setup, statusId: string): Promise<void> {
+		await runInDurableObject(t.store, (_instance, state) => {
+			state.storage.transactionSync(() => streamDelete(new Db(state.storage.sql), statusId, NOW))
+		})
+	}
+
+	async function tombstones(t: Setup): Promise<unknown> {
+		return sql(
+			t.store,
+			`SELECT e.subject, t.local, t.media, t.tags FROM stream_delete_tombstones t JOIN stream_events e ON e.id = t.event_id
+			ORDER BY e.id`
+		)
+	}
+
+	it('holds local, media and the subscribed hashtags of a public status, for a listener on feeds alone', async () => {
+		const t = await setup()
+		const erin = await remoteAccount(t.store, 'erin')
+		await keys(t, ALICE, 'public:remote:media', 'hashtag:cats', 'hashtag:local:dogs')
+		const local = await seedStatus(t.store, { accountId: DAVE, visibility: 'public', tags: ['cats', 'dogs', 'birds'] })
+		const remote = await seedStatus(t.store, { accountId: erin, visibility: 'public', tags: ['dogs'] })
+		await sql(
+			t.store,
+			"INSERT INTO media_attachments (id, account_id, status_id, type, url) VALUES ('400000000000000001', ?, ?, 'image', 'https://remote.example/m')",
+			erin,
+			remote
+		)
+		await capture(t, local)
+		await capture(t, remote)
+		expect(await tombstones(t)).toEqual([
+			{ subject: local, local: 1, media: 0, tags: '["cats","dogs"]' },
+			{ subject: remote, local: 0, media: 1, tags: '["dogs"]' },
+		])
+		// The feed's listener is named without boosts.
+		expect(await captures(t)).toEqual([
+			{ subject: local, account_id: ALICE, boosts: [] },
+			{ subject: remote, account_id: ALICE, boosts: [] },
+		])
+	})
+
+	it('captures nothing for feed listeners of a boost, a non-public status, or feeds the status would not reach', async () => {
+		const t = await setup()
+		await keys(t, ALICE, 'public:remote', 'hashtag:dogs', 'public:local:media')
+		const status = await seedStatus(t.store, { accountId: DAVE, visibility: 'public', tags: ['cats'] })
+		const unlisted = await seedStatus(t.store, { accountId: DAVE, visibility: 'unlisted', tags: ['dogs'] })
+		const boost = await seedStatus(t.store, { accountId: ALICE, visibility: 'public', reblogOfId: status })
+		for (const id of [status, unlisted, boost]) {
+			await capture(t, id)
+		}
+		expect(await deleteEvents(t)).toEqual([])
+		expect(await tombstones(t)).toEqual([])
+		// A `user` listener has its capture, and still no tombstone for a feed nobody would be sent.
+		await listen(t, DAVE)
+		await capture(t, status)
+		expect(await captures(t)).toEqual([{ subject: status, account_id: DAVE, boosts: [] }])
+		expect(await tombstones(t)).toEqual([])
+	})
+
+	// The maxima: 16 listening accounts, each on `user` and 15 hashtags of 256 bytes (240 in all), a status carrying 100
+	// of them and boosted by 40 accounts each account follows.
+	async function atMaxima(t: Setup): Promise<{ status: string; tags: string[] }> {
+		const tag = (i: number) => `${String(i).padStart(3, '0')}${'x'.repeat(253)}`
+		const viewers = Array.from({ length: 16 }, (_, i) => String(600000000000000000n + BigInt(i)))
+		for (const [v, viewer] of viewers.entries()) {
+			await sql(
+				t.store,
+				"INSERT INTO accounts (id, uri, username) VALUES (?, 'https://kopje.test/ap/users/v' || ?2, 'v' || ?2)",
+				viewer,
+				v
+			)
+			await keys(t, viewer, 'user', ...Array.from({ length: 15 }, (_, k) => `hashtag:${tag(v * 15 + k)}`))
+		}
+		const tags = Array.from({ length: 100 }, (_, i) => tag(i * 2))
+		const status = await seedStatus(t.store, { accountId: DAVE, visibility: 'public', tags })
+		for (let i = 0; i < 40; i++) {
+			const booster = await remoteAccount(t.store, `booster${i}`)
+			await seedStatus(t.store, { accountId: booster, visibility: 'public', reblogOfId: status })
+			for (const viewer of viewers) {
+				await sql(
+					t.store,
+					"INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'accepted')",
+					viewer,
+					booster
+				)
+			}
+		}
+		return { status, tags: [...tags].sort() }
+	}
+
+	it('stays within its bounds at the maxima: one tombstone of 100 hashtags, 16 rows of 40 boosts', async () => {
+		const t = await setup()
+		const { status, tags } = await atMaxima(t)
+		await capture(t, status)
+		const [tombstone] = await sql<{ tags: string; size: number }>(
+			t.store,
+			'SELECT tags, length(CAST(tags AS BLOB)) AS size FROM stream_delete_tombstones'
+		)
+		expect(JSON.parse(tombstone!.tags)).toEqual(tags)
+		expect(tombstone!.size).toBeLessThanOrEqual(LIMITS.tombstoneBytes)
+		const rows = await sql<{ boosts: string; size: number }>(
+			t.store,
+			'SELECT boosts, length(CAST(lists AS BLOB)) + length(CAST(boosts AS BLOB)) AS size FROM stream_delete_viewers'
+		)
+		expect(rows).toHaveLength(16)
+		expect(rows.every((row) => (JSON.parse(row.boosts) as unknown[]).length === 40)).toBe(true)
+		expect(rows.every((row) => row.size <= LIMITS.viewerBytes)).toBe(true)
+	})
+
+	it('truncates a tombstone over its bound, its last hashtags first, and still deletes', async () => {
+		const t = await setup()
+		const { status, tags } = await atMaxima(t)
+		CAPTURE_LIMITS.tombstoneBytes = 2000
+		const response = await t.request(`/api/v1/statuses/${status}`, {
+			method: 'DELETE',
+			headers: { authorization: `Bearer ${t.tokens.dave}` },
+		})
+		expect(response.status).toBe(200)
+		expect(await sql(t.store, 'SELECT count(*) AS n FROM statuses WHERE id = ?', status)).toEqual([{ n: 0 }])
+		const [tombstone] = await sql<{ tags: string; size: number }>(
+			t.store,
+			'SELECT tags, length(CAST(tags AS BLOB)) AS size FROM stream_delete_tombstones'
+		)
+		const kept = JSON.parse(tombstone!.tags) as string[]
+		expect(kept).toEqual(tags.slice(0, kept.length))
+		expect(kept.length).toBeGreaterThan(0)
+		expect(kept.length).toBeLessThan(tags.length)
+		expect(tombstone!.size).toBeLessThanOrEqual(2000)
 	})
 })
