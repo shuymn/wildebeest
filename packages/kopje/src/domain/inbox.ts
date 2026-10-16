@@ -21,6 +21,7 @@ import { deleteAccountVotes, deletePollVotes, hasPollVotes } from './polls'
 import { pushSequence } from './push'
 import {
 	continueRevocations,
+	NEW_GENERATION,
 	otherQuotesDue,
 	promoteQuote,
 	quoteArrival,
@@ -1561,7 +1562,7 @@ export const STATUS_CHILDREN: readonly { table: string; column: string; remove: 
 		table: 'quotes',
 		column: 'quoted_status_id',
 		remove: [
-			`UPDATE quotes SET quoted_status_id = NULL, quoted_account_id = NULL, generation = (abs(random()) % 9007199254740991),
+			`UPDATE quotes SET quoted_status_id = NULL, quoted_account_id = NULL, generation = ${NEW_GENERATION},
 				state = CASE state WHEN 'accepted' THEN 'deleted' ELSE state END, verify_after = NULL
 			WHERE status_id IN (SELECT status_id FROM quotes WHERE quoted_status_id = ?1 LIMIT CAST(?2 / 2 AS INTEGER))`,
 		],

@@ -142,7 +142,7 @@ export async function verifyQuote(
 	statusId: string,
 	loadersFor: (signer: string | null) => RemoteLoaders,
 	now: () => number,
-	run: { inline: boolean; generation?: number }
+	run: { inline: boolean; generation?: number; state: FederationState }
 ): Promise<boolean> {
 	// The quoted status, its author, the status again (now storable), the stamp, and the decision.
 	for (let stage = 0; stage < 5; stage++) {
@@ -160,6 +160,8 @@ export async function verifyQuote(
 			quotedUri: work.quotedUri,
 			approvalUri: work.approvalUri,
 			generation,
+			stage: work.stage,
+			fetch: work.fetch,
 			inline: run.inline,
 		}
 		if (work.stage === 'quoted' && work.fetch !== null) {
@@ -168,6 +170,11 @@ export async function verifyQuote(
 			input.author = await loadActor(work.fetch, origin, loaders)
 		} else if (work.stage === 'stamp' && work.fetch !== null) {
 			input.stamp = await loadStamp(work.fetch, origin, loaders.document)
+		}
+		// A Store refusal inside a loader (a signing key's RPC in maintenance) made the fetch fail: that is no outcome of
+		// the quote's. The round stops before submitting anything, and nothing is charged.
+		if (run.state.storeError !== null) {
+			throw run.state.storeError
 		}
 		let result: QuoteVerified
 		try {
@@ -182,7 +189,7 @@ export async function verifyQuote(
 			if (run.inline) {
 				return true
 			}
-			await rpc((s) => s.chargeQuote(build, { statusId, generation, now: now() }))
+			await rpc((s) => s.chargeQuote(build, { statusId, generation, stage: work.stage, fetch: work.fetch, now: now() }))
 			return false
 		}
 		if (!result.next) {
@@ -226,6 +233,7 @@ export async function verifyQuotes(env: Env, deps: InboxDeps): Promise<boolean> 
 		const left = await verifyQuote(rpc, build, origin, id, loadersFor, deps.now, {
 			inline: false,
 			generation: claimed.generations[i],
+			state,
 		})
 		if (state.storeError !== null) {
 			throw state.storeError

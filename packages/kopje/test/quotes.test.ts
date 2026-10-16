@@ -37,10 +37,17 @@ import {
 } from './inbox-status-helpers'
 import { Db } from '../src/db/sql'
 import { PURGE_BATCH, receiveActivity, RETRACTION_TTL_MS, runInboundJobs } from '../src/domain/inbox'
-import { MAX_LINKED_QUOTES, QUOTE_BACKOFF_MS, QUOTE_HOPS } from '../src/domain/quotes'
+import {
+	MAX_LINKED_QUOTES,
+	QUOTE_BACKOFF_MS,
+	QUOTE_HOPS,
+	type QuoteVerification,
+	type QuoteWork,
+} from '../src/domain/quotes'
 import { syncCollections } from '../src/federation/collections'
 import { verifyQuotes } from '../src/federation/quotes'
 import { parseRemoteStatus } from '../src/federation/remote-status'
+import { StoreUnavailableError } from '../src/platform/store-errors'
 import { RSA_ALGORITHM } from '../src/security/key-wrap'
 
 // Quotes received from remote servers (Mastodon 4.5's Quote, StatusParser's quote properties, VerifyQuoteService and the
@@ -1223,11 +1230,104 @@ describe('review round 1 regressions', () => {
 		expect(await quoteOf(t, pair.quote.id)).toMatchObject({ state: 'pending' })
 	})
 
-	it('discards an outcome for work that changed since it was read', async () => {
+	// The quote stored with its work due and no inline verification, and the Store's calls a verifier makes.
+	async function stored(t: Setup, quote: Note) {
+		await t.store.receiveActivity(BUILD, {
+			now: NOW,
+			origin: LOCAL,
+			actorUri: quote.attributedTo as string,
+			actor: null,
+			activity: { type: 'Create', id: `${quote.id}/activity`, object: parseRemoteStatus(quote)! },
+		})
+		const id = (await statusRow(t.store, quote.id))!.id
+		const work = async () => (await t.store.quoteWork(BUILD, { statusId: id }))!
+		const complete = async (read: QuoteWork, outcome: Partial<QuoteVerification>) =>
+			t.store.completeQuote(BUILD, {
+				statusId: id,
+				now: NOW,
+				origin: LOCAL,
+				inline: false,
+				quotedUri: read.quotedUri,
+				approvalUri: read.approvalUri,
+				generation: read.generation,
+				stage: read.stage,
+				fetch: read.fetch,
+				...outcome,
+			})
+		return { id, work, complete }
+	}
+
+	it('discards a stage’s outcome once another path moved the stage on, and leaves the new stage due', async () => {
 		const { t, bob } = await world()
 		const erin = await mastodonActor(t.web, 'erin', { origin: OTHER, key: 7 })
 		const pair = quotedPair(t, bob, erin)
-		const statusId = async () => (await statusRow(t.store, pair.quote.id))!.id
+		const { work, complete } = await stored(t, pair.quote)
+		await complete(await work(), {
+			quoted: { kind: 'ok', value: parseRemoteStatus({ '@context': AS, ...pair.target })! },
+		})
+		const fetching = await work()
+		expect(fetching).toMatchObject({ stage: 'author', fetch: erin.uri })
+		// While that verifier fetches erin, another request stores her: the stage is now the quoted status again.
+		await followed(t, erin)
+		expect(await work()).toMatchObject({ stage: 'quoted', generation: fetching.generation })
+		// Its late 404 for erin is an outcome of a stage the work left: discarded, the work due.
+		await complete(fetching, { author: { kind: 'gone' } })
+		expect(await quoteOf(t, pair.quote.id)).toMatchObject({ state: 'pending', verify_after: NOW, attempts: 0 })
+		await rounds(t, NOW)
+		expect(await quoteOf(t, pair.quote.id)).toMatchObject({ state: 'accepted' })
+	})
+
+	it('redraws the generation when a relayed Delete renews the check: an older fetch’s outcome is discarded', async () => {
+		const { t, bob, carol } = await world()
+		const pair = quotedPair(t, bob, carol)
+		expect(await t.post(bob, create(bob, pair.quote))).toBe(202)
+		const id = (await statusRow(t.store, pair.quote.id))!.id
+		// A verifier reads the accepted quote's stamp stage (an earlier check), and its fetch is still on its way.
+		const old = (await t.store.quoteWork(BUILD, { statusId: id }))!
+		expect(old.stage).toBe('stamp')
+		// An unproven relay of carol's Delete renews the check; the stamp is gone now.
+		await t.store.receiveActivity(BUILD, {
+			now: NOW,
+			origin: LOCAL,
+			actorUri: carol.uri,
+			actor: null,
+			activity: { type: 'RelayedDelete', id: `${carol.uri}#delete-${nextId()}`, object: pair.stamp, proven: false },
+		})
+		t.web.fail(pair.stamp, 404)
+		// The older fetch's valid stamp arrives first: discarded, so the renewed check still runs.
+		const stamp = { context: true, types: ['QuoteAuthorization'], id: pair.stamp, attributedTo: carol.uri }
+		await t.store.completeQuote(BUILD, {
+			statusId: id,
+			now: NOW,
+			origin: LOCAL,
+			inline: false,
+			quotedUri: old.quotedUri,
+			approvalUri: old.approvalUri,
+			generation: old.generation,
+			stage: old.stage,
+			fetch: old.fetch,
+			stamp: {
+				kind: 'ok',
+				value: { ...stamp, interactingObject: pair.quote.id, interactionTarget: pair.target.id },
+			},
+		})
+		expect(await quoteOf(t, pair.quote.id)).toMatchObject({ state: 'accepted', verify_after: NOW })
+		await rounds(t, NOW)
+		expect(await quoteOf(t, pair.quote.id)).toMatchObject({ state: 'revoked' })
+	})
+
+	it('redraws the generation when a promotion renews the work: an older failure charges nothing', async () => {
+		const { t, bob, carol } = await world()
+		await followed(t, carol)
+		const pair = quotedPair(t, bob, carol)
+		const { work, complete } = await stored(t, pair.quote)
+		await complete(await work(), {
+			quoted: { kind: 'ok', value: parseRemoteStatus({ '@context': AS, ...pair.target })! },
+		})
+		// A verifier fetches the stamp; the fetch will fail.
+		const fetching = await work()
+		expect(fetching.stage).toBe('stamp')
+		// Meanwhile the quote's status arrives again as a root (the Store's part alone): its work is renewed.
 		await t.store.receiveActivity(BUILD, {
 			now: NOW,
 			origin: LOCAL,
@@ -1235,40 +1335,19 @@ describe('review round 1 regressions', () => {
 			actor: null,
 			activity: { type: 'Create', id: `${pair.quote.id}/activity`, object: parseRemoteStatus(pair.quote)! },
 		})
-		const id = await statusId()
-		const base = { statusId: id, now: NOW, origin: LOCAL, inline: false, approvalUri: pair.stamp }
-		const work = async () => (await t.store.quoteWork(BUILD, { statusId: id }))!
-		// The first stage names erin as the author to fetch.
-		const first = await work()
-		const target = parseRemoteStatus({ '@context': AS, ...pair.target })!
-		await t.store.completeQuote(BUILD, {
-			...base,
-			quotedUri: pair.target.id,
-			generation: first.generation,
-			quoted: { kind: 'ok', value: target },
-		})
-		const stage = await work()
-		expect(stage).toMatchObject({ stage: 'author', fetch: erin.uri })
-		// A concurrent verifier finds the status now names another author, and moves the work on to that author.
-		await t.store.completeQuote(BUILD, {
-			...base,
-			quotedUri: pair.target.id,
-			generation: stage.generation,
-			quoted: { kind: 'ok', value: { ...target, attributedTo: `${OTHER}/users/frank` } },
-		})
-		// The first verifier's late 404 for erin is for work that is gone: discarded.
-		await t.store.completeQuote(BUILD, {
-			...base,
-			quotedUri: pair.target.id,
-			generation: stage.generation,
-			author: { kind: 'gone' },
-		})
-		expect(await sql(t.store, 'SELECT need_author, verify_after IS NOT NULL AS due FROM quotes')).toEqual([
-			{ need_author: `${OTHER}/users/frank`, due: 1 },
-		])
+		expect((await work()).generation).not.toBe(fetching.generation)
+		// The older fetch's failure arrives late: it charges nothing to the renewed work.
+		await complete(fetching, { stamp: { kind: 'transient' } })
+		expect(await quoteOf(t, pair.quote.id)).toMatchObject({ state: 'pending', attempts: 0, verify_after: NOW })
+	})
 
-		// A failed Store stage is charged only to the work it read: an Update replaced the quote before the charge.
+	it('charges a failed Store stage only to the work and stage it read', async () => {
+		const { t, bob } = await world()
+		const erin = await mastodonActor(t.web, 'erin', { origin: OTHER, key: 7 })
+		const pair = quotedPair(t, bob, erin)
+		const { id, work } = await stored(t, pair.quote)
 		const read = await work()
+		// An Update replaces the quote before the charge.
 		const other = mastodonNote(erin)
 		expect(
 			await t.post(
@@ -1281,8 +1360,44 @@ describe('review round 1 regressions', () => {
 			)
 		).toBe(202)
 		const before = await quoteOf(t, pair.quote.id)
-		await t.store.chargeQuote(BUILD, { statusId: id, generation: read.generation, now: NOW })
+		await t.store.chargeQuote(BUILD, {
+			statusId: id,
+			generation: read.generation,
+			stage: read.stage,
+			fetch: read.fetch,
+			now: NOW,
+		})
 		expect(await quoteOf(t, pair.quote.id)).toEqual(before)
 		expect(before).toMatchObject({ quoted_uri: other.id, attempts: 0 })
+	})
+
+	it('stops a round on a Store refusal inside a loader, charging nothing', async () => {
+		const { t, bob } = await world()
+		const followers = `${bob.uri}/followers`
+		const own = mastodonNote(bob, { to: [followers], cc: [] })
+		t.web.serve(own.id, { '@context': AS, ...own })
+		const quote = quoting(bob, own.id, null, { to: [followers], cc: [] })
+		// Stored for alice's personal inbox, so alice's key signs its fetches; no inline verification.
+		await t.store.receiveActivity(BUILD, {
+			now: NOW,
+			origin: LOCAL,
+			actorUri: bob.uri,
+			actor: null,
+			recipient: 'alice',
+			activity: { type: 'Create', id: `${quote.id}/activity`, object: parseRemoteStatus(quote)! },
+		})
+		expect(await quoteOf(t, quote.id)).toMatchObject({ fetch_as: ALICE, attempts: 0 })
+		// The Store refuses the signing key's read (maintenance) but would take the outcome.
+		const stub = t.store as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>
+		const refusing = new Proxy(t.store, {
+			get(_target, key: string) {
+				return (...args: unknown[]) =>
+					key === 'localKey' ? Promise.reject(new StoreUnavailableError('maintenance')) : stub[key]!(...args)
+			},
+		})
+		await expect(
+			verifyQuotes(t.env, { ...inboxDeps(() => refusing, t.web.loader), now: () => NOW })
+		).rejects.toBeInstanceOf(StoreUnavailableError)
+		expect(await quoteOf(t, quote.id)).toMatchObject({ state: 'pending', attempts: 0 })
 	})
 })

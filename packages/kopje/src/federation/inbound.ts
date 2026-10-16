@@ -633,7 +633,7 @@ async function verifyInline(
 			statusId,
 			loadersFor,
 			deps.now,
-			{ inline: true }
+			{ inline: true, state }
 		)
 	} catch (error) {
 		console.error({ event: 'kopje.quote.verify.failed', ...errorFields(error) })

@@ -18,8 +18,12 @@
 --   whose key may fetch for it, rechecked before each use) and need_author (the author of the quoted status, learned
 --   from a fetch of it, when Kopje does not have that account yet: the next stage fetches the author, the one after
 --   fetches the status again, now storable. Only this address is kept between stages, never a fetched document), and
---   generation (a random number drawn anew whenever the quote's target, stamp, stage or outcome changes: a verifier's
---   outcome applies only to the generation it read, so a late or concurrent one is discarded).
+--   generation, the work's identity for its verifiers. The rule: every write that changes what the work is or what it
+--   may conclude draws a new random generation (a new or replaced quote, a target linked or detached, a stage advanced
+--   or an author address recorded, a renewal that makes the work due anew or changes fetch_as: a promotion, a relayed
+--   Delete's check, a stage another path moved on; and every outcome applied, a revocation's included); a round's claim,
+--   which only leases the work, keeps it. Every outcome carries the generation and the stage and fetch address it was
+--   computed for, and applies only while all three still hold (src/domain/quotes.ts); anything else is discarded.
 -- - quote_revocations records, for good, every stamp whose Delete by an author revoked a stored quote of that author's
 --   status: the stamp never verifies a quote of that author's statuses again, whatever later happens to the quote row.
 --   It is keyed by the stamp and the author, so nobody else's Delete of the same URI revokes anything of the author's. pending marks one whose matching quotes are still being
