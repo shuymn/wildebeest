@@ -581,6 +581,8 @@ export class StreamHub {
 					event,
 					event.viewers.map((viewer) => ({ viewer, subject: { index: 0, id: event.subject } }))
 				)
+				// The event's viewers after the position were all read: none is left to pass over.
+				after = null
 				more = false
 			}
 			for (const [i, unit] of units.entries()) {
