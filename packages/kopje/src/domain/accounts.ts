@@ -13,7 +13,7 @@ import {
 	hidesCollectionsSql,
 	REACHES_FOLLOWERS_SQL,
 } from './audience'
-import { optionalUserReadOperation, userReadOperation, userWriteOperation } from './auth'
+import { localRole, optionalUserReadOperation, type Role, userReadOperation, userWriteOperation } from './auth'
 import { retractFollow } from './inbox'
 import { notify } from './notifications'
 import { readOperation } from './operation'
@@ -87,7 +87,7 @@ export type CredentialAccount = Account & {
 		hide_collections: boolean
 		attribution_domains: string[]
 	}
-	role: { id: string; name: string; permissions: string; color: string; highlighted: boolean }
+	role: Role
 }
 
 export type Relationship = {
@@ -364,8 +364,8 @@ export function credentialAccount(db: Db, accountId: string, present: Present): 
 			hide_collections: row.hide_collections === 1,
 			attribution_domains: JSON.parse(local.attribution_domains) as string[],
 		},
-		// Every user has Mastodon's default role (id -99) until roles exist. permissions is a string (design §4).
-		role: { id: '-99', name: '', permissions: '0', color: '', highlighted: false },
+		// The OAuth admin has the Owner role with the permissions Kopje serves; every other user the default role.
+		role: localRole(db, accountId),
 	}
 }
 

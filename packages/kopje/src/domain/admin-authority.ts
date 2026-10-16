@@ -67,7 +67,8 @@ export function oauthAdmin(db: Db): OAuthAdmin {
 	return { status: 'ok', username: row.username, accountId: row.account_id }
 }
 
-function normalizedEmail(email: string): string {
+// An email as the OAuth admin's match compares it: trimmed and lowercased (set-email compares the same way).
+export function normalizedEmail(email: string): string {
 	return email.trim().toLowerCase()
 }
 
