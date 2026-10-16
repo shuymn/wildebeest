@@ -20,7 +20,7 @@ import {
 } from './inbox-status-helpers'
 import { MAX_FEATURED_TAGS } from '../src/domain/featured-tags'
 import { MAX_REMOTE_PINS } from '../src/domain/remote-collections'
-import { syncCollections } from '../src/federation/collections'
+import { MAX_FEATURED_TAG_PAGES, syncCollections } from '../src/federation/collections'
 
 // A remote account's pinned statuses, featured hashtags and hide_collections (Mastodon 4.5's ActivityPub::Activity::Add
 // and Remove, FetchFeaturedCollectionService, FetchFeaturedTagsCollectionService and
@@ -316,6 +316,30 @@ describe('reading a remote account’s collections', () => {
 		expect(await pinned(t, bobId, null)).toEqual([own.id])
 		expect(t.web.fetched).not.toContain(late.id)
 		expect((await featuredTags(t, bobId)).map((tag) => tag.name)).toEqual(['Early'])
+	})
+
+	it('reads at most MAX_FEATURED_TAG_PAGES pages of the featuredTags collection, and never asks for the next', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		await servedCollections(t, bob, [], [])
+		const tags = `${bob.uri}/collections/tags`
+		const pageUrl = (n: number) => `${tags}?page=${n}`
+		t.web.serve(tags, { '@context': AS, id: tags, type: 'OrderedCollection', first: pageUrl(1) })
+		for (let n = 1; n <= MAX_FEATURED_TAG_PAGES + 1; n++) {
+			t.web.serve(pageUrl(n), {
+				'@context': AS,
+				id: pageUrl(n),
+				type: 'OrderedCollectionPage',
+				next: pageUrl(n + 1),
+				orderedItems: [hashtag(`page${n}`)],
+			})
+		}
+		const bobId = await followed(t, bob)
+		await sync(t)
+		expect(t.web.fetched).not.toContain(pageUrl(MAX_FEATURED_TAG_PAGES + 1))
+		expect((await featuredTags(t, bobId)).map((tag) => tag.name)).toEqual(
+			Array.from({ length: MAX_FEATURED_TAG_PAGES }, (_, i) => `page${i + 1}`)
+		)
 	})
 
 	it('leaves what it learned as it was when a collection cannot be read for now', async () => {

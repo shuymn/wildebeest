@@ -169,13 +169,19 @@ async function readFeaturedTags(
 	const items: unknown[] = []
 	let page: Json | 'transient' | null =
 		collection.first === undefined ? collection : await documentOn(collection.first, origin, loader)
-	for (let read = 0; isObject(page) && read < MAX_FEATURED_TAG_PAGES; read++) {
+	// The page limit is checked before the next page is fetched: page MAX_FEATURED_TAG_PAGES + 1 is never asked for.
+	for (let read = 1; isObject(page); read++) {
 		const listed = itemsOf(page)
 		if (listed === null || listed.length === 0) {
 			break
 		}
 		items.push(...listed)
-		if (items.length >= MAX_FEATURED_TAGS || page.next === undefined || page.next === null) {
+		if (
+			items.length >= MAX_FEATURED_TAGS ||
+			read >= MAX_FEATURED_TAG_PAGES ||
+			page.next === undefined ||
+			page.next === null
+		) {
 			break
 		}
 		page = await documentOn(page.next, origin, loader)
