@@ -21,7 +21,7 @@ import {
 	update,
 } from './inbox-status-helpers'
 import { FEATURED_COUNT_WINDOW, MAX_FEATURED_TAGS } from '../src/domain/featured-tags'
-import { MAX_REMOTE_PINS, SYNC_LEASE_MS, SYNC_RETRY_MS } from '../src/domain/remote-collections'
+import { MAX_REMOTE_PINS, MAX_SYNC_ATTEMPTS, SYNC_LEASE_MS, SYNC_RETRY_MS } from '../src/domain/remote-collections'
 import { COLLECTION_SYNCS_PER_ROUND, MAX_FEATURED_TAG_PAGES, syncCollections } from '../src/federation/collections'
 import { REQUEST_MAX_FETCHES } from '../src/federation/loader'
 
@@ -602,6 +602,31 @@ describe('a round’s claim of a sync', () => {
 			token: sync.token,
 			...read(tags),
 		})
+
+	it('gives a new request its own attempts, so rounds that failed for the older one do not drop it', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		t.web.fail(featuredOf(bob), 503)
+		const bobId = await followed(t, bob)
+		// MAX_SYNC_ATTEMPTS rounds fail for now; the sync waits, out of attempts, for its retry.
+		for (let round = 0; round < MAX_SYNC_ATTEMPTS; round++) {
+			await sql(t.store, 'UPDATE collection_syncs SET due_at = ?', NOW)
+			await syncCollections(t.env, deps(t))
+		}
+		expect(await sql(t.store, 'SELECT attempts, due_at > ? AS later FROM collection_syncs', NOW)).toEqual([
+			{ attempts: MAX_SYNC_ATTEMPTS, later: 1 },
+		])
+		// Bob's Update names a featured collection that answers: read at once.
+		const featured2 = `${bob.uri}/collections/featured2`
+		const note = mastodonNote(bob)
+		t.web.serve(featured2, { '@context': AS, id: featured2, type: 'OrderedCollection', orderedItems: [note.id] })
+		t.web.serve(bob.uri, { ...bob.document, featured: featured2 })
+		expect(await t.post(bob, create(bob, note))).toBe(202)
+		const update = { '@context': AS, id: `${bob.uri}#updates/${nextId()}`, type: 'Update', actor: bob.uri }
+		expect(await t.post(bob, { ...update, object: { ...bob.document, featured: featured2 } })).toBe(202)
+		await sync(t)
+		expect(await pinned(t, bobId, null)).toEqual([note.id])
+	})
 
 	it('lets only the current claim end it: a round whose lease ended, or whose sync was asked for anew, changes nothing', async () => {
 		const t = await setup()

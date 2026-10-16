@@ -42,9 +42,12 @@ export const SYNC_RETRY_MS = 15 * 60 * 1000
 // end leaves due (applyCollectionSync), so the round reading the older document does not end it. Whether a request is
 // due (no round holds it).
 export function requestCollectionSync(db: Db, accountId: string, now: number): boolean {
+	// A new request has its own MAX_SYNC_ATTEMPTS, and is due at once unless a round holds the sync (whose end leaves it
+	// due, endRound): rounds that failed for the older one neither drop nor delay it.
 	db.run(
-		`INSERT INTO collection_syncs (account_id, due_at) VALUES (?, ?)
-		ON CONFLICT (account_id) DO UPDATE SET generation = generation + 1`,
+		`INSERT INTO collection_syncs (account_id, due_at) VALUES (?1, ?2)
+		ON CONFLICT (account_id) DO UPDATE SET generation = generation + 1, attempts = 0,
+			due_at = CASE WHEN token IS NOT NULL AND due_at > ?2 THEN due_at ELSE min(due_at, ?2) END`,
 		accountId,
 		now
 	)
