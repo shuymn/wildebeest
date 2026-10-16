@@ -72,8 +72,9 @@ function deps(t: Setup, loader: Parameters<typeof inboxDeps>[1] = t.web.loader) 
 	return inboxDeps(() => t.store, loader)
 }
 
-async function sync(t: Setup, loader: Parameters<typeof inboxDeps>[1] = t.web.loader): Promise<void> {
-	for (let round = 0; round < 5 && (await syncCollections(t.env, deps(t, loader))); round++) {
+async function sync(t: Setup, loader: Parameters<typeof inboxDeps>[1] = t.web.loader, now = NOW): Promise<void> {
+	const at = { ...deps(t, loader), now: () => now }
+	for (let round = 0; round < 5 && (await syncCollections(t.env, at)); round++) {
 		// Another sync waits.
 	}
 	expect(await rows(t, 'collection_syncs')).toEqual([{ n: 0 }])
@@ -492,6 +493,24 @@ describe('reading a remote account’s collections', () => {
 		expect((await pinned(t, bobId, null)).length).toBeLessThan(notes.length)
 		await sync(t)
 		expect(await pinned(t, bobId, null)).toEqual(notes.map((note) => note.id))
+	})
+
+	it('shows the collection’s order across pins it had, pins it stores, and pins it fetches later', async () => {
+		const clock = { now: NOW }
+		const t = await setup(clock)
+		const bob = await mastodonActor(t.web, 'bob')
+		const bobId = await followed(t, bob)
+		const [old, unknown, stored] = [mastodonNote(bob), mastodonNote(bob), mastodonNote(bob)]
+		expect(await t.post(bob, create(bob, old))).toBe(202)
+		expect(await t.post(bob, create(bob, stored))).toBe(202)
+		expect(await t.post(bob, addOrRemove('Add', bob, old.id))).toBe(202)
+		t.web.serve(unknown.id, { '@context': AS, ...unknown })
+		// An hour later the collection lists the old pin first, then one Kopje fetches later, then a stored one.
+		clock.now += 3_600_000
+		await servedCollections(t, bob, [old.id, unknown.id, stored.id], [])
+		await sql(t.store, 'INSERT INTO collection_syncs (account_id, due_at) VALUES (?, 0) ON CONFLICT DO NOTHING', bobId)
+		await sync(t, t.web.loader, clock.now)
+		expect(await pinned(t, bobId, null)).toEqual([old.id, unknown.id, stored.id])
 	})
 
 	it('pins no pending status the actor removed before it was fetched, or while it was', async () => {

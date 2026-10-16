@@ -452,8 +452,9 @@ export const completePinFetches = writeOperation<PinFetchesInput, boolean>((db, 
 
 // The account's pins become the statuses the collection lists that are its own and pinnable, the first
 // MAX_REMOTE_PINS of them on its origin: those Kopje stores at once, those it does not left pending for phase 2; the
-// others are unpinned, and what was pending before is replaced. A pin kept keeps its time; a new one is timed so that
-// the collection's order is the profile's (the first listed is the newest pin).
+// others are unpinned, and what was pending before is replaced. Every pin listed, kept or new, stored or pending, takes
+// the time of its position in the collection (the first listed is the newest), so the profile shows the collection's
+// order however its pins were learned and whichever of them phase 2 pins later.
 function replacePins(db: Db, account: { id: string; uri: string }, uris: readonly string[], now: number): void {
 	const origin = originOf(account.uri)
 	const pinned: { id: string; at: string }[] = []
@@ -477,7 +478,8 @@ function replacePins(db: Db, account: { id: string; uri: string }, uris: readonl
 	)
 	for (const pin of pinned) {
 		db.run(
-			'INSERT INTO status_pins (account_id, status_id, created_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING',
+			`INSERT INTO status_pins (account_id, status_id, created_at) VALUES (?, ?, ?)
+			ON CONFLICT DO UPDATE SET created_at = excluded.created_at`,
 			account.id,
 			pin.id,
 			pin.at
