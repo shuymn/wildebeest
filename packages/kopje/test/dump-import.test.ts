@@ -18,6 +18,7 @@ import {
 	splitDump,
 	tableSnapshot,
 } from './ops-helpers'
+import { MIGRATIONS } from '../src/db/migrations'
 import { readOperation, sessionOperation, writeOperation } from '../src/domain/operation'
 import { MAX_PROFILE_UPDATES } from '../src/platform/dump-catalog'
 import type { DumpTrailer, TableSpec } from '../src/platform/dump-format'
@@ -90,6 +91,22 @@ describe('dump', () => {
 		expect(state).not.toContain('upgrade_bookmark=source-only')
 		// The imported Store serves again.
 		expect(await target.setupState(BUILD)).toEqual({ complete: true })
+	})
+
+	// The streaming journal's trigger (migration 0026_streaming) makes SQLite start the journal's AUTOINCREMENT counter
+	// on the first notification insert, recording or not; restored notifications must not leave a counter the dump lacks.
+	it('round-trips a Store upgraded to 0026_streaming with notifications written before it', async () => {
+		const source = freshStore()
+		const before = MIGRATIONS.slice(0, MIGRATION_NAMES.indexOf('0026_streaming'))
+		await runInDurableObject(source, (_instance, state) => testKernel(state, before).upgrade())
+		await seedStore(source, 3)
+		await runInDurableObject(source, (_instance, state) => testKernel(state).upgrade())
+		const { text } = await dumpViaRpc(source)
+		const target = await migratedStore()
+		await copyConfig(source, target)
+		const { report } = await importViaRpc(target, text)
+		expect(report).toMatchObject({ ok: true, problems: [] })
+		expect(withoutState(await tableSnapshot(target))).toEqual(withoutState(await tableSnapshot(source)))
 	})
 
 	it('writes the documented format and leaves out bookkeeping', async () => {

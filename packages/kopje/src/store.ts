@@ -69,6 +69,7 @@ import { restoreMarkerKey } from './platform/media-files'
 import { type ImportAuthority, StoreAdmin } from './platform/store-admin'
 import { readFlags } from './platform/store-flags'
 import { StoreKernel, type StoreOperation } from './platform/store-kernel'
+import { StreamHub } from './stream-hub'
 import { buildOf, PACKAGE_VERSION } from './version'
 
 // When a PITR restore was last scheduled (store.ts pitrToBookmark), or null.
@@ -92,15 +93,52 @@ type OperationInput<T> = T extends StoreOperation<infer I, unknown> ? I : never
 export class Store extends DurableObject<Env> {
 	readonly #kernel: StoreKernel
 	readonly #admin: StoreAdmin
+	readonly #streams: StreamHub
 
 	constructor(ctx: DurableObjectState, env: Env) {
 		super(ctx, env)
 		const build = buildOf(env)
-		this.#kernel = new StoreKernel(ctx, { build, migrations: MIGRATIONS })
+		this.#kernel = new StoreKernel(ctx, {
+			build,
+			migrations: MIGRATIONS,
+			afterCommit: (operation) => this.#streams.written(operation),
+		})
 		this.#admin = new StoreAdmin(ctx, this.#kernel, {
 			source: { build, version: PACKAGE_VERSION },
 			onPublish: (sql, now) => announceConvertedProfiles(new Db(sql), now),
 		})
+		// A turn is a request to this object's own stub (stream-hub.ts).
+		this.#streams = new StreamHub(ctx, this.#kernel, (headers) =>
+			env.STORE.get(ctx.id).fetch('https://store.internal/stream/turn', { method: 'POST', headers })
+		)
+	}
+
+	// The streaming API (stream-hub.ts): the upgrade the Worker forwards (mastodon/streaming.ts), and the turns of the
+	// fan-out, which only this object requests of itself.
+	override fetch(request: Request): Promise<Response> {
+		return this.#streams.fetch(request)
+	}
+
+	override webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+		return this.#streams.message(ws, message)
+	}
+
+	override webSocketClose(ws: WebSocket, code: number): Promise<void> {
+		return this.#streams.closed(ws, code)
+	}
+
+	override webSocketError(ws: WebSocket): Promise<void> {
+		return this.#streams.closed(ws, 1011)
+	}
+
+	// The cron's turn of the streaming API: closes the sockets of expired tokens and prunes the journal.
+	streamTick(_callerBuild: string) {
+		this.#streams.tick()
+	}
+
+	// The streaming tests' drain barrier (stream-hub.ts drained): resolves once the fan-out has caught up.
+	streamDrained(_callerBuild: string) {
+		return this.#streams.drained()
 	}
 
 	health(callerBuild: string) {
@@ -246,8 +284,14 @@ export class Store extends DurableObject<Env> {
 	}
 
 	// Import and configuration mutations name their authority; the Store checks it where it writes (store-admin.ts).
-	importBegin(callerBuild: string, authority: ImportAuthority, header: unknown) {
-		return this.#admin.importBegin(callerBuild, authority, header)
+	// An import replaces the data the streams were judged by: every socket closes (1012), and clients reconnect once it
+	// is published.
+	async importBegin(callerBuild: string, authority: ImportAuthority, header: unknown) {
+		const result = await this.#admin.importBegin(callerBuild, authority, header)
+		if (result.ok) {
+			this.#streams.closeAll(1012, 'service restart')
+		}
+		return result
 	}
 
 	importChunk(callerBuild: string, authority: ImportAuthority, id: string, seq: number, bytes: Uint8Array) {

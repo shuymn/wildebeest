@@ -77,6 +77,7 @@ against their own instance. TLS is assumed between all parties.
 | Web UI (profiles, permalinks, embeds, settings)                | R2, R4, R7 | session (AUTH-8), Origin and form token (WEB-4)               | branch `kopje/web-ui`: `src/app/web.tsx`, `src/web/*`                                                                                                                                                                                 |
 | Media upload and serving, Images transformation                | R2–R4      | bearer token; capability URL for reads                        | main: `src/mastodon/media.ts`                                                                                                                                                                                                         |
 | Web Push registration                                          | R3         | bearer token with `push`                                      | main: `src/mastodon/push.ts`, `src/domain/push.ts`                                                                                                                                                                                    |
+| Streaming API `/api/v1/streaming` (WebSocket)                  | R2–R4      | bearer token or subprotocol (VIS-26)                          | `kopje/streaming-1`: `src/mastodon/streaming.ts`, `src/stream-hub.ts`, `src/domain/streaming.ts`                                                                                                                                      |
 | Queue consumer, alarms, cron                                   | internal   | —                                                             | main: `src/jobs/queue.ts`, `src/platform/store-kernel.ts`                                                                                                                                                                             |
 | Delivery doorbell and cron (`src/jobs/deliver.ts`)             | internal   | —                                                             | main: `src/jobs/deliver.ts`                                                                                                                                                                                                           |
 | Dump import, backup restore, cutover tools                     | R5, R8     | admin authority, then digest chain and manifest               | main (import, convert, verify-conversion: DATA-11 to DATA-15); `kopje/scheduled-backup` (`backup-verify`); `kopje/cutover-ops` (`cutover-preflight`, `maintenance-worker`, `fingerprint`, `cutover`: OPS-4, OPS-7 to OPS-10, DATA-16) |
@@ -546,6 +547,27 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `src/domain/activities.ts`, `purgeRelationships` and `PURGED_ACCOUNT_CHILDREN` in `src/domain/inbox.ts`, migration
   `0022_reports`; `test/reports.test.ts`, `test/policy.test.ts`, `test/policy-bounds.test.ts`,
   `test/migrations.test.ts`, `test/cascade-guard.test.ts`.
+
+- **VIS-26: streaming reveals no more than the REST reads, judged when each message is made.** A socket of the
+  streaming API (`/api/v1/streaming`) opens only with a valid token of a user while the instance is published: none, an
+  invalid, revoked or expired token, an app token and a suspended account's answer 401. The token comes from the
+  `Authorization` header or the subprotocol, never from the URL, which the platform's invocation logs record (Mastodon
+  also takes `access_token`; a query token alone answers 401 as none does); the Worker sends only its sha256 to the
+  Store, which validates it (DATA-5). Each subscription
+  needs its stream's scope (`read:statuses` for `user`, `read:notifications` for `user:notification`), and notifications
+  go on `user` only with `read:notifications` too. A write records ids only (`stream_events`, by a trigger); each
+  message is made later in its own transaction, which authorizes the socket's token again and runs the reference for
+  its event and stream (R33): for a `notification` on `user` or `user:notification`, the recipient's notification
+  list positioned at it (R15: kept, and not filtered by their policy, as Mastodon pushes none of those), presented as
+  REST presents it. Nothing authorized is kept across units. Each unit is sent at most once: the position past it is
+  persisted by compare-and-set before its messages go, and a send that fails closes the sockets left without it
+  (1011), whose clients read REST again. Every turn checks every open socket's token again, so the socket of a revoked
+  token, a signed-out web session or a suspended account closes (1008) at the next turn, which any write starts, and an
+  expired token's at the cron's turn within 5 minutes. The other streams answer `Unknown stream type` for now. The work
+  is bounded (RES-6, RES-7). _Implemented on branch `kopje/streaming-1`:_ `src/mastodon/streaming.ts`,
+  `src/stream-hub.ts`, `src/domain/streaming.ts`, `authorizeStream` in `src/domain/auth.ts`, `streamedNotification`
+  in `src/domain/notifications.ts`, migration `0026_streaming`; `test/streaming/streaming.test.ts`,
+  `test/policy-bounds.test.ts`, `test/log-redaction.test.ts`, `test/migrations.test.ts`, `test/cascade-guard.test.ts`.
 
 - **VIS-29: admin views and actions disclose and change only through the admin account.** Only the OAuth admin,
   through a token covering the route's admin scope, reads or acts through `/api/v1/admin/*` and `/api/v2/admin/*`
@@ -1204,6 +1226,16 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   and sorts all the targets left, so a boost's withdrawal (by a purge, or by a remote author's `Delete` of the boosted
   status) costs work proportional to its audience in every batch until it is staged. Receipt enumeration has this in
   common with follower enumeration.
+  Streaming (VIS-26): _Implemented on branch `kopje/streaming-1`:_ at most 16 sockets per account (429) and 256 per
+  instance (503); 16 subscriptions per socket, 16 stream keys per account and a socket's attachment at most 12 KiB
+  (`Too many subscriptions`, 429); incoming messages text only (1003), at most 4 KiB and 120 a minute (1008). The
+  fan-out runs in turns, one at a time, each an incoming request to the Store's own stub, which restores the CPU
+  allowance: a turn spends at most 512 checks, 64 presentations, 4 MiB of presented payload and 4,096 sends, runs a
+  unit only while what is left covers a unit's worst case (33 checks, one presentation, 256 sends) and leaves the
+  rest to the next turn; a payload over 512 KiB is skipped and logged. The journal records nothing once it spans 4,096
+  ids, and is pruned 500 rows a turn behind the position. `src/stream-hub.ts`, `src/domain/streaming.ts`;
+  `test/streaming/streaming.test.ts`. _Gap:_ the budgets count work, not CPU time; a turn at the limits is to be
+  measured on a deployed instance, as is how long a hibernated idle socket stays open.
 - **RES-7: query work is bounded, not only the rows returned.** Feeds apply visibility and filters in the query before
   `LIMIT`. Context traversal visits a bounded number of statuses before sorting. A status keeps a bounded number and
   size of edits. _Enforced (main)_ for filtering before `LIMIT`: `src/domain/timelines.ts` (_Gap:
@@ -1262,6 +1294,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   deletes, a walk of all the account's notifications (the lists, the grouped walk, the unread counts) that reaches what
   is left of it passes over each with a key lookup, as it passes over notifications R15 hides for other reasons (a
   muted sender's); a clear has no such gap. Context traversal and edit history: _Planned (B4a fixes)._
+  The streaming fan-out reads a window of the journal from its position (64 events, each bound of the journal one
+  seek) and each unit's notification by key, positioned at it, so neither grows with the journal, the recipient's
+  notifications or anyone else's (`test/policy-bounds.test.ts`, "a streamed notification reads its item").
 
 ### Data and keys (DATA)
 

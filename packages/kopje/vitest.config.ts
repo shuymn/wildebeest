@@ -29,6 +29,8 @@ export default defineConfig({
 		// Converts a synthetic legacy export on Node for test/cutover-import.test.ts (node:sqlite is not in workerd).
 		globalSetup: [fileURLToPath(new URL('./test-node/cutover-global-setup.ts', import.meta.url))],
 		include: [fileURLToPath(new URL('./test/**/*.test.ts', import.meta.url))],
+		// The streaming suites run in a project of their own, without isolation (vitest.streaming.config.ts).
+		exclude: [fileURLToPath(new URL('./test/streaming/**', import.meta.url))],
 		setupFiles: [fileURLToPath(new URL('./test/sql-depth-setup.ts', import.meta.url))],
 		// The suites drive the real Store through workerd; on a loaded CI runner a heavy test can pass 5 s.
 		testTimeout: 20_000,
