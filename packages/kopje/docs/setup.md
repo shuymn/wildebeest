@@ -71,6 +71,20 @@ The CLI needs Node.js 22 or later and these variables: `KOPJE_ADMIN_URL` (the in
 commands. These docs write `kopje-admin <command>` for either form: in the instance's repository, read it as
 `npm run admin -- <command>`.
 
+### The Mastodon admin API's admin
+
+Moderation clients (such as Fedilab) use the Mastodon admin API with a token of the admin: the one local account whose
+email equals `admin_email`, compared trimmed and lowercased. `kopje-admin health` shows it as `oauthAdmin`. When its
+`status` is `none` or `ambiguous`, give the right account that email (any other account with it, after trimming and
+lowercasing, is refused):
+
+```sh
+kopje-admin account set-email <username> <email>
+```
+
+`kopje-admin moderation-log` lists what the admin did through the API, and these repairs, newest first
+(`--before <id>` continues the list).
+
 ## Running the wizard
 
 Open `https://<your domain>/setup` and enter the setup token. The browser gets a setup session for an hour; the token

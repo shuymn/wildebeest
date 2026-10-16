@@ -481,13 +481,9 @@ function originalShownSql(viewer: string, now: string): string {
 // ReportService#reported_status_ids, app/services/report_service.rb:82). Unlike the profile read, the viewer's own
 // block of the account hides none: AccountStatusesFilter#blocked? (app/lib/account_statuses_filter.rb:106-108) is the
 // account's block of the viewer alone, so a reporter who blocked the account may still name its statuses. Kopje keeps
-// no deleted status (Mastodon's with_discarded), so a deleted one is not found.
-export function accountStatusIds(
-	db: Db,
-	viewer: ViewerContext,
-	accountId: string,
-	ids: readonly string[]
-): { id: string; uri: string }[] {
+// no deleted status (Mastodon's with_discarded), so a deleted one is not found. The OAuth admin is shown a report's
+// statuses only while its reporter may still see them by the same rule (R37): the ids are the presenter's then.
+export function accountStatusIds(db: Db, viewer: ViewerContext, accountId: string, ids: readonly string[]) {
 	if (
 		ids.length === 0 ||
 		!statusReads(viewer, { viewer: '?1' }).authorShown(db, 'visible', { author: '?2' }, viewer.accountId, accountId)

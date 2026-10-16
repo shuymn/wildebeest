@@ -67,7 +67,7 @@ against their own instance. TLS is assumed between all parties.
 | Outbound document fetches                                      | R1 answers | final URL and parsed id (ID-2)                                | main: `src/federation/loader.ts`                                                                                                                                                                                                      |
 | Deliveries, remote media fetches, Web Push POSTs               | R1 answers | sink policy (NET-3)                                           | main (deliveries, Web Push: `src/jobs/push.ts`); Planned (B4)                                                                                                                                                                         |
 | Mastodon API `/api/*`                                          | R2–R4, R7  | bearer token and route access                                 | main: `src/mastodon/*`, `src/domain/auth.ts`                                                                                                                                                                                          |
-| Mastodon admin API `/api/v1/admin/*`, `/api/v2/admin/*`        | R2–R4      | bearer token with an admin scope, of the OAuth admin (VIS-29) | `kopje/admin-a1`: `src/mastodon/admin.ts`, `src/domain/auth.ts`, `src/domain/admin-authority.ts`                                                                                                                                      |
+| Mastodon admin API `/api/v1/admin/*`, `/api/v2/admin/*`        | R2–R4      | bearer token with an admin scope, of the OAuth admin (VIS-29) | `kopje/admin-a1`: `src/mastodon/admin.ts`, `src/domain/auth.ts`, `src/domain/admin-authority.ts`; `kopje/admin-a2`: `src/domain/reports.ts`, `src/domain/admin-accounts.ts`                                                           |
 | `/oauth/authorize`                                             | R2, R6, R7 | Access JWT, Origin, consent                                   | main: `src/app/authorize.tsx`                                                                                                                                                                                                         |
 | `/oauth/token`, `/oauth/revoke`                                | R2, R3     | client credentials                                            | main: `src/mastodon/oauth.ts`                                                                                                                                                                                                         |
 | `/oauth/userinfo`                                              | R2, R3     | bearer token with `profile`                                   | main: `src/mastodon/oauth.ts`                                                                                                                                                                                                         |
@@ -589,12 +589,21 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   local account matches, when the match is suspended, or when two accounts match. It is checked in the transaction of
   each admin operation, so existing tokens follow the current match, and the role's permissions are exactly the route
   groups Kopje serves. No admin action targets the admin's own account; a suspension fences the account's tokens; every
-  admin write is logged; and the OAuth admin never holds A5 (AUTH-5). _Planned (admin API, PRs A2 and A3)._ The match
-  and the check are _implemented on branch `kopje/admin-a1`_, with no permission granted yet (`ADMIN_PERMISSIONS = 0`,
-  so every admin route answers as Mastodon answers a role without the permission): `oauthAdmin` and `adminAccountId`
-  in `src/domain/admin-authority.ts`, `adminReadOperation` and `adminWriteOperation` in `src/domain/auth.ts`, setup's
-  admin in `src/domain/setup.ts`; `test/admin-api.test.ts`, `test/setup-access.test.ts` ("stops at the next checkpoint
-  when the admin stops being the only match for admin_email during the run").
+  admin write is logged; and the OAuth admin never holds A5 (AUTH-5). The match and the check are _implemented on
+  branch `kopje/admin-a1`_: `oauthAdmin` and `adminAccountId` in `src/domain/admin-authority.ts`, `adminReadOperation`
+  and `adminWriteOperation` in `src/domain/auth.ts`, setup's admin in `src/domain/setup.ts`; `test/admin-api.test.ts`,
+  `test/setup-access.test.ts` ("stops at the next checkpoint when the admin stops being the only match for admin_email
+  during the run"). Reports are _implemented on branch `kopje/admin-a2`_, the only permission granted
+  (`ADMIN_PERMISSIONS = 16`, manage_reports; every other admin route still answers as Mastodon answers a role without
+  the permission): anyone but the OAuth admin is refused before a report is read, so not even a report's existence is
+  disclosed; the admin sees every report with its accounts (local emails included) and only the statuses its reporter
+  may still see (R37); every admin write, and every Access repair below, writes its moderation log row
+  (`admin_actions`, actor, account and client or Access identity, newest 10,000 kept) in its own transaction, read only
+  through Access (`GET /admin/moderation-log`). `listAdminReports`, `getAdminReport`, `updateAdminReport` and
+  `actOnReport` in `src/domain/reports.ts`, `presentAdminAccounts` in `src/domain/admin-accounts.ts`,
+  `src/domain/moderation-log.ts`, migration `0029_admin_reports`; `test/admin-reports.test.ts`,
+  `test/admin-api.test.ts`, `test/policy-bounds.test.ts`, `test/migrations.test.ts`. Self-protection and the token
+  fence: _Planned (admin API, PR A3)_, with the accounts routes.
 
 ### Authorization (AUTH)
 
@@ -644,7 +653,10 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   holds an `ImportAuthority`, and `/api/v1/admin/*` is outside the Access application's `/admin` path. Its state is
   shown only to Access, as `oauthAdmin` in `GET /admin/health`. _Implemented on branch `kopje/admin-a1`:_
   `src/app/admin.ts`; `test/admin-api.test.ts` ("GET /admin/health: oauthAdmin"). The operations that repair it,
-  setting an account's email and unsuspending an account, are Access-only. _Planned (admin API, PRs A2 and A3)._
+  setting an account's email and unsuspending an account, are Access-only: setting an email is _implemented on branch
+  `kopje/admin-a2`_ (`POST /admin/accounts/email`, `setAccountEmail` in `src/domain/admin-accounts.ts`, checked with
+  `accessAdminRefusal` in its transaction, refusing an email that another local account's matches after normalization;
+  `test/admin-reports.test.ts` ("set-email"), `test/cli.test.ts`); unsuspending is _Planned (admin API, PR A3)._
 - **AUTH-6: a user acts only on what that user may touch.** User operations take the acting account from the validated
   viewer, never from the body or path, and check ownership or VIS-1 access to every referenced resource in the same
   transaction. Admin, setup and federation operations use their own named rules (AUTH-5, SETUP-2, ID-6), and the

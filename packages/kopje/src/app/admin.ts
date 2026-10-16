@@ -75,6 +75,9 @@ const STATUS: Record<string, ContentfulStatusCode> = {
 	'query-failed': 400,
 	'dump-not-found': 404,
 	'wrong-authority': 403,
+	'account-not-found': 404,
+	'invalid-email': 400,
+	'email-taken': 409,
 	'not-bootstrap': 403,
 	'invalid-config': 400,
 	'invalid-op-id': 400,
@@ -325,6 +328,34 @@ export function adminRoutes({ build, store, fetch, now, doorbell, loader, images
 		}
 		const { ok: _ok, ...rest } = result
 		return c.json(rest)
+	})
+
+	// ---- the moderation log (domain/moderation-log.ts): every admin write, newest first, and the Access admin's repair
+	// of the OAuth admin's match (domain/admin-accounts.ts). Access admin only: the import token and import sessions
+	// never reach these paths, and the Store checks the admin again where it writes.
+
+	admin.get('/moderation-log', async (c) => {
+		const before = c.req.query('before')
+		const limit = c.req.query('limit')
+		if ((before !== undefined && !/^\d{1,19}$/.test(before)) || (limit !== undefined && !/^\d{1,3}$/.test(limit))) {
+			return c.json({ error: 'before must be a log entry id and limit a number' }, 400)
+		}
+		const input = {
+			...(before === undefined ? {} : { before }),
+			...(limit === undefined ? {} : { limit: Number(limit) }),
+		}
+		return c.json(await stub(c).moderationLog(build(c.env), input))
+	})
+
+	admin.post('/accounts/email', async (c) => {
+		const { username, email } = await jsonBody(c)
+		if (typeof username !== 'string' || username === '' || typeof email !== 'string') {
+			return c.json({ error: 'expected {"username": string, "email": string}' }, 400)
+		}
+		return reply(
+			c,
+			await stub(c).setAccountEmail(build(c.env), { authority: c.get('auth'), username, email, now: now() })
+		)
 	})
 
 	// ---- media rebuild (mastodon/media-rebuild.ts): one bounded step under the Store's rebuild lease; the CLI follows

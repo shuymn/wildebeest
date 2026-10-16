@@ -60,6 +60,8 @@ Kopje schema.
 - The catalog is read from the live schema:
     - All tables are included except `kopje_migrations`, `media_orphans`, `backup_media`, `stream_*`, `_cf_*`, and
       `sqlite_*` other than `sqlite_sequence`.
+      The moderation log (`admin_actions`, migration `0029_admin_reports`) is included like any other table: a
+      restored Store keeps who did what, and its ids, so the log keeps pruning its oldest rows.
     - Columns are in declaration order.
     - `key` is the primary key.
     - `order` is `rowid` for rowid tables, and `key` (with the primary key columns) for WITHOUT ROWID tables and

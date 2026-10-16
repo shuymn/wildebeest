@@ -58,7 +58,7 @@ import {
 	SYNC_LEASE_MS,
 	unfeatureRemote,
 } from '../src/domain/remote-collections'
-import { createReport } from '../src/domain/reports'
+import { type AdminReportFilter, createReport, listAdminReports } from '../src/domain/reports'
 import { dueScheduled, listScheduled, publishScheduled } from '../src/domain/scheduled-statuses'
 import { search } from '../src/domain/search'
 import {
@@ -4514,4 +4514,186 @@ describe("R32: a delete's capture reads the smaller of the status's boosts and e
 		expect(past).toBeLessThanOrEqual(CAPTURE_BOOST_SCAN + 1 + 4 * (11 + 2 * ALLOWANCE))
 		expect(far).toBeLessThanOrEqual(past + ALLOWANCE)
 	}, 120_000)
+})
+
+// The admin's list of reports (R37, GET /api/v1/admin/reports) reads one index range per filter, in id order: the
+// unresolved reports through reports_state, a reporter's through reports_account_state, a reported account's through
+// reports_target_state (with the reporter as a residual when both are given). Each case holds FEW matching reports,
+// spread among `bulk` that do not match (the other state, other reporters, other accounts), and reads the same rows on
+// the newest, a middle and the final page with 20 or 2,000 of them. The reporter residual's skip is the other
+// reporters' reports of that account (local users' writes), left out of the case where both are given.
+describe("the admin's report list reads a page, however many reports do not match (RES-7)", () => {
+	const ADMIN_ID = '680000000000000000'
+	const A = '680000000000000001'
+	const B = '680000000000000002'
+	const T = '681000000000000001'
+	const U = '681000000000000002'
+	const STATUS = '682000000000000001'
+	const ADMIN_TOKEN = 'admin-reports-token'
+	const FEW = 30
+	const LIMIT = 10
+
+	type Kind = { reporter: string; target: string; resolved: boolean }
+	type Case = { name: string; filter: AdminReportFilter; match: Kind; bulk: Kind[] }
+
+	const CASES: Case[] = [
+		{
+			name: 'unresolved',
+			filter: { resolved: false, accountId: null, targetAccountId: null },
+			match: { reporter: A, target: T, resolved: false },
+			bulk: [{ reporter: A, target: T, resolved: true }],
+		},
+		{
+			name: 'resolved',
+			filter: { resolved: true, accountId: null, targetAccountId: null },
+			match: { reporter: A, target: T, resolved: true },
+			bulk: [{ reporter: B, target: U, resolved: false }],
+		},
+		{
+			name: 'by reporter',
+			filter: { resolved: false, accountId: A, targetAccountId: null },
+			match: { reporter: A, target: T, resolved: false },
+			bulk: [
+				{ reporter: A, target: T, resolved: true },
+				{ reporter: B, target: T, resolved: false },
+			],
+		},
+		{
+			name: 'by reported account',
+			filter: { resolved: false, accountId: null, targetAccountId: T },
+			match: { reporter: A, target: T, resolved: false },
+			bulk: [
+				{ reporter: A, target: T, resolved: true },
+				{ reporter: A, target: U, resolved: false },
+			],
+		},
+		{
+			name: 'by both',
+			filter: { resolved: false, accountId: A, targetAccountId: T },
+			match: { reporter: A, target: T, resolved: false },
+			bulk: [
+				{ reporter: A, target: T, resolved: true },
+				{ reporter: A, target: U, resolved: false },
+				{ reporter: B, target: U, resolved: false },
+			],
+		},
+	]
+
+	// The FEW matching reports, each after `bulk / FEW` that do not match, in id order; each names the target's status.
+	async function reports(c: Case, bulk: number): Promise<StoreStub> {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			sql.exec("INSERT INTO instance_settings (name, value) VALUES ('admin_email', 'admin@example.com')")
+			for (const [id, name] of [
+				[ADMIN_ID, 'admin'],
+				[A, 'a'],
+				[B, 'b'],
+			] as const) {
+				sql.exec(
+					'INSERT INTO accounts (id, uri, username) VALUES (?, ?, ?)',
+					id,
+					`https://kopje.test/ap/users/${name}`,
+					name
+				)
+				sql.exec(
+					"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, ?, X'00', X'00', 'test')",
+					id,
+					`${name}@example.com`
+				)
+			}
+			for (const id of [T, U]) {
+				sql.exec(
+					"INSERT INTO accounts (id, uri, username, domain) VALUES (?, ?, 't', 'far.example')",
+					id,
+					`https://far.example/users/${id}`
+				)
+			}
+			sql.exec(
+				"INSERT INTO statuses (id, uri, account_id, visibility, content, published_at) VALUES (?, 'https://far.example/s/1', ?, 'public', '<p>x</p>', ?)",
+				STATUS,
+				T,
+				new Date(NOW).toISOString()
+			)
+			const per = bulk / FEW
+			const kinds = [...c.bulk, c.match]
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1),
+				kinds(k, reporter, target, resolved) AS (SELECT key, value ->> '$.reporter', value ->> '$.target',
+					value ->> '$.resolved' FROM json_each(?2))
+				INSERT INTO reports (account_id, target_account_id, status_ids, uri, created_at, action_taken_at)
+				SELECT kinds.reporter, kinds.target, json_array(?3), 'https://kopje.test/actor#reports/' || n.i, ?4,
+					CASE WHEN kinds.resolved THEN ?4 END
+				FROM n JOIN kinds ON kinds.k = CASE WHEN n.i % (?5 + 1) = ?5 THEN ?6 ELSE n.i % ?6 END
+				ORDER BY n.i`,
+				FEW * (per + 1),
+				JSON.stringify(kinds),
+				STATUS,
+				new Date(NOW).toISOString(),
+				per,
+				c.bulk.length
+			)
+			sql.exec(
+				"INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('admin', 'secret', 'admin', 'urn:ietf:wg:oauth:2.0:oob', 'admin:read')"
+			)
+			sql.exec(
+				"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES (?, 'access', 'admin', ?, 'admin:read')",
+				ADMIN_TOKEN,
+				ADMIN_ID
+			)
+		})
+		return store
+	}
+
+	it('reads the same rows with 20 or 2,000 reports that do not match, on the newest, a middle and the final page', async () => {
+		const credential = { tokenHash: ADMIN_TOKEN, scope: 'admin:read:reports', now: NOW } as const
+		const grown: string[] = []
+		for (const c of CASES) {
+			const few = await reports(c, 20 * FEW)
+			const many = await reports(c, 2000 * FEW)
+			// The pages of each store, following next: the cursors strictly decrease, and only the last page is short.
+			const walk = async (store: StoreStub) => {
+				const inputs: unknown[] = []
+				let maxId: string | undefined
+				for (;;) {
+					const input = { credential, filter: c.filter, page: { limit: LIMIT, maxId }, present: PRESENT }
+					const page = await runInDurableObject(store, (_instance, state) =>
+						listAdminReports.run(state.storage.sql, input)
+					)
+					if (page.status !== 'ok') {
+						throw new Error(page.status)
+					}
+					expect(page.value.items.length, c.name).toBe(LIMIT)
+					expect(page.value.items.every((report) => report.statuses.length === 1)).toBe(true)
+					if (maxId !== undefined) {
+						expect(BigInt(page.value.oldest!) < BigInt(maxId)).toBe(true)
+					}
+					inputs.push(input)
+					maxId = page.value.oldest!
+					if (!page.value.more) {
+						break
+					}
+					if (inputs.length === FEW / LIMIT) {
+						const end = await runInDurableObject(store, (_instance, state) =>
+							listAdminReports.run(state.storage.sql, { ...input, page: { limit: LIMIT, maxId } })
+						)
+						expect(end).toMatchObject({ status: 'ok', value: { items: [], more: false } })
+						break
+					}
+				}
+				return inputs
+			}
+			const fewPages = await walk(few)
+			const manyPages = await walk(many)
+			expect(fewPages.length, c.name).toBe(FEW / LIMIT)
+			for (const [i, input] of manyPages.entries()) {
+				const fewRows = await rowsRead({ store: few }, listAdminReports, fewPages[i] as never)
+				const manyRows = await rowsRead({ store: many }, listAdminReports, input as never)
+				if (manyRows > fewRows + ALLOWANCE) {
+					grown.push(`${c.name}, page ${i + 1}: ${fewRows} -> ${manyRows}`)
+				}
+			}
+		}
+		expect(grown).toEqual([])
+	}, 300_000)
 })

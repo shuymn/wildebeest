@@ -170,6 +170,44 @@ describe('cascade guard (RES-6)', () => {
 	})
 })
 
+// The tables that name local_accounts (a local user's own rows, and the moderation columns of migration
+// 0029_admin_reports) are never met by a batched delete or purge: local_accounts restricts its account's delete, and
+// no code deletes a local account. A foreign key to local_accounts that cascades or sets null is therefore bounded
+// only while that holds; this pins it, so a delete of local accounts cannot be added without bounding them first.
+const LOCAL_ACCOUNT_SOURCES = import.meta.glob<string>(['../src/**/*.ts', '!../src/**/*.d.ts'], {
+	query: '?raw',
+	import: 'default',
+	eager: true,
+})
+
+describe('cascade guard below local_accounts (RES-6)', () => {
+	it('meets nothing: local_accounts restricts the delete of its account, and nothing deletes a local account', async () => {
+		await runInDurableObject(await migratedStore(), (_instance, state) => {
+			const keys = foreignKeys(state.storage.sql)
+			expect(keys.filter((key) => key.from === 'local_accounts')).toEqual([
+				{ from: 'local_accounts', table: 'accounts', column: 'account_id', onDelete: 'RESTRICT' },
+			])
+			expect(cascadesFrom(keys, 'accounts', ['statuses'])).not.toContain('local_accounts')
+			// The report's moderation columns name the admin's account, and let go of it if it ever went.
+			expect(
+				keys
+					.filter((key) => key.table === 'local_accounts' && key.from === 'reports')
+					.map((key) => [key.column, key.onDelete])
+			).toEqual(
+				expect.arrayContaining([
+					['account_id', 'CASCADE'],
+					['assigned_account_id', 'SET NULL'],
+					['action_taken_by_account_id', 'SET NULL'],
+				])
+			)
+		})
+		const deletes = Object.entries(LOCAL_ACCOUNT_SOURCES).filter(([, source]) =>
+			/\bDELETE\s+FROM\s+(?:main\s*\.\s*)?["`[]?local_accounts\b/i.test(source)
+		)
+		expect(deletes.map(([file]) => file)).toEqual([])
+	})
+})
+
 describe('a status in many conversations', () => {
 	it('leaves them over batches, each within PURGE_BATCH, its conversations with them', async () => {
 		const h = await community(['alice'])

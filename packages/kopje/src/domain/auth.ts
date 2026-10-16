@@ -89,7 +89,8 @@ export function authorize(db: Db, credential: Credential): AuthFailure | { statu
 // The viewer context of a signed-in user.
 export type UserContext = ViewerContext & { readonly accountId: string }
 
-// The only place a ViewerContext is made: the viewer a credential names (or none), judged at its request time.
+// The only place a ViewerContext is made: the viewer a credential names (or none), judged at its request time, or
+// another account seen by the OAuth admin (viewerOf).
 function contextOf<A extends string | null>(accountId: A, now: number): ViewerContext & { readonly accountId: A } {
 	return { accountId, now: new Date(now).toISOString() }
 }
@@ -180,11 +181,41 @@ export const ADMIN_PERMISSION = {
 export type AdminPermission = (typeof ADMIN_PERMISSION)[keyof typeof ADMIN_PERMISSION]
 
 // The permissions of the OAuth admin's role: the bits of the route groups Kopje serves. A group's bit is set only
-// once the whole group is served; until then its routes refuse the admin as they refuse everyone.
-export const ADMIN_PERMISSIONS = 0
+// once the whole group is served; until then its routes refuse the admin as they refuse everyone. Reports are served
+// (manage_reports); accounts (manage_users) come next.
+export const ADMIN_PERMISSIONS: number = ADMIN_PERMISSION.manageReports
 
-// The OAuth admin acting through an admin route: its account, the client it acts through, and the request time.
-export type Admin = { accountId: string; clientId: string; now: number }
+// A role as Mastodon's REST::RoleSerializer presents it (permissions is a string).
+export type Role = { id: string; name: string; permissions: string; color: string; highlighted: boolean }
+
+// The OAuth admin's role: Mastodon's Owner (id 3 on a default install, db/seeds/03_roles.rb), with exactly the
+// permissions Kopje serves. Not `administrator` (bit 1), which implies every permission (UserRole#can?).
+export const OWNER_ROLE: Role = {
+	id: '3',
+	name: 'Owner',
+	permissions: String(ADMIN_PERMISSIONS),
+	color: '',
+	highlighted: true,
+}
+
+// Every other local account's role: Mastodon's default (everyone) role, id -99.
+export const EVERYONE_ROLE: Role = { id: '-99', name: '', permissions: '0', color: '', highlighted: false }
+
+// The role a local account presents (its credential account, its admin entity): Owner for the OAuth admin, read in the
+// transaction that presents it, and the everyone role for every other one.
+export function localRole(db: Db, accountId: string): Role {
+	return accountId === adminAccountId(db) ? OWNER_ROLE : EVERYONE_ROLE
+}
+
+// The OAuth admin acting through an admin route: its account, the client it acts through, the request time, and the
+// admin as a viewer at that time.
+export type Admin = { accountId: string; clientId: string; now: number; context: UserContext }
+
+// R37: another account as a viewer at the admin's request time, for what the admin is shown only while that account
+// may still see it (the statuses a report names, as its reporter sees them: domain/reports.ts).
+export function viewerOf(admin: Admin, accountId: string): UserContext {
+	return contextOf(accountId, admin.now)
+}
 
 // Operations of the Mastodon admin API (R37, VIS-29). The route's token is optional (Mastodon's
 // authorize_if_got_token!): a token sent must be valid and cover the route's admin scope, and then, in the same
@@ -214,7 +245,12 @@ export function adminGuarded(declare: Declare, granted: number) {
 			}
 			return {
 				status: 'ok',
-				value: run(db, input, { accountId: viewer.accountId, clientId: viewer.client.id, now: viewer.now }),
+				value: run(db, input, {
+					accountId: viewer.accountId,
+					clientId: viewer.client.id,
+					now: viewer.now,
+					context: contextOf(viewer.accountId, viewer.now),
+				}),
 			}
 		})
 }
