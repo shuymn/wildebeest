@@ -730,6 +730,35 @@ export type RelationshipResult =
 	// The change cannot be recorded right now (answered 503).
 	| { status: 'unavailable' }
 
+export type FollowResult = RelationshipResult | { status: 'invalid'; errors: string[] }
+
+// Mastodon's FollowLimitValidator, with its default MAX_FOLLOWS_THRESHOLD and MAX_FOLLOWS_RATIO: a local account may
+// follow up to FOLLOW_LIMIT accounts, and past that up to FOLLOW_LIMIT_RATIO times its followers. Like Mastodon it
+// counts accepted follows only (following_count), not pending requests.
+export const FOLLOW_LIMIT = 7_500
+export const FOLLOW_LIMIT_RATIO = 1.1
+
+export function followLimit(counts: { following_count: number; followers_count: number }): number {
+	return counts.following_count < FOLLOW_LIMIT
+		? FOLLOW_LIMIT
+		: Math.max(Math.round(counts.followers_count * FOLLOW_LIMIT_RATIO), FOLLOW_LIMIT)
+}
+
+// The validator's error for a new follow or request past the limit, or null while under it. It applies where Mastodon
+// creates a Follow or FollowRequest without bypass_limit: the follow API only. Authorizing a request (local or a remote
+// Accept) and a Move's follower transfer bypass it, as there.
+function followLimitError(db: Db, accountId: string): string | null {
+	const counts = db.first<{ following_count: number; followers_count: number }>(
+		'SELECT following_count, followers_count FROM accounts WHERE id = ?',
+		accountId
+	)
+	if (counts === undefined) {
+		return null
+	}
+	const limit = followLimit(counts)
+	return counts.following_count >= limit ? `You cannot follow more than ${limit} people` : null
+}
+
 type TargetRow = {
 	id: string
 	domain: string | null
@@ -759,8 +788,9 @@ function followTarget(db: Db, viewerId: string, target: string): TargetRow | nul
 // (follow, or follow_request when locked) in the same transaction; a remote target is sent a Follow (its id kept in
 // follows.uri, which the remote Accept must match) and stays pending until that Accept arrives (VIS-8, VIS-9). As
 // in Mastodon's FollowService, a suspended target is not found, and a block either way or a domain block of the
-// viewer forbids the follow.
-export const follow = userWriteOperation<FollowInput, RelationshipResult>((db, input, { accountId: viewerId }) => {
+// viewer forbids the follow. A new follow or request past the follow limit is refused (422); changing the options of
+// an existing one is not, as the validator runs on create only.
+export const follow = userWriteOperation<FollowInput, FollowResult>((db, input, { accountId: viewerId }) => {
 	const target = followTarget(db, viewerId, input.target)
 	if (target === null || target.available === 0) {
 		return { status: 'not_found' }
@@ -781,6 +811,10 @@ export const follow = userWriteOperation<FollowInput, RelationshipResult>((db, i
 		target.id
 	)
 	if (existing === undefined) {
+		const limitError = followLimitError(db, viewerId)
+		if (limitError !== null) {
+			return { status: 'invalid', errors: [limitError] }
+		}
 		const state = target.domain === null && target.locked === 0 ? 'accepted' : 'pending'
 		const edge = db.first<{ id: string }>(
 			`INSERT INTO follows (account_id, target_account_id, state, show_reblogs, notify, languages, created_at)
@@ -1058,5 +1092,13 @@ export const answerFollowRequest = userWriteOperation<
 			(SELECT COUNT(*) FROM follows WHERE target_account_id = ?1 AND state = 'accepted') WHERE id = ?1`,
 		viewerId
 	)
+	// A local requester follows one more account now (its following_count, which the follow limit reads).
+	if (decision === 'authorize' && request.remote === 0) {
+		db.run(
+			`UPDATE accounts SET following_count =
+				(SELECT COUNT(*) FROM follows WHERE account_id = ?1 AND state = 'accepted') WHERE id = ?1`,
+			requesterId
+		)
+	}
 	return relationshipResult(db, viewerId, requesterId, now)
 })

@@ -21,6 +21,18 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       status answers 404, as its page does), and `/@alice@this.domain/:id` and the object URI (`/ap/o/...`) are taken;
       the HTML says "View on Kopje" without Mastodon's logo; the script is at `/assets/embed.js` (Mastodon:
       `/embed.js`) and frames only the `blockquote` embeds (not the older `iframe` ones).
+- The follow limit of Mastodon 4.5 (`FollowLimitValidator`, at its defaults): `POST /api/v1/accounts/:id/follow` refuses
+  a new follow or follow request with 422 and `Validation failed: You cannot follow more than 7500 people` once the
+  account follows 7,500 accounts, or, past that, 1.1 times its followers (rounded). Pending requests do not count;
+  changing an existing follow's options, authorizing a request (locally or by a remote `Accept`) and a `Move`'s
+  follower transfer are not limited, as in Mastodon. The limit also bounds the windows a home timeline reads.
+    - Where Kopje differs from Mastodon: the limit and ratio are fixed (Mastodon reads `MAX_FOLLOWS_THRESHOLD` and
+      `MAX_FOLLOWS_RATIO`).
+
+### Fixed
+
+- Authorizing a local account's follow request counts the follow in that account's `following_count` at once (it was
+  counted only at the account's next follow change).
 
 ## [0.1.0-rc.7] - 2026-10-16
 

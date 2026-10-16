@@ -262,7 +262,8 @@ export const follow: ApiHandler = async (c, deps) => {
 		languages,
 		now: deps.now(),
 	}
-	return relationshipResponse(c, authorized(await storeCall(c, deps, (s, b) => s.follow(b, input))))
+	const result = authorized(await storeCall(c, deps, (s, b) => s.follow(b, input)))
+	return result.status === 'invalid' ? validationError(result.errors) : relationshipResponse(c, result)
 }
 
 export const unfollow: ApiHandler = async (c, deps) => {

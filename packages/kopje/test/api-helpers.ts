@@ -73,6 +73,42 @@ export async function sql<T extends Record<string, SqlStorageValue>>(
 	return runInDurableObject(store, (_instance, state) => state.storage.sql.exec<T>(query, ...params).toArray())
 }
 
+// `count` new remote accounts of `domain` (ids from `base`), each with an accepted follow of `accountId`
+// (`followers`) or followed by it (`following`), in one statement; then the account's counts are recomputed from its
+// edges, as the follow writers keep them.
+export async function seedFollows(
+	store: StoreStub,
+	accountId: string,
+	count: number,
+	options: { direction: 'following' | 'followers'; domain: string; base: number }
+): Promise<void> {
+	await sql(
+		store,
+		`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+		INSERT INTO accounts (id, uri, username, domain)
+		SELECT printf('%018d', CAST(?2 AS INTEGER) + i), 'https://' || ?3 || '/users/u' || i, 'u' || i, ?3 FROM n`,
+		count,
+		options.base,
+		options.domain
+	)
+	const [mine, theirs] =
+		options.direction === 'following' ? ['account_id', 'target_account_id'] : ['target_account_id', 'account_id']
+	await sql(
+		store,
+		`INSERT INTO follows (${mine}, ${theirs}, state) SELECT ?1, id, 'accepted' FROM accounts WHERE domain = ?2`,
+		accountId,
+		options.domain
+	)
+	await sql(
+		store,
+		`UPDATE accounts SET
+			followers_count = (SELECT COUNT(*) FROM follows WHERE target_account_id = ?1 AND state = 'accepted'),
+			following_count = (SELECT COUNT(*) FROM follows WHERE account_id = ?1 AND state = 'accepted')
+		WHERE id = ?1`,
+		accountId
+	)
+}
+
 export async function setSetting(store: StoreStub, name: string, value: string): Promise<void> {
 	await sql(store, 'INSERT OR REPLACE INTO instance_settings (name, value) VALUES (?, ?)', name, value)
 }
