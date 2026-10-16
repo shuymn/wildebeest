@@ -9,19 +9,26 @@ import { instancePeers, instanceRules, MAX_PEERS, PEER_SEARCH_LIMIT, searchPeers
 // (RES-3, RES-7).
 
 describe('instance details', () => {
-	it('lists the rules as /api/v2/instance shows them', async () => {
+	it('lists the rules as every instance endpoint shows them, with a hint and translations as Mastodon', async () => {
 		const h = await apiHarness()
-		await setSetting(h.store, 'rules', JSON.stringify(['Be kind', { id: 'r2', text: 'No spam' }]))
+		await setSetting(
+			h.store,
+			'rules',
+			JSON.stringify(['Be kind', { id: 'r2', text: 'No spam', hint: 'No ads either' }, { text: 'Hi', hint: 3 }])
+		)
 		const rules = await getJson(h, '/api/v1/instance/rules')
 		expect(rules).toEqual({
 			status: 200,
 			body: [
-				{ id: '1', text: 'Be kind' },
-				{ id: 'r2', text: 'No spam' },
+				{ id: '1', text: 'Be kind', hint: '', translations: {} },
+				{ id: 'r2', text: 'No spam', hint: 'No ads either', translations: {} },
+				{ id: '3', text: 'Hi', hint: '', translations: {} },
 			],
 		})
+		const v1 = await getJson<{ rules: unknown }>(h, '/api/v1/instance')
 		const v2 = await getJson<{ rules: unknown }>(h, '/api/v2/instance')
-		expect(rules.body).toEqual(v2.body.rules)
+		expect(v1.body.rules).toEqual(rules.body)
+		expect(v2.body.rules).toEqual(rules.body)
 	})
 
 	it('reads only the rules setting, whatever the accounts (RES-7)', async () => {

@@ -71,6 +71,9 @@ export const MAX_FIELDS = 4
 export const MAX_FIELD_NAME = 255
 export const MAX_FIELD_VALUE = 255
 
+// Account::AttributionDomains::ATTRIBUTION_DOMAINS_LIMIT.
+export const MAX_ATTRIBUTION_DOMAINS = 100
+
 export type Visibility = 'public' | 'unlisted' | 'private' | 'direct'
 
 export type CredentialAccount = Account & {
@@ -82,6 +85,7 @@ export type CredentialAccount = Account & {
 		fields: (FieldSource & { verified_at: null })[]
 		follow_requests_count: number
 		hide_collections: boolean
+		attribution_domains: string[]
 	}
 	role: { id: string; name: string; permissions: string; color: string; highlighted: boolean }
 }
@@ -333,13 +337,14 @@ type CredentialRow = {
 	default_visibility: Visibility
 	default_sensitive: number
 	default_language: string | null
+	attribution_domains: string
 	follow_requests_count: number
 }
 
 export function credentialAccount(db: Db, accountId: string, present: Present): CredentialAccount | null {
 	const row = accountRow(db, accountId)
 	const local = db.first<CredentialRow>(
-		`SELECT default_visibility, default_sensitive, default_language,
+		`SELECT default_visibility, default_sensitive, default_language, attribution_domains,
 			(SELECT COUNT(*) FROM follows WHERE target_account_id = ?1 AND state = 'pending') AS follow_requests_count
 		FROM local_accounts WHERE account_id = ?1`,
 		accountId
@@ -357,6 +362,7 @@ export function credentialAccount(db: Db, accountId: string, present: Present): 
 			fields: fieldSources(row.local_fields).map((field) => ({ ...field, verified_at: null })),
 			follow_requests_count: local.follow_requests_count,
 			hide_collections: row.hide_collections === 1,
+			attribution_domains: JSON.parse(local.attribution_domains) as string[],
 		},
 		// Every user has Mastodon's default role (id -99) until roles exist. permissions is a string (design §4).
 		role: { id: '-99', name: '', permissions: '0', color: '', highlighted: false },
@@ -405,7 +411,7 @@ export type Preferences = {
 }
 
 export const preferences = userReadOperation<object, Preferences | null>((db, _input, { accountId }) => {
-	const row = db.first<Omit<CredentialRow, 'follow_requests_count'>>(
+	const row = db.first<Omit<CredentialRow, 'follow_requests_count' | 'attribution_domains'>>(
 		'SELECT default_visibility, default_sensitive, default_language FROM local_accounts WHERE account_id = ?',
 		accountId
 	)
@@ -432,6 +438,8 @@ export type CredentialChanges = {
 	language?: string | null
 	// Replaces every field; lengths and count are validated by the caller.
 	fields?: FieldSource[]
+	// Replaces every attribution domain; normalized and validated by the caller.
+	attributionDomains?: string[]
 }
 
 // Lengths and values are validated by the caller. display_name and the note are plain text: display_name is stored
@@ -473,7 +481,8 @@ export const updateCredentials = userWriteOperation<
 		`UPDATE local_accounts SET default_visibility = COALESCE(?, default_visibility),
 			default_sensitive = COALESCE(?, default_sensitive),
 			default_language = CASE WHEN ? THEN ? ELSE default_language END,
-			fields = COALESCE(?, fields), hide_collections = COALESCE(?, hide_collections)
+			fields = COALESCE(?, fields), hide_collections = COALESCE(?, hide_collections),
+			attribution_domains = COALESCE(?, attribution_domains)
 		WHERE account_id = ?`,
 		changes.privacy ?? null,
 		bit(changes.sensitive),
@@ -481,6 +490,7 @@ export const updateCredentials = userWriteOperation<
 		changes.language ?? null,
 		changes.fields === undefined ? null : JSON.stringify(changes.fields.slice(0, MAX_FIELDS)),
 		hide,
+		changes.attributionDomains === undefined ? null : JSON.stringify(changes.attributionDomains),
 		accountId
 	)
 	// Other servers learn of the change (Update(Person)), only if the published document changed, or if the account
@@ -731,6 +741,39 @@ export type RelationshipResult =
 	// The change cannot be recorded right now (answered 503).
 	| { status: 'unavailable' }
 
+export type FollowResult = RelationshipResult | { status: 'invalid'; errors: string[] }
+
+// Mastodon's FollowLimitValidator, with its default MAX_FOLLOWS_THRESHOLD and MAX_FOLLOWS_RATIO: a local account may
+// follow up to FOLLOW_LIMIT accounts, and past that up to FOLLOW_LIMIT_RATIO times its followers. Like Mastodon it
+// counts accepted follows only (following_count), not pending requests.
+export const FOLLOW_LIMIT = 7_500
+export const FOLLOW_LIMIT_RATIO = 1.1
+
+export function followLimit(counts: { following_count: number; followers_count: number }): number {
+	return counts.following_count < FOLLOW_LIMIT
+		? FOLLOW_LIMIT
+		: Math.max(Math.round(counts.followers_count * FOLLOW_LIMIT_RATIO), FOLLOW_LIMIT)
+}
+
+// The validator's error for a new follow or request past the limit, or null while under it. It applies where Mastodon
+// creates a Follow or FollowRequest without bypass_limit: the follow API only. Authorizing a request (local or a remote
+// Accept) and a Move's follower transfer bypass it, as there. The following count is derived from the viewer's accepted
+// follows (the partial index follows_accepted, the viewer's own rows only), not the cached following_count, so a stale
+// cache cannot let a follow through; followers_count, for the ratio, is read from the row.
+function followLimitError(db: Db, accountId: string): string | null {
+	const counts = db.first<{ following_count: number; followers_count: number }>(
+		`SELECT (SELECT COUNT(*) FROM follows WHERE account_id = ?1 AND state = 'accepted') AS following_count,
+			followers_count
+		FROM accounts WHERE id = ?1`,
+		accountId
+	)
+	if (counts === undefined) {
+		return null
+	}
+	const limit = followLimit(counts)
+	return counts.following_count >= limit ? `You cannot follow more than ${limit} people` : null
+}
+
 type TargetRow = {
 	id: string
 	domain: string | null
@@ -760,8 +803,9 @@ function followTarget(db: Db, viewerId: string, target: string): TargetRow | nul
 // (follow, or follow_request when locked) in the same transaction; a remote target is sent a Follow (its id kept in
 // follows.uri, which the remote Accept must match) and stays pending until that Accept arrives (VIS-8, VIS-9). As
 // in Mastodon's FollowService, a suspended target is not found, and a block either way or a domain block of the
-// viewer forbids the follow.
-export const follow = userWriteOperation<FollowInput, RelationshipResult>((db, input, { accountId: viewerId }) => {
+// viewer forbids the follow. A new follow or request past the follow limit is refused (422); changing the options of
+// an existing one is not, as the validator runs on create only.
+export const follow = userWriteOperation<FollowInput, FollowResult>((db, input, { accountId: viewerId }) => {
 	const target = followTarget(db, viewerId, input.target)
 	if (target === null || target.available === 0) {
 		return { status: 'not_found' }
@@ -782,6 +826,10 @@ export const follow = userWriteOperation<FollowInput, RelationshipResult>((db, i
 		target.id
 	)
 	if (existing === undefined) {
+		const limitError = followLimitError(db, viewerId)
+		if (limitError !== null) {
+			return { status: 'invalid', errors: [limitError] }
+		}
 		const state = target.domain === null && target.locked === 0 ? 'accepted' : 'pending'
 		const edge = db.first<{ id: string }>(
 			`INSERT INTO follows (account_id, target_account_id, state, show_reblogs, notify, languages, created_at)
@@ -855,7 +903,7 @@ function remoteFollow(db: Db, viewerId: string, target: TargetRow, edgeId: strin
 
 // Counts are recomputed from the edges in the transaction that changed them. A remote account's counts are the
 // cached values from its server and are left alone.
-function recountFollows(db: Db, viewerId: string, target: TargetRow): void {
+function recountFollows(db: Db, viewerId: string, target: Pick<TargetRow, 'id' | 'domain'>): void {
 	db.run(
 		`UPDATE accounts SET following_count =
 			(SELECT COUNT(*) FROM follows WHERE account_id = ?1 AND state = 'accepted') WHERE id = ?1`,
@@ -1054,10 +1102,15 @@ export const answerFollowRequest = userWriteOperation<
 			now
 		)
 	}
-	db.run(
-		`UPDATE accounts SET followers_count =
-			(SELECT COUNT(*) FROM follows WHERE target_account_id = ?1 AND state = 'accepted') WHERE id = ?1`,
-		viewerId
-	)
+	// The viewer's followers changed; an authorized local requester also follows one more account now.
+	if (decision === 'authorize' && request.remote === 0) {
+		recountFollows(db, requesterId, { id: viewerId, domain: null })
+	} else {
+		db.run(
+			`UPDATE accounts SET followers_count =
+				(SELECT COUNT(*) FROM follows WHERE target_account_id = ?1 AND state = 'accepted') WHERE id = ?1`,
+			viewerId
+		)
+	}
 	return relationshipResult(db, viewerId, requesterId, now)
 })

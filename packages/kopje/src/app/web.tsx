@@ -15,7 +15,7 @@ import { receiveImageUpload } from '../mastodon/media'
 import { type Params, readParams } from '../mastodon/params'
 import type { Scope } from '../security/scopes'
 import { pkceChallenge, sha256Hex } from '../security/tokens'
-import { EMBED_SCRIPT, EmbedPage, MessagePage, ProfilePage, SettingsPage, StatusPage } from '../web/pages'
+import { AboutPage, EMBED_SCRIPT, EmbedPage, MessagePage, ProfilePage, SettingsPage, StatusPage } from '../web/pages'
 import {
 	csrfMatches,
 	csrfToken,
@@ -29,8 +29,8 @@ import {
 } from '../web/session'
 import { noticeOf, STRINGS } from '../web/strings'
 
-// The web UI (B5): public profiles and permalinks, sign-in through Access, and the settings page. Posting and reading
-// happen in Mastodon clients; this is all the instance serves as HTML besides the consent page.
+// The web UI (B5): public profiles and permalinks, the about page, sign-in through Access, and the settings page.
+// Posting and reading happen in Mastodon clients; this is all the instance serves as HTML besides the consent page.
 //
 //   - WEB-2: every page has a CSP with no script source, frame-ancestors 'none' and X-Frame-Options DENY, except the
 //     embed page, which any site may frame and which runs one script; pages of a signed-in user are never cached
@@ -172,6 +172,21 @@ export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 			/>
 		)
 	}
+	app.get('/about', setup, async (c) => {
+		const info = await storeCall(c, deps, (s, b) => s.instanceSettings(b))
+		const domain = c.get('domain')
+		return publicPage(
+			c,
+			200,
+			<AboutPage
+				title={info.title ?? domain}
+				domain={domain}
+				description={info.description ?? ''}
+				contactEmail={info.contactEmail ?? ''}
+				rules={info.rules}
+			/>
+		)
+	})
 	// A remote account's featured hashtag URL (/@username@domain/tagged/:tag, featured-tags.ts taggedUrl): its profile
 	// on its own server, while it is available; Kopje shows no remote account's posts by hashtag.
 	const remoteTagged = async (c: WebContext, handle: string) => {

@@ -14,7 +14,33 @@ import type { Db } from '../db/sql'
 
 export type TagHistory = { day: string; uses: string; accounts: string }
 
-export type Tag = { name: string; url: string; history: TagHistory[]; following?: boolean; featuring?: boolean }
+export type Tag = {
+	id: string
+	name: string
+	url: string
+	history: TagHistory[]
+	following?: boolean
+	featuring?: boolean
+}
+
+// The Tag's id (Mastodon 4.3.1+ sends its tags row id). Kopje has no tags table, so the id is derived from the
+// normalized name: the 64-bit FNV-1a hash of its UTF-8 bytes, cut to 63 bits so it reads as a positive bigint, in
+// decimal. It is the same on every endpoint, instance and release, and two names share one with a chance of about
+// n²/2⁶⁴ for n names, which no instance approaches. Nothing takes it back: /api/v1/tags/:id takes the name, and the
+// clients surveyed use a Tag's id only to tell tags apart (Phanpy, the official Android app for featured hashtags) or
+// use the name instead (Ice Cubes).
+const FNV_OFFSET = 0xcbf29ce484222325n
+const FNV_PRIME = 0x100000001b3n
+const MASK_64 = (1n << 64n) - 1n
+const MASK_63 = (1n << 63n) - 1n
+
+export function tagId(name: string): string {
+	let hash = FNV_OFFSET
+	for (const byte of new TextEncoder().encode(name)) {
+		hash = ((hash ^ BigInt(byte)) * FNV_PRIME) & MASK_64
+	}
+	return (hash & MASK_63).toString()
+}
 
 const HISTORY_DAYS = 7
 const DAY_MS = 86_400_000
@@ -84,6 +110,7 @@ export function presentTags(
 ): Tag[] {
 	const relationships = viewerId === null ? null : tagRelationships(db, viewerId, names)
 	return names.map((name) => ({
+		id: tagId(name),
 		name,
 		url: `${present.origin}/tags/${encodeURIComponent(name)}`,
 		history: now === null ? [] : tagHistory(db, name, now),

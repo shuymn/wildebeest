@@ -49,6 +49,7 @@ describe('credentials', () => {
 				fields: [],
 				follow_requests_count: 0,
 				hide_collections: false,
+				attribution_domains: [],
 			},
 			role: { id: '-99', name: '', permissions: '0', color: '', highlighted: false },
 		})
@@ -127,6 +128,71 @@ describe('credentials', () => {
 			bearer(h.token, { method: 'PATCH', body: show })
 		)
 		expect(await shown.json()).toMatchObject({ hide_collections: false, source: { hide_collections: false } })
+	})
+
+	it('stores attribution domains as Mastodon normalizes them and gives them back in source', async () => {
+		const h = await aliceSession()
+		const patch = (body: Record<string, unknown>) =>
+			h.request('/api/v1/accounts/update_credentials', bearer(h.token, json(body, { method: 'PATCH' })))
+		const response = await patch({
+			attribution_domains: [' https://writer.example ', '*.news.example', 'writer.example', '', 'Bücher.example'],
+		})
+		expect(response.status).toBe(200)
+		const domains = ['writer.example', 'news.example', 'Bücher.example']
+		expect(await response.json()).toMatchObject({ source: { attribution_domains: domains } })
+		const verified = await h.request('/api/v1/accounts/verify_credentials', bearer(h.token))
+		expect(await verified.json()).toMatchObject({ source: { attribution_domains: domains } })
+		// Left out or sent as a scalar (which Mastodon's strong parameters drop), they stay as they are.
+		expect(await (await patch({ display_name: 'Alice A.' })).json()).toMatchObject({
+			source: { attribution_domains: domains },
+		})
+		expect(await (await patch({ attribution_domains: 'other.example' })).json()).toMatchObject({
+			source: { attribution_domains: domains },
+		})
+		// An empty list clears them, from a form as from JSON.
+		const clear = new FormData()
+		clear.set('attribution_domains[]', '')
+		const cleared = await h.request(
+			'/api/v1/accounts/update_credentials',
+			bearer(h.token, { method: 'PATCH', body: clear })
+		)
+		expect(await cleared.json()).toMatchObject({ source: { attribution_domains: [] } })
+		expect(await (await patch({ attribution_domains: ['a.example'] })).json()).toMatchObject({
+			source: { attribution_domains: ['a.example'] },
+		})
+		expect(await (await patch({ attribution_domains: [] })).json()).toMatchObject({
+			source: { attribution_domains: [] },
+		})
+	})
+
+	it('refuses attribution domains that are not domain names, or more than 100, with Mastodon messages', async () => {
+		const h = await aliceSession()
+		const patch = (body: Record<string, unknown>) =>
+			h.request('/api/v1/accounts/update_credentials', bearer(h.token, json(body, { method: 'PATCH' })))
+		const invalid = await patch({
+			attribution_domains: ['ok.example', 'under_score.example', 'writer.example/path', '.lead.example', 'a b'],
+		})
+		expect(invalid.status).toBe(422)
+		expect(await invalid.json()).toEqual({
+			error:
+				'Validation failed: Attribution domains under_score.example is not a valid domain name, Attribution domains writer.example/path is not a valid domain name, Attribution domains .lead.example is not a valid domain name, Attribution domains a b is not a valid domain name',
+		})
+		const many = await patch({ attribution_domains: Array.from({ length: 101 }, (_, i) => `d${i}.example`) })
+		expect(many.status).toBe(422)
+		expect(await many.json()).toEqual({
+			error: 'Validation failed: Attribution domains is too long (maximum is 100 characters)',
+		})
+		const hundred = await patch({ attribution_domains: Array.from({ length: 100 }, (_, i) => `d${i}.example`) })
+		expect(hundred.status).toBe(200)
+		// A trailing dot passes, as Ruby's split drops the empty label after it; a label of 64 characters does not.
+		expect((await patch({ attribution_domains: ['dot.example.'] })).status).toBe(200)
+		expect((await patch({ attribution_domains: [`${'a'.repeat(64)}.example`] })).status).toBe(422)
+		const [row] = await sql<{ attribution_domains: string }>(
+			h.store,
+			'SELECT attribution_domains FROM local_accounts WHERE account_id = ?',
+			h.aliceId
+		)
+		expect(JSON.parse(row?.attribution_domains ?? '')).toEqual(['dot.example.'])
 	})
 
 	it('refuses invalid values without changing anything', async () => {

@@ -10,17 +10,6 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Added
 
-- oEmbed, as Mastodon 4.5 has it: `GET /api/oembed?url=` (no token) answers a `rich` embed of a status, with
-  `author_name`, `author_url`, `provider_name`, `provider_url`, `cache_age` (a day), `width` (`maxwidth`, 400 by
-  default) and `height` (`maxheight`, else null), and HTML that links to the status and loads `/assets/embed.js`. The
-  script replaces the link with an iframe of the status's embed page, `/@username/:id/embed`, sized to the post. A
-  status can be embedded exactly when its page shows it: a public or unlisted post, not a boost, of a local account that
-  is not suspended; anything else, and any URL that is not a status page or object URI of this instance, answers 404.
-  The embed page is the one page other sites may frame; every other page still refuses framing.
-    - Where Kopje differs from Mastodon: the URL must name the status's author (`/@alice/:id` of another account's
-      status answers 404, as its page does), and `/@alice@this.domain/:id` and the object URI (`/ap/o/...`) are taken;
-      the HTML says "View on Kopje" without Mastodon's logo; the script is at `/assets/embed.js` (Mastodon:
-      `/embed.js`) and frames only the `blockquote` embeds (not the older `iframe` ones).
 - A remote account's pinned posts, featured hashtags and hidden network, learned as Mastodon 4.5 learns them:
   `GET /api/v1/accounts/:id/statuses?pinned=true` and `GET /api/v1/accounts/:id/featured_tags` now show a remote
   account's, and its `hide_collections` is shown and hides its followers and following lists as a local account's
@@ -33,11 +22,18 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
     - Pins and featured hashtags are shown by the same rules as a local account's: a followers-only pin only to the
       account's followers, nothing of an account that blocks you. A featured hashtag counts the account's public and
       unlisted posts with it that Kopje has, and the count follows as they arrive and are deleted.
+    - A sync the fetch budget cuts short continues in later rounds; one whose collections cannot be read for now (a
+      timeout, a 5xx) is tried again later, at most three times in a row without progress, and leaves what was learned
+      as it was meanwhile. A profile update while a sync runs is read again afterwards.
     - Where Kopje differs from Mastodon: an account keeps at most 20 pins and 10 featured hashtags (Mastodon keeps any
-      number for a remote account); a collection is read only on the account's own server, and a pin only when it is
-      the account's own post there; a collection that cannot be read for now (a timeout, a 5xx) leaves what was learned
-      as it was, where Mastodon retries, or for its followers and following, takes it as hidden; a sync is tried at
-      most three times; and a newly learned pin is ordered as the collection lists it (the first is the newest).
+      number for a remote account), from the first 20 items of its featured collection and the first four pages of its
+      featuredTags collection; a collection is read only on the account's own server, and a pin only when it is the
+      account's own post there; a followers or following collection that cannot be read for now hides nothing unless
+      the other one hides its items (Mastodon takes it as hidden); a featured hashtag of a remote account counts its posts
+      among the newest 200 Kopje has of it (Mastodon counts them all); a newly learned pin is ordered as the collection
+      lists it (the first is the newest); and a remote account's featured hashtag links to
+      `/@username@domain/tagged/:tag`, which leads to its profile on its server (Mastodon's link,
+      `/@username/tagged/:tag`, names a local account of the same username).
 
 ### Instance changes
 
@@ -46,8 +42,82 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
     - `0025_remote_collections`: lets `status_pins` and `featured_tags` hold any account's rows (each table is rebuilt
       and its rows copied), adds `accounts.hide_collections`, and adds the empty `collection_syncs` table. Only local
       accounts have pins and featured hashtags until then, at most five and ten each, so its work grows with the local
-      accounts alone (about four rows read per pin or featured hashtag), and the remote accounts and statuses are not
-      read.
+      accounts alone (about four rows read per pin or featured hashtag). The new column has no default and no
+      constraint, so the remote accounts and their statuses are neither read nor rewritten.
+- `wrangler.jsonc`: unchanged.
+
+## [0.1.0-rc.8] - 2026-10-16
+
+An eighth release candidate of the first release, published under the npm dist-tag `next`.
+
+### Added
+
+- oEmbed, as Mastodon 4.5 has it: `GET /api/oembed?url=` (no token) answers a `rich` embed of a status, with
+  `author_name`, `author_url`, `provider_name`, `provider_url`, `cache_age` (a day), `width` (`maxwidth`, 400 by
+  default) and `height` (`maxheight`, else null), and HTML that links to the status and loads `/assets/embed.js`. The
+  script replaces the link with an iframe of the status's embed page, `/@username/:id/embed`, sized to the post. A
+  status can be embedded exactly when its page shows it: a public or unlisted post, not a boost, of a local account that
+  is not suspended; anything else, and any URL that is not a status page or object URI of this instance, answers 404.
+  The embed page is the one page other sites may frame; every other page still refuses framing.
+    - Where Kopje differs from Mastodon: the URL must name the status's author (`/@alice/:id` of another account's
+      status answers 404, as its page does), and `/@alice@this.domain/:id` and the object URI (`/ap/o/...`) are taken;
+      the HTML says "View on Kopje" without Mastodon's logo; the script is at `/assets/embed.js` (Mastodon:
+      `/embed.js`) and frames only the `blockquote` embeds (not the older `iframe` ones).
+- The follow limit of Mastodon 4.5 (`FollowLimitValidator`, at its defaults): `POST /api/v1/accounts/:id/follow` refuses
+  a new follow or follow request with 422 and `Validation failed: You cannot follow more than 7500 people` once the
+  account follows 7,500 accounts, or, past that, 1.1 times its followers (rounded). Pending requests do not count;
+  changing an existing follow's options, authorizing a request (locally or by a remote `Accept`) and a `Move`'s
+  follower transfer are not limited, as in Mastodon. It is an admission rule on the account's own follows, not a
+  bound on what a home timeline reads.
+    - Where Kopje differs from Mastodon: the limit and ratio are fixed (Mastodon reads `MAX_FOLLOWS_THRESHOLD` and
+      `MAX_FOLLOWS_RATIO`).
+- Attribution domains, as Mastodon 4.5 has them: `PATCH /api/v1/accounts/update_credentials` takes
+  `attribution_domains[]` (the websites allowed to credit the account as the author of their articles), normalized as
+  Mastodon does (surrounding whitespace and an `http://`, `https://` or `*.` prefix removed, blanks and duplicates
+  dropped) and validated with its messages (each a domain name, at most 100). The credential account shows them in
+  `source.attribution_domains` (`[]` when none), and the actor document publishes them as `attributionDomains` when
+  there is one, which reaches other servers with the account's Update.
+- An about page at `/about`: the server's title (else its domain), description, rules and contact address, as the
+  instance endpoints give them. `/api/v2/instance` names it as `configuration.urls.about`, and the instance actor's
+  `url` already pointed there.
+
+### Changed
+
+- A full Tag (`/api/v1/tags/:id` and its `follow`, `unfollow`, `feature` and `unfeature`, `/api/v1/followed_tags`,
+  `/api/v1/featured_tags/suggestions` and the hashtags of `/api/v2/search`) has Mastodon's `id` (sent since 4.3.1).
+  Kopje has no table of hashtags, so the id is derived from the normalized name (its 64-bit FNV-1a hash cut to 63
+  bits, in decimal): the same on every endpoint and instance. No route takes it back; `/api/v1/tags/:id` still takes
+  the name, as in Mastodon.
+- Instance rules have Mastodon's `hint` and `translations` on every endpoint that shows them (`/api/v1/instance`,
+  `/api/v2/instance`, `/api/v1/instance/rules`): the hint is the `hint` of a rule given as an object in the `rules`
+  setting (else `""`), and `translations` is `{}`, since Kopje stores none. The about page shows the hint under its
+  rule.
+- `/api/v1/instance` and `/api/v2/instance` declare Mastodon `4.4.0` (was `4.0.2`), and `/api/v2/instance` adds
+  `api_versions: { "mastodon": 6 }`, the number Mastodon 4.4 sends. Clients choose APIs by these numbers, and every
+  API they switch on up to 6 is now served: grouped notifications (`/api/v2/notifications`), the notification policy,
+  the link timeline, `delete_media`, the `blur` filter action, featured hashtags and OAuth PKCE. With this, Phanpy,
+  Ice Cubes, Moshidon and the official iOS and Android apps use grouped notifications, Phanpy and Tusky offer the `blur`
+  filter action, the official Android app signs in with PKCE, and the official iOS app shows an account's featured
+  tab. Kopje stays below 7 (Mastodon 4.5) because 7 tells clients that quote posts are served, and they are not yet.
+    - The official iOS app also shows a default quote policy in its privacy settings at 6. Kopje ignores it: no one can
+      quote a Kopje post whatever it says.
+    - `/api/v2/instance` has Mastodon 4.4's other fields with Kopje's values: `icon` (none), `configuration.urls`
+      `about` (the about page), `status`, `privacy_policy` and `terms_of_service` (null),
+      `configuration.accounts.max_pinned_statuses` (5), `configuration.media_attachments.description_limit` (1500),
+      `configuration.limited_federation` (false), and `registrations.reason_required` (false), `min_age` and `url`
+      (null).
+
+### Fixed
+
+- Authorizing a local account's follow request counts the follow in that account's `following_count` at once (it was
+  counted only at the account's next follow change).
+
+### Instance changes
+
+- Store schema: adds one migration, applied on the first request after the deploy; a rollback to an earlier version
+  needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
+    - `0024_attribution_domains`: adds `local_accounts.attribution_domains`, an empty list for every account. Adding a
+      column with a constant default reads no row, so its work does not grow with the Store.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.7] - 2026-10-16

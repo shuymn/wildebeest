@@ -2,7 +2,7 @@ import { runInDurableObject } from 'cloudflare:test'
 
 import { describe, expect, it } from 'vitest'
 
-import { bearer, json, sql } from './api-helpers'
+import { bearer, json, setSetting, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { LEGACY } from './federation-helpers'
 import { PNG_PLAIN } from './fixtures/images'
@@ -31,7 +31,7 @@ describe('public pages: headers (WEB-2, WEB-3, WEB-5)', () => {
 	it('sends a CSP without script, denies framing, declares the type and opens no CORS', async () => {
 		const h = await community(['alice'])
 		const status = await post(h, h.users.alice, { status: 'hello' })
-		for (const path of ['/@alice', statusPath(status), '/@nobody']) {
+		for (const path of ['/@alice', statusPath(status), '/@nobody', '/about']) {
 			const response = await h.request(path, { headers: { origin: 'https://evil.example' } })
 			expect(response.headers.get('content-type'), path).toBe('text/html; charset=UTF-8')
 			expect(response.headers.get('x-content-type-options')).toBe('nosniff')
@@ -53,6 +53,37 @@ describe('public pages: headers (WEB-2, WEB-3, WEB-5)', () => {
 		await sql(h.store, "DELETE FROM instance_settings WHERE name = 'domain'")
 		expect((await h.request('/@alice')).status).toBe(503)
 		expect((await h.request('/login')).status).toBe(503)
+		expect((await h.request('/about')).status).toBe(503)
+	})
+})
+
+describe('about page', () => {
+	it('shows the title, description, rules and contact address, escaped, at the URL /api/v2/instance names', async () => {
+		const h = await community(['alice'])
+		await setSetting(h.store, 'title', 'Kopje <Test>')
+		await setSetting(h.store, 'description', 'A test & instance')
+		await setSetting(h.store, 'contact_email', 'admin@kopje.test')
+		await setSetting(h.store, 'rules', JSON.stringify(['Be kind', { text: '<b>No spam</b>', hint: 'No <ads>' }]))
+		const { response, html } = await page(h, '/about')
+		expect(response.status).toBe(200)
+		expect(html).toContain('<title>Kopje &lt;Test&gt;</title>')
+		expect(html).toContain('<p class="about">A test &amp; instance</p>')
+		expect(html).toContain(
+			'<ol class="rules"><li>Be kind</li><li>&lt;b&gt;No spam&lt;/b&gt;<p class="hint">No &lt;ads&gt;</p></li></ol>'
+		)
+		expect(html).toContain('admin@kopje.test')
+		expect(html).not.toContain('mailto:')
+		const instance = await (await h.request('/api/v2/instance')).json<{ configuration: { urls: { about: string } } }>()
+		expect(new URL(instance.configuration.urls.about).pathname).toBe('/about')
+	})
+
+	it('falls back to the domain as the title and leaves out what is not set', async () => {
+		const h = await community(['alice'])
+		const { response, html } = await page(h, '/about')
+		expect(response.status).toBe(200)
+		expect(html).toContain('<h1>kopje.test</h1>')
+		expect(html).not.toContain('class="rules"')
+		expect(html).not.toContain('class="contact"')
 	})
 })
 
