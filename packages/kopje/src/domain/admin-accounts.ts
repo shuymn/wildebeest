@@ -150,9 +150,9 @@ export type UnsuspendResult =
 	| { ok: false; code: 'wrong-authority' | 'account-not-found' | 'not-suspended'; message: string }
 
 // POST /admin/accounts/unsuspend (`kopje-admin account unsuspend`), Access only (AUTH-5): unsuspends a local account as
-// the admin API does (domain/suspension.ts unsuspendLocal; its credential epoch stays). It is how the operator recovers a
-// suspended OAuth admin, whom no OAuth admin can unsuspend. Logged in the moderation log with the Access identity, in
-// the same transaction.
+// the admin API does (domain/suspension.ts unsuspendLocal; its credential epoch stays). It is how the operator
+// recovers a suspended OAuth admin, whom no OAuth admin can unsuspend. Logged in the moderation log with the Access
+// identity, in the same transaction.
 export const unsuspendAccount = writeOperation<
 	{ authority: ImportAuthority; username: string; now: number },
 	UnsuspendResult
@@ -530,15 +530,15 @@ export function adminAccountOperations(read: AdminDeclare, write: AdminDeclare) 
 			if (type === 'suspend' && account.domain !== null) {
 				return { status: 'invalid', error: REMOTE_SUSPENSION }
 			}
+			if (type === 'none') {
+				// resolveReport writes nothing when the report is missing.
+				return reportId === null || resolveReport(db, reportId, admin) ? { status: 'ok' } : { status: 'not_found' }
+			}
 			if (reportId !== null && !reportExists(db, reportId)) {
 				return { status: 'not_found' }
 			}
-			if (type === 'suspend') {
-				const at = suspendLocal(db, account.id, admin.accountId, admin.now)
-				logAction(db, admin, 'suspend', { type: 'Account', id: account.id }, { suspended_at: at }, admin.now)
-			} else if (reportId !== null) {
-				resolveReport(db, reportId, admin)
-			}
+			const at = suspendLocal(db, account.id, admin.accountId, admin.now)
+			logAction(db, admin, 'suspend', { type: 'Account', id: account.id }, { suspended_at: at }, admin.now)
 			return { status: 'ok' }
 		}
 	)
@@ -548,7 +548,7 @@ export function adminAccountOperations(read: AdminDeclare, write: AdminDeclare) 
 	const unsuspendAdminAccount = write<{ id: string; present: Present }, AdminAccountResult>(
 		ADMIN_PERMISSION.manageUsers,
 		(db, { id, present }, admin) => {
-			const found = presentAdminAccounts(db, [id], admin.accountId, present).get(id)
+			const found = db.first<{ domain: string | null }>('SELECT domain FROM accounts WHERE id = ?', id)
 			if (found === undefined) {
 				return { status: 'not_found' }
 			}

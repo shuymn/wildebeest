@@ -47,7 +47,8 @@ export type AppDeps = {
 	jobs?: (env: Env) => Promise<unknown>
 }
 
-// The admin API writes that leave moderation jobs (domain/suspension.ts): the action and the unsuspension of an account.
+// The admin API writes that leave moderation jobs (domain/suspension.ts): the action and the unsuspension of an
+// account.
 const MODERATION_WRITE = /^\/api\/v1\/admin\/accounts\/[^/]+\/(?:action|unsuspend)$/
 
 const API_CORS_PATHS = [

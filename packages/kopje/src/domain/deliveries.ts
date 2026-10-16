@@ -340,7 +340,8 @@ export function enqueueActivity(
 // The earlier activities about an object that a new one supersedes. A moderation Update still staging (retracts 0,
 // staged set: beginStagedUpdate) is superseded only by another (`moderation`): a profile edit made while the
 // restoration's audience is staged must not cut that audience down to the followers.
-const SUPERSEDED = `account_id = ? AND object_uri = ? AND (? OR json_extract(body, '$.activity.type') IN (SELECT value FROM json_each(?)))
+const SUPERSEDED = `account_id = ? AND object_uri = ?
+	AND (? OR json_extract(body, '$.activity.type') IN (SELECT value FROM json_each(?)))
 	AND (? OR retracts = 1 OR staged IS NULL)`
 
 // Marks the earlier activities a new one about the object follows. A retraction still staging (stageRetraction) is
@@ -840,23 +841,30 @@ export const INSTANCE_SIGNER = 'instance'
 // the time of an unsuspension is sent then. The restoration's Update is recorded once the account is no longer
 // suspended, so it passes; one claimed after the account is suspended again does not. The claim is the boundary: a row
 // leased before the suspension committed may still be sent while its lease lasts.
-function refusedSender(db: Db, row: LaneRow): boolean {
-	return (
-		db.first(
-			`SELECT 1 AS x FROM local_accounts l, outbound_activities o
-			WHERE l.account_id = ?1 AND NOT ${availableLocalSql('l')} AND o.id = CAST(?2 AS INTEGER) AND o.retracts = 0
-				AND NOT (json_extract(o.body, '$.activity.type') = 'Update'
-					AND json_extract(o.body, '$.activity.object.suspended') IS 1
-					AND json_extract(o.body, '$.activity.object.id') = json_extract(o.body, '$.activity.actor'))`,
-			row.account_id,
-			row.activity_id
-		) !== undefined
+const REFUSED_SENDER = `EXISTS (SELECT 1 FROM local_accounts l
+	WHERE l.account_id = ?1 AND NOT ${availableLocalSql('l')} AND o.retracts = 0
+		AND NOT (json_extract(o.body, '$.activity.type') = 'Update'
+			AND json_extract(o.body, '$.activity.object.suspended') IS 1
+			AND json_extract(o.body, '$.activity.object.id') = json_extract(o.body, '$.activity.actor')))`
+
+// A due row's activity as sent (its body, and who signs it), and whether its sender is refused (above); undefined when
+// the activity is gone, which is never refused.
+function claimedActivity(
+	db: Db,
+	row: LaneRow
+): { activity: string; signed_by: string | null; refused: number } | undefined {
+	return db.first<{ activity: string; signed_by: string | null; refused: number }>(
+		`SELECT json_extract(o.body, '$.activity') AS activity, json_extract(o.body, '$.signedBy') AS signed_by,
+			${REFUSED_SENDER} AS refused
+		FROM outbound_activities o WHERE o.id = CAST(?2 AS INTEGER)`,
+		row.account_id,
+		row.activity_id
 	)
 }
 
 // Expands one step, then leases up to `limit` due lane heads (RES-6: a claim reads and returns a bounded number of
 // rows). An expired lease is due again; one that has used up its attempts is given up instead of claimed; one of a
-// suspended sender is dropped (refusedSender).
+// suspended sender is dropped (REFUSED_SENDER).
 export const claimDeliveries = writeOperation<{ now: number; leaseToken: string; limit?: number }, Claim>(
 	(db, { now, leaseToken, limit }) => {
 		expandPending(db, now, EXPANSION_STEP)
@@ -870,7 +878,9 @@ export const claimDeliveries = writeOperation<{ now: number; leaseToken: string;
 		)
 		const claimed: ClaimedDelivery[] = []
 		for (const row of due) {
-			if (refusedSender(db, row)) {
+			// Read before the lease, which changes neither the activity nor the sender.
+			const body = claimedActivity(db, row)
+			if (body?.refused === 1) {
 				db.run('DELETE FROM deliveries WHERE id = CAST(? AS INTEGER)', row.id)
 				promoteLane(db, row.account_id, row.lane, now)
 				dropSettledActivity(db, row.activity_id)
@@ -888,11 +898,6 @@ export const claimDeliveries = writeOperation<{ now: number; leaseToken: string;
 				leaseUntil,
 				now,
 				row.id
-			)
-			const body = db.first<{ activity: string; signed_by: string | null }>(
-				`SELECT json_extract(body, '$.activity') AS activity, json_extract(body, '$.signedBy') AS signed_by
-				FROM outbound_activities WHERE id = CAST(? AS INTEGER)`,
-				row.activity_id
 			)
 			claimed.push({
 				id: row.id,

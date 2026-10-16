@@ -24,8 +24,9 @@
 --                which the unsuspension keeps; a round finds the account suspended again, or in a later epoch, and
 --                ends the job.
 --
--- since is the suspension's time S (suspension jobs), against which its reports are judged. follow_bound freezes the follows the audience is read from, cutoff the time since which recent mentions and follows
--- count (two days before the suspension, as Mastodon's AccountReachFinder), and phase and state the job's persisted
+-- since is the suspension's time S (suspension jobs), against which its reports are judged. follow_bound freezes the
+-- follows the audience is read from, cutoff the time since which recent mentions and follows count (two days before
+-- the suspension, as Mastodon's AccountReachFinder), and phase and state the job's persisted
 -- cursor and counts. actor_account_id is the admin who suspended, whom the resolved reports name. intent_id names an
 -- outbound_activities row without a foreign key: the row may be superseded and go first, which ends the staging.
 --
@@ -55,7 +56,6 @@ CREATE TABLE moderation_jobs (
   cutoff TEXT,
   phase TEXT NOT NULL,
   state TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(state)),
-  created_at INTEGER NOT NULL,
   UNIQUE (account_id, kind, generation)
 );
 

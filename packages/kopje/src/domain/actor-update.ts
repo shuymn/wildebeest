@@ -105,7 +105,7 @@ function documentOf(row: ActorRow): Record<string, unknown> {
 	}
 }
 
-// The local actor document of an account, or null for none (or a suspended one, which sends no Update).
+// The local actor document of an account, or null for none (or a suspended one, which sends no profile Update).
 export function actorDocument(db: Db, accountId: string): Record<string, unknown> | null {
 	const row = actorRow(db, accountId)
 	return row === undefined || row.suspended_at !== null ? null : documentOf(row)

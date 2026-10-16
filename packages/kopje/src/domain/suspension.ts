@@ -35,7 +35,7 @@ import type { Db } from '../db/sql'
 // has no relays, and its reporters are local, so neither adds inboxes. Then the inboxes are written as the Update's
 // targets in inbox order (deliveries.ts stageTargets), and their staging rows deleted, a round at a time.
 //
-// A suspended sender's queued content is dropped when claimed (deliveries.ts refusedSender), so only the Update and
+// A suspended sender's queued content is dropped when claimed (deliveries.ts REFUSED_SENDER), so only the Update and
 // retractions leave its lanes.
 
 // Rows a tokens round writes at most (push deliveries, subscriptions and tokens, cascades included, and its job).
@@ -48,8 +48,8 @@ export const REACH_ROUND = 500
 export const STATUS_LIMIT = 200
 export const RECENT_LIMIT = 2_000
 export const RECENT_MS = 2 * 24 * 60 * 60 * 1000
-// Rows any round writes at most: REACH_ROUND staged inboxes (or their deletion), the chunks they make, and the job's own
-// rows (its update or delete, and its Update's release).
+// Rows any round writes at most: REACH_ROUND staged inboxes (or their deletion), the chunks they make, and the job's
+// own rows (its update or delete, and its Update's release).
 export const MODERATION_ROUND_ROWS = 600
 // Rounds one runModerationJobs call runs at most.
 export const MODERATION_ROUNDS = 4
@@ -98,11 +98,11 @@ function followBound(db: Db): number {
 	return db.first<{ id: number | null }>('SELECT max(id) AS id FROM follows')?.id ?? 0
 }
 
-function insertJob(db: Db, job: Omit<Job, 'id' | 'state'>, now: number): void {
+function insertJob(db: Db, job: Omit<Job, 'id' | 'state'>): void {
 	db.run(
 		`INSERT INTO moderation_jobs (kind, account_id, generation, since, actor_account_id, intent_id, report_bound,
-			follow_bound, cutoff, phase, created_at)
-		VALUES (?, ?, ?, ?, ?, CAST(? AS INTEGER), ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
+			follow_bound, cutoff, phase)
+		VALUES (?, ?, ?, ?, ?, CAST(? AS INTEGER), ?, ?, ?, ?)`,
 		job.kind,
 		job.account_id,
 		job.generation,
@@ -112,8 +112,7 @@ function insertJob(db: Db, job: Omit<Job, 'id' | 'state'>, now: number): void {
 		job.report_bound,
 		job.follow_bound,
 		job.cutoff,
-		job.phase,
-		now
+		job.phase
 	)
 }
 
@@ -151,23 +150,19 @@ export function suspendLocal(db: Db, accountId: string, by: string | null, now: 
 		follow_bound: null,
 		cutoff: null,
 	}
-	insertJob(db, { ...job, kind: 'tokens', phase: 'tokens' }, now)
+	insertJob(db, { ...job, kind: 'tokens', phase: 'tokens' })
 	const update = moderationUpdate(db, accountId, now)!
-	insertJob(
-		db,
-		{
-			...job,
-			kind: 'suspension',
-			since: at,
-			actor_account_id: by,
-			intent_id: beginStagedUpdate(db, accountId, update, now),
-			report_bound: reportBound(db),
-			follow_bound: followBound(db),
-			cutoff: iso(now - RECENT_MS),
-			phase: 'reports',
-		},
-		now
-	)
+	insertJob(db, {
+		...job,
+		kind: 'suspension',
+		since: at,
+		actor_account_id: by,
+		intent_id: beginStagedUpdate(db, accountId, update, now),
+		report_bound: reportBound(db),
+		follow_bound: followBound(db),
+		cutoff: iso(now - RECENT_MS),
+		phase: 'reports',
+	})
 	forgetActorSnapshots(db, accountId)
 	return at
 }
@@ -190,22 +185,18 @@ export function unsuspendLocal(db: Db, accountId: string, now: number): boolean 
 		accountId
 	)!.epoch
 	const update = moderationUpdate(db, accountId, now)!
-	insertJob(
-		db,
-		{
-			kind: 'reach',
-			account_id: accountId,
-			generation: epoch,
-			since: null,
-			actor_account_id: null,
-			intent_id: beginStagedUpdate(db, accountId, update, now),
-			report_bound: null,
-			follow_bound: followBound(db),
-			cutoff: iso(Date.parse(state.suspended_at) - RECENT_MS),
-			phase: 'followers',
-		},
-		now
-	)
+	insertJob(db, {
+		kind: 'reach',
+		account_id: accountId,
+		generation: epoch,
+		since: null,
+		actor_account_id: null,
+		intent_id: beginStagedUpdate(db, accountId, update, now),
+		report_bound: null,
+		follow_bound: followBound(db),
+		cutoff: iso(Date.parse(state.suspended_at) - RECENT_MS),
+		phase: 'followers',
+	})
 	forgetActorSnapshots(db, accountId)
 	return true
 }
@@ -232,27 +223,27 @@ function finish(db: Db, job: Job): void {
 }
 
 // One round of the tokens job: the account's tokens after the cursor, in token order (oauth_tokens_account), each one
-// of an epoch before the job's deleted child-first; one of the job's epoch or later is passed over. The round stops before writing more than
-// TOKEN_ROUND_ROWS rows, and the job ends once the walk reaches the last token.
+// of an epoch before the job's deleted child-first (with its push subscription, at most one per token, read with it);
+// one of the job's epoch or later is passed over. The round stops before writing more than TOKEN_ROUND_ROWS rows, and
+// the job ends once the walk reaches the last token.
 function tokensRound(db: Db, job: Job, state: JobState): void {
 	const start = totalChanges(db)
 	// What the round may still write, keeping one row for the job's own update or delete.
 	const room = () => TOKEN_ROUND_ROWS - 1 - (totalChanges(db) - start)
-	const tokens = db.all<{ token_hash: string; epoch: number }>(
-		`SELECT token_hash, epoch FROM oauth_tokens INDEXED BY oauth_tokens_account
-		WHERE account_id = ? AND token_hash > ? ORDER BY token_hash LIMIT ?`,
+	const tokens = db.all<{ token_hash: string; epoch: number; subscription: number | null }>(
+		`SELECT t.token_hash, t.epoch, p.id AS subscription FROM oauth_tokens t INDEXED BY oauth_tokens_account
+		LEFT JOIN push_subscriptions p ON p.token_hash = t.token_hash AND t.epoch < ?4
+		WHERE t.account_id = ?1 AND t.token_hash > ?2 ORDER BY t.token_hash LIMIT ?3`,
 		job.account_id,
 		String(state.cursor ?? ''),
-		TOKEN_ROUND_ROWS
+		TOKEN_ROUND_ROWS,
+		job.generation
 	)
 	let cursor = String(state.cursor ?? '')
 	let stopped = false
 	for (const token of tokens) {
 		if (token.epoch < job.generation) {
-			const subscription = db.first<{ id: number }>(
-				'SELECT id FROM push_subscriptions WHERE token_hash = ?',
-				token.token_hash
-			)
+			const subscription = token.subscription === null ? undefined : { id: token.subscription }
 			if (subscription !== undefined) {
 				// Room for the subscription and the token after the deliveries.
 				const deliveries = room() - 2
@@ -511,8 +502,8 @@ function mentionsRound(db: Db, job: Job, state: JobState): void {
 	}
 }
 
-const JOB_COLUMNS = `id, kind, account_id, generation, since, actor_account_id, CAST(intent_id AS TEXT) AS intent_id, report_bound,
-	follow_bound, cutoff, phase, state`
+const JOB_COLUMNS = `id, kind, account_id, generation, since, actor_account_id, CAST(intent_id AS TEXT) AS intent_id,
+	report_bound, follow_bound, cutoff, phase, state`
 
 // One round of the next job after `after` (a job id), or of the oldest job when none comes after it, so the jobs of
 // a call take turns and a long one (a large token history) does not hold back another's Update. Returns null when there

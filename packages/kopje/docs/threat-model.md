@@ -629,7 +629,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   retractions and its suspension `Update` (R1); a delivery leased before the suspension committed may still be sent
   while its lease lasts (the claim is the boundary until a send-time confirmation exists). `actOnAccount` and
   `unsuspendAdminAccount` in `src/domain/admin-accounts.ts`, `src/domain/suspension.ts`, `currentCredentialSql` in
-  `src/domain/auth.ts`, `refusedSender` in `src/domain/deliveries.ts`, migration `0032_admin_suspension`;
+  `src/domain/auth.ts`, `REFUSED_SENDER` in `src/domain/deliveries.ts`, migration `0032_admin_suspension`;
   `test/admin-suspension.test.ts`, `test/cascade-guard.test.ts`, `test/migrations.test.ts`.
 
 ### Authorization (AUTH)

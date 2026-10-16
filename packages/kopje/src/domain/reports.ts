@@ -524,8 +524,9 @@ export function reportBound(db: Db): number {
 // reports after `cursor` (a report id), through reports_target_state in id order. Only the reports frozen at the
 // suspension are resolved: filed up to `bound`, still unresolved, and last touched before the suspension's time
 // `since` (updated_at, or created_at when never changed), so a report filed after the suspension, or one the admin
-// reopened or changed since, even within its millisecond, is never resolved by it. `by` is the admin who suspended (null: none names it). Returns the last
-// report read (null when none was) and how many were resolved; fewer than `limit` read means the range is done.
+// reopened or changed since, even within its millisecond, is never resolved by it. `by` is the admin who suspended
+// (null: none names it). Returns the last report read (null when none was) and how many were resolved; fewer than
+// `limit` read means the range is done.
 export function resolveSuspensionReports(
 	db: Db,
 	target: string,

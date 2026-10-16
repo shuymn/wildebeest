@@ -3531,18 +3531,18 @@ describe('0032_admin_suspension', () => {
 				{ credential_epoch: 0 },
 			])
 			sql.exec(
-				"INSERT INTO moderation_jobs (kind, account_id, generation, phase, created_at) VALUES ('suspension', ?, 1, 'reports', 1)",
+				"INSERT INTO moderation_jobs (kind, account_id, generation, phase) VALUES ('suspension', ?, 1, 'reports')",
 				id(1)
 			)
 			expect(() =>
 				sql.exec(
-					"INSERT INTO moderation_jobs (kind, account_id, generation, phase, created_at) VALUES ('suspension', ?, 1, 'x', 1)",
+					"INSERT INTO moderation_jobs (kind, account_id, generation, phase) VALUES ('suspension', ?, 1, 'x')",
 					id(1)
 				)
 			).toThrow(/UNIQUE constraint failed/)
 			expect(() =>
 				sql.exec(
-					"INSERT INTO moderation_jobs (kind, account_id, generation, phase, created_at) VALUES ('silence', ?, 1, 'x', 1)",
+					"INSERT INTO moderation_jobs (kind, account_id, generation, phase) VALUES ('silence', ?, 1, 'x')",
 					id(1)
 				)
 			).toThrow(/CHECK constraint failed/)
