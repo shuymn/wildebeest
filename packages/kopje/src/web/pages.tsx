@@ -84,7 +84,10 @@ export const AboutPage: FC<AboutView> = ({ title, domain, description, contactEm
 				<h2>{STRINGS.aboutRules}</h2>
 				<ol class="rules">
 					{rules.map((rule) => (
-						<li>{rule.text}</li>
+						<li>
+							{rule.text}
+							{rule.hint === '' ? null : <p class="hint">{rule.hint}</p>}
+						</li>
 					))}
 				</ol>
 			</>

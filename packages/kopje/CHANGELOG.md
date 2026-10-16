@@ -33,6 +33,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Changed
 
+- Instance rules have Mastodon's `hint` and `translations` on every endpoint that shows them (`/api/v1/instance`,
+  `/api/v2/instance`, `/api/v1/instance/rules`): the hint is the `hint` of a rule given as an object in the `rules`
+  setting (else `""`), and `translations` is `{}`, since Kopje stores none. The about page shows the hint under its
+  rule.
 - `/api/v1/instance` and `/api/v2/instance` declare Mastodon `4.4.0` (was `4.0.2`), and `/api/v2/instance` adds
   `api_versions: { "mastodon": 6 }`, the number Mastodon 4.4 sends. Clients choose APIs by these numbers, and every
   API they switch on up to 6 is now served: grouped notifications (`/api/v2/notifications`), the notification policy,

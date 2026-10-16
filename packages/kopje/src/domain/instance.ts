@@ -3,7 +3,14 @@ import { readOperation } from './operation'
 
 // What the instance endpoints show, from instance_settings (the only settings store) and cached counters.
 
-export type InstanceRule = { id: string; text: string }
+// Mastodon's REST::RuleSerializer: a hint (default "") and the rule's translations by language. Kopje stores no
+// translations, so they are always {}.
+export type InstanceRule = {
+	id: string
+	text: string
+	hint: string
+	translations: Record<string, { text: string; hint: string }>
+}
 
 export type InstanceInfo = {
 	domain: string | null
@@ -46,7 +53,8 @@ export const instanceRules = readOperation<void, InstanceRule[]>((db) =>
 	parseRules(db.first<{ value: string }>("SELECT value FROM instance_settings WHERE name = 'rules'")?.value)
 )
 
-// rules is a JSON array of strings or of { id?, text } objects. Anything unreadable shows as no rules.
+// rules is a JSON array of strings or of { id?, text, hint? } objects. Anything unreadable shows as no rules, and a
+// hint that is not a string as none.
 export function parseRules(value: string | undefined): InstanceRule[] {
 	if (value === undefined) {
 		return []
@@ -66,8 +74,13 @@ export function parseRules(value: string | undefined): InstanceRule[] {
 		if (typeof text !== 'string' || text === '') {
 			continue
 		}
-		const id = (rule as { id?: unknown } | null)?.id
-		rules.push({ id: typeof id === 'string' || typeof id === 'number' ? String(id) : String(index + 1), text })
+		const { id, hint } = (typeof rule === 'object' && rule !== null ? rule : {}) as { id?: unknown; hint?: unknown }
+		rules.push({
+			id: typeof id === 'string' || typeof id === 'number' ? String(id) : String(index + 1),
+			text,
+			hint: typeof hint === 'string' ? hint : '',
+			translations: {},
+		})
 	}
 	return rules
 }

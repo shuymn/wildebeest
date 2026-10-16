@@ -63,12 +63,14 @@ describe('about page', () => {
 		await setSetting(h.store, 'title', 'Kopje <Test>')
 		await setSetting(h.store, 'description', 'A test & instance')
 		await setSetting(h.store, 'contact_email', 'admin@kopje.test')
-		await setSetting(h.store, 'rules', JSON.stringify(['Be kind', { text: '<b>No spam</b>' }]))
+		await setSetting(h.store, 'rules', JSON.stringify(['Be kind', { text: '<b>No spam</b>', hint: 'No <ads>' }]))
 		const { response, html } = await page(h, '/about')
 		expect(response.status).toBe(200)
 		expect(html).toContain('<title>Kopje &lt;Test&gt;</title>')
 		expect(html).toContain('<p class="about">A test &amp; instance</p>')
-		expect(html).toContain('<ol class="rules"><li>Be kind</li><li>&lt;b&gt;No spam&lt;/b&gt;</li></ol>')
+		expect(html).toContain(
+			'<ol class="rules"><li>Be kind</li><li>&lt;b&gt;No spam&lt;/b&gt;<p class="hint">No &lt;ads&gt;</p></li></ol>'
+		)
 		expect(html).toContain('admin@kopje.test')
 		expect(html).not.toContain('mailto:')
 		const instance = await (await h.request('/api/v2/instance')).json<{ configuration: { urls: { about: string } } }>()

@@ -38,8 +38,8 @@ async function configured() {
 }
 
 const RULES = [
-	{ id: '1', text: 'Be kind' },
-	{ id: 'r2', text: 'No spam' },
+	{ id: '1', text: 'Be kind', hint: '', translations: {} },
+	{ id: 'r2', text: 'No spam', hint: '', translations: {} },
 ]
 
 // Contract: the declared version is 4.4.0 and api_versions.mastodon is 6 (the reasoning is above MASTODON_VERSION in
