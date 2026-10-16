@@ -57,6 +57,10 @@ describe('push subscription endpoints', () => {
 		const updated = await call(h, alice, 'PUT', { data: { alerts: { reblog: true } } })
 		expect(updated.body).toMatchObject({ id: created.body.id, alerts: { reblog: true }, policy: 'all' })
 		expect((await call(h, alice, 'GET')).body).toEqual(updated.body)
+		// PATCH is the same update (Api::V1::Push::SubscriptionsController#update serves both).
+		const patched = await call(h, alice, 'PATCH', { data: { alerts: { follow: true }, policy: 'follower' } })
+		expect(patched.body).toMatchObject({ id: created.body.id, alerts: { follow: true }, policy: 'follower' })
+		expect((await call(h, alice, 'GET')).body).toEqual(patched.body)
 
 		expect(await call(h, alice, 'DELETE')).toEqual({ status: 200, body: {} })
 		expect(await call(h, alice, 'GET')).toEqual({ status: 404, body: { error: 'Record not found' } })
@@ -120,6 +124,7 @@ describe('push subscription endpoints', () => {
 		expect(await call(h, alice, 'GET')).toEqual(forbidden)
 		expect(await call(h, alice, 'POST', { subscription: await subscription() })).toEqual(forbidden)
 		expect(await call(h, alice, 'PUT', { data: {} })).toEqual(forbidden)
+		expect(await call(h, alice, 'PATCH', { data: {} })).toEqual(forbidden)
 		expect(await call(h, alice, 'DELETE')).toEqual(forbidden)
 		const anonymous = await h.request(PATH)
 		expect(anonymous.status).toBe(401)

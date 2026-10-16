@@ -43,6 +43,15 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       minutes apart rather than at once. As on Mastodon, the bulk dismiss deletes the requests alone and leaves their
       filtered notifications, and `GET /api/v1/notifications/:id` and `GET /api/v2/notifications/ungrouped-:id` show a
       filtered notification.
+- Mastodon 4.5's remaining small endpoints, under Mastodon's scopes, answered as Mastodon answers when the feature has
+  nothing to show or is not configured: `GET /api/v1/annual_reports` (none),
+  `GET /api/v1/instance/translation_languages` (`{}`), `GET /api/v1/emails/check_confirmation` (`true`) and
+  `DELETE /api/v1/suggestions/:id` (`{}`); 404 for
+  `GET /api/v1/timelines/link`, `GET /api/v1/annual_reports/:id`, `POST /api/v1/annual_reports/:id/read`,
+  `POST /api/v1/announcements/:id/dismiss`, announcement reactions, `GET /api/v1/instance/terms_of_service/:date`,
+  `POST /api/v1/statuses/:id/translate` and `GET /api/v1_alpha/async_refreshes/:id`; and 403 for
+  `POST /api/v1/emails/confirmations`. `GET /api/v1/peers/search` finds up to 10 known peers by domain prefix, and
+  `PATCH /api/v1/push/subscription` updates as `PUT` does.
 
 ### Changed
 
@@ -57,8 +66,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds two migrations, applied on the first request after the deploy; a rollback to an earlier version
-  needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
+- Store schema: adds two migrations, applied in order on the first request after the deploy; a rollback to an earlier
+  version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0019_tag_normalization`: renames the stored hashtags (`status_tags`, `tag_follows`, `featured_tags`) to
       Mastodon's normalization. Names that become one are merged: a status keeps one row of the hashtag, an account
       keeps its earliest follow and its earliest featured hashtag (with its spelling), and the featured hashtags left
