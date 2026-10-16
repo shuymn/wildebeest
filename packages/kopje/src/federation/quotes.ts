@@ -2,15 +2,23 @@ import { type DocumentLoader, FetchError } from '@fedify/fedify'
 
 import { createRemoteLoaders, type FederationDeps, type FederationState, type RemoteLoaders } from './federation'
 import type { InboxDeps } from './inbox'
-import { BudgetExceededError, type FetchBudget, isTransientLoadError, requestBudget } from './loader'
+import { BudgetExceededError, type FetchBudget, isTransientLoadError, loadFailureOf, requestBudget } from './loader'
 import { fetchActor } from './remote-actor'
 import { fetchRemoteStatus, idOf } from './remote-status'
 import type { RemoteActorInput } from '../domain/inbox'
-import { type Fetched, QUOTE_ROUND, type QuoteVerification, type StampInput } from '../domain/quotes'
+import {
+	type Fetched,
+	QUOTE_ROUND,
+	type QuoteVerification,
+	type QuoteVerified,
+	type StampInput,
+} from '../domain/quotes'
 import type { RemoteStatusInput } from '../domain/remote-statuses'
 import { readConfig, userKek } from '../platform/config'
+import { errorFields } from '../platform/error-message'
 import { withinJsonBounds } from '../platform/json-bounds'
 import { callStore, type StoreStub } from '../platform/store-client'
+import { StoreUnavailableError } from '../platform/store-errors'
 
 // The Worker's part of verifying a received quote (domain/quotes.ts, Mastodon's ActivityPub::VerifyQuoteService): it
 // fetches what the Store's work names, through the safe loader (NET-1) within a fetch budget (RES-6) that counts every
@@ -113,11 +121,23 @@ async function loadActor(uri: string, origin: string, loaders: RemoteLoaders): P
 	if (originOf(uri) === null || originOf(uri) === origin) {
 		return { kind: 'unusable' }
 	}
-	const fetched = await fetchActor(uri, loaders.document, loaders.context)
+	// fetchActor reports a spent budget as a failure that may pass: the loaders note it, the document's or a context's.
+	let exhausted = false
+	const watched =
+		(loader: DocumentLoader): DocumentLoader =>
+		async (url, options) => {
+			try {
+				return await loader(url, options)
+			} catch (error) {
+				exhausted ||= loadFailureOf(error) instanceof BudgetExceededError
+				throw error
+			}
+		}
+	const fetched = await fetchActor(uri, watched(loaders.document), watched(loaders.context))
 	if (fetched.kind === 'ok') {
 		return fetched.input === null ? { kind: 'unusable' } : { kind: 'ok', value: fetched.input }
 	}
-	return { kind: fetched.kind }
+	return exhausted ? { kind: 'budget' } : { kind: fetched.kind }
 }
 
 type Rpc = <T>(call: (store: StoreStub) => Promise<T>) => Promise<T>
@@ -127,11 +147,6 @@ export type QuoteLoaders = { loaders: RemoteLoaders; budget: FetchBudget }
 
 function spent(budget: FetchBudget): boolean {
 	return budget.fetches <= 0 || budget.bytes <= 0 || Date.now() >= budget.deadline
-}
-
-// A failure that may pass, told apart from the budget running out (which charges the quote no attempt).
-function charged<T>(fetched: Fetched<T>, budget: FetchBudget): Fetched<T> {
-	return fetched.kind === 'transient' && spent(budget) ? { kind: 'budget' } : fetched
 }
 
 // One quote's work, a stage at a time (quoteWork: the quoted status, its author, the stamp): each stage fetches one
@@ -147,7 +162,8 @@ export async function verifyQuote(
 	loadersFor: (signer: string | null) => QuoteLoaders,
 	now: () => number
 ): Promise<boolean> {
-	for (let stage = 0; stage < 4; stage++) {
+	// The quoted status, its author, the status again (now storable), the stamp, and the decision.
+	for (let stage = 0; stage < 5; stage++) {
 		const work = await rpc((s) => s.quoteWork(build, { statusId }))
 		if (work === null) {
 			return false
@@ -163,13 +179,25 @@ export async function verifyQuote(
 		if (work.fetch !== null && spent(budget)) {
 			input[work.stage === 'quoted' ? 'quoted' : work.stage === 'author' ? 'author' : 'stamp'] = { kind: 'budget' }
 		} else if (work.stage === 'quoted' && work.fetch !== null) {
-			input.quoted = charged(await loadStatus(work.fetch, origin, loaders.document), budget)
+			input.quoted = await loadStatus(work.fetch, origin, loaders.document)
 		} else if (work.stage === 'author' && work.fetch !== null) {
-			input.author = charged(await loadActor(work.fetch, origin, loaders), budget)
+			input.author = await loadActor(work.fetch, origin, loaders)
 		} else if (work.stage === 'stamp' && work.fetch !== null) {
-			input.stamp = charged(await loadStamp(work.fetch, origin, loaders.document), budget)
+			input.stamp = await loadStamp(work.fetch, origin, loaders.document)
 		}
-		const result = await rpc((s) => s.completeQuote(build, { ...input, now: now() }))
+		let result: QuoteVerified
+		try {
+			result = await rpc((s) => s.completeQuote(build, { ...input, now: now() }))
+		} catch (error) {
+			// What the Store could not apply (a document it cannot store) fails this quote alone, charged as a failure
+			// that may pass; maintenance still stops the round.
+			if (error instanceof StoreUnavailableError) {
+				throw error
+			}
+			console.error({ event: 'kopje.quote.stage.failed', ...errorFields(error) })
+			await rpc((s) => s.chargeQuote(build, { statusId, now: now() }))
+			return false
+		}
 		if (!result.next) {
 			return !result.done || result.due
 		}

@@ -988,7 +988,7 @@ describe('review round 1 regressions', () => {
 			attempts: QUOTE_BACKOFF_MS.length + 1,
 			verify_after: null,
 		})
-		expect(await sql(t.store, 'SELECT count(*) AS n FROM quotes WHERE fetched_quoted IS NOT NULL')).toEqual([{ n: 0 }])
+		expect(await sql(t.store, 'SELECT count(*) AS n FROM quotes WHERE need_author IS NOT NULL')).toEqual([{ n: 0 }])
 	})
 
 	it('verifies inline with the local follower’s key a followers-only self-quote received at the shared inbox', async () => {
@@ -1068,5 +1068,97 @@ describe('review round 1 regressions', () => {
 		expect(await statusRow(t.store, hers.id)).toBeUndefined()
 		expect(await quoteOf(t, foreign.id)).toMatchObject({ state: 'pending', quoted_status_id: null })
 		expect(t.web.fetched).toContain(hers.id)
+	})
+
+	it('stores a quoted status from a fresh fetch only: a stage never resumes from an old copy', async () => {
+		const { t, bob } = await world()
+		const erin = await mastodonActor(t.web, 'erin', { origin: OTHER, key: 7 })
+		const pair = quotedPair(t, bob, erin)
+		// The status is public when first fetched; its author cannot be fetched yet.
+		t.web.fail(erin.uri, 503)
+		expect(await t.post(bob, create(bob, pair.quote))).toBe(202)
+		expect(await quoteOf(t, pair.quote.id)).toMatchObject({ state: 'pending', attempts: 1 })
+		expect(await sql(t.store, 'SELECT need_author FROM quotes')).toEqual([{ need_author: erin.uri }])
+		// Before the next round its server makes it followers-only (and keeps the stamp).
+		t.web.serve(erin.uri, erin.document)
+		t.web.serve(pair.target.id, { '@context': AS, ...pair.target, to: [`${erin.uri}/followers`], cc: [] })
+		await rounds(t, NOW + QUOTE_BACKOFF_MS[0]!)
+		expect(await quoteOf(t, pair.quote.id)).toMatchObject({ state: 'pending', verify_after: null })
+		expect(await statusRow(t.store, pair.target.id)).toBeUndefined()
+		expect(await quotesCount(t, pair.target.id)).toBeUndefined()
+	})
+
+	it('fails only the quote whose stage the Store cannot apply, charged and given up, and verifies the others', async () => {
+		const { t, bob, carol } = await world()
+		const bad = quotedPair(t, bob, carol)
+		const good = quotedPair(t, bob, carol)
+		// Both stored with their work due, without inline verification (as a Worker that died would leave them).
+		for (const quote of [bad.quote, good.quote]) {
+			await t.store.receiveActivity(BUILD, {
+				now: NOW,
+				origin: LOCAL,
+				actorUri: bob.uri,
+				actor: null,
+				activity: { type: 'Create', id: `${quote.id}/activity`, object: parseRemoteStatus(quote)! },
+			})
+		}
+		const badId = (await statusRow(t.store, bad.quote.id))!.id
+		// A Store that cannot apply the bad quote's stage (as a document past the row size limit would make it).
+		const stub = t.store as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>
+		const failing = new Proxy(t.store, {
+			get(_target, key: string) {
+				return (...args: unknown[]) =>
+					key === 'completeQuote' && (args[1] as { statusId: string }).statusId === badId
+						? Promise.reject(new Error('string or blob too big: SQLITE_TOOBIG'))
+						: stub[key]!(...args)
+			},
+		})
+		let at = NOW
+		const round = () => verifyQuotes(t.env, { ...inboxDeps(() => failing, t.web.loader), now: () => at })
+		await round()
+		expect(await quoteOf(t, good.quote.id)).toMatchObject({ state: 'accepted' })
+		expect(await quoteOf(t, bad.quote.id)).toMatchObject({ state: 'pending', attempts: 1 })
+		for (const delay of QUOTE_BACKOFF_MS) {
+			at += delay
+			await round()
+		}
+		expect(await quoteOf(t, bad.quote.id)).toMatchObject({
+			state: 'pending',
+			attempts: QUOTE_BACKOFF_MS.length + 1,
+			verify_after: null,
+		})
+	})
+
+	it('charges no attempt when the bytes run out on a context, though fetches are left', async () => {
+		const { t, bob } = await world()
+		// erin's document names three JSON-LD contexts of about 900 KiB each: no more than two fit a budget's bytes.
+		const contexts = [1, 2, 3].map((n) => `${OTHER}/contexts/${n}.jsonld`)
+		for (const url of contexts) {
+			t.web.serve(url, { '@context': { pad: `${OTHER}/terms/${'p'.repeat(900 * 1024)}` } }, 'application/ld+json')
+		}
+		const erin = await mastodonActor(t.web, 'erin', {
+			origin: OTHER,
+			key: 7,
+			extra: { '@context': ['https://www.w3.org/ns/activitystreams', 'https://w3id.org/security/v1', ...contexts] },
+		})
+		const pair = quotedPair(t, bob, erin)
+		expect(await t.post(bob, create(bob, pair.quote))).toBe(202)
+		expect(await quoteOf(t, pair.quote.id)).toMatchObject({ state: 'pending', attempts: 0, verify_after: NOW })
+		await rounds(t, NOW)
+		expect(await quoteOf(t, pair.quote.id)).toMatchObject({ state: 'accepted', attempts: 0 })
+	}, 60_000)
+
+	it('takes an embedded target an Update brings for a quote it does not change', async () => {
+		const { t, bob } = await world()
+		const followers = `${bob.uri}/followers`
+		// A self-quote naming bob's followers-only status by URI: unfetchable, so pending.
+		const own = mastodonNote(bob, { to: [followers], cc: [] })
+		const quote = quoting(bob, own.id, null, { to: [followers], cc: [] })
+		expect(await t.post(bob, create(bob, quote))).toBe(202)
+		expect(await quoteOf(t, quote.id)).toMatchObject({ state: 'pending', verify_after: null })
+		// A newer Update embeds it, the quote otherwise unchanged.
+		expect(await t.post(bob, update(bob, { ...quote, quote: own }, '2026-10-11T12:30:00Z'))).toBe(202)
+		expect(await statusRow(t.store, own.id)).toMatchObject({ visibility: 'private' })
+		expect(await quoteOf(t, quote.id)).toMatchObject({ state: 'accepted' })
 	})
 })

@@ -1251,9 +1251,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   and sorts all the targets left, so a boost's withdrawal (by a purge, or by a remote author's `Delete` of the boosted
   status) costs work proportional to its audience in every batch until it is staged. Receipt enumeration has this in
   common with follower enumeration.
-  _Implemented on branch `kopje/quotes-1a`_ for received quotes: a quote's verification has three stages of one
-  document each (the quoted status, its author, the stamp), each kept by the Store when it completes, so a quote whose
-  stages need more than one budget (redirect hops count) goes on from the first stage not done; it runs inline with
+  _Implemented on branch `kopje/quotes-1a`_ for received quotes: a quote's verification goes in stages of one
+  document each (the quoted status, its author when Kopje lacks it, the status again, the stamp); between stages only
+  the author's address is kept, never a fetched document, and the status is stored only from a fresh fetch, so a quote
+  whose stages need more than one budget (redirect hops count) goes on from the first stage not done; a stage the Store
+  cannot apply fails that quote alone, charged like any failure that may pass; it runs inline with
   what is left of the request's budget, and a job round (Queue or cron) verifies at most 10 quotes, each with a budget
   of its own, so a heavy or failing quote starves no other; a budget that runs out charges no attempt; a status stored for a verification gets one hop less of
   work, so one traversal stops two levels below the status that arrived, however long a chain of quotes; a failed

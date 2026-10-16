@@ -495,6 +495,10 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, quotes.completeQuote, input)
 	}
 
+	chargeQuote(callerBuild: string, input: OperationInput<typeof quotes.chargeQuote>) {
+		return this.#kernel.execute(callerBuild, quotes.chargeQuote, input)
+	}
+
 	claimQuotes(callerBuild: string, input: OperationInput<typeof quotes.claimQuotes>) {
 		return this.#kernel.execute(callerBuild, quotes.claimQuotes, input)
 	}

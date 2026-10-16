@@ -78,13 +78,13 @@ type QuoteRow = {
 	attempts: number
 	hops: number
 	fetch_as: string | null
-	fetched_quoted: string | null
+	need_author: string | null
 }
 
 function quoteRow(db: Db, statusId: string): QuoteRow | undefined {
 	return db.first<QuoteRow>(
 		`SELECT q.status_id, s.uri AS status_uri, s.account_id, a.uri AS author_uri, q.quoted_uri, q.quoted_status_id,
-			q.state, q.legacy, q.approval_uri, q.attempts, q.hops, q.fetch_as, q.fetched_quoted
+			q.state, q.legacy, q.approval_uri, q.attempts, q.hops, q.fetch_as, q.need_author
 		FROM quotes q JOIN statuses s ON s.id = q.status_id JOIN accounts a ON a.id = s.account_id
 		WHERE q.status_id = ?`,
 		statusId
@@ -119,21 +119,8 @@ export function recordQuote(
 		}
 		return
 	}
-	const approval =
-		named.tombstone || named.approvalUri === null || originOf(named.approvalUri) === ctx.origin
-			? null
-			: named.approvalUri
-	const legacy = named.legacy ? 1 : 0
-	if (
-		existing !== undefined &&
-		existing.quoted_uri === named.uri &&
-		existing.approval_uri === approval &&
-		existing.legacy === legacy &&
-		(existing.state === 'deleted') === named.tombstone
-	) {
-		promoteQuote(db, status.id, arrival, ctx.now)
-		return
-	}
+	// The embedded quoted Note is taken first, whether or not the quote changed: an Update may embed what an earlier
+	// version only named.
 	const embedded = named.tombstone ? null : (named.embedded ?? null)
 	if (
 		embedded !== null &&
@@ -151,6 +138,21 @@ export function recordQuote(
 			quoteHops: arrival.hops - 1,
 		})
 	}
+	const approval =
+		named.tombstone || named.approvalUri === null || originOf(named.approvalUri) === ctx.origin
+			? null
+			: named.approvalUri
+	const legacy = named.legacy ? 1 : 0
+	if (
+		existing !== undefined &&
+		existing.quoted_uri === named.uri &&
+		existing.approval_uri === approval &&
+		existing.legacy === legacy &&
+		(existing.state === 'deleted') === named.tombstone
+	) {
+		promoteQuote(db, status.id, arrival, ctx.now)
+		return
+	}
 	const work = !named.tombstone && arrival.hops > 0
 	db.run(
 		`INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, quoted_account_id, state, legacy, approval_uri,
@@ -161,7 +163,7 @@ export function recordQuote(
 		ON CONFLICT (status_id) DO UPDATE SET quoted_uri = excluded.quoted_uri, quoted_status_id = excluded.quoted_status_id,
 			quoted_account_id = excluded.quoted_account_id, state = excluded.state, legacy = excluded.legacy, approval_uri = excluded.approval_uri,
 			verify_after = excluded.verify_after, attempts = 0, hops = excluded.hops, fetch_as = excluded.fetch_as,
-			fetched_quoted = NULL, updated_at = excluded.updated_at`,
+			need_author = NULL, updated_at = excluded.updated_at`,
 		status.id,
 		named.uri,
 		named.tombstone ? 1 : 0,
@@ -215,7 +217,7 @@ export function promoteQuote(db: Db, statusId: string, arrival: QuoteArrival, no
 export function linkQuotes(db: Db, status: { id: string; uri: string }, now: number): void {
 	db.run(
 		`UPDATE quotes SET quoted_status_id = ?1, quoted_account_id = (SELECT account_id FROM statuses WHERE id = ?1),
-			fetched_quoted = NULL, verify_after = CASE WHEN hops > 0 THEN ?3 ELSE verify_after END,
+			need_author = NULL, verify_after = CASE WHEN hops > 0 THEN ?3 ELSE verify_after END,
 			attempts = CASE WHEN hops > 0 THEN 0 ELSE attempts END, updated_at = ?4
 		WHERE status_id IN (SELECT status_id FROM quotes
 			WHERE quoted_uri = ?2 AND quoted_status_id IS NULL AND state = 'pending' AND status_id <> ?1 LIMIT ?5)`,
@@ -265,7 +267,7 @@ export type StampInput = {
 
 // The stage a quote's verification is at, each one fetch of the Worker's (a stage fits one fetch budget, redirects
 // included, so a round always finishes the stage it starts): the quoted status (not stored yet), its author (the status
-// fetched and kept in fetched_quoted, its author unknown), the stamp; decide: nothing left to fetch.
+// fetched and kept in need_author, its author unknown), the stamp; decide: nothing left to fetch.
 export type QuoteStage = 'quoted' | 'author' | 'stamp' | 'decide'
 
 export type QuoteWork = {
@@ -306,10 +308,6 @@ function revoked(db: Db, approvalUri: string, authorUri: string): boolean {
 	)
 }
 
-function parseFetched(raw: string | null): RemoteStatusInput | null {
-	return raw === null ? null : (JSON.parse(raw) as RemoteStatusInput)
-}
-
 // The stage of a quote whose quoted status is known: the stamp, unless nothing a stamp says can decide it (a
 // self-quote, a local or non-public target, no stamp, a stamp its author revoked).
 function stampStage(db: Db, row: QuoteRow, quoted: Linked): boolean {
@@ -332,18 +330,14 @@ export const quoteWork = readOperation<{ statusId: string }, QuoteWork | null>((
 		return null
 	}
 	const quoted = quotedOf(db, row)
-	const fetched = parseFetched(row.fetched_quoted)
 	const [stage, fetch]: [QuoteStage, string | null] =
 		quoted !== undefined
 			? stampStage(db, row, quoted)
 				? ['stamp', row.approval_uri]
 				: ['decide', null]
-			: fetched === null
-				? ['quoted', row.quoted_uri]
-				: fetched.attributedTo !== null &&
-					  db.first('SELECT 1 AS x FROM accounts WHERE uri = ?', fetched.attributedTo) === undefined
-					? ['author', fetched.attributedTo]
-					: ['decide', null]
+			: row.need_author !== null && db.first('SELECT 1 AS x FROM accounts WHERE uri = ?', row.need_author) === undefined
+				? ['author', row.need_author]
+				: ['quoted', row.quoted_uri]
 	const signer =
 		row.fetch_as === null
 			? undefined
@@ -387,8 +381,7 @@ export type QuoteVerified = { done: boolean; due: boolean; state: QuoteState | n
 
 // The end of one verification: the state it leaves and its work: done (none left), retry (a failure that may pass:
 // the next attempt after QUOTE_BACKOFF_MS, none after the last; an attempt is charged) or again (due at once: the fetch
-// budget ran out, which charges nothing). The quoted status kept for its author's fetch stays only while that fetch is
-// still to come.
+// budget ran out, which charges nothing). The author address a stage recorded stays only while work is left.
 function finish(
 	db: Db,
 	row: QuoteRow,
@@ -402,7 +395,7 @@ function finish(
 	const verifyAfter = work === 'again' ? now : delay === undefined ? null : now + delay
 	const fetched = work === 'done' || (work === 'retry' && delay === undefined) ? null : keep
 	db.run(
-		`UPDATE quotes SET state = ?2, verify_after = ?3, attempts = ?4, fetched_quoted = ?5, updated_at = ?6
+		`UPDATE quotes SET state = ?2, verify_after = ?3, attempts = ?4, need_author = ?5, updated_at = ?6
 		WHERE status_id = ?1`,
 		row.status_id,
 		state,
@@ -440,69 +433,67 @@ function stampValid(stamp: StampInput, row: QuoteRow, quoted: Linked): boolean {
 	)
 }
 
-// Stores the quoted status the stages fetched (with one hop less of work for its own quote) and links the quote to it,
-// once its author is known: kept in fetched_quoted while the author is to be fetched. Returns the linked status, or a
-// verification's end.
+// The quoted-status stages: a stage fetching the author it named stores that account and ends; one fetching the quoted
+// status stores it, from that fresh fetch, once its author is known, and otherwise records only the author's address
+// (need_author) for the next stage. Nothing fetched is kept between stages. Returns the linked status, or a stage's end.
 function storeQuoted(db: Db, row: QuoteRow, input: QuoteVerification, keep: QuoteState): Linked | QuoteVerified {
 	const { now, origin } = input
-	let status = parseFetched(row.fetched_quoted)
-	if (status === null) {
-		const fetched = input.quoted
-		if (fetched === undefined) {
-			return finish(db, row, keep, 'again', now)
+	if (input.author !== undefined) {
+		const document = input.author
+		if (document.kind !== 'ok') {
+			return failed(db, row, keep, document, now, row.need_author)
 		}
-		if (fetched.kind !== 'ok') {
-			return failed(db, row, keep, fetched, now, null)
+		if (document.value.uri !== row.need_author || isDeletedActor(db, document.value.uri, now)) {
+			return finish(db, row, keep, 'done', now)
 		}
-		status = fetched.value
+		upsertRemoteActor(db, document.value, origin, now)
+		return { done: false, due: true, state: keep, next: true }
 	}
+	const fetched = input.quoted
+	if (fetched === undefined) {
+		return finish(db, row, keep, 'again', now, row.need_author)
+	}
+	if (fetched.kind !== 'ok') {
+		return failed(db, row, keep, fetched, now, row.need_author)
+	}
+	const status = fetched.value
 	const authorUri = status.attributedTo
 	if (
 		status.uri !== row.quoted_uri ||
 		authorUri === null ||
+		authorUri.length > 2048 ||
 		originOf(authorUri) !== originOf(status.uri) ||
 		originOf(authorUri) === origin ||
 		isDeletedActor(db, authorUri, now)
 	) {
 		return finish(db, row, keep, 'done', now)
 	}
-	const held = JSON.stringify(status)
-	let author = db.first<{ id: string; uri: string }>(
+	const author = db.first<{ id: string; uri: string }>(
 		'SELECT id, uri FROM accounts WHERE uri = ? AND domain IS NOT NULL',
 		authorUri
 	)
-	let followers = author === undefined ? null : followersUri(db, author.id)
 	if (author === undefined) {
-		const document = input.author
-		if (document === undefined) {
-			// The status is kept, its author the next stage (in this round if its budget allows, else the next round's).
-			db.run(
-				'UPDATE quotes SET fetched_quoted = ?2, updated_at = ?3 WHERE status_id = ?1',
-				row.status_id,
-				held,
-				iso(now)
-			)
-			return { done: false, due: true, state: keep, next: true }
-		}
-		if (document.kind !== 'ok') {
-			return failed(db, row, keep, document, now, held)
-		}
-		if (document.value.uri !== authorUri) {
+		// A second fetch of the same unknown author ends the work: the stage before stored nobody under that address.
+		if (row.need_author === authorUri) {
 			return finish(db, row, keep, 'done', now)
 		}
-		followers = followersOfDocument(document.value.raw)
+		// A status that names another author each time it is fetched pays for each change.
+		if (row.need_author !== null) {
+			return finish(db, row, keep, 'retry', now, authorUri)
+		}
+		db.run(
+			'UPDATE quotes SET need_author = ?2, updated_at = ?3 WHERE status_id = ?1',
+			row.status_id,
+			authorUri,
+			iso(now)
+		)
+		return { done: false, due: true, state: keep, next: true }
 	}
 	// Only a public or unlisted status, or the quoting author's own, is ever accepted: nothing else is stored for it.
-	if (authorUri !== row.author_uri && !isDistributable(visibilityOf(status, followers))) {
+	if (authorUri !== row.author_uri && !isDistributable(visibilityOf(status, followersUri(db, author.id)))) {
 		return finish(db, row, keep, 'done', now)
 	}
-	if (author === undefined && input.author?.kind === 'ok') {
-		author = upsertRemoteActor(db, input.author.value, origin, now)
-	}
-	if (author === undefined) {
-		return finish(db, row, keep, 'done', now)
-	}
-	db.run('UPDATE quotes SET fetched_quoted = NULL WHERE status_id = ?', row.status_id)
+	db.run('UPDATE quotes SET need_author = NULL WHERE status_id = ?', row.status_id)
 	storeRemoteStatus(db, author, status, {
 		now,
 		origin,
@@ -541,7 +532,7 @@ export const completeQuote = writeOperation<QuoteVerification, QuoteVerified>((d
 	const quoted = found
 	if (row.quoted_status_id !== quoted.id) {
 		db.run(
-			'UPDATE quotes SET quoted_status_id = ?2, quoted_account_id = ?3, fetched_quoted = NULL WHERE status_id = ?1',
+			'UPDATE quotes SET quoted_status_id = ?2, quoted_account_id = ?3, need_author = NULL WHERE status_id = ?1',
 			row.status_id,
 			quoted.id,
 			quoted.account_id
@@ -573,17 +564,14 @@ export const completeQuote = writeOperation<QuoteVerification, QuoteVerified>((d
 	return finish(db, row, stampValid(stamp.value, row, quoted) ? 'accepted' : lost(false), 'done', now)
 })
 
-function followersOfDocument(raw: string | null): string | null {
-	if (raw === null) {
-		return null
+// A stage that failed in the Store itself (a document it could not store, as one past the row size limit): charged
+// as a failure that may pass, so it is given up after the last retry, and never stops the other quotes of a round.
+export const chargeQuote = writeOperation<{ statusId: string; now: number }, void>((db, { statusId, now }) => {
+	const row = quoteRow(db, statusId)
+	if (row !== undefined && (row.state === 'pending' || row.state === 'accepted')) {
+		finish(db, row, row.state, 'retry', now, row.need_author)
 	}
-	try {
-		const followers = (JSON.parse(raw) as { followers?: unknown }).followers
-		return typeof followers === 'string' ? followers : null
-	} catch {
-		return null
-	}
-}
+})
 
 // A job round's claim: the quotes due first, at most `limit`, held from other rounds for QUOTE_LEASE_MS (a round that
 // dies leaves them to a later one). more: others are due too.
