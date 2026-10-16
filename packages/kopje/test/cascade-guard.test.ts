@@ -40,6 +40,22 @@ const ACCOUNT_EXEMPT: Record<string, string> = {
 	push_deliveries: 'below notifications, which go a batch at a time; at most MAX_PUSH_BACKLOG (1,000) wait in all',
 }
 
+// Triggers that write when a row is deleted or updated. A batched delete or purge counts every row changed
+// (total_changes()), so each such write must be counted where the batch decides it has room. Each one is named here
+// with where that is.
+const WRITING_TRIGGERS: Record<string, string> = {
+	list_members_follow_ended:
+		"a follow's delete deletes the follower's list rows of the account; the purge deletes the account's list rows first (purgeRelationships), so then it writes none",
+	account_pins_follow_ended:
+		"a follow's delete deletes the follower's endorsement of the account; the purge deletes the account's endorsements first (purgeRelationships), so then it writes none",
+	conversation_statuses_removed:
+		"one conversation written per link deleted: STATUS_CHILDREN's conversation_statuses entry takes half the rows left",
+	statuses_last_status_removed:
+		"one account row per status deleted: deleteStatusWithin reserves it with the status's own delete",
+	statuses_last_status_changed:
+		'one account row per status hidden: deleteStatusBatch hides a status only with two rows left',
+}
+
 type ForeignKey = { from: string; table: string; column: string; onDelete: string }
 
 function foreignKeys(sql: SqlStorage): ForeignKey[] {
@@ -91,6 +107,28 @@ describe('cascade guard (RES-6)', () => {
 			// An exemption or entry for a table that no longer cascades is stale.
 			expect(Object.keys(STATUS_EXEMPT).filter((table) => !found.includes(table))).toEqual([])
 			expect(STATUS_CHILDREN.filter((child) => !found.includes(child.table))).toEqual([])
+		})
+	})
+
+	it('names every trigger that writes on a delete or an update, with where its writes are counted', async () => {
+		await runInDurableObject(await migratedStore(), (_instance, state) => {
+			const triggers = state.storage.sql
+				.exec<{ name: string; sql: string }>("SELECT name, sql FROM sqlite_schema WHERE type = 'trigger'")
+				.toArray()
+			// A trigger fires on a delete or an update when its head (before BEGIN) says so, and writes when its body holds
+			// an INSERT, UPDATE or DELETE; one that only RAISEs writes nothing.
+			const writing = triggers
+				.filter(({ sql }) => {
+					const [head = '', body = ''] = sql.split(/\bBEGIN\b/i)
+					return /\b(DELETE|UPDATE)\b/i.test(head) && /\b(INSERT|UPDATE|DELETE)\b/i.test(body)
+				})
+				.map(({ name }) => name)
+				.sort()
+			expect(
+				writing.filter((name) => WRITING_TRIGGERS[name] === undefined),
+				'these triggers write when a row is deleted or updated: count their writes where the batched delete or purge decides it has room (src/domain/inbox.ts), and name each in WRITING_TRIGGERS with where'
+			).toEqual([])
+			expect(Object.keys(WRITING_TRIGGERS).filter((name) => !writing.includes(name))).toEqual([])
 		})
 	})
 

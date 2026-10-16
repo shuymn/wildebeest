@@ -1140,7 +1140,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   deleted only after its children (edits, media, mentions, tags, favourites, bookmarks, notifications, receipts,
   boosts, reply links), so no delete cascades. The child tables of a status and of a purged account are each one list in
   `src/domain/inbox.ts` (`STATUS_CHILDREN`, `PURGED_ACCOUNT_CHILDREN`), which `test/cascade-guard.test.ts` checks
-  against the schema's cascading foreign keys. Blocks and mutes of the account go last, once nothing they filter is
+  against the schema's cascading foreign keys; the same test requires every trigger that writes on a delete or an
+  update to be named with where a batch counts its writes. Blocks and mutes of the account go last, once nothing they filter is
   left (`test/inbox-regressions.test.ts`, "keeps filtering a post that mentions the actor"). A user's own unboost keeps B2's path unchanged. Local media is detached
   for B4b's media sweep, never deleted from R2 here. Both are durable jobs in the Store (`inbound_jobs`), continued by the Queue and by cron, so neither a lost
   Queue message nor maintenance stops them, and waiting out maintenance spends no retry. `test/inbox.test.ts`,
