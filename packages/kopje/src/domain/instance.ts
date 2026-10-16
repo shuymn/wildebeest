@@ -1,5 +1,6 @@
 import { availableLocalSql } from './audience'
 import { readOperation } from './operation'
+import type { Db } from '../db/sql'
 
 // What the instance endpoints show, from instance_settings (the only settings store) and cached counters.
 
@@ -12,12 +13,15 @@ export type InstanceRule = {
 	translations: Record<string, { text: string; hint: string }>
 }
 
-export type InstanceInfo = {
+export type InstanceSettings = {
 	domain: string | null
 	title: string | null
 	description: string | null
 	contactEmail: string | null
 	rules: InstanceRule[]
+}
+
+export type InstanceInfo = InstanceSettings & {
 	userCount: number
 	statusCount: number
 	domainCount: number
@@ -26,15 +30,9 @@ export type InstanceInfo = {
 const PUBLIC_SETTINGS = ['domain', 'title', 'description', 'contact_email', 'rules'] as const
 const SETTINGS_QUERY = `SELECT name, value FROM instance_settings WHERE name IN (${PUBLIC_SETTINGS.map(() => '?').join(', ')})`
 
-export const instanceInfo = readOperation<void, InstanceInfo>((db) => {
+function settingsOf(db: Db): InstanceSettings {
 	const settings = new Map(
 		db.all<{ name: string; value: string }>(SETTINGS_QUERY, ...PUBLIC_SETTINGS).map((row) => [row.name, row.value])
-	)
-	const counts = db.first<{ users: number; statuses: number | null; domains: number }>(
-		`SELECT
-			(SELECT COUNT(*) FROM local_accounts l WHERE ${availableLocalSql('l')}) AS users,
-			(SELECT SUM(statuses_count) FROM accounts WHERE domain IS NULL) AS statuses,
-			(SELECT COUNT(DISTINCT domain) FROM accounts WHERE domain IS NOT NULL) AS domains`
 	)
 	return {
 		domain: settings.get('domain') ?? null,
@@ -42,6 +40,21 @@ export const instanceInfo = readOperation<void, InstanceInfo>((db) => {
 		description: settings.get('description') ?? null,
 		contactEmail: settings.get('contact_email') ?? null,
 		rules: parseRules(settings.get('rules')),
+	}
+}
+
+// The settings alone, without the counters (the about page).
+export const instanceSettings = readOperation<void, InstanceSettings>((db) => settingsOf(db))
+
+export const instanceInfo = readOperation<void, InstanceInfo>((db) => {
+	const counts = db.first<{ users: number; statuses: number | null; domains: number }>(
+		`SELECT
+			(SELECT COUNT(*) FROM local_accounts l WHERE ${availableLocalSql('l')}) AS users,
+			(SELECT SUM(statuses_count) FROM accounts WHERE domain IS NULL) AS statuses,
+			(SELECT COUNT(DISTINCT domain) FROM accounts WHERE domain IS NOT NULL) AS domains`
+	)
+	return {
+		...settingsOf(db),
 		userCount: counts?.users ?? 0,
 		statusCount: counts?.statuses ?? 0,
 		domainCount: counts?.domains ?? 0,

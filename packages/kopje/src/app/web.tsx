@@ -169,7 +169,7 @@ export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 		)
 	}
 	app.get('/about', setup, async (c) => {
-		const info = await storeCall(c, deps, (s, b) => s.instanceInfo(b))
+		const info = await storeCall(c, deps, (s, b) => s.instanceSettings(b))
 		const domain = c.get('domain')
 		return publicPage(
 			c,
