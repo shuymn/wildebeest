@@ -119,9 +119,14 @@ export function featuredTagNamed(db: Db, accountId: string, name: string): Featu
 	)
 }
 
-// Whether the account features MAX_FEATURED_TAGS hashtags already (FeaturedTag#validate_featured_tags_limit).
-function featuresMost(db: Db, accountId: string): boolean {
-	const featured = db.first<{ n: number }>('SELECT count(*) AS n FROM featured_tags WHERE account_id = ?', accountId)
+// Whether the account features MAX_FEATURED_TAGS hashtags already (FeaturedTag#validate_featured_tags_limit), counting
+// no further than that.
+export function featuresMost(db: Db, accountId: string): boolean {
+	const featured = db.first<{ n: number }>(
+		'SELECT count(*) AS n FROM (SELECT 1 FROM featured_tags WHERE account_id = ? LIMIT ?)',
+		accountId,
+		MAX_FEATURED_TAGS
+	)
 	return (featured?.n ?? 0) >= MAX_FEATURED_TAGS
 }
 

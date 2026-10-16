@@ -1,5 +1,5 @@
 import { availableLocalSql, availableSql, requiresMention, type Visibility } from './audience'
-import { displayName, featuredTagNamed, MAX_FEATURED_TAGS, writeFeatured } from './featured-tags'
+import { displayName, featuredTagNamed, featuresMost, MAX_FEATURED_TAGS, writeFeatured } from './featured-tags'
 import { writeOperation } from './operation'
 import { type RemoteStatusInput, statusByUri, storeRemoteStatus } from './remote-statuses'
 import { isHashtagName } from './status-text'
@@ -185,15 +185,11 @@ function featuredName(name: string): string | null {
 // Add#add_featured_tags: the account features the hashtag, unless it does already or features MAX_FEATURED_TAGS.
 export function featureRemote(db: Db, accountId: string, name: string, now: number): boolean {
 	const display = featuredName(name)
-	if (display === null || featuredTagNamed(db, accountId, normalizeTag(display)) !== undefined) {
-		return false
-	}
-	const featured = db.first<{ n: number }>(
-		'SELECT count(*) AS n FROM (SELECT 1 FROM featured_tags WHERE account_id = ? LIMIT ?)',
-		accountId,
-		MAX_FEATURED_TAGS
-	)
-	if ((featured?.n ?? 0) >= MAX_FEATURED_TAGS) {
+	if (
+		display === null ||
+		featuredTagNamed(db, accountId, normalizeTag(display)) !== undefined ||
+		featuresMost(db, accountId)
+	) {
 		return false
 	}
 	writeFeatured(db, accountId, display, now)
