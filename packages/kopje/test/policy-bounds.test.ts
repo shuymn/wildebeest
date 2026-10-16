@@ -16,7 +16,12 @@ import { backfillConversations } from '../src/domain/conversation-rows'
 import { listConversations } from '../src/domain/conversations'
 import { directory, DIRECTORY_WINDOW } from '../src/domain/directory'
 import { accountEndorsements, listEndorsements } from '../src/domain/endorsements'
-import { accountFeaturedTags, listFeaturedTags } from '../src/domain/featured-tags'
+import {
+	accountFeaturedTags,
+	FEATURED_COUNT_WINDOW,
+	listFeaturedTags,
+	uncountFeaturedTags,
+} from '../src/domain/featured-tags'
 import {
 	getFilter,
 	listFilterKeywords,
@@ -49,8 +54,16 @@ import {
 	runNotificationRequestJobs,
 } from '../src/domain/notification-requests'
 import { clearNotifications, listNotifications, REMOVAL_BATCHES, REMOVAL_WINDOW } from '../src/domain/notifications'
+import { writeOperation } from '../src/domain/operation'
 import { getPoll, vote } from '../src/domain/polls'
-import { claimCollectionSync, MAX_REMOTE_PINS, storedStatusUris, SYNC_LEASE_MS } from '../src/domain/remote-collections'
+import {
+	claimCollectionSync,
+	featureRemote,
+	MAX_REMOTE_PINS,
+	storedStatusUris,
+	SYNC_LEASE_MS,
+	unfeatureRemote,
+} from '../src/domain/remote-collections'
 import { createReport } from '../src/domain/reports'
 import { dueScheduled, listScheduled, publishScheduled } from '../src/domain/scheduled-statuses'
 import { search } from '../src/domain/search'
@@ -3028,7 +3041,7 @@ describe('filtered notifications and requests cost a read nothing (RES-7)', () =
 			expect(grown).toEqual([])
 			// The viewer's lists show the follow requests and the follows alone.
 			const newest = await runInDurableObject(few, (_instance, state) =>
-				listNotifications.run(state.storage.sql, { ...list, page: { limit: 40 } } as never)
+				listNotifications.run(state.storage.sql, { ...list, page: { limit: 40 } })
 			)
 			expect(
 				(newest as { value: { items: { type: string }[] } }).value.items
@@ -3118,7 +3131,7 @@ describe('pending request jobs cost merged and a round a bounded read (RES-7)', 
 		}
 		expect(grown).toEqual([])
 		const merged = await runInDurableObject(many, (_instance, state) =>
-			notificationRequestsMerged.run(state.storage.sql, { credential } as never)
+			notificationRequestsMerged.run(state.storage.sql, { credential })
 		)
 		expect(merged).toEqual({ status: 'ok', value: { merged: false } })
 	}, 120_000)
@@ -3623,7 +3636,7 @@ describe('clearing and dismissing touch a bounded batch, and reads skip what the
 		for (const removal of ['clear', 'dismissal'] as const) {
 			const round = async (count: number) => {
 				const store = await removing(count, removal)
-				const rows = await rowsTouched(store, runNotificationRequestJobs, { now: NOW } as never)
+				const rows = await rowsTouched(store, runNotificationRequestJobs, { now: NOW })
 				expect([removal, count, await stored(store)]).toEqual([removal, count, count + FOLLOWS + REQUESTS - IN_REQUEST])
 				return rows
 			}
@@ -3885,5 +3898,107 @@ describe("a remote account's learned collections cost a bounded read (RES-7)", (
 			}
 		}
 		expect(grown).toEqual([])
+	}, 120_000)
+})
+
+// A remote account's featured hashtag is counted from its newest FEATURED_COUNT_WINDOW statuses Kopje holds, and then
+// kept by deltas (featured-tags.ts): learning one, featuring and unfeaturing it again and again, and deleting its newest
+// status with older matches sparse among many statuses (and as many statuses of others with the hashtag) touch the same
+// rows whether the account has 400 statuses stored
+// or 4,000, since its history is never walked past the window.
+describe("a remote account's featured hashtags cost a window of its statuses (RES-7)", () => {
+	const OWNER = '960000000000000000'
+	const OTHER = '960000000000000001'
+	const STATUS_BASE = 961000000000000000n
+	const OTHER_BASE = 962000000000000000n
+	const newest = (count: number) => String(STATUS_BASE + BigInt(count - 1))
+
+	// The owner's `count` public statuses: the oldest and the newest carry #cats, none between.
+	async function history(count: number, featured: boolean): Promise<StoreStub> {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username, domain) VALUES (?, 'https://far.example/users/owner', 'owner', 'far.example')",
+				OWNER
+			)
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+				INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+				SELECT CAST(?2 + i AS TEXT), 'https://far.example/s/' || i, ?3, 'public', '<p>s</p>',
+					strftime('%Y-%m-%dT%H:%M:%fZ', '2026-01-01', '+' || i || ' minutes') FROM n`,
+				count,
+				String(STATUS_BASE),
+				OWNER
+			)
+			sql.exec(
+				"INSERT INTO status_tags (status_id, name, public) VALUES (?, 'cats', 1), (?, 'cats', 1)",
+				String(STATUS_BASE),
+				newest(count)
+			)
+			// As many statuses with #cats by another account, so a walk of the hashtag grows as well.
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username, domain) VALUES (?, 'https://far.example/users/other', 'other', 'far.example')",
+				OTHER
+			)
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+				INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+				SELECT CAST(?2 + i AS TEXT), 'https://far.example/o/' || i, ?3, 'public', '<p>o</p>', '2026-01-02T00:00:00.000Z'
+				FROM n`,
+				count,
+				String(OTHER_BASE),
+				OTHER
+			)
+			sql.exec(
+				"INSERT INTO status_tags (status_id, name, public) SELECT id, 'cats', 1 FROM statuses WHERE account_id = ?",
+				OTHER
+			)
+			if (featured) {
+				sql.exec(
+					`INSERT INTO featured_tags (id, account_id, name, display_name, statuses_count, last_status_at)
+					SELECT '970000000000000000', ?1, 'cats', 'cats', 2, published_at FROM statuses WHERE id = ?2`,
+					OWNER,
+					newest(count)
+				)
+			}
+		})
+		return store
+	}
+
+	const learn = writeOperation<{ now: number }, void>((db, { now }) => {
+		featureRemote(db, OWNER, '#cats', now)
+	})
+	const toggle = writeOperation<{ now: number }, void>((db, { now }) => {
+		for (let i = 0; i < 5; i++) {
+			unfeatureRemote(db, OWNER, 'cats')
+			featureRemote(db, OWNER, '#cats', now)
+		}
+	})
+	const uncount = writeOperation<{ id: string }, void>((db, { id }) => uncountFeaturedTags(db, id))
+
+	it('reads the same rows with 400 or 4,000 statuses: learning, featuring again and again, and a decrement', async () => {
+		expect(FEATURED_COUNT_WINDOW).toBeLessThan(400)
+		const grown: string[] = []
+		const cases: [string, boolean, StoreOperation<never, unknown>, (count: number) => unknown][] = [
+			['learn', false, learn, () => ({ now: NOW })],
+			['feature again', true, toggle, () => ({ now: NOW })],
+			['decrement', true, uncount, (count) => ({ id: newest(count) })],
+		]
+		for (const [name, featured, operation, input] of cases) {
+			const few = await rowsTouched(await history(400, featured), operation, input(400) as never)
+			const many = await rowsTouched(await history(4000, featured), operation, input(4000) as never)
+			if (many > few + ALLOWANCE) {
+				grown.push(`${name}: ${few} -> ${many}`)
+			}
+		}
+		expect(grown).toEqual([])
+		// Not vacuous: the decrement keeps a count and finds no newer status in the window, the learn counts the newest.
+		const store = await history(4000, false)
+		await runInDurableObject(store, (_instance, state) => learn.run(state.storage.sql, { now: NOW }))
+		const rows = await runInDurableObject(store, (_instance, state) =>
+			state.storage.sql.exec('SELECT statuses_count, last_status_at FROM featured_tags').toArray()
+		)
+		expect(rows).toEqual([{ statuses_count: 1, last_status_at: expect.stringMatching(/^2026-01-03/) }])
 	}, 120_000)
 })
