@@ -17,6 +17,7 @@ import * as oauth from './oauth'
 import * as placeholders from './placeholders'
 import * as polls from './polls'
 import * as push from './push'
+import * as reports from './reports'
 import * as scheduled from './scheduled-statuses'
 import * as search from './search'
 import * as statuses from './statuses'
@@ -624,6 +625,8 @@ export const ROUTES: readonly Route[] = [
 	// Timeline markers (mastodon/markers.ts).
 	{ method: 'GET', path: '/api/v1/markers', access: { scope: 'read:statuses' }, handler: markers.markers },
 	{ method: 'POST', path: '/api/v1/markers', access: { scope: 'write:statuses' }, handler: markers.saveMarkers },
+	// Reports (mastodon/reports.ts).
+	{ method: 'POST', path: '/api/v1/reports', access: { scope: 'write:reports' }, handler: reports.createReport },
 	// Polls (mastodon/polls.ts); a poll is posted with its status.
 	{
 		method: 'GET',

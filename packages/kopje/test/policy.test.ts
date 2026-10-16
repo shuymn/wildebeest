@@ -170,6 +170,15 @@ const RULES: readonly Rule[] = [
 			'../src/domain/timelines.ts': 'home’s windows of the viewer’s own followed hashtags (R9)',
 		},
 	},
+	{
+		// R34: a report is its reporter's; only its writer reads it, and a purge deletes the reports of the account.
+		name: 'reads or writes reports',
+		pattern: new RegExp(`\\b(?:FROM|JOIN|INTO|UPDATE)\\s+${table(['reports'])}`, 'i'),
+		allowed: {
+			'../src/domain/reports.ts': 'the reporter’s report, written and answered once (createReport)',
+			'../src/domain/inbox.ts': 'an actor purge deletes the reports of the account',
+		},
+	},
 ]
 
 function violations(files: Record<string, string>, rules: readonly Rule[] = RULES): string[] {

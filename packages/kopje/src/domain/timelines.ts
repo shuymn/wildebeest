@@ -410,8 +410,7 @@ export const accountStatuses = optionalUserReadOperation<AccountStatusesInput, P
 						}
 					: { where: 's.account_id = ?5', tail: `ORDER BY s.id ${order} LIMIT ?4` }),
 				and: `NOT ${blocksSql('?1', 's.account_id')}
-					AND (s.reblog_of_id IS NULL OR EXISTS (SELECT 1 FROM statuses o WHERE o.id = s.reblog_of_id
-						AND ${visibleSql('o', '?1')} AND NOT ${filteredForSql('o.account_id', '?1', '?7')}))
+					AND ${originalShownSql('?1', '?7')}
 					${input.onlyMedia ? 'AND EXISTS (SELECT 1 FROM media_attachments um WHERE um.status_id = s.id AND um.shown = 1)' : ''}
 					${input.excludeReplies ? `AND ${NOT_A_REPLY_TO_OTHERS}` : ''}
 					${input.excludeReblogs ? 'AND s.reblog_of_id IS NULL' : ''}
@@ -428,6 +427,39 @@ export const accountStatuses = optionalUserReadOperation<AccountStatusesInput, P
 		return statusesPage(db, ids(rows), cursor, viewer, input.present)
 	}
 )
+
+// R11 for a boost on an account's statuses: the viewer may see its original and does not filter its author
+// (AccountStatusesFilter#filtered_reblogs_scope).
+function originalShownSql(viewer: string, now: string): string {
+	return `(s.reblog_of_id IS NULL OR EXISTS (SELECT 1 FROM statuses o WHERE o.id = s.reblog_of_id
+		AND ${visibleSql('o', viewer)} AND NOT ${filteredForSql('o.account_id', viewer, now)}))`
+}
+
+// The statuses among `ids` that are the account's and that the viewer may see by Mastodon's AccountStatusesFilter
+// (R11), read by key: the statuses a local account may report (reports.ts, ReportService#reported_status_ids,
+// app/services/report_service.rb:82). Unlike the profile read, the viewer's own block of the account hides none:
+// AccountStatusesFilter#blocked? (app/lib/account_statuses_filter.rb:106-108) is the account's block of the viewer
+// alone, so a reporter who blocked the account may still name its statuses. Kopje keeps no deleted status (Mastodon's
+// with_discarded), so a deleted one is not found.
+export function accountStatusIds(db: Db, viewer: ViewerContext, accountId: string, ids: readonly string[]): string[] {
+	if (
+		ids.length === 0 ||
+		!statusReads(viewer, { viewer: '?1' }).authorShown(db, 'visible', { author: '?2' }, viewer.accountId, accountId)
+	) {
+		return []
+	}
+	return statusReads(viewer, { viewer: '?1', now: '?3' })
+		.select(
+			db,
+			'visible',
+			{ where: 's.id IN (SELECT value FROM json_each(?2)) AND s.account_id = ?4', and: originalShownSql('?1', '?3') },
+			viewer.accountId,
+			JSON.stringify(ids),
+			viewer.now,
+			accountId
+		)
+		.map((row) => row.id)
+}
 
 // Bookmarks and favourites, newest first by the edge's id, through the list rule: a status that is no longer
 // visible to the viewer (say, they stopped following a private author) or that they filter is not listed.
