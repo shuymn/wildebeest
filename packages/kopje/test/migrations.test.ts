@@ -5,10 +5,11 @@ import { describe, expect, it, vi } from 'vitest'
 import { BUILD, freshStore, rejectionOf, tableNames, testKernel as kernel } from './helpers'
 import { MIGRATIONS } from '../src/db/migrations'
 import { Db } from '../src/db/sql'
-import { REQUIRES_MENTION_SQL } from '../src/domain/audience'
+import { DISTRIBUTABLE_SQL, REQUIRES_MENTION_SQL } from '../src/domain/audience'
 import { CONVERSATIONS_BACKFILL } from '../src/domain/conversation-rows'
 import { readOperation, sessionOperation, writeOperation } from '../src/domain/operation'
 import { storeRemoteStatus } from '../src/domain/remote-statuses'
+import { normalizeTag } from '../src/domain/tag-name'
 import { parseRemoteStatus } from '../src/federation/remote-status'
 import { StoreUnavailableError, toStoreUnavailable } from '../src/platform/store-errors'
 
@@ -1328,6 +1329,293 @@ describe('Store migration runner', () => {
 		// The column is added without a pass, and the partial index's build reads each notification once.
 		expect(large - small).toBeLessThanOrEqual(3 * (10_000 - 1000))
 	}, 60_000)
+
+	it('upgrades a Store with 0019_tag_normalization: hashtag names as Mastodon normalizes them, merged where they meet', async () => {
+		const index = NAMES.indexOf('0019_tag_normalization')
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, MIGRATIONS.slice(0, index)).upgrade()).toMatchObject({ ok: true })
+			const [alice, bob] = ['100000000000000001', '100000000000000002']
+			for (const [id, name] of [
+				[alice, 'alice'],
+				[bob, 'bob'],
+			] as const) {
+				sql.exec(
+					"INSERT INTO accounts (id, uri, username, domain) VALUES (?, 'https://kopje.test/ap/users/' || ?, ?, NULL)",
+					id,
+					name,
+					name
+				)
+				sql.exec(
+					"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, ? || '@example.com', X'00', X'00', 'k')",
+					id,
+					name
+				)
+			}
+			const status = (n: number, account: string, visibility: string, minute: number) => {
+				const id = String(200000000000000000n + BigInt(n))
+				sql.exec(
+					'INSERT INTO statuses (id, uri, account_id, visibility, published_at) VALUES (?, ?, ?, ?, ?)',
+					id,
+					`https://kopje.test/ap/o/${n}`,
+					account,
+					visibility,
+					`2026-10-01T00:${String(minute).padStart(2, '0')}:00.000Z`
+				)
+				return id
+			}
+			const tag = (statusId: string, name: string, isPublic: number) =>
+				sql.exec('INSERT INTO status_tags (status_id, name, public) VALUES (?, ?, ?)', statusId, name, isPublic)
+			// Names as NFKC and lowercase left them.
+			const both = status(1, alice, 'public', 1)
+			tag(both, 'café', 1)
+			tag(both, 'cafe', 1)
+			const accented = status(2, alice, 'unlisted', 2)
+			tag(accented, 'café', 0)
+			tag(accented, 'i\u0307stanbul', 0)
+			tag(accented, '\u0301', 0)
+			const hidden = status(3, alice, 'private', 3)
+			tag(hidden, 'blåhaj', 0)
+			const bobs = status(4, bob, 'public', 4)
+			tag(bobs, 'blåhaj', 1)
+			tag(bobs, 'cats', 1)
+			// alice followed cafe before café; bob followed café first, then cafe, and a name that becomes empty.
+			for (const [account, name] of [
+				[alice, 'cafe'],
+				[bob, 'café'],
+				[alice, 'café'],
+				[bob, 'cafe'],
+				[bob, '\u0301'],
+				[alice, 'cats'],
+			] as const) {
+				sql.exec('INSERT INTO tag_follows (account_id, name) VALUES (?, ?)', account, name)
+			}
+			// alice featured Café first, then cafe and BLÅHAJ; bob only blahaj, before any status of his had it (counted 0).
+			const feature = (id: string, account: string, name: string, display: string) =>
+				sql.exec(
+					`INSERT INTO featured_tags (id, account_id, name, display_name, statuses_count, last_status_at)
+					VALUES (?, ?, ?, ?, 0, NULL)`,
+					id,
+					account,
+					name,
+					display
+				)
+			feature('700000000000000001', alice, 'café', 'Café')
+			feature('700000000000000002', alice, 'cafe', 'cafe')
+			feature('700000000000000003', alice, 'blåhaj', 'BLÅHAJ')
+			feature('700000000000000004', bob, 'blahaj', 'blahaj')
+
+			expect(await kernel(state, MIGRATIONS.slice(0, index + 1)).upgrade()).toMatchObject({
+				ok: true,
+				applied: [NAMES[index]],
+			})
+			expect(sql.exec('SELECT status_id, name, public FROM status_tags ORDER BY status_id, name').toArray()).toEqual([
+				{ status_id: both, name: 'cafe', public: 1 },
+				{ status_id: accented, name: 'cafe', public: 0 },
+				{ status_id: accented, name: 'istanbul', public: 0 },
+				{ status_id: hidden, name: 'blahaj', public: 0 },
+				{ status_id: bobs, name: 'blahaj', public: 1 },
+				{ status_id: bobs, name: 'cats', public: 1 },
+			])
+			expect(sql.exec('SELECT id, account_id, name FROM tag_follows ORDER BY id').toArray()).toEqual([
+				{ id: 1, account_id: alice, name: 'cafe' },
+				{ id: 2, account_id: bob, name: 'cafe' },
+				{ id: 6, account_id: alice, name: 'cats' },
+			])
+			// The earliest featured hashtag of each name stays, recounted from its account's public and unlisted statuses.
+			expect(
+				sql
+					.exec(
+						'SELECT id, account_id, name, display_name, statuses_count, last_status_at FROM featured_tags ORDER BY id'
+					)
+					.toArray()
+			).toEqual([
+				{
+					id: '700000000000000001',
+					account_id: alice,
+					name: 'cafe',
+					display_name: 'Café',
+					statuses_count: 2,
+					last_status_at: '2026-10-01T00:02:00.000Z',
+				},
+				{
+					id: '700000000000000003',
+					account_id: alice,
+					name: 'blahaj',
+					display_name: 'BLÅHAJ',
+					statuses_count: 0,
+					last_status_at: null,
+				},
+				{
+					id: '700000000000000004',
+					account_id: bob,
+					name: 'blahaj',
+					display_name: 'blahaj',
+					statuses_count: 1,
+					last_status_at: '2026-10-01T00:04:00.000Z',
+				},
+			])
+			// No Remove is queued for the featured hashtag that went, and the helper tables are gone.
+			expect(sql.exec('SELECT count(*) AS n FROM outbound_activities').one()).toEqual({ n: 0 })
+			expect(tableNames(sql)).not.toEqual(expect.arrayContaining(['tag_renames']))
+			expect(tableNames(sql)).not.toEqual(expect.arrayContaining(['tag_folds']))
+			expect(sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
+		})
+	})
+
+	it('0019_tag_normalization names each stored name as normalizeTag names what it was made from', async () => {
+		const index = NAMES.indexOf('0019_tag_normalization')
+		// Every letter of ASCIIFolding's table, every character of the first blocks (Latin to Thai, combining marks and
+		// connectors included), Japanese, fullwidth forms, and every 97th code point beyond, each between two letters;
+		// and some whole names. Characters the runtime does not know are left out: the migration judges by Unicode 17.
+		const samples = [
+			...'ÀÁÂÃÄÅàáâãäåĀāĂăĄąÇçĆćĈĉĊċČčÐðĎďĐđÈÉÊËèéêëĒēĔĕĖėĘęĚěĜĝĞğĠġĢģĤĥĦħÌÍÎÏìíîïĨĩĪīĬĭĮįİıĴĵĶķĸĹĺĻļĽľĿŀŁłÑñŃńŅņŇňŉŊŋÒÓÔÕÖØòóôõöøŌōŎŏŐőŔŕŖŗŘřŚśŜŝŞşŠšſŢţŤťŦŧÙÚÛÜùúûüŨũŪūŬŭŮůŰűŲųŴŵÝýÿŶŷŸŹźŻżŽž',
+		]
+		const ranges = [
+			[0x20, 0xfff, 1],
+			[0x1e00, 0x206f, 1],
+			[0x3000, 0x30ff, 1],
+			[0xff00, 0xffef, 1],
+			[0x1000, 0x10ffff, 97],
+		] as const
+		for (const [from, to, step] of ranges) {
+			for (let c = from; c <= to; c += step) {
+				const char = String.fromCodePoint(c)
+				if ((c < 0xd800 || c > 0xdfff) && !/\p{Cn}/u.test(char)) {
+					samples.push(`x${char}y`)
+				}
+			}
+		}
+		samples.push(
+			'İstanbul',
+			'Café',
+			'BLÅHAJ',
+			'ｶﾞ',
+			'か゛',
+			'ไทย\u0E47',
+			'a\u200Cb',
+			'e\u0301',
+			'Ⅻ',
+			'ﬁ',
+			'\uFDFA',
+			'\u0301'
+		)
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, MIGRATIONS.slice(0, index)).upgrade()).toMatchObject({ ok: true })
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username, domain) VALUES ('100000000000000001', 'https://kopje.test/ap/users/alice', 'alice', NULL)"
+			)
+			// One status for each, so no two names meet.
+			const stored = samples.map((sample) => sample.normalize('NFKC').toLowerCase())
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+				INSERT INTO statuses (id, uri, account_id, visibility, published_at)
+				SELECT CAST(200000000000000000 + i AS TEXT), 'https://kopje.test/ap/o/' || i, '100000000000000001', 'public',
+					'2026-10-01T00:00:00.000Z' FROM n`,
+				samples.length
+			)
+			sql.exec(
+				`INSERT INTO status_tags (status_id, name, public)
+				SELECT CAST(200000000000000001 + key AS TEXT), value, 1 FROM json_each(?)`,
+				JSON.stringify(stored)
+			)
+			expect(await kernel(state, MIGRATIONS.slice(0, index + 1)).upgrade()).toMatchObject({ ok: true })
+			const names = new Map(
+				sql
+					.exec<{ status_id: string; name: string }>('SELECT status_id, name FROM status_tags')
+					.toArray()
+					.map((row) => [Number(BigInt(row.status_id) - 200000000000000001n), row.name])
+			)
+			const mismatches = samples
+				.map((sample, i) => ({ sample, migrated: names.get(i) ?? '', normalized: normalizeTag(sample) }))
+				.filter(({ migrated, normalized }) => migrated !== normalized)
+			expect(mismatches).toEqual([])
+			// Not vacuous: names were folded and cut, and one that leaves nothing went.
+			expect(names.get(samples.indexOf('Café'))).toBe('cafe')
+			expect(names.get(samples.indexOf('İstanbul'))).toBe('istanbul')
+			expect(names.has(samples.indexOf('\u0301'))).toBe(false)
+		})
+	}, 60_000)
+
+	it('0019_tag_normalization counts the visibilities the policy names', () => {
+		const migration = MIGRATIONS.find((m) => m.name === '0019_tag_normalization')!
+		expect(migration.sql).toContain(`s.visibility IN ${DISTRIBUTABLE_SQL}`)
+	})
+
+	it('0019_tag_normalization reads each hashtag row a bounded number of times, however many there are', async () => {
+		const index = NAMES.indexOf('0019_tag_normalization')
+		const statements = (MIGRATIONS[index]?.sql ?? '')
+			.split('\n')
+			.filter((line) => !line.startsWith('--'))
+			.join('\n')
+			.split(';')
+			.filter((statement) => statement.trim() !== '')
+		const measure = async (count: number) => {
+			const store = freshStore()
+			return runInDurableObject(store, async (_instance, state) => {
+				const sql = state.storage.sql
+				await kernel(state, MIGRATIONS.slice(0, index)).upgrade()
+				// `count` local accounts, each with a public status tagged café, cafe and cats, follows of café and cafe, and
+				// cafe and café featured: every row is renamed or merged.
+				sql.exec(
+					`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+					INSERT INTO accounts (id, uri, username, domain) SELECT CAST(100000000000000000 + i AS TEXT),
+						'https://kopje.test/ap/users/u' || i, 'u' || i, NULL FROM n`,
+					count
+				)
+				sql.exec(
+					`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey)
+					SELECT id, id || '@example.com', X'00', X'00', 'k' FROM accounts`
+				)
+				sql.exec(
+					`INSERT INTO statuses (id, uri, account_id, visibility, published_at)
+					SELECT CAST(100000000000000000 + CAST(id AS INTEGER) AS TEXT), 'https://kopje.test/ap/o/' || id, id, 'public',
+						'2026-10-01T00:00:00.000Z' FROM accounts`
+				)
+				sql.exec(
+					`INSERT INTO status_tags (status_id, name, public)
+					SELECT id, 'café', 1 FROM statuses UNION ALL SELECT id, 'cafe', 1 FROM statuses
+					UNION ALL SELECT id, 'cats', 1 FROM statuses`
+				)
+				sql.exec(
+					`INSERT INTO tag_follows (account_id, name)
+					SELECT id, 'café' FROM accounts UNION ALL SELECT id, 'cafe' FROM accounts`
+				)
+				sql.exec(
+					`INSERT INTO featured_tags (id, account_id, name, display_name)
+					SELECT CAST(500000000000000000 + 2 * CAST(id AS INTEGER) - 200000000000000000 AS TEXT), id, 'cafe', 'cafe'
+						FROM accounts
+					UNION ALL SELECT CAST(500000000000000001 + 2 * CAST(id AS INTEGER) - 200000000000000000 AS TEXT), id, 'café',
+						'Café' FROM accounts`
+				)
+				let read = 0
+				for (const statement of statements) {
+					const cursor = sql.exec(statement)
+					cursor.toArray()
+					read += cursor.rowsRead
+				}
+				expect(
+					sql
+						.exec(
+							`SELECT (SELECT count(*) FROM status_tags WHERE name = 'cafe') AS tagged,
+								(SELECT count(*) FROM tag_follows WHERE name = 'cafe') AS followed,
+								(SELECT count(*) FROM featured_tags WHERE name = 'cafe' AND statuses_count = 1) AS featured`
+						)
+						.one()
+				).toEqual({ tagged: count, followed: count, featured: count })
+				return read
+			})
+		}
+		const small = await measure(1000)
+		const large = await measure(10_000)
+		// Per account added: three hashtag rows, two follows and two featured hashtags, each read a few times (the pass
+		// that finds the names, the merge, the rename) with lookups by index, and one status walked by the recount.
+		const added = 7 * (10_000 - 1000)
+		expect(large - small).toBeLessThanOrEqual(10 * added)
+	}, 120_000)
 
 	it('upgrades a Store with 0011_scheduled_statuses: uploads stay as they were, and scheduled statuses hold theirs and go with their account', async () => {
 		const index = NAMES.indexOf('0011_scheduled_statuses')

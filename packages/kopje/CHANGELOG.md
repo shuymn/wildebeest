@@ -163,7 +163,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   the tagged profile page, and among featured hashtags, so featuring `blahaj` after `BLÅHAJ` is refused as taken.
   A hashtag in status text that leaves nothing once normalized (a lone combining mark) stays text, and hashtag search
   drops the spaces of its query rather than finding nothing. The cutover and `verify-conversion` name hashtags the same
-  way.
+  way. Stored names are renormalized by the migration below.
 
 ### Fixed
 
@@ -176,7 +176,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds ten migrations, applied in order on the first request after the deploy; a rollback to an earlier
+- Store schema: adds eleven migrations, applied in order on the first request after the deploy; a rollback to an earlier
   version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0008_status_mentions_requires_mention`: adds `status_mentions.requires_mention` and `status_mentions.author_id`,
       marks the mentions in direct and limited statuses with their status's author, and indexes them by recipient and
@@ -209,6 +209,15 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
     - `0017_notification_groups`: adds `notifications.group_key`, empty for the notifications stored, and its partial
       index by recipient and group. It reads each notification once to build the index, so its work grows linearly
       with the notifications stored.
+    - `0019_tag_normalization`: renames the stored hashtags (`status_tags`, `tag_follows`, `featured_tags`) to
+      Mastodon's normalization. Names that become one are merged: a status keeps one row of the hashtag, an account
+      keeps its earliest follow and its earliest featured hashtag (with its spelling), and the featured hashtags left
+      are recounted from the account's statuses; a featured hashtag merged away sends no `Remove`, since Mastodon
+      servers already hold the names as one featured hashtag. A name that leaves nothing is deleted. A stored name
+      made from a word-final capital sigma keeps its `ς` (Mastodon would store `σ`), since the stored name cannot tell
+      it from a typed `ς`. It reads each table once to find the names with a character other than `a`–`z`, `0`–`9`
+      and `_`, walks each such distinct name's characters, and rewrites the rows of the renamed names through indexes,
+      so its work grows linearly with the hashtag rows stored.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.5] - 2026-10-15
