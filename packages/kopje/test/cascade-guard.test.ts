@@ -14,6 +14,7 @@ import {
 	PURGED_ACCOUNT_CHILDREN,
 	STATUS_CHILDREN,
 } from '../src/domain/inbox'
+import type { StoreStub } from '../src/platform/store-client'
 
 // RES-6: a status's delete (deleteStatusWithin) and a remote account's purge (purgeBatch) remove the rows that name
 // their parent a batch at a time and delete the parent only once none is left, so the parent's delete cascades
@@ -56,6 +57,19 @@ const WRITING_TRIGGERS: Record<string, string> = {
 		"one account row per status deleted: deleteStatusWithin reserves it with the status's own delete",
 	statuses_last_status_changed:
 		'one account row per status hidden: deleteStatusBatch hides a status only with two rows left',
+	stream_notification_inserted:
+		'fires on a notification insert, which no batched delete or purge makes (the exact-budget cases below run with a listener too)',
+}
+
+// A streaming subscription of the account, which arms the journal trigger (migration 0026_streaming).
+async function listen(store: StoreStub, listening: boolean, accountId: string): Promise<void> {
+	if (listening) {
+		await sql(
+			store,
+			"INSERT INTO stream_subscriptions (account_id, stream_key, sockets) VALUES (?, 'user', 1)",
+			accountId
+		)
+	}
 }
 
 type ForeignKey = { from: string; table: string; column: string; onDelete: string }
@@ -202,83 +216,94 @@ describe("a status's own delete within a batch", () => {
 	// A purge reaches the account's newest status, a reply with a poll, after its children left the batch exactly the
 	// rows the delete used to reserve: the status, its poll, the parent's recount, and the account's last status, which
 	// the trigger of migration 0021_directory moves back, one row more.
-	it('stays within PURGE_BATCH when the status is the newest of its account', async () => {
-		const h = await community(['alice'])
-		const parent = await seedStatus(h.store, { accountId: h.users.alice.id, visibility: 'public' })
-		const remote = await remoteAccount(h.store, 'carol')
-		const uri = 'https://remote.example/users/carol'
-		const reply = await seedStatus(h.store, { accountId: remote, visibility: 'public', inReplyToId: parent })
-		await sql(h.store, `INSERT INTO polls (status_id, options, tallies) VALUES (?, '["a","b"]', '[0,0]')`, reply)
-		// The mentions the batch deletes first: all of the budget but the 3 rows the delete used to reserve.
-		const mentions = PURGE_BATCH - 3
-		await sql(
-			h.store,
-			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+	// With a streaming listener the journal trigger is armed (migration 0026_streaming); the batch writes the same rows.
+	it.each([false, true])(
+		'stays within PURGE_BATCH when the status is the newest of its account (listening: %s)',
+		async (listening) => {
+			const h = await community(['alice'])
+			await listen(h.store, listening, h.users.alice.id)
+			const parent = await seedStatus(h.store, { accountId: h.users.alice.id, visibility: 'public' })
+			const remote = await remoteAccount(h.store, 'carol')
+			const uri = 'https://remote.example/users/carol'
+			const reply = await seedStatus(h.store, { accountId: remote, visibility: 'public', inReplyToId: parent })
+			await sql(h.store, `INSERT INTO polls (status_id, options, tallies) VALUES (?, '["a","b"]', '[0,0]')`, reply)
+			// The mentions the batch deletes first: all of the budget but the 3 rows the delete used to reserve.
+			const mentions = PURGE_BATCH - 3
+			await sql(
+				h.store,
+				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
 			INSERT INTO accounts (id, uri, username, domain)
 			SELECT printf('6%017d', i), 'https://many.example/users/m' || i, 'm' || i, 'many.example' FROM n`,
-			mentions
-		)
-		await sql(
-			h.store,
-			"INSERT INTO status_mentions (status_id, account_id) SELECT ?, id FROM accounts WHERE id GLOB '6*'",
-			reply
-		)
-		expect(await sql(h.store, 'SELECT last_status_id AS id FROM accounts WHERE id = ?', remote)).toEqual([
-			{ id: reply },
-		])
-		const batches: number[] = []
-		for (let i = 0; i < 10; i++) {
-			const { wrote, remaining } = await runInDurableObject(h.store, (_instance, state) => {
-				const db = new Db(state.storage.sql)
-				const changes = () => db.first<{ n: number }>('SELECT total_changes() AS n')!.n
-				const before = changes()
-				const more = state.storage.transactionSync(() => purgeBatch(db, uri, NOW))
-				return { wrote: changes() - before, remaining: more }
-			})
-			batches.push(wrote)
-			if (!remaining) {
-				break
+				mentions
+			)
+			await sql(
+				h.store,
+				"INSERT INTO status_mentions (status_id, account_id) SELECT ?, id FROM accounts WHERE id GLOB '6*'",
+				reply
+			)
+			expect(await sql(h.store, 'SELECT last_status_id AS id FROM accounts WHERE id = ?', remote)).toEqual([
+				{ id: reply },
+			])
+			const batches: number[] = []
+			for (let i = 0; i < 10; i++) {
+				const { wrote, remaining } = await runInDurableObject(h.store, (_instance, state) => {
+					const db = new Db(state.storage.sql)
+					const changes = () => db.first<{ n: number }>('SELECT total_changes() AS n')!.n
+					const before = changes()
+					const more = state.storage.transactionSync(() => purgeBatch(db, uri, NOW))
+					return { wrote: changes() - before, remaining: more }
+				})
+				batches.push(wrote)
+				if (!remaining) {
+					break
+				}
 			}
+			expect(batches.length).toBeGreaterThan(1)
+			expect(batches[0]).toBe(PURGE_BATCH - 3)
+			expect(batches.every((wrote) => wrote <= PURGE_BATCH)).toBe(true)
+			expect(await sql(h.store, 'SELECT count(*) AS n FROM accounts WHERE id = ?', remote)).toEqual([{ n: 0 }])
 		}
-		expect(batches.length).toBeGreaterThan(1)
-		expect(batches[0]).toBe(PURGE_BATCH - 3)
-		expect(batches.every((wrote) => wrote <= PURGE_BATCH)).toBe(true)
-		expect(await sql(h.store, 'SELECT count(*) AS n FROM accounts WHERE id = ?', remote)).toEqual([{ n: 0 }])
-	})
+	)
 
-	it('hides a status within PURGE_BATCH when its mentions leave one row', async () => {
-		const h = await community(['alice'])
-		const remote = await remoteAccount(h.store, 'carol')
-		const status = await seedStatus(h.store, { accountId: remote, visibility: 'public' })
-		await sql(
-			h.store,
-			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+	it.each([false, true])(
+		'hides a status within PURGE_BATCH when its mentions leave one row (listening: %s)',
+		async (listening) => {
+			const h = await community(['alice'])
+			await listen(h.store, listening, h.users.alice.id)
+			const remote = await remoteAccount(h.store, 'carol')
+			const status = await seedStatus(h.store, { accountId: remote, visibility: 'public' })
+			await sql(
+				h.store,
+				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
 			INSERT INTO accounts (id, uri, username, domain)
 			SELECT printf('6%017d', i), 'https://many.example/users/m' || i, 'm' || i, 'many.example' FROM n`,
-			PURGE_BATCH - 1
-		)
-		await sql(
-			h.store,
-			"INSERT INTO status_mentions (status_id, account_id) SELECT ?, id FROM accounts WHERE id GLOB '6*'",
-			status
-		)
-		const batches: number[] = []
-		for (let i = 0; i < 10; i++) {
-			const { wrote, remaining } = await runInDurableObject(h.store, (_instance, state) => {
-				const db = new Db(state.storage.sql)
-				const changes = () => db.first<{ n: number }>('SELECT total_changes() AS n')!.n
-				const before = changes()
-				const more = state.storage.transactionSync(() => deleteStatusBatch(db, status, NOW))
-				return { wrote: changes() - before, remaining: more }
-			})
-			batches.push(wrote)
-			if (!remaining) {
-				break
+				PURGE_BATCH - 1
+			)
+			await sql(
+				h.store,
+				"INSERT INTO status_mentions (status_id, account_id) SELECT ?, id FROM accounts WHERE id GLOB '6*'",
+				status
+			)
+			const batches: number[] = []
+			for (let i = 0; i < 10; i++) {
+				const { wrote, remaining } = await runInDurableObject(h.store, (_instance, state) => {
+					const db = new Db(state.storage.sql)
+					const changes = () => db.first<{ n: number }>('SELECT total_changes() AS n')!.n
+					const before = changes()
+					const more = state.storage.transactionSync(() => deleteStatusBatch(db, status, NOW))
+					return { wrote: changes() - before, remaining: more }
+				})
+				batches.push(wrote)
+				if (!remaining) {
+					break
+				}
 			}
+			expect(batches[0]).toBe(PURGE_BATCH - 1)
+			expect(batches.every((wrote) => wrote <= PURGE_BATCH)).toBe(true)
+			expect(await sql(h.store, 'SELECT count(*) AS n FROM statuses WHERE id = ?', status)).toEqual([{ n: 0 }])
+			expect(await sql(h.store, 'SELECT last_status_id AS id FROM accounts WHERE id = ?', remote)).toEqual([
+				{ id: null },
+			])
 		}
-		expect(batches[0]).toBe(PURGE_BATCH - 1)
-		expect(batches.every((wrote) => wrote <= PURGE_BATCH)).toBe(true)
-		expect(await sql(h.store, 'SELECT count(*) AS n FROM statuses WHERE id = ?', status)).toEqual([{ n: 0 }])
-		expect(await sql(h.store, 'SELECT last_status_id AS id FROM accounts WHERE id = ?', remote)).toEqual([{ id: null }])
-	})
+	)
 })

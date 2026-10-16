@@ -3,6 +3,7 @@ import { scheduledBackup } from './jobs/backup'
 import { scheduledDeliveries } from './jobs/deliver'
 import { handleQueue, runScheduledJobs } from './jobs/queue'
 import { handleScheduled } from './jobs/scheduled'
+import { errorFields } from './platform/error-message'
 import { defaultStore } from './platform/store-client'
 import { generateRsaKeyPair } from './security/key-wrap'
 import { buildOf } from './version'
@@ -24,8 +25,14 @@ export default {
 	fetch: (request, env, ctx) => app.fetch(request, env, ctx),
 	queue: (batch, env) => handleQueue(batch, env, { ...inboxDeps, delivery }),
 	// Every 5 minutes: the delivery sweep and doorbell, the media sweep and reconciliation, a round of inbound jobs
-	// (purges, Moves), and the daily backup when it is due or running. Each is a no-op in maintenance, by design.
+	// (purges, Moves), the daily backup when it is due or running, and a turn of the streaming API (which closes the
+	// sockets of expired tokens). Each is a no-op in maintenance, by design.
 	scheduled: (_controller, env, ctx) => {
+		ctx.waitUntil(
+			defaultStore(env)
+				.streamTick(buildOf(env))
+				.catch((error: unknown) => console.error({ event: 'kopje.stream.tick-failed', ...errorFields(error) }))
+		)
 		ctx.waitUntil(
 			scheduledBackup(env, { build: buildOf, store: defaultStore, now, fetch: (request) => fetch(request) })
 		)

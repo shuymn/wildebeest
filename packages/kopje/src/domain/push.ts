@@ -249,7 +249,9 @@ function contentOf(db: Db, row: TargetRow, origin: string): PushContent {
 	}
 }
 
-function instanceOrigin(db: Db): string | null {
+// The instance's origin, what the Store presents with where no request gives one (pushes, streamed messages); null
+// before /setup.
+export function instanceOrigin(db: Db): string | null {
 	const domain = db.first<{ value: string }>("SELECT value FROM instance_settings WHERE name = 'domain'")?.value
 	return domain === undefined ? null : `https://${domain}`
 }

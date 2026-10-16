@@ -48,7 +48,7 @@ fi
 
 projects=()
 if [ "$KOPJE" = true ]; then
-	projects+=(--project kopje --project kopje-cli)
+	projects+=(--project kopje --project kopje-streaming --project kopje-cli)
 fi
 if [ "$LEGACY" = true ]; then
 	projects+=(--project @wildebeest/backend --project consumer)

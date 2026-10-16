@@ -9,6 +9,7 @@ import { bindAll, readColumn, textLiteral, valueLiteral } from './dump-literals'
 //                         the source object), maintenance, dump and import are state of one object at one time
 //   media_orphans         tombstones of R2 objects to delete; a restored Store must not delete what it restores
 //   backup_media          the backup's media index for one bucket; a restored Store starts a fresh media baseline
+//   stream_*              the streaming API's registry, journal and position: state of the sockets of one object
 //   _cf_*                 platform internals
 //   sqlite_* internals    except sqlite_sequence (AUTOINCREMENT counters), which is restored by name
 export const STATE_TABLE = 'kopje_state'
@@ -48,6 +49,7 @@ function excluded(name: string): boolean {
 		name === 'kopje_migrations' ||
 		name === 'media_orphans' ||
 		name === 'backup_media' ||
+		name.startsWith('stream_') ||
 		name.startsWith('_cf_') ||
 		(name.startsWith('sqlite_') && name !== SEQUENCE_TABLE)
 	)
