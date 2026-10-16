@@ -21,13 +21,20 @@ export class RemoteWeb {
 	readonly fetched: string[] = []
 	// The keyId each fetch was signed with ('unsigned' if none).
 	readonly signers: string[] = []
+	// URLs answered only to a fetch signed with the given keyId (403 otherwise), as a followers-only object is.
+	readonly signedOnly = new Map<string, string>()
 
 	readonly fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
 		const request = input instanceof Request ? input : new Request(input, init)
 		const url = new URL(request.url)
 		url.hash = ''
 		this.fetched.push(url.href)
-		this.signers.push(/keyId="([^"]+)"/.exec(request.headers.get('signature') ?? '')?.[1] ?? 'unsigned')
+		const signer = /keyId="([^"]+)"/.exec(request.headers.get('signature') ?? '')?.[1] ?? 'unsigned'
+		this.signers.push(signer)
+		const only = this.signedOnly.get(url.href)
+		if (only !== undefined && only !== signer) {
+			return Promise.resolve(new Response('Forbidden', { status: 403 }))
+		}
 		const served = this.served.get(url.href)
 		if (served === undefined) {
 			return Promise.resolve(new Response('Not Found', { status: 404 }))

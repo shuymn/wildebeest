@@ -363,7 +363,8 @@ export async function receiveInbound(deps: InboundDeps, request: InboundRequest)
 	}
 	const origin = `https://${deps.domain}`
 	const state: FederationState = { resolvedUsername: null, source: null, storeError: null }
-	const loaders = createRemoteLoaders(deps, state, deps.recipient, requestBudget(Date.now()))
+	const budget = requestBudget(Date.now())
+	const loaders = createRemoteLoaders(deps, state, deps.recipient, budget)
 	const parsed = parseActivity(request.body)
 
 	const served = new Map<string, ServedKey>()
@@ -458,7 +459,13 @@ export async function receiveInbound(deps: InboundDeps, request: InboundRequest)
 		if (need === undefined) {
 			break
 		}
-		const fetched = await fetchNeeded(need, origin, loaders)
+		// A document the Store wants signed by a local follower of its author (an Add's pinned status) is fetched with that
+		// follower's key, within the same budget (DATA-7).
+		const needLoaders =
+			need.signer === undefined || need.signer === null || need.signer === deps.recipient
+				? loaders
+				: createRemoteLoaders(deps, state, need.signer, budget)
+		const fetched = await fetchNeeded(need, origin, needLoaders)
 		rethrowStoreError(state)
 		if (fetched === 'transient') {
 			return { status: 503, reason: 'object-unavailable' }

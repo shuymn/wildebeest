@@ -24,6 +24,7 @@ import {
 	actorCollections,
 	collectionOf,
 	featureRemote,
+	localFollower,
 	pinRemote,
 	requestCollectionSync,
 	unfeatureRemote,
@@ -191,7 +192,8 @@ export type ReceiveResult = {
 	reason: string
 	jobsPending: boolean
 	delivers?: boolean
-	need?: { kind: 'status' | 'actor'; uri: string }
+	// signer: the local account whose key signs the fetch (a follower of the status's author), else the inbox's own.
+	need?: { kind: 'status' | 'actor'; uri: string; signer?: string | null }
 	// Nothing changed, and the activity may apply later (its retraction could not be recorded): answered 503.
 	retry?: boolean
 }
@@ -2068,7 +2070,12 @@ const add: Handler<'Add'> = (db, actor, activity, input) => {
 		}
 		const fetched = input.prefetched?.statuses[object.status]
 		if (fetched === undefined) {
-			return { ...ignored('need-object'), need: { kind: 'status', uri: object.status } }
+			// Signed by a local follower, as Mastodon's status_from_object fetches on behalf of one, so a status for the
+			// author's followers is served.
+			return {
+				...ignored('need-object'),
+				need: { kind: 'status', uri: object.status, signer: localFollower(db, actor.id) },
+			}
 		}
 		if (fetched === null) {
 			return ignored('unfetchable')

@@ -202,6 +202,21 @@ export function unfeatureRemote(db: Db, accountId: string, name: string): boolea
 
 // ---- Syncs
 
+// The username of the first available local account that follows the account (Mastodon's local_follower), whose key
+// signs fetches on the account's behalf, or null. Walked from the local accounts, each a key lookup of its follow: the
+// account's remote followers, however many, are never read.
+export function localFollower(db: Db, accountId: string): string | null {
+	return (
+		db.first<{ username: string }>(
+			`SELECT a.username FROM local_accounts l CROSS JOIN accounts a ON a.id = l.account_id
+			WHERE ${availableLocalSql('l')} AND EXISTS (SELECT 1 FROM follows f
+				WHERE f.account_id = l.account_id AND f.target_account_id = ? AND f.state = 'accepted')
+			ORDER BY l.account_id LIMIT 1`,
+			accountId
+		)?.username ?? null
+	)
+}
+
 // A sync a round claimed: the account, the collections its stored document names, and the local follower whose key
 // signs the fetches (FetchFeaturedCollectionService#local_follower: the first available one), or null for the
 // instance actor. pending: another sync waits.
@@ -244,20 +259,11 @@ export const claimCollectionSync = writeOperation<{ now: number }, CollectionSyn
 			now + SYNC_LEASE_MS,
 			row.account_id
 		)
-		// Walked from the local accounts, each a key lookup of its follow: the account's remote followers, however many,
-		// are never read.
-		const signer = db.first<{ username: string }>(
-			`SELECT a.username FROM local_accounts l CROSS JOIN accounts a ON a.id = l.account_id
-			WHERE ${availableLocalSql('l')} AND EXISTS (SELECT 1 FROM follows f
-				WHERE f.account_id = l.account_id AND f.target_account_id = ? AND f.state = 'accepted')
-			ORDER BY l.account_id LIMIT 1`,
-			row.account_id
-		)
 		return {
 			accountUri: account.uri,
 			generation: row.generation,
 			...actorCollections(account.raw),
-			signer: signer?.username ?? null,
+			signer: localFollower(db, row.account_id),
 			pending: claimable(db, now) !== undefined,
 		}
 	}

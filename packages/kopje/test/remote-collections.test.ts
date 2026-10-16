@@ -6,6 +6,7 @@ import { BUILD } from './helpers'
 import { MASTODON, mastodonActor, type TestActor } from './inbox-helpers'
 import {
 	ALICE,
+	ALICE_URI,
 	AS,
 	create,
 	DAVE,
@@ -141,14 +142,18 @@ describe('learning a remote account’s collections from Add and Remove', () => 
 		expect((await t.request('/@nobody@mastodon.example/tagged/cats')).status).toBe(404)
 	})
 
-	it('fetches a status it does not have yet, for an actor with local followers', async () => {
+	it('fetches a status it does not have yet as a local follower, for an Add at the shared inbox', async () => {
 		const t = await setup()
 		const bob = await mastodonActor(t.web, 'bob')
 		const bobId = await followed(t, bob)
-		const note = mastodonNote(bob)
+		// Followers-only, served only to a fetch signed by alice, who follows bob.
+		const note = mastodonNote(bob, { to: [`${bob.uri}/followers`], cc: [] })
 		t.web.serve(note.id, { '@context': AS, ...note })
-		expect(await t.post(bob, addOrRemove('Add', bob, note.id))).toBe(202)
-		expect(await pinned(t, bobId, null)).toEqual([note.id])
+		t.web.signedOnly.set(note.id, `${ALICE_URI}#main-key`)
+		expect(await t.post(bob, addOrRemove('Add', bob, note.id), { path: '/inbox' })).toBe(202)
+		expect(t.web.fetched).toContain(note.id)
+		expect(await pinned(t, bobId, 'alice')).toEqual([note.id])
+		expect(await pinned(t, bobId, 'dave')).toEqual([])
 	})
 
 	it('ignores a forged Add: another actor’s, to a collection on another host, of another account’s status', async () => {
@@ -282,7 +287,7 @@ describe('reading a remote account’s collections', () => {
 		expect(await pinned(t, bobId, 'dave')).toEqual([stored.id])
 		expect((await featuredTags(t, bobId)).map((tag) => tag.name)).toEqual(['Cats', 'Dogs'])
 		// Fetched as alice, bob's local follower (FetchFeaturedCollectionService#local_follower).
-		expect(t.web.signers[t.web.fetched.indexOf(fetched.id)]).toBe('https://kopje.test/ap/users/alice#main-key')
+		expect(t.web.signers[t.web.fetched.indexOf(fetched.id)]).toBe(`${ALICE_URI}#main-key`)
 
 		// His followers collection shows no items: he hides his network, from everyone but himself.
 		const account = await t.api<Account>(`/api/v1/accounts/${bobId}`, 'dave')
