@@ -9,7 +9,7 @@ import {
 	statusReads,
 	type WithVisibleStatus,
 } from './audience'
-import { type UserContext, userReadOperation, userWriteOperation } from './auth'
+import { currentCredentialSql, type UserContext, userReadOperation, userWriteOperation } from './auth'
 import { addToConversation } from './conversations'
 import { presentStatuses, type Status } from './status-presenter'
 import type { Db } from '../db/sql'
@@ -194,12 +194,13 @@ function groupKeyOf(db: Db, input: NotifyInput): string | null {
 export const MAX_PUSH_BACKLOG = 1000
 
 // Whether subscription `p`, made with access token `t`, wants a push of notification `n` (table aliases), as Mastodon's
-// Web::PushSubscription#pushable? decides it: the token is the recipient's and still valid at `now` (an ISO time), the
-// subscription's alert for the type is on, and its policy lets the sender through (followed: the recipient follows
-// the sender; follower: the sender follows the recipient; none: nothing).
+// Web::PushSubscription#pushable? decides it: the token is the recipient's, still valid at `now` (an ISO time) and of
+// its account's current credential epoch (currentCredentialSql), so no push is queued, claimed or confirmed for an
+// earlier one; the subscription's alert for the type is on, and its policy lets the sender through (followed: the
+// recipient follows the sender; follower: the sender follows the recipient; none: nothing).
 export function pushWantedSql(p: string, t: string, n: string, now: string): string {
 	return `(${t}.kind = 'access' AND ${t}.account_id = ${n}.account_id
-		AND (${t}.expires_at IS NULL OR ${t}.expires_at > ${now})
+		AND (${t}.expires_at IS NULL OR ${t}.expires_at > ${now}) AND ${currentCredentialSql(t)}
 		AND json_extract(${p}.alerts, '$."' || ${n}.type || '"') IS 1
 		AND (${p}.policy = 'all'
 			OR (${p}.policy = 'followed' AND EXISTS (SELECT 1 FROM follows pf

@@ -1,4 +1,4 @@
-import { isActorObject, outboundKind, recipientsFor } from './audience'
+import { availableLocalSql, isActorObject, outboundKind, recipientsFor } from './audience'
 import { readOperation, writeOperation } from './operation'
 import type { Db } from '../db/sql'
 
@@ -294,6 +294,17 @@ export function enqueueActivity(
 	// Create to servers that lack the status, but for the inboxes of its poll's voters, which have it (they voted in it)
 	// and take its counts from an Update only (DistributePollUpdateWorker).
 	if (object !== null && envelope.activity.type === 'Update' && isActorObject(envelope.activity.object)) {
+		// A restoration Update still staging its audience carries the new document too, so a server it reaches after
+		// this Update is not left with the older profile. (No profile changes while the account is suspended, so a
+		// suspension's Update is never rewritten.)
+		db.run(
+			`UPDATE outbound_activities SET body = json_set(body, '$.activity.object', json(?3))
+			WHERE account_id = ?1 AND object_uri = ?2 AND retracts = 0 AND staged IS NOT NULL
+				AND json_extract(body, '$.activity.object.suspended') IS NOT 1`,
+			signerId,
+			object,
+			JSON.stringify(envelope.activity.object)
+		)
 		replaceWaiting(
 			db,
 			signerId,
@@ -326,18 +337,31 @@ export function enqueueActivity(
 	expandPending(db, now, EXPANSION_STEP)
 }
 
-const SUPERSEDED = `account_id = ? AND object_uri = ? AND (? OR json_extract(body, '$.activity.type') IN (SELECT value FROM json_each(?)))`
+// The earlier activities about an object that a new one supersedes. A moderation Update still staging (retracts 0,
+// staged set: beginStagedUpdate) is superseded only by another (`moderation`): a profile edit made while the
+// restoration's audience is staged must not cut that audience down to the followers.
+const SUPERSEDED = `account_id = ? AND object_uri = ?
+	AND (? OR json_extract(body, '$.activity.type') IN (SELECT value FROM json_each(?)))
+	AND (? OR retracts = 1 OR staged IS NULL)`
 
 // Marks the earlier activities a new one about the object follows. A retraction still staging (stageRetraction) is
 // complete then: the new retraction targets every inbox it held or would have.
-function supersede(db: Db, signerId: string, object: string, retracts: boolean, types: string[] = []): void {
+function supersede(
+	db: Db,
+	signerId: string,
+	object: string,
+	retracts: boolean,
+	types: string[] = [],
+	moderation = false
+): void {
 	const stopped = db.all<{ id: string }>(
 		`UPDATE outbound_activities SET superseded = 1, staged = NULL WHERE ${SUPERSEDED}
 		RETURNING CAST(id AS TEXT) AS id`,
 		signerId,
 		object,
 		retracts ? 1 : 0,
-		JSON.stringify(types)
+		JSON.stringify(types),
+		moderation ? 1 : 0
 	)
 	for (const { id } of stopped) {
 		dropSettledActivity(db, id)
@@ -371,7 +395,8 @@ export function beginRetraction(
 					signerId,
 					object,
 					1,
-					'[]'
+					'[]',
+					0
 				)?.n ?? 0)
 	// Each superseded intent is updated and may be dropped; then the intent itself.
 	if (2 * superseded + 1 > maxRows) {
@@ -425,6 +450,52 @@ export function stageRetraction(db: Db, signerId: string, object: string, maxRow
 		dropSettledActivity(db, intent.id)
 	}
 	return done
+}
+
+// An intent whose targets the moderation jobs stage (domain/suspension.ts): the Update of a local actor that a
+// suspension or an unsuspension sends to an audience read in bounded rounds (R1, AccountReachFinder). beginStagedUpdate
+// records it with no targets, superseding the earlier Updates of the actor, a moderation one still staging included
+// (it stops: its generation has ended); a profile Update supersedes none still staging (SUPERSEDED). While `staged` is
+// set the intent is kept even with no rows.
+// stageTargets writes targets to it as chunks, which claims may expand at once; endStaging releases it. Returns the
+// intent's id. Its chunks come after those of intents recorded meanwhile.
+export function beginStagedUpdate(db: Db, signerId: string, envelope: DeliveryEnvelope, now: number): string {
+	const { object } = subjectOf(envelope.activity, false)
+	if (object !== null) {
+		supersede(db, signerId, object, false, supersededTypes(envelope.activity.type), true)
+	}
+	return db.first<{ id: string }>(
+		`INSERT INTO outbound_activities (account_id, body, object_uri, retracts, staged, created_at)
+		VALUES (?, ?, ?, 0, '', ?) RETURNING CAST(id AS TEXT) AS id`,
+		signerId,
+		JSON.stringify(envelope),
+		object,
+		now
+	)!.id
+}
+
+// Writes `inboxes` (neutral copies) as chunks of the staged intent `intentId`, and returns how many rows it wrote; none
+// when the intent is no longer staging (superseded, or gone).
+export function stageTargets(db: Db, intentId: string, inboxes: readonly string[]): number {
+	if (
+		db.first(
+			'SELECT 1 AS x FROM outbound_activities WHERE id = CAST(? AS INTEGER) AND staged IS NOT NULL',
+			intentId
+		) === undefined
+	) {
+		return 0
+	}
+	const chunks = chunked(inboxes.filter(isDeliverableInbox).map((inbox) => ({ inbox, addressee: null })))
+	for (const chunk of chunks) {
+		db.run('INSERT INTO outbound_targets (activity_id, targets) VALUES (CAST(? AS INTEGER), ?)', intentId, chunk.json)
+	}
+	return chunks.length
+}
+
+// Releases a staged intent: no more targets come, and it goes once its rows are settled.
+export function endStaging(db: Db, intentId: string): void {
+	db.run('UPDATE outbound_activities SET staged = NULL WHERE id = CAST(? AS INTEGER) AND staged IS NOT NULL', intentId)
+	dropSettledActivity(db, intentId)
 }
 
 // The fixed order a retraction is staged in: personal copies first (as audienceTargets orders them), then by inbox.
@@ -763,8 +834,37 @@ function bodyFor(activity: string, addressee: string | null): string {
 // signs as claim.instanceActor.
 export const INSTANCE_SIGNER = 'instance'
 
+// R1 for a suspended local sender: what its lane holds is dropped when claimed, not sent, except a retraction
+// (outboundKind: a Delete, an Undo, a Reject that withdraws, which VIS-3 sends to every earlier receiver) and the
+// suspension's own Update of its actor (the redacted document, `suspended: true`). Queued content is dropped when it is
+// claimed while the sender is suspended, which the queue does within moments of the suspension; a row not claimed by
+// the time of an unsuspension is sent then. The restoration's Update is recorded once the account is no longer
+// suspended, so it passes; one claimed after the account is suspended again does not. The claim is the boundary: a row
+// leased before the suspension committed may still be sent while its lease lasts.
+const REFUSED_SENDER = `EXISTS (SELECT 1 FROM local_accounts l
+	WHERE l.account_id = ?1 AND NOT ${availableLocalSql('l')} AND o.retracts = 0
+		AND NOT (json_extract(o.body, '$.activity.type') = 'Update'
+			AND json_extract(o.body, '$.activity.object.suspended') IS 1
+			AND json_extract(o.body, '$.activity.object.id') = json_extract(o.body, '$.activity.actor')))`
+
+// A due row's activity as sent (its body, and who signs it), and whether its sender is refused (above); undefined when
+// the activity is gone, which is never refused.
+function claimedActivity(
+	db: Db,
+	row: LaneRow
+): { activity: string; signed_by: string | null; refused: number } | undefined {
+	return db.first<{ activity: string; signed_by: string | null; refused: number }>(
+		`SELECT json_extract(o.body, '$.activity') AS activity, json_extract(o.body, '$.signedBy') AS signed_by,
+			${REFUSED_SENDER} AS refused
+		FROM outbound_activities o WHERE o.id = CAST(?2 AS INTEGER)`,
+		row.account_id,
+		row.activity_id
+	)
+}
+
 // Expands one step, then leases up to `limit` due lane heads (RES-6: a claim reads and returns a bounded number of
-// rows). An expired lease is due again; one that has used up its attempts is given up instead of claimed.
+// rows). An expired lease is due again; one that has used up its attempts is given up instead of claimed; one of a
+// suspended sender is dropped (REFUSED_SENDER).
 export const claimDeliveries = writeOperation<{ now: number; leaseToken: string; limit?: number }, Claim>(
 	(db, { now, leaseToken, limit }) => {
 		expandPending(db, now, EXPANSION_STEP)
@@ -778,6 +878,14 @@ export const claimDeliveries = writeOperation<{ now: number; leaseToken: string;
 		)
 		const claimed: ClaimedDelivery[] = []
 		for (const row of due) {
+			// Read before the lease, which changes neither the activity nor the sender.
+			const body = claimedActivity(db, row)
+			if (body?.refused === 1) {
+				db.run('DELETE FROM deliveries WHERE id = CAST(? AS INTEGER)', row.id)
+				promoteLane(db, row.account_id, row.lane, now)
+				dropSettledActivity(db, row.activity_id)
+				continue
+			}
 			if (row.attempts >= MAX_ATTEMPTS) {
 				giveUp(db, row, now, null, 'lease expired')
 				continue
@@ -790,11 +898,6 @@ export const claimDeliveries = writeOperation<{ now: number; leaseToken: string;
 				leaseUntil,
 				now,
 				row.id
-			)
-			const body = db.first<{ activity: string; signed_by: string | null }>(
-				`SELECT json_extract(body, '$.activity') AS activity, json_extract(body, '$.signedBy') AS signed_by
-				FROM outbound_activities WHERE id = CAST(? AS INTEGER)`,
-				row.activity_id
 			)
 			claimed.push({
 				id: row.id,

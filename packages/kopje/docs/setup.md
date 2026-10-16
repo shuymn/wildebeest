@@ -82,6 +82,12 @@ lowercasing, is refused):
 kopje-admin account set-email <username> <email>
 ```
 
+When its `status` is `suspended`, unsuspend it (its old tokens stay refused, so it signs in again):
+
+```sh
+kopje-admin account unsuspend <username>
+```
+
 `kopje-admin moderation-log` lists what the admin did through the API, and these repairs, newest first
 (`--before <id>` continues the list).
 

@@ -42,12 +42,14 @@ export function adminHarness(
 	const testEnv = { ...env, ...overrides } as unknown as Env
 	// Doorbells are recorded, never sent: the test pool's Queue would run the real consumer.
 	const doorbell = vi.fn(() => Promise.resolve())
+	const jobs = vi.fn(() => Promise.resolve())
 	const app = createApp({
 		build: () => BUILD,
 		now: () => NOW,
 		store: () => store,
 		fetch: team.fetch,
 		doorbell,
+		jobs,
 		...(federation === undefined ? {} : { federation }),
 		...(images === undefined ? {} : { images }),
 	})
@@ -60,5 +62,5 @@ export function adminHarness(
 	}
 	const post = (claims: Claims, path: string, body: unknown = {}) =>
 		as(claims, path, { method: 'POST', body: JSON.stringify(body), headers: { 'content-type': 'application/json' } })
-	return { app, request, as, post, env: testEnv, doorbell }
+	return { app, request, as, post, env: testEnv, doorbell, jobs }
 }

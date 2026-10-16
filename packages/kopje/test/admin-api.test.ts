@@ -216,15 +216,15 @@ describe('admin operations', () => {
 		expect(await run(h.store, usersRead, token, 'admin:read:accounts')).toEqual({ status: 'forbidden' })
 	})
 
-	it('grant manage_reports only (ADMIN_PERMISSIONS = 16), so every other admin operation refuses the admin', async () => {
+	it('grant manage_reports and manage_users (ADMIN_PERMISSIONS = 1040), so every other admin operation refuses the admin', async () => {
 		const { h, owner } = await withAdmin()
-		expect(ADMIN_PERMISSIONS).toBe(ADMIN_PERMISSION.manageReports)
+		expect(ADMIN_PERMISSIONS).toBe(1040)
+		const served: number[] = [ADMIN_PERMISSION.manageReports, ADMIN_PERMISSION.manageUsers]
 		const token = await userToken(h, OWNER)
 		for (const permission of Object.values(ADMIN_PERMISSION)) {
 			const read = adminReadOperation(permission, (_db, _input, admin) => admin.accountId)
 			const write = adminWriteOperation(permission, (_db, _input, admin) => admin.accountId)
-			const want =
-				permission === ADMIN_PERMISSION.manageReports ? { status: 'ok', value: owner } : { status: 'forbidden' }
+			const want = served.includes(permission) ? { status: 'ok', value: owner } : { status: 'forbidden' }
 			expect(await run(h.store, read as Operation, token, 'admin:read')).toEqual(want)
 			expect(await run(h.store, write as Operation, token, 'admin:write')).toEqual(want)
 		}
@@ -240,7 +240,7 @@ describe('admin operations', () => {
 					role: unknown
 				}>()
 			).role
-		expect(await role(OWNER)).toEqual({ id: '3', name: 'Owner', permissions: '16', color: '', highlighted: true })
+		expect(await role(OWNER)).toEqual({ id: '3', name: 'Owner', permissions: '1040', color: '', highlighted: true })
 		expect(await role('alice@example.com')).toEqual({
 			id: '-99',
 			name: '',
@@ -261,15 +261,19 @@ describe('admin routes (AUTH-2)', () => {
 	const UNSTORED = /\/admin\/(domain_blocks|domain_allows|ip_blocks|email_domain_blocks|canonical_email_blocks)\/:id$/
 	const TRENDS = /^\/api\/v1\/admin\/trends\/(tags|links|statuses)$/
 
-	// Reports are served (manage_reports): to the admin, the list (empty here) and, for an id that is not a report,
-	// 404; to everyone else 403, as to a role without the permission.
-	const REPORTS = /^\/api\/v1\/admin\/reports(\/|$)/
-	const expected = (path: string, who = 'user'): { status: number; body: unknown } =>
+	// Reports (manage_reports) and accounts (manage_users) are served: to the admin, the lists (no report here, the two
+	// local accounts) and, for an id that is no record's, 404; to everyone else 403, as to a role without the
+	// permission. Deleting an account's data (delete_user_data) is not served: 403 to everyone.
+	const SERVED = /^\/api\/v1\/admin\/reports(\/|$)|^\/api\/v[12]\/admin\/accounts(\/|$)/
+	const LISTS = new Set(['/api/v1/admin/accounts', '/api/v2/admin/accounts'])
+	const expected = (path: string, who = 'user', method = 'GET'): { status: number; body: unknown } =>
 		TRENDS.test(path) || (who === 'admin' && path === '/api/v1/admin/reports')
 			? { status: 200, body: [] }
-			: UNSTORED.test(path) || (who === 'admin' && REPORTS.test(path))
-				? { status: 404, body: { error: 'Record not found' } }
-				: { status: 403, body: { error: 'This action is not allowed' } }
+			: who === 'admin' && LISTS.has(path)
+				? { status: 200, body: expect.arrayContaining([expect.objectContaining({ username: 'owner' })]) }
+				: UNSTORED.test(path) || (who === 'admin' && SERVED.test(path) && method !== 'DELETE')
+					? { status: 404, body: { error: 'Record not found' } }
+					: { status: 403, body: { error: 'This action is not allowed' } }
 
 	const tokens = async (h: ApiHarness) => ({
 		anonymous: null,
@@ -295,7 +299,7 @@ describe('admin routes (AUTH-2)', () => {
 		for (const route of adminRoutes) {
 			const path = route.path.replace(/:\w+/g, '1')
 			for (const [who, token] of Object.entries(callers)) {
-				const want = expected(route.path, who)
+				const want = expected(route.path, who, route.method)
 				const init = { method: route.method }
 				const response = await h.request(path, token === null ? init : bearer(token, init))
 				expect(response.status, `${route.method} ${route.path} as ${who}`).toBe(want.status)

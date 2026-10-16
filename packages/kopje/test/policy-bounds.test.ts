@@ -15,10 +15,9 @@ import {
 	ADMIN_ACCOUNT_CANDIDATES,
 	type AdminAccountFilter,
 	type AdminAccountList,
-	adminAccountOperations,
+	listAdminAccounts,
 } from '../src/domain/admin-accounts'
 import { CAPTURE_BOOST_SCAN, canView, deleteAudience, visibleSql, type Visibility } from '../src/domain/audience'
-import { ADMIN_PERMISSION, ADMIN_PERMISSIONS, adminGuarded } from '../src/domain/auth'
 import { backfillConversations } from '../src/domain/conversation-rows'
 import { listConversations } from '../src/domain/conversations'
 import { directory, DIRECTORY_WINDOW } from '../src/domain/directory'
@@ -5155,18 +5154,12 @@ describe("the admin's report list reads a page, however many reports do not matc
 // the suspended local accounts and the accounts_deleted range in id order; anything else walks the primary key, newest
 // first, skipping only local accounts (remote) or unavailable ones (active). Each case holds the same matches among 20
 // or 2,000 times as many accounts that do not match (or, for the walks, that all match), and reads the same rows on
-// the newest page, a middle one and the final one. Tested with manage_users granted (adminGuarded), as Kopje grants it
-// once local suspension is served.
+// the newest page, a middle one and the final one.
 describe("the admin's account list reads a page, however many accounts do not match (RES-7)", () => {
 	const ADMIN_ID = '690000000000000000'
 	const ADMIN_TOKEN = 'admin-accounts-token'
 	const FEW = 30
 	const LIMIT = 10
-	const GRANTED = ADMIN_PERMISSIONS | ADMIN_PERMISSION.manageUsers
-	const { listAdminAccounts } = adminAccountOperations(
-		adminGuarded(readOperation, GRANTED),
-		adminGuarded(writeOperation, GRANTED)
-	)
 	const NONE: AdminAccountFilter = {
 		origin: null,
 		status: null,
