@@ -2,13 +2,15 @@ import { type DocumentLoader, FetchError } from '@fedify/fedify'
 
 import { createRemoteLoaders, type FederationDeps, type FederationState, type RemoteLoaders } from './federation'
 import type { InboxDeps } from './inbox'
-import { isTransientLoadError, requestBudget } from './loader'
+import { isTransientLoadError, REQUEST_DEADLINE_MS, requestBudget } from './loader'
 import { fetchActor } from './remote-actor'
 import { fetchRemoteStatus, idOf } from './remote-status'
 import type { RemoteActorInput } from '../domain/inbox'
 import {
 	type Fetched,
+	QUOTE_LEASE_MS,
 	QUOTE_ROUND,
+	QUOTE_STAGES,
 	type QuoteVerification,
 	type QuoteVerified,
 	type StampInput,
@@ -31,6 +33,12 @@ import { StoreUnavailableError } from '../platform/store-errors'
 // transaction; every failure of a stage is charged (a budget or deadline that ran out included), so a stage that never
 // fits a budget is given up after the last attempt. The stamp's embedded objects are never trusted: only their ids are
 // read. Nothing of this instance's origin is fetched.
+
+// A round's claim must outlast the round (domain/quotes.ts QUOTE_LEASE_MS): twice its worst case of fetching.
+export const QUOTE_ROUND_WORST_MS = QUOTE_ROUND * QUOTE_STAGES * REQUEST_DEADLINE_MS
+if (QUOTE_LEASE_MS < 2 * QUOTE_ROUND_WORST_MS) {
+	throw new Error('QUOTE_LEASE_MS must be at least twice a round of QUOTE_ROUND quotes of QUOTE_STAGES stages')
+}
 
 const AS_CONTEXT = 'https://www.w3.org/ns/activitystreams'
 
@@ -140,7 +148,7 @@ async function verifyQuote(
 	run: { generation?: number; state: FederationState }
 ): Promise<boolean> {
 	// The quoted status, its author, the status again (now storable), the stamp, and the decision.
-	for (let stage = 0; stage < 5; stage++) {
+	for (let stage = 0; stage < QUOTE_STAGES; stage++) {
 		const work = await rpc((s) => s.quoteWork(build, { statusId }))
 		if (work === null) {
 			return false

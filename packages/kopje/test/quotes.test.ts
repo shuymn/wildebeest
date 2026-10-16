@@ -43,10 +43,12 @@ import {
 	QUOTE_HOPS,
 	QUOTE_LEASE_MS,
 	QUOTE_ROUND,
+	QUOTE_STAGES,
 	type QuoteVerification,
 	type QuoteWork,
 } from '../src/domain/quotes'
 import { syncCollections } from '../src/federation/collections'
+import { REQUEST_DEADLINE_MS } from '../src/federation/loader'
 import { verifyQuotes } from '../src/federation/quotes'
 import { parseRemoteStatus } from '../src/federation/remote-status'
 import { StoreUnavailableError } from '../src/platform/store-errors'
@@ -1688,5 +1690,77 @@ describe('review round 1 regressions', () => {
 				"SELECT count(*) AS n FROM quotes WHERE status_id GLOB '979*' AND recheck = 0 AND verify_after IS NULL"
 			)
 		).toEqual([{ n: 150 }])
+	})
+
+	it('marks the second quote of a batch, held with its target found by its uri, when a relayed Delete races its fetch', async () => {
+		const { t, bob, carol } = await world()
+		await followed(t, carol)
+		const target = mastodonNote(carol)
+		t.web.serve(target.id, { '@context': AS, ...target })
+		const pairs = [0, 1].map(() => {
+			const stamp = stampUri(carol)
+			const quote = quoting(bob, target.id, stamp)
+			serveStamp(t.web, stamp, carol, quote.id, target.id)
+			return { stamp, quote }
+		})
+		for (const { quote } of pairs) {
+			expect(await t.postOnly(bob, create(bob, quote))).toBe(202)
+		}
+		const [, second] = pairs as [unknown, { stamp: string; quote: Note }]
+		const dan = await mastodonActor(t.web, 'dan', { origin: RELAY, key: 6 })
+		let marked = false
+		await roundWith(t, second.stamp, async () => {
+			// The first quote stored the target; this one is held by the round, its target not linked yet.
+			expect(
+				await sql(
+					t.store,
+					'SELECT quoted_account_id FROM quotes q JOIN statuses s ON s.id = q.status_id WHERE s.uri = ?',
+					second.quote.id
+				)
+			).toEqual([{ quoted_account_id: null }])
+			const relay = {
+				'@context': AS,
+				id: `${carol.uri}#delete-${nextId()}`,
+				type: 'Delete',
+				actor: carol.uri,
+				object: second.stamp,
+			}
+			expect(await t.postOnly(dan, relay)).toBe(202)
+			marked = (await workOf(t, second.quote.id)).recheck === 1
+		})()
+		expect(marked).toBe(true)
+		// The valid stamp accepted it, and the raced Delete has it checked once more.
+		expect(await quoteOf(t, second.quote.id)).toMatchObject({ state: 'accepted', verify_after: NOW })
+	})
+
+	it('rechecks the quote a stamp accepted, not a self-quote that names the same stamp', async () => {
+		const { t, bob, carol } = await world()
+		await followed(t, carol)
+		const pair = quotedPair(t, bob, carol)
+		// carol's self-quote names the stamp too (accepted without it), and arrives first.
+		const own = mastodonNote(carol)
+		expect(await t.post(carol, create(carol, own))).toBe(202)
+		const self = quoting(carol, own.id, pair.stamp)
+		expect(await t.post(carol, create(carol, self))).toBe(202)
+		expect(await quoteOf(t, self.id)).toMatchObject({ state: 'accepted', verify_after: null })
+		expect(await t.post(bob, create(bob, pair.quote))).toBe(202)
+		expect(await quoteOf(t, pair.quote.id)).toMatchObject({ state: 'accepted', verify_after: null })
+		// An unproven relay of carol's Delete renews the check of bob's quote, the one the stamp accepted.
+		const dan = await mastodonActor(t.web, 'dan', { origin: RELAY, key: 6 })
+		const relay = {
+			'@context': AS,
+			id: `${carol.uri}#delete-${nextId()}`,
+			type: 'Delete',
+			actor: carol.uri,
+			object: pair.stamp,
+		}
+		expect(await t.postOnly(dan, relay)).toBe(202)
+		expect(await quoteOf(t, pair.quote.id)).toMatchObject({ state: 'accepted', verify_after: NOW })
+		expect(await quoteOf(t, self.id)).toMatchObject({ verify_after: null })
+	})
+
+	it('leases a claim for longer than a round can run', () => {
+		// A round: QUOTE_ROUND quotes of QUOTE_STAGES stages, each stage's fetches ending by its budget's deadline.
+		expect(QUOTE_LEASE_MS).toBeGreaterThanOrEqual(2 * QUOTE_ROUND * QUOTE_STAGES * REQUEST_DEADLINE_MS)
 	})
 })

@@ -1558,7 +1558,7 @@ export const STATUS_CHILDREN: readonly { table: string; column: string; remove: 
 		table: 'quotes',
 		column: 'quoted_status_id',
 		remove: [
-			`UPDATE quotes SET quoted_status_id = NULL, quoted_account_id = NULL, generation = ${NEW_GENERATION},
+			`UPDATE quotes SET quoted_status_id = NULL, quoted_account_id = NULL, generation = ${NEW_GENERATION}, lease_until = NULL,
 				state = CASE state WHEN 'accepted' THEN 'deleted' ELSE state END, verify_after = NULL
 			WHERE status_id IN (SELECT status_id FROM quotes WHERE quoted_status_id = ?1 LIMIT CAST(?2 / 2 AS INTEGER))`,
 		],

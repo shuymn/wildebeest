@@ -36,8 +36,16 @@ export const QUOTE_ROUND = 10
 // The delays before each retry of a verification that failed in a way that may pass (Mastodon retries five times).
 // After the last one the work is given up, and the quote stays pending until its status arrives again.
 export const QUOTE_BACKOFF_MS = [1, 5, 30, 120, 720].map((minutes) => minutes * 60 * 1000)
-// How long a round's claim holds a quote from other rounds.
-export const QUOTE_LEASE_MS = 10 * 60 * 1000
+// The stages one quote's verification runs at most in a round: the quoted status, its author, the status again, the
+// stamp, and the decision (federation/quotes.ts verifyQuote).
+export const QUOTE_STAGES = 5
+// How long a round's claim holds a quote from other rounds: longer than a live round can run, so its lease never
+// expires under it. A stage's fetches all end by its fetch budget's deadline (REQUEST_DEADLINE_MS, 15 s: the loader
+// bounds each load, redirects, signing and body included, by what is left of it), and a round runs at most
+// QUOTE_ROUND quotes of QUOTE_STAGES stages one after another: 10 × 5 × 15 s = 12.5 minutes of fetching at worst.
+// Twice that covers the Store RPCs between stages and the JSON-LD processing; federation/quotes.ts checks it as it
+// loads.
+export const QUOTE_LEASE_MS = 25 * 60 * 1000
 // Unresolved quotes that one newly stored status links at most (the rest stay unresolved, by uri), as replies are.
 export const MAX_LINKED_QUOTES = 100
 
@@ -177,7 +185,8 @@ export function recordQuote(
 		ON CONFLICT (status_id) DO UPDATE SET quoted_uri = excluded.quoted_uri, quoted_status_id = excluded.quoted_status_id,
 			quoted_account_id = excluded.quoted_account_id, state = excluded.state, legacy = excluded.legacy, approval_uri = excluded.approval_uri,
 			verify_after = excluded.verify_after, attempts = 0, hops = excluded.hops, fetch_as = excluded.fetch_as,
-			need_author = NULL, generation = excluded.generation, recheck = 0, updated_at = excluded.updated_at`,
+			need_author = NULL, generation = excluded.generation, recheck = 0, lease_until = NULL,
+			updated_at = excluded.updated_at`,
 		status.id,
 		named.uri,
 		named.tombstone ? 1 : 0,
@@ -437,7 +446,7 @@ function finish(
 	const fetched = work === 'done' || (work === 'retry' && delay === undefined) ? null : keep
 	db.run(
 		`UPDATE quotes SET state = ?2, verify_after = ?3, attempts = ?4, need_author = ?5, updated_at = ?6,
-			generation = ${NEW_GENERATION}, recheck = 0
+			generation = ${NEW_GENERATION}, recheck = 0, lease_until = NULL
 		WHERE status_id = ?1`,
 		row.status_id,
 		state,
@@ -769,18 +778,20 @@ export const MAX_RECHECKED = 100
 // A Delete of a stamp relayed by another server without the author's proof (federation/inbound.ts): nothing is revoked
 // on its word, but the quotes of the actor's statuses that name the stamp and could still be accepted by it are checked
 // again, their state unchanged until then, so a stamp that is gone revokes or rejects them. Replays coalesce:
-//   - the accepted quote (one at most: a valid stamp names exactly one quoting status) is renewed when idle (due now,
+//   - the accepted quote that a stamp accepted (one at most: a valid stamp names exactly one quoting status; a
+//     self-quote, accepted without one, may name the stamp too and is passed over) is renewed when idle (due now,
 //     attempts reset, a new generation), left as it is when due or backing off (its next fetch is fresh anyway), and
 //     marked when a round has leased it;
-//   - a pending quote is marked only when a round has leased it (its first stamp fetch is in flight); otherwise its next
-//     fetch is fresh anyway.
+//   - a pending quote is marked only when a round has leased it (its first stamp fetch is in flight), matched by the stamp
+//     alone, since a round may not have linked its target yet (the target found by its uri); marking one of another
+//     author's costs at most one more check. Otherwise its next fetch is fresh anyway.
 // A marked quote keeps its generation, so the fetch in flight still applies, and is checked once more if that fetch
 // finds the stamp valid. A round's 404 thus always applies, and a Delete that races a fetch is never lost. Returns
 // whether such a quote exists.
 export function recheckStamp(db: Db, actor: { id: string }, approvalUri: string, now: number): boolean {
 	const accepted = db.first<{ status_id: string; verify_after: number | null; leased: number }>(
-		`SELECT status_id, verify_after, ${LEASED} AS leased FROM quotes
-		WHERE approval_uri = ?1 AND quoted_account_id = ?2 AND state = 'accepted' LIMIT 1`,
+		`SELECT q.status_id, q.verify_after, ${LEASED} AS leased FROM quotes q JOIN statuses s ON s.id = q.status_id
+		WHERE q.approval_uri = ?1 AND q.quoted_account_id = ?2 AND q.state = 'accepted' AND s.account_id <> ?2 LIMIT 1`,
 		approvalUri,
 		actor.id,
 		now
@@ -798,8 +809,8 @@ export function recheckStamp(db: Db, actor: { id: string }, approvalUri: string,
 		)
 	}
 	const marked = db.run(
-		`UPDATE quotes SET recheck = 1 WHERE status_id IN (SELECT status_id FROM quotes
-			WHERE approval_uri = ?1 AND quoted_account_id = ?2 AND state = 'pending' AND ${LEASED} LIMIT ?4)`,
+		`UPDATE quotes SET recheck = 1 WHERE status_id IN (SELECT status_id FROM quotes INDEXED BY quotes_leased
+			WHERE approval_uri = ?1 AND state = 'pending' AND ${LEASED} LIMIT ?4)`,
 		approvalUri,
 		actor.id,
 		now,
@@ -817,7 +828,7 @@ export function recheckStamp(db: Db, actor: { id: string }, approvalUri: string,
 // gone), and its outgoing quote is deleted (the count trigger takes it off its target).
 export function detachQuotes(db: Db, statusId: string, now: number): void {
 	db.run(
-		`UPDATE quotes SET quoted_status_id = NULL, quoted_account_id = NULL, generation = ${NEW_GENERATION},
+		`UPDATE quotes SET quoted_status_id = NULL, quoted_account_id = NULL, generation = ${NEW_GENERATION}, lease_until = NULL,
 			state = CASE state WHEN 'accepted' THEN 'deleted' ELSE state END, verify_after = NULL, updated_at = ?2
 		WHERE quoted_status_id = ?1`,
 		statusId,

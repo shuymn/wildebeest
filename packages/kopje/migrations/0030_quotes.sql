@@ -19,7 +19,8 @@
 --   from a fetch of it, when Kopje does not have that account yet: the next stage fetches the author, the one after
 --   fetches the status again, now storable. Only this address is kept between stages, never a fetched document), and
 --   generation, the work's identity for its verifiers. Only the Worker's job rounds verify quotes, each claiming its
---   quotes with a lease (lease_until: it holds only while verify_after still equals it, so any later write ends it).
+--   quotes with a lease (lease_until: it holds only while verify_after still equals it, so any later write ends it;
+--   an outcome clears it), which outlasts the longest round (src/domain/quotes.ts QUOTE_LEASE_MS).
 --   The rule: every write that changes what the work is or what it may conclude draws a new random generation (a new
 --   or replaced quote, a target linked or detached, a stage advanced or an author address recorded, a renewal that
 --   makes idle work due anew or changes fetch_as: a promotion, a relayed Delete's check of idle work, a stage another
@@ -74,6 +75,10 @@ CREATE INDEX quotes_unresolved ON quotes (quoted_uri) WHERE quoted_status_id IS 
 CREATE INDEX quotes_approval ON quotes (approval_uri, quoted_account_id, state) WHERE approval_uri IS NOT NULL;
 
 CREATE INDEX quotes_due ON quotes (verify_after) WHERE verify_after IS NOT NULL;
+
+-- The pending quotes a round holds or held (an outcome, a replacement or a detach clears the lease), by stamp: a
+-- relayed Delete finds the ones whose first stamp fetch is in flight without reading the others naming the stamp.
+CREATE INDEX quotes_leased ON quotes (approval_uri) WHERE lease_until IS NOT NULL AND state = 'pending';
 
 CREATE TABLE quote_revocations (
   authorization TEXT NOT NULL,
