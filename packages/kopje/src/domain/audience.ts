@@ -551,9 +551,12 @@ export function statusReads(
 			// A term of its own, so the plan reads the partial index of unfiltered notifications (notifications_unfiltered).
 			const unfiltered = query.includeFiltered ? undefined : UNFILTERED_SQL
 			// One lower bound on the id, the cursor's or the floor, whichever is higher, so the index walk starts above
-			// what a clear or the group's dismissal hides; a read of every group checks each row's group by its key.
-			const range = `n.id < coalesce(CAST(${query.range?.max ?? 'NULL'} AS INTEGER), 1e19)
-				AND n.id > max(coalesce(CAST(${query.range?.min ?? 'NULL'} AS INTEGER), 0), ${keptFloorSql(at.viewer, query.group ?? null)})`
+			// what a clear or the group's dismissal hides, and one upper bound, the cursor's, only with a range: a second
+			// bound on either side may be the one the plan walks by. A read of every group checks each row's group by its
+			// key.
+			const floor = keptFloorSql(at.viewer, query.group ?? null)
+			const range = `n.id > max(coalesce(CAST(${query.range?.min ?? 'NULL'} AS INTEGER), 0), ${floor})
+				${query.range === undefined ? '' : `AND n.id < coalesce(CAST(${query.range.max} AS INTEGER), 1e19)`}`
 			const group =
 				query.group === undefined ? `n.id > ${dismissedSql(at.viewer, 'n.group_key')}` : `n.group_key = ${query.group}`
 			return run<Extra & { status_id: VisibleStatusId | null }>(

@@ -202,8 +202,8 @@ function membersOf(db: Db, viewer: UserContext, group: Found, upper: string | nu
 	return shownNotifications(
 		db,
 		viewer,
-		{ includeFiltered: false, group: '?3' },
-		'n.id <= coalesce(CAST(?4 AS INTEGER), 1e19)',
+		{ includeFiltered: false, range: { max: 'CAST(?4 AS INTEGER) + 1', min: 'NULL' }, group: '?3' },
+		'',
 		'ORDER BY n.id DESC LIMIT ?5',
 		group.key,
 		upper,
