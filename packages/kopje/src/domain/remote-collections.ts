@@ -1,6 +1,7 @@
 import { availableLocalSql, availableSql, requiresMention, type Visibility } from './audience'
 import { displayName, featuredTagNamed, featuresMost, MAX_FEATURED_TAGS, writeFeatured } from './featured-tags'
 import { writeOperation } from './operation'
+import { promoteQuote, quoteArrival } from './quotes'
 import { type RemoteStatusInput, statusByUri, storeRemoteStatus } from './remote-statuses'
 import { isHashtagName } from './status-text'
 import { normalizeTag } from './tag-name'
@@ -527,6 +528,8 @@ function replacePins(db: Db, account: { id: string; uri: string }, uris: readonl
 			pin.id,
 			pin.at
 		)
+		// A pinned status arrives as a root, cached or not: a cached one's quote is promoted (quotes.ts).
+		promoteQuote(db, pin.id, quoteArrival(db, account.id, null), now)
 	}
 	db.run('DELETE FROM collection_pins_pending WHERE account_id = ?', account.id)
 	for (const pin of pending) {

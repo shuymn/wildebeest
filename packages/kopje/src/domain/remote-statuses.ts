@@ -99,6 +99,8 @@ export type RemoteQuoteInput = {
 	legacy: boolean
 	tombstone: boolean
 	approvalUri: string | null
+	// The quoted Note as the quoting Note embeds it (one level, never trusted beyond what recordQuote checks), or null.
+	embedded?: RemoteStatusInput | null
 }
 
 export type StoreContext = {
@@ -445,7 +447,7 @@ export function storeRemoteStatus(db: Db, author: Author, input: RemoteStatusInp
 	recountStatus(db, parent?.id ?? null)
 	const isReply = input.inReplyTo !== null
 	linkReplies(db, { id, uri: input.uri, accountId: author.id, replyTarget, isReply })
-	recordQuote(db, { id, uri: input.uri }, input.quote, arrivalOf(db, author, ctx), ctx)
+	recordQuote(db, { id, uri: input.uri, author }, input.quote, arrivalOf(db, author, ctx), ctx)
 	linkQuotes(db, { id, uri: input.uri }, ctx.now)
 	if (!ctx.fetched) {
 		notifyCreated(db, {
@@ -610,7 +612,7 @@ export function updateRemoteStatus(db: Db, author: Author, input: RemoteStatusIn
 		// a poll's counts, which names none, or the same one) still refreshes the counts, the end and the voters of its
 		// poll, and verifies a changed stamp of the same quote again; the quoted status itself changes only with a newer
 		// version.
-		refreshQuote(db, { id: existing.id, uri: input.uri }, input.quote, arrival, ctx)
+		refreshQuote(db, { id: existing.id, uri: input.uri, author }, input.quote, arrival, ctx)
 		return input.poll !== undefined && storeRemotePoll(db, existing.id, input.poll, false, ctx.now)
 			? { applied: true, reason: 'poll-updated', statusId: existing.id }
 			: { applied: false, reason: 'stale', statusId: existing.id }
@@ -662,7 +664,7 @@ export function updateRemoteStatus(db: Db, author: Author, input: RemoteStatusIn
 	}
 	writeTags(db, existing.id, input.tags.slice(0, MAX_STATUS_TAGS))
 	writeMedia(db, existing.id, author, media, ctx)
-	recordQuote(db, { id: existing.id, uri: input.uri }, input.quote, arrival, ctx)
+	recordQuote(db, { id: existing.id, uri: input.uri, author }, input.quote, arrival, ctx)
 	if (significant) {
 		if (versions + (versions === 0 ? 2 : 1) > MAX_STATUS_EDITS) {
 			db.run('DELETE FROM status_edits WHERE id = (SELECT max(id) FROM status_edits WHERE status_id = ?)', existing.id)

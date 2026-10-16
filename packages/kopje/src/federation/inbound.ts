@@ -601,7 +601,8 @@ async function apply(deps: InboundDeps, application: Application): Promise<Inbox
 	if (result.retry === true) {
 		return { status: 503, reason: result.reason }
 	}
-	const verifying = result.verify === undefined ? false : await verifyInline(deps, result.verify, origin, loaders)
+	const verifying =
+		result.verify === undefined ? false : await verifyInline(deps, result.verify, origin, { loaders, state, budget })
 	return {
 		status: 202,
 		reason: result.reason,
@@ -610,22 +611,35 @@ async function apply(deps: InboundDeps, application: Application): Promise<Inbox
 	}
 }
 
-// The quote the activity made due, verified with the request's own loaders and what is left of its budget. Whatever
+// The quote the activity made due, verified with what is left of the request's budget, signed as its work's fetch_as
+// says (the request's own loaders when that is the inbox's recipient, else that account's or the instance actor's,
+// drawing on the same budget: a followers-only status a local follower may see is fetched with that follower's key, as
+// a round would). Whatever
 // it leaves due (the budget ran out, a fetch may pass later, the Store refused) is the job rounds' to finish: the work
 // is durable, so a failure here never fails the activity. Returns whether work is left due now.
 async function verifyInline(
 	deps: InboundDeps,
 	statusId: string,
 	origin: string,
-	loaders: RemoteLoaders
+	request: { loaders: RemoteLoaders; state: FederationState; budget: FetchBudget }
 ): Promise<boolean> {
+	const { loaders, state, budget } = request
+	const bySigner = new Map<string | null, RemoteLoaders>([[deps.recipient, loaders]])
+	const loadersFor = (signer: string | null) => {
+		let signed = bySigner.get(signer)
+		if (signed === undefined) {
+			signed = createRemoteLoaders(deps, state, signer, budget)
+			bySigner.set(signer, signed)
+		}
+		return { loaders: signed, budget }
+	}
 	try {
 		return await verifyQuote(
 			(call) => callStore(() => call(deps.store())),
 			deps.build,
 			origin,
 			statusId,
-			() => loaders,
+			loadersFor,
 			deps.now
 		)
 	} catch (error) {

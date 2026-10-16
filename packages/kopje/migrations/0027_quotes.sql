@@ -14,10 +14,12 @@
 --   Mastodon never shows unless accepted. approval_uri is the remote stamp's id.
 --   The row carries its own verification work, written in the transaction that makes it due: verify_after (ms, NULL
 --   when nothing is due), attempts, hops (the traversal budget left for this work: 2 for a status that arrived as a
---   root, one less for a status stored as a quoted target during verification) and fetch_as (the local account
---   whose key may fetch for it, rechecked before each use).
--- - quote_revocations records, for good, every stamp whose Delete revoked a stored quote: a stamp named there never
---   verifies again, whatever later happens to the quote row. pending marks one whose matching quotes are still being
+--   root, one less for a status stored as a quoted target during verification), fetch_as (the local account
+--   whose key may fetch for it, rechecked before each use) and fetched_quoted (the quoted status as a round fetched it,
+--   kept until its author is fetched too, so the next round starts there: each stage fits one fetch budget).
+-- - quote_revocations records, for good, every stamp whose Delete by an author revoked a stored quote of that author's
+--   status: the stamp never verifies a quote of that author's statuses again, whatever later happens to the quote row.
+--   It is keyed by the stamp and the author, so nobody else's Delete of the same URI revokes anything of the author's. pending marks one whose matching quotes are still being
 --   processed in bounded batches (inbox.ts runInboundJobs).
 -- - statuses.quotes_count is the number of accepted quotes of a status, kept by the triggers below as transactional
 --   deltas (Mastodon's counter cache), never recounted.
@@ -38,11 +40,13 @@ CREATE TABLE quotes (
   attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
   hops INTEGER NOT NULL DEFAULT 0 CHECK (hops BETWEEN 0 AND 2),
   fetch_as TEXT REFERENCES local_accounts (account_id) ON DELETE SET NULL,
+  fetched_quoted TEXT,
   updated_at TEXT NOT NULL,
   CHECK (state <> 'accepted' OR quoted_status_id IS NOT NULL),
   CHECK (quoted_uri IS NOT NULL OR state = 'deleted'),
   CHECK (verify_after IS NULL OR state IN ('pending', 'accepted')),
-  CHECK ((quoted_status_id IS NULL) = (quoted_account_id IS NULL))
+  CHECK ((quoted_status_id IS NULL) = (quoted_account_id IS NULL)),
+  CHECK (fetched_quoted IS NULL OR (quoted_status_id IS NULL AND state = 'pending'))
 );
 
 -- The quotes of a status (its delete detaches them), the unresolved ones a newly stored status links by uri, the ones
@@ -56,18 +60,21 @@ CREATE INDEX quotes_approval ON quotes (approval_uri, quoted_account_id, state) 
 CREATE INDEX quotes_due ON quotes (verify_after) WHERE verify_after IS NOT NULL;
 
 CREATE TABLE quote_revocations (
-  authorization TEXT NOT NULL PRIMARY KEY,
-  actor_uri TEXT,
+  authorization TEXT NOT NULL,
+  actor_uri TEXT NOT NULL,
   revoked_at INTEGER NOT NULL,
-  pending INTEGER NOT NULL DEFAULT 0 CHECK (pending IN (0, 1))
+  pending INTEGER NOT NULL DEFAULT 0 CHECK (pending IN (0, 1)),
+  PRIMARY KEY (authorization, actor_uri)
 ) WITHOUT ROWID;
 
 CREATE INDEX quote_revocations_pending ON quote_revocations (revoked_at) WHERE pending = 1;
 
 ALTER TABLE statuses ADD COLUMN quotes_count INTEGER NOT NULL DEFAULT 0;
 
--- One statuses row per accepted quote inserted, changed or deleted. A detach (the quoted status going, which sets
--- quoted_status_id NULL) fires none: the status it would count is being deleted.
+-- One statuses row per accepted quote of a status inserted, deleted, or changed into or out of counting: a change of
+-- state, or of the quoted status (an Update naming another status, a Tombstone or one not stored yet), takes it off
+-- the old status and adds it to the new. A detach (the quoted status going) also takes it off that status, one write
+-- more for the batch that does it (inbox.ts STATUS_CHILDREN).
 CREATE TRIGGER quotes_count_inserted AFTER INSERT ON quotes
 WHEN NEW.state = 'accepted' AND NEW.quoted_status_id IS NOT NULL
 BEGIN
@@ -75,9 +82,8 @@ BEGIN
 END;
 
 CREATE TRIGGER quotes_count_changed AFTER UPDATE OF state, quoted_status_id ON quotes
-WHEN NEW.quoted_status_id IS NOT NULL
-  AND ((OLD.state = 'accepted') <> (NEW.state = 'accepted')
-    OR (NEW.state = 'accepted' AND OLD.quoted_status_id IS NOT NEW.quoted_status_id))
+WHEN (OLD.state = 'accepted' AND OLD.quoted_status_id IS NOT NULL) <> (NEW.state = 'accepted' AND NEW.quoted_status_id IS NOT NULL)
+  OR (OLD.state = 'accepted' AND NEW.state = 'accepted' AND OLD.quoted_status_id IS NOT NEW.quoted_status_id)
 BEGIN
   UPDATE statuses SET quotes_count = max(0, quotes_count - 1) WHERE OLD.state = 'accepted' AND id = OLD.quoted_status_id;
   UPDATE statuses SET quotes_count = quotes_count + 1 WHERE NEW.state = 'accepted' AND id = NEW.quoted_status_id;

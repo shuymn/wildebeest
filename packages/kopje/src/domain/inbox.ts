@@ -1554,14 +1554,15 @@ export const STATUS_CHILDREN: readonly { table: string; column: string; remove: 
 	},
 	// Quotes of the status (migration 0027_quotes): any number, of any accounts. Each is detached, an accepted one
 	// becoming deleted in the same statement (the quotes CHECK refuses an accepted quote without its target), its work
-	// ended; a detach fires no count trigger (the status it would count is this one).
+	// ended; an accepted one also takes itself off this status's count (the trigger quotes_count_changed), so a batch
+	// takes half the rows left.
 	{
 		table: 'quotes',
 		column: 'quoted_status_id',
 		remove: [
 			`UPDATE quotes SET quoted_status_id = NULL, quoted_account_id = NULL,
 				state = CASE state WHEN 'accepted' THEN 'deleted' ELSE state END, verify_after = NULL
-			WHERE status_id IN (SELECT status_id FROM quotes WHERE quoted_status_id = ?1 LIMIT ?2)`,
+			WHERE status_id IN (SELECT status_id FROM quotes WHERE quoted_status_id = ?1 LIMIT CAST(?2 / 2 AS INTEGER))`,
 		],
 	},
 	// The status's own quote, one row at most: deleted before the status, so it never cascades, with the count of its
@@ -2190,7 +2191,12 @@ const add: Handler<'Add'> = (db, actor, activity, input) => {
 	if (status === undefined) {
 		return ignored('unknown-object')
 	}
-	return pinRemote(db, actor.id, status.id, input.now) ? applied('pinned') : ignored('not-pinned')
+	if (!pinRemote(db, actor.id, status.id, input.now)) {
+		return ignored('not-pinned')
+	}
+	// A pinned status arrives as a root, cached or not: a cached one's quote is promoted (quotes.ts).
+	promoteQuote(db, status.id, quoteArrival(db, actor.id, null), input.now)
+	return withVerify(db, applied('pinned'), status.id, input.now)
 }
 
 const remove: Handler<'Remove'> = (db, actor, activity) => {

@@ -272,8 +272,10 @@ function firstOf(object: Json, key: string): unknown {
 // properties name, in Mastodon's order; legacy when the Note has no `quote` (Misskey's and Fedibird's properties
 // only); a `quote` that is a Tombstone is a deleted quote whether or not it has an id (Mastodon's has none), its uri
 // its id or the first the other properties name. The stamp is the first quoteAuthorization, http(s) only (the Store
-// drops one of its own origin). null: the Note quotes nothing.
-function quoteOf(object: Json): RemoteQuoteInput | null {
+// drops one of its own origin). An object in `quote` is also kept as the embedded quoted Note, parsed one level deep
+// (its own quote is never embedded further), for the Store to take only when it is the quoting author's own. null: the
+// Note quotes nothing.
+function quoteOf(object: Json, embed: boolean): RemoteQuoteInput | null {
 	const quote = firstOf(object, 'quote')
 	const uriOf = (value: unknown) => httpString(idOf(value))
 	if (isObject(quote) && typeIs(quote.type, ['Tombstone'])) {
@@ -286,17 +288,24 @@ function quoteOf(object: Json): RemoteQuoteInput | null {
 	if (uri === undefined) {
 		return null
 	}
+	const embedded = embed && isObject(quote) ? parseRemoteStatus(quote, null, false) : null
 	return {
 		uri,
 		legacy: quote === undefined || quote === null,
 		tombstone: false,
 		approvalUri: uriOf(firstOf(object, 'quoteAuthorization')),
+		embedded: embedded !== null && embedded.uri === uri ? embedded : null,
 	}
 }
 
 // The status an object describes, or null if it is not one Kopje stores. `activity` supplies to and cc when the
-// object has none (StatusParser falls back to the activity's addressing).
-export function parseRemoteStatus(object: unknown, activity: Json | null = null): RemoteStatusInput | null {
+// object has none (StatusParser falls back to the activity's addressing). embedQuote: keep a Note embedded as the
+// quoted status (false for an embedded one itself).
+export function parseRemoteStatus(
+	object: unknown,
+	activity: Json | null = null,
+	embedQuote = true
+): RemoteStatusInput | null {
 	if (!isObject(object)) {
 		return null
 	}
@@ -348,7 +357,7 @@ export function parseRemoteStatus(object: unknown, activity: Json | null = null)
 		// A Note's name: in reply to a local poll, a vote (ActivityPub::Activity::Create#poll_vote?).
 		name: converted ? null : text(object.name),
 		poll: converted ? null : pollOf(object),
-		quote: quoteOf(object),
+		quote: quoteOf(object, embedQuote),
 		raw: JSON.stringify(object),
 	}
 }

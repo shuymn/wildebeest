@@ -59,7 +59,7 @@ const WRITING_TRIGGERS: Record<string, string> = {
 		'one account row per status hidden: deleteStatusBatch hides a status only with two rows left',
 	quotes_count_inserted: 'fires on a quote insert, which no batched delete or purge makes',
 	quotes_count_changed:
-		"one statuses row per quote entering or leaving accepted with its target: a detach (STATUS_CHILDREN's quoted_status_id entry) clears the target and fires none; a revocation batch (quotes.ts) takes half the rows left",
+		"one statuses row per accepted quote that leaves its count or changes its target, two at most: a detach (STATUS_CHILDREN's quoted_status_id entry) takes an accepted one off the status being deleted, and that entry and a revocation batch (quotes.ts) take half the rows left",
 	quotes_count_deleted:
 		"one statuses row per accepted quote deleted: STATUS_CHILDREN's status_id entry takes half the rows left",
 	stream_notification_inserted:
