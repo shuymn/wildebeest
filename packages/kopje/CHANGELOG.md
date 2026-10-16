@@ -25,7 +25,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   a new follow or follow request with 422 and `Validation failed: You cannot follow more than 7500 people` once the
   account follows 7,500 accounts, or, past that, 1.1 times its followers (rounded). Pending requests do not count;
   changing an existing follow's options, authorizing a request (locally or by a remote `Accept`) and a `Move`'s
-  follower transfer are not limited, as in Mastodon. The limit also bounds the windows a home timeline reads.
+  follower transfer are not limited, as in Mastodon. It is an admission rule on the account's own follows, not a
+  bound on what a home timeline reads.
     - Where Kopje differs from Mastodon: the limit and ratio are fixed (Mastodon reads `MAX_FOLLOWS_THRESHOLD` and
       `MAX_FOLLOWS_RATIO`).
 
