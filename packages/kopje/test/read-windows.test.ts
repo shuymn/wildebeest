@@ -35,7 +35,8 @@ import type { StoreOperation } from '../src/platform/store-kernel'
 // `newer`, also newer. The hidden range is `hidden` rows of each kind, newest:
 //   - availability (an account being deleted): GHOST's public statuses, FRIEND's boosts of them (home, the list,
 //     FRIEND's statuses), the viewer's bookmarks and favourites of them, GHOST's mentions of the viewer, and GONE_i
-//     (each being deleted) as notification and follow request senders, list members and endorsements, and as favouriters of FRIEND's status;
+//     (each being deleted) as notification and follow request senders, list members and endorsements, and as
+//     favouriters of FRIEND's status;
 //   - a block: BLOCKED's public #cats statuses;
 //   - a domain block: DOMAINED's public statuses;
 //   - a mute: MUTED_i following FRIEND;
