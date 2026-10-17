@@ -336,7 +336,6 @@ export type ListNotificationsInput = {
 	present: Present
 }
 
-// The columns a read of the viewer's notifications selects besides status_id.
 export type ShownColumns = Omit<NotificationRow, 'status_id'>
 
 // What a read of the viewer's notifications reads: filtered ones only with `includeFiltered`; within `range`, the

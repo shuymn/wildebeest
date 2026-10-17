@@ -98,7 +98,6 @@ export async function deliveryRound(env: Env, deps: DeliveryDeps): Promise<Round
 	const deadline = claim.leaseUntil - COMPLETION_MARGIN_MS
 	const settled = await Promise.all(
 		claim.deliveries.map(async (delivery): Promise<Completion | Dropped | null> => {
-			// What the confirmation decided, when it withheld the send.
 			let withheld: Dropped | 'stale' | 'unconfirmed' | null = null
 			// Key loading counts against the delivery's budget like the DNS check and the POST. After it, and after the
 			// host check, the Store confirms the row under its lease and hands over the body to sign and send (VIS-30,
