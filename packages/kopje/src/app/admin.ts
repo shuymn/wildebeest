@@ -78,6 +78,7 @@ const STATUS: Record<string, ContentfulStatusCode> = {
 	'dump-not-found': 404,
 	'wrong-authority': 403,
 	'account-not-found': 404,
+	'report-not-found': 404,
 	'invalid-email': 400,
 	'email-taken': 409,
 	'not-suspended': 409,
@@ -348,6 +349,20 @@ export function adminRoutes({ build, store, fetch, now, doorbell, jobs, loader, 
 			...(limit === undefined ? {} : { limit: Number(limit) }),
 		}
 		return c.json(await stub(c).moderationLog(build(c.env), input))
+	})
+
+	// Where Mastodon clients open an admin.report notification (https://<domain>/admin/reports/<id>, Mastodon's report
+	// page): Kopje has none, so it answers one redirect to the reported account's web page; the report itself is the
+	// Mastodon admin API's. An unknown id answers 404, as Report.find does. Anyone but the Access admin is refused before
+	// the report is read, above and again by the Store in the read's transaction: Mastodon finds the report first and
+	// answers 404 for an unknown id to anyone.
+	admin.get('/reports/:id', async (c) => {
+		const result = await stub(c).reportTargetPage(build(c.env), {
+			authority: c.get('auth'),
+			id: c.req.param('id'),
+			origin: new URL(c.req.url).origin,
+		})
+		return result.ok ? c.redirect(result.page, 302) : refusal(c, result)
 	})
 
 	admin.post('/accounts/email', async (c) => {

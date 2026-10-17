@@ -138,6 +138,7 @@ const NOT_CONVERTED: Record<string, string> = {
 	'notifications.filtered': 'legacy never filtered a notification: carried ones are shown, as stored ones are in 0020',
 	'notifications.group_key':
 		'legacy never grouped notifications: carried ones stay ungrouped, as stored ones do in 0017',
+	'notifications.report_id': 'legacy never notified of a report: carried ones name none, as stored ones do in 0040',
 	'status_edits.id': ASSIGNED,
 	'status_edits.poll_options': 'legacy has no polls',
 	'statuses.quotes_count': 'counts accepted quotes, which legacy has none of',
@@ -202,6 +203,7 @@ const NOT_VERIFIED: Record<string, string> = {
 	'notifications.created_at': TIME,
 	'notifications.filtered': DEFAULT,
 	'notifications.group_key': DEFAULT,
+	'notifications.report_id': DEFAULT,
 	'oauth_clients.created_at': TIME,
 	'status_edits.created_at': TIME,
 	'status_edits.id': DEFAULT,

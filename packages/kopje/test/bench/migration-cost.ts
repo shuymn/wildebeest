@@ -21,13 +21,14 @@ import { freshStore, testKernel } from '../helpers'
 //   - 3,000,000 accepted follows, three per account, among all accounts;
 //   - 2,000,000 statuses, two per remote account in turn, each with a mention of another account and a hashtag (one
 //     of 1,000 names);
+//   - 2,000,000 notifications of the local accounts in turn, a mention by each status's author;
 //   - 10,000 reports by the local accounts of remote accounts, naming one status each;
 //   - 200,000 quotes (from migration 0033_quotes on), one by every tenth status, each of the status after it, in each
 //     stored state in turn (a quarter accepted).
 // It grows every table a phase A migration reads (accounts, follows, statuses with their mentions and tags,
-// reports, quotes); a migration that reads another table must add it here before it is measured. The measured time is the
-// file's transaction as the kernel applies it, from before the first statement to after the commit: Date.now() in
-// workerd moves only between I/O events, so the clock is read across an await on each side.
+// notifications, reports, quotes); a migration that reads another table must add it here before it is measured. The
+// measured time is the file's transaction as the kernel applies it, from before the first statement to after the
+// commit: Date.now() in workerd moves only between I/O events, so the clock is read across an await on each side.
 
 export const MIGRATION_BUDGET_MS = 5_000
 
@@ -44,6 +45,7 @@ const SHAPE = {
 	domains: 1_000,
 	follows: 3,
 	statuses: 2_000_000,
+	notifications: 2_000_000,
 	reports: 10_000,
 	quotes: 200_000,
 }
@@ -55,6 +57,7 @@ it('applies the migration to the benchmark store within the budget', async () =>
 	expect(at, `no migration named ${name}`).toBeGreaterThan(0)
 	const accounts = Math.round(SHAPE.accounts * scale)
 	const statuses = Math.round(SHAPE.statuses * scale)
+	const notifications = Math.min(Math.round(SHAPE.notifications * scale), statuses)
 	const reports = Math.round(SHAPE.reports * scale)
 	const quotes = Math.min(Math.round(SHAPE.quotes * scale), Math.floor(statuses / 10))
 
@@ -147,6 +150,21 @@ it('applies the migration to the benchmark store within the budget', async () =>
 				Math.min(start + batch, statuses)
 			)
 		}
+		// Notifications: status i mentions local account i % SHAPE.local, by its author, in batches.
+		for (let start = 0; start < notifications; start += batch) {
+			run(
+				`WITH RECURSIVE n(i) AS (SELECT ?1 UNION ALL SELECT i + 1 FROM n WHERE i < ?2 - 1)
+				INSERT INTO notifications (account_id, type, from_account_id, status_id, created_at)
+				SELECT CAST(100000000000000000 + i % ?3 AS TEXT), 'mention', CAST(100000000000000000 + ?3 + i % ?4 AS TEXT),
+					CAST(500000000000000000 + i AS TEXT), ?5
+				FROM n`,
+				start,
+				Math.min(start + batch, notifications),
+				SHAPE.local,
+				remote,
+				now
+			)
+		}
 		run(
 			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
 			INSERT INTO reports (account_id, target_account_id, status_ids, uri, created_at)
@@ -184,6 +202,7 @@ it('applies the migration to the benchmark store within the budget', async () =>
 			statuses: count('statuses'),
 			mentions: count('status_mentions'),
 			tags: count('status_tags'),
+			notifications: count('notifications'),
 			reports: count('reports'),
 			quotes: hasQuotes ? count('quotes') : 0,
 		}
@@ -197,7 +216,7 @@ it('applies the migration to the benchmark store within the budget', async () =>
 		await scheduler.wait(1)
 		return { seeded, measured: { result, ms: Date.now() - started - 1 } }
 	})
-	expect(seeded).toMatchObject({ accounts, local: SHAPE.local, statuses, reports })
+	expect(seeded).toMatchObject({ accounts, local: SHAPE.local, statuses, notifications, reports })
 	expect(measured.result).toMatchObject({ ok: true, applied: [name] })
 	console.log(JSON.stringify({ migration: name, scale, seeded, ms: measured.ms, budgetMs: MIGRATION_BUDGET_MS }))
 	if (scale >= 1) {

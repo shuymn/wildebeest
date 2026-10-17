@@ -1,4 +1,5 @@
 import { type Account, type Page, type PageQuery, type Present, presentAccountsById } from './accounts'
+import { adminAccountIdOnce } from './admin-authority'
 import {
 	FILTERABLE_TYPES,
 	keptFloorSql,
@@ -11,6 +12,7 @@ import {
 } from './audience'
 import { currentCredentialSql, type UserContext, userReadOperation, userWriteOperation } from './auth'
 import { addToConversation } from './conversations'
+import { presentReportsById, type Report } from './reports'
 import { presentStatuses, type Status } from './status-presenter'
 import type { Db } from '../db/sql'
 
@@ -27,7 +29,8 @@ import type { Db } from '../db/sql'
 // The recipient's notification policy (notification-requests.ts) drops or filters what it chooses when it is written:
 // a filtered notification is kept apart from the lists, counts and pushes until its request is accepted.
 // A favourite, a boost or a follow also records the group it joins in the API v2's grouped notifications
-// (group_key, which v1 shows too); notification-groups.ts reads them.
+// (group_key, which v1 shows too); notification-groups.ts reads them. An admin.report names its report (report_id) and
+// is the OAuth admin's alone (R37; reports.ts notifies it).
 
 export type NotificationType =
 	| 'mention'
@@ -40,6 +43,7 @@ export type NotificationType =
 	| 'poll'
 	| 'quote'
 	| 'quoted_update'
+	| 'admin.report'
 
 export type Notification = {
 	id: string
@@ -49,6 +53,8 @@ export type Notification = {
 	group_key: string
 	account: Account
 	status?: Status
+	// An admin.report's report (REST::NotificationSerializer#report_type?).
+	report?: Report
 }
 
 export type NotifyInput = {
@@ -56,6 +62,8 @@ export type NotifyInput = {
 	type: NotificationType
 	fromId: string
 	statusId: string | null
+	// The report of an admin.report.
+	reportId?: string
 	now: number
 }
 
@@ -67,12 +75,16 @@ export type NotifyInput = {
 // The natural key makes a repeat a no-op, except for `update` and `quoted_update`: every edit notifies again, so the
 // previous one is replaced (and gets a newer id; LocalNotificationWorker). The replacement is judged first: an edit the
 // rule refuses (its conversation muted since) leaves the previous one as it is, as a mute keeps the notifications
-// written before it. An edit is never filtered or dropped by the policy.
+// written before it. An edit is never filtered or dropped by the policy. An admin.report is keyed by its report too
+// (migrations 0040 and 0041), so each report notifies once, as LocalNotificationWorker keys it by its activity.
 export function notify(db: Db, input: NotifyInput): void {
 	const now = new Date(input.now).toISOString()
+	// The OAuth admin, for R37 in the rule (shownSql); only an admin.report needs it.
+	const admin = input.type === 'admin.report' ? adminAccountIdOnce(db) : null
+	const reportId = input.reportId ?? null
 	if (input.type === 'update' || input.type === 'quoted_update') {
 		const eligible = db.first(
-			`SELECT 1 AS ok WHERE ${notifiedSql('?1', '?5', '?2', '?3', '?4')}`,
+			`SELECT 1 AS ok WHERE ${notifiedSql('?1', '?5', '?2', '?3', '?4', 'NULL')}`,
 			input.recipientId,
 			input.fromId,
 			input.statusId,
@@ -110,16 +122,20 @@ export function notify(db: Db, input: NotifyInput): void {
 	// delete it.
 	db.run(
 		`DELETE FROM notifications WHERE account_id = ?1 AND type = ?2 AND from_account_id = ?3
-			AND IFNULL(status_id, '') = IFNULL(?4, '') AND NOT ${keptSql('notifications')}`,
+			AND IFNULL(status_id, '') = IFNULL(?4, '') AND IFNULL(report_id, 0) = IFNULL(CAST(?5 AS INTEGER), 0)
+			AND NOT ${keptSql('notifications')}`,
 		input.recipientId,
 		input.type,
 		input.fromId,
-		input.statusId
+		input.statusId,
+		reportId
 	)
 	const inserted = db.all<{ id: number }>(
-		`INSERT INTO notifications (account_id, type, from_account_id, status_id, created_at, group_key, filtered)
-		SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7
-		WHERE EXISTS (SELECT 1 FROM local_accounts WHERE account_id = ?1) AND ${notifiedSql('?1', '?2', '?3', '?4', '?5')}
+		`INSERT INTO notifications (account_id, type, from_account_id, status_id, report_id, created_at, group_key,
+			filtered)
+		SELECT ?1, ?2, ?3, ?4, CAST(?9 AS INTEGER), ?5, ?6, ?7
+		WHERE EXISTS (SELECT 1 FROM local_accounts WHERE account_id = ?1)
+			AND ${notifiedSql('?1', '?2', '?3', '?4', '?5', '?8')}
 		ON CONFLICT DO NOTHING RETURNING id`,
 		input.recipientId,
 		input.type,
@@ -127,7 +143,9 @@ export function notify(db: Db, input: NotifyInput): void {
 		input.statusId,
 		now,
 		filtered ? null : groupKeyOf(db, input),
-		filtered ? 1 : 0
+		filtered ? 1 : 0,
+		admin,
+		reportId
 	)
 	for (const { id } of inserted) {
 		if (filtered) {
@@ -249,6 +267,7 @@ type NotificationRow = {
 	type: string
 	from_account_id: string
 	status_id: string | null
+	report_id: string | null
 	created_at: string
 	group_key: string | null
 }
@@ -260,6 +279,7 @@ export const NOTIFICATION_COLUMNS = {
 	from_account_id: 'n.from_account_id',
 	created_at: 'n.created_at',
 	group_key: 'n.group_key',
+	report_id: 'CAST(n.report_id AS TEXT)',
 }
 
 function presentNotifications(
@@ -275,10 +295,20 @@ function presentNotifications(
 	)
 	const statusIds = [...new Set(rows.flatMap((row) => (row.status_id === null ? [] : [row.status_id])))]
 	const statuses = new Map(presentStatuses(db, statusIds, { ...present, viewer }).map((status) => [status.id, status]))
+	const reports = presentReportsById(
+		db,
+		rows.flatMap((row) => (row.report_id === null ? [] : [row.report_id])),
+		present
+	)
 	return rows.flatMap((row) => {
 		const account = accounts.get(row.from_account_id)
 		const status = row.status_id === null ? undefined : statuses.get(row.status_id)
-		if (account === undefined || (row.status_id !== null && status === undefined)) {
+		const report = row.report_id === null ? undefined : reports.get(row.report_id)
+		if (
+			account === undefined ||
+			(row.status_id !== null && status === undefined) ||
+			(row.report_id !== null && report === undefined)
+		) {
 			return []
 		}
 		return [
@@ -289,6 +319,7 @@ function presentNotifications(
 				group_key: row.group_key ?? `ungrouped-${row.id}`,
 				account,
 				...(status === undefined ? {} : { status }),
+				...(report === undefined ? {} : { report }),
 			},
 		]
 	})
@@ -321,6 +352,7 @@ export const listNotifications = userReadOperation<ListNotificationsInput, Page<
 				range: { max: '?2', min: '?3' },
 				columns: NOTIFICATION_COLUMNS,
 				includeFiltered: input.includeFiltered || input.accountId !== null,
+				admin: adminAccountIdOnce(db),
 			},
 			viewerId,
 			page.maxId ?? null,
@@ -372,6 +404,8 @@ export function mentionedStatus(db: Db, viewer: UserContext, statusId: string) {
 				AND n.type = 'mention' AND n.status_id = ?2`,
 			columns: { id: 'n.id' },
 			includeFiltered: false,
+			// Only a mention is read, which the admin arm of R15 does not touch.
+			admin: null,
 		},
 		viewer.accountId,
 		statusId,
@@ -395,7 +429,12 @@ function notificationById(
 	const read = statusReads(viewer, { viewer: '?1', now: '?3' })
 	const rows = read.notifications<Omit<NotificationRow, 'status_id'>>(
 		db,
-		{ where: 'n.id = CAST(?2 AS INTEGER)', columns: NOTIFICATION_COLUMNS, includeFiltered },
+		{
+			where: 'n.id = CAST(?2 AS INTEGER)',
+			columns: NOTIFICATION_COLUMNS,
+			includeFiltered,
+			admin: adminAccountIdOnce(db),
+		},
 		viewer.accountId,
 		id,
 		viewer.now

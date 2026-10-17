@@ -4320,3 +4320,137 @@ describe('0039_quotes_local', () => {
 		expect(Math.abs(twice - 2 * some)).toBeLessThanOrEqual(2)
 	}, 120_000)
 })
+
+// The reporter and the reported account of the report notification migrations (0040, 0041).
+const REPORTER = '100000000000000001'
+const TARGET = '100000000000000002'
+
+// A local reporter with `notifications` mentions of it by the target, and one report of the target.
+function seedReport(sql: SqlStorage, notifications: number) {
+	sql.exec(
+		`INSERT INTO accounts (id, uri, username, domain) VALUES
+			(?1, 'https://kopje.test/ap/users/r', 'r', NULL), (?2, 'https://remote.test/users/t', 't', 'remote.test')`,
+		REPORTER,
+		TARGET
+	)
+	sql.exec(
+		"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'r@example.com', X'00', X'00', 'k')",
+		REPORTER
+	)
+	sql.exec(
+		`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+		INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+		SELECT CAST(200000000000000000 + i AS TEXT), 'https://remote.test/o/' || i, ?2, 'public', 'x',
+			'2026-10-12T00:00:00.000Z'
+		FROM n WHERE ?1 > 0`,
+		notifications,
+		TARGET
+	)
+	sql.exec(
+		`INSERT INTO notifications (account_id, type, from_account_id, status_id)
+		SELECT ?1, 'mention', ?2, id FROM statuses`,
+		REPORTER,
+		TARGET
+	)
+	sql.exec(
+		`INSERT INTO reports (id, account_id, target_account_id, uri, created_at)
+		VALUES (7, ?, ?, 'https://kopje.test/actor#reports/7', '2026-10-12T00:00:00.000Z')`,
+		REPORTER,
+		TARGET
+	)
+}
+
+describe('0040_report_notifications', () => {
+	const NAME = '0040_report_notifications'
+	const at = NAMES.indexOf(NAME)
+
+	it("names a notification's report, which takes it along when deleted, and keeps the natural key", async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, MIGRATIONS.slice(0, at)).upgrade()).toMatchObject({ ok: true })
+			seedReport(sql, 2)
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+			expect(sql.exec('SELECT DISTINCT report_id FROM notifications').toArray()).toEqual([{ report_id: null }])
+			const admin =
+				"INSERT INTO notifications (account_id, type, from_account_id, report_id) VALUES (?, 'admin.report', ?, ?)"
+			expect(() => sql.exec(admin, REPORTER, TARGET, 8)).toThrow(/FOREIGN KEY constraint failed/)
+			sql.exec(admin, REPORTER, TARGET, 7)
+			// One admin.report per recipient and sender (notifications_natural is unchanged).
+			sql.exec(
+				`INSERT INTO reports (id, account_id, target_account_id, uri, created_at)
+				VALUES (8, ?, ?, 'https://kopje.test/actor#reports/8', '2026-10-12T00:00:00.000Z')`,
+				REPORTER,
+				TARGET
+			)
+			expect(() => sql.exec(admin, REPORTER, TARGET, 8)).toThrow(/UNIQUE constraint failed/)
+			const plan = sql
+				.exec<{ detail: string }>('EXPLAIN QUERY PLAN SELECT id FROM notifications WHERE report_id = 7')
+				.toArray()
+				.map((row) => row.detail)
+			expect(plan.join('\n')).toContain('notifications_report')
+			sql.exec('DELETE FROM reports WHERE id = 7')
+			expect(sql.exec("SELECT count(*) AS n FROM notifications WHERE type = 'admin.report'").one()).toEqual({ n: 0 })
+			expect(sql.exec('SELECT count(*) AS n FROM notifications').one()).toEqual({ n: 2 })
+		})
+	})
+
+	// The ALTER reads nothing; the partial index reads each notification once: the rows read grow with the
+	// notifications (linearly, give or take the index build's own page reads) and with nothing else.
+	it('reads the stored notifications, and nothing else', async () => {
+		const measure = async (notifications: number) => {
+			const store = freshStore()
+			return runInDurableObject(store, async (_instance, state) => {
+				const sql = state.storage.sql
+				await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+				seedReport(sql, notifications)
+				const cursor = sql.exec(MIGRATIONS[at]?.sql ?? '')
+				cursor.toArray()
+				return cursor.rowsRead
+			})
+		}
+		const none = await measure(0)
+		const some = (await measure(1_000)) - none
+		const twice = (await measure(2_000)) - none
+		expect(some).toBeLessThanOrEqual(1_000 + 2)
+		expect(Math.abs(twice - 2 * some)).toBeLessThanOrEqual(2)
+	}, 120_000)
+})
+
+describe('0041_report_notifications_key', () => {
+	const NAME = '0041_report_notifications_key'
+	const at = NAMES.indexOf(NAME)
+
+	it('keys an admin.report by its report, and every other notification as before', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, MIGRATIONS.slice(0, at)).upgrade()).toMatchObject({ ok: true })
+			seedReport(sql, 0)
+			sql.exec(
+				`INSERT INTO reports (id, account_id, target_account_id, uri, created_at)
+				VALUES (8, ?, ?, 'https://kopje.test/actor#reports/8', '2026-10-12T00:00:00.000Z')`,
+				REPORTER,
+				TARGET
+			)
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+			const admin =
+				"INSERT INTO notifications (account_id, type, from_account_id, report_id) VALUES ('100000000000000001', 'admin.report', '100000000000000002', ?)"
+			sql.exec(admin, 7)
+			sql.exec(admin, 8)
+			expect(() => sql.exec(admin, 8)).toThrow(/UNIQUE constraint failed/)
+			const follow =
+				"INSERT INTO notifications (account_id, type, from_account_id) VALUES ('100000000000000001', 'follow', '100000000000000002')"
+			sql.exec(follow)
+			expect(() => sql.exec(follow)).toThrow(/UNIQUE constraint failed/)
+			const plan = sql
+				.exec<{ detail: string }>(
+					`EXPLAIN QUERY PLAN SELECT id FROM notifications WHERE account_id = '1' AND type = 'mention'
+					AND from_account_id = '2' AND IFNULL(status_id, '') = '3'`
+				)
+				.toArray()
+				.map((row) => row.detail)
+			expect(plan.join('\n')).toContain('notifications_natural')
+		})
+	})
+})

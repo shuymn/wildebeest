@@ -1,7 +1,9 @@
 import { type Account, type Page, type PageQuery, type Present, presentAccountsById } from './accounts'
+import { adminAccountIdOnce } from './admin-authority'
 import { statusReads } from './audience'
 import { type UserContext, userReadOperation, userWriteOperation } from './auth'
 import { GROUPABLE_TYPES, NOTIFICATION_COLUMNS, NOTIFICATION_ID, removeNotifications } from './notifications'
+import { presentReportsById, type Report } from './reports'
 import { presentStatuses, type Status } from './status-presenter'
 import type { Db } from '../db/sql'
 
@@ -57,6 +59,8 @@ export type NotificationGroup = {
 	latest_page_notification_at?: string
 	sample_account_ids: string[]
 	status_id?: string | null
+	// An admin.report's report (REST::NotificationGroupSerializer#report_type?).
+	report?: Report
 }
 
 // REST::DedupNotificationGroupSerializer::PartialAccountSerializer.
@@ -72,7 +76,14 @@ export type GroupedNotifications = {
 
 export type ExpandAccounts = 'full' | 'partial_avatars'
 
-type ShownColumns = { id: string; type: string; from_account_id: string; created_at: string; group_key: string | null }
+type ShownColumns = {
+	id: string
+	type: string
+	from_account_id: string
+	created_at: string
+	group_key: string | null
+	report_id: string | null
+}
 
 // What a read of the viewer's notifications reads: filtered ones only with `includeFiltered`; within `range`, the
 // cursor (exclusive ids); of `group` alone (statusReads(...).notifications), each an expression over the parameters.
@@ -91,7 +102,7 @@ function shownNotifications(
 	const read = statusReads(viewer, { viewer: '?1', now: '?2' })
 	return read.notifications<ShownColumns>(
 		db,
-		{ ...scope, where, tail, columns: NOTIFICATION_COLUMNS },
+		{ ...scope, where, tail, columns: NOTIFICATION_COLUMNS, admin: adminAccountIdOnce(db) },
 		viewer.accountId,
 		viewer.now,
 		...params
@@ -245,6 +256,11 @@ function presentGroups(
 	const statuses = new Map(
 		presentStatuses(db, statusIds, { ...options.present, viewer }).map((status) => [status.id, status])
 	)
+	const reports = presentReportsById(
+		db,
+		groups.flatMap(({ first }) => (first.report_id === null ? [] : [first.report_id])),
+		options.present
+	)
 	const shown: { group: NotificationGroup; accounts: Account[]; status: Status | undefined }[] = []
 	groups.forEach(({ key, first, rows, oldest: pageMin }, i) => {
 		const sampled = (samples[i] ?? []).flatMap((id) => {
@@ -256,7 +272,8 @@ function presentGroups(
 		if (newest === undefined || sampled.length === 0) {
 			return
 		}
-		if (first.status_id !== null && status === undefined) {
+		const report = first.report_id === null ? undefined : reports.get(first.report_id)
+		if ((first.status_id !== null && status === undefined) || (first.report_id !== null && report === undefined)) {
 			return
 		}
 		shown.push({
@@ -274,6 +291,7 @@ function presentGroups(
 					: {}),
 				sample_account_ids: sampled.map((account) => account.id),
 				...(STATUS_TYPES.has(first.type) ? { status_id: status?.id ?? null } : {}),
+				...(report === undefined ? {} : { report }),
 			},
 			accounts: sampled,
 			status,

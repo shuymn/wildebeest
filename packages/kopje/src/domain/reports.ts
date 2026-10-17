@@ -1,5 +1,6 @@
 import {
 	type Account,
+	accountUrl,
 	edgeRangeSql,
 	type Page,
 	type PageQuery,
@@ -9,6 +10,7 @@ import {
 } from './accounts'
 import { flagActivity, instanceActorUri, recordOutbound } from './activities'
 import { type AdminAccount, presentAdminAccounts } from './admin-accounts'
+import { accessAdminRefusal, adminAccountIdOnce } from './admin-authority'
 import { availableSql, reportForwardees } from './audience'
 import {
 	ADMIN_PERMISSION,
@@ -20,10 +22,13 @@ import {
 } from './auth'
 import { type InstanceRule, parseRules } from './instance'
 import { logAction } from './moderation-log'
+import { notify } from './notifications'
+import { readOperation } from './operation'
 import { presentStatuses, type Status } from './status-presenter'
 import { accountStatusIds } from './timelines'
 import type { Db } from '../db/sql'
 import { blockedDomain } from '../platform/domain-name'
+import type { ImportAuthority } from '../platform/store-admin'
 
 // Reports (Mastodon 4.5's POST /api/v1/reports: Api::V1::ReportsController, ReportService, Report; migration
 // 0022_reports). A local account reports an account, optionally naming statuses of it and instance rules, and may ask
@@ -45,7 +50,7 @@ import { blockedDomain } from '../platform/domain-name'
 //     account's inboxes (reportForwardees, R23). It is signed by the instance actor (report_service.rb:98-100), so the
 //     reporter is not named, and delivered by the outbound path as any other activity without to (deliveries.ts): by
 //     each server's shared inbox when the account has one, where Mastodon posts to the reported account's own inbox.
-//   - Not done yet: Mastodon notifies its staff (notify_staff!, report_service.rb:44-51); no one is notified.
+//   - The OAuth admin is notified (notify_staff!, report_service.rb:44-51) by notifyStaff below.
 //
 // Bounds (RES-7): Mastodon sets none on status_ids or forward_to_domains; Kopje takes at most MAX_REPORT_STATUSES and
 // MAX_FORWARD_DOMAINS (more answer 422 before any status is read). The statuses are read by key, and the replied-to
@@ -150,6 +155,7 @@ export const createReport = userWriteOperation<ReportInput, ReportResult>((db, i
 		uri,
 		new Date(input.now).toISOString()
 	)!
+	notifyStaff(db, row, input.now)
 	if (forward) {
 		const recipients = reportForwardees(db, target, statusIds, domains)
 		if (recipients.length > 0) {
@@ -170,6 +176,60 @@ export const createReport = userWriteOperation<ReportInput, ReportResult>((db, i
 	}
 	return { status: 'ok', report: userReport(row, presentAccountsById(db, [target], input.present).get(target)!) }
 })
+
+// ReportService#notify_staff! (report_service.rb:44-51) for a report just written, in its transaction: the OAuth admin
+// (R37) is notified (admin.report) unless another report of the same account is unresolved
+// (Report#unresolved_siblings?, app/models/report.rb:128-130), so only the first unresolved report of an account
+// notifies. One seek in reports_target_state finds a sibling, however many reports the account has. Mastodon notifies
+// every user who can manage reports; Kopje's one is the OAuth admin, none when there is none. The rule then refuses the
+// admin's own report (NotifyService's from_self?), a reporter the admin blocks, mutes with notifications or
+// domain-blocks, and an unavailable reporter (shownSql). Kopje stores no remote report (an inbound Flag is
+// unsupported), so only a local reporter notifies, where Mastodon's ActivityPub::Activity::Flag goes through
+// ReportService and notifies too.
+function notifyStaff(db: Db, report: ReportRow, now: number): void {
+	const sibling = db.first(
+		`SELECT 1 AS x FROM reports INDEXED BY reports_target_state
+		WHERE target_account_id = ?1 AND (action_taken_at IS NULL) = 1 AND id <> CAST(?2 AS INTEGER) LIMIT 1`,
+		report.target_account_id,
+		report.id
+	)
+	const admin = sibling === undefined ? adminAccountIdOnce(db) : null
+	if (admin === null) {
+		return
+	}
+	notify(db, {
+		recipientId: admin,
+		type: 'admin.report',
+		fromId: report.account_id,
+		statusId: null,
+		reportId: report.id,
+		now,
+	})
+}
+
+// The reporter's Report entities of the reports `ids` (REST::ReportSerializer), by id, with their reported accounts
+// read in one query: an admin.report notification shows its report so (REST::NotificationSerializer#report). An id
+// that names no report is left out.
+export function presentReportsById(db: Db, ids: readonly string[], present: Present): Map<string, Report> {
+	if (ids.length === 0) {
+		return new Map()
+	}
+	const rows = db.all<ReportRow>(
+		`SELECT ${REPORT_COLUMNS} FROM reports WHERE id IN (SELECT CAST(value AS INTEGER) FROM json_each(?))`,
+		JSON.stringify([...new Set(ids)])
+	)
+	const accounts = presentAccountsById(
+		db,
+		rows.map((row) => row.target_account_id),
+		present
+	)
+	return new Map(
+		rows.flatMap((row) => {
+			const target = accounts.get(row.target_account_id)
+			return target === undefined ? [] : [[row.id, userReport(row, target)] as const]
+		})
+	)
+}
 
 export type ReportRow = {
 	id: string
@@ -555,6 +615,33 @@ export function resolveSuspensionReports(
 	}
 	return { last: rows.at(-1)?.id ?? null, read: rows.length, resolved: frozen.length }
 }
+
+export type ReportTargetPage =
+	{ ok: true; page: string } | { ok: false; code: 'wrong-authority' | 'report-not-found'; message: string }
+
+// GET /admin/reports/:id (the Access admin's, app/admin.ts): the web page of the account report `id` is about (its
+// Account entity's url). The Access admin is checked against the saved configuration in this transaction, before the
+// report is read (accessAdminRefusal), so a change of the settings while the request was being authenticated refuses
+// it; an id that is no report's is not found (Report.find).
+export const reportTargetPage = readOperation<
+	{ authority: ImportAuthority; id: string; origin: string },
+	ReportTargetPage
+>((db, { authority, id, origin }) => {
+	const refused = accessAdminRefusal(db, authority, 'only an Access admin opens a report')
+	if (refused !== null) {
+		return { ok: false, code: 'wrong-authority', message: refused }
+	}
+	const row = /^\d{1,18}$/.test(id)
+		? db.first<{ url: string | null; uri: string; username: string; domain: string | null }>(
+				`SELECT a.url, a.uri, a.username, a.domain FROM reports r JOIN accounts a ON a.id = r.target_account_id
+				WHERE r.id = CAST(? AS INTEGER)`,
+				id
+			)
+		: undefined
+	return row === undefined
+		? { ok: false, code: 'report-not-found', message: 'report not found' }
+		: { ok: true, page: accountUrl(row, origin) }
+})
 
 // Whether `id` is a report's (Admin::AccountAction#report: Report.find, RecordNotFound otherwise).
 export function reportExists(db: Db, id: string): boolean {

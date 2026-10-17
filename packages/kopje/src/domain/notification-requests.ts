@@ -154,7 +154,7 @@ function presentRequests(
 			where: 'r.account_id = ?1 AND r.id IN (SELECT CAST(value AS INTEGER) FROM json_each(?2))',
 			// The request's own column, not `s.id`: shownSql names its own `statuses s`, inside which `s.id` would be that
 			// status and not this one.
-			and: shownSql('?1', "'mention'", 'r.from_account_id', 'r.last_status_id', '?3'),
+			and: shownSql('?1', "'mention'", 'r.from_account_id', 'r.last_status_id', '?3', 'NULL'),
 		},
 		viewer.accountId,
 		JSON.stringify(rows.map((row) => row.id)),
@@ -254,7 +254,7 @@ function jobBatch(db: Db, job: Job, now: string): void {
 			const shown = db.all<{ id: number; type: string; status_id: string | null }>(
 				`SELECT n.id, n.type, n.status_id FROM notifications n
 				WHERE n.from_account_id = ?1 AND n.id >= ?2 AND n.id < ?3 AND n.account_id = ?4 AND n.filtered = 1
-					AND ${keptSql('n')} AND ${notifiedSql('?4', 'n.type', 'n.from_account_id', 'n.status_id', '?5')}
+					AND ${keptSql('n')} AND ${notifiedSql('?4', 'n.type', 'n.from_account_id', 'n.status_id', '?5', 'NULL')}
 				ORDER BY n.id DESC`,
 				...params,
 				now

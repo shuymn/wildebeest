@@ -1293,6 +1293,11 @@ function spend(db: Db, budget: Budget, sql: string, ...params: SqlStorageValue[]
 	return left === 0 ? 0 : db.run(sql, ...params, left)
 }
 
+// The first ?2 reports of the account ?1 in the order reports_target_state holds them (resolution state, then id), so
+// the window is one bounded range of the index (purgeRelationships).
+const REPORT_WINDOW = `SELECT id FROM reports INDEXED BY reports_target_state WHERE target_account_id = ?1
+	ORDER BY (action_taken_at IS NULL), id LIMIT ?2`
+
 function purgeRelationships(db: Db, id: string, budget: Budget): void {
 	// The account's list memberships and endorsements go before its follows: a follow's delete also deletes the followed
 	// account's rows in the follower's lists and its endorsement (migrations 0007_list_members and
@@ -1377,8 +1382,33 @@ function purgeRelationships(db: Db, id: string, budget: Budget): void {
 		id
 	)
 	// The local users' reports of the account (migration 0022_reports), as Mastodon's DeleteAccountService destroys an
-	// account's targeted_reports.
-	spend(db, budget, 'DELETE FROM reports WHERE id IN (SELECT id FROM reports WHERE target_account_id = ? LIMIT ?)', id)
+	// account's targeted_reports, child-first so no delete cascades: the pushes of their admin.report notifications
+	// (up to MAX_PUSH_BACKLOG each), then the notifications (one per report and recipient, migration
+	// 0040_report_notifications), then the reports. Each statement reads only the account's first reports in
+	// reports_target_state's own order (resolution state, then id), as many as the budget has left (REPORT_WINDOW), and
+	// takes what it deletes from them: a report waits until its notifications are gone, a notification until its pushes
+	// are, so every row written is counted and none is read past the window, however many reports the account has.
+	spend(
+		db,
+		budget,
+		`DELETE FROM push_deliveries WHERE id IN (SELECT d.id FROM (${REPORT_WINDOW}) w
+			JOIN notifications n ON n.report_id = w.id JOIN push_deliveries d ON d.notification_id = n.id LIMIT ?2)`,
+		id
+	)
+	spend(
+		db,
+		budget,
+		`DELETE FROM notifications WHERE id IN (SELECT n.id FROM (${REPORT_WINDOW}) w JOIN notifications n ON n.report_id = w.id
+			WHERE NOT EXISTS (SELECT 1 FROM push_deliveries d WHERE d.notification_id = n.id) LIMIT ?2)`,
+		id
+	)
+	spend(
+		db,
+		budget,
+		`DELETE FROM reports WHERE id IN (SELECT w.id FROM (${REPORT_WINDOW}) w
+			WHERE NOT EXISTS (SELECT 1 FROM notifications n WHERE n.report_id = w.id) LIMIT ?2)`,
+		id
+	)
 	// Its pins and featured hashtags, at most MAX_REMOTE_PINS and MAX_FEATURED_TAGS, the sync of them that waits
 	// and its pending pinned statuses (migration 0025_remote_collections).
 	spend(
