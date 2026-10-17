@@ -46,9 +46,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       seconds on the first request after the deploy.
     - `0042_report_action_fence`: lets a suspension tell which reports were changed after it. A suspension still
       resolving reports at the upgrade whose moderation log entry has already been pruned (the log keeps the newest
-      10,000) resolves none of them: resolve them by hand in your admin client. On the same benchmark store its upgrade
-      took 3.1 seconds (3.1 in two more runs; 6.1 on a loaded machine), a pause of a few seconds on the first request
-      after the deploy.
+      10,000) resolves none of them: resolve them by hand in your admin client. Its work grows with the moderation log
+      (at most 10,000 entries) and the suspensions still resolving reports, not with the number of reports. On the same
+      benchmark store its upgrade took 3.1 seconds (3.1 in two more runs; 6.1 on a loaded machine), a pause of a few
+      seconds on the first request after the deploy.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.13] - 2026-10-17
