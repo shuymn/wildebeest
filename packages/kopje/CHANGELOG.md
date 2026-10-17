@@ -32,6 +32,13 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - The follow request list leaves out unavailable requesters (suspended, or being deleted) and reads a bounded window
   of requests per page, as the other filtered lists do: it may return a short or empty page while its `next` link
   still leads on.
+- Answers that present many accounts at once stop at 8 MiB of accounts, counted before the rows are read and again
+  once serialized, so remote bios and profile fields can no longer push them toward the Worker's memory limit. A
+  typical account takes about 2 KiB, so 1,000 still fit whole. `GET /api/v1/lists/:id/accounts` and
+  `GET /api/v1/endorsements` with `limit=0` answer up to that and, when they stop short, send a `Link` header whose
+  `next` (`limit=0` with `max_id`) answers the rest; `max_id` is otherwise ignored there, as in Mastodon.
+  `GET /api/v1/accounts/familiar_followers` splits the 8 MiB across the requested accounts, so one with large
+  followers does not crowd out the others, and shows fewer followers past its share.
 
 ### Instance changes
 
