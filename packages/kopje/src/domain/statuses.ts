@@ -1749,7 +1749,7 @@ export const revokeQuote = userWriteOperation<RevokeInput, RevokeResult>((db, in
 				input.now
 			)
 		}
-		for (const request of answeredRequests(db, quote.quotingUri, quoted)) {
+		for (const request of answeredRequests(db, quote.quotingUri, quoted, quote.quotingAuthorUri)) {
 			recordOutbound(
 				db,
 				accountId,

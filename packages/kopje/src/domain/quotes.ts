@@ -1084,7 +1084,10 @@ export type QuoteAuthorization = {
 
 // GET /ap/users/:username/quote_authorizations/:authorization_id (federation/routes.ts), one read: the stamp only while
 // it is the current authorization of an accepted quote, never retired, of a local original of the available account
-// `username` that is public or unlisted. Ids only (FEP-044f: the quote post is never embedded).
+// `username` (the quoted author: the path binds it) that is public or unlisted, and while the quoting status is
+// there: a Delete of it retires the authorization in its first transaction (retireQuoteOf), and a purge of its author
+// (whose batches delete the quote last) hides it here at once. Ids only (FEP-044f: the quote post is never embedded).
+// The id is 128 random bits, never sequential, so stamps cannot be enumerated.
 export const quoteAuthorization = readOperation<
 	{ username: string; authorizationId: string },
 	QuoteAuthorization | null
@@ -1095,7 +1098,9 @@ export const quoteAuthorization = readOperation<
 			JOIN accounts a ON a.id = t.account_id JOIN local_accounts l ON l.account_id = a.id
 		WHERE q.authorization_id = ?1 AND q.state = 'accepted' AND a.domain IS NULL AND a.username = ?2
 			AND ${availableLocalSql('l')} AND t.reblog_of_id IS NULL AND t.visibility IN ${DISTRIBUTABLE_SQL}
-			AND NOT EXISTS (SELECT 1 FROM quote_revocations r WHERE r.authorization = ?1)`,
+			AND NOT EXISTS (SELECT 1 FROM quote_revocations r WHERE r.authorization = ?1)
+			AND NOT EXISTS (SELECT 1 FROM accounts qa JOIN inbound_jobs j ON j.kind = 'purge' AND j.key = qa.uri
+				WHERE qa.id = s.account_id)`,
 		authorizationId,
 		username
 	)
@@ -1173,15 +1178,20 @@ export function revokeQuoteRow(
 	)
 }
 
-// The requests answered for the quote of `quotingUri` on `quotedId` (quote_requests), oldest first: the Rejects a
-// revoke sends. All are the quoting author's, so MAX_QUOTE_REQUESTS_PER_ACTOR bounds them.
-export function answeredRequests(db: Db, quotingUri: string, quotedId: string): string[] {
+// The requests the quoting author `authorUri` had answered for its quote `quotingUri` of `quotedId` (quote_requests),
+// oldest first: the Rejects a revoke sends. A request may name anyone's status as its instrument (a refused one is
+// recorded before the instrument is read), so only the quoting author's own count: another actor's never draws a
+// Reject about this quote, nor counts against its bound, MAX_QUOTE_REQUESTS_PER_ACTOR (one seek of
+// quote_requests_instrument).
+export function answeredRequests(db: Db, quotingUri: string, quotedId: string, authorUri: string): string[] {
 	return db
 		.all<{ activity_uri: string }>(
-			`SELECT activity_uri FROM quote_requests WHERE instrument_uri = ? AND quoted_status_id = ?
+			`SELECT activity_uri FROM quote_requests
+			WHERE instrument_uri = ? AND quoted_status_id = ? AND actor_uri = ?
 			ORDER BY answered_at, activity_uri LIMIT ?`,
 			quotingUri,
 			quotedId,
+			authorUri,
 			MAX_QUOTE_REQUESTS_PER_ACTOR
 		)
 		.map((row) => row.activity_uri)

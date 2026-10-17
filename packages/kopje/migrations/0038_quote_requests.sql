@@ -14,7 +14,8 @@
 --   quote_requests           every QuoteRequest Kopje answered (Accept or Reject), kept apart from the quote row so that
 --                            a later Update replacing the row cannot erase it: a request id found here is never answered
 --                            again (ID-7). instrument_uri and quoted_status_id name the quote it was about, so a revoke
---                            sends a Reject of each request answered for that quote. Pruned by age (RETRACTION_TTL_MS,
+--                            sends a Reject of each request its author answered for that quote (a request names any
+--                            instrument it likes, so only the quoting author's own count). Pruned by age (RETRACTION_TTL_MS,
 --                            30 days) and capped per actor by refusal, never by evicting a live row (quotes.ts).
 --
 -- quote_revocations rows written here carry the quoted author's uri as actor_uri and pending 0: the revocation batches
@@ -22,6 +23,10 @@
 --
 -- Cost: two ALTERs adding a nullable column (a change of the schema alone); the authorization_id CHECK is tested
 -- against each stored quote, all of which hold NULL. The index, table and triggers start empty. Nothing is backfilled.
+-- Measured on the benchmark store of test/bench/migration-cost.ts (1,000,000 accounts, 3,000,000 follows, 2,000,000
+-- statuses with their mentions and tags, 200,000 quotes, 10,000 reports, 20 local accounts) in workerd's local Durable
+-- Object SQLite: 2,524 ms for the upgrade of this file through the kernel (its bookmark, transaction and schema
+-- verification; 2,565 ms in a second run), within the 5,000 ms each migration file may take.
 
 ALTER TABLE quotes ADD COLUMN authorization_id TEXT CHECK (authorization_id IS NULL OR state = 'accepted');
 ALTER TABLE quotes ADD COLUMN activity_uri TEXT;
@@ -36,11 +41,11 @@ CREATE TABLE quote_requests (
   answered_at INTEGER NOT NULL
 ) WITHOUT ROWID;
 
--- The live requests of an actor (the cap), the requests of a quote (a revoke's Rejects), and the expired ones (the
--- sweep).
+-- The live requests of an actor (the cap), the requests of a quote by its author (a revoke's Rejects), and the expired
+-- ones (the sweep).
 CREATE INDEX quote_requests_actor ON quote_requests (actor_uri, answered_at);
 
-CREATE INDEX quote_requests_instrument ON quote_requests (instrument_uri, quoted_status_id);
+CREATE INDEX quote_requests_instrument ON quote_requests (instrument_uri, quoted_status_id, actor_uri, answered_at);
 
 CREATE INDEX quote_requests_answered ON quote_requests (answered_at);
 

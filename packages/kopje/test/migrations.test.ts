@@ -4137,3 +4137,102 @@ describe('0037_quote_policy', () => {
 		expect(locals).toBe(few)
 	}, 120_000)
 })
+
+describe('0038_quote_requests', () => {
+	const NAME = '0038_quote_requests'
+	const at = NAMES.indexOf(NAME)
+
+	// A local account with `statuses` public statuses, and `quotes` quotes among them (status i + 1 quoting status i).
+	function seed(sql: SqlStorage, statuses: number, quotes: number) {
+		sql.exec(
+			`INSERT INTO accounts (id, uri, username) VALUES ('100000000000000001', 'https://kopje.test/ap/users/u1', 'u1')`
+		)
+		sql.exec(
+			`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey)
+			VALUES ('100000000000000001', 'u1@example.com', X'00', X'00', 'k')`
+		)
+		sql.exec(
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+			SELECT CAST(200000000000000000 + i AS TEXT), 'https://kopje.test/ap/o/' || i, '100000000000000001', 'public',
+				'x', '2026-10-12T00:00:00.000Z'
+			FROM n WHERE ?1 > 0`,
+			statuses
+		)
+		sql.exec(
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, quoted_account_id, state, updated_at)
+			SELECT CAST(200000000000000000 + i + 1 AS TEXT), 'https://kopje.test/ap/o/' || i,
+				CAST(200000000000000000 + i AS TEXT), '100000000000000001',
+				CASE i % 2 WHEN 0 THEN 'accepted' ELSE 'pending' END, '2026-10-12T00:00:00.000Z'
+			FROM n WHERE ?1 > 0`,
+			quotes
+		)
+	}
+
+	it('keeps an authorization only while accepted, and records each one retired, by any path', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, MIGRATIONS.slice(0, at)).upgrade()).toMatchObject({ ok: true })
+			seed(sql, 4, 3)
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+			const quote = (n: number) => String(200000000000000000n + BigInt(n))
+			// 2 quotes 1 (pending), 3 quotes 2 (accepted), 4 quotes 3 (pending).
+			expect(() => sql.exec("UPDATE quotes SET authorization_id = 'a' WHERE status_id = ?", quote(2))).toThrow(
+				/CHECK constraint failed/
+			)
+			sql.exec("UPDATE quotes SET authorization_id = 'a' WHERE status_id = ?", quote(3))
+			expect(() => sql.exec("UPDATE quotes SET state = 'revoked' WHERE status_id = ?", quote(3))).toThrow(
+				/CHECK constraint failed/
+			)
+			sql.exec("UPDATE quotes SET state = 'accepted', authorization_id = 'b' WHERE status_id = ?", quote(4))
+			expect(() =>
+				sql.exec("UPDATE quotes SET state = 'accepted', authorization_id = 'b' WHERE status_id = ?", quote(2))
+			).toThrow(/UNIQUE constraint failed/)
+			sql.exec("UPDATE quotes SET state = 'revoked', authorization_id = NULL WHERE status_id = ?", quote(3))
+			sql.exec('DELETE FROM quotes WHERE status_id = ?', quote(4))
+			expect(
+				sql.exec('SELECT authorization, actor_uri, pending FROM quote_revocations ORDER BY authorization').toArray()
+			).toEqual([
+				{ authorization: 'a', actor_uri: 'https://kopje.test/ap/users/u1', pending: 0 },
+				{ authorization: 'b', actor_uri: 'https://kopje.test/ap/users/u1', pending: 0 },
+			])
+			sql.exec(
+				`INSERT INTO quote_requests (activity_uri, actor_uri, instrument_uri, quoted_status_id, answered_at)
+				VALUES ('r', 'x', 'i', 's', 1)`
+			)
+			expect(() =>
+				sql.exec(
+					`INSERT INTO quote_requests (activity_uri, actor_uri, instrument_uri, quoted_status_id, answered_at)
+					VALUES ('r', 'y', 'i', 's', 2)`
+				)
+			).toThrow(/UNIQUE constraint failed/)
+		})
+	})
+
+	// The ALTERs change the schema alone; the CHECK is tested against each stored quote (all NULL), so the rows read
+	// grow with the quotes and with nothing else.
+	it('reads the stored quotes once, for the CHECK, and nothing else', async () => {
+		const measure = async (statuses: number, quotes: number) => {
+			const store = freshStore()
+			return runInDurableObject(store, async (_instance, state) => {
+				const sql = state.storage.sql
+				await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+				seed(sql, statuses, quotes)
+				// The file in one call, as the kernel runs it.
+				const cursor = sql.exec(MIGRATIONS[at]?.sql ?? '')
+				cursor.toArray()
+				const read = cursor.rowsRead
+				expect(sql.exec('SELECT count(*) AS n FROM quotes WHERE authorization_id IS NULL').one()).toEqual({
+					n: quotes,
+				})
+				return read
+			})
+		}
+		const none = await measure(1, 0)
+		expect(await measure(10_001, 0)).toBe(none)
+		const some = await measure(1_001, 1_000)
+		expect(await measure(2_001, 2_000)).toBe(2 * some - none)
+	}, 120_000)
+})

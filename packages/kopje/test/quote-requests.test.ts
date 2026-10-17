@@ -894,6 +894,64 @@ describe('the stamp endpoint (QuoteAuthorizationsController)', () => {
 	})
 })
 
+describe('review regressions', () => {
+	it('rejects on revoke only the quoting author’s requests: a third party naming the quote’s status changes nothing', async () => {
+		const { t, bob, mine } = await world()
+		const { note, request } = await accepted(t, bob, mine.uri)
+		// carol, whom alice blocks, asks to quote alice's status with bob's Note as her instrument: refused, and recorded
+		// under carol alone.
+		const carol = await mastodonActor(t.web, 'carol', { origin: 'https://other.example', key: 2 })
+		await t.post(carol, quoteRequest(carol, `${LOCAL}/ap/o/none`, 'x'))
+		const carolId = (await sql<{ id: string }>(t.store, 'SELECT id FROM accounts WHERE uri = ?', carol.uri))[0]!.id
+		await sql(
+			t.store,
+			'INSERT INTO blocks (account_id, target_account_id, created_at) VALUES (?, ?, ?)',
+			ALICE,
+			carolId,
+			'2026-10-12T00:00:00.000Z'
+		)
+		const third = quoteRequest(carol, mine.uri, note.id)
+		expect(await t.post(carol, third)).toBe(202)
+		expect(await sql(t.store, 'SELECT actor_uri FROM quote_requests WHERE activity_uri = ?', third.id)).toEqual([
+			{ actor_uri: carol.uri },
+		])
+		// An unrefused third party naming bob's Note is not answered at all (the instrument is not hers).
+		await sql(t.store, 'DELETE FROM blocks')
+		const unanswered = quoteRequest(carol, mine.uri, note.id)
+		expect(await t.post(carol, unanswered)).toBe(202)
+		expect(
+			await sql(t.store, 'SELECT count(*) AS n FROM quote_requests WHERE activity_uri = ?', unanswered.id)
+		).toEqual([{ n: 0 }])
+		expect(await sql(t.store, 'SELECT count(*) AS n FROM quote_requests WHERE actor_uri = ?', bob.uri)).toEqual([
+			{ n: 1 },
+		])
+		await deliver(t)
+		expect((await revoke(t, mine.id, await statusId(t, note.id))).status).toBe(200)
+		const rejects: string[] = []
+		await deliver(t, (_url, body) => {
+			const activity = JSON.parse(body) as { type: string; object: { id: string } }
+			if (activity.type === 'Reject') {
+				rejects.push(activity.object.id)
+			}
+			return 202
+		})
+		expect(rejects).toEqual([request.id])
+	})
+
+	it('stops serving the stamp as soon as the quoting author’s purge starts', async () => {
+		const { t, bob, mine } = await world()
+		const { stamp: result } = await accepted(t, bob, mine.uri)
+		expect((await stamp(t, result)).status).toBe(200)
+		await sql(
+			t.store,
+			"INSERT INTO inbound_jobs (kind, key, actor_uri, created_at) VALUES ('purge', ?1, ?1, ?2)",
+			bob.uri,
+			NOW
+		)
+		expect((await stamp(t, result)).status).toBe(404)
+	})
+})
+
 describe('delivery subjects', () => {
 	it('names an Accept of a QuoteRequest by its stamp, and leaves a Follow’s Accept and the status’s receipts alone', async () => {
 		const { t, bob, mine } = await world()
