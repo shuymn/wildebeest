@@ -73,6 +73,7 @@ const NOT_CARRIED: Record<string, string> = {
 		'polls of Kopje; legacy never wrote its polls table, and a legacy row there stops the conversion (UNUSED_LEGACY_TABLES)',
 	push_deliveries: 'push queue; legacy has no such data',
 	push_subscriptions: 'push subscriptions are not carried: clients register again',
+	quote_requests: 'quote requests Kopje answered; legacy has no quotes',
 	quote_revocations: 'stamps revoked while Kopje stored quotes; legacy has no quotes',
 	quotes: "quotes Kopje received; legacy has no quotes, and a carried status's quote properties stay in raw",
 	remote_keys: 'fetched again on demand',
