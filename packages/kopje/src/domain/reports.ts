@@ -180,12 +180,12 @@ export const createReport = userWriteOperation<ReportInput, ReportResult>((db, i
 // ReportService#notify_staff! (report_service.rb:44-51) for a report just written, in its transaction: the OAuth admin
 // (R37) is notified (admin.report) unless another report of the same account is unresolved
 // (Report#unresolved_siblings?, app/models/report.rb:128-130), so only the first unresolved report of an account
-// notifies. One seek in
-// reports_target_state finds a sibling, however many reports the account has. Mastodon notifies every user who can
-// manage reports; Kopje's one is the OAuth admin, none when there is none. The rule then refuses the admin's own report
-// (NotifyService's from_self?), a reporter the admin blocks, mutes with notifications or domain-blocks, and an
-// unavailable reporter (shownSql). Kopje stores no remote report (an inbound Flag is unsupported), so only a local
-// reporter notifies, where Mastodon's ActivityPub::Activity::Flag goes through ReportService and notifies too.
+// notifies. One seek in reports_target_state finds a sibling, however many reports the account has. Mastodon notifies
+// every user who can manage reports; Kopje's one is the OAuth admin, none when there is none. The rule then refuses the
+// admin's own report (NotifyService's from_self?), a reporter the admin blocks, mutes with notifications or
+// domain-blocks, and an unavailable reporter (shownSql). Kopje stores no remote report (an inbound Flag is
+// unsupported), so only a local reporter notifies, where Mastodon's ActivityPub::Activity::Flag goes through
+// ReportService and notifies too.
 function notifyStaff(db: Db, report: ReportRow, now: number): void {
 	const sibling = db.first(
 		`SELECT 1 AS x FROM reports INDEXED BY reports_target_state
