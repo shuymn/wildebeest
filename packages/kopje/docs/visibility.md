@@ -544,10 +544,11 @@ that fetches nothing. A block names a domain, stored as `blockedDomain` returns 
 - **The admin API.** The OAuth admin (VIS-29) lists, shows, creates, updates and deletes blocks through
   `/api/v1/admin/domain_blocks` (`src/domain/admin-domain-blocks.ts`), each write logged in its transaction. Beyond
   Mastodon's refusals, a create or update answers 422 for severity `silence` (not built; also Mastodon's default when
-  none is sent), for `reject_media=true` (no remote media cache to reject from), for a domain deeper than
-  `MAX_BLOCK_LABELS` (checked before any ruling block is looked up; a raw domain longer than `MAX_DOMAIN_INPUT` is
-  refused before it is normalized, and a normalized one beyond Mastodon's 255 characters or 63 per label), and for a comment longer than `MAX_BLOCK_COMMENT` (1,000) characters, which bounds a page of
-  `MAX_DOMAIN_BLOCKS_LIMIT` (500) blocks. `reject_reports` and `obfuscate` are stored and shown, and change nothing:
+  none is sent), for `reject_media=true` (no remote media cache to reject from), and for a comment longer than
+  `MAX_BLOCK_COMMENT` (1,000) characters, which bounds a page of `MAX_DOMAIN_BLOCKS_LIMIT` (500) blocks. The domain is
+  validated on create only, since an update never changes it: a raw domain longer than `MAX_DOMAIN_INPUT` is refused
+  before it is normalized, a normalized one beyond Mastodon's 255 characters or 63 per label is invalid, and one
+  deeper than `MAX_BLOCK_LABELS` is refused before any ruling block is looked up. `reject_reports` and `obfuscate` are stored and shown, and change nothing:
   Kopje receives no remote reports, and the public block list (`GET /api/v1/instance/domain_blocks`) stays 404, as
   Mastodon's default `show_domain_blocks` hides it.
 - **The measure `instance_follows`** (`src/domain/admin-measures.ts`), which Fediblockhole reads before a block
