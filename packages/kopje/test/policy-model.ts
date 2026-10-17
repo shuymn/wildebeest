@@ -618,6 +618,26 @@ export class PolicyModel {
 		return kind !== 'content' || !this.blocked(signer, x)
 	}
 
+	// VIS-30, the send-time check (deliveries.ts sendRefused, at the claim and at confirmation): a delivery that is not
+	// a retraction is sent only while its signer is available (but for the suspension's own Update of the actor, R1)
+	// and, when the recipients behind it are known (`recipients`; 'many' above PROVENANCE_MAX, "not all unavailable"),
+	// while one of them exists and is available. Unknown recipients (null) leave the host rule only, which the world
+	// does not model (instance domain blocks come in phase B2a); nor does it model a purged account, which is missing.
+	sends(
+		signer: number,
+		retracts: boolean,
+		recipients: readonly number[] | 'many' | null,
+		ownSuspension = false
+	): boolean {
+		if (retracts) {
+			return true
+		}
+		if (!this.available(signer) && !ownSuspension) {
+			return false
+		}
+		return recipients === null || recipients === 'many' || recipients.some((x) => this.available(x))
+	}
+
 	// R23: the remote accounts an activity of `kind` by `signer` for `audience` reaches: the accepted remote followers
 	// when the audience has them, less, for content, unavailable ones and those on a domain the signer blocks; and the
 	// remote accounts of the audience it names (R22), less, for content, unavailable ones. A retraction also reaches

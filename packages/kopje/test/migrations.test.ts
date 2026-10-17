@@ -4693,3 +4693,53 @@ describe('0042_report_action_fence', () => {
 		expect(await cost({ log: MODERATION_LOG_KEEP, current: 100, obsolete: 5_000, reports: 10_000 })).toBe(capped)
 	}, 300_000)
 })
+
+describe('0044_delivery_provenance', () => {
+	const NAME = '0044_delivery_provenance'
+	const at = NAMES.indexOf(NAME)
+
+	// The rows the file reads on a store of `deliveries` queued rows, and what an old row holds after it.
+	async function upgrade(deliveries: number) {
+		const store = freshStore()
+		return runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username) VALUES ('100000000000000001', 'https://kopje.test/ap/users/a', 'a')"
+			)
+			sql.exec(
+				`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey)
+				VALUES ('100000000000000001', 'a@example.com', X'00', X'00', 'k')`
+			)
+			sql.exec(
+				`INSERT INTO outbound_activities (id, account_id, body, created_at)
+				VALUES (1, '100000000000000001', '{"activity":{"type":"Create"},"audience":{"followers":true,"accounts":[]}}', 0)`
+			)
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+				INSERT INTO deliveries (activity_id, account_id, inbox_url, lane, state, next_attempt_at, updated_at)
+				SELECT 1, '100000000000000001', 'https://s' || i || '.example/inbox', 'https://s' || i || '.example',
+					'pending', 0, 0 FROM n WHERE ?1 > 0`,
+				deliveries
+			)
+			const cursor = sql.exec(MIGRATIONS[at]?.sql ?? '')
+			cursor.toArray()
+			return {
+				read: cursor.rowsRead,
+				written: cursor.rowsWritten,
+				first: sql
+					.exec('SELECT recipient_accounts, recipient_domains, recipients_many FROM deliveries ORDER BY id LIMIT 1')
+					.toArray(),
+			}
+		})
+	}
+
+	// Each ALTER changes the schema alone: no row is read or written, however many deliveries are queued.
+	it('reads and writes no delivery, and leaves queued rows without provenance', async () => {
+		const none = await upgrade(0)
+		const many = await upgrade(10_000)
+		expect(many.read).toBe(none.read)
+		expect(many.written).toBe(none.written)
+		expect(many.first).toEqual([{ recipient_accounts: null, recipient_domains: null, recipients_many: null }])
+	}, 120_000)
+})

@@ -17,7 +17,7 @@ import {
 	sql,
 } from './api-helpers'
 import { NOW } from './app-helpers'
-import { BUILD, migratedStore } from './helpers'
+import { BUILD, claimSent, migratedStore } from './helpers'
 import { newClient, VAPID } from './push-helpers'
 import { deferred } from './quote-helpers'
 import { community, post, remoteAccount, remoteFollows, seedStatus } from './status-helpers'
@@ -97,7 +97,7 @@ async function drain(store: StoreStub, now = NOW): Promise<Sent[]> {
 	const sent: Sent[] = []
 	for (let round = 0; round < 200; round++) {
 		const leaseToken = `lease-${round}`
-		const claim = await store.claimDeliveries(BUILD, { now, leaseToken })
+		const claim = await claimSent(store, { now, leaseToken })
 		for (const delivery of claim.deliveries) {
 			const body = JSON.parse(delivery.body) as { type: string; object?: { suspended?: boolean } }
 			sent.push({

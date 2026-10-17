@@ -24,6 +24,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Changed
 
+- Deliveries are checked again right before they are sent, and what is sent is read at that moment. Content (posts,
+  edits, boosts, likes, follows, profile updates) is no longer sent to an inbox whose recipients are all gone (deleted,
+  or being deleted) by then; deletions and other withdrawals still go. A delivery queued before this version knows no
+  recipients and is checked by its sender only. Each delivery costs one more call to the Store.
 - Lists that hide some of their rows from the viewer (timelines, account statuses, bookmarks, favourites,
   notifications, followers and following, who favourited or boosted, notification requests, list members,
   endorsements, the profile page and the outbox) read a bounded window of rows per request, so a long run of hidden
@@ -49,7 +53,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds four migrations, applied on the first request after the deploy; a rollback to an earlier version
+- Store schema: adds five migrations, applied on the first request after the deploy; a rollback to an earlier version
   needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0040_report_notifications`: lets a notification name a report. It reads each stored notification once and no
       other table: on a benchmark store of 1,000,000 accounts, 3,000,000 follows, 2,000,000 statuses and 2,000,000
@@ -70,6 +74,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       6 is the overhead of an upgrade on a store that size (0042, upgraded alone there, took 6.0 and 5.9); an upgrade
       that applies several files pays it once. Expect a pause of
       several seconds on the first request after the deploy.
+    - `0044_delivery_provenance`: lets each delivery record the recipients behind it. It changes the schema only and
+      reads no row, however many deliveries are queued. On the same benchmark store its upgrade took 5.9 seconds (5.9
+      and 5.8 in two more runs), all of it the overhead of an upgrade on a store that size, which an upgrade applying
+      several files pays once.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.13] - 2026-10-17

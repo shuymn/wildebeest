@@ -1536,10 +1536,15 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, resolveSearch, input)
 	}
 
-	// Delivery (B2): claims and completions from the Worker's delivery round, the operator's view, and the sweep.
+	// Delivery (B2): claims, confirmations and completions from the Worker's delivery round, the operator's view, and
+	// the sweep.
 
 	claimDeliveries(callerBuild: string, input: OperationInput<typeof deliveries.claimDeliveries>) {
 		return this.#kernel.execute(callerBuild, deliveries.claimDeliveries, input)
+	}
+
+	confirmDelivery(callerBuild: string, input: OperationInput<typeof deliveries.confirmDelivery>) {
+		return this.#kernel.execute(callerBuild, deliveries.confirmDelivery, input)
 	}
 
 	completeDelivery(callerBuild: string, input: OperationInput<typeof deliveries.completeDelivery>) {

@@ -719,9 +719,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   older ones later. An unsuspension of a suspension made before the epoch existed moves it once. The jobs are bound to
   their epoch: the suspension's job resolves only the reports frozen by the suspension, and stops when the account is
   unsuspended or in a later epoch; an unsuspension's job stops when the account is suspended again. A suspended local
-  sender's queued deliveries are dropped when claimed, except retractions and its suspension `Update` (R1); a delivery
-  leased before the suspension committed may still be sent while its lease lasts (the claim is the boundary until a
-  send-time confirmation exists). `actOnAccount` and
+  sender's queued deliveries are dropped when claimed or confirmed, except retractions and its suspension `Update`
+  (R1); a delivery confirmed before the suspension committed may still be sent (VIS-30's boundary). `actOnAccount` and
   `unsuspendAdminAccount` in `src/domain/admin-accounts.ts`, `src/domain/suspension.ts`, `currentCredentialSql` in
   `src/domain/auth.ts`, `REFUSED_SENDER` in `src/domain/deliveries.ts`, migration `0034_admin_suspension`;
   `test/admin-suspension.test.ts`, `test/cascade-guard.test.ts`, `test/migrations.test.ts`. The report fence is
@@ -748,6 +747,26 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `0040_report_notifications` and `0041_report_notifications_key` (one notification per report and recipient);
   `test/report-notifications.test.ts`, `test/policy-oracle.test.ts`,
   `test/migrations.test.ts`.
+- **VIS-30: an unavailable recipient or a refused server gets no new content.** Only the delivery part is built, as
+  plumbing for remote suspension (phase B1b) and instance domain blocks (B2a); until they land, nothing is unavailable
+  for a new reason. Each staged target records the recipients behind it (merged across followers, addressed accounts,
+  silent recipients, poll voters and other statuses' reach before deduplication by inbox): up to 16 account ids, the
+  hosts of their actor ids, or `many` above 16, meaning "not all unavailable"; expansion copies them onto the delivery
+  row. A row that is not a retraction (by its persisted `retracts` flag) is dropped, its lane promoted, when its sender
+  is refused (R1), its inbox host is refused by the host policy, none of its listed accounts exists and is available
+  (R1: in practice a recipient being deleted or purged), or the host policy refuses every listed host. The check runs
+  at the claim and again in `confirmDelivery`, which the Worker calls under the claim's lease after the signer is
+  loaded and the host checked, right before signing and the POST; the body sent is read there, never from the claim. A
+  change that commits after confirmation does not stop that POST; a confirmation that fails, or finds the lease taken
+  over, sends nothing, and the lease expires. Accepted residuals: a shared inbox serving an available recipient besides
+  unavailable ones is sent (content expansion already left the unavailable out); a row without provenance (queued before
+  migration `0044`, phase A's staged reach, a retraction's earlier receivers) gets the inbox host rule only; Mastodon's
+  `DeliveryWorker` has no such check, so this is stricter than Mastodon, whose reach already leaves deleted accounts
+  out. A dropped row writes no receipt. _Implemented on branch `kopje/admin-b1a`_: `targetsOf`, `sendRefused`,
+  `claimDeliveries` and `confirmDelivery` in `src/domain/deliveries.ts`, `recipientsFor` in `src/domain/audience.ts`,
+  `src/domain/host-policy.ts` (refuses no host until B2a), `deliveryRound` in `src/jobs/deliver.ts`, migration
+  `0044_delivery_provenance`; `test/delivery-send-check.test.ts`, `test/policy-writes.test.ts` (provenance and the
+  send-time rule against `sends` in `test/policy-model.ts`), `test/migrations.test.ts`.
 
 ### Authorization (AUTH)
 
@@ -1965,7 +1984,7 @@ Each stage ships tests for these cases, named with the invariant IDs.
   scope, a revoked token, another account's resource, and a status the viewer may not see.
 - **Inbound activity handler:** ID-1, ID-3, ID-6, ID-7, ID-8, VIS-2, HTML-1, RES-1, RES-2, RES-6, OPS-1; the inbox
   precheck and the spool also OPS-6 (the cutover's maintenance worker shares them).
-- **Outbound activity or delivery:** VIS-3, NET-2, NET-3, DATA-1, DATA-7, RES-5, RES-6.
+- **Outbound activity or delivery:** VIS-3, VIS-30, NET-2, NET-3, DATA-1, DATA-7, RES-5, RES-6.
 - **Fetch of a remote URL:** NET-1, NET-3, NET-4, ID-2, ID-8. Use a sink client, never `fetch` directly.
 - **Rendered field or HTML page:** HTML-1, HTML-2, HTML-3, WEB-2, WEB-5. Run the vector suites.
 - **Web UI, consent or setup:** WEB-1 to WEB-5, AUTH-8, VIS-4, HTML-1 to HTML-3, SETUP-1 to SETUP-4.

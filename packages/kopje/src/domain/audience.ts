@@ -1324,17 +1324,48 @@ export function reportForwardees(
 		.map((row) => row.id)
 }
 
+// A remote recipient, as a target's provenance records it (VIS-30, deliveries.ts): its account id, and the host of
+// its actor id (uriHostSql), which an inbox on another host does not reveal.
+export type RemoteRecipient = { id: string; host: string }
+
+// A remote recipient reached at `inbox`: its shared inbox when it has one, else its personal inbox (null or '' when
+// it has none).
+export type ReachedInbox = RemoteRecipient & { inbox: string | null }
+
 // A remote account an activity is addressed to, with its inboxes ('' read as none).
-export type AddressedAccount = { uri: string; inbox_url: string | null; shared_inbox_url: string | null }
+export type AddressedAccount = RemoteRecipient & {
+	uri: string
+	inbox_url: string | null
+	shared_inbox_url: string | null
+}
+
+// The most recipients a target's provenance lists (VIS-30, deliveries.ts): above it, a target is marked `many`.
+export const PROVENANCE_MAX = 16
 
 export type OutboundRecipients = {
-	// The inboxes of the signer's accepted remote followers the activity reaches, when its audience has the followers:
-	// each one's shared inbox when it has one, else its personal inbox, deduplicated (possibly null or '').
-	followerInboxes: (string | null)[]
+	// The signer's accepted remote followers the activity reaches, when its audience has the followers: per inbox, at
+	// most PROVENANCE_MAX + 1 of them in id order and the first of each of at most PROVENANCE_MAX + 1 hosts (byInbox).
+	followers: ReachedInbox[]
 	// The remote accounts of its audience it reaches, by id.
 	accounts: AddressedAccount[]
-	// The inboxes of the remote voters of its poll it reaches, when its audience has them, as followerInboxes are.
-	voterInboxes: (string | null)[]
+	// The remote voters of its poll it reaches, when its audience has them, as followers are.
+	voters: ReachedInbox[]
+}
+
+const RECIPIENT_COLUMNS = `a.id, ${uriHostSql('a.uri')} AS host`
+
+// The rows (id, host, inbox) of `query` that a target's provenance can use, at most 2 × (PROVENANCE_MAX + 1) per
+// inbox however many recipients share it: the first PROVENANCE_MAX + 1 by id, which tell whether there are more than
+// PROVENANCE_MAX, and the first recipient of each of the first PROVENANCE_MAX + 1 hosts, which tell whether there are
+// more hosts than that. The query is still read whole (as SELECT DISTINCT inbox read it), but what it returns, and
+// what staging keeps, is bounded per inbox.
+function byInbox(query: string): string {
+	return `SELECT id, host, inbox FROM (
+		SELECT id, host, inbox, row_number() OVER (PARTITION BY inbox ORDER BY id) AS pn,
+			row_number() OVER (PARTITION BY inbox, host ORDER BY id) AS hn,
+			dense_rank() OVER (PARTITION BY inbox ORDER BY host) AS hr
+		FROM (${query}))
+	WHERE pn <= ${PROVENANCE_MAX + 1} OR (hn = 1 AND hr <= ${PROVENANCE_MAX + 1})`
 }
 
 // R23: whom an activity by `signerId` for `audience` reaches, by its kind (outboundKind). Local accounts are not
@@ -1347,19 +1378,18 @@ export function recipientsFor(
 	withdraws = false
 ): OutboundRecipients {
 	const kind = outboundKind(activity, withdraws)
-	const followerInboxes = audience.followers
-		? db
-				.all<{ inbox: string | null }>(
-					`SELECT DISTINCT COALESCE(NULLIF(a.shared_inbox_url, ''), a.inbox_url) AS inbox
-					FROM main.follows f JOIN main.accounts a ON a.id = f.account_id
-					WHERE f.target_account_id = ?1 AND f.state = 'accepted' AND a.domain IS NOT NULL
-						AND NOT ${leavesOutSql(kind, 'follower', '?1', 'a.id')}`,
-					signerId
-				)
-				.map((row) => row.inbox)
+	const followers = audience.followers
+		? db.all<ReachedInbox>(
+				byInbox(`SELECT ${RECIPIENT_COLUMNS}, COALESCE(NULLIF(a.shared_inbox_url, ''), a.inbox_url) AS inbox
+				FROM main.follows f JOIN main.accounts a ON a.id = f.account_id
+				WHERE f.target_account_id = ?1 AND f.state = 'accepted' AND a.domain IS NOT NULL
+					AND NOT ${leavesOutSql(kind, 'follower', '?1', 'a.id')}`),
+				signerId
+			)
 		: []
 	const accounts = db.all<AddressedAccount>(
-		`SELECT a.uri, NULLIF(a.inbox_url, '') AS inbox_url, NULLIF(a.shared_inbox_url, '') AS shared_inbox_url
+		`SELECT ${RECIPIENT_COLUMNS}, a.uri, NULLIF(a.inbox_url, '') AS inbox_url,
+			NULLIF(a.shared_inbox_url, '') AS shared_inbox_url
 		FROM main.accounts a
 		WHERE a.id IN (SELECT value FROM json_each(?1)) AND a.domain IS NOT NULL
 			AND NOT ${leavesOutSql(kind, 'addressed', '?2', 'a.id')}
@@ -1368,23 +1398,22 @@ export function recipientsFor(
 		...(kind === 'content' ? [signerId] : [])
 	)
 	// The voters of the poll's current generation (polls.ts), of a public or unlisted status of the signer's only (the
-	// others reach them as followers or addressed accounts already), without those the signer may not address.
-	const voterInboxes =
+	// others reach them as followers or addressed accounts already), without those the signer may not address. A voter
+	// holds a row per choice.
+	const voters =
 		audience.pollVoters === undefined
 			? []
-			: db
-					.all<{ inbox: string | null }>(
-						`SELECT DISTINCT COALESCE(NULLIF(a.shared_inbox_url, ''), a.inbox_url) AS inbox
-						FROM main.statuses ps JOIN main.polls pp ON pp.status_id = ps.id AND pp.removed = 0
-							JOIN main.poll_votes pv ON pv.poll_id = pp.status_id AND pv.generation = pp.generation
-							JOIN main.accounts a ON a.id = pv.account_id
-						WHERE ps.id = ?1 AND ps.account_id = ?2 AND ps.visibility IN ${DISTRIBUTABLE_SQL}
-							AND a.domain IS NOT NULL AND NOT ${leavesOutSql(kind, 'addressed', '?2', 'a.id')}`,
-						audience.pollVoters,
-						signerId
-					)
-					.map((row) => row.inbox)
-	return { followerInboxes, accounts, voterInboxes }
+			: db.all<ReachedInbox>(
+					byInbox(`SELECT DISTINCT ${RECIPIENT_COLUMNS}, COALESCE(NULLIF(a.shared_inbox_url, ''), a.inbox_url) AS inbox
+					FROM main.statuses ps JOIN main.polls pp ON pp.status_id = ps.id AND pp.removed = 0
+						JOIN main.poll_votes pv ON pv.poll_id = pp.status_id AND pv.generation = pp.generation
+						JOIN main.accounts a ON a.id = pv.account_id
+					WHERE ps.id = ?1 AND ps.account_id = ?2 AND ps.visibility IN ${DISTRIBUTABLE_SQL}
+						AND a.domain IS NOT NULL AND NOT ${leavesOutSql(kind, 'addressed', '?2', 'a.id')}`),
+					audience.pollVoters,
+					signerId
+				)
+	return { followers, accounts, voters }
 }
 
 // R23 for the Update of a local actor that its suspension or unsuspension sends (AccountReachFinder, run by the
