@@ -46,17 +46,17 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   deviation from Mastodon, which ignores `max_id` with `limit=0`. Familiar followers share the 8 MiB among the requested
   accounts that have followers to show, so one with large followers does not crowd out the others, and the answer does
   not depend on their order.
-- One status's size is bounded. A remote status's content is stored within 128 KiB as a JSON string, cut by
-  sanitizing a shorter part of it so it stays valid HTML (realistic posts at Misskey's, Pleroma's, Akkoma's and
-  GoToSocial's limits take at most about 35 KB), its content warning within 16 KiB, cut at a character, and a media URL
-  or preview longer than 2,048 characters is ignored, as an invalid one is. A remote status whose id is longer than
-  4,096 bytes is not stored, and an actor whose id is longer than 2,048 bytes as a serialized URL is not either. A local post or edit whose rendered text passes these bounds, which only hundreds of mentions of accounts
-  with long profile URLs reach, is refused as too long. Statuses already stored are shown within the same bounds
-  wherever they appear, edit history (each earlier attachment included), `/source` and a redacted quote included:
-  content or source text past the bound as empty (the status keeps its link to the original), a content warning cut,
-  at most 4 attachments with longer URLs as none and descriptions cut at 10,000 characters, and an actor or status URI
-  past its bound as empty. The largest presented shapes are listed in RES-3 of
-  [docs/threat-model.md](docs/threat-model.md).
+- One status's size is bounded. A remote status's content is stored within 128 KiB as a JSON string, cut by sanitizing a
+  shorter part of it so it stays valid HTML (realistic posts at Misskey's, Pleroma's, Akkoma's and GoToSocial's limits
+  take at most about 35 KB), its content warning within 16 KiB, cut at a character, and a media URL or preview longer
+  than 2,048 characters is ignored, as an invalid one is. A remote status whose id is longer than 4,096 bytes is not
+  stored, and an actor whose id is longer than 2,048 bytes as a serialized URL is not either. A local post or edit whose
+  rendered text passes these bounds, which only hundreds of mentions of accounts with long profile URLs reach, is
+  refused as too long. Statuses already stored are shown within the same bounds wherever they appear, edit history (each
+  earlier attachment included), `/source` and a redacted quote included: content or source text past the bound as empty
+  (the status keeps its link to the original), a content warning cut, at most 4 attachments with longer URLs as none and
+  descriptions cut at 10,000 characters, and an actor or status URI past its bound as empty. The largest presented
+  shapes are listed in RES-3 of [docs/threat-model.md](docs/threat-model.md).
 - A status presents at most 70 hashtags, the first by name; its content still links every one, and up to 100 are
   still stored. A conversation presents at most 12 participants, the first in stored order. Mastodon presents all of
   them. A status stored with more mentions or hashtags than it presents, or with hidden attachments, costs no more to
