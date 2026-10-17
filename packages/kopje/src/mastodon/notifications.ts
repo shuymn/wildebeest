@@ -1,6 +1,6 @@
 import { type ApiHandler, authorized, present, requestParams, storeCall, userCredential } from './context'
 import { mastodonError } from './errors'
-import { linkHeader, pageQuery } from './pagination'
+import { pageQuery, pageResponse } from './pagination'
 import { parseBoolean } from './params'
 
 // /api/v1/notifications (B4a, Mastodon 4.0.2 v1): the list with types[], exclude_types[], account_id and
@@ -29,11 +29,7 @@ export const listNotifications: ApiHandler = async (c, deps) => {
 			})
 		)
 	)
-	const link = linkHeader(c.req.url, { ...result, count: result.items.length }, page.limit)
-	if (link !== undefined) {
-		c.header('Link', link)
-	}
-	return c.json(result.items)
+	return pageResponse(c, result, page.limit)
 }
 
 export const getNotification: ApiHandler = async (c, deps) => {

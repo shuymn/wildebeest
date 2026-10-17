@@ -40,6 +40,7 @@ import m0039 from '../../migrations/0039_quotes_local.sql'
 import m0040 from '../../migrations/0040_report_notifications.sql'
 import m0041 from '../../migrations/0041_report_notifications_key.sql'
 import m0042 from '../../migrations/0042_report_action_fence.sql'
+import m0043 from '../../migrations/0043_read_window_indexes.sql'
 
 // Store migrations in apply order. Append only: an applied file is recorded by name and checksum and must
 // never change. Each file runs in its own transaction, must finish well under 30 seconds, and must be pure SQL.
@@ -86,4 +87,5 @@ export const MIGRATIONS: readonly { name: string; sql: string }[] = [
 	{ name: '0040_report_notifications', sql: m0040 },
 	{ name: '0041_report_notifications_key', sql: m0041 },
 	{ name: '0042_report_action_fence', sql: m0042 },
+	{ name: '0043_read_window_indexes', sql: m0043 },
 ]

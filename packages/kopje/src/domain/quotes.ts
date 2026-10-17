@@ -9,6 +9,7 @@ import {
 	updateActivity,
 } from './activities'
 import {
+	audienceSql,
 	availableLocalSql,
 	DISTRIBUTABLE_SQL,
 	isDistributable,
@@ -863,24 +864,30 @@ export function recheckStamp(db: Db, actor: { id: string }, approvalUri: string,
 // ---------------------------------------------------------------------------------------------------------------
 
 // The window of the quotes list of `quotedId`: the quoting statuses of at most `limit` of its accepted quotes strictly
-// between `max` and `min` (null: no bound), newest first, or oldest first when `ascending`. One seek of
-// quotes_accepted (migration 0036_quotes_list) that reads at most `limit` entries, whatever the status's other quotes;
-// the caller applies the read rule to these ids only.
+// between `max` and `min` (null: no bound), newest first, or oldest first when `ascending`. One seek of quotes_accepted
+// (migration 0036_quotes_list) from the cursor; the caller applies the read rule to these ids only. With `audience`
+// (the viewer's account id, null for anonymous), only quoting statuses whose visibility and audience let that viewer
+// see them are candidates (audienceSql, docs/visibility.md "Read bounds"), so none supplies a cursor; the walk passes
+// the others. Without it (the quoted author, who sees every quote, R35), it reads at most `limit` entries.
 export function acceptedQuoteWindow(
 	db: Db,
 	quotedId: string,
 	range: { readonly max: string | null; readonly min: string | null; readonly ascending: boolean },
-	limit: number
+	limit: number,
+	audience?: string | null
 ): string[] {
 	return db
 		.all<{ status_id: string }>(
-			`SELECT status_id FROM quotes INDEXED BY quotes_accepted
-			WHERE quoted_status_id = ?1 AND state = 'accepted' AND status_id < ?2 AND status_id > ?3
-			ORDER BY status_id ${range.ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
+			`SELECT q.status_id FROM quotes q INDEXED BY quotes_accepted
+			${audience === undefined ? '' : `CROSS JOIN statuses s ON s.id = q.status_id`}
+			WHERE q.quoted_status_id = ?1 AND q.state = 'accepted' AND q.status_id < ?2 AND q.status_id > ?3
+				${audience === undefined ? '' : `AND ${audienceSql('s', '?5')}`}
+			ORDER BY q.status_id ${range.ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
 			quotedId,
 			range.max ?? ':',
 			range.min ?? '',
-			limit
+			limit,
+			...(audience === undefined ? [] : [audience])
 		)
 		.map((row) => row.status_id)
 }

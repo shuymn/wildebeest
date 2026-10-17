@@ -21,21 +21,21 @@ function cursor(value: string | undefined): string | undefined {
 	return value !== undefined && CURSOR.test(value) ? value : undefined
 }
 
-// next is offered when the page is full; prev whenever the page has items.
+// next is offered when the page is full and has an oldest end; prev whenever it has a newest end. Each stands on its
+// own: an empty page cut at its window may have only the end it moves on from (a grouped walk's).
 export function linkHeader(
 	requestUrl: string,
 	page: { newest: string | null; oldest: string | null; count: number },
 	limit: number
 ): string | undefined {
-	if (page.newest === null || page.oldest === null) {
-		return undefined
-	}
 	const links: string[] = []
-	if (page.count >= limit) {
+	if (page.oldest !== null && page.count >= limit) {
 		links.push(`<${pageUrl(requestUrl, 'max_id', page.oldest)}>; rel="next"`)
 	}
-	links.push(`<${pageUrl(requestUrl, 'min_id', page.newest)}>; rel="prev"`)
-	return links.join(', ')
+	if (page.newest !== null) {
+		links.push(`<${pageUrl(requestUrl, 'min_id', page.newest)}>; rel="prev"`)
+	}
+	return links.length === 0 ? undefined : links.join(', ')
 }
 
 function pageUrl(requestUrl: string, name: 'max_id' | 'min_id', value: string): string {
@@ -48,8 +48,14 @@ function pageUrl(requestUrl: string, name: 'max_id' | 'min_id', value: string): 
 }
 
 // A page as a list response: its items, and the Link header to the pages around it. `count` is what the page read
-// toward its limit: its items, or the candidates of a window the rule filtered (the quotes list).
-export function pageResponse<T>(c: ApiContext, page: Page<T>, limit: number, count = page.items.length): Response {
+// toward its limit: its items, the candidates of a window the rule filtered (the quotes list), or the limit when the
+// read stopped at its window (Page.cut).
+export function pageResponse<T>(
+	c: ApiContext,
+	page: Page<T>,
+	limit: number,
+	count = page.cut === true ? limit : page.items.length
+): Response {
 	const link = linkHeader(c.req.url, { ...page, count }, limit)
 	if (link !== undefined) {
 		c.header('Link', link)
