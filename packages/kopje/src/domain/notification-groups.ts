@@ -452,7 +452,9 @@ export const listGroupedNotifications = userReadOperation<ListGroupedInput, Grou
 
 // The shown notification a group key names (Notification.by_group_key): `ungrouped-<id>` by its id, any other key by
 // its group, the newest of it. Api::V2::NotificationsController#show reads any of the viewer's notifications, filtered
-// or not (no browserable); a filtered notification has no group, so only its `ungrouped-` key names it.
+// or not (no browserable); a filtered notification has no group, so only its `ungrouped-` key names it. A group's
+// newest shown one is found by a walk of its notifications from the newest, in chunks of GROUP_COUNT, as far as
+// GROUP_WALK of them, shown or hidden: the bound a page's walk has, so a group a page lists is found here too.
 function firstOfGroup(db: Db, viewer: UserContext, groupKey: string): Shown | undefined {
 	if (groupKey.startsWith('ungrouped-')) {
 		const id = groupKey.slice('ungrouped-'.length)
@@ -460,19 +462,33 @@ function firstOfGroup(db: Db, viewer: UserContext, groupKey: string): Shown | un
 			? shownNotifications(db, viewer, { includeFiltered: true }, 'n.id = CAST(?3 AS INTEGER)', '', id)[0]
 			: undefined
 	}
-	return shownWindow(
-		db,
-		viewer,
-		{ includeFiltered: false, group: '?3' },
-		'',
-		'ORDER BY n.id DESC LIMIT ?4',
-		groupKey,
-		GROUP_COUNT
-	).rows[0]
+	let max: string | null = null
+	for (let read = 0; read < GROUP_WALK;) {
+		const chunk = Math.min(GROUP_COUNT, GROUP_WALK - read)
+		const { rows, candidates } = shownWindow(
+			db,
+			viewer,
+			{ includeFiltered: false, range: { max: '?4', min: 'NULL' }, group: '?3' },
+			'',
+			'ORDER BY n.id DESC LIMIT ?5',
+			groupKey,
+			max,
+			chunk
+		)
+		if (rows[0] !== undefined) {
+			return rows[0]
+		}
+		if (candidates.length < chunk) {
+			return undefined
+		}
+		read += candidates.length
+		max = candidates.at(-1) ?? null
+	}
+	return undefined
 }
 
-// GET /api/v2/notifications/:group_key: the group with its shown notifications among its newest GROUP_COUNT (newest
-// first), without page fields; null when none of those is shown.
+// GET /api/v2/notifications/:group_key: the group with its shown notifications among its newest GROUP_COUNT and the
+// one firstOfGroup found (membersOf), newest first, without page fields; null when firstOfGroup finds none.
 export const getNotificationGroup = userReadOperation<
 	{ groupKey: string; present: Present },
 	GroupedNotifications | null
@@ -481,19 +497,9 @@ export const getNotificationGroup = userReadOperation<
 	if (first === undefined) {
 		return null
 	}
-	const grouped = first.group_key !== null && GROUPABLE_TYPES.some((type) => type === first.type)
-	const rows = grouped
-		? shownWindow(
-				db,
-				viewer,
-				{ includeFiltered: false, group: '?3' },
-				'',
-				'ORDER BY n.id DESC LIMIT ?4',
-				first.group_key,
-				GROUP_COUNT
-			).rows
-		: [first]
-	return presentGroups(db, viewer, [{ key: groupOf(first, GROUPABLE_TYPES), first, rows }], {
+	const key = groupOf(first, GROUPABLE_TYPES)
+	const rows = membersOf(db, viewer, { key, first }, null)
+	return presentGroups(db, viewer, [{ key, first, rows }], {
 		paged: false,
 		expandAccounts: 'full',
 		present,

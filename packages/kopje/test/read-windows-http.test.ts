@@ -303,3 +303,43 @@ describe('the quotes list never answers an id of a quote the reader may not see'
 		}
 	}, 60_000)
 })
+
+describe('a group the list shows is found on its own', () => {
+	it('answers the group behind 400 newer notifications of it from muted senders', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const status = (await post(h, alice, { status: 'hello' })).id
+		const GROUP = 'favourite-shown'
+		await runInDurableObject(h.store, (_instance, state) => {
+			const sql = state.storage.sql
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 401 - 1)
+				INSERT INTO accounts (id, uri, username, domain)
+				SELECT CAST(?1 + i AS TEXT), 'https://far.example/users/m' || i, 'm' || i, 'far.example' FROM n`,
+				String(HIDDEN_BASE)
+			)
+			// The first sender's favourite is shown; the 400 after it are from senders alice mutes.
+			sql.exec(
+				'INSERT INTO mutes (account_id, target_account_id) SELECT ?, id FROM accounts WHERE id > ? AND domain = ?',
+				alice.id,
+				String(HIDDEN_BASE),
+				'far.example'
+			)
+			sql.exec(
+				`INSERT INTO notifications (account_id, type, from_account_id, status_id, group_key)
+				SELECT ?, 'favourite', id, ?, ? FROM accounts WHERE domain = 'far.example' ORDER BY id`,
+				alice.id,
+				status,
+				GROUP
+			)
+		})
+		const list = await h.request('/api/v2/notifications', bearer(alice.token))
+		const listed = await list.json<{ notification_groups: { group_key: string; sample_account_ids: string[] }[] }>()
+		expect(listed.notification_groups).toMatchObject([{ group_key: GROUP, sample_account_ids: [String(HIDDEN_BASE)] }])
+		const one = await h.request(`/api/v2/notifications/${GROUP}`, bearer(alice.token))
+		expect(one.status).toBe(200)
+		expect(
+			await one.json<{ notification_groups: { group_key: string; notifications_count: number }[] }>()
+		).toMatchObject({ notification_groups: [{ group_key: GROUP, notifications_count: 1 }] })
+	}, 60_000)
+})
