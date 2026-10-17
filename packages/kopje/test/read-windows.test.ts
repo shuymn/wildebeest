@@ -10,7 +10,7 @@ import { getOutbox } from '../src/domain/activities'
 import { listEndorsements } from '../src/domain/endorsements'
 import { listAccounts } from '../src/domain/lists'
 import { listGroupedNotifications, notificationGroupAccounts } from '../src/domain/notification-groups'
-import { listNotificationRequests } from '../src/domain/notification-requests'
+import { getNotificationPolicy, listNotificationRequests } from '../src/domain/notification-requests'
 import { listNotifications } from '../src/domain/notifications'
 import { interactors } from '../src/domain/statuses'
 import {
@@ -525,9 +525,11 @@ describe('filtered reads read a candidate window, however long the hidden range 
 	}, 300_000)
 
 	// The grouped list's walk reads at most GROUP_WALK notifications, shown or hidden: it is compared beyond that.
-	it('reads the same rows on the outbox, and on the grouped notifications past their walk', async () => {
+	it('reads the same rows on the outbox, the notification policy, and the grouped notifications past their walk', async () => {
 		const reads: [string, StoreOperation<never, unknown>, unknown, number][] = [
 			['outbox', getOutbox, { username: 'local', before: '999999999999999999' }, 100],
+			// Its summary counts the newest 100 requests, then applies availability: GONE_i's are the newest.
+			['notification policy', getNotificationPolicy, { credential }, 100],
 			[
 				'grouped notifications',
 				listGroupedNotifications,

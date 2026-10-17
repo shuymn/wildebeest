@@ -62,15 +62,16 @@ function policyOf(db: Db, accountId: string): Policy {
 }
 
 // NotificationPolicy#pending_notification_requests: the count of the recipient's requests from available senders
-// (NotificationRequest.without_suspended) and the sum of their counts, over at most MAX_MEANINGFUL_COUNT requests.
-// Mastodon names that limit, but `limit(100).pick(...)` replaces it with pick's LIMIT 1, so its query counts every
-// request; Kopje reads at most 100 (RES-7).
+// (NotificationRequest.without_suspended) and the sum of their counts, among their newest MAX_MEANINGFUL_COUNT
+// requests. Mastodon names that limit, but `limit(100).pick(...)` replaces it with pick's LIMIT 1, so its query counts
+// every request; Kopje reads at most 100 (RES-7), a window that availability is applied to after (windows.ts), so
+// requests from unavailable senders cost it nothing beyond the window.
 function summaryOf(db: Db, accountId: string): PolicySummary {
 	const row = db.first<{ requests: number; notifications: number }>(
-		`SELECT count(*) AS requests, coalesce(sum(c), 0) AS notifications FROM (
-			SELECT r.notifications_count AS c FROM notification_requests r
-			WHERE r.account_id = ?1 AND ${availableSql('r.from_account_id')}
-			ORDER BY r.id DESC LIMIT ?2)`,
+		`SELECT count(*) AS requests, coalesce(sum(w.c), 0) AS notifications FROM (
+			SELECT r.from_account_id AS f, r.notifications_count AS c FROM notification_requests r
+			WHERE r.account_id = ?1 ORDER BY r.id DESC LIMIT ?2) w
+		WHERE ${availableSql('w.f')}`,
 		accountId,
 		MAX_MEANINGFUL_COUNT
 	)
