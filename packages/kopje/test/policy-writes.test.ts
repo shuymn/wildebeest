@@ -769,6 +769,8 @@ type DueRow = {
 	retracts: number
 	accounts: string | null
 	many: number | null
+	// An Announce's original's author.
+	boosted: string | null
 }
 
 // The due lane heads a claim reads (claimDeliveries), with their provenance and whether they retract.
@@ -776,8 +778,10 @@ const dueRows = (sql: SqlStorage, now: number): DueRow[] =>
 	sql
 		.exec<DueRow>(
 			`SELECT CAST(d.id AS TEXT) AS id, d.account_id, d.inbox_url AS inbox, o.retracts, d.recipient_accounts AS accounts,
-				d.recipients_many AS many
+				d.recipients_many AS many, b.account_id AS boosted
 			FROM deliveries d JOIN outbound_activities o ON o.id = d.activity_id
+			LEFT JOIN statuses b ON json_extract(o.body, '$.activity.type') = 'Announce'
+				AND b.uri = json_extract(o.body, '$.activity.object')
 			WHERE d.state IN ('pending', 'leased') AND d.next_attempt_at <= ? ORDER BY d.next_attempt_at, d.id LIMIT ?`,
 			now,
 			CLAIM_LIMIT
@@ -1037,7 +1041,8 @@ function check(sql: SqlStorage, c: Case, saw: Set<Scenario>): string[] {
 								: row.accounts === null
 									? null
 									: (JSON.parse(row.accounts) as string[]).map((id) => accountIndex.get(id)!)
-						const expected = m.sends(accountIndex.get(row.account_id)!, row.retracts === 1, recipients)
+						const boosted = row.boosted === null ? null : (accountIndex.get(row.boosted) ?? null)
+						const expected = m.sends(accountIndex.get(row.account_id)!, row.retracts === 1, recipients, false, boosted)
 						const sent = claimed.has(row.id)
 						if (sent !== expected) {
 							problems.push(`${label}: row ${row.id} to ${row.inbox} ${sent ? 'claimed' : 'dropped'}`)

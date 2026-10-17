@@ -999,11 +999,15 @@ type DueRow = LaneRow & {
 	retracts: number | null
 	refused_sender: number
 	signed_by: string | null
+	// An Announce's boosted original (its object), null for any other activity.
+	boosted: string | null
 }
 
 const DUE_ROW = `CAST(d.id AS TEXT) AS id, CAST(d.activity_id AS TEXT) AS activity_id, d.account_id, d.lane, d.inbox_url,
 	d.attempts, d.addressee, d.recipient_accounts, d.recipient_domains, o.id IS NOT NULL AS found, o.retracts,
-	${REFUSED_SENDER} AS refused_sender, json_extract(o.body, '$.signedBy') AS signed_by`
+	${REFUSED_SENDER} AS refused_sender, json_extract(o.body, '$.signedBy') AS signed_by,
+	CASE json_extract(o.body, '$.activity.type') WHEN 'Announce' THEN json_extract(o.body, '$.activity.object') END
+		AS boosted`
 
 const DUE_FROM = 'deliveries d LEFT JOIN outbound_activities o ON o.id = d.activity_id'
 
@@ -1018,6 +1022,9 @@ function hostOf(inbox: string): string | null {
 // VIS-30's send-time check, at the claim and again at confirmation (the rules: docs/visibility.md, "The send-time
 // check"). The exemption reads the persisted retracts flag, never the activity's kind worked out again. The accounts
 // rule joins accounts, because availableSql reads a missing id as available and a purged recipient must count as gone.
+// An Announce distributes its original, so it is refused while the original's author is unavailable (R1), read live by
+// the original's uri (statuses' unique key); no other content activity carries a remote author's object (a quote names
+// its quoted status by uri and stamp only).
 function sendRefused(db: Db, row: DueRow): boolean {
 	if (row.retracts === 1) {
 		return false
@@ -1036,6 +1043,15 @@ function sendRefused(db: Db, row: DueRow): boolean {
 			WHERE ${availableSql('a.id')} LIMIT 1`,
 			row.recipient_accounts
 		) === undefined
+	) {
+		return true
+	}
+	if (
+		row.boosted !== null &&
+		db.first(
+			`SELECT 1 AS yes FROM main.statuses s WHERE s.uri = ? AND NOT ${availableSql('s.account_id')}`,
+			row.boosted
+		) !== undefined
 	) {
 		return true
 	}
