@@ -1,10 +1,11 @@
 import { runInDurableObject } from 'cloudflare:test'
 import { env } from 'cloudflare:workers'
 
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { type ApiHarness, bearer, form, login, sql } from './api-helpers'
 import { NOW } from './app-helpers'
+import { blockDomain, blockDomainIn } from './domain-block-helpers'
 import { LEGACY } from './federation-helpers'
 import { BUILD, freshStore, testKernel } from './helpers'
 import { deferred, deliveryDeps } from './quote-helpers'
@@ -13,7 +14,6 @@ import { MIGRATIONS } from '../src/db/migrations'
 import { Db } from '../src/db/sql'
 import { recipientsFor } from '../src/domain/audience'
 import { type Claim, claimDeliveries, enqueueActivity, LEASE_MS, PROVENANCE_MAX } from '../src/domain/deliveries'
-import { setHostPolicyForTests } from '../src/domain/host-policy'
 import { moderationRound, REACH_ROUND, suspendLocal, unsuspendLocal } from '../src/domain/suspension'
 import { deliveryRound } from '../src/jobs/deliver'
 import { endPolls } from '../src/jobs/scheduled'
@@ -21,9 +21,8 @@ import type { StoreStub } from '../src/platform/store-client'
 
 // VIS-30's delivery plumbing (deliveries.ts): the provenance each staged target carries (the recipients behind it,
 // merged across followers, addressed accounts and poll voters), the send-time check at the claim and at confirmation
-// (sendRefused), and the fallback of a row without provenance to the inbox host rule. Before remote suspension (B1b)
-// and instance domain blocks (B2a), a recipient is made unavailable by its deletion (an inbound Delete of the actor and
-// its purge), and the host rule by the test hook of host-policy.ts.
+// (sendRefused), and the fallback of a row without provenance to the inbox host rule. A recipient is made unavailable
+// by its deletion (an inbound Delete of the actor and its purge), and a host refused by an instance domain block.
 
 type Row = {
 	id: string
@@ -93,10 +92,6 @@ async function drain(store: StoreStub): Promise<[string, string][]> {
 }
 
 const sorted = (ids: string[]) => JSON.stringify([...ids].sort())
-
-afterEach(() => {
-	setHostPolicyForTests(null)
-})
 
 describe('provenance (VIS-30)', () => {
 	it.each([
@@ -270,9 +265,7 @@ describe('bounded provenance (VIS-30)', () => {
 		expect((await rows(h.store)).map((r) => [r.accounts, r.domains, r.many])).toEqual([
 			[null, '["crowd.example","m100.example"]', 1],
 		])
-		await runInDurableObject(h.store, () => {
-			setHostPolicyForTests((_db, host) => host === 'crowd.example')
-		})
+		await blockDomain(h.store, 'crowd.example')
 		expect(await drain(h.store)).toEqual([['Create', 'https://gateway.example/inbox']])
 	})
 
@@ -363,9 +356,7 @@ describe('the send-time check (VIS-30)', () => {
 			['https://gateway.example/inbox', '["blocked.example"]'],
 			['https://mixed.example/inbox', '["blocked.example","open.example"]'],
 		])
-		await runInDurableObject(h.store, () => {
-			setHostPolicyForTests((_db, host) => host === 'blocked.example')
-		})
+		await blockDomain(h.store, 'blocked.example')
 		const status = (await post(h, alice, { status: 'to all, again' })).id
 		await h.request(`/api/v1/statuses/${status}`, bearer(alice.token, { method: 'DELETE' }))
 		const sent = await drain(h.store)
@@ -479,7 +470,7 @@ describe('rows queued before migration 0044', () => {
 				)
 			}
 			await testKernel(state).upgrade()
-			setHostPolicyForTests((_db, host) => host === 'blocked.example')
+			blockDomainIn(sql, 'blocked.example')
 			const claimed = claimDeliveries.run(sql, { now: NOW, leaseToken: 'after' })
 			return {
 				claimed: claimed.deliveries.map((d) => d.inbox),
