@@ -13,10 +13,14 @@ import { describe, expect, it } from 'vitest'
 //   write's SET or VALUES. INSERT ... SELECT copies values inside SQLite, so its SELECT is no read.
 // - A SQL string is a string or template literal naming SELECT or RETURNING. An interpolated constant of the module
 //   (or of another src/domain module, by its unique name) is inlined, so ACCOUNT_COLUMNS and STATUS_FROM are read
-//   where they are used; a helper call becomes an opaque bounded value; any other interpolation is opaque.
+//   where they are used; a helper call (by its own name) is a bounded value.
+// - Fail closed: any other interpolation inside a result list or RETURNING is a finding (`interpolation <expression>`)
+//   unless it names a builder of SAFE_INTERPOLATIONS, so neither an import alias nor an interpolated string hides a
+//   column; so are a string with SQL keywords joined by `+` (`concatenated SQL`) and a bounded column named as a
+//   property value (`column <alias.column>`), which SQL built elsewhere selects.
 // - Tables are found by name from FROM and JOIN, with their aliases. A bare column counts when a table of the SELECT
 //   has it; `*` and `alias.*` count when such a table has a bounded column.
-// - ALLOWED lists, per module and column, the reads that are not presentation, with their reason and exact count.
+// - ALLOWED lists, per module, the findings that present nothing, with their reason and exact count.
 
 type Bounded = { table: string; column: string; helpers: readonly string[] }
 
@@ -136,6 +140,11 @@ function readsOf(list: readonly string[], tables: Map<string, string>): string[]
 			continue
 		}
 		const previous = list[i - 1]?.toUpperCase()
+		const opaque = /^__expr(\d+)__$/.exec(token)
+		if (opaque !== null) {
+			found.push(`unresolved:${opaque[1]}`)
+			continue
+		}
 		if (token === '*') {
 			if (previous === '(') {
 				continue
@@ -231,7 +240,14 @@ export function boundedReads(sql: string): string[] {
 
 type Part = { text: string } | { expression: string }
 
-type Literal = { path: string; offset: number; parts: Part[]; inHelper: boolean; constant: string | null }
+type Literal = {
+	path: string
+	offset: number
+	end: number
+	parts: Part[]
+	inHelper: boolean
+	constant: string | null
+}
 
 const HELPER_CALL = new RegExp(String.raw`^\s*(${[...HELPERS].join('|')})\s*\(`)
 
@@ -282,7 +298,7 @@ function lex(path: string, text: string): Literal[] {
 					i++
 				}
 				i++
-				literals.push({ path, offset: start, parts: [{ text: value }], inHelper, constant: constantAt(start) })
+				literals.push({ path, offset: start, end: i, parts: [{ text: value }], inHelper, constant: constantAt(start) })
 				last = c
 				continue
 			}
@@ -336,13 +352,17 @@ function lex(path: string, text: string): Literal[] {
 		}
 		i++
 		parts.push({ text: value })
-		literals.push({ path, offset: start, parts, inHelper, constant })
+		literals.push({ path, offset: start, end: i, parts, inHelper, constant })
 	}
 	code(false, false)
 	return literals
 }
 
-type Source = { path: string; text: string; literals: Literal[] }
+export type Source = { path: string; text: string; literals: Literal[] }
+
+export function source(path: string, text: string): Source {
+	return { path, text, literals: lex(path, text) }
+}
 
 function sources(dir: string): Source[] {
 	return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -353,8 +373,7 @@ function sources(dir: string): Source[] {
 		if (!entry.name.endsWith('.ts')) {
 			return []
 		}
-		const text = readFileSync(path, 'utf8')
-		return [{ path, text, literals: lex(path, text) }]
+		return [source(path, readFileSync(path, 'utf8'))]
 	})
 }
 
@@ -364,6 +383,7 @@ function render(
 	literal: Literal,
 	local: Map<string, Literal>,
 	global: Map<string, Literal | null>,
+	exprs: string[],
 	seen: ReadonlySet<Literal> = new Set()
 ): string {
 	return literal.parts
@@ -376,18 +396,48 @@ function render(
 			}
 			const name = /^\s*(\w+)\s*$/.exec(part.expression)?.[1]
 			const target = name === undefined ? undefined : (local.get(`${literal.path}#${name}`) ?? global.get(name))
-			return target === undefined || target === null || seen.has(target)
-				? ' __expr__ '
-				: ` ${render(target, local, global, new Set([...seen, target]))} `
+			if (target === undefined || target === null || seen.has(target)) {
+				exprs.push(part.expression.replace(/\s+/g, ' ').trim())
+				return ` __expr${exprs.length - 1}__ `
+			}
+			return ` ${render(target, local, global, exprs, new Set([...seen, target]))} `
 		})
 		.join('')
 }
 
 type Finding = { path: string; line: number; read: string }
 
-// Raw reads of bounded columns, and helper calls whose argument names a column the helper does not bound.
-function scan(root: string): { reads: Finding[]; misuses: Finding[] } {
-	const all = sources(root)
+// Builders an interpolation in a result list may name without a finding: each yields a predicate, a number, ids, or a
+// value it bounds itself (cutSql); none passes a bounded column through. Any other interpolation there is a finding,
+// so a raw column cannot hide behind one (an import alias of a helper included), unless ALLOWED names it.
+const SAFE_INTERPOLATIONS = new Set([
+	'availableJoinedSql',
+	'availableLocalSql',
+	'availableSql',
+	'blocksSql',
+	'cutSql',
+	'DISTRIBUTABLE_SQL',
+	'domainBlocksSql',
+	'followableBySql',
+	'followListsShownSql',
+	'hidesCollectionsSql',
+	'hostCoveredSql',
+	'mayQuoteSql',
+	'mutesSql',
+	'notificationPolicySql',
+	'participantsSql',
+	'pendingAppsSql',
+	'quotePolicySql',
+	'REQUIRES_MENTION_SQL',
+	'visibleSql',
+])
+
+// SQL keywords that mark a string as SQL when it is concatenated.
+const SQL_TEXT = /\b(?:SELECT|FROM|WHERE|RETURNING|INSERT|UPDATE)\b/
+
+// Raw reads of bounded columns, interpolations a result list cannot resolve (`interpolation <expression>`), SQL built
+// by concatenation (`concatenated SQL`), and helper calls whose argument names a column the helper does not bound.
+export function scan(all: readonly Source[]): { reads: Finding[]; misuses: Finding[] } {
 	const local = new Map<string, Literal>()
 	const global = new Map<string, Literal | null>()
 	for (const literal of all.flatMap((source) => source.literals)) {
@@ -412,10 +462,28 @@ function scan(root: string): { reads: Finding[]; misuses: Finding[] } {
 			if (literal.inHelper) {
 				continue
 			}
-			const sql = render(literal, local, global)
+			const exprs: string[] = []
+			const sql = render(literal, local, global, exprs)
+			const line = lineOf(literal.offset)
+			const before = text.slice(0, literal.offset).trimEnd().at(-1)
+			const after = text.slice(literal.end).trimStart()[0]
+			if ((before === '+' || after === '+') && SQL_TEXT.test(sql)) {
+				reads.push({ path, line, read: 'concatenated SQL' })
+			}
+			// A bounded column named as a property value (a status read's extra columns) is selected by SQL built
+			// elsewhere, so it counts as a read wherever it is named.
+			const named = /^\s*\w+\.(\w+)\s*$/.exec(sql)?.[1]
+			if (before === ':' && named !== undefined && BOUNDED.some((b) => b.column === named)) {
+				reads.push({ path, line, read: `column ${sql.trim()}` })
+			}
 			if (/\b(?:SELECT|RETURNING)\b/i.test(sql)) {
 				for (const read of boundedReads(sql)) {
-					reads.push({ path, line: lineOf(literal.offset), read })
+					const opaque = /^unresolved:(\d+)$/.exec(read)
+					const expression = opaque === null ? null : (exprs[Number(opaque[1])] ?? '')
+					if (expression !== null && SAFE_INTERPOLATIONS.has(/^\w+/.exec(expression)?.[0] ?? '')) {
+						continue
+					}
+					reads.push({ path, line, read: expression === null ? read : `interpolation ${expression}` })
 				}
 			}
 		}
@@ -430,9 +498,35 @@ const ACTIVITYPUB =
 const COMPARED = 'compared in the Worker with an incoming value, never presented'
 const UPLOAD = "a local upload's stored URL, for its R2 objects, never presented"
 const IDENTITY = 'an identity compared, stored or sent in an activity, never presented'
+const PREDICATE = 'inside a predicate builder: its SELECTs compute values that are compared, never returned'
+const EXTRA_COLUMNS = "a status or notification read's extra columns, checked where they are named (column findings)"
+const COMPARED_SQL = 'a tag name a stream matches in SQL, never returned'
+const WINDOW = "a merged window's stream key, order value or aggregate name, over ids"
 const POLL = "a poll's stored choices, matched against a vote or an update, never presented"
 
 const ALLOWED: Record<string, { count: number; reason: string }> = {
+	'src/domain/audience.ts interpolation host': { count: 1, reason: PREDICATE },
+	'src/domain/audience.ts interpolation a': { count: 1, reason: PREDICATE },
+	'src/domain/audience.ts interpolation uriHostSql(`${a}.uri`)': { count: 1, reason: PREDICATE },
+	'src/domain/audience.ts interpolation SNAPSHOT_STATE_PREFIX': { count: 1, reason: PREDICATE },
+	'src/domain/audience.ts interpolation key': { count: 1, reason: PREDICATE },
+	"src/domain/audience.ts interpolation columns(extra, 'id')": { count: 1, reason: EXTRA_COLUMNS },
+	"src/domain/audience.ts interpolation columns(query.columns, 'status_id')": { count: 1, reason: EXTRA_COLUMNS },
+	'src/domain/audience.ts interpolation column': { count: 1, reason: PREDICATE },
+	"src/domain/audience.ts interpolation mentionsSender('ps')": { count: 2, reason: PREDICATE },
+	'src/domain/audience.ts interpolation r': { count: 1, reason: PREDICATE },
+	"src/domain/audience.ts interpolation uriHostSql('a.uri')": { count: 3, reason: PREDICATE },
+	'src/domain/conversation-rows.ts interpolation s': { count: 1, reason: PREDICATE },
+	'src/domain/media.ts interpolation column': { count: 2, reason: LOCAL },
+	'src/domain/timelines.ts interpolation FOLLOWED_STREAM': { count: 2, reason: WINDOW },
+	'src/domain/timelines.ts interpolation OWN': { count: 1, reason: WINDOW },
+	'src/domain/timelines.ts interpolation TAG_STREAM': { count: 1, reason: WINDOW },
+	'src/domain/timelines.ts column t.name': { count: 1, reason: COMPARED_SQL },
+	'src/domain/timelines.ts interpolation n': { count: 1, reason: WINDOW },
+	'src/domain/timelines.ts column s.uri': { count: 1, reason: IDENTITY },
+	'src/domain/web-pages.ts column au.username': { count: 1, reason: LOCAL },
+	'src/domain/windows.ts interpolation highest': { count: 1, reason: WINDOW },
+	'src/domain/windows.ts interpolation end': { count: 1, reason: WINDOW },
 	'src/domain/accounts.ts accounts.uri': { count: 4, reason: IDENTITY },
 	'src/domain/activities.ts statuses.uri': { count: 5, reason: ACTIVITYPUB },
 	'src/domain/activities.ts accounts.uri': { count: 5, reason: ACTIVITYPUB },
@@ -550,9 +644,40 @@ describe('the bounded-read matcher', () => {
 	})
 })
 
+describe('the source scanner', () => {
+	const findings = (text: string) => scan([source('src/domain/probe.ts', text)]).reads.map((finding) => finding.read)
+
+	it.each([
+		['a raw column', 'db.all(`SELECT s.content FROM statuses s`)', 'statuses.content'],
+		['an interpolated string', "db.all(`SELECT ${'s.content'} FROM statuses s`)", "interpolation 's.content'"],
+		[
+			'an import alias of a helper',
+			"import { contentSql as c } from './status-bounds'\ndb.all(`SELECT ${c('s.content')} AS content FROM statuses s`)",
+			"interpolation c('s.content')",
+		],
+		['concatenated SQL', "db.all('SELECT s.content ' + 'FROM statuses s')", 'concatenated SQL'],
+		['a column passed as a property', "read.select(db, { columns: { text: 's.content' } })", 'column s.content'],
+		[
+			'a constant of raw columns',
+			"const COLUMNS = 's.id, s.content'\ndb.all(`SELECT ${COLUMNS} FROM statuses s`)",
+			'statuses.content',
+		],
+	])('finds %s', (_name, text, read) => {
+		expect(findings(text)).toContain(read)
+	})
+
+	it.each([
+		['a helper', "db.all(`SELECT ${contentSql('s.content')} AS content FROM statuses s`)"],
+		['a comparison', 'db.all(`SELECT s.id FROM statuses s WHERE s.content = ?`)'],
+		['a safe builder', "db.all(`SELECT s.id, ${availableSql('s.account_id')} AS a FROM statuses s`)"],
+	])('leaves %s', (_name, text) => {
+		expect(findings(text)).toEqual([])
+	})
+})
+
 describe('bounded columns in src/domain', () => {
 	const root = fileURLToPath(new URL('../src/domain', import.meta.url))
-	const { reads, misuses } = scan(root)
+	const { reads, misuses } = scan(sources(root))
 	const name = (path: string) => `src/domain/${relative(root, path).replaceAll('\\', '/')}`
 
 	it('are read only through their helpers', () => {
