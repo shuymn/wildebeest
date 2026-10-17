@@ -25,13 +25,11 @@ import {
 import { follow, remoteAccount, remoteFollows } from './status-helpers'
 import { Db } from '../src/db/sql'
 import { upsertRemoteActor } from '../src/domain/inbox'
-import { MAX_LISTS } from '../src/domain/lists'
 import {
 	CLEAR_ROUND,
 	MARK_ACCOUNTS,
 	MARK_WINDOW,
 	remoteModerationRound,
-	SEVER_LIST_ROWS,
 	SEVER_ROUND,
 } from '../src/domain/remote-suspension'
 import { MODERATION_ROUND_ROWS } from '../src/domain/suspension'
@@ -244,6 +242,104 @@ describe('the domain job (R38: marks and both-way severing)', () => {
 		await drain(store)
 		expect(await sql(store, "SELECT id FROM accounts WHERE suspension_source = 'domain'")).toEqual([{ id: taken }])
 		expect(await sql(store, 'SELECT account_id FROM follows')).toEqual([{ account_id: kept }])
+	})
+
+	it('deleting a child noop under the suspended parent resets the job, which marks and severs its accounts', async () => {
+		const w = await world()
+		const store = w.h.store
+		const x = await remoteAccount(store, 'x', `a.${D}`)
+		await remoteFollows(store, x, w.bob.id)
+		const child = await blockDomain(store, `a.${D}`, 'noop')
+		await blockDomain(store, D)
+		await drain(store)
+		expect(await marked(store, `a.${D}`)).toBe(0)
+		expect(await jobs(store)).toEqual([])
+		await unblockDomain(store, child.id)
+		expect(await jobs(store)).toEqual([{ kind: 'domain', subject: '', mode: 'domain', phase: 'clear', cursor: '' }])
+		await drain(store)
+		expect(await marked(store, `a.${D}`)).toBe(1)
+		expect(await sql(store, 'SELECT * FROM follows WHERE account_id = ?', x)).toEqual([])
+		expect(await rejects(store)).toEqual([{ signer: w.bob.id, follower: await uriOf(store, x), retracts: 1 }])
+	})
+
+	it('reconciles at most MARK_ACCOUNTS accounts a round, the one it resumes included', async () => {
+		const w = await world()
+		const store = w.h.store
+		// The first covered account by id has more local followers than a round ends; MARK_ACCOUNTS + 50 come after it.
+		const first = await remoteAccount(store, 'first', D)
+		await sql(
+			store,
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+			INSERT INTO accounts (id, uri, username, created_at) SELECT printf('%018d', 500000000000000000 + i),
+				'https://kopje.test/ap/users/l' || i, 'l' || i, ?2 FROM n`,
+			SEVER_ROUND,
+			new Date(NOW).toISOString()
+		)
+		await sql(
+			store,
+			`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey)
+			SELECT id, username || '@example.com', X'00', X'00', 'test' FROM accounts WHERE id LIKE '5000%'`
+		)
+		await sql(
+			store,
+			`INSERT INTO follows (account_id, target_account_id, state) SELECT id, ?, 'accepted' FROM accounts
+			WHERE id LIKE '5000%'`,
+			first
+		)
+		await sql(
+			store,
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+			INSERT INTO accounts (id, uri, username, domain, created_at)
+			SELECT printf('%018d', CAST(?2 AS INTEGER) + i), 'https://d.example/users/m' || i, 'm' || i, 'd.example', ?3 FROM n`,
+			MARK_ACCOUNTS + 50,
+			BASE,
+			new Date(NOW).toISOString()
+		)
+		expect(first < String(BASE)).toBe(true)
+		await blockDomain(store, D)
+		let resumed = 0
+		for (;;) {
+			const [job] = await sql<{ cursor: string; phase: string }>(
+				store,
+				'SELECT phase, cursor FROM remote_moderation_jobs'
+			)
+			if (job === undefined) {
+				break
+			}
+			const resuming = job.phase === 'mark' && (JSON.parse(job.cursor) as { severing?: string }).severing !== undefined
+			const before = await marked(store)
+			await round(store)
+			if (resuming) {
+				resumed++
+				// The resumed account was marked already: at most MARK_ACCOUNTS - 1 more.
+				expect((await marked(store)) - before).toBeLessThanOrEqual(MARK_ACCOUNTS - 1)
+			}
+		}
+		expect(resumed).toBeGreaterThan(0)
+		expect(await marked(store)).toBe(MARK_ACCOUNTS + 51)
+	})
+
+	it('removes a follower’s list memberships of an account in bounded rounds, legacy lists beyond the API limit', async () => {
+		const w = await world()
+		const store = w.h.store
+		const r = await remoteAccount(store, 'r', D)
+		await follow(w.h, w.alice, r)
+		await sql(store, "UPDATE follows SET state = 'accepted' WHERE account_id = ?", w.alice.id)
+		// As a converted instance keeps them: 700 of alice's lists, each with r, and one of bob's.
+		await sql(
+			store,
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 700 - 1)
+			INSERT INTO lists (id, account_id, title) SELECT printf('7%017d', i), ?, 'l' || i FROM n`,
+			w.alice.id
+		)
+		await sql(store, "INSERT INTO lists (id, account_id, title) VALUES ('800000000000000000', ?, 'b')", w.bob.id)
+		await sql(store, 'INSERT INTO list_accounts (list_id, account_id) SELECT id, ? FROM lists', r)
+		await blockDomain(store, D)
+		const rounds = await drain(store)
+		expect(rounds).toBeGreaterThan(3)
+		expect(await sql(store, 'SELECT * FROM follows WHERE target_account_id = ?', r)).toEqual([])
+		expect(await sql(store, 'SELECT list_id FROM list_accounts')).toEqual([{ list_id: '800000000000000000' }])
+		expect((await undos(store)).map((row) => row.n)).toEqual([1])
 	})
 
 	it('change 4: unblock, then correct the stored domain before clearing: active, and no mark left', async () => {
@@ -535,8 +631,8 @@ describe('the admin lists while the marks lag (decision 3, row 19)', () => {
 })
 
 describe('row 22: Queue and cron rounds interleaved under a gate', () => {
-	// A Store whose runInboundJobs, once committed, holds its caller until released: the Queue consumer stops between
-	// its rounds' commit and its next message.
+	// A Store whose runInboundJobs holds its caller before the call until released: the Queue consumer stops at the
+	// Store call of its rounds, while the cron's rounds and the admin's transitions commit.
 	function gated(store: StoreStub) {
 		const reached = deferred()
 		const release = deferred()
@@ -544,10 +640,9 @@ describe('row 22: Queue and cron rounds interleaved under a gate', () => {
 			get(target, key) {
 				if (key === 'runInboundJobs') {
 					return async (...args: Parameters<StoreStub['runInboundJobs']>) => {
-						const result = await target.runInboundJobs(...args)
 						reached.resolve()
 						await release.promise
-						return result
+						return target.runInboundJobs(...args)
 					}
 				}
 				return Reflect.get(target, key) as unknown
@@ -556,16 +651,38 @@ describe('row 22: Queue and cron rounds interleaved under a gate', () => {
 		return { proxy, reached: reached.promise, release: release.resolve }
 	}
 
-	it('rows 1 and 2: each Undo and Reject is recorded once, and the marks converge', async () => {
+	// `n` local accounts, each followed by `r` (accepted): more than one severing round ends.
+	async function followedByR(store: StoreStub, r: string, n: number): Promise<void> {
+		await sql(
+			store,
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+			INSERT INTO accounts (id, uri, username, created_at) SELECT printf('%018d', 500000000000000000 + i),
+				'https://kopje.test/ap/users/l' || i, 'l' || i, ?2 FROM n`,
+			n,
+			new Date(NOW).toISOString()
+		)
+		await sql(
+			store,
+			`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey)
+			SELECT id, username || '@example.com', X'00', X'00', 'test' FROM accounts WHERE id LIKE '5000%'`
+		)
+		await sql(
+			store,
+			`INSERT INTO follows (account_id, target_account_id, state) SELECT ?, id, 'accepted' FROM accounts
+			WHERE id LIKE '5000%'`,
+			r
+		)
+	}
+
+	it('rows 1 and 2: each generation’s follows are severed once, and the marks converge', async () => {
 		const w = await world()
 		const store = w.h.store
 		const sim = new QueueSim()
 		const env = { ...w.h.env, QUEUE: sim.queue, MAINTENANCE: 'off' } as unknown as Env
+		const deps = inboxDeps(() => store)
 		await followedOn(w, 400)
 		const r = await remoteAccount(store, 'r')
-		for (const local of [w.alice, w.bob, w.carol]) {
-			await remoteFollows(store, r, local.id)
-		}
+		await followedByR(store, r, 150)
 		const block = await blockDomain(store, D)
 		expect(await act(w, r, { type: 'suspend' })).toMatchObject({ status: 200 })
 		const gate = gated(store)
@@ -578,43 +695,40 @@ describe('row 22: Queue and cron rounds interleaved under a gate', () => {
 			)
 		)
 		await gate.reached
-		// The Queue consumer holds; the cron's rounds and the admin's transitions commit meanwhile.
-		await runScheduledJobs(
-			env,
-			inboxDeps(() => store)
-		)
+		// At the gate the Queue's round has not run; the cron's round runs and leaves both jobs unfinished.
+		expect((await jobs(store)).map((job) => job.kind).sort()).toEqual(['account', 'domain'])
+		await runScheduledJobs(env, deps)
+		expect((await jobs(store)).map((job) => job.kind).sort()).toEqual(['account', 'domain'])
+		expect(await count(store, 'SELECT 1 FROM follows WHERE account_id = ?', r)).toBeGreaterThan(0)
+		// The admin unblocks and unsuspends; r follows dan meanwhile (a second generation); both decisions come back.
 		await unblockDomain(store, block.id)
 		expect(await unsuspend(w, r)).toMatchObject({ status: 200 })
-		await runScheduledJobs(
-			env,
-			inboxDeps(() => store)
-		)
+		expect(
+			await receive(store, await uriOf(store, r), { type: 'Follow', object: await uriOf(store, w.dan.id) })
+		).toMatchObject({ applied: true })
+		await runScheduledJobs(env, deps)
 		await blockDomain(store, D)
 		expect(await act(w, r, { type: 'suspend' })).toMatchObject({ status: 200 })
 		gate.release()
 		await queue
-		for (let i = 0; i < 400 && sim.pending.length > 0; i++) {
-			await sim.deliver((batch) =>
-				handleQueue(
-					batch,
-					env,
-					inboxDeps(() => store)
-				)
-			)
-			await runScheduledJobs(
-				env,
-				inboxDeps(() => store)
-			)
+		// The Queue and the cron take turns until the jobs end.
+		for (let i = 0; i < 400 && (await jobs(store)).length > 0; i++) {
+			await sim.deliver((batch) => handleQueue(batch, env, deps))
+			await runScheduledJobs(env, deps)
 		}
-		await settle(store)
 		expect(await jobs(store)).toEqual([])
 		expect(await marked(store)).toBe(400)
 		expect(await followsOn(store)).toBe(0)
 		const undone = await undos(store)
 		expect(undone).toHaveLength(400)
 		expect(undone.every((row) => row.n === 1)).toBe(true)
+		// r's follows of both generations: each of the 150 and dan's, a withdrawing Reject each, once.
+		expect(await count(store, 'SELECT 1 FROM follows WHERE account_id = ?', r)).toBe(0)
 		const rejected = await rejects(store)
-		expect(rejected.map((row) => row.signer).sort()).toEqual([w.alice.id, w.bob.id, w.carol.id].sort())
+		expect(rejected).toHaveLength(151)
+		expect(new Set(rejected.map((row) => row.signer)).size).toBe(151)
+		expect(rejected.map((row) => row.signer)).toContain(w.dan.id)
+		expect(rejected.every((row) => row.retracts === 1)).toBe(true)
 	})
 })
 
@@ -660,10 +774,6 @@ describe('bounds of the rounds (growth: reads others control)', () => {
 			})
 		)
 	}
-
-	it('pins SEVER_LIST_ROWS to lists.ts', () => {
-		expect(SEVER_LIST_ROWS).toBe(MAX_LISTS + 1)
-	})
 
 	it('a marking round reads a bounded window however many accounts or marks there are', async () => {
 		const w = await world()

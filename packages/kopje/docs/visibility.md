@@ -567,8 +567,10 @@ severity `suspend` or `noop`.
       evaluated for each remote one. A covered account that is not individually suspended is marked if it is not yet,
       and severed both ways up to the bound, marked or not: its follows of local accounts (an accepted one with a
       withdrawing `Reject`, a request deleted without one) and local accounts' follows and requests of it (each with
-      its `Undo`), through `severFollow` with the account job's bounded preparation. An individually suspended account
-      is skipped, so its local follows are kept (`account` wins).
+      its `Undo`), through `severFollow` with the account job's bounded preparation, which also removes the account
+      from the follower's lists in bounded steps (a converted instance keeps legacy lists of any number). At most
+      `MARK_ACCOUNTS` (100) accounts are reconciled a round, one resumed from the round before included. An
+      individually suspended account is skipped, so its local follows are kept (`account` wins).
 
     No account is stored or moves into a covered domain, so the last walk after the last reset finds every covered
     account, and whatever the order of transitions and rounds, marks and severing agree with the blocks once the job
