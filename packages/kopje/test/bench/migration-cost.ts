@@ -24,9 +24,12 @@ import { freshStore, testKernel } from '../helpers'
 //   - 2,000,000 notifications of the local accounts in turn, a mention by each status's author;
 //   - 10,000 reports by the local accounts of remote accounts, naming one status each;
 //   - 200,000 quotes (from migration 0033_quotes on), one by every tenth status, each of the status after it, in each
-//     stored state in turn (a quarter accepted).
+//     stored state in turn (a quarter accepted);
+//   - 2,000,000 favourites, one of each status in a scattered order, by remote accounts in turn;
+//   - 200,000 boosts on top of the statuses, public and unlisted in turn, each of a different status by another
+//     remote account.
 // It grows every table a phase A migration reads (accounts, follows, statuses with their mentions and tags,
-// notifications, reports, quotes); a migration that reads another table must add it here before it is measured. The
+// notifications, reports, quotes) and what 0043_read_window_indexes indexes (favourites, boosts); a migration that reads another table must add it here before it is measured. The
 // measured time is the file's transaction as the kernel applies it, from before the first statement to after the
 // commit: Date.now() in workerd moves only between I/O events, so the clock is read across an await on each side.
 
@@ -48,6 +51,8 @@ const SHAPE = {
 	notifications: 2_000_000,
 	reports: 10_000,
 	quotes: 200_000,
+	favourites: 2_000_000,
+	boosts: 200_000,
 }
 
 it('applies the migration to the benchmark store within the budget', async () => {
@@ -60,6 +65,8 @@ it('applies the migration to the benchmark store within the budget', async () =>
 	const notifications = Math.min(Math.round(SHAPE.notifications * scale), statuses)
 	const reports = Math.round(SHAPE.reports * scale)
 	const quotes = Math.min(Math.round(SHAPE.quotes * scale), Math.floor(statuses / 10))
+	const favourites = Math.min(Math.round(SHAPE.favourites * scale), statuses)
+	const boosts = Math.min(Math.round(SHAPE.boosts * scale), Math.floor(statuses / 10))
 
 	const store = freshStore()
 	// One call: between calls, the Store's own alarm would apply every migration.
@@ -194,12 +201,44 @@ it('applies the migration to the benchmark store within the budget', async () =>
 				now
 			)
 		}
+		// Favourites: favourite i is of status (7919 i) mod the statuses (7919 is prime to their number at full scale, so
+		// each status once), by remote account i, in batches.
+		for (let start = 0; start < favourites; start += batch) {
+			run(
+				`WITH RECURSIVE n(i) AS (SELECT ?1 UNION ALL SELECT i + 1 FROM n WHERE i < ?2 - 1)
+				INSERT OR IGNORE INTO favourites (account_id, status_id, created_at)
+				SELECT CAST(100000000000000000 + ?3 + i % ?4 AS TEXT), CAST(500000000000000000 + (7919 * i) % ?5 AS TEXT), ?6
+				FROM n`,
+				start,
+				Math.min(start + batch, favourites),
+				SHAPE.local,
+				remote,
+				statuses,
+				now
+			)
+		}
+		// Boosts: boost i (ids after the statuses) is of status 10i + 3, by the remote account after its author, public
+		// and unlisted in turn.
+		run(
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+			INSERT INTO statuses (id, uri, account_id, visibility, content, published_at, created_at, reblog_of_id)
+			SELECT CAST(600000000000000000 + i AS TEXT), 'https://bench.example/b/' || i,
+				CAST(100000000000000000 + ?2 + (10 * i + 4) % ?3 AS TEXT), CASE i % 2 WHEN 0 THEN 'public' ELSE 'unlisted' END,
+				'', ?4, ?4, CAST(500000000000000000 + 10 * i + 3 AS TEXT)
+			FROM n`,
+			boosts,
+			SHAPE.local,
+			remote,
+			now
+		)
 		const count = (table: string) => sql.exec<{ n: number }>(`SELECT count(*) AS n FROM ${table}`).one().n
 		const seeded = {
 			accounts: count('accounts'),
 			local: count('local_accounts'),
 			follows: count('follows'),
-			statuses: count('statuses'),
+			statuses: count('statuses WHERE reblog_of_id IS NULL'),
+			boosts: count('statuses WHERE reblog_of_id IS NOT NULL'),
+			favourites: count('favourites'),
 			mentions: count('status_mentions'),
 			tags: count('status_tags'),
 			notifications: count('notifications'),
