@@ -656,9 +656,8 @@ export function revocationRejectActivity(
 	}
 }
 
-// The Delete of a stamp, as Mastodon's: public, its object the stamp by id. It is LD-signed by the quoted author before
-// it is recorded (federation/ld-sign.ts) and delivered unedited (an immutable envelope), so a quoting server can relay
-// it with the author's proof.
+// Mastodon's public, id-only stamp Delete. LD-signed before it is recorded and delivered unedited, so receivers can
+// relay the author's proof (federation/ld-sign.ts, VIS-28).
 export function stampDeleteActivity(authorUri: string, stamp: string): Record<string, unknown> {
 	return {
 		'@context': [AS_CONTEXT, 'https://w3id.org/security/v1'],

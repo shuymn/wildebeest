@@ -532,7 +532,6 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, quotes.claimQuotes, input)
 	}
 
-	// Kopje's stamp of an accepted quote of a local status (federation/routes.ts), one read.
 	quoteAuthorization(callerBuild: string, input: OperationInput<typeof quotes.quoteAuthorization>) {
 		return this.#kernel.execute(callerBuild, quotes.quoteAuthorization, input)
 	}

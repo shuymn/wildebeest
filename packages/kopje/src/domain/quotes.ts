@@ -1123,7 +1123,6 @@ export const quoteAuthorization = readOperation<
 			}
 })
 
-// The quote of `quotingId` on the status `quotedId`, for its revoke (statuses.ts revokeQuote).
 export type RevocableQuote = {
 	state: QuoteState
 	authorizationId: string | null

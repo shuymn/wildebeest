@@ -694,20 +694,13 @@ export function ownStatusId(db: Db, authorId: string, statusId: string): OwnStat
 // for an accepted quote, the state the quoted status has for the viewer.
 export type ApiQuoteState = QuoteState | 'unauthorized' | 'blocked_domain' | 'blocked_account' | 'muted_account'
 
-// The quote of a status as `viewer` is shown it: its state, and the quoted status when the viewer is shown it.
 export type QuoteRead = { status_id: string; state: ApiQuoteState; quoted_status_id: VisibleStatusId | null }
 
 // R35: the quotes of statuses, read for one viewer. The presenter reads quotes only through this (test/policy.test.ts).
 export type QuoteReads = {
-	// The quotes of the statuses `statusIds` (each a quoting status, keyed in quotes by it), in status id order, one key
-	// lookup each. A status with no quote has no row, and neither has a legacy quote (a Note without `quote`) that is
-	// not accepted, which Mastodon never shows (Quote#acceptable?). The state of an accepted quote is, in order:
-	// accepted for the quoted author; unauthorized when the viewer may not see the quoted status (R2); blocked_domain,
-	// blocked_account or muted_account (while the mute applies at the viewer's time) when a signed-in viewer filters
-	// its author so; accepted otherwise. quoted_status_id is the quoted status for accepted and the three filter
-	// states, which the client folds, and never otherwise; `source` (the statuses whose source is requested: the
-	// response to their deletion) also shows it for a quote in a stored state other than accepted when the viewer may
-	// see it (R2), for redrafting.
+	// One key lookup per quoting status, in status id order. States, their precedence and Mastodon's
+	// Quote#acceptable?: docs/visibility.md (R35). `source` lists the statuses deleted in this response: their quote
+	// shows its quoted status in any stored state when R2 permits it, for redrafting.
 	of(db: Db, statusIds: readonly string[], source?: readonly string[]): QuoteRead[]
 }
 
@@ -789,9 +782,8 @@ export function quotePolicyFlags(policy: number, kind: 'automatic' | 'manual'): 
 // R36, the policy part (Status#quote_policy_for_account, by the policy alone): what the policy of the status `t`
 // answers `quoter` (NULL: anonymous, denied). In order: `automatic` when the automatic half allows public, or followers
 // and the quoter follows t's author (an accepted follow), or following and t's author follows the quoter; `manual`
-// when the manual half allows the same; `unknown` when either half sets unsupported_policy; `denied` otherwise. Who
-// the quoter is to t otherwise (t's author, t's visibility, a boost, blocks) is the rest of R36 (mayQuoteSql, not
-// built yet), not this part.
+// when the manual half allows the same; `unknown` when either half sets unsupported_policy; `denied` otherwise.
+// mayQuoteSql checks the rest of R36: t's author, t's visibility, a boost and blocks.
 export function quotePolicySql(t: string, quoter: string): string {
 	const { unsupported_policy, public: everyone, followers, following } = QUOTE_POLICY_FLAGS
 	const follower = `EXISTS (SELECT 1 FROM main.follows qpf

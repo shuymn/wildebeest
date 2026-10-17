@@ -13,8 +13,8 @@ import type { InstanceInfo } from '../domain/instance'
 //     served: 2 grouped notifications (/api/v2/notifications); 3 attribution domains (update_credentials), and in the
 //     official Android app OAuth PKCE (S256); 4 delete_media and DELETE /api/v1/media/:id; 5 the blur filter action;
 //     6 featuring hashtags (POST /api/v1/tags/:id/feature). At 6 the official iOS app also shows a default quote
-//     policy in its privacy settings; Kopje stores it (source[quote_policy]) and gives new posts that policy, but its
-//     Notes still say that only the author may quote, so no one on another server can quote a Kopje post yet.
+//     policy in its privacy settings; Kopje stores source[quote_policy] as the default for new posts (R36), which
+//     other servers may quote when public or unlisted and that policy allows it (VIS-28).
 //   - 7 (Mastodon 4.5) is quote posts: clients would offer quoting in the composer and send quoted_status_id, which
 //     Kopje does not serve, so a quote would post as a plain status. Kopje stays below it until quotes exist.
 //   - version is 4.4.0, the release of api_versions 6. Ice Cubes reads it and switches on at 4.3 grouped

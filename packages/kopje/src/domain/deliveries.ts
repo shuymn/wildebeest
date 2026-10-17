@@ -113,7 +113,6 @@ function supersededTypes(type: unknown): string[] {
 	}
 }
 
-// The stamp an Accept of a QuoteRequest grants, or null for any other activity.
 function quoteStampOf(activity: Activity): string | null {
 	const object = activity.object
 	return typeof object === 'object' &&
@@ -337,10 +336,9 @@ export function enqueueActivity(
 			object
 		)
 	}
-	// An Update of an actor (a profile change) goes to every target as it is, and replaces the earlier Updates of the
-	// actor still waiting there, so quick edits deliver only the latest document. An Update of a status is preceded by a
-	// Create of its current version for servers not known to have it, but for the inboxes of its poll's voters, which
-	// have it (they voted in it) and take its counts from an Update only (DistributePollUpdateWorker).
+	// An actor Update goes unchanged to every target and replaces its waiting profile Updates, so quick edits deliver
+	// only the latest document. A status Update follows the rule above; poll voters hold the status and take its counts
+	// from an Update only (DistributePollUpdateWorker).
 	if (object !== null && envelope.activity.type === 'Update' && isActorObject(envelope.activity.object)) {
 		// A restoration Update still staging its audience carries the new document too, so a server it reaches after
 		// this Update is not left with the older profile. (No profile changes while the account is suspended, so a
@@ -666,8 +664,6 @@ function replaceWaiting(db: Db, signerId: string, object: string, lanes: Set<str
 	}
 }
 
-// The Create a destination not known to have the object gets before the Update: the current Note, under the Create's
-// id.
 function createOfCurrent(update: Activity): Activity {
 	const note = update.object as Activity
 	return {
