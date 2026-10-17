@@ -14,6 +14,8 @@ import { writeOperation } from './operation'
 import { checkPoll, isPollInput, type PollInput } from './polls'
 import { MEDIA_COLUMNS, type MediaAttachment, type MediaRow, presentMedia, type Status } from './status-presenter'
 import {
+	ABOVE_EVERY_ID,
+	BELOW_EVERY_ID,
 	type CreateStatusInput,
 	type CreateStatusResult,
 	iso,
@@ -361,7 +363,8 @@ export const listScheduled = userReadOperation<{ page: PageQuery }, Page<Schedul
 		const ascending = page.minId !== undefined
 		const rows = db.all<ScheduledRow>(
 			`SELECT ${COLUMNS} FROM scheduled_statuses ss
-			WHERE ${scheduledOwnSql('ss', '?1')} AND (?2 IS NULL OR ss.id < ?2) AND (?3 IS NULL OR ss.id > ?3)
+			WHERE ${scheduledOwnSql('ss', '?1')} AND ss.id < coalesce(?2, '${ABOVE_EVERY_ID}')
+				AND ss.id > coalesce(?3, '${BELOW_EVERY_ID}')
 			ORDER BY ss.id ${ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
 			accountId,
 			statusCursor(page.maxId),

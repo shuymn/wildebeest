@@ -724,6 +724,9 @@ per library source), the directory (`DIRECTORY_WINDOW`), the admin lists (their 
 traversal cap), conversations (no rule before `LIMIT`), and the blocks, mutes, domain blocks and follow requests lists
 (no rule before `LIMIT`). Suggestions and the link timeline answer empty lists.
 
+A cursor range is a direct range (`id < coalesce(?2, ':')`, `edgeRangeSql`), never `(?2 IS NULL OR id < ?2)`, which
+no index can seek; `test-node/range-predicates.test.ts` checks every statement in `src`.
+
 `test/read-windows.test.ts` checks that every windowed read stays bounded in front of hidden ranges of each kind,
 that paging by `max_id` and by `min_id` reaches every visible row on both sides once, in order, and that no response
 field names a status, blocking follower or interactor the viewer may not see.
