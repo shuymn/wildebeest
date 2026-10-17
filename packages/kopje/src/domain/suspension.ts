@@ -74,7 +74,7 @@ type Job = {
 	intent_id: string | null
 	report_bound: number | null
 	// The newest moderation log row at the suspension (a suspension job's): the report fence (reports.ts
-	// resolveSuspensionReports).
+	// resolveSuspensionReports). Null on a suspension job: unknown (0042_report_action_fence), which resolves none.
 	action_bound: number | null
 	follow_bound: number | null
 	cutoff: string | null
@@ -325,7 +325,7 @@ function reachRound(db: Db, job: Job, state: JobState, now: number): boolean {
 				db,
 				job.account_id,
 				job.report_bound ?? 0,
-				job.action_bound ?? 0,
+				job.action_bound,
 				job.actor_account_id,
 				Number(state.cursor ?? 0),
 				REPORT_ROUND,

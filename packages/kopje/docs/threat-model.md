@@ -730,7 +730,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   twice; a suspension freezes the newest report id and the newest log id (`moderation_jobs.action_bound`) in its
   transaction, and its job resolves only reports filed up to the first, still unresolved, and last written by an admin
   at or below the second (no admin write counts as 0). So a report reopened or changed after the suspension committed,
-  and one filed after it, stay as they are, whatever either request's clock said. `resolveSuspensionReports` and
+  and one filed after it, stay as they are, whatever either request's clock said. A job whose bound is unknown (a
+  suspension from before the fence whose log row was pruned) resolves none, and leaves them to the admin. `resolveSuspensionReports` and
   `actionBound` in `src/domain/reports.ts`, `logAction` in `src/domain/moderation-log.ts`, migration
   `0042_report_action_fence`; `test/admin-suspension.test.ts` ("the report fence"), `test/migrations.test.ts`. The
   report notification is

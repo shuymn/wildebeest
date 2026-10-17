@@ -8,13 +8,14 @@
 --   reports.last_action_id         the log id of the last admin write to the report, stamped in that write's
 --                                  transaction. NULL (no admin write) counts as 0.
 --   moderation_jobs.action_bound   the newest log id when the suspension committed, frozen in its transaction. A
---                                  suspension job resolves only reports whose last_action_id is at or below it.
+--                                  suspension job resolves only reports whose last_action_id is at or below it; NULL
+--                                  (unknown) resolves none, and leaves them to the admin.
 --
 -- The stored state is carried over from the log: each report logged by an admin gets its newest log id, and each
--- suspension job still running gets the id of its account's newest suspend row (logged in the suspension's
--- transaction, after the bound was frozen, and no report write between), or 0 when the log holds none, so such a job
--- resolves only reports no admin has written. Report writes older than the log's kept window (MODERATION_LOG_KEEP)
--- stay at 0, below any job's bound.
+-- suspension job still running gets the id of its own suspend row (the account's, with the job's suspended_at; logged
+-- in the suspension's transaction, after the bound was frozen, and no report write between). A job whose suspend row
+-- was pruned (MODERATION_LOG_KEEP) keeps NULL: the reopen that followed it may have been pruned as well, so no bound
+-- is safe. Report writes pruned while their suspension's row is kept are older than it, so 0 is below its bound.
 --
 -- Cost: two ALTERs adding a column with no default and no CHECK (a change of the schema alone), and the carry-over,
 -- which reads the log once (at most MODERATION_LOG_KEEP rows and a pruning batch), writes one row per report it names,
@@ -35,8 +36,10 @@ FROM (
 ) AS logged
 WHERE reports.id = logged.report_id;
 
-UPDATE moderation_jobs SET action_bound = coalesce((
-  SELECT max(id) FROM admin_actions
+UPDATE moderation_jobs SET action_bound = (
+  SELECT id FROM admin_actions
   WHERE action = 'suspend' AND target_type = 'Account' AND target_id = moderation_jobs.account_id
-), 0)
+    AND json_extract(detail, '$.suspended_at') = moderation_jobs.since
+  ORDER BY id DESC LIMIT 1
+)
 WHERE kind = 'suspension';

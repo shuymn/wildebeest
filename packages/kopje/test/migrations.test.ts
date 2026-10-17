@@ -9,6 +9,7 @@ import { DISTRIBUTABLE_SQL, REACHES_FOLLOWERS_SQL, REQUIRES_MENTION_SQL } from '
 import { CONVERSATIONS_BACKFILL } from '../src/domain/conversation-rows'
 import { readOperation, sessionOperation, writeOperation } from '../src/domain/operation'
 import { storeRemoteStatus } from '../src/domain/remote-statuses'
+import { moderationRound } from '../src/domain/suspension'
 import { normalizeTag } from '../src/domain/tag-name'
 import { parseRemoteStatus } from '../src/federation/remote-status'
 import { StoreUnavailableError, toStoreUnavailable } from '../src/platform/store-errors'
@@ -4458,30 +4459,47 @@ describe('0041_report_notifications_key', () => {
 describe('0042_report_action_fence', () => {
 	const NAME = '0042_report_action_fence'
 	const at = NAMES.indexOf(NAME)
+	const SUSPENDED_AT = '2026-10-12T00:00:00.000Z'
 
-	function log(sql: SqlStorage, id: number, action: string, type: 'Report' | 'Account', target: string) {
+	function log(sql: SqlStorage, id: number, action: string, type: 'Report' | 'Account', target: string, detail = {}) {
 		sql.exec(
-			`INSERT INTO admin_actions (id, actor, account_id, action, target_type, target_id, created_at)
-			VALUES (?, 'oauth', ?, ?, ?, ?, '2026-10-12T00:00:00.000Z')`,
+			`INSERT INTO admin_actions (id, actor, account_id, action, target_type, target_id, detail, created_at)
+			VALUES (?, 'oauth', ?, ?, ?, ?, ?, '2026-10-12T00:00:00.000Z')`,
 			id,
 			REPORTER,
 			action,
 			type,
-			target
+			target,
+			JSON.stringify(detail)
 		)
 	}
 
-	function report(sql: SqlStorage, id: number) {
+	function report(sql: SqlStorage, id: number, target = TARGET) {
 		sql.exec(
 			`INSERT INTO reports (id, account_id, target_account_id, uri, created_at)
 			VALUES (?1, ?2, ?3, 'https://kopje.test/actor#reports/' || ?1, '2026-10-12T00:00:00.000Z')`,
 			id,
 			REPORTER,
-			TARGET
+			target
 		)
 	}
 
-	it("carries each report's newest log id over, and each running suspension job's newest suspend row", async () => {
+	// REPORTER suspended at SUSPENDED_AT in epoch 1, its suspension job still in the report phase.
+	function suspended(sql: SqlStorage) {
+		sql.exec(
+			'UPDATE local_accounts SET suspended_at = ?, credential_epoch = 1 WHERE account_id = ?',
+			SUSPENDED_AT,
+			REPORTER
+		)
+		sql.exec(
+			`INSERT INTO moderation_jobs (kind, account_id, generation, since, report_bound, phase)
+			VALUES ('suspension', ?, 1, ?, 1000, 'reports')`,
+			REPORTER,
+			SUSPENDED_AT
+		)
+	}
+
+	it("carries each report's newest log id over, and each running suspension job's own suspend row", async () => {
 		const store = freshStore()
 		await runInDurableObject(store, async (_instance, state) => {
 			const sql = state.storage.sql
@@ -4490,17 +4508,15 @@ describe('0042_report_action_fence', () => {
 			report(sql, 8)
 			report(sql, 9)
 			log(sql, 1, 'resolve', 'Report', '7')
-			log(sql, 2, 'suspend', 'Account', REPORTER)
+			log(sql, 2, 'suspend', 'Account', REPORTER, { suspended_at: '2026-10-11T00:00:00.000Z' })
 			log(sql, 3, 'reopen', 'Report', '7')
 			log(sql, 4, 'update', 'Report', '8')
-			log(sql, 5, 'suspend', 'Account', REPORTER)
-			for (const kind of ['tokens', 'suspension']) {
-				sql.exec(
-					"INSERT INTO moderation_jobs (kind, account_id, generation, phase) VALUES (?, ?, 1, 'reports')",
-					kind,
-					REPORTER
-				)
-			}
+			log(sql, 5, 'suspend', 'Account', REPORTER, { suspended_at: SUSPENDED_AT })
+			sql.exec(
+				"INSERT INTO moderation_jobs (kind, account_id, generation, phase) VALUES ('tokens', ?, 1, 'tokens')",
+				REPORTER
+			)
+			suspended(sql)
 			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
 			expect(sql.exec('SELECT id, last_action_id FROM reports ORDER BY id').toArray()).toEqual([
 				{ id: 7, last_action_id: 3 },
@@ -4514,20 +4530,50 @@ describe('0042_report_action_fence', () => {
 		})
 	})
 
-	it('bounds a running suspension job at 0 when the log names no suspension of its account', async () => {
+	// Before the upgrade: REPORTER is suspended, then the admin reopens a report on REPORTER; `pruned` drops both log
+	// rows before the upgrade, while the job is still pending. The job's first round then runs.
+	async function reopenedAcrossUpgrade(pruned: boolean) {
 		const store = freshStore()
-		await runInDurableObject(store, async (_instance, state) => {
+		return runInDurableObject(store, async (_instance, state) => {
 			const sql = state.storage.sql
 			expect(await kernel(state, MIGRATIONS.slice(0, at)).upgrade()).toMatchObject({ ok: true })
 			seedReport(sql, 0)
-			log(sql, 1, 'resolve', 'Report', '7')
-			log(sql, 2, 'suspend', 'Account', TARGET)
-			sql.exec(
-				"INSERT INTO moderation_jobs (kind, account_id, generation, phase) VALUES ('suspension', ?, 1, 'reports')",
-				REPORTER
-			)
+			report(sql, 10, REPORTER)
+			report(sql, 11, REPORTER)
+			log(sql, 1, 'resolve', 'Report', '10')
+			log(sql, 2, 'suspend', 'Account', REPORTER, { suspended_at: SUSPENDED_AT })
+			log(sql, 3, 'reopen', 'Report', '10')
+			log(sql, 4, 'update', 'Report', '7')
+			suspended(sql)
+			if (pruned) {
+				sql.exec('DELETE FROM admin_actions WHERE id <= 3')
+			}
 			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
-			expect(sql.exec('SELECT action_bound FROM moderation_jobs').one()).toEqual({ action_bound: 0 })
+			state.storage.transactionSync(() => moderationRound(new Db(sql), Date.parse(SUSPENDED_AT)))
+			return {
+				bound: sql.exec('SELECT action_bound FROM moderation_jobs').one().action_bound,
+				reports: sql
+					.exec('SELECT id, action_taken_at IS NOT NULL AS resolved FROM reports WHERE id >= 10 ORDER BY id')
+					.toArray(),
+			}
+		})
+	}
+
+	it('leaves open a report reopened after a suspension from before the upgrade, also when the log was pruned', async () => {
+		expect(await reopenedAcrossUpgrade(false)).toEqual({
+			bound: 2,
+			reports: [
+				{ id: 10, resolved: 0 },
+				{ id: 11, resolved: 1 },
+			],
+		})
+		// The suspension's row is gone, so its bound is unknown: the job resolves none, and leaves them to the admin.
+		expect(await reopenedAcrossUpgrade(true)).toEqual({
+			bound: null,
+			reports: [
+				{ id: 10, resolved: 0 },
+				{ id: 11, resolved: 0 },
+			],
 		})
 	})
 

@@ -587,15 +587,15 @@ export function actionBound(db: Db): number {
 // #process_reports! resolves every unresolved one. Read at most `limit` reports after report id `cursor`, through
 // reports_target_state in id order. Resolve only reports frozen at suspension (the report fence, R37, VIS-29): filed
 // up to `bound`, still unresolved, and last written by an admin at or below the suspension's `actionBound`
-// (last_action_id, the log id of that write; none counts as 0). Log ids are given in commit order, so a report an admin
-// reopened or changed after the suspension stays untouched, whatever either request's clock said. `by` names the
-// suspending admin (null: none). Returns the last report read (null if none) and the resolved count; fewer than
-// `limit` read means the range is done.
+// (last_action_id, the log id of that write; none counts as 0). An unknown bound (null) resolves none. Log ids are
+// given in commit order, so a report an admin reopened or changed after the suspension stays untouched, whatever
+// either request's clock said. `by` names the suspending admin (null: none). Returns the last report read (null if
+// none) and the resolved count; fewer than `limit` read means the range is done.
 export function resolveSuspensionReports(
 	db: Db,
 	target: string,
 	bound: number,
-	actionBound: number,
+	actionBound: number | null,
 	by: string | null,
 	cursor: number,
 	limit: number,
@@ -611,7 +611,7 @@ export function resolveSuspensionReports(
 		bound,
 		limit
 	)
-	const frozen = rows.filter((row) => row.action <= actionBound).map((row) => row.id)
+	const frozen = actionBound === null ? [] : rows.filter((row) => row.action <= actionBound).map((row) => row.id)
 	if (frozen.length > 0) {
 		db.run(
 			`UPDATE reports SET action_taken_at = ?1, action_taken_by_account_id = ?2, updated_at = ?1
