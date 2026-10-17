@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 import { type ApiHarness, bearer } from './api-helpers'
 import { NOW } from './app-helpers'
+import { appToken } from './read-helpers'
 import { community, post, type User } from './status-helpers'
 
 // Candidate windows through the routes (src/domain/windows.ts, docs/visibility.md "Read bounds"): an empty page cut at
@@ -207,5 +208,98 @@ describe('a group keeps the notification its walk found behind its hidden newest
 			{ group_key: 'follow-b', notifications_count: 1, sample_account_ids: [String(HIDDEN_BASE + 401n)] },
 			{ group_key: 'favourite-a', notifications_count: 1, sample_account_ids: [String(HIDDEN_BASE)] },
 		])
+	}, 60_000)
+})
+
+// The quotes list (R35) as an outsider reads it: a remote status quoted by 5 public statuses, then by 60 private, 60
+// direct and 60 limited ones, newer, that the reader may not see. Neither a user token nor an app token learns their
+// ids, in the body or the Link header, and following next reaches the public quotes.
+describe('the quotes list never answers an id of a quote the reader may not see', () => {
+	it('keeps private, direct and limited quotes out of the body and the Link, for a user token and an app token', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const QUOTED = '740000000000000000'
+		const QUOTER = '740000000000000001'
+		const OTHER = '740000000000000002'
+		const TARGET = '741000000000000000'
+		const visible = ids(742000000000000000n, 5)
+		const hidden = new Set<string>()
+		await runInDurableObject(h.store, (_instance, state) => {
+			const sql = state.storage.sql
+			const at = new Date(NOW).toISOString()
+			for (const [id, name] of [
+				[QUOTED, 'quoted'],
+				[QUOTER, 'quoter'],
+				[OTHER, 'other'],
+			]) {
+				sql.exec(
+					"INSERT INTO accounts (id, uri, username, domain) VALUES (?, ?, ?, 'far.example')",
+					id,
+					`https://far.example/users/${name}`,
+					name
+				)
+			}
+			const status = (id: string, author: string, visibility: string) =>
+				sql.exec(
+					`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at) VALUES (?, ?, ?, ?, '<p>q</p>', ?)`,
+					id,
+					`https://far.example/objects/${id}`,
+					author,
+					visibility,
+					at
+				)
+			status(TARGET, QUOTED, 'public')
+			const quote = (id: string) =>
+				sql.exec(
+					`INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, quoted_account_id, state, updated_at)
+					VALUES (?, ?, ?, ?, 'accepted', ?)`,
+					id,
+					`https://far.example/objects/${TARGET}`,
+					TARGET,
+					QUOTED,
+					at
+				)
+			for (const id of visible) {
+				status(id, QUOTER, 'public')
+				quote(id)
+			}
+			for (const [base, visibility] of [
+				[743000000000000000n, 'private'],
+				[744000000000000000n, 'direct'],
+				[745000000000000000n, 'limited'],
+			] as const) {
+				for (const id of ids(base, 60)) {
+					status(id, QUOTER, visibility)
+					quote(id)
+					hidden.add(id)
+					if (visibility !== 'private') {
+						sql.exec(
+							'INSERT INTO status_mentions (status_id, account_id, silent) VALUES (?, ?, ?)',
+							id,
+							OTHER,
+							visibility === 'limited' ? 1 : 0
+						)
+					}
+				}
+			}
+		})
+		for (const token of [alice.token, await appToken(h)]) {
+			const seen: string[] = []
+			let next: string | null = `/api/v1/statuses/${TARGET}/quotes`
+			while (next !== null) {
+				expect(seen.length).toBeLessThan(1000)
+				const response = await h.request(next, bearer(token))
+				expect(response.status).toBe(200)
+				const text = (await response.text()) + (response.headers.get('link') ?? '')
+				const leaked = (text.match(/\d{18}/g) ?? []).filter((id) => hidden.has(id))
+				expect(leaked).toEqual([])
+				const body = JSON.parse(text.slice(0, text.length - (response.headers.get('link') ?? '').length)) as {
+					id: string
+				}[]
+				seen.push(...body.map((status) => status.id))
+				next = linkOf(response, 'next')
+			}
+			expect(seen).toEqual([...visible].reverse())
+		}
 	}, 60_000)
 })

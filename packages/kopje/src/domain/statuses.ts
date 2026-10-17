@@ -1713,9 +1713,11 @@ export type QuotesPage = Page<Status> & { candidates: number }
 
 // GET /api/v1/statuses/:id/quotes (Api::V1::Statuses::QuotesController#index, R35): app tokens read as anonymous,
 // as Mastodon requires no user. R3 guards the target. Accepted quotes, newest first, paged by the quoting status's id
-// (Kopje's quote key), not Mastodon's quote id. As Mastodon paginates before it filters, one acceptedQuoteWindow seek
-// reads at most `limit` rows, then R8 applies, or R2 for the quoted author, quotes of accounts they block or mute
-// included (Mastodon skips StatusFilter for them). Bounds are the window's, so short or empty pages still advance.
+// (Kopje's quote key), not Mastodon's quote id. One acceptedQuoteWindow seek reads at most `limit` candidates, then R8
+// applies, or R2 for the quoted author, quotes of accounts they block or mute included (Mastodon skips StatusFilter for
+// them). Bounds are the window's, so short or empty pages still advance. For anyone but the quoted author, a quoting
+// status their audience hides is never a candidate, so its id is never a cursor: Kopje's rule, stricter than
+// Mastodon's QuotesController, which paginates every accepted quote before StatusFilter.
 export const statusQuotes = optionalUserReadOperation<StatusQuotesInput, Viewed<QuotesPage>>(
 	(db, { id, page, present }, viewer) => {
 		const { accountId } = viewer
@@ -1732,7 +1734,8 @@ export const statusQuotes = optionalUserReadOperation<StatusQuotesInput, Viewed<
 			db,
 			resolved,
 			{ max: statusCursor(page.maxId), min: statusCursor(page.minId ?? page.sinceId), ascending },
-			page.limit
+			page.limit,
+			...(accountId !== null && quoted.account_id === accountId ? [] : [accountId])
 		)
 		if (ascending) {
 			window.reverse()
