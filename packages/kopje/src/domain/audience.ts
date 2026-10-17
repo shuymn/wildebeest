@@ -456,6 +456,7 @@ export type StatusReads = {
 		...params: SqlStorageValue[]
 	): boolean
 	// The viewer's notifications the notification rule (R15) shows them, which shows a status only if they may view it,
+	// and a report's only while `admin` (the OAuth admin's account id, adminAccountIdOnce) is the viewer (R37),
 	// and, unless `includeFiltered`, only those the recipient's policy did not filter (Notification.browserable), above
 	// the viewer's last clear and their group's last dismissal (keptFloorSql). `range` is the page's cursor, `max` and
 	// `min` exclusive (expressions over the parameters, as edgeRangeSql's), and `group` the one group read (an
@@ -472,6 +473,7 @@ export type StatusReads = {
 			readonly includeFiltered: boolean
 			readonly range?: { readonly max: string; readonly min: string }
 			readonly group?: string
+			readonly admin: string | null
 		},
 		...params: SqlStorageValue[]
 	): (Extra & { status_id: VisibleStatusId | null })[]
@@ -597,10 +599,13 @@ export function statusReads(
 				readonly includeFiltered: boolean
 				readonly range?: { readonly max: string; readonly min: string }
 				readonly group?: string
+				readonly admin: string | null
 			},
 			...params: SqlStorageValue[]
 		) {
-			const rule = shownSql(at.viewer, 'n.type', 'n.from_account_id', 'n.status_id', now())
+			const admin =
+				viewer !== null && viewer.accountId !== null && query.admin === viewer.accountId ? at.viewer : 'NULL'
+			const rule = shownSql(at.viewer, 'n.type', 'n.from_account_id', 'n.status_id', now(), admin)
 			// A term of its own, so the plan reads the partial index of unfiltered notifications (notifications_unfiltered).
 			const unfiltered = query.includeFiltered ? undefined : UNFILTERED_SQL
 			// One lower bound on the id, the cursor's or the floor, whichever is higher, so the index walk starts above
@@ -878,9 +883,12 @@ function silencedSql(r: string, a: string, now: string): string {
 // than in the author's own conversation (a partner that is someone else or unknown, as FeedInsertWorker#notify?) or
 // when home would leave it out (homeFilterSql, which also hides a sender the recipient mutes without notifications).
 // A quoted_update (about the recipient's own quoting status) is shown while its quote is accepted and the recipient
-// may see the quoted status by itself (R35, VIS-27: Mastodon checks neither).
-export function shownSql(r: string, type: string, from: string, status: string, now: string): string {
+// may see the quoted status by itself (R35, VIS-27: Mastodon checks neither). An admin.report is shown only while its
+// recipient is `admin`, the OAuth admin's account id (R37; NULL for none), so it leaves every read, push and stream
+// when the admin changes; it goes with its report (notifications.report_id, ON DELETE CASCADE).
+export function shownSql(r: string, type: string, from: string, status: string, now: string, admin: string): string {
 	return `((${from} <> ${r} OR ${type} = 'poll')
+		AND (${type} <> 'admin.report' OR ${r} IS ${admin})
 		AND ${availableSql(from)}
 		AND NOT ${silencedSql(r, from, now)}
 		AND NOT ${blocksSql(from, r)}
@@ -909,10 +917,10 @@ export function conversationMutedSql(owner: string, thread: string): string {
 // conversation the recipient mutes (R31, NotifyService::DropCondition#conversation_muted?: a reblog notification
 // names the original, whose conversation counts). Mastodon drops only the notifications it would create: one written
 // before the mute stays listed and pushed, so listing and pushes apply shownSql alone.
-export function notifiedSql(r: string, type: string, from: string, status: string, now: string): string {
+export function notifiedSql(r: string, type: string, from: string, status: string, now: string, admin: string): string {
 	return `((${status} IS NULL OR NOT EXISTS (SELECT 1 FROM main.statuses nc WHERE nc.id = ${status}
 			AND ${conversationMutedSql(r, 'nc.thread')}))
-		AND ${shownSql(r, type, from, status, now)})`
+		AND ${shownSql(r, type, from, status, now, admin)})`
 }
 
 // ---- Notification policies (R15 as notify writes; Mastodon 4.5's NotifyService::DropCondition and FilterCondition).

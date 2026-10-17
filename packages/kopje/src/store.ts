@@ -405,6 +405,11 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, unsuspendAccount, input)
 	}
 
+	// GET /admin/reports/:id (domain/reports.ts).
+	reportTargetPage(callerBuild: string, input: OperationInput<typeof reports.reportTargetPage>) {
+		return this.#kernel.execute(callerBuild, reports.reportTargetPage, input)
+	}
+
 	// GET /admin/moderation-log (domain/moderation-log.ts).
 	moderationLog(callerBuild: string, input: OperationInput<typeof moderationLog>) {
 		return this.#kernel.execute(callerBuild, moderationLog, input)

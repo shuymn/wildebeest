@@ -74,6 +74,18 @@ export function adminAccountId(db: Db): string | null {
 	return oauthAdmin(db).accountId
 }
 
+const onceByDb = new WeakMap<Db, string | null>()
+
+// adminAccountId read once per operation (each runs on its own Db, in one transaction), for the notification reads and
+// pushes that apply R37 to admin.report (shownSql) many times in one operation. Only operations that never change
+// admin_email, a local account's email or a suspension call it.
+export function adminAccountIdOnce(db: Db): string | null {
+	if (!onceByDb.has(db)) {
+		onceByDb.set(db, adminAccountId(db))
+	}
+	return onceByDb.get(db) ?? null
+}
+
 // The OAuth admin's state for GET /admin/health (Access only), so the operator sees why there is no admin.
 export const oauthAdminStatus = readOperation<void, Omit<OAuthAdmin, 'accountId'>>((db) => {
 	const { status, username } = oauthAdmin(db)

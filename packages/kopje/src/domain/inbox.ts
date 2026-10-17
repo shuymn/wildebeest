@@ -1377,8 +1377,21 @@ function purgeRelationships(db: Db, id: string, budget: Budget): void {
 		id
 	)
 	// The local users' reports of the account (migration 0022_reports), as Mastodon's DeleteAccountService destroys an
-	// account's targeted_reports.
-	spend(db, budget, 'DELETE FROM reports WHERE id IN (SELECT id FROM reports WHERE target_account_id = ? LIMIT ?)', id)
+	// account's targeted_reports. The admin.report notification of each (one at most, migration
+	// 0040_report_notifications) goes first, for the same reports in the same order, so no report's delete cascades.
+	spend(
+		db,
+		budget,
+		`DELETE FROM notifications WHERE report_id IN (SELECT id FROM reports WHERE target_account_id = ?1 ORDER BY id LIMIT ?2)
+			AND report_id IS NOT NULL`,
+		id
+	)
+	spend(
+		db,
+		budget,
+		'DELETE FROM reports WHERE id IN (SELECT id FROM reports WHERE target_account_id = ? ORDER BY id LIMIT ?)',
+		id
+	)
 	// Its pins and featured hashtags, at most MAX_REMOTE_PINS and MAX_FEATURED_TAGS, the sync of them that waits
 	// and its pending pinned statuses (migration 0025_remote_collections).
 	spend(

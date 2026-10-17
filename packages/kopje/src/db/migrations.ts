@@ -37,6 +37,7 @@ import m0036 from '../../migrations/0036_quotes_list.sql'
 import m0037 from '../../migrations/0037_quote_policy.sql'
 import m0038 from '../../migrations/0038_quote_requests.sql'
 import m0039 from '../../migrations/0039_quotes_local.sql'
+import m0040 from '../../migrations/0040_report_notifications.sql'
 
 // Store migrations in apply order. Append only: an applied file is recorded by name and checksum and must
 // never change. Each file runs in its own transaction, must finish well under 30 seconds, and must be pure SQL.
@@ -80,4 +81,5 @@ export const MIGRATIONS: readonly { name: string; sql: string }[] = [
 	{ name: '0037_quote_policy', sql: m0037 },
 	{ name: '0038_quote_requests', sql: m0038 },
 	{ name: '0039_quotes_local', sql: m0039 },
+	{ name: '0040_report_notifications', sql: m0040 },
 ]

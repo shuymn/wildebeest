@@ -290,7 +290,16 @@ describe('the policy fragments agree with the model of their rules', () => {
 		))
 
 	// Every (recipient, type, sender, status or none) a local recipient is shown, at the world's time; and, as notify
-	// writes them, without those about a status of a conversation the recipient mutes.
+	// writes them, without those about a status of a conversation the recipient mutes. The first local account is the
+	// OAuth admin (R37).
+	const adminOf = (world: World) => {
+		const index = world.accounts.findIndex((account) => account.local)
+		return index < 0 ? null : index
+	}
+	const adminIdOf = (world: World) => {
+		const admin = adminOf(world)
+		return admin === null ? null : accountId(admin)
+	}
 	for (const [title, fragment, rule] of [
 		['shownSql (R15)', shownSql, 'shown'],
 		['notifiedSql (R15, R31)', notifiedSql, 'notified'],
@@ -304,17 +313,19 @@ describe('the policy fragments agree with the model of their rules', () => {
 							`SELECT nr0.account_id AS r, nt.value AS type, nf.id AS sender, ns.id AS status
 							FROM local_accounts nr0 CROSS JOIN json_each(?1) nt CROSS JOIN accounts nf
 							CROSS JOIN (SELECT id FROM statuses UNION ALL SELECT NULL) ns
-							WHERE ${fragment('nr0.account_id', 'nt.value', 'nf.id', 'ns.id', '?2')}`,
+							WHERE ${fragment('nr0.account_id', 'nt.value', 'nf.id', 'ns.id', '?2', '?3')}`,
 							JSON.stringify(NOTIFICATION_TYPES),
-							world.now
+							world.now,
+							adminIdOf(world)
 						)
 						.map(
 							(row) =>
 								`${named(row.r)} ${row.type} ${named(row.sender)} ${row.status === null ? '-' : named(row.status)}`
 						)
 				},
-				(m) =>
-					accounts(m.world)
+				({ world }) => {
+					const m = new PolicyModel(world, adminOf(world))
+					return accounts(m.world)
 						.filter((r) => m.world.accounts[r]?.local === true)
 						.flatMap((r) =>
 							NOTIFICATION_TYPES.flatMap((type) =>
@@ -327,6 +338,7 @@ describe('the policy fragments agree with the model of their rules', () => {
 								)
 							)
 						)
+				}
 			)
 		)
 	}

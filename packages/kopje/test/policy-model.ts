@@ -55,6 +55,7 @@ export const NOTIFICATION_TYPES = [
 	'poll',
 	'quote',
 	'quoted_update',
+	'admin.report',
 ] as const satisfies readonly NotificationType[]
 const EVERY_TYPE: Exclude<NotificationType, (typeof NOTIFICATION_TYPES)[number]> extends never ? true : false = true
 void EVERY_TYPE
@@ -70,7 +71,11 @@ export type ModelConversation = {
 }
 
 export class PolicyModel {
-	constructor(readonly world: World) {}
+	// `admin` is the OAuth admin (R37), the only recipient shown an admin.report; null for none.
+	constructor(
+		readonly world: World,
+		readonly admin: number | null = null
+	) {}
 
 	private account(x: number) {
 		const account = this.world.accounts[x]
@@ -517,7 +522,8 @@ export class PolicyModel {
 	// recipient. A mention is left out when its status mentions (not silently) or replies to an account the recipient
 	// blocks or mutes with notifications. A post notification is shown only for a status that is not a reply, or is one
 	// in the author's own conversation (a known partner that is the author), and that home's filter passes. A
-	// quoted_update is shown while its status's quote is accepted and the recipient may see the quoted status.
+	// quoted_update is shown while its status's quote is accepted and the recipient may see the quoted status. An
+	// admin.report is shown to the OAuth admin alone (R37).
 	shown(r: number, type: NotificationType, from: number, s: number | null): boolean {
 		if (
 			(from === r && type !== 'poll') ||
@@ -556,6 +562,8 @@ export class PolicyModel {
 				const q = s === null ? undefined : this.world.quotes.find((quote) => quote.status === s)
 				return q !== undefined && q.state === 'accepted' && q.quoted !== null && this.viewable(q.quoted, r)
 			}
+			case 'admin.report':
+				return r === this.admin
 			default:
 				return true
 		}
