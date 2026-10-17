@@ -11,6 +11,7 @@ import {
 	ACTOR_URI_LIMIT,
 	cutJsonString,
 	isRemoteUsername,
+	isStorableActorId,
 	jsonStringBytes,
 	REMOTE_BIO_BYTES,
 	sanitizeRemoteBio,
@@ -399,10 +400,12 @@ describe('HTML is never cut silently', () => {
 		}, 'remote-actor-username-invalid')
 	})
 
-	it('refuses an actor id over its bound in UTF-8 bytes, though shorter in characters', async () => {
-		// 1,100 two-byte characters: 1,131 characters, 2,231 bytes.
-		const long = `https://remote.example/users/r2${'é'.repeat(1_100)}`
-		expect([long.length <= ACTOR_URI_LIMIT, withinIdentityBound(long, ACTOR_URI_LIMIT)]).toEqual([true, false])
+	it('refuses an actor id whose serialized URL is over its bound, though its spelling fits', async () => {
+		// 500 two-byte characters: 1,031 bytes as written, 3,031 serialized (each one percent-encoded), as ingestion reads
+		// the id.
+		const long = `https://remote.example/users/r2${'é'.repeat(500)}`
+		expect([withinIdentityBound(long, ACTOR_URI_LIMIT), isStorableActorId(long)]).toEqual([true, false])
+		expect(new TextEncoder().encode(new URL(long).href).length).toBe(3_031)
 		await refusesIdentity(async (exportPath) => {
 			expect(await replacedIn(exportPath, 'https://remote.example/users/r2', long)).toBeGreaterThan(0)
 		}, 'remote-actor-uri-over-limit')

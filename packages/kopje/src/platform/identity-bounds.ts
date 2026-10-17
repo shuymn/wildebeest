@@ -22,3 +22,16 @@ export function isRemoteUsername(value: string): boolean {
 export function withinIdentityBound(value: string, limit: number): boolean {
 	return value.length <= limit && ENCODER.encode(value).length <= limit
 }
+
+// Whether an actor id is one Kopje stores: a URL whose serialized form (what ingestion reads from the actor document,
+// federation/remote-actor.ts) is within ACTOR_URI_LIMIT, and whose spelling as stored is too (the cutover keeps
+// legacy's spelling, which the projection measures).
+export function isStorableActorId(id: string): boolean {
+	let href: string
+	try {
+		href = new URL(id).href
+	} catch {
+		return false
+	}
+	return withinIdentityBound(href, ACTOR_URI_LIMIT) && withinIdentityBound(id, ACTOR_URI_LIMIT)
+}

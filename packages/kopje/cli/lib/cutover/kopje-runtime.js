@@ -54,6 +54,7 @@ export const {
 	backfillConversations,
 	ACTOR_URI_LIMIT,
 	isRemoteUsername,
+	isStorableActorId,
 	STATUS_URI_LIMIT,
 	withinIdentityBound,
 } = runtime

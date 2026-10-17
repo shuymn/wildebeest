@@ -13,7 +13,13 @@ export { languageOf } from './domain/language'
 export { normalizeSearchText } from './domain/search-text'
 export { hashtagObjectName, normalizeTag } from './domain/tag-name'
 export { blockedDomain } from './platform/domain-name'
-export { ACTOR_URI_LIMIT, isRemoteUsername, STATUS_URI_LIMIT, withinIdentityBound } from './platform/identity-bounds'
+export {
+	ACTOR_URI_LIMIT,
+	isRemoteUsername,
+	isStorableActorId,
+	STATUS_URI_LIMIT,
+	withinIdentityBound,
+} from './platform/identity-bounds'
 export { sniffImageType } from './platform/image-bytes'
 export {
 	cutJsonString,

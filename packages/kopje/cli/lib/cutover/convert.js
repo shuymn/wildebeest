@@ -17,9 +17,9 @@ import { MAX_PROFILE_UPDATES } from './kopje-db.js'
 import {
 	backfillConversations,
 	blockedDomain,
-	ACTOR_URI_LIMIT,
 	hashtagObjectName,
 	isRemoteUsername,
+	isStorableActorId,
 	languageOf,
 	normalizeTag,
 	normalizeSearchText,
@@ -574,7 +574,7 @@ export function convertLegacy(
 			}
 			// An actor id is an identity: one past the Worker's bound (src/platform/identity-bounds.ts) is refused, never
 			// cut.
-			if (!withinIdentityBound(uri, ACTOR_URI_LIMIT)) {
+			if (!isStorableActorId(uri)) {
 				count(problems, 'remote-actor-uri-over-limit')
 				continue
 			}

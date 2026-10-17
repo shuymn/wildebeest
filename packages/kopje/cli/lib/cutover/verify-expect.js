@@ -13,8 +13,8 @@ import { domainToASCII } from 'node:url'
 import {
 	cutJsonString,
 	jsonStringBytes,
-	ACTOR_URI_LIMIT,
 	isRemoteUsername,
+	isStorableActorId,
 	REMOTE_BIO_BYTES,
 	STATUS_URI_LIMIT,
 	withinIdentityBound,
@@ -455,7 +455,7 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 		// An identity the Worker would refuse, as the converter refuses it (src/platform/identity-bounds.ts).
 		const username =
 			text(p.preferredUsername) || uri.replace(/\/+$/, '').slice(uri.replace(/\/+$/, '').lastIndexOf('/') + 1)
-		if (!isLocal && (!withinIdentityBound(uri, ACTOR_URI_LIMIT) || !isRemoteUsername(username))) {
+		if (!isLocal && (!isStorableActorId(uri) || !isRemoteUsername(username))) {
 			identities++
 		}
 		/** @param {unknown} value @param {string} kind */

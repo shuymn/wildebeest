@@ -6,7 +6,7 @@ import type { RemoteActorInput } from '../domain/inbox'
 import { ACTOR_URI_LIMIT, DISPLAY_NAME_LIMIT, PROFILE_URL_LIMIT } from '../domain/profile-bounds'
 import { hostDomain } from '../platform/domain-name'
 import { httpUrl } from '../platform/http-url'
-import { isRemoteUsername, withinIdentityBound } from '../platform/identity-bounds'
+import { isRemoteUsername, isStorableActorId } from '../platform/identity-bounds'
 import { sanitizeRemoteBio } from '../security/html'
 
 // Remote actors as Kopje stores them: fetched through the safe loader (NET-1, ID-8), parsed by Fedify's lookupObject,
@@ -124,12 +124,7 @@ async function ownKeys(actor: Actor, uri: URL): Promise<{ id: string; pem: strin
 export async function remoteActorInput(actor: Actor, document: unknown): Promise<RemoteActorInput | null> {
 	const uri = actor.id
 	const username = text(actor.preferredUsername)
-	if (
-		uri === null ||
-		!withinIdentityBound(uri.href, ACTOR_URI_LIMIT) ||
-		username === null ||
-		!isRemoteUsername(username)
-	) {
+	if (uri === null || !isStorableActorId(uri.href) || username === null || !isRemoteUsername(username)) {
 		return null
 	}
 	const inboxUrl = httpUrl(actor.inboxId?.href ?? null)?.href ?? null
