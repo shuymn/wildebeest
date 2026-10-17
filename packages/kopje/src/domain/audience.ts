@@ -1,3 +1,4 @@
+import type { QuoteState } from './quotes'
 import type { Db } from '../db/sql'
 
 // Audience and visibility (design §4 "audience and visibility", Mastodon 4.7.3; docs/visibility.md). One module decides
@@ -140,7 +141,7 @@ export function activeMuteJoinSql(m: string, owner: string, x: string, now: stri
 }
 
 // Whether `owner` mutes the account `x` at `now`; with `notifications`, only a mute that also hides notifications.
-function mutesSql(owner: string, x: string, now: string, notifications = false): string {
+export function mutesSql(owner: string, x: string, now: string, notifications = false): string {
 	return `EXISTS (SELECT 1 FROM main.mutes pm WHERE pm.account_id = ${owner} AND pm.target_account_id = ${x}
 		${notifications ? 'AND pm.hide_notifications = 1' : ''} AND ${activeMuteSql('pm', now)})`
 }
@@ -685,6 +686,64 @@ export function ownStatusId(db: Db, authorId: string, statusId: string): OwnStat
 		undefined
 		? null
 		: (statusId as OwnStatusId)
+}
+
+// ---- Quotes (R35, VIS-27; Mastodon 4.5's REST::BaseQuoteSerializer and StatusFilter#filter_state_for_quote).
+
+// What a viewer is shown of a quote: Mastodon's stored states (pending, accepted, rejected, revoked, deleted), and,
+// for an accepted quote, the state the quoted status has for the viewer.
+export type ApiQuoteState = QuoteState | 'unauthorized' | 'blocked_domain' | 'blocked_account' | 'muted_account'
+
+// The quote of a status as `viewer` is shown it: its state, and the quoted status when the viewer is shown it.
+export type QuoteRead = { status_id: string; state: ApiQuoteState; quoted_status_id: VisibleStatusId | null }
+
+// R35: the quotes of statuses, read for one viewer. The presenter reads quotes only through this (test/policy.test.ts).
+export type QuoteReads = {
+	// The quotes of the statuses `statusIds` (each a quoting status, keyed in quotes by it), in status id order, one key
+	// lookup each. A status with no quote has no row, and neither has a legacy quote (a Note without `quote`) that is
+	// not accepted, which Mastodon never shows (Quote#acceptable?). The state of an accepted quote is, in order:
+	// accepted for the quoted author; unauthorized when the viewer may not see the quoted status (R2); blocked_domain,
+	// blocked_account or muted_account (while the mute applies at the viewer's time) when a signed-in viewer filters
+	// its author so; accepted otherwise. quoted_status_id is the quoted status for accepted and the three filter
+	// states, which the client folds, and never otherwise; `source` (the statuses whose source is requested: the
+	// response to their deletion) also shows it for a quote in a stored state other than accepted when the viewer may
+	// see it (R2), for redrafting.
+	of(db: Db, statusIds: readonly string[], source?: readonly string[]): QuoteRead[]
+}
+
+export function quoteReads(viewer: ViewerContext): QuoteReads {
+	return {
+		of(db, statusIds, source = []) {
+			if (statusIds.length === 0) {
+				return []
+			}
+			// visible is R2 for the quoted status, read once; the state uses it where StatusFilter checks show?.
+			return db.all<QuoteRead>(
+				`SELECT r.status_id, r.state,
+					CASE WHEN r.state IN ('accepted', 'blocked_domain', 'blocked_account', 'muted_account')
+						OR (r.stored <> 'accepted' AND r.visible AND r.status_id IN (SELECT value FROM json_each(?4)))
+					THEN r.quoted END AS quoted_status_id
+				FROM (SELECT v.status_id, v.stored, v.quoted, v.visible,
+						CASE WHEN v.stored <> 'accepted' THEN v.stored
+							WHEN v.quoted IS NULL THEN 'deleted'
+							WHEN v.author IS ?2 THEN 'accepted'
+							WHEN NOT v.visible THEN 'unauthorized'
+							WHEN ?2 IS NOT NULL AND ${domainBlocksSql('?2', 'v.author')} THEN 'blocked_domain'
+							WHEN ?2 IS NOT NULL AND ${blocksSql('?2', 'v.author')} THEN 'blocked_account'
+							WHEN ?2 IS NOT NULL AND ${mutesSql('?2', 'v.author', '?3')} THEN 'muted_account'
+							ELSE 'accepted' END AS state
+					FROM (SELECT q.status_id, q.state AS stored, t.id AS quoted, t.account_id AS author,
+							CASE WHEN t.id IS NULL THEN 0 ELSE ${visibleSql('t', '?2')} END AS visible
+						FROM main.quotes q LEFT JOIN main.statuses t ON t.id = q.quoted_status_id
+						WHERE q.status_id IN (SELECT value FROM json_each(?1)) AND (q.legacy = 0 OR q.state = 'accepted')) v) r
+				ORDER BY r.status_id`,
+				JSON.stringify(statusIds),
+				viewer.accountId,
+				viewer.now,
+				JSON.stringify(source)
+			)
+		},
+	}
 }
 
 // R26: a scheduled status (scheduled_statuses row `ss`) is its owner's alone. It is not a status: no other rule

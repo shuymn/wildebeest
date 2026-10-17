@@ -96,6 +96,12 @@ const EXCEPTIONS: Record<string, Exception> = {
 			'unresolved (Pundit policy: authorize @status, :show?): required token, scopes read read:statuses, no user required',
 		reason: 'RouteAccess has no "scope without a user" form; Mastodon serves app tokens what StatusPolicy#show? allows',
 	},
+	'GET /api/v1/statuses/:id/quotes': {
+		kopje: 'required token, scopes read read:statuses, no user required',
+		mastodon:
+			'unresolved (Pundit policy: authorize @status, :show?): required token, scopes read read:statuses, no user required',
+		reason: "visibility is the Store's (Mastodon: Pundit StatusPolicy#show?, unresolved)",
+	},
 	'GET /api/v1/accounts/relationships': {
 		kopje: 'required token, scopes follow read read:follows, user required',
 		mastodon: 'required token, scopes read read:follows, user required',
@@ -211,9 +217,10 @@ function kopjeAccess(access: RouteAccess, covers = grants): Access {
 		return { token: 'required', scopes: null, user: false }
 	}
 	const scopes = access.scope === undefined ? null : acceptedScopes(access.scope, covers)
-	return access.optional === true
-		? { token: 'optional', scopes, user: false }
-		: { token: 'required', scopes, user: true }
+	if (access.optional === true) {
+		return { token: 'optional', scopes, user: false }
+	}
+	return { token: 'required', scopes, user: access.app !== true }
 }
 
 function mastodonAccess(route: MastodonRoute): Access {

@@ -11,7 +11,7 @@ import {
 } from './context'
 import { mastodonError } from './errors'
 import { descriptionProblem, parseFocus, sweepSoon } from './media'
-import { linkHeader, pageQuery } from './pagination'
+import { linkHeader, pageQuery, pageResponse } from './pagination'
 import { type Params, parseBoolean } from './params'
 import { API_VISIBILITIES, type ApiVisibility } from '../domain/audience'
 import { checkPoll, isPollInput, type PollInput } from '../domain/polls'
@@ -390,6 +390,28 @@ function interactors(kind: 'favourited_by' | 'reblogged_by'): ApiHandler {
 		}
 		return c.json(result.value.items)
 	}
+}
+
+// GET /api/v1/statuses/:id/quotes (Statuses::QuotesController#index): a token with read:statuses, an app token read as
+// anonymous (Mastodon requires no user here); limit 20 by default, at most 40. The Link
+// header's bounds are the page's window (statusQuotes), so next is offered whenever the window was full, also for a
+// page the rule emptied.
+export const statusQuotes: ApiHandler = async (c, deps) => {
+	const p = await requestParams(c, deps)
+	if (p instanceof Response) {
+		return p
+	}
+	const page = pageQuery(p, 20, 40)
+	const credential = optionalCredential(c, deps)
+	const result = authorized(
+		await storeCall(c, deps, (s, b) =>
+			s.statusQuotes(b, { credential, id: statusId(c), page, now: deps.now(), present: present(c) })
+		)
+	)
+	if (result.status !== 'ok') {
+		return viewedResponse(c, result)
+	}
+	return pageResponse(c, result.value, page.limit, result.value.candidates)
 }
 
 export const favouritedBy = interactors('favourited_by')

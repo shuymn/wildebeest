@@ -3736,6 +3736,99 @@ describe('0033_quotes', () => {
 	}, 120_000)
 })
 
+describe('0036_quotes_list', () => {
+	const NAME = '0036_quotes_list'
+	const at = NAMES.indexOf(NAME)
+	const id = (n: number) => String(100000000000000000n + BigInt(n))
+
+	// `statuses` public statuses of one remote account, the first of them quoted by the next `quotes`, one in four of
+	// those accepted.
+	function seed(sql: SqlStorage, statuses: number, quotes: number): void {
+		sql.exec(
+			"INSERT INTO accounts (id, uri, username, domain) VALUES (?, 'https://remote.example/users/bob', 'bob', 'remote.example')",
+			id(0)
+		)
+		sql.exec(
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+			SELECT CAST(200000000000000000 + i AS TEXT), 'https://remote.example/users/bob/statuses/' || i, ?2, 'public',
+				hex(randomblob(200)), '2026-10-01T00:00:00.000Z'
+			FROM n`,
+			statuses,
+			id(0)
+		)
+		sql.exec(
+			`WITH RECURSIVE n(i) AS (SELECT 2 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 + 1)
+			INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, quoted_account_id, state, updated_at)
+			SELECT CAST(200000000000000000 + i AS TEXT), 'https://remote.example/users/bob/statuses/1', '200000000000000001',
+				?2, CASE i % 4 WHEN 0 THEN 'accepted' WHEN 1 THEN 'pending' WHEN 2 THEN 'rejected' ELSE 'revoked' END,
+				'2026-10-01T00:00:00.000Z'
+			FROM n`,
+			quotes,
+			id(0)
+		)
+	}
+
+	it('indexes the accepted quotes of a status in quoting status order, which the list reads without a sort', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, MIGRATIONS.slice(0, at)).upgrade()).toMatchObject({ ok: true })
+			seed(sql, 40, 30)
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+			const plan = sql
+				.exec<{ detail: string }>(
+					`EXPLAIN QUERY PLAN SELECT status_id FROM quotes INDEXED BY quotes_accepted
+					WHERE quoted_status_id = ?1 AND state = 'accepted' AND status_id < ?2 AND status_id > ?3
+					ORDER BY status_id DESC LIMIT 20`,
+					'200000000000000001',
+					':',
+					''
+				)
+				.toArray()
+				.map((row) => row.detail)
+			expect(plan.join('\n')).toContain('quotes_accepted')
+			expect(plan.join('\n')).not.toContain('TEMP B-TREE')
+			const listed = sql
+				.exec<{ status_id: string }>(
+					"SELECT status_id FROM quotes INDEXED BY quotes_accepted WHERE quoted_status_id = ? AND state = 'accepted' ORDER BY status_id DESC",
+					'200000000000000001'
+				)
+				.toArray()
+			expect(listed).toHaveLength(7)
+		})
+	})
+
+	// The index reads the quotes and no status: the same with 200 or 20,000 statuses, and a row or two (the quote and its
+	// index entry) more for each quote more.
+	it('reads the quotes and no status, however many statuses there are', async () => {
+		const measure = async (statuses: number, quotes: number) => {
+			const store = freshStore()
+			return runInDurableObject(store, async (_instance, state) => {
+				const sql = state.storage.sql
+				await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+				seed(sql, statuses, quotes)
+				const cursor = sql.exec(MIGRATIONS[at]?.sql ?? '')
+				cursor.toArray()
+				// Not vacuous: the index holds the accepted quotes.
+				expect(
+					sql
+						.exec(
+							"SELECT count(*) AS n FROM quotes INDEXED BY quotes_accepted WHERE state = 'accepted' AND quoted_status_id > ''"
+						)
+						.one()
+				).toEqual({ n: Math.floor((quotes + 1) / 4) })
+				return cursor.rowsRead
+			})
+		}
+		const few = await measure(200, 100)
+		const statuses = await measure(20_000, 100)
+		const quotes = await measure(20_000, 10_000)
+		expect(statuses).toBeLessThanOrEqual(few + 10)
+		expect(quotes - statuses).toBeLessThanOrEqual(2 * (10_000 - 100))
+	}, 120_000)
+})
+
 describe('0034_admin_suspension', () => {
 	const at = NAMES.indexOf('0034_admin_suspension')
 	const id = (n: number) => String(100000000000000000n + BigInt(n))

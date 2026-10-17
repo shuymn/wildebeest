@@ -216,7 +216,31 @@ status the actor is not in the audience of. Mastodon 4.5's `ActivityPub::Activit
 `Announce` only `announceable?`, leaving it to `NotifyService` to filter the author's notification. Kopje refuses the
 interaction itself (VIS-13, VIS-15). A reply is a status of the actor's own: it is stored
 whatever the author of its parent blocks, as Mastodon stores it, and that author's blocks keep it out of their lists
-and notifications (R7, R15). Kopje has no quote posts.
+and notifications (R7, R15).
+
+A quote (R35, VIS-27; Mastodon 4.5's `REST::BaseQuoteSerializer` and `StatusFilter#filter_state_for_quote`) is shown
+with the status that makes it, and never widens what that status's rule passed: the quoted status is judged on its own
+by R2 for the same viewer. `quoteReads(viewer).of` in `src/domain/audience.ts` is the only read of `quotes` for a client.
+For each status it gives the quote's state and, when the viewer is shown it, the quoted status:
+
+- a status with no quote, or with a legacy quote (a Note without `quote`, a Misskey quote) that is not accepted, has
+  none (`quote: null`), as Mastodon's `Quote#acceptable?`;
+- a quote in a stored state other than accepted (`pending`, `rejected`, `revoked`, `deleted`) shows that state and no
+  status, except in the response to its deletion (`DELETE /api/v1/statuses/:id`, for redrafting), which shows the
+  quoted status when the viewer may see it (R2);
+- an accepted quote is, in this order: `accepted` for the quoted author; `unauthorized` when the viewer may not see the
+  quoted status (R2), with no status; for a signed-in viewer, `blocked_domain` when they block its author's domain,
+  `blocked_account` when they block its author, and `muted_account` when they mute its author (while the mute applies),
+  each with the status for the client to fold; `accepted` otherwise. A quoted status that is gone has made its quote
+  `deleted` already (the detach in `quotes.ts` and `inbox.ts`).
+
+The presenter embeds the quoted status as a full status for the same viewer (its own flags, `filtered`, media and
+poll), whose own `quote` is a ShallowQuote (the state and the id of the status it quotes, from the same rule), never a
+second embedded status; a boost shows its original's quote in its `reblog`. Feeds neither include nor exclude a status
+for its quote: the state tells the client what to hide. `GET /api/v1/statuses/:id/quotes` lists the statuses that
+quote a status the viewer may see by itself (R3), by their accepted quotes, under R8 for anyone but the quoted author,
+and R2 for the quoted author, who may see the quotes of accounts they block or mute (Mastodon skips `StatusFilter`
+for them).
 
 The domain term of R2 applies only to a remote viewer, as Mastodon's `author_blocking_domain?` does: whether the viewer
 is remote does not depend on the status, so SQLite evaluates it once per query (one row for a local viewer, none for
@@ -264,6 +288,7 @@ ${DISTRIBUTABLE_SQL}`, never the literals.
 | R32 stream delete            | `streamDelete` (`streaming.ts`), at four sites before a status's audience first changes (`test/layering.test.ts`): a row per listening account that may view the status (R3, `deleteAudience` in `audience.ts`); for an account on `user` or a list, with the boosts of it the account may view that it or an account it follows made, at most 40, and for the status and each boost the account's subscribed lists whose read positioned at it returned it (`listStatus`); for a public status that is not a boost, a tombstone (local, media, the hashtags some account subscribes to) while an account listens on a feed it reaches. A `delete` goes only where the capture allows, on a list only while it is still the viewer's (`ownList`), on a `public*` or `hashtag*` stream only for the status itself, never a boost, when its tombstone matches the stream (`tombstoneFeeds`).                                                                                                                                                                                                                                         |
 | R33 stream membership        | `streamUnit` (`streaming.ts`), re-authorizing the token (`authorizeStream`): a `notification` if the notification list positioned at it shows it (`streamedNotification`); `update` if home positioned at it does (`homeStatus`, R9) within the real-time window, on `list:<id>` if the list positioned at it does (`listStatus`, the viewer's list only), and on a `public*` or `hashtag*` stream if the public or the hashtag's timeline positioned at it does (`publicStatus`, `tagStatus`, R8) and it mentions no account the viewer blocks or mutes (`mentionsFilteredFor`); `status.update` if home, a list, such a feed or, with a notification scope, the mention reference does (`mentionedStatus`); `conversation` on `direct` if the conversation is the viewer's row (`streamedConversation`, presented as the list presents it, R25); `notifications_merged` under a notification scope, on the transition to no pending accept job.                                                                                                                                                                                  |
 | R34 reports                  | `reports` read and written only in `reports.ts` (the reporter's own report, answered once, and the OAuth admin's reads and actions under R37) and deleted by a remote account's purge (`inbox.ts`); a reported status passes `accountStatusIds` in `timelines.ts` (R11 less the reporter's own block of the account, as Mastodon's `AccountStatusesFilter`); the Flag of a forwarded report goes to `reportForwardees` (R23), signed by the instance actor.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| R35 quotes                   | `quoteReads` (`audience.ts`): the state of each status's quote and the quoted status, by `visibleSql`, `domainBlocksSql`, `blocksSql` and `mutesSql` for the viewer, read by the presenter (`status-presenter.ts`) for the statuses of a response and their originals, then for the quoted statuses it embeds; the `DELETE` response's source asks for the quoted status of a quote in any state. The quotes list (`statusQuotes` in `statuses.ts`): `viewable` (R3) for the quoted status, then one window of its accepted quotes (`acceptedQuoteWindow` in `quotes.ts`) under `listableSql` (R8), or `visibleSql` (R2) for the quoted author.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | R37 admin views              | Only the OAuth admin (`adminAccountId`, `admin-authority.ts`: the one local account whose email matches `admin_email`, failing closed), through a token covering the route's admin scope, reads or acts through `/api/v1/admin/*` (`adminReadOperation`, `adminWriteOperation` in `auth.ts`, checked in the operation's transaction, and only for the permissions in `ADMIN_PERMISSIONS`). The admin sees every report and its accounts (`presentAdminAccounts`, local emails included); a report's statuses only while its reporter may still see them (`accountStatusIds` with `viewerOf(admin, reporter)`), presented with the admin as the viewer. With manage_users, the admin lists and shows every account, local and remote, with each local account's email (`listAdminAccounts`, `getAdminAccount` in `admin-accounts.ts`); an unavailable account (R1) is shown as suspended. It suspends and unsuspends local accounts other than its own (`actOnAccount`, `unsuspendAdminAccount`; `suspension.ts`), which makes them unavailable (R1) and fences their tokens; the Access admin unsuspends too (`unsuspendAccount`). |
 
 The streaming API (`src/domain/streaming.ts`, `src/stream-hub.ts`) judges each message when it is made, never when the
@@ -553,8 +578,9 @@ module:
   serves the OAuth admin's reads and actions (R37), and `inbox.ts`, whose actor purge deletes the reports of the
   account.
 - reads or writes `quotes` or `quote_revocations` outside `quotes.ts`, which stores and verifies received quotes and
-  applies the `Delete` of a stamp (ID-6), and `inbox.ts`, whose batched delete of a status detaches the quotes of it and
-  deletes its own. No rule shows a quote to anyone yet: no read path presents one.
+  applies the `Delete` of a stamp (ID-6) and reads the quotes list's window, `inbox.ts`, whose batched delete of a
+  status detaches the quotes of it and deletes its own, and the policy module, whose `quoteReads` is the only read of
+  a quote for a client (R35).
 
 An allowed file that no longer matches fails the test too, so the list does not outlive its reason.
 
@@ -592,7 +618,10 @@ account, for `followListedSql` every viewer with every owner and account, and, f
 with every notification type, sender and status (or none). The set of pairs it accepts must equal the model's. A failure
 prints the shrunk world, the pairs only one side accepts, and the seed; `FC_SEED=<seed> pnpm vitest run
 test/policy-oracle.test.ts` replays it. Worlds also hold local accounts' pins of their own statuses and their conversation mutes, and
-`notifiedSql` and `conversationMutedSql` are checked as `shownSql` is.
+`notifiedSql` and `conversationMutedSql` are checked as `shownSql` is. Worlds hold quotes too, at most one by each
+original, in every stored state, legacy or not, self-quotes among them, of statuses of every visibility, and quotes
+whose quoted status is gone; `quoteReads` (R35) is checked for every viewer with every status, its state and quoted
+status, with and without the source.
 
 `test/policy-bounds.test.ts` takes one generated world, for a fixed seed, in which every endpoint below shows the viewer
 something. It runs home, the public and tag feeds, account statuses, notifications (the list, a page of groups, a group

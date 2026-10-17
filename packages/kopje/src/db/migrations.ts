@@ -33,6 +33,7 @@ import m0032 from '../../migrations/0032_streaming_lists.sql'
 import m0033 from '../../migrations/0033_quotes.sql'
 import m0034 from '../../migrations/0034_admin_suspension.sql'
 import m0035 from '../../migrations/0035_streaming_public.sql'
+import m0036 from '../../migrations/0036_quotes_list.sql'
 
 // Store migrations in apply order. Append only: an applied file is recorded by name and checksum and must
 // never change. Each file runs in its own transaction, must finish well under 30 seconds, and must be pure SQL.
@@ -72,4 +73,5 @@ export const MIGRATIONS: readonly { name: string; sql: string }[] = [
 	{ name: '0033_quotes', sql: m0033 },
 	{ name: '0034_admin_suspension', sql: m0034 },
 	{ name: '0035_streaming_public', sql: m0035 },
+	{ name: '0036_quotes_list', sql: m0036 },
 ]
