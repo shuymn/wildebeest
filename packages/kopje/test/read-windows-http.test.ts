@@ -156,3 +156,56 @@ describe('routes answer the Link of a page cut at its window', () => {
 		expect(newer.empty).toBeGreaterThan(0)
 	}, 120_000)
 })
+
+describe('a group keeps the notification its walk found behind its hidden newest ones', () => {
+	it('shows group A by its one visible notification below 400 hidden ones, on a page of two', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const status = (await post(h, alice, { status: 'hello' })).id
+		await runInDurableObject(h.store, (_instance, state) => {
+			const sql = state.storage.sql
+			// A's senders: 400 alice mutes (600 to 999) and one she does not (599); B's sender (1000).
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 402 - 1)
+				INSERT INTO accounts (id, uri, username, domain)
+				SELECT CAST(?1 + i AS TEXT), 'https://far.example/users/g' || i, 'g' || i, 'far.example' FROM n`,
+				String(HIDDEN_BASE)
+			)
+			const sender = (n: number) => String(HIDDEN_BASE + BigInt(n - 599))
+			sql.exec(
+				'INSERT INTO mutes (account_id, target_account_id) SELECT ?, id FROM accounts WHERE id > ? AND id <= ?',
+				alice.id,
+				sender(599),
+				sender(999)
+			)
+			for (let n = 599; n <= 999; n++) {
+				sql.exec(
+					"INSERT INTO notifications (id, account_id, type, from_account_id, status_id, group_key) VALUES (?, ?, 'favourite', ?, ?, 'favourite-a')",
+					n,
+					alice.id,
+					sender(n),
+					status
+				)
+			}
+			sql.exec(
+				"INSERT INTO notifications (id, account_id, type, from_account_id, group_key) VALUES (1000, ?, 'follow', ?, 'follow-b')",
+				alice.id,
+				sender(1000)
+			)
+		})
+		const response = await h.request('/api/v2/notifications?limit=2', bearer(alice.token))
+		const body = await response.json<{
+			notification_groups: { group_key: string; notifications_count: number; sample_account_ids: string[] }[]
+		}>()
+		expect(
+			body.notification_groups.map(({ group_key, notifications_count, sample_account_ids }) => ({
+				group_key,
+				notifications_count,
+				sample_account_ids,
+			}))
+		).toEqual([
+			{ group_key: 'follow-b', notifications_count: 1, sample_account_ids: [String(HIDDEN_BASE + 401n)] },
+			{ group_key: 'favourite-a', notifications_count: 1, sample_account_ids: [String(HIDDEN_BASE)] },
+		])
+	}, 60_000)
+})

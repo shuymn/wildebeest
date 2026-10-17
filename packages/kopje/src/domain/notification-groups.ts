@@ -244,13 +244,13 @@ function walkGroups(db: Db, viewer: UserContext, input: WalkInput): Walk {
 // null for no end.
 type Range = { lower: string | null; upper: string | null }
 
-// A group's shown notifications among its newest GROUP_COUNT up to the range's upper end, newest first; with no
-// grouped key, its first one alone.
+// A group's shown notifications among its newest GROUP_COUNT up to the range's upper end, with the walk's first one of
+// it in the last slot when they miss it, newest first; with no grouped key, its first one alone.
 function membersOf(db: Db, viewer: UserContext, group: Found, upper: string | null): Shown[] {
 	if (group.key.startsWith('ungrouped-')) {
 		return [group.first]
 	}
-	return shownWindow(
+	const { rows } = shownWindow(
 		db,
 		viewer,
 		{ includeFiltered: false, range: { max: 'CAST(?4 AS INTEGER) + 1', min: 'NULL' }, group: '?3' },
@@ -259,7 +259,13 @@ function membersOf(db: Db, viewer: UserContext, group: Found, upper: string | nu
 		group.key,
 		upper,
 		GROUP_COUNT
-	).rows
+	)
+	// One slot is kept for the walk's own find, which the rule already passed: a group whose newest are hidden keeps it.
+	if (rows.some((row) => row.id === group.first.id)) {
+		return rows
+	}
+	const byId = (a: Shown, b: Shown) => (BigInt(b.id) > BigInt(a.id) ? 1 : BigInt(b.id) < BigInt(a.id) ? -1 : 0)
+	return [...rows.slice(0, GROUP_COUNT - 1), group.first].sort(byId)
 }
 
 // The id of a group's oldest shown notification from the range's lower end up (load_groups_data's min_id), among the
