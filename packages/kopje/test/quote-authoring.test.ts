@@ -1,3 +1,5 @@
+import { runInDurableObject } from 'cloudflare:test'
+
 import { type DocumentLoader, signJsonLd, verifyJsonLd } from '@fedify/fedify'
 import { describe, expect, it } from 'vitest'
 
@@ -24,9 +26,11 @@ import {
 import { contexts } from './quote-helpers'
 import { rowsRead } from './read-helpers'
 import { outbound } from './status-helpers'
+import { Db } from '../src/db/sql'
 import { RETRACTION_TTL_MS } from '../src/domain/inbox'
 import { readOperation } from '../src/domain/operation'
 import { holdsLocalStamp, MAX_QUOTED_UPDATES, quotedUpdates } from '../src/domain/quotes'
+import { suspendLocal } from '../src/domain/suspension'
 import { deliveryRound } from '../src/jobs/deliver'
 import { publishScheduled } from '../src/jobs/scheduled'
 
@@ -562,12 +566,10 @@ async function fan(t: Setup, actor: TestActor): Promise<void> {
 	).toBe(202)
 }
 
-async function suspend(t: Setup, id: string, suspended: boolean): Promise<void> {
-	await sql(
-		t.store,
-		'UPDATE local_accounts SET suspended_at = ? WHERE account_id = ?',
-		suspended ? new Date(NOW).toISOString() : null,
-		id
+// The admin's suspension (suspension.ts suspendLocal): the account and its jobs, as POST .../action does.
+async function suspend(t: Setup, id: string): Promise<void> {
+	await runInDurableObject(t.store, (_instance, state) =>
+		state.storage.transactionSync(() => suspendLocal(new Db(state.storage.sql), id, null, NOW))
 	)
 }
 
@@ -891,7 +893,7 @@ describe('Concurrency (PR 3)', () => {
 			ALICE,
 			carol.uri
 		)
-		await suspend(t, ALICE, true)
+		await suspend(t, ALICE)
 		expect(await t.post(bob, await signed(bob, stampDelete(bob, stamp)))).toBe(202)
 		const retried = await t.store.retryDeliveries(BUILD, { ids: 'all', now: NOW })
 		expect(retried).toBeDefined()
@@ -907,21 +909,45 @@ describe('Concurrency (PR 3)', () => {
 		expect(sent.filter((s) => s.json.type === 'Update')).toEqual([])
 	})
 
-	it('12: Updates of an edit, an Accept and a policy change go in commit order; the last carries the stamp', async () => {
+	it('12: delivered between them, an edit, an Accept and a policy change reach each lane in commit order', async () => {
 		const { t, bob, theirs } = await world()
-		const mine = await quotePost(t, theirs.id)
+		const carol = await mastodonActor(t.web, 'carol', { key: 3 })
+		await fan(t, carol)
 		await deliver(t)
+		const mine = await quotePost(t, theirs.id)
+		const notes: Record<string, string[]> = {}
+		const step = async () => {
+			for (const s of await deliver(t)) {
+				const object = s.json.object as Record<string, unknown> | string
+				if (typeof object === 'object' && object.id === mine.uri) {
+					const policy = JSON.stringify((object.interactionPolicy as { canQuote: unknown }).canQuote)
+					const label = `${String(s.json.type)} ${String(object.content).includes('edited') ? 'edited' : 'first'} ${
+						'quoteAuthorization' in object ? 'stamped' : 'unstamped'
+					} ${policy.includes('Public') ? 'public' : 'nobody'}`
+					;(notes[s.inbox] ??= []).push(label)
+				}
+			}
+		}
+		await step()
 		expect((await api(t, 'PUT', `/api/v1/statuses/${mine.id}`, { status: 'edited' })).status).toBe(200)
+		await step()
 		const stamp = stampOf(bob)
 		expect(await t.post(bob, accept(bob, mine.uri, stamp))).toBe(202)
+		await step()
 		expect(
 			(await api(t, 'PUT', `/api/v1/statuses/${mine.id}/interaction_policy`, { quote_approval_policy: 'nobody' }))
 				.status
 		).toBe(200)
-		const updates = (await deliver(t)).filter((s) => s.json.type === 'Update' && s.inbox.startsWith(MASTODON))
-		const last = updates.at(-1)?.json.object as Record<string, unknown>
-		expect(last).toMatchObject({ content: expect.stringContaining('edited'), quoteAuthorization: stamp })
-		expect(last.interactionPolicy).toEqual({ canQuote: { automaticApproval: [ALICE_URI] } })
+		await step()
+		const sequence = [
+			'Create first unstamped public',
+			'Update edited unstamped public',
+			'Update edited stamped public',
+			'Update edited stamped nobody',
+		]
+		// bob's personal copy (a silent recipient) and carol's server's shared inbox each see the four in commit order.
+		expect(notes[`${MASTODON}/users/bob/inbox`]).toEqual(sequence)
+		expect(notes[`${MASTODON}/inbox`]).toEqual(sequence)
 		// Two Accept Updates at the same now get distinct ids.
 		const a = await quotePost(t, theirs.id)
 		const b = await quotePost(t, theirs.id)
@@ -931,24 +957,32 @@ describe('Concurrency (PR 3)', () => {
 		expect(new Set(ids).size).toBe(ids.length)
 	})
 
-	it('13: a leased Create does not hold the status: the pair goes too, and a server ends at the current version', async () => {
+	it('13: across 300 servers, leased, given up and unexpanded Creates each end at the current version', async () => {
 		const { t, bob, theirs } = await world()
-		const x = await mastodonActor(t.web, 'x', { origin: 'https://x.example', key: 3 })
-		const y = await mastodonActor(t.web, 'y', { origin: 'https://y.example', key: 4 })
-		await fan(t, x)
-		await fan(t, y)
-		await sql(t.store, 'DELETE FROM deliveries')
+		// 300 followers of alice, each on a server of its own.
+		await sql(
+			t.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 300)
+			INSERT INTO accounts (id, uri, username, domain, inbox_url, shared_inbox_url)
+			SELECT printf('5%017d', i), 'https://s' || i || '.example/users/f', 'f', 's' || i || '.example',
+				'https://s' || i || '.example/users/f/inbox', 'https://s' || i || '.example/inbox' FROM n`
+		)
+		await sql(
+			t.store,
+			"INSERT INTO follows (account_id, target_account_id, state) SELECT id, ?, 'accepted' FROM accounts WHERE id GLOB '5*'",
+			ALICE
+		)
+		// carol on bob's server: that lane holds several rows, so some wait queued behind its head.
+		await fan(t, await mastodonActor(t.web, 'carol', { key: 3 }))
+		await deliver(t)
 		const mine = await quotePost(t, theirs.id)
-		// Lease everything once (x's Create is in flight), then accept.
+		// The 300 targets are expanded 100 at a time (one step with the intent, one per claim): after one claim, some
+		// are still unexpanded when the Accept commits. Of the claimed Creates, half give up, half stay leased.
 		const claim = await t.store.claimDeliveries(BUILD, { now: NOW, leaseToken: 'held' })
-		const stamp = stampOf(bob)
-		expect(await t.post(bob, accept(bob, mine.uri, stamp))).toBe(202)
-		for (const origin of ['https://x.example', 'https://y.example', MASTODON]) {
-			const types = (await lane(t, origin)).map((d) => d.type)
-			expect(types.slice(-2), origin).toEqual(['Create', 'Update'])
-		}
-		// The leased Creates give up; the pair delivers the current version (with the stamp).
-		for (const d of claim.deliveries) {
+		const half = Math.floor(claim.deliveries.length / 2)
+		const failed = { deliveries: claim.deliveries.slice(0, half) }
+		const leased = { deliveries: claim.deliveries.slice(half) }
+		for (const d of failed.deliveries) {
 			await t.store.completeDelivery(BUILD, {
 				id: d.id,
 				leaseToken: 'held',
@@ -956,14 +990,55 @@ describe('Concurrency (PR 3)', () => {
 				outcome: { kind: 'failed', status: 410, error: 'gone', permanent: true },
 			})
 		}
+		const unexpanded = await sql<{ n: number }>(
+			t.store,
+			'SELECT count(*) AS n FROM outbound_targets c, json_each(c.targets) j WHERE j.key >= c.next'
+		)
+		expect(unexpanded[0]!.n).toBeGreaterThan(0)
+		expect(await sql(t.store, 'SELECT DISTINCT state FROM deliveries ORDER BY state')).toEqual([
+			{ state: 'gave_up' },
+			{ state: 'leased' },
+			{ state: 'pending' },
+			{ state: 'queued' },
+		])
+		expect(failed.deliveries.length).toBeGreaterThan(0)
+		const stamp = stampOf(bob)
+		expect(await t.post(bob, accept(bob, mine.uri, stamp))).toBe(202)
+		// The leased Creates are delivered after all (receipts), then everything else.
+		for (const d of leased.deliveries) {
+			await t.store.completeDelivery(BUILD, {
+				id: d.id,
+				leaseToken: 'held',
+				now: NOW,
+				outcome: { kind: 'delivered', status: 202 },
+			})
+		}
 		const sent = await deliver(t)
-		const toX = sent.filter((s) => s.inbox === 'https://x.example/inbox')
-		expect(toX.map((s) => s.json.type)).toEqual(['Create', 'Update'])
-		expect(toX[0]?.json.object).toMatchObject({ quoteAuthorization: stamp })
-		// An operator retry of the old Create reaches a server that holds the status: a Mastodon receiver ignores it.
-		await t.store.retryDeliveries(BUILD, { ids: 'all', now: NOW })
-		const again = (await deliver(t)).filter((s) => s.inbox === 'https://x.example/inbox')
-		expect(again.every((s) => s.json.type === 'Create')).toBe(true)
+		const byServer = new Map<string, Record<string, unknown>[]>()
+		for (const s of sent) {
+			const object = s.json.object as Record<string, unknown> | string
+			if (typeof object === 'object' && object.id === mine.uri) {
+				byServer.set(s.inbox, [...(byServer.get(s.inbox) ?? []), s.json])
+			}
+		}
+		const inboxes = [
+			...Array.from({ length: 300 }, (_, i) => `https://s${i + 1}.example/inbox`),
+			`${MASTODON}/inbox`,
+			`${MASTODON}/users/bob/inbox`,
+		]
+		for (const server of inboxes) {
+			const received = byServer.get(server) ?? []
+			// Every inbox, whether its first Create was leased (and delivered after the Accept), given up, or not even
+			// expanded, gets the current Create (with the stamp) and then the Update; a server holding the status ignores
+			// that Create, and ends at the current version either way.
+			expect(
+				received.map((a) => a.type),
+				server
+			).toEqual(['Create', 'Update'])
+			for (const activity of received) {
+				expect((activity.object as Record<string, unknown>).quoteAuthorization, server).toBe(stamp)
+			}
+		}
 	})
 
 	it('14: an answer after the quoting status’s delete finds nothing; the delete supersedes a waiting Accept Update', async () => {
@@ -993,19 +1068,23 @@ describe('Concurrency (PR 3)', () => {
 
 	it('15: an Accept between detach batches is undone by the detach; one after it is ignored', async () => {
 		const { t, bob, theirs } = await world()
-		// 600 other quotes first: the detach reaches them first (quotes_quoted, in row order), ours in a later batch.
+		// 600 accepted quotes first: the detach reaches them first (quotes_quoted, in row order), ours in a later batch.
 		await remoteQuotesNaming(t, bob.uri, theirs.uri, theirs.id, null, 600)
-		const mine = await quotePost(t, theirs.id)
 		await sql(t.store, "UPDATE quotes SET state = 'accepted' WHERE status_id GLOB '7*'")
 		const count = async () =>
 			(await sql<{ quotes_count: number }>(t.store, 'SELECT quotes_count FROM statuses WHERE id = ?', theirs.id))[0]
 				?.quotes_count
-		await sql(t.store, 'UPDATE statuses SET quotes_count = 600 WHERE id = ?', theirs.id)
+		expect(await count()).toBe(600)
+		const mine = await quotePost(t, theirs.id)
 		expect(await t.post(bob, remove(bob, theirs.uri))).toBe(202)
-		// Batch 1 ran in the request; the detach has not reached our row yet.
+		// Batch 1 ran in the request: some quotes are detached, the status is still there, ours is not detached yet.
+		const between = await count()
+		expect(between).toBeLessThan(600)
+		expect(between).toBeGreaterThan(0)
 		expect(await quoteRow(t, mine.uri)).toMatchObject({ quoted_status_id: theirs.id })
 		expect(await t.post(bob, accept(bob, mine.uri, stampOf(bob)))).toBe(202)
 		expect(await quoteRow(t, mine.uri)).toMatchObject({ state: 'accepted' })
+		expect(await count()).toBe(between! + 1)
 		await jobsUntilDone(t)
 		expect(await quoteRow(t, mine.uri)).toMatchObject({ state: 'deleted', quoted_status_id: null })
 		expect(await count()).toBeUndefined()
@@ -1096,7 +1175,7 @@ describe('Concurrency (PR 3)', () => {
 	it('18: a suspension drops the QuoteRequest and the Accept’s Update, never the forward', async () => {
 		const { t, bob, theirs } = await world()
 		const mine = await quotePost(t, theirs.id)
-		await suspend(t, ALICE, true)
+		await suspend(t, ALICE)
 		const stamp = stampOf(bob)
 		expect(await t.post(bob, accept(bob, mine.uri, stamp))).toBe(202)
 		expect(await quoteRow(t, mine.uri)).toMatchObject({ state: 'accepted' })
@@ -1106,27 +1185,58 @@ describe('Concurrency (PR 3)', () => {
 		expect(sent.filter((s) => s.json.type === 'Delete' && s.json.object === stamp)).not.toEqual([])
 	})
 
-	it('20: Queue and cron rounds interleaved send each delivery once per lease, one forward, and claim no quote', async () => {
+	it('20: an Accept and a stamp Delete commit while POSTs are in flight; each is sent once per lease, one forward', async () => {
 		const { t, bob, theirs } = await world()
 		const carol = await mastodonActor(t.web, 'carol', { origin: 'https://fans.example', key: 3 })
 		await fan(t, carol)
+		await deliver(t)
 		const mine = await quotePost(t, theirs.id)
 		const seen: string[] = []
-		const answer = (url: string, body: string) => {
-			const json = JSON.parse(body) as Record<string, unknown>
-			seen.push(`${url} ${String(json.id)}`)
-			return 202
+		// A gate on the next POST of `type`: it is in flight (leased) until released.
+		const gated = (type: string) => {
+			let reached!: () => void
+			let release!: () => void
+			const arrived = new Promise<void>((resolve) => (reached = resolve))
+			const gate = new Promise<void>((resolve) => (release = resolve))
+			let held = false
+			const answer = async (url: string, body: string) => {
+				const json = JSON.parse(body) as Record<string, unknown>
+				seen.push(`${url} ${String(json.id)}`)
+				if (!held && json.type === type) {
+					held = true
+					reached()
+					await gate
+				}
+				return 202
+			}
+			return { arrived, release, answer }
 		}
-		await Promise.all([deliver(t, answer), t.store.runInboundJobs(BUILD, { now: NOW })])
+		// The Accept commits while the Create and the QuoteRequest are in flight; the cron's quote round runs too.
+		const first = gated('QuoteRequest')
+		const round = deliver(t, first.answer)
+		await first.arrived
 		const stamp = stampOf(bob)
 		expect(await t.post(bob, accept(bob, mine.uri, stamp))).toBe(202)
+		expect(await t.store.claimQuotes(BUILD, { now: NOW, limit: 10 })).toMatchObject({ ids: [] })
+		first.release()
+		await round
+		// The edit's Update is in flight when the stamp Delete commits; inbound job rounds run alongside.
 		expect((await api(t, 'PUT', `/api/v1/statuses/${mine.id}`, { status: 'edit' })).status).toBe(200)
-		await Promise.all([deliver(t, answer), deliver(t, answer), t.store.claimQuotes(BUILD, { now: NOW, limit: 10 })])
+		const second = gated('Update')
+		const again = deliver(t, second.answer)
+		await second.arrived
 		expect(await t.post(bob, await signed(bob, stampDelete(bob, stamp)))).toBe(202)
-		await Promise.all([deliver(t, answer), jobsUntilDone(t), deliver(t, answer)])
+		await jobsUntilDone(t)
+		second.release()
+		await again
+		await deliver(t, (url, body) => {
+			seen.push(`${url} ${String((JSON.parse(body) as Record<string, unknown>).id)}`)
+			return 202
+		})
 		expect(new Set(seen).size).toBe(seen.length)
-		expect(seen.filter((s) => s.includes(`${stamp}#delete`) && s.startsWith('https://fans.example'))).toHaveLength(1)
+		expect(seen.filter((s) => s.startsWith('https://fans.example') && s.includes(`${stamp}#delete`))).toHaveLength(1)
 		expect(await t.store.claimQuotes(BUILD, { now: NOW + 1, limit: 10 })).toMatchObject({ ids: [] })
+		expect(await quoteRow(t, mine.uri)).toMatchObject({ state: 'revoked', approval_uri: null })
 	})
 })
 
