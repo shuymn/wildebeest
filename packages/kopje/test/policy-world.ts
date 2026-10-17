@@ -254,8 +254,6 @@ export const worldArb: fc.Arbitrary<World> = fc
 		// Last, as above: pins (each a choice among the author's pinnable statuses) and conversation mutes.
 		pins: fc.array(fc.record({ account: fc.nat(), status: fc.nat() }), { maxLength: 4 }),
 		conversationMutes: fc.array(fc.record({ account: fc.nat(), status: fc.nat() }), { maxLength: 4 }),
-		// Last, as above: a remote account the instance suspended (R38).
-		remoteSuspended: fc.option(fc.nat(), { freq: 3 }),
 	})
 	.map((raw): World => {
 		const accounts: WorldAccount[] = []
@@ -274,7 +272,9 @@ export const worldArb: fc.Arbitrary<World> = fc
 			accounts.push({
 				name: `R${i}`,
 				local: false,
-				suspended: raw.remoteSuspended !== null && raw.remoteSuspended % raw.remotes.length === i,
+				// The instance's suspension (R38), drawn from bits already drawn, as hidesCollections below, so the worlds a seed
+				// gave before stay as they were but for it: about one remote account in four.
+				suspended: raw.follows[LOCALS + i + 3]?.accepted === true && raw.follows[LOCALS + i + 3]?.notify === true,
 				deleting: raw.deleting !== null && raw.deleting % raw.remotes.length === i,
 				// Drawn from bits already drawn, as tagFollowers below: about one remote account in four.
 				hidesCollections: raw.follows[LOCALS + i]?.showReblogs === true && raw.follows[LOCALS + i]?.notify === true,
