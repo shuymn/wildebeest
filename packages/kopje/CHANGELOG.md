@@ -14,8 +14,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   takes `quoted_status_id`: a public or unlisted post whose quote policy allows the poster, or the poster's own post
   that is not direct. Anything else, the poster's or the author's blocks included, is answered 404 with Mastodon's
   error (`The post you are trying to quote does not appear to exist.`), before any 422 of the post, as Mastodon; a
-  scheduled quote is checked again when it is published, and dropped if it no longer passes. A quote of a followers-only post of one's own is followers-only; a direct quote of
-  someone else's post must mention its author (422 otherwise); the text may be empty.
+  scheduled quote is checked again when it is published, and dropped if it no longer passes. A quote of a
+  followers-only post of one's own is followers-only; a direct quote of someone else's post must mention its author
+  (422 otherwise); the text may be empty.
     - A quote of a Kopje post is accepted at once, and its author is notified (`quote`). A quote of a remote post is
       `pending` until its author's server approves it, then `accepted`; a refusal makes it `rejected`, and a later
       withdrawal `revoked`. The quoted author always sees the quote.
@@ -28,10 +29,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       `current_user`); Phanpy, Ice Cubes and the official apps still wait for version 7.
     - Authors of quotes are notified when a post they quoted is edited (`quoted_update`), at most 100 per edit, newest
       quotes first.
-    - Limits: Misskey ignores updates of posts, so a Misskey server keeps the first version of a quote it received and
-      never learns of its approval or withdrawal. A deletion of a remote quoted post is not passed on to the servers that
-      received the quote (as for boosts). A quote request, or the update announcing an approval, that falls while the
-      quoting account is suspended is not sent later.
+    - Limits: Misskey ignores updates of posts, so a Misskey server keeps the first version of a quote it received
+      and never learns of its approval or withdrawal. A deletion of a remote quoted post is not passed on to the servers
+      that received the quote (as for boosts). A quote request, or the update announcing an approval, that falls while
+      the quoting account is suspended is not sent later.
 - Remote posts' quote policies are read and stored when a post is first received and whenever it is updated. Remote
   posts Kopje already stored stay unquotable until this instance receives an update of the post carrying its quote
   policy. Opening or resolving them again does not refresh it, and some may stay unquotable for good. Nothing is
