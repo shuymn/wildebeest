@@ -65,7 +65,7 @@ import { allocateLocalId } from './ids'
 import { DETACHED_GRACE_MS, DOOMED_AT, liveMediaSql } from './media'
 import { notify } from './notifications'
 import { editPoll, type PollInput, pollOptionsJson, writePoll } from './polls'
-import { profileUrlSql, usernameSql } from './profile-bounds'
+import { actorUriSql, profileUrlSql, usernameSql } from './profile-bounds'
 import {
 	acceptedQuoteWindow,
 	answeredRequests,
@@ -80,7 +80,15 @@ import {
 	revokeQuoteRow,
 } from './quotes'
 import { normalizeSearchText } from './search-text'
-import { contentSql, editMediaSql, pollOptionsSql, sourceTextSql, spoilerSql, statusUrlSql } from './status-bounds'
+import {
+	contentSql,
+	editMediaSql,
+	pollOptionsSql,
+	sourceTextSql,
+	spoilerSql,
+	statusUriSql,
+	statusUrlSql,
+} from './status-bounds'
 import {
 	MEDIA_COLUMNS,
 	type MediaAttachment,
@@ -185,7 +193,7 @@ function resolveMentions(
 		d: ref.domain === null || ref.domain === localHost ? null : ref.domain,
 	}))
 	const rows = db.all<ResolvedMention & { key: string }>(
-		`SELECT json_extract(j.value, '$.key') AS key, a.id, a.uri, ${profileUrlSql('a.url')} AS url, ${usernameSql('a.username')} AS username, a.domain
+		`SELECT json_extract(j.value, '$.key') AS key, a.id, ${actorUriSql('a.uri')} AS uri, ${profileUrlSql('a.url')} AS url, ${usernameSql('a.username')} AS username, a.domain
 		FROM json_each(?1) j
 		JOIN accounts a ON a.domain IS json_extract(j.value, '$.d') AND lower(a.username) = json_extract(j.value, '$.u')
 		WHERE ${mentionableBySql('a.id', '?2')}`,
@@ -235,8 +243,8 @@ function quoteLink(db: Db, id: string): QuoteLink | null {
 		domain: string | null
 		author_uri: string
 	}>(
-		`SELECT s.uri, ${statusUrlSql('s.url')} AS url, ${usernameSql('a.username')} AS username, a.domain,
-			a.uri AS author_uri
+		`SELECT ${statusUriSql('s.uri')} AS uri, ${statusUrlSql('s.url')} AS url, ${usernameSql('a.username')} AS username,
+			a.domain, ${actorUriSql('a.uri')} AS author_uri
 		FROM statuses s JOIN accounts a ON a.id = s.account_id WHERE s.id = ?`,
 		id
 	)
@@ -1855,7 +1863,7 @@ export type RedactedStatus = Omit<Status, 'quote_approval' | 'quote'> & {
 
 function redactedStatus(db: Db, quotingId: string, state: QuoteState, present: Present): RedactedStatus | null {
 	const row = db.first<{ id: string; uri: string; account_id: string; visibility: Visibility; published_at: string }>(
-		'SELECT id, uri, account_id, visibility, published_at FROM statuses WHERE id = ?',
+		`SELECT id, ${statusUriSql('uri')} AS uri, account_id, visibility, published_at FROM statuses WHERE id = ?`,
 		quotingId
 	)
 	const account = row === undefined ? undefined : presentAccountsById(db, [row.account_id], present).get(row.account_id)

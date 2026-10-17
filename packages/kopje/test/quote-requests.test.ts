@@ -1052,6 +1052,30 @@ describe('revoke (QuotesController#revoke, RevokeQuoteService)', () => {
 		expect(await quoteOf(t, note.id)).toMatchObject({ state: 'accepted' })
 	})
 
+	it('answers a redacted Status within the bound of a uri, whatever the quoting status stores', async () => {
+		const { t, bob, mine } = await world()
+		const { note } = await accepted(t, bob, mine.uri)
+		const quoting = await statusId(t, note.id)
+		const bobId = (await sql<{ id: string }>(t.store, 'SELECT id FROM accounts WHERE uri = ?', bob.uri))[0]!.id
+		// A converted row may hold a uri past the bound the Worker stores (4,096 bytes).
+		await sql(
+			t.store,
+			"UPDATE statuses SET visibility = 'limited', uri = ? WHERE id = ?",
+			`${note.id}/${'x'.repeat(4096)}`,
+			quoting
+		)
+		await sql(
+			t.store,
+			'INSERT INTO blocks (account_id, target_account_id, created_at) VALUES (?, ?, ?)',
+			bobId,
+			ALICE,
+			'2026-10-12T00:00:00.000Z'
+		)
+		const { status, body } = await revoke(t, mine.id, quoting)
+		expect(status).toBe(200)
+		expect(body).toMatchObject({ id: quoting, uri: '', url: '' })
+	})
+
 	it('answers a revoker the quoting author blocks with a redacted Status that Android decodes', async () => {
 		const { t, bob, mine } = await world()
 		const { note } = await accepted(t, bob, mine.uri)

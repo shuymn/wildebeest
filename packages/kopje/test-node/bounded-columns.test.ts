@@ -27,10 +27,12 @@ export const BOUNDED: readonly Bounded[] = [
 	{ table: 'accounts', column: 'url', helpers: ['profileUrlSql'] },
 	{ table: 'accounts', column: 'avatar_url', helpers: ['profileUrlSql'] },
 	{ table: 'accounts', column: 'header_url', helpers: ['profileUrlSql'] },
+	{ table: 'accounts', column: 'uri', helpers: ['actorUriSql'] },
 	{ table: 'statuses', column: 'content', helpers: ['contentSql'] },
 	{ table: 'statuses', column: 'spoiler_text', helpers: ['spoilerSql'] },
 	{ table: 'statuses', column: 'source_text', helpers: ['sourceTextSql'] },
 	{ table: 'statuses', column: 'url', helpers: ['statusUrlSql'] },
+	{ table: 'statuses', column: 'uri', helpers: ['statusUriSql'] },
 	{ table: 'media_attachments', column: 'description', helpers: ['mediaDescriptionSql'] },
 	{ table: 'media_attachments', column: 'url', helpers: ['mediaUrlSql'] },
 	{ table: 'media_attachments', column: 'preview_url', helpers: ['mediaUrlSql'] },
@@ -427,9 +429,33 @@ const ACTIVITYPUB =
 	'an ActivityPub document built from a local status or actor (statusFacts, the actor documents), not an API answer'
 const COMPARED = 'compared in the Worker with an incoming value, never presented'
 const UPLOAD = "a local upload's stored URL, for its R2 objects, never presented"
+const IDENTITY = 'an identity compared, stored or sent in an activity, never presented'
 const POLL = "a poll's stored choices, matched against a vote or an update, never presented"
 
 const ALLOWED: Record<string, { count: number; reason: string }> = {
+	'src/domain/accounts.ts accounts.uri': { count: 4, reason: IDENTITY },
+	'src/domain/activities.ts statuses.uri': { count: 5, reason: ACTIVITYPUB },
+	'src/domain/activities.ts accounts.uri': { count: 5, reason: ACTIVITYPUB },
+	'src/domain/actor-update.ts accounts.uri': { count: 1, reason: ACTIVITYPUB },
+	'src/domain/actors.ts accounts.uri': { count: 1, reason: ACTIVITYPUB },
+	'src/domain/blocks.ts accounts.uri': { count: 2, reason: IDENTITY },
+	'src/domain/deliveries.ts accounts.uri': { count: 2, reason: IDENTITY },
+	'src/domain/featured-tags.ts accounts.uri': { count: 1, reason: IDENTITY },
+	'src/domain/inbox.ts accounts.uri': { count: 7, reason: IDENTITY },
+	'src/domain/inbox.ts statuses.uri': { count: 1, reason: IDENTITY },
+	'src/domain/media.ts accounts.uri': { count: 1, reason: IDENTITY },
+	'src/domain/polls.ts statuses.uri': { count: 1, reason: IDENTITY },
+	'src/domain/polls.ts accounts.uri': { count: 2, reason: IDENTITY },
+	'src/domain/quotes.ts statuses.uri': { count: 6, reason: IDENTITY },
+	'src/domain/quotes.ts accounts.uri': { count: 7, reason: IDENTITY },
+	'src/domain/remote-collections.ts accounts.uri': { count: 3, reason: IDENTITY },
+	'src/domain/remote-collections.ts statuses.uri': { count: 1, reason: IDENTITY },
+	'src/domain/remote-statuses.ts accounts.uri': { count: 1, reason: IDENTITY },
+	'src/domain/reports.ts accounts.uri': { count: 1, reason: IDENTITY },
+	'src/domain/status-actions.ts accounts.uri': { count: 1, reason: IDENTITY },
+	'src/domain/status-actions.ts statuses.uri': { count: 1, reason: IDENTITY },
+	'src/domain/statuses.ts accounts.uri': { count: 6, reason: IDENTITY },
+	'src/domain/statuses.ts statuses.uri': { count: 9, reason: IDENTITY },
 	'src/domain/accounts.ts accounts.username': { count: 1, reason: LOCAL },
 	'src/domain/accounts.ts accounts.display_name': { count: 1, reason: LOCAL },
 	'src/domain/activities.ts polls.options': { count: 1, reason: ACTIVITYPUB },
