@@ -12,7 +12,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 - The admin can suspend a remote account through the Mastodon admin API (`POST /api/v1/admin/accounts/:id/action`
   with `type=suspend`, which used to answer 422) and lift that suspension (`POST /api/v1/admin/accounts/:id/unsuspend`,
-  which used to answer 403), with Mastodon's answers and errors. From the moment the suspension is saved:
+  which used to answer 403), with Mastodon's answers and errors. Lifting the suspension makes the account visible
+  again; ended follows stay ended, and Kopje does not fetch the account again as Mastodon does. Unlike Mastodon, which
+  still delivers to suspended accounts what was queued before, Kopje checks every delivery again right before sending
+  it. From the moment the suspension is saved:
     - the account is shown to nobody: its posts, boosts, notifications and interactions are hidden everywhere, its
       profile is shown blank with `suspended: true` (in the admin entity too), it is listed under `status=suspended`
       and not `active`, and its follow requests are neither listed nor accepted;
@@ -23,9 +26,6 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       stops;
     - its reports are resolved, and its follows of local users are ended in the background, each with a rejection
       sent to it (a pending request is removed without one), as Mastodon does.
-  Lifting the suspension makes the account visible again; ended follows stay ended, and Kopje does not fetch the
-  account again as Mastodon does. Unlike Mastodon, which still delivers to suspended accounts what was queued before,
-  Kopje checks every delivery again right before sending it.
 - The admin can block domains through the Mastodon admin API (`/api/v1/admin/domain_blocks`: list, show, create,
   update and delete, as Fedilab and Fediblockhole call them), with Mastodon's entity, paging and errors, including
   Mastodon's refusal of a block that is already there or no stricter than the one ruling its domain. A block of

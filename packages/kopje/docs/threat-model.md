@@ -676,36 +676,36 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `src/domain/quotes.ts`, `preparePost` in `src/domain/statuses.ts`, migration `0039_quotes_local`;
   `test/quote-authoring.test.ts`.
 
-- **VIS-29: admin views and actions disclose and change only through the admin account.** Only the OAuth admin,
-  through a token covering the route's admin scope, reads or acts through `/api/v1/admin/*` and `/api/v2/admin/*`
-  (R37, reserved for the admin API's rule). The OAuth admin is the one local account whose email equals `admin_email`
-  after trimming and lowercasing both; the match fails closed: no admin when `admin_email` is unset or empty, when no
-  local account matches, when the match is suspended, or when two accounts match. It is checked in the transaction of
-  each admin operation, so existing tokens follow the current match, and the role's permissions are exactly the route
-  groups Kopje serves. No admin action targets the admin's own account; a suspension fences the account's tokens; every
-  admin write is logged; and the OAuth admin never holds A5 (AUTH-5). `ADMIN_PERMISSIONS` is 1080 (manage_reports,
-  manage_users, manage_federation, view_dashboard); every other admin route answers as Mastodon answers a role without
-  the permission. _Enforced (main):_ the match and the check: `oauthAdmin` and `adminAccountId` in `src/domain/admin-authority.ts`, `adminReadOperation`
-  and `adminWriteOperation` in `src/domain/auth.ts`, setup's admin in `src/domain/setup.ts`; `test/admin-api.test.ts`,
-  `test/setup-access.test.ts` ("stops at the next checkpoint when the admin stops being the only match for admin_email
-  during the run"). Reports (manage_reports): anyone but the OAuth admin is refused before a report is read, so not even a report's existence is
-  disclosed; the admin sees every report with its accounts (local emails included) and only the statuses its reporter
-  may still see (R37); every admin write, and every Access repair below, writes its moderation log row
-  (`admin_actions`, actor, account and client or Access identity, newest 10,000 kept) in its own transaction, read only
-  through Access (`GET /admin/moderation-log`). `listAdminReports`, `getAdminReport`, `updateAdminReport` and
-  `actOnReport` in `src/domain/reports.ts`, `presentAdminAccounts` in `src/domain/admin-accounts.ts`,
-  `src/domain/moderation-log.ts`, migration `0029_admin_reports`; `test/admin-reports.test.ts`,
-  `test/admin-api.test.ts`, `test/policy-bounds.test.ts`, `test/migrations.test.ts`. Accounts (manage_users): only the
-  OAuth admin lists every account, local and remote, with each local account's email, shows one, and logs the actions
-  that change nothing (`enable`, `unsilence`, `unsensitive`), while `approve` and `reject` are refused for every
-  account. Each list reads a bounded set (the local accounts, at most 2,000 search candidates, or an id-ordered range)
-  and answers 422 rather than an unordered or empty page. `listAdminAccounts`, `getAdminAccount` and
-  `actOnAdminAccount` in `src/domain/admin-accounts.ts`, `src/mastodon/admin.ts`, migrations `0030_admin_accounts` and
-  `0031_admin_accounts_available`; `test/admin-accounts.test.ts`, `test/policy-bounds.test.ts`,
-  `test/migrations.test.ts`. Local suspension, self-protection and the credential epoch: the OAuth admin's `action`
-  (`none`, which resolves the report it names, and `suspend`) and `unsuspend`; `disable`, `sensitive` and `silence`
-  answer 422, and any action on the admin's own account 403 (remote suspension is VIS-30's). A suspension commits, in one
-  bounded transaction, the account's `suspended_at` (its time S) and a new credential epoch
+- **VIS-29: admin views and actions disclose and change only through the admin account.** Only the OAuth admin, through
+  a token covering the route's admin scope, reads or acts through `/api/v1/admin/*` and `/api/v2/admin/*` (R37, reserved
+  for the admin API's rule). The OAuth admin is the one local account whose email equals `admin_email` after trimming
+  and lowercasing both; the match fails closed: no admin when `admin_email` is unset or empty, when no local account
+  matches, when the match is suspended, or when two accounts match. It is checked in the transaction of each admin
+  operation, so existing tokens follow the current match, and the role's permissions are exactly the route groups Kopje
+  serves. No admin action targets the admin's own account; a suspension fences the account's tokens; every admin write
+  is logged; and the OAuth admin never holds A5 (AUTH-5). `ADMIN_PERMISSIONS` is 1080 (manage_reports, manage_users,
+  manage_federation, view_dashboard); every other admin route answers as Mastodon answers a role without the permission.
+  _Enforced (main):_ the match and the check: `oauthAdmin` and `adminAccountId` in `src/domain/admin-authority.ts`,
+  `adminReadOperation` and `adminWriteOperation` in `src/domain/auth.ts`, setup's admin in `src/domain/setup.ts`;
+  `test/admin-api.test.ts`, `test/setup-access.test.ts` ("stops at the next checkpoint when the admin stops being the
+  only match for admin_email during the run"). Reports (manage_reports): anyone but the OAuth admin is refused before a
+  report is read, so not even a report's existence is disclosed; the admin sees every report with its accounts (local
+  emails included) and only the statuses its reporter may still see (R37); every admin write, and every Access repair
+  below, writes its moderation log row (`admin_actions`, actor, account and client or Access identity, newest 10,000
+  kept) in its own transaction, read only through Access (`GET /admin/moderation-log`). `listAdminReports`,
+  `getAdminReport`, `updateAdminReport` and `actOnReport` in `src/domain/reports.ts`, `presentAdminAccounts` in
+  `src/domain/admin-accounts.ts`, `src/domain/moderation-log.ts`, migration `0029_admin_reports`;
+  `test/admin-reports.test.ts`, `test/admin-api.test.ts`, `test/policy-bounds.test.ts`, `test/migrations.test.ts`.
+  Accounts (manage_users): only the OAuth admin lists every account, local and remote, with each local account's email,
+  shows one, and logs the actions that change nothing (`enable`, `unsilence`, `unsensitive`), while `approve` and
+  `reject` are refused for every account. Each list reads a bounded set (the local accounts, at most 2,000 search
+  candidates, or an id-ordered range) and answers 422 rather than an unordered or empty page. `listAdminAccounts`,
+  `getAdminAccount` and `actOnAdminAccount` in `src/domain/admin-accounts.ts`, `src/mastodon/admin.ts`, migrations
+  `0030_admin_accounts` and `0031_admin_accounts_available`; `test/admin-accounts.test.ts`,
+  `test/policy-bounds.test.ts`, `test/migrations.test.ts`. Local suspension, self-protection and the credential epoch:
+  the OAuth admin's `action` (`none`, which resolves the report it names, and `suspend`) and `unsuspend`; `disable`,
+  `sensitive` and `silence` answer 422, and any action on the admin's own account 403 (remote suspension is VIS-30's). A
+  suspension commits, in one bounded transaction, the account's `suspended_at` (its time S) and a new credential epoch
   (`local_accounts.credential_epoch`, incremented), the frozen report and follow bounds, its jobs and its actor's
   `Update` with no targets. Every token, code and web session is stamped with its account's epoch in the transaction
   that inserts it (`oauth_tokens.epoch`), and is valid only while that epoch is its account's, with no clock involved:
@@ -715,85 +715,82 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   older ones later. An unsuspension of a suspension made before the epoch existed moves it once. The jobs are bound to
   their epoch: the suspension's job resolves only the reports frozen by the suspension, and stops when the account is
   unsuspended or in a later epoch; an unsuspension's job stops when the account is suspended again. A suspended local
-  sender's queued deliveries are dropped when claimed or confirmed, except retractions and its suspension `Update`
-  (R1); a delivery confirmed before the suspension committed may still be sent (VIS-30's boundary). `actOnAccount` and
+  sender's queued deliveries are dropped when claimed or confirmed, except retractions and its suspension `Update` (R1);
+  a delivery confirmed before the suspension committed may still be sent (VIS-30's boundary). `actOnAccount` and
   `unsuspendAdminAccount` in `src/domain/admin-accounts.ts`, `src/domain/suspension.ts`, `currentCredentialSql` in
   `src/domain/auth.ts`, `REFUSED_SENDER` in `src/domain/deliveries.ts`, migration `0034_admin_suspension`;
   `test/admin-suspension.test.ts`, `test/cascade-guard.test.ts`, `test/migrations.test.ts`. The report fence uses no
-  caller clock: every write to a report stamps it, in that write's
-  transaction, with the moderation log id of the admin action that caused it (`reports.last_action_id`; an admin's
-  write its own row, a suspension round's resolution the suspension's row, never one row per report), and log ids are
-  given in commit order and never twice. A suspension freezes the newest report id and its own log id
-  (`moderation_jobs.action_bound`) in its transaction, and its job resolves only reports filed up to the first, still
-  unresolved, and last stamped at or below the second (none counts as 0). So a report reopened or changed after the
-  suspension committed, and one filed after it, stay as they are, whatever either request's clock said. A job whose
-  bound is unknown (a suspension from before the fence whose log row was pruned) resolves none, and leaves them to the
-  admin. `resolveSuspensionReports` and `writeReport` in `src/domain/reports.ts`, `suspendLocal` in
-  `src/domain/suspension.ts`, `logAction` in `src/domain/moderation-log.ts`, migration `0042_report_action_fence`;
-  `test/admin-suspension.test.ts` ("the report fence"), `test/migrations.test.ts`. A report another local account
-  files notifies the OAuth admin
-  (`admin.report`) when no other report of the same account is unresolved, read in the report's transaction; the
-  notification carries the report as its reporter sees it, and R15 shows it, lists it, streams it and pushes it only
-  while its recipient is the current OAuth admin (R37), so it leaves every read when `admin_email` changes or the match
-  fails closed, and comes back with the match; it goes with its report (a remote account's purge deletes it before the
-  report). `GET /admin/reports/:id`, where clients open it, redirects the Access admin to the reported account's web
-  page and reads nothing for anyone else: the Access admin is checked again against the saved settings in the
-  read's transaction (`accessAdminRefusal`), so a settings change during the request's authentication refuses it. `notifyStaff` and `reportTargetPage` in `src/domain/reports.ts`, `shownSql` in
-  `src/domain/audience.ts`, `adminAccountIdOnce` in `src/domain/admin-authority.ts`, migration
+  caller clock: every write to a report stamps it, in that write's transaction, with the moderation log id of the admin
+  action that caused it (`reports.last_action_id`; an admin's write its own row, a suspension round's resolution the
+  suspension's row, never one row per report), and log ids are given in commit order and never twice. A suspension
+  freezes the newest report id and its own log id (`moderation_jobs.action_bound`) in its transaction, and its job
+  resolves only reports filed up to the first, still unresolved, and last stamped at or below the second (none counts as
+  0). So a report reopened or changed after the suspension committed, and one filed after it, stay as they are, whatever
+  either request's clock said. A job whose bound is unknown (a suspension from before the fence whose log row was
+  pruned) resolves none, and leaves them to the admin. `resolveSuspensionReports` and `writeReport` in
+  `src/domain/reports.ts`, `suspendLocal` in `src/domain/suspension.ts`, `logAction` in `src/domain/moderation-log.ts`,
+  migration `0042_report_action_fence`; `test/admin-suspension.test.ts` ("the report fence"), `test/migrations.test.ts`.
+  A report another local account files notifies the OAuth admin (`admin.report`) when no other report of the same
+  account is unresolved, read in the report's transaction; the notification carries the report as its reporter sees it,
+  and R15 shows it, lists it, streams it and pushes it only while its recipient is the current OAuth admin (R37), so it
+  leaves every read when `admin_email` changes or the match fails closed, and comes back with the match; it goes with
+  its report (a remote account's purge deletes it before the report). `GET /admin/reports/:id`, where clients open it,
+  redirects the Access admin to the reported account's web page and reads nothing for anyone else: the Access admin is
+  checked again against the saved settings in the read's transaction (`accessAdminRefusal`), so a settings change during
+  the request's authentication refuses it. `notifyStaff` and `reportTargetPage` in `src/domain/reports.ts`, `shownSql`
+  in `src/domain/audience.ts`, `adminAccountIdOnce` in `src/domain/admin-authority.ts`, migration
   `0040_report_notifications` and `0041_report_notifications_key` (one notification per report and recipient);
-  `test/report-notifications.test.ts`, `test/policy-oracle.test.ts`,
-  `test/migrations.test.ts`. Domain blocks (manage_federation): only the OAuth admin lists, shows, creates, updates and
-  deletes instance domain blocks (VIS-30), each write logged in its transaction; domain allows list none, and their
-  create answers 403 to everyone. The measure `instance_follows` (view_dashboard) counts accepted follows of the
-  domain's accounts by a walk of at most 20,000 local follows, and answers 422 beyond it, never an undercount;
-  dimensions and retention answer `[]`. `src/domain/admin-domain-blocks.ts`, `src/domain/admin-measures.ts`;
-  `test/admin-domain-blocks.test.ts`, `test/admin-measures.test.ts`, `test/admin-domain-blocks-replay.test.ts`.
+  `test/report-notifications.test.ts`, `test/policy-oracle.test.ts`, `test/migrations.test.ts`. Domain blocks and allows
+  (manage_federation): the block API of VIS-30; domain allows list none, and their create answers 403 to everyone. The
+  measure `instance_follows` (view_dashboard) counts accepted follows of the domain's accounts by a walk of at most
+  20,000 local follows, and answers 422 beyond it, never an undercount; dimensions and retention answer `[]`.
+  `src/domain/admin-domain-blocks.ts`, `src/domain/admin-measures.ts`; `test/admin-domain-blocks.test.ts`,
+  `test/admin-measures.test.ts`, `test/admin-domain-blocks-replay.test.ts`.
 - **VIS-30: an instance-suspended account is shown to nobody and gets no new content.** An account the instance
   suspended (R38) is unavailable (R1) from the suspension's commit: shown to nobody (as any unavailable account), sent
   nothing but retractions, and its inbound activity is not applied but for its `Delete`, `DeleteActor`, `Undo` and
   `Reject`, after a routing refresh of its inbox from a verified document; no path refreshes its profile, keys or
-  domain, or stores a status of it. Its follows of local accounts are severed in bounded, generation-bound rounds
-  (R38), each accepted one with a withdrawing `Reject` to the follower's current inbox alone, as Mastodon sends it (a
-  retraction, never refused, but not sent to the earlier receivers of what it withdraws); local follows of it are
-  kept. An instance domain block of severity `suspend` (R38) covers a host by its longest matching block (a child
-  `noop` exempts its subdomains), with at most `MAX_BLOCK_LABELS` (8) labels per stored block; a covered account (by
-  its stored domain or its actor host) is unavailable from the block's commit, read live; nothing is fetched from a
-  covered host (advisory: the writes refuse to store a covered account or its statuses, and refresh no covered row);
-  its inbound activity is ignored before any fetch but `Delete`, `DeleteActor`, `Undo` and `Reject` verified with a
-  key already stored. The OAuth admin creates, changes and deletes blocks through the Mastodon admin API (VIS-29).
-  Each change into or out of `suspend` resets the domain job, whose bounded rounds mark the covered accounts and sever
-  their follows both ways up to a frozen follow bound, and clear the marks a block no longer covers; the admin's
-  `active` and `suspended` lists answer 503 while it runs (docs/visibility.md, "Instance domain blocks").
-  Each staged target records the recipients behind it (merged across followers, addressed accounts,
-  silent recipients, poll voters and other statuses' reach before deduplication by inbox): up to 16 account ids, the
-  hosts of their actor ids, or `many` above 16, meaning "not all unavailable"; expansion copies them onto the delivery
-  row. A row that is not a retraction (by its persisted `retracts` flag) is dropped, its lane promoted, when its sender
-  is refused (R1), an instance domain block covers its inbox host, none of its listed accounts exists and is available
-  (R1: a recipient the instance suspended, or one being deleted or purged), or a block covers every listed host. The check runs
-  at the claim and again in `confirmDelivery`, which the Worker calls under the claim's lease after the signer is
-  loaded and the host checked, right before signing and the POST; the body sent is read there, never from the claim. A
-  change that commits after confirmation does not stop that POST; a confirmation that fails, or finds the lease taken
-  over, sends nothing, and the lease expires. Accepted residuals: a shared inbox serving an available recipient besides
-  unavailable ones is sent (content expansion already left the unavailable out); a row without provenance (queued before
-  migration `0044`, phase A's staged reach, a retraction's earlier receivers) gets the inbox host rule only; Mastodon's
-  `DeliveryWorker` has no such check, so this is stricter than Mastodon, whose reach already leaves deleted accounts
-  out. A dropped row writes no receipt. _Enforced (main)._ Implementation, for accounts: `src/domain/remote-suspension.ts`,
-  `actOnAccount` and `unsuspendAdminAccount` in `src/domain/admin-accounts.ts`, `availableSql` in
-  `src/domain/audience.ts`, the gate in `receive` and `upsertRemoteActor` in `src/domain/inbox.ts`, `storeRemoteStatus`
-  in `src/domain/remote-statuses.ts`, migration `0045_remote_suspension`; `test/remote-suspension.test.ts`,
-  `test/remote-suspension-deliveries.test.ts`, `test/remote-suspension-inbound.test.ts`, `test/policy-oracle.test.ts`
-  and `test/policy-writes.test.ts` (against `available` and `sends` in `test/policy-model.ts`). For the delivery part:
-  `targetsOf`, `sendRefused`,
+  domain, or stores a status of it. Its follows of local accounts are severed in bounded, generation-bound rounds (R38),
+  each accepted one with a withdrawing `Reject` to the follower's current inbox alone, as Mastodon sends it (a
+  retraction, never refused, but not sent to the earlier receivers of what it withdraws); local follows of it are kept.
+  An instance domain block of severity `suspend` (R38) covers a host by its longest matching block (a child `noop`
+  exempts its subdomains), with at most `MAX_BLOCK_LABELS` (8) labels per stored block; a covered account (by its stored
+  domain or its actor host) is unavailable from the block's commit, read live; nothing is fetched from a covered host
+  (advisory: the writes refuse to store a covered account or its statuses, and refresh no covered row); its inbound
+  activity is ignored before any fetch but `Delete`, `DeleteActor`, `Undo` and `Reject` verified with a key already
+  stored. The OAuth admin creates, changes and deletes blocks through the Mastodon admin API (VIS-29). Each change into
+  or out of `suspend` resets the domain job, whose bounded rounds mark the covered accounts and sever their follows both
+  ways up to a frozen follow bound, and clear the marks a block no longer covers; the admin's `active` and `suspended`
+  lists answer 503 while it runs (docs/visibility.md, "Instance domain blocks"). Each staged target records the
+  recipients behind it (merged across followers, addressed accounts, silent recipients, poll voters and other statuses'
+  reach before deduplication by inbox): up to 16 account ids, the hosts of their actor ids, or `many` above 16, meaning
+  "not all unavailable"; expansion copies them onto the delivery row. A row that is not a retraction (by its persisted
+  `retracts` flag) is dropped, its lane promoted, when its sender is refused (R1), an instance domain block covers its
+  inbox host, none of its listed accounts exists and is available (R1: a recipient the instance suspended, or one being
+  deleted or purged), or a block covers every listed host. The check runs at the claim and again in `confirmDelivery`,
+  which the Worker calls under the claim's lease after the signer is loaded and the host checked, right before signing
+  and the POST; the body sent is read there, never from the claim. A change that commits after confirmation does not
+  stop that POST; a confirmation that fails, or finds the lease taken over, sends nothing, and the lease expires.
+  Accepted residuals: a shared inbox serving an available recipient besides unavailable ones is sent (content expansion
+  already left the unavailable out); a row without provenance (queued before migration `0044`, phase A's staged reach, a
+  retraction's earlier receivers) gets the inbox host rule only; Mastodon's `DeliveryWorker` has no such check, so this
+  is stricter than Mastodon, whose reach already leaves deleted accounts out. A dropped row writes no receipt. _Enforced
+  (main)._ Implementation, for accounts: `src/domain/remote-suspension.ts`, `actOnAccount` and `unsuspendAdminAccount`
+  in `src/domain/admin-accounts.ts`, `availableSql` in `src/domain/audience.ts`, the gate in `receive` and
+  `upsertRemoteActor` in `src/domain/inbox.ts`, `storeRemoteStatus` in `src/domain/remote-statuses.ts`, migration
+  `0045_remote_suspension`; `test/remote-suspension.test.ts`, `test/remote-suspension-deliveries.test.ts`,
+  `test/remote-suspension-inbound.test.ts`, `test/policy-oracle.test.ts` and `test/policy-writes.test.ts` (against
+  `available` and `sends` in `test/policy-model.ts`). For the delivery part: `targetsOf`, `sendRefused`,
   `claimDeliveries` and `confirmDelivery` in `src/domain/deliveries.ts`, `recipientsFor` in `src/domain/audience.ts`,
   `deliveryRound` in `src/jobs/deliver.ts`, migration `0044_delivery_provenance`; `test/delivery-send-check.test.ts`,
   `test/policy-writes.test.ts` (provenance and the send-time rule against `sends` in `test/policy-model.ts`),
-  `test/migrations.test.ts`. For domains: `src/domain/instance-domain-blocks.ts`, `hostCoveredSql` and `availableSql`
-  in `src/domain/audience.ts`, the fetch policy in `src/federation/loader.ts`, the inbound path in
+  `test/migrations.test.ts`. For domains: `src/domain/instance-domain-blocks.ts`, `hostCoveredSql` and `availableSql` in
+  `src/domain/audience.ts`, the fetch policy in `src/federation/loader.ts`, the inbound path in
   `src/federation/inbound.ts`, the domain job in `src/domain/remote-suspension.ts`, the admin API in
   `src/domain/admin-domain-blocks.ts`, migration `0046_instance_domain_blocks`; `test/instance-domain-blocks.test.ts`,
-  `test/domain-job.test.ts`, `test/admin-domain-blocks-replay.test.ts`,
-  `test/instance-domain-blocks-inbound.test.ts`, `test/read-windows.test.ts`, `test/policy-oracle.test.ts` (against
-  `available` and `covered` in `test/policy-model.ts`).
+  `test/domain-job.test.ts`, `test/admin-domain-blocks-replay.test.ts`, `test/instance-domain-blocks-inbound.test.ts`,
+  `test/read-windows.test.ts`, `test/policy-oracle.test.ts` (against `available` and `covered` in
+  `test/policy-model.ts`).
 
 ### Authorization (AUTH)
 
