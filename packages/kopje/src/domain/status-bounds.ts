@@ -14,8 +14,13 @@ export const MAX_STATUS_MEDIA = 4
 export const MAX_STATUS_TAGS = 100
 export const MAX_TAG_LENGTH = 256
 const TAG_NAME_BYTES = 1024
-// status_mentions rows of one remote status, and mentions one status presents.
+// status_mentions rows of one remote status.
 export const MAX_STATUS_MENTION_ROWS = 200
+// Mentions one status presents, the first by account id (the order they are stored in). Mastodon presents every
+// mention; this cap keeps one status within its share of an answer (docs/threat-model.md, "Maxima of presented
+// units"). The content's HTML keeps every mention link; only the `mentions` list, which clients read to address a
+// reply, stops here, past what a 500-character Mastodon post can name in practice.
+export const MAX_PRESENTED_MENTIONS = 50
 // A media description, as Mastodon's MAX_DESCRIPTION_HARD_LENGTH_LIMIT (code units as stored, code points as read).
 export const MAX_MEDIA_DESCRIPTION_LENGTH = 10_000
 // A media URL (url, preview_url), as profile URLs; a serialized URL is ASCII.

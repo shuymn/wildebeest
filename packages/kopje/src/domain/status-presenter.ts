@@ -29,7 +29,7 @@ import { actorUriSql, profileUrlSql, usernameSql } from './profile-bounds'
 import {
 	contentSql,
 	MAX_STATUS_MEDIA,
-	MAX_STATUS_MENTION_ROWS,
+	MAX_PRESENTED_MENTIONS,
 	MAX_STATUS_TAGS,
 	mediaDescriptionSql,
 	mediaMetaSql,
@@ -283,7 +283,7 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 		[...byId.values()].map((row) => row.account_id),
 		options
 	)
-	// At most MAX_STATUS_MEDIA attachments, MAX_STATUS_MENTION_ROWS mentions and MAX_STATUS_TAGS hashtags of each
+	// At most MAX_STATUS_MEDIA attachments, MAX_PRESENTED_MENTIONS mentions and MAX_STATUS_TAGS hashtags of each
 	// status, cut in SQL (a converted row may hold more), each read through its index.
 	const media = groupBy(
 		db.all<MediaRow & { status_id: string }>(
@@ -301,7 +301,7 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 				${profileUrlSql('a.url')} AS url, ${actorUriSql('a.uri')} AS uri
 			FROM json_each(?1) j CROSS JOIN accounts a
 			WHERE a.id IN (SELECT m.account_id FROM status_mentions m WHERE m.status_id = j.value AND m.silent = 0
-				ORDER BY m.account_id LIMIT ${MAX_STATUS_MENTION_ROWS})
+				ORDER BY m.account_id LIMIT ${MAX_PRESENTED_MENTIONS})
 			ORDER BY j.value, a.id`,
 			all
 		)
