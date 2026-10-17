@@ -1,15 +1,18 @@
 import { createExecutionContext, runInDurableObject, waitOnExecutionContext } from 'cloudflare:test'
 
+import { signRequest } from '@fedify/fedify'
+import { Temporal } from 'temporal-polyfill'
 import { describe, expect, it } from 'vitest'
 
 import { sql } from './api-helpers'
-import { harness, inboxDeps, NOW } from './app-helpers'
-import { fixtureKeyGen, LEGACY_EMPTY_KEK, seedLocalAccount } from './federation-helpers'
+import { harness, inboxDeps } from './app-helpers'
+import { LEGACY, LEGACY_EMPTY_KEK, seedLocalAccount } from './federation-helpers'
 import { BUILD, completeSetup, migratedStore } from './helpers'
-import { MASTODON, mastodonActor, RemoteWeb, signedInit, type TestActor } from './inbox-helpers'
+import { AP, MASTODON, mastodonActor, RemoteWeb, signedInit, type TestActor } from './inbox-helpers'
 import { ALICE, ALICE_URI, AS, create, mastodonNote, nextId, PUBLIC, token } from './inbox-status-helpers'
 import { verifyQuotes } from '../src/federation/quotes'
 import { deliveryRound } from '../src/jobs/deliver'
+import { type KeyGen, RSA_ALGORITHM } from '../src/security/key-wrap'
 
 // Interoperability of a Kopje user's quote of a Mastodon post (design §5.6, §8): the activities Kopje delivers, as
 // received by another Kopje instance through its real inbox and its real verification rounds, and by a model of
@@ -30,6 +33,29 @@ const QUOTE_CONTEXT = [
 
 type App = ReturnType<typeof harness>
 
+type RoundDeps = Parameters<typeof deliveryRound>[1]
+
+// Delivery rounds until nothing is due (a claim that only drops a refused row leaves the next one due).
+async function rounds(env: Env, deps: RoundDeps): Promise<void> {
+	for (let round = 0; round < 40; round++) {
+		const result = await deliveryRound(env, deps)
+		if (result.claimed === 0 && (result.nextDueAt === null || result.nextDueAt > Date.now())) {
+			return
+		}
+	}
+}
+
+// An instance actor key generated for one server, the same on every call (its keygen runs at most once anyway).
+function instanceKeyGen(): KeyGen {
+	let pair: Promise<CryptoKeyPair> | undefined
+	return () =>
+		(pair ??= crypto.subtle.generateKey(
+			{ ...RSA_ALGORITHM, modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]) },
+			true,
+			['sign', 'verify']
+		) as Promise<CryptoKeyPair>)
+}
+
 async function through(app: App, request: Request): Promise<Response> {
 	const ctx = createExecutionContext()
 	const response = await app.app.fetch(request, app.env, ctx)
@@ -42,9 +68,13 @@ async function through(app: App, request: Request): Promise<Response> {
 async function world() {
 	const web = new RemoteWeb()
 	const apps: { a?: App; b?: App } = {}
+	const gets: string[] = []
 	const route = (async (input: RequestInfo | URL, init?: RequestInit) => {
 		const request = input instanceof Request ? input : new Request(input, init)
 		const host = new URL(request.url).host
+		if (request.method === 'GET') {
+			gets.push(request.url)
+		}
 		if (host === 'kopje.test') {
 			return through(apps.a!, request)
 		}
@@ -61,17 +91,19 @@ async function world() {
 	await runInDurableObject(storeB, (_instance, state) => {
 		state.storage.sql.exec("INSERT INTO instance_settings (name, value) VALUES ('domain', 'kopje-b.test')")
 	})
-	await seedLocalAccount(storeB, 'kopje-b.test', { id: CAROL_B, username: 'carol', key: LEGACY_EMPTY_KEK })
-	apps.a = harness(storeA, {}, undefined, { keygen: fixtureKeyGen, loader }, () => NOW)
-	// B's clock is the real one: A's deliveries are signed at the real time (security/keyring.ts), as in production.
-	apps.b = harness(storeB, {}, undefined, { keygen: fixtureKeyGen, loader }, () => Date.now())
+	// Each server has keys of its own: A's users the empty-KEK fixture, B's the other fixture under B's own KEK, and
+	// each instance actor a key generated for it.
+	await seedLocalAccount(storeB, 'kopje-b.test', { id: CAROL_B, username: 'carol', key: LEGACY })
+	// Both clocks are the real one: deliveries are signed at the real time (security/keyring.ts), as in production.
+	apps.a = harness(storeA, { USER_KEK: '' }, undefined, { keygen: instanceKeyGen(), loader }, () => Date.now())
+	apps.b = harness(storeB, { USER_KEK: LEGACY.kek }, undefined, { keygen: instanceKeyGen(), loader }, () => Date.now())
 	const a = apps.a
 	const b = apps.b
 	const aliceToken = await token(storeA, ALICE)
 	const carolToken = await token(storeB, CAROL_B)
 	const bob = await mastodonActor(web, 'bob')
 	const postToA = async (actor: TestActor, activity: unknown) =>
-		(await a.request('/inbox', await signedInit(actor, '/inbox', activity, { at: NOW }))).status
+		(await a.request('/inbox', await signedInit(actor, '/inbox', activity, { at: Date.now() }))).status
 	// bob is known to A (his Follow of nobody: a Create is stored once alice follows him).
 	expect(
 		await postToA(bob, {
@@ -125,7 +157,7 @@ async function world() {
 		const deps = {
 			build: () => BUILD,
 			store: () => storeA,
-			now: () => NOW,
+			now: () => Date.now(),
 			fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
 				const request = new Request(input, init)
 				sent.push({ inbox: request.url, json: JSON.parse(await request.clone().text()) as Record<string, unknown> })
@@ -135,13 +167,45 @@ async function world() {
 			checkHost: () => Promise.resolve(),
 			leaseToken: () => `lease-${++n}`,
 		}
-		for (let round = 0; round < 40; round++) {
-			const result = await deliveryRound(a.env, deps)
-			if (result.claimed === 0 && (result.nextDueAt === null || result.nextDueAt > NOW)) {
-				return
-			}
-		}
+		await rounds(a.env, deps)
 	}
+	// B's delivery rounds, every POST through the router to the app of its host (A's inbox answers for real).
+	const deliverB = async () => {
+		let n = 0
+		await rounds(b.env, {
+			build: () => BUILD,
+			store: () => storeB,
+			now: () => Date.now(),
+			fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+				const request = new Request(input, init)
+				sentByB.push({ inbox: request.url, json: JSON.parse(await request.clone().text()) as Record<string, unknown> })
+				return new URL(request.url).host === 'kopje.test' ? route(request) : new Response(null, { status: 202 })
+			},
+			checkHost: () => Promise.resolve(),
+			leaseToken: () => `b-lease-${++n}`,
+		})
+	}
+	// A's delivery rounds keeping, rather than sending, what goes to B: signed requests to replay in any order.
+	const captureForB = async () => {
+		const held: Request[] = []
+		let n = 0
+		await rounds(a.env, {
+			build: () => BUILD,
+			store: () => storeA,
+			now: () => Date.now(),
+			fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+				const request = new Request(input, init)
+				if (new URL(request.url).host === 'kopje-b.test') {
+					held.push(request.clone())
+				}
+				return new Response(null, { status: 202 })
+			},
+			checkHost: () => Promise.resolve(),
+			leaseToken: () => `c-lease-${++n}`,
+		})
+		return held
+	}
+	const sentByB: { inbox: string; json: Record<string, unknown> }[] = []
 	// B's verification rounds (its real VerifyQuoteService), until none is due.
 	const verifyB = async () => {
 		const deps = { ...inboxDeps(() => storeB, loader), now: () => Date.now() + 60 * 60 * 1000 }
@@ -176,7 +240,38 @@ async function world() {
 			interactingObject: quoting,
 			interactionTarget: target,
 		})
-	return { web, bob, note, postToA, deliver, verifyB, quoteAtB, quote, serveStamp, sent }
+	const quoteAtA = async (uri: string) =>
+		(
+			await sql<{ state: string; approval_uri: string | null }>(
+				storeA,
+				'SELECT q.state, q.approval_uri FROM quotes q JOIN statuses s ON s.id = q.status_id WHERE s.uri = ?',
+				uri
+			)
+		)[0]
+	return {
+		web,
+		bob,
+		note,
+		a,
+		b,
+		storeA,
+		storeB,
+		aliceToken,
+		carolToken,
+		route,
+		postToA,
+		deliver,
+		deliverB,
+		captureForB,
+		sentByB,
+		gets,
+		verifyB,
+		quoteAtA,
+		quoteAtB,
+		quote,
+		serveStamp,
+		sent,
+	}
 }
 
 const accept = (bob: TestActor, quoting: string, result: string) => ({
@@ -400,5 +495,152 @@ describe('Mastodon 4.5.11 receiving our quote (a model of its handlers)', () => 
 			)
 			expect(['pending', 'rejected'], kind).toContain(held?.state)
 		}
+	})
+})
+
+// A request to `url`, signed at the real time with `privateKey` under `keyId`.
+async function signedPost(url: string, activity: unknown, privateKey: CryptoKey, keyId: string): Promise<Request> {
+	const request = new Request(url, { method: 'POST', headers: { 'content-type': AP }, body: JSON.stringify(activity) })
+	return signRequest(request, privateKey, new URL(keyId), {
+		spec: 'draft-cavage-http-signatures-12',
+		currentTime: Temporal.Instant.fromEpochMilliseconds(Date.now()),
+	})
+}
+
+const pkcs8 = (bytes: Uint8Array) => crypto.subtle.importKey('pkcs8', bytes, RSA_ALGORITHM, true, ['sign'])
+
+describe('the two servers’ keys', () => {
+	it('refuses a delivery signed with the other server’s key, and ingests nothing of it', async () => {
+		const w = await world()
+		const aKey = await pkcs8(LEGACY_EMPTY_KEK.pkcs8)
+		const bKey = await pkcs8(LEGACY.pkcs8)
+		const carolUri = `${B}/ap/users/carol`
+		const noteOf = (actor: string, origin: string) => {
+			const id = `${origin}/ap/o/forged-${nextId()}`
+			return {
+				'@context': AS,
+				id: `${id}/activity`,
+				type: 'Create',
+				actor,
+				to: [PUBLIC],
+				cc: [],
+				object: { id, type: 'Note', attributedTo: actor, to: [PUBLIC], cc: [], content: '<p>x</p>' },
+			}
+		}
+		const statusesAt = async (store: typeof w.storeA, uri: string) =>
+			sql(store, 'SELECT id FROM statuses WHERE uri = ?', uri)
+		// To B: alice's key id, signed with B's (carol's) key; then, as a control, with alice's own.
+		const toB = noteOf(ALICE_URI, 'https://kopje.test')
+		const forgedB = await through(w.b, await signedPost(`${B}/inbox`, toB, bKey, `${ALICE_URI}#main-key`))
+		expect(forgedB.status).toBe(401)
+		expect(await statusesAt(w.storeB, toB.object.id)).toEqual([])
+		const realB = await through(w.b, await signedPost(`${B}/inbox`, toB, aKey, `${ALICE_URI}#main-key`))
+		expect(realB.status).toBe(202)
+		expect(await statusesAt(w.storeB, toB.object.id)).toHaveLength(1)
+		// To A: carol's key id, signed with A's (alice's) key; then with carol's own.
+		const toA = noteOf(carolUri, B)
+		const forgedA = await through(w.a, await signedPost('https://kopje.test/inbox', toA, aKey, `${carolUri}#main-key`))
+		expect(forgedA.status).toBe(401)
+		expect(await statusesAt(w.storeA, toA.object.id)).toEqual([])
+		const realA = await through(w.a, await signedPost('https://kopje.test/inbox', toA, bKey, `${carolUri}#main-key`))
+		expect(realA.status).toBe(202)
+	})
+})
+
+describe('Kopje as the quoted server (B owns the status; its real inbox, stamps and revoke)', () => {
+	async function quotedAtB(order: 'create first' | 'request first' | 'request alone') {
+		const w = await world()
+		const carolPost = await through(
+			w.b,
+			new Request(`${B}/api/v1/statuses`, {
+				method: 'POST',
+				headers: { authorization: `Bearer ${w.carolToken}`, 'content-type': 'application/json' },
+				body: JSON.stringify({ status: 'quote me', visibility: 'public' }),
+			})
+		)
+		expect(carolPost.status).toBe(200)
+		const theirs = (await carolPost.json()) as { id: string; uri: string }
+		// alice finds carol's status (A fetches it from B), and quotes it.
+		const found = await w.a.request(`/api/v2/search?q=${encodeURIComponent(theirs.uri)}&resolve=true&type=statuses`, {
+			headers: { authorization: `Bearer ${w.aliceToken}` },
+		})
+		const quotedAtA = ((await found.json()) as { statuses: { id: string }[] }).statuses[0]!.id
+		const response = await w.a.request('/api/v1/statuses', {
+			method: 'POST',
+			headers: { authorization: `Bearer ${w.aliceToken}`, 'content-type': 'application/json' },
+			body: JSON.stringify({ status: 'quoting carol', quoted_status_id: quotedAtA }),
+		})
+		expect(response.status).toBe(200)
+		const mine = (await response.json()) as { id: string; uri: string }
+		expect(await w.quoteAtA(mine.uri)).toMatchObject({ state: 'pending' })
+		const held = await w.captureForB()
+		const typeOf = async (request: Request) => ((await request.clone().json()) as { type: string }).type
+		const creates: Request[] = []
+		const requests: Request[] = []
+		for (const request of held) {
+			;((await typeOf(request)) === 'QuoteRequest' ? requests : creates).push(request)
+		}
+		expect(requests).toHaveLength(1)
+		expect(creates.length).toBeGreaterThan(0)
+		const order_ =
+			order === 'create first'
+				? [...creates, ...requests]
+				: order === 'request first'
+					? [...requests, ...creates]
+					: requests
+		const getsBefore = w.gets.length
+		for (const request of order_) {
+			expect((await through(w.b, request.clone())).status).toBe(202)
+		}
+		if (order === 'request alone') {
+			// B took the inlined instrument: it fetched nothing of alice's status.
+			expect(w.gets.slice(getsBefore)).not.toContain(mine.uri)
+			expect(await sql(w.storeB, 'SELECT id FROM statuses WHERE uri = ?', mine.uri)).toHaveLength(1)
+		}
+		// B's Accept, and the stamp it serves.
+		const accepts = (await sql<{ body: string }>(w.storeB, 'SELECT body FROM outbound_activities'))
+			.map((row) => (JSON.parse(row.body) as { activity: Record<string, unknown> }).activity)
+			.filter((activity) => activity.type === 'Accept')
+		expect(accepts).toHaveLength(1)
+		const stamp = String(accepts[0]!.result)
+		expect(stamp).toMatch(new RegExp(`^${B}/ap/users/carol/quote_authorizations/[0-9a-f]{32}$`))
+		expect(accepts[0]).toMatchObject({ actor: `${B}/ap/users/carol`, object: { id: `${mine.uri}#quote-request` } })
+		const served = await through(w.b, new Request(stamp, { headers: { accept: AP } }))
+		expect(served.status).toBe(200)
+		expect(await served.json()).toMatchObject({
+			id: stamp,
+			type: 'QuoteAuthorization',
+			attributedTo: `${B}/ap/users/carol`,
+			interactingObject: mine.uri,
+			interactionTarget: theirs.uri,
+		})
+		// B delivers its Accept: A ends accepted with B's stamp.
+		await w.deliverB()
+		expect(await w.quoteAtA(mine.uri)).toEqual({ state: 'accepted', approval_uri: stamp })
+		// carol revokes on B: A ends not accepted, and B's stamp is gone.
+		const quotingAtB = (await sql<{ id: string }>(w.storeB, 'SELECT id FROM statuses WHERE uri = ?', mine.uri))[0]!.id
+		const revoked = await through(
+			w.b,
+			new Request(`${B}/api/v1/statuses/${theirs.id}/quotes/${quotingAtB}/revoke`, {
+				method: 'POST',
+				headers: { authorization: `Bearer ${w.carolToken}` },
+			})
+		)
+		expect(revoked.status).toBe(200)
+		await w.deliverB()
+		expect(await w.quoteAtA(mine.uri)).toMatchObject({ state: 'revoked' })
+		expect((await through(w.b, new Request(stamp, { headers: { accept: AP } }))).status).toBe(404)
+	}
+
+	it('answers when A’s Create arrives before the QuoteRequest', async () => {
+		await quotedAtB('create first')
+	})
+
+	it('answers when the QuoteRequest arrives before the Create', async () => {
+		await quotedAtB('request first')
+	})
+
+	it('answers the QuoteRequest alone from its inlined instrument', async () => {
+		await quotedAtB('request alone')
 	})
 })
