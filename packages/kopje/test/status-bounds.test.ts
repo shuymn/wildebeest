@@ -856,43 +856,43 @@ describe('the table of maxima (RES-3)', () => {
 	// shape stays within 80% of ANSWER_BYTES (8 MiB) with filters included.
 	const LIMIT = 0.8 * 8 * 1024 * 1024
 
-	it('measures the escaped worst case: the most JSON', async () => {
-		const shapes = await measureShapes('escaped')
-		expect(shapes).toEqual({
-			account: { sqlite: 97_844, json: 121_710, rows: 1, nodes: 36 },
-			status: { sqlite: 2_723_443, json: 2_595_446, rows: 1_381, nodes: 2_267 },
-			quote: { sqlite: 4_873_529, json: 5_190_925, rows: 1_710, nodes: 4_536 },
-			boostOfQuote: { sqlite: 4_981_776, json: 5_564_762, rows: 1_763, nodes: 5_439 },
-			conversation: { sqlite: 6_048_097, json: 6_651_414, rows: 1_723, nodes: 4_959 },
-		})
-		for (const shape of Object.values(shapes)) {
-			expect(shape.json).toBeLessThanOrEqual(LIMIT)
-		}
-	})
-
-	it('measures mentions whose url is derived', async () => {
-		const shapes = await measureShapes('derived')
-		expect(shapes).toEqual({
-			account: { sqlite: 97_844, json: 121_710, rows: 1, nodes: 36 },
-			status: { sqlite: 2_315_443, json: 2_185_846, rows: 1_381, nodes: 2_267 },
-			quote: { sqlite: 4_057_529, json: 4_371_725, rows: 1_710, nodes: 4_536 },
-			boostOfQuote: { sqlite: 4_165_776, json: 4_745_562, rows: 1_763, nodes: 5_439 },
-			conversation: { sqlite: 5_232_097, json: 5_832_214, rows: 1_723, nodes: 4_959 },
-		})
-		for (const shape of Object.values(shapes)) {
-			expect(shape.json).toBeLessThanOrEqual(LIMIT)
-		}
-	})
-
-	it('measures the raw worst case: the most bytes read from SQLite', async () => {
-		const shapes = await measureShapes('raw')
-		expect(shapes).toEqual({
-			account: { sqlite: 114_914, json: 117_615, rows: 1, nodes: 36 },
-			status: { sqlite: 4_280_990, json: 2_157_753, rows: 1_381, nodes: 2_267 },
-			quote: { sqlite: 6_491_023, json: 4_315_539, rows: 1_710, nodes: 4_536 },
-			boostOfQuote: { sqlite: 6_616_340, json: 4_531_681, rows: 1_763, nodes: 5_439 },
-			conversation: { sqlite: 7_870_431, json: 5_726_888, rows: 1_723, nodes: 4_959 },
-		})
+	it.each<[string, Fill, Record<string, Shape>]>([
+		[
+			'the escaped worst case: the most JSON',
+			'escaped',
+			{
+				account: { sqlite: 97_844, json: 121_710, rows: 1, nodes: 36 },
+				status: { sqlite: 2_723_443, json: 2_595_446, rows: 1_381, nodes: 2_267 },
+				quote: { sqlite: 4_873_529, json: 5_190_925, rows: 1_710, nodes: 4_536 },
+				boostOfQuote: { sqlite: 4_981_776, json: 5_564_762, rows: 1_763, nodes: 5_439 },
+				conversation: { sqlite: 6_048_097, json: 6_651_414, rows: 1_723, nodes: 4_959 },
+			},
+		],
+		[
+			'mentions whose url is derived',
+			'derived',
+			{
+				account: { sqlite: 97_844, json: 121_710, rows: 1, nodes: 36 },
+				status: { sqlite: 2_315_443, json: 2_185_846, rows: 1_381, nodes: 2_267 },
+				quote: { sqlite: 4_057_529, json: 4_371_725, rows: 1_710, nodes: 4_536 },
+				boostOfQuote: { sqlite: 4_165_776, json: 4_745_562, rows: 1_763, nodes: 5_439 },
+				conversation: { sqlite: 5_232_097, json: 5_832_214, rows: 1_723, nodes: 4_959 },
+			},
+		],
+		[
+			'the raw worst case: the most bytes read from SQLite',
+			'raw',
+			{
+				account: { sqlite: 114_914, json: 117_615, rows: 1, nodes: 36 },
+				status: { sqlite: 4_280_990, json: 2_157_753, rows: 1_381, nodes: 2_267 },
+				quote: { sqlite: 6_491_023, json: 4_315_539, rows: 1_710, nodes: 4_536 },
+				boostOfQuote: { sqlite: 6_616_340, json: 4_531_681, rows: 1_763, nodes: 5_439 },
+				conversation: { sqlite: 7_870_431, json: 5_726_888, rows: 1_723, nodes: 4_959 },
+			},
+		],
+	])('measures %s', async (_name, fill, expected) => {
+		const shapes = await measureShapes(fill)
+		expect(shapes).toEqual(expected)
 		for (const shape of Object.values(shapes)) {
 			expect(shape.json).toBeLessThanOrEqual(LIMIT)
 		}
