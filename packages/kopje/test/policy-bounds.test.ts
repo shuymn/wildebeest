@@ -4492,8 +4492,8 @@ describe("R32: a delete's capture reads the smaller of the status's boosts and e
 		const followed = await read({ listeners: 4, follows: 1000, boosts: 0 })
 		expect(followed).toBeLessThanOrEqual(few + ALLOWANCE)
 		const listeners = await read({ listeners: 40, follows: 1000, boosts: 0 })
-		// Each listener more costs the view check and its walk of the status's one boost, not its follows; each of those two
-		// statements also seeks the instance's suspend blocks once (availableSql, R38).
+		// Each listener more costs the view check and its walk of the status's one boost, not its follows; each of those
+		// two statements also seeks the instance's suspend blocks once (availableSql, R38).
 		expect(listeners - followed).toBeLessThanOrEqual(36 * (ALLOWANCE + 2))
 	}, 120_000)
 
