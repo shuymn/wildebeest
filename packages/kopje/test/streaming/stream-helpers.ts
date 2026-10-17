@@ -141,6 +141,13 @@ export async function drained(h: Pick<ApiHarness, 'store'>, ...inboxes: Inbox[])
 	return result
 }
 
+// Takes every message left on a socket.
+export async function takeAll(inbox: Inbox): Promise<void> {
+	for (let left = inbox.rest().length; left > 0; left--) {
+		await inbox.next()
+	}
+}
+
 // The notifications in a stream's messages, parsed, in order.
 export function notifications(messages: readonly StreamMessage[], stream: string): { id: string; type: string }[] {
 	return messages

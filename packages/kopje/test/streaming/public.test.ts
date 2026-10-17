@@ -17,7 +17,7 @@ import {
 	seedStatus,
 	type Status,
 } from '../status-helpers'
-import { connect, drained, echo, type Inbox, settled, type StreamMessage, subscribed } from './stream-helpers'
+import { connect, drained, echo, type Inbox, settled, type StreamMessage, subscribed, takeAll } from './stream-helpers'
 import { Db } from '../../src/db/sql'
 import { streamDelete } from '../../src/domain/streaming'
 import { sha256Hex } from '../../src/security/tokens'
@@ -33,13 +33,6 @@ const PUBLIC = ['public', 'public:local', 'public:remote', 'public:media', 'publ
 // The messages left on a socket, as [the stream joined, event, the payload's status id (or the deleted id)].
 function events(inbox: Inbox): [string, string | undefined, string][] {
 	return inbox.rest().map((m) => [(m.stream ?? []).join(' '), m.event, idOf(m)])
-}
-
-// Takes every message left on a socket.
-async function takeAll(inbox: Inbox): Promise<void> {
-	for (let left = inbox.rest().length; left > 0; left--) {
-		await inbox.next()
-	}
 }
 
 function idOf(m: StreamMessage): string {
