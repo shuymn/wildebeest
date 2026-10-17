@@ -17,6 +17,7 @@ import { Db } from '../src/db/sql'
 import { PURGE_BATCH, purgeBatch } from '../src/domain/inbox'
 import { streamedNotification } from '../src/domain/notifications'
 import { createReport } from '../src/domain/reports'
+import { MODERATION_ROUNDS, REPORT_ROUND } from '../src/domain/suspension'
 import type { DeliveryDeps } from '../src/jobs/deliver'
 import { pushRound } from '../src/jobs/push'
 import type { StoreStub } from '../src/platform/store-client'
@@ -629,27 +630,55 @@ describe('admin.report: interleavings with resolution', () => {
 		])
 	})
 
-	it("holds a suspension's resolution between its rounds while another report arrives", async () => {
+	it("pauses a suspension's resolution part-way, between two job calls, while another report arrives", async () => {
 		const { h, owner, alice, bob } = await world()
 		const admin = await adminToken(h)
-		// bob is the reported account here: a local one, which the admin can suspend.
+		// bob is the reported account here: a local one, which the admin can suspend. The first report notifies; then
+		// enough reports that one call of the jobs (MODERATION_ROUNDS rounds of REPORT_ROUND) cannot resolve them all.
 		const first = await report(h, alice, bob.id)
+		const frozen = 1 + MODERATION_ROUNDS * REPORT_ROUND
+		await sql(
+			h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO reports (account_id, target_account_id, status_ids, uri, created_at)
+			SELECT ?2, ?3, '[]', 'https://kopje.test/actor#reports/' || lower(hex(randomblob(16))), ?4 FROM n`,
+			frozen - 1,
+			alice.id,
+			bob.id,
+			new Date(NOW).toISOString()
+		)
 		expect(await reportsShown(h, owner)).toEqual([[alice.id, first]])
 		h.now.mockReturnValue(NOW + 1000)
 		expect((await suspend(h, admin, bob.id)).status).toBe(200)
-		// The suspension's job holds the first report (frozen at the suspension) and has resolved nothing yet: its rounds
-		// run only when the jobs are run. bob is unavailable meanwhile, so nothing can report him.
-		const refused = await h.request('/api/v1/reports', bearer(alice.token, json({ account_id: bob.id })))
-		expect(refused.status).toBe(404)
-		// Unsuspended while the job still holds the report: the report is unresolved, so a new one is not the first.
+		// One real call of the jobs: it resolves part of the frozen reports, the first among them, and leaves the rest.
+		expect((await h.store.runInboundJobs(BUILD, { now: NOW + 1000 })).pending).toBe(true)
+		const left = (await unresolved(h.store)).length
+		expect(left).toBeGreaterThan(0)
+		expect(left).toBeLessThan(frozen)
+		expect(await unresolved(h.store)).not.toContain(first)
+		// The next call waits at a gate: the job has more rounds to run, but none runs until the gate opens.
+		let open: () => void = () => {}
+		const gate = new Promise<void>((resolve) => {
+			open = resolve
+		})
+		const next = (async () => {
+			await gate
+			return h.store.runInboundJobs(BUILD, { now: NOW + 2000 })
+		})()
+		// Meanwhile bob is unsuspended and reported again: reports frozen at the suspension are still unresolved, so the
+		// new one is not the first unresolved report of bob, and notifies no one.
 		h.now.mockReturnValue(NOW + 2000)
 		expect((await unsuspend(h, admin, bob.id)).status).toBe(200)
-		const second = await report(h, alice, bob.id)
+		const later = await report(h, alice, bob.id)
 		expect(await reportsShown(h, owner)).toEqual([[alice.id, first]])
-		// Released: the job finds the account unsuspended and ends without resolving it.
+		// Released: the held call finds bob unsuspended and ends the job; the runner drains.
+		open()
+		await next
 		await runJobs(h.store)
-		expect(await unresolved(h.store)).toContain(first)
-		expect(await unresolved(h.store)).toContain(second)
+		expect(await sql(h.store, 'SELECT count(*) AS n FROM moderation_jobs')).toEqual([{ n: 0 }])
+		const after = await unresolved(h.store)
+		expect(after).toHaveLength(left + 1)
+		expect(after).toContain(later)
 		expect(await reportsShown(h, owner)).toEqual([[alice.id, first]])
 	})
 
