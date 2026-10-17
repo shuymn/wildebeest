@@ -24,10 +24,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Changed
 
-- Deliveries are checked again right before they are sent, and what is sent is read at that moment. Content (posts,
-  edits, boosts, likes, follows, profile updates) is no longer sent to an inbox whose recipients are all gone (deleted,
-  or being deleted) by then; deletions and other withdrawals still go. A delivery queued before this version knows no
-  recipients and is checked by its sender only. Each delivery costs one more call to the Store.
+- Content (posts, edits, boosts, likes, follows, profile updates) is checked right before it is sent, and what is
+  sent is read at that moment: it is not sent to an inbox whose recipients are all deleted or being deleted by then;
+  deletions and other withdrawals still go. A delivery queued before this version knows no recipients and is checked
+  by its sender only. Each delivery costs one more call to the Store.
 - Lists that hide some of their rows from the viewer (timelines, account statuses, bookmarks, favourites,
   notifications, followers and following, who favourited or boosted, notification requests, list members,
   endorsements, the profile page and the outbox) read a bounded window of rows per request, so a long run of hidden
@@ -42,8 +42,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Fixed
 
-- Suspending an account through the admin API no longer resolves reports that were filed, reopened or edited after
-  the suspension. Such reports stay unresolved, whatever times the requests carried.
+- Suspending an account through the admin API leaves reports filed, reopened or edited after the suspension
+  unresolved, whatever times the requests carried.
 - A page of remote accounts no longer risks the isolate's 128 MB memory limit when their actor documents carry huge
   profile-field lists. Each account now reads at most 16 fields, cut to their shown length and to 32 KiB of JSON, and
   shows only the leading fields whose sanitized names and values fit 32 KiB once serialized, dropping the rest whole.

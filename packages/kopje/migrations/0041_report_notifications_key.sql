@@ -2,8 +2,8 @@
 -- (checksummed).
 --
 -- notifications_natural (0000_initial) gains the report (0040), so a reporter's reports of two accounts each keep their
--- admin.report notification: without it, the key held one per reporter, and the second would replace the first. Every
--- other notification has no report, so its key is unchanged, and reads by the key's leading columns still use it.
+-- admin.report notification. Every other notification has no report, so its key is unchanged, and reads by the key's
+-- leading columns still use it.
 --
 -- Cost: the index is rebuilt over every notification (a sort of the notifications); nothing else is read. It is kept
 -- apart from 0040, whose own cost is the schema verification every file pays. Measured on the benchmark store of

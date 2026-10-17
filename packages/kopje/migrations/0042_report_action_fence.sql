@@ -1,9 +1,8 @@
 -- Kopje Store schema 0042: the report fence of a suspension. Never edit after release (checksummed).
 --
--- A suspension resolves only the reports it froze (src/domain/reports.ts resolveSuspensionReports, R37, VIS-29). It
--- judged them by comparing two requests' clocks, so a reopen applied after the suspension, with an earlier clock, was
--- resolved anyway. The fence is now the moderation log id, which is given in commit order and never twice
--- (0029_admin_reports):
+-- A suspension resolves only the reports it froze (src/domain/reports.ts resolveSuspensionReports, R37, VIS-29). The
+-- fence is the moderation log id, given in commit order and never twice (0029_admin_reports), so no request's clock
+-- can make a later reopen look older:
 --
 --   reports.last_action_id         the log id of the last admin write to the report, stamped in that write's
 --                                  transaction. NULL (no admin write) counts as 0.
