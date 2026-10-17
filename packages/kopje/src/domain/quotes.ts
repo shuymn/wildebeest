@@ -864,11 +864,11 @@ export function recheckStamp(db: Db, actor: { id: string }, approvalUri: string,
 // ---------------------------------------------------------------------------------------------------------------
 
 // The window of the quotes list of `quotedId`: the quoting statuses of at most `limit` of its accepted quotes strictly
-// between `max` and `min` (null: no bound), newest first, or oldest first when `ascending`. One seek of
-// quotes_accepted (migration 0036_quotes_list) from the cursor; the caller applies the read rule to these ids only.
-// With `audience` (the viewer's account id, null for anonymous), only quoting statuses whose visibility and audience let
-// that viewer see them are candidates (audienceSql, docs/visibility.md "Read bounds"), so none supplies a cursor; the
-// walk passes the others. Without it (the quoted author, who sees every quote, R35), it reads at most `limit` entries.
+// between `max` and `min` (null: no bound), newest first, or oldest first when `ascending`. One seek of quotes_accepted
+// (migration 0036_quotes_list) from the cursor; the caller applies the read rule to these ids only. With `audience`
+// (the viewer's account id, null for anonymous), only quoting statuses whose visibility and audience let that viewer
+// see them are candidates (audienceSql, docs/visibility.md "Read bounds"), so none supplies a cursor; the walk passes
+// the others. Without it (the quoted author, who sees every quote, R35), it reads at most `limit` entries.
 export function acceptedQuoteWindow(
 	db: Db,
 	quotedId: string,

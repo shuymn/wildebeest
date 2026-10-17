@@ -1,11 +1,7 @@
 import type { Db } from '../db/sql'
 
-// Candidate windows (docs/visibility.md "Read bounds", RES-7): a paged read whose rule hides rows (availability,
-// visibility, blocks, mutes, domain blocks) reads at most a window of candidates from its cursor, in cursor order,
-// through an index and without the rule; it then applies the rule to those candidates alone and returns what passes, up
-// to the page. A page may so be short or empty; when the window ended before the cursor's range did, the page's far end
-// is the window's last candidate and its next link is offered, so paging moves on by the window and reaches what lies
-// behind any hidden range. The quotes list (statuses.ts statusQuotes) reads its window the same way.
+// Candidate windows: the bound, the cut and the continuation of every paged read whose rule hides rows, and the cursor
+// rule its candidates keep, are docs/visibility.md "Read bounds" (RES-7).
 
 // The candidates of a read for a page of `limit`: three pages, at least 40, and never fewer than a stream's.
 export function readWindow(limit: number): number {

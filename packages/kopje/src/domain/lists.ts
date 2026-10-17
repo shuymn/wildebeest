@@ -149,10 +149,10 @@ export const deleteList = userWriteOperation<{ id: string }, boolean>(
 )
 
 // A page of an account list its owner keeps (list members, endorsements), by account id, newest first: `candidates`
-// selects (id) rows with ?1 the owner, ?2 and ?3 the exclusive bounds and ?4 the cap, in the order `order` gives; `rule`
-// (over `a` and `l`) decides which are listed. Paged, a page reads one window (windows.ts). Without a page (limit=0),
-// the answer is the whole list up to `limit`: windows one after another until that many pass or the list ends, as the
-// list is the owner's own and bounded by their follows.
+// selects (id) rows with ?1 the owner, ?2 and ?3 the exclusive bounds and ?4 the cap, in the order `order` gives;
+// `rule` (over `a` and `l`) decides which are listed. Paged, a page reads one window (windows.ts). Without a page
+// (limit=0), the answer is the whole list up to `limit`: windows one after another until that many pass or the list
+// ends, as the list is the owner's own and bounded by their follows.
 export function ownedAccountsPage(
 	db: Db,
 	owner: string,
@@ -190,7 +190,8 @@ export function ownedAccountsPage(
 
 // GET /api/v1/lists/:id/accounts: the members, unavailable accounts left out (Account.without_suspended), by account
 // id, newest first, paged by the account id (paginate_by_max_id); page null answers every member (limit=0), up to
-// MAX_LIST_MEMBERS_ANSWERED (ownedAccountsPage). A pending member is listed too. Null when the list is not the viewer's.
+// MAX_LIST_MEMBERS_ANSWERED (ownedAccountsPage). A pending member is listed too. Null when the list is not the
+// viewer's.
 export const listAccounts = userReadOperation<
 	{ id: string; page: PageQuery | null; present: Present },
 	Page<Account> | null

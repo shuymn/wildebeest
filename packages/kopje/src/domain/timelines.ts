@@ -172,11 +172,9 @@ export const homeTimeline = userReadOperation<{ page: PageQuery; present: Presen
 	}
 )
 
-// Home's candidate window (windows.ts mergedWindow): at most streamWindow(limit) candidates of each stream from the
-// cursor, merged up to the highest end of a stream that filled, at most readWindow(limit). Each stream is one index
-// walk that stops at its cap, whatever the rule leaves out of it, so a page reads at most a window per followed
-// account and per followed hashtag, plus one, however long the hidden ranges among them. Mastodon filters home as it
-// is written (FeedManager#filter_from_home at fan-out); Kopje filters it as it is read, so a page may be short.
+// Home's candidate window (mergedWindow; docs/visibility.md "Read bounds"): each stream is one index walk from the
+// cursor that stops at streamWindow(limit), whatever the rule leaves out, and the merge ends at the highest end of a
+// stream that filled, so no candidate below it is passed over. Candidates keep audienceSql.
 function homeWindow(db: Db, viewer: UserContext, cursor: Cursor): Window {
 	const order = orderOf(cursor)
 	const authors = `SELECT fa.account_id FROM (${FOLLOWED}) fa
@@ -322,9 +320,8 @@ export const listTimeline = userReadOperation<{ id: string; page: PageQuery; pre
 	}
 )
 
-// A list's candidate window, as homeWindow's: at most streamWindow(limit) of each active member's statuses from the
-// cursor, merged up to the highest end of a member's that filled, at most readWindow(limit). A member the rule rejects
-// as a whole has no stream.
+// A list's candidate window, as homeWindow's, with a stream per active member; a member the rule rejects as a whole
+// has no stream.
 function listWindow(db: Db, viewer: UserContext, listId: string, cursor: Cursor): Window {
 	const order = orderOf(cursor)
 	const authors = `SELECT la.account_id FROM list_accounts la WHERE la.list_id = ?6
@@ -548,9 +545,9 @@ function tagConditions(input: { local: boolean; remote: boolean; onlyMedia: bool
 		AND ${publicConditions(input.local, input.remote, input.onlyMedia)}`
 }
 
-// A hashtag timeline's candidate window: each name's stream, at most streamWindow(limit) from the cursor, merged as
-// home's (mergedWindow), at most readWindow(limit). CROSS JOIN keeps status_tags outermost, and the cursor is a plain
-// range (rangeSql), so each stream starts in the index at the cursor, walks it in order and stops at its cap.
+// A hashtag timeline's candidate window, as homeWindow's, with a stream per name. CROSS JOIN keeps status_tags
+// outermost, and the cursor is a plain range (rangeSql), so each stream starts in the index at the cursor, walks it in
+// order and stops at its cap.
 function tagWindow(
 	db: Db,
 	viewer: ViewerContext,
