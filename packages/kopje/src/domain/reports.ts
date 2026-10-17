@@ -10,7 +10,7 @@ import {
 } from './accounts'
 import { flagActivity, instanceActorUri, recordOutbound } from './activities'
 import { type AdminAccount, presentAdminAccounts } from './admin-accounts'
-import { adminAccountIdOnce } from './admin-authority'
+import { accessAdminRefusal, adminAccountIdOnce } from './admin-authority'
 import { availableSql, reportForwardees } from './audience'
 import {
 	ADMIN_PERMISSION,
@@ -28,6 +28,7 @@ import { presentStatuses, type Status } from './status-presenter'
 import { accountStatusIds } from './timelines'
 import type { Db } from '../db/sql'
 import { blockedDomain } from '../platform/domain-name'
+import type { ImportAuthority } from '../platform/store-admin'
 
 // Reports (Mastodon 4.5's POST /api/v1/reports: Api::V1::ReportsController, ReportService, Report; migration
 // 0022_reports). A local account reports an account, optionally naming statuses of it and instance rules, and may ask
@@ -614,9 +615,21 @@ export function resolveSuspensionReports(
 	return { last: rows.at(-1)?.id ?? null, read: rows.length, resolved: frozen.length }
 }
 
+export type ReportTargetPage =
+	{ ok: true; page: string } | { ok: false; code: 'wrong-authority' | 'report-not-found'; message: string }
+
 // GET /admin/reports/:id (the Access admin's, app/admin.ts): the web page of the account report `id` is about (its
-// Account entity's url), or null when `id` is no report's (Report.find).
-export const reportTargetPage = readOperation<{ id: string; origin: string }, string | null>((db, { id, origin }) => {
+// Account entity's url). The Access admin is checked against the saved configuration in this transaction, before the
+// report is read (accessAdminRefusal), so a change of the settings while the request was being authenticated refuses
+// it; an id that is no report's is not found (Report.find).
+export const reportTargetPage = readOperation<
+	{ authority: ImportAuthority; id: string; origin: string },
+	ReportTargetPage
+>((db, { authority, id, origin }) => {
+	const refused = accessAdminRefusal(db, authority, 'only an Access admin opens a report')
+	if (refused !== null) {
+		return { ok: false, code: 'wrong-authority', message: refused }
+	}
 	const row = /^\d{1,18}$/.test(id)
 		? db.first<{ url: string | null; uri: string; username: string; domain: string | null }>(
 				`SELECT a.url, a.uri, a.username, a.domain FROM reports r JOIN accounts a ON a.id = r.target_account_id
@@ -624,7 +637,9 @@ export const reportTargetPage = readOperation<{ id: string; origin: string }, st
 				id
 			)
 		: undefined
-	return row === undefined ? null : accountUrl(row, origin)
+	return row === undefined
+		? { ok: false, code: 'report-not-found', message: 'report not found' }
+		: { ok: true, page: accountUrl(row, origin) }
 })
 
 // Whether `id` is a report's (Admin::AccountAction#report: Report.find, RecordNotFound otherwise).

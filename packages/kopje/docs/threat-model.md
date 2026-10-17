@@ -731,7 +731,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   while its recipient is the current OAuth admin (R37), so it leaves every read when `admin_email` changes or the match
   fails closed, and comes back with the match; it goes with its report (a remote account's purge deletes it before the
   report). `GET /admin/reports/:id`, where clients open it, redirects the Access admin to the reported account's web
-  page and reads nothing for anyone else. `notifyStaff` and `reportTargetPage` in `src/domain/reports.ts`, `shownSql` in
+  page and reads nothing for anyone else: the Access admin is checked again against the saved settings in the
+  read's transaction (`accessAdminRefusal`), so a settings change during the request's authentication refuses it. `notifyStaff` and `reportTargetPage` in `src/domain/reports.ts`, `shownSql` in
   `src/domain/audience.ts`, `adminAccountIdOnce` in `src/domain/admin-authority.ts`, migration
   `0040_report_notifications` and `0041_report_notifications_key` (one notification per report and recipient);
   `test/report-notifications.test.ts`, `test/policy-oracle.test.ts`,

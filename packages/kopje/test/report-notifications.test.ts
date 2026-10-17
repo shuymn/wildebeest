@@ -623,6 +623,55 @@ describe('admin.report: bounds (RES-7)', () => {
 })
 
 describe('GET /admin/reports/:id (where clients open an admin.report)', () => {
+	// The Store stub with its report read held at a gate, after the /admin middleware has authenticated the request.
+	function gatedStore(store: StoreStub) {
+		let reached: () => void = () => {}
+		let release: () => void = () => {}
+		const atGate = new Promise<void>((resolve) => {
+			reached = resolve
+		})
+		const gate = new Promise<void>((resolve) => {
+			release = resolve
+		})
+		const stub = new Proxy(store, {
+			get(target, name) {
+				if (name === 'reportTargetPage') {
+					return async (...args: Parameters<StoreStub['reportTargetPage']>) => {
+						reached()
+						await gate
+						return target.reportTargetPage(...args)
+					}
+				}
+				if (typeof name !== 'string' || name === 'then') {
+					return undefined
+				}
+				// Every other call goes to the Store as it is (an RPC stub's methods are called on the stub itself).
+				const methods = target as unknown as Record<string, (...a: unknown[]) => unknown>
+				return (...args: unknown[]) => methods[name]!(...args)
+			},
+		})
+		return { stub, atGate, release }
+	}
+
+	it.each([
+		['admin_email', 'someone-else@kopje.test'],
+		['access_admin_aud', 'aud-another-application'],
+	])('refuses in the read when %s changes after the request was authenticated', async (name, value) => {
+		const { h, alice, carol } = await world()
+		const team = await adminTeam()
+		await setTeamAccess(h.store, team)
+		const id = await report(h, alice, carol)
+		const { stub, atGate, release } = gatedStore(h.store)
+		const { as } = adminHarness(stub, team)
+		const pending = as(adminClaims(), `/admin/reports/${id}`)
+		await atGate
+		await setSetting(h.store, name, value)
+		release()
+		const response = await pending
+		expect(response.status).toBe(403)
+		expect(response.headers.get('Location')).toBeNull()
+	})
+
 	it('redirects the Access admin to the reported account’s web page; 404 for no report; refuses anyone else', async () => {
 		const { h, alice, bob, carol } = await world()
 		const team = await adminTeam()
