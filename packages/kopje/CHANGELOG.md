@@ -8,6 +8,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+## [0.1.0-rc.11] - 2026-10-17
+
+An eleventh release candidate of the first release, published under the npm dist-tag `next`.
+
 ### Added
 
 - The streaming API's `list` stream (`read` or `read:statuses`, with `list` naming one of the account's lists) carries
