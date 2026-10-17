@@ -22,6 +22,15 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   account's profile. It is behind the `/admin` Access application like the rest of `/admin`: anyone else is refused
   before the report is looked up, and an unknown report answers 404.
 
+### Changed
+
+- Deliveries are checked again right before they are sent, after the signing key is loaded and the inbox's address
+  checked, and what is sent is read at that moment. Content (posts, edits, boosts, likes, follows, profile updates) is
+  no longer sent to an inbox whose recipients are all gone (deleted, or being deleted) by then; deletions and other
+  withdrawals still go. Each delivery costs one more call to the Store. A delivery queued before this version knows no
+  recipients and is checked by its sender only. This is the groundwork for suspending remote accounts and blocking
+  domains, which later versions add.
+
 ### Fixed
 
 - Suspending an account through the admin API no longer resolves reports that were filed, reopened or edited after
@@ -35,7 +44,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds three migrations, applied on the first request after the deploy; a rollback to an earlier version
+- Store schema: adds four migrations, applied on the first request after the deploy; a rollback to an earlier version
   needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0040_report_notifications`: lets a notification name a report. It reads each stored notification once and no
       other table: on a benchmark store of 1,000,000 accounts, 3,000,000 follows, 2,000,000 statuses and 2,000,000
@@ -50,6 +59,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       (at most 10,000 entries) and the suspensions still resolving reports, not with the number of reports. On the same
       benchmark store its upgrade took 3.1 seconds (3.1 in two more runs; 6.1 on a loaded machine), a pause of a few
       seconds on the first request after the deploy.
+    - `0043_delivery_provenance`: lets each delivery record the recipients behind it. It changes the schema only and
+      reads no row, however many deliveries are queued. On the same benchmark store its upgrade took 3.1 seconds (3.1
+      in a second run).
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.13] - 2026-10-17

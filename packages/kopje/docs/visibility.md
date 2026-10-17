@@ -509,6 +509,29 @@ a silent recipient of an addressed activity by a copy of its own at its personal
 an activity without `to` by shared inbox, else personal inbox. No other SQL turns follows into inboxes or reads an
 account's shared inbox (the architecture test below).
 
+### The send-time check (VIS-30)
+
+Each target also records the recipients behind it, so the check below can tell whose inbox it is: an inbox says
+nothing about the accounts it serves, and may be on another host than theirs. `recipientsFor` returns one entry per
+recipient (its id and the host of its actor id) rather than distinct inboxes, and `targetsOf` merges them per inbox
+across followers, addressed accounts, silent recipients, poll voters and `reachOf` before deduplicating. A target lists
+up to 16 accounts and their hosts; above 16 it is marked `many` ("not all unavailable"). A target that also serves an
+inbox with unknown recipients (a retraction's earlier receivers) has none.
+
+At the claim, and again at confirmation right before the POST (`confirmDelivery`), a row that is not a retraction is
+dropped when:
+
+| Rule     | Refused when                                                         |
+| -------- | -------------------------------------------------------------------- |
+| sender   | the signer is unavailable (R1), but for its own suspension `Update`  |
+| inbox    | the host policy (`host-policy.ts`) refuses the inbox's host          |
+| accounts | it lists accounts, and none of them exists and is available (R1)     |
+| domains  | it lists hosts, and the host policy refuses every one                |
+
+`availableSql` reads an unknown id as available, so the accounts rule joins `accounts`: a purged recipient counts as
+gone. A row without provenance gets the sender and inbox rules only. Retractions are never dropped. The host policy refuses
+no host until instance domain blocks exist (phase B2a). The oracle's `sends` in `test/policy-model.ts` states the rule.
+
 ## Status ids the presenter accepts
 
 The status presenter (`src/domain/status-presenter.ts`) turns ids into Mastodon `Status` entities for every read path

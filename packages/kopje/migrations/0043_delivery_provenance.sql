@@ -14,8 +14,11 @@
 -- receivers of a retraction. The check then reads the inbox host only. The JSON arrays carry no CHECK.
 --
 -- Cost: three ALTERs adding a column with no default and no CHECK, a change of the schema alone that reads and
--- writes no row (test/migrations.test.ts, 0043). Measured on the benchmark store of test/bench/migration-cost.ts in
--- workerd's local Durable Object SQLite: see the CHANGELOG entry for this release.
+-- writes no row, however many deliveries are queued (test/migrations.test.ts, 0043). Measured on the benchmark store
+-- of test/bench/migration-cost.ts (1,000,000 accounts, 3,000,000 follows, 2,000,000 statuses with their mentions and
+-- tags, 2,000,000 notifications, 200,000 quotes, 10,000 reports, 20 local accounts) in workerd's local Durable Object
+-- SQLite: 3,143 ms for the upgrade of this file through the kernel (3,059 ms in a second run, at load average 3 to 5),
+-- within the 5,000 ms each migration file may take; almost all of it is the schema verification every file pays.
 
 ALTER TABLE deliveries ADD COLUMN recipient_accounts TEXT;
 ALTER TABLE deliveries ADD COLUMN recipient_domains TEXT;
