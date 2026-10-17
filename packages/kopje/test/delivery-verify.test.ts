@@ -503,8 +503,9 @@ describe('copies as sent on the wire (VIS-2, VIS-7)', () => {
 	})
 })
 
-describe('outbox pages', () => {
-	it('run no count query', async () => {
+describe('the outbox', () => {
+	// The collection's totalItems is the account's stored statuses_count (activities.ts getOutbox).
+	it('runs no count query, for a page or for the collection', async () => {
 		const h = await community(['alice'])
 		await post(h, h.users.alice, { status: 'hello' })
 		const queries = await runInDurableObject(h.store, (_instance, state) => {
@@ -526,6 +527,7 @@ describe('outbox pages', () => {
 			return { page, collection: seen }
 		})
 		expect(queries.page.some((q) => /count\(/i.test(q))).toBe(false)
-		expect(queries.collection.some((q) => /count\(/i.test(q))).toBe(true)
+		expect(queries.collection.some((q) => /count\(/i.test(q))).toBe(false)
+		expect(queries.collection.length).toBeGreaterThan(0)
 	})
 })
