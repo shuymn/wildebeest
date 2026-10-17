@@ -143,7 +143,9 @@ export function activityEnvelope(
 	return { ok: true, actor, id, type }
 }
 
-// The actor an activity's envelope names, read within the JSON bounds (RES-2); null when there is no such envelope.
+// The actor of an activity's envelope, read within the JSON bounds (RES-2); null when the envelope is unusable: no
+// object, no ActivityStreams context, or no single actor, id and type (an actor array included), which no handler
+// reads.
 function envelopeActor(body: Uint8Array): string | null {
 	let json: unknown
 	try {
@@ -410,8 +412,13 @@ export async function receiveInbound(deps: InboundDeps, request: InboundRequest)
 
 	// Decision 1: the actor of the bounded envelope is judged before anything is verified, whether or not its type is
 	// one Kopje reads, so that no activity of a covered actor (an unsupported or malformed one included) is fetched for.
+	// An envelope that names no usable actor is answered as the ignored activity it is, before verification fetches
+	// anything: no handler would read it, and its actor could not be judged.
 	const named = parsed.ok ? parsed.actor : envelopeActor(request.body)
-	if (named !== null && (await callStore(() => deps.store().inboundDomainBlocked(deps.build, { uri: named })))) {
+	if (named === null) {
+		return { status: 202, reason: parsed.ok ? 'unusable' : parsed.reason }
+	}
+	if (await callStore(() => deps.store().inboundDomainBlocked(deps.build, { uri: named }))) {
 		return parsed.ok
 			? domainBlocked(deps, request, headers, parsed, { origin, state, budget })
 			: { status: 202, reason: 'domain-blocked' }

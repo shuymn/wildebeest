@@ -173,8 +173,17 @@ describe("a covered actor's activities that Kopje does not read are judged befor
 			actor: bob.uri,
 			object: 7,
 		}
+		// Envelopes no handler reads: an actor array naming bob (valid ActivityStreams), and bob's activity without an id
+		// or a type. They are answered before verification, whoever the actor is.
+		const create = { '@context': AS, id: `${bob.uri}/statuses/8/activity`, type: 'Create', actor: bob.uri, object: 7 }
+		const { id: _id, ...noId } = create
+		const { type: _type, ...noType } = create
+		const unusable = [{ ...create, actor: [bob.uri] }, noId, noType]
 		expect(await t.post(bob, flag, signer)).toBe(202)
 		expect(await t.post(bob, malformed, signer)).toBe(202)
+		for (const body of unusable) {
+			expect(await t.post(bob, body, signer)).toBe(202)
+		}
 		expect(t.web.fetched.slice(fetched)).toEqual([])
 	})
 })

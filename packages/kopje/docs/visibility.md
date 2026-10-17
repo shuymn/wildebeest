@@ -561,7 +561,8 @@ severity `suspend` or `noop`.
   `Delete`, `DeleteActor`, `Undo` and `Reject` before any fetch, and verifies those only against a key the Store
   already holds, of any age, with no fetch (a rotated key fails). The Store's gate holds such an actor in every round,
   as it holds an individually suspended one, without the routing refresh; an actor of a covered host with no stored
-  row is ignored.
+  row is ignored. An envelope that names no single actor, id and type (an actor array included) is answered as
+  ignored before verification, so it never causes a fetch.
 
 ### The send-time check (VIS-30)
 
