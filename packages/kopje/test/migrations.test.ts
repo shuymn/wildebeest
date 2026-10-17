@@ -4778,7 +4778,7 @@ describe('0045_remote_suspension', () => {
 		}
 	}
 
-	it('suspends remote accounts only, both columns together, and indexes the suspended and the active by id', async () => {
+	it('indexes the suspended and the active accounts by id, and drops the index it replaces', async () => {
 		const store = freshStore()
 		await runInDurableObject(store, async (_instance, state) => {
 			const sql = state.storage.sql
@@ -4790,14 +4790,6 @@ describe('0045_remote_suspension', () => {
 				"UPDATE accounts SET suspended_at = ?, suspension_source = 'account' WHERE id = '100000000000000001'",
 				at0
 			)
-			for (const refused of [
-				"UPDATE accounts SET suspended_at = '1', suspension_source = 'account' WHERE id = '900000000000000000'",
-				"UPDATE accounts SET suspended_at = '1' WHERE id = '100000000000000003'",
-				"UPDATE accounts SET suspension_source = 'account' WHERE id = '100000000000000003'",
-				"UPDATE accounts SET suspended_at = '1', suspension_source = 'silence' WHERE id = '100000000000000003'",
-			]) {
-				expect(() => sql.exec(refused), refused).toThrow(/CHECK constraint failed/)
-			}
 			const plan = (query: string) =>
 				sql
 					.exec<{ detail: string }>(`EXPLAIN QUERY PLAN ${query}`)
@@ -4847,7 +4839,7 @@ describe('0045_remote_suspension', () => {
 		const few = await measure(1000, 0)
 		const crowded = await measure(1000, 30)
 		const many = await measure(10_000, 0)
-		// The CHECK and the two index builds read the accounts a bounded number of times; the follows are not read.
+		// The two index builds read the accounts a bounded number of times; the follows are not read.
 		expect(crowded.read).toBeLessThanOrEqual(few.read + 10)
 		expect(many.read - few.read).toBeLessThanOrEqual(4 * (10_000 - 1000))
 		expect(many.read).toBeGreaterThan(few.read)

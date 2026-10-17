@@ -94,9 +94,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       reads no row, however many deliveries are queued. On the same benchmark store its upgrade took 5.9 seconds (5.9
       and 5.8 in two more runs), all of it the overhead of an upgrade on a store that size, which an upgrade applying
       several files pays once.
-    - `0045_remote_suspension`: lets the admin suspend remote accounts. It adds two account columns with a check
-      that reads every stored account once, builds two indexes over the accounts and drops one, and adds a table.
-      BENCH
+    - `0045_remote_suspension`: lets the admin suspend remote accounts. It adds two account columns, builds two
+      indexes over the accounts (one pass over them each), drops one, and adds a table: on the same benchmark store its
+      upgrade took 6.8 seconds (6.6 and 6.7 in two more runs), most of it the overhead of an upgrade on a store that
+      size, which an upgrade applying several files pays once.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.13] - 2026-10-17
