@@ -1794,7 +1794,7 @@ describe("markers read the viewer's rows, not every account's (RES-7)", () => {
 
 // Endorsements and private notes (R28) add a dimension: the accounts one account endorses and keeps notes on. A page
 // of endorsements reads the owner's from the cursor through the primary key, and a relationship looks its endorsement
-// and note up by pair, so they read the same rows whether the viewer endorses and keeps notes on 20 accounts or 2,000.
+// and note up by pair, so they read the same rows whether the viewer endorses and keeps notes on 60 accounts or 2,000.
 describe('endorsements and notes read a page, however many an account has (RES-7)', () => {
 	const VIEWER_ID = '640000000000000000'
 	const ENDORSING_TOKEN = 'endorsing-token'
@@ -1844,8 +1844,9 @@ describe('endorsements and notes read a page, however many an account has (RES-7
 		return store
 	}
 
-	it('reads the same rows with 20 or 2,000, on the newest, a middle and the oldest page', async () => {
-		const few = await endorsing(20)
+	// The fewer fill the read's window (readWindow: 60 for a page of 20).
+	it('reads the same rows with 60 or 2,000, on the newest, a middle and the oldest page', async () => {
+		const few = await endorsing(60)
 		const many = await endorsing(2000)
 		const credential = { tokenHash: ENDORSING_TOKEN, scope: 'read', now: NOW } as const
 		const grown: string[] = []
@@ -1878,7 +1879,7 @@ describe('endorsements and notes read a page, however many an account has (RES-7
 })
 
 // A list's members add a dimension: the accounts one list holds. A page of members reads the list's from the cursor
-// through the primary key, so it reads the same rows whether the list holds 20 accounts or 2,000.
+// through the primary key, so it reads the same rows whether the list holds 60 accounts or 2,000.
 describe("a list's members read a page, however many it holds (RES-7)", () => {
 	const OWNER_ID = '650000000000000000'
 	const LIST_ID = '659000000000000000'
@@ -1925,8 +1926,9 @@ describe("a list's members read a page, however many it holds (RES-7)", () => {
 		return store
 	}
 
-	it('reads the same rows with 20 or 2,000, on the newest, a middle and the oldest page', async () => {
-		const few = await holding(20)
+	// The fewer fill the read's window (readWindow: 60 for a page of 20).
+	it('reads the same rows with 60 or 2,000, on the newest, a middle and the oldest page', async () => {
+		const few = await holding(60)
 		const many = await holding(2000)
 		const credential = { tokenHash: OWNER_TOKEN, scope: 'read', now: NOW } as const
 		const grown: string[] = []

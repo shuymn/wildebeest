@@ -577,21 +577,34 @@ export const unreadCount = userReadOperation<UnreadCountInput, { count: number }
 	if (input.limit === 0) {
 		return { count: 0 }
 	}
-	const { rows } = shownWindow(
-		db,
-		viewer,
-		{ includeFiltered: input.includeFiltered || input.accountId !== null, range: { max: 'NULL', min: '?3' } },
-		`(?4 IS NULL OR n.type IN (SELECT value FROM json_each(?4)))
-		AND n.type NOT IN (SELECT value FROM json_each(?5))
-		AND (?6 IS NULL OR n.from_account_id = ?6)`,
-		'ORDER BY n.id ASC LIMIT ?7',
-		notificationsMarker(db, viewer.accountId),
-		input.types.length === 0 ? null : JSON.stringify(input.types),
-		JSON.stringify(input.excludeTypes),
-		input.accountId,
-		GROUP_WALK
-	)
-	return { count: Math.min(rows.length, input.limit) }
+	// In chunks of `limit` and then twice as large as the last, as walkGroups reads, until `limit` are shown.
+	let shown = 0
+	let read = 0
+	let min = notificationsMarker(db, viewer.accountId)
+	while (shown < input.limit && read < GROUP_WALK) {
+		const chunk = Math.min(Math.max(input.limit, read), GROUP_WALK - read)
+		const { rows, candidates } = shownWindow(
+			db,
+			viewer,
+			{ includeFiltered: input.includeFiltered || input.accountId !== null, range: { max: 'NULL', min: '?3' } },
+			`(?4 IS NULL OR n.type IN (SELECT value FROM json_each(?4)))
+			AND n.type NOT IN (SELECT value FROM json_each(?5))
+			AND (?6 IS NULL OR n.from_account_id = ?6)`,
+			'ORDER BY n.id ASC LIMIT ?7',
+			min,
+			input.types.length === 0 ? null : JSON.stringify(input.types),
+			JSON.stringify(input.excludeTypes),
+			input.accountId,
+			chunk
+		)
+		shown += rows.length
+		read += candidates.length
+		min = candidates.at(-1) ?? min
+		if (candidates.length < chunk) {
+			break
+		}
+	}
+	return { count: Math.min(shown, input.limit) }
 })
 
 // GET /api/v2/notifications/unread_count: how many groups the notifications newer than the marker make, walked oldest

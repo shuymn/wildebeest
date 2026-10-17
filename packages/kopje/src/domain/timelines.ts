@@ -186,7 +186,8 @@ function homeWindow(db: Db, viewer: UserContext, cursor: Cursor): Window {
 		{
 			streams: `SELECT w.id AS id, 'a' || a.account_id AS k, ${FOLLOWED_STREAM} AS o FROM (${authors}) a
 					CROSS JOIN statuses w ON w.id IN (SELECT s.id FROM statuses s
-						WHERE s.account_id = a.account_id AND ${FEED} AND ${rangeSql('s.id')} ORDER BY s.id ${order} LIMIT ?4)
+						WHERE s.account_id = a.account_id AND ${FEED} AND ${rangeSql('s.id')} AND ${audienceSql('s', '?1')}
+						ORDER BY s.id ${order} LIMIT ?4)
 				UNION ALL SELECT id, 'own', ${OWN} FROM (SELECT s.id FROM statuses s
 					WHERE s.account_id = ?1 AND ${rangeSql('s.id')} ORDER BY s.id ${order} LIMIT ?4)
 				UNION ALL SELECT w.id, 'm' || a.account_id, ${FOLLOWED_STREAM} FROM (${authors}) a
@@ -333,7 +334,8 @@ function listWindow(db: Db, viewer: UserContext, listId: string, cursor: Cursor)
 		{
 			streams: `SELECT w.id AS id, a.account_id AS k, 0 AS o FROM (${authors}) a
 				CROSS JOIN statuses w ON w.id IN (SELECT s.id FROM statuses s
-					WHERE s.account_id = a.account_id AND ${FEED} AND ${rangeSql('s.id')} ORDER BY s.id ${order} LIMIT ?4)`,
+					WHERE s.account_id = a.account_id AND ${FEED} AND ${rangeSql('s.id')} AND ${audienceSql('s', '?1')}
+					ORDER BY s.id ${order} LIMIT ?4)`,
 			ascending: cursor.ascending,
 			per: streamWindow(cursor.limit),
 			size: readWindow(cursor.limit),
@@ -420,8 +422,8 @@ function publicConditions(local: boolean, remote: boolean, onlyMedia: boolean): 
 		${onlyMedia ? 'AND EXISTS (SELECT 1 FROM media_attachments pm WHERE pm.status_id = s.id AND pm.shown = 1)' : ''}`
 }
 
-// A page reads a window of readWindow(limit) candidates from the cursor (publicConditions, without the rule), then
-// applies the list rule to them.
+// A page reads a window of readWindow(limit) candidates from the cursor (publicConditions and audienceSql, without the
+// rest of the rule), then applies the list rule to them.
 export const publicTimeline = optionalUserReadOperation<PublicTimelineInput, Page<Status>>((db, input, viewer) => {
 	const cursor = statusPage(input.page)
 	const size = readWindow(cursor.limit)
@@ -429,11 +431,12 @@ export const publicTimeline = optionalUserReadOperation<PublicTimelineInput, Pag
 		db,
 		`SELECT s.id FROM statuses s JOIN accounts pa ON pa.id = s.account_id
 		WHERE ${publicConditions(input.local, input.remote, input.onlyMedia)} AND ${NOT_A_REPLY_TO_OTHERS}
-			AND ${rangeSql('s.id')}
+			AND ${rangeSql('s.id')} AND ${audienceSql('s', '?4')}
 		ORDER BY s.id ${orderOf(cursor)} LIMIT ?1`,
 		size,
 		size,
-		...rangeParams(cursor)
+		...rangeParams(cursor),
+		viewer.accountId
 	)
 	return windowStatuses(db, viewer, 'listable', window, cursor, input.present)
 })
@@ -488,7 +491,7 @@ const MAX_TAG_TIMELINE_NAMES = 5
 // home does, and applies the list rule to it.
 export const tagTimeline = optionalUserReadOperation<TagTimelineInput, Page<Status>>((db, input, viewer) => {
 	const cursor = statusPage(input.page)
-	return windowStatuses(db, viewer, 'listable', tagWindow(db, input, cursor), cursor, input.present)
+	return windowStatuses(db, viewer, 'listable', tagWindow(db, viewer, input, cursor), cursor, input.present)
 })
 
 // R33 for `update` and `status.update` on a `hashtag` or `hashtag:local` stream (streaming.ts): the hashtag `tag`'s
@@ -552,13 +555,19 @@ function tagConditions(input: { local: boolean; remote: boolean; onlyMedia: bool
 // A hashtag timeline's candidate window: each name's stream, at most streamWindow(limit) from the cursor, merged as
 // home's (mergedWindow), at most readWindow(limit). CROSS JOIN keeps status_tags outermost, and the cursor is a plain
 // range (rangeSql), so each stream starts in the index at the cursor, walks it in order and stops at its cap.
-function tagWindow(db: Db, input: Omit<TagTimelineInput, 'page' | 'present'>, cursor: Cursor): Window {
+function tagWindow(
+	db: Db,
+	viewer: ViewerContext,
+	input: Omit<TagTimelineInput, 'page' | 'present'>,
+	cursor: Cursor
+): Window {
 	const names = tagNames(input)
 	const order = orderOf(cursor)
-	// ?4 the cap, ?5 all, ?6 none, then one parameter per name from ?7.
+	// ?1 the viewer, ?4 the cap, ?5 all, ?6 none, then one parameter per name from ?7.
 	const stream = (n: number) => `SELECT id, ${n} AS k, 0 AS o FROM (SELECT t.status_id AS id
 		FROM status_tags t CROSS JOIN statuses s ON s.id = t.status_id JOIN accounts pa ON pa.id = s.account_id
 		WHERE t.public = 1 AND t.name = ?${7 + n} AND ${rangeSql('t.status_id')} AND ${tagConditions(input)}
+			AND ${audienceSql('s', '?1')}
 		ORDER BY t.status_id ${order} LIMIT ?4)`
 	return mergedWindow(
 		db,
@@ -568,7 +577,7 @@ function tagWindow(db: Db, input: Omit<TagTimelineInput, 'page' | 'present'>, cu
 			per: streamWindow(cursor.limit),
 			size: readWindow(cursor.limit),
 		},
-		null,
+		viewer.accountId,
 		...rangeParams(cursor),
 		streamWindow(cursor.limit),
 		JSON.stringify(unique(input.all)),
