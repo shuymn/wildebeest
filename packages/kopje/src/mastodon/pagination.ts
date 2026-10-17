@@ -47,9 +47,10 @@ function pageUrl(requestUrl: string, name: 'max_id' | 'min_id', value: string): 
 	return url.toString()
 }
 
-// A page as a list response: its items, and the Link header to the pages around it.
-export function pageResponse<T>(c: ApiContext, page: Page<T>, limit: number): Response {
-	const link = linkHeader(c.req.url, { ...page, count: page.items.length }, limit)
+// A page as a list response: its items, and the Link header to the pages around it. `count` is what the page read
+// toward its limit: its items, or the candidates of a window the rule filtered (the quotes list).
+export function pageResponse<T>(c: ApiContext, page: Page<T>, limit: number, count = page.items.length): Response {
+	const link = linkHeader(c.req.url, { ...page, count }, limit)
 	if (link !== undefined) {
 		c.header('Link', link)
 	}

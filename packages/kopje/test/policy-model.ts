@@ -384,6 +384,40 @@ export class PolicyModel {
 		return this.world.conversationMutes.some((m) => m.account === r && m.thread === thread)
 	}
 
+	// R35: what the viewer is shown of the quote by the status s, or null when s has no quote or has a legacy quote
+	// that is not accepted. A stored state other than accepted is shown as it is, with the quoted status only when its
+	// source is asked for and the viewer may see the quoted status (R2). An accepted quote is accepted for the quoted
+	// author; unauthorized when the viewer may not see the quoted status; then, for a signed-in viewer, blocked_domain
+	// when they block its author's domain, blocked_account when they block its author, muted_account when they mute it;
+	// accepted otherwise. The quoted status goes with every state but unauthorized.
+	quote(s: number, viewer: Viewer, source = false): { state: string; quoted: number | null } | null {
+		this.status(s)
+		const q = this.world.quotes.find((quote) => quote.status === s)
+		if (q === undefined || (q.legacy && q.state !== 'accepted')) {
+			return null
+		}
+		if (q.state !== 'accepted' || q.quoted === null) {
+			return {
+				state: q.state === 'accepted' ? 'deleted' : q.state,
+				quoted: source && q.quoted !== null && this.visible(q.quoted, viewer) ? q.quoted : null,
+			}
+		}
+		const author = this.status(q.quoted).author
+		const state =
+			author === viewer
+				? 'accepted'
+				: !this.visible(q.quoted, viewer)
+					? 'unauthorized'
+					: viewer !== null && this.domainBlocks(viewer, author)
+						? 'blocked_domain'
+						: viewer !== null && this.blocks(viewer, author)
+							? 'blocked_account'
+							: viewer !== null && this.mutes(viewer, author)
+								? 'muted_account'
+								: 'accepted'
+		return { state, quoted: state === 'unauthorized' ? null : q.quoted }
+	}
+
 	// R15 as notify writes a notification: shown, and its status (if any) not in a conversation the recipient mutes.
 	notified(r: number, type: NotificationType, from: number, s: number | null): boolean {
 		return (s === null || !this.conversationMuted(r, s)) && this.shown(r, type, from, s)

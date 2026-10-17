@@ -28,6 +28,7 @@ import {
 	listedForSql,
 	mentionableBySql,
 	notifiedSql,
+	quoteReads,
 	shownSql,
 	visibleSql,
 } from '../src/domain/audience'
@@ -327,6 +328,38 @@ describe('the policy fragments agree with the model of their rules', () => {
 						)
 			)
 		)
+	}
+
+	// Every (viewer, status) with the quote the viewer is shown of it (R35): its state and quoted status, read as the
+	// presenter reads them, and with the source asked for (the DELETE response).
+	for (const source of [false, true]) {
+		it(`quoteReads (R35${source ? ', with the source' : ''})`, () =>
+			agree(
+				(db, world) => {
+					const named = namer(world)
+					const all = world.statuses.map((_, s) => statusId(s))
+					return viewers(world).flatMap((viewer) => {
+						const id = viewer === null ? null : accountId(viewer)
+						return quoteReads({ accountId: id, now: world.now })
+							.of(db, all, source ? all : [])
+							.map(
+								(read) =>
+									`${named(id, read.status_id)} ${read.state} ${read.quoted_status_id === null ? '-' : named(read.quoted_status_id)}`
+							)
+					})
+				},
+				(m) =>
+					viewers(m.world).flatMap((viewer) =>
+						statuses(m.world).flatMap((s) => {
+							const read = m.quote(s, viewer, source)
+							return read === null
+								? []
+								: [
+										`${name(m.world, viewer)} ${m.status(s).name} ${read.state} ${read.quoted === null ? '-' : m.status(read.quoted).name}`,
+									]
+						})
+					)
+			))
 	}
 
 	// Every (local account, status) whose conversation the account mutes.

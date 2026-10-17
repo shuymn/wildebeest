@@ -83,6 +83,7 @@ import {
 	interactors,
 	MAX_STATUSES_BY_ID,
 	statusContext,
+	statusQuotes,
 } from '../src/domain/statuses'
 import {
 	streamAccept,
@@ -5573,5 +5574,269 @@ describe('received quotes cost their work a bounded read (RES-7)', () => {
 		expect(outputs.recheck!.output).toBe(true)
 		expect(outputs.link!.linked).toEqual([{ n: MAX_LINKED_QUOTES }])
 		expect(outputs.work!.output).toMatchObject({ quotedUri: TARGET_URI, approvalUri: STAMP })
+	}, 120_000)
+})
+
+// Quotes shown and listed (R35): the account rows, a viewer token and the quote rows each case needs.
+function quoteWorld(sql: SqlStorage, viewer: string, token: string, remotes: readonly [string, string][]): void {
+	sql.exec(
+		"INSERT INTO accounts (id, uri, username) VALUES (?, 'https://kopje.test/ap/users/viewer', 'viewer')",
+		viewer
+	)
+	sql.exec(
+		"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'viewer@example.com', X'00', X'00', 'test')",
+		viewer
+	)
+	for (const [id, domain] of remotes) {
+		sql.exec(
+			'INSERT INTO accounts (id, uri, username, domain) VALUES (?, ?, ?, ?)',
+			id,
+			`https://${domain}/users/u${id}`,
+			`u${id}`,
+			domain
+		)
+	}
+	sql.exec(
+		"INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('quotes', 'secret', 'quotes', 'urn:ietf:wg:oauth:2.0:oob', 'read')"
+	)
+	sql.exec(
+		"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES (?, 'access', 'quotes', ?, 'read')",
+		token,
+		viewer
+	)
+}
+
+// Statuses (id, author, visibility) and the quotes they make (quoting status, quoted status, state), in two statements.
+function quoteRows(
+	sql: SqlStorage,
+	statuses: readonly { id: string; author: string }[],
+	quotes: readonly { status: string; quoted: string; state: string }[]
+): void {
+	sql.exec(
+		`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+		SELECT json_extract(value, '$.id'), 'https://remote.example/s/' || json_extract(value, '$.id'),
+			json_extract(value, '$.author'), 'public', '<p>status</p>', '2026-10-01T00:00:00.000Z'
+		FROM json_each(?)`,
+		JSON.stringify(statuses)
+	)
+	sql.exec(
+		`INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, quoted_account_id, state, updated_at)
+		SELECT json_extract(value, '$.status'), 'https://remote.example/s/' || json_extract(value, '$.quoted'),
+			json_extract(value, '$.quoted'), (SELECT account_id FROM statuses WHERE id = json_extract(value, '$.quoted')),
+			json_extract(value, '$.state'), '2026-10-01T00:00:00.000Z'
+		FROM json_each(?)`,
+		JSON.stringify(quotes)
+	)
+}
+
+// A page of statuses shows each one's quote and the quoted status one level deep (status-presenter.ts): two reads of
+// quote rows by the page's ids, never the quoted status's own quotes or the chain it starts.
+describe('statuses with quotes are presented from their quote rows (RES-7)', () => {
+	const VIEWER = '980000000000000000'
+	const AUTHOR = '980000000000000001'
+	const QUOTED_AUTHOR = '980000000000000002'
+	const OTHERS = '980000000000000003'
+	const TOKEN = 'quotes-page-token'
+	const page = (i: number) => String(981000000000000000n + BigInt(i))
+	const TARGET = '982000000000000000'
+	const chain = (i: number) => String(983000000000000000n + BigInt(i))
+	const other = (i: number) => String(984000000000000000n + BigInt(i))
+
+	// AUTHOR's 20 statuses each quote TARGET, which `quoted` statuses quote in all, and which quotes the first status of
+	// a chain `depth` long, all accepted.
+	async function quoting(quoted: number, depth: number): Promise<StoreStub> {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			quoteWorld(sql, VIEWER, TOKEN, [
+				[AUTHOR, 'author.example'],
+				[QUOTED_AUTHOR, 'quoted.example'],
+				[OTHERS, 'others.example'],
+			])
+			const links = Array.from({ length: depth }, (_, i) => i)
+			const others = Array.from({ length: quoted - 20 }, (_, i) => i)
+			quoteRows(
+				sql,
+				[
+					{ id: TARGET, author: QUOTED_AUTHOR },
+					...links.map((i) => ({ id: chain(i), author: QUOTED_AUTHOR })),
+					...Array.from({ length: 20 }, (_, i) => ({ id: page(i), author: AUTHOR })),
+					...others.map((i) => ({ id: other(i), author: OTHERS })),
+				],
+				[
+					...links.map((i) => ({ status: i === 0 ? TARGET : chain(i - 1), quoted: chain(i), state: 'accepted' })),
+					...Array.from({ length: 20 }, (_, i) => ({ status: page(i), quoted: TARGET, state: 'accepted' })),
+					...others.map((i) => ({ status: other(i), quoted: TARGET, state: 'accepted' })),
+				]
+			)
+		})
+		return store
+	}
+
+	it('reads the same rows with the quoted status quoted 20 or 2,000 times, on a chain 2 or 200 deep', async () => {
+		const credential = { tokenHash: TOKEN, scope: 'read', now: NOW } as const
+		const list = {
+			credential,
+			now: NOW,
+			account: AUTHOR,
+			page: PAGE,
+			onlyMedia: false,
+			excludeReblogs: false,
+			excludeReplies: false,
+			pinned: false,
+			tagged: null,
+			present: PRESENT,
+		}
+		const one = { credential, id: page(0), now: NOW, present: PRESENT }
+		const measured: number[][] = []
+		for (const [quoted, depth] of [
+			[20, 2],
+			[2000, 200],
+		] as const) {
+			const store = await quoting(quoted, depth)
+			const output = await runInDurableObject(store, (_instance, state) => accountStatuses.run(state.storage.sql, list))
+			const items = output.status === 'ok' ? (output.value?.items ?? []) : []
+			// Not vacuous: every status shows the quoted status with its count and, as a ShallowQuote, the chain's first.
+			expect(items).toHaveLength(20)
+			for (const status of items) {
+				expect(status.quote).toMatchObject({
+					state: 'accepted',
+					quoted_status: { id: TARGET, quotes_count: quoted, quote: { state: 'accepted', quoted_status_id: chain(0) } },
+				})
+			}
+			measured.push([await rowsRead({ store }, accountStatuses, list), await rowsRead({ store }, getStatus, one)])
+		}
+		const [few = [], many = []] = measured
+		const grown = ['page', 'status'].flatMap((name, k) =>
+			(many[k] ?? Infinity) <= (few[k] ?? 0) + ALLOWANCE ? [] : [`${name}: ${few[k]} -> ${many[k]}`]
+		)
+		expect(grown).toEqual([])
+	}, 120_000)
+})
+
+// The quotes list reads one window of a status's accepted quotes from its cursor (quotes_accepted, migration
+// 0036_quotes_list) and applies the rule to that window only (statuses.ts statusQuotes): the same rows however many
+// quotes the status has in any state, and however many of them the viewer may not list, which cost a request at most
+// the window and empty pages whose next link moves on by it.
+describe('the quotes list reads a window, however many quotes a status has (RES-7)', () => {
+	const VIEWER = '985000000000000000'
+	const QUOTED_AUTHOR = '985000000000000001'
+	const QUOTER = '985000000000000002'
+	const BLOCKED = '985000000000000003'
+	const TOKEN = 'quotes-list-token'
+	const TARGET = '986000000000000000'
+	const quoting = (i: number) => String(987000000000000000n + BigInt(i))
+	const credential = { tokenHash: TOKEN, scope: 'read', now: NOW } as const
+	const input = (page: PageQuery) => ({ credential, id: TARGET, page, now: NOW, present: PRESENT })
+
+	// TARGET's quotes, by quoting status id in order, each by QUOTER (listed), by BLOCKED (whom the viewer blocks), or in
+	// another state than accepted.
+	async function quoted(
+		kinds: readonly ('listed' | 'blocked' | 'pending' | 'rejected' | 'revoked')[]
+	): Promise<StoreStub> {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			quoteWorld(sql, VIEWER, TOKEN, [
+				[QUOTED_AUTHOR, 'quoted.example'],
+				[QUOTER, 'quoter.example'],
+				[BLOCKED, 'blocked.example'],
+			])
+			sql.exec('INSERT INTO blocks (account_id, target_account_id) VALUES (?, ?)', VIEWER, BLOCKED)
+			quoteRows(
+				sql,
+				[
+					{ id: TARGET, author: QUOTED_AUTHOR },
+					...kinds.map((kind, i) => ({ id: quoting(i), author: kind === 'blocked' ? BLOCKED : QUOTER })),
+				],
+				kinds.map((kind, i) => ({
+					status: quoting(i),
+					quoted: TARGET,
+					state: kind === 'listed' || kind === 'blocked' ? 'accepted' : kind,
+				}))
+			)
+		})
+		return store
+	}
+
+	type Listed = { items: { id: string }[]; newest: string | null; oldest: string | null; candidates: number }
+
+	async function list(store: StoreStub, page: PageQuery): Promise<Listed> {
+		const output = await runInDurableObject(store, (_instance, state) =>
+			statusQuotes.run(state.storage.sql, input(page))
+		)
+		expect(output).toMatchObject({ status: 'ok', value: { status: 'ok' } })
+		return output.status === 'ok' && output.value.status === 'ok'
+			? output.value.value
+			: { items: [], newest: null, oldest: null, candidates: 0 }
+	}
+
+	it('reads the same rows with 20 or 2,000 listed quotes and 2,000 in other states, on the newest, a middle and the oldest page', async () => {
+		// Listed quotes every third id, the other states between them, then the rest of the other states beyond them.
+		const layout = (listed: number) =>
+			Array.from({ length: Math.max(3 * listed, 3000) }, (_, i) =>
+				i % 3 === 0 && i / 3 < listed ? 'listed' : (['pending', 'rejected', 'revoked'] as const)[i % 3]!
+			).slice(0, Math.max(3 * listed, 2000 + listed))
+		const few = await quoted(layout(20))
+		const many = await quoted(layout(2000))
+		const pages: PageQuery[] = [PAGE, { ...PAGE, maxId: quoting(3000) }, { ...PAGE, minId: '1' }]
+		const grown: string[] = []
+		for (const page of pages) {
+			for (const store of [few, many]) {
+				const shownPage = await list(store, page)
+				expect([JSON.stringify(page), shownPage.items.length]).toEqual([JSON.stringify(page), 20])
+			}
+			const fewRows = await rowsRead({ store: few }, statusQuotes, input(page))
+			const manyRows = await rowsRead({ store: many }, statusQuotes, input(page))
+			if (manyRows > fewRows + ALLOWANCE) {
+				grown.push(`${JSON.stringify(page)}: ${fewRows} -> ${manyRows}`)
+			}
+		}
+		expect(grown).toEqual([])
+	}, 120_000)
+
+	it('answers empty pages whose next link moves on by the window when 2,000 quotes are hidden', async () => {
+		const few = await quoted(Array.from({ length: 40 }, () => 'blocked' as const))
+		const many = await quoted(Array.from({ length: 2000 }, () => 'blocked' as const))
+		let cursor: PageQuery = PAGE
+		for (let request = 1; request <= 3; request++) {
+			const shownPage = await list(many, cursor)
+			// Empty, with the window's bounds: the next page starts below the window's oldest candidate.
+			expect(shownPage).toEqual({
+				items: [],
+				newest: quoting(2000 - 1 - (request - 1) * 20),
+				oldest: quoting(2000 - request * 20),
+				candidates: 20,
+			})
+			expect(await rowsRead({ store: many }, statusQuotes, input(cursor))).toBeLessThanOrEqual(
+				(await rowsRead({ store: few }, statusQuotes, input(PAGE))) + ALLOWANCE
+			)
+			cursor = { ...PAGE, maxId: shownPage.oldest ?? undefined }
+		}
+		// The quoted author lists them all (R2): the window's quotes.
+		await runInDurableObject(many, (_instance, state) => {
+			state.storage.sql.exec('UPDATE statuses SET account_id = ? WHERE id = ?', VIEWER, TARGET)
+		})
+		expect((await list(many, PAGE)).items).toHaveLength(20)
+	}, 120_000)
+
+	it('reaches one listed quote behind 1,000 hidden ones a window per request, each reading at most a window', async () => {
+		const store = await quoted(['listed', ...Array.from({ length: 1000 }, () => 'blocked' as const)])
+		let cursor: PageQuery = PAGE
+		const reads: number[] = []
+		let requests = 0
+		let found: string[] = []
+		while (found.length === 0) {
+			requests++
+			expect(requests).toBeLessThanOrEqual(1000 / PAGE.limit + 1)
+			const shownPage = await list(store, cursor)
+			found = shownPage.items.map((item) => item.id)
+			reads.push(await rowsRead({ store }, statusQuotes, input(cursor)))
+			cursor = { ...PAGE, maxId: shownPage.oldest ?? undefined }
+		}
+		expect(found).toEqual([quoting(0)])
+		expect(requests).toBe(1000 / PAGE.limit + 1)
+		// Each request reads at most what the first does; the last, a window of one, reads less.
+		expect(Math.max(...reads)).toBeLessThanOrEqual((reads[0] ?? 0) + ALLOWANCE)
 	}, 120_000)
 })

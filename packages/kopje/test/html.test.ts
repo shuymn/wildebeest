@@ -88,7 +88,7 @@ function unsafeParts(markup: string): string[] {
 			}
 			if (
 				attribute === 'class' &&
-				!value.split(' ').every((c) => /^((h|p|u|dt|e)-.|mention$|hashtag$|ellipsis$|invisible$)/.test(c))
+				!value.split(' ').every((c) => /^((h|p|u|dt|e)-.|mention$|hashtag$|ellipsis$|invisible$|quote-inline$)/.test(c))
 			) {
 				problems.push(`class ${JSON.stringify(value)}`)
 			}
@@ -142,6 +142,11 @@ describe('HTML-1: Mastodon’s MASTODON_STRICT', () => {
 			'filters classes to microformats and the semantic ones',
 			'<span class="h-card evil mention">x</span><p class="ellipsis bad">y</p>',
 			'<span class="h-card mention">x</span><p class="ellipsis">y</p>',
+		],
+		[
+			'keeps a quote fallback’s quote-inline class, as Mastodon does',
+			'<p class="quote-inline quote-inline-x">RE: <a href="https://a.example/1">https://a.example/1</a></p>',
+			'<p class="quote-inline">RE: <a href="https://a.example/1" rel="nofollow noopener" target="_blank">https://a.example/1</a></p>',
 		],
 		[
 			'adds rel and target to links and drops other link attributes',

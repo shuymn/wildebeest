@@ -825,12 +825,13 @@ export function filterStatusMatches(
 }
 
 // Kopje's bound on the text matched, where Mastodon matches all of it: each status's searchable text is cut to
-// MAX_FILTER_TEXT code units, and the statuses of one response share MAX_FILTER_REQUEST_TEXT. When their cut texts fit,
-// each is matched whole; otherwise each is matched on its beginning up to one level, the highest at which the response
-// stays within the budget (water-filling: short statuses whole, long ones on the same share). A page of 40 statuses is
-// always matched whole; a keyword deep in a long status of a very large response may be missed. Filter statuses match
-// whatever the text: they need none. With the keyword caps, a response compares at most MAX_FILTER_REQUEST_TEXT code
-// units of text with each keyword.
+// MAX_FILTER_TEXT code units, and the statuses of one response (the quoted statuses shown in it included) share
+// MAX_FILTER_REQUEST_TEXT. When their cut texts fit, each is matched whole; otherwise each is matched on its beginning
+// up to one level, the highest at which the response stays within the budget (water-filling: short statuses whole,
+// long ones on the same share). A response of 40 statuses (20 with a quoted status each) is always matched whole; a
+// keyword deep in a long status of a very large response may be missed. Filter statuses match whatever the text: they
+// need none. With the keyword caps, a response compares at most MAX_FILTER_REQUEST_TEXT code units of text with each
+// keyword.
 export const MAX_FILTER_TEXT = 10_000
 export const MAX_FILTER_REQUEST_TEXT = 400_000
 

@@ -298,8 +298,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   ("answers a status by the single-status rule"), `test/policy-endpoints.test.ts`.
 - **VIS-6: a wrapper reveals nothing its target hides.** A boost is visible only if its original is; boosting is limited
   to `public` and `unlisted` statuses and one's own `private` ones (`StatusPolicy#reblog?`). _Enforced (main):_ `viewableSql`; `test/visibility.test.ts` ("a boost of an original the viewer may not see is hidden
-  with it"), `test/statuses.test.ts` ("refuses to boost direct and others’ private statuses"). Quotes and other embedded
-  objects check their target the same way: _Planned (B4)._ _Implemented on branch `kopje/inbound-statuses`_ for
+  with it"), `test/statuses.test.ts` ("refuses to boost direct and others’ private statuses"). A quote embeds its quoted
+  status only as VIS-27 allows. _Implemented on branch `kopje/inbound-statuses`_ for
   inbound boosts: an `Announce` is stored only for an original that is public, unlisted or the booster's own, decided
   before anything is stored, so a boost of a private, direct, limited or unfetchable object stores nothing (neither
   the boost nor the fetched original); an embedded copy of someone else's object is never trusted (it is fetched); a
@@ -627,6 +627,22 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `src/domain/streaming.ts`, the hashtag subscription in `src/stream-hub.ts`, migration `0035_streaming_public`;
   `test/streaming/public.test.ts`, `test/streaming-oracle.test.ts`, `test/stream-delete.test.ts`,
   `test/policy-bounds.test.ts`, `test/migrations.test.ts`, `test/cascade-guard.test.ts`.
+
+- **VIS-27: a quote reveals nothing its quoted status hides.** A quote shows its quoted status only when the viewer may
+  see that status by itself (VIS-1, R2), and only for an accepted quote; otherwise it shows a state and no content
+  (`unauthorized` for a status the viewer may not see, whatever the quoting status's own visibility). The filter states
+  (`blocked_domain`, `blocked_account`, `muted_account`) carry only a status the viewer may see, for the client to
+  fold. A legacy quote (a Note without `quote`, such as Misskey's) that was never accepted is not shown at all, as in
+  Mastodon. The embedded status is presented for the same viewer as any status (flags, filters, media, poll), and its
+  own quote is a state and an id only, from the same rule, so nothing is embedded two levels deep. The `DELETE`
+  response shows the quoted status of a quote in another state only when the viewer may see it. The quotes list
+  (`GET /api/v1/statuses/:id/quotes`) answers 404 for a status the viewer may not view (R3) and lists only quoting
+  statuses the viewer may list (R8), or, for the quoted author, may see (R2). A quote never widens what its quoting
+  status's rule passed: feeds include and exclude statuses as before. The work is bounded (RES-7). _Implemented on
+  branch `kopje/quotes-1b`:_ `quoteReads` in `src/domain/audience.ts` (R35), the presenter in
+  `src/domain/status-presenter.ts`, `statusQuotes` in `src/domain/statuses.ts`, `acceptedQuoteWindow` in
+  `src/domain/quotes.ts`, migration `0036_quotes_list`; `test/quotes-api.test.ts`, `test/policy-oracle.test.ts`
+  ("quoteReads (R35)"), `test/policy-bounds.test.ts`, `test/policy.test.ts`, `test/migrations.test.ts`.
 
 - **VIS-29: admin views and actions disclose and change only through the admin account.** Only the OAuth admin,
   through a token covering the route's admin scope, reads or acts through `/api/v1/admin/*` and `/api/v2/admin/*`
@@ -1480,6 +1496,16 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   keys' (one range of `stream_subscriptions_key` a scan) and one seek per hashtag of the status; a tombstone reads the
   status's hashtags by its key. They read the same rows however many statuses the author, others, the hashtag or the
   accounts the viewer filters have (`test/policy-bounds.test.ts`, "streamed public and hashtag statuses").
+  _Implemented on branch `kopje/quotes-1b`_ for quotes (R35, VIS-27): a response reads its statuses' quote rows by key
+  in one query and the quoted statuses' in a second, each over the response's ids, and embeds one level only, so a
+  page reads the same rows however many quotes its quoted statuses have and however long the chain they start
+  (`test/policy-bounds.test.ts`, "statuses with quotes are presented from their quote rows"). The quotes list reads one
+  window of the status's accepted quotes from its cursor through the partial index `quotes_accepted` (migration
+  `0036_quotes_list`), at most `limit`, and applies the rule to that window alone: a page reads the same rows with 20
+  or 2,000 listed quotes and 2,000 in other states, on any page; when the rule hides the window, the page is empty and
+  its next link moves on by the window, so 2,000 quotes the viewer may not list cost a request one window, and one
+  listed quote behind 1,000 hidden ones is reached a window per request (`test/policy-bounds.test.ts`, "the quotes list
+  reads a window"). A client that stops at an empty page sees fewer quotes than exist, as on Mastodon (accepted).
 
 ### Data and keys (DATA)
 

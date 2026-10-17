@@ -48,6 +48,7 @@ describe('POST /api/v1/statuses', () => {
 			replies_count: 0,
 			reblogs_count: 0,
 			favourites_count: 0,
+			quotes_count: 0,
 			edited_at: null,
 			favourited: false,
 			reblogged: false,
@@ -62,6 +63,7 @@ describe('POST /api/v1/statuses', () => {
 			mentions: [],
 			tags: [],
 			emojis: [],
+			quote: null,
 			card: null,
 			poll: null,
 		})
