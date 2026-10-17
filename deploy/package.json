@@ -11,7 +11,7 @@
 		"kopje": "0.1.0-rc.3"
 	},
 	"devDependencies": {
-		"wrangler": "4.149.0"
+		"wrangler": "4.151.0"
 	},
 	"cloudflare": {
 		"bindings": {
