@@ -4492,8 +4492,10 @@ describe("R32: a delete's capture reads the smaller of the status's boosts and e
 		const followed = await read({ listeners: 4, follows: 1000, boosts: 0 })
 		expect(followed).toBeLessThanOrEqual(few + ALLOWANCE)
 		const listeners = await read({ listeners: 40, follows: 1000, boosts: 0 })
-		// Each listener more costs the view check and its walk of the status's one boost, not its follows.
-		expect(listeners - followed).toBeLessThanOrEqual(36 * ALLOWANCE)
+		// Each listener more costs the view check and its walk of the status's one boost, not its follows. Every
+		// availability predicate the statements emit also reads the suspend blocks' index once (availableSql, R38), each
+		// occurrence on its own: measured at 2 more rows per listener (432 for 36 listeners, against 360 before it).
+		expect(listeners - followed).toBeLessThanOrEqual(36 * (ALLOWANCE + 2))
 	}, 120_000)
 
 	// A turn reads a delete's units a page at a time: the journal's scan reads no capture row, and a page reads its

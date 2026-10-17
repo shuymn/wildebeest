@@ -132,6 +132,8 @@ export type World = {
 	blocks: { from: number; to: number }[]
 	mutes: { from: number; to: number; expiresAt: string | null; hideNotifications: boolean }[]
 	domainBlocks: { owner: number; domain: string }[]
+	// The instance's domain blocks (R38), one per domain, as stored.
+	instanceBlocks: { domain: string; severity: 'suspend' | 'noop' }[]
 	lists: WorldList[]
 	// Pins of accounts' own originals that are not direct or limited, as the API makes them for a local account and
 	// Kopje learns them of a remote one.
@@ -254,6 +256,11 @@ export const worldArb: fc.Arbitrary<World> = fc
 		// Last, as above: pins (each a choice among the author's pinnable statuses) and conversation mutes.
 		pins: fc.array(fc.record({ account: fc.nat(), status: fc.nat() }), { maxLength: 4 }),
 		conversationMutes: fc.array(fc.record({ account: fc.nat(), status: fc.nat() }), { maxLength: 4 }),
+		// Last, as above: instance domain blocks (R38), a parent and its child included, so precedence is drawn.
+		instanceBlocks: fc.array(
+			fc.record({ domain: fc.constantFrom(...BLOCKABLE_DOMAINS), severity: fc.constantFrom('suspend', 'noop') }),
+			{ maxLength: 2 }
+		),
 	})
 	.map((raw): World => {
 		const accounts: WorldAccount[] = []
@@ -353,6 +360,7 @@ export const worldArb: fc.Arbitrary<World> = fc
 				raw.domainBlocks.map((d) => ({ owner: d.owner % LOCALS, domain: d.domain })),
 				(d) => `${d.owner}:${d.domain}`
 			),
+			instanceBlocks: unique(raw.instanceBlocks, (b) => b.domain),
 			lists: raw.lists.map((list) => {
 				const owner = list.owner % LOCALS
 				const candidates = [owner, ...follows.flatMap((f) => (f.from === owner ? [f.to] : []))]
@@ -443,6 +451,7 @@ const WORLD_TABLES = [
 	'blocks',
 	'mutes',
 	'domain_blocks',
+	'instance_domain_blocks',
 	'local_accounts',
 	'accounts',
 ]
@@ -553,6 +562,15 @@ export function writeWorld(sql: SqlStorage, world: World): void {
 	}
 	for (const d of world.domainBlocks) {
 		sql.exec('INSERT INTO domain_blocks (account_id, domain) VALUES (?, ?)', accountId(d.owner), d.domain)
+	}
+	for (const b of world.instanceBlocks) {
+		sql.exec(
+			`INSERT INTO instance_domain_blocks (domain, severity, created_at, updated_at) VALUES (?, ?, ?, ?)`,
+			b.domain,
+			b.severity,
+			world.now,
+			world.now
+		)
 	}
 	for (const follower of world.tagFollowers) {
 		sql.exec("INSERT INTO tag_follows (account_id, name) VALUES (?, 'cats')", accountId(follower))

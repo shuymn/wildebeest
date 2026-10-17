@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
+import { deferred } from './quote-helpers'
 import {
 	createContextLoader,
 	createSafeLoader,
@@ -93,6 +94,35 @@ describe('safe document loader', () => {
 		}
 		expect((await loader(fetch, { checkHost })(ACTOR)).documentUrl).toBe(next)
 		expect(checked).toEqual([ACTOR, next])
+	})
+
+	// Decision 6 (R38): the instance's domain policy is read before every request. A block that commits while the first
+	// response is awaited (the gate) refuses the redirect's destination, which is never requested.
+	it('reads the domain policy again before a redirect, and requests nothing once it refuses the host', async () => {
+		const next = 'https://remote.example/u/bob'
+		const reached = deferred()
+		const release = deferred()
+		const { fetch, requests } = fakeFetch({
+			[ACTOR]: async () => {
+				reached.resolve()
+				await release.promise
+				return new Response(null, { status: 302, headers: { location: '/u/bob' } })
+			},
+			[next]: () => Response.json({ id: next }, { headers: AP }),
+		})
+		let blocked = false
+		const asked: string[] = []
+		const refusesHost = (host: string) => {
+			asked.push(host)
+			return Promise.resolve(blocked)
+		}
+		const loading = loader(fetch, { refusesHost })(ACTOR)
+		await reached.promise
+		blocked = true
+		release.resolve()
+		await expect(loading).rejects.toThrow(/blocked by the instance/)
+		expect(requests.map((r) => r.url)).toEqual([ACTOR])
+		expect(asked).toEqual(['remote.example', 'remote.example'])
 	})
 
 	it('judges the origin from the final response.url', async () => {

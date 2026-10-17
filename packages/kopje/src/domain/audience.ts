@@ -91,16 +91,20 @@ export function mentionStatusSql(id: string): string {
 // ---- Accounts. `x` is an expression for an account id, never a status or edge alias.
 
 // R1 (Account#unavailable?): a suspended local account, a remote account the instance suspended (R38: accounts.
-// suspended_at, set in the suspension's transaction), and a remote account whose deletion has started
-// (accounts.deleted_at, set in the first transaction of its purge), is seen by nobody, and nothing of it is shown or
-// delivered. Three seeks: the local_accounts row, and the partial indexes of the suspended accounts and of the accounts
-// being deleted, which hold no entry for any other account (INDEXED BY keeps the plan from reading the account's row
-// instead), so the rule reads no row of an available account but its local_accounts row. An unknown id is available.
+// suspended_at, set in the suspension's transaction), a remote account whose deletion has started (accounts.deleted_at,
+// set in the first transaction of its purge), and a remote account an instance domain block covers (R38,
+// domainCoveredSql: read live, never from a mark), is seen by nobody, and nothing of it is shown or delivered. Three
+// seeks: the local_accounts row, and the partial indexes of the suspended accounts and of the accounts being deleted,
+// which hold no entry for any other account (INDEXED BY keeps the plan from reading the account's row instead). Domain
+// coverage costs one constant seek per emitted predicate while the instance has no suspend block (guardedSql), so the
+// rule then reads no row of an available account but its local_accounts row; otherwise it also reads the account's
+// row by its key and seeks at most 4 × (MAX_BLOCK_LABELS - 1) blocks (coveredSql). An unknown id is available.
 export function availableSql(x: string): string {
 	return `(NOT EXISTS (SELECT 1 FROM main.local_accounts pl WHERE pl.account_id = ${x} AND pl.suspended_at IS NOT NULL
 		UNION ALL SELECT 1 FROM main.accounts pa INDEXED BY accounts_deleted WHERE pa.id = ${x} AND pa.deleted_at IS NOT NULL
 		UNION ALL SELECT 1 FROM main.accounts ps INDEXED BY accounts_suspended
-			WHERE ps.id = ${x} AND ${suspendedSql('ps')}))`
+			WHERE ps.id = ${x} AND ${suspendedSql('ps')})
+		AND NOT ${guardedSql(accountCoveredSql(x))})`
 }
 
 // The same rule for a local account whose local_accounts row `l` is already joined, so a query that has the row does
@@ -111,10 +115,11 @@ export function availableLocalSql(l: string): string {
 }
 
 // The same rule for an account `a` with its local_accounts row `l` LEFT JOINed (NULL for a remote account), read
-// from the two rows without a lookup: account presentation (accounts.ts ACCOUNT_COLUMNS) and the admin's list of
-// accounts (admin-accounts.ts) read both rows anyway.
+// from the two rows without another lookup of the account (domain coverage seeks the blocks only): account
+// presentation (accounts.ts ACCOUNT_COLUMNS) and the admin's list of accounts (admin-accounts.ts) read both rows
+// anyway.
 export function availableJoinedSql(a: string, l: string): string {
-	return `(${availableLocalSql(l)} AND ${activeSql(a)})`
+	return `(${availableLocalSql(l)} AND ${activeSql(a)} AND NOT ${guardedSql(domainCoveredSql(a))})`
 }
 
 // The remote accounts whose deletion has started, the entries of the partial index accounts_deleted: its range in id
@@ -178,6 +183,64 @@ function uriHostSql(uri: string): string {
 // normalized, so a stored domain is compared as it is and found through its index.
 export function inDomainSql(a: string, domain: string): string {
 	return `(${a}.domain IS NOT NULL AND ${domain} IN (rtrim(${a}.domain, '.'), ${uriHostSql(`${a}.uri`)}))`
+}
+
+// ---- Instance domain blocks (R38, VIS-30; migration 0046_instance_domain_blocks)
+
+// Labels a stored instance domain block has at most (the table's CHECK; instance-domain-blocks.ts refuses a deeper
+// one), so a host's rule is always among its suffixes of at most this many labels, and a deeper host is still matched.
+export const MAX_BLOCK_LABELS = 8
+
+// Whether the instance has a suspend block at all: one seek of a partial index holding the suspend blocks only. It
+// names no outer column, so SQLite evaluates each occurrence once per statement (a statement that emits the predicate
+// twice reads it twice), and guardedSql skips the per-account rule on an instance without one.
+export const SUSPEND_BLOCKS_SQL = `EXISTS (SELECT 1 FROM main.instance_domain_blocks INDEXED BY instance_domain_blocks_suspend
+	WHERE severity = 'suspend')`
+
+// `covered`, an account's coverage, only while a suspend block exists. A CASE, not an AND: SQLite evaluates both
+// operands of an AND in a result column (account presentation's `available`), so only the CASE skips the walk there.
+function guardedSql(covered: string): string {
+	return `(CASE WHEN ${SUSPEND_BLOCKS_SQL} THEN ${covered} ELSE 0 END)`
+}
+
+// Whether an instance domain block covers one of `keys`, a SELECT of normalized domains (column d: hostDomain or
+// blockedDomain, platform/domain-name.ts). The rule that matches a domain is the block on the domain itself or on its
+// nearest parent, the longest match (Mastodon's DomainBlock.rule_for, app/models/domain_block.rb:68); it covers the
+// domain when it is a suspend. A child noop therefore exempts its subdomain tree from a parent's suspend. Each key's
+// suffixes are walked from the longest, and the walk stops at the first one a block names (the nearest), so the rule
+// is that block's; only suffixes of 2 to MAX_BLOCK_LABELS labels are sought, at most two unique seeks each (the walk's
+// and the match's). The keys and the walk are CTEs, whose expressions do not add to the depth of the expression that
+// holds this one (SQLite limits it to 100 in workerd).
+function coveredSql(keys: string): string {
+	const sought = `BETWEEN 1 AND ${MAX_BLOCK_LABELS - 1}`
+	return `EXISTS (WITH RECURSIVE pk(d) AS (${keys}),
+			ps(d, dots) AS (SELECT d, length(d) - length(replace(d, '.', '')) FROM pk
+				UNION ALL SELECT substr(d, instr(d, '.') + 1), dots - 1 FROM ps WHERE dots > 1
+					AND NOT EXISTS (SELECT 1 FROM main.instance_domain_blocks pn WHERE ps.dots ${sought} AND pn.domain = ps.d))
+		SELECT 1 FROM ps JOIN main.instance_domain_blocks pr ON pr.domain = ps.d
+		WHERE ps.dots ${sought} AND pr.severity = 'suspend')`
+}
+
+// Whether an instance domain block covers `host`, an expression for a normalized domain.
+export function hostCoveredSql(host: string): string {
+	return coveredSql(`SELECT ${host}`)
+}
+
+// The keys inDomainSql compares of the remote account row `a`, from `from` (which names `a`): its stored domain and
+// its actor id's host, once each. None for a local account.
+function accountKeysSql(a: string, from: string): string {
+	return `SELECT DISTINCT CASE pv.n WHEN 1 THEN rtrim(${a}.domain, '.') ELSE ${uriHostSql(`${a}.uri`)} END
+		FROM ${from} (SELECT 1 AS n UNION ALL SELECT 2) pv WHERE ${a}.domain IS NOT NULL`
+}
+
+// Whether an instance domain block covers the account row `a`, already in scope, by either key.
+export function domainCoveredSql(a: string): string {
+	return coveredSql(accountKeysSql(a, ''))
+}
+
+// Whether an instance domain block covers the account `x` by either key: its row read once by its key.
+function accountCoveredSql(x: string): string {
+	return coveredSql(`${accountKeysSql('pc', 'main.accounts pc CROSS JOIN')} AND pc.id = ${x}`)
 }
 
 // Whether `owner` blocks the domain of the account `x`: two seeks of the (account_id, domain) index, however many

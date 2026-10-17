@@ -8,6 +8,7 @@ import {
 } from '@fedify/fedify'
 
 import { readBoundedBody } from '../platform/body'
+import { hostDomain } from '../platform/domain-name'
 import { errorMessage } from '../platform/error-message'
 import { publicShapeRefusal } from '../platform/http-url'
 import { isActivityPubMediaType, type MediaType, parseMediaType } from '../platform/media-type'
@@ -23,6 +24,7 @@ import { isActivityPubMediaType, type MediaType, parseMediaType } from '../platf
 //   - a document is taken only as application/activity+json or ActivityStreams-profiled application/ld+json
 //     (isActivityPubMediaType, GHSA-jhrq-qvrm-qr36); the context loader alone takes plain JSON-LD or JSON, since JSON-LD
 //     contexts are served that way and a context is never trusted as an object
+//   - a host the instance's domain policy covers (refusesHost, decision 6, R38) is not requested at all
 export const DOCUMENT_BODY_LIMIT = 1024 * 1024
 export const DOCUMENT_TIMEOUT_MS = 5000
 const MAX_REDIRECTS = 5
@@ -117,6 +119,9 @@ export type LoaderDeps = {
 	timeoutMs?: number
 	// Shared by every loader of one request; none means only the per-load limits apply.
 	budget?: FetchBudget
+	// The instance's domain policy (instance-domain-blocks.ts fetchRefused), read before each load: true refuses the
+	// host (a normalized domain) before any request. Advisory: the Store's writes decide what is stored.
+	refusesHost?: (host: string) => Promise<boolean>
 }
 
 export type RequestSigner = (request: Request) => Promise<Request>
@@ -193,6 +198,12 @@ function createLoader(deps: LoaderDeps, kind: Kind, sign?: RequestSigner): Docum
 async function load(deps: LoaderDeps, kind: Kind, sign: RequestSigner | undefined, target: URL, signal: AbortSignal) {
 	let current = target
 	for (let redirects = 0; ; redirects++) {
+		// The policy is read before every request, a redirect's included: a block that commits while a response is
+		// awaited stops the next request.
+		assertPublicShape(current)
+		if (deps.refusesHost !== undefined && (await deps.refusesHost(hostDomain(current.href)))) {
+			throw new RefusedFetchError(current, `Refused host ${current.hostname}: blocked by the instance`)
+		}
 		await assertFetchable(current, deps.checkHost ?? dnsCheckHost)
 		if (deps.budget !== undefined) {
 			if (deps.budget.fetches <= 0) {

@@ -7,7 +7,7 @@ import {
 	type RemoteRecipient,
 	recipientsFor,
 } from './audience'
-import { hostRefused } from './host-policy'
+import { hostCovered } from './instance-domain-blocks'
 import { readOperation, writeOperation } from './operation'
 import type { Db } from '../db/sql'
 import { hostDomain } from '../platform/domain-name'
@@ -1064,7 +1064,7 @@ function sendRefused(db: Db, row: DueRow): boolean {
 		return true
 	}
 	const host = hostOf(row.inbox_url)
-	if (host !== null && hostRefused(db, host)) {
+	if (host !== null && hostCovered(db, host)) {
 		return true
 	}
 	if (
@@ -1087,7 +1087,7 @@ function sendRefused(db: Db, row: DueRow): boolean {
 		return true
 	}
 	const domains = row.recipient_domains === null ? [] : (JSON.parse(row.recipient_domains) as string[])
-	return domains.length > 0 && domains.every((domain) => hostRefused(db, domain))
+	return domains.length > 0 && domains.every((domain) => hostCovered(db, domain))
 }
 
 function dropRow(db: Db, row: LaneRow, now: number): void {
@@ -1294,7 +1294,7 @@ function personalFallback(db: Db, row: LaneRow, now: number, status: number | nu
 	)
 	const personal = candidates.find((c) => {
 		const host = hostOf(c.uri)
-		return c.retracts === 1 || (c.available === 1 && (host === null || !hostRefused(db, host)))
+		return c.retracts === 1 || (c.available === 1 && (host === null || !hostCovered(db, host)))
 	})
 	if (personal === undefined || !isDeliverableInbox(personal.inbox) || laneOf(personal.inbox) !== row.lane) {
 		return false

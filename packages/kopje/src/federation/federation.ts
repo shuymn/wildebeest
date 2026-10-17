@@ -133,7 +133,11 @@ function federationParts(deps: FederationDeps, state: FederationState) {
 	}
 	const kv = new DoKvStore(deps.store, build, deps.now)
 	const keyring = createKeyring(deps.kek)
-	const loaderDeps: LoaderDeps = { ...deps.loader, userAgent: `Kopje/${PACKAGE_VERSION} (+${origin}/)` }
+	const loaderDeps: LoaderDeps = {
+		...deps.loader,
+		userAgent: `Kopje/${PACKAGE_VERSION} (+${origin}/)`,
+		refusesHost: (host) => rpc((s) => s.fetchRefused(build, { host })),
+	}
 	const instanceKeyId = new URL('/actor#main-key', origin)
 
 	const actors = new Map<string, Promise<LocalActor | null>>()

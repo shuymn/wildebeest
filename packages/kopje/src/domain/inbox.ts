@@ -6,6 +6,7 @@ import {
 	blockedSql,
 	blocksSql,
 	canView,
+	domainCoveredSql,
 	followableBySql,
 	individuallySuspendedSql,
 	isDistributable,
@@ -16,6 +17,7 @@ import {
 } from './audience'
 import { stageRetraction } from './deliveries'
 import { insertWithFreshId, NEW_GENERATION, remoteId } from './ids'
+import { actorDomainBlocked, hostCovered } from './instance-domain-blocks'
 import { listsHolding } from './lists'
 import { notify } from './notifications'
 import { readOperation, writeOperation } from './operation'
@@ -354,11 +356,13 @@ export function accountDomain(
 
 // R38 (Mastodon's set_immediate_protocol_attributes!): a verified document of an individually suspended account updates
 // its inbox and shared inbox only, so that moderation's Rejects reach a current inbox. Its profile, keys and stored
-// domain stay frozen; the values passed remote-actor.ts's checks as any refresh's.
+// domain stay frozen; the values passed remote-actor.ts's checks as any refresh's. An account an instance domain block
+// covers takes no refresh at all (its documents are not fetched).
 function refreshRouting(db: Db, accountId: string, actor: RemoteActorInput): void {
 	db.run(
 		`UPDATE accounts SET inbox_url = ?2, shared_inbox_url = ?3
-		WHERE id = ?1 AND ${individuallySuspendedSql('accounts')} AND (inbox_url IS NOT ?2 OR shared_inbox_url IS NOT ?3)`,
+		WHERE id = ?1 AND ${individuallySuspendedSql('accounts')} AND (inbox_url IS NOT ?2 OR shared_inbox_url IS NOT ?3)
+			AND NOT ${domainCoveredSql('accounts')}`,
 		accountId,
 		actor.inboxUrl,
 		actor.sharedInboxUrl
@@ -376,7 +380,10 @@ function unavailableRemote(db: Db, uri: string): RemoteRow | undefined {
 // Inserts or refreshes a remote account and its keys from its document. Never touches a local row (ID-3): a URI on
 // this instance's origin, or one a local account holds, is refused, and so is a deleted actor. An unavailable account
 // (R38, VIS-30) is never refreshed: its stored row is returned unchanged (frozen), but for a routing refresh
-// (refreshRouting), as Mastodon leaves a suspended account's key and attributes as they were. A document that names
+// (refreshRouting), as Mastodon leaves a suspended account's key and attributes as they were. No account is stored, and
+// none moves, under an instance domain block: a document whose actor host or domain is covered stores nothing, and
+// leaves a stored row unchanged (Mastodon's ProcessAccountService stores nothing on a blocked domain), so the set of
+// accounts a block covers is fixed when it commits. A document that names
 // any of its collections asks for them to be read (remote-collections.ts, as ActivityPub::ProcessAccountService
 // schedules its syncs each time it processes the account); syncWaiting: a request waits for a round.
 export function upsertRemoteActor(
@@ -404,6 +411,10 @@ export function upsertRemoteActor(
 		actor.uri
 	)
 	const { domain, confirmedUsername } = accountDomain(stored, actor)
+	if (hostCovered(db, hostDomain(actor.uri)) || hostCovered(db, domain)) {
+		const row = remoteAccount(db, actor.uri)
+		return row === undefined ? undefined : { ...row, syncWaiting: false, frozen: true }
+	}
 	const values = [
 		actor.uri,
 		actor.username,
@@ -2419,8 +2430,12 @@ function receive(db: Db, input: ReceiveInput): ReceiveResult {
 	}
 	// R38, VIS-30: the inbound gate, in every round. An unavailable actor (individually suspended) first takes a routing
 	// refresh from its verified document; then only its cleanups apply, with its stored row and no upsert (SUSPENDED_
-	// ADMITS), and anything else is ignored.
+	// ADMITS), and anything else is ignored. An actor an instance domain block covers is held the same way, without the
+	// refresh; one with no stored row has nothing to clean up, and nothing of it is stored.
 	const held = unavailableRemote(db, actorUri)
+	if (held === undefined && actorDomainBlocked(db, actorUri)) {
+		return ignored('actor-suspended')
+	}
 	if (held !== undefined) {
 		if (input.actor !== null) {
 			refreshRouting(db, held.id, input.actor)

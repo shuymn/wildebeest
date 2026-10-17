@@ -39,6 +39,7 @@ const SCHEMA_TABLES = [
 	'inbound_jobs',
 	'inbound_retractions',
 	'inbound_spool',
+	'instance_domain_blocks',
 	'instance_settings',
 	'list_accounts',
 	'lists',
@@ -4851,4 +4852,47 @@ describe('0045_remote_suspension', () => {
 		// The index of the active accounts holds every available one; nothing else is written per account.
 		expect(many.written - few.written).toBeLessThanOrEqual(2 * (10_000 - 1000))
 	}, 120_000)
+})
+
+describe('0046_instance_domain_blocks', () => {
+	const NAME = '0046_instance_domain_blocks'
+	const at = NAMES.indexOf(NAME)
+
+	it('stores one block per domain with an id never given twice, refuses a deeper or unnormalized domain, and seeks suspend blocks', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+			// Nothing of the existing schema is read: a store with accounts upgrades the same way.
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username, domain) VALUES ('100000000000000001', 'https://r.example/u', 'u', 'r.example')"
+			)
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+			const insert = (domain: string, severity = 'suspend') =>
+				sql
+					.exec<{ id: number }>(
+						"INSERT INTO instance_domain_blocks (domain, severity, created_at, updated_at) VALUES (?, ?, 'x', 'x') RETURNING id",
+						domain,
+						severity
+					)
+					.one().id
+			expect(insert('a.example')).toBe(1)
+			expect(() => insert('a.example', 'noop')).toThrow(/UNIQUE constraint failed/)
+			for (const refused of ['A.example', 'example', 'a.b.c.d.e.f.g.h.example', '']) {
+				expect(() => insert(refused)).toThrow(/CHECK constraint failed/)
+			}
+			expect(() => insert('b.example', 'silence')).toThrow(/CHECK constraint failed/)
+			expect(insert('a.b.c.d.e.f.g.example', 'noop')).toBe(2)
+			sql.exec('DELETE FROM instance_domain_blocks WHERE id = 2')
+			expect(insert('c.example')).toBe(3)
+			const plan = sql
+				.exec<{ detail: string }>(
+					`EXPLAIN QUERY PLAN SELECT 1 FROM instance_domain_blocks INDEXED BY instance_domain_blocks_suspend
+					WHERE severity = 'suspend'`
+				)
+				.toArray()
+				.map((row) => row.detail)
+			expect(plan).toEqual(['SCAN instance_domain_blocks USING COVERING INDEX instance_domain_blocks_suspend'])
+		})
+	})
 })

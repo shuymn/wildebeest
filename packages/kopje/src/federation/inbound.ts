@@ -77,7 +77,8 @@ type Dereference = { type: 'Dereference'; kind: 'Create' | 'UpdateStatus'; id: s
 
 type Parsed =
 	| { ok: true; actor: string; activity: InboundActivity | Dereference; target: string | null; body: Json }
-	| { ok: false; reason: string; deleteOfSelf?: boolean }
+	// actor: the envelope's single actor, when the envelope is usable but its activity is not one Kopje reads.
+	| { ok: false; reason: string; deleteOfSelf?: boolean; actor?: string }
 
 // Store calls one activity may take: the activity, its boosted original, and that original's author.
 const MAX_STORE_ROUNDS = 3
@@ -166,7 +167,7 @@ export function parseActivity(body: Uint8Array): Parsed {
 	const { actor, id, type } = envelope
 	const activity = activityOf(type, id, actor, json, object)
 	if (activity === null) {
-		return { ok: false, reason: 'unsupported', deleteOfSelf }
+		return { ok: false, reason: 'unsupported', deleteOfSelf, actor }
 	}
 	return { ok: true, actor, activity, target: type === 'Move' ? idOf(json.target) : null, body: json }
 }
@@ -393,6 +394,27 @@ export async function receiveInbound(deps: InboundDeps, request: InboundRequest)
 	const loaders = createRemoteLoaders(deps, state, deps.recipient, budget)
 	const parsed = parseActivity(request.body)
 
+	// Decision 1: the actor of the bounded envelope is judged before anything is verified, whether or not its type is
+	// one Kopje reads, so that no activity of a covered actor (an unsupported or malformed one included) is fetched for.
+	// An envelope that names no usable actor cannot be judged, and no handler would read it: it is checked with the
+	// Store's keys alone, fetching nothing, and answered as ignored. A request without a valid signature stays refused
+	// (ID-1), a wrong signature under a stored key included; one signed with a key id the Store does not hold (a cache
+	// miss: no key was served) is ignored as it would be once that key were fetched.
+	const blocked = (uri: string) => callStore(() => deps.store().inboundDomainBlocked(deps.build, { uri }))
+	if (!parsed.ok) {
+		if (parsed.actor === undefined) {
+			const none = { document: NO_FETCH, context: NO_FETCH }
+			const stored = new Map<string, ServedKey>()
+			const checked = await verify(deps, request, headers, none, stored, true)
+			const missed = 'status' in checked && checked.reason === 'key-refused' && stored.size === 0
+			return 'status' in checked && !missed ? checked : { status: 202, reason: parsed.reason }
+		}
+		if (await blocked(parsed.actor)) {
+			return { status: 202, reason: 'domain-blocked' }
+		}
+	} else if (await blocked(parsed.actor)) {
+		return domainBlocked(deps, request, headers, parsed, { origin, state, budget })
+	}
 	const served = new Map<string, ServedKey>()
 	let verified = await verify(deps, request, headers, loaders, served, false)
 	rethrowStoreError(state)
@@ -465,6 +487,56 @@ export async function receiveInbound(deps: InboundDeps, request: InboundRequest)
 		loaders,
 		state,
 		budget,
+		body: parsed.body,
+	})
+}
+
+// Decision 1 (R38, VIS-30): what an actor an instance domain block covers may still do. Only its cleanups (Delete,
+// DeleteActor, Undo, Reject) are admitted, and only when they verify against a key the Store already holds, of any
+// age, signed by the actor itself; nothing is fetched, the key and the actor's document included (a rotated key fails
+// verification). Everything else is ignored before any fetch, as Mastodon refuses a blocked domain before verifying
+// (signature_verification.rb:96-99). The Store's gate (inbox.ts receive) holds the actor the same way in every round.
+const DOMAIN_BLOCKED_ADMITS: ReadonlySet<string> = new Set(['Delete', 'DeleteActor', 'Undo', 'Reject'])
+
+async function domainBlocked(
+	deps: InboundDeps,
+	request: InboundRequest,
+	headers: Headers,
+	parsed: Extract<Parsed, { ok: true }>,
+	context: { origin: string; state: FederationState; budget: FetchBudget }
+): Promise<InboxOutcome> {
+	const { actor: actorUri, activity } = parsed
+	if (!DOMAIN_BLOCKED_ADMITS.has(activity.type)) {
+		return { status: 202, reason: 'domain-blocked' }
+	}
+	const none = { document: NO_FETCH, context: NO_FETCH, webfinger: NO_FETCH }
+	const served = new Map<string, ServedKey>()
+	const verified = await verify(deps, request, headers, none, served, true)
+	if ('status' in verified) {
+		return verified.reason === 'key-gone' || verified.reason === 'key-refused'
+			? { status: 401, reason: 'key-not-stored' }
+			: verified
+	}
+	const { key } = verified
+	const fromStore = key.id === null ? undefined : served.get(key.id.href)
+	if (fromStore === undefined || fromStore.key !== key || fromStore.owner !== actorUri) {
+		return { status: 401, reason: 'not-key-owner' }
+	}
+	if (originOf(actorUri) === context.origin) {
+		return { status: 401, reason: 'local-actor' }
+	}
+	if (originOf(activity.id) !== originOf(actorUri)) {
+		return { status: 202, reason: 'foreign-id' }
+	}
+	return apply(deps, {
+		activity,
+		target: parsed.target,
+		actorUri,
+		actor: null,
+		origin: context.origin,
+		loaders: none,
+		state: context.state,
+		budget: context.budget,
 		body: parsed.body,
 	})
 }
