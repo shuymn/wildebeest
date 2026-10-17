@@ -196,13 +196,14 @@ function createLoader(deps: LoaderDeps, kind: Kind, sign?: RequestSigner): Docum
 }
 
 async function load(deps: LoaderDeps, kind: Kind, sign: RequestSigner | undefined, target: URL, signal: AbortSignal) {
-	// Redirects stay on the target's origin, so the policy is read once per load.
-	assertPublicShape(target)
-	if (deps.refusesHost !== undefined && (await deps.refusesHost(hostDomain(target.href)))) {
-		throw new RefusedFetchError(target, `Refused host ${target.hostname}: blocked by the instance`)
-	}
 	let current = target
 	for (let redirects = 0; ; redirects++) {
+		// The policy is read before every request, a redirect's included: a block that commits while a response is
+		// awaited stops the next request.
+		assertPublicShape(current)
+		if (deps.refusesHost !== undefined && (await deps.refusesHost(hostDomain(current.href)))) {
+			throw new RefusedFetchError(current, `Refused host ${current.hostname}: blocked by the instance`)
+		}
 		await assertFetchable(current, deps.checkHost ?? dnsCheckHost)
 		if (deps.budget !== undefined) {
 			if (deps.budget.fetches <= 0) {
