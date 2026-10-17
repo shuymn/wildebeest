@@ -418,6 +418,7 @@ const SAFE_INTERPOLATIONS = new Set([
 	'cutSql',
 	'DISTRIBUTABLE_SQL',
 	'domainBlocksSql',
+	'domainCoveredSql',
 	'followableBySql',
 	'followListsShownSql',
 	'hidesCollectionsSql',
@@ -429,6 +430,7 @@ const SAFE_INTERPOLATIONS = new Set([
 	'pendingAppsSql',
 	'quotePolicySql',
 	'REQUIRES_MENTION_SQL',
+	'suspendedSql',
 	'visibleSql',
 ])
 
@@ -505,6 +507,7 @@ const WINDOW = "a merged window's stream key, order value or aggregate name, ove
 const POLL = "a poll's stored choices, matched against a vote or an update, never presented"
 
 const ALLOWED: Record<string, { count: number; reason: string }> = {
+	'src/domain/remote-suspension.ts accounts.uri': { count: 1, reason: IDENTITY },
 	'src/domain/audience.ts interpolation host': { count: 1, reason: PREDICATE },
 	'src/domain/audience.ts interpolation a': { count: 1, reason: PREDICATE },
 	'src/domain/audience.ts interpolation uriHostSql(`${a}.uri`)': { count: 1, reason: PREDICATE },
