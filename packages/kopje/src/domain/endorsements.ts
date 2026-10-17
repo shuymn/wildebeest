@@ -3,7 +3,6 @@ import {
 	type Page,
 	type PageQuery,
 	type Present,
-	presentAccount,
 	relationshipResult,
 	type RelationshipResult,
 	resolveAccountId,
@@ -20,8 +19,7 @@ import type { Db } from '../db/sql'
 // account's list is shown to anyone (R28). They are not federated: Mastodon 4.5's actor has no endorsements collection.
 
 // GET /api/v1/endorsements with limit=0 answers every endorsement (EndorsementsController#unlimited?). Kopje stops at
-// this many, the newest by account id, so the accounts one answer presents stay well within the isolate's memory
-// (RES-3).
+// this many, the newest by account id, and at ACCOUNT_ANSWER_BYTES (RES-3).
 export const MAX_ENDORSEMENTS_ANSWERED = 1_000
 
 // AccountPin's validation message (accounts.pin_errors.following), as ActiveRecord::RecordInvalid words it.
@@ -73,28 +71,32 @@ export const unendorse = userWriteOperation<{ target: string; now: number }, Rel
 
 // The accounts `owner` endorses that R28 lists, by account id, newest first, paged by the account id
 // (paginate_by_max_id, and min_id as Kopje's other account lists page); page null reads up to
-// MAX_ENDORSEMENTS_ANSWERED (ownedAccountsPage in lists.ts).
-function endorsedPage(db: Db, owner: string, page: PageQuery | null, present: Present): Page<Account> {
+// MAX_ENDORSEMENTS_ANSWERED within ACCOUNT_ANSWER_BYTES, below `from` (ownedAccountsPage in lists.ts).
+function endorsedPage(
+	db: Db,
+	owner: string,
+	query: { page: PageQuery | null; from?: string; present: Present }
+): Page<Account> {
 	if (db.first(`SELECT 1 AS shown WHERE ${endorsementsShownSql('?1')}`, owner) === undefined) {
 		return { items: [], newest: null, oldest: null }
 	}
-	const result = ownedAccountsPage(
+	return ownedAccountsPage(
 		db,
 		owner,
 		(order) => `SELECT p.target_account_id AS id FROM account_pins p
 			WHERE p.account_id = ?1 AND p.target_account_id < ?2 AND p.target_account_id > ?3
 			ORDER BY p.target_account_id ${order} LIMIT ?4`,
 		endorsementListedSql('a.id'),
-		page,
+		query,
 		MAX_ENDORSEMENTS_ANSWERED
 	)
-	return { ...result, items: result.items.map((row) => presentAccount(row, present)) }
 }
 
 // GET /api/v1/endorsements: the viewer's own (EndorsementsController).
-export const listEndorsements = userReadOperation<{ page: PageQuery | null; present: Present }, Page<Account>>(
-	(db, { page, present }, { accountId }) => endorsedPage(db, accountId, page, present)
-)
+export const listEndorsements = userReadOperation<
+	{ page: PageQuery | null; from?: string; present: Present },
+	Page<Account>
+>((db, query, { accountId }) => endorsedPage(db, accountId, query))
 
 // GET /api/v1/accounts/:id/endorsements, to anyone (Accounts::EndorsementsController#index). Null when no account has
 // the id.
@@ -103,5 +105,5 @@ export const accountEndorsements = optionalUserReadOperation<
 	Page<Account> | null
 >((db, { account, page, present }) => {
 	const id = resolveAccountId(db, account)
-	return id === null ? null : endorsedPage(db, id, page, present)
+	return id === null ? null : endorsedPage(db, id, { page, present })
 })

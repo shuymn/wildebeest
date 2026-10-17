@@ -62,3 +62,13 @@ export function pageResponse<T>(
 	}
 	return c.json(page.items as object)
 }
+
+// An answer of every item at once (limit=0), sent without Link headers as Mastodon sends it; one Kopje cut at its byte
+// bound (Page.cut) links next to the rest with max_id at its oldest item, which the same limit=0 request continues
+// from.
+export function unlimitedResponse<T>(c: ApiContext, page: Page<T>): Response {
+	if (page.cut === true && page.oldest !== null) {
+		c.header('Link', `<${pageUrl(c.req.url, 'max_id', page.oldest)}>; rel="next"`)
+	}
+	return c.json(page.items as object)
+}

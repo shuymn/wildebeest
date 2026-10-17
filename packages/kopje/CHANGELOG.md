@@ -32,6 +32,20 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - The follow request list leaves out unavailable requesters (suspended, or being deleted) and reads a bounded window
   of requests per page, as the other filtered lists do: it may return a short or empty page while its `next` link
   still leads on.
+- One account's size is bounded. A remote bio is stored within 64 KiB as a JSON string, cut by sanitizing a shorter part
+  of it so it stays valid HTML (realistic bios take at most about 28 KB), and a remote profile URL (`url`, avatar,
+  header) longer than 2,048 characters is ignored, as an invalid one is. Accounts already stored are shown within the
+  same bounds wherever they appear, mentions included: a longer bio as empty, a longer URL as none, the display name cut
+  at 2,048 characters and the username at 255, until the account is fetched again. One account then serializes to at
+  most about 123 KB (RES-3 in [docs/threat-model.md](docs/threat-model.md)).
+- Pages of followers, following, follow requests, `favourited_by` and `reblogged_by` read the profiles of the accounts
+  they show only, not of every candidate their read window considers.
+- Answers that present many accounts at once (list members and endorsements with `limit=0`, familiar followers) stop at
+  a response body of 8 MiB; 1,000 typical accounts, about 2 KiB each, still fit whole. A `limit=0` answer that stops
+  short sends a `Link` header whose `next` answers the rest through `max_id`, which these answers honour, a deliberate
+  deviation from Mastodon, which ignores `max_id` with `limit=0`. Familiar followers share the 8 MiB among the requested
+  accounts that have followers to show, so one with large followers does not crowd out the others, and the answer does
+  not depend on their order.
 
 ### Instance changes
 

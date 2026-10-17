@@ -989,14 +989,14 @@ describe('windows never take a row hidden by its visibility as a candidate (docs
 })
 
 // limit=0 on a list the viewer keeps reads its windows by id and builds the profiles of its answer only: a first window
-// of 999 available and 2,001 unavailable members (by id, newest first), then 3,000 available ones, each with a 16 KiB
+// of 999 available and 2,001 unavailable members (by id, newest first), then 3,000 available ones, each with a 4 KiB
 // bio. The answer is the cap, 1,000 accounts, and no more account rows than that are read.
 describe('limit=0 builds the profiles of its answer only', () => {
 	it('reads at most 1,000 account rows across windows of available and unavailable members', async () => {
 		const store = await world(0)
 		await runInDurableObject(store, (_instance, state) => {
 			const sql = state.storage.sql
-			const bio = `<p>${'x'.repeat(16 * 1024)}</p>`
+			const bio = `<p>${'x'.repeat(4 * 1024)}</p>`
 			// Ids from 980...: 3,000 available below; above them, 999 available and 2,001 being deleted, interleaved.
 			sql.exec(
 				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 6000 - 1)

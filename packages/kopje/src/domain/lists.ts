@@ -1,12 +1,12 @@
 import {
 	type Account,
-	type AccountRow,
+	ACCOUNT_ANSWER_BYTES,
 	type Page,
 	type PageQuery,
 	type Present,
-	presentAccount,
+	presentAccountsWithin,
+	presentedRows,
 	resolveAccountId,
-	accountRowsOf,
 	windowAccountIds,
 } from './accounts'
 import { availableSql } from './audience'
@@ -29,8 +29,7 @@ export const MAX_LISTS = 50
 export const MAX_LIST_TITLE = 256
 
 // GET /api/v1/lists/:id/accounts with limit=0 answers every member (Lists::AccountsController#unlimited?). Kopje stops
-// at this many, the newest by account id, so the accounts one answer presents (bios of remote accounts included) stay
-// well within the isolate's memory (RES-3).
+// at this many, the newest by account id, and at ACCOUNT_ANSWER_BYTES (RES-3).
 export const MAX_LIST_MEMBERS_ANSWERED = 1_000
 
 export const REPLIES_POLICIES = ['followed', 'list', 'none'] as const
@@ -151,26 +150,28 @@ export const deleteList = userWriteOperation<{ id: string }, boolean>(
 // A page of an account list its owner keeps (list members, endorsements), by account id, newest first: `candidates`
 // selects (id) rows with ?1 the owner, ?2 and ?3 the exclusive bounds and ?4 the cap, in the order `order` gives;
 // `rule` (over `a` and `l`) decides which are listed. Paged, a page reads one window (windows.ts). Without a page
-// (limit=0), the answer is the whole list up to `limit`: windows one after another until that many pass or the list
-// ends, as the list is the owner's own and bounded by their follows.
+// (limit=0), the answer is the whole list below `from` (none: from the newest) up to `limit`: windows one after another
+// until that many pass or the list ends, as the list is the owner's own and bounded by their follows. That answer
+// presents its accounts within ACCOUNT_ANSWER_BYTES, its first whatever its size; one cut there is `cut`, and continues
+// below its oldest.
 export function ownedAccountsPage(
 	db: Db,
 	owner: string,
 	candidates: (order: 'ASC' | 'DESC') => string,
 	rule: string,
-	page: PageQuery | null,
+	query: { page: PageQuery | null; from?: string | undefined; present: Present },
 	limit: number
-): Page<AccountRow> {
+): Page<Account> {
+	const { page, present } = query
 	const ascending = page?.minId !== undefined
 	const size = readWindow(page?.limit ?? limit)
-	let max = statusCursor(page?.maxId) ?? ABOVE_EVERY_ID
+	let max = statusCursor(page?.maxId ?? query.from) ?? ABOVE_EVERY_ID
 	const min = statusCursor(page?.minId ?? page?.sinceId) ?? BELOW_EVERY_ID
 	const key = (row: { id: string }) => row.id
 	if (page !== null) {
 		const window = singleWindow(db, candidates(ascending ? 'ASC' : 'DESC'), size, owner, max, min, size)
 		const shown = windowPage(window, windowAccountIds(db, window, rule), key, page.limit, ascending)
-		const items = accountRowsOf(db, shown.rows.map(key))
-		return { items, newest: shown.newest, oldest: shown.oldest, cut: shown.cut }
+		return { items: presentedRows(db, shown.rows, present), newest: shown.newest, oldest: shown.oldest, cut: shown.cut }
 	}
 	// Ids first, through the rule, then the profiles of the answer's own accounts only.
 	const ids: string[] = []
@@ -184,31 +185,31 @@ export function ownedAccountsPage(
 		}
 		max = last
 	}
-	const items = accountRowsOf(db, ids)
-	return { items, newest: items[0]?.id ?? null, oldest: items.at(-1)?.id ?? null }
+	// The array's brackets: its separators are counted with the accounts.
+	const { items, cut } = presentAccountsWithin(db, ids, present, ACCOUNT_ANSWER_BYTES - 1, true)
+	return { items, newest: items[0]?.id ?? null, oldest: items.at(-1)?.id ?? null, ...(cut ? { cut } : {}) }
 }
 
 // GET /api/v1/lists/:id/accounts: the members, unavailable accounts left out (Account.without_suspended), by account
-// id, newest first, paged by the account id (paginate_by_max_id); page null answers every member (limit=0), up to
-// MAX_LIST_MEMBERS_ANSWERED (ownedAccountsPage). A pending member is listed too. Null when the list is not the
-// viewer's.
+// id, newest first, paged by the account id (paginate_by_max_id); page null answers every member (limit=0) below
+// `from`, up to MAX_LIST_MEMBERS_ANSWERED and within ACCOUNT_ANSWER_BYTES (ownedAccountsPage). A pending member is
+// listed too. Null when the list is not the viewer's.
 export const listAccounts = userReadOperation<
-	{ id: string; page: PageQuery | null; present: Present },
+	{ id: string; page: PageQuery | null; from?: string; present: Present },
 	Page<Account> | null
->((db, { id, page, present }, { accountId }) => {
+>((db, { id, ...query }, { accountId }) => {
 	if (ownList(db, accountId, id) === undefined) {
 		return null
 	}
-	const result = ownedAccountsPage(
+	return ownedAccountsPage(
 		db,
 		id,
 		(order) => `SELECT la.account_id AS id FROM list_accounts la
 			WHERE la.list_id = ?1 AND la.account_id < ?2 AND la.account_id > ?3 ORDER BY la.account_id ${order} LIMIT ?4`,
 		availableSql('a.id'),
-		page,
+		query,
 		MAX_LIST_MEMBERS_ANSWERED
 	)
-	return { ...result, items: result.items.map((row) => presentAccount(row, present)) }
 })
 
 export type MembersResult = { status: 'ok' } | { status: 'not_found' } | { status: 'invalid'; errors: string[] }
