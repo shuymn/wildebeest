@@ -48,5 +48,6 @@ describe('signing keys', () => {
 				`ctx.getDocumentLoader({ identifier })\nctx['getActorKeyPairs'](name)\nfederation.setInboxListeners('/u/{identifier}/inbox')`
 			)
 		).toBe(3)
+		expect(flagged(`const { ['setInboxListeners']: listen } = federation\nconst { getDocumentLoader } = ctx`)).toBe(2)
 	})
 })

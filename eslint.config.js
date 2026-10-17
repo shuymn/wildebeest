@@ -156,6 +156,11 @@ export default [
 						'MemberExpression:matches([property.name=/^(getDocumentLoader|getActorKeyPairs|setInboxListeners)$/], [property.value=/^(getDocumentLoader|getActorKeyPairs|setInboxListeners)$/])',
 					message: 'This makes Fedify sign with the published key pairs, which skip the availability check.',
 				},
+				{
+					selector:
+						'ObjectPattern > Property:matches([key.name=/^(getDocumentLoader|getActorKeyPairs|setInboxListeners)$/], [key.value=/^(getDocumentLoader|getActorKeyPairs|setInboxListeners)$/])',
+					message: 'This makes Fedify sign with the published key pairs, which skip the availability check.',
+				},
 			],
 		},
 	},
