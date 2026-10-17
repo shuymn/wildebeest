@@ -64,9 +64,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       benchmark store its upgrade took 3.1 seconds (3.1 in two more runs; 6.1 on a loaded machine), a pause of a few
       seconds on the first request after the deploy.
     - `0043_read_window_indexes`: indexes the following list, who favourited a post and who boosted it in their
-      paging order. It builds three indexes and reads nothing else: on the same benchmark store (which holds no
-      favourites or boosts) its upgrade took 4.1 seconds on a loaded machine (4.1 and 4.1 in two more runs). Expect a
-      pause of a few seconds on the first request after the deploy, longer with many favourites and boosts.
+      paging order. It builds three indexes and reads nothing else: on the same benchmark store with 2,000,000
+      favourites and 200,000 boosts added, its upgrade took 8.1 seconds (8.2 and 8.6 in two more runs), of which about
+      6 is the work every migration pays on a store that size (0042 alone took 6.0 and 5.9 there). Expect a pause of
+      several seconds on the first request after the deploy.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.13] - 2026-10-17
