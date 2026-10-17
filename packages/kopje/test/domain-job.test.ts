@@ -39,7 +39,7 @@ import type { StoreStub } from '../src/platform/store-client'
 
 // The domain job of R38 (instance domain blocks, severity suspend): its reset by each transition, the marks it
 // reconciles and the clearing walk, both-way severing, the conversion of an individual suspension into a domain one,
-// the admin's lists while marks lag (503), and the rows of the concurrency table it answers (1, 2, 3, 4, 19, 22).
+// the admin's lists while marks lag (503), and its interleavings with transitions, suspensions and the Queue and cron.
 
 const D = 'd.example'
 
@@ -89,6 +89,23 @@ const undos = (store: StoreStub) =>
 		`SELECT json_extract(body, '$.activity.object.id') AS follow, count(*) AS n FROM outbound_activities
 		WHERE json_extract(body, '$.activity.type') = 'Undo' GROUP BY follow`
 	)
+
+// `n` local accounts with ids from 500000000000000000 (LIKE '5000%'), with their local_accounts rows.
+async function localAccounts(store: StoreStub, n: number): Promise<void> {
+	await sql(
+		store,
+		`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+		INSERT INTO accounts (id, uri, username, created_at) SELECT printf('%018d', 500000000000000000 + i),
+			'https://kopje.test/ap/users/l' || i, 'l' || i, ?2 FROM n`,
+		n,
+		new Date(NOW).toISOString()
+	)
+	await sql(
+		store,
+		`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey)
+		SELECT id, username || '@example.com', X'00', X'00', 'test' FROM accounts WHERE id LIKE '5000%'`
+	)
+}
 
 // Rounds of the remote jobs until none is left, each within the round budget; how many.
 async function drain(store: StoreStub, limit = 2_000): Promise<number> {
@@ -163,7 +180,7 @@ describe('the domain job (R38: marks and both-way severing)', () => {
 		expect(await jobs(store)).toEqual([])
 	})
 
-	it('row 2: block, 2 rounds, unblock, 1 round, block again: every account marked, each follow severed once', async () => {
+	it('block, 2 rounds, unblock, 1 round, block again: every account marked, each follow severed once', async () => {
 		const w = await world()
 		const store = w.h.store
 		await followedOn(w, 3_000)
@@ -187,7 +204,7 @@ describe('the domain job (R38: marks and both-way severing)', () => {
 		])
 	})
 
-	it('row 2: suspend → noop → suspend by PUT, then a transition between every round, converges the same way', async () => {
+	it('suspend → noop → suspend by PUT, then a transition between every round, converges the same way', async () => {
 		const w = await world()
 		const store = w.h.store
 		await followedOn(w, 600)
@@ -208,7 +225,7 @@ describe('the domain job (R38: marks and both-way severing)', () => {
 		expect(await undos(store)).toHaveLength(600)
 	})
 
-	it('row 4: nested blocks; unblocking the child keeps its accounts marked, unblocking the parent clears them', async () => {
+	it('nested blocks; unblocking the child keeps its accounts marked, unblocking the parent clears them', async () => {
 		const w = await world()
 		const store = w.h.store
 		const x = await remoteAccount(store, 'x', `a.${D}`)
@@ -267,19 +284,7 @@ describe('the domain job (R38: marks and both-way severing)', () => {
 		const store = w.h.store
 		// The first covered account by id has more local followers than a round ends; MARK_ACCOUNTS + 50 come after it.
 		const first = await remoteAccount(store, 'first', D)
-		await sql(
-			store,
-			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
-			INSERT INTO accounts (id, uri, username, created_at) SELECT printf('%018d', 500000000000000000 + i),
-				'https://kopje.test/ap/users/l' || i, 'l' || i, ?2 FROM n`,
-			SEVER_ROUND,
-			new Date(NOW).toISOString()
-		)
-		await sql(
-			store,
-			`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey)
-			SELECT id, username || '@example.com', X'00', X'00', 'test' FROM accounts WHERE id LIKE '5000%'`
-		)
+		await localAccounts(store, SEVER_ROUND)
 		await sql(
 			store,
 			`INSERT INTO follows (account_id, target_account_id, state) SELECT id, ?, 'accepted' FROM accounts
@@ -342,7 +347,7 @@ describe('the domain job (R38: marks and both-way severing)', () => {
 		expect((await undos(store)).map((row) => row.n)).toEqual([1])
 	})
 
-	it('change 4: unblock, then correct the stored domain before clearing: active, and no mark left', async () => {
+	it('unblock, then correct the stored domain before clearing: active, and no mark left', async () => {
 		const w = await world()
 		const store = w.h.store
 		// r's address is confirmed on d, while its actor lives on moved.example.
@@ -370,7 +375,7 @@ describe('the domain job (R38: marks and both-way severing)', () => {
 		])
 	})
 
-	it('change 4: the clearing walk finds a mark whatever the stored domain is now', async () => {
+	it('the clearing walk finds a mark whatever the stored domain is now', async () => {
 		const w = await world()
 		const store = w.h.store
 		const r = await remoteAccount(store, 'r', D)
@@ -386,7 +391,7 @@ describe('the domain job (R38: marks and both-way severing)', () => {
 	})
 })
 
-describe('row 3: an individual suspension and a block on one account', () => {
+describe('an individual suspension and a block on one account', () => {
 	async function setup() {
 		const w = await world()
 		const r = await remoteAccount(w.h.store, 'r', D)
@@ -453,7 +458,7 @@ describe('row 3: an individual suspension and a block on one account', () => {
 	})
 })
 
-describe('the conversion mode (second review, change 2)', () => {
+describe('the conversion mode', () => {
 	// r is suspended with its job held before its follows phase; d is blocked and its job run to its end (it skips r,
 	// individually suspended). r has a pending request to locked carol, and alice and bob follow r.
 	async function converted() {
@@ -502,7 +507,7 @@ describe('the conversion mode (second review, change 2)', () => {
 	})
 })
 
-describe('row 1: the account job reset, with the conversion mode', () => {
+describe('the account job reset, with the conversion mode', () => {
 	it('gated before its Rejects: block, unsuspend (converted), suspend again; one withdrawing Reject each', async () => {
 		const w = await world()
 		const store = w.h.store
@@ -538,7 +543,7 @@ describe('row 1: the account job reset, with the conversion mode', () => {
 	})
 })
 
-describe('the admin lists while the marks lag (decision 3, row 19)', () => {
+describe('the admin lists while the marks lag', () => {
 	const ACCOUNTS = 50_000
 	const OTHERS = 100
 
@@ -630,7 +635,7 @@ describe('the admin lists while the marks lag (decision 3, row 19)', () => {
 	}, 300_000)
 })
 
-describe('row 22: Queue and cron rounds interleaved under a gate', () => {
+describe('Queue and cron rounds interleaved under a gate', () => {
 	// A Store whose runInboundJobs holds its caller before the call until released: the Queue consumer stops at the
 	// Store call of its rounds, while the cron's rounds and the admin's transitions commit.
 	function gated(store: StoreStub) {
@@ -653,19 +658,7 @@ describe('row 22: Queue and cron rounds interleaved under a gate', () => {
 
 	// `n` local accounts, each followed by `r` (accepted): more than one severing round ends.
 	async function followedByR(store: StoreStub, r: string, n: number): Promise<void> {
-		await sql(
-			store,
-			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
-			INSERT INTO accounts (id, uri, username, created_at) SELECT printf('%018d', 500000000000000000 + i),
-				'https://kopje.test/ap/users/l' || i, 'l' || i, ?2 FROM n`,
-			n,
-			new Date(NOW).toISOString()
-		)
-		await sql(
-			store,
-			`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey)
-			SELECT id, username || '@example.com', X'00', X'00', 'test' FROM accounts WHERE id LIKE '5000%'`
-		)
+		await localAccounts(store, n)
 		await sql(
 			store,
 			`INSERT INTO follows (account_id, target_account_id, state) SELECT ?, id, 'accepted' FROM accounts
@@ -674,7 +667,7 @@ describe('row 22: Queue and cron rounds interleaved under a gate', () => {
 		)
 	}
 
-	it('rows 1 and 2: each generation’s follows are severed once, and the marks converge', async () => {
+	it('account and domain jobs: each generation’s follows are severed once, and the marks converge', async () => {
 		const w = await world()
 		const store = w.h.store
 		const sim = new QueueSim()
@@ -732,7 +725,7 @@ describe('row 22: Queue and cron rounds interleaved under a gate', () => {
 	})
 })
 
-describe('change 13: a user’s domain block cleanup and the instance job, interleaved', () => {
+describe('a user’s domain block cleanup and the instance job, interleaved', () => {
 	it('ends each follow once, whichever removes it first', async () => {
 		const w = await world()
 		const store = w.h.store
@@ -813,19 +806,7 @@ describe('bounds of the rounds (growth: reads others control)', () => {
 		const w = await world()
 		const store = w.h.store
 		const r = await remoteAccount(store, 'r', D)
-		await sql(
-			store,
-			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
-			INSERT INTO accounts (id, uri, username, created_at) SELECT printf('%018d', 500000000000000000 + i),
-				'https://kopje.test/ap/users/l' || i, 'l' || i, ?2 FROM n`,
-			LOCALS,
-			new Date(NOW).toISOString()
-		)
-		await sql(
-			store,
-			`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey)
-			SELECT id, username || '@example.com', X'00', X'00', 'test' FROM accounts WHERE id LIKE '5000%'`
-		)
+		await localAccounts(store, LOCALS)
 		await sql(
 			store,
 			`INSERT INTO follows (account_id, target_account_id, state) SELECT id, ?, 'accepted' FROM accounts
