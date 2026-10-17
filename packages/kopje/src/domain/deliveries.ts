@@ -286,7 +286,8 @@ function targetsOf(
 	activity: Activity,
 	audience: DeliveryAudience,
 	withdraws: boolean,
-	reachOf: readonly ReachOf[]
+	reachOf: readonly ReachOf[],
+	earlierReceivers = true
 ): { targets: Target[]; voters: Set<string> } {
 	// Neutral copies by inbox; personal copies by recipient, kept apart so one never replaces the other.
 	const neutral = new Map<string, Behind>()
@@ -334,7 +335,7 @@ function targetsOf(
 	const recipients = recipientsFor(db, signerId, activity, audience, withdraws)
 	reach(recipients)
 	const { object, retracts } = subjectOf(activity, withdraws)
-	if (retracts && object !== null) {
+	if (retracts && object !== null && earlierReceivers) {
 		for (const inbox of receiversOf(db, signerId, object)) {
 			add(inbox, null, null)
 		}
@@ -394,12 +395,16 @@ function receiversOf(db: Db, signerId: string, object: string): string[] {
 // waiting for it there. Whether such a server holds the status is never guessed: Mastodon and Misskey ignore a Create
 // of a status they hold (Create#create_status) and an Update of one they do not, so one of the pair applies either way,
 // and the delivered Create's receipt makes later edits an Update alone.
+// options.withdraws: a Reject that ends an accepted follow, a retraction (outboundKind). options.audienceOnly: a
+// retraction sent to its audience alone, not to the earlier receivers of what it withdraws (R38's severing Reject,
+// blocks.ts endFollow: a Follow's Reject matters to the follower's server only, at its current inbox, as Mastodon's
+// RejectFollowService sends it).
 export function enqueueActivity(
 	db: Db,
 	signerId: string,
 	envelope: DeliveryEnvelope,
 	now: number,
-	options: { withdraws?: boolean } = {}
+	options: { withdraws?: boolean; audienceOnly?: boolean } = {}
 ): void {
 	const found = targetsOf(
 		db,
@@ -407,7 +412,8 @@ export function enqueueActivity(
 		envelope.activity,
 		envelope.audience,
 		options.withdraws === true,
-		envelope.reachOf ?? []
+		envelope.reachOf ?? [],
+		options.audienceOnly !== true
 	)
 	const { voters } = found
 	let targets = found.targets
@@ -592,8 +598,7 @@ export function stageRetraction(db: Db, signerId: string, object: string, maxRow
 		return false
 	}
 	const envelope = JSON.parse(intent.body) as { activity: Activity; audience: DeliveryAudience }
-	// The intent is a retraction (retracts = 1): a Reject staged so withdraws (R38's severing, blocks.ts endFollow).
-	const targets = audienceTargets(db, signerId, envelope.activity, envelope.audience, true)
+	const targets = audienceTargets(db, signerId, envelope.activity, envelope.audience)
 		.map((target) => ({ target, key: stageKey(target) }))
 		.filter((t) => t.key > intent.staged)
 		.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))

@@ -1,7 +1,7 @@
 import { individuallySuspendedSql } from './audience'
 import type { Admin } from './auth'
 import { severRemoteFollow } from './blocks'
-import { EXPANSION_STEP, stageRetraction, supersedeEarlier } from './deliveries'
+import { EXPANSION_STEP, supersedeEarlier } from './deliveries'
 import { logAction } from './moderation-log'
 import { actionBound, reportBound, resolveSuspensionReports } from './reports'
 import { MODERATION_ROUND_ROWS, REPORT_ROUND } from './suspension'
@@ -19,7 +19,8 @@ import type { Db } from '../db/sql'
 //
 //   - reports: resolves the account's reports the suspension froze (reports.ts resolveSuspensionReports, VIS-29).
 //   - follows: ends the account's follows of local accounts up to the follow bound, in target order (follows_pair).
-//     An accepted follow ends with a withdrawing Reject, a request is deleted without one (blocks.ts
+//     An accepted follow ends with a withdrawing Reject to the follower's current inbox alone (its shared inbox when
+//     known, else its personal one), as Mastodon sends it; a request is deleted without one (blocks.ts
 //     severRemoteFollow); row existence decides, so an Undo or purge that removed the follow first sends nothing more.
 //     Local accounts' follows of the account are kept, and an unsuspension restores nothing that was severed.
 //
@@ -29,28 +30,23 @@ import type { Db } from '../db/sql'
 //     that ending the follow would cascade to. These are its follow notification's push deliveries (the notification's
 //     delete cascades to them) and, for an accepted follow whose Reject names its Follow by id, the earlier activities
 //     about that Follow, which the Reject supersedes (an update, and a delete when settled, each; a Misskey pair id
-//     names every generation of a follow, so they grow with its history). They are worked down across rounds.
+//     names every generation of a follow, so they grow with its history). They are worked down across rounds, so no
+//     Accept left waiting is sent after the Reject.
 //   - the final step (blocks.ts severRemoteFollow), taken only once both are done, which then writes at most SEVER_ROWS
-//     rows: a constant. The Reject of a follow named by its Follow's id is recorded there as a staged retraction
-//     (deliveries.ts beginRetraction, one row): its receivers, every inbox an earlier activity about that id reached
-//     or may reach, grow with the id's history (a Misskey pair id, a shared inbox that changed).
-//   - staging (phase 'reject', deliveries.ts stageRetraction): the staged Reject's targets, written a chunk at a time
-//     in inbox order within the rows the round has left, across rounds, before the next follow. Chunks written may
-//     be expanded before the rest; each expanded row is queued behind the earlier rows of its lane, the earlier
-//     activities' included. Staging runs to its end even after an unsuspension, since the follow is gone.
+//     rows: a constant.
 // The arithmetic: a preparatory step writes at most room() rows, and the final step is taken only while room() >= 0,
 // so a round writes at most MODERATION_ROUND_ROWS - SEVER_ROWS + SEVER_ROWS rows. Progress: a round starts with room()
 // = MODERATION_ROUND_ROWS - SEVER_ROWS (260) > 0, so its first follow either has a preparatory row written (a push
-// delivery deleted, or an activity superseded) or is ended; the job's cursor moves past each follow ended. A staging
-// round passes stageRetraction at least MODERATION_ROUND_ROWS - 2 rows, so it writes a chunk or completes, within
-// that and the job's save (stageRetraction writes at most its maxRows rows and one delete).
+// delivery deleted, or an activity superseded) or is ended; the job's cursor moves past each follow ended.
 
 // Follows a severing round reads at most.
 export const SEVER_ROUND = 100
-// Rows the final step of ending a follow writes at most, its preparatory steps done, with the job's own update: up to
-// 40 for the follow (its list and pin triggers delete nothing for a remote follower, which has neither), its follow and
-// follow_request notifications (one each at most, notifications_natural; no push delivery left), the two counts, the
-// retraction, the Reject's intent and chunk, the earlier activities left to supersede (none), and the job's update; and
+// Rows the final step of ending a follow writes at most, its preparatory steps done, with the job's own update: 40
+// for the follow and its bookkeeping, which write 9 at most: the follow (its list and pin triggers delete nothing for a
+// remote follower, which has neither), its follow and follow_request notifications (one each at most,
+// notifications_natural; no push delivery left), the two counts, the retraction, the Reject's intent and its one chunk
+// (one target, the follower's current inbox: no earlier receivers), the earlier activities left to supersede (none),
+// and the job's update; and
 // 3 × EXPANSION_STEP for the expansion that recording the Reject runs (deliveries.ts enqueueActivity), which may expand
 // any activity's pending targets: up to EXPANSION_STEP deliveries, each from a chunk of its own at worst, whose cursor
 // update and delete are two more rows.
@@ -199,16 +195,7 @@ function severRound(db: Db, job: RemoteJob, now: number): boolean {
 				stopped = true
 				break
 			}
-			const ended = severRemoteFollow(db, job.subject, follow.target, now)
-			recorded = ended.recorded || recorded
-			if (ended.staged !== null) {
-				// The staged Reject's receivers, within what the round has left (one row kept for the job's save).
-				const used = totalChanges(db) - start
-				if (!stageRetraction(db, ended.staged.signer, ended.staged.object, MODERATION_ROUND_ROWS - used - 2)) {
-					save(db, job, 'reject', JSON.stringify({ after: follow.target, ...ended.staged }))
-					return true
-				}
-			}
+			recorded = severRemoteFollow(db, job.subject, follow.target, now) || recorded
 		}
 		cursor = follow.target
 	}
@@ -230,14 +217,6 @@ export function remoteModerationRound(db: Db, now: number, after = 0): { id: num
 		db.first<RemoteJob>(`SELECT ${JOB_COLUMNS} FROM remote_moderation_jobs ORDER BY id LIMIT 1`)
 	if (job === undefined) {
 		return null
-	}
-	// A staged Reject is staged to the end whether or not the account is still suspended: its follow is gone already.
-	if (job.phase === 'reject') {
-		const staging = JSON.parse(job.cursor) as { after: string; signer: string; object: string }
-		if (stageRetraction(db, staging.signer, staging.object, MODERATION_ROUND_ROWS - 2)) {
-			save(db, job, 'follows', staging.after)
-		}
-		return { id: job.id, delivers: true }
 	}
 	if (!holds(db, job)) {
 		finish(db, job)

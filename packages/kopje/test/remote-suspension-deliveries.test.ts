@@ -197,6 +197,29 @@ describe('lane order with the withdrawing Rejects (row 15)', () => {
 	})
 })
 
+describe('a re-formed follow after the severing (row 15)', () => {
+	it("delivers the Reject before the new follow's Accept in their shared lane, and no stale Accept after it", async () => {
+		const w = await world()
+		const r = await remoteAccount(w.h.store, 'r', 'remote.example')
+		const uri = await uriOf(w.h.store, r)
+		const alice = await uriOf(w.h.store, w.alice.id)
+		expect(await receive(w.h.store, uri, { type: 'Follow', object: alice })).toMatchObject({ applied: true })
+		await suspend(w, r)
+		await settle(w.h.store)
+		expect(await unsuspend(w, r)).toMatchObject({ status: 200 })
+		// r follows alice again: her Accept is queued behind the Reject in the lane to remote.example.
+		expect(await receive(w.h.store, uri, { type: 'Follow', object: alice })).toMatchObject({ applied: true })
+		await settle(w.h.store)
+		// The lane in order: the first follow's Accept, queued before the suspension (r is available again), then the
+		// Reject that withdraws it, then the new follow's Accept; nothing of the first follow comes after its Reject.
+		expect((await drain(w.h.store)).map(([type, actor, inbox]) => [type, actor, inbox])).toEqual([
+			['Accept', alice, 'https://remote.example/inbox'],
+			['Reject', alice, 'https://remote.example/inbox'],
+			['Accept', alice, 'https://remote.example/inbox'],
+		])
+	})
+})
+
 describe('the send boundary is confirmation (row 14)', () => {
 	const testEnv = { ...env, USER_KEK: LEGACY.kek } as unknown as Env
 

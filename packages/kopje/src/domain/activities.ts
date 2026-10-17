@@ -85,7 +85,7 @@ export function recordOutbound(
 	signerId: string,
 	envelope: OutboundEnvelope,
 	now: number,
-	options: { withdraws?: boolean } = {}
+	options: { withdraws?: boolean; audienceOnly?: boolean } = {}
 ): void {
 	enqueueActivity(db, signerId, envelope, now, options)
 }

@@ -178,21 +178,16 @@ describe("a suspended actor's cleanups while its job waits (row 7, change 4)", (
 				bobId
 			)
 		).toEqual([{ account_id: bobId, target_account_id: '222222222222222222' }])
-		// The job: bob's follow of dave ends with a withdrawing Reject, to the shared inbox the refresh stored (and, as a
-		// retraction, to the inbox its queued Accept was for).
+		// The job: bob's follow of dave ends with a withdrawing Reject, to the shared inbox the refresh stored alone (not
+		// to the inbox its queued Accept was for), as Mastodon sends it.
 		await settle(t.store)
-		// The Reject is staged (its receivers in chunks); a claim expands them.
-		await t.store.claimDeliveries(BUILD, { now: NOW, leaseToken: 'expand' })
 		expect(
 			await sql(
 				t.store,
 				`SELECT d.inbox_url AS inbox, o.retracts FROM deliveries d JOIN outbound_activities o ON o.id = d.activity_id
 				WHERE json_extract(o.body, '$.activity.type') = 'Reject' ORDER BY d.id`
 			)
-		).toEqual([
-			{ inbox: `${MASTODON}/inbox`, retracts: 1 },
-			{ inbox: `${MASTODON}/inbox2`, retracts: 1 },
-		])
+		).toEqual([{ inbox: `${MASTODON}/inbox2`, retracts: 1 }])
 		expect(await sql(t.store, 'SELECT * FROM follows WHERE ? IN (account_id, target_account_id)', bobId)).toEqual([])
 	})
 

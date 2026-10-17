@@ -752,7 +752,9 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   nothing but retractions, and its inbound activity is not applied but for its `Delete`, `DeleteActor`, `Undo` and
   `Reject`, after a routing refresh of its inbox from a verified document; no path refreshes its profile, keys or
   domain, or stores a status of it. Its follows of local accounts are severed in bounded, generation-bound rounds
-  (R38); local follows of it are kept. Instance domain blocks (B2a) are not built yet: the host policy refuses no host.
+  (R38), each accepted one with a withdrawing `Reject` to the follower's current inbox alone, as Mastodon sends it (a
+  retraction, never refused, but not sent to the earlier receivers of what it withdraws); local follows of it are
+  kept. Instance domain blocks (B2a) are not built yet: the host policy refuses no host.
   Each staged target records the recipients behind it (merged across followers, addressed accounts,
   silent recipients, poll voters and other statuses' reach before deduplication by inbox): up to 16 account ids, the
   hosts of their actor ids, or `many` above 16, meaning "not all unavailable"; expansion copies them onto the delivery

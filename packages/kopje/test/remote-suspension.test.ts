@@ -379,16 +379,16 @@ describe("the severing round's budget (change 2 and its preparatory steps)", () 
 			const w = await world()
 			const { r, uri } = await followed(w)
 			if (!named) {
-				// A follow stored without its Follow's id: its Reject is recorded at once, and recording it expands.
+				// A follow stored without its Follow's id: its Reject names none.
 				await sql(w.h.store, 'UPDATE follows SET uri = NULL WHERE account_id = ?', r)
 			}
 			await pushes(w, count)
 			await backlog(w)
 			expect(await act(w, r, { type: 'suspend' })).toMatchObject({ status: 200 })
 			await severedOnce(w, r, uri, await rounds(w.h.store))
-			// Recording an unstaged Reject expanded the backlog's first EXPANSION_STEP chunks; a staged one expands none.
+			// Recording the Reject expanded the backlog's first EXPANSION_STEP chunks.
 			expect(await sql(w.h.store, 'SELECT count(*) AS n FROM deliveries WHERE activity_id = 9000')).toEqual([
-				{ n: named ? 0 : EXPANSION_STEP },
+				{ n: EXPANSION_STEP },
 			])
 		}
 	)
@@ -424,16 +424,20 @@ describe("the severing round's budget (change 2 and its preparatory steps)", () 
 		120_000
 	)
 
-	// The Reject's targets as staged: each inbox and how many times it is named.
-	const rejectTargets = (store: StoreStub) =>
+	// The Reject's targets, expanded or not: each inbox and how many times it is named.
+	const rejectInboxes = (store: StoreStub) =>
 		sql<{ inbox: string; n: number }>(
 			store,
-			`SELECT json_extract(t.value, '$.inbox') AS inbox, count(*) AS n
-			FROM outbound_activities o JOIN outbound_targets c ON c.activity_id = o.id, json_each(c.targets) t
-			WHERE json_extract(o.body, '$.activity.type') = 'Reject' GROUP BY 1`
+			`SELECT inbox, count(*) AS n FROM (
+				SELECT d.inbox_url AS inbox FROM deliveries d JOIN outbound_activities o ON o.id = d.activity_id
+				WHERE json_extract(o.body, '$.activity.type') = 'Reject'
+				UNION ALL SELECT json_extract(t.value, '$.inbox')
+				FROM outbound_activities o JOIN outbound_targets c ON c.activity_id = o.id, json_each(c.targets) t
+				WHERE json_extract(o.body, '$.activity.type') = 'Reject' AND t.key >= c.next)
+			GROUP BY 1`
 		)
 
-	it('stages the Reject to every inbox a pair-id follow was accepted at, its shared inbox changing, once each', async () => {
+	it('rejects a pair-id follow accepted at 300 inboxes once, at its current inbox, in bounded rounds', async () => {
 		const w = await world()
 		const r = await remoteAccount(w.h.store, 'r')
 		const uri = await uriOf(w.h.store, r)
@@ -455,16 +459,11 @@ describe("the severing round's budget (change 2 and its preparatory steps)", () 
 			}
 		}
 		expect(await act(w, r, { type: 'suspend' })).toMatchObject({ status: 200 })
-		const written = await rounds(w.h.store)
-		await severedOnce(w, r, uri, written)
-		const targets = await rejectTargets(w.h.store)
-		expect(targets.filter((t) => t.n !== 1)).toEqual([])
-		expect(targets.map((t) => t.inbox).sort()).toEqual(
-			Array.from({ length: GENERATIONS }, (_, i) => `https://h${i}.example/inbox`).sort()
-		)
+		await severedOnce(w, r, uri, await rounds(w.h.store))
+		expect(await rejectInboxes(w.h.store)).toEqual([{ inbox: `https://h${GENERATIONS - 1}.example/inbox`, n: 1 }])
 	}, 180_000)
 
-	it('stages more receivers than a round may write across rounds, each round within the budget', async () => {
+	it('rejects once at the current inbox though an earlier Accept waits for 65,000 inboxes', async () => {
 		const w = await world()
 		const { r, uri } = await followed(w, 2)
 		// The earlier Accept about the pair id waits with targets not yet expanded at RECEIVERS distinct inboxes (as many
@@ -485,21 +484,13 @@ describe("the severing round's budget (change 2 and its preparatory steps)", () 
 			accept!.id
 		)
 		expect(await act(w, r, { type: 'suspend' })).toMatchObject({ status: 200 })
-		const written = await rounds(w.h.store)
-		await severedOnce(w, r, uri, written)
-		// The Reject's chunks are more rows than one round may write, so staging spanned rounds.
-		expect(
-			(
-				await sql<{ n: number }>(
-					w.h.store,
-					`SELECT count(*) AS n FROM outbound_targets c JOIN outbound_activities o ON o.id = c.activity_id
-					WHERE json_extract(o.body, '$.activity.type') = 'Reject'`
-				)
-			)[0]!.n
-		).toBeGreaterThan(MODERATION_ROUND_ROWS)
-		const targets = await rejectTargets(w.h.store)
-		expect(targets.filter((t) => t.n !== 1)).toEqual([])
-		expect(targets.length).toBe(RECEIVERS + 1)
+		await severedOnce(w, r, uri, await rounds(w.h.store))
+		const [current] = await sql<{ inbox: string }>(
+			w.h.store,
+			'SELECT coalesce(shared_inbox_url, inbox_url) AS inbox FROM accounts WHERE id = ?',
+			r
+		)
+		expect(await rejectInboxes(w.h.store)).toEqual([{ inbox: current!.inbox, n: 1 }])
 	}, 180_000)
 })
 
