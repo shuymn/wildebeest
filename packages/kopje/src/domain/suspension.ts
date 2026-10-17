@@ -4,6 +4,7 @@ import type { Admin } from './auth'
 import { beginStagedUpdate, endStaging, isDeliverableInbox, stageTargets } from './deliveries'
 import { logAction } from './moderation-log'
 import { writeOperation } from './operation'
+import { remoteModerationRound } from './remote-suspension'
 import { actionBound, reportBound, resolveSuspensionReports } from './reports'
 import { forgetActorSnapshots } from './snapshot'
 import type { Db } from '../db/sql'
@@ -528,20 +529,40 @@ export function moderationRound(db: Db, now: number, after = 0): { id: number; d
 	return { id: job.id, delivers: reachRound(db, job, state, now) }
 }
 
-// The moderation jobs' next rounds, at most MODERATION_ROUNDS, the jobs taking turns oldest first (the Queue and the
-// cron run it with the inbound jobs, store.ts). pending: a job has rounds left; delivers: targets were written.
+// The moderation jobs' next rounds, at most MODERATION_ROUNDS, the local jobs (moderation_jobs) and the remote ones
+// (remote_moderation_jobs, remote-suspension.ts) taking turns, each table's jobs oldest first (the Queue and the cron
+// run it with the inbound jobs, store.ts). pending: a job has rounds left; delivers: an activity or targets were
+// written.
 export const runModerationJobs = writeOperation<{ now: number }, { pending: boolean; delivers: boolean }>(
 	(db, { now }) => {
 		let delivers = false
-		let after = 0
+		const after = { local: 0, remote: 0 }
+		const rounds = {
+			local: () => moderationRound(db, now, after.local),
+			remote: () => remoteModerationRound(db, now, after.remote),
+		}
+		let turn: 'local' | 'remote' = 'local'
 		for (let round = 0; round < MODERATION_ROUNDS; round++) {
-			const ran = moderationRound(db, now, after)
+			// The table whose turn it is, else the other when it has no job.
+			const other: 'local' | 'remote' = turn === 'local' ? 'remote' : 'local'
+			let table: 'local' | 'remote' = turn
+			let ran = rounds[turn]()
+			if (ran === null) {
+				table = other
+				ran = rounds[other]()
+			}
 			if (ran === null) {
 				break
 			}
-			after = ran.id
+			after[table] = ran.id
 			delivers = ran.delivers || delivers
+			turn = table === 'local' ? 'remote' : 'local'
 		}
-		return { pending: db.first('SELECT 1 AS x FROM moderation_jobs LIMIT 1') !== undefined, delivers }
+		return {
+			pending:
+				db.first('SELECT 1 AS x FROM moderation_jobs UNION ALL SELECT 1 FROM remote_moderation_jobs LIMIT 1') !==
+				undefined,
+			delivers,
+		}
 	}
 )

@@ -62,8 +62,9 @@ function party(db: Db, id: string): Party | undefined {
 // RejectFollowService do: a local follower's follow of a remote target is undone there, and a remote follower of a
 // local target is sent a Reject (one that withdraws the follow if it had been accepted, deliveries.ts). The local
 // sides' counts lose the removed edge if it was accepted (a remote account's counts are its server's). Returns
-// whether an activity was recorded.
-function endFollow(db: Db, follower: Party, target: Party, now: number): boolean {
+// whether an activity was recorded. quietRequest: a remote follower's request (pending) is deleted without a Reject,
+// as Mastodon's SuspendAccountService leaves a suspended account's requests unanswered (R38).
+function endFollow(db: Db, follower: Party, target: Party, now: number, quietRequest = false): boolean {
 	const edge = db.first<{ id: string; uri: string | null; state: string }>(
 		`DELETE FROM follows WHERE account_id = ? AND target_account_id = ?
 		RETURNING CAST(id AS TEXT) AS id, uri, state`,
@@ -106,6 +107,9 @@ function endFollow(db: Db, follower: Party, target: Party, now: number): boolean
 		if (edge.uri !== null) {
 			retractFollow(db, follower.uri, edge.uri, now)
 		}
+		if (quietRequest && edge.state !== 'accepted') {
+			return false
+		}
 		recordOutbound(
 			db,
 			target.id,
@@ -122,6 +126,14 @@ function endFollow(db: Db, follower: Party, target: Party, now: number): boolean
 		return true
 	}
 	return false
+}
+
+// R38's severing of a remote account's follow of a local account (remote-suspension.ts): an accepted follow ends with
+// a withdrawing Reject, a request is deleted without one (endFollow). Returns whether an activity was recorded.
+export function severRemoteFollow(db: Db, followerId: string, targetId: string, now: number): boolean {
+	const follower = party(db, followerId)
+	const target = party(db, targetId)
+	return follower !== undefined && target !== undefined && endFollow(db, follower, target, now, true)
 }
 
 type Target = { status: 'ok'; viewer: Party; target: Party } | { status: 'not_found' } | { status: 'forbidden' }

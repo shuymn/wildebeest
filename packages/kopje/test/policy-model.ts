@@ -93,11 +93,11 @@ export class PolicyModel {
 		return status
 	}
 
-	// R1: a suspended local account and a remote account whose deletion has started are unavailable; every other
-	// account is available.
+	// R1: a suspended local account, a remote account the instance suspended (R38) and a remote account whose deletion
+	// has started are unavailable; every other account is available.
 	available(x: number): boolean {
 		const account = this.account(x)
-		return !(account.local && account.suspended) && !(!account.local && account.deleting)
+		return !account.suspended && !(!account.local && account.deleting)
 	}
 
 	// The account lives on `domain`: its stored domain or the host of its actor id, exactly. Local accounts live nowhere

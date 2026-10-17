@@ -90,26 +90,31 @@ export function mentionStatusSql(id: string): string {
 
 // ---- Accounts. `x` is an expression for an account id, never a status or edge alias.
 
-// R1 (Account#unavailable?): a suspended local account, and a remote account whose deletion has started
+// R1 (Account#unavailable?): a suspended local account, a remote account the instance suspended (R38: accounts.
+// suspended_at, set in the suspension's transaction), and a remote account whose deletion has started
 // (accounts.deleted_at, set in the first transaction of its purge), is seen by nobody, and nothing of it is shown or
-// delivered. Two seeks: the local_accounts row, and the partial index of the accounts being deleted, which holds no
-// entry for any other account (INDEXED BY keeps the plan from reading the account's row instead), so the rule reads
-// no row of an available account but its local_accounts row. An unknown id is available.
+// delivered. Three seeks: the local_accounts row, and the partial indexes of the suspended accounts and of the accounts
+// being deleted, which hold no entry for any other account (INDEXED BY keeps the plan from reading the account's row
+// instead), so the rule reads no row of an available account but its local_accounts row. An unknown id is available.
 export function availableSql(x: string): string {
 	return `(NOT EXISTS (SELECT 1 FROM main.local_accounts pl WHERE pl.account_id = ${x} AND pl.suspended_at IS NOT NULL
-		UNION ALL SELECT 1 FROM main.accounts pa INDEXED BY accounts_deleted WHERE pa.id = ${x} AND pa.deleted_at IS NOT NULL))`
+		UNION ALL SELECT 1 FROM main.accounts pa INDEXED BY accounts_deleted WHERE pa.id = ${x} AND pa.deleted_at IS NOT NULL
+		UNION ALL SELECT 1 FROM main.accounts ps INDEXED BY accounts_suspended
+			WHERE ps.id = ${x} AND ${suspendedSql('ps')}))`
 }
 
 // The same rule for a local account whose local_accounts row `l` is already joined, so a query that has the row does
-// not look it up again. A local account is never deleted that way (the schema refuses deleted_at on it).
+// not look it up again. A local account is never deleted or suspended through its accounts row (the schema refuses
+// deleted_at and suspension_source on it).
 export function availableLocalSql(l: string): string {
 	return `${l}.suspended_at IS NULL`
 }
 
 // The same rule for an account `a` with its local_accounts row `l` LEFT JOINed (NULL for a remote account), read
-// from the two rows without a lookup: the admin's list of accounts (admin-accounts.ts) reads both rows anyway.
+// from the two rows without a lookup: account presentation (accounts.ts ACCOUNT_COLUMNS) and the admin's list of
+// accounts (admin-accounts.ts) read both rows anyway.
 export function availableJoinedSql(a: string, l: string): string {
-	return `(${availableLocalSql(l)} AND ${notDeletingSql(a)})`
+	return `(${availableLocalSql(l)} AND ${activeSql(a)})`
 }
 
 // The remote accounts whose deletion has started, the entries of the partial index accounts_deleted: its range in id
@@ -118,10 +123,22 @@ export function deletingSql(a: string): string {
 	return `${a}.deleted_at IS NOT NULL`
 }
 
-// The accounts whose deletion has not started, the entries of the partial index accounts_available (migration
-// 0031_admin_accounts_available): its range in id order is what the admin's list of active accounts walks.
-export function notDeletingSql(a: string): string {
-	return `${a}.deleted_at IS NULL`
+// The remote accounts the instance suspended (R38), the entries of the partial index accounts_suspended (migration
+// 0045_remote_suspension): its range in id order is what the admin's list of suspended accounts reads of them.
+export function suspendedSql(a: string): string {
+	return `${a}.suspended_at IS NOT NULL`
+}
+
+// The accounts neither suspended by the instance nor being deleted, the entries of the partial index accounts_active
+// (migration 0045_remote_suspension): its range in id order is what the admin's list of active accounts walks.
+export function activeSql(a: string): string {
+	return `(${a}.deleted_at IS NULL AND ${a}.suspended_at IS NULL)`
+}
+
+// R38: the remote account `a` is suspended by the admin's own decision (suspension_source 'account'), which its job
+// requires each round (remote-suspension.ts), and which a verified routing refresh may still update (inbox.ts).
+export function individuallySuspendedSql(a: string): string {
+	return `(${a}.suspended_at IS NOT NULL AND ${a}.suspension_source = 'account')`
 }
 
 // Whether `owner` blocks the account `x`.

@@ -41,7 +41,7 @@ export const profilePage = readOperation<
 	if (row === undefined) {
 		return { status: 'not_found' }
 	}
-	if (row.suspended_at !== null) {
+	if (row.available === 0) {
 		return { status: 'suspended' }
 	}
 	// A window of the account's public and unlisted posts from the cursor (statuses_account_originals, windows.ts; no

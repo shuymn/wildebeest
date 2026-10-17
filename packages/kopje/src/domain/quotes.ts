@@ -532,7 +532,12 @@ function storeQuoted(db: Db, row: QuoteRow, input: QuoteVerification, keep: Quot
 		if (document.value.uri !== row.need_author || isDeletedActor(db, document.value.uri, now)) {
 			return finish(db, row, keep, 'done', now)
 		}
-		upsertRemoteActor(db, document.value, origin, now)
+		// An upsert that stores nothing (an unavailable author's row is frozen, R38) ends the work: the next stage could
+		// store nothing of that author either.
+		const stored = upsertRemoteActor(db, document.value, origin, now)
+		if (stored === undefined || stored.frozen) {
+			return finish(db, row, keep, 'done', now)
+		}
 		db.run(`UPDATE quotes SET generation = ${NEW_GENERATION} WHERE status_id = ?`, row.status_id)
 		return { done: false, due: true, state: keep, next: true }
 	}

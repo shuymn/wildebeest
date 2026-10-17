@@ -57,6 +57,7 @@ const HOUR_MS = 3_600_000
 type WorldAccount = {
 	name: string
 	local: boolean
+	// A local account's suspension, or the instance's suspension of a remote account (R38: accounts.suspended_at).
 	suspended: boolean
 	// Remote accounts only: its deletion has started (accounts.deleted_at), and its purge has removed nothing yet.
 	deleting: boolean
@@ -253,6 +254,8 @@ export const worldArb: fc.Arbitrary<World> = fc
 		// Last, as above: pins (each a choice among the author's pinnable statuses) and conversation mutes.
 		pins: fc.array(fc.record({ account: fc.nat(), status: fc.nat() }), { maxLength: 4 }),
 		conversationMutes: fc.array(fc.record({ account: fc.nat(), status: fc.nat() }), { maxLength: 4 }),
+		// Last, as above: a remote account the instance suspended (R38).
+		remoteSuspended: fc.option(fc.nat(), { freq: 3 }),
 	})
 	.map((raw): World => {
 		const accounts: WorldAccount[] = []
@@ -271,7 +274,7 @@ export const worldArb: fc.Arbitrary<World> = fc
 			accounts.push({
 				name: `R${i}`,
 				local: false,
-				suspended: false,
+				suspended: raw.remoteSuspended !== null && raw.remoteSuspended % raw.remotes.length === i,
 				deleting: raw.deleting !== null && raw.deleting % raw.remotes.length === i,
 				// Drawn from bits already drawn, as tagFollowers below: about one remote account in four.
 				hidesCollections: raw.follows[LOCALS + i]?.showReblogs === true && raw.follows[LOCALS + i]?.notify === true,
@@ -453,8 +456,9 @@ export function writeWorld(sql: SqlStorage, world: World): void {
 		const username = account.name.toLowerCase()
 		// Every account's search text holds "account", so an account search for it reads them all.
 		sql.exec(
-			`INSERT INTO accounts (id, uri, username, domain, search_text, deleted_at, hide_collections)
-			VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			`INSERT INTO accounts (id, uri, username, domain, search_text, deleted_at, hide_collections, suspended_at,
+				suspension_source)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			accountId(i),
 			account.uri,
 			username,
@@ -462,7 +466,9 @@ export function writeWorld(sql: SqlStorage, world: World): void {
 			`account ${account.domain === null ? username : `${username}@${account.domain}`}`,
 			account.deleting ? '2026-01-01T00:00:00.000Z' : null,
 			// A remote account Kopje has not learned of hides nothing, as one that shows its network.
-			account.local || !account.hidesCollections ? null : 1
+			account.local || !account.hidesCollections ? null : 1,
+			!account.local && account.suspended ? '2026-01-01T00:00:00.000Z' : null,
+			!account.local && account.suspended ? 'account' : null
 		)
 		if (account.local) {
 			sql.exec(

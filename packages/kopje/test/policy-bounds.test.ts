@@ -5242,7 +5242,7 @@ describe("the admin's account list reads a page, however many accounts do not ma
 			filter: { status: 'suspended' },
 			match: { ...remote('gone'), deleted: true },
 			bulk: [remote('r')],
-			matching: 'a.deleted_at IS NOT NULL OR l.suspended_at IS NOT NULL',
+			matching: 'a.deleted_at IS NOT NULL OR a.suspended_at IS NOT NULL OR l.suspended_at IS NOT NULL',
 		},
 		{
 			name: 'status=pending (nothing to read)',
@@ -5264,7 +5264,7 @@ describe("the admin's account list reads a page, however many accounts do not ma
 			filter: { status: 'active' },
 			match: remote('r'),
 			bulk: [remote('r')],
-			matching: 'a.deleted_at IS NULL AND l.suspended_at IS NULL',
+			matching: 'a.deleted_at IS NULL AND a.suspended_at IS NULL AND l.suspended_at IS NULL',
 		},
 		// The active walks among many remote accounts whose deletion has started (awaiting their purge).
 		{
@@ -5272,14 +5272,14 @@ describe("the admin's account list reads a page, however many accounts do not ma
 			filter: { status: 'active' },
 			match: remote('r'),
 			bulk: [{ ...remote('gone'), deleted: true }],
-			matching: 'a.deleted_at IS NULL AND l.suspended_at IS NULL',
+			matching: 'a.deleted_at IS NULL AND a.suspended_at IS NULL AND l.suspended_at IS NULL',
 		},
 		{
 			name: 'origin=remote, status=active among accounts being deleted',
 			filter: { origin: 'remote', status: 'active' },
 			match: remote('r'),
 			bulk: [{ ...remote('gone'), deleted: true }],
-			matching: 'a.domain IS NOT NULL AND a.deleted_at IS NULL',
+			matching: 'a.domain IS NOT NULL AND a.deleted_at IS NULL AND a.suspended_at IS NULL',
 		},
 	]
 

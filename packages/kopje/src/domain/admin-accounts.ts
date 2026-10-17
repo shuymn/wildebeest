@@ -9,7 +9,7 @@ import {
 	presentAccount,
 } from './accounts'
 import { accessAdminRefusal, normalizedEmail } from './admin-authority'
-import { availableJoinedSql, availableLocalSql, deletingSql, notDeletingSql } from './audience'
+import { availableJoinedSql, availableLocalSql, deletingSql, suspendedSql } from './audience'
 import {
 	ADMIN_PERMISSION,
 	adminGuarded,
@@ -21,6 +21,7 @@ import {
 } from './auth'
 import { logAction } from './moderation-log'
 import { writeOperation } from './operation'
+import { suspendRemote, unsuspendRemote } from './remote-suspension'
 import { reportExists, resolveReport } from './reports'
 import { suspendLocal, unsuspendLocal } from './suspension'
 import type { Db } from '../db/sql'
@@ -210,8 +211,8 @@ export type AdminAccountList =
 	// More than ADMIN_ACCOUNT_CANDIDATES accounts in the searched range: 422, never an unordered or empty page.
 	| { status: 'too_broad' }
 
-// What a filter reads of an account. unavailable is R1's rule (availableSql): a suspended local account, or a remote
-// one whose deletion has started; the admin entity shows both as suspended, and the filter agrees.
+// What a filter reads of an account. unavailable is R1's rule (availableSql): a suspended account, local or remote
+// (R38), or a remote one whose deletion has started; the admin entity shows each as suspended, and the filter agrees.
 type Candidate = {
 	id: string
 	username: string
@@ -353,33 +354,36 @@ function readMatches(
 	}
 	const order = bounds.ascending ? 'ASC' : 'DESC'
 	if (filter.status === 'suspended') {
-		// The suspended local accounts (operator-sized) and the remote accounts whose deletion has started, as one range
-		// of accounts_deleted in id order; merged by id.
+		// The suspended local accounts (operator-sized), and the remote accounts the instance suspended or whose deletion
+		// has started, as one range of accounts_suspended and one of accounts_deleted in id order; merged by id.
 		const local = db.all<Candidate>(
 			`SELECT ${CANDIDATE_COLUMNS} FROM local_accounts l JOIN accounts a ON a.id = l.account_id
 			WHERE NOT ${availableLocalSql('l')}`
 		)
-		const deleting = db.all<Candidate>(
-			`SELECT ${CANDIDATE_COLUMNS} FROM accounts a INDEXED BY accounts_deleted
-			LEFT JOIN local_accounts l ON l.account_id = a.id
-			WHERE ${deletingSql('a')} AND ${ID_RANGE} ORDER BY a.id ${order} LIMIT ?3`,
-			bounds.max,
-			bounds.min,
-			limit + 1
-		)
-		return ordered([...local, ...deleting], filter, adminId, bounds).slice(0, limit + 1)
+		const range = (index: string, where: string) =>
+			db.all<Candidate>(
+				`SELECT ${CANDIDATE_COLUMNS} FROM accounts a INDEXED BY ${index}
+				LEFT JOIN local_accounts l ON l.account_id = a.id
+				WHERE ${where} AND ${ID_RANGE} ORDER BY a.id ${order} LIMIT ?3`,
+				bounds.max,
+				bounds.min,
+				limit + 1
+			)
+		const remote = [...range('accounts_suspended', suspendedSql('a')), ...range('accounts_deleted', deletingSql('a'))]
+		const merged = new Map([...local, ...remote].map((row) => [row.id, row]))
+		return ordered([...merged.values()], filter, adminId, bounds).slice(0, limit + 1)
 	}
-	// No search: the accounts by id, newest first. Active accounts walk accounts_available (migration
-	// 0031_admin_accounts_available), which holds no account whose deletion has started, so the walk skips only the
-	// suspended local accounts; others walk the primary key. The residual skips the local accounts (remote) and the
-	// suspended local accounts (active), operator-sized sets.
+	// No search: the accounts by id, newest first. Active accounts walk accounts_active (migration
+	// 0045_remote_suspension), which holds no account suspended by the instance or whose deletion has started, so the
+	// walk skips only the suspended local accounts; others walk the primary key. The residual skips the local accounts
+	// (remote) and the suspended local accounts (active), operator-sized sets.
 	const active = filter.status === 'active'
 	const residual = [
 		filter.origin === 'remote' ? 'a.domain IS NOT NULL' : '1',
-		active ? `${notDeletingSql('a')} AND ${availableLocalSql('l')}` : '1',
+		active ? availableJoinedSql('a', 'l') : '1',
 	].join(' AND ')
 	return db.all<Candidate>(
-		`SELECT ${CANDIDATE_COLUMNS} FROM accounts a INDEXED BY ${active ? 'accounts_available' : 'sqlite_autoindex_accounts_1'}
+		`SELECT ${CANDIDATE_COLUMNS} FROM accounts a INDEXED BY ${active ? 'accounts_active' : 'sqlite_autoindex_accounts_1'}
 		LEFT JOIN local_accounts l ON l.account_id = a.id
 		WHERE ${ID_RANGE} AND ${residual} ORDER BY a.id ${order} LIMIT ?3`,
 		bounds.max,
@@ -501,7 +505,8 @@ export function adminAccountOperations(read: AdminDeclare, write: AdminDeclare) 
 	//   - none resolves the report named, if any (process_reports!); nothing else.
 	//   - suspend on a local account suspends it (domain/suspension.ts): its reports, frozen at the suspension, are
 	//     resolved by the suspension job, as process_reports! resolves every unresolved report on the target.
-	//   - suspend on a remote account answers 422: remote suspension is not served yet.
+	//   - suspend on a remote account suspends it (remote-suspension.ts, R38): its reports, frozen at the suspension, are
+	//     resolved by its job, which then ends its follows of local accounts.
 	//   - disable, sensitive and silence answer 422 as a type outside the list would, so the client sees a failed action
 	//     rather than a silent no-op: Kopje has no disabling, sensitizing or silencing.
 	//   - text and warning_preset_id are accepted and dropped: Kopje keeps no strikes and sends no warning, as Mastodon
@@ -525,9 +530,6 @@ export function adminAccountOperations(read: AdminDeclare, write: AdminDeclare) 
 			if (account.id === admin.accountId) {
 				return { status: 'not_allowed' }
 			}
-			if (type === 'suspend' && account.domain !== null) {
-				return { status: 'invalid', error: REMOTE_SUSPENSION }
-			}
 			if (type === 'none') {
 				// resolveReport writes nothing when the report is missing.
 				return reportId === null || resolveReport(db, reportId, admin) ? { status: 'ok' } : { status: 'not_found' }
@@ -535,13 +537,19 @@ export function adminAccountOperations(read: AdminDeclare, write: AdminDeclare) 
 			if (reportId !== null && !reportExists(db, reportId)) {
 				return { status: 'not_found' }
 			}
-			suspendLocal(db, account.id, admin, admin.now)
+			if (account.domain === null) {
+				suspendLocal(db, account.id, admin, admin.now)
+			} else {
+				suspendRemote(db, account.id, admin, admin.now)
+			}
 			return { status: 'ok' }
 		}
 	)
 
-	// POST /api/v1/admin/accounts/:id/unsuspend (AccountPolicy#unsuspend?: a local suspension only): a remote account,
-	// or a local one that is not suspended, is refused (403). The OAuth admin is never suspended (it is no admin then).
+	// POST /api/v1/admin/accounts/:id/unsuspend (AccountPolicy#unsuspend?: a suspension of this instance's only): an
+	// account that is not suspended, or a remote one unavailable for another reason (its deletion has started), is
+	// refused (403). A remote account is not fetched again, as Mastodon's UnsuspendAccountService does. The OAuth admin
+	// is never suspended (it is no admin then).
 	const unsuspendAdminAccount = write<{ id: string; present: Present }, AdminAccountResult>(
 		ADMIN_PERMISSION.manageUsers,
 		(db, { id, present }, admin) => {
@@ -549,7 +557,7 @@ export function adminAccountOperations(read: AdminDeclare, write: AdminDeclare) 
 			if (found === undefined) {
 				return { status: 'not_found' }
 			}
-			if (found.domain !== null || !unsuspendLocal(db, id, admin.now)) {
+			if (!(found.domain === null ? unsuspendLocal(db, id, admin.now) : unsuspendRemote(db, id))) {
 				return { status: 'not_allowed' }
 			}
 			logAction(db, admin, 'unsuspend', { type: 'Account', id }, {}, admin.now)
@@ -559,8 +567,6 @@ export function adminAccountOperations(read: AdminDeclare, write: AdminDeclare) 
 
 	return { listAdminAccounts, getAdminAccount, actOnAdminAccount, actOnAccount, unsuspendAdminAccount }
 }
-
-export const REMOTE_SUSPENSION = 'Remote accounts cannot be suspended yet'
 
 export type AccountActionResult =
 	| { status: 'ok' }
