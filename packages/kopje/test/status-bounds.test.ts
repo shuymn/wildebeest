@@ -9,6 +9,7 @@ import { ALICE, setup, type Setup } from './inbox-status-helpers'
 import { observedSql, rowsRead } from './read-helpers'
 import { community, post, remoteAccount } from './status-helpers'
 import { listConversations, MAX_PRESENTED_PARTICIPANTS } from '../src/domain/conversations'
+import { MAX_FILTER_KEYWORD, MAX_FILTER_TITLE, MAX_FILTERS } from '../src/domain/filters'
 import { ACTOR_URI_LIMIT, PROFILE_URL_LIMIT, USERNAME_LIMIT } from '../src/domain/profile-bounds'
 import {
 	MAX_MEDIA_DESCRIPTION_LENGTH,
@@ -27,6 +28,7 @@ import { utf8Length } from '../src/platform/dump-format'
 import type { StoreOperation } from '../src/platform/store-kernel'
 import {
 	jsonStringBytes,
+	REMOTE_BIO_BYTES,
 	sanitizeRemoteBio,
 	sanitizeRemoteContent,
 	sanitizeRemoteHtml,
@@ -58,8 +60,13 @@ const MAX_FIELDS = Array.from({ length: 16 }, () => ({
 	value: 'v'.repeat(4096),
 }))
 
+// How a fixture fills text at its bound: `escaped` with characters JSON escapes to six bytes (the most JSON for the
+// fewest bytes read), `raw` with ASCII that JSON keeps as is (the most bytes read for the same JSON).
+type Fill = 'escaped' | 'raw'
+const RAW_BIO = `<p>${'x'.repeat(REMOTE_BIO_BYTES - 9)}</p>`
+
 // A remote account with every profile column at its bound; `light`: only what a mention reads is at its bound.
-async function maximalAccount(t: Setup, light = false): Promise<string> {
+async function maximalAccount(t: Setup, light = false, fill: Fill = 'escaped'): Promise<string> {
 	const id = nextId()
 	const username = `${'u'.repeat(USERNAME_LIMIT - 18)}${id}`
 	await sql(
@@ -71,7 +78,7 @@ async function maximalAccount(t: Setup, light = false): Promise<string> {
 		username,
 		HOST,
 		light ? '' : C.repeat(2048),
-		light ? '' : MAX_BIO,
+		light ? '' : fill === 'raw' ? RAW_BIO : MAX_BIO,
 		atLimit(`https://${HOST}/@${id}/`, PROFILE_URL_LIMIT),
 		light ? null : atLimit(`https://${HOST}/a/${id}/`, PROFILE_URL_LIMIT),
 		light ? null : atLimit(`https://${HOST}/h/${id}/`, PROFILE_URL_LIMIT),
@@ -164,14 +171,14 @@ const maxTag = (i: number) => `${String.fromCodePoint(0x20000 + i)}${'𠀀'.repe
 // A status with every part at its bound: content of STATUS_CONTENT_BYTES and a warning of SPOILER_BYTES as JSON
 // strings, MAX_STATUS_MEDIA attachments at theirs, MAX_STATUS_MENTION_ROWS mentions of accounts at theirs,
 // MAX_STATUS_TAGS tags and a poll of MAX_REMOTE_OPTIONS choices of MAX_REMOTE_OPTION_LENGTH escaping characters.
-async function maximalParts(t: Setup): Promise<Parts> {
+async function maximalParts(t: Setup, fill: Fill = 'escaped'): Promise<Parts> {
 	const mentions: string[] = []
 	for (let i = 0; i < MAX_STATUS_MENTION_ROWS; i++) {
 		mentions.push(await maximalAccount(t, true))
 	}
 	return {
-		content: C.repeat((STATUS_CONTENT_BYTES - 2) / 6),
-		spoiler: C.repeat(Math.floor((SPOILER_BYTES - 2) / 6)),
+		content: fill === 'raw' ? 'x'.repeat(STATUS_CONTENT_BYTES - 2) : C.repeat((STATUS_CONTENT_BYTES - 2) / 6),
+		spoiler: fill === 'raw' ? 'x'.repeat(SPOILER_BYTES - 2) : C.repeat(Math.floor((SPOILER_BYTES - 2) / 6)),
 		media: Array.from({ length: MAX_STATUS_MEDIA }, (_, i) => ({
 			url: atLimit(`https://${HOST}/m/${i}/`, MEDIA_URL_LIMIT),
 			preview: atLimit(`https://${HOST}/p/${i}/`, MEDIA_URL_LIMIT),
@@ -652,85 +659,155 @@ describe('realistic content is never cut (RES-2)', () => {
 	})
 })
 
-describe('the table of maxima (RES-3)', () => {
-	it('measures a status, a quote, a boost of a quote, a conversation and an account at every bound', async () => {
-		const t = await setup()
-		const [booster, quoter, quotedAuthor] = [await maximalAccount(t), await maximalAccount(t), await maximalAccount(t)]
-		const quoted = await storedStatus(t, quotedAuthor, await maximalParts(t))
-		const quote = await storedStatus(t, quoter, await maximalParts(t))
+// The viewer's own filters at their bounds (filters.ts): MAX_FILTERS of them in every context, each with a title of
+// MAX_FILTER_TITLE characters and a keyword of MAX_FILTER_KEYWORD that the statuses' text holds, and each naming the
+// given statuses, so every presented status carries every filter with a keyword match and its status matches.
+async function maximalFilters(t: Setup, fill: Fill, statuses: readonly string[]): Promise<void> {
+	const char = fill === 'raw' ? 'x' : C
+	for (let i = 0; i < MAX_FILTERS; i++) {
+		const filter = nextId()
 		await sql(
 			t.store,
-			`INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, quoted_account_id, state, updated_at)
-			SELECT ?1, uri, id, account_id, 'accepted', ?3 FROM statuses WHERE id = ?2`,
-			quote,
-			quoted,
-			new Date(NOW).toISOString()
-		)
-		const boost = nextId()
-		await sql(
-			t.store,
-			`INSERT INTO statuses (id, uri, account_id, reblog_of_id, visibility, published_at)
-			VALUES (?, ?, ?, ?, 'public', ?)`,
-			boost,
-			atLimit(`https://${HOST}/announces/${boost}/`, 4096),
-			booster,
-			quote,
-			new Date(NOW).toISOString()
-		)
-		const one = await read(t, getStatus as never, quoted)
-		const pair = await read(t, getStatus as never, boost)
-		const shape = (m: Measure) => ({
-			sqlite: m.sqliteBytes,
-			json: jsonBytes(m.answer),
-			rows: m.rows,
-			nodes: nodes(m.answer),
-		})
-		const status = shape(one)
-		const boosted = shape(pair)
-		const account = (one.answer as Presented).account
-		// The status read is complete: every part at its bound is shown.
-		const shown = one.answer as Presented
-		expect(shown.content.length).toBe((STATUS_CONTENT_BYTES - 2) / 6)
-		expect(shown.media_attachments).toHaveLength(MAX_STATUS_MEDIA)
-		expect(shown.mentions).toHaveLength(MAX_STATUS_MENTION_ROWS)
-		expect(shown.tags).toHaveLength(MAX_PRESENTED_TAGS)
-		expect(shown.poll!.options).toHaveLength(MAX_REMOTE_OPTIONS)
-		expect((pair.answer as { reblog: { quote: { quoted_status: unknown } } }).reblog.quote.quoted_status).not.toBeNull()
-		const quoting = shape(await read(t, getStatus as never, quote))
-		// A conversation of alice's with more participants than presented, each at its bounds, whose last status is the
-		// quote, read end to end.
-		const participants: string[] = []
-		for (let i = 0; i < MAX_PRESENTED_PARTICIPANTS + 8; i++) {
-			participants.push(await maximalAccount(t))
-		}
-		await sql(
-			t.store,
-			"INSERT INTO conversations (account_id, thread, participants, last_status_id) VALUES (?, 'th', ?, ?)",
+			`INSERT INTO filters (id, account_id, title, context, action) VALUES (?, ?, ?, ?, 'warn')`,
+			filter,
 			ALICE,
-			JSON.stringify(participants.toSorted()),
-			quote
+			char.repeat(MAX_FILTER_TITLE),
+			JSON.stringify(['home', 'notifications', 'public', 'thread', 'account'])
 		)
-		const listed = await measured(
-			t,
-			listConversations as never,
-			{
-				credential: await credential(t),
-				page: { limit: 1 },
-				present: { origin: ORIGIN },
-			} as never
+		await sql(
+			t.store,
+			'INSERT INTO filter_keywords (id, filter_id, keyword, whole_word) VALUES (?, ?, ?, 0)',
+			nextId(),
+			filter,
+			char.repeat(MAX_FILTER_KEYWORD)
 		)
-		const [talk] = (listed.answer as { items: { accounts: { id: string }[]; last_status: unknown }[] }).items
-		expect(talk!.accounts.map((a) => a.id)).toEqual(participants.toSorted().slice(0, MAX_PRESENTED_PARTICIPANTS))
-		expect(talk!.last_status).not.toBeNull()
-		const conversation = { ...shape({ ...listed, answer: talk }), sqlite: listed.sqliteBytes }
-		// docs/threat-model.md "Maxima of presented units" states these; the composite shapes are derived from them.
-		const measuredShapes = { status, quoting, boosted, conversation }
-		expect({ ...measuredShapes, account: { sqlite: one.profileBytes, json: jsonBytes(account) } }).toEqual({
-			status: { sqlite: 708_693, json: 1_177_677, rows: 131, nodes: 607 },
-			quoting: { sqlite: 1_417_329, json: 2_355_387, rows: 260, nodes: 1_216 },
-			boosted: { sqlite: 1_523_776, json: 2_485_875, rows: 263, nodes: 1_269 },
-			conversation: { sqlite: 2_592_065, json: 3_815_876, rows: 273, nodes: 1_639 },
-			account: { sqlite: 97_844, json: 121_710 },
+		for (const status of statuses) {
+			await sql(
+				t.store,
+				'INSERT INTO filter_statuses (id, filter_id, status_id) VALUES (?, ?, ?)',
+				nextId(),
+				filter,
+				status
+			)
+		}
+	}
+}
+
+type Shape = { sqlite: number; json: number; rows: number; nodes: number }
+
+// Every atomic shape at every bound, filled as `fill`, read as alice with her filters at their bounds.
+async function measureShapes(fill: Fill): Promise<Record<string, Shape>> {
+	const t = await setup()
+	const [booster, quoter, quotedAuthor] = [
+		await maximalAccount(t, false, fill),
+		await maximalAccount(t, false, fill),
+		await maximalAccount(t, false, fill),
+	]
+	const quoted = await storedStatus(t, quotedAuthor, await maximalParts(t, fill))
+	const quote = await storedStatus(t, quoter, await maximalParts(t, fill))
+	await sql(
+		t.store,
+		`INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, quoted_account_id, state, updated_at)
+		SELECT ?1, uri, id, account_id, 'accepted', ?3 FROM statuses WHERE id = ?2`,
+		quote,
+		quoted,
+		new Date(NOW).toISOString()
+	)
+	const boost = nextId()
+	await sql(
+		t.store,
+		`INSERT INTO statuses (id, uri, account_id, reblog_of_id, visibility, published_at)
+		VALUES (?, ?, ?, ?, 'public', ?)`,
+		boost,
+		atLimit(`https://${HOST}/announces/${boost}/`, 4096),
+		booster,
+		quote,
+		new Date(NOW).toISOString()
+	)
+	await maximalFilters(t, fill, [quoted, quote, boost])
+	const shape = (m: Measure): Shape => ({
+		sqlite: m.sqliteBytes,
+		json: jsonBytes(m.answer),
+		rows: m.rows,
+		nodes: nodes(m.answer),
+	})
+	const one = await read(t, getStatus as never, quoted)
+	const pair = await read(t, getStatus as never, boost)
+	// Every part at its bound is shown, and every filter with its match.
+	const shown = one.answer as Presented & { filtered: { keyword_matches: string[]; status_matches: string[] }[] }
+	expect(shown.media_attachments).toHaveLength(MAX_STATUS_MEDIA)
+	expect(shown.mentions).toHaveLength(MAX_STATUS_MENTION_ROWS)
+	expect(shown.tags).toHaveLength(MAX_PRESENTED_TAGS)
+	expect(shown.poll!.options).toHaveLength(MAX_REMOTE_OPTIONS)
+	expect(shown.filtered).toHaveLength(MAX_FILTERS)
+	expect(shown.filtered[0]!.keyword_matches).toHaveLength(1)
+	expect(shown.filtered[0]!.status_matches).toEqual([quoted])
+	expect((pair.answer as { reblog: { quote: { quoted_status: unknown } } }).reblog.quote.quoted_status).not.toBeNull()
+	// A conversation of alice's with more participants than presented, each at its bounds, whose last status is the
+	// quote, read end to end.
+	const participants: string[] = []
+	for (let i = 0; i < MAX_PRESENTED_PARTICIPANTS + 8; i++) {
+		participants.push(await maximalAccount(t, false, fill))
+	}
+	await sql(
+		t.store,
+		"INSERT INTO conversations (account_id, thread, participants, last_status_id) VALUES (?, 'th', ?, ?)",
+		ALICE,
+		JSON.stringify(participants.toSorted()),
+		quote
+	)
+	const listed = await measured(
+		t,
+		listConversations as never,
+		{
+			credential: await credential(t),
+			page: { limit: 1 },
+			present: { origin: ORIGIN },
+		} as never
+	)
+	const [talk] = (listed.answer as { items: { accounts: { id: string }[]; last_status: unknown }[] }).items
+	expect(talk!.accounts.map((a) => a.id)).toEqual(participants.toSorted().slice(0, MAX_PRESENTED_PARTICIPANTS))
+	expect(talk!.last_status).not.toBeNull()
+	const account = (one.answer as Presented).account
+	return {
+		account: { sqlite: one.profileBytes, json: jsonBytes(account), rows: 1, nodes: nodes(account) },
+		status: shape(one),
+		quote: shape(await read(t, getStatus as never, quote)),
+		boostOfQuote: shape(pair),
+		conversation: { ...shape({ ...listed, answer: talk }), sqlite: listed.sqliteBytes },
+	}
+}
+
+describe('the table of maxima (RES-3)', () => {
+	// docs/threat-model.md "Maxima of presented units" states these. An answer admits a whole item, so every atomic
+	// shape stays within 80% of ANSWER_BYTES (8 MiB) with filters included.
+	const LIMIT = 0.8 * 8 * 1024 * 1024
+
+	it('measures the escaped worst case: the most JSON', async () => {
+		const shapes = await measureShapes('escaped')
+		expect(shapes).toEqual({
+			account: { sqlite: 97_844, json: 121_710, rows: 1, nodes: 36 },
+			status: { sqlite: 2_195_243, json: 2_595_446, rows: 431, nodes: 2_267 },
+			quote: { sqlite: 4_345_329, json: 5_190_925, rows: 760, nodes: 4_536 },
+			boostOfQuote: { sqlite: 4_453_576, json: 5_564_762, rows: 813, nodes: 5_439 },
+			conversation: { sqlite: 5_519_897, json: 6_651_414, rows: 773, nodes: 4_959 },
 		})
+		for (const shape of Object.values(shapes)) {
+			expect(shape.json).toBeLessThanOrEqual(LIMIT)
+		}
+	})
+
+	it('measures the raw worst case: the most bytes read from SQLite', async () => {
+		const shapes = await measureShapes('raw')
+		expect(shapes).toEqual({
+			account: { sqlite: 108_770, json: 121_711, rows: 1, nodes: 36 },
+			status: { sqlite: 2_329_046, json: 2_403_449, rows: 431, nodes: 2_267 },
+			quote: { sqlite: 4_612_935, json: 4_806_931, rows: 760, nodes: 4_536 },
+			boostOfQuote: { sqlite: 4_732_108, json: 4_988_769, rows: 813, nodes: 5_439 },
+			conversation: { sqlite: 5_918_615, json: 6_267_432, rows: 773, nodes: 4_959 },
+		})
+		for (const shape of Object.values(shapes)) {
+			expect(shape.json).toBeLessThanOrEqual(LIMIT)
+		}
 	})
 })
