@@ -20,12 +20,16 @@ import {
 	languageOf,
 	normalizeTag,
 	normalizeSearchText,
+	cutJsonString,
 	jsonStringBytes,
 	REMOTE_BIO_BYTES,
 	REMOTE_HTML_RAW_LIMIT,
 	remoteHtmlText,
 	sanitizeRemoteBio,
+	sanitizeRemoteContent,
 	sanitizeRemoteHtml,
+	SPOILER_BYTES,
+	STATUS_CONTENT_BYTES,
 } from './kopje-runtime.js'
 import { digestOf } from './sql-script.js'
 import { fit, FULL_EDGE, SMALL_EDGE } from './upload-rules.js'
@@ -34,6 +38,10 @@ const PUBLIC = 'https://www.w3.org/ns/activitystreams#Public'
 const STATUS_TYPES = new Set(['Note', 'Article', 'Page', 'Question', 'Video', 'Audio', 'Event'])
 const EARLIEST_MS = Date.UTC(2018, 4, 10)
 const ID18 = /^[0-9]{18}$/
+// The Worker's bounds of identities it stores (src/domain/profile-bounds.ts ACTOR_URI_LIMIT, src/domain/status-bounds.ts
+// for a status's uri): a longer one is refused (test-node/cutover-safety.test.ts checks they agree).
+export const ACTOR_URI_LIMIT = 2048
+export const STATUS_URI_LIMIT = 4096
 
 // Tables 0030-0033 created that the legacy code never wrote; rows there would be lost, so they stop the conversion.
 export const UNUSED_LEGACY_TABLES = [
@@ -412,29 +420,39 @@ export function convertLegacy(
 		}
 		return wellFormed
 	}
-	/** @param {unknown} value */
-	const html = (value) => {
-		const text = carried(value)
-		if (text.length > REMOTE_HTML_RAW_LIMIT) {
-			count(acceptTruncation ? normalized : problems, 'html:longer-than-sanitizer-limit')
-		}
-		return sanitizeRemoteHtml(text)
-	}
-	// A bio as the Worker stores one (sanitizeRemoteBio, RES-2); one cut to REMOTE_BIO_BYTES loses its end, so it is
-	// counted as a truncation too.
-	/** @param {unknown} value */
-	const bio = (value) => {
+	// HTML as the Worker stores it within `bytes` as a JSON string (sanitizeRemoteBio, sanitizeRemoteContent, RES-2):
+	// one cut to its bound loses its end, so it is counted as a truncation too.
+	/**
+	 * @param {unknown} value @param {number} bytes @param {(html: string) => string} within @param {string} code
+	 */
+	const sanitizedWithin = (value, bytes, within, code) => {
 		const text = carried(value)
 		if (text.length > REMOTE_HTML_RAW_LIMIT) {
 			count(acceptTruncation ? normalized : problems, 'html:longer-than-sanitizer-limit')
 		}
 		const whole = sanitizeRemoteHtml(text)
-		if (jsonStringBytes(whole) <= REMOTE_BIO_BYTES) {
+		if (jsonStringBytes(whole) <= bytes) {
 			return whole
 		}
-		count(acceptTruncation ? normalized : problems, 'html:bio-longer-than-bound')
-		return sanitizeRemoteBio(text)
+		count(acceptTruncation ? normalized : problems, code)
+		return within(text)
 	}
+	/** @param {unknown} value */
+	const bio = (value) => sanitizedWithin(value, REMOTE_BIO_BYTES, sanitizeRemoteBio, 'html:bio-longer-than-bound')
+	/** @param {unknown} value */
+	const content = (value) =>
+		sanitizedWithin(value, STATUS_CONTENT_BYTES, sanitizeRemoteContent, 'html:content-longer-than-bound')
+	// A content warning and source text cut to their bounds as JSON strings (cutJsonString), counted likewise.
+	/** @param {string} text @param {number} bytes @param {string} code */
+	const bounded = (text, bytes, code) => {
+		const cut = cutJsonString(text, bytes)
+		if (cut !== text) {
+			count(acceptTruncation ? normalized : problems, code)
+		}
+		return cut
+	}
+	/** @param {string} text */
+	const spoilerOf = (text) => bounded(text, SPOILER_BYTES, 'text:spoiler-longer-than-bound')
 	/** @param {string} table @param {string | null} time @param {string} key */
 	const localId = (table, time, key) => ids.local(table, time, key)
 	/** @param {string} table @param {string | null} time @param {string} key */
@@ -551,6 +569,11 @@ export function convertLegacy(
 				host = new URL(uri).host.toLowerCase()
 			} catch {
 				count(problems, 'remote-actor-uri-invalid')
+				continue
+			}
+			// An actor id is an identity: one past the Worker's bound (ACTOR_URI_LIMIT) is refused, never cut.
+			if (uri.length > ACTOR_URI_LIMIT) {
+				count(problems, 'remote-actor-uri-over-limit')
 				continue
 			}
 			if (username === '') {
@@ -684,6 +707,11 @@ export function convertLegacy(
 		}
 		if (statusUris.has(uri)) {
 			count(problems, 'duplicate-status-uri')
+			continue
+		}
+		// A status's uri is an identity too: one past the Worker's bound (STATUS_URI_LIMIT) is refused.
+		if (uri.length > STATUS_URI_LIMIT) {
+			count(problems, 'status-uri-over-limit')
 			continue
 		}
 		statusUris.add(uri)
@@ -902,10 +930,12 @@ export function convertLegacy(
 			count(normalized, 'mentionsNotRecipients', outside)
 		}
 		const visibility = legacy === 'direct' && [...mentions.values()].includes(1) ? 'limited' : legacy
-		const spoiler = local
-			? carried(properties.spoiler_text) || carried(properties.summary)
-			: carried(properties.summary) || carried(properties.spoiler_text)
-		const content = html(properties.content)
+		const spoiler = spoilerOf(
+			local
+				? carried(properties.spoiler_text) || carried(properties.summary)
+				: carried(properties.summary) || carried(properties.spoiler_text)
+		)
+		const body = content(properties.content)
 		const updated = isoTime(properties.updated)
 		// An update at the publication time is no edit, as Kopje stores an incoming status (src/domain/remote-statuses.ts).
 		const edited = updated !== null && updated !== plan.published ? updated : null
@@ -924,12 +954,12 @@ export function convertLegacy(
 			parent ?? null,
 			visibility,
 			spoiler,
-			content,
+			body,
 			local &&
 				typeof properties.source === 'object' &&
 				properties.source !== null &&
 				typeof properties.source.content === 'string'
-				? carried(properties.source.content)
+				? bounded(carried(properties.source.content), STATUS_CONTENT_BYTES, 'text:source-longer-than-bound')
 				: null,
 			properties.sensitive === true ? 1 : 0,
 			// As Kopje stores a received status's language.
@@ -939,7 +969,7 @@ export function convertLegacy(
 			local ? null : (edited ?? plan.published),
 			local ? (idempotency.get(String(row.id)) ?? null) : null,
 			local ? null : String(row.properties),
-			normalizeSearchText(`${spoiler} ${remoteHtmlText(content)}`),
+			normalizeSearchText(`${spoiler} ${remoteHtmlText(body)}`),
 			plan.legacyId,
 			plan.legacyApO,
 			isoTime(row.cdate) ?? plan.published
@@ -1423,8 +1453,8 @@ export function convertLegacy(
 				})
 			editInsert.run(
 				plan.id,
-				html(properties.content),
-				carried(properties.spoiler_text) || carried(properties.summary),
+				content(properties.content),
+				spoilerOf(carried(properties.spoiler_text) || carried(properties.summary)),
 				properties.sensitive === true ? 1 : 0,
 				JSON.stringify(media),
 				isoTime(properties.updated) ?? isoTime(properties.published) ?? isoTime(revision.cdate) ?? plan.published

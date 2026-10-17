@@ -11,11 +11,15 @@ import { createHmac } from 'node:crypto'
 import { domainToASCII } from 'node:url'
 
 import {
+	cutJsonString,
 	jsonStringBytes,
 	REMOTE_BIO_BYTES,
 	REMOTE_HTML_RAW_LIMIT,
 	sanitizeRemoteBio,
+	sanitizeRemoteContent,
 	sanitizeRemoteHtml,
+	SPOILER_BYTES,
+	STATUS_CONTENT_BYTES,
 } from './kopje-runtime.js'
 
 const PUBLIC = 'https://www.w3.org/ns/activitystreams#Public'
@@ -336,15 +340,29 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 		}
 		return sanitizeRemoteHtml(text(value))
 	}
-	// A bio as the converter and the Worker store it (sanitizeRemoteBio); one cut to its bound is a truncation too.
-	/** @param {unknown} value */
-	const bio = (value) => {
+	// A bio and status content as the converter and the Worker store them (sanitizeRemoteBio, sanitizeRemoteContent);
+	// one cut to its bound is a truncation too.
+	/** @param {unknown} value @param {number} bytes @param {(html: string) => string} within */
+	const sanitizedWithin = (value, bytes, within) => {
 		const whole = sanitized(value)
-		if (jsonStringBytes(whole) <= REMOTE_BIO_BYTES) {
+		if (jsonStringBytes(whole) <= bytes) {
 			return whole
 		}
 		overLimit++
-		return sanitizeRemoteBio(text(value))
+		return within(text(value))
+	}
+	/** @param {unknown} value */
+	const bio = (value) => sanitizedWithin(value, REMOTE_BIO_BYTES, sanitizeRemoteBio)
+	/** @param {unknown} value */
+	const content = (value) => sanitizedWithin(value, STATUS_CONTENT_BYTES, sanitizeRemoteContent)
+	// A content warning and source text cut to their bounds (cutJsonString), each cut a truncation.
+	/** @param {string} value @param {number} bytes */
+	const bounded = (value, bytes) => {
+		const cut = cutJsonString(value, bytes)
+		if (cut !== value) {
+			overLimit++
+		}
+		return cut
 	}
 
 	// Accounts and profiles.
@@ -539,10 +557,13 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 		}
 		const author = String(o.original_actor_id)
 		const isLocal = o.local === 1
-		const spoiler = isLocal ? text(p.spoiler_text) || text(p.summary) : text(p.summary) || text(p.spoiler_text)
+		const spoiler = bounded(
+			isLocal ? text(p.spoiler_text) || text(p.summary) : text(p.summary) || text(p.spoiler_text),
+			SPOILER_BYTES
+		)
 		const sourceText =
 			isLocal && typeof p.source === 'object' && p.source !== null && typeof p.source.content === 'string'
-				? text(p.source.content)
+				? bounded(text(p.source.content), STATUS_CONTENT_BYTES)
 				: null
 		// Hashtags: the object's Hashtag tags and the ones legacy recorded for it. An edit time equal to the publication
 		// time is stored as none, as Kopje stores an incoming status (src/domain/remote-statuses.ts).
@@ -566,7 +587,7 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 		const listed = audience.visibility === 'public' ? 1 : 0
 		put('statuses', uri, [
 			author,
-			sanitized(p.content),
+			content(p.content),
 			sourceText,
 			spoiler,
 			p.sensitive === true ? 1 : 0,
@@ -756,7 +777,12 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 			})
 		history.set(uri, [
 			...(history.get(uri) ?? []),
-			[sanitized(p.content), text(p.spoiler_text) || text(p.summary), p.sensitive === true ? 1 : 0, media],
+			[
+				content(p.content),
+				bounded(text(p.spoiler_text) || text(p.summary), SPOILER_BYTES),
+				p.sensitive === true ? 1 : 0,
+				media,
+			],
 		])
 	}
 	for (const [uri, versions] of history) {

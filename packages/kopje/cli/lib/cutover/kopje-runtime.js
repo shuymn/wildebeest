@@ -1,5 +1,5 @@
-// Kopje's own functions the cutover tools share with the Worker: the HTML and bio sanitizers
-// (src/security/html.ts), the search text (src/domain/search-text.ts), hashtag names (src/domain/tag-name.ts), an
+// Kopje's own functions the cutover tools share with the Worker: the HTML, bio and content sanitizers and the bounds
+// of status text (src/security/html.ts), the search text (src/domain/search-text.ts), hashtag names (src/domain/tag-name.ts), an
 // object's language
 // (src/domain/language.ts), the image signature check (src/platform/image-bytes.ts), the domain of a domain block
 // (src/platform/domain-name.ts) and the conversations of the direct statuses stored (src/domain/conversation-rows.ts,
@@ -34,8 +34,12 @@ const runtime = fromSources
 export const {
 	sanitizeRemoteHtml,
 	sanitizeRemoteBio,
+	sanitizeRemoteContent,
+	cutJsonString,
 	jsonStringBytes,
 	REMOTE_BIO_BYTES,
+	STATUS_CONTENT_BYTES,
+	SPOILER_BYTES,
 	remoteHtmlText,
 	normalizeSearchText,
 	normalizeTag,
