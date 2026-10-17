@@ -143,6 +143,21 @@ export function activityEnvelope(
 	return { ok: true, actor, id, type }
 }
 
+// The actor an activity's envelope names, read within the JSON bounds (RES-2); null when there is no such envelope.
+function envelopeActor(body: Uint8Array): string | null {
+	let json: unknown
+	try {
+		json = JSON.parse(new TextDecoder().decode(body))
+	} catch {
+		return null
+	}
+	if (!isObject(json) || !withinJsonBounds(json)) {
+		return null
+	}
+	const envelope = activityEnvelope(json)
+	return envelope.ok ? envelope.actor : null
+}
+
 export function parseActivity(body: Uint8Array): Parsed {
 	let json: unknown
 	try {
@@ -393,11 +408,13 @@ export async function receiveInbound(deps: InboundDeps, request: InboundRequest)
 	const loaders = createRemoteLoaders(deps, state, deps.recipient, budget)
 	const parsed = parseActivity(request.body)
 
-	if (parsed.ok) {
-		const blocked = await callStore(() => deps.store().inboundDomainBlocked(deps.build, { uri: parsed.actor }))
-		if (blocked) {
-			return domainBlocked(deps, request, headers, parsed, { origin, state, budget })
-		}
+	// Decision 1: the actor of the bounded envelope is judged before anything is verified, whether or not its type is
+	// one Kopje reads, so that no activity of a covered actor (an unsupported or malformed one included) is fetched for.
+	const named = parsed.ok ? parsed.actor : envelopeActor(request.body)
+	if (named !== null && (await callStore(() => deps.store().inboundDomainBlocked(deps.build, { uri: named })))) {
+		return parsed.ok
+			? domainBlocked(deps, request, headers, parsed, { origin, state, budget })
+			: { status: 202, reason: 'domain-blocked' }
 	}
 	const served = new Map<string, ServedKey>()
 	let verified = await verify(deps, request, headers, loaders, served, false)

@@ -149,6 +149,36 @@ describe("a blocked domain's cleanups are verified with stored keys only (row 8,
 	})
 })
 
+describe("a covered actor's activities that Kopje does not read are judged before verification (decision 1)", () => {
+	// A Flag (a type Kopje does not read) and a Create whose object is malformed, each signed with a key on another,
+	// unblocked host: verification would fetch that key. bob is covered by his host, or, stored, by his stored domain.
+	it.each(['host', 'stored domain'] as const)('fetches nothing for them when bob is covered by his %s', async (by) => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const carol = await mastodonActor(t.web, 'carol', { origin: OTHER, key: 2 })
+		if (by === 'host') {
+			await blockDomain(t.store, BLOCKED)
+		} else {
+			await followed(t, bob)
+			await sql(t.store, "UPDATE accounts SET domain = 'covered.example' WHERE uri = ?", bob.uri)
+			await blockDomain(t.store, 'covered.example')
+		}
+		const signer = { keyId: carol.keyId, privateKey: carol.privateKey }
+		const fetched = t.web.fetched.length
+		const flag = { '@context': AS, id: `${bob.uri}#flags/1`, type: 'Flag', actor: bob.uri, object: DAVE_URI }
+		const malformed = {
+			'@context': AS,
+			id: `${bob.uri}/statuses/9/activity`,
+			type: 'Create',
+			actor: bob.uri,
+			object: 7,
+		}
+		expect(await t.post(bob, flag, signer)).toBe(202)
+		expect(await t.post(bob, malformed, signer)).toBe(202)
+		expect(t.web.fetched.slice(fetched)).toEqual([])
+	})
+})
+
 describe('fetches outside the inbox after a block (rows 9, 10)', () => {
 	it('stores no account for a resolve held at its fetch, and requests nothing from the host afterwards', async () => {
 		const t = await setup()
