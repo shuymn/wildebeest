@@ -42,7 +42,7 @@ const RULES = [
 	{ id: 'r2', text: 'No spam', hint: '', translations: {} },
 ]
 
-// Contract: the declared version is 4.4.0 and api_versions.mastodon is 6 (the reasoning is above MASTODON_VERSION in
+// Contract: the declared version is 4.5.0 and api_versions.mastodon is 7 (the reasoning is above MASTODON_VERSION in
 // src/mastodon/instance.ts). Changing these payloads changes what clients do; update this test only together with that
 // decision.
 describe('instance contract', () => {
@@ -57,7 +57,7 @@ describe('instance contract', () => {
 			short_description: 'A test instance',
 			description: 'A test instance',
 			email: 'admin@kopje.test',
-			version: '4.4.0',
+			version: '4.5.0',
 			urls: { streaming_api: 'wss://kopje.test' },
 			stats: { user_count: 1, status_count: 0, domain_count: 1 },
 			thumbnail: null,
@@ -80,7 +80,7 @@ describe('instance contract', () => {
 		expect(body).toEqual({
 			domain: 'kopje.test',
 			title: 'Kopje Test',
-			version: '4.4.0',
+			version: '4.5.0',
 			source_url: 'https://github.com/shuymn/wildebeest',
 			description: 'A test instance',
 			usage: { users: { active_month: 1 } },
@@ -100,6 +100,11 @@ describe('instance contract', () => {
 				accounts: { max_featured_tags: 10, max_pinned_statuses: 5 },
 				media_attachments: { ...CONFIGURATION.media_attachments, description_limit: 1500 },
 				translation: { enabled: false },
+				timelines_access: {
+					live_feeds: { local: 'public', remote: 'public' },
+					hashtag_feeds: { local: 'public', remote: 'public' },
+					trending_link_feeds: { local: 'public', remote: 'public' },
+				},
 				limited_federation: false,
 			},
 			registrations: {
@@ -110,7 +115,7 @@ describe('instance contract', () => {
 				min_age: null,
 				url: null,
 			},
-			api_versions: { mastodon: 6 },
+			api_versions: { mastodon: 7 },
 			contact: { email: 'admin@kopje.test', account: null },
 			rules: RULES,
 		})
@@ -120,9 +125,9 @@ describe('instance contract', () => {
 		const h = await configured()
 		const v1 = await (await h.request('/api/v1/instance')).json<Record<string, unknown>>()
 		const v2 = await (await h.request('/api/v2/instance')).json<Record<string, unknown>>()
-		expect(v1.version).toBe('4.4.0')
+		expect(v1.version).toBe('4.5.0')
 		expect(v2.version).toBe(v1.version)
-		expect(v2.api_versions).toEqual({ mastodon: 6 })
+		expect(v2.api_versions).toEqual({ mastodon: 7 })
 		expect(v1).not.toHaveProperty('api_versions')
 	})
 
