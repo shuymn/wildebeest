@@ -93,11 +93,30 @@ export class PolicyModel {
 		return status
 	}
 
-	// R1: a suspended local account, a remote account the instance suspended (R38) and a remote account whose deletion
-	// has started are unavailable; every other account is available.
+	// R1: a suspended local account, a remote account the instance suspended (R38), a remote account whose deletion
+	// has started and a remote account an instance domain block covers (R38) are unavailable; every other account is
+	// available.
 	available(x: number): boolean {
 		const account = this.account(x)
-		return !account.suspended && !(!account.local && account.deleting)
+		return !account.suspended && !(!account.local && (account.deleting || this.domainCovered(x)))
+	}
+
+	// R38: an instance domain block covers `domain` (lowercase, no trailing dot) when the block that rules it is a
+	// suspend: the block of the domain itself or of its nearest parent, the longest match (Mastodon's
+	// DomainBlock.rule_for). A child noop exempts its subdomains from a parent's suspend.
+	covered(domain: string): boolean {
+		const rule = this.world.instanceBlocks
+			.filter((b) => domain === b.domain || domain.endsWith(`.${b.domain}`))
+			.sort((a, b) => b.domain.length - a.domain.length)[0]
+		return rule?.severity === 'suspend'
+	}
+
+	// R38: a remote account is covered by its stored domain or by its actor id's host, whichever an instance domain block
+	// covers.
+	domainCovered(x: number): boolean {
+		const account = this.account(x)
+		const host = new URL(account.uri).hostname.replace(/\.$/, '')
+		return !account.local && (this.covered((account.domain ?? '').replace(/\.$/, '')) || this.covered(host))
 	}
 
 	// The account lives on `domain`: its stored domain or the host of its actor id, exactly. Local accounts live nowhere
@@ -622,15 +641,16 @@ export class PolicyModel {
 	// a retraction is sent only while its signer is available (but for the suspension's own Update of the actor, R1)
 	// and, when the recipients behind it are known (`recipients`; 'many' above PROVENANCE_MAX, "not all unavailable"),
 	// while one of them exists and is available. An Announce is sent only while its original exists and its author
-	// (`boosted`; 'missing' when the original is not stored) is available. Unknown recipients (null) leave the host
-	// rule only, which the world does not model (instance domain blocks come in phase B2a); nor does it model a purged
-	// account, which is missing.
+	// (`boosted`; 'missing' when the original is not stored) is available. The host rule (`hosts`): nothing but a
+	// retraction is sent to an inbox whose host an instance domain block covers, nor through a shared inbox all of whose
+	// recipient hosts (`domains`, when known) are covered. The model does not know a purged account, which is missing.
 	sends(
 		signer: number,
 		retracts: boolean,
 		recipients: readonly number[] | 'many' | null,
 		ownSuspension = false,
-		boosted: number | 'missing' | null = null
+		boosted: number | 'missing' | null = null,
+		hosts: { inbox: string; domains: readonly string[] | null } | null = null
 	): boolean {
 		if (retracts) {
 			return true
@@ -639,6 +659,13 @@ export class PolicyModel {
 			(!this.available(signer) && !ownSuspension) ||
 			boosted === 'missing' ||
 			(boosted !== null && !this.available(boosted))
+		) {
+			return false
+		}
+		if (
+			hosts !== null &&
+			(this.covered(new URL(hosts.inbox).hostname.replace(/\.$/, '')) ||
+				(hosts.domains !== null && hosts.domains.length > 0 && hosts.domains.every((d) => this.covered(d))))
 		) {
 			return false
 		}

@@ -41,6 +41,7 @@ import { kvCas, kvDelete, kvGet, kvList, kvSet } from './domain/fedify-kv'
 import * as filters from './domain/filters'
 import * as inbox from './domain/inbox'
 import { instanceInfo, instancePeers, instanceRules, instanceSettings, searchPeers } from './domain/instance'
+import * as instanceDomainBlocks from './domain/instance-domain-blocks'
 import * as lists from './domain/lists'
 import * as markers from './domain/markers'
 import * as media from './domain/media'
@@ -543,6 +544,16 @@ export class Store extends DurableObject<Env> {
 
 	remoteKey(callerBuild: string, input: OperationInput<typeof inbox.getRemoteKey>) {
 		return this.#kernel.execute(callerBuild, inbox.getRemoteKey, input)
+	}
+
+	// The instance domain policy the Worker reads before a fetch, and before verifying an inbound request (decision 6,
+	// R38): advisory, as the writes decide.
+	fetchRefused(callerBuild: string, input: OperationInput<typeof instanceDomainBlocks.fetchRefused>) {
+		return this.#kernel.execute(callerBuild, instanceDomainBlocks.fetchRefused, input)
+	}
+
+	inboundDomainBlocked(callerBuild: string, input: OperationInput<typeof instanceDomainBlocks.inboundDomainBlocked>) {
+		return this.#kernel.execute(callerBuild, instanceDomainBlocks.inboundDomainBlocked, input)
 	}
 
 	inboxWritable(callerBuild: string) {

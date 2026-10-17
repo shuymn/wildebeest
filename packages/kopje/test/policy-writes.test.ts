@@ -222,6 +222,7 @@ function witness(
 			blocks: [],
 			mutes: [],
 			domainBlocks: [],
+			instanceBlocks: [],
 			lists: world.lists ?? [],
 			pins: [],
 			conversationMutes: [],
@@ -649,6 +650,9 @@ function readWorld(sql: SqlStorage, base: World): Snapshot {
 				.exec<{ account_id: string; domain: string }>('SELECT account_id, domain FROM domain_blocks')
 				.toArray()
 				.map((d) => ({ owner: account(d.account_id), domain: d.domain })),
+			instanceBlocks: sql
+				.exec<{ domain: string; severity: 'suspend' | 'noop' }>('SELECT domain, severity FROM instance_domain_blocks')
+				.toArray(),
 			// The case's lists, with the members they hold now.
 			lists: base.lists.map((list, l) => ({
 				...list,
@@ -768,6 +772,7 @@ type DueRow = {
 	inbox: string
 	retracts: number
 	accounts: string | null
+	domains: string | null
 	many: number | null
 	// An Announce's original's author (null when the original is not stored), and whether the row is an Announce.
 	boosted: string | null
@@ -779,7 +784,7 @@ const dueRows = (sql: SqlStorage, now: number): DueRow[] =>
 	sql
 		.exec<DueRow>(
 			`SELECT CAST(d.id AS TEXT) AS id, d.account_id, d.inbox_url AS inbox, o.retracts, d.recipient_accounts AS accounts,
-				d.recipients_many AS many, b.account_id AS boosted,
+				d.recipient_domains AS domains, d.recipients_many AS many, b.account_id AS boosted,
 				json_extract(o.body, '$.activity.type') = 'Announce' AS announce
 			FROM deliveries d JOIN outbound_activities o ON o.id = d.activity_id
 			LEFT JOIN statuses b ON json_extract(o.body, '$.activity.type') = 'Announce'
@@ -1045,7 +1050,17 @@ function check(sql: SqlStorage, c: Case, saw: Set<Scenario>): string[] {
 									: (JSON.parse(row.accounts) as string[]).map((id) => accountIndex.get(id)!)
 						const boosted =
 							row.announce !== 1 ? null : row.boosted === null ? 'missing' : (accountIndex.get(row.boosted) ?? null)
-						const expected = m.sends(accountIndex.get(row.account_id)!, row.retracts === 1, recipients, false, boosted)
+						const expected = m.sends(
+							accountIndex.get(row.account_id)!,
+							row.retracts === 1,
+							recipients,
+							false,
+							boosted,
+							{
+								inbox: row.inbox,
+								domains: row.domains === null ? null : (JSON.parse(row.domains) as string[]),
+							}
+						)
 						const sent = claimed.has(row.id)
 						if (sent !== expected) {
 							problems.push(`${label}: row ${row.id} to ${row.inbox} ${sent ? 'claimed' : 'dropped'}`)

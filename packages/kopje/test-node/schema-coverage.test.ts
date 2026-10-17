@@ -53,6 +53,7 @@ const NOT_CARRIED: Record<string, string> = {
 	inbound_jobs: 'inbound queue; legacy queues are not carried',
 	inbound_retractions: 'inbound queue state',
 	inbound_spool: 'inbound queue state',
+	instance_domain_blocks: 'instance domain blocks made in Kopje; legacy Wildebeest has no instance-wide block',
 	kopje_migrations: 'the target Store records its own migrations',
 	markers: 'legacy never wrote its markers table, and a legacy row there stops the conversion (UNUSED_LEGACY_TABLES)',
 	media_orphans: 'tombstones of R2 objects; a converted Store has none',

@@ -8,7 +8,7 @@ import { NOW } from './app-helpers'
 import { LEGACY } from './federation-helpers'
 import { BUILD } from './helpers'
 import { newClient, VAPID } from './push-helpers'
-import { deferred, deliveryDeps } from './quote-helpers'
+import { deferred, deliveryDeps, recordingFetch } from './quote-helpers'
 import { act, receive, unsuspend, uriOf, world, type World } from './remote-suspension-helpers'
 import { follow, post, remoteAccount, remoteFollows, seedStatus } from './status-helpers'
 import { Db } from '../src/db/sql'
@@ -255,15 +255,6 @@ describe('the send boundary is confirmation', () => {
 		const r = await remoteAccount(w.h.store, 'r', 'remote.example')
 		await remoteFollows(w.h.store, r, w.alice.id)
 		return { w, r }
-	}
-
-	function recordingFetch() {
-		const sent: string[] = []
-		const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-			sent.push(new Request(input, init).url)
-			return new Response(null, { status: 202 })
-		})
-		return { fetch: fetch as unknown as typeof globalThis.fetch, sent }
 	}
 
 	it('sends nothing when the suspension commits between the signer load and confirmation, and promotes the lane', async () => {
