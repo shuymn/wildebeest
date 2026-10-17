@@ -303,8 +303,8 @@ function receiversOf(db: Db, signerId: string, object: string): string[] {
 
 // Records the intent with its targets, and expands what the step allows. A retraction supersedes every earlier
 // activity about its object and drops the object's receipts (its own targets now hold that evidence); an Update
-// supersedes earlier Updates only. An Update of a status goes alone to servers known to have it (a receipt, a Create
-// in flight before it in the lane, or its poll's voters); every other server gets a Create of the current
+// supersedes earlier Updates only. An Update of a status goes alone to servers known to have it (a receipt, or its
+// poll's voters); every other server gets a Create of the current
 // version and then the Update, in that order in its lane, which replace any Create or Update of the object still
 // waiting for it there. Whether such a server holds the status is never guessed: Mastodon and Misskey ignore a Create
 // of a status they hold (Create#create_status) and an Update of one they do not, so one of the pair applies either way,
@@ -602,11 +602,12 @@ function insertIntent(
 	}
 }
 
-// The servers (lane origins) known to have the object, or to get it before anything later in their lane: a receipt at
-// any of their inboxes (a delivered Create), or a leased Create of it (which may have been POSTed already). A server
-// may hold the object without being known to (it fetched it to boost or quote it), so this decides only what may be
-// left out. A server is the unit, as one that holds the object from its shared inbox applies an Update sent to a
-// personal inbox, but ignores a Create.
+// The servers (lane origins) known to have the object: a receipt at any of their inboxes (a delivered Create). A
+// Create still leased does not count: it may give up, and an operator's retry of it later would bring an older version
+// (design, Concurrency (PR 3), changes after the design review 2); a server it reaches gets the pair as well, ignores
+// the Create it already holds and applies the Update. A server may hold the object without being known to (it fetched
+// it to boost or quote it), so this decides only what may be left out. A server is the unit, as one that holds the
+// object from its shared inbox applies an Update sent to a personal inbox, but ignores a Create.
 function serversWithObject(db: Db, signerId: string, object: string): Set<string> {
 	const receipts = db.all<{ inbox_url: string }>(
 		`SELECT r.inbox_url FROM outbound_receipts r JOIN statuses s ON s.id = r.status_id
@@ -614,14 +615,7 @@ function serversWithObject(db: Db, signerId: string, object: string): Set<string
 		object,
 		signerId
 	)
-	const leased = db.all<{ lane: string }>(
-		`SELECT DISTINCT d.lane FROM deliveries d JOIN outbound_activities o ON o.id = d.activity_id
-		WHERE o.account_id = ? AND o.object_uri = ? AND o.retracts = 0 AND d.state = 'leased'
-			AND json_extract(o.body, '$.activity.type') = 'Create'`,
-		signerId,
-		object
-	)
-	return new Set([...receipts.map((r) => laneOf(r.inbox_url)), ...leased.map((r) => r.lane)])
+	return new Set(receipts.map((r) => laneOf(r.inbox_url)))
 }
 
 // Drops the Creates and Updates of an object still waiting for these servers (queued, pending, given up, or not

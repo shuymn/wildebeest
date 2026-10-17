@@ -813,6 +813,35 @@ export function mayQuoteSql(t: string, quoter: string): string {
 			OR (${t}.visibility IN ${DISTRIBUTABLE_SQL} AND ${quotePolicySql(t, quoter)} <> 'denied')))`
 }
 
+// Mastodon's quote_approval.current_user (Status#quote_policy_for_account) for one viewer, read as R36 decides it:
+// `denied` whenever R36 refuses (anonymous, a boost, a status the viewer may not see by itself, blocks either way, a
+// direct or limited status), `automatic` for the viewer's own, and otherwise what the policy answers them
+// (quotePolicySql). Stricter than Mastodon, which reads the policy alone, so a client never offers a quote that the post
+// would refuse (design §4.1). A stale answer costs a 404 from the post, which decides again.
+export type QuoteApprovalReads = {
+	// One row per status, in no order.
+	of(db: Db, statusIds: readonly string[]): Map<string, 'automatic' | 'manual' | 'unknown' | 'denied'>
+}
+
+export function quoteApprovalReads(viewer: ViewerContext): QuoteApprovalReads {
+	return {
+		of(db, statusIds) {
+			if (viewer.accountId === null || statusIds.length === 0) {
+				return new Map()
+			}
+			const rows = db.all<{ id: string; current_user: 'automatic' | 'manual' | 'unknown' | 'denied' }>(
+				`SELECT t.id, CASE WHEN ${mayQuoteSql('t', '?2')}
+					THEN CASE WHEN t.account_id = ?2 THEN 'automatic' ELSE ${quotePolicySql('t', '?2')} END
+					ELSE 'denied' END AS current_user
+				FROM main.statuses t WHERE t.id IN (SELECT value FROM json_each(?1))`,
+				JSON.stringify(statusIds),
+				viewer.accountId
+			)
+			return new Map(rows.map((row) => [row.id, row.current_user]))
+		},
+	}
+}
+
 // R26: a scheduled status (scheduled_statuses row `ss`) is its owner's alone. It is not a status: no other rule
 // reads it, nothing lists, notifies or delivers it, and anyone else's is not found, until its publication writes an
 // ordinary status, which the rules above then govern.
@@ -848,6 +877,8 @@ function silencedSql(r: string, a: string, now: string): string {
 // silences (FeedManager#filter_from_mentions), and a post notification (`status`) when its status is a reply other
 // than in the author's own conversation (a partner that is someone else or unknown, as FeedInsertWorker#notify?) or
 // when home would leave it out (homeFilterSql, which also hides a sender the recipient mutes without notifications).
+// A quoted_update (about the recipient's own quoting status) is shown while its quote is accepted and the recipient
+// may see the quoted status by itself (R35, VIS-27: Mastodon checks neither).
 export function shownSql(r: string, type: string, from: string, status: string, now: string): string {
 	return `((${from} <> ${r} OR ${type} = 'poll')
 		AND ${availableSql(from)}
@@ -862,7 +893,9 @@ export function shownSql(r: string, type: string, from: string, status: string, 
 					AND ${silencedSql(r, 'mm.account_id', now)})
 				OR (mt.in_reply_to_account_id IS NOT NULL AND ${silencedSql(r, 'mt.in_reply_to_account_id', now)}))))
 		AND (${type} <> 'status' OR EXISTS (SELECT 1 FROM main.statuses s WHERE s.id = ${status}
-			AND ${NOT_A_REPLY_TO_OTHERS} AND ${homeFilterSql('s', r, now)})))`
+			AND ${NOT_A_REPLY_TO_OTHERS} AND ${homeFilterSql('s', r, now)}))
+		AND (${type} <> 'quoted_update' OR EXISTS (SELECT 1 FROM main.quotes nq JOIN main.statuses nt ON nt.id = nq.quoted_status_id
+			WHERE nq.status_id = ${status} AND nq.state = 'accepted' AND ${viewableSql('nt', r)})))`
 }
 
 // R31 (Account#muting_conversation?): whether `owner` mutes the conversation `thread`, an expression for a status's

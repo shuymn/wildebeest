@@ -168,6 +168,17 @@ export function renderFieldValue(value: string): string {
 		.join('')
 }
 
+// TextFormatter#add_quote_fallback: the RE: line a quote's content starts with, linking the quoted status, for clients
+// that do not show quotes (the class lets the others hide it, as the sanitizer keeps it: security/html.ts).
+export function quoteFallbackHtml(url: string): string {
+	return `<p class="quote-inline">RE: ${linkHtml(url)}</p>`
+}
+
+// Whether the text links one of `urls` (a URL segment exactly one of them): its quote then needs no RE: line.
+export function linksAny(segments: readonly Segment[], urls: readonly string[]): boolean {
+	return segments.some((segment) => segment.kind === 'url' && urls.includes(segment.url))
+}
+
 const DISPLAY_LIMIT = 30
 
 // Mastodon's link display: the scheme (and www.) hidden, the rest cut with an ellipsis after 30 characters.

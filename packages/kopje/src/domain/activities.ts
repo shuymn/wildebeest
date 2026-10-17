@@ -15,6 +15,7 @@ import {
 } from './audience'
 import { type DeliveryEnvelope, enqueueActivity, type ReachOf } from './deliveries'
 import { readOperation } from './operation'
+import { type NoteQuote, noteQuote } from './quotes'
 import type { Db } from '../db/sql'
 import { httpUrl } from '../platform/http-url'
 import { sha256Hex } from '../platform/sha256'
@@ -36,15 +37,22 @@ const AS_CONTEXT = 'https://www.w3.org/ns/activitystreams'
 
 const CONTEXT = [AS_CONTEXT, { sensitive: 'as:sensitive', Hashtag: 'as:Hashtag' }] as const
 
-// The terms of a status's interaction policy (GoToSocial's namespace, as Mastodon's interaction_policies context).
+// The terms of a status's interaction policy (GoToSocial's namespace, as Mastodon's interaction_policies context) and
+// of its quote (Mastodon's quotes context: FEP-044f's quote and quoteAuthorization, Fedibird's quoteUri, Misskey's
+// _misskey_quote).
 const INTERACTION_POLICY = {
 	gts: 'https://gotosocial.org/ns#',
 	interactionPolicy: { '@id': 'gts:interactionPolicy', '@type': '@id' },
 	canQuote: { '@id': 'gts:canQuote', '@type': '@id' },
 	automaticApproval: { '@id': 'gts:automaticApproval', '@type': '@id' },
+	manualApproval: { '@id': 'gts:manualApproval', '@type': '@id' },
+	quote: { '@id': 'https://w3id.org/fep/044f#quote', '@type': '@id' },
+	quoteUri: 'http://fedibird.com/ns#quoteUri',
+	_misskey_quote: 'https://misskey-hub.net/ns#_misskey_quote',
+	quoteAuthorization: { '@id': 'https://w3id.org/fep/044f#quoteAuthorization', '@type': '@id' },
 } as const
 
-// The context of a status: its interaction policy's terms.
+// The context of a status: its interaction policy's and its quote's terms.
 const NOTE_CONTEXT = [AS_CONTEXT, { sensitive: 'as:sensitive', Hashtag: 'as:Hashtag', ...INTERACTION_POLICY }] as const
 
 // The context of a status carrying a poll: Mastodon's votersCount extension too.
@@ -107,6 +115,8 @@ export type StatusFacts = {
 	reached: string[]
 	// statuses.quote_policy, Mastodon's flags (audience.ts QUOTE_POLICY_FLAGS).
 	quotePolicy: number
+	// The status's quote, when it quotes one (quotes.ts noteQuote).
+	quote: NoteQuote | null
 	tags: { name: string; href: string }[]
 	media: { url: string; content_type: string | null; description: string }[]
 	mentionNames: Map<string, string>
@@ -234,6 +244,7 @@ export function statusFacts(db: Db, statusId: string, options: { reached?: boole
 		mentionNames: new Map(mentioned.map((m) => [m.uri, `@${m.username}@${m.domain ?? host}`])),
 		poll: pollFacts(db, statusId),
 		quotePolicy: row.quote_policy,
+		quote: noteQuote(db, statusId),
 	}
 }
 
@@ -292,7 +303,19 @@ export function noteOf(facts: StatusFacts): Record<string, unknown> {
 			...facts.tags.map((t) => ({ type: 'Hashtag', href: t.href, name: `#${t.name}` })),
 		],
 		...(facts.poll === null ? {} : questionOf(facts.poll)),
+		...(facts.quote === null ? {} : quoteOf(facts.quote)),
 		interactionPolicy: { canQuote: { automaticApproval: automaticApproval(facts) } },
+	}
+}
+
+// ActivityPub::NoteSerializer's quote properties: quote (the quoted status, or a Tombstone once it is gone), and,
+// while it is there, _misskey_quote and quoteUri whatever the quote's state (Misskey reads only those, and only from a
+// Create: design §8); quoteAuthorization only while the quote is accepted with a stamp.
+function quoteOf(quote: NoteQuote): Record<string, unknown> {
+	return {
+		quote: quote.quotedUri ?? { type: 'Tombstone' },
+		...(quote.quotedUri === null ? {} : { _misskey_quote: quote.quotedUri, quoteUri: quote.quotedUri }),
+		...(quote.stamp === null ? {} : { quoteAuthorization: quote.stamp }),
 	}
 }
 
@@ -606,6 +629,29 @@ export type QuoteRequestRef = {
 	actorId: string
 	quotedUri: string
 	instrumentUri: string
+}
+
+// A local user's request to quote a remote status (Mastodon's QuoteRequestSerializer): to the quoted author alone,
+// with the quoting Note inlined. Its id is the quoting status's own, so an Accept or Reject names it; its delivery
+// subject is that id (deliveries.ts subjectOf), so neither an edit's Update nor the status's Delete drops it while it
+// waits (design, Concurrency (PR 3) row 5).
+export function quoteRequestActivity(facts: StatusFacts, quoted: { uri: string; authorId: string }): OutboundEnvelope {
+	const [as, terms] = contextOf(facts)
+	return {
+		activity: {
+			'@context': [as, { ...terms, QuoteRequest: 'https://w3id.org/fep/044f#QuoteRequest' }],
+			id: quoteRequestUri(facts.uri),
+			type: 'QuoteRequest',
+			actor: facts.actorUri,
+			object: quoted.uri,
+			instrument: noteOf(facts),
+		},
+		audience: { followers: false, accounts: [quoted.authorId] },
+	}
+}
+
+export function quoteRequestUri(statusUri: string): string {
+	return `${statusUri}#quote-request`
 }
 
 // result: the stamp an Accept grants.

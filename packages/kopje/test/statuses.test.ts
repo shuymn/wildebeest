@@ -21,10 +21,18 @@ import { MAX_RAW_LENGTH } from '../src/domain/status-text'
 import { MAX_STATUS_EDITS } from '../src/domain/statuses'
 import type { StoreStub } from '../src/platform/store-client'
 
-// Puts the pending Creates in flight, so the servers they go to will have the object: an edit then goes to them as an
-// Update (a server without the object gets a Create of the current version instead).
+// Puts the pending Creates in flight and records their servers as having the object (the receipt a delivered Create
+// leaves): an edit then goes to them as an Update (a server without a receipt gets a Create of the current version
+// first, a leased Create included: it may still give up).
 async function createsInFlight(store: StoreStub): Promise<void> {
 	await store.claimDeliveries(BUILD, { now: NOW, leaseToken: 'in-flight' })
+	await sql(
+		store,
+		`INSERT OR IGNORE INTO outbound_receipts (status_id, inbox_url, account_id, delivered_at)
+		SELECT s.id, d.inbox_url, o.account_id, 0 FROM deliveries d JOIN outbound_activities o ON o.id = d.activity_id
+			JOIN statuses s ON s.uri = o.object_uri
+		WHERE json_extract(o.body, '$.activity.type') = 'Create'`
+	)
 }
 
 describe('POST /api/v1/statuses', () => {
@@ -64,7 +72,7 @@ describe('POST /api/v1/statuses', () => {
 			tags: [],
 			emojis: [],
 			quote: null,
-			quote_approval: { automatic: ['public'], manual: [], current_user: 'denied' },
+			quote_approval: { automatic: ['public'], manual: [], current_user: 'automatic' },
 			card: null,
 			poll: null,
 		})

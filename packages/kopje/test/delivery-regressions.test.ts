@@ -71,11 +71,16 @@ describe('silent recipients (VIS-2, VIS-3, VIS-7)', () => {
 		// silent recipients.
 		const claimed = await claim(h.store, NOW, 'a')
 		await h.request(`/api/v1/statuses/${direct.id}`, bearer(alice.token, json({ status: 'edited' }, { method: 'PUT' })))
-		// The Creates first (one lane per server); complete them to reach the Updates.
+		// The Creates first (one lane per server), then the current Creates of the edit fan-out pair (a leased Create may
+		// give up); complete them to reach the Updates.
 		for (const delivery of claimed.deliveries) {
 			await complete(h.store, delivery.id, 'a', NOW, OK)
 		}
-		const updates = (await claim(h.store, NOW, 'b')).deliveries
+		for (const delivery of (await claim(h.store, NOW, 'b')).deliveries) {
+			expect(JSON.parse(delivery.body)).toMatchObject({ type: 'Create' })
+			await complete(h.store, delivery.id, 'b', NOW, OK)
+		}
+		const updates = (await claim(h.store, NOW, 'c')).deliveries
 		const byInbox = new Map(updates.map((d) => [d.inbox, JSON.parse(d.body) as Record<string, unknown>]))
 		const carol = byInbox.get('https://carol.example/users/carol/inbox') as {
 			to: string[]
@@ -106,7 +111,7 @@ describe('silent recipients (VIS-2, VIS-3, VIS-7)', () => {
 		const carol = await remoteAccount(h.store, 'carol', 'carol.example')
 		await remoteFollows(h.store, await remoteAccount(h.store, 'fan', 'carol.example'), alice.id)
 		const status = await post(h, alice, { status: '@carol@carol.example hi', visibility: 'private' })
-		// The Create is in flight when the edit comes, so the server will have the object: the edit goes as an Update.
+		// The Create is in flight when the edit comes; the edit's Updates go to the personal inbox and the followers'.
 		await h.store.claimDeliveries(BUILD, { now: NOW, leaseToken: 'in-flight' })
 		await h.request(
 			`/api/v1/statuses/${status.id}`,
@@ -132,11 +137,12 @@ describe('lane order across a server (NET-2)', () => {
 		const { alice } = h.users
 		await remoteAccount(h.store, 'carol', 'carol.example')
 		const direct = await post(h, alice, { status: '@carol@carol.example psst', visibility: 'direct' })
-		// The Create is in flight when the edit comes, so the server will have the object: the edit goes as an Update.
+		// The Create is in flight when the edit comes; the edit fan-out pair follows it in the server's one lane.
 		await h.store.claimDeliveries(BUILD, { now: NOW, leaseToken: 'in-flight' })
 		await h.request(`/api/v1/statuses/${direct.id}`, bearer(alice.token, json({ status: 'edited' }, { method: 'PUT' })))
 		expect((await rows(h.store)).map((r) => [r.type, r.inbox_url, r.state])).toEqual([
 			['Create', 'https://carol.example/inbox', 'leased'],
+			['Create', 'https://carol.example/users/carol/inbox', 'queued'],
 			['Update', 'https://carol.example/users/carol/inbox', 'queued'],
 		])
 	})

@@ -26,6 +26,8 @@ import { sha256Hex } from '../security/tokens'
 const NOT_FOUND = () => mastodonError(404, 'Record not found')
 const FORBIDDEN = () => mastodonError(403, 'This action is not allowed')
 const REPLY_NOT_FOUND = () => mastodonError(404, 'The post you are trying to reply to does not appear to exist.')
+// StatusesController#set_quoted_status: any failure, a status R36 refuses included.
+const QUOTE_NOT_FOUND = () => mastodonError(404, 'The post you are trying to quote does not appear to exist.')
 
 export const MAX_CHARACTERS = 500
 export const MAX_MEDIA_ATTACHMENTS = 4
@@ -211,6 +213,7 @@ export const createStatus: ApiHandler = async (c, deps) => {
 		...composed,
 		visibility: visibility as ApiVisibility | undefined,
 		inReplyToId: emptyToUndefined(p.get('in_reply_to_id')),
+		quotedStatusId: emptyToUndefined(p.get('quoted_status_id')),
 		quotePolicy,
 		idempotencyKey,
 		objectId: crypto.randomUUID(),
@@ -226,6 +229,8 @@ export const createStatus: ApiHandler = async (c, deps) => {
 			return c.json(result.value)
 		case 'reply_not_found':
 			return REPLY_NOT_FOUND()
+		case 'quote_not_found':
+			return QUOTE_NOT_FOUND()
 		case 'invalid':
 			return mastodonError(422, result.error)
 	}

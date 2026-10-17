@@ -15,6 +15,7 @@ import {
 	MAX_TAG_LENGTH,
 	type RemoteMediaInput,
 	type RemoteQuoteInput,
+	type RemoteQuotePolicyInput,
 	type RemoteStatusInput,
 } from '../domain/remote-statuses'
 import { MAX_URL_LENGTH } from '../domain/status-text'
@@ -298,6 +299,26 @@ function quoteOf(object: Json, embed: boolean): RemoteQuoteInput | null {
 	}
 }
 
+// Entries of each half of a canQuote policy read at most (RES-1). A policy names a few collections; a longer one only
+// adds unsupported_policy, which an entry past the bound would add anyway unless it named a collection twice.
+const MAX_QUOTE_POLICY_ENTRIES = 32
+
+// StatusParser#quote_policy's input: interactionPolicy.canQuote's automaticApproval and manualApproval, as the actor
+// URIs (or collections) they list; an entry that is not a URI string is kept as '' (it can only be unsupported). The
+// Store turns them into Mastodon's flags with the author's collections (remote-statuses.ts remoteQuotePolicy). null:
+// the Note states no policy.
+function quotePolicyOf(object: Json): RemoteQuotePolicyInput | null {
+	const policy = isObject(object.interactionPolicy) ? object.interactionPolicy.canQuote : undefined
+	if (!isObject(policy)) {
+		return null
+	}
+	const half = (value: unknown) =>
+		asArray(value)
+			.slice(0, MAX_QUOTE_POLICY_ENTRIES)
+			.map((entry) => (typeof entry === 'string' && entry.length <= MAX_URL_LENGTH ? entry : ''))
+	return { automatic: half(policy.automaticApproval), manual: half(policy.manualApproval) }
+}
+
 // The status an object describes, or null if it is not one Kopje stores. `activity` supplies to and cc when the
 // object has none (StatusParser falls back to the activity's addressing). embedQuote: keep a Note embedded as the
 // quoted status (false for an embedded one itself).
@@ -358,6 +379,7 @@ export function parseRemoteStatus(
 		name: converted ? null : text(object.name),
 		poll: converted ? null : pollOf(object),
 		quote: quoteOf(object, embedQuote),
+		quotePolicy: quotePolicyOf(object),
 		raw: JSON.stringify(object),
 	}
 }

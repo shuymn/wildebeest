@@ -64,8 +64,9 @@ async function refusal(response: Response): Promise<{ status: number; body: unkn
 	return { status: response.status, body: await response.json() }
 }
 
-function approvalOf(automatic: string[]): QuoteApproval {
-	return { automatic, manual: [], current_user: 'denied' }
+// current_user: what R36 answers the viewer (the author of their own public, unlisted or private status: automatic).
+function approvalOf(automatic: string[], current = 'automatic'): QuoteApproval {
+	return { automatic, manual: [], current_user: current }
 }
 
 describe('POST /api/v1/statuses quote_approval_policy', () => {
@@ -117,7 +118,8 @@ describe('POST /api/v1/statuses quote_approval_policy', () => {
 					...(policy === undefined ? {} : { quote_approval_policy: policy }),
 				})) as PolicyStatus
 				expect(await stored(h.store, status.id)).toBe(0)
-				expect(status.quote_approval).toEqual(approvalOf([]))
+				// Its author may quote a private status of theirs, never a direct one (R36).
+				expect(status.quote_approval).toEqual(approvalOf([], visibility === 'direct' ? 'denied' : 'automatic'))
 			}
 		}
 		// Unlisted is distributable: its policy is kept.
@@ -333,7 +335,9 @@ describe('PUT and PATCH /api/v1/statuses/:id/interaction_policy', () => {
 						{ quote_approval_policy: 'public' }
 					)
 					expect(response.status).toBe(200)
-					expect((await response.json<PolicyStatus>()).quote_approval).toEqual(approvalOf([]))
+					expect((await response.json<PolicyStatus>()).quote_approval).toEqual(
+						approvalOf([], visibility === 'direct' ? 'denied' : 'automatic')
+					)
 					expect(await stored(h.store, status.id)).toBe(0)
 				}
 			})
@@ -414,21 +418,99 @@ describe('quote_approval', () => {
 		}
 	})
 
-	it('is denied for every viewer, the author and a follower included, while Kopje cannot author quotes', async () => {
-		const h = await community(['alice', 'bob'])
-		const { alice, bob } = h.users
+	// current_user is R36 for the viewer (audience.ts quoteApprovalReads): denied whenever R36 refuses, automatic for
+	// the viewer's own, and otherwise what the policy answers them. Every policy against every viewer relation, local
+	// and remote statuses, a private and a direct one, and a boost (which answers for its original).
+	it('answers R36 for every policy and viewer relation, a boost and a private post included', async () => {
+		const h = await community(['alice', 'bob', 'carol', 'dan', 'erin', 'frank', 'gina'])
+		const { alice, bob, carol, dan, erin, frank, gina } = h.users
 		await follow(h, bob, alice.id)
-		const status = await post(h, alice, { status: 'quotable', quote_approval_policy: 'public' })
-		const followers = await post(h, alice, { status: 'followers', quote_approval_policy: 'followers' })
-		const remote = await remoteAccount(h.store, 'rem')
-		const theirs = await seedStatus(h.store, { accountId: remote, visibility: 'public' })
-		// A remote status shows what is stored of it (0: Kopje does not read remote policies yet).
-		await sql(h.store, 'UPDATE statuses SET quote_policy = ? WHERE id = ?', (2 << 16) | 4 | 1, theirs)
-		for (const token of [undefined, alice.token, bob.token]) {
-			for (const id of [status.id, followers.id, theirs]) {
-				const { body } = await getJson<PolicyStatus>(h, `/api/v1/statuses/${id}`, token)
-				expect(body.quote_approval.current_user).toBe('denied')
+		await follow(h, alice, dan.id)
+		expect((await act(h, erin, `/api/v1/accounts/${alice.id}/block`)).status).toBe(200)
+		expect((await act(h, alice, `/api/v1/accounts/${frank.id}/block`)).status).toBe(200)
+		const remote = await remoteAccount(h.store, 'rem', 'far.example')
+		expect((await act(h, gina, '/api/v1/domain_blocks', { domain: 'far.example' })).status).toBe(200)
+		// bob follows rem; rem follows dan.
+		await sql(
+			h.store,
+			`INSERT INTO follows (account_id, target_account_id, state, created_at) VALUES (?1, ?2, 'accepted', ?4),
+				(?2, ?3, 'accepted', ?4)`,
+			bob.id,
+			remote,
+			dan.id,
+			new Date(NOW).toISOString()
+		)
+		type Case = { id: string; author: string; visibility: string; policy: number }
+		const cases: Case[] = []
+		const seed = async (author: string, visibility: 'public' | 'unlisted' | 'private' | 'direct', policy: number) => {
+			const id = await seedStatus(h.store, { accountId: author, visibility })
+			await sql(h.store, 'UPDATE statuses SET quote_policy = ? WHERE id = ?', policy, id)
+			cases.push({ id, author, visibility, policy })
+		}
+		for (const author of [alice.id, remote]) {
+			for (const visibility of ['public', 'unlisted'] as const) {
+				for (const policy of [PUBLIC, FOLLOWERS, 8 << 16, 2, 4, 8, 1 << 16, 1, 0]) {
+					await seed(author, visibility, policy)
+				}
 			}
+			await seed(author, 'private', PUBLIC)
+			await seed(author, 'direct', PUBLIC)
+		}
+		const follows = (a: string, b: string) =>
+			(a === bob.id && (b === alice.id || b === remote)) ||
+			(a === alice.id && b === dan.id) ||
+			(a === remote && b === dan.id)
+		const half = (bits: number, viewer: string, author: string) =>
+			(bits & 2) !== 0 || ((bits & 4) !== 0 && follows(viewer, author)) || ((bits & 8) !== 0 && follows(author, viewer))
+		const expected = (viewer: string | null, c: Case): string => {
+			if (viewer === null) {
+				return 'denied'
+			}
+			if (viewer === c.author) {
+				return c.visibility === 'direct' ? 'denied' : 'automatic'
+			}
+			const blocked =
+				(c.author === alice.id && (viewer === erin.id || viewer === frank.id)) ||
+				(c.author === remote && viewer === gina.id)
+			if (blocked || c.visibility === 'private' || c.visibility === 'direct') {
+				return 'denied'
+			}
+			return half(c.policy >> 16, viewer, c.author)
+				? 'automatic'
+				: half(c.policy & 0xffff, viewer, c.author)
+					? 'manual'
+					: ((c.policy >> 16) | (c.policy & 0xffff)) & 1
+						? 'unknown'
+						: 'denied'
+		}
+		const viewers: [string | null, string | undefined][] = [
+			[null, undefined],
+			...[alice, bob, carol, dan, erin, frank, gina].map((user) => [user.id, user.token] as [string, string]),
+		]
+		for (const [viewer, token] of viewers) {
+			for (const c of cases) {
+				const response = await h.request(`/api/v1/statuses/${c.id}`, token === undefined ? {} : bearer(token))
+				// A status the viewer may not see is not shown at all.
+				if (response.status === 404) {
+					expect(expected(viewer, c), `${viewer} ${c.visibility}`).toBe('denied')
+					continue
+				}
+				const body = await response.json<PolicyStatus>()
+				expect(body.quote_approval.current_user, `${viewer} ${c.author} ${c.visibility} ${c.policy}`).toBe(
+					expected(viewer, c)
+				)
+			}
+		}
+		// A boost answers for its original, for each viewer: bob's boost of alice's public status open to followers.
+		const original = cases.find((c) => c.author === alice.id && c.visibility === 'public' && c.policy === FOLLOWERS)!
+		const boost = await (await act(h, bob, `/api/v1/statuses/${original.id}/reblog`)).json<PolicyStatus>()
+		for (const [viewer, token] of [
+			[bob.id, bob.token],
+			[carol.id, carol.token],
+		] as const) {
+			const { body } = await getJson<PolicyStatus & { reblog: PolicyStatus }>(h, `/api/v1/statuses/${boost.id}`, token)
+			expect(body.quote_approval.current_user).toBe(expected(viewer, original))
+			expect(body.reblog.quote_approval.current_user).toBe(expected(viewer, original))
 		}
 	})
 
@@ -438,8 +520,9 @@ describe('quote_approval', () => {
 		const status = await post(h, alice, { status: 'boost me', quote_approval_policy: 'followers' })
 		const boost = await act(h, bob, `/api/v1/statuses/${status.id}/reblog`)
 		const boosted = await boost.json<PolicyStatus & { reblog: PolicyStatus }>()
-		expect(boosted.quote_approval).toEqual(approvalOf(['followers']))
-		expect(boosted.reblog.quote_approval).toEqual(approvalOf(['followers']))
+		// bob does not follow alice: her followers policy denies him, on the boost as on its original.
+		expect(boosted.quote_approval).toEqual(approvalOf(['followers'], 'denied'))
+		expect(boosted.reblog.quote_approval).toEqual(approvalOf(['followers'], 'denied'))
 		expect(await stored(h.store, boosted.id)).toBe(0)
 		// A remote quote of alice's status, accepted: the embedded status carries its own quote_approval.
 		const remote = await remoteAccount(h.store, 'rem')
@@ -456,13 +539,13 @@ describe('quote_approval', () => {
 			`/api/v1/statuses/${quoting}`,
 			bob.token
 		)
-		expect(body.quote_approval).toEqual(approvalOf([]))
-		expect(body.quote.quoted_status.quote_approval).toEqual(approvalOf(['followers']))
+		expect(body.quote_approval).toEqual(approvalOf([], 'denied'))
+		expect(body.quote.quoted_status.quote_approval).toEqual(approvalOf(['followers'], 'denied'))
 	})
 
 	// Ice Cubes (Models/QuoteApproval.swift) decodes all three fields, non-optional, current_user from a closed enum, or
-	// fails the whole status; Elk (app/composables/masto/status.ts) offers its quote button for automatic or manual.
-	it('has the shape Ice Cubes decodes and never offers Elk a quote button', async () => {
+	// fails the whole status.
+	it('has the shape Ice Cubes decodes', async () => {
 		const h = await community(['alice', 'bob'])
 		const { alice, bob } = h.users
 		const mine = await post(h, alice, { status: 'mine' })
@@ -482,7 +565,6 @@ describe('quote_approval', () => {
 					}
 				}
 				expect(['automatic', 'manual', 'unknown', 'denied']).toContain(approval.current_user)
-				expect(['automatic', 'manual']).not.toContain(approval.current_user)
 			}
 		}
 	})

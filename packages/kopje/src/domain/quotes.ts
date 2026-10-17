@@ -1,4 +1,13 @@
-import { type QuoteRequestRef, quoteAnswerActivity, recordOutbound, stampUri } from './activities'
+import {
+	type QuoteRequestRef,
+	quoteAnswerActivity,
+	quoteRequestUri,
+	recordOutbound,
+	stampUri,
+	statusFacts,
+	statusReach,
+	updateActivity,
+} from './activities'
 import {
 	availableLocalSql,
 	DISTRIBUTABLE_SQL,
@@ -8,6 +17,7 @@ import {
 	mentionStatusSql,
 	type Visibility,
 } from './audience'
+import { NEW_GENERATION } from './ids'
 import {
 	isDeleted,
 	isDeletedActor,
@@ -76,8 +86,7 @@ export type QuoteState = 'pending' | 'accepted' | 'rejected' | 'revoked' | 'dele
 // Null-safe (IS), so NOT of it holds for work with no due time.
 const LEASED = '(lease_until IS NOT NULL AND verify_after IS lease_until AND lease_until > ?3)'
 
-// A new generation of a quote's work: drawn by every write the rule at the column names (migration 0033_quotes).
-export const NEW_GENERATION = '(abs(random()) % 9007199254740991)'
+export { NEW_GENERATION } from './ids'
 
 // How a status came: hops is its work's budget (QUOTE_HOPS for a root), fetchAs the local account whose key may fetch
 // for it (the owner of the personal inbox it was delivered to, else a local follower of its author), or null.
@@ -234,7 +243,8 @@ export function refreshQuote(
 
 // A stored status arrived again as a root: its pending quote gets the full work budget again and is due now, with this
 // arrival's fetch identity when it has one. An arrival of a status stored for verification (fewer hops) promotes
-// nothing, and neither does one whose quote is of a local status (no work, as in recordQuote).
+// nothing, and neither does one whose quote is of a local status (no work, as in recordQuote), nor a local quoting
+// status's (a local user resolving its uri: no round decides it, Concurrency (PR 3) row 17).
 export function promoteQuote(db: Db, statusId: string, arrival: QuoteArrival, now: number): void {
 	if (arrival.hops < QUOTE_HOPS) {
 		return
@@ -242,7 +252,7 @@ export function promoteQuote(db: Db, statusId: string, arrival: QuoteArrival, no
 	db.run(
 		`UPDATE quotes SET hops = ?2, attempts = 0, verify_after = ?3, fetch_as = COALESCE(?4, fetch_as), updated_at = ?5,
 			generation = ${NEW_GENERATION}
-		WHERE status_id = ?1 AND state = 'pending' AND quoted_uri IS NOT NULL
+		WHERE status_id = ?1 AND state = 'pending' AND quoted_uri IS NOT NULL AND local = 0
 			AND NOT EXISTS (SELECT 1 FROM local_accounts l WHERE l.account_id = quotes.quoted_account_id)`,
 		statusId,
 		QUOTE_HOPS,
@@ -754,16 +764,22 @@ function revocationBatch(db: Db, approvalUri: string, actorUri: string, left: ()
 // A Delete of `approvalUri` by `actor` (its retraction recorded by the caller): when a stored quote of one of the
 // actor's statuses names that stamp, the revocation is recorded once, for good and for that actor alone (another
 // actor's Delete of the same URI revokes nothing of this one's), and its first batch runs within
-// `left()`; the rest is continued by the inbound job rounds (continueRevocations). A repeated Delete finds the
-// revocation and adds nothing. Returns null when no such quote names the stamp, else whether batches remain.
+// `left()`; the rest is continued by the inbound job rounds (continueRevocations), which meet received quotes only. A
+// repeated Delete finds the revocation and adds nothing. The local quote holding the stamp is handled first, in this
+// transaction and outside the batch budget, whether or not the revocation was recorded before (a Reject records it
+// too): revoked, and, for a proven Delete (`forward`, the body as received), forwarded once (revokeLocalStamp).
+// Returns null when no quote names the stamp, else whether batches remain.
 export function revokeStamp(
 	db: Db,
 	actor: { id: string; uri: string },
 	approvalUri: string,
 	left: () => number,
-	now: number
+	now: number,
+	forward: Record<string, unknown> | null = null
 ): boolean | null {
+	const local = revokeLocalStamp(db, actor, approvalUri, forward, now)
 	const named =
+		local ||
 		db.first(
 			'SELECT 1 AS x FROM quotes WHERE approval_uri = ? AND quoted_account_id = ? LIMIT 1',
 			approvalUri,
@@ -803,7 +819,8 @@ export const MAX_RECHECKED = 100
 // on its word, but the quotes of the actor's statuses that name the stamp and could still be accepted by it are checked
 // again, their state unchanged until then, so a stamp that is gone revokes or rejects them. Replays coalesce:
 //   - the accepted quote that a stamp accepted (one at most: a valid stamp names exactly one quoting status; a
-//     self-quote, accepted without one, may name the stamp too and is passed over) is renewed when idle (due now,
+//     self-quote, accepted without one, may name the stamp too and is passed over, and so is a local quote, which only
+//     its quoted author's answers decide: Concurrency (PR 3) row 17) is renewed when idle (due now,
 //     attempts reset, a new generation), left as it is when due or backing off (its next fetch is fresh anyway), and
 //     marked when a round has leased it;
 //   - a pending quote is marked only when a round has leased it (its first stamp fetch is in flight), matched by the
@@ -815,7 +832,8 @@ export const MAX_RECHECKED = 100
 export function recheckStamp(db: Db, actor: { id: string }, approvalUri: string, now: number): boolean {
 	const accepted = db.first<{ status_id: string; verify_after: number | null; leased: number }>(
 		`SELECT q.status_id, q.verify_after, ${LEASED} AS leased FROM quotes q JOIN statuses s ON s.id = q.status_id
-		WHERE q.approval_uri = ?1 AND q.quoted_account_id = ?2 AND q.state = 'accepted' AND s.account_id <> ?2 LIMIT 1`,
+		WHERE q.approval_uri = ?1 AND q.quoted_account_id = ?2 AND q.state = 'accepted' AND s.account_id <> ?2
+			AND q.local = 0 LIMIT 1`,
 		approvalUri,
 		actor.id,
 		now
@@ -1209,4 +1227,302 @@ export function answeredRequests(
 			MAX_QUOTE_REQUESTS_PER_ACTOR
 		)
 		.map((row) => row.activity_uri)
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Authoring: quotes by local users (design §5.6, Concurrency (PR 3))
+// ---------------------------------------------------------------------------------------------------------------
+//
+// A local quoting row (local = 1) is decided only by the post that writes it, the quoted author's answer (an Accept or
+// Reject of our QuoteRequest, each one compare-and-set), the quoted author's stamp Delete (in its first transaction),
+// and the removal paths (a detach, the quoting status's delete). It never has verification work (hops 0, no due time),
+// so no job round claims it (row 17), and every write here draws a new generation and clears the work. Its stamp
+// (approval_uri) is kept after it leaves accepted, until the quoted author's proven Delete of it is forwarded
+// (quotes_local_stamp, migration 0039_quotes_local): one local quote per stamp and quoted author, so that forward is
+// one envelope, recorded once.
+
+// The quoted status of a post, as preparePost (statuses.ts) found it through R36.
+export type QuotedForPost = {
+	id: string
+	uri: string
+	account_id: string
+	author_uri: string
+	local: number
+}
+
+// PostStatusService#attach_quote! in the post's transaction: a quote of a local status is accepted at once (R36 was
+// its decision), with a fresh authorization when its author is not the poster's; a quote of a remote status is pending
+// until its author answers the QuoteRequest named activity_uri (activities.ts quoteRequestUri). Returns the state.
+export function recordLocalQuote(
+	db: Db,
+	quoting: { id: string; uri: string; authorId: string },
+	quoted: QuotedForPost,
+	now: number
+): QuoteState {
+	const state: QuoteState = quoted.local === 1 ? 'accepted' : 'pending'
+	db.run(
+		`INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, quoted_account_id, state, legacy, local,
+			authorization_id, activity_uri, hops, generation, updated_at)
+		VALUES (?1, ?2, ?3, ?4, ?5, 0, 1, ?6, ?7, 0, ${NEW_GENERATION}, ?8)`,
+		quoting.id,
+		quoted.uri,
+		quoted.id,
+		quoted.account_id,
+		state,
+		quoted.local === 1 && quoted.account_id !== quoting.authorId ? freshAuthorization() : null,
+		quoted.local === 1 ? null : quoteRequestUri(quoting.uri),
+		iso(now)
+	)
+	return state
+}
+
+// What a local status's Note says of its quote (activities.ts noteOf): the quoted status's uri while it is there
+// (null once it is gone: a Tombstone), and the stamp while the quote is accepted: Kopje's own for a local quoted status
+// by someone else, the quoted author's (approval_uri) for a remote one.
+export type NoteQuote = { quotedUri: string | null; stamp: string | null }
+
+export function noteQuote(db: Db, statusId: string): NoteQuote | null {
+	const row = db.first<{
+		quoted_uri: string | null
+		present: number
+		state: QuoteState
+		authorization_id: string | null
+		approval_uri: string | null
+		author_uri: string | null
+	}>(
+		`SELECT q.quoted_uri, q.quoted_status_id IS NOT NULL AS present, q.state, q.authorization_id, q.approval_uri,
+			a.uri AS author_uri
+		FROM quotes q LEFT JOIN accounts a ON a.id = q.quoted_account_id
+		WHERE q.status_id = ? AND q.local = 1`,
+		statusId
+	)
+	if (row === undefined) {
+		return null
+	}
+	const stamp =
+		row.state !== 'accepted'
+			? null
+			: row.authorization_id !== null && row.author_uri !== null
+				? stampUri(row.author_uri, row.authorization_id)
+				: row.approval_uri
+	return { quotedUri: row.present === 1 ? row.quoted_uri : null, stamp }
+}
+
+// A local status's quote, for an edit of it (statuses.ts): the status it quotes while it is there (its RE: line), or
+// null once it is gone; undefined when it quotes nothing.
+export function localQuoteOf(db: Db, statusId: string): { quotedStatusId: string | null } | undefined {
+	const row = db.first<{ quoted_status_id: string | null }>(
+		'SELECT quoted_status_id FROM quotes WHERE status_id = ? AND local = 1',
+		statusId
+	)
+	return row === undefined ? undefined : { quotedStatusId: row.quoted_status_id }
+}
+
+// The answer an Accept or Reject names: our request by its id (the quoting status's uri with #quote-request), or an
+// inlined QuoteRequest whose instrument is our quoting status and whose object is the actor's status (Mastodon's
+// quote_from_request_json). Only a local quoting row of a quote of the actor's status matches.
+export type QuoteAnswerRef = {
+	id: string | null
+	type: string | null
+	object: string | null
+	instrument: string | null
+}
+
+function answeredQuote(db: Db, actor: { id: string }, ref: QuoteAnswerRef): { status_id: string } | undefined {
+	const byId =
+		ref.id === null || !ref.id.endsWith('#quote-request')
+			? undefined
+			: db.first<{ status_id: string }>(
+					`SELECT q.status_id FROM statuses s JOIN quotes q ON q.status_id = s.id
+					WHERE s.uri = ?1 AND q.local = 1 AND q.activity_uri = ?2 AND q.quoted_account_id = ?3`,
+					ref.id.slice(0, -'#quote-request'.length),
+					ref.id,
+					actor.id
+				)
+	if (byId !== undefined || ref.type !== 'QuoteRequest' || ref.instrument === null || ref.object === null) {
+		return byId
+	}
+	return db.first<{ status_id: string }>(
+		`SELECT q.status_id FROM statuses s JOIN quotes q ON q.status_id = s.id JOIN statuses t ON t.id = q.quoted_status_id
+		WHERE s.uri = ?1 AND q.local = 1 AND t.uri = ?2 AND t.account_id = ?3`,
+		ref.instrument,
+		ref.object,
+		actor.id
+	)
+}
+
+// The Update of a local quoting status whose quote's stamp changed (Mastodon's StatusUpdateDistributionWorker after an
+// Accept): its Note as of this commit, with no history entry and edited_at unchanged, so receivers apply it as an
+// implicit update and verify the stamp it carries, or its absence, again. Its id is random (never a clock), and it
+// supersedes the earlier waiting Updates of the status (deliveries.ts).
+function recordStampUpdate(db: Db, statusId: string, now: number): void {
+	const facts = statusFacts(db, statusId)
+	const author = db.first<{ account_id: string }>('SELECT account_id FROM statuses WHERE id = ?', statusId)
+	if (facts !== null && author !== undefined) {
+		recordOutbound(db, author.account_id, updateActivity(facts, `quote-${crypto.randomUUID()}`), now)
+	}
+}
+
+// Mastodon's Accept#accept_quote! for our QuoteRequest, one compare-and-set (row 7): only from the quoted author (the
+// row's quoted_account_id, cleared by a detach, row 15), with a result on the actor's origin that the actor never
+// revoked nor retracted (rows 8, the same checks as verification), on a pending quote, and only when no other local
+// quote holds that stamp of the actor (quotes_local_stamp, row 9: the update is ignored on the unique index). Then the
+// quoting status's Update carries the stamp. Anything else changes nothing: an Accept repeated, late, or after a
+// Reject. Returns whether it applied.
+export function acceptOurQuote(
+	db: Db,
+	actor: { id: string; uri: string },
+	ref: QuoteAnswerRef,
+	result: string | null,
+	now: number
+): boolean {
+	const quote = answeredQuote(db, actor, ref)
+	if (
+		quote === undefined ||
+		result === null ||
+		originOf(result) === null ||
+		!/^https?:$/.test(new URL(result).protocol) ||
+		originOf(result) !== originOf(actor.uri) ||
+		revoked(db, result, actor.uri) ||
+		isDeleted(db, actor.uri, result, now)
+	) {
+		return false
+	}
+	const changed = db.run(
+		`UPDATE OR IGNORE quotes SET state = 'accepted', approval_uri = ?3, verify_after = NULL, lease_until = NULL,
+			recheck = 0, need_author = NULL, generation = ${NEW_GENERATION}, updated_at = ?4
+		WHERE status_id = ?1 AND local = 1 AND state = 'pending' AND quoted_account_id = ?2`,
+		quote.status_id,
+		actor.id,
+		result,
+		iso(now)
+	)
+	if (changed === 0) {
+		return false
+	}
+	recordStampUpdate(db, quote.status_id, now)
+	return true
+}
+
+// Mastodon's Reject of our QuoteRequest (Quote#reject!), one compare-and-set: pending becomes rejected and accepted
+// revoked. Leaving accepted records the stamp in quote_revocations for good (so no later Accept of it applies) and the
+// quoting status's Update without it (design, changes after the design review 1: it supersedes a waiting Update that
+// still carries the stamp); the stamp stays on the row until its proven Delete is forwarded. Returns whether it applied.
+export function rejectOurQuote(db: Db, actor: { id: string; uri: string }, ref: QuoteAnswerRef, now: number): boolean {
+	const quote = answeredQuote(db, actor, ref)
+	if (quote === undefined) {
+		return false
+	}
+	const row = db.first<{ state: QuoteState; approval_uri: string | null }>(
+		`UPDATE quotes SET state = CASE state WHEN 'accepted' THEN 'revoked' ELSE 'rejected' END, verify_after = NULL,
+			lease_until = NULL, recheck = 0, generation = ${NEW_GENERATION}, updated_at = ?3
+		WHERE status_id = ?1 AND local = 1 AND state IN ('pending', 'accepted') AND quoted_account_id = ?2
+		RETURNING state, approval_uri`,
+		quote.status_id,
+		actor.id,
+		iso(now)
+	)
+	if (row === undefined) {
+		return false
+	}
+	if (row.state === 'revoked') {
+		if (row.approval_uri !== null) {
+			db.run(
+				`INSERT INTO quote_revocations (authorization, actor_uri, revoked_at, pending) VALUES (?, ?, ?, 0)
+				ON CONFLICT DO NOTHING`,
+				row.approval_uri,
+				actor.uri,
+				now
+			)
+		}
+		recordStampUpdate(db, quote.status_id, now)
+	}
+	return true
+}
+
+// Whether a local quote holds the actor's stamp `approvalUri` (one seek of quotes_local_stamp): a Delete of it is then
+// forwarded when proven, so the inbox asks the Worker to verify a proof the Delete carries (inbox.ts deleteObject).
+export function holdsLocalStamp(db: Db, actor: { id: string }, approvalUri: string): boolean {
+	return (
+		db.first(
+			`SELECT 1 AS x FROM quotes INDEXED BY quotes_local_stamp
+			WHERE approval_uri = ? AND quoted_account_id = ? AND local = 1`,
+			approvalUri,
+			actor.id
+		) !== undefined
+	)
+}
+
+// The first transaction of the actor's Delete of the stamp `approvalUri` (row 10, as changed by the second design
+// review), for the one local quote that holds it (a seek of quotes_local_stamp, whatever the received quotes naming
+// it): an accepted quote becomes revoked and its status's Update without the stamp is recorded; and when the Delete is
+// proven (its author's proof verified: `forward` is the body as received), that body is recorded unchanged as one
+// immutable envelope signed by the quoting author, reaching every inbox that received the quoting status or would
+// receive it now (reachOf, its owner's receipts and audience), and the row lets go of the stamp, so a replay forwards
+// nothing more. A retraction: no suspension or admission refuses it. Returns whether a local quote held the stamp.
+function revokeLocalStamp(
+	db: Db,
+	actor: { id: string },
+	approvalUri: string,
+	forward: Record<string, unknown> | null,
+	now: number
+): boolean {
+	const row = db.first<{ status_id: string; state: QuoteState; author_id: string }>(
+		`SELECT q.status_id, q.state, s.account_id AS author_id FROM quotes q INDEXED BY quotes_local_stamp
+			JOIN statuses s ON s.id = q.status_id
+		WHERE q.approval_uri = ?1 AND q.quoted_account_id = ?2 AND q.local = 1`,
+		approvalUri,
+		actor.id
+	)
+	if (row === undefined) {
+		return false
+	}
+	if (row.state === 'accepted') {
+		db.run(
+			`UPDATE quotes SET state = 'revoked', verify_after = NULL, lease_until = NULL, recheck = 0,
+				generation = ${NEW_GENERATION}, updated_at = ?2
+			WHERE status_id = ?1`,
+			row.status_id,
+			iso(now)
+		)
+		recordStampUpdate(db, row.status_id, now)
+	}
+	if (forward !== null) {
+		const reach = statusReach(db, row.status_id)
+		recordOutbound(
+			db,
+			row.author_id,
+			{
+				activity: forward,
+				audience: { followers: false, accounts: [] },
+				immutable: true,
+				reachOf: reach === null ? [] : [reach],
+			},
+			now
+		)
+		db.run(
+			`UPDATE quotes SET approval_uri = NULL, generation = ${NEW_GENERATION}, updated_at = ?2 WHERE status_id = ?1`,
+			row.status_id,
+			iso(now)
+		)
+	}
+	return true
+}
+
+// Local accounts an edit of a status notifies with quoted_update at most (row 16): the authors of its newest accepted
+// local quotes.
+export const MAX_QUOTED_UPDATES = 100
+
+// The quoting statuses and their local authors that an edit of `quotedId` notifies (Mastodon's
+// FanOutOnWriteService#notify_about_update!): the accepted local quotes at this commit, newest first, at most
+// MAX_QUOTED_UPDATES, from one seek of quotes_local_accepted (migration 0039_quotes_local) whatever the received
+// quotes of the status.
+export function quotedUpdates(db: Db, quotedId: string): { status_id: string; account_id: string }[] {
+	return db.all<{ status_id: string; account_id: string }>(
+		`SELECT q.status_id, s.account_id FROM quotes q INDEXED BY quotes_local_accepted JOIN statuses s ON s.id = q.status_id
+		WHERE q.quoted_status_id = ? AND q.local = 1 AND q.state = 'accepted'
+		ORDER BY q.status_id DESC LIMIT ?`,
+		quotedId,
+		MAX_QUOTED_UPDATES
+	)
 }

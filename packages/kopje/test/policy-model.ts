@@ -54,6 +54,7 @@ export const NOTIFICATION_TYPES = [
 	'update',
 	'poll',
 	'quote',
+	'quoted_update',
 ] as const satisfies readonly NotificationType[]
 const EVERY_TYPE: Exclude<NotificationType, (typeof NOTIFICATION_TYPES)[number]> extends never ? true : false = true
 void EVERY_TYPE
@@ -515,7 +516,8 @@ export class PolicyModel {
 	// recipient, and the recipient may see the status. A reblog needs the sender's boost of it to be visible to the
 	// recipient. A mention is left out when its status mentions (not silently) or replies to an account the recipient
 	// blocks or mutes with notifications. A post notification is shown only for a status that is not a reply, or is one
-	// in the author's own conversation (a known partner that is the author), and that home's filter passes.
+	// in the author's own conversation (a known partner that is the author), and that home's filter passes. A
+	// quoted_update is shown while its status's quote is accepted and the recipient may see the quoted status.
 	shown(r: number, type: NotificationType, from: number, s: number | null): boolean {
 		if (
 			(from === r && type !== 'poll') ||
@@ -548,6 +550,12 @@ export class PolicyModel {
 			}
 			case 'status':
 				return s !== null && (!this.isReply(s) || this.partner(s) === this.status(s).author) && this.homeFilter(s, r)
+			// About the recipient's own quoting status: shown while its quote is accepted and the recipient may see the
+			// quoted status by itself.
+			case 'quoted_update': {
+				const q = s === null ? undefined : this.world.quotes.find((quote) => quote.status === s)
+				return q !== undefined && q.state === 'accepted' && q.quoted !== null && this.viewable(q.quoted, r)
+			}
 			default:
 				return true
 		}

@@ -76,7 +76,7 @@ type Json = Record<string, unknown>
 type Dereference = { type: 'Dereference'; kind: 'Create' | 'UpdateStatus'; id: string; object: string; activity: Json }
 
 type Parsed =
-	| { ok: true; actor: string; activity: InboundActivity | Dereference; target: string | null }
+	| { ok: true; actor: string; activity: InboundActivity | Dereference; target: string | null; body: Json }
 	| { ok: false; reason: string; deleteOfSelf?: boolean }
 
 // Store calls one activity may take: the activity, its boosted original, and that original's author.
@@ -95,13 +95,14 @@ function idOf(value: unknown): string | null {
 
 function refOf(value: unknown): ActivityRef {
 	if (!isObject(value)) {
-		return { id: idOf(value), type: null, actor: null, object: null }
+		return { id: idOf(value), type: null, actor: null, object: null, instrument: null }
 	}
 	return {
 		id: idOf(value),
 		type: typeof value.type === 'string' ? value.type : null,
 		actor: idOf(value.actor),
 		object: idOf(value.object),
+		instrument: idOf(value.instrument),
 	}
 }
 
@@ -167,7 +168,7 @@ export function parseActivity(body: Uint8Array): Parsed {
 	if (activity === null) {
 		return { ok: false, reason: 'unsupported', deleteOfSelf }
 	}
-	return { ok: true, actor, activity, target: type === 'Move' ? idOf(json.target) : null }
+	return { ok: true, actor, activity, target: type === 'Move' ? idOf(json.target) : null, body: json }
 }
 
 function strings(value: unknown): string[] {
@@ -195,7 +196,11 @@ function activityOf(
 		case 'Follow':
 		case 'Block':
 			return object === null ? null : { type, id, object }
-		case 'Accept':
+		// An Accept of a QuoteRequest names the stamp it grants in result (Accept#accept_quote!: its first value, by id).
+		case 'Accept': {
+			const result = Array.isArray(json.result) ? json.result[0] : json.result
+			return { type, id, object: refOf(json.object), result: idOf(result) }
+		}
 		case 'Reject':
 		case 'Undo':
 			return { type, id, object: refOf(json.object) }
@@ -236,7 +241,9 @@ function activityOf(
 			if (object === null) {
 				return null
 			}
-			return object === actor ? { type: 'DeleteActor', id } : { type: 'Delete', id, object }
+			return object === actor
+				? { type: 'DeleteActor', id }
+				: { type: 'Delete', id, object, ...(hasAuthorProof(json) ? { signed: true } : {}) }
 		// Misskey's reactions arrive as a Like with _misskey_reaction (or content), and Pleroma's as EmojiReact: both are
 		// a favourite, and the emoji is not kept (as Mastodon).
 		case 'Like':
@@ -449,7 +456,17 @@ export async function receiveInbound(deps: InboundDeps, request: InboundRequest)
 		}
 		actor = owned.input
 	}
-	return apply(deps, { activity, target: parsed.target, actorUri, actor, origin, loaders, state, budget })
+	return apply(deps, {
+		activity,
+		target: parsed.target,
+		actorUri,
+		actor,
+		origin,
+		loaders,
+		state,
+		budget,
+		body: parsed.body,
+	})
 }
 
 // The current document of `uri`, fetched anew, if it lists this very key (the same id and the same key material).
@@ -538,7 +555,13 @@ async function relayed(deps: InboundDeps, request: InboundRequest, relay: Relay)
 		proven = true
 	}
 	return apply(deps, {
-		activity: { type: 'RelayedDelete', id: activity.id, object: activity.object, proven },
+		activity: {
+			type: 'RelayedDelete',
+			id: activity.id,
+			object: activity.object,
+			proven,
+			...(proven ? { body: json } : {}),
+		},
 		target: null,
 		actorUri,
 		actor,
@@ -546,6 +569,7 @@ async function relayed(deps: InboundDeps, request: InboundRequest, relay: Relay)
 		loaders,
 		state,
 		budget,
+		body: json,
 	})
 }
 
@@ -558,17 +582,20 @@ type Application = {
 	loaders: RemoteLoaders
 	state: FederationState
 	budget: FetchBudget
+	// The activity as received, for an author proof the Store asks to have verified (need 'proof').
+	body: Json
 }
 
 // Steps 5 and 6: what the type needs, and the Store.
 async function apply(deps: InboundDeps, application: Application): Promise<InboxOutcome> {
 	const { target, actorUri, actor, origin, loaders, state, budget } = application
 	const activity = application.activity
-	const prepared = await prepare(activity, target, actorUri, origin, loaders)
+	const ready = await prepare(activity, target, actorUri, origin, loaders)
 	rethrowStoreError(state)
-	if (!('type' in prepared)) {
-		return prepared
+	if (!('type' in ready)) {
+		return ready
 	}
+	let prepared: InboundActivity = ready
 	const prefetched: Prefetched = { statuses: {}, actors: {} }
 	let result: ReceiveResult | undefined
 	for (let round = 0; round < MAX_STORE_ROUNDS; round++) {
@@ -586,6 +613,21 @@ async function apply(deps: InboundDeps, application: Application): Promise<Inbox
 		const need = result.need
 		if (need === undefined) {
 			break
+		}
+		// The Delete's author proof, verified as a relayed one's is (a key the actor's current document embeds): proven,
+		// the body goes to the Store to be forwarded; otherwise the Delete applies unproven, as delivered by its actor.
+		if (need.kind === 'proof') {
+			if (prepared.type !== 'Delete') {
+				break
+			}
+			const proof = await proveDelete(application.body, prepared, actorUri, loaders)
+			rethrowStoreError(state)
+			if (proof === 'transient') {
+				return { status: 503, reason: 'proof-unavailable' }
+			}
+			prepared = proof ? { ...prepared, proven: application.body } : { ...prepared, signed: false }
+			result = undefined
+			continue
 		}
 		// A document the Store wants signed otherwise (an Add's pinned status: by a local follower of its author, else by
 		// the instance actor, never the inbox's recipient) is fetched with that key, within the same budget (DATA-7).
@@ -617,6 +659,29 @@ async function apply(deps: InboundDeps, application: Application): Promise<Inbox
 		return { status: 503, reason: result.reason }
 	}
 	return { status: 202, reason: result.reason, jobsPending: result.jobsPending, delivers: result.delivers === true }
+}
+
+// Whether the author proof the body of the actor's own Delete carries verifies against a key the actor's current
+// document embeds (author-proof.ts); 'transient' when that may change.
+async function proveDelete(
+	body: Json,
+	activity: { id: string; object: string },
+	actorUri: string,
+	loaders: RemoteLoaders
+): Promise<boolean | 'transient'> {
+	const fetched = await fetchActor(actorUri, loaders.document, loaders.context)
+	if (fetched.kind === 'transient') {
+		return 'transient'
+	}
+	if (fetched.kind !== 'ok' || fetched.input === null) {
+		return false
+	}
+	return verifyAuthorProof(
+		body,
+		{ id: activity.id, actor: actorUri, object: activity.object },
+		JSON.parse(fetched.input.raw) as unknown,
+		loaders.context
+	)
 }
 
 // A document the Store asked for, fetched through the request's loaders: a status (null if it cannot be one) or an

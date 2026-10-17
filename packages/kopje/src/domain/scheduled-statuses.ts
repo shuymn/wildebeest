@@ -48,10 +48,10 @@ export const MAX_PARAMS_BYTES = 128 * 1024
 export const PUBLISH_ROUND = 25
 
 // REST::ScheduledStatusSerializer's params: the post's options as PostStatusService#scheduled_options keeps them. Kopje
-// has no applications on statuses and cannot author quotes, so those are always null. The quote policy is the one the
-// request chose, or the author's default when it chose none, resolved when the post is scheduled (as Mastodon's
-// controller resolves it), by name as the serializer shows it. Ids are strings, and so is a poll's expires_in, as a
-// form sends it.
+// has no applications on statuses, so that is always null. quoted_status_id is the status quoted (a boost's original),
+// which R36 judges again when the post is published. The quote policy is the one the request chose, or the author's
+// default when it chose none, resolved when the post is scheduled (as Mastodon's controller resolves it), by name as
+// the serializer shows it. Ids are strings, and so is a poll's expires_in, as a form sends it.
 export type ScheduledParams = {
 	text: string
 	poll: ScheduledPoll | null
@@ -66,7 +66,7 @@ export type ScheduledParams = {
 	idempotency: null
 	with_rate_limit: false
 	allowed_mentions: null
-	quoted_status_id: null
+	quoted_status_id: string | null
 	quote_approval_policy: QuotePolicyName
 }
 
@@ -107,7 +107,8 @@ function ownScheduled(db: Db, viewerId: string, id: string): ScheduledRow | unde
 }
 
 // The params of a stored row, or null when not of the shape this module writes (a restored row has only schema
-// validation). A row without a quote policy has nobody, the policy such rows were scheduled with.
+// validation). A row without a quote policy has nobody, the policy such rows were scheduled with; one without a quoted
+// status quotes nothing.
 function readParams(text: string): ScheduledParams | null {
 	const p = JSON.parse(text) as Record<string, unknown>
 	const optional = (value: unknown, type: string) => value === null || typeof value === type
@@ -120,9 +121,16 @@ function readParams(text: string): ScheduledParams | null {
 		(p.visibility === null || API_VISIBILITIES.includes(p.visibility as ApiVisibility)) &&
 		(p.media_ids === null || (Array.isArray(p.media_ids) && p.media_ids.every((id) => typeof id === 'string'))) &&
 		(p.poll === null || p.poll === undefined || isScheduledPoll(p.poll)) &&
-		(p.quote_approval_policy === undefined || QUOTE_POLICY_NAMES.includes(p.quote_approval_policy as QuotePolicyName))
+		(p.quote_approval_policy === undefined ||
+			QUOTE_POLICY_NAMES.includes(p.quote_approval_policy as QuotePolicyName)) &&
+		(p.quoted_status_id === undefined || optional(p.quoted_status_id, 'string'))
 	return valid
-		? ({ ...p, poll: p.poll ?? null, quote_approval_policy: p.quote_approval_policy ?? 'nobody' } as ScheduledParams)
+		? ({
+				...p,
+				poll: p.poll ?? null,
+				quote_approval_policy: p.quote_approval_policy ?? 'nobody',
+				quoted_status_id: p.quoted_status_id ?? null,
+			} as ScheduledParams)
 		: null
 }
 
@@ -154,6 +162,7 @@ function paramsOf(
 	input: PostInput,
 	media: readonly string[],
 	inReplyToId: string | null,
+	quotedStatusId: string | null,
 	quotePolicy: QuotePolicyName
 ): ScheduledParams {
 	return {
@@ -170,7 +179,7 @@ function paramsOf(
 		idempotency: null,
 		with_rate_limit: false,
 		allowed_mentions: null,
-		quoted_status_id: null,
+		quoted_status_id: quotedStatusId,
 		quote_approval_policy: quotePolicy,
 	}
 }
@@ -202,6 +211,7 @@ function postOf(params: ScheduledParams, now: number): PostInput | null {
 		language: params.language ?? undefined,
 		mediaIds: params.media_ids ?? [],
 		quotePolicy: params.quote_approval_policy,
+		...(params.quoted_status_id === null ? {} : { quotedStatusId: params.quoted_status_id }),
 		now,
 	}
 }
@@ -310,6 +320,7 @@ export const postStatus = userWriteOperation<ScheduleInput, ScheduleResult>((db,
 			input,
 			prepared.media,
 			prepared.parent?.id ?? null,
+			prepared.quoted?.id ?? null,
 			input.quotePolicy ?? prepared.author.default_quote_policy
 		)
 	)
@@ -472,12 +483,13 @@ export const recordPublishFailure = writeOperation<{ id: string; now: number }, 
 export type Publication =
 	| { status: 'gone' }
 	| { status: 'published'; statusId: string }
-	| { status: 'dropped'; reason: 'unavailable' | 'params' | 'reply_not_found' | 'invalid' }
+	| { status: 'dropped'; reason: 'unavailable' | 'params' | 'reply_not_found' | 'quote_not_found' | 'invalid' }
 
 // Publishes the scheduled status `id` if it is still due: deletes it and, in the same transaction, posts it through
 // the path of an immediate post (preparePost, writePost), with its held media, so it is published once however many
 // runs or retries reach it. As PublishScheduledStatusWorker, a post that no longer passes (the status replied to is
-// gone or hidden, its text is blank without media, its account is suspended) is dropped: deleted without a status,
+// gone or hidden, the status quoted is gone or R36 no longer lets the author quote it, its text is blank without media,
+// its account is suspended) is dropped: deleted without a status,
 // its media detached. The status is created at the time of publication (PostStatusService does not take the scheduled
 // time), and its Idempotency-Key carries over, so a client repeating the request is answered with it.
 export const publishScheduled = writeOperation<{ id: string; now: number; objectId: string }, Publication>(

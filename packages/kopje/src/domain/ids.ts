@@ -1,5 +1,10 @@
 import type { Db } from '../db/sql'
 
+// A new generation of a quote's work (quotes.ts): drawn by every write the rule at the column names (migration
+// 0033_quotes). Kept here, in a module that imports nothing, because inbox.ts builds a statement with it when it is
+// loaded, whichever module of the domain's import cycle is loaded first.
+export const NEW_GENERATION = '(abs(random()) % 9007199254740991)'
+
 // API IDs: 18-digit snowflakes, (ms << 16) | 16 random bits, kept as TEXT and never read as JS numbers.
 
 // Returns an integer in [0, maxExclusive).

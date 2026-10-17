@@ -13,20 +13,23 @@ import {
 	type Visibility,
 } from './audience'
 import { stageRetraction } from './deliveries'
-import { insertWithFreshId, remoteId } from './ids'
+import { insertWithFreshId, NEW_GENERATION, remoteId } from './ids'
 import { listsHolding } from './lists'
 import { notify } from './notifications'
 import { readOperation, writeOperation } from './operation'
 import { deleteAccountVotes, deletePollVotes, hasPollVotes } from './polls'
 import { pushSequence } from './push'
 import {
+	acceptOurQuote,
 	answerQuoteRequest,
 	continueRevocations,
-	NEW_GENERATION,
+	holdsLocalStamp,
 	promoteQuote,
+	type QuoteAnswerRef,
 	quotesDue,
 	quoteArrival,
 	recheckStamp,
+	rejectOurQuote,
 	retireQuoteOf,
 	revokeStamp,
 	sweepQuoteRequests,
@@ -150,12 +153,20 @@ export type RemoteActorInput = {
 	confirmedDomain?: string
 }
 
-// The object of an Accept, Reject or Undo: an id, or an embedded activity (id optional).
-export type ActivityRef = { id: string | null; type: string | null; actor: string | null; object: string | null }
+// The object of an Accept, Reject or Undo: an id, or an embedded activity (id optional; instrument: an inlined
+// QuoteRequest's, by id).
+export type ActivityRef = {
+	id: string | null
+	type: string | null
+	actor: string | null
+	object: string | null
+	instrument?: string | null
+}
 
 export type InboundActivity =
 	| { type: 'Follow'; id: string; object: string }
-	| { type: 'Accept'; id: string; object: ActivityRef }
+	// result: an Accept of a QuoteRequest's stamp (its first value, by id).
+	| { type: 'Accept'; id: string; object: ActivityRef; result?: string | null }
 	| { type: 'Reject'; id: string; object: ActivityRef }
 	| { type: 'Undo'; id: string; object: ActivityRef }
 	| { type: 'Block'; id: string; object: string }
@@ -163,10 +174,12 @@ export type InboundActivity =
 	| { type: 'Move'; id: string; target: RemoteActorInput | { local: string } }
 	| { type: 'UpdateActor'; id: string }
 	| { type: 'DeleteActor'; id: string }
-	| { type: 'Delete'; id: string; object: string }
+	// signed: the body carries an author proof the Worker has not verified; proven: the body as received, its proof
+	// verified (federation/author-proof.ts), which the Store forwards for a local quote's stamp (quotes.ts revokeStamp).
+	| { type: 'Delete'; id: string; object: string; signed?: boolean; proven?: Record<string, unknown> }
 	// A Delete another server relayed (its HTTP signer is not the actor). proven: it carries the actor's own proof,
-	// verified by the Worker (federation/author-proof.ts).
-	| { type: 'RelayedDelete'; id: string; object: string; proven: boolean }
+	// verified by the Worker (federation/author-proof.ts); body: then, the body as received.
+	| { type: 'RelayedDelete'; id: string; object: string; proven: boolean; body?: Record<string, unknown> }
 	// A request to quote a local status (FEP-044f): object the quoted status, instrument the quoting status, embedded
 	// the instrument as the request inlined it.
 	| { type: 'QuoteRequest'; id: string; object: string; instrument: string; embedded: RemoteStatusInput | null }
@@ -224,7 +237,9 @@ export type ReceiveResult = {
 	// signer: whose key signs the fetch: a local follower of the status's author, a local account by username while it
 	// is available (a QuoteRequest's instrument, fetched as the quoted author: federation.ts localSigner), or
 	// 'instance' for the instance actor; absent, the inbox's own (the recipient's for a personal inbox).
-	need?: { kind: 'status' | 'actor'; uri: string; signer?: FollowerSigner | { local: string } | 'instance' }
+	// kind 'proof': the activity's author proof, verified (a Delete of a local quote's stamp, which is forwarded only
+	// proven: quotes.ts revokeStamp); uri is the actor's.
+	need?: { kind: 'status' | 'actor' | 'proof'; uri: string; signer?: FollowerSigner | { local: string } | 'instance' }
 	// Nothing changed, and the activity may apply later (its retraction could not be recorded): answered 503.
 	retry?: boolean
 }
@@ -769,7 +784,13 @@ function ourFollow(
 	return edge === undefined ? null : { id: edge.id, follower: follower.id }
 }
 
-const accept: Handler<'Accept'> = (db, actor, activity) => {
+// An Accept of our QuoteRequest (quotes.ts acceptOurQuote) or of our Follow.
+const accept: Handler<'Accept'> = (db, actor, activity, { now }) => {
+	if (isQuoteAnswer(activity.object)) {
+		return acceptOurQuote(db, actor, quoteAnswerRef(activity.object), activity.result ?? null, now)
+			? applied('quote-accepted')
+			: ignored('quote-unchanged')
+	}
 	const edge = ourFollow(db, actor, activity.object)
 	if (edge === null || edge === 'not-target') {
 		return ignored(edge ?? 'unknown-follow')
@@ -782,8 +803,14 @@ const accept: Handler<'Accept'> = (db, actor, activity) => {
 	return changed > 0 ? applied('follow-accepted') : ignored('duplicate')
 }
 
-// Mastodon's Reject removes our request, or our follow if it was already accepted.
-const reject: Handler<'Reject'> = (db, actor, activity) => {
+// Mastodon's Reject removes our request, or our follow if it was already accepted; a Reject of our QuoteRequest
+// rejects or revokes our quote (quotes.ts rejectOurQuote).
+const reject: Handler<'Reject'> = (db, actor, activity, { now }) => {
+	if (isQuoteAnswer(activity.object)) {
+		return rejectOurQuote(db, actor, quoteAnswerRef(activity.object), now)
+			? applied('quote-rejected')
+			: ignored('quote-unchanged')
+	}
 	const edge = ourFollow(db, actor, activity.object, true)
 	if (edge === null || edge === 'not-target') {
 		return ignored(edge ?? 'unknown-follow')
@@ -791,6 +818,16 @@ const reject: Handler<'Reject'> = (db, actor, activity) => {
 	db.run('DELETE FROM follows WHERE id = CAST(? AS INTEGER)', edge.id)
 	recountLocal(db, [edge.follower])
 	return applied('follow-rejected')
+}
+
+// An answer to our QuoteRequest: an inlined QuoteRequest, or its id (the quoting status's uri with #quote-request,
+// activities.ts quoteRequestUri), which no Follow of ours carries.
+function isQuoteAnswer(ref: ActivityRef): boolean {
+	return ref.type === 'QuoteRequest' || (ref.type === null && ref.id !== null && ref.id.endsWith('#quote-request'))
+}
+
+function quoteAnswerRef(ref: ActivityRef): QuoteAnswerRef {
+	return { id: ref.id, type: ref.type, object: ref.object, instrument: ref.instrument ?? null }
 }
 
 // Misskey's Undo of a Follow names the follow by its pair (ApRendererService#renderFollow without a request id:
@@ -1696,7 +1733,12 @@ const deleteObject: Handler<'Delete'> = (db, actor, activity, { now }) => {
 		return ignored('not-author')
 	}
 	if (status === undefined) {
-		return retractUnknown(db, actor, activity.object, now)
+		// A Delete of a local quote's stamp carrying an author proof is forwarded only once the Worker has verified it:
+		// asked for before anything is written.
+		if (activity.signed === true && activity.proven === undefined && holdsLocalStamp(db, actor, activity.object)) {
+			return { ...ignored('need-proof'), need: { kind: 'proof', uri: actor.uri } }
+		}
+		return retractUnknown(db, actor, activity.object, now, activity.proven ?? null)
 	}
 	if (!retract(db, actor.uri, activity.object, now)) {
 		return retryLater('retraction-cap')
@@ -1746,16 +1788,23 @@ const relayedDelete: Handler<'RelayedDelete'> = (db, actor, activity, { now }) =
 	if (!activity.proven) {
 		return recheckStamp(db, actor, activity.object, now) ? applied('stamp-rechecked') : ignored('unknown-stamp')
 	}
-	return retractUnknown(db, actor, activity.object, now)
+	return retractUnknown(db, actor, activity.object, now, activity.body ?? null)
 }
 
 // The actor's Delete of an object Kopje holds no status of: recorded as a retraction (ID-7) and, when it is the stamp
 // of a quote of the actor's status, as a revocation for good whether or not the retraction could be (quote_revocations
-// is bounded by the quotes stored), its first batch within PURGE_BATCH (quotes.ts revokeStamp).
-function retractUnknown(db: Db, actor: { id: string; uri: string }, object: string, now: number): ReceiveResult {
+// is bounded by the quotes stored), its first batch within PURGE_BATCH (quotes.ts revokeStamp). proven: the body as
+// received, its author proof verified, forwarded for a local quote that holds the stamp.
+function retractUnknown(
+	db: Db,
+	actor: { id: string; uri: string },
+	object: string,
+	now: number,
+	proven: Record<string, unknown> | null
+): ReceiveResult {
 	const recorded = retract(db, actor.uri, object, now)
 	const budget = new Budget(db, PURGE_BATCH)
-	const revocation = revokeStamp(db, actor, object, () => budget.left(), now)
+	const revocation = revokeStamp(db, actor, object, () => budget.left(), now, proven)
 	if (revocation !== null) {
 		return applied('stamp-revoked', revocation)
 	}
