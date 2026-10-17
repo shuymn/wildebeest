@@ -4321,53 +4321,55 @@ describe('0039_quotes_local', () => {
 	}, 120_000)
 })
 
+// The reporter and the reported account of the report notification migrations (0040, 0041).
+const REPORTER = '100000000000000001'
+const TARGET = '100000000000000002'
+
+// A local reporter with `notifications` mentions of it by the target, and one report of the target.
+function seedReport(sql: SqlStorage, notifications: number) {
+	sql.exec(
+		`INSERT INTO accounts (id, uri, username, domain) VALUES
+			(?1, 'https://kopje.test/ap/users/r', 'r', NULL), (?2, 'https://remote.test/users/t', 't', 'remote.test')`,
+		REPORTER,
+		TARGET
+	)
+	sql.exec(
+		"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'r@example.com', X'00', X'00', 'k')",
+		REPORTER
+	)
+	sql.exec(
+		`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+		INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+		SELECT CAST(200000000000000000 + i AS TEXT), 'https://remote.test/o/' || i, ?2, 'public', 'x',
+			'2026-10-12T00:00:00.000Z'
+		FROM n WHERE ?1 > 0`,
+		notifications,
+		TARGET
+	)
+	sql.exec(
+		`INSERT INTO notifications (account_id, type, from_account_id, status_id)
+		SELECT ?1, 'mention', ?2, id FROM statuses`,
+		REPORTER,
+		TARGET
+	)
+	sql.exec(
+		`INSERT INTO reports (id, account_id, target_account_id, uri, created_at)
+		VALUES (7, ?, ?, 'https://kopje.test/actor#reports/7', '2026-10-12T00:00:00.000Z')`,
+		REPORTER,
+		TARGET
+	)
+}
+
 describe('0040_report_notifications', () => {
 	const NAME = '0040_report_notifications'
 	const at = NAMES.indexOf(NAME)
-	const REPORTER = '100000000000000001'
-	const TARGET = '100000000000000002'
-
-	// A local reporter with `notifications` mentions of it by the target, and one report of the target.
-	function seed(sql: SqlStorage, notifications: number) {
-		sql.exec(
-			`INSERT INTO accounts (id, uri, username, domain) VALUES
-				(?1, 'https://kopje.test/ap/users/r', 'r', NULL), (?2, 'https://remote.test/users/t', 't', 'remote.test')`,
-			REPORTER,
-			TARGET
-		)
-		sql.exec(
-			"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'r@example.com', X'00', X'00', 'k')",
-			REPORTER
-		)
-		sql.exec(
-			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
-			INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
-			SELECT CAST(200000000000000000 + i AS TEXT), 'https://remote.test/o/' || i, ?2, 'public', 'x',
-				'2026-10-12T00:00:00.000Z'
-			FROM n WHERE ?1 > 0`,
-			notifications,
-			TARGET
-		)
-		sql.exec(
-			`INSERT INTO notifications (account_id, type, from_account_id, status_id)
-			SELECT ?1, 'mention', ?2, id FROM statuses`,
-			REPORTER,
-			TARGET
-		)
-		sql.exec(
-			`INSERT INTO reports (id, account_id, target_account_id, uri, created_at)
-			VALUES (7, ?, ?, 'https://kopje.test/actor#reports/7', '2026-10-12T00:00:00.000Z')`,
-			REPORTER,
-			TARGET
-		)
-	}
 
 	it("names a notification's report, which takes it along when deleted, and keeps the natural key", async () => {
 		const store = freshStore()
 		await runInDurableObject(store, async (_instance, state) => {
 			const sql = state.storage.sql
 			expect(await kernel(state, MIGRATIONS.slice(0, at)).upgrade()).toMatchObject({ ok: true })
-			seed(sql, 2)
+			seedReport(sql, 2)
 			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
 			expect(sql.exec('SELECT DISTINCT report_id FROM notifications').toArray()).toEqual([{ report_id: null }])
 			const admin =
@@ -4401,7 +4403,7 @@ describe('0040_report_notifications', () => {
 			return runInDurableObject(store, async (_instance, state) => {
 				const sql = state.storage.sql
 				await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
-				seed(sql, notifications)
+				seedReport(sql, notifications)
 				const cursor = sql.exec(MIGRATIONS[at]?.sql ?? '')
 				cursor.toArray()
 				return cursor.rowsRead
@@ -4424,18 +4426,12 @@ describe('0041_report_notifications_key', () => {
 		await runInDurableObject(store, async (_instance, state) => {
 			const sql = state.storage.sql
 			expect(await kernel(state, MIGRATIONS.slice(0, at)).upgrade()).toMatchObject({ ok: true })
+			seedReport(sql, 0)
 			sql.exec(
-				`INSERT INTO accounts (id, uri, username, domain) VALUES
-					('100000000000000001', 'https://kopje.test/ap/users/r', 'r', NULL),
-					('100000000000000002', 'https://remote.test/users/t', 't', 'remote.test')`
-			)
-			sql.exec(
-				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES ('100000000000000001', 'r@example.com', X'00', X'00', 'k')"
-			)
-			sql.exec(
-				`INSERT INTO reports (id, account_id, target_account_id, uri, created_at) VALUES
-					(7, '100000000000000001', '100000000000000002', 'https://kopje.test/actor#reports/7', '2026-10-12T00:00:00.000Z'),
-					(8, '100000000000000001', '100000000000000002', 'https://kopje.test/actor#reports/8', '2026-10-12T00:00:00.000Z')`
+				`INSERT INTO reports (id, account_id, target_account_id, uri, created_at)
+				VALUES (8, ?, ?, 'https://kopje.test/actor#reports/8', '2026-10-12T00:00:00.000Z')`,
+				REPORTER,
+				TARGET
 			)
 			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
 			const admin =

@@ -1,5 +1,4 @@
 import { runInDurableObject } from 'cloudflare:test'
-import { env } from 'cloudflare:workers'
 
 import { describe, expect, it, vi } from 'vitest'
 
@@ -11,20 +10,20 @@ import { mastodonActor } from './inbox-helpers'
 import { ALICE, setup } from './inbox-status-helpers'
 import { ADMIN_EMAIL } from './ops-helpers'
 import { type Client, newClient, readPush, VAPID } from './push-helpers'
-import { rowsRead } from './read-helpers'
+import { deferred, deliveryDeps } from './quote-helpers'
+import { appToken, rowsRead } from './read-helpers'
 import { community, remoteAccount, type User } from './status-helpers'
 import { Db } from '../src/db/sql'
 import { PURGE_BATCH, purgeBatch } from '../src/domain/inbox'
 import { streamedNotification } from '../src/domain/notifications'
 import { createReport } from '../src/domain/reports'
 import { MODERATION_ROUNDS, REPORT_ROUND } from '../src/domain/suspension'
-import type { DeliveryDeps } from '../src/jobs/deliver'
 import { pushRound } from '../src/jobs/push'
 import type { StoreStub } from '../src/platform/store-client'
 
-// The OAuth admin's admin.report notifications (Mastodon 4.5.11's ReportService#notify_staff!, REST::NotificationSerializer,
-// REST::NotificationGroupSerializer and REST::ReportSerializer; R34, R37, VIS-29) and the /admin/reports/:id redirect
-// that clients open from one.
+// The OAuth admin's admin.report notifications (Mastodon 4.5.11's ReportService#notify_staff!,
+// REST::NotificationSerializer, REST::NotificationGroupSerializer and REST::ReportSerializer; R34, R37, VIS-29) and the
+// /admin/reports/:id redirect that clients open from one.
 
 const SCOPES = 'read write follow push'
 const ENDPOINT = 'https://push.example/send/admin'
@@ -79,8 +78,8 @@ async function get<T>(h: ApiHarness, path: string, token: string | null): Promis
 }
 
 // The admin.report notifications `user` is shown by GET /api/v1/notifications, as (reporter, report) pairs.
-async function reportsShown(h: ApiHarness, user: User, query = ''): Promise<[string, string][]> {
-	const { body } = await get<NotificationBody[]>(h, `/api/v1/notifications${query}`, user.token)
+async function reportsShown(h: ApiHarness, user: User): Promise<[string, string][]> {
+	const { body } = await get<NotificationBody[]>(h, '/api/v1/notifications', user.token)
 	return body.filter((n) => n.type === 'admin.report').map((n) => [n.account.id, n.report!.id])
 }
 
@@ -201,19 +200,11 @@ describe('admin.report: who sees it (R37)', () => {
 		expect(await reportsShown(h, owner)).toEqual([[alice.id, id]])
 		expect(await reportsShown(h, alice)).toEqual([])
 		expect(await reportsShown(h, bob)).toEqual([])
-		const app = await registerApp(h)
-		const appToken = (
-			await (
-				await h.request(
-					'/oauth/token',
-					form({ grant_type: 'client_credentials', client_id: app.client_id, client_secret: app.client_secret })
-				)
-			).json<{ access_token: string }>()
-		).access_token
+		const app = await appToken(h)
 		// Mastodon's require_user!: 422 for a token without a user.
-		expect((await get(h, '/api/v1/notifications', appToken)).status).toBe(422)
+		expect((await get(h, '/api/v1/notifications', app)).status).toBe(422)
 		expect((await get(h, '/api/v1/notifications', null)).status).toBe(401)
-		expect((await get(h, '/api/v2/notifications', appToken)).status).toBe(422)
+		expect((await get(h, '/api/v2/notifications', app)).status).toBe(422)
 		expect((await get(h, '/api/v2/notifications', null)).status).toBe(401)
 	})
 
@@ -344,42 +335,38 @@ describe('admin.report: who sees it (R37)', () => {
 	})
 })
 
-describe('admin.report: push', () => {
-	function deps(store: StoreStub, fetch: typeof globalThis.fetch): DeliveryDeps {
-		let n = 0
-		return {
-			build: () => env.CF_VERSION_METADATA.id,
-			store: () => store,
-			now: () => NOW,
-			fetch,
-			checkHost: () => Promise.resolve(),
-			leaseToken: () => `lease-${++n}`,
-		}
-	}
-
-	async function subscribe(h: ApiHarness, user: User, alerts: Record<string, boolean>): Promise<Client> {
-		const client = await newClient()
-		const response = await h.request(
-			'/api/v1/push/subscription',
-			bearer(
-				user.token,
-				json({
-					subscription: { endpoint: ENDPOINT, keys: { p256dh: client.p256dh, auth: client.auth } },
-					data: { alerts, policy: 'all' },
-				})
-			)
+// A Web Push subscription of `user`'s token with `alerts`.
+async function subscribe(h: ApiHarness, user: User, alerts: Record<string, boolean>): Promise<Client> {
+	const client = await newClient()
+	const response = await h.request(
+		'/api/v1/push/subscription',
+		bearer(
+			user.token,
+			json({
+				subscription: { endpoint: ENDPOINT, keys: { p256dh: client.p256dh, auth: client.auth } },
+				data: { alerts, policy: 'all' },
+			})
 		)
-		expect(response.status).toBe(200)
-		return client
-	}
+	)
+	expect(response.status).toBe(200)
+	return client
+}
 
+describe('admin.report: push', () => {
 	async function sent(h: ApiHarness, client: Client): Promise<Record<string, unknown>[]> {
 		const requests: Request[] = []
 		const fetch = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
 			requests.push(new Request(input, init))
 			return Promise.resolve(new Response(null, { status: 201 }))
 		})
-		await pushRound(h.env, deps(h.store, fetch))
+		await pushRound(
+			h.env,
+			deliveryDeps(
+				() => h.store,
+				fetch,
+				() => NOW
+			)
+		)
 		return Promise.all(requests.map((request) => readPush(client, request)))
 	}
 
@@ -444,23 +431,9 @@ describe('admin.report: push', () => {
 })
 
 describe('admin.report: removal', () => {
-	async function subscribe(h: ApiHarness, user: User): Promise<void> {
-		const client = await newClient()
-		await h.request(
-			'/api/v1/push/subscription',
-			bearer(
-				user.token,
-				json({
-					subscription: { endpoint: ENDPOINT, keys: { p256dh: client.p256dh, auth: client.auth } },
-					data: { alerts: { 'admin.report': true }, policy: 'all' },
-				})
-			)
-		)
-	}
-
 	it("goes with its report in a remote account's purge, before the report, within the batch", async () => {
 		const { h, owner, alice, bob, carol, dave } = await world()
-		await subscribe(h, owner)
+		await subscribe(h, owner, { 'admin.report': true })
 		await report(h, alice, carol)
 		await report(h, bob, carol)
 		await report(h, bob, dave)
@@ -657,12 +630,9 @@ describe('admin.report: interleavings with resolution', () => {
 		expect(left).toBeLessThan(frozen)
 		expect(await unresolved(h.store)).not.toContain(first)
 		// The next call waits at a gate: the job has more rounds to run, but none runs until the gate opens.
-		let open: () => void = () => {}
-		const gate = new Promise<void>((resolve) => {
-			open = resolve
-		})
+		const gate = deferred()
 		const next = (async () => {
-			await gate
+			await gate.promise
 			return h.store.runInboundJobs(BUILD, { now: NOW + 2000 })
 		})()
 		// Meanwhile bob is unsuspended and reported again: reports frozen at the suspension are still unresolved, so the
@@ -672,7 +642,7 @@ describe('admin.report: interleavings with resolution', () => {
 		const later = await report(h, alice, bob.id)
 		expect(await reportsShown(h, owner)).toEqual([[alice.id, first]])
 		// Released: the held call finds bob unsuspended and ends the job; the runner drains.
-		open()
+		gate.resolve()
 		await next
 		await runJobs(h.store)
 		expect(await sql(h.store, 'SELECT count(*) AS n FROM moderation_jobs')).toEqual([{ n: 0 }])
@@ -756,20 +726,14 @@ describe('admin.report: bounds (RES-7)', () => {
 describe('GET /admin/reports/:id (where clients open an admin.report)', () => {
 	// The Store stub with its report read held at a gate, after the /admin middleware has authenticated the request.
 	function gatedStore(store: StoreStub) {
-		let reached: () => void = () => {}
-		let release: () => void = () => {}
-		const atGate = new Promise<void>((resolve) => {
-			reached = resolve
-		})
-		const gate = new Promise<void>((resolve) => {
-			release = resolve
-		})
+		const reached = deferred()
+		const gate = deferred()
 		const stub = new Proxy(store, {
 			get(target, name) {
 				if (name === 'reportTargetPage') {
 					return async (...args: Parameters<StoreStub['reportTargetPage']>) => {
-						reached()
-						await gate
+						reached.resolve()
+						await gate.promise
 						return target.reportTargetPage(...args)
 					}
 				}
@@ -781,7 +745,7 @@ describe('GET /admin/reports/:id (where clients open an admin.report)', () => {
 				return (...args: unknown[]) => methods[name]!(...args)
 			},
 		})
-		return { stub, atGate, release }
+		return { stub, atGate: reached.promise, release: gate.resolve }
 	}
 
 	it.each([

@@ -26,8 +26,8 @@ import { freshStore, testKernel } from '../helpers'
 //   - 200,000 quotes (from migration 0033_quotes on), one by every tenth status, each of the status after it, in each
 //     stored state in turn (a quarter accepted).
 // It grows every table a phase A migration reads (accounts, follows, statuses with their mentions and tags,
-// notifications, reports, quotes); a migration that reads another table must add it here before it is measured. The measured time is the
-// file's transaction as the kernel applies it, from before the first statement to after the commit: Date.now() in
+// notifications, reports, quotes); a migration that reads another table must add it here before it is measured. The
+// measured time is the file's transaction as the kernel applies it, from before the first statement to after the commit: Date.now() in
 // workerd moves only between I/O events, so the clock is read across an await on each side.
 
 export const MIGRATION_BUDGET_MS = 5_000
