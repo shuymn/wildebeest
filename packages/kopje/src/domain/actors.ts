@@ -110,10 +110,11 @@ export const getLocalKey = readOperation<{ username: string }, StoredKey | null>
 	return row === undefined ? null : storedKey(row)
 })
 
-// The key of a local account, by its exact username, that signs a fetch as itself (a QuoteRequest's instrument, fetched
-// as the quoted author, Mastodon's on_behalf_of), read when it is loaded: only while the account is available, so an
-// author suspended or being deleted after the request's round never signs; null otherwise, and the instance actor signs.
-export const getAuthorKey = readOperation<{ username: string }, StoredKey | null>((db, { username }) => {
+// The key of a local account, by its exact username, that signs a fetch as itself (the recipient of a personal inbox, a
+// QuoteRequest's quoted author as Mastodon's on_behalf_of), read when it is loaded: only while the account is
+// available, so an account suspended or being deleted, before or after the request's round, never signs; null
+// otherwise, and the instance actor signs. Publishing its public key is getLocalKey's, which has no such check.
+export const getSigningKey = readOperation<{ username: string }, StoredKey | null>((db, { username }) => {
 	const row = db.first<KeyRow>(
 		`SELECT a.username, l.privkey, l.privkey_salt, l.pubkey FROM accounts a JOIN local_accounts l ON l.account_id = a.id
 		WHERE a.domain IS NULL AND a.username = ? AND ${availableLocalSql('l')}`,

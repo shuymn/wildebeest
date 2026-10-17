@@ -153,9 +153,9 @@ function federationParts(deps: FederationDeps, state: FederationState) {
 			: keyring.signerFor(userOwner(found.key, new URL(`/ap/users/${found.username}#main-key`, origin)))
 	}
 
-	// The signer of a local author fetching as itself, while it is available (getAuthorKey), or null.
-	const authorSigner = async (username: string): Promise<Signer | null> => {
-		const key = await rpc((s) => s.authorKey(build, { username }))
+	// The signer of a fetch as a local account, while it is available (getSigningKey), or null.
+	const localSigner = async (username: string): Promise<Signer | null> => {
+		const key = await rpc((s) => s.signingKey(build, { username }))
 		return key === null ? null : keyring.signerFor(userOwner(key, new URL(`/ap/users/${username}#main-key`, origin)))
 	}
 
@@ -189,7 +189,7 @@ function federationParts(deps: FederationDeps, state: FederationState) {
 		loadInstanceKey,
 		instanceSigner,
 		userSigner,
-		authorSigner,
+		localSigner,
 		followerSigner,
 		signedLoader,
 		contextLoader,
@@ -207,7 +207,7 @@ export type RemoteLoaders = { document: DocumentLoader; context: DocumentLoader;
 export function createRemoteLoaders(
 	deps: FederationDeps,
 	state: FederationState,
-	recipient: string | FollowerSigner | { author: string } | null,
+	recipient: string | FollowerSigner | null,
 	budget: FetchBudget
 ): RemoteLoaders {
 	const parts = federationParts(deps, state)
@@ -219,10 +219,8 @@ export function createRemoteLoaders(
 			(recipient === null
 				? null
 				: typeof recipient === 'string'
-					? await parts.userSigner(recipient)
-					: 'author' in recipient
-						? await parts.authorSigner(recipient.author)
-						: await parts.followerSigner(recipient)) ?? parts.instanceSigner())())
+					? await parts.localSigner(recipient)
+					: await parts.followerSigner(recipient)) ?? parts.instanceSigner())())
 	const fetched = new Map<string, ReturnType<DocumentLoader>>()
 	const fresh = requireObjectRoot(async (url, options) => {
 		return withinBounds(await createSafeLoader(loaderDeps, (await signer()).sign)(url, options))

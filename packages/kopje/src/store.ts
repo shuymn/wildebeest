@@ -8,7 +8,6 @@ import { announceConvertedProfiles } from './domain/actor-update'
 import {
 	ensureInstanceActorKey,
 	featuredTagsOfActor,
-	getAuthorKey,
 	getCollection,
 	getInstanceActorKey,
 	getInstanceDomain,
@@ -16,6 +15,7 @@ import {
 	getLocalActor,
 	getLocalKey,
 	getNodeInfoUsage,
+	getSigningKey,
 	listLocalKeys,
 	listRewrapKeys,
 	rewrapLocalKey,
@@ -580,8 +580,8 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, getLocalActor, input)
 	}
 
-	authorKey(callerBuild: string, input: OperationInput<typeof getAuthorKey>) {
-		return this.#kernel.execute(callerBuild, getAuthorKey, input)
+	signingKey(callerBuild: string, input: OperationInput<typeof getSigningKey>) {
+		return this.#kernel.execute(callerBuild, getSigningKey, input)
 	}
 
 	followerKey(callerBuild: string, input: OperationInput<typeof getFollowerKey>) {

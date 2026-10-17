@@ -36,7 +36,7 @@ import type { Db } from '../db/sql'
 //   - An activity without to that a recipient's shared inbox answers with 404, 405 or 410 moves to that recipient's
 //     personal inbox on the same origin, within its attempts (personalFallback): some servers advertise a shared
 //     inbox they have disabled.
-//   - A delivered Create, Update or Announce of a local status records its inbox in outbound_receipts, owned by the
+//   - A delivered Create or Announce of a local status records its inbox in outbound_receipts, owned by the
 //     status; none is written once the status is gone or a retraction of it is pending (one still staging its
 //     targets reads them from the receipts, so they are written until it is staged).
 //   - Claims and completions return nextDueAt, the earliest time any work is due, so the Worker can ring for it.
@@ -605,9 +605,10 @@ function insertIntent(
 }
 
 // The servers (lane origins) known to have the object, or to get it before anything later in their lane: a receipt at
-// any of their inboxes, or a leased Create or Update of it (which may have been POSTed already). A server may hold the
-// object without being known to (it fetched it to boost or quote it), so this decides only what may be left out. A server is the unit, as one
-// that holds the object from its shared inbox applies an Update sent to a personal inbox, but ignores a Create.
+// any of their inboxes (a delivered Create), or a leased Create of it (which may have been POSTed already). A server
+// may hold the object without being known to (it fetched it to boost or quote it), so this decides only what may be
+// left out. A server is the unit, as one that holds the object from its shared inbox applies an Update sent to a
+// personal inbox, but ignores a Create.
 function serversWithObject(db: Db, signerId: string, object: string): Set<string> {
 	const receipts = db.all<{ inbox_url: string }>(
 		`SELECT r.inbox_url FROM outbound_receipts r JOIN statuses s ON s.id = r.status_id
@@ -617,7 +618,8 @@ function serversWithObject(db: Db, signerId: string, object: string): Set<string
 	)
 	const leased = db.all<{ lane: string }>(
 		`SELECT DISTINCT d.lane FROM deliveries d JOIN outbound_activities o ON o.id = d.activity_id
-		WHERE o.account_id = ? AND o.object_uri = ? AND o.retracts = 0 AND d.state = 'leased'`,
+		WHERE o.account_id = ? AND o.object_uri = ? AND o.retracts = 0 AND d.state = 'leased'
+			AND json_extract(o.body, '$.activity.type') = 'Create'`,
 		signerId,
 		object
 	)
@@ -1002,11 +1004,13 @@ export const completeDelivery = writeOperation<
 	}
 	if (outcome.kind === 'delivered') {
 		// The receipt is kept only for a status that still exists and has no retraction pending (VIS-3). A retraction
-		// still staging its targets is not pending yet: it reads them from the receipts.
+		// still staging its targets is not pending yet: it reads them from the receipts. Only a Create or an Announce
+		// records one: a delivered Update proves nothing (a server that lacks the status answers 2xx and ignores it), so
+		// a server whose Create was given up gets the Create again with the next edit.
 		db.run(
 			`INSERT INTO outbound_receipts (status_id, inbox_url, account_id, delivered_at)
 			SELECT s.id, ?2, o.account_id, ?3 FROM outbound_activities o JOIN statuses s ON s.uri = o.object_uri
-			WHERE o.id = CAST(?1 AS INTEGER) AND json_extract(o.body, '$.activity.type') IN ('Create', 'Update', 'Announce')
+			WHERE o.id = CAST(?1 AS INTEGER) AND json_extract(o.body, '$.activity.type') IN ('Create', 'Announce')
 				AND NOT EXISTS (SELECT 1 FROM outbound_activities r
 					WHERE r.account_id = o.account_id AND r.object_uri = o.object_uri AND r.retracts = 1 AND r.staged IS NULL)
 			ON CONFLICT DO UPDATE SET delivered_at = excluded.delivered_at`,

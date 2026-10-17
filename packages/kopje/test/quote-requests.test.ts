@@ -475,7 +475,7 @@ describe('review regressions (r2)', () => {
 					return undefined
 				}
 				return async (...args: unknown[]) => {
-					if (prop === 'authorKey') {
+					if (prop === 'signingKey') {
 						await sql(
 							t.store,
 							'UPDATE local_accounts SET suspended_at = ? WHERE account_id = ?',
@@ -521,6 +521,73 @@ describe('review regressions (r2)', () => {
 		expect(await t.post(bob, quoteRequest(bob, mine.uri, note.id))).toBe(202)
 		expect(await quoteOf(t, note.id)).toMatchObject({ state: 'accepted' })
 		expect(t.web.signers[t.web.fetched.lastIndexOf(note.id)]).toBe(`${ALICE_URI}#main-key`)
+	})
+})
+
+describe('review regressions (r4)', () => {
+	// Delivery rounds where a Create fails for good (400) and everything else is taken (202); returns what was taken.
+	async function failingCreates(t: Setup): Promise<Record<string, unknown>[]> {
+		const taken: Record<string, unknown>[] = []
+		await deliver(t, (url, body) => {
+			const activity = JSON.parse(body) as Record<string, unknown>
+			if (activity.type === 'Create') {
+				return 400
+			}
+			if (url.startsWith(MASTODON)) {
+				taken.push(activity)
+			}
+			return 202
+		})
+		return taken
+	}
+
+	it('counts no delivered Update as holding the status: after a given-up Create, the next edit pairs again', async () => {
+		const { t, bob, mine } = await world()
+		expect(await t.post(bob, follow(bob))).toBe(202)
+		await deliver(t)
+		const taken: Record<string, unknown>[] = []
+		await edit(t, mine.id, 'V2')
+		taken.push(...(await failingCreates(t)))
+		expect(taken.map((a) => a.type)).toEqual(['Update'])
+		expect(await sql(t.store, 'SELECT count(*) AS n FROM outbound_receipts')).toEqual([{ n: 0 }])
+		await edit(t, mine.id, 'V3')
+		// The given-up Create of V2 is dropped for the pair of V3: an operator retry cannot install V2 later.
+		expect((await deliveries(t)).filter((d) => d.state === 'gave_up')).toEqual([])
+		taken.push(...(await sentTo(t, MASTODON)))
+		expect(holdsAfter(taken, mine.uri, null)).toBe('<p>V3</p>')
+	})
+
+	it('ends at the current version when an operator retries a given-up Create before any further edit', async () => {
+		const { t, bob, mine } = await world()
+		expect(await t.post(bob, follow(bob))).toBe(202)
+		await deliver(t)
+		await edit(t, mine.id, 'V2')
+		const taken = await failingCreates(t)
+		const given = (await deliveries(t)).find((d) => d.type === 'Create' && d.state === 'gave_up')
+		expect(given).toBeDefined()
+		expect(await t.store.retryDeliveries(BUILD, { ids: [given!.id], now: NOW })).toMatchObject({ ok: true })
+		taken.push(...(await sentTo(t, MASTODON)))
+		expect(holdsAfter(taken, mine.uri, null)).toBe('<p>V2</p>')
+		// Its delivery is the receipt: the next edit is an Update alone.
+		await edit(t, mine.id, 'V3')
+		expect((await sentTo(t, MASTODON)).map((a) => a.type)).toEqual(['Update'])
+	})
+
+	it('never signs a fetch for a personal inbox with a suspended recipient’s key', async () => {
+		const { t, bob } = await world()
+		await sql(
+			t.store,
+			'UPDATE local_accounts SET suspended_at = ? WHERE account_id = ?',
+			'2026-10-12T00:00:00.000Z',
+			ALICE
+		)
+		const note = mastodonNote(bob, { to: [ALICE_URI], cc: [] })
+		t.web.serve(note.id, { '@context': AS, ...note })
+		const activity = { '@context': AS, id: `${note.id}/activity`, type: 'Create', actor: bob.uri, object: note.id }
+		expect(await t.post(bob, activity, { path: '/ap/users/alice/inbox' })).toBe(202)
+		const signer = t.web.signers[t.web.fetched.lastIndexOf(note.id)]
+		expect(signer).toBeDefined()
+		expect(signer).not.toBe(`${ALICE_URI}#main-key`)
 	})
 })
 

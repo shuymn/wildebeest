@@ -592,7 +592,12 @@ async function apply(deps: InboundDeps, application: Application): Promise<Inbox
 		const needLoaders =
 			need.signer === undefined
 				? loaders
-				: createRemoteLoaders(deps, state, need.signer === 'instance' ? null : need.signer, budget)
+				: createRemoteLoaders(
+						deps,
+						state,
+						need.signer === 'instance' ? null : 'local' in need.signer ? need.signer.local : need.signer,
+						budget
+					)
 		const fetched = await fetchNeeded(need, origin, needLoaders)
 		rethrowStoreError(state)
 		if (fetched === 'transient') {
