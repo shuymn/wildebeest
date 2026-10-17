@@ -216,10 +216,15 @@ describe('admin operations', () => {
 		expect(await run(h.store, usersRead, token, 'admin:read:accounts')).toEqual({ status: 'forbidden' })
 	})
 
-	it('grant manage_reports and manage_users (ADMIN_PERMISSIONS = 1040), so every other admin operation refuses the admin', async () => {
+	it('grant manage_reports, manage_users, manage_federation and view_dashboard (ADMIN_PERMISSIONS = 1080), so every other admin operation refuses the admin', async () => {
 		const { h, owner } = await withAdmin()
-		expect(ADMIN_PERMISSIONS).toBe(1040)
-		const served: number[] = [ADMIN_PERMISSION.manageReports, ADMIN_PERMISSION.manageUsers]
+		expect(ADMIN_PERMISSIONS).toBe(1080)
+		const served: number[] = [
+			ADMIN_PERMISSION.manageReports,
+			ADMIN_PERMISSION.manageUsers,
+			ADMIN_PERMISSION.manageFederation,
+			ADMIN_PERMISSION.viewDashboard,
+		]
 		const token = await userToken(h, OWNER)
 		for (const permission of Object.values(ADMIN_PERMISSION)) {
 			const read = adminReadOperation(permission, (_db, _input, admin) => admin.accountId)
@@ -240,7 +245,7 @@ describe('admin operations', () => {
 					role: unknown
 				}>()
 			).role
-		expect(await role(OWNER)).toEqual({ id: '3', name: 'Owner', permissions: '1040', color: '', highlighted: true })
+		expect(await role(OWNER)).toEqual({ id: '3', name: 'Owner', permissions: '1080', color: '', highlighted: true })
 		expect(await role('alice@example.com')).toEqual({
 			id: '-99',
 			name: '',
@@ -258,22 +263,38 @@ describe('admin operations', () => {
 describe('admin routes (AUTH-2)', () => {
 	const adminRoutes = ROUTES.filter((route) => /^\/api\/v[12]\/admin\//.test(route.path))
 	// Kinds Kopje stores none of, found by id before Mastodon's policy runs.
-	const UNSTORED = /\/admin\/(domain_blocks|domain_allows|ip_blocks|email_domain_blocks|canonical_email_blocks)\/:id$/
+	const UNSTORED = /\/admin\/(domain_allows|ip_blocks|email_domain_blocks|canonical_email_blocks)\/:id$/
 	const TRENDS = /^\/api\/v1\/admin\/trends\/(tags|links|statuses)$/
 
-	// Reports (manage_reports) and accounts (manage_users) are served: to the admin, the lists (no report here, the two
-	// local accounts) and, for an id that is no record's, 404; to everyone else 403, as to a role without the
-	// permission. Deleting an account's data (delete_user_data) is not served: 403 to everyone.
-	const SERVED = /^\/api\/v1\/admin\/reports(\/|$)|^\/api\/v[12]\/admin\/accounts(\/|$)/
+	// Reports (manage_reports), accounts (manage_users), domain blocks and allows (manage_federation) and the metrics
+	// (view_dashboard) are served: to the admin, the lists (no report, block, allow or metric here; the two local
+	// accounts), a create without fields (422) and, for an id that is no record's, 404; to everyone else 403, as to a
+	// role without the permission. Deleting an account's data (delete_user_data) is not served: 403 to everyone, as is
+	// creating a domain allow.
+	const SERVED = /^\/api\/v1\/admin\/(reports|domain_blocks)(\/|$)|^\/api\/v[12]\/admin\/accounts(\/|$)/
 	const LISTS = new Set(['/api/v1/admin/accounts', '/api/v2/admin/accounts'])
+	const EMPTY = new Set([
+		'GET /api/v1/admin/reports',
+		'GET /api/v1/admin/domain_blocks',
+		'GET /api/v1/admin/domain_allows',
+		'POST /api/v1/admin/measures',
+		'POST /api/v1/admin/dimensions',
+		'POST /api/v1/admin/retention',
+	])
 	const expected = (path: string, who = 'user', method = 'GET'): { status: number; body: unknown } =>
-		TRENDS.test(path) || (who === 'admin' && path === '/api/v1/admin/reports')
+		TRENDS.test(path) || (who === 'admin' && EMPTY.has(`${method} ${path}`))
 			? { status: 200, body: [] }
 			: who === 'admin' && LISTS.has(path)
 				? { status: 200, body: expect.arrayContaining([expect.objectContaining({ username: 'owner' })]) }
-				: UNSTORED.test(path) || (who === 'admin' && SERVED.test(path) && method !== 'DELETE')
-					? { status: 404, body: { error: 'Record not found' } }
-					: { status: 403, body: { error: 'This action is not allowed' } }
+				: who === 'admin' && method === 'POST' && path === '/api/v1/admin/domain_blocks'
+					? {
+							status: 422,
+							body: { error: "Validation failed: Severity is not included in the list, Domain can't be blank" },
+						}
+					: UNSTORED.test(path) ||
+						  (who === 'admin' && SERVED.test(path) && (method !== 'DELETE' || path.includes('domain_blocks')))
+						? { status: 404, body: { error: 'Record not found' } }
+						: { status: 403, body: { error: 'This action is not allowed' } }
 
 	const tokens = async (h: ApiHarness) => ({
 		anonymous: null,
@@ -286,8 +307,8 @@ describe('admin routes (AUTH-2)', () => {
 		expect(adminRoutes).toHaveLength(63)
 		const answers = adminRoutes.map((route) => expected(route.path).status)
 		expect(answers.filter((status) => status === 200)).toHaveLength(3)
-		expect(answers.filter((status) => status === 404)).toHaveLength(14)
-		expect(answers.filter((status) => status === 403)).toHaveLength(46)
+		expect(answers.filter((status) => status === 404)).toHaveLength(10)
+		expect(answers.filter((status) => status === 403)).toHaveLength(50)
 	})
 
 	it('answer anonymous callers, app tokens and other users alike, and the admin so for the routes not served', async () => {

@@ -202,9 +202,14 @@ export const ADMIN_PERMISSION = {
 export type AdminPermission = (typeof ADMIN_PERMISSION)[keyof typeof ADMIN_PERMISSION]
 
 // The permissions of the OAuth admin's role: the bits of the route groups Kopje serves. A group's bit is set only
-// once the whole group is served; until then its routes refuse the admin as they refuse everyone. Reports
-// (manage_reports) and accounts (manage_users, with local suspension) are served: 1040.
-export const ADMIN_PERMISSIONS: number = ADMIN_PERMISSION.manageReports | ADMIN_PERMISSION.manageUsers
+// once the whole group is served; until then its routes refuse the admin as they refuse everyone. Served: reports
+// (manage_reports), accounts (manage_users, with local and remote suspension), domain blocks and allows
+// (manage_federation) and the dashboard's metrics (view_dashboard, the measure instance_follows): 1080.
+export const ADMIN_PERMISSIONS: number =
+	ADMIN_PERMISSION.manageReports |
+	ADMIN_PERMISSION.manageUsers |
+	ADMIN_PERMISSION.manageFederation |
+	ADMIN_PERMISSION.viewDashboard
 
 // A role as Mastodon's REST::RoleSerializer presents it (permissions is a string).
 export type Role = { id: string; name: string; permissions: string; color: string; highlighted: boolean }
