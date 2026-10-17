@@ -188,6 +188,23 @@ describe("a covered actor's activities that Kopje does not read are judged befor
 	})
 })
 
+describe('an unusable envelope is checked with stored keys only (ID-1)', () => {
+	it('refuses a wrong signature under a stored key, ignores an unknown key, and fetches nothing', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		await followed(t, bob)
+		const carol = await mastodonActor(t.web, 'carol', { origin: OTHER, key: 2 })
+		const body = { '@context': AS, id: `${bob.uri}/statuses/7/activity`, type: 'Create', actor: [bob.uri], object: 7 }
+		const fetched = t.web.fetched.length
+		// bob's stored key id, signed with another key: the signature fails under a key the Store holds.
+		expect(await t.post(bob, body, { keyId: bob.keyId, privateKey: carol.privateKey })).toBe(401)
+		// A key id the Store does not hold: ignored, as it would be once fetched.
+		expect(await t.post(bob, body, { keyId: carol.keyId, privateKey: carol.privateKey })).toBe(202)
+		expect(await t.post(bob, body, { keyId: bob.keyId, privateKey: bob.privateKey })).toBe(202)
+		expect(t.web.fetched.slice(fetched)).toEqual([])
+	})
+})
+
 describe('fetches outside the inbox after a block (rows 9, 10)', () => {
 	it('stores no account for a resolve held at its fetch, and requests nothing from the host afterwards', async () => {
 		const t = await setup()
