@@ -33,10 +33,30 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       `since_id`, `min_id`) is the quoting post's id, not the quote's. Each page reads a window of `limit` quotes and
       leaves out those the viewer may not list, so a page may be short or empty while its `next` link still leads on,
       as on Mastodon.
-- Quote policies, as Mastodon 4.5 has them: who may quote a post. Nobody on another server can quote a Kopje post
-  yet, whatever its policy: Kopje's posts still declare that only their author may quote them, and will declare their
-  policy only once a later version answers quote requests. Until then a policy is stored and shown, and changes
-  nothing for other servers.
+- Mastodon users (and any server following FEP-044f) can quote Kopje posts, as each post's quote policy allows.
+  Kopje answers their quote request at once: a public or unlisted post whose policy lets the quoter in (`public`,
+  or `followers` for an account that follows the author) is accepted, anything else refused; a quoter the author
+  blocks, or who blocks the author, is refused whatever the policy. An accepted quote shows on the quoter's server as
+  approved, and Kopje serves its approval (`/ap/users/<name>/quote_authorizations/<id>`) to anyone who checks it.
+  Requests for private and direct posts are never answered, so an answer never reveals that one exists.
+    - Kopje users are notified of a new quote (`quote`, which notification policies filter like a mention, and which
+      push subscriptions may ask for) and see the quote in the quoted post's quotes list; the quote is visible to them
+      even when it is a private post.
+    - The author of a quoted post can revoke a quote with `POST /api/v1/statuses/:id/quotes/:quoting_status_id/revoke`
+      (`write:statuses`; the official Android app's "Remove quote", Phanpy's revoke): 404 for a post the caller may not
+      see or a quote that is not of it, 403 for someone else's post. It answers 200 with the quoting post, or, when its
+      author blocks the caller, with a stand-in that shows only its id, address, time, author and visibility. The
+      quoter's server and everyone who received the quoted post are told the approval is withdrawn, and the approval
+      address answers 404 from then on, for good.
+    - Edits and deletions of a quoted post now also reach the accounts that quoted it, so their copies stay current.
+    - Where Kopje differs from Mastodon: a revoke also rejects every quote request Kopje answered for that quote, so a
+      server that processes the withdrawal before an earlier approval still ends with the quote removed. A Mastodon
+      server that processes the approval and the rejection at the same moment can still keep the quote; nothing on
+      Kopje's side can prevent that. A quoter whose quote was revoked can ask again, and is accepted again while the
+      policy allows it, as on Mastodon: a narrower policy or a block stops that.
+    - Kopje still does not offer quoting itself: `quote_approval.current_user` stays `denied`.
+- Quote policies, as Mastodon 4.5 has them: who may quote a post. Posts declare their policy to other servers
+  (`interactionPolicy.canQuote`), and Kopje's answers to quote requests follow it.
     - `POST /api/v1/statuses` takes `quote_approval_policy`: `public`, `followers` or `nobody`; none (or a blank one)
       is the account's default; any other value is answered 422 `Record invalid`, as Mastodon. A private or direct
       post always gets `nobody`. A scheduled post keeps the policy it was sent with, or the account's default when it
@@ -45,8 +65,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       differs: a change of the policy alone is not an edit (no history entry, no `edited_at`), as below.
     - `PUT` and `PATCH /api/v1/statuses/:id/interaction_policy` (`write:statuses`) change the policy of one's own post
       (none sent is the account's default) and answer with the post: 404 for a post the caller may not see, 403 for
-      someone else's, then 422 for another value. The official Android app's "Change quote policy" uses it. Mastodon
-      also sends the change to other servers; Kopje will once its posts declare their policy.
+      someone else's, then 422 for another value. The official Android app's "Change quote policy" uses it. A change
+      is sent to other servers as an update of the post; quotes already accepted stay, as on Mastodon.
     - `source[quote_policy]` on `PATCH /api/v1/accounts/update_credentials` sets the account's default (`public`
       until changed; another value is refused with 422), shown in `source` of `verify_credentials` and as
       `posting:default:quote_policy` in `GET /api/v1/preferences`. The official iOS app's default quote policy
@@ -54,12 +74,12 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
     - Every status carries `quote_approval`: the `automatic` and `manual` flags of its policy (`public`, `followers`,
       `following`, `unsupported_policy`, in Mastodon's order; a boost shows its original's), and `current_user`, which
       is `denied` for every viewer while Kopje cannot post quotes itself, so no client (Elk among them) offers a quote
-      button. Posts written before this version have `nobody`, and so does every remote post for now: Kopje does not
-      read other servers' policies yet.
+      button. Posts written before the quote policies existed have `nobody`, and so does every remote post for now:
+      Kopje does not read other servers' policies yet.
 
 ### Instance changes
 
-- Store schema: adds two migrations, applied on the first request after the deploy; a rollback to an earlier version
+- Store schema: adds three migrations, applied on the first request after the deploy; a rollback to an earlier version
   needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0036_quotes_list`: adds the index the quotes list reads (each status's accepted quotes in quoting-post order). It
       reads the quotes once and no other table: on a benchmark store of 1,000,000 accounts, 3,000,000 follows,
@@ -67,6 +87,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
     - `0037_quote_policy`: adds each status's quote policy (every stored post gets `nobody`) and each local account's
       default (`public`). It changes the schema alone, reading and rewriting no status: on the same benchmark store its
       upgrade took 2.3 seconds (3.2 in a second run) in workerd's local Durable Object SQLite.
+    - `0038_quote_requests`: adds the approvals of quotes of local posts and the record of answered quote requests.
+      It reads each stored quote once and no other table: on the same benchmark store its upgrade took 2.5 seconds
+      (2.6 in a second run) in workerd's local Durable Object SQLite.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.11] - 2026-10-17
