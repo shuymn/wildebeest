@@ -158,7 +158,7 @@ export function jsonStringBytes(text: string): number {
 // RES-2: a status's content (a remote status's sanitized HTML, a local one's rendered text), as stored and shown, is
 // at most this many UTF-8 bytes as a JSON string, and its content warning at most SPOILER_BYTES, so one presented
 // status has a known size (domain/status-bounds.ts). Realistic posts stay far below them: Misskey's 3,000 characters
-// and Pleroma's or Akkoma's 5,000 of Japanese with links, mentions and hashtags render to at most about 30 KB
+// and Pleroma's, Akkoma's or GoToSocial's 5,000 of Japanese with links, mentions and hashtags take at most about 35 KB
 // (test/status-bounds.test.ts).
 export const STATUS_CONTENT_BYTES = 128 * 1024
 export const SPOILER_BYTES = 16 * 1024
@@ -198,10 +198,7 @@ export function sanitizeRemoteContent(html: string): string {
 
 // The UTF-8 bytes one code point takes in a JSON string, as JSON.stringify escapes it (a lone surrogate as \uXXXX).
 function jsonCodePointBytes(point: number): number {
-	if (point === 0x22 || point === 0x5c || point === 0x08 || point === 0x09 || point === 0x0a) {
-		return 2
-	}
-	if (point === 0x0c || point === 0x0d) {
+	if ([0x08, 0x09, 0x0a, 0x0c, 0x0d, 0x22, 0x5c].includes(point)) {
 		return 2
 	}
 	if (point < 0x20 || (point >= 0xd800 && point <= 0xdfff)) {

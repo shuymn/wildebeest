@@ -1,10 +1,10 @@
 // Kopje's own functions the cutover tools share with the Worker: the HTML, bio and content sanitizers and the bounds
-// of status text (src/security/html.ts), the search text (src/domain/search-text.ts), hashtag names (src/domain/tag-name.ts), an
-// object's language
-// (src/domain/language.ts), the image signature check (src/platform/image-bytes.ts), the domain of a domain block
-// (src/platform/domain-name.ts) and the conversations of the direct statuses stored (src/domain/conversation-rows.ts,
-// the backfill of migration 0009_conversations). A repository checkout runs them from the sources; the npm package, which ships no
-// sources, runs the same code from dist/maintenance-render.js, which re-exports them (src/maintenance-render.ts).
+// of status text (src/security/html.ts), the search text (src/domain/search-text.ts), hashtag names
+// (src/domain/tag-name.ts), an object's language (src/domain/language.ts), the image signature check
+// (src/platform/image-bytes.ts), the domain of a domain block (src/platform/domain-name.ts) and the conversations of
+// the direct statuses stored (src/domain/conversation-rows.ts, the backfill of migration 0009_conversations). A
+// repository checkout runs them from the sources; the npm package, which ships no sources, runs the same code from
+// dist/maintenance-render.js, which re-exports them (src/maintenance-render.ts).
 
 import { existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'

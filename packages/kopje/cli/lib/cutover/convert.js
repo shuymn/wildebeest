@@ -38,8 +38,8 @@ const PUBLIC = 'https://www.w3.org/ns/activitystreams#Public'
 const STATUS_TYPES = new Set(['Note', 'Article', 'Page', 'Question', 'Video', 'Audio', 'Event'])
 const EARLIEST_MS = Date.UTC(2018, 4, 10)
 const ID18 = /^[0-9]{18}$/
-// The Worker's bounds of identities it stores (src/domain/profile-bounds.ts ACTOR_URI_LIMIT, src/domain/status-bounds.ts
-// for a status's uri): a longer one is refused (test-node/cutover-safety.test.ts checks they agree).
+// The Worker's bounds of the identities it stores (ACTOR_URI_LIMIT in src/domain/profile-bounds.ts, a status's uri in
+// src/domain/status-bounds.ts): a longer one is refused (test-node/cutover-safety.test.ts checks they agree).
 export const ACTOR_URI_LIMIT = 2048
 export const STATUS_URI_LIMIT = 4096
 
