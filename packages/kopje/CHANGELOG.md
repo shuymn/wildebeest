@@ -8,6 +8,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+## [0.1.0-rc.13] - 2026-10-17
+
+A thirteenth release candidate of the first release, published under the npm dist-tag `next`.
+
 ### Added
 
 - Kopje users can quote posts as on Mastodon 4.5. `POST /api/v1/statuses` accepts `quoted_status_id` (also in scheduled
