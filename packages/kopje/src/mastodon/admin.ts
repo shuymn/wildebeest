@@ -29,12 +29,12 @@ import { ADMIN_REPORTS_LIMIT, MAX_ADMIN_REPORTS_LIMIT, type ReportAction } from 
 // Mastodon's Pundit policy then refuses any role without the route's permission bit, so anonymous callers, app tokens
 // and users who are not staff are answered 403 "This action is not allowed".
 //
-// The reports and accounts routes (below) are served. The other handlers here are the routes Kopje does not serve (yet):
-// they answer as Mastodon does for a role without the route's permission, which is the same to every caller, so they check the token only (no admin check, no Store read
-// beyond it). A route that finds its record before authorizing (a before_action with find) answers 404 for an id of a
-// kind Kopje stores none of; one that authorizes first, or whose records Kopje does store (accounts, reports, tags),
-// answers 403. The routes Kopje serves are admin operations (adminReadOperation, domain/auth.ts), which grant only the
-// bits in ADMIN_PERMISSIONS to the OAuth admin.
+// Reports and accounts (below) are served as admin operations (adminReadOperation, domain/auth.ts), granting only
+// ADMIN_PERMISSIONS to the OAuth admin. The other handlers are routes Kopje does not serve (yet): they answer as
+// Mastodon does a role without the route's permission, the same to every caller, so they check only the token (no
+// admin check or further Store read). A route that finds its record before authorizing (a before_action with find)
+// answers 404 for a kind Kopje stores none of; one that authorizes first, or whose records Kopje stores (accounts,
+// reports, tags), answers 403.
 
 const NOT_ALLOWED = 'This action is not allowed'
 
@@ -60,11 +60,9 @@ export const recordNotFound = afterToken(() => mastodonError(404, 'Record not fo
 // (`super`), which are empty in Kopje (placeholders.emptyList).
 export const trends = afterToken((c) => c.json([]))
 
-// ---- Reports (Api::V1::Admin::ReportsController, app/controllers/api/v1/admin/reports_controller.rb; the Store does
-// the work in domain/reports.ts). Mastodon finds the report (set_report) before its policy runs, so a role without
-// manage_reports learns from 404 or 403 whether a report id exists; Kopje refuses everyone but the OAuth admin before
-// reading the report, so the answer is 403 either way and the number of reports is not disclosed. The admin is answered
-// 404 for an id that is not a report.
+// ---- Reports (Api::V1::Admin::ReportsController, app/controllers/api/v1/admin/reports_controller.rb;
+// domain/reports.ts). Mastodon's set_report precedes manage_reports policy (404/403 leaks existence). Kopje authorizes
+// the OAuth admin first (R37, VIS-29): others always get 403; an authorized lookup of a missing report returns 404.
 
 const CURSOR = /^\d{1,19}$/
 
@@ -144,8 +142,7 @@ function reportsUrl(c: ApiContext, p: Params, cursor: Record<string, string>): s
 	return listUrl(c, '/api/v1/admin/reports', REPORT_PAGINATION_PARAMS, p, cursor)
 }
 
-// GET /api/v1/admin/reports: ReportFilter's parameters, newest first; next is offered when the page is full or the
-// status budget stopped it, prev whenever it has reports (next_path and prev_path, reports_controller.rb:92-98).
+// GET /api/v1/admin/reports (reports_controller.rb:92-98 next_path/prev_path); paging: listLinks and listAdminReports.
 export const reports: ApiHandler = async (c, deps) => {
 	const p = await requestParams(c, deps)
 	if (p instanceof Response) {
@@ -203,9 +200,8 @@ export function actOnReport(action: ReportAction): ApiHandler {
 	}
 }
 
-// ---- Accounts (Api::V1::Admin::AccountsController and Api::V2::Admin::AccountsController; the Store does the work in
-// domain/admin-accounts.ts). Mastodon finds the account (set_account) before its policy runs; Kopje refuses everyone but
-// the OAuth admin with manage_users before reading it, as for reports.
+// ---- Accounts (Api::V{1,2}::Admin::AccountsController; domain/admin-accounts.ts): set_account precedes the policy.
+// Kopje requires the OAuth admin's manage_users before lookup; see the Reports note above for the disclosure rule.
 
 // Each version's FILTER_PARAMS (accounts_controller.rb:18-33; v2 3-14), which with limit are its PAGINATION_PARAMS.
 const V1_ACCOUNT_PARAMS = [
@@ -352,7 +348,6 @@ export function adminAccounts(version: 1 | 2): ApiHandler {
 	}
 }
 
-// An account operation's answer (domain/admin-accounts.ts), as the RPC returns it.
 type AccountAnswer = { status: 'ok'; account: object } | Exclude<AdminAccountResult, { status: 'ok' }>
 
 function accountResponse(result: AccountAnswer, c: ApiContext): Response {

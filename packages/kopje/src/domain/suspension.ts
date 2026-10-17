@@ -201,9 +201,8 @@ export function unsuspendLocal(db: Db, accountId: string, now: number): boolean 
 	return true
 }
 
-// Suspends a local account with no admin to name (suspendLocal), unlogged: the owner console calls it in a later
-// stage. Token validation and authorize refuse the account from then on, and its credential epoch its tokens and
-// codes.
+// Unlogged local suspension with no admin attribution (suspendLocal), for the later owner console.
+// Token validation and authorize reject the account immediately; the credential epoch fences its tokens and codes.
 export const suspendAccount = writeOperation<{ accountId: string; now: number }, { suspended: boolean }>(
 	(db, { accountId, now }) => ({ suspended: suspendLocal(db, accountId, null, now) !== null })
 )
@@ -433,10 +432,9 @@ function endJob(db: Db, job: Job): void {
 	finish(db, job)
 }
 
-// One round of the mentions walk: from the oldest of the newest STATUS_LIMIT statuses since the cutoff (`low`, found
-// once through statuses_account), each status's mentioned accounts in key order (status_mentions), at most REACH_ROUND
-// rows read per round and RECENT_LIMIT mentions in all. The cursor is the status being read and its last mention read
-// (null once the status is done).
+// One round of the mentions walk over the newest STATUS_LIMIT statuses since the cutoff, oldest first (`low`, found
+// once via statuses_account). Read mentions in status_mentions key order: at most REACH_ROUND rows per round,
+// RECENT_LIMIT mentions in all. The cursor stores the current status and last mention (null when that status is done).
 function mentionsRound(db: Db, job: Job, state: JobState): void {
 	let low = state.low
 	if (low === undefined) {
@@ -505,9 +503,9 @@ function mentionsRound(db: Db, job: Job, state: JobState): void {
 const JOB_COLUMNS = `id, kind, account_id, generation, since, actor_account_id, CAST(intent_id AS TEXT) AS intent_id,
 	report_bound, follow_bound, cutoff, phase, state`
 
-// One round of the next job after `after` (a job id), or of the oldest job when none comes after it, so the jobs of
-// a call take turns and a long one (a large token history) does not hold back another's Update. Returns null when there
-// is no job, else the job's id and whether the round wrote targets to an Update.
+// One round of the job after id `after`, else of the oldest, so a call's jobs take turns and a long token history
+// cannot hold back another's Update. Null when there is no job; else the job's id and whether the round wrote Update
+// targets.
 export function moderationRound(db: Db, now: number, after = 0): { id: number; delivers: boolean } | null {
 	const job =
 		db.first<Job>(`SELECT ${JOB_COLUMNS} FROM moderation_jobs WHERE id > ? ORDER BY id LIMIT 1`, after) ??

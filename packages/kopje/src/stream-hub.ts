@@ -66,8 +66,7 @@ export const STREAM_LIMITS = {
 	payloadBytes: 512 * 1024,
 }
 
-// Tests only: when set, a turn that leaves work requests no continuation and calls it instead, as a continuation whose
-// request failed (the cron's turn picks the work up).
+// Test hook: a turn that leaves work calls this instead of requesting a continuation, as if it failed (cron resumes).
 export const STREAM_FAULTS: { dropContinuation: (() => void) | null } = { dropContinuation: null }
 
 type Charge = { checks: number; presentations: number; bytes: number; sends: number }
@@ -335,7 +334,6 @@ export class StreamHub {
 			subs: [...at.subs, key],
 			tags: raw === null ? at.tags : { ...at.tags, [key]: raw },
 		}
-		// The account's keys with this socket's as they would be.
 		const keys = this.#keys(at.accountId, ws)
 		for (const sub of next.subs) {
 			keys.set(sub, (keys.get(sub) ?? 0) + 1)
@@ -411,7 +409,6 @@ export class StreamHub {
 		await this.#sync(at.accountId, ws)
 	}
 
-	// The stream keys of an account's open sockets and how many sockets subscribe to each, but `except`.
 	#keys(accountId: string, except?: WebSocket): Map<string, number> {
 		const keys = new Map<string, number>()
 		for (const { ws, at } of this.#open(accountTag(accountId))) {
@@ -672,9 +669,8 @@ export class StreamHub {
 		return true
 	}
 
-	// The units an event's candidates make, in order: each viewer with an open socket that opened before the event and
-	// has a subscription that may carry it, with the lists those sockets subscribe to (of a delete's, those its capture
-	// allowed) and their `public*` and `hashtag*` keys.
+	// An event's units in candidate order: each viewer's sockets opened before the event with a subscription that may
+	// carry it, with their subscribed lists (a delete's: only those its capture allowed) and `public*`/`hashtag*` keys.
 	#units(
 		event: StreamEvent,
 		candidates: readonly { viewer: string; subject: StreamSubject; lists?: readonly string[] }[]
@@ -698,13 +694,12 @@ export class StreamHub {
 		})
 	}
 
-	// A conversation event's units (its subject is the owner): the owner's newest changes (CONVERSATIONS_PER_TURN, older
-	// ones skipped) above the lowest convSeq of its `direct` sockets and above the position within the event, and at most
-	// the event's ceiling (fixed when the fan-out entered it, so a turn that resumes the event never reads a change
-	// written since: that one has the owner's next row), oldest of them first, each one conversation, its subject index
-	// the change's sequence. A unit goes to the sockets whose convSeq is below its change. A socket's `since` does not
-	// apply: its convSeq, set from the owner's mark when it subscribed, says what it has been sent, and a change written
-	// after it opened may join a row journaled before.
+	// A conversation event's units (its subject is the owner): the owner's newest CONVERSATIONS_PER_TURN changes (older
+	// ones skipped) above both the lowest convSeq of its `direct` sockets and the position within the event, up to the
+	// event's fixed ceiling (see streamEnterConversation), oldest first. Each unit is one conversation, indexed by its
+	// change's sequence, and goes to the sockets whose convSeq is below it. Use convSeq (what the socket has been sent,
+	// set from the owner's mark on subscribe), not `since`: a change written after it opened may join a row journaled
+	// before.
 	async #conversationUnits(owner: string, sockets: Socket[], position: number, ceiling: number): Promise<Unit[]> {
 		const lowest = Math.min(...sockets.map(({ at }) => at.convSeq))
 		const changes = await this.#run(streamConversations, {
@@ -724,7 +719,6 @@ export class StreamHub {
 			.filter((unit) => unit.sockets.length > 0)
 	}
 
-	// The owner's open sockets subscribed to `direct`.
 	#directSockets(owner: string): Socket[] {
 		return this.#open(accountTag(owner)).filter(
 			({ at }) => mayCarry('conversation', at.grant, 'direct') && at.subs.includes('direct')
@@ -814,7 +808,6 @@ export class StreamHub {
 		return true
 	}
 
-	// Closes the sockets whose tokens are no longer valid (1008), then records their accounts' keys.
 	async #revoke(sockets: Socket[]): Promise<void> {
 		for (const { ws } of sockets) {
 			close(ws, 1008, 'token revoked')
@@ -859,7 +852,6 @@ export class StreamHub {
 
 const TOKEN_HASH = /^[0-9a-f]{64}$/
 
-// Whether a token's grant has every scope `needs` names.
 function grants(grant: StreamGrant, needs: StreamGrant): boolean {
 	return (!needs.statuses || grant.statuses) && (!needs.notifications || grant.notifications)
 }
