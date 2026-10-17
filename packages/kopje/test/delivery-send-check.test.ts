@@ -11,7 +11,7 @@ import { deferred, deliveryDeps } from './quote-helpers'
 import { community, post, remoteAccount, remoteFollows, type User } from './status-helpers'
 import { MIGRATIONS } from '../src/db/migrations'
 import { Db } from '../src/db/sql'
-import { type Claim, claimDeliveries, LEASE_MS, PROVENANCE_MAX } from '../src/domain/deliveries'
+import { type Claim, claimDeliveries, enqueueActivity, LEASE_MS, PROVENANCE_MAX } from '../src/domain/deliveries'
 import { setHostPolicyForTests } from '../src/domain/host-policy'
 import { moderationRound, REACH_ROUND, suspendLocal, unsuspendLocal } from '../src/domain/suspension'
 import { deliveryRound } from '../src/jobs/deliver'
@@ -259,6 +259,54 @@ describe('the send-time check (VIS-30)', () => {
 				.map(([, inbox]) => inbox)
 				.sort()
 		).toEqual(['https://blocked.example/inbox', 'https://gateway.example/inbox', 'https://mixed.example/inbox'])
+	})
+})
+
+describe('the personal-inbox fallback (VIS-30)', () => {
+	it('moves content to an available recipient, never to one the check would refuse', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		// Both on one server, A first by id: A's deletion has started, B is available.
+		const a = await remoteAccount(h.store, 'a', 'shared.example')
+		const b = await remoteAccount(h.store, 'b', 'shared.example')
+		await runInDurableObject(h.store, (_instance, state) =>
+			state.storage.transactionSync(() =>
+				enqueueActivity(
+					new Db(state.storage.sql),
+					alice.id,
+					{
+						// An activity without to, as a forwarded Flag naming both is.
+						activity: {
+							type: 'Flag',
+							id: 'https://kopje.test/ap/flags/1',
+							actor: 'https://kopje.test/actor',
+							object: ['https://shared.example/users/a', 'https://shared.example/users/b'],
+						},
+						audience: { followers: false, accounts: [a, b] },
+					},
+					NOW
+				)
+			)
+		)
+		expect((await rows(h.store)).map((r) => [r.inbox, r.accounts])).toEqual([
+			['https://shared.example/inbox', sorted([a, b])],
+		])
+		await sql(h.store, 'UPDATE accounts SET deleted_at = ? WHERE id = ?', new Date(NOW).toISOString(), a)
+		const first = await claim(h.store, 'shared')
+		expect(first.deliveries.map((d) => d.inbox)).toEqual(['https://shared.example/inbox'])
+		// The shared inbox is missing (404): the row moves to B's personal inbox, not A's.
+		expect(
+			await h.store.completeDelivery(BUILD, {
+				id: first.deliveries[0]!.id,
+				leaseToken: 'shared',
+				now: NOW,
+				outcome: { kind: 'failed', status: 404, error: 'HTTP 404', permanent: true },
+			})
+		).toMatchObject({ status: 'retry' })
+		expect((await rows(h.store)).map((r) => [r.inbox, r.accounts])).toEqual([
+			['https://shared.example/users/b/inbox', JSON.stringify([b])],
+		])
+		expect(await drain(h.store)).toEqual([['Flag', 'https://shared.example/users/b/inbox']])
 	})
 })
 

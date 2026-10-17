@@ -1241,8 +1241,12 @@ function personalFallback(db: Db, row: LaneRow, now: number, status: number | nu
 	if (status === null || !SHARED_INBOX_MISSING.has(status) || row.attempts >= MAX_ATTEMPTS) {
 		return false
 	}
-	const personal = db.first<{ inbox: string; id: string; uri: string }>(
-		`SELECT a.inbox_url AS inbox, a.id, a.uri
+	// The audience's accounts at this shared inbox, in id order (as many as the activity addresses). For content, the
+	// first one the send-time check would still send to (sendRefused): one it would refuse would lose the delivery at
+	// the next claim, though another recipient there may be available. A retraction takes the first, as it is never
+	// refused.
+	const candidates = db.all<{ inbox: string; id: string; uri: string; retracts: number; available: number }>(
+		`SELECT a.inbox_url AS inbox, a.id, a.uri, o.retracts, ${availableSql('a.id')} AS available
 		FROM deliveries d JOIN outbound_activities o ON o.id = d.activity_id,
 			json_each(o.body, '$.audience.accounts') r JOIN accounts a ON a.id = r.value
 		WHERE d.id = CAST(?1 AS INTEGER) AND d.addressee IS NULL AND json_type(o.body, '$.activity.to') IS NOT 'array'
@@ -1250,9 +1254,13 @@ function personalFallback(db: Db, row: LaneRow, now: number, status: number | nu
 			AND NOT EXISTS (SELECT 1 FROM deliveries e WHERE e.activity_id = o.id AND e.inbox_url = a.inbox_url)
 			AND NOT EXISTS (SELECT 1 FROM outbound_targets c, json_each(c.targets) t
 				WHERE c.activity_id = o.id AND t.key >= c.next AND json_extract(t.value, '$.inbox') = a.inbox_url)
-		ORDER BY a.id LIMIT 1`,
+		ORDER BY a.id`,
 		row.id
 	)
+	const personal = candidates.find((c) => {
+		const host = hostOf(c.uri)
+		return c.retracts === 1 || (c.available === 1 && (host === null || !hostRefused(db, host)))
+	})
 	if (personal === undefined || !isDeliverableInbox(personal.inbox) || laneOf(personal.inbox) !== row.lane) {
 		return false
 	}
