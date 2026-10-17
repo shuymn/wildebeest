@@ -12,6 +12,10 @@ import { SPOILER_BYTES, STATUS_CONTENT_BYTES } from '../security/html'
 export const MAX_STATUS_MEDIA = 4
 // Hashtags of one status, each at most this many code units as stored and code points as read (and 1 KiB).
 export const MAX_STATUS_TAGS = 100
+// Hashtags one status presents, the first by name (the order they are stored in). Mastodon presents every tag; this
+// cap keeps one status within its share of an answer, far above the few a post carries in practice (a 500-character
+// Mastodon post names at most about 250). The content's HTML keeps every hashtag link.
+export const MAX_PRESENTED_TAGS = 70
 export const MAX_TAG_LENGTH = 256
 const TAG_NAME_BYTES = 1024
 // status_mentions rows of one remote status.

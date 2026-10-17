@@ -30,7 +30,7 @@ import {
 	contentSql,
 	MAX_STATUS_MEDIA,
 	MAX_PRESENTED_MENTIONS,
-	MAX_STATUS_TAGS,
+	MAX_PRESENTED_TAGS,
 	mediaDescriptionSql,
 	mediaMetaSql,
 	mediaUrlSql,
@@ -283,7 +283,7 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 		[...byId.values()].map((row) => row.account_id),
 		options
 	)
-	// At most MAX_STATUS_MEDIA attachments, MAX_PRESENTED_MENTIONS mentions and MAX_STATUS_TAGS hashtags of each
+	// At most MAX_STATUS_MEDIA attachments, MAX_PRESENTED_MENTIONS mentions and MAX_PRESENTED_TAGS hashtags of each
 	// status, cut in SQL (a converted row may hold more), each read through its index.
 	const media = groupBy(
 		db.all<MediaRow & { status_id: string }>(
@@ -310,7 +310,7 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 		db.all<{ status_id: string; name: string }>(
 			`SELECT j.value AS status_id, ${tagNameSql('t.name')} AS name FROM json_each(?1) j CROSS JOIN status_tags t
 			WHERE t.status_id = j.value AND t.name IN (SELECT ${tagNameSql('n.name')} FROM status_tags n
-				WHERE n.status_id = j.value AND ${tagNameSql('n.name')} IS NOT NULL ORDER BY n.name LIMIT ${MAX_STATUS_TAGS})
+				WHERE n.status_id = j.value AND ${tagNameSql('n.name')} IS NOT NULL ORDER BY n.name LIMIT ${MAX_PRESENTED_TAGS})
 			ORDER BY j.value, t.name`,
 			all
 		)

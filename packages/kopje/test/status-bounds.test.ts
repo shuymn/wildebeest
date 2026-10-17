@@ -16,6 +16,7 @@ import {
 	MAX_STATUS_MEDIA,
 	MAX_PRESENTED_MENTIONS,
 	MAX_STATUS_MENTION_ROWS,
+	MAX_PRESENTED_TAGS,
 	MAX_STATUS_TAGS,
 	MAX_TAG_LENGTH,
 	MEDIA_URL_LIMIT,
@@ -387,7 +388,7 @@ describe('a stored status is read within its bounds (RES-2)', () => {
 		expect(odd.username).toBe(C.repeat(Math.floor(USERNAME_LIMIT / 6)))
 		expect(jsonStringBytes(odd.username as string)).toBeLessThanOrEqual(USERNAME_LIMIT + 2)
 		expect(status.tags.map((tag) => tag.name)).toEqual(
-			Array.from({ length: MAX_STATUS_TAGS }, (_, i) => `t${String(i).padStart(3, '0')}`)
+			Array.from({ length: MAX_PRESENTED_TAGS }, (_, i) => `t${String(i).padStart(3, '0')}`)
 		)
 		expect(status.poll!.options.map((o) => o.title)).toEqual(
 			Array.from({ length: MAX_REMOTE_OPTIONS }, () => 'x'.repeat(MAX_REMOTE_OPTION_LENGTH))
@@ -604,15 +605,15 @@ describe('the table of maxima (RES-3)', () => {
 		expect(shown.content.length).toBe((STATUS_CONTENT_BYTES - 2) / 6)
 		expect(shown.media_attachments).toHaveLength(MAX_STATUS_MEDIA)
 		expect(shown.mentions).toHaveLength(MAX_PRESENTED_MENTIONS)
-		expect(shown.tags).toHaveLength(MAX_STATUS_TAGS)
+		expect(shown.tags).toHaveLength(MAX_PRESENTED_TAGS)
 		expect(shown.poll!.options).toHaveLength(MAX_REMOTE_OPTIONS)
 		expect((pair.answer as { reblog: { quote: { quoted_status: unknown } } }).reblog.quote.quoted_status).not.toBeNull()
 		const quoting = shape(await read(t, getStatus as never, quote))
 		// docs/threat-model.md "Maxima of presented units" states these; the composite shapes are derived from them.
 		expect({ status, quoting, boosted, account: { sqlite: one.profileBytes, json: jsonBytes(account) } }).toEqual({
-			status: { sqlite: 739_953, json: 1_301_907, rows: 161, nodes: 697 },
-			quoting: { sqlite: 1_479_849, json: 2_603_847, rows: 320, nodes: 1_396 },
-			boosted: { sqlite: 1_586_296, json: 2_734_335, rows: 323, nodes: 1_449 },
+			status: { sqlite: 708_693, json: 1_177_677, rows: 131, nodes: 607 },
+			quoting: { sqlite: 1_417_329, json: 2_355_387, rows: 260, nodes: 1_216 },
+			boosted: { sqlite: 1_523_776, json: 2_485_875, rows: 263, nodes: 1_269 },
 			account: { sqlite: 97_844, json: 121_710 },
 		})
 	})
