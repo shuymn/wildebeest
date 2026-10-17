@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest'
 import { sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { ALICE, setup, type Setup } from './inbox-status-helpers'
+import { MAX_BIO, maxFields } from './profile-fixtures'
 import { observedSql, rowsRead } from './read-helpers'
 import { community, post, remoteAccount } from './status-helpers'
 import { listConversations, MAX_PRESENTED_PARTICIPANTS } from '../src/domain/conversations'
@@ -29,7 +30,6 @@ import type { StoreOperation } from '../src/platform/store-kernel'
 import {
 	jsonStringBytes,
 	REMOTE_BIO_BYTES,
-	sanitizeRemoteBio,
 	sanitizeRemoteContent,
 	sanitizeRemoteHtml,
 	SPOILER_BYTES,
@@ -51,14 +51,6 @@ let sequence = 900_000_000_000_000_000n
 const nextId = () => String(sequence++)
 
 const atLimit = (prefix: string, limit: number) => prefix.padEnd(limit, 'u')
-
-// Every variable part an account presents at its bound (as test/account-answer-bytes.test.ts).
-const MAX_BIO = sanitizeRemoteBio(`<p>${`${C}"<a>x</a>`.repeat(20_000)}</p>`)
-const MAX_FIELDS = Array.from({ length: 16 }, () => ({
-	type: 'PropertyValue',
-	name: 'n'.repeat(255),
-	value: 'v'.repeat(4096),
-}))
 
 // How a fixture fills text at its bound: `escaped` with characters JSON escapes to six bytes (the most JSON for the
 // fewest bytes read); `derived`, the same with mentioned accounts that have no stored url, so their url is derived
@@ -85,7 +77,7 @@ async function maximalAccount(t: Setup, light = false, fill: Fill = 'escaped'): 
 		light && fill === 'derived' ? null : atLimit(`https://${HOST}/@${id}/`, PROFILE_URL_LIMIT),
 		light ? null : atLimit(`https://${HOST}/a/${id}/`, PROFILE_URL_LIMIT),
 		light ? null : atLimit(`https://${HOST}/h/${id}/`, PROFILE_URL_LIMIT),
-		light ? null : JSON.stringify({ type: 'Person', attachment: MAX_FIELDS })
+		light ? null : JSON.stringify({ type: 'Person', attachment: maxFields() })
 	)
 	return id
 }
