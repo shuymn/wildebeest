@@ -65,6 +65,7 @@ const SCHEMA_TABLES = [
 	'quote_revocations',
 	'quotes',
 	'remote_keys',
+	'remote_moderation_jobs',
 	'reports',
 	'scheduled_statuses',
 	'status_edits',
