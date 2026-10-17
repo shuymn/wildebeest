@@ -98,9 +98,18 @@ export function pollOptionsSql(column: string): string {
 			WHERE key < ${MAX_REMOTE_OPTIONS}) END`
 }
 
-// An edit's media snapshot as a JSON array: its first MAX_STATUS_MEDIA entries; '[]' past EDIT_MEDIA_BYTES.
+// An edit's media snapshot as a JSON array: its first MAX_STATUS_MEDIA entries, each rebuilt as a MediaAttachment
+// whose columns are bounded as a stored attachment's are (mediaUrlSql, mediaDescriptionSql, mediaMetaSql; the id and
+// type cut at SNAPSHOT_KEY_LIMIT); an entry that is not an object is left out; '[]' past EDIT_MEDIA_BYTES.
+const SNAPSHOT_KEY_LIMIT = 32
 export function editMediaSql(column: string): string {
+	const text = (key: string) => `(CASE WHEN json_type(value, '$.${key}') = 'text' THEN value ->> '$.${key}' END)`
+	const meta = `(CASE WHEN json_type(value, '$.meta') = 'object' THEN value -> '$.meta' END)`
 	return `CASE WHEN length(CAST(${column} AS BLOB)) <= ${EDIT_MEDIA_BYTES} THEN
-		(SELECT json_group_array(CASE WHEN type IN ('object', 'array') THEN json(value) ELSE json_quote(value) END
-			ORDER BY key) FROM json_each(${column}) WHERE key < ${MAX_STATUS_MEDIA}) ELSE '[]' END`
+		(SELECT json_group_array(json_object('id', ${cutSql(text('id'), SNAPSHOT_KEY_LIMIT)},
+			'type', ${cutSql(text('type'), SNAPSHOT_KEY_LIMIT)}, 'url', ${mediaUrlSql(text('url'))},
+			'preview_url', ${mediaUrlSql(text('preview_url'))}, 'remote_url', NULL, 'preview_remote_url', NULL,
+			'text_url', NULL, 'meta', json(${mediaMetaSql(meta)}), 'description', ${mediaDescriptionSql(text('description'))},
+			'blurhash', NULL) ORDER BY key)
+		FROM json_each(${column}) WHERE key < ${MAX_STATUS_MEDIA} AND type = 'object') ELSE '[]' END`
 }

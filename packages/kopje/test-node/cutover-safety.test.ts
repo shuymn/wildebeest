@@ -349,6 +349,25 @@ describe('HTML is never cut silently', () => {
 		expect((await verify(exportPath, accepted.dumpPath, { acceptTruncation: true })).ok).toBe(true)
 	})
 
+	it('counts an attachment of an earlier version that the Worker shows cut', async () => {
+		const exportPath = await exportOf(space.dir, { level: 39 })
+		const long = `[{"type":"Document","mediaType":"image/png","url":"https://remote.example/a.png","name":"${'d'.repeat(10_001)}"}]`
+		expect(
+			await replacedIn(
+				exportPath,
+				'"spoiler_text":"","sensitive":false,"attachment":[]',
+				`"spoiler_text":"","sensitive":false,"attachment":${long}`
+			)
+		).toBe(1)
+		const converted = await convert(space.dir, exportPath)
+		expect(converted.ok).toBe(true)
+		expect(
+			(converted.manifest.conversion as { normalized: Record<string, number> }).normalized[
+				'edits:media-field-over-bound'
+			]
+		).toBe(1)
+	})
+
 	it('refuses a remote username the Worker would refuse, whatever truncation accepts', async () => {
 		const source = await readFile(fileURLToPath(new URL('../src/federation/remote-actor.ts', import.meta.url)), 'utf8')
 		expect(source).toContain(`const USERNAME = ${REMOTE_USERNAME}\n`)

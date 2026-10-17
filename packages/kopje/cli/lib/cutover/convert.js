@@ -9,6 +9,7 @@
 // HTML from the legacy database (status content, bios) goes through Kopje's own sanitizer (src/security/html.ts,
 // HTML-1), so the Store never holds HTML it would not have stored itself.
 
+import { Buffer } from 'node:buffer'
 import { createHash } from 'node:crypto'
 
 import { LEGACY_DEFAULT_AVATAR, mediaToken, parseDeliveryUrl, UPSTREAM_ACCOUNT_HASH } from './images-export.js'
@@ -1353,19 +1354,37 @@ export function convertLegacy(
 	}
 
 	// ---------------------------------------------------------------- edits: earlier versions, then the current one
+	// The Worker reads a snapshot's attachments within the bounds of a stored attachment (src/domain/status-bounds.ts
+	// editMediaSql): a URL past 2,048 bytes or meta past 1 KiB as none, a description cut at 10,000 code points. Such a
+	// field is converted whole and counted, as the Worker shows less of it.
 	/** @param {Omit<Attached, 'position' | 'imageId'>} m */
-	const presented = (m) => ({
-		id: m.id,
-		type: m.type,
-		url: m.url,
-		preview_url: m.preview ?? m.url,
-		remote_url: null,
-		preview_remote_url: null,
-		text_url: null,
-		meta: m.meta === null ? null : JSON.parse(m.meta),
-		description: m.description === '' ? null : m.description,
-		blurhash: null,
-	})
+	const snapshotLosses = (m) => {
+		const bytes = (/** @type {string | null} */ value) => (value === null ? 0 : Buffer.byteLength(value))
+		const over =
+			bytes(m.url) > 2048 ||
+			bytes(m.preview) > 2048 ||
+			bytes(m.meta) > 1024 ||
+			(bytes(m.description) > 10_000 && [...m.description].length > 10_000)
+		if (over) {
+			count(normalized, 'edits:media-field-over-bound')
+		}
+	}
+	/** @param {Omit<Attached, 'position' | 'imageId'>} m */
+	const presented = (m) => {
+		snapshotLosses(m)
+		return {
+			id: m.id,
+			type: m.type,
+			url: m.url,
+			preview_url: m.preview ?? m.url,
+			remote_url: null,
+			preview_remote_url: null,
+			text_url: null,
+			meta: m.meta === null ? null : JSON.parse(m.meta),
+			description: m.description === '' ? null : m.description,
+			blurhash: null,
+		}
+	}
 	const editInsert = insert(
 		'INSERT INTO status_edits (status_id, content, spoiler_text, sensitive, media_json, created_at) VALUES (?, ?, ?, ?, ?, ?)'
 	)

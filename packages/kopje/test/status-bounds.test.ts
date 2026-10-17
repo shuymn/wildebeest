@@ -427,7 +427,19 @@ describe('a stored status is read within its bounds (RES-2)', () => {
 			JSON.stringify(Array.from({ length: 10 }, (_, i) => snapshot(i))),
 			JSON.stringify(Array.from({ length: 150 }, (_, i) => `${i}${'o'.repeat(2_000)}`)),
 			new Date(NOW).toISOString(),
-			JSON.stringify(Array.from({ length: 6 }, (_, i) => ({ id: `m${i}` }))),
+			// A small snapshot whose single fields are past their bounds: a long URL, description and meta.
+			JSON.stringify([
+				'not an attachment',
+				...Array.from({ length: 6 }, (_, i) => ({
+					id: `m${i}`,
+					type: 'image',
+					url: atLimit(`https://${HOST}/m/${i}/`, MEDIA_URL_LIMIT + i),
+					preview_url: atLimit(`https://${HOST}/p/${i}/`, MEDIA_URL_LIMIT),
+					description: 'd'.repeat(2 * MAX_MEDIA_DESCRIPTION_LENGTH),
+					meta: i === 0 ? { original: { width: 1, height: 1 } } : { x: 'x'.repeat(2_000) },
+					extra: 'x'.repeat(1_000),
+				})),
+			]),
 			JSON.stringify(['a', 'b'])
 		)
 		const { answer, longest } = await read(t, statusHistory as never, id)
@@ -442,7 +454,21 @@ describe('a stored status is read within its bounds (RES-2)', () => {
 		expect(first!.media_attachments).toEqual([])
 		expect(first!.poll!.options).toHaveLength(MAX_REMOTE_OPTIONS)
 		expect(first!.poll!.options[7]!.title).toBe(`7${'o'.repeat(MAX_REMOTE_OPTION_LENGTH - 1)}`)
-		expect(second!.media_attachments).toEqual(Array.from({ length: MAX_STATUS_MEDIA }, (_, i) => ({ id: `m${i}` })))
+		// The first MAX_STATUS_MEDIA entries (the string among them left out), each rebuilt within the column bounds.
+		expect(second!.media_attachments).toEqual(
+			Array.from({ length: MAX_STATUS_MEDIA - 1 }, (_, i) => ({
+				id: `m${i}`,
+				type: 'image',
+				url: i === 0 ? atLimit(`https://${HOST}/m/0/`, MEDIA_URL_LIMIT) : null,
+				preview_url: atLimit(`https://${HOST}/p/${i}/`, MEDIA_URL_LIMIT),
+				remote_url: null,
+				preview_remote_url: null,
+				text_url: null,
+				meta: i === 0 ? { original: { width: 1, height: 1 } } : null,
+				description: 'd'.repeat(MAX_MEDIA_DESCRIPTION_LENGTH),
+				blurhash: null,
+			}))
+		)
 		expect(second!.poll!.options.map((o) => o.title)).toEqual(['a', 'b'])
 		expect(longest).toBeLessThanOrEqual(STATUS_CONTENT_BYTES)
 		// The source a local author reads back for editing.
