@@ -901,7 +901,7 @@ function nextDueAt(db: Db, now: number, ownLease: string | null = null): number 
 // Claims and completions
 // ---------------------------------------------------------------------------------------------------------------
 
-export type ClaimedDelivery = { id: string; inbox: string; signer: string; activityId: string; body: string }
+export type ClaimedDelivery = { id: string; inbox: string; signer: string }
 
 export type DeliverySigner = { actorUri: string; privkey: Uint8Array; salt: Uint8Array; pubkey: string }
 
@@ -988,38 +988,28 @@ export const INSTANCE_SIGNER = 'instance'
 // the time of an unsuspension is sent then. The restoration's Update is recorded once the account is no longer
 // suspended, so it passes; one confirmed after the account is suspended again does not.
 const REFUSED_SENDER = `EXISTS (SELECT 1 FROM local_accounts l
-	WHERE l.account_id = ?1 AND NOT ${availableLocalSql('l')} AND o.retracts = 0
+	WHERE l.account_id = d.account_id AND NOT ${availableLocalSql('l')} AND o.retracts = 0
 		AND NOT (json_extract(o.body, '$.activity.type') = 'Update'
 			AND json_extract(o.body, '$.activity.object.suspended') IS 1
 			AND json_extract(o.body, '$.activity.object.id') = json_extract(o.body, '$.activity.actor')))`
 
+// A due row (`d`) with what the send-time check reads of its activity (`o`, LEFT JOINed: found is 0 when it is gone):
+// whether it retracts, whether its sender is refused (above), and who signs it.
 type DueRow = LaneRow & {
 	addressee: string | null
 	recipient_accounts: string | null
 	recipient_domains: string | null
-}
-
-const DUE_ROW = `${LANE_ROW}, addressee, recipient_accounts, recipient_domains`
-
-type SentActivity = {
-	activity: string
-	signed_by: string | null
-	immutable: number | null
-	retracts: number
+	found: number
+	retracts: number | null
 	refused_sender: number
+	signed_by: string | null
 }
 
-// A due row's activity as sent (its body, and who signs it), whether it retracts, and whether its sender is refused
-// (above); undefined when the activity is gone.
-function sentActivity(db: Db, row: LaneRow): SentActivity | undefined {
-	return db.first<SentActivity>(
-		`SELECT json_extract(o.body, '$.activity') AS activity, json_extract(o.body, '$.signedBy') AS signed_by,
-			json_extract(o.body, '$.immutable') AS immutable, o.retracts, ${REFUSED_SENDER} AS refused_sender
-		FROM outbound_activities o WHERE o.id = CAST(?2 AS INTEGER)`,
-		row.account_id,
-		row.activity_id
-	)
-}
+const DUE_ROW = `CAST(d.id AS TEXT) AS id, CAST(d.activity_id AS TEXT) AS activity_id, d.account_id, d.lane, d.inbox_url,
+	d.attempts, d.addressee, d.recipient_accounts, d.recipient_domains, o.id IS NOT NULL AS found, o.retracts,
+	${REFUSED_SENDER} AS refused_sender, json_extract(o.body, '$.signedBy') AS signed_by`
+
+const DUE_FROM = 'deliveries d LEFT JOIN outbound_activities o ON o.id = d.activity_id'
 
 function hostOf(inbox: string): string | null {
 	try {
@@ -1029,20 +1019,14 @@ function hostOf(inbox: string): string | null {
 	}
 }
 
-// VIS-30's send-time check, at the claim and again at confirmation (confirmDelivery). A row that is not a retraction
-// (the persisted retracts flag, never the activity's kind worked out again) is refused when:
-//   - its sender is refused (REFUSED_SENDER);
-//   - its inbox host is refused by the host policy (host-policy.ts);
-//   - its provenance lists accounts (at most PROVENANCE_MAX, `many` unset) and none of them exists and is available
-//     (R1, availableSql, which reads an unknown id as available: so a purged recipient counts as gone);
-//   - its provenance lists recipient hosts, and the host policy refuses every one.
-// A row without provenance gets the inbox host rule only. A shared inbox that serves an available recipient besides
-// unavailable ones is sent: content expansion already left the unavailable out (leavesOutSql in audience.ts).
-function sendRefused(db: Db, row: DueRow, activity: SentActivity): boolean {
-	if (activity.retracts === 1) {
+// VIS-30's send-time check, at the claim and again at confirmation (the rules: docs/visibility.md, "The send-time
+// check"). The exemption reads the persisted retracts flag, never the activity's kind worked out again. The accounts
+// rule joins accounts, because availableSql reads a missing id as available and a purged recipient must count as gone.
+function sendRefused(db: Db, row: DueRow): boolean {
+	if (row.retracts === 1) {
 		return false
 	}
-	if (activity.refused_sender === 1) {
+	if (row.refused_sender === 1) {
 		return true
 	}
 	const host = hostOf(row.inbox_url)
@@ -1063,7 +1047,7 @@ function sendRefused(db: Db, row: DueRow, activity: SentActivity): boolean {
 	return domains.length > 0 && domains.every((domain) => hostRefused(db, domain))
 }
 
-// Deletes a row that may not be sent, and lets its lane go on.
+// Deletes a settled row (delivered, or one that may not be sent), and lets its lane go on.
 function dropRow(db: Db, row: LaneRow, now: number): void {
 	db.run('DELETE FROM deliveries WHERE id = CAST(? AS INTEGER)', row.id)
 	promoteLane(db, row.account_id, row.lane, now)
@@ -1072,24 +1056,22 @@ function dropRow(db: Db, row: LaneRow, now: number): void {
 
 // Expands one step, then leases up to `limit` due lane heads (RES-6: a claim reads and returns a bounded number of
 // rows). An expired lease is due again; one that has used up its attempts is given up instead of claimed; one the
-// send-time check refuses (sendRefused) is dropped. The body a claim returns is as of the claim: the Worker sends the
-// one confirmDelivery returns.
+// send-time check refuses (sendRefused) is dropped. What to send is read by confirmDelivery.
 export const claimDeliveries = writeOperation<{ now: number; leaseToken: string; limit?: number }, Claim>(
 	(db, { now, leaseToken, limit }) => {
 		expandPending(db, now, EXPANSION_STEP)
 		const max = Math.max(1, Math.min(limit ?? CLAIM_LIMIT, CLAIM_LIMIT))
 		const leaseUntil = now + LEASE_MS
 		const due = db.all<DueRow>(
-			`SELECT ${DUE_ROW} FROM deliveries
-			WHERE state IN ('pending', 'leased') AND next_attempt_at <= ? ORDER BY next_attempt_at, id LIMIT ?`,
+			`SELECT ${DUE_ROW} FROM ${DUE_FROM}
+			WHERE d.state IN ('pending', 'leased') AND d.next_attempt_at <= ? ORDER BY d.next_attempt_at, id LIMIT ?`,
 			now,
 			max
 		)
 		const claimed: ClaimedDelivery[] = []
 		for (const row of due) {
-			// Read before the lease, which changes neither the activity nor the sender.
-			const body = sentActivity(db, row)
-			if (body !== undefined && sendRefused(db, row, body)) {
+			// A row whose activity is gone is never refused here; its confirmation drops it.
+			if (row.found === 1 && sendRefused(db, row)) {
 				dropRow(db, row, now)
 				continue
 			}
@@ -1109,9 +1091,7 @@ export const claimDeliveries = writeOperation<{ now: number; leaseToken: string;
 			claimed.push({
 				id: row.id,
 				inbox: row.inbox_url,
-				signer: body?.signed_by === 'instance' ? INSTANCE_SIGNER : row.account_id,
-				activityId: row.activity_id,
-				body: bodyFor(body?.activity ?? '{}', row.addressee, body?.immutable === 1),
+				signer: row.signed_by === 'instance' ? INSTANCE_SIGNER : row.account_id,
 			})
 		}
 		const signers: Record<string, DeliverySigner> = {}
@@ -1155,20 +1135,20 @@ export type Confirmation =
 // rewritten in place while it stages). A change that commits after it does not stop that POST.
 export const confirmDelivery = writeOperation<{ id: string; leaseToken: string; now: number }, Confirmation>(
 	(db, { id, leaseToken, now }) => {
-		const row = db.first<DueRow>(
-			`SELECT ${DUE_ROW} FROM deliveries WHERE id = CAST(? AS INTEGER) AND state = 'leased' AND lease_token = ?`,
+		const row = db.first<DueRow & { activity: string | null; immutable: number | null }>(
+			`SELECT ${DUE_ROW}, json_extract(o.body, '$.activity') AS activity, json_extract(o.body, '$.immutable') AS immutable
+			FROM ${DUE_FROM} WHERE d.id = CAST(? AS INTEGER) AND d.state = 'leased' AND d.lease_token = ?`,
 			id,
 			leaseToken
 		)
 		if (row === undefined) {
 			return { status: 'stale' }
 		}
-		const activity = sentActivity(db, row)
-		if (activity === undefined || sendRefused(db, row, activity)) {
+		if (row.found === 0 || row.activity === null || sendRefused(db, row)) {
 			dropRow(db, row, now)
 			return { status: 'dropped', nextDueAt: nextDueAt(db, now, leaseToken) }
 		}
-		return { status: 'send', body: bodyFor(activity.activity, row.addressee, activity.immutable === 1) }
+		return { status: 'send', body: bodyFor(row.activity, row.addressee, row.immutable === 1) }
 	}
 )
 
@@ -1213,9 +1193,7 @@ export const completeDelivery = writeOperation<
 			row.inbox_url,
 			now
 		)
-		db.run('DELETE FROM deliveries WHERE id = CAST(? AS INTEGER)', row.id)
-		promoteLane(db, row.account_id, row.lane, now)
-		dropSettledActivity(db, row.activity_id)
+		dropRow(db, row, now)
 		return { status: 'delivered', nextDueAt: nextDueAt(db, now, leaseToken) }
 	}
 	const error = outcome.error.slice(0, MAX_ERROR_LENGTH)
