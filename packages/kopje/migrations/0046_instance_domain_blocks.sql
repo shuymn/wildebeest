@@ -17,8 +17,11 @@
 --                                    finds none on an instance without one and skips the per-account rule.
 --
 -- Cost: a new empty table and its indexes; no existing row is read. Measured on the benchmark store of
--- test/bench/migration-cost.ts: see the CHANGELOG entry of this migration (MEASURED below).
--- MEASURED
+-- test/bench/migration-cost.ts (1,000,000 accounts, 3,000,000 follows, 2,000,000 statuses with their mentions and
+-- tags, 2,000,000 favourites, 200,000 boosts, 2,000,000 notifications, 200,000 quotes, 10,000 reports, 500,000
+-- outbound activities, 20 local accounts) in workerd's local Durable Object SQLite: 5,888 ms for the upgrade of this
+-- file through the kernel (6,026 and 6,355 ms in two more runs, at load averages of 6 to 10), within the 10,000 ms
+-- each migration file may take; it is the overhead of an upgrade on a store that size.
 
 CREATE TABLE instance_domain_blocks (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
