@@ -60,12 +60,13 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       a self-quote is accepted.
     - `DELETE /api/v1/statuses/:id` answers with the quoted post of a quote in any state, when the viewer may see it,
       for redrafting.
-    - `GET /api/v1/statuses/:id/quotes` (`read:statuses`, a user token) lists the posts that quote a post the viewer may
-      see, by their accepted quotes, newest first; `limit` 20 by default, at most 40. The quoted author sees every quote
-      they may see, also those of accounts they block or mute, as in Mastodon; anyone else not those. Where Kopje
-      differs from Mastodon: the cursor (`max_id`, `since_id`, `min_id`) is the quoting post's id, not the quote's.
-      Each page reads a window of `limit` quotes and leaves out those the viewer may not list, so a page may be short
-      or empty while its `next` link still leads on, as on Mastodon.
+    - `GET /api/v1/statuses/:id/quotes` (a token with `read:statuses`; an app token is answered as an anonymous viewer,
+      as Mastodon's) lists the posts that quote a post the viewer may see, by their accepted quotes, newest first;
+      `limit` 20 by default, at most 40. The quoted author sees every quote they may see, also those of accounts they
+      block or mute, as in Mastodon; anyone else not those. Where Kopje differs from Mastodon: the cursor (`max_id`,
+      `since_id`, `min_id`) is the quoting post's id, not the quote's. Each page reads a window of `limit` quotes and
+      leaves out those the viewer may not list, so a page may be short or empty while its `next` link still leads on,
+      as on Mastodon.
 
 - The admin API's accounts are served to the admin: the role's `manage_users` is granted with local suspension
   (below), so `GET /api/v1/admin/accounts`, `GET /api/v2/admin/accounts` and `GET /api/v1/admin/accounts/:id`, and
