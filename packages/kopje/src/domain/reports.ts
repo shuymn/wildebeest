@@ -505,6 +505,13 @@ function updateReport(db: Db, row: ReportRow, changes: Partial<ReportRow>, now: 
 	return next
 }
 
+// Logs an admin write to the report `id` (moderation-log.ts) and stamps the report with the log row's id, the
+// report's side of the report fence (resolveSuspensionReports).
+function logReportAction(db: Db, admin: Admin, action: string, id: string, detail: Record<string, unknown>): void {
+	const logged = logAction(db, admin, action, { type: 'Report', id }, detail, admin.now)
+	db.run('UPDATE reports SET last_action_id = ? WHERE id = ?', logged, id)
+}
+
 // POST /api/v1/admin/reports/:id/assign_to_self, unassign, resolve and reopen.
 export const actOnReport = adminWriteOperation<
 	{ id: string; action: ReportAction; present: Present },
@@ -516,7 +523,7 @@ export const actOnReport = adminWriteOperation<
 	}
 	const now = new Date(admin.now).toISOString()
 	const updated = updateReport(db, row, ACTIONS[action].set(admin, now), now)
-	logAction(db, admin, ACTIONS[action].log, { type: 'Report', id: row.id }, {}, admin.now)
+	logReportAction(db, admin, ACTIONS[action].log, row.id, {})
 	return presented(db, updated, admin, present)
 })
 
@@ -561,14 +568,7 @@ export const updateAdminReport = adminWriteOperation<
 		{ category: nextCategory, rule_ids: nextRules === null ? null : JSON.stringify(nextRules) },
 		now
 	)
-	logAction(
-		db,
-		admin,
-		'update',
-		{ type: 'Report', id: row.id },
-		{ category: updated.category, rule_ids: nextRules },
-		admin.now
-	)
+	logReportAction(db, admin, 'update', row.id, { category: updated.category, rule_ids: nextRules })
 	return presented(db, updated, admin, present)
 })
 
@@ -577,24 +577,32 @@ export function reportBound(db: Db): number {
 	return db.first<{ id: number | null }>('SELECT max(id) AS id FROM reports')?.id ?? 0
 }
 
+// The newest moderation log row, which a suspension freezes in its transaction: the action bound of the report fence
+// (resolveSuspensionReports).
+export function actionBound(db: Db): number {
+	return db.first<{ id: number | null }>('SELECT max(id) AS id FROM admin_actions')?.id ?? 0
+}
+
 // A suspension-job round (domain/suspension.ts) resolving the target's reports, as Admin::AccountAction
 // #process_reports! resolves every unresolved one. Read at most `limit` reports after report id `cursor`, through
-// reports_target_state in id order. Resolve only reports frozen at suspension: filed up to `bound`, still unresolved,
-// and last touched before suspension time `since` (updated_at, else created_at), so later reports and ones reopened or
-// changed since, even in the same millisecond, stay untouched. `by` names the suspending admin (null: none). Returns
-// the last report read (null if none) and the resolved count; fewer than `limit` read means the range is done.
+// reports_target_state in id order. Resolve only reports frozen at suspension (the report fence, R37, VIS-29): filed
+// up to `bound`, still unresolved, and last written by an admin at or below the suspension's `actionBound`
+// (last_action_id, the log id of that write; none counts as 0). Log ids are given in commit order, so a report an admin
+// reopened or changed after the suspension stays untouched, whatever either request's clock said. `by` names the
+// suspending admin (null: none). Returns the last report read (null if none) and the resolved count; fewer than
+// `limit` read means the range is done.
 export function resolveSuspensionReports(
 	db: Db,
 	target: string,
 	bound: number,
-	since: string,
+	actionBound: number,
 	by: string | null,
 	cursor: number,
 	limit: number,
 	now: string
 ): { last: number | null; read: number; resolved: number } {
-	const rows = db.all<{ id: number; touched: string }>(
-		`SELECT id, coalesce(updated_at, created_at) AS touched
+	const rows = db.all<{ id: number; action: number }>(
+		`SELECT id, coalesce(last_action_id, 0) AS action
 		FROM reports INDEXED BY reports_target_state
 		WHERE target_account_id = ?1 AND (action_taken_at IS NULL) = 1 AND id > ?2 AND id <= ?3
 		ORDER BY id LIMIT ?4`,
@@ -603,7 +611,7 @@ export function resolveSuspensionReports(
 		bound,
 		limit
 	)
-	const frozen = rows.filter((row) => row.touched < since).map((row) => row.id)
+	const frozen = rows.filter((row) => row.action <= actionBound).map((row) => row.id)
 	if (frozen.length > 0) {
 		db.run(
 			`UPDATE reports SET action_taken_at = ?1, action_taken_by_account_id = ?2, updated_at = ?1
@@ -657,6 +665,6 @@ export function resolveReport(db: Db, id: string, admin: Admin): boolean {
 	}
 	const now = new Date(admin.now).toISOString()
 	updateReport(db, row, ACTIONS.resolve.set(admin, now), now)
-	logAction(db, admin, ACTIONS.resolve.log, { type: 'Report', id: row.id }, {}, admin.now)
+	logReportAction(db, admin, ACTIONS.resolve.log, row.id, {})
 	return true
 }
