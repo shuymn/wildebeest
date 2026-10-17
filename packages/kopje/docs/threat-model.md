@@ -668,7 +668,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   quoted author's `Accept` of our QuoteRequest (a remote one): one compare-and-set on a pending quote, from the quoted
   author only, with a stamp on that author's origin that they neither revoked nor retracted, and that no other local
   quote holds (one local quote per stamp and author, a unique index). A `Reject`, or the author's `Delete` of the stamp,
-  ends it, records the stamp for good and records an `Update` of the quoting status without it; a `Delete` proven by
+  ends it and records an `Update` of the quoting status without it; the revoked quote keeps the stamp, so no other
+  local quote takes it, until the `Delete` records it for good in `quote_revocations`; a `Delete` proven by
   the author's own signature is also forwarded unedited, once, to every inbox that received the quoting status, signed
   by its local author, as a retraction (FEP-044f "Handling a revocation"). No verification round ever decides a local
   quote. Implementation: `recordLocalQuote`, `acceptOurQuote`, `rejectOurQuote` and `revokeStamp` in

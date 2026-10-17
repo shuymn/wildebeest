@@ -1403,19 +1403,21 @@ export function acceptOurQuote(
 }
 
 // Mastodon's Reject of our QuoteRequest (Quote#reject!), one compare-and-set: pending becomes rejected and accepted
-// revoked. Leaving accepted records the stamp in quote_revocations for good (so no later Accept of it applies) and the
-// quoting status's Update without it (design, changes after the design review 1: it supersedes a waiting Update that
-// still carries the stamp); the stamp stays on the row until its proven Delete is forwarded. Returns whether it applied.
+// revoked, with the quoting status's Update without the stamp (design, changes after the design review 1: it
+// supersedes a waiting Update that still carries it). The Reject records nothing in quote_revocations: only the
+// author's Delete of the stamp does, so that Delete still runs the batches of the received quotes naming it. The stamp
+// stays on the revoked row until that Delete's forward, so no other local quote can take it meanwhile (row 9); after
+// the forward, the Delete's own record refuses it (row 8). Returns whether it applied.
 export function rejectOurQuote(db: Db, actor: { id: string; uri: string }, ref: QuoteAnswerRef, now: number): boolean {
 	const quote = answeredQuote(db, actor, ref)
 	if (quote === undefined) {
 		return false
 	}
-	const row = db.first<{ state: QuoteState; approval_uri: string | null }>(
+	const row = db.first<{ state: QuoteState }>(
 		`UPDATE quotes SET state = CASE state WHEN 'accepted' THEN 'revoked' ELSE 'rejected' END, verify_after = NULL,
 			lease_until = NULL, recheck = 0, generation = ${NEW_GENERATION}, updated_at = ?3
 		WHERE status_id = ?1 AND local = 1 AND state IN ('pending', 'accepted') AND quoted_account_id = ?2
-		RETURNING state, approval_uri`,
+		RETURNING state`,
 		quote.status_id,
 		actor.id,
 		iso(now)
@@ -1424,15 +1426,6 @@ export function rejectOurQuote(db: Db, actor: { id: string; uri: string }, ref: 
 		return false
 	}
 	if (row.state === 'revoked') {
-		if (row.approval_uri !== null) {
-			db.run(
-				`INSERT INTO quote_revocations (authorization, actor_uri, revoked_at, pending) VALUES (?, ?, ?, 0)
-				ON CONFLICT DO NOTHING`,
-				row.approval_uri,
-				actor.uri,
-				now
-			)
-		}
 		recordStampUpdate(db, quote.status_id, now)
 	}
 	return true

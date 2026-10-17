@@ -1253,3 +1253,30 @@ describe('bounds of the new reads (RES-7)', () => {
 		expect(await measure(2000)).toBe(await measure(0))
 	})
 })
+
+describe('review fixes', () => {
+	it('a Reject leaves the stamp’s Delete to revoke the received quotes naming it, in batches, and forwards once', async () => {
+		const { t, bob, theirs } = await world()
+		const { mine, stamp } = await acceptedQuote(t, bob, theirs.id)
+		await remoteQuotesNaming(t, bob.uri, theirs.uri, theirs.id, stamp, 300)
+		expect(await t.post(bob, reject(bob, mine.uri))).toBe(202)
+		expect(await sql(t.store, 'SELECT count(*) AS n FROM quote_revocations')).toEqual([{ n: 0 }])
+		expect(await t.post(bob, await signed(bob, stampDelete(bob, stamp)))).toBe(202)
+		expect((await recorded(t, 'Delete')).filter((a) => a.activity.object === stamp)).toHaveLength(1)
+		await jobsUntilDone(t)
+		expect(
+			await sql(t.store, "SELECT state, count(*) AS n FROM quotes WHERE status_id GLOB '7*' GROUP BY state")
+		).toEqual([{ state: 'rejected', n: 300 }])
+		expect(await sql(t.store, 'SELECT pending FROM quote_revocations')).toEqual([{ pending: 0 }])
+	})
+
+	it('after a Reject with no Delete, the stamp still accepts no other local quote', async () => {
+		const { t, bob, theirs } = await world()
+		const { mine, stamp } = await acceptedQuote(t, bob, theirs.id)
+		expect(await t.post(bob, reject(bob, mine.uri))).toBe(202)
+		const second = await quotePost(t, theirs.id)
+		expect(await t.post(bob, accept(bob, second.uri, stamp))).toBe(202)
+		expect(await quoteRow(t, second.uri)).toMatchObject({ state: 'pending', approval_uri: null })
+		expect(await quoteRow(t, mine.uri)).toMatchObject({ state: 'revoked', approval_uri: stamp })
+	})
+})
