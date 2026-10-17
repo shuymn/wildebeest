@@ -16,9 +16,9 @@ import type { Db } from '../db/sql'
 
 // The instance suspension of remote accounts (R38, VIS-30), migration 0045_remote_suspension: of one account
 // (Mastodon's Admin::AccountAction with type suspend and SuspendAccountService#reject_remote_follows!,
-// UnsuspendAccountService for the unsuspension), and of the accounts an instance domain block covers (BlockDomainService
-// with DeleteAccountService's severing; the blocks are instance-domain-blocks.ts's). The OAuth admin suspends and
-// unsuspends an account through the Mastodon admin API (admin-accounts.ts).
+// UnsuspendAccountService for the unsuspension), and of the accounts an instance domain block covers
+// (BlockDomainService with DeleteAccountService's severing; the blocks are instance-domain-blocks.ts's). The OAuth
+// admin suspends and unsuspends an account through the Mastodon admin API (admin-accounts.ts).
 //
 // Each decision commits in one bounded transaction that resets its job's row: the reset is the job's generation, and
 // each round first requires the condition the job's kind and mode name, read live, so a later decision ends or
@@ -36,9 +36,9 @@ import type { Db } from '../db/sql'
 //     account. Suspending the account again sets mode 'account' back, which keeps local follows of it.
 //
 // The domain job (kind 'domain', one row in all, subject ''): every transition of a block into or out of suspend for
-// some host resets it, with a fresh follow bound (instance-domain-blocks.ts resetDomainJob). It reconciles the domain marks
-// (suspension_source 'domain', which only the admin's lists read: availability reads coverage live) with the blocks as
-// they stand, in two walks:
+// some host resets it, with a fresh follow bound (instance-domain-blocks.ts resetDomainJob). It reconciles the domain
+// marks (suspension_source 'domain', which only the admin's lists read: availability reads coverage live) with the
+// blocks as they stand, in two walks:
 //   - clear: the suspended accounts by id (accounts_suspended, which holds every mark, whatever the account's domain is
 //     now), CLEAR_ROUND a round; a mark no block covers any more is cleared.
 //   - mark (only while a suspend block exists): every account by id, MARK_WINDOW a round (the predicate per remote
@@ -49,13 +49,13 @@ import type { Db } from '../db/sql'
 // finds every covered account; marks and severing then agree with the blocks whatever the order of transitions and
 // rounds. A permitted refresh of a marked account clears its stale mark (upsertRemoteActor).
 //
-// Severing an account (sever): out, its follows of local accounts (follows_pair, by target), then in, local accounts'
-// follows of it (follows_target, by state and id), each up to the follow bound. A remote follower's accepted follow ends
-// with a withdrawing Reject to its current inbox alone (its shared inbox when known, else its personal one), as
-// Mastodon sends it; its request is deleted without one; a local follower's follow or request ends with its Undo
-// (blocks.ts severFollow). Row existence decides, so an Undo, a purge, a user's domain block cleanup or another job that
-// removed the follow first sends nothing more. Every round reads at most SEVER_ROUND follows and writes at most
-// MODERATION_ROUND_ROWS rows (suspension.ts, counted with total_changes). Ending a follow has two parts:
+// Severing an account (sever): out, its follows of local accounts (follows_pair, by target), then in, local
+// accounts' follows of it (follows_target, by state and id), each up to the follow bound. A remote follower's accepted
+// follow ends with a withdrawing Reject to its current inbox alone (its shared inbox when known, else its personal
+// one), as Mastodon sends it; its request is deleted without one; a local follower's follow or request ends with its
+// Undo (blocks.ts severFollow). Row existence decides, so an Undo, a purge, a user's domain block cleanup or another
+// job that removed the follow first sends nothing more. Every round reads at most SEVER_ROUND follows and writes at
+// most MODERATION_ROUND_ROWS rows (suspension.ts, counted with total_changes). Ending a follow has two parts:
 //   - preparatory steps (prepared), each bounded by the round's room above SEVER_ROWS: every write of variable size
 //     that ending the follow would cascade to. These are its follow notification's push deliveries (the notification's
 //     delete cascades to them) and, for an activity that names the follow by id (the Reject of an accepted follow, the
@@ -88,7 +88,8 @@ export const SEVER_ROWS = 40 + SEVER_LIST_ROWS + 3 * EXPANSION_STEP
 // Suspended accounts a clearing round reads at most: each clear is one row, so a round writes CLEAR_ROUND + 1.
 export const CLEAR_ROUND = 500
 // Accounts a marking round walks at most, by id (the predicate is evaluated for each remote one among them), and
-// covered accounts it reconciles at most. MARK_WINDOW is set by measurement on the benchmark store: docs/operations.md.
+// covered accounts it reconciles at most. MARK_WINDOW is set by measurement on the benchmark store (docs/visibility.md,
+// "Instance domain blocks").
 export const MARK_WINDOW = 2_000
 export const MARK_ACCOUNTS = 100
 

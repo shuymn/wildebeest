@@ -470,6 +470,13 @@ it. Local accounts' follows of it are kept; their `Follow` and any other content
 (VIS-30). Each round writes at most `MODERATION_ROUND_ROWS` rows: a follow notification's push deliveries are deleted
 in bounded steps before the follow ends.
 
+Unsuspending an account that a `suspend` block still covers answers 200 and converts the suspension (decision 4): the
+account keeps `suspended_at` with `suspension_source = 'domain'`, so it stays unavailable and the entity shows
+`suspended: true`, and the same transaction resets its job to mode `domain` with a fresh follow bound. In that mode
+each round requires the domain mark and live coverage, and the job severs both ways, as the domain job severs a
+covered account (below). Suspending it again sets mode `account` back, which keeps local follows of it; a stale mode
+ends the job at its next round. An account held only by a domain mark answers 403: lowering the block lifts it.
+
 Inbound, the gate runs in every round after the deleted-actor check and before the actor upsert: a verified document
 of an individually suspended actor updates only its inbox and shared inbox, so the job's `Reject` reaches a current
 inbox; then only its `Delete`, `DeleteActor`, `Undo` and `Reject` apply, with its stored row, which only remove state
@@ -548,8 +555,36 @@ severity `suspend` or `noop`.
   instance has no `suspend` block the rule costs one constant seek per predicate a statement emits, and its `CASE`
   skips the walk in a result column too; otherwise it reads the account's row by its key and walks each key. Account
   presentation reads the same rule with the row (`availableJoinedSql`).
-- **Follows.** A block severs no follow: the follows of a covered account stay, and only what is sent to it is
-  dropped (below).
+- **The domain job and its marks.** Every create, update or delete that changes whether the hosts a block's domain
+  rules are covered (their longest matching block's severity, into or out of `suspend`) resets one job row
+  (`remote_moderation_jobs`, kind `domain`) in its transaction, with a fresh follow bound (the newest follow). Its
+  rounds reconcile the domain marks (`suspension_source = 'domain'`) with the blocks as they stand. Marks serve the
+  admin's lists only; availability never reads them. Two walks:
+    - **clear:** the suspended accounts by id (`accounts_suspended`, which holds every mark whatever the account's
+      domain is now); a mark no block covers any more is cleared. A permitted refresh of a marked account
+      (`upsertRemoteActor`, which stores only an uncovered account) clears its stale mark in its own transaction.
+    - **mark** (only while a `suspend` block exists): every account by id, `MARK_WINDOW` (2,000) a round, the predicate
+      evaluated for each remote one. A covered account that is not individually suspended is marked if it is not yet,
+      and severed both ways up to the bound, marked or not: its follows of local accounts (an accepted one with a
+      withdrawing `Reject`, a request deleted without one) and local accounts' follows and requests of it (each with
+      its `Undo`), through `severFollow` with the account job's bounded preparation. An individually suspended account
+      is skipped, so its local follows are kept (`account` wins).
+
+    No account is stored or moves into a covered domain, so the last walk after the last reset finds every covered
+    account, and whatever the order of transitions and rounds, marks and severing agree with the blocks once the job
+    ends. Severing is never reversed, as in Mastodon. Every round reads at most `MARK_WINDOW` accounts or `CLEAR_ROUND`
+    (500) suspended accounts, and `SEVER_ROUND` follows, and writes at most `MODERATION_ROUND_ROWS`.
+
+- **The admin's lists.** `status=active` walks `accounts_active` and `status=suspended` `accounts_suspended`, which
+  hold or leave out marked accounts; while the domain job exists both answer 503 with `Retry-After: 30` and the error
+  "moderation in progress, try again", never a short or empty page. Searches, which filter by the live rule, are not
+  affected.
+- **For operators: how long marking takes.** On the benchmark store (1,000,000 accounts over 1,000 domains, in
+  workerd's local SQLite), a round walking 2,000 accounts took 7 to 9 ms (at most 36 ms at the 99th percentile), so a
+  walk of the whole store is about 500 rounds and 3 to 6 s of Store time; each Queue message runs 4 rounds, so the
+  walk is about 125 messages back to back, and the lists answer 503 that long. A block covering many accounts marks
+  about 100 a round (8 ms each): about 10,000 rounds, 80 s of Store time and 2,500 messages per million accounts it
+  covers. The cron resumes the rounds if a message is lost.
 - **Deliveries.** The send-time check below refuses a covered inbox host, and a row all of whose listed hosts are
   covered; retractions still go.
 - **Fetches (advisory).** The Worker asks the Store before each request, a redirect's included (`fetchRefused`), and
