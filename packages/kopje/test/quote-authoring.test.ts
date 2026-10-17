@@ -1207,7 +1207,9 @@ describe('Concurrency (PR 3)', () => {
 		})
 		expect(new Set(seen).size).toBe(seen.length)
 		expect(
-			seen.filter((s) => new URL(s.split(' ')[0]).origin === 'https://fans.example' && s.includes(`${stamp}#delete`))
+			seen.filter(
+				(s) => new URL(s.slice(0, s.indexOf(' '))).origin === 'https://fans.example' && s.includes(`${stamp}#delete`)
+			)
 		).toHaveLength(1)
 		expect(await t.store.claimQuotes(BUILD, { now: NOW + 1, limit: 10 })).toMatchObject({ ids: [] })
 		expect(await quoteRow(t, mine.uri)).toMatchObject({ state: 'revoked', approval_uri: null })
