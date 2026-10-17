@@ -5,11 +5,11 @@
 	"author": "Sven Sauleau <sven@cloudflare.com>",
 	"devDependencies": {
 		"@cloudflare/pages-plugin-cloudflare-access": "1.0.5",
-		"lefthook": "2.2.1",
+		"lefthook": "2.2.2",
 		"npm-run-all2": "9.0.3",
 		"prettier": "3.9.10",
 		"sql-formatter": "15.9.0",
-		"wrangler": "4.149.0"
+		"wrangler": "4.151.0"
 	},
 	"private": true,
 	"scripts": {

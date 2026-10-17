@@ -34,7 +34,7 @@
 		"vite": "6.4.4",
 		"vite-tsconfig-paths": "6.1.1",
 		"vitest": "4.1.11",
-		"wrangler": "4.149.0"
+		"wrangler": "4.151.0"
 	},
 	"dependencies": {
 		"cookie": "1.1.1",
