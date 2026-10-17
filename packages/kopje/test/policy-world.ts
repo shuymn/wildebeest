@@ -13,8 +13,9 @@ import type { RepliesPolicy } from '../src/domain/lists'
 // accepted), blocks both ways, mutes with and without an expiry and with and without notifications, and domain blocks
 // in their stored form; and local accounts' lists, exclusive or not, with each replies_policy, whose members are their
 // owner and accounts it follows, accepted or pending (whatever else the owner blocks, mutes or domain-blocks); and the
-// local accounts that follow the hashtag tagged statuses carry. Accounts, statuses and lists are referred to by index;
-// writeWorld gives them fixed ids.
+// local accounts that follow the hashtag tagged statuses carry; and quotes (R35) in every stored state, legacy or not,
+// self-quotes among them, of statuses of every visibility, and quotes whose quoted status is gone. Accounts, statuses
+// and lists are referred to by index; writeWorld gives them fixed ids.
 
 declare module 'vitest' {
 	interface ProvidedContext {
@@ -98,6 +99,18 @@ function actorHost(form: (typeof HOSTS)[number], domain: string): string {
 	}
 }
 
+// The stored states of a quote (migration 0033_quotes).
+export const QUOTE_STATES = ['pending', 'accepted', 'rejected', 'revoked', 'deleted'] as const
+
+// A quote by the status `status` of the status `quoted` (an original, never itself; null: the quoted status is gone,
+// as a detach leaves it, never accepted). legacy: the Note had no `quote` property.
+export type WorldQuote = {
+	status: number
+	quoted: number | null
+	state: (typeof QUOTE_STATES)[number]
+	legacy: boolean
+}
+
 // A list of a local account. Its members are the owner or accounts the owner follows (in either state): a Store holds
 // no other (migration 0007_list_members, the converter), so the world has none.
 export type WorldList = {
@@ -122,6 +135,8 @@ export type World = {
 	conversationMutes: { account: number; thread: string }[]
 	// Local accounts that follow the hashtag the world's tagged statuses carry.
 	tagFollowers: number[]
+	// Quotes, at most one by each status (an original).
+	quotes: WorldQuote[]
 	now: string
 }
 
@@ -234,6 +249,19 @@ export const worldArb: fc.Arbitrary<World> = fc
 		// Last, as above: pins (each a choice among the author's pinnable statuses) and conversation mutes.
 		pins: fc.array(fc.record({ account: fc.nat(), status: fc.nat() }), { maxLength: 4 }),
 		conversationMutes: fc.array(fc.record({ account: fc.nat(), status: fc.nat() }), { maxLength: 4 }),
+		// Last, as above: quotes, each by an original of another (or, with `self`, the author's own) original or of a
+		// status that is gone.
+		quotes: fc.array(
+			fc.record({
+				status: fc.nat(),
+				quoted: fc.nat(),
+				gone: fc.boolean(),
+				self: fc.boolean(),
+				state: fc.constantFrom(...QUOTE_STATES),
+				legacy: fc.boolean(),
+			}),
+			{ maxLength: 8 }
+		),
 	})
 	.map((raw): World => {
 		const accounts: WorldAccount[] = []
@@ -374,6 +402,24 @@ export const worldArb: fc.Arbitrary<World> = fc
 			tagFollowers: Array.from({ length: LOCALS }, (_, x) => x).filter(
 				(x) => raw.follows[x]?.showReblogs === true && raw.follows[x]?.notify === true
 			),
+			quotes: unique(
+				raw.quotes.flatMap((q): WorldQuote[] => {
+					const originals = statuses.flatMap((status, s) => (status.reblogOf === null ? [s] : []))
+					const status = originals[q.status % Math.max(originals.length, 1)]
+					if (status === undefined) {
+						return []
+					}
+					const author = statuses[status]?.author
+					const own = originals.filter((s) => s !== status && statuses[s]?.author === author)
+					const others = originals.filter((s) => s !== status)
+					const candidates = q.self && own.length > 0 ? own : others
+					const quoted = q.gone ? null : (candidates[q.quoted % Math.max(candidates.length, 1)] ?? null)
+					// An accepted quote has its quoted status (the schema's CHECK); a detach makes it deleted.
+					const state = quoted === null && q.state === 'accepted' ? 'deleted' : q.state
+					return [{ status, quoted, state, legacy: q.legacy }]
+				}),
+				(q) => String(q.status)
+			),
 			now: raw.now,
 		}
 	})
@@ -392,6 +438,7 @@ const WORLD_TABLES = [
 	'bookmarks',
 	'status_tags',
 	'status_mentions',
+	'quotes',
 	'statuses',
 	'follows',
 	'blocks',
@@ -531,5 +578,19 @@ export function writeWorld(sql: SqlStorage, world: World): void {
 	})
 	for (const m of world.conversationMutes) {
 		sql.exec('INSERT INTO conversation_mutes (account_id, thread) VALUES (?, ?)', accountId(m.account), m.thread)
+	}
+	for (const q of world.quotes) {
+		const quoted = q.quoted === null ? undefined : world.statuses[q.quoted]
+		sql.exec(
+			`INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, quoted_account_id, state, legacy, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			statusId(q.status),
+			q.quoted === null ? unknownParentUri(q.status) : statusUri(q.quoted),
+			q.quoted === null ? null : statusId(q.quoted),
+			quoted === undefined ? null : accountId(quoted.author),
+			q.state,
+			q.legacy ? 1 : 0,
+			TIMES[0]
+		)
 	}
 }

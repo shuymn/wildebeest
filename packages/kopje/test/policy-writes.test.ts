@@ -204,6 +204,7 @@ function witness(
 			pins: [],
 			conversationMutes: [],
 			tagFollowers: [],
+			quotes: [],
 			now: '2026-10-12T00:00:00.000Z',
 		},
 		shared: [false],
@@ -561,6 +562,8 @@ function readWorld(sql: SqlStorage, base: World): Snapshot {
 			pins: [],
 			conversationMutes: [],
 			tagFollowers: base.tagFollowers,
+			// No rule the snapshot is checked against reads a quote.
+			quotes: [],
 			now: base.now,
 		},
 	}
