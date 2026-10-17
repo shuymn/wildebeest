@@ -40,9 +40,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       runs; up to 7.6 on a loaded one). An instance with millions of notifications should expect a pause of several
       seconds on the first request after the deploy.
     - `0042_report_action_fence`: records which admin action last changed each report, and which one a running
-      suspension stops at, carried over from the moderation log. It reads the moderation log (at most its newest
-      10,000 entries) and no other table grows its cost: on the same benchmark store its upgrade took 3.0 seconds
-      (3.1 in a second run).
+      suspension stops at, carried over from the moderation log. A suspension whose log entry has already been pruned
+      leaves its reports for the admin to resolve. It reads the moderation log (at most its newest 10,000 entries) and
+      each suspended account's current job, and no other table grows its cost: on the same benchmark store its upgrade
+      took 3.1 seconds (3.1 in two more runs; one run on a loaded machine took 6.1).
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.13] - 2026-10-17
