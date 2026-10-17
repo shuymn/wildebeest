@@ -4,12 +4,13 @@
 -- user choose the policy their new posts get (UserSettings default_quote_policy). Kopje stores both
 -- (src/domain/audience.ts R36, src/domain/statuses.ts):
 --
---   statuses.quote_policy                Mastodon's bit flags, automatic approval in the high 16 bits and manual approval
---                                        in the low ones, each of unsupported_policy (1), public (2), followers (4) and
---                                        following (8). A local status gets it when it is posted (public, followers or
---                                        nobody; 0 for a private or direct one) and keeps it until its author changes it.
---                                        Every stored status keeps 0, nobody: a post written before quote policies
---                                        existed stays unquotable, as Mastodon's existing statuses did.
+--   statuses.quote_policy                Mastodon's bit flags, automatic approval in the high 16 bits and manual
+--                                        approval in the low ones, each of unsupported_policy (1), public (2),
+--                                        followers (4) and following (8). A local status gets it when it is posted
+--                                        (public, followers or nobody; 0 for a private or direct one) and keeps it
+--                                        until its author changes it. Every stored status keeps 0, nobody: a post
+--                                        written before quote policies existed stays unquotable, as Mastodon's
+--                                        existing statuses did.
 --   local_accounts.default_quote_policy  the policy a local account's new posts get when the post names none: public,
 --                                        followers or nobody; public by default, as Mastodon's.
 --

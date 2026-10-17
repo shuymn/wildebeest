@@ -14,8 +14,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   carries `quote` and `quotes_count` (its accepted quotes). Phanpy, Elk, Ice Cubes and the official iOS and Android
   apps embed a quoted post (they render `quote` whatever the server's API version); Phanpy also still shows the `RE:`
   line, which it hides only from API version 7. None of them offers a quote button yet: Kopje still declares API
-  version 6, and `quote_approval` tells every viewer they may not quote (below). Tusky shows the `RE:` line as before. Remote posts keep their
-  `quote-inline` class, so clients can hide that line.
+  version 6, and `quote_approval` tells every viewer they may not quote (below). Tusky shows the `RE:` line as before.
+  Remote posts keep their `quote-inline` class, so clients can hide that line.
     - `quote` is `{state, quoted_status}`: the quoted post, presented for the same viewer (its own favourite and other
       flags, filters, media and poll), whose own `quote` is `{state, quoted_status_id}`, one level deep. A boost carries
       its original's quote in `reblog`. `state` is one of Mastodon's nine: `pending`, `rejected`, `revoked` and
