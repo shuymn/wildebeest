@@ -59,7 +59,7 @@ const MAX_FIELDS = Array.from({ length: 16 }, () => ({
 // A remote account with every profile column at its bound; `light`: only what a mention reads is at its bound.
 async function maximalAccount(t: Setup, light = false): Promise<string> {
 	const id = nextId()
-	const username = `${C.repeat(USERNAME_LIMIT - 18)}${id}`
+	const username = `${'u'.repeat(USERNAME_LIMIT - 18)}${id}`
 	await sql(
 		t.store,
 		`INSERT INTO accounts (id, uri, username, domain, display_name, note, url, avatar_url, header_url, raw)
@@ -335,6 +335,8 @@ describe('a stored status is read within its bounds (RES-2)', () => {
 			atLimit('https://remote.example/users/u/', ACTOR_URI_LIMIT + 1),
 			mentions[0]!
 		)
+		// A converted username outside Mastodon's remote format, of characters that escape to six bytes.
+		await sql(t.store, 'UPDATE accounts SET username = ? WHERE id = ?', C.repeat(300), mentions[1]!)
 		const id = await storedStatus(t, author, {
 			content: C.repeat(Math.floor(STATUS_CONTENT_BYTES / 6) + 1),
 			spoiler: C.repeat(SPOILER_BYTES),
@@ -379,6 +381,9 @@ describe('a stored status is read within its bounds (RES-2)', () => {
 			acct: `u${'v'.repeat(USERNAME_LIMIT - 1)}@${HOST}`,
 			url: `${ORIGIN}/@u${'v'.repeat(USERNAME_LIMIT - 1)}@${HOST}`,
 		})
+		const odd = status.mentions.find((m) => m.id === mentions[1])!
+		expect(odd.username).toBe(C.repeat(Math.floor(USERNAME_LIMIT / 6)))
+		expect(jsonStringBytes(odd.username as string)).toBeLessThanOrEqual(USERNAME_LIMIT + 2)
 		expect(status.tags.map((tag) => tag.name)).toEqual(
 			Array.from({ length: MAX_STATUS_TAGS }, (_, i) => `t${String(i).padStart(3, '0')}`)
 		)
@@ -557,10 +562,10 @@ describe('the table of maxima (RES-3)', () => {
 		const quoting = shape(await read(t, getStatus as never, quote))
 		// docs/threat-model.md "Maxima of presented units" states these; the composite shapes are derived from them.
 		expect({ status, quoting, boosted, account: { sqlite: one.profileBytes, json: jsonBytes(account) } }).toEqual({
-			status: { sqlite: 2_179_603, json: 2_954_797, rows: 311, nodes: 1_607 },
-			quoting: { sqlite: 4_359_149, json: 5_909_627, rows: 620, nodes: 3_216 },
-			boosted: { sqlite: 4_465_596, json: 6_042_485, rows: 623, nodes: 3_269 },
-			account: { sqlite: 97_844, json: 124_080 },
+			status: { sqlite: 2_179_603, json: 2_478_427, rows: 311, nodes: 1_607 },
+			quoting: { sqlite: 4_359_149, json: 4_956_887, rows: 620, nodes: 3_216 },
+			boosted: { sqlite: 4_465_596, json: 5_087_375, rows: 623, nodes: 3_269 },
+			account: { sqlite: 97_844, json: 121_710 },
 		})
 	})
 })

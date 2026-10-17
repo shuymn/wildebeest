@@ -42,6 +42,10 @@ const ID18 = /^[0-9]{18}$/
 // src/domain/status-bounds.ts): a longer one is refused (test-node/cutover-safety.test.ts checks they agree).
 export const ACTOR_URI_LIMIT = 2048
 export const STATUS_URI_LIMIT = 4096
+// A remote username as the Worker stores one (src/federation/remote-actor.ts USERNAME and USERNAME_LIMIT): Mastodon's
+// remote format (Account::USERNAME_ONLY_RE), ASCII, at most 255 characters.
+export const REMOTE_USERNAME = /^[a-z0-9_]+([a-z0-9_.-]+[a-z0-9_]+)?$/i
+export const USERNAME_LIMIT = 255
 
 // Tables 0030-0033 created that the legacy code never wrote; rows there would be lost, so they stop the conversion.
 export const UNUSED_LEGACY_TABLES = [
@@ -578,6 +582,11 @@ export function convertLegacy(
 			}
 			if (username === '') {
 				username = uri.replace(/\/+$/, '').slice(uri.replace(/\/+$/, '').lastIndexOf('/') + 1)
+			}
+			// A username is an identity too: one the Worker would refuse is refused, never rewritten.
+			if (username.length > USERNAME_LIMIT || !REMOTE_USERNAME.test(username)) {
+				count(problems, 'remote-actor-username-invalid')
+				continue
 			}
 		}
 		const displayName = carried(properties.name)

@@ -11,7 +11,9 @@ import { sanitizeRemoteBio } from '../security/html'
 // Remote actors as Kopje stores them: fetched through the safe loader (NET-1, ID-8), parsed by Fedify's lookupObject,
 // which checks the parsed id against the document's origin (ID-2), and reduced to bounded, safe columns.
 
-// Mastodon's remote username rule (Account::USERNAME_RE), with a length bound (RES-1).
+// Mastodon's remote username rule (Account::USERNAME_ONLY_RE, app/models/account.rb lines 75, 78 and 115 at v4.5.0;
+// the same language as USERNAME_RE there), ASCII, with a length bound Mastodon does not set for remote accounts (RES-1).
+// The cutover refuses any other (cli/lib/cutover/convert.js REMOTE_USERNAME).
 const USERNAME = /^[a-z0-9_]+([a-z0-9_.-]+[a-z0-9_]+)?$/i
 // Raw caps (RES-1): the display name is plain text and is cut (DISPLAY_NAME_LIMIT), as Mastodon cuts what it
 // receives.

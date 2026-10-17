@@ -7,7 +7,7 @@ import { promisify } from 'node:util'
 import { describe, expect, it } from 'vitest'
 
 import { convert, exportOf, opened, verify, workspace } from './cutover-helpers.js'
-import { ACTOR_URI_LIMIT, STATUS_URI_LIMIT } from '../cli/lib/cutover/convert.js'
+import { ACTOR_URI_LIMIT, REMOTE_USERNAME, STATUS_URI_LIMIT } from '../cli/lib/cutover/convert.js'
 import {
 	cutJsonString,
 	jsonStringBytes,
@@ -347,6 +347,18 @@ describe('HTML is never cut silently', () => {
 		expect(refused.ok).toBe(false)
 		expect(refused.report).toMatchObject({ truncation: { overLimit: 2, accepted: false } })
 		expect((await verify(exportPath, accepted.dumpPath, { acceptTruncation: true })).ok).toBe(true)
+	})
+
+	it('refuses a remote username the Worker would refuse, whatever truncation accepts', async () => {
+		const source = await readFile(fileURLToPath(new URL('../src/federation/remote-actor.ts', import.meta.url)), 'utf8')
+		expect(source).toContain(`const USERNAME = ${REMOTE_USERNAME}\n`)
+		const exportPath = await exportOf(space.dir, { level: 39 })
+		expect(await replacedIn(exportPath, '"preferredUsername":"r3"', '"preferredUsername":"r\\u00e9"')).toBe(1)
+		const stopped = await convert(space.dir, exportPath, { acceptTruncation: true })
+		expect(stopped.ok).toBe(false)
+		expect((stopped.manifest.conversion as { problems: Record<string, number> }).problems).toEqual({
+			'remote-actor-username-invalid': 1,
+		})
 	})
 
 	it('refuses an actor id over the bound the Worker stores, whatever truncation accepts', async () => {

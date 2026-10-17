@@ -29,10 +29,15 @@ export function jsonBoundSql(column: string, bytes: number, over: string): strin
 	WHEN length(CAST(json_quote(${column}) AS BLOB)) > ${bytes} THEN ${over} ELSE ${column} END`
 }
 
-// A stored username as every read that presents one, or derives an acct or URL from it, takes it: cut at
-// USERNAME_LIMIT (a converted row may keep legacy's, of any length). Lookups compare the whole stored username.
+// A stored username as every read that presents one, or derives an acct or URL from it, takes it. One the Worker
+// stores is ASCII of Mastodon's remote format (federation/remote-actor.ts), so its JSON is its length: cut at
+// USERNAME_LIMIT. A row stored otherwise (converted before the cutover refused such usernames) holding any other
+// character is cut at NONCONFORMING_USERNAME_LIMIT code points, which escape to at most USERNAME_LIMIT bytes. Lookups
+// compare the whole stored username.
+const NONCONFORMING_USERNAME_LIMIT = Math.floor(USERNAME_LIMIT / 6)
 export function usernameSql(column: string): string {
-	return cutSql(column, USERNAME_LIMIT)
+	return `CASE WHEN ${column} GLOB '*[^A-Za-z0-9_.-]*' THEN substr(${column}, 1, ${NONCONFORMING_USERNAME_LIMIT})
+	ELSE ${cutSql(column, USERNAME_LIMIT)} END`
 }
 
 // A stored display name, cut at DISPLAY_NAME_LIMIT code points.
