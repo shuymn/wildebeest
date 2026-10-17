@@ -547,7 +547,6 @@ type OwnStatus = {
 	sensitive: number
 	language: string | null
 	published_at: string
-	quote_policy: number
 }
 
 function ownStatus(db: Db, accountId: string, id: string): OwnStatus | null {
@@ -558,7 +557,7 @@ function ownStatus(db: Db, accountId: string, id: string): OwnStatus | null {
 	return (
 		db.first<OwnStatus>(
 			`SELECT id, account_id, reblog_of_id, in_reply_to_id, visibility, content, source_text, spoiler_text, sensitive,
-				language, published_at, quote_policy
+				language, published_at
 			FROM statuses WHERE id = ? AND account_id = ?`,
 			resolved,
 			accountId
@@ -651,13 +650,11 @@ export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db
 	const status = (): Acted<Status> => {
 		return viewed(presentOwn(db, accountId, current.id, options))
 	}
-	const storePolicy = () => {
-		if (input.quotePolicy !== undefined) {
-			setQuotePolicy(db, current.id, storedQuotePolicy(input.quotePolicy, current.visibility))
-		}
-	}
+	const policy = input.quotePolicy === undefined ? null : storedQuotePolicy(input.quotePolicy, current.visibility)
 	if (unchanged) {
-		storePolicy()
+		if (policy !== null) {
+			setQuotePolicy(db, current.id, policy)
+		}
 		return status()
 	}
 	const versions =
@@ -665,7 +662,6 @@ export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db
 	if (versions + (versions === 0 ? 2 : 1) > MAX_STATUS_EDITS) {
 		return { status: 'invalid', error: 'Validation failed: This status has been edited too many times' }
 	}
-	storePolicy()
 	const author = localAuthor(db, accountId)
 	const composed = compose(db, input.text, author, input.present.origin)
 	const editedAt = iso(input.now)
@@ -675,7 +671,7 @@ export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db
 	editPoll(db, current.id, input.poll ?? null, input.now)
 	db.run(
 		`UPDATE statuses SET content = ?, source_text = ?, spoiler_text = ?, sensitive = ?, language = ?, edited_at = ?,
-			search_text = ?
+			search_text = ?, quote_policy = COALESCE(?, quote_policy)
 		WHERE id = ?`,
 		composed.content,
 		composed.source,
@@ -684,6 +680,7 @@ export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db
 		language,
 		editedAt,
 		searchText(composed.source, input.spoilerText),
+		policy,
 		current.id
 	)
 	const previous = db
@@ -748,20 +745,16 @@ function setQuotePolicy(db: Db, id: string, policy: number): void {
 export type InteractionPolicyInput = {
 	id: string
 	quotePolicy?: QuotePolicyName | 'invalid'
-	now: number
 	present: Present
 }
 
 // PUT and PATCH /api/v1/statuses/:id/interaction_policy (Statuses::InteractionPoliciesController#update): the status
 // must be one the viewer may see by itself (R3, else not found) and their own (else forbidden), then the policy must be
 // one of the three (else "Record invalid"). The policy sent, or the author's default_quote_policy when none is, is
-// stored as on posting (nobody for a status that is not public or
-// unlisted). A boost has no policy of its own (its original's is shown): it is answered unchanged.
-//
-// Mastodon sends a changed policy to other servers as an Update of the status (no history entry, edited_at
-// unchanged). Kopje's Notes still say that only the author may quote (activities.ts, interactionPolicy.canQuote), and
-// will carry the policy only once Kopje answers quote requests, so for now a change is stored and nothing is sent;
-// the Update comes with the Notes that carry the policy.
+// stored as on posting (storedQuotePolicy). A boost has no policy of its own (its original's is shown): it is answered
+// unchanged. A change writes no history entry and leaves edited_at, and sends no Update: Notes advertise author-only
+// quoting (activities.ts interactionPolicy.canQuote) until Kopje answers quote requests, so an Update would carry no
+// change (R36, docs/visibility.md).
 export const updateInteractionPolicy = userWriteOperation<InteractionPolicyInput, Acted<Status>>(
 	(db, input, { accountId }, viewer) => {
 		const visible = viewable(db, accountId, input.id)
@@ -785,7 +778,7 @@ export const updateInteractionPolicy = userWriteOperation<InteractionPolicyInput
 			const name = input.quotePolicy ?? localAuthor(db, accountId).default_quote_policy
 			setQuotePolicy(db, visible, storedQuotePolicy(name, row.visibility))
 		}
-		return presented(db, visible, viewer, input.present)
+		return viewed(presentStatus(db, visible, { ...input.present, viewer }))
 	}
 )
 

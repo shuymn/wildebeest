@@ -293,7 +293,6 @@ export const updateInteractionPolicy: ApiHandler = async (c, deps) => {
 			credential,
 			id: statusId(c),
 			quotePolicy: quotePolicy === null ? 'invalid' : quotePolicy,
-			now: deps.now(),
 			present: present(c),
 		})
 	)
