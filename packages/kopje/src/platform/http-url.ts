@@ -34,3 +34,11 @@ export function publicShapeRefusal(url: URL): string | null {
 	}
 	return null
 }
+
+// The serialized form of an http(s) URL when it is at most `limit` characters (a serialized URL is ASCII, so its
+// length is its size in bytes), else null: a presented URL stays within its bound however it was derived or
+// normalized (RES-2).
+export function boundedHref(value: string | null, limit: number): string | null {
+	const href = httpUrl(value)?.href ?? null
+	return href !== null && href.length <= limit ? href : null
+}

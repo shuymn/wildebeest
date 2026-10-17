@@ -33,6 +33,7 @@ import {
 	MAX_PRESENTED_TAGS,
 	mediaDescriptionSql,
 	mediaMetaSql,
+	MEDIA_URL_LIMIT,
 	mediaUrlSql,
 	sourceTextSql,
 	spoilerSql,
@@ -41,7 +42,7 @@ import {
 	tagNameSql,
 } from './status-bounds'
 import type { Db } from '../db/sql'
-import { httpUrl } from '../platform/http-url'
+import { boundedHref } from '../platform/http-url'
 import { remotePlainText } from '../security/html'
 
 // The Status entity as Mastodon 4.0.2's REST::StatusSerializer shows it. One presenter for every read path: it takes
@@ -506,7 +507,8 @@ function statusUrl(row: StatusRow): string {
 // MediaAttachment as REST::MediaAttachmentSerializer shows it. URLs are emitted only when they are http(s) (HTML-3);
 // meta carries the stored dimensions (Mastodon's original and small) and the focal point.
 export function presentMedia(row: MediaRow): MediaAttachment {
-	const url = httpUrl(row.url)?.href ?? null
+	// URLs within MEDIA_URL_LIMIT as serialized, as stored (mediaUrlSql).
+	const url = boundedHref(row.url, MEDIA_URL_LIMIT)
 	const stored = row.meta === null ? {} : (JSON.parse(row.meta) as { original?: Size; small?: Size })
 	const meta: MediaMeta = {
 		...(stored.original === undefined ? {} : { original: mediaSize(stored.original) }),
@@ -517,7 +519,7 @@ export function presentMedia(row: MediaRow): MediaAttachment {
 		id: row.id,
 		type: row.type,
 		url,
-		preview_url: httpUrl(row.preview_url)?.href ?? url,
+		preview_url: boundedHref(row.preview_url, MEDIA_URL_LIMIT) ?? url,
 		remote_url: null,
 		preview_remote_url: null,
 		text_url: null,

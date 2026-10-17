@@ -9,7 +9,7 @@ import { ALICE, setup, type Setup } from './inbox-status-helpers'
 import { observedSql, rowsRead } from './read-helpers'
 import { community, post, remoteAccount } from './status-helpers'
 import { listConversations, MAX_PRESENTED_PARTICIPANTS } from '../src/domain/conversations'
-import { MAX_FILTER_KEYWORD, MAX_FILTER_TITLE, MAX_FILTERS } from '../src/domain/filters'
+import { MAX_FILTER_KEYWORD, MAX_FILTER_KEYWORDS, MAX_FILTER_TITLE, MAX_FILTERS } from '../src/domain/filters'
 import { ACTOR_URI_LIMIT, PROFILE_URL_LIMIT, USERNAME_LIMIT } from '../src/domain/profile-bounds'
 import {
 	MAX_MEDIA_DESCRIPTION_LENGTH,
@@ -61,8 +61,11 @@ const MAX_FIELDS = Array.from({ length: 16 }, () => ({
 }))
 
 // How a fixture fills text at its bound: `escaped` with characters JSON escapes to six bytes (the most JSON for the
-// fewest bytes read), `raw` with ASCII that JSON keeps as is (the most bytes read for the same JSON).
-type Fill = 'escaped' | 'raw'
+// fewest bytes read); `derived`, the same with mentioned accounts that have no stored url, so their url is derived
+// from the host and the username; `raw` with what reads the most bytes from SQLite for each bound: ASCII where the
+// bound is in bytes, and four-byte characters (W) where it is in characters.
+type Fill = 'escaped' | 'derived' | 'raw'
+const W = '𠀀'
 const RAW_BIO = `<p>${'x'.repeat(REMOTE_BIO_BYTES - 9)}</p>`
 
 // A remote account with every profile column at its bound; `light`: only what a mention reads is at its bound.
@@ -77,9 +80,9 @@ async function maximalAccount(t: Setup, light = false, fill: Fill = 'escaped'): 
 		atLimit(`https://${HOST}/users/${id}/`, ACTOR_URI_LIMIT),
 		username,
 		HOST,
-		light ? '' : C.repeat(2048),
+		light ? '' : (fill === 'raw' ? W : C).repeat(2048),
 		light ? '' : fill === 'raw' ? RAW_BIO : MAX_BIO,
-		atLimit(`https://${HOST}/@${id}/`, PROFILE_URL_LIMIT),
+		light && fill === 'derived' ? null : atLimit(`https://${HOST}/@${id}/`, PROFILE_URL_LIMIT),
 		light ? null : atLimit(`https://${HOST}/a/${id}/`, PROFILE_URL_LIMIT),
 		light ? null : atLimit(`https://${HOST}/h/${id}/`, PROFILE_URL_LIMIT),
 		light ? null : JSON.stringify({ type: 'Person', attachment: MAX_FIELDS })
@@ -174,20 +177,21 @@ const maxTag = (i: number) => `${String.fromCodePoint(0x20000 + i)}${'𠀀'.repe
 async function maximalParts(t: Setup, fill: Fill = 'escaped'): Promise<Parts> {
 	const mentions: string[] = []
 	for (let i = 0; i < MAX_STATUS_MENTION_ROWS; i++) {
-		mentions.push(await maximalAccount(t, true))
+		mentions.push(await maximalAccount(t, true, fill))
 	}
+	const counted = fill === 'raw' ? W : C
 	return {
 		content: fill === 'raw' ? 'x'.repeat(STATUS_CONTENT_BYTES - 2) : C.repeat((STATUS_CONTENT_BYTES - 2) / 6),
 		spoiler: fill === 'raw' ? 'x'.repeat(SPOILER_BYTES - 2) : C.repeat(Math.floor((SPOILER_BYTES - 2) / 6)),
 		media: Array.from({ length: MAX_STATUS_MEDIA }, (_, i) => ({
 			url: atLimit(`https://${HOST}/m/${i}/`, MEDIA_URL_LIMIT),
 			preview: atLimit(`https://${HOST}/p/${i}/`, MEDIA_URL_LIMIT),
-			description: C.repeat(MAX_MEDIA_DESCRIPTION_LENGTH),
+			description: counted.repeat(MAX_MEDIA_DESCRIPTION_LENGTH),
 			meta: MAX_META,
 		})),
 		mentions,
 		tags: Array.from({ length: MAX_STATUS_TAGS }, (_, i) => maxTag(i)),
-		poll: Array.from({ length: MAX_REMOTE_OPTIONS }, () => C.repeat(MAX_REMOTE_OPTION_LENGTH)),
+		poll: Array.from({ length: MAX_REMOTE_OPTIONS }, () => counted.repeat(MAX_REMOTE_OPTION_LENGTH)),
 	}
 }
 
@@ -397,7 +401,8 @@ describe('a stored status is read within its bounds (RES-2)', () => {
 			id: mentions[0],
 			username: `u${'v'.repeat(USERNAME_LIMIT - 1)}`,
 			acct: `u${'v'.repeat(USERNAME_LIMIT - 1)}@${HOST}`,
-			url: `${ORIGIN}/@u${'v'.repeat(USERNAME_LIMIT - 1)}@${HOST}`,
+			// Its url derived from the host and the username would pass PROFILE_URL_LIMIT: none fits, so ''.
+			url: '',
 		})
 		// A NUL hides what follows it from GLOB; the username is still read within its JSON bound.
 		const nul = status.mentions.find((m) => m.id === mentions[2])!
@@ -702,7 +707,10 @@ describe('realistic content is never cut (RES-2)', () => {
 // MAX_FILTER_TITLE characters and a keyword of MAX_FILTER_KEYWORD that the statuses' text holds, and each naming the
 // given statuses, so every presented status carries every filter with a keyword match and its status matches.
 async function maximalFilters(t: Setup, fill: Fill, statuses: readonly string[]): Promise<void> {
-	const char = fill === 'raw' ? 'x' : C
+	// The first keyword is what the statuses hold, so it matches; the rest fill the filter's keywords.
+	const matching = (fill === 'raw' ? 'x' : C).repeat(MAX_FILTER_KEYWORD)
+	const other = (k: number) =>
+		fill === 'raw' ? `${String.fromCodePoint(0x20000 + k)}${W.repeat(MAX_FILTER_KEYWORD - 1)}` : matching
 	for (let i = 0; i < MAX_FILTERS; i++) {
 		const filter = nextId()
 		await sql(
@@ -710,16 +718,18 @@ async function maximalFilters(t: Setup, fill: Fill, statuses: readonly string[])
 			`INSERT INTO filters (id, account_id, title, context, action) VALUES (?, ?, ?, ?, 'warn')`,
 			filter,
 			ALICE,
-			char.repeat(MAX_FILTER_TITLE),
+			(fill === 'raw' ? W : C).repeat(MAX_FILTER_TITLE),
 			JSON.stringify(['home', 'notifications', 'public', 'thread', 'account'])
 		)
-		await sql(
-			t.store,
-			'INSERT INTO filter_keywords (id, filter_id, keyword, whole_word) VALUES (?, ?, ?, 0)',
-			nextId(),
-			filter,
-			char.repeat(MAX_FILTER_KEYWORD)
-		)
+		for (let k = 0; k < MAX_FILTER_KEYWORDS; k++) {
+			await sql(
+				t.store,
+				'INSERT INTO filter_keywords (id, filter_id, keyword, whole_word) VALUES (?, ?, ?, 0)',
+				nextId(),
+				filter,
+				k === 0 ? matching : other(k)
+			)
+		}
 		for (const status of statuses) {
 			await sql(
 				t.store,
@@ -826,10 +836,24 @@ describe('the table of maxima (RES-3)', () => {
 		const shapes = await measureShapes('escaped')
 		expect(shapes).toEqual({
 			account: { sqlite: 97_844, json: 121_710, rows: 1, nodes: 36 },
-			status: { sqlite: 2_195_243, json: 2_595_446, rows: 431, nodes: 2_267 },
-			quote: { sqlite: 4_345_329, json: 5_190_925, rows: 760, nodes: 4_536 },
-			boostOfQuote: { sqlite: 4_453_576, json: 5_564_762, rows: 813, nodes: 5_439 },
-			conversation: { sqlite: 5_519_897, json: 6_651_414, rows: 773, nodes: 4_959 },
+			status: { sqlite: 2_723_443, json: 2_595_446, rows: 1_381, nodes: 2_267 },
+			quote: { sqlite: 4_873_529, json: 5_190_925, rows: 1_710, nodes: 4_536 },
+			boostOfQuote: { sqlite: 4_981_776, json: 5_564_762, rows: 1_763, nodes: 5_439 },
+			conversation: { sqlite: 6_048_097, json: 6_651_414, rows: 1_723, nodes: 4_959 },
+		})
+		for (const shape of Object.values(shapes)) {
+			expect(shape.json).toBeLessThanOrEqual(LIMIT)
+		}
+	})
+
+	it('measures mentions whose url is derived', async () => {
+		const shapes = await measureShapes('derived')
+		expect(shapes).toEqual({
+			account: { sqlite: 97_844, json: 121_710, rows: 1, nodes: 36 },
+			status: { sqlite: 2_315_443, json: 2_185_846, rows: 1_381, nodes: 2_267 },
+			quote: { sqlite: 4_057_529, json: 4_371_725, rows: 1_710, nodes: 4_536 },
+			boostOfQuote: { sqlite: 4_165_776, json: 4_745_562, rows: 1_763, nodes: 5_439 },
+			conversation: { sqlite: 5_232_097, json: 5_832_214, rows: 1_723, nodes: 4_959 },
 		})
 		for (const shape of Object.values(shapes)) {
 			expect(shape.json).toBeLessThanOrEqual(LIMIT)
@@ -839,11 +863,11 @@ describe('the table of maxima (RES-3)', () => {
 	it('measures the raw worst case: the most bytes read from SQLite', async () => {
 		const shapes = await measureShapes('raw')
 		expect(shapes).toEqual({
-			account: { sqlite: 108_770, json: 121_711, rows: 1, nodes: 36 },
-			status: { sqlite: 2_329_046, json: 2_403_449, rows: 431, nodes: 2_267 },
-			quote: { sqlite: 4_612_935, json: 4_806_931, rows: 760, nodes: 4_536 },
-			boostOfQuote: { sqlite: 4_732_108, json: 4_988_769, rows: 813, nodes: 5_439 },
-			conversation: { sqlite: 5_918_615, json: 6_267_432, rows: 773, nodes: 4_959 },
+			account: { sqlite: 114_914, json: 117_615, rows: 1, nodes: 36 },
+			status: { sqlite: 4_280_990, json: 2_157_753, rows: 1_381, nodes: 2_267 },
+			quote: { sqlite: 6_491_023, json: 4_315_539, rows: 1_710, nodes: 4_536 },
+			boostOfQuote: { sqlite: 6_616_340, json: 4_531_681, rows: 1_763, nodes: 5_439 },
+			conversation: { sqlite: 7_870_431, json: 5_726_888, rows: 1_723, nodes: 4_959 },
 		})
 		for (const shape of Object.values(shapes)) {
 			expect(shape.json).toBeLessThanOrEqual(LIMIT)

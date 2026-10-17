@@ -37,7 +37,7 @@ import { readWindow, singleWindow, type Window, windowJson, windowPage } from '.
 import type { Db } from '../db/sql'
 import { normalizeDomain, parseAddress } from '../platform/domain-name'
 import { utf8Length } from '../platform/dump-format'
-import { httpUrl } from '../platform/http-url'
+import { boundedHref, httpUrl } from '../platform/http-url'
 import { sanitizeRemoteHtml } from '../security/html'
 
 // Accounts as the Mastodon API (4.0.2) shows them: one presenter, and the account and relationship operations of B3.
@@ -270,15 +270,21 @@ export function presentAccountsWithin(
 	return { items, cut: items.length < ids.length }
 }
 
-// A local account's url is derived from its actor URI, which carries the instance origin.
 // An account's profile URL. A stored url is used only when it is http(s) (HTML-3); otherwise it is derived from the
-// actor URI, which carries the account's origin, or from this instance's origin when the URI is not http(s) either.
+// actor URI, which carries the account's origin (a local account's carries the instance origin), or from this
+// instance's origin when the URI is not http(s) either. Each is used only within PROFILE_URL_LIMIT as serialized
+// (RES-2): a longer one falls back to the next, and to '' when none fits (a converted row of a long host and name).
 export function accountUrl(
 	row: { url: string | null; uri: string; username: string; domain: string | null },
 	origin: string
 ): string {
 	const actor = httpUrl(row.uri)
-	return httpUrl(row.url)?.href ?? (actor === null ? `${origin}/@${acctOf(row)}` : `${actor.origin}/@${row.username}`)
+	return (
+		boundedHref(row.url, PROFILE_URL_LIMIT) ??
+		(actor === null ? null : boundedHref(`${actor.origin}/@${row.username}`, PROFILE_URL_LIMIT)) ??
+		boundedHref(`${origin}/@${acctOf(row)}`, PROFILE_URL_LIMIT) ??
+		''
+	)
 }
 
 export function acctOf(row: { username: string; domain: string | null }): string {
@@ -292,8 +298,8 @@ export function presentAccount(row: AccountRow, { origin }: Present): Account {
 	const suspended = row.available === 0
 	// Stored URLs are shown only when they are http(s) (httpUrl); anything else reads as unset.
 	const url = accountUrl(row, origin)
-	const avatar = (suspended ? null : httpUrl(row.avatar_url)?.href) ?? `${origin}${DEFAULT_AVATAR}`
-	const header = (suspended ? null : httpUrl(row.header_url)?.href) ?? `${origin}${DEFAULT_HEADER}`
+	const avatar = (suspended ? null : boundedHref(row.avatar_url, PROFILE_URL_LIMIT)) ?? `${origin}${DEFAULT_AVATAR}`
+	const header = (suspended ? null : boundedHref(row.header_url, PROFILE_URL_LIMIT)) ?? `${origin}${DEFAULT_HEADER}`
 	return {
 		id: row.id,
 		username: row.username,
