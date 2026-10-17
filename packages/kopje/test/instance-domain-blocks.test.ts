@@ -9,10 +9,12 @@ import { blockDomain, setSeverity, unblockDomain } from './domain-block-helpers'
 import { LEGACY } from './federation-helpers'
 import { BUILD } from './helpers'
 import { deferred, deliveryDeps } from './quote-helpers'
+import { rowsRead } from './read-helpers'
 import { adminEntity, uriOf, world } from './remote-suspension-helpers'
 import { community, post, remoteAccount, remoteFollows } from './status-helpers'
 import { Db } from '../src/db/sql'
-import { availableSql, MAX_BLOCK_LABELS } from '../src/domain/audience'
+import { ACCOUNT_FROM, getAccounts, MAX_ACCOUNTS_BY_ID } from '../src/domain/accounts'
+import { activeSql, availableJoinedSql, availableSql, MAX_BLOCK_LABELS } from '../src/domain/audience'
 import { enqueueActivity } from '../src/domain/deliveries'
 import {
 	createInstanceDomainBlock,
@@ -197,6 +199,57 @@ describe("the predicate's cost (availableSql)", () => {
 		expect([blocked.available, blockedFewer.available]).toEqual([900, 90])
 		// Per account: its row, the walk of its two-label domain, and its seeks: measured at 6 rows.
 		expect(blocked.read - blockedFewer.read).toBeLessThanOrEqual(900 * 8)
+	})
+})
+
+describe('the no-block fast path in result columns (account presentation)', () => {
+	// `count` remote accounts whose domain and actor host have `labels` labels, and the rows read by a projection of
+	// availability over them, by each form, and by the bulk account read (getAccounts) of 40 of them.
+	async function projected(labels: number, blocks: [string, 'suspend' | 'noop'][]) {
+		const h = await community([])
+		const domain = [...Array.from({ length: labels - 2 }, (_, i) => `l${i}`), 'far', 'example'].join('.')
+		await sql(
+			h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 999)
+			INSERT INTO accounts (id, uri, username, domain)
+			SELECT CAST(500000000000000000 + i AS TEXT), 'https://' || ?1 || '/users/u' || i, 'u' || i, ?1 FROM n`,
+			domain
+		)
+		for (const [blocked, severity] of blocks) {
+			await blockDomain(h.store, blocked, severity)
+		}
+		const read = (query: string) =>
+			runInDurableObject(h.store, (_instance, state) => {
+				const cursor = state.storage.sql.exec(query)
+				cursor.toArray()
+				return cursor.rowsRead
+			})
+		const where = "WHERE a.id GLOB '5*'"
+		const ids = Array.from({ length: MAX_ACCOUNTS_BY_ID }, (_, i) => String(500000000000000000n + BigInt(i)))
+		return {
+			joined: await read(`SELECT a.id, ${availableJoinedSql('a', 'l')} AS v FROM ${ACCOUNT_FROM} ${where}`),
+			// The joined form without domain coverage: what account presentation read before it.
+			before: await read(
+				`SELECT a.id, (l.suspended_at IS NULL AND ${activeSql('a')}) AS v FROM ${ACCOUNT_FROM} ${where}`
+			),
+			single: await read(`SELECT a.id, ${availableSql('a.id')} AS v FROM accounts a ${where}`),
+			bulk: await rowsRead({ store: h.store }, getAccounts, { ids, present: { origin: 'https://kopje.test' } }),
+		}
+	}
+
+	// Rows read do not count the walk of a host no block names, so they cannot tell whether a projection ran it: the CASE
+	// of guardedSql (audience.ts) is what skips it, measured with the sqlite3 3.51 shell over 1,000 three-label
+	// accounts at 31,042 virtual machine steps, against 178,042 for the same projection with an AND.
+	it('reads as before while no suspend block exists, however deep the hosts', async () => {
+		const shallow = await projected(2, [])
+		const deep = await projected(MAX_BLOCK_LABELS + 4, [])
+		expect(deep).toEqual(shallow)
+		expect(await projected(2, [['far.example', 'noop']])).toEqual(shallow)
+		// One read of the suspend blocks' index per emitted predicate.
+		expect(shallow.joined - shallow.before).toBeLessThanOrEqual(1)
+		// Covered or not, a suspend block elsewhere makes each account pay its walk.
+		const walked = await projected(2, [['elsewhere.example', 'suspend']])
+		expect(walked.joined).toBeGreaterThan(shallow.joined + 1_000)
 	})
 })
 
