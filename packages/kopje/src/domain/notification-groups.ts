@@ -2,10 +2,18 @@ import { type Account, type Page, type PageQuery, type Present, presentAccountsB
 import { adminAccountIdOnce } from './admin-authority'
 import { statusReads } from './audience'
 import { type UserContext, userReadOperation, userWriteOperation } from './auth'
-import { GROUPABLE_TYPES, NOTIFICATION_COLUMNS, NOTIFICATION_ID, removeNotifications } from './notifications'
+import {
+	GROUPABLE_TYPES,
+	NOTIFICATION_COLUMNS,
+	NOTIFICATION_ID,
+	removeNotifications,
+	type Scope,
+	type ShownColumns,
+	shownWindow,
+} from './notifications'
 import { presentReportsById, type Report } from './reports'
 import { presentStatuses, type Status } from './status-presenter'
-import { readWindow, windowJson, windowOf, windowPage } from './windows'
+import { readWindow, windowOf, windowPage } from './windows'
 import type { Db } from '../db/sql'
 
 // Grouped notifications (Mastodon 4.5's API v2: Api::V2::NotificationsController, Notifications::AccountsController,
@@ -84,19 +92,6 @@ export type GroupedNotifications = {
 
 export type ExpandAccounts = 'full' | 'partial_avatars'
 
-type ShownColumns = {
-	id: string
-	type: string
-	from_account_id: string
-	created_at: string
-	group_key: string | null
-	report_id: string | null
-}
-
-// What a read of the viewer's notifications reads: filtered ones only with `includeFiltered`; within `range`, the
-// cursor (exclusive ids); of `group` alone (statusReads(...).notifications), each an expression over the parameters.
-type Scope = { includeFiltered: boolean; range?: { max: string; min: string }; group?: string }
-
 // The viewer's notifications the rule shows them in `scope` that match `where` (over the parameters: ?1 is the viewer,
 // ?2 the time of the read), in the order and number `tail` gives.
 function shownNotifications(
@@ -118,41 +113,6 @@ function shownNotifications(
 }
 
 type Shown = ReturnType<typeof shownNotifications>[number]
-
-// The same read as a candidate window (windows.ts): the notifications of `scope` matching `where`, in the order and
-// number `tail` gives, without the rule; then the rule over those alone. The shown ones in the candidates' order, and
-// the candidates' ids.
-function shownWindow(
-	db: Db,
-	viewer: UserContext,
-	scope: Scope,
-	where: string,
-	tail: string,
-	...params: (string | number | null)[]
-): { rows: Shown[]; candidates: string[] } {
-	const read = statusReads(viewer, { viewer: '?1', now: '?2' })
-	const candidates = read
-		.notificationWindow(db, { ...scope, where, tail }, viewer.accountId, viewer.now, ...params)
-		.map((row) => row.id)
-	if (candidates.length === 0) {
-		return { rows: [], candidates }
-	}
-	const shown = read.notifications<ShownColumns>(
-		db,
-		{
-			where: '',
-			within: '?3',
-			includeFiltered: scope.includeFiltered,
-			columns: NOTIFICATION_COLUMNS,
-			admin: adminAccountIdOnce(db),
-		},
-		viewer.accountId,
-		viewer.now,
-		windowJson(windowOf(candidates, candidates.length))
-	)
-	const byId = new Map(shown.map((row) => [row.id, row]))
-	return { rows: candidates.flatMap((id) => byId.get(id) ?? []), candidates }
-}
 
 // A group as a walk found it: its first notification read stands for it.
 type Found = { key: string; first: Shown }

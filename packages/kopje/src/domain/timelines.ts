@@ -505,25 +505,19 @@ export function tagStatus(db: Db, viewer: UserContext, tag: string, local: boole
 	if (cursor === null) {
 		return null
 	}
-	const input = { tag, any: [], all: [], none: [], local, remote: false, onlyMedia: false }
-	const names = tagNames(input)
-	// ?5 all, ?6 none, ?7 now, then one parameter per name from ?8, then the status.
-	const onlyAt = `?${8 + names.length}`
-	const read = statusReads(viewer, { viewer: '?1', now: '?7', only: onlyAt })
+	// One name, and no `all` or `none`: ?5 and ?6 are empty, ?7 the time, ?8 the name, ?9 the status.
+	const input = { local, remote: false, onlyMedia: false }
+	const read = statusReads(viewer, { viewer: '?1', now: '?7', only: '?9' })
 	return (
-		read.union(
+		read.select(
 			db,
 			'listable',
 			{
-				all: false,
-				branches: names.map((_, n) => ({
-					from: 'status_tags t CROSS JOIN',
-					join: 'ON s.id = t.status_id JOIN accounts pa ON pa.id = s.account_id',
-					where: `t.public = 1 AND t.name = ?${8 + n} AND t.status_id = ${onlyAt} AND ${tagConditions(input)}`,
-					and: rangeSql('t.status_id'),
-					tail: `ORDER BY t.status_id ${orderOf(cursor)} LIMIT ?4`,
-				})),
-				tail: `ORDER BY id ${orderOf(cursor)} LIMIT ?4`,
+				from: 'status_tags t CROSS JOIN',
+				join: 'ON s.id = t.status_id JOIN accounts pa ON pa.id = s.account_id',
+				where: `t.public = 1 AND t.name = ?8 AND t.status_id = ?9 AND ${tagConditions(input)}`,
+				and: rangeSql('t.status_id'),
+				tail: `ORDER BY t.status_id ${orderOf(cursor)} LIMIT ?4`,
 			},
 			viewer.accountId,
 			...rangeParams(cursor),
@@ -531,7 +525,7 @@ export function tagStatus(db: Db, viewer: UserContext, tag: string, local: boole
 			'[]',
 			'[]',
 			viewer.now,
-			...names,
+			normalizeTag(tag),
 			statusId
 		)[0]?.id ?? null
 	)

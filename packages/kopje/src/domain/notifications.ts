@@ -336,50 +336,72 @@ export type ListNotificationsInput = {
 	present: Present
 }
 
-// A page reads a window of readWindow(limit) of the viewer's notifications from the cursor (windows.ts), with the
+// The columns a read of the viewer's notifications selects besides status_id.
+export type ShownColumns = Omit<NotificationRow, 'status_id'>
+
+// What a read of the viewer's notifications reads: filtered ones only with `includeFiltered`; within `range`, the
+// cursor (exclusive ids); of `group` alone (statusReads(...).notifications), each an expression over the parameters.
+export type Scope = { includeFiltered: boolean; range?: { max: string; min: string }; group?: string }
+
+// A read of the viewer's notifications as a candidate window (windows.ts): the notifications of `scope` matching
+// `where` (over the parameters: ?1 the viewer, ?2 the time of the read, `params` from ?3), in the order and number
+// `tail` gives, without the rule; then the rule (R15) over those alone. The shown ones in the candidates' order, and
+// the candidates' ids.
+export function shownWindow(
+	db: Db,
+	viewer: UserContext,
+	scope: Scope,
+	where: string,
+	tail: string,
+	...params: (string | number | null)[]
+) {
+	const read = statusReads(viewer, { viewer: '?1', now: '?2' })
+	const candidates = read
+		.notificationWindow(db, { ...scope, where, tail }, viewer.accountId, viewer.now, ...params)
+		.map((row) => row.id)
+	const shown =
+		candidates.length === 0
+			? []
+			: read.notifications<ShownColumns>(
+					db,
+					{
+						where: '',
+						within: '?3',
+						includeFiltered: scope.includeFiltered,
+						columns: NOTIFICATION_COLUMNS,
+						admin: adminAccountIdOnce(db),
+					},
+					viewer.accountId,
+					viewer.now,
+					windowJson(windowOf(candidates, candidates.length))
+				)
+	const byId = new Map(shown.map((row) => [row.id, row]))
+	return { rows: candidates.flatMap((id) => byId.get(id) ?? []), candidates }
+}
+
+// A page reads a window of readWindow(limit) of the viewer's notifications from the cursor (shownWindow), with the
 // request's types and sender but not the rule, then applies the rule (R15) to those.
 export const listNotifications = userReadOperation<ListNotificationsInput, Page<Notification>>(
 	(db, input, _viewer, viewer) => {
-		const { accountId: viewerId, now } = viewer
 		const { page } = input
 		const ascending = page.minId !== undefined
 		const size = readWindow(page.limit)
-		const read = statusReads(viewer, { viewer: '?1', now: '?8' })
-		const includeFiltered = input.includeFiltered || input.accountId !== null
-		const window = windowOf(
-			read
-				.notificationWindow(
-					db,
-					{
-						where: `(?4 IS NULL OR n.type IN (SELECT value FROM json_each(?4)))
-							AND n.type NOT IN (SELECT value FROM json_each(?5))
-							AND (?6 IS NULL OR n.from_account_id = ?6)`,
-						tail: `ORDER BY n.id ${ascending ? 'ASC' : 'DESC'} LIMIT ?7`,
-						range: { max: '?2', min: '?3' },
-						includeFiltered,
-					},
-					viewerId,
-					page.maxId ?? null,
-					page.minId ?? page.sinceId ?? null,
-					input.types.length === 0 ? null : JSON.stringify(input.types),
-					JSON.stringify(input.excludeTypes),
-					input.accountId,
-					size
-				)
-				.map((row) => row.id),
+		const { rows, candidates } = shownWindow(
+			db,
+			viewer,
+			{ includeFiltered: input.includeFiltered || input.accountId !== null, range: { max: '?3', min: '?4' } },
+			`(?5 IS NULL OR n.type IN (SELECT value FROM json_each(?5)))
+			AND n.type NOT IN (SELECT value FROM json_each(?6))
+			AND (?7 IS NULL OR n.from_account_id = ?7)`,
+			`ORDER BY n.id ${ascending ? 'ASC' : 'DESC'} LIMIT ?8`,
+			page.maxId ?? null,
+			page.minId ?? page.sinceId ?? null,
+			input.types.length === 0 ? null : JSON.stringify(input.types),
+			JSON.stringify(input.excludeTypes),
+			input.accountId,
 			size
 		)
-		const rows =
-			window.candidates.length === 0
-				? []
-				: statusReads(viewer, { viewer: '?1', now: '?2' }).notifications<Omit<NotificationRow, 'status_id'>>(
-						db,
-						{ where: '', within: '?3', columns: NOTIFICATION_COLUMNS, includeFiltered, admin: adminAccountIdOnce(db) },
-						viewerId,
-						now,
-						windowJson(window)
-					)
-		const shown = windowPage(window, rows, (row) => row.id, page.limit, ascending)
+		const shown = windowPage(windowOf(candidates, size), rows, (row) => row.id, page.limit, ascending)
 		return {
 			items: presentNotifications(db, shown.rows, viewer, input.present),
 			newest: shown.newest,

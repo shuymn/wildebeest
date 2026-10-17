@@ -924,22 +924,25 @@ export const getOutbox = readOperation<{ username: string; before: string | null
 			before,
 			size
 		)
-		const rows = db.all<{
-			id: string
-			uri: string
-			visibility: Visibility
-			published_at: string
-			original_id: string | null
-			original_uri: string | null
-			original_author_id: string | null
-			original_author_uri: string | null
-		}>(
-			`SELECT s.id, s.uri, s.visibility, s.published_at, o.id AS original_id, o.uri AS original_uri,
-				o.account_id AS original_author_id, (SELECT uri FROM accounts WHERE id = o.account_id) AS original_author_uri
-			${listed} AND s.id IN (SELECT json_extract(value, '$.id') FROM json_each(?2)) ORDER BY s.id DESC`,
-			owner.id,
-			windowJson(window)
-		)
+		const rows =
+			window.candidates.length === 0
+				? []
+				: db.all<{
+						id: string
+						uri: string
+						visibility: Visibility
+						published_at: string
+						original_id: string | null
+						original_uri: string | null
+						original_author_id: string | null
+						original_author_uri: string | null
+					}>(
+						`SELECT s.id, s.uri, s.visibility, s.published_at, o.id AS original_id, o.uri AS original_uri,
+							o.account_id AS original_author_id, (SELECT uri FROM accounts WHERE id = o.account_id) AS original_author_uri
+						${listed} AND s.id IN (SELECT json_extract(value, '$.id') FROM json_each(?2)) ORDER BY s.id DESC`,
+						owner.id,
+						windowJson(window)
+					)
 		const items: string[] = []
 		for (const row of rows.slice(0, OUTBOX_PAGE_SIZE)) {
 			if (row.original_uri !== null && row.original_author_uri !== null && row.original_author_id !== null) {
