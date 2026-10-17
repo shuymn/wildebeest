@@ -8,6 +8,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+## [0.1.0-rc.14] - 2026-10-18
+
+A fourteenth release candidate of the first release, published under the npm dist-tag `next`.
+
 ### Added
 
 - The admin (the account whose email is the instance's admin email) is notified when another Kopje user files a
@@ -54,7 +58,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 ### Instance changes
 
 - Store schema: adds five migrations, applied on the first request after the deploy; a rollback to an earlier version
-  needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
+  needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). Applied together in one upgrade, as
+  an instance coming from rc.13 applies them, the five took 11.0 seconds on the benchmark store with favourites and
+  boosts (on a heavily loaded machine), within the 20-second budget for a release.
     - `0040_report_notifications`: lets a notification name a report. It reads each stored notification once and no
       other table: on a benchmark store of 1,000,000 accounts, 3,000,000 follows, 2,000,000 statuses and 2,000,000
       notifications its upgrade took 3.1 seconds (3.1 in a second run) in workerd's local Durable Object SQLite.
@@ -72,8 +78,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       paging order. It builds three indexes and reads nothing else: on the same benchmark store with 2,000,000
       favourites and 200,000 boosts added, its upgrade took 8.1 seconds (8.2 and 8.6 in two more runs), of which about
       6 is the overhead of an upgrade on a store that size (0042, upgraded alone there, took 6.0 and 5.9); an upgrade
-      that applies several files pays it once. Expect a pause of
-      several seconds on the first request after the deploy.
+      that applies several files pays it once. Expect a pause of several seconds on the first request after the deploy.
     - `0044_delivery_provenance`: lets each delivery record the recipients behind it. It changes the schema only and
       reads no row, however many deliveries are queued. On the same benchmark store its upgrade took 5.9 seconds (5.9
       and 5.8 in two more runs), all of it the overhead of an upgrade on a store that size, which an upgrade applying
