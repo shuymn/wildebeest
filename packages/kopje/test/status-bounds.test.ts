@@ -15,7 +15,6 @@ import {
 	MAX_REMOTE_OPTION_LENGTH,
 	MAX_REMOTE_OPTIONS,
 	MAX_STATUS_MEDIA,
-	MAX_PRESENTED_MENTIONS,
 	MAX_STATUS_MENTION_ROWS,
 	MAX_PRESENTED_TAGS,
 	MAX_STATUS_TAGS,
@@ -376,8 +375,8 @@ describe('a stored status is read within its bounds (RES-2)', () => {
 			expect(m).toMatchObject({ preview_url: m.url, meta: null })
 			expect(m.description).toBe(C.repeat(MAX_MEDIA_DESCRIPTION_LENGTH))
 		}
-		expect(status.mentions).toHaveLength(MAX_PRESENTED_MENTIONS)
-		expect(status.mentions.map((m) => m.id)).toEqual(mentions.toSorted().slice(0, MAX_PRESENTED_MENTIONS))
+		expect(status.mentions).toHaveLength(MAX_STATUS_MENTION_ROWS)
+		expect(status.mentions.map((m) => m.id)).toEqual(mentions.toSorted().slice(0, MAX_STATUS_MENTION_ROWS))
 		const cut = status.mentions.find((m) => m.id === mentions[0])!
 		expect(cut).toEqual({
 			id: mentions[0],
@@ -605,7 +604,7 @@ describe('the table of maxima (RES-3)', () => {
 		const shown = one.answer as Presented
 		expect(shown.content.length).toBe((STATUS_CONTENT_BYTES - 2) / 6)
 		expect(shown.media_attachments).toHaveLength(MAX_STATUS_MEDIA)
-		expect(shown.mentions).toHaveLength(MAX_PRESENTED_MENTIONS)
+		expect(shown.mentions).toHaveLength(MAX_STATUS_MENTION_ROWS)
 		expect(shown.tags).toHaveLength(MAX_PRESENTED_TAGS)
 		expect(shown.poll!.options).toHaveLength(MAX_REMOTE_OPTIONS)
 		expect((pair.answer as { reblog: { quote: { quoted_status: unknown } } }).reblog.quote.quoted_status).not.toBeNull()
