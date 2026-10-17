@@ -1280,7 +1280,8 @@ export function reportForwardees(
 // its actor id (uriHostSql), which an inbox on another host does not reveal.
 export type RemoteRecipient = { id: string; host: string }
 
-// A remote recipient reached at `inbox`: its shared inbox when it has one, else its personal inbox (possibly null or '').
+// A remote recipient reached at `inbox`: its shared inbox when it has one, else its personal inbox (null or '' when
+// it has none).
 export type ReachedInbox = RemoteRecipient & { inbox: string | null }
 
 // A remote account an activity is addressed to, with its inboxes ('' read as none).

@@ -49,6 +49,9 @@ import { hostDomain } from '../platform/domain-name'
 //     status; none is written once the status is gone or a retraction of it is pending (one still staging its
 //     targets reads them from the receipts, so they are written until it is staged).
 //   - Claims and completions return nextDueAt, the earliest time any work is due, so the Worker can ring for it.
+//   - Send-time check (VIS-30): each target carries the recipients behind it (Provenance), copied onto its row. The
+//     claim, and confirmDelivery right before the POST, drop a row that may no longer be sent (sendRefused); the body
+//     sent is the one confirmDelivery reads.
 //   - Signer: an activity is signed by its lane's account, its author, except one recorded as signed by the instance
 //     actor (signedBy 'instance', DATA-7): a forwarded report's Flag (reports.ts), which Mastodon sends from
 //     Account.representative. Its lane is still the reporter's, which owns the intent and orders it with the reporter's
@@ -231,7 +234,7 @@ export function audienceTargets(
 // The recipients behind a target as staging gathers them; unknown once any of them is.
 type Behind = { accounts: Set<string>; domains: Set<string>; unknown: boolean }
 
-function behind(): Behind {
+function nobody(): Behind {
 	return { accounts: new Set(), domains: new Set(), unknown: false }
 }
 
@@ -281,11 +284,11 @@ function targetsOf(
 		if (addressee !== null) {
 			// VIS-2: only the recipient's own inbox. Without one the copy is recorded as unreachable ('' inbox), never
 			// sent to a shared inbox where others would see the recipient named.
-			const entry = personal.get(addressee) ?? { inbox: isDeliverableInbox(inbox) ? inbox : '', behind: behind() }
+			const entry = personal.get(addressee) ?? { inbox: isDeliverableInbox(inbox) ? inbox : '', behind: nobody() }
 			personal.set(addressee, entry)
 			into = entry.behind
 		} else if (isDeliverableInbox(inbox)) {
-			into = neutral.get(inbox) ?? behind()
+			into = neutral.get(inbox) ?? nobody()
 			neutral.set(inbox, into)
 		} else {
 			return
@@ -963,11 +966,11 @@ function bodyFor(activity: string, addressee: string | null, immutable: boolean)
 export const INSTANCE_SIGNER = 'instance'
 
 // R1 for a suspended local sender: what its lane holds is dropped, not sent, except a retraction (outboundKind: a
-// Delete, an Undo, a Reject that withdraws, which VIS-3 sends to every earlier receiver) and the suspension's own Update
-// of its actor (the redacted document, `suspended: true`). Queued content is dropped when it is claimed or confirmed
-// while the sender is suspended, which the queue does within moments of the suspension; a row not claimed by the time
-// of an unsuspension is sent then. The restoration's Update is recorded once the account is no longer suspended, so it
-// passes; one confirmed after the account is suspended again does not.
+// Delete, an Undo, a Reject that withdraws, which VIS-3 sends to every earlier receiver) and the suspension's own
+// Update of its actor (the redacted document, `suspended: true`). Queued content is dropped when it is claimed or
+// confirmed while the sender is suspended, which the queue does within moments of the suspension; a row not claimed by
+// the time of an unsuspension is sent then. The restoration's Update is recorded once the account is no longer
+// suspended, so it passes; one confirmed after the account is suspended again does not.
 const REFUSED_SENDER = `EXISTS (SELECT 1 FROM local_accounts l
 	WHERE l.account_id = ?1 AND NOT ${availableLocalSql('l')} AND o.retracts = 0
 		AND NOT (json_extract(o.body, '$.activity.type') = 'Update'
@@ -1033,7 +1036,8 @@ function sendRefused(db: Db, row: DueRow, activity: SentActivity): boolean {
 	if (
 		row.recipient_accounts !== null &&
 		db.first(
-			`SELECT 1 AS yes FROM json_each(?) r JOIN main.accounts a ON a.id = r.value WHERE ${availableSql('a.id')} LIMIT 1`,
+			`SELECT 1 AS yes FROM json_each(?) r JOIN main.accounts a ON a.id = r.value
+			WHERE ${availableSql('a.id')} LIMIT 1`,
 			row.recipient_accounts
 		) === undefined
 	) {
