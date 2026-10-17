@@ -23,6 +23,7 @@ import { accountSearchText, queryTerms } from './search-text'
 import { renderFieldValue } from './status-text'
 import type { Db } from '../db/sql'
 import { normalizeDomain, parseAddress } from '../platform/domain-name'
+import { utf8Length } from '../platform/dump-format'
 import { httpUrl } from '../platform/http-url'
 import { sanitizeRemoteHtml } from '../security/html'
 
@@ -153,8 +154,9 @@ export type AccountRow = {
 export const MAX_REMOTE_FIELDS = 16
 const FIELD_NAME_LIMIT = 255
 const FIELD_VALUE_RAW_LIMIT = 4096
-// The most UTF-8 bytes of projected JSON one account carries. The largest read, a list's members with limit=0
-// (MAX_LIST_MEMBERS_ANSWERED, 1,000 accounts), thus carries at most 32 MiB of fields.
+// The most UTF-8 bytes of field JSON one account carries: read from SQLite (REMOTE_ATTACHMENT_SQL) and, again, shown
+// (remoteFields). The largest read, a list's members with limit=0 (MAX_LIST_MEMBERS_ANSWERED, 1,000 accounts), thus
+// reads at most 32 MiB of fields and returns at most 32 MiB of field names and values.
 export const REMOTE_FIELDS_BYTES = 32 * 1024
 
 // SQLite's substr and length stop at an embedded NUL, so a string is cut only when its UTF-8 bytes pass the limit
@@ -271,15 +273,26 @@ function presentField(field: FieldSource): Field {
 	return { name: field.name, value: renderFieldValue(field.value), verified_at: null }
 }
 
+// The fields shown, in document order, while the JSON of their names and values, in UTF-8 bytes, stays within
+// REMOTE_FIELDS_BYTES: the first field that would pass it is dropped with all after it, never cut. This bounds what is
+// returned and serialized, as REMOTE_ATTACHMENT_SQL bounds what is read (sanitizing can grow a value fivefold, `&` to
+// `&amp;`). A response of N accounts thus carries at most N × 32 KiB of field names and values once serialized.
 function remoteFields(attachment: string | null): Field[] {
 	if (attachment === null) {
 		return []
 	}
-	return (JSON.parse(attachment) as { name: string; value: string }[]).map(({ name, value }) => ({
-		name: name.slice(0, FIELD_NAME_LIMIT),
-		value: sanitizeRemoteHtml(value.slice(0, FIELD_VALUE_RAW_LIMIT)),
-		verified_at: null,
-	}))
+	const fields: Field[] = []
+	let bytes = 0
+	for (const entry of JSON.parse(attachment) as { name: string; value: string }[]) {
+		const name = entry.name.slice(0, FIELD_NAME_LIMIT)
+		const value = sanitizeRemoteHtml(entry.value.slice(0, FIELD_VALUE_RAW_LIMIT))
+		bytes += utf8Length(JSON.stringify(name)) + utf8Length(JSON.stringify(value))
+		if (bytes > REMOTE_FIELDS_BYTES) {
+			break
+		}
+		fields.push({ name, value, verified_at: null })
+	}
+	return fields
 }
 
 // API ids are 18 digits; legacy ids are UUIDs or other short strings. Anything longer is not an id.

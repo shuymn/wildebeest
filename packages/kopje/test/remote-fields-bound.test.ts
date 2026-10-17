@@ -11,6 +11,8 @@ import {
 	presentAccount,
 	REMOTE_FIELDS_BYTES,
 } from '../src/domain/accounts'
+import { MAX_LIST_MEMBERS_ANSWERED } from '../src/domain/lists'
+import { utf8Length } from '../src/platform/dump-format'
 import { sanitizeRemoteHtml } from '../src/security/html'
 
 // A remote account's profile fields are projected bounded (REMOTE_ATTACHMENT_SQL): a row carries at most what the
@@ -23,6 +25,12 @@ const DOMAIN = 'fields.example'
 const ESCAPED = { type: 'PropertyValue', name: '\u0001'.repeat(255), value: '\u0001'.repeat(4096) }
 
 const field = (name: string, value: string) => ({ type: 'PropertyValue', name, value })
+// Fields within every input bound whose values sanitizing grows fivefold (`&` to `&amp;`): the output's worst case.
+const AMPERSANDS = Array.from({ length: MAX_REMOTE_FIELDS }, () => field('n'.repeat(255), '&'.repeat(4096)))
+
+// The bytes of a presented account's field names and values once serialized as JSON: what remoteFields bounds.
+const fieldBytes = (fields: readonly { name: string; value: string }[]) =>
+	fields.reduce((sum, f) => sum + utf8Length(JSON.stringify(f.name)) + utf8Length(JSON.stringify(f.value)), 0)
 
 async function remoteFollowers(t: Setup, count: number): Promise<string[]> {
 	await seedFollows(t.store, ALICE, count, { direction: 'followers', domain: DOMAIN, base: 500_000 })
@@ -147,6 +155,62 @@ describe('remote profile fields are projected bounded (RES-2)', () => {
 		await storeAttachment(t, [id!], fields)
 		const { bounded, whole } = await bothWays(t, id!)
 		expect(bounded).toEqual(whole.slice(0, 7))
+	})
+
+	it('bounds the shown fields after sanitizing, dropping whole fields', async () => {
+		const t = await setup()
+		const [id] = await remoteFollowers(t, 1)
+		await storeAttachment(t, [id!], AMPERSANDS)
+		// The read keeps seven fields (30,619 bytes); sanitized, one is 20,739 bytes and two would pass the budget.
+		expect(JSON.parse((await projected(t, [id!]))[0]!.attachment)).toHaveLength(7)
+		const { bounded, whole } = await bothWays(t, id!)
+		expect(bounded).toEqual(whole.slice(0, 1))
+		expect(bounded[0]!.value).toBe('&amp;'.repeat(4096))
+		expect(fieldBytes(bounded)).toBeLessThanOrEqual(REMOTE_FIELDS_BYTES)
+	})
+
+	it(`answers a list of ${MAX_LIST_MEMBERS_ANSWERED} such members with at most 32 KiB of fields each`, async () => {
+		const t = await setup()
+		const ids = await remoteFollowers(t, MAX_LIST_MEMBERS_ANSWERED)
+		await storeAttachment(t, ids, AMPERSANDS)
+		const list = '800000000000000001'
+		await sql(t.store, "INSERT INTO lists (id, account_id, title) VALUES (?, ?, 'l')", list, ALICE)
+		await sql(
+			t.store,
+			'INSERT INTO list_accounts (list_id, account_id) SELECT ?, value FROM json_each(?)',
+			list,
+			JSON.stringify(ids)
+		)
+		const response = await t.request(`/api/v1/lists/${list}/accounts?limit=0`, {
+			headers: { authorization: `Bearer ${t.tokens.alice}` },
+		})
+		const body = await response.text()
+		const accounts = JSON.parse(body) as { fields: { name: string; value: string }[] }[]
+		expect(accounts).toHaveLength(MAX_LIST_MEMBERS_ANSWERED)
+		for (const account of accounts) {
+			expect(account.fields).toHaveLength(1)
+			expect(fieldBytes(account.fields)).toBeLessThanOrEqual(REMOTE_FIELDS_BYTES)
+		}
+		// The whole answer: the fields' bound for each member, and a little over 1 KiB of everything else each.
+		expect(utf8Length(body)).toBeLessThanOrEqual(MAX_LIST_MEMBERS_ANSWERED * (REMOTE_FIELDS_BYTES + 2048))
+	})
+
+	it('shows the same fields for 20 and 300 such fields, a 1.3 MB document', async () => {
+		const t = await setup()
+		const [small, large] = await remoteFollowers(t, 2)
+		await storeAttachment(
+			t,
+			[small!],
+			Array.from({ length: 20 }, () => AMPERSANDS[0])
+		)
+		await storeAttachment(
+			t,
+			[large!],
+			Array.from({ length: 300 }, () => AMPERSANDS[0])
+		)
+		const [a, b] = [await bothWays(t, small!), await bothWays(t, large!)]
+		expect(a.bounded).toEqual(b.bounded)
+		expect(a.bounded).toHaveLength(1)
 	})
 
 	it('projects the same bytes for 20 and 20,000 fields, and for 20 and 2,000 escaped ones', async () => {
