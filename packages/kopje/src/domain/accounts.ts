@@ -11,6 +11,7 @@ import {
 	followListedSql,
 	followListsShownSql,
 	hidesCollectionsSql,
+	type QuotePolicyName,
 	REACHES_FOLLOWERS_SQL,
 } from './audience'
 import { localRole, optionalUserReadOperation, type Role, userReadOperation, userWriteOperation } from './auth'
@@ -86,6 +87,7 @@ export type CredentialAccount = Account & {
 		follow_requests_count: number
 		hide_collections: boolean
 		attribution_domains: string[]
+		quote_policy: QuotePolicyName
 	}
 	role: Role
 }
@@ -337,6 +339,7 @@ type CredentialRow = {
 	default_visibility: Visibility
 	default_sensitive: number
 	default_language: string | null
+	default_quote_policy: QuotePolicyName
 	attribution_domains: string
 	follow_requests_count: number
 }
@@ -344,7 +347,7 @@ type CredentialRow = {
 export function credentialAccount(db: Db, accountId: string, present: Present): CredentialAccount | null {
 	const row = accountRow(db, accountId)
 	const local = db.first<CredentialRow>(
-		`SELECT default_visibility, default_sensitive, default_language, attribution_domains,
+		`SELECT default_visibility, default_sensitive, default_language, default_quote_policy, attribution_domains,
 			(SELECT COUNT(*) FROM follows WHERE target_account_id = ?1 AND state = 'pending') AS follow_requests_count
 		FROM local_accounts WHERE account_id = ?1`,
 		accountId
@@ -363,6 +366,7 @@ export function credentialAccount(db: Db, accountId: string, present: Present): 
 			follow_requests_count: local.follow_requests_count,
 			hide_collections: row.hide_collections === 1,
 			attribution_domains: JSON.parse(local.attribution_domains) as string[],
+			quote_policy: local.default_quote_policy,
 		},
 		// The OAuth admin has the Owner role with the permissions Kopje serves; every other user the default role.
 		role: localRole(db, accountId),
@@ -406,13 +410,14 @@ export type Preferences = {
 	'posting:default:visibility': Visibility
 	'posting:default:sensitive': boolean
 	'posting:default:language': string | null
+	'posting:default:quote_policy': QuotePolicyName
 	'reading:expand:media': 'default'
 	'reading:expand:spoilers': false
 }
 
 export const preferences = userReadOperation<object, Preferences | null>((db, _input, { accountId }) => {
 	const row = db.first<Omit<CredentialRow, 'follow_requests_count' | 'attribution_domains'>>(
-		'SELECT default_visibility, default_sensitive, default_language FROM local_accounts WHERE account_id = ?',
+		'SELECT default_visibility, default_sensitive, default_language, default_quote_policy FROM local_accounts WHERE account_id = ?',
 		accountId
 	)
 	return row === undefined
@@ -421,6 +426,7 @@ export const preferences = userReadOperation<object, Preferences | null>((db, _i
 				'posting:default:visibility': row.default_visibility,
 				'posting:default:sensitive': row.default_sensitive === 1,
 				'posting:default:language': row.default_language,
+				'posting:default:quote_policy': row.default_quote_policy,
 				'reading:expand:media': 'default',
 				'reading:expand:spoilers': false,
 			}
@@ -436,6 +442,7 @@ export type CredentialChanges = {
 	privacy?: Visibility
 	sensitive?: boolean
 	language?: string | null
+	quotePolicy?: QuotePolicyName
 	// Replaces every field; lengths and count are validated by the caller.
 	fields?: FieldSource[]
 	// Replaces every attribution domain; normalized and validated by the caller.
@@ -482,7 +489,8 @@ export const updateCredentials = userWriteOperation<
 			default_sensitive = COALESCE(?, default_sensitive),
 			default_language = CASE WHEN ? THEN ? ELSE default_language END,
 			fields = COALESCE(?, fields), hide_collections = COALESCE(?, hide_collections),
-			attribution_domains = COALESCE(?, attribution_domains)
+			attribution_domains = COALESCE(?, attribution_domains),
+			default_quote_policy = COALESCE(?, default_quote_policy)
 		WHERE account_id = ?`,
 		changes.privacy ?? null,
 		bit(changes.sensitive),
@@ -491,6 +499,7 @@ export const updateCredentials = userWriteOperation<
 		changes.fields === undefined ? null : JSON.stringify(changes.fields.slice(0, MAX_FIELDS)),
 		hide,
 		changes.attributionDomains === undefined ? null : JSON.stringify(changes.attributionDomains),
+		changes.quotePolicy ?? null,
 		accountId
 	)
 	// Other servers learn of the change (Update(Person)), only if the published document changed, or if the account

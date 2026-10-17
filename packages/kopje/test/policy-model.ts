@@ -418,6 +418,29 @@ export class PolicyModel {
 		return { state, quoted: state === 'unauthorized' ? null : q.quoted }
 	}
 
+	// R36, the policy part: what the quote policy of the status s answers the quoter (anonymous: denied), by its flags
+	// alone. automatic when the automatic half allows public, or followers and the quoter follows the author (accepted),
+	// or following and the author follows the quoter; manual when the manual half allows the same; unknown when either
+	// half sets unsupported_policy; denied otherwise.
+	quotePolicy(s: number, quoter: Viewer): 'automatic' | 'manual' | 'unknown' | 'denied' {
+		const { author, quotePolicy = 0 } = this.status(s)
+		if (quoter === null) {
+			return 'denied'
+		}
+		const halves = { automatic: quotePolicy >> 16, manual: quotePolicy & 0xffff }
+		const allows = (half: number) =>
+			(half & 2) !== 0 ||
+			((half & 4) !== 0 && this.follows(quoter, author)) ||
+			((half & 8) !== 0 && this.follows(author, quoter))
+		if (allows(halves.automatic)) {
+			return 'automatic'
+		}
+		if (allows(halves.manual)) {
+			return 'manual'
+		}
+		return ((halves.automatic | halves.manual) & 1) !== 0 ? 'unknown' : 'denied'
+	}
+
 	// R15 as notify writes a notification: shown, and its status (if any) not in a conversation the recipient mutes.
 	notified(r: number, type: NotificationType, from: number, s: number | null): boolean {
 		return (s === null || !this.conversationMuted(r, s)) && this.shown(r, type, from, s)

@@ -50,6 +50,7 @@ describe('credentials', () => {
 				follow_requests_count: 0,
 				hide_collections: false,
 				attribution_domains: [],
+				quote_policy: 'public',
 			},
 			role: { id: '-99', name: '', permissions: '0', color: '', highlighted: false },
 		})

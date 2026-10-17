@@ -27,6 +27,7 @@ import {
 	type RelationshipResult,
 	type Visibility,
 } from '../domain/accounts'
+import { QUOTE_POLICY_NAMES, type QuotePolicyName } from '../domain/audience'
 import { DIRECTORY_DEFAULT_LIMIT, DIRECTORY_MAX_LIMIT } from '../domain/directory'
 import type { ProfileImage } from '../domain/media'
 import { grantsAny } from '../security/scopes'
@@ -78,6 +79,15 @@ export function credentialChanges(p: Params): { changes: CredentialChanges; prob
 			problems.push('Privacy is not included in the list')
 		}
 		changes.privacy = privacy as Visibility
+	}
+	// UserSettings' default_quote_policy (public, followers or nobody). Mastodon raises on any other value (an error
+	// answered 500); Kopje refuses it as it refuses another privacy.
+	const quotePolicy = p.get('source[quote_policy]')
+	if (quotePolicy !== undefined) {
+		if (!QUOTE_POLICY_NAMES.includes(quotePolicy as QuotePolicyName)) {
+			problems.push('Quote policy is not included in the list')
+		}
+		changes.quotePolicy = quotePolicy as QuotePolicyName
 	}
 	const language = p.get('source[language]')
 	if (language !== undefined) {

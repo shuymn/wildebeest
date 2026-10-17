@@ -5,6 +5,8 @@ import {
 	type ApiVisibility,
 	conversationMutedSql,
 	type OwnStatusId,
+	type QuotePolicyFlag,
+	quotePolicyFlags,
 	quoteReads,
 	requiresMention,
 	type ViewerContext,
@@ -70,6 +72,15 @@ export type Quote = { state: ApiQuoteState; quoted_status: Status | null }
 
 export type ShallowQuote = { state: ApiQuoteState; quoted_status_id: string | null }
 
+// Mastodon's QuoteApproval (REST::StatusSerializer#quote_approval): the flags of the status's automatic and manual
+// policy, and what the policy answers the viewer. Ice Cubes decodes all three fields, and current_user only as one of
+// these four values, or drops the whole status.
+export type QuoteApproval = {
+	automatic: QuotePolicyFlag[]
+	manual: QuotePolicyFlag[]
+	current_user: 'automatic' | 'manual' | 'unknown' | 'denied'
+}
+
 export type Status = {
 	id: string
 	created_at: string
@@ -101,6 +112,7 @@ export type Status = {
 	tags: Tag[]
 	emojis: []
 	quote: Quote | ShallowQuote | null
+	quote_approval: QuoteApproval
 	card: null
 	poll: Poll | null
 }
@@ -125,6 +137,7 @@ export type StatusRow = {
 	reblogs_count: number
 	favourites_count: number
 	quotes_count: number
+	quote_policy: number
 	author_uri: string
 	author_username: string
 	author_domain: string | null
@@ -137,7 +150,7 @@ export type StatusRow = {
 export const STATUS_COLUMNS = `s.id, s.uri, s.url, s.account_id, s.reblog_of_id, s.in_reply_to_id,
 	s.in_reply_to_account_id, s.visibility, s.spoiler_text, s.content, s.source_text, s.sensitive,
 	s.language, s.published_at, s.edited_at, s.replies_count, s.reblogs_count, s.favourites_count, s.quotes_count,
-	au.uri AS author_uri, au.username AS author_username, au.domain AS author_domain`
+	s.quote_policy, au.uri AS author_uri, au.username AS author_username, au.domain AS author_domain`
 
 export const STATUS_FROM = 'statuses s JOIN accounts au ON au.id = s.account_id'
 
@@ -353,6 +366,9 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 				}
 			}
 		}
+		// A boost shows its original's policy (Status#proper); a boost whose original the viewer may not see shows its
+		// own row's, which is always 0.
+		const policy = (row.reblog_of_id === null ? row : byId.get(row.reblog_of_id))?.quote_policy ?? row.quote_policy
 		const visibility = apiVisibility(row.visibility)
 		const viewer =
 			viewerId === null
@@ -406,6 +422,14 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 			})),
 			emojis: [],
 			quote,
+			quote_approval: {
+				automatic: quotePolicyFlags(policy, 'automatic'),
+				manual: quotePolicyFlags(policy, 'manual'),
+				// Kopje cannot author quotes yet (quoted_status_id is not served), so it tells every viewer they may not
+				// quote, whatever the policy answers them (quotePolicySql, R36): Elk offers its quote button for automatic
+				// or manual and would post a plain status.
+				current_user: 'denied',
+			},
 			card: null,
 			poll: polls.get(row.id) ?? null,
 		}

@@ -25,6 +25,7 @@ describe('preferences', () => {
 				'posting:default:visibility': 'public',
 				'posting:default:sensitive': false,
 				'posting:default:language': null,
+				'posting:default:quote_policy': 'public',
 				'reading:expand:media': 'default',
 				'reading:expand:spoilers': false,
 			},

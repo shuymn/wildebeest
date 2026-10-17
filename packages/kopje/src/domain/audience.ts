@@ -746,6 +746,70 @@ export function quoteReads(viewer: ViewerContext): QuoteReads {
 	}
 }
 
+// ---- Quote policies (R36, the policy part; Mastodon 4.5's Status::InteractionPolicyConcern).
+//
+// statuses.quote_policy holds Mastodon's bit flags (migration 0037_quote_policy): automatic approval in the high 16
+// bits, manual approval in the low ones, each of these flags. Kopje writes automatic policies only, for local statuses.
+
+export const QUOTE_POLICY_FLAGS = { unsupported_policy: 1, public: 2, followers: 4, following: 8 } as const
+
+export type QuotePolicyFlag = keyof typeof QUOTE_POLICY_FLAGS
+
+// The flags in Mastodon's order (QUOTE_APPROVAL_POLICY_FLAGS), which quote_approval lists them in.
+const QUOTE_POLICY_FLAG_ORDER = Object.keys(QUOTE_POLICY_FLAGS) as QuotePolicyFlag[]
+
+// What a local author chooses (quote_approval_policy, source[quote_policy], local_accounts.default_quote_policy).
+export type QuotePolicyName = 'public' | 'followers' | 'nobody'
+
+export const QUOTE_POLICY_NAMES: readonly QuotePolicyName[] = ['public', 'followers', 'nobody']
+
+// Api::InteractionPoliciesConcern#quote_approval_policy and Status#downgrade_quote_policy: the stored policy of a local
+// status of `visibility` whose author chose `name`. A status that is not public or unlisted gets 0, nobody, whatever
+// was chosen.
+export function storedQuotePolicy(name: QuotePolicyName, visibility: Visibility): number {
+	if (!isDistributable(visibility)) {
+		return 0
+	}
+	switch (name) {
+		case 'public':
+			return QUOTE_POLICY_FLAGS.public << 16
+		case 'followers':
+			return QUOTE_POLICY_FLAGS.followers << 16
+		case 'nobody':
+			return 0
+	}
+}
+
+// Status#quote_policy_as_keys: the flags of a stored policy's automatic or manual half, in Mastodon's order.
+export function quotePolicyFlags(policy: number, kind: 'automatic' | 'manual'): QuotePolicyFlag[] {
+	const half = kind === 'automatic' ? policy >> 16 : policy & 0xffff
+	return QUOTE_POLICY_FLAG_ORDER.filter((flag) => (half & QUOTE_POLICY_FLAGS[flag]) !== 0)
+}
+
+// R36, the policy part (Status#quote_policy_for_account, by the policy alone): what the policy of the status `t`
+// answers `quoter` (NULL: anonymous, denied). In order: `automatic` when the automatic half allows public, or followers
+// and the quoter follows t's author (an accepted follow), or following and t's author follows the quoter; `manual`
+// when the manual half allows the same; `unknown` when either half sets unsupported_policy; `denied` otherwise. Who
+// the quoter is to t otherwise (t's author, t's visibility, a boost, blocks) is the rest of R36 (mayQuoteSql, not
+// built yet), not this part.
+export function quotePolicySql(t: string, quoter: string): string {
+	const { unsupported_policy, public: everyone, followers, following } = QUOTE_POLICY_FLAGS
+	const follower = `EXISTS (SELECT 1 FROM main.follows qpf
+		WHERE qpf.account_id = ${quoter} AND qpf.target_account_id = ${t}.account_id AND qpf.state = 'accepted')`
+	const followed = `EXISTS (SELECT 1 FROM main.follows qpg
+		WHERE qpg.account_id = ${t}.account_id AND qpg.target_account_id = ${quoter} AND qpg.state = 'accepted')`
+	const allows = (half: string) => `((${half}) & ${everyone} <> 0
+		OR ((${half}) & ${followers} <> 0 AND ${follower})
+		OR ((${half}) & ${following} <> 0 AND ${followed}))`
+	const automatic = `(${t}.quote_policy >> 16)`
+	const manual = `(${t}.quote_policy & 65535)`
+	return `(CASE WHEN ${quoter} IS NULL THEN 'denied'
+		WHEN ${allows(automatic)} THEN 'automatic'
+		WHEN ${allows(manual)} THEN 'manual'
+		WHEN (${automatic} | ${manual}) & ${unsupported_policy} <> 0 THEN 'unknown'
+		ELSE 'denied' END)`
+}
+
 // R26: a scheduled status (scheduled_statuses row `ss`) is its owner's alone. It is not a status: no other rule
 // reads it, nothing lists, notifies or delivers it, and anyone else's is not found, until its publication writes an
 // ordinary status, which the rules above then govern.

@@ -13,7 +13,7 @@ import { mastodonError } from './errors'
 import { descriptionProblem, parseFocus, sweepSoon } from './media'
 import { linkHeader, pageQuery, pageResponse } from './pagination'
 import { type Params, parseBoolean } from './params'
-import { API_VISIBILITIES, type ApiVisibility } from '../domain/audience'
+import { API_VISIBILITIES, type ApiVisibility, QUOTE_POLICY_NAMES, type QuotePolicyName } from '../domain/audience'
 import { checkPoll, isPollInput, type PollInput } from '../domain/polls'
 import { exceedsRawLength, statusLength } from '../domain/status-text'
 import { type Acted, MAX_STATUSES_BY_ID, type MediaAttributes, TOO_MANY_FILES, type Viewed } from '../domain/statuses'
@@ -53,6 +53,18 @@ function viewedResponse<T>(c: ApiContext, result: Viewed<T> | Acted<T>): Respons
 		case 'invalid':
 			return mastodonError(422, result.error)
 	}
+}
+
+// quote_approval_policy as Api::InteractionPoliciesConcern reads it: public, followers or nobody; absent or blank is
+// none (the author's default on posting, the status's own policy on an edit); anything else is null, which Mastodon
+// answers with ActiveRecord::RecordInvalid's "Record invalid".
+function quotePolicyOf(p: Params): QuotePolicyName | null | undefined {
+	const raw = emptyToUndefined(p.get('quote_approval_policy'))
+	return raw === undefined
+		? undefined
+		: QUOTE_POLICY_NAMES.includes(raw as QuotePolicyName)
+			? (raw as QuotePolicyName)
+			: null
 }
 
 type Composition = {
@@ -174,15 +186,19 @@ export const createStatus: ApiHandler = async (c, deps) => {
 	const visibility = emptyToUndefined(p.get('visibility'))
 	const scheduledRaw = emptyToUndefined(p.get('scheduled_at'))
 	const scheduledAt = scheduledRaw === undefined ? undefined : parseScheduledAt(scheduledRaw)
+	// The controller resolves the quote policy before PostStatusService validates anything else.
+	const quotePolicy = quotePolicyOf(p)
 	const problem =
-		typeof composed === 'string'
-			? composed
-			: scheduledAt === null
-				? 'Record invalid'
-				: visibility !== undefined && !API_VISIBILITIES.includes(visibility as ApiVisibility)
-					? 'Validation failed: Visibility is not included in the list'
-					: undefined
-	if (typeof composed === 'string' || scheduledAt === null || problem !== undefined) {
+		quotePolicy === null
+			? 'Record invalid'
+			: typeof composed === 'string'
+				? composed
+				: scheduledAt === null
+					? 'Record invalid'
+					: visibility !== undefined && !API_VISIBILITIES.includes(visibility as ApiVisibility)
+						? 'Validation failed: Visibility is not included in the list'
+						: undefined
+	if (typeof composed === 'string' || scheduledAt === null || quotePolicy === null || problem !== undefined) {
 		return refuseAfterAuth(c, deps, mastodonError(422, problem ?? 'Validation failed'))
 	}
 	// The key is stored as the sha256 of all of it, so keys of any length stay distinct (never truncated). It is
@@ -195,6 +211,7 @@ export const createStatus: ApiHandler = async (c, deps) => {
 		...composed,
 		visibility: visibility as ApiVisibility | undefined,
 		inReplyToId: emptyToUndefined(p.get('in_reply_to_id')),
+		quotePolicy,
 		idempotencyKey,
 		objectId: crypto.randomUUID(),
 		now: deps.now(),
@@ -236,16 +253,48 @@ export const editStatus: ApiHandler = async (c, deps) => {
 		})
 	}
 	const mediaAttributes = [...merged.values()]
+	// Mastodon 4.5.5 (#37436) takes quote_approval_policy on an edit only when it is sent.
+	const quotePolicy = quotePolicyOf(p)
 	const problem =
-		typeof composed === 'string'
-			? composed
-			: mediaAttributes.map((a) => descriptionProblem(a.description)).find((found) => found !== undefined)
-	if (typeof composed === 'string' || problem !== undefined) {
+		quotePolicy === null
+			? 'Record invalid'
+			: typeof composed === 'string'
+				? composed
+				: mediaAttributes.map((a) => descriptionProblem(a.description)).find((found) => found !== undefined)
+	if (typeof composed === 'string' || quotePolicy === null || problem !== undefined) {
 		return refuseAfterAuth(c, deps, mastodonError(422, problem ?? 'Validation failed'))
 	}
 	const credential = userCredential(c, deps)
 	const result = await storeCall(c, deps, (s, b) =>
-		s.editStatus(b, { credential, id: statusId(c), ...composed, mediaAttributes, now: deps.now(), present: present(c) })
+		s.editStatus(b, {
+			credential,
+			id: statusId(c),
+			...composed,
+			mediaAttributes,
+			quotePolicy,
+			now: deps.now(),
+			present: present(c),
+		})
+	)
+	return viewedResponse(c, authorized(result))
+}
+
+// PUT and PATCH /api/v1/statuses/:id/interaction_policy (Statuses::InteractionPoliciesController#update). The policy
+// is checked in the Store, after the status is found (404) and found the viewer's own (403), as Mastodon checks it.
+export const updateInteractionPolicy: ApiHandler = async (c, deps) => {
+	const p = await requestParams(c, deps)
+	if (p instanceof Response) {
+		return p
+	}
+	const quotePolicy = quotePolicyOf(p)
+	const credential = userCredential(c, deps)
+	const result = await storeCall(c, deps, (s, b) =>
+		s.updateInteractionPolicy(b, {
+			credential,
+			id: statusId(c),
+			quotePolicy: quotePolicy === null ? 'invalid' : quotePolicy,
+			present: present(c),
+		})
 	)
 	return viewedResponse(c, authorized(result))
 }
