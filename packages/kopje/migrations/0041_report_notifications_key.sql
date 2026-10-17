@@ -10,7 +10,8 @@
 -- test/bench/migration-cost.ts (1,000,000 accounts, 3,000,000 follows, 2,000,000 statuses with their mentions and tags,
 -- 2,000,000 notifications, 200,000 quotes, 10,000 reports, 20 local accounts) in workerd's local Durable Object SQLite:
 -- 4,959 ms for the upgrade of this file through the kernel (its bookmark, transaction and schema verification; 4,951
--- and 4,978 ms in two more runs), just within the 5,000 ms each migration file may take (a sixth of the 30 s limit).
+-- and 4,978 ms in two more runs) on an idle machine, just within the 5,000 ms each migration file may take (a sixth of
+-- the 30 s limit). On a loaded machine (load average 9 to 19) it took 4,897 to 7,566 ms.
 -- Splitting does not lower it: every file also pays the schema verification, and dropping the old key in a file of
 -- its own measured 7,482 ms.
 
