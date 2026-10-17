@@ -153,17 +153,24 @@ export const MAX_REMOTE_FIELDS = 16
 const FIELD_NAME_LIMIT = 255
 const FIELD_VALUE_RAW_LIMIT = 4096
 
+// SQLite's substr and length stop at an embedded NUL, so a string is cut only when its UTF-8 bytes pass the limit (a
+// code point is never longer than its bytes): one within the limit stays whole, NULs included. A string past the
+// limit with a NUL before the cut comes out shorter than remoteFields would cut it, never longer.
+function cutSql(column: string, limit: number): string {
+	return `CASE WHEN length(CAST(${column} AS BLOB)) <= ${limit} THEN ${column} ELSE substr(${column}, 1, ${limit}) END`
+}
+
 // A remote account's attachment as ACCOUNT_COLUMNS projects it, chosen and cut in SQL so that the stored actor
 // document (up to the fetch budget, 2 MiB) never reaches the isolate: a JSON list of at most MAX_REMOTE_FIELDS
-// {name, value} entries in document order, the name cut at FIELD_NAME_LIMIT and the value at FIELD_VALUE_RAW_LIMIT
-// code points. A row thus carries at most 16 × 4,351 characters (each at most six once JSON-escaped) whatever the
+// {name, value} entries in document order, the name cut (cutSql) at FIELD_NAME_LIMIT and the value at
+// FIELD_VALUE_RAW_LIMIT code points. A row thus carries at most 16 × 4,351 characters (each at most six once JSON-escaped) whatever the
 // document's size, and a page of 80, or a list of 1,000 accounts (RES-3), stays far below the isolate's 128 MB.
 // An entry counts when it is an object whose `type` is 'PropertyValue' or a list holding it and whose name and value
 // are strings; an attachment that is one object counts as a list of one. SQLite counts code points where JavaScript
 // counts code units, so remoteFields cuts again.
 const REMOTE_ATTACHMENT_SQL = `CASE WHEN a.domain IS NOT NULL THEN (
-		SELECT json_group_array(json_object('name', substr(p.name, 1, ${FIELD_NAME_LIMIT}),
-			'value', substr(p.value, 1, ${FIELD_VALUE_RAW_LIMIT})) ORDER BY p.key)
+		SELECT json_group_array(json_object('name', ${cutSql('p.name', FIELD_NAME_LIMIT)},
+			'value', ${cutSql('p.value', FIELD_VALUE_RAW_LIMIT)}) ORDER BY p.key)
 		FROM (SELECT e.key, e.value ->> '$.name' AS name, e.value ->> '$.value' AS value
 			FROM json_each(CASE json_type(a.raw, '$.attachment') WHEN 'array' THEN a.raw -> '$.attachment'
 				ELSE json_array(a.raw -> '$.attachment') END) e

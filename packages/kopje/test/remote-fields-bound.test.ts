@@ -209,4 +209,33 @@ describe('remote profile fields are projected bounded (RES-2)', () => {
 		expect(results[4]!.bounded).toEqual([])
 		expect(results[5]!.bounded).toEqual([])
 	})
+
+	it('keeps an embedded NUL in a name or value within the limits, and stays bounded past them', async () => {
+		const t = await setup()
+		const [within, past] = await remoteFollowers(t, 2)
+		await storeAttachment(
+			t,
+			[within!],
+			[field('A\u0000B', 'ok'), field('name', 'x\u0000y\u0000'), field('\u0000', '\u0000')]
+		)
+		await storeAttachment(t, [past!], [field(`A\u0000${'n'.repeat(300)}`, `v\u0000${'v'.repeat(5000)}`)])
+		const [w, p] = await projected(t, [within!, past!])
+		expect(JSON.parse(w!.attachment)).toEqual([
+			{ name: 'A\u0000B', value: 'ok' },
+			{ name: 'name', value: 'x\u0000y\u0000' },
+			{ name: '\u0000', value: '\u0000' },
+		])
+		const shown = await bothWays(t, within!)
+		expect(shown.bounded.map((f) => f.name)).toEqual(['A\u0000B', 'name', '\u0000'])
+		expect(JSON.stringify(shown.bounded)).toBe(JSON.stringify(shown.whole))
+		const api = await t.api<{ fields: { name: string }[] }>(`/api/v1/accounts/${within!}`)
+		expect(api.body.fields.map((f) => f.name)).toEqual(['A\u0000B', 'name', '\u0000'])
+		// Past the limit, the cut may stop at the NUL: shorter than the presenter's own cut, never longer.
+		expect(p!.length).toBeLessThanOrEqual(PROJECTED_CEILING)
+		const [cut] = JSON.parse(p!.attachment) as { name: string; value: string }[]
+		expect(cut!.name.length).toBeLessThanOrEqual(255)
+		expect(cut!.value.length).toBeLessThanOrEqual(4096)
+		const [bounded] = (await bothWays(t, past!)).bounded
+		expect(bounded!.name.startsWith('A')).toBe(true)
+	})
 })
