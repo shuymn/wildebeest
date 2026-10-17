@@ -9,7 +9,7 @@ import {
 	presentAccount,
 } from './accounts'
 import { accessAdminRefusal, normalizedEmail } from './admin-authority'
-import { availableJoinedSql, availableLocalSql, deletingSql, suspendedSql } from './audience'
+import { activeSql, availableJoinedSql, availableLocalSql, deletingSql, suspendedSql } from './audience'
 import {
 	ADMIN_PERMISSION,
 	adminGuarded,
@@ -21,7 +21,7 @@ import {
 } from './auth'
 import { logAction } from './moderation-log'
 import { writeOperation } from './operation'
-import { suspendRemote, unsuspendRemote } from './remote-suspension'
+import { domainJobRunning, suspendRemote, unsuspendRemote } from './remote-suspension'
 import { reportExists, resolveReport } from './reports'
 import { suspendLocal, unsuspendLocal } from './suspension'
 import type { Db } from '../db/sql'
@@ -187,6 +187,9 @@ export const MAX_ADMIN_ACCOUNTS_LIMIT = 200
 // The most candidates a search reads (a username, display name or domain range); one more is read to see that there
 // are more, which answers 'too_broad' rather than a page out of id order or an empty one.
 export const ADMIN_ACCOUNT_CANDIDATES = 2_000
+// Accounts the walk of a plain list (no search) may skip for its residual (below) before it answers 503: a guard, as
+// the walk's index leaves out every account the residual would skip but operator-sized sets.
+export const ADMIN_ACTIVE_SKIP = 2_000
 
 export type AdminAccountStatus = 'active' | 'pending' | 'disabled' | 'silenced' | 'suspended' | 'sensitized'
 
@@ -210,6 +213,9 @@ export type AdminAccountList =
 	| ({ status: 'ok'; more: boolean } & Page<AdminAccount>)
 	// More than ADMIN_ACCOUNT_CANDIDATES accounts in the searched range: 422, never an unordered or empty page.
 	| { status: 'too_broad' }
+	// A list of active or suspended accounts while the domain job runs, or whose walk skipped more than
+	// ADMIN_ACTIVE_SKIP accounts: 503 with Retry-After, never a short or empty page (R38).
+	| { status: 'moderating' }
 
 // What a filter reads of an account: its id and flags only. unavailable is R1's rule (availableSql): a suspended
 // account, local or remote (R38), or a remote one whose deletion has started; the admin entity shows each as
@@ -374,7 +380,7 @@ function readMatches(
 	adminId: string,
 	bounds: Bounds,
 	limit: number
-): Candidate[] | 'too_broad' {
+): Candidate[] | 'too_broad' | 'moderating' {
 	if (filter.origin === 'local' || filter.email !== null || filter.roleIds !== null) {
 		// The local accounts, an operator-sized set (a deployment assumption of about 10 accounts).
 		return ordered(
@@ -396,6 +402,11 @@ function readMatches(
 		return rows.length > ADMIN_ACCOUNT_CANDIDATES ? 'too_broad' : ordered(db, rows, filter, adminId, bounds)
 	}
 	const order = bounds.ascending ? 'ASC' : 'DESC'
+	// The plans below walk indexes that read the domain marks (accounts_suspended, accounts_active), which lag the
+	// blocks while the domain job runs (R38, remote-suspension.ts): no page is answered from them meanwhile.
+	if ((filter.status === 'suspended' || filter.status === 'active') && domainJobRunning(db)) {
+		return 'moderating'
+	}
 	if (filter.status === 'suspended') {
 		// The suspended local accounts (operator-sized), and the remote accounts the instance suspended or whose deletion
 		// has started, as one range of accounts_suspended and one of accounts_deleted in id order; merged by id.
@@ -419,20 +430,24 @@ function readMatches(
 	// No search: the accounts by id, newest first. Active accounts walk accounts_active (migration
 	// 0045_remote_suspension), which holds no account suspended by the instance or whose deletion has started, so the
 	// walk skips only the suspended local accounts; others walk the primary key. The residual skips the local accounts
-	// (remote) and the suspended local accounts (active), operator-sized sets.
+	// (remote) and the suspended local accounts (active), operator-sized sets; a walk that skips more than
+	// ADMIN_ACTIVE_SKIP answers 503 rather than a short page.
 	const active = filter.status === 'active'
 	const residual = [
 		filter.origin === 'remote' ? 'a.domain IS NOT NULL' : '1',
 		active ? availableJoinedSql('a', 'l') : '1',
 	].join(' AND ')
-	return db.all<Candidate>(
-		`SELECT ${CANDIDATE_COLUMNS} FROM accounts a INDEXED BY ${active ? 'accounts_active' : 'sqlite_autoindex_accounts_1'}
+	const walked = db.all<Candidate & { kept: number }>(
+		`SELECT ${CANDIDATE_COLUMNS}, ${residual} AS kept
+		FROM accounts a INDEXED BY ${active ? 'accounts_active' : 'sqlite_autoindex_accounts_1'}
 		LEFT JOIN local_accounts l ON l.account_id = a.id
-		WHERE ${ID_RANGE} AND ${residual} ORDER BY a.id ${order} LIMIT ?3`,
+		WHERE ${ID_RANGE} AND ${active ? activeSql('a') : '1'} ORDER BY a.id ${order} LIMIT ?3`,
 		bounds.max,
 		bounds.min,
-		limit + 1
+		limit + 1 + ADMIN_ACTIVE_SKIP
 	)
+	const kept = walked.filter((row) => row.kept === 1).slice(0, limit + 1)
+	return kept.length <= limit && walked.length === limit + 1 + ADMIN_ACTIVE_SKIP ? 'moderating' : kept
 }
 
 // The index range a search reads, or null when the filter searches nothing: a username prefix (within a domain when
@@ -487,8 +502,8 @@ export function adminAccountOperations(read: AdminDeclare, write: AdminDeclare) 
 			}
 			const bounds = boundsOf(page)
 			const found = readMatches(db, filter, admin.accountId, bounds, page.limit)
-			if (found === 'too_broad') {
-				return { status: 'too_broad' }
+			if (found === 'too_broad' || found === 'moderating') {
+				return { status: found }
 			}
 			const kept = found.slice(0, page.limit)
 			const more = bounds.ascending
@@ -592,7 +607,7 @@ export function adminAccountOperations(read: AdminDeclare, write: AdminDeclare) 
 			if (found === undefined) {
 				return { status: 'not_found' }
 			}
-			if (!(found.domain === null ? unsuspendLocal(db, id, admin.now) : unsuspendRemote(db, id))) {
+			if (!(found.domain === null ? unsuspendLocal(db, id, admin.now) : unsuspendRemote(db, id) !== null)) {
 				return { status: 'not_allowed' }
 			}
 			logAction(db, admin, 'unsuspend', { type: 'Account', id }, {}, admin.now)

@@ -1,56 +1,90 @@
-import { individuallySuspendedSql } from './audience'
+import { followUri } from './activities'
+import { domainCoveredSql, individuallySuspendedSql, SUSPEND_BLOCKS_SQL } from './audience'
 import type { Admin } from './auth'
-import { severRemoteFollow } from './blocks'
+import { severFollow } from './blocks'
 import { EXPANSION_STEP, supersedeEarlier } from './deliveries'
 import { logAction } from './moderation-log'
 import { actionBound, reportBound, resolveSuspensionReports } from './reports'
 import { MODERATION_ROUND_ROWS, REPORT_ROUND } from './suspension'
 import type { Db } from '../db/sql'
 
-// The instance suspension of a remote account (R38, VIS-30; Mastodon's Admin::AccountAction with type suspend and
-// SuspendAccountService#reject_remote_follows!, UnsuspendAccountService for the unsuspension), migration
-// 0045_remote_suspension. The OAuth admin suspends and unsuspends through the Mastodon admin API (admin-accounts.ts).
+// The instance suspension of remote accounts (R38, VIS-30), migration 0045_remote_suspension: of one account
+// (Mastodon's Admin::AccountAction with type suspend and SuspendAccountService#reject_remote_follows!,
+// UnsuspendAccountService for the unsuspension), and of the accounts an instance domain block covers (BlockDomainService
+// with DeleteAccountService's severing; the blocks are instance-domain-blocks.ts's). The OAuth admin suspends and
+// unsuspends an account through the Mastodon admin API (admin-accounts.ts).
 //
-// A suspension commits in one bounded transaction: the account's suspended_at and suspension_source 'account', which
-// make it unavailable (R1, availableSql) from the commit on, and the reset of its job, which freezes its bounds (the
-// newest follow, report and moderation log row) and moves its cursor to the start. The reset is the job's generation:
-// a suspension again resets the same row, and every round first requires that the account is still individually
-// suspended, so an unsuspension ends the job at its next round. Rounds are Store-only and stage nothing:
+// Each decision commits in one bounded transaction that resets its job's row: the reset is the job's generation, and
+// each round first requires the condition the job's kind and mode name, read live, so a later decision ends or
+// redirects the job at its next round. Rounds are Store-only and stage nothing.
 //
-//   - reports: resolves the account's reports the suspension froze (reports.ts resolveSuspensionReports, VIS-29).
-//   - follows: ends the account's follows of local accounts up to the follow bound, in target order (follows_pair).
-//     An accepted follow ends with a withdrawing Reject to the follower's current inbox alone (its shared inbox when
-//     known, else its personal one), as Mastodon sends it; a request is deleted without one (blocks.ts
-//     severRemoteFollow); row existence decides, so an Undo or purge that removed the follow first sends nothing more.
-//     Local accounts' follows of the account are kept, and an unsuspension restores nothing that was severed.
+// The account job (kind 'account', one row per account):
+//   - mode 'account', set by a suspension: the account's suspended_at with suspension_source 'account' make it
+//     unavailable (R1, availableSql) from the commit on; each round requires that it is still individually suspended.
+//       - reports: resolves the account's reports the suspension froze (reports.ts resolveSuspensionReports, VIS-29).
+//       - follows: ends the account's follows of local accounts up to the follow bound (severing, below). Local
+//         accounts' follows of it are kept, and an unsuspension restores nothing that was severed.
+//   - mode 'domain', set by the conversion: an unsuspension of an account a suspend block still covers keeps it
+//     suspended, as a domain mark (suspension_source 'domain'), and redirects the job with a fresh follow bound; each
+//     round requires the mark and live coverage. It severs both ways (out, then in), as the domain job severs a covered
+//     account. Suspending the account again sets mode 'account' back, which keeps local follows of it.
 //
-// Every round writes at most MODERATION_ROUND_ROWS rows (suspension.ts, counted with total_changes) and reads at most
-// REPORT_ROUND reports or SEVER_ROUND follows. Ending a follow has two parts:
+// The domain job (kind 'domain', one row in all, subject ''): every transition of a block into or out of suspend for
+// some host resets it, with a fresh follow bound (instance-domain-blocks.ts resetDomainJob). It reconciles the domain marks
+// (suspension_source 'domain', which only the admin's lists read: availability reads coverage live) with the blocks as
+// they stand, in two walks:
+//   - clear: the suspended accounts by id (accounts_suspended, which holds every mark, whatever the account's domain is
+//     now), CLEAR_ROUND a round; a mark no block covers any more is cleared.
+//   - mark (only while a suspend block exists): every account by id, MARK_WINDOW a round (the predicate per remote
+//     account, MARK_ACCOUNTS covered ones at most); a covered account not individually suspended is marked if it is
+//     not yet, and severed both ways up to the follow bound, marked or not, so a follow made while an earlier block was
+//     lifted is severed too. An individually suspended account is skipped: its local follows are kept.
+// No account is stored or moves into a covered domain (inbox.ts upsertRemoteActor), so the walk after the last reset
+// finds every covered account; marks and severing then agree with the blocks whatever the order of transitions and
+// rounds. A permitted refresh of a marked account clears its stale mark (upsertRemoteActor).
+//
+// Severing an account (sever): out, its follows of local accounts (follows_pair, by target), then in, local accounts'
+// follows of it (follows_target, by state and id), each up to the follow bound. A remote follower's accepted follow ends
+// with a withdrawing Reject to its current inbox alone (its shared inbox when known, else its personal one), as
+// Mastodon sends it; its request is deleted without one; a local follower's follow or request ends with its Undo
+// (blocks.ts severFollow). Row existence decides, so an Undo, a purge, a user's domain block cleanup or another job that
+// removed the follow first sends nothing more. Every round reads at most SEVER_ROUND follows and writes at most
+// MODERATION_ROUND_ROWS rows (suspension.ts, counted with total_changes). Ending a follow has two parts:
 //   - preparatory steps (prepared), each bounded by the round's room above SEVER_ROWS: every write of variable size
 //     that ending the follow would cascade to. These are its follow notification's push deliveries (the notification's
-//     delete cascades to them) and, for an accepted follow whose Reject names its Follow by id, the earlier activities
-//     about that Follow, which the Reject supersedes (an update, and a delete when settled, each; a Misskey pair id
-//     names every generation of a follow, so they grow with its history). They are worked down across rounds, so no
-//     Accept left waiting is sent after the Reject.
-//   - the final step (blocks.ts severRemoteFollow), taken only once both are done, which then writes at most SEVER_ROWS
-//     rows: a constant.
-// The arithmetic: a preparatory step writes at most room() rows, and the final step is taken only while room() >= 0,
-// so a round writes at most MODERATION_ROUND_ROWS - SEVER_ROWS + SEVER_ROWS rows. Progress: a round starts with room()
-// = MODERATION_ROUND_ROWS - SEVER_ROWS (260) > 0, so its first follow either has a preparatory row written (a push
-// delivery deleted, or an activity superseded) or is ended; the job's cursor moves past each follow ended.
+//     delete cascades to them) and, for an activity that names the follow by id (the Reject of an accepted follow, the
+//     Undo of a local one), the earlier activities about that follow it supersedes (an update, and a delete when
+//     settled, each; a Misskey pair id names every generation of a follow, so they grow with its history). They are
+//     worked down across rounds, so no Accept left waiting is sent after the Reject.
+//   - the final step (blocks.ts severFollow), taken only once both are done, which then writes at most SEVER_ROWS rows:
+//     a constant.
+// The arithmetic: a preparatory step or a mark writes at most room() rows, and the final step is taken only while
+// room() >= 0, so a round writes at most MODERATION_ROUND_ROWS - SEVER_ROWS + SEVER_ROWS rows. Progress: a round
+// starts with room() = MODERATION_ROUND_ROWS - SEVER_ROWS (209) > 0, so its first covered account is marked, or its
+// first follow has a preparatory row written or is ended; otherwise the cursor moves past what it read.
 
 // Follows a severing round reads at most.
 export const SEVER_ROUND = 100
+// Rows a local follow's delete writes through its triggers at most: lists.ts MAX_LISTS list memberships and one pin.
+// Written out: lists.ts imports this module through its own imports, so its constant is not set yet when this one is
+// (test/domain-job.test.ts pins the two).
+export const SEVER_LIST_ROWS = 51
 // Rows the final step of ending a follow writes at most, its preparatory steps done, with the job's own update: 40
-// for the follow and its bookkeeping, which write 9 at most: the follow (its list and pin triggers delete nothing for a
-// remote follower, which has neither), its follow and follow_request notifications (one each at most,
-// notifications_natural; no push delivery left), the two counts, the retraction, the Reject's intent and its one chunk
-// (one target, the follower's current inbox: no earlier receivers), the earlier activities left to supersede (none),
-// and the job's update; and
-// 3 × EXPANSION_STEP for the expansion that recording the Reject runs (deliveries.ts enqueueActivity), which may expand
-// any activity's pending targets: up to EXPANSION_STEP deliveries, each from a chunk of its own at worst, whose cursor
-// update and delete are two more rows.
-export const SEVER_ROWS = 40 + 3 * EXPANSION_STEP
+// for the follow and its bookkeeping, which write 9 at most: the follow, its follow and follow_request notifications
+// (one each at most, notifications_natural; no push delivery left), the two counts, the retraction, the activity's
+// intent and its one chunk (one target: the remote account's current inbox; no earlier receivers), the earlier
+// activities left to supersede (none), and the job's update; SEVER_LIST_ROWS for the follow delete's triggers, which
+// for a local follower remove the account from each of its lists and its pin (list_members_follow_ended,
+// account_pins_follow_ended); and 3 × EXPANSION_STEP for the expansion that recording the activity runs
+// (deliveries.ts enqueueActivity), which may expand any activity's pending targets: up to EXPANSION_STEP deliveries,
+// each from a chunk of its own at worst, whose cursor update and delete are two more rows.
+export const SEVER_ROWS = 40 + SEVER_LIST_ROWS + 3 * EXPANSION_STEP
+// Suspended accounts a clearing round reads at most: each clear is one row, so a round writes CLEAR_ROUND + 1.
+export const CLEAR_ROUND = 500
+// Accounts a marking round walks at most, by id (the predicate is evaluated for each remote one among them), and
+// covered accounts it reconciles at most. MARK_WINDOW is set by measurement on the benchmark store: docs/operations.md.
+export const MARK_WINDOW = 2_000
+export const MARK_ACCOUNTS = 100
 
 type RemoteJob = {
 	id: number
@@ -67,10 +101,13 @@ type RemoteJob = {
 
 const iso = (ms: number) => new Date(ms).toISOString()
 
+const NEWEST_FOLLOW = '(SELECT coalesce(max(id), 0) FROM follows)'
+
 // Suspends the remote account `accountId` in one bounded transaction (above), also when it is suspended already
-// (Mastodon's suspend! runs again), which resets its job. `by` is the admin who suspends: its suspend row in the
-// moderation log is the job's action bound (VIS-29), and the resolved reports name it; without one (null), nothing is
-// logged and the bound is the newest log row. Returns the suspension's time, or null for an account that is not remote.
+// (Mastodon's suspend! runs again) or held by a domain mark, which resets its job to mode 'account'. `by` is the admin
+// who suspends: its suspend row in the moderation log is the job's action bound (VIS-29), and the resolved reports name
+// it; without one (null), nothing is logged and the bound is the newest log row. Returns the suspension's time, or null
+// for an account that is not remote.
 export function suspendRemote(db: Db, accountId: string, by: Admin | null, now: number): string | null {
 	const at = iso(now)
 	const found = db.first(
@@ -88,7 +125,7 @@ export function suspendRemote(db: Db, accountId: string, by: Admin | null, now: 
 	db.run(
 		`INSERT INTO remote_moderation_jobs (kind, subject, mode, actor_account_id, follow_bound, report_bound,
 			action_bound, phase, cursor)
-		VALUES ('account', ?1, 'account', ?2, (SELECT coalesce(max(id), 0) FROM follows), ?3, ?4, 'reports', '')
+		VALUES ('account', ?1, 'account', ?2, ${NEWEST_FOLLOW}, ?3, ?4, 'reports', '')
 		ON CONFLICT (kind, subject) DO UPDATE SET mode = excluded.mode, actor_account_id = excluded.actor_account_id,
 			follow_bound = excluded.follow_bound, report_bound = excluded.report_bound,
 			action_bound = excluded.action_bound, phase = excluded.phase, cursor = excluded.cursor`,
@@ -100,16 +137,40 @@ export function suspendRemote(db: Db, accountId: string, by: Admin | null, now: 
 	return at
 }
 
-// Lifts the individual suspension of a remote account: clears suspended_at and its source, which ends its job at the
-// next round. What was severed stays severed. Returns false for an account that is not individually suspended.
-export function unsuspendRemote(db: Db, accountId: string): boolean {
-	return (
-		db.first(
-			`UPDATE accounts SET suspended_at = NULL, suspension_source = NULL
-			WHERE id = ? AND domain IS NOT NULL AND ${individuallySuspendedSql('accounts')} RETURNING id`,
-			accountId
-		) !== undefined
+// Lifts the individual suspension of a remote account. When no suspend block covers it, clears suspended_at and its
+// source ('lifted'), which ends its job at the next round; what was severed stays severed. When one still does, the
+// account stays suspended as a domain mark ('converted', decision 4), and its job is reset to mode 'domain' with a
+// fresh follow bound, so it severs both ways. Null for an account that is not individually suspended (a domain mark
+// alone is lifted by lowering the block).
+export function unsuspendRemote(db: Db, accountId: string): 'lifted' | 'converted' | null {
+	const found = db.first<{ covered: number }>(
+		`SELECT ${domainCoveredSql('a')} AS covered FROM accounts a
+		WHERE a.id = ? AND a.domain IS NOT NULL AND ${individuallySuspendedSql('a')}`,
+		accountId
 	)
+	if (found === undefined) {
+		return null
+	}
+	if (found.covered === 0) {
+		db.run('UPDATE accounts SET suspended_at = NULL, suspension_source = NULL WHERE id = ?', accountId)
+		return 'lifted'
+	}
+	db.run("UPDATE accounts SET suspension_source = 'domain' WHERE id = ?", accountId)
+	db.run(
+		`INSERT INTO remote_moderation_jobs (kind, subject, mode, follow_bound, phase, cursor)
+		VALUES ('account', ?1, 'domain', ${NEWEST_FOLLOW}, 'out', '')
+		ON CONFLICT (kind, subject) DO UPDATE SET mode = excluded.mode, actor_account_id = NULL,
+			follow_bound = excluded.follow_bound, report_bound = NULL, action_bound = NULL, phase = excluded.phase,
+			cursor = excluded.cursor`,
+		accountId
+	)
+	return 'converted'
+}
+
+// Whether the domain job runs: the domain marks may lag the blocks (R38), so the admin's lists that read them answer
+// 503 meanwhile (admin-accounts.ts).
+export function domainJobRunning(db: Db): boolean {
+	return db.first("SELECT 1 AS x FROM remote_moderation_jobs WHERE kind = 'domain' AND subject = ''") !== undefined
 }
 
 // ---- Rounds
@@ -118,15 +179,22 @@ function totalChanges(db: Db): number {
 	return db.first<{ n: number }>('SELECT total_changes() AS n')?.n ?? 0
 }
 
-// Whether the condition the job's mode requires still holds: in mode 'account', the account is individually
-// suspended. A job of another kind or mode is not served by this version, and ends.
+// The remote account `a` the domain job severs: covered by a suspend block, and not individually suspended.
+function severableSql(a: string): string {
+	return `(${a}.domain IS NOT NULL AND NOT ${individuallySuspendedSql(a)} AND ${domainCoveredSql(a)})`
+}
+
+// Whether the condition the job requires still holds: the domain job always reconciles; mode 'account', the account
+// is individually suspended; mode 'domain', it is held by a domain mark that a suspend block still covers.
 function holds(db: Db, job: RemoteJob): boolean {
-	return (
-		job.kind === 'account' &&
-		job.mode === 'account' &&
-		db.first(`SELECT 1 AS x FROM accounts a WHERE a.id = ? AND ${individuallySuspendedSql('a')}`, job.subject) !==
-			undefined
-	)
+	if (job.kind === 'domain') {
+		return true
+	}
+	const condition =
+		job.mode === 'account'
+			? individuallySuspendedSql('a')
+			: `a.suspended_at IS NOT NULL AND a.suspension_source = 'domain' AND ${domainCoveredSql('a')}`
+	return db.first(`SELECT 1 AS x FROM accounts a WHERE a.id = ? AND ${condition}`, job.subject) !== undefined
 }
 
 function save(db: Db, job: RemoteJob, phase: string, cursor: string): void {
@@ -137,14 +205,22 @@ function finish(db: Db, job: RemoteJob): void {
 	db.run('DELETE FROM remote_moderation_jobs WHERE id = ?', job.id)
 }
 
-type Severed = { target: string; id: number; state: string; uri: string | null }
+// A round's budgets: rows written (room, above) and follows read.
+type Budget = { room: () => number; reads: number }
+
+function budget(db: Db): Budget {
+	const start = totalChanges(db)
+	return { room: () => MODERATION_ROUND_ROWS - SEVER_ROWS - (totalChanges(db) - start), reads: SEVER_ROUND }
+}
+
+type Severed = { follower: string; target: string; id: number; state: string; uri: string | null }
 
 // The preparatory steps of ending `follow` (above), within `room()` rows: its follow notification's push deliveries,
-// then, for an accepted follow whose Reject names its Follow by id, the earlier activities about that Follow the Reject
-// would supersede (deliveries.ts supersedeEarlier, two rows each at most). Returns whether all are done, so that its
-// end costs at most SEVER_ROWS; false when room ran out first, after writing at least one row whenever room() was
-// positive.
-function prepared(db: Db, job: RemoteJob, follow: Severed, room: () => number): boolean {
+// then the earlier activities that the activity ending it would supersede (deliveries.ts supersedeEarlier, two rows
+// each at most): for a remote follower's accepted follow with an id, its Reject's, signed by the local target; for a
+// local follower, its Undo's, signed by the follower. Returns whether all are done, so that its end costs at most
+// SEVER_ROWS; false when room ran out first, after writing at least one row whenever room() was positive.
+function prepared(db: Db, follow: Severed, room: () => number): boolean {
 	let left = room()
 	if (left <= 0) {
 		return false
@@ -155,62 +231,224 @@ function prepared(db: Db, job: RemoteJob, follow: Severed, room: () => number): 
 			WHERE n.account_id = ?1 AND n.type IN ('follow', 'follow_request') AND n.from_account_id = ?2
 			LIMIT ?3)`,
 		follow.target,
-		job.subject,
+		follow.follower,
 		left
 	)
 	const waiting = db.first(
 		`SELECT 1 AS x FROM notifications n JOIN push_deliveries d ON d.notification_id = n.id
 		WHERE n.account_id = ?1 AND n.type IN ('follow', 'follow_request') AND n.from_account_id = ?2 LIMIT 1`,
 		follow.target,
-		job.subject
+		follow.follower
 	)
 	if (waiting !== undefined) {
 		return false
 	}
-	if (follow.state !== 'accepted' || follow.uri === null) {
+	const local = db.first<{ uri: string }>('SELECT uri FROM accounts WHERE id = ? AND domain IS NULL', follow.follower)
+	const [signer, object] =
+		local !== undefined
+			? [follow.follower, follow.uri ?? followUri(local.uri, String(follow.id))]
+			: [follow.target, follow.state === 'accepted' ? follow.uri : null]
+	if (object === null) {
 		return true
 	}
 	left = Math.floor(room() / 2)
-	return left > 0 && !supersedeEarlier(db, follow.target, follow.uri, left)
+	return left > 0 && !supersedeEarlier(db, signer, object, left)
 }
 
-// One round of the follows phase (above). Returns whether an activity was recorded.
-function severRound(db: Db, job: RemoteJob, now: number): boolean {
-	const start = totalChanges(db)
-	const room = () => MODERATION_ROUND_ROWS - SEVER_ROWS - (totalChanges(db) - start)
-	const follows = db.all<Severed>(
-		`SELECT f.target_account_id AS target, f.id, f.state, f.uri FROM follows f INDEXED BY follows_pair
-		WHERE f.account_id = ?1 AND f.target_account_id > ?2 ORDER BY f.target_account_id LIMIT ?3`,
-		job.subject,
-		job.cursor,
-		SEVER_ROUND
-	)
-	let cursor = job.cursor
-	let stopped = false
-	let recorded = false
-	for (const follow of follows) {
-		if (follow.id <= job.follow_bound) {
-			// The final step only once nothing of variable size is left, with its constant cost still in the budget.
-			if (!prepared(db, job, follow, room) || room() < 0) {
-				stopped = true
-				break
-			}
-			recorded = severRemoteFollow(db, job.subject, follow.target, now) || recorded
+// Where severing an account stands: the direction ('out', its follows of local accounts; 'in', local accounts' follows
+// of it) and the cursor in it (the last target id out; the last state and id in, as 'state id').
+type Side = { dir: 'out' | 'in'; cursor: string }
+
+const SEVERED_COLUMNS = 'f.account_id AS follower, f.target_account_id AS target, f.id, f.state, f.uri'
+
+function readSide(
+	db: Db,
+	account: string,
+	side: Side,
+	limit: number
+): { rows: Severed[]; next: (f: Severed) => string } {
+	if (side.dir === 'out') {
+		return {
+			rows: db.all<Severed>(
+				`SELECT ${SEVERED_COLUMNS} FROM follows f INDEXED BY follows_pair
+				WHERE f.account_id = ?1 AND f.target_account_id > ?2 ORDER BY f.target_account_id LIMIT ?3`,
+				account,
+				side.cursor,
+				limit
+			),
+			next: (f) => f.target,
 		}
-		cursor = follow.target
 	}
-	if (!stopped && follows.length < SEVER_ROUND) {
+	const [state = '', id = '0'] = side.cursor.split(' ')
+	return {
+		rows: db.all<Severed>(
+			`SELECT ${SEVERED_COLUMNS} FROM follows f INDEXED BY follows_target
+			WHERE f.target_account_id = ?1 AND (f.state, f.id) > (?2, ?3) ORDER BY f.state, f.id LIMIT ?4`,
+			account,
+			state,
+			Number(id),
+			limit
+		),
+		next: (f) => `${f.state} ${f.id}`,
+	}
+}
+
+// Severs `account`'s follows from `side` up to `bound` (above), out only or both ways, within the round's budget.
+// Returns the side where it stopped, or null when done, and whether an activity was recorded.
+function sever(
+	db: Db,
+	account: string,
+	bound: number,
+	side: Side,
+	both: boolean,
+	spent: Budget,
+	now: number
+): { side: Side | null; recorded: boolean } {
+	let recorded = false
+	let at = side
+	for (;;) {
+		if (spent.reads <= 0) {
+			return { side: at, recorded }
+		}
+		const { rows, next } = readSide(db, account, at, spent.reads)
+		spent.reads -= rows.length
+		for (const follow of rows) {
+			if (follow.id <= bound) {
+				// The final step only once nothing of variable size is left, with its constant cost still in the budget.
+				if (!prepared(db, follow, spent.room) || spent.room() < 0) {
+					return { side: at, recorded }
+				}
+				recorded = severFollow(db, follow.follower, follow.target, now) || recorded
+			}
+			at = { dir: at.dir, cursor: next(follow) }
+		}
+		if (spent.reads <= 0 && rows.length > 0) {
+			// Read up to the budget: there may be more on this side.
+			return { side: at, recorded }
+		}
+		if (at.dir === 'in' || !both) {
+			return { side: null, recorded }
+		}
+		at = { dir: 'in', cursor: '' }
+	}
+}
+
+// One round of an account job's severing (mode 'account': out only; mode 'domain': both ways).
+function accountSeverRound(db: Db, job: RemoteJob, now: number): boolean {
+	const dir = job.phase === 'in' ? 'in' : 'out'
+	const done = sever(
+		db,
+		job.subject,
+		job.follow_bound,
+		{ dir, cursor: job.cursor },
+		job.mode === 'domain',
+		budget(db),
+		now
+	)
+	if (done.side === null) {
 		finish(db, job)
 	} else {
-		save(db, job, 'follows', cursor)
+		save(db, job, done.side.dir === 'in' ? 'in' : job.mode === 'domain' ? 'out' : 'follows', done.side.cursor)
 	}
-	return recorded
+	return done.recorded
+}
+
+// One round of the domain job's clearing walk (above).
+function clearRound(db: Db, job: RemoteJob): void {
+	const rows = db.all<{ id: string; stale: number }>(
+		`SELECT a.id, (a.suspension_source = 'domain' AND NOT ${domainCoveredSql('a')}) AS stale
+		FROM accounts a INDEXED BY accounts_suspended
+		WHERE a.suspended_at IS NOT NULL AND a.id > ?1 ORDER BY a.id LIMIT ?2`,
+		job.cursor,
+		CLEAR_ROUND
+	)
+	const stale = rows.filter((row) => row.stale === 1).map((row) => row.id)
+	if (stale.length > 0) {
+		db.run(
+			`UPDATE accounts SET suspended_at = NULL, suspension_source = NULL
+			WHERE id IN (SELECT value FROM json_each(?)) AND suspension_source = 'domain'`,
+			JSON.stringify(stale)
+		)
+	}
+	if (rows.length === CLEAR_ROUND) {
+		save(db, job, 'clear', rows.at(-1)!.id)
+	} else if (db.first(`SELECT ${SUSPEND_BLOCKS_SQL} AS x`)?.x === 1) {
+		save(db, job, 'mark', JSON.stringify({ after: '' }))
+	} else {
+		finish(db, job)
+	}
+}
+
+// The domain job's position in its marking walk: every account up to `after` is reconciled; `severing` is the
+// account after it whose severing stopped at `side`.
+type MarkCursor = { after: string; severing?: string; side?: Side }
+
+// One round of the domain job's marking walk (above). Returns whether an activity was recorded.
+function markRound(db: Db, job: RemoteJob, now: number): boolean {
+	const at = JSON.parse(job.cursor) as MarkCursor
+	const spent = budget(db)
+	let recorded = false
+	const stop = (cursor: MarkCursor) => {
+		save(db, job, 'mark', JSON.stringify(cursor))
+		return recorded
+	}
+	if (at.severing !== undefined) {
+		const still = db.first(`SELECT 1 AS x FROM accounts a WHERE a.id = ? AND ${severableSql('a')}`, at.severing)
+		if (still !== undefined) {
+			const done = sever(db, at.severing, job.follow_bound, at.side!, true, spent, now)
+			recorded = done.recorded
+			if (done.side !== null) {
+				return stop({ ...at, side: done.side })
+			}
+		}
+		at.after = at.severing
+	}
+	// The window's last account, or none when fewer than MARK_WINDOW accounts are left (the walk's last window).
+	const end = db.first<{ id: string }>(
+		'SELECT id FROM accounts WHERE id > ? ORDER BY id LIMIT 1 OFFSET ?',
+		at.after,
+		MARK_WINDOW - 1
+	)?.id
+	const covered = db.all<{ id: string; marked: number }>(
+		`SELECT a.id, a.suspended_at IS NOT NULL AS marked FROM accounts a
+		WHERE a.id > ?1 AND a.id <= coalesce(?2, char(58)) AND ${severableSql('a')} ORDER BY a.id LIMIT ?3`,
+		at.after,
+		end ?? null,
+		MARK_ACCOUNTS
+	)
+	let after = at.after
+	for (const account of covered) {
+		if (spent.room() < 1) {
+			return stop({ after })
+		}
+		if (account.marked === 0) {
+			db.run(
+				"UPDATE accounts SET suspended_at = ?, suspension_source = 'domain' WHERE id = ? AND suspended_at IS NULL",
+				iso(now),
+				account.id
+			)
+		}
+		const done = sever(db, account.id, job.follow_bound, { dir: 'out', cursor: '' }, true, spent, now)
+		recorded = done.recorded || recorded
+		if (done.side !== null) {
+			return stop({ after, severing: account.id, side: done.side })
+		}
+		after = account.id
+	}
+	if (covered.length === MARK_ACCOUNTS) {
+		return stop({ after })
+	}
+	if (end === undefined) {
+		finish(db, job)
+		return recorded
+	}
+	return stop({ after: end })
 }
 
 const JOB_COLUMNS = `id, kind, subject, mode, actor_account_id, follow_bound, report_bound, action_bound, phase, cursor`
 
-// One round of the remote job after id `after`, else of the oldest, so a call's jobs take turns. Null when there is
-// no job; else the job's id and whether the round recorded an activity to deliver.
+// One round of the remote job after id `after`, else of the oldest, so a call's jobs take turns, of both kinds. Null
+// when there is no job; else the job's id and whether the round recorded an activity to deliver.
 export function remoteModerationRound(db: Db, now: number, after = 0): { id: number; delivers: boolean } | null {
 	const job =
 		db.first<RemoteJob>(`SELECT ${JOB_COLUMNS} FROM remote_moderation_jobs WHERE id > ? ORDER BY id LIMIT 1`, after) ??
@@ -221,6 +459,13 @@ export function remoteModerationRound(db: Db, now: number, after = 0): { id: num
 	if (!holds(db, job)) {
 		finish(db, job)
 		return { id: job.id, delivers: false }
+	}
+	if (job.kind === 'domain') {
+		if (job.phase === 'clear') {
+			clearRound(db, job)
+			return { id: job.id, delivers: false }
+		}
+		return { id: job.id, delivers: markRound(db, job, now) }
 	}
 	if (job.phase === 'reports') {
 		const round = resolveSuspensionReports(
@@ -240,5 +485,5 @@ export function remoteModerationRound(db: Db, now: number, after = 0): { id: num
 		}
 		return { id: job.id, delivers: false }
 	}
-	return { id: job.id, delivers: severRound(db, job, now) }
+	return { id: job.id, delivers: accountSeverRound(db, job, now) }
 }

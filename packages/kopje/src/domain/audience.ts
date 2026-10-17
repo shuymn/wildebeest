@@ -91,11 +91,12 @@ export function mentionStatusSql(id: string): string {
 // ---- Accounts. `x` is an expression for an account id, never a status or edge alias.
 
 // R1 (Account#unavailable?): a suspended local account, a remote account the instance suspended (R38: accounts.
-// suspended_at, set in the suspension's transaction), a remote account whose deletion has started (accounts.deleted_at,
-// set in the first transaction of its purge), and a remote account an instance domain block covers (R38,
-// domainCoveredSql: read live, never from a mark), is seen by nobody, and nothing of it is shown or delivered. Three
-// seeks: the local_accounts row, and the partial indexes of the suspended accounts and of the accounts being deleted,
-// which hold no entry for any other account (INDEXED BY keeps the plan from reading the account's row instead). Domain
+// suspended_at with suspension_source 'account', set in the suspension's transaction), a remote account whose deletion
+// has started (accounts.deleted_at, set in the first transaction of its purge), and a remote account an instance domain
+// block covers (R38, domainCoveredSql: read live, never from a mark: suspension_source 'domain' is not read), is seen
+// by nobody, and nothing of it is shown or delivered. Three seeks: the local_accounts row, and the partial indexes of
+// the suspended accounts (the row read only for an entry) and of the accounts being deleted, which hold no entry for
+// any other account (INDEXED BY keeps the plan from reading the account's row instead). Domain
 // coverage costs one constant seek per emitted predicate while the instance has no suspend block (guardedSql), so the
 // rule then reads no row of an available account but its local_accounts row; otherwise it also reads the account's
 // row by its key and seeks at most 4 × (MAX_BLOCK_LABELS - 1) blocks (coveredSql). An unknown id is available.
@@ -103,7 +104,7 @@ export function availableSql(x: string): string {
 	return `(NOT EXISTS (SELECT 1 FROM main.local_accounts pl WHERE pl.account_id = ${x} AND pl.suspended_at IS NOT NULL
 		UNION ALL SELECT 1 FROM main.accounts pa INDEXED BY accounts_deleted WHERE pa.id = ${x} AND pa.deleted_at IS NOT NULL
 		UNION ALL SELECT 1 FROM main.accounts ps INDEXED BY accounts_suspended
-			WHERE ps.id = ${x} AND ${suspendedSql('ps')})
+			WHERE ps.id = ${x} AND ${individuallySuspendedSql('ps')})
 		AND NOT ${guardedSql(accountCoveredSql(x))})`
 }
 
@@ -119,7 +120,8 @@ export function availableLocalSql(l: string): string {
 // presentation (accounts.ts ACCOUNT_COLUMNS) and the admin's list of accounts (admin-accounts.ts) read both rows
 // anyway.
 export function availableJoinedSql(a: string, l: string): string {
-	return `(${availableLocalSql(l)} AND ${activeSql(a)} AND NOT ${guardedSql(domainCoveredSql(a))})`
+	return `(${availableLocalSql(l)} AND ${a}.deleted_at IS NULL AND NOT ${individuallySuspendedSql(a)}
+		AND NOT ${guardedSql(domainCoveredSql(a))})`
 }
 
 // The remote accounts whose deletion has started, the entries of the partial index accounts_deleted: its range in id
@@ -128,14 +130,16 @@ export function deletingSql(a: string): string {
 	return `${a}.deleted_at IS NOT NULL`
 }
 
-// The remote accounts the instance suspended (R38), the entries of the partial index accounts_suspended (migration
-// 0045_remote_suspension): its range in id order is what the admin's list of suspended accounts reads of them.
+// The remote accounts the instance suspended or a domain block's job marked (R38: suspension_source 'account' or
+// 'domain'), the entries of the partial index accounts_suspended (migration 0045_remote_suspension): its range in id
+// order is what the admin's list of suspended accounts reads of them, and what the domain job's clearing walks.
 export function suspendedSql(a: string): string {
 	return `${a}.suspended_at IS NOT NULL`
 }
 
-// The accounts neither suspended by the instance nor being deleted, the entries of the partial index accounts_active
-// (migration 0045_remote_suspension): its range in id order is what the admin's list of active accounts walks.
+// The accounts neither suspended by the instance (nor marked by a domain block's job) nor being deleted, the entries of
+// the partial index accounts_active (migration 0045_remote_suspension): its range in id order is what the admin's list
+// of active accounts walks. Marks lag the blocks, so the list answers 503 while the domain job runs (R38).
 export function activeSql(a: string): string {
 	return `(${a}.deleted_at IS NULL AND ${a}.suspended_at IS NULL)`
 }

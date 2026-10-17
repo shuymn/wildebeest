@@ -10,7 +10,9 @@ import { blockedDomain, hostDomain } from '../platform/domain-name'
 // nothing is fetched from it (fetchRefused), its accounts are neither stored nor refreshed (inbox.ts
 // upsertRemoteActor), and its inbound activity is ignored but for cleanups verified with a stored key (inbox.ts
 // receive, federation/inbound.ts). Every rule reads the live blocks, so a create, update or delete applies from its
-// commit on.
+// commit on. A create, update or delete that changes whether the hosts the block's domain rules are covered (the
+// severity of their longest matching block, into or out of suspend) resets the domain job in its own transaction
+// (resetDomainJob), which then reconciles the domain marks and severs newly covered accounts.
 
 export type Severity = 'suspend' | 'noop'
 
@@ -71,6 +73,24 @@ function ruleFor(db: Db, domain: string): BlockRow | undefined {
 	)
 }
 
+// Resets the domain job (remote-suspension.ts) in the caller's transaction: its walks start again, and its follow
+// bound is the newest follow. Here, not there: deliveries.ts reads hostCovered, and remote-suspension.ts deliveries.ts.
+export function resetDomainJob(db: Db): void {
+	db.run(
+		`INSERT INTO remote_moderation_jobs (kind, subject, mode, follow_bound, phase, cursor)
+		VALUES ('domain', '', 'domain', (SELECT coalesce(max(id), 0) FROM follows), 'clear', '')
+		ON CONFLICT (kind, subject) DO UPDATE SET follow_bound = excluded.follow_bound, phase = excluded.phase,
+			cursor = excluded.cursor`
+	)
+}
+
+// A block's change of the rule for the hosts its domain rules: whether they were covered before (`was`) and are after.
+function transition(db: Db, was: boolean, is: boolean): void {
+	if (was !== is) {
+		resetDomainJob(db)
+	}
+}
+
 // Mastodon's DomainBlock#stricter_than? for the severities Kopje stores: a suspend is stricter than anything; a noop is
 // stricter than a noop only by rejecting what the other does not.
 function stricterThan(block: BlockFields, other: BlockRow): boolean {
@@ -107,6 +127,7 @@ export const createInstanceDomainBlock = writeOperation<
 	if (existing !== undefined && (existing.domain === domain || !stricterThan(input, existing))) {
 		return { ok: false, error: 'exists', existing: present(existing) }
 	}
+	transition(db, existing?.severity === 'suspend', input.severity === 'suspend')
 	const at = new Date(input.now).toISOString()
 	const row = db.first<BlockRow>(
 		`INSERT INTO instance_domain_blocks (domain, severity, reject_media, reject_reports, obfuscate, private_comment,
@@ -130,6 +151,11 @@ export const updateInstanceDomainBlock = writeOperation<
 	BlockFields & { id: number; now: number },
 	InstanceDomainBlock | null
 >((db, input) => {
+	const before = db.first<{ severity: Severity }>('SELECT severity FROM instance_domain_blocks WHERE id = ?', input.id)
+	if (before === undefined) {
+		return null
+	}
+	transition(db, before.severity === 'suspend', input.severity === 'suspend')
 	const row = db.first<BlockRow>(
 		`UPDATE instance_domain_blocks SET severity = ?, reject_media = ?, reject_reports = ?, obfuscate = ?,
 			private_comment = ?, public_comment = ?, updated_at = ?
@@ -149,7 +175,11 @@ export const updateInstanceDomainBlock = writeOperation<
 // Deletes the block `id`; returns it, or null for an unknown id.
 export const deleteInstanceDomainBlock = writeOperation<{ id: number }, InstanceDomainBlock | null>((db, { id }) => {
 	const row = db.first<BlockRow>(`DELETE FROM instance_domain_blocks WHERE id = ? RETURNING ${COLUMNS}`, id)
-	return row === undefined ? null : present(row)
+	if (row === undefined) {
+		return null
+	}
+	transition(db, row.severity === 'suspend', ruleFor(db, row.domain)?.severity === 'suspend')
+	return present(row)
 })
 
 // Whether a suspend block covers `host`, a normalized domain (hostDomain).
