@@ -181,6 +181,8 @@ describe("a suspended actor's cleanups while its job waits (row 7, change 4)", (
 		// The job: bob's follow of dave ends with a withdrawing Reject, to the shared inbox the refresh stored (and, as a
 		// retraction, to the inbox its queued Accept was for).
 		await settle(t.store)
+		// The Reject is staged (its receivers in chunks); a claim expands them.
+		await t.store.claimDeliveries(BUILD, { now: NOW, leaseToken: 'expand' })
 		expect(
 			await sql(
 				t.store,

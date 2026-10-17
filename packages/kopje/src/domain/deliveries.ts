@@ -592,7 +592,8 @@ export function stageRetraction(db: Db, signerId: string, object: string, maxRow
 		return false
 	}
 	const envelope = JSON.parse(intent.body) as { activity: Activity; audience: DeliveryAudience }
-	const targets = audienceTargets(db, signerId, envelope.activity, envelope.audience)
+	// The intent is a retraction (retracts = 1): a Reject staged so withdraws (R38's severing, blocks.ts endFollow).
+	const targets = audienceTargets(db, signerId, envelope.activity, envelope.audience, true)
 		.map((target) => ({ target, key: stageKey(target) }))
 		.filter((t) => t.key > intent.staged)
 		.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))

@@ -23,6 +23,7 @@ import {
 import { activeMuteSql, inDomainSql } from './audience'
 import { userReadOperation, userWriteOperation } from './auth'
 import { leaveConversationsWith } from './conversations'
+import { beginRetraction } from './deliveries'
 import { retractFollow } from './inbox'
 import { writeOperation } from './operation'
 import type { Db } from '../db/sql'
@@ -63,9 +64,13 @@ function party(db: Db, id: string): Party | undefined {
 // RejectFollowService do: a local follower's follow of a remote target is undone there, and a remote follower of a
 // local target is sent a Reject (one that withdraws the follow if it had been accepted, deliveries.ts). The local
 // sides' counts lose the removed edge if it was accepted (a remote account's counts are its server's). Returns
-// whether an activity was recorded. quietRequest: a remote follower's request (pending) is deleted without a Reject,
-// as Mastodon's SuspendAccountService leaves a suspended account's requests unanswered (R38).
-function endFollow(db: Db, follower: Party, target: Party, now: number, quietRequest = false): boolean {
+// whether an activity was recorded, 'staged' for a Reject recorded to be staged. severing (R38): a remote follower's
+// request (pending) is deleted without a Reject, as Mastodon's SuspendAccountService leaves a suspended account's
+// requests unanswered; and the Reject of an accepted follow named by its Follow's id is a staged retraction
+// (deliveries.ts beginRetraction), whose earlier receivers, which grow with that id's history, the caller stages in
+// bounded steps (stageRetraction). Its caller has superseded the earlier activities about that id already, so the
+// intent is one row.
+function endFollow(db: Db, follower: Party, target: Party, now: number, severing = false): boolean | 'staged' {
 	const edge = db.first<{ id: string; uri: string | null; state: string }>(
 		`DELETE FROM follows WHERE account_id = ? AND target_account_id = ?
 		RETURNING CAST(id AS TEXT) AS id, uri, state`,
@@ -108,33 +113,51 @@ function endFollow(db: Db, follower: Party, target: Party, now: number, quietReq
 		if (edge.uri !== null) {
 			retractFollow(db, follower.uri, edge.uri, now)
 		}
-		if (quietRequest && edge.state !== 'accepted') {
+		if (severing && edge.state !== 'accepted') {
 			return false
 		}
-		recordOutbound(
-			db,
-			target.id,
-			followAnswerActivity('Reject', {
-				localActorUri: target.uri,
-				followerUri: follower.uri,
-				followerId: follower.id,
-				followUri: edge.uri,
-				edgeId: edge.id,
-			}),
-			now,
-			{ withdraws: edge.state === 'accepted' }
-		)
+		const reject = followAnswerActivity('Reject', {
+			localActorUri: target.uri,
+			followerUri: follower.uri,
+			followerId: follower.id,
+			followUri: edge.uri,
+			edgeId: edge.id,
+		})
+		if (severing && edge.uri !== null) {
+			if (!beginRetraction(db, target.id, reject, now, 1)) {
+				throw new Error('the earlier activities about the follow were not superseded first')
+			}
+			return 'staged'
+		}
+		recordOutbound(db, target.id, reject, now, { withdraws: edge.state === 'accepted' })
 		return true
 	}
 	return false
 }
 
 // R38's severing of a remote account's follow of a local account (remote-suspension.ts): an accepted follow ends with
-// a withdrawing Reject, a request is deleted without one (endFollow). Returns whether an activity was recorded.
-export function severRemoteFollow(db: Db, followerId: string, targetId: string, now: number): boolean {
+// a withdrawing Reject, a request is deleted without one (endFollow). Returns whether an activity was recorded, and the
+// staged Reject (its signer and object) when its receivers are left to stage.
+export function severRemoteFollow(
+	db: Db,
+	followerId: string,
+	targetId: string,
+	now: number
+): { recorded: boolean; staged: { signer: string; object: string } | null } {
 	const follower = party(db, followerId)
 	const target = party(db, targetId)
-	return follower !== undefined && target !== undefined && endFollow(db, follower, target, now, true)
+	if (follower === undefined || target === undefined) {
+		return { recorded: false, staged: null }
+	}
+	const uri = db.first<{ uri: string | null }>(
+		'SELECT uri FROM follows WHERE account_id = ? AND target_account_id = ?',
+		follower.id,
+		target.id
+	)?.uri
+	const ended = endFollow(db, follower, target, now, true)
+	return ended === 'staged'
+		? { recorded: true, staged: { signer: target.id, object: uri! } }
+		: { recorded: ended, staged: null }
 }
 
 type Target = { status: 'ok'; viewer: Party; target: Party } | { status: 'not_found' } | { status: 'forbidden' }
@@ -385,7 +408,7 @@ function cleanupBatch(db: Db, cleanup: Cleanup, now: number): boolean {
 		for (const edge of ended) {
 			const other = { id: edge.other, uri: edge.other_uri, local: 0 }
 			const ends = edge.follower === user.id ? endFollow(db, user, other, now) : endFollow(db, other, user, now)
-			recorded = ends || recorded
+			recorded = ends !== false || recorded
 		}
 	}
 	if (last == null || last >= cleanup.bound) {

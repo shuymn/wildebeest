@@ -364,18 +364,26 @@ describe("the severing round's budget (change 2 and its preparatory steps)", () 
 		await severedOnce(w, r, uri, written)
 	})
 
-	it.each([560, MODERATION_ROUND_ROWS - SEVER_ROWS])(
-		'stays within the budget with %i pushes and an unrelated expansion backlog the Reject expands',
-		async (count) => {
+	it.each([
+		[560, true],
+		[MODERATION_ROUND_ROWS - SEVER_ROWS, true],
+		[560, false],
+	])(
+		'stays within the budget with %i pushes and an unrelated expansion backlog (Follow id stored: %s)',
+		async (count, named) => {
 			const w = await world()
 			const { r, uri } = await followed(w)
+			if (!named) {
+				// A follow stored without its Follow's id: its Reject is recorded at once, and recording it expands.
+				await sql(w.h.store, 'UPDATE follows SET uri = NULL WHERE account_id = ?', r)
+			}
 			await pushes(w, count)
 			await backlog(w)
 			expect(await act(w, r, { type: 'suspend' })).toMatchObject({ status: 200 })
 			await severedOnce(w, r, uri, await rounds(w.h.store))
-			// The Reject's recording expanded the backlog's first EXPANSION_STEP chunks.
+			// Recording an unstaged Reject expanded the backlog's first EXPANSION_STEP chunks; a staged one expands none.
 			expect(await sql(w.h.store, 'SELECT count(*) AS n FROM deliveries WHERE activity_id = 9000')).toEqual([
-				{ n: EXPANSION_STEP },
+				{ n: named ? 0 : EXPANSION_STEP },
 			])
 		}
 	)
@@ -410,6 +418,84 @@ describe("the severing round's budget (change 2 and its preparatory steps)", () 
 		},
 		120_000
 	)
+
+	// The Reject's targets as staged: each inbox and how many times it is named.
+	const rejectTargets = (store: StoreStub) =>
+		sql<{ inbox: string; n: number }>(
+			store,
+			`SELECT json_extract(t.value, '$.inbox') AS inbox, count(*) AS n
+			FROM outbound_activities o JOIN outbound_targets c ON c.activity_id = o.id, json_each(c.targets) t
+			WHERE json_extract(o.body, '$.activity.type') = 'Reject' GROUP BY 1`
+		)
+
+	it('stages the Reject to every inbox a pair-id follow was accepted at, its shared inbox changing, once each', async () => {
+		const w = await world()
+		const r = await remoteAccount(w.h.store, 'r')
+		const uri = await uriOf(w.h.store, r)
+		const alice = await uriOf(w.h.store, w.alice.id)
+		const GENERATIONS = 300
+		for (let generation = 0; generation < GENERATIONS; generation++) {
+			const inbox = `https://h${generation}.example/inbox`
+			await sql(w.h.store, 'UPDATE accounts SET inbox_url = ?, shared_inbox_url = ? WHERE id = ?', inbox, inbox, r)
+			expect(await receive(w.h.store, uri, { type: 'Follow', id: PAIR, object: alice })).toMatchObject({
+				applied: true,
+			})
+			if (generation < GENERATIONS - 1) {
+				expect(
+					await receive(w.h.store, uri, {
+						type: 'Undo',
+						object: { id: PAIR, type: 'Follow', actor: uri, object: alice },
+					})
+				).toMatchObject({ applied: true })
+			}
+		}
+		expect(await act(w, r, { type: 'suspend' })).toMatchObject({ status: 200 })
+		const written = await rounds(w.h.store)
+		await severedOnce(w, r, uri, written)
+		const targets = await rejectTargets(w.h.store)
+		expect(targets.filter((t) => t.n !== 1)).toEqual([])
+		expect(targets.map((t) => t.inbox).sort()).toEqual(
+			Array.from({ length: GENERATIONS }, (_, i) => `https://h${i}.example/inbox`).sort()
+		)
+	}, 180_000)
+
+	it('stages more receivers than a round may write across rounds, each round within the budget', async () => {
+		const w = await world()
+		const { r, uri } = await followed(w, 2)
+		// The earlier Accept about the pair id waits with targets not yet expanded at RECEIVERS distinct inboxes (as many
+		// changes of its shared inbox would leave), in chunks of 100.
+		const RECEIVERS = 65_000
+		const [accept] = await sql<{ id: number }>(
+			w.h.store,
+			"SELECT id FROM outbound_activities WHERE object_uri = ? AND json_extract(body, '$.activity.type') = 'Accept' ORDER BY id LIMIT 1",
+			PAIR
+		)
+		await sql(
+			w.h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+			INSERT INTO outbound_targets (activity_id, targets)
+			SELECT ?2, json_group_array(json_object('inbox', 'https://s' || i || '.example/inbox', 'addressee', NULL))
+			FROM n GROUP BY i / 100`,
+			RECEIVERS,
+			accept!.id
+		)
+		expect(await act(w, r, { type: 'suspend' })).toMatchObject({ status: 200 })
+		const written = await rounds(w.h.store)
+		await severedOnce(w, r, uri, written)
+		// The Reject's chunks are more rows than one round may write, so staging spanned rounds.
+		expect(
+			(
+				await sql<{ n: number }>(
+					w.h.store,
+					`SELECT count(*) AS n FROM outbound_targets c JOIN outbound_activities o ON o.id = c.activity_id
+					WHERE json_extract(o.body, '$.activity.type') = 'Reject'`
+				)
+			)[0]!.n
+		).toBeGreaterThan(MODERATION_ROUND_ROWS)
+		const targets = await rejectTargets(w.h.store)
+		expect(targets.filter((t) => t.n !== 1)).toEqual([])
+		expect(targets.length).toBe(RECEIVERS + 1)
+	}, 180_000)
 })
 
 describe('follow requests of a suspended account (row 12 b)', () => {
