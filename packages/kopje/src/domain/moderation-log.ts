@@ -21,7 +21,7 @@ export const MODERATION_LOG_PRUNE = 10
 // accessAdminRefusal).
 export type ModerationActor = Admin | Extract<ImportAuthority, { kind: 'access' }>
 
-export type ModerationTarget = { type: 'Report' | 'Account'; id: string }
+export type ModerationTarget = { type: 'Report' | 'Account' | 'DomainBlock'; id: string }
 
 // Logs one admin write; returns its row's id, which is never given twice (0029_admin_reports), so it orders the
 // writes (the report fence, reports.ts resolveSuspensionReports).

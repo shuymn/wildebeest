@@ -9,7 +9,7 @@ import {
 	storeCall,
 } from './context'
 import { mastodonError, moderatingError } from './errors'
-import type { Params } from './params'
+import { type Params, parseBoolean } from './params'
 import { reportResponse } from './reports'
 import type { PageQuery } from '../domain/accounts'
 import {
@@ -21,20 +21,30 @@ import {
 	type AdminAccountStatus,
 	MAX_ADMIN_ACCOUNTS_LIMIT,
 } from '../domain/admin-accounts'
+import {
+	type BlockRequest,
+	DOMAIN_BLOCKS_LIMIT,
+	type DomainBlockResult,
+	MAX_DOMAIN_BLOCKS_LIMIT,
+} from '../domain/admin-domain-blocks'
+import { MEASURE_DAYS, MEASURE_FOLLOWS } from '../domain/admin-measures'
 import { OWNER_ROLE } from '../domain/auth'
+import type { InstanceDomainBlock } from '../domain/instance-domain-blocks'
 import { ADMIN_REPORTS_LIMIT, MAX_ADMIN_REPORTS_LIMIT, type ReportAction } from '../domain/reports'
+import { blockedDomain } from '../platform/domain-name'
+import { sha256Hex } from '../security/tokens'
 
 // The Mastodon admin API (/api/v1/admin/*, /api/v2/admin/*). Every route is Mastodon's authorize_if_got_token!: the
 // token is optional, a token sent must be valid and cover the route's admin scope, and an app token is let through.
 // Mastodon's Pundit policy then refuses any role without the route's permission bit, so anonymous callers, app tokens
 // and users who are not staff are answered 403 "This action is not allowed".
 //
-// Reports and accounts (below) are served as admin operations (adminReadOperation, domain/auth.ts), granting only
-// ADMIN_PERMISSIONS to the OAuth admin. The other handlers are routes Kopje does not serve (yet): they answer as
-// Mastodon does a role without the route's permission, the same to every caller, so they check only the token (no
-// admin check or further Store read). A route that finds its record before authorizing (a before_action with find)
+// Reports, accounts, domain blocks and allows, and the metrics (below) are served as admin operations
+// (adminReadOperation, domain/auth.ts), granting only ADMIN_PERMISSIONS to the OAuth admin. The other handlers are
+// routes Kopje does not serve: they answer as Mastodon does a role without the route's permission, the same to every
+// caller, so they check only the token (no admin check or further Store read). A route that finds its record before authorizing (a before_action with find)
 // answers 404 for a kind Kopje stores none of; one that authorizes first, or whose records Kopje stores (accounts,
-// reports, tags), answers 403.
+// reports, domain blocks, tags), answers 403.
 
 const NOT_ALLOWED = 'This action is not allowed'
 
@@ -46,14 +56,12 @@ const afterToken =
 	}
 
 // Mastodon's policy refusal for a role without the route's permission (ApplicationPolicy, Api::ErrorHandling's
-// Mastodon::NotPermittedError rescue). Measures, dimensions and retention are refused before their body is read, where
-// Mastodon would first answer 400 to a body without its required keys (params.require); the refusal is the same either
-// way for a role without view_dashboard.
+// Mastodon::NotPermittedError rescue).
 export const notAllowed = afterToken(() => mastodonError(403, NOT_ALLOWED))
 
-// A route whose before_action finds the record by id before the policy runs (set_domain_block, set_domain_allow,
-// set_ip_block, set_email_domain_block, set_canonical_email_block): RecordNotFound, since Kopje stores no instance
-// domain blocks, domain allows, IP blocks, email domain blocks or canonical email blocks.
+// A route whose before_action finds the record by id before the policy runs (set_domain_allow,
+// set_ip_block, set_email_domain_block, set_canonical_email_block): RecordNotFound, since Kopje stores no domain
+// allows, IP blocks, email domain blocks or canonical email blocks.
 export const recordNotFound = afterToken(() => mastodonError(404, 'Record not found'))
 
 // GET /api/v1/admin/trends/{tags,links,statuses}: without manage_taxonomies, Mastodon answers the public trends
@@ -416,4 +424,203 @@ export const accountAction: ApiHandler = async (c, deps) => {
 export const unsuspendAccount: ApiHandler = async (c, deps) => {
 	const input = { credential: optionalCredential(c, deps), id: c.req.param('id') ?? '', present: present(c) }
 	return accountResponse(authorized(await storeCall(c, deps, (s, b) => s.unsuspendAdminAccount(b, input))), c)
+}
+
+// ---- Domain blocks (Api::V1::Admin::DomainBlocksController, domain_blocks_controller.rb;
+// domain/admin-domain-blocks.ts).
+// set_domain_block precedes the policy in Mastodon; Kopje authorizes the OAuth admin first, as for reports.
+
+// REST::Admin::DomainBlockSerializer (app/serializers/rest/admin/domain_block_serializer.rb), in its attribute order;
+// digest is the SHA-256 of the domain (DomainBlock#domain_digest, domain_block.rb:104-106).
+async function domainBlockEntity(block: InstanceDomainBlock): Promise<object> {
+	return {
+		id: String(block.id),
+		domain: block.domain,
+		digest: await sha256Hex(block.domain),
+		created_at: block.created_at,
+		severity: block.severity,
+		reject_media: block.reject_media,
+		reject_reports: block.reject_reports,
+		private_comment: block.private_comment,
+		public_comment: block.public_comment,
+		obfuscate: block.obfuscate,
+	}
+}
+
+async function domainBlockResponse(result: DomainBlockResult, c: ApiContext, body?: object): Promise<Response> {
+	switch (result.status) {
+		case 'ok':
+			return c.json(body ?? (await domainBlockEntity(result.block)))
+		case 'not_found':
+			return mastodonError(404, 'Record not found')
+		case 'invalid':
+			return mastodonError(422, result.error)
+		case 'exists':
+			// REST::Admin::ExistingDomainBlockErrorSerializer with the en locale's admin.domain_blocks.existing_domain_block.
+			return c.json(
+				{
+					error: `You have already imposed stricter limits on ${result.existing.domain}.`,
+					existing_domain_block: await domainBlockEntity(result.existing),
+				},
+				422
+			)
+	}
+}
+
+// The fields a create or update sends (resource_params, domain_block_params), booleans cast as Rails casts them.
+function blockRequest(p: Params): BlockRequest {
+	return {
+		severity: p.get('severity'),
+		rejectMedia: parseBoolean(p.get('reject_media')),
+		rejectReports: parseBoolean(p.get('reject_reports')),
+		obfuscate: parseBoolean(p.get('obfuscate')),
+		privateComment: p.get('private_comment'),
+		publicComment: p.get('public_comment'),
+	}
+}
+
+// GET /api/v1/admin/domain_blocks: newest first, limit 100 by default and at most 500 (LIMIT, MAX_LIMIT); Link next
+// while a page is full (records_continue?) and prev whenever it has items, carrying only limit (PAGINATION_PARAMS).
+export const domainBlocks: ApiHandler = async (c, deps) => {
+	const p = await requestParams(c, deps)
+	if (p instanceof Response) {
+		return p
+	}
+	const page = adminPage(p, DOMAIN_BLOCKS_LIMIT, MAX_DOMAIN_BLOCKS_LIMIT)
+	const input = { credential: optionalCredential(c, deps), page }
+	const blocks = authorized(await storeCall(c, deps, (s, b) => s.adminDomainBlocks(b, input)))
+	const ids = blocks.map((block) => String(block.id))
+	listLinks(c, (cursor) => listUrl(c, '/api/v1/admin/domain_blocks', ['limit'], p, cursor), {
+		more: blocks.length === page.limit,
+		newest: ids[0] ?? null,
+		oldest: ids.at(-1) ?? null,
+	})
+	return c.json(await Promise.all(blocks.map(domainBlockEntity)))
+}
+
+// GET /api/v1/admin/domain_blocks/:id.
+export const domainBlock: ApiHandler = async (c, deps) => {
+	const input = { credential: optionalCredential(c, deps), id: c.req.param('id') ?? '' }
+	return domainBlockResponse(authorized(await storeCall(c, deps, (s, b) => s.adminDomainBlock(b, input))), c)
+}
+
+// POST /api/v1/admin/domain_blocks: as a form (Fedilab) or JSON (Fediblockhole's add_block, __init__.py:627-649).
+export const createDomainBlock: ApiHandler = async (c, deps) => {
+	const p = await requestParams(c, deps)
+	if (p instanceof Response) {
+		return p
+	}
+	const input = { credential: optionalCredential(c, deps), domain: p.get('domain'), ...blockRequest(p) }
+	return domainBlockResponse(authorized(await storeCall(c, deps, (s, b) => s.createAdminDomainBlock(b, input))), c)
+}
+
+// PUT and PATCH /api/v1/admin/domain_blocks/:id. Fediblockhole's update_known_block sends the whole block, its domain
+// included (__init__.py:606-624), which, as in Mastodon, does not change.
+export const updateDomainBlock: ApiHandler = async (c, deps) => {
+	const p = await requestParams(c, deps)
+	if (p instanceof Response) {
+		return p
+	}
+	const input = { credential: optionalCredential(c, deps), id: c.req.param('id') ?? '', ...blockRequest(p) }
+	return domainBlockResponse(authorized(await storeCall(c, deps, (s, b) => s.updateAdminDomainBlock(b, input))), c)
+}
+
+// DELETE /api/v1/admin/domain_blocks/:id: an empty object (render_empty).
+export const deleteDomainBlock: ApiHandler = async (c, deps) => {
+	const input = { credential: optionalCredential(c, deps), id: c.req.param('id') ?? '' }
+	const result = authorized(await storeCall(c, deps, (s, b) => s.deleteAdminDomainBlock(b, input)))
+	return domainBlockResponse(result, c, {})
+}
+
+// GET /api/v1/admin/domain_allows: no allow exists without limited federation mode, so the OAuth admin's list is
+// empty (design §1). Its :id answers 404 and its create 403, to everyone (recordNotFound, notAllowed).
+export const domainAllows: ApiHandler = async (c, deps) => {
+	const input = { credential: optionalCredential(c, deps) }
+	authorized(await storeCall(c, deps, (s, b) => s.adminFederationGranted(b, input)))
+	return c.json([])
+}
+
+// ---- Metrics (Api::V1::Admin::{Measures,Dimensions,Retention}Controller; domain/admin-measures.ts), view_dashboard.
+
+// POST /api/v1/admin/dimensions and /retention: no dimension key is served and no sign-in is recorded, so the OAuth
+// admin gets `[]`, as Dimension.retrieve answers keys it does not know (dimension.rb:15-21).
+export const emptyMetric: ApiHandler = async (c, deps) => {
+	const input = { credential: optionalCredential(c, deps) }
+	authorized(await storeCall(c, deps, (s, b) => s.adminDashboardGranted(b, input)))
+	return c.json([])
+}
+
+const DATE = /^(\d{4})-(\d{2})-(\d{2})/
+
+// A start_at or end_at as BaseMeasure reads it (`to_datetime`, then `to_date`): blank is none; otherwise the date the
+// value names, its time ignored. Kopje reads ISO 8601 dates and times only, where Ruby's DateTime.parse reads more.
+function measureDate(value: string | undefined): { date: string | null } | 'invalid' {
+	if (value === undefined || value.trim() === '') {
+		return { date: null }
+	}
+	const match = DATE.exec(value.trim())
+	if (match === null) {
+		return 'invalid'
+	}
+	const [, year, month, day] = match
+	const at = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)))
+	return at.toISOString().slice(0, 10) === match[0] ? { date: match[0] } : 'invalid'
+}
+
+// POST /api/v1/admin/measures (measures_controller.rb, Admin::Metrics::Measure.retrieve, measure.rb:21-26): one
+// measure per key in `keys`, in order, of the keys served (instance_follows); every other key is left out, as retrieve
+// leaves out keys it does not know (filter_map). As in Mastodon, the body is read before the policy (set_measures):
+// instance_follows without its object answers 400 (params.require), and a date that is none 422 (Date::Error,
+// error_handling.rb:15-17), to every caller. Fediblockhole sends no dates (fetch_instance_follows,
+// __init__.py:529-567), so its data is empty, as generate_series of NULLs is.
+//
+// The answer is REST::Admin::MeasureSerializer's: key, unit, total and data; no human_value (the measure has no
+// value_to_human_value) and no previous_total (total_in_time_range? is false), measure_serializer.rb:3-8. A data
+// point's date is written as Mastodon's documentation shows it (methods/admin/measures.md, instance_follows:
+// "2022-09-14T00:00:00.000+00:00").
+export const measures: ApiHandler = async (c, deps) => {
+	const p = await requestParams(c, deps)
+	if (p instanceof Response) {
+		return p
+	}
+	const keys = p.getAll('keys')
+	const credential = optionalCredential(c, deps)
+	if (!keys.includes('instance_follows')) {
+		authorized(await storeCall(c, deps, (s, b) => s.adminDashboardGranted(b, { credential })))
+		return c.json([])
+	}
+	if (!p.hasObject('instance_follows')) {
+		await checkOptionalToken(c, deps)
+		return mastodonError(400, 'param is missing or the value is empty or invalid: instance_follows')
+	}
+	const start = measureDate(p.get('start_at'))
+	const end = measureDate(p.get('end_at'))
+	if (start === 'invalid' || end === 'invalid') {
+		await checkOptionalToken(c, deps)
+		return mastodonError(422, 'Invalid date supplied')
+	}
+	const domain = (p.get('instance_follows[domain]') ?? '').trim()
+	const input = {
+		credential,
+		domain: domain === '' ? null : blockedDomain(domain),
+		includeSubdomains: parseBoolean(p.get('instance_follows[include_subdomains]')) ?? false,
+		range: start.date === null || end.date === null ? null : { start: start.date, end: end.date },
+	}
+	const result = authorized(await storeCall(c, deps, (s, b) => s.instanceFollowsMeasure(b, input)))
+	switch (result.status) {
+		case 'too_many':
+			return mastodonError(422, `too many follows to count (more than ${MEASURE_FOLLOWS}); the total is not known`)
+		case 'too_long':
+			return mastodonError(422, `date range too long (at most ${MEASURE_DAYS} days)`)
+	}
+	const measure = {
+		key: 'instance_follows',
+		unit: null,
+		total: String(result.measure.total),
+		data: result.measure.data.map((point) => ({
+			date: `${point.date}T00:00:00.000+00:00`,
+			value: String(point.value),
+		})),
+	}
+	return c.json(keys.filter((key) => key === 'instance_follows').map(() => measure))
 }

@@ -1,3 +1,4 @@
+import { type PageQuery, edgeRangeSql } from './accounts'
 import { domainCoveredSql, hostCoveredSql, MAX_BLOCK_LABELS } from './audience'
 import { readOperation, writeOperation } from './operation'
 import type { Db } from '../db/sql'
@@ -91,16 +92,29 @@ function transition(db: Db, was: boolean, is: boolean): void {
 	}
 }
 
-// Mastodon's DomainBlock#stricter_than? for the severities Kopje stores: a suspend is stricter than anything; a noop is
-// stricter than a noop only by rejecting what the other does not.
-function stricterThan(block: BlockFields, other: BlockRow): boolean {
+// The fields Mastodon's DomainBlock#stricter_than? compares (domain_block.rb:81-87). `severity` is a request's, which
+// may be one Kopje does not store (silence, or a value outside the list), as Mastodon compares an unsaved block.
+export type Strictness = { severity: string; rejectMedia: boolean; rejectReports: boolean }
+
+// Mastodon's DomainBlock#stricter_than? (domain_block.rb:81-87) against a stored block, whose severity is suspend or
+// noop: a suspend is stricter than anything; nothing else is stricter than a suspend; otherwise the flags decide.
+function stricterThan(block: Strictness, other: BlockRow): boolean {
 	if (block.severity === 'suspend') {
 		return true
 	}
-	if (other.severity === 'suspend') {
+	if (other.severity === 'suspend' && (block.severity === 'silence' || block.severity === 'noop')) {
 		return false
 	}
 	return (block.rejectMedia || other.reject_media === 0) && (block.rejectReports || other.reject_reports === 0)
+}
+
+// The block a new block of `domain` (normalized) conflicts with, as Mastodon's create refuses it
+// (domain_blocks_controller.rb:32-33, 58-60): the block of `domain` itself, or a ruling block at least as strict.
+export function conflictingBlock(db: Db, domain: string, block: Strictness): InstanceDomainBlock | undefined {
+	const existing = ruleFor(db, domain)
+	return existing !== undefined && (existing.domain === domain || !stricterThan(block, existing))
+		? present(existing)
+		: undefined
 }
 
 export type CreateBlockResult =
@@ -109,13 +123,9 @@ export type CreateBlockResult =
 	| { ok: false; error: 'exists'; existing: InstanceDomainBlock }
 
 // Creates a block of `domain` (raw, normalized by blockedDomain). Refused: a domain that is not one; a domain of more
-// than MAX_BLOCK_LABELS labels (the label bound hostCoveredSql relies on); and, as Mastodon's create refuses it
-// (domain_blocks_controller.rb:32-33, 58-60), a domain already blocked, or one whose ruling block is at least as
-// strict, which `existing` names.
-export const createInstanceDomainBlock = writeOperation<
-	BlockFields & { domain: string; now: number },
-	CreateBlockResult
->((db, input) => {
+// than MAX_BLOCK_LABELS labels (the label bound hostCoveredSql relies on); and a conflicting block (conflictingBlock),
+// which `existing` names.
+export function createBlock(db: Db, input: BlockFields & { domain: string; now: number }): CreateBlockResult {
 	const domain = blockedDomain(input.domain)
 	if (domain === null) {
 		return { ok: false, error: 'invalid-domain' }
@@ -123,11 +133,11 @@ export const createInstanceDomainBlock = writeOperation<
 	if (labels(domain) > MAX_BLOCK_LABELS) {
 		return { ok: false, error: 'too-deep' }
 	}
-	const existing = ruleFor(db, domain)
-	if (existing !== undefined && (existing.domain === domain || !stricterThan(input, existing))) {
-		return { ok: false, error: 'exists', existing: present(existing) }
+	const existing = conflictingBlock(db, domain, input)
+	if (existing !== undefined) {
+		return { ok: false, error: 'exists', existing }
 	}
-	transition(db, existing?.severity === 'suspend', input.severity === 'suspend')
+	transition(db, ruleFor(db, domain)?.severity === 'suspend', input.severity === 'suspend')
 	const at = new Date(input.now).toISOString()
 	const row = db.first<BlockRow>(
 		`INSERT INTO instance_domain_blocks (domain, severity, reject_media, reject_reports, obfuscate, private_comment,
@@ -144,43 +154,74 @@ export const createInstanceDomainBlock = writeOperation<
 		at
 	)
 	return { ok: true, block: present(row!) }
-})
+}
 
-// Changes the severity, flags and comments of the block `id` (its domain stays); null for an unknown id.
-export const updateInstanceDomainBlock = writeOperation<
-	BlockFields & { id: number; now: number },
-	InstanceDomainBlock | null
->((db, input) => {
-	const before = db.first<{ severity: Severity }>('SELECT severity FROM instance_domain_blocks WHERE id = ?', input.id)
+export const createInstanceDomainBlock = writeOperation(createBlock)
+
+// Changes the fields given of the block `id` (its domain stays; a field left out keeps its value); null for an unknown
+// id.
+export function updateBlock(
+	db: Db,
+	input: Partial<BlockFields> & { id: number; now: number }
+): InstanceDomainBlock | null {
+	const before = db.first<BlockRow>(`SELECT ${COLUMNS} FROM instance_domain_blocks WHERE id = ?`, input.id)
 	if (before === undefined) {
 		return null
 	}
-	transition(db, before.severity === 'suspend', input.severity === 'suspend')
+	const severity = input.severity ?? before.severity
+	transition(db, before.severity === 'suspend', severity === 'suspend')
+	const flag = (value: boolean | undefined, stored: number) => (value === undefined ? stored : value ? 1 : 0)
 	const row = db.first<BlockRow>(
 		`UPDATE instance_domain_blocks SET severity = ?, reject_media = ?, reject_reports = ?, obfuscate = ?,
 			private_comment = ?, public_comment = ?, updated_at = ?
 		WHERE id = ? RETURNING ${COLUMNS}`,
-		input.severity,
-		input.rejectMedia ? 1 : 0,
-		input.rejectReports ? 1 : 0,
-		input.obfuscate ? 1 : 0,
-		input.privateComment,
-		input.publicComment,
+		severity,
+		flag(input.rejectMedia, before.reject_media),
+		flag(input.rejectReports, before.reject_reports),
+		flag(input.obfuscate, before.obfuscate),
+		input.privateComment === undefined ? before.private_comment : input.privateComment,
+		input.publicComment === undefined ? before.public_comment : input.publicComment,
 		new Date(input.now).toISOString(),
 		input.id
 	)
 	return row === undefined ? null : present(row)
-})
+}
+
+export const updateInstanceDomainBlock = writeOperation(updateBlock)
 
 // Deletes the block `id`; returns it, or null for an unknown id.
-export const deleteInstanceDomainBlock = writeOperation<{ id: number }, InstanceDomainBlock | null>((db, { id }) => {
+export function deleteBlock(db: Db, id: number): InstanceDomainBlock | null {
 	const row = db.first<BlockRow>(`DELETE FROM instance_domain_blocks WHERE id = ? RETURNING ${COLUMNS}`, id)
 	if (row === undefined) {
 		return null
 	}
 	transition(db, row.severity === 'suspend', ruleFor(db, row.domain)?.severity === 'suspend')
 	return present(row)
-})
+}
+
+export const deleteInstanceDomainBlock = writeOperation<{ id: number }, InstanceDomainBlock | null>((db, { id }) =>
+	deleteBlock(db, id)
+)
+
+export function blockById(db: Db, id: number): InstanceDomainBlock | null {
+	const row = db.first<BlockRow>(`SELECT ${COLUMNS} FROM instance_domain_blocks WHERE id = ?`, id)
+	return row === undefined ? null : present(row)
+}
+
+// A page of the blocks by id, as Mastodon's to_a_paginated_by_id reads it (app/models/concerns/paginable.rb:24-30):
+// newest first below max_id and above since_id, or, given min_id, the oldest above it and below max_id (since_id
+// unused), still answered newest first. Direct ranges on the primary key (edgeRangeSql).
+export function blocksPage(db: Db, page: PageQuery): InstanceDomainBlock[] {
+	const ascending = page.minId !== undefined
+	const rows = db.all<BlockRow>(
+		`SELECT ${COLUMNS} FROM instance_domain_blocks WHERE ${edgeRangeSql('id', '?1', '?2')}
+		ORDER BY id ${ascending ? 'ASC' : 'DESC'} LIMIT ?3`,
+		page.maxId ?? null,
+		(ascending ? page.minId : page.sinceId) ?? null,
+		page.limit
+	)
+	return (ascending ? rows.reverse() : rows).map(present)
+}
 
 // Whether a suspend block covers `host`, a normalized domain (hostDomain).
 export function hostCovered(db: Db, host: string): boolean {
