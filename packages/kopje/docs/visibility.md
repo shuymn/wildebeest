@@ -545,17 +545,19 @@ severity `suspend` or `noop`.
   names: at most two unique seeks per suffix of 2 to 8 labels.
 - **Availability.** `availableSql` makes a remote account unavailable when a block covers either key `inDomainSql`
   compares (its stored domain or its actor id's host), read live in every statement; no mark is read. While the
-  instance has no `suspend` block the rule costs one constant seek per statement; otherwise the account's row by its
+  instance has no `suspend` block the rule costs one constant seek per predicate a statement emits (a `CASE`, so a
+  result column skips the walk too); otherwise the account's row by its
   key and the walk of each key. Account presentation reads the same rule with the row (`availableJoinedSql`).
 - **Deliveries.** The send-time check below refuses a covered inbox host, and a row all of whose listed hosts are
   covered; retractions still go.
-- **Fetches (advisory).** The Worker asks the Store before each fetch (`fetchRefused`) and makes no request to a
+- **Fetches (advisory).** The Worker asks the Store before each request, a redirect's included (`fetchRefused`), and makes none to a
   covered host: search resolution, `Announce` originals, keys, owner documents, collection syncs and quote rounds. A
   block that commits between that read and the fetch costs one request, whose result the writes refuse.
 - **Writes.** `upsertRemoteActor` stores no account whose actor host or domain is covered and refreshes no covered
   row (not even its routing), so no account moves into a blocked domain; `storeRemoteStatus` refuses an unavailable
   author, so nothing of a covered account is stored.
-- **Inbound.** For an actor on a covered host, or whose stored account is covered, the Worker ignores everything but
+- **Inbound.** For an actor on a covered host, or whose stored account is covered (judged from the activity's
+  envelope, whatever its type), the Worker ignores everything but
   `Delete`, `DeleteActor`, `Undo` and `Reject` before any fetch, and verifies those only against a key the Store
   already holds, of any age, with no fetch (a rotated key fails). The Store's gate holds such an actor in every round,
   as it holds an individually suspended one, without the routing refresh; an actor of a covered host with no stored

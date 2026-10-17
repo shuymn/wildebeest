@@ -13,7 +13,7 @@
 --   reject_media, reject_reports, obfuscate, private_comment, public_comment, created_at, updated_at: the admin
 --                      API's fields, stored as given.
 --
---   instance_domain_blocks_suspend   the suspend blocks by id: availableSql's one constant seek per query, which
+--   instance_domain_blocks_suspend   the suspend blocks by id: availableSql's one constant seek per predicate, which
 --                                    finds none on an instance without one and skips the per-account rule.
 --
 -- Cost: a new empty table and its indexes; no existing row is read. Measured on the benchmark store of
