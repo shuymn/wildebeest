@@ -23,7 +23,7 @@ import {
 	type Setup,
 	update,
 } from './inbox-status-helpers'
-import { contexts } from './quote-helpers'
+import { contexts, deferred, deliveryDeps, quoteAccept as accept, quoteReject as reject } from './quote-helpers'
 import { rowsRead } from './read-helpers'
 import { outbound } from './status-helpers'
 import { Db } from '../src/db/sql'
@@ -129,29 +129,6 @@ async function world() {
 	return { t, bob, theirs }
 }
 
-function accept(actor: TestActor, quoting: string, result: string | null, extra: Record<string, unknown> = {}) {
-	return {
-		'@context': [AS, { QuoteRequest: FEP }],
-		id: `${actor.uri}#accepts/quote_requests/${nextId()}`,
-		type: 'Accept',
-		actor: actor.uri,
-		object: `${quoting}#quote-request`,
-		...(result === null ? {} : { result }),
-		...extra,
-	}
-}
-
-function reject(actor: TestActor, quoting: string, extra: Record<string, unknown> = {}) {
-	return {
-		'@context': [AS, { QuoteRequest: FEP }],
-		id: `${actor.uri}#rejects/quote_requests/${nextId()}`,
-		type: 'Reject',
-		actor: actor.uri,
-		object: `${quoting}#quote-request`,
-		...extra,
-	}
-}
-
 function stampOf(actor: TestActor): string {
 	return `${actor.uri}/quote_authorizations/${nextId()}`
 }
@@ -192,23 +169,20 @@ async function deliver(
 	now = NOW
 ): Promise<Delivered[]> {
 	const sent: Delivered[] = []
-	let n = 0
-	const deps = {
-		build: () => BUILD,
-		store: () => t.store,
-		now: () => now,
-		fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
-			const request = new Request(input, init)
-			const body = await request.text()
-			const status = await answer(request.url, body)
-			if (status < 300) {
-				sent.push({ inbox: request.url, body, json: JSON.parse(body) as Record<string, unknown> })
-			}
-			return new Response(null, { status })
-		}) as typeof fetch,
-		checkHost: () => Promise.resolve(),
-		leaseToken: () => `lease-${++n}`,
-	}
+	const record = (async (input: RequestInfo | URL, init?: RequestInit) => {
+		const request = new Request(input, init)
+		const body = await request.text()
+		const status = await answer(request.url, body)
+		if (status < 300) {
+			sent.push({ inbox: request.url, body, json: JSON.parse(body) as Record<string, unknown> })
+		}
+		return new Response(null, { status })
+	}) as typeof fetch
+	const deps = deliveryDeps(
+		() => t.store,
+		record,
+		() => now
+	)
 	// A claim that only drops refused rows (a suspended sender's) claims nothing but leaves the next row due.
 	for (let round = 0; round < 40; round++) {
 		const result = await deliveryRound(t.env, deps)
@@ -537,7 +511,7 @@ describe('the Note’s quote properties', () => {
 })
 
 // ---------------------------------------------------------------------------------------------------------------
-// Concurrency (PR 3): the test table, as changed by both design reviews
+// Concurrency (PR 3): the test table
 // ---------------------------------------------------------------------------------------------------------------
 
 type Lane = { type: string; object_uri: string | null; inbox: string; addressee: string | null; state: string }
@@ -1194,22 +1168,20 @@ describe('Concurrency (PR 3)', () => {
 		const seen: string[] = []
 		// A gate on the next POST of `type`: it is in flight (leased) until released.
 		const gated = (type: string) => {
-			let reached!: () => void
-			let release!: () => void
-			const arrived = new Promise<void>((resolve) => (reached = resolve))
-			const gate = new Promise<void>((resolve) => (release = resolve))
+			const arrived = deferred()
+			const gate = deferred()
 			let held = false
 			const answer = async (url: string, body: string) => {
 				const json = JSON.parse(body) as Record<string, unknown>
 				seen.push(`${url} ${String(json.id)}`)
 				if (!held && json.type === type) {
 					held = true
-					reached()
-					await gate
+					arrived.resolve()
+					await gate.promise
 				}
 				return 202
 			}
-			return { arrived, release, answer }
+			return { arrived: arrived.promise, release: gate.resolve, answer }
 		}
 		// The Accept commits while the Create and the QuoteRequest are in flight; the cron's quote round runs too.
 		const first = gated('QuoteRequest')
@@ -1294,7 +1266,7 @@ describe('bounds of the new reads (RES-7)', () => {
 	})
 })
 
-describe('review fixes', () => {
+describe('a Reject, then the stamp’s Delete', () => {
 	it('a Reject leaves the stamp’s Delete to revoke the received quotes naming it, in batches, and forwards once', async () => {
 		const { t, bob, theirs } = await world()
 		const { mine, stamp } = await acceptedQuote(t, bob, theirs.id)

@@ -35,7 +35,7 @@ import {
 	statusRow,
 	update,
 } from './inbox-status-helpers'
-import { contexts, quoting } from './quote-helpers'
+import { contexts, deferred, QUOTE_CONTEXT, quoting, serveStamp } from './quote-helpers'
 import { Db } from '../src/db/sql'
 import { PURGE_BATCH, receiveActivity, RETRACTION_TTL_MS, runInboundJobs } from '../src/domain/inbox'
 import {
@@ -62,15 +62,6 @@ import { RSA_ALGORITHM } from '../src/security/key-wrap'
 
 const OTHER = 'https://other.example'
 const RELAY = 'https://relay.example'
-const QUOTE_CONTEXT = [
-	AS,
-	{
-		QuoteAuthorization: 'https://w3id.org/fep/044f#QuoteAuthorization',
-		gts: 'https://gotosocial.org/ns#',
-		interactingObject: { '@id': 'gts:interactingObject', '@type': '@id' },
-		interactionTarget: { '@id': 'gts:interactionTarget', '@type': '@id' },
-	},
-]
 
 type QuoteRow = {
 	quoted_uri: string | null
@@ -113,19 +104,6 @@ async function rounds(t: Setup, now: number): Promise<number> {
 
 function stampUri(quoted: TestActor): string {
 	return `${quoted.uri}/quote_authorizations/${nextId()}`
-}
-
-// A stamp as Mastodon's QuoteAuthorizationSerializer renders it, served on the web.
-function serveStamp(web: RemoteWeb, uri: string, quoted: TestActor, quoting: string, target: string, extra = {}) {
-	web.serve(uri, {
-		'@context': QUOTE_CONTEXT,
-		type: 'QuoteAuthorization',
-		id: uri,
-		attributedTo: quoted.uri,
-		interactingObject: quoting,
-		interactionTarget: target,
-		...extra,
-	})
 }
 
 // The app, where each inbox request is followed by the job rounds it asks the Queue for (only rounds verify quotes);
@@ -1481,14 +1459,6 @@ describe('review round 1 regressions', () => {
 		expect(await round()).toBe(false)
 		expect(await quoteOf(t, quote.id)).toMatchObject({ state: 'accepted', verify_after: null })
 	})
-
-	function deferred() {
-		let resolve!: () => void
-		const promise = new Promise<void>((r) => {
-			resolve = r
-		})
-		return { promise, resolve }
-	}
 
 	// A pending quote of carol's (known) status, stored with its work due and no round run yet.
 	async function pendingQuote() {

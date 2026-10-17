@@ -24,7 +24,7 @@ import {
 	undo,
 	update,
 } from './inbox-status-helpers'
-import { contexts, quoting } from './quote-helpers'
+import { contexts, deferred, deliveryDeps, quoting } from './quote-helpers'
 import { outbound } from './status-helpers'
 import { MAX_LANE_BACKLOG } from '../src/domain/deliveries'
 import { RETRACTION_TTL_MS } from '../src/domain/inbox'
@@ -140,18 +140,15 @@ async function accepted(t: Setup, bob: TestActor, target: string) {
 
 // Delivery rounds until nothing is due, every POST answered by `answer` (202 unless it says otherwise).
 async function deliver(t: Setup, answer: (url: string, body: string) => Promise<number> | number = () => 202) {
-	let n = 0
-	const deps = {
-		build: () => BUILD,
-		store: () => t.store,
-		now: () => NOW,
-		fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
-			const request = new Request(input, init)
-			return new Response(null, { status: await answer(request.url, await request.text()) })
-		}) as typeof fetch,
-		checkHost: () => Promise.resolve(),
-		leaseToken: () => `lease-${++n}`,
-	}
+	const answering = (async (input: RequestInfo | URL, init?: RequestInit) => {
+		const request = new Request(input, init)
+		return new Response(null, { status: await answer(request.url, await request.text()) })
+	}) as typeof fetch
+	const deps = deliveryDeps(
+		() => t.store,
+		answering,
+		() => NOW
+	)
 	for (let round = 0; round < 20; round++) {
 		if ((await deliveryRound(t.env, deps)).claimed === 0) {
 			return
@@ -571,23 +568,21 @@ describe('concurrency (design, Concurrency (PR 2): the test table)', () => {
 		const { t, bob, mine } = await world()
 		const { note, stamp: result, authorization, request } = await accepted(t, bob, mine.uri)
 		const quoting = await statusId(t, note.id)
-		let releaseAccept!: () => void
-		let reachedAccept!: () => void
-		const acceptHeld = new Promise<void>((resolve) => (reachedAccept = resolve))
-		const gate = new Promise<void>((resolve) => (releaseAccept = resolve))
+		const acceptHeld = deferred()
+		const gate = deferred()
 		const order: string[] = []
 		const delivering = deliver(t, async (_url, body) => {
 			const activity = JSON.parse(body) as { type: string }
 			if (activity.type === 'Accept' && order.length === 0) {
-				reachedAccept()
-				await gate
+				acceptHeld.resolve()
+				await gate.promise
 			}
 			order.push(activity.type)
 			return 202
 		})
-		await acceptHeld
+		await acceptHeld.promise
 		expect((await revoke(t, mine.id, quoting)).status).toBe(200)
-		releaseAccept()
+		gate.resolve()
 		await delivering
 		await deliver(t, (_url, body) => {
 			order.push((JSON.parse(body) as { type: string }).type)

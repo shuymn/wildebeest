@@ -7,9 +7,16 @@ import { describe, expect, it } from 'vitest'
 import { sql } from './api-helpers'
 import { harness, inboxDeps } from './app-helpers'
 import { LEGACY, LEGACY_EMPTY_KEK, seedLocalAccount } from './federation-helpers'
-import { BUILD, completeSetup, migratedStore } from './helpers'
+import { completeSetup, migratedStore } from './helpers'
 import { AP, MASTODON, mastodonActor, RemoteWeb, signedInit, type TestActor } from './inbox-helpers'
 import { ALICE, ALICE_URI, AS, create, mastodonNote, nextId, PUBLIC, token } from './inbox-status-helpers'
+import {
+	deliveryDeps,
+	quoteAccept as accept,
+	quoteReject as reject,
+	type RoundDeps,
+	serveStamp as sharedServeStamp,
+} from './quote-helpers'
 import { verifyQuotes } from '../src/federation/quotes'
 import { deliveryRound } from '../src/jobs/deliver'
 import { type KeyGen, RSA_ALGORITHM } from '../src/security/key-wrap'
@@ -21,19 +28,8 @@ import { type KeyGen, RSA_ALGORITHM } from '../src/security/key-wrap'
 
 const B = 'https://kopje-b.test'
 const CAROL_B = '333333333333333333'
-const QUOTE_CONTEXT = [
-	AS,
-	{
-		QuoteAuthorization: 'https://w3id.org/fep/044f#QuoteAuthorization',
-		gts: 'https://gotosocial.org/ns#',
-		interactingObject: { '@id': 'gts:interactingObject', '@type': '@id' },
-		interactionTarget: { '@id': 'gts:interactionTarget', '@type': '@id' },
-	},
-]
 
 type App = ReturnType<typeof harness>
-
-type RoundDeps = Parameters<typeof deliveryRound>[1]
 
 // Delivery rounds until nothing is due (a claim that only drops a refused row leaves the next one due).
 async function rounds(env: Env, deps: RoundDeps): Promise<void> {
@@ -153,56 +149,57 @@ async function world() {
 	const sent: { inbox: string; json: Record<string, unknown> }[] = []
 	// A's delivery rounds until nothing is due, through the router (B's inbox answers for real).
 	const deliver = async () => {
-		let n = 0
-		const deps = {
-			build: () => BUILD,
-			store: () => storeA,
-			now: () => Date.now(),
-			fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
-				const request = new Request(input, init)
-				sent.push({ inbox: request.url, json: JSON.parse(await request.clone().text()) as Record<string, unknown> })
-				// mastodon.example takes every POST (its answers are modelled below); B's inbox answers for real.
-				return new URL(request.url).host === 'kopje-b.test' ? route(request) : new Response(null, { status: 202 })
-			}) as typeof fetch,
-			checkHost: () => Promise.resolve(),
-			leaseToken: () => `lease-${++n}`,
-		}
-		await rounds(a.env, deps)
+		const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+			const request = new Request(input, init)
+			sent.push({ inbox: request.url, json: JSON.parse(await request.clone().text()) as Record<string, unknown> })
+			// mastodon.example takes every POST (its answers are modelled below); B's inbox answers for real.
+			return new URL(request.url).host === 'kopje-b.test' ? route(request) : new Response(null, { status: 202 })
+		}) as typeof globalThis.fetch
+		await rounds(
+			a.env,
+			deliveryDeps(
+				() => storeA,
+				fetch,
+				() => Date.now()
+			)
+		)
 	}
 	// B's delivery rounds, every POST through the router to the app of its host (A's inbox answers for real).
 	const deliverB = async () => {
-		let n = 0
-		await rounds(b.env, {
-			build: () => BUILD,
-			store: () => storeB,
-			now: () => Date.now(),
-			fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
-				const request = new Request(input, init)
-				sentByB.push({ inbox: request.url, json: JSON.parse(await request.clone().text()) as Record<string, unknown> })
-				return new URL(request.url).host === 'kopje.test' ? route(request) : new Response(null, { status: 202 })
-			},
-			checkHost: () => Promise.resolve(),
-			leaseToken: () => `b-lease-${++n}`,
-		})
+		const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+			const request = new Request(input, init)
+			sentByB.push({ inbox: request.url, json: JSON.parse(await request.clone().text()) as Record<string, unknown> })
+			return new URL(request.url).host === 'kopje.test' ? route(request) : new Response(null, { status: 202 })
+		}) as typeof globalThis.fetch
+		await rounds(
+			b.env,
+			deliveryDeps(
+				() => storeB,
+				fetch,
+				() => Date.now(),
+				'b-lease'
+			)
+		)
 	}
 	// A's delivery rounds keeping, rather than sending, what goes to B: signed requests to replay in any order.
 	const captureForB = async () => {
 		const held: Request[] = []
-		let n = 0
-		await rounds(a.env, {
-			build: () => BUILD,
-			store: () => storeA,
-			now: () => Date.now(),
-			fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
-				const request = new Request(input, init)
-				if (new URL(request.url).host === 'kopje-b.test') {
-					held.push(request.clone())
-				}
-				return new Response(null, { status: 202 })
-			},
-			checkHost: () => Promise.resolve(),
-			leaseToken: () => `c-lease-${++n}`,
-		})
+		const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+			const request = new Request(input, init)
+			if (new URL(request.url).host === 'kopje-b.test') {
+				held.push(request.clone())
+			}
+			return new Response(null, { status: 202 })
+		}) as typeof globalThis.fetch
+		await rounds(
+			a.env,
+			deliveryDeps(
+				() => storeA,
+				fetch,
+				() => Date.now(),
+				'c-lease'
+			)
+		)
 		return held
 	}
 	const sentByB: { inbox: string; json: Record<string, unknown> }[] = []
@@ -232,14 +229,7 @@ async function world() {
 		return (await response.json()) as { id: string; uri: string }
 	}
 	const serveStamp = (uri: string, quoting: string, target = note.id) =>
-		web.serve(uri, {
-			'@context': QUOTE_CONTEXT,
-			type: 'QuoteAuthorization',
-			id: uri,
-			attributedTo: bob.uri,
-			interactingObject: quoting,
-			interactionTarget: target,
-		})
+		sharedServeStamp(web, uri, bob, quoting, target)
 	const quoteAtA = async (uri: string) =>
 		(
 			await sql<{ state: string; approval_uri: string | null }>(
@@ -273,23 +263,6 @@ async function world() {
 		sent,
 	}
 }
-
-const accept = (bob: TestActor, quoting: string, result: string) => ({
-	'@context': [AS, { QuoteRequest: 'https://w3id.org/fep/044f#QuoteRequest' }],
-	id: `${bob.uri}#accepts/quote_requests/${nextId()}`,
-	type: 'Accept',
-	actor: bob.uri,
-	object: `${quoting}#quote-request`,
-	result,
-})
-
-const reject = (bob: TestActor, quoting: string) => ({
-	'@context': [AS, { QuoteRequest: 'https://w3id.org/fep/044f#QuoteRequest' }],
-	id: `${bob.uri}#rejects/quote_requests/${nextId()}`,
-	type: 'Reject',
-	actor: bob.uri,
-	object: `${quoting}#quote-request`,
-})
 
 describe('a second Kopje instance receiving our quote (its real inbox and verification)', () => {
 	it('stores it pending, accepts it once the approving Update carries a valid stamp, and drops it on the Reject', async () => {
