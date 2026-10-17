@@ -11,6 +11,7 @@ import {
 	MAX_DOMAIN_BLOCKS_LIMIT,
 } from '../src/domain/admin-domain-blocks'
 import { MAX_BLOCK_LABELS } from '../src/domain/audience'
+import { MAX_DOMAIN_INPUT, MAX_DOMAIN_LENGTH } from '../src/domain/instance-domain-blocks'
 import { sha256Hex } from '../src/security/tokens'
 
 // The Mastodon admin API's domain blocks and domain allows (Api::V1::Admin::DomainBlocksController and
@@ -31,6 +32,8 @@ async function call(w: World, path: string, init: RequestInit = {}, token: strin
 type Entity = Record<string, unknown> & { id: string; domain: string; severity: string }
 
 const create = (w: World, body: Record<string, unknown>) => call(w, BLOCKS, json(body))
+
+const suspendBlock = (w: World, domain: string) => created(w, { domain, severity: 'suspend' })
 
 async function created(w: World, body: Record<string, unknown>): Promise<Entity> {
 	const answer = await create(w, body)
@@ -282,16 +285,58 @@ describe('admin domain blocks, bounds', () => {
 			w.h.store,
 			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
 			INSERT INTO instance_domain_blocks (domain, severity, private_comment, public_comment, created_at, updated_at)
-			SELECT 'c' || i || '.example', 'noop', ?2, ?2, ?3, ?3 FROM n`,
+			SELECT printf('%063d.%063d.%063d.%059d', i, 0, 0, 0), 'noop', ?2, ?2, ?3, ?3 FROM n`,
 			MAX_DOMAIN_BLOCKS_LIMIT,
 			comment,
 			new Date(NOW).toISOString()
 		)
 		const response = await w.h.request(`${BLOCKS}?limit=${MAX_DOMAIN_BLOCKS_LIMIT}`, bearer(w.admin))
 		const bytes = (await response.arrayBuffer()).byteLength
-		// Two comments of at most 6 bytes per character, plus at most 512 bytes of other fields, per block.
-		expect(bytes).toBeGreaterThan(MAX_DOMAIN_BLOCKS_LIMIT * 2 * 6 * MAX_BLOCK_COMMENT)
-		expect(bytes).toBeLessThan(MAX_DOMAIN_BLOCKS_LIMIT * (2 * 6 * MAX_BLOCK_COMMENT + 512))
+		// Two comments of at most 6 bytes per character, a domain of MAX_DOMAIN_LENGTH (251 here), and at most 512
+		// bytes of other fields (the digest included), per block.
+		expect(bytes).toBeGreaterThan(MAX_DOMAIN_BLOCKS_LIMIT * (2 * 6 * MAX_BLOCK_COMMENT + 251))
+		expect(bytes).toBeLessThan(MAX_DOMAIN_BLOCKS_LIMIT * (2 * 6 * MAX_BLOCK_COMMENT + MAX_DOMAIN_LENGTH + 512))
+	})
+
+	it("hold a domain to Mastodon's limits, from JSON or a form, before it is normalized or matched", async () => {
+		const w = await world()
+		const label = (n: number, c = 'a') => c.repeat(n)
+		// 255 characters with labels of 63 (domain_validator.rb:4-6, 29): the longest domain stored.
+		const longest = [label(63), label(63, 'b'), label(63, 'c'), label(60, 'd'), 'ex'].join('.')
+		expect(longest).toHaveLength(MAX_DOMAIN_LENGTH)
+		const invalid = { status: 422, body: { error: 'Validation failed: Domain is invalid' } }
+		const send = (domain: string, asJson: boolean) =>
+			asJson ? create(w, { domain, severity: 'noop' }) : call(w, BLOCKS, form({ domain, severity: 'noop' }))
+		for (const asJson of [true, false]) {
+			const prefix = asJson ? 'j' : 'f'
+			// 256 characters, a label of 64, and a raw input past MAX_DOMAIN_INPUT (refused before normalizing).
+			for (const domain of [
+				`${prefix}${longest}`,
+				`${label(64)}.${prefix}.example`,
+				`${'x'.repeat(MAX_DOMAIN_INPUT)}.${prefix}.example`,
+				`${'a.'.repeat(30_000)}${prefix}.example`,
+			]) {
+				expect(await send(domain, asJson), `${domain.length}`).toMatchObject(invalid)
+			}
+		}
+		const created = await w.h.request(
+			BLOCKS,
+			bearer(w.admin, json({ domain: ` ${longest.toUpperCase()}. `, severity: 'noop' }))
+		)
+		expect(created.status).toBe(200)
+		const text = await created.text()
+		expect((JSON.parse(text) as Entity).domain).toBe(longest)
+		// The entity of the longest domain: the domain, its digest and the other fields.
+		expect(new TextEncoder().encode(text).byteLength).toBeLessThan(MAX_DOMAIN_LENGTH + 512)
+		expect((await call(w, BLOCKS, form({ domain: `${label(63)}.f.example`, severity: 'noop' }))).status).toBe(200)
+		// Depth is refused before any ruling block is looked up: a deep child of a blocked parent is not a conflict.
+		await suspendBlock(w, 'parent.example')
+		expect(
+			await create(w, { domain: `${'a.'.repeat(MAX_BLOCK_LABELS)}parent.example`, severity: 'noop' })
+		).toMatchObject({
+			status: 422,
+			body: { error: `Validation failed: Domain has more than ${MAX_BLOCK_LABELS} labels` },
+		})
 	})
 })
 
