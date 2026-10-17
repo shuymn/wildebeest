@@ -107,6 +107,35 @@ const iso = (ms: number) => new Date(ms).toISOString()
 
 const NEWEST_FOLLOW = '(SELECT coalesce(max(id), 0) FROM follows)'
 
+// Resets the account job of `accountId` in the caller's transaction (its generation): the mode, the phase it starts in
+// and its metadata, a fresh follow bound (the newest follow, read in the same statement) and the cursor at the start.
+function resetAccountJob(
+	db: Db,
+	accountId: string,
+	job: {
+		mode: 'account' | 'domain'
+		phase: string
+		actor: string | null
+		reportBound: number | null
+		actionBound: number | null
+	}
+): void {
+	db.run(
+		`INSERT INTO remote_moderation_jobs (kind, subject, mode, actor_account_id, follow_bound, report_bound,
+			action_bound, phase, cursor)
+		VALUES ('account', ?1, ?2, ?3, ${NEWEST_FOLLOW}, ?4, ?5, ?6, '')
+		ON CONFLICT (kind, subject) DO UPDATE SET mode = excluded.mode, actor_account_id = excluded.actor_account_id,
+			follow_bound = excluded.follow_bound, report_bound = excluded.report_bound,
+			action_bound = excluded.action_bound, phase = excluded.phase, cursor = excluded.cursor`,
+		accountId,
+		job.mode,
+		job.actor,
+		job.reportBound,
+		job.actionBound,
+		job.phase
+	)
+}
+
 // Suspends the remote account `accountId` in one bounded transaction (above), also when it is suspended already
 // (Mastodon's suspend! runs again) or held by a domain mark, which resets its job to mode 'account'. `by` is the admin
 // who suspends: its suspend row in the moderation log is the job's action bound (VIS-29), and the resolved reports name
@@ -126,24 +155,19 @@ export function suspendRemote(db: Db, accountId: string, by: Admin | null, now: 
 		by === null
 			? actionBound(db)
 			: logAction(db, by, 'suspend', { type: 'Account', id: accountId }, { suspended_at: at }, by.now)
-	db.run(
-		`INSERT INTO remote_moderation_jobs (kind, subject, mode, actor_account_id, follow_bound, report_bound,
-			action_bound, phase, cursor)
-		VALUES ('account', ?1, 'account', ?2, ${NEWEST_FOLLOW}, ?3, ?4, 'reports', '')
-		ON CONFLICT (kind, subject) DO UPDATE SET mode = excluded.mode, actor_account_id = excluded.actor_account_id,
-			follow_bound = excluded.follow_bound, report_bound = excluded.report_bound,
-			action_bound = excluded.action_bound, phase = excluded.phase, cursor = excluded.cursor`,
-		accountId,
-		by?.accountId ?? null,
-		reportBound(db),
-		fence
-	)
+	resetAccountJob(db, accountId, {
+		mode: 'account',
+		phase: 'reports',
+		actor: by?.accountId ?? null,
+		reportBound: reportBound(db),
+		actionBound: fence,
+	})
 	return at
 }
 
 // Lifts the individual suspension of a remote account. When no suspend block covers it, clears suspended_at and its
 // source ('lifted'), which ends its job at the next round; what was severed stays severed. When one still does, the
-// account stays suspended as a domain mark ('converted', decision 4), and its job is reset to mode 'domain' with a
+// account stays suspended as a domain mark ('converted'), and its job is reset to mode 'domain' with a
 // fresh follow bound, so it severs both ways. Null for an account that is not individually suspended (a domain mark
 // alone is lifted by lowering the block).
 export function unsuspendRemote(db: Db, accountId: string): 'lifted' | 'converted' | null {
@@ -160,14 +184,7 @@ export function unsuspendRemote(db: Db, accountId: string): 'lifted' | 'converte
 		return 'lifted'
 	}
 	db.run("UPDATE accounts SET suspension_source = 'domain' WHERE id = ?", accountId)
-	db.run(
-		`INSERT INTO remote_moderation_jobs (kind, subject, mode, follow_bound, phase, cursor)
-		VALUES ('account', ?1, 'domain', ${NEWEST_FOLLOW}, 'out', '')
-		ON CONFLICT (kind, subject) DO UPDATE SET mode = excluded.mode, actor_account_id = NULL,
-			follow_bound = excluded.follow_bound, report_bound = NULL, action_bound = NULL, phase = excluded.phase,
-			cursor = excluded.cursor`,
-		accountId
-	)
+	resetAccountJob(db, accountId, { mode: 'domain', phase: 'out', actor: null, reportBound: null, actionBound: null })
 	return 'converted'
 }
 
