@@ -22,9 +22,15 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   account's profile. It is behind the `/admin` Access application like the rest of `/admin`: anyone else is refused
   before the report is looked up, and an unknown report answers 404.
 
+### Fixed
+
+- Suspending an account through the admin API resolves only the reports that were open when the suspension was made.
+  A report the admin reopened or changed after the suspension could be resolved anyway when that request carried an
+  earlier time than the suspension; the order the Store applied them in now decides, whatever their times.
+
 ### Instance changes
 
-- Store schema: adds two migrations, applied on the first request after the deploy; a rollback to an earlier version
+- Store schema: adds three migrations, applied on the first request after the deploy; a rollback to an earlier version
   needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0040_report_notifications`: lets a notification name a report. It reads each stored notification once and no
       other table: on a benchmark store of 1,000,000 accounts, 3,000,000 follows, 2,000,000 statuses and 2,000,000
@@ -33,6 +39,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       notifications. On the same benchmark store its upgrade took 5.0 seconds on an idle machine (5.0 in two more
       runs; up to 7.6 on a loaded one). An instance with millions of notifications should expect a pause of several
       seconds on the first request after the deploy.
+    - `0042_report_action_fence`: records which admin action last changed each report, and which one a running
+      suspension stops at, carried over from the moderation log. It reads the moderation log (at most its newest
+      10,000 entries) and no other table grows its cost: on the same benchmark store its upgrade took 3.0 seconds
+      (3.1 in a second run).
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.13] - 2026-10-17

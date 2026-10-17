@@ -21,8 +21,9 @@
 -- and reads the log once more per running suspension job. Measured on the benchmark store of
 -- test/bench/migration-cost.ts (1,000,000 accounts, 3,000,000 follows, 2,000,000 statuses with their mentions and tags,
 -- 2,000,000 notifications, 200,000 quotes, 10,000 reports, 20 local accounts) in workerd's local Durable Object SQLite:
--- BENCH ms for the upgrade of this file through the kernel (its bookmark, transaction and schema verification),
--- within the 5,000 ms each migration file may take.
+-- 3,045 ms for the upgrade of this file through the kernel (its bookmark, transaction and schema verification; 3,074
+-- ms in a second run), within the 5,000 ms each migration file may take. That store holds no moderation log; the
+-- carry-over's reads grow with the log alone (test/migrations.test.ts, 0042), and the log is capped.
 
 ALTER TABLE reports ADD COLUMN last_action_id INTEGER;
 ALTER TABLE moderation_jobs ADD COLUMN action_bound INTEGER;

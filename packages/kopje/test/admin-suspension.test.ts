@@ -664,7 +664,8 @@ describe('the report fence (R37, VIS-29; concurrency row 21)', () => {
 				if (!held) {
 					const cursor = await sql<{ n: number }>(
 						w.h.store,
-						"SELECT count(*) AS n FROM moderation_jobs WHERE kind = 'suspension' AND phase = 'reports' AND json_extract(state, '$.cursor') > 0"
+						`SELECT count(*) AS n FROM moderation_jobs
+						WHERE kind = 'suspension' AND phase = 'reports' AND json_extract(state, '$.cursor') > 0`
 					)
 					if (cursor[0]!.n > 0) {
 						held = true

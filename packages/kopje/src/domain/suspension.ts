@@ -20,7 +20,7 @@ import type { Db } from '../db/sql'
 //     cascades, at most TOKEN_ROUND_ROWS rows written per round. The epoch already refuses them (auth.ts
 //     currentCredentialSql): API calls, web sessions, code exchange, streaming and pushes. Never cancelled; an
 //     unsuspension keeps the epoch, so the user signs in again, at once.
-//   - suspension: resolves the reports frozen by its bounds (reports.ts resolveSuspensionReports), then stages the Update's
+//   - suspension: resolves the reports its bounds froze (reports.ts resolveSuspensionReports), then stages the Update's
 //     audience, then writes it. A round that finds the account unsuspended or in a later epoch ends the job.
 //   - reach (an unsuspension's), bound to the epoch the unsuspension keeps: stages the restoration Update's audience
 //     the same way, and ends once the account is suspended again.
