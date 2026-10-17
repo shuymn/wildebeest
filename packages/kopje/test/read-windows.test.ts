@@ -916,3 +916,51 @@ describe('windows never take a row hidden by its visibility as a candidate (docs
 		}
 	}, 120_000)
 })
+
+// limit=0 on a list the viewer keeps reads its windows by id and builds the profiles of its answer only: a first window
+// of 999 available and 2,001 unavailable members (by id, newest first), then 3,000 available ones, each with a 16 KiB
+// bio. The answer is the cap, 1,000 accounts, and no more account rows than that are read.
+describe('limit=0 builds the profiles of its answer only', () => {
+	it('reads at most 1,000 account rows across windows of available and unavailable members', async () => {
+		const store = await world(0)
+		await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			const bio = `<p>${'x'.repeat(16 * 1024)}</p>`
+			// Ids from 980...: 3,000 available below; above them, 999 available and 2,001 being deleted, interleaved.
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 6000 - 1)
+				INSERT INTO accounts (id, uri, username, domain, note, deleted_at)
+				SELECT CAST(980000000000000000 + i AS TEXT), 'https://big.example/users/b' || i, 'b' || i, 'big.example', ?1,
+					CASE WHEN i >= 3000 AND ((i - 3000) % 3 <> 0 OR i >= 5997) THEN ?2 END
+				FROM n`,
+				bio,
+				new Date(NOW).toISOString()
+			)
+			sql.exec(
+				"INSERT INTO list_accounts (list_id, account_id) SELECT ?, id FROM accounts WHERE domain = 'big.example'",
+				MEMBERS
+			)
+		})
+		const input = { credential, id: MEMBERS, page: null, present: PRESENT }
+		const counted = await runInDurableObject(store, (_instance, state) => {
+			let profiles = 0
+			const real = state.storage.sql
+			const counting = {
+				exec: (query: string, ...params: SqlStorageValue[]) => {
+					const cursor = real.exec(query, ...params)
+					return {
+						toArray: () => {
+							const rows = cursor.toArray()
+							profiles += rows.filter((row) => 'note' in row && 'display_name' in row).length
+							return rows
+						},
+						one: () => cursor.one(),
+					}
+				},
+			} as unknown as SqlStorage
+			const output = answerOf(listAccounts.run(counting, input as never)) as { items: { id: string }[] }
+			return { profiles, answered: output.items.length }
+		})
+		expect(counted).toEqual({ answered: 1_000, profiles: 1_000 })
+	}, 120_000)
+})

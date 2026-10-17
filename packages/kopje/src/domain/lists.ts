@@ -6,7 +6,8 @@ import {
 	type Present,
 	presentAccount,
 	resolveAccountId,
-	windowAccounts,
+	accountRowsOf,
+	windowAccountIds,
 } from './accounts'
 import { availableSql } from './audience'
 import { userReadOperation, userWriteOperation } from './auth'
@@ -164,23 +165,27 @@ export function ownedAccountsPage(
 	const size = readWindow(page?.limit ?? limit)
 	let max = statusCursor(page?.maxId) ?? ABOVE_EVERY_ID
 	const min = statusCursor(page?.minId ?? page?.sinceId) ?? BELOW_EVERY_ID
+	const key = (row: { id: string }) => row.id
 	if (page !== null) {
 		const window = singleWindow(db, candidates(ascending ? 'ASC' : 'DESC'), size, owner, max, min, size)
-		const shown = windowPage(window, windowAccounts(db, window, rule), (row) => row.id, page.limit, ascending)
-		return { items: shown.rows, newest: shown.newest, oldest: shown.oldest, cut: shown.cut }
+		const shown = windowPage(window, windowAccountIds(db, window, rule), key, page.limit, ascending)
+		const items = accountRowsOf(db, shown.rows.map(key))
+		return { items, newest: shown.newest, oldest: shown.oldest, cut: shown.cut }
 	}
-	const items: AccountRow[] = []
+	// Ids first, through the rule, then the profiles of the answer's own accounts only.
+	const ids: string[] = []
 	for (;;) {
 		const window = singleWindow(db, candidates('DESC'), size, owner, max, min, size)
-		items.push(...windowPage(window, windowAccounts(db, window, rule), (row) => row.id, size, false).rows)
+		const passed = windowPage(window, windowAccountIds(db, window, rule), key, limit - ids.length, false).rows
+		ids.push(...passed.map(key))
 		const last = window.candidates.at(-1)?.id
-		if (!window.cut || items.length >= limit || last === undefined) {
+		if (!window.cut || ids.length >= limit || last === undefined) {
 			break
 		}
 		max = last
 	}
-	const answered = items.slice(0, limit)
-	return { items: answered, newest: answered[0]?.id ?? null, oldest: answered.at(-1)?.id ?? null }
+	const items = accountRowsOf(db, ids)
+	return { items, newest: items[0]?.id ?? null, oldest: items.at(-1)?.id ?? null }
 }
 
 // GET /api/v1/lists/:id/accounts: the members, unavailable accounts left out (Account.without_suspended), by account

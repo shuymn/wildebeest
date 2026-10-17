@@ -1023,18 +1023,35 @@ export type ListFollowsInput = {
 	present: Present
 }
 
-// The accounts of a window of account ids (windows.ts) that `rule` (over `a`, the account row, and `l`, its
-// local_accounts row) passes, each by its key.
-export function windowAccounts(db: Db, window: Window, rule: string): AccountRow[] {
+// The ids of a window of account ids (windows.ts) that `rule` (over `a`, the account row, and `l`, its local_accounts
+// row) passes, each by its key, without their profiles.
+export function windowAccountIds(db: Db, window: Window, rule: string): { id: string }[] {
 	return window.candidates.length === 0
 		? []
-		: db.all<AccountRow>(
-				`SELECT ${ACCOUNT_COLUMNS}
-				FROM json_each(?1) c CROSS JOIN accounts a ON a.id = json_extract(c.value, '$.id')
+		: db.all<{ id: string }>(
+				`SELECT a.id FROM json_each(?1) c CROSS JOIN accounts a ON a.id = json_extract(c.value, '$.id')
 					LEFT JOIN local_accounts l ON l.account_id = a.id
 				WHERE ${rule}`,
 				windowJson(window)
 			)
+}
+
+// The account rows of `ids`, in their order, each by its key: the profiles an answer presents, built for its own
+// accounts only.
+export function accountRowsOf(db: Db, ids: readonly string[]): AccountRow[] {
+	if (ids.length === 0) {
+		return []
+	}
+	const rows = new Map(
+		db
+			.all<AccountRow>(
+				`SELECT ${ACCOUNT_COLUMNS} FROM json_each(?1) c CROSS JOIN accounts a ON a.id = c.value
+					LEFT JOIN local_accounts l ON l.account_id = a.id`,
+				JSON.stringify(ids)
+			)
+			.map((row) => [row.id, row])
+	)
+	return ids.flatMap((id) => rows.get(id) ?? [])
 }
 
 // GET /api/v1/accounts/:id/followers and /following as the viewer (null: anonymous) may see them (R13, Mastodon's
