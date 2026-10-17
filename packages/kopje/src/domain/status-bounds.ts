@@ -30,8 +30,10 @@ const MEDIA_META_BYTES = 1024
 // A status's uri and url, as a remote one is stored (status-text.ts MAX_URL_LENGTH).
 const STATUS_URL_LIMIT = 4096
 // A remote poll's choices (RES-4), and an edit's: at most this many, each at most this many code units as stored and
-// code points as read.
-export const MAX_REMOTE_OPTIONS = 100
+// code points as read. The count is Pleroma's and Akkoma's default (poll_limits max_options), above Misskey's 10
+// (notes/create choices maxItems) and Mastodon's 4 (PollOptionsValidator::MAX_OPTIONS, line 4 at v4.5.0). A poll
+// stored with more (up to migration 0013's 100) is read with its first ones, by index (polls.ts).
+export const MAX_REMOTE_OPTIONS = 20
 export const MAX_REMOTE_OPTION_LENGTH = 1000
 // polls.options as its CHECK bounds it (migration 0013); an edit's poll_options past it reads as none.
 const POLL_OPTIONS_BYTES = 655_360

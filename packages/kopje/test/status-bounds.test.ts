@@ -453,6 +453,52 @@ describe('a stored status is read within its bounds (RES-2)', () => {
 	})
 })
 
+describe('a stored poll with more choices than presented (RES-2)', () => {
+	it('presents its first choices by index, with their tallies, own votes among them, and votes only in them', async () => {
+		const t = await setup()
+		const author = await maximalAccount(t, true)
+		const options = Array.from({ length: MAX_REMOTE_OPTIONS + 10 }, (_, i) => `choice ${i}`)
+		const id = await storedStatus(t, author, {
+			content: '<p>q</p>',
+			spoiler: '',
+			media: [],
+			mentions: [],
+			tags: [],
+			poll: options,
+		})
+		await sql(
+			t.store,
+			'UPDATE polls SET tallies = ?, multiple = 1 WHERE status_id = ?',
+			JSON.stringify(options.map((_, i) => i)),
+			id
+		)
+		await sql(
+			t.store,
+			'INSERT INTO poll_votes (poll_id, account_id, choice) VALUES (?1, ?2, 3), (?1, ?2, ?3)',
+			id,
+			ALICE,
+			MAX_REMOTE_OPTIONS + 5
+		)
+		const shown = await t.api<{
+			options: { title: string; votes_count: number }[]
+			voted: boolean
+			own_votes: number[]
+		}>(`/api/v1/polls/${id}`)
+		expect(shown.body.options).toEqual(
+			options.slice(0, MAX_REMOTE_OPTIONS).map((title, i) => ({ title, votes_count: i }))
+		)
+		expect(shown.body).toMatchObject({ voted: true, own_votes: [3] })
+		const vote = (choice: number) =>
+			t.request(`/api/v1/polls/${id}/votes`, {
+				method: 'POST',
+				headers: { authorization: `Bearer ${t.tokens.alice}`, 'content-type': 'application/json' },
+				body: JSON.stringify({ choices: [String(choice)] }),
+			})
+		expect((await vote(MAX_REMOTE_OPTIONS + 1)).status).toBe(422)
+		expect((await vote(MAX_REMOTE_OPTIONS - 1)).status).toBe(200)
+	})
+})
+
 // Realistic posts of each implementation at its own length limit, in Japanese with its own markup.
 const misskey = () => {
 	const mention = '<a href="https://misskey.example/@bob" class="u-url mention">@bob@misskey.example</a>'
@@ -564,9 +610,9 @@ describe('the table of maxima (RES-3)', () => {
 		const quoting = shape(await read(t, getStatus as never, quote))
 		// docs/threat-model.md "Maxima of presented units" states these; the composite shapes are derived from them.
 		expect({ status, quoting, boosted, account: { sqlite: one.profileBytes, json: jsonBytes(account) } }).toEqual({
-			status: { sqlite: 1_221_553, json: 1_785_427, rows: 161, nodes: 857 },
-			quoting: { sqlite: 2_443_049, json: 3_570_887, rows: 320, nodes: 1_716 },
-			boosted: { sqlite: 2_549_496, json: 3_701_375, rows: 323, nodes: 1_769 },
+			status: { sqlite: 739_953, json: 1_301_907, rows: 161, nodes: 697 },
+			quoting: { sqlite: 1_479_849, json: 2_603_847, rows: 320, nodes: 1_396 },
+			boosted: { sqlite: 1_586_296, json: 2_734_335, rows: 323, nodes: 1_449 },
 			account: { sqlite: 97_844, json: 121_710 },
 		})
 	})

@@ -22,8 +22,8 @@ export const MIN_EXPIRATION_S = 5 * 60
 // Rails' 1.month.
 export const MAX_EXPIRATION_S = 2_629_746
 
-// A remote poll keeps at most this many choices, each cut to this many code units (RES-4; Mastodon's PollParser
-// keeps 500 choices, whole). The length holds Mastodon's 50 grapheme clusters at 20 code units each (an emoji tag
+// A remote poll keeps at most MAX_REMOTE_OPTIONS choices, each cut to this many code units (RES-4; Mastodon's
+// PollParser keeps 500 choices, whole). The length holds Mastodon's 50 grapheme clusters at 20 code units each (an emoji tag
 // sequence takes 14) and Misskey's 50 code units, so a choice either server allows is kept whole.
 export { MAX_REMOTE_OPTION_LENGTH, MAX_REMOTE_OPTIONS }
 
@@ -297,7 +297,11 @@ function presentPoll(row: PollRow, viewer: { id: string | null; votes: number[] 
 		emojis: [],
 		...(viewer.id === null
 			? {}
-			: { voted: row.account_id === viewer.id || viewer.votes.length > 0, own_votes: viewer.votes }),
+			: {
+					voted: row.account_id === viewer.id || viewer.votes.length > 0,
+					// Only votes in the choices presented (pollOptionsSql keeps the first MAX_REMOTE_OPTIONS, by index).
+					own_votes: viewer.votes.filter((choice) => choice < MAX_REMOTE_OPTIONS),
+				}),
 	}
 }
 
@@ -397,8 +401,9 @@ function voteErrors(poll: VotedPoll, voterId: string, choice: number, votes: num
 	if (poll.ended === 1 || hasEnded(poll.expires_at, now)) {
 		errors.push('The poll has already ended')
 	}
-	// A remote choice cut to MAX_REMOTE_OPTION_LENGTH: its name would match nothing on its server.
-	if (choice < 0 || choice >= poll.options.length || poll.cut_options.includes(choice)) {
+	// A remote choice cut to MAX_REMOTE_OPTION_LENGTH: its name would match nothing on its server. A choice past
+	// MAX_REMOTE_OPTIONS of a poll stored with more is not presented, so it is not one to vote in either.
+	if (choice < 0 || choice >= Math.min(poll.options.length, MAX_REMOTE_OPTIONS) || poll.cut_options.includes(choice)) {
 		errors.push('The chosen vote option does not exist')
 	}
 	if (voterId === poll.author_id) {
