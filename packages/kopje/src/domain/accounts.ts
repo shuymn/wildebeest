@@ -23,6 +23,7 @@ import { accountSearchText, queryTerms } from './search-text'
 import { renderFieldValue } from './status-text'
 import type { Db } from '../db/sql'
 import { normalizeDomain, parseAddress } from '../platform/domain-name'
+import { utf8Length } from '../platform/dump-format'
 import { httpUrl } from '../platform/http-url'
 import { sanitizeRemoteHtml } from '../security/html'
 
@@ -140,9 +141,51 @@ export type AccountRow = {
 	// accounts' (null until learned) for a remote one.
 	local_fields: string | null
 	hide_collections: number | null
-	// A remote account's `attachment`, as JSON (fields are read from raw, as the design keeps them).
+	// A remote account's PropertyValue attachments, bounded (REMOTE_ATTACHMENT_SQL), as JSON; null for a local one.
 	attachment: string | null
 }
+
+// Fields a remote profile shows: its PropertyValue attachments (ProcessAccountService#property_values), the name as
+// plain text and the value as sanitized HTML (HTML-1, its links http(s) only, HTML-3), as Mastodon renders them.
+// Kopje's bounds (RES-2): at most MAX_REMOTE_FIELDS, names cut at 255 code units, values at FIELD_VALUE_RAW_LIMIT
+// before sanitizing, and REMOTE_FIELDS_BYTES in all. Mastodon keeps more: 50 fields
+// (ActivityPub::ProcessAccountService::MAX_PROFILE_FIELDS) and 2,047 characters of each stripped name and value
+// (Account::Field::MAX_CHARACTERS_COMPAT).
+export const MAX_REMOTE_FIELDS = 16
+const FIELD_NAME_LIMIT = 255
+const FIELD_VALUE_RAW_LIMIT = 4096
+// The most UTF-8 bytes of field JSON one account carries: read from SQLite (REMOTE_ATTACHMENT_SQL) and, again, shown
+// (remoteFields). An answer of N presented accounts thus carries at most N × 32 KiB of fields: a list's members with
+// limit=0 (MAX_LIST_MEMBERS_ANSWERED, 1,000) 32 MiB, familiar followers (20 targets × 80) 50 MiB.
+export const REMOTE_FIELDS_BYTES = 32 * 1024
+
+// SQLite's substr and length stop at an embedded NUL, so a string is cut only when its UTF-8 bytes pass the limit
+// (a code point is never longer than its bytes). A string containing a NUL is kept whole while its UTF-8 bytes fit
+// the limit; otherwise it may come out shorter than remoteFields would cut it, never longer.
+function cutSql(column: string, limit: number): string {
+	return `CASE WHEN length(CAST(${column} AS BLOB)) <= ${limit} THEN ${column} ELSE substr(${column}, 1, ${limit}) END`
+}
+
+// A remote account's attachment as ACCOUNT_COLUMNS projects it, chosen and cut in SQL so that the stored actor
+// document (up to the fetch budget, 2 MiB) never reaches the isolate: a JSON list of {name, value} entries in
+// document order, at most MAX_REMOTE_FIELDS of them, the name cut (cutSql) at FIELD_NAME_LIMIT and the value at
+// FIELD_VALUE_RAW_LIMIT code points, and only the leading entries whose JSON fits REMOTE_FIELDS_BYTES (size: the
+// list's length in bytes once each entry and the ones before it are included). The bound is in bytes because
+// escaping inflates characters up to six times. An entry counts when it is an object whose `type` is
+// 'PropertyValue' or a list holding it and whose name and value are strings; an attachment that is one object
+// counts as a list of one. SQLite counts code points where JavaScript counts code units, so remoteFields cuts again.
+const REMOTE_ATTACHMENT_SQL = `CASE WHEN a.domain IS NOT NULL THEN (
+		SELECT '[' || COALESCE(group_concat(k.entry, ',' ORDER BY k.key), '') || ']'
+		FROM (SELECT c.key, c.entry, 1 + sum(length(CAST(c.entry AS BLOB)) + 1) OVER (ORDER BY c.key) AS size
+			FROM (SELECT e.key, json_object('name', ${cutSql("e.value ->> '$.name'", FIELD_NAME_LIMIT)},
+					'value', ${cutSql("e.value ->> '$.value'", FIELD_VALUE_RAW_LIMIT)}) AS entry
+				FROM json_each(CASE json_type(a.raw, '$.attachment') WHEN 'array' THEN a.raw -> '$.attachment'
+					ELSE json_array(a.raw -> '$.attachment') END) e
+				WHERE e.type = 'object' AND json_type(e.value, '$.name') = 'text' AND json_type(e.value, '$.value') = 'text'
+					AND json_type(e.value, '$.type') IN ('text', 'array')
+					AND EXISTS (SELECT 1 FROM json_each(e.value, '$.type') t WHERE t.type = 'text' AND t.value = 'PropertyValue')
+				ORDER BY e.key LIMIT ${MAX_REMOTE_FIELDS}) c) k
+		WHERE k.size <= ${REMOTE_FIELDS_BYTES}) END`
 
 export const ACCOUNT_COLUMNS = `a.id, a.uri, a.username, a.domain, a.actor_type, a.display_name, a.note, a.url, a.avatar_url,
 	a.header_url, a.locked, a.discoverable, a.followers_count, a.following_count, a.statuses_count, a.created_at,
@@ -151,7 +194,7 @@ export const ACCOUNT_COLUMNS = `a.id, a.uri, a.username, a.domain, a.actor_type,
 		WHERE s.account_id = a.id AND s.visibility IN ${REACHES_FOLLOWERS_SQL} ORDER BY s.id DESC LIMIT 1)
 		AS last_status_at,
 	l.fields AS local_fields, COALESCE(l.hide_collections, a.hide_collections) AS hide_collections,
-	CASE WHEN a.domain IS NOT NULL THEN a.raw -> '$.attachment' END AS attachment`
+	${REMOTE_ATTACHMENT_SQL} AS attachment`
 
 export const ACCOUNT_FROM = 'accounts a LEFT JOIN local_accounts l ON l.account_id = a.id'
 
@@ -230,37 +273,24 @@ function presentField(field: FieldSource): Field {
 	return { name: field.name, value: renderFieldValue(field.value), verified_at: null }
 }
 
-// Fields a remote profile shows: its PropertyValue attachments (ProcessAccountService#property_values), the name as
-// plain text and the value as sanitized HTML (HTML-1, its links http(s) only, HTML-3), as Mastodon renders them. Kopje's
-// bounds (RES-2): at most MAX_REMOTE_FIELDS, names cut at 255 code units, values at FIELD_VALUE_RAW_LIMIT before
-// sanitizing.
-export const MAX_REMOTE_FIELDS = 16
-const FIELD_NAME_LIMIT = 255
-const FIELD_VALUE_RAW_LIMIT = 4096
-
+// The fields shown, in document order, while the JSON of their names and values, in UTF-8 bytes, stays within
+// REMOTE_FIELDS_BYTES: the first field that would pass it is dropped with all after it, never cut. This bounds what is
+// returned and serialized, as REMOTE_ATTACHMENT_SQL bounds what is read (sanitizing can grow a value fivefold, `&` to
+// `&amp;`). A response of N accounts thus carries at most N × 32 KiB of field names and values once serialized.
 function remoteFields(attachment: string | null): Field[] {
 	if (attachment === null) {
 		return []
 	}
-	const parsed = JSON.parse(attachment) as unknown
 	const fields: Field[] = []
-	for (const entry of Array.isArray(parsed) ? parsed : [parsed]) {
-		if (fields.length >= MAX_REMOTE_FIELDS) {
+	let bytes = 0
+	for (const entry of JSON.parse(attachment) as { name: string; value: string }[]) {
+		const name = entry.name.slice(0, FIELD_NAME_LIMIT)
+		const value = sanitizeRemoteHtml(entry.value.slice(0, FIELD_VALUE_RAW_LIMIT))
+		bytes += utf8Length(JSON.stringify(name)) + utf8Length(JSON.stringify(value))
+		if (bytes > REMOTE_FIELDS_BYTES) {
 			break
 		}
-		if (typeof entry !== 'object' || entry === null) {
-			continue
-		}
-		const { type, name, value } = entry as Record<string, unknown>
-		const types = Array.isArray(type) ? type : [type]
-		if (!types.includes('PropertyValue') || typeof name !== 'string' || typeof value !== 'string') {
-			continue
-		}
-		fields.push({
-			name: name.slice(0, FIELD_NAME_LIMIT),
-			value: sanitizeRemoteHtml(value.slice(0, FIELD_VALUE_RAW_LIMIT)),
-			verified_at: null,
-		})
+		fields.push({ name, value, verified_at: null })
 	}
 	return fields
 }
