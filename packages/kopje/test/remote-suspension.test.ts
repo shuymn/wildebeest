@@ -18,8 +18,10 @@ import {
 	world,
 } from './remote-suspension-helpers'
 import { follow, remoteAccount, remoteFollows } from './status-helpers'
-import { SEVER_ROUND } from '../src/domain/remote-suspension'
+import { EXPANSION_STEP } from '../src/domain/deliveries'
+import { SEVER_ROUND, SEVER_ROWS } from '../src/domain/remote-suspension'
 import { MODERATION_ROUND_ROWS } from '../src/domain/suspension'
+import type { StoreStub } from '../src/platform/store-client'
 
 // The instance suspension of a remote account through the Mastodon admin API (R1, R38, VIS-30; Admin::AccountAction,
 // SuspendAccountService#reject_remote_follows! and UnsuspendAccountService of Mastodon 4.5.11): the action and its
@@ -259,7 +261,8 @@ describe('the account job (concurrency row 1)', () => {
 })
 
 describe("the severing round's budget (change 2)", () => {
-	it('deletes more than 600 pushes of one follow notification in bounded rounds, then ends the follow', async () => {
+	// r follows alice, whose follow notification has `pushes` push deliveries waiting (one subscription each).
+	async function pushed(pushes: number) {
 		const w = await world()
 		const r = await remoteAccount(w.h.store, 'r')
 		const uri = await uriOf(w.h.store, r)
@@ -271,13 +274,12 @@ describe("the severing round's budget (change 2)", () => {
 			"SELECT id FROM notifications WHERE account_id = ? AND type = 'follow'",
 			w.alice.id
 		)
-		const PUSHES = 1_300
 		await sql(
 			w.h.store,
 			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
 			INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes)
 			SELECT 'push-' || i, 'access', (SELECT id FROM oauth_clients LIMIT 1), ?2, 'push' FROM n`,
-			PUSHES,
+			pushes,
 			w.alice.id
 		)
 		await sql(
@@ -293,12 +295,23 @@ describe("the severing round's budget (change 2)", () => {
 			NOW,
 			NOW
 		)
-		expect(await act(w, r, { type: 'suspend' })).toMatchObject({ status: 200 })
+		return { w, r, uri }
+	}
+
+	// Rounds until the job ends; the rows each wrote.
+	async function rounds(store: StoreStub): Promise<number[]> {
 		const written: number[] = []
-		for (let ran = await round(w.h.store); ran !== null; ran = await round(w.h.store)) {
+		for (let ran = await round(store); ran !== null; ran = await round(store)) {
 			written.push(ran.rows)
 			expect(written.length).toBeLessThan(20)
 		}
+		return written
+	}
+
+	it('deletes more than 600 pushes of one follow notification in bounded rounds, then ends the follow', async () => {
+		const { w, r, uri } = await pushed(1_300)
+		expect(await act(w, r, { type: 'suspend' })).toMatchObject({ status: 200 })
+		const written = await rounds(w.h.store)
 		expect(Math.max(...written)).toBeLessThanOrEqual(MODERATION_ROUND_ROWS)
 		// The reports round, then at least three rounds of pushes and the follow's end.
 		expect(written.length).toBeGreaterThanOrEqual(4)
@@ -306,6 +319,39 @@ describe("the severing round's budget (change 2)", () => {
 		expect(await sql(w.h.store, 'SELECT * FROM follows WHERE account_id = ?', r)).toEqual([])
 		expect(await rejects(w.h.store)).toEqual([{ signer: w.alice.id, follower: uri, retracts: 1 }])
 	})
+
+	it.each([560, MODERATION_ROUND_ROWS - SEVER_ROWS])(
+		'stays within the budget with %i pushes and an unrelated expansion backlog the Reject expands',
+		async (pushes) => {
+			const { w, r, uri } = await pushed(pushes)
+			// Another activity's targets still to expand, one per chunk (the costliest expansion): the Reject's recording
+			// expands EXPANSION_STEP of them.
+			const BACKLOG = EXPANSION_STEP + 50
+			await sql(
+				w.h.store,
+				`INSERT INTO outbound_activities (id, account_id, body, created_at)
+				VALUES (9000, ?, '{"activity":{"type":"Note"},"audience":{"followers":false,"accounts":[]}}', ?)`,
+				w.bob.id,
+				NOW
+			)
+			await sql(
+				w.h.store,
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+				INSERT INTO outbound_targets (activity_id, targets)
+				SELECT 9000, json_array(json_object('inbox', 'https://b' || i || '.example/inbox', 'addressee', NULL)) FROM n`,
+				BACKLOG
+			)
+			expect(await act(w, r, { type: 'suspend' })).toMatchObject({ status: 200 })
+			const written = await rounds(w.h.store)
+			expect(written.filter((rows) => rows > MODERATION_ROUND_ROWS)).toEqual([])
+			expect(await sql(w.h.store, 'SELECT * FROM follows WHERE account_id = ?', r)).toEqual([])
+			expect(await rejects(w.h.store)).toEqual([{ signer: w.alice.id, follower: uri, retracts: 1 }])
+			// The Reject's recording expanded the backlog's first EXPANSION_STEP chunks.
+			expect(await sql(w.h.store, 'SELECT count(*) AS n FROM deliveries WHERE activity_id = 9000')).toEqual([
+				{ n: EXPANSION_STEP },
+			])
+		}
+	)
 })
 
 describe('follow requests of a suspended account (row 12 b)', () => {

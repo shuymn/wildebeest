@@ -1,6 +1,7 @@
 import { individuallySuspendedSql } from './audience'
 import type { Admin } from './auth'
 import { severRemoteFollow } from './blocks'
+import { EXPANSION_STEP } from './deliveries'
 import { logAction } from './moderation-log'
 import { actionBound, reportBound, resolveSuspensionReports } from './reports'
 import { MODERATION_ROUND_ROWS, REPORT_ROUND } from './suspension'
@@ -23,16 +24,23 @@ import type { Db } from '../db/sql'
 //     Local accounts' follows of the account are kept, and an unsuspension restores nothing that was severed.
 //
 // Every round writes at most MODERATION_ROUND_ROWS rows (suspension.ts, counted with total_changes) and reads at most
-// REPORT_ROUND reports or SEVER_ROUND follows. Before a follow ends, the push deliveries of
-// its follow notification, which the notification's delete would cascade to, are deleted within the room the round has
-// left above SEVER_ROWS; a follow whose deliveries do not fit waits for the next round, which starts with them.
+// REPORT_ROUND reports or SEVER_ROUND follows. Before a follow ends, the push deliveries of its follow notification,
+// which the notification's delete would cascade to, are deleted within the room the round has left above SEVER_ROWS;
+// a follow whose deliveries do not fit waits for the next round, which starts with them. The arithmetic: a follow is
+// ended only while room() > 0, that is while the round has written fewer than MODERATION_ROUND_ROWS - SEVER_ROWS
+// rows, so the round ends at most SEVER_ROWS later, within MODERATION_ROUND_ROWS. Each round makes progress: SEVER_ROWS
+// (340) is below MODERATION_ROUND_ROWS (600), so a round starting with no push deliveries left ends at least one
+// follow, and one starting with some deletes up to 260 of them.
 
 // Follows a severing round reads at most.
 export const SEVER_ROUND = 100
-// Rows one follow's end writes at most, its push deliveries deleted first, with the job's own update: the follow and
-// its list and pin triggers (none for a remote follower), its notifications, the two counts, the retraction, the
-// Reject's intent and chunk, and the earlier activities about the follow it supersedes with their deliveries.
-export const SEVER_ROWS = 40
+// Rows one follow's end writes at most, its push deliveries deleted first, with the job's own update: up to 40 for the
+// follow and its list and pin triggers (none for a remote follower), its notifications, the two counts, the
+// retraction, the Reject's intent and chunk, and the earlier activities about the follow it supersedes with their
+// deliveries; and 3 × EXPANSION_STEP for the expansion that recording the Reject runs (deliveries.ts enqueueActivity),
+// which may expand any activity's pending targets: up to EXPANSION_STEP deliveries, each from a chunk of its own at
+// worst, whose cursor update and delete are two more rows.
+export const SEVER_ROWS = 40 + 3 * EXPANSION_STEP
 
 type RemoteJob = {
 	id: number
