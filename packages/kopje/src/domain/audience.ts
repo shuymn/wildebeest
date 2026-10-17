@@ -210,7 +210,7 @@ function guardedSql(covered: string): string {
 // suffixes are walked from the longest, and the walk stops at the first one a block names (the nearest), so the rule
 // is that block's; only suffixes of 2 to MAX_BLOCK_LABELS labels are sought, at most two unique seeks each (the walk's
 // and the match's). The keys and the walk are CTEs, whose expressions do not add to the depth of the expression that
-// holds this one (SQLite limits it to 100 in workerd). Measured against a window, test/read-windows.test.ts.
+// holds this one (SQLite limits it to 100 in workerd).
 function coveredSql(keys: string): string {
 	const sought = `BETWEEN 1 AND ${MAX_BLOCK_LABELS - 1}`
 	return `EXISTS (WITH RECURSIVE pk(d) AS (${keys}),

@@ -759,8 +759,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   its stored domain or its actor host) is unavailable from the block's commit, read live; nothing is fetched from a
   covered host (advisory: the writes refuse to store a covered account or its statuses, and refresh no covered row);
   its inbound activity is ignored before any fetch but `Delete`, `DeleteActor`, `Undo` and `Reject` verified with a
-  key already stored. The domain enforcement is in place; no route creates a block until the admin API serves them
-  (B2b), and the severing of a blocked domain's follows comes with B2a-2.
+  key already stored. No route creates a block yet (only the Store operations do), and a block severs no follow: the
+  follows of a blocked domain's accounts stay, and only what is sent to them is dropped.
   Each staged target records the recipients behind it (merged across followers, addressed accounts,
   silent recipients, poll voters and other statuses' reach before deduplication by inbox): up to 16 account ids, the
   hosts of their actor ids, or `many` above 16, meaning "not all unavailable"; expansion copies them onto the delivery

@@ -237,9 +237,8 @@ describe('the no-block fast path in result columns (account presentation)', () =
 		}
 	}
 
-	// Rows read do not count the walk of a host no block names, so they cannot tell whether a projection ran it: the CASE
-	// of guardedSql (audience.ts) is what skips it, measured with the sqlite3 3.51 shell over 1,000 three-label
-	// accounts at 31,042 virtual machine steps, against 178,042 for the same projection with an AND.
+	// Rows read do not count the walk of a host no block names, so they cannot tell whether a projection ran it; the
+	// walk itself is counted by execution in test-node/domain-coverage-cost.test.ts.
 	it('reads as before while no suspend block exists, however deep the hosts', async () => {
 		const shallow = await projected(2, [])
 		const deep = await projected(MAX_BLOCK_LABELS + 4, [])
@@ -331,7 +330,7 @@ describe('deliveries to a blocked domain (VIS-30)', () => {
 		expect(await drain(w.h.store)).toEqual([])
 		expect(await deliveries(w.h.store)).toEqual([])
 		// No receipt was written, so the Delete goes where the Create was queued: by the activity's own reach, which
-		// still holds the block's followers (Mastodon keeps them until the severing; B2a-2 adds it).
+		// still holds the block's followers, since a block severs no follow.
 		const deleted = await w.h.request(`/api/v1/statuses/${status.id}`, bearer(w.alice.token, { method: 'DELETE' }))
 		expect(deleted.status).toBe(200)
 		expect(new Set((await drain(w.h.store)).map(([type]) => type))).toEqual(new Set(['Delete']))

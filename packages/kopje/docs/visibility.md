@@ -532,7 +532,7 @@ account's shared inbox (the architecture test below).
 
 The instance's own domain policy (`instance_domain_blocks`, migration `0046_instance_domain_blocks`; Mastodon's
 `DomainBlock`), written by the Store operations of `src/domain/instance-domain-blocks.ts`, each in one transaction
-that fetches nothing; no route writes them yet. A block names a domain, stored as `blockedDomain` returns it, with
+that fetches nothing; no route writes them. A block names a domain, stored as `blockedDomain` returns it, with
 severity `suspend` or `noop`.
 
 - **Precedence.** The rule of a host is the block on the host itself or on its nearest parent, the longest match
@@ -545,24 +545,27 @@ severity `suspend` or `noop`.
   names: at most two unique seeks per suffix of 2 to 8 labels.
 - **Availability.** `availableSql` makes a remote account unavailable when a block covers either key `inDomainSql`
   compares (its stored domain or its actor id's host), read live in every statement; no mark is read. While the
-  instance has no `suspend` block the rule costs one constant seek per predicate a statement emits (a `CASE`, so a
-  result column skips the walk too); otherwise the account's row by its
-  key and the walk of each key. Account presentation reads the same rule with the row (`availableJoinedSql`).
+  instance has no `suspend` block the rule costs one constant seek per predicate a statement emits, and its `CASE`
+  skips the walk in a result column too; otherwise it reads the account's row by its key and walks each key. Account
+  presentation reads the same rule with the row (`availableJoinedSql`).
+- **Follows.** A block severs no follow: the follows of a covered account stay, and only what is sent to it is
+  dropped (below).
 - **Deliveries.** The send-time check below refuses a covered inbox host, and a row all of whose listed hosts are
   covered; retractions still go.
-- **Fetches (advisory).** The Worker asks the Store before each request, a redirect's included (`fetchRefused`), and makes none to a
-  covered host: search resolution, `Announce` originals, keys, owner documents, collection syncs and quote rounds. A
-  block that commits between that read and the fetch costs one request, whose result the writes refuse.
+- **Fetches (advisory).** The Worker asks the Store before each request, a redirect's included (`fetchRefused`), and
+  makes none to a covered host: search resolution, `Announce` originals, keys, owner documents, collection syncs and
+  quote rounds. A block that commits between that read and a request costs that request, whose result the writes
+  refuse.
 - **Writes.** `upsertRemoteActor` stores no account whose actor host or domain is covered and refreshes no covered
   row (not even its routing), so no account moves into a blocked domain; `storeRemoteStatus` refuses an unavailable
   author, so nothing of a covered account is stored.
 - **Inbound.** For an actor on a covered host, or whose stored account is covered (judged from the activity's
-  envelope, whatever its type), the Worker ignores everything but
-  `Delete`, `DeleteActor`, `Undo` and `Reject` before any fetch, and verifies those only against a key the Store
-  already holds, of any age, with no fetch (a rotated key fails). The Store's gate holds such an actor in every round,
-  as it holds an individually suspended one, without the routing refresh; an actor of a covered host with no stored
-  row is ignored. An envelope that names no single actor, id and type (an actor array included) is checked with stored keys only
-  and answered as ignored (unsigned: 401), so it never causes a fetch.
+  envelope, whatever its type), the Worker ignores everything but `Delete`, `DeleteActor`, `Undo` and `Reject` before
+  any fetch, and verifies those only against a key the Store already holds, of any age, with no fetch (a rotated key
+  fails). The Store's gate holds such an actor in every round, as it holds an individually suspended one, without the
+  routing refresh; an actor of a covered host with no stored row is ignored. An envelope that names no single actor,
+  id and type (an actor array included) is checked with stored keys only and never causes a fetch: without a valid
+  signature under a stored key it is refused (401, ID-1), and with a key id the Store does not hold it is ignored.
 
 ### The send-time check (VIS-30)
 
