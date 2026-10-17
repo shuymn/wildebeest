@@ -156,7 +156,10 @@ against their own instance. TLS is assumed between all parties.
   is never accepted from outside. A quoted Note embedded in a status is taken only when it is that status's author's
   own (its `attributedTo` the author, its id on the author's origin), with one hop less of work. `revokeStamp` and `completeQuote` in `src/domain/quotes.ts`; `test/quotes.test.ts`
   ("is not taken from anyone but the quoted author", "leaves a quote pending when its stamp is …", "wins over a quote
-  that arrives after it").
+  that arrives after it"). For a local user's quote of a remote status, the `Accept` and `Reject` of our QuoteRequest
+  (rows of the same table): only the quoted author (the quote's `quoted_account_id`), naming our request by id or
+  inlining it with our quoting status as its instrument and the actor's status as its object; an `Accept`'s `result`
+  must be on the actor's origin; `test/quote-authoring.test.ts` ("7: Accept and Reject are each one compare-and-set").
 - **ID-7: replay changes nothing twice.** A repeated activity creates no second relationship, counter change,
   notification, push or outbound intent (natural keys). A valid `Delete` or `Undo` that arrives before its target is
   recorded for 30 days and prevents the target from appearing later. Input that fails ID-1 or ID-6 reserves no key and
@@ -631,7 +634,9 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
 
 - **VIS-27: a quote reveals nothing its quoted status hides.** R35 applies VIS-1/R2 to the quoted status for the
   same viewer, whatever the quoting status's own visibility: `unauthorized` carries no content, and the filter states
-  carry only a status the viewer may see. Ordinary reads embed it only for an accepted quote; the `DELETE` response's
+  carry only a status the viewer may see, for a local user's quote as for a received one. A `quoted_update` is written
+  and shown only while its quote is accepted and its recipient may see the edited status (R15). Ordinary reads embed it
+  only for an accepted quote; the `DELETE` response's
   source also requires R2. States, legacy quotes and Mastodon's behaviour: [visibility.md](visibility.md). Embedding
   stops after one level; the inner quote is a state and an id. The quotes list answers 404 under R3, then applies R8
   to quoting statuses, or R2 for the quoted author. Quotes never widen feed membership. The work is bounded (RES-7).
@@ -659,7 +664,16 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `quoteAuthorization`, `retireQuoteOf` and `revokeQuoteRow` in `src/domain/quotes.ts`, `mayQuoteSql` and
   `reachQuoters` in `src/domain/audience.ts`, `revokeQuote` in `src/domain/statuses.ts`, the immutable and `reachOf`
   envelopes in `src/domain/deliveries.ts`, migration `0038_quote_requests`; `test/quote-requests.test.ts`,
-  `test/migrations.test.ts`.
+  `test/migrations.test.ts`. A local user's quote is accepted only by R36 at posting (a local quoted status) or by the
+  quoted author's `Accept` of our QuoteRequest (a remote one): one compare-and-set on a pending quote, from the quoted
+  author only, with a stamp on that author's origin that they neither revoked nor retracted, and that no other local
+  quote holds (one local quote per stamp and author, a unique index). A `Reject`, or the author's `Delete` of the stamp,
+  ends it, records the stamp for good and records an `Update` of the quoting status without it; a `Delete` proven by
+  the author's own signature is also forwarded unedited, once, to every inbox that received the quoting status, signed
+  by its local author, as a retraction (FEP-044f "Handling a revocation"). No verification round ever decides a local
+  quote. Implementation: `recordLocalQuote`, `acceptOurQuote`, `rejectOurQuote` and `revokeStamp` in
+  `src/domain/quotes.ts`, `preparePost` in `src/domain/statuses.ts`, migration `0039_quotes_local`;
+  `test/quote-authoring.test.ts`.
 
 - **VIS-29: admin views and actions disclose and change only through the admin account.** Only the OAuth admin,
   through a token covering the route's admin scope, reads or acts through `/api/v1/admin/*` and `/api/v2/admin/*`

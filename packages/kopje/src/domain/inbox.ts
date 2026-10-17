@@ -71,8 +71,10 @@ import { hostDomain } from '../platform/domain-name'
 // ID-6, Mastodon 4.7.3's rules for the types handled here (one negative test each in test/inbox.test.ts):
 //   Follow       the object is a local account (exact actor URI); the actor is the follower; refused while either
 //                side blocks the other
-//   Accept       the actor is the target of our matching Follow (see ourFollow)
-//   Reject       as Accept
+//   Accept       the actor is the target of our matching Follow (see ourFollow); of our QuoteRequest, the quoted
+//                author of our pending quote, with a result on its origin (quotes.ts acceptOurQuote;
+//                test/quote-authoring.test.ts)
+//   Reject       as Accept (quotes.ts rejectOurQuote)
 //   Undo         the undone activity's actor is the actor, and it names the current Follow or Block (see undo)
 //   Block        the object is a local account; the actor is the blocker
 //   Move         the object is the actor, and the target lists the actor in alsoKnownAs (ID-4)
@@ -81,7 +83,8 @@ import { hostDomain } from '../platform/domain-name'
 //   Delete       of an actor: the object is the actor itself; of a status or boost: its author is the actor; of
 //                anything else of the actor's origin: recorded as a retraction (ID-7); of a quote's stamp
 //                (QuoteAuthorization): the quoted status's author is the actor, and only the quotes naming that stamp
-//                and quoting the actor's statuses are revoked (quotes.ts revokeStamp; test/quotes.test.ts)
+//                and quoting the actor's statuses are revoked (quotes.ts revokeStamp; test/quotes.test.ts); a local
+//                quote holding it is forwarded the Delete only when the actor's own proof verifies
 //   Delete       relayed by another server (its HTTP signer is not the actor, ID-1's one exception): only of what is
 //                neither an actor, a status nor a boost, so of a stamp at most; with the actor's own proof
 //                (RsaSignature2017 or FEP-8b32, federation/author-proof.ts) applied as the actor's revocation, without
