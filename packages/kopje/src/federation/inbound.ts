@@ -412,11 +412,18 @@ export async function receiveInbound(deps: InboundDeps, request: InboundRequest)
 
 	// Decision 1: the actor of the bounded envelope is judged before anything is verified, whether or not its type is
 	// one Kopje reads, so that no activity of a covered actor (an unsupported or malformed one included) is fetched for.
-	// An envelope that names no usable actor is answered as the ignored activity it is, before verification fetches
-	// anything: no handler would read it, and its actor could not be judged.
+	// An envelope that names no usable actor cannot be judged, and no handler would read it: it is checked with the
+	// Store's keys alone, fetching nothing, and answered as ignored. A request without a valid signature stays refused
+	// (ID-1); one signed with a key the Store does not hold is ignored as it would be once that key were fetched.
 	const named = parsed.ok ? parsed.actor : envelopeActor(request.body)
 	if (named === null) {
-		return { status: 202, reason: parsed.ok ? 'unusable' : parsed.reason }
+		const none = { document: NO_FETCH, context: NO_FETCH }
+		const checked = await verify(deps, request, headers, none, new Map<string, ServedKey>(), true)
+		rethrowStoreError(state)
+		const unknownKey = 'status' in checked && (checked.reason === 'key-refused' || checked.reason === 'key-gone')
+		return 'status' in checked && !unknownKey
+			? checked
+			: { status: 202, reason: parsed.ok ? 'unusable' : parsed.reason }
 	}
 	if (await callStore(() => deps.store().inboundDomainBlocked(deps.build, { uri: named }))) {
 		return parsed.ok
