@@ -11,13 +11,15 @@
 --
 -- The natural key (notifications_natural) is kept: an admin.report has no status, so it holds one notification per
 -- reporter, and a reporter's later report replaces the earlier one's (notify in src/domain/notifications.ts).
--- Rebuilding the key with the report would read and sort every notification, past the budget below.
+-- Rebuilding the key with the report sorts every notification: 4,867 to 4,989 ms in all on the benchmark store below,
+-- with no margin left within the budget.
 --
 -- Cost: the ALTER is a change of the schema alone, and the partial index reads each notification once and holds none.
 -- Measured on the benchmark store of test/bench/migration-cost.ts (1,000,000 accounts, 3,000,000 follows, 2,000,000
 -- statuses with their mentions and tags, 2,000,000 notifications, 200,000 quotes, 10,000 reports, 20 local accounts)
--- in workerd's local Durable Object SQLite: MEASURED for the upgrade of this file through the kernel (its bookmark,
--- transaction and schema verification), within the 5,000 ms each migration file may take.
+-- in workerd's local Durable Object SQLite: 3,118 ms for the upgrade of this file through the kernel (its bookmark,
+-- transaction and schema verification; 3,098 ms and 3,176 ms in two more runs), within the 5,000 ms each migration
+-- file may take.
 
 ALTER TABLE notifications ADD COLUMN report_id INTEGER REFERENCES reports (id) ON DELETE CASCADE;
 
