@@ -21,7 +21,7 @@ import { readOperation } from './operation'
 import { htmlToPlainText, plainTextToHtml } from './plain-text'
 import { accountSearchText, queryTerms } from './search-text'
 import { renderFieldValue } from './status-text'
-import { readWindow, singleWindow, windowJson, windowPage } from './windows'
+import { readWindow, singleWindow, type Window, windowJson, windowPage } from './windows'
 import type { Db } from '../db/sql'
 import { normalizeDomain, parseAddress } from '../platform/domain-name'
 import { httpUrl } from '../platform/http-url'
@@ -991,6 +991,20 @@ export type ListFollowsInput = {
 	direction: 'followers' | 'following'
 	page: PageQuery
 	present: Present
+}
+
+// The accounts of a window of account ids (windows.ts) that `rule` (over `a`, the account row, and `l`, its
+// local_accounts row) passes, each by its key.
+export function windowAccounts(db: Db, window: Window, rule: string): AccountRow[] {
+	return window.candidates.length === 0
+		? []
+		: db.all<AccountRow>(
+				`SELECT ${ACCOUNT_COLUMNS}
+				FROM json_each(?1) c CROSS JOIN accounts a ON a.id = json_extract(c.value, '$.id')
+					LEFT JOIN local_accounts l ON l.account_id = a.id
+				WHERE ${rule}`,
+				windowJson(window)
+			)
 }
 
 // GET /api/v1/accounts/:id/followers and /following as the viewer (null: anonymous) may see them (R13, Mastodon's

@@ -16,6 +16,7 @@ import {
 import { type DeliveryEnvelope, enqueueActivity, type ReachOf } from './deliveries'
 import { readOperation } from './operation'
 import { type NoteQuote, noteQuote } from './quotes'
+import { readWindow, singleWindow, windowJson } from './windows'
 import type { Db } from '../db/sql'
 import { httpUrl } from '../platform/http-url'
 import { sha256Hex } from '../platform/sha256'
@@ -909,6 +910,18 @@ export const getOutbox = readOperation<{ username: string; before: string | null
 				next: null,
 			}
 		}
+		// A window of the actor's statuses below `before` (statuses_account, windows.ts), then the rule over those: its
+		// private and direct statuses, and boosts of originals it may not serve, cost a window, not their number. One
+		// more than a page tells whether more follow.
+		const size = readWindow(OUTBOX_PAGE_SIZE + 1)
+		const window = singleWindow(
+			db,
+			'SELECT s.id FROM statuses s WHERE s.account_id = ?1 AND s.id < ?2 ORDER BY s.id DESC LIMIT ?3',
+			size,
+			owner.id,
+			before,
+			size
+		)
 		const rows = db.all<{
 			id: string
 			uri: string
@@ -921,10 +934,9 @@ export const getOutbox = readOperation<{ username: string; before: string | null
 		}>(
 			`SELECT s.id, s.uri, s.visibility, s.published_at, o.id AS original_id, o.uri AS original_uri,
 				o.account_id AS original_author_id, (SELECT uri FROM accounts WHERE id = o.account_id) AS original_author_uri
-			${listed} AND s.id < ?2 ORDER BY s.id DESC LIMIT ?3`,
+			${listed} AND s.id IN (SELECT json_extract(value, '$.id') FROM json_each(?2)) ORDER BY s.id DESC`,
 			owner.id,
-			before,
-			OUTBOX_PAGE_SIZE + 1
+			windowJson(window)
 		)
 		const items: string[] = []
 		for (const row of rows.slice(0, OUTBOX_PAGE_SIZE)) {
@@ -956,7 +968,13 @@ export const getOutbox = readOperation<{ username: string; before: string | null
 			}
 		}
 		const last = rows[OUTBOX_PAGE_SIZE - 1]
-		return { total: null, items, next: rows.length > OUTBOX_PAGE_SIZE && last !== undefined ? last.id : null }
+		const next =
+			rows.length > OUTBOX_PAGE_SIZE && last !== undefined
+				? last.id
+				: window.cut
+					? (window.candidates.at(-1)?.id ?? null)
+					: null
+		return { total: null, items, next }
 	}
 )
 

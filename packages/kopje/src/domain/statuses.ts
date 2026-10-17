@@ -3,6 +3,7 @@ import {
 	ACCOUNT_COLUMNS,
 	type AccountRow,
 	accountUrl,
+	edgeRangeSql,
 	type Page,
 	type PageQuery,
 	type Present,
@@ -102,6 +103,7 @@ import {
 	renderStatusHtml,
 } from './status-text'
 import { streamDelete } from './streaming'
+import { readWindow, singleWindow, windowJson, windowPage } from './windows'
 import type { Db } from '../db/sql'
 
 // Statuses (B4a): posting, editing and deleting local statuses, the per-status reads, and favourite, reblog and
@@ -1628,8 +1630,11 @@ export type InteractorsInput = { id: string; kind: 'favourited_by' | 'reblogged_
 
 // Accounts that favourited or boosted a status the viewer may see, newest first, without accounts the viewer
 // blocks, is blocked by, mutes or domain-blocks, and without suspended accounts. Only public and unlisted boosts are
-// listed (Mastodon's RebloggedByAccountsController); reblogs_count still counts every boost, as Mastodon's does. Favourites page by the favourite's id; boosts by
-// the boost's status id.
+// listed (Mastodon's RebloggedByAccountsController); reblogs_count still counts every boost, as Mastodon's does.
+// Favourites page by the favourite's id; boosts by the boost's status id. A page applies R12 to a window of
+// readWindow(limit) of the status's favourites or boosts from the cursor (windows.ts). Neither has an index in that
+// order (favourites_pair and statuses_reblog are by account), so the window's read sorts the status's favourites or
+// boosts by their key, without reading their accounts.
 export const interactors = optionalUserReadOperation<InteractorsInput, Viewed<Page<Account>>>(
 	(db, { id, kind, page, present }, { accountId: viewerId, now }) => {
 		const resolved = viewable(db, viewerId, id)
@@ -1639,45 +1644,55 @@ export const interactors = optionalUserReadOperation<InteractorsInput, Viewed<Pa
 		}
 		const ascending = page.minId !== undefined
 		const order = ascending ? 'ASC' : 'DESC'
-		const listed = listedForSql('a.id', '?1', '?6')
 		const lower = page.minId ?? page.sinceId ?? null
-		const rows =
+		const size = readWindow(page.limit)
+		const window =
 			kind === 'favourited_by'
-				? db.all<AccountRow & { cursor: string }>(
-						`SELECT CAST(f.id AS TEXT) AS cursor, ${ACCOUNT_COLUMNS}
-						FROM favourites f JOIN accounts a ON a.id = f.account_id LEFT JOIN local_accounts l ON l.account_id = a.id
-						WHERE f.status_id = ?2 AND ${listed}
-							AND (?3 IS NULL OR f.id < CAST(?3 AS INTEGER)) AND (?4 IS NULL OR f.id > CAST(?4 AS INTEGER))
-						ORDER BY f.id ${order} LIMIT ?5`,
-						viewerId,
+				? singleWindow(
+						db,
+						`SELECT CAST(f.id AS TEXT) AS id FROM favourites f WHERE f.status_id = ?1 AND ${edgeRangeSql('f.id', '?2', '?3')}
+						ORDER BY f.id ${order} LIMIT ?4`,
+						size,
 						target,
 						page.maxId ?? null,
 						lower,
-						page.limit,
-						now
+						size
 					)
-				: db.all<AccountRow & { cursor: string }>(
-						`SELECT r.id AS cursor, ${ACCOUNT_COLUMNS}
-						FROM statuses r JOIN accounts a ON a.id = r.account_id LEFT JOIN local_accounts l ON l.account_id = a.id
-						WHERE r.reblog_of_id = ?2 AND r.visibility IN ${DISTRIBUTABLE_SQL} AND ${listed}
-							AND (?3 IS NULL OR r.id < ?3) AND (?4 IS NULL OR r.id > ?4)
-						ORDER BY r.id ${order} LIMIT ?5`,
-						viewerId,
+				: singleWindow(
+						db,
+						`SELECT r.id FROM statuses r WHERE r.reblog_of_id = ?1 AND r.visibility IN ${DISTRIBUTABLE_SQL}
+							AND r.id < ?2 AND r.id > ?3
+						ORDER BY r.id ${order} LIMIT ?4`,
+						size,
 						target,
-						statusCursor(page.maxId),
-						statusCursor(lower ?? undefined),
-						page.limit,
-						now
+						statusCursor(page.maxId) ?? ':',
+						statusCursor(lower ?? undefined) ?? '',
+						size
 					)
-		if (ascending) {
-			rows.reverse()
-		}
+		const edge =
+			kind === 'favourited_by'
+				? `favourites e ON e.id = CAST(json_extract(c.value, '$.id') AS INTEGER)`
+				: `statuses e ON e.id = json_extract(c.value, '$.id')`
+		const rows =
+			window.candidates.length === 0
+				? []
+				: db.all<AccountRow & { cursor: string }>(
+						`SELECT CAST(e.id AS TEXT) AS cursor, ${ACCOUNT_COLUMNS}
+						FROM json_each(?3) c CROSS JOIN ${edge}
+							JOIN accounts a ON a.id = e.account_id LEFT JOIN local_accounts l ON l.account_id = a.id
+						WHERE ${listedForSql('a.id', '?1', '?2')}`,
+						viewerId,
+						now,
+						windowJson(window)
+					)
+		const shown = windowPage(window, rows, (row) => row.cursor, page.limit, ascending)
 		return {
 			status: 'ok',
 			value: {
-				items: rows.map((row) => presentAccount(row, present)),
-				newest: rows[0]?.cursor ?? null,
-				oldest: rows.at(-1)?.cursor ?? null,
+				items: shown.rows.map((row) => presentAccount(row, present)),
+				newest: shown.newest,
+				oldest: shown.oldest,
+				cut: shown.cut,
 			},
 		}
 	}

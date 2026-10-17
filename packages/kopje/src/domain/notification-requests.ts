@@ -15,6 +15,7 @@ import { MAX_MEANINGFUL_COUNT, REMOVAL_BATCHES, runRemovals } from './notificati
 import { writeOperation } from './operation'
 import { presentStatuses, type Status } from './status-presenter'
 import { streamMerged } from './streaming'
+import { readWindow, singleWindow, windowJson, windowPage } from './windows'
 import type { Db } from '../db/sql'
 
 // Notification policies and requests (Mastodon 4.5's NotificationPolicy, NotificationRequest and
@@ -186,28 +187,41 @@ function presentRequests(
 }
 
 // GET /api/v1/notifications/requests: the viewer's requests from available senders (without_suspended), newest
-// first, paged by id (to_a_paginated_by_id; min_id reads up from it).
+// first, paged by id (to_a_paginated_by_id; min_id reads up from it). A page reads a window of readWindow(limit) of the
+// viewer's requests from the cursor (notification_requests_account, windows.ts), then keeps those of available senders.
 export const listNotificationRequests = userReadOperation<
 	{ page: PageQuery; present: Present },
 	Page<NotificationRequest>
 >((db, { page, present }, _viewer, viewer) => {
 	const ascending = page.minId !== undefined
-	const rows = db.all<RequestRow>(
-		`SELECT ${REQUEST_COLUMNS} FROM notification_requests r
-		WHERE r.account_id = ?1 AND ${edgeRangeSql('r.id', '?2', '?3')} AND ${availableSql('r.from_account_id')}
+	const size = readWindow(page.limit)
+	const window = singleWindow(
+		db,
+		`SELECT CAST(r.id AS TEXT) AS id FROM notification_requests r
+		WHERE r.account_id = ?1 AND ${edgeRangeSql('r.id', '?2', '?3')}
 		ORDER BY r.id ${ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
+		size,
 		viewer.accountId,
 		page.maxId ?? null,
 		page.minId ?? page.sinceId ?? null,
-		page.limit
+		size
 	)
-	if (ascending) {
-		rows.reverse()
-	}
+	const rows =
+		window.candidates.length === 0
+			? []
+			: db.all<RequestRow>(
+					`SELECT ${REQUEST_COLUMNS}
+					FROM json_each(?2) c CROSS JOIN notification_requests r ON r.id = CAST(json_extract(c.value, '$.id') AS INTEGER)
+					WHERE r.account_id = ?1 AND ${availableSql('r.from_account_id')}`,
+					viewer.accountId,
+					windowJson(window)
+				)
+	const shown = windowPage(window, rows, (row) => row.id, page.limit, ascending)
 	return {
-		items: presentRequests(db, viewer, rows, present),
-		newest: rows[0]?.id ?? null,
-		oldest: rows.at(-1)?.id ?? null,
+		items: presentRequests(db, viewer, shown.rows, present),
+		newest: shown.newest,
+		oldest: shown.oldest,
+		cut: shown.cut,
 	}
 })
 

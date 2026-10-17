@@ -1,17 +1,17 @@
 import {
 	type Account,
-	ACCOUNT_COLUMNS,
-	type AccountRow,
 	type Page,
 	type PageQuery,
 	type Present,
 	presentAccount,
 	resolveAccountId,
+	windowAccounts,
 } from './accounts'
 import { availableSql } from './audience'
 import { userReadOperation, userWriteOperation } from './auth'
 import { allocateLocalId } from './ids'
 import { ABOVE_EVERY_ID, BELOW_EVERY_ID, statusCursor } from './statuses'
+import { readWindow, singleWindow, windowPage } from './windows'
 import type { Db } from '../db/sql'
 
 // Lists (Mastodon 4.5's List and ListAccount, Api::V1::ListsController, Lists::AccountsController and
@@ -148,7 +148,8 @@ export const deleteList = userWriteOperation<{ id: string }, boolean>(
 
 // GET /api/v1/lists/:id/accounts: the members, unavailable accounts left out (Account.without_suspended), by account
 // id, newest first, paged by the account id (paginate_by_max_id); page null answers every member (limit=0), up to
-// MAX_LIST_MEMBERS_ANSWERED. A pending member is listed too. Null when the list is not the viewer's.
+// MAX_LIST_MEMBERS_ANSWERED. A pending member is listed too. A read applies availability to a window of
+// readWindow(limit) of the list's members from the cursor (windows.ts). Null when the list is not the viewer's.
 export const listAccounts = userReadOperation<
 	{ id: string; page: PageQuery | null; present: Present },
 	Page<Account> | null
@@ -157,24 +158,25 @@ export const listAccounts = userReadOperation<
 		return null
 	}
 	const ascending = page?.minId !== undefined
-	const rows = db.all<AccountRow>(
-		`SELECT ${ACCOUNT_COLUMNS}
-		FROM list_accounts la JOIN accounts a ON a.id = la.account_id LEFT JOIN local_accounts l ON l.account_id = a.id
-		WHERE la.list_id = ?1 AND la.account_id < ?2 AND la.account_id > ?3
-			AND ${availableSql('la.account_id')}
+	const limit = page?.limit ?? MAX_LIST_MEMBERS_ANSWERED
+	const size = readWindow(limit)
+	const window = singleWindow(
+		db,
+		`SELECT la.account_id AS id FROM list_accounts la WHERE la.list_id = ?1 AND la.account_id < ?2 AND la.account_id > ?3
 		ORDER BY la.account_id ${ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
+		size,
 		id,
 		statusCursor(page?.maxId) ?? ABOVE_EVERY_ID,
 		statusCursor(page?.minId ?? page?.sinceId) ?? BELOW_EVERY_ID,
-		page?.limit ?? MAX_LIST_MEMBERS_ANSWERED
+		size
 	)
-	if (ascending) {
-		rows.reverse()
-	}
+	const rows = windowAccounts(db, window, availableSql('a.id'))
+	const shown = windowPage(window, rows, (row) => row.id, limit, ascending)
 	return {
-		items: rows.map((row) => presentAccount(row, present)),
-		newest: rows[0]?.id ?? null,
-		oldest: rows.at(-1)?.id ?? null,
+		items: shown.rows.map((row) => presentAccount(row, present)),
+		newest: shown.newest,
+		oldest: shown.oldest,
+		cut: shown.cut,
 	}
 })
 

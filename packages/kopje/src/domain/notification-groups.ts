@@ -571,7 +571,8 @@ export type UnreadCountInput = {
 }
 
 // GET /api/v1/notifications/unread_count: how many shown notifications are newer than the notifications marker's
-// last_read_id (all of them without a marker), up to `limit`, among a window of readWindow(limit) from the marker.
+// last_read_id (all of them without a marker), up to `limit`, among the GROUP_WALK from the marker, shown or hidden
+// (as the grouped count's walk).
 export const unreadCount = userReadOperation<UnreadCountInput, { count: number }>((db, input, _viewer, viewer) => {
 	if (input.limit === 0) {
 		return { count: 0 }
@@ -588,7 +589,7 @@ export const unreadCount = userReadOperation<UnreadCountInput, { count: number }
 		input.types.length === 0 ? null : JSON.stringify(input.types),
 		JSON.stringify(input.excludeTypes),
 		input.accountId,
-		readWindow(input.limit)
+		GROUP_WALK
 	)
 	return { count: Math.min(rows.length, input.limit) }
 })
