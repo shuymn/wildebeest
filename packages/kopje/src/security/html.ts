@@ -39,8 +39,8 @@ const DROPPED_WITH_CONTENT = [
 	'xmp',
 ]
 
-// Mastodon's CLASS_WHITELIST_TRANSFORMER: microformats prefixes, a few semantic classes, and quote-inline, the class of a
-// quote's fallback paragraph (`RE: <link>`), which clients that embed the quote hide.
+// Mastodon's CLASS_WHITELIST_TRANSFORMER: microformats prefixes, a few semantic classes, and quote-inline, the class
+// of a quote's fallback paragraph (`RE: <link>`), which clients that embed the quote hide.
 const ALLOWED_CLASS = /^(?:(?:h|p|u|dt|e)-.|(?:mention|hashtag|ellipsis|invisible|quote-inline)$)/
 
 // A heading is renamed to this placeholder, which becomes <p><strong> once the output is complete: a transform can

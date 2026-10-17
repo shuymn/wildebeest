@@ -11,7 +11,7 @@ import {
 } from './context'
 import { mastodonError } from './errors'
 import { descriptionProblem, parseFocus, sweepSoon } from './media'
-import { linkHeader, pageQuery } from './pagination'
+import { linkHeader, pageQuery, pageResponse } from './pagination'
 import { type Params, parseBoolean } from './params'
 import { API_VISIBILITIES, type ApiVisibility } from '../domain/audience'
 import { checkPoll, isPollInput, type PollInput } from '../domain/polls'
@@ -411,12 +411,7 @@ export const statusQuotes: ApiHandler = async (c, deps) => {
 	if (result.status !== 'ok') {
 		return viewedResponse(c, result)
 	}
-	const { items, newest, oldest, candidates } = result.value
-	const link = linkHeader(c.req.url, { newest, oldest, count: candidates }, page.limit)
-	if (link !== undefined) {
-		c.header('Link', link)
-	}
-	return c.json(items)
+	return pageResponse(c, result.value, page.limit, result.value.candidates)
 }
 
 export const favouritedBy = interactors('favourited_by')

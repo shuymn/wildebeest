@@ -1,3 +1,4 @@
+import type { QuoteState } from './quotes'
 import type { Db } from '../db/sql'
 
 // Audience and visibility (design §4 "audience and visibility", Mastodon 4.7.3; docs/visibility.md). One module decides
@@ -673,16 +674,7 @@ export function ownStatusId(db: Db, authorId: string, statusId: string): OwnStat
 
 // What a viewer is shown of a quote: Mastodon's stored states (pending, accepted, rejected, revoked, deleted), and,
 // for an accepted quote, the state the quoted status has for the viewer.
-export type ApiQuoteState =
-	| 'pending'
-	| 'accepted'
-	| 'rejected'
-	| 'revoked'
-	| 'deleted'
-	| 'unauthorized'
-	| 'blocked_domain'
-	| 'blocked_account'
-	| 'muted_account'
+export type ApiQuoteState = QuoteState | 'unauthorized' | 'blocked_domain' | 'blocked_account' | 'muted_account'
 
 // The quote of a status as `viewer` is shown it: its state, and the quoted status when the viewer is shown it.
 export type QuoteRead = { status_id: string; state: ApiQuoteState; quoted_status_id: VisibleStatusId | null }

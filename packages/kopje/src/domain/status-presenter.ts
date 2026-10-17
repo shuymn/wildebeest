@@ -234,7 +234,6 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 			JSON.stringify(unread)
 		)) {
 			byId.set(row.id, row)
-			rows.push(row)
 		}
 		for (const quote of reads.of(db, unread)) {
 			quotes.set(quote.status_id, quote)
@@ -248,7 +247,7 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 	]
 	const accounts = presentAccountsById(
 		db,
-		rows.map((row) => row.account_id),
+		[...byId.values()].map((row) => row.account_id),
 		options
 	)
 	const media = groupBy(
@@ -350,7 +349,7 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 				const target = read.quoted_status_id === null ? undefined : byId.get(read.quoted_status_id)
 				quote = {
 					state: read.state,
-					quoted_status: target === undefined ? null : (presentRow(target, 'quoted') ?? null),
+					quoted_status: target === undefined ? null : (presentQuoted(target) ?? null),
 				}
 			}
 		}
@@ -410,6 +409,15 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 			card: null,
 			poll: polls.get(row.id) ?? null,
 		}
+	}
+	// A quoted status is presented once however many statuses of the response quote it: its presentation depends on its
+	// row, the viewer and its own matched text (quotedKey) alone.
+	const embedded = new Map<string, Status | undefined>()
+	const presentQuoted = (row: StatusRow): Status | undefined => {
+		if (!embedded.has(row.id)) {
+			embedded.set(row.id, presentRow(row, 'quoted'))
+		}
+		return embedded.get(row.id)
 	}
 
 	return ids.map((id) => {
