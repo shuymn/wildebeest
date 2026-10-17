@@ -30,9 +30,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       other table: on a benchmark store of 1,000,000 accounts, 3,000,000 follows, 2,000,000 statuses and 2,000,000
       notifications its upgrade took 3.1 seconds (3.1 in a second run) in workerd's local Durable Object SQLite.
     - `0041_report_notifications_key`: rebuilds the notifications' uniqueness index with the report, sorting every
-      stored notification. On the same benchmark store its upgrade took 4.9 to 5.2 seconds (7.6 once on a loaded
-      machine). An instance with millions of notifications should expect a pause of several seconds on the first
-      request after the deploy.
+      stored notification. On the same benchmark store its upgrade took 5.0 seconds (5.0 in two more runs). An
+      instance with millions of notifications should expect a pause of several seconds on the first request after the
+      deploy.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.13] - 2026-10-17
