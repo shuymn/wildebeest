@@ -133,4 +133,29 @@ export default [
 			'@typescript-eslint/no-unsafe-argument': 'error',
 		},
 	},
+	{
+		// Kopje signs a fetch as a local account only with a key loaded while the account is available (the Store's
+		// signingKey or followerKey). localKey has no such check and serves Fedify's key-pairs dispatcher alone (userSigner
+		// in federation.ts), so nothing may make Fedify sign with those pairs. test-node/signing-keys.test.ts pins these.
+		files: ['packages/kopje/src/**/*.ts'],
+		rules: {
+			'no-restricted-syntax': [
+				'error',
+				{
+					selector:
+						"CallExpression[callee.property.name='localKey']:not(VariableDeclarator[id.name='userSigner'] CallExpression)",
+					message: 'Load a signing key with signingKey (it checks availability); localKey serves userSigner only.',
+				},
+				{
+					selector:
+						"CallExpression[callee.name='userSigner']:not(CallExpression[callee.property.name='setKeyPairsDispatcher'] CallExpression)",
+					message: 'userSigner serves the key-pairs dispatcher only; sign fetches with localSigner.',
+				},
+				{
+					selector: 'CallExpression[callee.property.name=/^(getDocumentLoader|getActorKeyPairs|setInboxListeners)$/]',
+					message: 'This makes Fedify sign with the unchecked dispatcher keys.',
+				},
+			],
+		},
+	},
 ]
