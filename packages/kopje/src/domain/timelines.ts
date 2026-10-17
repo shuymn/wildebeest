@@ -649,10 +649,9 @@ export const accountStatuses = optionalUserReadOperation<AccountStatusesInput, P
 				oldest: ids.at(-1) ?? null,
 			}
 		}
-		// The account's statuses from the cursor with the request's filters and the audience the viewer is in
-		// (audienceSql), a window of readWindow(limit) through statuses_account; R2 and R11 then apply to those (boosts
-		// of originals of unavailable or filtered authors). Statuses the viewer may not see by their visibility are never
-		// candidates: the walk passes them, as it did before windows, and none supplies a cursor.
+		// A readWindow(limit) window through statuses_account with the request's filters and audienceSql, then R2 and
+		// R11 over it (availability and filters of boosted originals). Statuses hidden by their visibility are walked
+		// past and never supply a cursor (docs/visibility.md "Read bounds").
 		const size = readWindow(cursor.limit)
 		const window = singleWindow(
 			db,

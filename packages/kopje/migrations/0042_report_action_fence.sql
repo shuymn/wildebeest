@@ -1,9 +1,8 @@
 -- Kopje Store schema 0042: the report fence of a suspension. Never edit after release (checksummed).
 --
--- A suspension resolves only the reports it froze (src/domain/reports.ts resolveSuspensionReports, R37, VIS-29). It
--- judged them by comparing two requests' clocks, so a reopen applied after the suspension, with an earlier clock, was
--- resolved anyway. The fence is now the moderation log id, which is given in commit order and never twice
--- (0029_admin_reports):
+-- A suspension resolves only the reports it froze (src/domain/reports.ts resolveSuspensionReports, R37, VIS-29). The
+-- fence is the moderation log id, given in commit order and never twice (0029_admin_reports), so no request's clock
+-- can make a later reopen look older:
 --
 --   reports.last_action_id         the log id of the last admin write to the report, stamped in that write's
 --                                  transaction. NULL (no admin write) counts as 0.
@@ -25,8 +24,8 @@
 -- accounts, 3,000,000 follows, 2,000,000 statuses with their mentions and tags, 2,000,000 notifications, 200,000
 -- quotes, 10,000 reports, 20 local accounts) in workerd's local Durable Object SQLite: 3,059 ms for the upgrade of this
 -- file through the kernel (its bookmark, transaction and schema verification; 3,117 and 3,112 ms in two more runs at
--- load average 7 to 9, and one outlier of 6,055 ms), within the 5,000 ms each migration file may take. That store
--- holds no moderation log, so this is mostly the schema verification every file pays.
+-- load average 7 to 9, and one outlier of 6,055 ms), within the per-file budget (test/bench/migration-cost.ts). That
+-- store holds no moderation log, so this is mostly the schema verification an isolated upgrade pays.
 
 ALTER TABLE reports ADD COLUMN last_action_id INTEGER;
 ALTER TABLE moderation_jobs ADD COLUMN action_bound INTEGER;

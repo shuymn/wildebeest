@@ -712,8 +712,8 @@ of their candidates too. A candidate may be hidden only by availability (an acco
 the viewer's own blocks, mutes and domain blocks, by a follow's options or the home filter, or, for rows the viewer
 owns (their notifications, bookmarks, favourites, notification requests, list members, endorsements), by the rule over
 what the row names: the viewer already knows their own relations and rows, and Mastodon paginates before filtering
-there. Where a read cannot keep rows hidden by visibility out with an index, it walks past them as it did before
-windows: such rows cost their number, never a cursor.
+there. Where a read cannot keep rows hidden by visibility out with an index, it walks past them: such rows cost
+their number, never a cursor.
 
 The windows, for a page of `limit` (`readWindow(limit)` = max(3 × limit, 40); `streamWindow(limit)` = max(2 ×
 limit, 40); statuses page by 20 and at most 40, accounts and notifications by 40 and at most 80):
@@ -749,11 +749,12 @@ per library source), the directory (`DIRECTORY_WINDOW`), the admin lists (their 
 traversal cap), conversations (no rule before `LIMIT`), and the blocks, mutes, domain blocks and follow requests lists
 (no rule before `LIMIT`). Suggestions and the link timeline answer empty lists.
 
-`test/read-windows.test.ts` puts 100 or 20,000 hidden rows of each kind (accounts being deleted, a block, a domain
-block, mutes) in front of the visible ones: every windowed read reads the same rows (but the interactors' sort), its
-newest page is empty and cut, and paging by `max_id` and by `min_id` through 1,000 hidden rows reaches every visible
-row on both sides once, in order. Its leak cases put 1,000 private and 1,000 direct statuses, and 200 blocking
-followers and favouriters, in front of a viewer who may not see them, and check that no response field names one.
+A cursor range is a direct range (`id < coalesce(?2, ':')`, `edgeRangeSql`), never `(?2 IS NULL OR id < ?2)`, which
+no index can seek; `test-node/range-predicates.test.ts` checks every statement in `src`.
+
+`test/read-windows.test.ts` checks that every windowed read stays bounded in front of hidden ranges of each kind,
+that paging by `max_id` and by `min_id` reaches every visible row on both sides once, in order, and that no response
+field names a status, blocking follower or interactor the viewer may not see.
 
 ## The oracle and the bounds harness
 

@@ -44,10 +44,9 @@ export const profilePage = readOperation<
 	if (row.available === 0) {
 		return { status: 'suspended' }
 	}
-	// A window of the account's public and unlisted posts from the cursor (statuses_account_originals, windows.ts; no
-	// cursor is ':', above every id, so the walk starts at the cursor either way), then the rule over those. Private and
-	// direct posts are never candidates (the walk passes them), so none supplies the next cursor. One more than a page
-	// tells whether more follow.
+	// A statuses_account_originals window (windows.ts) of public and unlisted posts from the cursor (none is ':', above
+	// every id), then the rule. Private and direct posts supply no cursor (docs/visibility.md "Read bounds"). One more
+	// than a page tells whether more follow.
 	const size = readWindow(PROFILE_PAGE_SIZE + 1)
 	const window = singleWindow(
 		db,

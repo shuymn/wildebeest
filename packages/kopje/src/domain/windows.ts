@@ -58,7 +58,6 @@ export function windowOf(ids: readonly string[], size: number): Window {
 	return { candidates: ids.map((id) => ({ id, o: 0 })), cut: ids.length >= size }
 }
 
-// The window's candidates as a JSON array for json_each, [{id, o}].
 export function windowJson(window: Window): string {
 	return JSON.stringify(window.candidates)
 }
