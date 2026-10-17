@@ -86,8 +86,6 @@ export type QuoteState = 'pending' | 'accepted' | 'rejected' | 'revoked' | 'dele
 // Null-safe (IS), so NOT of it holds for work with no due time.
 const LEASED = '(lease_until IS NOT NULL AND verify_after IS lease_until AND lease_until > ?3)'
 
-export { NEW_GENERATION } from './ids'
-
 // How a status came: hops is its work's budget (QUOTE_HOPS for a root), fetchAs the local account whose key may fetch
 // for it (the owner of the personal inbox it was delivered to, else a local follower of its author), or null.
 export type QuoteArrival = { hops: number; fetchAs: string | null }
