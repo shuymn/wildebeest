@@ -687,6 +687,12 @@ limit, 40); statuses page by 20 and at most 40, accounts and notifications by 40
 | profile web page, outbox             | `readWindow` of 21 (63), public and unlisted only                                                                                            | availability of a boosted original (outbox)                              |
 | quotes list (statuses.ts)            | a page of accepted quotes; for anyone but the quoted author, within the audience (stricter than Mastodon)                                    | R8, or R2 for the quoted author                                          |
 
+Showing one group by its key (`GET /api/v2/notifications/:group_key`) is the one read with no cursor to resume from:
+it walks at most `GROUP_DISCOVERY` (20,000) of that group's own notifications, through `notifications_group`, to find
+its newest shown one, and a group whose newest 20,000 notifications are all hidden answers 404 even when a page of the
+list shows it. The limit is deliberate: an unbounded walk would let a hidden range cost a request its whole length,
+which these bounds exist to prevent, and Mastodon's API gives a group show no token to continue from.
+
 Following and the interactors read their windows through the indexes of migration `0043_read_window_indexes`, in id
 order. Reads bounded otherwise: search (2,500
 per library source), the directory (`DIRECTORY_WINDOW`), the admin lists (their residual budget), context (its
