@@ -161,6 +161,45 @@ describe('precedence: the longest matching block rules (Mastodon DomainBlock.rul
 	})
 })
 
+describe("the predicate's cost (availableSql)", () => {
+	// Rows read by one statement judging `count` remote accounts, a tenth of them on blocked.example.
+	async function judged(count: number, blocks: [string, 'suspend' | 'noop'][]) {
+		const h = await community([])
+		await sql(
+			h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+			INSERT INTO accounts (id, uri, username, domain)
+			SELECT CAST(500000000000000000 + i AS TEXT), 'https://' || iif(i % 10 = 0, 'blocked', 'd' || (i % 10)) ||
+				'.example/users/u' || i, 'u' || i, iif(i % 10 = 0, 'blocked', 'd' || (i % 10)) || '.example' FROM n`,
+			count
+		)
+		for (const [domain, severity] of blocks) {
+			await blockDomain(h.store, domain, severity)
+		}
+		return runInDurableObject(h.store, (_instance, state) => {
+			const cursor = state.storage.sql.exec<{ n: number }>(
+				`SELECT count(*) AS n FROM accounts a WHERE a.id GLOB '5*' AND ${availableSql('a.id')}`
+			)
+			const [{ n }] = cursor.toArray() as [{ n: number }]
+			return { available: n, read: cursor.rowsRead }
+		})
+	}
+
+	it('adds one read per statement while no suspend block exists, and a bounded number per account otherwise', async () => {
+		const none = await judged(1_000, [])
+		const noop = await judged(1_000, [['blocked.example', 'noop']])
+		expect(noop).toEqual(none)
+		const fewer = await judged(100, [])
+		// The accounts' scan, and one read of the suspend blocks' index for the statement.
+		expect(none.read - fewer.read).toBe(900)
+		const blocked = await judged(1_000, [['blocked.example', 'suspend']])
+		const blockedFewer = await judged(100, [['blocked.example', 'suspend']])
+		expect([blocked.available, blockedFewer.available]).toEqual([900, 90])
+		// Per account: its row, the walk of its two-label domain, and its seeks: measured at 6 rows.
+		expect(blocked.read - blockedFewer.read).toBeLessThanOrEqual(900 * 8)
+	})
+})
+
 describe('account presentation reads domain coverage live', () => {
 	it('shows the account suspended in the ordinary, bulk and admin reads right after a block, and not after its delete', async () => {
 		const w = await world()
