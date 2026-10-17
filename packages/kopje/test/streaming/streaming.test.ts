@@ -147,10 +147,11 @@ describe('the subscribe protocol', () => {
 		expect(notifications(inbox.rest(), 'user:notification')).toMatchObject([{ type: 'follow' }])
 	})
 
-	it('answers an unknown or unserved stream with Unknown stream type, and an unknown unsubscribe', async () => {
+	it('answers an unknown stream with Unknown stream type, and an unknown unsubscribe', async () => {
 		const h = await community(['alice'])
 		const inbox = await connect(h, h.users.alice.token)
-		for (const stream of ['local', 'public', 'public:local', 'hashtag', 42]) {
+		// Ice Cubes' `local` is not a Mastodon stream; every stream Mastodon knows is served.
+		for (const stream of ['local', 'public:media:local', 'hashtag:remote', 42]) {
 			inbox.send({ type: 'subscribe', stream, tag: 'kopje', list: '1' })
 			expect(await inbox.next()).toEqual({ error: 'Unknown stream type', status: 400 })
 		}

@@ -3837,3 +3837,115 @@ describe('0034_admin_suspension', () => {
 		expect(many).toBe(few)
 	}, 120_000)
 })
+
+describe('0035_streaming_public', () => {
+	const at = NAMES.indexOf('0035_streaming_public')
+	const id = (n: number) => String(100000000000000000n + BigInt(n))
+
+	// A local account with `statuses` public statuses, each with a hashtag.
+	function seed(sql: SqlStorage, statuses: number) {
+		sql.exec("INSERT INTO accounts (id, uri, username) VALUES (?, 'https://kopje.test/ap/users/alice', 'alice')", id(1))
+		sql.exec(
+			"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'alice@example.com', X'00', X'00', 'k')",
+			id(1)
+		)
+		sql.exec(
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+			SELECT CAST(200000000000000000 + i AS TEXT), 'https://kopje.test/ap/o/' || i, ?2, 'public', '', '2026-10-12T00:00:00.000Z'
+			FROM n WHERE ?1 > 0`,
+			statuses,
+			id(1)
+		)
+		sql.exec("INSERT INTO status_tags (status_id, name, public) SELECT id, 'cats', 1 FROM statuses")
+	}
+
+	it('journals public statuses that are not boosts, and their edits, for feed listeners', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, MIGRATIONS.slice(0, at)).upgrade()).toMatchObject({ ok: true })
+			seed(sql, 0)
+			sql.exec(
+				"INSERT INTO stream_subscriptions (account_id, stream_key, sockets) VALUES (?, 'public:local:media', 1)",
+				id(1)
+			)
+			const status = (n: number, visibility: string, reblogOf: string | null = null) =>
+				sql.exec(
+					`INSERT INTO statuses (id, uri, account_id, reblog_of_id, visibility, content, published_at)
+					VALUES (?, ?, ?, ?, ?, ?, '2026-10-12T00:00:00.000Z')`,
+					id(300 + n),
+					`https://kopje.test/ap/o/s${n}`,
+					id(1),
+					reblogOf,
+					visibility,
+					reblogOf === null ? '<p>x</p>' : ''
+				)
+			const edit = (n: number) =>
+				sql.exec("UPDATE statuses SET edited_at = '2026-10-12T01:00:00.000Z' WHERE id = ?", id(300 + n))
+			const journal = () => sql.exec('SELECT kind, subject FROM stream_events ORDER BY id').toArray()
+			// Before: a feed alone arms nothing.
+			status(1, 'public')
+			expect(journal()).toEqual([])
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({
+				ok: true,
+				applied: ['0035_streaming_public'],
+			})
+			status(2, 'public')
+			status(3, 'unlisted')
+			status(4, 'public', id(302))
+			edit(2)
+			edit(3)
+			expect(journal()).toEqual([
+				{ kind: 'status', subject: id(302) },
+				{ kind: 'edit', subject: id(302) },
+			])
+			// A hashtag key arms them too; `user` arms them for every status, as before.
+			sql.exec('DELETE FROM stream_events')
+			sql.exec("UPDATE stream_subscriptions SET stream_key = 'hashtag:local:cats'")
+			status(5, 'public')
+			status(6, 'private')
+			expect(journal()).toEqual([{ kind: 'status', subject: id(305) }])
+			sql.exec("INSERT INTO stream_subscriptions (account_id, stream_key, sockets) VALUES (?, 'user', 1)", id(1))
+			status(7, 'private')
+			expect(journal()).toEqual([
+				{ kind: 'status', subject: id(305) },
+				{ kind: 'status', subject: id(307) },
+			])
+			expect(sql.exec('SELECT count(*) AS n FROM stream_delete_tombstones').one().n).toBe(0)
+		})
+	})
+
+	it('reads the same rows with 0 or 10,000 statuses', async () => {
+		// The file's statements: a trigger's body holds statements of its own, and ends at END.
+		const statements: string[] = []
+		let statement = ''
+		for (const line of (MIGRATIONS[at]?.sql ?? '').split('\n').filter((line) => !line.startsWith('--'))) {
+			statement += `${line}\n`
+			const trigger = /^\s*CREATE TRIGGER/i.test(statement)
+			if (trigger ? /^END;\s*$/.test(line) : /;\s*$/.test(line)) {
+				statements.push(statement)
+				statement = ''
+			}
+		}
+		expect(statements).toHaveLength(5)
+		const measure = async (statuses: number) => {
+			const store = freshStore()
+			return runInDurableObject(store, async (_instance, state) => {
+				const sql = state.storage.sql
+				await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+				seed(sql, statuses)
+				let read = 0
+				for (const statement of statements) {
+					const cursor = sql.exec(statement)
+					cursor.toArray()
+					read += cursor.rowsRead
+				}
+				expect(sql.exec('SELECT count(*) AS n FROM statuses').one().n).toBe(statuses)
+				return read
+			})
+		}
+		// A table and triggers made: no status, hashtag or other row of the Store is read.
+		expect(await measure(10_000)).toBe(await measure(0))
+	}, 120_000)
+})
