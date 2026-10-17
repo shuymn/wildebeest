@@ -333,7 +333,7 @@ describe('R33: the streamed statuses agree with their references (user, lists, p
 				const problems = await runInDurableObject(store, (_instance, state) => check(state.storage.sql, c))
 				expect(problems).toEqual([])
 			}),
-			runs(CASES)
+			runs(CASES, 20261017)
 		)
 		expect([...shown].sort()).toEqual(
 			[
@@ -550,7 +550,7 @@ describe('R33: the streamed conversation agrees with the conversation relation',
 				const problems = await runInDurableObject(store, (_instance, state) => checkConversations(state.storage.sql, c))
 				expect(problems).toEqual([])
 			}),
-			runs(CASES)
+			runs(CASES, 20261017)
 		)
 		expect(shownConversations.has('shown')).toBe(true)
 	}, 120_000)
