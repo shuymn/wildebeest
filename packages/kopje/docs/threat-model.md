@@ -659,8 +659,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   good. A revoked quote may be accepted again by a later request, with a new id, as Mastodon does; the author's lasting
   tools are the policy and blocks. A revoke records, in one transaction and only while the quote still holds the id
   its `Delete` was signed for, the quoted author's LD-signed `Delete` (signed once in the Worker, delivered byte for
-  byte to the quoter and to the receipts and audiences of both statuses), then a `Reject` of every request the quoting
-  author had answered for the quote, in the same lane. Accepted risk: a receiver that applies an `Accept` and a `Reject`
+  byte to the quoter and to the receipts and audiences of both statuses), then a `Reject` of every live request the
+  quoting author had answered for the quote, by id, in the same lane, recorded as retractions like the `Delete`. Accepted risk: a receiver that applies an `Accept` and a `Reject`
   concurrently (Mastodon 4.5.11 checks `pending?` in memory) may keep the quote. _Implemented on branch
   `kopje/quotes-2b`:_ `answerQuoteRequest`, `quoteAuthorization`, `retireQuoteOf` and `revokeQuoteRow` in
   `src/domain/quotes.ts`, `mayQuoteSql` and `reachQuoters` in `src/domain/audience.ts`, `revokeQuote` in

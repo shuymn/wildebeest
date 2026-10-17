@@ -17,8 +17,8 @@ import {
 	createActivity,
 	deleteActivity,
 	likeActivity,
-	quoteAnswerActivity,
 	recordOutbound,
+	revocationRejectActivity,
 	stampDeleteActivity,
 	stampUri,
 	statusFacts,
@@ -1749,18 +1749,19 @@ export const revokeQuote = userWriteOperation<RevokeInput, RevokeResult>((db, in
 				input.now
 			)
 		}
-		for (const request of answeredRequests(db, quote.quotingUri, quoted, quote.quotingAuthorUri)) {
+		for (const request of answeredRequests(db, quote.quotingUri, quoted, quote.quotingAuthorUri, input.now)) {
 			recordOutbound(
 				db,
 				accountId,
-				quoteAnswerActivity('Reject', authorUri, {
+				revocationRejectActivity(authorUri, {
 					id: request,
 					actorUri: quote.quotingAuthorUri,
 					actorId: quote.quotingAuthorId,
 					quotedUri: quote.quotedUri,
 					instrumentUri: quote.quotingUri,
 				}),
-				input.now
+				input.now,
+				{ withdraws: true }
 			)
 		}
 	}

@@ -1,5 +1,13 @@
 import { type QuoteRequestRef, quoteAnswerActivity, recordOutbound, stampUri } from './activities'
-import { availableLocalSql, DISTRIBUTABLE_SQL, isDistributable, mayQuoteSql, type Visibility } from './audience'
+import {
+	availableLocalSql,
+	DISTRIBUTABLE_SQL,
+	isDistributable,
+	mayQuoteSql,
+	MENTION_STATUS_COLUMNS,
+	mentionStatusSql,
+	type Visibility,
+} from './audience'
 import {
 	isDeleted,
 	isDeletedActor,
@@ -1026,7 +1034,8 @@ export function answerQuoteRequest(
 	)
 	// Quote#ensure_quoted_access: the quoted author may always see the quote of their post.
 	db.run(
-		'INSERT INTO status_mentions (status_id, account_id, silent) VALUES (?, ?, 1) ON CONFLICT DO NOTHING',
+		`INSERT INTO status_mentions (status_id, account_id, silent, ${MENTION_STATUS_COLUMNS})
+		VALUES (?1, ?2, 1, ${mentionStatusSql('?1')}) ON CONFLICT DO NOTHING`,
 		quoting.id,
 		quoted.account_id
 	)
@@ -1181,17 +1190,25 @@ export function revokeQuoteRow(
 // The requests the quoting author `authorUri` had answered for its quote `quotingUri` of `quotedId` (quote_requests),
 // oldest first: the Rejects a revoke sends. A request may name anyone's status as its instrument (a refused one is
 // recorded before the instrument is read), so only the quoting author's own count: another actor's never draws a
-// Reject about this quote, nor counts against its bound, MAX_QUOTE_REQUESTS_PER_ACTOR (one seek of
-// quote_requests_instrument).
-export function answeredRequests(db: Db, quotingUri: string, quotedId: string, authorUri: string): string[] {
+// Reject about this quote, nor counts against its bound, MAX_QUOTE_REQUESTS_PER_ACTOR. Only live rows count, as for
+// the cap (answered within RETRACTION_TTL_MS), so expired rows the sweep has yet to remove never crowd out the current
+// request (one seek of quote_requests_instrument).
+export function answeredRequests(
+	db: Db,
+	quotingUri: string,
+	quotedId: string,
+	authorUri: string,
+	now: number
+): string[] {
 	return db
 		.all<{ activity_uri: string }>(
 			`SELECT activity_uri FROM quote_requests
-			WHERE instrument_uri = ? AND quoted_status_id = ? AND actor_uri = ?
+			WHERE instrument_uri = ? AND quoted_status_id = ? AND actor_uri = ? AND answered_at > ?
 			ORDER BY answered_at, activity_uri LIMIT ?`,
 			quotingUri,
 			quotedId,
 			authorUri,
+			now - RETRACTION_TTL_MS,
 			MAX_QUOTE_REQUESTS_PER_ACTOR
 		)
 		.map((row) => row.activity_uri)

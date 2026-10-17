@@ -635,6 +635,25 @@ export function quoteAnswerActivity(
 	}
 }
 
+// A revoke's Reject of a request answered for the quote, naming the request by id alone. Mastodon 4.5.11 matches a
+// Reject by its object's id against the quote's current request (Reject#quote_request_from_object); an embedded
+// QuoteRequest that matches none falls into reject_embedded_quote_request, which calls an undefined quoting_status
+// (app/lib/activitypub/activity/reject.rb:39, a NameError), so a revoke never inlines it. Recorded as a retraction
+// (withdraws): it withdraws an approval already sent, so admission never refuses it and a suspension does not drop it,
+// as the stamp's Delete it follows in the lane.
+export function revocationRejectActivity(authorUri: string, request: QuoteRequestRef): OutboundEnvelope {
+	return {
+		activity: {
+			'@context': QUOTE_REQUEST_CONTEXT,
+			id: `${authorUri}#rejects/quote_requests/${sha256Hex(request.id)}/revoked`,
+			type: 'Reject',
+			actor: authorUri,
+			object: request.id,
+		},
+		audience: { followers: false, accounts: [request.actorId] },
+	}
+}
+
 // The Delete of a stamp, as Mastodon's: public, its object the stamp by id. It is LD-signed by the quoted author before
 // it is recorded (federation/ld-sign.ts) and delivered unedited (an immutable envelope), so a quoting server can relay
 // it with the author's proof.

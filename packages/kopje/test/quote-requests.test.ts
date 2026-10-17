@@ -12,6 +12,7 @@ import {
 	AS,
 	create,
 	DAVE,
+	followed,
 	localStatus,
 	mastodonNote,
 	type Note,
@@ -21,6 +22,8 @@ import {
 	type Setup,
 	update,
 } from './inbox-status-helpers'
+import { MAX_LANE_BACKLOG } from '../src/domain/deliveries'
+import { RETRACTION_TTL_MS } from '../src/domain/inbox'
 import { MAX_QUOTE_REQUESTS_PER_ACTOR } from '../src/domain/quotes'
 import { signAsAuthor } from '../src/federation/ld-sign'
 import { deliveryRound } from '../src/jobs/deliver'
@@ -167,6 +170,53 @@ async function deliver(t: Setup, answer: (url: string, body: string) => Promise<
 	throw new Error('delivery did not settle')
 }
 
+// The activities sent to inboxes starting with `prefix` (one inbox, or a server's origin) in delivery rounds until
+// nothing is due.
+async function sentTo(t: Setup, prefix: string): Promise<Record<string, unknown>[]> {
+	const sent: Record<string, unknown>[] = []
+	await deliver(t, (url, body) => {
+		if (url.startsWith(prefix)) {
+			sent.push(JSON.parse(body) as Record<string, unknown>)
+		}
+		return 202
+	})
+	return sent
+}
+
+const idOf = (value: unknown) => (typeof value === 'string' ? value : (value as { id: string }).id)
+
+function label(activity: Record<string, unknown>): string {
+	return `${String(activity.type)} ${idOf(activity.object)}`
+}
+
+// Mastodon 4.5.11 as a receiver of the quote it stored for its current request `current`, applying `activities` with
+// Delete first, then each Accept, then each Reject: a Delete matches the quote by its stamp (Delete#revoke_quote); an
+// Accept or Reject by its object's id against the current request (quote_request_from_object), an Accept only while
+// pending. A Reject whose embedded QuoteRequest matches no request falls into reject_embedded_quote_request, which
+// raises a NameError (app/lib/activitypub/activity/reject.rb:39): modelled as a throw.
+function mastodonReceiver(current: string, activities: Record<string, unknown>[]) {
+	const receiver = { state: 'pending', approval: null as string | null }
+	const ordered = ['Delete', 'Accept', 'Reject'].flatMap((type) => activities.filter((a) => a.type === type))
+	for (const activity of ordered) {
+		const ref = idOf(activity.object)
+		if (activity.type === 'Delete') {
+			if (ref === receiver.approval && ['pending', 'accepted'].includes(receiver.state)) {
+				receiver.state = receiver.state === 'accepted' ? 'revoked' : 'rejected'
+			}
+		} else if (activity.type === 'Accept') {
+			if (ref === current && receiver.state === 'pending') {
+				receiver.state = 'accepted'
+				receiver.approval = String(activity.result)
+			}
+		} else if (ref === current) {
+			receiver.state = receiver.state === 'accepted' ? 'revoked' : 'rejected'
+		} else if (typeof activity.object !== 'string') {
+			throw new Error('NameError: undefined local variable or method `quoting_status`')
+		}
+	}
+	return receiver
+}
+
 describe('QuoteRequest for a local status (QuoteRequest#perform)', () => {
 	it('accepts by the policy: a fresh authorization, the silent mention, the Accept, the notification', async () => {
 		const { t, bob, mine } = await world()
@@ -297,6 +347,22 @@ describe('QuoteRequest for a local status (QuoteRequest#perform)', () => {
 		expect(await t.post(bob, quoteRequest(bob, mine.uri, note.id))).toBe(202)
 		expect((await recorded(t, 'Reject')).length).toBe(2)
 		expect(await recorded(t, 'Accept')).toEqual([])
+	})
+})
+
+describe('the silent mention of acceptance', () => {
+	it('puts a direct quote in the quoted author’s home when they follow the quoter', async () => {
+		const { t, bob, mine } = await world()
+		await followed(t, bob)
+		// bob's direct Note quoting alice, addressed to nobody: alice reaches it only through the silent mention.
+		const note = quoteNote(t, bob, mine.uri, { to: [], cc: [] })
+		expect(await t.post(bob, quoteRequest(bob, mine.uri, note))).toBe(202)
+		const quoting = await statusId(t, note.id)
+		expect(await sql(t.store, 'SELECT visibility FROM statuses WHERE id = ?', quoting)).toEqual([
+			{ visibility: 'direct' },
+		])
+		const home = (await t.api<{ id: string }[]>('/api/v1/timelines/home')).body
+		expect(home.map((s) => s.id)).toContain(quoting)
 	})
 })
 
@@ -653,42 +719,85 @@ describe('revoke (QuotesController#revoke, RevokeQuoteService)', () => {
 		const r2 = quoteRequest(bob, mine.uri, note.id)
 		expect(await t.post(bob, r2)).toBe(202)
 		expect((await revoke(t, mine.id, await statusId(t, note.id))).status).toBe(200)
-		const sent: Record<string, unknown>[] = []
-		await deliver(t, (url, body) => {
-			if (url === `${MASTODON}/inbox`) {
-				sent.push(JSON.parse(body) as Record<string, unknown>)
-			}
-			return 202
-		})
-		expect(
-			sent.map((a) => `${String(a.type)} ${typeof a.object === 'string' ? 'stamp' : (a.object as { id: string }).id}`)
-		).toEqual([`Accept ${r1.id}`, `Accept ${r2.id}`, 'Delete stamp', `Reject ${r1.id}`, `Reject ${r2.id}`])
-		// Mastodon 4.5.11 as a receiver: its quote is matched by its current request (R2) for Accept and Reject, and by
-		// the stamp for a Delete (Delete#revoke_quote); an Accept needs a pending quote. Applied Delete first, then the
-		// Accept of R2, then the Rejects in order:
-		const receiver = { state: 'pending', activity: r2.id, approval: null as string | null }
-		const apply = (activity: Record<string, unknown>) => {
-			const ref = typeof activity.object === 'string' ? activity.object : (activity.object as { id: string }).id
-			if (activity.type === 'Delete' && ref === receiver.approval && ['pending', 'accepted'].includes(receiver.state)) {
-				receiver.state = receiver.state === 'accepted' ? 'revoked' : 'rejected'
-			} else if (activity.type === 'Accept' && ref === receiver.activity && receiver.state === 'pending') {
-				receiver.state = 'accepted'
-				receiver.approval = String(activity.result)
-			} else if (activity.type === 'Reject' && ref === receiver.activity) {
-				receiver.state = receiver.state === 'accepted' ? 'revoked' : 'rejected'
-			}
-		}
-		const byKind = (kind: string, id?: string) =>
-			sent.find((a) => a.type === kind && (id === undefined || (a.object as { id?: string }).id === id))!
-		for (const activity of [
-			byKind('Delete'),
-			byKind('Accept', r2.id),
-			byKind('Reject', r1.id),
-			byKind('Reject', r2.id),
-		]) {
-			apply(activity)
-		}
-		expect(receiver).toMatchObject({ state: 'revoked', approval: result })
+		const sent = await sentTo(t, `${MASTODON}/inbox`)
+		expect(sent.map(label)).toEqual([
+			`Accept ${r1.id}`,
+			`Accept ${r2.id}`,
+			`Delete ${result}`,
+			`Reject ${r1.id}`,
+			`Reject ${r2.id}`,
+		])
+		expect(mastodonReceiver(r2.id, sent)).toMatchObject({ state: 'revoked', approval: result })
+	})
+
+	it('delivers the Rejects as retractions: past a full lane and after the revoker’s suspension', async () => {
+		const { t, bob, mine } = await world()
+		const { note, stamp: result } = await accepted(t, bob, mine.uri)
+		const r2 = quoteRequest(bob, mine.uri, note.id)
+		expect(await t.post(bob, r2)).toBe(202)
+		const earlier = await sentTo(t, MASTODON)
+		// alice's lane to bob's server is full (MAX_LANE_BACKLOG active rows) when she revokes.
+		await sql(
+			t.store,
+			`INSERT INTO outbound_activities (account_id, body, object_uri, retracts, created_at)
+			VALUES (?, '{"activity":{"type":"Like"},"audience":{"followers":false,"accounts":[]}}', 'filler', 0, ?)`,
+			ALICE,
+			NOW
+		)
+		await sql(
+			t.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?3)
+			INSERT INTO deliveries (activity_id, account_id, inbox_url, lane, state, next_attempt_at, updated_at)
+			SELECT (SELECT id FROM outbound_activities WHERE object_uri = 'filler'), ?1, ?2 || '/inbox', ?2, 'queued', ?4, ?4
+			FROM n`,
+			ALICE,
+			MASTODON,
+			MAX_LANE_BACKLOG,
+			NOW
+		)
+		expect((await revoke(t, mine.id, await statusId(t, note.id))).status).toBe(200)
+		const rejects = (await deliveries(t)).filter((d) => d.type === 'Reject')
+		expect(rejects).toHaveLength(2)
+		expect(rejects.filter((d) => d.state === 'gave_up')).toEqual([])
+		// The filler goes; the lane's next row becomes its head, as a settled head promotes it.
+		await sql(t.store, "DELETE FROM outbound_activities WHERE object_uri = 'filler'")
+		await sql(
+			t.store,
+			"UPDATE deliveries SET state = 'pending' WHERE id = (SELECT min(id) FROM deliveries WHERE account_id = ? AND state = 'queued')",
+			ALICE
+		)
+		// alice is suspended before anything more is delivered (design, Concurrency row 17): the retractions still go.
+		await sql(
+			t.store,
+			'UPDATE local_accounts SET suspended_at = ? WHERE account_id = ?',
+			'2026-10-12T00:00:00.000Z',
+			ALICE
+		)
+		const sent = await sentTo(t, MASTODON)
+		expect(sent.map(label)).toEqual([
+			`Delete ${result}`,
+			...earlier.filter((a) => a.type === 'Accept').map((a) => `Reject ${(a.object as { id: string }).id}`),
+		])
+		// A receiver that applies the Delete before the Accept of R2 still ends rejected.
+		expect(mastodonReceiver(r2.id, [...earlier, ...sent])).toMatchObject({ state: 'revoked', approval: result })
+	})
+
+	it('rejects the live requests only: expired rows the sweep has not removed never crowd out the current one', async () => {
+		const { t, bob, mine } = await world()
+		const { note, request } = await accepted(t, bob, mine.uri)
+		await sql(
+			t.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO quote_requests (activity_uri, actor_uri, instrument_uri, quoted_status_id, answered_at)
+			SELECT ?2 || '/quote_requests/expired-' || i, ?2, ?3, ?4, ?5 FROM n`,
+			MAX_QUOTE_REQUESTS_PER_ACTOR,
+			bob.uri,
+			note.id,
+			mine.id,
+			NOW - RETRACTION_TTL_MS - 1
+		)
+		expect((await revoke(t, mine.id, await statusId(t, note.id))).status).toBe(200)
+		expect((await recorded(t, 'Reject')).map((r) => r.object)).toEqual([request.id])
 	})
 
 	it('signs the Delete once: every destination receives the same bytes, and they verify as the author’s', async () => {
@@ -929,9 +1038,9 @@ describe('review regressions', () => {
 		expect((await revoke(t, mine.id, await statusId(t, note.id))).status).toBe(200)
 		const rejects: string[] = []
 		await deliver(t, (_url, body) => {
-			const activity = JSON.parse(body) as { type: string; object: { id: string } }
+			const activity = JSON.parse(body) as { type: string; object: unknown }
 			if (activity.type === 'Reject') {
-				rejects.push(activity.object.id)
+				rejects.push(idOf(activity.object))
 			}
 			return 202
 		})
