@@ -184,6 +184,19 @@ export const createStatus: ApiHandler = async (c, deps) => {
 	if (p instanceof Response) {
 		return p
 	}
+	// StatusesController#set_thread and #set_quoted_status run before the create action: a quoted status that is not
+	// found (or that R36 refuses) answers its 404 before any of the create action's 422s, for a scheduled post too.
+	const inReplyToId = emptyToUndefined(p.get('in_reply_to_id'))
+	const quotedStatusId = emptyToUndefined(p.get('quoted_status_id'))
+	if (quotedStatusId !== undefined) {
+		const credential = userCredential(c, deps)
+		const found = authorized(
+			await storeCall(c, deps, (s, b) => s.postTargets(b, { credential, inReplyToId, quotedStatusId }))
+		)
+		if (found !== 'ok') {
+			return found === 'reply_not_found' ? REPLY_NOT_FOUND() : QUOTE_NOT_FOUND()
+		}
+	}
 	const composed = composition(p)
 	const visibility = emptyToUndefined(p.get('visibility'))
 	const scheduledRaw = emptyToUndefined(p.get('scheduled_at'))
@@ -212,8 +225,8 @@ export const createStatus: ApiHandler = async (c, deps) => {
 		credential,
 		...composed,
 		visibility: visibility as ApiVisibility | undefined,
-		inReplyToId: emptyToUndefined(p.get('in_reply_to_id')),
-		quotedStatusId: emptyToUndefined(p.get('quoted_status_id')),
+		inReplyToId,
+		quotedStatusId,
 		quotePolicy,
 		idempotencyKey,
 		objectId: crypto.randomUUID(),

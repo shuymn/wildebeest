@@ -422,6 +422,22 @@ export function preparePost(db: Db, accountId: string, input: PostInput, schedul
 	return { author, parent, media, visibility, quoted }
 }
 
+// StatusesController's before_actions, set_thread then set_quoted_status, which answer their 404 before anything the
+// create action validates: whether the status replied to and the status quoted are found for the viewer. Read for that
+// precedence only; the post decides both again in its own transaction (preparePost), which alone is authoritative.
+export const postTargets = userReadOperation<
+	{ inReplyToId?: string; quotedStatusId?: string },
+	'ok' | 'reply_not_found' | 'quote_not_found'
+>((db, input, { accountId }) => {
+	if (input.inReplyToId !== undefined && replyParent(db, accountId, input.inReplyToId) === null) {
+		return 'reply_not_found'
+	}
+	if (input.quotedStatusId !== undefined && quotable(db, accountId, input.quotedStatusId) === null) {
+		return 'quote_not_found'
+	}
+	return 'ok'
+})
+
 // A status a post may quote, as R36 found it.
 type Quotable = QuotedForPost & { visibility: Visibility }
 

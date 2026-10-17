@@ -1136,6 +1136,10 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, statuses.updateInteractionPolicy, input)
 	}
 
+	postTargets(callerBuild: string, input: OperationInput<typeof statuses.postTargets>) {
+		return this.#kernel.execute(callerBuild, statuses.postTargets, input)
+	}
+
 	prepareRevoke(callerBuild: string, input: OperationInput<typeof statuses.prepareRevoke>) {
 		return this.#kernel.execute(callerBuild, statuses.prepareRevoke, input)
 	}

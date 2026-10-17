@@ -1280,3 +1280,34 @@ describe('review fixes', () => {
 		expect(await quoteRow(t, mine.uri)).toMatchObject({ state: 'revoked', approval_uri: stamp })
 	})
 })
+
+describe('error precedence (StatusesController before_actions)', () => {
+	it('answers a missing or refused quoted status 404 before any 422 of the create action, scheduled or not', async () => {
+		const { t, bob } = await world()
+		const nobody = await remoteStatus(t, bob, [bob.uri])
+		const scheduledAt = new Date(NOW + 60 * 60 * 1000).toISOString()
+		for (const quoted of ['999999999999999999', nobody.id]) {
+			for (const extra of [{}, { scheduled_at: scheduledAt }]) {
+				for (const body of [
+					{ status: 'x'.repeat(501) },
+					{ status: 'x', quote_approval_policy: 'everyone' },
+					{ status: 'x', visibility: 'secret' },
+					{ status: 'x', scheduled_at: 'not a time' },
+				]) {
+					expect(await postRaw(t, { ...extra, ...body, quoted_status_id: quoted }), JSON.stringify(body)).toEqual({
+						status: 404,
+						body: { error: NOT_FOUND },
+					})
+				}
+			}
+		}
+		// set_thread comes first: a missing parent answers its own 404.
+		expect(
+			await postRaw(t, { status: 'x', in_reply_to_id: '999999999999999998', quoted_status_id: nobody.id })
+		).toEqual({
+			status: 404,
+			body: { error: 'The post you are trying to reply to does not appear to exist.' },
+		})
+		expect(await sql(t.store, 'SELECT id FROM scheduled_statuses')).toEqual([])
+	})
+})
