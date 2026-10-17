@@ -1,14 +1,14 @@
 import { runInDurableObject } from 'cloudflare:test'
 import { env } from 'cloudflare:workers'
 
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 
 import { bearer, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { blockDomain, setSeverity, unblockDomain } from './domain-block-helpers'
 import { LEGACY } from './federation-helpers'
 import { BUILD } from './helpers'
-import { deferred, deliveryDeps } from './quote-helpers'
+import { deferred, deliveryDeps, gatedHost, recordingFetch } from './quote-helpers'
 import { rowsRead } from './read-helpers'
 import { adminEntity, uriOf, world } from './remote-suspension-helpers'
 import { community, post, remoteAccount, remoteFollows } from './status-helpers'
@@ -422,38 +422,25 @@ describe('deliveries to a blocked domain (VIS-30)', () => {
 			return w
 		}
 
-		function recordingFetch() {
-			const sent: string[] = []
-			const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-				sent.push(new Request(input, init).url)
-				return new Response(null, { status: 202 })
-			})
-			return { fetch: fetch as unknown as typeof globalThis.fetch, sent }
-		}
-
 		it('sends nothing when the block commits between the claim and confirmation, and promotes the lane', async () => {
 			const w = await signed()
 			await post(w.h, w.alice, { status: 'first' })
 			await post(w.h, w.alice, { status: 'second' })
 			const { fetch, sent } = recordingFetch()
-			const reached = deferred()
-			const release = deferred()
 			// Held at its host check: after the claim and the signer load, before confirmation.
+			const gate = gatedHost()
 			const round = deliveryRound(testEnv, {
 				...deliveryDeps(
 					() => w.h.store,
 					fetch,
 					() => NOW
 				),
-				checkHost: async () => {
-					reached.resolve()
-					await release.promise
-				},
+				checkHost: gate.checkHost,
 			})
-			await reached.promise
+			await gate.reached
 			expect((await deliveries(w.h.store)).map((row) => row.state)).toEqual(['leased', 'queued'])
 			await blockDomain(w.h.store, 'blocked.example')
-			release.resolve()
+			gate.release()
 			expect(await round).toEqual({ claimed: 1, settled: ['dropped'], nextDueAt: NOW })
 			expect(sent).toEqual([])
 			expect((await deliveries(w.h.store)).map((row) => row.state)).toEqual(['pending'])

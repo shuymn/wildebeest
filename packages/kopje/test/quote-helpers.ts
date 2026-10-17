@@ -1,4 +1,5 @@
 import { type DocumentLoader, preloadedContexts } from '@fedify/fedify'
+import { vi } from 'vitest'
 
 import { BUILD } from './helpers'
 import type { RemoteWeb, TestActor } from './inbox-helpers'
@@ -104,6 +105,27 @@ export function deferred(): { promise: Promise<void>; resolve: () => void } {
 		resolve = r
 	})
 	return { promise, resolve }
+}
+
+// A host check that holds every delivery of the round (after the claim, before confirmation) until released.
+export function gatedHost() {
+	const reached = deferred()
+	const release = deferred()
+	const checkHost = async () => {
+		reached.resolve()
+		await release.promise
+	}
+	return { checkHost, reached: reached.promise, release: release.resolve }
+}
+
+// A fetch that answers every POST 202 and records its URL, in order.
+export function recordingFetch() {
+	const sent: string[] = []
+	const fetch = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+		sent.push(new Request(input, init).url)
+		return Promise.resolve(new Response(null, { status: 202 }))
+	})
+	return { fetch: fetch as unknown as typeof globalThis.fetch, sent }
 }
 
 export type RoundDeps = Parameters<typeof deliveryRound>[1]

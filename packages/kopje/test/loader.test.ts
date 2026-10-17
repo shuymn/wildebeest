@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
+import { deferred } from './quote-helpers'
 import {
 	createContextLoader,
 	createSafeLoader,
@@ -99,14 +100,12 @@ describe('safe document loader', () => {
 	// response is awaited (the gate) refuses the redirect's destination, which is never requested.
 	it('reads the domain policy again before a redirect, and requests nothing once it refuses the host', async () => {
 		const next = 'https://remote.example/u/bob'
-		let release!: () => void
-		let reached!: () => void
-		const gate = new Promise<void>((resolve) => (release = resolve))
-		const arrived = new Promise<void>((resolve) => (reached = resolve))
+		const reached = deferred()
+		const release = deferred()
 		const { fetch, requests } = fakeFetch({
 			[ACTOR]: async () => {
-				reached()
-				await gate
+				reached.resolve()
+				await release.promise
 				return new Response(null, { status: 302, headers: { location: '/u/bob' } })
 			},
 			[next]: () => Response.json({ id: next }, { headers: AP }),
@@ -118,9 +117,9 @@ describe('safe document loader', () => {
 			return Promise.resolve(blocked)
 		}
 		const loading = loader(fetch, { refusesHost })(ACTOR)
-		await arrived
+		await reached.promise
 		blocked = true
-		release()
+		release.resolve()
 		await expect(loading).rejects.toThrow(/blocked by the instance/)
 		expect(requests.map((r) => r.url)).toEqual([ACTOR])
 		expect(asked).toEqual(['remote.example', 'remote.example'])

@@ -8,7 +8,7 @@ import { NOW } from './app-helpers'
 import { blockDomain, blockDomainIn } from './domain-block-helpers'
 import { LEGACY } from './federation-helpers'
 import { BUILD, freshStore, testKernel } from './helpers'
-import { deferred, deliveryDeps } from './quote-helpers'
+import { deferred, deliveryDeps, gatedHost } from './quote-helpers'
 import { community, post, remoteAccount, remoteFollows, type User } from './status-helpers'
 import { MIGRATIONS } from '../src/db/migrations'
 import { Db } from '../src/db/sql'
@@ -513,17 +513,6 @@ function recordingFetch() {
 		return new Response(null, { status: 202 })
 	})
 	return { fetch: fetch as unknown as typeof globalThis.fetch, sent }
-}
-
-// A host check that holds every delivery of the round (after the claim, before confirmation) until released.
-function gatedHost() {
-	const reached = deferred()
-	const release = deferred()
-	const checkHost = async () => {
-		reached.resolve()
-		await release.promise
-	}
-	return { checkHost, reached: reached.promise, release: release.resolve }
 }
 
 describe('confirmDelivery in the round (VIS-30)', () => {
