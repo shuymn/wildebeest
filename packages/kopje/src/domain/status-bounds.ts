@@ -19,6 +19,15 @@ export const MAX_STATUS_TAGS = 100
 export const MAX_PRESENTED_TAGS = 70
 export const MAX_TAG_LENGTH = 256
 const TAG_NAME_BYTES = 1024
+const ENCODER = new TextEncoder()
+
+// Whether a hashtag name is one Kopje stores, local or remote: at most MAX_TAG_LENGTH code units and TAG_NAME_BYTES.
+// Mastodon 4.5 sets no length (Tag validates only HASHTAG_NAME_RE); a longer hashtag of a local post stays a link in
+// its content and is not recorded, as a remote one is not (federation/remote-status.ts). Only a converted row can hold
+// a longer name, which tagNameSql leaves out.
+export function isStoredTagName(name: string): boolean {
+	return name.length <= MAX_TAG_LENGTH && ENCODER.encode(name).length <= TAG_NAME_BYTES
+}
 // status_mentions rows of one remote status, and mentions one status presents.
 export const MAX_STATUS_MENTION_ROWS = 200
 // A media description, as Mastodon's MAX_DESCRIPTION_HARD_LENGTH_LIMIT (code units as stored, code points as read).

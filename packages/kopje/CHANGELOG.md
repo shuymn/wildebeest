@@ -73,7 +73,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds two migrations, applied on the first request after the deploy; a rollback to an earlier version
+- Store schema: adds three migrations, applied on the first request after the deploy; a rollback to an earlier version
   needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0045_remote_suspension`: lets the admin suspend remote accounts. It adds two account columns, builds two
       indexes over the accounts and one over the queued outbound activities (one pass over each), drops one index, and
@@ -83,6 +83,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
     - `0046_instance_domain_blocks`: the table of instance domain blocks, which no route writes. It adds an empty
       table and reads nothing: on the same benchmark store its upgrade took 5.9 seconds (6.0 and 6.4 in two
       more runs), the overhead of an upgrade on a store that size.
+    - `0047_status_mentions_shown`: an index of the mentions a status shows, so a status read takes them without
+      passing the silent ones. It builds a partial index in one pass over the mentions: on the same benchmark store,
+      with 2,000,000 mentions, its upgrade took 7.1 seconds (7.2 in another run, and 9.7 in a first run on a loaded
+      machine).
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.14] - 2026-10-18

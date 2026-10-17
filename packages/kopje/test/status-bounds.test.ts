@@ -595,6 +595,45 @@ describe('a conversation presents its first participants (RES-3)', () => {
 	})
 })
 
+describe('an ordinary status keeps its mentions and hashtags (RES-2)', () => {
+	it('shows a current mention after more silent rows than the cap, as an edited status keeps them', async () => {
+		const h = await community(['alice'])
+		const bob = await remoteAccount(h.store, 'bob')
+		const posted = await post(h, h.users.alice, { status: '@bob@remote.example hello' })
+		// Recipients an edit removed stay as silent rows, without a cap, and may sort before the current one.
+		await sql(
+			h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+			INSERT INTO accounts (id, uri, username, domain)
+			SELECT CAST(100000000000000000 + i AS TEXT), 'https://old.example/users/o' || i, 'o' || i, 'old.example' FROM n`,
+			MAX_STATUS_MENTION_ROWS + 50
+		)
+		await sql(
+			h.store,
+			`INSERT INTO status_mentions (status_id, account_id, silent, requires_mention, author_id)
+			SELECT ?1, id, 1, 0, ?2 FROM accounts WHERE domain = 'old.example'`,
+			posted.id,
+			h.users.alice.id
+		)
+		const response = await h.request(`/api/v1/statuses/${posted.id}`, {
+			headers: { authorization: `Bearer ${h.users.alice.token}` },
+		})
+		const shown = (await response.json()) as { mentions: { id: string }[] }
+		// The silent rows sort before the current mention.
+		expect(bob > String(100_000_000_000_000_000n + BigInt(MAX_STATUS_MENTION_ROWS + 50))).toBe(true)
+		expect(shown.mentions.map((m) => m.id)).toEqual([bob])
+	})
+
+	it('stores no hashtag past its bound, so a post with one shows every other', async () => {
+		const h = await community(['alice'])
+		const cjk = Array.from({ length: MAX_PRESENTED_TAGS }, (_, i) => `#${String.fromCodePoint(0x4e00 + i)}`)
+		const posted = await post(h, h.users.alice, { status: `#${'a'.repeat(MAX_TAG_LENGTH + 1)} ${cjk.join(' ')}` })
+		expect(posted.tags.map((tag) => `#${tag.name}`).toSorted()).toEqual(cjk.toSorted())
+		expect(posted.content).toContain(`#<span>${'a'.repeat(MAX_TAG_LENGTH + 1)}</span>`)
+		expect(await sql(h.store, 'SELECT name FROM status_tags WHERE length(name) > ?', MAX_TAG_LENGTH)).toEqual([])
+	})
+})
+
 // Realistic posts of each implementation at its own length limit, in Japanese with its own markup.
 const misskey = () => {
 	const mention = '<a href="https://misskey.example/@bob" class="u-url mention">@bob@misskey.example</a>'

@@ -285,10 +285,10 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 	)
 	// At most MAX_STATUS_MEDIA attachments, MAX_STATUS_MENTION_ROWS mentions and MAX_PRESENTED_TAGS hashtags of each
 	// status (each status once), cut in SQL: a converted row may hold more. Each cap reads at most that many rows of
-	// the status through its index, whatever is stored, and only then filters them: a mention among them that is
-	// silent, or a hashtag whose name is past its bound, is left out rather than replaced by a later one, so a converted
-	// status holding such rows may show fewer. Media are read through media_attachments_status, which orders the
-	// shown attachments of a status by position, so hidden ones cost nothing.
+	// the status through an index that holds only the rows it shows: media_attachments_status (shown attachments by
+	// position), status_mentions_shown (mentions that are not silent, migration 0047) and status_tags (names). No
+	// local or remote status stores a hashtag name past its bound (isStoredTagName); a converted one that holds such a
+	// name among its first ones read shows fewer, as the name is left out rather than replaced by a later one.
 	const statusIds = 'SELECT DISTINCT value FROM json_each(?1)'
 	const media = groupBy(
 		db.all<MediaRow & { status_id: string }>(
@@ -305,8 +305,8 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 			`SELECT j.value AS status_id, a.id, ${usernameSql('a.username')} AS username, a.domain,
 				${profileUrlSql('a.url')} AS url, ${actorUriSql('a.uri')} AS uri
 			FROM (${statusIds}) j CROSS JOIN accounts a
-			WHERE a.id IN (SELECT m.account_id FROM (SELECT account_id, silent FROM status_mentions
-				WHERE status_id = j.value ORDER BY account_id LIMIT ${MAX_STATUS_MENTION_ROWS}) m WHERE m.silent = 0)
+			WHERE a.id IN (SELECT m.account_id FROM status_mentions m INDEXED BY status_mentions_shown
+				WHERE m.status_id = j.value AND m.silent = 0 ORDER BY m.account_id LIMIT ${MAX_STATUS_MENTION_ROWS})
 			ORDER BY j.value, a.id`,
 			all
 		)

@@ -83,6 +83,7 @@ import { normalizeSearchText } from './search-text'
 import {
 	contentSql,
 	editMediaSql,
+	isStoredTagName,
 	pollOptionsSql,
 	sourceTextSql,
 	spoilerSql,
@@ -231,7 +232,7 @@ function compose(db: Db, text: string, author: Author, origin: string, quoted: Q
 			? rendered
 			: quoteFallbackHtml(quoted.url) + rendered
 	const unique = new Map([...resolved.values()].map((account) => [account.id, account]))
-	return { content, source: text, mentions: [...unique.values()], tags: parsed.tags }
+	return { content, source: text, mentions: [...unique.values()], tags: parsed.tags.filter(isStoredTagName) }
 }
 
 // The web page of the status `id` (Mastodon's url_for): a local status's /@user/<id>, a remote one's url or uri.
