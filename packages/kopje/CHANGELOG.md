@@ -12,9 +12,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 - Kopje users can quote posts, as on Mastodon 4.5. `POST /api/v1/statuses` (and a scheduled post, in its `params`)
   takes `quoted_status_id`: a public or unlisted post whose quote policy allows the poster, or the poster's own post
-  that is not direct. Anything else, the poster's or the author's blocks included, is answered 404 `The post you are
-trying to quote does not appear to exist.`, as Mastodon; a scheduled quote is checked again when it is published,
-  and dropped if it no longer passes. A quote of a followers-only post of one's own is followers-only; a direct quote of
+  that is not direct. Anything else, the poster's or the author's blocks included, is answered 404 with Mastodon's
+  error (`The post you are trying to quote does not appear to exist.`), before any 422 of the post, as Mastodon; a
+  scheduled quote is checked again when it is published, and dropped if it no longer passes. A quote of a followers-only post of one's own is followers-only; a direct quote of
   someone else's post must mention its author (422 otherwise); the text may be empty.
     - A quote of a Kopje post is accepted at once, and its author is notified (`quote`). A quote of a remote post is
       `pending` until its author's server approves it, then `accepted`; a refusal makes it `rejected`, and a later
