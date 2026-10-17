@@ -103,8 +103,10 @@ kopje-admin verify-conversion <export> <dump file> [--accept-deletions] [--accep
   recorded in the manifest.
 - `--catalog` takes the target's `kopje-admin catalog` output. Without it the converter uses the catalog of its own
   schema; `import` refuses a dump whose catalog differs from the target's either way.
-- `--accept-truncation` accepts HTML longer than the sanitizer's limit (50,000 UTF-16 units), and a bio longer than
-  64 KiB once sanitized (as a JSON string), whose end is then cut as the Worker cuts it.
+- `--accept-truncation` accepts HTML longer than the sanitizer's limit (50,000 UTF-16 units), a bio longer than
+  64 KiB once sanitized (as a JSON string), status content (and an earlier version's) longer than 128 KiB once
+  sanitized, a content warning longer than 16 KiB and a local status's source text longer than 128 KiB (each as a JSON
+  string), whose end is then cut as the Worker cuts it.
   Without it such a value stops the conversion, and `verify-conversion` fails, both counted.
 - `--domain` refuses an export whose local accounts are on another domain. The domain is otherwise taken as it is.
 - The KEK candidates come from the environment: the empty KEK always, and the values of `userKEK` and `USER_KEY` (the
@@ -282,9 +284,11 @@ over: users sign in again and clients register push again. Legacy never wrote it
 `filter_keywords`, `filter_statuses`), so a converted Store starts without filters.
 
 **Stops.** The converter writes no dump when it finds rows it cannot carry over (`conversion.problems`: rows in tables
-the legacy code never wrote, unknown object types, statuses whose author is not local where it must be, duplicate
-URIs, lists without 18-digit ids, and the like), when rows reference accounts or statuses that do not exist and
-`--accept-deletions` is not given (`conversion.dropped`), or when no single KEK candidate unwraps every key.
+the legacy code never wrote, unknown object types, statuses whose author is not local where it must be, duplicate URIs,
+a remote actor id longer than 2,048 bytes, a status or boost URI longer than 4,096 bytes (in UTF-8) or a remote username
+outside Mastodon's remote format, which the Worker never stores and which are identities that cannot be cut, lists
+without 18-digit ids, and the like), when rows reference accounts or statuses that do not exist and `--accept-deletions`
+is not given (`conversion.dropped`), or when no single KEK candidate unwraps every key.
 
 **What `--accept-deletions` drops.** Besides the rows bridge migrations remove (Steps), `conversion.dropped` counts rows
 the conversion leaves out because legacy never showed them, or showed them only through what is also left out:

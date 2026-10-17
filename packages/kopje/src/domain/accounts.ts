@@ -21,8 +21,11 @@ import { notify } from './notifications'
 import { readOperation } from './operation'
 import { htmlToPlainText, plainTextToHtml } from './plain-text'
 import {
+	actorUriSql,
 	cutSql,
 	DISPLAY_NAME_LIMIT,
+	displayNameSql,
+	noteSql,
 	PROFILE_URL_LIMIT,
 	profileUrlSql,
 	USERNAME_LIMIT,
@@ -34,8 +37,8 @@ import { readWindow, singleWindow, type Window, windowJson, windowPage } from '.
 import type { Db } from '../db/sql'
 import { normalizeDomain, parseAddress } from '../platform/domain-name'
 import { utf8Length } from '../platform/dump-format'
-import { httpUrl } from '../platform/http-url'
-import { REMOTE_BIO_BYTES, sanitizeRemoteHtml } from '../security/html'
+import { boundedHref, httpUrl } from '../platform/http-url'
+import { sanitizeRemoteHtml } from '../security/html'
 
 // Accounts as the Mastodon API (4.0.2) shows them: one presenter, and the account and relationship operations of B3.
 // Every operation takes an account by its API id or by its legacy id (accounts.legacy_id); both resolve to the same
@@ -192,20 +195,18 @@ const REMOTE_ATTACHMENT_SQL = `CASE WHEN a.domain IS NOT NULL THEN (
 // RES-2: the most one presented account carries. A remote server controls its bio, display name, profile URLs and
 // fields; each is bounded as stored (federation/remote-actor.ts) and again as ACCOUNT_COLUMNS reads it, so rows
 // stored before a bound, or converted at the cutover, are bounded too until the account is fetched again:
-//   - the bio at REMOTE_BIO_BYTES (64 KiB) as a JSON string; a longer stored one reads as '' (json_quote measures
-//     it only below the raw bound, so its escaped copy stays far below SQLite's largest string);
+//   - the bio at REMOTE_BIO_BYTES (64 KiB) as a JSON string; a longer stored one reads as '' (noteSql);
 //   - the display name at DISPLAY_NAME_LIMIT and the username at USERNAME_LIMIT code points (cutSql);
 //   - url, avatar and header at PROFILE_URL_LIMIT bytes; a longer stored one reads as NULL, as an invalid one;
 //   - the fields at REMOTE_FIELDS_BYTES (REMOTE_ATTACHMENT_SQL, remoteFields).
 // One account is then at most about 113 KB as read and 123 KB serialized (bio 64 KiB, display name 12 KiB escaped,
 // fields 33 KB, five URLs 10 KiB, the rest about 2 KB), so a page of 80 serializes to at most about 10 MB. The actor
-// URI is bounded as stored (ACTOR_URI_LIMIT); a converted row keeps legacy's.
-const NOTE_SQL = `CASE WHEN length(CAST(a.note AS BLOB)) > ${REMOTE_BIO_BYTES} THEN ''
-	WHEN length(CAST(json_quote(a.note) AS BLOB)) > ${REMOTE_BIO_BYTES} THEN '' ELSE a.note END`
-
-export const ACCOUNT_COLUMNS = `a.id, a.uri, ${usernameSql('a.username')} AS username, a.domain, a.actor_type,
-	${cutSql('a.display_name', DISPLAY_NAME_LIMIT)} AS display_name, ${NOTE_SQL} AS note, ${profileUrlSql('a.url')} AS url,
-	${profileUrlSql('a.avatar_url')} AS avatar_url, ${profileUrlSql('a.header_url')} AS header_url, a.locked, a.discoverable, a.followers_count, a.following_count, a.statuses_count, a.created_at,
+// URI is bounded as stored (ACTOR_URI_LIMIT) and read through actorUriSql.
+export const ACCOUNT_COLUMNS = `a.id, ${actorUriSql('a.uri')} AS uri, ${usernameSql('a.username')} AS username, a.domain,
+	a.actor_type, ${displayNameSql('a.display_name')} AS display_name, ${noteSql('a.note')} AS note,
+	${profileUrlSql('a.url')} AS url, ${profileUrlSql('a.avatar_url')} AS avatar_url,
+	${profileUrlSql('a.header_url')} AS header_url, a.locked, a.discoverable, a.followers_count, a.following_count,
+	a.statuses_count, a.created_at,
 	${availableJoinedSql('a', 'l')} AS available,
 	(SELECT substr(s.published_at, 1, 10) FROM statuses s
 		WHERE s.account_id = a.id AND s.visibility IN ${REACHES_FOLLOWERS_SQL} ORDER BY s.id DESC LIMIT 1)
@@ -269,15 +270,21 @@ export function presentAccountsWithin(
 	return { items, cut: items.length < ids.length }
 }
 
-// A local account's url is derived from its actor URI, which carries the instance origin.
 // An account's profile URL. A stored url is used only when it is http(s) (HTML-3); otherwise it is derived from the
-// actor URI, which carries the account's origin, or from this instance's origin when the URI is not http(s) either.
+// actor URI, which carries the account's origin (a local account's carries the instance origin), or from this
+// instance's origin when the URI is not http(s) either. Each is used only within PROFILE_URL_LIMIT as serialized
+// (RES-2): a longer one falls back to the next, and to '' when none fits (a converted row of a long host and name).
 export function accountUrl(
 	row: { url: string | null; uri: string; username: string; domain: string | null },
 	origin: string
 ): string {
 	const actor = httpUrl(row.uri)
-	return httpUrl(row.url)?.href ?? (actor === null ? `${origin}/@${acctOf(row)}` : `${actor.origin}/@${row.username}`)
+	return (
+		boundedHref(row.url, PROFILE_URL_LIMIT) ??
+		(actor === null ? null : boundedHref(`${actor.origin}/@${row.username}`, PROFILE_URL_LIMIT)) ??
+		boundedHref(`${origin}/@${acctOf(row)}`, PROFILE_URL_LIMIT) ??
+		''
+	)
 }
 
 export function acctOf(row: { username: string; domain: string | null }): string {
@@ -291,8 +298,8 @@ export function presentAccount(row: AccountRow, { origin }: Present): Account {
 	const suspended = row.available === 0
 	// Stored URLs are shown only when they are http(s) (httpUrl); anything else reads as unset.
 	const url = accountUrl(row, origin)
-	const avatar = (suspended ? null : httpUrl(row.avatar_url)?.href) ?? `${origin}${DEFAULT_AVATAR}`
-	const header = (suspended ? null : httpUrl(row.header_url)?.href) ?? `${origin}${DEFAULT_HEADER}`
+	const avatar = (suspended ? null : boundedHref(row.avatar_url, PROFILE_URL_LIMIT)) ?? `${origin}${DEFAULT_AVATAR}`
+	const header = (suspended ? null : boundedHref(row.header_url, PROFILE_URL_LIMIT)) ?? `${origin}${DEFAULT_HEADER}`
 	return {
 		id: row.id,
 		username: row.username,

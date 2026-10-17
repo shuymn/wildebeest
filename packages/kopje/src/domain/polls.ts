@@ -4,6 +4,7 @@ import { mayVoteSql, viewableStatusId } from './audience'
 import { optionalUserReadOperation, userWriteOperation } from './auth'
 import { notify } from './notifications'
 import { writeOperation } from './operation'
+import { MAX_REMOTE_OPTION_LENGTH, MAX_REMOTE_OPTIONS, pollOptionsSql } from './status-bounds'
 import type { Db } from '../db/sql'
 
 // Polls (Mastodon 4.5's Poll, PollVote, VoteService, Api::V1::PollsController and Polls::VotesController,
@@ -24,8 +25,7 @@ export const MAX_EXPIRATION_S = 2_629_746
 // A remote poll keeps at most this many choices, each cut to this many code units (RES-4; Mastodon's PollParser
 // keeps 500 choices, whole). The length holds Mastodon's 50 grapheme clusters at 20 code units each (an emoji tag
 // sequence takes 14) and Misskey's 50 code units, so a choice either server allows is kept whole.
-export const MAX_REMOTE_OPTIONS = 100
-export const MAX_REMOTE_OPTION_LENGTH = 1000
+export { MAX_REMOTE_OPTION_LENGTH, MAX_REMOTE_OPTIONS }
 
 // VoteService#distribute_poll!: the Update of a local poll's counts waits this long after a vote, and one Update
 // carries every vote cast meanwhile.
@@ -254,8 +254,10 @@ export function sweepStaleVotes(db: Db, limit: number): number {
 // The choices of a status's poll, for its edit history (StatusEdit's poll_options): a JSON array, or null.
 export function pollOptionsJson(db: Db, statusId: string): string | null {
 	return (
-		db.first<{ options: string }>('SELECT options FROM polls WHERE status_id = ? AND removed = 0', statusId)?.options ??
-		null
+		db.first<{ options: string }>(
+			`SELECT ${pollOptionsSql('options')} AS options FROM polls WHERE status_id = ? AND removed = 0`,
+			statusId
+		)?.options ?? null
 	)
 }
 
@@ -273,7 +275,7 @@ type PollRow = {
 	voters_count: number | null
 }
 
-const POLL_COLUMNS = `p.status_id, s.account_id, p.options, p.tallies, p.multiple, p.hide_totals, p.expires_at,
+const POLL_COLUMNS = `p.status_id, s.account_id, ${pollOptionsSql('p.options')} AS options, p.tallies, p.multiple, p.hide_totals, p.expires_at,
 	p.votes_count, p.voters_count`
 
 function presentPoll(row: PollRow, viewer: { id: string | null; votes: number[] }, now: string): Poll {

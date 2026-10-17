@@ -6,7 +6,6 @@ import {
 	type PageQuery,
 	type Present,
 	presentAccountsById,
-	profileUrlSql,
 	resolveAccountId,
 } from './accounts'
 import { flagActivity, instanceActorUri, recordOutbound } from './activities'
@@ -25,6 +24,7 @@ import { type InstanceRule, parseRules } from './instance'
 import { logAction } from './moderation-log'
 import { notify } from './notifications'
 import { readOperation } from './operation'
+import { actorUriSql, profileUrlSql, usernameSql } from './profile-bounds'
 import { presentStatuses, type Status } from './status-presenter'
 import { accountStatusIds } from './timelines'
 import type { Db } from '../db/sql'
@@ -644,7 +644,8 @@ export const reportTargetPage = readOperation<
 	}
 	const row = /^\d{1,18}$/.test(id)
 		? db.first<{ url: string | null; uri: string; username: string; domain: string | null }>(
-				`SELECT ${profileUrlSql('a.url')} AS url, a.uri, a.username, a.domain
+				`SELECT ${profileUrlSql('a.url')} AS url, ${actorUriSql('a.uri')} AS uri, ${usernameSql('a.username')} AS username,
+					a.domain
 				FROM reports r JOIN accounts a ON a.id = r.target_account_id
 				WHERE r.id = CAST(? AS INTEGER)`,
 				id

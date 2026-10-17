@@ -3,6 +3,7 @@ import { edgeRangeSql } from './accounts'
 import { visibleSql } from './audience'
 import { optionalUserReadOperation, userReadOperation, userWriteOperation } from './auth'
 import { featureTag, unfeatureTag } from './featured-tags'
+import { tagNameSql } from './status-bounds'
 import { isHashtagName } from './status-text'
 import { normalizeTag } from './tag-name'
 import type { Db } from '../db/sql'
@@ -246,9 +247,9 @@ const SUGGESTIONS = 10
 export const featuredTagSuggestions = userReadOperation<{ present: Present }, Tag[]>(
 	(db, { present }, { accountId }) => {
 		const rows = db.all<{ name: string }>(
-			`SELECT t.name FROM (SELECT id FROM statuses WHERE account_id = ?1 ORDER BY id DESC LIMIT ?2) r
+			`SELECT ${tagNameSql('t.name')} AS name FROM (SELECT id FROM statuses WHERE account_id = ?1 ORDER BY id DESC LIMIT ?2) r
 			CROSS JOIN status_tags t ON t.status_id = r.id
-			WHERE NOT EXISTS (SELECT 1 FROM featured_tags f WHERE f.account_id = ?1 AND f.name = t.name)
+			WHERE ${tagNameSql('t.name')} IS NOT NULL AND NOT EXISTS (SELECT 1 FROM featured_tags f WHERE f.account_id = ?1 AND f.name = t.name)
 			GROUP BY t.name ORDER BY count(*) DESC, t.name LIMIT ?3`,
 			accountId,
 			RECENT_STATUSES,

@@ -25,9 +25,24 @@ import {
 } from './filters'
 import { htmlToPlainText } from './plain-text'
 import { type Poll, presentPolls } from './polls'
-import { profileUrlSql, usernameSql } from './profile-bounds'
+import { actorUriSql, profileUrlSql, usernameSql } from './profile-bounds'
+import {
+	contentSql,
+	MAX_STATUS_MEDIA,
+	MAX_STATUS_MENTION_ROWS,
+	MAX_PRESENTED_TAGS,
+	mediaDescriptionSql,
+	mediaMetaSql,
+	MEDIA_URL_LIMIT,
+	mediaUrlSql,
+	sourceTextSql,
+	spoilerSql,
+	statusUriSql,
+	statusUrlSql,
+	tagNameSql,
+} from './status-bounds'
 import type { Db } from '../db/sql'
-import { httpUrl } from '../platform/http-url'
+import { boundedHref } from '../platform/http-url'
 import { remotePlainText } from '../security/html'
 
 // The Status entity as Mastodon 4.0.2's REST::StatusSerializer shows it. One presenter for every read path: it takes
@@ -149,10 +164,13 @@ export type StatusRow = {
 // parent: they belong to the reply, whose ActivityPub object carries inReplyTo to every recipient anyway, and its
 // author chose to publish them. The parent itself (content, author profile, context entry) stays behind the audience
 // rule. in_reply_to_account_id is the conversation partner carried through self-replies.
-export const STATUS_COLUMNS = `s.id, s.uri, s.url, s.account_id, s.reblog_of_id, s.in_reply_to_id,
-	s.in_reply_to_account_id, s.visibility, s.spoiler_text, s.content, s.source_text, s.sensitive,
+// The text and URLs are bounded (status-bounds.ts, RES-2).
+export const STATUS_COLUMNS = `s.id, ${statusUriSql('s.uri')} AS uri, ${statusUrlSql('s.url')} AS url, s.account_id,
+	s.reblog_of_id, s.in_reply_to_id, s.in_reply_to_account_id, s.visibility, ${spoilerSql('s.spoiler_text')} AS spoiler_text,
+	${contentSql('s.content')} AS content, ${sourceTextSql('s.source_text')} AS source_text, s.sensitive,
 	s.language, s.published_at, s.edited_at, s.replies_count, s.reblogs_count, s.favourites_count, s.quotes_count,
-	s.quote_policy, au.uri AS author_uri, ${usernameSql('au.username')} AS author_username, au.domain AS author_domain`
+	s.quote_policy, ${actorUriSql('au.uri')} AS author_uri, ${usernameSql('au.username')} AS author_username,
+	au.domain AS author_domain`
 
 export const STATUS_FROM = 'statuses s JOIN accounts au ON au.id = s.account_id'
 
@@ -166,13 +184,14 @@ export type PresentOwnOptions = PresentOptions & {
 	source?: boolean
 }
 
-// The columns presentMedia reads, for every query that presents media.
-export const MEDIA_COLUMNS = 'id, type, url, preview_url, description, meta, focus_x, focus_y'
+// The columns presentMedia reads, bounded (status-bounds.ts), for every query that presents media.
+export const MEDIA_COLUMNS = `id, type, ${mediaUrlSql('url')} AS url, ${mediaUrlSql('preview_url')} AS preview_url,
+	${mediaDescriptionSql('description')} AS description, ${mediaMetaSql('meta')} AS meta, focus_x, focus_y`
 
 export type MediaRow = {
 	id: string
 	type: string
-	url: string
+	url: string | null
 	preview_url: string | null
 	description: string
 	meta: string | null
@@ -265,24 +284,42 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 		[...byId.values()].map((row) => row.account_id),
 		options
 	)
+	// At most MAX_STATUS_MEDIA attachments, MAX_STATUS_MENTION_ROWS mentions and MAX_PRESENTED_TAGS hashtags of each
+	// status (each status once), cut in SQL: a converted row may hold more. Each cap reads at most that many rows of
+	// the status through an index that holds only the rows it shows: media_attachments_status (shown attachments by
+	// position), status_mentions_shown (mentions that are not silent, migration 0047) and status_tags (names). A
+	// hashtag name past its bound (tagNameSql) among the first ones read is left out rather than replaced by a later
+	// one, so a status holding one shows one fewer: a remote status stores none, and a local one (a name over 256 code
+	// units, which Mastodon also records) only when it sorts before more than MAX_PRESENTED_TAGS others.
+	const statusIds = 'SELECT DISTINCT value FROM json_each(?1)'
 	const media = groupBy(
 		db.all<MediaRow & { status_id: string }>(
 			`SELECT ${MEDIA_COLUMNS}, status_id FROM media_attachments
-			WHERE status_id IN (SELECT value FROM json_each(?1)) AND shown = 1 ORDER BY status_id, position, id`,
+			WHERE id IN (SELECT x.id FROM (${statusIds}) j CROSS JOIN media_attachments x ON x.id IN (SELECT y.id
+				FROM media_attachments y WHERE y.status_id = j.value AND y.shown = 1 ORDER BY y.position
+				LIMIT ${MAX_STATUS_MEDIA}))
+			ORDER BY status_id, position, id`,
 			all
 		)
 	)
 	const mentions = groupBy(
 		db.all<MentionRow>(
-			`SELECT m.status_id, a.id, ${usernameSql('a.username')} AS username, a.domain, ${profileUrlSql('a.url')} AS url, a.uri
-			FROM status_mentions m JOIN accounts a ON a.id = m.account_id
-			WHERE m.status_id IN (SELECT value FROM json_each(?1)) AND m.silent = 0 ORDER BY m.status_id, a.id`,
+			`SELECT j.value AS status_id, a.id, ${usernameSql('a.username')} AS username, a.domain,
+				${profileUrlSql('a.url')} AS url, ${actorUriSql('a.uri')} AS uri
+			FROM (${statusIds}) j CROSS JOIN accounts a
+			WHERE a.id IN (SELECT m.account_id FROM status_mentions m INDEXED BY status_mentions_shown
+				WHERE m.status_id = j.value AND m.silent = 0 ORDER BY m.account_id LIMIT ${MAX_STATUS_MENTION_ROWS})
+			ORDER BY j.value, a.id`,
 			all
 		)
 	)
 	const tags = groupBy(
 		db.all<{ status_id: string; name: string }>(
-			'SELECT status_id, name FROM status_tags WHERE status_id IN (SELECT value FROM json_each(?1)) ORDER BY status_id, name',
+			`SELECT j.value AS status_id, ${tagNameSql('t.name')} AS name FROM (${statusIds}) j CROSS JOIN status_tags t
+			WHERE t.status_id = j.value AND t.name IN (SELECT n.name FROM (SELECT ${tagNameSql('name')} AS name
+				FROM status_tags WHERE status_id = j.value ORDER BY status_tags.name LIMIT ${MAX_PRESENTED_TAGS}) n
+				WHERE n.name IS NOT NULL)
+			ORDER BY j.value, t.name`,
 			all
 		)
 	)
@@ -471,7 +508,8 @@ function statusUrl(row: StatusRow): string {
 // MediaAttachment as REST::MediaAttachmentSerializer shows it. URLs are emitted only when they are http(s) (HTML-3);
 // meta carries the stored dimensions (Mastodon's original and small) and the focal point.
 export function presentMedia(row: MediaRow): MediaAttachment {
-	const url = httpUrl(row.url)?.href ?? null
+	// URLs within MEDIA_URL_LIMIT as serialized, as stored (mediaUrlSql).
+	const url = boundedHref(row.url, MEDIA_URL_LIMIT)
 	const stored = row.meta === null ? {} : (JSON.parse(row.meta) as { original?: Size; small?: Size })
 	const meta: MediaMeta = {
 		...(stored.original === undefined ? {} : { original: mediaSize(stored.original) }),
@@ -482,7 +520,7 @@ export function presentMedia(row: MediaRow): MediaAttachment {
 		id: row.id,
 		type: row.type,
 		url,
-		preview_url: httpUrl(row.preview_url)?.href ?? url,
+		preview_url: boundedHref(row.preview_url, MEDIA_URL_LIMIT) ?? url,
 		remote_url: null,
 		preview_remote_url: null,
 		text_url: null,

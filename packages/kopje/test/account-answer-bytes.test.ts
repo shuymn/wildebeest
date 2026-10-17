@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest'
 import { bearer, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { ALICE, setup, type Setup } from './inbox-status-helpers'
+import { field, MAX_BIO, maxFields } from './profile-fixtures'
 import { longestString, observedSql } from './read-helpers'
 import { community, post, remoteAccount, seedStatus } from './status-helpers'
 import { Db } from '../src/db/sql'
@@ -45,7 +46,6 @@ type Profile = {
 	attachment: unknown[]
 }
 
-const field = (name: string, value: string) => ({ type: 'PropertyValue', name, value })
 const link = (href: string) =>
 	`<a href="${href}" target="_blank" rel="nofollow noopener me" translate="no"><span class="invisible">https://</span>` +
 	`<span class="">${href.slice(8)}</span><span class="invisible"></span></a>`
@@ -85,10 +85,9 @@ const large = (i: number): Profile => ({
 	),
 })
 
-// Every variable part an account presents at its bound (RES-2): a bio of REMOTE_BIO_BYTES as a JSON string (control
-// characters that escape to six bytes, among links the sanitizer grows), a display name of DISPLAY_NAME_LIMIT
-// characters that escape to six bytes each, URLs of PROFILE_URL_LIMIT, and fields of about REMOTE_FIELDS_BYTES.
-const MAX_BIO = sanitizeRemoteBio(`<p>${'\u0001"<a>x</a>'.repeat(20_000)}</p>`)
+// Every variable part an account presents at its bound (RES-2): a bio of REMOTE_BIO_BYTES (MAX_BIO), a display name of
+// DISPLAY_NAME_LIMIT characters that escape to six bytes each, URLs of PROFILE_URL_LIMIT, and fields of about
+// REMOTE_FIELDS_BYTES (maxFields).
 const atLimit = (prefix: string) => prefix.padEnd(PROFILE_URL_LIMIT, 'u')
 const maximal = (i: number): Profile => ({
 	displayName: '\u0001'.repeat(DISPLAY_NAME_LIMIT),
@@ -96,7 +95,7 @@ const maximal = (i: number): Profile => ({
 	url: atLimit(`https://max.example/@u${i}/`),
 	avatar: atLimit(`https://max.example/a${i}/`),
 	header: atLimit(`https://max.example/h${i}/`),
-	attachment: Array.from({ length: MAX_REMOTE_FIELDS }, () => field('n'.repeat(255), 'v'.repeat(4096))),
+	attachment: maxFields(),
 })
 // What one such account is at most as read from SQLite and as serialized (ACCOUNT_COLUMNS's comment).
 const READ_MAX = 115_000

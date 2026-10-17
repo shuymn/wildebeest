@@ -1,8 +1,9 @@
 // The expected side of the conversion check, computed from the legacy data alone. It shares nothing with convert.js:
 // it reads legacy columns and JSON directly, takes every audience from the addressing as exported (captured before any
 // bridge migration ran), and writes each record in the comparison form of verify-actual.js, keyed by AP URIs (never by
-// the ids the converter assigns). The only shared code is Kopje's own HTML sanitizer, a runtime transformation the
-// Store applies to every stored HTML value (HTML-1); test-node/cutover-sanitize.test.ts pins its output by hand.
+// the ids the converter assigns). The only shared code is the Worker's own runtime (kopje-runtime.js): its HTML
+// sanitizers and text bounds, which the Store applies to every stored value (HTML-1, RES-2), and its identity checks;
+// test-node/cutover-sanitize.test.ts pins the sanitizer's output by hand.
 //
 // Records are kept as exact values, not digests, so a change of the same length is still a difference. They hold data
 // and are never printed: reports carry counts and digests only.
@@ -11,11 +12,19 @@ import { createHmac } from 'node:crypto'
 import { domainToASCII } from 'node:url'
 
 import {
+	cutJsonString,
 	jsonStringBytes,
+	isRemoteUsername,
+	isStorableActorId,
 	REMOTE_BIO_BYTES,
+	STATUS_URI_LIMIT,
+	withinIdentityBound,
 	REMOTE_HTML_RAW_LIMIT,
 	sanitizeRemoteBio,
+	sanitizeRemoteContent,
 	sanitizeRemoteHtml,
+	SPOILER_BYTES,
+	STATUS_CONTENT_BYTES,
 } from './kopje-runtime.js'
 
 const PUBLIC = 'https://www.w3.org/ns/activitystreams#Public'
@@ -314,12 +323,14 @@ export function threadsOf(replies, statuses, conversations = new Map()) {
  * @param {{ originalActorIds: Map<string, string>, source: import('./legacy-load.js').SourceAddressing,
  *   notificationSequence: string | null, images?: import('./images-export.js').ImagesFile }} options
  * @returns {{ records: Records, overLimit: number, images: { missing: number, unmapped: number },
- *   dropped: Record<string, number> }} dropped: rows the conversion must leave out, which need --accept-deletions
+ *   dropped: Record<string, number>, identities: number }} dropped: rows the conversion must leave out, which need
+ *   --accept-deletions; identities: actor ids, remote usernames and status uris the Worker would refuse
  */
 export function expectedFromLegacy(db, { originalActorIds, source, notificationSequence, images }) {
 	/** @type {Records} */
 	const out = {}
 	let overLimit = 0
+	let identities = 0
 	/** @type {Record<string, number>} */
 	const dropped = {}
 	/** @param {string} category @param {string} key @param {unknown} value */
@@ -336,15 +347,29 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 		}
 		return sanitizeRemoteHtml(text(value))
 	}
-	// A bio as the converter and the Worker store it (sanitizeRemoteBio); one cut to its bound is a truncation too.
-	/** @param {unknown} value */
-	const bio = (value) => {
+	// A bio and status content as the converter and the Worker store them (sanitizeRemoteBio, sanitizeRemoteContent);
+	// one cut to its bound is a truncation too.
+	/** @param {unknown} value @param {number} bytes @param {(html: string) => string} within */
+	const sanitizedWithin = (value, bytes, within) => {
 		const whole = sanitized(value)
-		if (jsonStringBytes(whole) <= REMOTE_BIO_BYTES) {
+		if (jsonStringBytes(whole) <= bytes) {
 			return whole
 		}
 		overLimit++
-		return sanitizeRemoteBio(text(value))
+		return within(text(value))
+	}
+	/** @param {unknown} value */
+	const bio = (value) => sanitizedWithin(value, REMOTE_BIO_BYTES, sanitizeRemoteBio)
+	/** @param {unknown} value */
+	const content = (value) => sanitizedWithin(value, STATUS_CONTENT_BYTES, sanitizeRemoteContent)
+	// A content warning and source text cut to their bounds (cutJsonString), each cut a truncation.
+	/** @param {string} value @param {number} bytes */
+	const bounded = (value, bytes) => {
+		const cut = cutJsonString(value, bytes)
+		if (cut !== value) {
+			overLimit++
+		}
+		return cut
 	}
 
 	// Accounts and profiles.
@@ -428,6 +453,12 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 		const p = parse(actor.properties)
 		actors.set(uri, p)
 		const isLocal = local.has(uri)
+		// An identity the Worker would refuse, as the converter refuses it (src/platform/identity-bounds.ts).
+		const username =
+			text(p.preferredUsername) || uri.replace(/\/+$/, '').slice(uri.replace(/\/+$/, '').lastIndexOf('/') + 1)
+		if (!isLocal && (!isStorableActorId(uri) || !isRemoteUsername(username))) {
+			identities++
+		}
 		/** @param {unknown} value @param {string} kind */
 		const profileImage = (value, kind) => {
 			const url = href(typeof value === 'object' && value !== null ? /** @type {Json} */ (value).url : value)
@@ -493,12 +524,14 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 			continue
 		}
 		const id = String(o.id)
-		statusUri.set(
-			id,
+		const uri =
 			o.local !== 1 && typeof o.original_object_id === 'string' && o.original_object_id !== id
 				? o.original_object_id
 				: id
-		)
+		statusUri.set(id, uri)
+		if (!withinIdentityBound(uri, STATUS_URI_LIMIT)) {
+			identities++
+		}
 	}
 	const byUri = new Set(statusUri.values())
 	/**
@@ -539,10 +572,13 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 		}
 		const author = String(o.original_actor_id)
 		const isLocal = o.local === 1
-		const spoiler = isLocal ? text(p.spoiler_text) || text(p.summary) : text(p.summary) || text(p.spoiler_text)
+		const spoiler = bounded(
+			isLocal ? text(p.spoiler_text) || text(p.summary) : text(p.summary) || text(p.spoiler_text),
+			SPOILER_BYTES
+		)
 		const sourceText =
 			isLocal && typeof p.source === 'object' && p.source !== null && typeof p.source.content === 'string'
-				? text(p.source.content)
+				? bounded(text(p.source.content), STATUS_CONTENT_BYTES)
 				: null
 		// Hashtags: the object's Hashtag tags and the ones legacy recorded for it. An edit time equal to the publication
 		// time is stored as none, as Kopje stores an incoming status (src/domain/remote-statuses.ts).
@@ -566,7 +602,7 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 		const listed = audience.visibility === 'public' ? 1 : 0
 		put('statuses', uri, [
 			author,
-			sanitized(p.content),
+			content(p.content),
 			sourceText,
 			spoiler,
 			p.sensitive === true ? 1 : 0,
@@ -756,7 +792,12 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 			})
 		history.set(uri, [
 			...(history.get(uri) ?? []),
-			[sanitized(p.content), text(p.spoiler_text) || text(p.summary), p.sensitive === true ? 1 : 0, media],
+			[
+				content(p.content),
+				bounded(text(p.spoiler_text) || text(p.summary), SPOILER_BYTES),
+				p.sensitive === true ? 1 : 0,
+				media,
+			],
 		])
 	}
 	for (const [uri, versions] of history) {
@@ -770,6 +811,9 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 		const target = statusUri.get(String(r.object_id))
 		if (target === undefined || !known(r.actor_id)) {
 			continue
+		}
+		if (!withinIdentityBound(String(r.id), STATUS_URI_LIMIT)) {
+			identities++
 		}
 		const sent = source.outbox.get(String(r.outbox_object_id))
 		const audience =
@@ -1004,5 +1048,5 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 			typeof c.website === 'string' ? c.website : null,
 		])
 	}
-	return { records: out, overLimit, images: imageCounts, dropped }
+	return { records: out, overLimit, images: imageCounts, dropped, identities }
 }

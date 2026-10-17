@@ -84,10 +84,36 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   deviation from Mastodon, which ignores `max_id` with `limit=0`. Familiar followers share the 8 MiB among the requested
   accounts that have followers to show, so one with large followers does not crowd out the others, and the answer does
   not depend on their order.
+- One status's size is bounded. A remote status's content is stored within 128 KiB as a JSON string, cut by sanitizing a
+  shorter part of it so it stays valid HTML (realistic posts at Misskey's, Pleroma's, Akkoma's and GoToSocial's limits
+  take at most about 35 KB), its content warning within 16 KiB, cut at a character, and a media URL or preview longer
+  than 2,048 characters is ignored, as an invalid one is. A remote status whose id is longer than 4,096 bytes is not
+  stored, and an actor whose id is longer than 2,048 bytes as a serialized URL is not either. A local post or edit whose
+  rendered text passes these bounds, which only hundreds of mentions of accounts with long profile URLs reach, is
+  refused as too long. Statuses already stored are shown within the same bounds wherever they appear, edit history (each
+  earlier attachment included), `/source` and a redacted quote included: content or source text past the bound as empty
+  (the status keeps its link to the original), a content warning cut, at most 4 attachments with longer URLs as none and
+  descriptions cut at 10,000 characters, and an actor or status URI past its bound as empty. The largest presented
+  shapes are listed in RES-3 of [docs/threat-model.md](docs/threat-model.md).
+- A status presents at most 70 hashtags, the first by name, of the up to 100 it stores, and its content links every one.
+  A conversation presents at most 12 participants, the first in stored order. Mastodon presents all of them. Reading a
+  status costs no more for the mentions and hashtags it stores beyond those it presents, or for hidden attachments. A
+  hashtag longer than 256 characters is recorded but not presented, so a post whose such hashtag sorts before more than
+  70 others presents 69.
+- A presented profile or attachment URL stays within 2,048 characters once normalized or derived: an account's profile
+  URL falls back from its stored URL to one derived from its actor id or from this instance, and is empty when none
+  fits.
+- A remote account's username follows Mastodon's remote format; a stored one outside it (converted at a cutover), or
+  holding a NUL, is shown cut at 42 characters.
+- `kopje-admin convert` and `verify-conversion` apply the same bounds to status content, content warnings and source
+  text, of current and earlier versions, counting each cut as a truncation that `--accept-truncation` accepts. They
+  refuse a remote actor id longer than 2,048 bytes as written or as a serialized URL, a status or boost URI longer than
+  4,096 bytes, and a remote username outside Mastodon's remote format, and the conversion counts an earlier version's
+  attachment that is shown cut (`edits:media-field-over-bound`).
 
 ### Instance changes
 
-- Store schema: adds two migrations, applied on the first request after the deploy; a rollback to an earlier version
+- Store schema: adds three migrations, applied on the first request after the deploy; a rollback to an earlier version
   needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0045_remote_suspension`: lets the admin suspend remote accounts. It adds two account columns, builds two
       indexes over the accounts and one over the queued outbound activities (one pass over each), drops one index, and
@@ -97,6 +123,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
     - `0046_instance_domain_blocks`: the table of instance domain blocks. It adds an empty
       table and reads nothing: on the same benchmark store its upgrade took 5.9 seconds (6.0 and 6.4 in two
       more runs), the overhead of an upgrade on a store that size.
+    - `0047_status_mentions_shown`: an index of the mentions a status shows, so a status read takes them without
+      passing the silent ones. It builds a partial index in one pass over the mentions: on the same benchmark store,
+      with 2,000,000 mentions, its upgrade took 7.1 seconds (7.2 in another run, and 9.7 in a first run on a loaded
+      machine).
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.14] - 2026-10-18

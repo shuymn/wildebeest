@@ -26,12 +26,22 @@ import type { Db } from '../db/sql'
 // is shown as null, as Mastodon shows a last status it can no longer load. The accounts are the other participants
 // (the owner when there are none).
 
+// The participants one conversation presents: the first by account id, the order the row stores them in
+// (conversation-rows.ts participantsSql). Mastodon presents every participant; this cap keeps one conversation within
+// its share of an answer (docs/threat-model.md, "Maxima of presented units"). The stored participants, which key the
+// row, are unchanged.
+export const MAX_PRESENTED_PARTICIPANTS = 12
+
 // REST::ConversationSerializer.
 export type Conversation = { id: string; unread: boolean; accounts: Account[]; last_status: Status | null }
 
 type ConversationRow = { id: string; participants: string; last_status_id: string; unread: number }
 
-const COLUMNS = 'CAST(id AS TEXT) AS id, participants, last_status_id, unread'
+// The participants presented (MAX_PRESENTED_PARTICIPANTS, in stored order) are cut in SQL: a converted row may store
+// many more, and only those leave SQLite. The key the row is found by stays the whole stored list.
+const COLUMNS = `CAST(id AS TEXT) AS id, last_status_id, unread,
+	(SELECT json_group_array(value ORDER BY key) FROM json_each(participants) WHERE key < ${MAX_PRESENTED_PARTICIPANTS})
+		AS participants`
 
 // Mastodon's conversation ids are integers; anything else names none.
 const CONVERSATION_ID = /^\d{1,19}$/

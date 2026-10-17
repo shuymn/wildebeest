@@ -3,16 +3,15 @@ import { type Actor, getActorTypeName, type Image, isActor, Link, lookupObject }
 
 import { isTransientLoadError, loadFailureOf } from './loader'
 import type { RemoteActorInput } from '../domain/inbox'
-import { DISPLAY_NAME_LIMIT, PROFILE_URL_LIMIT, USERNAME_LIMIT } from '../domain/profile-bounds'
+import { ACTOR_URI_LIMIT, DISPLAY_NAME_LIMIT, PROFILE_URL_LIMIT } from '../domain/profile-bounds'
 import { hostDomain } from '../platform/domain-name'
 import { httpUrl } from '../platform/http-url'
+import { isRemoteUsername, isStorableActorId } from '../platform/identity-bounds'
 import { sanitizeRemoteBio } from '../security/html'
 
 // Remote actors as Kopje stores them: fetched through the safe loader (NET-1, ID-8), parsed by Fedify's lookupObject,
 // which checks the parsed id against the document's origin (ID-2), and reduced to bounded, safe columns.
 
-// Mastodon's remote username rule (Account::USERNAME_RE), with a length bound (RES-1).
-const USERNAME = /^[a-z0-9_]+([a-z0-9_.-]+[a-z0-9_]+)?$/i
 // Raw caps (RES-1): the display name is plain text and is cut (DISPLAY_NAME_LIMIT), as Mastodon cuts what it
 // receives.
 // Actor ids and inbox URLs (RES-6): a delivery target is an inbox and, for a silent recipient, an actor id, so their
@@ -20,7 +19,7 @@ const USERNAME = /^[a-z0-9_]+([a-z0-9_.-]+[a-z0-9_]+)?$/i
 // sets no length limit, and Misskey stores inbox URLs in 512-character columns. Real servers use far shorter URLs.
 // A serialized URL is ASCII, so its length is its size in bytes.
 export const INBOX_URL_LIMIT = 2048
-export const ACTOR_URI_LIMIT = 2048
+export { ACTOR_URI_LIMIT }
 
 export type FetchedActor =
 	| { kind: 'ok'; actor: Actor; input: RemoteActorInput | null }
@@ -125,13 +124,7 @@ async function ownKeys(actor: Actor, uri: URL): Promise<{ id: string; pem: strin
 export async function remoteActorInput(actor: Actor, document: unknown): Promise<RemoteActorInput | null> {
 	const uri = actor.id
 	const username = text(actor.preferredUsername)
-	if (
-		uri === null ||
-		uri.href.length > ACTOR_URI_LIMIT ||
-		username === null ||
-		username.length > USERNAME_LIMIT ||
-		!USERNAME.test(username)
-	) {
+	if (uri === null || !isStorableActorId(uri.href) || username === null || !isRemoteUsername(username)) {
 		return null
 	}
 	const inboxUrl = httpUrl(actor.inboxId?.href ?? null)?.href ?? null

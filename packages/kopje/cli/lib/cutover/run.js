@@ -353,7 +353,7 @@ export async function verifyConversion(options) {
 			texts: files.map((file) => () => readFileSync(file, 'utf8')),
 			acceptDeletions: options.acceptDeletions,
 		})
-		const { records, overLimit, images, dropped } = expectedFromLegacy(db, {
+		const { records, overLimit, images, dropped, identities } = expectedFromLegacy(db, {
 			originalActorIds,
 			source: addressing,
 			notificationSequence: source.notificationSequence,
@@ -366,6 +366,11 @@ export async function verifyConversion(options) {
 		)
 		report.truncation = { overLimit, accepted: options.acceptTruncation === true }
 		if (overLimit > 0 && options.acceptTruncation !== true) {
+			report.result = 'FAIL'
+		}
+		// Identities the Worker would refuse, which the conversion refuses: no dump carries one.
+		report.identities = { overBound: identities }
+		if (identities > 0) {
 			report.result = 'FAIL'
 		}
 		// Rows the conversion leaves out, counted here on their own: a dump made with --accept-deletions passes only

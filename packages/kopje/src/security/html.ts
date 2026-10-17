@@ -155,26 +155,74 @@ export function jsonStringBytes(text: string): number {
 	return ENCODER.encode(JSON.stringify(text)).length
 }
 
-// A remote bio as Kopje stores it (HTML-1, RES-2): sanitizeRemoteHtml's output when it fits REMOTE_BIO_BYTES, else
-// the sanitized form of a raw prefix whose output fits, found by halving (sanitizing can shrink as well as grow, so
-// it need not be the longest such prefix); always sanitizer output, so well-formed HTML; '' when none fits. The
-// cutover's converter and its verification use it too.
-export function sanitizeRemoteBio(html: string): string {
+// RES-2: a status's content (a remote status's sanitized HTML, a local one's rendered text), as stored and shown, is
+// at most this many UTF-8 bytes as a JSON string, and its content warning at most SPOILER_BYTES, so one presented
+// status has a known size (domain/status-bounds.ts). Realistic posts stay far below them: Misskey's 3,000 characters
+// and Pleroma's, Akkoma's or GoToSocial's 5,000 of Japanese with links, mentions and hashtags take at most about 35 KB
+// (test/status-bounds.test.ts).
+export const STATUS_CONTENT_BYTES = 128 * 1024
+export const SPOILER_BYTES = 16 * 1024
+
+// Sanitized remote HTML (HTML-1) within `bytes` as a JSON string: sanitizeRemoteHtml's output when it fits, else the
+// sanitized form of a raw prefix whose output fits, found by halving (sanitizing can shrink as well as grow, so it
+// need not be the longest such prefix); always sanitizer output, so well-formed HTML; '' when none fits.
+function sanitizeRemoteWithin(html: string, bytes: number): string {
 	const whole = sanitizeRemoteHtml(html)
-	if (jsonStringBytes(whole) <= REMOTE_BIO_BYTES) {
+	if (jsonStringBytes(whole) <= bytes) {
 		return whole
 	}
 	let [fits, best, over] = [0, '', Math.min(html.length, REMOTE_HTML_RAW_LIMIT)]
 	while (over - fits > 1) {
 		const middle = Math.floor((fits + over) / 2)
 		const cut = sanitizeRemoteHtml(html.slice(0, middle))
-		if (jsonStringBytes(cut) <= REMOTE_BIO_BYTES) {
+		if (jsonStringBytes(cut) <= bytes) {
 			;[fits, best] = [middle, cut]
 		} else {
 			over = middle
 		}
 	}
 	return best
+}
+
+// A remote bio as Kopje stores it (RES-2): within REMOTE_BIO_BYTES (sanitizeRemoteWithin). The cutover's converter and
+// its verification use it too.
+export function sanitizeRemoteBio(html: string): string {
+	return sanitizeRemoteWithin(html, REMOTE_BIO_BYTES)
+}
+
+// A remote status's content as Kopje stores it (RES-2): within STATUS_CONTENT_BYTES (sanitizeRemoteWithin). The
+// cutover's converter and its verification use it too.
+export function sanitizeRemoteContent(html: string): string {
+	return sanitizeRemoteWithin(html, STATUS_CONTENT_BYTES)
+}
+
+// The UTF-8 bytes one code point takes in a JSON string, as JSON.stringify escapes it (a lone surrogate as \uXXXX).
+function jsonCodePointBytes(point: number): number {
+	if ([0x08, 0x09, 0x0a, 0x0c, 0x0d, 0x22, 0x5c].includes(point)) {
+		return 2
+	}
+	if (point < 0x20 || (point >= 0xd800 && point <= 0xdfff)) {
+		return 6
+	}
+	return point < 0x80 ? 1 : point < 0x800 ? 2 : point < 0x10000 ? 3 : 4
+}
+
+// Plain text (a content warning) within `bytes` as a JSON string: the text when it fits, else its longest prefix of
+// whole code points that does.
+export function cutJsonString(text: string, bytes: number): string {
+	if (jsonStringBytes(text) <= bytes) {
+		return text
+	}
+	let used = 2
+	let end = 0
+	for (const char of text) {
+		used += jsonCodePointBytes(char.codePointAt(0) ?? 0)
+		if (used > bytes) {
+			break
+		}
+		end += char.length
+	}
+	return text.slice(0, end)
 }
 
 // The text of sanitized remote HTML, for search_text: tags dropped, line and paragraph breaks kept as spaces, the

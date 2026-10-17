@@ -13,14 +13,25 @@ export { languageOf } from './domain/language'
 export { normalizeSearchText } from './domain/search-text'
 export { hashtagObjectName, normalizeTag } from './domain/tag-name'
 export { blockedDomain } from './platform/domain-name'
+export {
+	ACTOR_URI_LIMIT,
+	isRemoteUsername,
+	isStorableActorId,
+	STATUS_URI_LIMIT,
+	withinIdentityBound,
+} from './platform/identity-bounds'
 export { sniffImageType } from './platform/image-bytes'
 export {
+	cutJsonString,
 	jsonStringBytes,
 	REMOTE_BIO_BYTES,
 	REMOTE_HTML_RAW_LIMIT,
 	remoteHtmlText,
 	sanitizeRemoteBio,
+	sanitizeRemoteContent,
 	sanitizeRemoteHtml,
+	SPOILER_BYTES,
+	STATUS_CONTENT_BYTES,
 } from './security/html'
 
 // Renders the cutover's maintenance snapshot (src/maintenance-worker.ts) with Kopje's own code: the local actors are

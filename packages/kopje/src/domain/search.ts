@@ -2,6 +2,7 @@ import { type Account, findAccounts, type Present, resolveAccountId, type Search
 import { listableSql, statusReads } from './audience'
 import { type UserContext, userReadOperation } from './auth'
 import { statusQueryTerms } from './search-text'
+import { tagNameSql } from './status-bounds'
 import { presentStatuses, type Status } from './status-presenter'
 import { statusCursor } from './statuses'
 import { normalizeTag } from './tag-name'
@@ -170,7 +171,9 @@ function searchHashtags(db: Db, input: SearchRequest, { accountId: viewerId, now
 		public(id) AS (SELECT id FROM statuses WHERE visibility = 'public' AND reblog_of_id IS NULL ORDER BY id DESC LIMIT ?5),
 		candidates(id) AS (SELECT id FROM library UNION SELECT id FROM public),
 		visible(id) AS (SELECT s.id FROM candidates c JOIN statuses s ON s.id = c.id WHERE ${listableSql('s', '?1', '?8')})
-		SELECT DISTINCT t.name FROM visible v CROSS JOIN status_tags t ON t.status_id = v.id AND t.name >= ?2 AND t.name < ?3
+		SELECT DISTINCT ${tagNameSql('t.name')} AS name FROM visible v
+			CROSS JOIN status_tags t ON t.status_id = v.id AND t.name >= ?2 AND t.name < ?3
+		WHERE ${tagNameSql('t.name')} IS NOT NULL
 		ORDER BY t.name = ?2 DESC, length(t.name), t.name LIMIT ?6 OFFSET ?7`,
 		viewerId,
 		prefix,

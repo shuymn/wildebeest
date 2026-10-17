@@ -7,7 +7,20 @@ import { promisify } from 'node:util'
 import { describe, expect, it } from 'vitest'
 
 import { convert, exportOf, opened, verify, workspace } from './cutover-helpers.js'
-import { jsonStringBytes, REMOTE_BIO_BYTES, sanitizeRemoteBio } from '../cli/lib/cutover/kopje-runtime.js'
+import {
+	ACTOR_URI_LIMIT,
+	cutJsonString,
+	isRemoteUsername,
+	isStorableActorId,
+	jsonStringBytes,
+	REMOTE_BIO_BYTES,
+	sanitizeRemoteBio,
+	sanitizeRemoteContent,
+	SPOILER_BYTES,
+	STATUS_CONTENT_BYTES,
+	STATUS_URI_LIMIT,
+	withinIdentityBound,
+} from '../cli/lib/cutover/kopje-runtime.js'
 import { loadLegacyExport } from '../cli/lib/cutover/legacy-load.js'
 import { ExportError, parseStatement, tableExpressions } from '../cli/lib/cutover/sql-script.js'
 
@@ -291,6 +304,118 @@ describe('HTML is never cut silently', () => {
 		expect(refused.ok).toBe(false)
 		expect(refused.report).toMatchObject({ truncation: { overLimit: 1, accepted: false } })
 		expect((await verify(exportPath, accepted.dumpPath, { acceptTruncation: true })).ok).toBe(true)
+	})
+
+	// Replaces `from` with `to` in every file of the export; returns how many files held it.
+	const replacedIn = async (exportPath: string, from: string, to: string) => {
+		let replaced = 0
+		for (const name of (await readdir(exportPath)).filter((n) => n.endsWith('.sql'))) {
+			const text = await readFile(join(exportPath, name), 'utf8')
+			if (text.includes(from)) {
+				await writeFile(join(exportPath, name), text.replaceAll(from, to))
+				replaced++
+			}
+		}
+		return replaced
+	}
+
+	it('stops on status text over its bounds unless truncation is accepted, and stores it cut as the Worker does', async () => {
+		const exportPath = await exportOf(space.dir, { level: 39 })
+		// Content within the sanitizer's raw limit but about 780 KB once sanitized, and a content warning of 48 KB.
+		const content = '<a>'.repeat(16_000)
+		const spoiler = '注意'.repeat(8_000)
+		expect(await replacedIn(exportPath, '<p>unlisted from r3, lost its original id</p>', content)).toBe(1)
+		expect(await replacedIn(exportPath, 'CW 注意', spoiler)).toBe(1)
+		const stopped = await convert(space.dir, exportPath)
+		expect(stopped.ok).toBe(false)
+		expect((stopped.manifest.conversion as { problems: Record<string, number> }).problems).toEqual({
+			'html:content-longer-than-bound': 1,
+			'text:spoiler-longer-than-bound': 1,
+		})
+		const accepted = await convert(space.dir, exportPath, { out: 'accepted', acceptTruncation: true })
+		expect(accepted.ok).toBe(true)
+		const db = await opened(accepted.dumpPath)
+		const rows = db.prepare('SELECT content, spoiler_text FROM statuses').all() as {
+			content: string
+			spoiler_text: string
+		}[]
+		db.close()
+		expect(rows.map((row) => row.content)).toContain(sanitizeRemoteContent(content))
+		expect(rows.map((row) => row.spoiler_text)).toContain(cutJsonString(spoiler, SPOILER_BYTES))
+		for (const row of rows) {
+			expect(jsonStringBytes(row.content)).toBeLessThanOrEqual(STATUS_CONTENT_BYTES)
+			expect(jsonStringBytes(row.spoiler_text)).toBeLessThanOrEqual(SPOILER_BYTES)
+		}
+		// Verification counts both as truncations, and agrees with the converter once they are accepted.
+		const refused = await verify(exportPath, accepted.dumpPath)
+		expect(refused.ok).toBe(false)
+		expect(refused.report).toMatchObject({ truncation: { overLimit: 2, accepted: false } })
+		expect((await verify(exportPath, accepted.dumpPath, { acceptTruncation: true })).ok).toBe(true)
+	})
+
+	it('counts an attachment of an earlier version that the Worker shows cut', async () => {
+		const exportPath = await exportOf(space.dir, { level: 39 })
+		const long = `[{"type":"Document","mediaType":"image/png","url":"https://remote.example/a.png","name":"${'d'.repeat(10_001)}"}]`
+		expect(
+			await replacedIn(
+				exportPath,
+				'"spoiler_text":"","sensitive":false,"attachment":[]',
+				`"spoiler_text":"","sensitive":false,"attachment":${long}`
+			)
+		).toBe(1)
+		const converted = await convert(space.dir, exportPath)
+		expect(converted.ok).toBe(true)
+		expect(
+			(converted.manifest.conversion as { normalized: Record<string, number> }).normalized[
+				'edits:media-field-over-bound'
+			]
+		).toBe(1)
+	})
+
+	// Converts `exportPath` as changed by `change`, which must refuse an identity: the conversion stops with `problem`,
+	// and verifying the changed export against the unchanged one's dump fails on it too.
+	const refusesIdentity = async (change: (exportPath: string) => Promise<void>, problem: string) => {
+		const exportPath = await exportOf(space.dir, { level: 39 })
+		const unchanged = await convert(space.dir, exportPath, { out: 'unchanged' })
+		expect(unchanged.ok).toBe(true)
+		await change(exportPath)
+		const stopped = await convert(space.dir, exportPath, { acceptTruncation: true })
+		expect(stopped.ok).toBe(false)
+		expect((stopped.manifest.conversion as { problems: Record<string, number> }).problems).toMatchObject({
+			[problem]: 1,
+		})
+		const verified = await verify(exportPath, unchanged.dumpPath, { acceptTruncation: true, acceptDeletions: true })
+		expect(verified.ok).toBe(false)
+		expect(verified.report).toMatchObject({ identities: { overBound: 1 } })
+	}
+
+	it("refuses a remote username outside Mastodon's format, whatever truncation accepts", async () => {
+		expect([isRemoteUsername('r3'), isRemoteUsername('r3\n'), isRemoteUsername('r\u00e9')]).toEqual([
+			true,
+			false,
+			false,
+		])
+		await refusesIdentity(async (exportPath) => {
+			expect(await replacedIn(exportPath, '"preferredUsername":"r3"', '"preferredUsername":"r\\u00e9"')).toBe(1)
+		}, 'remote-actor-username-invalid')
+	})
+
+	it('refuses an actor id whose serialized URL is over its bound, though its spelling fits', async () => {
+		// 500 two-byte characters: 1,031 bytes as written, 3,031 serialized (each one percent-encoded), as ingestion reads
+		// the id.
+		const long = `https://remote.example/users/r2${'é'.repeat(500)}`
+		expect([withinIdentityBound(long, ACTOR_URI_LIMIT), isStorableActorId(long)]).toEqual([true, false])
+		expect(new TextEncoder().encode(new URL(long).href).length).toBe(3_031)
+		await refusesIdentity(async (exportPath) => {
+			expect(await replacedIn(exportPath, 'https://remote.example/users/r2', long)).toBeGreaterThan(0)
+		}, 'remote-actor-uri-over-limit')
+	})
+
+	it('refuses a boost whose Announce id is over the bound of a status uri', async () => {
+		const announce = 'https://remote.example/users/r1/statuses/900/activity'
+		await refusesIdentity(async (exportPath) => {
+			expect(await replacedIn(exportPath, announce, `${announce}/${'x'.repeat(STATUS_URI_LIMIT)}`)).toBeGreaterThan(0)
+		}, 'status-uri-over-limit')
 	})
 
 	it('stores sanitized HTML as written here by hand, not as computed by the shared sanitizer', async () => {

@@ -9,6 +9,7 @@
 // HTML from the legacy database (status content, bios) goes through Kopje's own sanitizer (src/security/html.ts,
 // HTML-1), so the Store never holds HTML it would not have stored itself.
 
+import { Buffer } from 'node:buffer'
 import { createHash } from 'node:crypto'
 
 import { LEGACY_DEFAULT_AVATAR, mediaToken, parseDeliveryUrl, UPSTREAM_ACCOUNT_HASH } from './images-export.js'
@@ -17,15 +18,23 @@ import {
 	backfillConversations,
 	blockedDomain,
 	hashtagObjectName,
+	isRemoteUsername,
+	isStorableActorId,
 	languageOf,
 	normalizeTag,
 	normalizeSearchText,
+	cutJsonString,
 	jsonStringBytes,
 	REMOTE_BIO_BYTES,
 	REMOTE_HTML_RAW_LIMIT,
 	remoteHtmlText,
 	sanitizeRemoteBio,
+	sanitizeRemoteContent,
 	sanitizeRemoteHtml,
+	SPOILER_BYTES,
+	STATUS_CONTENT_BYTES,
+	STATUS_URI_LIMIT,
+	withinIdentityBound,
 } from './kopje-runtime.js'
 import { digestOf } from './sql-script.js'
 import { fit, FULL_EDGE, SMALL_EDGE } from './upload-rules.js'
@@ -412,29 +421,39 @@ export function convertLegacy(
 		}
 		return wellFormed
 	}
-	/** @param {unknown} value */
-	const html = (value) => {
-		const text = carried(value)
-		if (text.length > REMOTE_HTML_RAW_LIMIT) {
-			count(acceptTruncation ? normalized : problems, 'html:longer-than-sanitizer-limit')
-		}
-		return sanitizeRemoteHtml(text)
-	}
-	// A bio as the Worker stores one (sanitizeRemoteBio, RES-2); one cut to REMOTE_BIO_BYTES loses its end, so it is
-	// counted as a truncation too.
-	/** @param {unknown} value */
-	const bio = (value) => {
+	// HTML as the Worker stores it within `bytes` as a JSON string (sanitizeRemoteBio, sanitizeRemoteContent, RES-2):
+	// one cut to its bound loses its end, so it is counted as a truncation too.
+	/**
+	 * @param {unknown} value @param {number} bytes @param {(html: string) => string} within @param {string} code
+	 */
+	const sanitizedWithin = (value, bytes, within, code) => {
 		const text = carried(value)
 		if (text.length > REMOTE_HTML_RAW_LIMIT) {
 			count(acceptTruncation ? normalized : problems, 'html:longer-than-sanitizer-limit')
 		}
 		const whole = sanitizeRemoteHtml(text)
-		if (jsonStringBytes(whole) <= REMOTE_BIO_BYTES) {
+		if (jsonStringBytes(whole) <= bytes) {
 			return whole
 		}
-		count(acceptTruncation ? normalized : problems, 'html:bio-longer-than-bound')
-		return sanitizeRemoteBio(text)
+		count(acceptTruncation ? normalized : problems, code)
+		return within(text)
 	}
+	/** @param {unknown} value */
+	const bio = (value) => sanitizedWithin(value, REMOTE_BIO_BYTES, sanitizeRemoteBio, 'html:bio-longer-than-bound')
+	/** @param {unknown} value */
+	const content = (value) =>
+		sanitizedWithin(value, STATUS_CONTENT_BYTES, sanitizeRemoteContent, 'html:content-longer-than-bound')
+	// A content warning and source text cut to their bounds as JSON strings (cutJsonString), counted likewise.
+	/** @param {string} text @param {number} bytes @param {string} code */
+	const bounded = (text, bytes, code) => {
+		const cut = cutJsonString(text, bytes)
+		if (cut !== text) {
+			count(acceptTruncation ? normalized : problems, code)
+		}
+		return cut
+	}
+	/** @param {string} text */
+	const spoilerOf = (text) => bounded(text, SPOILER_BYTES, 'text:spoiler-longer-than-bound')
 	/** @param {string} table @param {string | null} time @param {string} key */
 	const localId = (table, time, key) => ids.local(table, time, key)
 	/** @param {string} table @param {string | null} time @param {string} key */
@@ -553,8 +572,19 @@ export function convertLegacy(
 				count(problems, 'remote-actor-uri-invalid')
 				continue
 			}
+			// An actor id is an identity: one past the Worker's bound (src/platform/identity-bounds.ts) is refused, never
+			// cut.
+			if (!isStorableActorId(uri)) {
+				count(problems, 'remote-actor-uri-over-limit')
+				continue
+			}
 			if (username === '') {
 				username = uri.replace(/\/+$/, '').slice(uri.replace(/\/+$/, '').lastIndexOf('/') + 1)
+			}
+			// A username is an identity too: one the Worker would refuse is refused, never rewritten.
+			if (!isRemoteUsername(username)) {
+				count(problems, 'remote-actor-username-invalid')
+				continue
 			}
 		}
 		const displayName = carried(properties.name)
@@ -686,6 +716,11 @@ export function convertLegacy(
 			count(problems, 'duplicate-status-uri')
 			continue
 		}
+		// A status's uri is an identity too: one past the Worker's bound (identity-bounds.ts) is refused.
+		if (!withinIdentityBound(uri, STATUS_URI_LIMIT)) {
+			count(problems, 'status-uri-over-limit')
+			continue
+		}
 		statusUris.add(uri)
 		planned.push({ row, properties, uri, local, author: author.id, legacyApO })
 	}
@@ -704,6 +739,11 @@ export function convertLegacy(
 			continue
 		}
 		const uri = String(reblog.id)
+		// A boost's uri (its Announce id) is a status's uri.
+		if (!withinIdentityBound(uri, STATUS_URI_LIMIT)) {
+			count(problems, 'status-uri-over-limit')
+			continue
+		}
 		if (statusUris.has(uri)) {
 			count(problems, 'duplicate-status-uri')
 			continue
@@ -902,10 +942,12 @@ export function convertLegacy(
 			count(normalized, 'mentionsNotRecipients', outside)
 		}
 		const visibility = legacy === 'direct' && [...mentions.values()].includes(1) ? 'limited' : legacy
-		const spoiler = local
-			? carried(properties.spoiler_text) || carried(properties.summary)
-			: carried(properties.summary) || carried(properties.spoiler_text)
-		const content = html(properties.content)
+		const spoiler = spoilerOf(
+			local
+				? carried(properties.spoiler_text) || carried(properties.summary)
+				: carried(properties.summary) || carried(properties.spoiler_text)
+		)
+		const body = content(properties.content)
 		const updated = isoTime(properties.updated)
 		// An update at the publication time is no edit, as Kopje stores an incoming status (src/domain/remote-statuses.ts).
 		const edited = updated !== null && updated !== plan.published ? updated : null
@@ -924,12 +966,12 @@ export function convertLegacy(
 			parent ?? null,
 			visibility,
 			spoiler,
-			content,
+			body,
 			local &&
 				typeof properties.source === 'object' &&
 				properties.source !== null &&
 				typeof properties.source.content === 'string'
-				? carried(properties.source.content)
+				? bounded(carried(properties.source.content), STATUS_CONTENT_BYTES, 'text:source-longer-than-bound')
 				: null,
 			properties.sensitive === true ? 1 : 0,
 			// As Kopje stores a received status's language.
@@ -939,7 +981,7 @@ export function convertLegacy(
 			local ? null : (edited ?? plan.published),
 			local ? (idempotency.get(String(row.id)) ?? null) : null,
 			local ? null : String(row.properties),
-			normalizeSearchText(`${spoiler} ${remoteHtmlText(content)}`),
+			normalizeSearchText(`${spoiler} ${remoteHtmlText(body)}`),
 			plan.legacyId,
 			plan.legacyApO,
 			isoTime(row.cdate) ?? plan.published
@@ -1314,19 +1356,37 @@ export function convertLegacy(
 	}
 
 	// ---------------------------------------------------------------- edits: earlier versions, then the current one
+	// The Worker reads a snapshot's attachments within the bounds of a stored attachment (src/domain/status-bounds.ts
+	// editMediaSql): a URL past 2,048 bytes or meta past 1 KiB as none, a description cut at 10,000 code points. Such a
+	// field is converted whole and counted, as the Worker shows less of it.
 	/** @param {Omit<Attached, 'position' | 'imageId'>} m */
-	const presented = (m) => ({
-		id: m.id,
-		type: m.type,
-		url: m.url,
-		preview_url: m.preview ?? m.url,
-		remote_url: null,
-		preview_remote_url: null,
-		text_url: null,
-		meta: m.meta === null ? null : JSON.parse(m.meta),
-		description: m.description === '' ? null : m.description,
-		blurhash: null,
-	})
+	const snapshotLosses = (m) => {
+		const bytes = (/** @type {string | null} */ value) => (value === null ? 0 : Buffer.byteLength(value))
+		const over =
+			bytes(m.url) > 2048 ||
+			bytes(m.preview) > 2048 ||
+			bytes(m.meta) > 1024 ||
+			(bytes(m.description) > 10_000 && [...m.description].length > 10_000)
+		if (over) {
+			count(normalized, 'edits:media-field-over-bound')
+		}
+	}
+	/** @param {Omit<Attached, 'position' | 'imageId'>} m */
+	const presented = (m) => {
+		snapshotLosses(m)
+		return {
+			id: m.id,
+			type: m.type,
+			url: m.url,
+			preview_url: m.preview ?? m.url,
+			remote_url: null,
+			preview_remote_url: null,
+			text_url: null,
+			meta: m.meta === null ? null : JSON.parse(m.meta),
+			description: m.description === '' ? null : m.description,
+			blurhash: null,
+		}
+	}
 	const editInsert = insert(
 		'INSERT INTO status_edits (status_id, content, spoiler_text, sensitive, media_json, created_at) VALUES (?, ?, ?, ?, ?, ?)'
 	)
@@ -1423,8 +1483,8 @@ export function convertLegacy(
 				})
 			editInsert.run(
 				plan.id,
-				html(properties.content),
-				carried(properties.spoiler_text) || carried(properties.summary),
+				content(properties.content),
+				spoilerOf(carried(properties.spoiler_text) || carried(properties.summary)),
 				properties.sensitive === true ? 1 : 0,
 				JSON.stringify(media),
 				isoTime(properties.updated) ?? isoTime(properties.published) ?? isoTime(revision.cdate) ?? plan.published

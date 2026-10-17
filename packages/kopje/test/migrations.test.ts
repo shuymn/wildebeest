@@ -4896,3 +4896,47 @@ describe('0046_instance_domain_blocks', () => {
 		})
 	})
 })
+
+describe('0047_status_mentions_shown', () => {
+	const NAME = '0047_status_mentions_shown'
+	const at = NAMES.indexOf(NAME)
+
+	it('indexes the mentions that are not silent, built over the existing rows, as the presenter reads them', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+			sql.exec(
+				`INSERT INTO accounts (id, uri, username, domain) VALUES
+					('100000000000000001', 'https://r.example/a', 'a', 'r.example'),
+					('100000000000000002', 'https://r.example/b', 'b', 'r.example')`
+			)
+			sql.exec(
+				`INSERT INTO statuses (id, uri, account_id, visibility, published_at)
+				VALUES ('200000000000000001', 'https://r.example/s', '100000000000000001', 'public', 'x')`
+			)
+			sql.exec(
+				`INSERT INTO status_mentions (status_id, account_id, silent, requires_mention, author_id) VALUES
+					('200000000000000001', '100000000000000001', 1, 0, '100000000000000001'),
+					('200000000000000001', '100000000000000002', 0, 0, '100000000000000001')`
+			)
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+			const shown = sql
+				.exec<{ account_id: string }>(
+					`SELECT account_id FROM status_mentions INDEXED BY status_mentions_shown
+					WHERE status_id = '200000000000000001' AND silent = 0 ORDER BY account_id LIMIT 200`
+				)
+				.toArray()
+			expect(shown).toEqual([{ account_id: '100000000000000002' }])
+			const plan = sql
+				.exec<{ detail: string }>(
+					`EXPLAIN QUERY PLAN SELECT account_id FROM status_mentions INDEXED BY status_mentions_shown
+					WHERE status_id = ?1 AND silent = 0 ORDER BY account_id LIMIT 200`,
+					'200000000000000001'
+				)
+				.toArray()
+				.map((row) => row.detail)
+			expect(plan).toEqual(['SEARCH status_mentions USING COVERING INDEX status_mentions_shown (status_id=?)'])
+		})
+	})
+})

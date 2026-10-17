@@ -1263,10 +1263,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
 - **POLL-3: polls cost bounded work (RES).** Presenting reads each poll's row and the viewer's own votes, never the
   votes; the cron ends at most 25 polls and records at most 25 Updates of counts a run, through partial indexes; the
   Update of a local poll's counts is debounced (3 minutes after the first vote since the last one sent, one Update for
-  all, superseding any still waiting), never one per vote; a remote poll keeps at most 100 choices of at most 1,000
-  code units (Mastodon's and Misskey's own choices fit whole; a vote in a choice cut to that is refused, as its name
-  would match nothing); a status's or account's votes go in bounded batches of a purge, and the votes an edit drops
-  (a new generation of the poll) in bounded rounds of the cron. _Enforced (main):_
+  all, superseding any still waiting), never one per vote; a remote poll keeps at most 100 choices of at most 1,000 code
+  units (Mastodon's and Misskey's own choices fit whole; a vote in a choice cut to that is refused, as its name would
+  match nothing); a status's or account's votes go in bounded batches of a purge, and the votes an edit drops (a new
+  generation of the poll) in bounded rounds of the cron. _Enforced (main):_
   `test/policy-bounds.test.ts` ("polls are presented from their counts, not their votes"), `test/polls.test.ts`
   ("ends at most 25 polls a run", "falls due a while after the first vote", "RES-6: votes go in bounded batches").
 - **POLL-4: polls federate as Mastodon's (AP).** A local poll's status is a Question (`oneOf`/`anyOf`, `endTime`,
@@ -1286,6 +1286,14 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   and 16,777,216 pixels, read with the body bound before parsing): `src/mastodon/search.ts`, `src/mastodon/media.ts`;
   `test/search.test.ts` ("bounds the query"), `test/media.test.ts` ("refuses a file over 16 MB"). _Enforced (main)_ for remote profiles: bios are cut at 50,000 code units before sanitizing and
   display names at 2,048 (`src/security/html.ts`, `src/federation/remote-actor.ts`). _Implemented on branch `kopje/markers`:_ a timeline marker's `last_read_id` stops at 255 characters, which Mastodon bounds as a bigint (`src/domain/markers.ts`; `test/markers.test.ts`, "answers 422 with Mastodon's validation message"). _Enforced (main)_ for scheduled statuses: `scheduled_at` is read only up to 64 characters, and a scheduled status's params are a JSON object of a fixed shape built from checked fields (the status text's raw bound, at most four media ids), refused over 128 KiB in the Store and by the schema (migration `0011_scheduled_statuses`); `test/migrations.test.ts`, `test/scheduled-statuses.test.ts`. `scheduled_at` must name a date and time the calendar has (Ruby's `DateTime.parse`: no February 29 outside leap years, no 31st of a 30-day month, minutes and hours in range), checked before its offset applies. Other query strings: _Gap._
+  _Enforced (main)_ for status text a remote server sends: content is stored within `STATUS_CONTENT_BYTES` (128 KiB)
+  as a JSON string, the sanitized form of a shorter raw prefix when the whole does not fit, so it stays sanitizer
+  output (`sanitizeRemoteContent` in `src/security/html.ts`, the search `sanitizeRemoteBio` uses); a content warning
+  within `SPOILER_BYTES` (16 KiB), cut at a code point (`cutJsonString`); a media URL or preview over
+  `MEDIA_URL_LIMIT` (2,048) is not stored (`src/federation/remote-status.ts`). A local post or edit whose rendered
+  content or warning passes those bounds, which only hundreds of mentions of accounts with long profile URLs reach, is
+  refused with Mastodon's length error (`src/domain/statuses.ts`); `test/status-bounds.test.ts` ("a remote status is
+  stored within its bounds", "a local status is written within its bounds").
 - **RES-2: parsing work is bounded.** Every regex, parser and normalization over input at the RES-1 cap has an
   adversarial fixture with a time bound. _Enforced (main)_ for status text:
   `test/statuses.test.ts` ("handles the worst case at the bound within a generous time"). _Enforced (main)_ for the image metadata walk: `test/image-bytes.test.ts` ("walks a worst-case file at the upload
@@ -1324,8 +1332,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   as NULL, and cuts the display name at 2,048 and the username at 255 code points; mentions read the username and URL
   through the same projections (`src/domain/profile-bounds.ts`) and derive `acct` and a fallback url from the cut
   username; the admin account search reads candidates' ids and flags only and tests their text in SQL. The actor URI is
-  bounded as stored (`ACTOR_URI_LIMIT`); a converted row keeps legacy's. One account is then at most about 113 KB as
-  read and 123 KB serialized (94 KB and 119 KB measured with every part at its bound), so a page of 80 serializes to at
+  bounded as stored (`ACTOR_URI_LIMIT`), read through `actorUriSql`, and refused at the cutover. One account is then
+  at most about 113 KB as read and 123 KB serialized (94 KB and 119 KB measured with every part at its bound), so a
+  page of 80 serializes to at
   most about 10 MB; realistic bios (Mastodon's 500 characters, Misskey's 1,500, Pleroma's and GoToSocial's 5,000 of
   Japanese with links) render to at most about 28 KB. Windowed account reads (followers, following, follow requests,
   `favourited_by`, `reblogged_by`) select ids for their window and read the profiles of the page only
@@ -1338,6 +1347,36 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   that pass what one leaves unused to the others, so the answer does not depend on their order (`presentAccountsWithin`
   and `familiarFollowers` in `src/domain/accounts.ts`, `unlimitedResponse` in `src/mastodon/pagination.ts`;
   `test/account-answer-bytes.test.ts`).
+  _Enforced (main)_ for each presented status: every status column a remote server controls, or a converted row may hold
+  past the ingestion bounds, is read through its helper in `src/domain/status-bounds.ts` (accounts and actor ids through
+  `src/domain/profile-bounds.ts`). Content and source text over 128 KiB as a JSON string read as '' (the status keeps
+  its url); a content warning over 16 KiB is cut to the 2,730 code points that fit however they escape; a status url
+  over 4,096 bytes reads as NULL and a uri as ''; at most 4 attachments per status, their URLs over 2,048 as NULL,
+  descriptions cut at 10,000 code points and meta over 1 KiB as NULL; at most 200 mentions and 70 hashtags (of the 100
+  stored) per status, the first by account id and by name; at most 100 poll choices of 1,000 code points, and an edit's
+  choices over 640 KiB as none; each edit-history snapshot is read the same way, each of its first 4 attachments rebuilt
+  through the attachment bounds and '[]' over 288 KiB; a conversation presents its first 12 participants in stored
+  order, cut in SQL. Every presented URL stays within its bound as serialized, derived or stored: a profile URL, avatar
+  or header within 2,048 (a profile URL falls back from the stored one to the actor's origin and to this instance's
+  `/@acct` page, and to '' when none fits), a media URL within 2,048. Each per-status cap reads at most its own number
+  of rows, each status once, through an index that holds only the rows it shows: media_attachments_status (shown
+  attachments), status_mentions_shown (mentions that are not silent, migration `0047_status_mentions_shown`) and
+  status_tags. A hashtag name over 256 code units or 1 KiB among a status's first names read is left out rather than
+  replaced by a later one, so such a status shows one fewer: a remote status stores none, and a local post records one
+  as Mastodon does (Mastodon 4.5 sets no length), which costs it a presented hashtag only when it sorts before more than
+  70 others, a corner case within 500 characters (`test/status-bounds.test.ts`, "each per-status cap reads a bounded
+  number of rows", "an ordinary status keeps its mentions and hashtags"). A remote username is Mastodon's remote format
+  (ASCII), so its JSON is its length; a stored one holding any other character or a NUL (only a row converted before the
+  cutover refused such usernames) is cut at 42 code points, which escape to at most 255 bytes. Identities are bounded by
+  `src/platform/identity-bounds.ts`, which ingestion, the cutover's conversion and its verification share: an actor id
+  whose serialized URL or stored spelling is over 2,048 bytes, or a status uri over 4,096, is refused, never cut, and
+  reads as '' where a converted row holds one. `test-node/bounded-columns.test.ts` reads every SQL string in
+  `src/domain` and fails when a bounded column (uris included) is read outside its helper or a helper is given another
+  column; it fails closed on an interpolation it cannot resolve as a constant or a single safe call inside a result
+  list, on SQL built by concatenation and on a bounded column passed as a property value; lookups and comparisons may
+  name a column, and an exact list names the reads that present nothing. It is an architectural aid with documented gaps
+  (correlated outer aliases, property syntax variants); the aggregate response tests prove the budgets. The maxima of
+  each presented shape are in "Maxima of presented units" below (`test/status-bounds.test.ts`).
 - **RES-4: stored derived data is bounded.** Snapshots, the KV cache, the spool and deliveries each have a size cap, a
   count cap or an expiry with a sweeper. _Implemented on branch `kopje/inbound-statuses`_ for remote statuses: one
   status stores at most 4 attachments (Mastodon's limit) with 10,000 code units of description each, 100 hashtags
@@ -1631,6 +1670,62 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   cap reads at most 100 rows of its actor; a revoke's `Reject`s read at most 100 rows of the quoting author by one
   seek of `quote_requests_instrument`, whatever other actors' requests name the same instrument; quoters' reach reads
   the accepted quotes of the status through `quotes_accepted`, as its boosts are read.
+
+#### Maxima of presented units (RES-3)
+
+`test/status-bounds.test.ts` ("the table of maxima") builds every part at its bound and measures what one read takes
+out of SQLite and what it presents, three ways: filled with characters JSON escapes to six bytes (the most JSON); the
+same with mentioned accounts that have no stored url, so their url is derived; and filled with what reads the most
+bytes for each bound (ASCII where the bound is in bytes, four-byte characters where it is in characters: a 10,000
+character description reads 40,000 bytes). Every part is at the bound RES-3 states for a presented status and account
+above, with accounts on 2,000-character domains (the longest an actor id of 2,048 holds), hashtag names of four-byte
+characters, and the viewer's filters at theirs: 50 filters in every context, each with a 256-character title and 20
+keywords of 512 characters, the first held by the status, and naming the statuses read, so every status carries 50
+filter results (about 0.24 MB each set) and every read takes the 1,000 keywords. SQLite bytes are the UTF-8 bytes of every value read (8 per number); nodes are the
+objects, arrays and strings presented. Measured shapes are read through the Store operation; the real Store RPC
+measurement comes with the answer budgets.
+
+| Shape                                                            | Most SQLite bytes | Most JSON bytes | Rows read | Nodes | Share of 8 MiB |
+| ---------------------------------------------------------------- | ----------------- | --------------- | --------- | ----- | -------------- |
+| Account occurrence                                               | 114,914           | 121,710         | 1         | 36    | 1.5%           |
+| Status                                                           | 4,280,990         | 2,595,446       | 1,381     | 2,267 | 31%            |
+| Quote (the status and its quoted status)                         | 6,491,023         | 5,190,925       | 1,710     | 4,536 | 62%            |
+| Boost of a quote                                                 | 6,616,340         | 5,564,762       | 1,763     | 5,439 | 66%            |
+| Conversation: 12 participants presented, its last status a quote | 7,870,431         | 6,651,414       | 1,723     | 4,959 | 79.3%          |
+
+Mentions whose url is derived read and present less (the conversation: 5,232,097 and 5,832,214 bytes): a derived url
+within the bound is at most the stored bound, and a longer one presents as ''.
+
+Two composite shapes are conditional estimates, not measurements, which hold once their answers' byte budgets are
+built:
+
+| Shape                                                | Estimated most JSON bytes | Share of 8 MiB | Today                                                                                                 |
+| ---------------------------------------------------- | ------------------------- | -------------- | ----------------------------------------------------------------------------------------------------- |
+| Notification group: 8 sample accounts and its status | about 6.17 M              | 74%            | the grouped answer is bounded by its counts only (groups per page, 8 sample accounts each)            |
+| Report: 4 admin accounts and its embedded statuses   | about 5.68 M              | 68%            | a report embeds up to 100 statuses, bounded by that count only, so one report can exceed the estimate |
+
+A group's status is the owner's own (favourites and boosts group), so it is at most a quote: 8 accounts and a quote. The
+report estimate assumes an embedded-status allowance that stops at 2 MiB after the first status, which is always
+admitted: 4 accounts and a quote. Every measured shape stays within 80% of an answer of 8 MiB with filter results
+included, so an answer that admits whole items always fits its first.
+
+Heap at 8 MiB per answer. Assumptions: one request at a time per isolate; the answer's JSON is at most 8 MiB, since
+every item is below it; presented objects take at most three times their JSON bytes (a string takes no more than its
+JSON bytes, since JSON only adds escapes, and the rest is per-object overhead; an assumption, as workerd exposes no
+heap to measure); rows of one chunk take their SQLite bytes, and the chunk is one item.
+
+| Phase                                                   | Store isolate | Worker isolate |
+| ------------------------------------------------------- | ------------- | -------------- |
+| Rows of one chunk (a conversation, the most bytes read) | 7.9 MB        |                |
+| Presented objects of the admitted answer                | 25.2 MB       |                |
+| Measurement string of one item                          | 6.7 MB        |                |
+| RPC copy (serialized; deserialized in the Worker)       | 8.4 MB        | 25.2 MB        |
+| The Worker's JSON string and the body                   |               | 16.8 MB        |
+| Peak                                                    | 40 MB         | 42 MB          |
+
+Each isolate stays within half of its 128 MB. One isolate holding both sides at once, the Store's objects alive while
+the Worker's are built, would reach about 76 MB; it stays within half (59 MB) when the Store drops its objects once
+they are serialized.
 
 ### Data and keys (DATA)
 

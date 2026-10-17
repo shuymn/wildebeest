@@ -18,11 +18,13 @@ import {
 	type RemoteQuotePolicyInput,
 	type RemoteStatusInput,
 } from '../domain/remote-statuses'
+import { MEDIA_URL_LIMIT } from '../domain/status-bounds'
 import { MAX_URL_LENGTH } from '../domain/status-text'
 import { hashtagObjectName } from '../domain/tag-name'
 import { httpUrl } from '../platform/http-url'
+import { STATUS_URI_LIMIT, withinIdentityBound } from '../platform/identity-bounds'
 import { withinJsonBounds } from '../platform/json-bounds'
-import { remoteHtmlText, sanitizeRemoteHtml } from '../security/html'
+import { cutJsonString, remoteHtmlText, sanitizeRemoteContent, SPOILER_BYTES } from '../security/html'
 
 // Remote statuses as Mastodon 4.7.3 reads them (ActivityPub::Parser::StatusParser and MediaAttachmentParser): compacted
 // JSON with the ActivityStreams context, values as strings, objects with an id, or arrays of either. Note and Question
@@ -160,6 +162,11 @@ function focusOf(value: unknown): { x: number; y: number } | null {
 	return valid(x) && valid(y) ? { x, y } : null
 }
 
+// A media URL within MEDIA_URL_LIMIT (RES-2), else none.
+function mediaUrl(url: string | null): string | null {
+	return url !== null && url.length <= MEDIA_URL_LIMIT ? url : null
+}
+
 // Create#process_attachments: links (an href) are preview cards, not media; at most MAX_STATUS_MEDIA with a usable url.
 function mediaOf(object: Json): RemoteMediaInput[] {
 	const media: RemoteMediaInput[] = []
@@ -170,7 +177,7 @@ function mediaOf(object: Json): RemoteMediaInput[] {
 		if (!isObject(attachment) || attachment.href !== undefined) {
 			continue
 		}
-		const url = urlOf(attachment.url)
+		const url = mediaUrl(urlOf(attachment.url))
 		if (url === null) {
 			continue
 		}
@@ -179,7 +186,9 @@ function mediaOf(object: Json): RemoteMediaInput[] {
 		media.push({
 			type: mediaType(attachment.type, attachment.mediaType),
 			url,
-			previewUrl: httpString(typeof icon === 'string' ? icon : isObject(icon) ? (text(icon.url) ?? null) : null),
+			previewUrl: mediaUrl(
+				httpString(typeof icon === 'string' ? icon : isObject(icon) ? (text(icon.url) ?? null) : null)
+			),
 			description: description.slice(0, MAX_MEDIA_DESCRIPTION_LENGTH),
 			focus: focusOf(attachment.focalPoint),
 			width: dimension(attachment.width),
@@ -334,11 +343,16 @@ export function parseRemoteStatus(
 	if (!typeIs(object.type, STATUS_TYPES) && !converted) {
 		return null
 	}
-	const uri = typeof object.id === 'string' && httpString(object.id) !== null ? object.id : null
+	// The id is stored as written, so its bound is measured as the projection measures it (identity-bounds.ts).
+	const uri =
+		typeof object.id === 'string' && withinIdentityBound(object.id, STATUS_URI_LIMIT) && httpString(object.id) !== null
+			? object.id
+			: null
 	if (uri === null) {
 		return null
 	}
-	const url = urlOf(object.url, 'text/html')
+	const href = urlOf(object.url, 'text/html')
+	const url = href !== null && withinIdentityBound(href, STATUS_URI_LIMIT) ? href : null
 	const summary = languageString(object, 'summary')
 	let html: string
 	if (converted) {
@@ -351,7 +365,7 @@ export function parseRemoteStatus(
 	} else {
 		html = languageString(object, 'content') ?? ''
 	}
-	const content = sanitizeRemoteHtml(html)
+	const content = sanitizeRemoteContent(html)
 	const { mentions, tags } = tagsOf(object)
 	const inReplyTo = idOf(object.inReplyTo)
 	// Mastodon's `conversation` (ActivityPub::Activity::Create reads it, and not `context`): any identifier, a tag: URI
@@ -363,7 +377,7 @@ export function parseRemoteStatus(
 		attributedTo: idOf(asArray(object.attributedTo)[0]),
 		content,
 		text: remoteHtmlText(content),
-		spoilerText: converted ? '' : (summary ?? '').slice(0, MAX_SPOILER_LENGTH),
+		spoilerText: converted ? '' : cutJsonString((summary ?? '').slice(0, MAX_SPOILER_LENGTH), SPOILER_BYTES),
 		sensitive: object.sensitive === true,
 		language: languageOf(object),
 		published: timeOf(object.published),
