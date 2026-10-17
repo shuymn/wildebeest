@@ -1022,9 +1022,10 @@ function hostOf(inbox: string): string | null {
 // VIS-30's send-time check, at the claim and again at confirmation (the rules: docs/visibility.md, "The send-time
 // check"). The exemption reads the persisted retracts flag, never the activity's kind worked out again. The accounts
 // rule joins accounts, because availableSql reads a missing id as available and a purged recipient must count as gone.
-// An Announce distributes its original, so it is refused while the original's author is unavailable (R1), read live by
-// the original's uri (statuses' unique key); no other content activity carries a remote author's object (a quote names
-// its quoted status by uri and stamp only).
+// An Announce distributes its original, so it is sent only while the original exists and its author is available (R1),
+// read live by the original's uri (statuses' unique key): an original deleted since (its author's Delete applies even
+// while the author is suspended) or never stored refuses it. No other content activity carries a remote author's
+// object (a quote names its quoted status by uri and stamp only).
 function sendRefused(db: Db, row: DueRow): boolean {
 	if (row.retracts === 1) {
 		return false
@@ -1049,9 +1050,9 @@ function sendRefused(db: Db, row: DueRow): boolean {
 	if (
 		row.boosted !== null &&
 		db.first(
-			`SELECT 1 AS yes FROM main.statuses s WHERE s.uri = ? AND NOT ${availableSql('s.account_id')}`,
+			`SELECT 1 AS yes FROM main.statuses s WHERE s.uri = ? AND ${availableSql('s.account_id')}`,
 			row.boosted
-		) !== undefined
+		) === undefined
 	) {
 		return true
 	}

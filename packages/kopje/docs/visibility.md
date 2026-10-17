@@ -538,13 +538,13 @@ recipients (a retraction's earlier receivers) has none.
 At the claim, and again at confirmation right before the POST (`confirmDelivery`), a row that is not a retraction is
 dropped when:
 
-| Rule     | Refused when                                                            |
-| -------- | ----------------------------------------------------------------------- |
-| sender   | the signer is unavailable (R1), but for its own suspension `Update`     |
-| inbox    | the host policy (`host-policy.ts`) refuses the inbox's host             |
-| accounts | it lists accounts, and none of them exists and is available (R1)        |
-| domains  | it lists hosts, and the host policy refuses every one                   |
-| original | it is an `Announce` whose boosted original's author is unavailable (R1) |
+| Rule     | Refused when                                                                            |
+| -------- | --------------------------------------------------------------------------------------- |
+| sender   | the signer is unavailable (R1), but for its own suspension `Update`                     |
+| inbox    | the host policy (`host-policy.ts`) refuses the inbox's host                             |
+| accounts | it lists accounts, and none of them exists and is available (R1)                        |
+| domains  | it lists hosts, and the host policy refuses every one                                   |
+| original | it is an `Announce` whose boosted original is gone, or whose author is unavailable (R1) |
 
 `availableSql` reads an unknown id as available, so the accounts rule joins `accounts`: a purged recipient counts as
 gone. A recipient the instance suspended (R38) is unavailable, so content to its personal inbox, or to a shared inbox

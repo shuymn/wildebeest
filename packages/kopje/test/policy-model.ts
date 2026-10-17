@@ -621,20 +621,24 @@ export class PolicyModel {
 	// VIS-30, the send-time check (deliveries.ts sendRefused, at the claim and at confirmation): a delivery that is not
 	// a retraction is sent only while its signer is available (but for the suspension's own Update of the actor, R1)
 	// and, when the recipients behind it are known (`recipients`; 'many' above PROVENANCE_MAX, "not all unavailable"),
-	// while one of them exists and is available. An Announce is sent only while its original's author (`boosted`) is
-	// available. Unknown recipients (null) leave the host rule only, which the world does not model (instance domain
+	// while one of them exists and is available. An Announce is sent only while its original exists and its author
+	// (`boosted`; 'missing' when the original is not stored) is available. Unknown recipients (null) leave the host rule only, which the world does not model (instance domain
 	// blocks come in phase B2a); nor does it model a purged account, which is missing.
 	sends(
 		signer: number,
 		retracts: boolean,
 		recipients: readonly number[] | 'many' | null,
 		ownSuspension = false,
-		boosted: number | null = null
+		boosted: number | 'missing' | null = null
 	): boolean {
 		if (retracts) {
 			return true
 		}
-		if ((!this.available(signer) && !ownSuspension) || (boosted !== null && !this.available(boosted))) {
+		if (
+			(!this.available(signer) && !ownSuspension) ||
+			boosted === 'missing' ||
+			(boosted !== null && !this.available(boosted))
+		) {
 			return false
 		}
 		return recipients === null || recipients === 'many' || recipients.some((x) => this.available(x))

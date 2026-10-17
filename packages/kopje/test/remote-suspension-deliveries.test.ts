@@ -252,69 +252,90 @@ describe('the send boundary is confirmation (row 14)', () => {
 		expect((await deliveries(w.h.store)).map((row) => row.state)).toEqual(['pending'])
 	})
 
-	it("drops a queued boost of the suspended author's status between the claim and confirmation; its Undo goes", async () => {
-		const { w } = await signed()
-		// r follows alice (signed); s, on another server, does too. The original's author is o, whom alice boosts.
-		const s2 = await remoteAccount(w.h.store, 's', 'other.example')
-		await remoteFollows(w.h.store, s2, w.alice.id)
-		const o = await remoteAccount(w.h.store, 'o', 'origin.example')
-		const original = await seedStatus(w.h.store, {
-			accountId: o,
-			visibility: 'public',
-			uri: 'https://origin.example/statuses/1',
-		})
-		const boosted = await w.h.request(`/api/v1/statuses/${original}/reblog`, bearer(w.alice.token, { method: 'POST' }))
-		expect(boosted.status).toBe(200)
-		expect(new Set((await deliveries(w.h.store)).map((row) => row.type))).toEqual(new Set(['Announce']))
-		const { fetch, sent } = recordingFetch()
-		const reached = deferred()
-		const release = deferred()
-		const round = deliveryRound(testEnv, {
-			...deliveryDeps(
-				() => w.h.store,
-				fetch,
-				() => NOW
-			),
-			checkHost: async () => {
-				reached.resolve()
-				await release.promise
-			},
-		})
-		await reached.promise
-		await suspend(w, o)
-		release.resolve()
-		const settled = await round
-		expect(settled.settled.length).toBeGreaterThan(0)
-		expect(settled.settled.every((outcome) => outcome === 'dropped')).toBe(true)
-		expect(sent).toEqual([])
-		// o deletes the original (a suspended actor's Delete applies): the local boost is withdrawn with an Undo, a
-		// retraction, which still goes.
-		expect(
-			await receive(w.h.store, await uriOf(w.h.store, o), {
-				type: 'Delete',
-				object: 'https://origin.example/statuses/1',
+	it.each([
+		['its author is suspended', true, false],
+		['its author is suspended, then deletes it', true, true],
+		['its author deletes it', false, true],
+	])(
+		'drops a queued boost when %s between the claim and confirmation; its Undo goes',
+		async (_, suspended, deleted) => {
+			const { w } = await signed()
+			// r follows alice (signed); s, on another server, does too. The original's author is o, whom alice boosts.
+			const s2 = await remoteAccount(w.h.store, 's', 'other.example')
+			await remoteFollows(w.h.store, s2, w.alice.id)
+			const o = await remoteAccount(w.h.store, 'o', 'origin.example')
+			const original = await seedStatus(w.h.store, {
+				accountId: o,
+				visibility: 'public',
+				uri: 'https://origin.example/statuses/1',
 			})
-		).toMatchObject({ applied: true })
-		await settle(w.h.store)
-		const bodies: string[] = []
-		const recording = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-			bodies.push((JSON.parse(await new Request(input, init).text()) as { type: string }).type)
-			return new Response(null, { status: 202 })
-		}) as unknown as typeof globalThis.fetch
-		for (let i = 0; i < 5; i++) {
-			await deliveryRound(
-				testEnv,
-				deliveryDeps(
-					() => w.h.store,
-					recording,
-					() => NOW,
-					`undo-${i}`
-				)
+			const boosted = await w.h.request(
+				`/api/v1/statuses/${original}/reblog`,
+				bearer(w.alice.token, { method: 'POST' })
 			)
+			expect(boosted.status).toBe(200)
+			expect(new Set((await deliveries(w.h.store)).map((row) => row.type))).toEqual(new Set(['Announce']))
+			const { fetch, sent } = recordingFetch()
+			const reached = deferred()
+			const release = deferred()
+			const round = deliveryRound(testEnv, {
+				...deliveryDeps(
+					() => w.h.store,
+					fetch,
+					() => NOW
+				),
+				checkHost: async () => {
+					reached.resolve()
+					await release.promise
+				},
+			})
+			await reached.promise
+			if (suspended) {
+				await suspend(w, o)
+			}
+			if (deleted) {
+				// The author's Delete applies (also while it is suspended): the original is gone before confirmation.
+				expect(
+					await receive(w.h.store, await uriOf(w.h.store, o), {
+						type: 'Delete',
+						object: 'https://origin.example/statuses/1',
+					})
+				).toMatchObject({ applied: true })
+			}
+			release.resolve()
+			const settled = await round
+			expect(settled.settled.length).toBeGreaterThan(0)
+			expect(settled.settled.every((outcome) => outcome === 'dropped')).toBe(true)
+			expect(sent).toEqual([])
+			// o deletes the original (a suspended actor's Delete applies): the local boost is withdrawn with an Undo, a
+			// retraction, which still goes.
+			expect(
+				await receive(w.h.store, await uriOf(w.h.store, o), {
+					type: 'Delete',
+					object: 'https://origin.example/statuses/1',
+				})
+			).toMatchObject({ applied: true })
+			await settle(w.h.store)
+			const bodies: string[] = []
+			const recording = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+				bodies.push((JSON.parse(await new Request(input, init).text()) as { type: string }).type)
+				return new Response(null, { status: 202 })
+			}) as unknown as typeof globalThis.fetch
+			for (let i = 0; i < 5; i++) {
+				await deliveryRound(
+					testEnv,
+					deliveryDeps(
+						() => w.h.store,
+						recording,
+						() => NOW,
+						`undo-${i}`
+					)
+				)
+			}
+			expect(bodies.length).toBeGreaterThan(0)
+			expect(new Set(bodies)).toEqual(new Set(['Undo']))
 		}
-		expect(bodies.length).toBeGreaterThan(0)
-		expect(new Set(bodies)).toEqual(new Set(['Undo']))
-	})
+	)
 
 	it('sends a row confirmed before the suspension commits', async () => {
 		const { w, r } = await signed()
