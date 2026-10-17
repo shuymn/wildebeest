@@ -1,9 +1,11 @@
 import { type Account, accountUrl, acctOf, type Present, presentAccountsById } from './accounts'
 import {
+	type ApiQuoteState,
 	apiVisibility,
 	type ApiVisibility,
 	conversationMutedSql,
 	type OwnStatusId,
+	quoteReads,
 	requiresMention,
 	type ViewerContext,
 	type Visibility,
@@ -32,6 +34,11 @@ import { remotePlainText } from '../security/html'
 // viewer, or OwnStatusId, the viewer's own, for the response to their write. A boost's original is read through the
 // read rule for the same viewer, whichever the boost's id: a boost the viewer may see stands only with an original
 // they may see, and their own boost of an original they may no longer see is shown without it (reblog: null).
+// A quote (R35, quoteReads in audience.ts) is shown one level deep, as Mastodon's REST::StatusSerializer and
+// ShallowStatusSerializer: a status's `quote` embeds the quoted status, when the viewer is shown it, as a full status
+// for the same viewer (its flags, filters, media and poll), whose own `quote` is a ShallowQuote (the state and the id
+// of the status it quotes). The quotes are read twice, for the statuses and their originals, then for the quoted
+// statuses, each one query over json_each, never along a chain. A boost shows its original's quote in its `reblog`.
 // For a signed-in viewer every status carries `filtered` (REST::StatusSerializer, StatusRelationshipsPresenter): the
 // viewer's active filters that match it, whatever their context and action, as CustomFilter.apply_cached_filters finds
 // them (filters.ts); a boost and its original carry the same. Nothing is left out for a filter: the client decides by
@@ -58,6 +65,11 @@ export type Mention = { id: string; username: string; url: string; acct: string 
 
 export type Tag = { name: string; url: string }
 
+// Mastodon's Quote, with the quoted status embedded, and ShallowQuote, with its id.
+export type Quote = { state: ApiQuoteState; quoted_status: Status | null }
+
+export type ShallowQuote = { state: ApiQuoteState; quoted_status_id: string | null }
+
 export type Status = {
 	id: string
 	created_at: string
@@ -72,6 +84,7 @@ export type Status = {
 	replies_count: number
 	reblogs_count: number
 	favourites_count: number
+	quotes_count: number
 	edited_at: string | null
 	favourited?: boolean
 	reblogged?: boolean
@@ -87,6 +100,7 @@ export type Status = {
 	mentions: Mention[]
 	tags: Tag[]
 	emojis: []
+	quote: Quote | ShallowQuote | null
 	card: null
 	poll: Poll | null
 }
@@ -110,6 +124,7 @@ export type StatusRow = {
 	replies_count: number
 	reblogs_count: number
 	favourites_count: number
+	quotes_count: number
 	author_uri: string
 	author_username: string
 	author_domain: string | null
@@ -121,7 +136,7 @@ export type StatusRow = {
 // rule. in_reply_to_account_id is the conversation partner carried through self-replies.
 export const STATUS_COLUMNS = `s.id, s.uri, s.url, s.account_id, s.reblog_of_id, s.in_reply_to_id,
 	s.in_reply_to_account_id, s.visibility, s.spoiler_text, s.content, s.source_text, s.sensitive,
-	s.language, s.published_at, s.edited_at, s.replies_count, s.reblogs_count, s.favourites_count,
+	s.language, s.published_at, s.edited_at, s.replies_count, s.reblogs_count, s.favourites_count, s.quotes_count,
 	au.uri AS author_uri, au.username AS author_username, au.domain AS author_domain`
 
 export const STATUS_FROM = 'statuses s JOIN accounts au ON au.id = s.account_id'
@@ -130,8 +145,9 @@ export const STATUS_FROM = 'statuses s JOIN accounts au ON au.id = s.account_id'
 export type PresentOptions = Present & { viewer: ViewerContext }
 
 export type PresentOwnOptions = PresentOptions & {
-	// DELETE answers with the source text (`text`) in place of `content`, for redrafting: on the deleted status only,
-	// never on a boost's original.
+	// DELETE answers with the source text (`text`) in place of `content`, for redrafting, and with the quoted status of
+	// a quote in any state when the viewer may see it (quoteReads): on the deleted status only, never on a boost's
+	// original.
 	source?: boolean
 }
 
@@ -205,7 +221,31 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 		viewerId
 	)
 	const byId = new Map(rows.map((row) => [row.id, row]))
+	// The quotes of the statuses and originals (R35), then the quoted statuses the viewer is shown and their own quotes.
+	const reads = quoteReads(options.viewer)
+	const quotes = new Map(
+		reads.of(db, [...byId.keys()], options.source === true ? ids : []).map((quote) => [quote.status_id, quote])
+	)
+	const quoted = [...new Set([...quotes.values()].flatMap((quote) => quote.quoted_status_id ?? []))]
+	const unread = quoted.filter((id) => !byId.has(id))
+	if (unread.length > 0) {
+		for (const row of db.all<StatusRow>(
+			`SELECT ${STATUS_COLUMNS} FROM ${STATUS_FROM} WHERE s.id IN (SELECT value FROM json_each(?1))`,
+			JSON.stringify(unread)
+		)) {
+			byId.set(row.id, row)
+			rows.push(row)
+		}
+		for (const quote of reads.of(db, unread)) {
+			quotes.set(quote.status_id, quote)
+		}
+	}
 	const all = JSON.stringify([...byId.keys()])
+	// The statuses matched by filters: each status of the response, and each quoted status shown in it.
+	const targets = [
+		...ids.map((id) => ({ key: id, row: byId.get(id) })),
+		...quoted.map((id) => ({ key: quotedKey(id), row: byId.get(id) })),
+	]
 	const accounts = presentAccountsById(
 		db,
 		rows.map((row) => row.account_id),
@@ -252,13 +292,12 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 	// The text each status is matched on (filterTextLimits): read only when a filter has keywords.
 	const texts = new Map<string, { text: string; cut: number }>()
 	if (filters !== null && filters.filters.some((filter) => filter.keywords !== null)) {
-		const full = ids.map((id) => {
-			const row = byId.get(id)
+		const full = targets.map(({ row }) => {
 			const proper = row?.reblog_of_id == null ? row : byId.get(row.reblog_of_id)
 			return proper === undefined ? '' : searchableText(proper)
 		})
 		const limits = filterTextLimits(full.map((text) => Math.min(text.length, MAX_FILTER_TEXT)))
-		ids.forEach((id, i) => {
+		targets.forEach(({ key }, i) => {
 			const text = full[i] ?? ''
 			// A cut inside a surrogate pair moves back to the pair's start, so the code point after it is whole.
 			const limit = limits[i] ?? 0
@@ -266,34 +305,53 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 			const cut = limit > 0 && limit < text.length && unit >= 0xdc00 && unit <= 0xdfff ? limit - 1 : limit
 			// The code point after a cut is kept for the boundary after a match, so the cut is not taken for one.
 			const next = cut < text.length ? String.fromCodePoint(text.codePointAt(cut) ?? 0) : ''
-			texts.set(id, { text: text.slice(0, cut) + next, cut })
+			texts.set(key, { text: text.slice(0, cut) + next, cut })
 		})
 	}
 
-	const presentRow = (row: StatusRow, top: boolean, filtered: FilterResult[] = []): Status | undefined => {
+	// A status of the response (top), a boost's original, or a quoted status shown in a quote.
+	const presentRow = (
+		row: StatusRow,
+		kind: 'top' | 'reblog' | 'quoted',
+		filtered: FilterResult[] = []
+	): Status | undefined => {
 		const account = accounts.get(row.account_id)
 		if (account === undefined) {
 			return undefined
 		}
+		const top = kind === 'top'
 		let reblog: Status | null = null
-		if (top && filters !== null) {
+		if (kind !== 'reblog' && filters !== null) {
 			const proper = row.reblog_of_id === null ? row : byId.get(row.reblog_of_id)
 			if (proper !== undefined) {
 				filtered = applyFilters(filters, statusMatches, {
-					...(texts.get(row.id) ?? { text: '', cut: 0 }),
+					...(texts.get(top ? row.id : quotedKey(row.id)) ?? { text: '', cut: 0 }),
 					ids: row.reblog_of_id === null ? [row.id] : [row.id, row.reblog_of_id],
 				})
 			}
 		}
 		if (row.reblog_of_id !== null) {
-			const original = byId.get(row.reblog_of_id)
+			const original = kind === 'quoted' ? undefined : byId.get(row.reblog_of_id)
 			if (original !== undefined) {
-				reblog = presentRow(original, false, filtered) ?? null
+				reblog = presentRow(original, 'reblog', filtered) ?? null
 				if (reblog === null) {
 					return undefined
 				}
 			} else if (!(top && own)) {
 				return undefined
+			}
+		}
+		const read = quotes.get(row.id)
+		let quote: Quote | ShallowQuote | null = null
+		if (read !== undefined) {
+			if (kind === 'quoted') {
+				quote = { state: read.state, quoted_status_id: read.quoted_status_id }
+			} else {
+				const target = read.quoted_status_id === null ? undefined : byId.get(read.quoted_status_id)
+				quote = {
+					state: read.state,
+					quoted_status: target === undefined ? null : (presentRow(target, 'quoted') ?? null),
+				}
 			}
 		}
 		const visibility = apiVisibility(row.visibility)
@@ -330,6 +388,7 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 			replies_count: row.replies_count,
 			reblogs_count: row.reblogs_count,
 			favourites_count: row.favourites_count,
+			quotes_count: row.quotes_count,
 			edited_at: row.edited_at,
 			...viewer,
 			...body,
@@ -347,6 +406,7 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 				url: `${options.origin}/tags/${encodeURIComponent(t.name)}`,
 			})),
 			emojis: [],
+			quote,
 			card: null,
 			poll: polls.get(row.id) ?? null,
 		}
@@ -354,8 +414,13 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 
 	return ids.map((id) => {
 		const row = byId.get(id)
-		return row === undefined ? undefined : presentRow(row, true)
+		return row === undefined ? undefined : presentRow(row, 'top')
 	})
+}
+
+// The key of a quoted status's matched text, apart from the same status's as a status of the response.
+function quotedKey(id: string): string {
+	return `quoted:${id}`
 }
 
 // A local status's web page is /@user/<id>; a local boost has none of its own and shows its Announce id. A remote

@@ -55,7 +55,7 @@ import { allocateLocalId } from './ids'
 import { DETACHED_GRACE_MS, DOOMED_AT, liveMediaSql } from './media'
 import { notify } from './notifications'
 import { editPoll, type PollInput, pollOptionsJson, writePoll } from './polls'
-import { detachQuotes } from './quotes'
+import { acceptedQuoteWindow, detachQuotes } from './quotes'
 import { normalizeSearchText } from './search-text'
 import {
 	MEDIA_COLUMNS,
@@ -1422,6 +1422,72 @@ export const interactors = optionalUserReadOperation<InteractorsInput, Viewed<Pa
 				items: rows.map((row) => presentAccount(row, present)),
 				newest: rows[0]?.cursor ?? null,
 				oldest: rows.at(-1)?.cursor ?? null,
+			},
+		}
+	}
+)
+
+// ---------------------------------------------------------------------------------------------------------------
+// Quotes of a status
+// ---------------------------------------------------------------------------------------------------------------
+
+export type StatusQuotesInput = { id: string; page: PageQuery; present: Present }
+
+// A page of the quotes list, and how many candidates its window held: the next page is offered when the window was
+// full, whatever the rule left of it.
+export type QuotesPage = Page<Status> & { candidates: number }
+
+// GET /api/v1/statuses/:id/quotes (Api::V1::Statuses::QuotesController#index, R35): the statuses that quote a status the
+// viewer may see (R3), by their accepted quotes, newest quoting status first, paged by the quoting status's id
+// (Mastodon pages by the quote's id; Kopje's quote is keyed by its status). The page is a bounded window, as Mastodon
+// paginates before it filters: one seek reads at most `limit` accepted quotes from the cursor (acceptedQuoteWindow),
+// and the read rule is applied to those statuses only, R8 (listableSql: the viewer filters neither the author nor is
+// blocked) for anyone but the quoted author, who is shown every quote they may see (R2), from accounts they block or
+// mute too (Mastodon skips StatusFilter for them). A page may be short or empty; its bounds are the window's, so a
+// stretch of hidden quotes is crossed a window at a time.
+export const statusQuotes = userReadOperation<StatusQuotesInput, Viewed<QuotesPage>>(
+	(db, { id, page, present }, { accountId }, viewer) => {
+		const resolved = viewable(db, accountId, id)
+		const quoted =
+			resolved === null
+				? undefined
+				: db.first<{ account_id: string }>('SELECT account_id FROM statuses WHERE id = ?', resolved)
+		if (resolved === null || quoted === undefined) {
+			return { status: 'not_found' }
+		}
+		const ascending = page.minId !== undefined
+		const window = acceptedQuoteWindow(
+			db,
+			resolved,
+			{ max: statusCursor(page.maxId), min: statusCursor(page.minId ?? page.sinceId), ascending },
+			page.limit
+		)
+		if (ascending) {
+			window.reverse()
+		}
+		const select = { where: 's.id IN (SELECT value FROM json_each(?2))', tail: 'ORDER BY s.id DESC' }
+		const rows =
+			quoted.account_id === accountId
+				? statusReads(viewer, { viewer: '?1' }).select(db, 'visible', select, accountId, JSON.stringify(window))
+				: statusReads(viewer, { viewer: '?1', now: '?3' }).select(
+						db,
+						'listable',
+						select,
+						accountId,
+						JSON.stringify(window),
+						viewer.now
+					)
+		return {
+			status: 'ok',
+			value: {
+				items: presentStatuses(
+					db,
+					rows.map((row) => row.id),
+					{ ...present, viewer }
+				),
+				newest: window[0] ?? null,
+				oldest: window.at(-1) ?? null,
+				candidates: window.length,
 			},
 		}
 	}

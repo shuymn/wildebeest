@@ -408,6 +408,12 @@ export const ROUTES: readonly Route[] = [
 	},
 	{
 		method: 'GET',
+		path: '/api/v1/statuses/:id/quotes',
+		access: { scope: 'read:statuses' },
+		handler: statuses.statusQuotes,
+	},
+	{
+		method: 'GET',
 		path: '/api/v1/statuses/:id/favourited_by',
 		access: { scope: 'read:accounts', optional: true },
 		handler: statuses.favouritedBy,

@@ -183,10 +183,11 @@ const RULES: readonly Rule[] = [
 	},
 	{
 		// Received quotes are verified in one place: only quotes.ts decides a quote's state (VerifyQuoteService, the
-		// Delete of a stamp), and nothing reads them for a client yet.
+		// Delete of a stamp), and only the policy module reads them for a client (R35: quoteReads).
 		name: 'reads or writes quotes',
 		pattern: new RegExp(`\\b(?:FROM|JOIN|INTO|UPDATE)\\s+${table(['quotes', 'quote_revocations'])}`, 'i'),
 		allowed: {
+			...POLICY_ONLY,
 			'../src/domain/quotes.ts': 'received quotes, their verification work and revocations',
 			'../src/domain/inbox.ts':
 				'a status’s batched delete detaches the quotes of it and deletes its own (STATUS_CHILDREN), never a revocation',

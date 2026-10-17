@@ -392,5 +392,29 @@ function interactors(kind: 'favourited_by' | 'reblogged_by'): ApiHandler {
 	}
 }
 
+// GET /api/v1/statuses/:id/quotes (Statuses::QuotesController#index): limit 20 by default, at most 40. The Link
+// header's bounds are the page's window (statusQuotes), so next is offered whenever the window was full, also for a
+// page the rule emptied.
+export const statusQuotes: ApiHandler = async (c, deps) => {
+	const p = await requestParams(c, deps)
+	if (p instanceof Response) {
+		return p
+	}
+	const page = pageQuery(p, 20, 40)
+	const credential = userCredential(c, deps)
+	const result = authorized(
+		await storeCall(c, deps, (s, b) => s.statusQuotes(b, { credential, id: statusId(c), page, present: present(c) }))
+	)
+	if (result.status !== 'ok') {
+		return viewedResponse(c, result)
+	}
+	const { items, newest, oldest, candidates } = result.value
+	const link = linkHeader(c.req.url, { newest, oldest, count: candidates }, page.limit)
+	if (link !== undefined) {
+		c.header('Link', link)
+	}
+	return c.json(items)
+}
+
 export const favouritedBy = interactors('favourited_by')
 export const rebloggedBy = interactors('reblogged_by')

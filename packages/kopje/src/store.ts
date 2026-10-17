@@ -1171,6 +1171,10 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, statuses.interactors, input)
 	}
 
+	statusQuotes(callerBuild: string, input: OperationInput<typeof statuses.statusQuotes>) {
+		return this.#kernel.execute(callerBuild, statuses.statusQuotes, input)
+	}
+
 	// Statuses by id, pins and conversation mutes (domain/statuses.ts, domain/status-actions.ts).
 
 	getStatuses(callerBuild: string, input: OperationInput<typeof statuses.getStatuses>) {
