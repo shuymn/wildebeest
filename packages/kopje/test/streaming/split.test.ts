@@ -6,7 +6,7 @@ import { type ApiHarness, sql } from '../api-helpers'
 import { NOW } from '../app-helpers'
 import { BUILD } from '../helpers'
 import { community } from '../status-helpers'
-import { connect, drained, echo, type Inbox, type StreamMessage } from './stream-helpers'
+import { connect, drained, echo, type Inbox, type StreamMessage, takeAll } from './stream-helpers'
 import { Db } from '../../src/db/sql'
 import { addToConversation } from '../../src/domain/conversations'
 import { deleteStatus, unreblog } from '../../src/domain/statuses'
@@ -20,17 +20,11 @@ import { STREAM_FAULTS, TURN_BUDGET } from '../../src/stream-hub'
 // conversation event's changes, a delete's captured boosts). A notification is an event of one unit, its recipient's:
 // its kind splits a batch of them, one for each of more recipients than a turn presents; so does a merge's, by checks
 // (it presents nothing). Deletes are made by the API's operations (deleteStatus, unreblog), so their rows are gone
-// before the fan-out reads the capture. Every kind passes the same cases:
-//   - exactly once: each listener that should receive the event gets it once, in order, and each that should not gets
-//     nothing, proved after the drain barrier; the event took two turns at least;
-//   - progress under writes between turns: while the split event is being sent, writes of its kind land between turns,
-//     by the same author or owner and by another; the event finishes within a bounded number of turns, what arrived is
-//     at every turn a prefix of what must arrive, and the later events arrive too, each once;
-//   - lost continuation: the continuation of the turn that split the event fails (STREAM_FAULTS) and the object is
-//     evicted; the cron's turns resume from the persisted position, with no duplicate and nothing lost;
-//   - quiescence (the end of each case): after the drain barrier, a further drain runs no turn and sends nothing.
-// Writes go straight to the Store, which starts no turn: the cases run each turn themselves (turn) or through the
+// before the fan-out reads the capture. The cases are docs/threat-model.md's (RES-6). Writes go straight to the Store, which starts no turn: the cases run each turn themselves (turn) or through the
 // barrier. A new event kind joins KINDS.
+
+// The cases, each of which writes one event to split (Fixture.event).
+const CASES = 3
 
 // The rounds of writes between turns, a turn after each: each round writes one event of the kind by the same author or
 // owner and one by another, and the split event must finish within them.
@@ -148,12 +142,6 @@ async function opened(h: ApiHarness, inboxes: Inbox[]): Promise<void> {
 	}
 }
 
-async function takeAll(inbox: Inbox): Promise<void> {
-	for (let left = inbox.rest().length; left > 0; left--) {
-		await inbox.next()
-	}
-}
-
 // A public status written straight to the Store (no turn), arrived and published at NOW.
 async function status(
 	h: ApiHarness,
@@ -211,8 +199,21 @@ async function lists(h: ApiHarness, viewers: readonly string[], members: readonl
 	return ids
 }
 
-// The same expected messages for each receiver.
-const each = (receivers: number, keys: string[]): Expected => Array.from({ length: receivers }, () => keys)
+// The sockets of `ids` on `user` and `user:notification`, opened, split by `who` into receivers and others.
+async function notificationListeners(
+	h: ApiHarness,
+	ids: readonly string[],
+	who: readonly boolean[]
+): Promise<{ receivers: Inbox[]; others: Inbox[] }> {
+	const receivers: Inbox[] = []
+	const others: Inbox[] = []
+	for (const [i, id] of ids.entries()) {
+		const inbox = await socket(h, id, [{ stream: 'user' }, { stream: 'user:notification' }])
+		;(who[i] ? receivers : others).push(inbox)
+	}
+	await opened(h, [...receivers, ...others])
+	return { receivers, others }
+}
 
 // Statuses and edits on `user`, statuses on a list, `public*` and `hashtag*`: one presentation per receiving viewer.
 type StatusKind = {
@@ -222,6 +223,8 @@ type StatusKind = {
 	stream: (index: number, list: string) => string
 	event: 'update' | 'status.update'
 	status: { media?: boolean; tag?: string }
+	// Whether each listener has a list of its own (the list kind's subscription).
+	lists?: boolean
 }
 
 function statusKind(name: string, kind: StatusKind): Kind {
@@ -233,25 +236,31 @@ function statusKind(name: string, kind: StatusKind): Kind {
 			const who = roles(TURN_BUDGET.presentations + 1)
 			const ids = await accounts(h, who.length, '5')
 			const receiving = ids.filter((_, i) => who[i])
-			// Receivers follow both authors and list them; the others follow nobody and their lists are empty.
+			// Receivers follow both authors (and, for a list kind, list them); the others follow nobody (and their lists are
+			// empty).
 			await follow(h, receiving, [author.id, other.id])
-			const listIds = await lists(h, ids, [])
-			for (const [i, list] of listIds.entries()) {
-				if (who[i]) {
-					await sql(
-						h.store,
-						'INSERT INTO list_accounts (list_id, account_id) VALUES (?1, ?2), (?1, ?3)',
-						list,
-						author.id,
-						other.id
-					)
+			const listIds = kind.lists === true ? await lists(h, ids, []) : ids.map(() => '')
+			if (kind.lists === true) {
+				for (const [i, list] of listIds.entries()) {
+					if (who[i]) {
+						await sql(
+							h.store,
+							'INSERT INTO list_accounts (list_id, account_id) VALUES (?1, ?2), (?1, ?3)',
+							list,
+							author.id,
+							other.id
+						)
+					}
 				}
 			}
-			// An edit's statuses, written before any socket opens (nothing is journaled for them).
+			// An edit's statuses, written before any socket opens (nothing is journaled for them): the author's one a case
+			// (edited again between turns), another's one a round.
 			const pool = { author: [] as string[], other: [] as string[] }
 			if (kind.event === 'status.update') {
-				for (let i = 0; i < 3 + ROUNDS; i++) {
+				for (let i = 0; i < CASES; i++) {
 					pool.author.push(await status(h, author.id, kind.status))
+				}
+				for (let i = 0; i < ROUNDS; i++) {
 					pool.other.push(await status(h, other.id, kind.status))
 				}
 			}
@@ -330,6 +339,7 @@ const KINDS: Kind[] = [
 		stream: (_, list) => `list ${list}`,
 		event: 'update',
 		status: {},
+		lists: true,
 	}),
 	// A local status with media goes on `public` and `public:local:media`, not on `public:remote`.
 	statusKind('update on public and public:local:media', {
@@ -358,19 +368,16 @@ const KINDS: Kind[] = [
 			const who = roles(TURN_BUDGET.presentations + 1)
 			const ids = await accounts(h, who.length, '5')
 			const receiving = ids.filter((_, i) => who[i])
-			// The statuses the mentions are of, written before any socket opens.
+			// The statuses the mentions are of, written before any socket opens: the author's one a case and one a round,
+			// another's one a round.
 			const pool = { author: [] as string[], other: [] as string[] }
-			for (let i = 0; i < 3 + ROUNDS; i++) {
+			for (let i = 0; i < CASES + ROUNDS; i++) {
 				pool.author.push(await status(h, author.id))
+			}
+			for (let i = 0; i < ROUNDS; i++) {
 				pool.other.push(await status(h, other.id))
 			}
-			const receivers: Inbox[] = []
-			const others: Inbox[] = []
-			for (const [i, id] of ids.entries()) {
-				const inbox = await socket(h, id, [{ stream: 'user' }, { stream: 'user:notification' }])
-				;(who[i] ? receivers : others).push(inbox)
-			}
-			await opened(h, [...receivers, ...others])
+			const { receivers, others } = await notificationListeners(h, ids, who)
 			const mention = async (from: string, statusId: string): Promise<Expected> => {
 				const rows = await sql<{ id: number; account_id: string }>(
 					h.store,
@@ -406,13 +413,7 @@ const KINDS: Kind[] = [
 			const ids = await accounts(h, who.length, '5')
 			const receiving = ids.filter((_, i) => who[i])
 			const perAccount = Math.ceil(TURN_BUDGET.checks / receiving.length)
-			const receivers: Inbox[] = []
-			const others: Inbox[] = []
-			for (const [i, id] of ids.entries()) {
-				const inbox = await socket(h, id, [{ stream: 'user' }, { stream: 'user:notification' }])
-				;(who[i] ? receivers : others).push(inbox)
-			}
-			await opened(h, [...receivers, ...others])
+			const { receivers, others } = await notificationListeners(h, ids, who)
 			const both = ['user notifications_merged', 'user:notification notifications_merged']
 			// `count` transitions of each receiver (by index), journaled as notification-requests.ts does (streamMerged).
 			const transitions = async (counts: Map<number, number>): Promise<Expected> => {
@@ -529,7 +530,7 @@ const KINDS: Kind[] = [
 			// Written before any socket opens: a status boosted by every booster for each case, the author's statuses
 			// without boosts, and another's status boosted by every booster (one boost undone per round).
 			const boosted: { status: string; boosts: string[] }[] = []
-			for (let i = 0; i < 3; i++) {
+			for (let i = 0; i < CASES; i++) {
 				const id = await status(h, author.id)
 				const its: string[] = []
 				for (const booster of boosters) {
