@@ -436,7 +436,7 @@ describe('Mastodon 4.5.11 receiving our quote (a model of its handlers)', () => 
 		w.serveStamp(stamp, mine.uri)
 		expect(await w.postToA(w.bob, accept(w.bob, mine.uri, stamp))).toBe(202)
 		await w.deliver()
-		const toCarol = () => w.sent.filter((s) => s.inbox.startsWith(B)).map((s) => s.json)
+		const toCarol = () => w.sent.filter((s) => new URL(s.inbox).origin === B).map((s) => s.json)
 		expect(await mastodonHolds(toCarol(), mine.uri, fetchStamp)).toEqual({ state: 'accepted', approval: stamp })
 		expect(await w.postToA(w.bob, reject(w.bob, mine.uri))).toBe(202)
 		await w.deliver()
@@ -462,7 +462,7 @@ describe('Mastodon 4.5.11 receiving our quote (a model of its handlers)', () => 
 				return response.status === 200 ? ((await response.json()) as Record<string, unknown>) : null
 			}
 			const held = await mastodonHolds(
-				v.sent.filter((s) => s.inbox.startsWith(B)).map((s) => s.json),
+				v.sent.filter((s) => new URL(s.inbox).origin === B).map((s) => s.json),
 				theirs.uri,
 				fetchBad
 			)
