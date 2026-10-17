@@ -499,7 +499,6 @@ export type StatusReads = {
 	notificationWindow(db: Db, query: NotificationQuery, ...params: SqlStorageValue[]): { id: string }[]
 }
 
-// The parts of a read of the viewer's notifications (StatusReads.notifications).
 export type NotificationQuery = {
 	readonly where: string
 	readonly tail?: string
@@ -1354,11 +1353,10 @@ export type OutboundRecipients = {
 
 const RECIPIENT_COLUMNS = `a.id, ${uriHostSql('a.uri')} AS host`
 
-// The rows (id, host, inbox) of `query` that a target's provenance can use, at most 2 × (PROVENANCE_MAX + 1) per
-// inbox however many recipients share it: the first PROVENANCE_MAX + 1 by id, which tell whether there are more than
-// PROVENANCE_MAX, and the first recipient of each of the first PROVENANCE_MAX + 1 hosts, which tell whether there are
-// more hosts than that. The query is still read whole (as SELECT DISTINCT inbox read it), but what it returns, and
-// what staging keeps, is bounded per inbox.
+// The rows (id, host, inbox) of `query` a target's provenance can use, at most 2 × (PROVENANCE_MAX + 1) per inbox:
+// the first PROVENANCE_MAX + 1 by id and the first recipient of each of the first PROVENANCE_MAX + 1 hosts, which
+// tell whether there are more accounts or hosts than PROVENANCE_MAX. The query is read whole; only what it returns,
+// and what staging keeps, is bounded per inbox.
 function byInbox(query: string): string {
 	return `SELECT id, host, inbox FROM (
 		SELECT id, host, inbox, row_number() OVER (PARTITION BY inbox ORDER BY id) AS pn,

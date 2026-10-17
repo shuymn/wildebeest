@@ -6,17 +6,21 @@ import { MIGRATIONS } from '../../src/db/migrations'
 import { freshStore, testKernel } from '../helpers'
 
 // The migration cost benchmark (design: "Migrations", acceptance criterion): one migration file applied to a large,
-// representative Store, in the SQLite the Store runs on (workerd's local Durable Object runtime), timed. A file must
-// finish in at most MIGRATION_BUDGET_MS, a third of the 30 seconds a migration transaction may take, before its PR
-// merges; the time goes in the file's header comment and in the PR description. The owner's instance is not
-// representative and does not count. The budget was a sixth (5 s) until the store gained favourites and boosts: on it,
-// upgrading one file in isolation costs about 6 s before any of the file's own work (the kernel's bookmark,
-// transaction and schema verification, which an upgrade runs once after all pending files); 0042_report_action_fence,
-// which does little else, measured 5,981 and 5,893 ms there.
+// representative Store in workerd's local Durable Object SQLite, timed. A file must finish in at most
+// MIGRATION_BUDGET_MS, a third of the 30 seconds a migration transaction may take, before its PR merges; the time
+// goes in the file's header comment and in the PR description. The owner's instance is not representative. On this
+// store, upgrading one file in isolation costs about 6 s before the file's own work (the kernel's bookmark,
+// transaction and schema verification, which an upgrade runs once after all pending files): 0042_report_action_fence,
+// which does little else, measured 5,981 and 5,893 ms.
 //
 //   pnpm --filter kopje bench:migration                            the newest migration
 //   KOPJE_BENCH_MIGRATION=0029_admin_reports pnpm --filter kopje bench:migration
 //   KOPJE_BENCH_SCALE=0.01 pnpm --filter kopje bench:migration     a quick check of the script itself (not a measure)
+//   KOPJE_BENCH_FROM=0040_report_notifications pnpm --filter kopje bench:migration
+//                                                                  a release: every file from 0040 to the newest (or
+//                                                                  to KOPJE_BENCH_MIGRATION) in one upgrade, within
+//                                                                  RELEASE_BUDGET_MS. Run it before tagging, from the
+//                                                                  first file the previous release did not carry.
 //
 // The Store is migrated up to the file before the one measured, then seeded with SQL of the current schema, in this
 // file's shape (scaled by KOPJE_BENCH_SCALE):
@@ -38,10 +42,14 @@ import { freshStore, testKernel } from '../helpers'
 // so the clock is read across an await on each side.
 
 export const MIGRATION_BUDGET_MS = 10_000
+// A release's pending files applied in one upgrade, as an instance applies them after a deploy: two thirds of the
+// 30 seconds, since the verification is paid once for the whole set.
+export const RELEASE_BUDGET_MS = 20_000
 
 declare module 'vitest' {
 	interface ProvidedContext {
 		benchMigration: string
+		benchFrom: string
 		benchScale: string
 	}
 }
@@ -62,8 +70,15 @@ const SHAPE = {
 it('applies the migration to the benchmark store within the budget', async () => {
 	const name = inject('benchMigration') || MIGRATIONS.at(-1)!.name
 	const scale = Number(inject('benchScale') || '1')
-	const at = MIGRATIONS.findIndex((migration) => migration.name === name)
-	expect(at, `no migration named ${name}`).toBeGreaterThan(0)
+	const last = MIGRATIONS.findIndex((migration) => migration.name === name)
+	expect(last, `no migration named ${name}`).toBeGreaterThan(0)
+	const from = inject('benchFrom') || name
+	// The first file measured: the Store is migrated to the one before it, then seeded.
+	const at = MIGRATIONS.findIndex((migration) => migration.name === from)
+	expect(at, `no migration named ${from}`).toBeGreaterThan(0)
+	expect(at, `${from} comes after ${name}`).toBeLessThanOrEqual(last)
+	const applied = MIGRATIONS.slice(at, last + 1).map((migration) => migration.name)
+	const budgetMs = applied.length === 1 ? MIGRATION_BUDGET_MS : RELEASE_BUDGET_MS
 	const accounts = Math.round(SHAPE.accounts * scale)
 	const statuses = Math.round(SHAPE.statuses * scale)
 	const notifications = Math.min(Math.round(SHAPE.notifications * scale), statuses)
@@ -251,18 +266,18 @@ it('applies the migration to the benchmark store within the budget', async () =>
 		}
 		expect(sql.exec('SELECT count(*) AS n FROM kopje_migrations').one().n).toBe(at)
 
-		// The file alone, through the kernel, as an upgrade applies it: the bookmark, the file's transaction and the
+		// The files, through the kernel, as an upgrade applies them: the bookmark, each file's transaction and the
 		// verification of the schema.
 		await scheduler.wait(1)
 		const started = Date.now()
-		const result = await testKernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()
+		const result = await testKernel(state, MIGRATIONS.slice(0, last + 1)).upgrade()
 		await scheduler.wait(1)
 		return { seeded, measured: { result, ms: Date.now() - started - 1 } }
 	})
 	expect(seeded).toMatchObject({ accounts, local: SHAPE.local, statuses, notifications, reports })
-	expect(measured.result).toMatchObject({ ok: true, applied: [name] })
-	console.log(JSON.stringify({ migration: name, scale, seeded, ms: measured.ms, budgetMs: MIGRATION_BUDGET_MS }))
+	expect(measured.result).toMatchObject({ ok: true, applied })
+	console.log(JSON.stringify({ migrations: applied, scale, seeded, ms: measured.ms, budgetMs }))
 	if (scale >= 1) {
-		expect(measured.ms).toBeLessThanOrEqual(MIGRATION_BUDGET_MS)
+		expect(measured.ms).toBeLessThanOrEqual(budgetMs)
 	}
 }, 3_600_000)

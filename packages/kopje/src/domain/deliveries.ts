@@ -50,9 +50,7 @@ import { hostDomain } from '../platform/domain-name'
 //     status; none is written once the status is gone or a retraction of it is pending (one still staging its
 //     targets reads them from the receipts, so they are written until it is staged).
 //   - Claims and completions return nextDueAt, the earliest time any work is due, so the Worker can ring for it.
-//   - Send-time check (VIS-30): each target carries the recipients behind it (Provenance), copied onto its row. The
-//     claim, and confirmDelivery right before the POST, drop a row that may no longer be sent (sendRefused); the body
-//     sent is the one confirmDelivery reads.
+//   - Send-time check (VIS-30): each target's Provenance is copied onto its row; sendRefused and confirmDelivery below.
 //   - Signer: an activity is signed by its lane's account, its author, except one recorded as signed by the instance
 //     actor (signedBy 'instance', DATA-7): a forwarded report's Flag (reports.ts), which Mastodon sends from
 //     Account.representative. Its lane is still the reporter's, which owns the intent and orders it with the reporter's
@@ -246,7 +244,6 @@ function addCapped(set: Set<string>, value: string): void {
 	}
 }
 
-// The provenance of a target that also serves `other`'s recipients.
 function mergedProvenance(target: Target, other: Target): Provenance {
 	const known = (t: Target) => t.accounts !== undefined || t.many === true
 	if (!known(target) || !known(other)) {
@@ -993,8 +990,7 @@ const REFUSED_SENDER = `EXISTS (SELECT 1 FROM local_accounts l
 			AND json_extract(o.body, '$.activity.object.suspended') IS 1
 			AND json_extract(o.body, '$.activity.object.id') = json_extract(o.body, '$.activity.actor')))`
 
-// A due row (`d`) with what the send-time check reads of its activity (`o`, LEFT JOINed: found is 0 when it is gone):
-// whether it retracts, whether its sender is refused (above), and who signs it.
+// A due row (`d`) with its activity (`o`, LEFT JOINed: found is 0 when it is gone) as the send-time check reads it.
 type DueRow = LaneRow & {
 	addressee: string | null
 	recipient_accounts: string | null
@@ -1047,7 +1043,6 @@ function sendRefused(db: Db, row: DueRow): boolean {
 	return domains.length > 0 && domains.every((domain) => hostRefused(db, domain))
 }
 
-// Deletes a settled row (delivered, or one that may not be sent), and lets its lane go on.
 function dropRow(db: Db, row: LaneRow, now: number): void {
 	db.run('DELETE FROM deliveries WHERE id = CAST(? AS INTEGER)', row.id)
 	promoteLane(db, row.account_id, row.lane, now)
@@ -1122,7 +1117,6 @@ export const claimDeliveries = writeOperation<{ now: number; leaseToken: string;
 )
 
 export type Confirmation =
-	// Send this body now.
 	| { status: 'send'; body: string }
 	// The send-time check refused the row: it is deleted and its lane promoted.
 	| { status: 'dropped'; nextDueAt: number | null }

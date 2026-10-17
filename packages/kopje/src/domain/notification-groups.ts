@@ -554,7 +554,6 @@ export const unreadCount = userReadOperation<UnreadCountInput, { count: number }
 	if (input.limit === 0) {
 		return { count: 0 }
 	}
-	// In chunks of `limit` and then twice as large as the last, as walkGroups reads, until `limit` are shown.
 	let shown = 0
 	let read = 0
 	let min = notificationsMarker(db, viewer.accountId)
