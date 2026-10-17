@@ -629,13 +629,37 @@ describe('an ordinary status keeps its mentions and hashtags (RES-2)', () => {
 		expect(shown.mentions.map((m) => m.id)).toEqual([bob])
 	})
 
-	it('stores no hashtag past its bound, so a post with one shows every other', async () => {
+	it('records a local hashtag past its bound, and leaves it out of the 70 presented when it sorts first', async () => {
 		const h = await community(['alice'])
+		const long = 'a'.repeat(MAX_TAG_LENGTH + 1)
 		const cjk = Array.from({ length: MAX_PRESENTED_TAGS }, (_, i) => `#${String.fromCodePoint(0x4e00 + i)}`)
-		const posted = await post(h, h.users.alice, { status: `#${'a'.repeat(MAX_TAG_LENGTH + 1)} ${cjk.join(' ')}` })
-		expect(posted.tags.map((tag) => `#${tag.name}`).toSorted()).toEqual(cjk.toSorted())
-		expect(posted.content).toContain(`#<span>${'a'.repeat(MAX_TAG_LENGTH + 1)}</span>`)
-		expect(await sql(h.store, 'SELECT name FROM status_tags WHERE length(name) > ?', MAX_TAG_LENGTH)).toEqual([])
+		const posted = await post(h, h.users.alice, { status: `#${long} ${cjk.join(' ')}` })
+		// Stored and associated, as Mastodon records it.
+		expect(
+			await sql(h.store, 'SELECT name FROM status_tags WHERE status_id = ? AND name = ?', posted.id, long)
+		).toEqual([{ name: long }])
+		// It sorts before the others, takes one of the MAX_PRESENTED_TAGS rows read, and is left out: 69 are presented.
+		expect(posted.tags.map((tag) => `#${tag.name}`).toSorted()).toEqual(cjk.toSorted().slice(0, MAX_PRESENTED_TAGS - 1))
+	})
+
+	it("keeps a local post with a hashtag past its bound on that hashtag's timeline, after an edit too", async () => {
+		const h = await community(['alice'])
+		const long = 'a'.repeat(MAX_TAG_LENGTH + 1)
+		const posted = await post(h, h.users.alice, { status: `hello #${long}` })
+		const timeline = async () => {
+			const response = await h.request(`/api/v1/timelines/tag/${long}`, {
+				headers: { authorization: `Bearer ${h.users.alice.token}` },
+			})
+			return ((await response.json()) as { id: string }[]).map((status) => status.id)
+		}
+		expect(await timeline()).toEqual([posted.id])
+		const edited = await h.request(`/api/v1/statuses/${posted.id}`, {
+			method: 'PUT',
+			headers: { authorization: `Bearer ${h.users.alice.token}`, 'content-type': 'application/json' },
+			body: JSON.stringify({ status: `edited #${long}` }),
+		})
+		expect(edited.status).toBe(200)
+		expect(await timeline()).toEqual([posted.id])
 	})
 })
 

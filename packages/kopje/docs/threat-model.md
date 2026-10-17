@@ -1359,12 +1359,13 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `/@acct` page, and to '' when none fits), a media URL within 2,048. Each per-status cap reads at most its own number
   of rows, each status once, through an index that holds only the rows it shows: media_attachments_status (shown
   attachments), status_mentions_shown (mentions that are not silent, migration `0047_status_mentions_shown`) and
-  status_tags; no status, local or remote, stores a hashtag name over 256 code units or 1 KiB (Mastodon 4.5 sets no
-  length; a longer hashtag of a local post stays a link in its content), so only a converted status holding one among
-  its first names read shows fewer (`test/status-bounds.test.ts`, "each per-status cap reads a bounded number of rows",
-  "an ordinary status keeps its mentions and hashtags"). A remote username is Mastodon's remote format (ASCII), so its
-  JSON is its length; a stored one holding any other character or a NUL (only a row converted before the cutover refused
-  such usernames) is cut at 42 code points, which escape to at most 255 bytes. Identities are bounded by
+  status_tags. A hashtag name over 256 code units or 1 KiB among a status's first names read is left out rather than
+  replaced by a later one, so such a status shows one fewer: a remote status stores none, and a local post records one
+  as Mastodon does (Mastodon 4.5 sets no length), which costs it a presented hashtag only when it sorts before more than
+  70 others, a corner case within 500 characters (`test/status-bounds.test.ts`, "each per-status cap reads a bounded
+  number of rows", "an ordinary status keeps its mentions and hashtags"). A remote username is Mastodon's remote format
+  (ASCII), so its JSON is its length; a stored one holding any other character or a NUL (only a row converted before the
+  cutover refused such usernames) is cut at 42 code points, which escape to at most 255 bytes. Identities are bounded by
   `src/platform/identity-bounds.ts`, which ingestion, the cutover's conversion and its verification share: an actor id
   whose serialized URL or stored spelling is over 2,048 bytes, or a status uri over 4,096, is refused, never cut, and
   reads as '' where a converted row holds one. `test-node/bounded-columns.test.ts` reads every SQL string in

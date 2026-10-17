@@ -287,9 +287,10 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 	// At most MAX_STATUS_MEDIA attachments, MAX_STATUS_MENTION_ROWS mentions and MAX_PRESENTED_TAGS hashtags of each
 	// status (each status once), cut in SQL: a converted row may hold more. Each cap reads at most that many rows of
 	// the status through an index that holds only the rows it shows: media_attachments_status (shown attachments by
-	// position), status_mentions_shown (mentions that are not silent, migration 0047) and status_tags (names). No
-	// local or remote status stores a hashtag name past its bound (isStoredTagName); a converted one that holds such a
-	// name among its first ones read shows fewer, as the name is left out rather than replaced by a later one.
+	// position), status_mentions_shown (mentions that are not silent, migration 0047) and status_tags (names). A
+	// hashtag name past its bound (tagNameSql) among the first ones read is left out rather than replaced by a later
+	// one, so a status holding one shows one fewer: a remote status stores none, and a local one (a name over 256 code
+	// units, which Mastodon also records) only when it sorts before more than MAX_PRESENTED_TAGS others.
 	const statusIds = 'SELECT DISTINCT value FROM json_each(?1)'
 	const media = groupBy(
 		db.all<MediaRow & { status_id: string }>(

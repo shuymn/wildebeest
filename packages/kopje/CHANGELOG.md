@@ -60,9 +60,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - A status presents at most 70 hashtags, the first by name; its content still links every one, and up to 100 are
   still stored. A conversation presents at most 12 participants, the first in stored order. Mastodon presents all of
   them. A status stored with more mentions or hashtags than it presents, or with hidden attachments, costs no more to
-  read than one at those counts.
-- A hashtag longer than 256 characters (or 1 KiB) in a local post is no longer recorded as one of the post's hashtags;
-  it stays a link in the post's text, as a remote one already did. Mastodon sets no length.
+  read than one at those counts. A hashtag longer than 256 characters is still recorded, but is not presented, and a
+  post whose such hashtag sorts before more than 70 others presents one fewer.
 - Every URL an account or attachment presents is within 2,048 characters, derived or stored: an account's profile URL
   falls back from its stored URL to one derived from its actor id or from this instance, and is empty when none fits.
 - A remote account's username is held to Mastodon's remote format, as before; one stored otherwise (converted at an
