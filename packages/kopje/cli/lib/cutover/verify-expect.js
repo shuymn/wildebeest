@@ -1,8 +1,9 @@
 // The expected side of the conversion check, computed from the legacy data alone. It shares nothing with convert.js:
 // it reads legacy columns and JSON directly, takes every audience from the addressing as exported (captured before any
 // bridge migration ran), and writes each record in the comparison form of verify-actual.js, keyed by AP URIs (never by
-// the ids the converter assigns). The only shared code is Kopje's own HTML sanitizer, a runtime transformation the
-// Store applies to every stored HTML value (HTML-1); test-node/cutover-sanitize.test.ts pins its output by hand.
+// the ids the converter assigns). The only shared code is the Worker's own runtime (kopje-runtime.js): its HTML
+// sanitizers and text bounds, which the Store applies to every stored value (HTML-1, RES-2), and its identity checks;
+// test-node/cutover-sanitize.test.ts pins the sanitizer's output by hand.
 //
 // Records are kept as exact values, not digests, so a change of the same length is still a difference. They hold data
 // and are never printed: reports carry counts and digests only.

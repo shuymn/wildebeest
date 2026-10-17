@@ -3,8 +3,8 @@ import { REMOTE_BIO_BYTES } from '../security/html'
 
 // RES-2: the bounds of the profile columns a remote server controls, as ACCOUNT_COLUMNS (accounts.ts) and every other
 // read that presents them take them. Each bounded column is read through its helper here (test-node/
-// bounded-columns.test.ts). It imports only the leaf security/html.ts, so modules that build SQL at load
-// (status-presenter.ts) can use it whatever the import order.
+// bounded-columns.test.ts). It imports only leaves (platform/identity-bounds.ts, security/html.ts), so modules that
+// build SQL at load (status-presenter.ts) can use it whatever the import order.
 
 // The display name, in code points as read (code units as stored, federation/remote-actor.ts).
 export const DISPLAY_NAME_LIMIT = 2048
