@@ -5,27 +5,24 @@ import { MAX_DESCRIPTION } from './media'
 import { PIN_LIMIT } from '../domain/activities'
 import type { InstanceInfo } from '../domain/instance'
 
-// /api/v1/instance and /api/v2/instance in their Mastodon 4.4 shapes. The payloads are frozen by a contract test.
+// /api/v1/instance and /api/v2/instance in their Mastodon 4.5 shapes. The payloads are frozen by a contract test.
 //
 // Clients choose APIs by these two numbers, so they are the highest at which every feature a client switches on is
 // one Kopje serves or one whose missing parts the client gets past:
-//   - api_versions.mastodon (v2 only, as in Mastodon) is 6, Mastodon 4.4's. What each step up to it signals, all
+//   - api_versions.mastodon (v2 only, as in Mastodon) is 7, Mastodon 4.5's. What each step up to it signals, all
 //     served: 2 grouped notifications (/api/v2/notifications); 3 attribution domains (update_credentials), and in the
 //     official Android app OAuth PKCE (S256); 4 delete_media and DELETE /api/v1/media/:id; 5 the blur filter action;
-//     6 featuring hashtags (POST /api/v1/tags/:id/feature). At 6 the official iOS app also shows a default quote
-//     policy in its privacy settings; Kopje stores source[quote_policy] as the default for new posts (R36), which
-//     other servers may quote when public or unlisted and that policy allows it (VIS-28).
-//   - 7 (Mastodon 4.5) is quote posts: clients would offer quoting in the composer and send quoted_status_id, which
-//     Kopje does not serve, so a quote would post as a plain status. Kopje stays below it until it can post quotes.
-//   - version is 4.4.0, the release of api_versions 6. Ice Cubes reads it and switches on at 4.3 grouped
+//     6 featuring hashtags (POST /api/v1/tags/:id/feature); 7 quote posts: quoted_status_id, quote_approval_policy,
+//     interaction_policy, the quotes list and revoke (R35, R36). At 7 Phanpy also hides the quote-inline fallback.
+//   - version is 4.5.0, the release of api_versions 7. Ice Cubes reads it and switches on at 4.3 grouped
 //     notifications, the notification policy and the link timeline, all served; the official apps read only its major
 //     number; Phanpy reads it only when NodeInfo names the software "mastodon", and Kopje's says "kopje". Kopje had no
 //     build suffix and adds none: NodeInfo names it, as it names Pleroma, Akkoma and GoToSocial.
 // Streaming and translation are not chosen by either number: clients use configuration.urls.streaming and
 // configuration.translation.enabled (false).
 
-export const MASTODON_VERSION = '4.4.0'
-export const API_VERSIONS = { mastodon: 6 }
+export const MASTODON_VERSION = '4.5.0'
+export const API_VERSIONS = { mastodon: 7 }
 
 const SOURCE_URL = 'https://github.com/shuymn/wildebeest'
 
@@ -105,6 +102,12 @@ export const instanceV2: ApiHandler = async (c, deps) => {
 			accounts: { ...CONFIGURATION.accounts, max_pinned_statuses: PIN_LIMIT },
 			media_attachments: { ...CONFIGURATION.media_attachments, description_limit: MAX_DESCRIPTION },
 			translation: { enabled: false },
+			// Who may read the public, hashtag and link timelines: anyone, as Kopje serves them without a token.
+			timelines_access: {
+				live_feeds: { local: 'public', remote: 'public' },
+				hashtag_feeds: { local: 'public', remote: 'public' },
+				trending_link_feeds: { local: 'public', remote: 'public' },
+			},
 			limited_federation: false,
 		},
 		registrations: {

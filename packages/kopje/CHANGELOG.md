@@ -25,8 +25,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
     - `quote_approval.current_user` now tells each viewer whether they may quote the post: `denied` when the post
       could not be quoted by them (their blocks and the author's included), `automatic` for their own posts, and
       otherwise what the policy answers.
-    - Before Kopje declares API version 7, of the clients checked only Elk offers the quote button (it reads
-      `current_user`); Phanpy, Ice Cubes and the official apps still wait for version 7.
+    - Clients offer quoting: Elk (it reads `current_user`), and with API version 7 (below) Phanpy, Ice Cubes and the
+      official iOS and Android apps, which also show quote-policy controls and the quotes list.
     - Authors of quotes are notified when a post they quoted is edited (`quoted_update`), at most 100 per edit, newest
       quotes first.
     - Limits: Misskey ignores updates of posts, so a Misskey server keeps the first version of a quote it received
@@ -40,6 +40,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Changed
 
+- `/api/v1/instance` and `/api/v2/instance` declare Mastodon 4.5: `version` 4.5.0 and `api_versions.mastodon` 7, so
+  clients switch on quote posts. Phanpy then hides the `RE:` fallback line of quotes. `/api/v2/instance` gains
+  `configuration.timelines_access`, which says that anyone may read the public, hashtag and link timelines, as before.
 - An edited post now also reaches, as the new version followed by the edit, a server whose earlier delivery of the
   post was still in flight, so that server ends with the edited version even if that delivery fails.
 
