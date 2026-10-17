@@ -74,8 +74,10 @@ async function drain(store: StoreStub): Promise<[string, string][]> {
 		const claimed = await claim(store, leaseToken)
 		for (const delivery of claimed.deliveries) {
 			const confirmation = await store.confirmDelivery(BUILD, { id: delivery.id, leaseToken, now: NOW })
-			expect(confirmation.status).toBe('send')
-			sent.push([(JSON.parse(delivery.body) as { type: string }).type, delivery.inbox])
+			if (confirmation.status !== 'send') {
+				throw new Error(`delivery ${delivery.id} claimed, then ${confirmation.status} at confirmation`)
+			}
+			sent.push([(JSON.parse(confirmation.body) as { type: string }).type, delivery.inbox])
 			await store.completeDelivery(BUILD, {
 				id: delivery.id,
 				leaseToken,

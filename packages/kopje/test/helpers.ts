@@ -2,6 +2,7 @@ import { runInDurableObject } from 'cloudflare:test'
 import { env } from 'cloudflare:workers'
 
 import { MIGRATIONS } from '../src/db/migrations'
+import type { Claim, ClaimedDelivery } from '../src/domain/deliveries'
 import type { StoreStub } from '../src/platform/store-client'
 import { type KernelOptions, type Migration, StoreKernel } from '../src/platform/store-kernel'
 
@@ -53,4 +54,28 @@ export function tableNames(sql: SqlStorage): string[] {
 		.exec<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
 		.toArray()
 		.map((row) => row.name)
+}
+
+export type SentClaim = Omit<Claim, 'deliveries'> & { deliveries: (ClaimedDelivery & { body: string })[] }
+
+// A claim, with each claimed row's body as its confirmation reads it in the same lease, right after: what the Worker
+// sends (confirmDelivery). Every claimed row must still be sendable.
+export async function claimSent(
+	store: StoreStub,
+	input: { now: number; leaseToken: string; limit?: number }
+): Promise<SentClaim> {
+	const claim = await store.claimDeliveries(BUILD, input)
+	const deliveries: SentClaim['deliveries'] = []
+	for (const delivery of claim.deliveries) {
+		const confirmation = await store.confirmDelivery(BUILD, {
+			id: delivery.id,
+			leaseToken: input.leaseToken,
+			now: input.now,
+		})
+		if (confirmation.status !== 'send') {
+			throw new Error(`delivery ${delivery.id} claimed, then ${confirmation.status} at confirmation`)
+		}
+		deliveries.push({ ...delivery, body: confirmation.body })
+	}
+	return { ...claim, deliveries }
 }

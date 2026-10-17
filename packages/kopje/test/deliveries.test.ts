@@ -2,11 +2,10 @@ import { describe, expect, it } from 'vitest'
 
 import { bearer, json, sql } from './api-helpers'
 import { NOW } from './app-helpers'
-import { BUILD } from './helpers'
+import { BUILD, claimSent, type SentClaim } from './helpers'
 import { act, community, post, remoteAccount, remoteFollows, seedStatus } from './status-helpers'
 import { followAnswerActivity, followActivity, followUri, undoFollowActivity } from '../src/domain/activities'
 import {
-	type Claim,
 	type DeliveryOutcome,
 	GAVE_UP_RETENTION_MS,
 	LEASE_MS,
@@ -42,8 +41,8 @@ function rows(store: StoreStub): Promise<Row[]> {
 	)
 }
 
-function claim(store: StoreStub, now: number, leaseToken: string): Promise<Claim> {
-	return store.claimDeliveries(BUILD, { now, leaseToken })
+function claim(store: StoreStub, now: number, leaseToken: string): Promise<SentClaim> {
+	return claimSent(store, { now, leaseToken })
 }
 
 function complete(store: StoreStub, id: string, leaseToken: string, now: number, outcome: DeliveryOutcome) {

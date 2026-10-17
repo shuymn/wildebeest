@@ -5,11 +5,11 @@ import { describe, expect, it, vi } from 'vitest'
 import { bearer, json, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { LEGACY } from './federation-helpers'
-import { BUILD } from './helpers'
+import { BUILD, claimSent, type SentClaim } from './helpers'
 import { QueueSim } from './queue-sim'
 import { act, community, post, remoteAccount, remoteFollows, seedStatus } from './status-helpers'
 import * as deliveries from '../src/domain/deliveries'
-import type { Claim, DeliveryOutcome } from '../src/domain/deliveries'
+import type { DeliveryOutcome } from '../src/domain/deliveries'
 import { postActivity } from '../src/federation/delivery'
 import { type DeliveryDeps, deliveryRound } from '../src/jobs/deliver'
 import { handleQueue } from '../src/jobs/queue'
@@ -41,8 +41,8 @@ function rows(store: StoreStub): Promise<Row[]> {
 	)
 }
 
-function claim(store: StoreStub, now: number, leaseToken: string): Promise<Claim> {
-	return store.claimDeliveries(BUILD, { now, leaseToken })
+function claim(store: StoreStub, now: number, leaseToken: string): Promise<SentClaim> {
+	return claimSent(store, { now, leaseToken })
 }
 
 function complete(store: StoreStub, id: string, leaseToken: string, now: number, outcome: DeliveryOutcome) {

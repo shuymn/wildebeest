@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 import { type ApiHarness, bearer, json, login, sql } from './api-helpers'
 import { NOW } from './app-helpers'
-import { BUILD } from './helpers'
+import { BUILD, claimSent } from './helpers'
 import {
 	act,
 	community,
@@ -332,7 +332,7 @@ describe('blocked recipients (VIS-13, VIS-15)', () => {
 
 		// As in Mastodon, the boost is allowed; the author is left out of it.
 		expect((await act(h, alice, `/api/v1/statuses/${original}/reblog`)).status).toBe(200)
-		const claim = await h.store.claimDeliveries(BUILD, { now: NOW, leaseToken: 'lease' })
+		const claim = await claimSent(h.store, { now: NOW, leaseToken: 'lease' })
 		expect(claim.deliveries.map((d) => d.inbox)).toEqual(['https://other.example/inbox'])
 		const body = JSON.parse(claim.deliveries[0]!.body) as { id: string; type: string; cc: string[] }
 		expect(body.type).toBe('Announce')
