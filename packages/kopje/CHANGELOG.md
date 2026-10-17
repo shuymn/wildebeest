@@ -39,7 +39,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       severity;
     - `reject_media=true` answers 422 (Kopje keeps no copies of remote media to reject); `reject_reports` and
       `obfuscate` are stored but change nothing yet;
-    - a domain of more than 8 labels, and a comment longer than 1,000 characters, answer 422;
+    - a domain of more than 8 labels, and a comment longer than 1,000 characters, answer 422, as does, like on
+      Mastodon, a domain of 256 characters or more or with a label longer than 63;
     - while the background work of a block or unblock runs, the admin account lists `status=active` and
       `status=suspended` answer 503 with `Retry-After` ("moderation in progress, try again") instead of a page that
       could be wrong; searches by name or domain still answer;
@@ -50,13 +51,15 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   than silence: the number of accepted follows by local users of the domain's accounts (with `include_subdomains`, of
   its subdomains' too), and a per-day series between `start_at` and `end_at`. Other measure keys are left out of the
   answer, as Mastodon leaves out keys it does not know. With its default `max_followed_severity` (silence),
-  Fediblockhole lowers a block of a domain that local users follow to `silence`, which Kopje refuses (422;
-  Fediblockhole logs the error and goes on); a domain with only pending follow requests is blocked as asked.
-  Differences from Mastodon:
+  Fediblockhole lowers a block of a domain that local users follow to `silence`, which Kopje refuses with 422. For a
+  new block, Fediblockhole logs that error and goes on with the next one; for a block it raises (an update), it stops
+  the whole run with an error, leaving the rest of its list unpushed. A domain with only pending follow requests is
+  blocked as asked. Differences from Mastodon:
     - a follow is counted in the series on the day it was requested, not accepted;
-    - the series spans at most 366 days, and the count walks at most 20,000 follows by local users in all; beyond
-      either, the answer is 422, never a partial count. An instance whose users follow more than 20,000 accounts in
-      all cannot use the measure, and Fediblockhole then stops that block with an error.
+    - the series has at most 366 points, a request names at most 16 measure keys, and the count walks at most 20,000
+      follows by local users in all; beyond any of these, the answer is 422, never a partial count. An instance whose
+      users follow more than 20,000 accounts in all cannot use the measure, and Fediblockhole then stops its whole run
+      with an error at the first block stricter than silence.
 
 ### Changed
 
