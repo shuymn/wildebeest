@@ -217,6 +217,19 @@ function mastodonReceiver(current: string, activities: Record<string, unknown>[]
 	return receiver
 }
 
+// What a Mastodon server that already holds status `uri` (fetched, V1) holds after `activities`: a Create of a status it
+// has changes nothing (Create#create_status finds it), an Update replaces its content.
+function holdsAfter(activities: Record<string, unknown>[], uri: string): string {
+	let content = 'V1'
+	for (const activity of activities) {
+		const object = activity.object as { id?: string; content?: string }
+		if (activity.type === 'Update' && object.id === uri) {
+			content = String(object.content)
+		}
+	}
+	return content
+}
+
 describe('QuoteRequest for a local status (QuoteRequest#perform)', () => {
 	it('accepts by the policy: a fresh authorization, the silent mention, the Accept, the notification', async () => {
 		const { t, bob, mine } = await world()
@@ -363,6 +376,59 @@ describe('the silent mention of acceptance', () => {
 		])
 		const home = (await t.api<{ id: string }[]>('/api/v1/timelines/home')).body
 		expect(home.map((s) => s.id)).toContain(quoting)
+	})
+})
+
+describe('review regressions (r2)', () => {
+	it('reaches a booster’s server with an edit as an Update: it fetched the status to boost it', async () => {
+		const { t, bob, mine } = await world()
+		const boost = {
+			'@context': AS,
+			id: `${bob.uri}/statuses/${nextId()}/activity`,
+			type: 'Announce',
+			actor: bob.uri,
+			published: '2026-10-11T13:00:00Z',
+			to: [`${AS}#Public`],
+			cc: [ALICE_URI],
+			object: mine.uri,
+		}
+		expect(await t.post(bob, boost)).toBe(202)
+		await deliver(t)
+		const edited = await t.request(`/api/v1/statuses/${mine.id}`, {
+			method: 'PUT',
+			headers: { authorization: `Bearer ${t.tokens.alice}`, 'content-type': 'application/json' },
+			body: JSON.stringify({ status: 'boosted, edited' }),
+		})
+		expect(edited.status).toBe(200)
+		expect(holdsAfter(await sentTo(t, MASTODON), mine.uri)).toBe('<p>boosted, edited</p>')
+	})
+
+	it('shows the quoting status of a grouped quote notification, in the page and the group', async () => {
+		const { t, bob, mine } = await world()
+		const { note } = await accepted(t, bob, mine.uri)
+		const quoting = await statusId(t, note.id)
+		const page = (
+			await t.api<{ notification_groups: { group_key: string; type: string; status_id?: string }[] }>(
+				'/api/v2/notifications'
+			)
+		).body
+		const group = page.notification_groups.find((g) => g.type === 'quote')
+		expect(group?.status_id).toBe(quoting)
+		const detail = (
+			await t.api<{ notification_groups: { status_id?: string }[] }>(
+				`/api/v2/notifications/${encodeURIComponent(group!.group_key)}`
+			)
+		).body
+		expect(detail.notification_groups[0]?.status_id).toBe(quoting)
+	})
+
+	it('fetches the instrument as the quoted author, so a Note served to them alone is answered', async () => {
+		const { t, bob, mine } = await world()
+		const note = quoteNote(t, bob, mine.uri, { to: [ALICE_URI], cc: [] })
+		t.web.signedOnly.set(note.id, `${ALICE_URI}#main-key`)
+		expect(await t.post(bob, quoteRequest(bob, mine.uri, note.id))).toBe(202)
+		expect(await quoteOf(t, note.id)).toMatchObject({ state: 'accepted' })
+		expect(t.web.signers[t.web.fetched.lastIndexOf(note.id)]).toBe(`${ALICE_URI}#main-key`)
 	})
 })
 
@@ -558,9 +624,8 @@ describe('concurrency (design, Concurrency (PR 2): the test table)', () => {
 		expect(edited.status).toBe(200)
 		const reached = async (type: string) =>
 			(await deliveries(t)).filter((d) => d.type === type && d.object_uri === mine.uri).map((d) => d.inbox)
-		// bob has no receipt of the status, so the edit reaches him as a Create of its current version.
-		expect(await reached('Create')).toEqual([`${bob.uri}/inbox`])
-		await deliver(t)
+		// bob's server fetched the status to quote it (no receipt), and ends with the edited version.
+		expect(holdsAfter(await sentTo(t, MASTODON), mine.uri)).toBe('<p>quote me, edited</p>')
 		const deleted = await t.request(`/api/v1/statuses/${mine.id}`, {
 			method: 'DELETE',
 			headers: { authorization: `Bearer ${t.tokens.alice}` },

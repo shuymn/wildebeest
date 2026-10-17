@@ -1,4 +1,4 @@
-import { availableLocalSql, isActorObject, outboundKind, recipientsFor } from './audience'
+import { availableLocalSql, fetchedBy, isActorObject, outboundKind, recipientsFor } from './audience'
 import { readOperation, writeOperation } from './operation'
 import type { Db } from '../db/sql'
 
@@ -611,7 +611,10 @@ function insertIntent(
 }
 
 // The servers (lane origins) that have the object, or will before anything later in their lane: a receipt at any of
-// their inboxes, or a leased Create or Update of it (which may have been POSTed already). A server is the unit, as one
+// their inboxes, a leased Create or Update of it (which may have been POSTed already), or a remote account there that
+// boosted it or holds an accepted quote of it, either of which fetched it (audience.ts fetchedBy). A Create to a server
+// that holds the status changes nothing there (Mastodon's Create#create_status keeps an existing status), so an edit
+// reaches such a server as an Update. A server is the unit, as one
 // that holds the object from its shared inbox applies an Update sent to a personal inbox, but ignores a Create.
 function serversWithObject(db: Db, signerId: string, object: string): Set<string> {
 	const receipts = db.all<{ inbox_url: string }>(
@@ -626,7 +629,11 @@ function serversWithObject(db: Db, signerId: string, object: string): Set<string
 		signerId,
 		object
 	)
-	return new Set([...receipts.map((r) => laneOf(r.inbox_url)), ...leased.map((r) => r.lane)])
+	return new Set([
+		...receipts.map((r) => laneOf(r.inbox_url)),
+		...leased.map((r) => r.lane),
+		...fetchedBy(db, signerId, object).flatMap((inbox) => (isDeliverableInbox(inbox) ? [laneOf(inbox)] : [])),
+	])
 }
 
 // Drops the Creates and Updates of an object still waiting for these servers (queued, pending, given up, or not

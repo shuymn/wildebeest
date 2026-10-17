@@ -915,9 +915,11 @@ export type QuoteRequestInput = {
 }
 
 export type QuoteRequestOutcome =
-	{ kind: 'need'; uri: string } | { kind: 'ignored'; reason: string } | { kind: 'answered'; reason: string }
+	// as: the username of the quoted author, whose key signs the instrument's fetch (Mastodon fetches it on_behalf_of
+	// them), so a Note addressed to them alone is served.
+	{ kind: 'need'; uri: string; as: string } | { kind: 'ignored'; reason: string } | { kind: 'answered'; reason: string }
 
-type QuotedTarget = { id: string; uri: string; account_id: string; author_uri: string }
+type QuotedTarget = { id: string; uri: string; account_id: string; author_uri: string; username: string }
 
 // Mastodon's ActivityPub::Activity::QuoteRequest for a local status, answered entirely in this one transaction (the
 // inbox's final Store round; design, Concurrency: Defaults 1). The only fetch, the instrument, happens between rounds,
@@ -944,7 +946,7 @@ export function answerQuoteRequest(
 		return { kind: 'ignored', reason: 'duplicate' }
 	}
 	const quoted = db.first<QuotedTarget>(
-		`SELECT t.id, t.uri, t.account_id, a.uri AS author_uri
+		`SELECT t.id, t.uri, t.account_id, a.uri AS author_uri, a.username
 		FROM statuses t JOIN accounts a ON a.id = t.account_id JOIN local_accounts l ON l.account_id = a.id
 		WHERE t.uri = ? AND t.reblog_of_id IS NULL AND t.visibility IN ${DISTRIBUTABLE_SQL} AND ${availableLocalSql('l')}`,
 		request.object
@@ -988,7 +990,7 @@ export function answerQuoteRequest(
 				? embedded
 				: ctx.prefetched
 		if (document === undefined) {
-			return { kind: 'need', uri: request.instrument }
+			return { kind: 'need', uri: request.instrument, as: quoted.username }
 		}
 		if (document === null) {
 			return { kind: 'ignored', reason: 'unfetchable' }
