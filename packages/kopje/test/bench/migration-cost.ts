@@ -10,8 +10,9 @@ import { freshStore, testKernel } from '../helpers'
 // finish in at most MIGRATION_BUDGET_MS, a third of the 30 seconds a migration transaction may take, before its PR
 // merges; the time goes in the file's header comment and in the PR description. The owner's instance is not
 // representative and does not count. The budget was a sixth (5 s) until the store gained favourites and boosts: on it,
-// every file pays about 6 s of per-file work (the kernel's bookmark, transaction and schema verification) before any
-// of its own; 0042_report_action_fence, which does little else, measured 5,981 and 5,893 ms there.
+// upgrading one file in isolation costs about 6 s before any of the file's own work (the kernel's bookmark,
+// transaction and schema verification, which an upgrade runs once after all pending files); 0042_report_action_fence,
+// which does little else, measured 5,981 and 5,893 ms there.
 //
 //   pnpm --filter kopje bench:migration                            the newest migration
 //   KOPJE_BENCH_MIGRATION=0029_admin_reports pnpm --filter kopje bench:migration
