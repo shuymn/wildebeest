@@ -25,9 +25,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 ### Fixed
 
 - A page of remote accounts no longer risks the isolate's 128 MB memory limit when their actor documents carry huge
-  profile-field lists: each account now reads at most the 16 fields it shows, cut to their shown length and to 32 KiB
-  in all, whatever the stored document's size. A remote profile whose fields pass 32 KiB shows only its leading
-  fields; others are unchanged. Existing accounts are covered without a migration.
+  profile-field lists. Each account now reads at most 16 fields, cut to their shown length and to 32 KiB of JSON, and
+  shows only the leading fields whose sanitized names and values fit 32 KiB once serialized, dropping the rest whole.
+  The largest answer, a list's 1,000 members with `limit=0`, thus carries at most 32 MiB of profile fields. Profiles
+  within these bounds show the same fields as before; existing accounts are covered without a migration.
 
 ### Instance changes
 
