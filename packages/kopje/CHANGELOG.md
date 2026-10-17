@@ -10,21 +10,19 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Added
 
-- Kopje users can quote posts, as on Mastodon 4.5. `POST /api/v1/statuses` (and a scheduled post, in its `params`)
-  takes `quoted_status_id`: a public or unlisted post whose quote policy allows the poster, or the poster's own post
-  that is not direct. Anything else, the poster's or the author's blocks included, is answered 404 with Mastodon's
-  error (`The post you are trying to quote does not appear to exist.`), before any 422 of the post, as Mastodon; a
-  scheduled quote is checked again when it is published, and dropped if it no longer passes. A quote of a
-  followers-only post of one's own is followers-only; a direct quote of someone else's post must mention its author
-  (422 otherwise); the text may be empty.
+- Kopje users can quote posts as on Mastodon 4.5. `POST /api/v1/statuses` accepts `quoted_status_id` (also in scheduled
+  posts' `params`): a public or unlisted post whose policy permits it, or the poster's own post unless direct. Other
+  targets, including blocks by either party, return 404 (`The post you are trying to quote does not appear to exist.`)
+  before any 422, as Mastodon does. Scheduled quotes are rechecked at publication and dropped if refused. Quoting
+  one's own followers-only post makes the quote followers-only; a direct quote of another author's post must mention
+  them (422 otherwise). Quote text may be empty.
     - A quote of a Kopje post is accepted at once, and its author is notified (`quote`). A quote of a remote post is
       `pending` until its author's server approves it, then `accepted`; a refusal makes it `rejected`, and a later
       withdrawal `revoked`. The quoted author always sees the quote.
     - The post's text starts with an `RE:` link to the quoted post (class `quote-inline`), unless the text already
       links it, so clients and servers without quote support show the link.
-    - `quote_approval.current_user` now tells each viewer whether they may quote the post: `denied` when the post
-      could not be quoted by them (their blocks and the author's included), `automatic` for their own posts, and
-      otherwise what the policy answers.
+    - `quote_approval.current_user` reports `denied` when the viewer cannot quote (including blocks in either
+      direction), `automatic` for their own posts, and otherwise the policy's answer.
     - Clients offer quoting: Elk (it reads `current_user`), and with API version 7 (below) Phanpy, Ice Cubes and the
       official iOS and Android apps, which also show quote-policy controls and the quotes list.
     - Authors of quotes are notified when a post they quoted is edited (`quoted_update`), at most 100 per edit, newest
@@ -43,17 +41,16 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - `/api/v1/instance` and `/api/v2/instance` declare Mastodon 4.5: `version` 4.5.0 and `api_versions.mastodon` 7, so
   clients switch on quote posts. Phanpy then hides the `RE:` fallback line of quotes. `/api/v2/instance` gains
   `configuration.timelines_access`, which says that anyone may read the public, hashtag and link timelines, as before.
-- An edited post now also reaches, as the new version followed by the edit, a server whose earlier delivery of the
-  post was still in flight, so that server ends with the edited version even if that delivery fails.
+- If a post's earlier delivery to a server is still in flight, an edit sends that server the new version followed by
+  the edit, so it ends with the edited version even if the earlier delivery fails.
 
 ### Instance changes
 
 - Store schema: adds one migration, applied on the first request after the deploy; a rollback to an earlier version
   needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
-    - `0039_quotes_local`: marks which quotes Kopje users wrote, with two indexes over them. It reads each stored quote
-      once and no other table: on a benchmark store of 1,000,000 accounts, 3,000,000 follows, 2,000,000 statuses and
-      200,000 quotes its upgrade took 2.6 seconds (2.6 and 4.1 in two more runs) in workerd's local Durable Object
-      SQLite.
+    - `0039_quotes_local`: marks which quotes Kopje users wrote. It reads each stored quote once and no other table:
+      on a benchmark store of 1,000,000 accounts, 3,000,000 follows, 2,000,000 statuses and 200,000 quotes its upgrade
+      took 2.6 seconds (2.6 and 4.1 in two more runs) in workerd's local Durable Object SQLite.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.12] - 2026-10-17
