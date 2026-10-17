@@ -155,8 +155,8 @@ export const MAX_REMOTE_FIELDS = 16
 const FIELD_NAME_LIMIT = 255
 const FIELD_VALUE_RAW_LIMIT = 4096
 // The most UTF-8 bytes of field JSON one account carries: read from SQLite (REMOTE_ATTACHMENT_SQL) and, again, shown
-// (remoteFields). The largest read, a list's members with limit=0 (MAX_LIST_MEMBERS_ANSWERED, 1,000 accounts), thus
-// reads at most 32 MiB of fields and returns at most 32 MiB of field names and values.
+// (remoteFields). An answer of N presented accounts thus carries at most N × 32 KiB of fields: a list's members with
+// limit=0 (MAX_LIST_MEMBERS_ANSWERED, 1,000) 32 MiB, familiar followers (20 targets × 80) 50 MiB.
 export const REMOTE_FIELDS_BYTES = 32 * 1024
 
 // SQLite's substr and length stop at an embedded NUL, so a string is cut only when its UTF-8 bytes pass the limit

@@ -1260,8 +1260,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   of each presented account: a remote account's row carries at most 16 fields, each name and value cut, 32 KiB of
   JSON in all, chosen in SQL from the stored actor document; the presenter then shows only the leading fields whose
   sanitized names and values fit 32 KiB once serialized as JSON, dropping the rest whole. So one account answers at
-  most 32 KiB of fields whatever its document, and the largest answer, a list's 1,000 members with `limit=0`, at
-  most 32 MiB (`REMOTE_ATTACHMENT_SQL` and `remoteFields` in `src/domain/accounts.ts`;
+  most 32 KiB of fields whatever its document, and an answer of N presented accounts at most N × 32 KiB (a list's
+  1,000 members with `limit=0`: 32 MiB; familiar followers, up to 1,600 presentations: 50 MiB). Bios are not yet
+  bounded per answer (`REMOTE_ATTACHMENT_SQL` and `remoteFields` in `src/domain/accounts.ts`;
   `test/remote-fields-bound.test.ts`).
 - **RES-4: stored derived data is bounded.** Snapshots, the KV cache, the spool and deliveries each have a size cap, a
   count cap or an expiry with a sweeper. _Implemented on branch `kopje/inbound-statuses`_ for remote statuses: one
