@@ -1293,8 +1293,8 @@ function spend(db: Db, budget: Budget, sql: string, ...params: SqlStorageValue[]
 	return left === 0 ? 0 : db.run(sql, ...params, left)
 }
 
-// The first ?2 reports of the account ?1 in the order reports_target_state holds them (resolution state, then id), so the
-// window is one bounded range of the index (purgeRelationships).
+// The first ?2 reports of the account ?1 in the order reports_target_state holds them (resolution state, then id), so
+// the window is one bounded range of the index (purgeRelationships).
 const REPORT_WINDOW = `SELECT id FROM reports INDEXED BY reports_target_state WHERE target_account_id = ?1
 	ORDER BY (action_taken_at IS NULL), id LIMIT ?2`
 

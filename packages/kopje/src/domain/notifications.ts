@@ -404,7 +404,8 @@ export function mentionedStatus(db: Db, viewer: UserContext, statusId: string) {
 				AND n.type = 'mention' AND n.status_id = ?2`,
 			columns: { id: 'n.id' },
 			includeFiltered: false,
-			admin: adminAccountIdOnce(db),
+			// Only a mention is read, which the admin arm of R15 does not touch.
+			admin: null,
 		},
 		viewer.accountId,
 		statusId,

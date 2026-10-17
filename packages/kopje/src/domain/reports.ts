@@ -178,8 +178,9 @@ export const createReport = userWriteOperation<ReportInput, ReportResult>((db, i
 })
 
 // ReportService#notify_staff! (report_service.rb:44-51) for a report just written, in its transaction: the OAuth admin
-// (R37) is notified (admin.report) unless another report of the same account is unresolved (Report#unresolved_siblings?,
-// app/models/report.rb:128-130), so only the first unresolved report of an account notifies. One seek in
+// (R37) is notified (admin.report) unless another report of the same account is unresolved
+// (Report#unresolved_siblings?, app/models/report.rb:128-130), so only the first unresolved report of an account
+// notifies. One seek in
 // reports_target_state finds a sibling, however many reports the account has. Mastodon notifies every user who can
 // manage reports; Kopje's one is the OAuth admin, none when there is none. The rule then refuses the admin's own report
 // (NotifyService's from_self?), a reporter the admin blocks, mutes with notifications or domain-blocks, and an
