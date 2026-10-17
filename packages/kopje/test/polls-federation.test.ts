@@ -18,7 +18,7 @@ import {
 	update,
 } from './inbox-status-helpers'
 import { block, domainBlock, outbound } from './status-helpers'
-import type { Poll } from '../src/domain/polls'
+import { MAX_REMOTE_OPTIONS, type Poll } from '../src/domain/polls'
 import { endPolls } from '../src/jobs/scheduled'
 
 // Polls over ActivityPub (domain/polls.ts, remote-statuses.ts, activities.ts), as Mastodon 4.5 federates them: a
@@ -199,6 +199,58 @@ describe('a remote Question', () => {
 		expect(await stored()).toEqual([
 			{ tallies: '[6,5]', votes_count: 11, voters_count: 11, expires_at: '2026-10-12T03:00:00.000Z' },
 		])
+	})
+
+	it('keeps the first 100 choices of a larger poll, taking count updates and edits of them, and votes in them', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		await followed(t, bob)
+		const choices = (names: (i: number) => string, counts: (i: number) => number) =>
+			Array.from({ length: MAX_REMOTE_OPTIONS + 1 }, (_, i) => ({
+				type: 'Note',
+				name: names(i),
+				replies: { type: 'Collection', totalItems: counts(i) },
+			}))
+		const object = question(bob, {
+			oneOf: undefined,
+			anyOf: choices(
+				(i) => `c${i}`,
+				() => 1
+			),
+		})
+		const id = await remotePoll(t, bob, object)
+		const stored = async () =>
+			(await sql<{ options: string; tallies: string }>(t.store, 'SELECT options, tallies FROM polls'))[0]!
+		expect(JSON.parse((await stored()).options) as string[]).toHaveLength(MAX_REMOTE_OPTIONS)
+		// A vote in the last choice kept is counted; the one past it does not exist.
+		const vote = (choice: number) =>
+			api(t, `/api/v1/polls/${id}/votes`, { method: 'POST', body: JSON.stringify({ choices: [String(choice)] }) })
+		expect((await vote(MAX_REMOTE_OPTIONS)).status).toBe(422)
+		expect((await vote(MAX_REMOTE_OPTIONS - 1)).status).toBe(200)
+		// New counts for the same choices (and the one past the bound) are an implicit update: the vote stays.
+		const counted = question(bob, {
+			id: object.id,
+			oneOf: undefined,
+			anyOf: choices(
+				(i) => `c${i}`,
+				(i) => i + 2
+			),
+		})
+		expect(await t.post(bob, implicitUpdate(bob, counted, 1))).toBe(202)
+		expect(JSON.parse((await stored()).tallies)).toEqual(Array.from({ length: MAX_REMOTE_OPTIONS }, (_, i) => i + 2))
+		expect((await api<Poll>(t, `/api/v1/polls/${id}`)).body).toMatchObject({ own_votes: [MAX_REMOTE_OPTIONS - 1] })
+		// A change of the last choice kept is an edit, which drops the votes cast.
+		const edited = question(bob, {
+			id: object.id,
+			oneOf: undefined,
+			anyOf: choices(
+				(i) => (i === MAX_REMOTE_OPTIONS - 1 ? 'changed' : `c${i}`),
+				() => 0
+			),
+		})
+		expect(await t.post(bob, update(bob, edited, '2026-10-11T12:30:00Z'))).toBe(202)
+		expect((JSON.parse((await stored()).options) as string[]).at(-1)).toBe('changed')
+		expect((await api<Poll>(t, `/api/v1/polls/${id}`)).body).toMatchObject({ voted: false, own_votes: [] })
 	})
 
 	it('keeps a long choice Mastodon allows whole, and refuses a vote in a choice it had to cut', async () => {
