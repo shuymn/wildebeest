@@ -28,6 +28,7 @@ import {
 	listedForSql,
 	mentionableBySql,
 	notifiedSql,
+	quotePolicySql,
 	quoteReads,
 	shownSql,
 	visibleSql,
@@ -361,6 +362,24 @@ describe('the policy fragments agree with the model of their rules', () => {
 					)
 			))
 	}
+
+	// Every (viewer, status) with what the status's quote policy answers the viewer as a quoter (R36, the policy part).
+	it('quotePolicySql (R36)', () =>
+		agree(
+			(db, world) => {
+				const named = namer(world)
+				return db
+					.all<{ x: string | null; y: string; answer: string }>(
+						`SELECT qv.id AS x, qt.id AS y, ${quotePolicySql('qt', 'qv.id')} AS answer
+						FROM ${VIEWERS} qv CROSS JOIN statuses qt`
+					)
+					.map((row) => `${named(row.x, row.y)} ${row.answer}`)
+			},
+			(m) =>
+				viewers(m.world).flatMap((viewer) =>
+					statuses(m.world).map((s) => `${name(m.world, viewer)} ${m.status(s).name} ${m.quotePolicy(s, viewer)}`)
+				)
+		))
 
 	// Every (local account, status) whose conversation the account mutes.
 	it('conversationMutedSql (R31)', () =>

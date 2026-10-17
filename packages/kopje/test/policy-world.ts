@@ -14,8 +14,9 @@ import type { RepliesPolicy } from '../src/domain/lists'
 // in their stored form; and local accounts' lists, exclusive or not, with each replies_policy, whose members are their
 // owner and accounts it follows, accepted or pending (whatever else the owner blocks, mutes or domain-blocks); and the
 // local accounts that follow the hashtag tagged statuses carry; and quotes (R35) in every stored state, legacy or not,
-// self-quotes among them, of statuses of every visibility, and quotes whose quoted status is gone. Accounts, statuses
-// and lists are referred to by index; writeWorld gives them fixed ids.
+// self-quotes among them, of statuses of every visibility, and quotes whose quoted status is gone; and each original's
+// quote policy (R36), any combination of Mastodon's flags. Accounts, statuses and lists are referred to by index;
+// writeWorld gives them fixed ids.
 
 declare module 'vitest' {
 	interface ProvidedContext {
@@ -76,6 +77,9 @@ export type WorldStatus = {
 	// A reply to a status the server never stored (replyTo is null): its parent and partner are unknown.
 	replyToUnknown: boolean
 	tagged: boolean
+	// statuses.quote_policy: Mastodon's flags, automatic in the high 16 bits (0 for a boost, as Kopje stores them).
+	// None is 0, as for the statuses a write property reads back.
+	quotePolicy?: number
 }
 
 // How an actor id's host relates to the account's stored domain: the same, a subdomain, with a port, with a trailing
@@ -299,6 +303,9 @@ export const worldArb: fc.Arbitrary<World> = fc
 				),
 				reblogOf: boost ? target : null,
 				replyToUnknown: false,
+				// Drawn from bits already drawn (a new field would change the worlds the fixed seeds of the other
+				// properties give): four automatic and four manual flags from the author's draw above what picks the author.
+				quotePolicy: boost ? 0 : ((Math.floor(raw.author / 128) % 16) << 16) | (Math.floor(raw.author / 2048) % 16),
 				replyTo:
 					raw.kind === 'reply'
 						? target
@@ -483,8 +490,8 @@ export function writeWorld(sql: SqlStorage, world: World): void {
 		)
 		sql.exec(
 			`INSERT INTO statuses (id, uri, account_id, reblog_of_id, in_reply_to_uri, in_reply_to_id, in_reply_to_account_id,
-				visibility, content, search_text, published_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				visibility, content, search_text, published_at, quote_policy)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			statusId(i),
 			statusUri(i),
 			accountId(status.author),
@@ -495,7 +502,8 @@ export function writeWorld(sql: SqlStorage, world: World): void {
 			status.visibility,
 			status.reblogOf === null ? `<p>status ${i}</p>` : '',
 			status.reblogOf === null ? `status ${i}` : null,
-			new Date(Date.parse(TIMES[0]) - (world.statuses.length - i) * 60_000).toISOString()
+			new Date(Date.parse(TIMES[0]) - (world.statuses.length - i) * 60_000).toISOString(),
+			status.quotePolicy ?? 0
 		)
 		for (const mention of status.mentions) {
 			sql.exec(
