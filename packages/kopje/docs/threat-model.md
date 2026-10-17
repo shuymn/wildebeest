@@ -733,7 +733,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   unresolved, and last stamped at or below the second (none counts as 0). So a report reopened or changed after the
   suspension committed, and one filed after it, stay as they are, whatever either request's clock said. A job whose
   bound is unknown (a suspension from before the fence whose log row was pruned) resolves none, and leaves them to the
-  admin. `resolveSuspensionReports` and `logReportAction` in `src/domain/reports.ts`, `suspendLocal` in
+  admin. `resolveSuspensionReports` and `writeReport` in `src/domain/reports.ts`, `suspendLocal` in
   `src/domain/suspension.ts`, `logAction` in `src/domain/moderation-log.ts`, migration `0042_report_action_fence`;
   `test/admin-suspension.test.ts` ("the report fence"), `test/migrations.test.ts`. The report notification is
   _implemented on branch `kopje/admin-a4`_: a report another local account files notifies the OAuth admin

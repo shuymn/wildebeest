@@ -24,9 +24,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Fixed
 
-- Suspending an account through the admin API resolves only the reports that were open when the suspension was made.
-  A report the admin reopened or changed after the suspension could be resolved anyway when that request carried an
-  earlier time than the suspension; the order the Store applied them in now decides, whatever their times.
+- Suspending an account through the admin API no longer resolves reports that were filed, reopened or edited after
+  the suspension. Such reports stay unresolved, whatever times the requests carried.
 - A page of remote accounts no longer risks the isolate's 128 MB memory limit when their actor documents carry huge
   profile-field lists. Each account now reads at most 16 fields, cut to their shown length and to 32 KiB of JSON, and
   shows only the leading fields whose sanitized names and values fit 32 KiB once serialized, dropping the rest whole.
@@ -45,11 +44,11 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       notifications. On the same benchmark store its upgrade took 5.0 seconds on an idle machine (5.0 in two more
       runs; up to 7.6 on a loaded one). An instance with millions of notifications should expect a pause of several
       seconds on the first request after the deploy.
-    - `0042_report_action_fence`: records which admin action last changed each report, and which one a running
-      suspension stops at, carried over from the moderation log. A suspension whose log entry has already been pruned
-      leaves its reports for the admin to resolve. It reads the moderation log (at most its newest 10,000 entries) and
-      each suspended account's current job, and no other table grows its cost: on the same benchmark store its upgrade
-      took 3.1 seconds (3.1 in two more runs; one run on a loaded machine took 6.1).
+    - `0042_report_action_fence`: lets a suspension tell which reports were changed after it. A suspension still
+      resolving reports at the upgrade whose moderation log entry has already been pruned (the log keeps the newest
+      10,000) resolves none of them: resolve them by hand in your admin client. On the same benchmark store its upgrade
+      took 3.1 seconds (3.1 in two more runs; 6.1 on a loaded machine), a pause of a few seconds on the first request
+      after the deploy.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.13] - 2026-10-17
