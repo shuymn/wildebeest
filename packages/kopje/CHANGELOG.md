@@ -33,30 +33,21 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       `since_id`, `min_id`) is the quoting post's id, not the quote's. Each page reads a window of `limit` quotes and
       leaves out those the viewer may not list, so a page may be short or empty while its `next` link still leads on,
       as on Mastodon.
-- Mastodon users (and any server following FEP-044f) can quote Kopje posts, as each post's quote policy allows.
-  Kopje answers their quote request at once: a public or unlisted post whose policy lets the quoter in (`public`,
-  or `followers` for an account that follows the author) is accepted, anything else refused; a quoter the author
-  blocks, or who blocks the author, is refused whatever the policy. An accepted quote shows on the quoter's server as
-  approved, and Kopje serves its approval (`/ap/users/<name>/quote_authorizations/<id>`) to anyone who checks it.
-  Requests for private and direct posts are never answered, so an answer never reveals that one exists.
-    - Kopje users are notified of a new quote (`quote`, which notification policies filter like a mention, and which
-      push subscriptions may ask for) and see the quote in the quoted post's quotes list; the quote is visible to them
-      even when it is a private post.
-    - The author of a quoted post can revoke a quote with `POST /api/v1/statuses/:id/quotes/:quoting_status_id/revoke`
-      (`write:statuses`; the official Android app's "Remove quote", Phanpy's revoke): 404 for a post the caller may not
-      see or a quote that is not of it, 403 for someone else's post. It answers 200 with the quoting post, or, when its
-      author blocks the caller, with a stand-in that shows only its id, address, time, author and visibility. The
-      quoter's server and everyone who received the quoted post are told the approval is withdrawn, and the approval
-      address answers 404 from then on, for good.
-    - Edits and deletions of a quoted post now also reach the accounts that quoted it, so their copies stay current.
-    - Where Kopje differs from Mastodon: a revoke also rejects every quote request Kopje answered for that quote, so a
-      server that processes the withdrawal before an earlier approval still ends with the quote removed. A Mastodon
-      server that processes the approval and the rejection at the same moment can still keep the quote; nothing on
-      Kopje's side can prevent that. A quoter whose quote was revoked can ask again, and is accepted again while the
-      policy allows it, as on Mastodon: a narrower policy or a block stops that.
-    - Kopje still does not offer quoting itself: `quote_approval.current_user` stays `denied`.
-- Quote policies, as Mastodon 4.5 has them: who may quote a post. Posts declare their policy to other servers
-  (`interactionPolicy.canQuote`), and Kopje's answers to quote requests follow it.
+- Users on Mastodon and other FEP-044f servers can quote Kopje posts that are public or unlisted, as each post's quote
+  policy allows; quoters the author blocks, or who block the author, are refused. Kopje users still cannot post quotes
+  themselves (`quote_approval.current_user` stays `denied`). Edits and deletions of a quoted post also reach the
+  accounts that quoted it.
+    - Kopje users are notified of new quotes (`quote`, filtered by notification policies like a mention, and available
+      to push subscriptions), and always see quotes of their own posts.
+    - The quoted author can revoke a quote with `POST /api/v1/statuses/:id/quotes/:quoting_status_id/revoke`
+      (`write:statuses`; Android's "Remove quote", Phanpy's revoke). The quoter's server and everyone who received the
+      post are told; a revoked approval never becomes valid again.
+    - Limits, as on Mastodon: a quoter whose quote was revoked can ask again and is accepted again while the policy
+      allows it (a narrower policy or a block stops that). Where Kopje differs: a revoke also rejects each request it
+      answered for the quote, so a Mastodon server that processes the withdrawal before an earlier approval still ends
+      with the quote removed; one that processes an approval and a rejection at the same moment can still keep it.
+- Quote policies, as Mastodon 4.5 has them: who may quote a post. Posts publish their policy to other servers, and
+  Kopje's answers to quote requests follow it.
     - `POST /api/v1/statuses` takes `quote_approval_policy`: `public`, `followers` or `nobody`; none (or a blank one)
       is the account's default; any other value is answered 422 `Record invalid`, as Mastodon. A private or direct
       post always gets `nobody`. A scheduled post keeps the policy it was sent with, or the account's default when it
