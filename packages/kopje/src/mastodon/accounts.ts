@@ -13,7 +13,7 @@ import {
 } from './context'
 import { mastodonError } from './errors'
 import { sweepSoon } from './media'
-import { pageQuery, pageResponse } from './pagination'
+import { pageQuery, pageResponse, unlimitedResponse } from './pagination'
 import { type Params, parseBoolean } from './params'
 import { MAX_SEARCH_OFFSET, searchParams } from './search'
 import {
@@ -375,16 +375,18 @@ export const unendorse: ApiHandler = async (c, deps) => {
 }
 
 // GET /api/v1/endorsements (EndorsementsController): the viewer's, 40 by default and at most 80 with Link headers, or
-// every one at once with limit=0, without them.
+// every one at once with limit=0, without them. Kopje's limit=0 answer stops at MAX_ENDORSEMENTS_ANSWERED and
+// ACCOUNT_ANSWER_BYTES (8 MiB, RES-3); one cut by the bytes links next to the rest (unlimitedResponse).
 export const endorsements: ApiHandler = async (c, deps) => {
 	const p = await requestParams(c, deps)
 	if (p instanceof Response) {
 		return p
 	}
-	const page = p.get('limit') === '0' ? null : pageQuery(p)
-	const input = { credential: userCredential(c, deps), page, present: present(c) }
+	const query = pageQuery(p)
+	const page = p.get('limit') === '0' ? null : query
+	const input = { credential: userCredential(c, deps), page, from: query.maxId, present: present(c) }
 	const result = authorized(await storeCall(c, deps, (s, b) => s.listEndorsements(b, input)))
-	return page === null ? c.json(result.items) : pageResponse(c, result, page.limit)
+	return page === null ? unlimitedResponse(c, result) : pageResponse(c, result, page.limit)
 }
 
 // GET /api/v1/directory (Api::V1::DirectoriesController#show, domain/directory.ts). Parameters as Mastodon reads them:

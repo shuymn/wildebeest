@@ -140,6 +140,43 @@ export function sanitizeRemoteHtml(html: string): string {
 	)
 }
 
+// RES-2: a remote account's bio, as stored and shown, is at most this many UTF-8 bytes as a JSON string (escapes and
+// quotes included), so one presented account has a known size (accounts.ts ACCOUNT_COLUMNS). Realistic bios stay far
+// below it: Mastodon's 500 characters, Misskey's 1,500 and Pleroma's or GoToSocial's 5,000 characters of Japanese
+// with a link and a hashtag every 100 render to at most about 28 KB (test/account-answer-bytes.test.ts).
+export const REMOTE_BIO_BYTES = 64 * 1024
+
+const ENCODER = new TextEncoder()
+
+// The UTF-8 bytes of `text` as JSON.stringify writes it. Not dump-format's utf8Length: this module has no relative
+// imports, as the cutover runs it from the sources on Node, which resolves no extensionless path
+// (cli/lib/cutover/kopje-runtime.js).
+export function jsonStringBytes(text: string): number {
+	return ENCODER.encode(JSON.stringify(text)).length
+}
+
+// A remote bio as Kopje stores it (HTML-1, RES-2): sanitizeRemoteHtml's output when it fits REMOTE_BIO_BYTES, else
+// the sanitized form of a raw prefix whose output fits, found by halving (sanitizing can shrink as well as grow, so
+// it need not be the longest such prefix); always sanitizer output, so well-formed HTML; '' when none fits. The
+// cutover's converter and its verification use it too.
+export function sanitizeRemoteBio(html: string): string {
+	const whole = sanitizeRemoteHtml(html)
+	if (jsonStringBytes(whole) <= REMOTE_BIO_BYTES) {
+		return whole
+	}
+	let [fits, best, over] = [0, '', Math.min(html.length, REMOTE_HTML_RAW_LIMIT)]
+	while (over - fits > 1) {
+		const middle = Math.floor((fits + over) / 2)
+		const cut = sanitizeRemoteHtml(html.slice(0, middle))
+		if (jsonStringBytes(cut) <= REMOTE_BIO_BYTES) {
+			;[fits, best] = [middle, cut]
+		} else {
+			over = middle
+		}
+	}
+	return best
+}
+
 // The text of sanitized remote HTML, for search_text: tags dropped, line and paragraph breaks kept as spaces, the
 // entities sanitize-html writes decoded. Its input is sanitizeRemoteHtml's output, so the breaks have one spelling.
 const TEXT_OPTIONS: sanitizeHtml.IOptions = {

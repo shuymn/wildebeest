@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { seedFollows, sql } from './api-helpers'
 import { ALICE, setup, type Setup } from './inbox-status-helpers'
 import {
+	ACCOUNT_ANSWER_BYTES,
 	ACCOUNT_COLUMNS,
 	ACCOUNT_FROM,
 	type AccountRow,
@@ -169,7 +170,7 @@ describe('remote profile fields are projected bounded (RES-2)', () => {
 		expect(fieldBytes(bounded)).toBeLessThanOrEqual(REMOTE_FIELDS_BYTES)
 	})
 
-	it(`answers a list of ${MAX_LIST_MEMBERS_ANSWERED} such members with at most 32 KiB of fields each`, async () => {
+	it(`answers a list of ${MAX_LIST_MEMBERS_ANSWERED} such members within the answer's bytes, 32 KiB of fields each`, async () => {
 		const t = await setup()
 		const ids = await remoteFollowers(t, MAX_LIST_MEMBERS_ANSWERED)
 		await storeAttachment(t, ids, AMPERSANDS)
@@ -186,13 +187,15 @@ describe('remote profile fields are projected bounded (RES-2)', () => {
 		})
 		const body = await response.text()
 		const accounts = JSON.parse(body) as { fields: { name: string; value: string }[] }[]
-		expect(accounts).toHaveLength(MAX_LIST_MEMBERS_ANSWERED)
+		// Each member counts its seven projected fields, about 30 KiB, so the answer stops short and links on (RES-3).
+		expect(accounts.length).toBeGreaterThan(200)
+		expect(accounts.length).toBeLessThan(MAX_LIST_MEMBERS_ANSWERED)
+		expect(response.headers.get('link')).toContain('rel="next"')
 		for (const account of accounts) {
 			expect(account.fields).toHaveLength(1)
 			expect(fieldBytes(account.fields)).toBeLessThanOrEqual(REMOTE_FIELDS_BYTES)
 		}
-		// The whole answer: the fields' bound for each member, and a little over 1 KiB of everything else each.
-		expect(utf8Length(body)).toBeLessThanOrEqual(MAX_LIST_MEMBERS_ANSWERED * (REMOTE_FIELDS_BYTES + 2048))
+		expect(utf8Length(body)).toBeLessThanOrEqual(ACCOUNT_ANSWER_BYTES)
 	})
 
 	it('shows the same fields for 20 and 300 such fields, a 1.3 MB document', async () => {

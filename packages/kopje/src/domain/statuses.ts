@@ -1,14 +1,12 @@
 import {
 	type Account,
-	ACCOUNT_COLUMNS,
-	type AccountRow,
 	accountUrl,
 	edgeRangeSql,
 	type Page,
 	type PageQuery,
 	type Present,
-	presentAccount,
 	presentAccountsById,
+	presentedRows,
 	resolveApiId,
 } from './accounts'
 import {
@@ -67,6 +65,7 @@ import { allocateLocalId } from './ids'
 import { DETACHED_GRACE_MS, DOOMED_AT, liveMediaSql } from './media'
 import { notify } from './notifications'
 import { editPoll, type PollInput, pollOptionsJson, writePoll } from './polls'
+import { profileUrlSql, usernameSql } from './profile-bounds'
 import {
 	acceptedQuoteWindow,
 	answeredRequests,
@@ -177,7 +176,7 @@ function resolveMentions(
 		d: ref.domain === null || ref.domain === localHost ? null : ref.domain,
 	}))
 	const rows = db.all<ResolvedMention & { key: string }>(
-		`SELECT json_extract(j.value, '$.key') AS key, a.id, a.uri, a.url, a.username, a.domain
+		`SELECT json_extract(j.value, '$.key') AS key, a.id, a.uri, ${profileUrlSql('a.url')} AS url, ${usernameSql('a.username')} AS username, a.domain
 		FROM json_each(?1) j
 		JOIN accounts a ON a.domain IS json_extract(j.value, '$.d') AND lower(a.username) = json_extract(j.value, '$.u')
 		WHERE ${mentionableBySql('a.id', '?2')}`,
@@ -1679,10 +1678,10 @@ export const interactors = optionalUserReadOperation<InteractorsInput, Viewed<Pa
 		const rows =
 			window.candidates.length === 0
 				? []
-				: db.all<AccountRow & { cursor: string }>(
-						`SELECT CAST(e.id AS TEXT) AS cursor, ${ACCOUNT_COLUMNS}
+				: db.all<{ cursor: string; id: string }>(
+						`SELECT CAST(e.id AS TEXT) AS cursor, a.id
 						FROM json_each(?3) c CROSS JOIN ${edge}
-							JOIN accounts a ON a.id = e.account_id LEFT JOIN local_accounts l ON l.account_id = a.id
+							JOIN accounts a ON a.id = e.account_id
 						WHERE ${listedForSql('a.id', '?1', '?2')}`,
 						viewerId,
 						now,
@@ -1692,7 +1691,7 @@ export const interactors = optionalUserReadOperation<InteractorsInput, Viewed<Pa
 		return {
 			status: 'ok',
 			value: {
-				items: shown.rows.map((row) => presentAccount(row, present)),
+				items: presentedRows(db, shown.rows, present),
 				newest: shown.newest,
 				oldest: shown.oldest,
 				cut: shown.cut,
