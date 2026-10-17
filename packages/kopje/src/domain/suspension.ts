@@ -1,8 +1,10 @@
 import { moderationUpdate } from './actor-update'
 import { type ReachedAccount, reachFollowers, reachFollowing, reachMentioned } from './audience'
+import type { Admin } from './auth'
 import { beginStagedUpdate, endStaging, isDeliverableInbox, stageTargets } from './deliveries'
+import { logAction } from './moderation-log'
 import { writeOperation } from './operation'
-import { reportBound, resolveSuspensionReports } from './reports'
+import { actionBound, reportBound, resolveSuspensionReports } from './reports'
 import { forgetActorSnapshots } from './snapshot'
 import type { Db } from '../db/sql'
 
@@ -12,15 +14,15 @@ import type { Db } from '../db/sql'
 // /admin; both call suspendLocal and unsuspendLocal here.
 //
 // A suspension commits in one bounded transaction (RES-6): the account's suspended_at at its time S and a new
-// credential epoch, the frozen bounds (the newest report and follow), two jobs bound to that epoch, the Update of its
-// actor with no targets yet, and the removal of its actor's snapshots. Everything that grows with the account runs
-// afterwards in rounds of the jobs (runModerationJobs, with the inbound jobs, store.ts):
+// credential epoch, the frozen bounds (the newest report, moderation log row and follow), two jobs bound to that
+// epoch, the Update of its actor with no targets yet, and the removal of its actor's snapshots. Everything that grows
+// with the account runs afterwards in rounds of the jobs (runModerationJobs, with the inbound jobs, store.ts):
 //
 //   - tokens: deletes the account's credentials of earlier epochs child-first (TOKEN_CHILDREN), so no delete
 //     cascades, at most TOKEN_ROUND_ROWS rows written per round. The epoch already refuses them (auth.ts
 //     currentCredentialSql): API calls, web sessions, code exchange, streaming and pushes. Never cancelled; an
 //     unsuspension keeps the epoch, so the user signs in again, at once.
-//   - suspension: resolves the reports frozen at S (reports.ts resolveSuspensionReports), then stages the Update's
+//   - suspension: resolves the reports its bounds froze (reports.ts resolveSuspensionReports), then stages the Update's
 //     audience, then writes it. A round that finds the account unsuspended or in a later epoch ends the job.
 //   - reach (an unsuspension's), bound to the epoch the unsuspension keeps: stages the restoration Update's audience
 //     the same way, and ends once the account is suspended again.
@@ -68,11 +70,12 @@ type Job = {
 	account_id: string
 	// The credential epoch the job was made in.
 	generation: number
-	// The suspension's time S (a suspension job's), which its reports are judged against.
-	since: string | null
 	actor_account_id: string | null
 	intent_id: string | null
 	report_bound: number | null
+	// A suspension job's report fence (VIS-29): its suspend row in the moderation log, or without an admin the newest
+	// row at the suspension. Null: unknown (0042_report_action_fence), which resolves none.
+	action_bound: number | null
 	follow_bound: number | null
 	cutoff: string | null
 	phase: Phase
@@ -100,16 +103,16 @@ function followBound(db: Db): number {
 
 function insertJob(db: Db, job: Omit<Job, 'id' | 'state'>): void {
 	db.run(
-		`INSERT INTO moderation_jobs (kind, account_id, generation, since, actor_account_id, intent_id, report_bound,
-			follow_bound, cutoff, phase)
-		VALUES (?, ?, ?, ?, ?, CAST(? AS INTEGER), ?, ?, ?, ?)`,
+		`INSERT INTO moderation_jobs (kind, account_id, generation, actor_account_id, intent_id, report_bound,
+			action_bound, follow_bound, cutoff, phase)
+		VALUES (?, ?, ?, ?, CAST(? AS INTEGER), ?, ?, ?, ?, ?)`,
 		job.kind,
 		job.account_id,
 		job.generation,
-		job.since,
 		job.actor_account_id,
 		job.intent_id,
 		job.report_bound,
+		job.action_bound,
 		job.follow_bound,
 		job.cutoff,
 		job.phase
@@ -127,9 +130,10 @@ function localState(db: Db, accountId: string): LocalState | undefined {
 
 // Suspends a local account in one bounded transaction (above): its time S and a new credential epoch, also when it is
 // suspended already (Mastodon's suspend! sets suspended_at again and runs the suspension anew), which ends the jobs of
-// the epoch before. `by` is the admin who suspends, whom the resolved reports name. Returns S, or null for an account
-// that is not local.
-export function suspendLocal(db: Db, accountId: string, by: string | null, now: number): string | null {
+// the epoch before. `by` is the admin who suspends: its suspend row in the moderation log is the job's action bound
+// (VIS-29), and the resolved reports name it. Without an admin (null), nothing is logged and the bound is the newest
+// log row. Returns S, or null for an account that is not local (nothing logged).
+export function suspendLocal(db: Db, accountId: string, by: Admin | null, now: number): string | null {
 	const at = iso(now)
 	const epoch = db.first<{ epoch: number }>(
 		`UPDATE local_accounts SET suspended_at = ?, credential_epoch = credential_epoch + 1 WHERE account_id = ?
@@ -143,10 +147,10 @@ export function suspendLocal(db: Db, accountId: string, by: string | null, now: 
 	const job = {
 		account_id: accountId,
 		generation: epoch,
-		since: null,
 		actor_account_id: null,
 		intent_id: null,
 		report_bound: null,
+		action_bound: null,
 		follow_bound: null,
 		cutoff: null,
 	}
@@ -155,10 +159,13 @@ export function suspendLocal(db: Db, accountId: string, by: string | null, now: 
 	insertJob(db, {
 		...job,
 		kind: 'suspension',
-		since: at,
-		actor_account_id: by,
+		actor_account_id: by?.accountId ?? null,
 		intent_id: beginStagedUpdate(db, accountId, update, now),
 		report_bound: reportBound(db),
+		action_bound:
+			by === null
+				? actionBound(db)
+				: logAction(db, by, 'suspend', { type: 'Account', id: accountId }, { suspended_at: at }, by.now),
 		follow_bound: followBound(db),
 		cutoff: iso(now - RECENT_MS),
 		phase: 'reports',
@@ -189,10 +196,10 @@ export function unsuspendLocal(db: Db, accountId: string, now: number): boolean 
 		kind: 'reach',
 		account_id: accountId,
 		generation: epoch,
-		since: null,
 		actor_account_id: null,
 		intent_id: beginStagedUpdate(db, accountId, update, now),
 		report_bound: null,
+		action_bound: null,
 		follow_bound: followBound(db),
 		cutoff: iso(Date.parse(state.suspended_at) - RECENT_MS),
 		phase: 'followers',
@@ -318,7 +325,7 @@ function reachRound(db: Db, job: Job, state: JobState, now: number): boolean {
 				db,
 				job.account_id,
 				job.report_bound ?? 0,
-				job.since ?? '',
+				job.action_bound,
 				job.actor_account_id,
 				Number(state.cursor ?? 0),
 				REPORT_ROUND,
@@ -500,8 +507,8 @@ function mentionsRound(db: Db, job: Job, state: JobState): void {
 	}
 }
 
-const JOB_COLUMNS = `id, kind, account_id, generation, since, actor_account_id, CAST(intent_id AS TEXT) AS intent_id,
-	report_bound, follow_bound, cutoff, phase, state`
+const JOB_COLUMNS = `id, kind, account_id, generation, actor_account_id, CAST(intent_id AS TEXT) AS intent_id,
+	report_bound, action_bound, follow_bound, cutoff, phase, state`
 
 // One round of the job after id `after`, else of the oldest, so a call's jobs take turns and a long token history
 // cannot hold back another's Update. Null when there is no job; else the job's id and whether the round wrote Update

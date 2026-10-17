@@ -7,8 +7,10 @@ import { MIGRATIONS } from '../src/db/migrations'
 import { Db } from '../src/db/sql'
 import { DISTRIBUTABLE_SQL, REACHES_FOLLOWERS_SQL, REQUIRES_MENTION_SQL } from '../src/domain/audience'
 import { CONVERSATIONS_BACKFILL } from '../src/domain/conversation-rows'
+import { MODERATION_LOG_KEEP } from '../src/domain/moderation-log'
 import { readOperation, sessionOperation, writeOperation } from '../src/domain/operation'
 import { storeRemoteStatus } from '../src/domain/remote-statuses'
+import { moderationRound } from '../src/domain/suspension'
 import { normalizeTag } from '../src/domain/tag-name'
 import { parseRemoteStatus } from '../src/federation/remote-status'
 import { StoreUnavailableError, toStoreUnavailable } from '../src/platform/store-errors'
@@ -4453,4 +4455,241 @@ describe('0041_report_notifications_key', () => {
 			expect(plan.join('\n')).toContain('notifications_natural')
 		})
 	})
+})
+
+describe('0042_report_action_fence', () => {
+	const NAME = '0042_report_action_fence'
+	const at = NAMES.indexOf(NAME)
+	const SUSPENDED_AT = '2026-10-12T00:00:00.000Z'
+	// The file's statements, in order (its comments dropped; no statement holds a semicolon).
+	const STATEMENTS = (MIGRATIONS[at]?.sql ?? '')
+		.split('\n')
+		.filter((line) => !line.startsWith('--'))
+		.join('\n')
+		.split(';')
+		.map((statement) => statement.trim())
+		.filter((statement) => statement !== '')
+
+	function log(sql: SqlStorage, id: number, action: string, type: 'Report' | 'Account', target: string, detail = {}) {
+		sql.exec(
+			`INSERT INTO admin_actions (id, actor, account_id, action, target_type, target_id, detail, created_at)
+			VALUES (?, 'oauth', ?, ?, ?, ?, ?, '2026-10-12T00:00:00.000Z')`,
+			id,
+			REPORTER,
+			action,
+			type,
+			target,
+			JSON.stringify(detail)
+		)
+	}
+
+	function report(sql: SqlStorage, id: number, target = TARGET) {
+		sql.exec(
+			`INSERT INTO reports (id, account_id, target_account_id, uri, created_at)
+			VALUES (?1, ?2, ?3, 'https://kopje.test/actor#reports/' || ?1, '2026-10-12T00:00:00.000Z')`,
+			id,
+			REPORTER,
+			target
+		)
+	}
+
+	// REPORTER suspended at SUSPENDED_AT in epoch 1, its suspension job still in the report phase.
+	function suspended(sql: SqlStorage) {
+		sql.exec(
+			'UPDATE local_accounts SET suspended_at = ?, credential_epoch = 1 WHERE account_id = ?',
+			SUSPENDED_AT,
+			REPORTER
+		)
+		sql.exec(
+			`INSERT INTO moderation_jobs (kind, account_id, generation, since, report_bound, phase)
+			VALUES ('suspension', ?, 1, ?, 1000, 'reports')`,
+			REPORTER,
+			SUSPENDED_AT
+		)
+	}
+
+	it("carries each report's newest log id over, and each running suspension job's own suspend row", async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, MIGRATIONS.slice(0, at)).upgrade()).toMatchObject({ ok: true })
+			seedReport(sql, 0)
+			report(sql, 8)
+			report(sql, 9)
+			log(sql, 1, 'resolve', 'Report', '7')
+			log(sql, 2, 'suspend', 'Account', REPORTER, { suspended_at: '2026-10-11T00:00:00.000Z' })
+			log(sql, 3, 'reopen', 'Report', '7')
+			log(sql, 4, 'update', 'Report', '8')
+			log(sql, 5, 'suspend', 'Account', REPORTER, { suspended_at: SUSPENDED_AT })
+			sql.exec(
+				"INSERT INTO moderation_jobs (kind, account_id, generation, phase) VALUES ('tokens', ?, 1, 'tokens')",
+				REPORTER
+			)
+			// The first suspension's job, of an epoch that ended: it never resolves again, so it keeps NULL.
+			sql.exec(
+				`INSERT INTO moderation_jobs (kind, account_id, generation, since, phase)
+				VALUES ('suspension', ?, 0, '2026-10-11T00:00:00.000Z', 'reports')`,
+				REPORTER
+			)
+			suspended(sql)
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+			expect(sql.exec('SELECT id, last_action_id FROM reports ORDER BY id').toArray()).toEqual([
+				{ id: 7, last_action_id: 3 },
+				{ id: 8, last_action_id: 4 },
+				{ id: 9, last_action_id: null },
+			])
+			expect(sql.exec('SELECT kind, action_bound FROM moderation_jobs ORDER BY id').toArray()).toEqual([
+				{ kind: 'tokens', action_bound: null },
+				{ kind: 'suspension', action_bound: null },
+				{ kind: 'suspension', action_bound: 5 },
+			])
+			// The jobs are sought by their unique key, from the suspended accounts, never scanned.
+			const plan = sql
+				.exec<{ detail: string }>(`EXPLAIN QUERY PLAN ${STATEMENTS.at(-1)}`)
+				.toArray()
+				.map((row) => row.detail)
+				.join('\n')
+			expect(plan).toMatch(
+				/SEARCH moderation_jobs USING INDEX sqlite_autoindex_moderation_jobs_1 \(account_id=\? AND kind=\? AND generation=\?\)/
+			)
+			expect(plan).not.toMatch(/SCAN moderation_jobs/)
+		})
+	})
+
+	// Before the upgrade: REPORTER is suspended, then the admin reopens a report on REPORTER; `pruned` drops both log
+	// rows before the upgrade, while the job is still pending. The job's first round then runs.
+	async function reopenedAcrossUpgrade(pruned: boolean) {
+		const store = freshStore()
+		return runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, MIGRATIONS.slice(0, at)).upgrade()).toMatchObject({ ok: true })
+			seedReport(sql, 0)
+			report(sql, 10, REPORTER)
+			report(sql, 11, REPORTER)
+			log(sql, 1, 'resolve', 'Report', '10')
+			log(sql, 2, 'suspend', 'Account', REPORTER, { suspended_at: SUSPENDED_AT })
+			log(sql, 3, 'reopen', 'Report', '10')
+			log(sql, 4, 'update', 'Report', '7')
+			suspended(sql)
+			if (pruned) {
+				sql.exec('DELETE FROM admin_actions WHERE id <= 3')
+			}
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+			state.storage.transactionSync(() => moderationRound(new Db(sql), Date.parse(SUSPENDED_AT)))
+			return {
+				bound: sql.exec('SELECT action_bound FROM moderation_jobs').one().action_bound,
+				reports: sql
+					.exec('SELECT id, action_taken_at IS NOT NULL AS resolved FROM reports WHERE id >= 10 ORDER BY id')
+					.toArray(),
+			}
+		})
+	}
+
+	it('leaves open a report reopened after a suspension from before the upgrade, also when the log was pruned', async () => {
+		expect(await reopenedAcrossUpgrade(false)).toEqual({
+			bound: 2,
+			reports: [
+				{ id: 10, resolved: 0 },
+				{ id: 11, resolved: 1 },
+			],
+		})
+		// The suspension's row is gone, so its bound is unknown: the job resolves none, and leaves them to the admin.
+		expect(await reopenedAcrossUpgrade(true)).toEqual({
+			bound: null,
+			reports: [
+				{ id: 10, resolved: 0 },
+				{ id: 11, resolved: 0 },
+			],
+		})
+	})
+
+	type Scale = { reports?: number; log?: number; current?: number; obsolete?: number }
+
+	// The rows each statement of the file reads, summed, on a store of `reports` reports, `log` logged report writes,
+	// `current` suspended accounts each with its suspend row and its job in the report phase, and `obsolete` jobs of
+	// epochs that ended (REPORTER's, which has a suspend row too).
+	async function cost({ reports = 0, log = 0, current = 0, obsolete = 0 }: Scale) {
+		const store = freshStore()
+		return runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+			seedReport(sql, 0)
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 8 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 + 7)
+				INSERT INTO reports (id, account_id, target_account_id, uri, created_at)
+				SELECT i, ?2, ?3, 'https://kopje.test/actor#reports/' || i, '2026-10-12T00:00:00.000Z' FROM n WHERE ?1 > 0`,
+				reports,
+				REPORTER,
+				TARGET
+			)
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+				INSERT INTO admin_actions (actor, account_id, action, target_type, target_id, created_at)
+				SELECT 'oauth', ?2, 'update', 'Report', '7', '2026-10-12T00:00:00.000Z' FROM n WHERE ?1 > 0`,
+				log,
+				REPORTER
+			)
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+				INSERT INTO accounts (id, uri, username, domain)
+				SELECT CAST(300000000000000000 + i AS TEXT), 'https://kopje.test/ap/users/s' || i, 's' || i, NULL
+				FROM n WHERE ?1 > 0`,
+				current
+			)
+			sql.exec(
+				`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey, suspended_at, credential_epoch)
+				SELECT id, username || '@example.com', X'00', X'00', 'k', ?1, 2 FROM accounts WHERE username GLOB 's*'`,
+				SUSPENDED_AT
+			)
+			sql.exec(
+				`INSERT INTO moderation_jobs (kind, account_id, generation, since, phase)
+				SELECT 'suspension', account_id, 2, ?1, 'reports' FROM local_accounts WHERE credential_epoch = 2`,
+				SUSPENDED_AT
+			)
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+				INSERT INTO moderation_jobs (kind, account_id, generation, since, phase)
+				SELECT 'suspension', ?2, i, ?3, 'reports' FROM n WHERE ?1 > 0`,
+				obsolete,
+				REPORTER,
+				SUSPENDED_AT
+			)
+			sql.exec(
+				`INSERT INTO admin_actions (actor, account_id, action, target_type, target_id, detail, created_at)
+				SELECT 'oauth', ?1, 'suspend', 'Account', account_id, json_object('suspended_at', ?2), ?2
+				FROM local_accounts`,
+				REPORTER,
+				SUSPENDED_AT
+			)
+			let read = 0
+			for (const statement of STATEMENTS) {
+				const cursor = sql.exec(statement)
+				cursor.toArray()
+				read += cursor.rowsRead
+			}
+			expect(sql.exec('SELECT count(*) AS n FROM moderation_jobs WHERE action_bound IS NOT NULL').one()).toEqual({
+				n: current,
+			})
+			return read
+		})
+	}
+
+	// The carry-over reads the log twice and seeks each suspended account's current job: the rows read grow with the
+	// log and the current jobs, and never with the reports or with jobs of epochs that ended.
+	it('reads the log and the current jobs, and nothing that grows with the reports or obsolete jobs', async () => {
+		const none = await cost({})
+		const logged = (await cost({ log: 1_000 })) - none
+		const twice = (await cost({ log: 2_000 })) - none
+		expect(logged).toBeGreaterThanOrEqual(2 * 1_000)
+		expect(logged).toBeLessThanOrEqual(3 * 1_000 + 3)
+		expect(Math.abs(twice - 2 * logged)).toBeLessThanOrEqual(3)
+		expect(await cost({ reports: 10_000 })).toBe(none)
+		const jobs = (await cost({ current: 100 })) - none
+		const jobsTwice = (await cost({ current: 200 })) - none
+		expect(jobs).toBeGreaterThan(0)
+		expect(Math.abs(jobsTwice - 2 * jobs)).toBeLessThanOrEqual(3)
+		// The log at its cap, and a backlog of 5,000 jobs of ended epochs, besides the current ones.
+		const capped = await cost({ log: MODERATION_LOG_KEEP, current: 100 })
+		expect(await cost({ log: MODERATION_LOG_KEEP, current: 100, obsolete: 5_000, reports: 10_000 })).toBe(capped)
+	}, 300_000)
 })

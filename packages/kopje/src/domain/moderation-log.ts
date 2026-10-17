@@ -23,6 +23,8 @@ export type ModerationActor = Admin | Extract<ImportAuthority, { kind: 'access' 
 
 export type ModerationTarget = { type: 'Report' | 'Account'; id: string }
 
+// Logs one admin write; returns its row's id, which is never given twice (0029_admin_reports), so it orders the
+// writes (the report fence, reports.ts resolveSuspensionReports).
 export function logAction(
 	db: Db,
 	actor: ModerationActor,
@@ -30,7 +32,7 @@ export function logAction(
 	target: ModerationTarget,
 	detail: Record<string, unknown>,
 	now: number
-): void {
+): number {
 	const oauth = 'accountId' in actor
 	const id = db.first<{ id: number }>(
 		`INSERT INTO admin_actions (actor, account_id, client_id, action, target_type, target_id, detail, created_at)
@@ -49,6 +51,7 @@ export function logAction(
 			(SELECT id FROM admin_actions WHERE id <= ? ORDER BY id LIMIT ${MODERATION_LOG_PRUNE})`,
 		id - MODERATION_LOG_KEEP
 	)
+	return id
 }
 
 export type ModerationLogEntry = {
