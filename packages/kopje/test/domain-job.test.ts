@@ -16,6 +16,7 @@ import {
 	receive,
 	rejects,
 	round,
+	toFollows,
 	unsuspend,
 	uriOf,
 	world,
@@ -405,6 +406,42 @@ describe('the conversion mode (second review, change 2)', () => {
 	})
 })
 
+describe('row 1: the account job reset, with the conversion mode', () => {
+	it('gated before its Rejects: block, unsuspend (converted), suspend again; one withdrawing Reject each', async () => {
+		const w = await world()
+		const store = w.h.store
+		const r = await remoteAccount(store, 'r', D)
+		for (const local of [w.alice, w.bob, w.carol]) {
+			await remoteFollows(store, r, local.id)
+		}
+		await follow(w.h, w.dan, r)
+		expect(await act(w, r, { type: 'suspend' })).toMatchObject({ status: 200 })
+		await toFollows(store)
+		const block = await blockDomain(store, D)
+		expect(await unsuspend(w, r)).toMatchObject({ status: 200, body: { suspended: true } })
+		expect((await jobs(store))[0]).toMatchObject({ kind: 'account', mode: 'domain', phase: 'out' })
+		expect(await act(w, r, { type: 'suspend' })).toMatchObject({ status: 200 })
+		expect((await jobs(store))[0]).toMatchObject({ kind: 'account', mode: 'account', phase: 'reports' })
+		await drain(store)
+		const uri = await uriOf(store, r)
+		expect((await rejects(store)).map((row) => [row.signer, row.follower, row.retracts]).sort()).toEqual(
+			[w.alice.id, w.bob.id, w.carol.id].map((id) => [id, uri, 1]).sort()
+		)
+		// The suspension again keeps dan's follow of r (account wins), and the domain job skipped r.
+		expect(await sql(store, 'SELECT account_id FROM follows WHERE target_account_id = ?', r)).toEqual([
+			{ account_id: w.dan.id },
+		])
+		// Unsuspended again while covered, then unblocked before its round: the stale mode ends the job, nothing severed.
+		expect(await unsuspend(w, r)).toMatchObject({ status: 200, body: { suspended: true } })
+		await unblockDomain(store, block.id)
+		await drain(store)
+		expect(await sql(store, 'SELECT account_id FROM follows WHERE target_account_id = ?', r)).toEqual([
+			{ account_id: w.dan.id },
+		])
+		expect(await adminEntity(w, r)).toMatchObject({ suspended: false })
+	})
+})
+
 describe('the admin lists while the marks lag (decision 3, row 19)', () => {
 	const ACCOUNTS = 50_000
 	const OTHERS = 100
@@ -659,17 +696,19 @@ describe('bounds of the rounds (growth: reads others control)', () => {
 		expect(await count(store, "SELECT 1 FROM accounts WHERE domain = 'e.example' AND suspended_at IS NOT NULL")).toBe(0)
 	})
 
-	it("an account's severing reads at most SEVER_ROUND follows a round, either way", async () => {
+	// r on d with `followers` of LOCALS local accounts following it (the same accounts either way, so the marking
+	// window reads the same); the most rows a round read, and the rounds, until the job ended.
+	const LOCALS = SEVER_ROUND * 6 + 5
+	async function severed(followers: number): Promise<{ maxRead: number; rounds: number }> {
 		const w = await world()
 		const store = w.h.store
 		const r = await remoteAccount(store, 'r', D)
-		// More local followers of r than a round reads.
 		await sql(
 			store,
 			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
 			INSERT INTO accounts (id, uri, username, created_at) SELECT printf('%018d', 500000000000000000 + i),
 				'https://kopje.test/ap/users/l' || i, 'l' || i, ?2 FROM n`,
-			SEVER_ROUND * 2 + 5,
+			LOCALS,
 			new Date(NOW).toISOString()
 		)
 		await sql(
@@ -680,17 +719,28 @@ describe('bounds of the rounds (growth: reads others control)', () => {
 		await sql(
 			store,
 			`INSERT INTO follows (account_id, target_account_id, state) SELECT id, ?, 'accepted' FROM accounts
-			WHERE id LIKE '5000%'`,
-			r
+			WHERE id LIKE '5000%' ORDER BY id LIMIT ?`,
+			r,
+			followers
 		)
 		await blockDomain(store, D)
+		let maxRead = 0
 		let rounds = 0
 		for (let ran = await measured(store); ran !== null; ran = await measured(store)) {
 			expect(ran.written).toBeLessThanOrEqual(MODERATION_ROUND_ROWS)
+			maxRead = Math.max(maxRead, ran.read)
 			rounds++
 		}
-		expect(rounds).toBeGreaterThan(3)
 		expect(await count(store, 'SELECT 1 FROM follows WHERE target_account_id = ?', r)).toBe(0)
-		expect(await undos(store)).toHaveLength(SEVER_ROUND * 2 + 5)
+		expect(await undos(store)).toHaveLength(followers)
+		return { maxRead, rounds }
+	}
+
+	it("an account's severing reads the same rows a round with 2 or 6 rounds' worth of local followers", async () => {
+		const small = await severed(SEVER_ROUND * 2 + 5)
+		const large = await severed(LOCALS)
+		expect(small.rounds).toBeGreaterThan(3)
+		expect(large.rounds).toBeGreaterThan(small.rounds)
+		expect(large.maxRead).toBeLessThanOrEqual(small.maxRead * 1.1)
 	})
 })
