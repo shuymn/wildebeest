@@ -9,7 +9,8 @@ import { community } from '../status-helpers'
 import { connect, drained, echo, type Inbox, type StreamMessage } from './stream-helpers'
 import { Db } from '../../src/db/sql'
 import { addToConversation } from '../../src/domain/conversations'
-import { CAPTURE_LIMITS, CONVERSATIONS_PER_TURN, streamCaughtUp, streamDelete } from '../../src/domain/streaming'
+import { deleteStatus, unreblog } from '../../src/domain/statuses'
+import { CAPTURE_LIMITS, CONVERSATIONS_PER_TURN, streamCaughtUp, streamMerged } from '../../src/domain/streaming'
 import { sha256Hex } from '../../src/security/tokens'
 import { STREAM_FAULTS, TURN_BUDGET } from '../../src/stream-hub'
 
@@ -17,8 +18,9 @@ import { STREAM_FAULTS, TURN_BUDGET } from '../../src/stream-hub'
 // than one turn's budget allows, read from the budget's constants: listeners on distinct tokens (a status or an edit is
 // presented once per viewer, and a turn presents at most TURN_BUDGET.presentations), or a viewer's many units (a
 // conversation event's changes, a delete's captured boosts). A notification is an event of one unit, its recipient's:
-// its kind splits a batch of them, one for each of more recipients than a turn presents. Every kind passes the same
-// cases:
+// its kind splits a batch of them, one for each of more recipients than a turn presents; so does a merge's, by checks
+// (it presents nothing). Deletes are made by the API's operations (deleteStatus, unreblog), so their rows are gone
+// before the fan-out reads the capture. Every kind passes the same cases:
 //   - exactly once: each listener that should receive the event gets it once, in order, and each that should not gets
 //     nothing, proved after the drain barrier; the event took two turns at least;
 //   - progress under writes between turns: while the split event is being sent, writes of its kind land between turns,
@@ -58,11 +60,14 @@ type Fixture = {
 type Kind = { name: string; fixture: () => Promise<Fixture> }
 
 // A message as `<stream> <event> <id>`: the status id, a delete's id, a notification's id, or a conversation's last
-// status id.
+// status id; `notifications_merged` has none.
 function key(m: StreamMessage): string {
 	const stream = (m.stream ?? []).join(' ')
 	if (m.event === 'delete') {
 		return `${stream} delete ${m.payload}`
+	}
+	if (m.event === 'notifications_merged') {
+		return `${stream} notifications_merged`
 	}
 	const payload = JSON.parse(m.payload ?? 'null') as { id?: string; last_status?: { id: string } | null } | null
 	const id = m.event === 'conversation' ? payload?.last_status?.id : payload?.id
@@ -87,8 +92,8 @@ function caughtUp(h: ApiHarness): Promise<boolean> {
 let nextId = 300000000000000000n
 const newId = () => String(nextId++)
 
-// `count` local accounts (ids `<prefix>` then 17 digits), each with the token `split-<id>` (read).
-async function accounts(h: ApiHarness, count: number, prefix: string): Promise<string[]> {
+// `count` local accounts (ids `<prefix>` then 17 digits), each with the token `split-<id>` (`scopes`).
+async function accounts(h: ApiHarness, count: number, prefix: string, scopes = 'read'): Promise<string[]> {
 	await sql(
 		h.store,
 		`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
@@ -105,9 +110,10 @@ async function accounts(h: ApiHarness, count: number, prefix: string): Promise<s
 	for (const id of ids) {
 		await sql(
 			h.store,
-			"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) SELECT ?, 'access', client_id, ?, 'read' FROM oauth_tokens LIMIT 1",
+			"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) SELECT ?, 'access', client_id, ?, ? FROM oauth_tokens LIMIT 1",
 			await sha256Hex(`split-${id}`),
-			id
+			id,
+			scopes
 		)
 	}
 	return ids
@@ -391,6 +397,54 @@ const KINDS: Kind[] = [
 		},
 	},
 	{
+		// One event per transition, of one unit, its account's, sent on `user` and `user:notification`: no presentation,
+		// a token check each. A batch of `perAccount` transitions for each receiver is more units than a turn's checks.
+		name: 'notifications_merged on user and user:notification',
+		fixture: async () => {
+			const h = await community(['alice'])
+			const who = roles(TURN_BUDGET.presentations + 1)
+			const ids = await accounts(h, who.length, '5')
+			const receiving = ids.filter((_, i) => who[i])
+			const perAccount = Math.ceil(TURN_BUDGET.checks / receiving.length)
+			const receivers: Inbox[] = []
+			const others: Inbox[] = []
+			for (const [i, id] of ids.entries()) {
+				const inbox = await socket(h, id, [{ stream: 'user' }, { stream: 'user:notification' }])
+				;(who[i] ? receivers : others).push(inbox)
+			}
+			await opened(h, [...receivers, ...others])
+			const both = ['user notifications_merged', 'user:notification notifications_merged']
+			// `count` transitions of each receiver (by index), journaled as notification-requests.ts does (streamMerged).
+			const transitions = async (counts: Map<number, number>): Promise<Expected> => {
+				await runInDurableObject(h.store, (_instance, state) => {
+					const db = new Db(state.storage.sql)
+					state.storage.transactionSync(() => {
+						for (const [receiver, count] of counts) {
+							for (let n = 0; n < count; n++) {
+								streamMerged(db, receiving[receiver]!, new Date(NOW).toISOString())
+							}
+						}
+					})
+				})
+				return receiving.map((_, i) => Array.from({ length: counts.get(i) ?? 0 }, () => both).flat())
+			}
+			return {
+				h,
+				receivers,
+				others,
+				event: () => transitions(new Map(receiving.map((_, i) => [i, perAccount]))),
+				// The last receiver's (whose transitions the split leaves unsent), and the first's.
+				more: () =>
+					transitions(
+						new Map([
+							[receiving.length - 1, 1],
+							[0, 1],
+						])
+					),
+			}
+		},
+	},
+	{
 		// One event per owner with at most CONVERSATIONS_PER_TURN changes: owners enough that their changes are more than
 		// a turn presents, so the last owner's event is split.
 		name: 'conversation on direct',
@@ -461,7 +515,7 @@ const KINDS: Kind[] = [
 			const who = roles(Math.floor(TURN_BUDGET.checks / (2 * (1 + boosts))) + 1)
 			const ids = await accounts(h, who.length, '5')
 			const receiving = ids.filter((_, i) => who[i])
-			const boosters = await accounts(h, boosts, '6')
+			const boosters = await accounts(h, boosts, '6', 'read write')
 			await follow(h, receiving, [author.id, other.id, ...boosters])
 			const listIds = await lists(h, receiving, [author.id, other.id, ...boosters])
 			// The others: every author and booster blocks them, so none is captured for them.
@@ -505,12 +559,31 @@ const KINDS: Kind[] = [
 				;(who[i] ? receivers : others).push(inbox)
 			}
 			await opened(h, [...receivers, ...others])
-			// The capture of the delete of `deleted[0]`, whose units are `deleted` (the status, then its boosts).
-			const capture = async (deleted: string[]): Promise<Expected> => {
-				await runInDurableObject(h.store, (_instance, state) => {
-					state.storage.transactionSync(() => streamDelete(new Db(state.storage.sql), deleted[0]!, NOW))
-				})
-				return listIds.map((list) => deleted.flatMap((id) => [`user delete ${id}`, `list ${list} delete ${id}`]))
+			// A delete as the API makes it (deleteStatus, unreblog: the capture, then the rows go, a status's boosts
+			// cascading with it), in a transaction of the Store's, which starts no turn. The units are `deleted` (the
+			// status, then its boosts), and none of their rows is left when the fan-out starts.
+			const remove = async (
+				operation: typeof deleteStatus | typeof unreblog,
+				token: string,
+				id: string,
+				deleted: string[]
+			): Promise<Expected> => {
+				const credential = { tokenHash: await sha256Hex(token), scope: 'write:statuses' as const, now: NOW }
+				const present = { origin: 'https://kopje.test' }
+				const result = await runInDurableObject(h.store, (_instance, state) =>
+					state.storage.transactionSync(() =>
+						operation.run(state.storage.sql, { credential, id, deleteMedia: false, now: NOW, present })
+					)
+				)
+				expect(result).toMatchObject({ status: 'ok', value: { status: 'ok' } })
+				expect(
+					await sql(
+						h.store,
+						'SELECT id FROM statuses WHERE id IN (SELECT value FROM json_each(?))',
+						JSON.stringify(deleted)
+					)
+				).toEqual([])
+				return listIds.map((list) => deleted.flatMap((d) => [`user delete ${d}`, `list ${list} delete ${d}`]))
 			}
 			return {
 				h,
@@ -518,9 +591,14 @@ const KINDS: Kind[] = [
 				others,
 				event: () => {
 					const next = boosted.shift()!
-					return capture([next.status, ...next.boosts])
+					return remove(deleteStatus, author.token, next.status, [next.status, ...next.boosts])
 				},
-				more: async (round) => merge(await capture([plain[round]!]), await capture([undone[round]!])),
+				// The author deletes another status; a booster undoes its boost of another's.
+				more: async (round) =>
+					merge(
+						await remove(deleteStatus, author.token, plain[round]!, [plain[round]!]),
+						await remove(unreblog, `split-${boosters[round]!}`, shared, [undone[round]!])
+					),
 			}
 		},
 	},
