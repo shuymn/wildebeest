@@ -520,6 +520,41 @@ describe('each per-status cap reads a bounded number of rows (RES-7)', () => {
 	})
 })
 
+describe('a conversation presents its first participants (RES-3)', () => {
+	it('reads only the participants it presents out of SQLite, whatever the row stores', async () => {
+		const t = await setup()
+		const author = await maximalAccount(t, true)
+		const id = await storedStatus(t, author, {
+			content: '<p>x</p>',
+			spoiler: '',
+			media: [],
+			mentions: [],
+			tags: [],
+			poll: null,
+		})
+		const stored = Array.from({ length: 5_000 }, (_, i) => String(600_000_000_000_000_000n + BigInt(i)))
+		await sql(
+			t.store,
+			"INSERT INTO conversations (account_id, thread, participants, last_status_id) VALUES (?, 'th', ?, ?)",
+			ALICE,
+			JSON.stringify(stored),
+			id
+		)
+		const listed = await measured(
+			t,
+			listConversations as never,
+			{
+				credential: await credential(t),
+				page: { limit: 1 },
+				present: { origin: ORIGIN },
+			} as never
+		)
+		// The stored list is 105,000 bytes; what leaves SQLite is the last status with its author and URLs (about 15 KB)
+		// and 12 ids of the list.
+		expect(listed.sqliteBytes).toBeLessThan(30_000)
+	})
+})
+
 // Realistic posts of each implementation at its own length limit, in Japanese with its own markup.
 const misskey = () => {
 	const mention = '<a href="https://misskey.example/@bob" class="u-url mention">@bob@misskey.example</a>'

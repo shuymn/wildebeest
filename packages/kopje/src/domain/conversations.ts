@@ -37,7 +37,11 @@ export type Conversation = { id: string; unread: boolean; accounts: Account[]; l
 
 type ConversationRow = { id: string; participants: string; last_status_id: string; unread: number }
 
-const COLUMNS = 'CAST(id AS TEXT) AS id, participants, last_status_id, unread'
+// The participants presented (MAX_PRESENTED_PARTICIPANTS, in stored order) are cut in SQL: a converted row may store
+// many more, and only those leave SQLite. The key the row is found by stays the whole stored list.
+const COLUMNS = `CAST(id AS TEXT) AS id, last_status_id, unread,
+	(SELECT json_group_array(value ORDER BY key) FROM json_each(participants) WHERE key < ${MAX_PRESENTED_PARTICIPANTS})
+		AS participants`
 
 // Mastodon's conversation ids are integers; anything else names none.
 const CONVERSATION_ID = /^\d{1,19}$/
@@ -129,9 +133,7 @@ function presentConversations(
 			{ ...present, viewer }
 		).map((status) => [status.id, status])
 	)
-	const participants = rows.map((row) =>
-		(JSON.parse(row.participants) as string[]).slice(0, MAX_PRESENTED_PARTICIPANTS)
-	)
+	const participants = rows.map((row) => JSON.parse(row.participants) as string[])
 	const accounts = presentAccountsById(db, [viewer.accountId, ...participants.flat()], present)
 	const owner = accounts.get(viewer.accountId)
 	return rows.map((row, i) => {
