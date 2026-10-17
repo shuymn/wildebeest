@@ -21,9 +21,11 @@ import { freshStore, testKernel } from '../helpers'
 //   - 3,000,000 accepted follows, three per account, among all accounts;
 //   - 2,000,000 statuses, two per remote account in turn, each with a mention of another account and a hashtag (one
 //     of 1,000 names);
-//   - 10,000 reports by the local accounts of remote accounts, naming one status each.
+//   - 10,000 reports by the local accounts of remote accounts, naming one status each;
+//   - 200,000 quotes (from migration 0033_quotes on), one by every tenth status, each of the status after it, in each
+//     stored state in turn (a quarter accepted).
 // It grows every table a phase A migration reads (accounts, follows, statuses with their mentions and tags,
-// reports); a migration that reads another table must add it here before it is measured. The measured time is the
+// reports, quotes); a migration that reads another table must add it here before it is measured. The measured time is the
 // file's transaction as the kernel applies it, from before the first statement to after the commit: Date.now() in
 // workerd moves only between I/O events, so the clock is read across an await on each side.
 
@@ -36,7 +38,15 @@ declare module 'vitest' {
 	}
 }
 
-const SHAPE = { accounts: 1_000_000, local: 20, domains: 1_000, follows: 3, statuses: 2_000_000, reports: 10_000 }
+const SHAPE = {
+	accounts: 1_000_000,
+	local: 20,
+	domains: 1_000,
+	follows: 3,
+	statuses: 2_000_000,
+	reports: 10_000,
+	quotes: 200_000,
+}
 
 it('applies the migration to the benchmark store within the budget', async () => {
 	const name = inject('benchMigration') || MIGRATIONS.at(-1)!.name
@@ -46,6 +56,7 @@ it('applies the migration to the benchmark store within the budget', async () =>
 	const accounts = Math.round(SHAPE.accounts * scale)
 	const statuses = Math.round(SHAPE.statuses * scale)
 	const reports = Math.round(SHAPE.reports * scale)
+	const quotes = Math.min(Math.round(SHAPE.quotes * scale), Math.floor(statuses / 10))
 
 	const store = freshStore()
 	// One call: between calls, the Store's own alarm would apply every migration.
@@ -148,6 +159,23 @@ it('applies the migration to the benchmark store within the budget', async () =>
 			statuses,
 			now
 		)
+		// Quotes: status 10i quotes status 10i + 1, in the states pending, accepted, rejected and revoked in turn.
+		const hasQuotes =
+			sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'quotes'").toArray().length > 0
+		if (hasQuotes) {
+			run(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+				INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, quoted_account_id, state, updated_at)
+				SELECT CAST(500000000000000000 + 10 * i AS TEXT), 'https://bench.example/s/' || (10 * i + 1),
+					CAST(500000000000000000 + 10 * i + 1 AS TEXT), CAST(100000000000000000 + ?2 + (10 * i + 1) % ?3 AS TEXT),
+					CASE i % 4 WHEN 0 THEN 'pending' WHEN 1 THEN 'accepted' WHEN 2 THEN 'rejected' ELSE 'revoked' END, ?4
+				FROM n`,
+				quotes,
+				SHAPE.local,
+				remote,
+				now
+			)
+		}
 		const count = (table: string) => sql.exec<{ n: number }>(`SELECT count(*) AS n FROM ${table}`).one().n
 		const seeded = {
 			accounts: count('accounts'),
@@ -157,6 +185,7 @@ it('applies the migration to the benchmark store within the budget', async () =>
 			mentions: count('status_mentions'),
 			tags: count('status_tags'),
 			reports: count('reports'),
+			quotes: hasQuotes ? count('quotes') : 0,
 		}
 		expect(sql.exec('SELECT count(*) AS n FROM kopje_migrations').one().n).toBe(at)
 

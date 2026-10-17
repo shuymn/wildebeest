@@ -14,7 +14,8 @@ import type { Db } from '../db/sql'
 
 // Quote posts received from remote servers (Mastodon 4.5's Quote, ActivityPub::Parser::StatusParser's quote
 // properties, ActivityPub::VerifyQuoteService and the Delete of a QuoteAuthorization), stored and verified in the rows
-// of migration 0033_quotes. Nothing reads them for a client yet.
+// of migration 0033_quotes. Clients read them only through the policy module (audience.ts quoteReads, R35) and the
+// quotes list's window (acceptedQuoteWindow).
 //
 // A quote is stored with the status that makes it (recordQuote, from storeRemoteStatus and updateRemoteStatus, so every
 // path that stores a remote status records it), in the same transaction, with its verification work: verify_after

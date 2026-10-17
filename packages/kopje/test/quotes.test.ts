@@ -57,7 +57,7 @@ import { RSA_ALGORITHM } from '../src/security/key-wrap'
 // Quotes received from remote servers (Mastodon 4.5's Quote, StatusParser's quote properties, VerifyQuoteService and the
 // Delete of a QuoteAuthorization; FEP-044f): stored with every status that names one, verified inline or by the job
 // rounds, and revoked by the quoted author's Delete of the stamp, also when another server relays it with the author's
-// proof. Nothing is shown to clients yet.
+// proof. What clients are shown of them is test/quotes-api.test.ts.
 
 const OTHER = 'https://other.example'
 const RELAY = 'https://relay.example'
