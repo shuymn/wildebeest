@@ -121,16 +121,12 @@ const actionArb: fc.Arbitrary<Action> = fc.record({
 	reply: fc.boolean(),
 })
 
-// The types the write paths here notify: no action files a report, so admin.report (R37) is covered by
-// test/report-notifications.test.ts and the oracle, not by a subscription's alert here.
-const WRITTEN_TYPES = NOTIFICATION_TYPES.filter((type) => type !== 'admin.report')
-
 const caseArb: fc.Arbitrary<Case> = fc.record({
 	world: worldArb,
 	shared: fc.array(fc.boolean(), { minLength: 3, maxLength: 3 }),
 	subscriptions: fc.array(
 		fc.record({
-			alerts: fc.array(fc.boolean(), { minLength: WRITTEN_TYPES.length, maxLength: WRITTEN_TYPES.length }),
+			alerts: fc.array(fc.boolean(), { minLength: NOTIFICATION_TYPES.length, maxLength: NOTIFICATION_TYPES.length }),
 			policy: fc.constantFrom(...POLICIES),
 			expired: fc.boolean(),
 		}),
@@ -217,7 +213,7 @@ function witness(
 			now: '2026-10-12T00:00:00.000Z',
 		},
 		shared: [false],
-		subscriptions: [{ alerts: WRITTEN_TYPES.map(() => true), policy: 'all', expired: false }],
+		subscriptions: [{ alerts: NOTIFICATION_TYPES.map(() => true), policy: 'all', expired: false }],
 		actions: actions.map((action) => ({
 			actor: 0,
 			target: 0,
@@ -508,7 +504,7 @@ function writeCase(
 				expires
 			)
 		}
-		const alerts = WRITTEN_TYPES.filter((_, i) => sub.alerts[i] === true)
+		const alerts = NOTIFICATION_TYPES.filter((_, i) => sub.alerts[i] === true)
 		const { id } = sql
 			.exec<{ id: number }>(
 				`INSERT INTO push_subscriptions (token_hash, endpoint, key_p256dh, key_auth, alerts, policy)
