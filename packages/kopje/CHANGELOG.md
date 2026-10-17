@@ -49,25 +49,27 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - One status's size is bounded. A remote status's content is stored within 128 KiB as a JSON string, cut by
   sanitizing a shorter part of it so it stays valid HTML (realistic posts at Misskey's, Pleroma's, Akkoma's and
   GoToSocial's limits take at most about 35 KB), its content warning within 16 KiB, cut at a character, and a media URL
-  or preview longer than 2,048 characters is ignored, as an invalid one is. A local post or edit whose rendered text
-  passes these bounds, which only hundreds of mentions of accounts with long profile URLs reach, is refused as too long.
-  Statuses already stored are shown within the same bounds wherever they appear, edit history and `/source` included:
+  or preview longer than 2,048 characters is ignored, as an invalid one is. A remote status whose id is longer than
+  4,096 bytes is not stored, and an actor whose id is longer than 2,048 bytes is not either (both measured in UTF-8
+  bytes). A local post or edit whose rendered text passes these bounds, which only hundreds of mentions of accounts
+  with long profile URLs reach, is refused as too long. Statuses already stored are shown within the same bounds
+  wherever they appear, edit history (each earlier attachment included), `/source` and a redacted quote included:
   content or source text past the bound as empty (the status keeps its link to the original), a content warning cut,
-  at most 4 attachments with longer URLs as none and descriptions cut at 10,000 characters, at most 20 poll choices
-  cut at 1,000 characters, and an actor or status URI past its bound (2,048 and 4,096 characters) as empty. The
-  largest presented shapes are listed in RES-3 of [docs/threat-model.md](docs/threat-model.md).
-- A status presents at most 50 mentions and 70 hashtags, the first by account id and by name; its content still links
-  every one, and up to 200 mentions and 100 hashtags are still stored. A conversation presents at most 12 participants,
-  the first by account id. Mastodon presents all of them.
-- A remote poll keeps at most 20 choices (Pleroma's and Akkoma's default; Misskey allows 10 and Mastodon 4). A poll
-  stored earlier with more shows its first 20, with their counts and the viewer's own votes among them, and a vote in a
-  later choice is refused.
+  at most 4 attachments with longer URLs as none and descriptions cut at 10,000 characters, and an actor or status URI
+  past its bound as empty. The largest presented shapes are listed in RES-3 of
+  [docs/threat-model.md](docs/threat-model.md).
+- A status presents at most 70 hashtags, the first by name; its content still links every one, and up to 100 are
+  still stored. A conversation presents at most 12 participants, the first in stored order. Mastodon presents all of
+  them. A status stored with more mentions or hashtags than it presents, or with hidden attachments, costs no more to
+  read than one at those counts; a silent mention or an over-long hashtag among the first ones read is left out, so such
+  a status (only a converted one) may show fewer.
 - A remote account's username is held to Mastodon's remote format, as before; one stored otherwise (converted at an
-  earlier cutover) is shown cut at 42 characters.
+  earlier cutover), or holding a NUL, is shown cut at 42 characters.
 - `kopje-admin convert` and `verify-conversion` apply the same bounds to status content, content warnings and source
-  text, of current and earlier versions, counting each cut as a truncation that `--accept-truncation` accepts, and
-  refuse a remote actor id longer than 2,048 characters, a status URI longer than 4,096, and a remote username outside
-  Mastodon's remote format.
+  text, of current and earlier versions, counting each cut as a truncation that `--accept-truncation` accepts. They
+  refuse a remote actor id longer than 2,048 bytes, a status or boost URI longer than 4,096 bytes, and a remote
+  username outside Mastodon's remote format, and the conversion counts an earlier version's attachment that is shown
+  cut (`edits:media-field-over-bound`).
 
 ### Instance changes
 
