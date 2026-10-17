@@ -1106,7 +1106,7 @@ function moveBatch(db: Db, key: string, now: number): boolean {
 		source === undefined ||
 		target === undefined ||
 		isDeletedActor(db, source.uri, now) ||
-		db.first(`SELECT 1 AS x WHERE ${availableSql('?')}`, source.id) === undefined ||
+		db.first(`SELECT 1 AS x WHERE ${availableSql('?1')}`, source.id) === undefined ||
 		(target.local === 0 && isDeletedActor(db, target.uri, now))
 	) {
 		finishJob(db, 'move', key, now)

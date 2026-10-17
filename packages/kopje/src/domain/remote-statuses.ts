@@ -380,7 +380,7 @@ export function storeRemoteStatus(db: Db, author: Author, input: RemoteStatusInp
 	}
 	// R38, VIS-30: nothing is stored for an unavailable author (an account the instance suspended), whichever path
 	// fetched it, as Mastodon's FetchRemoteStatusService refuses a suspended author.
-	if (db.first(`SELECT 1 AS x WHERE ${availableSql('?')}`, author.id) === undefined) {
+	if (db.first(`SELECT 1 AS x WHERE ${availableSql('?1')}`, author.id) === undefined) {
 		return { applied: false, reason: 'author-unavailable' }
 	}
 	// Create#poll_vote?: a Note naming a choice in reply to a local poll is a vote, counted when it may be
