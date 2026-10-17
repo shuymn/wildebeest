@@ -539,8 +539,26 @@ account's shared inbox (the architecture test below).
 
 The instance's own domain policy (`instance_domain_blocks`, migration `0046_instance_domain_blocks`; Mastodon's
 `DomainBlock`), written by the Store operations of `src/domain/instance-domain-blocks.ts`, each in one transaction
-that fetches nothing; no route writes them. A block names a domain, stored as `blockedDomain` returns it, with
-severity `suspend` or `noop`.
+that fetches nothing. A block names a domain, stored as `blockedDomain` returns it, with severity `suspend` or `noop`.
+
+- **The admin API.** The OAuth admin (VIS-29) lists, shows, creates, updates and deletes blocks through
+  `/api/v1/admin/domain_blocks` (`src/domain/admin-domain-blocks.ts`), each write logged in its transaction. Beyond
+  Mastodon's refusals, a create or update answers 422 for severity `silence` (not built; also Mastodon's default when
+  none is sent), for `reject_media=true` (no remote media cache to reject from), and for a comment longer than
+  `MAX_BLOCK_COMMENT` (1,000) characters, which bounds a page of `MAX_DOMAIN_BLOCKS_LIMIT` (500) blocks. The domain is
+  validated on create only, since an update never changes it: a raw domain longer than `MAX_DOMAIN_INPUT` is refused
+  before it is normalized, a normalized one beyond Mastodon's 255 characters or 63 per label is invalid, and one
+  deeper than `MAX_BLOCK_LABELS` is refused before any ruling block is looked up. `reject_reports` and `obfuscate` are stored and shown, and change nothing:
+  Kopje receives no remote reports, and the public block list (`GET /api/v1/instance/domain_blocks`) stays 404, as
+  Mastodon's default `show_domain_blocks` hides it.
+- **The measure `instance_follows`** (`src/domain/admin-measures.ts`), which Fediblockhole reads before a block
+  stricter than silence, counts the accepted follows of the domain's accounts (with `include_subdomains`, of its
+  subdomains' too). It walks from the local accounts (a `CROSS JOIN`, so a remote account's follow of a local one is
+  never read) through each one's accepted follows (`follows_accepted`), reading each target by key, at most
+  `MEASURE_FOLLOWS` (20,000) rows, and answers 422 beyond that, never an undercount. Its series has at most
+  `MEASURE_DAYS` (366) points, so at most 368 grouped rows leave SQLite, and a request names at most
+  `MAX_MEASURE_KEYS` (16) keys, each repeating the series, so the answer stays under 400 KB. The total falls as the
+  domain job severs a blocked domain's follows.
 
 - **Precedence.** The rule of a host is the block on the host itself or on its nearest parent, the longest match
   (Mastodon's `DomainBlock.rule_for`). A host is covered when its rule is a `suspend`, so a child `noop` exempts its

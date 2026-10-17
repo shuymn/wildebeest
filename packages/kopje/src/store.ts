@@ -30,6 +30,8 @@ import {
 	unsuspendAdminAccount,
 } from './domain/admin-accounts'
 import { oauthAdminStatus } from './domain/admin-authority'
+import * as adminDomainBlocks from './domain/admin-domain-blocks'
+import { instanceFollowsMeasure } from './domain/admin-measures'
 import { checkCredential, type Credential, type UserCredential } from './domain/auth'
 import * as blocks from './domain/blocks'
 import * as conversations from './domain/conversations'
@@ -857,6 +859,40 @@ export class Store extends DurableObject<Env> {
 
 	unsuspendAdminAccount(callerBuild: string, input: OperationInput<typeof unsuspendAdminAccount>) {
 		return this.#kernel.execute(callerBuild, unsuspendAdminAccount, input)
+	}
+
+	// The Mastodon admin API's domain blocks, domain allows and metrics (domain/admin-domain-blocks.ts,
+	// domain/admin-measures.ts).
+	adminDomainBlocks(callerBuild: string, input: OperationInput<typeof adminDomainBlocks.listAdminDomainBlocks>) {
+		return this.#kernel.execute(callerBuild, adminDomainBlocks.listAdminDomainBlocks, input)
+	}
+
+	adminDomainBlock(callerBuild: string, input: OperationInput<typeof adminDomainBlocks.getAdminDomainBlock>) {
+		return this.#kernel.execute(callerBuild, adminDomainBlocks.getAdminDomainBlock, input)
+	}
+
+	createAdminDomainBlock(callerBuild: string, input: OperationInput<typeof adminDomainBlocks.createAdminDomainBlock>) {
+		return this.#kernel.execute(callerBuild, adminDomainBlocks.createAdminDomainBlock, input)
+	}
+
+	updateAdminDomainBlock(callerBuild: string, input: OperationInput<typeof adminDomainBlocks.updateAdminDomainBlock>) {
+		return this.#kernel.execute(callerBuild, adminDomainBlocks.updateAdminDomainBlock, input)
+	}
+
+	deleteAdminDomainBlock(callerBuild: string, input: OperationInput<typeof adminDomainBlocks.deleteAdminDomainBlock>) {
+		return this.#kernel.execute(callerBuild, adminDomainBlocks.deleteAdminDomainBlock, input)
+	}
+
+	adminFederationGranted(callerBuild: string, input: OperationInput<typeof adminDomainBlocks.federationGranted>) {
+		return this.#kernel.execute(callerBuild, adminDomainBlocks.federationGranted, input)
+	}
+
+	adminDashboardGranted(callerBuild: string, input: OperationInput<typeof adminDomainBlocks.dashboardGranted>) {
+		return this.#kernel.execute(callerBuild, adminDomainBlocks.dashboardGranted, input)
+	}
+
+	instanceFollowsMeasure(callerBuild: string, input: OperationInput<typeof instanceFollowsMeasure>) {
+		return this.#kernel.execute(callerBuild, instanceFollowsMeasure, input)
 	}
 
 	endorse(callerBuild: string, input: OperationInput<typeof endorsements.endorse>) {

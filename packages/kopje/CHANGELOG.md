@@ -12,7 +12,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 - The admin can suspend a remote account through the Mastodon admin API (`POST /api/v1/admin/accounts/:id/action`
   with `type=suspend`, which used to answer 422) and lift that suspension (`POST /api/v1/admin/accounts/:id/unsuspend`,
-  which used to answer 403), with Mastodon's answers and errors. From the moment the suspension is saved:
+  which used to answer 403), with Mastodon's answers and errors. Lifting the suspension makes the account visible
+  again; ended follows stay ended, and Kopje does not fetch the account again as Mastodon does. Unlike Mastodon, which
+  still delivers to suspended accounts what was queued before, Kopje checks every delivery again right before sending
+  it. From the moment the suspension is saved:
     - the account is shown to nobody: its posts, boosts, notifications and interactions are hidden everywhere, its
       profile is shown blank with `suspended: true` (in the admin entity too), it is listed under `status=suspended`
       and not `active`, and its follow requests are neither listed nor accepted;
@@ -23,12 +26,47 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       stops;
     - its reports are resolved, and its follows of local users are ended in the background, each with a rejection
       sent to it (a pending request is removed without one), as Mastodon does.
-  Lifting the suspension makes the account visible again; ended follows stay ended, and Kopje does not fetch the
-  account again as Mastodon does. Unlike Mastodon, which still delivers to suspended accounts what was queued before,
-  Kopje checks every delivery again right before sending it.
+- The admin can block domains through the Mastodon admin API (`/api/v1/admin/domain_blocks`: list, show, create,
+  update and delete, as Fedilab and Fediblockhole call them), with Mastodon's entity, paging and errors, including
+  Mastodon's refusal of a block that is already there or no stricter than the one ruling its domain. A block of
+  severity `suspend` covers the domain and its subdomains (a more specific `noop` block exempts its own): from the
+  moment it is saved, their accounts are treated as suspended (shown to nobody, sent nothing but withdrawals, their
+  activities ignored but deletions, undos and rejections, and nothing fetched from them), and in the background they
+  are marked suspended and their follows with local users are ended both ways, as Mastodon does. Deleting the block
+  makes them visible again; ended follows stay ended. A `noop` block stores its flags and comments. Every change is
+  written to the moderation log (`kopje-admin moderation-log`). Differences from Mastodon:
+    - severity `silence` is not built, and answers 422; as it is Mastodon's default, so does a create without a
+      severity;
+    - `reject_media=true` answers 422 (Kopje keeps no copies of remote media to reject); `reject_reports` and
+      `obfuscate` are stored but change nothing yet;
+    - a domain of more than 8 labels, and a comment longer than 1,000 characters, answer 422, as does, like on
+      Mastodon, a domain of 256 characters or more or with a label longer than 63;
+    - while the background work of a block or unblock runs, the admin account lists `status=active` and
+      `status=suspended` answer 503 with `Retry-After` ("moderation in progress, try again") instead of a page that
+      could be wrong; searches by name or domain still answer;
+    - lifting the suspension (`POST /api/v1/admin/accounts/:id/unsuspend`) of an account that only a domain block
+      holds answers 403: delete or lower the block instead. An account suspended on its own and covered by a block
+      answers 200 and stays suspended by the block (`suspended: true`) until the block goes.
+- The measure `instance_follows` (`POST /api/v1/admin/measures`), which Fediblockhole checks before a block stricter
+  than silence: the number of accepted follows by local users of the domain's accounts (with `include_subdomains`, of
+  its subdomains' too), and a per-day series between `start_at` and `end_at`. Other measure keys are left out of the
+  answer, as Mastodon leaves out keys it does not know. With its default `max_followed_severity` (silence),
+  Fediblockhole lowers a block of a domain that local users follow to `silence`, which Kopje refuses with 422. For a
+  new block, Fediblockhole logs that error and goes on with the next one; for a block it raises (an update), it stops
+  the whole run with an error, leaving the rest of its list unpushed. A domain with only pending follow requests is
+  blocked as asked. Differences from Mastodon:
+    - a follow is counted in the series on the day it was requested, not accepted;
+    - the series has at most 366 points, a request names at most 16 measure keys, and the count walks at most 20,000
+      follows by local users in all; beyond any of these, the answer is 422, never a partial count. An instance whose
+      users follow more than 20,000 accounts in all cannot use the measure, and Fediblockhole then stops its whole run
+      with an error at the first block stricter than silence.
 
 ### Changed
 
+- The admin's role (`role.permissions` in the credential account) is now 1080: it adds manage_federation (domain
+  blocks; domain allows answer an empty list to the admin and refuse a create, as there is no limited federation
+  mode) and view_dashboard (the measure above; dimensions and retention answer an empty list). Measures, dimensions
+  and retention used to answer 403 to everyone.
 - The follow request list leaves out unavailable requesters (suspended, or being deleted) and reads a bounded window
   of requests per page, as the other filtered lists do: it may return a short or empty page while its `next` link
   still leads on.
@@ -56,7 +94,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       adds a table: on the benchmark store of 1,000,000 accounts and 500,000 outbound activities its upgrade took 7.1
       seconds (7.0 in two more runs), most of it the overhead of an upgrade on a store that size, which an upgrade
       applying several files pays once.
-    - `0046_instance_domain_blocks`: the table of instance domain blocks, which no route writes. It adds an empty
+    - `0046_instance_domain_blocks`: the table of instance domain blocks. It adds an empty
       table and reads nothing: on the same benchmark store its upgrade took 5.9 seconds (6.0 and 6.4 in two
       more runs), the overhead of an upgrade on a store that size.
 - `wrangler.jsonc`: unchanged.
