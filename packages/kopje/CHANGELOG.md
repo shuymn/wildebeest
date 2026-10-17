@@ -27,6 +27,12 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - Suspending an account through the admin API resolves only the reports that were open when the suspension was made.
   A report the admin reopened or changed after the suspension could be resolved anyway when that request carried an
   earlier time than the suspension; the order the Store applied them in now decides, whatever their times.
+- A page of remote accounts no longer risks the isolate's 128 MB memory limit when their actor documents carry huge
+  profile-field lists. Each account now reads at most 16 fields, cut to their shown length and to 32 KiB of JSON, and
+  shows only the leading fields whose sanitized names and values fit 32 KiB once serialized, dropping the rest whole.
+  An answer of N accounts thus carries at most N × 32 KiB of profile fields (a list's 1,000 members with `limit=0`:
+  32 MiB; familiar followers of 20 accounts, up to 1,600 presentations: 50 MiB). Profiles within these bounds show the
+  same fields as before; existing accounts are covered without a migration.
 
 ### Instance changes
 
