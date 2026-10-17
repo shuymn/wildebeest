@@ -18,8 +18,10 @@ import {
 	MAX_REMOTE_FIELDS,
 	presentAccountsWithin,
 	PROFILE_URL_LIMIT,
+	USERNAME_LIMIT,
 } from '../src/domain/accounts'
 import { listAccounts, MAX_LIST_MEMBERS_ANSWERED } from '../src/domain/lists'
+import { createStatus, getStatus } from '../src/domain/statuses'
 import { remoteActorInput } from '../src/federation/remote-actor'
 import { utf8Length } from '../src/platform/dump-format'
 import type { StoreOperation } from '../src/platform/store-kernel'
@@ -355,6 +357,86 @@ describe('one account has a known size (RES-2)', () => {
 		const body = await response.text()
 		expect(body).not.toContain(long)
 		expect((JSON.parse(body) as { mentions: { url: string }[] }).mentions.map((m) => m.url)).toEqual([derived])
+	})
+
+	it('shows a mention of a converted account by its cut username, in a status and in a composed one', async () => {
+		const h = await community(['alice'])
+		const [carol, dave] = [await remoteAccount(h.store, 'carol'), await remoteAccount(h.store, 'dave')]
+		const long = `https://remote.example/${'x'.repeat(PROFILE_URL_LIMIT)}`
+		// A converted 64 KiB username (no text can name it), and one of 300 characters a post can name; both with an
+		// over-long stored URL.
+		const huge = `c${'u'.repeat(64 * 1024)}`
+		const named = `d${'v'.repeat(299)}`
+		await sql(h.store, 'UPDATE accounts SET username = ?, url = ? WHERE id = ?', huge, long, carol)
+		await sql(h.store, 'UPDATE accounts SET username = ?, url = ? WHERE id = ?', named, long, dave)
+		const credential = (scope: string) =>
+			sha256Hex(h.users.alice.token).then((tokenHash) => ({ tokenHash, scope, now: NOW }))
+		// Each mention carries the username cut at USERNAME_LIMIT, and the acct and URL derived from it.
+		const expectMention = (mention: Record<string, unknown>, id: string, username: string) => {
+			const cut = username.slice(0, USERNAME_LIMIT)
+			expect(mention).toEqual({
+				id,
+				username: cut,
+				acct: `${cut}@remote.example`,
+				url: `https://remote.example/@${cut}`,
+			})
+			expect(utf8Length(JSON.stringify(mention))).toBeLessThan(1000)
+		}
+		const runLongest = (operation: StoreOperation<never, unknown>, input: unknown) =>
+			runInDurableObject(h.store, (_instance, state) => {
+				let most = 0
+				const real = state.storage.sql
+				const counting = {
+					exec: (query: string, ...params: SqlStorageValue[]) => {
+						const cursor = real.exec(query, ...params)
+						const measure = (rows: Record<string, SqlStorageValue>[]) => {
+							for (const value of rows.flatMap((row) => Object.values(row))) {
+								most = Math.max(most, typeof value === 'string' ? value.length : 0)
+							}
+							return rows
+						}
+						return { toArray: () => measure(cursor.toArray()), one: () => measure([cursor.one()])[0]! }
+					},
+				} as unknown as SqlStorage
+				let answer = operation.run(counting, input as never) as Record<string, unknown>
+				while (answer.status === 'ok' && 'value' in answer) {
+					answer = answer.value as Record<string, unknown>
+				}
+				return { most, status: answer as unknown as { content: string; mentions: unknown[] } }
+			})
+		// Composed: the 300-character username resolves and is shown cut; the 64 KiB one stays text.
+		const composed = await runLongest(createStatus, {
+			credential: await credential('write:statuses'),
+			text: `@${named}@remote.example @${huge.slice(0, 100)}@remote.example hi`,
+			spoilerText: '',
+			mediaIds: [],
+			objectId: '00000000-0000-4000-8000-000000000001',
+			now: NOW,
+			present: { origin: ORIGIN },
+		})
+		expect(composed.most).toBeLessThanOrEqual(2048)
+		expect(composed.status.content).not.toContain(long)
+		expect(composed.status.mentions).toHaveLength(1)
+		expectMention(composed.status.mentions[0] as Record<string, unknown>, dave, named)
+		// Presented: a stored status mentioning both.
+		const stored = await seedStatus(h.store, {
+			accountId: h.users.alice.id,
+			visibility: 'public',
+			mentions: [{ accountId: carol }, { accountId: dave }],
+		})
+		const read = await runLongest(getStatus, {
+			credential: await credential('read:statuses'),
+			id: stored,
+			present: { origin: ORIGIN },
+		})
+		expect(read.most).toBeLessThanOrEqual(2048)
+		const response = await h.request(`/api/v1/statuses/${stored}`, bearer(h.users.alice.token))
+		const body = await response.text()
+		expect(body).not.toContain(long)
+		const mentions = (JSON.parse(body) as { mentions: Record<string, unknown>[] }).mentions
+		const byId = new Map(mentions.map((mention) => [mention.id, mention]))
+		expectMention(byId.get(carol)!, carol, huge)
+		expectMention(byId.get(dave)!, dave, named)
 	})
 
 	it('reads and answers a page of 80 followers at every bound from a window of 240', async () => {

@@ -7,7 +7,6 @@ import {
 	type Present,
 	presentAccountsById,
 	presentedRows,
-	profileUrlSql,
 	resolveApiId,
 } from './accounts'
 import {
@@ -66,6 +65,7 @@ import { allocateLocalId } from './ids'
 import { DETACHED_GRACE_MS, DOOMED_AT, liveMediaSql } from './media'
 import { notify } from './notifications'
 import { editPoll, type PollInput, pollOptionsJson, writePoll } from './polls'
+import { profileUrlSql, usernameSql } from './profile-bounds'
 import {
 	acceptedQuoteWindow,
 	answeredRequests,
@@ -176,7 +176,7 @@ function resolveMentions(
 		d: ref.domain === null || ref.domain === localHost ? null : ref.domain,
 	}))
 	const rows = db.all<ResolvedMention & { key: string }>(
-		`SELECT json_extract(j.value, '$.key') AS key, a.id, a.uri, ${profileUrlSql('a.url')} AS url, a.username, a.domain
+		`SELECT json_extract(j.value, '$.key') AS key, a.id, a.uri, ${profileUrlSql('a.url')} AS url, ${usernameSql('a.username')} AS username, a.domain
 		FROM json_each(?1) j
 		JOIN accounts a ON a.domain IS json_extract(j.value, '$.d') AND lower(a.username) = json_extract(j.value, '$.u')
 		WHERE ${mentionableBySql('a.id', '?2')}`,

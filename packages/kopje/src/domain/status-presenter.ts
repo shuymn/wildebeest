@@ -1,4 +1,4 @@
-import { type Account, accountUrl, acctOf, type Present, presentAccountsById, profileUrlSql } from './accounts'
+import { type Account, accountUrl, acctOf, type Present, presentAccountsById } from './accounts'
 import {
 	type ApiQuoteState,
 	apiVisibility,
@@ -25,6 +25,7 @@ import {
 } from './filters'
 import { htmlToPlainText } from './plain-text'
 import { type Poll, presentPolls } from './polls'
+import { profileUrlSql, usernameSql } from './profile-bounds'
 import type { Db } from '../db/sql'
 import { httpUrl } from '../platform/http-url'
 import { remotePlainText } from '../security/html'
@@ -151,7 +152,7 @@ export type StatusRow = {
 export const STATUS_COLUMNS = `s.id, s.uri, s.url, s.account_id, s.reblog_of_id, s.in_reply_to_id,
 	s.in_reply_to_account_id, s.visibility, s.spoiler_text, s.content, s.source_text, s.sensitive,
 	s.language, s.published_at, s.edited_at, s.replies_count, s.reblogs_count, s.favourites_count, s.quotes_count,
-	s.quote_policy, au.uri AS author_uri, au.username AS author_username, au.domain AS author_domain`
+	s.quote_policy, au.uri AS author_uri, ${usernameSql('au.username')} AS author_username, au.domain AS author_domain`
 
 export const STATUS_FROM = 'statuses s JOIN accounts au ON au.id = s.account_id'
 
@@ -273,7 +274,7 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 	)
 	const mentions = groupBy(
 		db.all<MentionRow>(
-			`SELECT m.status_id, a.id, a.username, a.domain, ${profileUrlSql('a.url')} AS url, a.uri
+			`SELECT m.status_id, a.id, ${usernameSql('a.username')} AS username, a.domain, ${profileUrlSql('a.url')} AS url, a.uri
 			FROM status_mentions m JOIN accounts a ON a.id = m.account_id
 			WHERE m.status_id IN (SELECT value FROM json_each(?1)) AND m.silent = 0 ORDER BY m.status_id, a.id`,
 			all

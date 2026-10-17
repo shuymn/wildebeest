@@ -20,6 +20,14 @@ import { retractFollow } from './inbox'
 import { notify } from './notifications'
 import { readOperation } from './operation'
 import { htmlToPlainText, plainTextToHtml } from './plain-text'
+import {
+	cutSql,
+	DISPLAY_NAME_LIMIT,
+	PROFILE_URL_LIMIT,
+	profileUrlSql,
+	USERNAME_LIMIT,
+	usernameSql,
+} from './profile-bounds'
 import { accountSearchText, queryTerms } from './search-text'
 import { renderFieldValue } from './status-text'
 import { readWindow, singleWindow, type Window, windowJson, windowPage } from './windows'
@@ -160,13 +168,6 @@ const FIELD_VALUE_RAW_LIMIT = 4096
 // (a list's members with limit=0, familiar followers) at most ACCOUNT_ANSWER_BYTES in all.
 export const REMOTE_FIELDS_BYTES = 32 * 1024
 
-// SQLite's substr and length stop at an embedded NUL, so a string is cut only when its UTF-8 bytes pass the limit
-// (a code point is never longer than its bytes). A string containing a NUL is kept whole while its UTF-8 bytes fit
-// the limit; otherwise it may come out shorter than remoteFields would cut it, never longer.
-function cutSql(column: string, limit: number): string {
-	return `CASE WHEN length(CAST(${column} AS BLOB)) <= ${limit} THEN ${column} ELSE substr(${column}, 1, ${limit}) END`
-}
-
 // A remote account's attachment as ACCOUNT_COLUMNS projects it, chosen and cut in SQL so that the stored actor
 // document (up to the fetch budget, 2 MiB) never reaches the isolate: a JSON list of {name, value} entries in
 // document order, at most MAX_REMOTE_FIELDS of them, the name cut (cutSql) at FIELD_NAME_LIMIT and the value at
@@ -199,17 +200,10 @@ const REMOTE_ATTACHMENT_SQL = `CASE WHEN a.domain IS NOT NULL THEN (
 // One account is then at most about 113 KB as read and 123 KB serialized (bio 64 KiB, display name 12 KiB escaped,
 // fields 33 KB, five URLs 10 KiB, the rest about 2 KB), so a page of 80 serializes to at most about 10 MB. The actor
 // URI is bounded as stored (ACTOR_URI_LIMIT); a converted row keeps legacy's.
-export const DISPLAY_NAME_LIMIT = 2048
-// Mastodon's remote usernames are short; Kopje refuses a longer one as stored (federation/remote-actor.ts, RES-1).
-export const USERNAME_LIMIT = 255
-export const PROFILE_URL_LIMIT = 2048
 const NOTE_SQL = `CASE WHEN length(CAST(a.note AS BLOB)) > ${REMOTE_BIO_BYTES} THEN ''
 	WHEN length(CAST(json_quote(a.note) AS BLOB)) > ${REMOTE_BIO_BYTES} THEN '' ELSE a.note END`
-// A stored profile URL as every read that presents one takes it (ACCOUNT_COLUMNS, mentions): NULL past the bound.
-export const profileUrlSql = (column: string) =>
-	`CASE WHEN length(CAST(${column} AS BLOB)) <= ${PROFILE_URL_LIMIT} THEN ${column} END`
 
-export const ACCOUNT_COLUMNS = `a.id, a.uri, ${cutSql('a.username', USERNAME_LIMIT)} AS username, a.domain, a.actor_type,
+export const ACCOUNT_COLUMNS = `a.id, a.uri, ${usernameSql('a.username')} AS username, a.domain, a.actor_type,
 	${cutSql('a.display_name', DISPLAY_NAME_LIMIT)} AS display_name, ${NOTE_SQL} AS note, ${profileUrlSql('a.url')} AS url,
 	${profileUrlSql('a.avatar_url')} AS avatar_url, ${profileUrlSql('a.header_url')} AS header_url, a.locked, a.discoverable, a.followers_count, a.following_count, a.statuses_count, a.created_at,
 	${availableJoinedSql('a', 'l')} AS available,
@@ -218,6 +212,8 @@ export const ACCOUNT_COLUMNS = `a.id, a.uri, ${cutSql('a.username', USERNAME_LIM
 		AS last_status_at,
 	l.fields AS local_fields, COALESCE(l.hide_collections, a.hide_collections) AS hide_collections,
 	${REMOTE_ATTACHMENT_SQL} AS attachment`
+
+export { DISPLAY_NAME_LIMIT, PROFILE_URL_LIMIT, profileUrlSql, USERNAME_LIMIT, usernameSql }
 
 export const ACCOUNT_FROM = 'accounts a LEFT JOIN local_accounts l ON l.account_id = a.id'
 

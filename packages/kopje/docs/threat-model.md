@@ -1309,8 +1309,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   remote profile URL (`url`, icon, image) over `PROFILE_URL_LIMIT` (2,048) is not stored, as an invalid one; the
   display name is cut at 2,048 code units, and a username over 255 is refused. `ACCOUNT_COLUMNS` reads stored rows
   within the same bounds (a longer bio as '', a longer URL as NULL, the display name cut at 2,048 and the username
-  at 255 code points), and mentions read the URL through the same projection (`profileUrlSql`), so rows stored
-  earlier or converted are bounded until the account is fetched again; the admin account search reads candidates'
+  at 255 code points), and mentions read the username and URL through the same projections (`usernameSql`,
+  `profileUrlSql` in `src/domain/profile-bounds.ts`), deriving `acct` and a fallback url from the cut username, so
+  rows stored earlier or converted are bounded until the account is fetched again; the admin account search reads candidates'
   ids and flags only and tests their username, display name, domain and email in SQL. One account is then at most
   about 113 KB as read and 123 KB serialized (94 KB and 119 KB measured with every part at its bound), so a page of 80 serializes to at most about
   10 MB; realistic bios (Mastodon's 500 characters, Misskey's 1,500, Pleroma's and GoToSocial's 5,000 of Japanese
