@@ -1,6 +1,6 @@
 import type { PageQuery } from './accounts'
 import { MAX_BLOCK_LABELS } from './audience'
-import { ADMIN_PERMISSION, adminReadOperation, adminWriteOperation } from './auth'
+import { type Admin, ADMIN_PERMISSION, adminReadOperation, adminWriteOperation } from './auth'
 import {
 	blockDomainOf,
 	blockById,
@@ -80,6 +80,18 @@ const invalid = (errors: string[]): DomainBlockResult => ({
 	error: `Validation failed: ${errors.join(', ')}`,
 })
 
+// Logs an admin write to `block` in the caller's transaction (moderation-log.ts), as Mastodon's log_action.
+function logBlockAction(db: Db, admin: Admin, action: 'create' | 'update' | 'destroy', block: InstanceDomainBlock) {
+	logAction(
+		db,
+		admin,
+		action,
+		{ type: 'DomainBlock', id: String(block.id) },
+		{ domain: block.domain, severity: block.severity },
+		admin.now
+	)
+}
+
 export const listAdminDomainBlocks = adminReadOperation<{ page: PageQuery }, InstanceDomainBlock[]>(
 	ADMIN_PERMISSION.manageFederation,
 	(db, { page }) => blocksPage(db, page)
@@ -155,14 +167,7 @@ export const createAdminDomainBlock = adminWriteOperation<BlockRequest & { domai
 				? { status: 'exists', existing: created.existing }
 				: invalid(['Domain is invalid'])
 		}
-		logAction(
-			db,
-			admin,
-			'create',
-			{ type: 'DomainBlock', id: String(created.block.id) },
-			{ domain, severity },
-			admin.now
-		)
+		logBlockAction(db, admin, 'create', created.block)
 		return { status: 'ok', block: created.block }
 	}
 )
@@ -190,14 +195,7 @@ export const updateAdminDomainBlock = adminWriteOperation<BlockRequest & { id: s
 			publicComment: request.publicComment,
 			now: admin.now,
 		})!
-		logAction(
-			db,
-			admin,
-			'update',
-			{ type: 'DomainBlock', id: String(block.id) },
-			{ domain: block.domain, severity: block.severity },
-			admin.now
-		)
+		logBlockAction(db, admin, 'update', block)
 		return { status: 'ok', block }
 	}
 )
@@ -212,14 +210,7 @@ export const deleteAdminDomainBlock = adminWriteOperation<{ id: string }, Domain
 		if (block === null) {
 			return { status: 'not_found' }
 		}
-		logAction(
-			db,
-			admin,
-			'destroy',
-			{ type: 'DomainBlock', id: String(block.id) },
-			{ domain: block.domain, severity: block.severity },
-			admin.now
-		)
+		logBlockAction(db, admin, 'destroy', block)
 		return { status: 'ok', block }
 	}
 )

@@ -133,13 +133,16 @@ function stricterThan(block: Strictness, other: BlockRow): boolean {
 	return (block.rejectMedia || other.reject_media === 0) && (block.rejectReports || other.reject_reports === 0)
 }
 
-// The block a new block of `domain` (normalized) conflicts with, as Mastodon's create refuses it
-// (domain_blocks_controller.rb:32-33, 58-60): the block of `domain` itself, or a ruling block at least as strict.
+// Whether a new block of `domain` (normalized) conflicts with `ruling`, the block that rules it, as Mastodon's create
+// refuses it (domain_blocks_controller.rb:32-33, 58-60): the block of `domain` itself, or one at least as strict.
+function conflicts(domain: string, block: Strictness, ruling: BlockRow): boolean {
+	return ruling.domain === domain || !stricterThan(block, ruling)
+}
+
+// The block a new block of `domain` (normalized) conflicts with (conflicts).
 export function conflictingBlock(db: Db, domain: string, block: Strictness): InstanceDomainBlock | undefined {
-	const existing = ruleFor(db, domain)
-	return existing !== undefined && (existing.domain === domain || !stricterThan(block, existing))
-		? present(existing)
-		: undefined
+	const ruling = ruleFor(db, domain)
+	return ruling !== undefined && conflicts(domain, block, ruling) ? present(ruling) : undefined
 }
 
 export type CreateBlockResult =
@@ -155,11 +158,11 @@ export function createBlock(db: Db, input: BlockFields & { domain: string; now: 
 		return named
 	}
 	const { domain } = named
-	const existing = conflictingBlock(db, domain, input)
-	if (existing !== undefined) {
-		return { ok: false, error: 'exists', existing }
+	const ruling = ruleFor(db, domain)
+	if (ruling !== undefined && conflicts(domain, input, ruling)) {
+		return { ok: false, error: 'exists', existing: present(ruling) }
 	}
-	transition(db, ruleFor(db, domain)?.severity === 'suspend', input.severity === 'suspend')
+	transition(db, ruling?.severity === 'suspend', input.severity === 'suspend')
 	const at = new Date(input.now).toISOString()
 	const row = db.first<BlockRow>(
 		`INSERT INTO instance_domain_blocks (domain, severity, reject_media, reject_reports, obfuscate, private_comment,
