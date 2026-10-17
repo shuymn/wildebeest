@@ -369,8 +369,17 @@ describe('lane promotion across a server (NET-2)', () => {
 		await remoteAccount(h.store, 'carol', 'carol.example')
 		await remoteFollows(h.store, await remoteAccount(h.store, 'fan', 'fans.example'), alice.id)
 		const status = await post(h, alice, { status: '@carol@carol.example hi', visibility: 'private' })
-		// The Creates are in flight when the edit comes, so the edit goes as Updates queued behind them.
+		// The Creates are in flight when the edit comes, and their servers are recorded as having the status (as a
+		// delivered Create's receipt does), so the edit goes as Updates queued behind them.
 		const leased = await claim(h.store, NOW, 'a')
+		await sql(
+			h.store,
+			`INSERT INTO outbound_receipts (status_id, inbox_url, account_id, delivered_at)
+			SELECT ?, value, ?, 0 FROM json_each(?)`,
+			status.id,
+			alice.id,
+			JSON.stringify(leased.deliveries.map((d) => d.inbox))
+		)
 		await h.request(`/api/v1/statuses/${status.id}`, bearer(alice.token, json({ status: 'edited' }, { method: 'PUT' })))
 		const head = leased.deliveries.find((d) => d.inbox === 'https://carol.example/inbox')
 		return { h, head }

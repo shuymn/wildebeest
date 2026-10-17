@@ -202,8 +202,10 @@ async function deliver(
 		checkHost: () => Promise.resolve(),
 		leaseToken: () => `lease-${++n}`,
 	}
+	// A claim that only drops refused rows (a suspended sender's) claims nothing but leaves the next row due.
 	for (let round = 0; round < 40; round++) {
-		if ((await deliveryRound(t.env, deps)).claimed === 0) {
+		const result = await deliveryRound(t.env, deps)
+		if (result.claimed === 0 && (result.nextDueAt === null || result.nextDueAt > now)) {
 			return sent
 		}
 	}
@@ -528,18 +530,612 @@ describe('the Note’s quote properties', () => {
 	})
 })
 
-export {
-	accept,
-	acceptedQuote,
-	deliver,
-	label,
-	MASTODON,
-	reject,
-	signed,
-	stampDelete,
-	stampOf,
-	verifyJsonLd,
-	RETRACTION_TTL_MS,
-	MAX_QUOTED_UPDATES,
+// ---------------------------------------------------------------------------------------------------------------
+// Concurrency (PR 3): the test table, as changed by both design reviews
+// ---------------------------------------------------------------------------------------------------------------
+
+type Lane = { type: string; object_uri: string | null; inbox: string; addressee: string | null; state: string }
+
+// The delivery rows of every lane at `origin`, in id order (a lane is delivered in that order).
+async function lane(t: Setup, origin: string): Promise<Lane[]> {
+	return sql<Lane>(
+		t.store,
+		`SELECT json_extract(o.body, '$.activity.type') AS type, o.object_uri, d.inbox_url AS inbox, d.addressee, d.state
+		FROM deliveries d JOIN outbound_activities o ON o.id = d.activity_id WHERE d.inbox_url LIKE ?1 || '%'
+		ORDER BY d.id`,
+		origin
+	)
 }
-export type { DocumentLoader }
+
+// `actor` follows alice (an accepted inbound Follow).
+async function fan(t: Setup, actor: TestActor): Promise<void> {
+	expect(
+		await t.post(actor, {
+			'@context': AS,
+			id: `${actor.uri}#follows/${nextId()}`,
+			type: 'Follow',
+			actor: actor.uri,
+			object: ALICE_URI,
+		})
+	).toBe(202)
+}
+
+async function suspend(t: Setup, id: string, suspended: boolean): Promise<void> {
+	await sql(
+		t.store,
+		'UPDATE local_accounts SET suspended_at = ? WHERE account_id = ?',
+		suspended ? new Date(NOW).toISOString() : null,
+		id
+	)
+}
+
+async function jobsUntilDone(t: Setup, now = NOW): Promise<void> {
+	for (let round = 0; round < 50; round++) {
+		if (!(await t.store.runInboundJobs(BUILD, { now })).pending) {
+			return
+		}
+	}
+	throw new Error('jobs did not finish')
+}
+
+// `count` pending quotes of `quotedId` by remote statuses of `actor`'s server, each naming `stamp`.
+async function remoteQuotesNaming(
+	t: Setup,
+	bobUri: string,
+	quotedUri: string,
+	quotedId: string,
+	stamp: string | null,
+	count: number,
+	prefix = '7'
+) {
+	await sql(
+		t.store,
+		`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+		INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+		SELECT printf('${prefix}%017d', i), ?2 || '/q' || i, (SELECT id FROM accounts WHERE uri = ?2), 'public', '',
+			'2026-10-11T12:00:00.000Z' FROM n`,
+		count,
+		bobUri
+	)
+	await sql(
+		t.store,
+		`INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, quoted_account_id, state, approval_uri, updated_at)
+		SELECT id, ?1, ?2, (SELECT account_id FROM statuses WHERE id = ?2), 'pending', ?3, '2026-10-11T12:00:00.000Z'
+		FROM statuses WHERE id GLOB '${prefix}*' AND length(id) = 18`,
+		quotedUri,
+		quotedId,
+		stamp
+	)
+}
+
+describe('Concurrency (PR 3)', () => {
+	it('1: a quoted status deleted before the post refuses it; one deleted after leaves the quote pending for good', async () => {
+		const { t, bob, theirs } = await world()
+		const other = await remoteStatus(t, bob)
+		expect(await t.post(bob, remove(bob, theirs.uri))).toBe(202)
+		expect(await postRaw(t, { status: 'x', quoted_status_id: theirs.id })).toEqual({
+			status: 404,
+			body: { error: NOT_FOUND },
+		})
+		const mine = await quotePost(t, other.id)
+		expect(await t.post(bob, remove(bob, other.uri))).toBe(202)
+		await jobsUntilDone(t)
+		expect(await quoteRow(t, mine.uri)).toMatchObject({
+			state: 'pending',
+			quoted_status_id: null,
+			quoted_account_id: null,
+		})
+		const before = (await recorded(t, 'Update')).length
+		expect(await t.post(bob, accept(bob, mine.uri, stampOf(bob)))).toBe(202)
+		expect(await quoteRow(t, mine.uri)).toMatchObject({ state: 'pending' })
+		expect((await recorded(t, 'Update')).length).toBe(before)
+	})
+
+	it('3: Bob quotes Alice: Alice’s revoke reaches Bob’s receipts with her signed Delete; Bob’s delete ends the stamp', async () => {
+		const t = await setup()
+		const carol = await mastodonActor(t.web, 'carol', { origin: 'https://fans.example', key: 3 })
+		await fan(t, carol)
+		const daves = await localStatus(t, { status: 'dave', visibility: 'public' }, 'dave')
+		const mine = await quotePost(t, daves.id)
+		const authorization = (await quoteRow(t, mine.uri))!.authorization_id!
+		const stamp = `${LOCAL_ORIGIN}/ap/users/dave/quote_authorizations/${authorization}`
+		// carol's server receives alice's quote (a receipt), then dave revokes.
+		await deliver(t)
+		const revoked = await api(t, 'POST', `/api/v1/statuses/${daves.id}/quotes/${mine.id}/revoke`, undefined, 'dave')
+		expect(revoked.status).toBe(200)
+		const sent = await deliver(t)
+		const deletes = sent.filter((s) => s.json.type === 'Delete' && s.json.object === stamp)
+		expect(deletes.map((s) => s.inbox)).toContain('https://fans.example/inbox')
+		expect(deletes[0]?.json).toMatchObject({
+			actor: `${LOCAL_ORIGIN}/ap/users/dave`,
+			signature: { type: 'RsaSignature2017' },
+		})
+		// Accepted again by a new quote, then Bob (alice) deletes it: the stamp answers 404.
+		const again = await quotePost(t, daves.id)
+		const second = (await quoteRow(t, again.uri))!.authorization_id!
+		const path = `/ap/users/dave/quote_authorizations/${second}`
+		expect((await t.request(path, { headers: { accept: 'application/activity+json' } })).status).toBe(200)
+		expect((await api(t, 'DELETE', `/api/v1/statuses/${again.id}`)).status).toBe(200)
+		expect((await t.request(path, { headers: { accept: 'application/activity+json' } })).status).toBe(404)
+	})
+
+	it('4: the quoted server’s lane holds the Create, the QuoteRequest, then the Accept’s Update', async () => {
+		const { t, bob, theirs } = await world()
+		const carol = await mastodonActor(t.web, 'carol', { key: 3 })
+		await fan(t, carol)
+		await sql(t.store, 'DELETE FROM deliveries')
+		const mine = await quotePost(t, theirs.id)
+		expect((await lane(t, MASTODON)).map((d) => [d.type, d.inbox])).toEqual([
+			['Create', `${MASTODON}/users/bob/inbox`],
+			['Create', `${MASTODON}/inbox`],
+			['QuoteRequest', `${MASTODON}/inbox`],
+		])
+		// The lane's head is in flight when the Accept comes: what waits behind it is replaced by the pair (the current
+		// Create, then the Update), always after the QuoteRequest.
+		await t.store.claimDeliveries(BUILD, { now: NOW, leaseToken: 'held' })
+		expect(await t.post(bob, accept(bob, mine.uri, stampOf(bob)))).toBe(202)
+		expect((await lane(t, MASTODON)).map((d) => [d.type, d.inbox])).toEqual([
+			['Create', `${MASTODON}/users/bob/inbox`],
+			['QuoteRequest', `${MASTODON}/inbox`],
+			['Create', `${MASTODON}/users/bob/inbox`],
+			['Create', `${MASTODON}/inbox`],
+			['Update', `${MASTODON}/users/bob/inbox`],
+			['Update', `${MASTODON}/inbox`],
+		])
+		// A receiver that has not had the Create can take the inlined instrument: the full Note, the author's own.
+		const [request] = await recorded(t, 'QuoteRequest')
+		expect(request?.activity.instrument).toMatchObject({ id: mine.uri, attributedTo: ALICE_URI, quote: theirs.uri })
+	})
+
+	it('5: an edit before any claim keeps the QuoteRequest, after the current Create and the Update', async () => {
+		const { t, theirs } = await world()
+		await sql(t.store, 'DELETE FROM deliveries')
+		const mine = await quotePost(t, theirs.id)
+		expect((await api(t, 'PUT', `/api/v1/statuses/${mine.id}`, { status: 'fixed' })).status).toBe(200)
+		const types = (await lane(t, MASTODON)).map((d) => `${d.type} ${d.object_uri}`)
+		expect(types).toContain(`QuoteRequest ${mine.uri}#quote-request`)
+		expect(types.filter((x) => x.startsWith('Update'))).not.toEqual([])
+	})
+
+	it('6: deleting the status keeps lane order Create, QuoteRequest, Delete; a given-up request is retried after it', async () => {
+		const { t, theirs } = await world()
+		await sql(t.store, 'DELETE FROM deliveries')
+		const mine = await quotePost(t, theirs.id)
+		await t.store.claimDeliveries(BUILD, { now: NOW, leaseToken: 'held' })
+		expect((await api(t, 'DELETE', `/api/v1/statuses/${mine.id}`)).status).toBe(200)
+		// The Delete to each of the server's inboxes (bob's personal one and the one the Create was in flight to) follows.
+		const rows = (await lane(t, MASTODON)).map((d) => [d.type, d.state])
+		expect(rows.slice(0, 2)).toEqual([
+			['Create', 'leased'],
+			['QuoteRequest', 'queued'],
+		])
+		expect(rows.slice(2).map(([type]) => type)).toEqual(expect.arrayContaining(['Delete']))
+		expect(new Set(rows.slice(2).map(([type]) => type))).toEqual(new Set(['Delete']))
+		// Variant: the request gave up before the delete, and the operator retries everything.
+		const v = await world()
+		const other = await quotePost(v.t, v.theirs.id)
+		await sql(
+			v.t.store,
+			`UPDATE deliveries SET state = 'gave_up' WHERE activity_id IN (SELECT id FROM outbound_activities
+				WHERE json_extract(body, '$.activity.type') = 'QuoteRequest')`
+		)
+		expect((await api(v.t, 'DELETE', `/api/v1/statuses/${other.id}`)).status).toBe(200)
+		await v.t.store.retryDeliveries(BUILD, { ids: 'all', now: NOW })
+		const sent = await deliver(v.t)
+		expect(sent.filter((s) => s.json.type === 'QuoteRequest').length).toBe(1)
+	})
+
+	it('7: Accept and Reject are each one compare-and-set', async () => {
+		const { t, bob, theirs } = await world()
+		const mine = await quotePost(t, theirs.id)
+		const stamp = stampOf(bob)
+		const one = accept(bob, mine.uri, stamp)
+		// Two copies at once, through the operation queue: one transition, one Update.
+		expect(await Promise.all([t.post(bob, one), t.post(bob, { ...one, id: `${one.id}-copy` })])).toEqual([202, 202])
+		expect((await recorded(t, 'Update')).length).toBe(1)
+		// A second result changes nothing.
+		expect(await t.post(bob, accept(bob, mine.uri, stampOf(bob)))).toBe(202)
+		expect(await quoteRow(t, mine.uri)).toMatchObject({ state: 'accepted', approval_uri: stamp })
+		// Reject after Accept: revoked. Accept after: stays revoked.
+		expect(await t.post(bob, reject(bob, mine.uri))).toBe(202)
+		expect(await quoteRow(t, mine.uri)).toMatchObject({ state: 'revoked' })
+		expect(await t.post(bob, accept(bob, mine.uri, stampOf(bob)))).toBe(202)
+		expect(await quoteRow(t, mine.uri)).toMatchObject({ state: 'revoked' })
+		// Accept after Reject: stays rejected.
+		const later = await quotePost(t, theirs.id)
+		expect(await t.post(bob, reject(bob, later.uri))).toBe(202)
+		expect(await t.post(bob, accept(bob, later.uri, stampOf(bob)))).toBe(202)
+		expect(await quoteRow(t, later.uri)).toMatchObject({ state: 'rejected' })
+		// A wrong actor, a result on another origin, or none: ignored.
+		const third = await quotePost(t, theirs.id)
+		const eve = await mastodonActor(t.web, 'eve', { key: 4 })
+		expect(await t.post(eve, accept(eve, third.uri, stampOf(eve)))).toBe(202)
+		expect(await t.post(bob, accept(bob, third.uri, 'https://other.example/stamp'))).toBe(202)
+		expect(await t.post(bob, accept(bob, third.uri, null))).toBe(202)
+		expect(await quoteRow(t, third.uri)).toMatchObject({ state: 'pending', approval_uri: null })
+		// The inlined form matches too (Mastodon's quote_from_request_json).
+		const inlined = accept(bob, third.uri, stampOf(bob), {
+			object: { type: 'QuoteRequest', id: 'https://other.example/any', object: theirs.uri, instrument: third.uri },
+		})
+		expect(await t.post(bob, inlined)).toBe(202)
+		expect(await quoteRow(t, third.uri)).toMatchObject({ state: 'accepted' })
+	})
+
+	it('8: an Accept of a stamp its author deleted leaves the quote pending, until the retraction expires', async () => {
+		const clock = { now: NOW }
+		const t = await setup(clock)
+		const bob = await mastodonActor(t.web, 'bob')
+		await followed(t, bob)
+		const theirs = await remoteStatus(t, bob)
+		// (a) Delete(S) while pending, then Accept(S).
+		const a = await quotePost(t, theirs.id)
+		const s1 = stampOf(bob)
+		expect(await t.post(bob, stampDelete(bob, s1))).toBe(202)
+		expect(await t.post(bob, accept(bob, a.uri, s1))).toBe(202)
+		expect(await quoteRow(t, a.uri)).toMatchObject({ state: 'pending' })
+		// (b) A received quote names S too: its revocation is recorded, whatever its batches still have to do.
+		const b = await quotePost(t, theirs.id)
+		const s2 = stampOf(bob)
+		await remoteQuotesNaming(t, bob.uri, theirs.uri, theirs.id, s2, 3)
+		expect(await t.post(bob, stampDelete(bob, s2))).toBe(202)
+		expect(await t.post(bob, accept(bob, b.uri, s2))).toBe(202)
+		expect(await quoteRow(t, b.uri)).toMatchObject({ state: 'pending' })
+		// (c) Past RETRACTION_TTL_MS and the sweep, the retraction alone is gone: the Accept applies (Mastodon parity).
+		clock.now = NOW + RETRACTION_TTL_MS + 60_000
+		expect(await t.post(bob, accept(bob, a.uri, s1))).toBe(202)
+		expect(await quoteRow(t, a.uri)).toMatchObject({ state: 'accepted', approval_uri: s1 })
+	})
+
+	it('9: one stamp accepts one local quote', async () => {
+		const { t, bob, theirs } = await world()
+		const first = await quotePost(t, theirs.id)
+		const second = await quotePost(t, theirs.id)
+		const stamp = stampOf(bob)
+		expect(await t.post(bob, accept(bob, first.uri, stamp))).toBe(202)
+		expect(await t.post(bob, accept(bob, second.uri, stamp))).toBe(202)
+		expect(await quoteRow(t, first.uri)).toMatchObject({ state: 'accepted' })
+		expect(await quoteRow(t, second.uri)).toMatchObject({ state: 'pending', approval_uri: null })
+	})
+
+	it('10: a proven Delete revokes our quote and records one forward in its first transaction; replays add nothing', async () => {
+		const { t, bob, theirs } = await world()
+		const carol = await mastodonActor(t.web, 'carol', { origin: 'https://fans.example', key: 3 })
+		await fan(t, carol)
+		const { mine, stamp } = await acceptedQuote(t, bob, theirs.id)
+		await remoteQuotesNaming(t, bob.uri, theirs.uri, theirs.id, stamp, 300)
+		await deliver(t)
+		const body = await signed(bob, stampDelete(bob, stamp))
+		expect(await t.post(bob, body)).toBe(202)
+		expect(await quoteRow(t, mine.uri)).toMatchObject({ state: 'revoked', approval_uri: null })
+		const forwards = (await recorded(t, 'Delete')).filter((a) => a.activity.object === stamp)
+		expect(forwards).toHaveLength(1)
+		expect(forwards[0]).toMatchObject({ signer: ALICE, immutable: true, activity: body })
+		const reach = (forwards[0] as unknown as { reachOf: { object: string }[] }).reachOf
+		expect(reach.map((r) => r.object)).toEqual([mine.uri])
+		// The batches meet received quotes only, and record nothing outbound.
+		const before = (await outbound(t.store)).length
+		await jobsUntilDone(t)
+		expect(await sql(t.store, "SELECT count(*) AS n FROM quotes WHERE state = 'rejected'")).toEqual([{ n: 300 }])
+		expect((await outbound(t.store)).length).toBe(before)
+		// A replay records nothing more.
+		expect(await t.post(bob, body)).toBe(202)
+		expect((await outbound(t.store)).length).toBe(before)
+		// The body delivered to every destination is the one bob signed, byte for byte, and verifies.
+		const sent = (await deliver(t)).filter((s) => s.json.type === 'Delete' && s.json.object === stamp)
+		expect([...new Set(sent.map((s) => s.inbox))].sort()).toEqual([
+			'https://fans.example/inbox',
+			`${MASTODON}/users/bob/inbox`,
+		])
+		expect(new Set(sent.map((s) => s.body)).size).toBe(1)
+		const documentLoader: DocumentLoader = (url) =>
+			Promise.resolve({ document: bob.document, documentUrl: url, contextUrl: null })
+		for (const s of sent) {
+			expect(await verifyJsonLd(s.json, { documentLoader, contextLoader: contexts })).toBe(true)
+		}
+	})
+
+	it('10: without a proof, the Delete revokes our quote and forwards nothing', async () => {
+		const { t, bob, theirs } = await world()
+		const { mine, stamp } = await acceptedQuote(t, bob, theirs.id)
+		expect(await t.post(bob, stampDelete(bob, stamp))).toBe(202)
+		expect(await quoteRow(t, mine.uri)).toMatchObject({ state: 'revoked', approval_uri: stamp })
+		expect((await recorded(t, 'Delete')).filter((a) => a.activity.object === stamp)).toEqual([])
+		// A later proven Delete forwards it once.
+		expect(await t.post(bob, await signed(bob, stampDelete(bob, stamp)))).toBe(202)
+		expect((await recorded(t, 'Delete')).filter((a) => a.activity.object === stamp)).toHaveLength(1)
+		expect(await quoteRow(t, mine.uri)).toMatchObject({ approval_uri: null })
+	})
+
+	it('11: Delete then Reject, or Reject then Delete: one stamp-free Update and one forward either way', async () => {
+		for (const order of ['delete first', 'reject first']) {
+			const { t, bob, theirs } = await world()
+			const { mine, stamp } = await acceptedQuote(t, bob, theirs.id)
+			const deletion = await signed(bob, stampDelete(bob, stamp))
+			if (order === 'delete first') {
+				expect(await t.post(bob, deletion)).toBe(202)
+				expect(await t.post(bob, reject(bob, mine.uri))).toBe(202)
+			} else {
+				expect(await t.post(bob, reject(bob, mine.uri))).toBe(202)
+				expect(await t.post(bob, deletion)).toBe(202)
+			}
+			// The stamp-free Update supersedes (and so replaces) the Accept's.
+			const updates = await recorded(t, 'Update')
+			expect(
+				updates.map((u) => 'quoteAuthorization' in (u.activity.object as object)),
+				order
+			).toEqual([false])
+			expect(
+				(await recorded(t, 'Delete')).filter((a) => a.activity.object === stamp),
+				order
+			).toHaveLength(1)
+			expect(await quoteRow(t, mine.uri)).toMatchObject({ state: 'revoked', approval_uri: null })
+		}
+	})
+
+	it('11: the stale Accept Update given up is superseded; a follower gone and a suspended quoter still get the forward', async () => {
+		const { t, bob, theirs } = await world()
+		const carol = await mastodonActor(t.web, 'carol', { origin: 'https://fans.example', key: 3 })
+		await fan(t, carol)
+		const mine = await quotePost(t, theirs.id)
+		await deliver(t)
+		const stamp = stampOf(bob)
+		expect(await t.post(bob, accept(bob, mine.uri, stamp))).toBe(202)
+		// The Accept's Update gives up everywhere.
+		await deliver(t, () => 410)
+		// carol leaves, and alice is suspended.
+		await sql(
+			t.store,
+			'DELETE FROM follows WHERE target_account_id = ? AND account_id = (SELECT id FROM accounts WHERE uri = ?)',
+			ALICE,
+			carol.uri
+		)
+		await suspend(t, ALICE, true)
+		expect(await t.post(bob, await signed(bob, stampDelete(bob, stamp)))).toBe(202)
+		const retried = await t.store.retryDeliveries(BUILD, { ids: 'all', now: NOW })
+		expect(retried).toBeDefined()
+		const sent = await deliver(t)
+		// No Note with the stamp goes out again; the forward reaches carol's server, which had the status.
+		expect(
+			sent.filter((s) => typeof s.json.object === 'object' && JSON.stringify(s.json.object).includes(stamp))
+		).toEqual([])
+		expect(sent.filter((s) => s.json.type === 'Delete' && s.json.object === stamp).map((s) => s.inbox)).toContain(
+			'https://fans.example/inbox'
+		)
+		// The stamp-free Update is dropped while alice is suspended.
+		expect(sent.filter((s) => s.json.type === 'Update')).toEqual([])
+	})
+
+	it('12: Updates of an edit, an Accept and a policy change go in commit order; the last carries the stamp', async () => {
+		const { t, bob, theirs } = await world()
+		const mine = await quotePost(t, theirs.id)
+		await deliver(t)
+		expect((await api(t, 'PUT', `/api/v1/statuses/${mine.id}`, { status: 'edited' })).status).toBe(200)
+		const stamp = stampOf(bob)
+		expect(await t.post(bob, accept(bob, mine.uri, stamp))).toBe(202)
+		expect(
+			(await api(t, 'PUT', `/api/v1/statuses/${mine.id}/interaction_policy`, { quote_approval_policy: 'nobody' }))
+				.status
+		).toBe(200)
+		const updates = (await deliver(t)).filter((s) => s.json.type === 'Update' && s.inbox.startsWith(MASTODON))
+		const last = updates.at(-1)?.json.object as Record<string, unknown>
+		expect(last).toMatchObject({ content: expect.stringContaining('edited'), quoteAuthorization: stamp })
+		expect(last.interactionPolicy).toEqual({ canQuote: { automaticApproval: [ALICE_URI] } })
+		// Two Accept Updates at the same now get distinct ids.
+		const a = await quotePost(t, theirs.id)
+		const b = await quotePost(t, theirs.id)
+		expect(await t.post(bob, accept(bob, a.uri, stampOf(bob)))).toBe(202)
+		expect(await t.post(bob, accept(bob, b.uri, stampOf(bob)))).toBe(202)
+		const ids = (await recorded(t, 'Update')).map((u) => u.activity.id)
+		expect(new Set(ids).size).toBe(ids.length)
+	})
+
+	it('13: a leased Create does not hold the status: the pair goes too, and a server ends at the current version', async () => {
+		const { t, bob, theirs } = await world()
+		const x = await mastodonActor(t.web, 'x', { origin: 'https://x.example', key: 3 })
+		const y = await mastodonActor(t.web, 'y', { origin: 'https://y.example', key: 4 })
+		await fan(t, x)
+		await fan(t, y)
+		await sql(t.store, 'DELETE FROM deliveries')
+		const mine = await quotePost(t, theirs.id)
+		// Lease everything once (x's Create is in flight), then accept.
+		const claim = await t.store.claimDeliveries(BUILD, { now: NOW, leaseToken: 'held' })
+		const stamp = stampOf(bob)
+		expect(await t.post(bob, accept(bob, mine.uri, stamp))).toBe(202)
+		for (const origin of ['https://x.example', 'https://y.example', MASTODON]) {
+			const types = (await lane(t, origin)).map((d) => d.type)
+			expect(types.slice(-2), origin).toEqual(['Create', 'Update'])
+		}
+		// The leased Creates give up; the pair delivers the current version (with the stamp).
+		for (const d of claim.deliveries) {
+			await t.store.completeDelivery(BUILD, {
+				id: d.id,
+				leaseToken: 'held',
+				now: NOW,
+				outcome: { kind: 'failed', status: 410, error: 'gone', permanent: true },
+			})
+		}
+		const sent = await deliver(t)
+		const toX = sent.filter((s) => s.inbox === 'https://x.example/inbox')
+		expect(toX.map((s) => s.json.type)).toEqual(['Create', 'Update'])
+		expect(toX[0]?.json.object).toMatchObject({ quoteAuthorization: stamp })
+		// An operator retry of the old Create reaches a server that holds the status: a Mastodon receiver ignores it.
+		await t.store.retryDeliveries(BUILD, { ids: 'all', now: NOW })
+		const again = (await deliver(t)).filter((s) => s.inbox === 'https://x.example/inbox')
+		expect(again.every((s) => s.json.type === 'Create')).toBe(true)
+	})
+
+	it('14: an answer after the quoting status’s delete finds nothing; the delete supersedes a waiting Accept Update', async () => {
+		const { t, bob, theirs } = await world()
+		const gone = await quotePost(t, theirs.id)
+		expect((await api(t, 'DELETE', `/api/v1/statuses/${gone.id}`)).status).toBe(200)
+		const before = (await recorded(t, 'Update')).length
+		expect(await t.post(bob, accept(bob, gone.uri, stampOf(bob)))).toBe(202)
+		expect((await recorded(t, 'Update')).length).toBe(before)
+		const mine = await quotePost(t, theirs.id)
+		expect(await t.post(bob, accept(bob, mine.uri, stampOf(bob)))).toBe(202)
+		expect((await api(t, 'DELETE', `/api/v1/statuses/${mine.id}`)).status).toBe(200)
+		expect(
+			await sql(
+				t.store,
+				`SELECT superseded FROM outbound_activities WHERE object_uri = ? AND json_extract(body, '$.activity.type') = 'Update'`,
+				mine.uri
+			)
+		).toEqual([{ superseded: 1 }])
+		// Everything gives up; the operator's retry of everything never sends the superseded Update, only the Delete.
+		await deliver(t, () => 410)
+		await t.store.retryDeliveries(BUILD, { ids: 'all', now: NOW })
+		const sent = await deliver(t)
+		expect(sent.filter((s) => s.json.type === 'Update' && idOf(s.json.object) === mine.uri)).toEqual([])
+		expect(sent.some((s) => s.json.type === 'Delete' && idOf(s.json.object) === mine.uri)).toBe(true)
+	})
+
+	it('15: an Accept between detach batches is undone by the detach; one after it is ignored', async () => {
+		const { t, bob, theirs } = await world()
+		// 600 other quotes first: the detach reaches them first (quotes_quoted, in row order), ours in a later batch.
+		await remoteQuotesNaming(t, bob.uri, theirs.uri, theirs.id, null, 600)
+		const mine = await quotePost(t, theirs.id)
+		await sql(t.store, "UPDATE quotes SET state = 'accepted' WHERE status_id GLOB '7*'")
+		const count = async () =>
+			(await sql<{ quotes_count: number }>(t.store, 'SELECT quotes_count FROM statuses WHERE id = ?', theirs.id))[0]
+				?.quotes_count
+		await sql(t.store, 'UPDATE statuses SET quotes_count = 600 WHERE id = ?', theirs.id)
+		expect(await t.post(bob, remove(bob, theirs.uri))).toBe(202)
+		// Batch 1 ran in the request; the detach has not reached our row yet.
+		expect(await quoteRow(t, mine.uri)).toMatchObject({ quoted_status_id: theirs.id })
+		expect(await t.post(bob, accept(bob, mine.uri, stampOf(bob)))).toBe(202)
+		expect(await quoteRow(t, mine.uri)).toMatchObject({ state: 'accepted' })
+		await jobsUntilDone(t)
+		expect(await quoteRow(t, mine.uri)).toMatchObject({ state: 'deleted', quoted_status_id: null })
+		expect(await count()).toBeUndefined()
+		const late = await quotePost(t, (await remoteStatus(t, bob)).id)
+		expect(await t.post(bob, remove(bob, (await quoteRowTarget(t, late.uri))!))).toBe(202)
+		await jobsUntilDone(t)
+		expect(await t.post(bob, accept(bob, late.uri, stampOf(bob)))).toBe(202)
+		expect(await quoteRow(t, late.uri)).toMatchObject({ state: 'pending' })
+	})
+
+	it('16: an edit notifies at most 100 local quoters, newest first; later acceptances and revocations change that', async () => {
+		const { t, bob, theirs } = await world()
+		await sql(
+			t.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 150)
+			INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+			SELECT printf('6%017d', i), 'https://kopje.test/ap/o/q' || i, ?1, 'public', '', '2026-10-11T12:00:00.000Z' FROM n`,
+			ALICE
+		)
+		await sql(
+			t.store,
+			`INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, quoted_account_id, state, local, approval_uri, updated_at)
+			SELECT id, ?1, ?2, (SELECT account_id FROM statuses WHERE id = ?2), 'accepted', 1, 'https://mastodon.example/s/' || id,
+				'2026-10-11T12:00:00.000Z' FROM statuses WHERE id GLOB '6*'`,
+			theirs.uri,
+			theirs.id
+		)
+		const late = await quotePost(t, theirs.id)
+		expect(await t.post(bob, update(bob, { ...theirs.note, content: '<p>edited</p>' }, '2026-10-11T15:00:00Z'))).toBe(
+			202
+		)
+		const notified = await sql<{ status_id: string }>(
+			t.store,
+			"SELECT status_id FROM notifications WHERE type = 'quoted_update' ORDER BY status_id DESC"
+		)
+		expect(notified).toHaveLength(MAX_QUOTED_UPDATES)
+		expect(notified[0]?.status_id).toBe('600000000000000150')
+		expect(notified.at(-1)?.status_id).toBe('600000000000000051')
+		// Accepted after the edit: nothing for it.
+		expect(await t.post(bob, accept(bob, late.uri, stampOf(bob)))).toBe(202)
+		expect(
+			await sql(t.store, "SELECT id FROM notifications WHERE type = 'quoted_update' AND status_id = ?", late.id)
+		).toEqual([])
+		// Revoked after it: the notification is hidden (R15's quoted_update arm).
+		await sql(t.store, "UPDATE quotes SET state = 'revoked' WHERE status_id = '600000000000000150'")
+		const listed = await t.api<{ type: string; status: { id: string } }[]>(
+			'/api/v1/notifications?types[]=quoted_update&limit=40'
+		)
+		expect(listed.body.map((n) => n.status.id)).not.toContain('600000000000000150')
+		expect(listed.body[0]?.type).toBe('quoted_update')
+	})
+
+	it('17: no round ever holds a local quoting row', async () => {
+		const clock = { now: NOW }
+		const t = await setup(clock)
+		const bob = await mastodonActor(t.web, 'bob')
+		await followed(t, bob)
+		const theirs = await remoteStatus(t, bob)
+		const { mine, stamp } = await acceptedQuote(t, bob, theirs.id)
+		const idle = async () => {
+			expect(await quoteRow(t, mine.uri)).toMatchObject({ verify_after: null })
+			expect(await t.store.claimQuotes(BUILD, { now: NOW + 1, limit: 10 })).toMatchObject({ ids: [] })
+		}
+		// (a) A local user resolves our quoting status's uri.
+		await t.api(`/api/v2/search?q=${encodeURIComponent(mine.uri)}&resolve=true&type=statuses`)
+		await idle()
+		// (b) An unsigned relay of a Delete of our stamp.
+		const relay = await mastodonActor(t.web, 'relay', { origin: 'https://relay.example', key: 5 })
+		expect(await t.post(relay, stampDelete(bob, stamp))).toBe(202)
+		await idle()
+		expect(await quoteRow(t, mine.uri)).toMatchObject({ state: 'accepted' })
+		// (c) Detach, then the same uri stored again after its retraction expired: relinked with no work.
+		const target = await remoteStatus(t, bob)
+		const other = await quotePost(t, target.id)
+		expect(await t.post(bob, remove(bob, target.uri))).toBe(202)
+		await jobsUntilDone(t)
+		expect(await quoteRow(t, other.uri)).toMatchObject({ quoted_status_id: null })
+		clock.now = NOW + RETRACTION_TTL_MS + 60_000
+		expect(await t.post(bob, { ...create(bob, target.note), id: `${target.uri}/activity-again` })).toBe(202)
+		expect(await quoteRow(t, other.uri)).toMatchObject({
+			quoted_status_id: await statusId(t, target.uri),
+			verify_after: null,
+			hops: 0,
+		})
+		expect(await t.store.claimQuotes(BUILD, { now: clock.now, limit: 10 })).toMatchObject({ ids: [] })
+	})
+
+	it('18: a suspension drops the QuoteRequest and the Accept’s Update, never the forward', async () => {
+		const { t, bob, theirs } = await world()
+		const mine = await quotePost(t, theirs.id)
+		await suspend(t, ALICE, true)
+		const stamp = stampOf(bob)
+		expect(await t.post(bob, accept(bob, mine.uri, stamp))).toBe(202)
+		expect(await quoteRow(t, mine.uri)).toMatchObject({ state: 'accepted' })
+		expect(await t.post(bob, await signed(bob, stampDelete(bob, stamp)))).toBe(202)
+		const sent = await deliver(t)
+		expect(sent.filter((s) => ['QuoteRequest', 'Update', 'Create'].includes(String(s.json.type)))).toEqual([])
+		expect(sent.filter((s) => s.json.type === 'Delete' && s.json.object === stamp)).not.toEqual([])
+	})
+
+	it('20: Queue and cron rounds interleaved send each delivery once per lease, one forward, and claim no quote', async () => {
+		const { t, bob, theirs } = await world()
+		const carol = await mastodonActor(t.web, 'carol', { origin: 'https://fans.example', key: 3 })
+		await fan(t, carol)
+		const mine = await quotePost(t, theirs.id)
+		const seen: string[] = []
+		const answer = (url: string, body: string) => {
+			const json = JSON.parse(body) as Record<string, unknown>
+			seen.push(`${url} ${String(json.id)}`)
+			return 202
+		}
+		await Promise.all([deliver(t, answer), t.store.runInboundJobs(BUILD, { now: NOW })])
+		const stamp = stampOf(bob)
+		expect(await t.post(bob, accept(bob, mine.uri, stamp))).toBe(202)
+		expect((await api(t, 'PUT', `/api/v1/statuses/${mine.id}`, { status: 'edit' })).status).toBe(200)
+		await Promise.all([deliver(t, answer), deliver(t, answer), t.store.claimQuotes(BUILD, { now: NOW, limit: 10 })])
+		expect(await t.post(bob, await signed(bob, stampDelete(bob, stamp)))).toBe(202)
+		await Promise.all([deliver(t, answer), jobsUntilDone(t), deliver(t, answer)])
+		expect(new Set(seen).size).toBe(seen.length)
+		expect(seen.filter((s) => s.includes(`${stamp}#delete`) && s.startsWith('https://fans.example'))).toHaveLength(1)
+		expect(await t.store.claimQuotes(BUILD, { now: NOW + 1, limit: 10 })).toMatchObject({ ids: [] })
+	})
+})
+
+const LOCAL_ORIGIN = 'https://kopje.test'
+
+async function quoteRowTarget(t: Setup, uri: string): Promise<string | undefined> {
+	return (
+		await sql<{ quoted_uri: string }>(
+			t.store,
+			'SELECT q.quoted_uri FROM quotes q JOIN statuses s ON s.id = q.status_id WHERE s.uri = ?',
+			uri
+		)
+	)[0]?.quoted_uri
+}

@@ -316,7 +316,7 @@ export function enqueueActivity(
 	now: number,
 	options: { withdraws?: boolean } = {}
 ): void {
-	const { targets, voters } = targetsOf(
+	const found = targetsOf(
 		db,
 		signerId,
 		envelope.activity,
@@ -324,6 +324,14 @@ export function enqueueActivity(
 		options.withdraws === true,
 		envelope.reachOf ?? []
 	)
+	const { voters } = found
+	// An immutable activity's personal copy is the neutral one, byte for byte: an inbox that gets the first needs no
+	// second (a quoting status's receipt at its silent recipient's personal inbox, for a forwarded stamp Delete).
+	const personal = new Set(found.targets.filter((t) => t.addressee !== null).map((t) => t.inbox))
+	const targets =
+		envelope.immutable === true
+			? found.targets.filter((t) => t.addressee !== null || !personal.has(t.inbox))
+			: found.targets
 	const { object, retracts } = subjectOf(envelope.activity, options.withdraws === true)
 	const types = supersededTypes(envelope.activity.type)
 	if (object !== null && (retracts || types.length > 0)) {
