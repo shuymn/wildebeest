@@ -77,6 +77,10 @@ const BLOCKED_STATUS = 820000000000000000n
 const DOMAINED_STATUS = 830000000000000000n
 const LOCAL_PRIVATE = 850000000000000000n
 const LOCAL_BOOST = 860000000000000000n
+// Boosts of FRIEND's second status (reblogged_by).
+const BOOST_OLDER = 750000000000000000n
+const BOOST_HIDDEN = 760000000000000000n
+const BOOST_NEWER = 897000000000000000n
 const FRIEND_NEWER = 890000000000000000n
 const LOCAL_NEWER = 895000000000000000n
 
@@ -199,7 +203,9 @@ async function world(hidden: number, newer = 0, privates = 0): Promise<StoreStub
 				id(FRIEND_OLDER, 0)
 			)
 		}
-		const followers = (base: bigint, count: number) =>
+		// `count` accounts from `base` follow FRIEND, FRIEND follows them, and they boost FRIEND's second status (the
+		// boosts' ids from `boosts`), in id order.
+		const followers = (base: bigint, count: number, boosts: bigint) => {
 			sql.exec(
 				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
 				INSERT INTO follows (account_id, target_account_id, state) SELECT CAST(?2 + i AS TEXT), ?3, 'accepted' FROM n
@@ -208,6 +214,26 @@ async function world(hidden: number, newer = 0, privates = 0): Promise<StoreStub
 				String(base),
 				FRIEND
 			)
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+				INSERT INTO follows (account_id, target_account_id, state) SELECT ?3, CAST(?2 + i AS TEXT), 'accepted' FROM n
+				WHERE ?1 > 0`,
+				count,
+				String(base),
+				FRIEND
+			)
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+				INSERT INTO statuses (id, uri, account_id, visibility, content, published_at, reblog_of_id)
+				SELECT CAST(?3 + i AS TEXT), 'https://example.test/boosts/' || (?3 + i), CAST(?2 + i AS TEXT), 'public', '', ?5, ?4
+				FROM n WHERE ?1 > 0`,
+				count,
+				String(base),
+				String(boosts),
+				id(FRIEND_OLDER, 1),
+				at
+			)
+		}
 
 		local(VIEWER, 'viewer')
 		local(LOCAL, 'local')
@@ -252,7 +278,7 @@ async function world(hidden: number, newer = 0, privates = 0): Promise<StoreStub
 		statuses(LOCAL_OLDER, OLDER, LOCAL, 'public')
 		edges(FRIEND_OLDER, OLDER, FRIEND)
 		toAccounts(VISIBLE_ACCOUNT, OLDER)
-		followers(VISIBLE_ACCOUNT, OLDER)
+		followers(VISIBLE_ACCOUNT, OLDER, BOOST_OLDER)
 
 		statuses(GHOST_STATUS, hidden, GHOST, 'public')
 		statuses(FRIEND_BOOST, hidden, FRIEND, 'public', GHOST_STATUS)
@@ -263,14 +289,14 @@ async function world(hidden: number, newer = 0, privates = 0): Promise<StoreStub
 		statuses(LOCAL_BOOST, hidden, LOCAL, 'public', GHOST_STATUS)
 		edges(GHOST_STATUS, hidden, GHOST)
 		toAccounts(GONE_ACCOUNT, hidden)
-		followers(MUTED_ACCOUNT, hidden)
+		followers(MUTED_ACCOUNT, hidden, BOOST_HIDDEN)
 
 		statuses(FRIEND_NEWER, newer, FRIEND, 'public')
 		tagged(FRIEND_NEWER, newer)
 		statuses(LOCAL_NEWER, newer, LOCAL, 'public')
 		edges(FRIEND_NEWER, newer, FRIEND)
 		toAccounts(NEWER_ACCOUNT, newer)
-		followers(NEWER_ACCOUNT, newer)
+		followers(NEWER_ACCOUNT, newer, BOOST_NEWER)
 	})
 	return store
 }
@@ -285,6 +311,9 @@ type Read = {
 	key?: (item: { id: string }) => string
 	minId?: boolean
 }
+
+// The reads whose window sorts its edges by id (no index orders them so): the window bounds their rule, not the sort.
+const SORTING = ['following', 'favourited_by', 'reblogged_by']
 
 const range = (base: bigint, count: number) => Array.from({ length: count }, (_, i) => id(base, count - 1 - i))
 const friendStatuses = (newer: number) => [...range(FRIEND_NEWER, newer), ...range(FRIEND_OLDER, OLDER)]
@@ -403,6 +432,20 @@ const READS: Read[] = [
 		minId: true,
 	},
 	{
+		name: 'following',
+		operation: listFollows,
+		input: (page) => ({ credential, now: NOW, account: FRIEND, direction: 'following', page, present: PRESENT }),
+		expected: visibleAccounts,
+		minId: true,
+	},
+	{
+		name: 'reblogged_by',
+		operation: interactors,
+		input: (page) => ({ credential, now: NOW, id: id(FRIEND_OLDER, 1), kind: 'reblogged_by', page, present: PRESENT }),
+		expected: visibleAccounts,
+		minId: true,
+	},
+	{
 		name: 'favourited_by',
 		operation: interactors,
 		input: (page) => ({ credential, now: NOW, id: id(FRIEND_OLDER, 0), kind: 'favourited_by', page, present: PRESENT }),
@@ -477,9 +520,8 @@ describe('filtered reads read a candidate window, however long the hidden range 
 				grown.push(`${r.name}: ${fewRows} -> ${manyRows}`)
 			}
 		}
-		// favourited_by sorts the status's favourites by id (no index orders them so): its window bounds the rule, not
-		// that sort.
-		expect(grown.filter((line) => !line.startsWith('favourited_by'))).toEqual([])
+		// SORTING's windows bound their rule, not the sort of their edges.
+		expect(grown.filter((line) => !SORTING.some((name) => line.startsWith(`${name}:`)))).toEqual([])
 	}, 300_000)
 
 	// The grouped list's walk reads at most GROUP_WALK notifications, shown or hidden: it is compared beyond that.
@@ -551,6 +593,30 @@ describe('paging moves through empty windows (RES-7)', () => {
 			maxId = output.next
 		}
 		expect(seen).toEqual([...range(LOCAL_NEWER, 5), ...range(LOCAL_OLDER, OLDER)])
+	}, 120_000)
+
+	it("pages the outbox through boosts of unavailable authors' statuses to the posts below", async () => {
+		const store = await world(1_000, 5)
+		const seen: string[] = []
+		let before = '999999999999999999'
+		for (let requests = 0; ; requests++) {
+			expect(requests).toBeLessThan(100)
+			const output = answerOf(
+				await runInDurableObject(store, (_instance, state) =>
+					getOutbox.run(state.storage.sql, { username: 'local', before } as never)
+				)
+			) as { items: string[]; next: string | null }
+			seen.push(...output.items.map((item) => (JSON.parse(item) as { object: { id: string } }).object.id))
+			if (output.next === null) {
+				break
+			}
+			before = output.next
+		}
+		// Each Create's object is the status (its uri ends in its id).
+		expect(seen.map((object) => object.slice(object.lastIndexOf('/') + 1))).toEqual([
+			...range(LOCAL_NEWER, 5),
+			...range(LOCAL_OLDER, OLDER),
+		])
 	}, 120_000)
 
 	it("pages a notification group's accounts through hidden senders", async () => {
@@ -644,6 +710,16 @@ describe('windows never take a row hidden by its visibility as a candidate (docs
 					LOCAL
 				)
 			}
+			// Mentions of the viewer in them, as a notification kept from before the mention was edited out.
+			sql.exec(
+				`INSERT INTO notifications (account_id, type, from_account_id, status_id)
+				SELECT ?, 'mention', ?, id FROM statuses WHERE account_id = ? AND visibility = 'private'`,
+				VIEWER,
+				LOCAL,
+				LOCAL
+			)
+			// The viewer lists LOCAL without following it.
+			sql.exec('INSERT INTO list_accounts (list_id, account_id) VALUES (?, ?)', LIST, LOCAL)
 		})
 		const hidden = new Set<string>()
 		await runInDurableObject(store, (_instance, state) => {
@@ -673,6 +749,29 @@ describe('windows never take a row hidden by its visibility as a candidate (docs
 				(page) => ({ credential, now: NOW, page, local: false, remote: false, onlyMedia: false, present: PRESENT }),
 			],
 			['home', homeTimeline, (page) => ({ credential, page, present: PRESENT })],
+			['list', listTimeline, (page) => ({ credential, id: LIST, page, present: PRESENT })],
+			[
+				'hashtag',
+				tagTimeline,
+				(page) => ({
+					credential,
+					now: NOW,
+					page,
+					tag: 'cats',
+					any: [],
+					all: [],
+					none: [],
+					local: false,
+					remote: false,
+					onlyMedia: false,
+					present: PRESENT,
+				}),
+			],
+			[
+				'notifications',
+				listNotifications,
+				(page) => ({ credential, page, types: [], excludeTypes: [], accountId: null, present: PRESENT }),
+			],
 			['bookmarks', bookmarks, (page) => ({ credential, page, present: PRESENT })],
 			['favourites', favourites, (page) => ({ credential, page, present: PRESENT })],
 		]
