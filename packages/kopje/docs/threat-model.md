@@ -1395,7 +1395,12 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   public status that is not a boost while some account listens on a feed, on the same writes as before. Every public
   status can reach every socket (256 accounts on `public`): it is a unit per account, each within a unit's worst case,
   over as many turns as the budget needs, and a turn that resumes an event goes on from the persisted account
-  (`test/streaming/public.test.ts`, 256 sockets on distinct tokens). `src/stream-hub.ts`, `src/domain/streaming.ts`;
+  (`test/streaming/public.test.ts`, 256 sockets on distinct tokens). Every stream event kind must pass
+  `test/streaming/split.test.ts`, which splits one event of the kind (or, for a kind of one unit per event, a batch of
+  them) across turns by the budget's own constants and checks that each listener gets it exactly once and the others
+  nothing, that it finishes within a bounded number of turns while writes of its kind land between turns, that the
+  cron's turn resumes it from the persisted position after a lost continuation, and that a drain after the barrier runs
+  no turn; a new event kind joins its table (`KINDS`). `src/stream-hub.ts`, `src/domain/streaming.ts`;
   `test/streaming/streaming.test.ts`. _Gap:_ the budgets count work, not CPU time; a turn at the limits is to be
   measured on a deployed instance, as is how long a hibernated idle socket stays open.
 - **RES-7: query work is bounded, not only the rows returned.** Feeds apply visibility and filters in the query before
