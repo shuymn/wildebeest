@@ -567,10 +567,20 @@ severity `suspend` or `noop`.
       evaluated for each remote one. A covered account that is not individually suspended is marked if it is not yet,
       and severed both ways up to the bound, marked or not: its follows of local accounts (an accepted one with a
       withdrawing `Reject`, a request deleted without one) and local accounts' follows and requests of it (each with
-      its `Undo`), through `severFollow` with the account job's bounded preparation, which also removes the account
-      from the follower's lists in bounded steps (a converted instance keeps legacy lists of any number). At most
-      `MARK_ACCOUNTS` (100) accounts are reconciled a round, one resumed from the round before included. An
-      individually suspended account is skipped, so its local follows are kept (`account` wins).
+      its `Undo`), through `severFollow` with the account job's preparation. Before a local follower's follow ends,
+      the preparation removes the account from that follower's lists, writing at most the round's room (about 259
+      rows) a round, so the follow's final delete writes no list row. Its reads are not bounded the same way: each
+      preparatory step, and the final delete's trigger (`list_members_follow_ended`), scans all of the follower's
+      lists, O(L) for L lists. That is the follower's own data, at most 50 lists through the API, and unbounded only
+      for legacy lists a converted instance imported. At most `MARK_ACCOUNTS` (100) accounts are reconciled a round,
+      one resumed from the round before included. An individually suspended account is skipped, so its local follows
+      are kept (`account` wins).
+
+      **Limit (imported lists).** The memberships are removed before the follow ends, and nothing restores them. A
+      follower imported with more than about 259 lists that include a covered account needs several rounds for them.
+      If the block is lifted meanwhile (an unblock, or a conversion back to an individual suspension), the follow can
+      survive with some of those list memberships removed. Lists made through the API (at most 50 per account) always
+      finish in one round.
 
     No account is stored or moves into a covered domain, so the last walk after the last reset finds every covered
     account, and whatever the order of transitions and rounds, marks and severing agree with the blocks once the job
