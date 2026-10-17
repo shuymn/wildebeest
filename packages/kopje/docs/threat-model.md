@@ -717,14 +717,25 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   sessions, code exchange, streaming, pushes queued, claimed or confirmed, and the authorized apps listed), also after
   an unsuspension, which keeps the epoch, so credentials issued after it are valid at once; the tokens job deletes the
   older ones later. An unsuspension of a suspension made before the epoch existed moves it once. The jobs are bound to
-  their epoch: the suspension's job resolves only the reports filed up to the bound and last touched before S, and
-  stops when the account is unsuspended or in a later epoch; an unsuspension's job stops when the account is suspended
-  again. Reversed caller clocks between a reopen and the suspension (the same operator) are an accepted limit. A suspended local sender's queued deliveries are dropped when claimed, except
-  retractions and its suspension `Update` (R1); a delivery leased before the suspension committed may still be sent
-  while its lease lasts (the claim is the boundary until a send-time confirmation exists). `actOnAccount` and
+  their epoch: the suspension's job resolves only the reports frozen by the suspension, and stops when the account is
+  unsuspended or in a later epoch; an unsuspension's job stops when the account is suspended again. A suspended local
+  sender's queued deliveries are dropped when claimed, except retractions and its suspension `Update` (R1); a delivery
+  leased before the suspension committed may still be sent while its lease lasts (the claim is the boundary until a
+  send-time confirmation exists). `actOnAccount` and
   `unsuspendAdminAccount` in `src/domain/admin-accounts.ts`, `src/domain/suspension.ts`, `currentCredentialSql` in
   `src/domain/auth.ts`, `REFUSED_SENDER` in `src/domain/deliveries.ts`, migration `0034_admin_suspension`;
-  `test/admin-suspension.test.ts`, `test/cascade-guard.test.ts`, `test/migrations.test.ts`. The report notification is
+  `test/admin-suspension.test.ts`, `test/cascade-guard.test.ts`, `test/migrations.test.ts`. The report fence is
+  _implemented on branch `kopje/admin-b0`_, with no caller clock: every write to a report stamps it, in that write's
+  transaction, with the moderation log id of the admin action that caused it (`reports.last_action_id`; an admin's
+  write its own row, a suspension round's resolution the suspension's row, never one row per report), and log ids are
+  given in commit order and never twice. A suspension freezes the newest report id and its own log id
+  (`moderation_jobs.action_bound`) in its transaction, and its job resolves only reports filed up to the first, still
+  unresolved, and last stamped at or below the second (none counts as 0). So a report reopened or changed after the
+  suspension committed, and one filed after it, stay as they are, whatever either request's clock said. A job whose
+  bound is unknown (a suspension from before the fence whose log row was pruned) resolves none, and leaves them to the
+  admin. `resolveSuspensionReports` and `writeReport` in `src/domain/reports.ts`, `suspendLocal` in
+  `src/domain/suspension.ts`, `logAction` in `src/domain/moderation-log.ts`, migration `0042_report_action_fence`;
+  `test/admin-suspension.test.ts` ("the report fence"), `test/migrations.test.ts`. The report notification is
   _implemented on branch `kopje/admin-a4`_: a report another local account files notifies the OAuth admin
   (`admin.report`) when no other report of the same account is unresolved, read in the report's transaction; the
   notification carries the report as its reporter sees it, and R15 shows it, lists it, streams it and pushes it only
@@ -1256,7 +1267,14 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   (`src/mastodon/blocks.ts`). _Implemented on branch `kopje/startup-reads`:_ `GET /api/v1/instance/peers` lists at most
   10,000 domains (`MAX_PEERS` in `src/domain/instance.ts`); `familiar_followers` reads at most 20 ids and shows at
   most 80 accounts for each (`src/domain/accounts.ts`); `test/instance-reads.test.ts` ("bounds the peers"),
-  `test/account-reads.test.ts` ("bounds the ids and the accounts shown").
+  `test/account-reads.test.ts` ("bounds the ids and the accounts shown"). _Enforced (main)_ for the profile fields
+  of each presented account: a remote account's row carries at most 16 fields, each name and value cut, 32 KiB of
+  JSON in all, chosen in SQL from the stored actor document; the presenter then shows only the leading fields whose
+  sanitized names and values fit 32 KiB once serialized as JSON, dropping the rest whole. So one account answers at
+  most 32 KiB of fields whatever its document, and an answer of N presented accounts at most N × 32 KiB (a list's
+  1,000 members with `limit=0`: 32 MiB; familiar followers, up to 1,600 presentations: 50 MiB). Bios are not yet
+  bounded per answer (`REMOTE_ATTACHMENT_SQL` and `remoteFields` in `src/domain/accounts.ts`;
+  `test/remote-fields-bound.test.ts`).
 - **RES-4: stored derived data is bounded.** Snapshots, the KV cache, the spool and deliveries each have a size cap, a
   count cap or an expiry with a sweeper. _Implemented on branch `kopje/inbound-statuses`_ for remote statuses: one
   status stores at most 4 attachments (Mastodon's limit) with 10,000 code units of description each, 100 hashtags

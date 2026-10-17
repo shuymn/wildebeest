@@ -19,6 +19,7 @@ import {
 import { NOW } from './app-helpers'
 import { BUILD, migratedStore } from './helpers'
 import { newClient, VAPID } from './push-helpers'
+import { deferred } from './quote-helpers'
 import { community, post, remoteAccount, remoteFollows, seedStatus } from './status-helpers'
 import { signIn } from './web-helpers'
 import { Db } from '../src/db/sql'
@@ -28,6 +29,7 @@ import {
 	moderationRound,
 	REACH_ROUND,
 	RECENT_MS,
+	REPORT_ROUND,
 	suspendLocal,
 	TOKEN_ROUND_ROWS,
 } from '../src/domain/suspension'
@@ -554,6 +556,154 @@ describe('report resolution, bound to the generation', () => {
 		expect((await states()).map((row) => row.resolved)).toEqual([1])
 		// One Update of each generation was recorded; only the second's carries targets.
 		expect(await sql(h.store, 'SELECT count(*) AS n FROM moderation_jobs')).toEqual([{ n: 0 }])
+	})
+})
+
+describe('the report fence (R37, VIS-29; concurrency row 21)', () => {
+	// A report of alice's, filed and resolved through the API at `filed` (both before the suspension).
+	async function resolvedReport(w: Awaited<ReturnType<typeof world>>, reporter: string) {
+		const response = await w.h.request('/api/v1/reports', bearer(reporter, json({ account_id: w.alice.id })))
+		const id = (await response.json<{ id: string }>()).id
+		expect((await w.h.request(`/api/v1/admin/reports/${id}/resolve`, bearer(w.admin, { method: 'POST' }))).status).toBe(
+			200
+		)
+		return id
+	}
+
+	const reopen = async (w: Awaited<ReturnType<typeof world>>, id: string) =>
+		(await w.h.request(`/api/v1/admin/reports/${id}/reopen`, bearer(w.admin, { method: 'POST' }))).status
+
+	const resolved = (store: StoreStub) =>
+		sql<{ id: string; resolved: number }>(
+			store,
+			'SELECT CAST(id AS TEXT) AS id, action_taken_at IS NOT NULL AS resolved FROM reports ORDER BY id'
+		)
+
+	it('leaves open a report reopened after the suspension, though its clock reads earlier (row 21)', async () => {
+		const w = await world()
+		const reporter = await userToken(w.h, 'bob@example.com', 'write:reports')
+		const t0 = NOW
+		const t1 = NOW + 60_000
+		w.h.now.mockReturnValue(t0 - 1000)
+		const report = await resolvedReport(w, reporter)
+		const untouched = (
+			await (
+				await w.h.request('/api/v1/reports', bearer(reporter, json({ account_id: w.alice.id })))
+			).json<{
+				id: string
+			}>()
+		).id
+		// Applied in this order through the Store: the suspension at t1, then the reopen at t0 < t1.
+		w.h.now.mockReturnValue(t1)
+		expect(await act(w.h, w.admin, w.alice.id, { type: 'suspend' })).toEqual({ status: 200, body: {} })
+		w.h.now.mockReturnValue(t0)
+		expect(await reopen(w, report)).toBe(200)
+		await settle(w.h.store)
+		expect(await resolved(w.h.store)).toEqual([
+			{ id: report, resolved: 0 },
+			{ id: untouched, resolved: 1 },
+		])
+		// Each report carries the log row of the admin action that last wrote it: the reopen's, and the suspension's for
+		// the one its round resolved (no row of its own).
+		expect(
+			await sql(
+				w.h.store,
+				`SELECT CAST(r.id AS TEXT) AS id, a.action FROM reports r JOIN admin_actions a ON a.id = r.last_action_id
+				ORDER BY r.id`
+			)
+		).toEqual([
+			{ id: report, action: 'reopen' },
+			{ id: untouched, action: 'suspend' },
+		])
+		expect((await logRows(w.h.store)).map((row) => row.action)).toEqual(['resolve', 'suspend', 'reopen'])
+	})
+
+	it('resolves a report reopened before the suspension, though its clock reads later', async () => {
+		const w = await world()
+		const reporter = await userToken(w.h, 'bob@example.com', 'write:reports')
+		w.h.now.mockReturnValue(NOW - 1000)
+		const report = await resolvedReport(w, reporter)
+		w.h.now.mockReturnValue(NOW + 60_000)
+		expect(await reopen(w, report)).toBe(200)
+		w.h.now.mockReturnValue(NOW)
+		expect(await act(w.h, w.admin, w.alice.id, { type: 'suspend' })).toEqual({ status: 200, body: {} })
+		await settle(w.h.store)
+		expect(await resolved(w.h.store)).toEqual([{ id: report, resolved: 1 }])
+	})
+
+	it('never resolves a report filed after the suspension, though its clock reads earlier', async () => {
+		const w = await world()
+		w.h.now.mockReturnValue(NOW)
+		expect(await act(w.h, w.admin, w.alice.id, { type: 'suspend' })).toEqual({ status: 200, body: {} })
+		// Only a row can report alice now (she is unavailable to the API); it carries a clock before the suspension.
+		await sql(
+			w.h.store,
+			`INSERT INTO reports (account_id, target_account_id, status_ids, comment, category, forwarded, uri, created_at)
+			VALUES (?, ?, '[]', '', 'other', 0, 'https://kopje.test/late-report', ?)`,
+			w.bob.id,
+			w.alice.id,
+			new Date(NOW - 60_000).toISOString()
+		)
+		await settle(w.h.store)
+		expect((await resolved(w.h.store)).map((row) => row.resolved)).toEqual([0])
+	})
+
+	it('leaves open a report reopened while the job is held between its report rounds', async () => {
+		const w = await world()
+		const reporter = await userToken(w.h, 'bob@example.com', 'write:reports')
+		// More reports than one round reads, so the job's report phase spans rounds; the reopened one is read last.
+		await sql(
+			w.h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?3)
+			INSERT INTO reports (account_id, target_account_id, status_ids, comment, category, forwarded, uri, created_at)
+			SELECT ?1, ?2, '[]', '', 'other', 0, 'https://kopje.test/seeded/' || i, ?4 FROM n`,
+			w.bob.id,
+			w.alice.id,
+			REPORT_ROUND + 20,
+			new Date(NOW - 120_000).toISOString()
+		)
+		w.h.now.mockReturnValue(NOW - 60_000)
+		const report = await resolvedReport(w, reporter)
+		w.h.now.mockReturnValue(NOW)
+		expect(await act(w.h, w.admin, w.alice.id, { type: 'suspend' })).toEqual({ status: 200, body: {} })
+		const reached = deferred()
+		const gate = deferred()
+		// The jobs a round at a time, each in its own transaction (as runModerationJobs runs them); held once the
+		// suspension job has read its first round of reports.
+		const run = (async () => {
+			let after = 0
+			let held = false
+			for (let i = 0; i < 1_000; i++) {
+				if (!held) {
+					const cursor = await sql<{ n: number }>(
+						w.h.store,
+						`SELECT count(*) AS n FROM moderation_jobs
+						WHERE kind = 'suspension' AND phase = 'reports' AND json_extract(state, '$.cursor') > 0`
+					)
+					if (cursor[0]!.n > 0) {
+						held = true
+						reached.resolve()
+						await gate.promise
+					}
+				}
+				const ran = await runInDurableObject(w.h.store, (_instance, state) =>
+					state.storage.transactionSync(() => moderationRound(new Db(state.storage.sql), NOW, after))
+				)
+				if (ran === null) {
+					return held
+				}
+				after = ran.id
+			}
+			throw new Error('the jobs did not end')
+		})()
+		await reached.promise
+		w.h.now.mockReturnValue(NOW - 30_000)
+		expect(await reopen(w, report)).toBe(200)
+		gate.resolve()
+		expect(await run).toBe(true)
+		const rows = await resolved(w.h.store)
+		expect(rows.filter((row) => row.resolved === 0)).toEqual([{ id: report, resolved: 0 }])
+		expect(rows).toHaveLength(REPORT_ROUND + 21)
 	})
 })
 
