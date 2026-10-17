@@ -4454,3 +4454,118 @@ describe('0041_report_notifications_key', () => {
 		})
 	})
 })
+
+describe('0042_report_action_fence', () => {
+	const NAME = '0042_report_action_fence'
+	const at = NAMES.indexOf(NAME)
+
+	function log(sql: SqlStorage, id: number, action: string, type: 'Report' | 'Account', target: string) {
+		sql.exec(
+			`INSERT INTO admin_actions (id, actor, account_id, action, target_type, target_id, created_at)
+			VALUES (?, 'oauth', ?, ?, ?, ?, '2026-10-12T00:00:00.000Z')`,
+			id,
+			REPORTER,
+			action,
+			type,
+			target
+		)
+	}
+
+	function report(sql: SqlStorage, id: number) {
+		sql.exec(
+			`INSERT INTO reports (id, account_id, target_account_id, uri, created_at)
+			VALUES (?1, ?2, ?3, 'https://kopje.test/actor#reports/' || ?1, '2026-10-12T00:00:00.000Z')`,
+			id,
+			REPORTER,
+			TARGET
+		)
+	}
+
+	it("carries each report's newest log id over, and each running suspension job's newest suspend row", async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, MIGRATIONS.slice(0, at)).upgrade()).toMatchObject({ ok: true })
+			seedReport(sql, 0)
+			report(sql, 8)
+			report(sql, 9)
+			log(sql, 1, 'resolve', 'Report', '7')
+			log(sql, 2, 'suspend', 'Account', REPORTER)
+			log(sql, 3, 'reopen', 'Report', '7')
+			log(sql, 4, 'update', 'Report', '8')
+			log(sql, 5, 'suspend', 'Account', REPORTER)
+			for (const kind of ['tokens', 'suspension']) {
+				sql.exec(
+					"INSERT INTO moderation_jobs (kind, account_id, generation, phase) VALUES (?, ?, 1, 'reports')",
+					kind,
+					REPORTER
+				)
+			}
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+			expect(sql.exec('SELECT id, last_action_id FROM reports ORDER BY id').toArray()).toEqual([
+				{ id: 7, last_action_id: 3 },
+				{ id: 8, last_action_id: 4 },
+				{ id: 9, last_action_id: null },
+			])
+			expect(sql.exec('SELECT kind, action_bound FROM moderation_jobs ORDER BY id').toArray()).toEqual([
+				{ kind: 'tokens', action_bound: null },
+				{ kind: 'suspension', action_bound: 5 },
+			])
+		})
+	})
+
+	it('bounds a running suspension job at 0 when the log names no suspension of its account', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, MIGRATIONS.slice(0, at)).upgrade()).toMatchObject({ ok: true })
+			seedReport(sql, 0)
+			log(sql, 1, 'resolve', 'Report', '7')
+			log(sql, 2, 'suspend', 'Account', TARGET)
+			sql.exec(
+				"INSERT INTO moderation_jobs (kind, account_id, generation, phase) VALUES ('suspension', ?, 1, 'reports')",
+				REPORTER
+			)
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+			expect(sql.exec('SELECT action_bound FROM moderation_jobs').one()).toEqual({ action_bound: 0 })
+		})
+	})
+
+	// The carry-over reads the log once, and the log again per running suspension job: the rows read grow with the
+	// log's rows, and never with the reports.
+	it('reads the log, and nothing that grows with the reports', async () => {
+		const measure = async (reports: number, logged: number) => {
+			const store = freshStore()
+			return runInDurableObject(store, async (_instance, state) => {
+				const sql = state.storage.sql
+				await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+				seedReport(sql, 0)
+				sql.exec(
+					`WITH RECURSIVE n(i) AS (SELECT 8 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 + 7)
+					INSERT INTO reports (id, account_id, target_account_id, uri, created_at)
+					SELECT i, ?2, ?3, 'https://kopje.test/actor#reports/' || i, '2026-10-12T00:00:00.000Z' FROM n WHERE ?1 > 0`,
+					reports,
+					REPORTER,
+					TARGET
+				)
+				sql.exec(
+					`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+					INSERT INTO admin_actions (id, actor, account_id, action, target_type, target_id, created_at)
+					SELECT i, 'oauth', ?2, 'update', 'Report', '7', '2026-10-12T00:00:00.000Z' FROM n WHERE ?1 > 0`,
+					logged,
+					REPORTER
+				)
+				const cursor = sql.exec(MIGRATIONS[at]?.sql ?? '')
+				cursor.toArray()
+				return cursor.rowsRead
+			})
+		}
+		const none = await measure(0, 0)
+		expect(await measure(10_000, 0)).toBe(none)
+		const some = (await measure(0, 1_000)) - none
+		const twice = (await measure(0, 2_000)) - none
+		expect(some).toBeLessThanOrEqual(3 * 1_000 + 3)
+		expect(Math.abs(twice - 2 * some)).toBeLessThanOrEqual(3)
+		expect(await measure(10_000, 1_000)).toBe(none + some)
+	}, 120_000)
+})
