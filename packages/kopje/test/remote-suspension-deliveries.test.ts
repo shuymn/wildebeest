@@ -16,10 +16,9 @@ import { enqueueActivity } from '../src/domain/deliveries'
 import { deliveryRound } from '../src/jobs/deliver'
 import type { StoreStub } from '../src/platform/store-client'
 
-// VIS-30's send-time check for an account the instance suspended (R38; concurrency rows 12 a and 13 to 18 of the
-// phase B design): content to it is dropped at the claim or at confirmation through the delivery's provenance, a
-// retraction still goes in its lane's order, an operator's retry is checked again, and pushes from it are dropped. The
-// check is stricter than Mastodon's DeliveryWorker, which has none.
+// VIS-30's send-time check for an account the instance suspended (R38): content to it is dropped at the claim or at
+// confirmation through the delivery's provenance, a retraction still goes in its lane's order, an operator's retry is
+// checked again, and pushes from it are dropped. The check is stricter than Mastodon's DeliveryWorker, which has none.
 
 type Row = { id: string; inbox: string; type: string; state: string }
 
@@ -59,7 +58,7 @@ async function drain(store: StoreStub): Promise<[string, string, string][]> {
 const suspend = async (w: World, id: string) =>
 	expect(await act(w, id, { type: 'suspend' })).toMatchObject({ status: 200 })
 
-describe('content to a suspended account is dropped (rows 13 and 16)', () => {
+describe('content to a suspended account is dropped', () => {
 	it('drops a follower Create at its shared inbox, a private Create at a gateway inbox and a Like', async () => {
 		const w = await world()
 		const { alice } = w
@@ -124,7 +123,7 @@ describe('content to a suspended account is dropped (rows 13 and 16)', () => {
 	})
 })
 
-describe('a local follow of a suspended account (row 12 a)', () => {
+describe('a local follow of a suspended account', () => {
 	it('drops the queued Follow, keeps the request pending, and ignores its Accept', async () => {
 		const w = await world()
 		const r = await remoteAccount(w.h.store, 'r', 'remote.example')
@@ -155,7 +154,7 @@ describe('a local follow of a suspended account (row 12 a)', () => {
 	})
 })
 
-describe('lane order with the withdrawing Rejects (row 15)', () => {
+describe('lane order with the withdrawing Rejects', () => {
 	it('sends only the Undo and the withdrawing Reject, in lane order; content and a request’s Reject are dropped', async () => {
 		const w = await world()
 		const { alice, bob } = w
@@ -197,7 +196,7 @@ describe('lane order with the withdrawing Rejects (row 15)', () => {
 	})
 })
 
-describe('a re-formed follow after the severing (row 15)', () => {
+describe('a re-formed follow after the severing', () => {
 	it("delivers the Reject before the new follow's Accept in their shared lane, and no stale Accept after it", async () => {
 		const w = await world()
 		const r = await remoteAccount(w.h.store, 'r', 'remote.example')
@@ -220,7 +219,7 @@ describe('a re-formed follow after the severing (row 15)', () => {
 	})
 })
 
-describe('the send boundary is confirmation (row 14)', () => {
+describe('the send boundary is confirmation', () => {
 	const testEnv = { ...env, USER_KEK: LEGACY.kek } as unknown as Env
 
 	// A delivery round over `store` held at its host check, after the claim and before confirmation: `reached` resolves
@@ -388,7 +387,7 @@ describe('the send boundary is confirmation (row 14)', () => {
 	})
 })
 
-describe("an operator's retry and a long lane (row 17)", () => {
+describe("an operator's retry and a long lane", () => {
 	it('drops a given-up Create that the operator retries after the suspension, at its claim', async () => {
 		const w = await world()
 		const r = await remoteAccount(w.h.store, 'r', 'remote.example')
@@ -451,7 +450,7 @@ describe("an operator's retry and a long lane (row 17)", () => {
 	})
 })
 
-describe('pushes from a suspended account (row 18)', () => {
+describe('pushes from a suspended account', () => {
 	it('drops a push claimed before the suspension at its confirmation; the notification is listed after it', async () => {
 		const w = await world({ VAPID_JWK: VAPID.env })
 		const r = await remoteAccount(w.h.store, 'r', 'remote.example')

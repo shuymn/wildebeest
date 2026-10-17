@@ -31,9 +31,9 @@ import { verifyQuotes } from '../src/federation/quotes'
 import type { StoreStub } from '../src/platform/store-client'
 
 // Inbound activities of an account the instance suspended (R38, VIS-30), through the real inbound path: signed requests
-// verified by the Worker, then the Store's gate in every round (concurrency rows 5, 7, 8 and 10, and changes 3 and 4 of
-// the phase B design). The suspension is the admin API's (domain/remote-suspension.ts), committed while the request
-// is held at a fetch: a deterministic gate of the remote web (RemoteWeb.hold).
+// verified by the Worker, then the Store's gate in every round. The suspension is the admin API's
+// (domain/remote-suspension.ts), committed while the request is held at a fetch: a deterministic gate of the remote web
+// (RemoteWeb.hold).
 
 async function suspend(store: StoreStub, id: string): Promise<void> {
 	await runInDurableObject(store, (_instance, state) =>
@@ -67,7 +67,7 @@ async function rotated(t: Setup, actor: TestActor) {
 	return { keyId, privateKey: next.privateKey }
 }
 
-describe('the gate after the fetches before round 1 (rows 5 and 8)', () => {
+describe('the gate after the fetches before round 1', () => {
 	it('ignores a Create whose owner document was fetched before the suspension, and keeps the row frozen', async () => {
 		const t = await setup()
 		const bob = await mastodonActor(t.web, 'bob')
@@ -130,7 +130,7 @@ describe('the gate after the fetches before round 1 (rows 5 and 8)', () => {
 	})
 })
 
-describe("a suspended actor's cleanups while its job waits (row 7, change 4)", () => {
+describe("a suspended actor's cleanups while its job waits", () => {
 	it('takes a routing refresh only, then applies its Undo and Reject; the job’s Reject goes to the new inbox', async () => {
 		const t = await setup()
 		const bob = await mastodonActor(t.web, 'bob')
@@ -250,7 +250,7 @@ describe("a suspended actor's cleanups while its job waits (row 7, change 4)", (
 	})
 })
 
-describe('a Move whose source is suspended (change 3)', () => {
+describe('a Move whose source is suspended', () => {
 	it('moves no more followers once the source is suspended between batches', async () => {
 		const t = await setup()
 		const bob = await mastodonActor(t.web, 'bob')
@@ -301,7 +301,7 @@ describe('a Move whose source is suspended (change 3)', () => {
 	})
 })
 
-describe('the quote author stage (row 10)', () => {
+describe('the quote author stage', () => {
 	// Job rounds as the Queue and cron run them, until no quote's work is due at `now`; how many it took.
 	async function rounds(t: Setup, now: number): Promise<number> {
 		const deps = { ...inboxDeps(() => t.store, t.web.loader), now: () => now }

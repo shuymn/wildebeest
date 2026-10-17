@@ -29,10 +29,8 @@ import type { StoreStub } from '../src/platform/store-client'
 
 // The instance suspension of a remote account through the Mastodon admin API (R1, R38, VIS-30; Admin::AccountAction,
 // SuspendAccountService#reject_remote_follows! and UnsuspendAccountService of Mastodon 4.5.11): the action and its
-// errors, the entity and the lists, the account job's rounds and their generation (concurrency row 1), its budget
-// (change 2 of the phase B design), and follow requests (row 12). Deliveries (rows 13 to 18) are in
-// remote-suspension-deliveries.test.ts, the inbound paths (rows 5, 7, 8, 10, changes 3 and 4) in
-// remote-suspension-inbound.test.ts.
+// errors, the entity and the lists, the account job's rounds and their generation, its budget, and follow requests.
+// Deliveries are in remote-suspension-deliveries.test.ts, the inbound paths in remote-suspension-inbound.test.ts.
 
 describe('the remote suspension action (Admin::AccountAction, R38)', () => {
 	it('suspends a remote account: 200, logged, a job, and the entity, list and profile show it suspended', async () => {
@@ -51,7 +49,7 @@ describe('the remote suspension action (Admin::AccountAction, R38)', () => {
 		expect(await adminIds(w, 'status=suspended')).toEqual([r])
 		expect(await adminIds(w, 'origin=remote&status=active')).toEqual([])
 		expect(await adminIds(w, 'status=active')).not.toContain(r)
-		// The ordinary and the bulk account reads present it redacted (change 6).
+		// The ordinary and the bulk account reads present it redacted, reading availability live.
 		const single = await w.h.request(`/api/v1/accounts/${r}`, bearer(w.alice.token))
 		expect(await single.json()).toMatchObject({ id: r, suspended: true })
 		const bulk = await w.h.request(`/api/v1/accounts?id[]=${r}`, bearer(w.alice.token))
@@ -139,7 +137,7 @@ describe('the remote suspension action (Admin::AccountAction, R38)', () => {
 	})
 })
 
-describe('the account job (concurrency row 1)', () => {
+describe('the account job and its generation', () => {
 	// r follows alice, bob and carol, and bob files two reports of it.
 	async function followed() {
 		const w = await world()
@@ -264,7 +262,7 @@ describe('the account job (concurrency row 1)', () => {
 	})
 })
 
-describe("the severing round's budget (change 2 and its preparatory steps)", () => {
+describe("the severing round's budget and its preparatory steps", () => {
 	const PAIR = 'https://remote.example/follows/r/alice'
 
 	// r follows alice through the Store's inbox: with a Misskey pair-shaped Follow id when `generations` > 1, undone and
@@ -492,7 +490,7 @@ describe("the severing round's budget (change 2 and its preparatory steps)", () 
 	}, 180_000)
 })
 
-describe('follow requests of a suspended account (row 12 b)', () => {
+describe('follow requests of a suspended account', () => {
 	it('are refused to authorize and left out of the list while it is suspended, and listed again after', async () => {
 		const w = await world()
 		const r = await remoteAccount(w.h.store, 'r')

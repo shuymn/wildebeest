@@ -352,9 +352,9 @@ export function accountDomain(
 	return { domain: host, confirmedUsername: null }
 }
 
-// R38 (change 11 of the phase B design; Mastodon's set_immediate_protocol_attributes!): a verified document of an
-// individually suspended account updates its inbox and shared inbox only, so that moderation's Rejects reach a current
-// inbox. Its profile, keys and stored domain stay frozen; the values passed remote-actor.ts's checks as any refresh's.
+// R38 (Mastodon's set_immediate_protocol_attributes!): a verified document of an individually suspended account updates
+// its inbox and shared inbox only, so that moderation's Rejects reach a current inbox. Its profile, keys and stored
+// domain stay frozen; the values passed remote-actor.ts's checks as any refresh's.
 function refreshRouting(db: Db, accountId: string, actor: RemoteActorInput): void {
 	db.run(
 		`UPDATE accounts SET inbox_url = ?2, shared_inbox_url = ?3
@@ -2387,9 +2387,9 @@ export const receiveActivity = writeOperation<ReceiveInput, ReceiveResult>((db, 
 	return { ...result, delivers: outboundSince(db, before) }
 })
 
-// What an unavailable actor's activity may still do (decision 1 of the phase B design): its Deletes, a DeleteActor, an
-// Undo and a Reject, which only remove state. A Reject ending our follow of it must apply, since local follows of a
-// suspended account are kept (R38). Mastodon also admits Update (process_collection_service.rb:59-61); Kopje does not.
+// What an unavailable actor's activity may still do (R38): its Deletes, a DeleteActor, an Undo and a Reject, which only
+// remove state. A Reject ending our follow of it must apply, since local follows of a suspended account are kept (R38).
+// Mastodon also admits Update (process_collection_service.rb:59-61); Kopje does not.
 const SUSPENDED_ADMITS: ReadonlySet<InboundActivity['type']> = new Set([
 	'Delete',
 	'RelayedDelete',
