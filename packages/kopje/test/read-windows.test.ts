@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { NOW } from './app-helpers'
 import { migratedStore } from './helpers'
 import { rowsRead } from './read-helpers'
-import { listFollows, type Page, type PageQuery } from '../src/domain/accounts'
+import { listFollowRequests, listFollows, type Page, type PageQuery } from '../src/domain/accounts'
 import { getOutbox } from '../src/domain/activities'
 import { listEndorsements } from '../src/domain/endorsements'
 import { listAccounts } from '../src/domain/lists'
@@ -35,7 +35,7 @@ import type { StoreOperation } from '../src/platform/store-kernel'
 // `newer`, also newer. The hidden range is `hidden` rows of each kind, newest:
 //   - availability (an account being deleted): GHOST's public statuses, FRIEND's boosts of them (home, the list,
 //     FRIEND's statuses), the viewer's bookmarks and favourites of them, GHOST's mentions of the viewer, and GONE_i
-//     (each being deleted) as request senders, list members and endorsements, and as favouriters of FRIEND's status;
+//     (each being deleted) as notification and follow request senders, list members and endorsements, and as favouriters of FRIEND's status;
 //   - a block: BLOCKED's public #cats statuses;
 //   - a domain block: DOMAINED's public statuses;
 //   - a mute: MUTED_i following FRIEND;
@@ -200,6 +200,13 @@ async function world(hidden: number, newer = 0, privates = 0): Promise<StoreStub
 				base,
 				`INSERT INTO favourites (account_id, status_id) SELECT CAST(?2 + i AS TEXT), ?3 FROM n WHERE ?1 > 0`,
 				id(FRIEND_OLDER, 0)
+			)
+			each(
+				count,
+				base,
+				`INSERT INTO follows (account_id, target_account_id, state) SELECT CAST(?2 + i AS TEXT), ?3, 'pending' FROM n
+				WHERE ?1 > 0`,
+				VIEWER
 			)
 		}
 		// `count` accounts from `base` follow FRIEND, FRIEND follows them, and they boost FRIEND's second status (the
@@ -400,6 +407,13 @@ const READS: Read[] = [
 		input: (page) => ({ credential, now: NOW, account: FRIEND, direction: 'followers', page, present: PRESENT }),
 		// The viewer follows FRIEND first, below every other follower.
 		expected: (newer) => [...visibleAccounts(newer), VIEWER],
+		minId: true,
+	},
+	{
+		name: 'follow requests',
+		operation: listFollowRequests,
+		input: (page) => ({ credential, page, present: PRESENT }),
+		expected: visibleAccounts,
 		minId: true,
 	},
 	{

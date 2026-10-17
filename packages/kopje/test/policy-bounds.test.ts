@@ -5181,8 +5181,9 @@ describe("the admin's account list reads a page, however many accounts do not ma
 		invitedBy: null,
 	}
 
-	// An account kind: a username (and display name) prefix, a domain (null: local), and whether its deletion started.
-	type Kind = { username: string; domain: string | null; display: string; deleted?: boolean }
+	// An account kind: a username (and display name) prefix, a domain (null: local), whether its deletion started, and
+	// whether the instance suspended it (R38).
+	type Kind = { username: string; domain: string | null; display: string; deleted?: boolean; suspended?: boolean }
 	// `matching` selects the case's matches in SQL over `accounts a LEFT JOIN local_accounts l`.
 	type Case = { name: string; filter: Partial<AdminAccountFilter>; match: Kind; bulk: Kind[]; matching: string }
 
@@ -5245,6 +5246,20 @@ describe("the admin's account list reads a page, however many accounts do not ma
 			matching: 'a.deleted_at IS NOT NULL OR a.suspended_at IS NOT NULL OR l.suspended_at IS NOT NULL',
 		},
 		{
+			name: 'status=suspended among remote accounts the instance suspended',
+			filter: { status: 'suspended' },
+			match: { ...remote('gone'), deleted: true },
+			bulk: [{ ...remote('held'), suspended: true }, remote('r')],
+			matching: 'a.deleted_at IS NOT NULL OR a.suspended_at IS NOT NULL OR l.suspended_at IS NOT NULL',
+		},
+		{
+			name: 'status=suspended, a remote account the instance suspended',
+			filter: { status: 'suspended' },
+			match: { ...remote('held'), suspended: true },
+			bulk: [remote('r')],
+			matching: 'a.deleted_at IS NOT NULL OR a.suspended_at IS NOT NULL OR l.suspended_at IS NOT NULL',
+		},
+		{
 			name: 'status=pending (nothing to read)',
 			filter: { status: 'pending' },
 			match: remote('r'),
@@ -5264,6 +5279,14 @@ describe("the admin's account list reads a page, however many accounts do not ma
 			filter: { status: 'active' },
 			match: remote('r'),
 			bulk: [remote('r')],
+			matching: 'a.deleted_at IS NULL AND a.suspended_at IS NULL AND l.suspended_at IS NULL',
+		},
+		// The active walk among many remote accounts the instance suspended (R38).
+		{
+			name: 'status=active among suspended remote accounts',
+			filter: { status: 'active' },
+			match: remote('r'),
+			bulk: [{ ...remote('held'), suspended: true }],
 			matching: 'a.deleted_at IS NULL AND a.suspended_at IS NULL AND l.suspended_at IS NULL',
 		},
 		// The active walks among many remote accounts whose deletion has started (awaiting their purge).
@@ -5302,12 +5325,13 @@ describe("the admin's account list reads a page, however many accounts do not ma
 			const per = interleaved ? bulk / few : 0
 			sql.exec(
 				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1),
-				kinds(k, username, domain, display, deleted) AS (SELECT key, value ->> '$.username', value ->> '$.domain',
-					value ->> '$.display', value ->> '$.deleted' FROM json_each(?2))
-				INSERT INTO accounts (id, uri, username, domain, display_name, deleted_at)
+				kinds(k, username, domain, display, deleted, suspended) AS (SELECT key, value ->> '$.username',
+					value ->> '$.domain', value ->> '$.display', value ->> '$.deleted', value ->> '$.suspended' FROM json_each(?2))
+				INSERT INTO accounts (id, uri, username, domain, display_name, deleted_at, suspended_at, suspension_source)
 				SELECT printf('%018d', 691000000000000000 + n.i),
 					'https://' || coalesce(kinds.domain, 'kopje.test') || '/users/x' || n.i, kinds.username || n.i, kinds.domain,
-					kinds.display || ' ' || n.i, CASE WHEN kinds.deleted THEN ?3 END
+					kinds.display || ' ' || n.i, CASE WHEN kinds.deleted THEN ?3 END, CASE WHEN kinds.suspended THEN ?3 END,
+					CASE WHEN kinds.suspended THEN 'account' END
 				FROM n JOIN kinds ON kinds.k = CASE
 					WHEN ?7 THEN CASE WHEN n.i % (?4 + 1) = ?4 THEN ?5 ELSE n.i % ?5 END
 					ELSE CASE WHEN n.i < ?6 THEN ?5 ELSE n.i % ?5 END END`,
