@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest'
 import { sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { ALICE, setup, type Setup } from './inbox-status-helpers'
-import { observedSql } from './read-helpers'
+import { observedSql, rowsRead } from './read-helpers'
 import { community, post, remoteAccount } from './status-helpers'
 import { listConversations, MAX_PRESENTED_PARTICIPANTS } from '../src/domain/conversations'
 import { ACTOR_URI_LIMIT, PROFILE_URL_LIMIT, USERNAME_LIMIT } from '../src/domain/profile-bounds'
@@ -21,7 +21,7 @@ import {
 	MAX_TAG_LENGTH,
 	MEDIA_URL_LIMIT,
 } from '../src/domain/status-bounds'
-import { getStatus, statusHistory, statusSource } from '../src/domain/statuses'
+import { getStatus, getStatuses, statusHistory, statusSource } from '../src/domain/statuses'
 import { parseRemoteStatus } from '../src/federation/remote-status'
 import { utf8Length } from '../src/platform/dump-format'
 import type { StoreOperation } from '../src/platform/store-kernel'
@@ -392,8 +392,9 @@ describe('a stored status is read within its bounds (RES-2)', () => {
 		const odd = status.mentions.find((m) => m.id === mentions[1])!
 		expect(odd.username).toBe(C.repeat(Math.floor(USERNAME_LIMIT / 6)))
 		expect(jsonStringBytes(odd.username as string)).toBeLessThanOrEqual(USERNAME_LIMIT + 2)
+		// The over-long name sorts first: it takes one of the MAX_PRESENTED_TAGS rows read and is left out.
 		expect(status.tags.map((tag) => tag.name)).toEqual(
-			Array.from({ length: MAX_PRESENTED_TAGS }, (_, i) => `t${String(i).padStart(3, '0')}`)
+			Array.from({ length: MAX_PRESENTED_TAGS - 1 }, (_, i) => `t${String(i).padStart(3, '0')}`)
 		)
 		expect(status.poll!.options.map((o) => o.title)).toEqual(
 			Array.from({ length: MAX_REMOTE_OPTIONS }, () => 'x'.repeat(MAX_REMOTE_OPTION_LENGTH))
@@ -456,6 +457,66 @@ describe('a stored status is read within its bounds (RES-2)', () => {
 		const source = await read(t, statusSource as never, id)
 		expect(source.answer).toEqual({ id, text: '', spoiler_text: '' })
 		expect(source.longest).toBeLessThanOrEqual(STATUS_CONTENT_BYTES)
+	})
+})
+
+describe('each per-status cap reads a bounded number of rows (RES-7)', () => {
+	it('reads at most its cap of rows whatever a converted status holds, each status once', async () => {
+		const t = await setup()
+		const author = await maximalAccount(t, true)
+		const id = await storedStatus(t, author, {
+			content: '<p>x</p>',
+			spoiler: '',
+			media: [],
+			mentions: [],
+			tags: [],
+			poll: null,
+		})
+		const many = 10_000
+		// Rejected rows that sort before the presented ones: over-long tag names, hidden media and silent mentions.
+		await sql(
+			t.store,
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?2 - 1)
+			INSERT INTO status_tags (status_id, name, public) SELECT ?1, 'a' || printf('%05d', i) || ?3, 1 FROM n`,
+			id,
+			many,
+			'x'.repeat(MAX_TAG_LENGTH)
+		)
+		await sql(t.store, "INSERT INTO status_tags (status_id, name, public) VALUES (?1, 'shown', 1)", id)
+		await sql(
+			t.store,
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?3 - 1)
+			INSERT INTO media_attachments (id, account_id, status_id, position, type, url, shown)
+			SELECT CAST(800000000000000000 + i AS TEXT), ?2, ?1, i, 'image', 'https://m.example/' || i, 0 FROM n`,
+			id,
+			author,
+			many
+		)
+		await sql(
+			t.store,
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+			INSERT INTO accounts (id, uri, username, domain)
+			SELECT CAST(700000000000000000 + i AS TEXT), 'https://m.example/users/s' || i, 's' || i, 'm.example' FROM n`,
+			many
+		)
+		await sql(
+			t.store,
+			`INSERT INTO status_mentions (status_id, account_id, silent, requires_mention, author_id)
+			SELECT ?1, id, 1, 0, ?2 FROM accounts WHERE id BETWEEN '700000000000000000' AND '700000000000009999'`,
+			id,
+			author
+		)
+		const credentialOf = await credential(t)
+		const rows = (ids: string[]) =>
+			rowsRead(t, getStatuses as never, { credential: credentialOf, now: NOW, ids, present: { origin: ORIGIN } })
+		const once = await rows([id])
+		// The status, its account, at most MAX_STATUS_MENTION_ROWS mentions, MAX_PRESENTED_TAGS tags and MAX_STATUS_MEDIA
+		// media, and a constant number of other rows; never the 30,000 rejected ones.
+		expect(once).toBeLessThan(MAX_STATUS_MENTION_ROWS + MAX_PRESENTED_TAGS + MAX_STATUS_MEDIA + 200)
+		// Repeating the id adds only the rows of reading the repeated ids, not another status's worth.
+		expect(await rows([id, id, id, id])).toBeLessThanOrEqual(once + 8)
+		const { answer } = await read(t, getStatus as never, id)
+		expect(answer).toMatchObject({ media_attachments: [], mentions: [], tags: [] })
 	})
 })
 

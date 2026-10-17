@@ -284,12 +284,17 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 		options
 	)
 	// At most MAX_STATUS_MEDIA attachments, MAX_STATUS_MENTION_ROWS mentions and MAX_PRESENTED_TAGS hashtags of each
-	// status, cut in SQL (a converted row may hold more), each read through its index.
+	// status (each status once), cut in SQL: a converted row may hold more. Each cap reads at most that many rows of
+	// the status through its index, whatever is stored, and only then filters them: a mention among them that is
+	// silent, or a hashtag whose name is past its bound, is left out rather than replaced by a later one, so a converted
+	// status holding such rows may show fewer. Media are read through media_attachments_status, which orders the
+	// shown attachments of a status by position, so hidden ones cost nothing.
+	const statusIds = 'SELECT DISTINCT value FROM json_each(?1)'
 	const media = groupBy(
 		db.all<MediaRow & { status_id: string }>(
 			`SELECT ${MEDIA_COLUMNS}, status_id FROM media_attachments
-			WHERE id IN (SELECT x.id FROM json_each(?1) j CROSS JOIN media_attachments x ON x.id IN (SELECT y.id
-				FROM media_attachments y WHERE y.status_id = j.value AND y.shown = 1 ORDER BY y.position, y.id
+			WHERE id IN (SELECT x.id FROM (${statusIds}) j CROSS JOIN media_attachments x ON x.id IN (SELECT y.id
+				FROM media_attachments y WHERE y.status_id = j.value AND y.shown = 1 ORDER BY y.position
 				LIMIT ${MAX_STATUS_MEDIA}))
 			ORDER BY status_id, position, id`,
 			all
@@ -299,18 +304,19 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 		db.all<MentionRow>(
 			`SELECT j.value AS status_id, a.id, ${usernameSql('a.username')} AS username, a.domain,
 				${profileUrlSql('a.url')} AS url, ${actorUriSql('a.uri')} AS uri
-			FROM json_each(?1) j CROSS JOIN accounts a
-			WHERE a.id IN (SELECT m.account_id FROM status_mentions m WHERE m.status_id = j.value AND m.silent = 0
-				ORDER BY m.account_id LIMIT ${MAX_STATUS_MENTION_ROWS})
+			FROM (${statusIds}) j CROSS JOIN accounts a
+			WHERE a.id IN (SELECT m.account_id FROM (SELECT account_id, silent FROM status_mentions
+				WHERE status_id = j.value ORDER BY account_id LIMIT ${MAX_STATUS_MENTION_ROWS}) m WHERE m.silent = 0)
 			ORDER BY j.value, a.id`,
 			all
 		)
 	)
 	const tags = groupBy(
 		db.all<{ status_id: string; name: string }>(
-			`SELECT j.value AS status_id, ${tagNameSql('t.name')} AS name FROM json_each(?1) j CROSS JOIN status_tags t
-			WHERE t.status_id = j.value AND t.name IN (SELECT ${tagNameSql('n.name')} FROM status_tags n
-				WHERE n.status_id = j.value AND ${tagNameSql('n.name')} IS NOT NULL ORDER BY n.name LIMIT ${MAX_PRESENTED_TAGS})
+			`SELECT j.value AS status_id, ${tagNameSql('t.name')} AS name FROM (${statusIds}) j CROSS JOIN status_tags t
+			WHERE t.status_id = j.value AND t.name IN (SELECT n.name FROM (SELECT ${tagNameSql('name')} AS name
+				FROM status_tags WHERE status_id = j.value ORDER BY status_tags.name LIMIT ${MAX_PRESENTED_TAGS}) n
+				WHERE n.name IS NOT NULL)
 			ORDER BY j.value, t.name`,
 			all
 		)
