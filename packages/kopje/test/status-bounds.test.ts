@@ -182,7 +182,7 @@ async function maximalParts(t: Setup): Promise<Parts> {
 	}
 }
 
-type Measure = { answer: unknown; rows: number; sqliteBytes: number; longest: number }
+type Measure = { answer: unknown; rows: number; sqliteBytes: number; longest: number; profileBytes: number }
 
 // Runs a read over a SqlStorage that measures what leaves SQLite: the rows, the UTF-8 bytes of their values (eight per
 // number) and the longest value's bytes.
@@ -191,12 +191,15 @@ async function measured<I>(t: Setup, operation: StoreOperation<I, unknown>, inpu
 		let rows = 0
 		let sqliteBytes = 0
 		let longest = 0
+		let profileBytes = 0
 		const counting = observedSql(state.storage.sql, (read) => {
 			for (const row of read) {
 				rows++
+				const profile = 'note' in row && 'display_name' in row
 				for (const value of Object.values(row)) {
 					const bytes = typeof value === 'string' ? utf8Length(value) : 8
 					sqliteBytes += bytes
+					profileBytes += profile ? bytes : 0
 					longest = Math.max(longest, bytes)
 				}
 			}
@@ -205,7 +208,7 @@ async function measured<I>(t: Setup, operation: StoreOperation<I, unknown>, inpu
 		while (answer.status === 'ok' && 'value' in answer) {
 			answer = answer.value as Record<string, unknown>
 		}
-		return { answer, rows, sqliteBytes, longest }
+		return { answer, rows, sqliteBytes, longest, profileBytes }
 	})
 }
 
@@ -508,7 +511,7 @@ describe('realistic content is never cut (RES-2)', () => {
 })
 
 describe('the table of maxima (RES-3)', () => {
-	it('measures a status, a boost of a quote and an account at every bound', async () => {
+	it('measures a status, a quote, a boost of a quote and an account at every bound', async () => {
 		const t = await setup()
 		const [booster, quoter, quotedAuthor] = [await maximalAccount(t), await maximalAccount(t), await maximalAccount(t)]
 		const quoted = await storedStatus(t, quotedAuthor, await maximalParts(t))
@@ -551,8 +554,13 @@ describe('the table of maxima (RES-3)', () => {
 		expect(shown.tags).toHaveLength(MAX_STATUS_TAGS)
 		expect(shown.poll!.options).toHaveLength(MAX_REMOTE_OPTIONS)
 		expect((pair.answer as { reblog: { quote: { quoted_status: unknown } } }).reblog.quote.quoted_status).not.toBeNull()
-		const measuredTable = { status, boosted, account: { json: jsonBytes(account), nodes: nodes(account) } }
-		console.log(JSON.stringify(measuredTable))
-		expect(status.json).toBeLessThan(4 * 1024 * 1024)
+		const quoting = shape(await read(t, getStatus as never, quote))
+		// docs/threat-model.md "Maxima of presented units" states these; the composite shapes are derived from them.
+		expect({ status, quoting, boosted, account: { sqlite: one.profileBytes, json: jsonBytes(account) } }).toEqual({
+			status: { sqlite: 2_179_603, json: 2_954_797, rows: 311, nodes: 1_607 },
+			quoting: { sqlite: 4_359_149, json: 5_909_627, rows: 620, nodes: 3_216 },
+			boosted: { sqlite: 4_465_596, json: 6_042_485, rows: 623, nodes: 3_269 },
+			account: { sqlite: 97_844, json: 124_080 },
+		})
 	})
 })
