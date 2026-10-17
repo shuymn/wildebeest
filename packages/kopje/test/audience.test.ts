@@ -178,7 +178,7 @@ describe('the recipient rule (recipientsFor, addresses)', () => {
 			const of = (type: string) => {
 				const recipients = recipientsFor(db, alice.id, { type, object: 'https://kopje.test/ap/o/1' }, audience)
 				return {
-					followers: recipients.followerInboxes,
+					followers: recipients.followers.map((f) => f.inbox),
 					accounts: recipients.accounts.map((a) => a.uri),
 					named: [carol.id, bob, far].map((x) => addresses(db, outboundKind({ type }), alice.id, x)),
 				}

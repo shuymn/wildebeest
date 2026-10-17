@@ -1,6 +1,6 @@
 import { pushRound } from './push'
 import { decodeKey } from '../domain/actors'
-import type { Completion, DeliverySigner } from '../domain/deliveries'
+import type { Completion, Confirmation, DeliverySigner } from '../domain/deliveries'
 import { CLAIM_LIMIT, INSTANCE_SIGNER } from '../domain/deliveries'
 import { COMPLETION_MARGIN_MS, type PostDeps, postActivity, ringDoorbell } from '../federation/delivery'
 import { instanceActorKey } from '../federation/federation'
@@ -32,7 +32,11 @@ export type DeliveryDeps = {
 	keygen?: KeyGen
 }
 
-export type RoundResult = { claimed: number; settled: Completion['status'][]; nextDueAt: number | null }
+// settled: each claimed row's completion, or 'dropped' when its confirmation refused it (VIS-30); a row whose
+// confirmation found its lease gone, or did not reach the Store, settles nothing here.
+export type RoundResult = { claimed: number; settled: (Completion['status'] | 'dropped')[]; nextDueAt: number | null }
+
+type Dropped = { status: 'dropped'; nextDueAt: number | null }
 
 const freshToken = () => crypto.randomUUID()
 
@@ -93,14 +97,44 @@ export async function deliveryRound(env: Env, deps: DeliveryDeps): Promise<Round
 	}
 	const deadline = claim.leaseUntil - COMPLETION_MARGIN_MS
 	const settled = await Promise.all(
-		claim.deliveries.map(async (delivery): Promise<Completion | null> => {
-			// Key loading counts against the delivery's budget like the DNS check and the POST.
+		claim.deliveries.map(async (delivery): Promise<Completion | Dropped | null> => {
+			// What the confirmation decided, when it withheld the send.
+			let withheld: Dropped | 'stale' | 'unconfirmed' | null = null
+			// Key loading counts against the delivery's budget like the DNS check and the POST. After it, and after the
+			// host check, the Store confirms the row under its lease and hands over the body to sign and send (VIS-30,
+			// confirmDelivery): nothing is sent unless it does.
 			const outcome = await postActivity(post, {
 				inbox: delivery.inbox,
-				body: delivery.body,
-				signer: async () => (await signerOf(delivery.signer))?.sign ?? null,
+				body: '',
+				signer: async () => {
+					const sign = (await signerOf(delivery.signer))?.sign
+					if (sign === undefined) {
+						return null
+					}
+					let confirmation: Confirmation
+					try {
+						confirmation = await callStore(
+							async (): Promise<Confirmation> =>
+								await store.confirmDelivery(build, { id: delivery.id, leaseToken: claim.leaseToken, now: deps.now() })
+						)
+					} catch (error) {
+						// The lease expires and the row is claimed again.
+						console.error({ event: 'kopje.delivery.confirm.failed', delivery: delivery.id, ...errorFields(error) })
+						withheld = 'unconfirmed'
+						return null
+					}
+					if (confirmation.status !== 'send') {
+						withheld = confirmation.status === 'stale' ? 'stale' : confirmation
+						return null
+					}
+					const body = confirmation.body
+					return (request) => sign(new Request(request, { body }))
+				},
 				deadline,
 			})
+			if (withheld !== null) {
+				return typeof withheld === 'string' ? null : withheld
+			}
 			try {
 				const input = { id: delivery.id, leaseToken: claim.leaseToken, now: deps.now(), outcome }
 				return await callStore(async (): Promise<Completion> => {
@@ -115,7 +149,7 @@ export async function deliveryRound(env: Env, deps: DeliveryDeps): Promise<Round
 			}
 		})
 	)
-	const completions = settled.filter((c): c is Completion => c !== null)
+	const completions = settled.filter((c): c is Completion | Dropped => c !== null)
 	const gaveUp = completions.filter((c) => c.status === 'gave_up').length
 	if (gaveUp > 0) {
 		console.warn({ event: 'kopje.delivery.gave_up', count: gaveUp })

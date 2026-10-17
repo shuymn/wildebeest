@@ -20,7 +20,15 @@ import {
 import { updateCredentials } from '../src/domain/accounts'
 import { API_VISIBILITIES, type ApiVisibility } from '../src/domain/audience'
 import { backfillConversations } from '../src/domain/conversation-rows'
-import { type Claim, claimDeliveries, completeDelivery, EXPANSION_STEP, type Target } from '../src/domain/deliveries'
+import {
+	type Claim,
+	CLAIM_LIMIT,
+	claimDeliveries,
+	completeDelivery,
+	type Confirmation,
+	confirmDelivery,
+	EXPANSION_STEP,
+} from '../src/domain/deliveries'
 import type { NotificationType } from '../src/domain/notifications'
 import { POLICIES } from '../src/domain/push'
 import {
@@ -51,6 +59,11 @@ import type { StoreOperation } from '../src/platform/store-kernel'
 //     their domain, and its Undo names them always;
 //   - a retraction reaches every inbox that received what it withdraws or may still: delivered, still in a deliveries
 //     row, or in a chunk of targets not yet expanded; an Update of the actor reaches every follower;
+//   - VIS-30 provenance: a target that names its recipients names only accounts the activity reaches there, every
+//     follower it reaches at that inbox, their hosts, and its addressee alone for a personal copy; only a retraction's
+//     targets may leave them unknown;
+//   - VIS-30 send-time check: each due row a delivery round claims or drops is the model's (sends), and a confirmation
+//     right after the claim sends what was claimed;
 //   - R15 and R16: every notification written is shown to its recipient, and every push recorded is wanted, at the
 //     time of the action;
 //   - list members leave with the follow: after each action, a list holds what it held before, less each account its
@@ -158,6 +171,10 @@ const SCENARIOS = [
 	'retraction reaches an unexpanded target',
 	'retraction reaches what was delivered',
 	'Undo(Announce) names a blocked author',
+	'provenance lists every recipient at a shared inbox',
+	'send-time check drops content to an unavailable recipient',
+	'send-time check sends to a shared inbox with an available recipient',
+	'send-time check sends a retraction to an unavailable recipient',
 ] as const
 
 type Scenario = (typeof SCENARIOS)[number]
@@ -384,6 +401,27 @@ const WITNESSES: { name: string; scenarios: Scenario[]; case: Case }[] = [
 			{ kind: 'post', visibility: 'direct', mentions: [1] },
 			{ kind: 'post', actor: 1, visibility: 'direct', mentions: [0], reply: true },
 		]),
+	},
+	{
+		// R0 and R2 share one.example's inbox, R1 is alone at two.example's.
+		name: 'deliveries to shared inboxes after the deletion of some of their recipients starts, and a delete',
+		scenarios: [
+			'provenance lists every recipient at a shared inbox',
+			'send-time check drops content to an unavailable recipient',
+			'send-time check sends to a shared inbox with an available recipient',
+			'send-time check sends a retraction to an unavailable recipient',
+		],
+		case: {
+			...witness(3, { followers: [R0, R1, R2] }, [
+				{ kind: 'post' },
+				{ kind: 'deletion starts', account: R0 },
+				{ kind: 'deletion starts', account: R1 },
+				{ kind: 'deliver' },
+				{ kind: 'delete' },
+				{ kind: 'deliver' },
+			]),
+			shared: [true],
+		},
 	},
 	{
 		name: 'a delete before delivery after the follower leaves',
@@ -686,18 +724,65 @@ function namedIn(activity: Activity): Set<string> {
 	return new Set([...uris(activity.to), ...uris(activity.cc), ...uris(object.to), ...uris(object.cc)])
 }
 
+// A recorded target and its provenance: accounts null when unknown or many.
+type RecordedTarget = {
+	inbox: string
+	addressee: string | null
+	accounts: string[] | null
+	domains: string[] | null
+	many: boolean
+}
+
 // The targets recorded for an activity: its deliveries rows and its targets not yet expanded.
-function targetsOf(sql: SqlStorage, activityId: string): Target[] {
+function targetsOf(sql: SqlStorage, activityId: string): RecordedTarget[] {
 	return sql
-		.exec<Target>(
-			`SELECT inbox_url AS inbox, addressee FROM deliveries WHERE activity_id = CAST(?1 AS INTEGER)
+		.exec<{
+			inbox: string
+			addressee: string | null
+			accounts: string | null
+			domains: string | null
+			many: number | null
+		}>(
+			`SELECT inbox_url AS inbox, addressee, recipient_accounts AS accounts, recipient_domains AS domains,
+				recipients_many AS many
+			FROM deliveries WHERE activity_id = CAST(?1 AS INTEGER)
 			UNION ALL
-			SELECT json_extract(t.value, '$.inbox'), json_extract(t.value, '$.addressee')
+			SELECT json_extract(t.value, '$.inbox'), json_extract(t.value, '$.addressee'), json_extract(t.value, '$.accounts'),
+				json_extract(t.value, '$.domains'), json_extract(t.value, '$.many')
 			FROM outbound_targets c, json_each(c.targets) t WHERE c.activity_id = CAST(?1 AS INTEGER) AND t.key >= c.next`,
 			activityId
 		)
 		.toArray()
+		.map((row) => ({
+			inbox: row.inbox,
+			addressee: row.addressee,
+			accounts: row.accounts === null ? null : (JSON.parse(row.accounts) as string[]),
+			domains: row.domains === null ? null : (JSON.parse(row.domains) as string[]),
+			many: row.many === 1,
+		}))
 }
+
+type DueRow = {
+	id: string
+	account_id: string
+	inbox: string
+	retracts: number
+	accounts: string | null
+	many: number | null
+}
+
+// The due lane heads a claim reads (claimDeliveries), with their provenance and whether they retract.
+const dueRows = (sql: SqlStorage, now: number): DueRow[] =>
+	sql
+		.exec<DueRow>(
+			`SELECT CAST(d.id AS TEXT) AS id, d.account_id, d.inbox_url AS inbox, o.retracts, d.recipient_accounts AS accounts,
+				d.recipients_many AS many
+			FROM deliveries d JOIN outbound_activities o ON o.id = d.activity_id
+			WHERE d.state IN ('pending', 'leased') AND d.next_attempt_at <= ? ORDER BY d.next_attempt_at, d.id LIMIT ?`,
+			now,
+			CLAIM_LIMIT
+		)
+		.toArray()
 
 type ActivityRow = { id: string; account_id: string; body: string }
 
@@ -935,18 +1020,55 @@ function check(sql: SqlStorage, c: Case, saw: Set<Scenario>): string[] {
 			case 'deliver':
 				for (let round = 0; round < 64; round++) {
 					const leaseToken = `lease-${objects++}`
+					// The rows the claim reads, when it has nothing to expand first; each is claimed or dropped as the model
+					// says (VIS-30).
+					const expanding = sql.exec('SELECT 1 FROM outbound_targets LIMIT 1').toArray().length > 0
+					const due = expanding ? [] : dueRows(sql, now)
+					const m = new PolicyModel(readWorld(sql, world).world)
 					const claim = run<Claim>(claimDeliveries, { now, leaseToken })
-					if (claim.deliveries.length === 0) {
+					if (claim.deliveries.length === 0 && due.length === 0 && !expanding) {
 						break
 					}
+					const claimed = new Set(claim.deliveries.map((d) => d.id))
+					for (const row of due) {
+						const recipients =
+							row.many === 1
+								? 'many'
+								: row.accounts === null
+									? null
+									: (JSON.parse(row.accounts) as string[]).map((id) => accountIndex.get(id)!)
+						const expected = m.sends(accountIndex.get(row.account_id)!, row.retracts === 1, recipients)
+						const sent = claimed.has(row.id)
+						if (sent !== expected) {
+							problems.push(`${label}: row ${row.id} to ${row.inbox} ${sent ? 'claimed' : 'dropped'}`)
+						}
+						const unavailable = world.accounts.some((_, x) => !m.available(x) && inboxesOf(x).includes(row.inbox))
+						if (row.retracts === 1 && sent && unavailable) {
+							saw.add('send-time check sends a retraction to an unavailable recipient')
+						} else if (row.retracts === 0 && !sent && recipients !== null && recipients !== 'many') {
+							saw.add('send-time check drops content to an unavailable recipient')
+						} else if (
+							row.retracts === 0 &&
+							sent &&
+							Array.isArray(recipients) &&
+							recipients.some((x) => !m.available(x))
+						) {
+							saw.add('send-time check sends to a shared inbox with an available recipient')
+						}
+					}
 					for (const delivery of claim.deliveries) {
+						const confirmation = run<Confirmation>(confirmDelivery, { id: delivery.id, leaseToken, now })
+						if (confirmation.status !== 'send') {
+							problems.push(`${label}: row ${delivery.id} claimed, then ${confirmation.status} at confirmation`)
+							continue
+						}
 						run(completeDelivery, {
 							id: delivery.id,
 							leaseToken,
 							now,
 							outcome: { kind: 'delivered', status: 202 },
 						})
-						add(delivered, subjectOf(JSON.parse(delivery.body) as Activity), delivery.inbox)
+						add(delivered, subjectOf(JSON.parse(confirmation.body) as Activity), delivery.inbox)
 					}
 				}
 				break
@@ -1090,6 +1212,50 @@ function check(sql: SqlStorage, c: Case, saw: Set<Scenario>): string[] {
 				}
 			}
 			const reach = m.reaches(kind, signer, audience)
+
+			// VIS-30: the recipients each target names are reached there, the followers it reaches there are all named,
+			// and so are their hosts; a personal copy names its addressee alone. Only a retraction's targets, which may
+			// also go to earlier receivers, may leave them unknown.
+			const reachedAccounts = new Set([...reach.followers, ...reach.accounts])
+			for (const target of targets) {
+				if (target.accounts === null && !target.many) {
+					if (kind !== 'retraction') {
+						problems.push(`${what}: no provenance at ${target.inbox}`)
+					}
+					continue
+				}
+				const listed = (target.accounts ?? []).map((id) => accountIndex.get(id))
+				for (const x of listed) {
+					if (
+						x === undefined ||
+						!reachedAccounts.has(x) ||
+						(target.inbox !== '' && !inboxesOf(x).includes(target.inbox))
+					) {
+						problems.push(`${what}: names ${String(x)} behind ${target.inbox}`)
+					}
+				}
+				if (target.addressee !== null) {
+					if (listed.length !== 1 || uriOf(listed[0]!) !== target.addressee) {
+						problems.push(`${what}: a personal copy for ${target.addressee} names ${listed.join(' ')}`)
+					}
+				} else if (!target.many) {
+					for (const f of reach.followers) {
+						if (inboxOf(f) === target.inbox && !listed.includes(f)) {
+							problems.push(`${what}: does not name the follower ${nameOf(f)} behind ${target.inbox}`)
+						}
+					}
+					if (listed.length > 1) {
+						saw.add('provenance lists every recipient at a shared inbox')
+					}
+				}
+				if (!target.many) {
+					// The host of each actor id as domain blocks read it: lowercased, without a trailing dot.
+					const hosts = [...new Set(listed.map((x) => new URL(uriOf(x!)).hostname.replace(/\.$/, '')))].sort()
+					if (JSON.stringify(target.domains) !== JSON.stringify(hosts)) {
+						problems.push(`${what}: hosts ${JSON.stringify(target.domains)} behind ${target.inbox}`)
+					}
+				}
+			}
 
 			// R22: to and cc name only Public, the signer's followers and the accounts the rule lets it name.
 			const allowedNames = new Set([PUBLIC, `${uriOf(signer)}/followers`, ...[...mayName].map(uriOf)])

@@ -1,6 +1,15 @@
-import { availableLocalSql, isActorObject, outboundKind, recipientsFor } from './audience'
+import {
+	availableLocalSql,
+	availableSql,
+	isActorObject,
+	outboundKind,
+	type RemoteRecipient,
+	recipientsFor,
+} from './audience'
+import { hostRefused } from './host-policy'
 import { readOperation, writeOperation } from './operation'
 import type { Db } from '../db/sql'
+import { hostDomain } from '../platform/domain-name'
 
 // Outbound delivery (design §4 "outbound", NET-2, VIS-3, RES-4, RES-5, RES-6, OPS-3). deliveries is the source of
 // truth; the Queue only rings a doorbell, and the Worker does the POSTs.
@@ -75,7 +84,17 @@ export function retryDelay(attempts: number): number {
 
 type Activity = Record<string, unknown>
 
-export type Target = { inbox: string; addressee: string | null }
+// A target's provenance (VIS-30): the remote recipients behind it, which the send-time check reads (sendRefused).
+//   - accounts: their ids, at most PROVENANCE_MAX; absent above it, where `many` is set instead ("not all
+//     unavailable").
+//   - domains: the distinct hosts of their actor ids, at most PROVENANCE_MAX; absent above it.
+// A target with neither accounts nor many has no provenance: one whose recipients are unknown (a retraction's earlier
+// receivers, phase A's staged reach, a row queued before migration 0043) or merged with such a target.
+export type Provenance = { accounts?: string[]; domains?: string[]; many?: true }
+
+export type Target = { inbox: string; addressee: string | null } & Provenance
+
+export const PROVENANCE_MAX = 16
 
 function uris(value: unknown): string[] {
 	if (typeof value === 'string') {
@@ -209,8 +228,42 @@ export function audienceTargets(
 	return targetsOf(db, signerId, activity, audience, withdraws, []).targets
 }
 
+// The recipients behind a target as staging gathers them; unknown once any of them is.
+type Behind = { accounts: Set<string>; domains: Set<string>; unknown: boolean }
+
+function behind(): Behind {
+	return { accounts: new Set(), domains: new Set(), unknown: false }
+}
+
+// The provenance of a target that also serves `other`'s recipients.
+function mergedProvenance(target: Target, other: Target): Provenance {
+	const known = (t: Target) => t.accounts !== undefined || t.many === true
+	if (!known(target) || !known(other)) {
+		return {}
+	}
+	const merged = provenanceOf({
+		accounts: new Set([...(target.accounts ?? []), ...(other.accounts ?? [])]),
+		domains: new Set([...(target.domains ?? []), ...(other.domains ?? [])]),
+		unknown: false,
+	})
+	const many = target.many === true || other.many === true || merged.many === true
+	const domains = target.domains === undefined || other.domains === undefined ? undefined : merged.domains
+	return { ...(many ? { many: true } : { accounts: merged.accounts }), ...(domains === undefined ? {} : { domains }) }
+}
+
+function provenanceOf(b: Behind): Provenance {
+	if (b.unknown) {
+		return {}
+	}
+	const domains = b.domains.size > PROVENANCE_MAX ? {} : { domains: [...b.domains].sort() }
+	return b.accounts.size > PROVENANCE_MAX
+		? { many: true, ...domains }
+		: { accounts: [...b.accounts].sort(), ...domains }
+}
+
 // The targets, and the inboxes among them that are a poll's voters (pollVoters), which hold the status already: they
-// fetched it to vote, though no delivery of it to them may have been recorded.
+// fetched it to vote, though no delivery of it to them may have been recorded. Each target carries the provenance of
+// every recipient it serves, merged across followers, addressed accounts, voters and reachOf before deduplication.
 function targetsOf(
 	db: Db,
 	signerId: string,
@@ -220,30 +273,44 @@ function targetsOf(
 	reachOf: readonly ReachOf[]
 ): { targets: Target[]; voters: Set<string> } {
 	// Neutral copies by inbox; personal copies by recipient, kept apart so one never replaces the other.
-	const neutral = new Set<string>()
-	const personal = new Map<string, string>()
-	const add = (inbox: string | null, addressee: string | null) => {
+	const neutral = new Map<string, Behind>()
+	const personal = new Map<string, { inbox: string; behind: Behind }>()
+	// recipient null: an inbox whose recipients are unknown (an earlier receiver of what a retraction withdraws).
+	const add = (inbox: string | null, addressee: string | null, recipient: RemoteRecipient | null) => {
+		let into: Behind
 		if (addressee !== null) {
 			// VIS-2: only the recipient's own inbox. Without one the copy is recorded as unreachable ('' inbox), never
 			// sent to a shared inbox where others would see the recipient named.
-			personal.set(addressee, isDeliverableInbox(inbox) ? inbox : '')
+			const entry = personal.get(addressee) ?? { inbox: isDeliverableInbox(inbox) ? inbox : '', behind: behind() }
+			personal.set(addressee, entry)
+			into = entry.behind
 		} else if (isDeliverableInbox(inbox)) {
-			neutral.add(inbox)
+			into = neutral.get(inbox) ?? behind()
+			neutral.set(inbox, into)
+		} else {
+			return
+		}
+		if (recipient === null) {
+			into.unknown = true
+		} else {
+			into.accounts.add(recipient.id)
+			into.domains.add(recipient.host)
 		}
 	}
 	const named = new Set([...uris(activity.to), ...uris(activity.cc)])
 	const addressedActivity = Array.isArray(activity.to)
 	const reach = (recipients: ReturnType<typeof recipientsFor>) => {
-		for (const inbox of [...recipients.followerInboxes, ...recipients.voterInboxes]) {
-			add(inbox, null)
+		for (const follower of [...recipients.followers, ...recipients.voters]) {
+			add(follower.inbox, null, follower)
 		}
 		for (const account of recipients.accounts) {
 			if (named.has(account.uri)) {
-				add(account.shared_inbox_url ?? account.inbox_url, null)
+				add(account.shared_inbox_url ?? account.inbox_url, null, account)
 			} else {
 				add(
 					addressedActivity ? account.inbox_url : (account.shared_inbox_url ?? account.inbox_url),
-					addressedActivity ? account.uri : null
+					addressedActivity ? account.uri : null,
+					account
 				)
 			}
 		}
@@ -253,22 +320,24 @@ function targetsOf(
 	const { object, retracts } = subjectOf(activity, withdraws)
 	if (retracts && object !== null) {
 		for (const inbox of receiversOf(db, signerId, object)) {
-			add(inbox, null)
+			add(inbox, null, null)
 		}
 	}
 	for (const other of reachOf) {
 		reach(recipientsFor(db, other.owner, activity, other.audience, withdraws))
 		for (const inbox of receiversOf(db, other.owner, other.object)) {
-			add(inbox, null)
+			add(inbox, null, null)
 		}
 	}
 	const byInbox = (a: Target, b: Target) => (a.inbox < b.inbox ? -1 : a.inbox > b.inbox ? 1 : 0)
 	return {
 		targets: [
-			...[...personal].map(([addressee, inbox]) => ({ inbox, addressee })).sort(byInbox),
-			...[...neutral].map((inbox) => ({ inbox, addressee: null })).sort(byInbox),
+			...[...personal]
+				.map(([addressee, { inbox, behind }]) => ({ inbox, addressee, ...provenanceOf(behind) }))
+				.sort(byInbox),
+			...[...neutral].map(([inbox, behind]) => ({ inbox, addressee: null, ...provenanceOf(behind) })).sort(byInbox),
 		],
-		voters: new Set(recipients.voterInboxes.filter(isDeliverableInbox)),
+		voters: new Set(recipients.voters.map((v) => v.inbox).filter(isDeliverableInbox)),
 	}
 }
 
@@ -327,10 +396,17 @@ export function enqueueActivity(
 	const { voters } = found
 	let targets = found.targets
 	// An immutable activity's personal copy is the neutral one, byte for byte: one delivery per inbox suffices
-	// (quotes.ts revokeLocalStamp).
+	// (quotes.ts revokeLocalStamp), and it serves the neutral copy's recipients too.
 	if (envelope.immutable === true) {
+		const neutral = new Map(targets.filter((t) => t.addressee === null).map((t) => [t.inbox, t]))
 		const personal = new Set(targets.filter((t) => t.addressee !== null).map((t) => t.inbox))
-		targets = targets.filter((t) => t.addressee !== null || !personal.has(t.inbox))
+		targets = targets.flatMap((t) => {
+			if (t.addressee === null) {
+				return personal.has(t.inbox) ? [] : [t]
+			}
+			const shared = neutral.get(t.inbox)
+			return [shared === undefined ? t : { inbox: t.inbox, addressee: t.addressee, ...mergedProvenance(t, shared) }]
+		})
 	}
 	const { object, retracts } = subjectOf(envelope.activity, options.withdraws === true)
 	const types = supersededTypes(envelope.activity.type)
@@ -728,8 +804,17 @@ function expandPending(db: Db, now: number, budget: number): void {
 		if (chunk === undefined) {
 			return
 		}
-		const step = db.all<{ key: number; inbox: string; addressee: string | null }>(
-			`SELECT t.key, json_extract(t.value, '$.inbox') AS inbox, json_extract(t.value, '$.addressee') AS addressee
+		const step = db.all<{
+			key: number
+			inbox: string
+			addressee: string | null
+			accounts: string | null
+			domains: string | null
+			many: number | null
+		}>(
+			`SELECT t.key, json_extract(t.value, '$.inbox') AS inbox, json_extract(t.value, '$.addressee') AS addressee,
+				json_extract(t.value, '$.accounts') AS accounts, json_extract(t.value, '$.domains') AS domains,
+				json_extract(t.value, '$.many') AS many
 			FROM outbound_targets c, json_each(c.targets) t
 			WHERE c.id = CAST(? AS INTEGER) AND t.key >= c.next ORDER BY t.key LIMIT ?`,
 			chunk.id,
@@ -750,19 +835,22 @@ function expandPending(db: Db, now: number, budget: number): void {
 			}
 			db.run(
 				`INSERT INTO deliveries (activity_id, account_id, inbox_url, lane, addressee, state, next_attempt_at,
-					last_error, updated_at)
+					last_error, updated_at, recipient_accounts, recipient_domains, recipients_many)
 				VALUES (CAST(?1 AS INTEGER), ?2, ?3, ?4, ?5,
 					CASE WHEN ?6 IS NOT NULL THEN 'gave_up'
 						WHEN EXISTS (SELECT 1 FROM deliveries WHERE account_id = ?2 AND lane = ?4 AND state IN ${ACTIVE})
 						THEN 'queued' ELSE 'pending' END,
-					?7, ?6, ?7)`,
+					?7, ?6, ?7, ?8, ?9, ?10)`,
 				intent.id,
 				intent.account_id,
 				target.inbox,
 				lane,
 				target.addressee,
 				refusal,
-				now
+				now,
+				target.many === 1 ? null : target.accounts,
+				target.domains,
+				target.many === 1 ? 1 : null
 			)
 		}
 		const next = step.length === 0 ? chunk.next : step[step.length - 1]!.key + 1
@@ -874,44 +962,105 @@ function bodyFor(activity: string, addressee: string | null, immutable: boolean)
 // signs as claim.instanceActor.
 export const INSTANCE_SIGNER = 'instance'
 
-// R1 for a suspended local sender: what its lane holds is dropped when claimed, not sent, except a retraction
-// (outboundKind: a Delete, an Undo, a Reject that withdraws, which VIS-3 sends to every earlier receiver) and the
-// suspension's own Update of its actor (the redacted document, `suspended: true`). Queued content is dropped when it is
-// claimed while the sender is suspended, which the queue does within moments of the suspension; a row not claimed by
-// the time of an unsuspension is sent then. The restoration's Update is recorded once the account is no longer
-// suspended, so it passes; one claimed after the account is suspended again does not. The claim is the boundary: a row
-// leased before the suspension committed may still be sent while its lease lasts.
+// R1 for a suspended local sender: what its lane holds is dropped, not sent, except a retraction (outboundKind: a
+// Delete, an Undo, a Reject that withdraws, which VIS-3 sends to every earlier receiver) and the suspension's own Update
+// of its actor (the redacted document, `suspended: true`). Queued content is dropped when it is claimed or confirmed
+// while the sender is suspended, which the queue does within moments of the suspension; a row not claimed by the time
+// of an unsuspension is sent then. The restoration's Update is recorded once the account is no longer suspended, so it
+// passes; one confirmed after the account is suspended again does not.
 const REFUSED_SENDER = `EXISTS (SELECT 1 FROM local_accounts l
 	WHERE l.account_id = ?1 AND NOT ${availableLocalSql('l')} AND o.retracts = 0
 		AND NOT (json_extract(o.body, '$.activity.type') = 'Update'
 			AND json_extract(o.body, '$.activity.object.suspended') IS 1
 			AND json_extract(o.body, '$.activity.object.id') = json_extract(o.body, '$.activity.actor')))`
 
-// A due row's activity as sent (its body, and who signs it), and whether its sender is refused (above); undefined when
-// the activity is gone, which is never refused.
-function claimedActivity(
-	db: Db,
-	row: LaneRow
-): { activity: string; signed_by: string | null; immutable: number | null; refused: number } | undefined {
-	return db.first<{ activity: string; signed_by: string | null; immutable: number | null; refused: number }>(
+type DueRow = LaneRow & {
+	addressee: string | null
+	recipient_accounts: string | null
+	recipient_domains: string | null
+}
+
+const DUE_ROW = `${LANE_ROW}, addressee, recipient_accounts, recipient_domains`
+
+type SentActivity = {
+	activity: string
+	signed_by: string | null
+	immutable: number | null
+	retracts: number
+	refused_sender: number
+}
+
+// A due row's activity as sent (its body, and who signs it), whether it retracts, and whether its sender is refused
+// (above); undefined when the activity is gone.
+function sentActivity(db: Db, row: LaneRow): SentActivity | undefined {
+	return db.first<SentActivity>(
 		`SELECT json_extract(o.body, '$.activity') AS activity, json_extract(o.body, '$.signedBy') AS signed_by,
-			json_extract(o.body, '$.immutable') AS immutable, ${REFUSED_SENDER} AS refused
+			json_extract(o.body, '$.immutable') AS immutable, o.retracts, ${REFUSED_SENDER} AS refused_sender
 		FROM outbound_activities o WHERE o.id = CAST(?2 AS INTEGER)`,
 		row.account_id,
 		row.activity_id
 	)
 }
 
+function hostOf(inbox: string): string | null {
+	try {
+		return hostDomain(inbox)
+	} catch {
+		return null
+	}
+}
+
+// VIS-30's send-time check, at the claim and again at confirmation (confirmDelivery). A row that is not a retraction
+// (the persisted retracts flag, never the activity's kind worked out again) is refused when:
+//   - its sender is refused (REFUSED_SENDER);
+//   - its inbox host is refused by the host policy (host-policy.ts);
+//   - its provenance lists accounts (at most PROVENANCE_MAX, `many` unset) and none of them exists and is available
+//     (R1, availableSql, which reads an unknown id as available: so a purged recipient counts as gone);
+//   - its provenance lists recipient hosts, and the host policy refuses every one.
+// A row without provenance gets the inbox host rule only. A shared inbox that serves an available recipient besides
+// unavailable ones is sent: content expansion already left the unavailable out (leavesOutSql in audience.ts).
+function sendRefused(db: Db, row: DueRow, activity: SentActivity): boolean {
+	if (activity.retracts === 1) {
+		return false
+	}
+	if (activity.refused_sender === 1) {
+		return true
+	}
+	const host = hostOf(row.inbox_url)
+	if (host !== null && hostRefused(db, host)) {
+		return true
+	}
+	if (
+		row.recipient_accounts !== null &&
+		db.first(
+			`SELECT 1 AS yes FROM json_each(?) r JOIN main.accounts a ON a.id = r.value WHERE ${availableSql('a.id')} LIMIT 1`,
+			row.recipient_accounts
+		) === undefined
+	) {
+		return true
+	}
+	const domains = row.recipient_domains === null ? [] : (JSON.parse(row.recipient_domains) as string[])
+	return domains.length > 0 && domains.every((domain) => hostRefused(db, domain))
+}
+
+// Deletes a row that may not be sent, and lets its lane go on.
+function dropRow(db: Db, row: LaneRow, now: number): void {
+	db.run('DELETE FROM deliveries WHERE id = CAST(? AS INTEGER)', row.id)
+	promoteLane(db, row.account_id, row.lane, now)
+	dropSettledActivity(db, row.activity_id)
+}
+
 // Expands one step, then leases up to `limit` due lane heads (RES-6: a claim reads and returns a bounded number of
-// rows). An expired lease is due again; one that has used up its attempts is given up instead of claimed; one of a
-// suspended sender is dropped (REFUSED_SENDER).
+// rows). An expired lease is due again; one that has used up its attempts is given up instead of claimed; one the
+// send-time check refuses (sendRefused) is dropped. The body a claim returns is as of the claim: the Worker sends the
+// one confirmDelivery returns.
 export const claimDeliveries = writeOperation<{ now: number; leaseToken: string; limit?: number }, Claim>(
 	(db, { now, leaseToken, limit }) => {
 		expandPending(db, now, EXPANSION_STEP)
 		const max = Math.max(1, Math.min(limit ?? CLAIM_LIMIT, CLAIM_LIMIT))
 		const leaseUntil = now + LEASE_MS
-		const due = db.all<LaneRow & { addressee: string | null }>(
-			`SELECT ${LANE_ROW}, addressee FROM deliveries
+		const due = db.all<DueRow>(
+			`SELECT ${DUE_ROW} FROM deliveries
 			WHERE state IN ('pending', 'leased') AND next_attempt_at <= ? ORDER BY next_attempt_at, id LIMIT ?`,
 			now,
 			max
@@ -919,11 +1068,9 @@ export const claimDeliveries = writeOperation<{ now: number; leaseToken: string;
 		const claimed: ClaimedDelivery[] = []
 		for (const row of due) {
 			// Read before the lease, which changes neither the activity nor the sender.
-			const body = claimedActivity(db, row)
-			if (body?.refused === 1) {
-				db.run('DELETE FROM deliveries WHERE id = CAST(? AS INTEGER)', row.id)
-				promoteLane(db, row.account_id, row.lane, now)
-				dropSettledActivity(db, row.activity_id)
+			const body = sentActivity(db, row)
+			if (body !== undefined && sendRefused(db, row, body)) {
+				dropRow(db, row, now)
 				continue
 			}
 			if (row.attempts >= MAX_ATTEMPTS) {
@@ -971,6 +1118,37 @@ export const claimDeliveries = writeOperation<{ now: number; leaseToken: string;
 			: undefined
 		const instanceActor = domain === undefined ? null : `https://${domain}/actor`
 		return { leaseToken, leaseUntil, deliveries: claimed, signers, instanceActor, nextDueAt: nextDueAt(db, now) }
+	}
+)
+
+export type Confirmation =
+	// Send this body now.
+	| { status: 'send'; body: string }
+	// The send-time check refused the row: it is deleted and its lane promoted.
+	| { status: 'dropped'; nextDueAt: number | null }
+	// The lease is no longer this one's: send nothing.
+	| { status: 'stale' }
+
+// VIS-30's send boundary: called after the signer is loaded and the host checked, right before signing and the POST,
+// with the claim's lease (as confirmPush is). It runs the claim's check again (sendRefused) and, when the row may still
+// be sent, writes nothing and returns what to send, read now and never from the claim (a staged restoration Update is
+// rewritten in place while it stages). A change that commits after it does not stop that POST.
+export const confirmDelivery = writeOperation<{ id: string; leaseToken: string; now: number }, Confirmation>(
+	(db, { id, leaseToken, now }) => {
+		const row = db.first<DueRow>(
+			`SELECT ${DUE_ROW} FROM deliveries WHERE id = CAST(? AS INTEGER) AND state = 'leased' AND lease_token = ?`,
+			id,
+			leaseToken
+		)
+		if (row === undefined) {
+			return { status: 'stale' }
+		}
+		const activity = sentActivity(db, row)
+		if (activity === undefined || sendRefused(db, row, activity)) {
+			dropRow(db, row, now)
+			return { status: 'dropped', nextDueAt: nextDueAt(db, now, leaseToken) }
+		}
+		return { status: 'send', body: bodyFor(activity.activity, row.addressee, activity.immutable === 1) }
 	}
 )
 
@@ -1053,13 +1231,14 @@ const SHARED_INBOX_MISSING = new Set([404, 405, 410])
 // its place in the lane (a later Undo stays behind it), and records the shared inbox's answer until it settles. The
 // failed attempt counts, and a row moves only while it has attempts left (MAX_ATTEMPTS): a recipient that swaps its
 // inbox URLs between attempts keeps a row alive for at most MAX_ATTEMPTS attempts, as ordinary retries do. Rows of an
-// addressed activity (followers, accounts named in to/cc) and personal copies (addressee) never move.
+// addressed activity (followers, accounts named in to/cc) and personal copies (addressee) never move. A moved row
+// serves that recipient alone, and its provenance (VIS-30) says so.
 function personalFallback(db: Db, row: LaneRow, now: number, status: number | null, error: string): boolean {
 	if (status === null || !SHARED_INBOX_MISSING.has(status) || row.attempts >= MAX_ATTEMPTS) {
 		return false
 	}
-	const personal = db.first<{ inbox: string }>(
-		`SELECT a.inbox_url AS inbox
+	const personal = db.first<{ inbox: string; id: string; uri: string }>(
+		`SELECT a.inbox_url AS inbox, a.id, a.uri
 		FROM deliveries d JOIN outbound_activities o ON o.id = d.activity_id,
 			json_each(o.body, '$.audience.accounts') r JOIN accounts a ON a.id = r.value
 		WHERE d.id = CAST(?1 AS INTEGER) AND d.addressee IS NULL AND json_type(o.body, '$.activity.to') IS NOT 'array'
@@ -1075,13 +1254,16 @@ function personalFallback(db: Db, row: LaneRow, now: number, status: number | nu
 	}
 	db.run(
 		`UPDATE deliveries SET state = 'pending', inbox_url = ?2, lease_token = NULL, next_attempt_at = ?3,
-			last_status = ?4, last_error = ?5, updated_at = ?3
+			last_status = ?4, last_error = ?5, updated_at = ?3, recipient_accounts = json_array(?6),
+			recipient_domains = CASE WHEN ?7 IS NULL THEN NULL ELSE json_array(?7) END, recipients_many = NULL
 		WHERE id = CAST(?1 AS INTEGER)`,
 		row.id,
 		personal.inbox,
 		now,
 		status,
-		`shared inbox ${error}; sent to the personal inbox`.slice(0, MAX_ERROR_LENGTH)
+		`shared inbox ${error}; sent to the personal inbox`.slice(0, MAX_ERROR_LENGTH),
+		personal.id,
+		hostOf(personal.uri)
 	)
 	// DATA-5: no URL or identity in the log.
 	console.warn({ event: 'kopje.delivery.shared_inbox_fallback', status })
