@@ -754,13 +754,19 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   domain, or stores a status of it. Its follows of local accounts are severed in bounded, generation-bound rounds
   (R38), each accepted one with a withdrawing `Reject` to the follower's current inbox alone, as Mastodon sends it (a
   retraction, never refused, but not sent to the earlier receivers of what it withdraws); local follows of it are
-  kept. Instance domain blocks (B2a) are not built yet: the host policy refuses no host.
+  kept. An instance domain block of severity `suspend` (R38) covers a host by its longest matching block (a child
+  `noop` exempts its subdomains), with at most `MAX_BLOCK_LABELS` (8) labels per stored block; a covered account (by
+  its stored domain or its actor host) is unavailable from the block's commit, read live; nothing is fetched from a
+  covered host (advisory: the writes refuse to store a covered account or its statuses, and refresh no covered row);
+  its inbound activity is ignored before any fetch but `Delete`, `DeleteActor`, `Undo` and `Reject` verified with a
+  key already stored. The domain enforcement is in place; no route creates a block until the admin API serves them
+  (B2b), and the severing of a blocked domain's follows comes with B2a-2.
   Each staged target records the recipients behind it (merged across followers, addressed accounts,
   silent recipients, poll voters and other statuses' reach before deduplication by inbox): up to 16 account ids, the
   hosts of their actor ids, or `many` above 16, meaning "not all unavailable"; expansion copies them onto the delivery
   row. A row that is not a retraction (by its persisted `retracts` flag) is dropped, its lane promoted, when its sender
-  is refused (R1), its inbox host is refused by the host policy, none of its listed accounts exists and is available
-  (R1: a recipient the instance suspended, or one being deleted or purged), or the host policy refuses every listed host. The check runs
+  is refused (R1), an instance domain block covers its inbox host, none of its listed accounts exists and is available
+  (R1: a recipient the instance suspended, or one being deleted or purged), or a block covers every listed host. The check runs
   at the claim and again in `confirmDelivery`, which the Worker calls under the claim's lease after the signer is
   loaded and the host checked, right before signing and the POST; the body sent is read there, never from the claim. A
   change that commits after confirmation does not stop that POST; a confirmation that fails, or finds the lease taken
@@ -776,9 +782,13 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   and `test/policy-writes.test.ts` (against `available` and `sends` in `test/policy-model.ts`). For the delivery part:
   `targetsOf`, `sendRefused`,
   `claimDeliveries` and `confirmDelivery` in `src/domain/deliveries.ts`, `recipientsFor` in `src/domain/audience.ts`,
-  `src/domain/host-policy.ts` (refuses no host until B2a), `deliveryRound` in `src/jobs/deliver.ts`, migration
-  `0044_delivery_provenance`; `test/delivery-send-check.test.ts`, `test/policy-writes.test.ts` (provenance and the
-  send-time rule against `sends` in `test/policy-model.ts`), `test/migrations.test.ts`.
+  `deliveryRound` in `src/jobs/deliver.ts`, migration `0044_delivery_provenance`; `test/delivery-send-check.test.ts`,
+  `test/policy-writes.test.ts` (provenance and the send-time rule against `sends` in `test/policy-model.ts`),
+  `test/migrations.test.ts`. For domains: `src/domain/instance-domain-blocks.ts`, `hostCoveredSql` and `availableSql`
+  in `src/domain/audience.ts`, the fetch policy in `src/federation/loader.ts`, the inbound path in
+  `src/federation/inbound.ts`, migration `0046_instance_domain_blocks`; `test/instance-domain-blocks.test.ts`,
+  `test/instance-domain-blocks-inbound.test.ts`, `test/read-windows.test.ts`, `test/policy-oracle.test.ts` (against
+  `available` and `covered` in `test/policy-model.ts`).
 
 ### Authorization (AUTH)
 
