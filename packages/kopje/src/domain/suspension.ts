@@ -73,8 +73,9 @@ type Job = {
 	actor_account_id: string | null
 	intent_id: string | null
 	report_bound: number | null
-	// The newest moderation log row at the suspension (a suspension job's): the report fence (reports.ts
-	// resolveSuspensionReports). Null on a suspension job: unknown (0042_report_action_fence), which resolves none.
+	// The suspension's moderation log row (a suspension job's; without an admin, the newest row at the suspension): the
+	// report fence and the stamp of the reports it resolves (reports.ts resolveSuspensionReports). Null on a suspension
+	// job: unknown (0042_report_action_fence), which resolves none.
 	action_bound: number | null
 	follow_bound: number | null
 	cutoff: string | null
@@ -131,9 +132,16 @@ function localState(db: Db, accountId: string): LocalState | undefined {
 
 // Suspends a local account in one bounded transaction (above): its time S and a new credential epoch, also when it is
 // suspended already (Mastodon's suspend! sets suspended_at again and runs the suspension anew), which ends the jobs of
-// the epoch before. `by` is the admin who suspends, whom the resolved reports name. Returns S, or null for an account
-// that is not local.
-export function suspendLocal(db: Db, accountId: string, by: string | null, now: number): string | null {
+// the epoch before. `by` is the admin who suspends, whom the resolved reports name, and `log` writes its moderation
+// log row given S, in this transaction; the row's id is the job's action bound and the id its resolved reports are
+// stamped with (reports.ts resolveSuspensionReports). Without an admin (null), the bound is the newest log row, and
+// that id is the stamp. Returns S, or null for an account that is not local (nothing logged).
+export function suspendLocal(
+	db: Db,
+	accountId: string,
+	by: { accountId: string; log: (at: string) => number } | null,
+	now: number
+): string | null {
 	const at = iso(now)
 	const epoch = db.first<{ epoch: number }>(
 		`UPDATE local_accounts SET suspended_at = ?, credential_epoch = credential_epoch + 1 WHERE account_id = ?
@@ -161,10 +169,10 @@ export function suspendLocal(db: Db, accountId: string, by: string | null, now: 
 		...job,
 		kind: 'suspension',
 		since: at,
-		actor_account_id: by,
+		actor_account_id: by?.accountId ?? null,
 		intent_id: beginStagedUpdate(db, accountId, update, now),
 		report_bound: reportBound(db),
-		action_bound: actionBound(db),
+		action_bound: by === null ? actionBound(db) : by.log(at),
 		follow_bound: followBound(db),
 		cutoff: iso(now - RECENT_MS),
 		phase: 'reports',

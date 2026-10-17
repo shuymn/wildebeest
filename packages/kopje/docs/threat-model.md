@@ -725,16 +725,17 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `unsuspendAdminAccount` in `src/domain/admin-accounts.ts`, `src/domain/suspension.ts`, `currentCredentialSql` in
   `src/domain/auth.ts`, `REFUSED_SENDER` in `src/domain/deliveries.ts`, migration `0034_admin_suspension`;
   `test/admin-suspension.test.ts`, `test/cascade-guard.test.ts`, `test/migrations.test.ts`. The report fence is
-  _implemented on branch `kopje/admin-b0`_, with no caller clock: every admin write to a report stamps the report with
-  its moderation log id (`reports.last_action_id`) in its transaction, and log ids are given in commit order and never
-  twice; a suspension freezes the newest report id and the newest log id (`moderation_jobs.action_bound`) in its
-  transaction, and its job resolves only reports filed up to the first, still unresolved, and last written by an admin
-  at or below the second (no admin write counts as 0). So a report reopened or changed after the suspension committed,
-  and one filed after it, stay as they are, whatever either request's clock said. A job whose bound is unknown (a
-  suspension from before the fence whose log row was pruned) resolves none, and leaves them to the admin. `resolveSuspensionReports` and
-  `actionBound` in `src/domain/reports.ts`, `logAction` in `src/domain/moderation-log.ts`, migration
-  `0042_report_action_fence`; `test/admin-suspension.test.ts` ("the report fence"), `test/migrations.test.ts`. The
-  report notification is
+  _implemented on branch `kopje/admin-b0`_, with no caller clock: every write to a report stamps it, in that write's
+  transaction, with the moderation log id of the admin action that caused it (`reports.last_action_id`; an admin's
+  write its own row, a suspension round's resolution the suspension's row, never one row per report), and log ids are
+  given in commit order and never twice. A suspension freezes the newest report id and its own log id
+  (`moderation_jobs.action_bound`) in its transaction, and its job resolves only reports filed up to the first, still
+  unresolved, and last stamped at or below the second (none counts as 0). So a report reopened or changed after the
+  suspension committed, and one filed after it, stay as they are, whatever either request's clock said. A job whose
+  bound is unknown (a suspension from before the fence whose log row was pruned) resolves none, and leaves them to the
+  admin. `resolveSuspensionReports` and `logReportAction` in `src/domain/reports.ts`, `suspendLocal` in
+  `src/domain/suspension.ts`, `logAction` in `src/domain/moderation-log.ts`, migration `0042_report_action_fence`;
+  `test/admin-suspension.test.ts` ("the report fence"), `test/migrations.test.ts`. The report notification is
   _implemented on branch `kopje/admin-a4`_: a report another local account files notifies the OAuth admin
   (`admin.report`) when no other report of the same account is unresolved, read in the report's transaction; the
   notification carries the report as its reporter sees it, and R15 shows it, lists it, streams it and pushes it only

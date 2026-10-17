@@ -603,6 +603,19 @@ describe('the report fence (R37, VIS-29; concurrency row 21)', () => {
 			{ id: report, resolved: 0 },
 			{ id: untouched, resolved: 1 },
 		])
+		// Each report carries the log row of the admin action that last wrote it: the reopen's, and the suspension's for
+		// the one its round resolved (no row of its own).
+		expect(
+			await sql(
+				w.h.store,
+				`SELECT CAST(r.id AS TEXT) AS id, a.action FROM reports r JOIN admin_actions a ON a.id = r.last_action_id
+				ORDER BY r.id`
+			)
+		).toEqual([
+			{ id: report, action: 'reopen' },
+			{ id: untouched, action: 'suspend' },
+		])
+		expect((await logRows(w.h.store)).map((row) => row.action)).toEqual(['resolve', 'suspend', 'reopen'])
 	})
 
 	it('resolves a report reopened before the suspension, though its clock reads later', async () => {
