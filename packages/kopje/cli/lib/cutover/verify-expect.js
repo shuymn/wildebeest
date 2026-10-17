@@ -347,8 +347,8 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 		}
 		return sanitizeRemoteHtml(text(value))
 	}
-	// A bio and status content as the converter and the Worker store them (sanitizeRemoteBio, sanitizeRemoteContent);
-	// one cut to its bound is a truncation too.
+	// RES-2: a bio and status content within their JSON-byte bounds, as the converter and the Worker store them
+	// (src/security/html.ts); a cut is a truncation too.
 	/** @param {unknown} value @param {number} bytes @param {(html: string) => string} within */
 	const sanitizedWithin = (value, bytes, within) => {
 		const whole = sanitized(value)

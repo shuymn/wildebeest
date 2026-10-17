@@ -421,8 +421,7 @@ export function convertLegacy(
 		}
 		return wellFormed
 	}
-	// HTML as the Worker stores it within `bytes` as a JSON string (sanitizeRemoteBio, sanitizeRemoteContent, RES-2):
-	// one cut to its bound loses its end, so it is counted as a truncation too.
+	// RES-2: HTML within `bytes` as a JSON string, as the Worker stores it; a cut loses its end, so it is a truncation.
 	/**
 	 * @param {unknown} value @param {number} bytes @param {(html: string) => string} within @param {string} code
 	 */
@@ -572,8 +571,7 @@ export function convertLegacy(
 				count(problems, 'remote-actor-uri-invalid')
 				continue
 			}
-			// An actor id is an identity: one past the Worker's bound (src/platform/identity-bounds.ts) is refused, never
-			// cut.
+			// Refuse an oversized actor identity; never cut it (src/platform/identity-bounds.ts).
 			if (!isStorableActorId(uri)) {
 				count(problems, 'remote-actor-uri-over-limit')
 				continue
@@ -1356,9 +1354,8 @@ export function convertLegacy(
 	}
 
 	// ---------------------------------------------------------------- edits: earlier versions, then the current one
-	// The Worker reads a snapshot's attachments within the bounds of a stored attachment (src/domain/status-bounds.ts
-	// editMediaSql): a URL past 2,048 bytes or meta past 1 KiB as none, a description cut at 10,000 code points. Such a
-	// field is converted whole and counted, as the Worker shows less of it.
+	// The Worker reads snapshot attachments within editMediaSql's bounds (src/domain/status-bounds.ts). Convert such
+	// fields whole and count them as edits:media-field-over-bound, as the Worker shows less of them.
 	/** @param {Omit<Attached, 'position' | 'imageId'>} m */
 	const snapshotLosses = (m) => {
 		const bytes = (/** @type {string | null} */ value) => (value === null ? 0 : Buffer.byteLength(value))
