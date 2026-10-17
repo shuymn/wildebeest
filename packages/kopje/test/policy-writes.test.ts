@@ -14,6 +14,7 @@ import {
 	threadOf,
 	type World,
 	worldArb,
+	type WorldQuote,
 	writeWorld,
 } from './policy-world'
 import { updateCredentials } from '../src/domain/accounts'
@@ -42,8 +43,9 @@ import type { StoreOperation } from '../src/platform/store-kernel'
 // the model of the rules (test/policy-model.ts):
 //   - R23: the targets of an activity are inboxes of the accounts the model lets it reach (content leaves out the
 //     followers on a domain the author blocks and the addressed accounts the author blocks or whose domain it blocks;
-//     a retraction may also reach what was sent about its object before), and a personal copy goes only to an
-//     addressed account the activity does not name;
+//     a retraction may also reach what was sent about its object before; a public or unlisted status also reaches
+//     the remote authors of its accepted quotes, the quoters' reach), and a personal copy goes only to an addressed
+//     account the activity does not name;
 //   - R22: to and cc never name a silent recipient, and content never names an account the author blocks or whose
 //     domain it blocks; a boost's Announce names the original's author exactly when the author does not block them or
 //     their domain, and its Undo names them always;
@@ -141,7 +143,10 @@ const caseArb: fc.Arbitrary<Case> = fc.record({
 const SCENARIOS = [
 	'actor Update to a domain-blocked follower',
 	'content leaves out a domain-blocked follower',
+	'content leaves out a blocked quoter',
+	'content leaves out a quoter of a private status',
 	'content leaves out an unavailable account',
+	'content reaches a quoter',
 	'content to a silent recipient',
 	'conversation goes with its last status',
 	'conversation moves back to an earlier status',
@@ -166,7 +171,7 @@ type Scenario = (typeof SCENARIOS)[number]
 // every local account subscribed to every alert.
 function witness(
 	remotes: number,
-	world: Partial<Pick<World, 'statuses' | 'lists'>> & { followers?: number[]; following?: number[] },
+	world: Partial<Pick<World, 'statuses' | 'lists' | 'quotes'>> & { followers?: number[]; following?: number[] },
 	actions: (Partial<Action> & Pick<Action, 'kind'>)[]
 ): Case {
 	const accounts: World['accounts'] = []
@@ -208,7 +213,7 @@ function witness(
 			pins: [],
 			conversationMutes: [],
 			tagFollowers: [],
-			quotes: [],
+			quotes: world.quotes ?? [],
 			now: '2026-10-12T00:00:00.000Z',
 		},
 		shared: [false],
@@ -226,8 +231,64 @@ function witness(
 
 const R0 = 4
 const R1 = 5
+const R2 = 6
+
+// An original by `author` with nothing else to it.
+const original = (s: number, author: number, visibility: World['statuses'][number]['visibility']) => ({
+	name: `S${s}`,
+	author,
+	visibility,
+	mentions: [],
+	reblogOf: null,
+	replyTo: null,
+	replyToUnknown: false,
+	tagged: false,
+})
 
 const WITNESSES: { name: string; scenarios: Scenario[]; case: Case }[] = [
+	{
+		// The counterexample seed 20261015 gave once the push alerts grew by one: quoters' reach (statusAudience) sends
+		// the edit, as a Create and an Update, to a remote quoter that neither follows L0 nor is mentioned.
+		name: 'an edit and a delete of a status a remote account quotes through an accepted legacy quote',
+		scenarios: ['content reaches a quoter', 'retraction reaches what was delivered'],
+		case: witness(
+			2,
+			{
+				statuses: [original(0, 0, 'public'), original(1, R0, 'public')],
+				quotes: [
+					{ status: 0, quoted: null, state: 'pending', legacy: false },
+					{ status: 1, quoted: 0, state: 'accepted', legacy: true },
+				],
+			},
+			[{ kind: 'edit' }, { kind: 'deliver' }, { kind: 'delete' }]
+		),
+	},
+	{
+		// R2 follows L0, so each edit is recorded with a target.
+		name: 'edits of a private status and of a public one, each quoted, the public one by an account the author blocks',
+		scenarios: ['content leaves out a quoter of a private status', 'content leaves out a blocked quoter'],
+		case: witness(
+			3,
+			{
+				followers: [R2],
+				statuses: [
+					original(0, 0, 'private'),
+					original(1, 0, 'public'),
+					original(2, R0, 'public'),
+					original(3, R1, 'public'),
+				],
+				quotes: [
+					{ status: 2, quoted: 0, state: 'accepted', legacy: false },
+					{ status: 3, quoted: 1, state: 'accepted', legacy: true },
+				],
+			},
+			[
+				{ kind: 'block', account: R1 },
+				{ kind: 'edit', target: 0 },
+				{ kind: 'edit', target: 1 },
+			]
+		),
+	},
 	{
 		name: 'a post and a delete after the deletion of a mentioned follower starts',
 		scenarios: ['content leaves out an unavailable account', 'retraction reaches an unavailable receiver'],
@@ -566,8 +627,18 @@ function readWorld(sql: SqlStorage, base: World): Snapshot {
 			pins: [],
 			conversationMutes: [],
 			tagFollowers: base.tagFollowers,
-			// No rule the snapshot is checked against reads a quote.
-			quotes: [],
+			// The quotes the Store holds now (a delete detaches the quotes of its status), for quoters' reach.
+			quotes: sql
+				.exec<{ status_id: string; quoted_status_id: string | null; state: WorldQuote['state']; legacy: number }>(
+					'SELECT status_id, quoted_status_id, state, legacy FROM quotes ORDER BY status_id'
+				)
+				.toArray()
+				.map((q) => ({
+					status: byId.get(q.status_id)!,
+					quoted: q.quoted_status_id === null ? null : (byId.get(q.quoted_status_id) ?? null),
+					state: q.state,
+					legacy: q.legacy === 1,
+				})),
 			now: base.now,
 		},
 	}
@@ -974,6 +1045,10 @@ function check(sql: SqlStorage, c: Case, saw: Set<Scenario>): string[] {
 			// The accounts it may name besides Public and the signer's followers, and those it must name.
 			const mayName = new Set<number>()
 			const mustName = new Set<number>()
+			// For an activity about a status: the remote authors of its accepted quotes that neither follow the signer nor
+			// are mentioned, whom only quoters' reach can bring it to; and whether the status is public or unlisted.
+			let quoters: number[] = []
+			let distributable = false
 			if (actorUpdate) {
 				audience = { followers: true, accounts: [] }
 			} else if (activity.type === 'Like' || inner.type === 'Like') {
@@ -1000,6 +1075,18 @@ function check(sql: SqlStorage, c: Case, saw: Set<Scenario>): string[] {
 					continue
 				}
 				audience = m.statusAudience(s)
+				const status = snapshot.world.statuses[s]!
+				distributable = status.visibility === 'public' || status.visibility === 'unlisted'
+				quoters = snapshot.world.quotes.flatMap((q) => {
+					const x = snapshot.world.statuses[q.status]!.author
+					return q.quoted === s &&
+						q.state === 'accepted' &&
+						!world.accounts[x]!.local &&
+						!snapshot.world.follows.some((f) => f.from === x && f.to === signer && f.accepted) &&
+						!status.mentions.some((mention) => mention.account === x)
+						? [x]
+						: []
+				})
 				for (const mention of snapshot.world.statuses[s]!.mentions) {
 					if (!mention.silent && m.names(kind, signer, mention.account)) {
 						mayName.add(mention.account)
@@ -1045,6 +1132,15 @@ function check(sql: SqlStorage, c: Case, saw: Set<Scenario>): string[] {
 			if (kind === 'content') {
 				for (const target of targets) {
 					contentInboxes.add(target.inbox)
+				}
+				for (const x of quoters) {
+					if (inboxesOf(x).some((inbox) => inbox !== null && sent.has(inbox))) {
+						saw.add('content reaches a quoter')
+					} else if (m.blocked(signer, x)) {
+						saw.add('content leaves out a blocked quoter')
+					} else if (!distributable) {
+						saw.add('content leaves out a quoter of a private status')
+					}
 				}
 				const whole = m.reaches('other', signer, audience)
 				if (

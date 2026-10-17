@@ -592,16 +592,18 @@ export class PolicyModel {
 
 	// The audience of an activity about the local status s (Create, Update, Delete): its followers unless only the
 	// mentioned may see it, and its mentions (silent included), with, for a public or unlisted status, the remote
-	// accounts that boosted it and the remote author of the status it replies to.
+	// accounts that boosted it, the remote author of the status it replies to, and the remote authors of its accepted
+	// quotes, legacy or not (quoters' reach: Mastodon's StatusReachFinder#quotes_account_ids, which takes every quote
+	// of a distributable status; Kopje's reachQuoters in audience.ts takes the accepted ones).
 	statusAudience(s: number): { followers: boolean; accounts: number[] } {
 		const status = this.status(s)
 		const distributable = status.visibility === 'public' || status.visibility === 'unlisted'
+		const remoteAuthor = (x: number) => (this.account(this.status(x).author).local ? [] : [this.status(x).author])
 		const reached = distributable
 			? [
-					...this.world.statuses.flatMap((b) => (b.reblogOf === s && !this.account(b.author).local ? [b.author] : [])),
-					...(status.replyTo !== null && !this.account(this.status(status.replyTo).author).local
-						? [this.status(status.replyTo).author]
-						: []),
+					...this.world.statuses.flatMap((b, x) => (b.reblogOf === s ? remoteAuthor(x) : [])),
+					...(status.replyTo === null ? [] : remoteAuthor(status.replyTo)),
+					...this.world.quotes.flatMap((q) => (q.quoted === s && q.state === 'accepted' ? remoteAuthor(q.status) : [])),
 				]
 			: []
 		return {
