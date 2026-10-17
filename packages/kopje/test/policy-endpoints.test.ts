@@ -241,7 +241,7 @@ describe('the status read endpoints agree with the model of their rules', () => 
 				const problems = await runInDurableObject(store, (_instance, state) => check(state.storage.sql, c))
 				expect(problems).toEqual([])
 			}),
-			runs(CASES)
+			runs(CASES, 20261018)
 		)
 	}, 60_000)
 })
