@@ -74,29 +74,21 @@ active mention the viewer blocks or mutes, whose author blocks the viewer, or wh
 accounts, the third condition of Mastodon's `broadcastable?`. As home is read, a followed hashtag's statuses from before
 the follow are shown too, and they leave home when the follow ends (Mastodon's `TagUnmergeWorker`).
 
-Home reads a window of each followed hashtag's public statuses (`TagWindows` below), through the partial index
-`status_tags_public`, so a hashtag's unlisted, private, direct and limited statuses are never read; an account follows
-at most `MAX_FOLLOWED_TAGS` (100) hashtags, Kopje's cap where Mastodon has none, so the windows of a page are bounded.
-Each window inspects at most two pages (at least 40) of the hashtag's public statuses from the cursor, whatever the rule
-leaves out of them: Mastodon filters a hashtag's statuses as they arrive, Kopje as home is read, so a hashtag whose
-newest statuses are mostly hidden from the viewer (a blocked author's) shows fewer of its statuses on that page instead
-of costing home its whole history; those below a longer hidden stretch appear once home's other streams move the page
-past it.
-Home and a list's timeline read a window of each author's statuses (`AuthorWindows` below): for each account home
-shows (for a list, each active member), the newest public, unlisted and private statuses of theirs inside the cursor
-that pass every filter above, at most a page, through the partial index `statuses_feed` from the cursor; then the
-newest page of all those windows. A status of the page is within its author's window, so the page is the one a single
-query over every author's statuses would give, and the filters apply inside each window, so an author whose newest
-statuses are all left out still shows older ones on the same page. Home merges two more streams: the viewer's own
-statuses, whatever their visibility (the read rule shows the viewer all of them, so this reads at most a page), and the
-direct and limited statuses that mention the viewer, as a window per followed account of the viewer's mentions by that
-account, in status id order from the cursor, through the partial index `status_mentions_requires_mention` of the
-mentions in direct and limited statuses by recipient and author (`status_mentions.requires_mention` and `author_id`,
-which the writers of `status_mentions` copy from the status, migration `0008_status_mentions_requires_mention`). A page
-reads a page of shown statuses per author however long each author's history; a followed account's direct and limited
-statuses to others are never read, and neither are the viewer's mentions in public, unlisted and private statuses or
-by accounts they do not follow. What a follow's options (boosts, languages, replies) and `homeFilterSql` leave out is
-still read on the way: an author whose recent statuses are mostly left out costs those rows. The number of windows is
+Home reads each followed hashtag's public statuses as a stream, through the partial index `status_tags_public`, so a
+hashtag's unlisted, private, direct and limited statuses are never read; an account follows at most
+`MAX_FOLLOWED_TAGS` (100) hashtags, Kopje's cap where Mastodon has none, so the streams of a page are bounded.
+Home and a list's timeline merge streams into one candidate window (see "Read bounds" below): for each account home
+shows (for a list, each active member), its public, unlisted and private statuses from the cursor through the partial
+index `statuses_feed`; home adds the viewer's own statuses, whatever their visibility, the direct and limited statuses
+that mention the viewer, as a stream per followed account of the viewer's mentions by that account, through the
+partial index `status_mentions_requires_mention` of the mentions in direct and limited statuses by recipient and
+author (`status_mentions.requires_mention` and `author_id`, which the writers of `status_mentions` copy from the status,
+migration `0008_status_mentions_requires_mention`), and the followed hashtags' streams. An account the rule rejects as
+a whole (unavailable, blocking the viewer, filtered by them) has no stream. The rule, the follow's options and
+`homeFilterSql` then apply to the window's candidates. Mastodon filters home as statuses arrive; Kopje filters it as it
+is read, so a page whose window holds mostly what the filters leave out is short or empty, and its next link moves on
+past the window. A followed account's direct and limited statuses to others are never read, and neither are the
+viewer's mentions in public, unlisted and private statuses or by accounts they do not follow. The number of streams is
 the number of accounts the viewer follows (a list's active members are among them): the viewer's own choice, not data
 others control, and not a hard bound. The follow API has Mastodon's `FollowLimitValidator` as an admission rule on the
 viewer's own follows: a new follow or request is refused (422) once the viewer has 7,500 accepted follows, or past that
@@ -556,7 +548,9 @@ WHERE (<where>) AND (<rule over s>) AND (<and>) <tail>
 - `notifications(db, parts)` selects `n.status_id` and further columns from `notifications n`, with `shownSql` (R15,
   the viewer as the recipient, which shows a status only if they may view it) as the rule. It reads the viewer's
   notifications only, within the parts' cursor (`range`) and above the viewer's clear, of one group (`group`) above its
-  dismissal, or of every group each above its own.
+  dismissal, or of every group each above its own; with `within`, the candidates of a window alone.
+  `notificationWindow(db, parts)` reads those candidates: the same rows without the rule and the per-row dismissal.
+- `authorRule(rule, author)` is the rule over the author as SQL, for a window's author-level exclusion.
 
 The rule is a conjunct of the SELECT's own WHERE, over the `statuses s` whose id it selects, so no condition, subquery,
 join or `WITH` table of the caller's can stand in for it. The reader and the fragments name their tables with the
@@ -567,19 +561,19 @@ the terms, the plan and the rows read are the same. Each query runs only with it
 bound to the context's account id and time. `viewableStatusId` is `canView` (R3) for one id. `ownStatusId` checks the
 author. The callers:
 
-| Caller                                                     | Ids from                                                                                             |
-| ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| home                                                       | `union` under `homeFilter` of two `AuthorWindows` (follows, mentions), own and a `TagWindows`        |
-| list timeline                                              | `union` of one `AuthorWindows` under `homeFilter`: the list's active members                         |
-| public feed, bookmarks and favourites, context             | `select` under `listable`; the tag feed a `union` of its names under it                              |
-| account statuses                                           | `authorShown`, then `select` under `visible`, with `visibleSql` and `filteredForSql` for an original |
-| status search                                              | `select` under `listable`, with its candidates as a `WITH` table                                     |
-| notifications (list and one, groups, unread counts)        | `notifications`, with `includeFiltered`                                                              |
-| web profile and status pages                               | `select` under `visible` with no viewer; the parent through `viewableStatusId`                       |
-| conversations (list, read, unread)                         | `select` under `visible` of each last status                                                         |
-| single status, history, actions (favourite, bookmark, ...) | `viewableStatusId`                                                                                   |
-| search resolution                                          | `viewableStatusId`, after the domain block of the author                                             |
-| post, edit, delete, boost (and their repeats)              | `ownStatusId`, then `presentOwnStatus`                                                               |
+| Caller                                                     | Ids from                                                                                                                                              |
+| ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| home (a page)                                              | `select` under `homeFilter` of its window's candidates; positioned (R33): the `union` of `AuthorWindows`, own and `TagWindows` narrowed to the status |
+| list timeline                                              | as home: its window's candidates, or the narrowed `union` of one `AuthorWindows`                                                                      |
+| public and tag feeds, bookmarks and favourites, context    | `select` under `listable` (feeds and edges: of their window's candidates)                                                                             |
+| account statuses                                           | `authorShown`, then `select` under `visible` of its window, with `visibleSql` and `filteredForSql` for an original                                    |
+| status search                                              | `select` under `listable`, with its candidates as a `WITH` table                                                                                      |
+| notifications (list and one, groups, unread counts)        | `notifications`, with `includeFiltered`                                                                                                               |
+| web profile and status pages                               | `select` under `visible` with no viewer; the parent through `viewableStatusId`                                                                        |
+| conversations (list, read, unread)                         | `select` under `visible` of each last status                                                                                                          |
+| single status, history, actions (favourite, bookmark, ...) | `viewableStatusId`                                                                                                                                    |
+| search resolution                                          | `viewableStatusId`, after the domain block of the author                                                                                              |
+| post, edit, delete, boost (and their repeats)              | `ownStatusId`, then `presentOwnStatus`                                                                                                                |
 
 The presenter reads a boost's original through `visibleSql` for the same viewer, whatever brand the boost's id has: a
 `VisibleStatusId` boost whose original the viewer may not see is left out (R3), and an `OwnStatusId` boost is shown
@@ -643,6 +637,67 @@ deepest terms last in a chain and prefer `JOIN ... ON` to `WHERE` for a lookup i
 allow 90: `test/sql-depth-setup.ts` records each statement a suite runs through `Db` and has its depth measured on
 Node (`test-node/sql-depth.ts`), so a statement nearing the limit fails the suite that runs it.
 
+## Read bounds
+
+A paged read whose rule hides rows reads a candidate window (`src/domain/windows.ts`; RES-7 in the threat model):
+
+- From its cursor, in cursor order, it reads at most a fixed number of candidates through an index, with its request's
+  own conditions (types, hashtags, media, the follow relation of the stream) but without the rule.
+- It applies the rule to those candidates alone, each by its key, and returns the first that pass, at most a page.
+- The page may be short or empty. When the window ended before the cursor's range did, the page's far end is the
+  window's last candidate (or the last item of a full page), and the next link is offered whatever the page holds
+  (`Page.cut`), so paging moves on by the window and reaches what lies behind any hidden range. `min_id`, `since_id`
+  and the `prev` link keep Mastodon's meaning. Mastodon paginates its quotes list before it filters, and does the same.
+- A merged read (home, a list, a hashtag timeline's names) reads at most `streamWindow` candidates per stream and
+  merges them up to the highest end of a stream that filled, at most `readWindow`, so no candidate below a stream's end
+  is passed over. A read positioned at a status (`max_id` just above it, `limit` 1) has it as its first candidate, so
+  the narrowed reads of R33 return it exactly when the positioned read does.
+
+The cursor rule: a row hidden from the viewer by its own visibility or audience (private, direct or limited that they
+may not see, a boost of such an original, a status of an author on whose blocked domain a remote viewer lives) is
+never a candidate, so it never supplies a cursor, a Link id or any other id in a response. Candidate queries keep it out
+with `audienceSql` (the row's visibility and audience, and its original's, without availability or filters), or with
+`visibility IN ('public', 'unlisted')` for anonymous pages; a follower or interactor that blocks the viewer is left out
+of their candidates too. A candidate may be hidden only by availability (an account being deleted or suspended), by
+the viewer's own blocks, mutes and domain blocks, by a follow's options or the home filter, or, for rows the viewer
+owns (their notifications, bookmarks, favourites, notification requests, list members, endorsements), by the rule over
+what the row names: the viewer already knows their own relations and rows, and Mastodon paginates before filtering
+there. Where a read cannot keep rows hidden by visibility out with an index, it walks past them as it did before
+windows: such rows cost their number, never a cursor.
+
+The windows, for a page of `limit` (`readWindow(limit)` = max(3 × limit, 40); `streamWindow(limit)` = max(2 ×
+limit, 40); statuses page by 20 and at most 40, accounts and notifications by 40 and at most 80):
+
+| Read                                 | Window                                                                                                        | What its candidates may hide                                             |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| home                                 | `streamWindow` per followed account, mention stream, own and followed hashtag; merged `readWindow`            | availability of a boosted original, filters, follow options, home filter |
+| list timeline                        | `streamWindow` per active member; merged `readWindow`                                                         | as home                                                                  |
+| public timeline                      | `readWindow`, on `statuses_public`                                                                            | availability, the viewer's filters, a blocking author                    |
+| hashtag timeline                     | `streamWindow` per name (at most five); merged `readWindow`                                                   | as the public timeline                                                   |
+| account statuses                     | `readWindow`, on `statuses_account`, within the audience                                                      | availability or filters of a boosted original                            |
+| bookmarks, favourites                | `readWindow` of the viewer's edges                                                                            | the rule over the status the viewer saved                                |
+| notifications (v1)                   | `readWindow` of the viewer's notifications                                                                    | R15                                                                      |
+| grouped notifications, unread counts | at most `GROUP_WALK` (2,000) per page or count; a group's count, samples and oldest among `GROUP_COUNT` (400) | R15                                                                      |
+| a group's accounts                   | `readWindow` of the group's notifications                                                                     | R15                                                                      |
+| notification requests                | `readWindow` of the viewer's requests                                                                         | an unavailable sender                                                    |
+| followers, following                 | `readWindow` of the account's accepted follows                                                                | the viewer's blocks and mutes                                            |
+| `favourited_by`, `reblogged_by`      | `readWindow` of the status's favourites or public boosts                                                      | availability, the viewer's filters                                       |
+| list members, endorsements           | `readWindow` (1,000 answered without a page: 3,000)                                                           | availability                                                             |
+| profile web page, outbox             | `readWindow` of 21 (63), public and unlisted only                                                             | availability of a boosted original (outbox)                              |
+| quotes list (statuses.ts)            | a page of accepted quotes                                                                                     | R8, or R2 for the quoted author                                          |
+
+Following and the interactors' windows sort the account's follows or the status's favourites and boosts by id: no
+index orders them so, so those windows bound the rule's work, not that sort. Reads bounded otherwise: search (2,500
+per library source), the directory (`DIRECTORY_WINDOW`), the admin lists (their residual budget), context (its
+traversal cap), conversations (no rule before `LIMIT`), and the blocks, mutes, domain blocks and follow requests lists
+(no rule before `LIMIT`). Suggestions and the link timeline answer empty lists.
+
+`test/read-windows.test.ts` puts 100 or 20,000 hidden rows of each kind (accounts being deleted, a block, a domain
+block, mutes) in front of the visible ones: every windowed read reads the same rows (but the interactors' sort), its
+newest page is empty and cut, and paging by `max_id` and by `min_id` through 1,000 hidden rows reaches every visible
+row on both sides once, in order. Its leak cases put 1,000 private and 1,000 direct statuses, and 200 blocking
+followers and favouriters, in front of a viewer who may not see them, and check that no response field names one.
+
 ## The oracle and the bounds harness
 
 `test/policy-oracle.test.ts` checks each fragment against a second statement of its rule. `test/policy-model.ts` states
@@ -686,13 +741,13 @@ statuses, accounts, notifications and hashtags in the same order, and the same r
 reads (RES-7) may grow by at most 10 (home by 11: each followed hashtag's window judges its statuses again, and the
 probe of the viewer's blocks and mutes reads the next index entry, which the unrelated accounts provide; the same with
 ten times the unrelated rows). A second case grows the history of each author home and a list read instead: the viewer,
-who follows seven accounts and has a list of them, and those accounts, from 20 statuses each to 2,000, one of the
+who follows seven accounts and has a list of them, and those accounts, from 60 statuses each to 2,000, one of the
 accounts posting only direct statuses addressed to another account. The newest page, a page from the middle of the
 longer histories and the oldest page of home and of the list must each be full and read at most 10 rows more. A third
 case does the same for the conversation list, with 20 or 2,000 conversations of the viewer, each a thread of three
 direct statuses.
 
-A third case grows the generated world's own history: the same world with every status replicated 40 and 400 times,
+A third case grows the generated world's own history: the same world with every status replicated 100 and 400 times,
 each copy a new status older than every original, with its original's author, visibility, mentions, hashtag and
 reply or boost (to the copy of its parent or original in the same replica), and the viewer's favourite, bookmark and
 notification of it. Accounts, follows, blocks, mutes, domain blocks and list memberships are not replicated. Because

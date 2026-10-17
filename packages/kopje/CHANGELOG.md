@@ -22,6 +22,16 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   account's profile. It is behind the `/admin` Access application like the rest of `/admin`: anyone else is refused
   before the report is looked up, and an unknown report answers 404.
 
+### Changed
+
+- Lists that hide some of their rows from the viewer (timelines, account statuses, bookmarks, favourites,
+  notifications, followers and following, who favourited or boosted, notification requests, list members,
+  endorsements, the profile page and the outbox) read a bounded window of rows per request, so a long run of hidden
+  rows (from accounts being deleted, or blocked, muted or domain-blocked by the viewer) costs a request the same as a
+  short one. Such a list may now return a short or empty page while its `next` link still leads on, as Mastodon's
+  lists do where it filters after paginating; clients that follow `next` reach everything behind it. No hidden
+  post's id is ever shown.
+
 ### Instance changes
 
 - Store schema: adds two migrations, applied on the first request after the deploy; a rollback to an earlier version
