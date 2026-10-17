@@ -25,7 +25,21 @@ import {
 } from './filters'
 import { htmlToPlainText } from './plain-text'
 import { type Poll, presentPolls } from './polls'
-import { profileUrlSql, usernameSql } from './profile-bounds'
+import { actorUriSql, profileUrlSql, usernameSql } from './profile-bounds'
+import {
+	contentSql,
+	MAX_STATUS_MEDIA,
+	MAX_STATUS_MENTION_ROWS,
+	MAX_STATUS_TAGS,
+	mediaDescriptionSql,
+	mediaMetaSql,
+	mediaUrlSql,
+	sourceTextSql,
+	spoilerSql,
+	statusUriSql,
+	statusUrlSql,
+	tagNameSql,
+} from './status-bounds'
 import type { Db } from '../db/sql'
 import { httpUrl } from '../platform/http-url'
 import { remotePlainText } from '../security/html'
@@ -149,10 +163,13 @@ export type StatusRow = {
 // parent: they belong to the reply, whose ActivityPub object carries inReplyTo to every recipient anyway, and its
 // author chose to publish them. The parent itself (content, author profile, context entry) stays behind the audience
 // rule. in_reply_to_account_id is the conversation partner carried through self-replies.
-export const STATUS_COLUMNS = `s.id, s.uri, s.url, s.account_id, s.reblog_of_id, s.in_reply_to_id,
-	s.in_reply_to_account_id, s.visibility, s.spoiler_text, s.content, s.source_text, s.sensitive,
+// The text and URLs are bounded (status-bounds.ts, RES-2).
+export const STATUS_COLUMNS = `s.id, ${statusUriSql('s.uri')} AS uri, ${statusUrlSql('s.url')} AS url, s.account_id,
+	s.reblog_of_id, s.in_reply_to_id, s.in_reply_to_account_id, s.visibility, ${spoilerSql('s.spoiler_text')} AS spoiler_text,
+	${contentSql('s.content')} AS content, ${sourceTextSql('s.source_text')} AS source_text, s.sensitive,
 	s.language, s.published_at, s.edited_at, s.replies_count, s.reblogs_count, s.favourites_count, s.quotes_count,
-	s.quote_policy, au.uri AS author_uri, ${usernameSql('au.username')} AS author_username, au.domain AS author_domain`
+	s.quote_policy, ${actorUriSql('au.uri')} AS author_uri, ${usernameSql('au.username')} AS author_username,
+	au.domain AS author_domain`
 
 export const STATUS_FROM = 'statuses s JOIN accounts au ON au.id = s.account_id'
 
@@ -166,13 +183,14 @@ export type PresentOwnOptions = PresentOptions & {
 	source?: boolean
 }
 
-// The columns presentMedia reads, for every query that presents media.
-export const MEDIA_COLUMNS = 'id, type, url, preview_url, description, meta, focus_x, focus_y'
+// The columns presentMedia reads, bounded (status-bounds.ts), for every query that presents media.
+export const MEDIA_COLUMNS = `id, type, ${mediaUrlSql('url')} AS url, ${mediaUrlSql('preview_url')} AS preview_url,
+	${mediaDescriptionSql('description')} AS description, ${mediaMetaSql('meta')} AS meta, focus_x, focus_y`
 
 export type MediaRow = {
 	id: string
 	type: string
-	url: string
+	url: string | null
 	preview_url: string | null
 	description: string
 	meta: string | null
@@ -265,24 +283,35 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 		[...byId.values()].map((row) => row.account_id),
 		options
 	)
+	// At most MAX_STATUS_MEDIA attachments, MAX_STATUS_MENTION_ROWS mentions and MAX_STATUS_TAGS hashtags of each
+	// status, cut in SQL (a converted row may hold more), each read through its index.
 	const media = groupBy(
 		db.all<MediaRow & { status_id: string }>(
 			`SELECT ${MEDIA_COLUMNS}, status_id FROM media_attachments
-			WHERE status_id IN (SELECT value FROM json_each(?1)) AND shown = 1 ORDER BY status_id, position, id`,
+			WHERE id IN (SELECT x.id FROM json_each(?1) j CROSS JOIN media_attachments x ON x.id IN (SELECT y.id
+				FROM media_attachments y WHERE y.status_id = j.value AND y.shown = 1 ORDER BY y.position, y.id
+				LIMIT ${MAX_STATUS_MEDIA}))
+			ORDER BY status_id, position, id`,
 			all
 		)
 	)
 	const mentions = groupBy(
 		db.all<MentionRow>(
-			`SELECT m.status_id, a.id, ${usernameSql('a.username')} AS username, a.domain, ${profileUrlSql('a.url')} AS url, a.uri
-			FROM status_mentions m JOIN accounts a ON a.id = m.account_id
-			WHERE m.status_id IN (SELECT value FROM json_each(?1)) AND m.silent = 0 ORDER BY m.status_id, a.id`,
+			`SELECT j.value AS status_id, a.id, ${usernameSql('a.username')} AS username, a.domain,
+				${profileUrlSql('a.url')} AS url, ${actorUriSql('a.uri')} AS uri
+			FROM json_each(?1) j CROSS JOIN accounts a
+			WHERE a.id IN (SELECT m.account_id FROM status_mentions m WHERE m.status_id = j.value AND m.silent = 0
+				ORDER BY m.account_id LIMIT ${MAX_STATUS_MENTION_ROWS})
+			ORDER BY j.value, a.id`,
 			all
 		)
 	)
 	const tags = groupBy(
 		db.all<{ status_id: string; name: string }>(
-			'SELECT status_id, name FROM status_tags WHERE status_id IN (SELECT value FROM json_each(?1)) ORDER BY status_id, name',
+			`SELECT j.value AS status_id, ${tagNameSql('t.name')} AS name FROM json_each(?1) j CROSS JOIN status_tags t
+			WHERE t.status_id = j.value AND t.name IN (SELECT ${tagNameSql('n.name')} FROM status_tags n
+				WHERE n.status_id = j.value AND ${tagNameSql('n.name')} IS NOT NULL ORDER BY n.name LIMIT ${MAX_STATUS_TAGS})
+			ORDER BY j.value, t.name`,
 			all
 		)
 	)

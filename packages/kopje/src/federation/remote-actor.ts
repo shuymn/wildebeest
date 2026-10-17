@@ -3,7 +3,7 @@ import { type Actor, getActorTypeName, type Image, isActor, Link, lookupObject }
 
 import { isTransientLoadError, loadFailureOf } from './loader'
 import type { RemoteActorInput } from '../domain/inbox'
-import { DISPLAY_NAME_LIMIT, PROFILE_URL_LIMIT, USERNAME_LIMIT } from '../domain/profile-bounds'
+import { ACTOR_URI_LIMIT, DISPLAY_NAME_LIMIT, PROFILE_URL_LIMIT, USERNAME_LIMIT } from '../domain/profile-bounds'
 import { hostDomain } from '../platform/domain-name'
 import { httpUrl } from '../platform/http-url'
 import { sanitizeRemoteBio } from '../security/html'
@@ -20,7 +20,7 @@ const USERNAME = /^[a-z0-9_]+([a-z0-9_.-]+[a-z0-9_]+)?$/i
 // sets no length limit, and Misskey stores inbox URLs in 512-character columns. Real servers use far shorter URLs.
 // A serialized URL is ASCII, so its length is its size in bytes.
 export const INBOX_URL_LIMIT = 2048
-export const ACTOR_URI_LIMIT = 2048
+export { ACTOR_URI_LIMIT }
 
 export type FetchedActor =
 	| { kind: 'ok'; actor: Actor; input: RemoteActorInput | null }

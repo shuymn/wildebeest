@@ -20,6 +20,13 @@ import { notify } from './notifications'
 import { isLocalPoll, receiveVote, type RemotePollInput, remotePollChanges, storeRemotePoll } from './polls'
 import { linkQuotes, promoteQuote, QUOTE_HOPS, quoteArrival, quoteDue, recordQuote, refreshQuote } from './quotes'
 import { normalizeSearchText } from './search-text'
+import {
+	MAX_MEDIA_DESCRIPTION_LENGTH,
+	MAX_STATUS_MEDIA,
+	MAX_STATUS_MENTION_ROWS,
+	MAX_STATUS_TAGS,
+	MAX_TAG_LENGTH,
+} from './status-bounds'
 import { presentStatus, type Status } from './status-presenter'
 import { MAX_STATUS_EDITS, notifyQuotedUpdate, recordEdit, recountStatus, writeTags } from './statuses'
 import type { Db } from '../db/sql'
@@ -37,16 +44,13 @@ import type { Db } from '../db/sql'
 // (Status::MEDIA_ATTACHMENTS_LIMIT) and 10,000 code units of description (MAX_DESCRIPTION_HARD_LENGTH_LIMIT). Content
 // is cut at REMOTE_HTML_RAW_LIMIT before sanitizing (security/html.ts). Mastodon has no cap on the rest; these are
 // Kopje's.
-export const MAX_STATUS_MEDIA = 4
-export const MAX_STATUS_TAGS = 100
+// Attachments, tags and their names, mention rows (local accounts first, then mentions, then silent mentions) and
+// media descriptions are bounded as status-bounds.ts states, content and content warnings as security/html.ts does.
+export { MAX_MEDIA_DESCRIPTION_LENGTH, MAX_STATUS_MEDIA, MAX_STATUS_MENTION_ROWS, MAX_STATUS_TAGS, MAX_TAG_LENGTH }
 // Mention tags read, and to and cc entries read (Public is detected before the cut).
 export const MAX_STATUS_MENTION_TAGS = 100
 export const MAX_STATUS_AUDIENCE = 1000
-// status_mentions rows of one remote status, local accounts first, then mentions, then silent mentions.
-export const MAX_STATUS_MENTION_ROWS = 200
 export const MAX_SPOILER_LENGTH = 10_000
-export const MAX_MEDIA_DESCRIPTION_LENGTH = 10_000
-export const MAX_TAG_LENGTH = 256
 // Replies stored before their parent that one arriving parent links (the rest stay unresolved, by uri).
 export const MAX_LINKED_REPLIES = 100
 // An Update of an unknown status creates it only if the status is this recent (Mastodon's OBJECT_AGE_THRESHOLD).

@@ -80,6 +80,7 @@ import {
 	revokeQuoteRow,
 } from './quotes'
 import { normalizeSearchText } from './search-text'
+import { contentSql, editMediaSql, pollOptionsSql, sourceTextSql, spoilerSql, statusUrlSql } from './status-bounds'
 import {
 	MEDIA_COLUMNS,
 	type MediaAttachment,
@@ -104,6 +105,7 @@ import {
 import { streamDelete } from './streaming'
 import { readWindow, singleWindow, windowJson, windowPage } from './windows'
 import type { Db } from '../db/sql'
+import { jsonStringBytes, SPOILER_BYTES, STATUS_CONTENT_BYTES } from '../security/html'
 
 // Statuses (B4a): posting, editing and deleting local statuses, the per-status reads, and favourite, reblog and
 // bookmark. Every read goes through the audience rule (audience.ts); every write recomputes the counters it changes
@@ -115,6 +117,13 @@ export type Acted<T> = Viewed<T> | { status: 'forbidden' } | { status: 'invalid'
 
 // The Worker checks the counted length; the Store re-checks the raw bound so no caller can make it parse more.
 const TOO_LONG = 'Validation failed: Text character limit of 500 exceeded'
+
+// RES-2: a local status's content and content warning stay within the bounds a presented status has (status-bounds.ts),
+// as a remote one's do. Text within MAX_RAW_LENGTH renders past STATUS_CONTENT_BYTES only through hundreds of
+// mentions of accounts with long profile URLs; such a post is refused as too long.
+function exceedsStatusBounds(content: string, spoilerText: string): boolean {
+	return jsonStringBytes(content) > STATUS_CONTENT_BYTES || jsonStringBytes(spoilerText) > SPOILER_BYTES
+}
 
 // Mastodon's media_attachments.validations.too_many, which it also answers for media sent with a poll.
 export const TOO_MANY_FILES = 'Cannot attach more than 4 files'
@@ -226,8 +235,9 @@ function quoteLink(db: Db, id: string): QuoteLink | null {
 		domain: string | null
 		author_uri: string
 	}>(
-		`SELECT s.uri, s.url, a.username, a.domain, a.uri AS author_uri FROM statuses s JOIN accounts a ON a.id = s.account_id
-		WHERE s.id = ?`,
+		`SELECT s.uri, ${statusUrlSql('s.url')} AS url, ${usernameSql('a.username')} AS username, a.domain,
+			a.uri AS author_uri
+		FROM statuses s JOIN accounts a ON a.id = s.account_id WHERE s.id = ?`,
 		id
 	)
 	if (row === undefined) {
@@ -417,6 +427,11 @@ export function preparePost(db: Db, accountId: string, input: PostInput, schedul
 	}
 	if (input.text.trim() === '' && media.length === 0 && quoted === null) {
 		return { status: 'invalid', error: "Validation failed: Text can't be blank" }
+	}
+	const origin = new URL(author.uri).origin
+	const composed = compose(db, input.text, author, origin, quoted === null ? null : quoteLink(db, quoted.id))
+	if (exceedsStatusBounds(composed.content, input.spoilerText)) {
+		return { status: 'invalid', error: TOO_LONG }
 	}
 	return { author, parent, media, visibility, quoted }
 }
@@ -842,6 +857,9 @@ export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db
 		input.present.origin,
 		quotedId === null ? null : quoteLink(db, quotedId)
 	)
+	if (exceedsStatusBounds(composed.content, input.spoilerText)) {
+		return { status: 'invalid', error: TOO_LONG }
+	}
 	const editedAt = iso(input.now)
 	if (versions === 0) {
 		recordEdit(db, current.id, current.published_at)
@@ -1214,8 +1232,9 @@ export const statusHistory = optionalUserReadOperation<{ id: string; present: Pr
 			poll_options: string | null
 			created_at: string
 		}>(
-			`SELECT content, spoiler_text, sensitive, media_json, poll_options, created_at FROM status_edits
-			WHERE status_id = ? ORDER BY id`,
+			`SELECT ${contentSql('content')} AS content, ${spoilerSql('spoiler_text')} AS spoiler_text, sensitive,
+				${editMediaSql('media_json')} AS media_json, ${pollOptionsSql('poll_options')} AS poll_options, created_at
+			FROM status_edits WHERE status_id = ? ORDER BY id`,
 			resolved
 		)
 		const value: StatusEdit[] =
@@ -1256,7 +1275,9 @@ export const statusSource = userReadOperation<{ id: string }, Viewed<StatusSourc
 		resolved === null
 			? undefined
 			: db.first<{ id: string; source_text: string | null; content: string; spoiler_text: string }>(
-					'SELECT id, source_text, content, spoiler_text FROM statuses WHERE id = ? AND account_id = ? AND reblog_of_id IS NULL',
+					`SELECT id, ${sourceTextSql('source_text')} AS source_text, ${contentSql('content')} AS content,
+						${spoilerSql('spoiler_text')} AS spoiler_text
+					FROM statuses WHERE id = ? AND account_id = ? AND reblog_of_id IS NULL`,
 					resolved,
 					accountId
 				)

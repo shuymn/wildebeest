@@ -5,6 +5,7 @@ import { availableSql, DISTRIBUTABLE_SQL } from './audience'
 import { userReadOperation, userWriteOperation } from './auth'
 import { allocateLocalId } from './ids'
 import { readOperation } from './operation'
+import { usernameSql } from './profile-bounds'
 import { isHashtagName } from './status-text'
 import { normalizeTag } from './tag-name'
 import type { Db } from '../db/sql'
@@ -57,7 +58,7 @@ const FEATURED_COLUMNS = `f.id, f.name, f.display_name,
 	CASE WHEN a.domain IS NULL THEN f.statuses_count ELSE (SELECT count(*) ${REMOTE_COUNTED}) END AS statuses_count,
 	CASE WHEN a.domain IS NULL THEN f.last_status_at
 		ELSE (SELECT s.published_at ${REMOTE_COUNTED} ORDER BY s.id DESC LIMIT 1) END AS last_status_at,
-	a.username, a.domain`
+	${usernameSql('a.username')} AS username, a.domain`
 const FEATURED_FROM = 'FROM featured_tags f JOIN accounts a ON a.id = f.account_id'
 
 // The URL of the account's statuses with the hashtag (Mastodon's short_account_tag_url): its profile, tagged. A remote
