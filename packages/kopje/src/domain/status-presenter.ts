@@ -6,6 +6,7 @@ import {
 	conversationMutedSql,
 	type OwnStatusId,
 	type QuotePolicyFlag,
+	quoteApprovalReads,
 	quotePolicyFlags,
 	quoteReads,
 	requiresMention,
@@ -285,6 +286,8 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 		)
 	)
 	const flags = viewerFlags(db, viewerId, all)
+	// R36 for the viewer, of every status presented by its own row (a boost answers denied: its original's is shown).
+	const approvals = quoteApprovalReads(options.viewer).of(db, [...byId.keys()])
 	const polls = presentPolls(db, [...byId.keys()], viewerId, options.viewer.now)
 	const filters = activeFilters(db, options.viewer)
 	const statusMatches =
@@ -366,8 +369,9 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 			}
 		}
 		// A boost shows its original's policy (Status#proper); a boost whose original the viewer may not see shows its
-		// own row's, which is always 0.
-		const policy = (row.reblog_of_id === null ? row : byId.get(row.reblog_of_id))?.quote_policy ?? row.quote_policy
+		// own row's, which is always 0, and denied.
+		const proper = (row.reblog_of_id === null ? row : byId.get(row.reblog_of_id)) ?? row
+		const policy = proper.quote_policy
 		const visibility = apiVisibility(row.visibility)
 		const viewer =
 			viewerId === null
@@ -424,10 +428,7 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 			quote_approval: {
 				automatic: quotePolicyFlags(policy, 'automatic'),
 				manual: quotePolicyFlags(policy, 'manual'),
-				// Kopje cannot author quotes yet (quoted_status_id is not served), so it tells every viewer they may not
-				// quote, whatever the policy answers them (quotePolicySql, R36): Elk offers its quote button for automatic
-				// or manual and would post a plain status.
-				current_user: 'denied',
+				current_user: approvals.get(proper.id) ?? 'denied',
 			},
 			card: null,
 			poll: polls.get(row.id) ?? null,

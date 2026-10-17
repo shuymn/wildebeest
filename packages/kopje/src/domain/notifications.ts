@@ -30,7 +30,16 @@ import type { Db } from '../db/sql'
 // (group_key, which v1 shows too); notification-groups.ts reads them.
 
 export type NotificationType =
-	'mention' | 'status' | 'reblog' | 'favourite' | 'follow' | 'follow_request' | 'update' | 'poll' | 'quote'
+	| 'mention'
+	| 'status'
+	| 'reblog'
+	| 'favourite'
+	| 'follow'
+	| 'follow_request'
+	| 'update'
+	| 'poll'
+	| 'quote'
+	| 'quoted_update'
 
 export type Notification = {
 	id: string
@@ -55,26 +64,28 @@ export type NotifyInput = {
 // policy filters (NotifyService#filter?) is written with `filtered` set and no group (Notification#set_group_key!
 // skips it): it is not pushed, does not join a conversation, and a mention opens or updates the request of its sender
 // (update_notification_request!, app/services/notify_service.rb:229-256); every read leaves it out unless asked.
-// The natural key makes a repeat a no-op, except for `update`: every edit notifies again, so the previous one is
-// replaced (and gets a newer id). The replacement is judged first: an edit the rule refuses (its conversation muted
-// since) leaves the previous one as it is, as a mute keeps the notifications written before it. An edit is never
-// filtered or dropped by the policy.
+// The natural key makes a repeat a no-op, except for `update` and `quoted_update`: every edit notifies again, so the
+// previous one is replaced (and gets a newer id; LocalNotificationWorker). The replacement is judged first: an edit the
+// rule refuses (its conversation muted since) leaves the previous one as it is, as a mute keeps the notifications
+// written before it. An edit is never filtered or dropped by the policy.
 export function notify(db: Db, input: NotifyInput): void {
 	const now = new Date(input.now).toISOString()
-	if (input.type === 'update') {
+	if (input.type === 'update' || input.type === 'quoted_update') {
 		const eligible = db.first(
-			`SELECT 1 AS ok WHERE ${notifiedSql('?1', "'update'", '?2', '?3', '?4')}`,
+			`SELECT 1 AS ok WHERE ${notifiedSql('?1', '?5', '?2', '?3', '?4')}`,
 			input.recipientId,
 			input.fromId,
 			input.statusId,
-			now
+			now,
+			input.type
 		)
 		if (eligible === undefined) {
 			return
 		}
 		db.run(
-			`DELETE FROM notifications WHERE account_id = ? AND type = 'update' AND from_account_id = ? AND status_id = ?`,
+			'DELETE FROM notifications WHERE account_id = ? AND type = ? AND from_account_id = ? AND status_id = ?',
 			input.recipientId,
+			input.type,
 			input.fromId,
 			input.statusId
 		)

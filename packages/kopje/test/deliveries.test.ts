@@ -120,12 +120,15 @@ describe('expansion (NET-2, VIS-3)', () => {
 		const { alice } = h.users
 		await remoteAccount(h.store, 'carol', 'carol.example')
 		const direct = await post(h, alice, { status: '@carol@carol.example psst', visibility: 'direct' })
-		// The Create is in flight when the edit comes, so the server will have the object: the edit goes as an Update.
+		// The Create is in flight when the edit comes: it may give up, so the server gets the current Create and the
+		// Update after it (the edit fan-out pair), each a copy of its own at the personal inbox.
 		await h.store.claimDeliveries(BUILD, { now: NOW, leaseToken: 'in-flight' })
 		// The edit removes the mention; carol stays addressed as a silent recipient (VIS-11).
 		await h.request(`/api/v1/statuses/${direct.id}`, bearer(alice.token, json({ status: 'edited' }, { method: 'PUT' })))
-		const [create, update] = await rows(h.store)
+		const [create, current, update] = await rows(h.store)
 		expect(create?.inbox_url).toBe('https://carol.example/inbox')
+		expect(current?.type).toBe('Create')
+		expect(current?.inbox_url).toBe('https://carol.example/users/carol/inbox')
 		expect(update?.type).toBe('Update')
 		expect(update?.inbox_url).toBe('https://carol.example/users/carol/inbox')
 		const activity = JSON.parse(update?.body ?? '{}') as { to: string[]; cc: string[]; object: { tag: unknown[] } }
@@ -448,6 +451,11 @@ describe('follows toward remote accounts', () => {
 		).toEqual([
 			{ type: 'Like', inbox_url: 'https://remote.example/inbox', addressee: null },
 			{ type: 'Create', inbox_url: 'https://carol.example/inbox', addressee: null },
+			{
+				type: 'Create',
+				inbox_url: 'https://carol.example/users/carol/inbox',
+				addressee: 'https://carol.example/users/carol',
+			},
 			{
 				type: 'Update',
 				inbox_url: 'https://carol.example/users/carol/inbox',

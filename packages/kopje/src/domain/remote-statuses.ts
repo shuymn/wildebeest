@@ -5,6 +5,7 @@ import {
 	interpretAddressing,
 	isDistributable,
 	isPublicCollection,
+	QUOTE_POLICY_FLAGS,
 	MENTION_STATUS_COLUMNS,
 	mentionStatusSql,
 	type StatusMention,
@@ -19,7 +20,7 @@ import { isLocalPoll, receiveVote, type RemotePollInput, remotePollChanges, stor
 import { linkQuotes, promoteQuote, QUOTE_HOPS, quoteArrival, quoteDue, recordQuote, refreshQuote } from './quotes'
 import { normalizeSearchText } from './search-text'
 import { presentStatus, type Status } from './status-presenter'
-import { MAX_STATUS_EDITS, recordEdit, recountStatus, writeTags } from './statuses'
+import { MAX_STATUS_EDITS, notifyQuotedUpdate, recordEdit, recountStatus, writeTags } from './statuses'
 import type { Db } from '../db/sql'
 
 // Remote statuses (B1b-2): Create, Update and the originals of boosts and search results, stored as Mastodon 4.7.3's
@@ -87,6 +88,8 @@ export type RemoteStatusInput = {
 	poll?: RemotePollInput | null
 	// The quote the Note names (quote, _misskey_quote, quoteUrl or quoteUri), or null.
 	quote?: RemoteQuoteInput | null
+	// Who the Note's author lets quote it (interactionPolicy.canQuote), or null when it states nothing.
+	quotePolicy?: RemoteQuotePolicyInput | null
 	// The object as received.
 	raw: string
 }
@@ -102,6 +105,9 @@ export type RemoteQuoteInput = {
 	// The quoted Note as the quoting Note embeds it (one level, never trusted beyond what recordQuote checks), or null.
 	embedded?: RemoteStatusInput | null
 }
+
+// interactionPolicy.canQuote as the Worker read it: the URIs each half lists ('' for an entry that is not one).
+export type RemoteQuotePolicyInput = { automatic: string[]; manual: string[] }
 
 export type StoreContext = {
 	now: number
@@ -185,6 +191,42 @@ export function followersUri(db: Db, accountId: string): string | null {
 			accountId
 		)?.followers ?? null
 	)
+}
+
+// StatusParser#quote_policy (Status::InteractionPolicyConcern's flags, audience.ts QUOTE_POLICY_FLAGS) of a remote
+// status by `author`: each half's flags from the URIs it lists: the public collection, the author's followers and
+// following collections (as its stored actor document names them), the author itself (which means nobody, so it adds
+// nothing), and anything else unsupported_policy; automatic in the high 16 bits. A Note that states no policy is 0,
+// nobody, as Mastodon stores it. Stored at a status's first store and on every Update of it (explicit or implicit),
+// never from a Create of a status already stored, so a replayed Create cannot bring an older policy back (design,
+// Concurrency (PR 3) row 2). Advisory (FEP-044f): it decides only whether a local user may ask (R36); the quoted
+// author's answer decides the quote.
+export function remoteQuotePolicy(db: Db, author: Author, policy: RemoteQuotePolicyInput | null | undefined): number {
+	if (policy === null || policy === undefined) {
+		return 0
+	}
+	const collections = db.first<{ followers: string | null; following: string | null }>(
+		`SELECT CASE WHEN json_type(raw, '$.followers') = 'text' THEN json_extract(raw, '$.followers') END AS followers,
+			CASE WHEN json_type(raw, '$.following') = 'text' THEN json_extract(raw, '$.following') END AS following
+		FROM accounts WHERE id = ?`,
+		author.id
+	)
+	const flags = (entries: readonly string[]): number => {
+		let half = 0
+		for (const entry of new Set(entries)) {
+			if (isPublicCollection(entry)) {
+				half |= QUOTE_POLICY_FLAGS.public
+			} else if (entry === collections?.followers) {
+				half |= QUOTE_POLICY_FLAGS.followers
+			} else if (entry === collections?.following) {
+				half |= QUOTE_POLICY_FLAGS.following
+			} else if (entry !== author.uri) {
+				half |= QUOTE_POLICY_FLAGS.unsupported_policy
+			}
+		}
+		return half
+	}
+	return (flags(policy.automatic) << 16) | flags(policy.manual)
 }
 
 type Known = { byUri: Map<string, string>; local: Set<string> }
@@ -386,6 +428,7 @@ export function storeRemoteStatus(db: Db, author: Author, input: RemoteStatusInp
 	}
 	const published = remoteTime(input.published, ctx.now)
 	const updated = input.updated === null ? null : remoteTime(input.updated, ctx.now)
+	const quotePolicy = remoteQuotePolicy(db, author, input.quotePolicy)
 	const declared = versionOf(input.updated ?? input.published, ctx.now)
 	const version = Number.isFinite(declared) ? declared : published
 	// Status#carried_over_reply_to_account_id.
@@ -404,9 +447,9 @@ export function storeRemoteStatus(db: Db, author: Author, input: RemoteStatusInp
 			db.run(
 				`INSERT INTO statuses (id, uri, url, account_id, in_reply_to_uri, in_reply_to_id, in_reply_to_account_id,
 					visibility, spoiler_text, content, sensitive, language, published_at, edited_at, remote_version, raw,
-					search_text, created_at, thread)
+					search_text, created_at, thread, quote_policy)
 				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-					COALESCE((SELECT p.thread FROM statuses p WHERE p.id = ?6), ?))`,
+					COALESCE((SELECT p.thread FROM statuses p WHERE p.id = ?6), ?), ?)`,
 				candidate,
 				input.uri,
 				input.url,
@@ -425,7 +468,8 @@ export function storeRemoteStatus(db: Db, author: Author, input: RemoteStatusInp
 				input.raw,
 				searchText(input),
 				iso(ctx.now),
-				input.conversation ?? null
+				input.conversation ?? null,
+				quotePolicy
 			)
 			return candidate
 		}
@@ -616,9 +660,17 @@ export function updateRemoteStatus(db: Db, author: Author, input: RemoteStatusIn
 		// poll, and verifies a changed stamp of the same quote again; the quoted status itself changes only with a newer
 		// version.
 		refreshQuote(db, { id: existing.id, uri: input.uri, author }, input.quote, arrival, ctx)
+		const policyChanged =
+			db.run(
+				'UPDATE statuses SET quote_policy = ?1 WHERE id = ?2 AND quote_policy <> ?1',
+				remoteQuotePolicy(db, author, input.quotePolicy),
+				existing.id
+			) > 0
 		return input.poll !== undefined && storeRemotePoll(db, existing.id, input.poll, false, ctx.now)
 			? { applied: true, reason: 'poll-updated', statusId: existing.id }
-			: { applied: false, reason: 'stale', statusId: existing.id }
+			: policyChanged
+				? { applied: true, reason: 'policy-updated', statusId: existing.id }
+				: { applied: false, reason: 'stale', statusId: existing.id }
 	}
 	const editedAt = iso(Math.min(version, ctx.now))
 	const media = input.media.slice(0, MAX_STATUS_MEDIA)
@@ -643,7 +695,7 @@ export function updateRemoteStatus(db: Db, author: Author, input: RemoteStatusIn
 	storeRemotePoll(db, existing.id, input.poll ?? null, true, ctx.now)
 	db.run(
 		`UPDATE statuses SET content = ?, spoiler_text = ?, sensitive = ?, language = ?, raw = ?, search_text = ?,
-			remote_version = ?, edited_at = CASE WHEN ? THEN ? ELSE edited_at END
+			remote_version = ?, edited_at = CASE WHEN ? THEN ? ELSE edited_at END, quote_policy = ?
 		WHERE id = ?`,
 		input.content,
 		input.spoilerText,
@@ -654,6 +706,7 @@ export function updateRemoteStatus(db: Db, author: Author, input: RemoteStatusIn
 		iso(version),
 		significant ? 1 : 0,
 		editedAt,
+		remoteQuotePolicy(db, author, input.quotePolicy),
 		existing.id
 	)
 	// As for a Create: a newly mentioned local account is notified if the status addresses it.
@@ -687,6 +740,7 @@ export function updateRemoteStatus(db: Db, author: Author, input: RemoteStatusIn
 				now: ctx.now,
 			})
 		}
+		notifyQuotedUpdate(db, existing.id, author.id, ctx.now)
 	}
 	return { applied: true, reason: significant ? 'edited' : 'updated', statusId: existing.id }
 }
