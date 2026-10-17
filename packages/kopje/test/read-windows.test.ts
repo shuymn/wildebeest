@@ -111,14 +111,21 @@ async function world(hidden: number, newer = 0, privates = 0): Promise<StoreStub
 				`${name}@example.com`
 			)
 		}
-		// `count` accounts from `base`, on `domain`, being deleted or not.
-		const accounts = (base: bigint, count: number, domain: string, deleting: boolean) =>
+		// `query` over n(i), the numbers 0 to `count` - 1, with ?1 the count, ?2 `base` and `params` from ?3.
+		const each = (count: number, base: bigint, query: string, ...params: SqlStorageValue[]) =>
 			sql.exec(
-				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
-				INSERT INTO accounts (id, uri, username, domain, deleted_at)
-				SELECT CAST(?2 + i AS TEXT), 'https://' || ?3 || '/users/a' || (?2 + i), 'a' || (?2 + i), ?3, ?4 FROM n WHERE ?1 > 0`,
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1) ${query}`,
 				count,
 				String(base),
+				...params
+			)
+		// `count` accounts from `base`, on `domain`, being deleted or not.
+		const accounts = (base: bigint, count: number, domain: string, deleting: boolean) =>
+			each(
+				count,
+				base,
+				`INSERT INTO accounts (id, uri, username, domain, deleted_at)
+				SELECT CAST(?2 + i AS TEXT), 'https://' || ?3 || '/users/a' || (?2 + i), 'a' || (?2 + i), ?3, ?4 FROM n WHERE ?1 > 0`,
 				domain,
 				deleting ? at : null
 			)
@@ -130,105 +137,94 @@ async function world(hidden: number, newer = 0, privates = 0): Promise<StoreStub
 			visibility: string,
 			reblogOf: bigint | null = null
 		) =>
-			sql.exec(
-				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
-				INSERT INTO statuses (id, uri, account_id, visibility, content, published_at, reblog_of_id)
+			each(
+				count,
+				base,
+				`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at, reblog_of_id)
 				SELECT CAST(?2 + i AS TEXT), 'https://example.test/objects/' || (?2 + i), ?3, ?4,
 					CASE WHEN ?6 IS NULL THEN '<p>#cats</p>' ELSE '' END, ?5,
 					CASE WHEN ?6 IS NULL THEN NULL ELSE CAST(?6 + i AS TEXT) END
 				FROM n WHERE ?1 > 0`,
-				count,
-				String(base),
 				author,
 				visibility,
 				at,
 				reblogOf === null ? null : String(reblogOf)
 			)
 		const tagged = (base: bigint, count: number) =>
-			sql.exec(
-				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
-				INSERT INTO status_tags (status_id, name, public) SELECT CAST(?2 + i AS TEXT), 'cats', 1 FROM n WHERE ?1 > 0`,
+			each(
 				count,
-				String(base)
+				base,
+				`INSERT INTO status_tags (status_id, name, public) SELECT CAST(?2 + i AS TEXT), 'cats', 1 FROM n WHERE ?1 > 0`
 			)
 		// The viewer's edges (favourites, bookmarks) and notifications on `count` statuses from `base`, in id order.
 		const edges = (base: bigint, count: number, from: string) => {
 			for (const table of ['favourites', 'bookmarks']) {
-				sql.exec(
-					`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
-					INSERT INTO ${table} (account_id, status_id) SELECT ?3, CAST(?2 + i AS TEXT) FROM n WHERE ?1 > 0`,
+				each(
 					count,
-					String(base),
+					base,
+					`INSERT INTO ${table} (account_id, status_id) SELECT ?3, CAST(?2 + i AS TEXT) FROM n WHERE ?1 > 0`,
 					VIEWER
 				)
 			}
-			sql.exec(
-				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
-				INSERT INTO notifications (account_id, type, from_account_id, status_id)
-				SELECT ?3, 'mention', ?4, CAST(?2 + i AS TEXT) FROM n WHERE ?1 > 0`,
+			each(
 				count,
-				String(base),
+				base,
+				`INSERT INTO notifications (account_id, type, from_account_id, status_id)
+				SELECT ?3, 'mention', ?4, CAST(?2 + i AS TEXT) FROM n WHERE ?1 > 0`,
 				VIEWER,
 				from
 			)
 		}
 		// Rows of `table` from the viewer (or to FRIEND, for follows) to `count` accounts from `base`, in id order.
 		const toAccounts = (base: bigint, count: number) => {
-			sql.exec(
-				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
-				INSERT INTO notification_requests (account_id, from_account_id) SELECT ?3, CAST(?2 + i AS TEXT) FROM n WHERE ?1 > 0`,
+			each(
 				count,
-				String(base),
+				base,
+				`INSERT INTO notification_requests (account_id, from_account_id) SELECT ?3, CAST(?2 + i AS TEXT) FROM n WHERE ?1 > 0`,
 				VIEWER
 			)
-			sql.exec(
-				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
-				INSERT INTO list_accounts (list_id, account_id) SELECT ?3, CAST(?2 + i AS TEXT) FROM n WHERE ?1 > 0`,
+			each(
 				count,
-				String(base),
+				base,
+				`INSERT INTO list_accounts (list_id, account_id) SELECT ?3, CAST(?2 + i AS TEXT) FROM n WHERE ?1 > 0`,
 				MEMBERS
 			)
-			sql.exec(
-				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
-				INSERT INTO account_pins (account_id, target_account_id) SELECT ?3, CAST(?2 + i AS TEXT) FROM n WHERE ?1 > 0`,
+			each(
 				count,
-				String(base),
+				base,
+				`INSERT INTO account_pins (account_id, target_account_id) SELECT ?3, CAST(?2 + i AS TEXT) FROM n WHERE ?1 > 0`,
 				VIEWER
 			)
-			sql.exec(
-				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
-				INSERT INTO favourites (account_id, status_id) SELECT CAST(?2 + i AS TEXT), ?3 FROM n WHERE ?1 > 0`,
+			each(
 				count,
-				String(base),
+				base,
+				`INSERT INTO favourites (account_id, status_id) SELECT CAST(?2 + i AS TEXT), ?3 FROM n WHERE ?1 > 0`,
 				id(FRIEND_OLDER, 0)
 			)
 		}
 		// `count` accounts from `base` follow FRIEND, FRIEND follows them, and they boost FRIEND's second status (the
 		// boosts' ids from `boosts`), in id order.
 		const followers = (base: bigint, count: number, boosts: bigint) => {
-			sql.exec(
-				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
-				INSERT INTO follows (account_id, target_account_id, state) SELECT CAST(?2 + i AS TEXT), ?3, 'accepted' FROM n
-				WHERE ?1 > 0`,
+			each(
 				count,
-				String(base),
+				base,
+				`INSERT INTO follows (account_id, target_account_id, state) SELECT CAST(?2 + i AS TEXT), ?3, 'accepted' FROM n
+				WHERE ?1 > 0`,
 				FRIEND
 			)
-			sql.exec(
-				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
-				INSERT INTO follows (account_id, target_account_id, state) SELECT ?3, CAST(?2 + i AS TEXT), 'accepted' FROM n
-				WHERE ?1 > 0`,
+			each(
 				count,
-				String(base),
+				base,
+				`INSERT INTO follows (account_id, target_account_id, state) SELECT ?3, CAST(?2 + i AS TEXT), 'accepted' FROM n
+				WHERE ?1 > 0`,
 				FRIEND
 			)
-			sql.exec(
-				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
-				INSERT INTO statuses (id, uri, account_id, visibility, content, published_at, reblog_of_id)
+			each(
+				count,
+				base,
+				`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at, reblog_of_id)
 				SELECT CAST(?3 + i AS TEXT), 'https://example.test/boosts/' || (?3 + i), CAST(?2 + i AS TEXT), 'public', '', ?5, ?4
 				FROM n WHERE ?1 > 0`,
-				count,
-				String(base),
 				String(boosts),
 				id(FRIEND_OLDER, 1),
 				at
