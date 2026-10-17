@@ -325,13 +325,13 @@ export function enqueueActivity(
 		envelope.reachOf ?? []
 	)
 	const { voters } = found
+	let targets = found.targets
 	// An immutable activity's personal copy is the neutral one, byte for byte: an inbox that gets the first needs no
 	// second (a quoting status's receipt at its silent recipient's personal inbox, for a forwarded stamp Delete).
-	const personal = new Set(found.targets.filter((t) => t.addressee !== null).map((t) => t.inbox))
-	const targets =
-		envelope.immutable === true
-			? found.targets.filter((t) => t.addressee !== null || !personal.has(t.inbox))
-			: found.targets
+	if (envelope.immutable === true) {
+		const personal = new Set(targets.filter((t) => t.addressee !== null).map((t) => t.inbox))
+		targets = targets.filter((t) => t.addressee !== null || !personal.has(t.inbox))
+	}
 	const { object, retracts } = subjectOf(envelope.activity, options.withdraws === true)
 	const types = supersededTypes(envelope.activity.type)
 	if (object !== null && (retracts || types.length > 0)) {
@@ -611,8 +611,8 @@ function insertIntent(
 }
 
 // The servers (lane origins) known to have the object: a receipt at any of their inboxes (a delivered Create). A
-// Create still leased does not count: it may give up, and an operator's retry of it later would bring an older version
-// (design, Concurrency (PR 3), changes after the design review 2); a server it reaches gets the pair as well, ignores
+// Create still leased does not count: it may give up, and an operator's retry of it later would bring an older
+// version; a server it reaches gets the pair as well, ignores
 // the Create it already holds and applies the Update. A server may hold the object without being known to (it fetched
 // it to boost or quote it), so this decides only what may be left out. A server is the unit, as one that holds the
 // object from its shared inbox applies an Update sent to a personal inbox, but ignores a Create.

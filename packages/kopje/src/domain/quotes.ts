@@ -764,8 +764,8 @@ function revocationBatch(db: Db, approvalUri: string, actorUri: string, left: ()
 // actor's Delete of the same URI revokes nothing of this one's), and its first batch runs within
 // `left()`; the rest is continued by the inbound job rounds (continueRevocations), which meet received quotes only. A
 // repeated Delete finds the revocation and adds nothing. The local quote holding the stamp is handled first, in this
-// transaction and outside the batch budget, whether or not the revocation was recorded before (a Reject records it
-// too): revoked, and, for a proven Delete (`forward`, the body as received), forwarded once (revokeLocalStamp).
+// transaction and outside the batch budget, whether or not the revocation was recorded before: revoked, and, for a
+// proven Delete (`forward`, the body as received), forwarded once (revokeLocalStamp).
 // Returns null when no quote names the stamp, else whether batches remain.
 export function revokeStamp(
 	db: Db,
@@ -922,6 +922,17 @@ function freshAuthorization(): string {
 	return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
 }
 
+// Quote#ensure_quoted_access: the quoted author `quotedAuthorId` becomes a silent recipient of the quoting status, so
+// they may always see the quote of their status; an existing mention of them stays as it is.
+export function ensureQuotedAccess(db: Db, quotingId: string, quotedAuthorId: string): void {
+	db.run(
+		`INSERT INTO status_mentions (status_id, account_id, silent, ${MENTION_STATUS_COLUMNS})
+		VALUES (?1, ?2, 1, ${mentionStatusSql('?1')}) ON CONFLICT DO NOTHING`,
+		quotingId,
+		quotedAuthorId
+	)
+}
+
 export type QuoteRequestInput = {
 	id: string
 	// The quoted status, and the quoting status (the instrument) by id, with the Note when the request inlined it.
@@ -1048,13 +1059,7 @@ export function answerQuoteRequest(
 		request.id,
 		iso(now)
 	)
-	// Quote#ensure_quoted_access: the quoted author may always see the quote of their post.
-	db.run(
-		`INSERT INTO status_mentions (status_id, account_id, silent, ${MENTION_STATUS_COLUMNS})
-		VALUES (?1, ?2, 1, ${mentionStatusSql('?1')}) ON CONFLICT DO NOTHING`,
-		quoting.id,
-		quoted.account_id
-	)
+	ensureQuotedAccess(db, quoting.id, quoted.account_id)
 	recordOutbound(
 		db,
 		quoted.account_id,
@@ -1244,7 +1249,6 @@ export type QuotedForPost = {
 	id: string
 	uri: string
 	account_id: string
-	author_uri: string
 	local: number
 }
 
@@ -1326,12 +1330,14 @@ export type QuoteAnswerRef = {
 	instrument: string | null
 }
 
-function answeredQuote(db: Db, actor: { id: string }, ref: QuoteAnswerRef): { status_id: string } | undefined {
+type AnsweredQuote = { status_id: string; author_id: string }
+
+function answeredQuote(db: Db, actor: { id: string }, ref: QuoteAnswerRef): AnsweredQuote | undefined {
 	const byId =
 		ref.id === null || !ref.id.endsWith('#quote-request')
 			? undefined
-			: db.first<{ status_id: string }>(
-					`SELECT q.status_id FROM statuses s JOIN quotes q ON q.status_id = s.id
+			: db.first<AnsweredQuote>(
+					`SELECT q.status_id, s.account_id AS author_id FROM statuses s JOIN quotes q ON q.status_id = s.id
 					WHERE s.uri = ?1 AND q.local = 1 AND q.activity_uri = ?2 AND q.quoted_account_id = ?3`,
 					ref.id.slice(0, -'#quote-request'.length),
 					ref.id,
@@ -1340,8 +1346,9 @@ function answeredQuote(db: Db, actor: { id: string }, ref: QuoteAnswerRef): { st
 	if (byId !== undefined || ref.type !== 'QuoteRequest' || ref.instrument === null || ref.object === null) {
 		return byId
 	}
-	return db.first<{ status_id: string }>(
-		`SELECT q.status_id FROM statuses s JOIN quotes q ON q.status_id = s.id JOIN statuses t ON t.id = q.quoted_status_id
+	return db.first<AnsweredQuote>(
+		`SELECT q.status_id, s.account_id AS author_id FROM statuses s JOIN quotes q ON q.status_id = s.id
+			JOIN statuses t ON t.id = q.quoted_status_id
 		WHERE s.uri = ?1 AND q.local = 1 AND t.uri = ?2 AND t.account_id = ?3`,
 		ref.instrument,
 		ref.object,
@@ -1353,11 +1360,10 @@ function answeredQuote(db: Db, actor: { id: string }, ref: QuoteAnswerRef): { st
 // Accept): its Note as of this commit, with no history entry and edited_at unchanged, so receivers apply it as an
 // implicit update and verify the stamp it carries, or its absence, again. Its id is random (never a clock), and it
 // supersedes the earlier waiting Updates of the status (deliveries.ts).
-function recordStampUpdate(db: Db, statusId: string, now: number): void {
+function recordStampUpdate(db: Db, statusId: string, authorId: string, now: number): void {
 	const facts = statusFacts(db, statusId)
-	const author = db.first<{ account_id: string }>('SELECT account_id FROM statuses WHERE id = ?', statusId)
-	if (facts !== null && author !== undefined) {
-		recordOutbound(db, author.account_id, updateActivity(facts, `quote-${crypto.randomUUID()}`), now)
+	if (facts !== null) {
+		recordOutbound(db, authorId, updateActivity(facts, `quote-${crypto.randomUUID()}`), now)
 	}
 }
 
@@ -1398,17 +1404,17 @@ export function acceptOurQuote(
 	if (changed === 0) {
 		return false
 	}
-	recordStampUpdate(db, quote.status_id, now)
+	recordStampUpdate(db, quote.status_id, quote.author_id, now)
 	return true
 }
 
 // Mastodon's Reject of our QuoteRequest (Quote#reject!), one compare-and-set: pending becomes rejected and accepted
-// revoked, with the quoting status's Update without the stamp (design, changes after the design review 1: it
-// supersedes a waiting Update that still carries it). The Reject records nothing in quote_revocations: only the
-// author's Delete of the stamp does, so that Delete still runs the batches of the received quotes naming it. The stamp
-// stays on the revoked row until that Delete's forward, so no other local quote can take it meanwhile (row 9); after
-// the forward, the Delete's own record refuses it (row 8). Returns whether it applied.
-export function rejectOurQuote(db: Db, actor: { id: string; uri: string }, ref: QuoteAnswerRef, now: number): boolean {
+// revoked, with the quoting status's Update without the stamp (it supersedes a waiting Update that still carries it).
+// The Reject records nothing in quote_revocations: only the author's Delete of the stamp does, so that Delete still
+// runs the batches of the received quotes naming it. The stamp stays on the revoked row until that Delete's forward, so
+// no other local quote can take it meanwhile (row 9); after the forward, the Delete's own record refuses it (row 8).
+// Returns whether it applied.
+export function rejectOurQuote(db: Db, actor: { id: string }, ref: QuoteAnswerRef, now: number): boolean {
 	const quote = answeredQuote(db, actor, ref)
 	if (quote === undefined) {
 		return false
@@ -1426,7 +1432,7 @@ export function rejectOurQuote(db: Db, actor: { id: string; uri: string }, ref: 
 		return false
 	}
 	if (row.state === 'revoked') {
-		recordStampUpdate(db, quote.status_id, now)
+		recordStampUpdate(db, quote.status_id, quote.author_id, now)
 	}
 	return true
 }
@@ -1444,13 +1450,13 @@ export function holdsLocalStamp(db: Db, actor: { id: string }, approvalUri: stri
 	)
 }
 
-// The first transaction of the actor's Delete of the stamp `approvalUri` (row 10, as changed by the second design
-// review), for the one local quote that holds it (a seek of quotes_local_stamp, whatever the received quotes naming
-// it): an accepted quote becomes revoked and its status's Update without the stamp is recorded; and when the Delete is
-// proven (its author's proof verified: `forward` is the body as received), that body is recorded unchanged as one
-// immutable envelope signed by the quoting author, reaching every inbox that received the quoting status or would
-// receive it now (reachOf, its owner's receipts and audience), and the row lets go of the stamp, so a replay forwards
-// nothing more. A retraction: no suspension or admission refuses it. Returns whether a local quote held the stamp.
+// The first transaction of the actor's Delete of the stamp `approvalUri` (row 10), for the one local quote that holds
+// it (a seek of quotes_local_stamp, whatever the received quotes naming it): an accepted quote becomes revoked and its
+// status's Update without the stamp is recorded; and when the Delete is proven (its author's proof verified: `forward`
+// is the body as received), that body is recorded unchanged as one immutable envelope signed by the quoting author,
+// reaching every inbox that received the quoting status or would receive it now (reachOf, its owner's receipts and
+// audience), and the row lets go of the stamp, so a replay forwards nothing more. A retraction: no suspension or
+// admission refuses it. Returns whether a local quote held the stamp.
 function revokeLocalStamp(
 	db: Db,
 	actor: { id: string },
@@ -1476,7 +1482,7 @@ function revokeLocalStamp(
 			row.status_id,
 			iso(now)
 		)
-		recordStampUpdate(db, row.status_id, now)
+		recordStampUpdate(db, row.status_id, row.author_id, now)
 	}
 	if (forward !== null) {
 		const reach = statusReach(db, row.status_id)

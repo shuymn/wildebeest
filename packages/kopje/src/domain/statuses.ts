@@ -70,6 +70,7 @@ import {
 	acceptedQuoteWindow,
 	answeredRequests,
 	detachQuotes,
+	ensureQuotedAccess,
 	localQuoteOf,
 	type QuotedForPost,
 	quotedUpdates,
@@ -450,7 +451,7 @@ function quotable(db: Db, accountId: string, id: string): Quotable | null {
 	}
 	return (
 		db.first<Quotable>(
-			`SELECT t.id, t.uri, t.account_id, t.visibility, a.uri AS author_uri, a.domain IS NULL AS local
+			`SELECT t.id, t.uri, t.account_id, t.visibility, a.domain IS NULL AS local
 			FROM statuses s JOIN statuses t ON t.id = IFNULL(s.reblog_of_id, s.id) JOIN accounts a ON a.id = t.account_id
 			WHERE s.id = ?1 AND ${mayQuoteSql('t', '?2')}`,
 			resolved,
@@ -575,12 +576,7 @@ function writeQuote(
 	now: number
 ): void {
 	if (quoted.account_id !== quoting.authorId) {
-		db.run(
-			`INSERT INTO status_mentions (status_id, account_id, silent, ${MENTION_STATUS_COLUMNS})
-			VALUES (?1, ?2, 1, ${mentionStatusSql('?1')}) ON CONFLICT DO NOTHING`,
-			quoting.id,
-			quoted.account_id
-		)
+		ensureQuotedAccess(db, quoting.id, quoted.account_id)
 	}
 	const state = recordLocalQuote(db, quoting, quoted, now)
 	if (state === 'accepted' && quoted.account_id !== quoting.authorId) {

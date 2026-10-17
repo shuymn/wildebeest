@@ -816,8 +816,8 @@ export function mayQuoteSql(t: string, quoter: string): string {
 // Mastodon's quote_approval.current_user (Status#quote_policy_for_account) for one viewer, read as R36 decides it:
 // `denied` whenever R36 refuses (anonymous, a boost, a status the viewer may not see by itself, blocks either way, a
 // direct or limited status), `automatic` for the viewer's own, and otherwise what the policy answers them
-// (quotePolicySql). Stricter than Mastodon, which reads the policy alone, so a client never offers a quote that the post
-// would refuse (design §4.1). A stale answer costs a 404 from the post, which decides again.
+// (quotePolicySql). Stricter than Mastodon, which reads the policy alone, so a client never offers a quote that the
+// post would refuse (design §4.1). A stale answer costs a 404 from the post, which decides again.
 export type QuoteApprovalReads = {
 	// One row per status, in no order.
 	of(db: Db, statusIds: readonly string[]): Map<string, 'automatic' | 'manual' | 'unknown' | 'denied'>
