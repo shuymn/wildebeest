@@ -11,6 +11,7 @@ import { deferred, deliveryDeps } from './quote-helpers'
 import { community, post, remoteAccount, remoteFollows, type User } from './status-helpers'
 import { MIGRATIONS } from '../src/db/migrations'
 import { Db } from '../src/db/sql'
+import { recipientsFor } from '../src/domain/audience'
 import { type Claim, claimDeliveries, enqueueActivity, LEASE_MS, PROVENANCE_MAX } from '../src/domain/deliveries'
 import { setHostPolicyForTests } from '../src/domain/host-policy'
 import { moderationRound, REACH_ROUND, suspendLocal, unsuspendLocal } from '../src/domain/suspension'
@@ -195,6 +196,81 @@ describe('provenance (VIS-30)', () => {
 		await sql(h.store, "UPDATE accounts SET deleted_at = ? WHERE domain = 'crowd.example'", new Date(NOW).toISOString())
 		expect((await drain(h.store)).length).toBe(sent ? 1 : 0)
 	})
+})
+
+describe('bounded provenance (VIS-30)', () => {
+	// `count` remote followers of `accountId`, `hosts` of them on hosts of their own, the rest on crowd.example, all
+	// sharing one gateway inbox.
+	async function crowd(store: StoreStub, accountId: string, count: number, hosts: number) {
+		await sql(
+			store,
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+			INSERT INTO accounts (id, uri, username, domain, inbox_url, shared_inbox_url)
+			SELECT CAST(800000000000000000 + i AS TEXT), 'https://' || d || '/users/u' || i, 'u' || i, d,
+				'https://' || d || '/users/u' || i || '/inbox', 'https://gateway.example/inbox'
+			FROM (SELECT i, CASE WHEN i < ?2 THEN 'h' || i || '.example' ELSE 'crowd.example' END AS d FROM n)`,
+			count,
+			hosts
+		)
+		await sql(
+			store,
+			`INSERT INTO follows (account_id, target_account_id, state)
+			SELECT id, ?, 'accepted' FROM accounts WHERE shared_inbox_url = 'https://gateway.example/inbox'`,
+			accountId
+		)
+	}
+
+	it('stages 20,000 followers sharing one inbox from a bounded number of recipients', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		await crowd(h.store, alice.id, 20_000, 0)
+		const returned = await runInDurableObject(h.store, (_instance, state) => {
+			const recipients = recipientsFor(
+				new Db(state.storage.sql),
+				alice.id,
+				{ type: 'Create', object: { type: 'Note' } },
+				{ followers: true, accounts: [] }
+			)
+			return recipients.followers.length
+		})
+		// The first PROVENANCE_MAX + 1 by id tell the overflow; the one host is among them.
+		expect(returned).toBe(PROVENANCE_MAX + 1)
+		await post(h, alice, { status: 'to the crowd' })
+		expect((await rows(h.store)).map((r) => [r.inbox, r.accounts, r.domains, r.many])).toEqual([
+			['https://gateway.example/inbox', null, '["crowd.example"]', 1],
+		])
+	}, 60_000)
+
+	it('returns the first of each host up to the bound, and leaves the hosts out above it', async () => {
+		for (const [hosts, domains] of [
+			// Besides crowd.example: 16 hosts in all, then 17, then 101.
+			[PROVENANCE_MAX - 1, true],
+			[PROVENANCE_MAX, false],
+			[100, false],
+		] as const) {
+			const h = await community(['alice'])
+			const { alice } = h.users
+			await crowd(h.store, alice.id, 200, hosts)
+			const returned = await runInDurableObject(h.store, (_instance, state) =>
+				recipientsFor(
+					new Db(state.storage.sql),
+					alice.id,
+					{ type: 'Create', object: { type: 'Note' } },
+					{ followers: true, accounts: [] }
+				).followers.map((f) => f.host)
+			)
+			expect(returned.length).toBeLessThanOrEqual(2 * (PROVENANCE_MAX + 1))
+			// Enough hosts to tell their overflow (the rows kept by id may add others).
+			expect(new Set(returned).size).toBeGreaterThanOrEqual(Math.min(hosts + 1, PROVENANCE_MAX + 1))
+			await post(h, alice, { status: 'to the gateway' })
+			const [row] = await rows(h.store)
+			expect([row!.accounts, row!.many]).toEqual([null, 1])
+			expect(row!.domains === null).toBe(!domains)
+			if (domains) {
+				expect((JSON.parse(row!.domains!) as string[]).length).toBe(hosts + 1)
+			}
+		}
+	}, 60_000)
 })
 
 describe('the send-time check (VIS-30)', () => {

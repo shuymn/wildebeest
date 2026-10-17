@@ -3,6 +3,7 @@ import {
 	availableSql,
 	isActorObject,
 	outboundKind,
+	PROVENANCE_MAX,
 	type RemoteRecipient,
 	recipientsFor,
 } from './audience'
@@ -97,7 +98,7 @@ export type Provenance = { accounts?: string[]; domains?: string[]; many?: true 
 
 export type Target = { inbox: string; addressee: string | null } & Provenance
 
-export const PROVENANCE_MAX = 16
+export { PROVENANCE_MAX }
 
 function uris(value: unknown): string[] {
 	if (typeof value === 'string') {
@@ -231,11 +232,18 @@ export function audienceTargets(
 	return targetsOf(db, signerId, activity, audience, withdraws, []).targets
 }
 
-// The recipients behind a target as staging gathers them; unknown once any of them is.
+// The recipients behind a target as staging gathers them, unknown once any of them is. Each set stops growing at
+// PROVENANCE_MAX + 1 (its overflow), so a target keeps a bounded amount whatever its audience.
 type Behind = { accounts: Set<string>; domains: Set<string>; unknown: boolean }
 
 function nobody(): Behind {
 	return { accounts: new Set(), domains: new Set(), unknown: false }
+}
+
+function addCapped(set: Set<string>, value: string): void {
+	if (set.size <= PROVENANCE_MAX) {
+		set.add(value)
+	}
 }
 
 // The provenance of a target that also serves `other`'s recipients.
@@ -244,14 +252,22 @@ function mergedProvenance(target: Target, other: Target): Provenance {
 	if (!known(target) || !known(other)) {
 		return {}
 	}
-	const merged = provenanceOf({
-		accounts: new Set([...(target.accounts ?? []), ...(other.accounts ?? [])]),
-		domains: new Set([...(target.domains ?? []), ...(other.domains ?? [])]),
-		unknown: false,
-	})
-	const many = target.many === true || other.many === true || merged.many === true
-	const domains = target.domains === undefined || other.domains === undefined ? undefined : merged.domains
-	return { ...(many ? { many: true } : { accounts: merged.accounts }), ...(domains === undefined ? {} : { domains }) }
+	const merged = nobody()
+	for (const t of [target, other]) {
+		for (const id of t.accounts ?? []) {
+			addCapped(merged.accounts, id)
+		}
+		for (const host of t.domains ?? []) {
+			addCapped(merged.domains, host)
+		}
+	}
+	const provenance = provenanceOf(merged)
+	const many = target.many === true || other.many === true || provenance.many === true
+	const domains = target.domains === undefined || other.domains === undefined ? undefined : provenance.domains
+	return {
+		...(many ? { many: true } : { accounts: provenance.accounts }),
+		...(domains === undefined ? {} : { domains }),
+	}
 }
 
 function provenanceOf(b: Behind): Provenance {
@@ -296,8 +312,8 @@ function targetsOf(
 		if (recipient === null) {
 			into.unknown = true
 		} else {
-			into.accounts.add(recipient.id)
-			into.domains.add(recipient.host)
+			addCapped(into.accounts, recipient.id)
+			addCapped(into.domains, recipient.host)
 		}
 	}
 	const named = new Set([...uris(activity.to), ...uris(activity.cc)])

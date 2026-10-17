@@ -512,11 +512,13 @@ account's shared inbox (the architecture test below).
 ### The send-time check (VIS-30)
 
 Each target also records the recipients behind it, so the check below can tell whose inbox it is: an inbox says
-nothing about the accounts it serves, and may be on another host than theirs. `recipientsFor` returns one entry per
-recipient (its id and the host of its actor id) rather than distinct inboxes, and `targetsOf` merges them per inbox
-across followers, addressed accounts, silent recipients, poll voters and `reachOf` before deduplicating. A target lists
-up to 16 accounts and their hosts; above 16 it is marked `many` ("not all unavailable"). A target that also serves an
-inbox with unknown recipients (a retraction's earlier receivers) has none.
+nothing about the accounts it serves, and may be on another host than theirs. `recipientsFor` returns recipients (each
+one's id and the host of its actor id) rather than distinct inboxes, at most 34 per inbox: the first 17 by id and the
+first of each of the first 17 hosts, enough to tell either overflow. `targetsOf` merges them per inbox across
+followers, addressed accounts, silent recipients, poll voters and `reachOf` before deduplicating, keeping at most 17
+accounts and 17 hosts per target. A target lists up to 16 accounts and their hosts; above 16 accounts it is marked
+`many` ("not all unavailable"), and above 16 hosts it lists none. A target that also serves an inbox with unknown
+recipients (a retraction's earlier receivers) has none.
 
 At the claim, and again at confirmation right before the POST (`confirmDelivery`), a row that is not a retraction is
 dropped when:

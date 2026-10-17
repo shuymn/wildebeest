@@ -1291,9 +1291,12 @@ export type AddressedAccount = RemoteRecipient & {
 	shared_inbox_url: string | null
 }
 
+// The most recipients a target's provenance lists (VIS-30, deliveries.ts): above it, a target is marked `many`.
+export const PROVENANCE_MAX = 16
+
 export type OutboundRecipients = {
-	// The signer's accepted remote followers the activity reaches, when its audience has the followers, one entry per
-	// follower (several may share an inbox).
+	// The signer's accepted remote followers the activity reaches, when its audience has the followers: per inbox, at
+	// most PROVENANCE_MAX + 1 of them in id order and the first of each of at most PROVENANCE_MAX + 1 hosts (byInbox).
 	followers: ReachedInbox[]
 	// The remote accounts of its audience it reaches, by id.
 	accounts: AddressedAccount[]
@@ -1302,6 +1305,20 @@ export type OutboundRecipients = {
 }
 
 const RECIPIENT_COLUMNS = `a.id, ${uriHostSql('a.uri')} AS host`
+
+// The rows (id, host, inbox) of `query` that a target's provenance can use, at most 2 × (PROVENANCE_MAX + 1) per
+// inbox however many recipients share it: the first PROVENANCE_MAX + 1 by id, which tell whether there are more than
+// PROVENANCE_MAX, and the first recipient of each of the first PROVENANCE_MAX + 1 hosts, which tell whether there are
+// more hosts than that. The query is still read whole (as SELECT DISTINCT inbox read it), but what it returns, and
+// what staging keeps, is bounded per inbox.
+function byInbox(query: string): string {
+	return `SELECT id, host, inbox FROM (
+		SELECT id, host, inbox, row_number() OVER (PARTITION BY inbox ORDER BY id) AS pn,
+			row_number() OVER (PARTITION BY inbox, host ORDER BY id) AS hn,
+			dense_rank() OVER (PARTITION BY inbox ORDER BY host) AS hr
+		FROM (${query}))
+	WHERE pn <= ${PROVENANCE_MAX + 1} OR (hn = 1 AND hr <= ${PROVENANCE_MAX + 1})`
+}
 
 // R23: whom an activity by `signerId` for `audience` reaches, by its kind (outboundKind). Local accounts are not
 // among them: they read the Store. withdraws: a Reject that ends a follow already accepted.
@@ -1315,10 +1332,10 @@ export function recipientsFor(
 	const kind = outboundKind(activity, withdraws)
 	const followers = audience.followers
 		? db.all<ReachedInbox>(
-				`SELECT ${RECIPIENT_COLUMNS}, COALESCE(NULLIF(a.shared_inbox_url, ''), a.inbox_url) AS inbox
+				byInbox(`SELECT ${RECIPIENT_COLUMNS}, COALESCE(NULLIF(a.shared_inbox_url, ''), a.inbox_url) AS inbox
 				FROM main.follows f JOIN main.accounts a ON a.id = f.account_id
 				WHERE f.target_account_id = ?1 AND f.state = 'accepted' AND a.domain IS NOT NULL
-					AND NOT ${leavesOutSql(kind, 'follower', '?1', 'a.id')}`,
+					AND NOT ${leavesOutSql(kind, 'follower', '?1', 'a.id')}`),
 				signerId
 			)
 		: []
@@ -1339,12 +1356,12 @@ export function recipientsFor(
 		audience.pollVoters === undefined
 			? []
 			: db.all<ReachedInbox>(
-					`SELECT DISTINCT ${RECIPIENT_COLUMNS}, COALESCE(NULLIF(a.shared_inbox_url, ''), a.inbox_url) AS inbox
+					byInbox(`SELECT DISTINCT ${RECIPIENT_COLUMNS}, COALESCE(NULLIF(a.shared_inbox_url, ''), a.inbox_url) AS inbox
 					FROM main.statuses ps JOIN main.polls pp ON pp.status_id = ps.id AND pp.removed = 0
 						JOIN main.poll_votes pv ON pv.poll_id = pp.status_id AND pv.generation = pp.generation
 						JOIN main.accounts a ON a.id = pv.account_id
 					WHERE ps.id = ?1 AND ps.account_id = ?2 AND ps.visibility IN ${DISTRIBUTABLE_SQL}
-						AND a.domain IS NOT NULL AND NOT ${leavesOutSql(kind, 'addressed', '?2', 'a.id')}`,
+						AND a.domain IS NOT NULL AND NOT ${leavesOutSql(kind, 'addressed', '?2', 'a.id')}`),
 					audience.pollVoters,
 					signerId
 				)
