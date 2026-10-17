@@ -339,6 +339,7 @@ describe('a stored status is read within its bounds (RES-2)', () => {
 		)
 		// A converted username outside Mastodon's remote format, of characters that escape to six bytes.
 		await sql(t.store, 'UPDATE accounts SET username = ? WHERE id = ?', C.repeat(300), mentions[1]!)
+		await sql(t.store, 'UPDATE accounts SET username = ? WHERE id = ?', `u\u0000${C.repeat(253)}`, mentions[2]!)
 		const id = await storedStatus(t, author, {
 			content: C.repeat(Math.floor(STATUS_CONTENT_BYTES / 6) + 1),
 			spoiler: C.repeat(SPOILER_BYTES),
@@ -384,6 +385,10 @@ describe('a stored status is read within its bounds (RES-2)', () => {
 			acct: `u${'v'.repeat(USERNAME_LIMIT - 1)}@${HOST}`,
 			url: `${ORIGIN}/@u${'v'.repeat(USERNAME_LIMIT - 1)}@${HOST}`,
 		})
+		// A NUL hides what follows it from GLOB; the username is still read within its JSON bound.
+		const nul = status.mentions.find((m) => m.id === mentions[2])!
+		expect(jsonStringBytes(nul.username as string)).toBeLessThanOrEqual(USERNAME_LIMIT + 2)
+		expect(jsonStringBytes(nul.acct as string)).toBeLessThanOrEqual(USERNAME_LIMIT + 2 + HOST.length + 1)
 		const odd = status.mentions.find((m) => m.id === mentions[1])!
 		expect(odd.username).toBe(C.repeat(Math.floor(USERNAME_LIMIT / 6)))
 		expect(jsonStringBytes(odd.username as string)).toBeLessThanOrEqual(USERNAME_LIMIT + 2)

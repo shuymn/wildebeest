@@ -31,13 +31,15 @@ export function jsonBoundSql(column: string, bytes: number, over: string): strin
 
 // A stored username as every read that presents one, or derives an acct or URL from it, takes it. One the Worker
 // stores is ASCII of Mastodon's remote format (federation/remote-actor.ts), so its JSON is its length: cut at
-// USERNAME_LIMIT. A row stored otherwise (converted before the cutover refused such usernames) holding any other
-// character is cut at NONCONFORMING_USERNAME_LIMIT code points, which escape to at most USERNAME_LIMIT bytes. Lookups
-// compare the whole stored username.
+// USERNAME_LIMIT. Any other (a row converted before the cutover refused such usernames) is cut at
+// NONCONFORMING_USERNAME_LIMIT code points; a code point escapes to at most six bytes, so its JSON is at most
+// USERNAME_LIMIT bytes plus the quotes. The fast path needs every byte to be a character (length counts characters
+// up to an embedded NUL, so a NUL or a non-ASCII byte makes the two differ) and none outside the format (GLOB, which
+// also stops at a NUL). Lookups compare the whole stored username.
 const NONCONFORMING_USERNAME_LIMIT = Math.floor(USERNAME_LIMIT / 6)
 export function usernameSql(column: string): string {
-	return `CASE WHEN ${column} GLOB '*[^A-Za-z0-9_.-]*' THEN substr(${column}, 1, ${NONCONFORMING_USERNAME_LIMIT})
-	ELSE ${cutSql(column, USERNAME_LIMIT)} END`
+	return `CASE WHEN length(CAST(${column} AS BLOB)) = length(${column}) AND ${column} NOT GLOB '*[^A-Za-z0-9_.-]*'
+	THEN ${cutSql(column, USERNAME_LIMIT)} ELSE substr(${column}, 1, ${NONCONFORMING_USERNAME_LIMIT}) END`
 }
 
 // A stored display name, cut at DISPLAY_NAME_LIMIT code points.
