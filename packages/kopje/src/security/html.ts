@@ -154,8 +154,9 @@ export function jsonStringBytes(text: string): number {
 }
 
 // A remote bio as Kopje stores it (HTML-1, RES-2): sanitizeRemoteHtml's output when it fits REMOTE_BIO_BYTES, else
-// the sanitized form of the longest raw prefix (found by halving) whose output fits, so it is always sanitized,
-// well-formed HTML; '' when none does. The cutover's converter and its verification use it too.
+// the sanitized form of a raw prefix whose output fits, found by halving (sanitizing can shrink as well as grow, so
+// it need not be the longest such prefix); always sanitizer output, so well-formed HTML; '' when none fits. The
+// cutover's converter and its verification use it too.
 export function sanitizeRemoteBio(html: string): string {
 	const whole = sanitizeRemoteHtml(html)
 	if (jsonStringBytes(whole) <= REMOTE_BIO_BYTES) {

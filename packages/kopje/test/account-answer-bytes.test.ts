@@ -4,9 +4,10 @@ import { Person } from '@fedify/vocab'
 import { parseFragment } from 'parse5'
 import { describe, expect, it } from 'vitest'
 
-import { sql } from './api-helpers'
+import { bearer, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { ALICE, setup, type Setup } from './inbox-status-helpers'
+import { community, post, remoteAccount, seedStatus } from './status-helpers'
 import { Db } from '../src/db/sql'
 import {
 	ACCOUNT_ANSWER_BYTES,
@@ -314,6 +315,46 @@ describe('one account has a known size (RES-2)', () => {
 		expect((await shownBytes(t, `/api/v1/accounts/${id}`)).body).toMatchObject({ note: '' })
 		await sql(t.store, 'UPDATE accounts SET note = ? WHERE id = ?', MAX_BIO, id!)
 		expect((await shownBytes(t, `/api/v1/accounts/${id}`)).body).toMatchObject({ note: MAX_BIO })
+	})
+
+	it('guards a stored bio with an embedded NUL by its whole bytes, and cuts a display name by code points', async () => {
+		const t = await setup()
+		const [id] = await accounts(t, 1, BASE, typical)
+		const shown = async (note: string, displayName = 'n') => {
+			await sql(t.store, 'UPDATE accounts SET note = ?, display_name = ? WHERE id = ?', note, displayName, id!)
+			return (await shownBytes(t, `/api/v1/accounts/${id}`)).body as { note: string; display_name: string }
+		}
+		// A NUL does not hide the rest from the guards: past the raw bound, or escaping past it, the bio reads as empty.
+		expect((await shown(`<p>a\u0000${'x'.repeat(REMOTE_BIO_BYTES)}</p>`)).note).toBe('')
+		expect((await shown(`<p>a${'\u0000'.repeat(REMOTE_BIO_BYTES / 4)}</p>`)).note).toBe('')
+		expect((await shown('<p>a\u0000b</p>')).note).toBe('<p>a\u0000b</p>')
+		// Supplementary characters count once each: 2,048 of them, 4,096 UTF-16 units.
+		const bisons = '🦬'.repeat(DISPLAY_NAME_LIMIT + 10)
+		expect((await shown('', bisons)).display_name).toBe('🦬'.repeat(DISPLAY_NAME_LIMIT))
+		expect((await shown('', `a${bisons}`)).display_name).toBe(`a${'🦬'.repeat(DISPLAY_NAME_LIMIT - 1)}`)
+	})
+
+	it('shows a mention with a stored over-long URL by its derived URL, in a status and in a composed one', async () => {
+		const h = await community(['alice'])
+		const carol = await remoteAccount(h.store, 'carol')
+		const long = `https://remote.example/${'x'.repeat(PROFILE_URL_LIMIT)}`
+		await sql(h.store, 'UPDATE accounts SET url = ? WHERE id = ?', long, carol)
+		const derived = 'https://remote.example/@carol'
+		// Composed: the mention links the derived URL.
+		const status = await post(h, h.users.alice, { status: '@carol@remote.example hi' })
+		expect(status.content).not.toContain(long)
+		expect(status.content).toContain(`href="${derived}"`)
+		expect(status.mentions).toEqual([{ id: carol, username: 'carol', url: derived, acct: 'carol@remote.example' }])
+		// Presented: a stored status mentioning the account.
+		const stored = await seedStatus(h.store, {
+			accountId: h.users.alice.id,
+			visibility: 'public',
+			mentions: [{ accountId: carol }],
+		})
+		const response = await h.request(`/api/v1/statuses/${stored}`, bearer(h.users.alice.token))
+		const body = await response.text()
+		expect(body).not.toContain(long)
+		expect((JSON.parse(body) as { mentions: { url: string }[] }).mentions.map((m) => m.url)).toEqual([derived])
 	})
 
 	it('reads and answers a page of 80 followers at every bound from a window of 240', async () => {

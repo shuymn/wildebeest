@@ -6,6 +6,7 @@ import {
 	type PageQuery,
 	type Present,
 	presentAccountsById,
+	profileUrlSql,
 	resolveAccountId,
 } from './accounts'
 import { flagActivity, instanceActorUri, recordOutbound } from './activities'
@@ -643,7 +644,8 @@ export const reportTargetPage = readOperation<
 	}
 	const row = /^\d{1,18}$/.test(id)
 		? db.first<{ url: string | null; uri: string; username: string; domain: string | null }>(
-				`SELECT a.url, a.uri, a.username, a.domain FROM reports r JOIN accounts a ON a.id = r.target_account_id
+				`SELECT ${profileUrlSql('a.url')} AS url, a.uri, a.username, a.domain
+				FROM reports r JOIN accounts a ON a.id = r.target_account_id
 				WHERE r.id = CAST(? AS INTEGER)`,
 				id
 			)

@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { lstat, mkdir, readFile, stat, symlink, truncate, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, readdir, readFile, stat, symlink, truncate, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
@@ -7,6 +7,7 @@ import { promisify } from 'node:util'
 import { describe, expect, it } from 'vitest'
 
 import { convert, exportOf, opened, verify, workspace } from './cutover-helpers.js'
+import { jsonStringBytes, REMOTE_BIO_BYTES, sanitizeRemoteBio } from '../cli/lib/cutover/kopje-runtime.js'
 import { loadLegacyExport } from '../cli/lib/cutover/legacy-load.js'
 import { ExportError, parseStatement, tableExpressions } from '../cli/lib/cutover/sql-script.js'
 
@@ -254,6 +255,41 @@ describe('HTML is never cut silently', () => {
 		const accepted = await convert(space.dir, exportPath, { out: 'accepted', acceptTruncation: true })
 		expect(accepted.ok).toBe(true)
 		expect((await verify(exportPath, accepted.dumpPath)).ok).toBe(false)
+		expect((await verify(exportPath, accepted.dumpPath, { acceptTruncation: true })).ok).toBe(true)
+	})
+
+	it('stops on a bio over its bound unless truncation is accepted, and stores it cut as the Worker does', async () => {
+		const exportPath = await exportOf(space.dir, { level: 39 })
+		// Within the sanitizer's raw limit, but about 780 KB once sanitized: past REMOTE_BIO_BYTES.
+		const bio = '<a>'.repeat(16_000)
+		const files = (await readdir(exportPath)).filter((name) => name.endsWith('.sql'))
+		let replaced = 0
+		for (const name of files) {
+			const text = await readFile(join(exportPath, name), 'utf8')
+			if (text.includes('<p>bio 0</p>')) {
+				await writeFile(join(exportPath, name), text.replace('<p>bio 0</p>', bio))
+				replaced++
+			}
+		}
+		expect(replaced).toBe(1)
+		const stopped = await convert(space.dir, exportPath)
+		expect(stopped.ok).toBe(false)
+		expect((stopped.manifest.conversion as { problems: Record<string, number> }).problems).toEqual({
+			'html:bio-longer-than-bound': 1,
+		})
+		const accepted = await convert(space.dir, exportPath, { out: 'accepted', acceptTruncation: true })
+		expect(accepted.ok).toBe(true)
+		const db = await opened(accepted.dumpPath)
+		const row = db.prepare("SELECT note FROM accounts WHERE uri = 'https://remote.example/users/r0'").get() as {
+			note: string
+		}
+		db.close()
+		expect(row.note).toBe(sanitizeRemoteBio(bio))
+		expect(jsonStringBytes(row.note)).toBeLessThanOrEqual(REMOTE_BIO_BYTES)
+		// Verification counts the cut bio as a truncation, and agrees with the converter once it is accepted.
+		const refused = await verify(exportPath, accepted.dumpPath)
+		expect(refused.ok).toBe(false)
+		expect(refused.report).toMatchObject({ truncation: { overLimit: 1, accepted: false } })
 		expect((await verify(exportPath, accepted.dumpPath, { acceptTruncation: true })).ok).toBe(true)
 	})
 

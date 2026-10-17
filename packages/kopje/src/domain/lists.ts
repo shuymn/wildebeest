@@ -187,7 +187,8 @@ export function ownedAccountsPage(
 		}
 		max = last
 	}
-	const { items, cut } = presentAccountsWithin(db, ids, present, ACCOUNT_ANSWER_BYTES, true)
+	// The array's brackets: its separators are counted with the accounts.
+	const { items, cut } = presentAccountsWithin(db, ids, present, ACCOUNT_ANSWER_BYTES - 1, true)
 	return { items, newest: items[0]?.id ?? null, oldest: items.at(-1)?.id ?? null, ...(cut ? { cut } : {}) }
 }
 

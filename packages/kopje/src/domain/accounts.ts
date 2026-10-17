@@ -203,12 +203,13 @@ export const DISPLAY_NAME_LIMIT = 2048
 export const PROFILE_URL_LIMIT = 2048
 const NOTE_SQL = `CASE WHEN length(CAST(a.note AS BLOB)) > ${REMOTE_BIO_BYTES} THEN ''
 	WHEN length(CAST(json_quote(a.note) AS BLOB)) > ${REMOTE_BIO_BYTES} THEN '' ELSE a.note END`
-const urlSql = (column: string) =>
+// A stored profile URL as every read that presents one takes it (ACCOUNT_COLUMNS, mentions): NULL past the bound.
+export const profileUrlSql = (column: string) =>
 	`CASE WHEN length(CAST(${column} AS BLOB)) <= ${PROFILE_URL_LIMIT} THEN ${column} END`
 
 export const ACCOUNT_COLUMNS = `a.id, a.uri, a.username, a.domain, a.actor_type,
-	${cutSql('a.display_name', DISPLAY_NAME_LIMIT)} AS display_name, ${NOTE_SQL} AS note, ${urlSql('a.url')} AS url,
-	${urlSql('a.avatar_url')} AS avatar_url, ${urlSql('a.header_url')} AS header_url, a.locked, a.discoverable, a.followers_count, a.following_count, a.statuses_count, a.created_at,
+	${cutSql('a.display_name', DISPLAY_NAME_LIMIT)} AS display_name, ${NOTE_SQL} AS note, ${profileUrlSql('a.url')} AS url,
+	${profileUrlSql('a.avatar_url')} AS avatar_url, ${profileUrlSql('a.header_url')} AS header_url, a.locked, a.discoverable, a.followers_count, a.following_count, a.statuses_count, a.created_at,
 	${availableJoinedSql('a', 'l')} AS available,
 	(SELECT substr(s.published_at, 1, 10) FROM statuses s
 		WHERE s.account_id = a.id AND s.visibility IN ${REACHES_FOLLOWERS_SQL} ORDER BY s.id DESC LIMIT 1)
@@ -218,8 +219,9 @@ export const ACCOUNT_COLUMNS = `a.id, a.uri, a.username, a.domain, a.actor_type,
 
 export const ACCOUNT_FROM = 'accounts a LEFT JOIN local_accounts l ON l.account_id = a.id'
 
-// RES-3: the UTF-8 bytes of the accounts one answer of many carries (a list's members and endorsements with limit=0,
-// familiar followers), as serialized. A Mastodon user's account serializes to about 2 KiB, so 1,000 take a quarter
+// RES-3: the UTF-8 bytes of one answer of many accounts (a list's members and endorsements with limit=0, familiar
+// followers), as serialized, the JSON around the accounts reserved first, so it bounds the whole response body
+// (only an answer's first account, itself bounded per account by RES-2, may stand alone past it). A Mastodon user's account serializes to about 2 KiB, so 1,000 take a quarter
 // of it; one at Misskey's profile limits to about 8 KiB (test/account-answer-bytes.test.ts measures both).
 export const ACCOUNT_ANSWER_BYTES = 8 * 1024 * 1024
 // Accounts read per query while an answer is filled: what is read past the budget is at most one chunk of accounts
@@ -743,11 +745,17 @@ export const familiarFollowers = userReadOperation<{ ids: string[]; present: Pre
 				.map((row) => row.id)
 			return [{ id: target, followers }]
 		})
+		// The answer's own JSON: the brackets and, for each entry, its id, keys and separator (each account's separator
+		// is counted with it).
+		const frame = entries.reduce(
+			(sum, entry) => sum + utf8Length(JSON.stringify({ id: entry.id, accounts: [] })) + 1,
+			1
+		)
 		const shown = sharedAnswer(
 			db,
 			entries.map((entry) => entry.followers),
 			present,
-			ACCOUNT_ANSWER_BYTES
+			ACCOUNT_ANSWER_BYTES - frame
 		)
 		return entries.map((entry, i) => ({ id: entry.id, accounts: shown[i] ?? [] }))
 	}

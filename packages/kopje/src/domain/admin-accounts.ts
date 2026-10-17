@@ -213,16 +213,17 @@ export type AdminAccountList =
 
 // What a filter reads of an account. unavailable is R1's rule (availableSql): a suspended account, local or remote
 // (R38), or a remote one whose deletion has started; the admin entity shows each as suspended, and the filter agrees.
+// The display name is not read (a converted row may keep legacy's, of any length, RES-2): its prefix is matched in
+// SQL (displayMatches).
 type Candidate = {
 	id: string
 	username: string
 	domain: string | null
-	display_name: string
 	email: string | null
 	unavailable: number
 }
 
-const CANDIDATE_COLUMNS = `a.id, a.username, a.domain, a.display_name, l.email,
+const CANDIDATE_COLUMNS = `a.id, a.username, a.domain, l.email,
 	NOT ${availableJoinedSql('a', 'l')} AS unavailable`
 
 // Lowercases ASCII letters only, as SQLite's lower() does, so a prefix compares alike in an index range and in memory.
@@ -264,8 +265,14 @@ function matchesNothing(filter: AdminAccountFilter): boolean {
 // `prefix` is already folded (ordered folds the filter's prefixes once per set).
 const startsWith = (value: string, prefix: string) => asciiLower(value).startsWith(prefix)
 
-// AccountFilter's scopes in memory, over an account the plan read, with the filter's prefixes folded (ordered).
-function matches(filter: AdminAccountFilter, adminId: string, row: Candidate): boolean {
+// AccountFilter's scopes in memory, over an account the plan read, with the filter's prefixes folded (ordered);
+// `displayed`: the accounts whose display name has the filter's prefix (displayMatches), when it has one.
+function matches(
+	filter: AdminAccountFilter,
+	adminId: string,
+	row: Candidate,
+	displayed: ReadonlySet<string> | null
+): boolean {
 	const local = row.domain === null
 	return (
 		(filter.origin === null || (filter.origin === 'local') === local) &&
@@ -276,7 +283,7 @@ function matches(filter: AdminAccountFilter, adminId: string, row: Candidate): b
 			(local && filter.roleIds.includes(row.id === adminId ? OWNER_ROLE.id : EVERYONE_ROLE.id))) &&
 		(filter.username === null || startsWith(row.username, filter.username)) &&
 		(filter.byDomain === null || row.domain === filter.byDomain) &&
-		(filter.displayName === null || startsWith(row.display_name, filter.displayName)) &&
+		(displayed === null || displayed.has(row.id)) &&
 		(filter.email === null || (row.email !== null && startsWith(row.email, filter.email)))
 	)
 }
@@ -307,17 +314,32 @@ const inBounds = (bounds: Bounds, id: string) =>
 	(bounds.max === null || id < bounds.max) && (bounds.min === null || id > bounds.min)
 
 // A complete set's matches inside the cursor, in the page's order.
-function ordered(rows: readonly Candidate[], filter: AdminAccountFilter, adminId: string, bounds: Bounds): Candidate[] {
+function ordered(
+	db: Db,
+	rows: readonly Candidate[],
+	filter: AdminAccountFilter,
+	adminId: string,
+	bounds: Bounds
+): Candidate[] {
 	const fold = (prefix: string | null) => (prefix === null ? null : asciiLower(prefix))
-	const folded = {
-		...filter,
-		username: fold(filter.username),
-		displayName: fold(filter.displayName),
-		email: fold(filter.email),
-	}
+	const folded = { ...filter, username: fold(filter.username), email: fold(filter.email) }
+	const displayed = filter.displayName === null ? null : displayMatches(db, rows, filter.displayName)
 	return rows
-		.filter((row) => inBounds(bounds, row.id) && matches(folded, adminId, row))
+		.filter((row) => inBounds(bounds, row.id) && matches(folded, adminId, row, displayed))
 		.sort((a, b) => (a.id < b.id === bounds.ascending ? -1 : 1))
+}
+
+// The candidates whose display name starts with `prefix` (ASCII letters folded): the range searchRange reads, from
+// the prefix to its successor in BINARY order, so the test reads no name into the isolate.
+function displayMatches(db: Db, rows: readonly Candidate[], prefix: string): Set<string> {
+	const lower = asciiLower(prefix)
+	const end = prefixEnd(lower)
+	const ids = JSON.stringify(rows.map((row) => row.id))
+	const query = `SELECT a.id FROM json_each(?1) c CROSS JOIN accounts a ON a.id = c.value
+		WHERE lower(a.display_name) >= ?2${end === null ? '' : ' AND lower(a.display_name) < ?3'}`
+	const found =
+		end === null ? db.all<{ id: string }>(query, ids, lower) : db.all<{ id: string }>(query, ids, lower, end)
+	return new Set(found.map((row) => row.id))
 }
 
 // The range of an id walk inside the cursor, for a query whose ?1 and ?2 are the bounds.
@@ -336,6 +358,7 @@ function readMatches(
 	if (filter.origin === 'local' || filter.email !== null || filter.roleIds !== null) {
 		// The local accounts, an operator-sized set (a deployment assumption of about 10 accounts).
 		return ordered(
+			db,
 			db.all<Candidate>(`SELECT ${CANDIDATE_COLUMNS} FROM local_accounts l JOIN accounts a ON a.id = l.account_id`),
 			filter,
 			adminId,
@@ -350,7 +373,7 @@ function readMatches(
 			WHERE ${search.where} LIMIT ${ADMIN_ACCOUNT_CANDIDATES + 1}`,
 			...search.values
 		)
-		return rows.length > ADMIN_ACCOUNT_CANDIDATES ? 'too_broad' : ordered(rows, filter, adminId, bounds)
+		return rows.length > ADMIN_ACCOUNT_CANDIDATES ? 'too_broad' : ordered(db, rows, filter, adminId, bounds)
 	}
 	const order = bounds.ascending ? 'ASC' : 'DESC'
 	if (filter.status === 'suspended') {
@@ -371,7 +394,7 @@ function readMatches(
 			)
 		const remote = [...range('accounts_suspended', suspendedSql('a')), ...range('accounts_deleted', deletingSql('a'))]
 		const merged = new Map([...local, ...remote].map((row) => [row.id, row]))
-		return ordered([...merged.values()], filter, adminId, bounds).slice(0, limit + 1)
+		return ordered(db, [...merged.values()], filter, adminId, bounds).slice(0, limit + 1)
 	}
 	// No search: the accounts by id, newest first. Active accounts walk accounts_active (migration
 	// 0045_remote_suspension), which holds no account suspended by the instance or whose deletion has started, so the

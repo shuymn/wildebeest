@@ -1,4 +1,4 @@
-import { type Account, accountUrl, acctOf, type Present, presentAccountsById } from './accounts'
+import { type Account, accountUrl, acctOf, type Present, presentAccountsById, profileUrlSql } from './accounts'
 import {
 	type ApiQuoteState,
 	apiVisibility,
@@ -273,7 +273,7 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 	)
 	const mentions = groupBy(
 		db.all<MentionRow>(
-			`SELECT m.status_id, a.id, a.username, a.domain, a.url, a.uri
+			`SELECT m.status_id, a.id, a.username, a.domain, ${profileUrlSql('a.url')} AS url, a.uri
 			FROM status_mentions m JOIN accounts a ON a.id = m.account_id
 			WHERE m.status_id IN (SELECT value FROM json_each(?1)) AND m.silent = 0 ORDER BY m.status_id, a.id`,
 			all
