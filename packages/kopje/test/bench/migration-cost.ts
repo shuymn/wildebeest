@@ -34,9 +34,12 @@ import { freshStore, testKernel } from '../helpers'
 //     stored state in turn (a quarter accepted);
 //   - 2,000,000 favourites, one of each status in a scattered order, by remote accounts in turn;
 //   - 200,000 boosts on top of the statuses, public and unlisted in turn, each of a different status by another
-//     remote account.
+//     remote account;
+//   - 500,000 outbound activities of the local accounts in turn, each about one status, one in ten superseded (what
+//     waits for delivery, and what given-up rows keep for retries).
 // It grows every table a phase A migration reads (accounts, follows, statuses with their mentions and tags,
-// notifications, reports, quotes) and what 0043_read_window_indexes indexes (favourites, boosts); a migration that
+// notifications, reports, quotes), what 0043_read_window_indexes indexes (favourites, boosts) and what
+// 0045_remote_suspension indexes (accounts, outbound activities); a migration that
 // reads another table must add it here before it is measured. The measured time is the file's transaction as the kernel
 // applies it, from before the first statement to after the commit: Date.now() in workerd moves only between I/O events,
 // so the clock is read across an await on each side.
@@ -65,6 +68,7 @@ const SHAPE = {
 	quotes: 200_000,
 	favourites: 2_000_000,
 	boosts: 200_000,
+	outbound: 500_000,
 }
 
 it('applies the migration to the benchmark store within the budget', async () => {
@@ -86,6 +90,7 @@ it('applies the migration to the benchmark store within the budget', async () =>
 	const quotes = Math.min(Math.round(SHAPE.quotes * scale), Math.floor(statuses / 10))
 	const favourites = Math.min(Math.round(SHAPE.favourites * scale), statuses)
 	const boosts = Math.min(Math.round(SHAPE.boosts * scale), Math.floor(statuses / 10))
+	const outbound = Math.round(SHAPE.outbound * scale)
 
 	const store = freshStore()
 	// One call: between calls, the Store's own alarm would apply every migration.
@@ -250,6 +255,21 @@ it('applies the migration to the benchmark store within the budget', async () =>
 			remote,
 			now
 		)
+		// Outbound activities: activity i by local account i mod the local ones, about status i, superseded when i is a
+		// multiple of ten, in batches.
+		for (let start = 0; start < outbound; start += batch) {
+			run(
+				`WITH RECURSIVE n(i) AS (SELECT ?1 UNION ALL SELECT i + 1 FROM n WHERE i < ?2 - 1)
+				INSERT INTO outbound_activities (account_id, body, object_uri, retracts, superseded, created_at)
+				SELECT CAST(100000000000000000 + i % ?3 AS TEXT), '{"activity":{"type":"Create"}}',
+					'https://bench.example/s/' || i, 0, i % 10 = 0, ?4
+				FROM n`,
+				start,
+				Math.min(start + batch, outbound),
+				SHAPE.local,
+				Date.parse(now)
+			)
+		}
 		const count = (table: string) => sql.exec<{ n: number }>(`SELECT count(*) AS n FROM ${table}`).one().n
 		const seeded = {
 			accounts: count('accounts'),
@@ -263,6 +283,7 @@ it('applies the migration to the benchmark store within the budget', async () =>
 			notifications: count('notifications'),
 			reports: count('reports'),
 			quotes: hasQuotes ? count('quotes') : 0,
+			outbound: count('outbound_activities'),
 		}
 		expect(sql.exec('SELECT count(*) AS n FROM kopje_migrations').one().n).toBe(at)
 

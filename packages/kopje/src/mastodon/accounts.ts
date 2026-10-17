@@ -13,7 +13,7 @@ import {
 } from './context'
 import { mastodonError } from './errors'
 import { sweepSoon } from './media'
-import { linkHeader, pageQuery, pageResponse } from './pagination'
+import { pageQuery, pageResponse } from './pagination'
 import { type Params, parseBoolean } from './params'
 import { MAX_SEARCH_OFFSET, searchParams } from './search'
 import {
@@ -479,11 +479,7 @@ export const followRequests: ApiHandler = async (c, deps) => {
 	const result = authorized(
 		await storeCall(c, deps, (s, b) => s.listFollowRequests(b, { credential, page, present: present(c) }))
 	)
-	const link = linkHeader(c.req.url, { ...result, count: result.items.length }, page.limit)
-	if (link !== undefined) {
-		c.header('Link', link)
-	}
-	return c.json(result.items)
+	return pageResponse(c, result, page.limit)
 }
 
 function answerFollowRequest(decision: 'authorize' | 'reject'): ApiHandler {

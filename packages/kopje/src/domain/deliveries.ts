@@ -286,7 +286,8 @@ function targetsOf(
 	activity: Activity,
 	audience: DeliveryAudience,
 	withdraws: boolean,
-	reachOf: readonly ReachOf[]
+	reachOf: readonly ReachOf[],
+	earlierReceivers = true
 ): { targets: Target[]; voters: Set<string> } {
 	// Neutral copies by inbox; personal copies by recipient, kept apart so one never replaces the other.
 	const neutral = new Map<string, Behind>()
@@ -334,7 +335,7 @@ function targetsOf(
 	const recipients = recipientsFor(db, signerId, activity, audience, withdraws)
 	reach(recipients)
 	const { object, retracts } = subjectOf(activity, withdraws)
-	if (retracts && object !== null) {
+	if (retracts && object !== null && earlierReceivers) {
 		for (const inbox of receiversOf(db, signerId, object)) {
 			add(inbox, null, null)
 		}
@@ -394,12 +395,16 @@ function receiversOf(db: Db, signerId: string, object: string): string[] {
 // waiting for it there. Whether such a server holds the status is never guessed: Mastodon and Misskey ignore a Create
 // of a status they hold (Create#create_status) and an Update of one they do not, so one of the pair applies either way,
 // and the delivered Create's receipt makes later edits an Update alone.
+// options.withdraws: a Reject that ends an accepted follow, a retraction (outboundKind). options.audienceOnly: a
+// retraction sent to its audience alone, not to the earlier receivers of what it withdraws (R38's severing Reject,
+// blocks.ts endFollow: a Follow's Reject matters to the follower's server only, at its current inbox, as Mastodon's
+// RejectFollowService sends it).
 export function enqueueActivity(
 	db: Db,
 	signerId: string,
 	envelope: DeliveryEnvelope,
 	now: number,
-	options: { withdraws?: boolean } = {}
+	options: { withdraws?: boolean; audienceOnly?: boolean } = {}
 ): void {
 	const found = targetsOf(
 		db,
@@ -407,7 +412,8 @@ export function enqueueActivity(
 		envelope.activity,
 		envelope.audience,
 		options.withdraws === true,
-		envelope.reachOf ?? []
+		envelope.reachOf ?? [],
+		options.audienceOnly !== true
 	)
 	const { voters } = found
 	let targets = found.targets
@@ -477,7 +483,8 @@ export function enqueueActivity(
 // The earlier activities about an object that a new one supersedes. A moderation Update still staging (retracts 0,
 // staged set: beginStagedUpdate) is superseded only by another (`moderation`): a profile edit made while the
 // restoration's audience is staged must not cut that audience down to the followers.
-const SUPERSEDED = `account_id = ? AND object_uri = ?
+// An activity superseded already is final (superseded, staged NULL), so it is not written again.
+const SUPERSEDED = `account_id = ? AND object_uri = ? AND superseded = 0
 	AND (? OR json_extract(body, '$.activity.type') IN (SELECT value FROM json_each(?)))
 	AND (? OR retracts = 1 OR staged IS NULL)`
 
@@ -503,6 +510,29 @@ function supersede(
 	for (const { id } of stopped) {
 		dropSettledActivity(db, id)
 	}
+}
+
+// Supersedes at most `limit` of the earlier activities about `object` that a retraction of it by `signerId` would
+// (supersede), each an update and at most one delete; returns whether any is left. R38's severing works them down
+// this way before recording its Reject (remote-suspension.ts), so that the Reject's own supersede writes nothing.
+export function supersedeEarlier(db: Db, signerId: string, object: string, limit: number): boolean {
+	const earlier = db.all<{ id: string }>(
+		`SELECT CAST(id AS TEXT) AS id FROM outbound_activities WHERE ${SUPERSEDED} LIMIT ?6`,
+		signerId,
+		object,
+		1,
+		'[]',
+		0,
+		limit
+	)
+	for (const { id } of earlier) {
+		db.run('UPDATE outbound_activities SET superseded = 1, staged = NULL WHERE id = CAST(? AS INTEGER)', id)
+		dropSettledActivity(db, id)
+	}
+	return (
+		db.first(`SELECT 1 AS x FROM outbound_activities WHERE ${SUPERSEDED} LIMIT 1`, signerId, object, 1, '[]', 0) !==
+		undefined
+	)
 }
 
 // A retraction recorded in bounded steps: a purge's Undo of a local boost (RES-6), whose receipts alone may be more
@@ -999,11 +1029,15 @@ type DueRow = LaneRow & {
 	retracts: number | null
 	refused_sender: number
 	signed_by: string | null
+	// An Announce's boosted original (its object), null for any other activity.
+	boosted: string | null
 }
 
 const DUE_ROW = `CAST(d.id AS TEXT) AS id, CAST(d.activity_id AS TEXT) AS activity_id, d.account_id, d.lane, d.inbox_url,
 	d.attempts, d.addressee, d.recipient_accounts, d.recipient_domains, o.id IS NOT NULL AS found, o.retracts,
-	${REFUSED_SENDER} AS refused_sender, json_extract(o.body, '$.signedBy') AS signed_by`
+	${REFUSED_SENDER} AS refused_sender, json_extract(o.body, '$.signedBy') AS signed_by,
+	CASE json_extract(o.body, '$.activity.type') WHEN 'Announce' THEN json_extract(o.body, '$.activity.object') END
+		AS boosted`
 
 const DUE_FROM = 'deliveries d LEFT JOIN outbound_activities o ON o.id = d.activity_id'
 
@@ -1018,6 +1052,10 @@ function hostOf(inbox: string): string | null {
 // VIS-30's send-time check, at the claim and again at confirmation (the rules: docs/visibility.md, "The send-time
 // check"). The exemption reads the persisted retracts flag, never the activity's kind worked out again. The accounts
 // rule joins accounts, because availableSql reads a missing id as available and a purged recipient must count as gone.
+// An Announce distributes its original, so it is sent only while the original exists and its author is available (R1),
+// read live by the original's uri (statuses' unique key): an original deleted since (its author's Delete applies even
+// while the author is suspended) or never stored refuses it. No other content activity carries a remote author's
+// object (a quote names its quoted status by uri and stamp only).
 function sendRefused(db: Db, row: DueRow): boolean {
 	if (row.retracts === 1) {
 		return false
@@ -1035,6 +1073,15 @@ function sendRefused(db: Db, row: DueRow): boolean {
 			`SELECT 1 AS yes FROM json_each(?) r JOIN main.accounts a ON a.id = r.value
 			WHERE ${availableSql('a.id')} LIMIT 1`,
 			row.recipient_accounts
+		) === undefined
+	) {
+		return true
+	}
+	if (
+		row.boosted !== null &&
+		db.first(
+			`SELECT 1 AS yes FROM main.statuses s WHERE s.uri = ? AND ${availableSql('s.account_id')}`,
+			row.boosted
 		) === undefined
 	) {
 		return true

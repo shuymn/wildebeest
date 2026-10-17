@@ -98,8 +98,9 @@ const READS: Read[] = [
 		items: pageItems,
 		item: target,
 		cursor: integerCursor,
-		statement: /FROM follows f /,
-		access: 'SEARCH f USING INDEX follows_target (target_account_id=? AND state=? AND rowid>? AND rowid<?)',
+		// The candidate window of the requests (windows.ts); the presented accounts are read by key after it.
+		statement: /FROM follows f\s+WHERE/,
+		access: 'SEARCH f USING COVERING INDEX follows_target (target_account_id=? AND state=? AND rowid>? AND rowid<?)',
 	},
 	{
 		name: 'scheduled statuses',

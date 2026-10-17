@@ -65,6 +65,7 @@ const SCHEMA_TABLES = [
 	'quote_revocations',
 	'quotes',
 	'remote_keys',
+	'remote_moderation_jobs',
 	'reports',
 	'scheduled_statuses',
 	'status_edits',
@@ -4741,5 +4742,113 @@ describe('0044_delivery_provenance', () => {
 		expect(many.read).toBe(none.read)
 		expect(many.written).toBe(none.written)
 		expect(many.first).toEqual([{ recipient_accounts: null, recipient_domains: null, recipients_many: null }])
+	}, 120_000)
+})
+
+describe('0045_remote_suspension', () => {
+	const NAME = '0045_remote_suspension'
+	const at = NAMES.indexOf(NAME)
+	const statements = (MIGRATIONS[at]?.sql ?? '')
+		.split('\n')
+		.filter((line) => !line.startsWith('--'))
+		.join('\n')
+		.split(';')
+		.filter((statement) => statement.trim() !== '')
+
+	// `accounts` remote accounts, every second one being deleted, with `follows` follows of each; and one local account.
+	function seed(sql: SqlStorage, accounts: number, follows: number) {
+		sql.exec(
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+			INSERT INTO accounts (id, uri, username, domain, deleted_at) SELECT CAST(100000000000000000 + i AS TEXT),
+				'https://remote.example/users/u' || i, 'u' || i, 'remote.example',
+				CASE WHEN i % 2 = 0 THEN '2026-10-01T00:00:00.000Z' END FROM n`,
+			accounts
+		)
+		sql.exec(
+			"INSERT INTO accounts (id, uri, username) VALUES ('900000000000000000', 'https://kopje.test/ap/users/l', 'l')"
+		)
+		for (let k = 1; k <= follows; k++) {
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+				INSERT INTO follows (account_id, target_account_id, state) SELECT CAST(100000000000000000 + i AS TEXT),
+					CAST(100000000000000000 + (i + CAST(?2 AS INTEGER)) % CAST(?1 AS INTEGER) AS TEXT), 'accepted' FROM n`,
+				accounts,
+				k
+			)
+		}
+	}
+
+	it('indexes the suspended and the active accounts by id, and drops the index it replaces', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+			seed(sql, 4, 0)
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+			const at0 = '2026-10-18T00:00:00.000Z'
+			sql.exec(
+				"UPDATE accounts SET suspended_at = ?, suspension_source = 'account' WHERE id = '100000000000000001'",
+				at0
+			)
+			const plan = (query: string) =>
+				sql
+					.exec<{ detail: string }>(`EXPLAIN QUERY PLAN ${query}`)
+					.toArray()
+					.map((row) => row.detail)
+			const suspended = 'SELECT id FROM accounts INDEXED BY accounts_suspended WHERE suspended_at IS NOT NULL'
+			expect(sql.exec(suspended).toArray()).toEqual([{ id: '100000000000000001' }])
+			expect(plan(suspended)).toEqual(['SCAN accounts USING INDEX accounts_suspended'])
+			const active =
+				'SELECT id FROM accounts INDEXED BY accounts_active WHERE deleted_at IS NULL AND suspended_at IS NULL ORDER BY id'
+			expect(sql.exec(active).toArray()).toEqual([{ id: '100000000000000003' }, { id: '900000000000000000' }])
+			expect(sql.exec("SELECT name FROM sqlite_master WHERE name = 'accounts_available'").toArray()).toEqual([])
+			const unsuperseded =
+				"SELECT id FROM outbound_activities WHERE account_id = 'a' AND object_uri = 'o' AND superseded = 0 ORDER BY id"
+			expect(plan(unsuperseded)).toEqual([
+				'SEARCH outbound_activities USING COVERING INDEX outbound_activities_unsuperseded (account_id=? AND object_uri=?)',
+			])
+			sql.exec(
+				"INSERT INTO remote_moderation_jobs (kind, subject, mode, follow_bound, phase) VALUES ('account', 'x', 'account', 0, 'reports')"
+			)
+			expect(() =>
+				sql.exec(
+					"INSERT INTO remote_moderation_jobs (kind, subject, mode, follow_bound, phase) VALUES ('account', 'x', 'account', 0, 'reports')"
+				)
+			).toThrow(/UNIQUE constraint failed/)
+			expect(() =>
+				sql.exec(
+					"INSERT INTO remote_moderation_jobs (kind, subject, mode, follow_bound, phase) VALUES ('silence', 'y', 'account', 0, 'reports')"
+				)
+			).toThrow(/CHECK constraint failed/)
+		})
+	})
+
+	it('reads each account a bounded number of times, and no follow', async () => {
+		const measure = async (accounts: number, follows: number) => {
+			const store = freshStore()
+			return runInDurableObject(store, async (_instance, state) => {
+				const sql = state.storage.sql
+				await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+				seed(sql, accounts, follows)
+				let read = 0
+				let written = 0
+				for (const statement of statements) {
+					const cursor = sql.exec(statement)
+					cursor.toArray()
+					read += cursor.rowsRead
+					written += cursor.rowsWritten
+				}
+				return { read, written }
+			})
+		}
+		const few = await measure(1000, 0)
+		const crowded = await measure(1000, 30)
+		const many = await measure(10_000, 0)
+		// The two index builds read the accounts a bounded number of times; the follows are not read.
+		expect(crowded.read).toBeLessThanOrEqual(few.read + 10)
+		expect(many.read - few.read).toBeLessThanOrEqual(4 * (10_000 - 1000))
+		expect(many.read).toBeGreaterThan(few.read)
+		// The index of the active accounts holds every available one; nothing else is written per account.
+		expect(many.written - few.written).toBeLessThanOrEqual(2 * (10_000 - 1000))
 	}, 120_000)
 })

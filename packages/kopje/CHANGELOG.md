@@ -8,6 +8,42 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+### Added
+
+- The admin can suspend a remote account through the Mastodon admin API (`POST /api/v1/admin/accounts/:id/action`
+  with `type=suspend`, which used to answer 422) and lift that suspension (`POST /api/v1/admin/accounts/:id/unsuspend`,
+  which used to answer 403), with Mastodon's answers and errors. From the moment the suspension is saved:
+    - the account is shown to nobody: its posts, boosts, notifications and interactions are hidden everywhere, its
+      profile is shown blank with `suspended: true` (in the admin entity too), it is listed under `status=suspended`
+      and not `active`, and its follow requests are neither listed nor accepted;
+    - nothing more is sent to it but withdrawals (deletions, undos, and the rejections below), including deliveries
+      queued earlier, pushes caused by it, and follows of it by local users, which are kept but not sent;
+    - activities from it are ignored, except its deletions, undos and rejections. Its profile and keys are no longer
+      updated, except its inbox addresses, so the rejections reach it. A move of its followers that is under way
+      stops;
+    - its reports are resolved, and its follows of local users are ended in the background, each with a rejection
+      sent to it (a pending request is removed without one), as Mastodon does.
+  Lifting the suspension makes the account visible again; ended follows stay ended, and Kopje does not fetch the
+  account again as Mastodon does. Unlike Mastodon, which still delivers to suspended accounts what was queued before,
+  Kopje checks every delivery again right before sending it.
+
+### Changed
+
+- The follow request list leaves out unavailable requesters (suspended, or being deleted) and reads a bounded window
+  of requests per page, as the other filtered lists do: it may return a short or empty page while its `next` link
+  still leads on.
+
+### Instance changes
+
+- Store schema: adds one migration, applied on the first request after the deploy; a rollback to an earlier version
+  needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
+    - `0045_remote_suspension`: lets the admin suspend remote accounts. It adds two account columns, builds two
+      indexes over the accounts and one over the queued outbound activities (one pass over each), drops one index, and
+      adds a table: on the benchmark store of 1,000,000 accounts and 500,000 outbound activities its upgrade took 7.1
+      seconds (7.0 in two more runs), most of it the overhead of an upgrade on a store that size, which an upgrade
+      applying several files pays once.
+- `wrangler.jsonc`: unchanged.
+
 ## [0.1.0-rc.14] - 2026-10-18
 
 A fourteenth release candidate of the first release, published under the npm dist-tag `next`.

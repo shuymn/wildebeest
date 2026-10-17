@@ -10,11 +10,12 @@ import {
 	exchange,
 	form,
 	json,
-	login,
 	registerApp,
 	seedAccount,
 	setSetting,
+	settle,
 	sql,
+	userToken,
 } from './api-helpers'
 import { NOW } from './app-helpers'
 import { BUILD, claimSent, migratedStore } from './helpers'
@@ -43,11 +44,6 @@ import { sha256Hex } from '../src/security/tokens'
 
 const OWNER = 'owner@example.com'
 const ADMIN_SCOPES = 'read write admin:read admin:write'
-
-async function userToken(h: ApiHarness, email: string, scope: string): Promise<string> {
-	const app = await registerApp(h, { scopes: scope })
-	return (await login(h, { app, scope, email })).token
-}
 
 // The owner (the OAuth admin), alice and bob, each signed in; `admin` is the owner's token with the admin scopes.
 async function world(overrides: Record<string, unknown> = {}) {
@@ -78,16 +74,6 @@ async function act(
 async function unsuspend(h: ApiHarness, token: string | null, id: string): Promise<Answer> {
 	const init = { method: 'POST' }
 	return answer(await h.request(`/api/v1/admin/accounts/${id}/unsuspend`, token === null ? init : bearer(token, init)))
-}
-
-// Runs the Store's jobs until none is left; returns how many calls it took.
-async function settle(store: StoreStub): Promise<number> {
-	for (let call = 1; call <= 200; call++) {
-		if (!(await store.runInboundJobs(BUILD, { now: NOW })).pending) {
-			return call
-		}
-	}
-	throw new Error('the jobs did not settle')
 }
 
 type Sent = { type: string; inbox: string; suspended: boolean; object: unknown }
@@ -192,7 +178,7 @@ describe('the account action and unsuspend: who is answered (R37, VIS-29)', () =
 		])
 	})
 
-	it("never acts on the admin's own account, and refuses a remote unsuspension", async () => {
+	it("never acts on the admin's own account, and refuses unsuspending a remote account that is not suspended", async () => {
 		const { h, admin, owner } = await world()
 		const carol = await remoteAccount(h.store, 'carol')
 		for (const type of ['suspend', 'none']) {
@@ -210,7 +196,6 @@ describe('the account action and unsuspend: who is answered (R37, VIS-29)', () =
 describe('the account action types (Admin::AccountAction)', () => {
 	it("answers Fedilab's request shapes: a suspend, a none with its text, and the types Kopje does not serve", async () => {
 		const { h, admin, alice, bob } = await world()
-		const carol = await remoteAccount(h.store, 'carol')
 		// AccountReportActivity: none with the comment and the email flag; text is dropped (no strikes).
 		expect(await act(h, admin, bob.id, { type: 'none', text: 'please stop', send_email_notification: 'true' })).toEqual(
 			{ status: 200, body: {} }
@@ -225,11 +210,6 @@ describe('the account action types (Admin::AccountAction)', () => {
 			body: { error: "Validation failed: Type can't be blank, Type is not included in the list" },
 		})
 		expect(await act(h, admin, bob.id, { type: '' })).toMatchObject({ status: 422 })
-		// Remote suspension is phase B's.
-		expect(await act(h, admin, carol, { type: 'suspend' })).toEqual({
-			status: 422,
-			body: { error: 'Remote accounts cannot be suspended yet' },
-		})
 		// None of these changed anything or logged.
 		expect(await suspendedAt(h.store, bob.id)).toMatchObject({ suspended_at: null })
 		expect(await logRows(h.store)).toEqual([])

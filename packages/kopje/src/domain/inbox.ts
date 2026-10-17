@@ -2,10 +2,12 @@ import { followActivity, followAnswerActivity, followUri, recordOutbound, undoFo
 import {
 	activeMuteSql,
 	availableLocalSql,
+	availableSql,
 	blockedSql,
 	blocksSql,
 	canView,
 	followableBySql,
+	individuallySuspendedSql,
 	isDistributable,
 	isPublicCollection,
 	MENTION_STATUS_COLUMNS,
@@ -350,8 +352,31 @@ export function accountDomain(
 	return { domain: host, confirmedUsername: null }
 }
 
+// R38 (Mastodon's set_immediate_protocol_attributes!): a verified document of an individually suspended account updates
+// its inbox and shared inbox only, so that moderation's Rejects reach a current inbox. Its profile, keys and stored
+// domain stay frozen; the values passed remote-actor.ts's checks as any refresh's.
+function refreshRouting(db: Db, accountId: string, actor: RemoteActorInput): void {
+	db.run(
+		`UPDATE accounts SET inbox_url = ?2, shared_inbox_url = ?3
+		WHERE id = ?1 AND ${individuallySuspendedSql('accounts')} AND (inbox_url IS NOT ?2 OR shared_inbox_url IS NOT ?3)`,
+		accountId,
+		actor.inboxUrl,
+		actor.sharedInboxUrl
+	)
+}
+
+// The stored remote account of `uri` when it is unavailable (R1): the account the instance suspended (R38).
+function unavailableRemote(db: Db, uri: string): RemoteRow | undefined {
+	return db.first<RemoteRow>(
+		`SELECT a.id, a.uri, a.domain FROM accounts a WHERE a.uri = ? AND a.domain IS NOT NULL AND NOT ${availableSql('a.id')}`,
+		uri
+	)
+}
+
 // Inserts or refreshes a remote account and its keys from its document. Never touches a local row (ID-3): a URI on
-// this instance's origin, or one a local account holds, is refused, and so is a deleted actor. A document that names
+// this instance's origin, or one a local account holds, is refused, and so is a deleted actor. An unavailable account
+// (R38, VIS-30) is never refreshed: its stored row is returned unchanged (frozen), but for a routing refresh
+// (refreshRouting), as Mastodon leaves a suspended account's key and attributes as they were. A document that names
 // any of its collections asks for them to be read (remote-collections.ts, as ActivityPub::ProcessAccountService
 // schedules its syncs each time it processes the account); syncWaiting: a request waits for a round.
 export function upsertRemoteActor(
@@ -359,13 +384,18 @@ export function upsertRemoteActor(
 	actor: RemoteActorInput,
 	origin: string,
 	now: number
-): (RemoteRow & { syncWaiting: boolean }) | undefined {
+): (RemoteRow & { syncWaiting: boolean; frozen: boolean }) | undefined {
 	if (
 		originOf(actor.uri) === origin ||
 		db.first('SELECT 1 AS x FROM accounts WHERE uri = ? AND domain IS NULL', actor.uri) !== undefined ||
 		isDeletedActor(db, actor.uri, now)
 	) {
 		return undefined
+	}
+	const frozen = unavailableRemote(db, actor.uri)
+	if (frozen !== undefined) {
+		refreshRouting(db, frozen.id, actor)
+		return { ...frozen, syncWaiting: false, frozen: true }
 	}
 	const published = actor.published === null ? NaN : Date.parse(actor.published)
 	const createdAt = new Date(Number.isNaN(published) || published > now ? now : published).toISOString()
@@ -439,7 +469,7 @@ export function upsertRemoteActor(
 	}
 	const collections = actorCollections(actor.raw)
 	const named = Object.values(collections).some((url) => url !== null)
-	return { ...row, syncWaiting: named && requestCollectionSync(db, row.id, now) }
+	return { ...row, syncWaiting: named && requestCollectionSync(db, row.id, now), frozen: false }
 }
 
 export type StoredRemoteKey = { owner: string; pem: string; fresh: boolean }
@@ -1069,13 +1099,14 @@ function moveBatch(db: Db, key: string, now: number): boolean {
 					'SELECT id, uri, domain IS NULL AS local, locked FROM accounts WHERE id = ?',
 					job.target_account_id
 				)
-	// Checked before every batch: a Move whose source or target has since deleted itself ends here, before it changes
-	// anything (ID-7: a purged actor gets no new follows).
+	// Checked before every batch: a Move whose source or target has since deleted itself, or whose source has become
+	// unavailable (R38: suspended), ends here, before it changes anything (ID-7: a purged actor gets no new follows).
 	if (
 		job === undefined ||
 		source === undefined ||
 		target === undefined ||
 		isDeletedActor(db, source.uri, now) ||
+		db.first(`SELECT 1 AS x WHERE ${availableSql('?1')}`, source.id) === undefined ||
 		(target.local === 0 && isDeletedActor(db, target.uri, now))
 	) {
 		finishJob(db, 'move', key, now)
@@ -2356,6 +2387,17 @@ export const receiveActivity = writeOperation<ReceiveInput, ReceiveResult>((db, 
 	return { ...result, delivers: outboundSince(db, before) }
 })
 
+// What an unavailable actor's activity may still do (R38): its Deletes, a DeleteActor, an Undo and a Reject, which only
+// remove state. A Reject ending our follow of it must apply, since local follows of a suspended account are kept (R38).
+// Mastodon also admits Update (process_collection_service.rb:59-61); Kopje does not.
+const SUSPENDED_ADMITS: ReadonlySet<InboundActivity['type']> = new Set([
+	'Delete',
+	'RelayedDelete',
+	'DeleteActor',
+	'Undo',
+	'Reject',
+])
+
 function receive(db: Db, input: ReceiveInput): ReceiveResult {
 	const { activity, actorUri, now, origin } = input
 	sweep(db, now)
@@ -2375,10 +2417,23 @@ function receive(db: Db, input: ReceiveInput): ReceiveResult {
 			? { ...ignored('duplicate'), jobsPending: pendingPurge(db, actorUri) }
 			: ignored('actor-deleted')
 	}
+	// R38, VIS-30: the inbound gate, in every round. An unavailable actor (individually suspended) first takes a routing
+	// refresh from its verified document; then only its cleanups apply, with its stored row and no upsert (SUSPENDED_
+	// ADMITS), and anything else is ignored.
+	const held = unavailableRemote(db, actorUri)
+	if (held !== undefined) {
+		if (input.actor !== null) {
+			refreshRouting(db, held.id, input.actor)
+		}
+		if (!SUSPENDED_ADMITS.has(activity.type)) {
+			return ignored('actor-suspended')
+		}
+	}
 	const actor =
-		input.actor === null || activity.type === 'DeleteActor'
+		held ??
+		(input.actor === null || activity.type === 'DeleteActor'
 			? remoteAccount(db, actorUri)
-			: upsertRemoteActor(db, input.actor, origin, now)
+			: upsertRemoteActor(db, input.actor, origin, now))
 	if (actor === undefined && activity.type === 'DeleteActor' && input.actor !== null) {
 		// Verified against the actor's current document, but never stored: the tombstone alone keeps it from being
 		// stored by a late activity (ID-7).

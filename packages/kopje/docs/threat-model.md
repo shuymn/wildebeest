@@ -747,14 +747,20 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `0040_report_notifications` and `0041_report_notifications_key` (one notification per report and recipient);
   `test/report-notifications.test.ts`, `test/policy-oracle.test.ts`,
   `test/migrations.test.ts`.
-- **VIS-30: an unavailable recipient or a refused server gets no new content.** Only the delivery part is built, as
-  plumbing for remote suspension (phase B1b) and instance domain blocks (B2a); until they land, nothing is unavailable
-  for a new reason. Each staged target records the recipients behind it (merged across followers, addressed accounts,
+- **VIS-30: an instance-suspended account is shown to nobody and gets no new content.** An account the instance
+  suspended (R38) is unavailable (R1) from the suspension's commit: shown to nobody (as any unavailable account), sent
+  nothing but retractions, and its inbound activity is not applied but for its `Delete`, `DeleteActor`, `Undo` and
+  `Reject`, after a routing refresh of its inbox from a verified document; no path refreshes its profile, keys or
+  domain, or stores a status of it. Its follows of local accounts are severed in bounded, generation-bound rounds
+  (R38), each accepted one with a withdrawing `Reject` to the follower's current inbox alone, as Mastodon sends it (a
+  retraction, never refused, but not sent to the earlier receivers of what it withdraws); local follows of it are
+  kept. Instance domain blocks (B2a) are not built yet: the host policy refuses no host.
+  Each staged target records the recipients behind it (merged across followers, addressed accounts,
   silent recipients, poll voters and other statuses' reach before deduplication by inbox): up to 16 account ids, the
   hosts of their actor ids, or `many` above 16, meaning "not all unavailable"; expansion copies them onto the delivery
   row. A row that is not a retraction (by its persisted `retracts` flag) is dropped, its lane promoted, when its sender
   is refused (R1), its inbox host is refused by the host policy, none of its listed accounts exists and is available
-  (R1: in practice a recipient being deleted or purged), or the host policy refuses every listed host. The check runs
+  (R1: a recipient the instance suspended, or one being deleted or purged), or the host policy refuses every listed host. The check runs
   at the claim and again in `confirmDelivery`, which the Worker calls under the claim's lease after the signer is
   loaded and the host checked, right before signing and the POST; the body sent is read there, never from the claim. A
   change that commits after confirmation does not stop that POST; a confirmation that fails, or finds the lease taken
@@ -762,7 +768,13 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   unavailable ones is sent (content expansion already left the unavailable out); a row without provenance (queued before
   migration `0044`, phase A's staged reach, a retraction's earlier receivers) gets the inbox host rule only; Mastodon's
   `DeliveryWorker` has no such check, so this is stricter than Mastodon, whose reach already leaves deleted accounts
-  out. A dropped row writes no receipt. Implementation: `targetsOf`, `sendRefused`,
+  out. A dropped row writes no receipt. Implementation, for accounts: `src/domain/remote-suspension.ts`,
+  `actOnAccount` and `unsuspendAdminAccount` in `src/domain/admin-accounts.ts`, `availableSql` in
+  `src/domain/audience.ts`, the gate in `receive` and `upsertRemoteActor` in `src/domain/inbox.ts`, `storeRemoteStatus`
+  in `src/domain/remote-statuses.ts`, migration `0045_remote_suspension`; `test/remote-suspension.test.ts`,
+  `test/remote-suspension-deliveries.test.ts`, `test/remote-suspension-inbound.test.ts`, `test/policy-oracle.test.ts`
+  and `test/policy-writes.test.ts` (against `available` and `sends` in `test/policy-model.ts`). For the delivery part:
+  `targetsOf`, `sendRefused`,
   `claimDeliveries` and `confirmDelivery` in `src/domain/deliveries.ts`, `recipientsFor` in `src/domain/audience.ts`,
   `src/domain/host-policy.ts` (refuses no host until B2a), `deliveryRound` in `src/jobs/deliver.ts`, migration
   `0044_delivery_provenance`; `test/delivery-send-check.test.ts`, `test/policy-writes.test.ts` (provenance and the

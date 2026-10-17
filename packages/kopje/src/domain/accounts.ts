@@ -2,6 +2,7 @@ import { followActivity, followAnswerActivity, followUri, recordOutbound, undoFo
 import { actorSnapshot, recordActorUpdate } from './actor-update'
 import {
 	activeMuteJoinSql,
+	availableJoinedSql,
 	availableSql,
 	blocksSql,
 	domainBlocksSql,
@@ -134,9 +135,8 @@ export type AccountRow = {
 	following_count: number
 	statuses_count: number
 	created_at: string
-	suspended_at: string | null
-	// A remote account whose deletion has started; null otherwise.
-	deleted_at: string | null
+	// R1, read live in the query that reads the row (availableJoinedSql): 0 for an unavailable account.
+	available: number
 	last_status_at: string | null
 	// local_accounts.fields; null for a remote account. hide_collections: local_accounts' for a local account,
 	// accounts' (null until learned) for a remote one.
@@ -190,7 +190,7 @@ const REMOTE_ATTACHMENT_SQL = `CASE WHEN a.domain IS NOT NULL THEN (
 
 export const ACCOUNT_COLUMNS = `a.id, a.uri, a.username, a.domain, a.actor_type, a.display_name, a.note, a.url, a.avatar_url,
 	a.header_url, a.locked, a.discoverable, a.followers_count, a.following_count, a.statuses_count, a.created_at,
-	l.suspended_at, a.deleted_at,
+	${availableJoinedSql('a', 'l')} AS available,
 	(SELECT substr(s.published_at, 1, 10) FROM statuses s
 		WHERE s.account_id = a.id AND s.visibility IN ${REACHES_FOLLOWERS_SQL} ORDER BY s.id DESC LIMIT 1)
 		AS last_status_at,
@@ -214,11 +214,11 @@ export function acctOf(row: { username: string; domain: string | null }): string
 	return row.domain === null ? row.username : `${row.username}@${row.domain}`
 }
 
-// An unavailable account (R1: suspended, or a remote account whose deletion has started) is shown redacted, as
-// Mastodon's REST::AccountSerializer shows an unavailable one: no display name, note, fields or emojis, the default
-// avatar and header, locked, bot and discoverable false, and `suspended: true`.
+// An unavailable account (R1: suspended, or a remote account whose deletion has started, as the row's query read it
+// live) is shown redacted, as Mastodon's REST::AccountSerializer shows an unavailable one: no display name, note,
+// fields or emojis, the default avatar and header, locked, bot and discoverable false, and `suspended: true`.
 export function presentAccount(row: AccountRow, { origin }: Present): Account {
-	const suspended = row.suspended_at !== null || row.deleted_at !== null
+	const suspended = row.available === 0
 	// Stored URLs are shown only when they are http(s) (httpUrl); anything else reads as unset.
 	const url = accountUrl(row, origin)
 	const avatar = (suspended ? null : httpUrl(row.avatar_url)?.href) ?? `${origin}${DEFAULT_AVATAR}`
@@ -1113,33 +1113,48 @@ export const listFollows = optionalUserReadOperation<ListFollowsInput, Page<Acco
 
 // Follow requests to the viewer (Mastodon's FollowRequestsController and AuthorizeFollowService/RejectFollowService).
 // Only the followed account decides (VIS-9): the viewer is the target, from the credential, never from the request.
+// An unavailable requester (R1) is left out, as Mastodon lists Account.without_suspended, and listed again once it is
+// available. A page reads a window of readWindow(limit) of the viewer's requests from the cursor (follows_target, in
+// id order; windows.ts), then applies the rule to those (docs/visibility.md "Read bounds").
 export const listFollowRequests = userReadOperation<{ page: PageQuery; present: Present }, Page<Account>>(
 	(db, { page, present }, { accountId: viewerId }) => {
 		const ascending = page.minId !== undefined
-		const rows = db.all<AccountRow & { cursor: string }>(
-			`SELECT CAST(f.id AS TEXT) AS cursor, ${ACCOUNT_COLUMNS}
-			FROM follows f JOIN accounts a ON a.id = f.account_id LEFT JOIN local_accounts l ON l.account_id = a.id
-			WHERE f.target_account_id = ?1 AND f.state = 'pending'
-				AND ${edgeRangeSql('f.id', '?2', '?3')}
+		const size = readWindow(page.limit)
+		const window = singleWindow(
+			db,
+			`SELECT CAST(f.id AS TEXT) AS id FROM follows f
+			WHERE f.target_account_id = ?1 AND f.state = 'pending' AND ${edgeRangeSql('f.id', '?2', '?3')}
 			ORDER BY f.id ${ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
+			size,
 			viewerId,
 			page.maxId ?? null,
 			page.minId ?? page.sinceId ?? null,
-			page.limit
+			size
 		)
-		if (ascending) {
-			rows.reverse()
-		}
+		const rows =
+			window.candidates.length === 0
+				? []
+				: db.all<AccountRow & { cursor: string }>(
+						`SELECT CAST(f.id AS TEXT) AS cursor, ${ACCOUNT_COLUMNS}
+						FROM json_each(?1) c CROSS JOIN follows f ON f.id = CAST(json_extract(c.value, '$.id') AS INTEGER)
+							JOIN accounts a ON a.id = f.account_id LEFT JOIN local_accounts l ON l.account_id = a.id
+						WHERE ${availableJoinedSql('a', 'l')}`,
+						windowJson(window)
+					)
+		const shown = windowPage(window, rows, (row) => row.cursor, page.limit, ascending)
 		return {
-			items: rows.map((row) => presentAccount(row, present)),
-			newest: rows[0]?.cursor ?? null,
-			oldest: rows.at(-1)?.cursor ?? null,
+			items: shown.rows.map((row) => presentAccount(row, present)),
+			newest: shown.newest,
+			oldest: shown.oldest,
+			cut: shown.cut,
 		}
 	}
 )
 
 // Authorizes or rejects a pending follow of the viewer. A remote requester gets the Accept or Reject at its personal
-// inbox, named after its Follow (followAnswerActivity). The follow_request notification goes either way.
+// inbox, named after its Follow (followAnswerActivity). The follow_request notification goes either way. An
+// unavailable requester (R1, R38) is not found, read in this transaction: a request authorized after its requester's
+// suspension would leave a follower its suspension never severed.
 export const answerFollowRequest = userWriteOperation<
 	{ account: string; decision: 'authorize' | 'reject'; now: number },
 	RelationshipResult
@@ -1151,7 +1166,7 @@ export const answerFollowRequest = userWriteOperation<
 			: db.first<{ id: string; uri: string | null; requester_uri: string; remote: number }>(
 					`SELECT CAST(f.id AS TEXT) AS id, f.uri, a.uri AS requester_uri, a.domain IS NOT NULL AS remote
 					FROM follows f JOIN accounts a ON a.id = f.account_id
-					WHERE f.account_id = ? AND f.target_account_id = ? AND f.state = 'pending'`,
+					WHERE f.account_id = ?1 AND f.target_account_id = ?2 AND f.state = 'pending' AND ${availableSql('?1')}`,
 					requesterId,
 					viewerId
 				)
