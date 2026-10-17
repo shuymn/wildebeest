@@ -133,4 +133,35 @@ export default [
 			'@typescript-eslint/no-unsafe-argument': 'error',
 		},
 	},
+	{
+		// Kopje signs a fetch as a local account only with a key loaded while the account is available (the Store's
+		// signingKey or followerKey). localKey has no such check: only publishedKeyPair in federation.ts reads it, for the
+		// key pairs Fedify publishes, and nothing may make Fedify sign with those pairs. test-node/signing-keys.test.ts
+		// pins these rules.
+		files: ['packages/kopje/src/**/*.ts'],
+		rules: {
+			'no-restricted-syntax': [
+				'error',
+				{
+					selector:
+						"MemberExpression:matches([property.name='localKey'], [property.value='localKey']):not(VariableDeclarator[id.name='publishedKeyPair'] MemberExpression)",
+					message: "Load a signing key with signingKey (it checks availability); localKey is publishedKeyPair's alone.",
+				},
+				{
+					selector: "ObjectPattern > Property:matches([key.name='localKey'], [key.value='localKey'])",
+					message: "Load a signing key with signingKey (it checks availability); localKey is publishedKeyPair's alone.",
+				},
+				{
+					selector:
+						'MemberExpression:matches([property.name=/^(getDocumentLoader|getActorKeyPairs|setInboxListeners)$/], [property.value=/^(getDocumentLoader|getActorKeyPairs|setInboxListeners)$/])',
+					message: 'This makes Fedify sign with the published key pairs, which skip the availability check.',
+				},
+				{
+					selector:
+						'ObjectPattern > Property:matches([key.name=/^(getDocumentLoader|getActorKeyPairs|setInboxListeners)$/], [key.value=/^(getDocumentLoader|getActorKeyPairs|setInboxListeners)$/])',
+					message: 'This makes Fedify sign with the published key pairs, which skip the availability check.',
+				},
+			],
+		},
+	},
 ]
