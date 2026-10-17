@@ -5516,7 +5516,7 @@ describe('the quotes list reads a window, however many quotes a status has (RES-
 	const TARGET = '986000000000000000'
 	const quoting = (i: number) => String(987000000000000000n + BigInt(i))
 	const credential = { tokenHash: TOKEN, scope: 'read', now: NOW } as const
-	const input = (page: PageQuery) => ({ credential, id: TARGET, page, present: PRESENT })
+	const input = (page: PageQuery) => ({ credential, id: TARGET, page, now: NOW, present: PRESENT })
 
 	// TARGET's quotes, by quoting status id in order, each by QUOTER (listed), by BLOCKED (whom the viewer blocks), or in
 	// another state than accepted.

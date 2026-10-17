@@ -306,13 +306,38 @@ describe('GET /api/v1/statuses/:id/quotes', () => {
 		expect((await list(h, `/api/v1/statuses/${t}/quotes`, carol.token)).ids).toEqual(newest)
 	})
 
-	it('answers 404 for a status the viewer may not see, and needs a user token with read:statuses', async () => {
+	it('answers 404 for a status the viewer may not see, and needs a token with read:statuses', async () => {
 		const { h, alice, carol } = await world()
 		const hidden = (await post(h, carol, { status: 'private', visibility: 'private' })).id
 		expect((await list(h, `/api/v1/statuses/${hidden}/quotes`, alice.token)).status).toBe(404)
 		expect((await list(h, `/api/v1/statuses/${hidden}/quotes`, carol.token)).status).toBe(200)
 		expect((await h.request(`/api/v1/statuses/${hidden}/quotes`)).status).toBe(401)
-		expect((await list(h, `/api/v1/statuses/${hidden}/quotes`, await appToken(h))).status).toBe(422)
 		expect((await list(h, `/api/v1/statuses/${hidden}/quotes`, await scopedToken(h, 'read:accounts'))).status).toBe(403)
+	})
+
+	it('reads an app token as an anonymous viewer, as Mastodon requires no user', async () => {
+		const { h, alice, carol, rem, far } = await world()
+		const t = (await post(h, carol, { status: 'quote me', visibility: 'public' })).id
+		const open = await seedStatus(h.store, { accountId: rem, visibility: 'public' })
+		const followers = await seedStatus(h.store, { accountId: far, visibility: 'private' })
+		const blocked = await seedStatus(h.store, { accountId: far, visibility: 'public' })
+		for (const q of [open, followers, blocked]) {
+			await quote(h.store, q, t, 'accepted')
+		}
+		await follow(h, alice, far)
+		await sql(
+			h.store,
+			"UPDATE follows SET state = 'accepted' WHERE account_id = ? AND target_account_id = ?",
+			alice.id,
+			far
+		)
+		const app = await appToken(h)
+		// Anonymous: neither the followers-only quote nor a filter of alice's applies.
+		expect(await list(h, `/api/v1/statuses/${t}/quotes`, app)).toMatchObject({ status: 200, ids: [blocked, open] })
+		await block(h.store, alice.id, rem)
+		expect((await list(h, `/api/v1/statuses/${t}/quotes`, alice.token)).ids).toEqual([blocked, followers])
+		// A status an anonymous viewer may not see is not found.
+		const hidden = (await post(h, carol, { status: 'private', visibility: 'private' })).id
+		expect((await list(h, `/api/v1/statuses/${hidden}/quotes`, app)).status).toBe(404)
 	})
 })

@@ -409,7 +409,7 @@ export const ROUTES: readonly Route[] = [
 	{
 		method: 'GET',
 		path: '/api/v1/statuses/:id/quotes',
-		access: { scope: 'read:statuses' },
+		access: { scope: 'read:statuses', app: true },
 		handler: statuses.statusQuotes,
 	},
 	{
