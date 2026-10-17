@@ -21,6 +21,13 @@ import { describe, expect, it } from 'vitest'
 // - Tables are found by name from FROM and JOIN, with their aliases. A bare column counts when a table of the SELECT
 //   has it; `*` and `alias.*` count when such a table has a bounded column.
 // - ALLOWED lists, per module, the findings that present nothing, with their reason and exact count.
+//
+// The guard is an architectural aid, not a proof: the aggregate response tests prove the budgets (test/status-bounds.
+// test.ts). It reads SQL as tokens, not as a grammar, and has known gaps: a column qualified by an outer query's alias
+// inside a correlated subquery is read against the subquery's own tables only; a bounded column passed as a property
+// value is found only as a plain literal right after `:` (not parenthesized, computed or spread); and an expression
+// is resolved only as a constant or a single call by name. A helper call counts only when the interpolation is that
+// one call and nothing joined to it; quoted identifiers read as bare ones; concatenated SQL is found in any case.
 
 type Bounded = { table: string; column: string; helpers: readonly string[] }
 
@@ -78,8 +85,9 @@ const NOT_ALIAS = new Set([
 	'RETURNING',
 ])
 
+// Quoted identifiers ("s"."content") read as bare ones.
 function tokens(sql: string): string[] {
-	return (sql.match(TOKEN) ?? []).filter((t) => !t.startsWith('--'))
+	return (sql.replace(/"([A-Za-z_]\w*)"/g, '$1').match(TOKEN) ?? []).filter((t) => !t.startsWith('--'))
 }
 
 // The index of the parenthesis that closes the one at `open`.
@@ -391,7 +399,8 @@ function render(
 			if ('text' in part) {
 				return part.text
 			}
-			if (HELPER_CALL.test(part.expression)) {
+			const call = singleCall(part.expression)
+			if (call !== null && HELPERS.has(call)) {
 				return ' __bounded__ '
 			}
 			const name = /^\s*(\w+)\s*$/.exec(part.expression)?.[1]
@@ -406,6 +415,25 @@ function render(
 }
 
 type Finding = { path: string; line: number; read: string }
+
+// The function an interpolation is a single call of, or an identifier it is: its name when the expression is exactly
+// `name` or `name(arguments)` whose arguments hold no template and no `+`, so nothing else is joined to the call's
+// value. null for anything else.
+function singleCall(expression: string): string | null {
+	const match = /^\s*(\w+)\s*(\(([\s\S]*)\))?\s*$/.exec(expression)
+	if (match === null) {
+		return null
+	}
+	const args = match[3] ?? ''
+	let depth = 0
+	for (const c of args) {
+		depth += c === '(' ? 1 : c === ')' ? -1 : 0
+		if (depth < 0) {
+			return null
+		}
+	}
+	return depth === 0 && !/[`+]/.test(args) ? match[1]! : null
+}
 
 // Builders an interpolation in a result list may name without a finding: each yields a predicate, a number, ids, or a
 // value it bounds itself (cutSql); none passes a bounded column through. Any other interpolation there is a finding,
@@ -435,7 +463,7 @@ const SAFE_INTERPOLATIONS = new Set([
 ])
 
 // SQL keywords that mark a string as SQL when it is concatenated.
-const SQL_TEXT = /\b(?:SELECT|FROM|WHERE|RETURNING|INSERT|UPDATE)\b/
+const SQL_TEXT = /\b(?:SELECT|FROM|WHERE|RETURNING|INSERT|UPDATE)\b/i
 
 // Raw reads of bounded columns, interpolations a result list cannot resolve (`interpolation <expression>`), SQL built
 // by concatenation (`concatenated SQL`), and helper calls whose argument names a column the helper does not bound.
@@ -482,7 +510,7 @@ export function scan(all: readonly Source[]): { reads: Finding[]; misuses: Findi
 				for (const read of boundedReads(sql)) {
 					const opaque = /^unresolved:(\d+)$/.exec(read)
 					const expression = opaque === null ? null : (exprs[Number(opaque[1])] ?? '')
-					if (expression !== null && SAFE_INTERPOLATIONS.has(/^\w+/.exec(expression)?.[0] ?? '')) {
+					if (expression !== null && SAFE_INTERPOLATIONS.has(singleCall(expression) ?? '')) {
 						continue
 					}
 					reads.push({ path, line, read: expression === null ? read : `interpolation ${expression}` })
@@ -659,6 +687,13 @@ describe('the source scanner', () => {
 			"interpolation c('s.content')",
 		],
 		['concatenated SQL', "db.all('SELECT s.content ' + 'FROM statuses s')", 'concatenated SQL'],
+		['lower-case concatenated SQL', "db.all('select s.content ' + 'from statuses s')", 'concatenated SQL'],
+		[
+			'a helper call with more joined to it',
+			"db.all(`SELECT ${contentSql('s.content') + ', s.source_text'} FROM statuses s`)",
+			"interpolation contentSql('s.content') + ', s.source_text'",
+		],
+		['quoted identifiers', 'db.all(`SELECT "s"."content" FROM statuses AS "s"`)', 'statuses.content'],
 		['a column passed as a property', "read.select(db, { columns: { text: 's.content' } })", 'column s.content'],
 		[
 			'a constant of raw columns',
