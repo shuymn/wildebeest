@@ -94,6 +94,17 @@ function storedKey(row: KeyRow): StoredKey {
 	return { privkey: new Uint8Array(row.privkey), salt: new Uint8Array(row.privkey_salt), pubkey: row.pubkey }
 }
 
+// The wrapped key of the local account `accountId`, for an activity its own request has signed in the Worker (a
+// revoke's stamp Delete, DATA-1: unwrapped there, per call).
+export function accountKey(db: Db, accountId: string): StoredKey | null {
+	const row = db.first<KeyRow>(
+		`SELECT a.username, l.privkey, l.privkey_salt, l.pubkey FROM accounts a JOIN local_accounts l ON l.account_id = a.id
+		WHERE a.id = ?`,
+		accountId
+	)
+	return row === undefined ? null : storedKey(row)
+}
+
 export const getLocalKey = readOperation<{ username: string }, StoredKey | null>((db, { username }) => {
 	const row = db.first<KeyRow>(`SELECT a.username, l.privkey, l.privkey_salt, l.pubkey ${LOCAL_BY_USERNAME}`, username)
 	return row === undefined ? null : storedKey(row)

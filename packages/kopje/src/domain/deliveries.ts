@@ -113,6 +113,17 @@ function supersededTypes(type: unknown): string[] {
 	}
 }
 
+// The stamp an Accept of a QuoteRequest grants, or null for any other activity.
+function quoteStampOf(activity: Activity): string | null {
+	const object = activity.object
+	return typeof object === 'object' &&
+		object !== null &&
+		(object as { type?: unknown }).type === 'QuoteRequest' &&
+		typeof activity.result === 'string'
+		? activity.result
+		: null
+}
+
 // The local object an activity is about, and whether it retracts it (outboundKind in audience.ts).
 // retracts: the activity withdraws work already sent, so it supersedes what it names and admission never refuses it.
 // A Reject withdraws only when it ends a follow we had accepted (withdraws); a Reject of a request never accepted (a
@@ -120,12 +131,15 @@ function supersededTypes(type: unknown): string[] {
 function subjectOf(activity: Activity, withdraws: boolean): { object: string | null; retracts: boolean } {
 	const retracts = outboundKind(activity, withdraws) === 'retraction'
 	switch (activity.type) {
+		// An Accept of a QuoteRequest is about the stamp it grants (its result), so the stamp's Delete supersedes it
+		// while it waits; any other Accept, a Follow's, is about what it accepts.
+		case 'Accept':
+			return { object: quoteStampOf(activity) ?? idOf(activity.object), retracts }
 		case 'Create':
 		case 'Update':
 		case 'Delete':
 		case 'Undo':
 		case 'Reject':
-		case 'Accept':
 			return { object: idOf(activity.object), retracts }
 		// An Add or Remove is about its object in its collection (a featured hashtag, by its href when it has no id), so a
 		// later one about the same pair supersedes it.
@@ -156,8 +170,22 @@ export function isDeliverableInbox(value: string | null): value is string {
 
 export type DeliveryAudience = { followers: boolean; accounts: string[]; pollVoters?: string }
 
+// The audience of another status an activity also reaches (reachOf), resolved under that status's owner: its local
+// author, whose receipts and earlier activities about `object` hold the inboxes that received it.
+export type ReachOf = { owner: string; object: string; audience: DeliveryAudience }
+
 // What an intent records: the activity, its audience, and, for the one activity the instance actor signs, signedBy.
-export type DeliveryEnvelope = { activity: Activity; audience: DeliveryAudience; signedBy?: 'instance' }
+// immutable: every destination receives the activity as recorded, byte for byte (a body signed by its author, whose
+// proof an edit would break); a would-be personal copy goes to its recipient's personal inbox unedited. reachOf: the
+// audiences of other statuses it reaches too (a stamp's Delete reaches the quoted and the quoting status's), only
+// selecting inboxes: the signer, its lanes and the subject stay the envelope's own.
+export type DeliveryEnvelope = {
+	activity: Activity
+	audience: DeliveryAudience
+	signedBy?: 'instance'
+	immutable?: true
+	reachOf?: ReachOf[]
+}
 
 // The targets an activity goes to (NET-2), from the stored audience only, for the recipients the policy gives it
 // (recipientsFor in audience.ts):
@@ -179,7 +207,7 @@ export function audienceTargets(
 	audience: DeliveryAudience,
 	withdraws = false
 ): Target[] {
-	return targetsOf(db, signerId, activity, audience, withdraws).targets
+	return targetsOf(db, signerId, activity, audience, withdraws, []).targets
 }
 
 // The targets, and the inboxes among them that are a poll's voters (pollVoters), which hold the status already: they
@@ -189,7 +217,8 @@ function targetsOf(
 	signerId: string,
 	activity: Activity,
 	audience: DeliveryAudience,
-	withdraws: boolean
+	withdraws: boolean,
+	reachOf: readonly ReachOf[]
 ): { targets: Target[]; voters: Set<string> } {
 	// Neutral copies by inbox; personal copies by recipient, kept apart so one never replaces the other.
 	const neutral = new Set<string>()
@@ -203,25 +232,34 @@ function targetsOf(
 			neutral.add(inbox)
 		}
 	}
-	const recipients = recipientsFor(db, signerId, activity, audience, withdraws)
-	for (const inbox of [...recipients.followerInboxes, ...recipients.voterInboxes]) {
-		add(inbox, null)
-	}
 	const named = new Set([...uris(activity.to), ...uris(activity.cc)])
 	const addressedActivity = Array.isArray(activity.to)
-	for (const account of recipients.accounts) {
-		if (named.has(account.uri)) {
-			add(account.shared_inbox_url ?? account.inbox_url, null)
-		} else {
-			add(
-				addressedActivity ? account.inbox_url : (account.shared_inbox_url ?? account.inbox_url),
-				addressedActivity ? account.uri : null
-			)
+	const reach = (recipients: ReturnType<typeof recipientsFor>) => {
+		for (const inbox of [...recipients.followerInboxes, ...recipients.voterInboxes]) {
+			add(inbox, null)
+		}
+		for (const account of recipients.accounts) {
+			if (named.has(account.uri)) {
+				add(account.shared_inbox_url ?? account.inbox_url, null)
+			} else {
+				add(
+					addressedActivity ? account.inbox_url : (account.shared_inbox_url ?? account.inbox_url),
+					addressedActivity ? account.uri : null
+				)
+			}
 		}
 	}
+	const recipients = recipientsFor(db, signerId, activity, audience, withdraws)
+	reach(recipients)
 	const { object, retracts } = subjectOf(activity, withdraws)
 	if (retracts && object !== null) {
 		for (const inbox of receiversOf(db, signerId, object)) {
+			add(inbox, null)
+		}
+	}
+	for (const other of reachOf) {
+		reach(recipientsFor(db, other.owner, activity, other.audience, withdraws))
+		for (const inbox of receiversOf(db, other.owner, other.object)) {
 			add(inbox, null)
 		}
 	}
@@ -276,7 +314,14 @@ export function enqueueActivity(
 	now: number,
 	options: { withdraws?: boolean } = {}
 ): void {
-	const { targets, voters } = targetsOf(db, signerId, envelope.activity, envelope.audience, options.withdraws === true)
+	const { targets, voters } = targetsOf(
+		db,
+		signerId,
+		envelope.activity,
+		envelope.audience,
+		options.withdraws === true,
+		envelope.reachOf ?? []
+	)
 	const { object, retracts } = subjectOf(envelope.activity, options.withdraws === true)
 	const types = supersededTypes(envelope.activity.type)
 	if (object !== null && (retracts || types.length > 0)) {
@@ -813,9 +858,10 @@ function giveUp(db: Db, row: LaneRow, now: number, status: number | null, error:
 	promoteLane(db, row.account_id, row.lane, now)
 }
 
-// The activity as sent to one row: a personal copy adds its addressee to to, and to the object's to.
-function bodyFor(activity: string, addressee: string | null): string {
-	if (addressee === null) {
+// The activity as sent to one row: a personal copy adds its addressee to to, and to the object's to, unless the
+// activity is immutable.
+function bodyFor(activity: string, addressee: string | null, immutable: boolean): string {
+	if (addressee === null || immutable) {
 		return activity
 	}
 	const parsed = JSON.parse(activity) as Activity
@@ -852,10 +898,10 @@ const REFUSED_SENDER = `EXISTS (SELECT 1 FROM local_accounts l
 function claimedActivity(
 	db: Db,
 	row: LaneRow
-): { activity: string; signed_by: string | null; refused: number } | undefined {
-	return db.first<{ activity: string; signed_by: string | null; refused: number }>(
+): { activity: string; signed_by: string | null; immutable: number | null; refused: number } | undefined {
+	return db.first<{ activity: string; signed_by: string | null; immutable: number | null; refused: number }>(
 		`SELECT json_extract(o.body, '$.activity') AS activity, json_extract(o.body, '$.signedBy') AS signed_by,
-			${REFUSED_SENDER} AS refused
+			json_extract(o.body, '$.immutable') AS immutable, ${REFUSED_SENDER} AS refused
 		FROM outbound_activities o WHERE o.id = CAST(?2 AS INTEGER)`,
 		row.account_id,
 		row.activity_id
@@ -904,7 +950,7 @@ export const claimDeliveries = writeOperation<{ now: number; leaseToken: string;
 				inbox: row.inbox_url,
 				signer: body?.signed_by === 'instance' ? INSTANCE_SIGNER : row.account_id,
 				activityId: row.activity_id,
-				body: bodyFor(body?.activity ?? '{}', row.addressee),
+				body: bodyFor(body?.activity ?? '{}', row.addressee, body?.immutable === 1),
 			})
 		}
 		const signers: Record<string, DeliverySigner> = {}

@@ -30,7 +30,7 @@ import type { Db } from '../db/sql'
 // (group_key, which v1 shows too); notification-groups.ts reads them.
 
 export type NotificationType =
-	'mention' | 'status' | 'reblog' | 'favourite' | 'follow' | 'follow_request' | 'update' | 'poll'
+	'mention' | 'status' | 'reblog' | 'favourite' | 'follow' | 'follow_request' | 'update' | 'poll' | 'quote'
 
 export type Notification = {
 	id: string
@@ -120,7 +120,7 @@ export function notify(db: Db, input: NotifyInput): void {
 	)
 	for (const { id } of inserted) {
 		if (filtered) {
-			if (input.type === 'mention' && input.statusId !== null) {
+			if ((input.type === 'mention' || input.type === 'quote') && input.statusId !== null) {
 				openRequest(db, input.recipientId, input.fromId, input.statusId, now)
 			}
 			continue

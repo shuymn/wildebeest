@@ -17,6 +17,8 @@ import { API_VISIBILITIES, type ApiVisibility, QUOTE_POLICY_NAMES, type QuotePol
 import { checkPoll, isPollInput, type PollInput } from '../domain/polls'
 import { exceedsRawLength, statusLength } from '../domain/status-text'
 import { type Acted, MAX_STATUSES_BY_ID, type MediaAttributes, TOO_MANY_FILES, type Viewed } from '../domain/statuses'
+import { signAsAuthor } from '../federation/ld-sign'
+import { readConfig, userKek } from '../platform/config'
 import { sha256Hex } from '../security/tokens'
 
 // /api/v1/statuses (B4a): posting, editing, deleting, the per-status reads, favourite, reblog and bookmark, pins and
@@ -461,6 +463,44 @@ export const statusQuotes: ApiHandler = async (c, deps) => {
 		return viewedResponse(c, result)
 	}
 	return pageResponse(c, result.value, page.limit, result.value.candidates)
+}
+
+// Prepare-and-record rounds one revoke takes at most: another round only when the quote was accepted again between
+// its preparation and its recording (a QuoteRequest answered meanwhile), which a client cannot cause in a loop.
+const REVOKE_ROUNDS = 3
+
+// POST /api/v1/statuses/:id/quotes/:quoting_status_id/revoke (QuotesController#revoke). The stamp Delete is LD-signed
+// here, once, with the author's key, before the Store records it with the revoke in one transaction, which first
+// checks the quote still holds the authorization signed for (statuses.ts revokeQuote).
+export const revokeQuote: ApiHandler = async (c, deps) => {
+	const credential = userCredential(c, deps)
+	const target = { id: statusId(c), quotingId: c.req.param('quoting_status_id') ?? '' }
+	const config = readConfig(c.env)
+	const kek = config.ok ? userKek(config.config) : ''
+	for (let round = 0; round < REVOKE_ROUNDS; round++) {
+		const prepared = authorized(await storeCall(c, deps, (s, b) => s.prepareRevoke(b, { credential, ...target })))
+		if (prepared.status !== 'ok') {
+			return viewedResponse(c, prepared)
+		}
+		const { authorization, sign } = prepared.value
+		const signed = sign === null ? null : await signAsAuthor(kek, sign)
+		const result = authorized(
+			await storeCall(c, deps, (s, b) =>
+				s.revokeQuote(b, {
+					credential,
+					...target,
+					expected: authorization,
+					signed,
+					now: deps.now(),
+					present: present(c),
+				})
+			)
+		)
+		if (result.status !== 'stale') {
+			return viewedResponse(c, result)
+		}
+	}
+	return mastodonError(503, 'The quote changed while it was being revoked; try again')
 }
 
 export const favouritedBy = interactors('favourited_by')

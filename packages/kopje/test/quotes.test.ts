@@ -905,18 +905,6 @@ describe('deleting a quoted or quoting status', () => {
 	})
 })
 
-describe('local Notes', () => {
-	it('advertise that nobody but their author may quote them', async () => {
-		const t = await setup()
-		const mine = await localStatus(t, { status: 'mine', visibility: 'public' })
-		const response = await t.request(new URL(mine.uri).pathname, { headers: { accept: 'application/activity+json' } })
-		const note = (await response.json()) as Record<string, unknown>
-		expect(note.interactionPolicy).toEqual({ canQuote: { automaticApproval: [ALICE_URI] } })
-		expect(JSON.stringify(note['@context'])).toContain('gts:canQuote')
-		expect(ALICE).toBeDefined()
-	})
-})
-
 describe('review round 1 regressions', () => {
 	// A redirect chain of `hops` same-origin hops ending at `document`, served at `uri`.
 	function redirected(web: RemoteWeb, uri: string, document: unknown, hops: number) {

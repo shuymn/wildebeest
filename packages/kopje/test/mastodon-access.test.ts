@@ -102,6 +102,13 @@ const EXCEPTIONS: Record<string, Exception> = {
 			'unresolved (Pundit policy: authorize @status, :show?): required token, scopes read read:statuses, no user required',
 		reason: "visibility is the Store's (Mastodon: Pundit StatusPolicy#show?, unresolved)",
 	},
+	'POST /api/v1/statuses/:id/quotes/:quoting_status_id/revoke': {
+		kopje: 'required token, scopes write write:statuses, user required',
+		mastodon:
+			'unresolved (Pundit policy: authorize @quote, :revoke?; authorize @status, :show?): required token, scopes write write:statuses, no user required',
+		reason:
+			'only the quoted author may revoke (QuotePolicy#revoke?), and a token without a user is nobody’s; Kopje refuses it at the route',
+	},
 	'PUT /api/v1/statuses/:id/interaction_policy': {
 		kopje: 'required token, scopes write write:statuses, user required',
 		mastodon:

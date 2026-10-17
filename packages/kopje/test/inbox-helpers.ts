@@ -23,11 +23,33 @@ export class RemoteWeb {
 	readonly signers: string[] = []
 	// URLs answered only to a fetch signed with the given keyId (403 otherwise), as a followers-only object is.
 	readonly signedOnly = new Map<string, string>()
+	// URLs whose next fetch waits at a gate (hold): a deterministic interleaving point, never a timer.
+	readonly #held = new Map<string, { reached: () => void; gate: Promise<void> }[]>()
 
-	readonly fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+	// The next fetch of `url` not held yet stops before it is answered: `reached` resolves when it arrives, and it is
+	// answered as served when `release` is called. Each call holds one more fetch, in order.
+	hold(url: string): { reached: Promise<void>; release: () => void } {
+		let reached!: () => void
+		let release!: () => void
+		const arrived = new Promise<void>((resolve) => (reached = resolve))
+		const gate = new Promise<void>((resolve) => (release = resolve))
+		this.#held.set(url, [...(this.#held.get(url) ?? []), { reached, gate }])
+		return { reached: arrived, release }
+	}
+
+	readonly fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 		const request = input instanceof Request ? input : new Request(input, init)
 		const url = new URL(request.url)
 		url.hash = ''
+		const held = this.#held.get(url.href)?.shift()
+		if (held !== undefined) {
+			held.reached()
+			await held.gate
+		}
+		return this.answer(request, url)
+	}) as typeof fetch
+
+	private answer(request: Request, url: URL): Promise<Response> {
 		this.fetched.push(url.href)
 		const signer = /keyId="([^"]+)"/.exec(request.headers.get('signature') ?? '')?.[1] ?? 'unsigned'
 		this.signers.push(signer)
@@ -51,7 +73,7 @@ export class RemoteWeb {
 		return served.delayMs === undefined
 			? Promise.resolve(response)
 			: new Promise<Response>((resolve) => setTimeout(() => resolve(response), served.delayMs))
-	}) as typeof fetch
+	}
 
 	get loader() {
 		return { fetch: this.fetch, checkHost: () => Promise.resolve() }

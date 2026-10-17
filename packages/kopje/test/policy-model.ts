@@ -53,6 +53,7 @@ export const NOTIFICATION_TYPES = [
 	'follow_request',
 	'update',
 	'poll',
+	'quote',
 ] as const satisfies readonly NotificationType[]
 const EVERY_TYPE: Exclude<NotificationType, (typeof NOTIFICATION_TYPES)[number]> extends never ? true : false = true
 void EVERY_TYPE
