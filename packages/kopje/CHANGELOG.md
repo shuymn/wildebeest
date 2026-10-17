@@ -57,21 +57,21 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   (the status keeps its link to the original), a content warning cut, at most 4 attachments with longer URLs as none and
   descriptions cut at 10,000 characters, and an actor or status URI past its bound as empty. The largest presented
   shapes are listed in RES-3 of [docs/threat-model.md](docs/threat-model.md).
-- A status presents at most 70 hashtags, the first by name; its content still links every one, and up to 100 are
-  still stored. A conversation presents at most 12 participants, the first in stored order. Mastodon presents all of
-  them. A status stored with more mentions or hashtags than it presents, or with hidden attachments, costs no more to
-  read than one at those counts. A hashtag longer than 256 characters is still recorded, but is not presented, and a
-  post whose such hashtag sorts before more than 70 others presents one fewer.
-- Every URL an account or attachment presents is within 2,048 characters, derived or stored: an account's profile URL
-  falls back from its stored URL to one derived from its actor id or from this instance, and is empty when none fits.
-- A remote account's username is held to Mastodon's remote format, as before; one stored otherwise (converted at an
-  earlier cutover), or holding a NUL, is shown cut at 42 characters.
+- A status presents at most 70 hashtags, the first by name, of the up to 100 it stores, and its content links every one.
+  A conversation presents at most 12 participants, the first in stored order. Mastodon presents all of them. Reading a
+  status costs no more for the mentions and hashtags it stores beyond those it presents, or for hidden attachments. A
+  hashtag longer than 256 characters is recorded but not presented, so a post whose such hashtag sorts before more than
+  70 others presents 69.
+- A presented profile or attachment URL stays within 2,048 characters once normalized or derived: an account's profile
+  URL falls back from its stored URL to one derived from its actor id or from this instance, and is empty when none
+  fits.
+- A remote account's username follows Mastodon's remote format; a stored one outside it (converted at a cutover), or
+  holding a NUL, is shown cut at 42 characters.
 - `kopje-admin convert` and `verify-conversion` apply the same bounds to status content, content warnings and source
   text, of current and earlier versions, counting each cut as a truncation that `--accept-truncation` accepts. They
   refuse a remote actor id longer than 2,048 bytes as written or as a serialized URL, a status or boost URI longer than
-  4,096 bytes, and a remote
-  username outside Mastodon's remote format, and the conversion counts an earlier version's attachment that is shown
-  cut (`edits:media-field-over-bound`).
+  4,096 bytes, and a remote username outside Mastodon's remote format, and the conversion counts an earlier version's
+  attachment that is shown cut (`edits:media-field-over-bound`).
 
 ### Instance changes
 
