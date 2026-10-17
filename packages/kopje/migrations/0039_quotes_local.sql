@@ -1,8 +1,7 @@
 -- Kopje Store schema 0039: quotes written by local users. Never edit after release (checksummed).
 --
--- Mastodon 4.5 lets a user quote a status (PostStatusService#attach_quote!): a quote of a local status is accepted at
--- once by the author's policy, a quote of a remote one waits for the quoted author's Accept of the QuoteRequest sent to
--- them. Kopje does the same (src/domain/quotes.ts, docs/threat-model.md VIS-28):
+-- Mastodon 4.5 quote authoring (PostStatusService#attach_quote!): src/domain/quotes.ts; lifecycle rules:
+-- docs/threat-model.md VIS-28.
 --
 --   quotes.local               1 for the quote of a local quoting status, 0 for a received one. A local row is never
 --                              verified by a job round (it has no work): only Kopje's posting, the quoted author's

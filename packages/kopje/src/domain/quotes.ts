@@ -239,10 +239,9 @@ export function refreshQuote(
 	}
 }
 
-// A stored status arrived again as a root: its pending quote gets the full work budget again and is due now, with this
-// arrival's fetch identity when it has one. An arrival of a status stored for verification (fewer hops) promotes
-// nothing, and neither does one whose quote is of a local status (no work, as in recordQuote), nor a local quoting
-// status's (a local user resolving its uri: no round decides it, Concurrency (PR 3) row 17).
+// A root re-arrival renews a pending quote's full budget and due time, using its fetch identity when present.
+// Verification arrivals (fewer hops) promote nothing, nor do quotes of local statuses (no work: recordQuote) or local
+// quoting statuses (no round decides them: test/quote-authoring.test.ts concurrency row 17).
 export function promoteQuote(db: Db, statusId: string, arrival: QuoteArrival, now: number): void {
 	if (arrival.hops < QUOTE_HOPS) {
 		return
@@ -818,7 +817,7 @@ export const MAX_RECHECKED = 100
 // again, their state unchanged until then, so a stamp that is gone revokes or rejects them. Replays coalesce:
 //   - the accepted quote that a stamp accepted (one at most: a valid stamp names exactly one quoting status; a
 //     self-quote, accepted without one, may name the stamp too and is passed over, and so is a local quote, which only
-//     its quoted author's answers decide: Concurrency (PR 3) row 17) is renewed when idle (due now,
+//     its quoted author's answers decide: VIS-28, quote-authoring concurrency row 17) is renewed when idle (due now,
 //     attempts reset, a new generation), left as it is when due or backing off (its next fetch is fresh anyway), and
 //     marked when a round has leased it;
 //   - a pending quote is marked only when a round has leased it (its first stamp fetch is in flight), matched by the
@@ -1233,7 +1232,7 @@ export function answeredRequests(
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// Authoring: quotes by local users (design §5.6, Concurrency (PR 3))
+// Authoring: quotes by local users (design §5.6, VIS-28; rows: test/quote-authoring.test.ts concurrency table)
 // ---------------------------------------------------------------------------------------------------------------
 //
 // A local quoting row (local = 1) is decided only by the post that writes it, the quoted author's answer (an Accept or
@@ -1278,9 +1277,8 @@ export function recordLocalQuote(
 	return state
 }
 
-// What a local status's Note says of its quote (activities.ts noteOf): the quoted status's uri while it is there
-// (null once it is gone: a Tombstone), and the stamp while the quote is accepted: Kopje's own for a local quoted status
-// by someone else, the quoted author's (approval_uri) for a remote one.
+// Note quote fields (activities.ts noteOf): quotedUri is null for a deleted target (Tombstone); only accepted quotes
+// carry a stamp, Kopje's for another local author's status or approval_uri for a remote status.
 export type NoteQuote = { quotedUri: string | null; stamp: string | null }
 
 export function noteQuote(db: Db, statusId: string): NoteQuote | null {
@@ -1356,10 +1354,9 @@ function answeredQuote(db: Db, actor: { id: string }, ref: QuoteAnswerRef): Answ
 	)
 }
 
-// The Update of a local quoting status whose quote's stamp changed (Mastodon's StatusUpdateDistributionWorker after an
-// Accept): its Note as of this commit, with no history entry and edited_at unchanged, so receivers apply it as an
-// implicit update and verify the stamp it carries, or its absence, again. Its id is random (never a clock), and it
-// supersedes the earlier waiting Updates of the status (deliveries.ts).
+// Mastodon's StatusUpdateDistributionWorker after Accept: snapshot the Note without history or an edited_at change,
+// so receivers treat it as implicit and recheck the stamp or its absence. Use a random id, never a clock; supersede
+// waiting Updates (deliveries.ts).
 function recordStampUpdate(db: Db, statusId: string, authorId: string, now: number): void {
 	const facts = statusFacts(db, statusId)
 	if (facts !== null) {
@@ -1371,8 +1368,7 @@ function recordStampUpdate(db: Db, statusId: string, authorId: string, now: numb
 // row's quoted_account_id, cleared by a detach, row 15), with a result on the actor's origin that the actor never
 // revoked nor retracted (rows 8, the same checks as verification), on a pending quote, and only when no other local
 // quote holds that stamp of the actor (quotes_local_stamp, row 9: the update is ignored on the unique index). Then the
-// quoting status's Update carries the stamp. Anything else changes nothing: an Accept repeated, late, or after a
-// Reject. Returns whether it applied.
+// quoting status's Update carries the stamp. Returns whether it applied.
 export function acceptOurQuote(
 	db: Db,
 	actor: { id: string; uri: string },
@@ -1408,11 +1404,10 @@ export function acceptOurQuote(
 	return true
 }
 
-// Mastodon's Reject of our QuoteRequest (Quote#reject!), one compare-and-set: pending becomes rejected and accepted
-// revoked, with the quoting status's Update without the stamp (it supersedes a waiting Update that still carries it).
-// The Reject records nothing in quote_revocations: only the author's Delete of the stamp does, so that Delete still
-// runs the batches of the received quotes naming it. The stamp stays on the revoked row until that Delete's forward, so
-// no other local quote can take it meanwhile (row 9); after the forward, the Delete's own record refuses it (row 8).
+// Mastodon's Quote#reject!: compare-and-set pending to rejected or accepted to revoked; the latter sends an Update
+// without the stamp, superseding waiting Updates that carry it. Only the author's stamp Delete writes
+// quote_revocations, so it still runs revocation batches for received quotes. Keep the stamp until that Delete is
+// forwarded: uniqueness prevents reuse before forwarding (row 9), and the Delete's record afterwards (row 8).
 // Returns whether it applied.
 export function rejectOurQuote(db: Db, actor: { id: string }, ref: QuoteAnswerRef, now: number): boolean {
 	const quote = answeredQuote(db, actor, ref)

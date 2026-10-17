@@ -326,8 +326,8 @@ export function enqueueActivity(
 	)
 	const { voters } = found
 	let targets = found.targets
-	// An immutable activity's personal copy is the neutral one, byte for byte: an inbox that gets the first needs no
-	// second (a quoting status's receipt at its silent recipient's personal inbox, for a forwarded stamp Delete).
+	// An immutable activity's personal copy is the neutral one, byte for byte: one delivery per inbox suffices
+	// (quotes.ts revokeLocalStamp).
 	if (envelope.immutable === true) {
 		const personal = new Set(targets.filter((t) => t.addressee !== null).map((t) => t.inbox))
 		targets = targets.filter((t) => t.addressee !== null || !personal.has(t.inbox))
@@ -610,12 +610,10 @@ function insertIntent(
 	}
 }
 
-// The servers (lane origins) known to have the object: a receipt at any of their inboxes (a delivered Create). A
-// Create still leased does not count: it may give up, and an operator's retry of it later would bring an older
-// version; a server it reaches gets the pair as well, ignores
-// the Create it already holds and applies the Update. A server may hold the object without being known to (it fetched
-// it to boost or quote it), so this decides only what may be left out. A server is the unit, as one that holds the
-// object from its shared inbox applies an Update sent to a personal inbox, but ignores a Create.
+// Servers (lane origins) with a delivered Create receipt at any inbox. A leased Create does not count: it may give
+// up, and an operator's later retry could deliver an older version; send the Create/Update pair even if it succeeds.
+// A server may already hold an object it fetched to boost or quote, so this set only controls omissions. Origins are
+// the unit: an Update at a personal inbox applies after a Create at the shared inbox; another Create is ignored.
 function serversWithObject(db: Db, signerId: string, object: string): Set<string> {
 	const receipts = db.all<{ inbox_url: string }>(
 		`SELECT r.inbox_url FROM outbound_receipts r JOIN statuses s ON s.id = r.status_id

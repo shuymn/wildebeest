@@ -156,10 +156,10 @@ against their own instance. TLS is assumed between all parties.
   is never accepted from outside. A quoted Note embedded in a status is taken only when it is that status's author's
   own (its `attributedTo` the author, its id on the author's origin), with one hop less of work. `revokeStamp` and `completeQuote` in `src/domain/quotes.ts`; `test/quotes.test.ts`
   ("is not taken from anyone but the quoted author", "leaves a quote pending when its stamp is …", "wins over a quote
-  that arrives after it"). For a local user's quote of a remote status, the `Accept` and `Reject` of our QuoteRequest
-  (rows of the same table): only the quoted author (the quote's `quoted_account_id`), naming our request by id or
-  inlining it with our quoting status as its instrument and the actor's status as its object; an `Accept`'s `result`
-  must be on the actor's origin; `test/quote-authoring.test.ts` ("7: Accept and Reject are each one compare-and-set").
+  that arrives after it"). For locally authored quotes of remote statuses, `Accept`/`Reject` must come from the quoted
+  author and name our request by id or inline it with our quoting status as instrument and their status as object.
+  An `Accept`'s `result` must share their origin; `test/quote-authoring.test.ts` ("7: Accept and Reject are each one
+  compare-and-set").
 - **ID-7: replay changes nothing twice.** A repeated activity creates no second relationship, counter change,
   notification, push or outbound intent (natural keys). A valid `Delete` or `Undo` that arrives before its target is
   recorded for 30 days and prevents the target from appearing later. Input that fails ID-1 or ID-6 reserves no key and

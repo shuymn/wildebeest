@@ -196,8 +196,7 @@ type Composed = {
 // uri, which the text may link instead.
 type QuoteLink = { url: string; uri: string }
 
-// `quoted`: the status the post quotes, while it is there; its RE: line comes first unless the text links it already
-// (a text that is empty but for a quote is the line alone).
+// `quoted`: the status the post quotes, while it is there (fallback line: status-text.ts quoteFallbackHtml, linksAny).
 function compose(db: Db, text: string, author: Author, origin: string, quoted: QuoteLink | null = null): Composed {
 	const parsed = parseStatusText(text)
 	const localHost = new URL(author.uri).host
@@ -375,11 +374,9 @@ export type Prepared =
 export const QUOTED_USER_NOT_MENTIONED =
 	'Validation failed: Cannot quote a non-mentioned user in a Private Mention post.'
 
-// PostStatusService's checks of a post, before anything is written: the raw bound, the status replied to, the status
-// quoted (R36), the media, a direct quote's mention and a blank text (a quote stands for text). `scheduledId` is the
-// scheduled status being published, whose media it attaches (null: none). R36 is decided here, in the transaction that
-// writes the post, for an immediate post, a scheduled one when it is scheduled, and its publication alike (design,
-// Concurrency (PR 3) row 1).
+// PostStatusService's checks, before any write, including the raw bound; a quote permits blank text. `scheduledId` is
+// the scheduled status being published, whose media it attaches (null: none). R36 is checked in the writing
+// transaction at posting, scheduling and publication (test/quote-authoring.test.ts concurrency table, row 1).
 export function preparePost(db: Db, accountId: string, input: PostInput, scheduledId: string | null): Prepared {
 	if (exceedsRawLength(input.text, input.spoilerText)) {
 		return { status: 'invalid', error: TOO_LONG }
@@ -423,9 +420,8 @@ export function preparePost(db: Db, accountId: string, input: PostInput, schedul
 	return { author, parent, media, visibility, quoted }
 }
 
-// StatusesController's before_actions, set_thread then set_quoted_status, which answer their 404 before anything the
-// create action validates: whether the status replied to and the status quoted are found for the viewer. Read for that
-// precedence only; the post decides both again in its own transaction (preparePost), which alone is authoritative.
+// StatusesController#set_thread then #set_quoted_status return 404 before create validation. This read preserves
+// error precedence only; preparePost rechecks both in the writing transaction and alone authorizes.
 export const postTargets = userReadOperation<
 	{ inReplyToId?: string; quotedStatusId?: string },
 	'ok' | 'reply_not_found' | 'quote_not_found'
@@ -565,10 +561,8 @@ export function writePost(
 	return id
 }
 
-// PostStatusService#attach_quote!: the quote row (quotes.ts recordLocalQuote: a local quoted status accepted at once,
-// a remote one pending its author's answer), the quoted author as a silent recipient (Quote#ensure_quoted_access: they
-// may always see the quote of their status, and a private one reaches them), and, for an accepted quote of someone
-// else's status, its `quote` notification (FanOutOnWriteService#notify_quoted_account!).
+// PostStatusService#attach_quote!: the row (quotes.ts recordLocalQuote), silent access (ensureQuotedAccess), and for
+// an accepted quote of someone else's status its `quote` notification (FanOutOnWriteService#notify_quoted_account!).
 function writeQuote(
 	db: Db,
 	quoting: { id: string; uri: string; authorId: string },
@@ -920,9 +914,8 @@ export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db
 	return status()
 })
 
-// FanOutOnWriteService#notify_about_update!'s quoted_update: the local authors of the quotes of `quotedId` accepted at
-// this edit's commit (quotes.ts quotedUpdates: at most MAX_QUOTED_UPDATES, newest first), each about their own quoting
-// status, from the quoted author. A later one replaces the earlier (notify); one accepted after the edit gets none.
+// FanOutOnWriteService#notify_about_update!'s quoted_update: each local quoter (quotes.ts quotedUpdates) about their
+// own quoting status, from the quoted author; a later one replaces the earlier (notify).
 export function notifyQuotedUpdate(db: Db, quotedId: string, fromId: string, now: number): void {
 	for (const quote of quotedUpdates(db, quotedId)) {
 		notify(db, { recipientId: quote.account_id, type: 'quoted_update', fromId, statusId: quote.status_id, now })

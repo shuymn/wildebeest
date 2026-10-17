@@ -52,7 +52,6 @@ const INTERACTION_POLICY = {
 	quoteAuthorization: { '@id': 'https://w3id.org/fep/044f#quoteAuthorization', '@type': '@id' },
 } as const
 
-// The context of a status: its interaction policy's and its quote's terms.
 const NOTE_CONTEXT = [AS_CONTEXT, { sensitive: 'as:sensitive', Hashtag: 'as:Hashtag', ...INTERACTION_POLICY }] as const
 
 // The context of a status carrying a poll: Mastodon's votersCount extension too.
@@ -115,7 +114,6 @@ export type StatusFacts = {
 	reached: string[]
 	// statuses.quote_policy, Mastodon's flags (audience.ts QUOTE_POLICY_FLAGS).
 	quotePolicy: number
-	// The status's quote, when it quotes one (quotes.ts noteQuote).
 	quote: NoteQuote | null
 	tags: { name: string; href: string }[]
 	media: { url: string; content_type: string | null; description: string }[]
@@ -631,10 +629,9 @@ export type QuoteRequestRef = {
 	instrumentUri: string
 }
 
-// A local user's request to quote a remote status (Mastodon's QuoteRequestSerializer): to the quoted author alone,
-// with the quoting Note inlined. Its id is the quoting status's own, so an Accept or Reject names it; its delivery
-// subject is that id (deliveries.ts subjectOf), so neither an edit's Update nor the status's Delete drops it while it
-// waits (design, Concurrency (PR 3) row 5).
+// Mastodon's QuoteRequestSerializer: only to the quoted author, with the quoting Note inlined. Its id
+// (quoteRequestUri), which an Accept or Reject names, is also its delivery subject (deliveries.ts subjectOf), so an
+// edit or the status's Delete cannot drop it while it waits (test/quote-authoring.test.ts concurrency table, row 5).
 export function quoteRequestActivity(facts: StatusFacts, quoted: { uri: string; authorId: string }): OutboundEnvelope {
 	const [as, terms] = contextOf(facts)
 	return {

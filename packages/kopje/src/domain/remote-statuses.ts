@@ -198,9 +198,9 @@ export function followersUri(db: Db, accountId: string): string | null {
 // following collections (as its stored actor document names them), the author itself (which means nobody, so it adds
 // nothing), and anything else unsupported_policy; automatic in the high 16 bits. A Note that states no policy is 0,
 // nobody, as Mastodon stores it. Stored at a status's first store and on every Update of it (explicit or implicit),
-// never from a Create of a status already stored, so a replayed Create cannot bring an older policy back (design,
-// Concurrency (PR 3) row 2). Advisory (FEP-044f): it decides only whether a local user may ask (R36); the quoted
-// author's answer decides the quote.
+// never from a Create of a status already stored, so a replayed Create cannot bring an older policy back
+// (test/quote-authoring.test.ts concurrency table, row 2). Advisory (FEP-044f): it decides only whether a local user
+// may ask (R36); the quoted author's answer decides the quote.
 export function remoteQuotePolicy(db: Db, author: Author, policy: RemoteQuotePolicyInput | null | undefined): number {
 	if (policy === null || policy === undefined) {
 		return 0

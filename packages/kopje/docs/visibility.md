@@ -270,14 +270,12 @@ stricter than Mastodon, which answers by the policy alone, so a client never off
 Notes advertise the automatic half (`interactionPolicy.canQuote`); that is advisory to receivers (FEP-044f), and only
 the quoted author's answer approves a quote (VIS-28).
 
-A local user's quote (`quoted_status_id` on `POST /api/v1/statuses`, and on a scheduled status at its publication) is
-decided by R36 in the transaction that writes the post (`preparePost` in `src/domain/statuses.ts`); a refusal is
-Mastodon's 404, so a status the poster may not see is never confirmed. The quoted author becomes a silent recipient of
-the quoting status, so they may always see a quote of their status and a private one reaches them. A quote of a local
-status is accepted at once; one of a remote status stays `pending` until its author's `Accept`. Quoting one's own
-private status makes the quote private, and a direct quote of someone else's status must mention its author. The
-quoting status's quote is shown to every viewer by R35 like any other: its stored state, and the quoted status only
-when the viewer may see it by itself.
+A local quote (`quoted_status_id` on `POST /api/v1/statuses`, rechecked at scheduled publication) is authorized by
+R36 in the writing transaction (`preparePost` in `src/domain/statuses.ts`). Refusal returns Mastodon's 404 without
+confirming an invisible status. The quoted author is a silent recipient who can always see the quote, including a
+private one. Local targets are accepted immediately; remote targets wait for their author's `Accept` (VIS-28).
+Quoting one's own private status makes the quote private; a direct quote of another author's status must mention them.
+R35 shows the stored state to every viewer and embeds the target only when the viewer may see it independently.
 
 The domain term of R2 applies only to a remote viewer, as Mastodon's `author_blocking_domain?` does: whether the viewer
 is remote does not depend on the status, so SQLite evaluates it once per query (one row for a local viewer, none for
