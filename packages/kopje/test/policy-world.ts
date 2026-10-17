@@ -59,6 +59,9 @@ type WorldAccount = {
 	local: boolean
 	// A local account's suspension, or the instance's suspension of a remote account (R38: accounts.suspended_at).
 	suspended: boolean
+	// Remote accounts only: a domain mark (R38: suspension_source 'domain'), current or left from a lifted block. The
+	// model never reads it: availability reads the blocks live (instanceBlocks), and only the admin's lists read marks.
+	domainMarked?: boolean
 	// Remote accounts only: its deletion has started (accounts.deleted_at), and its purge has removed nothing yet.
 	deleting: boolean
 	// hide_collections: a local account's setting, or what Kopje learned of a remote account's.
@@ -285,6 +288,9 @@ export const worldArb: fc.Arbitrary<World> = fc
 				deleting: raw.deleting !== null && raw.deleting % raw.remotes.length === i,
 				// Drawn from bits already drawn, as tagFollowers below: about one remote account in four.
 				hidesCollections: raw.follows[LOCALS + i]?.showReblogs === true && raw.follows[LOCALS + i]?.notify === true,
+				// Drawn from bits already drawn, as above: about one remote account in four.
+				domainMarked:
+					raw.follows[LOCALS + i + 6]?.accepted === true && raw.follows[LOCALS + i + 6]?.showReblogs === true,
 				domain: remote.domain,
 				uri: `https://${actorHost(remote.host, remote.domain)}/users/r${i}`,
 			})
@@ -476,8 +482,8 @@ export function writeWorld(sql: SqlStorage, world: World): void {
 			account.deleting ? '2026-01-01T00:00:00.000Z' : null,
 			// A remote account Kopje has not learned of hides nothing, as one that shows its network.
 			account.local || !account.hidesCollections ? null : 1,
-			!account.local && account.suspended ? '2026-01-01T00:00:00.000Z' : null,
-			!account.local && account.suspended ? 'account' : null
+			!account.local && (account.suspended || account.domainMarked === true) ? '2026-01-01T00:00:00.000Z' : null,
+			account.local ? null : account.suspended ? 'account' : account.domainMarked === true ? 'domain' : null
 		)
 		if (account.local) {
 			sql.exec(

@@ -1,5 +1,11 @@
 import { followUri } from './activities'
-import { domainCoveredSql, individuallySuspendedSql, SUSPEND_BLOCKS_SQL } from './audience'
+import {
+	domainCoveredSql,
+	domainMarkedSql,
+	individuallySuspendedSql,
+	SUSPEND_BLOCKS_SQL,
+	suspendedSql,
+} from './audience'
 import type { Admin } from './auth'
 import { severFollow } from './blocks'
 import { EXPANSION_STEP, supersedeEarlier } from './deliveries'
@@ -191,9 +197,7 @@ function holds(db: Db, job: RemoteJob): boolean {
 		return true
 	}
 	const condition =
-		job.mode === 'account'
-			? individuallySuspendedSql('a')
-			: `a.suspended_at IS NOT NULL AND a.suspension_source = 'domain' AND ${domainCoveredSql('a')}`
+		job.mode === 'account' ? individuallySuspendedSql('a') : `${domainMarkedSql('a')} AND ${domainCoveredSql('a')}`
 	return db.first(`SELECT 1 AS x FROM accounts a WHERE a.id = ? AND ${condition}`, job.subject) !== undefined
 }
 
@@ -358,7 +362,7 @@ function clearRound(db: Db, job: RemoteJob): void {
 	const rows = db.all<{ id: string; stale: number }>(
 		`SELECT a.id, (a.suspension_source = 'domain' AND NOT ${domainCoveredSql('a')}) AS stale
 		FROM accounts a INDEXED BY accounts_suspended
-		WHERE a.suspended_at IS NOT NULL AND a.id > ?1 ORDER BY a.id LIMIT ?2`,
+		WHERE ${suspendedSql('a')} AND a.id > ?1 ORDER BY a.id LIMIT ?2`,
 		job.cursor,
 		CLEAR_ROUND
 	)
@@ -410,7 +414,7 @@ function markRound(db: Db, job: RemoteJob, now: number): boolean {
 		MARK_WINDOW - 1
 	)?.id
 	const covered = db.all<{ id: string; marked: number }>(
-		`SELECT a.id, a.suspended_at IS NOT NULL AS marked FROM accounts a
+		`SELECT a.id, ${suspendedSql('a')} AS marked FROM accounts a
 		WHERE a.id > ?1 AND a.id <= coalesce(?2, char(58)) AND ${severableSql('a')} ORDER BY a.id LIMIT ?3`,
 		at.after,
 		end ?? null,
@@ -423,7 +427,7 @@ function markRound(db: Db, job: RemoteJob, now: number): boolean {
 		}
 		if (account.marked === 0) {
 			db.run(
-				"UPDATE accounts SET suspended_at = ?, suspension_source = 'domain' WHERE id = ? AND suspended_at IS NULL",
+				`UPDATE accounts SET suspended_at = ?, suspension_source = 'domain' WHERE id = ? AND NOT ${suspendedSql('accounts')}`,
 				iso(now),
 				account.id
 			)

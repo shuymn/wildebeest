@@ -150,6 +150,12 @@ export function individuallySuspendedSql(a: string): string {
 	return `(${a}.suspended_at IS NOT NULL AND ${a}.suspension_source = 'account')`
 }
 
+// R38: the remote account `a` is held by a domain mark (suspension_source 'domain'), which the domain job and the
+// conversion write (remote-suspension.ts) and only the admin's lists and those jobs read: availability never does.
+export function domainMarkedSql(a: string): string {
+	return `(${a}.suspended_at IS NOT NULL AND ${a}.suspension_source = 'domain')`
+}
+
 // Whether `owner` blocks the account `x`.
 export function blocksSql(owner: string, x: string): string {
 	return `EXISTS (SELECT 1 FROM main.blocks pb WHERE pb.account_id = ${owner} AND pb.target_account_id = ${x})`
