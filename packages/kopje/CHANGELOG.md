@@ -10,12 +10,11 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Added
 
-- Clients are shown the quote posts Kopje stores and verifies (0.1.0-rc.11), as Mastodon 4.5 shows them. A status
-  carries `quote` and `quotes_count` (its accepted quotes). Phanpy, Elk, Ice Cubes and the official iOS and Android
-  apps embed a quoted post (they render `quote` whatever the server's API version); Phanpy also still shows the `RE:`
-  line, which it hides only from API version 7. None of them offers a quote button yet: Kopje still declares API
-  version 6, and `quote_approval` tells every viewer they may not quote (below). Tusky shows the `RE:` line as before.
-  Remote posts keep their `quote-inline` class, so clients can hide that line.
+- Clients are shown the quote posts Kopje stores and verifies, as Mastodon 4.5 shows them. A status carries `quote`
+  and `quotes_count` (its accepted quotes). Phanpy, Elk, Ice Cubes and the official iOS and Android apps embed a quoted
+  post whatever the server's API version; Phanpy also shows the `RE:` line below API version 7. None of them offers a
+  quote button: Kopje declares API version 6, and `quote_approval` tells every viewer they may not quote (below). Tusky
+  shows the `RE:` line. Remote posts keep their `quote-inline` class, so clients can hide that line.
     - `quote` is `{state, quoted_status}`: the quoted post, presented for the same viewer (its own favourite and other
       flags, filters, media and poll), whose own `quote` is `{state, quoted_status_id}`, one level deep. A boost carries
       its original's quote in `reblog`. `state` is one of Mastodon's nine: `pending`, `rejected`, `revoked` and
@@ -54,22 +53,21 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
     - `POST /api/v1/statuses` takes `quote_approval_policy`: `public`, `followers` or `nobody`; none (or a blank one)
       is the account's default; any other value is answered 422 `Record invalid`, as Mastodon. A private or direct
       post always gets `nobody`. A scheduled post keeps the policy it was sent with, or the account's default when it
-      was scheduled, in its `params` (`quote_approval_policy`, until now always `nobody`), and is published with it.
+      was scheduled, in its `params` (`quote_approval_policy`), and is published with it.
     - `PUT /api/v1/statuses/:id` takes `quote_approval_policy` only when it is sent, as Mastodon 4.5.5. Where Kopje
-      differs: a change of the policy alone is not an edit (no history entry, no `edited_at`), as below.
+      differs: a change of the policy alone is not an edit (no history entry, no `edited_at`).
     - `PUT` and `PATCH /api/v1/statuses/:id/interaction_policy` (`write:statuses`) change the policy of one's own post
       (none sent is the account's default) and answer with the post: 404 for a post the caller may not see, 403 for
       someone else's, then 422 for another value. The official Android app's "Change quote policy" uses it. A change
       is sent to other servers as an update of the post; quotes already accepted stay, as on Mastodon.
     - `source[quote_policy]` on `PATCH /api/v1/accounts/update_credentials` sets the account's default (`public`
       until changed; another value is refused with 422), shown in `source` of `verify_credentials` and as
-      `posting:default:quote_policy` in `GET /api/v1/preferences`. The official iOS app's default quote policy
-      setting now keeps its value.
+      `posting:default:quote_policy` in `GET /api/v1/preferences`, as the official iOS app's default quote policy
+      setting uses it.
     - Every status carries `quote_approval`: the `automatic` and `manual` flags of its policy (`public`, `followers`,
       `following`, `unsupported_policy`, in Mastodon's order; a boost shows its original's), and `current_user`, which
-      is `denied` for every viewer while Kopje cannot post quotes itself, so no client (Elk among them) offers a quote
-      button. Posts written before the quote policies existed have `nobody`, and so does every remote post for now:
-      Kopje does not read other servers' policies yet.
+      is `denied` for every viewer while Kopje cannot post quotes itself. Posts written before the quote policies
+      existed have `nobody`, and so does every remote post: Kopje does not read other servers' policies.
 
 ### Changed
 
