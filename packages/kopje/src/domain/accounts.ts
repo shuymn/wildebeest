@@ -1,5 +1,6 @@
 import { followActivity, followAnswerActivity, followUri, recordOutbound, undoFollowActivity } from './activities'
 import { actorSnapshot, recordActorUpdate } from './actor-update'
+import { ANSWER_BYTES } from './answer-budget'
 import {
 	activeMuteJoinSql,
 	availableJoinedSql,
@@ -168,7 +169,7 @@ const FIELD_NAME_LIMIT = 255
 const FIELD_VALUE_RAW_LIMIT = 4096
 // The most UTF-8 bytes of field JSON one account carries: read from SQLite (REMOTE_ATTACHMENT_SQL) and, again, shown
 // (remoteFields). An answer of N presented accounts thus carries at most N × 32 KiB of fields; an answer of many
-// (a list's members with limit=0, familiar followers) at most ACCOUNT_ANSWER_BYTES in all.
+// (a list's members with limit=0, familiar followers) at most ANSWER_BYTES in all.
 export const REMOTE_FIELDS_BYTES = 32 * 1024
 
 // A remote account's attachment as ACCOUNT_COLUMNS projects it, chosen and cut in SQL so that the stored actor
@@ -218,12 +219,10 @@ export { DISPLAY_NAME_LIMIT, PROFILE_URL_LIMIT, profileUrlSql, USERNAME_LIMIT, u
 
 export const ACCOUNT_FROM = 'accounts a LEFT JOIN local_accounts l ON l.account_id = a.id'
 
-// RES-3: the UTF-8 bytes of one answer of many accounts (a list's members and endorsements with limit=0, familiar
-// followers), as serialized, the JSON around the accounts reserved first, so it bounds the whole response body
-// (only an answer's first account, itself bounded per account by RES-2, may stand alone past it). A Mastodon user's
-// account serializes to about 2 KiB, so 1,000 take a quarter of it; one at Misskey's profile limits to about 8 KiB
-// (test/account-answer-bytes.test.ts measures both).
-export const ACCOUNT_ANSWER_BYTES = 8 * 1024 * 1024
+// An answer of many accounts (a list's members and endorsements with limit=0, familiar followers) is within
+// ANSWER_BYTES, the JSON around the accounts reserved first (only its first account, bounded by RES-2, may stand
+// alone past it). A Mastodon user's account serializes to about 2 KiB, so 1,000 take a quarter of it; one at
+// Misskey's profile limits to about 8 KiB (test/account-answer-bytes.test.ts measures both).
 // Accounts read per query while an answer is filled: what is read past the budget is at most one chunk of accounts
 // at their bound (RES-2), about 6 MB.
 const ANSWER_CHUNK = 50
@@ -707,7 +706,7 @@ export const relationships = userReadOperation<{ ids: string[] }, Relationship[]
 // for an accepted follow of the account through the unique pair index (CROSS JOIN keeps SQLite to that order), so
 // the work never grows with the account's other followers and a match is never pushed out by them. At most
 // MAX_FAMILIAR_FOLLOWERS are shown, newest follow of the account first, while the answer's accounts fit
-// ACCOUNT_ANSWER_BYTES, shared among the requested accounts that have followers to show (sharedAnswer); past it,
+// ANSWER_BYTES, shared among the requested accounts that have followers to show (sharedAnswer); past it,
 // fewer are shown (Mastodon's answer has no paging).
 export const MAX_FAMILIAR_FOLLOWERS_IDS = 20
 // Above Mastodon's default follow limit (7,500), which Kopje does not enforce: a match past the viewer's first 10,000
@@ -761,7 +760,7 @@ export const familiarFollowers = userReadOperation<{ ids: string[]; present: Pre
 			db,
 			entries.map((entry) => entry.followers),
 			present,
-			ACCOUNT_ANSWER_BYTES - frame
+			ANSWER_BYTES - frame
 		)
 		return entries.map((entry, i) => ({ id: entry.id, accounts: shown[i] ?? [] }))
 	}
@@ -1134,7 +1133,7 @@ export function edgeRangeSql(column: string, max: string, min: string): string {
 }
 
 // A page of a list. `cut`: the read stopped at its candidate window (windows.ts) before the page filled, or an answer
-// without a page stopped at ACCOUNT_ANSWER_BYTES, so the next link is offered however few items it holds.
+// without a page stopped at ANSWER_BYTES, so the next link is offered however few items it holds.
 export type Page<T> = { items: T[]; newest: string | null; oldest: string | null; cut?: boolean }
 
 export type ListFollowsInput = {

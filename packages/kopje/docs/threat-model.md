@@ -1340,7 +1340,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `favourited_by`, `reblogged_by`) select ids for their window and read the profiles of the page only
   (`test/account-answer-bytes.test.ts`, `test/admin-accounts.test.ts`). _Enforced (main)_ for answers of many accounts
   (a list's members and endorsements with `limit=0`, familiar followers): the whole response body is at most
-  `ACCOUNT_ANSWER_BYTES` (8 MiB), its own JSON reserved first, only an answer's first account standing alone past it;
+  `ANSWER_BYTES` (8 MiB, `src/domain/answer-budget.ts`), its own JSON reserved first, only an answer's first account standing alone past it;
   accounts are read in chunks of 50 that stop once it is reached, so at most one chunk (about 6 MB) is read past it. A
   `limit=0` answer cut there links `next` to the rest with `max_id`, a deliberate deviation (Mastodon ignores `max_id`
   with `limit=0`). Familiar followers share the bytes among the requested accounts with followers to show, in rounds

@@ -80,7 +80,7 @@ export const deleteList: ApiHandler = async (c, deps) => {
 
 // Lists::AccountsController pages 40 accounts by default and at most 80 (pageQuery's defaults); limit=0 answers every
 // member at once, without Link headers (Lists::AccountsController#unlimited?). Kopje's limit=0 answer stops at
-// MAX_LIST_MEMBERS_ANSWERED members and ACCOUNT_ANSWER_BYTES (8 MiB, RES-3); one cut by the bytes links next to the
+// MAX_LIST_MEMBERS_ANSWERED members and ANSWER_BYTES (8 MiB, RES-3); one cut by the bytes links next to the
 // rest, read by limit=0 with max_id, which Mastodon ignores there (unlimitedResponse).
 export const listAccounts: ApiHandler = async (c, deps) => {
 	const p = await requestParams(c, deps)
