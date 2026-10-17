@@ -126,6 +126,8 @@ const NOT_CONVERTED: Record<string, string> = {
 	'local_accounts.hide_collections': 'legacy has no setting to hide the network: every account shows it',
 	'local_accounts.suspended_at': 'legacy has no suspension',
 	'local_accounts.credential_epoch': 'the credential epoch a suspension in Kopje moves; legacy has no suspension',
+	'local_accounts.default_quote_policy':
+		"legacy has no quote policy setting: a carried account gets Mastodon's default",
 	'media_attachments.focus_x': 'legacy has no focal point',
 	'media_attachments.focus_y': 'legacy has no focal point',
 	'media_attachments.gc_at': 'converted media is kept: attached, or a profile or earlier-version image',
@@ -138,6 +140,8 @@ const NOT_CONVERTED: Record<string, string> = {
 	'status_edits.id': ASSIGNED,
 	'status_edits.poll_options': 'legacy has no polls',
 	'statuses.quotes_count': 'counts accepted quotes, which legacy has none of',
+	'statuses.quote_policy':
+		'legacy has no quote policies: a carried status stays unquotable, as 0037_quote_policy leaves it',
 	'statuses.thread': 'written by the trigger statuses_thread and given again by backfillConversations (DERIVED)',
 	'statuses.withdrawn': 'marks an Undo Kopje recorded; legacy has none',
 }
@@ -182,6 +186,7 @@ const NOT_VERIFIED: Record<string, string> = {
 	'local_accounts.hide_collections': DEFAULT,
 	'local_accounts.suspended_at': DEFAULT,
 	'local_accounts.credential_epoch': DEFAULT,
+	'local_accounts.default_quote_policy': DEFAULT,
 	'media_attachments.created_at': TIME,
 	'media_attachments.focus_x': DEFAULT,
 	'media_attachments.focus_y': DEFAULT,
@@ -206,6 +211,7 @@ const NOT_VERIFIED: Record<string, string> = {
 	'statuses.in_reply_to_account_id': 'derived from the reply links and authors, which are compared',
 	'statuses.reblogs_count': COUNTER,
 	'statuses.quotes_count': DEFAULT,
+	'statuses.quote_policy': DEFAULT,
 	'statuses.remote_version': 'remote: published_at, or edited_at when edited; local: NULL',
 	'statuses.replies_count': COUNTER,
 	'statuses.search_text': SEARCH,

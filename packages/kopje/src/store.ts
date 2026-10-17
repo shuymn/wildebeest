@@ -1123,6 +1123,10 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, statuses.editStatus, input)
 	}
 
+	updateInteractionPolicy(callerBuild: string, input: OperationInput<typeof statuses.updateInteractionPolicy>) {
+		return this.#kernel.execute(callerBuild, statuses.updateInteractionPolicy, input)
+	}
+
 	deleteStatus(callerBuild: string, input: OperationInput<typeof statuses.deleteStatus>) {
 		return this.#kernel.execute(callerBuild, statuses.deleteStatus, input)
 	}

@@ -102,6 +102,20 @@ const EXCEPTIONS: Record<string, Exception> = {
 			'unresolved (Pundit policy: authorize @status, :show?): required token, scopes read read:statuses, no user required',
 		reason: "visibility is the Store's (Mastodon: Pundit StatusPolicy#show?, unresolved)",
 	},
+	'PUT /api/v1/statuses/:id/interaction_policy': {
+		kopje: 'required token, scopes write write:statuses, user required',
+		mastodon:
+			'unresolved (Pundit policy: authorize @status, :update?; authorize @status, :show?): required token, scopes write write:statuses, no user required',
+		reason:
+			'a token without a user owns no status, so StatusPolicy#update? refuses it there (403); Kopje refuses it at the route',
+	},
+	'PATCH /api/v1/statuses/:id/interaction_policy': {
+		kopje: 'required token, scopes write write:statuses, user required',
+		mastodon:
+			'unresolved (Pundit policy: authorize @status, :update?; authorize @status, :show?): required token, scopes write write:statuses, no user required',
+		reason:
+			'a token without a user owns no status, so StatusPolicy#update? refuses it there (403); Kopje refuses it at the route',
+	},
 	'GET /api/v1/accounts/relationships': {
 		kopje: 'required token, scopes follow read read:follows, user required',
 		mastodon: 'required token, scopes read read:follows, user required',

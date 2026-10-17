@@ -383,6 +383,18 @@ export const ROUTES: readonly Route[] = [
 	{ method: 'PUT', path: '/api/v1/statuses/:id', access: { scope: 'write:statuses' }, handler: statuses.editStatus },
 	{ method: 'PATCH', path: '/api/v1/statuses/:id', access: { scope: 'write:statuses' }, handler: statuses.editStatus },
 	{
+		method: 'PUT',
+		path: '/api/v1/statuses/:id/interaction_policy',
+		access: { scope: 'write:statuses' },
+		handler: statuses.updateInteractionPolicy,
+	},
+	{
+		method: 'PATCH',
+		path: '/api/v1/statuses/:id/interaction_policy',
+		access: { scope: 'write:statuses' },
+		handler: statuses.updateInteractionPolicy,
+	},
+	{
 		method: 'DELETE',
 		path: '/api/v1/statuses/:id',
 		access: { scope: 'write:statuses' },

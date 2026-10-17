@@ -1,5 +1,12 @@
 import type { Page, PageQuery } from './accounts'
-import { type ApiVisibility, API_VISIBILITIES, availableSql, scheduledOwnSql } from './audience'
+import {
+	type ApiVisibility,
+	API_VISIBILITIES,
+	availableSql,
+	QUOTE_POLICY_NAMES,
+	type QuotePolicyName,
+	scheduledOwnSql,
+} from './audience'
 import { userReadOperation, userWriteOperation } from './auth'
 import { allocateLocalId } from './ids'
 import { DETACHED_GRACE_MS } from './media'
@@ -41,8 +48,10 @@ export const MAX_PARAMS_BYTES = 128 * 1024
 export const PUBLISH_ROUND = 25
 
 // REST::ScheduledStatusSerializer's params: the post's options as PostStatusService#scheduled_options keeps them. Kopje
-// has no applications on statuses or quotes, so those are always null (and the quote policy nobody, as the serializer
-// answers for none). Ids are strings, and so is a poll's expires_in, as a form sends it.
+// has no applications on statuses and cannot author quotes, so those are always null. The quote policy is the one the
+// request chose, or the author's default when it chose none, resolved when the post is scheduled (as Mastodon's
+// controller resolves it), by name as the serializer shows it. Ids are strings, and so is a poll's expires_in, as a
+// form sends it.
 export type ScheduledParams = {
 	text: string
 	poll: ScheduledPoll | null
@@ -58,7 +67,7 @@ export type ScheduledParams = {
 	with_rate_limit: false
 	allowed_mentions: null
 	quoted_status_id: null
-	quote_approval_policy: 'nobody'
+	quote_approval_policy: QuotePolicyName
 }
 
 export type ScheduledPoll = { options: string[]; expires_in: string; multiple: boolean; hide_totals: boolean }
@@ -98,7 +107,7 @@ function ownScheduled(db: Db, viewerId: string, id: string): ScheduledRow | unde
 }
 
 // The params of a stored row, or null when they are not of the shape this module writes (a row restored from a dump
-// is only checked by the schema).
+// is only checked by the schema). A row without a quote policy has nobody, which this module wrote before it took one.
 function readParams(text: string): ScheduledParams | null {
 	const p = JSON.parse(text) as Record<string, unknown>
 	const optional = (value: unknown, type: string) => value === null || typeof value === type
@@ -110,8 +119,11 @@ function readParams(text: string): ScheduledParams | null {
 		optional(p.in_reply_to_id, 'string') &&
 		(p.visibility === null || API_VISIBILITIES.includes(p.visibility as ApiVisibility)) &&
 		(p.media_ids === null || (Array.isArray(p.media_ids) && p.media_ids.every((id) => typeof id === 'string'))) &&
-		(p.poll === null || p.poll === undefined || isScheduledPoll(p.poll))
-	return valid ? ({ ...p, poll: p.poll ?? null } as ScheduledParams) : null
+		(p.poll === null || p.poll === undefined || isScheduledPoll(p.poll)) &&
+		(p.quote_approval_policy === undefined || QUOTE_POLICY_NAMES.includes(p.quote_approval_policy as QuotePolicyName))
+	return valid
+		? ({ ...p, poll: p.poll ?? null, quote_approval_policy: p.quote_approval_policy ?? 'nobody' } as ScheduledParams)
+		: null
 }
 
 function isScheduledPoll(value: unknown): value is ScheduledPoll {
@@ -138,7 +150,12 @@ function pollParams(poll: PollInput | undefined): ScheduledPoll | null {
 			}
 }
 
-function paramsOf(input: PostInput, media: readonly string[], inReplyToId: string | null): ScheduledParams {
+function paramsOf(
+	input: PostInput,
+	media: readonly string[],
+	inReplyToId: string | null,
+	quotePolicy: QuotePolicyName
+): ScheduledParams {
 	return {
 		text: input.text,
 		poll: pollParams(input.poll),
@@ -154,13 +171,14 @@ function paramsOf(input: PostInput, media: readonly string[], inReplyToId: strin
 		with_rate_limit: false,
 		allowed_mentions: null,
 		quoted_status_id: null,
-		quote_approval_policy: 'nobody',
+		quote_approval_policy: quotePolicy,
 	}
 }
 
 // The post a scheduled status publishes, at the time it is published: the author's defaults (visibility, sensitive,
 // language) apply then, as PostStatusService applies them when the worker runs, and a poll is checked again and ends
-// its duration after the publication. null: a poll that no longer passes.
+// its duration after the publication. The quote policy was resolved when it was scheduled; a status published private
+// or direct gets nobody (storedQuotePolicy). null: a poll that no longer passes.
 function postOf(params: ScheduledParams, now: number): PostInput | null {
 	const poll =
 		params.poll === null
@@ -183,6 +201,7 @@ function postOf(params: ScheduledParams, now: number): PostInput | null {
 		inReplyToId: params.in_reply_to_id ?? undefined,
 		language: params.language ?? undefined,
 		mediaIds: params.media_ids ?? [],
+		quotePolicy: params.quote_approval_policy,
 		now,
 	}
 }
@@ -286,7 +305,14 @@ export const postStatus = userWriteOperation<ScheduleInput, ScheduleResult>((db,
 	if (errors.length > 0) {
 		return invalid(errors)
 	}
-	const params = JSON.stringify(paramsOf(input, prepared.media, prepared.parent?.id ?? null))
+	const params = JSON.stringify(
+		paramsOf(
+			input,
+			prepared.media,
+			prepared.parent?.id ?? null,
+			input.quotePolicy ?? prepared.author.default_quote_policy
+		)
+	)
 	if (new TextEncoder().encode(params).length > MAX_PARAMS_BYTES) {
 		return { status: 'invalid', error: 'Record invalid' }
 	}

@@ -126,7 +126,8 @@ describe('scheduling a status', () => {
 				with_rate_limit: false,
 				allowed_mentions: null,
 				quoted_status_id: null,
-				quote_approval_policy: 'nobody',
+				// None was sent: alice's default, resolved when it was scheduled.
+				quote_approval_policy: 'public',
 			},
 			media_attachments: [expect.objectContaining({ id: media, type: 'image' })],
 		})

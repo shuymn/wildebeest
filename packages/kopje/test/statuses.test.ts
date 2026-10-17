@@ -64,6 +64,7 @@ describe('POST /api/v1/statuses', () => {
 			tags: [],
 			emojis: [],
 			quote: null,
+			quote_approval: { automatic: ['public'], manual: [], current_user: 'denied' },
 			card: null,
 			poll: null,
 		})
