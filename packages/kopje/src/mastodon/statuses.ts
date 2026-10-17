@@ -17,8 +17,6 @@ import { API_VISIBILITIES, type ApiVisibility, QUOTE_POLICY_NAMES, type QuotePol
 import { checkPoll, isPollInput, type PollInput } from '../domain/polls'
 import { exceedsRawLength, statusLength } from '../domain/status-text'
 import { type Acted, MAX_STATUSES_BY_ID, type MediaAttributes, TOO_MANY_FILES, type Viewed } from '../domain/statuses'
-import { signAsAuthor } from '../federation/ld-sign'
-import { readConfig, userKek } from '../platform/config'
 import { sha256Hex } from '../security/tokens'
 
 // /api/v1/statuses (B4a): posting, editing, deleting, the per-status reads, favourite, reblog and bookmark, pins and
@@ -475,15 +473,16 @@ const REVOKE_ROUNDS = 3
 export const revokeQuote: ApiHandler = async (c, deps) => {
 	const credential = userCredential(c, deps)
 	const target = { id: statusId(c), quotingId: c.req.param('quoting_status_id') ?? '' }
-	const config = readConfig(c.env)
-	const kek = config.ok ? userKek(config.config) : ''
 	for (let round = 0; round < REVOKE_ROUNDS; round++) {
 		const prepared = authorized(await storeCall(c, deps, (s, b) => s.prepareRevoke(b, { credential, ...target })))
 		if (prepared.status !== 'ok') {
 			return viewedResponse(c, prepared)
 		}
 		const { authorization, sign } = prepared.value
-		const signed = sign === null ? null : await signAsAuthor(kek, sign)
+		if (sign !== null && deps.signAsAuthor === undefined) {
+			return mastodonError(503, 'Revocations cannot be signed here')
+		}
+		const signed = sign === null ? null : await deps.signAsAuthor!(c.env, sign)
 		const result = authorized(
 			await storeCall(c, deps, (s, b) =>
 				s.revokeQuote(b, {

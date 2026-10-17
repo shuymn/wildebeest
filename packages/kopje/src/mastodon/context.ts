@@ -4,6 +4,7 @@ import { HTTPException } from 'hono/http-exception'
 import { INVALID_TOKEN, invalidTokenError, mastodonError } from './errors'
 import { type Params, readParams } from './params'
 import type { Present } from '../domain/accounts'
+import type { StoredKey } from '../domain/actors'
 import type { AuthFailure, Authorized, Credential, UserCredential } from '../domain/auth'
 import type { Resolved } from '../domain/remote-statuses'
 import { webPushKeys } from '../platform/config'
@@ -24,7 +25,12 @@ export type ApiDeps = {
 	resolve?: (env: Env, query: string) => Promise<Resolved>
 	// Asks the Queue for a round of the Store's jobs (a resolved status's quote to verify); cron runs one regardless.
 	requestJobs?: (env: Env) => Promise<unknown>
+	// LD-signs an activity as a local author with their wrapped key (a revoke's stamp Delete, federation/ld-sign.ts);
+	// none: revokes that need a signature answer 503.
+	signAsAuthor?: (env: Env, sign: AuthorSignature) => Promise<Record<string, unknown>>
 }
+
+export type AuthorSignature = { activity: Record<string, unknown>; keyId: string; key: StoredKey }
 
 // The bearer token's digest and the scope the route declares, set by the access middleware (mastodon/access.ts) on
 // every API route: null on a public route. It is not validated there; the Store validates it in the operation.
