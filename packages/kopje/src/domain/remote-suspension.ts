@@ -222,8 +222,9 @@ type Severed = { follower: string; target: string; id: number; state: string; ur
 // a converted instance keeps legacy lists, of any number, so they are not bounded by lists.ts MAX_LISTS; read as the
 // trigger reads them, through the follower's lists), then the earlier activities that the activity ending it would
 // supersede (deliveries.ts supersedeEarlier, two rows each at most): for a remote follower's accepted follow with an
-// id, its Reject's, signed by the local target; for a local follower, its Undo's, signed by the follower. Returns whether all are done, so that its end costs at most
-// SEVER_ROWS; false when room ran out first, after writing at least one row whenever room() was positive.
+// id, its Reject's, signed by the local target; for a local follower, its Undo's, signed by the follower. Returns
+// whether all are done, so that its end costs at most SEVER_ROWS; false when room ran out first, after writing at
+// least one row whenever room() was positive.
 function prepared(db: Db, follow: Severed, room: () => number): boolean {
 	let left = room()
 	if (left <= 0) {
