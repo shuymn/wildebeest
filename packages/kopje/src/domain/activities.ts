@@ -102,7 +102,8 @@ export type StatusFacts = {
 	inReplyToUri: string | null
 	recipients: Recipient[]
 	// Remote accounts a distributable status reaches beyond its addressing: those that reblogged it, the author of the
-	// replied-to status, and the authors of its accepted quotes (audience.ts reachQuoters).
+	// replied-to status, and the authors of its accepted quotes (audience.ts reachQuoters); may repeat an account, which
+	// audienceOf deduplicates.
 	reached: string[]
 	// statuses.quote_policy, Mastodon's flags (audience.ts QUOTE_POLICY_FLAGS).
 	quotePolicy: number
@@ -193,20 +194,18 @@ export function statusFacts(db: Db, statusId: string, options: { reached?: boole
 	const reached =
 		options.reached !== false && isDistributable(row.visibility)
 			? [
-					...new Set([
-						...db
-							.all<{ id: string }>(
-								`SELECT r.account_id AS id FROM statuses r JOIN accounts a ON a.id = r.account_id
-								WHERE r.reblog_of_id = ?1 AND a.domain IS NOT NULL
-								UNION
-								SELECT p.account_id FROM statuses p JOIN accounts a ON a.id = p.account_id
-								WHERE p.id = ?2 AND a.domain IS NOT NULL`,
-								statusId,
-								row.in_reply_to_id
-							)
-							.map((r) => r.id),
-						...reachQuoters(db, statusId),
-					]),
+					...db
+						.all<{ id: string }>(
+							`SELECT r.account_id AS id FROM statuses r JOIN accounts a ON a.id = r.account_id
+							WHERE r.reblog_of_id = ?1 AND a.domain IS NOT NULL
+							UNION
+							SELECT p.account_id FROM statuses p JOIN accounts a ON a.id = p.account_id
+							WHERE p.id = ?2 AND a.domain IS NOT NULL`,
+							statusId,
+							row.in_reply_to_id
+						)
+						.map((r) => r.id),
+					...reachQuoters(db, statusId),
 				]
 			: []
 	const { host, origin } = new URL(row.actor_uri)
@@ -641,7 +640,10 @@ export function quoteAnswerActivity(
 // (app/lib/activitypub/activity/reject.rb:39, a NameError), so a revoke never inlines it. Recorded as a retraction
 // (withdraws): it withdraws an approval already sent, so admission never refuses it and a suspension does not drop it,
 // as the stamp's Delete it follows in the lane.
-export function revocationRejectActivity(authorUri: string, request: QuoteRequestRef): OutboundEnvelope {
+export function revocationRejectActivity(
+	authorUri: string,
+	request: Pick<QuoteRequestRef, 'id' | 'actorId'>
+): OutboundEnvelope {
 	return {
 		activity: {
 			'@context': QUOTE_REQUEST_CONTEXT,

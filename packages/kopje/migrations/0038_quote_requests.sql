@@ -11,12 +11,13 @@
 --                            the change, whatever the path (a revoke, a quoter's Update replacing or dropping the
 --                            quote, a detach, a delete, a purge). A recorded id is never served again.
 --   quotes.activity_uri      the QuoteRequest id that accepted the quote; NULL otherwise.
---   quote_requests           every QuoteRequest Kopje answered (Accept or Reject), kept apart from the quote row so that
---                            a later Update replacing the row cannot erase it: a request id found here is never answered
---                            again (ID-7). instrument_uri and quoted_status_id name the quote it was about, so a revoke
---                            sends a Reject of each request its author answered for that quote (a request names any
---                            instrument it likes, so only the quoting author's own count). Pruned by age (RETRACTION_TTL_MS,
---                            30 days) and capped per actor by refusal, never by evicting a live row (quotes.ts).
+--   quote_requests           every QuoteRequest Kopje answered (Accept or Reject), kept apart from the quote row so
+--                            that a later Update replacing the row cannot erase it: a request id found here is never
+--                            answered again (ID-7). instrument_uri and quoted_status_id name the quote it was about, so
+--                            a revoke sends a Reject of each request its author answered for that quote (a request
+--                            names any instrument it likes, so only the quoting author's own count). Pruned by age
+--                            (RETRACTION_TTL_MS, 30 days) and capped per actor by refusal, never by evicting a live row
+--                            (quotes.ts).
 --
 -- quote_revocations rows written here carry the quoted author's uri as actor_uri and pending 0: the revocation batches
 -- (pending 1) never see them, and an id of ours has no scheme, so it never equals a remote stamp's.

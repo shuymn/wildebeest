@@ -305,7 +305,7 @@ function receiversOf(db: Db, signerId: string, object: string): string[] {
 // Records the intent with its targets, and expands what the step allows. A retraction supersedes every earlier
 // activity about its object and drops the object's receipts (its own targets now hold that evidence); an Update
 // supersedes earlier Updates only. An Update of a status goes alone to servers known to have it (a receipt, a Create
-// or Update in flight before it in the lane, or its poll's voters); every other server gets a Create of the current
+// in flight before it in the lane, or its poll's voters); every other server gets a Create of the current
 // version and then the Update, in that order in its lane, which replace any Create or Update of the object still
 // waiting for it there. Whether such a server holds the status is never guessed: Mastodon and Misskey ignore a Create
 // of a status they hold (Create#create_status) and an Update of one they do not, so one of the pair applies either way,
@@ -627,7 +627,7 @@ function serversWithObject(db: Db, signerId: string, object: string): Set<string
 }
 
 // Drops the Creates and Updates of an object still waiting for these servers (queued, pending, given up, or not
-// expanded): the Create of the current version replaces them.
+// expanded): the pair of the current version's Create and the Update replaces them.
 function replaceWaiting(db: Db, signerId: string, object: string, lanes: Set<string>, now: number): void {
 	const earlier = db.all<{ id: string }>(
 		`SELECT CAST(id AS TEXT) AS id FROM outbound_activities
@@ -666,7 +666,8 @@ function replaceWaiting(db: Db, signerId: string, object: string, lanes: Set<str
 	}
 }
 
-// The Create a destination without the object gets instead of an Update: the current Note, under the Create's id.
+// The Create a destination not known to have the object gets before the Update: the current Note, under the Create's
+// id.
 function createOfCurrent(update: Activity): Activity {
 	const note = update.object as Activity
 	return {

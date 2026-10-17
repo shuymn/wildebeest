@@ -1717,6 +1717,7 @@ export const revokeQuote = userWriteOperation<RevokeInput, RevokeResult>((db, in
 		return own
 	}
 	const { quote, quoted, authorUri } = own
+	let state = quote.state
 	const revocable = quote.state === 'accepted' || quote.state === 'pending'
 	if (revocable && quote.authorizationId !== input.expected) {
 		return { status: 'stale' }
@@ -1734,7 +1735,7 @@ export const revokeQuote = userWriteOperation<RevokeInput, RevokeResult>((db, in
 		) {
 			return { status: 'invalid', error: 'The revocation could not be signed' }
 		}
-		revokeQuoteRow(db, input.quotingId, quoted, input.expected, input.now)
+		state = revokeQuoteRow(db, input.quotingId, quoted, input.expected, input.now) ?? state
 		if (signed !== null) {
 			const reach = [statusReach(db, quoted), statusReach(db, input.quotingId)].filter((r) => r !== null)
 			recordOutbound(
@@ -1753,19 +1754,12 @@ export const revokeQuote = userWriteOperation<RevokeInput, RevokeResult>((db, in
 			recordOutbound(
 				db,
 				accountId,
-				revocationRejectActivity(authorUri, {
-					id: request,
-					actorUri: quote.quotingAuthorUri,
-					actorId: quote.quotingAuthorId,
-					quotedUri: quote.quotedUri,
-					instrumentUri: quote.quotingUri,
-				}),
+				revocationRejectActivity(authorUri, { id: request, actorId: quote.quotingAuthorId }),
 				input.now,
 				{ withdraws: true }
 			)
 		}
 	}
-	const state = revocableQuote(db, quoted, input.quotingId)?.state ?? quote.state
 	const visible = viewableStatusId(db, accountId, input.quotingId)
 	const value =
 		visible === null

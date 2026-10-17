@@ -894,8 +894,8 @@ export function detachQuotes(db: Db, statusId: string, now: number): void {
 // Being quoted: QuoteRequests for local statuses, Kopje's stamps and their revocation (design §5.4, §5.5, VIS-28)
 // ---------------------------------------------------------------------------------------------------------------
 
-// Answered QuoteRequests one actor may have recorded at once (quote_requests, kept RETRACTION_TTL_MS). A request past it
-// is refused with a retry (503), never by evicting a live row, as canRetract caps retractions; it also bounds the
+// Answered QuoteRequests one actor may have recorded at once (quote_requests, kept RETRACTION_TTL_MS). A request past
+// it is refused with a retry (503), never by evicting a live row, as canRetract caps retractions; it also bounds the
 // Rejects one revoke sends (every request answered for the quote is the actor's).
 export const MAX_QUOTE_REQUESTS_PER_ACTOR = 100
 
@@ -919,22 +919,22 @@ export type QuoteRequestOutcome =
 	// them), so a Note addressed to them alone is served.
 	{ kind: 'need'; uri: string; as: string } | { kind: 'ignored'; reason: string } | { kind: 'answered'; reason: string }
 
-type QuotedTarget = { id: string; uri: string; account_id: string; author_uri: string; username: string }
+type QuotedTarget = {
+	id: string
+	uri: string
+	account_id: string
+	author_uri: string
+	username: string
+	allowed: number
+}
 
-// Mastodon's ActivityPub::Activity::QuoteRequest for a local status, answered entirely in this one transaction (the
-// inbox's final Store round; design, Concurrency: Defaults 1). The only fetch, the instrument, happens between rounds,
-// which write nothing: an earlier round returns `need` before any write. In order:
-//   - a request id already answered (quote_requests) is ignored (ID-7), and so is one whose object is not a local,
-//     available author's public or unlisted original: no answer, so none confirms that a private status exists;
-//   - R36 (mayQuoteSql) for the actor, read here at the final round, decides; a refusal answers a Reject;
-//   - otherwise the instrument must be stored or storable (inlined only as the actor's own object, else fetched), the
-//     actor's, and its stored quote must name this status (the stored row decides, never the fetched document); a
-//     quoting status being deleted (an open delete job) is ignored;
-//   - a quote already accepted is answered with its existing stamp, nothing else changing; any other is a transition
-//     into accepted with a fresh authorization id, the quoted author as a silent mention of the quoting status, an
-//     Accept and a `quote` notification. A revoked quote is accepted again by a later request, as in Mastodon, with a
-//     new id: the author's lasting tools are the policy and blocks, which R36 reads.
-// Every answered request id is recorded, at most MAX_QUOTE_REQUESTS_PER_ACTOR live ones per actor (RetryLater past it).
+// Mastodon's ActivityPub::Activity::QuoteRequest for a local status. Invariant: the answer is decided and written in
+// this one transaction, the inbox's final Store round, and an earlier round returns `need` (the instrument, the only
+// fetch) before any write (design, Concurrency: Defaults 1). R36 (mayQuoteSql) decides, read in that round; the stored
+// quote row, never the fetched document, says what the instrument quotes; only a transition into accepted draws an
+// authorization (VIS-28). Bounds: one answer per request id (ID-7), at most MAX_QUOTE_REQUESTS_PER_ACTOR live ones per
+// actor (RetryLater past it), one fetch. What is answered and what is ignored: docs/visibility.md (R36) and
+// docs/threat-model.md (VIS-28).
 export function answerQuoteRequest(
 	db: Db,
 	actor: { id: string; uri: string },
@@ -946,10 +946,11 @@ export function answerQuoteRequest(
 		return { kind: 'ignored', reason: 'duplicate' }
 	}
 	const quoted = db.first<QuotedTarget>(
-		`SELECT t.id, t.uri, t.account_id, a.uri AS author_uri, a.username
+		`SELECT t.id, t.uri, t.account_id, a.uri AS author_uri, a.username, ${mayQuoteSql('t', '?2')} AS allowed
 		FROM statuses t JOIN accounts a ON a.id = t.account_id JOIN local_accounts l ON l.account_id = a.id
-		WHERE t.uri = ? AND t.reblog_of_id IS NULL AND t.visibility IN ${DISTRIBUTABLE_SQL} AND ${availableLocalSql('l')}`,
-		request.object
+		WHERE t.uri = ?1 AND t.reblog_of_id IS NULL AND t.visibility IN ${DISTRIBUTABLE_SQL} AND ${availableLocalSql('l')}`,
+		request.object,
+		actor.id
 	)
 	if (quoted === undefined) {
 		return { kind: 'ignored', reason: 'unknown-object' }
@@ -971,10 +972,7 @@ export function answerQuoteRequest(
 		quotedUri: quoted.uri,
 		instrumentUri: request.instrument,
 	}
-	const allowed =
-		db.first(`SELECT 1 AS x FROM statuses t WHERE t.id = ?1 AND ${mayQuoteSql('t', '?2')}`, quoted.id, actor.id) !==
-		undefined
-	if (!allowed) {
+	if (quoted.allowed !== 1) {
 		recordAnswer(db, ref, quoted.id, now)
 		recordOutbound(db, quoted.account_id, quoteAnswerActivity('Reject', quoted.author_uri, ref), now)
 		return { kind: 'answered', reason: 'quote-rejected' }
@@ -1132,7 +1130,6 @@ export type RevocableQuote = {
 	quotingUri: string
 	quotingAuthorId: string
 	quotingAuthorUri: string
-	quotedUri: string
 }
 
 export function revocableQuote(db: Db, quotedId: string, quotingId: string): RevocableQuote | undefined {
@@ -1142,12 +1139,10 @@ export function revocableQuote(db: Db, quotedId: string, quotingId: string): Rev
 		quoting_uri: string
 		quoting_author_id: string
 		quoting_author_uri: string
-		quoted_uri: string
 	}>(
 		`SELECT q.state, q.authorization_id, s.uri AS quoting_uri, s.account_id AS quoting_author_id,
-			a.uri AS quoting_author_uri, t.uri AS quoted_uri
+			a.uri AS quoting_author_uri
 		FROM quotes q JOIN statuses s ON s.id = q.status_id JOIN accounts a ON a.id = s.account_id
-			JOIN statuses t ON t.id = q.quoted_status_id
 		WHERE q.status_id = ? AND q.quoted_status_id = ?`,
 		quotingId,
 		quotedId
@@ -1160,32 +1155,33 @@ export function revocableQuote(db: Db, quotedId: string, quotingId: string): Rev
 				quotingUri: row.quoting_uri,
 				quotingAuthorId: row.quoting_author_id,
 				quotingAuthorUri: row.quoting_author_uri,
-				quotedUri: row.quoted_uri,
 			}
 }
 
 // The revoke itself (Quote#reject!): accepted becomes revoked and pending rejected, only while the quote still holds
 // the authorization the caller prepared its signed Delete for (`expected`, null for none), so of two concurrent
-// revokes exactly one changes it. Clearing the authorization retires it (the trigger). Returns whether it changed.
+// revokes exactly one changes it. Clearing the authorization retires it (the trigger). Returns the new state, or null
+// when it changed nothing.
 export function revokeQuoteRow(
 	db: Db,
 	quotingId: string,
 	quotedId: string,
 	expected: string | null,
 	now: number
-): boolean {
+): QuoteState | null {
 	return (
-		db.run(
+		db.first<{ state: QuoteState }>(
 			`UPDATE quotes SET state = CASE state WHEN 'accepted' THEN 'revoked' ELSE 'rejected' END,
 				authorization_id = NULL, verify_after = NULL, lease_until = NULL, generation = ${NEW_GENERATION},
 				updated_at = ?4
 			WHERE status_id = ?1 AND quoted_status_id = ?2 AND state IN ('accepted', 'pending')
-				AND authorization_id IS ?3`,
+				AND authorization_id IS ?3
+			RETURNING state`,
 			quotingId,
 			quotedId,
 			expected,
 			iso(now)
-		) === 1
+		)?.state ?? null
 	)
 }
 

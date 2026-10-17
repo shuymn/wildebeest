@@ -1,4 +1,4 @@
-import { type DocumentLoader, preloadedContexts, verifyJsonLd } from '@fedify/fedify'
+import { type DocumentLoader, verifyJsonLd } from '@fedify/fedify'
 import { describe, expect, it } from 'vitest'
 
 import { sql } from './api-helpers'
@@ -9,6 +9,7 @@ import { LOCAL, mastodonActor, MASTODON, signedInit, type TestActor } from './in
 import {
 	ALICE,
 	ALICE_URI,
+	announce,
 	AS,
 	create,
 	DAVE,
@@ -23,6 +24,8 @@ import {
 	undo,
 	update,
 } from './inbox-status-helpers'
+import { contexts, quoting } from './quote-helpers'
+import { outbound } from './status-helpers'
 import { MAX_LANE_BACKLOG } from '../src/domain/deliveries'
 import { RETRACTION_TTL_MS } from '../src/domain/inbox'
 import { MAX_QUOTE_REQUESTS_PER_ACTOR } from '../src/domain/quotes'
@@ -30,24 +33,17 @@ import { signAsAuthor } from '../src/federation/ld-sign'
 import { deliveryRound } from '../src/jobs/deliver'
 import { sha256Hex } from '../src/security/tokens'
 
-// Being quoted (design §5.4, §5.5 and "Concurrency (PR 2)", VIS-28): remote servers' QuoteRequests for local statuses,
-// answered by R36 in the inbox's final Store round; Kopje's stamps; their revocation with an LD-signed Delete and the
-// Rejects of the requests answered; quoters' reach; Notes advertising the real policy. Interleavings use the remote
-// web's gates (RemoteWeb.hold) and gated delivery POSTs, never timers.
+// Being quoted (design §5.4, §5.5 and "Concurrency (PR 2)", VIS-28): remote servers' QuoteRequests for local
+// statuses, answered by R36 in the inbox's final Store round; Kopje's stamps; their revocation with an LD-signed Delete
+// and the Rejects of the requests answered; quoters' reach; Notes advertising the real policy. Interleavings use the
+// remote web's gates (RemoteWeb.hold) and gated delivery POSTs, never timers.
 
 const FEP = 'https://w3id.org/fep/044f#QuoteRequest'
 const PRESENT = { origin: LOCAL }
 
-const contexts: DocumentLoader = (url) => {
-	const document = (preloadedContexts as Record<string, unknown>)[url]
-	return document === undefined
-		? Promise.reject(new Error(`no context ${url}`))
-		: Promise.resolve({ document, documentUrl: url, contextUrl: null })
-}
-
-// bob's Note quoting `target` as Mastodon 4.5 writes it, served at its id.
+// `actor`'s Note quoting `target` (no stamp), served at its id.
 function quoteNote(t: Setup, actor: TestActor, target: string, extra: Record<string, unknown> = {}): Note {
-	const note = mastodonNote(actor, { quote: target, _misskey_quote: target, quoteUri: target, ...extra })
+	const note = quoting(actor, target, null, extra)
 	t.web.serve(note.id, { '@context': AS, ...note })
 	return note
 }
@@ -94,15 +90,8 @@ async function deliveries(t: Setup): Promise<Sent[]> {
 	)
 }
 
-// The activities recorded, by type, with their bodies.
 async function recorded(t: Setup, type: string): Promise<Record<string, unknown>[]> {
-	return (
-		await sql<{ body: string }>(
-			t.store,
-			"SELECT json_extract(body, '$.activity') AS body FROM outbound_activities WHERE json_extract(body, '$.activity.type') = ? ORDER BY id",
-			type
-		)
-	).map((row) => JSON.parse(row.body) as Record<string, unknown>)
+	return (await outbound(t.store)).map((row) => row.activity).filter((activity) => activity.type === type)
 }
 
 async function stamp(t: Setup, uri: string) {
@@ -219,8 +208,8 @@ function mastodonReceiver(current: string, activities: Record<string, unknown>[]
 }
 
 // What a Mastodon server holds of status `uri` after `activities`, in order: `held` its version before (V1, fetched),
-// or null for none. A Create of a status it has changes nothing (Create#create_status finds it) and stores one it lacks;
-// an Update replaces one it has and is ignored otherwise.
+// or null for none. A Create of a status it has changes nothing (Create#create_status finds it) and stores one it
+// lacks; an Update replaces one it has and is ignored otherwise.
 function holdsAfter(activities: Record<string, unknown>[], uri: string, held: string | null = 'V1'): string | null {
 	let content = held
 	for (const activity of activities) {
@@ -237,20 +226,6 @@ function holdsAfter(activities: Record<string, unknown>[], uri: string, held: st
 	return content
 }
 
-function announceOf(actor: TestActor, object: string) {
-	return {
-		'@context': AS,
-		id: `${actor.uri}/statuses/${nextId()}/activity`,
-		type: 'Announce',
-		actor: actor.uri,
-		published: '2026-10-11T13:00:00Z',
-		to: [`${AS}#Public`],
-		cc: [ALICE_URI],
-		object,
-	}
-}
-
-// alice's edit of her status `id` to `text`.
 async function edit(t: Setup, id: string, text: string) {
 	const response = await t.request(`/api/v1/statuses/${id}`, {
 		method: 'PUT',
@@ -413,10 +388,10 @@ describe('the silent mention of acceptance', () => {
 	})
 })
 
-describe('review regressions (r2)', () => {
+describe('federation of quotes: edits reach holders, grouped notifications, the fetching signer', () => {
 	it('reaches a booster’s server with an edit: it fetched the status to boost it', async () => {
 		const { t, bob, mine } = await world()
-		expect(await t.post(bob, announceOf(bob, mine.uri))).toBe(202)
+		expect(await t.post(bob, announce(bob, mine.uri, { cc: [ALICE_URI] }))).toBe(202)
 		await deliver(t)
 		await edit(t, mine.id, 'boosted, edited')
 		expect(holdsAfter(await sentTo(t, MASTODON), mine.uri)).toBe('<p>boosted, edited</p>')
@@ -424,7 +399,7 @@ describe('review regressions (r2)', () => {
 
 	it('reaches a former booster’s server with an edit: an undone boost leaves the status there', async () => {
 		const { t, bob, mine } = await world()
-		const boost = announceOf(bob, mine.uri)
+		const boost = announce(bob, mine.uri, { cc: [ALICE_URI] })
 		expect(await t.post(bob, boost)).toBe(202)
 		expect(await t.post(bob, undo(bob, boost))).toBe(202)
 		expect(await t.post(bob, follow(bob))).toBe(202)
@@ -524,7 +499,7 @@ describe('review regressions (r2)', () => {
 	})
 })
 
-describe('review regressions (r4)', () => {
+describe('receipts and signers: a given-up Create, operator retries, suspended accounts', () => {
 	// Delivery rounds where a Create fails for good (400) and everything else is taken (202); returns what was taken.
 	async function failingCreates(t: Setup): Promise<Record<string, unknown>[]> {
 		const taken: Record<string, unknown>[] = []
@@ -1227,7 +1202,7 @@ describe('the stamp endpoint (QuoteAuthorizationsController)', () => {
 	})
 })
 
-describe('review regressions', () => {
+describe('revoke Rejects bind the quoting author; the stamp hides during a purge', () => {
 	it('rejects on revoke only the quoting author’s requests: a third party naming the quote’s status changes nothing', async () => {
 		const { t, bob, mine } = await world()
 		const { note, request } = await accepted(t, bob, mine.uri)
