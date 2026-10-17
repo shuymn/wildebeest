@@ -90,12 +90,35 @@ export const getLocalActor = readOperation<{ username: string }, LocalActor | nu
 
 type KeyRow = { username: string; privkey: ArrayBuffer; privkey_salt: ArrayBuffer; pubkey: string }
 
-function storedKey(row: KeyRow): StoredKey {
+function storedKey(row: Omit<KeyRow, 'username'>): StoredKey {
 	return { privkey: new Uint8Array(row.privkey), salt: new Uint8Array(row.privkey_salt), pubkey: row.pubkey }
+}
+
+// The wrapped key of the local account `accountId`, for an activity its own request has signed in the Worker (a
+// revoke's stamp Delete, DATA-1: unwrapped there, per call).
+export function accountKey(db: Db, accountId: string): StoredKey | null {
+	const row = db.first<Omit<KeyRow, 'username'>>(
+		'SELECT privkey, privkey_salt, pubkey FROM local_accounts WHERE account_id = ?',
+		accountId
+	)
+	return row === undefined ? null : storedKey(row)
 }
 
 export const getLocalKey = readOperation<{ username: string }, StoredKey | null>((db, { username }) => {
 	const row = db.first<KeyRow>(`SELECT a.username, l.privkey, l.privkey_salt, l.pubkey ${LOCAL_BY_USERNAME}`, username)
+	return row === undefined ? null : storedKey(row)
+})
+
+// The key of a local account, by its exact username, that signs a fetch as itself (the recipient of a personal inbox, a
+// QuoteRequest's quoted author as Mastodon's on_behalf_of), read when it is loaded: only while the account is
+// available, so an account suspended or being deleted, before or after the request's round, never signs; null
+// otherwise, and the instance actor signs. Publishing its public key is getLocalKey's, which has no such check.
+export const getSigningKey = readOperation<{ username: string }, StoredKey | null>((db, { username }) => {
+	const row = db.first<KeyRow>(
+		`SELECT a.username, l.privkey, l.privkey_salt, l.pubkey FROM accounts a JOIN local_accounts l ON l.account_id = a.id
+		WHERE a.domain IS NULL AND a.username = ? AND ${availableLocalSql('l')}`,
+		username
+	)
 	return row === undefined ? null : storedKey(row)
 })
 

@@ -425,6 +425,12 @@ export const ROUTES: readonly Route[] = [
 		handler: statuses.statusQuotes,
 	},
 	{
+		method: 'POST',
+		path: '/api/v1/statuses/:id/quotes/:quoting_status_id/revoke',
+		access: { scope: 'write:statuses' },
+		handler: statuses.revokeQuote,
+	},
+	{
 		method: 'GET',
 		path: '/api/v1/statuses/:id/favourited_by',
 		access: { scope: 'read:accounts', optional: true },

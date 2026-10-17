@@ -20,13 +20,16 @@ import { readOperation, writeOperation } from './operation'
 import { deleteAccountVotes, deletePollVotes, hasPollVotes } from './polls'
 import { pushSequence } from './push'
 import {
+	answerQuoteRequest,
 	continueRevocations,
 	NEW_GENERATION,
 	promoteQuote,
 	quotesDue,
 	quoteArrival,
 	recheckStamp,
+	retireQuoteOf,
 	revokeStamp,
+	sweepQuoteRequests,
 } from './quotes'
 import {
 	actorCollections,
@@ -80,6 +83,10 @@ import { hostDomain } from '../platform/domain-name'
 //                neither an actor, a status nor a boost, so of a stamp at most; with the actor's own proof
 //                (RsaSignature2017 or FEP-8b32, federation/author-proof.ts) applied as the actor's revocation, without
 //                one only a reason to verify the accepted quote naming it again (relayedDelete; test/quotes.test.ts)
+//   QuoteRequest the object is a local original of an available author, public or unlisted (else no answer); the
+//                actor may quote it (R36, mayQuoteSql, else a Reject); the instrument is the actor's own status, on its
+//                origin, and its stored quote names the object (else no answer); one answer per request id
+//                (quotes.ts answerQuoteRequest; test/quote-requests.test.ts)
 //   Create       the object has the actor's origin and names no other author (attributedTo)
 //   Like         the object is a local status the actor may see (VIS-1); the actor is the one who likes it
 //   Announce     the actor is the booster; the original is public, unlisted or the actor's own (VIS-6)
@@ -160,6 +167,9 @@ export type InboundActivity =
 	// A Delete another server relayed (its HTTP signer is not the actor). proven: it carries the actor's own proof,
 	// verified by the Worker (federation/author-proof.ts).
 	| { type: 'RelayedDelete'; id: string; object: string; proven: boolean }
+	// A request to quote a local status (FEP-044f): object the quoted status, instrument the quoting status, embedded
+	// the instrument as the request inlined it.
+	| { type: 'QuoteRequest'; id: string; object: string; instrument: string; embedded: RemoteStatusInput | null }
 	| { type: 'Create'; id: string; object: RemoteStatusInput }
 	| { type: 'UpdateStatus'; id: string; object: RemoteStatusInput }
 	// A Like, a Misskey reaction (Like with _misskey_reaction) or an EmojiReact: a favourite of `object`.
@@ -211,9 +221,10 @@ export type ReceiveResult = {
 	reason: string
 	jobsPending: boolean
 	delivers?: boolean
-	// signer: whose key signs the fetch: a local follower of the status's author, or 'instance' for the instance actor;
-	// absent, the inbox's own (the recipient's for a personal inbox).
-	need?: { kind: 'status' | 'actor'; uri: string; signer?: FollowerSigner | 'instance' }
+	// signer: whose key signs the fetch: a local follower of the status's author, a local account by username while it
+	// is available (a QuoteRequest's instrument, fetched as the quoted author: federation.ts localSigner), or
+	// 'instance' for the instance actor; absent, the inbox's own (the recipient's for a personal inbox).
+	need?: { kind: 'status' | 'actor'; uri: string; signer?: FollowerSigner | { local: string } | 'instance' }
 	// Nothing changed, and the activity may apply later (its retraction could not be recorded): answered 503.
 	retry?: boolean
 }
@@ -532,6 +543,7 @@ function sweep(db: Db, now: number): void {
 		new Date(now).toISOString(),
 		SWEEP_BATCH
 	)
+	sweepQuoteRequests(db, now)
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -1554,24 +1566,27 @@ export const STATUS_CHILDREN: readonly { table: string; column: string; remove: 
 	// Quotes of the status (migration 0033_quotes): any number, of any accounts. Each is detached, an accepted one
 	// becoming deleted in the same statement (the quotes CHECK refuses an accepted quote without its target), its work
 	// ended; an accepted one also takes itself off this status's count (the trigger quotes_count_changed), so a batch
-	// takes half the rows left.
+	// takes half the rows left. A batch removes remote statuses only, and Kopje's authorizations are of quotes of local
+	// statuses, so no row here holds one (cleared all the same: the CHECK allows one only while accepted).
 	{
 		table: 'quotes',
 		column: 'quoted_status_id',
 		remove: [
 			`UPDATE quotes SET quoted_status_id = NULL, quoted_account_id = NULL, generation = ${NEW_GENERATION}, lease_until = NULL,
-				state = CASE state WHEN 'accepted' THEN 'deleted' ELSE state END, verify_after = NULL
+				state = CASE state WHEN 'accepted' THEN 'deleted' ELSE state END, verify_after = NULL, authorization_id = NULL
 			WHERE status_id IN (SELECT status_id FROM quotes WHERE quoted_status_id = ?1 LIMIT CAST(?2 / 2 AS INTEGER))`,
 		],
 	},
 	// The status's own quote, one row at most: deleted before the status, so it never cascades, with the count of its
-	// target when it was accepted (the trigger quotes_count_deleted), so it takes half the rows left. With one row left
-	// it deletes nothing, and the next batch takes it.
+	// target when it was accepted (the trigger quotes_count_deleted) and, for a quote of a local status still holding
+	// Kopje's authorization (a purge: a Delete of the status retires it first, retireQuoteOf), its quote_revocations row
+	// (quotes_authorization_deleted), so it takes a third of the rows left. With fewer than three rows left it deletes
+	// nothing, and the next batch takes it.
 	{
 		table: 'quotes',
 		column: 'status_id',
 		remove: [
-			`DELETE FROM quotes WHERE status_id IN (SELECT status_id FROM quotes WHERE status_id = ?1 LIMIT CAST(?2 / 2 AS INTEGER))`,
+			`DELETE FROM quotes WHERE status_id IN (SELECT status_id FROM quotes WHERE status_id = ?1 LIMIT CAST(?2 / 3 AS INTEGER))`,
 		],
 	},
 ]
@@ -1706,6 +1721,9 @@ const deleteObject: Handler<'Delete'> = (db, actor, activity, { now }) => {
 	if (created !== undefined) {
 		streamDelete(db, status.id, now)
 	}
+	// Kopje's authorization of its quote ends now, before any batch, outside the batch's budget (one quote row, its
+	// count and its revocation): the stamp is not served while the removal runs (VIS-28).
+	retireQuoteOf(db, status.id, now)
 	return applied('status-deleted', deleteStatusBatch(db, status.id, now))
 }
 
@@ -1824,6 +1842,25 @@ const create: Handler<'Create'> = (db, actor, activity, input) =>
 
 const updateStatus: Handler<'UpdateStatus'> = (db, actor, activity, input) =>
 	outcome(updateRemoteStatus(db, actor, activity.object, storeContext(db, input)))
+
+// A QuoteRequest for a local status (quotes.ts answerQuoteRequest), answered in this one transaction. The instrument,
+// when neither stored nor inlined by the actor, is asked of the Worker (need) before anything is written.
+const quoteRequest: Handler<'QuoteRequest'> = (db, actor, activity, input) => {
+	const answer = answerQuoteRequest(db, actor, activity, {
+		now: input.now,
+		origin: input.origin,
+		deliveredTo: deliveredTo(db, input.recipient),
+		prefetched: input.prefetched?.statuses[activity.instrument],
+	})
+	switch (answer.kind) {
+		case 'need':
+			return { ...ignored('need-instrument'), need: { kind: 'status', uri: answer.uri, signer: { local: answer.as } } }
+		case 'ignored':
+			return ignored(answer.reason)
+		case 'answered':
+			return applied(answer.reason)
+	}
+}
 
 // What an inbound Like or Announce of a status requires of its actor: that it may see the status by itself (canView, as
 // a remote viewer). So an author who blocks the actor (VIS-13) or its domain (VIS-15) refuses both. Mastodon's Like and
@@ -2225,6 +2262,7 @@ const HANDLERS: { [T in InboundActivity['type']]: Handler<T> } = {
 	DeleteActor: deleteActor,
 	Delete: deleteObject,
 	RelayedDelete: relayedDelete,
+	QuoteRequest: quoteRequest,
 	Create: create,
 	UpdateStatus: updateStatus,
 	Like: like,

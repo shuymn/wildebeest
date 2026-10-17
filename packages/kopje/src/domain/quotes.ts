@@ -1,11 +1,30 @@
-import { availableLocalSql, isDistributable, type Visibility } from './audience'
-import { isDeleted, isDeletedActor, type RemoteActorInput, upsertRemoteActor } from './inbox'
+import { type QuoteRequestRef, quoteAnswerActivity, recordOutbound, stampUri } from './activities'
+import {
+	availableLocalSql,
+	DISTRIBUTABLE_SQL,
+	isDistributable,
+	mayQuoteSql,
+	MENTION_STATUS_COLUMNS,
+	mentionStatusSql,
+	type Visibility,
+} from './audience'
+import {
+	isDeleted,
+	isDeletedActor,
+	type RemoteActorInput,
+	RETRACTION_TTL_MS,
+	RetryLater,
+	SWEEP_BATCH,
+	upsertRemoteActor,
+} from './inbox'
+import { notify } from './notifications'
 import { readOperation, writeOperation } from './operation'
 import { localFollower } from './remote-collections'
 import {
 	followersUri,
 	type RemoteQuoteInput,
 	type RemoteStatusInput,
+	statusByUri,
 	storeRemoteStatus,
 	visibilityOf,
 } from './remote-statuses'
@@ -168,7 +187,9 @@ export function recordQuote(
 		promoteQuote(db, status.id, arrival, ctx.now)
 		return
 	}
-	const work = !named.tombstone && arrival.hops > 0
+	// A quote of a local status is decided by Kopje's answer to its QuoteRequest alone (answerQuoteRequest), never by a
+	// verification round: it gets no work (design, Concurrency: Defaults 7).
+	const work = !named.tombstone && arrival.hops > 0 && originOf(named.uri) !== ctx.origin
 	db.run(
 		`INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, quoted_account_id, state, legacy, approval_uri,
 			verify_after, attempts, hops, fetch_as, generation, updated_at)
@@ -180,7 +201,7 @@ export function recordQuote(
 			quoted_account_id = excluded.quoted_account_id, state = excluded.state, legacy = excluded.legacy, approval_uri = excluded.approval_uri,
 			verify_after = excluded.verify_after, attempts = 0, hops = excluded.hops, fetch_as = excluded.fetch_as,
 			need_author = NULL, generation = excluded.generation, recheck = 0, lease_until = NULL,
-			updated_at = excluded.updated_at`,
+			authorization_id = NULL, activity_uri = NULL, updated_at = excluded.updated_at`,
 		status.id,
 		named.uri,
 		named.tombstone ? 1 : 0,
@@ -213,7 +234,7 @@ export function refreshQuote(
 
 // A stored status arrived again as a root: its pending quote gets the full work budget again and is due now, with this
 // arrival's fetch identity when it has one. An arrival of a status stored for verification (fewer hops) promotes
-// nothing.
+// nothing, and neither does one whose quote is of a local status (no work, as in recordQuote).
 export function promoteQuote(db: Db, statusId: string, arrival: QuoteArrival, now: number): void {
 	if (arrival.hops < QUOTE_HOPS) {
 		return
@@ -221,7 +242,8 @@ export function promoteQuote(db: Db, statusId: string, arrival: QuoteArrival, no
 	db.run(
 		`UPDATE quotes SET hops = ?2, attempts = 0, verify_after = ?3, fetch_as = COALESCE(?4, fetch_as), updated_at = ?5,
 			generation = ${NEW_GENERATION}
-		WHERE status_id = ?1 AND state = 'pending' AND quoted_uri IS NOT NULL`,
+		WHERE status_id = ?1 AND state = 'pending' AND quoted_uri IS NOT NULL
+			AND NOT EXISTS (SELECT 1 FROM local_accounts l WHERE l.account_id = quotes.quoted_account_id)`,
 		statusId,
 		QUOTE_HOPS,
 		now,
@@ -853,15 +875,339 @@ export function acceptedQuoteWindow(
 // ---------------------------------------------------------------------------------------------------------------
 
 // Before a local status's own delete: its incoming quotes are detached (an accepted one becomes deleted in the same
-// statement, so the CHECK never sees an accepted quote without its target, and no work stays due on a target that is
-// gone), and its outgoing quote is deleted (the count trigger takes it off its target).
+// statement and its authorization is retired by the trigger, so neither CHECK sees an accepted quote without its target
+// nor an authorization without acceptance, and no work stays due on a target that is gone), and its outgoing quote is
+// deleted (the count trigger takes it off its target). The status's Delete, recorded before, reaches its quoters.
 export function detachQuotes(db: Db, statusId: string, now: number): void {
 	db.run(
 		`UPDATE quotes SET quoted_status_id = NULL, quoted_account_id = NULL, generation = ${NEW_GENERATION}, lease_until = NULL,
-			state = CASE state WHEN 'accepted' THEN 'deleted' ELSE state END, verify_after = NULL, updated_at = ?2
+			state = CASE state WHEN 'accepted' THEN 'deleted' ELSE state END, verify_after = NULL, updated_at = ?2,
+			authorization_id = NULL
 		WHERE quoted_status_id = ?1`,
 		statusId,
 		iso(now)
 	)
 	db.run('DELETE FROM quotes WHERE status_id = ?', statusId)
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Being quoted: QuoteRequests for local statuses, Kopje's stamps and their revocation (design §5.4, §5.5, VIS-28)
+// ---------------------------------------------------------------------------------------------------------------
+
+// Answered QuoteRequests one actor may have recorded at once (quote_requests, kept RETRACTION_TTL_MS). A request past
+// it is refused with a retry (503), never by evicting a live row, as canRetract caps retractions; it also bounds the
+// Rejects one revoke sends (every request answered for the quote is the actor's).
+export const MAX_QUOTE_REQUESTS_PER_ACTOR = 100
+
+// A fresh authorization id: 128 random bits, hex. Never reused: the unique index refuses a repeat, and a retired id
+// stays in quote_revocations for good.
+function freshAuthorization(): string {
+	const bytes = crypto.getRandomValues(new Uint8Array(16))
+	return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+export type QuoteRequestInput = {
+	id: string
+	// The quoted status, and the quoting status (the instrument) by id, with the Note when the request inlined it.
+	object: string
+	instrument: string
+	embedded: RemoteStatusInput | null
+}
+
+export type QuoteRequestOutcome =
+	// as: the username of the quoted author, whose key signs the instrument's fetch (Mastodon fetches it on_behalf_of
+	// them), so a Note addressed to them alone is served.
+	{ kind: 'need'; uri: string; as: string } | { kind: 'ignored'; reason: string } | { kind: 'answered'; reason: string }
+
+type QuotedTarget = {
+	id: string
+	uri: string
+	account_id: string
+	author_uri: string
+	username: string
+	allowed: number
+}
+
+// Mastodon's ActivityPub::Activity::QuoteRequest for a local status. Invariant: the answer is decided and written in
+// this one transaction, the inbox's final Store round, and an earlier round returns `need` (the instrument, the only
+// fetch) before any write (design, Concurrency: Defaults 1). R36 (mayQuoteSql) decides, read in that round; the stored
+// quote row, never the fetched document, says what the instrument quotes; only a transition into accepted draws an
+// authorization (VIS-28). Bounds: one answer per request id (ID-7), at most MAX_QUOTE_REQUESTS_PER_ACTOR live ones per
+// actor (RetryLater past it), one fetch. What is answered and what is ignored: docs/visibility.md (R36) and
+// docs/threat-model.md (VIS-28).
+export function answerQuoteRequest(
+	db: Db,
+	actor: { id: string; uri: string },
+	request: QuoteRequestInput,
+	ctx: { now: number; origin: string; deliveredTo: string | null; prefetched: RemoteStatusInput | null | undefined }
+): QuoteRequestOutcome {
+	const { now } = ctx
+	if (db.first('SELECT 1 AS x FROM quote_requests WHERE activity_uri = ?', request.id) !== undefined) {
+		return { kind: 'ignored', reason: 'duplicate' }
+	}
+	const quoted = db.first<QuotedTarget>(
+		`SELECT t.id, t.uri, t.account_id, a.uri AS author_uri, a.username, ${mayQuoteSql('t', '?2')} AS allowed
+		FROM statuses t JOIN accounts a ON a.id = t.account_id JOIN local_accounts l ON l.account_id = a.id
+		WHERE t.uri = ?1 AND t.reblog_of_id IS NULL AND t.visibility IN ${DISTRIBUTABLE_SQL} AND ${availableLocalSql('l')}`,
+		request.object,
+		actor.id
+	)
+	if (quoted === undefined) {
+		return { kind: 'ignored', reason: 'unknown-object' }
+	}
+	const live =
+		db.first<{ n: number }>(
+			`SELECT count(*) AS n FROM (SELECT 1 FROM quote_requests WHERE actor_uri = ? AND answered_at > ? LIMIT ?)`,
+			actor.uri,
+			now - RETRACTION_TTL_MS,
+			MAX_QUOTE_REQUESTS_PER_ACTOR
+		)?.n ?? 0
+	if (live >= MAX_QUOTE_REQUESTS_PER_ACTOR) {
+		throw new RetryLater('quote-request-cap')
+	}
+	const ref: QuoteRequestRef = {
+		id: request.id,
+		actorUri: actor.uri,
+		actorId: actor.id,
+		quotedUri: quoted.uri,
+		instrumentUri: request.instrument,
+	}
+	if (quoted.allowed !== 1) {
+		recordAnswer(db, ref, quoted.id, now)
+		recordOutbound(db, quoted.account_id, quoteAnswerActivity('Reject', quoted.author_uri, ref), now)
+		return { kind: 'answered', reason: 'quote-rejected' }
+	}
+	let quoting = statusByUri(db, request.instrument)
+	if (quoting === undefined) {
+		const embedded = request.embedded
+		const document =
+			embedded !== null &&
+			embedded.uri === request.instrument &&
+			embedded.attributedTo === actor.uri &&
+			originOf(embedded.uri) === originOf(actor.uri)
+				? embedded
+				: ctx.prefetched
+		if (document === undefined) {
+			return { kind: 'need', uri: request.instrument, as: quoted.username }
+		}
+		if (document === null) {
+			return { kind: 'ignored', reason: 'unfetchable' }
+		}
+		const stored = storeRemoteStatus(db, actor, document, {
+			now,
+			origin: ctx.origin,
+			deliveredTo: ctx.deliveredTo,
+			fetched: true,
+		})
+		quoting = statusByUri(db, request.instrument)
+		if (quoting === undefined) {
+			return { kind: 'ignored', reason: stored.reason }
+		}
+	}
+	const row = db.first<{ state: QuoteState; authorization_id: string | null }>(
+		`SELECT q.state, q.authorization_id FROM quotes q JOIN statuses s ON s.id = q.status_id
+		WHERE q.status_id = ?1 AND q.quoted_status_id = ?2 AND s.account_id = ?3 AND s.reblog_of_id IS NULL
+			AND NOT EXISTS (SELECT 1 FROM inbound_jobs j WHERE j.kind = 'delete' AND j.key = ?1 AND j.done_at IS NULL)`,
+		quoting.id,
+		quoted.id,
+		actor.id
+	)
+	if (row === undefined) {
+		return { kind: 'ignored', reason: 'not-a-quote' }
+	}
+	recordAnswer(db, ref, quoted.id, now)
+	if (row.state === 'accepted' && row.authorization_id !== null) {
+		const stamp = stampUri(quoted.author_uri, row.authorization_id)
+		recordOutbound(db, quoted.account_id, quoteAnswerActivity('Accept', quoted.author_uri, ref, stamp), now)
+		return { kind: 'answered', reason: 'quote-accepted-again' }
+	}
+	const authorization = freshAuthorization()
+	db.run(
+		`UPDATE quotes SET state = 'accepted', authorization_id = ?3, activity_uri = ?4, verify_after = NULL,
+			lease_until = NULL, recheck = 0, need_author = NULL, generation = ${NEW_GENERATION}, updated_at = ?5
+		WHERE status_id = ?1 AND quoted_status_id = ?2`,
+		quoting.id,
+		quoted.id,
+		authorization,
+		request.id,
+		iso(now)
+	)
+	// Quote#ensure_quoted_access: the quoted author may always see the quote of their post.
+	db.run(
+		`INSERT INTO status_mentions (status_id, account_id, silent, ${MENTION_STATUS_COLUMNS})
+		VALUES (?1, ?2, 1, ${mentionStatusSql('?1')}) ON CONFLICT DO NOTHING`,
+		quoting.id,
+		quoted.account_id
+	)
+	recordOutbound(
+		db,
+		quoted.account_id,
+		quoteAnswerActivity('Accept', quoted.author_uri, ref, stampUri(quoted.author_uri, authorization)),
+		now
+	)
+	notify(db, { recipientId: quoted.account_id, type: 'quote', fromId: actor.id, statusId: quoting.id, now })
+	return { kind: 'answered', reason: 'quote-accepted' }
+}
+
+function recordAnswer(db: Db, request: QuoteRequestRef, quotedId: string, now: number): void {
+	db.run(
+		`INSERT INTO quote_requests (activity_uri, actor_uri, instrument_uri, quoted_status_id, answered_at)
+		VALUES (?, ?, ?, ?, ?)`,
+		request.id,
+		request.actorUri,
+		request.instrumentUri,
+		quotedId,
+		now
+	)
+}
+
+// The sweep's part (inbox.ts sweep): answered requests older than RETRACTION_TTL_MS, at most SWEEP_BATCH, oldest first.
+export function sweepQuoteRequests(db: Db, now: number): void {
+	db.run(
+		`DELETE FROM quote_requests WHERE activity_uri IN
+			(SELECT activity_uri FROM quote_requests WHERE answered_at <= ? ORDER BY answered_at LIMIT ?)`,
+		now - RETRACTION_TTL_MS,
+		SWEEP_BATCH
+	)
+}
+
+// The first transaction of a Delete of a remote quoting status (inbox.ts deleteObject), before any batch: an
+// authorization of Kopje's that its quote holds is retired at once (the trigger records it), so the stamp is never
+// served while the status's removal runs in batches. One row: a status has one quote.
+export function retireQuoteOf(db: Db, statusId: string, now: number): void {
+	db.run(
+		`UPDATE quotes SET state = 'revoked', authorization_id = NULL, verify_after = NULL, lease_until = NULL,
+			generation = ${NEW_GENERATION}, updated_at = ?2
+		WHERE status_id = ?1 AND authorization_id IS NOT NULL`,
+		statusId,
+		iso(now)
+	)
+}
+
+export type QuoteAuthorization = {
+	id: string
+	attributedTo: string
+	interactingObject: string
+	interactionTarget: string
+}
+
+// GET /ap/users/:username/quote_authorizations/:authorization_id (federation/routes.ts), one read: the stamp only while
+// it is the current authorization of an accepted quote, never retired, of a local original of the available account
+// `username` (the quoted author: the path binds it) that is public or unlisted, and while the quoting status is
+// there: a Delete of it retires the authorization in its first transaction (retireQuoteOf), and a purge of its author
+// (whose batches delete the quote last) hides it here at once. Ids only (FEP-044f: the quote post is never embedded).
+// The id is 128 random bits, never sequential, so stamps cannot be enumerated.
+export const quoteAuthorization = readOperation<
+	{ username: string; authorizationId: string },
+	QuoteAuthorization | null
+>((db, { username, authorizationId }) => {
+	const row = db.first<{ author_uri: string; interacting: string; target: string }>(
+		`SELECT a.uri AS author_uri, s.uri AS interacting, t.uri AS target
+		FROM quotes q JOIN statuses s ON s.id = q.status_id JOIN statuses t ON t.id = q.quoted_status_id
+			JOIN accounts a ON a.id = t.account_id JOIN local_accounts l ON l.account_id = a.id
+		WHERE q.authorization_id = ?1 AND q.state = 'accepted' AND a.domain IS NULL AND a.username = ?2
+			AND ${availableLocalSql('l')} AND t.reblog_of_id IS NULL AND t.visibility IN ${DISTRIBUTABLE_SQL}
+			AND NOT EXISTS (SELECT 1 FROM quote_revocations r WHERE r.authorization = ?1)
+			AND NOT EXISTS (SELECT 1 FROM accounts qa JOIN inbound_jobs j ON j.kind = 'purge' AND j.key = qa.uri
+				WHERE qa.id = s.account_id)`,
+		authorizationId,
+		username
+	)
+	return row === undefined
+		? null
+		: {
+				id: stampUri(row.author_uri, authorizationId),
+				attributedTo: row.author_uri,
+				interactingObject: row.interacting,
+				interactionTarget: row.target,
+			}
+})
+
+// The quote of `quotingId` on the status `quotedId`, for its revoke (statuses.ts revokeQuote).
+export type RevocableQuote = {
+	state: QuoteState
+	authorizationId: string | null
+	quotingUri: string
+	quotingAuthorId: string
+	quotingAuthorUri: string
+}
+
+export function revocableQuote(db: Db, quotedId: string, quotingId: string): RevocableQuote | undefined {
+	const row = db.first<{
+		state: QuoteState
+		authorization_id: string | null
+		quoting_uri: string
+		quoting_author_id: string
+		quoting_author_uri: string
+	}>(
+		`SELECT q.state, q.authorization_id, s.uri AS quoting_uri, s.account_id AS quoting_author_id,
+			a.uri AS quoting_author_uri
+		FROM quotes q JOIN statuses s ON s.id = q.status_id JOIN accounts a ON a.id = s.account_id
+		WHERE q.status_id = ? AND q.quoted_status_id = ?`,
+		quotingId,
+		quotedId
+	)
+	return row === undefined
+		? undefined
+		: {
+				state: row.state,
+				authorizationId: row.authorization_id,
+				quotingUri: row.quoting_uri,
+				quotingAuthorId: row.quoting_author_id,
+				quotingAuthorUri: row.quoting_author_uri,
+			}
+}
+
+// The revoke itself (Quote#reject!): accepted becomes revoked and pending rejected, only while the quote still holds
+// the authorization the caller prepared its signed Delete for (`expected`, null for none), so of two concurrent
+// revokes exactly one changes it. Clearing the authorization retires it (the trigger). Returns the new state, or null
+// when it changed nothing.
+export function revokeQuoteRow(
+	db: Db,
+	quotingId: string,
+	quotedId: string,
+	expected: string | null,
+	now: number
+): QuoteState | null {
+	return (
+		db.first<{ state: QuoteState }>(
+			`UPDATE quotes SET state = CASE state WHEN 'accepted' THEN 'revoked' ELSE 'rejected' END,
+				authorization_id = NULL, verify_after = NULL, lease_until = NULL, generation = ${NEW_GENERATION},
+				updated_at = ?4
+			WHERE status_id = ?1 AND quoted_status_id = ?2 AND state IN ('accepted', 'pending')
+				AND authorization_id IS ?3
+			RETURNING state`,
+			quotingId,
+			quotedId,
+			expected,
+			iso(now)
+		)?.state ?? null
+	)
+}
+
+// The requests the quoting author `authorUri` had answered for its quote `quotingUri` of `quotedId` (quote_requests),
+// oldest first: the Rejects a revoke sends. A request may name anyone's status as its instrument (a refused one is
+// recorded before the instrument is read), so only the quoting author's own count: another actor's never draws a
+// Reject about this quote, nor counts against its bound, MAX_QUOTE_REQUESTS_PER_ACTOR. Only live rows count, as for
+// the cap (answered within RETRACTION_TTL_MS), so expired rows the sweep has yet to remove never crowd out the current
+// request (one seek of quote_requests_instrument).
+export function answeredRequests(
+	db: Db,
+	quotingUri: string,
+	quotedId: string,
+	authorUri: string,
+	now: number
+): string[] {
+	return db
+		.all<{ activity_uri: string }>(
+			`SELECT activity_uri FROM quote_requests
+			WHERE instrument_uri = ? AND quoted_status_id = ? AND actor_uri = ? AND answered_at > ?
+			ORDER BY answered_at, activity_uri LIMIT ?`,
+			quotingUri,
+			quotedId,
+			authorUri,
+			now - RETRACTION_TTL_MS,
+			MAX_QUOTE_REQUESTS_PER_ACTOR
+		)
+		.map((row) => row.activity_uri)
 }

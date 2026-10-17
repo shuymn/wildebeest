@@ -8,10 +8,12 @@ import {
 	DISTRIBUTABLE_SQL,
 	isDistributable,
 	PUBLIC_COLLECTION,
+	quotePolicyFlags,
+	reachQuoters,
 	type Recipient,
 	type Visibility,
 } from './audience'
-import { enqueueActivity } from './deliveries'
+import { type DeliveryEnvelope, enqueueActivity, type ReachOf } from './deliveries'
 import { readOperation } from './operation'
 import type { Db } from '../db/sql'
 import { httpUrl } from '../platform/http-url'
@@ -61,8 +63,9 @@ function contextOf(facts: StatusFacts) {
 	return facts.poll === null ? NOTE_CONTEXT : POLL_CONTEXT
 }
 
-// signedBy 'instance': signed by the instance actor rather than the lane's account (a report's Flag, deliveries.ts).
-export type OutboundEnvelope = { activity: Record<string, unknown>; audience: Audience; signedBy?: 'instance' }
+// signedBy 'instance': signed by the instance actor rather than the lane's account (a report's Flag, deliveries.ts);
+// immutable and reachOf: a stamp's signed Delete (deliveries.ts DeliveryEnvelope).
+export type OutboundEnvelope = Omit<DeliveryEnvelope, 'audience'> & { audience: Audience }
 
 // Records the intent and its target inboxes (domain/deliveries.ts), or nothing if no remote inbox needs it. As in
 // Mastodon, the followers are the current ones; a Delete also reaches every inbox that received the status or may
@@ -98,8 +101,12 @@ export type StatusFacts = {
 	editedAt: string | null
 	inReplyToUri: string | null
 	recipients: Recipient[]
-	// Remote accounts that interacted with a distributable status (reblogged it, or wrote the replied-to status).
+	// Remote accounts a distributable status reaches beyond its addressing: those that reblogged it, the author of the
+	// replied-to status, and the authors of its accepted quotes (audience.ts reachQuoters); may repeat an account, which
+	// audienceOf deduplicates.
 	reached: string[]
+	// statuses.quote_policy, Mastodon's flags (audience.ts QUOTE_POLICY_FLAGS).
+	quotePolicy: number
 	tags: { name: string; href: string }[]
 	media: { url: string; content_type: string | null; description: string }[]
 	mentionNames: Map<string, string>
@@ -161,11 +168,12 @@ export function statusFacts(db: Db, statusId: string, options: { reached?: boole
 		edited_at: string | null
 		in_reply_to_uri: string | null
 		in_reply_to_id: string | null
+		quote_policy: number
 		actor_uri: string
 		username: string
 	}>(
 		`SELECT s.id, s.uri, s.visibility, s.content, s.spoiler_text, s.sensitive, s.language, s.published_at, s.edited_at,
-			s.in_reply_to_uri, s.in_reply_to_id, a.uri AS actor_uri, a.username
+			s.in_reply_to_uri, s.in_reply_to_id, s.quote_policy, a.uri AS actor_uri, a.username
 		FROM statuses s JOIN accounts a ON a.id = s.account_id WHERE s.id = ?`,
 		statusId
 	)
@@ -185,17 +193,20 @@ export function statusFacts(db: Db, statusId: string, options: { reached?: boole
 	)
 	const reached =
 		options.reached !== false && isDistributable(row.visibility)
-			? db
-					.all<{ id: string }>(
-						`SELECT r.account_id AS id FROM statuses r JOIN accounts a ON a.id = r.account_id
-					WHERE r.reblog_of_id = ?1 AND a.domain IS NOT NULL
-					UNION
-					SELECT p.account_id FROM statuses p JOIN accounts a ON a.id = p.account_id
-					WHERE p.id = ?2 AND a.domain IS NOT NULL`,
-						statusId,
-						row.in_reply_to_id
-					)
-					.map((r) => r.id)
+			? [
+					...db
+						.all<{ id: string }>(
+							`SELECT r.account_id AS id FROM statuses r JOIN accounts a ON a.id = r.account_id
+							WHERE r.reblog_of_id = ?1 AND a.domain IS NOT NULL
+							UNION
+							SELECT p.account_id FROM statuses p JOIN accounts a ON a.id = p.account_id
+							WHERE p.id = ?2 AND a.domain IS NOT NULL`,
+							statusId,
+							row.in_reply_to_id
+						)
+						.map((r) => r.id),
+					...reachQuoters(db, statusId),
+				]
 			: []
 	const { host, origin } = new URL(row.actor_uri)
 	return {
@@ -222,6 +233,7 @@ export function statusFacts(db: Db, statusId: string, options: { reached?: boole
 		),
 		mentionNames: new Map(mentioned.map((m) => [m.uri, `@${m.username}@${m.domain ?? host}`])),
 		poll: pollFacts(db, statusId),
+		quotePolicy: row.quote_policy,
 	}
 }
 
@@ -280,14 +292,39 @@ export function noteOf(facts: StatusFacts): Record<string, unknown> {
 			...facts.tags.map((t) => ({ type: 'Hashtag', href: t.href, name: `#${t.name}` })),
 		],
 		...(facts.poll === null ? {} : questionOf(facts.poll)),
-		// Nobody may quote it but its author, the way Mastodon writes the policy `nobody`: Kopje answers no QuoteRequest
-		// yet (FEP-044f; Mastodon refuses to quote a status without a policy anyway).
-		interactionPolicy: { canQuote: { automaticApproval: [facts.actorUri] } },
+		interactionPolicy: { canQuote: { automaticApproval: automaticApproval(facts) } },
 	}
+}
+
+// ActivityPub::NoteSerializer#interaction_policy: who may quote the status with automatic approval, from the automatic
+// half of its policy: everyone, its author's followers or following collection, or its author alone for nobody
+// (Kopje, as Mastodon, never publishes manual approval). Advisory to receivers (FEP-044f): Kopje's answer to a
+// QuoteRequest (R36) is the approval.
+function automaticApproval(facts: StatusFacts): string[] {
+	const flags = quotePolicyFlags(facts.quotePolicy, 'automatic')
+	const approved = [
+		...(flags.includes('public') ? [PUBLIC_COLLECTION] : []),
+		...(flags.includes('followers') ? [followersUri(facts.actorUri)] : []),
+		...(flags.includes('following') ? [`${facts.actorUri}/following`] : []),
+	]
+	return approved.length === 0 ? [facts.actorUri] : approved
 }
 
 function statusAudience(facts: StatusFacts): Audience {
 	return audienceOf(facts.visibility, facts.recipients, facts.reached)
+}
+
+// The reach of the local status `statusId` for another activity's reachOf (deliveries.ts): its owner, its uri and its
+// current audience. Null when it is gone or not local.
+export function statusReach(db: Db, statusId: string): ReachOf | null {
+	const owner = db.first<{ account_id: string }>(
+		'SELECT s.account_id FROM statuses s JOIN local_accounts l ON l.account_id = s.account_id WHERE s.id = ?',
+		statusId
+	)
+	const facts = owner === undefined ? null : statusFacts(db, statusId)
+	return owner === undefined || facts === null
+		? null
+		: { owner: owner.account_id, object: facts.uri, audience: statusAudience(facts) }
 }
 
 export function createActivity(facts: StatusFacts): OutboundEnvelope {
@@ -547,6 +584,90 @@ export function followAnswerActivity(kind: 'Accept' | 'Reject', input: FollowAns
 		},
 		audience: { followers: false, accounts: [input.followerId] },
 	} satisfies OutboundEnvelope
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Quote requests and stamps (FEP-044f, Mastodon 4.5's AcceptQuoteRequestSerializer, RejectQuoteRequestSerializer and
+// DeleteQuoteAuthorizationSerializer). An answer goes to the requester only, as a Follow's does, and names the request
+// by its id (with its actor, object and instrument by id, never the inlined Note). An Accept's delivery subject is the
+// stamp it grants (deliveries.ts subjectOf), so the stamp's Delete supersedes it while it waits.
+// ---------------------------------------------------------------------------------------------------------------
+
+const QUOTE_REQUEST_CONTEXT = [AS_CONTEXT, { QuoteRequest: 'https://w3id.org/fep/044f#QuoteRequest' }] as const
+
+// The stamp of an accepted quote of a local status (QuoteAuthorization), under its quoted author.
+export function stampUri(authorUri: string, authorizationId: string): string {
+	return `${authorUri}/quote_authorizations/${authorizationId}`
+}
+
+export type QuoteRequestRef = {
+	id: string
+	actorUri: string
+	actorId: string
+	quotedUri: string
+	instrumentUri: string
+}
+
+// result: the stamp an Accept grants.
+export function quoteAnswerActivity(
+	kind: 'Accept' | 'Reject',
+	authorUri: string,
+	request: QuoteRequestRef,
+	result?: string
+): OutboundEnvelope {
+	return {
+		activity: {
+			'@context': QUOTE_REQUEST_CONTEXT,
+			id: `${authorUri}#${kind === 'Accept' ? 'accepts' : 'rejects'}/quote_requests/${sha256Hex(request.id)}`,
+			type: kind,
+			actor: authorUri,
+			object: {
+				id: request.id,
+				type: 'QuoteRequest',
+				actor: request.actorUri,
+				object: request.quotedUri,
+				instrument: request.instrumentUri,
+			},
+			...(result === undefined ? {} : { result }),
+		},
+		audience: { followers: false, accounts: [request.actorId] },
+	}
+}
+
+// A revoke's Reject of a request answered for the quote, naming the request by id alone. Mastodon 4.5.11 matches a
+// Reject by its object's id against the quote's current request (Reject#quote_request_from_object); an embedded
+// QuoteRequest that matches none falls into reject_embedded_quote_request, which calls an undefined quoting_status
+// (app/lib/activitypub/activity/reject.rb:39, a NameError), so a revoke never inlines it. Recorded as a retraction
+// (withdraws): it withdraws an approval already sent, so admission never refuses it and a suspension does not drop it,
+// as the stamp's Delete it follows in the lane.
+export function revocationRejectActivity(
+	authorUri: string,
+	request: Pick<QuoteRequestRef, 'id' | 'actorId'>
+): OutboundEnvelope {
+	return {
+		activity: {
+			'@context': QUOTE_REQUEST_CONTEXT,
+			id: `${authorUri}#rejects/quote_requests/${sha256Hex(request.id)}/revoked`,
+			type: 'Reject',
+			actor: authorUri,
+			object: request.id,
+		},
+		audience: { followers: false, accounts: [request.actorId] },
+	}
+}
+
+// The Delete of a stamp, as Mastodon's: public, its object the stamp by id. It is LD-signed by the quoted author before
+// it is recorded (federation/ld-sign.ts) and delivered unedited (an immutable envelope), so a quoting server can relay
+// it with the author's proof.
+export function stampDeleteActivity(authorUri: string, stamp: string): Record<string, unknown> {
+	return {
+		'@context': [AS_CONTEXT, 'https://w3id.org/security/v1'],
+		id: `${stamp}#delete`,
+		type: 'Delete',
+		actor: authorUri,
+		to: [PUBLIC_COLLECTION],
+		object: stamp,
+	}
 }
 
 // ---------------------------------------------------------------------------------------------------------------

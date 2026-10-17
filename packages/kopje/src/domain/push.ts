@@ -155,6 +155,7 @@ const TITLES: Record<string, (name: string) => string> = {
 	follow_request: (name) => `Pending follower: ${name}`,
 	update: (name) => `${name} edited a post`,
 	poll: (name) => `A poll by ${name} has ended`,
+	quote: (name) => `${name} quoted your post`,
 }
 
 // Rails' truncate: at most `length` characters, the last three replaced by '...' when cut.

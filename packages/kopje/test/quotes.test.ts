@@ -1,6 +1,6 @@
 import { runInDurableObject } from 'cloudflare:test'
 
-import { type DocumentLoader, exportSpki, preloadedContexts, signJsonLd, signObject } from '@fedify/fedify'
+import { exportSpki, signJsonLd, signObject } from '@fedify/fedify'
 import { CryptographicKey, Delete, Multikey, Person } from '@fedify/vocab'
 import { describe, expect, it } from 'vitest'
 
@@ -35,6 +35,7 @@ import {
 	statusRow,
 	update,
 } from './inbox-status-helpers'
+import { contexts, quoting } from './quote-helpers'
 import { Db } from '../src/db/sql'
 import { PURGE_BATCH, receiveActivity, RETRACTION_TTL_MS, runInboundJobs } from '../src/domain/inbox'
 import {
@@ -70,14 +71,6 @@ const QUOTE_CONTEXT = [
 		interactionTarget: { '@id': 'gts:interactionTarget', '@type': '@id' },
 	},
 ]
-
-// JSON-LD contexts as Kopje's own loader serves them: the preloaded ones, nothing fetched.
-const contexts: DocumentLoader = (url) => {
-	const document = (preloadedContexts as Record<string, unknown>)[url]
-	return document === undefined
-		? Promise.reject(new Error(`no context ${url}`))
-		: Promise.resolve({ document, documentUrl: url, contextUrl: null })
-}
 
 type QuoteRow = {
 	quoted_uri: string | null
@@ -131,17 +124,6 @@ function serveStamp(web: RemoteWeb, uri: string, quoted: TestActor, quoting: str
 		attributedTo: quoted.uri,
 		interactingObject: quoting,
 		interactionTarget: target,
-		...extra,
-	})
-}
-
-// A Note quoting `target` as Mastodon 4.5 writes it (quote, _misskey_quote, quoteUri, quoteAuthorization).
-function quoting(actor: TestActor, target: string, stamp: string | null, extra: Record<string, unknown> = {}): Note {
-	return mastodonNote(actor, {
-		quote: target,
-		_misskey_quote: target,
-		quoteUri: target,
-		...(stamp === null ? {} : { quoteAuthorization: stamp }),
 		...extra,
 	})
 }
@@ -905,18 +887,6 @@ describe('deleting a quoted or quoting status', () => {
 	})
 })
 
-describe('local Notes', () => {
-	it('advertise that nobody but their author may quote them', async () => {
-		const t = await setup()
-		const mine = await localStatus(t, { status: 'mine', visibility: 'public' })
-		const response = await t.request(new URL(mine.uri).pathname, { headers: { accept: 'application/activity+json' } })
-		const note = (await response.json()) as Record<string, unknown>
-		expect(note.interactionPolicy).toEqual({ canQuote: { automaticApproval: [ALICE_URI] } })
-		expect(JSON.stringify(note['@context'])).toContain('gts:canQuote')
-		expect(ALICE).toBeDefined()
-	})
-})
-
 describe('review round 1 regressions', () => {
 	// A redirect chain of `hops` same-origin hops ending at `document`, served at `uri`.
 	function redirected(web: RemoteWeb, uri: string, document: unknown, hops: number) {
@@ -1391,7 +1361,7 @@ describe('review round 1 regressions', () => {
 		const refusing = new Proxy(t.store, {
 			get(_target, key: string) {
 				return (...args: unknown[]) =>
-					key === 'localKey' ? Promise.reject(new StoreUnavailableError('maintenance')) : stub[key]!(...args)
+					key === 'signingKey' ? Promise.reject(new StoreUnavailableError('maintenance')) : stub[key]!(...args)
 			},
 		})
 		await expect(

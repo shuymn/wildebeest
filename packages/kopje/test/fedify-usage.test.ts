@@ -48,6 +48,15 @@ describe('Fedify usage', () => {
 		expect(verifying).toEqual(['../src/federation/author-proof.ts'])
 	})
 
+	// Kopje's own LD signatures (a stamp's Delete) are made in ld-sign.ts only, with the preloaded contexts and a key
+	// unwrapped for the call (DATA-1).
+	it('signs Linked Data in ld-sign.ts only', () => {
+		const signing = Object.entries(sources)
+			.filter(([, source]) => /\b(signJsonLd|signObject)\b/.test(source))
+			.map(([file]) => file)
+		expect(signing).toEqual(['../src/federation/ld-sign.ts'])
+	})
+
 	it('detects each forbidden use', () => {
 		expect(
 			violations({

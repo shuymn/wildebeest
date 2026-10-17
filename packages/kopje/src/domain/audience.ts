@@ -810,6 +810,17 @@ export function quotePolicySql(t: string, quoter: string): string {
 		ELSE 'denied' END)`
 }
 
+// R36 (StatusPolicy#quote? with Quote's validations): whether `quoter` may quote the status `t`: t is not a boost, the
+// quoter may see it by itself (R3, so an author who blocks the quoter or its domain refuses), the quoter blocks neither
+// t's author nor its domain (as R27 for votes), and either t is the quoter's own and neither direct nor limited, or t
+// is public or unlisted and its policy does not deny the quoter (quotePolicySql: automatic, manual or unknown pass).
+// An inbound QuoteRequest for a local status is decided by it alone (quotes.ts answerQuoteRequest).
+export function mayQuoteSql(t: string, quoter: string): string {
+	return `(${t}.reblog_of_id IS NULL AND ${viewableSql(t, quoter)} AND NOT ${blockedSql(quoter, `${t}.account_id`)}
+		AND ((${t}.account_id = ${quoter} AND ${t}.visibility IN ${REACHES_FOLLOWERS_SQL})
+			OR (${t}.visibility IN ${DISTRIBUTABLE_SQL} AND ${quotePolicySql(t, quoter)} <> 'denied')))`
+}
+
 // R26: a scheduled status (scheduled_statuses row `ss`) is its owner's alone. It is not a status: no other rule
 // reads it, nothing lists, notifies or delivers it, and anyone else's is not found, until its publication writes an
 // ordinary status, which the rules above then govern.
@@ -914,9 +925,16 @@ export function keptSql(n: string): string {
 }
 
 // The types a policy may filter or drop (Notification::PROPERTIES, app/models/notification.rb:37-83: `filterable`):
-// mention, reblog, follow, follow_request and favourite, and quote, which Kopje never notifies. A post notification
-// (`status`), an edit (`update`) and a poll's end are never filtered.
-export const FILTERABLE_TYPES: readonly string[] = ['mention', 'reblog', 'follow', 'follow_request', 'favourite']
+// mention, reblog, follow, follow_request, favourite and quote. A post notification (`status`), an edit (`update`) and
+// a poll's end are never filtered.
+export const FILTERABLE_TYPES: readonly string[] = [
+	'mention',
+	'reblog',
+	'follow',
+	'follow_request',
+	'favourite',
+	'quote',
+]
 
 // A policy's choice for a condition (NotificationPolicy's enums, app/models/notification_policy.rb:34-38).
 export type PolicyChoice = 'accept' | 'filter' | 'drop'
@@ -1349,4 +1367,19 @@ export function reachMentioned(
 		after,
 		limit
 	)
+}
+
+// Quoters' reach (StatusReachFinder#quotes_account_ids, design §5.5): the remote authors of the accepted quotes of the
+// status `statusId`, so its Update or Delete reaches a quoter that neither follows its author, is mentioned, boosted it
+// nor received it. Read when the activity is recorded (activities.ts statusFacts), in the transaction that serializes
+// it with acceptances: a quoter is either reached, or accepted later (having fetched the status to quote it).
+export function reachQuoters(db: Db, statusId: string): string[] {
+	return db
+		.all<{ id: string }>(
+			`SELECT DISTINCT s.account_id AS id FROM main.quotes q INDEXED BY quotes_accepted
+				JOIN main.statuses s ON s.id = q.status_id JOIN main.accounts a ON a.id = s.account_id
+			WHERE q.quoted_status_id = ? AND q.state = 'accepted' AND a.domain IS NOT NULL`,
+			statusId
+		)
+		.map((row) => row.id)
 }

@@ -153,6 +153,12 @@ function federationParts(deps: FederationDeps, state: FederationState) {
 			: keyring.signerFor(userOwner(found.key, new URL(`/ap/users/${found.username}#main-key`, origin)))
 	}
 
+	// The signer of a fetch as a local account, while it is available (getSigningKey), or null.
+	const localSigner = async (username: string): Promise<Signer | null> => {
+		const key = await rpc((s) => s.signingKey(build, { username }))
+		return key === null ? null : keyring.signerFor(userOwner(key, new URL(`/ap/users/${username}#main-key`, origin)))
+	}
+
 	const userSigner = async (username: string): Promise<Signer | null> => {
 		if ((await localActor(username))?.username !== username) {
 			return null
@@ -183,6 +189,7 @@ function federationParts(deps: FederationDeps, state: FederationState) {
 		loadInstanceKey,
 		instanceSigner,
 		userSigner,
+		localSigner,
 		followerSigner,
 		signedLoader,
 		contextLoader,
@@ -212,7 +219,7 @@ export function createRemoteLoaders(
 			(recipient === null
 				? null
 				: typeof recipient === 'string'
-					? await parts.userSigner(recipient)
+					? await parts.localSigner(recipient)
 					: await parts.followerSigner(recipient)) ?? parts.instanceSigner())())
 	const fetched = new Map<string, ReturnType<DocumentLoader>>()
 	const fresh = requireObjectRoot(async (url, options) => {

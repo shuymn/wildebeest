@@ -11,17 +11,19 @@ import { webRoutes } from './web'
 import { ringDoorbell } from '../federation/delivery'
 import { inboxHandler, precheckInbox, requestInboundJobs } from '../federation/inbox'
 import { INBOX_ROUTES } from '../federation/inbox-request'
+import { signAsAuthor } from '../federation/ld-sign'
 import { createResolver } from '../federation/resolve'
 import { FEDERATION_GET_ROUTES, federationHandler, type FederationRouteDeps } from '../federation/routes'
 import { FEDERATION_PATHS, requireSetup } from '../federation/setup-gate'
 import { rescueFromSnapshot } from '../federation/snapshot'
 import { createAdmission, INBOX_BODY_LIMIT, spoolInbox } from '../federation/spool'
+import type { AuthorSignature } from '../mastodon/context'
 import { maintenanceError, mastodonError } from '../mastodon/errors'
 import { mastodonApi } from '../mastodon/routes'
 import { streamingRoutes } from '../mastodon/streaming'
 import { readBackupConfig } from '../platform/backup-config'
 import { readBoundedBody } from '../platform/body'
-import { readConfig } from '../platform/config'
+import { readConfig, userKek } from '../platform/config'
 import { errorFields } from '../platform/error-message'
 import { type ImageCodec, imagesCodec } from '../platform/images'
 import { defaultStore, type StoreResolver } from '../platform/store-client'
@@ -193,6 +195,10 @@ export function createApp({
 		images,
 		resolve: createResolver({ build, store, now, keygen, loader }),
 		requestJobs: (env: Env) => requestInboundJobs(env.QUEUE),
+		signAsAuthor: (env: Env, sign: AuthorSignature) => {
+			const config = readConfig(env)
+			return signAsAuthor(config.ok ? userKek(config.config) : '', sign)
+		},
 	}
 	app.get(MEDIA_ROUTE, serveMedia)
 	app.route('/', authorizeRoutes({ ...apiDeps, fetch: (input, init) => fetch(input, init) }))

@@ -202,6 +202,20 @@ function activityOf(
 		case 'Move':
 			// The object of a Move is the actor itself (Mastodon ignores any other).
 			return object === actor ? { type, id, target: { local: '' } } : null
+		// FEP-044f: the object is the quoted status by id; the instrument, the quoting status, by id or inlined (used
+		// only as the actor's own object, in the Store, with its own addressing, never the request's).
+		case 'QuoteRequest': {
+			const instrument = idOf(json.instrument)
+			return object === null || instrument === null
+				? null
+				: {
+						type,
+						id,
+						object,
+						instrument,
+						embedded: isObject(json.instrument) ? parseRemoteStatus(json.instrument) : null,
+					}
+		}
 		case 'Create':
 			return statusActivity('Create', id, json)
 		case 'Update': {
@@ -578,7 +592,12 @@ async function apply(deps: InboundDeps, application: Application): Promise<Inbox
 		const needLoaders =
 			need.signer === undefined
 				? loaders
-				: createRemoteLoaders(deps, state, need.signer === 'instance' ? null : need.signer, budget)
+				: createRemoteLoaders(
+						deps,
+						state,
+						need.signer === 'instance' ? null : 'local' in need.signer ? need.signer.local : need.signer,
+						budget
+					)
 		const fetched = await fetchNeeded(need, origin, needLoaders)
 		rethrowStoreError(state)
 		if (fetched === 'transient') {

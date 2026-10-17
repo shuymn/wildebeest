@@ -7,6 +7,7 @@ import {
 	type PageQuery,
 	type Present,
 	presentAccount,
+	presentAccountsById,
 	resolveApiId,
 } from './accounts'
 import {
@@ -17,13 +18,19 @@ import {
 	deleteActivity,
 	likeActivity,
 	recordOutbound,
+	revocationRejectActivity,
+	stampDeleteActivity,
+	stampUri,
 	statusFacts,
+	statusReach,
 	undoAnnounceActivity,
 	undoLikeActivity,
 	updateActivity,
 } from './activities'
+import { accountKey, type StoredKey } from './actors'
 import {
 	type ApiVisibility,
+	apiVisibility,
 	blockedSql,
 	blocksSql,
 	canView,
@@ -57,7 +64,14 @@ import { allocateLocalId } from './ids'
 import { DETACHED_GRACE_MS, DOOMED_AT, liveMediaSql } from './media'
 import { notify } from './notifications'
 import { editPoll, type PollInput, pollOptionsJson, writePoll } from './polls'
-import { acceptedQuoteWindow, detachQuotes } from './quotes'
+import {
+	acceptedQuoteWindow,
+	answeredRequests,
+	detachQuotes,
+	type QuoteState,
+	revocableQuote,
+	revokeQuoteRow,
+} from './quotes'
 import { normalizeSearchText } from './search-text'
 import {
 	MEDIA_COLUMNS,
@@ -597,8 +611,8 @@ export function recordEdit(db: Db, statusId: string, at: string): string {
 // Visibility cannot change. An edit that changes nothing is not recorded. The first edit also records the original
 // as the first history entry. A quote policy sent with the edit is stored (Mastodon 4.5.5: only when one is sent),
 // nobody for a status that is not public or unlisted. Where Kopje differs from Mastodon, which counts a changed policy
-// as an edit: the policy is not part of the history and Notes do not carry it yet, so a change of the policy alone is
-// stored as PUT .../interaction_policy stores it, with no history entry, edited_at or Update.
+// as an edit: the policy is not part of the history, so a change of the policy alone is stored as
+// PUT .../interaction_policy stores it, with an Update but no history entry or edited_at (setQuotePolicy).
 //
 // Deliberate difference from Mastodon: the audience of a private, direct or limited status never widens. A mention
 // added by an edit is linked in the text but adds no recipient, notification or delivery, so neither the status nor
@@ -653,7 +667,7 @@ export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db
 	const policy = input.quotePolicy === undefined ? null : storedQuotePolicy(input.quotePolicy, current.visibility)
 	if (unchanged) {
 		if (policy !== null) {
-			setQuotePolicy(db, current.id, policy)
+			setQuotePolicy(db, accountId, current.id, policy, input.now)
 		}
 		return status()
 	}
@@ -736,9 +750,17 @@ export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db
 	return status()
 })
 
-// Stores the quote policy of the author's own status `id`.
-function setQuotePolicy(db: Db, id: string, policy: number): void {
-	db.run('UPDATE statuses SET quote_policy = ? WHERE id = ?', policy, id)
+// Stores the quote policy of the author's own status `id`. A change is federated as an Update of the status, with no
+// history entry and edited_at unchanged, so receivers apply it as an implicit update (Notes carry the policy,
+// activities.ts noteOf). Each Update is a snapshot of its commit, and a later one supersedes those still waiting.
+function setQuotePolicy(db: Db, accountId: string, id: string, policy: number, now: number): void {
+	if (db.run('UPDATE statuses SET quote_policy = ?1 WHERE id = ?2 AND quote_policy <> ?1', policy, id) === 0) {
+		return
+	}
+	const facts = statusFacts(db, id)
+	if (facts !== null) {
+		recordOutbound(db, accountId, updateActivity(facts, `quote-policy-${crypto.randomUUID()}`), now)
+	}
 }
 
 // quotePolicy: the policy sent; none is the author's default, and 'invalid' one the Worker could not read.
@@ -752,9 +774,7 @@ export type InteractionPolicyInput = {
 // must be one the viewer may see by itself (R3, else not found) and their own (else forbidden), then the policy must be
 // one of the three (else "Record invalid"). The policy sent, or the author's default_quote_policy when none is, is
 // stored as on posting (storedQuotePolicy). A boost has no policy of its own (its original's is shown): it is answered
-// unchanged. A change writes no history entry and leaves edited_at, and sends no Update: Notes advertise author-only
-// quoting (activities.ts interactionPolicy.canQuote) until Kopje answers quote requests, so an Update would carry no
-// change (R36, docs/visibility.md).
+// unchanged. A change writes no history entry and leaves edited_at, and sends an Update (setQuotePolicy).
 export const updateInteractionPolicy = userWriteOperation<InteractionPolicyInput, Acted<Status>>(
 	(db, input, { accountId }, viewer) => {
 		const visible = viewable(db, accountId, input.id)
@@ -776,7 +796,7 @@ export const updateInteractionPolicy = userWriteOperation<InteractionPolicyInput
 		}
 		if (row.reblog_of_id === null) {
 			const name = input.quotePolicy ?? localAuthor(db, accountId).default_quote_policy
-			setQuotePolicy(db, visible, storedQuotePolicy(name, row.visibility))
+			setQuotePolicy(db, accountId, visible, storedQuotePolicy(name, row.visibility), Date.parse(viewer.now))
 		}
 		return viewed(presentStatus(db, visible, { ...input.present, viewer }))
 	}
@@ -1559,6 +1579,194 @@ export const statusQuotes = optionalUserReadOperation<StatusQuotesInput, Viewed<
 		}
 	}
 )
+
+// ---------------------------------------------------------------------------------------------------------------
+// Revoking a quote (Api::V1::Statuses::QuotesController#revoke, RevokeQuoteService; design §5.5, VIS-28)
+// ---------------------------------------------------------------------------------------------------------------
+
+export type RevokeTarget = { id: string; quotingId: string }
+
+// What the Worker needs to sign a revoke's stamp Delete before the revoke is recorded: the authorization the quote
+// holds now (null: none, nothing to sign), and with one the Delete to sign and the author's wrapped key.
+export type RevokePreparation = {
+	authorization: string | null
+	sign: { activity: Record<string, unknown>; keyId: string; key: StoredKey } | null
+}
+
+// The quote of `quotingId` on the viewer's own status `id`: R3 on `id` (else not found), a quote of it by that status
+// (else not found), the viewer's own (else forbidden), as QuotesController checks them.
+function ownQuote(db: Db, accountId: string, target: RevokeTarget) {
+	const visible = viewable(db, accountId, target.id)
+	const quote = visible === null ? undefined : revocableQuote(db, visible, target.quotingId)
+	if (visible === null || quote === undefined) {
+		return { status: 'not_found' } as const
+	}
+	const author = db.first<{ account_id: string; uri: string }>(
+		'SELECT s.account_id, a.uri FROM statuses s JOIN accounts a ON a.id = s.account_id WHERE s.id = ?',
+		visible
+	)
+	if (author === undefined || author.account_id !== accountId) {
+		return { status: 'forbidden' } as const
+	}
+	return { status: 'ok', quoted: visible, authorUri: author.uri, quote } as const
+}
+
+// The first step of a revoke, a read: the authorization to retire and, for one, the stamp Delete the Worker LD-signs
+// with the author's key (federation/ld-sign.ts) before the second step records it. Signing once, before recording,
+// keeps the Store free of keys (DATA-1) and gives every destination one body.
+export const prepareRevoke = userReadOperation<RevokeTarget, Acted<RevokePreparation>>((db, target, { accountId }) => {
+	const own = ownQuote(db, accountId, target)
+	if (own.status !== 'ok') {
+		return own
+	}
+	const authorization = own.quote.state === 'accepted' ? own.quote.authorizationId : null
+	const key = authorization === null ? null : accountKey(db, accountId)
+	return {
+		status: 'ok',
+		value: {
+			authorization,
+			sign:
+				authorization === null || key === null
+					? null
+					: {
+							activity: stampDeleteActivity(own.authorUri, stampUri(own.authorUri, authorization)),
+							keyId: `${own.authorUri}#main-key`,
+							key,
+						},
+		},
+	}
+})
+
+// A Status as the revoke answers it to a revoker who may not see the quoting status (its author blocks them): only
+// what the request and the revoker's own quotes list already named (id, uri, created_at), the author as the account
+// presenter shows them, the visibility as the API spells it, the quote's new state, and nothing else (design §5.5:
+// every field Android's Status.postprocess requires is present, every other empty, zero, false or null).
+export type RedactedStatus = Omit<Status, 'quote_approval' | 'quote'> & {
+	quote: { state: QuoteState; quoted_status: null }
+	quote_approval: null
+}
+
+function redactedStatus(db: Db, quotingId: string, state: QuoteState, present: Present): RedactedStatus | null {
+	const row = db.first<{ id: string; uri: string; account_id: string; visibility: Visibility; published_at: string }>(
+		'SELECT id, uri, account_id, visibility, published_at FROM statuses WHERE id = ?',
+		quotingId
+	)
+	const account = row === undefined ? undefined : presentAccountsById(db, [row.account_id], present).get(row.account_id)
+	if (row === undefined || account === undefined) {
+		return null
+	}
+	return {
+		id: row.id,
+		created_at: row.published_at,
+		in_reply_to_id: null,
+		in_reply_to_account_id: null,
+		sensitive: false,
+		spoiler_text: '',
+		visibility: apiVisibility(row.visibility),
+		language: null,
+		uri: row.uri,
+		url: row.uri,
+		replies_count: 0,
+		reblogs_count: 0,
+		favourites_count: 0,
+		quotes_count: 0,
+		edited_at: null,
+		favourited: false,
+		reblogged: false,
+		muted: false,
+		bookmarked: false,
+		filtered: [],
+		content: '',
+		reblog: null,
+		account,
+		media_attachments: [],
+		mentions: [],
+		tags: [],
+		emojis: [],
+		quote: { state, quoted_status: null },
+		quote_approval: null,
+		card: null,
+		poll: null,
+	}
+}
+
+export type RevokeInput = RevokeTarget & {
+	// The authorization the preparation saw, and the stamp Delete the Worker signed for it (null with none).
+	expected: string | null
+	signed: Record<string, unknown> | null
+	now: number
+	present: Present
+}
+
+// stale: the quote now holds another authorization than the one prepared (accepted again meanwhile); the Worker
+// prepares again.
+export type RevokeResult = Acted<Status | RedactedStatus> | { status: 'stale' }
+
+// The second step of a revoke, one transaction (Quote#reject!, RevokeQuoteService): accepted becomes revoked and
+// pending rejected only while the quote still holds the prepared authorization (the trigger retires it), so of two
+// concurrent revokes one changes it and the other answers as a repeated revoke does, recording nothing. The one that
+// changes it records, for an authorization, the signed Delete as an immutable envelope from the quoted author to the
+// quoting author, reaching the receipts and current audience of the quoted status (its quoters included) and, when the
+// quoting status is local, of that status too, each resolved under its own owner (RevokeQuoteService sends to the
+// reach of both); then a Reject of every request answered for the quote, by id, in the same lane after the Delete, so
+// a receiver that applies the Delete before an earlier Accept still ends rejected (design, Concurrency: changes 2 and
+// 6). Always answered 200 once applied: the quoting status as presented, or redacted when the revoker may not see it.
+export const revokeQuote = userWriteOperation<RevokeInput, RevokeResult>((db, input, { accountId }, viewer) => {
+	const own = ownQuote(db, accountId, input)
+	if (own.status !== 'ok') {
+		return own
+	}
+	const { quote, quoted, authorUri } = own
+	let state = quote.state
+	const revocable = quote.state === 'accepted' || quote.state === 'pending'
+	if (revocable && quote.authorizationId !== input.expected) {
+		return { status: 'stale' }
+	}
+	if (revocable) {
+		const stamp = input.expected === null ? null : stampUri(authorUri, input.expected)
+		const signed = input.signed
+		if (
+			stamp !== null &&
+			(signed === null ||
+				signed.type !== 'Delete' ||
+				signed.id !== `${stamp}#delete` ||
+				signed.actor !== authorUri ||
+				signed.object !== stamp)
+		) {
+			return { status: 'invalid', error: 'The revocation could not be signed' }
+		}
+		state = revokeQuoteRow(db, input.quotingId, quoted, input.expected, input.now) ?? state
+		if (signed !== null) {
+			const reach = [statusReach(db, quoted), statusReach(db, input.quotingId)].filter((r) => r !== null)
+			recordOutbound(
+				db,
+				accountId,
+				{
+					activity: signed,
+					audience: { followers: false, accounts: [quote.quotingAuthorId] },
+					immutable: true,
+					reachOf: reach,
+				},
+				input.now
+			)
+		}
+		for (const request of answeredRequests(db, quote.quotingUri, quoted, quote.quotingAuthorUri, input.now)) {
+			recordOutbound(
+				db,
+				accountId,
+				revocationRejectActivity(authorUri, { id: request, actorId: quote.quotingAuthorId }),
+				input.now,
+				{ withdraws: true }
+			)
+		}
+	}
+	const visible = viewableStatusId(db, accountId, input.quotingId)
+	const value =
+		visible === null
+			? redactedStatus(db, input.quotingId, state, input.present)
+			: presentStatus(db, visible, { ...input.present, viewer })
+	return viewed<Status | RedactedStatus>(value)
+})
 
 const STATUS_ID_LENGTH = 18
 const MAX_STATUS_ID = '9'.repeat(STATUS_ID_LENGTH)

@@ -43,7 +43,7 @@ export const GROUP_WALK = 2_000
 export const GROUP_COUNT = 400
 
 // The types whose notifications show their status (REST::NotificationGroupSerializer#status_type?).
-const STATUS_TYPES = new Set(['favourite', 'reblog', 'status', 'mention', 'poll', 'update'])
+const STATUS_TYPES = new Set(['favourite', 'reblog', 'status', 'mention', 'poll', 'update', 'quote'])
 
 // REST::NotificationGroupSerializer. most_recent_notification_id is a number, as Mastodon renders it; the page fields
 // are present in a page of groups only.

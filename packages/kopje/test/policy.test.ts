@@ -106,6 +106,8 @@ const RULES: readonly Rule[] = [
 			'../src/domain/statuses.ts': 'a local status’s mentions, resolved by mentionableBySql',
 			'../src/domain/remote-statuses.ts': 'an inbound status’s addressing (interpretAddressing) and its later audience',
 			'../src/domain/inbox.ts': 'an inbound boost’s addressing, as silent mentions',
+			'../src/domain/quotes.ts':
+				'an accepted QuoteRequest makes the quoted author a silent mention of the quoting status (Quote#ensure_quoted_access)',
 		},
 	},
 	{
@@ -182,13 +184,18 @@ const RULES: readonly Rule[] = [
 		},
 	},
 	{
-		// Received quotes are verified in one place: only quotes.ts decides a quote's state (VerifyQuoteService, the
-		// Delete of a stamp), and only the policy module reads them for a client (R35: quoteReads).
+		// Quotes are decided in one place: only quotes.ts decides a quote's state (VerifyQuoteService, the Delete of a
+		// stamp, the answer to a QuoteRequest, a revoke) and keeps the answered requests, and only the policy module reads
+		// them for a client (R35: quoteReads) or for reach (reachQuoters).
 		name: 'reads or writes quotes',
-		pattern: new RegExp(`\\b(?:FROM|JOIN|INTO|UPDATE)\\s+${table(['quotes', 'quote_revocations'])}`, 'i'),
+		pattern: new RegExp(
+			`\\b(?:FROM|JOIN|INTO|UPDATE)\\s+${table(['quotes', 'quote_revocations', 'quote_requests'])}`,
+			'i'
+		),
 		allowed: {
 			...POLICY_ONLY,
-			'../src/domain/quotes.ts': 'received quotes, their verification work and revocations',
+			'../src/domain/quotes.ts':
+				'quotes, their verification work, revocations, answered QuoteRequests and Kopje’s authorizations',
 			'../src/domain/inbox.ts':
 				'a status’s batched delete detaches the quotes of it and deletes its own (STATUS_CHILDREN), never a revocation',
 		},

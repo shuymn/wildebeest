@@ -23,6 +23,7 @@ export const FEDERATION_GET_ROUTES = [
 	'/ap/users/:username/collections/featured',
 	'/ap/users/:username/collections/tags',
 	'/ap/o/:uuid',
+	'/ap/users/:username/quote_authorizations/:authorization_id',
 ]
 
 export type FederationRouteDeps = {
@@ -70,9 +71,54 @@ async function respond(c: Context<FederationEnv>, deps: FederationRouteDeps, url
 			return { response: nodeInfoLinks(c.get('domain')), source: { kind: 'static' } }
 		case '/nodeinfo/2.0':
 			return nodeInfo20(c, deps)
-		default:
+		default: {
+			const stamp = STAMP.exec(url.pathname)
+			if (stamp !== null) {
+				return { response: await quoteAuthorization(c, deps, stamp[1]!, stamp[2]!), source: null }
+			}
 			return LEGACY_OBJECT.test(url.pathname) ? objectOrAlias(c, deps, url) : viaFedify(c, deps, url)
+		}
 	}
+}
+
+const STAMP = /^\/ap\/users\/([A-Za-z0-9_]{1,64})\/quote_authorizations\/([0-9a-f]{32})$/
+
+// FEP-044f's QuoteAuthorization of an accepted quote of a local status (Mastodon's QuoteAuthorizationsController,
+// QuoteAuthorizationSerializer), one read of the Store (quotes.ts quoteAuthorization): 404 unless it is the current
+// authorization, never retired, of a public or unlisted status of an available `username`. It names only ids, all of
+// public objects, so it is served unsigned to anyone. no-store: a revoke ends it at once, and no cache may answer 200
+// after that (VIS-28); it is never kept as a snapshot either.
+async function quoteAuthorization(
+	c: Context<FederationEnv>,
+	deps: FederationRouteDeps,
+	username: string,
+	authorizationId: string
+): Promise<Response> {
+	const stamp = await callStore(() =>
+		deps.store(c.env).quoteAuthorization(deps.build(c.env), { username, authorizationId })
+	)
+	if (stamp === null) {
+		return new Response('Not Found', { status: 404, headers: { 'cache-control': 'no-store' } })
+	}
+	const body = {
+		'@context': [
+			'https://www.w3.org/ns/activitystreams',
+			{
+				gts: 'https://gotosocial.org/ns#',
+				QuoteAuthorization: 'https://w3id.org/fep/044f#QuoteAuthorization',
+				interactingObject: { '@id': 'gts:interactingObject', '@type': '@id' },
+				interactionTarget: { '@id': 'gts:interactionTarget', '@type': '@id' },
+			},
+		],
+		id: stamp.id,
+		type: 'QuoteAuthorization',
+		attributedTo: stamp.attributedTo,
+		interactingObject: stamp.interactingObject,
+		interactionTarget: stamp.interactionTarget,
+	}
+	return new Response(JSON.stringify(body), {
+		headers: { 'content-type': 'application/activity+json', 'cache-control': 'no-store' },
+	})
 }
 
 const LEGACY_OBJECT = /^\/ap\/o\/[0-9A-Za-z-]{1,64}$/

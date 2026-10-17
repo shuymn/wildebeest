@@ -36,7 +36,7 @@ import type { Db } from '../db/sql'
 //   - An activity without to that a recipient's shared inbox answers with 404, 405 or 410 moves to that recipient's
 //     personal inbox on the same origin, within its attempts (personalFallback): some servers advertise a shared
 //     inbox they have disabled.
-//   - A delivered Create, Update or Announce of a local status records its inbox in outbound_receipts, owned by the
+//   - A delivered Create or Announce of a local status records its inbox in outbound_receipts, owned by the
 //     status; none is written once the status is gone or a retraction of it is pending (one still staging its
 //     targets reads them from the receipts, so they are written until it is staged).
 //   - Claims and completions return nextDueAt, the earliest time any work is due, so the Worker can ring for it.
@@ -113,6 +113,17 @@ function supersededTypes(type: unknown): string[] {
 	}
 }
 
+// The stamp an Accept of a QuoteRequest grants, or null for any other activity.
+function quoteStampOf(activity: Activity): string | null {
+	const object = activity.object
+	return typeof object === 'object' &&
+		object !== null &&
+		(object as { type?: unknown }).type === 'QuoteRequest' &&
+		typeof activity.result === 'string'
+		? activity.result
+		: null
+}
+
 // The local object an activity is about, and whether it retracts it (outboundKind in audience.ts).
 // retracts: the activity withdraws work already sent, so it supersedes what it names and admission never refuses it.
 // A Reject withdraws only when it ends a follow we had accepted (withdraws); a Reject of a request never accepted (a
@@ -120,12 +131,15 @@ function supersededTypes(type: unknown): string[] {
 function subjectOf(activity: Activity, withdraws: boolean): { object: string | null; retracts: boolean } {
 	const retracts = outboundKind(activity, withdraws) === 'retraction'
 	switch (activity.type) {
+		// An Accept of a QuoteRequest is about the stamp it grants (its result), so the stamp's Delete supersedes it
+		// while it waits; any other Accept, a Follow's, is about what it accepts.
+		case 'Accept':
+			return { object: quoteStampOf(activity) ?? idOf(activity.object), retracts }
 		case 'Create':
 		case 'Update':
 		case 'Delete':
 		case 'Undo':
 		case 'Reject':
-		case 'Accept':
 			return { object: idOf(activity.object), retracts }
 		// An Add or Remove is about its object in its collection (a featured hashtag, by its href when it has no id), so a
 		// later one about the same pair supersedes it.
@@ -156,8 +170,22 @@ export function isDeliverableInbox(value: string | null): value is string {
 
 export type DeliveryAudience = { followers: boolean; accounts: string[]; pollVoters?: string }
 
+// The audience of another status an activity also reaches (reachOf), resolved under that status's owner: its local
+// author, whose receipts and earlier activities about `object` hold the inboxes that received it.
+export type ReachOf = { owner: string; object: string; audience: DeliveryAudience }
+
 // What an intent records: the activity, its audience, and, for the one activity the instance actor signs, signedBy.
-export type DeliveryEnvelope = { activity: Activity; audience: DeliveryAudience; signedBy?: 'instance' }
+// immutable: every destination receives the activity as recorded, byte for byte (a body signed by its author, whose
+// proof an edit would break); a would-be personal copy goes to its recipient's personal inbox unedited. reachOf: the
+// audiences of other statuses it reaches too (a stamp's Delete reaches the quoted and the quoting status's), only
+// selecting inboxes: the signer, its lanes and the subject stay the envelope's own.
+export type DeliveryEnvelope = {
+	activity: Activity
+	audience: DeliveryAudience
+	signedBy?: 'instance'
+	immutable?: true
+	reachOf?: ReachOf[]
+}
 
 // The targets an activity goes to (NET-2), from the stored audience only, for the recipients the policy gives it
 // (recipientsFor in audience.ts):
@@ -179,7 +207,7 @@ export function audienceTargets(
 	audience: DeliveryAudience,
 	withdraws = false
 ): Target[] {
-	return targetsOf(db, signerId, activity, audience, withdraws).targets
+	return targetsOf(db, signerId, activity, audience, withdraws, []).targets
 }
 
 // The targets, and the inboxes among them that are a poll's voters (pollVoters), which hold the status already: they
@@ -189,7 +217,8 @@ function targetsOf(
 	signerId: string,
 	activity: Activity,
 	audience: DeliveryAudience,
-	withdraws: boolean
+	withdraws: boolean,
+	reachOf: readonly ReachOf[]
 ): { targets: Target[]; voters: Set<string> } {
 	// Neutral copies by inbox; personal copies by recipient, kept apart so one never replaces the other.
 	const neutral = new Set<string>()
@@ -203,25 +232,34 @@ function targetsOf(
 			neutral.add(inbox)
 		}
 	}
-	const recipients = recipientsFor(db, signerId, activity, audience, withdraws)
-	for (const inbox of [...recipients.followerInboxes, ...recipients.voterInboxes]) {
-		add(inbox, null)
-	}
 	const named = new Set([...uris(activity.to), ...uris(activity.cc)])
 	const addressedActivity = Array.isArray(activity.to)
-	for (const account of recipients.accounts) {
-		if (named.has(account.uri)) {
-			add(account.shared_inbox_url ?? account.inbox_url, null)
-		} else {
-			add(
-				addressedActivity ? account.inbox_url : (account.shared_inbox_url ?? account.inbox_url),
-				addressedActivity ? account.uri : null
-			)
+	const reach = (recipients: ReturnType<typeof recipientsFor>) => {
+		for (const inbox of [...recipients.followerInboxes, ...recipients.voterInboxes]) {
+			add(inbox, null)
+		}
+		for (const account of recipients.accounts) {
+			if (named.has(account.uri)) {
+				add(account.shared_inbox_url ?? account.inbox_url, null)
+			} else {
+				add(
+					addressedActivity ? account.inbox_url : (account.shared_inbox_url ?? account.inbox_url),
+					addressedActivity ? account.uri : null
+				)
+			}
 		}
 	}
+	const recipients = recipientsFor(db, signerId, activity, audience, withdraws)
+	reach(recipients)
 	const { object, retracts } = subjectOf(activity, withdraws)
 	if (retracts && object !== null) {
 		for (const inbox of receiversOf(db, signerId, object)) {
+			add(inbox, null)
+		}
+	}
+	for (const other of reachOf) {
+		reach(recipientsFor(db, other.owner, activity, other.audience, withdraws))
+		for (const inbox of receiversOf(db, other.owner, other.object)) {
 			add(inbox, null)
 		}
 	}
@@ -266,9 +304,12 @@ function receiversOf(db: Db, signerId: string, object: string): string[] {
 
 // Records the intent with its targets, and expands what the step allows. A retraction supersedes every earlier
 // activity about its object and drops the object's receipts (its own targets now hold that evidence); an Update
-// supersedes earlier Updates only. An Update goes as an Update only to servers that have the object (a receipt, or a
-// Create or Update in flight before it in the lane); every other server gets a Create of the current version
-// instead, which replaces any Create or Update of the object still waiting for it there.
+// supersedes earlier Updates only. An Update of a status goes alone to servers known to have it (a receipt, a Create
+// in flight before it in the lane, or its poll's voters); every other server gets a Create of the current
+// version and then the Update, in that order in its lane, which replace any Create or Update of the object still
+// waiting for it there. Whether such a server holds the status is never guessed: Mastodon and Misskey ignore a Create
+// of a status they hold (Create#create_status) and an Update of one they do not, so one of the pair applies either way,
+// and the delivered Create's receipt makes later edits an Update alone.
 export function enqueueActivity(
 	db: Db,
 	signerId: string,
@@ -276,7 +317,14 @@ export function enqueueActivity(
 	now: number,
 	options: { withdraws?: boolean } = {}
 ): void {
-	const { targets, voters } = targetsOf(db, signerId, envelope.activity, envelope.audience, options.withdraws === true)
+	const { targets, voters } = targetsOf(
+		db,
+		signerId,
+		envelope.activity,
+		envelope.audience,
+		options.withdraws === true,
+		envelope.reachOf ?? []
+	)
 	const { object, retracts } = subjectOf(envelope.activity, options.withdraws === true)
 	const types = supersededTypes(envelope.activity.type)
 	if (object !== null && (retracts || types.length > 0)) {
@@ -290,9 +338,9 @@ export function enqueueActivity(
 		)
 	}
 	// An Update of an actor (a profile change) goes to every target as it is, and replaces the earlier Updates of the
-	// actor still waiting there, so quick edits deliver only the latest document. An Update of a status goes as a
-	// Create to servers that lack the status, but for the inboxes of its poll's voters, which have it (they voted in it)
-	// and take its counts from an Update only (DistributePollUpdateWorker).
+	// actor still waiting there, so quick edits deliver only the latest document. An Update of a status is preceded by a
+	// Create of its current version for servers not known to have it, but for the inboxes of its poll's voters, which
+	// have it (they voted in it) and take its counts from an Update only (DistributePollUpdateWorker).
 	if (object !== null && envelope.activity.type === 'Update' && isActorObject(envelope.activity.object)) {
 		// A restoration Update still staging its audience carries the new document too, so a server it reaches after
 		// this Update is not left with the older profile. (No profile changes while the account is suspended, so a
@@ -321,16 +369,7 @@ export function enqueueActivity(
 			const creation = { ...envelope, activity: createOfCurrent(envelope.activity) }
 			insertIntent(db, signerId, creation, object, false, fresh, now)
 		}
-		const kept = new Set(fresh)
-		insertIntent(
-			db,
-			signerId,
-			envelope,
-			object,
-			false,
-			targets.filter((t) => !kept.has(t)),
-			now
-		)
+		insertIntent(db, signerId, envelope, object, false, targets, now)
 	} else {
 		insertIntent(db, signerId, envelope, object, retracts, targets, now)
 	}
@@ -565,9 +604,11 @@ function insertIntent(
 	}
 }
 
-// The servers (lane origins) that have the object, or will before anything later in their lane: a receipt at any of
-// their inboxes, or a leased Create or Update of it (which may have been POSTed already). A server is the unit, as one
-// that holds the object from its shared inbox applies an Update sent to a personal inbox, but ignores a Create.
+// The servers (lane origins) known to have the object, or to get it before anything later in their lane: a receipt at
+// any of their inboxes (a delivered Create), or a leased Create of it (which may have been POSTed already). A server
+// may hold the object without being known to (it fetched it to boost or quote it), so this decides only what may be
+// left out. A server is the unit, as one that holds the object from its shared inbox applies an Update sent to a
+// personal inbox, but ignores a Create.
 function serversWithObject(db: Db, signerId: string, object: string): Set<string> {
 	const receipts = db.all<{ inbox_url: string }>(
 		`SELECT r.inbox_url FROM outbound_receipts r JOIN statuses s ON s.id = r.status_id
@@ -577,7 +618,8 @@ function serversWithObject(db: Db, signerId: string, object: string): Set<string
 	)
 	const leased = db.all<{ lane: string }>(
 		`SELECT DISTINCT d.lane FROM deliveries d JOIN outbound_activities o ON o.id = d.activity_id
-		WHERE o.account_id = ? AND o.object_uri = ? AND o.retracts = 0 AND d.state = 'leased'`,
+		WHERE o.account_id = ? AND o.object_uri = ? AND o.retracts = 0 AND d.state = 'leased'
+			AND json_extract(o.body, '$.activity.type') = 'Create'`,
 		signerId,
 		object
 	)
@@ -585,7 +627,7 @@ function serversWithObject(db: Db, signerId: string, object: string): Set<string
 }
 
 // Drops the Creates and Updates of an object still waiting for these servers (queued, pending, given up, or not
-// expanded): the Create of the current version replaces them.
+// expanded): the pair of the current version's Create and the Update replaces them.
 function replaceWaiting(db: Db, signerId: string, object: string, lanes: Set<string>, now: number): void {
 	const earlier = db.all<{ id: string }>(
 		`SELECT CAST(id AS TEXT) AS id FROM outbound_activities
@@ -624,7 +666,8 @@ function replaceWaiting(db: Db, signerId: string, object: string, lanes: Set<str
 	}
 }
 
-// The Create a destination without the object gets instead of an Update: the current Note, under the Create's id.
+// The Create a destination not known to have the object gets before the Update: the current Note, under the Create's
+// id.
 function createOfCurrent(update: Activity): Activity {
 	const note = update.object as Activity
 	return {
@@ -813,9 +856,10 @@ function giveUp(db: Db, row: LaneRow, now: number, status: number | null, error:
 	promoteLane(db, row.account_id, row.lane, now)
 }
 
-// The activity as sent to one row: a personal copy adds its addressee to to, and to the object's to.
-function bodyFor(activity: string, addressee: string | null): string {
-	if (addressee === null) {
+// The activity as sent to one row: a personal copy adds its addressee to to, and to the object's to, unless the
+// activity is immutable.
+function bodyFor(activity: string, addressee: string | null, immutable: boolean): string {
+	if (addressee === null || immutable) {
 		return activity
 	}
 	const parsed = JSON.parse(activity) as Activity
@@ -852,10 +896,10 @@ const REFUSED_SENDER = `EXISTS (SELECT 1 FROM local_accounts l
 function claimedActivity(
 	db: Db,
 	row: LaneRow
-): { activity: string; signed_by: string | null; refused: number } | undefined {
-	return db.first<{ activity: string; signed_by: string | null; refused: number }>(
+): { activity: string; signed_by: string | null; immutable: number | null; refused: number } | undefined {
+	return db.first<{ activity: string; signed_by: string | null; immutable: number | null; refused: number }>(
 		`SELECT json_extract(o.body, '$.activity') AS activity, json_extract(o.body, '$.signedBy') AS signed_by,
-			${REFUSED_SENDER} AS refused
+			json_extract(o.body, '$.immutable') AS immutable, ${REFUSED_SENDER} AS refused
 		FROM outbound_activities o WHERE o.id = CAST(?2 AS INTEGER)`,
 		row.account_id,
 		row.activity_id
@@ -904,7 +948,7 @@ export const claimDeliveries = writeOperation<{ now: number; leaseToken: string;
 				inbox: row.inbox_url,
 				signer: body?.signed_by === 'instance' ? INSTANCE_SIGNER : row.account_id,
 				activityId: row.activity_id,
-				body: bodyFor(body?.activity ?? '{}', row.addressee),
+				body: bodyFor(body?.activity ?? '{}', row.addressee, body?.immutable === 1),
 			})
 		}
 		const signers: Record<string, DeliverySigner> = {}
@@ -961,11 +1005,13 @@ export const completeDelivery = writeOperation<
 	}
 	if (outcome.kind === 'delivered') {
 		// The receipt is kept only for a status that still exists and has no retraction pending (VIS-3). A retraction
-		// still staging its targets is not pending yet: it reads them from the receipts.
+		// still staging its targets is not pending yet: it reads them from the receipts. Only a Create or an Announce
+		// records one: a delivered Update proves nothing (a server that lacks the status answers 2xx and ignores it), so
+		// a server whose Create was given up gets the Create again with the next edit.
 		db.run(
 			`INSERT INTO outbound_receipts (status_id, inbox_url, account_id, delivered_at)
 			SELECT s.id, ?2, o.account_id, ?3 FROM outbound_activities o JOIN statuses s ON s.uri = o.object_uri
-			WHERE o.id = CAST(?1 AS INTEGER) AND json_extract(o.body, '$.activity.type') IN ('Create', 'Update', 'Announce')
+			WHERE o.id = CAST(?1 AS INTEGER) AND json_extract(o.body, '$.activity.type') IN ('Create', 'Announce')
 				AND NOT EXISTS (SELECT 1 FROM outbound_activities r
 					WHERE r.account_id = o.account_id AND r.object_uri = o.object_uri AND r.retracts = 1 AND r.staged IS NULL)
 			ON CONFLICT DO UPDATE SET delivered_at = excluded.delivered_at`,

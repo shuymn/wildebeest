@@ -11,10 +11,11 @@ import {
 	getCollection,
 	getInstanceActorKey,
 	getInstanceDomain,
-	getLocalActor,
 	getFollowerKey,
+	getLocalActor,
 	getLocalKey,
 	getNodeInfoUsage,
+	getSigningKey,
 	listLocalKeys,
 	listRewrapKeys,
 	rewrapLocalKey,
@@ -531,6 +532,11 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, quotes.claimQuotes, input)
 	}
 
+	// Kopje's stamp of an accepted quote of a local status (federation/routes.ts), one read.
+	quoteAuthorization(callerBuild: string, input: OperationInput<typeof quotes.quoteAuthorization>) {
+		return this.#kernel.execute(callerBuild, quotes.quoteAuthorization, input)
+	}
+
 	remoteKey(callerBuild: string, input: OperationInput<typeof inbox.getRemoteKey>) {
 		return this.#kernel.execute(callerBuild, inbox.getRemoteKey, input)
 	}
@@ -572,6 +578,10 @@ export class Store extends DurableObject<Env> {
 
 	localActor(callerBuild: string, input: OperationInput<typeof getLocalActor>) {
 		return this.#kernel.execute(callerBuild, getLocalActor, input)
+	}
+
+	signingKey(callerBuild: string, input: OperationInput<typeof getSigningKey>) {
+		return this.#kernel.execute(callerBuild, getSigningKey, input)
 	}
 
 	followerKey(callerBuild: string, input: OperationInput<typeof getFollowerKey>) {
@@ -1125,6 +1135,14 @@ export class Store extends DurableObject<Env> {
 
 	updateInteractionPolicy(callerBuild: string, input: OperationInput<typeof statuses.updateInteractionPolicy>) {
 		return this.#kernel.execute(callerBuild, statuses.updateInteractionPolicy, input)
+	}
+
+	prepareRevoke(callerBuild: string, input: OperationInput<typeof statuses.prepareRevoke>) {
+		return this.#kernel.execute(callerBuild, statuses.prepareRevoke, input)
+	}
+
+	revokeQuote(callerBuild: string, input: OperationInput<typeof statuses.revokeQuote>) {
+		return this.#kernel.execute(callerBuild, statuses.revokeQuote, input)
 	}
 
 	deleteStatus(callerBuild: string, input: OperationInput<typeof statuses.deleteStatus>) {

@@ -254,7 +254,7 @@ describe('PUT /api/v1/statuses/:id quote_approval_policy', () => {
 		expect(await stored(h.store, status.id)).toBe(0)
 	})
 
-	it('stores a change of the policy alone with no history entry, edited_at or Update', async () => {
+	it('stores a change of the policy alone with no history entry or edited_at, and sends an Update', async () => {
 		const h = await community(['alice'])
 		await remoteFollows(h.store, await remoteAccount(h.store, 'rem'), h.users.alice.id)
 		const status = await post(h, h.users.alice, { status: 'same' })
@@ -268,7 +268,7 @@ describe('PUT /api/v1/statuses/:id quote_approval_policy', () => {
 		expect(edited.quote_approval).toEqual(approvalOf([]))
 		expect(await stored(h.store, status.id)).toBe(0)
 		expect(await sql(h.store, 'SELECT id FROM status_edits')).toEqual([])
-		expect((await outbound(h.store)).map((row) => row.activity.type)).toEqual(['Create'])
+		expect((await outbound(h.store)).map((row) => row.activity.type)).toEqual(['Create', 'Update'])
 	})
 })
 
@@ -298,8 +298,8 @@ describe('PUT and PATCH /api/v1/statuses/:id/interaction_policy', () => {
 				await setDefault(h, alice, 'public')
 				expect((await send(h, alice.token, method, path, { quote_approval_policy: '' })).status).toBe(200)
 				expect(await stored(h.store, status.id)).toBe(PUBLIC)
-				// Nothing is sent to other servers: Notes do not carry the policy yet.
-				expect((await outbound(h.store)).map((row) => row.activity.type)).toEqual(['Create'])
+				// Each change is sent as an Update of the status (Notes carry the policy); the last supersedes those waiting.
+				expect((await outbound(h.store)).map((row) => row.activity.type)).toEqual(['Create', 'Update'])
 				expect(await sql(h.store, 'SELECT edited_at FROM statuses WHERE id = ?', status.id)).toEqual([
 					{ edited_at: null },
 				])
