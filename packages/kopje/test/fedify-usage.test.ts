@@ -57,6 +57,23 @@ describe('Fedify usage', () => {
 		expect(signing).toEqual(['../src/federation/ld-sign.ts'])
 	})
 
+	// A fetch signed as a local account loads its key through getSigningKey, which refuses an unavailable account
+	// (federation.ts localSigner). getLocalKey has no such check: it serves only the key pairs Fedify publishes on the
+	// actor document (userSigner, in setKeyPairsDispatcher), and nothing may ask Fedify to sign with those pairs.
+	it('loads a local key without the availability check only to publish it', () => {
+		const loading = Object.entries(sources)
+			.filter(([, source]) => /\.localKey\s*\(/.test(source))
+			.map(([file]) => file)
+		expect(loading).toEqual(['../src/federation/federation.ts'])
+		const federation = sources['../src/federation/federation.ts'] ?? ''
+		expect(federation.match(/\buserSigner\s*\(/g)).toHaveLength(1)
+		expect(federation).toMatch(/setKeyPairsDispatcher\([\s\S]*?\buserSigner\s*\(identifier\)/)
+		const fedifySigning = Object.entries(sources)
+			.filter(([, source]) => /\b(getDocumentLoader|getActorKeyPairs)\s*\(/.test(source))
+			.map(([file]) => file)
+		expect(fedifySigning).toEqual([])
+	})
+
 	it('detects each forbidden use', () => {
 		expect(
 			violations({
