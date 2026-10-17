@@ -4460,6 +4460,14 @@ describe('0042_report_action_fence', () => {
 	const NAME = '0042_report_action_fence'
 	const at = NAMES.indexOf(NAME)
 	const SUSPENDED_AT = '2026-10-12T00:00:00.000Z'
+	// The file's statements, in order (its comments dropped; no statement holds a semicolon).
+	const STATEMENTS = (MIGRATIONS[at]?.sql ?? '')
+		.split('\n')
+		.filter((line) => !line.startsWith('--'))
+		.join('\n')
+		.split(';')
+		.map((statement) => statement.trim())
+		.filter((statement) => statement !== '')
 
 	function log(sql: SqlStorage, id: number, action: string, type: 'Report' | 'Account', target: string, detail = {}) {
 		sql.exec(
@@ -4516,6 +4524,12 @@ describe('0042_report_action_fence', () => {
 				"INSERT INTO moderation_jobs (kind, account_id, generation, phase) VALUES ('tokens', ?, 1, 'tokens')",
 				REPORTER
 			)
+			// The first suspension's job, of an epoch that ended: it never resolves again, so it keeps NULL.
+			sql.exec(
+				`INSERT INTO moderation_jobs (kind, account_id, generation, since, phase)
+				VALUES ('suspension', ?, 0, '2026-10-11T00:00:00.000Z', 'reports')`,
+				REPORTER
+			)
 			suspended(sql)
 			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
 			expect(sql.exec('SELECT id, last_action_id FROM reports ORDER BY id').toArray()).toEqual([
@@ -4525,8 +4539,19 @@ describe('0042_report_action_fence', () => {
 			])
 			expect(sql.exec('SELECT kind, action_bound FROM moderation_jobs ORDER BY id').toArray()).toEqual([
 				{ kind: 'tokens', action_bound: null },
+				{ kind: 'suspension', action_bound: null },
 				{ kind: 'suspension', action_bound: 5 },
 			])
+			// The jobs are sought by their unique key, from the suspended accounts, never scanned.
+			const plan = sql
+				.exec<{ detail: string }>(`EXPLAIN QUERY PLAN ${STATEMENTS.at(-1)}`)
+				.toArray()
+				.map((row) => row.detail)
+				.join('\n')
+			expect(plan).toMatch(
+				/SEARCH moderation_jobs USING INDEX sqlite_autoindex_moderation_jobs_1 \(account_id=\? AND kind=\? AND generation=\?\)/
+			)
+			expect(plan).not.toMatch(/SCAN moderation_jobs/)
 		})
 	})
 
