@@ -8,6 +8,7 @@ import { NOW } from './app-helpers'
 import { ALICE, setup, type Setup } from './inbox-status-helpers'
 import { observedSql } from './read-helpers'
 import { community, post, remoteAccount } from './status-helpers'
+import { listConversations, MAX_PRESENTED_PARTICIPANTS } from '../src/domain/conversations'
 import { ACTOR_URI_LIMIT, PROFILE_URL_LIMIT, USERNAME_LIMIT } from '../src/domain/profile-bounds'
 import {
 	MAX_MEDIA_DESCRIPTION_LENGTH,
@@ -565,7 +566,7 @@ describe('realistic content is never cut (RES-2)', () => {
 })
 
 describe('the table of maxima (RES-3)', () => {
-	it('measures a status, a quote, a boost of a quote and an account at every bound', async () => {
+	it('measures a status, a quote, a boost of a quote, a conversation and an account at every bound', async () => {
 		const t = await setup()
 		const [booster, quoter, quotedAuthor] = [await maximalAccount(t), await maximalAccount(t), await maximalAccount(t)]
 		const quoted = await storedStatus(t, quotedAuthor, await maximalParts(t))
@@ -609,11 +610,39 @@ describe('the table of maxima (RES-3)', () => {
 		expect(shown.poll!.options).toHaveLength(MAX_REMOTE_OPTIONS)
 		expect((pair.answer as { reblog: { quote: { quoted_status: unknown } } }).reblog.quote.quoted_status).not.toBeNull()
 		const quoting = shape(await read(t, getStatus as never, quote))
+		// A conversation of alice's with more participants than presented, each at its bounds, whose last status is the
+		// quote, read end to end.
+		const participants: string[] = []
+		for (let i = 0; i < MAX_PRESENTED_PARTICIPANTS + 8; i++) {
+			participants.push(await maximalAccount(t))
+		}
+		await sql(
+			t.store,
+			"INSERT INTO conversations (account_id, thread, participants, last_status_id) VALUES (?, 'th', ?, ?)",
+			ALICE,
+			JSON.stringify(participants.toSorted()),
+			quote
+		)
+		const listed = await measured(
+			t,
+			listConversations as never,
+			{
+				credential: await credential(t),
+				page: { limit: 1 },
+				present: { origin: ORIGIN },
+			} as never
+		)
+		const [talk] = (listed.answer as { items: { accounts: { id: string }[]; last_status: unknown }[] }).items
+		expect(talk!.accounts.map((a) => a.id)).toEqual(participants.toSorted().slice(0, MAX_PRESENTED_PARTICIPANTS))
+		expect(talk!.last_status).not.toBeNull()
+		const conversation = { ...shape({ ...listed, answer: talk }), sqlite: listed.sqliteBytes }
 		// docs/threat-model.md "Maxima of presented units" states these; the composite shapes are derived from them.
-		expect({ status, quoting, boosted, account: { sqlite: one.profileBytes, json: jsonBytes(account) } }).toEqual({
+		const measuredShapes = { status, quoting, boosted, conversation }
+		expect({ ...measuredShapes, account: { sqlite: one.profileBytes, json: jsonBytes(account) } }).toEqual({
 			status: { sqlite: 708_693, json: 1_177_677, rows: 131, nodes: 607 },
 			quoting: { sqlite: 1_417_329, json: 2_355_387, rows: 260, nodes: 1_216 },
 			boosted: { sqlite: 1_523_776, json: 2_485_875, rows: 263, nodes: 1_269 },
+			conversation: { sqlite: 2_592_065, json: 3_815_876, rows: 273, nodes: 1_639 },
 			account: { sqlite: 97_844, json: 121_710 },
 		})
 	})

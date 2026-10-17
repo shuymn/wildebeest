@@ -26,6 +26,12 @@ import type { Db } from '../db/sql'
 // is shown as null, as Mastodon shows a last status it can no longer load. The accounts are the other participants
 // (the owner when there are none).
 
+// The participants one conversation presents: the first by account id, the order the row stores them in
+// (conversation-rows.ts participantsSql). Mastodon presents every participant; this cap keeps one conversation within
+// its share of an answer (docs/threat-model.md, "Maxima of presented units"). The stored participants, which key the
+// row, are unchanged.
+export const MAX_PRESENTED_PARTICIPANTS = 12
+
 // REST::ConversationSerializer.
 export type Conversation = { id: string; unread: boolean; accounts: Account[]; last_status: Status | null }
 
@@ -123,7 +129,9 @@ function presentConversations(
 			{ ...present, viewer }
 		).map((status) => [status.id, status])
 	)
-	const participants = rows.map((row) => JSON.parse(row.participants) as string[])
+	const participants = rows.map((row) =>
+		(JSON.parse(row.participants) as string[]).slice(0, MAX_PRESENTED_PARTICIPANTS)
+	)
 	const accounts = presentAccountsById(db, [viewer.accountId, ...participants.flat()], present)
 	const owner = accounts.get(viewer.accountId)
 	return rows.map((row, i) => {
