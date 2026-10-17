@@ -16,7 +16,7 @@ import type { InstanceInfo } from '../domain/instance'
 //     policy in its privacy settings; Kopje stores source[quote_policy] as the default for new posts (R36), which
 //     other servers may quote when public or unlisted and that policy allows it (VIS-28).
 //   - 7 (Mastodon 4.5) is quote posts: clients would offer quoting in the composer and send quoted_status_id, which
-//     Kopje does not serve, so a quote would post as a plain status. Kopje stays below it until quotes exist.
+//     Kopje does not serve, so a quote would post as a plain status. Kopje stays below it until it can post quotes.
 //   - version is 4.4.0, the release of api_versions 6. Ice Cubes reads it and switches on at 4.3 grouped
 //     notifications, the notification policy and the link timeline, all served; the official apps read only its major
 //     number; Phanpy reads it only when NodeInfo names the software "mastodon", and Kopje's says "kopje". Kopje had no
