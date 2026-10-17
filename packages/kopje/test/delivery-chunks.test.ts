@@ -155,13 +155,14 @@ describe('RES-6: target chunks', () => {
 		expect(creates).toHaveLength(150)
 		expect(creates.every((c) => c.n === 1)).toBe(true)
 		expect((await createsOf(h.store, first.uri)).every((c) => c.n === 1)).toBe(true)
+		// Each server new to the status gets the edit after the Create too (deliveries.ts enqueueActivity), once.
 		expect(
 			await count(
 				h.store,
 				`SELECT 1 FROM deliveries d JOIN outbound_activities o ON o.id = d.activity_id
 				WHERE json_extract(o.body, '$.activity.type') = 'Update'`
 			)
-		).toBe(0)
+		).toBe(150)
 	})
 
 	it('changes nothing when a claim fails at a chunk transition, and the next claim resumes', async () => {

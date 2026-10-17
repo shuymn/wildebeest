@@ -194,7 +194,7 @@ describe('boosts that cascade with their original (VIS-3)', () => {
 })
 
 describe('a destination that never received the Create (VIS-3)', () => {
-	it('gets a Create of the current version after a failed Create and an edit', async () => {
+	it('gets a Create of the current version and then the Update after a failed Create and an edit', async () => {
 		const h = await community(['alice'])
 		const { alice } = h.users
 		await remoteFollows(h.store, await remoteAccount(h.store, 'fan', 'fans.example'), alice.id)
@@ -208,6 +208,7 @@ describe('a destination that never received the Create (VIS-3)', () => {
 		const after = await rows(h.store)
 		expect(after.map((r) => [r.type, r.inbox_url, r.state])).toEqual([
 			['Create', 'https://fans.example/inbox', 'pending'],
+			['Update', 'https://fans.example/inbox', 'queued'],
 			['Update', 'https://ok.example/inbox', 'pending'],
 		])
 		const create = JSON.parse(after[0]?.body ?? '{}') as { id: string; object: { id: string; content: string } }
@@ -215,7 +216,7 @@ describe('a destination that never received the Create (VIS-3)', () => {
 		expect(create.object.content).toContain('second version')
 	})
 
-	it('replaces a Create still queued for it with the current version', async () => {
+	it('replaces a Create still queued for it with the current version, followed by the Update', async () => {
 		const h = await community(['alice'])
 		const { alice } = h.users
 		await remoteFollows(h.store, await remoteAccount(h.store, 'fan', 'fans.example'), alice.id)
@@ -225,7 +226,10 @@ describe('a destination that never received the Create (VIS-3)', () => {
 			bearer(alice.token, json({ status: 'second version' }, { method: 'PUT' }))
 		)
 		const after = await rows(h.store)
-		expect(after.map((r) => [r.type, r.inbox_url])).toEqual([['Create', 'https://fans.example/inbox']])
+		expect(after.map((r) => [r.type, r.inbox_url])).toEqual([
+			['Create', 'https://fans.example/inbox'],
+			['Update', 'https://fans.example/inbox'],
+		])
 		expect(after[0]?.body).toContain('second version')
 	})
 })

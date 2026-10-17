@@ -1383,23 +1383,3 @@ export function reachQuoters(db: Db, statusId: string): string[] {
 		)
 		.map((row) => row.id)
 }
-
-// The inboxes of the remote accounts that hold the signer's status `uri` without a receipt of it: those that boosted it
-// and the authors of its accepted quotes, each of which fetched it (deliveries.ts serversWithObject). Each account's
-// shared inbox when it has one, else its personal inbox.
-export function fetchedBy(db: Db, signerId: string, uri: string): (string | null)[] {
-	return db
-		.all<{ inbox: string | null }>(
-			`SELECT ${REACH_INBOX} AS inbox FROM main.statuses t
-				JOIN main.statuses r ON r.reblog_of_id = t.id JOIN main.accounts a ON a.id = r.account_id
-			WHERE t.uri = ?1 AND t.account_id = ?2 AND a.domain IS NOT NULL
-			UNION
-			SELECT ${REACH_INBOX} FROM main.statuses t JOIN main.quotes q INDEXED BY quotes_accepted
-					ON q.quoted_status_id = t.id AND q.state = 'accepted'
-				JOIN main.statuses s ON s.id = q.status_id JOIN main.accounts a ON a.id = s.account_id
-			WHERE t.uri = ?1 AND t.account_id = ?2 AND a.domain IS NOT NULL`,
-			uri,
-			signerId
-		)
-		.map((row) => row.inbox)
-}

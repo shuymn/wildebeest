@@ -1,4 +1,4 @@
-import { availableLocalSql, fetchedBy, isActorObject, outboundKind, recipientsFor } from './audience'
+import { availableLocalSql, isActorObject, outboundKind, recipientsFor } from './audience'
 import { readOperation, writeOperation } from './operation'
 import type { Db } from '../db/sql'
 
@@ -304,9 +304,12 @@ function receiversOf(db: Db, signerId: string, object: string): string[] {
 
 // Records the intent with its targets, and expands what the step allows. A retraction supersedes every earlier
 // activity about its object and drops the object's receipts (its own targets now hold that evidence); an Update
-// supersedes earlier Updates only. An Update goes as an Update only to servers that have the object (a receipt, or a
-// Create or Update in flight before it in the lane); every other server gets a Create of the current version
-// instead, which replaces any Create or Update of the object still waiting for it there.
+// supersedes earlier Updates only. An Update of a status goes alone to servers known to have it (a receipt, a Create
+// or Update in flight before it in the lane, or its poll's voters); every other server gets a Create of the current
+// version and then the Update, in that order in its lane, which replace any Create or Update of the object still
+// waiting for it there. Whether such a server holds the status is never guessed: Mastodon and Misskey ignore a Create
+// of a status they hold (Create#create_status) and an Update of one they do not, so one of the pair applies either way,
+// and the delivered Create's receipt makes later edits an Update alone.
 export function enqueueActivity(
 	db: Db,
 	signerId: string,
@@ -335,9 +338,9 @@ export function enqueueActivity(
 		)
 	}
 	// An Update of an actor (a profile change) goes to every target as it is, and replaces the earlier Updates of the
-	// actor still waiting there, so quick edits deliver only the latest document. An Update of a status goes as a
-	// Create to servers that lack the status, but for the inboxes of its poll's voters, which have it (they voted in it)
-	// and take its counts from an Update only (DistributePollUpdateWorker).
+	// actor still waiting there, so quick edits deliver only the latest document. An Update of a status is preceded by a
+	// Create of its current version for servers not known to have it, but for the inboxes of its poll's voters, which
+	// have it (they voted in it) and take its counts from an Update only (DistributePollUpdateWorker).
 	if (object !== null && envelope.activity.type === 'Update' && isActorObject(envelope.activity.object)) {
 		// A restoration Update still staging its audience carries the new document too, so a server it reaches after
 		// this Update is not left with the older profile. (No profile changes while the account is suspended, so a
@@ -366,16 +369,7 @@ export function enqueueActivity(
 			const creation = { ...envelope, activity: createOfCurrent(envelope.activity) }
 			insertIntent(db, signerId, creation, object, false, fresh, now)
 		}
-		const kept = new Set(fresh)
-		insertIntent(
-			db,
-			signerId,
-			envelope,
-			object,
-			false,
-			targets.filter((t) => !kept.has(t)),
-			now
-		)
+		insertIntent(db, signerId, envelope, object, false, targets, now)
 	} else {
 		insertIntent(db, signerId, envelope, object, retracts, targets, now)
 	}
@@ -610,11 +604,9 @@ function insertIntent(
 	}
 }
 
-// The servers (lane origins) that have the object, or will before anything later in their lane: a receipt at any of
-// their inboxes, a leased Create or Update of it (which may have been POSTed already), or a remote account there that
-// boosted it or holds an accepted quote of it, either of which fetched it (audience.ts fetchedBy). A Create to a server
-// that holds the status changes nothing there (Mastodon's Create#create_status keeps an existing status), so an edit
-// reaches such a server as an Update. A server is the unit, as one
+// The servers (lane origins) known to have the object, or to get it before anything later in their lane: a receipt at
+// any of their inboxes, or a leased Create or Update of it (which may have been POSTed already). A server may hold the
+// object without being known to (it fetched it to boost or quote it), so this decides only what may be left out. A server is the unit, as one
 // that holds the object from its shared inbox applies an Update sent to a personal inbox, but ignores a Create.
 function serversWithObject(db: Db, signerId: string, object: string): Set<string> {
 	const receipts = db.all<{ inbox_url: string }>(
@@ -629,11 +621,7 @@ function serversWithObject(db: Db, signerId: string, object: string): Set<string
 		signerId,
 		object
 	)
-	return new Set([
-		...receipts.map((r) => laneOf(r.inbox_url)),
-		...leased.map((r) => r.lane),
-		...fetchedBy(db, signerId, object).flatMap((inbox) => (isDeliverableInbox(inbox) ? [laneOf(inbox)] : [])),
-	])
+	return new Set([...receipts.map((r) => laneOf(r.inbox_url)), ...leased.map((r) => r.lane)])
 }
 
 // Drops the Creates and Updates of an object still waiting for these servers (queued, pending, given up, or not

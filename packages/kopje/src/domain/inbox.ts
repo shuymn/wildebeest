@@ -221,10 +221,10 @@ export type ReceiveResult = {
 	reason: string
 	jobsPending: boolean
 	delivers?: boolean
-	// signer: whose key signs the fetch: a local follower of the status's author, a local account by its username (a
-	// QuoteRequest's instrument, fetched as the quoted author), or 'instance' for the instance actor; absent, the inbox's
-	// own (the recipient's for a personal inbox).
-	need?: { kind: 'status' | 'actor'; uri: string; signer?: FollowerSigner | { local: string } | 'instance' }
+	// signer: whose key signs the fetch: a local follower of the status's author, a local author by username while it
+	// is available (a QuoteRequest's instrument, fetched as the quoted author: federation.ts authorSigner), or
+	// 'instance' for the instance actor; absent, the inbox's own (the recipient's for a personal inbox).
+	need?: { kind: 'status' | 'actor'; uri: string; signer?: FollowerSigner | { author: string } | 'instance' }
 	// Nothing changed, and the activity may apply later (its retraction could not be recorded): answered 503.
 	retry?: boolean
 }
@@ -1854,7 +1854,7 @@ const quoteRequest: Handler<'QuoteRequest'> = (db, actor, activity, input) => {
 	})
 	switch (answer.kind) {
 		case 'need':
-			return { ...ignored('need-instrument'), need: { kind: 'status', uri: answer.uri, signer: { local: answer.as } } }
+			return { ...ignored('need-instrument'), need: { kind: 'status', uri: answer.uri, signer: { author: answer.as } } }
 		case 'ignored':
 			return ignored(answer.reason)
 		case 'answered':

@@ -2,10 +2,10 @@ import { type DocumentLoader, preloadedContexts, verifyJsonLd } from '@fedify/fe
 import { describe, expect, it } from 'vitest'
 
 import { sql } from './api-helpers'
-import { NOW } from './app-helpers'
-import { LEGACY_EMPTY_KEK } from './federation-helpers'
+import { harness, NOW } from './app-helpers'
+import { fixtureKeyGen, LEGACY_EMPTY_KEK } from './federation-helpers'
 import { BUILD } from './helpers'
-import { LOCAL, mastodonActor, MASTODON, type TestActor } from './inbox-helpers'
+import { LOCAL, mastodonActor, MASTODON, signedInit, type TestActor } from './inbox-helpers'
 import {
 	ALICE,
 	ALICE_URI,
@@ -20,6 +20,7 @@ import {
 	remove,
 	setup,
 	type Setup,
+	undo,
 	update,
 } from './inbox-status-helpers'
 import { MAX_LANE_BACKLOG } from '../src/domain/deliveries'
@@ -217,17 +218,50 @@ function mastodonReceiver(current: string, activities: Record<string, unknown>[]
 	return receiver
 }
 
-// What a Mastodon server that already holds status `uri` (fetched, V1) holds after `activities`: a Create of a status it
-// has changes nothing (Create#create_status finds it), an Update replaces its content.
-function holdsAfter(activities: Record<string, unknown>[], uri: string): string {
-	let content = 'V1'
+// What a Mastodon server holds of status `uri` after `activities`, in order: `held` its version before (V1, fetched),
+// or null for none. A Create of a status it has changes nothing (Create#create_status finds it) and stores one it lacks;
+// an Update replaces one it has and is ignored otherwise.
+function holdsAfter(activities: Record<string, unknown>[], uri: string, held: string | null = 'V1'): string | null {
+	let content = held
 	for (const activity of activities) {
 		const object = activity.object as { id?: string; content?: string }
-		if (activity.type === 'Update' && object.id === uri) {
+		if (object?.id !== uri) {
+			continue
+		}
+		if (activity.type === 'Create' && content === null) {
+			content = String(object.content)
+		} else if (activity.type === 'Update' && content !== null) {
 			content = String(object.content)
 		}
 	}
 	return content
+}
+
+function announceOf(actor: TestActor, object: string) {
+	return {
+		'@context': AS,
+		id: `${actor.uri}/statuses/${nextId()}/activity`,
+		type: 'Announce',
+		actor: actor.uri,
+		published: '2026-10-11T13:00:00Z',
+		to: [`${AS}#Public`],
+		cc: [ALICE_URI],
+		object,
+	}
+}
+
+// alice's edit of her status `id` to `text`.
+async function edit(t: Setup, id: string, text: string) {
+	const response = await t.request(`/api/v1/statuses/${id}`, {
+		method: 'PUT',
+		headers: { authorization: `Bearer ${t.tokens.alice}`, 'content-type': 'application/json' },
+		body: JSON.stringify({ status: text }),
+	})
+	expect(response.status).toBe(200)
+}
+
+function follow(actor: TestActor) {
+	return { '@context': AS, id: `${actor.uri}#follows/${nextId()}`, type: 'Follow', actor: actor.uri, object: ALICE_URI }
 }
 
 describe('QuoteRequest for a local status (QuoteRequest#perform)', () => {
@@ -380,27 +414,85 @@ describe('the silent mention of acceptance', () => {
 })
 
 describe('review regressions (r2)', () => {
-	it('reaches a booster’s server with an edit as an Update: it fetched the status to boost it', async () => {
+	it('reaches a booster’s server with an edit: it fetched the status to boost it', async () => {
 		const { t, bob, mine } = await world()
-		const boost = {
-			'@context': AS,
-			id: `${bob.uri}/statuses/${nextId()}/activity`,
-			type: 'Announce',
-			actor: bob.uri,
-			published: '2026-10-11T13:00:00Z',
-			to: [`${AS}#Public`],
-			cc: [ALICE_URI],
-			object: mine.uri,
-		}
-		expect(await t.post(bob, boost)).toBe(202)
+		expect(await t.post(bob, announceOf(bob, mine.uri))).toBe(202)
 		await deliver(t)
-		const edited = await t.request(`/api/v1/statuses/${mine.id}`, {
-			method: 'PUT',
-			headers: { authorization: `Bearer ${t.tokens.alice}`, 'content-type': 'application/json' },
-			body: JSON.stringify({ status: 'boosted, edited' }),
-		})
-		expect(edited.status).toBe(200)
+		await edit(t, mine.id, 'boosted, edited')
 		expect(holdsAfter(await sentTo(t, MASTODON), mine.uri)).toBe('<p>boosted, edited</p>')
+	})
+
+	it('reaches a former booster’s server with an edit: an undone boost leaves the status there', async () => {
+		const { t, bob, mine } = await world()
+		const boost = announceOf(bob, mine.uri)
+		expect(await t.post(bob, boost)).toBe(202)
+		expect(await t.post(bob, undo(bob, boost))).toBe(202)
+		expect(await t.post(bob, follow(bob))).toBe(202)
+		await deliver(t)
+		await edit(t, mine.id, 'unboosted, edited')
+		expect(holdsAfter(await sentTo(t, MASTODON), mine.uri)).toBe('<p>unboosted, edited</p>')
+	})
+
+	it('reaches a revoked quoter that follows since with an edit, though no relation says it holds the status', async () => {
+		const { t, bob, mine } = await world()
+		const { note } = await accepted(t, bob, mine.uri)
+		await deliver(t)
+		expect((await revoke(t, mine.id, await statusId(t, note.id))).status).toBe(200)
+		expect(await t.post(bob, follow(bob))).toBe(202)
+		await deliver(t)
+		await edit(t, mine.id, 'revoked, edited')
+		expect(holdsAfter(await sentTo(t, MASTODON), mine.uri)).toBe('<p>revoked, edited</p>')
+	})
+
+	it('gives a server that never held the status its current version, and later edits as an Update alone', async () => {
+		const { t, bob, mine } = await world()
+		// bob follows after the status was posted: nothing delivered it to his server.
+		expect(await t.post(bob, follow(bob))).toBe(202)
+		await deliver(t)
+		await edit(t, mine.id, 'first edit')
+		const first = await sentTo(t, MASTODON)
+		expect(first.filter((a) => (a.object as { id?: string })?.id === mine.uri).map((a) => a.type)).toEqual([
+			'Create',
+			'Update',
+		])
+		expect(holdsAfter(first, mine.uri, null)).toBe('<p>first edit</p>')
+		await edit(t, mine.id, 'second edit')
+		const second = await sentTo(t, MASTODON)
+		expect(second.filter((a) => (a.object as { id?: string })?.id === mine.uri).map((a) => a.type)).toEqual(['Update'])
+		expect(holdsAfter(second, mine.uri, '<p>first edit</p>')).toBe('<p>second edit</p>')
+	})
+
+	it('never fetches the instrument as an author suspended after the round that asked for it', async () => {
+		const { t, bob, mine } = await world()
+		const note = quoteNote(t, bob, mine.uri, { to: [ALICE_URI], cc: [] })
+		t.web.signedOnly.set(note.id, `${ALICE_URI}#main-key`)
+		// alice is suspended between the round's need and the load of her key.
+		const store = t.store as unknown as Record<string | symbol, (...args: unknown[]) => Promise<unknown>>
+		const suspending = new Proxy(t.store, {
+			get(_target, prop) {
+				// A Store stub answers every name with an RPC method; `then` must stay undefined to keep it awaitable.
+				if (prop === 'then') {
+					return undefined
+				}
+				return async (...args: unknown[]) => {
+					if (prop === 'authorKey') {
+						await sql(
+							t.store,
+							'UPDATE local_accounts SET suspended_at = ? WHERE account_id = ?',
+							'2026-10-12T00:00:00.000Z',
+							ALICE
+						)
+					}
+					return store[prop]!(...args)
+				}
+			},
+		})
+		const h = harness(suspending, {}, undefined, { keygen: fixtureKeyGen, loader: t.web.loader })
+		const request = quoteRequest(bob, mine.uri, note.id)
+		expect((await h.request('/inbox', await signedInit(bob, '/inbox', request))).status).toBe(202)
+		expect(t.web.signers[t.web.fetched.lastIndexOf(note.id)]).toBe(`${LOCAL}/actor#main-key`)
+		expect(await quoteOf(t, note.id)).toBeUndefined()
+		expect(await recorded(t, 'Accept')).toEqual([])
 	})
 
 	it('shows the quoting status of a grouped quote notification, in the page and the group', async () => {

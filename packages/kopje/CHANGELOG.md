@@ -77,6 +77,12 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       button. Posts written before the quote policies existed have `nobody`, and so does every remote post for now:
       Kopje does not read other servers' policies yet.
 
+### Changed
+
+- An edited post reaches a server that has never been sent it as the new version followed by the edit (one extra
+  delivery to that server, the first time only), so a server that fetched the post on its own (to boost or quote it)
+  also ends with the edited version.
+
 ### Instance changes
 
 - Store schema: adds three migrations, applied on the first request after the deploy; a rollback to an earlier version

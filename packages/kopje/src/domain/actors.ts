@@ -110,6 +110,18 @@ export const getLocalKey = readOperation<{ username: string }, StoredKey | null>
 	return row === undefined ? null : storedKey(row)
 })
 
+// The key of a local account, by its exact username, that signs a fetch as itself (a QuoteRequest's instrument, fetched
+// as the quoted author, Mastodon's on_behalf_of), read when it is loaded: only while the account is available, so an
+// author suspended or being deleted after the request's round never signs; null otherwise, and the instance actor signs.
+export const getAuthorKey = readOperation<{ username: string }, StoredKey | null>((db, { username }) => {
+	const row = db.first<KeyRow>(
+		`SELECT a.username, l.privkey, l.privkey_salt, l.pubkey FROM accounts a JOIN local_accounts l ON l.account_id = a.id
+		WHERE a.domain IS NULL AND a.username = ? AND ${availableLocalSql('l')}`,
+		username
+	)
+	return row === undefined ? null : storedKey(row)
+})
+
 // The key of a local account that signs a fetch on a remote account's behalf (FollowerSigner in remote-collections.ts),
 // with its username, checked when it is loaded: the local account is available and follows the remote account (an
 // accepted follow), and the remote account is available. Null otherwise, and the fetch is signed by the instance actor.
