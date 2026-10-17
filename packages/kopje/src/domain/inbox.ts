@@ -383,7 +383,9 @@ function unavailableRemote(db: Db, uri: string): RemoteRow | undefined {
 // (refreshRouting), as Mastodon leaves a suspended account's key and attributes as they were. No account is stored, and
 // none moves, under an instance domain block: a document whose actor host or domain is covered stores nothing, and
 // leaves a stored row unchanged (Mastodon's ProcessAccountService stores nothing on a blocked domain), so the set of
-// accounts a block covers is fixed when it commits. A document that names
+// accounts a block covers is fixed when it commits. A refresh stores only an account no block covers, by its stored
+// keys or its new ones, so it clears a domain mark left from a lifted block (R38) in its own transaction: the mark
+// never outlives the account's move to another domain. A document that names
 // any of its collections asks for them to be read (remote-collections.ts, as ActivityPub::ProcessAccountService
 // schedules its syncs each time it processes the account); syncWaiting: a request waits for a round.
 export function upsertRemoteActor(
@@ -450,7 +452,10 @@ export function upsertRemoteActor(
 					discoverable = excluded.discoverable, inbox_url = excluded.inbox_url,
 					shared_inbox_url = excluded.shared_inbox_url, raw = excluded.raw, fetched_at = excluded.fetched_at,
 					search_text = excluded.search_text, domain = excluded.domain,
-					confirmed_username = excluded.confirmed_username
+					confirmed_username = excluded.confirmed_username,
+					suspended_at = CASE WHEN accounts.suspension_source = 'domain' THEN NULL ELSE accounts.suspended_at END,
+					suspension_source = CASE WHEN accounts.suspension_source = 'domain' THEN NULL
+						ELSE accounts.suspension_source END
 				WHERE accounts.domain IS NOT NULL`,
 				id,
 				...values

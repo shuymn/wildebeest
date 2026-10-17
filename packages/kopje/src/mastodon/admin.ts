@@ -8,7 +8,7 @@ import {
 	requestParams,
 	storeCall,
 } from './context'
-import { mastodonError } from './errors'
+import { mastodonError, moderatingError } from './errors'
 import type { Params } from './params'
 import { reportResponse } from './reports'
 import type { PageQuery } from '../domain/accounts'
@@ -341,6 +341,9 @@ export function adminAccounts(version: 1 | 2): ApiHandler {
 		const result = authorized(await storeCall(c, deps, (s, b) => s.adminAccounts(b, input)))
 		if (result.status === 'too_broad') {
 			return mastodonError(422, TOO_BROAD)
+		}
+		if (result.status === 'moderating') {
+			return moderatingError()
 		}
 		const path = `/api/v${version}/admin/accounts`
 		listLinks(c, (cursor) => listUrl(c, path, ['limit', ...parsed.names], p, cursor), result)

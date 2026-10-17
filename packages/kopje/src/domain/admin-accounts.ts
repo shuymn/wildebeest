@@ -9,7 +9,7 @@ import {
 	presentAccount,
 } from './accounts'
 import { accessAdminRefusal, normalizedEmail } from './admin-authority'
-import { availableJoinedSql, availableLocalSql, deletingSql, suspendedSql } from './audience'
+import { activeSql, availableJoinedSql, availableLocalSql, deletingSql, suspendedSql } from './audience'
 import {
 	ADMIN_PERMISSION,
 	adminGuarded,
@@ -21,7 +21,7 @@ import {
 } from './auth'
 import { logAction } from './moderation-log'
 import { writeOperation } from './operation'
-import { suspendRemote, unsuspendRemote } from './remote-suspension'
+import { domainJobRunning, suspendRemote, unsuspendRemote } from './remote-suspension'
 import { reportExists, resolveReport } from './reports'
 import { suspendLocal, unsuspendLocal } from './suspension'
 import type { Db } from '../db/sql'
@@ -210,6 +210,9 @@ export type AdminAccountList =
 	| ({ status: 'ok'; more: boolean } & Page<AdminAccount>)
 	// More than ADMIN_ACCOUNT_CANDIDATES accounts in the searched range: 422, never an unordered or empty page.
 	| { status: 'too_broad' }
+	// A list of active or suspended accounts while the domain job runs: 503 with Retry-After, never a short or empty
+	// page (R38).
+	| { status: 'moderating' }
 
 // What a filter reads of an account: its id and flags only. unavailable is R1's rule (availableSql): a suspended
 // account, local or remote (R38), or a remote one whose deletion has started; the admin entity shows each as
@@ -374,7 +377,7 @@ function readMatches(
 	adminId: string,
 	bounds: Bounds,
 	limit: number
-): Candidate[] | 'too_broad' {
+): Candidate[] | 'too_broad' | 'moderating' {
 	if (filter.origin === 'local' || filter.email !== null || filter.roleIds !== null) {
 		// The local accounts, an operator-sized set (a deployment assumption of about 10 accounts).
 		return ordered(
@@ -396,6 +399,11 @@ function readMatches(
 		return rows.length > ADMIN_ACCOUNT_CANDIDATES ? 'too_broad' : ordered(db, rows, filter, adminId, bounds)
 	}
 	const order = bounds.ascending ? 'ASC' : 'DESC'
+	// The plans below walk indexes that read the domain marks (accounts_suspended, accounts_active), which lag the
+	// blocks while the domain job runs (R38, remote-suspension.ts): no page is answered from them meanwhile.
+	if ((filter.status === 'suspended' || filter.status === 'active') && domainJobRunning(db)) {
+		return 'moderating'
+	}
 	if (filter.status === 'suspended') {
 		// The suspended local accounts (operator-sized), and the remote accounts the instance suspended or whose deletion
 		// has started, as one range of accounts_suspended and one of accounts_deleted in id order; merged by id.
@@ -419,11 +427,12 @@ function readMatches(
 	// No search: the accounts by id, newest first. Active accounts walk accounts_active (migration
 	// 0045_remote_suspension), which holds no account suspended by the instance or whose deletion has started, so the
 	// walk skips only the suspended local accounts; others walk the primary key. The residual skips the local accounts
-	// (remote) and the suspended local accounts (active), operator-sized sets.
+	// (remote) and the suspended local accounts (active), operator-sized sets: once the domain job has run, every
+	// account a block covers is marked or individually suspended, so none is in accounts_active.
 	const active = filter.status === 'active'
 	const residual = [
 		filter.origin === 'remote' ? 'a.domain IS NOT NULL' : '1',
-		active ? availableJoinedSql('a', 'l') : '1',
+		active ? `${activeSql('a')} AND ${availableJoinedSql('a', 'l')}` : '1',
 	].join(' AND ')
 	return db.all<Candidate>(
 		`SELECT ${CANDIDATE_COLUMNS} FROM accounts a INDEXED BY ${active ? 'accounts_active' : 'sqlite_autoindex_accounts_1'}
@@ -487,8 +496,8 @@ export function adminAccountOperations(read: AdminDeclare, write: AdminDeclare) 
 			}
 			const bounds = boundsOf(page)
 			const found = readMatches(db, filter, admin.accountId, bounds, page.limit)
-			if (found === 'too_broad') {
-				return { status: 'too_broad' }
+			if (found === 'too_broad' || found === 'moderating') {
+				return { status: found }
 			}
 			const kept = found.slice(0, page.limit)
 			const more = bounds.ascending
@@ -592,7 +601,7 @@ export function adminAccountOperations(read: AdminDeclare, write: AdminDeclare) 
 			if (found === undefined) {
 				return { status: 'not_found' }
 			}
-			if (!(found.domain === null ? unsuspendLocal(db, id, admin.now) : unsuspendRemote(db, id))) {
+			if (!(found.domain === null ? unsuspendLocal(db, id, admin.now) : unsuspendRemote(db, id) !== null)) {
 				return { status: 'not_allowed' }
 			}
 			logAction(db, admin, 'unsuspend', { type: 'Account', id }, {}, admin.now)
