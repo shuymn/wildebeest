@@ -30,6 +30,28 @@ function violations(files: Record<string, string>): string[] {
 	return found
 }
 
+// Where an unchecked local key (getLocalKey) can be loaded or used for signing: only userSigner calls .localKey(, and
+// only setKeyPairsDispatcher calls userSigner.
+function keyLoadingViolations(files: Record<string, string>): string[] {
+	const found: string[] = []
+	const FED = '../src/federation/federation.ts'
+	for (const [file, source] of Object.entries(files)) {
+		const outside = file === FED ? source.replace(/const userSigner = async[\s\S]*?\n\t\}\n/, '') : source
+		if (/\.localKey\s*\(/.test(outside)) {
+			found.push(`${file}: calls .localKey( outside userSigner`)
+		}
+		const calls = source.match(/\buserSigner\s*\(/g)?.length ?? 0
+		const inDispatcher = /setKeyPairsDispatcher\([\s\S]*?\buserSigner\s*\(identifier\)/.test(source) ? 1 : 0
+		if (calls > inDispatcher) {
+			found.push(`${file}: calls userSigner outside setKeyPairsDispatcher`)
+		}
+		if (/\b(getDocumentLoader|getActorKeyPairs|setInboxListeners)\s*\(/.test(source)) {
+			found.push(`${file}: asks Fedify to sign with the dispatcher keys`)
+		}
+	}
+	return found
+}
+
 describe('Fedify usage', () => {
 	it('sees the federation sources', () => {
 		expect(Object.keys(sources)).toContain('../src/federation/federation.ts')
@@ -57,21 +79,44 @@ describe('Fedify usage', () => {
 		expect(signing).toEqual(['../src/federation/ld-sign.ts'])
 	})
 
-	// A fetch signed as a local account loads its key through getSigningKey, which refuses an unavailable account
-	// (federation.ts localSigner). getLocalKey has no such check: it serves only the key pairs Fedify publishes on the
-	// actor document (userSigner, in setKeyPairsDispatcher), and nothing may ask Fedify to sign with those pairs.
-	it('loads a local key without the availability check only to publish it', () => {
-		const loading = Object.entries(sources)
-			.filter(([, source]) => /\.localKey\s*\(/.test(source))
-			.map(([file]) => file)
-		expect(loading).toEqual(['../src/federation/federation.ts'])
-		const federation = sources['../src/federation/federation.ts'] ?? ''
-		expect(federation.match(/\buserSigner\s*\(/g)).toHaveLength(1)
-		expect(federation).toMatch(/setKeyPairsDispatcher\([\s\S]*?\buserSigner\s*\(identifier\)/)
-		const fedifySigning = Object.entries(sources)
-			.filter(([, source]) => /\b(getDocumentLoader|getActorKeyPairs)\s*\(/.test(source))
-			.map(([file]) => file)
-		expect(fedifySigning).toEqual([])
+	// A fetch signed as a local account loads its key through getSigningKey (localSigner), or getFollowerKey for a
+	// follower, both of which refuse an unavailable account. getLocalKey has no such check and serves only Fedify's
+	// key-pairs dispatcher (userSigner), so nothing may make Fedify sign with those pairs: no document loader or key
+	// pairs asked of Fedify, and no Fedify inbox listeners, whose loader signs as the recipient.
+	it('loads a local key without the availability check only for the key-pairs dispatcher', () => {
+		expect(keyLoadingViolations(sources)).toEqual([])
+	})
+
+	it('detects each unchecked key use', () => {
+		const userSigner = `const userSigner = async (username) => {
+		const key = await rpc((s) => s.localKey(build, { username }))
+	}
+	federation.setKeyPairsDispatcher(async (_ctx, identifier) => { await userSigner(identifier) })`
+		const fed = '../src/federation/federation.ts'
+		expect(keyLoadingViolations({ [fed]: userSigner })).toEqual([])
+		expect(
+			keyLoadingViolations({
+				[fed]: userSigner.replace('{ await userSigner(identifier) }', '{}') + '\nawait userSigner(name)',
+			})
+		).toEqual([`${fed}: calls userSigner outside setKeyPairsDispatcher`])
+		expect(keyLoadingViolations({ [fed]: `${userSigner}\nconst localSigner = () => s.localKey(build, x)` })).toEqual([
+			`${fed}: calls .localKey( outside userSigner`,
+		])
+		expect(keyLoadingViolations({ [fed]: userSigner, 'a.ts': 'store.localKey(build, x)' })).toEqual([
+			'a.ts: calls .localKey( outside userSigner',
+		])
+		expect(
+			keyLoadingViolations({
+				[fed]: userSigner,
+				'b.ts': 'ctx.getDocumentLoader({ identifier })',
+				'c.ts': 'ctx.getActorKeyPairs(name)',
+				'd.ts': 'federation.setInboxListeners("/u/{identifier}/inbox")',
+			})
+		).toEqual([
+			'b.ts: asks Fedify to sign with the dispatcher keys',
+			'c.ts: asks Fedify to sign with the dispatcher keys',
+			'd.ts: asks Fedify to sign with the dispatcher keys',
+		])
 	})
 
 	it('detects each forbidden use', () => {
