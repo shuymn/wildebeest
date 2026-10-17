@@ -219,8 +219,9 @@ export const ACCOUNT_FROM = 'accounts a LEFT JOIN local_accounts l ON l.account_
 
 // RES-3: the UTF-8 bytes of one answer of many accounts (a list's members and endorsements with limit=0, familiar
 // followers), as serialized, the JSON around the accounts reserved first, so it bounds the whole response body
-// (only an answer's first account, itself bounded per account by RES-2, may stand alone past it). A Mastodon user's account serializes to about 2 KiB, so 1,000 take a quarter
-// of it; one at Misskey's profile limits to about 8 KiB (test/account-answer-bytes.test.ts measures both).
+// (only an answer's first account, itself bounded per account by RES-2, may stand alone past it). A Mastodon user's
+// account serializes to about 2 KiB, so 1,000 take a quarter of it; one at Misskey's profile limits to about 8 KiB
+// (test/account-answer-bytes.test.ts measures both).
 export const ACCOUNT_ANSWER_BYTES = 8 * 1024 * 1024
 // Accounts read per query while an answer is filled: what is read past the budget is at most one chunk of accounts
 // at their bound (RES-2), about 6 MB.
@@ -1216,7 +1217,7 @@ export const listFollows = optionalUserReadOperation<ListFollowsInput, Page<Acco
 				: db.all<{ cursor: string; id: string }>(
 						`SELECT CAST(f.id AS TEXT) AS cursor, a.id
 						FROM json_each(?4) c CROSS JOIN follows f ON f.id = CAST(json_extract(c.value, '$.id') AS INTEGER)
-							JOIN accounts a ON a.id = f.${other} LEFT JOIN local_accounts l ON l.account_id = a.id
+							JOIN accounts a ON a.id = f.${other}
 						WHERE ${followListedSql('a.id', '?1', '?2', '?3')}`,
 						id,
 						viewerId,

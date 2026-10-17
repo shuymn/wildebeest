@@ -1681,7 +1681,7 @@ export const interactors = optionalUserReadOperation<InteractorsInput, Viewed<Pa
 				: db.all<{ cursor: string; id: string }>(
 						`SELECT CAST(e.id AS TEXT) AS cursor, a.id
 						FROM json_each(?3) c CROSS JOIN ${edge}
-							JOIN accounts a ON a.id = e.account_id LEFT JOIN local_accounts l ON l.account_id = a.id
+							JOIN accounts a ON a.id = e.account_id
 						WHERE ${listedForSql('a.id', '?1', '?2')}`,
 						viewerId,
 						now,

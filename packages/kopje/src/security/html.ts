@@ -148,7 +148,9 @@ export const REMOTE_BIO_BYTES = 64 * 1024
 
 const ENCODER = new TextEncoder()
 
-// The UTF-8 bytes of `text` as JSON.stringify writes it.
+// The UTF-8 bytes of `text` as JSON.stringify writes it. Not dump-format's utf8Length: this module has no relative
+// imports, as the cutover runs it from the sources on Node, which resolves no extensionless path
+// (cli/lib/cutover/kopje-runtime.js).
 export function jsonStringBytes(text: string): number {
 	return ENCODER.encode(JSON.stringify(text)).length
 }

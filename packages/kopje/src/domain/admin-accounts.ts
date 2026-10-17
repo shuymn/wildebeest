@@ -326,16 +326,10 @@ function textMatches(db: Db, rows: readonly Candidate[], filter: AdminAccountFil
 	const conditions: string[] = []
 	const values: SqlStorageValue[] = [JSON.stringify(rows.map((row) => row.id))]
 	const prefix = (expression: string, value: string | null) => {
-		if (value === null) {
-			return
-		}
-		const lower = asciiLower(value)
-		const end = prefixEnd(lower)
-		values.push(lower)
-		conditions.push(`${expression} >= ?${values.length}`)
-		if (end !== null) {
-			values.push(end)
-			conditions.push(`${expression} < ?${values.length}`)
+		if (value !== null) {
+			const range = prefixRange(expression, value, values.length + 1)
+			conditions.push(range.where)
+			values.push(...range.values)
 		}
 	}
 	prefix('lower(a.username)', filter.username)
@@ -355,6 +349,17 @@ function textMatches(db: Db, rows: readonly Candidate[], filter: AdminAccountFil
 		...values
 	)
 	return new Set(found.map((row) => row.id))
+}
+
+// The values of `expression` that start with `value` (ASCII letters folded): the range from the folded prefix to its
+// successor (prefixEnd) in BINARY order, none above when it has none, with its parameters numbered from `at`.
+function prefixRange(expression: string, value: string, at: number): { where: string; values: string[] } {
+	const lower = asciiLower(value)
+	const end = prefixEnd(lower)
+	return {
+		where: `${expression} >= ?${at}${end === null ? '' : ` AND ${expression} < ?${at + 1}`}`,
+		values: end === null ? [lower] : [lower, end],
+	}
 }
 
 // The range of an id walk inside the cursor, for a query whose ?1 and ?2 are the bounds.
@@ -434,27 +439,19 @@ function readMatches(
 // by_domain is given), a display name prefix, or a domain. Each is a range of lowercased text from the prefix to its
 // successor (prefixEnd), compared in BINARY order as the index stores it.
 function searchRange(filter: AdminAccountFilter): { index: string; where: string; values: SqlStorageValue[] } | null {
-	const prefix = (expression: string, value: string, at: number) => {
-		const lower = asciiLower(value)
-		const end = prefixEnd(lower)
-		return {
-			where: `${expression} >= ?${at}${end === null ? '' : ` AND ${expression} < ?${at + 1}`}`,
-			values: end === null ? [lower] : [lower, end],
-		}
-	}
 	if (filter.username !== null) {
 		if (filter.byDomain !== null) {
-			const range = prefix('lower(a.username)', filter.username, 2)
+			const range = prefixRange('lower(a.username)', filter.username, 2)
 			return {
 				index: 'accounts_domain_username',
 				where: `a.domain = ?1 AND ${range.where}`,
 				values: [filter.byDomain, ...range.values],
 			}
 		}
-		return { index: 'accounts_username', ...prefix('lower(a.username)', filter.username, 1) }
+		return { index: 'accounts_username', ...prefixRange('lower(a.username)', filter.username, 1) }
 	}
 	if (filter.displayName !== null) {
-		return { index: 'accounts_display_name', ...prefix('lower(a.display_name)', filter.displayName, 1) }
+		return { index: 'accounts_display_name', ...prefixRange('lower(a.display_name)', filter.displayName, 1) }
 	}
 	if (filter.byDomain !== null) {
 		return { index: 'accounts_domain_username', where: 'a.domain = ?1', values: [filter.byDomain] }

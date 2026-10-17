@@ -4,10 +4,9 @@ import {
 	type Page,
 	type PageQuery,
 	type Present,
-	presentAccount,
 	presentAccountsWithin,
+	presentedRows,
 	resolveAccountId,
-	accountRowsOf,
 	windowAccountIds,
 } from './accounts'
 import { availableSql } from './audience'
@@ -172,8 +171,7 @@ export function ownedAccountsPage(
 	if (page !== null) {
 		const window = singleWindow(db, candidates(ascending ? 'ASC' : 'DESC'), size, owner, max, min, size)
 		const shown = windowPage(window, windowAccountIds(db, window, rule), key, page.limit, ascending)
-		const items = accountRowsOf(db, shown.rows.map(key)).map((row) => presentAccount(row, present))
-		return { items, newest: shown.newest, oldest: shown.oldest, cut: shown.cut }
+		return { items: presentedRows(db, shown.rows, present), newest: shown.newest, oldest: shown.oldest, cut: shown.cut }
 	}
 	// Ids first, through the rule, then the profiles of the answer's own accounts only.
 	const ids: string[] = []
