@@ -241,6 +241,50 @@ describe('bounded provenance (VIS-30)', () => {
 		])
 	}, 60_000)
 
+	// 100 recipients on crowd.example with the lowest ids, then `minority` on hosts of their own, all at one gateway
+	// inbox: the hosts after the first PROVENANCE_MAX + 1 ids are found by the host arm of byInbox only.
+	async function crowdThenMinority(store: StoreStub, accountId: string, minority: number) {
+		await sql(
+			store,
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 100 + ?1 - 1)
+			INSERT INTO accounts (id, uri, username, domain, inbox_url, shared_inbox_url)
+			SELECT CAST(900000000000000000 + i AS TEXT), 'https://' || d || '/users/u' || i, 'u' || i, d,
+				'https://' || d || '/users/u' || i || '/inbox', 'https://gateway.example/inbox'
+			FROM (SELECT i, CASE WHEN i < 100 THEN 'crowd.example' ELSE 'm' || i || '.example' END AS d FROM n)`,
+			minority
+		)
+		await sql(
+			store,
+			`INSERT INTO follows (account_id, target_account_id, state)
+			SELECT id, ?, 'accepted' FROM accounts WHERE shared_inbox_url = 'https://gateway.example/inbox'`,
+			accountId
+		)
+	}
+
+	it('finds a host whose recipients come after the first ids, which keeps the row when another host is refused', async () => {
+		const h = await community(['alice'])
+		await crowdThenMinority(h.store, h.users.alice.id, 1)
+		await post(h, h.users.alice, { status: 'to the gateway' })
+		expect((await rows(h.store)).map((r) => [r.accounts, r.domains, r.many])).toEqual([
+			[null, '["crowd.example","m100.example"]', 1],
+		])
+		await runInDurableObject(h.store, () => {
+			setHostPolicyForTests((_db, host) => host === 'crowd.example')
+		})
+		expect(await drain(h.store)).toEqual([['Create', 'https://gateway.example/inbox']])
+	})
+
+	it.each([
+		[PROVENANCE_MAX - 1, true],
+		[PROVENANCE_MAX, false],
+	])('lists the exact hosts at 16 and none at 17, with %i hosts after the first ids', async (minority, listed) => {
+		const h = await community(['alice'])
+		await crowdThenMinority(h.store, h.users.alice.id, minority)
+		await post(h, h.users.alice, { status: 'to the gateway' })
+		const hosts = ['crowd.example', ...Array.from({ length: minority }, (_, k) => `m${100 + k}.example`)].sort()
+		expect((await rows(h.store)).map((r) => r.domains)).toEqual([listed ? JSON.stringify(hosts) : null])
+	})
+
 	it('returns the first of each host up to the bound, and leaves the hosts out above it', async () => {
 		for (const [hosts, domains] of [
 			// Besides crowd.example: 16 hosts in all, then 17, then 101.
@@ -555,7 +599,7 @@ describe('confirmDelivery in the round (VIS-30)', () => {
 		expect([body.type, body.object.content]).toEqual(['Create', '<p>confirmed</p>'])
 	})
 
-	it('sends nothing when the row was claimed again before the confirmation, nor when the confirmation fails', async () => {
+	it('sends nothing when the row was claimed again under another lease before the confirmation', async () => {
 		const { h } = await followedAlice()
 		await post(h, h.users.alice, { status: 'once' })
 		const { fetch, sent } = recordingFetch()
@@ -570,23 +614,25 @@ describe('confirmDelivery in the round (VIS-30)', () => {
 			checkHost: gate.checkHost,
 		})
 		await gate.reached
-		// The lease runs out; another round claims the row again and delivers it.
-		expect(
-			await deliveryRound(
-				testEnv,
-				deliveryDeps(
-					() => h.store,
-					fetch,
-					() => NOW + LEASE_MS,
-					'again'
-				)
-			)
-		).toMatchObject({ claimed: 1, settled: ['delivered'] })
+		// The lease runs out; another claim leases the row again, and holds it.
+		const again = await h.store.claimDeliveries(BUILD, { now: NOW + LEASE_MS, leaseToken: 'again' })
+		expect(again.deliveries).toHaveLength(1)
+		const id = again.deliveries[0]!.id
+		const lease = () => sql(h.store, 'SELECT state, lease_token FROM deliveries WHERE id = ?', id)
 		gate.release()
 		expect(await late).toMatchObject({ claimed: 1, settled: [] })
-		expect(sent).toHaveLength(1)
+		expect(sent).toEqual([])
+		// The old token is refused; the replacement lease stays as it was.
+		expect(await h.store.confirmDelivery(BUILD, { id, leaseToken: 'late-1', now: NOW + LEASE_MS })).toEqual({
+			status: 'stale',
+		})
+		expect(await lease()).toEqual([{ state: 'leased', lease_token: 'again' }])
+	})
 
+	it('sends nothing when the confirmation fails', async () => {
+		const { h } = await followedAlice()
 		await post(h, h.users.alice, { status: 'unconfirmed' })
+		const { fetch, sent } = recordingFetch()
 		const failing = new Proxy(h.store, {
 			get: (target, name) =>
 				name === 'confirmDelivery'
@@ -600,14 +646,17 @@ describe('confirmDelivery in the round (VIS-30)', () => {
 				deliveryDeps(
 					() => failing,
 					fetch,
-					() => NOW + LEASE_MS,
+					() => NOW,
 					'failing'
 				)
 			)
-		).toMatchObject({ claimed: 1, settled: [] })
+		).toMatchObject({
+			claimed: 1,
+			settled: [],
+		})
 		expect(errors).toHaveBeenCalledWith(expect.objectContaining({ event: 'kopje.delivery.confirm.failed' }))
 		errors.mockRestore()
-		expect(sent).toHaveLength(1)
+		expect(sent).toEqual([])
 		// The row stays leased until its lease ends, and is claimed again then.
 		expect((await rows(h.store)).map((r) => r.state)).toEqual(['leased'])
 	})
