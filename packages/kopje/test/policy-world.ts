@@ -249,19 +249,6 @@ export const worldArb: fc.Arbitrary<World> = fc
 		// Last, as above: pins (each a choice among the author's pinnable statuses) and conversation mutes.
 		pins: fc.array(fc.record({ account: fc.nat(), status: fc.nat() }), { maxLength: 4 }),
 		conversationMutes: fc.array(fc.record({ account: fc.nat(), status: fc.nat() }), { maxLength: 4 }),
-		// Last, as above: quotes, each by an original of another (or, with `self`, the author's own) original or of a
-		// status that is gone.
-		quotes: fc.array(
-			fc.record({
-				status: fc.nat(),
-				quoted: fc.nat(),
-				gone: fc.boolean(),
-				self: fc.boolean(),
-				state: fc.constantFrom(...QUOTE_STATES),
-				legacy: fc.boolean(),
-			}),
-			{ maxLength: 8 }
-		),
 	})
 	.map((raw): World => {
 		const accounts: WorldAccount[] = []
@@ -402,24 +389,26 @@ export const worldArb: fc.Arbitrary<World> = fc
 			tagFollowers: Array.from({ length: LOCALS }, (_, x) => x).filter(
 				(x) => raw.follows[x]?.showReblogs === true && raw.follows[x]?.notify === true
 			),
-			quotes: unique(
-				raw.quotes.flatMap((q): WorldQuote[] => {
-					const originals = statuses.flatMap((status, s) => (status.reblogOf === null ? [s] : []))
-					const status = originals[q.status % Math.max(originals.length, 1)]
-					if (status === undefined) {
-						return []
-					}
-					const author = statuses[status]?.author
-					const own = originals.filter((s) => s !== status && statuses[s]?.author === author)
-					const others = originals.filter((s) => s !== status)
-					const candidates = q.self && own.length > 0 ? own : others
-					const quoted = q.gone ? null : (candidates[q.quoted % Math.max(candidates.length, 1)] ?? null)
-					// An accepted quote has its quoted status (the schema's CHECK); a detach makes it deleted.
-					const state = quoted === null && q.state === 'accepted' ? 'deleted' : q.state
-					return [{ status, quoted, state, legacy: q.legacy }]
-				}),
-				(q) => String(q.status)
-			),
+			// Quotes, drawn from bits already drawn (a new field would change the worlds the fixed seeds of the other
+			// properties give): about one original in three quotes another original (with one bit, one of its author's own
+			// when there is one) or a status that is gone, in each stored state, legacy or not.
+			quotes: raw.statuses.flatMap((r, s): WorldQuote[] => {
+				const k = Math.floor(r.target / 2)
+				if (statuses[s]?.reblogOf !== null || k % 3 !== 0) {
+					return []
+				}
+				const bits = Math.floor(k / 3)
+				const author = statuses[s]?.author
+				const originals = statuses.flatMap((status, o) => (status.reblogOf === null && o !== s ? [o] : []))
+				const own = originals.filter((o) => statuses[o]?.author === author)
+				const candidates = Math.floor(bits / 10) % 2 === 1 && own.length > 0 ? own : originals
+				const gone = Math.floor(bits / 20) % 5 === 0
+				const quoted = gone ? null : (candidates[Math.floor(bits / 100) % Math.max(candidates.length, 1)] ?? null)
+				const drawn = QUOTE_STATES[bits % QUOTE_STATES.length] ?? 'pending'
+				// An accepted quote has its quoted status (the schema's CHECK); a detach makes it deleted.
+				const state = quoted === null && drawn === 'accepted' ? 'deleted' : drawn
+				return [{ status: s, quoted, state, legacy: Math.floor(bits / 5) % 2 === 1 }]
+			}),
 			now: raw.now,
 		}
 	})
