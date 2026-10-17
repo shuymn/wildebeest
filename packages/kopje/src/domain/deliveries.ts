@@ -815,19 +815,25 @@ function activeCount(db: Db, where: string, limit: number, ...params: SqlStorage
 }
 
 // Admission (RES-4): whether one more active row fits the lane and the whole backlog, `total` being the active rows
-// counted once by the caller and kept up to date. Retractions are never refused: they clean up what was already
-// sent, and are bounded by it.
+// counted once by the caller, when a row first needs it, and kept up to date. Retractions are never refused: they
+// clean up what was already sent, and are bounded by it; admitting only retractions counts nothing, so R38's severing
+// rounds, which record many, do not read up to MAX_BACKLOG rows for each.
 class Admission {
 	#total: number | null = null
 
 	constructor(private readonly db: Db) {}
 
 	admits(accountId: string, lane: string, retracts: boolean): boolean {
+		if (retracts) {
+			if (this.#total !== null) {
+				this.#total++
+			}
+			return true
+		}
 		this.#total ??= activeCount(this.db, '1', MAX_BACKLOG)
 		const fits =
-			retracts ||
-			(this.#total < MAX_BACKLOG &&
-				activeCount(this.db, 'account_id = ? AND lane = ?', MAX_LANE_BACKLOG, accountId, lane) < MAX_LANE_BACKLOG)
+			this.#total < MAX_BACKLOG &&
+			activeCount(this.db, 'account_id = ? AND lane = ?', MAX_LANE_BACKLOG, accountId, lane) < MAX_LANE_BACKLOG
 		if (fits) {
 			this.#total++
 		}

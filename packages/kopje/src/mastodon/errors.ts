@@ -25,3 +25,13 @@ export function maintenanceError(): Response {
 	response.headers.set('retry-after', String(MAINTENANCE_RETRY_AFTER_SECONDS))
 	return response
 }
+
+// How long the admin should wait before listing active or suspended accounts again while the domain job reconciles
+// the domain marks (R38, domain/remote-suspension.ts): its rounds run back to back through the Queue.
+export const MODERATION_RETRY_AFTER_SECONDS = 30
+
+export function moderatingError(): Response {
+	const response = mastodonError(503, 'moderation in progress, try again')
+	response.headers.set('retry-after', String(MODERATION_RETRY_AFTER_SECONDS))
+	return response
+}

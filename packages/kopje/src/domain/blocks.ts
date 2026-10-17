@@ -131,9 +131,11 @@ function endFollow(db: Db, follower: Party, target: Party, now: number, severing
 	return false
 }
 
-// R38's severing of a remote account's follow of a local account (remote-suspension.ts): an accepted follow ends with
-// a withdrawing Reject, a request is deleted without one (endFollow). Returns whether an activity was recorded.
-export function severRemoteFollow(db: Db, followerId: string, targetId: string, now: number): boolean {
+// R38's severing (remote-suspension.ts) of a follow between a remote account and a local one, either way. A remote
+// account's accepted follow of a local account ends with a withdrawing Reject, its request is deleted without one; a
+// local account's follow or request of a remote account ends with its Undo (endFollow). Returns whether an activity was
+// recorded.
+export function severFollow(db: Db, followerId: string, targetId: string, now: number): boolean {
 	const follower = party(db, followerId)
 	const target = party(db, targetId)
 	return follower !== undefined && target !== undefined && endFollow(db, follower, target, now, true)
