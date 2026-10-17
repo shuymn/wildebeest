@@ -66,25 +66,21 @@ import type { Db } from '../db/sql'
 //     a constant.
 // The arithmetic: a preparatory step or a mark writes at most room() rows, and the final step is taken only while
 // room() >= 0, so a round writes at most MODERATION_ROUND_ROWS - SEVER_ROWS + SEVER_ROWS rows. Progress: a round
-// starts with room() = MODERATION_ROUND_ROWS - SEVER_ROWS (209) > 0, so its first covered account is marked, or its
+// starts with room() = MODERATION_ROUND_ROWS - SEVER_ROWS (259) > 0, so its first covered account is marked, or its
 // first follow has a preparatory row written or is ended; otherwise the cursor moves past what it read.
 
 // Follows a severing round reads at most.
 export const SEVER_ROUND = 100
-// Rows a local follow's delete writes through its triggers at most: lists.ts MAX_LISTS list memberships and one pin.
-// Written out: lists.ts imports this module through its own imports, so its constant is not set yet when this one is
-// (test/domain-job.test.ts pins the two).
-export const SEVER_LIST_ROWS = 51
 // Rows the final step of ending a follow writes at most, its preparatory steps done, with the job's own update: 40
 // for the follow and its bookkeeping, which write 9 at most: the follow, its follow and follow_request notifications
 // (one each at most, notifications_natural; no push delivery left), the two counts, the retraction, the activity's
 // intent and its one chunk (one target: the remote account's current inbox; no earlier receivers), the earlier
-// activities left to supersede (none), and the job's update; SEVER_LIST_ROWS for the follow delete's triggers, which
-// for a local follower remove the account from each of its lists and its pin (list_members_follow_ended,
-// account_pins_follow_ended); and 3 × EXPANSION_STEP for the expansion that recording the activity runs
+// activities left to supersede (none), and the job's update; 1 for the follow delete's triggers, which for a local
+// follower remove its pin of the account (account_pins_follow_ended) and, its list memberships of the account already
+// deleted in preparatory steps, no list row (list_members_follow_ended); and 3 × EXPANSION_STEP for the expansion that recording the activity runs
 // (deliveries.ts enqueueActivity), which may expand any activity's pending targets: up to EXPANSION_STEP deliveries,
 // each from a chunk of its own at worst, whose cursor update and delete are two more rows.
-export const SEVER_ROWS = 40 + SEVER_LIST_ROWS + 3 * EXPANSION_STEP
+export const SEVER_ROWS = 40 + 1 + 3 * EXPANSION_STEP
 // Suspended accounts a clearing round reads at most: each clear is one row, so a round writes CLEAR_ROUND + 1.
 export const CLEAR_ROUND = 500
 // Accounts a marking round walks at most, by id (the predicate is evaluated for each remote one among them), and
@@ -221,7 +217,9 @@ function budget(db: Db): Budget {
 type Severed = { follower: string; target: string; id: number; state: string; uri: string | null }
 
 // The preparatory steps of ending `follow` (above), within `room()` rows: its follow notification's push deliveries,
-// then the earlier activities that the activity ending it would supersede (deliveries.ts supersedeEarlier, two rows
+// the followed account's memberships in the follower's lists (which the follow delete's trigger would remove at once:
+// a converted instance keeps legacy lists, of any number, so they are not bounded by lists.ts MAX_LISTS; read as the
+// trigger reads them, through the follower's lists), then the earlier activities that the activity ending it would supersede (deliveries.ts supersedeEarlier, two rows
 // each at most): for a remote follower's accepted follow with an id, its Reject's, signed by the local target; for a
 // local follower, its Undo's, signed by the follower. Returns whether all are done, so that its end costs at most
 // SEVER_ROWS; false when room ran out first, after writing at least one row whenever room() was positive.
@@ -246,6 +244,21 @@ function prepared(db: Db, follow: Severed, room: () => number): boolean {
 		follow.follower
 	)
 	if (waiting !== undefined) {
+		return false
+	}
+	left = room()
+	if (left <= 0) {
+		return false
+	}
+	const members = `SELECT l.id FROM lists l INDEXED BY lists_account
+		WHERE l.account_id = ?1 AND EXISTS (SELECT 1 FROM list_accounts m WHERE m.list_id = l.id AND m.account_id = ?2)`
+	db.run(
+		`DELETE FROM list_accounts WHERE account_id = ?2 AND list_id IN (${members} LIMIT ?3)`,
+		follow.follower,
+		follow.target,
+		left
+	)
+	if (db.first(`${members} LIMIT 1`, follow.follower, follow.target) !== undefined) {
 		return false
 	}
 	const local = db.first<{ uri: string }>('SELECT uri FROM accounts WHERE id = ? AND domain IS NULL', follow.follower)
@@ -397,7 +410,10 @@ function markRound(db: Db, job: RemoteJob, now: number): boolean {
 		save(db, job, 'mark', JSON.stringify(cursor))
 		return recorded
 	}
+	// Covered accounts this round may still reconcile: MARK_ACCOUNTS, the one it resumes included.
+	let accounts = MARK_ACCOUNTS
 	if (at.severing !== undefined) {
+		accounts--
 		const still = db.first(`SELECT 1 AS x FROM accounts a WHERE a.id = ? AND ${severableSql('a')}`, at.severing)
 		if (still !== undefined) {
 			const done = sever(db, at.severing, job.follow_bound, at.side!, true, spent, now)
@@ -419,7 +435,7 @@ function markRound(db: Db, job: RemoteJob, now: number): boolean {
 		WHERE a.id > ?1 AND a.id <= coalesce(?2, char(58)) AND ${severableSql('a')} ORDER BY a.id LIMIT ?3`,
 		at.after,
 		end ?? null,
-		MARK_ACCOUNTS
+		accounts
 	)
 	let after = at.after
 	for (const account of covered) {
@@ -440,7 +456,7 @@ function markRound(db: Db, job: RemoteJob, now: number): boolean {
 		}
 		after = account.id
 	}
-	if (covered.length === MARK_ACCOUNTS) {
+	if (covered.length === accounts) {
 		return stop({ after })
 	}
 	if (end === undefined) {
