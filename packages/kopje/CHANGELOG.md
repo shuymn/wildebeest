@@ -50,8 +50,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   sanitizing a shorter part of it so it stays valid HTML (realistic posts at Misskey's, Pleroma's, Akkoma's and
   GoToSocial's limits take at most about 35 KB), its content warning within 16 KiB, cut at a character, and a media URL
   or preview longer than 2,048 characters is ignored, as an invalid one is. A remote status whose id is longer than
-  4,096 bytes is not stored, and an actor whose id is longer than 2,048 bytes is not either (both measured in UTF-8
-  bytes). A local post or edit whose rendered text passes these bounds, which only hundreds of mentions of accounts
+  4,096 bytes is not stored, and an actor whose id is longer than 2,048 bytes as a serialized URL is not either. A local post or edit whose rendered text passes these bounds, which only hundreds of mentions of accounts
   with long profile URLs reach, is refused as too long. Statuses already stored are shown within the same bounds
   wherever they appear, edit history (each earlier attachment included), `/source` and a redacted quote included:
   content or source text past the bound as empty (the status keeps its link to the original), a content warning cut,
@@ -61,13 +60,17 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - A status presents at most 70 hashtags, the first by name; its content still links every one, and up to 100 are
   still stored. A conversation presents at most 12 participants, the first in stored order. Mastodon presents all of
   them. A status stored with more mentions or hashtags than it presents, or with hidden attachments, costs no more to
-  read than one at those counts; a silent mention or an over-long hashtag among the first ones read is left out, so such
-  a status (only a converted one) may show fewer.
+  read than one at those counts.
+- A hashtag longer than 256 characters (or 1 KiB) in a local post is no longer recorded as one of the post's hashtags;
+  it stays a link in the post's text, as a remote one already did. Mastodon sets no length.
+- Every URL an account or attachment presents is within 2,048 characters, derived or stored: an account's profile URL
+  falls back from its stored URL to one derived from its actor id or from this instance, and is empty when none fits.
 - A remote account's username is held to Mastodon's remote format, as before; one stored otherwise (converted at an
   earlier cutover), or holding a NUL, is shown cut at 42 characters.
 - `kopje-admin convert` and `verify-conversion` apply the same bounds to status content, content warnings and source
   text, of current and earlier versions, counting each cut as a truncation that `--accept-truncation` accepts. They
-  refuse a remote actor id longer than 2,048 bytes, a status or boost URI longer than 4,096 bytes, and a remote
+  refuse a remote actor id longer than 2,048 bytes as written or as a serialized URL, a status or boost URI longer than
+  4,096 bytes, and a remote
   username outside Mastodon's remote format, and the conversion counts an earlier version's attachment that is shown
   cut (`edits:media-field-over-bound`).
 
