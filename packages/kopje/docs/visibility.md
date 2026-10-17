@@ -438,9 +438,8 @@ a remote account's purge deletes the reports of it, and the notification of each
 A report also notifies the OAuth admin (`admin.report`, Mastodon's `ReportService#notify_staff!`) when no other report
 of the same account is unresolved; the notification carries the report as its reporter sees it, and R15 shows it to
 the current admin alone (R37): it leaves every read, stream and push when `admin_email` changes, and comes back with
-the match. The admin's own report notifies nobody (R15: not from oneself). A reporter's later report replaces the
-notification of their earlier one, where Mastodon keeps both: the natural key holds one per reporter (migration
-`0040_report_notifications`).
+the match. The admin's own report notifies nobody (R15: not from oneself). Each report has its own notification
+(migrations `0040_report_notifications` and `0041_report_notifications_key`), also several of one reporter.
 
 The same admin, once Kopje grants it manage_users (with local suspension, PR A3b; until then the routes refuse it as
 everyone), lists every account, local and remote, through `GET /api/v1/admin/accounts` and `/api/v2/admin/accounts`

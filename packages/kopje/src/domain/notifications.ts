@@ -75,29 +75,27 @@ export type NotifyInput = {
 // The natural key makes a repeat a no-op, except for `update` and `quoted_update`: every edit notifies again, so the
 // previous one is replaced (and gets a newer id; LocalNotificationWorker). The replacement is judged first: an edit the
 // rule refuses (its conversation muted since) leaves the previous one as it is, as a mute keeps the notifications
-// written before it. An edit is never filtered or dropped by the policy. An admin.report is replaced the same way:
-// the key holds one per reporter (migration 0040_report_notifications), so a reporter's later report replaces the
-// notification of their earlier one, where Mastodon keeps one per report.
+// written before it. An edit is never filtered or dropped by the policy. An admin.report is keyed by its report too
+// (migrations 0040 and 0041), so each report notifies once, as LocalNotificationWorker keys it by its activity.
 export function notify(db: Db, input: NotifyInput): void {
 	const now = new Date(input.now).toISOString()
 	// The OAuth admin, for R37 in the rule (shownSql); only an admin.report needs it.
 	const admin = input.type === 'admin.report' ? adminAccountIdOnce(db) : null
-	if (input.type === 'update' || input.type === 'quoted_update' || input.type === 'admin.report') {
+	const reportId = input.reportId ?? null
+	if (input.type === 'update' || input.type === 'quoted_update') {
 		const eligible = db.first(
-			`SELECT 1 AS ok WHERE ${notifiedSql('?1', '?5', '?2', '?3', '?4', '?6')}`,
+			`SELECT 1 AS ok WHERE ${notifiedSql('?1', '?5', '?2', '?3', '?4', 'NULL')}`,
 			input.recipientId,
 			input.fromId,
 			input.statusId,
 			now,
-			input.type,
-			admin
+			input.type
 		)
 		if (eligible === undefined) {
 			return
 		}
 		db.run(
-			`DELETE FROM notifications WHERE account_id = ? AND type = ? AND from_account_id = ?
-				AND IFNULL(status_id, '') = IFNULL(?, '')`,
+			'DELETE FROM notifications WHERE account_id = ? AND type = ? AND from_account_id = ? AND status_id = ?',
 			input.recipientId,
 			input.type,
 			input.fromId,
@@ -124,11 +122,13 @@ export function notify(db: Db, input: NotifyInput): void {
 	// delete it.
 	db.run(
 		`DELETE FROM notifications WHERE account_id = ?1 AND type = ?2 AND from_account_id = ?3
-			AND IFNULL(status_id, '') = IFNULL(?4, '') AND NOT ${keptSql('notifications')}`,
+			AND IFNULL(status_id, '') = IFNULL(?4, '') AND IFNULL(report_id, 0) = IFNULL(CAST(?5 AS INTEGER), 0)
+			AND NOT ${keptSql('notifications')}`,
 		input.recipientId,
 		input.type,
 		input.fromId,
-		input.statusId
+		input.statusId,
+		reportId
 	)
 	const inserted = db.all<{ id: number }>(
 		`INSERT INTO notifications (account_id, type, from_account_id, status_id, report_id, created_at, group_key,
@@ -145,7 +145,7 @@ export function notify(db: Db, input: NotifyInput): void {
 		filtered ? null : groupKeyOf(db, input),
 		filtered ? 1 : 0,
 		admin,
-		input.reportId ?? null
+		reportId
 	)
 	for (const { id } of inserted) {
 		if (filtered) {

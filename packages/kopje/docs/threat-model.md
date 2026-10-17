@@ -733,7 +733,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   report). `GET /admin/reports/:id`, where clients open it, redirects the Access admin to the reported account's web
   page and reads nothing for anyone else. `notifyStaff` and `reportTargetPage` in `src/domain/reports.ts`, `shownSql` in
   `src/domain/audience.ts`, `adminAccountIdOnce` in `src/domain/admin-authority.ts`, migration
-  `0040_report_notifications`; `test/report-notifications.test.ts`, `test/policy-oracle.test.ts`,
+  `0040_report_notifications` and `0041_report_notifications_key` (one notification per report and recipient);
+  `test/report-notifications.test.ts`, `test/policy-oracle.test.ts`,
   `test/migrations.test.ts`.
 
 ### Authorization (AUTH)

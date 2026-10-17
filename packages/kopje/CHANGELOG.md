@@ -17,20 +17,22 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
     - Only the current admin sees these notifications: when the admin email changes, or no single active account
       matches it, they disappear from every list, count, stream and push, and come back if the admin does. A report
       deleted with its reported remote account takes its notification along.
-    - Differences from Mastodon: a user's later report replaces the notification of their earlier one, where Mastodon
-      keeps one per report. Reports from other servers are not received, so they notify nobody.
+    - Difference from Mastodon: reports from other servers are not received, so they notify nobody.
 - `GET /admin/reports/<id>`, which clients open when the admin taps a report notification, redirects to the reported
   account's profile. It is behind the `/admin` Access application like the rest of `/admin`: anyone else is refused
   before the report is looked up, and an unknown report answers 404.
 
 ### Instance changes
 
-- Store schema: adds one migration, applied on the first request after the deploy; a rollback to an earlier version
+- Store schema: adds two migrations, applied on the first request after the deploy; a rollback to an earlier version
   needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0040_report_notifications`: lets a notification name a report. It reads each stored notification once and no
       other table: on a benchmark store of 1,000,000 accounts, 3,000,000 follows, 2,000,000 statuses and 2,000,000
-      notifications its upgrade took 3.1 seconds (3.1 and 3.2 in two more runs) in workerd's local Durable Object
-      SQLite.
+      notifications its upgrade took 3.1 seconds (3.1 in a second run) in workerd's local Durable Object SQLite.
+    - `0041_report_notifications_key`: rebuilds the notifications' uniqueness index with the report, sorting every
+      stored notification. On the same benchmark store its upgrade took 4.9 to 5.2 seconds (7.6 once on a loaded
+      machine). An instance with millions of notifications should expect a pause of several seconds on the first
+      request after the deploy.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.13] - 2026-10-17

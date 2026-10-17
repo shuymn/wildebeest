@@ -4414,3 +4414,47 @@ describe('0040_report_notifications', () => {
 		expect(Math.abs(twice - 2 * some)).toBeLessThanOrEqual(2)
 	}, 120_000)
 })
+
+describe('0041_report_notifications_key', () => {
+	const NAME = '0041_report_notifications_key'
+	const at = NAMES.indexOf(NAME)
+
+	it('keys an admin.report by its report, and every other notification as before', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, MIGRATIONS.slice(0, at)).upgrade()).toMatchObject({ ok: true })
+			sql.exec(
+				`INSERT INTO accounts (id, uri, username, domain) VALUES
+					('100000000000000001', 'https://kopje.test/ap/users/r', 'r', NULL),
+					('100000000000000002', 'https://remote.test/users/t', 't', 'remote.test')`
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES ('100000000000000001', 'r@example.com', X'00', X'00', 'k')"
+			)
+			sql.exec(
+				`INSERT INTO reports (id, account_id, target_account_id, uri, created_at) VALUES
+					(7, '100000000000000001', '100000000000000002', 'https://kopje.test/actor#reports/7', '2026-10-12T00:00:00.000Z'),
+					(8, '100000000000000001', '100000000000000002', 'https://kopje.test/actor#reports/8', '2026-10-12T00:00:00.000Z')`
+			)
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+			const admin =
+				"INSERT INTO notifications (account_id, type, from_account_id, report_id) VALUES ('100000000000000001', 'admin.report', '100000000000000002', ?)"
+			sql.exec(admin, 7)
+			sql.exec(admin, 8)
+			expect(() => sql.exec(admin, 8)).toThrow(/UNIQUE constraint failed/)
+			const follow =
+				"INSERT INTO notifications (account_id, type, from_account_id) VALUES ('100000000000000001', 'follow', '100000000000000002')"
+			sql.exec(follow)
+			expect(() => sql.exec(follow)).toThrow(/UNIQUE constraint failed/)
+			const plan = sql
+				.exec<{ detail: string }>(
+					`EXPLAIN QUERY PLAN SELECT id FROM notifications WHERE account_id = '1' AND type = 'mention'
+					AND from_account_id = '2' AND IFNULL(status_id, '') = '3'`
+				)
+				.toArray()
+				.map((row) => row.detail)
+			expect(plan.join('\n')).toContain('notifications_natural')
+		})
+	})
+})

@@ -145,10 +145,11 @@ describe('admin.report: who is notified (ReportService#notify_staff!)', () => {
 		await resolve(h, admin, String(third))
 		const fourth = await report(h, bob, carol)
 		const ofDave = await report(h, alice, dave)
-		// alice's report of dave replaces the notification of her earlier one (the natural key holds one per reporter).
+		// Each report keeps its own notification, also two of the same reporter.
 		expect(await reportsShown(h, owner)).toEqual([
 			[alice.id, ofDave],
 			[bob.id, fourth],
+			[alice.id, first],
 		])
 	})
 
@@ -395,6 +396,36 @@ describe('admin.report: push', () => {
 				body: 'hello',
 			}),
 		])
+	})
+
+	it("keeps and pushes one reporter's reports of two accounts, each until its own report goes", async () => {
+		const { h, owner, alice, carol, dave } = await world()
+		const admin = await adminToken(h)
+		const client = await subscribe(h, owner, { 'admin.report': true })
+		const ofCarol = await report(h, alice, carol)
+		const ofDave = await report(h, alice, dave)
+		expect(await reportsShown(h, owner)).toEqual([
+			[alice.id, ofDave],
+			[alice.id, ofCarol],
+		])
+		const pushed = await sent(h, client)
+		expect(pushed.map((push) => push.notification_type)).toEqual(['admin.report', 'admin.report'])
+		// Resolving one leaves both notifications; a later report of carol is not the first, of dave neither.
+		await resolve(h, admin, ofCarol)
+		await report(h, alice, dave)
+		expect(await reportsShown(h, owner)).toEqual([
+			[alice.id, ofDave],
+			[alice.id, ofCarol],
+		])
+		// A report's notification goes with it alone: carol's purge leaves dave's.
+		const uri = (await sql<{ uri: string }>(h.store, 'SELECT uri FROM accounts WHERE id = ?', carol))[0]!.uri
+		await runInDurableObject(h.store, (_instance, state) => {
+			const db = new Db(state.storage.sql)
+			while (state.storage.transactionSync(() => purgeBatch(db, uri, NOW))) {
+				// next batch
+			}
+		})
+		expect(await reportsShown(h, owner)).toEqual([[alice.id, ofDave]])
 	})
 
 	it('pushes nothing without the alert, and drops a push once the admin changes before it is sent', async () => {
