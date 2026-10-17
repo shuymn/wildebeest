@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 import { type ApiHarness, bearer, form, login, registerApp, seedAccount, setSetting, sql } from './api-helpers'
 import { NOW } from './app-helpers'
+import { longestString, observedSql } from './read-helpers'
 import { storeWith } from './setup-helpers'
 import { community } from './status-helpers'
 import { instanceActorUri } from '../src/domain/activities'
@@ -522,18 +523,9 @@ describe('the admin account list: converted text of any length (RES-2)', () => {
 		return runInDurableObject(h.store, (_instance, state) => {
 			let most = 0
 			const real = state.storage.sql
-			const counting = {
-				exec: (query: string, ...params: SqlStorageValue[]) => {
-					const cursor = real.exec(query, ...params)
-					const measure = (rows: Record<string, SqlStorageValue>[]) => {
-						for (const value of rows.flatMap((row) => Object.values(row))) {
-							most = Math.max(most, typeof value === 'string' ? value.length : 0)
-						}
-						return rows
-					}
-					return { toArray: () => measure(cursor.toArray()), one: () => measure([cursor.one()])[0]! }
-				},
-			} as unknown as SqlStorage
+			const counting = observedSql(real, (rows) => {
+				most = Math.max(most, longestString(rows))
+			})
 			const answer = listAdminAccounts.run(counting, {
 				credential: { tokenHash, scope: 'admin:read:accounts', now: NOW },
 				filter,

@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest'
 import { bearer, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { ALICE, setup, type Setup } from './inbox-status-helpers'
+import { longestString, observedSql } from './read-helpers'
 import { community, post, remoteAccount, seedStatus } from './status-helpers'
 import { Db } from '../src/db/sql'
 import {
@@ -161,21 +162,14 @@ async function measured<I>(t: Setup, operation: StoreOperation<I, unknown>, inpu
 		let profiles = 0
 		let bytes = 0
 		const real = state.storage.sql
-		const counting = {
-			exec: (query: string, ...params: SqlStorageValue[]) => {
-				const cursor = real.exec(query, ...params)
-				const count = (rows: Record<string, SqlStorageValue>[]) => {
-					for (const row of rows.filter((r) => 'note' in r && 'display_name' in r)) {
-						profiles++
-						for (const value of Object.values(row)) {
-							bytes += typeof value === 'string' ? utf8Length(value) : 8
-						}
-					}
-					return rows
+		const counting = observedSql(real, (rows) => {
+			for (const row of rows.filter((r) => 'note' in r && 'display_name' in r)) {
+				profiles++
+				for (const value of Object.values(row)) {
+					bytes += typeof value === 'string' ? utf8Length(value) : 8
 				}
-				return { toArray: () => count(cursor.toArray()), one: () => count([cursor.one()])[0]! }
-			},
-		} as unknown as SqlStorage
+			}
+		})
 		let answer = operation.run(counting, input) as Record<string, unknown>
 		while (answer.status === 'ok' && 'value' in answer) {
 			answer = answer.value as Record<string, unknown>
@@ -386,18 +380,9 @@ describe('one account has a known size (RES-2)', () => {
 			runInDurableObject(h.store, (_instance, state) => {
 				let most = 0
 				const real = state.storage.sql
-				const counting = {
-					exec: (query: string, ...params: SqlStorageValue[]) => {
-						const cursor = real.exec(query, ...params)
-						const measure = (rows: Record<string, SqlStorageValue>[]) => {
-							for (const value of rows.flatMap((row) => Object.values(row))) {
-								most = Math.max(most, typeof value === 'string' ? value.length : 0)
-							}
-							return rows
-						}
-						return { toArray: () => measure(cursor.toArray()), one: () => measure([cursor.one()])[0]! }
-					},
-				} as unknown as SqlStorage
+				const counting = observedSql(real, (rows) => {
+					most = Math.max(most, longestString(rows))
+				})
 				let answer = operation.run(counting, input as never) as Record<string, unknown>
 				while (answer.status === 'ok' && 'value' in answer) {
 					answer = answer.value as Record<string, unknown>

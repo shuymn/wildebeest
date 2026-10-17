@@ -62,3 +62,28 @@ export async function remoteAccounts(h: ApiHarness, domains: number, perDomain: 
 		domains
 	)
 }
+
+export type SqlRow = Record<string, SqlStorageValue>
+
+// A SqlStorage over `real` that hands every row a statement returns (toArray or one) to `observe`, as it leaves SQLite.
+export function observedSql(real: SqlStorage, observe: (rows: readonly SqlRow[]) => void): SqlStorage {
+	return {
+		exec: (query: string, ...params: SqlStorageValue[]) => {
+			const cursor = real.exec(query, ...params)
+			const seen = (rows: SqlRow[]) => {
+				observe(rows)
+				return rows
+			}
+			return { toArray: () => seen(cursor.toArray()), one: () => seen([cursor.one()])[0]! }
+		},
+	} as unknown as SqlStorage
+}
+
+// The longest string among `rows`' values, in UTF-16 code units.
+export function longestString(rows: readonly SqlRow[]): number {
+	let most = 0
+	for (const value of rows.flatMap((row) => Object.values(row))) {
+		most = Math.max(most, typeof value === 'string' ? value.length : 0)
+	}
+	return most
+}
