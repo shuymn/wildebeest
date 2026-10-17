@@ -1675,13 +1675,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
 out of SQLite and what it presents, three ways: filled with characters JSON escapes to six bytes (the most JSON); the
 same with mentioned accounts that have no stored url, so their url is derived; and filled with what reads the most
 bytes for each bound (ASCII where the bound is in bytes, four-byte characters where it is in characters: a 10,000
-character description reads 40,000 bytes). Every part is at its bound: content of 128 KiB and a warning of 16 KiB as
-JSON, 4 attachments with 10,000-character descriptions, 2,048-character URLs and 1 KiB meta, 200 mentions of accounts
-with 255-character usernames, 2,000-character domains and 2,048-character URLs, 100 stored hashtags of 256 four-byte
-characters, a poll of 100 choices of 1,000 characters, each account at its bounds, and the viewer's filters at theirs:
-50 filters in every context, each with a 256-character title and 20 keywords of 512 characters, the first held by the
-status, and naming the statuses read, so every status carries 50 filter results (about 0.24 MB each set) and every
-read takes the 1,000 keywords. SQLite bytes are the UTF-8 bytes of every value read (8 per number); nodes are the
+character description reads 40,000 bytes). Every part is at the bound RES-3 states for a presented status and account
+above, with accounts on 2,000-character domains (the longest an actor id of 2,048 holds), hashtag names of four-byte
+characters, and the viewer's filters at theirs: 50 filters in every context, each with a 256-character title and 20
+keywords of 512 characters, the first held by the status, and naming the statuses read, so every status carries 50
+filter results (about 0.24 MB each set) and every read takes the 1,000 keywords. SQLite bytes are the UTF-8 bytes of every value read (8 per number); nodes are the
 objects, arrays and strings presented. Measured shapes are read through the Store operation; the real Store RPC
 measurement comes with the answer budgets.
 
