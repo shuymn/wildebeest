@@ -1,7 +1,11 @@
+import { runInDurableObject } from 'cloudflare:test'
+
 import { describe, expect, it } from 'vitest'
 
 import { bearer, json, sql } from './api-helpers'
 import { NOW } from './app-helpers'
+import { migratedStore } from './helpers'
+import { rowsRead } from './read-helpers'
 import {
 	act,
 	adminEntity,
@@ -19,7 +23,8 @@ import {
 	type World,
 } from './remote-suspension-helpers'
 import { follow, remoteAccount, remoteFollows } from './status-helpers'
-import { EXPANSION_STEP } from '../src/domain/deliveries'
+import { EXPANSION_STEP, supersedeEarlier } from '../src/domain/deliveries'
+import { writeOperation } from '../src/domain/operation'
 import { SEVER_ROUND, SEVER_ROWS } from '../src/domain/remote-suspension'
 import { MODERATION_ROUND_ROWS } from '../src/domain/suspension'
 import type { StoreStub } from '../src/platform/store-client'
@@ -525,5 +530,84 @@ describe('follow requests of a suspended account (row 12 b)', () => {
 		expect(await sql(w.h.store, 'SELECT state FROM follows WHERE account_id = ?', r)).toEqual([{ state: 'pending' }])
 		expect(await unsuspend(w, r)).toMatchObject({ status: 200 })
 		expect(await listed()).toEqual([r])
+	})
+})
+
+describe('the supersession lookup (outbound_activities_unsuperseded)', () => {
+	const SIGNER = '900000000000000001'
+	const OBJECT = 'https://remote.example/follows/r/alice'
+	const supersede = writeOperation<{ limit: number }, boolean>((db, { limit }) =>
+		supersedeEarlier(db, SIGNER, OBJECT, limit)
+	)
+
+	// `history` activities about the object superseded already (each with a delivery kept, as a given-up row is), and
+	// two not yet.
+	async function store(history: number) {
+		const s = await migratedStore()
+		await runInDurableObject(s, (_instance, state) => {
+			const sql = state.storage.sql
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username) VALUES (?, 'https://kopje.test/ap/users/alice', 'alice')",
+				SIGNER
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'a@example.com', X'00', X'00', 'k')",
+				SIGNER
+			)
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+				INSERT INTO outbound_activities (account_id, body, object_uri, retracts, superseded, created_at)
+				SELECT ?2, '{"activity":{"type":"Accept"}}', ?3, 0, CASE WHEN i < ?1 - 2 THEN 1 ELSE 0 END, 0 FROM n`,
+				history + 2,
+				SIGNER,
+				OBJECT
+			)
+			sql.exec(
+				`INSERT INTO deliveries (activity_id, account_id, inbox_url, lane, state, next_attempt_at, updated_at)
+				SELECT id, ?, 'https://remote.example/inbox', 'https://remote.example', 'gave_up', 0, 0 FROM outbound_activities`,
+				SIGNER
+			)
+		})
+		return s
+	}
+
+	it('seeks the activities not superseded yet, so its reads do not grow with the superseded history', async () => {
+		const read: number[] = []
+		for (const history of [100, 10_000]) {
+			const s = await store(history)
+			read.push(await rowsRead({ store: s }, supersede, { limit: 1 }))
+			expect(await rowsRead({ store: s }, supersede, { limit: 10 })).toBeLessThanOrEqual(read.at(-1)! + 10)
+			// The plans of the lookups supersedeEarlier runs (SUPERSEDED in deliveries.ts), as it runs them.
+			const plans = await runInDurableObject(s, (_instance, state) => {
+				const real = state.storage.sql
+				const found: string[][] = []
+				const capturing = {
+					exec: (query: string, ...params: SqlStorageValue[]) => {
+						if (/^\s*SELECT [\s\S]*FROM outbound_activities WHERE account_id = \?/.test(query)) {
+							found.push(
+								real
+									.exec<{ detail: string }>(`EXPLAIN QUERY PLAN ${query}`, ...params)
+									.toArray()
+									.map((row) => row.detail)
+							)
+						}
+						return real.exec(query, ...params)
+					},
+				} as unknown as SqlStorage
+				supersede.run(capturing, { limit: 1 })
+				return found
+			})
+			expect(plans.map((plan) => [plan[0], plan.some((step) => step.includes('TEMP B-TREE'))])).toEqual([
+				[
+					'SEARCH outbound_activities USING INDEX outbound_activities_unsuperseded (account_id=? AND object_uri=?)',
+					false,
+				],
+				[
+					'SEARCH outbound_activities USING INDEX outbound_activities_unsuperseded (account_id=? AND object_uri=?)',
+					false,
+				],
+			])
+		}
+		expect(read[1]).toBeLessThanOrEqual(read[0]! + 5)
 	})
 })

@@ -511,7 +511,7 @@ function supersede(
 // this way before recording its Reject (remote-suspension.ts), so that the Reject's own supersede writes nothing.
 export function supersedeEarlier(db: Db, signerId: string, object: string, limit: number): boolean {
 	const earlier = db.all<{ id: string }>(
-		`SELECT CAST(id AS TEXT) AS id FROM outbound_activities WHERE ${SUPERSEDED} ORDER BY id LIMIT ?6`,
+		`SELECT CAST(id AS TEXT) AS id FROM outbound_activities WHERE ${SUPERSEDED} LIMIT ?6`,
 		signerId,
 		object,
 		1,

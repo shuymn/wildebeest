@@ -25,12 +25,13 @@
 -- Cost: two ALTERs adding a column with no default and no CHECK (a change of the schema alone: SQLite would test an
 -- added CHECK against every stored account, which measured 15,875 ms in all on the store below), two index builds
 -- over the accounts, each a pass over them (one holding no entry, one every available account), the drop of 0031's
--- index, and a new table. Measured on the benchmark store of test/bench/migration-cost.ts (1,000,000 accounts,
--- 3,000,000 follows, 2,000,000 statuses with their mentions and tags, 2,000,000 favourites, 200,000 boosts, 2,000,000
--- notifications, 200,000 quotes, 10,000 reports, 20 local accounts) in workerd's local Durable Object SQLite: 6,752 ms
--- for the upgrade of this file through the kernel (6,561 and 6,694 ms in two more runs, at load averages of 2 to 8),
--- within the 10,000 ms each migration file may take; about 6 s of it is the overhead of an upgrade on a store that
--- size.
+-- index, an index build over the outbound activities (a pass over them, holding those not superseded), and a new
+-- table. Measured on the benchmark store of test/bench/migration-cost.ts (1,000,000 accounts, 3,000,000 follows,
+-- 2,000,000 statuses with their mentions and tags, 2,000,000 favourites, 200,000 boosts, 2,000,000 notifications,
+-- 200,000 quotes, 10,000 reports, 500,000 outbound activities, 20 local accounts) in workerd's local Durable Object
+-- SQLite: 7,059 ms for the upgrade of this file through the kernel (7,022 and 7,030 ms in two more runs, at load
+-- averages of 2 to 6), within the 10,000 ms each migration file may take; about 6 s of it is the overhead of an
+-- upgrade on a store that size.
 
 ALTER TABLE accounts ADD COLUMN suspended_at TEXT;
 ALTER TABLE accounts ADD COLUMN suspension_source TEXT;
@@ -40,6 +41,11 @@ ALTER TABLE accounts ADD COLUMN suspension_source TEXT;
 CREATE INDEX accounts_suspended ON accounts (id) WHERE suspended_at IS NOT NULL;
 CREATE INDEX accounts_active ON accounts (id) WHERE deleted_at IS NULL AND suspended_at IS NULL;
 DROP INDEX accounts_available;
+
+-- The activities not superseded yet, about each object of each signer, by id: what a later activity about the object
+-- supersedes (deliveries.ts SUPERSEDED), sought without reading the superseded history that rows kept for retries
+-- and receivers leave behind.
+CREATE INDEX outbound_activities_unsuperseded ON outbound_activities (account_id, object_uri, id) WHERE superseded = 0;
 
 CREATE TABLE remote_moderation_jobs (
   id INTEGER PRIMARY KEY,

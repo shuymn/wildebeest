@@ -38,9 +38,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - Store schema: adds one migration, applied on the first request after the deploy; a rollback to an earlier version
   needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0045_remote_suspension`: lets the admin suspend remote accounts. It adds two account columns, builds two
-      indexes over the accounts (one pass over them each), drops one, and adds a table: on the benchmark store of
-      1,000,000 accounts its upgrade took 6.8 seconds (6.6 and 6.7 in two more runs), most of it the overhead of an
-      upgrade on a store that size, which an upgrade applying several files pays once.
+      indexes over the accounts and one over the queued outbound activities (one pass over each), drops one index, and
+      adds a table: on the benchmark store of 1,000,000 accounts and 500,000 outbound activities its upgrade took 7.1
+      seconds (7.0 in two more runs), most of it the overhead of an upgrade on a store that size, which an upgrade
+      applying several files pays once.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.14] - 2026-10-18

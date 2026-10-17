@@ -4802,6 +4802,11 @@ describe('0045_remote_suspension', () => {
 				'SELECT id FROM accounts INDEXED BY accounts_active WHERE deleted_at IS NULL AND suspended_at IS NULL ORDER BY id'
 			expect(sql.exec(active).toArray()).toEqual([{ id: '100000000000000003' }, { id: '900000000000000000' }])
 			expect(sql.exec("SELECT name FROM sqlite_master WHERE name = 'accounts_available'").toArray()).toEqual([])
+			const unsuperseded =
+				"SELECT id FROM outbound_activities WHERE account_id = 'a' AND object_uri = 'o' AND superseded = 0 ORDER BY id"
+			expect(plan(unsuperseded)).toEqual([
+				'SEARCH outbound_activities USING COVERING INDEX outbound_activities_unsuperseded (account_id=? AND object_uri=?)',
+			])
 			sql.exec(
 				"INSERT INTO remote_moderation_jobs (kind, subject, mode, follow_bound, phase) VALUES ('account', 'x', 'account', 0, 'reports')"
 			)
