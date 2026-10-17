@@ -6,13 +6,12 @@ import { MIGRATIONS } from '../../src/db/migrations'
 import { freshStore, testKernel } from '../helpers'
 
 // The migration cost benchmark (design: "Migrations", acceptance criterion): one migration file applied to a large,
-// representative Store, in the SQLite the Store runs on (workerd's local Durable Object runtime), timed. A file must
-// finish in at most MIGRATION_BUDGET_MS, a third of the 30 seconds a migration transaction may take, before its PR
-// merges; the time goes in the file's header comment and in the PR description. The owner's instance is not
-// representative and does not count. The budget was a sixth (5 s) until the store gained favourites and boosts: on it,
-// upgrading one file in isolation costs about 6 s before any of the file's own work (the kernel's bookmark,
-// transaction and schema verification, which an upgrade runs once after all pending files); 0042_report_action_fence,
-// which does little else, measured 5,981 and 5,893 ms there.
+// representative Store in workerd's local Durable Object SQLite, timed. A file must finish in at most
+// MIGRATION_BUDGET_MS, a third of the 30 seconds a migration transaction may take, before its PR merges; the time
+// goes in the file's header comment and in the PR description. The owner's instance is not representative. On this
+// store, upgrading one file in isolation costs about 6 s before the file's own work (the kernel's bookmark,
+// transaction and schema verification, which an upgrade runs once after all pending files): 0042_report_action_fence,
+// which does little else, measured 5,981 and 5,893 ms.
 //
 //   pnpm --filter kopje bench:migration                            the newest migration
 //   KOPJE_BENCH_MIGRATION=0029_admin_reports pnpm --filter kopje bench:migration

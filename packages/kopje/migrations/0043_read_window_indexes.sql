@@ -1,7 +1,7 @@
 -- Kopje Store schema 0043: indexes for three read windows. Never edit after release (checksummed).
 --
 -- Paged reads read a candidate window from their cursor in cursor order (src/domain/windows.ts, docs/visibility.md
--- "Read bounds", RES-7). Three had no index in that order, so each window sorted every row it ranged over first:
+-- "Read bounds", RES-7); without an index in that order a window sorts every row it ranges over first:
 --
 --   follows_following       an account's accepted follows by follow id: the following list (listFollows).
 --                           follows_accepted (0000_initial) orders them by target account.
