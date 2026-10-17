@@ -145,39 +145,45 @@ export type AccountRow = {
 }
 
 // Fields a remote profile shows: its PropertyValue attachments (ProcessAccountService#property_values), the name as
-// plain text and the value as sanitized HTML (HTML-1, its links http(s) only, HTML-3), as Mastodon renders them. Kopje's
-// bounds (RES-2): at most MAX_REMOTE_FIELDS, names cut at 255 code units, values at FIELD_VALUE_RAW_LIMIT before
-// sanitizing. Mastodon keeps more: 50 fields (ActivityPub::ProcessAccountService::MAX_PROFILE_FIELDS) and 2,047
-// characters of each stripped name and value (Account::Field::MAX_CHARACTERS_COMPAT).
+// plain text and the value as sanitized HTML (HTML-1, its links http(s) only, HTML-3), as Mastodon renders them.
+// Kopje's bounds (RES-2): at most MAX_REMOTE_FIELDS, names cut at 255 code units, values at FIELD_VALUE_RAW_LIMIT
+// before sanitizing, and REMOTE_FIELDS_BYTES in all. Mastodon keeps more: 50 fields
+// (ActivityPub::ProcessAccountService::MAX_PROFILE_FIELDS) and 2,047 characters of each stripped name and value
+// (Account::Field::MAX_CHARACTERS_COMPAT).
 export const MAX_REMOTE_FIELDS = 16
 const FIELD_NAME_LIMIT = 255
 const FIELD_VALUE_RAW_LIMIT = 4096
+// The most UTF-8 bytes of projected JSON one account carries. The largest read, a list's members with limit=0
+// (MAX_LIST_MEMBERS_ANSWERED, 1,000 accounts), thus carries at most 32 MiB of fields.
+export const REMOTE_FIELDS_BYTES = 32 * 1024
 
-// SQLite's substr and length stop at an embedded NUL, so a string is cut only when its UTF-8 bytes pass the limit (a
-// code point is never longer than its bytes): one within the limit stays whole, NULs included. A string past the
-// limit with a NUL before the cut comes out shorter than remoteFields would cut it, never longer.
+// SQLite's substr and length stop at an embedded NUL, so a string is cut only when its UTF-8 bytes pass the limit
+// (a code point is never longer than its bytes). A string containing a NUL is kept whole while its UTF-8 bytes fit
+// the limit; otherwise it may come out shorter than remoteFields would cut it, never longer.
 function cutSql(column: string, limit: number): string {
 	return `CASE WHEN length(CAST(${column} AS BLOB)) <= ${limit} THEN ${column} ELSE substr(${column}, 1, ${limit}) END`
 }
 
 // A remote account's attachment as ACCOUNT_COLUMNS projects it, chosen and cut in SQL so that the stored actor
-// document (up to the fetch budget, 2 MiB) never reaches the isolate: a JSON list of at most MAX_REMOTE_FIELDS
-// {name, value} entries in document order, the name cut (cutSql) at FIELD_NAME_LIMIT and the value at
-// FIELD_VALUE_RAW_LIMIT code points. A row thus carries at most 16 × 4,351 characters (each at most six once JSON-escaped) whatever the
-// document's size, and a page of 80, or a list of 1,000 accounts (RES-3), stays far below the isolate's 128 MB.
-// An entry counts when it is an object whose `type` is 'PropertyValue' or a list holding it and whose name and value
-// are strings; an attachment that is one object counts as a list of one. SQLite counts code points where JavaScript
-// counts code units, so remoteFields cuts again.
+// document (up to the fetch budget, 2 MiB) never reaches the isolate: a JSON list of {name, value} entries in
+// document order, at most MAX_REMOTE_FIELDS of them, the name cut (cutSql) at FIELD_NAME_LIMIT and the value at
+// FIELD_VALUE_RAW_LIMIT code points, and only the leading entries whose JSON fits REMOTE_FIELDS_BYTES (size: the
+// list's length in bytes once each entry and the ones before it are included). The bound is in bytes because
+// escaping inflates characters up to six times. An entry counts when it is an object whose `type` is
+// 'PropertyValue' or a list holding it and whose name and value are strings; an attachment that is one object
+// counts as a list of one. SQLite counts code points where JavaScript counts code units, so remoteFields cuts again.
 const REMOTE_ATTACHMENT_SQL = `CASE WHEN a.domain IS NOT NULL THEN (
-		SELECT json_group_array(json_object('name', ${cutSql('p.name', FIELD_NAME_LIMIT)},
-			'value', ${cutSql('p.value', FIELD_VALUE_RAW_LIMIT)}) ORDER BY p.key)
-		FROM (SELECT e.key, e.value ->> '$.name' AS name, e.value ->> '$.value' AS value
-			FROM json_each(CASE json_type(a.raw, '$.attachment') WHEN 'array' THEN a.raw -> '$.attachment'
-				ELSE json_array(a.raw -> '$.attachment') END) e
-			WHERE e.type = 'object' AND json_type(e.value, '$.name') = 'text' AND json_type(e.value, '$.value') = 'text'
-				AND json_type(e.value, '$.type') IN ('text', 'array')
-				AND EXISTS (SELECT 1 FROM json_each(e.value, '$.type') t WHERE t.type = 'text' AND t.value = 'PropertyValue')
-			ORDER BY e.key LIMIT ${MAX_REMOTE_FIELDS}) p) END`
+		SELECT '[' || COALESCE(group_concat(k.entry, ',' ORDER BY k.key), '') || ']'
+		FROM (SELECT c.key, c.entry, 1 + sum(length(CAST(c.entry AS BLOB)) + 1) OVER (ORDER BY c.key) AS size
+			FROM (SELECT e.key, json_object('name', ${cutSql("e.value ->> '$.name'", FIELD_NAME_LIMIT)},
+					'value', ${cutSql("e.value ->> '$.value'", FIELD_VALUE_RAW_LIMIT)}) AS entry
+				FROM json_each(CASE json_type(a.raw, '$.attachment') WHEN 'array' THEN a.raw -> '$.attachment'
+					ELSE json_array(a.raw -> '$.attachment') END) e
+				WHERE e.type = 'object' AND json_type(e.value, '$.name') = 'text' AND json_type(e.value, '$.value') = 'text'
+					AND json_type(e.value, '$.type') IN ('text', 'array')
+					AND EXISTS (SELECT 1 FROM json_each(e.value, '$.type') t WHERE t.type = 'text' AND t.value = 'PropertyValue')
+				ORDER BY e.key LIMIT ${MAX_REMOTE_FIELDS}) c) k
+		WHERE k.size <= ${REMOTE_FIELDS_BYTES}) END`
 
 export const ACCOUNT_COLUMNS = `a.id, a.uri, a.username, a.domain, a.actor_type, a.display_name, a.note, a.url, a.avatar_url,
 	a.header_url, a.locked, a.discoverable, a.followers_count, a.following_count, a.statuses_count, a.created_at,

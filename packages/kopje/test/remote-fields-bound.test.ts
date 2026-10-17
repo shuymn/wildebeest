@@ -9,6 +9,7 @@ import {
 	type Field,
 	MAX_REMOTE_FIELDS,
 	presentAccount,
+	REMOTE_FIELDS_BYTES,
 } from '../src/domain/accounts'
 import { sanitizeRemoteHtml } from '../src/security/html'
 
@@ -18,9 +19,8 @@ import { sanitizeRemoteHtml } from '../src/security/html'
 
 const ORIGIN = 'https://kopje.test'
 const DOMAIN = 'fields.example'
-// The projection's ceiling: MAX_REMOTE_FIELDS entries of a 255-character name and a 4,096-character value, each
-// character at most six once JSON-escaped, plus the JSON punctuation.
-const PROJECTED_CEILING = MAX_REMOTE_FIELDS * ((255 + 4096) * 6 + 32) + 2
+// A field at both character limits that escapes to six bytes a character in JSON: the projection's worst case.
+const ESCAPED = { type: 'PropertyValue', name: '\u0001'.repeat(255), value: '\u0001'.repeat(4096) }
 
 const field = (name: string, value: string) => ({ type: 'PropertyValue', name, value })
 
@@ -39,11 +39,11 @@ async function storeAttachment(t: Setup, ids: readonly string[], attachment: unk
 	)
 }
 
-// The projected attachment of each account, and its length in characters.
-async function projected(t: Setup, ids: readonly string[]): Promise<{ attachment: string; length: number }[]> {
-	return sql<{ attachment: string; length: number }>(
+// The projected attachment of each account, and its length in UTF-8 bytes.
+async function projected(t: Setup, ids: readonly string[]): Promise<{ attachment: string; bytes: number }[]> {
+	return sql<{ attachment: string; bytes: number }>(
 		t.store,
-		`SELECT attachment, length(attachment) AS length FROM (SELECT ${ACCOUNT_COLUMNS} FROM ${ACCOUNT_FROM}
+		`SELECT attachment, length(CAST(attachment AS BLOB)) AS bytes FROM (SELECT ${ACCOUNT_COLUMNS} FROM ${ACCOUNT_FROM}
 			WHERE a.id IN (SELECT value FROM json_each(?))) ORDER BY id`,
 		JSON.stringify(ids)
 	)
@@ -82,7 +82,7 @@ async function bothWays(t: Setup, id: string): Promise<{ bounded: Field[]; whole
 }
 
 describe('remote profile fields are projected bounded (RES-2)', () => {
-	it('reads one account and a page of 80 with a 1.5 MiB attachment within the bound', async () => {
+	it('reads one account and a page of 80 with a 1.5 MiB attachment within the budget', async () => {
 		const t = await setup()
 		const ids = await remoteFollowers(t, 80)
 		const huge = 'x'.repeat(512 * 1024)
@@ -111,10 +111,8 @@ describe('remote profile fields are projected bounded (RES-2)', () => {
 		const rows = await projected(t, ids)
 		expect(rows).toHaveLength(80)
 		for (const row of rows) {
-			expect(row.length).toBeLessThanOrEqual(PROJECTED_CEILING)
+			expect(row.bytes).toBeLessThanOrEqual(REMOTE_FIELDS_BYTES)
 		}
-		const total = rows.reduce((sum, row) => sum + row.length, 0)
-		expect(total).toBeLessThanOrEqual(80 * PROJECTED_CEILING)
 		// The huge values are cut to 255 and 4,096 characters before they leave SQLite.
 		const [cut] = JSON.parse(rows.find((row) => row.attachment.includes('"b"'))!.attachment) as {
 			name: string
@@ -123,20 +121,55 @@ describe('remote profile fields are projected bounded (RES-2)', () => {
 		expect([cut!.name.length, cut!.value.length]).toEqual([255, 4096])
 	})
 
-	it('projects the same size for 20 and 20,000 fields', async () => {
+	it('keeps the escaped worst case within the budget, for one account and for a page', async () => {
 		const t = await setup()
-		const [small, large] = await remoteFollowers(t, 2)
+		const ids = await remoteFollowers(t, 80)
+		await storeAttachment(
+			t,
+			ids,
+			Array.from({ length: MAX_REMOTE_FIELDS }, () => ESCAPED)
+		)
+		const rows = await projected(t, ids)
+		for (const row of rows) {
+			expect(row.bytes).toBeLessThanOrEqual(REMOTE_FIELDS_BYTES)
+		}
+		// One such entry is 26,127 bytes of JSON, so only the first fits.
+		expect(JSON.parse(rows[0]!.attachment)).toEqual([{ name: ESCAPED.name, value: ESCAPED.value }])
+		const page = await t.api<{ fields: { name: string }[] }[]>(`/api/v1/accounts/${ALICE}/followers?limit=80`)
+		expect(page.body.map((account) => account.fields.length)).toEqual(Array.from({ length: 80 }, () => 1))
+	})
+
+	it('keeps the leading fields that fit the budget, in document order', async () => {
+		const t = await setup()
+		const [id] = await remoteFollowers(t, 1)
+		// Each entry is 4,372 bytes of JSON: seven make 30,612 bytes, eight 34,985.
+		const fields = Array.from({ length: MAX_REMOTE_FIELDS }, (_, i) => field(`${i}`.padEnd(255, 'n'), 'v'.repeat(4096)))
+		await storeAttachment(t, [id!], fields)
+		const { bounded, whole } = await bothWays(t, id!)
+		expect(bounded).toEqual(whole.slice(0, 7))
+	})
+
+	it('projects the same bytes for 20 and 20,000 fields, and for 20 and 2,000 escaped ones', async () => {
+		const t = await setup()
+		const [small, large, escapedSmall, escapedLarge] = await remoteFollowers(t, 4)
 		const fields = (count: number) => Array.from({ length: count }, (_, i) => field(`f${i % 10}`, `<p>v${i % 10}</p>`))
+		// 2,751 bytes of JSON each, so the byte budget binds before MAX_REMOTE_FIELDS: eleven fit.
+		const escaped = (count: number) =>
+			Array.from({ length: count }, () => field('\u0001'.repeat(255), '\u0001'.repeat(200)))
 		await storeAttachment(t, [small!], fields(20))
 		await storeAttachment(t, [large!], fields(20_000))
-		const [a, b] = await projected(t, [small!, large!])
-		expect(a!.length).toBe(b!.length)
+		await storeAttachment(t, [escapedSmall!], escaped(20))
+		await storeAttachment(t, [escapedLarge!], escaped(2_000))
+		const [a, b, c, d] = await projected(t, [small!, large!, escapedSmall!, escapedLarge!])
 		expect(a!.attachment).toBe(b!.attachment)
+		expect(c!.attachment).toBe(d!.attachment)
+		expect(JSON.parse(d!.attachment)).toHaveLength(11)
+		expect(d!.bytes).toBeLessThanOrEqual(REMOTE_FIELDS_BYTES)
 	})
 
 	it('shows a normal actor’s fields as Mastodon does, and as the whole attachment does', async () => {
 		const t = await setup()
-		const [id] = await remoteFollowers(t, 1)
+		const [id, full] = await remoteFollowers(t, 2)
 		await storeAttachment(
 			t,
 			[id!],
@@ -146,6 +179,15 @@ describe('remote profile fields are projected bounded (RES-2)', () => {
 				field('Quote "x" \\ ü 🦬', '<p>a\nb</p>'),
 				{ type: 'IdentityProof', name: 'skip', signatureValue: 'x' },
 			]
+		)
+		// A Mastodon profile at its local limits: four fields of 255 characters, the values rendered with links.
+		const link = (i: number) =>
+			`<a href="https://example.com/${i}" target="_blank" rel="nofollow noopener me" translate="no">` +
+			`<span class="invisible">https://</span><span class="">example.com/${i}</span><span class="invisible"></span></a>`
+		await storeAttachment(
+			t,
+			[full!],
+			Array.from({ length: 4 }, (_, i) => field('ü'.repeat(255), Array.from({ length: 10 }, () => link(i)).join(' ')))
 		)
 		const shown = await t.api<{ fields: unknown[] }>(`/api/v1/accounts/${id}`)
 		expect(shown.body.fields).toEqual([
@@ -157,41 +199,53 @@ describe('remote profile fields are projected bounded (RES-2)', () => {
 			{ name: 'Pronouns', value: 'they/them', verified_at: null },
 			{ name: 'Quote "x" \\ ü 🦬', value: '<p>a\nb</p>', verified_at: null },
 		])
-		const { bounded, whole } = await bothWays(t, id!)
-		expect(bounded).toEqual(shown.body.fields)
-		expect(JSON.stringify(bounded)).toBe(JSON.stringify(whole))
+		const normal = await bothWays(t, id!)
+		expect(normal.bounded).toEqual(shown.body.fields)
+		expect(normal.bounded).toEqual(normal.whole)
+		const atLimits = await bothWays(t, full!)
+		expect(atLimits.bounded).toHaveLength(4)
+		expect(atLimits.bounded).toEqual(atLimits.whole)
 	})
 
 	it('cuts at the limits as the presenter does, and keeps its filters', async () => {
 		const t = await setup()
-		const ids = await remoteFollowers(t, 6)
+		const ids = await remoteFollowers(t, 7)
 		const astral = '🦬'.repeat(300)
+		let deep: unknown = 'PropertyValue'
+		for (let i = 0; i < 30; i++) {
+			deep = [deep]
+		}
 		const cases: unknown[] = [
-			// More than MAX_REMOTE_FIELDS, with names and values at and past the limits (astral characters: SQLite counts
-			// code points, JavaScript code units).
+			// More than MAX_REMOTE_FIELDS.
+			Array.from({ length: MAX_REMOTE_FIELDS + 4 }, (_, i) => field(`f${i}`, `v${i}`)),
+			// Names and values at and past the limits; astral characters (SQLite counts code points, JavaScript code
+			// units).
 			[
-				...Array.from({ length: MAX_REMOTE_FIELDS + 4 }, (_, i) =>
-					field(`${i}`.padEnd(255 + (i % 3) - 1, 'n'), 'v'.repeat(4096 + (i % 3) - 1))
-				),
+				...[-1, 0, 1].map((d) => field('n'.repeat(255 + d), 'v'.repeat(4096 + d))),
+				field(astral, astral),
+				field('a', '🦬'.repeat(4096)),
 			],
-			[field(astral, astral), field('a', '🦬'.repeat(4096))],
 			// One object rather than a list.
 			field('Only', 'one'),
-			// type as a list, as an object, missing; non-string names and values; non-object entries.
+			// type as a list, as an object, missing; non-string names and values; non-object and deep entries.
 			[
 				{ type: ['PropertyValue', 'Other'], name: 'listed', value: 'yes' },
 				{ type: { x: 'PropertyValue' }, name: 'object type', value: 'no' },
 				{ type: [['PropertyValue']], name: 'nested type', value: 'no' },
+				{ type: deep, name: 'deep type', value: 'no' },
+				{ type: 'PropertyValue', name: deep, value: 'no' },
 				{ name: 'untyped', value: 'no' },
 				{ type: 'PropertyValue', name: 1, value: 'no' },
 				{ type: 'PropertyValue', name: 'no value' },
 				{ type: 'PropertyValue', name: 'null value', value: null },
 				['PropertyValue', 'n', 'v'],
+				deep,
 				'PropertyValue',
 				null,
 				field('', ''),
 			],
-			// No attachment at all, and an empty one.
+			// A deep attachment, no attachment at all, and an empty one.
+			deep,
 			undefined,
 			[],
 		]
@@ -200,17 +254,24 @@ describe('remote profile fields are projected bounded (RES-2)', () => {
 		}
 		const results = await Promise.all(ids.map((id) => bothWays(t, id)))
 		for (const { bounded, whole } of results) {
-			expect(JSON.stringify(bounded)).toBe(JSON.stringify(whole))
+			expect(bounded).toEqual(whole)
 		}
-		expect(results[0]!.bounded).toHaveLength(MAX_REMOTE_FIELDS)
-		expect(results[0]!.bounded.map((f) => [f.name.length, f.value.length])).toContainEqual([255, 4096])
+		expect(results[0]!.bounded.map((f) => f.name)).toEqual(Array.from({ length: MAX_REMOTE_FIELDS }, (_, i) => `f${i}`))
+		expect(results[1]!.bounded.map((f) => [f.name.length, f.value.length])).toEqual([
+			[254, 4095],
+			[255, 4096],
+			[255, 4096],
+			[255, 600],
+			[1, 4096],
+		])
 		expect(results[2]!.bounded.map((f) => f.name)).toEqual(['Only'])
 		expect(results[3]!.bounded.map((f) => f.name)).toEqual(['listed', ''])
-		expect(results[4]!.bounded).toEqual([])
-		expect(results[5]!.bounded).toEqual([])
+		for (const empty of results.slice(4)) {
+			expect(empty.bounded).toEqual([])
+		}
 	})
 
-	it('keeps an embedded NUL in a name or value within the limits, and stays bounded past them', async () => {
+	it('keeps a string with a NUL whole while its bytes fit the limit, and only ever shorter past it', async () => {
 		const t = await setup()
 		const [within, past] = await remoteFollowers(t, 2)
 		await storeAttachment(
@@ -218,7 +279,8 @@ describe('remote profile fields are projected bounded (RES-2)', () => {
 			[within!],
 			[field('A\u0000B', 'ok'), field('name', 'x\u0000y\u0000'), field('\u0000', '\u0000')]
 		)
-		await storeAttachment(t, [past!], [field(`A\u0000${'n'.repeat(300)}`, `v\u0000${'v'.repeat(5000)}`)])
+		// Past the byte limits: a 102-character name of 302 bytes, and an ASCII value past 4,096 characters.
+		await storeAttachment(t, [past!], [field(`A\u0000${'界'.repeat(100)}`, `v\u0000${'v'.repeat(5000)}`)])
 		const [w, p] = await projected(t, [within!, past!])
 		expect(JSON.parse(w!.attachment)).toEqual([
 			{ name: 'A\u0000B', value: 'ok' },
@@ -227,15 +289,13 @@ describe('remote profile fields are projected bounded (RES-2)', () => {
 		])
 		const shown = await bothWays(t, within!)
 		expect(shown.bounded.map((f) => f.name)).toEqual(['A\u0000B', 'name', '\u0000'])
-		expect(JSON.stringify(shown.bounded)).toBe(JSON.stringify(shown.whole))
+		expect(shown.bounded).toEqual(shown.whole)
 		const api = await t.api<{ fields: { name: string }[] }>(`/api/v1/accounts/${within!}`)
 		expect(api.body.fields.map((f) => f.name)).toEqual(['A\u0000B', 'name', '\u0000'])
-		// Past the limit, the cut may stop at the NUL: shorter than the presenter's own cut, never longer.
-		expect(p!.length).toBeLessThanOrEqual(PROJECTED_CEILING)
-		const [cut] = JSON.parse(p!.attachment) as { name: string; value: string }[]
-		expect(cut!.name.length).toBeLessThanOrEqual(255)
-		expect(cut!.value.length).toBeLessThanOrEqual(4096)
-		const [bounded] = (await bothWays(t, past!)).bounded
-		expect(bounded!.name.startsWith('A')).toBe(true)
+		// SQLite's substr stops at the NUL: each string comes out as what precedes it.
+		expect(JSON.parse(p!.attachment)).toEqual([{ name: 'A', value: 'v' }])
+		const cut = await bothWays(t, past!)
+		expect(cut.bounded).toEqual([{ name: 'A', value: 'v', verified_at: null }])
+		expect(cut.whole.map((f) => [f.name.length, f.value.length])).toEqual([[102, 4096]])
 	})
 })
