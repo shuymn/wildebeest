@@ -622,8 +622,9 @@ export class PolicyModel {
 	// a retraction is sent only while its signer is available (but for the suspension's own Update of the actor, R1)
 	// and, when the recipients behind it are known (`recipients`; 'many' above PROVENANCE_MAX, "not all unavailable"),
 	// while one of them exists and is available. An Announce is sent only while its original exists and its author
-	// (`boosted`; 'missing' when the original is not stored) is available. Unknown recipients (null) leave the host rule only, which the world does not model (instance domain
-	// blocks come in phase B2a); nor does it model a purged account, which is missing.
+	// (`boosted`; 'missing' when the original is not stored) is available. Unknown recipients (null) leave the host
+	// rule only, which the world does not model (instance domain blocks come in phase B2a); nor does it model a purged
+	// account, which is missing.
 	sends(
 		signer: number,
 		retracts: boolean,

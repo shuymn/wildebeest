@@ -272,8 +272,8 @@ export const worldArb: fc.Arbitrary<World> = fc
 			accounts.push({
 				name: `R${i}`,
 				local: false,
-				// The instance's suspension (R38), drawn from bits already drawn, as hidesCollections below, so the worlds a seed
-				// gave before stay as they were but for it: about one remote account in four.
+				// The instance's suspension (R38), drawn from bits already drawn, as hidesCollections below, so the worlds a
+				// seed gave before stay as they were but for it: about one remote account in four.
 				suspended: raw.follows[LOCALS + i + 3]?.accepted === true && raw.follows[LOCALS + i + 3]?.notify === true,
 				deleting: raw.deleting !== null && raw.deleting % raw.remotes.length === i,
 				// Drawn from bits already drawn, as tagFollowers below: about one remote account in four.
