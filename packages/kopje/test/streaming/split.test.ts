@@ -9,14 +9,16 @@ import { community } from '../status-helpers'
 import { connect, drained, echo, type Inbox, type StreamMessage } from './stream-helpers'
 import { Db } from '../../src/db/sql'
 import { addToConversation } from '../../src/domain/conversations'
-import { CAPTURE_LIMITS, CONVERSATIONS_PER_TURN, streamDelete } from '../../src/domain/streaming'
+import { CAPTURE_LIMITS, CONVERSATIONS_PER_TURN, streamCaughtUp, streamDelete } from '../../src/domain/streaming'
 import { sha256Hex } from '../../src/security/tokens'
 import { STREAM_FAULTS, TURN_BUDGET } from '../../src/stream-hub'
 
 // Every event kind the hub serves, split across turns by the turn budget (RES-6). Each kind's fixture has more units
-// than one turn's budget allows, read from the budget's constants: listeners on distinct tokens (a status, an edit or
-// a notification is presented once per viewer, and a turn presents at most TURN_BUDGET.presentations), or a viewer's
-// many units (a conversation event's changes, a delete's captured boosts). Every kind passes the same cases:
+// than one turn's budget allows, read from the budget's constants: listeners on distinct tokens (a status or an edit is
+// presented once per viewer, and a turn presents at most TURN_BUDGET.presentations), or a viewer's many units (a
+// conversation event's changes, a delete's captured boosts). A notification is an event of one unit, its recipient's:
+// its kind splits a batch of them, one for each of more recipients than a turn presents. Every kind passes the same
+// cases:
 //   - exactly once: each listener that should receive the event gets it once, in order, and each that should not gets
 //     nothing, proved after the drain barrier; the event took two turns at least;
 //   - progress under writes between turns: while the split event is being sent, writes of its kind land between turns,
@@ -28,15 +30,16 @@ import { STREAM_FAULTS, TURN_BUDGET } from '../../src/stream-hub'
 // Writes go straight to the Store, which starts no turn: the cases run each turn themselves (turn) or through the
 // barrier. A new event kind joins KINDS.
 
-// The turns the split event may take after the first while writes of its kind land between turns.
-const FINISH_WITHIN = 3
+// The rounds of writes between turns, a turn after each: each round writes one event of the kind by the same author or
+// owner and one by another, and the split event must finish within them.
+const ROUNDS = 3
 
 // The turns the cron may take to finish the event after a lost continuation.
 const CRON_TURNS = 3
 
-// The rounds of writes between turns: each round writes one event of the kind by the same author or owner and one by
-// another.
-const ROUNDS = 3
+// The turns, with continuations dropped, in which what is left must be sent and the position reach the journal's head:
+// far more than the cases' work needs, so a fan-out that keeps going without reaching the head fails here.
+const SETTLE_TURNS = 20
 
 // Each listener's expected messages, as `key`s, by receiver index.
 type Expected = string[][]
@@ -66,12 +69,18 @@ function key(m: StreamMessage): string {
 	return `${stream} ${m.event} ${id}`
 }
 
-const sent = (inbox: Inbox) => inbox.rest().map(key)
+// The events left on a socket (an echo's error is not one), as keys.
+const sent = (inbox: Inbox) => inbox.rest().flatMap((m) => (m.event === undefined ? [] : [key(m)]))
 
 // A turn, as the cron's or a continuation's request to the Store's own stub, awaited until it ends.
 async function turn(h: ApiHarness): Promise<void> {
 	const response = await h.store.fetch('https://store.internal/stream/turn', { method: 'POST' })
 	await response.body?.cancel()
+}
+
+// Whether the fan-out's position is at the journal's head (what the drain barrier waits for).
+function caughtUp(h: ApiHarness): Promise<boolean> {
+	return runInDurableObject(h.store, (_instance, state) => streamCaughtUp.run(state.storage.sql, undefined))
 }
 
 // Ids for rows written straight to the Store (each fixture has a Store of its own).
@@ -525,8 +534,13 @@ describe.each(KINDS)('$name split across turns', (kind) => {
 		f = await kind.fixture()
 	}, 60_000)
 
-	afterEach(async () => {
+	afterEach(async ({ task }) => {
 		STREAM_FAULTS.dropContinuation = null
+		// A failed case may leave a fan-out that never reaches the head, with the barrier asking for turns: the object is
+		// reset, which ends both, so the cases after it are not starved.
+		if (task.result?.state === 'fail') {
+			await runInDurableObject(f.h.store, (_instance, state) => state.abort('the case failed')).catch(() => {})
+		}
 		for (const inbox of [...f.receivers, ...f.others]) {
 			await takeAll(inbox)
 		}
@@ -537,12 +551,41 @@ describe.each(KINDS)('$name split across turns', (kind) => {
 	// Each receiver got exactly what it expects, in order, and the others nothing, after the drain barrier; then a
 	// further drain runs no turn and sends nothing.
 	async function exactly(expected: Expected): Promise<void> {
-		const { turns } = await drained(f.h, ...all())
+		const { turns } = await barrier(expected)
 		expect(f.receivers.map(sent)).toEqual(expected)
 		expect(f.others.map(sent)).toEqual(f.others.map(() => []))
 		expect((await drained(f.h, ...all())).turns).toBe(turns)
 		expect(f.receivers.map(sent)).toEqual(expected)
 		expect(f.others.map(sent)).toEqual(f.others.map(() => []))
+	}
+
+	// The drain barrier, failed as soon as a socket is sent more than it expects: a re-send that goes on would keep
+	// the barrier from returning.
+	async function barrier(expected: Expected): Promise<{ turns: number }> {
+		let fail: (error: Error) => void = () => {}
+		const overrun = new Promise<never>((_, reject) => {
+			fail = reject
+		})
+		const watches = all().map((inbox, i) => {
+			const limit = expected[i]?.length ?? 0
+			const watch = () => {
+				if (sent(inbox).length > limit) {
+					fail(new Error(`a socket was sent more than the ${limit} events it expects`))
+				}
+			}
+			inbox.ws.addEventListener('message', watch)
+			return () => inbox.ws.removeEventListener('message', watch)
+		})
+		try {
+			const drain = drained(f.h, ...all())
+			// Once the overrun failed the case, the barrier is ended by the object's reset (afterEach).
+			drain.catch(() => {})
+			return await Promise.race([drain, overrun])
+		} finally {
+			for (const unwatch of watches) {
+				unwatch()
+			}
+		}
 	}
 
 	// After a turn: what arrived is a prefix of what must arrive, on every socket; returns how many receivers have all
@@ -559,6 +602,19 @@ describe.each(KINDS)('$name split across turns', (kind) => {
 		return f.receivers.filter((inbox, i) => sent(inbox).length >= event[i]!.length).length
 	}
 
+	// With continuations dropped, turns until the position is at the journal's head, what arrived a prefix of what must
+	// arrive after each; then continuations are restored.
+	async function settle(expected: Expected): Promise<void> {
+		let turns = 0
+		while (!(await caughtUp(f.h)) && turns < SETTLE_TURNS) {
+			await turn(f.h)
+			await arrived(expected, expected)
+			turns++
+		}
+		expect(await caughtUp(f.h)).toBe(true)
+		STREAM_FAULTS.dropContinuation = null
+	}
+
 	function dropContinuations(): void {
 		dropped = 0
 		STREAM_FAULTS.dropContinuation = () => {
@@ -570,10 +626,10 @@ describe.each(KINDS)('$name split across turns', (kind) => {
 		const before = (await drained(f.h)).turns
 		const expected = await f.event()
 		await f.h.store.streamTick(BUILD)
-		const { turns } = await drained(f.h, ...all())
+		const { turns } = await barrier(expected)
 		expect(turns - before).toBeGreaterThanOrEqual(2)
 		await exactly(expected)
-	}, 60_000)
+	})
 
 	it('finishes the event within a bound while writes of its kind land between turns, then sends those once', async () => {
 		dropContinuations()
@@ -585,25 +641,16 @@ describe.each(KINDS)('$name split across turns', (kind) => {
 		const first = await arrived(expected, event)
 		expect(first).toBeGreaterThan(0)
 		expect(first).toBeLessThan(f.receivers.length)
-		let finished = -1
+		let finished = false
 		for (let round = 0; round < ROUNDS; round++) {
 			expected = merge(expected, await f.more(round))
 			await turn(f.h)
-			if ((await arrived(expected, event)) === f.receivers.length && finished === -1) {
-				finished = round + 1
-			}
+			finished ||= (await arrived(expected, event)) === f.receivers.length
 		}
-		for (let extra = ROUNDS; finished === -1 && extra < FINISH_WITHIN; extra++) {
-			await turn(f.h)
-			if ((await arrived(expected, event)) === f.receivers.length) {
-				finished = extra + 1
-			}
-		}
-		expect(finished).toBeGreaterThan(0)
-		expect(finished).toBeLessThanOrEqual(FINISH_WITHIN)
-		STREAM_FAULTS.dropContinuation = null
+		expect(finished).toBe(true)
+		await settle(expected)
 		await exactly(expected)
-	}, 60_000)
+	})
 
 	it('resumes from the persisted position after a lost continuation, by the cron, once each', async () => {
 		dropContinuations()
@@ -621,7 +668,7 @@ describe.each(KINDS)('$name split across turns', (kind) => {
 			done = (await arrived(event, event)) === f.receivers.length
 		}
 		expect(done).toBe(true)
-		STREAM_FAULTS.dropContinuation = null
+		await settle(event)
 		await exactly(event)
-	}, 60_000)
+	})
 })
