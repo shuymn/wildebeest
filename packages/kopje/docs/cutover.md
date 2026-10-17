@@ -285,10 +285,10 @@ over: users sign in again and clients register push again. Legacy never wrote it
 
 **Stops.** The converter writes no dump when it finds rows it cannot carry over (`conversion.problems`: rows in tables
 the legacy code never wrote, unknown object types, statuses whose author is not local where it must be, duplicate URIs,
-a remote actor id longer than 2,048 characters, a status URI longer than 4,096 or a remote username outside
-Mastodon's remote format, which the Worker never stores and which are identities that cannot be cut, lists without 18-digit ids, and the like), when rows reference accounts or
-statuses that do not exist and `--accept-deletions` is not given (`conversion.dropped`), or when no single KEK candidate
-unwraps every key.
+a remote actor id longer than 2,048 characters, a status URI longer than 4,096 or a remote username outside Mastodon's
+remote format, which the Worker never stores and which are identities that cannot be cut, lists without 18-digit ids,
+and the like), when rows reference accounts or statuses that do not exist and `--accept-deletions` is not given
+(`conversion.dropped`), or when no single KEK candidate unwraps every key.
 
 **What `--accept-deletions` drops.** Besides the rows bridge migrations remove (Steps), `conversion.dropped` counts rows
 the conversion leaves out because legacy never showed them, or showed them only through what is also left out:
