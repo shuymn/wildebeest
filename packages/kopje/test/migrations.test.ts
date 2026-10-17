@@ -4042,3 +4042,98 @@ describe('0035_streaming_public', () => {
 		expect(await measure(10_000)).toBe(await measure(0))
 	}, 120_000)
 })
+
+describe('0037_quote_policy', () => {
+	const NAME = '0037_quote_policy'
+	const at = NAMES.indexOf(NAME)
+	const id = (n: number) => String(100000000000000000n + BigInt(n))
+
+	// `locals` local accounts, and `statuses` public statuses of the first of them.
+	function seed(sql: SqlStorage, locals: number, statuses: number) {
+		sql.exec(
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO accounts (id, uri, username) SELECT CAST(100000000000000000 + i AS TEXT),
+				'https://kopje.test/ap/users/u' || i, 'u' || i FROM n`,
+			locals
+		)
+		sql.exec(
+			`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey)
+			SELECT id, username || '@example.com', X'00', X'00', 'k' FROM accounts`
+		)
+		sql.exec(
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+			SELECT CAST(200000000000000000 + i AS TEXT), 'https://kopje.test/ap/o/' || i, ?2, 'public',
+				hex(randomblob(200)), '2026-10-12T00:00:00.000Z'
+			FROM n WHERE ?1 > 0`,
+			statuses,
+			id(1)
+		)
+	}
+
+	it('leaves every stored status unquotable and gives local accounts the public default', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, MIGRATIONS.slice(0, at)).upgrade()).toMatchObject({ ok: true })
+			seed(sql, 2, 3)
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+			expect(sql.exec('SELECT DISTINCT quote_policy FROM statuses').toArray()).toEqual([{ quote_policy: 0 }])
+			expect(sql.exec('SELECT DISTINCT default_quote_policy FROM local_accounts').toArray()).toEqual([
+				{ default_quote_policy: 'public' },
+			])
+			for (const policy of ['followers', 'nobody']) {
+				sql.exec('UPDATE local_accounts SET default_quote_policy = ? WHERE account_id = ?', policy, id(1))
+			}
+			expect(() =>
+				sql.exec("UPDATE local_accounts SET default_quote_policy = 'following' WHERE account_id = ?", id(1))
+			).toThrow(/CHECK constraint failed/)
+			expect(() => sql.exec('UPDATE statuses SET quote_policy = NULL')).toThrow(/NOT NULL constraint failed/)
+			sql.exec('UPDATE statuses SET quote_policy = ? WHERE id = ?', (2 << 16) | 4, '200000000000000001')
+			expect(sql.exec('SELECT quote_policy FROM statuses WHERE id = ?', '200000000000000001').one()).toEqual({
+				quote_policy: 131076,
+			})
+		})
+	})
+
+	// Both columns have a constant default, so neither table is rewritten, and the statuses column has no CHECK: the rows
+	// read are the same with 10,000 statuses or 500 local accounts as with none. SQLite also tests the local_accounts
+	// column's CHECK against each stored local account (a handful on any instance), which the cursor does not count.
+	it('reads the same rows however many statuses or local accounts there are', async () => {
+		const statements = (MIGRATIONS[at]?.sql ?? '')
+			.split('\n')
+			.filter((line) => !line.startsWith('--'))
+			.join('\n')
+			.split(';')
+			.filter((statement) => statement.trim() !== '')
+		expect(statements).toHaveLength(2)
+		const measure = async (locals: number, statuses: number) => {
+			const store = freshStore()
+			return runInDurableObject(store, async (_instance, state) => {
+				const sql = state.storage.sql
+				await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+				seed(sql, locals, statuses)
+				let read = 0
+				for (const statement of statements) {
+					const cursor = sql.exec(statement)
+					cursor.toArray()
+					read += cursor.rowsRead
+				}
+				// Not vacuous: the rows are there, and the columns were added.
+				expect(sql.exec('SELECT count(*) AS n, sum(quote_policy) AS p FROM statuses').one()).toEqual({
+					n: statuses,
+					p: statuses === 0 ? null : 0,
+				})
+				expect(
+					sql.exec("SELECT count(*) AS n FROM local_accounts WHERE default_quote_policy = 'public'").one()
+				).toEqual({ n: locals })
+				return read
+			})
+		}
+		const few = await measure(2, 0)
+		const statuses = await measure(2, 10_000)
+		const locals = await measure(500, 0)
+		expect(statuses).toBe(few)
+		expect(locals).toBe(few)
+	}, 120_000)
+})

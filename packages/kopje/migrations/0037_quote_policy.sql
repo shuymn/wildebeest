@@ -17,9 +17,9 @@
 -- CHECK, so SQLite neither rewrites nor reads the stored statuses; the local_accounts one has a CHECK, which SQLite
 -- tests against each stored local account, a handful of rows. Nothing is backfilled. Measured on the benchmark store
 -- of test/bench/migration-cost.ts (1,000,000 accounts, 3,000,000 follows, 2,000,000 statuses with their mentions and
--- tags, 200,000 quotes, 10,000 reports, 20 local accounts) in workerd's local Durable Object SQLite: MEASURED for the
--- upgrade of this file through the kernel (its bookmark, transaction and schema verification), within the 5,000 ms
--- each migration file may take.
+-- tags, 200,000 quotes, 10,000 reports, 20 local accounts) in workerd's local Durable Object SQLite: 2,341 ms for the
+-- upgrade of this file through the kernel (its bookmark, transaction and schema verification; 3,228 ms in a second
+-- run), within the 5,000 ms each migration file may take.
 
 ALTER TABLE statuses ADD COLUMN quote_policy INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE local_accounts ADD COLUMN default_quote_policy TEXT NOT NULL DEFAULT 'public'
