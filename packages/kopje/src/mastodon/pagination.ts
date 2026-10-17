@@ -21,21 +21,21 @@ function cursor(value: string | undefined): string | undefined {
 	return value !== undefined && CURSOR.test(value) ? value : undefined
 }
 
-// next is offered when the page is full; prev whenever the page has items.
+// next is offered when the page is full and has an oldest end; prev whenever it has a newest end. Each stands on its
+// own: an empty page cut at its window may have only the end it moves on from (a grouped walk's).
 export function linkHeader(
 	requestUrl: string,
 	page: { newest: string | null; oldest: string | null; count: number },
 	limit: number
 ): string | undefined {
-	if (page.newest === null || page.oldest === null) {
-		return undefined
-	}
 	const links: string[] = []
-	if (page.count >= limit) {
+	if (page.oldest !== null && page.count >= limit) {
 		links.push(`<${pageUrl(requestUrl, 'max_id', page.oldest)}>; rel="next"`)
 	}
-	links.push(`<${pageUrl(requestUrl, 'min_id', page.newest)}>; rel="prev"`)
-	return links.join(', ')
+	if (page.newest !== null) {
+		links.push(`<${pageUrl(requestUrl, 'min_id', page.newest)}>; rel="prev"`)
+	}
+	return links.length === 0 ? undefined : links.join(', ')
 }
 
 function pageUrl(requestUrl: string, name: 'max_id' | 'min_id', value: string): string {
