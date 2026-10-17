@@ -140,9 +140,37 @@ export type AccountRow = {
 	// accounts' (null until learned) for a remote one.
 	local_fields: string | null
 	hide_collections: number | null
-	// A remote account's `attachment`, as JSON (fields are read from raw, as the design keeps them).
+	// A remote account's PropertyValue attachments, bounded (REMOTE_ATTACHMENT_SQL), as JSON; null for a local one.
 	attachment: string | null
 }
+
+// Fields a remote profile shows: its PropertyValue attachments (ProcessAccountService#property_values), the name as
+// plain text and the value as sanitized HTML (HTML-1, its links http(s) only, HTML-3), as Mastodon renders them. Kopje's
+// bounds (RES-2): at most MAX_REMOTE_FIELDS, names cut at 255 code units, values at FIELD_VALUE_RAW_LIMIT before
+// sanitizing. Mastodon keeps more: 50 fields (ActivityPub::ProcessAccountService::MAX_PROFILE_FIELDS) and 2,047
+// characters of each stripped name and value (Account::Field::MAX_CHARACTERS_COMPAT).
+export const MAX_REMOTE_FIELDS = 16
+const FIELD_NAME_LIMIT = 255
+const FIELD_VALUE_RAW_LIMIT = 4096
+
+// A remote account's attachment as ACCOUNT_COLUMNS projects it, chosen and cut in SQL so that the stored actor
+// document (up to the fetch budget, 2 MiB) never reaches the isolate: a JSON list of at most MAX_REMOTE_FIELDS
+// {name, value} entries in document order, the name cut at FIELD_NAME_LIMIT and the value at FIELD_VALUE_RAW_LIMIT
+// code points. A row thus carries at most 16 × 4,351 characters (each at most six once JSON-escaped) whatever the
+// document's size, and a page of 80, or a list of 1,000 accounts (RES-3), stays far below the isolate's 128 MB.
+// An entry counts when it is an object whose `type` is 'PropertyValue' or a list holding it and whose name and value
+// are strings; an attachment that is one object counts as a list of one. SQLite counts code points where JavaScript
+// counts code units, so remoteFields cuts again.
+const REMOTE_ATTACHMENT_SQL = `CASE WHEN a.domain IS NOT NULL THEN (
+		SELECT json_group_array(json_object('name', substr(p.name, 1, ${FIELD_NAME_LIMIT}),
+			'value', substr(p.value, 1, ${FIELD_VALUE_RAW_LIMIT})) ORDER BY p.key)
+		FROM (SELECT e.key, e.value ->> '$.name' AS name, e.value ->> '$.value' AS value
+			FROM json_each(CASE json_type(a.raw, '$.attachment') WHEN 'array' THEN a.raw -> '$.attachment'
+				ELSE json_array(a.raw -> '$.attachment') END) e
+			WHERE e.type = 'object' AND json_type(e.value, '$.name') = 'text' AND json_type(e.value, '$.value') = 'text'
+				AND json_type(e.value, '$.type') IN ('text', 'array')
+				AND EXISTS (SELECT 1 FROM json_each(e.value, '$.type') t WHERE t.type = 'text' AND t.value = 'PropertyValue')
+			ORDER BY e.key LIMIT ${MAX_REMOTE_FIELDS}) p) END`
 
 export const ACCOUNT_COLUMNS = `a.id, a.uri, a.username, a.domain, a.actor_type, a.display_name, a.note, a.url, a.avatar_url,
 	a.header_url, a.locked, a.discoverable, a.followers_count, a.following_count, a.statuses_count, a.created_at,
@@ -151,7 +179,7 @@ export const ACCOUNT_COLUMNS = `a.id, a.uri, a.username, a.domain, a.actor_type,
 		WHERE s.account_id = a.id AND s.visibility IN ${REACHES_FOLLOWERS_SQL} ORDER BY s.id DESC LIMIT 1)
 		AS last_status_at,
 	l.fields AS local_fields, COALESCE(l.hide_collections, a.hide_collections) AS hide_collections,
-	CASE WHEN a.domain IS NOT NULL THEN a.raw -> '$.attachment' END AS attachment`
+	${REMOTE_ATTACHMENT_SQL} AS attachment`
 
 export const ACCOUNT_FROM = 'accounts a LEFT JOIN local_accounts l ON l.account_id = a.id'
 
@@ -230,39 +258,15 @@ function presentField(field: FieldSource): Field {
 	return { name: field.name, value: renderFieldValue(field.value), verified_at: null }
 }
 
-// Fields a remote profile shows: its PropertyValue attachments (ProcessAccountService#property_values), the name as
-// plain text and the value as sanitized HTML (HTML-1, its links http(s) only, HTML-3), as Mastodon renders them. Kopje's
-// bounds (RES-2): at most MAX_REMOTE_FIELDS, names cut at 255 code units, values at FIELD_VALUE_RAW_LIMIT before
-// sanitizing.
-export const MAX_REMOTE_FIELDS = 16
-const FIELD_NAME_LIMIT = 255
-const FIELD_VALUE_RAW_LIMIT = 4096
-
 function remoteFields(attachment: string | null): Field[] {
 	if (attachment === null) {
 		return []
 	}
-	const parsed = JSON.parse(attachment) as unknown
-	const fields: Field[] = []
-	for (const entry of Array.isArray(parsed) ? parsed : [parsed]) {
-		if (fields.length >= MAX_REMOTE_FIELDS) {
-			break
-		}
-		if (typeof entry !== 'object' || entry === null) {
-			continue
-		}
-		const { type, name, value } = entry as Record<string, unknown>
-		const types = Array.isArray(type) ? type : [type]
-		if (!types.includes('PropertyValue') || typeof name !== 'string' || typeof value !== 'string') {
-			continue
-		}
-		fields.push({
-			name: name.slice(0, FIELD_NAME_LIMIT),
-			value: sanitizeRemoteHtml(value.slice(0, FIELD_VALUE_RAW_LIMIT)),
-			verified_at: null,
-		})
-	}
-	return fields
+	return (JSON.parse(attachment) as { name: string; value: string }[]).map(({ name, value }) => ({
+		name: name.slice(0, FIELD_NAME_LIMIT),
+		value: sanitizeRemoteHtml(value.slice(0, FIELD_VALUE_RAW_LIMIT)),
+		verified_at: null,
+	}))
 }
 
 // API ids are 18 digits; legacy ids are UUIDs or other short strings. Anything longer is not an id.
