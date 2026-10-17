@@ -40,8 +40,8 @@ async function total(w: World, domain: string, extra: Record<string, unknown> = 
 
 let next = 7_000_000_000_000
 
-// `n` new remote accounts on `domain`, followed by `follower` in `state`.
-async function followed(w: World, follower: string, n: number, domain: string, state = 'accepted'): Promise<void> {
+// `n` new remote accounts on `domain`, with ids after the returned base.
+async function remoteAccountsOn(w: World, n: number, domain: string): Promise<number> {
 	const base = next
 	next += 1_000_000
 	await sql(
@@ -53,6 +53,12 @@ async function followed(w: World, follower: string, n: number, domain: string, s
 		base,
 		domain
 	)
+	return base
+}
+
+// `n` new remote accounts on `domain`, followed by `follower` in `state`.
+async function followed(w: World, follower: string, n: number, domain: string, state = 'accepted'): Promise<void> {
+	const base = await remoteAccountsOn(w, n, domain)
 	await sql(
 		w.h.store,
 		`INSERT INTO follows (account_id, target_account_id, state)
@@ -67,17 +73,7 @@ async function followed(w: World, follower: string, n: number, domain: string, s
 
 // `n` new remote accounts on `domain`, each following `local` (accepted).
 async function followersOn(w: World, local: string, n: number, domain: string): Promise<void> {
-	const base = next
-	next += 1_000_000
-	await sql(
-		w.h.store,
-		`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
-		INSERT INTO accounts (id, uri, username, domain)
-		SELECT printf('%018d', ?2 + i), 'https://' || ?3 || '/users/u' || (?2 + i), 'u' || i, ?3 FROM n`,
-		n,
-		base,
-		domain
-	)
+	await remoteAccountsOn(w, n, domain)
 	await sql(
 		w.h.store,
 		`INSERT INTO follows (account_id, target_account_id, state) SELECT id, ?1, 'accepted' FROM accounts WHERE domain = ?2`,
