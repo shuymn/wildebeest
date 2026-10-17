@@ -470,7 +470,7 @@ it. Local accounts' follows of it are kept; their `Follow` and any other content
 (VIS-30). Each round writes at most `MODERATION_ROUND_ROWS` rows: a follow notification's push deliveries are deleted
 in bounded steps before the follow ends.
 
-Unsuspending an account that a `suspend` block still covers answers 200 and converts the suspension (decision 4): the
+Unsuspending an account that a `suspend` block still covers answers 200 and converts the suspension: the
 account keeps `suspended_at` with `suspension_source = 'domain'`, so it stays unavailable and the entity shows
 `suspended: true`, and the same transaction resets its job to mode `domain` with a fresh follow bound. In that mode
 each round requires the domain mark and live coverage, and the job severs both ways, as the domain job severs a
@@ -558,8 +558,8 @@ severity `suspend` or `noop`.
 - **The domain job and its marks.** Every create, update or delete that changes whether the hosts a block's domain
   rules are covered (their longest matching block's severity, into or out of `suspend`) resets one job row
   (`remote_moderation_jobs`, kind `domain`) in its transaction, with a fresh follow bound (the newest follow). Its
-  rounds reconcile the domain marks (`suspension_source = 'domain'`) with the blocks as they stand. Marks serve the
-  admin's lists only; availability never reads them. Two walks:
+  rounds reconcile the domain marks (`suspension_source = 'domain'`) with the blocks as they stand; marks serve the
+  admin's lists only. Two walks:
     - **clear:** the suspended accounts by id (`accounts_suspended`, which holds every mark whatever the account's
       domain is now); a mark no block covers any more is cleared. A permitted refresh of a marked account
       (`upsertRemoteActor`, which stores only an uncovered account) clears its stale mark in its own transaction.
@@ -571,14 +571,13 @@ severity `suspend` or `noop`.
       the preparation removes the account from that follower's lists, writing at most the round's room (about 259
       rows) a round, so the follow's final delete writes no list row. Its reads are not bounded the same way: each
       preparatory step, and the final delete's trigger (`list_members_follow_ended`), scans all of the follower's
-      lists, O(L) for L lists. That is the follower's own data, at most 50 lists through the API, and unbounded only
-      for legacy lists a converted instance imported. At most `MARK_ACCOUNTS` (100) accounts are reconciled a round,
+      lists, O(L) for L lists. That is the follower's own data, at most 50 lists through the API (always removed in
+      one round), and unbounded only for legacy lists a converted instance imported. At most `MARK_ACCOUNTS` (100) accounts are reconciled a round,
       one resumed from the round before included. An individually suspended account is skipped, so its local follows
       are kept (`account` wins). **Limit (imported lists):** the memberships are removed before the follow ends,
       and nothing restores them. A follower imported with more than about 259 lists that include a covered account
       needs several rounds for them; if the block is lifted meanwhile (an unblock, or a conversion back to an
-      individual suspension), the follow can survive with some of those list memberships removed. Lists made through
-      the API (at most 50 per account) always finish in one round.
+      individual suspension), the follow can survive with some of those list memberships removed.
 
     No account is stored or moves into a covered domain, so the last walk after the last reset finds every covered
     account, and whatever the order of transitions and rounds, marks and severing agree with the blocks once the job
