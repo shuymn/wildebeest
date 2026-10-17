@@ -9,8 +9,8 @@
 -- Cost: one pass over the quotes and a sort of the accepted ones; nothing else is read or written.
 -- Measured on the benchmark store of test/bench/migration-cost.ts (1,000,000 accounts, 3,000,000 follows,
 -- 2,000,000 statuses with their mentions and tags, 200,000 quotes of which a quarter accepted, 10,000 reports, 20 local
--- accounts) in workerd's local Durable Object SQLite: 2,351 ms for the upgrade of this file through the kernel (its
--- bookmark, transaction and schema verification; 2,521 ms in a second run), within the 5,000 ms each migration file
+-- accounts) in workerd's local Durable Object SQLite: 2,358 ms for the upgrade of this file through the kernel (its
+-- bookmark, transaction and schema verification; 2,299 ms in a second run), within the 5,000 ms each migration file
 -- may take.
 
 CREATE INDEX quotes_accepted ON quotes (quoted_status_id, status_id) WHERE state = 'accepted';

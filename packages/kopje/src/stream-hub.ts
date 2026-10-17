@@ -1,12 +1,13 @@
 import {
 	CONVERSATIONS_PER_TURN,
+	hashtagKey,
+	isFeedKey,
 	JOURNAL_SPAN,
+	keyHashtag,
 	keyList,
 	listKey,
 	mayCarry,
 	maySubscribe,
-	SERVED_STREAMS,
-	type ServedStream,
 	STREAM_NAMES,
 	STREAM_OPERATIONS,
 	streamAccept,
@@ -29,6 +30,7 @@ import {
 	streamTokens,
 	streamUnit,
 } from './domain/streaming'
+import { normalizeTag } from './domain/tag-name'
 import { errorFields } from './platform/error-message'
 import { toStoreUnavailable } from './platform/store-errors'
 import type { StoreKernel, StoreOperation } from './platform/store-kernel'
@@ -58,6 +60,8 @@ export const STREAM_LIMITS = {
 	// Messages a socket may send per minute; one more closes it (1008).
 	messagesPerMinute: 120,
 	attachmentBytes: 12 * 1024,
+	// A hashtag stream's `tag`, as sent and normalized, at most this many UTF-8 bytes.
+	tagBytes: 256,
 	// A presented subject larger than this is skipped and logged.
 	payloadBytes: 512 * 1024,
 }
@@ -69,11 +73,11 @@ export const STREAM_FAULTS: { dropContinuation: (() => void) | null } = { dropCo
 type Charge = { checks: number; presentations: number; bytes: number; sends: number }
 
 // What one turn may do, and what one unit may do at most: 16 token checks and the reference reads of an edit (home, the
-// mention, and up to 16 lists: an account has at most 16 keys, all of them lists at most, and an edit reads home and
-// the mention whatever it subscribes to), one presentation, and a send to each of 16 subscriptions on each of 16
-// sockets.
+// mention, one for each list, `public*` and `hashtag*` key: an account has at most 16 keys, and an edit reads home and
+// the mention whatever it subscribes to; and the mention filter once a feed returned the status), one presentation,
+// and a send to each of 16 subscriptions on each of 16 sockets. A delete reads at most 16 lists and its tombstone.
 export const TURN_BUDGET: Charge = { checks: 512, presentations: 64, bytes: 4 * 1024 * 1024, sends: 4096 }
-const UNIT_WORST: Charge = { checks: 34, presentations: 1, bytes: STREAM_LIMITS.payloadBytes, sends: 256 }
+const UNIT_WORST: Charge = { checks: 35, presentations: 1, bytes: STREAM_LIMITS.payloadBytes, sends: 256 }
 
 // Journal events read per scan of a turn.
 const SCAN = 64
@@ -83,7 +87,8 @@ const TURN_HEADER = 'x-kopje-turn'
 
 // A socket's state (design §4.5). since: the journal head when it opened (it receives later events only); convSeq: the
 // highest conversation change sent or skipped on `direct` (raised, and written, before a conversation is sent); rate:
-// the minute its message count started; subs: its subscriptions' keys (a stream's name, or `list:<id>`), in order.
+// the minute its message count started; subs: its subscriptions' keys (a stream's name, `list:<id>`, or
+// `hashtag[:local]:<tag>`), in order; tags: each hashtag key's `tag` as the client sent it (its messages echo it).
 type Attachment = {
 	v: 1
 	tokenHash: string
@@ -93,12 +98,14 @@ type Attachment = {
 	convSeq: number
 	rate: { window: number; count: number }
 	subs: string[]
+	tags: Record<string, string>
 }
 
 type Socket = { ws: WebSocket; at: Attachment }
 
-// One subject of an event for one viewer, with the viewer's sockets that may carry it and the list ids it may go on.
-type Unit = { subject: StreamSubject; viewer: string; sockets: Socket[]; lists: string[] }
+// One subject of an event for one viewer, with the viewer's sockets that may carry it, the list ids it may go on, and
+// the `public*` and `hashtag*` keys those sockets subscribe to.
+type Unit = { subject: StreamSubject; viewer: string; sockets: Socket[]; lists: string[]; feeds: string[] }
 
 // A scan's walk: the position as this turn moved it, and an event passed over whose position write is pending.
 type Walk = { from: StreamPosition; skipTo: StreamPosition | null; ceiling: number }
@@ -265,6 +272,7 @@ export class StreamHub {
 			convSeq: 0,
 			rate: { window: Date.now(), count: 0 },
 			subs: [],
+			tags: {},
 		}
 		server.serializeAttachment(at)
 		// ?stream= (with tag and list) subscribes on connect, as a first message would, uncounted.
@@ -287,11 +295,14 @@ export class StreamHub {
 		if (!maySubscribe(at.grant, name)) {
 			return send(ws, { error: 'Access token does not have the required scopes', status: 401 })
 		}
-		const stream = SERVED_STREAMS.find((served) => served === name)
+		const stream = STREAM_NAMES.find((known) => known === name)
 		if (stream === undefined) {
 			return send(ws, { error: 'Unknown stream type', status: 400 })
 		}
 		let key: string = stream
+		// A hashtag's tag as the client sent it (Mastodon echoes it); the key holds it normalized, so `#Cats` and `cats`
+		// are one subscription, as Mastodon's channel is one.
+		let raw: string | null = null
 		if (stream === 'list') {
 			if (json.list === undefined || json.list === null || json.list === '') {
 				return send(ws, { error: 'Missing list name parameter', status: 400 })
@@ -300,11 +311,30 @@ export class StreamHub {
 				return send(ws, { error: 'Invalid parameter', status: 400 })
 			}
 			key = listKey(json.list)
+		} else if (stream === 'hashtag' || stream === 'hashtag:local') {
+			if (json.tag === undefined || json.tag === null || json.tag === '') {
+				return send(ws, { error: 'Missing tag name parameter', status: 400 })
+			}
+			const tag = typeof json.tag === 'string' ? normalizeTag(json.tag) : null
+			if (
+				typeof json.tag !== 'string' ||
+				tag === null ||
+				exceeds(json.tag, STREAM_LIMITS.tagBytes) ||
+				exceeds(tag, STREAM_LIMITS.tagBytes)
+			) {
+				return send(ws, { error: 'Invalid parameter', status: 400 })
+			}
+			key = hashtagKey(stream, tag)
+			raw = json.tag
 		}
 		if (at.subs.includes(key)) {
 			return
 		}
-		const next: Attachment = { ...at, subs: [...at.subs, key] }
+		const next: Attachment = {
+			...at,
+			subs: [...at.subs, key],
+			tags: raw === null ? at.tags : { ...at.tags, [key]: raw },
+		}
 		// The account's keys with this socket's as they would be.
 		const keys = this.#keys(at.accountId, ws)
 		for (const sub of next.subs) {
@@ -332,11 +362,16 @@ export class StreamHub {
 			return send(ws, { error: 'An unexpected error occurred', status: 500 })
 		}
 		// On the attachment as it is now (a turn may have raised its convSeq meanwhile); `direct` starts at the mark.
-		this.#update(ws, (current) => ({
-			...current,
-			subs: current.subs.includes(key) ? current.subs : [...current.subs, key],
-			convSeq: key === 'direct' ? (registered.convSeq ?? 0) : current.convSeq,
-		}))
+		this.#update(ws, (current) =>
+			current.subs.includes(key)
+				? current
+				: {
+						...current,
+						subs: [...current.subs, key],
+						tags: raw === null ? current.tags : { ...current.tags, [key]: raw },
+						convSeq: key === 'direct' ? (registered.convSeq ?? 0) : current.convSeq,
+					}
+		)
 	}
 
 	// Mastodon's unsubscribeWebsocketFromChannel: a stream it cannot resolve answers its one unsubscribe error.
@@ -346,11 +381,20 @@ export class StreamHub {
 		if (!STREAM_NAMES.includes(name) || missing) {
 			return send(ws, { error: 'Error unsubscribing from channel' })
 		}
-		const key = name === 'list' ? listKey(String(json.list)) : name
+		const key =
+			name === 'list'
+				? listKey(String(json.list))
+				: name === 'hashtag' || name === 'hashtag:local'
+					? hashtagKey(name, normalizeTag(String(json.tag)))
+					: name
 		if (!at.subs.includes(key)) {
 			return
 		}
-		this.#update(ws, (current) => ({ ...current, subs: current.subs.filter((sub) => sub !== key) }))
+		this.#update(ws, (current) => ({
+			...current,
+			subs: current.subs.filter((sub) => sub !== key),
+			tags: Object.fromEntries(Object.entries(current.tags).filter(([tagged]) => tagged !== key)),
+		}))
 		await this.#sync(at.accountId)
 	}
 
@@ -630,13 +674,13 @@ export class StreamHub {
 
 	// The units an event's candidates make, in order: each viewer with an open socket that opened before the event and
 	// has a subscription that may carry it, with the lists those sockets subscribe to (of a delete's, those its capture
-	// allowed).
+	// allowed) and their `public*` and `hashtag*` keys.
 	#units(
 		event: StreamEvent,
 		candidates: readonly { viewer: string; subject: StreamSubject; lists?: readonly string[] }[]
 	): Unit[] {
 		// A viewer's sockets are selected once for all its subjects (a delete has up to 41 each).
-		const selected = new Map<string, { sockets: Socket[]; lists: Set<string> }>()
+		const selected = new Map<string, { sockets: Socket[]; lists: Set<string>; feeds: string[] }>()
 		return candidates.flatMap(({ viewer, subject, lists }) => {
 			let found = selected.get(viewer)
 			if (found === undefined) {
@@ -644,12 +688,13 @@ export class StreamHub {
 					({ at }) => at.since < event.id && at.subs.some((sub) => mayCarry(event.kind, at.grant, sub))
 				)
 				const subscribed = sockets.flatMap(({ at }) => at.subs.flatMap((sub) => keyList(sub) ?? []))
-				found = { sockets, lists: new Set(subscribed) }
+				const feeds = new Set(sockets.flatMap(({ at }) => at.subs.filter(isFeedKey)))
+				found = { sockets, lists: new Set(subscribed), feeds: [...feeds].sort() }
 				selected.set(viewer, found)
 			}
-			const { sockets, lists: subscribed } = found
+			const { sockets, lists: subscribed, feeds } = found
 			const unitLists = lists === undefined ? [...subscribed] : lists.filter((list) => subscribed.has(list))
-			return sockets.length === 0 ? [] : [{ subject, viewer, sockets, lists: unitLists.sort() }]
+			return sockets.length === 0 ? [] : [{ subject, viewer, sockets, lists: unitLists.sort(), feeds }]
 		})
 	}
 
@@ -674,6 +719,7 @@ export class StreamHub {
 				viewer: owner,
 				sockets: sockets.filter(({ at }) => at.convSeq < seq),
 				lists: [],
+				feeds: [],
 			}))
 			.filter((unit) => unit.sockets.length > 0)
 	}
@@ -703,6 +749,8 @@ export class StreamHub {
 			accountId: unit.viewer,
 			tokenHashes,
 			lists: unit.lists,
+			feeds: unit.feeds,
+			eventId: event.id,
 			now: Date.now(),
 		})
 		budget.charge({ checks: tokenHashes.length + made.checks })
@@ -719,7 +767,7 @@ export class StreamHub {
 		}
 		const revoked: Socket[] = []
 		const messages: { ws: WebSocket; text: string }[] = []
-		// One envelope per stream: every socket of the unit is sent the same presentation.
+		// One envelope per stream as the client named it: every socket of the unit is sent the same presentation.
 		const envelopes = new Map<string, string>()
 		for (const socket of unit.sockets) {
 			const grant = made.grants[socket.at.tokenHash]
@@ -731,10 +779,11 @@ export class StreamHub {
 				for (const sub of socket.at.subs) {
 					const target = made.streams.find(({ stream }) => stream === sub)
 					if (target !== undefined && grants(grant, target.needs)) {
-						let text = envelopes.get(sub)
+						const stream = streamOf(sub, socket.at.tags[sub])
+						let text = envelopes.get(stream)
 						if (text === undefined) {
-							text = envelope(sub, made.event, payload)
-							envelopes.set(sub, text)
+							text = envelope(stream, made.event, payload)
+							envelopes.set(stream, text)
 						}
 						messages.push({ ws: socket.ws, text })
 					}
@@ -838,6 +887,7 @@ function peek(ws: WebSocket): Attachment | null {
 	const grant = at.grant as Partial<Record<keyof StreamGrant, unknown>> | null | undefined
 	const rate = at.rate as Partial<Record<'window' | 'count', unknown>> | null | undefined
 	const subs = at.subs
+	const tags = at.tags as Record<string, unknown> | null | undefined
 	const valid =
 		at.v === 1 &&
 		typeof at.tokenHash === 'string' &&
@@ -857,17 +907,36 @@ function peek(ws: WebSocket): Attachment | null {
 		Array.isArray(subs) &&
 		subs.length <= STREAM_LIMITS.subscriptionsPerSocket &&
 		new Set(subs).size === subs.length &&
-		subs.every((sub) => typeof sub === 'string' && validKey(sub))
+		subs.every((sub) => typeof sub === 'string' && validKey(sub)) &&
+		typeof tags === 'object' &&
+		tags !== null &&
+		!Array.isArray(tags) &&
+		Object.entries(tags).every(
+			([key, raw]) =>
+				subs.includes(key) &&
+				keyHashtag(key) !== null &&
+				typeof raw === 'string' &&
+				!exceeds(raw, STREAM_LIMITS.tagBytes)
+		) &&
+		(subs as string[]).every((sub) => keyHashtag(sub) === null || Object.hasOwn(tags, sub))
 	return valid ? (value as Attachment) : null
 }
 
 // A list id as a `list` parameter may name one (Kopje's are 18 digits; Mastodon's at most 19).
 const LIST_ID = /^\d{1,19}$/
 
-// Whether `key` is a subscription key Kopje serves: a served stream's name, or `list:<id>`.
+// Whether `key` is a subscription key: a stream's name (but those that take a parameter), `list:<id>`, or a hashtag
+// key with its tag within bounds.
 function validKey(key: string): boolean {
 	const list = keyList(key)
-	return list === null ? SERVED_STREAMS.includes(key as ServedStream) && key !== 'list' : LIST_ID.test(list)
+	if (list !== null) {
+		return LIST_ID.test(list)
+	}
+	const hashtag = keyHashtag(key)
+	if (hashtag !== null) {
+		return !exceeds(hashtag.tag, STREAM_LIMITS.tagBytes)
+	}
+	return STREAM_NAMES.includes(key) && !['list', 'hashtag', 'hashtag:local'].includes(key)
 }
 
 // A message's `stream`: its first element if it is an array (streaming/utils.js firstParam), as a string.
@@ -888,12 +957,20 @@ function parseObject(text: string): Record<string, unknown> | null {
 	}
 }
 
-// An outgoing message (streaming/index.js streamToWs): the stream as the client named it (a list's as `["list", id]`,
-// the id as the client sent it), the event, and the payload, a JSON string already encoded once for all envelopes.
-function envelope(key: string, event: string, encodedPayload: string): string {
+// The stream of the key `key` as the client named it (streaming/index.js streamNameFromChannelName), encoded: a list's
+// as `["list", id]`, a hashtag's as `["hashtag", tag]` or `["hashtag:local", tag]` with the tag as the client sent it
+// (`raw`), any other as `[name]`.
+function streamOf(key: string, raw: string | undefined): string {
 	const list = keyList(key)
-	const stream = list === null ? [key] : ['list', list]
-	return `{"stream":${JSON.stringify(stream)},"event":${JSON.stringify(event)},"payload":${encodedPayload}}`
+	const hashtag = keyHashtag(key)
+	const stream = list !== null ? ['list', list] : hashtag !== null ? [hashtag.stream, raw ?? hashtag.tag] : [key]
+	return JSON.stringify(stream)
+}
+
+// An outgoing message (streaming/index.js streamToWs): the stream as the client named it (streamOf), the event, and the
+// payload, a JSON string already encoded once for all envelopes.
+function envelope(stream: string, event: string, encodedPayload: string): string {
+	return `{"stream":${stream},"event":${JSON.stringify(event)},"payload":${encodedPayload}}`
 }
 
 function send(ws: WebSocket, message: Record<string, unknown>): void {

@@ -10,6 +10,45 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Added
 
+- Clients are shown the quote posts Kopje stores and verifies (0.1.0-rc.11), as Mastodon 4.5 shows them. A status
+  carries `quote` and `quotes_count` (its accepted quotes). Phanpy, Elk, Ice Cubes and the official iOS and Android
+  apps embed a quoted post (they render `quote` whatever the server's API version); Phanpy also still shows the `RE:`
+  line, which it hides only from API version 7. None of them offers a quote button yet: Kopje still declares API
+  version 6 and serves no `quote_approval`. Tusky shows the `RE:` line as before. Remote posts keep their
+  `quote-inline` class, so clients can hide that line.
+    - `quote` is `{state, quoted_status}`: the quoted post, presented for the same viewer (its own favourite and other
+      flags, filters, media and poll), whose own `quote` is `{state, quoted_status_id}`, one level deep. A boost carries
+      its original's quote in `reblog`. `state` is one of Mastodon's nine: `pending`, `rejected`, `revoked` and
+      `deleted` without a post; `unauthorized` when the viewer may not see the quoted post (a public quote of a
+      followers-only post, for one); `blocked_domain`, `blocked_account` and `muted_account`, with the post, when the
+      viewer blocks its author's domain, blocks its author or mutes it, in that order; `accepted` otherwise, and always
+      for the quoted author. A legacy quote (Misskey's, Fedibird's) is not shown until it is accepted, as Mastodon's;
+      a self-quote is accepted.
+    - `DELETE /api/v1/statuses/:id` answers with the quoted post of a quote in any state, when the viewer may see it,
+      for redrafting.
+    - `GET /api/v1/statuses/:id/quotes` (a token with `read:statuses`; an app token is answered as an anonymous viewer,
+      as Mastodon's) lists the posts that quote a post the viewer may see, by their accepted quotes, newest first;
+      `limit` 20 by default, at most 40. The quoted author sees every quote they may see, also those of accounts they
+      block or mute, as in Mastodon; anyone else not those. Where Kopje differs from Mastodon: the cursor (`max_id`,
+      `since_id`, `min_id`) is the quoting post's id, not the quote's. Each page reads a window of `limit` quotes and
+      leaves out those the viewer may not list, so a page may be short or empty while its `next` link still leads on,
+      as on Mastodon.
+
+### Instance changes
+
+- Store schema: adds one migration, applied on the first request after the deploy; a rollback to an earlier version
+  needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
+    - `0036_quotes_list`: adds the index the quotes list reads (each status's accepted quotes in quoting-post order). It
+      reads the quotes once and no other table: on a benchmark store of 1,000,000 accounts, 3,000,000 follows,
+      2,000,000 statuses and 200,000 quotes its upgrade took 2.4 seconds (2.3 in a second run) in workerd's local Durable Object SQLite.
+- `wrangler.jsonc`: unchanged.
+
+## [0.1.0-rc.11] - 2026-10-17
+
+An eleventh release candidate of the first release, published under the npm dist-tag `next`.
+
+### Added
+
 - The streaming API's `list` stream (`read` or `read:statuses`, with `list` naming one of the account's lists) carries
   the list's timeline: `update` and `status.update` when a status enters it or one in it is edited (as
   `GET /api/v1/timelines/list/:id` would show it at its place), and `delete` when a status or boost it held is deleted.
@@ -24,9 +63,26 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   `user:notification` when the account's last pending accepted notification request has had its notifications
   unfiltered, or a dismiss replaces it, as Mastodon's. Where Kopje differs: nothing is sent when the sender's purge
   cancels the job.
-- `public*` and `hashtag*` still answer `{"error":"Unknown stream type","status":400}`.
-- Quote posts received from other servers are stored and verified, as Mastodon 4.5 does (FEP-044f), and shown through
-  the API (below); the web pages and the notifications are unchanged.
+- The `public`, `public:local`, `public:remote`, `public:media`, `public:local:media` and `public:remote:media` streams,
+  and `hashtag` and `hashtag:local` (with `tag`), carry `update` and `status.update` (`read` or `read:statuses`) when a
+  public status that is not a boost is posted or edited, as `GET /api/v1/timelines/public` (with `local`, `remote` and
+  `only_media`) or `GET /api/v1/timelines/tag/:tag` (with `local`) would show it at its place, presented as REST
+  presents it to the account, with its matching filters in `filtered`. As Mastodon's: `public*` leaves out replies to
+  others and the hashtag streams keep them; a status whose author the account blocks, mutes or domain-blocks, whose
+  author blocks the account, or that mentions an account the account blocks or mutes, is not sent; a post published
+  more than 6 hours before it arrived is not sent as `update`; and `delete` (the id) is sent for a public status, never
+  a boost, on the streams it would have reached: its local or remote stream, the media streams if it had media, and
+  the hashtag streams of its hashtags (`hashtag:local` for a local status).
+    - The `tag` is echoed as the client sent it (`["hashtag", "#Cats"]`) and matched as Kopje normalizes hashtags, so
+      `#Cats` and `cats` are one subscription. A missing `tag` answers `Missing tag name parameter`; one over 256
+      bytes, as sent or normalized, answers `Invalid parameter` (400).
+    - Where Kopje differs from Mastodon: an account the status's author blocks is sent no `delete` of it; there are no
+      chosen languages or feed access settings to apply, and no silenced accounts.
+    - Every stream Mastodon's streaming server knows is now served. Only other names (Ice Cubes' `local`, for one)
+      answer `{"error":"Unknown stream type","status":400}`; announcements and server-sent events are still not
+      served.
+- Quote posts received from other servers are stored and verified, as Mastodon 4.5 does (FEP-044f). Nothing shows them
+  yet: the API, the web pages and the notifications are unchanged, and a quote is still seen as its `RE:` link.
     - A post that quotes another (Mastodon's `quote`, or Misskey's and Fedibird's `_misskey_quote`, `quoteUrl` and
       `quoteUri`) keeps its quote, with every path that stores a post: delivered, boosted, found by search or fetched
       as a pin. A quote of a deleted post (a `Tombstone`) is kept as deleted. A quoted post embedded by its own author
@@ -45,28 +101,6 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       Data Signature or an FEP-8b32 proof); without one, Kopje only checks the stamp again.
     - Kopje's own posts now say that nobody but their author may quote them (`interactionPolicy.canQuote`), as Mastodon
       already assumes of a post without a policy.
-- Clients are shown quotes as Mastodon 4.5 shows them. A status carries `quote` and `quotes_count` (its accepted
-  quotes). Phanpy, Elk, Ice Cubes and the official iOS and Android apps embed a quoted post (they render `quote`
-  whatever the server's API version); Phanpy also still shows the `RE:` line, which it hides only from API version 7.
-  None of them offers a quote button yet: Kopje still declares API version 6 and serves no `quote_approval`. Tusky shows
-  the `RE:` line as before. Remote posts keep their `quote-inline` class, so clients can hide that line.
-    - `quote` is `{state, quoted_status}`: the quoted post, presented for the same viewer (its own favourite and other
-      flags, filters, media and poll), whose own `quote` is `{state, quoted_status_id}`, one level deep. A boost carries
-      its original's quote in `reblog`. `state` is one of Mastodon's nine: `pending`, `rejected`, `revoked` and
-      `deleted` without a post; `unauthorized` when the viewer may not see the quoted post (a public quote of a
-      followers-only post, for one); `blocked_domain`, `blocked_account` and `muted_account`, with the post, when the
-      viewer blocks its author's domain, blocks its author or mutes it, in that order; `accepted` otherwise, and always
-      for the quoted author. A legacy quote (Misskey's, Fedibird's) is not shown until it is accepted, as Mastodon's;
-      a self-quote is accepted.
-    - `DELETE /api/v1/statuses/:id` answers with the quoted post of a quote in any state, when the viewer may see it,
-      for redrafting.
-    - `GET /api/v1/statuses/:id/quotes` (a token with `read:statuses`; an app token is answered as an anonymous viewer,
-      as Mastodon's) lists the posts that quote a post the viewer may see, by their accepted quotes, newest first;
-      `limit` 20 by default, at most 40. The quoted author sees every quote they may see, also those of accounts they
-      block or mute, as in Mastodon; anyone else not those. Where Kopje differs from Mastodon: the cursor (`max_id`,
-      `since_id`, `min_id`) is the quoting post's id, not the quote's. Each page reads a window of `limit` quotes and
-      leaves out those the viewer may not list, so a page may be short or empty while its `next` link still leads on,
-      as on Mastodon.
 
 - The admin API's accounts are served to the admin: the role's `manage_users` is granted with local suspension
   (below), so `GET /api/v1/admin/accounts`, `GET /api/v2/admin/accounts` and `GET /api/v1/admin/accounts/:id`, and
@@ -127,9 +161,11 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
     - `0034_admin_suspension`: adds the credential epoch columns to the local accounts and the OAuth tokens, and the
       empty tables of the moderation jobs and their staged audience. The columns have a constant default, so it reads
       no row: on the same benchmark store its upgrade took 2.2 seconds (2.7 in a second run).
-    - `0036_quotes_list`: adds the index the quotes list reads (each status's accepted quotes in quoting-post order). It
-      reads the quotes once and no other table: on the same benchmark store, with 200,000 quotes, its upgrade took
-      2.4 seconds (2.5 in a second run).
+    - `0035_streaming_public`: lets a `public*` or hashtag subscription journal public statuses that are not boosts,
+      and their edits (the journal's status triggers recreated), and adds the table of a deleted public status's
+      streaming tombstone (left out of dumps and backups, as the other streaming tables are). It creates a table and
+      triggers and reads no row: on the same benchmark store its upgrade, with the kernel's bookmark and schema
+      verification, took 2.2 seconds.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.10] - 2026-10-16

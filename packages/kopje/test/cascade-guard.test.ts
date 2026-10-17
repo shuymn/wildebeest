@@ -68,22 +68,30 @@ const WRITING_TRIGGERS: Record<string, string> = {
 	stream_notification_inserted:
 		'fires on a notification insert, which no batched delete or purge makes (the exact-budget cases below run with a listener too)',
 	stream_status_inserted:
-		'fires on a status insert, which no batched delete or purge makes, whether `user` or a list arms it (the exact-budget cases below run with both listening)',
+		'fires on a status insert, which no batched delete or purge makes, whether `user`, a list, a `public*` stream or a hashtag arms it (the exact-budget cases below run with all of them listening, and with the feeds alone)',
 	stream_conversation_changed:
 		"one journal row when an owner's mark moves, at most one per owner ahead of the position: counted with conversation_statuses_removed, a fourth row per link",
 	stream_status_edited:
-		'fires only when edited_at changes, which no batched delete or purge does: hiding a status writes its visibility and content (the exact-budget cases below run with `user` and a list listening)',
+		'fires only when edited_at changes, which no batched delete or purge does: hiding a status writes its visibility and content (the exact-budget cases below run with `user`, a list and the feeds listening, and with the feeds alone)',
 }
 
-// Streaming subscriptions of the account on `user`, `user:notification`, a list and `direct`, which arm every journal
-// trigger (migrations 0026_streaming, 0028_streaming_home and 0032_streaming_lists), and its conversation mark, which
-// makes every conversation write take a change sequence.
-async function listen(store: StoreStub, listening: boolean, accountId: string): Promise<void> {
-	if (listening) {
+// Streaming subscriptions of the account on `user`, `user:notification`, a list, `direct`, `public` and a hashtag, which
+// arm every journal trigger (migrations 0026_streaming, 0028_streaming_home, 0032_streaming_lists and
+// 0035_streaming_public), and its conversation mark, which makes every conversation write take a change sequence; or,
+// with 'feeds', on `public` and a hashtag alone, which arm the status triggers for public statuses only.
+async function listen(store: StoreStub, listening: boolean | 'feeds', accountId: string): Promise<void> {
+	if (listening === 'feeds') {
+		await sql(
+			store,
+			`INSERT INTO stream_subscriptions (account_id, stream_key, sockets) VALUES (?1, 'public', 1), (?1, 'hashtag:cats', 1)`,
+			accountId
+		)
+	} else if (listening) {
 		await sql(
 			store,
 			`INSERT INTO stream_subscriptions (account_id, stream_key, sockets)
-			VALUES (?1, 'user', 1), (?1, 'user:notification', 1), (?1, 'list:100000000000000001', 1), (?1, 'direct', 1)`,
+			VALUES (?1, 'user', 1), (?1, 'user:notification', 1), (?1, 'list:100000000000000001', 1), (?1, 'direct', 1),
+				(?1, 'public', 1), (?1, 'hashtag:cats', 1)`,
 			accountId
 		)
 		await sql(store, 'INSERT INTO stream_conversation_marks (account_id, seq) VALUES (?, 0)', accountId)
@@ -405,9 +413,10 @@ describe("a status's own delete within a batch", () => {
 	// children left the batch exactly the rows the delete used to reserve: the status, its poll, the parent's recount, and
 	// the account's last status, which the trigger of migration 0021_directory moves back, one row more. Its quote went
 	// before it with the quoted status's count (the trigger quotes_count_deleted), two rows.
-	// With a streaming listener the journal triggers are armed (migrations 0026_streaming and 0028_streaming_home); the
-	// batch writes the same rows and journals nothing.
-	it.each([false, true])(
+	// With a streaming listener the journal triggers are armed (migrations 0026_streaming, 0028_streaming_home and
+	// 0035_streaming_public; the feeds alone arm them for these public statuses); the batch writes the same rows and
+	// journals nothing.
+	it.each([false, true, 'feeds'] as const)(
 		'stays within PURGE_BATCH when the status is the newest of its account (listening: %s)',
 		async (listening) => {
 			const h = await community(['alice'])
@@ -475,7 +484,7 @@ describe("a status's own delete within a batch", () => {
 		}
 	)
 
-	it.each([false, true])(
+	it.each([false, true, 'feeds'] as const)(
 		'hides a status within PURGE_BATCH when its mentions leave one row (listening: %s)',
 		async (listening) => {
 			const h = await community(['alice'])

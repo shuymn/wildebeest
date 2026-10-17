@@ -303,6 +303,24 @@ export function homeFilterSql(s: string, viewer: string, now: string): string {
 			AND (${blocksSql(viewer, 'phm.account_id')} OR ${mutesSql(viewer, 'phm.account_id', now)}))))`
 }
 
+// What the `public*` and `hashtag*` streams leave out beyond their timelines' rule (R33; Mastodon's streaming server
+// filters each connection's statuses, streaming/index.js streamFrom): whether the status `statusId` mentions (not
+// silently, as its `mentions` show them) an account the viewer blocks or mutes at `now`. The status's mentions are
+// read by its key, each checked by the (account_id, target_account_id) keys, so the work does not grow with the
+// viewer's blocks or mutes.
+export function mentionsFilteredFor(db: Db, viewerId: string, now: string, statusId: string): boolean {
+	return (
+		db.first(
+			`SELECT 1 AS x FROM main.status_mentions fm WHERE fm.status_id = ?2 AND fm.silent = 0
+				AND (${blocksSql('?1', 'fm.account_id')} OR ${mutesSql('?1', 'fm.account_id', '?3')})
+			LIMIT 1`,
+			viewerId,
+			statusId,
+			now
+		) !== undefined
+	)
+}
+
 // The rule for one status: whether `viewerId` (null: anonymous) may see it by itself.
 export function canView(db: Db, viewerId: string | null, statusId: string): boolean {
 	return (

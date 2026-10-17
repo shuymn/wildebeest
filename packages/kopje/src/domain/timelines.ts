@@ -145,11 +145,8 @@ export const homeTimeline = userReadOperation<{ page: PageQuery; present: Presen
 // it heads (followedTagBounds). The status, if that read returns it; each narrowed set is read through an index, so the
 // work does not grow with the viewer's follows, lists, followed hashtags or anyone's statuses.
 export function homeStatus(db: Db, viewer: UserContext, statusId: string) {
-	if (!/^\d{18}$/.test(statusId)) {
-		return null
-	}
-	const cursor = statusPage({ maxId: String(BigInt(statusId) + 1n), limit: 1 })
-	return homeRows(db, viewer, cursor, statusId)[0]?.id ?? null
+	const cursor = positionedAt(statusId)
+	return cursor === null ? null : (homeRows(db, viewer, cursor, statusId)[0]?.id ?? null)
 }
 
 // Home's statuses from the cursor, or, with `only`, the read narrowed to that status.
@@ -308,11 +305,8 @@ export function ownListStatus(
 	list: { id: string; replies_policy: RepliesPolicy },
 	statusId: string
 ) {
-	if (!/^\d{18}$/.test(statusId)) {
-		return null
-	}
-	const cursor = statusPage({ maxId: String(BigInt(statusId) + 1n), limit: 1 })
-	return listRows(db, viewer, list, cursor, statusId)[0]?.id ?? null
+	const cursor = positionedAt(statusId)
+	return cursor === null ? null : (listRows(db, viewer, list, cursor, statusId)[0]?.id ?? null)
 }
 
 // A list's statuses from the cursor, or, with `only`, the read narrowed to that status.
@@ -370,25 +364,46 @@ function publicConditions(local: boolean, remote: boolean, onlyMedia: boolean): 
 }
 
 export const publicTimeline = optionalUserReadOperation<PublicTimelineInput, Page<Status>>((db, input, viewer) => {
-	const { accountId: viewerId, now } = viewer
 	const cursor = statusPage(input.page)
-	const read = statusReads(viewer, { viewer: '?1', now: '?5' })
-	const rows = read.select(
+	return statusesPage(db, ids(publicRows(db, viewer, input, cursor, null)), cursor, viewer, input.present)
+})
+
+// Which public timeline: local, remote or both, and media only (the six `public*` streams).
+export type PublicFeed = { local: boolean; remote: boolean; onlyMedia: boolean }
+
+// R33 for `update` and `status.update` on a `public*` stream (streaming.ts): the public timeline `feed` positioned at
+// the status `statusId`, narrowed to it (statusReads' `only`, a seek of the status by its key), so the work does not
+// grow with anyone's statuses. The status, if that read returns it.
+export function publicStatus(db: Db, viewer: UserContext, feed: PublicFeed, statusId: string) {
+	const cursor = positionedAt(statusId)
+	return cursor === null ? null : (publicRows(db, viewer, feed, cursor, statusId)[0]?.id ?? null)
+}
+
+// The public timeline's statuses from the cursor, or, with `only`, the read narrowed to that status.
+function publicRows(db: Db, viewer: ViewerContext, feed: PublicFeed, cursor: Cursor, only: string | null) {
+	const read = statusReads(viewer, { viewer: '?1', now: '?5', ...(only === null ? {} : { only: '?6' }) })
+	return read.select(
 		db,
 		'listable',
 		{
 			join: 'JOIN accounts pa ON pa.id = s.account_id',
-			where: publicConditions(input.local, input.remote, input.onlyMedia),
+			where: publicConditions(feed.local, feed.remote, feed.onlyMedia),
 			and: `${NOT_A_REPLY_TO_OTHERS} AND ${rangeSql('s.id')}`,
 			tail: `ORDER BY s.id ${cursor.ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
 		},
-		viewerId,
+		viewer.accountId,
 		...rangeParams(cursor),
 		cursor.limit,
-		now
+		viewer.now,
+		...(only === null ? [] : [only])
 	)
-	return statusesPage(db, ids(rows), cursor, viewer, input.present)
-})
+}
+
+// The cursor of a read positioned at the status `statusId` (max_id just above it, limit 1), or null for an id no
+// status has.
+function positionedAt(statusId: string): Cursor | null {
+	return /^\d{18}$/.test(statusId) ? statusPage({ maxId: String(BigInt(statusId) + 1n), limit: 1 }) : null
+}
 
 export type TagTimelineInput = PublicTimelineInput & { tag: string; any: string[]; all: string[]; none: string[] }
 
@@ -402,19 +417,48 @@ const MAX_TAG_TIMELINE_NAMES = 5
 // through the tag's unlisted, private, direct or limited statuses, and it stops at the page however many statuses the
 // tag has. The pages of the names are then merged (a status may carry several) and cut to one page.
 export const tagTimeline = optionalUserReadOperation<TagTimelineInput, Page<Status>>((db, input, viewer) => {
-	const { accountId: viewerId, now } = viewer
 	const cursor = statusPage(input.page)
+	return statusesPage(db, ids(tagRows(db, viewer, input, cursor, null)), cursor, viewer, input.present)
+})
+
+// R33 for `update` and `status.update` on a `hashtag` or `hashtag:local` stream (streaming.ts): the hashtag `tag`'s
+// timeline (local only, or local and remote) positioned at the status `statusId`, narrowed to it: the status's own
+// row of the hashtag, found by its key (status_tags' (status_id, name)), so the work does not grow with the hashtag's
+// statuses. The status, if that read returns it.
+export function tagStatus(db: Db, viewer: UserContext, tag: string, local: boolean, statusId: string) {
+	const cursor = positionedAt(statusId)
+	return cursor === null
+		? null
+		: (tagRows(
+				db,
+				viewer,
+				{ tag, any: [], all: [], none: [], local, remote: false, onlyMedia: false },
+				cursor,
+				statusId
+			)[0]?.id ?? null)
+}
+
+// A hashtag timeline's statuses from the cursor, or, with `only`, the read narrowed to that status: each name's walk
+// is then the status's own row of the name (the cursor alone would walk the name's older rows past it).
+function tagRows(
+	db: Db,
+	viewer: ViewerContext,
+	input: Omit<TagTimelineInput, 'page' | 'present'>,
+	cursor: Cursor,
+	only: string | null
+) {
 	const order = cursor.ascending ? 'ASC' : 'DESC'
-	const read = statusReads(viewer, { viewer: '?1', now: '?7' })
 	const unique = (names: string[]) => [...new Set(names.map(normalizeTag))]
 	const names = unique([input.tag, ...input.any]).slice(0, MAX_TAG_TIMELINE_NAMES)
-	// ?5 all, ?6 none, ?7 now, then one parameter per name from ?8. CROSS JOIN keeps status_tags outermost, and the
-	// cursor is a plain range (rangeSql), so each branch starts in the index at the cursor, walks it in order and stops
-	// at LIMIT.
+	// ?5 all, ?6 none, ?7 now, then one parameter per name from ?8, then `only`. CROSS JOIN keeps status_tags
+	// outermost, and the cursor is a plain range (rangeSql), so each branch starts in the index at the cursor, walks it
+	// in order and stops at LIMIT.
+	const onlyAt = `?${8 + names.length}`
+	const read = statusReads(viewer, { viewer: '?1', now: '?7', ...(only === null ? {} : { only: onlyAt }) })
 	const branch = (n: number): StatusSelect => ({
 		from: 'status_tags t CROSS JOIN',
 		join: 'ON s.id = t.status_id JOIN accounts pa ON pa.id = s.account_id',
-		where: `t.public = 1 AND t.name = ?${8 + n}
+		where: `t.public = 1 AND t.name = ?${8 + n} ${only === null ? '' : `AND t.status_id = ${onlyAt}`}
 			AND NOT EXISTS (SELECT 1 FROM json_each(?5) a
 				WHERE NOT EXISTS (SELECT 1 FROM status_tags st WHERE st.status_id = s.id AND st.name = a.value))
 			AND NOT EXISTS (SELECT 1 FROM status_tags st WHERE st.status_id = s.id
@@ -423,20 +467,20 @@ export const tagTimeline = optionalUserReadOperation<TagTimelineInput, Page<Stat
 		and: rangeSql('t.status_id'),
 		tail: `ORDER BY t.status_id ${order} LIMIT ?4`,
 	})
-	const rows = read.union(
+	return read.union(
 		db,
 		'listable',
 		{ all: false, branches: names.map((_, n) => branch(n)), tail: `ORDER BY id ${order} LIMIT ?4` },
-		viewerId,
+		viewer.accountId,
 		...rangeParams(cursor),
 		cursor.limit,
 		JSON.stringify(unique(input.all)),
 		JSON.stringify(unique(input.none)),
-		now,
-		...names
+		viewer.now,
+		...names,
+		...(only === null ? [] : [only])
 	)
-	return statusesPage(db, ids(rows), cursor, viewer, input.present)
-})
+}
 
 export type AccountStatusesInput = {
 	account: string
