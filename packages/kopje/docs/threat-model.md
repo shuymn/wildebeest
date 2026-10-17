@@ -67,7 +67,7 @@ against their own instance. TLS is assumed between all parties.
 | Outbound document fetches                                      | R1 answers | final URL and parsed id (ID-2)                                | main: `src/federation/loader.ts`                                                                                                                                                                                                                                  |
 | Deliveries, remote media fetches, Web Push POSTs               | R1 answers | sink policy (NET-3)                                           | main (deliveries, Web Push: `src/jobs/push.ts`); Planned (B4)                                                                                                                                                                                                     |
 | Mastodon API `/api/*`                                          | R2–R4, R7  | bearer token and route access                                 | main: `src/mastodon/*`, `src/domain/auth.ts`                                                                                                                                                                                                                      |
-| Mastodon admin API `/api/v1/admin/*`, `/api/v2/admin/*`        | R2–R4      | bearer token with an admin scope, of the OAuth admin (VIS-29) | `kopje/admin-a1`: `src/mastodon/admin.ts`, `src/domain/auth.ts`, `src/domain/admin-authority.ts`; `kopje/admin-a2`: `src/domain/reports.ts`, `src/domain/admin-accounts.ts`; `kopje/admin-a3a`: the accounts reads; `kopje/admin-a3b`: `src/domain/suspension.ts` |
+| Mastodon admin API `/api/v1/admin/*`, `/api/v2/admin/*`        | R2–R4      | bearer token with an admin scope, of the OAuth admin (VIS-29) | `kopje/admin-a1`: `src/mastodon/admin.ts`, `src/domain/auth.ts`, `src/domain/admin-authority.ts`; `kopje/admin-a2`: `src/domain/reports.ts`, `src/domain/admin-accounts.ts`; `kopje/admin-a3a`: the accounts reads; `kopje/admin-a3b`: `src/domain/suspension.ts`; `kopje/admin-a4`: the report notification |
 | `/oauth/authorize`                                             | R2, R6, R7 | Access JWT, Origin, consent                                   | main: `src/app/authorize.tsx`                                                                                                                                                                                                                                     |
 | `/oauth/token`, `/oauth/revoke`                                | R2, R3     | client credentials                                            | main: `src/mastodon/oauth.ts`                                                                                                                                                                                                                                     |
 | `/oauth/userinfo`                                              | R2, R3     | bearer token with `profile`                                   | main: `src/mastodon/oauth.ts`                                                                                                                                                                                                                                     |
@@ -724,7 +724,17 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   while its lease lasts (the claim is the boundary until a send-time confirmation exists). `actOnAccount` and
   `unsuspendAdminAccount` in `src/domain/admin-accounts.ts`, `src/domain/suspension.ts`, `currentCredentialSql` in
   `src/domain/auth.ts`, `REFUSED_SENDER` in `src/domain/deliveries.ts`, migration `0034_admin_suspension`;
-  `test/admin-suspension.test.ts`, `test/cascade-guard.test.ts`, `test/migrations.test.ts`.
+  `test/admin-suspension.test.ts`, `test/cascade-guard.test.ts`, `test/migrations.test.ts`. The report notification is
+  _implemented on branch `kopje/admin-a4`_: a report another local account files notifies the OAuth admin
+  (`admin.report`) when no other report of the same account is unresolved, read in the report's transaction; the
+  notification carries the report as its reporter sees it, and R15 shows it, lists it, streams it and pushes it only
+  while its recipient is the current OAuth admin (R37), so it leaves every read when `admin_email` changes or the match
+  fails closed, and comes back with the match; it goes with its report (a remote account's purge deletes it before the
+  report). `GET /admin/reports/:id`, where clients open it, redirects the Access admin to the reported account's web
+  page and reads nothing for anyone else. `notifyStaff` and `reportTargetPage` in `src/domain/reports.ts`, `shownSql` in
+  `src/domain/audience.ts`, `adminAccountIdOnce` in `src/domain/admin-authority.ts`, migration
+  `0040_report_notifications`; `test/report-notifications.test.ts`, `test/policy-oracle.test.ts`,
+  `test/migrations.test.ts`.
 
 ### Authorization (AUTH)
 
