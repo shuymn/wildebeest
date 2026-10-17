@@ -489,27 +489,28 @@ const ACTIONS: Record<ReportAction, { log: string; set: (admin: Admin, now: stri
 	reopen: { log: 'reopen', set: () => ({ action_taken_at: null, action_taken_by_account_id: null }) },
 }
 
-// See ReportAction for Rails' save semantics.
-function updateReport(db: Db, row: ReportRow, changes: Partial<ReportRow>, now: string): ReportRow {
+// An admin write to `row`, logged as `action` with `detail` (moderation-log.ts). The changed columns are saved with
+// updated_at, as Rails saves only a changed record (ReportAction); last_action_id takes the log row either way
+// (VIS-29), in the same UPDATE.
+function writeReport(
+	db: Db,
+	admin: Admin,
+	row: ReportRow,
+	changes: Partial<ReportRow>,
+	now: string,
+	action: string,
+	detail: Record<string, unknown> = {}
+): ReportRow {
+	const logged = logAction(db, admin, action, { type: 'Report', id: row.id }, detail, admin.now)
 	const changed = Object.entries(changes).filter(([column, value]) => row[column as keyof ReportRow] !== value)
-	if (changed.length === 0) {
-		return row
-	}
-	const next = { ...row, ...Object.fromEntries(changed), updated_at: now } as ReportRow
+	const saved = changed.length > 0 ? [...changed, ['updated_at', now]] : []
 	db.run(
-		`UPDATE reports SET ${changed.map(([column]) => `${column} = ?`).join(', ')}, updated_at = ? WHERE id = ?`,
-		...changed.map(([, value]) => value as string | null),
-		now,
+		`UPDATE reports SET ${[...saved.map(([column]) => `${column} = ?`), 'last_action_id = ?'].join(', ')} WHERE id = ?`,
+		...saved.map(([, value]) => value as string | null),
+		logged,
 		row.id
 	)
-	return next
-}
-
-// Logs an admin write to the report `id` (moderation-log.ts) and stamps the report with the log row's id, the
-// report's side of the report fence (resolveSuspensionReports).
-function logReportAction(db: Db, admin: Admin, action: string, id: string, detail: Record<string, unknown>): void {
-	const logged = logAction(db, admin, action, { type: 'Report', id }, detail, admin.now)
-	db.run('UPDATE reports SET last_action_id = ? WHERE id = ?', logged, id)
+	return { ...row, ...Object.fromEntries(saved) } as ReportRow
 }
 
 // POST /api/v1/admin/reports/:id/assign_to_self, unassign, resolve and reopen.
@@ -522,8 +523,7 @@ export const actOnReport = adminWriteOperation<
 		return { status: 'not_found' }
 	}
 	const now = new Date(admin.now).toISOString()
-	const updated = updateReport(db, row, ACTIONS[action].set(admin, now), now)
-	logReportAction(db, admin, ACTIONS[action].log, row.id, {})
+	const updated = writeReport(db, admin, row, ACTIONS[action].set(admin, now), now, ACTIONS[action].log)
 	return presented(db, updated, admin, present)
 })
 
@@ -562,13 +562,15 @@ export const updateAdminReport = adminWriteOperation<
 		return { status: 'invalid', errors }
 	}
 	const now = new Date(admin.now).toISOString()
-	const updated = updateReport(
+	const updated = writeReport(
 		db,
+		admin,
 		row,
 		{ category: nextCategory, rule_ids: nextRules === null ? null : JSON.stringify(nextRules) },
-		now
+		now,
+		'update',
+		{ category: nextCategory, rule_ids: nextRules }
 	)
-	logReportAction(db, admin, 'update', row.id, { category: updated.category, rule_ids: nextRules })
 	return presented(db, updated, admin, present)
 })
 
@@ -585,19 +587,16 @@ export function actionBound(db: Db): number {
 
 // A suspension-job round (domain/suspension.ts) resolving the target's reports, as Admin::AccountAction
 // #process_reports! resolves every unresolved one. Read at most `limit` reports after report id `cursor`, through
-// reports_target_state in id order. Resolve only reports frozen at suspension (the report fence, R37, VIS-29): filed
-// up to `bound`, still unresolved, and last written at or below the suspension's `actionBound`. An unknown bound
-// (null) resolves none. Every write to a report stamps last_action_id with the moderation log id of the admin action
-// that caused it (none counts as 0): an admin's write its own row (logReportAction), this round the suspension's row,
-// `actionBound`, with no row per report (the log is capped; Mastodon logs the account action alone). Log ids are given
-// in commit order, so a report an admin reopened or changed after the suspension stays untouched, whatever either
-// request's clock said. `by` names the suspending admin (null: none). Returns the last report read (null if none) and
-// the resolved count; fewer than `limit` read means the range is done.
+// reports_target_state in id order. Resolve only reports frozen at suspension (the report fence, VIS-29 and
+// 0042_report_action_fence): filed up to `bound`, still unresolved, and last stamped at or below `fence`, which also
+// stamps the reports resolved here. A null `fence` (unknown) resolves none. `by` names the suspending admin (null:
+// none). Returns the last report read (null if none) and the resolved count; fewer than `limit` read means the range
+// is done.
 export function resolveSuspensionReports(
 	db: Db,
 	target: string,
 	bound: number,
-	actionBound: number | null,
+	fence: number | null,
 	by: string | null,
 	cursor: number,
 	limit: number,
@@ -613,7 +612,7 @@ export function resolveSuspensionReports(
 		bound,
 		limit
 	)
-	const frozen = actionBound === null ? [] : rows.filter((row) => row.action <= actionBound).map((row) => row.id)
+	const frozen = fence === null ? [] : rows.filter((row) => row.action <= fence).map((row) => row.id)
 	if (frozen.length > 0) {
 		db.run(
 			`UPDATE reports SET action_taken_at = ?1, action_taken_by_account_id = ?2, updated_at = ?1, last_action_id = ?4
@@ -621,7 +620,7 @@ export function resolveSuspensionReports(
 			now,
 			by,
 			JSON.stringify(frozen),
-			actionBound
+			fence
 		)
 	}
 	return { last: rows.at(-1)?.id ?? null, read: rows.length, resolved: frozen.length }
@@ -667,7 +666,6 @@ export function resolveReport(db: Db, id: string, admin: Admin): boolean {
 		return false
 	}
 	const now = new Date(admin.now).toISOString()
-	updateReport(db, row, ACTIONS.resolve.set(admin, now), now)
-	logReportAction(db, admin, ACTIONS.resolve.log, row.id, {})
+	writeReport(db, admin, row, ACTIONS.resolve.set(admin, now), now, ACTIONS.resolve.log)
 	return true
 }

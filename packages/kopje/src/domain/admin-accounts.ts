@@ -535,16 +535,7 @@ export function adminAccountOperations(read: AdminDeclare, write: AdminDeclare) 
 			if (reportId !== null && !reportExists(db, reportId)) {
 				return { status: 'not_found' }
 			}
-			suspendLocal(
-				db,
-				account.id,
-				{
-					accountId: admin.accountId,
-					log: (at) =>
-						logAction(db, admin, 'suspend', { type: 'Account', id: account.id }, { suspended_at: at }, admin.now),
-				},
-				admin.now
-			)
+			suspendLocal(db, account.id, admin, admin.now)
 			return { status: 'ok' }
 		}
 	)
