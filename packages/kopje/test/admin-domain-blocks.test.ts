@@ -161,7 +161,10 @@ describe('admin domain blocks', () => {
 		})
 		const patch = await call(w, path, form({ private_comment: 'note' }, { method: 'PATCH' }))
 		expect(patch.body).toMatchObject({ severity: 'noop', obfuscate: true, private_comment: 'note' })
-		for (const body of [{ severity: 'silence' }, { severity: '' }, { reject_media: 'true' }]) {
+		for (const body of [{ severity: 'silence' }, { severity: '' }, { reject_media: 'true' }] as Record<
+			string,
+			string
+		>[]) {
 			expect((await call(w, path, form(body, { method: 'PUT' }))).status, JSON.stringify(body)).toBe(422)
 		}
 		expect((await call(w, path)).body).toEqual(patch.body)
