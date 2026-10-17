@@ -477,7 +477,8 @@ export function enqueueActivity(
 // The earlier activities about an object that a new one supersedes. A moderation Update still staging (retracts 0,
 // staged set: beginStagedUpdate) is superseded only by another (`moderation`): a profile edit made while the
 // restoration's audience is staged must not cut that audience down to the followers.
-const SUPERSEDED = `account_id = ? AND object_uri = ?
+// An activity superseded already is final (superseded, staged NULL), so it is not written again.
+const SUPERSEDED = `account_id = ? AND object_uri = ? AND superseded = 0
 	AND (? OR json_extract(body, '$.activity.type') IN (SELECT value FROM json_each(?)))
 	AND (? OR retracts = 1 OR staged IS NULL)`
 
@@ -503,6 +504,29 @@ function supersede(
 	for (const { id } of stopped) {
 		dropSettledActivity(db, id)
 	}
+}
+
+// Supersedes at most `limit` of the earlier activities about `object` that a retraction of it by `signerId` would
+// (supersede), each an update and at most one delete; returns whether any is left. R38's severing works them down
+// this way before recording its Reject (remote-suspension.ts), so that the Reject's own supersede writes nothing.
+export function supersedeEarlier(db: Db, signerId: string, object: string, limit: number): boolean {
+	const earlier = db.all<{ id: string }>(
+		`SELECT CAST(id AS TEXT) AS id FROM outbound_activities WHERE ${SUPERSEDED} ORDER BY id LIMIT ?6`,
+		signerId,
+		object,
+		1,
+		'[]',
+		0,
+		limit
+	)
+	for (const { id } of earlier) {
+		db.run('UPDATE outbound_activities SET superseded = 1, staged = NULL WHERE id = CAST(? AS INTEGER)', id)
+		dropSettledActivity(db, id)
+	}
+	return (
+		db.first(`SELECT 1 AS x FROM outbound_activities WHERE ${SUPERSEDED} LIMIT 1`, signerId, object, 1, '[]', 0) !==
+		undefined
+	)
 }
 
 // A retraction recorded in bounded steps: a purge's Undo of a local boost (RES-6), whose receipts alone may be more

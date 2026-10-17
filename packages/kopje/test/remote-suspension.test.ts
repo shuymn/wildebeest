@@ -16,6 +16,7 @@ import {
 	uriOf,
 	userToken,
 	world,
+	type World,
 } from './remote-suspension-helpers'
 import { follow, remoteAccount, remoteFollows } from './status-helpers'
 import { EXPANSION_STEP } from '../src/domain/deliveries'
@@ -260,15 +261,31 @@ describe('the account job (concurrency row 1)', () => {
 	})
 })
 
-describe("the severing round's budget (change 2)", () => {
-	// r follows alice, whose follow notification has `pushes` push deliveries waiting (one subscription each).
-	async function pushed(pushes: number) {
-		const w = await world()
+describe("the severing round's budget (change 2 and its preparatory steps)", () => {
+	const PAIR = 'https://remote.example/follows/r/alice'
+
+	// r follows alice through the Store's inbox: with a Misskey pair-shaped Follow id when `generations` > 1, undone and
+	// made again that many times, so alice's Accept of each generation waits as an intent about that one id (pending or
+	// queued, or given up once the lane is full); the last generation stays.
+	async function followed(w: World, generations = 1) {
 		const r = await remoteAccount(w.h.store, 'r')
 		const uri = await uriOf(w.h.store, r)
-		expect(await receive(w.h.store, uri, { type: 'Follow', object: await uriOf(w.h.store, w.alice.id) })).toMatchObject(
-			{ applied: true }
-		)
+		const alice = await uriOf(w.h.store, w.alice.id)
+		const follow = { type: 'Follow', id: PAIR, object: alice }
+		for (let generation = 1; generation < generations; generation++) {
+			expect(await receive(w.h.store, uri, follow)).toMatchObject({ applied: true })
+			expect(
+				await receive(w.h.store, uri, { type: 'Undo', object: { id: PAIR, type: 'Follow', actor: uri, object: alice } })
+			).toMatchObject({ applied: true })
+		}
+		expect(await receive(w.h.store, uri, generations > 1 ? follow : { type: 'Follow', object: alice })).toMatchObject({
+			applied: true,
+		})
+		return { r, uri }
+	}
+
+	// `pushes` push deliveries waiting on alice's follow notification, one subscription each.
+	async function pushes(w: World, count: number) {
 		const [notification] = await sql<{ id: number }>(
 			w.h.store,
 			"SELECT id FROM notifications WHERE account_id = ? AND type = 'follow'",
@@ -279,7 +296,7 @@ describe("the severing round's budget (change 2)", () => {
 			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
 			INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes)
 			SELECT 'push-' || i, 'access', (SELECT id FROM oauth_clients LIMIT 1), ?2, 'push' FROM n`,
-			pushes,
+			count,
 			w.alice.id
 		)
 		await sql(
@@ -295,7 +312,26 @@ describe("the severing round's budget (change 2)", () => {
 			NOW,
 			NOW
 		)
-		return { w, r, uri }
+	}
+
+	// Another activity's targets still to expand, one per chunk (the costliest expansion): the Reject's recording
+	// expands EXPANSION_STEP of them.
+	const BACKLOG = EXPANSION_STEP + 50
+	async function backlog(w: World) {
+		await sql(
+			w.h.store,
+			`INSERT INTO outbound_activities (id, account_id, body, created_at)
+			VALUES (9000, ?, '{"activity":{"type":"Note"},"audience":{"followers":false,"accounts":[]}}', ?)`,
+			w.bob.id,
+			NOW
+		)
+		await sql(
+			w.h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+			INSERT INTO outbound_targets (activity_id, targets)
+			SELECT 9000, json_array(json_object('inbox', 'https://b' || i || '.example/inbox', 'addressee', NULL)) FROM n`,
+			BACKLOG
+		)
 	}
 
 	// Rounds until the job ends; the rows each wrote.
@@ -303,54 +339,76 @@ describe("the severing round's budget (change 2)", () => {
 		const written: number[] = []
 		for (let ran = await round(store); ran !== null; ran = await round(store)) {
 			written.push(ran.rows)
-			expect(written.length).toBeLessThan(20)
+			expect(written.length).toBeLessThan(30)
 		}
 		return written
 	}
 
+	// The job ran to its end within the budget, and ended r's follow of alice once, with a withdrawing Reject.
+	async function severedOnce(w: World, r: string, uri: string, written: number[]) {
+		expect(written.filter((rows) => rows > MODERATION_ROUND_ROWS)).toEqual([])
+		expect(await sql(w.h.store, 'SELECT * FROM remote_moderation_jobs')).toEqual([])
+		expect(await sql(w.h.store, 'SELECT * FROM follows WHERE account_id = ?', r)).toEqual([])
+		expect(await sql(w.h.store, 'SELECT count(*) AS n FROM push_deliveries')).toEqual([{ n: 0 }])
+		expect(await rejects(w.h.store)).toEqual([{ signer: w.alice.id, follower: uri, retracts: 1 }])
+	}
+
 	it('deletes more than 600 pushes of one follow notification in bounded rounds, then ends the follow', async () => {
-		const { w, r, uri } = await pushed(1_300)
+		const w = await world()
+		const { r, uri } = await followed(w)
+		await pushes(w, 1_300)
 		expect(await act(w, r, { type: 'suspend' })).toMatchObject({ status: 200 })
 		const written = await rounds(w.h.store)
-		expect(Math.max(...written)).toBeLessThanOrEqual(MODERATION_ROUND_ROWS)
-		// The reports round, then at least three rounds of pushes and the follow's end.
-		expect(written.length).toBeGreaterThanOrEqual(4)
-		expect(await sql(w.h.store, 'SELECT count(*) AS n FROM push_deliveries')).toEqual([{ n: 0 }])
-		expect(await sql(w.h.store, 'SELECT * FROM follows WHERE account_id = ?', r)).toEqual([])
-		expect(await rejects(w.h.store)).toEqual([{ signer: w.alice.id, follower: uri, retracts: 1 }])
+		// The reports round, then at least five rounds of pushes and the follow's end.
+		expect(written.length).toBeGreaterThanOrEqual(6)
+		await severedOnce(w, r, uri, written)
 	})
 
 	it.each([560, MODERATION_ROUND_ROWS - SEVER_ROWS])(
 		'stays within the budget with %i pushes and an unrelated expansion backlog the Reject expands',
-		async (pushes) => {
-			const { w, r, uri } = await pushed(pushes)
-			// Another activity's targets still to expand, one per chunk (the costliest expansion): the Reject's recording
-			// expands EXPANSION_STEP of them.
-			const BACKLOG = EXPANSION_STEP + 50
-			await sql(
-				w.h.store,
-				`INSERT INTO outbound_activities (id, account_id, body, created_at)
-				VALUES (9000, ?, '{"activity":{"type":"Note"},"audience":{"followers":false,"accounts":[]}}', ?)`,
-				w.bob.id,
-				NOW
-			)
-			await sql(
-				w.h.store,
-				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
-				INSERT INTO outbound_targets (activity_id, targets)
-				SELECT 9000, json_array(json_object('inbox', 'https://b' || i || '.example/inbox', 'addressee', NULL)) FROM n`,
-				BACKLOG
-			)
+		async (count) => {
+			const w = await world()
+			const { r, uri } = await followed(w)
+			await pushes(w, count)
+			await backlog(w)
 			expect(await act(w, r, { type: 'suspend' })).toMatchObject({ status: 200 })
-			const written = await rounds(w.h.store)
-			expect(written.filter((rows) => rows > MODERATION_ROUND_ROWS)).toEqual([])
-			expect(await sql(w.h.store, 'SELECT * FROM follows WHERE account_id = ?', r)).toEqual([])
-			expect(await rejects(w.h.store)).toEqual([{ signer: w.alice.id, follower: uri, retracts: 1 }])
+			await severedOnce(w, r, uri, await rounds(w.h.store))
 			// The Reject's recording expanded the backlog's first EXPANSION_STEP chunks.
 			expect(await sql(w.h.store, 'SELECT count(*) AS n FROM deliveries WHERE activity_id = 9000')).toEqual([
 				{ n: EXPANSION_STEP },
 			])
 		}
+	)
+
+	it.each([
+		['alone', false],
+		['with 560 pushes and an expansion backlog', true],
+	])(
+		'supersedes 600 earlier Accepts of a Misskey pair-id follow in bounded rounds before its Reject, %s',
+		async (_, loaded) => {
+			const w = await world()
+			const { r, uri } = await followed(w, 601)
+			const accepts = () =>
+				sql<{ n: number }>(
+					w.h.store,
+					`SELECT count(*) AS n FROM outbound_activities
+					WHERE account_id = ? AND object_uri = ? AND superseded = 0 AND json_extract(body, '$.activity.type') = 'Accept'`,
+					w.alice.id,
+					PAIR
+				)
+			expect(await accepts()).toEqual([{ n: 601 }])
+			if (loaded) {
+				await pushes(w, 560)
+				await backlog(w)
+			}
+			expect(await act(w, r, { type: 'suspend' })).toMatchObject({ status: 200 })
+			const written = await rounds(w.h.store)
+			await severedOnce(w, r, uri, written)
+			expect(await accepts()).toEqual([{ n: 0 }])
+			// The reports round, at least three rounds superseding (at most 130 activities each), and the end.
+			expect(written.length).toBeGreaterThanOrEqual(loaded ? 7 : 5)
+		},
+		120_000
 	)
 })
 
