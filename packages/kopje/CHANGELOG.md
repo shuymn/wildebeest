@@ -36,12 +36,15 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - Users on Mastodon and other FEP-044f servers can quote Kopje posts that are public or unlisted, as each post's quote
   policy allows; quoters the author blocks, or who block the author, are refused. Kopje users still cannot post quotes
   themselves (`quote_approval.current_user` stays `denied`). Edits and deletions of a quoted post also reach the
-  accounts that quoted it.
+  accounts that quoted it. Requests for private and direct posts are never answered, so an answer never reveals that
+  one exists.
     - Kopje users are notified of new quotes (`quote`, filtered by notification policies like a mention, and available
       to push subscriptions), and always see quotes of their own posts.
     - The quoted author can revoke a quote with `POST /api/v1/statuses/:id/quotes/:quoting_status_id/revoke`
-      (`write:statuses`; Android's "Remove quote", Phanpy's revoke). The quoter's server and everyone who received the
-      post are told; a revoked approval never becomes valid again.
+      (`write:statuses`; Android's "Remove quote", Phanpy's revoke): 404 for a post the caller may not see or a quote
+      that is not of it, 403 for someone else's post, otherwise 200 with the quoting post (a stand-in showing only its
+      id, address, time, author and visibility when its author blocks the caller). The quoter's server and everyone
+      who received the post are told; a revoked approval never becomes valid again.
     - Limits, as on Mastodon: a quoter whose quote was revoked can ask again and is accepted again while the policy
       allows it (a narrower policy or a block stops that). Where Kopje differs: a revoke also rejects each request it
       answered for the quote, so a Mastodon server that processes the withdrawal before an earlier approval still ends
