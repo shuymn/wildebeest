@@ -2,6 +2,7 @@ import {
 	ACCOUNT_COLUMNS,
 	type Account,
 	type AccountRow,
+	edgeRangeSql,
 	type Page,
 	type PageQuery,
 	type Present,
@@ -285,7 +286,7 @@ export const listBlocks = userReadOperation<{ page: PageQuery; present: Present 
 			`SELECT CAST(b.id AS TEXT) AS cursor, ${ACCOUNT_COLUMNS}
 			FROM blocks b JOIN accounts a ON a.id = b.target_account_id LEFT JOIN local_accounts l ON l.account_id = a.id
 			WHERE b.account_id = ?1
-				AND (?2 IS NULL OR b.id < CAST(?2 AS INTEGER)) AND (?3 IS NULL OR b.id > CAST(?3 AS INTEGER))
+				AND ${edgeRangeSql('b.id', '?2', '?3')}
 			ORDER BY b.id ${ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
 			accountId,
 			page.maxId ?? null,
@@ -305,7 +306,7 @@ export const listMutes = userReadOperation<{ page: PageQuery; present: Present }
 			`SELECT CAST(m.id AS TEXT) AS cursor, m.expires_at AS mute_expires_at, ${ACCOUNT_COLUMNS}
 			FROM mutes m JOIN accounts a ON a.id = m.target_account_id LEFT JOIN local_accounts l ON l.account_id = a.id
 			WHERE m.account_id = ?1 AND ${activeMuteSql('m', '?5')}
-				AND (?2 IS NULL OR m.id < CAST(?2 AS INTEGER)) AND (?3 IS NULL OR m.id > CAST(?3 AS INTEGER))
+				AND ${edgeRangeSql('m.id', '?2', '?3')}
 			ORDER BY m.id ${ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
 			accountId,
 			page.maxId ?? null,
@@ -326,7 +327,7 @@ export const listDomainBlocks = userReadOperation<{ page: PageQuery }, Page<stri
 	const rows = db.all<{ cursor: string; domain: string }>(
 		`SELECT CAST(id AS TEXT) AS cursor, domain FROM domain_blocks
 			WHERE account_id = ?1
-				AND (?2 IS NULL OR id < CAST(?2 AS INTEGER)) AND (?3 IS NULL OR id > CAST(?3 AS INTEGER))
+				AND ${edgeRangeSql('id', '?2', '?3')}
 			ORDER BY id ${ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
 		accountId,
 		page.maxId ?? null,

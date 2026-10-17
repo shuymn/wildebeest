@@ -1335,7 +1335,7 @@ export const deliveriesReport = readOperation<{ before?: string; limit?: number 
 				json_extract(o.body, '$.activity.id') AS activity, d.attempts, d.last_status, d.last_error, o.superseded, d.addressee,
 				d.updated_at
 			FROM deliveries d JOIN outbound_activities o ON o.id = d.activity_id LEFT JOIN accounts a ON a.id = d.account_id
-			WHERE d.state = 'gave_up' AND (?1 IS NULL OR d.id < CAST(?1 AS INTEGER)) ORDER BY d.id DESC LIMIT ?2`,
+			WHERE d.state = 'gave_up' AND d.id < coalesce(CAST(?1 AS INTEGER), 1e19) ORDER BY d.id DESC LIMIT ?2`,
 			before ?? null,
 			Math.max(1, Math.min(limit ?? REPORT_LIMIT, REPORT_LIMIT))
 		)

@@ -724,6 +724,9 @@ per library source), the directory (`DIRECTORY_WINDOW`), the admin lists (their 
 traversal cap), conversations (no rule before `LIMIT`), and the blocks, mutes, domain blocks and follow requests lists
 (no rule before `LIMIT`). Suggestions and the link timeline answer empty lists.
 
+A cursor range is a direct range (`id < coalesce(?2, ':')`, `edgeRangeSql`), never `(?2 IS NULL OR id < ?2)`, which
+no index can seek; `test-node/range-predicates.test.ts` checks every statement in `src`.
+
 `test/read-windows.test.ts` puts 100 or 20,000 hidden rows of each kind (accounts being deleted, a block, a domain
 block, mutes) in front of the visible ones: every windowed read reads the same rows (but the interactors' sort), its
 newest page is empty and cut, and paging by `max_id` and by `min_id` through 1,000 hidden rows reaches every visible

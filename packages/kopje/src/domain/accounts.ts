@@ -1120,7 +1120,7 @@ export const listFollowRequests = userReadOperation<{ page: PageQuery; present: 
 			`SELECT CAST(f.id AS TEXT) AS cursor, ${ACCOUNT_COLUMNS}
 			FROM follows f JOIN accounts a ON a.id = f.account_id LEFT JOIN local_accounts l ON l.account_id = a.id
 			WHERE f.target_account_id = ?1 AND f.state = 'pending'
-				AND (?2 IS NULL OR f.id < CAST(?2 AS INTEGER)) AND (?3 IS NULL OR f.id > CAST(?3 AS INTEGER))
+				AND ${edgeRangeSql('f.id', '?2', '?3')}
 			ORDER BY f.id ${ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
 			viewerId,
 			page.maxId ?? null,
