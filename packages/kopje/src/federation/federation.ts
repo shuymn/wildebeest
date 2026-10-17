@@ -144,7 +144,6 @@ function federationParts(deps: FederationDeps, state: FederationState) {
 	const loadInstanceKey = () => (instanceKey ??= instanceActorKey(rpc, build, deps.kek, deps.keygen))
 	const instanceSigner = async () => keyring.signerFor(instanceOwner(await loadInstanceKey(), instanceKeyId))
 
-	// The signer of a local user by the stored spelling of the username, or null.
 	// The signer of a local account on a remote account's behalf, while it may sign for it (getFollowerKey), or null.
 	const followerSigner = async (signer: FollowerSigner): Promise<Signer | null> => {
 		const found = await rpc((s) => s.followerKey(build, signer))
@@ -159,12 +158,16 @@ function federationParts(deps: FederationDeps, state: FederationState) {
 		return key === null ? null : keyring.signerFor(userOwner(key, new URL(`/ap/users/${username}#main-key`, origin)))
 	}
 
-	const userSigner = async (username: string): Promise<Signer | null> => {
+	// The key pair Fedify publishes for a local account (setKeyPairsDispatcher), by the stored spelling of the username,
+	// or null. It is loaded without the availability check, so it is a bare key pair, never a Signer a fetch could use.
+	const publishedKeyPair = async (username: string): Promise<CryptoKeyPair | null> => {
 		if ((await localActor(username))?.username !== username) {
 			return null
 		}
 		const key = await rpc((s) => s.localKey(build, { username }))
-		return key === null ? null : keyring.signerFor(userOwner(key, new URL(`/ap/users/${username}#main-key`, origin)))
+		return key === null
+			? null
+			: (await keyring.signerFor(userOwner(key, new URL(`/ap/users/${username}#main-key`, origin)))).keyPair
 	}
 
 	// A signed loader caches per signing key (design §7): what one key was shown must not reach another key or the
@@ -188,7 +191,7 @@ function federationParts(deps: FederationDeps, state: FederationState) {
 		localActor,
 		loadInstanceKey,
 		instanceSigner,
-		userSigner,
+		publishedKeyPair,
 		localSigner,
 		followerSigner,
 		signedLoader,
@@ -253,8 +256,17 @@ function boundedContexts(loaderDeps: LoaderDeps, kv: DoKvStore): DocumentLoader 
 export function createKopjeFederation(deps: FederationDeps, state: FederationState): Federation<FederationState> {
 	const { domain } = deps
 	const parts = federationParts(deps, state)
-	const { origin, kv, instanceKeyId, localActor, loadInstanceKey, instanceSigner, userSigner, signedLoader, rpc } =
-		parts
+	const {
+		origin,
+		kv,
+		instanceKeyId,
+		localActor,
+		loadInstanceKey,
+		instanceSigner,
+		publishedKeyPair,
+		signedLoader,
+		rpc,
+	} = parts
 	const { build } = deps
 
 	const federation = createFederation<FederationState>({
@@ -292,18 +304,12 @@ export function createKopjeFederation(deps: FederationDeps, state: FederationSta
 		.mapHandle(async (_ctx, username) => (await localActor(username))?.username ?? null)
 		.mapActorAlias('/actor', INSTANCE_ACTOR)
 		.setKeyPairsDispatcher(async (_ctx, identifier) => {
-			let signer: Signer
 			if (identifier === INSTANCE_ACTOR) {
-				signer = await instanceSigner()
-			} else {
-				// Only the stored spelling has keys: '#main-key' under another case would name a key no actor publishes.
-				const user = await userSigner(identifier)
-				if (user === null) {
-					return []
-				}
-				signer = user
+				return [(await instanceSigner()).keyPair]
 			}
-			return [signer.keyPair]
+			// Only the stored spelling has keys: '#main-key' under another case would name a key no actor publishes.
+			const pair = await publishedKeyPair(identifier)
+			return pair === null ? [] : [pair]
 		})
 
 	const collections = new Map<string, Promise<CollectionPage | null>>()

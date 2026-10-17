@@ -135,25 +135,26 @@ export default [
 	},
 	{
 		// Kopje signs a fetch as a local account only with a key loaded while the account is available (the Store's
-		// signingKey or followerKey). localKey has no such check and serves Fedify's key-pairs dispatcher alone (userSigner
-		// in federation.ts), so nothing may make Fedify sign with those pairs. test-node/signing-keys.test.ts pins these.
+		// signingKey or followerKey). localKey has no such check: only publishedKeyPair in federation.ts reads it, for the
+		// key pairs Fedify publishes, and nothing may make Fedify sign with those pairs. test-node/signing-keys.test.ts
+		// pins these rules.
 		files: ['packages/kopje/src/**/*.ts'],
 		rules: {
 			'no-restricted-syntax': [
 				'error',
 				{
 					selector:
-						"CallExpression[callee.property.name='localKey']:not(VariableDeclarator[id.name='userSigner'] CallExpression)",
-					message: 'Load a signing key with signingKey (it checks availability); localKey serves userSigner only.',
+						"MemberExpression:matches([property.name='localKey'], [property.value='localKey']):not(VariableDeclarator[id.name='publishedKeyPair'] MemberExpression)",
+					message: "Load a signing key with signingKey (it checks availability); localKey is publishedKeyPair's alone.",
+				},
+				{
+					selector: "ObjectPattern > Property:matches([key.name='localKey'], [key.value='localKey'])",
+					message: "Load a signing key with signingKey (it checks availability); localKey is publishedKeyPair's alone.",
 				},
 				{
 					selector:
-						"CallExpression[callee.name='userSigner']:not(CallExpression[callee.property.name='setKeyPairsDispatcher'] CallExpression)",
-					message: 'userSigner serves the key-pairs dispatcher only; sign fetches with localSigner.',
-				},
-				{
-					selector: 'CallExpression[callee.property.name=/^(getDocumentLoader|getActorKeyPairs|setInboxListeners)$/]',
-					message: 'This makes Fedify sign with the unchecked dispatcher keys.',
+						'MemberExpression:matches([property.name=/^(getDocumentLoader|getActorKeyPairs|setInboxListeners)$/], [property.value=/^(getDocumentLoader|getActorKeyPairs|setInboxListeners)$/])',
+					message: 'This makes Fedify sign with the published key pairs, which skip the availability check.',
 				},
 			],
 		},

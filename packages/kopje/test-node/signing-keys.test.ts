@@ -4,53 +4,49 @@ import { describe, expect, it } from 'vitest'
 
 import config from '../../../eslint.config.js'
 
-// The rule eslint.config.js sets for Kopje's sources: a fetch signs as a local account only with a key loaded while the
-// account is available; the unchecked localKey serves Fedify's key-pairs dispatcher alone (federation.ts userSigner).
+// The rules eslint.config.js sets for Kopje's sources: a fetch signs as a local account only with a key loaded while
+// the account is available; the unchecked localKey is read only by federation.ts publishedKeyPair, which returns a bare
+// key pair (never a Signer) for Fedify's key-pairs dispatcher.
 const block = (config as { files?: string[]; rules?: Linter.RulesRecord }[]).find(
 	(entry) => entry.files?.includes('packages/kopje/src/**/*.ts') && entry.rules?.['no-restricted-syntax'] !== undefined
 )
 
-function flagged(code: string): string[] {
-	const messages = new Linter({ configType: 'flat' }).verify(
+function flagged(code: string): number {
+	return new Linter({ configType: 'flat' }).verify(
 		code,
 		[{ files: ['**/*.ts'], languageOptions: { parser: tsParser }, rules: block?.rules ?? {} }],
 		'federation.ts'
-	)
-	return messages.map((m) => m.message)
+	).length
 }
 
 const ALLOWED = `
-const userSigner = async (username: string) => {
-	const key = await rpc((s) => s.localKey(build, { username })) // the dispatcher's own key
+const publishedKeyPair = async (username: string) => {
+	const key = await rpc((s) => s.localKey(build, { username })) // the published key
 	return key
-}
+} // a comment after the closing brace
 const localSigner = async (username: string) => rpc((s) => s.signingKey(build, { username }))
-federation.setKeyPairsDispatcher(async (_ctx, identifier) => [await userSigner(identifier)])
+federation.setKeyPairsDispatcher(async (_ctx, identifier) => [await publishedKeyPair(identifier)])
 `
 
 describe('signing keys', () => {
-	it('allows the dispatcher alone to load an unchecked key', () => {
+	it('lets publishedKeyPair alone read the unchecked key', () => {
 		expect(block).toBeDefined()
-		expect(flagged(ALLOWED)).toEqual([])
+		expect(flagged(ALLOWED)).toBe(0)
 	})
 
-	it('flags an unchecked key loaded anywhere else', () => {
-		expect(flagged(ALLOWED.replace('s.signingKey(', 's.localKey('))).toHaveLength(1)
-		expect(flagged(`${ALLOWED}\nconst other = () => store.localKey(build, x)`)).toHaveLength(1)
+	it('flags the unchecked key read anywhere else, however it is named', () => {
+		expect(flagged(ALLOWED.replace('s.signingKey(', 's.localKey('))).toBe(1)
+		expect(flagged(ALLOWED.replace('s.signingKey(', "s['localKey']("))).toBe(1)
+		expect(flagged(ALLOWED.replace('s.signingKey(', 's.localKey?.('))).toBe(1)
+		expect(flagged(`${ALLOWED}\nconst load = store.localKey`)).toBe(1)
+		expect(flagged(`${ALLOWED}\nconst { localKey } = store`)).toBe(1)
 	})
 
-	it('flags userSigner called outside the dispatcher', () => {
-		expect(flagged(`${ALLOWED}\nconst late = async (identifier: string) => userSigner(identifier)`)).toHaveLength(1)
-		expect(
-			flagged(`${ALLOWED}\nfederation.setKeyPairsDispatcher(() => [])\nawait userSigner(identifier)`)
-		).toHaveLength(1)
-	})
-
-	it('flags every Fedify call that signs with the dispatcher keys', () => {
+	it('flags every Fedify call that signs with the published key pairs', () => {
 		expect(
 			flagged(
-				`ctx.getDocumentLoader({ identifier })\nctx.getActorKeyPairs(name)\nfederation.setInboxListeners('/u/{identifier}/inbox')`
+				`ctx.getDocumentLoader({ identifier })\nctx['getActorKeyPairs'](name)\nfederation.setInboxListeners('/u/{identifier}/inbox')`
 			)
-		).toHaveLength(3)
+		).toBe(3)
 	})
 })
