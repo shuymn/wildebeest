@@ -36,9 +36,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   part of it, so it stays valid HTML; realistic bios (5,000 characters of Japanese with links render to about
   28 KB) are never cut. A remote profile URL (`url`, avatar, header) longer than 2,048 characters is ignored, as an
   invalid one is. Accounts stored before this version are read within the same bounds wherever they are shown,
-  mentions included: a longer bio reads as empty, a longer URL as none and a display name past 2,048 characters is
-  cut, until the account is fetched again. The admin account search matches display names without reading them. With the
-  fields' 32 KiB, one account serializes to at most about 123 KB, so a page of 80 to about 10 MB.
+  mentions included: a longer bio reads as empty, a longer URL as none, and a display name past 2,048 characters or
+  a username past 255 is cut, until the account is fetched again. The admin account search tests usernames, display
+  names, domains and emails in the database without reading them. With the fields' 32 KiB, one account serializes
+  to at most about 123 KB, so a page of 80 to about 10 MB.
 - Pages of followers, following, follow requests, `favourited_by` and `reblogged_by` read the profiles of the
   accounts they show only, not of every candidate their read window considered.
 - Answers that present many accounts at once stop at a response body of 8 MiB. A typical account takes about

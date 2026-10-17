@@ -1307,19 +1307,20 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `REMOTE_BIO_BYTES` (64 KiB) as a JSON string, cut by sanitizing a shorter raw prefix so it stays valid sanitized
   HTML (`sanitizeRemoteBio` in `src/security/html.ts`, which the cutover's converter and verification use too); a
   remote profile URL (`url`, icon, image) over `PROFILE_URL_LIMIT` (2,048) is not stored, as an invalid one; the
-  display name is cut at 2,048 code units. `ACCOUNT_COLUMNS` reads stored rows within the same bounds (a longer bio
-  as '', a longer URL as NULL, the display name cut at 2,048 code points), and mentions read the URL through the
-  same projection (`profileUrlSql`), so rows stored earlier or converted are bounded until the account is fetched
-  again; the admin account search matches a display name prefix in SQL and reads no name. One account is then at most about 113 KB as read and 123 KB
-  serialized (94 KB and 119 KB measured with every part at its bound), so a page of 80 serializes to at most about
+  display name is cut at 2,048 code units, and a username over 255 is refused. `ACCOUNT_COLUMNS` reads stored rows
+  within the same bounds (a longer bio as '', a longer URL as NULL, the display name cut at 2,048 and the username
+  at 255 code points), and mentions read the URL through the same projection (`profileUrlSql`), so rows stored
+  earlier or converted are bounded until the account is fetched again; the admin account search reads candidates'
+  ids and flags only and tests their username, display name, domain and email in SQL. One account is then at most
+  about 113 KB as read and 123 KB serialized (94 KB and 119 KB measured with every part at its bound), so a page of 80 serializes to at most about
   10 MB; realistic bios (Mastodon's 500 characters, Misskey's 1,500, Pleroma's and GoToSocial's 5,000 of Japanese
   with links) render to at most about 28 KB. The windowed account reads (followers, following, follow requests,
   `favourited_by`, `reblogged_by`) select account ids for their window and read the profiles of the page only. The
-  username (255) and actor URI (`ACTOR_URI_LIMIT`) are bounded as stored by the Worker; a converted row keeps
-  legacy's (`test/account-answer-bytes.test.ts`). _Enforced (main)_ for answers of many accounts (a list's members
+  actor URI (`ACTOR_URI_LIMIT`) is bounded as stored by the Worker; a converted row keeps legacy's
+  (`test/account-answer-bytes.test.ts`, `test/admin-accounts.test.ts`). _Enforced (main)_ for answers of many accounts (a list's members
   and endorsements with `limit=0`, familiar followers): at most `ACCOUNT_ANSWER_BYTES` (8 MiB) for the whole
-  response body, its own JSON reserved first, read in chunks of 50 that stop once it is reached, so at most one chunk (about 6 MB) is read past it. A
-  `limit=0` answer cut there shows at least its first account and links `next` to the rest with `max_id` (a
+  response body, its own JSON reserved first, read in chunks of 50 that stop once it is reached, so at most one
+  chunk (about 6 MB) is read past it. A `limit=0` answer cut there shows at least its first account and links `next` to the rest with `max_id` (a
   deliberate deviation: Mastodon ignores `max_id` with `limit=0`); familiar followers share the bytes among the
   requested accounts with followers to show, in rounds that give what one leaves unused to the others, so the
   answer does not depend on their order (`presentAccountsWithin` and `familiarFollowers` in

@@ -7,7 +7,12 @@ import { NOW } from './app-helpers'
 import { storeWith } from './setup-helpers'
 import { community } from './status-helpers'
 import { instanceActorUri } from '../src/domain/activities'
-import { ADMIN_ACCOUNT_CANDIDATES, adminAccountOperations, listAdminAccounts } from '../src/domain/admin-accounts'
+import {
+	ADMIN_ACCOUNT_CANDIDATES,
+	type AdminAccountFilter,
+	adminAccountOperations,
+	listAdminAccounts,
+} from '../src/domain/admin-accounts'
 import { ADMIN_PERMISSION, ADMIN_PERMISSIONS, adminGuarded } from '../src/domain/auth'
 import { readOperation, writeOperation } from '../src/domain/operation'
 import type { StoreStub } from '../src/platform/store-client'
@@ -495,23 +500,26 @@ describe('the admin account list: pages', () => {
 	}, 60_000)
 })
 
-describe('the admin account list: a converted display name of any length (RES-2)', () => {
-	// A converted row keeps legacy's display name, of any length: the filter matches its prefix in SQL and reads no
-	// name, and the entity shows it cut.
-	it('matches the prefix of a huge display name without reading it, and shows it cut', async () => {
-		const { h, ids, admin } = await world()
-		const huge = `Alice${'x'.repeat(1_500_000)}`
-		await sql(h.store, 'UPDATE accounts SET display_name = ? WHERE id IN (?, ?)', huge, ids.carol, ids.erin)
-		const list = async (query: string) => (await call(h, `/api/v2/admin/accounts?${query}`, admin)).body
-		// The display name drives the read (its index range), and is a residual of the suspended accounts' read.
-		const searched = (await list('origin=remote&display_name=ali')) as AdminAccountBody[]
-		expect(idsOf(searched)).toEqual(expected(ids, ['carol', 'erin', 'dave']))
-		const named = (await list('origin=remote&status=suspended&display_name=alicex')) as AdminAccountBody[]
-		expect(idsOf(named)).toEqual(expected(ids, ['erin']))
-		expect(await list('origin=remote&status=suspended&display_name=alicey')).toEqual([])
-		const shown = searched.find((account) => account.id === ids.carol)!.account as unknown as { display_name: string }
-		expect(shown.display_name).toBe(huge.slice(0, 2048))
-		const longest = await runInDurableObject(h.store, async (_instance, state) => {
+describe('the admin account list: converted text of any length (RES-2)', () => {
+	// A converted row keeps legacy's username and display name, of any length: the filter tests text in SQL over ids
+	// and flags, and the entity shows each cut.
+	const filterOf = (changes: Partial<AdminAccountFilter>): AdminAccountFilter => ({
+		origin: null,
+		status: null,
+		roleIds: null,
+		username: null,
+		byDomain: null,
+		displayName: null,
+		email: null,
+		ip: null,
+		invitedBy: null,
+		...changes,
+	})
+
+	// The longest string any statement of the list reads from SQLite.
+	async function longestRead(h: ApiHarness, admin: string, filter: AdminAccountFilter): Promise<number> {
+		const tokenHash = await sha256Hex(admin)
+		return runInDurableObject(h.store, (_instance, state) => {
 			let most = 0
 			const real = state.storage.sql
 			const counting = {
@@ -526,25 +534,59 @@ describe('the admin account list: a converted display name of any length (RES-2)
 					return { toArray: () => measure(cursor.toArray()), one: () => measure([cursor.one()])[0]! }
 				},
 			} as unknown as SqlStorage
-			listAdminAccounts.run(counting, {
-				credential: { tokenHash: await sha256Hex(admin), scope: 'admin:read:accounts', now: NOW },
-				filter: {
-					origin: 'remote',
-					status: 'suspended',
-					roleIds: null,
-					username: null,
-					byDomain: null,
-					displayName: 'alicex',
-					email: null,
-					ip: null,
-					invitedBy: null,
-				},
+			const answer = listAdminAccounts.run(counting, {
+				credential: { tokenHash, scope: 'admin:read:accounts', now: NOW },
+				filter,
 				page: { limit: 100 },
 				present: { origin: 'https://kopje.test' },
-			})
+			}) as { status: string; value?: { status: string; items: unknown[] } }
+			expect(answer.value?.items.length).toBeGreaterThan(0)
 			return most
 		})
-		// No string read is longer than a presented display name.
-		expect(longest).toBeLessThanOrEqual(2048)
+	}
+
+	it('matches the prefix of a huge display name without reading it, and shows it cut', async () => {
+		const { h, ids, admin } = await world()
+		const huge = `Alice${'x'.repeat(1_500_000)}`
+		await sql(h.store, 'UPDATE accounts SET display_name = ? WHERE id IN (?, ?)', huge, ids.carol, ids.erin)
+		const list = async (query: string) => (await call(h, `/api/v2/admin/accounts?${query}`, admin)).body
+		// The display name drives the read (its index range), and is a residual of the suspended accounts' read.
+		const searched = (await list('origin=remote&display_name=ali')) as AdminAccountBody[]
+		expect(idsOf(searched)).toEqual(expected(ids, ['carol', 'erin', 'dave']))
+		const named = (await list('origin=remote&status=suspended&display_name=alicex')) as AdminAccountBody[]
+		expect(idsOf(named)).toEqual(expected(ids, ['erin']))
+		expect(await list('origin=remote&status=suspended&display_name=alicey')).toEqual([])
+		const shown = searched.find((account) => account.id === ids.carol)!.account as unknown as { display_name: string }
+		expect(shown.display_name).toBe(huge.slice(0, 2048))
+		for (const filter of [
+			filterOf({ origin: 'remote', displayName: 'ali' }),
+			filterOf({ origin: 'remote', status: 'suspended', displayName: 'alicex' }),
+		]) {
+			expect(await longestRead(h, admin, filter)).toBeLessThanOrEqual(2048)
+		}
+	})
+
+	it('matches the prefix of a huge username without reading it, and shows it cut', async () => {
+		const { h, ids, admin } = await world()
+		const huge = `ali${'u'.repeat(1_500_000)}`
+		await sql(h.store, 'UPDATE accounts SET username = ? WHERE id IN (?, ?)', huge, ids.carol, ids.erin)
+		const list = async (query: string) =>
+			(await call(h, `/api/v2/admin/accounts?${query}`, admin)).body as AdminAccountBody[]
+		// The username drives the read (its index range, within a domain too), and is a residual of the suspended
+		// accounts' read; the local alice matches the same prefix.
+		expect(idsOf(await list('username=ali'))).toEqual(expected(ids, ['alice', 'carol', 'erin']))
+		expect(idsOf(await list('username=ALIU&by_domain=remote.example'))).toEqual(expected(ids, ['carol', 'erin']))
+		expect(idsOf(await list('origin=remote&status=suspended&username=aliuu'))).toEqual(expected(ids, ['erin']))
+		expect(await list('origin=remote&status=suspended&username=aliv')).toEqual([])
+		const shown = (await list('username=aliu&by_domain=remote.example')).find((account) => account.id === ids.carol)!
+		expect(shown.username).toBe(huge.slice(0, 255))
+		for (const filter of [
+			filterOf({ username: 'ali' }),
+			filterOf({ username: 'aliu', byDomain: 'remote.example' }),
+			filterOf({ origin: 'remote', status: 'suspended', username: 'aliuu' }),
+			filterOf({ origin: 'remote', status: 'suspended' }),
+		]) {
+			expect(await longestRead(h, admin, filter)).toBeLessThanOrEqual(2048)
+		}
 	})
 })

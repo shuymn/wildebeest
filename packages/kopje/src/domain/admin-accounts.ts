@@ -211,20 +211,17 @@ export type AdminAccountList =
 	// More than ADMIN_ACCOUNT_CANDIDATES accounts in the searched range: 422, never an unordered or empty page.
 	| { status: 'too_broad' }
 
-// What a filter reads of an account. unavailable is R1's rule (availableSql): a suspended account, local or remote
-// (R38), or a remote one whose deletion has started; the admin entity shows each as suspended, and the filter agrees.
-// The display name is not read (a converted row may keep legacy's, of any length, RES-2): its prefix is matched in
-// SQL (displayMatches).
+// What a filter reads of an account: its id and flags only. unavailable is R1's rule (availableSql): a suspended
+// account, local or remote (R38), or a remote one whose deletion has started; the admin entity shows each as
+// suspended, and the filter agrees. No text is read (a converted row may keep legacy's username or display name, of
+// any length, RES-2): the filter's text predicates are evaluated in SQL (textMatches).
 type Candidate = {
 	id: string
-	username: string
-	domain: string | null
-	email: string | null
+	local: number
 	unavailable: number
 }
 
-const CANDIDATE_COLUMNS = `a.id, a.username, a.domain, l.email,
-	NOT ${availableJoinedSql('a', 'l')} AS unavailable`
+const CANDIDATE_COLUMNS = `a.id, a.domain IS NULL AS local, NOT ${availableJoinedSql('a', 'l')} AS unavailable`
 
 // Lowercases ASCII letters only, as SQLite's lower() does, so a prefix compares alike in an index range and in memory.
 // Other letters keep their case (an accepted difference from Mastodon's ILIKE).
@@ -262,18 +259,15 @@ function matchesNothing(filter: AdminAccountFilter): boolean {
 	)
 }
 
-// `prefix` is already folded (ordered folds the filter's prefixes once per set).
-const startsWith = (value: string, prefix: string) => asciiLower(value).startsWith(prefix)
-
-// AccountFilter's scopes in memory, over an account the plan read, with the filter's prefixes folded (ordered);
-// `displayed`: the accounts whose display name has the filter's prefix (displayMatches), when it has one.
+// AccountFilter's scopes over an account the plan read: its flags in memory, and `texts`, the candidates whose
+// username, domain, display name and email pass the filter's text predicates (textMatches), when it has any.
 function matches(
 	filter: AdminAccountFilter,
 	adminId: string,
 	row: Candidate,
-	displayed: ReadonlySet<string> | null
+	texts: ReadonlySet<string> | null
 ): boolean {
-	const local = row.domain === null
+	const local = row.local === 1
 	return (
 		(filter.origin === null || (filter.origin === 'local') === local) &&
 		(filter.status === null ||
@@ -281,10 +275,7 @@ function matches(
 			(filter.status === 'suspended' && row.unavailable === 1)) &&
 		(filter.roleIds === null ||
 			(local && filter.roleIds.includes(row.id === adminId ? OWNER_ROLE.id : EVERYONE_ROLE.id))) &&
-		(filter.username === null || startsWith(row.username, filter.username)) &&
-		(filter.byDomain === null || row.domain === filter.byDomain) &&
-		(displayed === null || displayed.has(row.id)) &&
-		(filter.email === null || (row.email !== null && startsWith(row.email, filter.email)))
+		(texts === null || texts.has(row.id))
 	)
 }
 
@@ -321,24 +312,48 @@ function ordered(
 	adminId: string,
 	bounds: Bounds
 ): Candidate[] {
-	const fold = (prefix: string | null) => (prefix === null ? null : asciiLower(prefix))
-	const folded = { ...filter, username: fold(filter.username), email: fold(filter.email) }
-	const displayed = filter.displayName === null ? null : displayMatches(db, rows, filter.displayName)
+	const texts = textMatches(db, rows, filter)
 	return rows
-		.filter((row) => inBounds(bounds, row.id) && matches(folded, adminId, row, displayed))
+		.filter((row) => inBounds(bounds, row.id) && matches(filter, adminId, row, texts))
 		.sort((a, b) => (a.id < b.id === bounds.ascending ? -1 : 1))
 }
 
-// The candidates whose display name starts with `prefix` (ASCII letters folded): the range searchRange reads, from
-// the prefix to its successor in BINARY order, so the test reads no name into the isolate.
-function displayMatches(db: Db, rows: readonly Candidate[], prefix: string): Set<string> {
-	const lower = asciiLower(prefix)
-	const end = prefixEnd(lower)
-	const ids = JSON.stringify(rows.map((row) => row.id))
-	const query = `SELECT a.id FROM json_each(?1) c CROSS JOIN accounts a ON a.id = c.value
-		WHERE lower(a.display_name) >= ?2${end === null ? '' : ' AND lower(a.display_name) < ?3'}`
-	const found =
-		end === null ? db.all<{ id: string }>(query, ids, lower) : db.all<{ id: string }>(query, ids, lower, end)
+// The candidates that pass the filter's text predicates, tested in SQL so no text is read into the isolate (null when
+// it has none): the username, display name and email start with the filter's (ASCII letters folded on both sides,
+// as asciiLower and SQLite's lower() fold alike), each the range from the prefix to its successor in BINARY order
+// that searchRange reads; by_domain equals the domain.
+function textMatches(db: Db, rows: readonly Candidate[], filter: AdminAccountFilter): Set<string> | null {
+	const conditions: string[] = []
+	const values: SqlStorageValue[] = [JSON.stringify(rows.map((row) => row.id))]
+	const prefix = (expression: string, value: string | null) => {
+		if (value === null) {
+			return
+		}
+		const lower = asciiLower(value)
+		const end = prefixEnd(lower)
+		values.push(lower)
+		conditions.push(`${expression} >= ?${values.length}`)
+		if (end !== null) {
+			values.push(end)
+			conditions.push(`${expression} < ?${values.length}`)
+		}
+	}
+	prefix('lower(a.username)', filter.username)
+	prefix('lower(a.display_name)', filter.displayName)
+	prefix('lower(l.email)', filter.email)
+	if (filter.byDomain !== null) {
+		values.push(filter.byDomain)
+		conditions.push(`a.domain = ?${values.length}`)
+	}
+	if (conditions.length === 0) {
+		return null
+	}
+	const found = db.all<{ id: string }>(
+		`SELECT a.id FROM json_each(?1) c CROSS JOIN accounts a ON a.id = c.value
+			LEFT JOIN local_accounts l ON l.account_id = a.id
+		WHERE ${conditions.join(' AND ')}`,
+		...values
+	)
 	return new Set(found.map((row) => row.id))
 }
 

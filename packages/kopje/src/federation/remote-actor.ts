@@ -2,7 +2,7 @@ import { type DocumentLoader, exportSpki, FetchError } from '@fedify/fedify'
 import { type Actor, getActorTypeName, type Image, isActor, Link, lookupObject } from '@fedify/vocab'
 
 import { isTransientLoadError, loadFailureOf } from './loader'
-import { DISPLAY_NAME_LIMIT, PROFILE_URL_LIMIT } from '../domain/accounts'
+import { DISPLAY_NAME_LIMIT, PROFILE_URL_LIMIT, USERNAME_LIMIT } from '../domain/accounts'
 import type { RemoteActorInput } from '../domain/inbox'
 import { hostDomain } from '../platform/domain-name'
 import { httpUrl } from '../platform/http-url'
@@ -13,7 +13,6 @@ import { sanitizeRemoteBio } from '../security/html'
 
 // Mastodon's remote username rule (Account::USERNAME_RE), with a length bound (RES-1).
 const USERNAME = /^[a-z0-9_]+([a-z0-9_.-]+[a-z0-9_]+)?$/i
-const USERNAME_LIMIT = 255
 // Raw caps (RES-1): the display name is plain text and is cut (DISPLAY_NAME_LIMIT), as Mastodon cuts what it
 // receives.
 // Actor ids and inbox URLs (RES-6): a delivery target is an inbox and, for a silent recipient, an actor id, so their

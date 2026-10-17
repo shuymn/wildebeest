@@ -193,13 +193,15 @@ const REMOTE_ATTACHMENT_SQL = `CASE WHEN a.domain IS NOT NULL THEN (
 // stored before a bound, or converted at the cutover, are bounded too until the account is fetched again:
 //   - the bio at REMOTE_BIO_BYTES (64 KiB) as a JSON string; a longer stored one reads as '' (json_quote measures
 //     it only below the raw bound, so its escaped copy stays far below SQLite's largest string);
-//   - the display name at DISPLAY_NAME_LIMIT code points (cutSql);
+//   - the display name at DISPLAY_NAME_LIMIT and the username at USERNAME_LIMIT code points (cutSql);
 //   - url, avatar and header at PROFILE_URL_LIMIT bytes; a longer stored one reads as NULL, as an invalid one;
 //   - the fields at REMOTE_FIELDS_BYTES (REMOTE_ATTACHMENT_SQL, remoteFields).
 // One account is then at most about 113 KB as read and 123 KB serialized (bio 64 KiB, display name 12 KiB escaped,
-// fields 33 KB, five URLs 10 KiB, the rest about 2 KB), so a page of 80 serializes to at most about 10 MB. The
-// username and actor URI are bounded as stored (255 and ACTOR_URI_LIMIT); converted rows keep legacy's.
+// fields 33 KB, five URLs 10 KiB, the rest about 2 KB), so a page of 80 serializes to at most about 10 MB. The actor
+// URI is bounded as stored (ACTOR_URI_LIMIT); a converted row keeps legacy's.
 export const DISPLAY_NAME_LIMIT = 2048
+// Mastodon's remote usernames are short; Kopje refuses a longer one as stored (federation/remote-actor.ts, RES-1).
+export const USERNAME_LIMIT = 255
 export const PROFILE_URL_LIMIT = 2048
 const NOTE_SQL = `CASE WHEN length(CAST(a.note AS BLOB)) > ${REMOTE_BIO_BYTES} THEN ''
 	WHEN length(CAST(json_quote(a.note) AS BLOB)) > ${REMOTE_BIO_BYTES} THEN '' ELSE a.note END`
@@ -207,7 +209,7 @@ const NOTE_SQL = `CASE WHEN length(CAST(a.note AS BLOB)) > ${REMOTE_BIO_BYTES} T
 export const profileUrlSql = (column: string) =>
 	`CASE WHEN length(CAST(${column} AS BLOB)) <= ${PROFILE_URL_LIMIT} THEN ${column} END`
 
-export const ACCOUNT_COLUMNS = `a.id, a.uri, a.username, a.domain, a.actor_type,
+export const ACCOUNT_COLUMNS = `a.id, a.uri, ${cutSql('a.username', USERNAME_LIMIT)} AS username, a.domain, a.actor_type,
 	${cutSql('a.display_name', DISPLAY_NAME_LIMIT)} AS display_name, ${NOTE_SQL} AS note, ${profileUrlSql('a.url')} AS url,
 	${profileUrlSql('a.avatar_url')} AS avatar_url, ${profileUrlSql('a.header_url')} AS header_url, a.locked, a.discoverable, a.followers_count, a.following_count, a.statuses_count, a.created_at,
 	${availableJoinedSql('a', 'l')} AS available,
