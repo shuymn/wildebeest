@@ -21,9 +21,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       and not `active`, and its follow requests are neither listed nor accepted;
     - nothing more is sent to it but withdrawals (deletions, undos, and the rejections below), including deliveries
       queued earlier, pushes caused by it, and follows of it by local users, which are kept but not sent;
-    - activities from it are ignored, except its deletions, undos and rejections. Its profile and keys are no longer
-      updated, except its inbox addresses, so the rejections reach it. A move of its followers that is under way
-      stops;
+    - activities from it are ignored, except its deletions, undos and rejections. Its profile and keys stay frozen;
+      only its inbox addresses can change, so the rejections reach it. An ongoing move of its followers stops;
     - its reports are resolved, and its follows of local users are ended in the background, each with a rejection
       sent to it (a pending request is removed without one), as Mastodon does.
 - The admin can block domains through the Mastodon admin API (`/api/v1/admin/domain_blocks`: list, show, create,
@@ -76,8 +75,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   same bounds wherever they appear, mentions included: a longer bio as empty, a longer URL as none, the display name cut
   at 2,048 characters and the username at 255, until the account is fetched again. One account then serializes to at
   most about 123 KB (RES-3 in [docs/threat-model.md](docs/threat-model.md)).
-- Pages of followers, following, follow requests, `favourited_by` and `reblogged_by` read the profiles of the accounts
-  they show only, not of every candidate their read window considers.
+- Pages of followers, following, follow requests, `favourited_by` and `reblogged_by` read only the profiles of the
+  accounts they return.
 - Answers that present many accounts at once (list members and endorsements with `limit=0`, familiar followers) stop at
   a response body of 8 MiB; 1,000 typical accounts, about 2 KiB each, still fit whole. A `limit=0` answer that stops
   short sends a `Link` header whose `next` answers the rest through `max_id`, which these answers honour, a deliberate
