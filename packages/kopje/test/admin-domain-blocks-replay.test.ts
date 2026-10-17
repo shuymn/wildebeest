@@ -250,6 +250,16 @@ describe('a domain block through the admin API, end to end', () => {
 		const onD = (
 			await sql<{ id: string }>(w.h.store, "SELECT id FROM accounts WHERE domain = ?1 OR domain = 'x.' || ?1", D)
 		).map((row) => row.id)
+		// The other way: accounts on the domain following local accounts, accepted and pending.
+		await sql(
+			w.h.store,
+			`INSERT INTO follows (account_id, target_account_id, state)
+			SELECT value, ?2, CASE WHEN key % 2 = 0 THEN 'accepted' ELSE 'pending' END FROM json_each(?1)`,
+			JSON.stringify(onD.slice(0, 40)),
+			w.bob.id
+		)
+		const inward = await sql(w.h.store, 'SELECT 1 FROM follows WHERE target_account_id = ?', w.bob.id)
+		expect(inward).toHaveLength(40)
 		expect((await list(w, 'status=active')).ids).toEqual(expect.arrayContaining(onD))
 
 		const created = await w.h.request(BLOCKS, bearer(w.admin, json({ domain: D, severity: 'suspend' })))
