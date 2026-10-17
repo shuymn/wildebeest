@@ -490,6 +490,108 @@ describe('admin.report: removal', () => {
 	})
 })
 
+describe('admin.report: the purge of reports, bounded (RES-6, RES-7)', () => {
+	const uriOf = async (store: StoreStub, id: string) =>
+		(await sql<{ uri: string }>(store, 'SELECT uri FROM accounts WHERE id = ?', id))[0]!.uri
+
+	// One purge batch of `uri`, with the rows it wrote (total_changes) and read (each statement's rowsRead).
+	const batch = (store: StoreStub, uri: string) =>
+		runInDurableObject(store, (_instance, state) => {
+			const real = state.storage.sql
+			let read = 0
+			const counting = {
+				exec: (query: string, ...params: SqlStorageValue[]) => {
+					const cursor = real.exec(query, ...params)
+					return {
+						toArray: () => {
+							const rows = cursor.toArray()
+							read += cursor.rowsRead
+							return rows
+						},
+						get rowsWritten() {
+							const written = cursor.rowsWritten
+							read += cursor.rowsRead
+							return written
+						},
+					}
+				},
+			} as unknown as SqlStorage
+			const db = new Db(counting)
+			const changes = () => new Db(real).first<{ n: number }>('SELECT total_changes() AS n')!.n
+			const before = changes()
+			const more = state.storage.transactionSync(() => purgeBatch(db, uri, NOW))
+			return { wrote: changes() - before, read, more }
+		})
+
+	it("deletes a report notification's pushes child-first, every batch within PURGE_BATCH", async () => {
+		const { h, owner, alice, carol } = await world()
+		await report(h, alice, carol)
+		const pushes = PURGE_BATCH + 300
+		await sql(
+			h.store,
+			"INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('seed', 's', 'seed', 'urn:ietf:wg:oauth:2.0:oob', 'push')"
+		)
+		await sql(
+			h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) SELECT 'seed-' || i, 'access', 'seed', ?2, 'push' FROM n`,
+			pushes,
+			owner.id
+		)
+		await sql(
+			h.store,
+			`INSERT INTO push_subscriptions (token_hash, endpoint, key_p256dh, key_auth)
+			SELECT token_hash, 'https://push.example/' || token_hash, 'p', 'a' FROM oauth_tokens WHERE client_id = 'seed'`
+		)
+		await sql(
+			h.store,
+			`INSERT INTO push_deliveries (subscription_id, notification_id, next_attempt_at, updated_at)
+			SELECT p.id, n.id, 0, 0 FROM push_subscriptions p CROSS JOIN notifications n
+			WHERE p.token_hash GLOB 'seed-*' AND n.type = 'admin.report'`
+		)
+		expect(await sql(h.store, 'SELECT count(*) AS n FROM push_deliveries')).toEqual([{ n: pushes }])
+		const uri = await uriOf(h.store, carol)
+		const writes: number[] = []
+		for (let i = 0; i < 10; i++) {
+			const { wrote, more } = await batch(h.store, uri)
+			writes.push(wrote)
+			if (!more) {
+				break
+			}
+		}
+		expect(writes.length).toBeGreaterThan(1)
+		expect(writes[0]).toBe(PURGE_BATCH)
+		expect(writes.every((wrote) => wrote <= PURGE_BATCH)).toBe(true)
+		expect(await sql(h.store, 'SELECT count(*) AS n FROM push_deliveries')).toEqual([{ n: 0 }])
+		expect(await stored(h.store)).toEqual([])
+		expect(await sql(h.store, 'SELECT count(*) AS n FROM accounts WHERE id = ?', carol)).toEqual([{ n: 0 }])
+	})
+
+	it('reads the same rows per batch with 2,000 or 20,000 resolved and unresolved reports of the account', async () => {
+		const history = async (count: number) => {
+			const { h, alice, carol } = await world()
+			for (const resolved of [true, false]) {
+				await sql(
+					h.store,
+					`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+					INSERT INTO reports (account_id, target_account_id, status_ids, uri, created_at, action_taken_at)
+					SELECT ?2, ?3, '[]', 'https://kopje.test/actor#reports/' || lower(hex(randomblob(16))), ?4, ?5 FROM n`,
+					count / 2,
+					alice.id,
+					carol,
+					new Date(NOW).toISOString(),
+					resolved ? new Date(NOW).toISOString() : null
+				)
+			}
+			return batch(h.store, await uriOf(h.store, carol))
+		}
+		const few = await history(2_000)
+		const many = await history(20_000)
+		expect([few.wrote, many.wrote]).toEqual([PURGE_BATCH, PURGE_BATCH])
+		expect(many.read).toBeLessThanOrEqual(few.read + 10)
+	}, 120_000)
+})
+
 describe('admin.report: interleavings with resolution', () => {
 	type Answer = { status: number }
 	const suspend = async (h: ApiHarness, admin: string, id: string): Promise<Answer> =>
