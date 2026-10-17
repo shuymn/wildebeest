@@ -77,7 +77,8 @@ type Dereference = { type: 'Dereference'; kind: 'Create' | 'UpdateStatus'; id: s
 
 type Parsed =
 	| { ok: true; actor: string; activity: InboundActivity | Dereference; target: string | null; body: Json }
-	| { ok: false; reason: string; deleteOfSelf?: boolean }
+	// actor: the envelope's single actor, when the envelope is usable but its activity is not one Kopje reads.
+	| { ok: false; reason: string; deleteOfSelf?: boolean; actor?: string }
 
 // Store calls one activity may take: the activity, its boosted original, and that original's author.
 const MAX_STORE_ROUNDS = 3
@@ -143,23 +144,6 @@ export function activityEnvelope(
 	return { ok: true, actor, id, type }
 }
 
-// The actor of an activity's envelope, read within the JSON bounds (RES-2); null when the envelope is unusable: no
-// object, no ActivityStreams context, or no single actor, id and type (an actor array included), which no handler
-// reads.
-function envelopeActor(body: Uint8Array): string | null {
-	let json: unknown
-	try {
-		json = JSON.parse(new TextDecoder().decode(body))
-	} catch {
-		return null
-	}
-	if (!isObject(json) || !withinJsonBounds(json)) {
-		return null
-	}
-	const envelope = activityEnvelope(json)
-	return envelope.ok ? envelope.actor : null
-}
-
 export function parseActivity(body: Uint8Array): Parsed {
 	let json: unknown
 	try {
@@ -183,7 +167,7 @@ export function parseActivity(body: Uint8Array): Parsed {
 	const { actor, id, type } = envelope
 	const activity = activityOf(type, id, actor, json, object)
 	if (activity === null) {
-		return { ok: false, reason: 'unsupported', deleteOfSelf }
+		return { ok: false, reason: 'unsupported', deleteOfSelf, actor }
 	}
 	return { ok: true, actor, activity, target: type === 'Move' ? idOf(json.target) : null, body: json }
 }
@@ -416,19 +400,20 @@ export async function receiveInbound(deps: InboundDeps, request: InboundRequest)
 	// Store's keys alone, fetching nothing, and answered as ignored. A request without a valid signature stays refused
 	// (ID-1), a wrong signature under a stored key included; one signed with a key id the Store does not hold (a cache
 	// miss: no key was served) is ignored as it would be once that key were fetched.
-	const named = parsed.ok ? parsed.actor : envelopeActor(request.body)
-	if (named === null) {
-		const none = { document: NO_FETCH, context: NO_FETCH }
-		const stored = new Map<string, ServedKey>()
-		const checked = await verify(deps, request, headers, none, stored, true)
-		rethrowStoreError(state)
-		const missed = 'status' in checked && checked.reason === 'key-refused' && stored.size === 0
-		return 'status' in checked && !missed ? checked : { status: 202, reason: parsed.ok ? 'unusable' : parsed.reason }
-	}
-	if (await callStore(() => deps.store().inboundDomainBlocked(deps.build, { uri: named }))) {
-		return parsed.ok
-			? domainBlocked(deps, request, headers, parsed, { origin, state, budget })
-			: { status: 202, reason: 'domain-blocked' }
+	const blocked = (uri: string) => callStore(() => deps.store().inboundDomainBlocked(deps.build, { uri }))
+	if (!parsed.ok) {
+		if (parsed.actor === undefined) {
+			const none = { document: NO_FETCH, context: NO_FETCH }
+			const stored = new Map<string, ServedKey>()
+			const checked = await verify(deps, request, headers, none, stored, true)
+			const missed = 'status' in checked && checked.reason === 'key-refused' && stored.size === 0
+			return 'status' in checked && !missed ? checked : { status: 202, reason: parsed.reason }
+		}
+		if (await blocked(parsed.actor)) {
+			return { status: 202, reason: 'domain-blocked' }
+		}
+	} else if (await blocked(parsed.actor)) {
+		return domainBlocked(deps, request, headers, parsed, { origin, state, budget })
 	}
 	const served = new Map<string, ServedKey>()
 	let verified = await verify(deps, request, headers, loaders, served, false)
