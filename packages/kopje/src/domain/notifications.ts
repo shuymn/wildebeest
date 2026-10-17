@@ -14,6 +14,7 @@ import { currentCredentialSql, type UserContext, userReadOperation, userWriteOpe
 import { addToConversation } from './conversations'
 import { presentReportsById, type Report } from './reports'
 import { presentStatuses, type Status } from './status-presenter'
+import { readWindow, windowJson, windowOf, windowPage } from './windows'
 import type { Db } from '../db/sql'
 
 // Notifications of local users (Mastodon 4.0.2 v1). They are written by the operation that causes them, in its
@@ -335,41 +336,55 @@ export type ListNotificationsInput = {
 	present: Present
 }
 
+// A page reads a window of readWindow(limit) of the viewer's notifications from the cursor (windows.ts), with the
+// request's types and sender but not the rule, then applies the rule (R15) to those.
 export const listNotifications = userReadOperation<ListNotificationsInput, Page<Notification>>(
 	(db, input, _viewer, viewer) => {
 		const { accountId: viewerId, now } = viewer
 		const { page } = input
 		const ascending = page.minId !== undefined
+		const size = readWindow(page.limit)
 		const read = statusReads(viewer, { viewer: '?1', now: '?8' })
-		const rows = read.notifications<Omit<NotificationRow, 'status_id'>>(
-			db,
-			{
-				where: `n.account_id = ?1
-					AND (?4 IS NULL OR n.type IN (SELECT value FROM json_each(?4)))
-					AND n.type NOT IN (SELECT value FROM json_each(?5))
-					AND (?6 IS NULL OR n.from_account_id = ?6)`,
-				tail: `ORDER BY n.id ${ascending ? 'ASC' : 'DESC'} LIMIT ?7`,
-				range: { max: '?2', min: '?3' },
-				columns: NOTIFICATION_COLUMNS,
-				includeFiltered: input.includeFiltered || input.accountId !== null,
-				admin: adminAccountIdOnce(db),
-			},
-			viewerId,
-			page.maxId ?? null,
-			page.minId ?? page.sinceId ?? null,
-			input.types.length === 0 ? null : JSON.stringify(input.types),
-			JSON.stringify(input.excludeTypes),
-			input.accountId,
-			page.limit,
-			now
+		const includeFiltered = input.includeFiltered || input.accountId !== null
+		const window = windowOf(
+			read
+				.notificationWindow(
+					db,
+					{
+						where: `(?4 IS NULL OR n.type IN (SELECT value FROM json_each(?4)))
+							AND n.type NOT IN (SELECT value FROM json_each(?5))
+							AND (?6 IS NULL OR n.from_account_id = ?6)`,
+						tail: `ORDER BY n.id ${ascending ? 'ASC' : 'DESC'} LIMIT ?7`,
+						range: { max: '?2', min: '?3' },
+						includeFiltered,
+					},
+					viewerId,
+					page.maxId ?? null,
+					page.minId ?? page.sinceId ?? null,
+					input.types.length === 0 ? null : JSON.stringify(input.types),
+					JSON.stringify(input.excludeTypes),
+					input.accountId,
+					size
+				)
+				.map((row) => row.id),
+			size
 		)
-		if (ascending) {
-			rows.reverse()
-		}
+		const rows =
+			window.candidates.length === 0
+				? []
+				: statusReads(viewer, { viewer: '?1', now: '?2' }).notifications<Omit<NotificationRow, 'status_id'>>(
+						db,
+						{ where: '', within: '?3', columns: NOTIFICATION_COLUMNS, includeFiltered, admin: adminAccountIdOnce(db) },
+						viewerId,
+						now,
+						windowJson(window)
+					)
+		const shown = windowPage(window, rows, (row) => row.id, page.limit, ascending)
 		return {
-			items: presentNotifications(db, rows, viewer, input.present),
-			newest: rows[0]?.id ?? null,
-			oldest: rows.at(-1)?.id ?? null,
+			items: presentNotifications(db, shown.rows, viewer, input.present),
+			newest: shown.newest,
+			oldest: shown.oldest,
+			cut: shown.cut,
 		}
 	}
 )

@@ -455,6 +455,10 @@ export type StatusReads = {
 		query: { readonly author: string; readonly and?: string },
 		...params: SqlStorageValue[]
 	): boolean
+	// The same part of the rule over the author `author` as SQL, over the viewer's and the time's parameters, for a
+	// candidate window's author-level exclusion (windows.ts): an author it rejects contributes no candidates. A window
+	// selects candidates only; the rule is applied to them by a query of this reader.
+	authorRule(rule: StatusRule, author: string): string
 	// The viewer's notifications the notification rule (R15) shows them, which shows a status only if they may view it,
 	// and a report's only while `admin` (the OAuth admin's account id, adminAccountIdOnce) is the viewer (R37),
 	// and, unless `includeFiltered`, only those the recipient's policy did not filter (Notification.browserable), above
@@ -464,19 +468,29 @@ export type StatusReads = {
 	//   SELECT n.status_id AS status_id, <columns> FROM main.notifications n
 	//   WHERE (n.account_id = <viewer>) AND (<range above the floor>) AND (<the group, or above its dismissal>)
 	//     AND (<where>) [AND (n.filtered = 0)] AND (<rule>) <tail>
+	// With `within` (a parameter holding a window's candidates, windows.ts), the read is of those candidates alone, each
+	// by its key, and the range is theirs.
 	notifications<Extra extends Row>(
 		db: Db,
-		query: {
-			readonly where: string
-			readonly tail?: string
+		query: NotificationQuery & {
 			readonly columns: Columns<Extra, 'status_id'>
-			readonly includeFiltered: boolean
-			readonly range?: { readonly max: string; readonly min: string }
-			readonly group?: string
 			readonly admin: string | null
+			readonly within?: string
 		},
 		...params: SqlStorageValue[]
 	): (Extra & { status_id: VisibleStatusId | null })[]
+	// The candidates of a window of that read (windows.ts): the same rows but for the rule and, reading every group,
+	// each row's group dismissal, which the read of the candidates applies. Ids as TEXT, in the order of `tail`.
+	notificationWindow(db: Db, query: NotificationQuery, ...params: SqlStorageValue[]): { id: string }[]
+}
+
+// The parts of a read of the viewer's notifications (StatusReads.notifications).
+export type NotificationQuery = {
+	readonly where: string
+	readonly tail?: string
+	readonly includeFiltered: boolean
+	readonly range?: { readonly max: string; readonly min: string }
+	readonly group?: string
 }
 
 export function statusReads(
@@ -553,6 +567,24 @@ export function statusReads(
 		const authors = `SELECT wa.account_id FROM (${q.authors}) wa WHERE ${where(author, authorRuleSql(rule, 'wa.account_id'))}`
 		return `SELECT w.id AS id FROM (${authors}) a CROSS JOIN main.statuses w ON w.id IN (${window})`
 	}
+	// A notification read's group term: the one group, or, reading every group, each row above its group's dismissal,
+	// checked by its key.
+	const notificationGroupSql = (query: NotificationQuery) =>
+		query.group === undefined ? `n.id > ${dismissedSql(at.viewer, 'n.group_key')}` : `n.group_key = ${query.group}`
+	// A notification read's range above the floor, its group term (with `groups`: a window's candidates leave the
+	// per-row dismissal to the read of them) and the filtered term.
+	const notificationScope = (query: NotificationQuery, groups: boolean) => {
+		// A term of its own, so the plan reads the partial index of unfiltered notifications (notifications_unfiltered).
+		const unfiltered = query.includeFiltered ? undefined : UNFILTERED_SQL
+		// One lower bound on the id, the cursor's or the floor, whichever is higher, so the index walk starts above
+		// what a clear or the group's dismissal hides, and one upper bound, the cursor's, only with a range: a second
+		// bound on either side may be the one the plan walks by.
+		const floor = keptFloorSql(at.viewer, query.group ?? null)
+		const range = `n.id > max(coalesce(CAST(${query.range?.min ?? 'NULL'} AS INTEGER), 0), ${floor})
+			${query.range === undefined ? '' : `AND n.id < coalesce(CAST(${query.range.max} AS INTEGER), 1e19)`}`
+		const group = groups || query.group !== undefined ? notificationGroupSql(query) : undefined
+		return [range, group, unfiltered]
+	}
 	const run = <T extends Row>(db: Db, query: string, params: SqlStorageValue[]): T[] => {
 		const bound = (placeholder: string) => {
 			const index = /^\?([1-9]\d*)$/.exec(placeholder)?.[1]
@@ -581,6 +613,9 @@ export function statusReads(
 				params
 			)
 		},
+		authorRule(rule, author) {
+			return authorRuleSql(rule, author)
+		},
 		authorShown(db, rule, query, ...params) {
 			return (
 				run<{ shown: number }>(
@@ -592,36 +627,34 @@ export function statusReads(
 		},
 		notifications<Extra extends Row>(
 			db: Db,
-			query: {
-				readonly where: string
-				readonly tail?: string
+			query: NotificationQuery & {
 				readonly columns: Columns<Extra, 'status_id'>
-				readonly includeFiltered: boolean
-				readonly range?: { readonly max: string; readonly min: string }
-				readonly group?: string
 				readonly admin: string | null
+				readonly within?: string
 			},
 			...params: SqlStorageValue[]
 		) {
 			const admin =
 				viewer !== null && viewer.accountId !== null && query.admin === viewer.accountId ? at.viewer : 'NULL'
 			const rule = shownSql(at.viewer, 'n.type', 'n.from_account_id', 'n.status_id', now(), admin)
-			// A term of its own, so the plan reads the partial index of unfiltered notifications (notifications_unfiltered).
-			const unfiltered = query.includeFiltered ? undefined : UNFILTERED_SQL
-			// One lower bound on the id, the cursor's or the floor, whichever is higher, so the index walk starts above
-			// what a clear or the group's dismissal hides, and one upper bound, the cursor's, only with a range: a second
-			// bound on either side may be the one the plan walks by. A read of every group checks each row's group by its
-			// key.
-			const floor = keptFloorSql(at.viewer, query.group ?? null)
-			const range = `n.id > max(coalesce(CAST(${query.range?.min ?? 'NULL'} AS INTEGER), 0), ${floor})
-				${query.range === undefined ? '' : `AND n.id < coalesce(CAST(${query.range.max} AS INTEGER), 1e19)`}`
-			const group =
-				query.group === undefined ? `n.id > ${dismissedSql(at.viewer, 'n.group_key')}` : `n.group_key = ${query.group}`
+			const from =
+				query.within === undefined
+					? 'main.notifications n'
+					: `json_each(${query.within}) c CROSS JOIN main.notifications n
+						ON n.id = CAST(json_extract(c.value, '$.id') AS INTEGER)`
+			const scope = query.within === undefined ? notificationScope(query, true) : [notificationGroupSql(query)]
 			return run<Extra & { status_id: VisibleStatusId | null }>(
 				db,
-				`SELECT n.status_id AS status_id${columns(query.columns, 'status_id')} FROM main.notifications n
-				WHERE ${where(`n.account_id = ${at.viewer}`, range, group, query.where, unfiltered, rule)} ${query.tail ?? ''}`,
+				`SELECT n.status_id AS status_id${columns(query.columns, 'status_id')} FROM ${from}
+				WHERE ${where(`n.account_id = ${at.viewer}`, ...scope, query.where, rule)} ${query.tail ?? ''}`,
 				params
+			)
+		},
+		notificationWindow(db, query, ...params) {
+			return db.all<{ id: string }>(
+				`SELECT CAST(n.id AS TEXT) AS id FROM main.notifications n
+				WHERE ${where(`n.account_id = ${at.viewer}`, ...notificationScope(query, false), query.where)} ${query.tail ?? ''}`,
+				...params
 			)
 		},
 	}

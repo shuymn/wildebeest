@@ -21,6 +21,7 @@ import { readOperation } from './operation'
 import { htmlToPlainText, plainTextToHtml } from './plain-text'
 import { accountSearchText, queryTerms } from './search-text'
 import { renderFieldValue } from './status-text'
+import { readWindow, singleWindow, windowJson, windowPage } from './windows'
 import type { Db } from '../db/sql'
 import { normalizeDomain, parseAddress } from '../platform/domain-name'
 import { httpUrl } from '../platform/http-url'
@@ -981,7 +982,9 @@ export function edgeRangeSql(column: string, max: string, min: string): string {
 	return `${column} < coalesce(CAST(${max} AS INTEGER), 1e19) AND ${column} > coalesce(CAST(${min} AS INTEGER), -1e19)`
 }
 
-export type Page<T> = { items: T[]; newest: string | null; oldest: string | null }
+// A page of a list. `cut`: the read stopped at its candidate window (windows.ts) before the page filled, so the next
+// link is offered however few items it holds.
+export type Page<T> = { items: T[]; newest: string | null; oldest: string | null; cut?: boolean }
 
 export type ListFollowsInput = {
 	account: string
@@ -993,8 +996,9 @@ export type ListFollowsInput = {
 // GET /api/v1/accounts/:id/followers and /following as the viewer (null: anonymous) may see them (R13, Mastodon's
 // FollowerAccountsController and FollowingAccountsController): accepted follows, newest first. Nothing is listed when
 // the account is suspended, or, to anyone but itself, when it hides its network or blocks the viewer
-// (followListsShownSql). Others do not see the accounts they block, mute or are blocked by (followListedSql), left out
-// before LIMIT. An unknown account is not found.
+// (followListsShownSql). Others do not see the accounts they block, mute or are blocked by (followListedSql). A page
+// reads a window of readWindow(limit) of the account's follows from the cursor (windows.ts), then applies the rule to
+// those. An unknown account is not found.
 export const listFollows = optionalUserReadOperation<ListFollowsInput, Page<Account> | null>(
 	(db, { account, direction, page, present }, { accountId: viewerId, now }) => {
 		const id = resolveAccountId(db, account)
@@ -1006,29 +1010,38 @@ export const listFollows = optionalUserReadOperation<ListFollowsInput, Page<Acco
 		}
 		const [anchor, other] =
 			direction === 'followers' ? ['target_account_id', 'account_id'] : ['account_id', 'target_account_id']
-		const lower = page.minId ?? page.sinceId ?? null
 		const ascending = page.minId !== undefined
-		const rows = db.all<AccountRow & { cursor: string }>(
-			`SELECT CAST(f.id AS TEXT) AS cursor, ${ACCOUNT_COLUMNS}
-		FROM follows f JOIN accounts a ON a.id = f.${other} LEFT JOIN local_accounts l ON l.account_id = a.id
-		WHERE f.${anchor} = ?1 AND f.state = 'accepted'
-			AND (?2 IS NULL OR f.id < CAST(?2 AS INTEGER)) AND (?3 IS NULL OR f.id > CAST(?3 AS INTEGER))
-			AND ${followListedSql('a.id', '?1', '?5', '?6')}
-		ORDER BY f.id ${ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
+		const size = readWindow(page.limit)
+		const window = singleWindow(
+			db,
+			`SELECT CAST(f.id AS TEXT) AS id FROM follows f
+			WHERE f.${anchor} = ?1 AND f.state = 'accepted' AND ${edgeRangeSql('f.id', '?2', '?3')}
+			ORDER BY f.id ${ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
+			size,
 			id,
 			page.maxId ?? null,
-			lower,
-			page.limit,
-			viewerId,
-			now
+			page.minId ?? page.sinceId ?? null,
+			size
 		)
-		if (ascending) {
-			rows.reverse()
-		}
+		const rows =
+			window.candidates.length === 0
+				? []
+				: db.all<AccountRow & { cursor: string }>(
+						`SELECT CAST(f.id AS TEXT) AS cursor, ${ACCOUNT_COLUMNS}
+						FROM json_each(?4) c CROSS JOIN follows f ON f.id = CAST(json_extract(c.value, '$.id') AS INTEGER)
+							JOIN accounts a ON a.id = f.${other} LEFT JOIN local_accounts l ON l.account_id = a.id
+						WHERE ${followListedSql('a.id', '?1', '?2', '?3')}`,
+						id,
+						viewerId,
+						now,
+						windowJson(window)
+					)
+		const shown = windowPage(window, rows, (row) => row.cursor, page.limit, ascending)
 		return {
-			items: rows.map((row) => presentAccount(row, present)),
-			newest: rows[0]?.cursor ?? null,
-			oldest: rows.at(-1)?.cursor ?? null,
+			items: shown.rows.map((row) => presentAccount(row, present)),
+			newest: shown.newest,
+			oldest: shown.oldest,
+			cut: shown.cut,
 		}
 	}
 )
