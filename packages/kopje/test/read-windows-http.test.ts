@@ -394,3 +394,44 @@ describe('limit=0 answers the whole of a list the viewer keeps', () => {
 		}
 	}, 60_000)
 })
+
+describe('a group the list shows on a later page is found on its own', () => {
+	it('answers the group behind 2,500 newer notifications of it from muted senders', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const status = (await post(h, alice, { status: 'hello' })).id
+		const GROUP = 'favourite-deep'
+		const HIDDEN = 2_500
+		await runInDurableObject(h.store, (_instance, state) => {
+			const sql = state.storage.sql
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?2)
+				INSERT INTO accounts (id, uri, username, domain)
+				SELECT CAST(?1 + i AS TEXT), 'https://far.example/users/d' || i, 'd' || i, 'far.example' FROM n`,
+				String(HIDDEN_BASE),
+				HIDDEN
+			)
+			sql.exec(
+				'INSERT INTO mutes (account_id, target_account_id) SELECT ?, id FROM accounts WHERE id > ? AND domain = ?',
+				alice.id,
+				String(HIDDEN_BASE),
+				'far.example'
+			)
+			sql.exec(
+				`INSERT INTO notifications (account_id, type, from_account_id, status_id, group_key)
+				SELECT ?, 'favourite', id, ?, ? FROM accounts WHERE domain = 'far.example' ORDER BY id`,
+				alice.id,
+				status,
+				GROUP
+			)
+		})
+		// The list reaches the group past its walk's first 2,000, on a later page.
+		const { pages } = await follow(h, alice.token, '/api/v2/notifications', 'next', grouped)
+		expect(pages.flat()).toEqual([String(HIDDEN_BASE)])
+		const one = await h.request(`/api/v2/notifications/${GROUP}`, bearer(alice.token))
+		expect(one.status).toBe(200)
+		expect(
+			await one.json<{ notification_groups: { group_key: string; notifications_count: number }[] }>()
+		).toMatchObject({ notification_groups: [{ group_key: GROUP, notifications_count: 1 }] })
+	}, 60_000)
+})

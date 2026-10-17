@@ -47,6 +47,11 @@ export const GROUP_WALK = 2_000
 // How many of a group's shown notifications its count reads at most: a larger group counts this many.
 export const GROUP_COUNT = 400
 
+// How many of a group's own notifications, shown or hidden, a read of the group by its key walks to find its newest
+// shown one (firstOfGroup), through the group index (notifications_group): a group whose newest GROUP_DISCOVERY are all
+// hidden is not found (404), whatever a page of the list shows.
+export const GROUP_DISCOVERY = 20_000
+
 // The types whose notifications show their status (REST::NotificationGroupSerializer#status_type?).
 const STATUS_TYPES = new Set(['favourite', 'reblog', 'status', 'mention', 'poll', 'update', 'quote', 'quoted_update'])
 
@@ -453,8 +458,8 @@ export const listGroupedNotifications = userReadOperation<ListGroupedInput, Grou
 // The shown notification a group key names (Notification.by_group_key): `ungrouped-<id>` by its id, any other key by
 // its group, the newest of it. Api::V2::NotificationsController#show reads any of the viewer's notifications, filtered
 // or not (no browserable); a filtered notification has no group, so only its `ungrouped-` key names it. A group's
-// newest shown one is found by a walk of its notifications from the newest, in chunks of GROUP_COUNT, as far as
-// GROUP_WALK of them, shown or hidden: the bound a page's walk has, so a group a page lists is found here too.
+// newest shown one is found by a walk of that group's own notifications from the newest, through the group index, in
+// chunks of GROUP_WALK, as far as GROUP_DISCOVERY of them.
 function firstOfGroup(db: Db, viewer: UserContext, groupKey: string): Shown | undefined {
 	if (groupKey.startsWith('ungrouped-')) {
 		const id = groupKey.slice('ungrouped-'.length)
@@ -463,8 +468,8 @@ function firstOfGroup(db: Db, viewer: UserContext, groupKey: string): Shown | un
 			: undefined
 	}
 	let max: string | null = null
-	for (let read = 0; read < GROUP_WALK;) {
-		const chunk = Math.min(GROUP_COUNT, GROUP_WALK - read)
+	for (let read = 0; read < GROUP_DISCOVERY;) {
+		const chunk = Math.min(GROUP_WALK, GROUP_DISCOVERY - read)
 		const { rows, candidates } = shownWindow(
 			db,
 			viewer,
