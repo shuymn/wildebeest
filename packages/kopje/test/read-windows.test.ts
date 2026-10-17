@@ -720,6 +720,36 @@ describe('windows never take a row hidden by its visibility as a candidate (docs
 			)
 			// The viewer lists LOCAL without following it.
 			sql.exec('INSERT INTO list_accounts (list_id, account_id) VALUES (?, ?)', LIST, LOCAL)
+			// FRIEND (followed) boosts its own direct statuses to LOCAL, and the boosts name the viewer as their mention:
+			// the wrappers address the viewer, their originals do not.
+			const ORIGINAL = 880000000000000000n
+			const WRAPPER = 885000000000000000n
+			for (const [base, reblogOf] of [
+				[ORIGINAL, null],
+				[WRAPPER, ORIGINAL],
+			] as const) {
+				sql.exec(
+					`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+					INSERT INTO statuses (id, uri, account_id, visibility, content, published_at, reblog_of_id)
+					SELECT CAST(?2 + i AS TEXT), 'https://friend.example/objects/' || (?2 + i), ?3, 'direct',
+						CASE WHEN ?5 IS NULL THEN '<p>psst</p>' ELSE '' END, ?4,
+						CASE WHEN ?5 IS NULL THEN NULL ELSE CAST(?5 + i AS TEXT) END
+					FROM n`,
+					HIDDEN,
+					String(base),
+					FRIEND,
+					at,
+					reblogOf === null ? null : String(reblogOf)
+				)
+			}
+			sql.exec(
+				`INSERT INTO status_mentions (status_id, account_id, requires_mention, author_id)
+				SELECT id, CASE WHEN reblog_of_id IS NULL THEN ?2 ELSE ?3 END, 1, ?1 FROM statuses
+				WHERE account_id = ?1 AND visibility = 'direct'`,
+				FRIEND,
+				LOCAL,
+				VIEWER
+			)
 		})
 		const hidden = new Set<string>()
 		await runInDurableObject(store, (_instance, state) => {

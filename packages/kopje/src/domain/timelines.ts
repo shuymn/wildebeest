@@ -192,8 +192,10 @@ function homeWindow(db: Db, viewer: UserContext, cursor: Cursor): Window {
 					WHERE s.account_id = ?1 AND ${rangeSql('s.id')} ORDER BY s.id ${order} LIMIT ?4)
 				UNION ALL SELECT w.id, 'm' || a.account_id, ${FOLLOWED_STREAM} FROM (${authors}) a
 					CROSS JOIN statuses w ON w.id IN (SELECT m.status_id FROM status_mentions m
+						CROSS JOIN statuses s ON s.id = m.status_id
 						WHERE m.account_id = ?1 AND m.author_id = a.account_id AND m.requires_mention = 1
-							AND ${rangeSql('m.status_id')} ORDER BY m.status_id ${order} LIMIT ?4)
+							AND ${rangeSql('m.status_id')} AND ${audienceSql('s', '?1')}
+						ORDER BY m.status_id ${order} LIMIT ?4)
 				UNION ALL SELECT w.id, 't' || g.name, ${TAG_STREAM} FROM tag_follows g
 					CROSS JOIN statuses w ON w.id IN (SELECT t.status_id FROM status_tags t
 						WHERE t.name = g.name AND t.public = 1 AND ${rangeSql('t.status_id')} ORDER BY t.status_id ${order} LIMIT ?4)
