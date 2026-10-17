@@ -74,7 +74,6 @@ export const STREAM_NAMES: readonly string[] = [
 	'direct',
 ]
 
-// The `public*` streams, each one public timeline (PublicFeed).
 const PUBLIC_STREAMS: readonly string[] = STREAM_NAMES.filter((name) => name === 'public' || name.startsWith('public:'))
 
 // A subscription's key, as the registry (stream_subscriptions) and a socket's attachment hold it: the stream's name,
@@ -84,7 +83,6 @@ export function listKey(listId: string): string {
 	return `list:${listId}`
 }
 
-// The list id of a key, or null for any other stream.
 export function keyList(key: string): string | null {
 	return key.startsWith('list:') ? key.slice('list:'.length) : null
 }
@@ -95,7 +93,6 @@ export function hashtagKey(stream: HashtagStream, tag: string): string {
 	return `${stream}:${tag}`
 }
 
-// The hashtag stream and normalized tag of a key, or null for any other stream.
 export function keyHashtag(key: string): { stream: HashtagStream; tag: string } | null {
 	if (key.startsWith('hashtag:local:')) {
 		return { stream: 'hashtag:local', tag: key.slice('hashtag:local:'.length) }
@@ -103,7 +100,6 @@ export function keyHashtag(key: string): { stream: HashtagStream; tag: string } 
 	return key.startsWith('hashtag:') ? { stream: 'hashtag', tag: key.slice('hashtag:'.length) } : null
 }
 
-// The public timeline of a `public*` key, or null for any other stream.
 export function keyPublicFeed(key: string): PublicFeed | null {
 	return PUBLIC_STREAMS.includes(key)
 		? { local: key.includes(':local'), remote: key.includes(':remote'), onlyMedia: key.endsWith(':media') }
@@ -127,12 +123,10 @@ export function streamGrant(scopes: readonly string[]): StreamGrant {
 	}
 }
 
-// Whether a token with `grant` may subscribe to `stream`.
 export function maySubscribe(grant: StreamGrant, stream: string): boolean {
 	return stream === 'user:notification' ? grant.notifications : grant.statuses
 }
 
-// Whether a subscription with the key `key` carries notifications for a token with `grant`.
 export function carriesNotifications(grant: StreamGrant, key: string): boolean {
 	switch (key) {
 		case 'user:notification':
@@ -272,8 +266,7 @@ export const streamEvents = readOperation<
 		return accounts
 	}
 	let publicListeners: string[] | null = null
-	// The accounts listening on a `public*` stream or a hashtag of the status, while it is public and not a boost; read
-	// once a scan for each status (the scan is one transaction).
+	// Cache per status within this scan's transaction; see streamEvents for read bounds.
 	const fedByStatus = new Map<string, string[]>()
 	const fed = (statusId: string) => {
 		let found = fedByStatus.get(statusId)
@@ -532,7 +525,6 @@ export const streamUnit = readOperation<
 	}
 })
 
-// The lists among `lists` whose read positioned at the status returns it, each with the status.
 function listedIn(db: Db, viewer: UserContext, lists: readonly string[], statusId: string) {
 	return lists.flatMap((id) => {
 		const status = listStatus(db, viewer, id, statusId)
@@ -729,7 +721,6 @@ function tombstoneOf(db: Db, statusId: string, keys: readonly string[]): Tombsto
 		console.warn({ event: 'kopje.stream.capture-truncated', tags: tags.length })
 	}
 	const tombstone = { local: status.local === 1, media: status.media === 1, tags }
-	// Only while some subscribed feed would carry it.
 	return keys.some((key) => tombstoneCarries(tombstone, key)) ? tombstone : null
 }
 
@@ -921,8 +912,7 @@ export const streamReconcile = sessionOperation<{ accounts: readonly { accountId
 	}
 )
 
-// Whether the fan-out has reached the journal's head (the drain barrier of the streaming tests). Conversation changes
-// are journaled too, so this covers them.
+// Streaming-test drain barrier: position reached the journal head, including conversation changes.
 export const streamCaughtUp = readOperation<void, boolean>((db) => {
 	const position = readPosition(db)
 	const head = journalHead(db)

@@ -34,12 +34,10 @@ export type OAuthAdmin = {
 	accountId: string | null
 }
 
-// The OAuth admin (the Mastodon admin API's, and setup's after bootstrap): the single local account whose email equals
-// admin_email after trimming and lowercasing both. It fails closed: unset, no match, a suspended match or more than
-// one match gives no admin. It is read in the transaction of each operation that asks, so tokens follow the current
-// match when admin_email or an account changes. Both sides are normalized here, not in SQL, whose trim() and lower()
-// cover only spaces and ASCII, so every normalized match is counted. local_accounts is read whole; its size is the
-// operator's (a deployment assumption of about 10 accounts).
+// OAuth admin for the Mastodon API and post-bootstrap setup; see OAuthAdminStatus for fail-closed outcomes.
+// Match admin_email against every local email, trimming and lowercasing both in JS:
+// SQL trim()/lower() cover only spaces/ASCII. Re-read in each operation's transaction so tokens follow changes.
+// Full local_accounts scan assumes an operator-sized deployment (about 10 accounts).
 export function oauthAdmin(db: Db): OAuthAdmin {
 	const email = db.first<{ value: string }>(
 		'SELECT value FROM instance_settings WHERE name = ?',
@@ -72,7 +70,6 @@ export function normalizedEmail(email: string): string {
 	return email.trim().toLowerCase()
 }
 
-// The OAuth admin's account id, or null when there is none (see oauthAdmin).
 export function adminAccountId(db: Db): string | null {
 	return oauthAdmin(db).accountId
 }

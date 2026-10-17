@@ -189,11 +189,10 @@ export const ADMIN_ACCOUNT_CANDIDATES = 2_000
 
 export type AdminAccountStatus = 'active' | 'pending' | 'disabled' | 'silenced' | 'suspended' | 'sensitized'
 
-// AccountFilter's keys after the controller translated them (mastodon/admin.ts reads both versions' names into this):
-// each is null when it was not sent (or sent blank, which AccountFilter skips). The values are as AccountFilter reads
-// them: by_domain, display_name and email stripped, username stripped of spaces and a leading @, by_domain lowercased
-// (Kopje stores domains so). roleIds holds Mastodon's role ids: '3' is the OAuth admin's (Owner), '-99' every other
-// local account's (the everyone role); staff and permissions=staff read as ['3'], the one role that can manage reports.
+// AccountFilter's keys after the controller's translation (mastodon/admin.ts maps both versions' names); null if unsent
+// or blank (AccountFilter skips blanks). Values as AccountFilter reads them: by_domain/display_name/email trimmed,
+// username stripped of spaces and a leading @, by_domain lowercased (Kopje stores domains so). roleIds: '3' = OAuth
+// admin (Owner), '-99' = other locals (everyone); staff and permissions=staff become ['3'], the manage_reports role.
 export type AdminAccountFilter = {
 	origin: 'local' | 'remote' | null
 	status: AdminAccountStatus | null
@@ -436,7 +435,6 @@ export type AdminAccountAction = 'enable' | 'unsilence' | 'unsensitive' | 'appro
 
 type AdminDeclare = ReturnType<typeof adminGuarded>
 
-// The admin's account operations over an admin guard (adminReadOperation and adminWriteOperation outside tests).
 export function adminAccountOperations(read: AdminDeclare, write: AdminDeclare) {
 	// GET /api/v1/admin/accounts and /api/v2/admin/accounts: newest first by id, paged by max_id, since_id and min_id
 	// (Paginable#to_a_paginated_by_id). Each page is read through a plan whose range is in id order or from a set that is
@@ -563,7 +561,6 @@ export function adminAccountOperations(read: AdminDeclare, write: AdminDeclare) 
 	return { listAdminAccounts, getAdminAccount, actOnAdminAccount, actOnAccount, unsuspendAdminAccount }
 }
 
-// The answer to a suspend action on a remote account until remote suspension is served.
 export const REMOTE_SUSPENSION = 'Remote accounts cannot be suspended yet'
 
 export type AccountActionResult =

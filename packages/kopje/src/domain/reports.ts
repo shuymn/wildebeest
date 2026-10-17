@@ -118,7 +118,6 @@ export const createReport = userWriteOperation<ReportInput, ReportResult>((db, i
 	if (bounds.length > 0) {
 		return { status: 'invalid', errors: bounds }
 	}
-	// The reported statuses by id, with the uris a forwarded Flag names.
 	const statuses = accountStatusIds(db, viewer, target, statusIds)
 	if (statuses.length !== statusIds.length) {
 		return { status: 'not_found' }
@@ -172,7 +171,6 @@ export const createReport = userWriteOperation<ReportInput, ReportResult>((db, i
 	return { status: 'ok', report: userReport(row, presentAccountsById(db, [target], input.present).get(target)!) }
 })
 
-// A stored report, as every read of it takes it.
 export type ReportRow = {
 	id: string
 	account_id: string
@@ -431,7 +429,7 @@ const ACTIONS: Record<ReportAction, { log: string; set: (admin: Admin, now: stri
 	reopen: { log: 'reopen', set: () => ({ action_taken_at: null, action_taken_by_account_id: null }) },
 }
 
-// Writes the changed columns of a report, with updated_at, when any changed.
+// See ReportAction for Rails' save semantics.
 function updateReport(db: Db, row: ReportRow, changes: Partial<ReportRow>, now: string): ReportRow {
 	const changed = Object.entries(changes).filter(([column, value]) => row[column as keyof ReportRow] !== value)
 	if (changed.length === 0) {
@@ -519,14 +517,12 @@ export function reportBound(db: Db): number {
 	return db.first<{ id: number | null }>('SELECT max(id) AS id FROM reports')?.id ?? 0
 }
 
-// A local suspension's resolution of the reports on the account (Admin::AccountAction#process_reports!, which resolves
-// every unresolved report on the target): a round of the suspension job (domain/suspension.ts), at most `limit`
-// reports after `cursor` (a report id), through reports_target_state in id order. Only the reports frozen at the
-// suspension are resolved: filed up to `bound`, still unresolved, and last touched before the suspension's time
-// `since` (updated_at, or created_at when never changed), so a report filed after the suspension, or one the admin
-// reopened or changed since, even within its millisecond, is never resolved by it. `by` is the admin who suspended
-// (null: none names it). Returns the last report read (null when none was) and how many were resolved; fewer than
-// `limit` read means the range is done.
+// A suspension-job round (domain/suspension.ts) resolving the target's reports, as Admin::AccountAction
+// #process_reports! resolves every unresolved one. Read at most `limit` reports after report id `cursor`, through
+// reports_target_state in id order. Resolve only reports frozen at suspension: filed up to `bound`, still unresolved,
+// and last touched before suspension time `since` (updated_at, else created_at), so later reports and ones reopened or
+// changed since, even in the same millisecond, stay untouched. `by` names the suspending admin (null: none). Returns
+// the last report read (null if none) and the resolved count; fewer than `limit` read means the range is done.
 export function resolveSuspensionReports(
 	db: Db,
 	target: string,
