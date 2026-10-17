@@ -32,13 +32,22 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - The follow request list leaves out unavailable requesters (suspended, or being deleted) and reads a bounded window
   of requests per page, as the other filtered lists do: it may return a short or empty page while its `next` link
   still leads on.
-- Answers that present many accounts at once stop at 8 MiB of accounts, counted before the rows are read and again
-  once serialized, so remote bios and profile fields can no longer push them toward the Worker's memory limit. A
-  typical account takes about 2 KiB, so 1,000 still fit whole. `GET /api/v1/lists/:id/accounts` and
-  `GET /api/v1/endorsements` with `limit=0` answer up to that and, when they stop short, send a `Link` header whose
-  `next` (`limit=0` with `max_id`) answers the rest; `max_id` is otherwise ignored there, as in Mastodon.
-  `GET /api/v1/accounts/familiar_followers` splits the 8 MiB across the requested accounts, so one with large
-  followers does not crowd out the others, and shows fewer followers past its share.
+- One account has a known size. A remote bio is stored within 64 KiB as a JSON string, cut by sanitizing a shorter
+  part of it, so it stays valid HTML; realistic bios (5,000 characters of Japanese with links render to about
+  28 KB) are never cut. A remote profile URL (`url`, avatar, header) longer than 2,048 characters is ignored, as an
+  invalid one is. Accounts stored before this version are read within the same bounds: a longer bio reads as empty, a
+  longer URL as none and a display name past 2,048 characters is cut, until the account is fetched again. With the
+  fields' 32 KiB, one account serializes to at most about 123 KB, so a page of 80 to about 10 MB.
+- Pages of followers, following, follow requests, `favourited_by` and `reblogged_by` read the profiles of the
+  accounts they show only, not of every candidate their read window considered.
+- Answers that present many accounts at once stop at 8 MiB of serialized accounts. A typical account takes about
+  2 KiB, so 1,000 still fit whole. `GET /api/v1/lists/:id/accounts` and `GET /api/v1/endorsements` with `limit=0`
+  answer up to that and, when they stop short, send a `Link` header whose `next` answers the rest. That link
+  carries `max_id`, which these `limit=0` answers now honour, a deliberate deviation from Mastodon, which ignores
+  `max_id` with `limit=0`. `GET /api/v1/accounts/familiar_followers` shares the 8 MiB among the requested accounts
+  that have followers to show, giving to the others what one leaves unused, so the answer does not depend on the
+  order asked and one with large followers does not crowd out the others; past its share, an account shows fewer
+  followers.
 
 ### Instance changes
 

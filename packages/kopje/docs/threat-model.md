@@ -1303,13 +1303,26 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   JSON in all, chosen in SQL from the stored actor document; the presenter then shows only the leading fields whose
   sanitized names and values fit 32 KiB once serialized as JSON, dropping the rest whole. So one account answers at
   most 32 KiB of fields whatever its document (`REMOTE_ATTACHMENT_SQL` and `remoteFields` in
-  `src/domain/accounts.ts`; `test/remote-fields-bound.test.ts`). _Enforced (main)_ for answers of many accounts (a
-  list's members and endorsements with `limit=0`, familiar followers): at most `ACCOUNT_ANSWER_BYTES` (8 MiB) of
-  accounts, bios and fields included, counted in SQL by a running total before the rows leave SQLite and again once
-  each account is serialized. A `limit=0` answer cut there shows at least its first account and links `next` to the
-  rest; familiar followers split the bytes across the requested accounts (`presentAccountsWithin` in
-  `src/domain/accounts.ts`, `unlimitedResponse` in `src/mastodon/pagination.ts`;
-  `test/account-answer-bytes.test.ts`).
+  `src/domain/accounts.ts`; `test/remote-fields-bound.test.ts`). _Enforced (main)_ for each presented account (the per-account bound): a remote bio is stored at most
+  `REMOTE_BIO_BYTES` (64 KiB) as a JSON string, cut by sanitizing a shorter raw prefix so it stays valid sanitized
+  HTML (`sanitizeRemoteBio` in `src/security/html.ts`, which the cutover's converter and verification use too); a
+  remote profile URL (`url`, icon, image) over `PROFILE_URL_LIMIT` (2,048) is not stored, as an invalid one; the
+  display name is cut at 2,048 code units. `ACCOUNT_COLUMNS` reads stored rows within the same bounds (a longer bio
+  as '', a longer URL as NULL, the display name cut at 2,048 code points), so rows stored earlier or converted are
+  bounded until the account is fetched again. One account is then at most about 113 KB as read and 123 KB
+  serialized (94 KB and 119 KB measured with every part at its bound), so a page of 80 serializes to at most about
+  10 MB; realistic bios (Mastodon's 500 characters, Misskey's 1,500, Pleroma's and GoToSocial's 5,000 of Japanese
+  with links) render to at most about 28 KB. The windowed account reads (followers, following, follow requests,
+  `favourited_by`, `reblogged_by`) select account ids for their window and read the profiles of the page only. The
+  username (255) and actor URI (`ACTOR_URI_LIMIT`) are bounded as stored by the Worker; a converted row keeps
+  legacy's (`test/account-answer-bytes.test.ts`). _Enforced (main)_ for answers of many accounts (a list's members
+  and endorsements with `limit=0`, familiar followers): at most `ACCOUNT_ANSWER_BYTES` (8 MiB) of serialized
+  accounts, read in chunks of 50 that stop once it is reached, so at most one chunk (about 6 MB) is read past it. A
+  `limit=0` answer cut there shows at least its first account and links `next` to the rest with `max_id` (a
+  deliberate deviation: Mastodon ignores `max_id` with `limit=0`); familiar followers share the bytes among the
+  requested accounts with followers to show, in rounds that give what one leaves unused to the others, so the
+  answer does not depend on their order (`presentAccountsWithin` and `familiarFollowers` in
+  `src/domain/accounts.ts`, `unlimitedResponse` in `src/mastodon/pagination.ts`; `test/account-answer-bytes.test.ts`).
 - **RES-4: stored derived data is bounded.** Snapshots, the KV cache, the spool and deliveries each have a size cap, a
   count cap or an expiry with a sweeper. _Implemented on branch `kopje/inbound-statuses`_ for remote statuses: one
   status stores at most 4 attachments (Mastodon's limit) with 10,000 code units of description each, 100 hashtags

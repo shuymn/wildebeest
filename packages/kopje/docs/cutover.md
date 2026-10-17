@@ -103,7 +103,8 @@ kopje-admin verify-conversion <export> <dump file> [--accept-deletions] [--accep
   recorded in the manifest.
 - `--catalog` takes the target's `kopje-admin catalog` output. Without it the converter uses the catalog of its own
   schema; `import` refuses a dump whose catalog differs from the target's either way.
-- `--accept-truncation` accepts HTML longer than the sanitizer's limit (50,000 UTF-16 units), whose end is then cut.
+- `--accept-truncation` accepts HTML longer than the sanitizer's limit (50,000 UTF-16 units), and a bio longer than
+  64 KiB once sanitized (as a JSON string), whose end is then cut as the Worker cuts it.
   Without it such a value stops the conversion, and `verify-conversion` fails, both counted.
 - `--domain` refuses an export whose local accounts are on another domain. The domain is otherwise taken as it is.
 - The KEK candidates come from the environment: the empty KEK always, and the values of `userKEK` and `USER_KEY` (the
