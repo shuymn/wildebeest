@@ -29,7 +29,7 @@ import {
 } from '../domain/admin-domain-blocks'
 import { MEASURE_DAYS, MEASURE_FOLLOWS } from '../domain/admin-measures'
 import { OWNER_ROLE } from '../domain/auth'
-import type { InstanceDomainBlock } from '../domain/instance-domain-blocks'
+import { type InstanceDomainBlock, MAX_DOMAIN_INPUT } from '../domain/instance-domain-blocks'
 import { ADMIN_REPORTS_LIMIT, MAX_ADMIN_REPORTS_LIMIT, type ReportAction } from '../domain/reports'
 import { blockedDomain } from '../platform/domain-name'
 import { sha256Hex } from '../security/tokens'
@@ -42,9 +42,9 @@ import { sha256Hex } from '../security/tokens'
 // Reports, accounts, domain blocks and allows, and the metrics (below) are served as admin operations
 // (adminReadOperation, domain/auth.ts), granting only ADMIN_PERMISSIONS to the OAuth admin. The other handlers are
 // routes Kopje does not serve: they answer as Mastodon does a role without the route's permission, the same to every
-// caller, so they check only the token (no admin check or further Store read). A route that finds its record before authorizing (a before_action with find)
-// answers 404 for a kind Kopje stores none of; one that authorizes first, or whose records Kopje stores (accounts,
-// reports, domain blocks, tags), answers 403.
+// caller, so they check only the token (no admin check or further Store read). A route that finds its record before
+// authorizing (a before_action with find) answers 404 for a kind Kopje stores none of; one that authorizes first, or
+// whose records Kopje stores (accounts, reports, domain blocks, tags), answers 403.
 
 const NOT_ALLOWED = 'This action is not allowed'
 
@@ -550,22 +550,46 @@ export const emptyMetric: ApiHandler = async (c, deps) => {
 	return c.json([])
 }
 
-const DATE = /^(\d{4})-(\d{2})-(\d{2})/
+// An ISO 8601 date, or date and time with an optional fraction and zone (none is UTC, as Ruby's DateTime.parse reads
+// it), as a whole value.
+const ISO_TIME =
+	/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,9}))?)?(?:(Z)|([+-])(\d{2}):?(\d{2}))?)?$/i
 
-// A start_at or end_at as BaseMeasure reads it (`to_datetime`, then `to_date`): blank is none; otherwise the date the
-// value names, its time ignored. Kopje reads ISO 8601 dates and times only, where Ruby's DateTime.parse reads more.
-function measureDate(value: string | undefined): { date: string | null } | 'invalid' {
+// A start_at or end_at as BaseMeasure reads it (`to_datetime`, base_measure.rb:14-16): blank is none; otherwise the
+// instant the value names (epoch milliseconds), which Mastodon passes to generate_series as a UTC timestamp. Kopje
+// reads ISO 8601 values only, where Ruby's DateTime.parse reads more.
+function measureTime(value: string | undefined): { at: number | null } | 'invalid' {
 	if (value === undefined || value.trim() === '') {
-		return { date: null }
+		return { at: null }
 	}
-	const match = DATE.exec(value.trim())
+	const match = ISO_TIME.exec(value.trim())
 	if (match === null) {
 		return 'invalid'
 	}
-	const [, year, month, day] = match
-	const at = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)))
-	return at.toISOString().slice(0, 10) === match[0] ? { date: match[0] } : 'invalid'
+	const [, year, month, day, hour = '0', minute = '0', second = '0', fraction = '', , sign, zh = '0', zm = '0'] = match
+	const fields = [Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute), Number(second)] as const
+	const local = Date.UTC(...fields, Number(fraction.padEnd(3, '0').slice(0, 3)))
+	const check = new Date(local)
+	if (
+		check.getUTCFullYear() !== fields[0] ||
+		check.getUTCMonth() !== fields[1] ||
+		check.getUTCDate() !== fields[2] ||
+		check.getUTCHours() !== fields[3] ||
+		check.getUTCMinutes() !== fields[4] ||
+		check.getUTCSeconds() !== fields[5] ||
+		Number(zh) > 23 ||
+		Number(zm) > 59
+	) {
+		return 'invalid'
+	}
+	const offset = (sign === '-' ? -1 : 1) * (Number(zh) * 60 + Number(zm)) * 60_000
+	return { at: local - offset }
 }
+
+// Measure keys a request may name, repeats included: each served one repeats the whole series (at most
+// MEASURE_DAYS + 1 points), so this bounds the answer at about MAX_MEASURE_KEYS times one measure (16 x 367 points,
+// under 400 KB). Mastodon has 14 measure keys.
+export const MAX_MEASURE_KEYS = 16
 
 // POST /api/v1/admin/measures (measures_controller.rb, Admin::Metrics::Measure.retrieve, measure.rb:21-26): one
 // measure per key in `keys`, in order, of the keys served (instance_follows); every other key is left out, as retrieve
@@ -576,8 +600,8 @@ function measureDate(value: string | undefined): { date: string | null } | 'inva
 //
 // The answer is REST::Admin::MeasureSerializer's: key, unit, total and data; no human_value (the measure has no
 // value_to_human_value) and no previous_total (total_in_time_range? is false), measure_serializer.rb:3-8. A data
-// point's date is written as Mastodon's documentation shows it (methods/admin/measures.md, instance_follows:
-// "2022-09-14T00:00:00.000+00:00").
+// point's date is the axis' SQL date, which Rails serializes as YYYY-MM-DD (query_helper.rb:6-8). More than
+// MAX_MEASURE_KEYS keys answer 422 to the OAuth admin before any measure is read.
 export const measures: ApiHandler = async (c, deps) => {
 	const p = await requestParams(c, deps)
 	if (p instanceof Response) {
@@ -593,18 +617,23 @@ export const measures: ApiHandler = async (c, deps) => {
 		await checkOptionalToken(c, deps)
 		return mastodonError(400, 'param is missing or the value is empty or invalid: instance_follows')
 	}
-	const start = measureDate(p.get('start_at'))
-	const end = measureDate(p.get('end_at'))
+	const start = measureTime(p.get('start_at'))
+	const end = measureTime(p.get('end_at'))
 	if (start === 'invalid' || end === 'invalid') {
 		await checkOptionalToken(c, deps)
 		return mastodonError(422, 'Invalid date supplied')
 	}
+	if (keys.length > MAX_MEASURE_KEYS) {
+		authorized(await storeCall(c, deps, (s, b) => s.adminDashboardGranted(b, { credential })))
+		return mastodonError(422, `too many measure keys (at most ${MAX_MEASURE_KEYS})`)
+	}
+	// A domain longer than any domain an account has (MAX_DOMAIN_INPUT) is not normalized: no account matches it.
 	const domain = (p.get('instance_follows[domain]') ?? '').trim()
 	const input = {
 		credential,
-		domain: domain === '' ? null : blockedDomain(domain),
+		domain: domain === '' || domain.length > MAX_DOMAIN_INPUT ? null : blockedDomain(domain),
 		includeSubdomains: parseBoolean(p.get('instance_follows[include_subdomains]')) ?? false,
-		range: start.date === null || end.date === null ? null : { start: start.date, end: end.date },
+		range: start.at === null || end.at === null ? null : { start: start.at, end: end.at },
 	}
 	const result = authorized(await storeCall(c, deps, (s, b) => s.instanceFollowsMeasure(b, input)))
 	switch (result.status) {
@@ -617,10 +646,7 @@ export const measures: ApiHandler = async (c, deps) => {
 		key: 'instance_follows',
 		unit: null,
 		total: String(result.measure.total),
-		data: result.measure.data.map((point) => ({
-			date: `${point.date}T00:00:00.000+00:00`,
-			value: String(point.value),
-		})),
+		data: result.measure.data.map((point) => ({ date: point.date, value: String(point.value) })),
 	}
 	return c.json(keys.filter((key) => key === 'instance_follows').map(() => measure))
 }

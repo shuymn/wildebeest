@@ -6,6 +6,7 @@ import { rowsRead } from './read-helpers'
 import { round, world, type World } from './remote-suspension-helpers'
 import { instanceFollowsMeasure, MEASURE_DAYS, MEASURE_FOLLOWS } from '../src/domain/admin-measures'
 import { SEVER_ROUND } from '../src/domain/remote-suspension'
+import { MAX_MEASURE_KEYS } from '../src/mastodon/admin'
 import { sha256Hex } from '../src/security/tokens'
 
 // The admin metrics (Api::V1::Admin::{Measures,Dimensions,Retention}Controller of Mastodon 4.5.11): the measure
@@ -61,6 +62,27 @@ async function followed(w: World, follower: string, n: number, domain: string, s
 		domain,
 		base,
 		n
+	)
+}
+
+// `n` new remote accounts on `domain`, each following `local` (accepted).
+async function followersOn(w: World, local: string, n: number, domain: string): Promise<void> {
+	const base = next
+	next += 1_000_000
+	await sql(
+		w.h.store,
+		`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+		INSERT INTO accounts (id, uri, username, domain)
+		SELECT printf('%018d', ?2 + i), 'https://' || ?3 || '/users/u' || (?2 + i), 'u' || i, ?3 FROM n`,
+		n,
+		base,
+		domain
+	)
+	await sql(
+		w.h.store,
+		`INSERT INTO follows (account_id, target_account_id, state) SELECT id, ?1, 'accepted' FROM accounts WHERE domain = ?2`,
+		local,
+		domain
 	)
 }
 
@@ -145,8 +167,9 @@ describe('the measure instance_follows', () => {
 		for (const [i, id] of ids.entries()) {
 			await sql(w.h.store, 'UPDATE follows SET created_at = ? WHERE id = ?', `${dates[i]}T23:59:59.999Z`, id)
 		}
-		const range = { start_at: '2026-10-01T12:00:00Z', end_at: '2026-10-03' }
-		const point = (date: string, value: string) => ({ date: `${date}T00:00:00.000+00:00`, value })
+		const range = { start_at: '2026-10-01', end_at: '2026-10-03' }
+		// A point's date as Rails serializes the axis' SQL date (query_helper.rb:6-8).
+		const point = (date: string, value: string) => ({ date, value })
 		expect((await measure(w, follows(D, {}, range))).body).toEqual([
 			{
 				key: 'instance_follows',
@@ -159,6 +182,22 @@ describe('the measure instance_follows', () => {
 			point('2026-10-01', '3'),
 			point('2026-10-02', '1'),
 			point('2026-10-03', '2'),
+		])
+		// The axis steps a day at a time from the instant start_at names, then casts each step to its UTC date
+		// (generate_series(start_at::timestamp, end_at::timestamp, '1 day')::date): from noon on 1 October to midnight
+		// on 3 October gives two steps, 1 and 2 October; an offset is read into UTC first.
+		const data = async (top: Record<string, string>) =>
+			((await measure(w, follows(D, {}, top))).body as Measure[])[0]!.data
+		expect(await data({ start_at: '2026-10-01T12:00:00Z', end_at: '2026-10-03' })).toEqual([
+			point('2026-10-01', '2'),
+			point('2026-10-02', '0'),
+		])
+		expect(await data({ start_at: '2026-10-01T12:00:00Z', end_at: '2026-10-03T12:00:00Z' })).toHaveLength(3)
+		expect(await data({ start_at: '2026-10-01T23:00:00-02:00', end_at: '2026-10-03T00:30+00:00' })).toEqual([
+			point('2026-10-02', '0'),
+		])
+		expect(await data({ start_at: '2026-10-01T12:00:00', end_at: '2026-10-02T11:59:59.999' })).toEqual([
+			point('2026-10-01', '2'),
 		])
 		// No series without both dates, or when end_at is before start_at (generate_series gives none).
 		for (const top of [
@@ -182,6 +221,9 @@ describe('the measure instance_follows', () => {
 			status: 422,
 			body: { error: `date range too long (at most ${MEASURE_DAYS} days)` },
 		})
+		// The cap counts the generated steps: a range that starts in the afternoon steps once less.
+		const late = await measure(w, follows(D, {}, { start_at: '2025-01-01T12:00:00Z', end_at: '2026-01-02' }))
+		expect((late.body as Measure[])[0]!.data).toHaveLength(MEASURE_DAYS)
 	})
 
 	it(`answer 422 above ${MEASURE_FOLLOWS} walked follows, never an undercount, with reads bounded by the walk`, async () => {
@@ -193,8 +235,10 @@ describe('the measure instance_follows', () => {
 		const credential = { tokenHash: await sha256Hex(w.admin), scope: 'admin:read' as const, now: NOW }
 		const input = { credential, domain: D, includeSubdomains: false, range: null }
 		const atCap = await rowsRead(w.h, instanceFollowsMeasure, input)
-		// Pending requests and accounts nobody follows are not walked.
+		// Pending requests, accounts nobody follows, and remote accounts' accepted follows of local accounts are not
+		// walked: the walk starts at the local accounts (CROSS JOIN), so none of their rows is read.
 		await followed(w, w.carol.id, 5_000, 'pending.example', 'pending')
+		await followersOn(w, w.carol.id, 30_000, 'fans.example')
 		expect(await rowsRead(w.h, instanceFollowsMeasure, input)).toBe(atCap)
 		// One follow more, wherever it points, and the total is not known.
 		await followed(w, w.dan.id, 1, 'elsewhere.example')
@@ -224,7 +268,13 @@ describe('the measure instance_follows', () => {
 			expect(await measure(w, { keys: ['instance_follows'], instance_follows: {} }, token)).toMatchObject({
 				status: 400,
 			})
-			for (const date of ['2026-02-30', 'yesterday']) {
+			for (const date of [
+				'2026-02-30',
+				'yesterday',
+				'2026-10-01garbage',
+				'2026-10-01T25:00',
+				'2026-10-01T10:00+24:00',
+			]) {
 				expect(await measure(w, follows(D, {}, { start_at: date, end_at: '2026-10-01' }), token)).toEqual({
 					status: 422,
 					body: { error: 'Invalid date supplied' },
@@ -240,6 +290,20 @@ describe('the measure instance_follows', () => {
 		// mention, in order.
 		expect(await measure(w, {})).toEqual({ status: 200, body: [] })
 		expect(await measure(w, { keys: ['active_users', 'new_users'] })).toEqual({ status: 200, body: [] })
+		// Each repeat carries the whole series, so the keys are bounded: MAX_MEASURE_KEYS keys of a full year stay
+		// within a known size, one more answers 422 (and 403 to anyone else).
+		const year = { start_at: '2025-01-01', end_at: '2026-01-01' }
+		const many = (n: number) => ({ ...follows(D, {}, year), keys: Array<string>(n).fill('instance_follows') })
+		const full = await w.h.request(MEASURES, bearer(w.admin, json(many(MAX_MEASURE_KEYS))))
+		expect(full.status).toBe(200)
+		const bytes = (await full.arrayBuffer()).byteLength
+		expect(bytes).toBeGreaterThan(MAX_MEASURE_KEYS * MEASURE_DAYS * 30)
+		expect(bytes).toBeLessThan(MAX_MEASURE_KEYS * (MEASURE_DAYS + 1) * 40)
+		expect(await measure(w, many(MAX_MEASURE_KEYS + 1))).toEqual({
+			status: 422,
+			body: { error: `too many measure keys (at most ${MAX_MEASURE_KEYS})` },
+		})
+		expect((await measure(w, many(MAX_MEASURE_KEYS + 1), alice)).status).toBe(403)
 		const answer = await measure(w, { ...follows(D), keys: ['active_users', 'instance_follows', 'instance_follows'] })
 		expect(answer.body).toEqual([
 			{ key: 'instance_follows', unit: null, total: '2', data: [] },

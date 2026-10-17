@@ -61,12 +61,37 @@ function labels(domain: string): number {
 	return domain.split('.').length
 }
 
-// The block that rules `domain`: its own, or its nearest parent's (Mastodon's DomainBlock.rule_for).
+// Mastodon's DomainValidator (app/validators/domain_validator.rb:4-6, 24-31): a normalized domain is shorter than 256
+// characters, each label 1 to 63 long.
+export const MAX_DOMAIN_LENGTH = 255
+export const MAX_LABEL_LENGTH = 63
+// A raw domain (trimmed) longer than this is refused before it is normalized: no normalization of a longer one gives a
+// domain within MAX_DOMAIN_LENGTH.
+export const MAX_DOMAIN_INPUT = 1_024
+
+export type BlockDomain = { ok: true; domain: string } | { ok: false; error: 'invalid-domain' | 'too-deep' }
+
+// The domain a block of `raw` names: normalized by blockedDomain once the raw input is within MAX_DOMAIN_INPUT, then
+// held to Mastodon's limits (invalid-domain) and to MAX_BLOCK_LABELS labels (too-deep), the bound hostCoveredSql and
+// ruleFor rely on.
+export function blockDomainOf(raw: string): BlockDomain {
+	const trimmed = raw.trim()
+	const domain = trimmed.length > MAX_DOMAIN_INPUT ? null : blockedDomain(trimmed)
+	if (
+		domain === null ||
+		domain.length > MAX_DOMAIN_LENGTH ||
+		domain.split('.').some((label) => label.length > MAX_LABEL_LENGTH)
+	) {
+		return { ok: false, error: 'invalid-domain' }
+	}
+	return labels(domain) > MAX_BLOCK_LABELS ? { ok: false, error: 'too-deep' } : { ok: true, domain }
+}
+
+// The block that rules `domain`: its own, or its nearest parent's (Mastodon's DomainBlock.rule_for). Only its
+// suffixes of 2 to MAX_BLOCK_LABELS labels are built: no stored block has more.
 function ruleFor(db: Db, domain: string): BlockRow | undefined {
-	const suffixes = domain
-		.split('.')
-		.map((_, i, parts) => parts.slice(i).join('.'))
-		.filter((suffix) => labels(suffix) >= 2 && labels(suffix) <= MAX_BLOCK_LABELS)
+	const tail = domain.split('.').slice(-MAX_BLOCK_LABELS)
+	const suffixes = tail.map((_, i) => tail.slice(i).join('.')).filter((suffix) => labels(suffix) >= 2)
 	return db.first<BlockRow>(
 		`SELECT ${COLUMNS} FROM instance_domain_blocks WHERE domain IN (SELECT value FROM json_each(?))
 		ORDER BY length(domain) DESC LIMIT 1`,
@@ -122,17 +147,14 @@ export type CreateBlockResult =
 	| { ok: false; error: 'invalid-domain' | 'too-deep' }
 	| { ok: false; error: 'exists'; existing: InstanceDomainBlock }
 
-// Creates a block of `domain` (raw, normalized by blockedDomain). Refused: a domain that is not one; a domain of more
-// than MAX_BLOCK_LABELS labels (the label bound hostCoveredSql relies on); and a conflicting block (conflictingBlock),
-// which `existing` names.
+// Creates a block of `domain` (raw, as blockDomainOf reads it). Refused: what blockDomainOf refuses, and a conflicting
+// block (conflictingBlock), which `existing` names.
 export function createBlock(db: Db, input: BlockFields & { domain: string; now: number }): CreateBlockResult {
-	const domain = blockedDomain(input.domain)
-	if (domain === null) {
-		return { ok: false, error: 'invalid-domain' }
+	const named = blockDomainOf(input.domain)
+	if (!named.ok) {
+		return named
 	}
-	if (labels(domain) > MAX_BLOCK_LABELS) {
-		return { ok: false, error: 'too-deep' }
-	}
+	const { domain } = named
 	const existing = conflictingBlock(db, domain, input)
 	if (existing !== undefined) {
 		return { ok: false, error: 'exists', existing }

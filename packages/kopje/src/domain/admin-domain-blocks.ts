@@ -2,6 +2,7 @@ import type { PageQuery } from './accounts'
 import { MAX_BLOCK_LABELS } from './audience'
 import { ADMIN_PERMISSION, adminReadOperation, adminWriteOperation } from './auth'
 import {
+	blockDomainOf,
 	blockById,
 	blocksPage,
 	conflictingBlock,
@@ -13,11 +14,11 @@ import {
 } from './instance-domain-blocks'
 import { logAction } from './moderation-log'
 import type { Db } from '../db/sql'
-import { blockedDomain } from '../platform/domain-name'
 
 // The Mastodon admin API's domain blocks (R37, VIS-29, VIS-30; Api::V1::Admin::DomainBlocksController of Mastodon
 // 4.5.11) over the instance's blocks (instance-domain-blocks.ts), to the OAuth admin with manage_federation. Every
-// write is logged in its transaction (moderation-log.ts), as Mastodon's log_action (domain_blocks_controller.rb:37, 45, 52).
+// write is logged in its transaction (moderation-log.ts), as Mastodon's log_action
+// (domain_blocks_controller.rb:37, 45, 52).
 //
 // Differences from Mastodon, each answered 422 as a validation failure:
 // - severity silence is not built (R38 has suspend and noop), so it is refused as a value outside the list. It is
@@ -106,12 +107,13 @@ export const createAdminDomainBlock = adminWriteOperation<BlockRequest & { domai
 	ADMIN_PERMISSION.manageFederation,
 	(db, request, admin) => {
 		const raw = request.domain?.trim() ?? ''
-		const domain = raw === '' ? null : blockedDomain(raw)
+		const named = raw === '' ? null : blockDomainOf(raw)
 		// Mastodon's default severity is silence (domain_block.rb:11).
 		const severity = request.severity ?? 'silence'
-		const fields = { ...request, severity }
-		if (domain !== null) {
-			const existing = conflictingBlock(db, domain, {
+		// A conflict is answered before the validations (domain_blocks_controller.rb:31-33), for a domain within the
+		// bounds.
+		if (named?.ok === true) {
+			const existing = conflictingBlock(db, named.domain, {
 				severity,
 				rejectMedia: request.rejectMedia ?? false,
 				rejectReports: request.rejectReports ?? false,
@@ -120,22 +122,23 @@ export const createAdminDomainBlock = adminWriteOperation<BlockRequest & { domai
 				return { status: 'exists', existing }
 			}
 		}
-		const errors = fieldErrors(fields)
+		const errors = fieldErrors({ ...request, severity })
 		// The domain's errors follow the severity's (domain_block.rb:24-26); Kopje's own follow Mastodon's.
 		const domainError =
-			raw === ''
+			named === null
 				? "Domain can't be blank"
-				: domain === null
-					? 'Domain is invalid'
-					: domain.split('.').length > MAX_BLOCK_LABELS
-						? `Domain has more than ${MAX_BLOCK_LABELS} labels`
-						: null
+				: named.ok
+					? null
+					: named.error === 'invalid-domain'
+						? 'Domain is invalid'
+						: `Domain has more than ${MAX_BLOCK_LABELS} labels`
 		if (domainError !== null) {
 			errors.splice(errors[0] === 'Severity is not included in the list' ? 1 : 0, 0, domainError)
 		}
-		if (errors.length > 0 || domain === null) {
+		if (errors.length > 0 || named?.ok !== true) {
 			return invalid(errors)
 		}
+		const { domain } = named
 		const created = createBlock(db, {
 			domain,
 			severity: severity as Severity,
