@@ -1261,10 +1261,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
 - **POLL-3: polls cost bounded work (RES).** Presenting reads each poll's row and the viewer's own votes, never the
   votes; the cron ends at most 25 polls and records at most 25 Updates of counts a run, through partial indexes; the
   Update of a local poll's counts is debounced (3 minutes after the first vote since the last one sent, one Update for
-  all, superseding any still waiting), never one per vote; a remote poll keeps at most 100 choices of at most 1,000
-  code units (Mastodon's and Misskey's own choices fit whole; a vote in a choice cut to that is refused, as its name
-  would match nothing); a status's or account's votes go in bounded batches of a purge, and the votes an edit drops
-  (a new generation of the poll) in bounded rounds of the cron. _Enforced (main):_
+  all, superseding any still waiting), never one per vote; a remote poll keeps at most 20 choices (Pleroma's and
+  Akkoma's default) of at most 1,000 code units (Mastodon's and Misskey's own choices fit whole; a vote in a choice cut
+  to that is refused, as its name would match nothing); a status's or account's votes go in bounded batches of a purge,
+  and the votes an edit drops (a new generation of the poll) in bounded rounds of the cron. _Enforced (main):_
   `test/policy-bounds.test.ts` ("polls are presented from their counts, not their votes"), `test/polls.test.ts`
   ("ends at most 25 polls a run", "falls due a while after the first vote", "RES-6: votes go in bounded batches").
 - **POLL-4: polls federate as Mastodon's (AP).** A local poll's status is a Question (`oneOf`/`anyOf`, `endTime`,
@@ -1350,12 +1350,17 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   through `src/domain/profile-bounds.ts`). Content and source text over 128 KiB as a JSON string read as '' (the
   status keeps its url); a content warning over 16 KiB is cut to the 2,730 code points that fit however they escape;
   a status url over 4,096 bytes reads as NULL and a uri as ''; at most 4 attachments per status, their URLs over
-  2,048 as NULL, descriptions cut at 10,000 code points and meta over 1 KiB as NULL; at most 200 mentions and 100
-  hashtags per status, cut in SQL through their indexes, a name over 256 code points or 1 KiB left out; at most 100 poll
-  choices of 1,000 code points, and an edit's choices over 640 KiB as none; each edit-history snapshot is read the same
-  way, its media at most 4 and '[]' over 288 KiB. An actor id over `ACTOR_URI_LIMIT` reads as '', from which a
-  presenter derives this instance's `/@acct` page; it is an identity, so it is never cut, and the cutover refuses one
-  (as a status uri over 4,096). `test-node/bounded-columns.test.ts` reads every SQL string in `src/domain` and fails
+  2,048 as NULL, descriptions cut at 10,000 code points and meta over 1 KiB as NULL; at most 50 mentions (of the 200
+  stored) and 70 hashtags (of the 100 stored) per status, the first by account id and by name, cut in SQL through their
+  indexes, a name over 256 code points or 1 KiB left out; at most 20 poll choices of 1,000 code points, the first by
+  index, with their tallies and the viewer's own votes among them (a vote in a later choice of a poll stored with more
+  is refused), and an edit's choices over 640 KiB as none; each edit-history snapshot is read the same way, its media
+  at most 4 and '[]' over 288 KiB; a conversation presents its first 12 participants by account id. A remote username
+  is Mastodon's remote format (ASCII), so its JSON is its length; a stored one holding any other character (only a row
+  converted before the cutover refused such usernames) is cut at 42 code points, which escape to at most 255 bytes. An
+  actor id over `ACTOR_URI_LIMIT` reads as '', from which a presenter derives this instance's `/@acct` page; it is an
+  identity, so it is never cut, and the cutover refuses one (as a status uri over 4,096, and a remote username outside
+  Mastodon's format). `test-node/bounded-columns.test.ts` reads every SQL string in `src/domain` and fails
   when a bounded column is read outside its helper or a helper is given another column; lookups and comparisons may
   name the column, and an exact list names the reads that present nothing (ActivityPub documents of local statuses
   and actors, a local account's own row, comparisons with incoming values). The maxima of each presented shape are in
@@ -1658,47 +1663,48 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
 
 `test/status-bounds.test.ts` ("the table of maxima") builds every part at its bound and measures what one read takes
 out of SQLite and what it presents: content of 128 KiB and a warning of 16 KiB of characters that escape to six bytes,
-4 attachments with 10,000-character descriptions, 2,048-character URLs and 1 KiB meta, 200 mentions of accounts with
-255-character usernames of escaping characters, 2,000-character domains and 2,048-character URLs, 100 hashtags of 256
-four-byte characters, a poll of 100 choices of 1,000 escaping characters, and each account at its bounds. SQLite bytes
-are the UTF-8 bytes of every value read (8 per number); nodes are the objects, arrays and strings presented. The viewer
-is signed in, with no filters. Measured rows are exact; derived rows add measured parts and estimate the containers.
+4 attachments with 10,000-character descriptions, 2,048-character URLs and 1 KiB meta, 200 stored mentions of accounts
+with 255-character usernames, 2,000-character domains and 2,048-character URLs, 100 stored hashtags of 256 four-byte
+characters, a poll of 20 choices of 1,000 escaping characters, and each account at its bounds. SQLite bytes are the
+UTF-8 bytes of every value read (8 per number); nodes are the objects, arrays and strings presented. The viewer is
+signed in, with no filters. Measured rows are exact; derived rows add measured parts and estimate the containers.
 
-| Shape                                                                                       | SQLite bytes | JSON bytes   | Rows read | Nodes  | How      |
-| ------------------------------------------------------------------------------------------- | ------------ | ------------ | --------- | ------ | -------- |
-| Account occurrence (each status, group sample, participant)                                 | 97,844       | 124,080      | 1         | 36     | measured |
-| Status                                                                                      | 2,179,603    | 2,954,797    | 311       | 1,607  | measured |
-| Quote (the status and its quoted status)                                                    | 4,359,149    | 5,909,627    | 620       | 3,216  | measured |
-| Boost of a quote                                                                            | 4,465,596    | 6,042,485    | 623       | 3,269  | measured |
-| Notification group: 8 sample accounts and its status, a quote                               | about 5.15 M | about 6.90 M | about 630 | ~3,520 | derived  |
-| Conversation: 20 participants and its last status, a quote                                  | about 6.32 M | about 8.39 M | about 645 | ~3,940 | derived  |
-| Report: 4 admin accounts and a first embedded status, a quote (2 MiB of statuses otherwise) | about 4.75 M | about 6.41 M | about 630 | ~3,370 | derived  |
+| Shape                                                                  | SQLite bytes | JSON bytes   | Rows read | Nodes  | Share of 4 MiB | How      |
+| ---------------------------------------------------------------------- | ------------ | ------------ | --------- | ------ | -------------- | -------- |
+| Account occurrence (each status, group sample, participant)            | 97,844       | 121,710      | 1         | 36     | 3%             | measured |
+| Status                                                                 | 708,693      | 1,177,677    | 131       | 607    | 28%            | measured |
+| Quote (the status and its quoted status)                               | 1,417,329    | 2,355,387    | 260       | 1,216  | 56%            | measured |
+| Boost of a quote                                                       | 1,523,776    | 2,485,875    | 263       | 1,269  | 59%            | measured |
+| Conversation: 12 participants presented of 20, its last status a quote | 2,592,065    | 3,815,876    | 273       | 1,639  | 91%            | measured |
+| Notification group: 8 sample accounts and its status, at most a quote  | about 2.2 M  | about 3.33 M | about 270 | ~1,510 | 79%            | derived  |
+| Report: 4 admin accounts and a first embedded status, at most a quote  | about 1.81 M | about 2.85 M | about 265 | ~1,360 | 68%            | derived  |
 
-In a status at its bounds the mentions take about 1.4 MB of JSON (escaped usernames twice, the domain in `acct` and the
-URL), the poll 0.6 MB, the hashtags 0.4 MB, the media 0.26 MB, the content 0.13 MB and the account 0.12 MB. Filter
-results are the viewer's own and come on top: each status of a response, a boost's original and a quoted status carry
-at most 50 of them, each with its title and up to 20 matched keywords of 512 code units, about 0.5 MB per status in
-ASCII and 3.2 MB in characters that escape to six bytes.
+In a status at its bounds the mentions take about 0.24 MB of JSON, the hashtags 0.29 MB, the media 0.26 MB, the poll
+0.12 MB, the content 0.13 MB and the account 0.12 MB. A group's status is the owner's own (favourites and boosts group),
+so its size is at most a quote's. Filter results are the viewer's own and come on top: each status of a response, a
+boost's original and a quoted status carry at most 50 of them, each with its title and up to 20 matched keywords of
+512 code units, about 0.5 MB per status in ASCII and 3.2 MB in characters that escape to six bytes.
 
-Against an answer of 8 MiB (8,388,608 bytes) the conversation shape exceeds it by about 3 KB, and the notification
-group, the boost of a quote and the report take 72 to 83% of it, before filter results. Admitting whole items against
-such an answer needs every shape well below it, which these maxima do not yet meet.
+Every shape stays within half of an answer of 8 MiB (8,388,608 bytes) before filter results, and one status within
+1.2 MB.
 
-Heap at 8 MiB per answer. Assumptions: one request at a time per isolate; the answer's JSON is at most the larger of 8
-MiB and its largest item (8.39 MB, a conversation); presented objects take at most three times their JSON bytes (a
-string takes no more than its JSON bytes, since JSON only adds escapes, and the rest is per-object overhead; an
-assumption, as workerd exposes no heap to measure); rows of one chunk take their SQLite bytes and the chunk is one item.
+Heap at 8 MiB per answer. Assumptions: one request at a time per isolate; the answer's JSON is at most 8 MiB, since
+every item is below it; presented objects take at most three times their JSON bytes (a string takes no more than its
+JSON bytes, since JSON only adds escapes, and the rest is per-object overhead; an assumption, as workerd exposes no
+heap to measure); rows of one chunk take their SQLite bytes and the chunk is one item.
 
 | Phase                                                | Store isolate | Worker isolate |
 | ---------------------------------------------------- | ------------- | -------------- |
-| Rows of one chunk (a conversation, the largest item) | 6.3 MB        |                |
+| Rows of one chunk (a conversation, the largest item) | 2.6 MB        |                |
 | Presented objects of the admitted answer             | 25.2 MB       |                |
-| Measurement string of one item                       | 8.4 MB        |                |
+| Measurement string of one item                       | 3.8 MB        |                |
 | RPC copy (serialized; deserialized in the Worker)    | 8.4 MB        | 25.2 MB        |
 | The Worker's JSON string and the body                |               | 16.8 MB        |
-| Peak                                                 | 40 MB         | 42 MB          |
+| Peak                                                 | 34 MB         | 42 MB          |
 
-Each isolate stays within half of its 128 MB; one isolate that holds both at once would reach about 76 MB, past half.
+Each isolate stays within half of its 128 MB. One isolate holding both sides at once, the Store's objects alive while
+the Worker's are built, would reach about 76 MB; it stays within half (59 MB) when the Store drops its objects once
+they are serialized.
 
 ### Data and keys (DATA)
 

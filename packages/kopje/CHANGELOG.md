@@ -53,13 +53,21 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   passes these bounds, which only hundreds of mentions of accounts with long profile URLs reach, is refused as too long.
   Statuses already stored are shown within the same bounds wherever they appear, edit history and `/source` included:
   content or source text past the bound as empty (the status keeps its link to the original), a content warning cut,
-  at most 4 attachments with longer URLs as none and descriptions cut at 10,000 characters, at most 200 mentions and
-  100 hashtags (a hashtag longer than 256 characters left out), at most 100 poll choices cut at 1,000 characters, and
-  an actor or status URI past its bound (2,048 and 4,096 characters) as empty. The largest presented shapes are listed
-  in RES-3 of [docs/threat-model.md](docs/threat-model.md).
+  at most 4 attachments with longer URLs as none and descriptions cut at 10,000 characters, at most 20 poll choices
+  cut at 1,000 characters, and an actor or status URI past its bound (2,048 and 4,096 characters) as empty. The
+  largest presented shapes are listed in RES-3 of [docs/threat-model.md](docs/threat-model.md).
+- A status presents at most 50 mentions and 70 hashtags, the first by account id and by name; its content still links
+  every one, and up to 200 mentions and 100 hashtags are still stored. A conversation presents at most 12 participants,
+  the first by account id. Mastodon presents all of them.
+- A remote poll keeps at most 20 choices (Pleroma's and Akkoma's default; Misskey allows 10 and Mastodon 4). A poll
+  stored earlier with more shows its first 20, with their counts and the viewer's own votes among them, and a vote in a
+  later choice is refused.
+- A remote account's username is held to Mastodon's remote format, as before; one stored otherwise (converted at an
+  earlier cutover) is shown cut at 42 characters.
 - `kopje-admin convert` and `verify-conversion` apply the same bounds to status content, content warnings and source
   text, of current and earlier versions, counting each cut as a truncation that `--accept-truncation` accepts, and
-  refuse a remote actor id longer than 2,048 characters or a status URI longer than 4,096.
+  refuse a remote actor id longer than 2,048 characters, a status URI longer than 4,096, and a remote username outside
+  Mastodon's remote format.
 
 ### Instance changes
 
