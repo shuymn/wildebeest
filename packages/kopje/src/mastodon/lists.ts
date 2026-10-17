@@ -8,7 +8,7 @@ import {
 	userCredential,
 } from './context'
 import { mastodonError } from './errors'
-import { pageQuery, pageResponse } from './pagination'
+import { pageQuery, pageResponse, unlimitedResponse } from './pagination'
 import { type Params, parseBoolean } from './params'
 import type { ListChanges, ListResult, MembersResult } from '../domain/lists'
 
@@ -79,20 +79,29 @@ export const deleteList: ApiHandler = async (c, deps) => {
 }
 
 // Lists::AccountsController pages 40 accounts by default and at most 80 (pageQuery's defaults); limit=0 answers every
-// member at once, without Link headers (Lists::AccountsController#unlimited?).
+// member at once, without Link headers (Lists::AccountsController#unlimited?). Kopje's limit=0 answer stops at
+// MAX_LIST_MEMBERS_ANSWERED members and ACCOUNT_ANSWER_BYTES (8 MiB, RES-3); one cut by the bytes links next to the
+// rest, read by limit=0 with max_id, which Mastodon ignores there (unlimitedResponse).
 export const listAccounts: ApiHandler = async (c, deps) => {
 	const p = await requestParams(c, deps)
 	if (p instanceof Response) {
 		return p
 	}
 	const unlimited = p.get('limit') === '0'
-	const page = unlimited ? null : pageQuery(p)
-	const input = { credential: userCredential(c, deps), id: c.req.param('id') ?? '', page, present: present(c) }
+	const query = pageQuery(p)
+	const page = unlimited ? null : query
+	const input = {
+		credential: userCredential(c, deps),
+		id: c.req.param('id') ?? '',
+		page,
+		from: query.maxId,
+		present: present(c),
+	}
 	const result = authorized(await storeCall(c, deps, (s, b) => s.listAccounts(b, input)))
 	if (result === null) {
 		return NOT_FOUND()
 	}
-	return page === null ? c.json(result.items) : pageResponse(c, result, page.limit)
+	return page === null ? unlimitedResponse(c, result) : pageResponse(c, result, page.limit)
 }
 
 function membersResponse(c: ApiContext, result: MembersResult): Response {

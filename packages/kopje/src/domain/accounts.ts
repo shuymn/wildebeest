@@ -156,8 +156,8 @@ export const MAX_REMOTE_FIELDS = 16
 const FIELD_NAME_LIMIT = 255
 const FIELD_VALUE_RAW_LIMIT = 4096
 // The most UTF-8 bytes of field JSON one account carries: read from SQLite (REMOTE_ATTACHMENT_SQL) and, again, shown
-// (remoteFields). An answer of N presented accounts thus carries at most N × 32 KiB of fields: a list's members with
-// limit=0 (MAX_LIST_MEMBERS_ANSWERED, 1,000) 32 MiB, familiar followers (20 targets × 80) 50 MiB.
+// (remoteFields). An answer of N presented accounts thus carries at most N × 32 KiB of fields; an answer of many
+// (a list's members with limit=0, familiar followers) at most ACCOUNT_ANSWER_BYTES in all.
 export const REMOTE_FIELDS_BYTES = 32 * 1024
 
 // SQLite's substr and length stop at an embedded NUL, so a string is cut only when its UTF-8 bytes pass the limit
@@ -198,6 +198,81 @@ export const ACCOUNT_COLUMNS = `a.id, a.uri, a.username, a.domain, a.actor_type,
 	${REMOTE_ATTACHMENT_SQL} AS attachment`
 
 export const ACCOUNT_FROM = 'accounts a LEFT JOIN local_accounts l ON l.account_id = a.id'
+
+// RES-3: the UTF-8 bytes of the accounts one answer of many carries (a list's members and endorsements with limit=0,
+// familiar followers), counted by ACCOUNT_BYTES_SQL before the rows leave SQLite and again, once serialized, as they
+// are presented (presentAccountsWithin). A Mastodon user's account serializes to about 2 KiB, so 1,000 take a quarter
+// of it; one at Misskey's profile limits to about 8 KiB (test/account-answer-bytes.test.ts measures both).
+export const ACCOUNT_ANSWER_BYTES = 8 * 1024 * 1024
+// An account's JSON beyond what ACCOUNT_BYTES_SQL counts by column: its keys, id, counts, dates, flags, the default
+// avatar and header URLs, and `verified_at` of up to MAX_REMOTE_FIELDS fields (measured by the same test).
+const ACCOUNT_FIXED_BYTES = 1024
+
+// An upper bound of the UTF-8 bytes of the account `a` (and `l`) both as ACCOUNT_COLUMNS reads it and as it
+// serializes: text as JSON escapes it (escapedSql), URLs as shown (avatar and header twice), the username as shown in
+// `acct` and a derived url too, the domain as shown in `acct`, and the projected attachment (at most
+// REMOTE_FIELDS_BYTES). The bio is stored sanitized, so it is exact; sanitizing can grow the shown field values
+// beyond it, which presentAccountsWithin counts. ACCOUNT_LOW_BYTES_SQL is a lower bound read without escaping or the
+// attachment, which presentAccountsWithin uses to leave out what cannot fit before counting the rest exactly.
+const bytesSql = (column: string) => `coalesce(length(CAST(${column} AS BLOB)), 0)`
+// Text up to ESCAPED_EXACT_BYTES is escaped (json_quote, as JSON.stringify escapes it) and measured; longer text counts
+// six bytes a byte, JSON's most, as its escaped copy could pass SQLite's largest string (2 MB in a Durable Object)
+// and fail the read. Only a bio near its bound is that long (sanitized from REMOTE_HTML_RAW_LIMIT, up to about
+// 0.9 MB), so such accounts are answered a few at a time.
+const ESCAPED_EXACT_BYTES = 300_000
+const escapedSql = (column: string) =>
+	`CASE WHEN ${bytesSql(column)} <= ${ESCAPED_EXACT_BYTES} THEN length(CAST(json_quote(${column}) AS BLOB))
+		ELSE 6 * ${bytesSql(column)} END`
+const accountBytesSql = (text: (column: string) => string, attachment: string) =>
+	`(${ACCOUNT_FIXED_BYTES} + ${text('a.display_name')} + ${text('a.note')} + ${text('l.fields')} + ${bytesSql('a.uri')}
+	+ 3 * ${bytesSql('a.username')} + ${bytesSql('a.domain')} + ${bytesSql('a.actor_type')} + ${bytesSql('a.url')}
+	+ 2 * ${bytesSql('a.avatar_url')} + 2 * ${bytesSql('a.header_url')} + ${attachment})`
+export const ACCOUNT_BYTES_SQL = accountBytesSql(escapedSql, bytesSql(REMOTE_ATTACHMENT_SQL))
+const ACCOUNT_LOW_BYTES_SQL = accountBytesSql(bytesSql, '0')
+
+// The presented accounts of `ids` (accounts' ids, each once), in their order, while their bytes stay within `budget`:
+// the running ACCOUNT_BYTES_SQL of the ids (of those whose running ACCOUNT_LOW_BYTES_SQL fits) is summed first, so
+// only the profiles of the leading accounts within it are read; of those, the leading ones whose serialized JSON (and
+// a separator each) fits it are shown. `leading`: the first account is shown whatever its size (bounded per account,
+// RES-1 and RES-2), so an answer continued from its last account moves on. `cut`: an account was left out; `bytes`:
+// what the shown ones serialize to.
+export function presentAccountsWithin(
+	db: Db,
+	ids: readonly string[],
+	present: Present,
+	budget: number,
+	leading: boolean
+): { items: Account[]; cut: boolean; bytes: number } {
+	if (ids.length === 0) {
+		return { items: [], cut: false, bytes: 0 }
+	}
+	const rows = db.all<AccountRow>(
+		`WITH r AS (SELECT c.key AS ord, a.id, sum(${ACCOUNT_LOW_BYTES_SQL}) OVER (ORDER BY c.key) AS low,
+				row_number() OVER (ORDER BY c.key) AS n
+			FROM json_each(?1) c CROSS JOIN accounts a ON a.id = c.value LEFT JOIN local_accounts l ON l.account_id = a.id),
+		s AS (SELECT r.ord, r.id, r.n, sum(${ACCOUNT_BYTES_SQL}) OVER (ORDER BY r.ord) AS total
+			FROM r CROSS JOIN accounts a ON a.id = r.id LEFT JOIN local_accounts l ON l.account_id = a.id
+			WHERE r.low <= ?2 OR r.n = 1)
+		SELECT ${ACCOUNT_COLUMNS}
+		FROM s CROSS JOIN accounts a ON a.id = s.id LEFT JOIN local_accounts l ON l.account_id = a.id
+		WHERE s.total <= ?2 OR (?3 AND s.n = 1) ORDER BY s.ord`,
+		JSON.stringify(ids),
+		budget,
+		leading ? 1 : 0
+	)
+	const items: Account[] = []
+	let bytes = 0
+	for (const row of rows) {
+		const account = presentAccount(row, present)
+		const size = utf8Length(JSON.stringify(account)) + 1
+		if (bytes + size > budget && !(leading && items.length === 0)) {
+			break
+		}
+		bytes += size
+		items.push(account)
+	}
+	return { items, cut: items.length < ids.length, bytes }
+}
 
 // A local account's url is derived from its actor URI, which carries the instance origin.
 // An account's profile URL. A stored url is used only when it is http(s) (HTML-3); otherwise it is derived from the
@@ -629,7 +704,9 @@ export const relationships = userReadOperation<{ ids: string[] }, Relationship[]
 // accepted follows (at most FAMILIAR_FOLLOWERS_WINDOW, through the partial index of accepted follows), each checked
 // for an accepted follow of the account through the unique pair index (CROSS JOIN keeps SQLite to that order), so
 // the work never grows with the account's other followers and a match is never pushed out by them. At most
-// MAX_FAMILIAR_FOLLOWERS are shown, newest follow of the account first.
+// MAX_FAMILIAR_FOLLOWERS are shown, newest follow of the account first, while the answer's accounts fit
+// ACCOUNT_ANSWER_BYTES: each requested account may use its share of what earlier ones left, so a large one never
+// crowds out the rest; past it, fewer are shown (Mastodon's answer has no paging).
 export const MAX_FAMILIAR_FOLLOWERS_IDS = 20
 // Above Mastodon's default follow limit (7,500), which Kopje does not enforce: a match past the viewer's first 10,000
 // accepted follows (in index order, by account id) is not shown (an accepted risk).
@@ -644,7 +721,10 @@ export const familiarFollowers = userReadOperation<{ ids: string[]; present: Pre
 			.slice(0, MAX_FAMILIAR_FOLLOWERS_IDS)
 			.map((id) => resolveAccountId(db, id))
 			.filter((id) => id !== null)
-		return [...new Set(resolved)].flatMap((target) => {
+		const targets = [...new Set(resolved)]
+		// ACCOUNT_ANSWER_BYTES split fairly: each target may use what is left over its share of the targets left.
+		let left = ACCOUNT_ANSWER_BYTES
+		return targets.flatMap((target, i) => {
 			const row = db.first<{ hidden: number }>(
 				`SELECT ${hidesCollectionsSql('?1')} AS hidden WHERE ${availableSql('?1')}`,
 				target
@@ -670,8 +750,9 @@ export const familiarFollowers = userReadOperation<{ ids: string[]; present: Pre
 					now
 				)
 				.map((row) => row.id)
-			const accounts = presentAccountsById(db, followers, present)
-			return [{ id: target, accounts: followers.flatMap((id) => accounts.get(id) ?? []) }]
+			const shown = presentAccountsWithin(db, followers, present, Math.floor(left / (targets.length - i)), false)
+			left -= shown.bytes
+			return [{ id: target, accounts: shown.items }]
 		})
 	}
 )
@@ -1012,8 +1093,8 @@ export function edgeRangeSql(column: string, max: string, min: string): string {
 	return `${column} < coalesce(CAST(${max} AS INTEGER), 1e19) AND ${column} > coalesce(CAST(${min} AS INTEGER), -1e19)`
 }
 
-// A page of a list. `cut`: the read stopped at its candidate window (windows.ts) before the page filled, so the next
-// link is offered however few items it holds.
+// A page of a list. `cut`: the read stopped at its candidate window (windows.ts) before the page filled, or an answer
+// without a page stopped at ACCOUNT_ANSWER_BYTES, so the next link is offered however few items it holds.
 export type Page<T> = { items: T[]; newest: string | null; oldest: string | null; cut?: boolean }
 
 export type ListFollowsInput = {
