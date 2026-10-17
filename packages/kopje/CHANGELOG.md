@@ -24,12 +24,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Changed
 
-- Deliveries are checked again right before they are sent, after the signing key is loaded and the inbox's address
-  checked, and what is sent is read at that moment. Content (posts, edits, boosts, likes, follows, profile updates) is
-  no longer sent to an inbox whose recipients are all gone (deleted, or being deleted) by then; deletions and other
-  withdrawals still go. Each delivery costs one more call to the Store. A delivery queued before this version knows no
-  recipients and is checked by its sender only. This is the groundwork for suspending remote accounts and blocking
-  domains, which later versions add.
+- Deliveries are checked again right before they are sent, and what is sent is read at that moment. Content (posts,
+  edits, boosts, likes, follows, profile updates) is no longer sent to an inbox whose recipients are all gone (deleted,
+  or being deleted) by then; deletions and other withdrawals still go. A delivery queued before this version knows no
+  recipients and is checked by its sender only. Each delivery costs one more call to the Store.
 
 ### Fixed
 
