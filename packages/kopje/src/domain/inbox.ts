@@ -240,8 +240,7 @@ export type ReceiveResult = {
 	// signer: whose key signs the fetch: a local follower of the status's author, a local account by username while it
 	// is available (a QuoteRequest's instrument, fetched as the quoted author: federation.ts localSigner), or
 	// 'instance' for the instance actor; absent, the inbox's own (the recipient's for a personal inbox).
-	// kind 'proof': the activity's author proof, verified (a Delete of a local quote's stamp, which is forwarded only
-	// proven: quotes.ts revokeStamp); uri is the actor's.
+	// kind 'proof': verify the Delete's author proof before forwarding (quotes.ts revokeStamp); uri is the actor's.
 	need?: { kind: 'status' | 'actor' | 'proof'; uri: string; signer?: FollowerSigner | { local: string } | 'instance' }
 	// Nothing changed, and the activity may apply later (its retraction could not be recorded): answered 503.
 	retry?: boolean
@@ -787,7 +786,6 @@ function ourFollow(
 	return edge === undefined ? null : { id: edge.id, follower: follower.id }
 }
 
-// An Accept of our QuoteRequest (quotes.ts acceptOurQuote) or of our Follow.
 const accept: Handler<'Accept'> = (db, actor, activity, { now }) => {
 	if (isQuoteAnswer(activity.object)) {
 		return acceptOurQuote(db, actor, quoteAnswerRef(activity.object), activity.result ?? null, now)
@@ -806,8 +804,7 @@ const accept: Handler<'Accept'> = (db, actor, activity, { now }) => {
 	return changed > 0 ? applied('follow-accepted') : ignored('duplicate')
 }
 
-// Mastodon's Reject removes our request, or our follow if it was already accepted; a Reject of our QuoteRequest
-// rejects or revokes our quote (quotes.ts rejectOurQuote).
+// Mastodon's Reject removes our Follow, including an accepted one; quote handling: quotes.ts rejectOurQuote.
 const reject: Handler<'Reject'> = (db, actor, activity, { now }) => {
 	if (isQuoteAnswer(activity.object)) {
 		return rejectOurQuote(db, actor, quoteAnswerRef(activity.object), now)

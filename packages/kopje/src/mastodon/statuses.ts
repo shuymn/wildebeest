@@ -184,8 +184,7 @@ export const createStatus: ApiHandler = async (c, deps) => {
 	if (p instanceof Response) {
 		return p
 	}
-	// StatusesController#set_thread and #set_quoted_status run before the create action: a quoted status that is not
-	// found (or that R36 refuses) answers its 404 before any of the create action's 422s, for a scheduled post too.
+	// Mastodon's 404 precedence over 422, including R36 refusals and scheduled quotes: domain/statuses.ts postTargets.
 	const inReplyToId = emptyToUndefined(p.get('in_reply_to_id'))
 	const quotedStatusId = emptyToUndefined(p.get('quoted_status_id'))
 	if (quotedStatusId !== undefined) {

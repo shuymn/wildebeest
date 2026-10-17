@@ -614,8 +614,7 @@ async function apply(deps: InboundDeps, application: Application): Promise<Inbox
 		if (need === undefined) {
 			break
 		}
-		// The Delete's author proof, verified as a relayed one's is (a key the actor's current document embeds): proven,
-		// the body goes to the Store to be forwarded; otherwise the Delete applies unproven, as delivered by its actor.
+		// Only a proven body may be forwarded (proveDelete); an unproven Delete still applies as its actor's.
 		if (need.kind === 'proof') {
 			if (prepared.type !== 'Delete') {
 				break
