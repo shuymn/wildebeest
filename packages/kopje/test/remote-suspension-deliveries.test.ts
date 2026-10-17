@@ -223,6 +223,25 @@ describe('a re-formed follow after the severing (row 15)', () => {
 describe('the send boundary is confirmation (row 14)', () => {
 	const testEnv = { ...env, USER_KEK: LEGACY.kek } as unknown as Env
 
+	// A delivery round over `store` held at its host check, after the claim and before confirmation: `reached` resolves
+	// when it gets there, and `release` lets it go on.
+	function heldAtHostCheck(store: StoreStub, fetch: typeof globalThis.fetch) {
+		const reached = deferred()
+		const release = deferred()
+		const round = deliveryRound(testEnv, {
+			...deliveryDeps(
+				() => store,
+				fetch,
+				() => NOW
+			),
+			checkHost: async () => {
+				reached.resolve()
+				await release.promise
+			},
+		})
+		return { reached: reached.promise, release: release.resolve, round }
+	}
+
 	// alice signs with the legacy fixture key, so the round can load her signer; r follows her.
 	async function signed() {
 		const w = await world()
@@ -253,23 +272,11 @@ describe('the send boundary is confirmation (row 14)', () => {
 		await post(w.h, w.alice, { status: 'first' })
 		await post(w.h, w.alice, { status: 'second' })
 		const { fetch, sent } = recordingFetch()
-		const reached = deferred()
-		const release = deferred()
-		const round = deliveryRound(testEnv, {
-			...deliveryDeps(
-				() => w.h.store,
-				fetch,
-				() => NOW
-			),
-			checkHost: async () => {
-				reached.resolve()
-				await release.promise
-			},
-		})
-		await reached.promise
+		const { reached, release, round } = heldAtHostCheck(w.h.store, fetch)
+		await reached
 		expect((await deliveries(w.h.store)).map((row) => row.state)).toEqual(['leased', 'queued'])
 		await suspend(w, r)
-		release.resolve()
+		release()
 		expect(await round).toEqual({ claimed: 1, settled: ['dropped'], nextDueAt: NOW })
 		expect(sent).toEqual([])
 		expect((await deliveries(w.h.store)).map((row) => row.state)).toEqual(['pending'])
@@ -299,20 +306,8 @@ describe('the send boundary is confirmation (row 14)', () => {
 			expect(boosted.status).toBe(200)
 			expect(new Set((await deliveries(w.h.store)).map((row) => row.type))).toEqual(new Set(['Announce']))
 			const { fetch, sent } = recordingFetch()
-			const reached = deferred()
-			const release = deferred()
-			const round = deliveryRound(testEnv, {
-				...deliveryDeps(
-					() => w.h.store,
-					fetch,
-					() => NOW
-				),
-				checkHost: async () => {
-					reached.resolve()
-					await release.promise
-				},
-			})
-			await reached.promise
+			const { reached, release, round } = heldAtHostCheck(w.h.store, fetch)
+			await reached
 			if (suspended) {
 				await suspend(w, o)
 			}
@@ -325,7 +320,7 @@ describe('the send boundary is confirmation (row 14)', () => {
 					})
 				).toMatchObject({ applied: true })
 			}
-			release.resolve()
+			release()
 			const settled = await round
 			expect(settled.settled.length).toBeGreaterThan(0)
 			expect(settled.settled.every((outcome) => outcome === 'dropped')).toBe(true)
