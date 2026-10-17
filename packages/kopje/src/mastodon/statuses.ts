@@ -11,7 +11,7 @@ import {
 } from './context'
 import { mastodonError } from './errors'
 import { descriptionProblem, parseFocus, sweepSoon } from './media'
-import { linkHeader, pageQuery, pageResponse } from './pagination'
+import { pageQuery, pageResponse } from './pagination'
 import { type Params, parseBoolean } from './params'
 import { API_VISIBILITIES, type ApiVisibility, QUOTE_POLICY_NAMES, type QuotePolicyName } from '../domain/audience'
 import { checkPoll, isPollInput, type PollInput } from '../domain/polls'
@@ -450,11 +450,7 @@ function interactors(kind: 'favourited_by' | 'reblogged_by'): ApiHandler {
 		if (result.status !== 'ok') {
 			return NOT_FOUND()
 		}
-		const link = linkHeader(c.req.url, { ...result.value, count: result.value.items.length }, page.limit)
-		if (link !== undefined) {
-			c.header('Link', link)
-		}
-		return c.json(result.value.items)
+		return pageResponse(c, result.value, page.limit)
 	}
 }
 

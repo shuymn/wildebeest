@@ -1,7 +1,5 @@
 import {
 	type Account,
-	ACCOUNT_COLUMNS,
-	type AccountRow,
 	type Page,
 	type PageQuery,
 	type Present,
@@ -12,7 +10,7 @@ import {
 } from './accounts'
 import { endorsementListedSql, endorsementsShownSql } from './audience'
 import { optionalUserReadOperation, userReadOperation, userWriteOperation } from './auth'
-import { ABOVE_EVERY_ID, BELOW_EVERY_ID, statusCursor } from './statuses'
+import { ownedAccountsPage } from './lists'
 import type { Db } from '../db/sql'
 
 // Endorsed accounts (Mastodon 4.5's AccountPin, Api::V1::Accounts::EndorsementsController and
@@ -75,31 +73,22 @@ export const unendorse = userWriteOperation<{ target: string; now: number }, Rel
 
 // The accounts `owner` endorses that R28 lists, by account id, newest first, paged by the account id
 // (paginate_by_max_id, and min_id as Kopje's other account lists page); page null reads up to
-// MAX_ENDORSEMENTS_ANSWERED.
+// MAX_ENDORSEMENTS_ANSWERED (ownedAccountsPage in lists.ts).
 function endorsedPage(db: Db, owner: string, page: PageQuery | null, present: Present): Page<Account> {
 	if (db.first(`SELECT 1 AS shown WHERE ${endorsementsShownSql('?1')}`, owner) === undefined) {
 		return { items: [], newest: null, oldest: null }
 	}
-	const ascending = page?.minId !== undefined
-	const rows = db.all<AccountRow>(
-		`SELECT ${ACCOUNT_COLUMNS}
-		FROM account_pins p JOIN accounts a ON a.id = p.target_account_id LEFT JOIN local_accounts l ON l.account_id = a.id
-		WHERE p.account_id = ?1 AND p.target_account_id < ?2 AND p.target_account_id > ?3
-			AND ${endorsementListedSql('p.target_account_id')}
-		ORDER BY p.target_account_id ${ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
+	const result = ownedAccountsPage(
+		db,
 		owner,
-		statusCursor(page?.maxId) ?? ABOVE_EVERY_ID,
-		statusCursor(page?.minId ?? page?.sinceId) ?? BELOW_EVERY_ID,
-		page?.limit ?? MAX_ENDORSEMENTS_ANSWERED
+		(order) => `SELECT p.target_account_id AS id FROM account_pins p
+			WHERE p.account_id = ?1 AND p.target_account_id < ?2 AND p.target_account_id > ?3
+			ORDER BY p.target_account_id ${order} LIMIT ?4`,
+		endorsementListedSql('a.id'),
+		page,
+		MAX_ENDORSEMENTS_ANSWERED
 	)
-	if (ascending) {
-		rows.reverse()
-	}
-	return {
-		items: rows.map((row) => presentAccount(row, present)),
-		newest: rows[0]?.id ?? null,
-		oldest: rows.at(-1)?.id ?? null,
-	}
+	return { ...result, items: result.items.map((row) => presentAccount(row, present)) }
 }
 
 // GET /api/v1/endorsements: the viewer's own (EndorsementsController).

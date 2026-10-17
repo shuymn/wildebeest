@@ -183,7 +183,7 @@ describe('hashtag timeline', () => {
 		const cases: [string, Partial<Query>, () => PageQuery][] = [
 			['the newest page', {}, () => ({ limit: 20 })],
 			['the newest page of any of three tags', { any: ['dogs', 'birds'] }, () => ({ limit: 20 })],
-			// The same 80 statuses below the cursor, and 20 or 1,920 above it.
+			// The same 80 statuses below the cursor, and 120 or 1,920 above it.
 			['a page below a cursor', { any: ['dogs', 'birds'] }, () => ({ limit: 20, maxId: String(BASE + 80n) })],
 			['a page up from the oldest', { any: ['dogs'] }, () => ({ limit: 20, minId: String(BASE) })],
 		]
@@ -224,7 +224,8 @@ describe('hashtag timeline', () => {
 			}
 			return reads
 		}
-		const few = await measure(100)
+		// Each name's stream reads a window of 40 at most (timelines.ts tagWindow): with 200 statuses each name fills it.
+		const few = await measure(200)
 		const many = await measure(2000)
 		const grown = cases.flatMap(([name], i) =>
 			(many[i] ?? 0) > (few[i] ?? 0) + 10 ? [`${name}: ${few[i]} -> ${many[i]}`] : []

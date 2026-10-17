@@ -461,11 +461,7 @@ function followList(direction: 'followers' | 'following'): ApiHandler {
 		if (result === null) {
 			return NOT_FOUND()
 		}
-		const link = linkHeader(c.req.url, { ...result, count: result.items.length }, page.limit)
-		if (link !== undefined) {
-			c.header('Link', link)
-		}
-		return c.json(result.items)
+		return pageResponse(c, result, page.limit)
 	}
 }
 

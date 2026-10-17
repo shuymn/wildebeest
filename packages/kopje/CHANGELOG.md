@@ -28,6 +28,17 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   edits, boosts, likes, follows, profile updates) is no longer sent to an inbox whose recipients are all gone (deleted,
   or being deleted) by then; deletions and other withdrawals still go. A delivery queued before this version knows no
   recipients and is checked by its sender only. Each delivery costs one more call to the Store.
+- Lists that hide some of their rows from the viewer (timelines, account statuses, bookmarks, favourites,
+  notifications, followers and following, who favourited or boosted, notification requests, list members,
+  endorsements, the profile page and the outbox) read a bounded window of rows per request, so a long run of hidden
+  rows (from accounts being deleted, or blocked, muted or domain-blocked by the viewer) costs a request the same as a
+  short one. Such a list may now return a short or empty page while its `next` link still leads on, as Mastodon's
+  lists do where it filters after paginating; clients that follow `next` reach everything behind it. A post
+  hidden by its own visibility never supplies an id, and the quotes list never shows the id of a quote the reader may
+  not see (stricter than Mastodon, which pages every accepted quote); a post hidden only by availability or by the
+  viewer's own blocks, mutes and domain blocks may supply the id a `next` or `prev` link pages from.
+- An outbox's `totalItems` is the account's post count (`statuses_count`), as on Mastodon, instead of the number of
+  posts the outbox serves.
 
 ### Fixed
 
@@ -42,7 +53,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds four migrations, applied on the first request after the deploy; a rollback to an earlier version
+- Store schema: adds five migrations, applied on the first request after the deploy; a rollback to an earlier version
   needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0040_report_notifications`: lets a notification name a report. It reads each stored notification once and no
       other table: on a benchmark store of 1,000,000 accounts, 3,000,000 follows, 2,000,000 statuses and 2,000,000
@@ -57,6 +68,12 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       (at most 10,000 entries) and the suspensions still resolving reports, not with the number of reports. On the same
       benchmark store its upgrade took 3.1 seconds (3.1 in two more runs; 6.1 on a loaded machine), a pause of a few
       seconds on the first request after the deploy.
+    - `0043_read_window_indexes`: indexes the following list, who favourited a post and who boosted it in their
+      paging order. It builds three indexes and reads nothing else: on the same benchmark store with 2,000,000
+      favourites and 200,000 boosts added, its upgrade took 8.1 seconds (8.2 and 8.6 in two more runs), of which about
+      6 is the overhead of an upgrade on a store that size (0042, upgraded alone there, took 6.0 and 5.9); an upgrade
+      that applies several files pays it once. Expect a pause of
+      several seconds on the first request after the deploy.
     - `0043_delivery_provenance`: lets each delivery record the recipients behind it. It changes the schema only and
       reads no row, however many deliveries are queued. On the same benchmark store its upgrade took 3.1 seconds (3.1
       in a second run).

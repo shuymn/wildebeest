@@ -47,8 +47,8 @@ describe('timeline paging', () => {
 		expect(await ids(h, new URL(next ?? '').pathname + new URL(next ?? '').search, alice.token)).toEqual([newer.id])
 	})
 
-	// Home and a list read a window of each author's statuses (AuthorWindows): the filters apply inside the window, so
-	// an author whose newest statuses are all left out still shows their older ones, in order, on every page.
+	// Home and a list read a window of candidates (at least 40) and filter it: an author whose newest statuses are left
+	// out, fewer than a window, still shows their older ones, in order, on every page.
 	it("pages home and a list past an author's newest statuses that the follow leaves out", async () => {
 		const h = await community(['alice', 'bob', 'carol', 'dave'])
 		const { alice, bob, carol, dave } = h.users

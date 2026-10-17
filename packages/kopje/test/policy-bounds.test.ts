@@ -106,6 +106,7 @@ import {
 	tagTimeline,
 } from '../src/domain/timelines'
 import { embeddedStatus } from '../src/domain/web-pages'
+import { streamWindow } from '../src/domain/windows'
 import type { StoreStub } from '../src/platform/store-client'
 import type { StoreOperation } from '../src/platform/store-kernel'
 
@@ -958,7 +959,8 @@ describe('read endpoints do not read more rows as unrelated data grows (RES-7)',
 // factor. Both factors are past the point where each author's history holds more than a page of what it shows. The
 // author set is not grown (no follow cap bounds it yet), nor are skewed histories built.
 describe("read endpoints read the same rows however long the world's history (RES-7)", () => {
-	const FEW = 40
+	// Enough copies that every window (readWindow: 60 for a page of 20) fills on the middle page too.
+	const FEW = 100
 	const MANY = 400
 
 	// Endpoints whose reads grow with the history, left out of the comparison.
@@ -1117,9 +1119,10 @@ describe("the author's domain block costs a local viewer nothing per status (R2,
 			sql.exec(`SELECT count(*) AS n FROM main.statuses s WHERE ${visibleSql('s', '?1')}`, viewer).toArray(),
 	})
 
-	it('reads the same rows for a local viewer with 20 or 200 visible public statuses', async () => {
-		const few = await publicStatuses(20)
-		const many = await publicStatuses(200)
+	// The fewer fill the public timeline's window (readWindow: 60 for a page of 20).
+	it('reads the same rows for a local viewer with 60 or 600 visible public statuses', async () => {
+		const few = await publicStatuses(60)
+		const many = await publicStatuses(600)
 		const credential = { tokenHash: PUBLIC_TOKEN, scope: 'read', now: NOW } as const
 		const input = { credential, now: NOW, page: PAGE, present: PRESENT, local: false, remote: false, onlyMedia: false }
 		const page = async (store: StoreStub) => rowsRead({ store }, publicTimeline, input as never)
@@ -1263,8 +1266,9 @@ describe("home and list timelines read a page per author, not each author's hist
 		return store
 	}
 
-	it('reads the same rows with 20 or 2,000 statuses per author, on the newest, a middle and the oldest page', async () => {
-		const few = await histories(20)
+	// The shorter histories fill each author's stream (streamWindow: 40 for a page of 20).
+	it('reads the same rows with 60 or 2,000 statuses per author, on the newest, a middle and the oldest page', async () => {
+		const few = await histories(60)
 		const many = await histories(2000)
 		const credential = { tokenHash: HISTORY_TOKEN, scope: 'read', now: NOW } as const
 		const grown: string[] = []
@@ -1485,8 +1489,9 @@ describe("reads skip an author's history the viewer never sees (RES-7)", () => {
 		return store
 	}
 
-	it('reads the same rows with 20 or 2,000 statuses per author', async () => {
-		const few = await histories(20)
+	// The shorter histories fill the windows (streamWindow and readWindow, 40 and 60 for a page of 20).
+	it('reads the same rows with 60 or 2,000 statuses per author', async () => {
+		const few = await histories(60)
 		const many = await histories(2000)
 		const credential = { tokenHash: SKIP_TOKEN, scope: 'read', now: NOW } as const
 		const reads: [string, StoreOperation<never, unknown>, unknown, number][] = [
@@ -1714,9 +1719,10 @@ describe('filters cost a page their own rows, up to the caps, not the history (R
 		return rows
 	}
 
-	it('reads the same rows with 40 or 2,000 statuses at the caps, and at most the filter rows more than with none', async () => {
-		const none = await measure(40, 0)
-		const few = await measure(40, MAX_FILTERS)
+	// The fewer statuses fill the reads' windows (readWindow: 60 for a page of 20).
+	it('reads the same rows with 60 or 2,000 statuses at the caps, and at most the filter rows more than with none', async () => {
+		const none = await measure(60, 0)
+		const few = await measure(60, MAX_FILTERS)
 		const many = await measure(2000, MAX_FILTERS)
 		const grown: string[] = []
 		for (const [name] of reads) {
@@ -1788,7 +1794,7 @@ describe("markers read the viewer's rows, not every account's (RES-7)", () => {
 
 // Endorsements and private notes (R28) add a dimension: the accounts one account endorses and keeps notes on. A page
 // of endorsements reads the owner's from the cursor through the primary key, and a relationship looks its endorsement
-// and note up by pair, so they read the same rows whether the viewer endorses and keeps notes on 20 accounts or 2,000.
+// and note up by pair, so they read the same rows whether the viewer endorses and keeps notes on 60 accounts or 2,000.
 describe('endorsements and notes read a page, however many an account has (RES-7)', () => {
 	const VIEWER_ID = '640000000000000000'
 	const ENDORSING_TOKEN = 'endorsing-token'
@@ -1838,8 +1844,9 @@ describe('endorsements and notes read a page, however many an account has (RES-7
 		return store
 	}
 
-	it('reads the same rows with 20 or 2,000, on the newest, a middle and the oldest page', async () => {
-		const few = await endorsing(20)
+	// The fewer fill the read's window (readWindow: 60 for a page of 20).
+	it('reads the same rows with 60 or 2,000, on the newest, a middle and the oldest page', async () => {
+		const few = await endorsing(60)
 		const many = await endorsing(2000)
 		const credential = { tokenHash: ENDORSING_TOKEN, scope: 'read', now: NOW } as const
 		const grown: string[] = []
@@ -1872,7 +1879,7 @@ describe('endorsements and notes read a page, however many an account has (RES-7
 })
 
 // A list's members add a dimension: the accounts one list holds. A page of members reads the list's from the cursor
-// through the primary key, so it reads the same rows whether the list holds 20 accounts or 2,000.
+// through the primary key, so it reads the same rows whether the list holds 60 accounts or 2,000.
 describe("a list's members read a page, however many it holds (RES-7)", () => {
 	const OWNER_ID = '650000000000000000'
 	const LIST_ID = '659000000000000000'
@@ -1919,8 +1926,9 @@ describe("a list's members read a page, however many it holds (RES-7)", () => {
 		return store
 	}
 
-	it('reads the same rows with 20 or 2,000, on the newest, a middle and the oldest page', async () => {
-		const few = await holding(20)
+	// The fewer fill the read's window (readWindow: 60 for a page of 20).
+	it('reads the same rows with 60 or 2,000, on the newest, a middle and the oldest page', async () => {
+		const few = await holding(60)
 		const many = await holding(2000)
 		const credential = { tokenHash: OWNER_TOKEN, scope: 'read', now: NOW } as const
 		const grown: string[] = []
@@ -2281,9 +2289,9 @@ describe('followed hashtags cost home a window each, up to the cap, not their hi
 		const grown: string[] = []
 		for (const [name] of pages) {
 			const [base = 0, capped = 0, longer = 0] = [none[name], few[name], many[name]]
-			// Per hashtag: its tag_follows entry, and a window of a page of statuses, each with its status_tags row and the
-			// rows the rule reads for it (about ten).
-			if (capped > base + MAX_FOLLOWED_TAGS * (12 * PAGE.limit + 10) + ALLOWANCE) {
+			// Per hashtag: its tag_follows entry, and a stream of streamWindow(limit) candidates, each with its status_tags
+			// entry, its status and the merge's reads of it (about six); the rule reads a window of them, once.
+			if (capped > base + MAX_FOLLOWED_TAGS * (7 * streamWindow(PAGE.limit) + 10) + ALLOWANCE) {
 				grown.push(`${name} with hashtags: ${base} -> ${capped}`)
 			}
 			if (longer > capped + ALLOWANCE) {

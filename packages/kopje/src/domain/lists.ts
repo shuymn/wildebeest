@@ -1,17 +1,19 @@
 import {
 	type Account,
-	ACCOUNT_COLUMNS,
 	type AccountRow,
 	type Page,
 	type PageQuery,
 	type Present,
 	presentAccount,
 	resolveAccountId,
+	accountRowsOf,
+	windowAccountIds,
 } from './accounts'
 import { availableSql } from './audience'
 import { userReadOperation, userWriteOperation } from './auth'
 import { allocateLocalId } from './ids'
 import { ABOVE_EVERY_ID, BELOW_EVERY_ID, statusCursor } from './statuses'
+import { readWindow, singleWindow, windowPage } from './windows'
 import type { Db } from '../db/sql'
 
 // Lists (Mastodon 4.5's List and ListAccount, Api::V1::ListsController, Lists::AccountsController and
@@ -146,9 +148,50 @@ export const deleteList = userWriteOperation<{ id: string }, boolean>(
 	(db, { id }, { accountId }) => db.run('DELETE FROM lists WHERE id = ? AND account_id = ?', id, accountId) > 0
 )
 
+// A page of an account list its owner keeps (list members, endorsements), by account id, newest first: `candidates`
+// selects (id) rows with ?1 the owner, ?2 and ?3 the exclusive bounds and ?4 the cap, in the order `order` gives;
+// `rule` (over `a` and `l`) decides which are listed. Paged, a page reads one window (windows.ts). Without a page
+// (limit=0), the answer is the whole list up to `limit`: windows one after another until that many pass or the list
+// ends, as the list is the owner's own and bounded by their follows.
+export function ownedAccountsPage(
+	db: Db,
+	owner: string,
+	candidates: (order: 'ASC' | 'DESC') => string,
+	rule: string,
+	page: PageQuery | null,
+	limit: number
+): Page<AccountRow> {
+	const ascending = page?.minId !== undefined
+	const size = readWindow(page?.limit ?? limit)
+	let max = statusCursor(page?.maxId) ?? ABOVE_EVERY_ID
+	const min = statusCursor(page?.minId ?? page?.sinceId) ?? BELOW_EVERY_ID
+	const key = (row: { id: string }) => row.id
+	if (page !== null) {
+		const window = singleWindow(db, candidates(ascending ? 'ASC' : 'DESC'), size, owner, max, min, size)
+		const shown = windowPage(window, windowAccountIds(db, window, rule), key, page.limit, ascending)
+		const items = accountRowsOf(db, shown.rows.map(key))
+		return { items, newest: shown.newest, oldest: shown.oldest, cut: shown.cut }
+	}
+	// Ids first, through the rule, then the profiles of the answer's own accounts only.
+	const ids: string[] = []
+	for (;;) {
+		const window = singleWindow(db, candidates('DESC'), size, owner, max, min, size)
+		const passed = windowPage(window, windowAccountIds(db, window, rule), key, limit - ids.length, false).rows
+		ids.push(...passed.map(key))
+		const last = window.candidates.at(-1)?.id
+		if (!window.cut || ids.length >= limit || last === undefined) {
+			break
+		}
+		max = last
+	}
+	const items = accountRowsOf(db, ids)
+	return { items, newest: items[0]?.id ?? null, oldest: items.at(-1)?.id ?? null }
+}
+
 // GET /api/v1/lists/:id/accounts: the members, unavailable accounts left out (Account.without_suspended), by account
 // id, newest first, paged by the account id (paginate_by_max_id); page null answers every member (limit=0), up to
-// MAX_LIST_MEMBERS_ANSWERED. A pending member is listed too. Null when the list is not the viewer's.
+// MAX_LIST_MEMBERS_ANSWERED (ownedAccountsPage). A pending member is listed too. Null when the list is not the
+// viewer's.
 export const listAccounts = userReadOperation<
 	{ id: string; page: PageQuery | null; present: Present },
 	Page<Account> | null
@@ -156,26 +199,16 @@ export const listAccounts = userReadOperation<
 	if (ownList(db, accountId, id) === undefined) {
 		return null
 	}
-	const ascending = page?.minId !== undefined
-	const rows = db.all<AccountRow>(
-		`SELECT ${ACCOUNT_COLUMNS}
-		FROM list_accounts la JOIN accounts a ON a.id = la.account_id LEFT JOIN local_accounts l ON l.account_id = a.id
-		WHERE la.list_id = ?1 AND la.account_id < ?2 AND la.account_id > ?3
-			AND ${availableSql('la.account_id')}
-		ORDER BY la.account_id ${ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
+	const result = ownedAccountsPage(
+		db,
 		id,
-		statusCursor(page?.maxId) ?? ABOVE_EVERY_ID,
-		statusCursor(page?.minId ?? page?.sinceId) ?? BELOW_EVERY_ID,
-		page?.limit ?? MAX_LIST_MEMBERS_ANSWERED
+		(order) => `SELECT la.account_id AS id FROM list_accounts la
+			WHERE la.list_id = ?1 AND la.account_id < ?2 AND la.account_id > ?3 ORDER BY la.account_id ${order} LIMIT ?4`,
+		availableSql('a.id'),
+		page,
+		MAX_LIST_MEMBERS_ANSWERED
 	)
-	if (ascending) {
-		rows.reverse()
-	}
-	return {
-		items: rows.map((row) => presentAccount(row, present)),
-		newest: rows[0]?.id ?? null,
-		oldest: rows.at(-1)?.id ?? null,
-	}
+	return { ...result, items: result.items.map((row) => presentAccount(row, present)) }
 })
 
 export type MembersResult = { status: 'ok' } | { status: 'not_found' } | { status: 'invalid'; errors: string[] }

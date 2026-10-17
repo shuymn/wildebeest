@@ -16,6 +16,7 @@ import {
 import { type DeliveryEnvelope, enqueueActivity, type ReachOf } from './deliveries'
 import { readOperation } from './operation'
 import { type NoteQuote, noteQuote } from './quotes'
+import { readWindow, singleWindow, windowJson } from './windows'
 import type { Db } from '../db/sql'
 import { httpUrl } from '../platform/http-url'
 import { sha256Hex } from '../platform/sha256'
@@ -886,11 +887,13 @@ export const OUTBOX_PAGE_SIZE = 20
 export type OutboxPage = { total: number | null; items: string[]; next: string | null }
 
 // A local actor's outbox, newest first: Create for its statuses, Announce for its boosts (of public or unlisted
-// originals only). before null asks for the count only; otherwise a page of statuses with ids below it.
+// originals only). before null asks for the count only; otherwise a page of statuses with ids below it. The count is
+// the account's stored statuses_count, as Mastodon's OutboxesController gives totalItems (@account.statuses_count): one
+// row, however long the history.
 export const getOutbox = readOperation<{ username: string; before: string | null }, OutboxPage | null>(
 	(db, { username, before }) => {
-		const owner = db.first<{ id: string; uri: string }>(
-			`SELECT a.id, a.uri FROM accounts a JOIN local_accounts l ON l.account_id = a.id
+		const owner = db.first<{ id: string; uri: string; statuses_count: number }>(
+			`SELECT a.id, a.uri, a.statuses_count FROM accounts a JOIN local_accounts l ON l.account_id = a.id
 			WHERE a.domain IS NULL AND lower(a.username) = lower(?1) AND a.username = ?1 AND ${availableLocalSql('l')}`,
 			username
 		)
@@ -903,29 +906,43 @@ export const getOutbox = readOperation<{ username: string; before: string | null
 				AND (s.reblog_of_id IS NULL OR (o.visibility IN ${DISTRIBUTABLE_SQL} AND ${availableSql('o.account_id')}))`
 		// The count only for the collection itself; a page does not need it.
 		if (before === null) {
-			return {
-				total: db.first<{ n: number }>(`SELECT count(*) AS n ${listed}`, owner.id)?.n ?? 0,
-				items: [],
-				next: null,
-			}
+			return { total: owner.statuses_count, items: [], next: null }
 		}
-		const rows = db.all<{
-			id: string
-			uri: string
-			visibility: Visibility
-			published_at: string
-			original_id: string | null
-			original_uri: string | null
-			original_author_id: string | null
-			original_author_uri: string | null
-		}>(
-			`SELECT s.id, s.uri, s.visibility, s.published_at, o.id AS original_id, o.uri AS original_uri,
-				o.account_id AS original_author_id, (SELECT uri FROM accounts WHERE id = o.account_id) AS original_author_uri
-			${listed} AND s.id < ?2 ORDER BY s.id DESC LIMIT ?3`,
+		// A window of the actor's public and unlisted statuses below `before`, boosts only of public and unlisted
+		// originals (statuses_account, windows.ts), then the rule over those: boosts of unavailable authors' originals
+		// cost a window, not their number. Statuses an anonymous reader may not see are never candidates (the walk passes
+		// them), so none supplies the next cursor. One more than a page tells whether more follow.
+		const size = readWindow(OUTBOX_PAGE_SIZE + 1)
+		const window = singleWindow(
+			db,
+			`SELECT s.id FROM statuses s WHERE s.account_id = ?1 AND s.id < ?2 AND s.visibility IN ${DISTRIBUTABLE_SQL}
+				AND (s.reblog_of_id IS NULL OR EXISTS (SELECT 1 FROM statuses wo
+					WHERE wo.id = s.reblog_of_id AND wo.visibility IN ${DISTRIBUTABLE_SQL}))
+			ORDER BY s.id DESC LIMIT ?3`,
+			size,
 			owner.id,
 			before,
-			OUTBOX_PAGE_SIZE + 1
+			size
 		)
+		const rows =
+			window.candidates.length === 0
+				? []
+				: db.all<{
+						id: string
+						uri: string
+						visibility: Visibility
+						published_at: string
+						original_id: string | null
+						original_uri: string | null
+						original_author_id: string | null
+						original_author_uri: string | null
+					}>(
+						`SELECT s.id, s.uri, s.visibility, s.published_at, o.id AS original_id, o.uri AS original_uri,
+							o.account_id AS original_author_id, (SELECT uri FROM accounts WHERE id = o.account_id) AS original_author_uri
+						${listed} AND s.id IN (SELECT json_extract(value, '$.id') FROM json_each(?2)) ORDER BY s.id DESC`,
+						owner.id,
+						windowJson(window)
+					)
 		const items: string[] = []
 		for (const row of rows.slice(0, OUTBOX_PAGE_SIZE)) {
 			if (row.original_uri !== null && row.original_author_uri !== null && row.original_author_id !== null) {
@@ -956,7 +973,13 @@ export const getOutbox = readOperation<{ username: string; before: string | null
 			}
 		}
 		const last = rows[OUTBOX_PAGE_SIZE - 1]
-		return { total: null, items, next: rows.length > OUTBOX_PAGE_SIZE && last !== undefined ? last.id : null }
+		const next =
+			rows.length > OUTBOX_PAGE_SIZE && last !== undefined
+				? last.id
+				: window.cut
+					? (window.candidates.at(-1)?.id ?? null)
+					: null
+		return { total: null, items, next }
 	}
 )
 

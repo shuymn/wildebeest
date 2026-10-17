@@ -1,10 +1,11 @@
 import { type Account, ACCOUNT_COLUMNS, ACCOUNT_FROM, type AccountRow, type Present, presentAccount } from './accounts'
-import { NOT_A_REPLY_TO_OTHERS, statusReads, viewableStatusId } from './audience'
+import { DISTRIBUTABLE_SQL, NOT_A_REPLY_TO_OTHERS, statusReads, viewableStatusId } from './audience'
 import { readOperation } from './operation'
 import { presentStatus, presentStatuses, type Status } from './status-presenter'
 import { isHashtagName } from './status-text'
 import { resolveStatusId } from './statuses'
 import { normalizeTag } from './tag-name'
+import { readWindow, singleWindow, windowJson, windowPage } from './windows'
 import type { Db } from '../db/sql'
 import { httpUrl } from '../platform/http-url'
 
@@ -43,26 +44,37 @@ export const profilePage = readOperation<
 	if (row.suspended_at !== null) {
 		return { status: 'suspended' }
 	}
-	const read = statusReads(null, { viewer: '?1' })
-	const ids = read
-		.select(
-			db,
-			'visible',
-			{
-				where: 's.account_id = ?2 AND s.reblog_of_id IS NULL',
-				and: `${NOT_A_REPLY_TO_OTHERS} AND (?3 IS NULL OR s.id < ?3)${
-					tag === null ? '' : ' AND EXISTS (SELECT 1 FROM status_tags t WHERE t.status_id = s.id AND t.name = ?5)'
-				}`,
-				tail: 'ORDER BY s.id DESC LIMIT ?4',
-			},
-			null,
-			row.id,
-			maxId !== null && STATUS_ID.test(maxId) ? maxId : null,
-			PROFILE_PAGE_SIZE + 1,
-			...(tag === null ? [] : [normalizeTag(tag)])
-		)
-		.map((status) => status.id)
-	const next = ids.length > PROFILE_PAGE_SIZE ? (ids[PROFILE_PAGE_SIZE - 1] ?? null) : null
+	// A window of the account's public and unlisted posts from the cursor (statuses_account_originals, windows.ts; no
+	// cursor is ':', above every id, so the walk starts at the cursor either way), then the rule over those. Private and
+	// direct posts are never candidates (the walk passes them), so none supplies the next cursor. One more than a page
+	// tells whether more follow.
+	const size = readWindow(PROFILE_PAGE_SIZE + 1)
+	const window = singleWindow(
+		db,
+		`SELECT s.id FROM statuses s WHERE s.account_id = ?1 AND s.reblog_of_id IS NULL AND ${NOT_A_REPLY_TO_OTHERS}
+			AND s.visibility IN ${DISTRIBUTABLE_SQL}
+			AND s.id < coalesce(?2, ':')
+			${tag === null ? '' : 'AND EXISTS (SELECT 1 FROM status_tags t WHERE t.status_id = s.id AND t.name = ?4)'}
+		ORDER BY s.id DESC LIMIT ?3`,
+		size,
+		row.id,
+		maxId !== null && STATUS_ID.test(maxId) ? maxId : null,
+		size,
+		...(tag === null ? [] : [normalizeTag(tag)])
+	)
+	const passed =
+		window.candidates.length === 0
+			? []
+			: statusReads(null, { viewer: '?1' }).select(
+					db,
+					'visible',
+					{ from: 'json_each(?2) c CROSS JOIN', join: "ON s.id = json_extract(c.value, '$.id')" },
+					null,
+					windowJson(window)
+				)
+	const shown = windowPage(window, passed, (status) => status.id, PROFILE_PAGE_SIZE + 1, false)
+	const ids = shown.rows.map((status) => status.id)
+	const next = ids.length > PROFILE_PAGE_SIZE ? (ids[PROFILE_PAGE_SIZE - 1] ?? null) : shown.cut ? shown.oldest : null
 	return {
 		status: 'ok',
 		account: presentAccount(row, present),
