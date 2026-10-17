@@ -1,5 +1,6 @@
 import {
 	type Account,
+	type AccountRow,
 	type Page,
 	type PageQuery,
 	type Present,
@@ -146,10 +147,45 @@ export const deleteList = userWriteOperation<{ id: string }, boolean>(
 	(db, { id }, { accountId }) => db.run('DELETE FROM lists WHERE id = ? AND account_id = ?', id, accountId) > 0
 )
 
+// A page of an account list its owner keeps (list members, endorsements), by account id, newest first: `candidates`
+// selects (id) rows with ?1 the owner, ?2 and ?3 the exclusive bounds and ?4 the cap, in the order `order` gives; `rule`
+// (over `a` and `l`) decides which are listed. Paged, a page reads one window (windows.ts). Without a page (limit=0),
+// the answer is the whole list up to `limit`: windows one after another until that many pass or the list ends, as the
+// list is the owner's own and bounded by their follows.
+export function ownedAccountsPage(
+	db: Db,
+	owner: string,
+	candidates: (order: 'ASC' | 'DESC') => string,
+	rule: string,
+	page: PageQuery | null,
+	limit: number
+): Page<AccountRow> {
+	const ascending = page?.minId !== undefined
+	const size = readWindow(page?.limit ?? limit)
+	let max = statusCursor(page?.maxId) ?? ABOVE_EVERY_ID
+	const min = statusCursor(page?.minId ?? page?.sinceId) ?? BELOW_EVERY_ID
+	if (page !== null) {
+		const window = singleWindow(db, candidates(ascending ? 'ASC' : 'DESC'), size, owner, max, min, size)
+		const shown = windowPage(window, windowAccounts(db, window, rule), (row) => row.id, page.limit, ascending)
+		return { items: shown.rows, newest: shown.newest, oldest: shown.oldest, cut: shown.cut }
+	}
+	const items: AccountRow[] = []
+	for (;;) {
+		const window = singleWindow(db, candidates('DESC'), size, owner, max, min, size)
+		items.push(...windowPage(window, windowAccounts(db, window, rule), (row) => row.id, size, false).rows)
+		const last = window.candidates.at(-1)?.id
+		if (!window.cut || items.length >= limit || last === undefined) {
+			break
+		}
+		max = last
+	}
+	const answered = items.slice(0, limit)
+	return { items: answered, newest: answered[0]?.id ?? null, oldest: answered.at(-1)?.id ?? null }
+}
+
 // GET /api/v1/lists/:id/accounts: the members, unavailable accounts left out (Account.without_suspended), by account
 // id, newest first, paged by the account id (paginate_by_max_id); page null answers every member (limit=0), up to
-// MAX_LIST_MEMBERS_ANSWERED. A pending member is listed too. A read applies availability to a window of
-// readWindow(limit) of the list's members from the cursor (windows.ts). Null when the list is not the viewer's.
+// MAX_LIST_MEMBERS_ANSWERED (ownedAccountsPage). A pending member is listed too. Null when the list is not the viewer's.
 export const listAccounts = userReadOperation<
 	{ id: string; page: PageQuery | null; present: Present },
 	Page<Account> | null
@@ -157,27 +193,16 @@ export const listAccounts = userReadOperation<
 	if (ownList(db, accountId, id) === undefined) {
 		return null
 	}
-	const ascending = page?.minId !== undefined
-	const limit = page?.limit ?? MAX_LIST_MEMBERS_ANSWERED
-	const size = readWindow(limit)
-	const window = singleWindow(
+	const result = ownedAccountsPage(
 		db,
-		`SELECT la.account_id AS id FROM list_accounts la WHERE la.list_id = ?1 AND la.account_id < ?2 AND la.account_id > ?3
-		ORDER BY la.account_id ${ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
-		size,
 		id,
-		statusCursor(page?.maxId) ?? ABOVE_EVERY_ID,
-		statusCursor(page?.minId ?? page?.sinceId) ?? BELOW_EVERY_ID,
-		size
+		(order) => `SELECT la.account_id AS id FROM list_accounts la
+			WHERE la.list_id = ?1 AND la.account_id < ?2 AND la.account_id > ?3 ORDER BY la.account_id ${order} LIMIT ?4`,
+		availableSql('a.id'),
+		page,
+		MAX_LIST_MEMBERS_ANSWERED
 	)
-	const rows = windowAccounts(db, window, availableSql('a.id'))
-	const shown = windowPage(window, rows, (row) => row.id, limit, ascending)
-	return {
-		items: shown.rows.map((row) => presentAccount(row, present)),
-		newest: shown.newest,
-		oldest: shown.oldest,
-		cut: shown.cut,
-	}
+	return { ...result, items: result.items.map((row) => presentAccount(row, present)) }
 })
 
 export type MembersResult = { status: 'ok' } | { status: 'not_found' } | { status: 'invalid'; errors: string[] }

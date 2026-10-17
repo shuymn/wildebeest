@@ -343,3 +343,54 @@ describe('a group the list shows is found on its own', () => {
 		).toMatchObject({ notification_groups: [{ group_key: GROUP, notifications_count: 1 }] })
 	}, 60_000)
 })
+
+// limit=0 answers a list the viewer keeps whole (up to its answer cap), however many of its entries are unavailable:
+// 5 available accounts below 3,000 being deleted, as members of alice's list and as her endorsements.
+describe('limit=0 answers the whole of a list the viewer keeps', () => {
+	it('lists the available members and endorsements below 3,000 unavailable ones', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const list = (
+			await (
+				await h.request(
+					'/api/v1/lists',
+					bearer(alice.token, {
+						method: 'POST',
+						headers: { 'content-type': 'application/json' },
+						body: JSON.stringify({ title: 'all' }),
+					})
+				)
+			).json<{ id: string }>()
+		).id
+		await runInDurableObject(h.store, (_instance, state) => {
+			const sql = state.storage.sql
+			for (const [base, count, deleting] of [
+				[OLDER_BASE, 5, null],
+				[HIDDEN_BASE, 3_000, new Date(NOW).toISOString()],
+			] as const) {
+				sql.exec(
+					`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+					INSERT INTO accounts (id, uri, username, domain, deleted_at)
+					SELECT CAST(?2 + i AS TEXT), 'https://far.example/users/z' || (?2 + i), 'z' || (?2 + i), 'far.example', ?3 FROM n`,
+					count,
+					String(base),
+					deleting
+				)
+			}
+			sql.exec(
+				"INSERT INTO list_accounts (list_id, account_id) SELECT ?, id FROM accounts WHERE domain = 'far.example'",
+				list
+			)
+			sql.exec(
+				"INSERT INTO account_pins (account_id, target_account_id) SELECT ?, id FROM accounts WHERE domain = 'far.example'",
+				alice.id
+			)
+		})
+		const expected = ids(OLDER_BASE, 5).reverse()
+		for (const path of [`/api/v1/lists/${list}/accounts?limit=0`, '/api/v1/endorsements?limit=0']) {
+			const response = await h.request(path, bearer(alice.token))
+			expect(response.status).toBe(200)
+			expect([path, listed(await response.json())]).toEqual([path, expected])
+		}
+	}, 60_000)
+})

@@ -7,12 +7,10 @@ import {
 	relationshipResult,
 	type RelationshipResult,
 	resolveAccountId,
-	windowAccounts,
 } from './accounts'
 import { endorsementListedSql, endorsementsShownSql } from './audience'
 import { optionalUserReadOperation, userReadOperation, userWriteOperation } from './auth'
-import { ABOVE_EVERY_ID, BELOW_EVERY_ID, statusCursor } from './statuses'
-import { readWindow, singleWindow, windowPage } from './windows'
+import { ownedAccountsPage } from './lists'
 import type { Db } from '../db/sql'
 
 // Endorsed accounts (Mastodon 4.5's AccountPin, Api::V1::Accounts::EndorsementsController and
@@ -75,34 +73,22 @@ export const unendorse = userWriteOperation<{ target: string; now: number }, Rel
 
 // The accounts `owner` endorses that R28 lists, by account id, newest first, paged by the account id
 // (paginate_by_max_id, and min_id as Kopje's other account lists page); page null reads up to
-// MAX_ENDORSEMENTS_ANSWERED. A read applies R28 to a window of readWindow(limit) of the owner's endorsements from the
-// cursor (windows.ts).
+// MAX_ENDORSEMENTS_ANSWERED (ownedAccountsPage in lists.ts).
 function endorsedPage(db: Db, owner: string, page: PageQuery | null, present: Present): Page<Account> {
 	if (db.first(`SELECT 1 AS shown WHERE ${endorsementsShownSql('?1')}`, owner) === undefined) {
 		return { items: [], newest: null, oldest: null }
 	}
-	const ascending = page?.minId !== undefined
-	const limit = page?.limit ?? MAX_ENDORSEMENTS_ANSWERED
-	const size = readWindow(limit)
-	const window = singleWindow(
+	const result = ownedAccountsPage(
 		db,
-		`SELECT p.target_account_id AS id FROM account_pins p
-		WHERE p.account_id = ?1 AND p.target_account_id < ?2 AND p.target_account_id > ?3
-		ORDER BY p.target_account_id ${ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
-		size,
 		owner,
-		statusCursor(page?.maxId) ?? ABOVE_EVERY_ID,
-		statusCursor(page?.minId ?? page?.sinceId) ?? BELOW_EVERY_ID,
-		size
+		(order) => `SELECT p.target_account_id AS id FROM account_pins p
+			WHERE p.account_id = ?1 AND p.target_account_id < ?2 AND p.target_account_id > ?3
+			ORDER BY p.target_account_id ${order} LIMIT ?4`,
+		endorsementListedSql('a.id'),
+		page,
+		MAX_ENDORSEMENTS_ANSWERED
 	)
-	const rows = windowAccounts(db, window, endorsementListedSql('a.id'))
-	const shown = windowPage(window, rows, (row) => row.id, limit, ascending)
-	return {
-		items: shown.rows.map((row) => presentAccount(row, present)),
-		newest: shown.newest,
-		oldest: shown.oldest,
-		cut: shown.cut,
-	}
+	return { ...result, items: result.items.map((row) => presentAccount(row, present)) }
 }
 
 // GET /api/v1/endorsements: the viewer's own (EndorsementsController).
