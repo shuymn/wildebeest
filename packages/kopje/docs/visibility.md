@@ -686,8 +686,8 @@ limit, 40); statuses page by 20 and at most 40, accounts and notifications by 40
 | profile web page, outbox             | `readWindow` of 21 (63), public and unlisted only                                                             | availability of a boosted original (outbox)                              |
 | quotes list (statuses.ts)            | a page of accepted quotes                                                                                     | R8, or R2 for the quoted author                                          |
 
-Following and the interactors' windows sort the account's follows or the status's favourites and boosts by id: no
-index orders them so, so those windows bound the rule's work, not that sort. Reads bounded otherwise: search (2,500
+Following and the interactors read their windows through the indexes of migration `0043_read_window_indexes`, in id
+order. Reads bounded otherwise: search (2,500
 per library source), the directory (`DIRECTORY_WINDOW`), the admin lists (their residual budget), context (its
 traversal cap), conversations (no rule before `LIMIT`), and the blocks, mutes, domain blocks and follow requests lists
 (no rule before `LIMIT`). Suggestions and the link timeline answer empty lists.

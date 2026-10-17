@@ -312,9 +312,6 @@ type Read = {
 	minId?: boolean
 }
 
-// The reads whose window sorts its edges by id (no index orders them so): the window bounds their rule, not the sort.
-const SORTING = ['following', 'favourited_by', 'reblogged_by']
-
 const range = (base: bigint, count: number) => Array.from({ length: count }, (_, i) => id(base, count - 1 - i))
 const friendStatuses = (newer: number) => [...range(FRIEND_NEWER, newer), ...range(FRIEND_OLDER, OLDER)]
 const visibleAccounts = (newer: number) => [...range(NEWER_ACCOUNT, newer), ...range(VISIBLE_ACCOUNT, OLDER)]
@@ -520,8 +517,7 @@ describe('filtered reads read a candidate window, however long the hidden range 
 				grown.push(`${r.name}: ${fewRows} -> ${manyRows}`)
 			}
 		}
-		// SORTING's windows bound their rule, not the sort of their edges.
-		expect(grown.filter((line) => !SORTING.some((name) => line.startsWith(`${name}:`)))).toEqual([])
+		expect(grown).toEqual([])
 	}, 300_000)
 
 	// The grouped list's walk reads at most GROUP_WALK notifications, shown or hidden: it is compared beyond that.

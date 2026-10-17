@@ -1632,9 +1632,9 @@ export type InteractorsInput = { id: string; kind: 'favourited_by' | 'reblogged_
 // blocks, is blocked by, mutes or domain-blocks, and without suspended accounts. Only public and unlisted boosts are
 // listed (Mastodon's RebloggedByAccountsController); reblogs_count still counts every boost, as Mastodon's does.
 // Favourites page by the favourite's id; boosts by the boost's status id. A page applies R12 to a window of
-// readWindow(limit) of the status's favourites or boosts from the cursor (windows.ts). Neither has an index in that
-// order (favourites_pair and statuses_reblog are by account), so the window's read sorts the status's favourites or
-// boosts by their key. An account that blocks the viewer is never a candidate (docs/visibility.md "Read bounds").
+// readWindow(limit) of the status's favourites or public and unlisted boosts from the cursor (windows.ts), through
+// favourites_status and statuses_reblogged_by (migration 0043). An account that blocks the viewer is never a
+// candidate (docs/visibility.md "Read bounds").
 export const interactors = optionalUserReadOperation<InteractorsInput, Viewed<Page<Account>>>(
 	(db, { id, kind, page, present }, { accountId: viewerId, now }) => {
 		const resolved = viewable(db, viewerId, id)

@@ -1043,7 +1043,8 @@ export function windowAccounts(db: Db, window: Window, rule: string): AccountRow
 // (followListsShownSql). Others do not see the accounts they block, mute or are blocked by (followListedSql). A page
 // reads a window of readWindow(limit) of the account's follows from the cursor (windows.ts), then applies the rule to
 // those; a follower that blocks the viewer is never a candidate (docs/visibility.md "Read bounds"), so its follow
-// supplies no cursor. An unknown account is not found.
+// supplies no cursor. Followers read follows_target, following follows_following (migration 0043), both in id order.
+// An unknown account is not found.
 export const listFollows = optionalUserReadOperation<ListFollowsInput, Page<Account> | null>(
 	(db, { account, direction, page, present }, { accountId: viewerId, now }) => {
 		const id = resolveAccountId(db, account)

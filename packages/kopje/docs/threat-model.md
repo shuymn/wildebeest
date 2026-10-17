@@ -1502,10 +1502,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   (`test/read-windows.test.ts`: the same rows with 100 or 20,000 hidden rows of each kind, paging through 1,000 in both
   directions, and the leak cases). Home and a list read a stream per followed account (or active member), with the
   viewer's own statuses and the direct and limited statuses that mention them, and home a stream per followed
-  hashtag; an account whose every status the rule hides has no stream. _Gap:_ the number of streams is the viewer's
-  follows (their own choice); following and `favourited_by`/`reblogged_by` sort the account's follows or the status's
-  favourites and boosts by id (no index orders them so), so their windows bound the rule's work, not that sort; rows
-  hidden by visibility are walked past, not windowed (account statuses read by a non-follower of an account that posts
+  hashtag; an account whose every status the rule hides has no stream. Following and `favourited_by`/`reblogged_by`
+  read their windows through the id-ordered indexes of migration `0043_read_window_indexes`. _Gap:_ the number of streams is the viewer's
+  follows (their own choice); rows hidden by visibility are walked past, not windowed (account statuses read by a non-follower of an account that posts
   mostly to followers: a remote account's private statuses are stored only while a local account follows it, so no
   outside party can grow it at will; accepted).
   _Enforced (main)_ for search: statuses pass `listableSql` before `LIMIT`, each library source reads at most 2,500 rows through an index ordered by the status id it returns (cursors applied
