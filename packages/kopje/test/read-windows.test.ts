@@ -558,6 +558,23 @@ describe('filtered reads read a candidate window, however long the hidden range 
 	}, 300_000)
 })
 
+describe('the profile web page reads from its cursor, however many newer posts', () => {
+	// A fixed cursor with 20 of LOCAL's public posts below it, and 100 or 20,000 newer public posts above it.
+	it('reads the same rows below a cursor with 100 or 20,000 newer posts', async () => {
+		const input = { username: 'local', maxId: id(LOCAL_OLDER, 20), present: PRESENT, now: NOW }
+		const rows: number[] = []
+		for (const newer of [100, 20_000]) {
+			const store = await world(0, newer)
+			const output = answerOf(
+				await runInDurableObject(store, (_instance, state) => profilePage.run(state.storage.sql, input as never))
+			) as { statuses: { id: string }[] }
+			expect(output.statuses.map((status) => status.id)).toEqual(range(LOCAL_OLDER, 20))
+			rows.push(await rowsRead({ store }, profilePage, input as never))
+		}
+		expect(rows[1]).toBeLessThanOrEqual((rows[0] ?? 0) + ALLOWANCE)
+	}, 120_000)
+})
+
 describe('paging moves through empty windows (RES-7)', () => {
 	it('reaches every visible row on both sides of 1,000 hidden ones, once and in order, by max_id and by min_id', async () => {
 		const NEWER = 5
