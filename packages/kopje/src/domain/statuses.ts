@@ -1634,7 +1634,7 @@ export type InteractorsInput = { id: string; kind: 'favourited_by' | 'reblogged_
 // Favourites page by the favourite's id; boosts by the boost's status id. A page applies R12 to a window of
 // readWindow(limit) of the status's favourites or boosts from the cursor (windows.ts). Neither has an index in that
 // order (favourites_pair and statuses_reblog are by account), so the window's read sorts the status's favourites or
-// boosts by their key, without reading their accounts.
+// boosts by their key. An account that blocks the viewer is never a candidate (docs/visibility.md "Read bounds").
 export const interactors = optionalUserReadOperation<InteractorsInput, Viewed<Page<Account>>>(
 	(db, { id, kind, page, present }, { accountId: viewerId, now }) => {
 		const resolved = viewable(db, viewerId, id)
@@ -1651,23 +1651,26 @@ export const interactors = optionalUserReadOperation<InteractorsInput, Viewed<Pa
 				? singleWindow(
 						db,
 						`SELECT CAST(f.id AS TEXT) AS id FROM favourites f WHERE f.status_id = ?1 AND ${edgeRangeSql('f.id', '?2', '?3')}
+							AND NOT ${blocksSql('f.account_id', '?5')}
 						ORDER BY f.id ${order} LIMIT ?4`,
 						size,
 						target,
 						page.maxId ?? null,
 						lower,
-						size
+						size,
+						viewerId
 					)
 				: singleWindow(
 						db,
 						`SELECT r.id FROM statuses r WHERE r.reblog_of_id = ?1 AND r.visibility IN ${DISTRIBUTABLE_SQL}
-							AND r.id < ?2 AND r.id > ?3
+							AND r.id < ?2 AND r.id > ?3 AND NOT ${blocksSql('r.account_id', '?5')}
 						ORDER BY r.id ${order} LIMIT ?4`,
 						size,
 						target,
 						statusCursor(page.maxId) ?? ':',
 						statusCursor(lower ?? undefined) ?? '',
-						size
+						size,
+						viewerId
 					)
 		const edge =
 			kind === 'favourited_by'

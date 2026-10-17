@@ -1,5 +1,6 @@
 import { edgeRangeSql, type Page, type PageQuery, type Present, resolveAccountId } from './accounts'
 import {
+	audienceSql,
 	blocksSql,
 	filteredForSql,
 	NOT_A_REPLY_TO_OTHERS,
@@ -646,20 +647,23 @@ export const accountStatuses = optionalUserReadOperation<AccountStatusesInput, P
 				oldest: ids.at(-1) ?? null,
 			}
 		}
-		// The account's statuses from the cursor with the request's filters, a window of readWindow(limit) through
-		// statuses_account; R2 and R11 then apply to those (its private statuses, boosts of originals the viewer may not
-		// see or whose author they filter).
+		// The account's statuses from the cursor with the request's filters and the audience the viewer is in
+		// (audienceSql), a window of readWindow(limit) through statuses_account; R2 and R11 then apply to those (boosts
+		// of originals of unavailable or filtered authors). Statuses the viewer may not see by their visibility are never
+		// candidates: the walk passes them, as it did before windows, and none supplies a cursor.
 		const size = readWindow(cursor.limit)
 		const window = singleWindow(
 			db,
 			`SELECT s.id FROM statuses s WHERE s.account_id = ?1 AND ${rangeSql('s.id')} ${filters}
 				AND (?5 IS NULL OR EXISTS (SELECT 1 FROM status_tags ut WHERE ut.status_id = s.id AND ut.name = ?5))
+				AND ${audienceSql('s', '?6')}
 			ORDER BY s.id ${order} LIMIT ?4`,
 			size,
 			accountId,
 			...rangeParams(cursor),
 			size,
-			tagged
+			tagged,
+			viewerId
 		)
 		return windowStatuses(db, viewer, 'visible', window, cursor, input.present, originalShownSql('?1', '?2'))
 	}

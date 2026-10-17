@@ -266,13 +266,28 @@ function remoteSql(viewer: string): string {
 export function visibleSql(s: string, viewer: string): string {
 	return `(${availableSql(`${s}.account_id`)}
 		AND (${s}.account_id IS ${viewer}
-			OR (NOT ${blocksSql(`${s}.account_id`, viewer)}
-				AND (CASE WHEN ${s}.visibility IN ${DISTRIBUTABLE_SQL}
-					THEN CASE WHEN ${remoteSql(viewer)} THEN NOT ${domainBlocksSql(`${s}.account_id`, viewer)} ELSE 1 END
-					ELSE (${s}.visibility = 'private' AND EXISTS (SELECT 1 FROM main.follows fo
-							WHERE fo.account_id IS ${viewer} AND fo.target_account_id = ${s}.account_id AND fo.state = 'accepted'))
-						OR EXISTS (SELECT 1 FROM main.status_mentions sm WHERE sm.status_id = ${s}.id AND sm.account_id IS ${viewer})
-					END))))`
+			OR (NOT ${blocksSql(`${s}.account_id`, viewer)} AND ${audienceCaseSql(s, viewer)})))`
+}
+
+// R2's terms on the row's visibility and audience: public and unlisted to everyone but a remote account on a domain
+// the author blocks, private to accepted followers and the mentioned, direct and limited to the mentioned.
+function audienceCaseSql(s: string, viewer: string): string {
+	return `(CASE WHEN ${s}.visibility IN ${DISTRIBUTABLE_SQL}
+		THEN CASE WHEN ${remoteSql(viewer)} THEN NOT ${domainBlocksSql(`${s}.account_id`, viewer)} ELSE 1 END
+		ELSE (${s}.visibility = 'private' AND EXISTS (SELECT 1 FROM main.follows fo
+				WHERE fo.account_id IS ${viewer} AND fo.target_account_id = ${s}.account_id AND fo.state = 'accepted'))
+			OR EXISTS (SELECT 1 FROM main.status_mentions sm WHERE sm.status_id = ${s}.id AND sm.account_id IS ${viewer})
+		END)`
+}
+
+// The part of R2 a candidate window keeps (windows.ts, docs/visibility.md "Read bounds"): the row is the viewer's own,
+// or its visibility and audience let the viewer see it, and so for a boost's original. Availability, the author's
+// block of the viewer and the viewer's own filters are left to the rule over the candidates, so a window skips only
+// rows hidden for those reasons, and a row the viewer may not see by its visibility never supplies a cursor.
+export function audienceSql(s: string, viewer: string): string {
+	const row = (r: string) => `(${r}.account_id IS ${viewer} OR ${audienceCaseSql(r, viewer)})`
+	return `(${row(s)} AND (${s}.reblog_of_id IS NULL
+		OR EXISTS (SELECT 1 FROM main.statuses ${s}_ao WHERE ${s}_ao.id = ${s}.reblog_of_id AND ${row(`${s}_ao`)})))`
 }
 
 // R3: a status may be shown by itself (GET /statuses/:id): the row is visible and, for a reblog, so is the original.

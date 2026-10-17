@@ -1012,7 +1012,8 @@ export function windowAccounts(db: Db, window: Window, rule: string): AccountRow
 // the account is suspended, or, to anyone but itself, when it hides its network or blocks the viewer
 // (followListsShownSql). Others do not see the accounts they block, mute or are blocked by (followListedSql). A page
 // reads a window of readWindow(limit) of the account's follows from the cursor (windows.ts), then applies the rule to
-// those. An unknown account is not found.
+// those; a follower that blocks the viewer is never a candidate (docs/visibility.md "Read bounds"), so its follow
+// supplies no cursor. An unknown account is not found.
 export const listFollows = optionalUserReadOperation<ListFollowsInput, Page<Account> | null>(
 	(db, { account, direction, page, present }, { accountId: viewerId, now }) => {
 		const id = resolveAccountId(db, account)
@@ -1030,12 +1031,14 @@ export const listFollows = optionalUserReadOperation<ListFollowsInput, Page<Acco
 			db,
 			`SELECT CAST(f.id AS TEXT) AS id FROM follows f
 			WHERE f.${anchor} = ?1 AND f.state = 'accepted' AND ${edgeRangeSql('f.id', '?2', '?3')}
+				AND (?5 IS NULL OR ?5 IS ?1 OR NOT ${blocksSql(`f.${other}`, '?5')})
 			ORDER BY f.id ${ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
 			size,
 			id,
 			page.maxId ?? null,
 			page.minId ?? page.sinceId ?? null,
-			size
+			size,
+			viewerId
 		)
 		const rows =
 			window.candidates.length === 0

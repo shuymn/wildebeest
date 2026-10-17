@@ -910,13 +910,17 @@ export const getOutbox = readOperation<{ username: string; before: string | null
 				next: null,
 			}
 		}
-		// A window of the actor's statuses below `before` (statuses_account, windows.ts), then the rule over those: its
-		// private and direct statuses, and boosts of originals it may not serve, cost a window, not their number. One
-		// more than a page tells whether more follow.
+		// A window of the actor's public and unlisted statuses below `before`, boosts only of public and unlisted
+		// originals (statuses_account, windows.ts), then the rule over those: boosts of unavailable authors' originals
+		// cost a window, not their number. Statuses an anonymous reader may not see are never candidates (the walk passes
+		// them), so none supplies the next cursor. One more than a page tells whether more follow.
 		const size = readWindow(OUTBOX_PAGE_SIZE + 1)
 		const window = singleWindow(
 			db,
-			'SELECT s.id FROM statuses s WHERE s.account_id = ?1 AND s.id < ?2 ORDER BY s.id DESC LIMIT ?3',
+			`SELECT s.id FROM statuses s WHERE s.account_id = ?1 AND s.id < ?2 AND s.visibility IN ${DISTRIBUTABLE_SQL}
+				AND (s.reblog_of_id IS NULL OR EXISTS (SELECT 1 FROM statuses wo
+					WHERE wo.id = s.reblog_of_id AND wo.visibility IN ${DISTRIBUTABLE_SQL}))
+			ORDER BY s.id DESC LIMIT ?3`,
 			size,
 			owner.id,
 			before,

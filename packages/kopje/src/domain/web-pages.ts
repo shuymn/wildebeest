@@ -1,5 +1,5 @@
 import { type Account, ACCOUNT_COLUMNS, ACCOUNT_FROM, type AccountRow, type Present, presentAccount } from './accounts'
-import { NOT_A_REPLY_TO_OTHERS, statusReads, viewableStatusId } from './audience'
+import { DISTRIBUTABLE_SQL, NOT_A_REPLY_TO_OTHERS, statusReads, viewableStatusId } from './audience'
 import { readOperation } from './operation'
 import { presentStatus, presentStatuses, type Status } from './status-presenter'
 import { isHashtagName } from './status-text'
@@ -44,12 +44,14 @@ export const profilePage = readOperation<
 	if (row.suspended_at !== null) {
 		return { status: 'suspended' }
 	}
-	// A window of the account's own posts from the cursor (statuses_account, windows.ts), then the rule over those: its
-	// private and direct posts cost a window, not their number. One more than a page tells whether more follow.
+	// A window of the account's public and unlisted posts from the cursor (statuses_account, windows.ts), then the
+	// rule over those. Private and direct posts are never candidates (the walk passes them), so none supplies the next
+	// cursor. One more than a page tells whether more follow.
 	const size = readWindow(PROFILE_PAGE_SIZE + 1)
 	const window = singleWindow(
 		db,
 		`SELECT s.id FROM statuses s WHERE s.account_id = ?1 AND s.reblog_of_id IS NULL AND ${NOT_A_REPLY_TO_OTHERS}
+			AND s.visibility IN ${DISTRIBUTABLE_SQL}
 			AND (?2 IS NULL OR s.id < ?2)
 			${tag === null ? '' : 'AND EXISTS (SELECT 1 FROM status_tags t WHERE t.status_id = s.id AND t.name = ?4)'}
 		ORDER BY s.id DESC LIMIT ?3`,
