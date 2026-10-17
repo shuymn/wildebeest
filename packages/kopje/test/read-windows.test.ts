@@ -528,6 +528,8 @@ describe('filtered reads read a candidate window, however long the hidden range 
 	it('reads the same rows on the outbox, the notification policy, and the grouped notifications past their walk', async () => {
 		const reads: [string, StoreOperation<never, unknown>, unknown, number][] = [
 			['outbox', getOutbox, { username: 'local', before: '999999999999999999' }, 100],
+			// The collection itself: its totalItems is the account's stored count.
+			['outbox collection', getOutbox, { username: 'local', before: null }, 100],
 			// Its summary counts the newest 100 requests, then applies availability: GONE_i's are the newest.
 			['notification policy', getNotificationPolicy, { credential }, 100],
 			[

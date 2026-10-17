@@ -95,7 +95,13 @@ describe('object endpoint (VIS-4)', () => {
 		const collection = await h.request('/ap/users/alice/outbox', AP)
 		expect(collection.status).toBe(200)
 		const outbox = (await collection.json()) as { type: string; totalItems: number; first: string }
-		expect(outbox).toMatchObject({ type: 'OrderedCollection', totalItems: 3 })
+		// totalItems is the account's statuses_count, as Mastodon's OutboxesController gives it; the pages list only what
+		// may be served.
+		const count = (
+			await sql<{ count: number }>(h.store, 'SELECT statuses_count AS count FROM accounts WHERE id = ?', alice.id)
+		)[0]?.count
+		expect(outbox).toMatchObject({ type: 'OrderedCollection', totalItems: count })
+		expect(count).toBeGreaterThanOrEqual(4)
 		const page = (await (await h.request(path(outbox.first), AP)).json()) as {
 			orderedItems: { type: string; object: unknown }[]
 		}
