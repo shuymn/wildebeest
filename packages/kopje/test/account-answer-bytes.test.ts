@@ -1,27 +1,33 @@
 import { runInDurableObject } from 'cloudflare:test'
 
+import { Person } from '@fedify/vocab'
+import { parseFragment } from 'parse5'
 import { describe, expect, it } from 'vitest'
 
 import { sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { ALICE, setup, type Setup } from './inbox-status-helpers'
+import { Db } from '../src/db/sql'
 import {
 	ACCOUNT_ANSWER_BYTES,
-	ACCOUNT_BYTES_SQL,
-	ACCOUNT_FROM,
+	DISPLAY_NAME_LIMIT,
 	familiarFollowers,
+	listFollows,
 	MAX_FAMILIAR_FOLLOWERS,
 	MAX_REMOTE_FIELDS,
+	presentAccountsWithin,
+	PROFILE_URL_LIMIT,
 } from '../src/domain/accounts'
 import { listAccounts, MAX_LIST_MEMBERS_ANSWERED } from '../src/domain/lists'
+import { remoteActorInput } from '../src/federation/remote-actor'
 import { utf8Length } from '../src/platform/dump-format'
 import type { StoreOperation } from '../src/platform/store-kernel'
-import { sanitizeRemoteHtml } from '../src/security/html'
+import { jsonStringBytes, REMOTE_BIO_BYTES, sanitizeRemoteBio, sanitizeRemoteHtml } from '../src/security/html'
 import { sha256Hex } from '../src/security/tokens'
 
-// RES-3: an answer of many accounts (a list's members with limit=0, familiar followers) stays within
-// ACCOUNT_ANSWER_BYTES, both in the account rows that leave SQLite and in the serialized answer, whatever the
-// accounts' bios and fields; a typical answer is never cut.
+// RES-2: one presented account has a known size, as stored and as read, so a page of accounts does too. RES-3: an
+// answer of many accounts (list members and endorsements with limit=0, familiar followers) stays within
+// ACCOUNT_ANSWER_BYTES as serialized, reading at most one chunk past it; a typical answer is never cut.
 
 const ORIGIN = 'https://kopje.test'
 const LIST = '800000000000000001'
@@ -75,18 +81,22 @@ const large = (i: number): Profile => ({
 	),
 })
 
-// Every variable part at its bound: a bio the sanitizer grew from REMOTE_HTML_RAW_LIMIT code units (16,666 empty
-// links, about 0.8 MB, escaping to more), a display name of 2,048 characters that escape to six bytes each, 2 KiB
-// URLs, and 16 fields whose values sanitizing grows fivefold.
-const MAX_NOTE = sanitizeRemoteHtml('<a>'.repeat(16_666))
+// Every variable part an account presents at its bound (RES-2): a bio of REMOTE_BIO_BYTES as a JSON string (control
+// characters that escape to six bytes, among links the sanitizer grows), a display name of DISPLAY_NAME_LIMIT
+// characters that escape to six bytes each, URLs of PROFILE_URL_LIMIT, and fields of about REMOTE_FIELDS_BYTES.
+const MAX_BIO = sanitizeRemoteBio(`<p>${'\u0001"<a>x</a>'.repeat(20_000)}</p>`)
+const atLimit = (prefix: string) => prefix.padEnd(PROFILE_URL_LIMIT, 'u')
 const maximal = (i: number): Profile => ({
-	displayName: '\u0001'.repeat(2048),
-	note: MAX_NOTE,
-	url: `https://max.example/@u${i}/${'u'.repeat(2000)}`,
-	avatar: `https://max.example/a${i}/${'a'.repeat(2000)}`,
-	header: `https://max.example/h${i}/${'h'.repeat(2000)}`,
-	attachment: Array.from({ length: MAX_REMOTE_FIELDS }, () => field('n'.repeat(255), '&'.repeat(4096))),
+	displayName: '\u0001'.repeat(DISPLAY_NAME_LIMIT),
+	note: MAX_BIO,
+	url: atLimit(`https://max.example/@u${i}/`),
+	avatar: atLimit(`https://max.example/a${i}/`),
+	header: atLimit(`https://max.example/h${i}/`),
+	attachment: Array.from({ length: MAX_REMOTE_FIELDS }, () => field('n'.repeat(255), 'v'.repeat(4096))),
 })
+// What one such account is at most as read from SQLite and as serialized (ACCOUNT_COLUMNS's comment).
+const READ_MAX = 115_000
+const SHOWN_MAX = 125_000
 
 // `count` remote accounts from `base` with the profile of each, oldest id first.
 async function accounts(t: Setup, count: number, base: bigint, profile: (i: number) => Profile): Promise<string[]> {
@@ -203,44 +213,135 @@ const listInput = async (t: Setup) => ({
 	present: { origin: ORIGIN },
 })
 
-describe('answers of many accounts are bounded in bytes (RES-3)', () => {
-	it('counts at least what each account serializes to, as ACCOUNT_COLUMNS reads it', async () => {
-		const t = await setup()
-		const empty = (): Profile => ({
-			displayName: '',
-			note: '',
-			url: '',
-			avatar: '',
-			header: '',
-			attachment: Array.from({ length: MAX_REMOTE_FIELDS }, () => field('', '')),
-		})
-		const ids = [
-			...(await accounts(t, 1, 610_000_000_000_000_000n, typical)),
-			...(await accounts(t, 1, 620_000_000_000_000_000n, large)),
-			...(await accounts(t, 1, 630_000_000_000_000_000n, empty)),
-			// Escapes: quotes, backslashes, newlines and control characters in the name and bio.
-			...(await accounts(t, 1, 640_000_000_000_000_000n, (i) => ({
-				...typical(i),
-				displayName: '"\\\n\u0001'.repeat(400),
-				note: `<p>${'"\\\n\u0007'.repeat(4000)}</p>`,
-			}))),
-		]
-		await sql(t.store, 'UPDATE accounts SET url = NULL, avatar_url = NULL, header_url = NULL WHERE id = ?', ids[2]!)
-		await sql(t.store, 'UPDATE accounts SET username = ? WHERE id = ?', 'u'.repeat(255), ids[2]!)
-		for (const id of ids) {
-			const [row] = await sql<{ bytes: number }>(
-				t.store,
-				`SELECT ${ACCOUNT_BYTES_SQL} AS bytes FROM ${ACCOUNT_FROM} WHERE a.id = ?`,
-				id
-			)
-			const shown = await t.api(`/api/v1/accounts/${id}`)
-			expect(utf8Length(JSON.stringify(shown.body))).toBeLessThanOrEqual(row!.bytes)
+const BASE = 600_000_000_000_000_000n
+
+async function follows(t: Setup, followers: readonly string[], followed: readonly string[], state = 'accepted') {
+	await sql(
+		t.store,
+		`INSERT INTO follows (account_id, target_account_id, state)
+		SELECT f.value, x.value, ? FROM json_each(?) f, json_each(?) x`,
+		state,
+		JSON.stringify(followers),
+		JSON.stringify(followed)
+	)
+}
+
+async function shownBytes(t: Setup, path: string): Promise<{ body: unknown; bytes: number }> {
+	const response = await t.request(path, { headers: { authorization: `Bearer ${t.tokens.alice}` } })
+	expect(response.status).toBe(200)
+	const text = await response.text()
+	return { body: JSON.parse(text) as unknown, bytes: utf8Length(text) }
+}
+
+describe('one account has a known size (RES-2)', () => {
+	it('stores a remote bio within REMOTE_BIO_BYTES, as sanitized HTML, and refuses over-long profile URLs', async () => {
+		const long = `https://example.com/${'x'.repeat(PROFILE_URL_LIMIT)}`
+		for (const summary of [
+			'<a>'.repeat(16_666),
+			`<p>${'日本語の自己紹介と<a href="https://example.com/a">リンク</a>です。'.repeat(2_000)}</p>`,
+			`<p>${'\u0001"<b>x</b>'.repeat(10_000)}</p>`,
+		]) {
+			const actor = await Person.fromJsonLd({
+				'@context': 'https://www.w3.org/ns/activitystreams',
+				id: 'https://example.com/users/u',
+				type: 'Person',
+				preferredUsername: 'u',
+				summary,
+				url: long,
+				icon: { type: 'Image', url: long },
+				image: { type: 'Image', url: 'https://example.com/header.png' },
+			})
+			const input = await remoteActorInput(actor, {})
+			const note = input!.note
+			expect(jsonStringBytes(note)).toBeLessThanOrEqual(REMOTE_BIO_BYTES)
+			// Most of the bound is used, and the stored bio parses as HTML without a structural error (no tag cut
+			// mid-way); control characters in text are the sender's, kept as the sanitizer keeps them.
+			expect(jsonStringBytes(note)).toBeGreaterThan(REMOTE_BIO_BYTES / 2)
+			const errors: string[] = []
+			parseFragment(note, { onParseError: (error) => errors.push(error.code) })
+			expect(errors.filter((code) => code !== 'control-character-in-input-stream')).toEqual([])
+			expect(note.endsWith('>')).toBe(true)
+			expect([input!.url, input!.avatarUrl, input!.headerUrl]).toEqual([null, null, 'https://example.com/header.png'])
 		}
 	})
 
+	it('keeps realistic bios whole: Mastodon, Misskey, Pleroma and GoToSocial at their limits', () => {
+		const link = (i: number) =>
+			`<a href="https://example.com/${i}" rel="nofollow noopener" target="_blank" translate="no">` +
+			`<span class="invisible">https://</span><span class="">example.com/${i}</span><span class="invisible"></span></a>`
+		const tag = (i: number) =>
+			`<a href="https://social.example/tags/t${i}" class="mention hashtag" rel="tag">#<span>t${i}</span></a>`
+		const sizes = [
+			// Mastodon: 500 characters, with links and hashtags.
+			`<p>${'自己紹介'.repeat(80)} ${link(1)} ${tag(1)} ${tag(2)}</p>`,
+			// Misskey: 1,500 characters.
+			`<p>${'自己紹介の文章です。'.repeat(150)}</p>`,
+			// Pleroma and GoToSocial: 5,000 characters of Japanese in paragraphs, and 5,000 with a link every 100.
+			`<p>${'自己紹介の文章です。'.repeat(100)}</p>`.repeat(5),
+			Array.from({ length: 50 }, (_, i) => `<p>${'自己紹介の文章です。'.repeat(7)} ${link(i)} ${tag(i)}</p>`).join(''),
+		].map((bio) => {
+			expect(sanitizeRemoteBio(bio)).toBe(sanitizeRemoteHtml(bio))
+			return jsonStringBytes(sanitizeRemoteBio(bio))
+		})
+		// 1,437, 4,509, 15,037 and 27,712 bytes: the largest under half the bound.
+		expect(Math.max(...sizes)).toBeLessThan(REMOTE_BIO_BYTES / 2)
+	})
+
+	it('reads a stored over-long bio as empty and over-long URLs as none', async () => {
+		const t = await setup()
+		const [id] = await accounts(t, 1, BASE, typical)
+		const long = `https://example.com/${'x'.repeat(PROFILE_URL_LIMIT)}`
+		await sql(
+			t.store,
+			'UPDATE accounts SET note = ?, display_name = ?, url = ?, avatar_url = ?, header_url = ? WHERE id = ?',
+			`<p>${'x'.repeat(REMOTE_BIO_BYTES)}</p>`,
+			'n'.repeat(DISPLAY_NAME_LIMIT + 100),
+			long,
+			long,
+			long,
+			id!
+		)
+		const { body } = await shownBytes(t, `/api/v1/accounts/${id}`)
+		expect(body).toMatchObject({
+			note: '',
+			display_name: 'n'.repeat(DISPLAY_NAME_LIMIT),
+			url: `https://m.example/@u${id}`,
+			avatar: `${ORIGIN}/assets/avatar.png`,
+			header: `${ORIGIN}/assets/header.png`,
+		})
+		// A bio within the raw bound that escapes past it reads as empty too; one at the bound is kept.
+		await sql(t.store, 'UPDATE accounts SET note = ? WHERE id = ?', '\u0001'.repeat(REMOTE_BIO_BYTES / 2), id!)
+		expect((await shownBytes(t, `/api/v1/accounts/${id}`)).body).toMatchObject({ note: '' })
+		await sql(t.store, 'UPDATE accounts SET note = ? WHERE id = ?', MAX_BIO, id!)
+		expect((await shownBytes(t, `/api/v1/accounts/${id}`)).body).toMatchObject({ note: MAX_BIO })
+	})
+
+	it('reads and answers a page of 80 followers at every bound from a window of 240', async () => {
+		const t = await setup()
+		const ids = await accounts(t, 240, BASE, maximal)
+		await follows(t, ids, [ALICE])
+		const read = await measured(t, listFollows, {
+			credential: await credential(t, 'read:accounts'),
+			account: ALICE,
+			direction: 'followers',
+			page: { limit: 80 },
+			present: { origin: ORIGIN },
+			now: NOW,
+		})
+		expect(read.profiles).toBe(80)
+		expect(read.bytes).toBeLessThanOrEqual(80 * READ_MAX)
+		const { body, bytes } = await shownBytes(t, `/api/v1/accounts/${ALICE}/followers?limit=80`)
+		expect((body as unknown[]).length).toBe(80)
+		expect(bytes).toBeLessThanOrEqual(80 * SHOWN_MAX)
+		// Each account is near its bound.
+		expect(bytes).toBeGreaterThan(80 * 100_000)
+	}, 60_000)
+})
+
+describe('answers of many accounts are bounded in bytes (RES-3)', () => {
 	it(`answers ${MAX_LIST_MEMBERS_ANSWERED} typical members whole, in about a quarter of the budget`, async () => {
 		const t = await setup()
-		const ids = await accounts(t, MAX_LIST_MEMBERS_ANSWERED, 600_000_000_000_000_000n, typical)
+		const ids = await accounts(t, MAX_LIST_MEMBERS_ANSWERED, BASE, typical)
 		await listOf(t, ids)
 		const answer = await membersAnswer(t, `/api/v1/lists/${LIST}/accounts?limit=0`)
 		expect(answer.ids).toEqual([...ids].reverse())
@@ -251,7 +352,7 @@ describe('answers of many accounts are bounded in bytes (RES-3)', () => {
 
 	it(`cuts ${MAX_LIST_MEMBERS_ANSWERED} members at Misskey's limits and links next to the rest`, async () => {
 		const t = await setup()
-		const ids = await accounts(t, MAX_LIST_MEMBERS_ANSWERED, 600_000_000_000_000_000n, large)
+		const ids = await accounts(t, MAX_LIST_MEMBERS_ANSWERED, BASE, large)
 		await listOf(t, ids)
 		const answers = await walk(t, `/api/v1/lists/${LIST}/accounts?limit=0`)
 		// About 8 KiB a member: two answers.
@@ -263,49 +364,50 @@ describe('answers of many accounts are bounded in bytes (RES-3)', () => {
 		expect(new URL(answers[0]!.next!).searchParams.get('limit')).toBe('0')
 	}, 60_000)
 
-	it('reads and answers the same bounded bytes for 24 and 96 members at every bound, and pages to the rest', async () => {
+	it('reads the same bounded rows for 100 and 400 members at every bound, and pages to the rest', async () => {
 		const read: Read[] = []
-		for (const count of [24, 96]) {
+		for (const count of [100, 400]) {
 			const t = await setup()
-			const ids = await accounts(t, count, 600_000_000_000_000_000n, maximal)
+			const ids = await accounts(t, count, BASE, maximal)
 			await listOf(t, ids)
 			const first = await measured(t, listAccounts, await listInput(t))
 			read.push(first)
-			expect(first.bytes).toBeLessThanOrEqual(ACCOUNT_ANSWER_BYTES)
+			// The budget, and at most one chunk of 50 read past it.
+			expect(first.bytes).toBeLessThanOrEqual(ACCOUNT_ANSWER_BYTES + 50 * READ_MAX)
 			const answers = await walk(t, `/api/v1/lists/${LIST}/accounts?limit=0`)
 			for (const answer of answers) {
 				expect(answer.bytes).toBeLessThanOrEqual(ACCOUNT_ANSWER_BYTES)
 			}
 			expect(answers.flatMap((answer) => answer.ids)).toEqual([...ids].reverse())
 		}
-		// Each member counts over 4 MB (its bio past ESCAPED_EXACT_BYTES at six bytes a byte): the same one or two,
-		// however many there are.
-		expect(read[0]!.profiles).toBe(read[1]!.profiles)
-		expect(read[0]!.profiles).toBeLessThanOrEqual(2)
-		expect((read[0]!.answer as { items: unknown[] }).items).toHaveLength(read[0]!.profiles)
+		// About 68 fit: the first two chunks are read, however many members there are.
+		expect(read[0]!.profiles).toBe(100)
+		expect(read[1]!.profiles).toBe(100)
+		expect((read[1]!.answer as { items: unknown[] }).items.length).toBeGreaterThan(50)
 	}, 120_000)
 
-	it('answers the first member alone when it passes the budget, so the next link moves on', async () => {
+	it('answers the first account alone when it alone passes the budget, so a continuation moves on', async () => {
 		const t = await setup()
-		const [huge] = await accounts(t, 1, 690_000_000_000_000_000n, maximal)
-		const rest = await accounts(t, 3, 600_000_000_000_000_000n, typical)
-		// 1.5 million control characters escape to 9 MB (a row holds at most 2 MB).
-		await sql(t.store, 'UPDATE accounts SET note = ? WHERE id = ?', '\u0001'.repeat(1_500_000), huge!)
-		await listOf(t, [huge!, ...rest])
-		const answers = await walk(t, `/api/v1/lists/${LIST}/accounts?limit=0`)
-		expect(answers.map((answer) => answer.ids)).toEqual([[huge], [...rest].reverse()])
-	}, 60_000)
+		const ids = await accounts(t, 3, BASE, typical)
+		const answer = await runInDurableObject(t.store, (_instance, state) => {
+			const db = new Db(state.storage.sql)
+			const present = { origin: ORIGIN }
+			return [true, false].map((leading) => presentAccountsWithin(db, ids, present, 10, leading))
+		})
+		expect(answer.map((a) => [a.items.map((item) => item.id), a.cut])).toEqual([
+			[[ids[0]], true],
+			[[], true],
+		])
+	})
 
 	it('cuts the answer by its serialized bytes when sanitizing grows the fields', async () => {
 		const t = await setup()
-		// Each value of 600 code units sanitizes to 9.8 KB: three fields shown, about 30 KB, where the read counts 11 KB.
-		const ids = await accounts(t, 400, 600_000_000_000_000_000n, (i) => ({
+		// Each value of 600 code units sanitizes to 9.8 KB: three fields shown, about 30 KB a member.
+		const ids = await accounts(t, 400, BASE, (i) => ({
 			...typical(i),
 			attachment: Array.from({ length: MAX_REMOTE_FIELDS }, () => field('n', '<a>'.repeat(200))),
 		}))
 		await listOf(t, ids)
-		const first = await measured(t, listAccounts, await listInput(t))
-		expect(first.profiles).toBe(400)
 		const answers = await walk(t, `/api/v1/lists/${LIST}/accounts?limit=0`)
 		expect(answers.length).toBeGreaterThan(1)
 		for (const answer of answers) {
@@ -314,45 +416,113 @@ describe('answers of many accounts are bounded in bytes (RES-3)', () => {
 		expect(answers.flatMap((answer) => answer.ids)).toEqual([...ids].reverse())
 	}, 60_000)
 
-	it('shares the familiar followers budget, so one large account does not starve the others', async () => {
+	it('pages a cut answer past pending and unavailable members, each available one once', async () => {
+		const t = await setup()
+		const ids = await accounts(t, 200, BASE, maximal)
+		await listOf(t, ids)
+		// Every third member is being deleted; every other one is followed with a pending request only.
+		const gone = ids.filter((_, i) => i % 3 === 0)
+		await sql(
+			t.store,
+			'UPDATE accounts SET deleted_at = ? WHERE id IN (SELECT value FROM json_each(?))',
+			new Date(NOW).toISOString(),
+			JSON.stringify(gone)
+		)
+		await follows(
+			t,
+			[ALICE],
+			ids.filter((_, i) => i % 2 === 0),
+			'pending'
+		)
+		const answers = await walk(t, `/api/v1/lists/${LIST}/accounts?limit=0`)
+		expect(answers.length).toBeGreaterThan(1)
+		expect(answers.flatMap((answer) => answer.ids)).toEqual(ids.filter((id) => !gone.includes(id)).reverse())
+	}, 60_000)
+
+	it('cuts the endorsements answer by its bytes and links next to the rest', async () => {
+		const t = await setup()
+		const ids = await accounts(t, 150, BASE, maximal)
+		await follows(t, [ALICE], ids)
+		await sql(
+			t.store,
+			'INSERT INTO account_pins (account_id, target_account_id) SELECT ?, value FROM json_each(?)',
+			ALICE,
+			JSON.stringify(ids)
+		)
+		const answers = await walk(t, '/api/v1/endorsements?limit=0')
+		expect(answers.length).toBeGreaterThan(1)
+		for (const answer of answers) {
+			expect(answer.bytes).toBeLessThanOrEqual(ACCOUNT_ANSWER_BYTES)
+		}
+		expect(answers.flatMap((answer) => answer.ids)).toEqual([...ids].reverse())
+	}, 60_000)
+})
+
+describe('familiar followers share the answer bytes (RES-3)', () => {
+	type Entry = { id: string; accounts: { id: string }[] }
+	const ask = async (t: Setup, targets: readonly string[]) => {
+		const query = targets.map((id) => `id[]=${id}`).join('&')
+		const { body, bytes } = await shownBytes(t, `/api/v1/accounts/familiar_followers?${query}`)
+		expect(bytes).toBeLessThanOrEqual(ACCOUNT_ANSWER_BYTES)
+		return new Map((body as Entry[]).map((entry) => [entry.id, entry.accounts.map((a) => a.id)]))
+	}
+
+	it('answers one account whole when all its familiar followers fit, at every bound', async () => {
+		const t = await setup()
+		const [target] = await accounts(t, 1, 590_000_000_000_000_000n, typical)
+		const followers = await accounts(t, MAX_FAMILIAR_FOLLOWERS / 2, BASE, maximal)
+		await follows(t, [ALICE], followers)
+		await follows(t, followers, [target!])
+		// 40 accounts of about 120 KB: 4.8 MB.
+		expect((await ask(t, [target!])).get(target!)).toEqual([...followers].reverse())
+	}, 60_000)
+
+	it('gives the whole budget to the one account with followers, whatever the order and the empty ones', async () => {
 		const t = await setup()
 		const targets = await accounts(t, 20, 590_000_000_000_000_000n, typical)
-		// The first target's 80 followers have 110 KB bios; the others share 80 typical followers.
-		const heavy = await accounts(t, MAX_FAMILIAR_FOLLOWERS, 600_000_000_000_000_000n, (i) => ({
-			...typical(i),
-			note: `<p>${'&amp;'.repeat(22_000)}</p>`,
-		}))
-		const light = await accounts(t, MAX_FAMILIAR_FOLLOWERS, 610_000_000_000_000_000n, typical)
-		const follows = async (followers: readonly string[], followed: readonly string[]) =>
-			sql(
-				t.store,
-				`INSERT INTO follows (account_id, target_account_id, state)
-				SELECT f.value, x.value, 'accepted' FROM json_each(?) f, json_each(?) x`,
-				JSON.stringify(followers),
-				JSON.stringify(followed)
-			)
-		await follows([ALICE], [...heavy, ...light])
-		await follows(heavy, targets.slice(0, 1))
-		await follows(light, targets.slice(1))
-		const query = targets.map((id) => `id[]=${id}`).join('&')
-		const response = await t.request(`/api/v1/accounts/familiar_followers?${query}`, {
-			headers: { authorization: `Bearer ${t.tokens.alice}` },
-		})
-		const body = await response.text()
-		expect(utf8Length(body)).toBeLessThanOrEqual(ACCOUNT_ANSWER_BYTES)
-		const shown = JSON.parse(body) as { id: string; accounts: { id: string }[] }[]
-		expect(shown.map((entry) => entry.id)).toEqual(targets)
-		// Its share, a twentieth of the budget, holds three.
-		expect(shown[0]!.accounts.map((a) => a.id)).toEqual([...heavy].reverse().slice(0, 3))
-		for (const entry of shown.slice(1)) {
-			expect(entry.accounts.map((a) => a.id)).toEqual([...light].reverse())
+		const [big, hidden, ...empty] = targets
+		const followers = await accounts(t, MAX_FAMILIAR_FOLLOWERS, BASE, maximal)
+		await follows(t, [ALICE], followers)
+		await follows(t, followers, [big!, hidden!])
+		await sql(t.store, 'UPDATE accounts SET hide_collections = 1 WHERE id = ?', hidden!)
+		const first = await ask(t, [big!, hidden!, ...empty])
+		const last = await ask(t, [...empty, hidden!, big!])
+		expect(first).toEqual(last)
+		expect(first.get(hidden!)).toEqual([])
+		for (const id of empty) {
+			expect(first.get(id)).toEqual([])
 		}
+		// 80 such accounts pass the budget; about 68 fit, far more than a twentieth of it.
+		const shown = first.get(big!)!
+		expect(shown).toEqual([...followers].reverse().slice(0, shown.length))
+		expect(shown.length).toBeGreaterThan(60)
+		expect(shown.length).toBeLessThan(MAX_FAMILIAR_FOLLOWERS)
+	}, 60_000)
+
+	it('shares the budget so one large account does not crowd out the others, in any order', async () => {
+		const t = await setup()
+		const targets = await accounts(t, 20, 590_000_000_000_000_000n, typical)
+		const heavy = await accounts(t, MAX_FAMILIAR_FOLLOWERS, BASE, maximal)
+		const light = await accounts(t, MAX_FAMILIAR_FOLLOWERS, 610_000_000_000_000_000n, typical)
+		await follows(t, [ALICE], [...heavy, ...light])
+		await follows(t, heavy, targets.slice(0, 1))
+		await follows(t, light, targets.slice(1))
+		const forward = await ask(t, targets)
+		expect(await ask(t, [...targets].reverse())).toEqual(forward)
+		for (const id of targets.slice(1)) {
+			expect(forward.get(id)).toEqual([...light].reverse())
+		}
+		// The typical ones take about 3.2 MB; the large one takes what is left.
+		const shown = forward.get(targets[0]!)!
+		expect(shown).toEqual([...heavy].reverse().slice(0, shown.length))
+		expect(shown.length).toBeGreaterThan(30)
 		const read = await measured(t, familiarFollowers, {
 			credential: await credential(t, 'read:follows'),
 			ids: targets,
 			present: { origin: ORIGIN },
 		})
-		expect(read.bytes).toBeLessThanOrEqual(ACCOUNT_ANSWER_BYTES)
-		expect(read.profiles).toBe(3 + 19 * MAX_FAMILIAR_FOLLOWERS)
+		// What is shown, and at most one account per requested account read past it.
+		expect(read.profiles).toBeLessThanOrEqual(shown.length + 1 + 19 * MAX_FAMILIAR_FOLLOWERS)
+		expect(read.bytes).toBeLessThanOrEqual(ACCOUNT_ANSWER_BYTES + 20 * READ_MAX)
 	}, 60_000)
 })

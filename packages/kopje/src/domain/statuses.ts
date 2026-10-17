@@ -1,14 +1,12 @@
 import {
 	type Account,
-	ACCOUNT_COLUMNS,
-	type AccountRow,
 	accountUrl,
 	edgeRangeSql,
 	type Page,
 	type PageQuery,
 	type Present,
-	presentAccount,
 	presentAccountsById,
+	presentedRows,
 	resolveApiId,
 } from './accounts'
 import {
@@ -1679,8 +1677,8 @@ export const interactors = optionalUserReadOperation<InteractorsInput, Viewed<Pa
 		const rows =
 			window.candidates.length === 0
 				? []
-				: db.all<AccountRow & { cursor: string }>(
-						`SELECT CAST(e.id AS TEXT) AS cursor, ${ACCOUNT_COLUMNS}
+				: db.all<{ cursor: string; id: string }>(
+						`SELECT CAST(e.id AS TEXT) AS cursor, a.id
 						FROM json_each(?3) c CROSS JOIN ${edge}
 							JOIN accounts a ON a.id = e.account_id LEFT JOIN local_accounts l ON l.account_id = a.id
 						WHERE ${listedForSql('a.id', '?1', '?2')}`,
@@ -1692,7 +1690,7 @@ export const interactors = optionalUserReadOperation<InteractorsInput, Viewed<Pa
 		return {
 			status: 'ok',
 			value: {
-				items: shown.rows.map((row) => presentAccount(row, present)),
+				items: presentedRows(db, shown.rows, present),
 				newest: shown.newest,
 				oldest: shown.oldest,
 				cut: shown.cut,

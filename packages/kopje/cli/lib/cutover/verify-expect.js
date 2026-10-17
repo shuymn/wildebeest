@@ -10,7 +10,13 @@
 import { createHmac } from 'node:crypto'
 import { domainToASCII } from 'node:url'
 
-import { REMOTE_HTML_RAW_LIMIT, sanitizeRemoteHtml } from './kopje-runtime.js'
+import {
+	jsonStringBytes,
+	REMOTE_BIO_BYTES,
+	REMOTE_HTML_RAW_LIMIT,
+	sanitizeRemoteBio,
+	sanitizeRemoteHtml,
+} from './kopje-runtime.js'
 
 const PUBLIC = 'https://www.w3.org/ns/activitystreams#Public'
 const STATUS_TYPES = new Set(['Note', 'Article', 'Page', 'Question', 'Video', 'Audio', 'Event'])
@@ -330,6 +336,16 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 		}
 		return sanitizeRemoteHtml(text(value))
 	}
+	// A bio as the converter and the Worker store it (sanitizeRemoteBio); one cut to its bound is a truncation too.
+	/** @param {unknown} value */
+	const bio = (value) => {
+		const whole = sanitized(value)
+		if (jsonStringBytes(whole) <= REMOTE_BIO_BYTES) {
+			return whole
+		}
+		overLimit++
+		return sanitizeRemoteBio(text(value))
+	}
 
 	// Accounts and profiles.
 	const local = new Set(all('SELECT actor_id FROM users').map((u) => String(u.actor_id)))
@@ -429,7 +445,7 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 			isLocal ? 1 : 0,
 			isLocal ? text(p.preferredUsername) : null,
 			text(p.name),
-			sanitized(p.summary),
+			bio(p.summary),
 			profileImage(p.icon, 'avatar'),
 			profileImage(p.image, 'header'),
 			p.manuallyApprovesFollowers === true ? 1 : 0,

@@ -2,10 +2,11 @@ import { type DocumentLoader, exportSpki, FetchError } from '@fedify/fedify'
 import { type Actor, getActorTypeName, type Image, isActor, Link, lookupObject } from '@fedify/vocab'
 
 import { isTransientLoadError, loadFailureOf } from './loader'
+import { DISPLAY_NAME_LIMIT, PROFILE_URL_LIMIT } from '../domain/accounts'
 import type { RemoteActorInput } from '../domain/inbox'
 import { hostDomain } from '../platform/domain-name'
 import { httpUrl } from '../platform/http-url'
-import { sanitizeRemoteHtml } from '../security/html'
+import { sanitizeRemoteBio } from '../security/html'
 
 // Remote actors as Kopje stores them: fetched through the safe loader (NET-1, ID-8), parsed by Fedify's lookupObject,
 // which checks the parsed id against the document's origin (ID-2), and reduced to bounded, safe columns.
@@ -13,8 +14,8 @@ import { sanitizeRemoteHtml } from '../security/html'
 // Mastodon's remote username rule (Account::USERNAME_RE), with a length bound (RES-1).
 const USERNAME = /^[a-z0-9_]+([a-z0-9_.-]+[a-z0-9_]+)?$/i
 const USERNAME_LIMIT = 255
-// Raw caps (RES-1). The display name is plain text and is cut, as Mastodon cuts what it receives.
-const DISPLAY_NAME_LIMIT = 2048
+// Raw caps (RES-1): the display name is plain text and is cut (DISPLAY_NAME_LIMIT), as Mastodon cuts what it
+// receives.
 // Actor ids and inbox URLs (RES-6): a delivery target is an inbox and, for a silent recipient, an actor id, so their
 // length bounds a target. This cap is Kopje's own interoperability policy, not another server's behaviour: Mastodon
 // sets no length limit, and Misskey stores inbox URLs in 512-character columns. Real servers use far shorter URLs.
@@ -72,9 +73,11 @@ function text(value: string | { toString(): string } | null | undefined): string
 	return value === null || value === undefined ? null : value.toString()
 }
 
+// A profile URL (url, icon, image): http(s) (HTML-3) and at most PROFILE_URL_LIMIT long, else none, as an invalid one.
 function href(value: URL | Link | null | undefined): string | null {
 	const target = value instanceof Link ? value.href : value
-	return httpUrl(target?.href ?? null)?.href ?? null
+	const url = httpUrl(target?.href ?? null)?.href ?? null
+	return url !== null && url.length <= PROFILE_URL_LIMIT ? url : null
 }
 
 // Icons and headers are taken only when embedded: a reference would cost another fetch per actor (RES-6).
@@ -147,7 +150,7 @@ export async function remoteActorInput(actor: Actor, document: unknown): Promise
 		domain: hostDomain(uri.href),
 		actorType: getActorTypeName(actor),
 		displayName: (text(actor.name) ?? '').slice(0, DISPLAY_NAME_LIMIT),
-		note: sanitizeRemoteHtml(text(actor.summary) ?? ''),
+		note: sanitizeRemoteBio(text(actor.summary) ?? ''),
 		url: href(actor.url),
 		avatarUrl: await imageUrl(() => images.getIcon(options)),
 		headerUrl: await imageUrl(() => images.getImage(options)),

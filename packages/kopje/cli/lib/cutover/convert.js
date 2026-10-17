@@ -20,8 +20,11 @@ import {
 	languageOf,
 	normalizeTag,
 	normalizeSearchText,
+	jsonStringBytes,
+	REMOTE_BIO_BYTES,
 	REMOTE_HTML_RAW_LIMIT,
 	remoteHtmlText,
+	sanitizeRemoteBio,
 	sanitizeRemoteHtml,
 } from './kopje-runtime.js'
 import { digestOf } from './sql-script.js'
@@ -417,6 +420,21 @@ export function convertLegacy(
 		}
 		return sanitizeRemoteHtml(text)
 	}
+	// A bio as the Worker stores one (sanitizeRemoteBio, RES-2); one cut to REMOTE_BIO_BYTES loses its end, so it is
+	// counted as a truncation too.
+	/** @param {unknown} value */
+	const bio = (value) => {
+		const text = carried(value)
+		if (text.length > REMOTE_HTML_RAW_LIMIT) {
+			count(acceptTruncation ? normalized : problems, 'html:longer-than-sanitizer-limit')
+		}
+		const whole = sanitizeRemoteHtml(text)
+		if (jsonStringBytes(whole) <= REMOTE_BIO_BYTES) {
+			return whole
+		}
+		count(acceptTruncation ? normalized : problems, 'html:bio-longer-than-bound')
+		return sanitizeRemoteBio(text)
+	}
 	/** @param {string} table @param {string | null} time @param {string} key */
 	const localId = (table, time, key) => ids.local(table, time, key)
 	/** @param {string} table @param {string | null} time @param {string} key */
@@ -549,7 +567,7 @@ export function convertLegacy(
 			host,
 			str(actor.type) || str(properties.type) || 'Person',
 			displayName,
-			html(properties.summary),
+			bio(properties.summary),
 			local ? null : linkOf(properties.url),
 			profileImage(properties.icon, 'avatar'),
 			profileImage(properties.image, 'header'),

@@ -14,7 +14,14 @@ export { normalizeSearchText } from './domain/search-text'
 export { hashtagObjectName, normalizeTag } from './domain/tag-name'
 export { blockedDomain } from './platform/domain-name'
 export { sniffImageType } from './platform/image-bytes'
-export { REMOTE_HTML_RAW_LIMIT, remoteHtmlText, sanitizeRemoteHtml } from './security/html'
+export {
+	jsonStringBytes,
+	REMOTE_BIO_BYTES,
+	REMOTE_HTML_RAW_LIMIT,
+	remoteHtmlText,
+	sanitizeRemoteBio,
+	sanitizeRemoteHtml,
+} from './security/html'
 
 // Renders the cutover's maintenance snapshot (src/maintenance-worker.ts) with Kopje's own code: the local actors are
 // read from the converted Store database by the Store's own query (domain/actors.ts, localActorOf), and their actor
