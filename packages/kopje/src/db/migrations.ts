@@ -43,6 +43,7 @@ import m0042 from '../../migrations/0042_report_action_fence.sql'
 import m0043 from '../../migrations/0043_read_window_indexes.sql'
 import m0044 from '../../migrations/0044_delivery_provenance.sql'
 import m0045 from '../../migrations/0045_remote_suspension.sql'
+import m0046 from '../../migrations/0046_instance_domain_blocks.sql'
 
 // Store migrations in apply order. Append only: an applied file is recorded by name and checksum and must
 // never change. Each file runs in its own transaction, must finish well under 30 seconds, and must be pure SQL.
@@ -92,4 +93,5 @@ export const MIGRATIONS: readonly { name: string; sql: string }[] = [
 	{ name: '0043_read_window_indexes', sql: m0043 },
 	{ name: '0044_delivery_provenance', sql: m0044 },
 	{ name: '0045_remote_suspension', sql: m0045 },
+	{ name: '0046_instance_domain_blocks', sql: m0046 },
 ]
