@@ -1,4 +1,5 @@
 import { cutSql, jsonBoundSql } from './profile-bounds'
+import { STATUS_URI_LIMIT } from '../platform/identity-bounds'
 import { SPOILER_BYTES, STATUS_CONTENT_BYTES } from '../security/html'
 
 // RES-2: the bounds of one presented status. Each column a remote server controls, or a converted row may carry past
@@ -27,7 +28,7 @@ export const MEDIA_URL_LIMIT = 2048
 // A media row's meta: the stored dimensions ({"original":{...},"small":{...}}), about 80 bytes.
 const MEDIA_META_BYTES = 1024
 // A status's uri and url, as a remote one is stored (status-text.ts MAX_URL_LENGTH).
-const STATUS_URL_LIMIT = 4096
+const STATUS_URL_LIMIT = STATUS_URI_LIMIT
 // A remote poll's choices (RES-4), and an edit's: at most this many, each at most this many code units as stored and
 // code points as read.
 export const MAX_REMOTE_OPTIONS = 100

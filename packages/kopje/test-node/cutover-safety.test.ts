@@ -7,15 +7,18 @@ import { promisify } from 'node:util'
 import { describe, expect, it } from 'vitest'
 
 import { convert, exportOf, opened, verify, workspace } from './cutover-helpers.js'
-import { ACTOR_URI_LIMIT, REMOTE_USERNAME, STATUS_URI_LIMIT } from '../cli/lib/cutover/convert.js'
 import {
+	ACTOR_URI_LIMIT,
 	cutJsonString,
+	isRemoteUsername,
 	jsonStringBytes,
 	REMOTE_BIO_BYTES,
 	sanitizeRemoteBio,
 	sanitizeRemoteContent,
 	SPOILER_BYTES,
 	STATUS_CONTENT_BYTES,
+	STATUS_URI_LIMIT,
+	withinIdentityBound,
 } from '../cli/lib/cutover/kopje-runtime.js'
 import { loadLegacyExport } from '../cli/lib/cutover/legacy-load.js'
 import { ExportError, parseStatement, tableExpressions } from '../cli/lib/cutover/sql-script.js'
@@ -368,31 +371,48 @@ describe('HTML is never cut silently', () => {
 		).toBe(1)
 	})
 
-	it('refuses a remote username the Worker would refuse, whatever truncation accepts', async () => {
-		const source = await readFile(fileURLToPath(new URL('../src/federation/remote-actor.ts', import.meta.url)), 'utf8')
-		expect(source).toContain(`const USERNAME = ${REMOTE_USERNAME}\n`)
+	// Converts `exportPath` as changed by `change`, which must refuse an identity: the conversion stops with `problem`,
+	// and verifying the changed export against the unchanged one's dump fails on it too.
+	const refusesIdentity = async (change: (exportPath: string) => Promise<void>, problem: string) => {
 		const exportPath = await exportOf(space.dir, { level: 39 })
-		expect(await replacedIn(exportPath, '"preferredUsername":"r3"', '"preferredUsername":"r\\u00e9"')).toBe(1)
-		const stopped = await convert(space.dir, exportPath, { acceptTruncation: true })
-		expect(stopped.ok).toBe(false)
-		expect((stopped.manifest.conversion as { problems: Record<string, number> }).problems).toEqual({
-			'remote-actor-username-invalid': 1,
-		})
-	})
-
-	it('refuses an actor id over the bound the Worker stores, whatever truncation accepts', async () => {
-		// The converter's bounds of identities are the Worker's (src/domain/profile-bounds.ts, status-bounds.ts).
-		const source = (path: string) => readFile(fileURLToPath(new URL(path, import.meta.url)), 'utf8')
-		expect(await source('../src/domain/profile-bounds.ts')).toContain(`ACTOR_URI_LIMIT = ${ACTOR_URI_LIMIT}\n`)
-		expect(await source('../src/domain/status-bounds.ts')).toContain(`STATUS_URL_LIMIT = ${STATUS_URI_LIMIT}\n`)
-		const exportPath = await exportOf(space.dir, { level: 39 })
-		const long = `https://remote.example/users/r2${'x'.repeat(ACTOR_URI_LIMIT)}`
-		expect(await replacedIn(exportPath, 'https://remote.example/users/r2', long)).toBeGreaterThan(0)
+		const unchanged = await convert(space.dir, exportPath, { out: 'unchanged' })
+		expect(unchanged.ok).toBe(true)
+		await change(exportPath)
 		const stopped = await convert(space.dir, exportPath, { acceptTruncation: true })
 		expect(stopped.ok).toBe(false)
 		expect((stopped.manifest.conversion as { problems: Record<string, number> }).problems).toMatchObject({
-			'remote-actor-uri-over-limit': 1,
+			[problem]: 1,
 		})
+		const verified = await verify(exportPath, unchanged.dumpPath, { acceptTruncation: true, acceptDeletions: true })
+		expect(verified.ok).toBe(false)
+		expect(verified.report).toMatchObject({ identities: { overBound: 1 } })
+	}
+
+	it("refuses a remote username outside Mastodon's format, whatever truncation accepts", async () => {
+		expect([isRemoteUsername('r3'), isRemoteUsername('r3\n'), isRemoteUsername('r\u00e9')]).toEqual([
+			true,
+			false,
+			false,
+		])
+		await refusesIdentity(async (exportPath) => {
+			expect(await replacedIn(exportPath, '"preferredUsername":"r3"', '"preferredUsername":"r\\u00e9"')).toBe(1)
+		}, 'remote-actor-username-invalid')
+	})
+
+	it('refuses an actor id over its bound in UTF-8 bytes, though shorter in characters', async () => {
+		// 1,100 two-byte characters: 1,131 characters, 2,231 bytes.
+		const long = `https://remote.example/users/r2${'é'.repeat(1_100)}`
+		expect([long.length <= ACTOR_URI_LIMIT, withinIdentityBound(long, ACTOR_URI_LIMIT)]).toEqual([true, false])
+		await refusesIdentity(async (exportPath) => {
+			expect(await replacedIn(exportPath, 'https://remote.example/users/r2', long)).toBeGreaterThan(0)
+		}, 'remote-actor-uri-over-limit')
+	})
+
+	it('refuses a boost whose Announce id is over the bound of a status uri', async () => {
+		const announce = 'https://remote.example/users/r1/statuses/900/activity'
+		await refusesIdentity(async (exportPath) => {
+			expect(await replacedIn(exportPath, announce, `${announce}/${'x'.repeat(STATUS_URI_LIMIT)}`)).toBeGreaterThan(0)
+		}, 'status-uri-over-limit')
 	})
 
 	it('stores sanitized HTML as written here by hand, not as computed by the shared sanitizer', async () => {

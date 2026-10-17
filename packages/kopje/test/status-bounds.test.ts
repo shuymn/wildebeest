@@ -271,6 +271,13 @@ describe('a remote status is stored within its bounds (RES-2)', () => {
 		}
 	})
 
+	it('refuses a status id over its bound in UTF-8 bytes, and ignores such a url', () => {
+		const long = `https://remote.example/notes/${'é'.repeat(2_100)}`
+		expect(note({ id: long })).toBeNull()
+		expect(note({ url: long }).url).toBeNull()
+		expect(note({ url: 'https://remote.example/@u/1' }).url).toBe('https://remote.example/@u/1')
+	})
+
 	it('cuts a content warning to SPOILER_BYTES at a code point, and refuses over-long media URLs', () => {
 		const spoiler = note({ summary: '注意'.repeat(5_000) }).spoilerText
 		expect(jsonStringBytes(spoiler)).toBeLessThanOrEqual(SPOILER_BYTES)

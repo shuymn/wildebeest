@@ -1,3 +1,4 @@
+import { ACTOR_URI_LIMIT, REMOTE_USERNAME_LIMIT } from '../platform/identity-bounds'
 import { REMOTE_BIO_BYTES } from '../security/html'
 
 // RES-2: the bounds of the profile columns a remote server controls, as ACCOUNT_COLUMNS (accounts.ts) and every other
@@ -8,11 +9,11 @@ import { REMOTE_BIO_BYTES } from '../security/html'
 // The display name, in code points as read (code units as stored, federation/remote-actor.ts).
 export const DISPLAY_NAME_LIMIT = 2048
 // Mastodon's remote usernames are short; Kopje refuses a longer one as stored (federation/remote-actor.ts, RES-1).
-export const USERNAME_LIMIT = 255
+export const USERNAME_LIMIT = REMOTE_USERNAME_LIMIT
 // Profile URLs (url, avatar, header), as ACTOR_URI_LIMIT bounds actor ids; a serialized URL is ASCII.
 export const PROFILE_URL_LIMIT = 2048
-// Actor ids, as stored (federation/remote-actor.ts, RES-6).
-export const ACTOR_URI_LIMIT = 2048
+// Actor ids, as stored (federation/remote-actor.ts, RES-6), in UTF-8 bytes.
+export { ACTOR_URI_LIMIT }
 
 // SQLite's substr and length stop at an embedded NUL, so a string is cut only when its UTF-8 bytes pass the limit
 // (a code point is never longer than its bytes). A string containing a NUL is kept whole while its UTF-8 bytes fit

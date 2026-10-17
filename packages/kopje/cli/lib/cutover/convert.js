@@ -17,7 +17,9 @@ import { MAX_PROFILE_UPDATES } from './kopje-db.js'
 import {
 	backfillConversations,
 	blockedDomain,
+	ACTOR_URI_LIMIT,
 	hashtagObjectName,
+	isRemoteUsername,
 	languageOf,
 	normalizeTag,
 	normalizeSearchText,
@@ -31,6 +33,8 @@ import {
 	sanitizeRemoteHtml,
 	SPOILER_BYTES,
 	STATUS_CONTENT_BYTES,
+	STATUS_URI_LIMIT,
+	withinIdentityBound,
 } from './kopje-runtime.js'
 import { digestOf } from './sql-script.js'
 import { fit, FULL_EDGE, SMALL_EDGE } from './upload-rules.js'
@@ -39,14 +43,6 @@ const PUBLIC = 'https://www.w3.org/ns/activitystreams#Public'
 const STATUS_TYPES = new Set(['Note', 'Article', 'Page', 'Question', 'Video', 'Audio', 'Event'])
 const EARLIEST_MS = Date.UTC(2018, 4, 10)
 const ID18 = /^[0-9]{18}$/
-// The Worker's bounds of the identities it stores (ACTOR_URI_LIMIT in src/domain/profile-bounds.ts, a status's uri in
-// src/domain/status-bounds.ts): a longer one is refused (test-node/cutover-safety.test.ts checks they agree).
-export const ACTOR_URI_LIMIT = 2048
-export const STATUS_URI_LIMIT = 4096
-// A remote username as the Worker stores one (src/federation/remote-actor.ts USERNAME and USERNAME_LIMIT): Mastodon's
-// remote format (Account::USERNAME_ONLY_RE), ASCII, at most 255 characters.
-export const REMOTE_USERNAME = /^[a-z0-9_]+([a-z0-9_.-]+[a-z0-9_]+)?$/i
-export const USERNAME_LIMIT = 255
 
 // Tables 0030-0033 created that the legacy code never wrote; rows there would be lost, so they stop the conversion.
 export const UNUSED_LEGACY_TABLES = [
@@ -576,8 +572,9 @@ export function convertLegacy(
 				count(problems, 'remote-actor-uri-invalid')
 				continue
 			}
-			// An actor id is an identity: one past the Worker's bound (ACTOR_URI_LIMIT) is refused, never cut.
-			if (uri.length > ACTOR_URI_LIMIT) {
+			// An actor id is an identity: one past the Worker's bound (src/platform/identity-bounds.ts) is refused, never
+			// cut.
+			if (!withinIdentityBound(uri, ACTOR_URI_LIMIT)) {
 				count(problems, 'remote-actor-uri-over-limit')
 				continue
 			}
@@ -585,7 +582,7 @@ export function convertLegacy(
 				username = uri.replace(/\/+$/, '').slice(uri.replace(/\/+$/, '').lastIndexOf('/') + 1)
 			}
 			// A username is an identity too: one the Worker would refuse is refused, never rewritten.
-			if (username.length > USERNAME_LIMIT || !REMOTE_USERNAME.test(username)) {
+			if (!isRemoteUsername(username)) {
 				count(problems, 'remote-actor-username-invalid')
 				continue
 			}
@@ -719,8 +716,8 @@ export function convertLegacy(
 			count(problems, 'duplicate-status-uri')
 			continue
 		}
-		// A status's uri is an identity too: one past the Worker's bound (STATUS_URI_LIMIT) is refused.
-		if (uri.length > STATUS_URI_LIMIT) {
+		// A status's uri is an identity too: one past the Worker's bound (identity-bounds.ts) is refused.
+		if (!withinIdentityBound(uri, STATUS_URI_LIMIT)) {
 			count(problems, 'status-uri-over-limit')
 			continue
 		}
@@ -742,6 +739,11 @@ export function convertLegacy(
 			continue
 		}
 		const uri = String(reblog.id)
+		// A boost's uri (its Announce id) is a status's uri.
+		if (!withinIdentityBound(uri, STATUS_URI_LIMIT)) {
+			count(problems, 'status-uri-over-limit')
+			continue
+		}
 		if (statusUris.has(uri)) {
 			count(problems, 'duplicate-status-uri')
 			continue

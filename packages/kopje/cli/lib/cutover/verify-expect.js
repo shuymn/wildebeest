@@ -13,7 +13,11 @@ import { domainToASCII } from 'node:url'
 import {
 	cutJsonString,
 	jsonStringBytes,
+	ACTOR_URI_LIMIT,
+	isRemoteUsername,
 	REMOTE_BIO_BYTES,
+	STATUS_URI_LIMIT,
+	withinIdentityBound,
 	REMOTE_HTML_RAW_LIMIT,
 	sanitizeRemoteBio,
 	sanitizeRemoteContent,
@@ -318,12 +322,14 @@ export function threadsOf(replies, statuses, conversations = new Map()) {
  * @param {{ originalActorIds: Map<string, string>, source: import('./legacy-load.js').SourceAddressing,
  *   notificationSequence: string | null, images?: import('./images-export.js').ImagesFile }} options
  * @returns {{ records: Records, overLimit: number, images: { missing: number, unmapped: number },
- *   dropped: Record<string, number> }} dropped: rows the conversion must leave out, which need --accept-deletions
+ *   dropped: Record<string, number>, identities: number }} dropped: rows the conversion must leave out, which need
+ *   --accept-deletions; identities: actor ids, remote usernames and status uris the Worker would refuse
  */
 export function expectedFromLegacy(db, { originalActorIds, source, notificationSequence, images }) {
 	/** @type {Records} */
 	const out = {}
 	let overLimit = 0
+	let identities = 0
 	/** @type {Record<string, number>} */
 	const dropped = {}
 	/** @param {string} category @param {string} key @param {unknown} value */
@@ -446,6 +452,12 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 		const p = parse(actor.properties)
 		actors.set(uri, p)
 		const isLocal = local.has(uri)
+		// An identity the Worker would refuse, as the converter refuses it (src/platform/identity-bounds.ts).
+		const username =
+			text(p.preferredUsername) || uri.replace(/\/+$/, '').slice(uri.replace(/\/+$/, '').lastIndexOf('/') + 1)
+		if (!isLocal && (!withinIdentityBound(uri, ACTOR_URI_LIMIT) || !isRemoteUsername(username))) {
+			identities++
+		}
 		/** @param {unknown} value @param {string} kind */
 		const profileImage = (value, kind) => {
 			const url = href(typeof value === 'object' && value !== null ? /** @type {Json} */ (value).url : value)
@@ -511,12 +523,14 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 			continue
 		}
 		const id = String(o.id)
-		statusUri.set(
-			id,
+		const uri =
 			o.local !== 1 && typeof o.original_object_id === 'string' && o.original_object_id !== id
 				? o.original_object_id
 				: id
-		)
+		statusUri.set(id, uri)
+		if (!withinIdentityBound(uri, STATUS_URI_LIMIT)) {
+			identities++
+		}
 	}
 	const byUri = new Set(statusUri.values())
 	/**
@@ -797,6 +811,9 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 		if (target === undefined || !known(r.actor_id)) {
 			continue
 		}
+		if (!withinIdentityBound(String(r.id), STATUS_URI_LIMIT)) {
+			identities++
+		}
 		const sent = source.outbox.get(String(r.outbox_object_id))
 		const audience =
 			sent === undefined || sent === null
@@ -1030,5 +1047,5 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 			typeof c.website === 'string' ? c.website : null,
 		])
 	}
-	return { records: out, overLimit, images: imageCounts, dropped }
+	return { records: out, overLimit, images: imageCounts, dropped, identities }
 }
