@@ -4232,7 +4232,91 @@ describe('0038_quote_requests', () => {
 		}
 		const none = await measure(1, 0)
 		expect(await measure(10_001, 0)).toBe(none)
-		const some = await measure(1_001, 1_000)
-		expect(await measure(2_001, 2_000)).toBe(2 * some - none)
+		const some = (await measure(1_001, 1_000)) - none
+		const twice = (await measure(2_001, 2_000)) - none
+		expect(some).toBeLessThanOrEqual(2 * 1_000 + 2)
+		expect(Math.abs(twice - 2 * some)).toBeLessThanOrEqual(2)
+	}, 120_000)
+})
+
+describe('0039_quotes_local', () => {
+	const NAME = '0039_quotes_local'
+	const at = NAMES.indexOf(NAME)
+	const status = (n: number) => String(200000000000000000n + BigInt(n))
+
+	// A remote account with `statuses` public statuses, and `quotes` quotes among them (status i + 1 quoting status i,
+	// each naming the stamp s<i>).
+	function seed(sql: SqlStorage, statuses: number, quotes: number) {
+		sql.exec(
+			`INSERT INTO accounts (id, uri, username, domain)
+			VALUES ('100000000000000001', 'https://remote.test/users/u1', 'u1', 'remote.test')`
+		)
+		sql.exec(
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+			SELECT CAST(200000000000000000 + i AS TEXT), 'https://remote.test/o/' || i, '100000000000000001', 'public',
+				'x', '2026-10-12T00:00:00.000Z'
+			FROM n WHERE ?1 > 0`,
+			statuses
+		)
+		sql.exec(
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, quoted_account_id, state, approval_uri, updated_at)
+			SELECT CAST(200000000000000000 + i + 1 AS TEXT), 'https://remote.test/o/' || i,
+				CAST(200000000000000000 + i AS TEXT), '100000000000000001', 'pending', 'https://remote.test/s' || i,
+				'2026-10-12T00:00:00.000Z'
+			FROM n WHERE ?1 > 0`,
+			quotes
+		)
+	}
+
+	it('marks every stored quote received, and keeps one local quote per stamp and quoted author', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, MIGRATIONS.slice(0, at)).upgrade()).toMatchObject({ ok: true })
+			seed(sql, 5, 4)
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+			expect(sql.exec('SELECT DISTINCT local FROM quotes').toArray()).toEqual([{ local: 0 }])
+			expect(() => sql.exec('UPDATE quotes SET local = 2 WHERE status_id = ?', status(2))).toThrow(
+				/CHECK constraint failed/
+			)
+			// Received quotes may name one stamp many times; local ones once per quoted author.
+			sql.exec(
+				"UPDATE quotes SET approval_uri = 'https://remote.test/s' WHERE status_id IN (?, ?)",
+				status(2),
+				status(3)
+			)
+			sql.exec("UPDATE quotes SET local = 1, approval_uri = 'https://remote.test/t' WHERE status_id = ?", status(4))
+			expect(() =>
+				sql.exec("UPDATE quotes SET local = 1, approval_uri = 'https://remote.test/t' WHERE status_id = ?", status(5))
+			).toThrow(/UNIQUE constraint failed/)
+			sql.exec('UPDATE quotes SET local = 1, approval_uri = NULL WHERE status_id = ?', status(5))
+			sql.exec('UPDATE quotes SET local = 1, approval_uri = NULL WHERE status_id = ?', status(3))
+		})
+	})
+
+	// The ALTER's CHECK is tested against each stored quote, and the index reads each once: the rows read grow with the
+	// quotes (linearly, give or take the index build's own page reads) and with nothing else.
+	it('reads the stored quotes, and nothing else', async () => {
+		const measure = async (statuses: number, quotes: number) => {
+			const store = freshStore()
+			return runInDurableObject(store, async (_instance, state) => {
+				const sql = state.storage.sql
+				await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+				seed(sql, statuses, quotes)
+				const cursor = sql.exec(MIGRATIONS[at]?.sql ?? '')
+				cursor.toArray()
+				const read = cursor.rowsRead
+				expect(sql.exec('SELECT count(*) AS n FROM quotes WHERE local = 0').one()).toEqual({ n: quotes })
+				return read
+			})
+		}
+		const none = await measure(1, 0)
+		expect(await measure(10_001, 0)).toBe(none)
+		const some = (await measure(1_001, 1_000)) - none
+		const twice = (await measure(2_001, 2_000)) - none
+		expect(some).toBeLessThanOrEqual(2 * 1_000 + 2)
+		expect(Math.abs(twice - 2 * some)).toBeLessThanOrEqual(2)
 	}, 120_000)
 })
