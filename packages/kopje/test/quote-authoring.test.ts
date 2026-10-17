@@ -22,10 +22,13 @@ import {
 	update,
 } from './inbox-status-helpers'
 import { contexts } from './quote-helpers'
+import { rowsRead } from './read-helpers'
 import { outbound } from './status-helpers'
 import { RETRACTION_TTL_MS } from '../src/domain/inbox'
-import { MAX_QUOTED_UPDATES } from '../src/domain/quotes'
+import { readOperation } from '../src/domain/operation'
+import { holdsLocalStamp, MAX_QUOTED_UPDATES, quotedUpdates } from '../src/domain/quotes'
 import { deliveryRound } from '../src/jobs/deliver'
+import { publishScheduled } from '../src/jobs/scheduled'
 
 // Authoring quotes (design §5.6 and "Concurrency (PR 3)", VIS-28, R35, R36): local users quoting local and remote
 // statuses, with Mastodon's posting rules; the Note's quote properties; the quoted author's Accept and Reject of our
@@ -404,7 +407,6 @@ describe('scheduled quotes (PublishScheduledStatusWorker)', () => {
 	}
 
 	async function publish(t: Setup) {
-		const { publishScheduled } = await import('../src/jobs/scheduled')
 		await publishScheduled(t.env, {
 			build: () => BUILD,
 			now: () => NOW + 2 * 60 * 60 * 1000,
@@ -1139,3 +1141,115 @@ async function quoteRowTarget(t: Setup, uri: string): Promise<string | undefined
 		)
 	)[0]?.quoted_uri
 }
+
+// What a receiver holds of our quoting status `uri` after `activities` in the order they arrive: the Note it keeps and
+// whether it takes our quote as accepted. Mastodon 4.5.11 and Kopje store a Create of a status they lack, apply an
+// Update of one they hold, and take the quote as accepted only while the Note they hold names a stamp that was not
+// deleted (their own verification of a changed stamp, and Delete#revoke_quote). Misskey ignores Note Updates
+// (ApInboxService#update): it keeps the first version it imported, and reads no stamp at all.
+function receiver(kind: 'mastodon' | 'kopje' | 'misskey', activities: Record<string, unknown>[], uri: string) {
+	let note: Record<string, unknown> | null = null
+	const deleted = new Set<string>()
+	for (const activity of activities) {
+		const object = activity.object
+		if (activity.type === 'Delete' && typeof object === 'string') {
+			deleted.add(object)
+		}
+		if (typeof object !== 'object' || object === null || (object as { id?: string }).id !== uri) {
+			continue
+		}
+		if (activity.type === 'Create' && note === null) {
+			note = object as Record<string, unknown>
+		} else if (activity.type === 'Update' && note !== null && kind !== 'misskey') {
+			note = object as Record<string, unknown>
+		}
+	}
+	const stamp = note?.quoteAuthorization
+	return {
+		note,
+		accepted: kind !== 'misskey' && typeof stamp === 'string' && !deleted.has(stamp),
+	}
+}
+
+describe('receivers of our quote (Mastodon, Kopje, Misskey)', () => {
+	it('Mastodon and Kopje converge on the stamp, then on its revocation; Misskey keeps the first version', async () => {
+		const { t, bob, theirs } = await world()
+		const mine = await quotePost(t, theirs.id)
+		const first = await deliver(t)
+		const stamp = stampOf(bob)
+		expect(await t.post(bob, accept(bob, mine.uri, stamp))).toBe(202)
+		const second = await deliver(t)
+		const toBob = (sent: Delivered[]) => sent.filter((s) => s.inbox.startsWith(MASTODON)).map((s) => s.json)
+		for (const kind of ['mastodon', 'kopje'] as const) {
+			expect(receiver(kind, [...toBob(first), ...toBob(second)], mine.uri).accepted, kind).toBe(true)
+		}
+		// Misskey imported the first Create: _misskey_quote, and nothing of the stamp.
+		const misskey = receiver('misskey', [...toBob(first), ...toBob(second)], mine.uri)
+		expect(misskey).toMatchObject({ accepted: false, note: { _misskey_quote: theirs.uri } })
+		expect(misskey.note).not.toHaveProperty('quoteAuthorization')
+		// Reject: the stamp-free Update reaches them; a receiver that held accepted ends not accepted.
+		expect(await t.post(bob, reject(bob, mine.uri))).toBe(202)
+		const third = await deliver(t)
+		for (const kind of ['mastodon', 'kopje'] as const) {
+			expect(receiver(kind, [...toBob(first), ...toBob(second), ...toBob(third)], mine.uri).accepted, kind).toBe(false)
+		}
+	})
+
+	it('a lost acknowledgement of the Create sends the pair: Misskey stays at the first version, the others update', async () => {
+		const { t, theirs } = await world()
+		const mine = await quotePost(t, theirs.id)
+		// The Create's POST succeeds but its completion is lost: no receipt, so the edit goes as the pair.
+		const claim = await t.store.claimDeliveries(BUILD, { now: NOW, leaseToken: 'lost' })
+		const create = claim.deliveries.find((d) => (JSON.parse(d.body) as { type: string }).type === 'Create')
+		expect(create).toBeDefined()
+		expect((await api(t, 'PUT', `/api/v1/statuses/${mine.id}`, { status: 'second' })).status).toBe(200)
+		const later = (await deliver(t, () => 202, NOW + 120_000))
+			.filter((s) => s.inbox === create!.inbox)
+			.map((s) => s.json)
+		const arrived = [JSON.parse(create!.body) as Record<string, unknown>, ...later]
+		expect(String(receiver('misskey', arrived, mine.uri).note?.content)).toContain('look')
+		expect(String(receiver('mastodon', arrived, mine.uri).note?.content)).toContain('second')
+	})
+})
+
+describe('bounds of the new reads (RES-7)', () => {
+	it('finds the local quote of a stamp in one seek, however many received quotes name it', async () => {
+		const lookup = readOperation<{ actor: string; stamp: string }, boolean>((db, input) =>
+			holdsLocalStamp(db, { id: input.actor }, input.stamp)
+		)
+		const measure = async (remote: number) => {
+			const { t, bob, theirs } = await world()
+			const { stamp } = await acceptedQuote(t, bob, theirs.id)
+			await remoteQuotesNaming(t, bob.uri, theirs.uri, theirs.id, stamp, remote)
+			const actor = await statusAuthor(t, theirs.id)
+			return rowsRead(t, lookup, { actor, stamp })
+		}
+		expect(await measure(2000)).toBe(await measure(20))
+	})
+
+	it('reads the same rows for quoted_update with 150 local quoters, whatever the received quotes', async () => {
+		const read = readOperation<{ id: string }, number>((db, input) => quotedUpdates(db, input.id).length)
+		const measure = async (remote: number) => {
+			const { t, bob, theirs } = await world()
+			await remoteQuotesNaming(t, bob.uri, theirs.uri, theirs.id, null, remote)
+			await sql(t.store, "UPDATE quotes SET state = 'accepted' WHERE local = 0 AND status_id GLOB '7*'")
+			await sql(
+				t.store,
+				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 150)
+				INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+				SELECT printf('6%017d', i), 'https://kopje.test/ap/o/q' || i, ?1, 'public', '', '2026-10-11T12:00:00.000Z' FROM n`,
+				ALICE
+			)
+			await sql(
+				t.store,
+				`INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, quoted_account_id, state, local, updated_at)
+				SELECT id, ?1, ?2, (SELECT account_id FROM statuses WHERE id = ?2), 'accepted', 1, '2026-10-11T12:00:00.000Z'
+				FROM statuses WHERE id GLOB '6*'`,
+				theirs.uri,
+				theirs.id
+			)
+			return rowsRead(t, read, { id: theirs.id })
+		}
+		expect(await measure(2000)).toBe(await measure(0))
+	})
+})
