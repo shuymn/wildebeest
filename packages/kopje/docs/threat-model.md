@@ -1256,7 +1256,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   (`src/mastodon/blocks.ts`). _Implemented on branch `kopje/startup-reads`:_ `GET /api/v1/instance/peers` lists at most
   10,000 domains (`MAX_PEERS` in `src/domain/instance.ts`); `familiar_followers` reads at most 20 ids and shows at
   most 80 accounts for each (`src/domain/accounts.ts`); `test/instance-reads.test.ts` ("bounds the peers"),
-  `test/account-reads.test.ts` ("bounds the ids and the accounts shown").
+  `test/account-reads.test.ts` ("bounds the ids and the accounts shown"). _Enforced (main)_ for the bytes of each
+  presented account: a remote account's row carries only the profile fields it shows (at most 16, each name and value
+  cut), chosen in SQL from the stored actor document, so a page's size does not grow with the documents'
+  (`REMOTE_ATTACHMENT_SQL` in `src/domain/accounts.ts`; `test/remote-fields-bound.test.ts`).
 - **RES-4: stored derived data is bounded.** Snapshots, the KV cache, the spool and deliveries each have a size cap, a
   count cap or an expiry with a sweeper. _Implemented on branch `kopje/inbound-statuses`_ for remote statuses: one
   status stores at most 4 attachments (Mastodon's limit) with 10,000 code units of description each, 100 hashtags

@@ -22,6 +22,12 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   account's profile. It is behind the `/admin` Access application like the rest of `/admin`: anyone else is refused
   before the report is looked up, and an unknown report answers 404.
 
+### Fixed
+
+- A page of remote accounts no longer risks the isolate's 128 MB memory limit when their actor documents carry huge
+  profile-field lists: each account now reads at most the 16 fields it shows, cut to their shown length, whatever the
+  stored document's size. Shown fields are unchanged; existing accounts are covered without a migration.
+
 ### Instance changes
 
 - Store schema: adds two migrations, applied on the first request after the deploy; a rollback to an earlier version
