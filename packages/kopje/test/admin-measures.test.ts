@@ -304,6 +304,12 @@ describe('the measure instance_follows', () => {
 			body: { error: `too many measure keys (at most ${MAX_MEASURE_KEYS})` },
 		})
 		expect((await measure(w, many(MAX_MEASURE_KEYS + 1), alice)).status).toBe(403)
+		// Only the measures answered count: one served key among many left out is answered.
+		const mixed = await measure(w, {
+			...follows(D),
+			keys: ['instance_follows', ...Array<string>(16).fill('active_users')],
+		})
+		expect(mixed).toEqual({ status: 200, body: [{ key: 'instance_follows', unit: null, total: '2', data: [] }] })
 		const answer = await measure(w, { ...follows(D), keys: ['active_users', 'instance_follows', 'instance_follows'] })
 		expect(answer.body).toEqual([
 			{ key: 'instance_follows', unit: null, total: '2', data: [] },

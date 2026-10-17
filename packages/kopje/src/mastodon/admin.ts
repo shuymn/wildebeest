@@ -586,9 +586,9 @@ function measureTime(value: string | undefined): { at: number | null } | 'invali
 	return { at: local - offset }
 }
 
-// Measure keys a request may name, repeats included: each served one repeats the whole series (at most
-// MEASURE_DAYS + 1 points), so this bounds the answer at about MAX_MEASURE_KEYS times one measure (16 x 367 points,
-// under 400 KB). Mastodon has 14 measure keys.
+// Measures one answer may hold, repeats included: each repeats the whole series (at most MEASURE_DAYS points), so
+// the answer is at most MAX_MEASURE_KEYS times one measure. Keys left out (not served) do not count. Mastodon has 14
+// measure keys.
 export const MAX_MEASURE_KEYS = 16
 
 // POST /api/v1/admin/measures (measures_controller.rb, Admin::Metrics::Measure.retrieve, measure.rb:21-26): one
@@ -601,7 +601,7 @@ export const MAX_MEASURE_KEYS = 16
 // The answer is REST::Admin::MeasureSerializer's: key, unit, total and data; no human_value (the measure has no
 // value_to_human_value) and no previous_total (total_in_time_range? is false), measure_serializer.rb:3-8. A data
 // point's date is the axis' SQL date, which Rails serializes as YYYY-MM-DD (query_helper.rb:6-8). More than
-// MAX_MEASURE_KEYS keys answer 422 to the OAuth admin before any measure is read.
+// MAX_MEASURE_KEYS measures to answer is 422 to the OAuth admin before any measure is read.
 export const measures: ApiHandler = async (c, deps) => {
 	const p = await requestParams(c, deps)
 	if (p instanceof Response) {
@@ -623,7 +623,8 @@ export const measures: ApiHandler = async (c, deps) => {
 		await checkOptionalToken(c, deps)
 		return mastodonError(422, 'Invalid date supplied')
 	}
-	if (keys.length > MAX_MEASURE_KEYS) {
+	const served = keys.filter((key) => key === 'instance_follows').length
+	if (served > MAX_MEASURE_KEYS) {
 		authorized(await storeCall(c, deps, (s, b) => s.adminDashboardGranted(b, { credential })))
 		return mastodonError(422, `too many measure keys (at most ${MAX_MEASURE_KEYS})`)
 	}
@@ -648,5 +649,5 @@ export const measures: ApiHandler = async (c, deps) => {
 		total: String(result.measure.total),
 		data: result.measure.data.map((point) => ({ date: point.date, value: String(point.value) })),
 	}
-	return c.json(keys.filter((key) => key === 'instance_follows').map(() => measure))
+	return c.json(Array.from({ length: served }, () => measure))
 }
