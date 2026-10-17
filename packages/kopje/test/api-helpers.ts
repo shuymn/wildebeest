@@ -5,7 +5,7 @@ import { sign } from 'hono/jwt'
 import { vi } from 'vitest'
 
 import { NOW } from './app-helpers'
-import { migratedStore } from './helpers'
+import { BUILD, migratedStore } from './helpers'
 import { type AppDeps, createApp } from '../src/app/app'
 import { allocateLocalId } from '../src/domain/ids'
 import { writeOperation } from '../src/domain/operation'
@@ -343,4 +343,21 @@ export async function login(
 	}
 	const { access_token } = await response.json<{ access_token: string }>()
 	return { app, token: access_token }
+}
+
+// A token of the local account with `email`, from an app registered with `scope`.
+export async function userToken(h: ApiHarness, email: string, scope: string): Promise<string> {
+	const app = await registerApp(h, { scopes: scope })
+	return (await login(h, { app, scope, email })).token
+}
+
+// Runs the Store's jobs (the moderation jobs among them, as the Queue and the cron do) until none is left; how many
+// calls it took.
+export async function settle(store: StoreStub): Promise<number> {
+	for (let call = 1; call <= 200; call++) {
+		if (!(await store.runInboundJobs(BUILD, { now: NOW })).pending) {
+			return call
+		}
+	}
+	throw new Error('the jobs did not settle')
 }

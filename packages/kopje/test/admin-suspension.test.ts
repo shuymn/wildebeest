@@ -10,11 +10,12 @@ import {
 	exchange,
 	form,
 	json,
-	login,
 	registerApp,
 	seedAccount,
 	setSetting,
+	settle,
 	sql,
+	userToken,
 } from './api-helpers'
 import { NOW } from './app-helpers'
 import { BUILD, claimSent, migratedStore } from './helpers'
@@ -43,11 +44,6 @@ import { sha256Hex } from '../src/security/tokens'
 
 const OWNER = 'owner@example.com'
 const ADMIN_SCOPES = 'read write admin:read admin:write'
-
-async function userToken(h: ApiHarness, email: string, scope: string): Promise<string> {
-	const app = await registerApp(h, { scopes: scope })
-	return (await login(h, { app, scope, email })).token
-}
 
 // The owner (the OAuth admin), alice and bob, each signed in; `admin` is the owner's token with the admin scopes.
 async function world(overrides: Record<string, unknown> = {}) {
@@ -78,16 +74,6 @@ async function act(
 async function unsuspend(h: ApiHarness, token: string | null, id: string): Promise<Answer> {
 	const init = { method: 'POST' }
 	return answer(await h.request(`/api/v1/admin/accounts/${id}/unsuspend`, token === null ? init : bearer(token, init)))
-}
-
-// Runs the Store's jobs until none is left; returns how many calls it took.
-async function settle(store: StoreStub): Promise<number> {
-	for (let call = 1; call <= 200; call++) {
-		if (!(await store.runInboundJobs(BUILD, { now: NOW })).pending) {
-			return call
-		}
-	}
-	throw new Error('the jobs did not settle')
 }
 
 type Sent = { type: string; inbox: string; suspended: boolean; object: unknown }

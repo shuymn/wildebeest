@@ -2,7 +2,7 @@ import { runInDurableObject } from 'cloudflare:test'
 
 import { expect } from 'vitest'
 
-import { type ApiHarness, bearer, form, login, registerApp, setSetting, sql } from './api-helpers'
+import { bearer, form, setSetting, sql, userToken } from './api-helpers'
 import { NOW } from './app-helpers'
 import { BUILD } from './helpers'
 import { community } from './status-helpers'
@@ -16,11 +16,6 @@ import type { StoreStub } from '../src/platform/store-client'
 const OWNER = 'owner@example.com'
 const ADMIN_SCOPES = 'read write admin:read admin:write'
 export const ORIGIN = 'https://kopje.test'
-
-export async function userToken(h: ApiHarness, email: string, scope: string): Promise<string> {
-	const app = await registerApp(h, { scopes: scope })
-	return (await login(h, { app, scope, email })).token
-}
 
 // The owner (the OAuth admin) and four local accounts, each signed in; `admin` is the owner's admin token.
 export async function world(overrides: Record<string, unknown> = {}) {
@@ -78,17 +73,6 @@ export async function round(
 			return ran === null ? null : { ...ran, rows }
 		})
 	)
-}
-
-// Runs the Store's jobs (the moderation jobs among them, as the Queue and the cron do) until none is left; how many
-// calls it took.
-export async function settle(store: StoreStub): Promise<number> {
-	for (let call = 1; call <= 200; call++) {
-		if (!(await store.runInboundJobs(BUILD, { now: NOW })).pending) {
-			return call
-		}
-	}
-	throw new Error('the jobs did not settle')
 }
 
 // Rounds until the job is in the follows phase: the gate before its first Reject.

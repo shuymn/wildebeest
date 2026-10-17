@@ -2,7 +2,7 @@ import { runInDurableObject } from 'cloudflare:test'
 
 import { describe, expect, it } from 'vitest'
 
-import { bearer, json, sql } from './api-helpers'
+import { bearer, json, settle, sql, userToken } from './api-helpers'
 import { NOW } from './app-helpers'
 import { migratedStore } from './helpers'
 import { rowsRead } from './read-helpers'
@@ -14,11 +14,9 @@ import {
 	receive,
 	rejects,
 	round,
-	settle,
 	toFollows,
 	unsuspend,
 	uriOf,
-	userToken,
 	world,
 	type World,
 } from './remote-suspension-helpers'
