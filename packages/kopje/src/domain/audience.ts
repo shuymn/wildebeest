@@ -98,7 +98,7 @@ export function mentionStatusSql(id: string): string {
 // which hold no entry for any other account (INDEXED BY keeps the plan from reading the account's row instead). Domain
 // coverage costs one constant seek per statement while the instance has no suspend block (SUSPEND_BLOCKS_SQL), so the
 // rule then reads no row of an available account but its local_accounts row; otherwise it also reads the account's
-// row by its key and seeks at most 2 × (MAX_BLOCK_LABELS - 1) blocks. An unknown id is available.
+// row by its key and seeks at most 4 × (MAX_BLOCK_LABELS - 1) blocks (coveredSql). An unknown id is available.
 export function availableSql(x: string): string {
 	return `(NOT EXISTS (SELECT 1 FROM main.local_accounts pl WHERE pl.account_id = ${x} AND pl.suspended_at IS NOT NULL
 		UNION ALL SELECT 1 FROM main.accounts pa INDEXED BY accounts_deleted WHERE pa.id = ${x} AND pa.deleted_at IS NOT NULL
@@ -201,16 +201,18 @@ export const SUSPEND_BLOCKS_SQL = `EXISTS (SELECT 1 FROM main.instance_domain_bl
 // blockedDomain, platform/domain-name.ts). The rule that matches a domain is the block on the domain itself or on its
 // nearest parent, the longest match (Mastodon's DomainBlock.rule_for, app/models/domain_block.rb:68); it covers the
 // domain when it is a suspend. A child noop therefore exempts its subdomain tree from a parent's suspend. Each key's
-// suffixes are walked in SQL, and only those of 2 to MAX_BLOCK_LABELS labels are sought, one unique seek each. The
-// keys and the walk are CTEs, whose expressions do not add to the depth of the expression that holds this one (SQLite
-// limits it to 100 in workerd).
+// suffixes are walked from the longest, and the walk stops at the first one a block names (the nearest), so the rule
+// is that block's; only suffixes of 2 to MAX_BLOCK_LABELS labels are sought, at most two unique seeks each (the walk's
+// and the match's). The keys and the walk are CTEs, whose expressions do not add to the depth of the expression that
+// holds this one (SQLite limits it to 100 in workerd). Measured against a window, test/read-windows.test.ts.
 function coveredSql(keys: string): string {
+	const sought = `BETWEEN 1 AND ${MAX_BLOCK_LABELS - 1}`
 	return `EXISTS (WITH RECURSIVE pk(d) AS (${keys}),
-			ps(k, d, dots) AS (SELECT d, d, length(d) - length(replace(d, '.', '')) FROM pk
-				UNION ALL SELECT k, substr(d, instr(d, '.') + 1), dots - 1 FROM ps WHERE dots > 0),
-			pm(severity, nearest) AS (SELECT pr.severity, row_number() OVER (PARTITION BY ps.k ORDER BY ps.dots DESC)
-				FROM ps JOIN main.instance_domain_blocks pr ON pr.domain = ps.d WHERE ps.dots BETWEEN 1 AND ${MAX_BLOCK_LABELS - 1})
-		SELECT 1 FROM pm WHERE pm.nearest = 1 AND pm.severity = 'suspend')`
+			ps(d, dots) AS (SELECT d, length(d) - length(replace(d, '.', '')) FROM pk
+				UNION ALL SELECT substr(d, instr(d, '.') + 1), dots - 1 FROM ps WHERE dots > 1
+					AND NOT EXISTS (SELECT 1 FROM main.instance_domain_blocks pn WHERE ps.dots ${sought} AND pn.domain = ps.d))
+		SELECT 1 FROM ps JOIN main.instance_domain_blocks pr ON pr.domain = ps.d
+		WHERE ps.dots ${sought} AND pr.severity = 'suspend')`
 }
 
 // Whether an instance domain block covers `host`, an expression for a normalized domain.

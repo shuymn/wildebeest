@@ -48,6 +48,8 @@ import type { StoreOperation } from '../src/platform/store-kernel'
 const PRESENT = { origin: 'https://kopje.test' }
 const PAGE = { limit: 20 }
 const ALLOWANCE = 10
+// The rows a read may cost when an instance domain block hides its range, as a multiple of a deletion's (below).
+const DOMAIN_BUDGET = 3
 const TOKEN = 'read-windows-token'
 const credential = { tokenHash: TOKEN, scope: 'read', now: NOW } as const
 
@@ -85,7 +87,12 @@ const BOOST_NEWER = 897000000000000000n
 const FRIEND_NEWER = 890000000000000000n
 const LOCAL_NEWER = 895000000000000000n
 
-async function world(hidden: number, newer = 0, privates = 0): Promise<StoreStub> {
+// What hides the availability rows: the deletion of their accounts, or an instance domain block (R38) by either key
+// of each: GHOST is stored on ghost.example but its actor id lives on free.example, and GONE_i alternate between a
+// stored domain on gone.example and an actor id on social.gone.example, with free.example as their other key.
+type HiddenBy = 'deleting' | 'domain'
+
+async function world(hidden: number, newer = 0, privates = 0, by: HiddenBy = 'deleting'): Promise<StoreStub> {
 	const store = await migratedStore()
 	await runInDurableObject(store, (_instance, state) => {
 		const sql = state.storage.sql
@@ -242,7 +249,7 @@ async function world(hidden: number, newer = 0, privates = 0): Promise<StoreStub
 		local(VIEWER, 'viewer')
 		local(LOCAL, 'local')
 		remote(FRIEND, 'friend', 'friend.example')
-		remote(GHOST, 'ghost', 'ghost.example', true)
+		remote(GHOST, 'ghost', 'ghost.example', by === 'deleting')
 		remote(BLOCKED, 'blocked', 'blocking.example')
 		remote(DOMAINED, 'domained', 'blocked.example')
 		sql.exec(
@@ -265,7 +272,26 @@ async function world(hidden: number, newer = 0, privates = 0): Promise<StoreStub
 		sql.exec("INSERT INTO lists (id, account_id, title) VALUES (?, ?, 'members')", MEMBERS, VIEWER)
 
 		accounts(VISIBLE_ACCOUNT, OLDER, 'visible.example', false)
-		accounts(GONE_ACCOUNT, hidden, 'gone.example', true)
+		if (by === 'deleting') {
+			accounts(GONE_ACCOUNT, hidden, 'gone.example', true)
+		} else {
+			sql.exec("UPDATE accounts SET uri = 'https://free.example/users/ghost' WHERE id = ?", GHOST)
+			each(
+				hidden,
+				GONE_ACCOUNT,
+				`INSERT INTO accounts (id, uri, username, domain)
+				SELECT CAST(?2 + i AS TEXT), 'https://' || iif(i % 2 = 0, 'free.example', 'social.gone.example') || '/users/a' ||
+					(?2 + i), 'a' || (?2 + i), iif(i % 2 = 0, 'gone.example', 'free.example') FROM n WHERE ?1 > 0`
+			)
+			for (const domain of ['gone.example', 'ghost.example']) {
+				sql.exec(
+					"INSERT INTO instance_domain_blocks (domain, severity, created_at, updated_at) VALUES (?, 'suspend', ?, ?)",
+					domain,
+					at,
+					at
+				)
+			}
+		}
 		accounts(NEWER_ACCOUNT, newer, 'visible.example', false)
 		accounts(MUTED_ACCOUNT, hidden, 'muted.example', false)
 		sql.exec(
@@ -531,6 +557,34 @@ describe('filtered reads read a candidate window, however long the hidden range 
 		expect(grown).toEqual([])
 	}, 300_000)
 
+	// A covered candidate costs the rule more than one being deleted: the account's row and, per key, the walk of its
+	// suffixes with a seek of the blocks each (availableSql). Measured at 1.0 to 2.5 times the deletions' rows per read
+	// (account statuses the most, as it judges each boost's original too); the budget is 3 times.
+	it('reads the same rows when an instance domain block hides them, within a budget of the deletions', async () => {
+		const few = await world(100, 0, 0, 'domain')
+		const many = await world(20_000, 0, 0, 'domain')
+		const deleting = await world(20_000)
+		const grown: string[] = []
+		const over: string[] = []
+		for (const r of READS) {
+			for (const store of [few, many]) {
+				const page = await read(store, r, PAGE)
+				expect([r.name, page.items.length, page.cut]).toEqual([r.name, 0, true])
+			}
+			const fewRows = await rowsRead({ store: few }, r.operation, r.input(PAGE) as never)
+			const manyRows = await rowsRead({ store: many }, r.operation, r.input(PAGE) as never)
+			const deletingRows = await rowsRead({ store: deleting }, r.operation, r.input(PAGE) as never)
+			if (manyRows > fewRows + ALLOWANCE) {
+				grown.push(`${r.name}: ${fewRows} -> ${manyRows}`)
+			}
+			if (manyRows > DOMAIN_BUDGET * deletingRows) {
+				over.push(`${r.name}: ${manyRows} > ${DOMAIN_BUDGET} × ${deletingRows}`)
+			}
+		}
+		expect(grown).toEqual([])
+		expect(over).toEqual([])
+	}, 300_000)
+
 	// The grouped list's walk reads at most GROUP_WALK notifications, shown or hidden: it is compared beyond that.
 	it('reads the same rows on the outbox, the notification policy, and the grouped notifications past their walk', async () => {
 		const reads: [string, StoreOperation<never, unknown>, unknown, number][] = [
@@ -556,13 +610,15 @@ describe('filtered reads read a candidate window, however long the hidden range 
 			],
 		]
 		const grown: string[] = []
-		const many = await world(20_000)
-		for (const [name, operation, input, hidden] of reads) {
-			const few = await world(hidden)
-			const fewRows = await rowsRead({ store: few }, operation, input as never)
-			const manyRows = await rowsRead({ store: many }, operation, input as never)
-			if (manyRows > fewRows + ALLOWANCE) {
-				grown.push(`${name}: ${fewRows} -> ${manyRows}`)
+		for (const by of ['deleting', 'domain'] as const) {
+			const many = await world(20_000, 0, 0, by)
+			for (const [name, operation, input, hidden] of reads) {
+				const few = await world(hidden, 0, 0, by)
+				const fewRows = await rowsRead({ store: few }, operation, input as never)
+				const manyRows = await rowsRead({ store: many }, operation, input as never)
+				if (manyRows > fewRows + ALLOWANCE) {
+					grown.push(`${name} (${by}): ${fewRows} -> ${manyRows}`)
+				}
 			}
 		}
 		expect(grown).toEqual([])
@@ -587,21 +643,25 @@ describe('the profile web page reads from its cursor, however many newer posts',
 })
 
 describe('paging moves through empty windows (RES-7)', () => {
-	it('reaches every visible row on both sides of 1,000 hidden ones, once and in order, by max_id and by min_id', async () => {
-		const NEWER = 5
-		const store = await world(1_000, NEWER)
-		for (const r of READS) {
-			const expected = r.expected(NEWER)
-			const older = await walk(store, r, 'older')
-			expect([r.name, older.seen]).toEqual([r.name, expected])
-			// Some pages in the hidden range are empty, and each still moved the cursor on.
-			expect([r.name, older.requests.includes(0)]).toEqual([r.name, true])
-			if (r.minId === true) {
-				const newer = await walk(store, r, 'newer')
-				expect([r.name, newer.seen]).toEqual([r.name, expected.toReversed()])
+	it.each(['deleting', 'domain'] as const)(
+		'reaches every visible row on both sides of 1,000 hidden ones (%s), once and in order, by max_id and by min_id',
+		async (by) => {
+			const NEWER = 5
+			const store = await world(1_000, NEWER, 0, by)
+			for (const r of READS) {
+				const expected = r.expected(NEWER)
+				const older = await walk(store, r, 'older')
+				expect([r.name, older.seen]).toEqual([r.name, expected])
+				// Some pages in the hidden range are empty, and each still moved the cursor on.
+				expect([r.name, older.requests.includes(0)]).toEqual([r.name, true])
+				if (r.minId === true) {
+					const newer = await walk(store, r, 'newer')
+					expect([r.name, newer.seen]).toEqual([r.name, expected.toReversed()])
+				}
 			}
-		}
-	}, 300_000)
+		},
+		300_000
+	)
 
 	it('pages the profile web page through hidden private posts to the public ones below', async () => {
 		const store = await world(0, 5, 1_000)
