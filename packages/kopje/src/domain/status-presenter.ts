@@ -321,7 +321,6 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 		})
 	}
 
-	// A status of the response (top), a boost's original, or a quoted status shown in a quote.
 	const presentRow = (
 		row: StatusRow,
 		kind: 'top' | 'reblog' | 'quoted',

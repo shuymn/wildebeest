@@ -106,8 +106,8 @@ function ownScheduled(db: Db, viewerId: string, id: string): ScheduledRow | unde
 	)
 }
 
-// The params of a stored row, or null when they are not of the shape this module writes (a row restored from a dump
-// is only checked by the schema). A row without a quote policy has nobody, which this module wrote before it took one.
+// The params of a stored row, or null when not of the shape this module writes (a restored row has only schema
+// validation). A row without a quote policy has nobody, the policy such rows were scheduled with.
 function readParams(text: string): ScheduledParams | null {
 	const p = JSON.parse(text) as Record<string, unknown>
 	const optional = (value: unknown, type: string) => value === null || typeof value === type

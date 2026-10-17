@@ -750,9 +750,8 @@ export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db
 	return status()
 })
 
-// Stores the quote policy of the author's own status `id`. A change is federated as an Update of the status, with no
-// history entry and edited_at unchanged, so receivers apply it as an implicit update (Notes carry the policy,
-// activities.ts noteOf). Each Update is a snapshot of its commit, and a later one supersedes those still waiting.
+// A policy-only change sends an Update without a history entry or edited_at; receivers apply it as an implicit update
+// (Notes carry the policy: activities.ts noteOf). Each Update snapshots its commit and supersedes waiting ones.
 function setQuotePolicy(db: Db, accountId: string, id: string, policy: number, now: number): void {
 	if (db.run('UPDATE statuses SET quote_policy = ?1 WHERE id = ?2 AND quote_policy <> ?1', policy, id) === 0) {
 		return
@@ -1522,15 +1521,11 @@ export type StatusQuotesInput = { id: string; page: PageQuery; present: Present 
 // full, whatever the rule left of it.
 export type QuotesPage = Page<Status> & { candidates: number }
 
-// GET /api/v1/statuses/:id/quotes (Api::V1::Statuses::QuotesController#index, R35): with a token (an app token reads
-// as anonymous, as Mastodon requires no user), the statuses that quote a status the viewer may see (R3), by their
-// accepted quotes, newest quoting status first, paged by the quoting status's id (Mastodon pages by the quote's id;
-// Kopje's quote is keyed by its status). The page is a bounded window, as Mastodon paginates before it filters: one
-// seek reads at most `limit` accepted quotes from the cursor (acceptedQuoteWindow), and the read rule is applied to
-// those statuses only, R8 (listableSql: the viewer filters neither the author nor is blocked) for anyone but the quoted
-// author, who is shown every quote they may see (R2), from accounts they block or mute too (Mastodon skips
-// StatusFilter for them). A page may be short or empty; its bounds are the window's, so a stretch of hidden quotes is
-// crossed a window at a time.
+// GET /api/v1/statuses/:id/quotes (Api::V1::Statuses::QuotesController#index, R35): app tokens read as anonymous,
+// as Mastodon requires no user. R3 guards the target. Accepted quotes, newest first, paged by the quoting status's id
+// (Kopje's quote key), not Mastodon's quote id. As Mastodon paginates before it filters, one acceptedQuoteWindow seek
+// reads at most `limit` rows, then R8 applies, or R2 for the quoted author, quotes of accounts they block or mute
+// included (Mastodon skips StatusFilter for them). Bounds are the window's, so short or empty pages still advance.
 export const statusQuotes = optionalUserReadOperation<StatusQuotesInput, Viewed<QuotesPage>>(
 	(db, { id, page, present }, viewer) => {
 		const { accountId } = viewer
@@ -1586,8 +1581,7 @@ export const statusQuotes = optionalUserReadOperation<StatusQuotesInput, Viewed<
 
 export type RevokeTarget = { id: string; quotingId: string }
 
-// What the Worker needs to sign a revoke's stamp Delete before the revoke is recorded: the authorization the quote
-// holds now (null: none, nothing to sign), and with one the Delete to sign and the author's wrapped key.
+// What the Worker signs before the revoke is recorded; a null authorization means no stamp Delete to sign.
 export type RevokePreparation = {
 	authorization: string | null
 	sign: { activity: Record<string, unknown>; keyId: string; key: StoredKey } | null
@@ -1698,8 +1692,7 @@ export type RevokeInput = RevokeTarget & {
 	present: Present
 }
 
-// stale: the quote now holds another authorization than the one prepared (accepted again meanwhile); the Worker
-// prepares again.
+// stale: the authorization changed since preparation; the Worker prepares again.
 export type RevokeResult = Acted<Status | RedactedStatus> | { status: 'stale' }
 
 // The second step of a revoke, one transaction (Quote#reject!, RevokeQuoteService): accepted becomes revoked and

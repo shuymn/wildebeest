@@ -113,8 +113,7 @@ against their own instance. TLS is assumed between all parties.
   missing proof, a forged signature, a proof by another actor's key, a proof covering another object, a valid proof on
   another activity type and on the `Delete` of a status), `test/inbox.test.ts` ("records no retraction for input that
   fails ID-1"). Kopje's own stamp `Delete`s carry such a proof (VIS-28), so a server relaying one can be believed.
-  _Implemented on branch `kopje/quotes-2b`:_ `src/federation/ld-sign.ts`; `test/quote-requests.test.ts` ("signs the
-  Delete once"), `test/fedify-usage.test.ts` ("signs Linked Data in ld-sign.ts only").
+  See `src/federation/ld-sign.ts`, `test/quote-requests.test.ts` and `test/fedify-usage.test.ts`.
 - **ID-2: a fetched document is trusted only for its own origin.** The identity of a fetched object is its parsed `id`
   after JSON-LD processing, and it must have the origin of the final response URL. The loader's literal `id` check is a
   pre-filter. Cross-origin redirects are refused. _Enforced (main):_ `src/federation/loader.ts`;
@@ -630,21 +629,16 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `test/streaming/public.test.ts`, `test/streaming-oracle.test.ts`, `test/stream-delete.test.ts`,
   `test/policy-bounds.test.ts`, `test/migrations.test.ts`, `test/cascade-guard.test.ts`.
 
-- **VIS-27: a quote reveals nothing its quoted status hides.** A quote shows its quoted status only when the viewer may
-  see that status by itself (VIS-1, R2), and only for an accepted quote; otherwise it shows a state and no content
-  (`unauthorized` for a status the viewer may not see, whatever the quoting status's own visibility). The filter states
-  (`blocked_domain`, `blocked_account`, `muted_account`) carry only a status the viewer may see, for the client to
-  fold. A legacy quote (a Note without `quote`, such as Misskey's) that was never accepted is not shown at all, as in
-  Mastodon. The embedded status is presented for the same viewer as any status (flags, filters, media, poll), and its
-  own quote is a state and an id only, from the same rule, so nothing is embedded two levels deep. The `DELETE`
-  response shows the quoted status of a quote in another state only when the viewer may see it. The quotes list
-  (`GET /api/v1/statuses/:id/quotes`) answers 404 for a status the viewer may not view (R3) and lists only quoting
-  statuses the viewer may list (R8), or, for the quoted author, may see (R2). A quote never widens what its quoting
-  status's rule passed: feeds include and exclude statuses as before. The work is bounded (RES-7). _Implemented on
-  branch `kopje/quotes-1b`:_ `quoteReads` in `src/domain/audience.ts` (R35), the presenter in
-  `src/domain/status-presenter.ts`, `statusQuotes` in `src/domain/statuses.ts`, `acceptedQuoteWindow` in
-  `src/domain/quotes.ts`, migration `0036_quotes_list`; `test/quotes-api.test.ts`, `test/policy-oracle.test.ts`
-  ("quoteReads (R35)"), `test/policy-bounds.test.ts`, `test/policy.test.ts`, `test/migrations.test.ts`.
+- **VIS-27: a quote reveals nothing its quoted status hides.** R35 applies VIS-1/R2 to the quoted status for the
+  same viewer, whatever the quoting status's own visibility: `unauthorized` carries no content, and the filter states
+  carry only a status the viewer may see. Ordinary reads embed it only for an accepted quote; the `DELETE` response's
+  source also requires R2. States, legacy quotes and Mastodon's behaviour: [visibility.md](visibility.md). Embedding
+  stops after one level; the inner quote is a state and an id. The quotes list answers 404 under R3, then applies R8
+  to quoting statuses, or R2 for the quoted author. Quotes never widen feed membership. The work is bounded (RES-7).
+  Implementation: `quoteReads` in `src/domain/audience.ts`, the presenter in `src/domain/status-presenter.ts`,
+  `statusQuotes` in `src/domain/statuses.ts`, `acceptedQuoteWindow` in `src/domain/quotes.ts`, migration
+  `0036_quotes_list`; `test/quotes-api.test.ts`, `test/policy-oracle.test.ts`, `test/policy-bounds.test.ts`,
+  `test/policy.test.ts`, `test/migrations.test.ts`.
 
 - **VIS-28: a quote is approved only by the quoted author, and a revoked approval never becomes valid again.** A quote
   is `accepted` only as a self-quote, by a remote stamp that passes every check (section 5 of the quotes design), or,
@@ -661,11 +655,11 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   its `Delete` was signed for, the quoted author's LD-signed `Delete` (signed once in the Worker, delivered byte for
   byte to the quoter and to the receipts and audiences of both statuses), then a `Reject` of every live request the
   quoting author had answered for the quote, by id, in the same lane, recorded as retractions like the `Delete`. Accepted risk: a receiver that applies an `Accept` and a `Reject`
-  concurrently (Mastodon 4.5.11 checks `pending?` in memory) may keep the quote. _Implemented on branch
-  `kopje/quotes-2b`:_ `answerQuoteRequest`, `quoteAuthorization`, `retireQuoteOf` and `revokeQuoteRow` in
-  `src/domain/quotes.ts`, `mayQuoteSql` and `reachQuoters` in `src/domain/audience.ts`, `revokeQuote` in
-  `src/domain/statuses.ts`, the immutable and `reachOf` envelopes in `src/domain/deliveries.ts`, migration
-  `0038_quote_requests`; `test/quote-requests.test.ts`, `test/migrations.test.ts`.
+  concurrently (Mastodon 4.5.11 checks `pending?` in memory) may keep the quote. Implementation: `answerQuoteRequest`,
+  `quoteAuthorization`, `retireQuoteOf` and `revokeQuoteRow` in `src/domain/quotes.ts`, `mayQuoteSql` and
+  `reachQuoters` in `src/domain/audience.ts`, `revokeQuote` in `src/domain/statuses.ts`, the immutable and `reachOf`
+  envelopes in `src/domain/deliveries.ts`, migration `0038_quote_requests`; `test/quote-requests.test.ts`,
+  `test/migrations.test.ts`.
 
 - **VIS-29: admin views and actions disclose and change only through the admin account.** Only the OAuth admin,
   through a token covering the route's admin scope, reads or acts through `/api/v1/admin/*` and `/api/v2/admin/*`
@@ -1401,12 +1395,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   "processes 3000 quotes naming the stamp in bounded batches"), `test/cascade-guard.test.ts` (a purged status's
   accepted quote within the exact budget), `test/policy-bounds.test.ts` ("received quotes cost their work a bounded
   read").
-  _Implemented on branch `kopje/quotes-2b`_ for QuoteRequests: one fetch (the instrument, between Store rounds, which
-  write nothing) and one answer per request id, kept 30 days in `quote_requests` and at most 100 live per actor (past
-  it the request is refused with 503, nothing evicted); the sweep removes 100 expired a call. A revoke records one
-  signed `Delete` and at most 100 `Reject`s (the quoting author's answered requests). A Delete of a quoting status
-  retires its one authorization before its batches (three rows); a purge's batch deletes a quote holding one within a
-  third of the rows left. `test/quote-requests.test.ts` ("2: …", "records Rejects bounded by the per-actor cap"),
+  QuoteRequests: one fetch (the instrument, between Store rounds, which write nothing) and one answer per request id,
+  kept 30 days in `quote_requests` and at most 100 live per actor (503 past the cap, nothing evicted); the sweep
+  removes at most 100 expired rows a call. A revoke records one signed `Delete` and at most 100 `Reject`s (the quoting
+  author's answered requests). A Delete of a quoting status retires its one authorization before its batches (three
+  rows); a purge's batch deletes a quote holding one within a third of the rows left. `test/quote-requests.test.ts`,
   `test/cascade-guard.test.ts`.
   Streaming (VIS-26): _Implemented on branch `kopje/streaming-1`:_ at most 16 sockets per account (429) and 256 per
   instance (503); 16 subscriptions per socket, 16 stream keys per account and a socket's attachment at most 12 KiB
@@ -1526,20 +1519,18 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   keys' (one range of `stream_subscriptions_key` a scan) and one seek per hashtag of the status; a tombstone reads the
   status's hashtags by its key. They read the same rows however many statuses the author, others, the hashtag or the
   accounts the viewer filters have (`test/policy-bounds.test.ts`, "streamed public and hashtag statuses").
-  _Implemented on branch `kopje/quotes-1b`_ for quotes (R35, VIS-27): a response reads its statuses' quote rows by key
-  in one query and the quoted statuses' in a second, each over the response's ids, and embeds one level only, so a
-  page reads the same rows however many quotes its quoted statuses have and however long the chain they start
-  (`test/policy-bounds.test.ts`, "statuses with quotes are presented from their quote rows"). The quotes list reads one
-  window of the status's accepted quotes from its cursor through the partial index `quotes_accepted` (migration
-  `0036_quotes_list`), at most `limit`, and applies the rule to that window alone: a page reads the same rows with 20
-  or 2,000 listed quotes and 2,000 in other states, on any page; when the rule hides the window, the page is empty and
-  its next link moves on by the window, so 2,000 quotes the viewer may not list cost a request one window, and one
-  listed quote behind 1,000 hidden ones is reached a window per request (`test/policy-bounds.test.ts`, "the quotes list
-  reads a window"). A client that stops at an empty page sees fewer quotes than exist, as on Mastodon (accepted).
-  _Implemented on branch `kopje/quotes-2b`:_ the stamp endpoint is one read by its id's unique index; a request's cap
-  reads at most 100 rows of its actor; a revoke's `Reject`s read at most 100 rows of the quoting author by one seek of
-  `quote_requests_instrument`, whatever other actors' requests name the same instrument; quoters' reach reads the
-  accepted quotes of the status through `quotes_accepted`, as its boosts are read.
+  Quotes (R35, VIS-27): a response reads its statuses' quote rows by key in one query and the quoted statuses' in a
+  second, each over the response's ids, and embeds one level only, so a page reads the same rows however many quotes
+  its quoted statuses have and however long the chain they start (`test/policy-bounds.test.ts`, "statuses with quotes
+  are presented from their quote rows"). The quotes list reads one window of the status's accepted quotes from its
+  cursor through the partial index `quotes_accepted` (migration `0036_quotes_list`), at most `limit`, and applies the
+  rule to that window alone, whatever the count of quotes in any state; when the rule hides the window, the page is
+  empty and its next link moves on by the window, so hidden quotes cost a request one window
+  (`test/policy-bounds.test.ts`, "the quotes list reads a window"). A client that stops at an empty page sees fewer
+  quotes than exist, as on Mastodon (accepted). The stamp endpoint is one read by its id's unique index; a request's
+  cap reads at most 100 rows of its actor; a revoke's `Reject`s read at most 100 rows of the quoting author by one
+  seek of `quote_requests_instrument`, whatever other actors' requests name the same instrument; quoters' reach reads
+  the accepted quotes of the status through `quotes_accepted`, as its boosts are read.
 
 ### Data and keys (DATA)
 
