@@ -760,12 +760,12 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   change that commits after confirmation does not stop that POST; a confirmation that fails, or finds the lease taken
   over, sends nothing, and the lease expires. Accepted residuals: a shared inbox serving an available recipient besides
   unavailable ones is sent (content expansion already left the unavailable out); a row without provenance (queued before
-  migration `0043`, phase A's staged reach, a retraction's earlier receivers) gets the inbox host rule only; Mastodon's
+  migration `0044`, phase A's staged reach, a retraction's earlier receivers) gets the inbox host rule only; Mastodon's
   `DeliveryWorker` has no such check, so this is stricter than Mastodon, whose reach already leaves deleted accounts
   out. A dropped row writes no receipt. _Implemented on branch `kopje/admin-b1a`_: `targetsOf`, `sendRefused`,
   `claimDeliveries` and `confirmDelivery` in `src/domain/deliveries.ts`, `recipientsFor` in `src/domain/audience.ts`,
   `src/domain/host-policy.ts` (refuses no host until B2a), `deliveryRound` in `src/jobs/deliver.ts`, migration
-  `0043_delivery_provenance`; `test/delivery-send-check.test.ts`, `test/policy-writes.test.ts` (provenance and the
+  `0044_delivery_provenance`; `test/delivery-send-check.test.ts`, `test/policy-writes.test.ts` (provenance and the
   send-time rule against `sends` in `test/policy-model.ts`), `test/migrations.test.ts`.
 
 ### Authorization (AUTH)

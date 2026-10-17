@@ -432,10 +432,10 @@ describe('the personal-inbox fallback (VIS-30)', () => {
 	})
 })
 
-describe('rows queued before migration 0043', () => {
+describe('rows queued before migration 0044', () => {
 	it('fall back to the inbox host rule only', async () => {
 		const store = freshStore()
-		const at = MIGRATIONS.findIndex((m) => m.name === '0043_delivery_provenance')
+		const at = MIGRATIONS.findIndex((m) => m.name === '0044_delivery_provenance')
 		const result = await runInDurableObject(store, async (_instance, state) => {
 			const sql = state.storage.sql
 			await testKernel(state, MIGRATIONS.slice(0, at)).upgrade()

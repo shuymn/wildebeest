@@ -93,7 +93,7 @@ type Activity = Record<string, unknown>
 //     unavailable").
 //   - domains: the distinct hosts of their actor ids, at most PROVENANCE_MAX; absent above it.
 // A target with neither accounts nor many has no provenance: one whose recipients are unknown (a retraction's earlier
-// receivers, phase A's staged reach, a row queued before migration 0043) or merged with such a target.
+// receivers, phase A's staged reach, a row queued before migration 0044) or merged with such a target.
 export type Provenance = { accounts?: string[]; domains?: string[]; many?: true }
 
 export type Target = { inbox: string; addressee: string | null } & Provenance

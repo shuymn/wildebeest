@@ -4694,8 +4694,8 @@ describe('0042_report_action_fence', () => {
 	}, 300_000)
 })
 
-describe('0043_delivery_provenance', () => {
-	const NAME = '0043_delivery_provenance'
+describe('0044_delivery_provenance', () => {
+	const NAME = '0044_delivery_provenance'
 	const at = NAMES.indexOf(NAME)
 
 	// The rows the file reads on a store of `deliveries` queued rows, and what an old row holds after it.

@@ -74,9 +74,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       6 is the overhead of an upgrade on a store that size (0042, upgraded alone there, took 6.0 and 5.9); an upgrade
       that applies several files pays it once. Expect a pause of
       several seconds on the first request after the deploy.
-    - `0043_delivery_provenance`: lets each delivery record the recipients behind it. It changes the schema only and
-      reads no row, however many deliveries are queued. On the same benchmark store its upgrade took 3.1 seconds (3.1
-      in a second run).
+    - `0044_delivery_provenance`: lets each delivery record the recipients behind it. It changes the schema only and
+      reads no row, however many deliveries are queued. On the same benchmark store its upgrade took 5.9 seconds (5.9
+      and 5.8 in two more runs), all of it the overhead of an upgrade on a store that size, which an upgrade applying
+      several files pays once.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.13] - 2026-10-17
