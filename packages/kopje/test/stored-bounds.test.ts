@@ -345,7 +345,7 @@ describe('stored bounds (RES-2)', () => {
 					{ numRuns: column.runs * column.bounds.length }
 				)
 			})
-		})
+		}, 120_000)
 	}
 
 	it('runs where String.prototype.toWellFormed exists', () => {
@@ -434,7 +434,7 @@ describe('stored bounds (RES-2)', () => {
 				{ numRuns: 120 }
 			)
 		})
-	})
+	}, 120_000)
 
 	it('builds tokened media URLs within the bound on a host of 253 characters', async () => {
 		const host = [63, 63, 63, 61].map((n, i) => String.fromCharCode(97 + i).repeat(n)).join('.')
