@@ -1,9 +1,6 @@
-import { readdir, readFile, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
-
 import { describe, expect, it } from 'vitest'
 
-import { convert, exportOf, opened, verify, workspace } from './cutover-helpers.js'
+import { convert, exportOf, opened, rewriteExport, verify, workspace } from './cutover-helpers.js'
 import {
 	cutJsonString,
 	jsonStringBytes,
@@ -71,18 +68,11 @@ const urlOf = (prefix: string, bytes: number) => prefix.padEnd(bytes, 'x')
 const json = (text: string) => JSON.stringify(text).slice(1, -1)
 
 // Applies `edit` to every file of the export; returns how many files it changed.
-async function edited(exportPath: string, edit: (text: string) => string): Promise<number> {
-	let changed = 0
-	for (const name of (await readdir(exportPath)).filter((n) => n.endsWith('.sql'))) {
-		const text = await readFile(join(exportPath, name), 'utf8')
+const edited = (exportPath: string, edit: (text: string) => string) =>
+	rewriteExport(exportPath, (text) => {
 		const next = edit(text)
-		if (next !== text) {
-			await writeFile(join(exportPath, name), next)
-			changed++
-		}
-	}
-	return changed
-}
+		return next !== text ? next : undefined
+	})
 
 describe('converted rows at the stored bounds', () => {
 	it('stores each value as its writer does, counts the change, and verifies', async () => {

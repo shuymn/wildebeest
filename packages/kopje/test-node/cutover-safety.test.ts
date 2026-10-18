@@ -6,7 +6,7 @@ import { promisify } from 'node:util'
 
 import { describe, expect, it } from 'vitest'
 
-import { convert, exportOf, opened, verify, workspace } from './cutover-helpers.js'
+import { convert, exportOf, opened, rewriteExport, verify, workspace } from './cutover-helpers.js'
 import {
 	ACTOR_URI_LIMIT,
 	cutJsonString,
@@ -307,17 +307,8 @@ describe('HTML is never cut silently', () => {
 	})
 
 	// Replaces `from` with `to` in every file of the export; returns how many files held it.
-	const replacedIn = async (exportPath: string, from: string, to: string) => {
-		let replaced = 0
-		for (const name of (await readdir(exportPath)).filter((n) => n.endsWith('.sql'))) {
-			const text = await readFile(join(exportPath, name), 'utf8')
-			if (text.includes(from)) {
-				await writeFile(join(exportPath, name), text.replaceAll(from, to))
-				replaced++
-			}
-		}
-		return replaced
-	}
+	const replacedIn = (exportPath: string, from: string, to: string) =>
+		rewriteExport(exportPath, (text) => (text.includes(from) ? text.replaceAll(from, to) : undefined))
 
 	it('stops on status text over its bounds unless truncation is accepted, and stores it cut as the Worker does', async () => {
 		const exportPath = await exportOf(space.dir, { level: 39 })
