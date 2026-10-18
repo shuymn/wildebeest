@@ -69,6 +69,18 @@ async function bigStatus(
 	return id
 }
 
+// An accepted quote of `target` by `status`.
+async function acceptQuote(h: ApiHarness, status: string, target: string) {
+	return sql(
+		h.store,
+		`INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, quoted_account_id, state, updated_at)
+		SELECT ?1, uri, id, account_id, 'accepted', ?3 FROM statuses WHERE id = ?2`,
+		status,
+		target,
+		new Date(NOW).toISOString()
+	)
+}
+
 type Answer<T> = {
 	status: number
 	bytes: number
@@ -274,9 +286,16 @@ describe('status pages are answers within ANSWER_BYTES (RES-3)', () => {
 			['account statuses', `/api/v1/accounts/${w.author}/statuses?limit=40`],
 		] as const
 		const inner = V.slice(1, 19)
+		const firstPages: Partial<Record<'next' | 'prev', Walked['pages'][number]>> = {}
 		for (const [name, path] of lists) {
-			expectByteCutWalk(name, await walk(h, path, 'next', alice.token), V, 'next', size)
-			expectByteCutWalk(name, await walk(h, `${path}&min_id=1`, 'prev', alice.token), V.toReversed(), 'prev', size)
+			const older = await walk(h, path, 'next', alice.token)
+			expectByteCutWalk(name, older, V, 'next', size)
+			const newer = await walk(h, `${path}&min_id=1`, 'prev', alice.token)
+			expectByteCutWalk(name, newer, V.toReversed(), 'prev', size)
+			if (name === 'public') {
+				firstPages.next = older.pages[0]
+				firstPages.prev = newer.pages[0]
+			}
 			// since_id walks newest first above its bound; with max_id, between both, either way.
 			const since = `&since_id=${w.small.at(-1)!}`
 			expectByteCutWalk(name, await walk(h, `${path}${since}`, 'next', alice.token, since), V, 'next', size)
@@ -289,11 +308,8 @@ describe('status pages are answers within ANSWER_BYTES (RES-3)', () => {
 		}
 		// The public timeline's first pages from either end: ten big statuses passed in a window cut at muted statuses
 		// (B0b), cut by bytes before them, so the link continues from the last one shown, not from the window's end.
-		for (const [rel, path] of [
-			['next', '/api/v1/timelines/public?limit=40'],
-			['prev', '/api/v1/timelines/public?limit=40&min_id=1'],
-		] as const) {
-			const [first] = (await walk(h, path, rel, alice.token)).pages
+		for (const rel of ['next', 'prev'] as const) {
+			const first = firstPages[rel]
 			expect(first!.shown.length).toBeLessThan(10)
 			expect(first!.cursor).toBe(rel === 'next' ? first!.shown.at(-1) : first!.shown[0])
 			// The first rejected status is the one that does not fit.
@@ -380,14 +396,7 @@ describe('status pages are answers within ANSWER_BYTES (RES-3)', () => {
 		const quoting: string[] = []
 		for (let i = 0; i < 10; i++) {
 			const id = await bigStatus(h, author, NOW - DAY + i * 60_000)
-			await sql(
-				h.store,
-				`INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, quoted_account_id, state, updated_at)
-				SELECT ?1, uri, id, account_id, 'accepted', ?3 FROM statuses WHERE id = ?2`,
-				id,
-				quoted,
-				new Date(NOW).toISOString()
-			)
+			await acceptQuote(h, id, quoted)
 			quoting.push(id)
 		}
 		const quoteSize = Math.min(...(await Promise.all(quoting.map((id) => bytesOf(h, alice.token, id)))))
@@ -430,14 +439,7 @@ describe('admission at a chunk boundary (RES-3)', () => {
 		}
 		const quoted = await bigStatus(h, author, NOW - 2 * DAY)
 		const quote = await bigStatus(h, quoter, NOW - 2 * DAY + 60_000)
-		await sql(
-			h.store,
-			`INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, quoted_account_id, state, updated_at)
-			SELECT ?1, uri, id, account_id, 'accepted', ?3 FROM statuses WHERE id = ?2`,
-			quote,
-			quoted,
-			new Date(NOW).toISOString()
-		)
+		await acceptQuote(h, quote, quoted)
 		const boosts: string[] = []
 		for (const name of ['b1', 'b2']) {
 			const booster = await remoteAccount(h.store, name)
@@ -716,23 +718,14 @@ describe('the shared filter allowance (RES-3)', () => {
 		const author = await remoteAccount(h.store, 'quoting')
 		// Texts of 10,000 code units, each starting with the keyword, so every one matches.
 		const long = `<p>needle ${'y'.repeat(9_993)}</p>`
-		const quote = async (status: string, target: string) =>
-			sql(
-				h.store,
-				`INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, quoted_account_id, state, updated_at)
-				SELECT ?1, uri, id, account_id, 'accepted', ?3 FROM statuses WHERE id = ?2`,
-				status,
-				target,
-				new Date(NOW).toISOString()
-			)
 		// A chain: the 40 statuses quote `quoted`, which quotes `first`.
 		const first = await seedStatus(h.store, { accountId: author, visibility: 'public', content: long })
 		const quoted = await seedStatus(h.store, { accountId: author, visibility: 'public', content: long })
-		await quote(quoted, first)
+		await acceptQuote(h, quoted, first)
 		const statuses: string[] = []
 		for (let i = 0; i < 40; i++) {
 			const id = await seedStatus(h.store, { accountId: author, visibility: 'public', content: long })
-			await quote(id, quoted)
+			await acceptQuote(h, id, quoted)
 			statuses.push(id)
 		}
 		// The quoted status also stands at the top, as the first of a chunk after statuses that quote it.

@@ -762,7 +762,6 @@ async function maximalFilters(t: Setup, fill: Fill, statuses: readonly string[])
 
 type Shape = { sqlite: number; json: number; rows: number; nodes: number }
 
-// Every atomic shape at every bound, filled as `fill`, read as alice with her filters at their bounds.
 // A quote of a status and a boost of the quote, each part of every status at its bound and each account at its
 // bounds, filled as `fill`, with alice's filters at their bounds naming all three.
 async function maximalStatuses(fill: Fill) {
