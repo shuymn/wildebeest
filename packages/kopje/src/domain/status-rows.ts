@@ -154,7 +154,7 @@ export const PER_ROW_SORTS: readonly { query: HydrateQuery; column: string }[] =
 ]
 
 // The payload of every row read for the status `x.id` (one status row of an item), summed: what each query of
-// HYDRATE_QUERIES returns for it, each row by its map (rowBytesSql), or a FixedColumns constant times the rows. Its
+// hydrateQueries() returns for it, each row by its map (rowBytesSql), or a FixedColumns constant times the rows. Its
 // author's account counts once per status row, though a chunk reads it once.
 function statusRowTerms(viewer: string, filterRows: string): string {
 	const fixed = (columns: FixedColumns, rows: string) => `(${rows}) * ${columns.rowBytes}`
@@ -190,8 +190,8 @@ function statusRowTerms(viewer: string, filterRows: string): string {
 
 let boundSql: string | undefined
 
-// R of each status of ?1 (a JSON list of top-level ids, one item each), for the viewer ?2 (NULL: anonymous) whose
-// active filters naming statuses are ?3: one row per position (`k`, json_each's key) with `bytes`. An item reads at
+// R of each status of ?1 (a JSON list of top-level ids, one item each), for the viewer ?2 (NULL: anonymous), ?3 of
+// whose active filters name statuses: one row per position (`k`, json_each's key) with `bytes`. An item reads at
 // most these status rows: the status, its boosted original, and the quoted status of the status or, for a boost, of
 // its original (a boost has no quote of its own: R35); each counted whether or not the viewer is shown it. Every
 // subquery is a search by key or through the index the presenter's query uses.
