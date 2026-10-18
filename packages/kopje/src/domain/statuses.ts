@@ -399,7 +399,10 @@ export const QUOTED_USER_NOT_MENTIONED =
 // the scheduled status being published, whose media it attaches (null: none). R36 is checked in the writing
 // transaction at posting, scheduling and publication (test/quote-authoring.test.ts concurrency table, row 1).
 export function preparePost(db: Db, accountId: string, input: PostInput, scheduledId: string | null): Prepared {
-	if (exceedsRawLength(input.text, input.spoilerText)) {
+	// Checked as writePost stores them, so text of only U+0000 is blank, as an edit's is.
+	const text = storedText(input.text)
+	const spoilerText = storedText(input.spoilerText)
+	if (exceedsRawLength(text, spoilerText)) {
 		return { status: 'invalid', error: TOO_LONG }
 	}
 	const author = localAuthor(db, accountId)
@@ -431,16 +434,16 @@ export function preparePost(db: Db, accountId: string, input: PostInput, schedul
 		quoted !== null &&
 		visibility === 'direct' &&
 		quoted.account_id !== accountId &&
-		!mentions(db, input.text, author, quoted.account_id)
+		!mentions(db, text, author, quoted.account_id)
 	) {
 		return { status: 'invalid', error: QUOTED_USER_NOT_MENTIONED }
 	}
-	if (input.text.trim() === '' && media.length === 0 && quoted === null) {
+	if (text.trim() === '' && media.length === 0 && quoted === null) {
 		return { status: 'invalid', error: "Validation failed: Text can't be blank" }
 	}
 	const origin = new URL(author.uri).origin
-	const composed = compose(db, input.text, author, origin, quoted === null ? null : quoteLink(db, quoted.id))
-	if (exceedsStatusBounds(composed.content, input.spoilerText)) {
+	const composed = compose(db, text, author, origin, quoted === null ? null : quoteLink(db, quoted.id))
+	if (exceedsStatusBounds(composed.content, spoilerText)) {
 		return { status: 'invalid', error: TOO_LONG }
 	}
 	return { author, parent, media, visibility, quoted }

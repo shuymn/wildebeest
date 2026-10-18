@@ -14,6 +14,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   becomes U+FFFD, one character where a read showed three: display names, bios, status content, content warnings,
   source text and media descriptions, from remote servers and from the API alike. Display names are cut at 2,048 and
   media descriptions at 10,000 code points, as Mastodon counts them, where they were cut by UTF-16 code units.
+- A post whose text is only U+0000 is refused as blank, as an edit is.
 - `kopje-admin convert` stores display names, profile, status and media URLs, media descriptions and the attachments
   of earlier versions as the Worker stores them, which is what the API already showed: a URL past its bound becomes
   empty (null for a profile or status URL), a long text is cut, and U+0000 is removed from text. Each change is
