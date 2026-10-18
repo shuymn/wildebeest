@@ -190,3 +190,95 @@ export function storedMediaUrl(url: string): string {
 export function storedMediaMeta(meta: string | null): string | null {
 	return withinBytes(meta, MEDIA_META_BYTES)
 }
+
+// ---- Migration 0048_stored_bounds and its triggers
+
+// A covered column: its projection P and, where P's value cannot be stored (a NOT NULL column), what is stored.
+type StoredColumn = {
+	column: string
+	projection: (column: string) => string
+	// A JSON-bounded column's bound: a value of at most a sixth of it (less the quotes) in UTF-8 bytes cannot escape past
+	// it, so the test skips P (and json_quote) for it.
+	jsonBytes?: number
+	stored?: (column: string) => string
+	// What else selects a row for the migration's rewrite of this column.
+	rewritten?: string
+}
+
+// The covered columns of each table (design §3.2). accounts.uri and username, statuses.uri, status_tags.name,
+// polls.options and status_edits.media_json keep their read-time projections and are not here.
+export const STORED_COLUMNS: Readonly<Record<string, readonly StoredColumn[]>> = {
+	statuses: [
+		{ column: 'content', projection: contentSql, jsonBytes: CONTENT_JSON_BYTES },
+		{ column: 'spoiler_text', projection: spoilerSql, jsonBytes: SPOILER_JSON_BYTES },
+		{ column: 'source_text', projection: sourceTextSql, jsonBytes: CONTENT_JSON_BYTES },
+		{ column: 'url', projection: statusUrlSql },
+	],
+	accounts: [
+		{ column: 'display_name', projection: displayNameSql },
+		{ column: 'note', projection: noteSql, jsonBytes: BIO_JSON_BYTES },
+		{ column: 'url', projection: profileUrlSql },
+		{ column: 'avatar_url', projection: profileUrlSql },
+		{ column: 'header_url', projection: profileUrlSql },
+	],
+	media_attachments: [
+		// A row with a file token holds a URL Kopje built (storedMediaUrl), which the migration checks first.
+		{
+			column: 'url',
+			projection: mediaUrlSql,
+			stored: (column) => `coalesce(${mediaUrlSql(column)}, '')`,
+			rewritten: 'file_token IS NULL',
+		},
+		{ column: 'preview_url', projection: mediaUrlSql },
+		{ column: 'description', projection: mediaDescriptionSql },
+		{ column: 'meta', projection: mediaMetaSql },
+	],
+	status_edits: [
+		{ column: 'content', projection: contentSql, jsonBytes: CONTENT_JSON_BYTES },
+		{ column: 'spoiler_text', projection: spoilerSql, jsonBytes: SPOILER_JSON_BYTES },
+		{ column: 'poll_options', projection: pollOptionsSql },
+	],
+}
+
+// True when `column` is not a fixed point of its projection: P(x) IS NOT x, with JSON-bounded columns short of a sixth
+// of their bound skipped before P.
+function pastBoundSql({ projection, jsonBytes }: StoredColumn, column: string): string {
+	const moved = `(${projection(column)}) IS NOT ${column}`
+	return jsonBytes === undefined
+		? moved
+		: `CASE WHEN length(CAST(${column} AS BLOB)) <= ${Math.floor((jsonBytes - 2) / 6)} THEN 0 ELSE ${moved} END`
+}
+
+// The statements of migration 0048_stored_bounds, which its file holds after its header (test/migrations.test.ts):
+// the tokened media URL check, one rewrite per table setting each covered column to what it stores, and the triggers
+// that refuse a write of a value that is not a fixed point.
+export function storedBoundsMigrationSql(): string {
+	const statements = [
+		`CREATE TABLE stored_bounds_check (
+  n INTEGER CONSTRAINT tokened_media_url_within_2048_bytes CHECK (n = 0)
+);`,
+		`INSERT INTO stored_bounds_check
+SELECT count(*) FROM media_attachments
+WHERE file_token IS NOT NULL AND length(CAST(url AS BLOB)) > ${MEDIA_URL_LIMIT};`,
+		'DROP TABLE stored_bounds_check;',
+	]
+	for (const [table, columns] of Object.entries(STORED_COLUMNS)) {
+		const set = columns.map((c) => `  ${c.column} = ${(c.stored ?? c.projection)(c.column)}`).join(',\n')
+		const where = columns
+			.map((c) =>
+				c.rewritten === undefined ? pastBoundSql(c, c.column) : `(${c.rewritten} AND ${pastBoundSql(c, c.column)})`
+			)
+			.join('\n  OR ')
+		statements.push(`UPDATE ${table} SET\n${set}\nWHERE ${where};`)
+	}
+	for (const [table, columns] of Object.entries(STORED_COLUMNS)) {
+		const when = columns.map((c) => pastBoundSql(c, `NEW.${c.column}`)).join('\n  OR ')
+		const body = `BEGIN\n  SELECT RAISE(ABORT, '${table}: a value past its stored bound');\nEND;`
+		const names = columns.map((c) => c.column).join(', ')
+		statements.push(`CREATE TRIGGER ${table}_bounds_insert BEFORE INSERT ON ${table}\nWHEN ${when}\n${body}`)
+		statements.push(
+			`CREATE TRIGGER ${table}_bounds_update BEFORE UPDATE OF ${names} ON ${table}\nWHEN ${when}\n${body}`
+		)
+	}
+	return `${statements.join('\n\n')}\n`
+}
