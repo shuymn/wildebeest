@@ -1,3 +1,5 @@
+import { runInDurableObject } from 'cloudflare:test'
+
 import { describe, expect, it } from 'vitest'
 
 import { sql } from './api-helpers'
@@ -18,8 +20,11 @@ import {
 	update,
 } from './inbox-status-helpers'
 import { block, domainBlock, outbound } from './status-helpers'
+import { Db } from '../src/db/sql'
 import { MAX_REMOTE_OPTIONS, type Poll } from '../src/domain/polls'
+import { recordEdit } from '../src/domain/statuses'
 import { endPolls } from '../src/jobs/scheduled'
+import { MAX_REMOTE_OPTION_LENGTH, pollOptionsSql } from '../src/platform/stored-bounds'
 
 // Polls over ActivityPub (domain/polls.ts, remote-statuses.ts, activities.ts), as Mastodon 4.5 federates them: a
 // Question stored with its poll, an Update(Question) refreshing its counts, a vote Note counted in a local poll and
@@ -251,6 +256,54 @@ describe('a remote Question', () => {
 		expect(await t.post(bob, update(bob, edited, '2026-10-11T12:30:00Z'))).toBe(202)
 		expect((JSON.parse((await stored()).options) as string[]).at(-1)).toBe('changed')
 		expect((await api<Poll>(t, `/api/v1/polls/${id}`)).body).toMatchObject({ voted: false, own_votes: [] })
+	})
+
+	// RES-2: choices are stored well-formed and cut without splitting a pair, and an edit's snapshot holds P of them as
+	// SQLite projects them (recordEdit), never a value read into the Worker and bound again.
+	it('snapshots choices of lone surrogates or a split pair as fixed points of their projection', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		await followed(t, bob)
+		const lone = '\ud800'.repeat(MAX_REMOTE_OPTION_LENGTH)
+		const split = `${'a'.repeat(MAX_REMOTE_OPTION_LENGTH - 1)}\u{1F600}`
+		const choices = [lone, split].map((name) => ({
+			type: 'Note',
+			name,
+			replies: { type: 'Collection', totalItems: 0 },
+		}))
+		const object = question(bob, { oneOf: choices })
+		const id = await remotePoll(t, bob, object)
+		const edited = question(bob, { id: object.id, content: '<p>which, now?</p>', oneOf: choices })
+		expect(await t.post(bob, update(bob, edited, '2026-10-11T12:30:00Z'))).toBe(202)
+		const expected = ['\ufffd'.repeat(MAX_REMOTE_OPTION_LENGTH), 'a'.repeat(MAX_REMOTE_OPTION_LENGTH - 1)]
+		const [poll] = await sql<{ options: string; cut_options: string }>(
+			t.store,
+			'SELECT options, cut_options FROM polls'
+		)
+		expect([JSON.parse(poll!.options), JSON.parse(poll!.cut_options)]).toEqual([expected, [0, 1]])
+		const snapshots = await sql<{ options: string; fixed: number }>(
+			t.store,
+			`SELECT poll_options AS options, (${pollOptionsSql('poll_options')}) IS poll_options AS fixed FROM status_edits`
+		)
+		expect(snapshots).toEqual([
+			{ options: JSON.stringify(expected), fixed: 1 },
+			{ options: JSON.stringify(expected), fixed: 1 },
+		])
+		// A choice stored with lone surrogates (an earlier version's row) is snapshotted inside SQLite all the same.
+		const raw = `["${lone}","${split}"]`
+		const fixed = await runInDurableObject(t.store, (_instance, state) =>
+			state.storage.transactionSync(() => {
+				const db = new Db(state.storage.sql)
+				db.run('UPDATE polls SET options = ? WHERE status_id = ?', raw, id)
+				recordEdit(db, id, '2026-10-11T13:00:00.000Z')
+				return db.all<{ fixed: number; bytes: number }>(
+					`SELECT (${pollOptionsSql('poll_options')}) IS poll_options AS fixed,
+						length(CAST(poll_options AS BLOB)) AS bytes FROM status_edits ORDER BY id DESC LIMIT 1`
+				)
+			})
+		)
+		// Three bytes per lone surrogate as stored, 999 + 4 for the other choice, and the array's 7.
+		expect(fixed).toEqual([{ fixed: 1, bytes: 3 * MAX_REMOTE_OPTION_LENGTH + 1003 + 7 }])
 	})
 
 	it('keeps a long choice Mastodon allows whole, and refuses a vote in a choice it had to cut', async () => {

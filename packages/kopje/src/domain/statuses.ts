@@ -114,6 +114,7 @@ import {
 import { streamDelete } from './streaming'
 import { readWindow, singleWindow, windowJson, windowPage } from './windows'
 import type { Db } from '../db/sql'
+import { storedMediaDescription, storedText } from '../platform/stored-bounds'
 import { jsonStringBytes, SPOILER_BYTES, STATUS_CONTENT_BYTES } from '../security/html'
 
 // Statuses (B4a): posting, editing and deleting local statuses, the per-status reads, and favourite, reblog and
@@ -398,7 +399,10 @@ export const QUOTED_USER_NOT_MENTIONED =
 // the scheduled status being published, whose media it attaches (null: none). R36 is checked in the writing
 // transaction at posting, scheduling and publication (test/quote-authoring.test.ts concurrency table, row 1).
 export function preparePost(db: Db, accountId: string, input: PostInput, scheduledId: string | null): Prepared {
-	if (exceedsRawLength(input.text, input.spoilerText)) {
+	// Checked as writePost stores them, so text of only U+0000 is blank, as an edit's is.
+	const text = storedText(input.text)
+	const spoilerText = storedText(input.spoilerText)
+	if (exceedsRawLength(text, spoilerText)) {
 		return { status: 'invalid', error: TOO_LONG }
 	}
 	const author = localAuthor(db, accountId)
@@ -430,16 +434,16 @@ export function preparePost(db: Db, accountId: string, input: PostInput, schedul
 		quoted !== null &&
 		visibility === 'direct' &&
 		quoted.account_id !== accountId &&
-		!mentions(db, input.text, author, quoted.account_id)
+		!mentions(db, text, author, quoted.account_id)
 	) {
 		return { status: 'invalid', error: QUOTED_USER_NOT_MENTIONED }
 	}
-	if (input.text.trim() === '' && media.length === 0 && quoted === null) {
+	if (text.trim() === '' && media.length === 0 && quoted === null) {
 		return { status: 'invalid', error: "Validation failed: Text can't be blank" }
 	}
 	const origin = new URL(author.uri).origin
-	const composed = compose(db, input.text, author, origin, quoted === null ? null : quoteLink(db, quoted.id))
-	if (exceedsStatusBounds(composed.content, input.spoilerText)) {
+	const composed = compose(db, text, author, origin, quoted === null ? null : quoteLink(db, quoted.id))
+	if (exceedsStatusBounds(composed.content, spoilerText)) {
 		return { status: 'invalid', error: TOO_LONG }
 	}
 	return { author, parent, media, visibility, quoted }
@@ -500,8 +504,10 @@ export function writePost(
 	{ author, parent, media, visibility, quoted }: PreparedPost
 ): string {
 	const origin = new URL(author.uri).origin
-	const composed = compose(db, input.text, author, input.origin, quoted === null ? null : quoteLink(db, quoted.id))
-	const sensitive = (input.sensitive ?? author.default_sensitive === 1) || input.spoilerText !== ''
+	const text = storedText(input.text)
+	const spoilerText = storedText(input.spoilerText)
+	const composed = compose(db, text, author, input.origin, quoted === null ? null : quoteLink(db, quoted.id))
+	const sensitive = (input.sensitive ?? author.default_sensitive === 1) || spoilerText !== ''
 	const language = input.language ?? author.default_language
 	const quotePolicy = storedQuotePolicy(input.quotePolicy ?? author.default_quote_policy, visibility)
 	// Status#carried_over_reply_to_account_id: continuing one's own reply keeps the conversation partner.
@@ -523,14 +529,14 @@ export function writePost(
 		parent?.uri ?? null,
 		parent?.id ?? null,
 		visibility,
-		input.spoilerText,
+		spoilerText,
 		composed.content,
 		composed.source,
 		sensitive ? 1 : 0,
 		language,
 		iso(input.now),
 		input.idempotencyKey ?? null,
-		searchText(composed.source, input.spoilerText),
+		searchText(composed.source, spoilerText),
 		replyTarget,
 		quotePolicy
 	)
@@ -769,14 +775,17 @@ function mediaSnapshot(db: Db, statusId: string): MediaAttachment[] {
 // Records the status as it is now as a history entry and returns the entry's id (unique per edit; the Update
 // activity is named after it).
 export function recordEdit(db: Db, statusId: string, at: string): string {
+	// The poll's choices are copied as P projects them (pollOptionsSql) inside SQLite: read into the Worker and bound
+	// again, a lone surrogate stored by an earlier version would come back as three U+FFFD (RES-2).
 	const row = db.all<{ id: string }>(
 		`INSERT INTO status_edits (status_id, content, spoiler_text, sensitive, media_json, poll_options, created_at)
-		SELECT id, content, spoiler_text, sensitive, ?2, ?4, ?3 FROM statuses WHERE id = ?1
+		SELECT id, content, spoiler_text, sensitive, ?2,
+			(SELECT ${pollOptionsSql('p.options')} FROM polls p WHERE p.status_id = ?1 AND p.removed = 0), ?3
+		FROM statuses WHERE id = ?1
 		RETURNING CAST(id AS TEXT) AS id`,
 		statusId,
 		JSON.stringify(mediaSnapshot(db, statusId)),
-		at,
-		pollOptionsJson(db, statusId)
+		at
 	)[0]
 	if (row === undefined) {
 		throw new Error('edited status disappeared')
@@ -802,7 +811,9 @@ export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db
 	if (current === null || current.reblog_of_id !== null) {
 		return { status: 'not_found' }
 	}
-	if (exceedsRawLength(input.text, input.spoilerText)) {
+	const text = storedText(input.text)
+	const spoilerText = storedText(input.spoilerText)
+	if (exceedsRawLength(text, spoilerText)) {
 		return { status: 'invalid', error: TOO_LONG }
 	}
 	const media = attachableMedia(db, accountId, input.mediaIds, current.id, input.now)
@@ -812,10 +823,10 @@ export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db
 	// An edit keeps the status's quote (Mastodon takes no quoted_status_id on an edit), and its RE: line while the
 	// quoted status is there.
 	const quote = localQuoteOf(db, current.id)
-	if (input.text.trim() === '' && media.length === 0 && quote === undefined) {
+	if (text.trim() === '' && media.length === 0 && quote === undefined) {
 		return { status: 'invalid', error: "Validation failed: Text can't be blank" }
 	}
-	const sensitive = (input.sensitive ?? false) || input.spoilerText !== ''
+	const sensitive = (input.sensitive ?? false) || spoilerText !== ''
 	const language = input.language ?? current.language
 	const currentMedia = db.all<{ id: string; description: string; focus_x: number; focus_y: number }>(
 		'SELECT id, description, focus_x, focus_y FROM media_attachments WHERE status_id = ? AND shown = 1 ORDER BY position, id',
@@ -833,8 +844,8 @@ export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db
 		)
 	}
 	const unchanged =
-		input.text === (current.source_text ?? '') &&
-		input.spoilerText === current.spoiler_text &&
+		text === (current.source_text ?? '') &&
+		spoilerText === current.spoiler_text &&
 		(sensitive ? 1 : 0) === current.sensitive &&
 		language === current.language &&
 		JSON.stringify(media) === JSON.stringify(currentMedia.map((m) => m.id)) &&
@@ -859,14 +870,8 @@ export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db
 	}
 	const author = localAuthor(db, accountId)
 	const quotedId = quote?.quotedStatusId ?? null
-	const composed = compose(
-		db,
-		input.text,
-		author,
-		input.present.origin,
-		quotedId === null ? null : quoteLink(db, quotedId)
-	)
-	if (exceedsStatusBounds(composed.content, input.spoilerText)) {
+	const composed = compose(db, text, author, input.present.origin, quotedId === null ? null : quoteLink(db, quotedId))
+	if (exceedsStatusBounds(composed.content, spoilerText)) {
 		return { status: 'invalid', error: TOO_LONG }
 	}
 	const editedAt = iso(input.now)
@@ -880,11 +885,11 @@ export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db
 		WHERE id = ?`,
 		composed.content,
 		composed.source,
-		input.spoilerText,
+		spoilerText,
 		sensitive ? 1 : 0,
 		language,
 		editedAt,
-		searchText(composed.source, input.spoilerText),
+		searchText(composed.source, spoilerText),
 		policy,
 		current.id
 	)
@@ -908,7 +913,7 @@ export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db
 			`UPDATE media_attachments SET description = COALESCE(?, description), focus_x = COALESCE(?, focus_x),
 				focus_y = COALESCE(?, focus_y)
 			WHERE id = ? AND account_id = ? AND status_id = ?`,
-			a.description ?? null,
+			a.description === undefined ? null : storedMediaDescription(a.description),
 			a.focus?.x ?? null,
 			a.focus?.y ?? null,
 			a.id,

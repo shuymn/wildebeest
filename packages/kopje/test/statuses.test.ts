@@ -142,6 +142,23 @@ describe('POST /api/v1/statuses', () => {
 		}
 	})
 
+	// Stored text has U+0000 removed (src/platform/stored-bounds.ts storedText), so text of only U+0000 is blank.
+	it('refuses a post or an edit whose text is only U+0000 as blank', async () => {
+		const h = await community(['alice'])
+		const { token } = h.users.alice
+		const blank = { status: 422, body: { error: "Validation failed: Text can't be blank" } }
+		const posted = await h.request('/api/v1/statuses', bearer(token, json({ status: '\u0000 \u0000' })))
+		expect({ status: posted.status, body: await posted.json() }).toEqual(blank)
+		expect(await sql(h.store, 'SELECT id FROM statuses')).toEqual([])
+		const status = await post(h, h.users.alice, { status: 'first' })
+		const edited = await h.request(
+			`/api/v1/statuses/${status.id}`,
+			bearer(token, json({ status: '\u0000' }, { method: 'PUT' }))
+		)
+		expect({ status: edited.status, body: await edited.json() }).toEqual(blank)
+		expect(await sql(h.store, 'SELECT source_text FROM statuses')).toEqual([{ source_text: 'first' }])
+	})
+
 	it('refuses raw text over the bound even when its counted length is short, and takes text at the bound', async () => {
 		const h = await community(['alice'])
 		const url = (n: number) => `https://example.com/${'p'.repeat(n)}`

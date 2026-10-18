@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -36,6 +36,22 @@ export async function writeExport(dir: string, texts: Map<string, string>, name 
 		await writeFile(join(path, `${table}.sql`), text)
 	}
 	return path
+}
+
+// Rewrites each SQL file of an export for which `rewrite` returns new text; returns how many it rewrote.
+export async function rewriteExport(
+	exportPath: string,
+	rewrite: (text: string) => string | undefined
+): Promise<number> {
+	let rewritten = 0
+	for (const name of (await readdir(exportPath)).filter((n) => n.endsWith('.sql'))) {
+		const next = rewrite(await readFile(join(exportPath, name), 'utf8'))
+		if (next !== undefined) {
+			await writeFile(join(exportPath, name), next)
+			rewritten++
+		}
+	}
+	return rewritten
 }
 
 export async function exportOf(dir: string, options: FixtureOptions, name = 'export'): Promise<string> {

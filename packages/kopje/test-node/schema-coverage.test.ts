@@ -174,7 +174,6 @@ const NOT_VERIFIED: Record<string, string> = {
 	'accounts.search_text': SEARCH,
 	'accounts.shared_inbox_url': FROM_RAW,
 	'accounts.statuses_count': COUNTER,
-	'accounts.url': FROM_RAW,
 	'blocks.created_at': TIME,
 	'conversations.stream_seq': 'the streaming change sequence, 0 until the owner subscribes to `direct`',
 	'blocks.id': DEFAULT,
@@ -224,7 +223,6 @@ const NOT_VERIFIED: Record<string, string> = {
 	'statuses.remote_version': 'remote: published_at, or edited_at when edited; local: NULL',
 	'statuses.replies_count': COUNTER,
 	'statuses.search_text': SEARCH,
-	'statuses.url': FROM_RAW,
 	'statuses.withdrawn': DEFAULT,
 }
 

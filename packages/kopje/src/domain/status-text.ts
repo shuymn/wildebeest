@@ -2,6 +2,7 @@ import { LinkifyIt } from 'linkify-it'
 
 import { escapeHtml } from './plain-text'
 import { normalizeTag } from './tag-name'
+import { cutCodeUnits } from '../security/html'
 
 // Plain status text to safe HTML, as Mastodon 4's TextFormatter does: everything is escaped; http(s) URLs, mentions
 // of known accounts and hashtags become links; blank lines separate paragraphs and single newlines become <br />.
@@ -163,7 +164,7 @@ export function renderStatusHtml(segments: readonly Segment[], options: RenderOp
 // A local profile field value (HTML-2): escaped, with absolute http(s) URLs linked as in statuses. Mentions and
 // hashtags stay text. Values are short (MAX_FIELD_VALUE), so this never reaches the raw bound.
 export function renderFieldValue(value: string): string {
-	return parseStatusText(value.slice(0, MAX_RAW_LENGTH))
+	return parseStatusText(cutCodeUnits(value, MAX_RAW_LENGTH))
 		.segments.map((segment) => (segment.kind === 'url' ? linkHtml(segment.url) : escapeHtml(segment.text)))
 		.join('')
 }
@@ -185,7 +186,7 @@ const DISPLAY_LIMIT = 30
 function linkHtml(url: string): string {
 	const prefix = /^https?:\/\/(?:www\.)?/i.exec(url)?.[0] ?? ''
 	const rest = url.slice(prefix.length)
-	const shown = rest.length > DISPLAY_LIMIT ? rest.slice(0, DISPLAY_LIMIT) : rest
+	const shown = cutCodeUnits(rest, DISPLAY_LIMIT)
 	const hidden = rest.slice(shown.length)
 	const display =
 		`<span class="invisible">${escapeHtml(prefix)}</span>` +
