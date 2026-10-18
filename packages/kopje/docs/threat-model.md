@@ -1358,8 +1358,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   leaves out the ids past the budget; search, its resolved account included, and the account search return fewer
   results (offset endpoints); a profile web page shares the budget between its account and statuses. One presentation
   per answer compiles the viewer's filters once and fixes the filter text level (`MAX_FILTER_REQUEST_TEXT`) over the
-  answer's candidates in a bounded preparation pass, so chunked presentation matches as one whole presentation does
-  (`src/domain/answer-budget.ts`, `presentation` and `presentStatusesWithin` in `src/domain/status-presenter.ts`;
+  answer's candidates in a preparation pass, so chunked presentation matches as one whole presentation does, and
+  matches each quoted status once. When the viewer has keyword filters, that pass reads every candidate's searchable
+  text (content, source, poll choices, media descriptions) in chunks of 4 statuses: its memory is one chunk, and its
+  work is bounded by the candidate caps (a context's 8,192), not by the answer budget, as the unchunked presentation's
+  was (`src/domain/answer-budget.ts`, `presentation` and `presentStatusesWithin` in `src/domain/status-presenter.ts`;
   `test/answer-budgets.test.ts`). `test-node/raw-presenters.test.ts` reads the program with TypeScript's parser and
   fails on an import, re-export or namespace access of a raw presenter (`presentStatuses`, `presentAccountsById`,
   `presentAccount`) outside its module, but for the exact list of modules the inventory names as left for RB2

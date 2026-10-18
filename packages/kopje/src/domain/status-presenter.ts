@@ -246,9 +246,11 @@ function presentationOf(db: Db, candidates: readonly string[], options: PresentO
 
 // The preparation pass of the filter text level: the targets present() matches (each status of the answer, by its
 // boosted original for a boost, and each quoted status shown in it), read as ids first when there may be more than
-// the allowance holds whole. Their texts are read only when they could pass it, in chunks of TEXT_CHUNK statuses,
-// each chunk's rows dropped once measured; the lengths are the matched texts' own (searchableText), so the level is
-// the one presenting all at once gives.
+// the allowance holds whole. When the viewer has keyword filters and the targets could pass it, every target's
+// searchable text is read (content, source, poll choices, media descriptions), in chunks of TEXT_CHUNK statuses, each
+// chunk's rows dropped once measured: SQL cannot give the length of the plain text matched (searchableText), and the
+// level must be the one presenting all at once gives. The pass's work is bounded by the candidate caps (a context's
+// 8,192), not by the answer budget, as the unchunked presentation's was; its memory is one chunk.
 const TEXT_CHUNK = 4
 
 function textLevel(db: Db, ids: readonly string[], options: PresentOwnOptions): number {
