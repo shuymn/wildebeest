@@ -13,9 +13,10 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 // that tsconfig.json declares, through TypeScript's own parser, and fails on any import, re-export or namespace
 // access of a raw presenter in src/ outside its module, and on a dynamic import of its module.
 //
-// LEFT_FOR_RB2 names, per module, the raw presenters it still imports: the answers RB2 budgets (notifications,
-// conversations, reports, admin account lists, edge-cursor account pages and the directory). It is exact: an entry
-// no longer imported fails too, so it shrinks with each change. The guard is architectural; the aggregate response
+// LEFT_FOR_RB2 counts, per module and raw presenter, the uses it still makes (each mention of the imported name):
+// the answers RB2 budgets (notifications, conversations, reports, admin account lists, edge-cursor account pages and
+// the directory). It is exact: a further use of an allowed import fails, and so does an entry no longer used, so it
+// shrinks with each change. The guard is architectural; the aggregate response
 // tests (test/answer-budgets.test.ts) prove the budgets.
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
@@ -26,23 +27,23 @@ const RAW: Readonly<Record<string, readonly string[]>> = {
 	'src/domain/accounts': ['presentAccountsById', 'presentAccount'],
 }
 
-const LEFT_FOR_RB2: Readonly<Record<string, readonly string[]>> = {
-	'src/domain/admin-accounts.ts': ['presentAccount'],
-	'src/domain/blocks.ts': ['presentAccount'],
-	'src/domain/conversations.ts': ['presentAccountsById', 'presentStatuses'],
-	'src/domain/directory.ts': ['presentAccount'],
-	'src/domain/notification-groups.ts': ['presentAccountsById', 'presentStatuses'],
-	'src/domain/notification-requests.ts': ['presentAccountsById', 'presentStatuses'],
-	'src/domain/notifications.ts': ['presentAccountsById', 'presentStatuses'],
-	'src/domain/reports.ts': ['presentAccountsById', 'presentStatuses'],
+const LEFT_FOR_RB2: Readonly<Record<string, Readonly<Record<string, number>>>> = {
+	'src/domain/admin-accounts.ts': { presentAccount: 1 },
+	'src/domain/blocks.ts': { presentAccount: 2 },
+	'src/domain/conversations.ts': { presentAccountsById: 1, presentStatuses: 1 },
+	'src/domain/directory.ts': { presentAccount: 1 },
+	'src/domain/notification-groups.ts': { presentAccountsById: 2, presentStatuses: 1 },
+	'src/domain/notification-requests.ts': { presentAccountsById: 1, presentStatuses: 1 },
+	'src/domain/notifications.ts': { presentAccountsById: 1, presentStatuses: 1 },
+	'src/domain/reports.ts': { presentAccountsById: 2, presentStatuses: 1 },
 	// present() hydrates the accounts of the ids it is given: a page for presentStatuses until RB2 removes it, then
 	// one atomic item, read through a single-item helper.
-	'src/domain/status-presenter.ts': ['presentAccountsById'],
+	'src/domain/status-presenter.ts': { presentAccountsById: 1 },
 }
 
 type SourceNode = Node & Record<string, unknown>
 
-type Finding = { file: string; name: string; how: 'import' | 're-export' | 'namespace' | 'dynamic import' }
+type Finding = { file: string; name: string; how: 'import' | 'use' | 're-export' | 'namespace' | 'dynamic import' }
 
 // The module a relative specifier names, relative to the package and without extension; null for a package.
 function moduleOf(file: string, specifier: string): string | null {
@@ -60,27 +61,37 @@ function text(node: unknown): string {
 function findings(file: string, root: Node): Finding[] {
 	const found: Finding[] = []
 	const namespaces = new Map<string, string>()
+	// The local names of the raw presenters the file imports, with the presenter each names.
+	const locals = new Map<string, string>()
 	const own = file.replace(/\.(ts|tsx)$/, '')
 	const raw = (module: string | null) => (module === null || module === own ? [] : (RAW[module] ?? []))
+	// Imports first, wherever they stand: a binding is in scope in the whole module, so a use may precede its import.
+	for (const node of (root as SourceNode).statements as SourceNode[]) {
+		if (node.kind !== SyntaxKind.ImportDeclaration) {
+			continue
+		}
+		const clause = node.importClause as SourceNode | undefined
+		const module = moduleOf(file, text(node.moduleSpecifier))
+		const names = raw(module)
+		if (clause === undefined || clause.isTypeOnly === true || names.length === 0) {
+			continue
+		}
+		const bindings = clause.namedBindings as SourceNode | undefined
+		if (bindings?.kind === SyntaxKind.NamespaceImport) {
+			namespaces.set(text(bindings.name), module ?? '')
+		}
+		for (const element of (bindings?.elements as SourceNode[] | undefined) ?? []) {
+			const name = text(element.propertyName ?? element.name)
+			if (element.isTypeOnly !== true && names.includes(name)) {
+				found.push({ file, name, how: 'import' })
+				locals.set(text(element.name), name)
+			}
+		}
+	}
 	const visit = (node: SourceNode): void => {
 		switch (node.kind) {
-			case SyntaxKind.ImportDeclaration: {
-				const clause = node.importClause as SourceNode | undefined
-				const names = raw(moduleOf(file, text(node.moduleSpecifier)))
-				if (clause !== undefined && clause.isTypeOnly !== true && names.length > 0) {
-					const bindings = clause.namedBindings as SourceNode | undefined
-					if (bindings?.kind === SyntaxKind.NamespaceImport) {
-						namespaces.set(text(bindings.name), moduleOf(file, text(node.moduleSpecifier)) ?? '')
-					}
-					for (const element of (bindings?.elements as SourceNode[] | undefined) ?? []) {
-						const name = text(element.propertyName ?? element.name)
-						if (element.isTypeOnly !== true && names.includes(name)) {
-							found.push({ file, name, how: 'import' })
-						}
-					}
-				}
+			case SyntaxKind.ImportDeclaration:
 				return
-			}
 			case SyntaxKind.ExportDeclaration: {
 				const names = raw(moduleOf(file, text(node.moduleSpecifier)))
 				const clause = node.exportClause as SourceNode | undefined
@@ -95,7 +106,8 @@ function findings(file: string, root: Node): Finding[] {
 						}
 					}
 				}
-				return
+				// A local re-export of an imported presenter (`export { p }`) is a use, counted below.
+				break
 			}
 			case SyntaxKind.CallExpression: {
 				const callee = node.expression as SourceNode
@@ -109,10 +121,19 @@ function findings(file: string, root: Node): Finding[] {
 				break
 			}
 			case SyntaxKind.Identifier: {
+				const parent = node.parent as SourceNode | undefined
+				// Every mention of an imported presenter's local name, but as another object's property name.
+				const presenter = locals.get(text(node))
+				const property =
+					(parent?.kind === SyntaxKind.PropertyAccessExpression && parent.name === node) ||
+					(parent?.kind === SyntaxKind.QualifiedName && parent.right === node) ||
+					(parent?.kind === SyntaxKind.PropertyAssignment && parent.name === node)
+				if (presenter !== undefined && !property) {
+					found.push({ file, name: presenter, how: 'use' })
+				}
 				// A namespace of a presenter module: only a property access (or a qualified type name) by a name other than
 				// a raw presenter's.
 				const module = namespaces.get(text(node))
-				const parent = node.parent as SourceNode | undefined
 				if (module !== undefined && parent?.kind !== SyntaxKind.NamespaceImport) {
 					const access = parent?.kind === SyntaxKind.PropertyAccessExpression && parent.expression === node
 					const qualified = parent?.kind === SyntaxKind.QualifiedName && parent.left === node
@@ -196,8 +217,26 @@ describe('the raw presenter finder', () => {
 		['an element access', "import * as a from './domain/accounts'\nexport const f = a['presentAccount']", 'namespace'],
 		['a dynamic import', "export const f = import('./domain/status-presenter')", 'dynamic import'],
 		['a computed dynamic import', "const m = './x'\nexport const f = import(m)", 'dynamic import'],
+		[
+			'a namespace access before its import',
+			"export const f = a.presentAccount\nimport * as a from './domain/accounts'",
+			'namespace',
+		],
 	])('finds %s', (_name, text, how) => {
 		expect(scan({ 'src/x.ts': text }).map((finding) => finding.how)).toEqual([how])
+	})
+
+	it('counts every use of an imported presenter, before its import and under an alias too', () => {
+		const text = `export const early = p(1)
+import { presentAccount as p } from './domain/accounts'
+export const late = [p(2), { p: 3 }.p]
+export { p }`
+		expect(scan({ 'src/x.ts': text }).map((finding) => `${finding.how} ${finding.name}`)).toEqual([
+			'import presentAccount',
+			'use presentAccount',
+			'use presentAccount',
+			'use presentAccount',
+		])
 	})
 
 	it.each([
@@ -220,20 +259,27 @@ describe('raw presenters (RES-3)', () => {
 		expect(program.map(({ file }) => file).toSorted()).toEqual(onDisk('src').toSorted())
 	})
 
-	it('are imported only by their modules and the sites left for RB2', () => {
+	it('are used only by their modules and the counted sites left for RB2', () => {
 		const imported: Record<string, string[]> = {}
+		const used: Record<string, Record<string, number>> = {}
 		const other: Finding[] = []
 		for (const { file, root } of program) {
 			for (const finding of findings(file, root)) {
 				if (finding.how === 'import') {
 					imported[file] = [...(imported[file] ?? []), finding.name].toSorted()
+				} else if (finding.how === 'use') {
+					const counts = (used[file] ??= {})
+					counts[finding.name] = (counts[finding.name] ?? 0) + 1
 				} else {
 					other.push(finding)
 				}
 			}
 		}
 		expect(other).toEqual([])
-		expect(imported).toEqual(LEFT_FOR_RB2)
+		expect(used).toEqual(LEFT_FOR_RB2)
+		expect(imported).toEqual(
+			Object.fromEntries(Object.entries(LEFT_FOR_RB2).map(([file, uses]) => [file, Object.keys(uses).toSorted()]))
+		)
 	})
 
 	it('are allowed only where the response inventory names an exemption', () => {
