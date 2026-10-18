@@ -576,6 +576,38 @@ describe('the shared filter allowance (RES-3)', () => {
 		expect(matched).toContain(false)
 	}, 300_000)
 
+	it('matches each status once over passes that present it again, within the allowance', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const author = await remoteAccount(h.store, 'passes')
+		// 80 statuses of 10,000 code units, presented three times under one presentation, as a grouped page's
+		// re-admission passes present the groups they keep.
+		const ids: string[] = []
+		for (let i = 0; i < 80; i++) {
+			const content = `<p>needle ${'y'.repeat(9_993)}</p>`
+			ids.push(await seedStatus(h.store, { accountId: author, visibility: 'public', content }))
+		}
+		await h.request('/api/v2/filters', {
+			method: 'POST',
+			headers: { authorization: `Bearer ${alice.token}`, 'content-type': 'application/json' },
+			body: JSON.stringify({ title: 'n', context: ['public'], keywords_attributes: [{ keyword: 'needle' }] }),
+		})
+		const result = await runInDurableObject(h.store, (_instance, state) => {
+			const db = new Db(state.storage.sql)
+			const options = { origin: ORIGIN, viewer: { accountId: alice.id, now: new Date(NOW).toISOString() } }
+			const visible = ids as VisibleStatusId[]
+			const shared = presentation(db, visible, options)
+			const passes = [80, 79, 78].map((n) => presentStatusesWithin(db, shared, visible.slice(0, n), ANSWER_BYTES, true))
+			return { passes: passes.map((pass) => pass.items), units: shared.matched.units, level: shared.level }
+		})
+		const [level] = filterTextLimits(Array.from({ length: 80 }, () => 10_000))
+		expect(result.level).toBe(level)
+		expect(result.units).toBe(80 * level!)
+		expect(result.units).toBeLessThanOrEqual(MAX_FILTER_REQUEST_TEXT)
+		expect(result.passes[1]).toEqual(result.passes[0]!.slice(0, 79))
+		expect(result.passes[2]).toEqual(result.passes[0]!.slice(0, 78))
+	}, 300_000)
+
 	it('matches a status quoted by many once, within the allowance', async () => {
 		const h = await community(['alice'])
 		const { alice } = h.users

@@ -222,6 +222,9 @@ export type Presentation = {
 	// The filter results of each quoted status matched so far, by its id: a quoted status counts once in the level's
 	// allowance however many statuses of the answer quote it, so it is matched once (results only, no rows, are kept).
 	readonly quoted: Map<string, FilterResult[]>
+	// The same for each status of the answer, by its id: an answer that presents a status again (a grouped page's
+	// re-admission pass) matches it once.
+	readonly top: Map<string, FilterResult[]>
 	// The code units of text matched against the keywords so far, at most MAX_FILTER_REQUEST_TEXT.
 	readonly matched: { units: number }
 }
@@ -240,6 +243,7 @@ function presentationOf(db: Db, candidates: readonly string[], options: PresentO
 		filters,
 		level: keywords ? textLevel(db, candidates, options) : Infinity,
 		quoted: new Map(),
+		top: new Map(),
 		matched: { units: 0 },
 	}
 }
@@ -436,7 +440,7 @@ function hydrate(
 	const all = JSON.stringify([...byId.keys()])
 	// The statuses matched by filters: each status of the response, and each quoted status shown in it.
 	const targets = [
-		...ids.map((id) => ({ key: id, row: byId.get(id), matched: false })),
+		...ids.map((id) => ({ key: id, row: byId.get(id), matched: shared.top.has(id) })),
 		...quoted.map((id) => ({ key: quotedKey(id), row: byId.get(id), matched: shared.quoted.has(id) })),
 	]
 	// The authors of the chunk's statuses, their originals and quoted statuses.
@@ -511,7 +515,7 @@ function hydrate(
 		}
 		const top = kind === 'top'
 		let reblog: Status | null = null
-		const cached = kind === 'quoted' ? shared.quoted.get(row.id) : undefined
+		const cached = kind === 'quoted' ? shared.quoted.get(row.id) : top ? shared.top.get(row.id) : undefined
 		if (cached !== undefined) {
 			filtered = cached
 		} else if (kind !== 'reblog' && filters !== null) {
@@ -526,6 +530,8 @@ function hydrate(
 			}
 			if (kind === 'quoted') {
 				shared.quoted.set(row.id, filtered)
+			} else if (top) {
+				shared.top.set(row.id, filtered)
 			}
 		}
 		if (row.reblog_of_id !== null) {
