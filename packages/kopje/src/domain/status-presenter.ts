@@ -321,16 +321,16 @@ function statusGraph<R extends GraphRow>(
 }
 
 // How statusStream reads the rows of an answer's statuses ("Heap at 8 MiB per answer" in docs/threat-model.md): in
-// chunks of consecutive statuses whose R (statusRowBoundSql in status-rows.ts, the payload of the rows each reads) sums
-// to at most `target`, at most MAX_CHUNK_ITEMS of them and at least one; a chunk of several is read through a RowMeter
-// of `cap` bytes of heap, and past it is read again one status at a time (a status alone is not capped: its rows are
-// bounded as a unit, "Maxima of presented units").
+// chunks of consecutive statuses whose R (statusRowBoundSql in status-rows.ts, a bound of the heap the rows each reads
+// take, as RowMeter counts it) sums to at most `target`, at most MAX_CHUNK_ITEMS of them and at least one. A chunk of
+// several is read through a RowMeter of `cap`, which only a fault in R passes; past it the chunk is read again one
+// status at a time (a status alone is not capped: its rows are bounded as a unit, "Maxima of presented units").
 export type ChunkPlan = { readonly target: number; readonly cap: number }
 
-// Pages, contexts, search, histories and lookups.
-export const PAGE_CHUNKS: ChunkPlan = { target: 1.25 * 1024 * 1024, cap: 3 * 1024 * 1024 }
-// Grouped notifications and admin reports, which keep the most besides their statuses.
-export const LARGE_ITEM_CHUNKS: ChunkPlan = { target: 0.5 * 1024 * 1024, cap: 1024 * 1024 }
+// Pages, contexts, search, histories and lookups: 3 MiB of heap.
+export const PAGE_CHUNKS: ChunkPlan = { target: 3 * 1024 * 1024, cap: 3 * 1024 * 1024 }
+// Grouped notifications and admin reports, which keep the most besides their statuses: 1 MiB.
+export const LARGE_ITEM_CHUNKS: ChunkPlan = { target: 1024 * 1024, cap: 1024 * 1024 }
 
 // R is read for at most this many statuses at a time, and a chunk holds at most as many (a page's limit).
 const R_WINDOW = 80
@@ -373,7 +373,7 @@ export function* statusStream(
 				if (!(error instanceof RowCapExceeded)) {
 					throw error
 				}
-				// R was below what the rows took: a missing term, or an estimate the heap model does not hold for.
+				// R was below what the rows took: it misses a term.
 				console.warn({ event: 'kopje.presenter.row-cap-exceeded', ids: chunk })
 			}
 		}

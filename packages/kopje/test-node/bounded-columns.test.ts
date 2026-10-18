@@ -458,11 +458,11 @@ const SAFE_INTERPOLATIONS = new Set([
 	// A quoted status's id.
 	'quotedStatusIdSql',
 	'REQUIRES_MENTION_SQL',
-	// The payload of one row of a column map, a number.
-	'rowBytesSql',
+	// The heap of one row of a column map, a number.
+	'rowHeapSql',
 	// A column map's select list: its values are checked where the map names them (`column <alias.column>`).
 	'selectSql',
-	// As rowBytesSql: the payload of the rows one status reads (status-rows.ts), a number.
+	// As rowHeapSql: the heap of the rows one status reads (status-rows.ts), a number.
 	'statusRowTerms',
 	'suspendedSql',
 	'visibleSql',

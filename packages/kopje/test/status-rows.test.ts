@@ -17,7 +17,7 @@ import {
 	nextId,
 	observedPresentation,
 	ORIGIN,
-	payload,
+	heap,
 	rowsOf,
 	VIEWER_NOW,
 } from './status-row-fixtures'
@@ -33,8 +33,9 @@ import type { StoreStub } from '../src/platform/store-client'
 import { sha256Hex } from '../src/security/tokens'
 
 // RES-3, "Heap at 8 MiB per answer" in docs/threat-model.md: statusStream reads an answer's statuses in chunks planned
-// by R (status-rows.ts), the bound of the payload each status's rows take, generated from the column maps of the
-// queries that read them; a RowMeter caps each chunk's heap and a chunk past it is read again one status at a time.
+// by R (status-rows.ts), a bound of the heap each status's rows take as RowMeter counts it, generated from the column
+// maps of the queries that read them; the meter caps each chunk, and a chunk past it (a fault in R) is read again one
+// status at a time.
 // The chunks never change the answer.
 
 const itemArb = fc.record({
@@ -97,9 +98,10 @@ describe('the cursor (RES-3)', () => {
 })
 
 describe('R bounds the rows of a status (RES-3)', () => {
-	it('is at least the payload each status reads alone, and each chunk reads, for mixed sizes', async () => {
+	it("is at least the meter's count of each status alone and of each chunk, for mixed sizes", async () => {
 		const { h, f } = await fixture()
-		const small: ChunkPlan = { target: 96 * 1024, cap: 256 * 1024 }
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+		const small: ChunkPlan = { target: 256 * 1024, cap: 256 * 1024 }
 		await fc.assert(
 			fc.asyncProperty(fc.array(itemArb, { minLength: 1, maxLength: 12 }), async (items) => {
 				const result = await runInDurableObject(h.store, (_instance, state) => {
@@ -113,7 +115,7 @@ describe('R bounds the rows of a status (RES-3)', () => {
 						...observedPresentation(state, f.viewer, ids, plan),
 					}))
 					return {
-						alone: alone.segments.map((s) => ({ id: s.ids[0]!, payload: payload(rowsOf(s.reads)) })),
+						alone: alone.segments.map((s) => ({ id: s.ids[0]!, heap: heap(rowsOf(s.reads)) })),
 						bounds: [...bounds],
 						whole: whole.items,
 						planned: planned.map((p) => ({
@@ -121,35 +123,34 @@ describe('R bounds the rows of a status (RES-3)', () => {
 							items: p.items,
 							segments: p.segments.map((s) => ({
 								ids: s.ids,
-								payload: payload(rowsOf(s.reads)),
-								heap: rowsOf(s.reads).reduce((sum, row) => sum + rowHeapBytes(row), 0),
-								largest: Math.max(0, ...rowsOf(s.reads).map(rowHeapBytes)),
+								heap: heap(rowsOf(s.reads)),
 							})),
 						})),
 					}
 				})
 				const bounds = new Map(result.bounds)
-				for (const { id, payload } of result.alone) {
-					expect(payload).toBeLessThanOrEqual(bounds.get(id)!)
+				for (const { id, heap } of result.alone) {
+					expect(heap).toBeLessThanOrEqual(bounds.get(id)!)
 				}
 				for (const { plan, items, segments } of result.planned) {
 					expect(items).toEqual(result.whole)
 					for (const segment of segments) {
 						const r = segment.ids.reduce((sum, id) => sum + bounds.get(id)!, 0)
-						expect(segment.payload).toBeLessThanOrEqual(r)
+						expect(segment.heap).toBeLessThanOrEqual(r)
 						if (segment.ids.length > 1) {
-							// A chunk of several is within the plan, and its heap within the cap plus the row that passed it.
+							// A chunk of several is within the plan, so within the cap.
 							expect(r).toBeLessThanOrEqual(plan.target)
-							expect(segment.heap).toBeLessThanOrEqual(plan.cap + segment.largest)
 						}
 					}
 				}
 			}),
 			runs(8)
 		)
+		// R missed no term: the backstop never fired.
+		expect(warn).not.toHaveBeenCalled()
 	}, 600_000)
 
-	it('is at least the payload of a 2,048-byte actor id with a short status uri, a NULL and a 2 MiB actor document', async () => {
+	it("is at least the meter's count of a 2,048-byte actor id with a short status uri, a NULL and a 2 MiB actor document", async () => {
 		const { h, f } = await fixture()
 		const result = await runInDurableObject(h.store, (_instance, state) => {
 			const sql = state.storage.sql
@@ -175,16 +176,55 @@ describe('R bounds the rows of a status (RES-3)', () => {
 			const bounds = boundsOf(state, f.viewer, ids, 0)
 			const alone = observedPresentation(state, f.viewer, ids, 1)
 			return alone.segments.map((s) => ({
-				payload: payload(rowsOf(s.reads)),
+				heap: heap(rowsOf(s.reads)),
 				bound: bounds.get(s.ids[0]!)!,
 				uri: rowsOf(s.reads).find((row) => 'author_uri' in row)?.author_uri,
 			}))
 		})
 		expect(result.map((r) => (r.uri as string).length)).toEqual([2048, 2048])
-		for (const { payload, bound } of result) {
-			expect(payload).toBeLessThanOrEqual(bound)
+		for (const { heap, bound } of result) {
+			expect(heap).toBeLessThanOrEqual(bound)
 		}
 	})
+})
+
+describe('a page of many small rows (RES-3)', () => {
+	it('plans 40 boosts of statuses with 200 mentions and 70 hashtags without the backstop', async () => {
+		const { h, f } = await fixture()
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+		const result = await runInDurableObject(h.store, (_instance, state) => {
+			const item: Item = {
+				kind: 'boost',
+				text: 50,
+				wide: false,
+				mentions: 200,
+				tags: 70,
+				media: 0,
+				poll: 0,
+				viewer: false,
+			}
+			const ids = Array.from({ length: 40 }, () => build(state.storage.sql, f, item))
+			const bounds = boundsOf(state, f.viewer, ids, 1)
+			const planned = observedPresentation(state, f.viewer, ids, PAGE_CHUNKS)
+			const whole = observedPresentation(state, f.viewer, ids, ids.length)
+			return {
+				same: JSON.stringify(planned.items) === JSON.stringify(whole.items),
+				chunks: planned.segments.map((s) => ({
+					size: s.ids.length,
+					heap: heap(rowsOf(s.reads)),
+					r: s.ids.reduce((sum, id) => sum + bounds.get(id)!, 0),
+				})),
+			}
+		})
+		expect(result.same).toBe(true)
+		expect(result.chunks.length).toBeGreaterThan(1)
+		for (const chunk of result.chunks) {
+			expect(chunk.heap).toBeLessThanOrEqual(chunk.r)
+			expect(chunk.r).toBeLessThanOrEqual(PAGE_CHUNKS.target)
+		}
+		expect(warn).not.toHaveBeenCalled()
+		console.info(`R ÷ meter, many small rows: ${result.chunks.map((c) => (c.r / c.heap).toFixed(3)).join(', ')}`)
+	}, 120_000)
 })
 
 describe('the hydrate queries (RES-3)', () => {

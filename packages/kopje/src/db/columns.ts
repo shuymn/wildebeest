@@ -1,11 +1,11 @@
-// The result columns of a query as one map, name to SQL expression, from which both the select list and the bound of
-// a row's payload are generated, so the bound cannot drift from what the query reads (RES-3, "Heap at 8 MiB per
-// answer" in docs/threat-model.md). A leaf: modules that build SQL at load can import it whatever the import order.
+import { ROW_OBJECT_BYTES, VALUE_BYTES } from './sql'
+
+// The result columns of a query as one map, name to SQL expression, from which both the select list and a bound of
+// the heap a row takes are generated, so the bound cannot drift from what the query reads (RES-3, "Heap at 8 MiB per
+// answer" in docs/threat-model.md). It imports only src/db/sql.ts, a leaf, so modules that build SQL at load can use
+// it whatever the import order.
 
 export type ColumnMap = Readonly<Record<string, string>>
-
-// The payload a value counts at least: a number or NULL, as test/answer-budgets.test.ts counts SQLite bytes.
-const VALUE_BYTES = 8
 
 export function selectSql(columns: ColumnMap): string {
 	return Object.entries(columns)
@@ -13,15 +13,16 @@ export function selectSql(columns: ColumnMap): string {
 		.join(', ')
 }
 
-// An upper bound on the payload of one row of `columns`: the UTF-8 bytes of each text value (octet_length does not
-// load the value), and VALUE_BYTES for any value shorter or not text. The sum is a balanced tree, so its expression
-// depth grows with the logarithm of the column count (SQLite refuses a tree deeper than 100; test-node/sql-depth.ts).
-export function rowBytesSql(columns: ColumnMap): string {
-	return balancedSum(
-		Object.values(columns).map(
-			(expression) => `coalesce(max(${VALUE_BYTES}, octet_length(${expression})), ${VALUE_BYTES})`
-		)
-	)
+// An upper bound on the heap one row of `columns` takes as RowMeter counts it (rowHeapBytes in src/db/sql.ts):
+// ROW_OBJECT_BYTES, and for each value VALUE_BYTES and twice its UTF-8 bytes (octet_length, which does not load the
+// value). A string's UTF-16 code units are at most its UTF-8 bytes; a number counts its decimal digits, which the
+// meter does not, and NULL nothing. The sum is a balanced tree, so its expression depth grows with the logarithm of
+// the column count (SQLite refuses a tree deeper than 100; test-node/sql-depth.ts).
+export function rowHeapSql(columns: ColumnMap): string {
+	return balancedSum([
+		String(ROW_OBJECT_BYTES),
+		...Object.values(columns).map((expression) => `(${VALUE_BYTES} + coalesce(2 * octet_length(${expression}), 0))`),
+	])
 }
 
 export function balancedSum(terms: readonly string[]): string {
@@ -35,16 +36,16 @@ export function balancedSum(terms: readonly string[]): string {
 	return `(${balancedSum(terms.slice(0, half))} + ${balancedSum(terms.slice(half))})`
 }
 
-// Columns whose values have a fixed largest size (ids, flags, numbers): the payload of one row is a constant.
-export type FixedColumns = { readonly columns: ColumnMap; readonly rowBytes: number }
+// Columns whose values have a fixed largest size (ids, flags, numbers): the heap of one row is a constant.
+export type FixedColumns = { readonly columns: ColumnMap; readonly rowHeap: number }
 
-// `bytes`: the most UTF-8 bytes each column's value takes.
+// `bytes`: the most UTF-8 bytes each column's value takes as text (0 for a number).
 export function fixedColumns<C extends ColumnMap>(
 	columns: C,
 	bytes: { readonly [K in keyof C]: number }
 ): FixedColumns {
 	return {
 		columns,
-		rowBytes: Object.keys(columns).reduce((sum, name) => sum + Math.max(VALUE_BYTES, bytes[name]!), 0),
+		rowHeap: Object.keys(columns).reduce((sum, name) => sum + VALUE_BYTES + 2 * bytes[name]!, ROW_OBJECT_BYTES),
 	}
 }

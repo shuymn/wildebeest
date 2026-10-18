@@ -4,11 +4,10 @@ import { type ApiHarness } from './api-helpers'
 import { NOW } from './app-helpers'
 import { type SqlRow, watchedCursor } from './read-helpers'
 import { community } from './status-helpers'
-import { Db } from '../src/db/sql'
+import { Db, rowHeapBytes } from '../src/db/sql'
 import { type VisibleStatusId } from '../src/domain/audience'
 import { type ChunkPlan, presentation, presentStatusesWithin, type Status } from '../src/domain/status-presenter'
 import { statusRowBoundSql } from '../src/domain/status-rows'
-import { utf8Length } from '../src/platform/dump-format'
 
 // Fixtures of the chunk planning tests (test/status-rows.test.ts): answers of statuses of mixed shapes and sizes, built
 // in SQL, and what a presentation of them reads.
@@ -220,15 +219,9 @@ export function observedPresentation(
 	return { items, reads, segments }
 }
 
-// SQLite bytes, as test/answer-budgets.test.ts counts them: UTF-8 bytes of a string, 8 for any other value.
-export function payload(rows: readonly SqlRow[]): number {
-	let bytes = 0
-	for (const row of rows) {
-		for (const value of Object.values(row)) {
-			bytes += typeof value === 'string' ? utf8Length(value) : 8
-		}
-	}
-	return bytes
+// The heap of `rows` as RowMeter counts it (rowHeapBytes), which R bounds.
+export function heap(rows: readonly SqlRow[]): number {
+	return rows.reduce((sum, row) => sum + rowHeapBytes(row), 0)
 }
 
 export const rowsOf = (reads: readonly Read[]) => reads.flatMap((read) => read.rows)

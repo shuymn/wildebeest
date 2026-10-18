@@ -17,11 +17,11 @@ import {
 	statusUrlSql,
 	tagNameSql,
 } from './status-bounds'
-import { balancedSum, type ColumnMap, fixedColumns, type FixedColumns, rowBytesSql } from '../db/columns'
+import { balancedSum, type ColumnMap, fixedColumns, type FixedColumns, rowHeapSql } from '../db/columns'
 
 // The rows the status presenter reads (hydrate in status-presenter.ts), each query's result columns as one column map
-// (src/db/columns.ts), and R: an upper bound on the payload, in SQLite bytes, that the rows of one status of an answer
-// take, generated from the same maps, which statusStream plans its chunks by (RES-3, "Heap at 8 MiB per answer" in
+// (src/db/columns.ts), and R: an upper bound on the heap the rows of one status of an answer take as RowMeter counts
+// them, generated from the same maps, which statusStream plans its chunks by (RES-3, "Heap at 8 MiB per answer" in
 // docs/threat-model.md).
 
 // in_reply_to_id and in_reply_to_account_id are shown as Mastodon shows them, even when the viewer may not see the
@@ -153,25 +153,25 @@ export const PER_ROW_SORTS: readonly { query: HydrateQuery; column: string }[] =
 	{ query: 'polls', column: 'options' },
 ]
 
-// The payload of every row read for the status `x.id` (one status row of an item), summed: what each query of
-// hydrateQueries() returns for it, each row by its map (rowBytesSql), or a FixedColumns constant times the rows. Its
+// The heap of every row read for the status `x.id` (one status row of an item), summed: what each query of
+// hydrateQueries() returns for it, each row by its map (rowHeapSql), or a FixedColumns constant times the rows. Its
 // author's account counts once per status row, though a chunk reads it once.
 function statusRowTerms(viewer: string, filterRows: string): string {
-	const fixed = (columns: FixedColumns, rows: string) => `(${rows}) * ${columns.rowBytes}`
+	const fixed = (columns: FixedColumns, rows: string) => `(${rows}) * ${columns.rowHeap}`
 	const one = (sql: string) => `coalesce((${sql}), 0)`
 	return balancedSum([
-		one(`SELECT ${rowBytesSql(STATUS_COLUMN_MAP)} FROM ${STATUS_FROM} WHERE s.id = x.id`),
+		one(`SELECT ${rowHeapSql(STATUS_COLUMN_MAP)} FROM ${STATUS_FROM} WHERE s.id = x.id`),
 		fixed(QUOTE_READ_COLUMNS, '1'),
-		one(`SELECT ${rowBytesSql(ACCOUNT_COLUMN_MAP)} FROM statuses w JOIN accounts a ON a.id = w.account_id
+		one(`SELECT ${rowHeapSql(ACCOUNT_COLUMN_MAP)} FROM statuses w JOIN accounts a ON a.id = w.account_id
 			LEFT JOIN local_accounts l ON l.account_id = a.id WHERE w.id = x.id`),
 		one(
-			`SELECT sum(${rowBytesSql(STATUS_MEDIA_COLUMN_MAP)}) FROM media_attachments m WHERE m.id IN (${shownMediaSql('x.id')})`
+			`SELECT sum(${rowHeapSql(STATUS_MEDIA_COLUMN_MAP)}) FROM media_attachments m WHERE m.id IN (${shownMediaSql('x.id')})`
 		),
-		one(`SELECT sum(${rowBytesSql(MENTION_COLUMN_MAP)}) FROM (SELECT x.id AS value) j CROSS JOIN accounts a
+		one(`SELECT sum(${rowHeapSql(MENTION_COLUMN_MAP)}) FROM (SELECT x.id AS value) j CROSS JOIN accounts a
 			WHERE a.id IN (${SHOWN_MENTIONS_SQL})`),
-		one(`SELECT sum(${rowBytesSql(TAG_COLUMN_MAP)}) FROM (SELECT x.id AS value) j CROSS JOIN status_tags t
+		one(`SELECT sum(${rowHeapSql(TAG_COLUMN_MAP)}) FROM (SELECT x.id AS value) j CROSS JOIN status_tags t
 			WHERE ${SHOWN_TAGS_SQL}`),
-		one(`SELECT ${rowBytesSql(POLL_COLUMN_MAP)} FROM ${POLL_FROM} WHERE p.status_id = x.id AND p.removed = 0`),
+		one(`SELECT ${rowHeapSql(POLL_COLUMN_MAP)} FROM ${POLL_FROM} WHERE p.status_id = x.id AND p.removed = 0`),
 		fixed(FILTER_MATCH_COLUMNS, filterRows),
 		`CASE WHEN ${viewer} IS NULL THEN 0 ELSE ${balancedSum([
 			fixed(

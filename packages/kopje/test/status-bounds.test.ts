@@ -10,7 +10,7 @@ import { ALICE, setup, type Setup } from './inbox-status-helpers'
 import { MAX_BIO, maxFields } from './profile-fixtures'
 import { observedSql, rowsRead } from './read-helpers'
 import { community, post, remoteAccount } from './status-helpers'
-import { Db } from '../src/db/sql'
+import { Db, rowHeapBytes } from '../src/db/sql'
 import { createActivity, getFeatured, noteOf, OUTBOX_BYTES, PIN_LIMIT, statusFacts } from '../src/domain/activities'
 import { ANSWER_BYTES } from '../src/domain/answer-budget'
 import { type VisibleStatusId } from '../src/domain/audience'
@@ -977,8 +977,9 @@ describe('the table of maxima (RES-3)', () => {
 		}
 	})
 
-	// R (status-rows.ts), which statusStream plans its chunks by, is at least what each shape reads, with every part at
-	// its bound: the viewer's filters naming each status, her votes in every choice, and every flag of hers.
+	// R (status-rows.ts), which statusStream plans its chunks by, is at least the heap RowMeter counts of the rows each
+	// shape reads, with every part at its bound: the viewer's filters naming each status, her votes in every choice,
+	// and every flag of hers.
 	it('bounds the rows each shape reads by R', async () => {
 		const { t, quoted, quote, boost } = await maximalStatuses('raw')
 		for (const id of [quoted, quote]) {
@@ -1018,9 +1019,7 @@ describe('the table of maxima (RES-3)', () => {
 				const counting = observedSql(real, (read) => {
 					for (const row of read) {
 						rows++
-						for (const value of Object.values(row)) {
-							bytes += typeof value === 'string' ? utf8Length(value) : 8
-						}
+						bytes += rowHeapBytes(row)
 					}
 				})
 				presentStatusesWithin(new Db(counting), shared, visible, Infinity, true, 1)
@@ -1034,7 +1033,7 @@ describe('the table of maxima (RES-3)', () => {
 			expect(shape.bytes).toBeLessThanOrEqual(shape.bound)
 		}
 		console.info(
-			`R at the maxima (status, quote, boost of a quote): ${measuredShapes.map((m) => `${m.bound} for ${m.bytes} bytes in ${m.rows} rows`).join('; ')}`
+			`R at the maxima (status, quote, boost of a quote): ${measuredShapes.map((m) => `${m.bound} for ${m.bytes} counted in ${m.rows} rows`).join('; ')}`
 		)
 	}, 300_000)
 
