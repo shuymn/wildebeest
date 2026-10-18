@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { login, registerApp, setSetting, sql } from './api-helpers'
-import { answer, expectByteCutWalk, maximalAccounts, walk } from './budget-helpers'
+import { answer, expectByteCutFirstPage, expectByteCutWalk, maximalAccounts, walk } from './budget-helpers'
 import { community, seedStatus, type User } from './status-helpers'
 import { ANSWER_BYTES } from '../src/domain/answer-budget'
 
@@ -131,6 +131,26 @@ describe('pages of accounts within ANSWER_BYTES (RES-3)', () => {
 			if (ascending) {
 				const up = await walk(h, `${page}&min_id=0`, 'prev', owner.token)
 				expectByteCutWalk(name, up, order.toReversed(), 'prev', size, cursorOf)
+			}
+			// since_id, and both bounds: a cut first page is a prefix of the uncut answer, its link in Mastodon's form.
+			const [newest, oldest] = [cursorOf(order[0]!), cursorOf(order.at(-1)!)]
+			const inner = order.slice(1, -1)
+			const token = owner.token
+			await expectByteCutFirstPage(
+				h,
+				name,
+				`${page}&since_id=${oldest}`,
+				'next',
+				token,
+				order.slice(0, -1),
+				size,
+				cursorOf
+			)
+			const down = `${page}&max_id=${newest}&since_id=${oldest}`
+			await expectByteCutFirstPage(h, `${name} between`, down, 'next', token, inner, size, cursorOf)
+			if (ascending) {
+				const up = `${page}&min_id=${oldest}&max_id=${newest}`
+				await expectByteCutFirstPage(h, `${name} between`, up, 'prev', token, inner.toReversed(), size, cursorOf)
 			}
 		}
 		const [muted] = (await answer<{ mute_expires_at: unknown }[]>(h, '/api/v1/mutes?limit=1', carol.token)).body
