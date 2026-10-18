@@ -10,14 +10,26 @@ status, updates this file. IDs are never reused: an invariant that no longer app
 
 Each part of an invariant carries one of three statuses:
 
-- _Enforced (main)_: the cited source and tests exist on `main`. A test file cited with quoted names, `test/a.test.ts`
-  ("name"), holds a test of each name; `…` stands for a part of a name a parameter supplies.
+- _Enforced (main)_: the cited source and tests exist on `main`.
 - _Planned (topic)_: not implemented; the text names what is missing.
 - _Retired_: no longer applies, with the reason. Its ID is never reused.
 
-A **Gap** note (`_Gap:_`) names a part that no test pins yet; that part does not count as enforced. Paths are relative
-to `packages/kopje`; those starting with `packages/` or `/` are relative to the repository root.
-`test-node/threat-model.test.ts` checks the marks and the citations.
+A **Gap** note (`_Gap:_`) names a part that no test pins yet; that part does not count as enforced.
+
+`test-node/threat-model.test.ts` holds the document to this contract:
+
+- `_..._` emphasis is reserved for a status (`_Enforced (main)_`, `_Planned (topic)_`, `_Retired_`, each optionally
+  followed by `:` or `.`) and for Gap notes; every invariant has a status, and no text names a branch.
+- A status runs from its mark to the next status mark of the same invariant. Every _Enforced (main)_ part cites at
+  least one file that exists: a path in a code span, relative to `packages/kopje` (from the repository root when it
+  starts with `packages/` or `/`), a bare configuration file of the package (`wrangler.jsonc`, `package.json`,
+  `vitest.config.ts`), or a migration by name (`0011_scheduled_statuses`). A part kept by configuration alone cites
+  that file.
+- Test names follow their file in parentheses: `test/a.test.ts` ("name", "other name"). Each name is a contiguous part
+  of one title the file declares (the literal first argument of `it`, `test` or `describe`, after any `.each(...)` or
+  other chain), so a name may shorten a title but never joins two. `…` stands for text a parameter or interpolation
+  supplies: the parts around it appear in that order within one title. A name that is empty or only `…` is refused.
+- In the entry-point table, each status is `main: <paths>` with at least one path, or exactly `Planned (topic)`.
 
 Planned topics: the KV sweep (expired signed-fetch cache rows: NET-4, RES-4), remote media (a fetch sink for remote
 media: NET-3) and restore (DATA-8).
@@ -1090,11 +1102,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   existing actor) finds the account by its actor id and never sets or replaces its address. One helper
   (`accountDomain` in `src/domain/inbox.ts`) decides the stored domain for every path. _Gap:_ inbound activities do
   not look up WebFinger, so an account first seen inbound shows its actor's host until it is resolved, and a renamed
-  actor keeps its host until it is resolved again. `test/inbox-canonical-address.test.ts`. `createRemoteLoaders` in
+  actor keeps its host until it is resolved again. `test/inbox-canonical-address.test.ts` ("the canonical address of a
+  remote account", "the domains of WebFinger subjects and addresses, parsed one way"). `createRemoteLoaders` in
   `src/federation/federation.ts`, `src/federation/resolve.ts`; `test/inbox-statuses.test.ts` ("signed by the instance
   actor (NET-4)", "resolves a status URL as the instance actor", "answers 401 without a token and fetches nothing"),
-  `test/inbox-statuses-edge.test.ts` ("NET-4: search resolution fetches nothing without a valid token", "the
-  canonical WebFinger domain").
+  `test/inbox-statuses-edge.test.ts` ("NET-4: search resolution fetches nothing without a valid token").
 - **NET-5: snapshots come only from authoritative local data.** A rescue snapshot holds only a canonical actor,
   WebFinger or NodeInfo document rendered on the fixed domain from Store columns, and is kept only if its source still
   matches the Store when saved. Request hosts, arbitrary queries and remote documents never create or change one.
@@ -1181,7 +1193,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   (once a renewal or that check fails, no further write starts, the call reports `lease-overrun` and the lease is not
   released). A PITR restore is refused while the lease is live, and the lease while a restore is being scheduled
   (`pitr_restoring`); since a restore rewinds the maintenance start and the unpublished flag, the Store records each
-  restore outside its database (`kopje/pitr-restored/<store id>` in R2, never served) before scheduling it, and the
+  restore outside its database (an R2 object named by its id, `restoreMarkerKey` in `src/platform/media-files.ts`,
+  never served) before scheduling it, and the
   rebuild counts readiness only from it: an unpublished flag from before it is not ready, and maintenance settles from
   the later of its start and the restore. An import reset or cutover reset never writes the maintenance flag, so they
   leave no stale start. Per row the other steps are bounded: two R2 reads, five Images calls and five Store calls, each given up
@@ -1202,11 +1215,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   comment, text chunk or unknown JPEG application segment and keeps only colour profiles, and refuses the upload
   otherwise; `test/image-bytes.test.ts` ("refuses every EXIF block", "refuses XMP, IPTC, comments"),
   `test/media.test.ts` ("re-encodes an image without its location", "refuses a failed transformation", "refuses an
-  output that keeps ..."). Tests use Miniflare's local Images binding (sharp); the production binding's output is
+  output that keeps …"). Tests use Miniflare's local Images binding (sharp); the production binding's output is
   verified on a deployed instance. The media rebuild, which makes the served files of restored or moved
   media from their originals, goes through the same `processImage` and writes nothing for an original that fails, and
   never serves an original instead; it refuses an original whose served type differs from the row's (its URLs name that
-  type). `test/media-rebuild.test.ts` ("makes both files ... and corrects meta", "reports a missing original and a type
+  type). `test/media-rebuild.test.ts` ("makes both files … and corrects meta", "reports a missing original and a type
   mismatch").
 - **MEDIA-4: media cannot run as instance content.** Uploads are accepted by detected type from an allowlist and served
   with their stored type and `nosniff`; HTML, SVG and other active types are never served from the instance origin.
@@ -1459,7 +1472,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
 - **RES-6: one request cannot trigger unbounded work.** An inbound activity has fixed limits on dereferences,
   recipients, collection expansion and notifications. Delivery backlog and concurrency are bounded. Anonymous app
   registration, inbox spooling and media transformations have rate or storage budgets with a visible refusal. Inbox
-  spooling: _Enforced (main):_ the spool's budget (RES-4), refused with 503. Domain blocks: _Enforced (main):_ a domain block's cleanup scans at most 500 follows
+  spooling: _Enforced (main):_ the spool's budget (RES-4), refused with 503 (`createAdmission` in
+  `src/federation/spool.ts`; `test/maintenance-worker.test.ts` ("in Kopje's own maintenance gate: the same budget,
+  failing closed")). Domain blocks: _Enforced (main):_ a domain block's cleanup scans at most 500 follows
   per batch and does at most 4 batches a round, its first batch in the request, so blocking a domain stays bounded
   however many follows the user has, and always succeeds (VIS-15, `test/blocks.test.ts`). Local suspension:
   _Enforced (main):_ the suspension's transaction writes a fixed number of rows whatever the
@@ -1587,12 +1602,12 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   rest to the next turn; a payload over 512 KiB is skipped and logged. The journal records nothing once it spans 4,096
   ids, and is pruned behind the position, at most 500 rows a call: the finished journal rows first, so the span shrinks
   at once, then a delete's capture rows, in further turns until none is left. A turn that read anything moves the
-  position, also past what it read with nothing to send, before it stops for its budget. _Enforced (main):_ a delete's capture is one journal row and at most one row per account in the registry (256),
+  position, also past what it read with nothing to send, before it stops for its budget. a delete's capture is one journal row and at most one row per account in the registry (256),
   each at most 16 KiB (40 boosts); a row over it drops boosts, then list ids, and is logged, and the delete goes on.
   A unit is one subject (the status, or one captured boost) for one viewer, so a delete with 40 boosts is 41 units for
   each viewer, each within a unit's worst case; the position names the viewer and the subject within the event. The status and edit
   triggers write one journal row per status write, under the same span, and no batched delete or purge fires them.
-  _Enforced (main):_ a delete's capture also holds each viewer's lists (at most 16 for the
+  a delete's capture also holds each viewer's lists (at most 16 for the
   status and each boost, within the same 16 KiB); a list's check is one narrowed read. A conversation's change moves its owner's mark,
   which journals one 'conversation' event for the owner unless one is still ahead of the position, so a burst is one
   row and a busy owner waits behind the others (FIFO); its units are the owner's newest 20 changes up to a
@@ -1601,7 +1616,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   ends however fast its owner writes. A conversation's last status moved back by
   a status's removal writes the owner's mark and that journal row too, so the batched delete of a status's conversation
   links takes a fourth of the rows left (`LIMIT ?2 / 4`). `notifications_merged` is one journal
-  row per transition, under the span. _Enforced (main):_ a public status's delete adds one
+  row per transition, under the span. a public status's delete adds one
   tombstone row of at most 27 KiB (100 hashtags, each a subscribed key's of at most 256 bytes; over it, the last
   hashtags are dropped and logged, and the delete goes on), and a viewer row without boosts for each account listening
   on feeds alone; `streamPrune` deletes tombstones after the viewer rows, in the same 500-row calls. A hashtag `tag` is
@@ -2060,7 +2075,7 @@ images-export` reads the Images API token from the environment only (`CF_IMAGES_
   Kopje's replay verifies the signature against that time (OPS-1). _Enforced (main):_
   `src/maintenance.ts`, `scripts/build-maintenance.mjs`; `test/maintenance-worker.test.ts` ("refuses every other
   write with 503 and touches no legacy binding", "refuses before spooling what Kopje refuses", "answers 503 rather than
-  202 when it cannot spool", "spools a signed Follow ... and Kopje replays it" with the replaying clock a day later,
+  202 when it cannot spool", "spools a signed Follow … and Kopje replays it" with the replaying clock a day later,
   "a request altered in the spool is refused on replay", the generated file itself),
   `test-node/cutover-maintenance.test.ts` (the bundle imports no runtime module and exports its handler only),
   `test-node/maintenance-legacy-runtime.test.ts` (the generated file on the legacy compatibility date and flags,
