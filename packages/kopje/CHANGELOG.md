@@ -13,10 +13,11 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - A boost no longer shows a quote of its own (a converted row could attach one to the boost): as on Mastodon, a
   reblog has no `quote`, and its original's quote is shown inside `reblog`.
 - Statuses are read in chunks sized by a bound of the memory their rows take, so a page of 40 statuses takes about a
-  dozen queries instead of about two hundred, and grouped notifications and admin reports no longer read their
-  statuses one at a time. Answers are unchanged. A chunk whose rows pass that bound is read again one status at a
-  time and logs `kopje.presenter.row-cap-exceeded` with the status ids: it means the bound misses something, so
-  report it.
+  dozen queries instead of about two hundred, and grouped notifications and admin reports no longer read their statuses
+  one at a time. The chunks do not change answers (the dropped quote of a boost above can change which other statuses'
+  text a keyword filter matches, as the answer's text allowance is shared). A chunk whose rows pass that bound is read
+  again one status at a time and logs `kopje.presenter.row-cap-exceeded` with the status ids: it means the bound misses
+  something, so report it.
 
 ### Fixed
 

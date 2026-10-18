@@ -1847,14 +1847,14 @@ pass, and the passes are at most four), 200 for a page of reports (its at most 1
 | Groups                                      | 72.9 MB | 75.2 MB                                      | 72.9 MB       |
 | Reports                                     | 72.0 MB | 74.3 MB                                      | 72.0 MB       |
 
-A chunk of several takes at most its target of heap, 3 MiB (3.15 MB) or 1 MiB (1.05 MB). Timelines: rows
-max(1.25 × 3.15, 17.1) MB, the admitted answer 25.2 MB and the rejected item 16.7 MB; with the
-backstop fired, 1.25 × (3.15 + 0.8) MB of dropped rows more. Groups: 16.8 + 2.3 + 25.2 + 18.5 + 10.1 MB, and reports
-18.3 + 25.2 + 16.0 + 12.5 MB, each with 1.25 × (1.05 + 0.8) MB more when the backstop fires. The cap is 3 MiB so that
-the fallback fits within half of the isolate even when the dropped chunk is still live; V8 collects garbage before it
-fails an allocation, so the real fallback peak is the normal one. A boost that showed a quote of its own (a legacy
-row) would make a timeline's largest item a boost carrying its own quote whose original quotes another status: about
-22.8 MB of rows and 24.5 MB of objects, 72.5 MB at a chunk of one; it shows none (R35).
+A chunk of several takes at most its target of heap, 3 MiB (3.15 MB) or 1 MiB (1.05 MB). Timelines: rows max(1.25 ×
+3.15, 17.1) MB, the admitted answer 25.2 MB and the rejected item 16.7 MB; with the backstop fired, 1.25 × (3.15 + 0.8)
+MB of dropped rows more. Groups: 16.8 + 2.3 + 25.2 + 18.5 + 10.1 MB, and reports 18.3 + 25.2 + 16.0 + 12.5 MB, each with
+1.25 × (1.05 + 0.8) MB more when the backstop fires. The cap is 3 MiB so that the fallback fits within half of the
+isolate even when the dropped chunk is still live: the backstop-fired figures bound the fallback whenever the dropped
+rows are collected. A boost that showed a quote of its own (a legacy row) would make a timeline's largest item a boost carrying
+its own quote whose original quotes another status: about 22.8 MB of rows and 24.5 MB of objects, 72.5 MB at a chunk of
+one; it shows none (R35).
 
 | Phase                                             | Store isolate | Worker isolate |
 | ------------------------------------------------- | ------------- | -------------- |
