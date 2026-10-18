@@ -109,18 +109,28 @@ function random(seed: number): () => number {
 	}
 }
 
-type Mix = { seed: number; weights: number[]; padAt: number }
+type Mix = { seed: number; weights: number[]; padAt: number; alphabet: readonly string[] }
 
-const mix: fc.Arbitrary<Mix> = fc.record({
-	seed: fc.integer(),
-	weights: fc.array(fc.nat({ max: 8 }), { minLength: ALPHABET.length, maxLength: ALPHABET.length }),
-	padAt: fc.double({ min: 0, max: 1, noNaN: true }),
-})
+function mixOf(alphabet: readonly string[], least = 0): fc.Arbitrary<Mix> {
+	return fc.record({
+		seed: fc.integer(),
+		weights: fc.array(fc.integer({ min: least, max: 8 }), { minLength: alphabet.length, maxLength: alphabet.length }),
+		padAt: fc.double({ min: 0, max: 1, noNaN: true }),
+		alphabet: fc.constant(alphabet),
+	})
+}
+
+const mix = mixOf(ALPHABET)
+
+// Canonical text: no U+0000, no lone surrogate, nothing JSON escapes or a sanitizer rewrites. HTML_ALPHABET's
+// characters take three bytes and one code unit each, so HTML at a JSON bound stays within REMOTE_HTML_RAW_LIMIT.
+const CANONICAL_ALPHABET = ['a', ' ', '\u00e9', '\u65e5', '\u{1F600}']
+const HTML_ALPHABET = ['\u65e5', '\u672c', '\u30ab']
 
 // A string of exactly `target` in `unit` (the JSON unit counts the quotes): characters drawn from ALPHABET by the
 // mix's weights, then 'a' (one in every unit) at a drawn position for the rest. A lone high surrogate is never
 // followed by a low one, so the measure of the whole is the sum of its characters'.
-function measured({ seed, weights, padAt }: Mix, unit: Unit, target: number): string {
+function measured({ seed, weights, padAt, alphabet }: Mix, unit: Unit, target: number): string {
 	const next = random(seed)
 	const total = weights.reduce((sum, weight) => sum + weight, 0)
 	const pick = () => {
@@ -128,7 +138,7 @@ function measured({ seed, weights, padAt }: Mix, unit: Unit, target: number): st
 		for (const [i, weight] of weights.entries()) {
 			roll -= weight
 			if (roll < 0) {
-				return ALPHABET[i] ?? 'a'
+				return alphabet[i] ?? 'a'
 			}
 		}
 		return 'a'
@@ -166,6 +176,9 @@ type Column = {
 	writer: (value: string) => string | null
 	// A text column: its writer's output is well-formed and holds no U+0000.
 	text?: true
+	// Canonical inputs within the bound, at it and one below, which the writer and P keep unchanged; html wraps them
+	// in a paragraph (the tags count toward the bound).
+	kept: { unit: Unit; bound: number; html?: true }
 	bounds: [Unit, number][]
 	runs: number
 }
@@ -174,6 +187,7 @@ const sanitizerRuns = 4
 const COLUMNS: Column[] = [
 	{
 		name: 'accounts.display_name',
+		kept: { unit: 'points', bound: DISPLAY_NAME_LIMIT },
 		projection: displayNameSql,
 		writer: storedDisplayName,
 		text: true,
@@ -185,6 +199,7 @@ const COLUMNS: Column[] = [
 	},
 	{
 		name: 'accounts.note',
+		kept: { unit: 'json', bound: BIO_JSON_BYTES, html: true },
 		projection: noteSql,
 		writer: (value) => sanitizeRemoteBio(storedText(value)),
 		text: true,
@@ -196,6 +211,7 @@ const COLUMNS: Column[] = [
 	},
 	{
 		name: 'accounts.url, avatar_url, header_url',
+		kept: { unit: 'bytes', bound: PROFILE_URL_LIMIT },
 		projection: profileUrlSql,
 		writer: storedProfileUrl,
 		bounds: [['bytes', PROFILE_URL_LIMIT]],
@@ -203,6 +219,7 @@ const COLUMNS: Column[] = [
 	},
 	{
 		name: 'statuses.content, status_edits.content',
+		kept: { unit: 'json', bound: CONTENT_JSON_BYTES, html: true },
 		projection: contentSql,
 		writer: (value) => sanitizeRemoteContent(storedText(value)),
 		text: true,
@@ -214,6 +231,7 @@ const COLUMNS: Column[] = [
 	},
 	{
 		name: 'statuses.spoiler_text, status_edits.spoiler_text',
+		kept: { unit: 'json', bound: SPOILER_JSON_BYTES },
 		projection: spoilerSql,
 		writer: (value) => cutJsonString(storedText(value), SPOILER_JSON_BYTES),
 		text: true,
@@ -226,6 +244,7 @@ const COLUMNS: Column[] = [
 	},
 	{
 		name: 'statuses.source_text',
+		kept: { unit: 'json', bound: CONTENT_JSON_BYTES },
 		projection: sourceTextSql,
 		writer: (value) => cutJsonString(storedText(value), CONTENT_JSON_BYTES),
 		text: true,
@@ -237,6 +256,7 @@ const COLUMNS: Column[] = [
 	},
 	{
 		name: 'statuses.url',
+		kept: { unit: 'bytes', bound: STATUS_URL_LIMIT },
 		projection: statusUrlSql,
 		writer: storedStatusUrl,
 		bounds: [['bytes', STATUS_URL_LIMIT]],
@@ -244,6 +264,7 @@ const COLUMNS: Column[] = [
 	},
 	{
 		name: 'media_attachments.url',
+		kept: { unit: 'bytes', bound: MEDIA_URL_LIMIT },
 		projection: mediaUrlSql,
 		writer: storedMediaUrl,
 		bounds: [['bytes', MEDIA_URL_LIMIT]],
@@ -251,6 +272,7 @@ const COLUMNS: Column[] = [
 	},
 	{
 		name: 'media_attachments.preview_url',
+		kept: { unit: 'bytes', bound: MEDIA_URL_LIMIT },
 		projection: mediaUrlSql,
 		writer: storedMediaLink,
 		bounds: [['bytes', MEDIA_URL_LIMIT]],
@@ -258,6 +280,7 @@ const COLUMNS: Column[] = [
 	},
 	{
 		name: 'media_attachments.description',
+		kept: { unit: 'points', bound: MAX_MEDIA_DESCRIPTION_LENGTH },
 		projection: mediaDescriptionSql,
 		writer: storedMediaDescription,
 		text: true,
@@ -269,6 +292,7 @@ const COLUMNS: Column[] = [
 	},
 	{
 		name: 'media_attachments.meta',
+		kept: { unit: 'bytes', bound: MEDIA_META_BYTES },
 		projection: mediaMetaSql,
 		writer: storedMediaMeta,
 		bounds: [['bytes', MEDIA_META_BYTES]],
@@ -326,6 +350,23 @@ describe('stored bounds (RES-2)', () => {
 	})
 
 	for (const column of COLUMNS) {
+		it(`${column.name}: the writer and P keep a canonical value within the bound`, async () => {
+			const { unit, bound, html } = column.kept
+			const canonical = fc
+				.tuple(fc.constantFrom(bound - 1, bound), mixOf(html === true ? HTML_ALPHABET : CANONICAL_ALPHABET, 1))
+				.map(([target, m]) => (html === true ? `<p>${measured(m, unit, target - 7)}</p>` : measured(m, unit, target)))
+			await runInDurableObject(freshStore(), (_instance, state) => {
+				fc.assert(
+					fc.property(canonical, (input) => {
+						expect(lengthIn(unit, input)).toBeLessThanOrEqual(bound)
+						expect(column.writer(input)).toBe(input)
+						expect(valueOf(state.storage.sql, `(${column.projection('?1')}) IS ?1`, input)).toBe(1)
+					}),
+					{ numRuns: column.text === true && html === true ? 4 : 30 }
+				)
+			})
+		})
+
 		it(`${column.name}: P is idempotent and the writer's output is its fixed point`, async () => {
 			await runInDurableObject(freshStore(), (_instance, state) => {
 				fc.assert(
