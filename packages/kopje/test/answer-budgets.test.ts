@@ -1,5 +1,6 @@
 import { runInDurableObject } from 'cloudflare:test'
 
+import fc from 'fast-check'
 import { describe, expect, it } from 'vitest'
 
 import { type ApiHarness, sql } from './api-helpers'
@@ -126,6 +127,25 @@ describe('admission (RES-3)', () => {
 		expect(admit(items, 1, false)).toEqual({ items: [], bytes: 0, consumed: 0, cut: true })
 		// Nothing to show is consumed, never admitted.
 		expect(admit([undefined, 'x', undefined], 4, true)).toEqual({ items: ['x'], bytes: 4, consumed: 3, cut: false })
+	})
+
+	it('counts JSON bytes as JSON.stringify writes them, without building the string', () => {
+		const stringified = (value: unknown) => utf8Length(JSON.stringify(value))
+		fc.assert(
+			fc.property(fc.jsonValue({ stringUnit: 'binary', maxDepth: 4 }), (value) => {
+				expect(jsonBytes(value)).toBe(stringified(value))
+			}),
+			{ numRuns: 2_000 }
+		)
+		const edges = [
+			{ a: undefined, b: [undefined, () => 1, null], c: new Date(0), d: -0, e: Number.NaN, f: Infinity },
+			'\ud800x\udc00\u0000\u001f"\\\b\f\n\r\t\u007f\u0080\u07ff\u0800\uffff\ud83d\ude00',
+			[],
+			{},
+		]
+		for (const value of edges) {
+			expect(jsonBytes(value)).toBe(stringified(value))
+		}
 	})
 
 	it('continues a cut page from its last admitted row, dropping a window continuation', () => {

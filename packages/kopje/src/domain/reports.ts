@@ -366,9 +366,9 @@ function* adminReportStream(
 		const [account, target, assigned, actor] = [...adminAccountStream(db, ids, admin.accountId, present, ids.length)]
 		const ruleIds = new Set(row.rule_ids === null ? [] : (JSON.parse(row.rule_ids) as string[]))
 		const statuses = (shown[i] ?? []).map((status) => status.id)
-		// The first status presented, whatever its size (a unit), found one status at a time; the next ones only while
-		// room is left, so a first status that uses up the allowance stops the report's statuses without reading the
-		// next.
+		// Statuses are read one at a time ("Heap at 8 MiB per answer" in docs/threat-model.md). The first presented,
+		// whatever its size (a unit); the next ones only while room is left, so a first status that uses up the
+		// allowance stops the report's statuses without reading the next.
 		const one = statusStream(db, shared, statuses, 1)
 		let first: Status | undefined
 		let next = 0
@@ -384,7 +384,7 @@ function* adminReportStream(
 						first,
 						...(used >= REPORT_STATUS_BYTES
 							? []
-							: presentStatusesWithin(db, shared, statuses.slice(next), REPORT_STATUS_BYTES - used, false).items),
+							: presentStatusesWithin(db, shared, statuses.slice(next), REPORT_STATUS_BYTES - used, false, 1).items),
 					]
 		yield {
 			id: row.id,

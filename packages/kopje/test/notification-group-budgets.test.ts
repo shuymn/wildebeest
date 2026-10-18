@@ -1,3 +1,5 @@
+import { runInDurableObject } from 'cloudflare:test'
+
 import { describe, expect, it } from 'vitest'
 
 import { type ApiHarness, sql } from './api-helpers'
@@ -9,11 +11,14 @@ import {
 	bigStatus,
 	expectByteCutWalk,
 	maximalAccounts,
+	ORIGIN,
 	type Walked,
 } from './budget-helpers'
+import { observedSql } from './read-helpers'
 import { community, mute, remoteAccount, seedStatus, type User } from './status-helpers'
 import { ANSWER_BYTES, jsonBytes } from '../src/domain/answer-budget'
-import { GROUP_WALK } from '../src/domain/notification-groups'
+import { GROUP_WALK, listGroupedNotifications } from '../src/domain/notification-groups'
+import { sha256Hex } from '../src/security/tokens'
 
 // RES-3: a page of grouped notifications is within ANSWER_BYTES. Groups are admitted in discovery order, each with
 // the accounts and statuses it adds; a page cut by bytes continues from its last admitted group's discovery position
@@ -318,6 +323,34 @@ describe('grouped notifications within ANSWER_BYTES (RES-3)', () => {
 		expect(groupsOf(after)).toEqual(groupsOf(before))
 		expect(after.body.accounts.map((account) => account.id)).toContain(x)
 		expect(after.body.partial_accounts!.map((account) => account.id)).not.toContain(x)
+	}, 300_000)
+
+	it("reads one group's status at a time", async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const fan = await remoteAccount(h.store, 'fan')
+		for (let i = 0; i < 4; i++) {
+			await favourite(h, alice.id, fan, await bigStatus(h, alice.id, NOW - (10 - i) * 60_000))
+		}
+		const tokenHash = await sha256Hex(alice.token)
+		const most = await runInDurableObject(h.store, (_instance, state) => {
+			let largest = 0
+			const counting = observedSql(state.storage.sql, (rows) => {
+				largest = Math.max(largest, rows.filter((row) => 'content' in row && 'poll_id' in row === false).length)
+			})
+			listGroupedNotifications.run(counting, {
+				credential: { tokenHash, scope: 'read:notifications', now: NOW },
+				page: { limit: 20 },
+				types: [],
+				excludeTypes: [],
+				groupedTypes: null,
+				includeFiltered: false,
+				expandAccounts: 'full',
+				present: { origin: ORIGIN },
+			} as never)
+			return largest
+		})
+		expect(most).toBe(1)
 	}, 300_000)
 
 	it('moves a partial account to the accounts when a later group shows it first', async () => {

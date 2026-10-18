@@ -1373,8 +1373,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   admit whole items the same way (a notification with its account, status and report; a group with the accounts and
   statuses it adds; a conversation; a report), each continuing as the inventory states. Grouped notifications
   continue from the last admitted group's discovery position, with the page range and cursors of the groups kept,
-  dropping trailing groups when that range samples larger accounts, at most twice before the page is its first group
-  alone. A report's statuses are admitted in its order
+  dropping trailing groups when that range samples larger accounts, in at most four passes (the first, two more over
+  the kept groups, then the first group alone). A report's statuses are admitted in its order
   within 2 MiB (`REPORT_STATUS_BYTES`), the first always: a projection of the report. Streaming events stay one unit
   each, and an event over 512 KiB is skipped whole. An outbox page's activities are within `OUTBOX_BYTES`
   (`test/notification-budgets.test.ts`, `test/notification-group-budgets.test.ts`, `test/conversation-budgets.test.ts`,
@@ -1752,43 +1752,46 @@ maximal answers of plain notifications, grouped notifications, conversations, ad
 Heap at 8 MiB per answer. Assumptions: one request at a time per isolate; the answer's JSON is at most 8 MiB, since
 every item is below it; presented objects take at most three times their JSON bytes (a string takes no more than its
 JSON bytes, since JSON only adds escapes, and the rest is per-object overhead; an assumption, as workerd exposes no
-heap to measure); rows of one chunk take their SQLite bytes. A chunk of statuses is 2 items, their rows read together
-and each presented and measured only when admission reaches it (`STATUS_CHUNK` in `src/domain/status-presenter.ts`),
-so while the first rejected status is measured the admitted answer, the chunk's rows, the rejected status's presented
-objects and its measurement string coexist. A page of 40 ordinary statuses takes 10 queries and 0.9 ms presented at
-once, 381 queries and 5.7 ms one item per chunk, and 199 queries and 3.7 ms two per chunk. Any other chunk (a
-conversation, a report) is one item.
+heap to measure); rows of one chunk take their SQLite bytes. An item is measured without building its JSON
+(`jsonBytes` in `src/domain/answer-budget.ts`): a string of several MB, which takes up to two bytes a character once
+one character is wider than Latin-1, is never made. A chunk of statuses is 2 items, their rows read together and
+each presented and measured only when admission reaches it (`STATUS_CHUNK` in `src/domain/status-presenter.ts`), so
+while the first rejected status is measured the admitted answer, the chunk's rows and the rejected status's presented
+objects coexist. A page of 40 ordinary statuses takes 10 queries and 0.9 ms presented at once, 381 queries and 5.7 ms
+one item per chunk, and 199 queries and 3.7 ms two per chunk. Any other chunk (a conversation, a report) is one item.
 
 | Phase                                             | Store isolate | Worker isolate |
 | ------------------------------------------------- | ------------- | -------------- |
 | Rows of one chunk (2 boosts of quotes)            | 13.2 MB       |                |
 | Presented objects of the admitted answer          | 25.2 MB       |                |
 | Presented objects of the first rejected status    | 16.7 MB       |                |
-| Measurement string of one item                    | 6.7 MB        |                |
 | RPC copy (serialized; deserialized in the Worker) | 8.4 MB        | 25.2 MB        |
-| The Worker's JSON string and the body             |               | 16.8 MB        |
-| Peak                                              | 62 MB         | 42 MB          |
+| The Worker's JSON string and the body             |               | 25.2 MB        |
+| Peak                                              | 55 MB         | 50 MB          |
 
-Each isolate stays within half of its 128 MB. One isolate holding both sides at once, the Store's objects alive while
-the Worker's are built, would reach about 76 MB; it stays within half (59 MB) when the Store drops its objects once
-they are serialized.
+The Worker's JSON string is counted at two bytes a character (16.8 MB) and the body at its UTF-8 bytes. Each isolate
+stays within half of its 128 MB. One isolate holding both sides at once, the Store's objects alive while the Worker's
+are built, would reach about 105 MB; it stays within half (59 MB) when the Store drops its objects once they are
+serialized.
 
-A page of groups and a page of reports, the largest atomic items, take the same phases in the Store isolate with their
-own unit and chunk; the Worker's side is the table above. A group's rows are its status's chunk (2 statuses of a
-quote, 13.0 MB) and its 8 sample accounts (0.9 MB). A re-admission pass presents its own groups' statuses afresh and
-holds nothing of a group an earlier pass dropped, and the passes are at most three. A report's rows are its 4 accounts
-(0.5 MB) and a chunk of its statuses: its first alone (6.6 MB), the next ones 2 at a time (13.0 MB) and only while the
-first leaves room in REPORT_STATUS_BYTES.
+A page of groups and a page of reports, the largest atomic items, read their statuses one at a time: a group's rows
+are its status (a quote, 6.5 MB) and its 8 sample accounts (0.9 MB); a report's are one of its statuses (6.6 MB) and
+its 4 accounts (0.5 MB), the next status read only while the first leaves room in REPORT_STATUS_BYTES. Their answers
+also keep the presentation's state: the compiled filters (50 filters of 20 keywords, about 0.5 MB) and the filter
+results cached by status (at most 50 results of about 1.2 KB each, 60 KB a status) for the statuses and quoted
+statuses a page presents: 160 for a page of groups (80 groups, each with its status and a quoted one; a re-admission
+pass presents its own groups' statuses again, matched once, and holds nothing else of an earlier pass, and the passes
+are at most four), 200 for a page of reports (its at most 100 statuses and their quoted ones).
 
 | Phase (Store isolate)                    | Groups  | Reports |
 | ---------------------------------------- | ------- | ------- |
-| Rows of one chunk                        | 13.9 MB | 13.5 MB |
+| Rows of one chunk                        | 7.4 MB  | 7.1 MB  |
 | Presented objects of the admitted answer | 25.2 MB | 25.2 MB |
 | Presented objects of the rejected unit   | 18.5 MB | 16.0 MB |
-| Measurement string of one item           | 6.2 MB  | 5.3 MB  |
-| Peak                                     | 64 MB   | 60 MB   |
+| Presentation and filter state            | 10.1 MB | 12.5 MB |
+| Peak                                     | 61.2 MB | 60.8 MB |
 
-Both stay within half of the isolate's 128 MB, the group path at its edge (63.8 MB).
+Both stay within half of the isolate's 128 MB; the Worker's side is the table above.
 
 ### Data and keys (DATA)
 

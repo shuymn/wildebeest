@@ -80,8 +80,8 @@ shown as partial to the accounts, and the others as partial accounts read from t
 bytes, the page is the admitted groups as if the walk had found those alone: its range, which `membersOf` and the
 `page_min_id` and `page_max_id` fields read, and its `next` and `prev` cursors are those of the groups kept, and a
 walk's continuation past a group left out is dropped. The kept groups are admitted again over that range, since
-sampling below a lower upper end can show larger accounts, and the last are dropped the same way; after two such
-passes that still do not fit, the page is its first group alone, over its own range. A
+sampling below a lower upper end can show larger accounts, and the last are dropped the same way: at most four passes
+in all, the first, two more over the kept groups, and then the first group alone, over its own range. A
 group may appear again on the next page with its notifications below the cursor. Unread counts and markers are not
 read by admission.
 

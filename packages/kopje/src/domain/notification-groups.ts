@@ -462,7 +462,8 @@ function pageRange(walk: Walk, ordered: readonly Found[], ascending: boolean, pa
 }
 
 // Admission passes over a page's groups after the first, each over the range of the groups the one before kept,
-// before the page falls back to its first group alone: at most 1 + MAX_READMISSIONS passes over at most a page.
+// before the page falls back to its first group alone: at most four passes in all (the first, MAX_READMISSIONS, and the
+// first group alone).
 const MAX_READMISSIONS = 2
 
 // GET /api/v2/notifications: newest first by each group's first notification read; with min_id, the groups right
@@ -505,7 +506,8 @@ export const listGroupedNotifications = userReadOperation<ListGroupedInput, Grou
 				viewer,
 				read.groups,
 				pageRange(read, ordered, ascending, page),
-				firstUses(statusIds, statusStream(db, shared, statusIds)),
+				// One status's rows at a time ("Heap at 8 MiB per answer" in docs/threat-model.md).
+				firstUses(statusIds, statusStream(db, shared, statusIds, 1)),
 				input,
 				budget
 			)
