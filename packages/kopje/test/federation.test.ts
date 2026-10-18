@@ -351,6 +351,56 @@ describe('NodeInfo', () => {
 	})
 })
 
+describe('documents open to browsers', () => {
+	// Mastodon opens /.well-known/*, /nodeinfo/* and /users/:username to GET from any origin (config/initializers/cors.rb,
+	// v4.5.11). Elk reads NodeInfo with no-cache headers, so it sends a preflight first.
+	const ORIGIN = { origin: 'https://elk.example' }
+
+	it('answers GET and its preflight on the public documents with any origin', async () => {
+		const { request } = await instance()
+		for (const path of [
+			'/.well-known/nodeinfo',
+			'/nodeinfo/2.0',
+			'/nodeinfo/2.1',
+			'/.well-known/webfinger?resource=acct:Alice@social.example',
+			'/.well-known/oauth-authorization-server',
+			'/ap/users/Alice',
+		]) {
+			const response = await request(path, { headers: { ...ORIGIN, ...AP.headers } })
+			expect(response.headers.get('access-control-allow-origin'), path).toBe('*')
+			const preflight = await request(path, {
+				method: 'OPTIONS',
+				headers: {
+					...ORIGIN,
+					'access-control-request-method': 'GET',
+					'access-control-request-headers': 'cache-control,pragma',
+				},
+			})
+			expect(preflight.status, path).toBe(204)
+			expect(preflight.headers.get('access-control-allow-origin'), path).toBe('*')
+			expect(preflight.headers.get('access-control-allow-methods'), path).toBe('GET')
+			expect(preflight.headers.get('access-control-allow-headers'), path).toBe('cache-control,pragma')
+		}
+	})
+
+	it('keeps the instance actor, collections and objects closed, as Mastodon does', async () => {
+		const { request } = await instance()
+		for (const path of ['/actor', '/ap/users/Alice/followers', '/ap/users/Alice/outbox']) {
+			const response = await request(path, { headers: { ...ORIGIN, ...AP.headers } })
+			expect(response.headers.get('access-control-allow-origin'), path).toBeNull()
+		}
+	})
+
+	it('opens the profile page only as the actor document, not as HTML (WEB-3)', async () => {
+		const { request } = await instance()
+		const actor = await request('/@Alice', { headers: { ...ORIGIN, ...AP.headers } })
+		expect(actor.headers.get('content-type')).toContain('activity+json')
+		expect(actor.headers.get('access-control-allow-origin')).toBe('*')
+		const page = await request('/@Alice', { headers: { ...ORIGIN, accept: 'text/html' } })
+		expect(page.headers.get('access-control-allow-origin')).toBeNull()
+	})
+})
+
 describe('followers and following collections', () => {
 	it('answers the count with a first page link, and pages of actor ids', async () => {
 		const { json, store } = await instance()

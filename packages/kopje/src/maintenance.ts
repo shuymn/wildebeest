@@ -120,6 +120,8 @@ async function answer(
 
 const ACTOR_PATH = /^\/ap\/users\/[^/]+$/
 const ACCT = /^acct:([^@]+)@([^@]+)$/
+// Actor documents and WebFinger are open to browsers, misses included, as Kopje's (app.ts).
+const OPEN = { 'access-control-allow-origin': '*' }
 
 // The other answers Kopje's dispatchers give that the snapshot can tell exactly, since it holds every local actor:
 //   - WebFinger for acct:<user>@<domain> in any case: the user's answer, its subject the user as asked and the domain
@@ -134,7 +136,7 @@ function answerVariant(request: Request, domain: string, documents: Map<string, 
 		if (!acceptable(request, url)) {
 			return null
 		}
-		return new Response(body('Not Found'), { status: 404, headers: { vary: 'Accept' } })
+		return new Response(body('Not Found'), { status: 404, headers: { vary: 'Accept', ...OPEN } })
 	}
 	if (url.pathname !== '/.well-known/webfinger') {
 		return null
@@ -144,7 +146,7 @@ function answerVariant(request: Request, domain: string, documents: Map<string, 
 	if (resource === null) {
 		return null
 	}
-	const notFound = () => new Response(body('Not Found'), { status: 404 })
+	const notFound = () => new Response(body('Not Found'), { status: 404, headers: OPEN })
 	const acct = ACCT.exec(resource)
 	if (acct !== null) {
 		const [, user, host] = acct as unknown as [string, string, string]
@@ -160,7 +162,7 @@ function answerVariant(request: Request, domain: string, documents: Map<string, 
 		const snapshot = documents.get(canonical)!
 		const answer = JSON.parse(snapshot.body) as Record<string, unknown>
 		return new Response(body(JSON.stringify({ ...answer, subject: `acct:${user}@${domain}` })), {
-			headers: { 'content-type': snapshot.contentType, 'access-control-allow-origin': '*' },
+			headers: { 'content-type': snapshot.contentType, ...OPEN },
 		})
 	}
 	// The instance actor's URI is answered after the import, but its key does not exist yet: 503.

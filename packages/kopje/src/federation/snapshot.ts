@@ -100,11 +100,15 @@ export async function answerFromSnapshot(
 	if (snapshot === null) {
 		return null
 	}
-	// The headers the live answer has: an actor document is negotiated by Accept; WebFinger and NodeInfo are open to
-	// browsers.
-	const headers: Record<string, string> = isActorPath(url)
-		? { 'content-type': snapshot.contentType, vary: 'Accept' }
-		: { 'content-type': snapshot.contentType, 'access-control-allow-origin': '*' }
+	// The headers the live answer has (app.ts): an actor document is negotiated by Accept, and every document but the
+	// instance actor's is open to browsers.
+	const headers: Record<string, string> = { 'content-type': snapshot.contentType }
+	if (isActorPath(url)) {
+		headers.vary = 'Accept'
+	}
+	if (url.pathname !== '/actor') {
+		headers['access-control-allow-origin'] = '*'
+	}
 	return new Response(request.method === 'HEAD' ? null : snapshot.body, { headers })
 }
 

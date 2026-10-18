@@ -932,10 +932,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   Origin check refuses; `same-origin` still sends no referrer to other origins; `src/app/setup.tsx`; `test/setup.test.ts` ("WEB-2, WEB-3, WEB-5: is never cached, framed, scripted
   or opened to other origins").
 - **WEB-3: CORS is open only where no ambient credential exists.** Wildcard CORS without credentials applies to
-  `/api/*`, `/oauth/token`, `/oauth/revoke`, `/oauth/userinfo` (bearer tokens) and
-  `/.well-known/oauth-authorization-server` (public) only. `/oauth/authorize`, `/admin/*`, `/setup` and the
-  web UI send no CORS headers. _Enforced (main):_ `src/app/app.ts`; `test/oauth.test.ts` ("opens the API and token
-  endpoints to browser clients, errors included"). Admin, setup and UI routes: _Planned (B5); `/admin/*` on main sends no CORS headers._
+  `/api/*`, `/oauth/token`, `/oauth/revoke`, `/oauth/userinfo` (bearer tokens), and for GET to the public documents
+  `/.well-known/*`, `/nodeinfo/*` and local actor documents (`/ap/users/:username`), as Mastodon opens them, only.
+  `/oauth/authorize`, `/admin/*`, `/setup` and the web UI send no CORS headers; the profile page `/@:username`, which
+  Mastodon opens, is open only in its ActivityPub form (the actor document), not as HTML. _Enforced (main):_ `src/app/app.ts`; `test/oauth.test.ts` ("opens the API and token
+  endpoints to browser clients, errors included"), `test/federation.test.ts` ("documents open to browsers"). Admin, setup and UI routes: _Planned (B5); `/admin/*` on main sends no CORS headers._
   UI routes: _Implemented on branch `kopje/web-ui`:_ no CORS headers even for a request with a foreign `Origin`; `test/web-pages.test.ts`,
   `test/web-session.test.ts`. `/setup`: _Implemented on branch `kopje/setup`:_ no CORS headers, preflight included;
   `test/setup.test.ts`.
