@@ -324,16 +324,15 @@ export function* partialAccountsOf(
 }
 
 // Admission of accounts (RES-3, admit): the accounts of `ids` in traversal order while their JSON fits `budget`, read
-// in chunks of `chunk`; an id with no account is consumed.
+// in chunks of ANSWER_CHUNK; an id with no account is consumed.
 export function admitAccounts(
 	db: Db,
 	ids: readonly string[],
 	present: Present,
 	budget: number,
-	leading: boolean,
-	chunk = ANSWER_CHUNK
+	leading: boolean
 ): Admitted<Account> {
-	return admit(accountsOf(db, ids, present, chunk), budget, leading)
+	return admit(accountsOf(db, ids, present), budget, leading)
 }
 
 // An account's profile URL. A stored url is used only when it is http(s) (HTML-3); otherwise it is derived from the
