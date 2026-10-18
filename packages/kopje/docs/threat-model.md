@@ -1348,9 +1348,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   _Implemented on branch `kopje/rb1b`_ for answers that present statuses: every Store operation that returns presented
   statuses, accounts or notifications owns one budget of `ANSWER_BYTES` (8 MiB of the answer's JSON, containers
   included) or a stated unit or count bound, listed with its mechanism and continuation in
-  [response-inventory.md](response-inventory.md). Items are admitted whole in traversal order, each read and presented
-  when it is reached (one atomic item, a status with its boosted original and quoted status, per chunk), the first
-  whatever its size, so what is held past the admitted answer is one item at its maximum. Id-cursor status pages
+  [response-inventory.md](response-inventory.md). Items are admitted whole in traversal order, the first whatever its
+  size, each atomic item (a status with its boosted original and quoted status) presented and measured only when it
+  is reached, its rows read in chunks of 4 statuses, so what is held past the admitted answer is one chunk of rows and
+  one item at their maxima ("Heap at 8 MiB per answer"). Id-cursor status pages
   (home, public, hashtag and list timelines, account statuses, bookmarks, favourites, quotes) cut there are `Page.cut`
   and continue from their last admitted status in traversal order, `min_id` walking oldest first; a candidate-window
   continuation is kept only when no status was left out by bytes before it. A context gives the ancestors half,
@@ -1731,16 +1732,19 @@ included, so an answer that admits whole items always fits its first.
 Heap at 8 MiB per answer. Assumptions: one request at a time per isolate; the answer's JSON is at most 8 MiB, since
 every item is below it; presented objects take at most three times their JSON bytes (a string takes no more than its
 JSON bytes, since JSON only adds escapes, and the rest is per-object overhead; an assumption, as workerd exposes no
-heap to measure); rows of one chunk take their SQLite bytes, and the chunk is one item.
+heap to measure); rows of one chunk take their SQLite bytes. A chunk of statuses is 4 items, their rows read together
+and each presented and measured only when admission reaches it (`STATUS_CHUNK` in `src/domain/status-presenter.ts`):
+one item per chunk took a page of 40 ordinary statuses from 10 queries and 0.9 ms to 381 queries and 5.7 ms, and 4
+take it to 109 queries and 2.9 ms. Any other chunk (a conversation, a report) is one item.
 
-| Phase                                                   | Store isolate | Worker isolate |
-| ------------------------------------------------------- | ------------- | -------------- |
-| Rows of one chunk (a conversation, the most bytes read) | 7.9 MB        |                |
-| Presented objects of the admitted answer                | 25.2 MB       |                |
-| Measurement string of one item                          | 6.7 MB        |                |
-| RPC copy (serialized; deserialized in the Worker)       | 8.4 MB        | 25.2 MB        |
-| The Worker's JSON string and the body                   |               | 16.8 MB        |
-| Peak                                                    | 40 MB         | 42 MB          |
+| Phase                                             | Store isolate | Worker isolate |
+| ------------------------------------------------- | ------------- | -------------- |
+| Rows of one chunk (4 boosts of quotes)            | 26.5 MB       |                |
+| Presented objects of the admitted answer          | 25.2 MB       |                |
+| Measurement string of one item                    | 6.7 MB        |                |
+| RPC copy (serialized; deserialized in the Worker) | 8.4 MB        | 25.2 MB        |
+| The Worker's JSON string and the body             |               | 16.8 MB        |
+| Peak                                              | 58 MB         | 42 MB          |
 
 Each isolate stays within half of its 128 MB. One isolate holding both sides at once, the Store's objects alive while
 the Worker's are built, would reach about 76 MB; it stays within half (59 MB) when the Store drops its objects once

@@ -339,9 +339,14 @@ export function presentStatuses(db: Db, ids: readonly VisibleStatusId[], options
 	return presented(present(db, ids, presentationOf(db, ids, options), false))
 }
 
-// Admission of statuses (RES-3, admit): the statuses of `ids` in traversal order, each read and presented as one
-// atomic item (with its boosted original and quoted status) when it is reached, while their JSON fits `budget`, under
-// one presentation. An id with nothing to show is consumed.
+// The statuses whose rows are read together while an answer is admitted: what is read past the budget is at most one
+// chunk of rows at the unit maximum ("Heap at 8 MiB per answer" in docs/threat-model.md); each status is presented
+// and measured on its own, only when admission reaches it.
+const STATUS_CHUNK = 4
+
+// Admission of statuses (RES-3, admit): the statuses of `ids` in traversal order, their rows read STATUS_CHUNK at a
+// time, each presented as one atomic item (with its boosted original and quoted status) when it is reached, while
+// their JSON fits `budget`, under one presentation. An id with nothing to show is consumed.
 export function presentStatusesWithin(
 	db: Db,
 	shared: Presentation,
@@ -350,8 +355,12 @@ export function presentStatusesWithin(
 	leading: boolean
 ): Admitted<Status> {
 	function* each(): Generator<Status | undefined> {
-		for (const id of ids) {
-			yield present(db, [id], shared, false)[0]
+		for (let next = 0; next < ids.length; next += STATUS_CHUNK) {
+			const chunk = ids.slice(next, next + STATUS_CHUNK)
+			const at = hydrate(db, chunk, shared, false)
+			for (const id of chunk) {
+				yield at(id)
+			}
 		}
 	}
 	return admit(each(), budget, leading)
@@ -407,6 +416,18 @@ function present(db: Db, ids: readonly string[], shared: Presentation, own: bool
 	if (ids.length === 0) {
 		return []
 	}
+	const at = hydrate(db, ids, shared, own)
+	return ids.map(at)
+}
+
+// The rows of the statuses of `ids`, read kind by kind, and the presenter of each of them: a status is presented (and
+// matched against the filters) only when asked for.
+function hydrate(
+	db: Db,
+	ids: readonly string[],
+	shared: Presentation,
+	own: boolean
+): (id: string) => Status | undefined {
 	const { options, filters } = shared
 	const viewerId = options.viewer.accountId
 	// The statuses, the originals of the boosts among them that the viewer may see, the quotes of both (R35), and the
@@ -606,10 +627,10 @@ function present(db: Db, ids: readonly string[], shared: Presentation, own: bool
 		return embedded.get(row.id)
 	}
 
-	return ids.map((id) => {
+	return (id) => {
 		const row = byId.get(id)
 		return row === undefined ? undefined : presentRow(row, 'top')
-	})
+	}
 }
 
 // The key of a quoted status's matched text, apart from the same status's as a status of the response.

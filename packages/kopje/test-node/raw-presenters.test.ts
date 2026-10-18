@@ -37,7 +37,7 @@ const LEFT_FOR_RB2: Readonly<Record<string, Readonly<Record<string, number>>>> =
 	'src/domain/notifications.ts': { presentAccountsById: 1, presentStatuses: 1 },
 	'src/domain/reports.ts': { presentAccountsById: 2, presentStatuses: 1 },
 	// present() hydrates the accounts of the ids it is given: a page for presentStatuses until RB2 removes it, then
-	// one atomic item, read through a single-item helper.
+	// one chunk of statuses.
 	'src/domain/status-presenter.ts': { presentAccountsById: 1 },
 }
 

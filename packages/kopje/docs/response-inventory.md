@@ -7,8 +7,8 @@ operation returns and adds nothing to it.
 Mechanisms:
 
 - **Budget**: the answer's JSON is at most `ANSWER_BYTES` (8 MiB, `src/domain/answer-budget.ts`), containers
-  included. Items are admitted whole in traversal order, each read and presented when it is reached (one atomic item
-  per chunk), the first whatever its size (`admit`, `presentStatusesWithin`, `presentAccountsWithin`).
+  included. Items are admitted whole in traversal order, each presented and measured when it is reached, its rows read
+  in small chunks (4 statuses), the first whatever its size (`admit`, `presentStatusesWithin`, `presentAccountsWithin`).
 - **Unit**: one presented unit, at most its maximum ("Maxima of presented units" in `threat-model.md`).
 - **Count**: a fixed number of units whose maxima together stay within `ANSWER_BYTES`.
 - **Count only**: bounded by a count of units, not by bytes. These are the answers RB2 budgets.
@@ -71,7 +71,7 @@ two lists agree).
 | `createReport`                                                                | Unit                                          |                      | RB2   |                                |
 
 The status presenter itself (`src/domain/status-presenter.ts`) imports `presentAccountsById` to hydrate the accounts
-of the ids it is given: a page for `presentStatuses` until RB2 removes it, then one atomic item.
+of the ids it is given: a page for `presentStatuses` until RB2 removes it, then one chunk.
 
 ## ActivityPub
 

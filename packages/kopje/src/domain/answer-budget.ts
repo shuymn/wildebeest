@@ -23,7 +23,8 @@ export type Admitted<T> = { items: T[]; bytes: number; consumed: number; cut: bo
 
 // Admission (RES-3): the items of `entries`, in traversal order, while their JSON, each with a separator, fits
 // `budget`; it stops at the first item that does not fit. Each entry is presented only when it is reached, so what is
-// held past the admitted items is one atomic item. An entry presented as undefined (nothing to show) is consumed.
+// held past the admitted items is the rows of one chunk (presentStatusesWithin) and one presented item. An entry
+// presented as undefined (nothing to show) is consumed.
 // `leading`: the first item is admitted whatever its size, so an answer continued from its last item moves on; every
 // atomic item is below ANSWER_BYTES.
 export function admit<T>(entries: Iterable<T | undefined>, budget: number, leading: boolean): Admitted<T> {
