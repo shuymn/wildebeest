@@ -348,26 +348,21 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 	}
 	/** @param {string} sql */
 	const all = (sql) => /** @type {Json[]} */ (db.prepare(sql).all())
-	// Text as the Worker stores it (src/platform/stored-bounds.ts storedText).
-	/** @param {unknown} value */
-	const stripped = (value) => storedText(text(value))
-	/** @param {unknown} value */
-	const sanitized = (value) => {
-		if (stripped(value).length > REMOTE_HTML_RAW_LIMIT) {
-			overLimit++
-		}
-		return sanitizeRemoteHtml(stripped(value))
-	}
 	// RES-2: a bio and status content within their JSON-byte bounds, as the converter and the Worker store them
-	// (src/security/html.ts); a cut is a truncation too.
+	// (src/security/html.ts), from the text as stored (src/platform/stored-bounds.ts storedText); a cut is a truncation
+	// too.
 	/** @param {unknown} value @param {number} bytes @param {(html: string) => string} within */
 	const sanitizedWithin = (value, bytes, within) => {
-		const whole = sanitized(value)
+		const stored = storedText(text(value))
+		if (stored.length > REMOTE_HTML_RAW_LIMIT) {
+			overLimit++
+		}
+		const whole = sanitizeRemoteHtml(stored)
 		if (jsonStringBytes(whole) <= bytes) {
 			return whole
 		}
 		overLimit++
-		return within(stripped(value))
+		return within(stored)
 	}
 	/** @param {unknown} value */
 	const bio = (value) => sanitizedWithin(value, REMOTE_BIO_BYTES, sanitizeRemoteBio)
