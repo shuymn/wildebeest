@@ -221,28 +221,29 @@ export const ACCOUNT_FROM = 'accounts a LEFT JOIN local_accounts l ON l.account_
 const ANSWER_CHUNK = 50
 
 // The presented accounts of `ids` (accounts' ids), in order, `chunk` at a time, each with its serialized size (and a
-// separator): only the profiles asked for so far are read, so the attachment projection runs for those alone.
+// separator), an id with no account skipped: only the profiles asked for so far are read, so the attachment projection
+// runs for those alone.
 export function accountStream(
 	db: Db,
 	ids: readonly string[],
 	present: Present,
 	chunk = ANSWER_CHUNK
 ): () => { account: Account; bytes: number } | undefined {
-	let next = 0
-	let read: Account[] = []
+	const accounts = accountsOf(db, ids, present, chunk)
 	return () => {
-		while (read.length === 0 && next < ids.length) {
-			read = accountRowsOf(db, ids.slice(next, (next += chunk))).map((row) => presentAccount(row, present))
+		for (let next = accounts.next(); next.done !== true; next = accounts.next()) {
+			if (next.value !== undefined) {
+				return { account: next.value, bytes: jsonBytes(next.value) + 1 }
+			}
 		}
-		const account = read.shift()
-		return account === undefined ? undefined : { account, bytes: jsonBytes(account) + 1 }
+		return undefined
 	}
 }
 
 // The presented accounts of `ids` (accounts' ids, each once), in order, while their serialized bytes stay within
-// `budget`, read in chunks that stop once it is reached. `leading`: the first account is shown whatever its size
-// (RES-2 bounds it), so an answer continued from its last account moves on. `cut`: an account was left out. `bytes`:
-// the admitted accounts' JSON, each with a separator.
+// `budget`, read in chunks that stop once it is reached (admitAccounts). `leading`: the first account is shown whatever
+// its size (RES-2 bounds it), so an answer continued from its last account moves on. `cut`: an account was left out,
+// by the budget or for having none. `bytes`: the admitted accounts' JSON, each with a separator.
 export function presentAccountsWithin(
 	db: Db,
 	ids: readonly string[],
@@ -250,16 +251,7 @@ export function presentAccountsWithin(
 	budget: number,
 	leading: boolean
 ): { items: Account[]; cut: boolean; bytes: number } {
-	const stream = accountStream(db, ids, present)
-	const items: Account[] = []
-	let bytes = 0
-	for (let next = stream(); next !== undefined; next = stream()) {
-		if (bytes + next.bytes > budget && !(leading && items.length === 0)) {
-			break
-		}
-		bytes += next.bytes
-		items.push(next.account)
-	}
+	const { items, bytes } = admitAccounts(db, ids, present, budget, leading)
 	return { items, cut: items.length < ids.length, bytes }
 }
 
