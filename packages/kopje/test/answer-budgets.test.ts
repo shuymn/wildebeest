@@ -695,22 +695,29 @@ describe('the shared filter allowance (RES-3)', () => {
 		const h = await community(['alice'])
 		const { alice } = h.users
 		const author = await remoteAccount(h.store, 'quoting')
-		// 40 statuses of 10,000 code units, each quoting the same status of 10,000: 41 targets share the allowance.
-		const long = (word: string) => `<p>${'y'.repeat(9_993)} ${word}</p>`
-		const quoted = await seedStatus(h.store, { accountId: author, visibility: 'public', content: long('quoted') })
-		const ids: string[] = []
-		for (let i = 0; i < 40; i++) {
-			const id = await seedStatus(h.store, { accountId: author, visibility: 'public', content: long('status') })
-			await sql(
+		// Texts of 10,000 code units, each starting with the keyword, so every one matches.
+		const long = `<p>needle ${'y'.repeat(9_993)}</p>`
+		const quote = async (status: string, target: string) =>
+			sql(
 				h.store,
 				`INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, quoted_account_id, state, updated_at)
 				SELECT ?1, uri, id, account_id, 'accepted', ?3 FROM statuses WHERE id = ?2`,
-				id,
-				quoted,
+				status,
+				target,
 				new Date(NOW).toISOString()
 			)
-			ids.push(id)
+		// A chain: the 40 statuses quote `quoted`, which quotes `first`.
+		const first = await seedStatus(h.store, { accountId: author, visibility: 'public', content: long })
+		const quoted = await seedStatus(h.store, { accountId: author, visibility: 'public', content: long })
+		await quote(quoted, first)
+		const statuses: string[] = []
+		for (let i = 0; i < 40; i++) {
+			const id = await seedStatus(h.store, { accountId: author, visibility: 'public', content: long })
+			await quote(id, quoted)
+			statuses.push(id)
 		}
+		// The quoted status also stands at the top, as the first of a chunk after statuses that quote it.
+		const ids = [...statuses.slice(0, 2), quoted, ...statuses.slice(2)]
 		await h.request('/api/v2/filters', {
 			method: 'POST',
 			headers: { authorization: `Bearer ${alice.token}`, 'content-type': 'application/json' },
@@ -724,12 +731,17 @@ describe('the shared filter allowance (RES-3)', () => {
 			const items = presentStatusesWithin(db, shared, visible, ANSWER_BYTES, true).items
 			return { items, level: shared.level, units: shared.matched.units, whole: presentStatuses(db, visible, options) }
 		})
-		expect(result.items).toHaveLength(40)
+		expect(result.items).toHaveLength(41)
 		expect(result.items).toEqual(result.whole)
-		const [level] = filterTextLimits(Array.from({ length: 41 }, () => 10_000))
+		// Every status matches, and so does each quoted status shown: `quoted` in the 40, `first` in `quoted` at the top.
+		type Shown = { filtered?: unknown[]; quote: { quoted_status?: Shown | null } | null }
+		const matched = (status: Shown | null | undefined) => (status?.filtered ?? []).length > 0
+		const shown = result.items as unknown as Shown[]
+		expect(shown.every((s) => matched(s) && matched(s.quote?.quoted_status))).toBe(true)
+		// 41 statuses and two quoted statuses, each matched once at the level: 43 texts, not 82.
+		const [level] = filterTextLimits(Array.from({ length: 43 }, () => 10_000))
 		expect(result.level).toBe(level)
-		// Each status and the quoted status once: 41 texts at the level, not 80.
-		expect(result.units).toBe(41 * level!)
+		expect(result.units).toBe(43 * level!)
 		expect(result.units).toBeLessThanOrEqual(MAX_FILTER_REQUEST_TEXT)
 	}, 300_000)
 })
