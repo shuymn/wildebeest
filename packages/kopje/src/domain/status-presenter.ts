@@ -354,16 +354,24 @@ export function presentStatusesWithin(
 	budget: number,
 	leading: boolean
 ): Admitted<Status> {
-	function* each(): Generator<Status | undefined> {
-		for (let next = 0; next < ids.length; next += STATUS_CHUNK) {
-			const chunk = ids.slice(next, next + STATUS_CHUNK)
-			const at = hydrate(db, chunk, shared, false)
-			for (const id of chunk) {
-				yield at(id)
-			}
+	return admit(statusStream(db, shared, ids), budget, leading)
+}
+
+// The statuses of `ids` in order, under one presentation, for an admission (admit) of items that embed them: their
+// rows read STATUS_CHUNK at a time, each status presented only when the stream reaches it, undefined for an id with
+// nothing to show. What the stream holds past what its consumer kept is one chunk of rows.
+export function* statusStream(
+	db: Db,
+	shared: Presentation,
+	ids: readonly VisibleStatusId[]
+): Generator<Status | undefined, undefined> {
+	for (let next = 0; next < ids.length; next += STATUS_CHUNK) {
+		const chunk = ids.slice(next, next + STATUS_CHUNK)
+		const at = hydrate(db, chunk, shared, false)
+		for (const id of chunk) {
+			yield at(id)
 		}
 	}
-	return admit(each(), budget, leading)
 }
 
 function presented(statuses: readonly (Status | undefined)[]): Status[] {

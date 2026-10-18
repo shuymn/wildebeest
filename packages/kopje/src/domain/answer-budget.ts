@@ -45,6 +45,22 @@ export function admit<T>(entries: Iterable<T | undefined>, budget: number, leadi
 	return { items, bytes, consumed, cut: false }
 }
 
+// The value of each key as `stream` presents it, the keys (each once) in the order the answer first uses them: each is
+// presented when it is first asked for, and a key used again is answered from what was presented, so an answer whose
+// items share an embedded account or status (notifications, groups) presents and matches it once. What is held is
+// what the answer used so far.
+export function firstUses<T>(keys: readonly string[], stream: Iterator<T | undefined>): (key: string) => T | undefined {
+	const seen = new Map<string, T | undefined>()
+	let next = 0
+	return (key) => {
+		while (!seen.has(key) && next < keys.length) {
+			const result = stream.next()
+			seen.set(keys[next++] ?? '', result.done === true ? undefined : result.value)
+		}
+		return seen.get(key)
+	}
+}
+
 // A page of an id cursor (newest first, as windowPage gives it) whose rows are admitted, the first whatever its size
 // (admit with `leading`), in traversal order: newest first, or oldest first for min_id (`ascending`), shown newest
 // first. Uncut, it is the page as read. Cut by the budget, it is Page.cut and continues from the last admitted row in

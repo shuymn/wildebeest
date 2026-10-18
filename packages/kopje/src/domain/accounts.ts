@@ -1,6 +1,6 @@
 import { followActivity, followAnswerActivity, followUri, recordOutbound, undoFollowActivity } from './activities'
 import { actorSnapshot, recordActorUpdate } from './actor-update'
-import { ANSWER_BYTES, ARRAY_ANSWER_BYTES } from './answer-budget'
+import { admit, type Admitted, ANSWER_BYTES, ARRAY_ANSWER_BYTES } from './answer-budget'
 import {
 	activeMuteJoinSql,
 	availableJoinedSql,
@@ -262,6 +262,87 @@ export function presentAccountsWithin(
 		items.push(next.account)
 	}
 	return { items, cut: items.length < ids.length, bytes }
+}
+
+// The presented accounts of `ids` in order (an id may repeat), for an admission (admit) of items that embed them:
+// read `chunk` at a time as the stream reaches them, undefined for an id with no account. What the stream holds past
+// what its consumer kept is one chunk of accounts at their bound (RES-2).
+export function* accountsOf(
+	db: Db,
+	ids: readonly string[],
+	present: Present,
+	chunk = ANSWER_CHUNK
+): Generator<Account | undefined, undefined> {
+	for (let next = 0; next < ids.length; next += chunk) {
+		const slice = ids.slice(next, next + chunk)
+		const rows = new Map(accountRowsOf(db, [...new Set(slice)]).map((row) => [row.id, row]))
+		for (const id of slice) {
+			const row = rows.get(id)
+			yield row === undefined ? undefined : presentAccount(row, present)
+		}
+	}
+}
+
+// REST::DedupNotificationGroupSerializer::PartialAccountSerializer.
+export type PartialAccount = Pick<Account, 'id' | 'acct' | 'locked' | 'bot' | 'url' | 'avatar' | 'avatar_static'>
+
+type PartialRow = Pick<AccountRow, 'id' | 'uri' | 'username' | 'domain' | 'actor_type' | 'url' | 'avatar_url'> &
+	Pick<AccountRow, 'locked' | 'available'>
+
+// The partial accounts of `ids` in order (an id may repeat), as presentAccount shows those fields, reading only their
+// columns, `chunk` at a time as the stream reaches them; undefined for an id with no account.
+export function* partialAccountsOf(
+	db: Db,
+	ids: readonly string[],
+	present: Present,
+	chunk = ANSWER_CHUNK
+): Generator<PartialAccount | undefined, undefined> {
+	for (let next = 0; next < ids.length; next += chunk) {
+		const slice = ids.slice(next, next + chunk)
+		const rows = new Map(
+			db
+				.all<PartialRow>(
+					`SELECT a.id, ${actorUriSql('a.uri')} AS uri, ${usernameSql('a.username')} AS username, a.domain, a.actor_type,
+						${profileUrlSql('a.url')} AS url, ${profileUrlSql('a.avatar_url')} AS avatar_url, a.locked,
+						${availableJoinedSql('a', 'l')} AS available
+					FROM json_each(?1) c CROSS JOIN accounts a ON a.id = c.value LEFT JOIN local_accounts l ON l.account_id = a.id`,
+					JSON.stringify([...new Set(slice)])
+				)
+				.map((row) => [row.id, row])
+		)
+		for (const id of slice) {
+			const row = rows.get(id)
+			if (row === undefined) {
+				yield undefined
+				continue
+			}
+			const suspended = row.available === 0
+			const avatar =
+				(suspended ? null : boundedHref(row.avatar_url, PROFILE_URL_LIMIT)) ?? `${present.origin}${DEFAULT_AVATAR}`
+			yield {
+				id: row.id,
+				acct: acctOf(row),
+				locked: !suspended && row.locked === 1,
+				bot: !suspended && (row.actor_type === 'Service' || row.actor_type === 'Application'),
+				url: accountUrl(row, present.origin),
+				avatar,
+				avatar_static: avatar,
+			}
+		}
+	}
+}
+
+// Admission of accounts (RES-3, admit): the accounts of `ids` in traversal order while their JSON fits `budget`, read
+// in chunks of `chunk`; an id with no account is consumed.
+export function admitAccounts(
+	db: Db,
+	ids: readonly string[],
+	present: Present,
+	budget: number,
+	leading: boolean,
+	chunk = ANSWER_CHUNK
+): Admitted<Account> {
+	return admit(accountsOf(db, ids, present, chunk), budget, leading)
 }
 
 // An account's profile URL. A stored url is used only when it is http(s) (HTML-3); otherwise it is derived from the

@@ -5,7 +5,7 @@ import {
 	type Page,
 	type PageQuery,
 	type Present,
-	presentAccountsById,
+	presentAccountById,
 	resolveAccountId,
 } from './accounts'
 import { flagActivity, instanceActorUri, recordOutbound } from './activities'
@@ -175,7 +175,7 @@ export const createReport = userWriteOperation<ReportInput, ReportResult>((db, i
 			)
 		}
 	}
-	return { status: 'ok', report: userReport(row, presentAccountsById(db, [target], input.present).get(target)!) }
+	return { status: 'ok', report: userReport(row, presentAccountById(db, target, input.present)!) }
 })
 
 // ReportService#notify_staff! (report_service.rb:44-51) for a report just written, in its transaction: the OAuth admin
@@ -208,28 +208,13 @@ function notifyStaff(db: Db, report: ReportRow, now: number): void {
 	})
 }
 
-// The reporter's Report entities of the reports `ids` (REST::ReportSerializer), by id, with their reported accounts
-// read in one query: an admin.report notification shows its report so (REST::NotificationSerializer#report). An id
-// that names no report is left out.
-export function presentReportsById(db: Db, ids: readonly string[], present: Present): Map<string, Report> {
-	if (ids.length === 0) {
-		return new Map()
-	}
-	const rows = db.all<ReportRow>(
-		`SELECT ${REPORT_COLUMNS} FROM reports WHERE id IN (SELECT CAST(value AS INTEGER) FROM json_each(?))`,
-		JSON.stringify([...new Set(ids)])
-	)
-	const accounts = presentAccountsById(
-		db,
-		rows.map((row) => row.target_account_id),
-		present
-	)
-	return new Map(
-		rows.flatMap((row) => {
-			const target = accounts.get(row.target_account_id)
-			return target === undefined ? [] : [[row.id, userReport(row, target)] as const]
-		})
-	)
+// The reporter's Report entity of report `id` (REST::ReportSerializer), a unit (its reported account and its fields):
+// an admin.report notification shows its report so (REST::NotificationSerializer#report). Undefined for an id that
+// names no report.
+export function presentReport(db: Db, id: string, present: Present): Report | undefined {
+	const row = db.first<ReportRow>(`SELECT ${REPORT_COLUMNS} FROM reports WHERE id = CAST(? AS INTEGER)`, id)
+	const target = row === undefined ? undefined : presentAccountById(db, row.target_account_id, present)
+	return row === undefined || target === undefined ? undefined : userReport(row, target)
 }
 
 export type ReportRow = {
