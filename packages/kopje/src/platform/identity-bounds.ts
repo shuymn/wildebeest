@@ -1,6 +1,7 @@
-// RES-2: the bounds of the identities Kopje stores, an actor's id and a status's uri, in UTF-8 bytes, as the
-// projections measure them (profile-bounds.ts actorUriSql, status-bounds.ts statusUriSql). Ingestion, the cutover's
-// conversion and its verification refuse an identity past them with withinIdentityBound; an identity is never cut.
+// RES-2: the bounds of the identities Kopje stores, an actor's id and a status's uri, in UTF-8 bytes as JSON writes
+// them (escapes included), which bounds the bytes the projections measure too (profile-bounds.ts actorUriSql,
+// status-bounds.ts statusUriSql) and what an identity adds to a presented unit. Ingestion, the cutover's conversion
+// and its verification refuse an identity past them with withinIdentityBound; an identity is never cut.
 // No relative imports: the cutover runs it from the sources on Node (cli/lib/cutover/kopje-runtime.js).
 
 export const ACTOR_URI_LIMIT = 2048
@@ -25,7 +26,7 @@ export function isRemoteUsername(value: string): boolean {
 }
 
 export function withinIdentityBound(value: string, limit: number): boolean {
-	return value.length <= limit && ENCODER.encode(value).length <= limit
+	return value.length <= limit && ENCODER.encode(JSON.stringify(value)).length - 2 <= limit
 }
 
 // Whether an actor id is one Kopje stores: a URL whose serialized form (what ingestion reads from the actor document,
