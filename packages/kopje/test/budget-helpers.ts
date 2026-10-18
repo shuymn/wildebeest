@@ -99,15 +99,9 @@ export async function answer<T = { id: string }[]>(h: ApiHarness, path: string, 
 export type Walked = { ids: string[]; pages: { shown: string[]; bytes: number; cursor: string | null }[] }
 
 // Walks a list by its Link header from `path`: `next` (older, newest first) or `prev` (newer, each page shown newest
-// first, collected oldest first). `keep` is added back to each link (since_id or max_id, which links drop, as
-// Mastodon's). Each page keeps the cursor its link carries.
-export async function walk(
-	h: ApiHarness,
-	path: string,
-	rel: 'next' | 'prev',
-	token?: string,
-	keep = ''
-): Promise<Walked> {
+// first, collected oldest first), following each link as the server returns it. Each page keeps the cursor its link
+// carries.
+export async function walk(h: ApiHarness, path: string, rel: 'next' | 'prev', token?: string): Promise<Walked> {
 	const walked: Walked = { ids: [], pages: [] }
 	for (let at: string | null = path; at !== null;) {
 		const page: Answer<{ id: string }[]> = await answer(h, at, token)
@@ -122,10 +116,37 @@ export async function walk(
 			link === null ? null : new URLSearchParams(link.split('?')[1]).get(rel === 'next' ? 'max_id' : 'min_id')
 		walked.pages.push({ shown, bytes: page.bytes, cursor })
 		walked.ids.push(...(rel === 'next' ? shown : shown.toReversed()))
-		at = link === null ? null : `${link}${keep}`
+		at = link
 		expect(walked.pages.length).toBeLessThan(40)
 	}
 	return walked
+}
+
+// The first page of a bounded request (since_id, or both bounds) cut by the answer budget: a prefix of the uncut
+// answer (`expected`, in traversal order), one more item of `size` past ANSWER_BYTES, and its link in Mastodon's
+// form: the cursor of its last item in traversal order alone (max_id for next, min_id for prev), the request's other
+// bound dropped as Mastodon's pagination_params drops it.
+export async function expectByteCutFirstPage(
+	h: ApiHarness,
+	name: string,
+	path: string,
+	rel: 'next' | 'prev',
+	token: string,
+	expected: readonly string[],
+	size: number,
+	cursorOf: (id: string) => string = (id) => id
+): Promise<void> {
+	const page: Answer<{ id: string }[]> = await answer(h, path, token)
+	expect(page.bytes).toBeLessThanOrEqual(ANSWER_BYTES)
+	const shown = page.body.map((item) => item.id)
+	const traversal = rel === 'next' ? shown : shown.toReversed()
+	expect([name, traversal]).toEqual([name, expected.slice(0, traversal.length)])
+	expect([name, traversal.length < expected.length, page.bytes + size + 1 > ANSWER_BYTES]).toEqual([name, true, true])
+	const link = page[rel]
+	const params = [...new URLSearchParams(link?.split('?')[1] ?? '').keys()].filter((key) => key.endsWith('_id'))
+	expect([name, params]).toEqual([name, [rel === 'next' ? 'max_id' : 'min_id']])
+	const cursor = new URLSearchParams(link!.split('?')[1]).get(params[0]!)
+	expect([name, cursor]).toEqual([name, cursorOf(traversal.at(-1)!)])
 }
 
 // A walk cut by the answer budget: every status once, in order, at least one page cut by bytes (one more status of

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { type ApiHarness, sql } from './api-helpers'
 import { NOW } from './app-helpers'
-import { answer, bigStatus, expectByteCutWalk, walk } from './budget-helpers'
+import { answer, bigStatus, expectByteCutFirstPage, expectByteCutWalk, walk } from './budget-helpers'
 import { community, mute, remoteAccount, seedStatus } from './status-helpers'
 import { ANSWER_BYTES } from '../src/domain/answer-budget'
 
@@ -63,14 +63,8 @@ describe('notification lists within ANSWER_BYTES (RES-3)', () => {
 			expect(first.shown.length).toBeLessThan(10)
 			expect(first.cursor).toBe(rel === 'next' ? first.shown.at(-1) : first.shown[0])
 		}
-		const since = `&since_id=${V[19]!}`
-		expectByteCutWalk(
-			'since',
-			await walk(h, `${path}${since}`, 'next', alice.token, since),
-			V.slice(0, 19),
-			'next',
-			size
-		)
+		// since_id: a cut first page is a prefix of the uncut answer, its link in Mastodon's form.
+		await expectByteCutFirstPage(h, 'since', `${path}&since_id=${V[19]!}`, 'next', alice.token, V.slice(0, 19), size)
 		// The unread count and the marker do not change with admission.
 		const unread = await answer<{ count: number }>(h, '/api/v1/notifications/unread_count', alice.token)
 		expect(unread.body.count).toBe(20)

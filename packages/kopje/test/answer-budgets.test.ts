@@ -10,6 +10,7 @@ import {
 	bigStatus,
 	C,
 	DAY,
+	expectByteCutFirstPage,
 	expectByteCutWalk,
 	maximalAccounts,
 	nextId,
@@ -161,15 +162,14 @@ describe('status pages are answers within ANSWER_BYTES (RES-3)', () => {
 				firstPages.next = older.pages[0]
 				firstPages.prev = newer.pages[0]
 			}
-			// since_id walks newest first above its bound; with max_id, between both, either way.
-			const since = `&since_id=${w.small.at(-1)!}`
-			expectByteCutWalk(name, await walk(h, `${path}${since}`, 'next', alice.token, since), V, 'next', size)
-			const below = `&since_id=${V[19]!}`
-			const down = await walk(h, `${path}&max_id=${V[0]!}${below}`, 'next', alice.token, below)
-			expectByteCutWalk(`${name} between`, down, inner, 'next', size)
-			const above = `&max_id=${V[0]!}`
-			const up = await walk(h, `${path}&min_id=${V[19]!}${above}`, 'prev', alice.token, above)
-			expectByteCutWalk(`${name} between`, up, inner.toReversed(), 'prev', size)
+			// since_id reads newest first above its bound; with max_id, between both, either way: a cut first page is a
+			// prefix of the uncut answer, its link in Mastodon's form.
+			const token = alice.token
+			await expectByteCutFirstPage(h, name, `${path}&since_id=${w.small.at(-1)!}`, 'next', token, V, size)
+			const down = `${path}&max_id=${V[0]!}&since_id=${V[19]!}`
+			await expectByteCutFirstPage(h, `${name} between`, down, 'next', token, inner, size)
+			const up = `${path}&min_id=${V[19]!}&max_id=${V[0]!}`
+			await expectByteCutFirstPage(h, `${name} between`, up, 'prev', token, inner.toReversed(), size)
 		}
 		// The public timeline's first pages from either end: ten big statuses passed in a window cut at muted statuses
 		// (B0b), cut by bytes before them, so the link continues from the last one shown, not from the window's end.
@@ -188,14 +188,13 @@ describe('status pages are answers within ANSWER_BYTES (RES-3)', () => {
 			expectByteCutWalk(name, await walk(h, path, 'next', alice.token), V, 'next', size, cursorOf)
 			const ascending = await walk(h, `${path}&min_id=0`, 'prev', alice.token)
 			expectByteCutWalk(name, ascending, V.toReversed(), 'prev', size, cursorOf)
+			const token = alice.token
 			const since = `&since_id=${cursorOf(V[19]!)}`
-			const above = await walk(h, `${path}${since}`, 'next', alice.token, since)
-			expectByteCutWalk(name, above, V.slice(0, 19), 'next', size, cursorOf)
-			const down = await walk(h, `${path}&max_id=${cursorOf(V[0]!)}${since}`, 'next', alice.token, since)
-			expectByteCutWalk(`${name} between`, down, inner, 'next', size, cursorOf)
-			const max = `&max_id=${cursorOf(V[0]!)}`
-			const up = await walk(h, `${path}&min_id=${cursorOf(V[19]!)}${max}`, 'prev', alice.token, max)
-			expectByteCutWalk(`${name} between`, up, inner.toReversed(), 'prev', size, cursorOf)
+			await expectByteCutFirstPage(h, name, `${path}${since}`, 'next', token, V.slice(0, 19), size, cursorOf)
+			const down = `${path}&max_id=${cursorOf(V[0]!)}${since}`
+			await expectByteCutFirstPage(h, `${name} between`, down, 'next', token, inner, size, cursorOf)
+			const up = `${path}&min_id=${cursorOf(V[19]!)}&max_id=${cursorOf(V[0]!)}`
+			await expectByteCutFirstPage(h, `${name} between`, up, 'prev', token, inner.toReversed(), size, cursorOf)
 		}
 	}, 600_000)
 
