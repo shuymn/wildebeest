@@ -106,7 +106,7 @@ describe('grouped notifications within ANSWER_BYTES (RES-3)', () => {
 		const [first] = await sql<{ status_id: string }>(
 			h.store,
 			'SELECT status_id FROM notifications WHERE id = ?',
-			ids[0]
+			ids[0]!
 		)
 		const size = await groupBytes(h, alice, `favourite-${first!.status_id}-1`)
 		const unread = await answer<{ count: number }>(h, '/api/v2/notifications/unread_count', alice.token)
