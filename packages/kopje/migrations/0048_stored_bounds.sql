@@ -17,8 +17,14 @@
 -- escape past. The statements below are the output of storedBoundsMigrationSql (test/migrations.test.ts compares them).
 -- Recovery of a rewritten value: the point-in-time bookmark the kernel records before the upgrade (docs/upgrade.md).
 --
--- Cost: one pass over each of the four tables, rewriting only rows past a bound, and four pairs of triggers.
--- MEASUREMENT
+-- Cost: one pass over each of the four tables, rewriting only rows past a bound, and four pairs of triggers, which
+-- read no row when made. Measured on the benchmark store of test/bench/migration-cost.ts (1,000,000 accounts,
+-- 2,000,000 statuses, 500,000 media attachments, 100,000 earlier versions, the rows past their bounds it adds for this
+-- file, and the rest of that store) in workerd's local Durable Object SQLite: 7,262 ms for the upgrade of this file
+-- through the kernel (7,283 and 7,459 ms in two more runs, at load averages of 2.5 to 4), within the 10,000 ms each
+-- migration file may take. A file of one SELECT in its place on the same store measured 14,425 and 16,479 ms (load
+-- average 3 to 5), likely because this file's passes leave the pages the upgrade's verification reads in the cache;
+-- its own work is not separable from that overhead there.
 
 CREATE TABLE stored_bounds_check (
   n INTEGER CONSTRAINT tokened_media_url_within_2048_bytes CHECK (n = 0)

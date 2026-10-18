@@ -23,6 +23,19 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   source text and media descriptions, from remote servers and from the API alike. Display names are cut at 2,048 and
   media descriptions at 10,000 code points, as Mastodon counts them, where they were cut by UTF-16 code units.
 - A post whose text is only U+0000 is refused as blank, as an edit is.
+- The upgrade (migration `0048_stored_bounds`) rewrites stored values past their bounds to what the API already
+  shows, and keeps no copy:
+    - content, source text and bios past their JSON bounds become empty; content warnings are cut to 2,730 code
+      points, display names to 2,048 and media descriptions to 10,000;
+    - profile, status and media URLs past their bounds become null (a media URL becomes empty), as does a media meta
+      past 1,024 bytes;
+    - the content, content warning and poll choices of earlier versions change the same way.
+
+  From then on the Store refuses a write of such a value. A local status stored past a bound now shows the same value
+  in its ActivityPub Note as in the API. To recover a rewritten value, restore the point-in-time bookmark taken before
+  the upgrade (it restores the whole database, within the last 30 days; see [docs/upgrade.md](docs/upgrade.md)); for
+  a remote row, re-derive it from its stored `raw` document (refetching does not restore content); for a converted
+  row, run the conversion again from the legacy export.
 - `kopje-admin convert` stores display names, profile, status and media URLs, media descriptions and the attachments
   of earlier versions as the Worker stores them, which is what the API already showed: a URL past its bound becomes
   empty (null for a profile or status URL), a long text is cut, and U+0000 is removed from text. Each change is
@@ -34,6 +47,18 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - NodeInfo, the other `/.well-known` documents and local actor documents can be read by browser clients on other
   origins (GET, and its preflight), as Mastodon allows. Elk's NodeInfo request no longer fails with a CORS error. The
   profile page stays closed to other origins as HTML.
+
+### Instance changes
+
+- Store schema: adds one migration, applied on the first request after the deploy; a rollback to an earlier version
+  needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
+    - `0048_stored_bounds`: rewrites stored values past their bounds (above) and adds the triggers that refuse them.
+      It reads each account, status, media attachment and earlier version once: on a benchmark store of 1,000,000
+      accounts, 2,000,000 statuses, 500,000 media attachments and 100,000 earlier versions its upgrade took 7.3
+      seconds (7.3 and 7.5 in two more runs) in workerd's local Durable Object SQLite. The upgrade fails, and
+      the Store stays readonly and unchanged, with `CHECK constraint failed: tokened_media_url_within_2048_bytes` if
+      the URL of an uploaded media file passes 2,048 bytes, which Kopje never builds: report it.
+- `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.16] - 2026-10-18
 
