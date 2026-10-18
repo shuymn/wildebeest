@@ -284,8 +284,8 @@ export const NOTIFICATION_COLUMNS = {
 	report_id: 'CAST(n.report_id AS TEXT)',
 }
 
-// Notifications are read this many at a time while an answer is admitted: their accounts and statuses (and reports,
-// one at a time) are read for this many rows together.
+// Notifications are read this many at a time while an answer is admitted: their accounts (and reports, one at a time)
+// are read for this many rows together, their statuses in the chunks statusStream plans.
 export const NOTIFICATION_CHUNK = 2
 
 // The notifications of `rows` in order, for an admission (admit): each one atomic, with its account, its status and its

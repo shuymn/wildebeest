@@ -97,7 +97,7 @@ const maximal = (i: number): Profile => ({
 	header: atLimit(`https://max.example/h${i}/`),
 	attachment: maxFields(),
 })
-// What one such account is at most as read from SQLite and as serialized (ACCOUNT_COLUMNS's comment).
+// What one such account is at most as read from SQLite and as serialized (ACCOUNT_COLUMN_MAP's comment).
 const READ_MAX = 115_000
 const SHOWN_MAX = 125_000
 

@@ -12,7 +12,8 @@ import { allocateLocalId } from './ids'
 import { DETACHED_GRACE_MS } from './media'
 import { writeOperation } from './operation'
 import { checkPoll, isPollInput, type PollInput } from './polls'
-import { MEDIA_COLUMNS, type MediaAttachment, type MediaRow, presentMedia, type Status } from './status-presenter'
+import { type MediaAttachment, type MediaRow, presentMedia, type Status } from './status-presenter'
+import { MEDIA_COLUMN_MAP } from './status-rows'
 import {
 	ABOVE_EVERY_ID,
 	BELOW_EVERY_ID,
@@ -27,6 +28,7 @@ import {
 	statusCursor,
 	writePost,
 } from './statuses'
+import { selectSql } from '../db/columns'
 import type { Db } from '../db/sql'
 
 // Scheduled statuses (Mastodon 4.5's ScheduledStatus, PostStatusService#schedule_status!,
@@ -88,7 +90,7 @@ const COLUMNS = 'ss.id, ss.scheduled_at, ss.params'
 
 function presentScheduled(db: Db, row: ScheduledRow): ScheduledStatus {
 	const media = db.all<MediaRow>(
-		`SELECT ${MEDIA_COLUMNS} FROM media_attachments WHERE scheduled_status_id = ? ORDER BY position`,
+		`SELECT ${selectSql(MEDIA_COLUMN_MAP)} FROM media_attachments m WHERE m.scheduled_status_id = ? ORDER BY m.position`,
 		row.id
 	)
 	return {

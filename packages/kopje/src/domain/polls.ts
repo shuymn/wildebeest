@@ -5,6 +5,7 @@ import { optionalUserReadOperation, userWriteOperation } from './auth'
 import { notify } from './notifications'
 import { writeOperation } from './operation'
 import { MAX_REMOTE_OPTION_LENGTH, MAX_REMOTE_OPTIONS, pollOptionsSql } from './status-bounds'
+import { type ColumnMap, fixedColumns, selectSql } from '../db/columns'
 import type { Db } from '../db/sql'
 
 // Polls (Mastodon 4.5's Poll, PollVote, VoteService, Api::V1::PollsController and Polls::VotesController,
@@ -275,8 +276,29 @@ type PollRow = {
 	voters_count: number | null
 }
 
-const POLL_COLUMNS = `p.status_id, s.account_id, ${pollOptionsSql('p.options')} AS options, p.tallies, p.multiple, p.hide_totals, p.expires_at,
-	p.votes_count, p.voters_count`
+export const POLL_COLUMN_MAP = {
+	status_id: 'p.status_id',
+	account_id: 's.account_id',
+	options: pollOptionsSql('p.options'),
+	tallies: 'p.tallies',
+	multiple: 'p.multiple',
+	hide_totals: 'p.hide_totals',
+	expires_at: 'p.expires_at',
+	votes_count: 'p.votes_count',
+	voters_count: 'p.voters_count',
+} as const satisfies ColumnMap
+
+export const POLL_FROM = 'polls p JOIN statuses s ON s.id = p.status_id'
+
+// A viewer's own vote: a poll id and a choice.
+export const OWN_VOTE_COLUMNS = fixedColumns({ poll_id: 'v.poll_id', choice: 'v.choice' }, { poll_id: 18, choice: 0 })
+
+// How many votes `viewer` cast in the current generation of the poll of `status`, which presentPolls reads as their
+// own: for the bound of the rows a presentation reads (statusRowBoundSql in status-rows.ts).
+export function ownVoteCountSql(status: string, viewer: string): string {
+	return `(SELECT count(*) FROM polls p JOIN poll_votes v ON v.poll_id = p.status_id AND v.generation = p.generation
+		AND v.account_id = ${viewer} WHERE p.status_id = ${status})`
+}
 
 function presentPoll(row: PollRow, viewer: { id: string | null; votes: number[] }, now: string): Poll {
 	const expired = hasEnded(row.expires_at, now)
@@ -315,7 +337,8 @@ export function presentPolls(
 	}
 	const ids = JSON.stringify(statusIds)
 	const rows = db.all<PollRow>(
-		`SELECT ${POLL_COLUMNS} FROM json_each(?1) j CROSS JOIN polls p ON p.status_id = j.value JOIN statuses s ON s.id = p.status_id
+		`SELECT ${selectSql(POLL_COLUMN_MAP)} FROM json_each(?1) j CROSS JOIN polls p ON p.status_id = j.value
+			JOIN statuses s ON s.id = p.status_id
 		WHERE p.removed = 0`,
 		ids
 	)
@@ -324,9 +347,10 @@ export function presentPolls(
 	}
 	const votes = new Map<string, number[]>()
 	if (viewerId !== null) {
-		// The viewer's votes of each poll's current generation only.
+		// The viewer's votes of each poll's current generation only, in the order they were cast. The sort holds ids
+		// and choices only, no payload.
 		for (const vote of db.all<{ poll_id: string; choice: number }>(
-			`SELECT v.poll_id, v.choice FROM json_each(?2) j CROSS JOIN polls p ON p.status_id = j.value
+			`SELECT ${selectSql(OWN_VOTE_COLUMNS.columns)} FROM json_each(?2) j CROSS JOIN polls p ON p.status_id = j.value
 				CROSS JOIN poll_votes v ON v.poll_id = p.status_id AND v.generation = p.generation AND v.account_id = ?1
 			ORDER BY v.id`,
 			viewerId,

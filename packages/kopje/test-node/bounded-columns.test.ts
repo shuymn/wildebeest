@@ -12,8 +12,9 @@ import { describe, expect, it } from 'vitest'
 //   a helper call's argument is the helper's. Comparing is naming it anywhere else: WHERE, ON, ORDER BY, GROUP BY, a
 //   write's SET or VALUES. INSERT ... SELECT copies values inside SQLite, so its SELECT is no read.
 // - A SQL string is a string or template literal naming SELECT or RETURNING. An interpolated constant of the module
-//   (or of another src/domain module, by its unique name) is inlined, so ACCOUNT_COLUMNS and STATUS_FROM are read
-//   where they are used; a helper call (by its own name) is a bounded value.
+//   (or of another src/domain module, by its unique name) is inlined, so STATUS_FROM is read where it is used; a
+//   helper call (by its own name) is a bounded value. A column map's select list (`selectSql`, src/db/columns.ts) is
+//   read where the map names its columns: each value is a property value, so a raw bounded column there is a finding.
 // - Fail closed: any other interpolation inside a result list or RETURNING is a finding (`interpolation <expression>`)
 //   unless it names a builder of SAFE_INTERPOLATIONS, so neither an import alias nor an interpolated string hides a
 //   column; so are a string with SQL keywords joined by `+` (`concatenated SQL`) and a bounded column named as a
@@ -454,7 +455,15 @@ const SAFE_INTERPOLATIONS = new Set([
 	'participantsSql',
 	'pendingAppsSql',
 	'quotePolicySql',
+	// A quoted status's id.
+	'quotedStatusIdSql',
 	'REQUIRES_MENTION_SQL',
+	// The heap of one row of a column map, a number.
+	'rowHeapSql',
+	// A column map's select list: its values are checked where the map names them (`column <alias.column>`).
+	'selectSql',
+	// As rowHeapSql: the heap of the rows one status reads (status-rows.ts), a number.
+	'statusRowTerms',
 	'suspendedSql',
 	'visibleSql',
 ])

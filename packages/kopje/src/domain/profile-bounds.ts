@@ -1,10 +1,10 @@
 import { ACTOR_URI_LIMIT, REMOTE_USERNAME_LIMIT } from '../platform/identity-bounds'
 import { cutSql } from '../platform/stored-bounds'
 
-// RES-2: the bounds of the profile columns a remote server controls, as ACCOUNT_COLUMNS (accounts.ts) and every other
-// read that presents them take them. Each bounded column is read through its helper here (test-node/
+// RES-2: the bounds of the profile columns a remote server controls, as ACCOUNT_COLUMN_MAP (accounts.ts) and every
+// other read that presents them take them. Each bounded column is read through its helper here (test-node/
 // bounded-columns.test.ts). It imports only leaves (platform/identity-bounds.ts, platform/stored-bounds.ts), so modules
-// that build SQL at load (status-presenter.ts) can use it whatever the import order. The stored bounds and their
+// that build SQL at load (status-rows.ts) can use it whatever the import order. The stored bounds and their
 // projections live in platform/stored-bounds.ts.
 
 export {

@@ -303,7 +303,8 @@ describe('status pages are answers within ANSWER_BYTES (RES-3)', () => {
 		})
 		expect(one.result).toBe(1)
 		expect(page.result).toBeLessThan(w.V.length)
-		// Rows are read 2 statuses at a time (STATUS_CHUNK): the chunks up to the first rejected status, no more.
+		// Rows are read in chunks planned by R (PAGE_CHUNKS), at most two of these statuses each: the chunks up to the
+		// first rejected status, no more.
 		const chunks = Math.ceil((page.result + 1) / 2)
 		expect(page.largest).toBeLessThanOrEqual(2 * one.largest * 1.01)
 		expect(page.bytes).toBeLessThanOrEqual(chunks * 2 * one.bytes * 1.01)
