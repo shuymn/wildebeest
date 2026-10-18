@@ -1,11 +1,4 @@
-import {
-	type Account,
-	findAccountIds,
-	type Present,
-	presentAccountsWithin,
-	resolveAccountId,
-	type SearchInput,
-} from './accounts'
+import { type Account, findAccountIds, type Present, presentAccountsWithin, resolveAccountId } from './accounts'
 import { admit, ANSWER_BYTES, jsonBytes } from './answer-budget'
 import { findableBySql, listableSql, statusReads } from './audience'
 import { type UserContext, userReadOperation } from './auth'
@@ -71,18 +64,10 @@ export type SearchResults = { accounts: Account[]; statuses: Status[]; hashtags:
 const SEARCH_FRAME_BYTES = jsonBytes({ accounts: [], statuses: [], hashtags: [] } satisfies SearchResults)
 
 export const search = userReadOperation<SearchRequest, SearchResults>((db, input, _viewer, context) => {
-	const accountInput: SearchInput = {
-		query: input.query,
-		limit: input.limit,
-		offset: input.offset,
-		following: input.following,
-		localDomain: input.localDomain,
-		present: input.present,
-	}
 	let left = ANSWER_BYTES - SEARCH_FRAME_BYTES
 	let leading = true
 	const accounts = input.types.includes('accounts')
-		? presentAccountsWithin(db, accountIds(db, input, accountInput, context), input.present, left, leading)
+		? presentAccountsWithin(db, accountIds(db, input, context), input.present, left, leading)
 		: { items: [], bytes: 0 }
 	left -= accounts.bytes
 	leading &&= accounts.items.length === 0
@@ -97,8 +82,8 @@ export const search = userReadOperation<SearchRequest, SearchResults>((db, input
 
 // The accounts' ids: the account resolve=true found, when the viewer may find it (findableBySql, R14), then the
 // search's own, within the limit.
-function accountIds(db: Db, input: SearchRequest, accountInput: SearchInput, viewer: UserContext): string[] {
-	const found = findAccountIds(db, accountInput, viewer.accountId)
+function accountIds(db: Db, input: SearchRequest, viewer: UserContext): string[] {
+	const found = findAccountIds(db, input, viewer.accountId)
 	const resolved = input.resolvedAccountId
 	if (
 		resolved === undefined ||

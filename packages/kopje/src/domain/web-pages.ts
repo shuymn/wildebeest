@@ -1,13 +1,6 @@
-import {
-	type Account,
-	ACCOUNT_COLUMNS,
-	ACCOUNT_FROM,
-	type AccountRow,
-	type Present,
-	presentAccountById,
-} from './accounts'
+import { type Account, ACCOUNT_FROM, type Present, presentAccountById } from './accounts'
 import { ANSWER_BYTES, jsonBytes } from './answer-budget'
-import { DISTRIBUTABLE_SQL, NOT_A_REPLY_TO_OTHERS, statusReads, viewableStatusId } from './audience'
+import { availableJoinedSql, DISTRIBUTABLE_SQL, NOT_A_REPLY_TO_OTHERS, statusReads, viewableStatusId } from './audience'
 import { readOperation } from './operation'
 import { presentation, presentStatus, presentStatusesWithin, type Status } from './status-presenter'
 import { isHashtagName } from './status-text'
@@ -43,8 +36,9 @@ export const profilePage = readOperation<
 	if (tag !== null && !isHashtagName(tag)) {
 		return { status: 'not_found' }
 	}
-	const row = db.first<AccountRow>(
-		`SELECT ${ACCOUNT_COLUMNS} FROM ${ACCOUNT_FROM} WHERE a.domain IS NULL AND lower(a.username) = lower(?)`,
+	const row = db.first<{ id: string; available: number }>(
+		`SELECT a.id, ${availableJoinedSql('a', 'l')} AS available FROM ${ACCOUNT_FROM}
+		WHERE a.domain IS NULL AND lower(a.username) = lower(?)`,
 		username
 	)
 	if (row === undefined) {

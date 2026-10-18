@@ -668,13 +668,13 @@ export const accountStatuses = optionalUserReadOperation<AccountStatusesInput, P
 				tagged,
 				now
 			)
-			const shown = cursor.ascending ? rows.toReversed() : rows
-			const ids = shown.map((row) => row.id)
 			// Pinned answers carry no paging links (RES-3): a status-id cursor cannot follow pin order, so a link would
 			// repeat or skip pins, and pins are few and fetched in one request. `limit` caps the count, a client's bounds
-			// stay Mastodon's status-id bounds, and the answer budget keeps the pins that fit, in pin order.
-			const page = { newest: null, oldest: null }
-			return { items: presentedPage(db, viewer, page, ids, ids, cursor.ascending, input.present).items, ...page }
+			// stay Mastodon's status-id bounds, and the answer budget keeps the pins that fit, in traversal order.
+			const ids = rows.map((row) => row.id)
+			const shared = presentation(db, ids, { ...input.present, viewer })
+			const { items } = presentStatusesWithin(db, shared, ids, ARRAY_ANSWER_BYTES, true)
+			return { items: cursor.ascending ? items.toReversed() : items, newest: null, oldest: null }
 		}
 		// A readWindow(limit) window through statuses_account with the request's filters and audienceSql, then R2 and
 		// R11 over it (availability and filters of boosted originals). Statuses hidden by their visibility are walked
