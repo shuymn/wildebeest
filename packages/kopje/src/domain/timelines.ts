@@ -1,4 +1,5 @@
 import { edgeRangeSql, type Page, type PageQuery, type Present, resolveAccountId } from './accounts'
+import { admittedPage, ARRAY_ANSWER_BYTES } from './answer-budget'
 import {
 	audienceSql,
 	blocksSql,
@@ -9,11 +10,12 @@ import {
 	type StatusRule,
 	statusReads,
 	type ViewerContext,
+	type VisibleStatusId,
 	visibleSql,
 } from './audience'
 import { optionalUserReadOperation, type UserContext, userReadOperation } from './auth'
 import { holdingSql, ownList, type RepliesPolicy } from './lists'
-import { presentStatuses, type Status } from './status-presenter'
+import { presentation, presentStatusesWithin, type Status } from './status-presenter'
 import { statusCursor } from './statuses'
 import { normalizeTag } from './tag-name'
 import { mergedWindow, readWindow, singleWindow, streamWindow, type Window, windowJson, windowPage } from './windows'
@@ -23,7 +25,8 @@ import type { Db } from '../db/sql'
 // bookmarks and favourites, by the edge's INTEGER id. A page reads a candidate window from its cursor (windows.ts,
 // docs/visibility.md "Read bounds") and applies the audience rule to those candidates (statusReads in audience.ts),
 // so its ids are ones the presenter accepts and a range the rule hides costs a window, not its length. The feed
-// condition is the visibility list the partial index statuses_feed declares (REACHES_FOLLOWERS_SQL).
+// condition is the visibility list the partial index statuses_feed declares (REACHES_FOLLOWERS_SQL). A page is one
+// answer within ANSWER_BYTES (RES-3, admittedPage): cut there, it is Page.cut and continues from its last status.
 
 const FEED = `s.visibility IN ${REACHES_FOLLOWERS_SQL}`
 
@@ -77,16 +80,33 @@ function windowStatuses(
 					...params
 				)
 	const page = windowPage(window, passed, (row) => row.id, cursor.limit, cursor.ascending)
-	return {
-		items: presentStatuses(
+	return presentedPage(db, viewer, page, cursor.ascending, present)
+}
+
+// A page of statuses (`rows`, newest first, each with its cursor) presented within the answer budget, admitted in
+// traversal order (admittedPage).
+function presentedPage<R extends { id: VisibleStatusId }>(
+	db: Db,
+	viewer: ViewerContext,
+	page: { rows: readonly R[]; newest: string | null; oldest: string | null; cut?: boolean },
+	ascending: boolean,
+	present: Present,
+	key: (row: R) => string = (row) => row.id
+): Page<Status> {
+	const shared = presentation(
+		db,
+		page.rows.map((row) => row.id),
+		{ ...present, viewer }
+	)
+	return admittedPage(page, ascending, key, (traversal) =>
+		presentStatusesWithin(
 			db,
-			page.rows.map((row) => row.id),
-			{ ...present, viewer }
-		),
-		newest: page.newest,
-		oldest: page.oldest,
-		cut: page.cut,
-	}
+			shared,
+			traversal.map((row) => row.id),
+			ARRAY_ANSWER_BYTES,
+			true
+		)
+	)
 }
 
 // The stream bits of home's candidates (Window.o), and what each needs beyond the rule: the viewer's own pass; a
@@ -639,15 +659,14 @@ export const accountStatuses = optionalUserReadOperation<AccountStatusesInput, P
 				tagged,
 				now
 			)
-			const ids = rows.map((row) => row.id)
-			if (cursor.ascending) {
-				ids.reverse()
-			}
-			return {
-				items: presentStatuses(db, ids, { ...input.present, viewer }),
-				newest: ids[0] ?? null,
-				oldest: ids.at(-1) ?? null,
-			}
+			const shown = cursor.ascending ? rows.toReversed() : rows
+			return presentedPage(
+				db,
+				viewer,
+				{ rows: shown, newest: shown[0]?.id ?? null, oldest: shown.at(-1)?.id ?? null },
+				cursor.ascending,
+				input.present
+			)
 		}
 		// A readWindow(limit) window through statuses_account with the request's filters and audienceSql, then R2 and
 		// R11 over it (availability and filters of boosted originals). Statuses hidden by their visibility are walked
@@ -746,16 +765,7 @@ function edgeList(table: 'bookmarks' | 'favourites') {
 							windowJson(window)
 						)
 			const shown = windowPage(window, passed, (row) => row.cursor, page.limit, ascending)
-			return {
-				items: presentStatuses(
-					db,
-					shown.rows.map((row) => row.id),
-					{ ...present, viewer }
-				),
-				newest: shown.newest,
-				oldest: shown.oldest,
-				cut: shown.cut,
-			}
+			return presentedPage(db, viewer, shown, ascending, present, (row) => row.cursor)
 		}
 	)
 }
