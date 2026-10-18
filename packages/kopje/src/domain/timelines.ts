@@ -648,19 +648,7 @@ export const accountStatuses = optionalUserReadOperation<AccountStatusesInput, P
 			${input.excludeReplies ? `AND ${NOT_A_REPLY_TO_OTHERS}` : ''}
 			${input.excludeReblogs ? 'AND s.reblog_of_id IS NULL' : ''}`
 		if (input.pinned) {
-			// An account pins at most a few statuses, read through their primary key: no window. Newest pin first, a
-			// max_id that names one of the account's pins continues below it in that order (the continuation of a page cut
-			// by the answer budget, admittedPage); any other max_id bounds the status id, as Mastodon's does.
-			const pin =
-				cursor.ascending || cursor.max === null
-					? undefined
-					: db.first<{ created_at: string }>(
-							'SELECT created_at FROM status_pins WHERE account_id = ?1 AND status_id = ?2',
-							accountId,
-							cursor.max
-						)
-			const range =
-				pin === undefined ? rangeSql('s.id') : '(p.created_at < ?8 OR (p.created_at = ?8 AND s.id < ?2)) AND s.id > ?3'
+			// An account pins at most a few statuses, read through their primary key: no window.
 			const rows = statusReads(viewer, { viewer: '?1', now: '?7' }).select(
 				db,
 				'visible',
@@ -670,7 +658,7 @@ export const accountStatuses = optionalUserReadOperation<AccountStatusesInput, P
 					where: 'p.account_id = ?5 AND s.account_id = ?5',
 					and: `NOT ${blocksSql('?1', 's.account_id')} AND ${originalShownSql('?1', '?7')} ${filters}
 						AND (?6 IS NULL OR EXISTS (SELECT 1 FROM status_tags ut WHERE ut.status_id = s.id AND ut.name = ?6))
-						AND ${range}`,
+						AND ${rangeSql('s.id')}`,
 					tail: `ORDER BY ${cursor.ascending ? '' : 'p.created_at DESC, '}s.id ${order} LIMIT ?4`,
 				},
 				viewerId,
@@ -678,8 +666,7 @@ export const accountStatuses = optionalUserReadOperation<AccountStatusesInput, P
 				cursor.limit,
 				accountId,
 				tagged,
-				now,
-				...(pin === undefined ? [] : [pin.created_at])
+				now
 			)
 			const shown = cursor.ascending ? rows.toReversed() : rows
 			const ids = shown.map((row) => row.id)
