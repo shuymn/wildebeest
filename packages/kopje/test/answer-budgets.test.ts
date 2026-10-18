@@ -119,6 +119,8 @@ async function walk(
 
 type World = Awaited<ReturnType<typeof world>>
 
+const run = (kind: 'V' | 'M', n: number) => Array.from({ length: n }, () => kind)
+
 // Alice, a remote author of twelve big statuses (V[0] newest), tagged #big, which alice follows, lists, bookmarks and
 // favourites; and a muted author whose 135 small public statuses lie between them, newest first: V[0..9], 115 muted,
 // V[10..11], 20 muted. A public page of 40 reads a window of 120 candidates, so its first window ends in muted
@@ -129,7 +131,7 @@ async function world() {
 	const author = await remoteAccount(h.store, 'big')
 	const muted = await remoteAccount(h.store, 'muted')
 	await mute(h.store, alice.id, muted)
-	const kinds = ['V', ...Array(9).fill('V'), ...Array(115).fill('M'), 'V', 'V', ...Array(20).fill('M')].toReversed()
+	const kinds = [...run('V', 10), ...run('M', 115), ...run('V', 2), ...run('M', 20)].toReversed()
 	const big: string[] = []
 	const small: string[] = []
 	for (const [i, kind] of kinds.entries()) {
