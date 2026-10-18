@@ -89,15 +89,26 @@ export function movedCountSql(table: string): string {
 		.join(' OR ')}`
 }
 
-// What 0048_stored_bounds stores for each covered column of `table` (its projection, or '' for a media URL), by rowid.
+// The bytes of `value` as SQLite stores it, in hex, and NULL for NULL: values compare by bytes, not as decoded text.
+const bytesSql = (value: string) => `CASE WHEN (${value}) IS NOT NULL THEN hex(CAST((${value}) AS BLOB)) END`
+
+// What 0048_stored_bounds stores for each covered column of `table` (its projection, or '' for a media URL), by rowid,
+// as bytes.
 export function storedSql(table: string): string {
 	const columns = STORED_COLUMNS[table] ?? []
-	const values = columns.map((c) => `(${(c.stored ?? c.projection)(c.column)}) AS ${c.column}`)
+	const values = columns.map((c) => `${bytesSql((c.stored ?? c.projection)(c.column))} AS ${c.column}`)
 	return `SELECT rowid AS r, ${values.join(', ')} FROM ${table} ORDER BY rowid`
 }
 
-// The covered columns of `table` as stored, by rowid.
+// The covered columns of `table` as stored, by rowid, as bytes.
 export function columnsSql(table: string): string {
+	const columns = STORED_COLUMNS[table] ?? []
+	return `SELECT rowid AS r, ${columns.map((c) => `${bytesSql(c.column)} AS ${c.column}`).join(', ')} FROM ${table}
+		ORDER BY rowid`
+}
+
+// The covered columns of `table` as text, by rowid.
+export function textSql(table: string): string {
 	const columns = STORED_COLUMNS[table] ?? []
 	return `SELECT rowid AS r, ${columns.map((c) => c.column).join(', ')} FROM ${table} ORDER BY rowid`
 }
@@ -189,7 +200,35 @@ export function seedBounded(sql: SqlStorage) {
 	for (const { table, column, value } of FURTHER_PAST) {
 		insert(table, { [column]: value })
 	}
+	for (const { table, column, characters } of MALFORMED) {
+		const key = insert(table, {})
+		sql.exec(
+			`UPDATE ${table} SET ${column} = CAST(? AS TEXT) WHERE ${table === 'status_edits' ? 'rowid' : 'id'} = ?`,
+			loneSurrogates(characters),
+			key
+		)
+	}
 }
+
+// A legacy text value of `characters` lone surrogates as their three-byte encodings (ED A0 80), malformed UTF-8 that
+// SQLite counts as one character each and stores as given; a value read into the Worker and bound again is not it.
+export function loneSurrogates(characters: number): Uint8Array {
+	return new Uint8Array(3 * characters).map((_, i) => [0xed, 0xa0, 0x80][i % 3] ?? 0)
+}
+
+// The text columns with such a value: at the display name's bound, and one character past each bound (for the
+// JSON-bounded columns, past the bound in raw bytes).
+export const MALFORMED: { table: string; column: string; characters: number }[] = [
+	{ table: 'accounts', column: 'display_name', characters: DISPLAY_NAME_LIMIT },
+	{ table: 'accounts', column: 'display_name', characters: DISPLAY_NAME_LIMIT + 1 },
+	{ table: 'accounts', column: 'note', characters: Math.floor(BIO_JSON_BYTES / 3) + 1 },
+	{ table: 'statuses', column: 'content', characters: Math.floor(CONTENT_JSON_BYTES / 3) + 1 },
+	{ table: 'statuses', column: 'spoiler_text', characters: Math.floor(SPOILER_JSON_BYTES / 3) + 1 },
+	{ table: 'statuses', column: 'source_text', characters: Math.floor(CONTENT_JSON_BYTES / 3) + 1 },
+	{ table: 'media_attachments', column: 'description', characters: MAX_MEDIA_DESCRIPTION_LENGTH + 1 },
+	{ table: 'status_edits', column: 'content', characters: Math.floor(CONTENT_JSON_BYTES / 3) + 1 },
+	{ table: 'status_edits', column: 'spoiler_text', characters: Math.floor(SPOILER_JSON_BYTES / 3) + 1 },
+]
 
 // Runs `fn` with the stored-bound triggers of 0048_stored_bounds lifted, as a Store before 0048 (a converted or
 // legacy row) held values past their bounds; the triggers are made again after it. For tests of the read-time
