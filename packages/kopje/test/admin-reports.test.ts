@@ -14,6 +14,7 @@ import { Db } from '../src/db/sql'
 import type { PageQuery } from '../src/domain/accounts'
 import { setAccountEmail } from '../src/domain/admin-accounts'
 import { ANSWER_BYTES } from '../src/domain/answer-budget'
+import { filterTextLimits, MAX_FILTER_REQUEST_TEXT, MAX_FILTER_TEXT } from '../src/domain/filters'
 import { logAction, MODERATION_LOG_KEEP, MODERATION_LOG_PRUNE } from '../src/domain/moderation-log'
 import {
 	ADMIN_REPORT_STATUS_BUDGET,
@@ -799,10 +800,11 @@ describe('report answers within ANSWER_BYTES (RES-3)', () => {
 		expect(read).not.toContain(small)
 	}, 300_000)
 
-	it('present each report under its own filter allowance, a list as its reports one by one', async () => {
+	it("keep a list page's filter text within MAX_FILTER_REQUEST_TEXT, shared by its reports", async () => {
 		const w = await world()
-		// The admin filters "needle", which each status holds near its 10,000th character: one status alone is matched
-		// whole, fifty under one allowance (400,000 characters) would each be cut before it.
+		// The admin filters "needle", which each status holds at its 9,000th character. Fifty statuses of 10,000
+		// characters share the page's allowance, so each is matched up to the level it gives, before the needle; one
+		// report read alone is matched whole.
 		const filter = await w.h.request('/api/v2/filters', {
 			method: 'POST',
 			headers: { authorization: `Bearer ${w.admin}`, 'content-type': 'application/json' },
@@ -815,12 +817,14 @@ describe('report answers within ANSWER_BYTES (RES-3)', () => {
 			content: `<p>${'a '.repeat(4_500)}needle ${'a '.repeat(490)}</p>`,
 		})
 		await seedReports(w.h.store, w.alice.id, w.carol, 50, { statuses: [status] })
+		const [level] = filterTextLimits(Array.from({ length: 50 }, () => MAX_FILTER_TEXT))
+		expect(50 * level!).toBeLessThanOrEqual(MAX_FILTER_REQUEST_TEXT)
+		expect(level).toBeLessThan(9_000)
 		const list = await answer<AdminReportBody[]>(w.h, '/api/v1/admin/reports?limit=100', w.admin)
 		expect(list.body).toHaveLength(50)
 		const matched = (report: AdminReportBody) =>
 			(report.statuses[0] as unknown as { filtered?: unknown[] }).filtered?.length ?? 0
-		const one = await reportOf(w.h, list.body[0]!.id, w.admin)
-		expect(matched(one)).toBe(1)
-		expect(list.body.map(matched)).toEqual(list.body.map(() => 1))
+		expect(list.body.map(matched)).toEqual(list.body.map(() => 0))
+		expect(matched(await reportOf(w.h, list.body[0]!.id, w.admin))).toBe(1)
 	}, 300_000)
 })
