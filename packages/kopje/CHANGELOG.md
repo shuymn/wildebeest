@@ -53,8 +53,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - Store schema: adds one migration, applied on the first request after the deploy; a rollback to an earlier version
   needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0048_stored_bounds`: rewrites stored values past their bounds (above) and adds the triggers that refuse them.
-      It reads each account, status, media attachment and earlier version once: on a benchmark store of 1,000,000
-      accounts, 2,000,000 statuses, 500,000 media attachments and 100,000 earlier versions its upgrade took 7.3
+      It scans the media attachments once for a check, then rewrites each of the four tables in one scan, and the
+      upgrade's verification checks the foreign keys of the whole Store: on a benchmark store of 1,000,000 accounts,
+      2,000,000 statuses, 500,000 media attachments and 100,000 earlier versions the whole upgrade took 7.3
       seconds (7.3 and 7.5 in two more runs) in workerd's local Durable Object SQLite. The upgrade fails, and
       the Store stays readonly and unchanged, with `CHECK constraint failed: tokened_media_url_within_2048_bytes` if
       the URL of an uploaded media file passes 2,048 bytes, which Kopje never builds: report it.
