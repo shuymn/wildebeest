@@ -26,7 +26,7 @@ import { moderationRound } from '../src/domain/suspension'
 import { normalizeTag } from '../src/domain/tag-name'
 import { parseRemoteStatus } from '../src/federation/remote-status'
 import { StoreUnavailableError, toStoreUnavailable } from '../src/platform/store-errors'
-import { STORED_COLUMNS, storedBoundsMigrationSql } from '../src/platform/stored-bounds'
+import { storedBoundsMigrationSql } from '../src/platform/stored-bounds'
 
 // The shipped migrations, in order; test-only files are named after them (9999_*).
 const NAMES = MIGRATIONS.map((m) => m.name)
@@ -4981,28 +4981,10 @@ describe('0048_stored_bounds', () => {
 			const expected = tables.map((table) => sql.exec(storedSql(table)).toArray())
 			for (const table of tables) {
 				expect(sql.exec<{ n: number }>(movedCountSql(table)).one().n, table).toBeGreaterThanOrEqual(2)
-				// P of each value before the upgrade, as bytes, kept in SQLite (bookkeeping the kernel ignores).
-				const columns = STORED_COLUMNS[table] ?? []
-				sql.exec(
-					`CREATE TABLE expected_${table} AS SELECT rowid AS r, ${columns
-						.map((c) => `CAST((${(c.stored ?? c.projection)(c.column)}) AS BLOB) AS ${c.column}`)
-						.join(', ')} FROM ${table}`
-				)
 			}
 
 			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
-			// Each stored value is, byte for byte, P of the value before.
-			for (const table of tables) {
-				const columns = STORED_COLUMNS[table] ?? []
-				const differing = sql
-					.exec<{ n: number }>(
-						`SELECT count(*) AS n FROM ${table} t LEFT JOIN expected_${table} e ON e.r = t.rowid
-						WHERE e.r IS NULL OR ${columns.map((c) => `CAST(t.${c.column} AS BLOB) IS NOT e.${c.column}`).join(' OR ')}`
-					)
-					.one().n
-				expect(differing, table).toBe(0)
-				sql.exec(`DROP TABLE expected_${table}`)
-			}
+			// Each stored value is, byte for byte (hex), P of the value before, row by row.
 			expect(tables.map((table) => sql.exec(columnsSql(table)).toArray())).toEqual(expected)
 			expect(tables.map((table) => sql.exec<{ n: number }>(movedCountSql(table)).one().n)).toEqual([0, 0, 0, 0])
 			// The rows at their bounds are unchanged; the JSON-bounded values of 400,000 U+0001 are past their bounds.
