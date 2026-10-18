@@ -17,14 +17,14 @@
 -- escape past. The statements below are the output of storedBoundsMigrationSql (test/migrations.test.ts compares them).
 -- Recovery of a rewritten value: the point-in-time bookmark the kernel records before the upgrade (docs/upgrade.md).
 --
--- Cost: one pass over each of the four tables, rewriting only rows past a bound, and four pairs of triggers, which
--- read no row when made. Measured on the benchmark store of test/bench/migration-cost.ts (1,000,000 accounts,
--- 2,000,000 statuses, 500,000 media attachments, 100,000 earlier versions, the rows past their bounds it adds for this
--- file, and the rest of that store) in workerd's local Durable Object SQLite: 7,262 ms for the upgrade of this file
--- through the kernel (7,283 and 7,459 ms in two more runs, at load averages of 2.5 to 4), within the 10,000 ms each
--- migration file may take. A file of one SELECT in its place on the same store measured 14,425 and 16,479 ms (load
--- average 3 to 5), likely because this file's passes leave the pages the upgrade's verification reads in the cache;
--- its own work is not separable from that overhead there.
+-- Cost: a scan of the media attachments for the check, one rewrite scan of each of the four tables (writing only
+-- rows past a bound), and four pairs of triggers, which read no row when made; the upgrade's verification then runs
+-- PRAGMA foreign_key_check over the Store. Measured on the benchmark store of test/bench/migration-cost.ts (1,000,000
+-- accounts, 2,000,000 statuses, 500,000 media attachments, 100,000 earlier versions, the rows past their bounds it
+-- adds for this file, and the rest of that store) in workerd's local Durable Object SQLite, timing the whole upgrade
+-- through the kernel (its bookmark, this file's transaction and the verification): 7,262 ms (7,283 and 7,459 ms in
+-- two more runs, at load averages of 2.5 to 4), within the 10,000 ms each migration file may take. A file of one
+-- SELECT in its place on the same store measured 14,425 and 16,479 ms (load average 3 to 5), for a cause not known.
 
 CREATE TABLE stored_bounds_check (
   n INTEGER CONSTRAINT tokened_media_url_within_2048_bytes CHECK (n = 0)
@@ -71,7 +71,7 @@ UPDATE media_attachments SET
   preview_url = CASE WHEN length(CAST(preview_url AS BLOB)) <= 2048 THEN preview_url END,
   description = CASE WHEN length(CAST(description AS BLOB)) <= 10000 THEN description ELSE substr(description, 1, 10000) END,
   meta = CASE WHEN length(CAST(meta AS BLOB)) <= 1024 THEN meta END
-WHERE (file_token IS NULL AND (CASE WHEN length(CAST(url AS BLOB)) <= 2048 THEN url END) IS NOT url)
+WHERE (CASE WHEN length(CAST(url AS BLOB)) <= 2048 THEN url END) IS NOT url
   OR (CASE WHEN length(CAST(preview_url AS BLOB)) <= 2048 THEN preview_url END) IS NOT preview_url
   OR (CASE WHEN length(CAST(description AS BLOB)) <= 10000 THEN description ELSE substr(description, 1, 10000) END) IS NOT description
   OR (CASE WHEN length(CAST(meta AS BLOB)) <= 1024 THEN meta END) IS NOT meta;

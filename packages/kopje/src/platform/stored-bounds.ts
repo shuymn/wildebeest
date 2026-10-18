@@ -201,8 +201,6 @@ type StoredColumn = {
 	// it, so the test skips P (and json_quote) for it.
 	jsonBytes?: number
 	stored?: (column: string) => string
-	// What else selects a row for the migration's rewrite of this column.
-	rewritten?: string
 }
 
 // The covered columns of each table (design §3.2). accounts.uri and username, statuses.uri, status_tags.name,
@@ -222,12 +220,12 @@ export const STORED_COLUMNS: Readonly<Record<string, readonly StoredColumn[]>> =
 		{ column: 'header_url', projection: profileUrlSql },
 	],
 	media_attachments: [
-		// A row with a file token holds a URL Kopje built (storedMediaUrl), which the migration checks first.
+		// A row with a file token holds a URL Kopje built (storedMediaUrl), within the bound, as the migration checks
+		// first: only rows without one are rewritten.
 		{
 			column: 'url',
 			projection: mediaUrlSql,
 			stored: (column) => `coalesce(${mediaUrlSql(column)}, '')`,
-			rewritten: 'file_token IS NULL',
 		},
 		{ column: 'preview_url', projection: mediaUrlSql },
 		{ column: 'description', projection: mediaDescriptionSql },
@@ -264,11 +262,7 @@ WHERE file_token IS NOT NULL AND length(CAST(url AS BLOB)) > ${MEDIA_URL_LIMIT};
 	]
 	for (const [table, columns] of Object.entries(STORED_COLUMNS)) {
 		const set = columns.map((c) => `  ${c.column} = ${(c.stored ?? c.projection)(c.column)}`).join(',\n')
-		const where = columns
-			.map((c) =>
-				c.rewritten === undefined ? pastBoundSql(c, c.column) : `(${c.rewritten} AND ${pastBoundSql(c, c.column)})`
-			)
-			.join('\n  OR ')
+		const where = columns.map((c) => pastBoundSql(c, c.column)).join('\n  OR ')
 		statements.push(`UPDATE ${table} SET\n${set}\nWHERE ${where};`)
 	}
 	for (const [table, columns] of Object.entries(STORED_COLUMNS)) {
