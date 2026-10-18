@@ -129,9 +129,21 @@ const OPTIONS: sanitizeHtml.IOptions & { allowedEmptyAttributes: string[] } = {
 	},
 }
 
+// The first `limit` code units of `text`, one fewer where the cut would split a surrogate pair, so well-formed text
+// stays well-formed (RES-2: the stored text writers' output is well-formed, platform/stored-bounds.ts storedText).
+export function cutCodeUnits(text: string, limit: number): string {
+	if (text.length <= limit) {
+		return text
+	}
+	const high = text.charCodeAt(limit - 1)
+	const low = text.charCodeAt(limit)
+	const splits = limit > 0 && high >= 0xd800 && high <= 0xdbff && low >= 0xdc00 && low <= 0xdfff
+	return text.slice(0, splits ? limit - 1 : limit)
+}
+
 export function sanitizeRemoteHtml(html: string): string {
 	return (
-		sanitizeHtml(html.slice(0, REMOTE_HTML_RAW_LIMIT), OPTIONS)
+		sanitizeHtml(cutCodeUnits(html, REMOTE_HTML_RAW_LIMIT), OPTIONS)
 			.replaceAll(`<${HEADING}>`, '<p><strong>')
 			.replaceAll(`</${HEADING}>`, '</strong></p>')
 			// sanitize-html writes void tags XHTML-style and empty attributes with ="" ; Mastodon writes <br> and reversed.
@@ -173,7 +185,7 @@ function sanitizeRemoteWithin(html: string, bytes: number): string {
 	let [fits, best, over] = [0, '', Math.min(html.length, REMOTE_HTML_RAW_LIMIT)]
 	while (over - fits > 1) {
 		const middle = Math.floor((fits + over) / 2)
-		const cut = sanitizeRemoteHtml(html.slice(0, middle))
+		const cut = sanitizeRemoteHtml(cutCodeUnits(html, middle))
 		if (jsonStringBytes(cut) <= bytes) {
 			;[fits, best] = [middle, cut]
 		} else {

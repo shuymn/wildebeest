@@ -23,7 +23,7 @@ import { httpUrl } from '../platform/http-url'
 import { STATUS_URI_LIMIT, withinIdentityBound } from '../platform/identity-bounds'
 import { withinJsonBounds } from '../platform/json-bounds'
 import { storedMediaDescription, storedMediaLink, storedText } from '../platform/stored-bounds'
-import { cutJsonString, remoteHtmlText, sanitizeRemoteContent, SPOILER_BYTES } from '../security/html'
+import { cutCodeUnits, cutJsonString, remoteHtmlText, sanitizeRemoteContent, SPOILER_BYTES } from '../security/html'
 
 // Remote statuses as Mastodon 4.7.3 reads them (ActivityPub::Parser::StatusParser and MediaAttachmentParser): compacted
 // JSON with the ActivityStreams context, values as strings, objects with an id, or arrays of either. Note and Question
@@ -226,7 +226,8 @@ function isoOf(value: unknown): string | null {
 // ActivityPub::Parser::PollParser: the poll of a Question, from its anyOf (multiple) or oneOf items, each a choice by
 // its name (or content) with its votes in replies.totalItems; it ends when closed says (a time, or now for any other
 // true value), else at endTime. Choices without a name are left out with their votes. At most MAX_REMOTE_OPTIONS
-// choices, each cut to MAX_REMOTE_OPTION_LENGTH code units (RES-4). null: not a poll.
+// choices, each well-formed (a lone surrogate becomes U+FFFD) and cut to MAX_REMOTE_OPTION_LENGTH code units without
+// splitting a surrogate pair (RES-4); a choice so changed is marked cut, as a vote could not name it. null: not a poll.
 function pollOf(object: Json): RemotePollInput | null {
 	const items = Array.isArray(object.anyOf) ? object.anyOf : Array.isArray(object.oneOf) ? object.oneOf : null
 	if (!typeIs(object.type, ['Question']) || items === null) {
@@ -243,10 +244,11 @@ function pollOf(object: Json): RemotePollInput | null {
 		if (title === null || !isObject(item)) {
 			continue
 		}
-		if (title.length > MAX_REMOTE_OPTION_LENGTH) {
+		const kept = cutCodeUnits(title.toWellFormed(), MAX_REMOTE_OPTION_LENGTH)
+		if (kept !== title) {
 			cut.push(options.length)
 		}
-		options.push(title.slice(0, MAX_REMOTE_OPTION_LENGTH))
+		options.push(kept)
 		tallies.push((isObject(item.replies) ? count(item.replies.totalItems) : null) ?? 0)
 	}
 	if (options.length === 0) {
@@ -371,7 +373,9 @@ export function parseRemoteStatus(
 		attributedTo: idOf(asArray(object.attributedTo)[0]),
 		content,
 		text: remoteHtmlText(content),
-		spoilerText: converted ? '' : cutJsonString(storedText(summary ?? '').slice(0, MAX_SPOILER_LENGTH), SPOILER_BYTES),
+		spoilerText: converted
+			? ''
+			: cutJsonString(cutCodeUnits(storedText(summary ?? ''), MAX_SPOILER_LENGTH), SPOILER_BYTES),
 		sensitive: object.sensitive === true,
 		language: languageOf(object),
 		published: timeOf(object.published),

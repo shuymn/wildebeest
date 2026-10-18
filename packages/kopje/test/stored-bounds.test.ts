@@ -8,7 +8,10 @@ import { NOW } from './app-helpers'
 import { freshStore, migratedStore } from './helpers'
 import { Db } from '../src/db/sql'
 import { upsertRemoteActor } from '../src/domain/inbox'
+import { MAX_SPOILER_LENGTH } from '../src/domain/remote-statuses'
+import { MAX_RAW_LENGTH, parseStatusText, renderFieldValue, renderStatusHtml } from '../src/domain/status-text'
 import { remoteActorInput } from '../src/federation/remote-actor'
+import { parseRemoteStatus } from '../src/federation/remote-status'
 import { STATUS_URI_LIMIT } from '../src/platform/identity-bounds'
 import { mediaUrl, SERVED_TYPES } from '../src/platform/media-files'
 import {
@@ -45,11 +48,14 @@ import {
 	storedText,
 } from '../src/platform/stored-bounds'
 import {
+	cutCodeUnits,
 	cutJsonString,
 	jsonStringBytes,
 	REMOTE_BIO_BYTES,
+	REMOTE_HTML_RAW_LIMIT,
 	sanitizeRemoteBio,
 	sanitizeRemoteContent,
+	sanitizeRemoteHtml,
 	SPOILER_BYTES,
 	STATUS_CONTENT_BYTES,
 } from '../src/security/html'
@@ -382,7 +388,7 @@ describe('stored bounds (RES-2)', () => {
 		)
 	})
 
-	// An edit's snapshot stores P of the poll's choices (polls.ts pollOptionsJson), so its writer is P itself.
+	// An edit's snapshot stores P of the poll's choices (statuses.ts recordEdit), so its writer is P itself.
 	it('status_edits.poll_options: P is idempotent over JSON arrays of choices at each bound', async () => {
 		const choice = (unit: Unit, target: number) => mix.map((m) => measured(m, unit, target))
 		const near = (bound: number) => fc.constantFrom(bound - 1, bound, bound + 1)
@@ -436,5 +442,66 @@ describe('stored bounds (RES-2)', () => {
 			}
 		})
 		expect(Math.max(...urls.map((url) => url.length))).toBeLessThan(350)
+	})
+})
+
+// Cuts that run after storedText split no surrogate pair, so the text writers' output stays well-formed: each case
+// puts a pair across the cut.
+describe('cuts after normalization (RES-2)', () => {
+	const PAIR = '\u{1F600}'
+
+	it('cuts by code units without splitting a pair', () => {
+		expect(cutCodeUnits(`ab${PAIR}`, 3)).toBe('ab')
+		expect(cutCodeUnits(`ab${PAIR}`, 4)).toBe(`ab${PAIR}`)
+		expect(cutCodeUnits(`abc${PAIR}`, 3)).toBe('abc')
+		expect(cutCodeUnits('\ud800\ud800x', 1)).toBe('\ud800')
+	})
+
+	it("keeps an ingested status's content warning, content and poll choices well-formed", () => {
+		const status = parseRemoteStatus({
+			id: 'https://remote.example/notes/1',
+			type: 'Question',
+			attributedTo: 'https://remote.example/users/r',
+			summary: `${'a'.repeat(MAX_SPOILER_LENGTH - 1)}${PAIR}`,
+			content: `${'c'.repeat(REMOTE_HTML_RAW_LIMIT - 1)}${PAIR}`,
+			oneOf: [
+				{ type: 'Note', name: `${'o'.repeat(MAX_REMOTE_OPTION_LENGTH - 1)}${PAIR}` },
+				{ type: 'Note', name: '\ud800'.repeat(MAX_REMOTE_OPTION_LENGTH) },
+			],
+		})
+		expect(status?.spoilerText).toBe('a'.repeat(MAX_SPOILER_LENGTH - 1))
+		expect(status?.content).toBe('c'.repeat(REMOTE_HTML_RAW_LIMIT - 1))
+		expect(status?.poll?.options).toEqual([
+			'o'.repeat(MAX_REMOTE_OPTION_LENGTH - 1),
+			'�'.repeat(MAX_REMOTE_OPTION_LENGTH),
+		])
+		expect(status?.poll?.cut).toEqual([0, 1])
+	})
+
+	it("keeps sanitized HTML well-formed where the bound's prefix search cuts it", () => {
+		// 50,000 code units whose sanitized JSON passes both bounds, so the search halves through the pairs.
+		const html = `<<${PAIR}`.repeat(REMOTE_HTML_RAW_LIMIT / 4)
+		for (const [within, bytes] of [
+			[sanitizeRemoteContent, STATUS_CONTENT_BYTES],
+			[sanitizeRemoteBio, REMOTE_BIO_BYTES],
+		] as const) {
+			const output = within(html)
+			expect(jsonStringBytes(sanitizeRemoteHtml(html))).toBeGreaterThan(bytes)
+			expect(output.isWellFormed()).toBe(true)
+			expect(jsonStringBytes(output)).toBeLessThanOrEqual(bytes)
+			expect(output.length).toBeGreaterThan(0)
+		}
+	})
+
+	it('keeps local composition well-formed where a link display or a field value is cut', () => {
+		const url = `https://example.com/${'p'.repeat(17)}${PAIR}q`
+		const html = renderStatusHtml(parseStatusText(`see ${url}`).segments, {
+			mention: () => undefined,
+			tagUrl: (name) => `https://kopje.test/tags/${name}`,
+		})
+		expect(html).toContain(`href="${url}"`)
+		expect(html).toContain(`<span class="ellipsis">example.com/${'p'.repeat(17)}</span>`)
+		expect(html.isWellFormed()).toBe(true)
+		expect(renderFieldValue(`${'v'.repeat(MAX_RAW_LENGTH - 1)}${PAIR}`).isWellFormed()).toBe(true)
 	})
 })
