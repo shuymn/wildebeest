@@ -775,14 +775,17 @@ function mediaSnapshot(db: Db, statusId: string): MediaAttachment[] {
 // Records the status as it is now as a history entry and returns the entry's id (unique per edit; the Update
 // activity is named after it).
 export function recordEdit(db: Db, statusId: string, at: string): string {
+	// The poll's choices are copied as P projects them (pollOptionsSql) inside SQLite: read into the Worker and bound
+	// again, a lone surrogate stored by an earlier version would come back as three U+FFFD (RES-2).
 	const row = db.all<{ id: string }>(
 		`INSERT INTO status_edits (status_id, content, spoiler_text, sensitive, media_json, poll_options, created_at)
-		SELECT id, content, spoiler_text, sensitive, ?2, ?4, ?3 FROM statuses WHERE id = ?1
+		SELECT id, content, spoiler_text, sensitive, ?2,
+			(SELECT ${pollOptionsSql('p.options')} FROM polls p WHERE p.status_id = ?1 AND p.removed = 0), ?3
+		FROM statuses WHERE id = ?1
 		RETURNING CAST(id AS TEXT) AS id`,
 		statusId,
 		JSON.stringify(mediaSnapshot(db, statusId)),
-		at,
-		pollOptionsJson(db, statusId)
+		at
 	)[0]
 	if (row === undefined) {
 		throw new Error('edited status disappeared')

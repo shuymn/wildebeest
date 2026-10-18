@@ -111,8 +111,8 @@ export function mediaMetaSql(column: string): string {
 
 // A poll's choices (polls.options, status_edits.poll_options) as a JSON array: the first MAX_REMOTE_OPTIONS, each cut
 // at MAX_REMOTE_OPTION_LENGTH (cutSql); NULL (no poll) past POLL_OPTIONS_BYTES. A stored choice is longer only in a
-// converted row; a vote names it as stored (polls.ts cut_options). An edit's snapshot stores P of the poll's choices
-// (polls.ts pollOptionsJson).
+// converted row; a vote names it as stored (polls.ts cut_options). An edit's snapshot stores P of the poll's choices,
+// evaluated inside SQLite (statuses.ts recordEdit).
 export function pollOptionsSql(column: string): string {
 	return `CASE WHEN length(CAST(${column} AS BLOB)) <= ${POLL_OPTIONS_BYTES} THEN
 		(SELECT json_group_array(${cutSql('value', MAX_REMOTE_OPTION_LENGTH)} ORDER BY key) FROM json_each(${column})
