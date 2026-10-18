@@ -8,6 +8,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+## [0.1.0-rc.15] - 2026-10-18
+
+A fifteenth release candidate of the first release, published under the npm dist-tag `next`.
+
 ### Added
 
 - The admin can suspend a remote account through the Mastodon admin API (`POST /api/v1/admin/accounts/:id/action`
@@ -113,7 +117,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 ### Instance changes
 
 - Store schema: adds three migrations, applied on the first request after the deploy; a rollback to an earlier version
-  needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
+  needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). Applied together in one upgrade, as
+  an instance coming from rc.14 applies them, the three took 8.2 seconds on the benchmark store (on a loaded machine),
+  within the 20-second budget for a release.
     - `0045_remote_suspension`: lets the admin suspend remote accounts. It adds two account columns, builds two
       indexes over the accounts and one over the queued outbound activities (one pass over each), drops one index, and
       adds a table: on the benchmark store of 1,000,000 accounts and 500,000 outbound activities its upgrade took 7.1
