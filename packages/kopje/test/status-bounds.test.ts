@@ -10,6 +10,8 @@ import { ALICE, setup, type Setup } from './inbox-status-helpers'
 import { MAX_BIO, maxFields } from './profile-fixtures'
 import { observedSql, rowsRead } from './read-helpers'
 import { community, post, remoteAccount } from './status-helpers'
+import { Db } from '../src/db/sql'
+import { createActivity, getFeatured, noteOf, OUTBOX_BYTES, PIN_LIMIT, statusFacts } from '../src/domain/activities'
 import { ANSWER_BYTES } from '../src/domain/answer-budget'
 import { listConversations, MAX_PRESENTED_PARTICIPANTS } from '../src/domain/conversations'
 import { MAX_FILTER_KEYWORD, MAX_FILTER_KEYWORDS, MAX_FILTER_TITLE, MAX_FILTERS } from '../src/domain/filters'
@@ -998,4 +1000,91 @@ describe('the table of maxima (RES-3)', () => {
 		},
 		120_000
 	)
+})
+
+describe('ActivityPub Notes of a local status at its bounds (RES-3)', () => {
+	// A converted local status with every part at its bound,
+	// built as statusFacts and noteOf build the object endpoint's Note, the outbox's Create and the featured
+	// collection's Notes. docs/threat-model.md "Maxima of presented units" states the Note and the Create.
+	it('measures the Note and the Create, within OUTBOX_BYTES, and five Notes of the featured collection', async () => {
+		const t = await setup()
+		const parts = await maximalParts(t)
+		const ids: string[] = []
+		for (let i = 0; i < PIN_LIMIT; i++) {
+			const id = await storedStatus(t, ALICE, parts)
+			await sql(t.store, 'INSERT INTO status_pins (account_id, status_id) VALUES (?, ?)', ALICE, id)
+			ids.push(id)
+		}
+		const measuredNote = await runInDurableObject(t.store, (_instance, state) => {
+			let sqlite = 0
+			let rows = 0
+			const counting = observedSql(state.storage.sql, (read) => {
+				for (const row of read) {
+					rows++
+					for (const value of Object.values(row)) {
+						sqlite += typeof value === 'string' ? utf8Length(value) : 8
+					}
+				}
+			})
+			const facts = statusFacts(new Db(counting), ids[0]!, { reached: false })!
+			const note = noteOf(facts)
+			return {
+				sqlite,
+				rows,
+				nodes: nodes(note),
+				note: jsonBytes(note),
+				create: jsonBytes(createActivity(facts).activity),
+				tags: facts.tags.length,
+				longest: Math.max(...facts.tags.map((tag) => [...tag.name].length)),
+				mentions: facts.mentions.length,
+				media: facts.media.length,
+			}
+		})
+		expect(measuredNote).toMatchObject({ tags: MAX_PRESENTED_TAGS, mentions: MAX_STATUS_MENTION_ROWS, media: 4 })
+		expect(measuredNote.longest).toBeLessThanOrEqual(MAX_TAG_LENGTH)
+		expect(measuredNote.create).toBeLessThanOrEqual(OUTBOX_BYTES)
+		const featured = await runInDurableObject(t.store, (_instance, state) =>
+			getFeatured.run(state.storage.sql, { username: 'alice' } as never)
+		)
+		// Five such Notes pass the bound: the first ones are shown whole, the rest by their uri.
+		let items = featured as unknown
+		while (!Array.isArray(items)) {
+			items = (items as { value: unknown }).value
+		}
+		const pins = items as { uri: string; note: string | null }[]
+		const featuredBytes = jsonBytes(pins)
+		expect(featuredBytes).toBeLessThanOrEqual(ANSWER_BYTES)
+		const whole = pins.filter((item) => item.note !== null).length
+		expect(whole).toBeGreaterThan(0)
+		expect(whole).toBeLessThan(PIN_LIMIT)
+		expect(pins).toHaveLength(PIN_LIMIT)
+		// Three hashtags far past their bound, as a converted row may hold them, are left out, as the Status entity leaves
+		// them out.
+		const long = await storedStatus(t, ALICE, {
+			...parts,
+			mentions: [],
+			media: [],
+			poll: null,
+			tags: [1, 2, 3].map((i) => `${i}${'x'.repeat(240_000)}`),
+		})
+		const shown = await runInDurableObject(t.store, (_instance, state) => {
+			const facts = statusFacts(new Db(state.storage.sql), long, { reached: false })!
+			return { tags: facts.tags.length, create: jsonBytes(createActivity(facts).activity) }
+		})
+		expect(shown.tags).toBe(0)
+		expect(shown.create).toBeLessThan(200_000)
+		expect({ ...measuredNote, featured: featuredBytes, whole }).toEqual({
+			sqlite: 2_477_167,
+			rows: 476,
+			nodes: 1_816,
+			note: 2_579_494,
+			create: 2_994_734,
+			tags: MAX_PRESENTED_TAGS,
+			longest: MAX_TAG_LENGTH,
+			mentions: MAX_STATUS_MENTION_ROWS,
+			media: 4,
+			featured: 8_271_271,
+			whole: 3,
+		})
+	}, 300_000)
 })

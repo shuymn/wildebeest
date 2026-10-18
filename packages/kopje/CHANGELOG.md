@@ -38,6 +38,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
     - the profile directory returns fewer accounts, as search does; a client that advances its `offset` by the number
       received continues after them.
 - An outbox page holds its activities within the same bound, newest first, and continues after the last one shown.
+  The featured collection shows its pinned Notes within it, and any pin past it by its uri. A Note shows the hashtags,
+  mentions and attachments the API shows for the same status.
 
 ## [0.1.0-rc.15] - 2026-10-18
 

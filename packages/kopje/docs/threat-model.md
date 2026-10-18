@@ -1728,11 +1728,17 @@ RPC limit.
 | Conversation: 12 participants presented, its last status a quote | 7,870,431         | 6,651,414       | 1,723     | 4,959 | 79.3%          |
 | Notification group: 8 sample accounts, its status a quote        | 7,411,273         | 6,165,029       | 1,736     | 4,836 | 73.5%          |
 | Report: its first status a quote past the 2 MiB allowance        | 6,612,573         | 5,318,285       | 1,718     | 4,661 | 63.4%          |
+| ActivityPub Note of a local status at its bounds                 | 2,477,167         | 2,579,494       | 476       | 1,816 | 30.7%          |
+| Its Create (the Note and its addressing)                         |                   | 2,994,734       |           |       | 35.7%          |
 
 Mentions whose url is derived read and present less (the conversation: 5,232,097 and 5,832,214 bytes): a derived url
 within the bound is at most the stored bound, and a longer one presents as ''.
 
-A group's status is the owner's own (favourites and boosts group), so it is at most a quote. A report's statuses after
+A Note shows what the Status entity shows: its hashtags, mentions and attachments are read through the same
+projections (`statusFacts` in `src/domain/activities.ts`), so a converted row's hashtag past its bound is left out of
+both. The Create is within `OUTBOX_BYTES`; five such Notes are not within 8 MiB, so the featured collection shows its
+Notes within `OUTBOX_BYTES` and the pins past them by uri (8.27 MB with three Notes whole,
+`test/status-bounds.test.ts`). A group's status is the owner's own (favourites and boosts group), so it is at most a quote. A report's statuses after
 the first stop at 2 MiB, so a report is at most its accounts, its first status (a quote) and nothing more, or a small
 first status and 2 MiB; its staff accounts are local. Every measured shape stays within 80% of an answer of 8 MiB
 with filter results included, so an answer that admits whole items always fits its first. Through the real Store RPC,
