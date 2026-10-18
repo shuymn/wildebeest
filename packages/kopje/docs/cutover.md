@@ -193,8 +193,8 @@ migration changed stops the conversion (`statuses:author-changed-audience`).
   for 0016, every row is compared as written. A boost's visibility is its outbox row's, by the same rule; a boost has recipients only when
   it is direct (the known accounts in its `to`).
 - A local status that addresses more than `MAX_LOCAL_ADDRESSED` (1,000) accounts (its recipients that are not silent)
-  stops the conversion as `statuses:local-addressing-over-bound:<object id>`: its Create, which lists them all, would
-  not fit an outbox page (RES-3), and no recipient is dropped. Edit or delete the status in legacy, then export again.
+  stops the conversion as `statuses:local-addressing-over-bound:<object id>`, a conservative count that keeps its
+  Create, which lists them all, within an outbox page (RES-3) whatever their ids, and no recipient is dropped. Edit or delete the status in legacy, then export again.
 
 **Media.** Legacy stored local images (avatars, headers, attachments) in Cloudflare Images and wrote their delivery
 URLs, `https://imagedelivery.net/<account hash>/<image id>/<variant>`, into actor properties, statuses, earlier

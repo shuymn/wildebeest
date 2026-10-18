@@ -13,8 +13,8 @@ export const ARRAY_ANSWER_BYTES = ANSWER_BYTES - 1
 
 // The UTF-8 bytes of a value as JSON.stringify serializes it, counted without building the string: measuring an item
 // of several MB holds no copy of it (a string of mostly ASCII after one wider character takes two bytes a character;
-// "Heap at 8 MiB per answer" in docs/threat-model.md). Plain data only: what toJSON gives for a value that has it, as
-// JSON.stringify; no BigInt.
+// "Heap at 8 MiB per answer" in docs/threat-model.md). Plain data only, as the presenters build it: what toJSON gives
+// for a value that has it (a Date), as JSON.stringify; no BigInt and no boxed primitives.
 export function jsonBytes(value: unknown): number {
 	return valueBytes(value) ?? 0
 }
