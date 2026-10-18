@@ -10,8 +10,9 @@ import { fileURLToPath } from 'node:url'
  *   & typeof import('../../../src/domain/tag-name.ts') & typeof import('../../../src/domain/language.ts')
  *   & typeof import('../../../src/platform/image-bytes.ts') & typeof import('../../../src/platform/domain-name.ts')
  *   & typeof import('../../../src/domain/conversation-rows.ts')
- *   & typeof import('../../../src/platform/identity-bounds.ts') & typeof import('../../../src/platform/stored-bounds.ts')
- *   & typeof import('../../../src/platform/media-files.ts') & { renderMaintenanceSnapshot?: unknown }} KopjeRuntime
+ *   & typeof import('../../../src/platform/identity-bounds.ts')
+ *   & typeof import('../../../src/platform/stored-bounds.ts') & typeof import('../../../src/platform/media-files.ts')
+ *   & { renderMaintenanceSnapshot?: unknown }} KopjeRuntime
  */
 
 const fromSources = existsSync(fileURLToPath(new URL('../../../src/security/html.ts', import.meta.url)))
