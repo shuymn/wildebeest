@@ -1367,7 +1367,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   notifications: the Store operation that returns it owns one budget of `ANSWER_BYTES` (8 MiB of the answer's JSON,
   containers included) or a stated unit or count bound. Items are admitted whole in traversal order, the first
   whatever its size, each atomic item presented and measured only when it is reached, its rows read in small chunks
-  (statuses in chunks planned by a bound of their rows' payload and capped by a runtime meter of the rows' heap), so
+  (statuses in chunks planned by a bound of their rows' heap and capped by a runtime meter of the same heap), so
   what is held past the admitted answer is one chunk of rows and one item at their maxima ("Heap at 8 MiB per
   answer"). _Gap:_ under that section's heap model, a page of grouped notifications or of admin reports passes half of
   the Store isolate's 128 MB (72.9 and 72.0 MB, 75.2 and 74.3 MB when the backstop fires), below 128 MB: their single
@@ -1786,16 +1786,17 @@ every item is below it. The model:
 Chunks. `statusStream` (`src/domain/status-presenter.ts`) reads an answer's statuses in chunks of consecutive
 statuses, each presented and measured only when admission reaches it, so while the first rejected status is measured
 the admitted answer, one chunk's rows and the rejected status's objects coexist. A chunk is planned by R, an upper
-bound on the payload in SQLite bytes that the rows of one status take: the status, its boosted original, and the
+bound on the heap that the rows of one status take as the meter below counts it (per row 64 B, and per value 32 B
+and twice its UTF-8 bytes, which are at least its UTF-16 code units): the status, its boosted original, and the
 quoted status of the status or, for a boost, of its original (a boost has no quote of its own, R35). One query per
 window of 80 statuses computes it (`statusRowBoundSql` in `src/domain/status-rows.ts`) from the same column maps
 that generate every hydrate query's select list (`src/db/columns.ts`), so it cannot drift from what is read; it
 counts a row whether or not the viewer is shown it. A chunk holds statuses while their R sums to at most its target,
-at most 80 and at least one: 1.25 MiB for pages, contexts, search, histories and lookups, and 0.5 MiB for grouped
+at most 80 and at least one: 3 MiB of heap for pages, contexts, search, histories and lookups, and 1 MiB for grouped
 notifications and admin reports, which hold the most besides their statuses. A chunk of several is read through a
 `RowMeter` (`src/db/sql.ts`), which adds each row's heap under the model as the cursor returns it (workerd's cursor
-runs the statement lazily, one row ahead of the one it returns) and throws past its cap: 3 MiB for pages, 1 MiB for
-groups and reports. The chunk is then dropped, `kopje.presenter.row-cap-exceeded` is logged with its ids, and its
+runs the statement lazily, one row ahead of the one it returns) and throws past its cap, which equals the target, so
+only a term R misses passes it. The chunk is then dropped, `kopje.presenter.row-cap-exceeded` is logged with its ids, and its
 statuses are read one at a time. A status alone is not capped: its rows are bounded as a unit (the maxima above). The
 meter bounds the row objects and strings a chunk's queries return, past the cap by at most the row that passed it (at
 most 0.8 MB: a poll of 100 choices of 1,000 code points, or a status with content and source at their bounds); it does
@@ -1804,12 +1805,12 @@ functions, the conversion of the current row, or garbage awaiting collection. No
 payload: media, mentions, hashtags and own votes are put in order in JavaScript, and a temporary B-tree holds only
 ids, the two host names of one account in the visibility rule, or one row's value (an actor document's attachment
 entries, at most 2 MiB fetched and 16 kept; a poll's at most 100 choices). `test/status-rows.test.ts` ("steps lazily,
-one row ahead", "is at least the payload each status reads alone, and each chunk reads, for mixed sizes", "take their
+one row ahead", "is at least the meter's count of each status alone and of each chunk, for mixed sizes", "plans 40 boosts of statuses
+with 200 mentions and 70 hashtags without the backstop", "take their
 columns from the registered maps", "sort no chunk-wide payload", "reads a chunk past its cap again one status at a
 time, with the same answer") and `test/status-bounds.test.ts` ("bounds the rows each shape reads by R") pin these.
-R is the payload, not the heap: a row of small values takes up to about ten times its payload under the model, so a
-chunk of statuses with hundreds of short mentions and hashtags (about three bytes of heap per byte of R) passes the cap
-within its target and is read again one status at a time; the answer is the same.
+R counts a value's UTF-8 bytes twice where the meter counts its UTF-16 code units twice, so it overstates text that is
+not ASCII (up to three times for CJK) and plans such chunks smaller than the cap; it never understates.
 
 A page of 40 statuses, presented through `presentation` and `presentStatusesWithin`, mean of 20 runs on a loaded
 machine; `test/status-rows.test.ts` ("read an ordinary page of 40 statuses in at most 13 queries", "a context of 200
@@ -1818,11 +1819,12 @@ planned queries to their ceilings:
 
 | Page                                                                    | Chunks of 2         | Planned            | One chunk          |
 | ----------------------------------------------------------------------- | ------------------- | ------------------ | ------------------ |
-| Ordinary: short posts with a hashtag and a mention, every other a quote | 221 queries, 5.7 ms | 13 queries, 3.5 ms | 12 queries, 2.3 ms |
-| Realistic: 5,000 Japanese characters, a poll of 4, 4 described media    | 201 queries, 7.5 ms | 12 queries, 6.5 ms | 11 queries, 4.1 ms |
+| Ordinary: short posts with a hashtag and a mention, every other a quote | 221 queries, 4.7 ms | 13 queries, 2.9 ms | 12 queries, 1.9 ms |
+| Realistic: 5,000 Japanese characters, a poll of 4, 4 described media    | 201 queries, 5.5 ms | 12 queries, 4.7 ms | 11 queries, 3.8 ms |
 
-R takes about 1.6 ms a window of 40 statuses; it is at most 1.5 times the payload read for an ordinary status (its
-constant terms count rows that may not exist), 1.01 for a realistic one, and within 0.01% at the maxima.
+R takes about 0.7 ms a window of 40 statuses. It is 1.2 to 1.5 times the meter's count for an ordinary status (its
+constant terms count rows that may not exist), 2.4 for the realistic one (Japanese text), 1.02 for a status with 200
+short mentions and 70 hashtags, and 1.17 at the maxima.
 
 Single items at their maxima (Store isolate), from the table above at about 6 values a row:
 
@@ -1845,7 +1847,8 @@ pass, and the passes are at most four), 200 for a page of reports (its at most 1
 | Groups                                      | 72.9 MB | 75.2 MB                                      | 72.9 MB       |
 | Reports                                     | 72.0 MB | 74.3 MB                                      | 72.0 MB       |
 
-Timelines: rows max(1.25 × 3.15, 17.1) MB, the admitted answer 25.2 MB and the rejected item 16.7 MB; with the
+A chunk of several takes at most its target of heap, 3 MiB (3.15 MB) or 1 MiB (1.05 MB). Timelines: rows
+max(1.25 × 3.15, 17.1) MB, the admitted answer 25.2 MB and the rejected item 16.7 MB; with the
 backstop fired, 1.25 × (3.15 + 0.8) MB of dropped rows more. Groups: 16.8 + 2.3 + 25.2 + 18.5 + 10.1 MB, and reports
 18.3 + 25.2 + 16.0 + 12.5 MB, each with 1.25 × (1.05 + 0.8) MB more when the backstop fires. The cap is 3 MiB so that
 the fallback fits within half of the isolate even when the dropped chunk is still live; V8 collects garbage before it
