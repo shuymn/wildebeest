@@ -1346,42 +1346,26 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   that pass what one leaves unused to the others, so the answer does not depend on their order (`presentAccountsWithin`
   and `familiarFollowers` in `src/domain/accounts.ts`, `unlimitedResponse` in `src/mastodon/pagination.ts`;
   `test/account-answer-bytes.test.ts`).
-  _Implemented on branch `kopje/rb1b`_ for answers that present statuses: every Store operation that returns presented
-  statuses, accounts or notifications owns one budget of `ANSWER_BYTES` (8 MiB of the answer's JSON, containers
-  included) or a stated unit or count bound, listed with its mechanism and continuation in
-  [response-inventory.md](response-inventory.md). Items are admitted whole in traversal order, the first whatever its
-  size, each atomic item (a status with its boosted original and quoted status) presented and measured only when it
-  is reached, its rows read in chunks of 2 statuses, so what is held past the admitted answer is one chunk of rows and
-  one item at their maxima ("Heap at 8 MiB per answer"). Id-cursor status pages (home, public, hashtag and list
-  timelines, account statuses, bookmarks, favourites, quotes) cut there are `Page.cut` and continue from their last
-  admitted status in traversal order, `min_id` walking oldest first; a candidate-window continuation is kept only when
-  no status was left out by bytes before it. Pinned statuses (`pinned=true`) are a limit: their answers carry no
-  paging links, cut or not, since a status-id cursor cannot follow pin order; `limit` caps the count, a client's
-  bounds stay Mastodon's status-id bounds, and an answer that reaches the budget shows the pins that fit, in pin
-  order. An account pins few statuses, which clients fetch in one request. A context gives the ancestors half,
-  nearest first, and the descendants the rest; an edit history admits the newest versions; `GET /api/v1/statuses`
-  leaves out the ids past the budget; search, its resolved account included, and the account search return fewer
-  results (offset endpoints); a profile web page shares the budget between its account and statuses. One presentation
-  per answer compiles the viewer's filters once and fixes the filter text level (`MAX_FILTER_REQUEST_TEXT`) over the
-  answer's candidates in a preparation pass, so chunked presentation matches as one whole presentation does, and
-  matches each quoted status once. When the viewer has keyword filters, that pass reads every candidate's searchable
-  text (content, source, poll choices, media descriptions) in chunks of 4 statuses: its memory is one chunk, and its
-  work is bounded by the candidate caps (a context's 8,192), not by the answer budget (`src/domain/answer-budget.ts`,
-  `presentation` and `presentStatusesWithin` in `src/domain/status-presenter.ts`; `test/answer-budgets.test.ts`).
-  _Implemented on branch `kopje/rb2`_ for the rest: plain and grouped notifications, notification requests,
-  conversations, admin reports and accounts, blocks, mutes, the other edge-cursor account pages and the directory
-  admit whole items the same way (a notification with its account, status and report; a group with the accounts and
-  statuses it adds; a conversation; a report), each continuing as the inventory states. Grouped notifications
-  continue from the last admitted group's discovery position, with the page range and cursors of the groups kept,
-  dropping trailing groups when that range samples larger accounts, in at most four passes (the first, two more over
-  the kept groups, then the first group alone). A report's statuses are admitted in its order
-  within 2 MiB (`REPORT_STATUS_BYTES`), the first always: a projection of the report. Streaming events stay one unit
-  each, and an event over 512 KiB is skipped whole. An outbox page's activities are within `OUTBOX_BYTES`
-  (`test/notification-budgets.test.ts`, `test/notification-group-budgets.test.ts`, `test/conversation-budgets.test.ts`,
-  `test/account-page-budgets.test.ts`, `test/activitypub-budgets.test.ts`, `test/admin-reports.test.ts`).
-  `test-node/raw-presenters.test.ts` reads the program with TypeScript's parser and fails on an import, re-export,
-  namespace access or use of a raw presenter (`presentStatuses`, `presentAccountsById`, `presentAccount`) outside its
-  module; no module is exempt, and the inventory lists none.
+  _Implemented on branches `kopje/rb1b` and `kopje/rb2`_ for every answer that presents statuses, accounts or
+  notifications: the Store operation that returns it owns one budget of `ANSWER_BYTES` (8 MiB of the answer's JSON,
+  containers included) or a stated unit or count bound. Items are admitted whole in traversal order, the first
+  whatever its size, each atomic item presented and measured only when it is reached, its rows read in small chunks,
+  so what is held past the admitted answer is one chunk of rows and one item at their maxima ("Heap at 8 MiB per
+  answer"). Each operation's mechanism and continuation, the families' admission rules (grouped notifications'
+  discovery positions and passes, reports' status allowance, pinned statuses, contexts, histories, offset endpoints)
+  and the ActivityPub collections are in [response-inventory.md](response-inventory.md) ("Statuses", "Notifications",
+  "Accounts", "ActivityPub"). One presentation per answer compiles the viewer's filters once and fixes the filter text
+  level (`MAX_FILTER_REQUEST_TEXT`) over the answer's candidates in a preparation pass, so chunked presentation matches
+  as one whole presentation does, and matches each status and quoted status once. When the viewer has keyword
+  filters, that pass reads every candidate's searchable text (content, source, poll choices, media descriptions) in
+  chunks of 4 statuses: its memory is one chunk, and its work is bounded by the candidate caps (a context's 8,192),
+  not by the answer budget (`src/domain/answer-budget.ts`, `presentation` and `presentStatusesWithin` in
+  `src/domain/status-presenter.ts`; `test/answer-budgets.test.ts`, `test/notification-budgets.test.ts`,
+  `test/notification-group-budgets.test.ts`, `test/conversation-budgets.test.ts`, `test/account-page-budgets.test.ts`,
+  `test/activitypub-budgets.test.ts`, `test/admin-reports.test.ts`). Streaming events stay one unit each, and an event
+  over 512 KiB is skipped whole. `test-node/raw-presenters.test.ts` reads the program with TypeScript's parser and
+  fails on an import, re-export, namespace access or use of a raw presenter (`presentStatuses`, `presentAccountsById`,
+  `presentAccount`) outside its module; no module is exempt, and the inventory lists none.
   _Enforced (main)_ for each presented status: every status column a remote server controls, or a converted row may hold
   past the ingestion bounds, is read through its helper in `src/domain/status-bounds.ts` (accounts and actor ids through
   `src/domain/profile-bounds.ts`). Content and source text over 128 KiB as a JSON string read as '' (the status keeps
