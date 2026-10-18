@@ -219,6 +219,11 @@ export type Presentation = {
 	readonly options: PresentOwnOptions
 	readonly filters: ActiveFilters | null
 	readonly level: number
+	// The filter results of each quoted status matched so far, by its id: a quoted status counts once in the level's
+	// allowance however many statuses of the answer quote it, so it is matched once (results only, no rows, are kept).
+	readonly quoted: Map<string, FilterResult[]>
+	// The code units of text matched against the keywords so far, at most MAX_FILTER_REQUEST_TEXT.
+	readonly matched: { units: number }
 }
 
 // The presentation of an answer whose statuses are among `candidates` (top-level ids, boosts and quotes are followed
@@ -230,7 +235,13 @@ export function presentation(db: Db, candidates: readonly VisibleStatusId[], opt
 function presentationOf(db: Db, candidates: readonly string[], options: PresentOwnOptions): Presentation {
 	const filters = activeFilters(db, options.viewer)
 	const keywords = filters !== null && filters.filters.some((filter) => filter.keywords !== null)
-	return { options, filters, level: keywords ? textLevel(db, candidates, options) : Infinity }
+	return {
+		options,
+		filters,
+		level: keywords ? textLevel(db, candidates, options) : Infinity,
+		quoted: new Map(),
+		matched: { units: 0 },
+	}
 }
 
 // The preparation pass of the filter text level: the targets present() matches (each status of the answer, by its
@@ -402,8 +413,8 @@ function present(db: Db, ids: readonly string[], shared: Presentation, own: bool
 	const all = JSON.stringify([...byId.keys()])
 	// The statuses matched by filters: each status of the response, and each quoted status shown in it.
 	const targets = [
-		...ids.map((id) => ({ key: id, row: byId.get(id) })),
-		...quoted.map((id) => ({ key: quotedKey(id), row: byId.get(id) })),
+		...ids.map((id) => ({ key: id, row: byId.get(id), matched: false })),
+		...quoted.map((id) => ({ key: quotedKey(id), row: byId.get(id), matched: shared.quoted.has(id) })),
 	]
 	const accounts = presentAccountsById(
 		db,
@@ -449,7 +460,10 @@ function present(db: Db, ids: readonly string[], shared: Presentation, own: bool
 	// has keywords.
 	const texts = new Map<string, { text: string; cut: number }>()
 	if (filters !== null && filters.filters.some((filter) => filter.keywords !== null)) {
-		targets.forEach(({ key, row }) => {
+		targets.forEach(({ key, row, matched }) => {
+			if (matched) {
+				return
+			}
 			const proper = row?.reblog_of_id == null ? row : byId.get(row.reblog_of_id)
 			const text = proper === undefined ? '' : searchableText(proper, polls.get(proper.id), media.get(proper.id) ?? [])
 			// A cut inside a surrogate pair moves back to the pair's start, so the code point after it is whole.
@@ -473,13 +487,21 @@ function present(db: Db, ids: readonly string[], shared: Presentation, own: bool
 		}
 		const top = kind === 'top'
 		let reblog: Status | null = null
-		if (kind !== 'reblog' && filters !== null) {
+		const cached = kind === 'quoted' ? shared.quoted.get(row.id) : undefined
+		if (cached !== undefined) {
+			filtered = cached
+		} else if (kind !== 'reblog' && filters !== null) {
 			const proper = row.reblog_of_id === null ? row : byId.get(row.reblog_of_id)
 			if (proper !== undefined) {
+				const text = texts.get(top ? row.id : quotedKey(row.id)) ?? { text: '', cut: 0 }
+				shared.matched.units += text.cut
 				filtered = applyFilters(filters, statusMatches, {
-					...(texts.get(top ? row.id : quotedKey(row.id)) ?? { text: '', cut: 0 }),
+					...text,
 					ids: row.reblog_of_id === null ? [row.id] : [row.id, row.reblog_of_id],
 				})
+			}
+			if (kind === 'quoted') {
+				shared.quoted.set(row.id, filtered)
 			}
 		}
 		if (row.reblog_of_id !== null) {
