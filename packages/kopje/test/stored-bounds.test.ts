@@ -6,6 +6,9 @@ import { describe, expect, it } from 'vitest'
 
 import { NOW } from './app-helpers'
 import { freshStore, migratedStore } from './helpers'
+import { community } from './status-helpers'
+import { movedCountSql, seedBounded, STATUS, TABLES } from './stored-bounds-fixtures'
+import { MIGRATIONS } from '../src/db/migrations'
 import { Db } from '../src/db/sql'
 import { jsonBytes } from '../src/domain/answer-budget'
 import { upsertRemoteActor } from '../src/domain/inbox'
@@ -513,4 +516,61 @@ describe('cuts after normalization (RES-2)', () => {
 		expect(html.isWellFormed()).toBe(true)
 		expect(renderFieldValue(`${'v'.repeat(MAX_RAW_LENGTH - 1)}${PAIR}`).isWellFormed()).toBe(true)
 	})
+})
+
+// Migration 0048_stored_bounds keeps what the API shows: a converted-row fixture with every covered column at its
+// bound, past it (all together), of 400,000 U+0001 and with U+0000, stored without the triggers as a Store before
+// 0048 holds it, answers the same before and after the file's statements run.
+describe('0048_stored_bounds and presented output (RES-2)', () => {
+	it('answers the same for every converted row before and after the rewrite', async () => {
+		const h = await community(['alice'])
+		const { token } = h.users.alice
+		await runInDurableObject(h.store, (_instance, state) => {
+			const sql = state.storage.sql
+			for (const table of TABLES) {
+				sql.exec(`DROP TRIGGER ${table}_bounds_insert`)
+				sql.exec(`DROP TRIGGER ${table}_bounds_update`)
+			}
+			seedBounded(sql)
+			sql.exec("UPDATE statuses SET edited_at = '2026-10-02T00:00:00.000Z' WHERE id = ?", STATUS)
+		})
+		const ids = (table: string) =>
+			runInDurableObject(h.store, (_instance, state) =>
+				state.storage.sql
+					.exec<{ id: string }>(`SELECT id FROM ${table} ORDER BY id`)
+					.toArray()
+					.map((row) => row.id)
+			)
+		const paths = [
+			...(await ids('accounts')).filter((id) => id.startsWith('1')).map((id) => `/api/v1/accounts/${id}`),
+			...(await ids('statuses')).filter((id) => id.startsWith('2')).map((id) => `/api/v1/statuses/${id}`),
+			`/api/v1/statuses/${STATUS}/history`,
+		]
+		const answers = async () => {
+			const read: [string, number, string][] = []
+			for (const path of paths) {
+				const response = await h.request(path, { headers: { authorization: `Bearer ${token}` } })
+				read.push([path, response.status, await response.text()])
+			}
+			return read
+		}
+		const before = await answers()
+		expect(before.map(([, status]) => status)).toEqual(paths.map(() => 200))
+		const shown = (path: string) =>
+			JSON.parse(before.find(([p]) => p === path)?.[2] ?? 'null') as Record<string, unknown>
+		// The status at its bounds shows its four attachments, and its history every version.
+		expect(shown(`/api/v1/statuses/${STATUS}`).media_attachments).toHaveLength(4)
+		expect(shown(`/api/v1/statuses/${STATUS}/history`)).toHaveLength(6)
+		const sql = MIGRATIONS.find((m) => m.name === '0048_stored_bounds')?.sql ?? ''
+		const moved = await runInDurableObject(h.store, (_instance, state) => {
+			const store = state.storage.sql
+			const count = () => TABLES.map((table) => store.exec<{ n: number }>(movedCountSql(table)).one().n)
+			const was = count()
+			state.storage.transactionSync(() => store.exec(sql))
+			return { was, now: count() }
+		})
+		expect(moved.was.every((n) => n > 0)).toBe(true)
+		expect(moved.now).toEqual([0, 0, 0, 0])
+		expect(await answers()).toEqual(before)
+	}, 120_000)
 })
