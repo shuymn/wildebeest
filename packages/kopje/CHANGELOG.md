@@ -23,6 +23,21 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       account `resolve=true` found, in one answer, and returns fewer results when it reaches it. A client that
       advances its `offset` by the number received continues after them; Mastodon's web client takes the short answer
       for the last one.
+- Notifications, conversations, reports and the remaining lists of accounts stop at the same 8 MiB, a whole item at a
+  time (a notification with its account and status, a group with the accounts and statuses it adds, a conversation, a
+  report):
+    - notifications (`/api/v1/notifications`), notification requests, conversations, blocks, mutes, followers,
+      following, follow requests, `favourited_by`, `reblogged_by`, list members and endorsements stop early and offer
+      their `next` link (`prev` for `min_id`), which continues after the last item shown;
+    - grouped notifications (`/api/v2/notifications`) stop after the last group that fits, in the order the page found
+      them: `next` and `prev`, and each group's `page_min_id` and `page_max_id`, are those of the groups shown, and a
+      group may appear again on the next page with its older notifications. Unread counts and markers do not change;
+    - the admin's report and account lists stop at a whole report or account and offer the next page. A report shows
+      its statuses in order while they fit 2 MiB, the first always, so a report naming very large statuses shows fewer
+      of them than it holds (the report keeps them all); its detail and action answers show it the same way;
+    - the profile directory returns fewer accounts, as search does; a client that advances its `offset` by the number
+      received continues after them.
+- An outbox page holds its activities within the same bound, newest first, and continues after the last one shown.
 
 ## [0.1.0-rc.15] - 2026-10-18
 

@@ -1368,11 +1368,19 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   text (content, source, poll choices, media descriptions) in chunks of 4 statuses: its memory is one chunk, and its
   work is bounded by the candidate caps (a context's 8,192), not by the answer budget (`src/domain/answer-budget.ts`,
   `presentation` and `presentStatusesWithin` in `src/domain/status-presenter.ts`; `test/answer-budgets.test.ts`).
-  `test-node/raw-presenters.test.ts` reads the program with TypeScript's parser and
-  fails on an import, re-export or namespace access of a raw presenter (`presentStatuses`, `presentAccountsById`,
-  `presentAccount`) outside its module, but for the exact list of modules the inventory names as left for RB2
-  (notifications, notification requests, grouped notifications, conversations, reports, admin account lists, blocks
-  and mutes, the directory). _Gap:_ those answers are bounded by their counts only until RB2.
+  _Implemented on branch `kopje/rb2`_ for the rest: plain and grouped notifications, notification requests,
+  conversations, admin reports and accounts, blocks, mutes, the other edge-cursor account pages and the directory
+  admit whole items the same way (a notification with its account, status and report; a group with the accounts and
+  statuses it adds; a conversation; a report), each continuing as the inventory states. Grouped notifications
+  continue from the last admitted group's discovery position, with the page range and cursors of the groups kept,
+  dropping trailing groups when that range samples larger accounts. A report's statuses are admitted in its order
+  within 2 MiB (`REPORT_STATUS_BYTES`), the first always: a projection of the report. Streaming events stay one unit
+  each, and an event over 512 KiB is skipped whole. An outbox page's activities are within `OUTBOX_BYTES`
+  (`test/notification-budgets.test.ts`, `test/notification-group-budgets.test.ts`, `test/conversation-budgets.test.ts`,
+  `test/account-page-budgets.test.ts`, `test/activitypub-budgets.test.ts`, `test/admin-reports.test.ts`).
+  `test-node/raw-presenters.test.ts` reads the program with TypeScript's parser and fails on an import, re-export,
+  namespace access or use of a raw presenter (`presentStatuses`, `presentAccountsById`, `presentAccount`) outside its
+  module; no module is exempt, and the inventory lists none.
   _Enforced (main)_ for each presented status: every status column a remote server controls, or a converted row may hold
   past the ingestion bounds, is read through its helper in `src/domain/status-bounds.ts` (accounts and actor ids through
   `src/domain/profile-bounds.ts`). Content and source text over 128 KiB as a JSON string read as '' (the status keeps
@@ -1718,22 +1726,18 @@ RPC limit.
 | Quote (the status and its quoted status)                         | 6,491,023         | 5,190,925       | 1,710     | 4,536 | 62%            |
 | Boost of a quote                                                 | 6,616,340         | 5,564,762       | 1,763     | 5,439 | 66%            |
 | Conversation: 12 participants presented, its last status a quote | 7,870,431         | 6,651,414       | 1,723     | 4,959 | 79.3%          |
+| Notification group: 8 sample accounts, its status a quote        | 7,411,273         | 6,165,029       | 1,736     | 4,836 | 73.5%          |
+| Report: its first status a quote past the 2 MiB allowance        | 6,612,573         | 5,318,285       | 1,718     | 4,661 | 63.4%          |
 
 Mentions whose url is derived read and present less (the conversation: 5,232,097 and 5,832,214 bytes): a derived url
 within the bound is at most the stored bound, and a longer one presents as ''.
 
-Two composite shapes are conditional estimates, not measurements, which hold once their answers' byte budgets are
-built:
-
-| Shape                                                | Estimated most JSON bytes | Share of 8 MiB | Today                                                                                                 |
-| ---------------------------------------------------- | ------------------------- | -------------- | ----------------------------------------------------------------------------------------------------- |
-| Notification group: 8 sample accounts and its status | about 6.17 M              | 74%            | the grouped answer is bounded by its counts only (groups per page, 8 sample accounts each)            |
-| Report: 4 admin accounts and its embedded statuses   | about 5.68 M              | 68%            | a report embeds up to 100 statuses, bounded by that count only, so one report can exceed the estimate |
-
-A group's status is the owner's own (favourites and boosts group), so it is at most a quote: 8 accounts and a quote. The
-report estimate assumes an embedded-status allowance that stops at 2 MiB after the first status, which is always
-admitted: 4 accounts and a quote. Every measured shape stays within 80% of an answer of 8 MiB with filter results
-included, so an answer that admits whole items always fits its first.
+A group's status is the owner's own (favourites and boosts group), so it is at most a quote. A report's statuses after
+the first stop at 2 MiB, so a report is at most its accounts, its first status (a quote) and nothing more, or a small
+first status and 2 MiB; its staff accounts are local. Every measured shape stays within 80% of an answer of 8 MiB
+with filter results included, so an answer that admits whole items always fits its first. Through the real Store RPC,
+maximal answers of plain notifications, grouped notifications, conversations, admin reports and the directory return
+7.73, 7.73, 7.73, 7.07 and 8.30 MB of JSON (`test/rpc-budgets.test.ts`).
 
 Heap at 8 MiB per answer. Assumptions: one request at a time per isolate; the answer's JSON is at most 8 MiB, since
 every item is below it; presented objects take at most three times their JSON bytes (a string takes no more than its
