@@ -2,10 +2,16 @@ type Row = Record<string, SqlStorageValue>
 
 // Thin typed access to the Store's SQLite. Only used inside a Store transaction.
 export class Db {
-	constructor(private readonly sql: SqlStorage) {}
+	constructor(
+		private readonly sql: SqlStorage,
+		private readonly meter?: RowMeter
+	) {}
 
+	// With a meter, every row is counted as it leaves SQLite (iterate).
 	all<T extends Row>(query: string, ...params: SqlStorageValue[]): T[] {
-		return this.sql.exec<T>(query, ...params).toArray()
+		return this.meter === undefined
+			? this.sql.exec<T>(query, ...params).toArray()
+			: [...this.iterate<T>(query, ...params)]
 	}
 
 	first<T extends Row>(query: string, ...params: SqlStorageValue[]): T | undefined {
@@ -14,5 +20,56 @@ export class Db {
 
 	run(query: string, ...params: SqlStorageValue[]): number {
 		return this.sql.exec(query, ...params).rowsWritten
+	}
+
+	// The rows of `query` one at a time, as the cursor steps: workerd's SqlStorageCursor runs the statement lazily, one
+	// row per step (test/row-meter.test.ts), so a meter that throws stops the statement at the row that passed its cap.
+	*iterate<T extends Row>(query: string, ...params: SqlStorageValue[]): Generator<T, undefined> {
+		for (const row of this.sql.exec<T>(query, ...params)) {
+			this.meter?.add(row)
+			yield row
+		}
+	}
+
+	// This database, its reads counted by `meter`.
+	metered(meter: RowMeter): Db {
+		return new Db(this.sql, meter)
+	}
+}
+
+// The heap a row takes once it is a JavaScript object, as the heap model of "Heap at 8 MiB per answer"
+// (docs/threat-model.md) estimates it: ROW_OBJECT_BYTES for the object, VALUE_BYTES for each value, and two bytes per
+// UTF-16 code unit of each string (the most a string's characters take).
+export const ROW_OBJECT_BYTES = 64
+export const VALUE_BYTES = 32
+
+export function rowHeapBytes(row: Row): number {
+	let bytes = ROW_OBJECT_BYTES
+	for (const value of Object.values(row)) {
+		bytes +=
+			VALUE_BYTES + (typeof value === 'string' ? 2 * value.length : value instanceof ArrayBuffer ? value.byteLength : 0)
+	}
+	return bytes
+}
+
+export class RowCapExceeded extends Error {
+	constructor(readonly cap: number) {
+		super(`the rows read passed ${cap} bytes of heap`)
+		this.name = 'RowCapExceeded'
+	}
+}
+
+// The runtime backstop of a memory bound that rests on an estimate: it adds each row's heap (rowHeapBytes) as the row
+// arrives and throws RowCapExceeded once the total passes `cap`, so the rows held are at most `cap` plus the last row.
+export class RowMeter {
+	total = 0
+
+	constructor(readonly cap: number) {}
+
+	add(row: Row): void {
+		this.total += rowHeapBytes(row)
+		if (this.total > this.cap) {
+			throw new RowCapExceeded(this.cap)
+		}
 	}
 }

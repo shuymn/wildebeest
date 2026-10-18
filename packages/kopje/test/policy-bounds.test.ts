@@ -7,7 +7,7 @@ import { NOW } from './app-helpers'
 import { migratedStore } from './helpers'
 import { PolicyModel } from './policy-model'
 import { accountId, REMOTE_DOMAINS, statusId, statusUri, type World, worldArb, writeWorld } from './policy-world'
-import { rowsRead } from './read-helpers'
+import { rowsRead, watchedCursor } from './read-helpers'
 import { Db } from '../src/db/sql'
 import { getAccounts, listFollows, type PageQuery, relationships, userinfo } from '../src/domain/accounts'
 import { getFeatured, getLocalNote, getOutbox } from '../src/domain/activities'
@@ -2003,18 +2003,17 @@ async function rowsTouched<I>(store: StoreStub, operation: StoreOperation<I, unk
 		const counting = {
 			exec: (query: string, ...params: SqlStorageValue[]) => {
 				const cursor = real.exec(query, ...params)
-				return {
-					toArray: () => {
-						const rows = cursor.toArray()
-						read += cursor.rowsRead
-						return rows
-					},
-					get rowsWritten() {
-						cursor.toArray()
-						read += cursor.rowsRead
-						return cursor.rowsWritten
-					},
-				}
+				return Object.defineProperty(
+					watchedCursor(cursor, () => (read += cursor.rowsRead)),
+					'rowsWritten',
+					{
+						get() {
+							cursor.toArray()
+							read += cursor.rowsRead
+							return cursor.rowsWritten
+						},
+					}
+				)
 			},
 		} as unknown as SqlStorage
 		operation.run(counting, input)

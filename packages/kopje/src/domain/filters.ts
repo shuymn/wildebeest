@@ -2,6 +2,7 @@ import { resolveApiId } from './accounts'
 import { canView, type ViewerContext } from './audience'
 import { userReadOperation, userWriteOperation } from './auth'
 import { allocateLocalId } from './ids'
+import { fixedColumns, selectSql } from '../db/columns'
 import type { Db } from '../db/sql'
 
 // Filters (Mastodon 4.5's CustomFilter, CustomFilterKeyword and CustomFilterStatus, Api::V2::FiltersController and
@@ -798,6 +799,12 @@ export function activeFilters(db: Db, viewer: ViewerContext): ActiveFilters | nu
 	}
 }
 
+// A filter that names a status: two ids.
+export const FILTER_MATCH_COLUMNS = fixedColumns(
+	{ filter_id: 'fs.filter_id', status_id: 'fs.status_id' },
+	{ filter_id: 18, status_id: 18 }
+)
+
 // The filters among `active` that name each of `statusIds` (CustomFilterStatus), by status id: one seek per filter
 // and status through filter_statuses_pair, so the rows read follow the page, not what other filters name.
 export function filterStatusMatches(
@@ -811,7 +818,7 @@ export function filterStatusMatches(
 		return matches
 	}
 	const rows = db.all<{ filter_id: string; status_id: string }>(
-		`SELECT fs.filter_id, fs.status_id FROM json_each(?1) f CROSS JOIN json_each(?2) s
+		`SELECT ${selectSql(FILTER_MATCH_COLUMNS.columns)} FROM json_each(?1) f CROSS JOIN json_each(?2) s
 			CROSS JOIN filter_statuses fs INDEXED BY filter_statuses_pair ON fs.filter_id = f.value AND fs.status_id = s.value`,
 		JSON.stringify(filterIds),
 		JSON.stringify(statusIds)

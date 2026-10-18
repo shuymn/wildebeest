@@ -91,7 +91,6 @@ import {
 	statusUrlSql,
 } from './status-bounds'
 import {
-	MEDIA_COLUMNS,
 	type MediaAttachment,
 	type MediaRow,
 	presentMedia,
@@ -102,6 +101,7 @@ import {
 	presentStatusesWithin,
 	type Status,
 } from './status-presenter'
+import { MEDIA_COLUMN_MAP } from './status-rows'
 import {
 	exceedsRawLength,
 	linksAny,
@@ -113,6 +113,7 @@ import {
 } from './status-text'
 import { streamDelete } from './streaming'
 import { readWindow, singleWindow, windowJson, windowPage } from './windows'
+import { selectSql } from '../db/columns'
 import type { Db } from '../db/sql'
 import { jsonStringBytes, SPOILER_BYTES, STATUS_CONTENT_BYTES } from '../security/html'
 
@@ -760,7 +761,7 @@ function ownStatus(db: Db, accountId: string, id: string): OwnStatus | null {
 function mediaSnapshot(db: Db, statusId: string): MediaAttachment[] {
 	return db
 		.all<MediaRow>(
-			`SELECT ${MEDIA_COLUMNS} FROM media_attachments WHERE status_id = ? AND shown = 1 ORDER BY position, id`,
+			`SELECT ${selectSql(MEDIA_COLUMN_MAP)} FROM media_attachments m WHERE m.status_id = ? AND m.shown = 1 ORDER BY m.position, m.id`,
 			statusId
 		)
 		.map(presentMedia)

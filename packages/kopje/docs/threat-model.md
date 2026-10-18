@@ -389,7 +389,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   risks). Parent references follow Mastodon: `in_reply_to_id` and `in_reply_to_account_id` are shown even when the
   parent is hidden, because they belong to the reply (its ActivityPub object carries `inReplyTo` to every recipient);
   the parent itself stays behind VIS-1. _Enforced (main):_ `src/domain/status-presenter.ts`,
-  `src/domain/statuses.ts`, `ACCOUNT_COLUMNS` in `src/domain/accounts.ts`; `test/statuses.test.ts` ("review
+  `src/domain/statuses.ts`, `ACCOUNT_COLUMN_MAP` in `src/domain/accounts.ts`; `test/statuses.test.ts` ("review
   regressions"). A tag's `history` (`GET /api/v1/tags/:id`) counts only public originals (as Mastodon's
   `Trends::Tags`) of accounts that are not suspended, the same for every viewer, so it counts no status the caller may
   not see: _Enforced (main):_ `getTag` in `src/domain/tags.ts`; `test/tags.test.ts`
@@ -1343,7 +1343,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   (`sanitizeRemoteBio` in `src/security/html.ts`, which the cutover's converter and verification share); a remote
   profile URL (`url`, icon, image) over `PROFILE_URL_LIMIT` (2,048) is not stored; the display name is cut at 2,048 code
   units, and a username over 255 is refused. Reads apply the same bounds to stored rows, so a row stored earlier or
-  converted is bounded until the account is fetched again: `ACCOUNT_COLUMNS` reads a longer bio as '' and a longer URL
+  converted is bounded until the account is fetched again: `ACCOUNT_COLUMN_MAP` reads a longer bio as '' and a longer URL
   as NULL, and cuts the display name at 2,048 and the username at 255 code points; mentions read the username and URL
   through the same projections (`src/domain/profile-bounds.ts`) and derive `acct` and a fallback url from the cut
   username; the admin account search reads candidates' ids and flags only and tests their text in SQL. The actor URI is

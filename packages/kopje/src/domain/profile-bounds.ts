@@ -1,7 +1,7 @@
 import { ACTOR_URI_LIMIT, REMOTE_USERNAME_LIMIT } from '../platform/identity-bounds'
 import { REMOTE_BIO_BYTES } from '../security/html'
 
-// RES-2: the bounds of the profile columns a remote server controls, as ACCOUNT_COLUMNS (accounts.ts) and every other
+// RES-2: the bounds of the profile columns a remote server controls, as ACCOUNT_COLUMN_MAP (accounts.ts) and every other
 // read that presents them take them. Each bounded column is read through its helper here (test-node/
 // bounded-columns.test.ts). It imports only leaves (platform/identity-bounds.ts, security/html.ts), so modules that
 // build SQL at load (status-presenter.ts) can use it whatever the import order.
@@ -53,7 +53,7 @@ export function noteSql(column: string): string {
 	return jsonBoundSql(column, REMOTE_BIO_BYTES, "''")
 }
 
-// A stored profile URL as every read that presents one takes it (ACCOUNT_COLUMNS, mentions): NULL past the bound.
+// A stored profile URL as every read that presents one takes it (ACCOUNT_COLUMN_MAP, mentions): NULL past the bound.
 export function profileUrlSql(column: string): string {
 	return `CASE WHEN length(CAST(${column} AS BLOB)) <= ${PROFILE_URL_LIMIT} THEN ${column} END`
 }

@@ -141,7 +141,7 @@ export function sanitizeRemoteHtml(html: string): string {
 }
 
 // RES-2: a remote account's bio, as stored and shown, is at most this many UTF-8 bytes as a JSON string (escapes and
-// quotes included), so one presented account has a known size (accounts.ts ACCOUNT_COLUMNS). Realistic bios stay far
+// quotes included), so one presented account has a known size (accounts.ts ACCOUNT_COLUMN_MAP). Realistic bios stay far
 // below it: Mastodon's 500 characters, Misskey's 1,500 and Pleroma's or GoToSocial's 5,000 characters of Japanese
 // with a link and a hashtag every 100 render to at most about 28 KB (test/account-answer-bytes.test.ts).
 export const REMOTE_BIO_BYTES = 64 * 1024

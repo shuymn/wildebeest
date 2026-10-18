@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { seedAccount } from './api-helpers'
 import { NOW } from './app-helpers'
 import { migratedStore } from './helpers'
+import { watchedCursor } from './read-helpers'
 import { statusContext } from '../src/domain/statuses'
 import type { StoreStub } from '../src/platform/store-client'
 
@@ -52,16 +53,7 @@ async function rowsRead(store: StoreStub, signedIn: boolean): Promise<{ read: nu
 		const counting = {
 			exec: (query: string, ...params: SqlStorageValue[]) => {
 				const cursor = sql.exec(query, ...params)
-				return {
-					toArray: () => {
-						const rows = cursor.toArray()
-						read += cursor.rowsRead
-						return rows
-					},
-					get rowsWritten() {
-						return cursor.rowsWritten
-					},
-				}
+				return watchedCursor(cursor, () => (read += cursor.rowsRead))
 			},
 		} as unknown as SqlStorage
 		const credential = signedIn ? { tokenHash: 't', scope: 'read:statuses' as const, now: NOW } : null

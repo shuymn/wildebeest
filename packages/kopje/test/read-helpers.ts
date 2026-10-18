@@ -35,13 +35,7 @@ export async function rowsRead<I>(
 		const counting = {
 			exec: (query: string, ...params: SqlStorageValue[]) => {
 				const cursor = real.exec(query, ...params)
-				return {
-					toArray: () => {
-						const rows = cursor.toArray()
-						read += cursor.rowsRead
-						return rows
-					},
-				}
+				return watchedCursor(cursor, () => (read += cursor.rowsRead))
 			},
 		} as unknown as SqlStorage
 		operation.run(counting, input)
@@ -65,18 +59,69 @@ export async function remoteAccounts(h: ApiHarness, domains: number, perDomain: 
 
 export type SqlRow = Record<string, SqlStorageValue>
 
-// A SqlStorage over `real` that hands every row a statement returns (toArray or one) to `observe`, as it leaves SQLite.
-export function observedSql(real: SqlStorage, observe: (rows: readonly SqlRow[]) => void): SqlStorage {
+// A SqlStorage over `real` that hands the rows each statement returns to `observe` (with the statement), as they leave
+// SQLite: all at once for toArray and one, and once the statement is done or abandoned when Db.iterate steps it.
+export function observedSql(real: SqlStorage, observe: (rows: readonly SqlRow[], query: string) => void): SqlStorage {
 	return {
-		exec: (query: string, ...params: SqlStorageValue[]) => {
-			const cursor = real.exec(query, ...params)
-			const seen = (rows: SqlRow[]) => {
-				observe(rows)
-				return rows
-			}
-			return { toArray: () => seen(cursor.toArray()), one: () => seen([cursor.one()])[0]! }
-		},
+		exec: (query: string, ...params: SqlStorageValue[]) =>
+			watchedCursor(
+				real.exec(query, ...params),
+				() => {},
+				(rows) => observe(rows, query)
+			),
 	} as unknown as SqlStorage
+}
+
+// A cursor for a test's SqlStorage wrapper, over `cursor`: toArray, one and row-by-row iteration (Db.iterate), with
+// `done` called after each read (once a stepped statement is done or abandoned) and `seen` given the rows it returned.
+export function watchedCursor(
+	cursor: SqlStorageCursor<SqlRow>,
+	done: () => void,
+	seen: (rows: SqlRow[]) => void = () => {}
+) {
+	const finished = (rows: SqlRow[]) => {
+		seen(rows)
+		done()
+		return rows
+	}
+	return {
+		toArray: () => finished(cursor.toArray()),
+		one: () => finished([cursor.one()])[0]!,
+		get rowsRead() {
+			return cursor.rowsRead
+		},
+		get rowsWritten() {
+			return cursor.rowsWritten
+		},
+		[Symbol.iterator](): IterableIterator<SqlRow> {
+			const rows: SqlRow[] = []
+			let open = true
+			const close = () => {
+				if (open) {
+					open = false
+					finished(rows)
+				}
+			}
+			return {
+				next: () => {
+					const step = cursor.next()
+					if (step.done === true) {
+						close()
+					} else {
+						rows.push(step.value)
+					}
+					return step
+				},
+				return: (value?: unknown) => {
+					close()
+					return { done: true, value }
+				},
+				[Symbol.iterator]() {
+					return this
+				},
+			} as IterableIterator<SqlRow>
+		},
+	}
 }
 
 // The longest string among `rows`' values, in UTF-16 code units.

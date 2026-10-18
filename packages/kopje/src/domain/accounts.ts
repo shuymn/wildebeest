@@ -35,6 +35,7 @@ import {
 import { accountSearchText, queryTerms } from './search-text'
 import { renderFieldValue } from './status-text'
 import { readWindow, singleWindow, type Window, windowJson, windowPage } from './windows'
+import { type ColumnMap, selectSql } from '../db/columns'
 import type { Db } from '../db/sql'
 import { normalizeDomain, parseAddress } from '../platform/domain-name'
 import { boundedHref, httpUrl } from '../platform/http-url'
@@ -171,7 +172,7 @@ const FIELD_VALUE_RAW_LIMIT = 4096
 // (a list's members with limit=0, familiar followers) at most ANSWER_BYTES in all.
 export const REMOTE_FIELDS_BYTES = 32 * 1024
 
-// A remote account's attachment as ACCOUNT_COLUMNS projects it, chosen and cut in SQL so that the stored actor
+// A remote account's attachment as ACCOUNT_COLUMN_MAP projects it, chosen and cut in SQL so that the stored actor
 // document (up to the fetch budget, 2 MiB) never reaches the isolate: a JSON list of {name, value} entries in
 // document order, at most MAX_REMOTE_FIELDS of them, the name cut (cutSql) at FIELD_NAME_LIMIT and the value at
 // FIELD_VALUE_RAW_LIMIT code points, and only the leading entries whose JSON fits REMOTE_FIELDS_BYTES (size: the
@@ -196,17 +197,30 @@ const REMOTE_ATTACHMENT_SQL = `CASE WHEN a.domain IS NOT NULL THEN (
 // converted rows are bounded too; fields use REMOTE_ATTACHMENT_SQL and remoteFields. See docs/threat-model.md, RES-3.
 // One account reads at most about 113 KB and serializes to 123 KB (bio 64 KiB, escaped display name 12 KiB,
 // fields 33 KB, five URLs 10 KiB, the rest about 2 KB), so a page of 80 serializes to at most about 10 MB.
-export const ACCOUNT_COLUMNS = `a.id, ${actorUriSql('a.uri')} AS uri, ${usernameSql('a.username')} AS username, a.domain,
-	a.actor_type, ${displayNameSql('a.display_name')} AS display_name, ${noteSql('a.note')} AS note,
-	${profileUrlSql('a.url')} AS url, ${profileUrlSql('a.avatar_url')} AS avatar_url,
-	${profileUrlSql('a.header_url')} AS header_url, a.locked, a.discoverable, a.followers_count, a.following_count,
-	a.statuses_count, a.created_at,
-	${availableJoinedSql('a', 'l')} AS available,
-	(SELECT substr(s.published_at, 1, 10) FROM statuses s
-		WHERE s.account_id = a.id AND s.visibility IN ${REACHES_FOLLOWERS_SQL} ORDER BY s.id DESC LIMIT 1)
-		AS last_status_at,
-	l.fields AS local_fields, COALESCE(l.hide_collections, a.hide_collections) AS hide_collections,
-	${REMOTE_ATTACHMENT_SQL} AS attachment`
+export const ACCOUNT_COLUMN_MAP = {
+	id: 'a.id',
+	uri: actorUriSql('a.uri'),
+	username: usernameSql('a.username'),
+	domain: 'a.domain',
+	actor_type: 'a.actor_type',
+	display_name: displayNameSql('a.display_name'),
+	note: noteSql('a.note'),
+	url: profileUrlSql('a.url'),
+	avatar_url: profileUrlSql('a.avatar_url'),
+	header_url: profileUrlSql('a.header_url'),
+	locked: 'a.locked',
+	discoverable: 'a.discoverable',
+	followers_count: 'a.followers_count',
+	following_count: 'a.following_count',
+	statuses_count: 'a.statuses_count',
+	created_at: 'a.created_at',
+	available: availableJoinedSql('a', 'l'),
+	last_status_at: `(SELECT substr(s.published_at, 1, 10) FROM statuses s
+		WHERE s.account_id = a.id AND s.visibility IN ${REACHES_FOLLOWERS_SQL} ORDER BY s.id DESC LIMIT 1)`,
+	local_fields: 'l.fields',
+	hide_collections: 'COALESCE(l.hide_collections, a.hide_collections)',
+	attachment: REMOTE_ATTACHMENT_SQL,
+} as const satisfies ColumnMap
 
 export { DISPLAY_NAME_LIMIT, PROFILE_URL_LIMIT, profileUrlSql, USERNAME_LIMIT, usernameSql }
 
@@ -461,7 +475,7 @@ function presentAccountsById(db: Db, ids: readonly string[], present: Present): 
 	return new Map(
 		db
 			.all<AccountRow>(
-				`SELECT ${ACCOUNT_COLUMNS} FROM ${ACCOUNT_FROM} WHERE a.id IN (SELECT value FROM json_each(?1))`,
+				`SELECT ${selectSql(ACCOUNT_COLUMN_MAP)} FROM ${ACCOUNT_FROM} WHERE a.id IN (SELECT value FROM json_each(?1))`,
 				JSON.stringify([...new Set(ids)])
 			)
 			.map((row) => [row.id, presentAccount(row, present)])
@@ -475,7 +489,7 @@ export function presentAccountById(db: Db, id: string, present: Present): Accoun
 }
 
 function accountRow(db: Db, id: string): AccountRow | undefined {
-	return db.first<AccountRow>(`SELECT ${ACCOUNT_COLUMNS} FROM ${ACCOUNT_FROM} WHERE a.id = ?`, id)
+	return db.first<AccountRow>(`SELECT ${selectSql(ACCOUNT_COLUMN_MAP)} FROM ${ACCOUNT_FROM} WHERE a.id = ?`, id)
 }
 
 export const getAccount = readOperation<{ id: string; present: Present }, Account | null>((db, { id, present }) => {
@@ -503,11 +517,11 @@ export const lookupAccount = readOperation<
 	const row =
 		domain === null
 			? db.first<AccountRow>(
-					`SELECT ${ACCOUNT_COLUMNS} FROM ${ACCOUNT_FROM} WHERE a.domain IS NULL AND lower(a.username) = lower(?)`,
+					`SELECT ${selectSql(ACCOUNT_COLUMN_MAP)} FROM ${ACCOUNT_FROM} WHERE a.domain IS NULL AND lower(a.username) = lower(?)`,
 					username
 				)
 			: db.first<AccountRow>(
-					`SELECT ${ACCOUNT_COLUMNS} FROM ${ACCOUNT_FROM} WHERE a.domain = ? AND lower(a.username) = lower(?)`,
+					`SELECT ${selectSql(ACCOUNT_COLUMN_MAP)} FROM ${ACCOUNT_FROM} WHERE a.domain = ? AND lower(a.username) = lower(?)`,
 					normalizeDomain(domain) ?? domain.toLowerCase(),
 					username
 				)
@@ -1230,7 +1244,7 @@ export function accountRowsOf(db: Db, ids: readonly string[]): AccountRow[] {
 	const rows = new Map(
 		db
 			.all<AccountRow>(
-				`SELECT ${ACCOUNT_COLUMNS} FROM json_each(?1) c CROSS JOIN accounts a ON a.id = c.value
+				`SELECT ${selectSql(ACCOUNT_COLUMN_MAP)} FROM json_each(?1) c CROSS JOIN accounts a ON a.id = c.value
 					LEFT JOIN local_accounts l ON l.account_id = a.id`,
 				JSON.stringify(ids)
 			)
