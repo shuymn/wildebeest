@@ -5,6 +5,16 @@ import { describe, expect, it } from 'vitest'
 
 import { convert, exportOf, opened, verify, workspace } from './cutover-helpers.js'
 import {
+	cutJsonString,
+	jsonStringBytes,
+	REMOTE_BIO_BYTES,
+	sanitizeRemoteBio,
+	sanitizeRemoteContent,
+	sanitizeRemoteHtml,
+	SPOILER_BYTES,
+	STATUS_CONTENT_BYTES,
+} from '../cli/lib/cutover/kopje-runtime.js'
+import {
 	contentSql,
 	displayNameSql,
 	mediaDescriptionSql,
@@ -44,6 +54,16 @@ const COVERED: [table: string, column: string, projection: (column: string) => s
 	['status_edits', 'spoiler_text', spoilerSql],
 	['status_edits', 'poll_options', pollOptionsSql],
 ]
+
+// Every covered column of every row is a fixed point of its projection.
+function expectFixedPoints(db: Awaited<ReturnType<typeof opened>>): void {
+	for (const [table, column, projection] of COVERED) {
+		const off = db
+			.prepare(`SELECT count(*) AS n FROM ${table} WHERE (${projection(column)}) IS NOT ${column}`)
+			.get() as { n: number }
+		expect(off.n, `${table}.${column}`).toBe(0)
+	}
+}
 
 // `prefix` padded with 'x' to `bytes` UTF-8 bytes (an ASCII prefix).
 const urlOf = (prefix: string, bytes: number) => prefix.padEnd(bytes, 'x')
@@ -132,12 +152,7 @@ describe('converted rows at the stored bounds', () => {
 
 		const db = await opened(converted.dumpPath)
 		try {
-			for (const [table, column, projection] of COVERED) {
-				const off = db
-					.prepare(`SELECT count(*) AS n FROM ${table} WHERE (${projection(column)}) IS NOT ${column}`)
-					.get() as { n: number }
-				expect(off.n, `${table}.${column}`).toBe(0)
-			}
+			expectFixedPoints(db)
 			const account = (uri: string) =>
 				db.prepare('SELECT display_name, note, url, avatar_url FROM accounts WHERE uri = ?').get(uri) as Record<
 					string,
@@ -170,5 +185,106 @@ describe('converted rows at the stored bounds', () => {
 			db.close()
 		}
 		expect((await verify(exportPath, converted.dumpPath)).ok).toBe(true)
+	})
+	it('stores the JSON-bounded texts, header URLs and edit snapshots at each bound and one past it', async () => {
+		const exportPath = await exportOf(space.dir, { level: 39 })
+		const replace = (from: string, to: string) => edited(exportPath, (text) => text.replaceAll(from, to))
+		// Each value at its bound ('a' padding), and one past it ('b'), in UTF-8 bytes of its (sanitized) JSON string.
+		// The padding past `base` bytes: 'a' up to a bound (an even size here), 'b' past it, so a cut differs from it.
+		const pad2 = (bytes: number, base: number) => (bytes % 2 === 0 ? 'a' : 'b').repeat(bytes - base)
+		const html = (bytes: number) => `<p>${'\u65e5'.repeat(43_687)}${pad2(bytes, 131_070)}</p>`
+		const bio = (bytes: number) => `<p>${'\u00e9'.repeat(32_763)}${pad2(bytes, 65_535)}</p>`
+		const warning = (bytes: number) => `${'\u00e9'.repeat(8190)}${pad2(bytes, 16_382)}`
+		const source = (bytes: number) => `${'\u65e5'.repeat(43_689)}${pad2(bytes, 131_069)}`
+		const [bioAt, bioOver] = [bio(REMOTE_BIO_BYTES), bio(REMOTE_BIO_BYTES + 1)]
+		const [contentAt, contentOver] = [html(STATUS_CONTENT_BYTES), html(STATUS_CONTENT_BYTES + 1)]
+		const [warningAt, warningOver] = [warning(SPOILER_BYTES), warning(SPOILER_BYTES + 1)]
+		const [sourceAt, sourceOver] = [source(STATUS_CONTENT_BYTES), source(STATUS_CONTENT_BYTES + 1)]
+		expect([bioAt, bioOver].map((x) => jsonStringBytes(sanitizeRemoteHtml(x)))).toEqual([65_536, 65_537])
+		expect([contentAt, contentOver].map((x) => jsonStringBytes(sanitizeRemoteHtml(x)))).toEqual([131_072, 131_073])
+		expect([warningAt, warningOver].map(jsonStringBytes)).toEqual([16_384, 16_385])
+		expect([sourceAt, sourceOver].map(jsonStringBytes)).toEqual([131_072, 131_073])
+		const headerAt = urlOf('https://files.remote.example/h/2.png#', 2048)
+		const headerOver = urlOf('https://files.remote.example/h/3.png#', 2049)
+		const mediaAt = urlOf('https://files.remote.example/e/1.png#', 2048)
+		const mediaOver = urlOf('https://files.remote.example/e/2.png#', 2049)
+		expect([headerAt, headerOver, mediaAt, mediaOver].map((u) => Buffer.byteLength(u))).toEqual([
+			2048, 2049, 2048, 2049,
+		])
+
+		expect(await replace('<p>bio 0</p>', json(bioAt))).toBe(1)
+		expect(await replace('<p>bio 1</p>', json(bioOver))).toBe(1)
+		for (const [i, url] of [
+			[2, headerAt],
+			[3, headerOver],
+		] as const) {
+			const icon = `"icon":{"type":"Image","url":"https://files.remote.example/a/${i}.png"}`
+			expect(await replace(icon, `"image":{"type":"Image","url":"${url}"},${icon}`)).toBe(1)
+		}
+		expect(await replace('<p>unlisted from r3, lost its original id</p>', json(contentAt))).toBe(1)
+		expect(await replace('<p>a reply to alice</p>', json(contentOver))).toBe(1)
+		expect(await replace('CW 注意', json(warningAt))).toBe(1)
+		expect(await replace('CW: spoilers', json(warningOver))).toBe(1)
+		expect(await replace('"source":{"content":"unlisted, with a CW"', `"source":{"content":"${json(sourceAt)}"`)).toBe(
+			1
+		)
+		expect(await replace('"source":{"content":"followers only"', `"source":{"content":"${json(sourceOver)}"`)).toBe(1)
+		const attachment = (url: string) => `{"type":"Document","mediaType":"image/png","url":"${url}"}`
+		expect(
+			await replace(
+				'"content":"<p>edited text, first version</p>","spoiler_text":"","sensitive":false,"attachment":[]',
+				`"content":"${json(contentAt)}","spoiler_text":"${json(warningOver)}","sensitive":false,` +
+					`"attachment":[${attachment(mediaAt)},${attachment(mediaOver)}]`
+			)
+		).toBe(1)
+
+		const converted = await convert(space.dir, exportPath, { acceptTruncation: true })
+		expect(converted.ok).toBe(true)
+		expect((converted.manifest.conversion as { normalized: Record<string, number> }).normalized).toMatchObject({
+			'html:bio-longer-than-bound': 1,
+			'html:content-longer-than-bound': 1,
+			'text:spoiler-longer-than-bound': 2,
+			'text:source-longer-than-bound': 1,
+			'stored:accounts.header_url': 1,
+			'stored:status_edits.media_json': 1,
+		})
+		const db = await opened(converted.dumpPath)
+		try {
+			expectFixedPoints(db)
+			const value = (query: string, ...params: string[]) => db.prepare(query).get(...params) as Record<string, unknown>
+			const account = (i: number) =>
+				value('SELECT note, header_url FROM accounts WHERE uri = ?', `https://remote.example/users/r${i}`)
+			expect(account(0).note).toBe(bioAt)
+			expect(account(1).note).toBe(sanitizeRemoteBio(bioOver))
+			expect([account(2).header_url, account(3).header_url]).toEqual([headerAt, null])
+			expect(value('SELECT count(*) AS n FROM statuses WHERE content = ?', contentAt).n).toBe(1)
+			expect(value('SELECT count(*) AS n FROM statuses WHERE content = ?', sanitizeRemoteContent(contentOver)).n).toBe(
+				1
+			)
+			expect(value('SELECT count(*) AS n FROM statuses WHERE spoiler_text = ?', warningAt).n).toBe(1)
+			const cutWarning = cutJsonString(warningOver, SPOILER_BYTES)
+			expect(value('SELECT count(*) AS n FROM statuses WHERE spoiler_text = ?', cutWarning).n).toBe(1)
+			expect(value('SELECT count(*) AS n FROM statuses WHERE source_text = ?', sourceAt).n).toBe(1)
+			const cutSource = cutJsonString(sourceOver, STATUS_CONTENT_BYTES)
+			expect(value('SELECT count(*) AS n FROM statuses WHERE source_text = ?', cutSource).n).toBe(1)
+			const edit = value('SELECT content, spoiler_text, media_json FROM status_edits WHERE content = ?', contentAt) as {
+				content: string
+				spoiler_text: string
+				media_json: string
+			}
+			expect(edit.spoiler_text).toBe(cutWarning)
+			expect(
+				(JSON.parse(edit.media_json) as { url: string | null; preview_url: string | null }[]).map((m) => [
+					m.url,
+					m.preview_url,
+				])
+			).toEqual([
+				[mediaAt, mediaAt],
+				[null, null],
+			])
+		} finally {
+			db.close()
+		}
+		expect((await verify(exportPath, converted.dumpPath, { acceptTruncation: true })).ok).toBe(true)
 	})
 })
