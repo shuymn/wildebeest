@@ -1354,7 +1354,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   one item at their maxima ("Heap at 8 MiB per answer"). Id-cursor status pages
   (home, public, hashtag and list timelines, account statuses, bookmarks, favourites, quotes) cut there are `Page.cut`
   and continue from their last admitted status in traversal order, `min_id` walking oldest first; a candidate-window
-  continuation is kept only when no status was left out by bytes before it. A context gives the ancestors half,
+  continuation is kept only when no status was left out by bytes before it; pinned statuses continue in pin order
+  from a `max_id` that names one of the account's pins. A context gives the ancestors half,
   nearest first, and the descendants the rest; an edit history admits the newest versions; `GET /api/v1/statuses`
   leaves out the ids past the budget; search, its resolved account included, and the account search return fewer
   results (offset endpoints); a profile web page shares the budget between its account and statuses. One presentation
