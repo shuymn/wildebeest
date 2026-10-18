@@ -87,18 +87,13 @@ async function answer<T = { id: string }[]>(h: ApiHarness, path: string, token?:
 	}
 }
 
+type Walked = { ids: string[]; pages: { shown: string[]; bytes: number; cursor: string | null }[] }
+
 // Walks a list by its Link header from `path`: `next` (older, newest first) or `prev` (newer, each page shown newest
-// first, collected oldest first). `keep` is added back to each link (since_id, which links drop, as Mastodon's).
-async function walk(
-	h: ApiHarness,
-	path: string,
-	rel: 'next' | 'prev',
-	token?: string,
-	keep = ''
-): Promise<{ ids: string[]; pages: number; cut: number }> {
-	const ids: string[] = []
-	let pages = 0
-	let cut = 0
+// first, collected oldest first). `keep` is added back to each link (since_id or max_id, which links drop, as
+// Mastodon's). Each page keeps the cursor its link carries.
+async function walk(h: ApiHarness, path: string, rel: 'next' | 'prev', token?: string, keep = ''): Promise<Walked> {
+	const walked: Walked = { ids: [], pages: [] }
 	for (let at: string | null = path; at !== null;) {
 		const page: Answer<{ id: string }[]> = await answer(h, at, token)
 		expect(page.status).toBe(200)
@@ -107,37 +102,58 @@ async function walk(
 		if (shown.length === 0) {
 			break
 		}
-		pages++
-		cut += page.bytes > ANSWER_BYTES - 1_000_000 ? 1 : 0
-		ids.push(...(rel === 'next' ? shown : shown.toReversed()))
 		const link: string | null = page[rel]
+		const cursor =
+			link === null ? null : new URLSearchParams(link.split('?')[1]).get(rel === 'next' ? 'max_id' : 'min_id')
+		walked.pages.push({ shown, bytes: page.bytes, cursor })
+		walked.ids.push(...(rel === 'next' ? shown : shown.toReversed()))
 		at = link === null ? null : `${link}${keep}`
-		expect(pages).toBeLessThan(40)
+		expect(walked.pages.length).toBeLessThan(40)
 	}
-	return { ids, pages, cut }
+	return walked
+}
+
+// A walk cut by the answer budget: every status once, in order, at least one page cut by bytes (one more status of
+// `size` would pass ANSWER_BYTES), and each such page continuing from its last status in traversal order (`cursorOf`
+// gives its cursor: the status id, or a bookmark's or favourite's id).
+function expectByteCutWalk(
+	name: string,
+	walked: Walked,
+	expected: readonly string[],
+	rel: 'next' | 'prev',
+	size: number,
+	cursorOf: (id: string) => string = (id) => id
+): void {
+	expect([name, walked.ids]).toEqual([name, expected])
+	const cut = walked.pages.filter((page) => page.bytes + size + 1 > ANSWER_BYTES)
+	expect([name, cut.length]).not.toEqual([name, 0])
+	for (const page of cut) {
+		const last = rel === 'next' ? page.shown.at(-1)! : page.shown[0]!
+		expect([name, page.cursor]).toEqual([name, cursorOf(last)])
+	}
 }
 
 type World = Awaited<ReturnType<typeof world>>
 
 const run = (kind: 'V' | 'M', n: number) => Array.from({ length: n }, () => kind)
 
-// Alice, a remote author of twelve big statuses (V[0] newest), tagged #big, which alice follows, lists, bookmarks and
-// favourites; and a muted author whose 135 small public statuses lie between them, newest first: V[0..9], 115 muted,
-// V[10..11], 20 muted. A public page of 40 reads a window of 120 candidates, so its first window ends in muted
-// statuses and is cut (B0b) after V[0..9], which the answer budget cuts first.
+// Alice, a remote author of twenty big statuses (V[0] newest), tagged #big and #needle, which alice follows, lists,
+// bookmarks and favourites; and a muted author whose 135 small public statuses lie between them, newest first:
+// V[0..9], 115 muted, V[10..19], 20 muted. A public page of 40 reads a window of 120 candidates, so its first window,
+// from either end, ends in muted statuses and is cut (B0b) after ten big statuses, which the answer budget cuts first.
 async function world() {
 	const h = await community(['alice', 'bob'])
 	const { alice } = h.users
 	const author = await remoteAccount(h.store, 'big')
 	const muted = await remoteAccount(h.store, 'muted')
 	await mute(h.store, alice.id, muted)
-	const kinds = [...run('V', 10), ...run('M', 115), ...run('V', 2), ...run('M', 20)].toReversed()
+	const kinds = [...run('V', 10), ...run('M', 115), ...run('V', 10), ...run('M', 20)].toReversed()
 	const big: string[] = []
 	const small: string[] = []
 	for (const [i, kind] of kinds.entries()) {
 		const published = NOW - (kinds.length - i) * 60_000
 		if (kind === 'V') {
-			big.push(await bigStatus(h, author, published, { tags: ['big'] }))
+			big.push(await bigStatus(h, author, published, { tags: ['big', 'needle'] }))
 		} else {
 			small.push(await seedStatus(h.store, { accountId: muted, visibility: 'public', published }))
 		}
@@ -156,13 +172,35 @@ async function world() {
 		await sql(h.store, 'INSERT INTO bookmarks (account_id, status_id) VALUES (?, ?)', alice.id, id)
 		await sql(h.store, 'INSERT INTO favourites (account_id, status_id) VALUES (?, ?)', alice.id, id)
 	}
-	return { h, alice, author, muted, V, small: small.toReversed(), list }
+	// Each status's bookmark and favourite id, the cursors of those lists.
+	const edges = async (table: string) =>
+		new Map(
+			(
+				await sql<{ id: string; status_id: string }>(h.store, `SELECT CAST(id AS TEXT) AS id, status_id FROM ${table}`)
+			).map((row) => [row.status_id, row.id])
+		)
+	const size = Math.min(...(await Promise.all(V.map((id) => bytesOf(h, alice.token, id)))))
+	return {
+		h,
+		alice,
+		author,
+		muted,
+		V,
+		small: small.toReversed(),
+		list,
+		bookmarks: await edges('bookmarks'),
+		favourites: await edges('favourites'),
+		size,
+	}
 }
 
 // The JSON of one status as the viewer is shown it alone.
+async function bytesOf(h: ApiHarness, token: string, id: string): Promise<number> {
+	return (await answer<unknown>(h, `/api/v1/statuses/${id}`, token)).bytes
+}
+
 async function statusBytes(w: World, id: string): Promise<number> {
-	const one = await answer<unknown>(w.h, `/api/v1/statuses/${id}`, w.alice.token)
-	return one.bytes
+	return bytesOf(w.h, w.alice.token, id)
 }
 
 describe('admission (RES-3)', () => {
@@ -197,48 +235,108 @@ describe('admission (RES-3)', () => {
 })
 
 describe('status pages are answers within ANSWER_BYTES (RES-3)', () => {
-	it('walk every status once in both directions, a byte cut before a window continuation included', async () => {
+	it('walk every status once in both directions, each cut by bytes, before a window continuation too', async () => {
 		const w = await world()
-		const { h, alice, V } = w
+		const { h, alice, V, size } = w
 		const lists = [
 			['public', '/api/v1/timelines/public?limit=40'],
 			['home', '/api/v1/timelines/home?limit=40'],
 			['list', `/api/v1/timelines/list/${w.list}?limit=40`],
 			['tag', '/api/v1/timelines/tag/big?limit=40'],
 			['account statuses', `/api/v1/accounts/${w.author}/statuses?limit=40`],
-		]
+		] as const
+		const inner = V.slice(1, 19)
 		for (const [name, path] of lists) {
-			const older = await walk(h, path!, 'next', alice.token)
-			expect([name, older.ids]).toEqual([name, V])
-			expect(older.cut).toBeGreaterThan(0)
-			const newer = await walk(h, `${path!}&min_id=1`, 'prev', alice.token)
-			expect([name, newer.ids]).toEqual([name, V.toReversed()])
-			// since_id walks newest first above its bound; with max_id, between both.
+			expectByteCutWalk(name, await walk(h, path, 'next', alice.token), V, 'next', size)
+			expectByteCutWalk(name, await walk(h, `${path}&min_id=1`, 'prev', alice.token), V.toReversed(), 'prev', size)
+			// since_id walks newest first above its bound; with max_id, between both, either way.
 			const since = `&since_id=${w.small.at(-1)!}`
-			expect([name, (await walk(h, `${path!}${since}`, 'next', alice.token, since)).ids]).toEqual([name, V])
-			const between = `&since_id=${V[10]!}`
-			const bounded = await walk(h, `${path!}&max_id=${V[1]!}${between}`, 'next', alice.token, between)
-			expect([name, bounded.ids]).toEqual([name, V.slice(2, 10)])
+			expectByteCutWalk(name, await walk(h, `${path}${since}`, 'next', alice.token, since), V, 'next', size)
+			const below = `&since_id=${V[19]!}`
+			const down = await walk(h, `${path}&max_id=${V[0]!}${below}`, 'next', alice.token, below)
+			expectByteCutWalk(`${name} between`, down, inner, 'next', size)
+			const above = `&max_id=${V[0]!}`
+			const up = await walk(h, `${path}&min_id=${V[19]!}${above}`, 'prev', alice.token, above)
+			expectByteCutWalk(`${name} between`, up, inner.toReversed(), 'prev', size)
 		}
-		// The public timeline's first page: V[0..9] passed in a window cut at muted statuses, cut by bytes before them,
-		// so its next link starts below its last status, not below the window.
-		const first = await answer(h, '/api/v1/timelines/public?limit=40', alice.token)
-		const shown = first.body.map((s) => s.id)
-		expect(shown.length).toBeLessThan(10)
-		expect(first.next).toContain(`max_id=${shown.at(-1)!}`)
-		// The first rejected status is the one that does not fit.
-		const next = V[shown.length]!
-		expect(first.bytes + (await statusBytes(w, next)) + 1).toBeGreaterThan(ANSWER_BYTES)
-		for (const [name, path] of [
-			['bookmarks', '/api/v1/bookmarks?limit=40'],
-			['favourites', '/api/v1/favourites?limit=40'],
-		]) {
-			expect([name, (await walk(h, path!, 'next', alice.token)).ids]).toEqual([name, V])
-			expect([name, (await walk(h, `${path!}&min_id=0`, 'prev', alice.token)).ids]).toEqual([name, V.toReversed()])
+		// The public timeline's first pages from either end: ten big statuses passed in a window cut at muted statuses
+		// (B0b), cut by bytes before them, so the link continues from the last one shown, not from the window's end.
+		for (const [rel, path] of [
+			['next', '/api/v1/timelines/public?limit=40'],
+			['prev', '/api/v1/timelines/public?limit=40&min_id=1'],
+		] as const) {
+			const [first] = (await walk(h, path, rel, alice.token)).pages
+			expect(first!.shown.length).toBeLessThan(10)
+			expect(first!.cursor).toBe(rel === 'next' ? first!.shown.at(-1) : first!.shown[0])
+			// The first rejected status is the one that does not fit.
+			expect(first!.bytes + size + 1).toBeGreaterThan(ANSWER_BYTES)
+		}
+		for (const [name, path, edges] of [
+			['bookmarks', '/api/v1/bookmarks?limit=40', w.bookmarks],
+			['favourites', '/api/v1/favourites?limit=40', w.favourites],
+		] as const) {
+			const cursorOf = (id: string) => edges.get(id)!
+			expectByteCutWalk(name, await walk(h, path, 'next', alice.token), V, 'next', size, cursorOf)
+			const ascending = await walk(h, `${path}&min_id=0`, 'prev', alice.token)
+			expectByteCutWalk(name, ascending, V.toReversed(), 'prev', size, cursorOf)
+			const since = `&since_id=${cursorOf(V[19]!)}`
+			const above = await walk(h, `${path}${since}`, 'next', alice.token, since)
+			expectByteCutWalk(name, above, V.slice(0, 19), 'next', size, cursorOf)
+			const down = await walk(h, `${path}&max_id=${cursorOf(V[0]!)}${since}`, 'next', alice.token, since)
+			expectByteCutWalk(`${name} between`, down, inner, 'next', size, cursorOf)
+			const max = `&max_id=${cursorOf(V[0]!)}`
+			const up = await walk(h, `${path}&min_id=${cursorOf(V[19]!)}${max}`, 'prev', alice.token, max)
+			expectByteCutWalk(`${name} between`, up, inner.toReversed(), 'prev', size, cursorOf)
 		}
 	}, 600_000)
 
-	it('reads at most one status past the cut out of SQLite', async () => {
+	it('walk pinned statuses in pin order and quotes once each, cut by bytes', async () => {
+		const h = await community(['alice', 'bob'])
+		const { alice, bob } = h.users
+		// Ten of bob's big statuses, pinned in an order unlike their ids': newest pin first is P.
+		const posts: string[] = []
+		for (let i = 0; i < 10; i++) {
+			posts.push(await bigStatus(h, bob.id, NOW - (20 - i) * 60_000))
+		}
+		const P = [3, 7, 0, 9, 1, 8, 2, 6, 4, 5].map((i) => posts[i]!)
+		for (const [i, id] of P.toReversed().entries()) {
+			await sql(
+				h.store,
+				'INSERT INTO status_pins (account_id, status_id, created_at) VALUES (?, ?, ?)',
+				bob.id,
+				id,
+				new Date(NOW - DAY + i * 60_000).toISOString()
+			)
+		}
+		const size = Math.min(...(await Promise.all(posts.map((id) => bytesOf(h, alice.token, id)))))
+		const pinned = `/api/v1/accounts/${bob.id}/statuses?pinned=true&limit=40`
+		expectByteCutWalk('pinned', await walk(h, pinned, 'next', alice.token), P, 'next', size)
+		// min_id pages pins by status id.
+		expectByteCutWalk('pinned', await walk(h, `${pinned}&min_id=1`, 'prev', alice.token), posts, 'prev', size)
+		// Ten big statuses quoting a small one.
+		const author = await remoteAccount(h.store, 'quoter')
+		const quoted = await seedStatus(h.store, { accountId: author, visibility: 'public', published: NOW - 2 * DAY })
+		const quoting: string[] = []
+		for (let i = 0; i < 10; i++) {
+			const id = await bigStatus(h, author, NOW - DAY + i * 60_000)
+			await sql(
+				h.store,
+				`INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, quoted_account_id, state, updated_at)
+				SELECT ?1, uri, id, account_id, 'accepted', ?3 FROM statuses WHERE id = ?2`,
+				id,
+				quoted,
+				new Date(NOW).toISOString()
+			)
+			quoting.push(id)
+		}
+		const quoteSize = Math.min(...(await Promise.all(quoting.map((id) => bytesOf(h, alice.token, id)))))
+		const quotes = `/api/v1/statuses/${quoted}/quotes?limit=40`
+		const newest = quoting.toReversed()
+		expectByteCutWalk('quotes', await walk(h, quotes, 'next', alice.token), newest, 'next', quoteSize)
+		expectByteCutWalk('quotes', await walk(h, `${quotes}&min_id=1`, 'prev', alice.token), quoting, 'prev', quoteSize)
+	}, 300_000)
+
+	it('reads at most one chunk of statuses past the cut out of SQLite', async () => {
 		const w = await world()
 		const one = await sqliteBytes(w, (db, viewer) => {
 			const shared = presentation(db, [w.V[0] as VisibleStatusId], { origin: ORIGIN, viewer })
@@ -251,9 +349,10 @@ describe('status pages are answers within ANSWER_BYTES (RES-3)', () => {
 		})
 		expect(one.result).toBe(1)
 		expect(page.result).toBeLessThan(w.V.length)
-		// Each status is read as one chunk: the admitted ones and the first rejected, each about its own bytes.
-		expect(page.largest).toBeLessThanOrEqual(one.largest)
-		expect(page.bytes).toBeLessThanOrEqual((page.result + 1) * one.bytes * 1.01)
+		// Rows are read 4 statuses at a time (STATUS_CHUNK): the chunks up to the first rejected status, no more.
+		const chunks = Math.ceil((page.result + 1) / 4)
+		expect(page.largest).toBeLessThanOrEqual(4 * one.largest * 1.01)
+		expect(page.bytes).toBeLessThanOrEqual(chunks * 4 * one.bytes * 1.01)
 	})
 })
 
