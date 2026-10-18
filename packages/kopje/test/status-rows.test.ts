@@ -283,6 +283,34 @@ describe('the hydrate queries (RES-3)', () => {
 	})
 })
 
+describe('a boost (R35)', () => {
+	it("shows no quote of its own, and its original's in its reblog", async () => {
+		const { h, f } = await fixture()
+		const plain: Item = { kind: 'boost', text: 10, wide: false, mentions: 0, tags: 0, media: 0, poll: 0, viewer: false }
+		const shown = await runInDurableObject(h.store, (_instance, state) => {
+			const sql = state.storage.sql
+			const own = build(sql, f, plain)
+			const ofQuote = build(sql, f, { ...plain, kind: 'boostOfQuote' })
+			const target = build(sql, f, { ...plain, kind: 'status' })
+			// A quote row attached to the boost itself, as a converted row may hold one.
+			sql.exec(
+				`INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, quoted_account_id, state, updated_at)
+				SELECT ?1, uri, id, account_id, 'accepted', ?3 FROM statuses WHERE id = ?2`,
+				own,
+				target,
+				VIEWER_NOW
+			)
+			return observedPresentation(state, f.viewer, [own, ofQuote], PAGE_CHUNKS).items.map((status) => ({
+				quote: status.quote,
+				reblogQuoted: (status.reblog?.quote as { quoted_status?: { id: string } } | null)?.quoted_status?.id ?? null,
+			}))
+		})
+		expect(shown[0]).toEqual({ quote: null, reblogQuoted: null })
+		expect(shown[1]!.quote).toBeNull()
+		expect(shown[1]!.reblogQuoted).not.toBeNull()
+	})
+})
+
 describe('the backstop (RES-3)', () => {
 	it('reads a chunk past its cap again one status at a time, with the same answer', async () => {
 		const { h, f } = await fixture()

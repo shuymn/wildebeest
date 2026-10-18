@@ -8,7 +8,8 @@ Mechanisms:
 
 - **Budget**: the answer's JSON is at most `ANSWER_BYTES` (8 MiB, `src/domain/answer-budget.ts`), containers
   included. Items are admitted whole in traversal order, each presented and measured when it is reached, its rows read
-  in small chunks (2 statuses, 2 notifications, one conversation or report, 50 accounts), the first whatever its size
+  in small chunks (statuses in chunks planned by the bound of their rows, "Heap at 8 MiB per answer" in
+  `threat-model.md`; 2 notifications, one conversation or report, 50 accounts), the first whatever its size
   (`admit`, `presentStatusesWithin`, `presentAccountsWithin`, `admitAccounts`). An atomic item counts with everything
   it embeds: a notification with its account, status and report; a group with the accounts and statuses it adds; a
   conversation with its participants and last status; a report with its accounts and statuses.
