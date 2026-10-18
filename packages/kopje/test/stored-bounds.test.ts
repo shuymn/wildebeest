@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest'
 import { NOW } from './app-helpers'
 import { freshStore, migratedStore } from './helpers'
 import { Db } from '../src/db/sql'
+import { jsonBytes } from '../src/domain/answer-budget'
 import { upsertRemoteActor } from '../src/domain/inbox'
 import { MAX_SPOILER_LENGTH } from '../src/domain/remote-statuses'
 import { MAX_RAW_LENGTH, parseStatusText, renderFieldValue, renderStatusHtml } from '../src/domain/status-text'
@@ -184,6 +185,11 @@ type Column = {
 }
 
 const sanitizerRuns = 4
+
+// A column bounded in UTF-8 bytes alone: inputs at its bound, the same bound for canonical values, 60 runs.
+function byteColumn(name: string, projection: Column['projection'], writer: Column['writer'], bound: number): Column {
+	return { name, kept: { unit: 'bytes', bound }, projection, writer, bounds: [['bytes', bound]], runs: 60 }
+}
 const COLUMNS: Column[] = [
 	{
 		name: 'accounts.display_name',
@@ -209,14 +215,7 @@ const COLUMNS: Column[] = [
 		],
 		runs: sanitizerRuns,
 	},
-	{
-		name: 'accounts.url, avatar_url, header_url',
-		kept: { unit: 'bytes', bound: PROFILE_URL_LIMIT },
-		projection: profileUrlSql,
-		writer: storedProfileUrl,
-		bounds: [['bytes', PROFILE_URL_LIMIT]],
-		runs: 60,
-	},
+	byteColumn('accounts.url, avatar_url, header_url', profileUrlSql, storedProfileUrl, PROFILE_URL_LIMIT),
 	{
 		name: 'statuses.content, status_edits.content',
 		kept: { unit: 'json', bound: CONTENT_JSON_BYTES, html: true },
@@ -254,30 +253,9 @@ const COLUMNS: Column[] = [
 		],
 		runs: 20,
 	},
-	{
-		name: 'statuses.url',
-		kept: { unit: 'bytes', bound: STATUS_URL_LIMIT },
-		projection: statusUrlSql,
-		writer: storedStatusUrl,
-		bounds: [['bytes', STATUS_URL_LIMIT]],
-		runs: 60,
-	},
-	{
-		name: 'media_attachments.url',
-		kept: { unit: 'bytes', bound: MEDIA_URL_LIMIT },
-		projection: mediaUrlSql,
-		writer: storedMediaUrl,
-		bounds: [['bytes', MEDIA_URL_LIMIT]],
-		runs: 60,
-	},
-	{
-		name: 'media_attachments.preview_url',
-		kept: { unit: 'bytes', bound: MEDIA_URL_LIMIT },
-		projection: mediaUrlSql,
-		writer: storedMediaLink,
-		bounds: [['bytes', MEDIA_URL_LIMIT]],
-		runs: 60,
-	},
+	byteColumn('statuses.url', statusUrlSql, storedStatusUrl, STATUS_URL_LIMIT),
+	byteColumn('media_attachments.url', mediaUrlSql, storedMediaUrl, MEDIA_URL_LIMIT),
+	byteColumn('media_attachments.preview_url', mediaUrlSql, storedMediaLink, MEDIA_URL_LIMIT),
 	{
 		name: 'media_attachments.description',
 		kept: { unit: 'points', bound: MAX_MEDIA_DESCRIPTION_LENGTH },
@@ -290,14 +268,7 @@ const COLUMNS: Column[] = [
 		],
 		runs: 60,
 	},
-	{
-		name: 'media_attachments.meta',
-		kept: { unit: 'bytes', bound: MEDIA_META_BYTES },
-		projection: mediaMetaSql,
-		writer: storedMediaMeta,
-		bounds: [['bytes', MEDIA_META_BYTES]],
-		runs: 60,
-	},
+	byteColumn('media_attachments.meta', mediaMetaSql, storedMediaMeta, MEDIA_META_BYTES),
 ]
 
 type Sql = DurableObjectState['storage']['sql']
@@ -411,22 +382,19 @@ describe('stored bounds (RES-2)', () => {
 	})
 
 	it('writers remove U+0000 and cut by code points', () => {
-		fc.assert(
-			fc.property(inputs([['points', DISPLAY_NAME_LIMIT]]), (input) => {
-				const name = storedDisplayName(input)
-				expect(name).not.toContain('\u0000')
-				expect([...name].length).toBe(Math.min([...storedText(input)].length, DISPLAY_NAME_LIMIT))
-			}),
-			{ numRuns: 100 }
-		)
-		fc.assert(
-			fc.property(inputs([['points', MAX_MEDIA_DESCRIPTION_LENGTH]]), (input) => {
-				const description = storedMediaDescription(input)
-				expect(description).not.toContain('\u0000')
-				expect([...description].length).toBe(Math.min([...storedText(input)].length, MAX_MEDIA_DESCRIPTION_LENGTH))
-			}),
-			{ numRuns: 100 }
-		)
+		for (const [writer, limit] of [
+			[storedDisplayName, DISPLAY_NAME_LIMIT],
+			[storedMediaDescription, MAX_MEDIA_DESCRIPTION_LENGTH],
+		] as const) {
+			fc.assert(
+				fc.property(inputs([['points', limit]]), (input) => {
+					const written = writer(input)
+					expect(written).not.toContain('\u0000')
+					expect([...written].length).toBe(Math.min([...storedText(input)].length, limit))
+				}),
+				{ numRuns: 100 }
+			)
+		}
 	})
 
 	// An edit's snapshot stores P of the poll's choices (statuses.ts recordEdit), so its writer is P itself.
@@ -450,10 +418,10 @@ describe('stored bounds (RES-2)', () => {
 			.tuple(near(POLL_OPTIONS_BYTES), fc.array(choice('json', 20_000), { minLength: 40, maxLength: 40 }))
 			.map(([target, parts]) => {
 				const kept = [...parts]
-				while (kept.length > 1 && ENCODER.encode(JSON.stringify(kept)).length > target) {
+				while (kept.length > 1 && jsonBytes(kept) > target) {
 					kept.pop()
 				}
-				const size = ENCODER.encode(JSON.stringify(kept)).length
+				const size = jsonBytes(kept)
 				kept[kept.length - 1] = `${kept.at(-1) ?? ''}${'a'.repeat(Math.max(0, target - size))}`
 				return kept
 			})
