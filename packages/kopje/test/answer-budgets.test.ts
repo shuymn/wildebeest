@@ -7,7 +7,7 @@ import { NOW } from './app-helpers'
 import { BUILD } from './helpers'
 import { MAX_BIO, maxFields } from './profile-fixtures'
 import { observedSql } from './read-helpers'
-import { community, domainBlock, mute, remoteAccount, seedStatus } from './status-helpers'
+import { act, community, domainBlock, mute, post, remoteAccount, seedStatus } from './status-helpers'
 import { Db } from '../src/db/sql'
 import { admit, admittedPage, ANSWER_BYTES, jsonBytes } from '../src/domain/answer-budget'
 import { type VisibleStatusId } from '../src/domain/audience'
@@ -69,7 +69,14 @@ async function bigStatus(
 	return id
 }
 
-type Answer<T> = { status: number; bytes: number; body: T; next: string | null; prev: string | null }
+type Answer<T> = {
+	status: number
+	bytes: number
+	body: T
+	next: string | null
+	prev: string | null
+	link: string | null
+}
 
 // The answer of a GET as the client receives it: its body's bytes and its Link header's next and prev paths.
 async function answer<T = { id: string }[]>(h: ApiHarness, path: string, token?: string): Promise<Answer<T>> {
@@ -85,6 +92,7 @@ async function answer<T = { id: string }[]>(h: ApiHarness, path: string, token?:
 		body: JSON.parse(text) as T,
 		next: link('next'),
 		prev: link('prev'),
+		link: response.headers.get('link'),
 	}
 }
 
@@ -310,7 +318,7 @@ describe('status pages are answers within ANSWER_BYTES (RES-3)', () => {
 		}
 	}, 600_000)
 
-	it('stop pinned statuses at a byte cut, and walk quotes once each', async () => {
+	it('answer pinned statuses without paging links, and walk quotes once each', async () => {
 		const h = await community(['alice', 'bob'])
 		const { alice, bob } = h.users
 		// Ten of bob's big statuses, pinned in an order unlike their ids': newest pin first is P. X, unpinned, lies
@@ -335,26 +343,37 @@ describe('status pages are answers within ANSWER_BYTES (RES-3)', () => {
 			)
 		}
 		const size = Math.min(...(await Promise.all(posts.map((id) => bytesOf(h, alice.token, id)))))
-		// Pins do not continue past a byte cut: the first that fit, in pin order, with no next link (RES-3).
+		// Pinned answers carry no paging links (RES-3), cut or not: alice's two small pins, a small limit, a byte cut,
+		// and status-id bounds with a byte cut.
+		for (const text of ['one', 'two']) {
+			const { id } = await post(h, alice, { status: text })
+			await act(h, alice, `/api/v1/statuses/${id}/pin`)
+		}
+		const own = await answer(h, `/api/v1/accounts/${alice.id}/statuses?pinned=true`, alice.token)
+		expect(own.body).toHaveLength(2)
+		expect(own.link).toBeNull()
 		const pinned = `/api/v1/accounts/${bob.id}/statuses?pinned=true&limit=40`
+		const two = await answer(h, `/api/v1/accounts/${bob.id}/statuses?pinned=true&limit=2`, alice.token)
+		expect(two.body.map((s) => s.id)).toEqual(P.slice(0, 2))
+		expect(two.link).toBeNull()
 		const first = await answer(h, pinned, alice.token)
 		const shown = first.body.map((s) => s.id)
 		expect(shown.length).toBeLessThan(P.length)
 		expect(shown).toEqual(P.slice(0, shown.length))
 		expect(first.bytes + size + 1).toBeGreaterThan(ANSWER_BYTES)
-		expect(first.next).toBeNull()
+		expect(first.link).toBeNull()
 		// A max_id that is no pin keeps its status-id ceiling, cut or not.
 		const below = await answer(h, `${pinned}&max_id=${X}`, alice.token)
 		const under = P.filter((id) => id < X)
 		expect(below.body.map((s) => s.id)).toEqual(under.slice(0, below.body.length))
 		expect(below.body.length).toBeLessThan(under.length)
-		expect(below.next).toBeNull()
-		// min_id pages pins by status id, oldest first; a cut page offers no next link either.
-		const oldest = await answer(h, `${pinned}&min_id=1`, alice.token)
+		expect(below.link).toBeNull()
+		// min_id pages pins by status id, oldest first, within max_id too.
+		const oldest = await answer(h, `${pinned}&min_id=1&max_id=${X}`, alice.token)
 		const ascending = oldest.body.map((s) => s.id).toReversed()
 		expect(ascending).toEqual(posts.slice(0, ascending.length))
-		expect(ascending.length).toBeLessThan(posts.length)
-		expect(oldest.next).toBeNull()
+		expect(ascending.length).toBeLessThan(9)
+		expect(oldest.link).toBeNull()
 		// Ten big statuses quoting a small one.
 		const author = await remoteAccount(h.store, 'quoter')
 		const quoted = await seedStatus(h.store, { accountId: author, visibility: 'public', published: NOW - 2 * DAY })

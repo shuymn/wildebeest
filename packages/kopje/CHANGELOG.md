@@ -14,7 +14,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   not come near it (a page of 40 long posts with polls and described attachments takes under a quarter of it):
     - a timeline, account statuses, bookmarks, favourites or quotes page that reaches it stops early and offers its
       `next` link (`prev` for `min_id`), which continues after the last status shown; the profile web page likewise.
-      Pinned statuses (`pinned=true`) that reach it show the pins that fit, in pin order, with no link to the rest;
+      Pinned statuses (`pinned=true`) answer with no paging links at all, cut or not (`limit` still caps them, and
+      `max_id` and `min_id` still bound them by status id); one that reaches it shows the pins that fit, in pin order;
     - a thread's context shows the nearest ancestors, within half of it, and the first descendants in the rest, and
       an edit history shows the newest versions, oldest first, as Mastodon orders them;
     - `GET /api/v1/statuses?id[]=` leaves out the ids past it, as it leaves out unknown ones;
