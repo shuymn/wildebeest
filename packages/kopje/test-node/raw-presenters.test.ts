@@ -1,4 +1,4 @@
-import { readdirSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -234,5 +234,17 @@ describe('raw presenters (RES-3)', () => {
 		}
 		expect(other).toEqual([])
 		expect(imported).toEqual(LEFT_FOR_RB2)
+	})
+
+	it('are allowed only where the response inventory names an exemption', () => {
+		const inventory = readFileSync(join(ROOT, 'docs/response-inventory.md'), 'utf8')
+		// The last cell of each table row: the module exempt until its answer is budgeted.
+		const exempt = [...inventory.matchAll(/\| `(src\/[^`]+)` +\|$/gm)].map((m) => m[1] ?? '')
+		expect(inventory).toContain('(`src/domain/status-presenter.ts`) imports `presentAccountsById`')
+		expect(exempt.toSorted()).toEqual(
+			Object.keys(LEFT_FOR_RB2)
+				.filter((file) => file !== 'src/domain/status-presenter.ts')
+				.toSorted()
+		)
 	})
 })

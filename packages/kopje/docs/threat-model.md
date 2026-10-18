@@ -1347,6 +1347,26 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   that pass what one leaves unused to the others, so the answer does not depend on their order (`presentAccountsWithin`
   and `familiarFollowers` in `src/domain/accounts.ts`, `unlimitedResponse` in `src/mastodon/pagination.ts`;
   `test/account-answer-bytes.test.ts`).
+  _Implemented on branch `kopje/rb1b`_ for answers that present statuses: every Store operation that returns presented
+  statuses, accounts or notifications owns one budget of `ANSWER_BYTES` (8 MiB of the answer's JSON, containers
+  included) or a stated unit or count bound, listed with its mechanism and continuation in
+  [response-inventory.md](response-inventory.md). Items are admitted whole in traversal order, each read and presented
+  when it is reached (one atomic item, a status with its boosted original and quoted status, per chunk), the first
+  whatever its size, so what is held past the admitted answer is one item at its maximum. Id-cursor status pages
+  (home, public, hashtag and list timelines, account statuses, bookmarks, favourites, quotes) cut there are `Page.cut`
+  and continue from their last admitted status in traversal order, `min_id` walking oldest first; a candidate-window
+  continuation is kept only when no status was left out by bytes before it. A context gives the ancestors half,
+  nearest first, and the descendants the rest; an edit history admits the newest versions; `GET /api/v1/statuses`
+  leaves out the ids past the budget; search, its resolved account included, and the account search return fewer
+  results (offset endpoints); a profile web page shares the budget between its account and statuses. One presentation
+  per answer compiles the viewer's filters once and fixes the filter text level (`MAX_FILTER_REQUEST_TEXT`) over the
+  answer's candidates in a bounded preparation pass, so chunked presentation matches as one whole presentation does
+  (`src/domain/answer-budget.ts`, `presentation` and `presentStatusesWithin` in `src/domain/status-presenter.ts`;
+  `test/answer-budgets.test.ts`). `test-node/raw-presenters.test.ts` reads the program with TypeScript's parser and
+  fails on an import, re-export or namespace access of a raw presenter (`presentStatuses`, `presentAccountsById`,
+  `presentAccount`) outside its module, but for the exact list of modules the inventory names as left for RB2
+  (notifications, notification requests, grouped notifications, conversations, reports, admin account lists, blocks
+  and mutes, the directory). _Gap:_ those answers are bounded by their counts only until RB2.
   _Enforced (main)_ for each presented status: every status column a remote server controls, or a converted row may hold
   past the ingestion bounds, is read through its helper in `src/domain/status-bounds.ts` (accounts and actor ids through
   `src/domain/profile-bounds.ts`). Content and source text over 128 KiB as a JSON string read as '' (the status keeps
@@ -1682,8 +1702,10 @@ above, with accounts on 2,000-character domains (the longest an actor id of 2,04
 characters, and the viewer's filters at theirs: 50 filters in every context, each with a 256-character title and 20
 keywords of 512 characters, the first held by the status, and naming the statuses read, so every status carries 50
 filter results (about 0.24 MB each set) and every read takes the 1,000 keywords. SQLite bytes are the UTF-8 bytes of every value read (8 per number); nodes are the
-objects, arrays and strings presented. Measured shapes are read through the Store operation; the real Store RPC
-measurement comes with the answer budgets.
+objects, arrays and strings presented. Measured shapes are read through the Store operation. Through the real Store
+RPC, a public timeline page, a context and a search answer of statuses of about 0.97 MB each, each cut at the budget,
+return 7.72 MB of JSON each (`test/answer-budgets.test.ts`, "the Store RPC returns a maximal answer"), well under the
+32 MiB RPC limit.
 
 | Shape                                                            | Most SQLite bytes | Most JSON bytes | Rows read | Nodes | Share of 8 MiB |
 | ---------------------------------------------------------------- | ----------------- | --------------- | --------- | ----- | -------------- |
