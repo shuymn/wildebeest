@@ -1,4 +1,5 @@
 import { type Account, accountUrl, acctOf, type Present, presentAccountsById } from './accounts'
+import { admit, type Admitted } from './answer-budget'
 import {
 	type ApiQuoteState,
 	apiVisibility,
@@ -8,6 +9,7 @@ import {
 	type QuotePolicyFlag,
 	quoteApprovalReads,
 	quotePolicyFlags,
+	type QuoteRead,
 	quoteReads,
 	requiresMention,
 	type ViewerContext,
@@ -16,11 +18,13 @@ import {
 	visibleSql,
 } from './audience'
 import {
+	type ActiveFilters,
 	activeFilters,
 	applyFilters,
 	type FilterResult,
 	filterStatusMatches,
-	filterTextLimits,
+	filterTextLevel,
+	MAX_FILTER_REQUEST_TEXT,
 	MAX_FILTER_TEXT,
 } from './filters'
 import { htmlToPlainText } from './plain-text'
@@ -207,55 +211,97 @@ type MentionRow = {
 	uri: string
 }
 
-// Statuses the read rule passed for the viewer, in the order of `ids`; ids with no row, and boosts whose original the
-// viewer may not see, are left out.
-export function presentStatuses(db: Db, ids: readonly VisibleStatusId[], options: PresentOptions): Status[] {
-	return presented(present(db, ids, options, false))
+// One presentation per answer (RES-3): the viewer's active filters, compiled once, and the level the shared filter text
+// allowance (MAX_FILTER_REQUEST_TEXT, filterTextLimits) cuts each matched text at, computed once over the answer's
+// candidates, so an answer presented in chunks matches each status as one presented whole would. When the
+// presentation is cut by the answer budget, the level is the candidates', a superset of what is shown.
+export type Presentation = {
+	readonly options: PresentOwnOptions
+	readonly filters: ActiveFilters | null
+	readonly level: number
 }
 
-// Two lists of statuses presented as one response (a thread's ancestors and descendants), so their filters' text
-// budget is shared by both; each list as presentStatuses would give it.
-export function presentStatusPair(
-	db: Db,
-	first: readonly VisibleStatusId[],
-	second: readonly VisibleStatusId[],
-	options: PresentOptions
-): [Status[], Status[]] {
-	const all = present(db, [...first, ...second], options, false)
-	return [presented(all.slice(0, first.length)), presented(all.slice(first.length))]
+// The presentation of an answer whose statuses are among `candidates` (top-level ids, boosts and quotes are followed
+// as the presenter follows them).
+export function presentation(db: Db, candidates: readonly VisibleStatusId[], options: PresentOptions): Presentation {
+	return presentationOf(db, candidates, options)
 }
 
-function presented(statuses: readonly (Status | undefined)[]): Status[] {
-	return statuses.flatMap((status) => (status === undefined ? [] : [status]))
+function presentationOf(db: Db, candidates: readonly string[], options: PresentOwnOptions): Presentation {
+	const filters = activeFilters(db, options.viewer)
+	const keywords = filters !== null && filters.filters.some((filter) => filter.keywords !== null)
+	return { options, filters, level: keywords ? textLevel(db, candidates, options) : Infinity }
 }
 
-export function presentStatus(db: Db, id: VisibleStatusId, options: PresentOptions): Status | null {
-	return presentStatuses(db, [id], options)[0] ?? null
-}
+// The preparation pass of the filter text level: the targets present() matches (each status of the answer, by its
+// boosted original for a boost, and each quoted status shown in it), read as ids first when there may be more than
+// the allowance holds whole. Their texts are read only when they could pass it, in chunks of TEXT_CHUNK statuses,
+// each chunk's rows dropped once measured; the lengths are the matched texts' own (searchableText), so the level is
+// the one presenting all at once gives.
+const TEXT_CHUNK = 4
 
-// The viewer's own status, for the response to their write; a boost of an original they may not see has reblog: null.
-export function presentOwnStatus(db: Db, id: OwnStatusId, options: PresentOwnOptions): Status | null {
-	return present(db, [id], options, true)[0] ?? null
-}
-
-// The statuses in the order of `ids`, undefined for an id with no row or a boost left out.
-function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own: boolean): (Status | undefined)[] {
-	if (ids.length === 0) {
-		return []
+function textLevel(db: Db, ids: readonly string[], options: PresentOwnOptions): number {
+	// A status adds at most two targets: its quoted status and its boosted original's.
+	if (3 * ids.length * MAX_FILTER_TEXT <= MAX_FILTER_REQUEST_TEXT) {
+		return Infinity
 	}
-	const idList = JSON.stringify(ids)
-	const viewerId = options.viewer.accountId
-	// The statuses, and the originals of the boosts among them that the viewer may see.
-	const rows = db.all<StatusRow>(
-		`SELECT ${STATUS_COLUMNS} FROM ${STATUS_FROM}
-		WHERE s.id IN (SELECT value FROM json_each(?1))
+	const { byId, quoted } = statusGraph(db, ids, options, idRows)
+	const proper = (id: string): string | undefined => {
+		const row = byId.get(id)
+		return row?.reblog_of_id == null ? row?.id : byId.get(row.reblog_of_id)?.id
+	}
+	const targets = [...ids, ...quoted].map(proper)
+	if (targets.length * MAX_FILTER_TEXT <= MAX_FILTER_REQUEST_TEXT) {
+		return Infinity
+	}
+	const unique = [...new Set(targets.flatMap((id) => id ?? []))]
+	const lengths = new Map<string, number>()
+	for (let next = 0; next < unique.length; next += TEXT_CHUNK) {
+		const chunk = unique.slice(next, next + TEXT_CHUNK)
+		const json = JSON.stringify(chunk)
+		const polls = presentPolls(db, chunk, null, options.viewer.now)
+		const media = mediaOf(db, json)
+		for (const row of db.all<TextRow & { id: string }>(
+			`SELECT s.id, ${spoilerSql('s.spoiler_text')} AS spoiler_text, ${contentSql('s.content')} AS content,
+				${sourceTextSql('s.source_text')} AS source_text, au.domain AS author_domain
+			FROM ${STATUS_FROM} WHERE s.id IN (SELECT value FROM json_each(?1))`,
+			json
+		)) {
+			lengths.set(row.id, searchableText(row, polls.get(row.id), media.get(row.id) ?? []).length)
+		}
+	}
+	return filterTextLevel(targets.map((id) => (id === undefined ? 0 : Math.min(lengths.get(id) ?? 0, MAX_FILTER_TEXT))))
+}
+
+type GraphRow = { id: string; reblog_of_id: string | null }
+
+// The statuses of `ids` with their columns, and the originals of the boosts among them that the viewer may see.
+function statusRows(db: Db, where: string, ...params: SqlStorageValue[]): StatusRow[] {
+	return db.all<StatusRow>(`SELECT ${STATUS_COLUMNS} FROM ${STATUS_FROM} WHERE ${where}`, ...params)
+}
+
+function idRows(db: Db, where: string, ...params: SqlStorageValue[]): GraphRow[] {
+	return db.all<GraphRow>(`SELECT s.id, s.reblog_of_id FROM ${STATUS_FROM} WHERE ${where}`, ...params)
+}
+
+// The rows an answer of `ids` presents, read by `rows`: the statuses, the originals of the boosts among them that the
+// viewer may see, and the quoted statuses of both that the viewer is shown (R35), with the quotes of all of them.
+function statusGraph<R extends GraphRow>(
+	db: Db,
+	ids: readonly string[],
+	options: PresentOwnOptions,
+	rows: (db: Db, where: string, ...params: SqlStorageValue[]) => R[]
+): { byId: Map<string, R>; quotes: Map<string, QuoteRead>; quoted: string[] } {
+	const byId = new Map(
+		rows(
+			db,
+			`s.id IN (SELECT value FROM json_each(?1))
 			OR (s.id IN (SELECT reblog_of_id FROM statuses WHERE id IN (SELECT value FROM json_each(?1)) AND reblog_of_id IS NOT NULL)
 				AND ${visibleSql('s', '?2')})`,
-		idList,
-		viewerId
+			JSON.stringify(ids),
+			options.viewer.accountId
+		).map((row) => [row.id, row])
 	)
-	const byId = new Map(rows.map((row) => [row.id, row]))
-	// The quotes of the statuses and originals (R35), then the quoted statuses the viewer is shown and their own quotes.
 	const reads = quoteReads(options.viewer)
 	const quotes = new Map(
 		reads.of(db, [...byId.keys()], options.source === true ? ids : []).map((quote) => [quote.status_id, quote])
@@ -263,16 +309,96 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 	const quoted = [...new Set([...quotes.values()].flatMap((quote) => quote.quoted_status_id ?? []))]
 	const unread = quoted.filter((id) => !byId.has(id))
 	if (unread.length > 0) {
-		for (const row of db.all<StatusRow>(
-			`SELECT ${STATUS_COLUMNS} FROM ${STATUS_FROM} WHERE s.id IN (SELECT value FROM json_each(?1))`,
-			JSON.stringify(unread)
-		)) {
+		for (const row of rows(db, 's.id IN (SELECT value FROM json_each(?1))', JSON.stringify(unread))) {
 			byId.set(row.id, row)
 		}
 		for (const quote of reads.of(db, unread)) {
 			quotes.set(quote.status_id, quote)
 		}
 	}
+	return { byId, quotes, quoted }
+}
+
+// Statuses the read rule passed for the viewer, in the order of `ids`; ids with no row, and boosts whose original the
+// viewer may not see, are left out. Unbudgeted: an answer of many statuses goes through presentStatusesWithin
+// (docs/response-inventory.md lists the callers left).
+export function presentStatuses(db: Db, ids: readonly VisibleStatusId[], options: PresentOptions): Status[] {
+	return presented(present(db, ids, presentationOf(db, ids, options), false))
+}
+
+// Admission of statuses (RES-3, admit): the statuses of `ids` in traversal order, each read and presented as one
+// atomic item (with its boosted original and quoted status) when it is reached, while their JSON fits `budget`, under
+// one presentation. An id with nothing to show is consumed.
+export function presentStatusesWithin(
+	db: Db,
+	shared: Presentation,
+	ids: readonly VisibleStatusId[],
+	budget: number,
+	leading: boolean
+): Admitted<Status> {
+	function* each(): Generator<Status | undefined> {
+		for (const id of ids) {
+			yield present(db, [id], shared, false)[0]
+		}
+	}
+	return admit(each(), budget, leading)
+}
+
+function presented(statuses: readonly (Status | undefined)[]): Status[] {
+	return statuses.flatMap((status) => (status === undefined ? [] : [status]))
+}
+
+// One status, bounded as a unit (RES-3, "Maxima of presented units").
+export function presentStatus(db: Db, id: VisibleStatusId, options: PresentOptions): Status | null {
+	return presentStatuses(db, [id], options)[0] ?? null
+}
+
+// The viewer's own status, for the response to their write; a boost of an original they may not see has reblog: null.
+export function presentOwnStatus(db: Db, id: OwnStatusId, options: PresentOwnOptions): Status | null {
+	return present(db, [id], presentationOf(db, [id], options), true)[0] ?? null
+}
+
+const STATUS_IDS = 'SELECT DISTINCT value FROM json_each(?1)'
+
+// The shown attachments of each status of `ids` (a JSON list), at most MAX_STATUS_MEDIA, through
+// media_attachments_status (see present()).
+function mediaOf(db: Db, ids: string): Map<string, MediaRow[]> {
+	return groupBy(
+		db.all<MediaRow & { status_id: string }>(
+			`SELECT ${MEDIA_COLUMNS}, status_id FROM media_attachments
+			WHERE id IN (SELECT x.id FROM (${STATUS_IDS}) j CROSS JOIN media_attachments x ON x.id IN (SELECT y.id
+				FROM media_attachments y WHERE y.status_id = j.value AND y.shown = 1 ORDER BY y.position
+				LIMIT ${MAX_STATUS_MEDIA}))
+			ORDER BY status_id, position, id`,
+			ids
+		)
+	)
+}
+
+type TextRow = Pick<StatusRow, 'spoiler_text' | 'content' | 'source_text' | 'author_domain'>
+
+// Status#searchable_text of a status: its spoiler text, its text (a local status's source, a remote one's HTML as
+// text), its poll's choices and its media descriptions (SearchConcern).
+// A status without a poll has no entry for it (compact), not an empty one.
+function searchableText(row: TextRow, poll: Poll | undefined, media: readonly MediaRow[]): string {
+	return [
+		row.spoiler_text,
+		row.author_domain === null ? (row.source_text ?? htmlToPlainText(row.content)) : remotePlainText(row.content),
+		...(poll === undefined ? [] : [poll.options.map((option) => option.title).join('\n\n')]),
+		media.map((m) => m.description).join('\n\n'),
+	].join('\n\n')
+}
+
+// The statuses in the order of `ids`, undefined for an id with no row or a boost left out.
+function present(db: Db, ids: readonly string[], shared: Presentation, own: boolean): (Status | undefined)[] {
+	if (ids.length === 0) {
+		return []
+	}
+	const { options, filters } = shared
+	const viewerId = options.viewer.accountId
+	// The statuses, the originals of the boosts among them that the viewer may see, the quotes of both (R35), and the
+	// quoted statuses the viewer is shown with their own quotes.
+	const { byId, quotes, quoted } = statusGraph(db, ids, options, statusRows)
 	const all = JSON.stringify([...byId.keys()])
 	// The statuses matched by filters: each status of the response, and each quoted status shown in it.
 	const targets = [
@@ -291,22 +417,12 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 	// hashtag name past its bound (tagNameSql) among the first ones read is left out rather than replaced by a later
 	// one, so a status holding one shows one fewer: a remote status stores none, and a local one (a name over 256 code
 	// units, which Mastodon also records) only when it sorts before more than MAX_PRESENTED_TAGS others.
-	const statusIds = 'SELECT DISTINCT value FROM json_each(?1)'
-	const media = groupBy(
-		db.all<MediaRow & { status_id: string }>(
-			`SELECT ${MEDIA_COLUMNS}, status_id FROM media_attachments
-			WHERE id IN (SELECT x.id FROM (${statusIds}) j CROSS JOIN media_attachments x ON x.id IN (SELECT y.id
-				FROM media_attachments y WHERE y.status_id = j.value AND y.shown = 1 ORDER BY y.position
-				LIMIT ${MAX_STATUS_MEDIA}))
-			ORDER BY status_id, position, id`,
-			all
-		)
-	)
+	const media = mediaOf(db, all)
 	const mentions = groupBy(
 		db.all<MentionRow>(
 			`SELECT j.value AS status_id, a.id, ${usernameSql('a.username')} AS username, a.domain,
 				${profileUrlSql('a.url')} AS url, ${actorUriSql('a.uri')} AS uri
-			FROM (${statusIds}) j CROSS JOIN accounts a
+			FROM (${STATUS_IDS}) j CROSS JOIN accounts a
 			WHERE a.id IN (SELECT m.account_id FROM status_mentions m INDEXED BY status_mentions_shown
 				WHERE m.status_id = j.value AND m.silent = 0 ORDER BY m.account_id LIMIT ${MAX_STATUS_MENTION_ROWS})
 			ORDER BY j.value, a.id`,
@@ -315,7 +431,7 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 	)
 	const tags = groupBy(
 		db.all<{ status_id: string; name: string }>(
-			`SELECT j.value AS status_id, ${tagNameSql('t.name')} AS name FROM (${statusIds}) j CROSS JOIN status_tags t
+			`SELECT j.value AS status_id, ${tagNameSql('t.name')} AS name FROM (${STATUS_IDS}) j CROSS JOIN status_tags t
 			WHERE t.status_id = j.value AND t.name IN (SELECT n.name FROM (SELECT ${tagNameSql('name')} AS name
 				FROM status_tags WHERE status_id = j.value ORDER BY status_tags.name LIMIT ${MAX_PRESENTED_TAGS}) n
 				WHERE n.name IS NOT NULL)
@@ -327,33 +443,17 @@ function present(db: Db, ids: readonly string[], options: PresentOwnOptions, own
 	// R36 for the viewer, of every status presented by its own row (a boost answers denied: its original's is shown).
 	const approvals = quoteApprovalReads(options.viewer).of(db, [...byId.keys()])
 	const polls = presentPolls(db, [...byId.keys()], viewerId, options.viewer.now)
-	const filters = activeFilters(db, options.viewer)
 	const statusMatches =
 		filters === null ? new Map<string, Set<string>>() : filterStatusMatches(db, filters, [...byId.keys()])
-	// Status#searchable_text of a status: its spoiler text, its text (a local status's source, a remote one's HTML as
-	// text), its poll's choices and its media descriptions (SearchConcern).
-	// A status without a poll has no entry for it (compact), not an empty one.
-	const searchableText = (row: StatusRow): string => {
-		const poll = polls.get(row.id)
-		return [
-			row.spoiler_text,
-			row.author_domain === null ? (row.source_text ?? htmlToPlainText(row.content)) : remotePlainText(row.content),
-			...(poll === undefined ? [] : [poll.options.map((option) => option.title).join('\n\n')]),
-			(media.get(row.id) ?? []).map((m) => m.description).join('\n\n'),
-		].join('\n\n')
-	}
-	// The text each status is matched on (filterTextLimits): read only when a filter has keywords.
+	// The text each status is matched on, cut at the presentation's level (filterTextLimits): read only when a filter
+	// has keywords.
 	const texts = new Map<string, { text: string; cut: number }>()
 	if (filters !== null && filters.filters.some((filter) => filter.keywords !== null)) {
-		const full = targets.map(({ row }) => {
+		targets.forEach(({ key, row }) => {
 			const proper = row?.reblog_of_id == null ? row : byId.get(row.reblog_of_id)
-			return proper === undefined ? '' : searchableText(proper)
-		})
-		const limits = filterTextLimits(full.map((text) => Math.min(text.length, MAX_FILTER_TEXT)))
-		targets.forEach(({ key }, i) => {
-			const text = full[i] ?? ''
+			const text = proper === undefined ? '' : searchableText(proper, polls.get(proper.id), media.get(proper.id) ?? [])
 			// A cut inside a surrogate pair moves back to the pair's start, so the code point after it is whole.
-			const limit = limits[i] ?? 0
+			const limit = Math.min(text.length, MAX_FILTER_TEXT, shared.level)
 			const unit = text.charCodeAt(limit)
 			const cut = limit > 0 && limit < text.length && unit >= 0xdc00 && unit <= 0xdfff ? limit - 1 : limit
 			// The code point after a cut is kept for the boundary after a match, so the cut is not taken for one.

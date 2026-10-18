@@ -837,23 +837,28 @@ export const MAX_FILTER_REQUEST_TEXT = 400_000
 
 // For texts of `lengths` code units (each already cut to MAX_FILTER_TEXT), how many of each are matched.
 export function filterTextLimits(lengths: readonly number[]): number[] {
+	const level = filterTextLevel(lengths)
+	return lengths.map((length) => Math.min(length, level))
+}
+
+// The level filterTextLimits cuts every text at: Infinity when the texts fit MAX_FILTER_REQUEST_TEXT whole. It depends
+// on the lengths alone, so an answer presented in chunks applies one level computed over all its candidates.
+export function filterTextLevel(lengths: readonly number[]): number {
 	const total = lengths.reduce((sum, length) => sum + length, 0)
 	if (total <= MAX_FILTER_REQUEST_TEXT) {
-		return [...lengths]
+		return Infinity
 	}
 	const sorted = [...lengths].sort((a, b) => a - b)
 	let remaining = MAX_FILTER_REQUEST_TEXT
-	let level = 0
 	for (let i = 0; i < sorted.length; i++) {
 		const length = sorted[i] ?? 0
 		const fair = Math.floor(remaining / (sorted.length - i))
 		if (length > fair) {
-			level = fair
-			break
+			return fair
 		}
 		remaining -= length
 	}
-	return lengths.map((length) => Math.min(length, level))
+	return 0
 }
 
 // What a status is matched by: its text (Status#searchable_text, of the boosted original for a boost, as much of it as

@@ -28,6 +28,7 @@ import {
 	updateActivity,
 } from './activities'
 import { accountKey, type StoredKey } from './actors'
+import { admit, ANSWER_BYTES, ARRAY_ANSWER_BYTES, jsonBytes } from './answer-budget'
 import {
 	type ApiVisibility,
 	apiVisibility,
@@ -96,9 +97,10 @@ import {
 	presentMedia,
 	presentOwnStatus,
 	type PresentOwnOptions,
+	presentation,
 	presentStatus,
-	presentStatusPair,
 	presentStatuses,
+	presentStatusesWithin,
 	type Status,
 } from './status-presenter'
 import {
@@ -1082,7 +1084,8 @@ export const MAX_STATUSES_BY_ID = 20
 // GET /api/v1/statuses?id[]= (StatusesController#index, Status.permitted_statuses_from_ids): of the statuses with the
 // ids, those the list rule passes for the viewer (R8, StatusFilter: viewable, and the viewer filters neither the
 // author nor a boosted original's), each as getStatus shows it, in one read, in the order of the ids; an id with no
-// status, or with one the rule refuses, is left out.
+// status, or with one the rule refuses, is left out. Within ANSWER_BYTES (RES-3), the ids past the first status that
+// does not fit are left out as unknown ones are.
 export const getStatuses = optionalUserReadOperation<{ ids: readonly string[]; present: Present }, Status[]>(
 	(db, { ids, present }, viewer) => {
 		const resolved = [...new Set(ids.slice(0, MAX_STATUSES_BY_ID).flatMap((id) => resolveStatusId(db, id) ?? []))]
@@ -1099,7 +1102,8 @@ export const getStatuses = optionalUserReadOperation<{ ids: readonly string[]; p
 			viewer.now
 		)
 		const visible = rows.map((row) => row.id).sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0))
-		return presentStatuses(db, visible, { ...present, viewer })
+		const options = { ...present, viewer }
+		return presentStatusesWithin(db, presentation(db, visible, options), visible, ARRAY_ANSWER_BYTES, true).items
 	}
 )
 
@@ -1112,9 +1116,14 @@ const CONTEXT_LIMITS = {
 
 export type Context = { ancestors: Status[]; descendants: Status[] }
 
+// The JSON of an empty context: each list's items are counted with a separator, one more than they take.
+const CONTEXT_FRAME_BYTES = jsonBytes({ ancestors: [], descendants: [] } satisfies Context)
+
 // Ancestors oldest first and descendants depth first, as Mastodon orders them. Every member passes the list rule
 // (visible, and not filtered by the viewer's blocks, mutes and domain blocks); the thread continues past members
-// that do not.
+// that do not. One answer within ANSWER_BYTES (RES-3), under one presentation: the ancestors take half of it, nearest
+// first, and the descendants the rest with what the ancestors left, in their order; each list keeps its order, and
+// the farthest ancestors and the last descendants past it are left out (no paging, as Mastodon's context has none).
 export const statusContext = optionalUserReadOperation<{ id: string; present: Present }, Viewed<Context>>(
 	(db, { id, present }, viewer) => {
 		const { accountId: viewerId, now } = viewer
@@ -1153,14 +1162,13 @@ export const statusContext = optionalUserReadOperation<{ id: string; present: Pr
 			limits.descendants,
 			now
 		)
-		// Presented as one response, so the filters' text budget is shared by both lists.
-		const [presentedAncestors, presentedDescendants] = presentStatusPair(
-			db,
-			ancestors.map((row) => row.id),
-			descendants.map((row) => row.id),
-			{ ...present, viewer }
-		)
-		return { status: 'ok', value: { ancestors: presentedAncestors, descendants: presentedDescendants } }
+		const up = ancestors.map((row) => row.id)
+		const down = descendants.map((row) => row.id)
+		const shared = presentation(db, [...up, ...down], { ...present, viewer })
+		const budget = ANSWER_BYTES - CONTEXT_FRAME_BYTES
+		const near = presentStatusesWithin(db, shared, up.toReversed(), Math.floor(budget / 2), true)
+		const after = presentStatusesWithin(db, shared, down, budget - near.bytes, near.items.length === 0)
+		return { status: 'ok', value: { ancestors: near.items.toReversed(), descendants: after.items } }
 	}
 )
 
@@ -1223,7 +1231,9 @@ function editPollOf(options: string | null): StatusEdit['poll'] {
 	return options === null ? null : { options: (JSON.parse(options) as string[]).map((title) => ({ title })) }
 }
 
-// Edit history, oldest first. A status never edited has one entry: itself.
+// Edit history, oldest first. A status never edited has one entry: itself. Within ANSWER_BYTES (RES-3): versions are
+// admitted newest first, each read when it is reached, and the older ones past the first that does not fit are left
+// out.
 export const statusHistory = optionalUserReadOperation<{ id: string; present: Present }, Viewed<StatusEdit[]>>(
 	(db, { id, present }, viewer) => {
 		const { accountId: viewerId } = viewer
@@ -1232,44 +1242,55 @@ export const statusHistory = optionalUserReadOperation<{ id: string; present: Pr
 		if (resolved === null || status === null) {
 			return { status: 'not_found' }
 		}
-		const edits = db.all<{
-			content: string
-			spoiler_text: string
-			sensitive: number
-			media_json: string
-			poll_options: string | null
-			created_at: string
-		}>(
-			`SELECT ${contentSql('content')} AS content, ${spoilerSql('spoiler_text')} AS spoiler_text, sensitive,
-				${editMediaSql('media_json')} AS media_json, ${pollOptionsSql('poll_options')} AS poll_options, created_at
-			FROM status_edits WHERE status_id = ? ORDER BY id`,
-			resolved
-		)
-		const value: StatusEdit[] =
-			edits.length === 0
-				? [
-						{
-							content: status.content ?? '',
-							spoiler_text: status.spoiler_text,
-							sensitive: status.sensitive,
-							created_at: status.created_at,
-							account: status.account,
-							poll: status.poll === null ? null : { options: status.poll.options.map(({ title }) => ({ title })) },
-							media_attachments: status.media_attachments,
-							emojis: [],
-						},
-					]
-				: edits.map((edit) => ({
-						content: edit.content,
-						spoiler_text: edit.spoiler_text,
-						sensitive: edit.sensitive === 1,
-						created_at: edit.created_at,
+		const edits = db.all<{ id: number }>('SELECT id FROM status_edits WHERE status_id = ? ORDER BY id DESC', resolved)
+		if (edits.length === 0) {
+			return {
+				status: 'ok',
+				value: [
+					{
+						content: status.content ?? '',
+						spoiler_text: status.spoiler_text,
+						sensitive: status.sensitive,
+						created_at: status.created_at,
 						account: status.account,
-						poll: editPollOf(edit.poll_options),
-						media_attachments: JSON.parse(edit.media_json) as MediaAttachment[],
+						poll: status.poll === null ? null : { options: status.poll.options.map(({ title }) => ({ title })) },
+						media_attachments: status.media_attachments,
 						emojis: [],
-					}))
-		return { status: 'ok', value }
+					},
+				],
+			}
+		}
+		const { account } = status
+		function* newestFirst(): Generator<StatusEdit | undefined> {
+			for (const { id: editId } of edits) {
+				const edit = db.first<{
+					content: string
+					spoiler_text: string
+					sensitive: number
+					media_json: string
+					poll_options: string | null
+					created_at: string
+				}>(
+					`SELECT ${contentSql('content')} AS content, ${spoilerSql('spoiler_text')} AS spoiler_text, sensitive,
+						${editMediaSql('media_json')} AS media_json, ${pollOptionsSql('poll_options')} AS poll_options, created_at
+					FROM status_edits WHERE id = ?`,
+					editId
+				)
+				yield edit === undefined
+					? undefined
+					: {
+							content: edit.content,
+							spoiler_text: edit.spoiler_text,
+							sensitive: edit.sensitive === 1,
+							created_at: edit.created_at,
+							account,
+							poll: editPollOf(edit.poll_options),
+							media_attachments: JSON.parse(edit.media_json) as MediaAttachment[],
+							emojis: [],
+						}
+			}
+		}
+		return { status: 'ok', value: admit(newestFirst(), ARRAY_ANSWER_BYTES, true).items.toReversed() }
 	}
 )
 
