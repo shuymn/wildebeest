@@ -8,6 +8,7 @@ import {
 	ADMIN_AUD,
 	ADMIN_EMAIL,
 	beginImport,
+	collectDump,
 	copyConfig,
 	ensureAdmin,
 	dumpViaRpc,
@@ -125,28 +126,13 @@ describe('dump', () => {
 			expect(await testKernel(state, before).upgrade()).toMatchObject({ ok: true })
 			seedBounded(state.storage.sql)
 			const dumping = new StoreAdmin(state, testKernel(state, before), options)
-			const started = await dumping.dumpStart()
-			if (!started.ok) {
-				throw new Error(started.message)
-			}
-			let dumped = started.headerLine
-			let cursor: DumpCursor = started.cursor
-			for (;;) {
-				const step = await dumping.dumpNext(cursor)
-				if (!step.ok) {
-					throw new Error(step.message)
-				}
-				dumped += new TextDecoder().decode(step.chunk)
-				cursor = step.cursor
-				if (step.done) {
-					break
-				}
-			}
-			const finished = await dumping.dumpFinish(cursor)
-			if (!finished.ok) {
-				throw new Error(finished.message)
-			}
-			return dumped + (finished.trailerText ?? '')
+			return (
+				await collectDump({
+					start: () => dumping.dumpStart(),
+					next: (cursor) => dumping.dumpNext(cursor),
+					finish: (cursor) => dumping.dumpFinish(cursor),
+				})
+			).text
 		})
 		const chunks = await importChunks(text, 64 * 1024)
 		const target = freshStore()
