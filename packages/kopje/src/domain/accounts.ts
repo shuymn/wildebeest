@@ -1,5 +1,6 @@
 import { followActivity, followAnswerActivity, followUri, recordOutbound, undoFollowActivity } from './activities'
 import { actorSnapshot, recordActorUpdate } from './actor-update'
+import { ANSWER_BYTES, ARRAY_ANSWER_BYTES } from './answer-budget'
 import {
 	activeMuteJoinSql,
 	availableJoinedSql,
@@ -168,7 +169,7 @@ const FIELD_NAME_LIMIT = 255
 const FIELD_VALUE_RAW_LIMIT = 4096
 // The most UTF-8 bytes of field JSON one account carries: read from SQLite (REMOTE_ATTACHMENT_SQL) and, again, shown
 // (remoteFields). An answer of N presented accounts thus carries at most N × 32 KiB of fields; an answer of many
-// (a list's members with limit=0, familiar followers) at most ACCOUNT_ANSWER_BYTES in all.
+// (a list's members with limit=0, familiar followers) at most ANSWER_BYTES in all.
 export const REMOTE_FIELDS_BYTES = 32 * 1024
 
 // A remote account's attachment as ACCOUNT_COLUMNS projects it, chosen and cut in SQL so that the stored actor
@@ -212,12 +213,10 @@ export { DISPLAY_NAME_LIMIT, PROFILE_URL_LIMIT, profileUrlSql, USERNAME_LIMIT, u
 
 export const ACCOUNT_FROM = 'accounts a LEFT JOIN local_accounts l ON l.account_id = a.id'
 
-// RES-3: the UTF-8 bytes of one answer of many accounts (a list's members and endorsements with limit=0, familiar
-// followers), as serialized, the JSON around the accounts reserved first, so it bounds the whole response body
-// (only an answer's first account, itself bounded per account by RES-2, may stand alone past it). A Mastodon user's
-// account serializes to about 2 KiB, so 1,000 take a quarter of it; one at Misskey's profile limits to about 8 KiB
-// (test/account-answer-bytes.test.ts measures both).
-export const ACCOUNT_ANSWER_BYTES = 8 * 1024 * 1024
+// An answer of many accounts (a list's members and endorsements with limit=0, familiar followers) is within
+// ANSWER_BYTES, the JSON around the accounts reserved first (only its first account, bounded by RES-2, may stand
+// alone past it). A Mastodon user's account serializes to about 2 KiB, so 1,000 take a quarter of it; one at
+// Misskey's profile limits to about 8 KiB (test/account-answer-bytes.test.ts measures both).
 // Accounts read per query while an answer is filled: what is read past the budget is at most one chunk of accounts
 // at their bound (RES-2), about 6 MB.
 const ANSWER_CHUNK = 50
@@ -243,14 +242,15 @@ export function accountStream(
 
 // The presented accounts of `ids` (accounts' ids, each once), in order, while their serialized bytes stay within
 // `budget`, read in chunks that stop once it is reached. `leading`: the first account is shown whatever its size
-// (RES-2 bounds it), so an answer continued from its last account moves on. `cut`: an account was left out.
+// (RES-2 bounds it), so an answer continued from its last account moves on. `cut`: an account was left out. `bytes`:
+// the admitted accounts' JSON, each with a separator.
 export function presentAccountsWithin(
 	db: Db,
 	ids: readonly string[],
 	present: Present,
 	budget: number,
 	leading: boolean
-): { items: Account[]; cut: boolean } {
+): { items: Account[]; cut: boolean; bytes: number } {
 	const stream = accountStream(db, ids, present)
 	const items: Account[] = []
 	let bytes = 0
@@ -261,7 +261,7 @@ export function presentAccountsWithin(
 		bytes += next.bytes
 		items.push(next.account)
 	}
-	return { items, cut: items.length < ids.length }
+	return { items, cut: items.length < ids.length, bytes }
 }
 
 // An account's profile URL. A stored url is used only when it is http(s) (HTML-3); otherwise it is derived from the
@@ -395,6 +395,12 @@ export function presentAccountsById(db: Db, ids: readonly string[], present: Pre
 			)
 			.map((row) => [row.id, presentAccount(row, present)])
 	)
+}
+
+// One presented account by id, bounded as a unit (RES-2); undefined for an id with no account.
+export function presentAccountById(db: Db, id: string, present: Present): Account | undefined {
+	const row = accountRow(db, id)
+	return row === undefined ? undefined : presentAccount(row, present)
 }
 
 function accountRow(db: Db, id: string): AccountRow | undefined {
@@ -701,7 +707,7 @@ export const relationships = userReadOperation<{ ids: string[] }, Relationship[]
 // for an accepted follow of the account through the unique pair index (CROSS JOIN keeps SQLite to that order), so
 // the work never grows with the account's other followers and a match is never pushed out by them. At most
 // MAX_FAMILIAR_FOLLOWERS are shown, newest follow of the account first, while the answer's accounts fit
-// ACCOUNT_ANSWER_BYTES, shared among the requested accounts that have followers to show (sharedAnswer); past it,
+// ANSWER_BYTES, shared among the requested accounts that have followers to show (sharedAnswer); past it,
 // fewer are shown (Mastodon's answer has no paging).
 export const MAX_FAMILIAR_FOLLOWERS_IDS = 20
 // Above Mastodon's default follow limit (7,500), which Kopje does not enforce: a match past the viewer's first 10,000
@@ -754,7 +760,7 @@ export const familiarFollowers = userReadOperation<{ ids: string[]; present: Pre
 			db,
 			entries.map((entry) => entry.followers),
 			present,
-			ACCOUNT_ANSWER_BYTES - frame
+			ANSWER_BYTES - frame
 		)
 		return entries.map((entry, i) => ({ id: entry.id, accounts: shown[i] ?? [] }))
 	}
@@ -800,9 +806,12 @@ export type SearchInput = {
 
 // Local and known remote accounts whose search_text contains every term (in any of its variants). An exact username
 // ranks first, then local accounts. Only accounts the viewer may find are listed (findableBySql, R14): not suspended,
-// and not on a domain the viewer blocks.
-export const searchAccounts = userReadOperation<SearchInput, Account[]>((db, input, viewer) =>
-	findAccounts(db, input, viewer.accountId)
+// and not on a domain the viewer blocks. One answer within ANSWER_BYTES (RES-3): an offset endpoint, so a cut answer
+// holds fewer accounts and a client advancing by the number received continues after them.
+export const searchAccounts = userReadOperation<SearchInput, Account[]>(
+	(db, input, viewer) =>
+		presentAccountsWithin(db, findAccountIds(db, input, viewer.accountId), input.present, ARRAY_ANSWER_BYTES, true)
+			.items
 )
 
 // The work of an account search is bounded (RES-7): it matches only candidates from indexed sources, never the whole
@@ -818,7 +827,8 @@ export const ACCOUNT_RECENT_LIMIT = 5000
 // The largest code point, as UTF-8 compares: every string with a prefix sorts below prefix + this.
 const PREFIX_END = '\u{10FFFF}'
 
-export function findAccounts(db: Db, input: SearchInput, viewerId: string): Account[] {
+// The ids of the accounts the search finds, in its order.
+export function findAccountIds(db: Db, input: SearchInput, viewerId: string): string[] {
 	// An address is read with the shared parser, so a Unicode domain finds the account stored under its punycode.
 	const address = parseAddress(input.query.trim())
 	const query = (address === null ? input.query : `${address.username}@${address.domain}`)
@@ -852,7 +862,7 @@ export function findAccounts(db: Db, input: SearchInput, viewerId: string): Acco
 	const candidateParams: SqlStorageValue[] = input.following
 		? [viewerId, ...exactParams, viewerId]
 		: [...exactParams, prefix, `${prefix}${PREFIX_END}`]
-	const ids = db
+	return db
 		.all<{ id: string }>(
 			`WITH candidates(id) AS (${candidates})
 			SELECT a.id FROM candidates c JOIN accounts a ON a.id = c.id
@@ -867,11 +877,6 @@ export function findAccounts(db: Db, input: SearchInput, viewerId: string): Acco
 			input.offset
 		)
 		.map((row) => row.id)
-	const accounts = presentAccountsById(db, ids, input.present)
-	return ids.flatMap((id) => {
-		const account = accounts.get(id)
-		return account === undefined ? [] : [account]
-	})
 }
 
 function escapeRegExp(text: string): string {
@@ -1125,7 +1130,7 @@ export function edgeRangeSql(column: string, max: string, min: string): string {
 }
 
 // A page of a list. `cut`: the read stopped at its candidate window (windows.ts) before the page filled, or an answer
-// without a page stopped at ACCOUNT_ANSWER_BYTES, so the next link is offered however few items it holds.
+// without a page stopped at ANSWER_BYTES, so the next link is offered however few items it holds.
 export type Page<T> = { items: T[]; newest: string | null; oldest: string | null; cut?: boolean }
 
 export type ListFollowsInput = {

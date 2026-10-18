@@ -8,6 +8,22 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+### Changed
+
+- Answers that present statuses stop at a response body of 8 MiB, a whole status at a time; realistic content does
+  not come near it (a page of 40 long posts with polls and described attachments takes under a quarter of it):
+    - a timeline, account statuses, bookmarks, favourites or quotes page that reaches it stops early and offers its
+      `next` link (`prev` for `min_id`), which continues after the last status shown; the profile web page likewise.
+      Pinned statuses (`pinned=true`) answer with no paging links at all, cut or not (`limit` still caps them, and
+      `max_id` and `min_id` still bound them by status id); one that reaches it shows the pins that fit, in pin order;
+    - a thread's context shows the nearest ancestors, within half of it, and the first descendants in the rest, and
+      an edit history shows the newest versions, oldest first, as Mastodon orders them;
+    - `GET /api/v1/statuses?id[]=` leaves out the ids past it, as it leaves out unknown ones;
+    - search (`/api/v2/search`, and `/api/v1/accounts/search`) counts its accounts, statuses and hashtags, and the
+      account `resolve=true` found, in one answer, and returns fewer results when it reaches it. A client that
+      advances its `offset` by the number received continues after them; Mastodon's web client takes the short answer
+      for the last one.
+
 ## [0.1.0-rc.15] - 2026-10-18
 
 A fifteenth release candidate of the first release, published under the npm dist-tag `next`.

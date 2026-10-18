@@ -1,4 +1,4 @@
-import { type Account, type Present, presentAccountsById } from './accounts'
+import { type Account, type Present, presentAccountById } from './accounts'
 import {
 	availableSql,
 	domainBlocksSql,
@@ -852,7 +852,7 @@ export const resolveSearch = userWriteOperation<ResolveInput, ResolveResult>((db
 	const account = (id: string | undefined): ResolveResult => {
 		const findable =
 			id !== undefined && db.first(`SELECT 1 AS found WHERE ${findableBySql('?2', '?1')}`, accountId, id) !== undefined
-		const found = findable ? presentAccountsById(db, [id], input.present).get(id) : undefined
+		const found = findable ? presentAccountById(db, id, input.present) : undefined
 		return { accounts: found === undefined ? [] : [found], statuses: [] }
 	}
 	const status = (id: string | undefined): ResolveResult => {

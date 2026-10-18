@@ -1,7 +1,8 @@
-import { type Account, ACCOUNT_COLUMNS, ACCOUNT_FROM, type AccountRow, type Present, presentAccount } from './accounts'
-import { DISTRIBUTABLE_SQL, NOT_A_REPLY_TO_OTHERS, statusReads, viewableStatusId } from './audience'
+import { type Account, ACCOUNT_FROM, type Present, presentAccountById } from './accounts'
+import { ANSWER_BYTES, jsonBytes } from './answer-budget'
+import { availableJoinedSql, DISTRIBUTABLE_SQL, NOT_A_REPLY_TO_OTHERS, statusReads, viewableStatusId } from './audience'
 import { readOperation } from './operation'
-import { presentStatus, presentStatuses, type Status } from './status-presenter'
+import { presentation, presentStatus, presentStatusesWithin, type Status } from './status-presenter'
 import { isHashtagName } from './status-text'
 import { resolveStatusId } from './statuses'
 import { normalizeTag } from './tag-name'
@@ -26,7 +27,8 @@ export type ProfilePage =
 // signed-out visitor (public and unlisted, replies to others and boosts left out). `maxId` pages older posts. With
 // `tag` (a featured hashtag's URL, /@username/tagged/:tag), only the posts with that hashtag: the account's own posts are
 // read from the cursor as without it, each checked for the hashtag by its key, so the read follows the account's own
-// posts, never other accounts' posts with the hashtag; a name that is not a hashtag is not found.
+// posts, never other accounts' posts with the hashtag; a name that is not a hashtag is not found. The status and
+// embed pages present one status each, bounded as a unit (RES-3).
 export const profilePage = readOperation<
 	{ username: string; maxId: string | null; tag?: string | null; present: Present; now: number },
 	ProfilePage
@@ -34,8 +36,9 @@ export const profilePage = readOperation<
 	if (tag !== null && !isHashtagName(tag)) {
 		return { status: 'not_found' }
 	}
-	const row = db.first<AccountRow>(
-		`SELECT ${ACCOUNT_COLUMNS} FROM ${ACCOUNT_FROM} WHERE a.domain IS NULL AND lower(a.username) = lower(?)`,
+	const row = db.first<{ id: string; available: number }>(
+		`SELECT a.id, ${availableJoinedSql('a', 'l')} AS available FROM ${ACCOUNT_FROM}
+		WHERE a.domain IS NULL AND lower(a.username) = lower(?)`,
 		username
 	)
 	if (row === undefined) {
@@ -73,16 +76,24 @@ export const profilePage = readOperation<
 				)
 	const shown = windowPage(window, passed, (status) => status.id, PROFILE_PAGE_SIZE + 1, false)
 	const ids = shown.rows.map((status) => status.id)
-	const next = ids.length > PROFILE_PAGE_SIZE ? (ids[PROFILE_PAGE_SIZE - 1] ?? null) : shown.cut ? shown.oldest : null
-	return {
-		status: 'ok',
-		account: presentAccount(row, present),
-		statuses: presentStatuses(db, ids.slice(0, PROFILE_PAGE_SIZE), {
-			...present,
-			viewer: { accountId: null, now: new Date(now).toISOString() },
-		}),
-		next,
+	const page = ids.slice(0, PROFILE_PAGE_SIZE)
+	const account = presentAccountById(db, row.id, present)
+	if (account === undefined) {
+		return { status: 'not_found' }
 	}
+	// The account and its statuses share ANSWER_BYTES (RES-3): the statuses take what the account and the answer's own
+	// JSON leave, newest first, and a page cut there continues after its last status.
+	const frame = jsonBytes({ status: 'ok', account, statuses: [], next: '0'.repeat(18) } satisfies ProfilePage)
+	const options = anonymous(present, now)
+	const admitted = presentStatusesWithin(db, presentation(db, page, options), page, ANSWER_BYTES - frame, true)
+	const next = admitted.cut
+		? (page[admitted.consumed - 1] ?? null)
+		: ids.length > PROFILE_PAGE_SIZE
+			? (ids[PROFILE_PAGE_SIZE - 1] ?? null)
+			: shown.cut
+				? shown.oldest
+				: null
+	return { status: 'ok', account, statuses: admitted.items, next }
 })
 
 export type ParentLink = { url: string; acct: string }

@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest'
 import { seedFollows, sql } from './api-helpers'
 import { ALICE, setup, type Setup } from './inbox-status-helpers'
 import {
-	ACCOUNT_ANSWER_BYTES,
 	ACCOUNT_COLUMNS,
 	ACCOUNT_FROM,
 	type AccountRow,
@@ -12,6 +11,7 @@ import {
 	presentAccount,
 	REMOTE_FIELDS_BYTES,
 } from '../src/domain/accounts'
+import { ANSWER_BYTES } from '../src/domain/answer-budget'
 import { MAX_LIST_MEMBERS_ANSWERED } from '../src/domain/lists'
 import { utf8Length } from '../src/platform/dump-format'
 import { sanitizeRemoteHtml } from '../src/security/html'
@@ -195,7 +195,7 @@ describe('remote profile fields are projected bounded (RES-2)', () => {
 			expect(account.fields).toHaveLength(1)
 			expect(fieldBytes(account.fields)).toBeLessThanOrEqual(REMOTE_FIELDS_BYTES)
 		}
-		expect(utf8Length(body)).toBeLessThanOrEqual(ACCOUNT_ANSWER_BYTES)
+		expect(utf8Length(body)).toBeLessThanOrEqual(ANSWER_BYTES)
 	})
 
 	it('shows the same fields for 20 and 300 such fields, a 1.3 MB document', async () => {

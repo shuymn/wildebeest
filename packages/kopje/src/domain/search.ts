@@ -1,9 +1,10 @@
-import { type Account, findAccounts, type Present, resolveAccountId, type SearchInput } from './accounts'
-import { listableSql, statusReads } from './audience'
+import { type Account, findAccountIds, type Present, presentAccountsWithin, resolveAccountId } from './accounts'
+import { admit, ANSWER_BYTES, jsonBytes } from './answer-budget'
+import { findableBySql, listableSql, statusReads } from './audience'
 import { type UserContext, userReadOperation } from './auth'
 import { statusQueryTerms } from './search-text'
 import { tagNameSql } from './status-bounds'
-import { presentStatuses, type Status } from './status-presenter'
+import { presentation, presentStatusesWithin, type Status } from './status-presenter'
 import { statusCursor } from './statuses'
 import { normalizeTag } from './tag-name'
 import { presentTags, type Tag } from './tags'
@@ -26,6 +27,11 @@ import type { Db } from '../db/sql'
 // a hidden mention (from an author who blocks the viewer) could push a visible entry out. Limitations: a tag used only
 // outside the windows is not found, even by its exact name; a status the viewer saved that later became hidden (its
 // author blocked them) still takes a slot of the viewer's own windows, which reveals that something changed, not what.
+//
+// The whole answer, accounts, statuses and hashtags, is one answer within ANSWER_BYTES (RES-3), admitted in that order
+// with the account resolve=true found first among the accounts. Search pages by offset, so an answer cut there holds
+// fewer results: a client advancing its offset by the number received continues after them, while Mastodon's web
+// client, which takes a short answer for the last one, shows no more (docs/response-inventory.md).
 
 export const LIBRARY_SOURCE_LIMIT = 2500
 export const HASHTAG_LIBRARY_LIMIT = 500
@@ -47,25 +53,46 @@ export type SearchRequest = {
 	minId?: string
 	localDomain: string
 	present: Present
+	// The account resolve=true found (remote-statuses.ts resolveSearch), shown first among the accounts, as Mastodon's
+	// AccountSearchService puts the exact match first, when the viewer may find it.
+	resolvedAccountId?: string
 }
 
 export type SearchResults = { accounts: Account[]; statuses: Status[]; hashtags: Hashtag[] }
 
+// The JSON of an empty answer: each list's items are counted with a separator, one more than they take.
+const SEARCH_FRAME_BYTES = jsonBytes({ accounts: [], statuses: [], hashtags: [] } satisfies SearchResults)
+
 export const search = userReadOperation<SearchRequest, SearchResults>((db, input, _viewer, context) => {
-	const accountInput: SearchInput = {
-		query: input.query,
-		limit: input.limit,
-		offset: input.offset,
-		following: input.following,
-		localDomain: input.localDomain,
-		present: input.present,
-	}
-	return {
-		accounts: input.types.includes('accounts') ? findAccounts(db, accountInput, context.accountId) : [],
-		statuses: input.types.includes('statuses') ? searchStatuses(db, input, context) : [],
-		hashtags: input.types.includes('hashtags') ? searchHashtags(db, input, context) : [],
-	}
+	let left = ANSWER_BYTES - SEARCH_FRAME_BYTES
+	let leading = true
+	const accounts = input.types.includes('accounts')
+		? presentAccountsWithin(db, accountIds(db, input, context), input.present, left, leading)
+		: { items: [], bytes: 0 }
+	left -= accounts.bytes
+	leading &&= accounts.items.length === 0
+	const statusIds = input.types.includes('statuses') ? searchStatuses(db, input, context) : []
+	const options = { ...input.present, viewer: context }
+	const statuses = presentStatusesWithin(db, presentation(db, statusIds, options), statusIds, left, leading)
+	left -= statuses.bytes
+	leading &&= statuses.items.length === 0
+	const hashtags = input.types.includes('hashtags') ? searchHashtags(db, input, context) : []
+	return { accounts: accounts.items, statuses: statuses.items, hashtags: admit(hashtags, left, leading).items }
 })
+
+// The accounts' ids: the account resolve=true found, when the viewer may find it (findableBySql, R14), then the
+// search's own, within the limit.
+function accountIds(db: Db, input: SearchRequest, viewer: UserContext): string[] {
+	const found = findAccountIds(db, input, viewer.accountId)
+	const resolved = input.resolvedAccountId
+	if (
+		resolved === undefined ||
+		db.first(`SELECT 1 AS found WHERE ${findableBySql('?2', '?1')}`, viewer.accountId, resolved) === undefined
+	) {
+		return found
+	}
+	return [resolved, ...found.filter((id) => id !== resolved)].slice(0, input.limit)
+}
 
 // Numbered parameters, so fragments that use ?1 (the viewer) can be combined with any number of terms.
 class Params {
@@ -99,7 +126,7 @@ function librarySources(limit: string, cursor: (column: string) => string, menti
 			${mentioned}`
 }
 
-function searchStatuses(db: Db, input: SearchRequest, viewer: UserContext): Status[] {
+function searchStatuses(db: Db, input: SearchRequest, viewer: UserContext) {
 	const { accountId: viewerId, now } = viewer
 	const { include, exclude } = statusQueryTerms(input.query)
 	if (include.length === 0) {
@@ -135,7 +162,7 @@ function searchStatuses(db: Db, input: SearchRequest, viewer: UserContext): Stat
 		...include.map(matches),
 		...exclude.map((variants) => `NOT ${matches(variants)}`),
 	]
-	const ids = read
+	return read
 		.select(
 			db,
 			'listable',
@@ -149,7 +176,6 @@ function searchStatuses(db: Db, input: SearchRequest, viewer: UserContext): Stat
 			...p.values
 		)
 		.map((row) => row.id)
-	return presentStatuses(db, ids, { ...input.present, viewer })
 }
 
 // The largest code point, as UTF-8 compares: every name with the prefix sorts below prefix + this.

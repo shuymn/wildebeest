@@ -5,10 +5,12 @@ import { describe, expect, it } from 'vitest'
 
 import { sql } from './api-helpers'
 import { NOW } from './app-helpers'
+import { BUILD } from './helpers'
 import { ALICE, setup, type Setup } from './inbox-status-helpers'
 import { MAX_BIO, maxFields } from './profile-fixtures'
 import { observedSql, rowsRead } from './read-helpers'
 import { community, post, remoteAccount } from './status-helpers'
+import { ANSWER_BYTES } from '../src/domain/answer-budget'
 import { listConversations, MAX_PRESENTED_PARTICIPANTS } from '../src/domain/conversations'
 import { MAX_FILTER_KEYWORD, MAX_FILTER_KEYWORDS, MAX_FILTER_TITLE, MAX_FILTERS } from '../src/domain/filters'
 import { ACTOR_URI_LIMIT, PROFILE_URL_LIMIT, USERNAME_LIMIT } from '../src/domain/profile-bounds'
@@ -760,8 +762,9 @@ async function maximalFilters(t: Setup, fill: Fill, statuses: readonly string[])
 
 type Shape = { sqlite: number; json: number; rows: number; nodes: number }
 
-// Every atomic shape at every bound, filled as `fill`, read as alice with her filters at their bounds.
-async function measureShapes(fill: Fill): Promise<Record<string, Shape>> {
+// A quote of a status and a boost of the quote, each part of every status at its bound and each account at its
+// bounds, filled as `fill`, with alice's filters at their bounds naming all three.
+async function maximalStatuses(fill: Fill) {
 	const t = await setup()
 	const [booster, quoter, quotedAuthor] = [
 		await maximalAccount(t, false, fill),
@@ -790,6 +793,11 @@ async function measureShapes(fill: Fill): Promise<Record<string, Shape>> {
 		new Date(NOW).toISOString()
 	)
 	await maximalFilters(t, fill, [quoted, quote, boost])
+	return { t, quoted, quote, boost }
+}
+
+async function measureShapes(fill: Fill): Promise<Record<string, Shape>> {
+	const { t, quoted, quote, boost } = await maximalStatuses(fill)
 	const shape = (m: Measure): Shape => ({
 		sqlite: m.sqliteBytes,
 		json: jsonBytes(m.answer),
@@ -889,4 +897,32 @@ describe('the table of maxima (RES-3)', () => {
 			expect(shape.json).toBeLessThanOrEqual(LIMIT)
 		}
 	})
+
+	// The largest atomic items through the real Store RPC (32 MiB per return): the boost of a quote alone, and an
+	// answer of the boost, the quote and the quoted status, which admits the boost and stops at the quote. Raw fill is
+	// the most serialized bytes (four-byte characters), escaped fill the most JSON.
+	it.each<[string, Fill]>([
+		['escaped', 'escaped'],
+		['raw', 'raw'],
+	])(
+		'returns the largest atomic items through the Store RPC, %s',
+		async (_name, fill) => {
+			const { t, quoted, quote, boost } = await maximalStatuses(fill)
+			const input = {
+				credential: { ...(await credential(t)), scope: 'read' as const },
+				now: NOW,
+				present: { origin: ORIGIN },
+			}
+			const one = await t.store.getStatus(BUILD, { ...input, id: boost })
+			const many = await t.store.getStatuses(BUILD, { ...input, ids: [boost, quote, quoted] })
+			expect(one.status === 'ok' && one.value.status === 'ok' && one.value.value.id).toBe(boost)
+			expect(many.status === 'ok' && many.value.map((s) => s.id)).toEqual([boost])
+			const sizes = [jsonBytes(one), jsonBytes(many)]
+			for (const size of sizes) {
+				expect(size).toBeLessThanOrEqual(ANSWER_BYTES)
+			}
+			console.info(`Store RPC, ${fill}: the boost of a quote ${sizes[0]}, the lookup ${sizes[1]} JSON bytes`)
+		},
+		120_000
+	)
 })

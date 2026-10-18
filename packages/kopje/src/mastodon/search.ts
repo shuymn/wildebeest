@@ -21,7 +21,8 @@ import { StoreUnavailableError } from '../platform/store-errors'
 // resolve=true (B1b-2, Mastodon's SearchService): after the token is verified, a URL or user@domain query is fetched
 // (federation/resolve.ts, signed by the instance actor) and stored by the Store with inbound validation. A URL query
 // answers with what it resolved to alone, if the viewer may see it; an address query answers the account search with
-// the resolved account first. Unauthenticated requests are refused before anything is fetched (401, the route's
+// the resolved account first, which the Store's search puts there (resolvedAccountId), so the answer budget (RES-3)
+// covers it. Unauthenticated requests are refused before anything is fetched (401, the route's
 // scope).
 
 // The raw bound of q before it is normalized and split (RES-1). Terms beyond the eighth are ignored (search-text.ts).
@@ -93,14 +94,10 @@ export const search: ApiHandler = async (c, deps) => {
 			minId,
 			localDomain: new URL(c.req.url).host,
 			present: present(c),
+			resolvedAccountId: resolved?.accounts[0]?.id,
 		})
 	)
-	const found = authorized(results)
-	const first = resolved?.accounts.filter(() => types.includes('accounts')) ?? []
-	return c.json({
-		...found,
-		accounts: [...first, ...found.accounts.filter((a) => !first.some((r) => r.id === a.id))].slice(0, limit),
-	})
+	return c.json(authorized(results))
 }
 
 // What resolve=true found, as the Store presented it.

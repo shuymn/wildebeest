@@ -1338,13 +1338,41 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `favourited_by`, `reblogged_by`) select ids for their window and read the profiles of the page only
   (`test/account-answer-bytes.test.ts`, `test/admin-accounts.test.ts`). _Enforced (main)_ for answers of many accounts
   (a list's members and endorsements with `limit=0`, familiar followers): the whole response body is at most
-  `ACCOUNT_ANSWER_BYTES` (8 MiB), its own JSON reserved first, only an answer's first account standing alone past it;
-  accounts are read in chunks of 50 that stop once it is reached, so at most one chunk (about 6 MB) is read past it. A
+  `ANSWER_BYTES` (8 MiB, `src/domain/answer-budget.ts`), its own JSON reserved first, only an answer's first account
+  standing alone past it; accounts are read in chunks of 50 that stop once it is reached, so at most one chunk (about
+  6 MB) is read past it. A
   `limit=0` answer cut there links `next` to the rest with `max_id`, a deliberate deviation (Mastodon ignores `max_id`
   with `limit=0`). Familiar followers share the bytes among the requested accounts with followers to show, in rounds
   that pass what one leaves unused to the others, so the answer does not depend on their order (`presentAccountsWithin`
   and `familiarFollowers` in `src/domain/accounts.ts`, `unlimitedResponse` in `src/mastodon/pagination.ts`;
   `test/account-answer-bytes.test.ts`).
+  _Implemented on branch `kopje/rb1b`_ for answers that present statuses: every Store operation that returns presented
+  statuses, accounts or notifications owns one budget of `ANSWER_BYTES` (8 MiB of the answer's JSON, containers
+  included) or a stated unit or count bound, listed with its mechanism and continuation in
+  [response-inventory.md](response-inventory.md). Items are admitted whole in traversal order, the first whatever its
+  size, each atomic item (a status with its boosted original and quoted status) presented and measured only when it
+  is reached, its rows read in chunks of 2 statuses, so what is held past the admitted answer is one chunk of rows and
+  one item at their maxima ("Heap at 8 MiB per answer"). Id-cursor status pages (home, public, hashtag and list
+  timelines, account statuses, bookmarks, favourites, quotes) cut there are `Page.cut` and continue from their last
+  admitted status in traversal order, `min_id` walking oldest first; a candidate-window continuation is kept only when
+  no status was left out by bytes before it. Pinned statuses (`pinned=true`) are a limit: their answers carry no
+  paging links, cut or not, since a status-id cursor cannot follow pin order; `limit` caps the count, a client's
+  bounds stay Mastodon's status-id bounds, and an answer that reaches the budget shows the pins that fit, in pin
+  order. An account pins few statuses, which clients fetch in one request. A context gives the ancestors half,
+  nearest first, and the descendants the rest; an edit history admits the newest versions; `GET /api/v1/statuses`
+  leaves out the ids past the budget; search, its resolved account included, and the account search return fewer
+  results (offset endpoints); a profile web page shares the budget between its account and statuses. One presentation
+  per answer compiles the viewer's filters once and fixes the filter text level (`MAX_FILTER_REQUEST_TEXT`) over the
+  answer's candidates in a preparation pass, so chunked presentation matches as one whole presentation does, and
+  matches each quoted status once. When the viewer has keyword filters, that pass reads every candidate's searchable
+  text (content, source, poll choices, media descriptions) in chunks of 4 statuses: its memory is one chunk, and its
+  work is bounded by the candidate caps (a context's 8,192), not by the answer budget (`src/domain/answer-budget.ts`,
+  `presentation` and `presentStatusesWithin` in `src/domain/status-presenter.ts`; `test/answer-budgets.test.ts`).
+  `test-node/raw-presenters.test.ts` reads the program with TypeScript's parser and
+  fails on an import, re-export or namespace access of a raw presenter (`presentStatuses`, `presentAccountsById`,
+  `presentAccount`) outside its module, but for the exact list of modules the inventory names as left for RB2
+  (notifications, notification requests, grouped notifications, conversations, reports, admin account lists, blocks
+  and mutes, the directory). _Gap:_ those answers are bounded by their counts only until RB2.
   _Enforced (main)_ for each presented status: every status column a remote server controls, or a converted row may hold
   past the ingestion bounds, is read through its helper in `src/domain/status-bounds.ts` (accounts and actor ids through
   `src/domain/profile-bounds.ts`). Content and source text over 128 KiB as a JSON string read as '' (the status keeps
@@ -1676,8 +1704,12 @@ above, with accounts on 2,000-character domains (the longest an actor id of 2,04
 characters, and the viewer's filters at theirs: 50 filters in every context, each with a 256-character title and 20
 keywords of 512 characters, the first held by the status, and naming the statuses read, so every status carries 50
 filter results (about 0.24 MB each set) and every read takes the 1,000 keywords. SQLite bytes are the UTF-8 bytes of every value read (8 per number); nodes are the
-objects, arrays and strings presented. Measured shapes are read through the Store operation; the real Store RPC
-measurement comes with the answer budgets.
+objects, arrays and strings presented. Measured shapes are read through the Store operation. Through the real Store
+RPC, a public timeline page, a context and a search answer of statuses of about 0.97 MB each, each cut at the budget,
+return 7.72 MB of JSON each (`test/answer-budgets.test.ts`, "the Store RPC returns a maximal answer"), and the boost
+of a quote above, alone or as the one status a lookup of it, the quote and the quoted status admits, returns 5.56 MB
+(escaped fill) and 4.53 MB (raw fill, the most serialized bytes) (`test/status-bounds.test.ts`), well under the 32 MiB
+RPC limit.
 
 | Shape                                                            | Most SQLite bytes | Most JSON bytes | Rows read | Nodes | Share of 8 MiB |
 | ---------------------------------------------------------------- | ----------------- | --------------- | --------- | ----- | -------------- |
@@ -1706,16 +1738,22 @@ included, so an answer that admits whole items always fits its first.
 Heap at 8 MiB per answer. Assumptions: one request at a time per isolate; the answer's JSON is at most 8 MiB, since
 every item is below it; presented objects take at most three times their JSON bytes (a string takes no more than its
 JSON bytes, since JSON only adds escapes, and the rest is per-object overhead; an assumption, as workerd exposes no
-heap to measure); rows of one chunk take their SQLite bytes, and the chunk is one item.
+heap to measure); rows of one chunk take their SQLite bytes. A chunk of statuses is 2 items, their rows read together
+and each presented and measured only when admission reaches it (`STATUS_CHUNK` in `src/domain/status-presenter.ts`),
+so while the first rejected status is measured the admitted answer, the chunk's rows, the rejected status's presented
+objects and its measurement string coexist. A page of 40 ordinary statuses takes 10 queries and 0.9 ms presented at
+once, 381 queries and 5.7 ms one item per chunk, and 199 queries and 3.7 ms two per chunk. Any other chunk (a
+conversation, a report) is one item.
 
-| Phase                                                   | Store isolate | Worker isolate |
-| ------------------------------------------------------- | ------------- | -------------- |
-| Rows of one chunk (a conversation, the most bytes read) | 7.9 MB        |                |
-| Presented objects of the admitted answer                | 25.2 MB       |                |
-| Measurement string of one item                          | 6.7 MB        |                |
-| RPC copy (serialized; deserialized in the Worker)       | 8.4 MB        | 25.2 MB        |
-| The Worker's JSON string and the body                   |               | 16.8 MB        |
-| Peak                                                    | 40 MB         | 42 MB          |
+| Phase                                             | Store isolate | Worker isolate |
+| ------------------------------------------------- | ------------- | -------------- |
+| Rows of one chunk (2 boosts of quotes)            | 13.2 MB       |                |
+| Presented objects of the admitted answer          | 25.2 MB       |                |
+| Presented objects of the first rejected status    | 16.7 MB       |                |
+| Measurement string of one item                    | 6.7 MB        |                |
+| RPC copy (serialized; deserialized in the Worker) | 8.4 MB        | 25.2 MB        |
+| The Worker's JSON string and the body             |               | 16.8 MB        |
+| Peak                                              | 62 MB         | 42 MB          |
 
 Each isolate stays within half of its 128 MB. One isolate holding both sides at once, the Store's objects alive while
 the Worker's are built, would reach about 76 MB; it stays within half (59 MB) when the Store drops its objects once

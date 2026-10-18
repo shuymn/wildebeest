@@ -12,7 +12,6 @@ import { longestString, observedSql } from './read-helpers'
 import { community, post, remoteAccount, seedStatus } from './status-helpers'
 import { Db } from '../src/db/sql'
 import {
-	ACCOUNT_ANSWER_BYTES,
 	DISPLAY_NAME_LIMIT,
 	familiarFollowers,
 	listFollows,
@@ -22,6 +21,7 @@ import {
 	PROFILE_URL_LIMIT,
 	USERNAME_LIMIT,
 } from '../src/domain/accounts'
+import { ANSWER_BYTES } from '../src/domain/answer-budget'
 import { listAccounts, MAX_LIST_MEMBERS_ANSWERED } from '../src/domain/lists'
 import { createStatus, getStatus } from '../src/domain/statuses'
 import { remoteActorInput } from '../src/federation/remote-actor'
@@ -32,7 +32,7 @@ import { sha256Hex } from '../src/security/tokens'
 
 // RES-2: one presented account has a known size, as stored and as read, so a page of accounts does too. RES-3: an
 // answer of many accounts (list members and endorsements with limit=0, familiar followers) stays within
-// ACCOUNT_ANSWER_BYTES as serialized, reading at most one chunk past it; a typical answer is never cut.
+// ANSWER_BYTES as serialized, reading at most one chunk past it; a typical answer is never cut.
 
 const ORIGIN = 'https://kopje.test'
 const LIST = '800000000000000001'
@@ -454,7 +454,7 @@ describe('answers of many accounts are bounded in bytes (RES-3)', () => {
 		expect(answer.ids).toEqual([...ids].reverse())
 		expect(answer.next).toBeNull()
 		// 2,083 bytes a member.
-		expect(answer.bytes).toBeLessThan(ACCOUNT_ANSWER_BYTES / 4)
+		expect(answer.bytes).toBeLessThan(ANSWER_BYTES / 4)
 	}, 60_000)
 
 	it(`cuts ${MAX_LIST_MEMBERS_ANSWERED} members at Misskey's limits and links next to the rest`, async () => {
@@ -465,7 +465,7 @@ describe('answers of many accounts are bounded in bytes (RES-3)', () => {
 		// About 8 KiB a member: two answers.
 		expect(answers).toHaveLength(2)
 		for (const answer of answers) {
-			expect(answer.bytes).toBeLessThanOrEqual(ACCOUNT_ANSWER_BYTES)
+			expect(answer.bytes).toBeLessThanOrEqual(ANSWER_BYTES)
 		}
 		expect(answers.flatMap((answer) => answer.ids)).toEqual([...ids].reverse())
 		expect(new URL(answers[0]!.next!).searchParams.get('limit')).toBe('0')
@@ -480,10 +480,10 @@ describe('answers of many accounts are bounded in bytes (RES-3)', () => {
 			const first = await measured(t, listAccounts, await listInput(t))
 			read.push(first)
 			// The budget, and at most one chunk of 50 read past it.
-			expect(first.bytes).toBeLessThanOrEqual(ACCOUNT_ANSWER_BYTES + 50 * READ_MAX)
+			expect(first.bytes).toBeLessThanOrEqual(ANSWER_BYTES + 50 * READ_MAX)
 			const answers = await walk(t, `/api/v1/lists/${LIST}/accounts?limit=0`)
 			for (const answer of answers) {
-				expect(answer.bytes).toBeLessThanOrEqual(ACCOUNT_ANSWER_BYTES)
+				expect(answer.bytes).toBeLessThanOrEqual(ANSWER_BYTES)
 			}
 			expect(answers.flatMap((answer) => answer.ids)).toEqual([...ids].reverse())
 		}
@@ -518,7 +518,7 @@ describe('answers of many accounts are bounded in bytes (RES-3)', () => {
 		const answers = await walk(t, `/api/v1/lists/${LIST}/accounts?limit=0`)
 		expect(answers.length).toBeGreaterThan(1)
 		for (const answer of answers) {
-			expect(answer.bytes).toBeLessThanOrEqual(ACCOUNT_ANSWER_BYTES)
+			expect(answer.bytes).toBeLessThanOrEqual(ANSWER_BYTES)
 		}
 		expect(answers.flatMap((answer) => answer.ids)).toEqual([...ids].reverse())
 	}, 60_000)
@@ -559,7 +559,7 @@ describe('answers of many accounts are bounded in bytes (RES-3)', () => {
 		const answers = await walk(t, '/api/v1/endorsements?limit=0')
 		expect(answers.length).toBeGreaterThan(1)
 		for (const answer of answers) {
-			expect(answer.bytes).toBeLessThanOrEqual(ACCOUNT_ANSWER_BYTES)
+			expect(answer.bytes).toBeLessThanOrEqual(ANSWER_BYTES)
 		}
 		expect(answers.flatMap((answer) => answer.ids)).toEqual([...ids].reverse())
 	}, 60_000)
@@ -570,7 +570,7 @@ describe('familiar followers share the answer bytes (RES-3)', () => {
 	const ask = async (t: Setup, targets: readonly string[]) => {
 		const query = targets.map((id) => `id[]=${id}`).join('&')
 		const { body, bytes } = await shownBytes(t, `/api/v1/accounts/familiar_followers?${query}`)
-		expect(bytes).toBeLessThanOrEqual(ACCOUNT_ANSWER_BYTES)
+		expect(bytes).toBeLessThanOrEqual(ANSWER_BYTES)
 		return new Map((body as Entry[]).map((entry) => [entry.id, entry.accounts.map((a) => a.id)]))
 	}
 
@@ -630,6 +630,6 @@ describe('familiar followers share the answer bytes (RES-3)', () => {
 		})
 		// What is shown, and at most one account per requested account read past it.
 		expect(read.profiles).toBeLessThanOrEqual(shown.length + 1 + 19 * MAX_FAMILIAR_FOLLOWERS)
-		expect(read.bytes).toBeLessThanOrEqual(ACCOUNT_ANSWER_BYTES + 20 * READ_MAX)
+		expect(read.bytes).toBeLessThanOrEqual(ANSWER_BYTES + 20 * READ_MAX)
 	}, 60_000)
 })

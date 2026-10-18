@@ -1,4 +1,5 @@
 import { edgeRangeSql, type Page, type PageQuery, type Present, resolveAccountId } from './accounts'
+import { admittedPage, ARRAY_ANSWER_BYTES } from './answer-budget'
 import {
 	audienceSql,
 	blocksSql,
@@ -9,11 +10,12 @@ import {
 	type StatusRule,
 	statusReads,
 	type ViewerContext,
+	type VisibleStatusId,
 	visibleSql,
 } from './audience'
 import { optionalUserReadOperation, type UserContext, userReadOperation } from './auth'
 import { holdingSql, ownList, type RepliesPolicy } from './lists'
-import { presentStatuses, type Status } from './status-presenter'
+import { presentation, presentStatusesWithin, type Status } from './status-presenter'
 import { statusCursor } from './statuses'
 import { normalizeTag } from './tag-name'
 import { mergedWindow, readWindow, singleWindow, streamWindow, type Window, windowJson, windowPage } from './windows'
@@ -23,7 +25,8 @@ import type { Db } from '../db/sql'
 // bookmarks and favourites, by the edge's INTEGER id. A page reads a candidate window from its cursor (windows.ts,
 // docs/visibility.md "Read bounds") and applies the audience rule to those candidates (statusReads in audience.ts),
 // so its ids are ones the presenter accepts and a range the rule hides costs a window, not its length. The feed
-// condition is the visibility list the partial index statuses_feed declares (REACHES_FOLLOWERS_SQL).
+// condition is the visibility list the partial index statuses_feed declares (REACHES_FOLLOWERS_SQL). A page is one
+// answer within ANSWER_BYTES (RES-3, admittedPage): cut there, it is Page.cut and continues from its last status.
 
 const FEED = `s.visibility IN ${REACHES_FOLLOWERS_SQL}`
 
@@ -77,16 +80,42 @@ function windowStatuses(
 					...params
 				)
 	const page = windowPage(window, passed, (row) => row.id, cursor.limit, cursor.ascending)
-	return {
-		items: presentStatuses(
-			db,
-			page.rows.map((row) => row.id),
-			{ ...present, viewer }
-		),
-		newest: page.newest,
-		oldest: page.oldest,
-		cut: page.cut,
-	}
+	return presentedPage(
+		db,
+		viewer,
+		page,
+		page.rows.map((row) => row.id),
+		page.rows.map((row) => row.id),
+		cursor.ascending,
+		present
+	)
+}
+
+// A page of statuses (`ids`, newest first, and each one's cursor in `keys`) presented within the answer budget,
+// admitted in traversal order (admittedPage).
+function presentedPage(
+	db: Db,
+	viewer: ViewerContext,
+	page: { newest: string | null; oldest: string | null; cut?: boolean },
+	ids: readonly VisibleStatusId[],
+	keys: readonly string[],
+	ascending: boolean,
+	present: Present
+): Page<Status> {
+	const shared = presentation(db, ids, { ...present, viewer })
+	return admittedPage(
+		{ ...page, rows: ids.map((_, i) => i) },
+		ascending,
+		(i) => keys[i] ?? '',
+		(traversal) =>
+			presentStatusesWithin(
+				db,
+				shared,
+				traversal.flatMap((i) => ids[i] ?? []),
+				ARRAY_ANSWER_BYTES,
+				true
+			)
+	)
 }
 
 // The stream bits of home's candidates (Window.o), and what each needs beyond the rule: the viewer's own pass; a
@@ -639,15 +668,13 @@ export const accountStatuses = optionalUserReadOperation<AccountStatusesInput, P
 				tagged,
 				now
 			)
+			// Pinned answers carry no paging links (RES-3): a status-id cursor cannot follow pin order, so a link would
+			// repeat or skip pins, and pins are few and fetched in one request. `limit` caps the count, a client's bounds
+			// stay Mastodon's status-id bounds, and the answer budget keeps the pins that fit, in traversal order.
 			const ids = rows.map((row) => row.id)
-			if (cursor.ascending) {
-				ids.reverse()
-			}
-			return {
-				items: presentStatuses(db, ids, { ...input.present, viewer }),
-				newest: ids[0] ?? null,
-				oldest: ids.at(-1) ?? null,
-			}
+			const shared = presentation(db, ids, { ...input.present, viewer })
+			const { items } = presentStatusesWithin(db, shared, ids, ARRAY_ANSWER_BYTES, true)
+			return { items: cursor.ascending ? items.toReversed() : items, newest: null, oldest: null }
 		}
 		// A readWindow(limit) window through statuses_account with the request's filters and audienceSql, then R2 and
 		// R11 over it (availability and filters of boosted originals). Statuses hidden by their visibility are walked
@@ -746,16 +773,15 @@ function edgeList(table: 'bookmarks' | 'favourites') {
 							windowJson(window)
 						)
 			const shown = windowPage(window, passed, (row) => row.cursor, page.limit, ascending)
-			return {
-				items: presentStatuses(
-					db,
-					shown.rows.map((row) => row.id),
-					{ ...present, viewer }
-				),
-				newest: shown.newest,
-				oldest: shown.oldest,
-				cut: shown.cut,
-			}
+			return presentedPage(
+				db,
+				viewer,
+				shown,
+				shown.rows.map((row) => row.id),
+				shown.rows.map((row) => row.cursor),
+				ascending,
+				present
+			)
 		}
 	)
 }
