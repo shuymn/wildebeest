@@ -4,10 +4,11 @@ import { Person } from '@fedify/vocab'
 import fc from 'fast-check'
 import { describe, expect, it } from 'vitest'
 
+import { bearer } from './api-helpers'
 import { NOW } from './app-helpers'
 import { freshStore, migratedStore } from './helpers'
 import { community } from './status-helpers'
-import { movedCountSql, seedBounded, STATUS, TABLES } from './stored-bounds-fixtures'
+import { loneSurrogates, movedCountSql, seedBounded, STATUS, TABLES } from './stored-bounds-fixtures'
 import { MIGRATIONS } from '../src/db/migrations'
 import { Db } from '../src/db/sql'
 import { jsonBytes } from '../src/domain/answer-budget'
@@ -560,7 +561,7 @@ describe('0048_stored_bounds and presented output (RES-2)', () => {
 			JSON.parse(before.find(([p]) => p === path)?.[2] ?? 'null') as Record<string, unknown>
 		// The status at its bounds shows its four attachments, and its history every version.
 		expect(shown(`/api/v1/statuses/${STATUS}`).media_attachments).toHaveLength(4)
-		expect(shown(`/api/v1/statuses/${STATUS}/history`)).toHaveLength(6)
+		expect(shown(`/api/v1/statuses/${STATUS}/history`)).toHaveLength(8)
 		const sql = MIGRATIONS.find((m) => m.name === '0048_stored_bounds')?.sql ?? ''
 		const moved = await runInDurableObject(h.store, (_instance, state) => {
 			const store = state.storage.sql
@@ -573,4 +574,36 @@ describe('0048_stored_bounds and presented output (RES-2)', () => {
 		expect(moved.now).toEqual([0, 0, 0, 0])
 		expect(await answers()).toEqual(before)
 	}, 120_000)
+})
+
+// A display name of lone surrogate bytes at its bound is a fixed point SQLite stores as given, which a value read into
+// the Worker and bound again is not (three U+FFFD for each): a profile update that leaves the display name keeps it in
+// SQL, and the trigger accepts it.
+describe('a legacy display name after 0048_stored_bounds (RES-2)', () => {
+	it('keeps the stored bytes through a profile update that does not change the display name', async () => {
+		const h = await community(['alice'])
+		const { id, token } = h.users.alice
+		const bytes = () =>
+			runInDurableObject(
+				h.store,
+				(_instance, state) =>
+					state.storage.sql
+						.exec<{ h: string }>('SELECT hex(CAST(display_name AS BLOB)) AS h FROM accounts WHERE id = ?', id)
+						.one().h
+			)
+		await runInDurableObject(h.store, (_instance, state) => {
+			state.storage.sql.exec(
+				'UPDATE accounts SET display_name = CAST(? AS TEXT) WHERE id = ?',
+				loneSurrogates(DISPLAY_NAME_LIMIT),
+				id
+			)
+		})
+		const stored = await bytes()
+		expect(stored).toBe('EDA080'.repeat(DISPLAY_NAME_LIMIT))
+		const body = new FormData()
+		body.set('note', 'a new bio')
+		const response = await h.request('/api/v1/accounts/update_credentials', bearer(token, { method: 'PATCH', body }))
+		expect(response.status).toBe(200)
+		expect(await bytes()).toBe(stored)
+	})
 })

@@ -658,7 +658,8 @@ export const updateCredentials = userWriteOperation<
 		return null
 	}
 	const before = actorSnapshot(db, accountId)
-	const displayName = changes.displayName === undefined ? current.display_name : storedDisplayName(changes.displayName)
+	const changedName = changes.displayName === undefined ? null : storedDisplayName(changes.displayName)
+	const displayName = changedName ?? current.display_name
 	const hide = bit(changes.hideCollections)
 	const actorType =
 		changes.bot === undefined || !['Person', 'Service'].includes(current.actor_type)
@@ -666,11 +667,13 @@ export const updateCredentials = userWriteOperation<
 			: changes.bot
 				? 'Service'
 				: 'Person'
+	// An unchanged display name stays as stored (RES-2): read into the Worker and bound again, a legacy value of lone
+	// surrogate bytes would come back as three U+FFFD for each, past its bound.
 	db.run(
-		`UPDATE accounts SET display_name = ?, note = COALESCE(?, note), locked = COALESCE(?, locked),
+		`UPDATE accounts SET display_name = COALESCE(?, display_name), note = COALESCE(?, note), locked = COALESCE(?, locked),
 			discoverable = COALESCE(?, discoverable), actor_type = ?, search_text = ?
 		WHERE id = ?`,
-		displayName,
+		changedName,
 		changes.note === undefined ? null : plainTextToHtml(storedText(changes.note)),
 		bit(changes.locked),
 		bit(changes.discoverable),
