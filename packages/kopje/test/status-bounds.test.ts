@@ -3,7 +3,7 @@ import { runInDurableObject } from 'cloudflare:test'
 import { parseFragment } from 'parse5'
 import { describe, expect, it } from 'vitest'
 
-import { sql } from './api-helpers'
+import { setSetting, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { BUILD } from './helpers'
 import { ALICE, setup, type Setup } from './inbox-status-helpers'
@@ -13,7 +13,9 @@ import { community, post, remoteAccount } from './status-helpers'
 import { ANSWER_BYTES } from '../src/domain/answer-budget'
 import { listConversations, MAX_PRESENTED_PARTICIPANTS } from '../src/domain/conversations'
 import { MAX_FILTER_KEYWORD, MAX_FILTER_KEYWORDS, MAX_FILTER_TITLE, MAX_FILTERS } from '../src/domain/filters'
+import { listGroupedNotifications } from '../src/domain/notification-groups'
 import { ACTOR_URI_LIMIT, PROFILE_URL_LIMIT, USERNAME_LIMIT } from '../src/domain/profile-bounds'
+import { getAdminReport } from '../src/domain/reports'
 import {
 	MAX_MEDIA_DESCRIPTION_LENGTH,
 	MAX_REMOTE_OPTION_LENGTH,
@@ -841,6 +843,69 @@ async function measureShapes(fill: Fill): Promise<Record<string, Shape>> {
 	const [talk] = (listed.answer as { items: { accounts: { id: string }[]; last_status: unknown }[] }).items
 	expect(talk!.accounts.map((a) => a.id)).toEqual(participants.toSorted().slice(0, MAX_PRESENTED_PARTICIPANTS))
 	expect(talk!.last_status).not.toBeNull()
+	// A favourite group of alice's with its 8 sample accounts at their bounds, its status the quote, read as a page of
+	// one group.
+	for (let i = 0; i < 8; i++) {
+		await sql(
+			t.store,
+			`INSERT INTO notifications (account_id, type, from_account_id, status_id, created_at, group_key)
+			VALUES (?, 'favourite', ?, ?, ?, 'favourite-maximal-1')`,
+			ALICE,
+			await maximalAccount(t, false, fill),
+			quote,
+			new Date(NOW).toISOString()
+		)
+	}
+	const grouped = await measured(
+		t,
+		listGroupedNotifications as never,
+		{
+			credential: await credential(t),
+			page: { limit: 1 },
+			types: [],
+			excludeTypes: [],
+			groupedTypes: null,
+			includeFiltered: false,
+			expandAccounts: 'full',
+			present: { origin: ORIGIN },
+		} as never
+	)
+	const { next: _next, prev: _prev, ...group } = grouped.answer as Record<string, unknown> & { accounts: unknown[] }
+	expect(group.accounts).toHaveLength(8)
+	// A report of the quoter by alice naming the quote (its first status, past REPORT_STATUS_BYTES alone), assigned to
+	// and resolved by alice (local accounts only), read by alice as the OAuth admin.
+	await sql(t.store, "UPDATE local_accounts SET email = 'alice@kopje.test' WHERE account_id = ?", ALICE)
+	await setSetting(t.store, 'admin_email', 'alice@kopje.test')
+	const adminToken = 'admin-token'
+	await sql(
+		t.store,
+		"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES (?, 'access', 'test', ?, 'admin:read')",
+		await sha256Hex(adminToken),
+		ALICE
+	)
+	const [report] = await sql<{ id: string }>(
+		t.store,
+		`INSERT INTO reports (account_id, target_account_id, status_ids, uri, created_at, assigned_account_id,
+			action_taken_by_account_id)
+		VALUES (?, ?, ?, 'https://kopje.test/actor#reports/maximal', ?, ?, ?) RETURNING CAST(id AS TEXT) AS id`,
+		ALICE,
+		(await sql<{ account_id: string }>(t.store, 'SELECT account_id FROM statuses WHERE id = ?', quote))[0]!.account_id,
+		JSON.stringify([quote, quoted]),
+		new Date(NOW).toISOString(),
+		ALICE,
+		ALICE
+	)
+	const reported = await measured(
+		t,
+		getAdminReport as never,
+		{
+			credential: { tokenHash: await sha256Hex(adminToken), scope: 'admin:read', now: NOW },
+			id: report!.id,
+			present: { origin: ORIGIN },
+		} as never
+	)
+	const shownReport = (reported.answer as { report: { statuses: { id: string }[] } }).report
+	expect(shownReport.statuses.map((status) => status.id)).toEqual([quote])
 	const account = (one.answer as Presented).account
 	return {
 		account: { sqlite: one.profileBytes, json: jsonBytes(account), rows: 1, nodes: nodes(account) },
@@ -848,6 +913,8 @@ async function measureShapes(fill: Fill): Promise<Record<string, Shape>> {
 		quote: shape(await read(t, getStatus as never, quote)),
 		boostOfQuote: shape(pair),
 		conversation: { ...shape({ ...listed, answer: talk }), sqlite: listed.sqliteBytes },
+		group: shape({ ...grouped, answer: group }),
+		report: shape({ ...reported, answer: shownReport }),
 	}
 }
 
@@ -866,6 +933,8 @@ describe('the table of maxima (RES-3)', () => {
 				quote: { sqlite: 4_873_529, json: 5_190_925, rows: 1_710, nodes: 4_536 },
 				boostOfQuote: { sqlite: 4_981_776, json: 5_564_762, rows: 1_763, nodes: 5_439 },
 				conversation: { sqlite: 6_048_097, json: 6_651_414, rows: 1_723, nodes: 4_959 },
+				group: { sqlite: 5_657_219, json: 6_165_029, rows: 1_736, nodes: 4_836 },
+				report: { sqlite: 4_978_009, json: 5_318_285, rows: 1_718, nodes: 4_661 },
 			},
 		],
 		[
@@ -877,6 +946,8 @@ describe('the table of maxima (RES-3)', () => {
 				quote: { sqlite: 4_057_529, json: 4_371_725, rows: 1_710, nodes: 4_536 },
 				boostOfQuote: { sqlite: 4_165_776, json: 4_745_562, rows: 1_763, nodes: 5_439 },
 				conversation: { sqlite: 5_232_097, json: 5_832_214, rows: 1_723, nodes: 4_959 },
+				group: { sqlite: 4_841_219, json: 5_345_829, rows: 1_736, nodes: 4_836 },
+				report: { sqlite: 4_162_009, json: 4_499_085, rows: 1_718, nodes: 4_661 },
 			},
 		],
 		[
@@ -888,6 +959,8 @@ describe('the table of maxima (RES-3)', () => {
 				quote: { sqlite: 6_491_023, json: 4_315_539, rows: 1_710, nodes: 4_536 },
 				boostOfQuote: { sqlite: 6_616_340, json: 4_531_681, rows: 1_763, nodes: 5_439 },
 				conversation: { sqlite: 7_870_431, json: 5_726_888, rows: 1_723, nodes: 4_959 },
+				group: { sqlite: 7_411_273, json: 5_256_883, rows: 1_736, nodes: 4_836 },
+				report: { sqlite: 6_612_573, json: 4_438_804, rows: 1_718, nodes: 4_661 },
 			},
 		],
 	])('measures %s', async (_name, fill, expected) => {
