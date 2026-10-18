@@ -30,6 +30,7 @@ import {
 import { presentStatus, type Status } from './status-presenter'
 import { MAX_STATUS_EDITS, notifyQuotedUpdate, recordEdit, recountStatus, writeTags } from './statuses'
 import type { Db } from '../db/sql'
+import { storedMediaMeta } from '../platform/stored-bounds'
 
 // Remote statuses (B1b-2): Create, Update and the originals of boosts and search results, stored as Mastodon 4.7.3's
 // ActivityPub::Activity::Create and ProcessStatusUpdateService store them. The Worker has parsed the object as
@@ -41,7 +42,7 @@ import type { Db } from '../db/sql'
 // mentioned or addressed accounts are not fetched and add nothing. The raw object is kept whole in statuses.raw.
 
 // What one remote status may store (RES-4), as Mastodon caps it where it has a cap: 4 attachments
-// (Status::MEDIA_ATTACHMENTS_LIMIT) and 10,000 code units of description (MAX_DESCRIPTION_HARD_LENGTH_LIMIT). Content
+// (Status::MEDIA_ATTACHMENTS_LIMIT) and 10,000 code points of description (MAX_DESCRIPTION_HARD_LENGTH_LIMIT). Content
 // is cut at REMOTE_HTML_RAW_LIMIT before sanitizing (security/html.ts). Mastodon has no cap on the rest; these are
 // Kopje's.
 // Attachments, tags and their names, mention rows (local accounts first, then mentions, then silent mentions) and
@@ -309,7 +310,7 @@ function mediaMeta(media: RemoteMediaInput): string | null {
 	if (original === null && media.focus === null) {
 		return null
 	}
-	return JSON.stringify(original === null ? {} : { original })
+	return storedMediaMeta(JSON.stringify(original === null ? {} : { original }))
 }
 
 function writeMedia(db: Db, statusId: string, author: Author, media: readonly RemoteMediaInput[], ctx: StoreContext) {

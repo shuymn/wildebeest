@@ -38,6 +38,7 @@ import { readWindow, singleWindow, type Window, windowJson, windowPage } from '.
 import type { Db } from '../db/sql'
 import { normalizeDomain, parseAddress } from '../platform/domain-name'
 import { boundedHref, httpUrl } from '../platform/http-url'
+import { storedDisplayName, withoutNul } from '../platform/stored-bounds'
 import { sanitizeRemoteHtml } from '../security/html'
 
 // Accounts as the Mastodon API (4.0.2) shows them: one presenter, and the account and relationship operations of B3.
@@ -643,7 +644,7 @@ export const updateCredentials = userWriteOperation<
 		return null
 	}
 	const before = actorSnapshot(db, accountId)
-	const displayName = changes.displayName ?? current.display_name
+	const displayName = changes.displayName === undefined ? current.display_name : storedDisplayName(changes.displayName)
 	const hide = bit(changes.hideCollections)
 	const actorType =
 		changes.bot === undefined || !['Person', 'Service'].includes(current.actor_type)
@@ -656,7 +657,7 @@ export const updateCredentials = userWriteOperation<
 			discoverable = COALESCE(?, discoverable), actor_type = ?, search_text = ?
 		WHERE id = ?`,
 		displayName,
-		changes.note === undefined ? null : plainTextToHtml(changes.note),
+		changes.note === undefined ? null : plainTextToHtml(withoutNul(changes.note)),
 		bit(changes.locked),
 		bit(changes.discoverable),
 		actorType,

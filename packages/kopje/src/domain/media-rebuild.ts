@@ -4,6 +4,7 @@ import { mediaRebuildOperation, readOperation } from './operation'
 import type { Db } from '../db/sql'
 import type { ImportAuthority } from '../platform/store-admin'
 import { PITR_RESTORING, PITR_RESTORING_MS, REBUILD_LEASE } from '../platform/store-flags'
+import { storedMediaMeta } from '../platform/stored-bounds'
 
 // The media rebuild (mastodon/media-rebuild.ts): local media whose row is complete but whose served files are not in R2
 // get them made again from their original. That is media restored from a backup (which holds only the originals) and
@@ -235,7 +236,7 @@ export const recordRebuild = mediaRebuildOperation<
 	}
 	const changed = db.run(
 		`UPDATE media_attachments SET meta = ? WHERE id = ? AND file_token = ? AND content_type = ? AND ${ELIGIBLE}`,
-		JSON.stringify({ original, small }),
+		storedMediaMeta(JSON.stringify({ original, small })),
 		id,
 		token,
 		contentType,

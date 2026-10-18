@@ -64,6 +64,14 @@ export function mediaPath(token: string, variant: MediaVariant, contentType: str
 	return `/media/${token}/${variant}.${extension}`
 }
 
+// The URL of a served file on the instance origin, as a media row with a file token stores it (the Worker's uploads,
+// domain/media.ts, and the cutover's mapped images, cli/lib/cutover/convert.js). With a host of at most 253
+// characters it stays far within the stored media URL bound (platform/stored-bounds.ts MEDIA_URL_LIMIT). No imports:
+// the cutover runs this module from the sources on Node (cli/lib/cutover/kopje-runtime.js).
+export function mediaUrl(origin: string, token: string, variant: MediaVariant, contentType: string): string {
+	return `${origin}${mediaPath(token, variant, contentType)}`
+}
+
 // The R2 key a request path names, or null: the token must look like a server token, the variant and extension must
 // be known, and the extension must belong to a served type. Anything else (other segments, encoded separators, dots)
 // does not match.
