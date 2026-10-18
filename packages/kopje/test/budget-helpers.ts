@@ -166,3 +166,34 @@ export async function maximalAccounts(h: ApiHarness, prefix: string, count: numb
 	}
 	return ids.toSorted()
 }
+
+let mentioned = 650_000_000_000_000_000n
+
+// A public status of about 2.4 MB of JSON, past a report's status allowance (REPORT_STATUS_BYTES): a big status that
+// quotes another and mentions 200 accounts whose url is near its bound.
+export async function hugeStatus(h: ApiHarness, author: string, published: number): Promise<string> {
+	const quoted = await bigStatus(h, author, published - 1000)
+	const id = await bigStatus(h, author, published)
+	await acceptQuote(h, id, quoted)
+	const base = mentioned
+	mentioned += 1000n
+	await sql(
+		h.store,
+		`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 200)
+		INSERT INTO accounts (id, uri, username, domain, url)
+		SELECT printf('%018d', CAST(?1 AS INTEGER) + i), 'https://mentioned.example/users/' || ?1 || '-' || i,
+			'm' || i, 'mentioned.example', ?2 || i FROM n`,
+		String(base),
+		`https://mentioned.example/@${'u'.repeat(2000)}`
+	)
+	await sql(
+		h.store,
+		`INSERT INTO status_mentions (status_id, account_id, silent, requires_mention, author_id)
+		SELECT ?1, id, 0, 0, ?2 FROM accounts WHERE id > printf('%018d', CAST(?3 AS INTEGER))
+			AND id <= printf('%018d', CAST(?3 AS INTEGER) + 200)`,
+		id,
+		author,
+		String(base)
+	)
+	return id
+}

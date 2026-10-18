@@ -5,18 +5,21 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { adminClaims, adminHarness, adminTeam, setTeamAccess, type AccessTeam } from './access-helpers'
 import { type ApiHarness, bearer, form, json, login, registerApp, seedAccount, setSetting, sql } from './api-helpers'
 import { NOW } from './app-helpers'
+import { type Answer, answer, hugeStatus } from './budget-helpers'
 import { migratedStore } from './helpers'
 import { ACCESS, ADMIN_EMAIL } from './ops-helpers'
 import { community, remoteAccount, remoteFollows, seedStatus, type User } from './status-helpers'
 import { Db } from '../src/db/sql'
 import type { PageQuery } from '../src/domain/accounts'
 import { setAccountEmail } from '../src/domain/admin-accounts'
+import { ANSWER_BYTES } from '../src/domain/answer-budget'
 import { logAction, MODERATION_LOG_KEEP, MODERATION_LOG_PRUNE } from '../src/domain/moderation-log'
 import {
 	ADMIN_REPORT_STATUS_BUDGET,
 	type AdminReportFilter,
 	listAdminReports,
 	REPORT_COLUMNS,
+	REPORT_STATUS_BYTES,
 	type ReportRow,
 	userReport,
 } from '../src/domain/reports'
@@ -733,4 +736,48 @@ describe('POST /admin/accounts/email (set-email)', () => {
 		expect(await sql(store, 'SELECT * FROM admin_actions')).toEqual([])
 		expect(await sql(store, 'SELECT email FROM local_accounts WHERE email = ?', ADMIN_EMAIL)).toEqual([])
 	})
+})
+
+describe('report answers within ANSWER_BYTES (RES-3)', () => {
+	it('embed a first status past the allowance alone, on the list, the report and an action, and cut a page at a report', async () => {
+		const w = await world()
+		const huge = await hugeStatus(w.h, w.carol, NOW - 3_600_000)
+		const small = await seedStatus(w.h.store, { accountId: w.carol, visibility: 'public' })
+		await seedReports(w.h.store, w.alice.id, w.carol, 5, { statuses: [small, huge] })
+		const reports = (
+			await sql<{ id: string }>(w.h.store, 'SELECT CAST(id AS TEXT) AS id FROM reports ORDER BY id DESC')
+		).map((row) => row.id)
+		// Newest first: each page is cut at a report, `more` linking the next; every report once.
+		const walked: string[] = []
+		for (let at: string | null = '/api/v1/admin/reports?limit=10'; at !== null;) {
+			const page: Answer<AdminReportBody[]> = await answer<AdminReportBody[]>(w.h, at, w.admin)
+			expect(page.bytes).toBeLessThanOrEqual(ANSWER_BYTES)
+			expect(page.body.length).toBeLessThan(5)
+			for (const report of page.body) {
+				// The first status, past REPORT_STATUS_BYTES alone, is the one shown.
+				expect(report.statuses.map((status) => status.id)).toEqual([huge])
+			}
+			walked.push(...page.body.map((report) => report.id))
+			at = page.next
+		}
+		expect(walked).toEqual(reports)
+		const ascending: string[] = []
+		for (let at: string | null = '/api/v1/admin/reports?limit=10&min_id=0'; at !== null;) {
+			const page: Answer<AdminReportBody[]> = await answer<AdminReportBody[]>(w.h, at, w.admin)
+			expect(page.bytes).toBeLessThanOrEqual(ANSWER_BYTES)
+			ascending.push(...page.body.map((report) => report.id).toReversed())
+			at = page.body.length === 0 ? null : page.prev
+		}
+		expect(ascending).toEqual(reports.toReversed())
+		const one = await answer<AdminReportBody>(w.h, `/api/v1/admin/reports/${reports[0]!}`, w.admin)
+		expect(one.body.statuses.map((status) => status.id)).toEqual([huge])
+		expect(one.bytes).toBeGreaterThan(REPORT_STATUS_BYTES)
+		const acted = await call(w.h, `/api/v1/admin/reports/${reports[0]!}/assign_to_self`, w.admin, { method: 'POST' })
+		expect((acted.body as AdminReportBody).statuses.map((status) => status.id)).toEqual([huge])
+		// A small first status leaves room: the statuses within the allowance follow it.
+		await seedReports(w.h.store, w.alice.id, w.carol, 1, { statuses: [small, ...w.statuses] })
+		const [last] = await sql<{ id: string }>(w.h.store, 'SELECT CAST(max(id) AS TEXT) AS id FROM reports')
+		const smallOnes = await reportOf(w.h, last!.id, w.admin)
+		expect(smallOnes.statuses.map((status) => status.id).toSorted()).toEqual([small, ...w.statuses].toSorted())
+	}, 300_000)
 })
