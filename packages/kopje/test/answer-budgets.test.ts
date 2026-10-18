@@ -5,12 +5,13 @@ import { describe, expect, it } from 'vitest'
 import { type ApiHarness, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { BUILD } from './helpers'
+import { MAX_BIO, maxFields } from './profile-fixtures'
 import { observedSql } from './read-helpers'
 import { community, domainBlock, mute, remoteAccount, seedStatus } from './status-helpers'
 import { Db } from '../src/db/sql'
 import { admit, admittedPage, ANSWER_BYTES, jsonBytes } from '../src/domain/answer-budget'
 import { type VisibleStatusId } from '../src/domain/audience'
-import { filterTextLimits } from '../src/domain/filters'
+import { filterTextLimits, MAX_FILTER_REQUEST_TEXT } from '../src/domain/filters'
 import { presentation, presentStatuses, presentStatusesWithin } from '../src/domain/status-presenter'
 import { utf8Length } from '../src/platform/dump-format'
 import { sha256Hex } from '../src/security/tokens'
@@ -197,6 +198,25 @@ async function world() {
 // The JSON of one status as the viewer is shown it alone.
 async function bytesOf(h: ApiHarness, token: string, id: string): Promise<number> {
 	return (await answer<unknown>(h, `/api/v1/statuses/${id}`, token)).bytes
+}
+
+// `count` remote accounts named `prefix` and a number, in id order, each at its bounds (RES-2): a bio of 64 KiB,
+// a display name of 2,048 escaping characters and 16 fields at theirs, about 121 KB of JSON each.
+async function maximalAccounts(h: ApiHarness, prefix: string, count: number): Promise<string[]> {
+	const ids: string[] = []
+	for (let i = 0; i < count; i++) {
+		const id = await remoteAccount(h.store, `${prefix}${String(i).padStart(3, '0')}`)
+		await sql(
+			h.store,
+			'UPDATE accounts SET note = ?, display_name = ?, raw = ? WHERE id = ?',
+			MAX_BIO,
+			C.repeat(2048),
+			JSON.stringify({ type: 'Person', attachment: maxFields() }),
+			id
+		)
+		ids.push(id)
+	}
+	return ids.toSorted()
 }
 
 async function statusBytes(w: World, id: string): Promise<number> {
@@ -472,16 +492,18 @@ describe('composite answers within ANSWER_BYTES (RES-3)', () => {
 		expect(found).toEqual(w.V)
 	}, 300_000)
 
-	it('puts the resolved account first within the same answer, when the viewer may find it', async () => {
+	it('shares one budget among the resolved account, accounts, statuses and hashtags', async () => {
 		const w = await world()
 		const { h, alice } = w
-		const blocked = await remoteAccount(h.store, 'big', 'blocked.example')
+		const needles = await maximalAccounts(h, 'needle', 45)
+		const [resolved] = await maximalAccounts(h, 'resolved', 1)
+		const blocked = await remoteAccount(h.store, 'needleblocked', 'blocked.example')
 		await domainBlock(h.store, alice.id, 'blocked.example')
 		const credential = { tokenHash: await sha256Hex(alice.token), scope: 'read' as const, now: NOW }
-		const search = (resolvedAccountId?: string) =>
-			h.store.search(BUILD, {
+		const search = async (resolvedAccountId: string) => {
+			const found = await h.store.search(BUILD, {
 				credential,
-				query: 'big',
+				query: 'needle',
 				types: ['accounts', 'statuses', 'hashtags'],
 				limit: 40,
 				offset: 0,
@@ -490,16 +512,50 @@ describe('composite answers within ANSWER_BYTES (RES-3)', () => {
 				present: { origin: ORIGIN },
 				resolvedAccountId,
 			})
-		const found = await search(w.author)
-		expect(found.status).toBe('ok')
-		if (found.status !== 'ok') {
-			return
+			if (found.status !== 'ok') {
+				throw new Error(found.status)
+			}
+			return found.value
 		}
-		expect(found.value.accounts.map((a) => a.id)).toEqual([w.author])
-		expect(found.value.hashtags.map((t) => t.name)).toEqual(['big'])
-		expect(jsonBytes(found.value)).toBeLessThanOrEqual(ANSWER_BYTES)
-		const hidden = await search(blocked)
-		expect(hidden.status === 'ok' && hidden.value.accounts.map((a) => a.id)).toEqual([w.author])
+		const found = await search(resolved!)
+		// The resolved account first, then the search's own, within the limit; the statuses that fit what the accounts
+		// left; the hashtag after them.
+		expect(found.accounts.map((a) => a.id)).toEqual([resolved, ...needles.slice(0, 39)])
+		expect(found.statuses.map((s) => s.id)).toEqual(w.V.slice(0, found.statuses.length))
+		expect(found.statuses.length).toBeGreaterThan(0)
+		expect(found.hashtags.map((t) => t.name)).toEqual(['needle'])
+		expect(jsonBytes(found)).toBeLessThanOrEqual(ANSWER_BYTES)
+		// The next status is the first rejected: with it, the accounts and statuses alone pass the budget.
+		const items = (list: readonly unknown[]) => list.reduce<number>((sum, item) => sum + jsonBytes(item) + 1, 0)
+		const taken =
+			jsonBytes({ accounts: [], statuses: [], hashtags: [] }) + items(found.accounts) + items(found.statuses)
+		expect(taken + (await statusBytes(w, w.V[found.statuses.length]!)) + 1).toBeGreaterThan(ANSWER_BYTES)
+		// A resolved account the viewer may not find is not put first.
+		expect((await search(blocked)).accounts[0]?.id).toBe(needles[0])
+	}, 300_000)
+
+	it('answers the account search within the budget, its offset continuing after a cut', async () => {
+		const w = await world()
+		const { h, alice } = w
+		const needles = await maximalAccounts(h, 'needle', 90)
+		const found: string[] = []
+		for (let offset = 0, page = 0; page < 10; page++) {
+			const read = await answer(h, `/api/v1/accounts/search?q=needle&limit=80&offset=${offset}`, alice.token)
+			expect(read.bytes).toBeLessThanOrEqual(ANSWER_BYTES)
+			const shown = read.body.map((a) => a.id)
+			if (shown.length === 0) {
+				break
+			}
+			if (page === 0) {
+				// Cut by bytes: the next account would pass the budget.
+				expect(shown.length).toBeLessThan(needles.length)
+				const next = await answer<unknown>(h, `/api/v1/accounts/${needles[shown.length]!}`, alice.token)
+				expect(read.bytes + next.bytes + 1).toBeGreaterThan(ANSWER_BYTES)
+			}
+			found.push(...shown)
+			offset += shown.length
+		}
+		expect(found).toEqual(needles)
 	}, 300_000)
 
 	it('shares a profile page between its account and its statuses, next following the last one shown', async () => {
@@ -567,6 +623,48 @@ describe('the shared filter allowance (RES-3)', () => {
 		const matched = whole.map((s) => (s.filtered ?? []).length > 0)
 		expect(matched).toEqual(ids.map((_, i) => 150 * i + 7 <= level!))
 		expect(matched).toContain(false)
+	}, 300_000)
+
+	it('matches a status quoted by many once, within the allowance', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const author = await remoteAccount(h.store, 'quoting')
+		// 40 statuses of 10,000 code units, each quoting the same status of 10,000: 41 targets share the allowance.
+		const long = (word: string) => `<p>${'y'.repeat(9_993)} ${word}</p>`
+		const quoted = await seedStatus(h.store, { accountId: author, visibility: 'public', content: long('quoted') })
+		const ids: string[] = []
+		for (let i = 0; i < 40; i++) {
+			const id = await seedStatus(h.store, { accountId: author, visibility: 'public', content: long('status') })
+			await sql(
+				h.store,
+				`INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, quoted_account_id, state, updated_at)
+				SELECT ?1, uri, id, account_id, 'accepted', ?3 FROM statuses WHERE id = ?2`,
+				id,
+				quoted,
+				new Date(NOW).toISOString()
+			)
+			ids.push(id)
+		}
+		await h.request('/api/v2/filters', {
+			method: 'POST',
+			headers: { authorization: `Bearer ${alice.token}`, 'content-type': 'application/json' },
+			body: JSON.stringify({ title: 'n', context: ['public'], keywords_attributes: [{ keyword: 'needle' }] }),
+		})
+		const result = await runInDurableObject(h.store, (_instance, state) => {
+			const db = new Db(state.storage.sql)
+			const options = { origin: ORIGIN, viewer: { accountId: alice.id, now: new Date(NOW).toISOString() } }
+			const visible = ids as VisibleStatusId[]
+			const shared = presentation(db, visible, options)
+			const items = presentStatusesWithin(db, shared, visible, ANSWER_BYTES, true).items
+			return { items, level: shared.level, units: shared.matched.units, whole: presentStatuses(db, visible, options) }
+		})
+		expect(result.items).toHaveLength(40)
+		expect(result.items).toEqual(result.whole)
+		const [level] = filterTextLimits(Array.from({ length: 41 }, () => 10_000))
+		expect(result.level).toBe(level)
+		// Each status and the quoted status once: 41 texts at the level, not 80.
+		expect(result.units).toBe(41 * level!)
+		expect(result.units).toBeLessThanOrEqual(MAX_FILTER_REQUEST_TEXT)
 	}, 300_000)
 })
 
