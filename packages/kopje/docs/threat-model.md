@@ -1410,9 +1410,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   many children in bounded batches"), `test/inbox-statuses-edge.test.ts` ("RES-4: bounds at their limits", "writes at
   most … rows per batch, hiding included"). _Enforced (main)_ for snapshots: `test/snapshot.test.ts` ("snapshot caps"). KV
   cache: _Planned (KV sweep):_ its entries expire (NET-4), but expired rows are never deleted, so the table has no count
-  or size cap. Spool: _Enforced (main):_ a request is spooled only within one Queue message (`SPOOL_MESSAGE_LIMIT`) and
-  while the Queue's backlog is under `SPOOL_BACKLOG_MESSAGES` (10,000) and `SPOOL_BACKLOG_BYTES` (256 MiB), failing
-  closed when it cannot be read (`createAdmission` in `src/federation/spool.ts`); `test/gate.test.ts` ("answers 503 when
+  or size cap. Spool: _Enforced (main):_ a request is spooled only within one Queue message (`SPOOL_MESSAGE_LIMIT`), and
+  only while the Queue's backlog, as last read, is under `SPOOL_BACKLOG_MESSAGES` (10,000) and `SPOOL_BACKLOG_BYTES`
+  (256 MiB); a backlog that cannot be read admits nothing (`createAdmission` in `src/federation/spool.ts`). Each isolate
+  reads the backlog at most every 10 s and does not count what it sends in between, so the backlog is a budget, not a
+  hard ceiling: it can overshoot by what all isolates spool within one interval. `test/gate.test.ts` ("answers 503 when
   the deflated request does not fit one message"), `test/maintenance-worker.test.ts` ("in Kopje's own maintenance gate:
   the same budget, failing closed"). Deliveries: _Enforced (main):_ delivered rows are deleted
   at once and given-up rows after 30 days by the 5-minute cron (`sweepDeliveries`); receipts belong to their status
