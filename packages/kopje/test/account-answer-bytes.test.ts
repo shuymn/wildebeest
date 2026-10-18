@@ -10,6 +10,7 @@ import { ALICE, setup, type Setup } from './inbox-status-helpers'
 import { field, MAX_BIO, maxFields } from './profile-fixtures'
 import { longestString, observedSql } from './read-helpers'
 import { community, post, remoteAccount, seedStatus } from './status-helpers'
+import { legacySql } from './stored-bounds-fixtures'
 import { Db } from '../src/db/sql'
 import {
 	DISPLAY_NAME_LIMIT,
@@ -287,7 +288,7 @@ describe('one account has a known size (RES-2)', () => {
 		const t = await setup()
 		const [id] = await accounts(t, 1, BASE, typical)
 		const long = `https://example.com/${'x'.repeat(PROFILE_URL_LIMIT)}`
-		await sql(
+		await legacySql(
 			t.store,
 			'UPDATE accounts SET note = ?, display_name = ?, url = ?, avatar_url = ?, header_url = ? WHERE id = ?',
 			`<p>${'x'.repeat(REMOTE_BIO_BYTES)}</p>`,
@@ -306,9 +307,9 @@ describe('one account has a known size (RES-2)', () => {
 			header: `${ORIGIN}/assets/header.png`,
 		})
 		// A bio within the raw bound that escapes past it reads as empty too; one at the bound is kept.
-		await sql(t.store, 'UPDATE accounts SET note = ? WHERE id = ?', '\u0001'.repeat(REMOTE_BIO_BYTES / 2), id!)
+		await legacySql(t.store, 'UPDATE accounts SET note = ? WHERE id = ?', '\u0001'.repeat(REMOTE_BIO_BYTES / 2), id!)
 		expect((await shownBytes(t, `/api/v1/accounts/${id}`)).body).toMatchObject({ note: '' })
-		await sql(t.store, 'UPDATE accounts SET note = ? WHERE id = ?', MAX_BIO, id!)
+		await legacySql(t.store, 'UPDATE accounts SET note = ? WHERE id = ?', MAX_BIO, id!)
 		expect((await shownBytes(t, `/api/v1/accounts/${id}`)).body).toMatchObject({ note: MAX_BIO })
 	})
 
@@ -316,7 +317,7 @@ describe('one account has a known size (RES-2)', () => {
 		const t = await setup()
 		const [id] = await accounts(t, 1, BASE, typical)
 		const shown = async (note: string, displayName = 'n') => {
-			await sql(t.store, 'UPDATE accounts SET note = ?, display_name = ? WHERE id = ?', note, displayName, id!)
+			await legacySql(t.store, 'UPDATE accounts SET note = ?, display_name = ? WHERE id = ?', note, displayName, id!)
 			return (await shownBytes(t, `/api/v1/accounts/${id}`)).body as { note: string; display_name: string }
 		}
 		// A NUL does not hide the rest from the guards: past the raw bound, or escaping past it, the bio reads as empty.
@@ -333,7 +334,7 @@ describe('one account has a known size (RES-2)', () => {
 		const h = await community(['alice'])
 		const carol = await remoteAccount(h.store, 'carol')
 		const long = `https://remote.example/${'x'.repeat(PROFILE_URL_LIMIT)}`
-		await sql(h.store, 'UPDATE accounts SET url = ? WHERE id = ?', long, carol)
+		await legacySql(h.store, 'UPDATE accounts SET url = ? WHERE id = ?', long, carol)
 		const derived = 'https://remote.example/@carol'
 		// Composed: the mention links the derived URL.
 		const status = await post(h, h.users.alice, { status: '@carol@remote.example hi' })
@@ -360,8 +361,8 @@ describe('one account has a known size (RES-2)', () => {
 		// over-long stored URL.
 		const huge = `c${'u'.repeat(64 * 1024)}`
 		const named = `d${'v'.repeat(299)}`
-		await sql(h.store, 'UPDATE accounts SET username = ?, url = ? WHERE id = ?', huge, long, carol)
-		await sql(h.store, 'UPDATE accounts SET username = ?, url = ? WHERE id = ?', named, long, dave)
+		await legacySql(h.store, 'UPDATE accounts SET username = ?, url = ? WHERE id = ?', huge, long, carol)
+		await legacySql(h.store, 'UPDATE accounts SET username = ?, url = ? WHERE id = ?', named, long, dave)
 		const credential = (scope: string) =>
 			sha256Hex(h.users.alice.token).then((tokenHash) => ({ tokenHash, scope, now: NOW }))
 		// Each mention carries the username cut at USERNAME_LIMIT, and the acct and URL derived from it.

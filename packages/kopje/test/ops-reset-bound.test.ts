@@ -115,7 +115,7 @@ describe('a reset call that unlinks large rows', () => {
 			)
 			for (let n = 1; n <= 9; n++) {
 				sql.exec(
-					`INSERT INTO statuses (id, uri, account_id, in_reply_to_uri, in_reply_to_id, visibility, content, published_at)
+					`INSERT INTO statuses (id, uri, account_id, in_reply_to_uri, in_reply_to_id, visibility, search_text, published_at)
 					 VALUES (?, ?, ?, ?, ?, 'public', ?, '2026-10-12T00:00:00.000Z')`,
 					id(n),
 					`https://r.test/s/${n}`,

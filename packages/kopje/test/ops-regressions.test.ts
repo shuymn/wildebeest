@@ -41,7 +41,7 @@ describe('dump and import of values at the platform limits', () => {
 	it('imports a TEXT value larger than the 100 KB SQL statement limit', async () => {
 		const source = await seeded()
 		await runInDurableObject(source, (_instance, state) => {
-			state.storage.sql.exec('UPDATE accounts SET note = ? WHERE id = ?', 'n'.repeat(150_000), ACCOUNT)
+			state.storage.sql.exec('UPDATE accounts SET search_text = ? WHERE id = ?', 'n'.repeat(150_000), ACCOUNT)
 		})
 		const { target, report } = await roundTrip(source)
 		expect(report).toMatchObject({ ok: true })
@@ -54,7 +54,7 @@ describe('dump and import of values at the platform limits', () => {
 			const blob = new Uint8Array(1_100_000).map((_, i) => (i * 7) & 0xff)
 			state.storage.sql.exec('UPDATE local_accounts SET privkey = ? WHERE account_id = ?', blob, ACCOUNT)
 			state.storage.sql.exec(
-				'UPDATE accounts SET note = ? WHERE id = ?',
+				'UPDATE accounts SET search_text = ? WHERE id = ?',
 				`a${String.fromCharCode(0)}${'b'.repeat(1_100_000)}`,
 				ACCOUNT
 			)

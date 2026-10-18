@@ -5,6 +5,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { BUILD, freshStore, MIGRATION_NAMES, migratedStore, rejectionOf, testKernel } from './helpers'
 import {
 	ACCESS,
+	ADMIN_AUD,
+	ADMIN_EMAIL,
 	beginImport,
 	copyConfig,
 	ensureAdmin,
@@ -14,10 +16,13 @@ import {
 	importViaRpc,
 	resetImport,
 	seedStore,
+	SERVICE_CLIENT_ID,
 	setAccess,
 	splitDump,
 	tableSnapshot,
+	TEAM_DOMAIN,
 } from './ops-helpers'
+import { columnsSql, movedCountSql, seedBounded, storedSql, TABLES } from './stored-bounds-fixtures'
 import { MIGRATIONS } from '../src/db/migrations'
 import { readOperation, sessionOperation, writeOperation } from '../src/domain/operation'
 import { MAX_PROFILE_UPDATES } from '../src/platform/dump-catalog'
@@ -108,6 +113,85 @@ describe('dump', () => {
 		expect(report).toMatchObject({ ok: true, problems: [] })
 		expect(withoutState(await tableSnapshot(target))).toEqual(withoutState(await tableSnapshot(source)))
 	})
+
+	// RES-2: a dump taken before 0048_stored_bounds, of rows past their stored bounds, restores into a Store at the
+	// same migrations (the import requires them equal), which then upgrades through 0048 to P(x) of every value.
+	it('restores a dump taken before 0048_stored_bounds, which then upgrades through it', async () => {
+		const before = MIGRATIONS.slice(0, MIGRATION_NAMES.indexOf('0048_stored_bounds'))
+		const options = { source: { build: BUILD, version: 'test' }, log: () => {} }
+		const source = freshStore()
+		const text = await runInDurableObject(source, async (_instance, state) => {
+			await state.storage.deleteAlarm()
+			expect(await testKernel(state, before).upgrade()).toMatchObject({ ok: true })
+			seedBounded(state.storage.sql)
+			const dumping = new StoreAdmin(state, testKernel(state, before), options)
+			const started = await dumping.dumpStart()
+			if (!started.ok) {
+				throw new Error(started.message)
+			}
+			let dumped = started.headerLine
+			let cursor: DumpCursor = started.cursor
+			for (;;) {
+				const step = await dumping.dumpNext(cursor)
+				if (!step.ok) {
+					throw new Error(step.message)
+				}
+				dumped += new TextDecoder().decode(step.chunk)
+				cursor = step.cursor
+				if (step.done) {
+					break
+				}
+			}
+			const finished = await dumping.dumpFinish(cursor)
+			if (!finished.ok) {
+				throw new Error(finished.message)
+			}
+			return dumped + (finished.trailerText ?? '')
+		})
+		const chunks = await importChunks(text, 64 * 1024)
+		const target = freshStore()
+		await runInDurableObject(target, async (_instance, state) => {
+			const sql = state.storage.sql
+			await state.storage.deleteAlarm()
+			expect(await testKernel(state, before).upgrade()).toMatchObject({ ok: true })
+			for (const [name, value] of Object.entries({
+				access_team_domain: TEAM_DOMAIN,
+				access_admin_aud: ADMIN_AUD,
+				admin_email: ADMIN_EMAIL,
+				access_service_token_client_id: SERVICE_CLIENT_ID,
+			})) {
+				sql.exec('INSERT INTO instance_settings (name, value) VALUES (?, ?)', name, value)
+			}
+			const importing = new StoreAdmin(state, testKernel(state, before), options)
+			const { header, trailer } = splitDump(text)
+			const begun = await importing.importBegin(BUILD, ACCESS, header)
+			if (!begun.ok) {
+				throw new Error(begun.message)
+			}
+			const id = begun.progress.id
+			for (const [i, chunk] of chunks.entries()) {
+				expect(await importing.importChunk(BUILD, ACCESS, id, i + 1, chunk)).toMatchObject({ ok: true })
+			}
+			expect(await importing.importFinish(BUILD, ACCESS, id, trailer)).toMatchObject({ ok: true })
+			for (;;) {
+				const verified = await importing.importVerify(BUILD, ACCESS, id)
+				if (!verified.ok) {
+					throw new Error(verified.message)
+				}
+				if (verified.done) {
+					expect(verified.report).toMatchObject({ ok: true, problems: [] })
+					break
+				}
+			}
+			const expected = TABLES.map((table) => sql.exec(storedSql(table)).toArray())
+			expect(TABLES.map((table) => sql.exec<{ n: number }>(movedCountSql(table)).one().n).every((n) => n > 0)).toBe(
+				true
+			)
+			expect(await testKernel(state).upgrade()).toMatchObject({ ok: true, applied: ['0048_stored_bounds'] })
+			expect(TABLES.map((table) => sql.exec(columnsSql(table)).toArray())).toEqual(expected)
+			expect(TABLES.map((table) => sql.exec<{ n: number }>(movedCountSql(table)).one().n)).toEqual([0, 0, 0, 0])
+		})
+	}, 120_000)
 
 	it('writes the documented format and leaves out bookkeeping', async () => {
 		const { text } = await dumpViaRpc(await seeded(0))
@@ -491,7 +575,7 @@ describe('import work per call', () => {
 			const account = sql.exec<{ id: string }>("SELECT id FROM accounts WHERE domain = 'remote.test'").one().id
 			const insert = (n: number, replyTo: number | null) =>
 				sql.exec(
-					`INSERT INTO statuses (id, uri, account_id, in_reply_to_uri, in_reply_to_id, visibility, content, published_at)
+					`INSERT INTO statuses (id, uri, account_id, in_reply_to_uri, in_reply_to_id, visibility, search_text, published_at)
 					 VALUES (?, ?, ?, ?, ?, 'public', ?, '2026-10-12T00:00:00.000Z')`,
 					statusId(n),
 					`https://remote.test/s/large-${n}`,
