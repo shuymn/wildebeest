@@ -8,6 +8,12 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+### Fixed
+
+- NodeInfo, the other `/.well-known` documents and local actor documents can be read by browser clients on other
+  origins (GET, and its preflight), as Mastodon allows. Elk's NodeInfo request no longer fails with a CORS error. The
+  profile page stays closed to other origins as HTML.
+
 ## [0.1.0-rc.16] - 2026-10-18
 
 A sixteenth release candidate of the first release, published under the npm dist-tag `next`.

@@ -53,13 +53,12 @@ export type AppDeps = {
 // account.
 const MODERATION_WRITE = /^\/api\/v1\/admin\/accounts\/[^/]+\/(?:action|unsuspend)$/
 
-const API_CORS_PATHS = [
-	'/api/*',
-	'/oauth/token',
-	'/oauth/revoke',
-	'/oauth/userinfo',
-	'/.well-known/oauth-authorization-server',
-]
+const API_CORS_PATHS = ['/api/*', '/oauth/token', '/oauth/revoke', '/oauth/userinfo']
+
+// The public documents browsers read, for GET as Mastodon opens them (config/initializers/cors.rb, v4.5.11): the
+// /.well-known documents, NodeInfo and a local actor's document. The profile page is the web UI and stays closed
+// (WEB-3).
+const DOCUMENT_CORS_PATHS = ['/.well-known/*', '/nodeinfo/*', '/ap/users/:username']
 
 type AppEnv = { Bindings: Env; Variables: { requestClass: RequestClass; inboxBody: Uint8Array; domain: string } }
 
@@ -96,6 +95,10 @@ export function createApp({
 	const apiCors = cors({ origin: '*', exposeHeaders: ['Link'], maxAge: 86400 })
 	for (const path of API_CORS_PATHS) {
 		app.use(path, apiCors)
+	}
+	const documentCors = cors({ origin: '*', allowMethods: ['GET'], maxAge: 86400 })
+	for (const path of DOCUMENT_CORS_PATHS) {
+		app.use(path, documentCors)
 	}
 
 	// Spooling within the Queue's admission budget (federation/spool.ts): over it, or when it cannot be read, 503.
