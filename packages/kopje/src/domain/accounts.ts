@@ -1,6 +1,6 @@
 import { followActivity, followAnswerActivity, followUri, recordOutbound, undoFollowActivity } from './activities'
 import { actorSnapshot, recordActorUpdate } from './actor-update'
-import { admit, type Admitted, admittedPage, ANSWER_BYTES, ARRAY_ANSWER_BYTES } from './answer-budget'
+import { admit, type Admitted, admittedPage, ANSWER_BYTES, ARRAY_ANSWER_BYTES, jsonBytes } from './answer-budget'
 import {
 	activeMuteJoinSql,
 	availableJoinedSql,
@@ -37,7 +37,6 @@ import { renderFieldValue } from './status-text'
 import { readWindow, singleWindow, type Window, windowJson, windowPage } from './windows'
 import type { Db } from '../db/sql'
 import { normalizeDomain, parseAddress } from '../platform/domain-name'
-import { utf8Length } from '../platform/dump-format'
 import { boundedHref, httpUrl } from '../platform/http-url'
 import { sanitizeRemoteHtml } from '../security/html'
 
@@ -236,7 +235,7 @@ export function accountStream(
 			read = accountRowsOf(db, ids.slice(next, (next += chunk))).map((row) => presentAccount(row, present))
 		}
 		const account = read.shift()
-		return account === undefined ? undefined : { account, bytes: utf8Length(JSON.stringify(account)) + 1 }
+		return account === undefined ? undefined : { account, bytes: jsonBytes(account) + 1 }
 	}
 }
 
@@ -439,7 +438,7 @@ function remoteFields(attachment: string | null): Field[] {
 	for (const entry of JSON.parse(attachment) as { name: string; value: string }[]) {
 		const name = entry.name.slice(0, FIELD_NAME_LIMIT)
 		const value = sanitizeRemoteHtml(entry.value.slice(0, FIELD_VALUE_RAW_LIMIT))
-		bytes += utf8Length(JSON.stringify(name)) + utf8Length(JSON.stringify(value))
+		bytes += jsonBytes(name) + jsonBytes(value)
 		if (bytes > REMOTE_FIELDS_BYTES) {
 			break
 		}
@@ -833,10 +832,7 @@ export const familiarFollowers = userReadOperation<{ ids: string[]; present: Pre
 			return [{ id: target, followers }]
 		})
 		// The answer's own JSON: brackets and each entry's id, keys and separator; accountStream counts each account's.
-		const frame = entries.reduce(
-			(sum, entry) => sum + utf8Length(JSON.stringify({ id: entry.id, accounts: [] })) + 1,
-			1
-		)
+		const frame = entries.reduce((sum, entry) => sum + jsonBytes({ id: entry.id, accounts: [] }) + 1, 1)
 		const shown = sharedAnswer(
 			db,
 			entries.map((entry) => entry.followers),
