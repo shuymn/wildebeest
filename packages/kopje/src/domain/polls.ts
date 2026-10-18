@@ -290,11 +290,8 @@ export const POLL_COLUMN_MAP = {
 
 export const POLL_FROM = 'polls p JOIN statuses s ON s.id = p.status_id'
 
-// A viewer's own vote: its row id (the order votes are shown in), a poll id and a choice.
-export const OWN_VOTE_COLUMNS = fixedColumns(
-	{ id: 'v.id', poll_id: 'v.poll_id', choice: 'v.choice' },
-	{ id: 0, poll_id: 18, choice: 0 }
-)
+// A viewer's own vote: a poll id and a choice.
+export const OWN_VOTE_COLUMNS = fixedColumns({ poll_id: 'v.poll_id', choice: 'v.choice' }, { poll_id: 18, choice: 0 })
 
 // How many votes `viewer` cast in the current generation of the poll of `status`, which presentPolls reads as their own:
 // for the bound of the rows a presentation reads (statusRowBoundSql in status-rows.ts).
@@ -350,16 +347,15 @@ export function presentPolls(
 	}
 	const votes = new Map<string, number[]>()
 	if (viewerId !== null) {
-		// The viewer's votes of each poll's current generation only, in the order they were cast (sorted here, so no
-		// query sorts the chunk's rows).
-		for (const vote of db
-			.all<{ id: number; poll_id: string; choice: number }>(
-				`SELECT ${selectSql(OWN_VOTE_COLUMNS.columns)} FROM json_each(?2) j CROSS JOIN polls p ON p.status_id = j.value
-					CROSS JOIN poll_votes v ON v.poll_id = p.status_id AND v.generation = p.generation AND v.account_id = ?1`,
-				viewerId,
-				JSON.stringify(rows.map((row) => row.status_id))
-			)
-			.sort((a, b) => a.id - b.id)) {
+		// The viewer's votes of each poll's current generation only, in the order they were cast. The sort holds ids
+		// and choices only, no payload.
+		for (const vote of db.all<{ poll_id: string; choice: number }>(
+			`SELECT ${selectSql(OWN_VOTE_COLUMNS.columns)} FROM json_each(?2) j CROSS JOIN polls p ON p.status_id = j.value
+				CROSS JOIN poll_votes v ON v.poll_id = p.status_id AND v.generation = p.generation AND v.account_id = ?1
+			ORDER BY v.id`,
+			viewerId,
+			JSON.stringify(rows.map((row) => row.status_id))
+		)) {
 			votes.set(vote.poll_id, [...(votes.get(vote.poll_id) ?? []), vote.choice])
 		}
 	}

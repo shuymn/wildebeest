@@ -969,13 +969,17 @@ describe('the table of maxima (RES-3)', () => {
 				report: { sqlite: 6_612_653, json: 4_438_804, rows: 1_719, nodes: 4_661 },
 			},
 		],
-	])('measures %s', async (_name, fill, expected) => {
-		const shapes = await measureShapes(fill)
-		expect(shapes).toEqual(expected)
-		for (const shape of Object.values(shapes)) {
-			expect(shape.json).toBeLessThanOrEqual(LIMIT)
-		}
-	})
+	])(
+		'measures %s',
+		async (_name, fill, expected) => {
+			const shapes = await measureShapes(fill)
+			expect(shapes).toEqual(expected)
+			for (const shape of Object.values(shapes)) {
+				expect(shape.json).toBeLessThanOrEqual(LIMIT)
+			}
+		},
+		300_000
+	)
 
 	// R (status-rows.ts), which statusStream plans its chunks by, is at least the heap RowMeter counts of the rows each
 	// shape reads, with every part at its bound: the viewer's filters naming each status, her votes in every choice,

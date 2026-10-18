@@ -25,7 +25,7 @@ import { selectSql } from '../src/db/columns'
 import { Db, rowHeapBytes, RowMeter } from '../src/db/sql'
 import { ACCOUNT_COLUMN_MAP } from '../src/domain/accounts'
 import { listGroupedNotifications } from '../src/domain/notification-groups'
-import { POLL_COLUMN_MAP } from '../src/domain/polls'
+import { OWN_VOTE_COLUMNS, POLL_COLUMN_MAP } from '../src/domain/polls'
 import { type ChunkPlan, PAGE_CHUNKS } from '../src/domain/status-presenter'
 import { hydrateQueries, PER_ROW_SORTS, statusRowBoundSql } from '../src/domain/status-rows'
 import { statusContext } from '../src/domain/statuses'
@@ -105,7 +105,18 @@ describe('R bounds the rows of a status (RES-3)', () => {
 		await fc.assert(
 			fc.asyncProperty(fc.array(itemArb, { minLength: 1, maxLength: 12 }), async (items) => {
 				const result = await runInDurableObject(h.store, (_instance, state) => {
-					const ids = items.map((item) => build(state.storage.sql, f, item))
+					// Two small statuses first, so each plan reads a chunk of several.
+					const tiny: Item = {
+						kind: 'status',
+						text: 10,
+						wide: false,
+						mentions: 0,
+						tags: 0,
+						media: 0,
+						poll: 0,
+						viewer: false,
+					}
+					const ids = [tiny, tiny, ...items].map((item) => build(state.storage.sql, f, item))
 					const bounds = boundsOf(state, f.viewer, ids, 1)
 					// Each status alone, in a chunk of one.
 					const alone = observedPresentation(state, f.viewer, ids, 1)
@@ -116,6 +127,7 @@ describe('R bounds the rows of a status (RES-3)', () => {
 					}))
 					return {
 						alone: alone.segments.map((s) => ({ id: s.ids[0]!, heap: heap(rowsOf(s.reads)) })),
+						aloneItems: alone.items,
 						bounds: [...bounds],
 						whole: whole.items,
 						planned: planned.map((p) => ({
@@ -132,16 +144,18 @@ describe('R bounds the rows of a status (RES-3)', () => {
 				for (const { id, heap } of result.alone) {
 					expect(heap).toBeLessThanOrEqual(bounds.get(id)!)
 				}
+				expect(result.aloneItems).toEqual(result.whole)
 				for (const { plan, items, segments } of result.planned) {
 					expect(items).toEqual(result.whole)
 					for (const segment of segments) {
-						const r = segment.ids.reduce((sum, id) => sum + bounds.get(id)!, 0)
-						expect(segment.heap).toBeLessThanOrEqual(r)
-						if (segment.ids.length > 1) {
-							// A chunk of several is within the plan, so within the cap.
-							expect(r).toBeLessThanOrEqual(plan.target)
-						}
+						expect(segment.heap).toBeLessThanOrEqual(segment.ids.reduce((sum, id) => sum + bounds.get(id)!, 0))
 					}
+					// Chunks of several, each within the plan, so within the cap.
+					const several = segments.filter((segment) => segment.ids.length > 1)
+					expect(several.length).toBeGreaterThan(0)
+					expect(
+						several.map((segment) => segment.ids.reduce((sum, id) => sum + bounds.get(id)!, 0) <= plan.target)
+					).toEqual(several.map(() => true))
 				}
 			}),
 			runs(8)
@@ -284,7 +298,12 @@ describe('the hydrate queries (RES-3)', () => {
 		})
 		for (const { query, temp } of plans) {
 			expect(
-				temp.filter((detail) => detail !== 'USE TEMP B-TREE FOR DISTINCT'),
+				temp.filter(
+					(detail) =>
+						detail !== 'USE TEMP B-TREE FOR DISTINCT' &&
+						// Own votes are sorted by id: ids and choices only, no payload.
+						!(detail === 'USE TEMP B-TREE FOR ORDER BY' && query.includes(selectSql(OWN_VOTE_COLUMNS.columns)))
+				),
 				query
 			).toEqual([])
 			// A DISTINCT sorts ids (json_each's values), or the two host names of one account (the domain suspension check
@@ -321,6 +340,85 @@ describe('the hydrate queries (RES-3)', () => {
 		})
 		expect(counts.chunks).toBe(1)
 		expect(counts.queries).toBeLessThanOrEqual(13)
+	})
+})
+
+describe('the order of the rows of a status (RES-3)', () => {
+	it('shows hashtags, attachments, mentions and own votes in the order SQLite gave them', async () => {
+		const { h, f } = await fixture()
+		const shown = await runInDurableObject(h.store, (_instance, state) => {
+			const sql = state.storage.sql
+			const id = build(sql, f, {
+				kind: 'status',
+				text: 10,
+				wide: false,
+				mentions: 0,
+				tags: 0,
+				media: 0,
+				poll: 0,
+				viewer: false,
+			})
+			const author = sql
+				.exec<{ account_id: string }>('SELECT account_id FROM statuses WHERE id = ?', id)
+				.one().account_id
+			// Hashtags by UTF-8 bytes: U+FFE0 before U+20000, which UTF-16 code units order the other way.
+			for (const name of ['\u{20000}b', '\uffe0a', 'zc', 'Ab']) {
+				sql.exec('INSERT INTO status_tags (status_id, name, public) VALUES (?, ?, 1)', id, name)
+			}
+			// Attachments by position, then id: two at position 0, written with the higher id first.
+			const media = [nextId(), nextId(), nextId()]
+			for (const [mediaId, position] of [
+				[media[2]!, 0],
+				[media[1]!, 1],
+				[media[0]!, 0],
+			] as const) {
+				sql.exec(
+					`INSERT INTO media_attachments (id, account_id, status_id, position, type, url)
+					VALUES (?, ?, ?, ?, 'image', 'https://remote.example/m.png')`,
+					mediaId,
+					author,
+					id,
+					position
+				)
+			}
+			// Mentions by account id, written in another order.
+			for (const account of [f.mentioned[2]!, f.mentioned[0]!, f.mentioned[1]!]) {
+				sql.exec(
+					'INSERT INTO status_mentions (status_id, account_id, silent, requires_mention, author_id) VALUES (?, ?, 0, 0, ?)',
+					id,
+					account,
+					author
+				)
+			}
+			// Own votes in the order they were cast, not by choice.
+			sql.exec(
+				`INSERT INTO polls (status_id, options, tallies, multiple, votes_count, voters_count, expires_at)
+				VALUES (?, '["a","b","c"]', '[1,1,1]', 1, 3, 1, ?)`,
+				id,
+				new Date(NOW + 86_400_000).toISOString()
+			)
+			for (const choice of [2, 0, 1]) {
+				sql.exec(
+					'INSERT INTO poll_votes (poll_id, account_id, choice, generation, created_at) VALUES (?, ?, ?, 0, ?)',
+					id,
+					f.viewer,
+					choice,
+					VIEWER_NOW
+				)
+			}
+			const [status] = observedPresentation(state, f.viewer, [id], PAGE_CHUNKS).items
+			return {
+				tags: status!.tags.map((tag) => tag.name),
+				media: status!.media_attachments.map((attachment) => attachment.id),
+				mentions: status!.mentions.map((mention) => mention.id),
+				votes: status!.poll?.own_votes,
+				expected: { media: [media[0], media[2], media[1]], mentions: f.mentioned.slice(0, 3) },
+			}
+		})
+		expect(shown.tags).toEqual(['Ab', 'zc', '\uffe0a', '\u{20000}b'])
+		expect(shown.media).toEqual(shown.expected.media)
+		expect(shown.mentions).toEqual(shown.expected.mentions)
+		expect(shown.votes).toEqual([2, 0, 1])
 	})
 })
 

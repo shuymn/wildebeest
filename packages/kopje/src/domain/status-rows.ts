@@ -106,13 +106,13 @@ export const SHOWN_TAGS_SQL = `t.status_id = j.value AND t.name IN (SELECT n.nam
 	FROM status_tags WHERE status_id = j.value ORDER BY status_tags.name LIMIT ${MAX_PRESENTED_TAGS}) n
 	WHERE n.name IS NOT NULL)`
 
-// A viewer flag: its kind (one letter) and the status's id. A status has at most one of each kind but `r` (the
-// viewer's boosts of it, which nothing makes unique).
+// A viewer flag: its kind (one letter) and the status's id. A status has at most one of each of the five kinds (a
+// viewer boosts an original once: the unique index statuses_reblog).
 export const VIEWER_FLAG_COLUMNS = fixedColumns(
 	{ kind: 'f.kind', status_id: 'f.status_id' },
 	{ kind: 1, status_id: 18 }
 )
-const SINGLE_FLAGS = 4
+const VIEWER_FLAGS = 5
 
 // Every query the presenter runs for a chunk, by the map its result columns come from (test/status-rows.test.ts
 // fails on a query without one, or a column outside it). Built on first use, as statusRowBoundSql.
@@ -174,10 +174,7 @@ function statusRowTerms(viewer: string, filterRows: string): string {
 		one(`SELECT ${rowHeapSql(POLL_COLUMN_MAP)} FROM ${POLL_FROM} WHERE p.status_id = x.id AND p.removed = 0`),
 		fixed(FILTER_MATCH_COLUMNS, filterRows),
 		`CASE WHEN ${viewer} IS NULL THEN 0 ELSE ${balancedSum([
-			fixed(
-				VIEWER_FLAG_COLUMNS,
-				`${SINGLE_FLAGS} + (SELECT count(*) FROM statuses WHERE account_id = ${viewer} AND reblog_of_id = x.id)`
-			),
+			fixed(VIEWER_FLAG_COLUMNS, String(VIEWER_FLAGS)),
 			fixed(QUOTE_APPROVAL_COLUMNS, '1'),
 			fixed(OWN_VOTE_COLUMNS, ownVoteCountSql('x.id', viewer)),
 		])} END`,
