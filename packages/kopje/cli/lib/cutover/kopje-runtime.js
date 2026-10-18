@@ -10,7 +10,8 @@ import { fileURLToPath } from 'node:url'
  *   & typeof import('../../../src/domain/tag-name.ts') & typeof import('../../../src/domain/language.ts')
  *   & typeof import('../../../src/platform/image-bytes.ts') & typeof import('../../../src/platform/domain-name.ts')
  *   & typeof import('../../../src/domain/conversation-rows.ts')
- *   & typeof import('../../../src/platform/identity-bounds.ts') & { renderMaintenanceSnapshot?: unknown }} KopjeRuntime
+ *   & typeof import('../../../src/platform/identity-bounds.ts') & typeof import('../../../src/platform/stored-bounds.ts')
+ *   & typeof import('../../../src/platform/media-files.ts') & { renderMaintenanceSnapshot?: unknown }} KopjeRuntime
  */
 
 const fromSources = existsSync(fileURLToPath(new URL('../../../src/security/html.ts', import.meta.url)))
@@ -26,6 +27,8 @@ const runtime = fromSources
 			...(await import('../../../src/platform/domain-name.ts')),
 			...(await import('../../../src/domain/conversation-rows.ts')),
 			...(await import('../../../src/platform/identity-bounds.ts')),
+			...(await import('../../../src/platform/stored-bounds.ts')),
+			...(await import('../../../src/platform/media-files.ts')),
 		}
 	: /** @type {KopjeRuntime} */ (await import(new URL('../../../dist/maintenance-render.js', import.meta.url).href))
 
@@ -53,4 +56,13 @@ export const {
 	isStorableActorId,
 	STATUS_URI_LIMIT,
 	withinIdentityBound,
+	mediaUrl,
+	storedDisplayName,
+	storedMediaDescription,
+	storedMediaLink,
+	storedMediaMeta,
+	storedMediaUrl,
+	storedProfileUrl,
+	storedStatusUrl,
+	withoutNul,
 } = runtime

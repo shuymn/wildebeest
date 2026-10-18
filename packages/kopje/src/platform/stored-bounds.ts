@@ -9,7 +9,7 @@
 //
 // No relative imports: the cutover runs it from the sources on Node (cli/lib/cutover/kopje-runtime.js). The JSON
 // bounds of security/html.ts and the status URI bound of identity-bounds.ts are therefore repeated here;
-// test-node/stored-bounds.test.ts pins them equal.
+// test/stored-bounds.test.ts pins them equal.
 
 // Display names, in code points.
 export const DISPLAY_NAME_LIMIT = 2048

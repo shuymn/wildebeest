@@ -16,6 +16,7 @@ import {
 	jsonStringBytes,
 	isRemoteUsername,
 	isStorableActorId,
+	mediaUrl,
 	REMOTE_BIO_BYTES,
 	STATUS_URI_LIMIT,
 	withinIdentityBound,
@@ -25,6 +26,12 @@ import {
 	sanitizeRemoteHtml,
 	SPOILER_BYTES,
 	STATUS_CONTENT_BYTES,
+	storedDisplayName,
+	storedMediaDescription,
+	storedMediaLink,
+	storedMediaUrl,
+	storedProfileUrl,
+	withoutNul,
 } from './kopje-runtime.js'
 
 const PUBLIC = 'https://www.w3.org/ns/activitystreams#Public'
@@ -340,12 +347,15 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 	}
 	/** @param {string} sql */
 	const all = (sql) => /** @type {Json[]} */ (db.prepare(sql).all())
+	// Text as the Worker stores it: without U+0000 (src/platform/stored-bounds.ts).
+	/** @param {unknown} value */
+	const stripped = (value) => withoutNul(text(value))
 	/** @param {unknown} value */
 	const sanitized = (value) => {
-		if (text(value).length > REMOTE_HTML_RAW_LIMIT) {
+		if (stripped(value).length > REMOTE_HTML_RAW_LIMIT) {
 			overLimit++
 		}
-		return sanitizeRemoteHtml(text(value))
+		return sanitizeRemoteHtml(stripped(value))
 	}
 	// RES-2: a bio and status content within their JSON-byte bounds, as the converter and the Worker store them
 	// (src/security/html.ts); a cut is a truncation too.
@@ -356,15 +366,16 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 			return whole
 		}
 		overLimit++
-		return within(text(value))
+		return within(stripped(value))
 	}
 	/** @param {unknown} value */
 	const bio = (value) => sanitizedWithin(value, REMOTE_BIO_BYTES, sanitizeRemoteBio)
 	/** @param {unknown} value */
 	const content = (value) => sanitizedWithin(value, STATUS_CONTENT_BYTES, sanitizeRemoteContent)
 	// A content warning and source text cut to their bounds (cutJsonString), each cut a truncation.
-	/** @param {string} value @param {number} bytes */
-	const bounded = (value, bytes) => {
+	/** @param {string} text @param {number} bytes */
+	const bounded = (text, bytes) => {
+		const value = withoutNul(text)
 		const cut = cutJsonString(value, bytes)
 		if (cut !== value) {
 			overLimit++
@@ -439,8 +450,8 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 		const extension = entry.type === 'image/png' ? 'png' : 'webp'
 		const [fullWidth = 0, fullHeight = 0] = within(entry.width, entry.height, 3840)
 		const files = {
-			url: `https://${domain}/media/${token}/full.${extension}`,
-			preview: `https://${domain}/media/${token}/small.${extension}`,
+			url: mediaUrl(`https://${domain}`, token, 'full', `image/${extension}`),
+			preview: mediaUrl(`https://${domain}`, token, 'small', `image/${extension}`),
 			meta: [fullWidth, fullHeight, ...within(fullWidth, fullHeight, 640)],
 		}
 		put('media_files', token, [files.url, files.preview, `image/${extension}`, files.meta])
@@ -463,19 +474,19 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 		const profileImage = (value, kind) => {
 			const url = href(typeof value === 'object' && value !== null ? /** @type {Json} */ (value).url : value)
 			if (!isLocal) {
-				return url
+				return storedProfileUrl(url)
 			}
 			const converted = filesOf(resolveImage(url, true), `profile\n${uri}\n${kind}`)?.url ?? null
 			// A local profile whose image changed is announced at publication (the dump's profile_updates).
 			if (converted !== url) {
 				put('profile_updates', uri, 1)
 			}
-			return converted
+			return storedProfileUrl(converted)
 		}
 		put('accounts', uri, [
 			isLocal ? 1 : 0,
 			isLocal ? text(p.preferredUsername) : null,
-			text(p.name),
+			storedDisplayName(text(p.name)),
 			bio(p.summary),
 			profileImage(p.icon, 'avatar'),
 			profileImage(p.image, 'header'),
@@ -538,6 +549,18 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 	 * @typedef {{ imageId: string | null, link: string, url: string | null, preview: string | null, description: string,
 	 *   meta: unknown[] | null }} Shown
 	 */
+	// A media row's url as the Worker stores it (src/platform/stored-bounds.ts): a mapped image's is built, any other
+	// is '' past its bound.
+	/** @param {string | null} imageId @param {string | null} url */
+	const rowUrl = (imageId, url) => (imageId === null && url !== null ? storedMediaUrl(url) : url)
+	// An edit's attachment as its snapshot stores it: URLs past their bound are none, the description is cut.
+	/** @param {string | null} url @param {string | null} preview @param {string} description @param {unknown} meta */
+	const snapshot = (url, preview, description, meta) => [
+		storedMediaLink(url),
+		storedMediaLink(preview),
+		storedMediaDescription(description),
+		meta,
+	]
 	/** @type {Map<string, Shown[]>} status URI -> its attachments now */
 	const currentMedia = new Map()
 	/** @param {Json} element the size an attachment declares, as legacy stored it */
@@ -702,7 +725,7 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 			put(
 				'attachments',
 				uri,
-				shown.map((m) => [m.url, m.description])
+				shown.map((m) => [rowUrl(m.imageId, m.url), storedMediaDescription(m.description)])
 			)
 		}
 		statusApiIds.set(String(o.mastodon_id), [...(statusApiIds.get(String(o.mastodon_id)) ?? []), uri])
@@ -742,12 +765,17 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 		const own = href(parse(o.properties).url)
 		const where = shownIn.get(id)
 		// Shown by a status: the image is that attachment's row; otherwise a row of its own.
-		const files =
-			where === undefined
-				? filesOf(resolveImage(own, false), `image\n${id}`)
-				: filesOf(resolveImage(where.link ?? own, false), `attachment\n${where.uri}\n${where.position}`)
+		const resolved = resolveImage(where === undefined ? own : (where.link ?? own), false)
+		const files = filesOf(
+			resolved,
+			where === undefined ? `image\n${id}` : `attachment\n${where.uri}\n${where.position}`
+		)
 		if (id.startsWith(prefix) && files !== undefined) {
-			put('media', id.slice(prefix.length), [files.url, source.authors.get(id) ?? null, where?.uri ?? null])
+			put('media', id.slice(prefix.length), [
+				resolved.gone ? files.url : rowUrl(resolved.imageId, files.url),
+				source.authors.get(id) ?? null,
+				where?.uri ?? null,
+			])
 		}
 	}
 
@@ -780,15 +808,22 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 				// The URLs are the row's; the description (and a kept image's declared size) are this version's.
 				const description = text(element.name) || text(element.description) || text(element.summary)
 				if (same !== undefined) {
-					return [[same.url, same.preview, description, same.imageId === null ? metaSizes(sized(element)) : same.meta]]
+					return [
+						snapshot(
+							same.url,
+							same.preview,
+							description,
+							same.imageId === null ? metaSizes(sized(element)) : same.meta
+						),
+					]
 				}
 				if (resolved.imageId === null) {
-					return [[link ?? '', link ?? '', description, metaSizes(sized(element))]]
+					return [snapshot(link ?? '', link ?? '', description, metaSizes(sized(element)))]
 				}
 				const files = /** @type {{ url: string, preview: string, meta: unknown[] }} */ (
 					filesOf(resolved, `edit\n${uri}\n${resolved.imageId}`)
 				)
-				return [[files.url, files.preview, description, files.meta]]
+				return [snapshot(files.url, files.preview, description, files.meta)]
 			})
 		history.set(uri, [
 			...(history.get(uri) ?? []),
@@ -802,7 +837,7 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 	}
 	for (const [uri, versions] of history) {
 		const current = /** @type {unknown[]} */ (JSON.parse(out.statuses?.[uri] ?? '[]'))
-		const media = (currentMedia.get(uri) ?? []).map((m) => [m.url, m.preview, m.description, m.meta])
+		const media = (currentMedia.get(uri) ?? []).map((m) => snapshot(m.url, m.preview, m.description, m.meta))
 		put('edits', uri, [...versions, [current[1], current[3], current[4], media]])
 	}
 
