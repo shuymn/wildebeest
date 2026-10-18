@@ -203,14 +203,8 @@ export function statusFacts(db: Db, statusId: string, options: { reached?: boole
 	if (row === undefined) {
 		return null
 	}
-	const mentioned = db.all<{
-		account_id: string
-		uri: string
-		silent: number
-		username: string
-		domain: string | null
-	}>(
-		`SELECT m.account_id, a.uri, m.silent, a.username, a.domain FROM status_mentions m JOIN accounts a ON a.id = m.account_id
+	const mentioned = db.all<{ account_id: string; uri: string; silent: number }>(
+		`SELECT m.account_id, a.uri, m.silent FROM status_mentions m JOIN accounts a ON a.id = m.account_id
 		WHERE m.status_id = ? ORDER BY a.id`,
 		statusId
 	)

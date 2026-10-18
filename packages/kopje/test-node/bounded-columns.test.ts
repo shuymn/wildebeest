@@ -580,7 +580,7 @@ const ALLOWED: Record<string, { count: number; reason: string }> = {
 	'src/domain/accounts.ts accounts.display_name': { count: 1, reason: LOCAL },
 	'src/domain/activities.ts statuses.content': { count: 1, reason: ACTIVITYPUB },
 	'src/domain/activities.ts statuses.spoiler_text': { count: 1, reason: ACTIVITYPUB },
-	'src/domain/activities.ts accounts.username': { count: 2, reason: ACTIVITYPUB },
+	'src/domain/activities.ts accounts.username': { count: 1, reason: ACTIVITYPUB },
 	'src/domain/activities.ts media_attachments.url': { count: 1, reason: ACTIVITYPUB },
 	'src/domain/activities.ts media_attachments.description': { count: 1, reason: ACTIVITYPUB },
 	'src/domain/actor-update.ts accounts.username': { count: 1, reason: ACTIVITYPUB },

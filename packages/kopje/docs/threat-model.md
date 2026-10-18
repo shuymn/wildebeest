@@ -1729,7 +1729,7 @@ RPC limit.
 | Conversation: 12 participants presented, its last status a quote | 7,870,431         | 6,651,414       | 1,723     | 4,959 | 79.3%          |
 | Notification group: 8 sample accounts, its status a quote        | 7,411,273         | 6,165,029       | 1,736     | 4,836 | 73.5%          |
 | Report: its first status a quote past the 2 MiB allowance        | 6,612,573         | 5,318,285       | 1,718     | 4,661 | 63.4%          |
-| ActivityPub Note: a local status at its bounds, 1,000 addressed  | 5,739,459         | 4,220,294       | 1,276     | 2,616 | 50.3%          |
+| ActivityPub Note: a local status at its bounds, 1,000 addressed  | 3,685,367         | 4,220,294       | 1,276     | 2,616 | 50.3%          |
 | Its Create (the Note and its addressing again)                   |                   | 6,276,334       |           |       | 74.8%          |
 
 Mentions whose url is derived read and present less (the conversation: 5,232,097 and 5,832,214 bytes): a derived url

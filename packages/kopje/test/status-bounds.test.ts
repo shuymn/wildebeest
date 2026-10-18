@@ -1091,7 +1091,7 @@ describe('ActivityPub Notes of a local status at its bounds (RES-3)', () => {
 		expect(shown.tags).toBe(0)
 		expect(shown.create).toBeLessThan(200_000)
 		expect({ ...measuredNote, featured: featuredBytes, whole }).toEqual({
-			sqlite: 5_739_459,
+			sqlite: 3_685_367,
 			rows: 1_276,
 			nodes: 2_616,
 			note: 4_220_294,
