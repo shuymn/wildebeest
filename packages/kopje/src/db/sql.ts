@@ -23,7 +23,7 @@ export class Db {
 	}
 
 	// The rows of `query` one at a time, as the cursor steps: workerd's SqlStorageCursor runs the statement lazily, one
-	// row per step (test/row-meter.test.ts), so a meter that throws stops the statement at the row that passed its cap.
+	// row per step (test/status-rows.test.ts), so a meter that throws stops the statement at the row that passed its cap.
 	*iterate<T extends Row>(query: string, ...params: SqlStorageValue[]): Generator<T, undefined> {
 		for (const row of this.sql.exec<T>(query, ...params)) {
 			this.meter?.add(row)

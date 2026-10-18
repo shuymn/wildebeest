@@ -296,6 +296,13 @@ export const OWN_VOTE_COLUMNS = fixedColumns(
 	{ id: 8, poll_id: 18, choice: 8 }
 )
 
+// How many votes `viewer` cast in the current generation of the poll of `status`, which presentPolls reads as their own:
+// for the bound of the rows a presentation reads (statusRowBoundSql in status-rows.ts).
+export function ownVoteCountSql(status: string, viewer: string): string {
+	return `(SELECT count(*) FROM polls p JOIN poll_votes v ON v.poll_id = p.status_id AND v.generation = p.generation
+		AND v.account_id = ${viewer} WHERE p.status_id = ${status})`
+}
+
 function presentPoll(row: PollRow, viewer: { id: string | null; votes: number[] }, now: string): Poll {
 	const expired = hasEnded(row.expires_at, now)
 	// Poll#show_totals_now?: for everyone, the author included.

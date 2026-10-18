@@ -806,13 +806,19 @@ const UNRELATED = 1000
 
 // Endpoints allowed more than ALLOWANCE in the unrelated-rows case, each with why. The extra rows are constant: the same
 // with ten times the unrelated rows.
+// R (statusRowBoundSql, status-rows.ts) seeks each status's rows by index once more before its chunk is read, and a
+// seek reads the next index entry, which unrelated rows provide (3 rows with 1,000 or 10,000 unrelated rows).
+const R_SEEKS = 'R (statusRowBoundSql) seeks the rows of each status once more, each seek reading the next index entry'
 const UNRELATED_EXTRA: Record<string, { rows: number; why: string }> = {
 	home: {
-		rows: 1,
+		rows: 3,
 		why:
 			"each followed hashtag's window judges its statuses again through homeFilterSql, and its probe of the viewer's " +
-			'blocks and mutes reads the next index entry, which unrelated accounts provide',
+			`blocks and mutes reads the next index entry, which unrelated accounts provide; and ${R_SEEKS}`,
 	},
+	list: { rows: 2, why: R_SEEKS },
+	notifications: { rows: 1, why: R_SEEKS },
+	'grouped notifications': { rows: 2, why: R_SEEKS },
 }
 
 // What an endpoint showed: the items of a page, the members of a context, the results of a search, the entries of a

@@ -455,6 +455,8 @@ const SAFE_INTERPOLATIONS = new Set([
 	'participantsSql',
 	'pendingAppsSql',
 	'quotePolicySql',
+	// A quoted status's id.
+	'quotedStatusIdSql',
 	'REQUIRES_MENTION_SQL',
 	// The payload of one row of a column map, a number.
 	'rowBytesSql',

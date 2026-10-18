@@ -1,7 +1,7 @@
 import { ACCOUNT_COLUMN_MAP } from './accounts'
-import { QUOTE_APPROVAL_COLUMNS, QUOTE_READ_COLUMNS } from './audience'
+import { QUOTE_APPROVAL_COLUMNS, QUOTE_READ_COLUMNS, quotedStatusIdSql } from './audience'
 import { FILTER_MATCH_COLUMNS } from './filters'
-import { OWN_VOTE_COLUMNS, POLL_COLUMN_MAP, POLL_FROM } from './polls'
+import { OWN_VOTE_COLUMNS, ownVoteCountSql, POLL_COLUMN_MAP, POLL_FROM } from './polls'
 import { actorUriSql, profileUrlSql, usernameSql } from './profile-bounds'
 import {
 	contentSql,
@@ -179,11 +179,7 @@ function statusRowTerms(viewer: string, filterRows: string): string {
 				`${SINGLE_FLAGS} + (SELECT count(*) FROM statuses WHERE account_id = ${viewer} AND reblog_of_id = x.id)`
 			),
 			fixed(QUOTE_APPROVAL_COLUMNS, '1'),
-			fixed(
-				OWN_VOTE_COLUMNS,
-				`SELECT count(*) FROM polls p JOIN poll_votes v ON v.poll_id = p.status_id AND v.generation = p.generation
-					AND v.account_id = ${viewer} WHERE p.status_id = x.id`
-			),
+			fixed(OWN_VOTE_COLUMNS, ownVoteCountSql('x.id', viewer)),
 		])} END`,
 	])
 }
@@ -200,8 +196,8 @@ export function statusRowBoundSql(): string {
 	boundSql ??= `WITH t AS (SELECT key AS k, value AS id FROM json_each(?1)),
 		x(k, id) AS (SELECT k, id FROM t
 			UNION ALL SELECT t.k, b.reblog_of_id FROM t JOIN statuses b ON b.id = t.id WHERE b.reblog_of_id IS NOT NULL
-			UNION ALL SELECT t.k, q.quoted_status_id FROM t JOIN statuses b ON b.id = t.id
-				JOIN quotes q ON q.status_id = coalesce(b.reblog_of_id, b.id) WHERE q.quoted_status_id IS NOT NULL)
+			UNION ALL SELECT k, id FROM (SELECT t.k, ${quotedStatusIdSql('coalesce(b.reblog_of_id, b.id)')} AS id
+				FROM t JOIN statuses b ON b.id = t.id) WHERE id IS NOT NULL)
 		SELECT x.k, sum(${statusRowTerms('?2', '?3')}) AS bytes FROM x GROUP BY x.k`
 	return boundSql
 }

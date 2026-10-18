@@ -859,6 +859,12 @@ export const QUOTE_READ_COLUMNS = fixedColumns(
 	{ status_id: 18, state: 15, quoted_status_id: 18 }
 )
 
+// The status a stored quote by `status` names, whatever its state, or NULL: what the presenter may embed, for the
+// bound of the rows it reads (statusRowBoundSql in status-rows.ts), never shown by itself.
+export function quotedStatusIdSql(status: string): string {
+	return `(SELECT q.quoted_status_id FROM main.quotes q WHERE q.status_id = ${status})`
+}
+
 export function quoteReads(viewer: ViewerContext): QuoteReads {
 	return {
 		of(db, statusIds, source = []) {

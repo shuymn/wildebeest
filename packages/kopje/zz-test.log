@@ -1,0 +1,1097 @@
+
+> kopje@0.0.0 test /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje
+> vitest run && vitest run -c vitest.streaming.config.ts --max-workers=1 --no-isolate && vitest run -c vitest.node.config.ts
+
+
+ RUN  v5.0.4 /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje
+
+ ❯ |kopje| test/policy.test.ts (16 tests | 1 failed) 129ms
+   ❯ policy boundary (3)
+     × keeps the rules in the policy module and the writes with their single writers 74ms
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: version-mismatch
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:145:10)
+    at Store.setupState (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/store.ts:422:23)
+    at Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/node_modules/@cloudflare/vitest-plugin/dist/worker/lib/cloudflare/test-internal.mjs:369:47
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: version-mismatch
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at StoreKernel.restoreBookmark (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:254:10)
+    at Store.pitrToBookmark (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/store.ts:171:23)
+    at Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/node_modules/@cloudflare/vitest-plugin/dist/worker/lib/cloudflare/test-internal.mjs:369:47
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: unpublished
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admitFlags (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-flags.ts:178:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:150:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: unpublished
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admitFlags (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-flags.ts:178:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:150:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: unpublished
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admitFlags (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-flags.ts:178:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:150:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: unpublished
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admitFlags (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-flags.ts:178:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:150:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+ ❯ |kopje| test/policy-bounds.test.ts (51 tests | 1 failed) 63541ms
+   ❯ read endpoints do not read more rows as unrelated data grows (RES-7) (1)
+     × reads the same rows with or without unrelated accounts, statuses and edges 1424ms
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: unpublished
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admitFlags (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-flags.ts:178:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:150:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: maintenance
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admitFlags (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-flags.ts:175:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:150:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: dump-in-progress
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admitFlags (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-flags.ts:171:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:150:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: maintenance
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admitFlags (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-flags.ts:175:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:150:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: injected: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_TRIGGER)
+    at Db.run (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/db/sql.ts:22:19)
+    at Db.__vite_ssr_import_2__.Db.run (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/test/sql-depth-setup.ts:26:13)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/domain/setup.ts:572:5
+    at Object.run (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/domain/operation.ts:9:24)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:151:21
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: unpublished
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admitFlags (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-flags.ts:178:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:150:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: unpublished
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admitFlags (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-flags.ts:178:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:150:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: unpublished
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admitFlags (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-flags.ts:178:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:150:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+    at Store.publishScheduled (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/store.ts:1148:15)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: unpublished
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admitFlags (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-flags.ts:178:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:150:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: unpublished
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admitFlags (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-flags.ts:178:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:150:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: unpublished
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admitFlags (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-flags.ts:178:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:150:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: unpublished
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admitFlags (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-flags.ts:178:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:150:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: unpublished
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admitFlags (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-flags.ts:178:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:150:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: maintenance
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admitFlags (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-flags.ts:175:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:150:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: maintenance
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admitFlags (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-flags.ts:175:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:150:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: maintenance
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admitFlags (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-flags.ts:175:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:150:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+    at Store.publishScheduled (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/store.ts:1148:15)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: maintenance
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admitFlags (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-flags.ts:175:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:150:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: maintenance
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admitFlags (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-flags.ts:175:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:150:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: maintenance
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admitFlags (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-flags.ts:175:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:150:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: maintenance
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admitFlags (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-flags.ts:175:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:150:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: maintenance
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admitFlags (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-flags.ts:175:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:150:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: import-in-progress
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admitFlags (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-flags.ts:168:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:150:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: rebuild-in-progress
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admitFlags (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-flags.ts:181:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:150:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: rebuild-in-progress
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admitFlags (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-flags.ts:181:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:150:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: rebuild-in-progress
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admitFlags (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-flags.ts:181:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:150:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: rebuild-in-progress
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admitFlags (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-flags.ts:181:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:150:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: rebuild-in-progress
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:258:11
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.restoreBookmark (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:256:8)
+    at Store.pitrToBookmark (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/store.ts:171:23)
+    at Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/node_modules/@cloudflare/vitest-plugin/dist/worker/lib/cloudflare/test-internal.mjs:369:47
+uncaught exception; source = Uncaught (in promise); stack = Error: This Durable Object's storage back-end does not implement point-in-time recovery.
+    at StoreKernel.restoreBookmark (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:265:28)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: dump-in-progress
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admitFlags (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-flags.ts:171:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:150:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+    at Store.receiveActivity (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/store.ts:487:11)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: import-in-progress
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admitFlags (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-flags.ts:168:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:150:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: version-mismatch
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at StoreAdmin.#requireBuild (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-admin.ts:1725:10)
+    at StoreAdmin.importBegin (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-admin.ts:576:8)
+    at Store.importBegin (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/store.ts:306:36)
+    at Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/node_modules/@cloudflare/vitest-plugin/dist/worker/lib/cloudflare/test-internal.mjs:369:47
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: version-mismatch
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at StoreKernel.retryUpgrade (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:217:10)
+    at Store.retryUpgrade (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/store.ts:203:23)
+    at Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/node_modules/@cloudflare/vitest-plugin/dist/worker/lib/cloudflare/test-internal.mjs:369:47
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: version-mismatch
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:145:10)
+    at Store.instanceDomain (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/store.ts:593:23)
+    at Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/node_modules/@cloudflare/vitest-plugin/dist/worker/lib/cloudflare/test-internal.mjs:369:47
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: version-mismatch
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:145:10)
+    at Store.instanceDomain (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/store.ts:593:23)
+    at Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/node_modules/@cloudflare/vitest-plugin/dist/worker/lib/cloudflare/test-internal.mjs:369:47
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: version-mismatch
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:145:10)
+    at Store.instanceDomain (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/store.ts:593:23)
+    at Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/node_modules/@cloudflare/vitest-plugin/dist/worker/lib/cloudflare/test-internal.mjs:369:47
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: version-mismatch
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:145:10)
+    at Store.instanceDomain (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/store.ts:593:23)
+    at Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/node_modules/@cloudflare/vitest-plugin/dist/worker/lib/cloudflare/test-internal.mjs:369:47
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: version-mismatch
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:145:10)
+    at Store.instanceDomain (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/store.ts:593:23)
+    at Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/node_modules/@cloudflare/vitest-plugin/dist/worker/lib/cloudflare/test-internal.mjs:369:47
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: version-mismatch
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:145:10)
+    at Store.instanceDomain (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/store.ts:593:23)
+    at Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/node_modules/@cloudflare/vitest-plugin/dist/worker/lib/cloudflare/test-internal.mjs:369:47
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: version-mismatch
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:145:10)
+    at Store.instanceDomain (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/store.ts:593:23)
+    at Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/node_modules/@cloudflare/vitest-plugin/dist/worker/lib/cloudflare/test-internal.mjs:369:47
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: version-mismatch
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:145:10)
+    at Store.instanceDomain (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/store.ts:593:23)
+    at Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/node_modules/@cloudflare/vitest-plugin/dist/worker/lib/cloudflare/test-internal.mjs:369:47
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: version-mismatch
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:145:10)
+    at Store.instanceDomain (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/store.ts:593:23)
+    at Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/node_modules/@cloudflare/vitest-plugin/dist/worker/lib/cloudflare/test-internal.mjs:369:47
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: version-mismatch
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:145:10)
+    at Store.instanceDomain (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/store.ts:593:23)
+    at Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/node_modules/@cloudflare/vitest-plugin/dist/worker/lib/cloudflare/test-internal.mjs:369:47
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: version-mismatch
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:145:10)
+    at Store.instanceDomain (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/store.ts:593:23)
+    at Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/node_modules/@cloudflare/vitest-plugin/dist/worker/lib/cloudflare/test-internal.mjs:369:47
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: version-mismatch
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:145:10)
+    at Store.instanceDomain (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/store.ts:593:23)
+    at Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/node_modules/@cloudflare/vitest-plugin/dist/worker/lib/cloudflare/test-internal.mjs:369:47
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: version-mismatch
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:145:10)
+    at Store.instanceDomain (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/store.ts:593:23)
+    at Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/node_modules/@cloudflare/vitest-plugin/dist/worker/lib/cloudflare/test-internal.mjs:369:47
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: version-mismatch
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:145:10)
+    at Store.instanceDomain (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/store.ts:593:23)
+    at Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/node_modules/@cloudflare/vitest-plugin/dist/worker/lib/cloudflare/test-internal.mjs:369:47
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: version-mismatch
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:145:10)
+    at Store.instanceDomain (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/store.ts:593:23)
+    at Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/node_modules/@cloudflare/vitest-plugin/dist/worker/lib/cloudflare/test-internal.mjs:369:47
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: version-mismatch
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:145:10)
+    at Store.instanceDomain (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/store.ts:593:23)
+    at Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/node_modules/@cloudflare/vitest-plugin/dist/worker/lib/cloudflare/test-internal.mjs:369:47
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: version-mismatch
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:145:10)
+    at Store.instanceDomain (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/store.ts:593:23)
+    at Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/node_modules/@cloudflare/vitest-plugin/dist/worker/lib/cloudflare/test-internal.mjs:369:47
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: version-mismatch
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:145:10)
+    at Store.instanceDomain (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/store.ts:593:23)
+    at Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/node_modules/@cloudflare/vitest-plugin/dist/worker/lib/cloudflare/test-internal.mjs:369:47
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: version-mismatch
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:145:10)
+    at Store.instanceDomain (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/store.ts:593:23)
+    at Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/node_modules/@cloudflare/vitest-plugin/dist/worker/lib/cloudflare/test-internal.mjs:369:47
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: version-mismatch
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:145:10)
+    at Store.instanceDomain (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/store.ts:593:23)
+    at Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/node_modules/@cloudflare/vitest-plugin/dist/worker/lib/cloudflare/test-internal.mjs:369:47
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: version-mismatch
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:145:10)
+    at Store.instanceDomain (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/store.ts:593:23)
+    at Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/node_modules/@cloudflare/vitest-plugin/dist/worker/lib/cloudflare/test-internal.mjs:369:47
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: version-mismatch
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:145:10)
+    at Store.instanceDomain (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/store.ts:593:23)
+    at Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/node_modules/@cloudflare/vitest-plugin/dist/worker/lib/cloudflare/test-internal.mjs:369:47
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: version-mismatch
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:145:10)
+    at Store.instanceDomain (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/store.ts:593:23)
+    at Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/node_modules/@cloudflare/vitest-plugin/dist/worker/lib/cloudflare/test-internal.mjs:369:47
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: version-mismatch
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:145:10)
+    at Store.instanceDomain (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/store.ts:593:23)
+    at Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/node_modules/@cloudflare/vitest-plugin/dist/worker/lib/cloudflare/test-internal.mjs:369:47
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: version-mismatch
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:145:10)
+    at Store.instanceDomain (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/store.ts:593:23)
+    at Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/node_modules/@cloudflare/vitest-plugin/dist/worker/lib/cloudflare/test-internal.mjs:369:47
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: version-mismatch
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:145:10)
+    at Store.instanceDomain (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/store.ts:593:23)
+    at Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/node_modules/@cloudflare/vitest-plugin/dist/worker/lib/cloudflare/test-internal.mjs:369:47
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: version-mismatch
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:145:10)
+    at Store.instanceDomain (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/store.ts:593:23)
+    at Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/node_modules/@cloudflare/vitest-plugin/dist/worker/lib/cloudflare/test-internal.mjs:369:47
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: version-mismatch
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:145:10)
+    at Store.instanceDomain (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/store.ts:593:23)
+    at Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/node_modules/@cloudflare/vitest-plugin/dist/worker/lib/cloudflare/test-internal.mjs:369:47
+uncaught exception; source = Uncaught (in promise); stack = Error: This Durable Object's storage back-end does not implement point-in-time recovery.
+    at StoreKernel.restoreBookmark (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:265:28)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: maintenance
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admitFlags (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-flags.ts:175:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:150:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+    at Store.publishScheduled (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/store.ts:1148:15)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: maintenance
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admitFlags (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-flags.ts:175:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:150:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: import-in-progress
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admitFlags (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-flags.ts:168:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:150:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: version-mismatch
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:145:10)
+    at Store.instanceDomain (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/store.ts:593:23)
+    at Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/node_modules/@cloudflare/vitest-plugin/dist/worker/lib/cloudflare/test-internal.mjs:369:47
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: version-mismatch
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:145:10)
+    at Store.instanceDomain (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/store.ts:593:23)
+    at Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/node_modules/@cloudflare/vitest-plugin/dist/worker/lib/cloudflare/test-internal.mjs:369:47
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+uncaught exception; source = Uncaught (in promise); stack = Error: kopje-maintenance: upgrade-failed
+    at storeMaintenanceError (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-errors.ts:25:9)
+    at admit (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:537:9)
+    at /Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:149:4
+    at StoreKernel.<anonymous> (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:134:67)
+    at StoreKernel.execute (/Users/shuymn/ghq/github.com/shuymn/wildebeest-worktrees/kopje/sb-b1/packages/kopje/src/platform/store-kernel.ts:148:23)
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |kopje| test/policy-bounds.test.ts > read endpoints do not read more rows as unrelated data grows (RES-7) > reads the same rows with or without unrelated accounts, statuses and edges
+AssertionError: expected [ 'home: 1360 -> 1373', …(3) ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   "home: 1360 -> 1373",
++   "list: 1011 -> 1023",
++   "notifications: 734 -> 745",
++   "grouped notifications: 786 -> 798",
++ ]
+
+ ❯ test/policy-bounds.test.ts:953:17
+    951|    }
+    952|   }
+    953|   expect(grown).toEqual([])
+       |                 ^
+    954|  }, 60_000)
+    955| })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  |kopje| test/policy.test.ts > policy boundary > keeps the rules in the policy module and the writes with their single writers
+AssertionError: expected [ …(2) ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   "../src/domain/status-rows.ts reads or writes poll_votes",
++   "../src/domain/status-rows.ts reads or writes quotes",
++ ]
+
+ ❯ test/policy.test.ts:228:31
+    226|
+    227|  it('keeps the rules in the policy module and the writes with their si…
+    228|   expect(violations(sources)).toEqual([])
+       |                               ^
+    229|  })
+    230|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+
+ Test Files  2 failed | 157 passed (159)
+      Tests  2 failed | 3230 passed (3232)
+   Start at  17:25:19
+   Duration  466.08s (transform 60%, tests 34%, import 5%)
+
+ ELIFECYCLE  Test failed. See above for more details.
