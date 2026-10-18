@@ -310,14 +310,20 @@ describe('status pages are answers within ANSWER_BYTES (RES-3)', () => {
 		}
 	}, 600_000)
 
-	it('walk pinned statuses in pin order and quotes once each, cut by bytes', async () => {
+	it('stop pinned statuses at a byte cut, and walk quotes once each', async () => {
 		const h = await community(['alice', 'bob'])
 		const { alice, bob } = h.users
-		// Ten of bob's big statuses, pinned in an order unlike their ids': newest pin first is P.
+		// Ten of bob's big statuses, pinned in an order unlike their ids': newest pin first is P. X, unpinned, lies
+		// between the newest two by id.
 		const posts: string[] = []
+		let X = ''
 		for (let i = 0; i < 10; i++) {
+			if (i === 9) {
+				X = await seedStatus(h.store, { accountId: bob.id, visibility: 'public', published: NOW - 690_000 })
+			}
 			posts.push(await bigStatus(h, bob.id, NOW - (20 - i) * 60_000))
 		}
+		expect(X > posts[8]! && X < posts[9]!).toBe(true)
 		const P = [3, 7, 0, 9, 1, 8, 2, 6, 4, 5].map((i) => posts[i]!)
 		for (const [i, id] of P.toReversed().entries()) {
 			await sql(
@@ -329,10 +335,26 @@ describe('status pages are answers within ANSWER_BYTES (RES-3)', () => {
 			)
 		}
 		const size = Math.min(...(await Promise.all(posts.map((id) => bytesOf(h, alice.token, id)))))
+		// Pins do not continue past a byte cut: the first that fit, in pin order, with no next link (RES-3).
 		const pinned = `/api/v1/accounts/${bob.id}/statuses?pinned=true&limit=40`
-		expectByteCutWalk('pinned', await walk(h, pinned, 'next', alice.token), P, 'next', size)
-		// min_id pages pins by status id.
-		expectByteCutWalk('pinned', await walk(h, `${pinned}&min_id=1`, 'prev', alice.token), posts, 'prev', size)
+		const first = await answer(h, pinned, alice.token)
+		const shown = first.body.map((s) => s.id)
+		expect(shown.length).toBeLessThan(P.length)
+		expect(shown).toEqual(P.slice(0, shown.length))
+		expect(first.bytes + size + 1).toBeGreaterThan(ANSWER_BYTES)
+		expect(first.next).toBeNull()
+		// A max_id that is no pin keeps its status-id ceiling, cut or not.
+		const below = await answer(h, `${pinned}&max_id=${X}`, alice.token)
+		const under = P.filter((id) => id < X)
+		expect(below.body.map((s) => s.id)).toEqual(under.slice(0, below.body.length))
+		expect(below.body.length).toBeLessThan(under.length)
+		expect(below.next).toBeNull()
+		// min_id pages pins by status id, oldest first; a cut page offers no next link either.
+		const oldest = await answer(h, `${pinned}&min_id=1`, alice.token)
+		const ascending = oldest.body.map((s) => s.id).toReversed()
+		expect(ascending).toEqual(posts.slice(0, ascending.length))
+		expect(ascending.length).toBeLessThan(posts.length)
+		expect(oldest.next).toBeNull()
 		// Ten big statuses quoting a small one.
 		const author = await remoteAccount(h.store, 'quoter')
 		const quoted = await seedStatus(h.store, { accountId: author, visibility: 'public', published: NOW - 2 * DAY })
