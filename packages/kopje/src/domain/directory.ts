@@ -1,4 +1,5 @@
-import { type Account, ACCOUNT_COLUMNS, type AccountRow, type Present, presentAccount } from './accounts'
+import { type Account, admitAccounts, type Present } from './accounts'
+import { ARRAY_ANSWER_BYTES } from './answer-budget'
 import { listedForSql } from './audience'
 import { optionalUserReadOperation } from './auth'
 
@@ -23,7 +24,8 @@ import { optionalUserReadOperation } from './auth'
 // accounts that are not discoverable nor those below the window; when more than half of the window is hidden from the
 // viewer (accounts they block or mute, or unavailable ones), the page comes back short. The window is a prefix of the
 // directory, so every page is a slice of what the full directory would list. An offset above MAX_DIRECTORY_OFFSET
-// answers no accounts.
+// answers no accounts. The answer is within ANSWER_BYTES (RES-3), its profiles read for the page only: past it, the
+// page holds fewer accounts (an offset endpoint, docs/response-inventory.md).
 
 export const DIRECTORY_DEFAULT_LIMIT = 40
 export const DIRECTORY_MAX_LIMIT = 80
@@ -50,11 +52,10 @@ export const directory = optionalUserReadOperation<DirectoryInput, Account[]>(
 			return []
 		}
 		const sort = ORDERS[order]
-		const rows = db.all<AccountRow>(
-			`SELECT ${ACCOUNT_COLUMNS}
+		const rows = db.all<{ id: string }>(
+			`SELECT w.id
 			FROM (SELECT id, last_status_id FROM accounts INDEXED BY ${local ? sort.local : sort.all}
 				WHERE discoverable = 1 ${local ? 'AND domain IS NULL' : ''} ORDER BY ${sort.by('')} LIMIT ?1) w
-			JOIN accounts a ON a.id = w.id LEFT JOIN local_accounts l ON l.account_id = a.id
 			WHERE ${listedForSql('w.id', '?2', '?3')}
 			ORDER BY ${sort.by('w.')} LIMIT ?4 OFFSET ?5`,
 			DIRECTORY_WINDOW * (offset + limit),
@@ -63,6 +64,7 @@ export const directory = optionalUserReadOperation<DirectoryInput, Account[]>(
 			limit,
 			offset
 		)
-		return rows.map((row) => presentAccount(row, present))
+		const ids = rows.map((row) => row.id)
+		return admitAccounts(db, ids, present, ARRAY_ANSWER_BYTES, true).items
 	}
 )

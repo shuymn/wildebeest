@@ -1,6 +1,6 @@
 import { followActivity, followAnswerActivity, followUri, recordOutbound, undoFollowActivity } from './activities'
 import { actorSnapshot, recordActorUpdate } from './actor-update'
-import { admit, type Admitted, ANSWER_BYTES, ARRAY_ANSWER_BYTES } from './answer-budget'
+import { admit, type Admitted, admittedPage, ANSWER_BYTES, ARRAY_ANSWER_BYTES } from './answer-budget'
 import {
 	activeMuteJoinSql,
 	availableJoinedSql,
@@ -1252,12 +1252,25 @@ export function accountRowsOf(db: Db, ids: readonly string[]): AccountRow[] {
 	return ids.flatMap((id) => rows.get(id) ?? [])
 }
 
-// Read profiles only for the filtered page, in page order (RES-2); candidate windows read ids alone.
-export function presentedRows(db: Db, rows: readonly { id: string }[], present: Present): Account[] {
-	return accountRowsOf(
-		db,
-		rows.map((row) => row.id)
-	).map((row) => presentAccount(row, present))
+// A page of accounts (the rows of a window's page, newest first, each by its cursor `key`), their profiles read for
+// the page only (RES-2; candidate windows read ids alone), within ANSWER_BYTES (RES-3): admitted in traversal order,
+// a page cut there continues from its last admitted account (admittedPage).
+export function accountPage<R extends { id: string }>(
+	db: Db,
+	page: { rows: readonly R[]; newest: string | null; oldest: string | null; cut?: boolean },
+	ascending: boolean,
+	key: (row: R) => string,
+	present: Present
+): Page<Account> {
+	return admittedPage(page, ascending, key, (traversal) =>
+		admitAccounts(
+			db,
+			traversal.map((row) => row.id),
+			present,
+			ARRAY_ANSWER_BYTES,
+			true
+		)
+	)
 }
 
 // GET /api/v1/accounts/:id/followers and /following as the viewer (null: anonymous) may see them (R13, Mastodon's
@@ -1308,12 +1321,7 @@ export const listFollows = optionalUserReadOperation<ListFollowsInput, Page<Acco
 						windowJson(window)
 					)
 		const shown = windowPage(window, rows, (row) => row.cursor, page.limit, ascending)
-		return {
-			items: presentedRows(db, shown.rows, present),
-			newest: shown.newest,
-			oldest: shown.oldest,
-			cut: shown.cut,
-		}
+		return accountPage(db, shown, ascending, (row) => row.cursor, present)
 	}
 )
 
@@ -1348,12 +1356,7 @@ export const listFollowRequests = userReadOperation<{ page: PageQuery; present: 
 						windowJson(window)
 					)
 		const shown = windowPage(window, rows, (row) => row.cursor, page.limit, ascending)
-		return {
-			items: presentedRows(db, shown.rows, present),
-			newest: shown.newest,
-			oldest: shown.oldest,
-			cut: shown.cut,
-		}
+		return accountPage(db, shown, ascending, (row) => row.cursor, present)
 	}
 )
 
