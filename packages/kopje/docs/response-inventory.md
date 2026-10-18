@@ -54,7 +54,8 @@ The raw presenters (`presentStatuses`, `presentAccountsById` and `presentAccount
 | `adminReport`, `updateAdminReport`, `actOnReport`                           | Unit: a report's statuses in its order within 2 MiB, the first always         |              | RB2  |
 
 A report's statuses are admitted in the order the report shows them while their JSON fits `REPORT_STATUS_BYTES`
-(2 MiB, `src/domain/reports.ts`), the first whatever its size. The admin then sees a projection of the report: fewer
+(2 MiB, `src/domain/reports.ts`), the first whatever its size; a first status that uses up the allowance ends them
+without reading the next. The admin then sees a projection of the report: fewer
 statuses than it holds when they pass the allowance; the report itself keeps them all. A page of reports also stops
 at `ADMIN_REPORT_STATUS_BUDGET` statuses, which bounds the statuses it reads.
 
@@ -79,7 +80,8 @@ shown as partial to the accounts, and the others as partial accounts read from t
 bytes, the page is the admitted groups as if the walk had found those alone: its range, which `membersOf` and the
 `page_min_id` and `page_max_id` fields read, and its `next` and `prev` cursors are those of the groups kept, and a
 walk's continuation past a group left out is dropped. The kept groups are admitted again over that range, since
-sampling below a lower upper end can show larger accounts, and the last are dropped the same way until they fit. A
+sampling below a lower upper end can show larger accounts, and the last are dropped the same way; after two such
+passes that still do not fit, the page is its first group alone, over its own range. A
 group may appear again on the next page with its notifications below the cursor. Unread counts and markers are not
 read by admission.
 

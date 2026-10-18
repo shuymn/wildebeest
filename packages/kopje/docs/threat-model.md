@@ -1373,7 +1373,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   admit whole items the same way (a notification with its account, status and report; a group with the accounts and
   statuses it adds; a conversation; a report), each continuing as the inventory states. Grouped notifications
   continue from the last admitted group's discovery position, with the page range and cursors of the groups kept,
-  dropping trailing groups when that range samples larger accounts. A report's statuses are admitted in its order
+  dropping trailing groups when that range samples larger accounts, at most twice before the page is its first group
+  alone. A report's statuses are admitted in its order
   within 2 MiB (`REPORT_STATUS_BYTES`), the first always: a projection of the report. Streaming events stay one unit
   each, and an event over 512 KiB is skipped whole. An outbox page's activities are within `OUTBOX_BYTES`
   (`test/notification-budgets.test.ts`, `test/notification-group-budgets.test.ts`, `test/conversation-budgets.test.ts`,
@@ -1768,6 +1769,23 @@ conversation, a report) is one item.
 Each isolate stays within half of its 128 MB. One isolate holding both sides at once, the Store's objects alive while
 the Worker's are built, would reach about 76 MB; it stays within half (59 MB) when the Store drops its objects once
 they are serialized.
+
+A page of groups and a page of reports, the largest atomic items, take the same phases in the Store isolate with their
+own unit and chunk; the Worker's side is the table above. A group's rows are its status's chunk (2 statuses of a
+quote, 13.0 MB) and its 8 sample accounts (0.9 MB). A re-admission pass presents its own groups' statuses afresh and
+holds nothing of a group an earlier pass dropped, and the passes are at most three. A report's rows are its 4 accounts
+(0.5 MB) and a chunk of its statuses: its first alone (6.6 MB), the next ones 2 at a time (13.0 MB) and only while the
+first leaves room in REPORT_STATUS_BYTES.
+
+| Phase (Store isolate)                    | Groups  | Reports |
+| ---------------------------------------- | ------- | ------- |
+| Rows of one chunk                        | 13.9 MB | 13.5 MB |
+| Presented objects of the admitted answer | 25.2 MB | 25.2 MB |
+| Presented objects of the rejected unit   | 18.5 MB | 16.0 MB |
+| Measurement string of one item           | 6.2 MB  | 5.3 MB  |
+| Peak                                     | 64 MB   | 60 MB   |
+
+Both stay within half of the isolate's 128 MB, the group path at its edge (63.8 MB).
 
 ### Data and keys (DATA)
 

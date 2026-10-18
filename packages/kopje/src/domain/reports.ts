@@ -335,11 +335,11 @@ export const REPORT_STATUS_BYTES = 2 * 1024 * 1024
 // admission reaches it, with its four accounts read for it alone and its statuses within REPORT_STATUS_BYTES. A
 // report's statuses are shown only while its reporter may still see them by the account statuses rule (R11,
 // accountStatusIds, with the reporter as the viewer at the admin's request time), and presented with the admin as the
-// viewer, under one presentation of the page's statuses, so a keyword deep in a long status of a large page may be
-// missed where the report read alone matches it, as on timelines (filters.ts): Mastodon shows them regardless,
-// discarded ones included (Report#statuses, app/models/report.rb:78-80);
-// Kopje keeps the rule the report was made under (R37). The rules are the instance's that the report names, in the
-// instance's order; Mastodon keeps discarded rules (Rule.with_discarded), which Kopje does not store.
+// viewer. Mastodon shows them regardless, discarded ones included (Report#statuses, app/models/report.rb:78-80);
+// Kopje keeps the rule the report was made under (R37). The page's statuses share one presentation, so a keyword deep
+// in a long status of a large page may be missed where the report read alone matches it, as on timelines (filters.ts).
+// The rules are the instance's that the report names, in the instance's order; Mastodon keeps discarded rules
+// (Rule.with_discarded), which Kopje does not store.
 function* adminReportStream(
 	db: Db,
 	rows: readonly ReportRow[],
