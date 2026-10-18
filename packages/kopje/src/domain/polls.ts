@@ -251,7 +251,7 @@ export function sweepStaleVotes(db: Db, limit: number): number {
 	return limit - left
 }
 
-// The choices of a status's poll, for its edit history (StatusEdit's poll_options): a JSON array, or null.
+// The choices of a status's poll as reads present them (pollOptionsSql): a JSON array, or null when it has none.
 export function pollOptionsJson(db: Db, statusId: string): string | null {
 	return (
 		db.first<{ options: string }>(
