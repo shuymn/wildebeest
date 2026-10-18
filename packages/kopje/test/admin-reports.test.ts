@@ -18,6 +18,7 @@ import { filterTextLimits, MAX_FILTER_REQUEST_TEXT, MAX_FILTER_TEXT } from '../s
 import { logAction, MODERATION_LOG_KEEP, MODERATION_LOG_PRUNE } from '../src/domain/moderation-log'
 import {
 	ADMIN_REPORT_STATUS_BUDGET,
+	actOnReport,
 	type AdminReportFilter,
 	getAdminReport,
 	listAdminReports,
@@ -798,6 +799,67 @@ describe('report answers within ANSWER_BYTES (RES-3)', () => {
 		})
 		expect(read).toContain(huge)
 		expect(read).not.toContain(small)
+	}, 300_000)
+
+	it('find the first status a report presents one at a time, and stop when it uses up the allowance', async () => {
+		const w = await world()
+		// Carol's boost of her own private status, which alice (who follows her) may see and the admin may not, then a
+		// status past the allowance, then a small one: the boost presents nothing to the admin, so the large status is
+		// the report's first, and the small one is never read.
+		await sql(
+			w.h.store,
+			"INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'accepted')",
+			w.alice.id,
+			w.carol
+		)
+		const own = await seedStatus(w.h.store, { accountId: w.carol, visibility: 'private', published: NOW - 9_000_000 })
+		const boost = await seedStatus(w.h.store, {
+			accountId: w.carol,
+			visibility: 'private',
+			reblogOfId: own,
+			published: NOW - 8_000_000,
+		})
+		const huge = await hugeStatus(w.h, w.carol, NOW - 3_600_000)
+		const small = await seedStatus(w.h.store, { accountId: w.carol, visibility: 'public' })
+		await seedReports(w.h.store, w.alice.id, w.carol, 1, { statuses: [boost, huge, small] })
+		const [report] = await sql<{ id: string }>(w.h.store, 'SELECT CAST(max(id) AS TEXT) AS id FROM reports')
+		const id = report!.id
+		const tokenHash = await sha256Hex(w.admin)
+		const present = { origin: ORIGIN }
+		const filter = { resolved: false, accountId: null, targetAccountId: null }
+		const reads = [
+			[
+				listAdminReports,
+				{ credential: { tokenHash, scope: 'admin:read:reports', now: NOW }, filter, page: { limit: 10 }, present },
+			],
+			[getAdminReport, { credential: { tokenHash, scope: 'admin:read:reports', now: NOW }, id, present }],
+			[
+				actOnReport,
+				{ credential: { tokenHash, scope: 'admin:write:reports', now: NOW }, id, action: 'assign_to_self', present },
+			],
+		] as const
+		for (const [operation, input] of reads) {
+			const read = await runInDurableObject(w.h.store, (_instance, state) => {
+				const ids: unknown[] = []
+				const counting = observedSql(state.storage.sql, (rows) => {
+					for (const row of rows) {
+						if ('content' in row) {
+							ids.push(row.id)
+						}
+					}
+				})
+				let output = operation.run(counting, input as never) as unknown as Record<string, unknown>
+				while (output.status === 'ok' && 'value' in output) {
+					output = output.value as Record<string, unknown>
+				}
+				return { ids, output: JSON.stringify(output) }
+			})
+			expect(read.ids).toContain(huge)
+			expect(read.ids).not.toContain(small)
+			const shown = JSON.parse(read.output) as { items?: AdminReportBody[]; report?: AdminReportBody }
+			const body = shown.report ?? shown.items!.find((item) => item.id === id)!
+			expect(body.statuses.map((status) => status.id)).toEqual([huge])
+		}
 	}, 300_000)
 
 	it("keep a list page's filter text within MAX_FILTER_REQUEST_TEXT, shared by its reports", async () => {

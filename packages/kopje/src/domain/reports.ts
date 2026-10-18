@@ -11,7 +11,7 @@ import {
 import { flagActivity, instanceActorUri, recordOutbound } from './activities'
 import { type AdminAccount, adminAccountStream } from './admin-accounts'
 import { accessAdminRefusal, adminAccountIdOnce } from './admin-authority'
-import { admit, ARRAY_ANSWER_BYTES } from './answer-budget'
+import { admit, ARRAY_ANSWER_BYTES, jsonBytes } from './answer-budget'
 import { availableSql, reportForwardees } from './audience'
 import {
 	ADMIN_PERMISSION,
@@ -26,7 +26,7 @@ import { logAction } from './moderation-log'
 import { notify } from './notifications'
 import { readOperation } from './operation'
 import { actorUriSql, profileUrlSql, usernameSql } from './profile-bounds'
-import { presentation, presentStatusesWithin, type Status } from './status-presenter'
+import { presentation, presentStatusesWithin, type Status, statusStream } from './status-presenter'
 import { accountStatusIds } from './timelines'
 import type { Db } from '../db/sql'
 import { blockedDomain } from '../platform/domain-name'
@@ -366,19 +366,26 @@ function* adminReportStream(
 		const [account, target, assigned, actor] = [...adminAccountStream(db, ids, admin.accountId, present, ids.length)]
 		const ruleIds = new Set(row.rule_ids === null ? [] : (JSON.parse(row.rule_ids) as string[]))
 		const statuses = (shown[i] ?? []).map((status) => status.id)
-		// The first status whatever its size (a unit); the next ones only while room is left, so a first status that
-		// uses up the allowance stops the report's statuses without reading the next.
-		const first = presentStatusesWithin(db, shared, statuses.slice(0, 1), REPORT_STATUS_BYTES, true, 1)
-		const rest =
-			first.bytes >= REPORT_STATUS_BYTES
+		// The first status presented, whatever its size (a unit), found one status at a time; the next ones only while
+		// room is left, so a first status that uses up the allowance stops the report's statuses without reading the
+		// next.
+		const one = statusStream(db, shared, statuses, 1)
+		let first: Status | undefined
+		let next = 0
+		while (first === undefined && next < statuses.length) {
+			first = one.next().value
+			next++
+		}
+		const used = first === undefined ? 0 : jsonBytes(first) + 1
+		const embedded =
+			first === undefined
 				? []
-				: presentStatusesWithin(
-						db,
-						shared,
-						statuses.slice(1),
-						REPORT_STATUS_BYTES - first.bytes,
-						first.items.length === 0
-					).items
+				: [
+						first,
+						...(used >= REPORT_STATUS_BYTES
+							? []
+							: presentStatusesWithin(db, shared, statuses.slice(next), REPORT_STATUS_BYTES - used, false).items),
+					]
 		yield {
 			id: row.id,
 			action_taken: row.action_taken_at !== null,
@@ -392,7 +399,7 @@ function* adminReportStream(
 			target_account: target!,
 			assigned_account: assigned ?? null,
 			action_taken_by_account: actor ?? null,
-			statuses: [...first.items, ...rest],
+			statuses: embedded,
 			rules: rules.filter((rule) => ruleIds.has(rule.id)),
 		}
 	}
