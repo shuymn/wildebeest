@@ -80,7 +80,6 @@ const invalid = (errors: string[]): DomainBlockResult => ({
 	error: `Validation failed: ${errors.join(', ')}`,
 })
 
-// Logs an admin write to `block` in the caller's transaction (moderation-log.ts), as Mastodon's log_action.
 function logBlockAction(db: Db, admin: Admin, action: 'create' | 'update' | 'destroy', block: InstanceDomainBlock) {
 	logAction(
 		db,
@@ -120,10 +119,8 @@ export const createAdminDomainBlock = adminWriteOperation<BlockRequest & { domai
 	(db, request, admin) => {
 		const raw = request.domain?.trim() ?? ''
 		const named = raw === '' ? null : blockDomainOf(raw)
-		// Mastodon's default severity is silence (domain_block.rb:11).
 		const severity = request.severity ?? 'silence'
-		// A conflict is answered before the validations (domain_blocks_controller.rb:31-33), for a domain within the
-		// bounds.
+		// The conflict check comes first (see above), only for a domain within the bounds.
 		if (named?.ok === true) {
 			const existing = conflictingBlock(db, named.domain, {
 				severity,

@@ -34,9 +34,8 @@ export type InstanceFollowsResult =
 	{ status: 'ok'; measure: InstanceFollows } | { status: 'too_many' } | { status: 'too_long' }
 
 // The series' axis as Mastodon's QueryHelper builds it (query_helper.rb:18-24): generate_series(start_at::timestamp,
-// end_at::timestamp, '1 day')::date, the steps taken from the instant start_at names and each then cast to its UTC
-// date. So a start in the afternoon and an end at midnight two days later give two dates, not three. None when end_at
-// is before start_at. At most MEASURE_DAYS + 1 steps are generated, one past the cap to detect it.
+// end_at::timestamp, '1 day')::date, stepping from the start instant and taking each step's UTC date; none when
+// end_at < start_at. At most MEASURE_DAYS + 1 steps are generated, one past the cap to detect it.
 function days(range: MeasureRange): string[] {
 	const out: string[] = []
 	for (let at = range.start; at <= range.end && out.length <= MEASURE_DAYS; at += DAY_MS) {

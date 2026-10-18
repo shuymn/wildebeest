@@ -205,8 +205,7 @@ function severableSql(a: string): string {
 	return `(${a}.domain IS NOT NULL AND NOT ${individuallySuspendedSql(a)} AND ${domainCoveredSql(a)})`
 }
 
-// Whether the condition the job requires still holds: the domain job always reconciles; mode 'account', the account
-// is individually suspended; mode 'domain', it is held by a domain mark that a suspend block still covers.
+// Whether the job's condition (above, by kind and mode) still holds, read live before each round.
 function holds(db: Db, job: RemoteJob): boolean {
 	if (job.kind === 'domain') {
 		return true
@@ -351,7 +350,6 @@ function sever(
 		spent.reads -= rows.length
 		for (const follow of rows) {
 			if (follow.id <= bound) {
-				// The final step only once nothing of variable size is left, with its constant cost still in the budget.
 				if (!prepared(db, follow, spent.room) || spent.room() < 0) {
 					return { side: at, recorded }
 				}
@@ -390,7 +388,6 @@ function accountSeverRound(db: Db, job: RemoteJob, now: number): boolean {
 	return done.recorded
 }
 
-// One round of the domain job's clearing walk (above).
 function clearRound(db: Db, job: RemoteJob): void {
 	const rows = db.all<{ id: string; stale: number }>(
 		`SELECT a.id, (a.suspension_source = 'domain' AND NOT ${domainCoveredSql('a')}) AS stale
@@ -420,7 +417,7 @@ function clearRound(db: Db, job: RemoteJob): void {
 // account after it whose severing stopped at `side`.
 type MarkCursor = { after: string; severing?: string; side?: Side }
 
-// One round of the domain job's marking walk (above). Returns whether an activity was recorded.
+// Returns whether this round recorded an activity.
 function markRound(db: Db, job: RemoteJob, now: number): boolean {
 	const at = JSON.parse(job.cursor) as MarkCursor
 	const spent = budget(db)

@@ -8,10 +8,9 @@ export const STATUS_URI_LIMIT = 4096
 
 const ENCODER = new TextEncoder()
 
-// A remote username: Mastodon's remote rule (Account::USERNAME_ONLY_RE, app/models/account.rb lines 75, 78 and 115 at
-// v4.5.0; the same language as USERNAME_RE there), ASCII, at most REMOTE_USERNAME_LIMIT characters, a bound Mastodon
-// does not set for remote accounts (RES-1). JavaScript's `$` without the m flag matches only at the end, unlike Ruby's,
-// so a trailing newline fails as any other character outside the rule.
+// A remote username: Mastodon's remote format (Account::USERNAME_ONLY_RE, app/models/account.rb:75,78,115, v4.5.0;
+// same language as USERNAME_RE), ASCII, capped at REMOTE_USERNAME_LIMIT (RES-1); Mastodon sets no remote cap.
+// Without the m flag, JavaScript's `$` matches only the string end, unlike Ruby's, so a trailing newline fails.
 export const REMOTE_USERNAME_LIMIT = 255
 const REMOTE_USERNAME = /^[a-z0-9_]+([a-z0-9_.-]+[a-z0-9_]+)?$/i
 

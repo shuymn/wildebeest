@@ -4,16 +4,12 @@ import { readOperation, writeOperation } from './operation'
 import type { Db } from '../db/sql'
 import { blockedDomain, hostDomain } from '../platform/domain-name'
 
-// Instance domain blocks (R38, VIS-30; Mastodon's DomainBlock), migration 0046_instance_domain_blocks: the instance's
-// own policy by domain, as Store operations that each commit in one transaction and fetch nothing. The rule a host
-// follows is the longest matching block (audience.ts hostCoveredSql), and a suspend covers it: its accounts are
-// unavailable (availableSql), nothing is delivered to it but retractions (deliveries.ts sendRefused),
-// nothing is fetched from it (fetchRefused), its accounts are neither stored nor refreshed (inbox.ts
-// upsertRemoteActor), and its inbound activity is ignored but for cleanups verified with a stored key (inbox.ts
-// receive, federation/inbound.ts). Every rule reads the live blocks, so a create, update or delete applies from its
-// commit on. A create, update or delete that changes whether the hosts the block's domain rules are covered (the
-// severity of their longest matching block, into or out of suspend) resets the domain job in its own transaction
-// (resetDomainJob), which then reconciles the domain marks and severs newly covered accounts.
+// Instance domain blocks (R38, VIS-30; Mastodon's DomainBlock), migration 0046_instance_domain_blocks. Each Store
+// operation commits in one transaction and fetches nothing. A host's rule is its longest matching block (audience.ts
+// hostCoveredSql); a suspend denies availability, delivery but retractions, fetches, actor storage and refresh, and
+// inbound activity but cleanups verified with a stored key (docs/visibility.md, "Instance domain blocks").
+// Rules read the live blocks, so a change applies from its commit. A change in coverage resets the domain job in its
+// transaction (resetDomainJob), which reconciles the domain marks and severs newly covered accounts.
 
 export type Severity = 'suspend' | 'noop'
 
@@ -150,8 +146,7 @@ export type CreateBlockResult =
 	| { ok: false; error: 'invalid-domain' | 'too-deep' }
 	| { ok: false; error: 'exists'; existing: InstanceDomainBlock }
 
-// Creates a block of `domain` (raw, as blockDomainOf reads it). Refused: what blockDomainOf refuses, and a conflicting
-// block (conflictingBlock), which `existing` names.
+// Creates a block of a raw `domain`; refuses what blockDomainOf refuses and a conflicting block (conflictingBlock).
 export function createBlock(db: Db, input: BlockFields & { domain: string; now: number }): CreateBlockResult {
 	const named = blockDomainOf(input.domain)
 	if (!named.ok) {
@@ -183,8 +178,7 @@ export function createBlock(db: Db, input: BlockFields & { domain: string; now: 
 
 export const createInstanceDomainBlock = writeOperation(createBlock)
 
-// Changes the fields given of the block `id` (its domain stays; a field left out keeps its value); null for an unknown
-// id.
+// Applies the given fields; the domain and omitted fields stay. Null for an unknown id.
 export function updateBlock(
 	db: Db,
 	input: Partial<BlockFields> & { id: number; now: number }
@@ -214,7 +208,6 @@ export function updateBlock(
 
 export const updateInstanceDomainBlock = writeOperation(updateBlock)
 
-// Deletes the block `id`; returns it, or null for an unknown id.
 export function deleteBlock(db: Db, id: number): InstanceDomainBlock | null {
 	const row = db.first<BlockRow>(`DELETE FROM instance_domain_blocks WHERE id = ? RETURNING ${COLUMNS}`, id)
 	if (row === undefined) {
@@ -258,9 +251,8 @@ export function hostCovered(db: Db, host: string): boolean {
 // costs one request, whose result the writes refuse (upsertRemoteActor, storeRemoteStatus).
 export const fetchRefused = readOperation<{ host: string }, boolean>((db, { host }) => hostCovered(db, host))
 
-// Whether the actor `uri` is domain-blocked: its host is covered, or its stored account is covered by its stored
-// domain. Such an actor's inbound activity is verified only with a key already stored, with no fetch, and only its
-// cleanups apply (federation/inbound.ts, inbox.ts receive).
+// Blocked by the actor URI's host or its stored account's domain. Inbound cleanups then need a stored key and fetch
+// nothing (R38; federation/inbound.ts, inbox.ts receive).
 export function actorDomainBlocked(db: Db, uri: string): boolean {
 	let host: string
 	try {
