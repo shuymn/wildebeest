@@ -359,7 +359,7 @@ export function acctOf(row: { username: string; domain: string | null }): string
 // An unavailable account (R1: suspended, or a remote account whose deletion has started, as the row's query read it
 // live) is shown redacted, as Mastodon's REST::AccountSerializer shows an unavailable one: no display name, note,
 // fields or emojis, the default avatar and header, locked, bot and discoverable false, and `suspended: true`.
-export function presentAccount(row: AccountRow, { origin }: Present): Account {
+function presentAccount(row: AccountRow, { origin }: Present): Account {
 	const suspended = row.available === 0
 	// Stored URLs are shown only when they are http(s) (httpUrl); anything else reads as unset.
 	const url = accountUrl(row, origin)
