@@ -12,7 +12,7 @@ import {
 	expectByteCutWalk,
 	maximalAccounts,
 	ORIGIN,
-	type Walked,
+	walkPages,
 } from './budget-helpers'
 import { observedSql } from './read-helpers'
 import { community, mute, remoteAccount, seedStatus, type User } from './status-helpers'
@@ -72,25 +72,17 @@ async function hidden(h: ApiHarness, recipient: string, from: string, count: num
 
 // Walks the grouped list by its Link header, each group by its most recent notification's id.
 async function walkGroups(h: ApiHarness, path: string, rel: 'next' | 'prev', token: string) {
-	const walked: Walked & { groups: Group[][] } = { ids: [], pages: [], groups: [] }
-	for (let at: string | null = path; at !== null;) {
-		const page: Answer<Grouped> = await answer<Grouped>(h, at, token)
-		expect(page.status).toBe(200)
-		expect(page.bytes).toBeLessThanOrEqual(ANSWER_BYTES)
-		const shown = page.body.notification_groups.map((group) => String(group.most_recent_notification_id))
-		if (shown.length === 0) {
-			break
-		}
-		const link: string | null = page[rel]
-		const cursor =
-			link === null ? null : new URLSearchParams(link.split('?')[1]).get(rel === 'next' ? 'max_id' : 'min_id')
-		walked.pages.push({ shown, bytes: page.bytes, cursor })
-		walked.groups.push(page.body.notification_groups)
-		walked.ids.push(...(rel === 'next' ? shown : shown.toReversed()))
-		at = link
-		expect(walked.pages.length).toBeLessThan(20)
-	}
-	return walked
+	const groups: Group[][] = []
+	const walked = await walkPages<Grouped>(
+		h,
+		path,
+		rel,
+		token,
+		(body) => body.notification_groups.map((group) => String(group.most_recent_notification_id)),
+		20,
+		(body) => groups.push(body.notification_groups)
+	)
+	return { ...walked, groups }
 }
 
 async function groupBytes(h: ApiHarness, user: User, key: string): Promise<number> {

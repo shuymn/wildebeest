@@ -102,12 +102,26 @@ export type Walked = { ids: string[]; pages: { shown: string[]; bytes: number; c
 // first, collected oldest first), following each link as the server returns it. Each page keeps the cursor its link
 // carries.
 export async function walk(h: ApiHarness, path: string, rel: 'next' | 'prev', token?: string): Promise<Walked> {
+	return walkPages<{ id: string }[]>(h, path, rel, token, (body) => body.map((item) => item.id), 40)
+}
+
+// The walk of `walk` over answers of any shape: `shown` gives a page's item ids, in the order the page shows them;
+// `each` sees each page's body; at most `pages` pages.
+export async function walkPages<T>(
+	h: ApiHarness,
+	path: string,
+	rel: 'next' | 'prev',
+	token: string | undefined,
+	shownOf: (body: T) => string[],
+	pages: number,
+	each: (body: T) => void = () => {}
+): Promise<Walked> {
 	const walked: Walked = { ids: [], pages: [] }
 	for (let at: string | null = path; at !== null;) {
-		const page: Answer<{ id: string }[]> = await answer(h, at, token)
+		const page: Answer<T> = await answer<T>(h, at, token)
 		expect(page.status).toBe(200)
 		expect(page.bytes).toBeLessThanOrEqual(ANSWER_BYTES)
-		const shown = page.body.map((status) => status.id)
+		const shown = shownOf(page.body)
 		if (shown.length === 0) {
 			break
 		}
@@ -115,9 +129,10 @@ export async function walk(h: ApiHarness, path: string, rel: 'next' | 'prev', to
 		const cursor =
 			link === null ? null : new URLSearchParams(link.split('?')[1]).get(rel === 'next' ? 'max_id' : 'min_id')
 		walked.pages.push({ shown, bytes: page.bytes, cursor })
+		each(page.body)
 		walked.ids.push(...(rel === 'next' ? shown : shown.toReversed()))
 		at = link
-		expect(walked.pages.length).toBeLessThan(40)
+		expect(walked.pages.length).toBeLessThan(pages)
 	}
 	return walked
 }
