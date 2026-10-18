@@ -1702,8 +1702,10 @@ keywords of 512 characters, the first held by the status, and naming the statuse
 filter results (about 0.24 MB each set) and every read takes the 1,000 keywords. SQLite bytes are the UTF-8 bytes of every value read (8 per number); nodes are the
 objects, arrays and strings presented. Measured shapes are read through the Store operation. Through the real Store
 RPC, a public timeline page, a context and a search answer of statuses of about 0.97 MB each, each cut at the budget,
-return 7.72 MB of JSON each (`test/answer-budgets.test.ts`, "the Store RPC returns a maximal answer"), well under the
-32 MiB RPC limit.
+return 7.72 MB of JSON each (`test/answer-budgets.test.ts`, "the Store RPC returns a maximal answer"), and the boost
+of a quote above, alone or as the one status a lookup of it, the quote and the quoted status admits, returns 5.56 MB
+(escaped fill) and 4.53 MB (raw fill, the most serialized bytes) (`test/status-bounds.test.ts`), well under the 32 MiB
+RPC limit.
 
 | Shape                                                            | Most SQLite bytes | Most JSON bytes | Rows read | Nodes | Share of 8 MiB |
 | ---------------------------------------------------------------- | ----------------- | --------------- | --------- | ----- | -------------- |
