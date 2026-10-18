@@ -342,7 +342,7 @@ export function presentStatuses(db: Db, ids: readonly VisibleStatusId[], options
 // The statuses whose rows are read together while an answer is admitted: what is read past the budget is at most one
 // chunk of rows at the unit maximum ("Heap at 8 MiB per answer" in docs/threat-model.md); each status is presented
 // and measured on its own, only when admission reaches it.
-const STATUS_CHUNK = 4
+const STATUS_CHUNK = 2
 
 // Admission of statuses (RES-3, admit): the statuses of `ids` in traversal order, their rows read STATUS_CHUNK at a
 // time, each presented as one atomic item (with its boosted original and quoted status) when it is reached, while

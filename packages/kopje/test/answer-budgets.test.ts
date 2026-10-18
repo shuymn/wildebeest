@@ -391,11 +391,55 @@ describe('status pages are answers within ANSWER_BYTES (RES-3)', () => {
 		})
 		expect(one.result).toBe(1)
 		expect(page.result).toBeLessThan(w.V.length)
-		// Rows are read 4 statuses at a time (STATUS_CHUNK): the chunks up to the first rejected status, no more.
-		const chunks = Math.ceil((page.result + 1) / 4)
-		expect(page.largest).toBeLessThanOrEqual(4 * one.largest * 1.01)
-		expect(page.bytes).toBeLessThanOrEqual(chunks * 4 * one.bytes * 1.01)
+		// Rows are read 2 statuses at a time (STATUS_CHUNK): the chunks up to the first rejected status, no more.
+		const chunks = Math.ceil((page.result + 1) / 2)
+		expect(page.largest).toBeLessThanOrEqual(2 * one.largest * 1.01)
+		expect(page.bytes).toBeLessThanOrEqual(chunks * 2 * one.bytes * 1.01)
 	})
+})
+
+describe('admission at a chunk boundary (RES-3)', () => {
+	it('rejects the first status of a chunk of boosts of quotes after smaller statuses nearly fill the answer', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const author = await remoteAccount(h.store, 'small')
+		const quoter = await remoteAccount(h.store, 'quoter')
+		// Eight statuses of about 0.97 MB (four chunks of 2), then a chunk of two boosts of a quote of one, about 1.94 MB.
+		const small: string[] = []
+		for (let i = 0; i < 8; i++) {
+			small.push(await bigStatus(h, author, NOW - DAY + i * 60_000))
+		}
+		const quoted = await bigStatus(h, author, NOW - 2 * DAY)
+		const quote = await bigStatus(h, quoter, NOW - 2 * DAY + 60_000)
+		await sql(
+			h.store,
+			`INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, quoted_account_id, state, updated_at)
+			SELECT ?1, uri, id, account_id, 'accepted', ?3 FROM statuses WHERE id = ?2`,
+			quote,
+			quoted,
+			new Date(NOW).toISOString()
+		)
+		const boosts: string[] = []
+		for (const name of ['b1', 'b2']) {
+			const booster = await remoteAccount(h.store, name)
+			boosts.push(await seedStatus(h.store, { accountId: booster, visibility: 'public', reblogOfId: quote }))
+		}
+		const ids = [...small, ...boosts] as VisibleStatusId[]
+		const result = await runInDurableObject(h.store, (_instance, state) => {
+			const db = new Db(state.storage.sql)
+			const options = { origin: ORIGIN, viewer: { accountId: alice.id, now: new Date(NOW).toISOString() } }
+			const admitted = presentStatusesWithin(db, presentation(db, ids, options), ids, ANSWER_BYTES - 1, true)
+			const [boost] = presentStatuses(db, boosts.slice(0, 1) as VisibleStatusId[], options)
+			return { admitted, boost: jsonBytes(boost) }
+		})
+		expect(result.admitted.items.map((s) => s.id)).toEqual(small)
+		expect(result.admitted).toMatchObject({ consumed: 8, cut: true })
+		expect(result.admitted.bytes).toBe(result.admitted.items.reduce((sum, s) => sum + jsonBytes(s) + 1, 0))
+		// The answer's JSON stays within the budget, and the boost would pass it.
+		expect(jsonBytes(result.admitted.items)).toBeLessThanOrEqual(ANSWER_BYTES)
+		expect(result.boost).toBeGreaterThan(1_800_000)
+		expect(1 + result.admitted.bytes + result.boost).toBeGreaterThan(ANSWER_BYTES)
+	}, 300_000)
 })
 
 // What a read takes out of SQLite as alice: all its bytes and the most one query returns.
