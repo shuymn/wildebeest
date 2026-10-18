@@ -28,7 +28,7 @@ import {
 	updateActivity,
 } from './activities'
 import { accountKey, type StoredKey } from './actors'
-import { admit, ANSWER_BYTES, ARRAY_ANSWER_BYTES, jsonBytes } from './answer-budget'
+import { admit, admittedPage, ANSWER_BYTES, ARRAY_ANSWER_BYTES, jsonBytes } from './answer-budget'
 import {
 	type ApiVisibility,
 	apiVisibility,
@@ -99,7 +99,6 @@ import {
 	type PresentOwnOptions,
 	presentation,
 	presentStatus,
-	presentStatuses,
 	presentStatusesWithin,
 	type Status,
 } from './status-presenter'
@@ -1766,7 +1765,8 @@ export type QuotesPage = Page<Status> & { candidates: number }
 // applies, or R2 for the quoted author, quotes of accounts they block or mute included (Mastodon skips StatusFilter for
 // them). Bounds are the window's, so short or empty pages still advance. For anyone but the quoted author, a quoting
 // status their audience hides is never a candidate, so its id is never a cursor: Kopje's rule, stricter than
-// Mastodon's QuotesController, which paginates every accepted quote before StatusFilter.
+// Mastodon's QuotesController, which paginates every accepted quote before StatusFilter. A page is one answer within
+// ANSWER_BYTES (RES-3, admittedPage).
 export const statusQuotes = optionalUserReadOperation<StatusQuotesInput, Viewed<QuotesPage>>(
 	(db, { id, page, present }, viewer) => {
 		const { accountId } = viewer
@@ -1801,18 +1801,28 @@ export const statusQuotes = optionalUserReadOperation<StatusQuotesInput, Viewed<
 						JSON.stringify(window),
 						viewer.now
 					)
+		const shared = presentation(
+			db,
+			rows.map((row) => row.id),
+			{ ...present, viewer }
+		)
+		const shown = admittedPage(
+			{ rows, newest: window[0] ?? null, oldest: window.at(-1) ?? null },
+			ascending,
+			(row) => row.id,
+			(traversal) =>
+				presentStatusesWithin(
+					db,
+					shared,
+					traversal.map((row) => row.id),
+					ARRAY_ANSWER_BYTES,
+					true
+				)
+		)
+		// A page cut by the answer budget offers next whatever it holds (pageResponse's count).
 		return {
 			status: 'ok',
-			value: {
-				items: presentStatuses(
-					db,
-					rows.map((row) => row.id),
-					{ ...present, viewer }
-				),
-				newest: window[0] ?? null,
-				oldest: window.at(-1) ?? null,
-				candidates: window.length,
-			},
+			value: { ...shown, candidates: shown.cut === true ? page.limit : window.length },
 		}
 	}
 )
