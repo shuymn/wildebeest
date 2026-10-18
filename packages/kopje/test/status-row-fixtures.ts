@@ -4,6 +4,7 @@ import { type ApiHarness } from './api-helpers'
 import { NOW } from './app-helpers'
 import { type SqlRow, watchedCursor } from './read-helpers'
 import { community } from './status-helpers'
+import { withoutStoredBounds } from './stored-bounds-fixtures'
 import { Db, rowHeapBytes } from '../src/db/sql'
 import { type VisibleStatusId } from '../src/domain/audience'
 import { MAX_STATUS_MENTION_ROWS } from '../src/domain/status-bounds'
@@ -71,8 +72,13 @@ export async function fixture(): Promise<{ h: ApiHarness; f: Fixture }> {
 	return { h, f: { viewer, token: h.users.alice.token, mentioned, filter } }
 }
 
-// Writes the status rows of `item` (its original, quoted status and boost too) and returns its top-level id.
+// Writes the status rows of `item` (its original, quoted status and boost too) and returns its top-level id. The rows
+// may pass their stored bounds, as converted rows held them before 0048_stored_bounds: the triggers are lifted.
 export function build(sql: SqlStorage, f: Fixture, item: Item): string {
+	return withoutStoredBounds(sql, () => buildRows(sql, f, item))
+}
+
+function buildRows(sql: SqlStorage, f: Fixture, item: Item): string {
 	const author = nextId()
 	sql.exec(
 		"INSERT INTO accounts (id, uri, username, domain, display_name, raw) VALUES (?, ?, 'author', 'remote.example', ?, ?)",
