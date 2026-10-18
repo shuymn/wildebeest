@@ -403,6 +403,12 @@ export function presentAccountsById(db: Db, ids: readonly string[], present: Pre
 	)
 }
 
+// One presented account by id, bounded as a unit (RES-2); undefined for an id with no account.
+export function presentAccountById(db: Db, id: string, present: Present): Account | undefined {
+	const row = accountRow(db, id)
+	return row === undefined ? undefined : presentAccount(row, present)
+}
+
 function accountRow(db: Db, id: string): AccountRow | undefined {
 	return db.first<AccountRow>(`SELECT ${ACCOUNT_COLUMNS} FROM ${ACCOUNT_FROM} WHERE a.id = ?`, id)
 }

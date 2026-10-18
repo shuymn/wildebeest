@@ -5,7 +5,7 @@ import {
 	type Page,
 	type PageQuery,
 	type Present,
-	presentAccountsById,
+	presentAccountById,
 	presentedRows,
 	resolveApiId,
 } from './accounts'
@@ -1897,7 +1897,7 @@ function redactedStatus(db: Db, quotingId: string, state: QuoteState, present: P
 		`SELECT id, ${statusUriSql('uri')} AS uri, account_id, visibility, published_at FROM statuses WHERE id = ?`,
 		quotingId
 	)
-	const account = row === undefined ? undefined : presentAccountsById(db, [row.account_id], present).get(row.account_id)
+	const account = row === undefined ? undefined : presentAccountById(db, row.account_id, present)
 	if (row === undefined || account === undefined) {
 		return null
 	}

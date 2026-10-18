@@ -1,4 +1,4 @@
-import { presentAccountsById } from './accounts'
+import { presentAccountById } from './accounts'
 import { adminAccountIdOnce } from './admin-authority'
 import { availableLocalSql, keptSql, shownSql, UNFILTERED_SQL } from './audience'
 import { userReadOperation, userSessionOperation, userWriteOperation } from './auth'
@@ -240,7 +240,7 @@ function target(db: Db, id: string, now: number): TargetRow | undefined {
 }
 
 function contentOf(db: Db, row: TargetRow, origin: string): PushContent {
-	const from = presentAccountsById(db, [row.from_account_id], { origin }).get(row.from_account_id)
+	const from = presentAccountById(db, row.from_account_id, { origin })
 	const name = from === undefined ? '' : from.display_name === '' ? from.username : from.display_name
 	// The status's content warning, else its text; without a status, the sender's note. Stored HTML is sanitized.
 	const spoiler = row.spoiler_text ?? ''
