@@ -148,9 +148,8 @@ export const REMOTE_BIO_BYTES = 64 * 1024
 
 const ENCODER = new TextEncoder()
 
-// The UTF-8 bytes of `text` as JSON.stringify writes it. Not dump-format's utf8Length: this module has no relative
-// imports, as the cutover runs it from the sources on Node, which resolves no extensionless path
-// (cli/lib/cutover/kopje-runtime.js).
+// The UTF-8 bytes of `text` as JSON.stringify writes it. Not dump-format's utf8Length: the cutover loads this module
+// from the sources on Node, which resolves no extensionless import, so it has none (cli/lib/cutover/kopje-runtime.js).
 export function jsonStringBytes(text: string): number {
 	return ENCODER.encode(JSON.stringify(text)).length
 }
@@ -184,14 +183,12 @@ function sanitizeRemoteWithin(html: string, bytes: number): string {
 	return best
 }
 
-// A remote bio as Kopje stores it (RES-2): within REMOTE_BIO_BYTES (sanitizeRemoteWithin). The cutover's converter and
-// its verification use it too.
+// RES-2: a remote bio within REMOTE_BIO_BYTES; shared with the cutover's conversion and verification.
 export function sanitizeRemoteBio(html: string): string {
 	return sanitizeRemoteWithin(html, REMOTE_BIO_BYTES)
 }
 
-// A remote status's content as Kopje stores it (RES-2): within STATUS_CONTENT_BYTES (sanitizeRemoteWithin). The
-// cutover's converter and its verification use it too.
+// RES-2: remote status content within STATUS_CONTENT_BYTES; shared with the cutover's conversion and verification.
 export function sanitizeRemoteContent(html: string): string {
 	return sanitizeRemoteWithin(html, STATUS_CONTENT_BYTES)
 }

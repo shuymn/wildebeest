@@ -2,12 +2,10 @@ import { cutSql, jsonBoundSql } from './profile-bounds'
 import { STATUS_URI_LIMIT } from '../platform/identity-bounds'
 import { SPOILER_BYTES, STATUS_CONTENT_BYTES } from '../security/html'
 
-// RES-2: the bounds of one presented status. Each column a remote server controls, or a converted row may carry past
-// the ingestion bounds, is bounded where it is stored (federation/remote-status.ts, remote-statuses.ts, statuses.ts)
-// and again as a presenter reads it, through its helper here (test-node/bounded-columns.test.ts), so a row stored
-// before a bound, or converted at the cutover, leaves SQLite within it too. The resulting maxima of a presented
-// status and of the shapes built from it are in docs/threat-model.md (RES-3). Like profile-bounds.ts, it imports only
-// leaves, so modules that build SQL at load can use it whatever the import order.
+// RES-2: the bounds of one presented status. Columns a remote server controls, or a converted row may carry, are
+// bounded where stored (federation/remote-status.ts, remote-statuses.ts, statuses.ts) and again on every read through
+// these helpers (test-node/bounded-columns.test.ts). Maxima: docs/threat-model.md, RES-3. Like profile-bounds.ts, this
+// imports only leaves, so modules that build SQL at load can use it whatever the import order.
 
 // Attachments of one status, as Mastodon caps them (Status::MEDIA_ATTACHMENTS_LIMIT).
 export const MAX_STATUS_MEDIA = 4

@@ -90,7 +90,6 @@ function tokens(sql: string): string[] {
 	return (sql.replace(/"([A-Za-z_]\w*)"/g, '$1').match(TOKEN) ?? []).filter((t) => !t.startsWith('--'))
 }
 
-// The index of the parenthesis that closes the one at `open`.
 function closing(list: readonly string[], open: number): number {
 	let depth = 0
 	for (let i = open; i < list.length; i++) {
@@ -189,7 +188,6 @@ function readsOf(list: readonly string[], tables: Map<string, string>): string[]
 
 const WRITES = new Set(['INSERT', 'UPDATE', 'DELETE', 'REPLACE'])
 
-// The bounded columns one SQL string reads.
 export function boundedReads(sql: string): string[] {
 	const list = tokens(sql)
 	const found: string[] = []
@@ -416,9 +414,8 @@ function render(
 
 type Finding = { path: string; line: number; read: string }
 
-// The function an interpolation is a single call of, or an identifier it is: its name when the expression is exactly
-// `name` or `name(arguments)` whose arguments hold no template and no `+`, so nothing else is joined to the call's
-// value. null for anything else.
+// The name when the expression is exactly `name` or `name(arguments)` with balanced arguments holding no template
+// and no `+`; null otherwise, as joined text could hide an unbounded column.
 function singleCall(expression: string): string | null {
 	const match = /^\s*(\w+)\s*(\(([\s\S]*)\))?\s*$/.exec(expression)
 	if (match === null) {
@@ -465,8 +462,7 @@ const SAFE_INTERPOLATIONS = new Set([
 // SQL keywords that mark a string as SQL when it is concatenated.
 const SQL_TEXT = /\b(?:SELECT|FROM|WHERE|RETURNING|INSERT|UPDATE)\b/i
 
-// Raw reads of bounded columns, interpolations a result list cannot resolve (`interpolation <expression>`), SQL built
-// by concatenation (`concatenated SQL`), and helper calls whose argument names a column the helper does not bound.
+// The findings of the file header; misuses are helper calls given a column the helper does not bound.
 export function scan(all: readonly Source[]): { reads: Finding[]; misuses: Finding[] } {
 	const local = new Map<string, Literal>()
 	const global = new Map<string, Literal | null>()
@@ -500,8 +496,7 @@ export function scan(all: readonly Source[]): { reads: Finding[]; misuses: Findi
 			if ((before === '+' || after === '+') && SQL_TEXT.test(sql)) {
 				reads.push({ path, line, read: 'concatenated SQL' })
 			}
-			// A bounded column named as a property value (a status read's extra columns) is selected by SQL built
-			// elsewhere, so it counts as a read wherever it is named.
+			// A property-valued bounded column is selected by SQL built elsewhere (see the file header).
 			const named = /^\s*\w+\.(\w+)\s*$/.exec(sql)?.[1]
 			if (before === ':' && named !== undefined && BOUNDED.some((b) => b.column === named)) {
 				reads.push({ path, line, read: `column ${sql.trim()}` })

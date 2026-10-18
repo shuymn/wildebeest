@@ -687,9 +687,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   manage_federation, view_dashboard); every other admin route answers as Mastodon answers a role without the permission.
   _Enforced (main):_ the match and the check: `oauthAdmin` and `adminAccountId` in `src/domain/admin-authority.ts`,
   `adminReadOperation` and `adminWriteOperation` in `src/domain/auth.ts`, setup's admin in `src/domain/setup.ts`;
-  `test/admin-api.test.ts`, `test/setup-access.test.ts` ("stops at the next checkpoint when the admin stops being the
-  only match for admin_email during the run"). Reports (manage_reports): anyone but the OAuth admin is refused before a
-  report is read, so not even a report's existence is disclosed; the admin sees every report with its accounts (local
+  `test/admin-api.test.ts`, `test/setup-access.test.ts`. Reports (manage_reports): anyone but the OAuth admin is refused
+  before a report is read, so not even its existence is disclosed; the admin sees every report with its accounts (local
   emails included) and only the statuses its reporter may still see (R37); every admin write, and every Access repair
   below, writes its moderation log row (`admin_actions`, actor, account and client or Access identity, newest 10,000
   kept) in its own transaction, read only through Access (`GET /admin/moderation-log`). `listAdminReports`,
@@ -1292,8 +1291,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   within `SPOILER_BYTES` (16 KiB), cut at a code point (`cutJsonString`); a media URL or preview over
   `MEDIA_URL_LIMIT` (2,048) is not stored (`src/federation/remote-status.ts`). A local post or edit whose rendered
   content or warning passes those bounds, which only hundreds of mentions of accounts with long profile URLs reach, is
-  refused with Mastodon's length error (`src/domain/statuses.ts`); `test/status-bounds.test.ts` ("a remote status is
-  stored within its bounds", "a local status is written within its bounds").
+  refused with Mastodon's length error (`src/domain/statuses.ts`; `test/status-bounds.test.ts`).
 - **RES-2: parsing work is bounded.** Every regex, parser and normalization over input at the RES-1 cap has an
   adversarial fixture with a time bound. _Enforced (main)_ for status text:
   `test/statuses.test.ts` ("handles the worst case at the bound within a generous time"). _Enforced (main)_ for the image metadata walk: `test/image-bytes.test.ts` ("walks a worst-case file at the upload
@@ -1364,19 +1362,15 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   status_tags. A hashtag name over 256 code units or 1 KiB among a status's first names read is left out rather than
   replaced by a later one, so such a status shows one fewer: a remote status stores none, and a local post records one
   as Mastodon does (Mastodon 4.5 sets no length), which costs it a presented hashtag only when it sorts before more than
-  70 others, a corner case within 500 characters (`test/status-bounds.test.ts`, "each per-status cap reads a bounded
-  number of rows", "an ordinary status keeps its mentions and hashtags"). A remote username is Mastodon's remote format
-  (ASCII), so its JSON is its length; a stored one holding any other character or a NUL (only a row converted before the
-  cutover refused such usernames) is cut at 42 code points, which escape to at most 255 bytes. Identities are bounded by
-  `src/platform/identity-bounds.ts`, which ingestion, the cutover's conversion and its verification share: an actor id
-  whose serialized URL or stored spelling is over 2,048 bytes, or a status uri over 4,096, is refused, never cut, and
-  reads as '' where a converted row holds one. `test-node/bounded-columns.test.ts` reads every SQL string in
-  `src/domain` and fails when a bounded column (uris included) is read outside its helper or a helper is given another
-  column; it fails closed on an interpolation it cannot resolve as a constant or a single safe call inside a result
-  list, on SQL built by concatenation and on a bounded column passed as a property value; lookups and comparisons may
-  name a column, and an exact list names the reads that present nothing. It is an architectural aid with documented gaps
-  (correlated outer aliases, property syntax variants); the aggregate response tests prove the budgets. The maxima of
-  each presented shape are in "Maxima of presented units" below (`test/status-bounds.test.ts`).
+  70 others, a corner case within 500 characters (`test/status-bounds.test.ts`). A remote username is Mastodon's remote
+  format (ASCII), so its JSON is its length; a stored one holding any other character or a NUL (only a row converted
+  before the cutover refused such usernames) is cut at 42 code points, which escape to at most 255 bytes. Identities are
+  bounded by `src/platform/identity-bounds.ts`, which ingestion, the cutover's conversion and its verification share: an
+  actor id whose serialized URL or stored spelling is over 2,048 bytes, or a status uri over 4,096, is refused, never
+  cut, and reads as '' where a converted row holds one. `test-node/bounded-columns.test.ts` fails when a bounded column
+  (uris included) is read outside its helper in `src/domain` or a helper is given another column; its header states what
+  it checks, where it fails closed, and its known gaps. It is an architectural aid; the aggregate response tests prove
+  the budgets. Maxima of each presented shape: "Maxima of presented units" below (`test/status-bounds.test.ts`).
 - **RES-4: stored derived data is bounded.** Snapshots, the KV cache, the spool and deliveries each have a size cap, a
   count cap or an expiry with a sweeper. _Implemented on branch `kopje/inbound-statuses`_ for remote statuses: one
   status stores at most 4 attachments (Mastodon's limit) with 10,000 code units of description each, 100 hashtags

@@ -192,16 +192,10 @@ const REMOTE_ATTACHMENT_SQL = `CASE WHEN a.domain IS NOT NULL THEN (
 				ORDER BY e.key LIMIT ${MAX_REMOTE_FIELDS}) c) k
 		WHERE k.size <= ${REMOTE_FIELDS_BYTES}) END`
 
-// RES-2: the most one presented account carries. A remote server controls its bio, display name, profile URLs and
-// fields; each is bounded as stored (federation/remote-actor.ts) and again as ACCOUNT_COLUMNS reads it, so rows
-// stored before a bound, or converted at the cutover, are bounded too until the account is fetched again:
-//   - the bio at REMOTE_BIO_BYTES (64 KiB) as a JSON string; a longer stored one reads as '' (noteSql);
-//   - the display name at DISPLAY_NAME_LIMIT and the username at USERNAME_LIMIT code points (cutSql);
-//   - url, avatar and header at PROFILE_URL_LIMIT bytes; a longer stored one reads as NULL, as an invalid one;
-//   - the fields at REMOTE_FIELDS_BYTES (REMOTE_ATTACHMENT_SQL, remoteFields).
-// One account is then at most about 113 KB as read and 123 KB serialized (bio 64 KiB, display name 12 KiB escaped,
-// fields 33 KB, five URLs 10 KiB, the rest about 2 KB), so a page of 80 serializes to at most about 10 MB. The actor
-// URI is bounded as stored (ACTOR_URI_LIMIT) and read through actorUriSql.
+// RES-2: profiles are bounded as stored (federation/remote-actor.ts) and again as read (profile-bounds.ts), so
+// converted rows are bounded too; fields use REMOTE_ATTACHMENT_SQL and remoteFields. See docs/threat-model.md, RES-3.
+// One account reads at most about 113 KB and serializes to 123 KB (bio 64 KiB, escaped display name 12 KiB,
+// fields 33 KB, five URLs 10 KiB, the rest about 2 KB), so a page of 80 serializes to at most about 10 MB.
 export const ACCOUNT_COLUMNS = `a.id, ${actorUriSql('a.uri')} AS uri, ${usernameSql('a.username')} AS username, a.domain,
 	a.actor_type, ${displayNameSql('a.display_name')} AS display_name, ${noteSql('a.note')} AS note,
 	${profileUrlSql('a.url')} AS url, ${profileUrlSql('a.avatar_url')} AS avatar_url,
@@ -751,8 +745,7 @@ export const familiarFollowers = userReadOperation<{ ids: string[]; present: Pre
 				.map((row) => row.id)
 			return [{ id: target, followers }]
 		})
-		// The answer's own JSON: the brackets and, for each entry, its id, keys and separator (each account's separator
-		// is counted with it).
+		// The answer's own JSON: brackets and each entry's id, keys and separator; accountStream counts each account's.
 		const frame = entries.reduce(
 			(sum, entry) => sum + utf8Length(JSON.stringify({ id: entry.id, accounts: [] })) + 1,
 			1
@@ -767,11 +760,9 @@ export const familiarFollowers = userReadOperation<{ ids: string[]; present: Pre
 	}
 )
 
-// The presented accounts of each list of ids, in order, sharing `budget` (serialized bytes) among the lists that
-// have accounts left: each round gives every such list the same share of what is left, and a list takes its next
-// accounts while they fit its share; what one does not use goes to the next round. So the answer does not depend on
-// the lists' order, and a list with large accounts takes no more than its share while others have accounts to show.
-// Profiles are read one at a time, so at most one account per list is read and not shown.
+// The presented accounts of each list, in order. Each round shares what is left of `budget` (serialized bytes)
+// equally among lists with accounts left; unused shares go to the next round. So list order cannot change the answer,
+// and large accounts cannot crowd others out. Profiles are read one at a time: at most one unshown account per list.
 function sharedAnswer(db: Db, lists: readonly (readonly string[])[], present: Present, budget: number): Account[][] {
 	const streams = lists.map((ids) => accountStream(db, ids, present, 1))
 	const pending = streams.map((stream) => stream())
@@ -1175,8 +1166,7 @@ export function accountRowsOf(db: Db, ids: readonly string[]): AccountRow[] {
 	return ids.flatMap((id) => rows.get(id) ?? [])
 }
 
-// The presented accounts of a page's rows (the candidates the rule passed, by account id), in their order: a window
-// selects ids only, and the profiles are read for the page alone (RES-2 bounds each).
+// Read profiles only for the filtered page, in page order (RES-2); candidate windows read ids alone.
 export function presentedRows(db: Db, rows: readonly { id: string }[], present: Present): Account[] {
 	return accountRowsOf(
 		db,
