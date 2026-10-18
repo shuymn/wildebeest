@@ -1367,9 +1367,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `src/domain/status-presenter.ts`; `test/answer-budgets.test.ts`, `test/notification-budgets.test.ts`,
   `test/notification-group-budgets.test.ts`, `test/conversation-budgets.test.ts`, `test/account-page-budgets.test.ts`,
   `test/activitypub-budgets.test.ts`, `test/admin-reports.test.ts`). Streaming events stay one unit each, and an event
-  over 512 KiB is skipped whole. `test-node/raw-presenters.test.ts` reads the program with TypeScript's parser and
-  fails on an import, re-export, namespace access or use of a raw presenter (`presentStatuses`, `presentAccountsById`,
-  `presentAccount`) outside its module; no module is exempt, and the inventory lists none.
+  over 512 KiB is skipped whole. The raw presenters (`present` and `hydrate` in status-presenter.ts,
+  `presentAccountsById` and `presentAccount` in accounts.ts) are not exported, so the compiler refuses direct use
+  outside their module; the exported paths present one unit or admit within a budget.
   _Enforced (main)_ for each presented status: every status column a remote server controls, or a converted row may hold
   past the ingestion bounds, is read through its helper in `src/domain/status-bounds.ts` (accounts and actor ids through
   `src/domain/profile-bounds.ts`). Content and source text over 128 KiB as a JSON string read as '' (the status keeps

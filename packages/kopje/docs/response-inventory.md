@@ -29,8 +29,9 @@ Continuations:
 - **None**: the answer has no paging; what is left out is a Kopje bound. Pinned statuses are one: a status-id cursor
   cannot follow pin order.
 
-The raw presenters (`presentStatuses`, `presentAccountsById` and `presentAccount`) are used only inside their modules
-(`test-node/raw-presenters.test.ts`); no operation is exempt.
+The raw presenters (`present` and `hydrate` in status-presenter.ts, `presentAccountsById` and `presentAccount` in
+accounts.ts) are not exported, so no operation uses them directly; the exported paths present one unit or admit within
+a budget.
 
 ## Statuses
 
