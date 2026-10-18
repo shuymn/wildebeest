@@ -8,6 +8,17 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+### Changed
+
+- Incoming text has U+0000 removed: display names, bios, status content, content warnings, source text and media
+  descriptions, from remote servers and from the API alike. Display names are cut at 2,048 and media descriptions at
+  10,000 code points, as Mastodon counts them, where they were cut by UTF-16 code units.
+- `kopje-admin convert` stores display names, profile, status and media URLs, media descriptions and the attachments
+  of earlier versions as the Worker stores them, which is what the API already showed: a URL past its bound becomes
+  empty (null for a profile or status URL), a long text is cut, and U+0000 is removed from text. Each change is
+  counted among the normalized values as `stored:<table>.<column>`; `edits:media-field-over-bound` is now
+  `stored:status_edits.media_json`. Verification expects the same values.
+
 ### Fixed
 
 - NodeInfo, the other `/.well-known` documents and local actor documents can be read by browser clients on other
