@@ -2,8 +2,16 @@ import { describe, expect, it } from 'vitest'
 
 import { type ApiHarness, sql } from './api-helpers'
 import { NOW } from './app-helpers'
-import { type Answer, answer, bigStatus, expectByteCutWalk, maximalAccounts, type Walked } from './budget-helpers'
-import { community, mute, remoteAccount, type User } from './status-helpers'
+import {
+	acceptQuote,
+	type Answer,
+	answer,
+	bigStatus,
+	expectByteCutWalk,
+	maximalAccounts,
+	type Walked,
+} from './budget-helpers'
+import { community, mute, remoteAccount, seedStatus, type User } from './status-helpers'
 import { ANSWER_BYTES } from '../src/domain/answer-budget'
 import { GROUP_WALK } from '../src/domain/notification-groups'
 
@@ -220,6 +228,48 @@ describe('grouped notifications within ANSWER_BYTES (RES-3)', () => {
 		)
 		expect(up.prev).toContain(`min_id=${pads.at(-1)!}`)
 		expect(up.bytes).toBeLessThanOrEqual(ANSWER_BYTES)
+	}, 300_000)
+
+	it('answers its first group alone after two passes over the kept groups still do not fit', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const fan = await remoteAccount(h.store, 'fan')
+		const large = await maximalAccounts(h, 'large', 8)
+		const small = await Promise.all(Array.from({ length: 8 }, (_, i) => remoteAccount(h.store, `small${i}`)))
+		// A, a quote of about 1.94 MB, and B, a small status. Below min_id, seven favourites of each from large
+		// accounts. Above it, walked oldest first: six groups of about 0.97 MB, A's eighth large favourite and eight
+		// small ones, B's eighth large favourite, a group C, and eight small favourites of B.
+		const a = await bigStatus(h, alice.id, NOW - 60_000)
+		await acceptQuote(h, a, await bigStatus(h, alice.id, NOW - 90_000))
+		const b = await seedStatus(h.store, { accountId: alice.id, visibility: 'public' })
+		let min = ''
+		for (const account of large.slice(0, 7)) {
+			await favourite(h, alice.id, account, a)
+			min = await favourite(h, alice.id, account, b)
+		}
+		const pads: string[] = []
+		for (let i = 0; i < 6; i++) {
+			pads.push(await favourite(h, alice.id, fan, await bigStatus(h, alice.id, NOW - 120_000)))
+		}
+		await favourite(h, alice.id, large[7]!, a)
+		for (const account of small) {
+			await favourite(h, alice.id, account, a)
+		}
+		await favourite(h, alice.id, large[7]!, b)
+		await favourite(h, alice.id, fan, await bigStatus(h, alice.id, NOW - 120_000))
+		for (const account of small) {
+			await favourite(h, alice.id, account, b)
+		}
+		// The first pass keeps the six groups, A and B (C does not fit). Over their range, ending at B's position, B
+		// samples the large accounts and does not fit; over the range ending at A's, A samples them and does not fit
+		// either. After those two passes the page is its first group alone.
+		const up = await answer<Grouped>(h, `/api/v2/notifications?limit=20&min_id=${min}`, alice.token)
+		expect(up.body.notification_groups.map((group) => String(group.most_recent_notification_id))).toEqual([pads[0]])
+		expect(up.body.notification_groups[0]).toMatchObject({ page_min_id: pads[0], page_max_id: pads[0] })
+		expect(up.prev).toContain(`min_id=${pads[0]!}`)
+		// It continues from there: the next page starts at the second group.
+		const next = await answer<Grouped>(h, up.prev!, alice.token)
+		expect(String(next.body.notification_groups.at(-1)!.most_recent_notification_id)).toBe(pads[1])
 	}, 300_000)
 
 	it('moves a partial account to the accounts when a later group shows it first', async () => {

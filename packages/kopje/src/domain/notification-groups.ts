@@ -268,6 +268,8 @@ type AdmittedGroups = {
 	groups: PresentedGroup[]
 	// The groups walked: the admitted ones, and those with nothing to show before the first one left out.
 	consumed: number
+	// The groups walked up to the first one admitted, that one included.
+	leading: number
 	cut: boolean
 	accounts: Map<string, Account>
 	partial: Map<string, { account: PartialAccount; bytes: number }>
@@ -301,6 +303,7 @@ function admitGroups(
 	const admitted: AdmittedGroups = {
 		groups: [],
 		consumed: 0,
+		leading: 0,
 		cut: false,
 		accounts: new Map(),
 		partial: new Map(),
@@ -385,6 +388,9 @@ function admitGroups(
 		}
 		bytes += size
 		admitted.consumed++
+		if (admitted.groups.length === 0) {
+			admitted.leading = admitted.consumed
+		}
 		for (const [id, account] of whole) {
 			admitted.accounts.set(id, account)
 			admitted.partial.delete(id)
@@ -455,6 +461,10 @@ function pageRange(walk: Walk, ordered: readonly Found[], ascending: boolean, pa
 	return { lower: walk.cut ? walk.last : above, upper: newest }
 }
 
+// Admission passes over a page's groups after the first, each over the range of the groups the one before kept,
+// before the page falls back to its first group alone: at most 1 + MAX_READMISSIONS passes over at most a page.
+const MAX_READMISSIONS = 2
+
 // GET /api/v2/notifications: newest first by each group's first notification read; with min_id, the groups right
 // above it, walked oldest first (each group's oldest notification above min_id stands for it) and answered newest
 // first.
@@ -462,8 +472,9 @@ function pageRange(walk: Walk, ordered: readonly Found[], ascending: boolean, pa
 // page is the groups up to the last one admitted, as if the walk had found those alone: its range (membersOf,
 // oldestOf) and cursors are of those groups, and the walk's continuation (a walk cut at GROUP_WALK), which lies past
 // a group left out, is dropped. Those groups are then admitted again over that range, since sampling below a lower
-// upper end can show other accounts; until they all fit, the last ones are dropped the same way, at most once per
-// group. A group left out is found again by the next page.
+// upper end can show other accounts; while they do not all fit, the last ones are dropped the same way, at most
+// MAX_READMISSIONS times, after which the page is its first group alone, over its own range. A group left out is
+// found again by the next page.
 export const listGroupedNotifications = userReadOperation<ListGroupedInput, GroupedPage>(
 	(db, input, _viewer, viewer) => {
 		const { page } = input
@@ -478,27 +489,29 @@ export const listGroupedNotifications = userReadOperation<ListGroupedInput, Grou
 			includeFiltered: input.includeFiltered,
 			limit: page.limit,
 		})
-		// Each group's status, presented once when admission first reaches it, under one presentation.
-		const statusIds = [
-			...new Set(walk.groups.flatMap(({ first }) => (first.status_id === null ? [] : [first.status_id]))),
+		// One presentation of the groups' statuses; each pass presents the statuses of its own groups, each once, so a
+		// pass holds nothing of a group an earlier pass dropped.
+		const statusesOf = (groups: readonly Found[]) => [
+			...new Set(groups.flatMap(({ first }) => (first.status_id === null ? [] : [first.status_id]))),
 		]
-		const shared = presentation(db, statusIds, { ...input.present, viewer })
-		const statusOf = firstUses(statusIds, statusStream(db, shared, statusIds))
+		const shared = presentation(db, statusesOf(walk.groups), { ...input.present, viewer })
 		const budget = ANSWER_BYTES - jsonBytes(emptyAnswer(input.expandAccounts))
 		let read = walk
-		for (;;) {
+		for (let round = 0; ; round++) {
 			const ordered = ascending ? read.groups.toReversed() : read.groups
+			const statusIds = statusesOf(read.groups)
 			const admitted = admitGroups(
 				db,
 				viewer,
 				read.groups,
 				pageRange(read, ordered, ascending, page),
-				statusOf,
+				firstUses(statusIds, statusStream(db, shared, statusIds)),
 				input,
 				budget
 			)
 			if (admitted.cut) {
-				const groups = read.groups.slice(0, admitted.consumed)
+				// After MAX_READMISSIONS passes that still do not fit, the first group alone, over its own range.
+				const groups = read.groups.slice(0, round < MAX_READMISSIONS ? admitted.consumed : admitted.leading)
 				read = { groups, full: true, cut: false, last: groups.at(-1)?.first.id ?? null }
 				continue
 			}
