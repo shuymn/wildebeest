@@ -115,25 +115,40 @@ export const VIEWER_FLAG_COLUMNS = fixedColumns(
 const SINGLE_FLAGS = 4
 
 // Every query the presenter runs for a chunk, by the map its result columns come from (test/status-rows.test.ts
-// fails on a query without one, or a column outside it).
-export const HYDRATE_QUERIES: Readonly<Record<string, ColumnMap>> = {
-	statuses: STATUS_COLUMN_MAP,
-	quotes: QUOTE_READ_COLUMNS.columns,
-	accounts: ACCOUNT_COLUMN_MAP,
-	media: STATUS_MEDIA_COLUMN_MAP,
-	mentions: MENTION_COLUMN_MAP,
-	tags: TAG_COLUMN_MAP,
-	flags: VIEWER_FLAG_COLUMNS.columns,
-	approvals: QUOTE_APPROVAL_COLUMNS.columns,
-	polls: POLL_COLUMN_MAP,
-	votes: OWN_VOTE_COLUMNS.columns,
-	filters: FILTER_MATCH_COLUMNS.columns,
+// fails on a query without one, or a column outside it). Built on first use, as statusRowBoundSql.
+export function hydrateQueries(): Readonly<Record<HydrateQuery, ColumnMap>> {
+	return {
+		statuses: STATUS_COLUMN_MAP,
+		quotes: QUOTE_READ_COLUMNS.columns,
+		accounts: ACCOUNT_COLUMN_MAP,
+		media: STATUS_MEDIA_COLUMN_MAP,
+		mentions: MENTION_COLUMN_MAP,
+		tags: TAG_COLUMN_MAP,
+		flags: VIEWER_FLAG_COLUMNS.columns,
+		approvals: QUOTE_APPROVAL_COLUMNS.columns,
+		polls: POLL_COLUMN_MAP,
+		votes: OWN_VOTE_COLUMNS.columns,
+		filters: FILTER_MATCH_COLUMNS.columns,
+	}
 }
+
+export type HydrateQuery =
+	| 'statuses'
+	| 'quotes'
+	| 'accounts'
+	| 'media'
+	| 'mentions'
+	| 'tags'
+	| 'flags'
+	| 'approvals'
+	| 'polls'
+	| 'votes'
+	| 'filters'
 
 // Per-row aggregates a hydrate query may sort in a temporary B-tree, by map and column: each sorts within one stored
 // value, at most one row at a time (an actor document's attachment entries, at most 2 MiB fetched and
 // MAX_REMOTE_FIELDS kept; a poll's at most MAX_REMOTE_OPTIONS choices).
-export const PER_ROW_SORTS: readonly { query: keyof typeof HYDRATE_QUERIES; column: string }[] = [
+export const PER_ROW_SORTS: readonly { query: HydrateQuery; column: string }[] = [
 	{ query: 'accounts', column: 'attachment' },
 	{ query: 'polls', column: 'options' },
 ]
