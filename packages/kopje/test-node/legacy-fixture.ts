@@ -69,6 +69,8 @@ export type FixtureOptions = {
 	domainBlockSpellings?: boolean
 	// A direct exchange: r1 writes to alice (who is notified of it), and alice answers in its thread.
 	directMessages?: boolean
+	// A public status of alice's that mentions this many more remote accounts, each its own actor.
+	addressed?: number
 }
 
 export type LegacyFixture = {
@@ -191,6 +193,7 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		imagesAccount,
 		domainBlockSpellings = false,
 		directMessages = false,
+		addressed = 0,
 	} = options
 	const images = imagesAccount === undefined ? IMAGES : `https://imagedelivery.net/${imagesAccount}`
 	if (before0016 !== undefined && level < 16) {
@@ -326,6 +329,26 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 		return { uri, host, followers: `${uri}/followers` }
 	})
 	const r = (i: number) => remote[i] ?? { uri: '', host: '', followers: '' }
+	const many = Array.from({ length: addressed }, (_, i) => {
+		const uri = `https://many.example/users/m${i}`
+		insert('actors', {
+			id: uri,
+			type: 'Person',
+			cdate: cdate(16),
+			properties: JSON.stringify({
+				'@context': ['https://www.w3.org/ns/activitystreams'],
+				id: uri,
+				type: 'Person',
+				preferredUsername: `m${i}`,
+				inbox: `${uri}/inbox`,
+				followers: `${uri}/followers`,
+			}),
+			mastodon_id: snowflake(16, 1000 + i),
+			username: `m${i}`,
+			domain: 'many.example',
+		})
+		return uri
+	})
 
 	// ---- objects
 	let objectCounter = 0
@@ -605,6 +628,18 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
 			{ type: 'Mention', href: r(1).uri, name: '@r1@remote.example' },
 		],
 	})
+	if (many.length > 0) {
+		localNote({
+			author: alice,
+			username: 'alice',
+			minutes: 146,
+			text: 'to many',
+			to: [PUBLIC],
+			cc: [`${alice}/followers`, ...many],
+			mastodonId: snowflake(146, 2),
+			tags: many.map((uri, i) => ({ type: 'Mention', href: uri, name: `@m${i}@many.example` })),
+		})
+	}
 	const edited = localNote({
 		author: alice,
 		username: 'alice',

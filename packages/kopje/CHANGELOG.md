@@ -40,6 +40,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - An outbox page holds its activities within the same bound, newest first, and continues after the last one shown.
   The featured collection shows its pinned Notes within it, and any pin past it by its uri. A Note shows the hashtags,
   mentions and attachments the API shows for the same status.
+- The cutover's conversion stops on a local status that addresses more than 1,000 accounts, naming it
+  (`statuses:local-addressing-over-bound:<object id>`), rather than drop any recipient: its Create would not fit an
+  outbox page. A post's 500 characters name at most about 170.
 
 ## [0.1.0-rc.15] - 2026-10-18
 

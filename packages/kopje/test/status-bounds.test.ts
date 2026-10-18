@@ -32,6 +32,7 @@ import {
 import { getStatus, getStatuses, statusHistory, statusSource } from '../src/domain/statuses'
 import { parseRemoteStatus } from '../src/federation/remote-status'
 import { utf8Length } from '../src/platform/dump-format'
+import { MAX_LOCAL_ADDRESSED } from '../src/platform/identity-bounds'
 import type { StoreOperation } from '../src/platform/store-kernel'
 import {
 	jsonStringBytes,
@@ -1009,6 +1010,22 @@ describe('ActivityPub Notes of a local status at its bounds (RES-3)', () => {
 	it('measures the Note and the Create, within OUTBOX_BYTES, and five Notes of the featured collection', async () => {
 		const t = await setup()
 		const parts = await maximalParts(t)
+		// Addressed to MAX_LOCAL_ADDRESSED accounts, each actor id at ACTOR_URI_LIMIT: the mentions above and more.
+		const base = 950_000_000_000_000_000n
+		const more = MAX_LOCAL_ADDRESSED - parts.mentions.length
+		await sql(
+			t.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO accounts (id, uri, username, domain)
+			SELECT CAST(?2 + i AS TEXT), substr(?3 || (?2 + i) || '/' || ?4, 1, ?5), 'a' || i, ?6 FROM n`,
+			more,
+			String(base),
+			`https://${HOST}/users/`,
+			'u'.repeat(ACTOR_URI_LIMIT),
+			ACTOR_URI_LIMIT,
+			HOST
+		)
+		parts.mentions = [...parts.mentions, ...Array.from({ length: more }, (_, i) => String(base + BigInt(i + 1)))]
 		const ids: string[] = []
 		for (let i = 0; i < PIN_LIMIT; i++) {
 			const id = await storedStatus(t, ALICE, parts)
@@ -1074,17 +1091,17 @@ describe('ActivityPub Notes of a local status at its bounds (RES-3)', () => {
 		expect(shown.tags).toBe(0)
 		expect(shown.create).toBeLessThan(200_000)
 		expect({ ...measuredNote, featured: featuredBytes, whole }).toEqual({
-			sqlite: 2_477_167,
-			rows: 476,
-			nodes: 1_816,
-			note: 2_579_494,
-			create: 2_994_734,
+			sqlite: 5_739_459,
+			rows: 1_276,
+			nodes: 2_616,
+			note: 4_220_294,
+			create: 6_276_334,
 			tags: MAX_PRESENTED_TAGS,
 			longest: MAX_TAG_LENGTH,
 			mentions: MAX_STATUS_MENTION_ROWS,
 			media: 4,
-			featured: 8_271_271,
-			whole: 3,
+			featured: 4_413_221,
+			whole: 1,
 		})
 	}, 300_000)
 })

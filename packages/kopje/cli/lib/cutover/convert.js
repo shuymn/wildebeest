@@ -25,6 +25,7 @@ import {
 	normalizeSearchText,
 	cutJsonString,
 	jsonStringBytes,
+	MAX_LOCAL_ADDRESSED,
 	REMOTE_BIO_BYTES,
 	REMOTE_HTML_RAW_LIMIT,
 	remoteHtmlText,
@@ -938,6 +939,12 @@ export function convertLegacy(
 		const outside = [...candidates].filter((a) => !readers.has(a)).length
 		if (outside > 0) {
 			count(normalized, 'mentionsNotRecipients', outside)
+		}
+		// A local status addresses at most MAX_LOCAL_ADDRESSED accounts (its Create must fit an outbox page): one past it
+		// stops the conversion, named by its object id, rather than lose a recipient.
+		if (local && [...mentions.values()].filter((silent) => silent === 0).length > MAX_LOCAL_ADDRESSED) {
+			count(problems, `statuses:local-addressing-over-bound:${String(row.id)}`)
+			continue
 		}
 		const visibility = legacy === 'direct' && [...mentions.values()].includes(1) ? 'limited' : legacy
 		const spoiler = spoilerOf(

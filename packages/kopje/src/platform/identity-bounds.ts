@@ -6,6 +6,12 @@
 export const ACTOR_URI_LIMIT = 2048
 export const STATUS_URI_LIMIT = 4096
 
+// The accounts a local status addresses at most (its mentions that are not silent, which its Note's to or cc lists
+// and its Create repeats): with each actor id within ACTOR_URI_LIMIT, its Create stays within an outbox page's byte
+// bound (RES-3, docs/threat-model.md "Maxima of presented units"). A post names at most about 170 within its 500
+// characters; the cutover's conversion refuses a legacy status past it rather than drop any of them.
+export const MAX_LOCAL_ADDRESSED = 1000
+
 const ENCODER = new TextEncoder()
 
 // A remote username: Mastodon's remote format (Account::USERNAME_ONLY_RE, app/models/account.rb:75,78,115, v4.5.0;

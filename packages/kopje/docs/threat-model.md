@@ -1729,16 +1729,19 @@ RPC limit.
 | Conversation: 12 participants presented, its last status a quote | 7,870,431         | 6,651,414       | 1,723     | 4,959 | 79.3%          |
 | Notification group: 8 sample accounts, its status a quote        | 7,411,273         | 6,165,029       | 1,736     | 4,836 | 73.5%          |
 | Report: its first status a quote past the 2 MiB allowance        | 6,612,573         | 5,318,285       | 1,718     | 4,661 | 63.4%          |
-| ActivityPub Note of a local status at its bounds                 | 2,477,167         | 2,579,494       | 476       | 1,816 | 30.7%          |
-| Its Create (the Note and its addressing)                         |                   | 2,994,734       |           |       | 35.7%          |
+| ActivityPub Note: a local status at its bounds, 1,000 addressed  | 5,739,459         | 4,220,294       | 1,276     | 2,616 | 50.3%          |
+| Its Create (the Note and its addressing again)                   |                   | 6,276,334       |           |       | 74.8%          |
 
 Mentions whose url is derived read and present less (the conversation: 5,232,097 and 5,832,214 bytes): a derived url
 within the bound is at most the stored bound, and a longer one presents as ''.
 
 A Note shows what the Status entity shows: its hashtags, mentions and attachments are read through the same
 projections (`statusFacts` in `src/domain/activities.ts`), so a converted row's hashtag past its bound is left out of
-both. The Create is within `OUTBOX_BYTES`; five such Notes are not within 8 MiB, so the featured collection shows its
-Notes within `OUTBOX_BYTES` and the pins past them by uri (8.27 MB with three Notes whole,
+both. A Note's addressing (to, cc) keeps every recipient, and the Create repeats it: a local status addresses at most
+`MAX_LOCAL_ADDRESSED` (1,000) accounts, which a post's 500 characters (about 170 mentions) never reach and the
+cutover's conversion refuses past, naming the status (`src/platform/identity-bounds.ts`). With every part at its bound
+and 1,000 actor ids of 2,048 bytes, the Create is 75% of `OUTBOX_BYTES`; five such Notes are not within 8 MiB, so the
+featured collection shows its Notes within `OUTBOX_BYTES` and the pins past them by uri (4.41 MB with one Note whole,
 `test/status-bounds.test.ts`). A group's status is the owner's own (favourites and boosts group), so it is at most a quote. A report's statuses after
 the first stop at 2 MiB, so a report is at most its accounts, its first status (a quote) and nothing more, or a small
 first status and 2 MiB; its staff accounts are local. Every measured shape stays within 80% of an answer of 8 MiB
