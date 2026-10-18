@@ -466,8 +466,8 @@ export function resolveAccountId(db: Db, id: string): string | null {
 	return resolveApiId(db, 'accounts', id)
 }
 
-// Presented accounts by id, read in one query.
-export function presentAccountsById(db: Db, ids: readonly string[], present: Present): Map<string, Account> {
+// Presented accounts by id, read in one query: for getAccounts' MAX_ACCOUNTS_BY_ID only.
+function presentAccountsById(db: Db, ids: readonly string[], present: Present): Map<string, Account> {
 	return new Map(
 		db
 			.all<AccountRow>(

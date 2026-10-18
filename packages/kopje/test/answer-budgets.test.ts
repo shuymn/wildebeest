@@ -24,7 +24,7 @@ import { Db } from '../src/db/sql'
 import { admit, admittedPage, ANSWER_BYTES, jsonBytes } from '../src/domain/answer-budget'
 import { type VisibleStatusId } from '../src/domain/audience'
 import { filterTextLimits, MAX_FILTER_REQUEST_TEXT } from '../src/domain/filters'
-import { presentation, presentStatuses, presentStatusesWithin } from '../src/domain/status-presenter'
+import { type PresentOptions, presentation, presentStatus, presentStatusesWithin } from '../src/domain/status-presenter'
 import { utf8Length } from '../src/platform/dump-format'
 import { sha256Hex } from '../src/security/tokens'
 
@@ -101,6 +101,11 @@ async function bytesOf(h: ApiHarness, token: string, id: string): Promise<number
 
 async function statusBytes(w: World, id: string): Promise<number> {
 	return bytesOf(w.h, w.alice.token, id)
+}
+
+// The statuses of `ids` presented as one whole, their rows read in one chunk, as a page was before admission.
+function presentedWhole(db: Db, ids: readonly VisibleStatusId[], options: PresentOptions) {
+	return presentStatusesWithin(db, presentation(db, ids, options), ids, Infinity, true, Math.max(ids.length, 1)).items
 }
 
 describe('admission (RES-3)', () => {
@@ -310,7 +315,7 @@ describe('admission at a chunk boundary (RES-3)', () => {
 			const db = new Db(state.storage.sql)
 			const options = { origin: ORIGIN, viewer: { accountId: alice.id, now: new Date(NOW).toISOString() } }
 			const admitted = presentStatusesWithin(db, presentation(db, ids, options), ids, ANSWER_BYTES - 1, true)
-			const [boost] = presentStatuses(db, boosts.slice(0, 1) as VisibleStatusId[], options)
+			const boost = presentStatus(db, boosts[0] as VisibleStatusId, options)
 			return { admitted, boost: jsonBytes(boost) }
 		})
 		expect(result.admitted.items.map((s) => s.id)).toEqual(small)
@@ -557,7 +562,7 @@ describe('the shared filter allowance (RES-3)', () => {
 			const visible = ids as VisibleStatusId[]
 			const shared = presentation(db, visible, options)
 			return [
-				presentStatuses(db, visible, options),
+				presentedWhole(db, visible, options),
 				[
 					...presentStatusesWithin(db, shared, visible.slice(0, 7), ANSWER_BYTES, true).items,
 					...presentStatusesWithin(db, shared, visible.slice(7), ANSWER_BYTES, true).items,
@@ -601,7 +606,7 @@ describe('the shared filter allowance (RES-3)', () => {
 			const visible = ids as VisibleStatusId[]
 			const shared = presentation(db, visible, options)
 			const items = presentStatusesWithin(db, shared, visible, ANSWER_BYTES, true).items
-			return { items, level: shared.level, units: shared.matched.units, whole: presentStatuses(db, visible, options) }
+			return { items, level: shared.level, units: shared.matched.units, whole: presentedWhole(db, visible, options) }
 		})
 		expect(result.items).toHaveLength(41)
 		expect(result.items).toEqual(result.whole)
