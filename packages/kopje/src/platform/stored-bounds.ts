@@ -123,9 +123,10 @@ export function pollOptionsSql(column: string): string {
 
 const ENCODER = new TextEncoder()
 
-// UTF-8 bytes as SQLite stores the string (a lone surrogate takes three bytes, as U+FFFD or as workerd binds it).
-function utf8Bytes(text: string): number {
-	return ENCODER.encode(text).length
+// `value` when its UTF-8 bytes as SQLite stores it are at most `bytes` (a lone surrogate takes three bytes, as U+FFFD
+// or as workerd binds it), else none.
+function withinBytes(value: string | null, bytes: number): string | null {
+	return value !== null && ENCODER.encode(value).length <= bytes ? value : null
 }
 
 // Text as stored: well-formed and without U+0000. workerd binds a lone surrogate as its three-byte surrogate encoding,
@@ -166,17 +167,17 @@ export function storedMediaDescription(text: string): string {
 
 // accounts.url, avatar_url and header_url as stored: none past PROFILE_URL_LIMIT.
 export function storedProfileUrl(url: string | null): string | null {
-	return url !== null && utf8Bytes(url) <= PROFILE_URL_LIMIT ? url : null
+	return withinBytes(url, PROFILE_URL_LIMIT)
 }
 
 // statuses.url as stored: none past STATUS_URL_LIMIT.
 export function storedStatusUrl(url: string | null): string | null {
-	return url !== null && utf8Bytes(url) <= STATUS_URL_LIMIT ? url : null
+	return withinBytes(url, STATUS_URL_LIMIT)
 }
 
 // media_attachments.preview_url as stored, and a media URL where none is a value: none past MEDIA_URL_LIMIT.
 export function storedMediaLink(url: string | null): string | null {
-	return url !== null && utf8Bytes(url) <= MEDIA_URL_LIMIT ? url : null
+	return withinBytes(url, MEDIA_URL_LIMIT)
 }
 
 // media_attachments.url as stored (NOT NULL): '' past MEDIA_URL_LIMIT. A row with a file token holds a URL Kopje
@@ -187,5 +188,5 @@ export function storedMediaUrl(url: string): string {
 
 // media_attachments.meta as stored: none past MEDIA_META_BYTES.
 export function storedMediaMeta(meta: string | null): string | null {
-	return meta !== null && utf8Bytes(meta) <= MEDIA_META_BYTES ? meta : null
+	return withinBytes(meta, MEDIA_META_BYTES)
 }
