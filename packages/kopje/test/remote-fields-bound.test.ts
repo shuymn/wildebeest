@@ -5,10 +5,8 @@ import { ALICE, setup, type Setup } from './inbox-status-helpers'
 import {
 	ACCOUNT_COLUMNS,
 	ACCOUNT_FROM,
-	type AccountRow,
 	type Field,
 	MAX_REMOTE_FIELDS,
-	presentAccount,
 	REMOTE_FIELDS_BYTES,
 } from '../src/domain/accounts'
 import { ANSWER_BYTES } from '../src/domain/answer-budget'
@@ -20,7 +18,6 @@ import { sanitizeRemoteHtml } from '../src/security/html'
 // presenter shows, whatever the size of the stored actor document (RES-2), and shows the same fields as the whole
 // attachment does.
 
-const ORIGIN = 'https://kopje.test'
 const DOMAIN = 'fields.example'
 // A field at both character limits that escapes to six bytes a character in JSON: the projection's worst case.
 const ESCAPED = { type: 'PropertyValue', name: '\u0001'.repeat(255), value: '\u0001'.repeat(4096) }
@@ -79,15 +76,15 @@ function wholeFields(attachment: string | null): Field[] {
 	return fields
 }
 
-// The account's fields as the presenter shows them from the bounded projection, and from the whole attachment.
+// The account's fields as the API shows them from the bounded projection, and from the whole attachment.
 async function bothWays(t: Setup, id: string): Promise<{ bounded: Field[]; whole: Field[] }> {
-	const [row] = await sql<AccountRow & { whole: string | null }>(
+	const [row] = await sql<{ whole: string | null }>(
 		t.store,
-		`SELECT ${ACCOUNT_COLUMNS}, a.raw -> '$.attachment' AS whole FROM ${ACCOUNT_FROM} WHERE a.id = ?`,
+		"SELECT raw -> '$.attachment' AS whole FROM accounts WHERE id = ?",
 		id
 	)
-	const { whole, ...bounded } = row!
-	return { bounded: presentAccount(bounded, { origin: ORIGIN }).fields, whole: wholeFields(whole) }
+	const { body } = await t.api<{ fields: Field[] }>(`/api/v1/accounts/${id}`)
+	return { bounded: body.fields, whole: wholeFields(row!.whole) }
 }
 
 describe('remote profile fields are projected bounded (RES-2)', () => {
