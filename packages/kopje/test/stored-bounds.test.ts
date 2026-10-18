@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest'
 
 import { bearer } from './api-helpers'
 import { NOW } from './app-helpers'
-import { freshStore, migratedStore } from './helpers'
+import { BUILD, freshStore, migratedStore } from './helpers'
 import { community } from './status-helpers'
 import { loneSurrogates, movedCountSql, seedBounded, STATUS, TABLES } from './stored-bounds-fixtures'
 import { MIGRATIONS } from '../src/db/migrations'
@@ -64,6 +64,7 @@ import {
 	SPOILER_BYTES,
 	STATUS_CONTENT_BYTES,
 } from '../src/security/html'
+import { sha256Hex } from '../src/security/tokens'
 
 // RES-2 (src/platform/stored-bounds.ts): for every covered column, evaluated in the Store's SQLite, a writer's output
 // as stored is a fixed point of the column's projection P, and P(P(x)) = P(x). The inputs are random strings with
@@ -605,5 +606,42 @@ describe('a legacy display name after 0048_stored_bounds (RES-2)', () => {
 		const response = await h.request('/api/v1/accounts/update_credentials', bearer(token, { method: 'PATCH', body }))
 		expect(response.status).toBe(200)
 		expect(await bytes()).toBe(stored)
+	})
+})
+
+// A media URL of lone surrogate bytes within its bound (921 stored bytes, which a read into the Worker would decode to
+// 2,721) is copied to the profile within SQL when made the avatar, so the account's trigger accepts it.
+describe('a legacy media URL made a profile image after 0048_stored_bounds (RES-2)', () => {
+	it("stores the media row's bytes as the avatar", async () => {
+		const h = await community(['alice'])
+		const { id, token } = h.users.alice
+		const media = '300000000000000001'
+		const url = new Uint8Array([...new TextEncoder().encode('https://kopje.test/m/'), ...loneSurrogates(300)])
+		expect(url.length).toBe(921)
+		await runInDurableObject(h.store, (_instance, state) => {
+			state.storage.sql.exec(
+				"INSERT INTO media_attachments (id, account_id, type, url) VALUES (?, ?, 'image', CAST(? AS TEXT))",
+				media,
+				id,
+				url
+			)
+		})
+		const credential = { tokenHash: await sha256Hex(token), scope: 'write', now: NOW } as const
+		expect(await h.store.setProfileImage(BUILD, { credential, id: media, kind: 'avatar', now: NOW })).toEqual({
+			status: 'ok',
+			value: true,
+		})
+		const stored = await runInDurableObject(h.store, (_instance, state) =>
+			state.storage.sql
+				.exec<{ avatar: string; media: string }>(
+					`SELECT hex(CAST(a.avatar_url AS BLOB)) AS avatar, hex(CAST(m.url AS BLOB)) AS media
+					FROM accounts a, media_attachments m WHERE a.id = ? AND m.id = ?`,
+					id,
+					media
+				)
+				.one()
+		)
+		expect(stored.avatar).toBe(stored.media)
+		expect(stored.avatar.length).toBe(2 * 921)
 	})
 })
