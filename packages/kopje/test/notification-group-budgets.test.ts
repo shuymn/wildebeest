@@ -12,7 +12,7 @@ import {
 	type Walked,
 } from './budget-helpers'
 import { community, mute, remoteAccount, seedStatus, type User } from './status-helpers'
-import { ANSWER_BYTES } from '../src/domain/answer-budget'
+import { ANSWER_BYTES, jsonBytes } from '../src/domain/answer-budget'
 import { GROUP_WALK } from '../src/domain/notification-groups'
 
 // RES-3: a page of grouped notifications is within ANSWER_BYTES. Groups are admitted in discovery order, each with
@@ -270,6 +270,54 @@ describe('grouped notifications within ANSWER_BYTES (RES-3)', () => {
 		// It continues from there: the next page starts at the second group.
 		const next = await answer<Grouped>(h, up.prev!, alice.token)
 		expect(String(next.body.notification_groups.at(-1)!.most_recent_notification_id)).toBe(pads[1])
+	}, 300_000)
+
+	it('refunds a partial account a later group promotes, so a page that fits only with the refund is whole', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const fan = await remoteAccount(h.store, 'fan')
+		const [x, y] = await maximalAccounts(h, 'promoted', 2)
+		// Walked oldest first: G1 (x, then y: y shown whole, x partial), eight groups of about 0.97 MB, a group T whose
+		// poll tunes the answer's size, and G2 (x alone), which shows x whole in place of its partial account.
+		const s1 = await seedStatus(h.store, { accountId: alice.id, visibility: 'public' })
+		await favourite(h, alice.id, x!, s1)
+		await favourite(h, alice.id, y!, s1)
+		for (let i = 0; i < 8; i++) {
+			await favourite(h, alice.id, fan, await bigStatus(h, alice.id, NOW - 120_000))
+		}
+		const tuner = await bigStatus(h, alice.id, NOW - 120_000)
+		const options = (texts: string[]) =>
+			sql(h.store, 'UPDATE polls SET options = ? WHERE status_id = ?', JSON.stringify(texts), tuner)
+		await options(Array.from({ length: 100 }, () => ''))
+		await favourite(h, alice.id, fan, tuner)
+		const s2 = await seedStatus(h.store, { accountId: alice.id, visibility: 'public' })
+		await favourite(h, alice.id, x!, s2)
+		const path = '/api/v2/notifications?limit=20&min_id=0&expand_accounts=partial_avatars'
+		const groupsOf = (page: Answer<Grouped>) => page.body.notification_groups.map((group) => group.group_key)
+		const before = await answer<Grouped>(h, path, alice.token)
+		expect(groupsOf(before)).toContain(`favourite-${s2}-1`)
+		// x's partial account, as G1 and the next group show it.
+		const alone = await answer<Grouped>(
+			h,
+			'/api/v2/notifications?limit=2&min_id=0&expand_accounts=partial_avatars',
+			alice.token
+		)
+		const partial = jsonBytes(alone.body.partial_accounts!.find((account) => account.id === x))
+		// Grow T's poll until the answer is within 100 bytes of ANSWER_BYTES: each choice's title adds its JSON bytes
+		// (six for a control character, one for ASCII).
+		const delta = ANSWER_BYTES - 100 - before.bytes
+		expect(delta).toBeGreaterThan(0)
+		expect(delta).toBeLessThan(100 * 6 * 1_000)
+		const each = Math.floor(delta / 100)
+		const title = (bytes: number) => '\u0001'.repeat(Math.floor(bytes / 6)) + 'x'.repeat(bytes % 6)
+		await options(Array.from({ length: 100 }, (_, i) => title(each + (i === 0 ? delta - 100 * each : 0))))
+		const after = await answer<Grouped>(h, path, alice.token)
+		expect(after.bytes).toBe(ANSWER_BYTES - 100)
+		// Counted without the refund, x's partial account would pass the budget and leave G2 out.
+		expect(after.bytes + partial + 1).toBeGreaterThan(ANSWER_BYTES)
+		expect(groupsOf(after)).toEqual(groupsOf(before))
+		expect(after.body.accounts.map((account) => account.id)).toContain(x)
+		expect(after.body.partial_accounts!.map((account) => account.id)).not.toContain(x)
 	}, 300_000)
 
 	it('moves a partial account to the accounts when a later group shows it first', async () => {
