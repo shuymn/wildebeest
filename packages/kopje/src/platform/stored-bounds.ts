@@ -221,7 +221,7 @@ export const STORED_COLUMNS: Readonly<Record<string, readonly StoredColumn[]>> =
 	],
 	media_attachments: [
 		// A row with a file token holds a URL Kopje built (storedMediaUrl), within the bound, as the migration checks
-		// first: only rows without one are rewritten.
+		// first.
 		{
 			column: 'url',
 			projection: mediaUrlSql,

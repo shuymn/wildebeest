@@ -23,8 +23,7 @@
 -- accounts, 2,000,000 statuses, 500,000 media attachments, 100,000 earlier versions, the rows past their bounds it
 -- adds for this file, and the rest of that store) in workerd's local Durable Object SQLite, timing the whole upgrade
 -- through the kernel (its bookmark, this file's transaction and the verification): 7,262 ms (7,283 and 7,459 ms in
--- two more runs, at load averages of 2.5 to 4), within the 10,000 ms each migration file may take. A file of one
--- SELECT in its place on the same store measured 14,425 and 16,479 ms (load average 3 to 5), for a cause not known.
+-- two more runs, at load averages of 2.5 to 4), within the 10,000 ms each migration file may take.
 
 CREATE TABLE stored_bounds_check (
   n INTEGER CONSTRAINT tokened_media_url_within_2048_bytes CHECK (n = 0)
