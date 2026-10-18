@@ -1,3 +1,4 @@
+import { ANSWER_BYTES } from './answer-budget'
 import {
 	addresses,
 	addressingOf,
@@ -18,6 +19,7 @@ import { readOperation } from './operation'
 import { type NoteQuote, noteQuote } from './quotes'
 import { readWindow, singleWindow, windowJson } from './windows'
 import type { Db } from '../db/sql'
+import { utf8Length } from '../platform/dump-format'
 import { httpUrl } from '../platform/http-url'
 import { sha256Hex } from '../platform/sha256'
 
@@ -883,6 +885,11 @@ export const getLegacyObject = readOperation<{ uuid: string; origin: string }, L
 
 export const OUTBOX_PAGE_SIZE = 20
 
+// The bytes of an outbox page's serialized activities at most (RES-3): ANSWER_BYTES less a reserve for the
+// collection page around them, which the Worker builds. Activities are admitted newest first while they fit, the first
+// whatever its size (one Create of a local status, a unit); a page cut there continues from its last activity.
+export const OUTBOX_BYTES = ANSWER_BYTES - 64 * 1024
+
 // Items are serialized JSON: RPC types cannot carry `unknown`.
 export type OutboxPage = { total: number | null; items: string[]; next: string | null }
 
@@ -943,9 +950,20 @@ export const getOutbox = readOperation<{ username: string; before: string | null
 						windowJson(window)
 					)
 		const items: string[] = []
+		let bytes = 0
+		let consumed = 0
+		const admitted = (item: string): boolean => {
+			const size = utf8Length(item) + 1
+			if (bytes + size > OUTBOX_BYTES && items.length > 0) {
+				return false
+			}
+			bytes += size
+			items.push(item)
+			return true
+		}
 		for (const row of rows.slice(0, OUTBOX_PAGE_SIZE)) {
 			if (row.original_uri !== null && row.original_author_uri !== null && row.original_author_id !== null) {
-				items.push(
+				const announce = admitted(
 					JSON.stringify(
 						announceActivity(
 							boostAnnounce(
@@ -964,20 +982,28 @@ export const getOutbox = readOperation<{ username: string; before: string | null
 						).activity
 					)
 				)
+				if (!announce) {
+					break
+				}
+				consumed++
 				continue
 			}
 			const facts = statusFacts(db, row.id, { reached: false })
-			if (facts !== null) {
-				items.push(JSON.stringify(createActivity(facts).activity))
+			if (facts !== null && !admitted(JSON.stringify(createActivity(facts).activity))) {
+				break
 			}
+			consumed++
 		}
 		const last = rows[OUTBOX_PAGE_SIZE - 1]
+		// Cut by bytes, the page continues from its last activity, before the window's continuation.
 		const next =
-			rows.length > OUTBOX_PAGE_SIZE && last !== undefined
-				? last.id
-				: window.cut
-					? (window.candidates.at(-1)?.id ?? null)
-					: null
+			consumed < Math.min(rows.length, OUTBOX_PAGE_SIZE)
+				? (rows[consumed - 1]?.id ?? null)
+				: rows.length > OUTBOX_PAGE_SIZE && last !== undefined
+					? last.id
+					: window.cut
+						? (window.candidates.at(-1)?.id ?? null)
+						: null
 		return { total: null, items, next }
 	}
 )
