@@ -7,7 +7,7 @@ import {
 	type SearchInput,
 } from './accounts'
 import { admit, ANSWER_BYTES, jsonBytes } from './answer-budget'
-import { findableBySql, listableSql, statusReads, type VisibleStatusId } from './audience'
+import { findableBySql, listableSql, statusReads } from './audience'
 import { type UserContext, userReadOperation } from './auth'
 import { statusQueryTerms } from './search-text'
 import { tagNameSql } from './status-bounds'
@@ -141,7 +141,7 @@ function librarySources(limit: string, cursor: (column: string) => string, menti
 			${mentioned}`
 }
 
-function searchStatuses(db: Db, input: SearchRequest, viewer: UserContext): VisibleStatusId[] {
+function searchStatuses(db: Db, input: SearchRequest, viewer: UserContext) {
 	const { accountId: viewerId, now } = viewer
 	const { include, exclude } = statusQueryTerms(input.query)
 	if (include.length === 0) {

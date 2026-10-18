@@ -80,32 +80,41 @@ function windowStatuses(
 					...params
 				)
 	const page = windowPage(window, passed, (row) => row.id, cursor.limit, cursor.ascending)
-	return presentedPage(db, viewer, page, cursor.ascending, present)
+	return presentedPage(
+		db,
+		viewer,
+		page,
+		page.rows.map((row) => row.id),
+		page.rows.map((row) => row.id),
+		cursor.ascending,
+		present
+	)
 }
 
-// A page of statuses (`rows`, newest first, each with its cursor) presented within the answer budget, admitted in
-// traversal order (admittedPage).
-function presentedPage<R extends { id: VisibleStatusId }>(
+// A page of statuses (`ids`, newest first, and each one's cursor in `keys`) presented within the answer budget,
+// admitted in traversal order (admittedPage).
+function presentedPage(
 	db: Db,
 	viewer: ViewerContext,
-	page: { rows: readonly R[]; newest: string | null; oldest: string | null; cut?: boolean },
+	page: { newest: string | null; oldest: string | null; cut?: boolean },
+	ids: readonly VisibleStatusId[],
+	keys: readonly string[],
 	ascending: boolean,
-	present: Present,
-	key: (row: R) => string = (row) => row.id
+	present: Present
 ): Page<Status> {
-	const shared = presentation(
-		db,
-		page.rows.map((row) => row.id),
-		{ ...present, viewer }
-	)
-	return admittedPage(page, ascending, key, (traversal) =>
-		presentStatusesWithin(
-			db,
-			shared,
-			traversal.map((row) => row.id),
-			ARRAY_ANSWER_BYTES,
-			true
-		)
+	const shared = presentation(db, ids, { ...present, viewer })
+	return admittedPage(
+		{ ...page, rows: ids.map((_, i) => i) },
+		ascending,
+		(i) => keys[i] ?? '',
+		(traversal) =>
+			presentStatusesWithin(
+				db,
+				shared,
+				traversal.flatMap((i) => ids[i] ?? []),
+				ARRAY_ANSWER_BYTES,
+				true
+			)
 	)
 }
 
@@ -660,10 +669,13 @@ export const accountStatuses = optionalUserReadOperation<AccountStatusesInput, P
 				now
 			)
 			const shown = cursor.ascending ? rows.toReversed() : rows
+			const ids = shown.map((row) => row.id)
 			return presentedPage(
 				db,
 				viewer,
-				{ rows: shown, newest: shown[0]?.id ?? null, oldest: shown.at(-1)?.id ?? null },
+				{ newest: ids[0] ?? null, oldest: ids.at(-1) ?? null },
+				ids,
+				ids,
 				cursor.ascending,
 				input.present
 			)
@@ -765,7 +777,15 @@ function edgeList(table: 'bookmarks' | 'favourites') {
 							windowJson(window)
 						)
 			const shown = windowPage(window, passed, (row) => row.cursor, page.limit, ascending)
-			return presentedPage(db, viewer, shown, ascending, present, (row) => row.cursor)
+			return presentedPage(
+				db,
+				viewer,
+				shown,
+				shown.rows.map((row) => row.id),
+				shown.rows.map((row) => row.cursor),
+				ascending,
+				present
+			)
 		}
 	)
 }
