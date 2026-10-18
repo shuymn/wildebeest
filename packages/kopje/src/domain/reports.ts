@@ -335,10 +335,9 @@ export const REPORT_STATUS_BYTES = 2 * 1024 * 1024
 // admission reaches it, with its four accounts read for it alone and its statuses within REPORT_STATUS_BYTES. A
 // report's statuses are shown only while its reporter may still see them by the account statuses rule (R11,
 // accountStatusIds, with the reporter as the viewer at the admin's request time), and presented with the admin as the
-// viewer, under one presentation of the rows' statuses: Mastodon shows them regardless, discarded ones included
-// (Report#statuses, app/models/report.rb:78-80); Kopje keeps the rule the report was made under (R37). The rules are
-// the instance's that the report names, in the instance's order; Mastodon keeps discarded rules
-// (Rule.with_discarded), which Kopje does not store.
+// viewer: Mastodon shows them regardless, discarded ones included (Report#statuses, app/models/report.rb:78-80);
+// Kopje keeps the rule the report was made under (R37). The rules are the instance's that the report names, in the
+// instance's order; Mastodon keeps discarded rules (Rule.with_discarded), which Kopje does not store.
 function* adminReportStream(
 	db: Db,
 	rows: readonly ReportRow[],
@@ -348,11 +347,6 @@ function* adminReportStream(
 	const rules = rows.some((row) => row.rule_ids !== null) ? instanceRules(db) : []
 	const shown = rows.map((row) =>
 		accountStatusIds(db, viewerOf(admin, row.account_id), row.target_account_id, JSON.parse(row.status_ids) as string[])
-	)
-	const shared = presentation(
-		db,
-		shown.flatMap((statuses) => statuses.map((status) => status.id)),
-		{ ...present, viewer: admin.context }
 	)
 	for (const [i, row] of rows.entries()) {
 		const ids = [
@@ -364,6 +358,21 @@ function* adminReportStream(
 		const [account, target, assigned, actor] = [...adminAccountStream(db, ids, admin.accountId, present, ids.length)]
 		const ruleIds = new Set(row.rule_ids === null ? [] : (JSON.parse(row.rule_ids) as string[]))
 		const statuses = (shown[i] ?? []).map((status) => status.id)
+		// Each report under its own presentation: its filter text allowance is its own, as when it is read alone.
+		const shared = presentation(db, statuses, { ...present, viewer: admin.context })
+		// The first status whatever its size (a unit); the next ones only while room is left, so a first status that
+		// uses up the allowance stops the report's statuses without reading the next.
+		const first = presentStatusesWithin(db, shared, statuses.slice(0, 1), REPORT_STATUS_BYTES, true, 1)
+		const rest =
+			first.bytes >= REPORT_STATUS_BYTES
+				? []
+				: presentStatusesWithin(
+						db,
+						shared,
+						statuses.slice(1),
+						REPORT_STATUS_BYTES - first.bytes,
+						first.items.length === 0
+					).items
 		yield {
 			id: row.id,
 			action_taken: row.action_taken_at !== null,
@@ -377,7 +386,7 @@ function* adminReportStream(
 			target_account: target!,
 			assigned_account: assigned ?? null,
 			action_taken_by_account: actor ?? null,
-			statuses: presentStatusesWithin(db, shared, statuses, REPORT_STATUS_BYTES, true).items,
+			statuses: [...first.items, ...rest],
 			rules: rules.filter((rule) => ruleIds.has(rule.id)),
 		}
 	}

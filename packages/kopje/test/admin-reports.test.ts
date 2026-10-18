@@ -5,9 +5,10 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { adminClaims, adminHarness, adminTeam, setTeamAccess, type AccessTeam } from './access-helpers'
 import { type ApiHarness, bearer, form, json, login, registerApp, seedAccount, setSetting, sql } from './api-helpers'
 import { NOW } from './app-helpers'
-import { type Answer, answer, hugeStatus } from './budget-helpers'
+import { type Answer, answer, hugeStatus, ORIGIN } from './budget-helpers'
 import { migratedStore } from './helpers'
 import { ACCESS, ADMIN_EMAIL } from './ops-helpers'
+import { observedSql } from './read-helpers'
 import { community, remoteAccount, remoteFollows, seedStatus, type User } from './status-helpers'
 import { Db } from '../src/db/sql'
 import type { PageQuery } from '../src/domain/accounts'
@@ -17,6 +18,7 @@ import { logAction, MODERATION_LOG_KEEP, MODERATION_LOG_PRUNE } from '../src/dom
 import {
 	ADMIN_REPORT_STATUS_BUDGET,
 	type AdminReportFilter,
+	getAdminReport,
 	listAdminReports,
 	REPORT_COLUMNS,
 	REPORT_STATUS_BYTES,
@@ -779,5 +781,46 @@ describe('report answers within ANSWER_BYTES (RES-3)', () => {
 		const [last] = await sql<{ id: string }>(w.h.store, 'SELECT CAST(max(id) AS TEXT) AS id FROM reports')
 		const smallOnes = await reportOf(w.h, last!.id, w.admin)
 		expect(smallOnes.statuses.map((status) => status.id).toSorted()).toEqual([small, ...w.statuses].toSorted())
+		// A first status that uses up the allowance stops the report's statuses: the next one is not read.
+		const credential = { tokenHash: await sha256Hex(w.admin), scope: 'admin:read:reports', now: NOW }
+		const read = await runInDurableObject(w.h.store, (_instance, state) => {
+			const ids: unknown[] = []
+			const counting = observedSql(state.storage.sql, (rows) => {
+				for (const row of rows) {
+					if ('content' in row) {
+						ids.push(row.id)
+					}
+				}
+			})
+			getAdminReport.run(counting, { credential, id: reports[0]!, present: { origin: ORIGIN } } as never)
+			return ids
+		})
+		expect(read).toContain(huge)
+		expect(read).not.toContain(small)
+	}, 300_000)
+
+	it('present each report under its own filter allowance, a list as its reports one by one', async () => {
+		const w = await world()
+		// The admin filters "needle", which each status holds near its 10,000th character: one status alone is matched
+		// whole, fifty under one allowance (400,000 characters) would each be cut before it.
+		const filter = await w.h.request('/api/v2/filters', {
+			method: 'POST',
+			headers: { authorization: `Bearer ${w.admin}`, 'content-type': 'application/json' },
+			body: JSON.stringify({ title: 'n', context: ['home'], keywords_attributes: [{ keyword: 'needle' }] }),
+		})
+		expect(filter.status).toBe(200)
+		const status = await seedStatus(w.h.store, {
+			accountId: w.carol,
+			visibility: 'public',
+			content: `<p>${'a '.repeat(4_500)}needle ${'a '.repeat(490)}</p>`,
+		})
+		await seedReports(w.h.store, w.alice.id, w.carol, 50, { statuses: [status] })
+		const list = await answer<AdminReportBody[]>(w.h, '/api/v1/admin/reports?limit=100', w.admin)
+		expect(list.body).toHaveLength(50)
+		const matched = (report: AdminReportBody) =>
+			(report.statuses[0] as unknown as { filtered?: unknown[] }).filtered?.length ?? 0
+		const one = await reportOf(w.h, list.body[0]!.id, w.admin)
+		expect(matched(one)).toBe(1)
+		expect(list.body.map(matched)).toEqual(list.body.map(() => 1))
 	}, 300_000)
 })
