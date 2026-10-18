@@ -26,7 +26,8 @@ Continuations:
 - **Offset**: the answer holds fewer results. A client that advances its offset by the number received (Tusky,
   Ivory) continues after them. Mastodon's web client takes a short answer for the last one and shows no more. This
   happens only past 8 MiB, which realistic content does not reach.
-- **None**: the answer has no paging; what is left out is a Kopje bound.
+- **None**: the answer has no paging; what is left out is a Kopje bound. Pinned statuses are one: a status-id cursor
+  cannot follow pin order.
 
 The raw presenters (`presentStatuses`, `presentAccountsById` and `presentAccount`) are used only inside their modules
 (`test-node/raw-presenters.test.ts`); no operation is exempt.
