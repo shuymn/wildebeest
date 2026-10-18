@@ -302,8 +302,8 @@ export const listBlocks = userReadOperation<{ page: PageQuery; present: Present 
 	(db, { page, present }, { accountId }) => {
 		const ascending = page.minId !== undefined
 		const rows = db.all<{ cursor: string; id: string }>(
-			`SELECT CAST(b.id AS TEXT) AS cursor, b.target_account_id AS id FROM blocks b
-			WHERE b.account_id = ?1 AND ${edgeRangeSql('b.id', '?2', '?3')}
+			`SELECT CAST(b.id AS TEXT) AS cursor, b.target_account_id AS id
+			FROM blocks b WHERE b.account_id = ?1 AND ${edgeRangeSql('b.id', '?2', '?3')}
 			ORDER BY b.id ${ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
 			accountId,
 			page.maxId ?? null,
@@ -321,8 +321,8 @@ export const listMutes = userReadOperation<{ page: PageQuery; present: Present }
 	(db, { page, present }, _viewer, { accountId, now }) => {
 		const ascending = page.minId !== undefined
 		const rows = db.all<{ cursor: string; id: string; mute_expires_at: string | null }>(
-			`SELECT CAST(m.id AS TEXT) AS cursor, m.target_account_id AS id, m.expires_at AS mute_expires_at FROM mutes m
-			WHERE m.account_id = ?1 AND ${activeMuteSql('m', '?5')}
+			`SELECT CAST(m.id AS TEXT) AS cursor, m.target_account_id AS id, m.expires_at AS mute_expires_at
+			FROM mutes m WHERE m.account_id = ?1 AND ${activeMuteSql('m', '?5')}
 				AND ${edgeRangeSql('m.id', '?2', '?3')}
 			ORDER BY m.id ${ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
 			accountId,
