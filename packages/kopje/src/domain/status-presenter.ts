@@ -322,7 +322,7 @@ function statusGraph<R extends GraphRow>(
 
 // How statusStream reads the rows of an answer's statuses ("Heap at 8 MiB per answer" in docs/threat-model.md): in
 // chunks of consecutive statuses whose R (statusRowBoundSql in status-rows.ts, a bound of the heap the rows each reads
-// take, as RowMeter counts it) sums to at most `target`, at most MAX_CHUNK_ITEMS of them and at least one. A chunk of
+// take, as RowMeter counts it) sums to at most `target`, within one window of R_WINDOW and at least one. A chunk of
 // several is read through a RowMeter of `cap`, which only a fault in R passes; past it the chunk is read again one
 // status at a time (a status alone is not capped: its rows are bounded as a unit, "Maxima of presented units").
 export type ChunkPlan = { readonly target: number; readonly cap: number }
@@ -332,9 +332,8 @@ export const PAGE_CHUNKS: ChunkPlan = { target: 3 * 1024 * 1024, cap: 3 * 1024 *
 // Grouped notifications and admin reports, which keep the most besides their statuses: 1 MiB.
 export const LARGE_ITEM_CHUNKS: ChunkPlan = { target: 1024 * 1024, cap: 1024 * 1024 }
 
-// R is read for at most this many statuses at a time, and a chunk holds at most as many (a page's limit).
+// R is read for at most this many statuses at a time (a page's limit), and a chunk lies within one window.
 const R_WINDOW = 80
-const MAX_CHUNK_ITEMS = 80
 
 // Admission of statuses (RES-3, admit): the statuses of `ids` in traversal order, their rows read in chunks
 // (statusStream), each presented as one atomic item (with its boosted original and quoted status) when it is reached,
@@ -389,8 +388,8 @@ function* fixedChunks(ids: readonly string[], size: number): Generator<string[]>
 	}
 }
 
-// Consecutive statuses of `ids` whose R sums to at most `target`, at most MAX_CHUNK_ITEMS and at least one, R read a
-// window of R_WINDOW statuses at a time as the stream reaches it.
+// Consecutive statuses of `ids` whose R sums to at most `target`, at least one, R read a window of R_WINDOW statuses at
+// a time as the stream reaches it; a chunk never spans two windows.
 function* plannedChunks(db: Db, shared: Presentation, ids: readonly string[], target: number): Generator<string[]> {
 	const filterRows = shared.filters?.filters.filter((filter) => filter.hasStatuses).length ?? 0
 	for (let next = 0; next < ids.length; next += R_WINDOW) {
@@ -400,7 +399,7 @@ function* plannedChunks(db: Db, shared: Presentation, ids: readonly string[], ta
 		let sum = 0
 		for (const [i, id] of window.entries()) {
 			const bytes = bounds[i] ?? 0
-			if (chunk.length > 0 && (sum + bytes > target || chunk.length >= MAX_CHUNK_ITEMS)) {
+			if (chunk.length > 0 && sum + bytes > target) {
 				yield chunk
 				chunk = []
 				sum = 0

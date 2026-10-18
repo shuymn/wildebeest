@@ -10,7 +10,8 @@ import { ALICE, setup, type Setup } from './inbox-status-helpers'
 import { MAX_BIO, maxFields } from './profile-fixtures'
 import { observedSql, rowsRead } from './read-helpers'
 import { community, post, remoteAccount } from './status-helpers'
-import { Db, rowHeapBytes } from '../src/db/sql'
+import { heap } from './status-row-fixtures'
+import { Db } from '../src/db/sql'
 import { createActivity, getFeatured, noteOf, OUTBOX_BYTES, PIN_LIMIT, statusFacts } from '../src/domain/activities'
 import { ANSWER_BYTES } from '../src/domain/answer-budget'
 import { type VisibleStatusId } from '../src/domain/audience'
@@ -1021,10 +1022,8 @@ describe('the table of maxima (RES-3)', () => {
 				let bytes = 0
 				let rows = 0
 				const counting = observedSql(real, (read) => {
-					for (const row of read) {
-						rows++
-						bytes += rowHeapBytes(row)
-					}
+					rows += read.length
+					bytes += heap(read)
 				})
 				presentStatusesWithin(new Db(counting), shared, visible, Infinity, true, 1)
 				const [bound] = real

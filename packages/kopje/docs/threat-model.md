@@ -1370,8 +1370,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   (statuses in chunks planned by a bound of their rows' heap and capped by a runtime meter of the same heap), so
   what is held past the admitted answer is one chunk of rows and one item at their maxima ("Heap at 8 MiB per
   answer"). _Gap:_ under that section's heap model, a page of grouped notifications or of admin reports passes half of
-  the Store isolate's 128 MB (72.9 and 72.0 MB, 75.2 and 74.3 MB when the backstop fires), below 128 MB: their single
-  item dominates, so no chunk target or cap lowers it. A measured factor for presented objects and the strings they
+  the Store isolate's 128 MB, below 128 MB (the peaks table there): their single item dominates, so no chunk target or cap lowers it. A measured factor for presented objects and the strings they
   share with rows, or lower unit maxima, would close it. Each operation's mechanism and continuation, the families' admission rules (grouped notifications'
   discovery positions and passes, reports' status allowance, pinned statuses, contexts, histories, offset endpoints)
   and the ActivityPub collections are in [response-inventory.md](response-inventory.md) ("Statuses", "Notifications",
@@ -1783,34 +1782,34 @@ every item is below it. The model:
 - An item is measured without building its JSON (`jsonBytes` in `src/domain/answer-budget.ts`): a string of several
   MB, which takes up to two bytes a character once one character is wider than Latin-1, is never made.
 
-Chunks. `statusStream` (`src/domain/status-presenter.ts`) reads an answer's statuses in chunks of consecutive
-statuses, each presented and measured only when admission reaches it, so while the first rejected status is measured
-the admitted answer, one chunk's rows and the rejected status's objects coexist. A chunk is planned by R, an upper
-bound on the heap that the rows of one status take as the meter below counts it (per row 64 B, and per value 32 B
-and twice its UTF-8 bytes, which are at least its UTF-16 code units): the status, its boosted original, and the
-quoted status of the status or, for a boost, of its original (a boost has no quote of its own, R35). One query per
-window of 80 statuses computes it (`statusRowBoundSql` in `src/domain/status-rows.ts`) from the same column maps
-that generate every hydrate query's select list (`src/db/columns.ts`), so it cannot drift from what is read; it
-counts a row whether or not the viewer is shown it. A chunk holds statuses while their R sums to at most its target,
-at most 80 and at least one: 3 MiB of heap for pages, contexts, search, histories and lookups, and 1 MiB for grouped
-notifications and admin reports, which hold the most besides their statuses. A chunk of several is read through a
-`RowMeter` (`src/db/sql.ts`), which adds each row's heap under the model as the cursor returns it (workerd's cursor
-runs the statement lazily, one row ahead of the one it returns) and throws past its cap, which equals the target, so
-only a term R misses passes it. The chunk is then dropped, `kopje.presenter.row-cap-exceeded` is logged with its ids, and its
-statuses are read one at a time. A status alone is not capped: its rows are bounded as a unit (the maxima above). The
-meter bounds the row objects and strings a chunk's queries return, past the cap by at most the row that passed it (at
-most 0.8 MB: a poll of 100 choices of 1,000 code points, or a status with content and source at their bounds); it does
-not bound SQLite's page cache, statement and sorter scratch, the parsing buffers of `json_each` and the `json_*`
-functions, the conversion of the current row, or garbage awaiting collection. No hydrate query sorts a chunk's
-payload: media, mentions, hashtags and own votes are put in order in JavaScript, and a temporary B-tree holds only
-ids, the two host names of one account in the visibility rule, or one row's value (an actor document's attachment
-entries, at most 2 MiB fetched and 16 kept; a poll's at most 100 choices). `test/status-rows.test.ts` ("steps lazily,
-one row ahead", "is at least the meter's count of each status alone and of each chunk, for mixed sizes", "plans 40 boosts of statuses
-with 200 mentions and 70 hashtags without the backstop", "take their
-columns from the registered maps", "sort no chunk-wide payload", "reads a chunk past its cap again one status at a
-time, with the same answer") and `test/status-bounds.test.ts` ("bounds the rows each shape reads by R") pin these.
-R counts a value's UTF-8 bytes twice where the meter counts its UTF-16 code units twice, so it overstates text that is
-not ASCII (up to three times for CJK) and plans such chunks smaller than the cap; it never understates.
+Chunks. `statusStream` (`src/domain/status-presenter.ts`) reads an answer's statuses in chunks of consecutive statuses,
+each presented and measured only when admission reaches it, so while the first rejected status is measured the admitted
+answer, one chunk's rows and the rejected status's objects coexist. A chunk is planned by R, an upper bound on the heap
+that the rows of one status take as the meter below counts it (per row 64 B, and per value 32 B and twice its UTF-8
+bytes, which are at least its UTF-16 code units): the status, its boosted original, and the quoted status of the status
+or, for a boost, of its original (a boost has no quote of its own, R35). One query per window of 80 statuses computes it
+(`statusRowBoundSql` in `src/domain/status-rows.ts`) from the same column maps that generate every hydrate query's
+select list (`src/db/columns.ts`), so it cannot drift from what is read; it counts a row whether or not the viewer is
+shown it. A chunk holds statuses while their R sums to at most its target, at most 80 and at least one: 3 MiB of heap
+for pages, contexts, search, histories and lookups, and 1 MiB for grouped notifications and admin reports, which hold
+the most besides their statuses. A chunk of several is read through a `RowMeter` (`src/db/sql.ts`), which adds each
+row's heap under the model as the cursor returns it (workerd's cursor runs the statement lazily, one row ahead of the
+one it returns) and throws past its cap, which equals the target, so only a term R misses passes it. The chunk is then
+dropped, `kopje.presenter.row-cap-exceeded` is logged with its ids, and its statuses are read one at a time. A status
+alone is not capped: its rows are bounded as a unit (the maxima above). The meter bounds the row objects and strings a
+chunk's queries return, past the cap by at most the row that passed it (at most 0.8 MB: a poll of 100 choices of 1,000
+code points, or a status with content and source at their bounds); it does not bound SQLite's page cache, statement and
+sorter scratch, the parsing buffers of `json_each` and the `json_*` functions, the conversion of the current row, or
+garbage awaiting collection. No hydrate query sorts a chunk's payload: media, mentions and hashtags are put in order in
+JavaScript, and a temporary B-tree holds only ids (own votes, sorted by id, carry ids and choices only), the two host
+names of one account in the visibility rule, or one row's value (an actor document's attachment entries, at most 2 MiB
+fetched and 16 kept; a poll's at most 100 choices). `test/status-rows.test.ts` ("steps lazily, one row ahead", "is at
+least the meter's count of each status alone and of each chunk, for mixed sizes", "plans 40 boosts of statuses with 200
+mentions and 70 hashtags without the backstop", "take their columns from the registered maps", "sort no chunk-wide
+payload", "reads a chunk past its cap again one status at a time, with the same answer") and
+`test/status-bounds.test.ts` ("bounds the rows each shape reads by R") pin these. R counts a value's UTF-8 bytes twice
+where the meter counts its UTF-16 code units twice, so it overstates text that is not ASCII (up to three times for CJK)
+and plans such chunks smaller than the cap; it never understates.
 
 A page of 40 statuses, presented through `presentation` and `presentStatusesWithin`, mean of 20 runs on a loaded
 machine; `test/status-rows.test.ts` ("read an ordinary page of 40 statuses in at most 13 queries", "a context of 200

@@ -7,7 +7,6 @@ import { type ApiHarness, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { freshStore } from './helpers'
 import { runs } from './policy-world'
-import { watchedCursor } from './read-helpers'
 import {
 	boundsOf,
 	build,
@@ -16,6 +15,8 @@ import {
 	type Item,
 	nextId,
 	observedPresentation,
+	planCounts,
+	recordingSql,
 	ORIGIN,
 	heap,
 	rowsOf,
@@ -26,6 +27,7 @@ import { Db, rowHeapBytes, RowMeter } from '../src/db/sql'
 import { ACCOUNT_COLUMN_MAP } from '../src/domain/accounts'
 import { listGroupedNotifications } from '../src/domain/notification-groups'
 import { OWN_VOTE_COLUMNS, POLL_COLUMN_MAP } from '../src/domain/polls'
+import { MAX_REMOTE_OPTIONS, MAX_STATUS_MENTION_ROWS } from '../src/domain/status-bounds'
 import { type ChunkPlan, PAGE_CHUNKS } from '../src/domain/status-presenter'
 import { hydrateQueries, PER_ROW_SORTS, statusRowBoundSql } from '../src/domain/status-rows'
 import { statusContext } from '../src/domain/statuses'
@@ -42,10 +44,10 @@ const itemArb = fc.record({
 	kind: fc.constantFrom('status', 'quote', 'boost', 'boostOfQuote'),
 	text: fc.integer({ min: 0, max: 40_000 }),
 	wide: fc.boolean(),
-	mentions: fc.integer({ min: 0, max: 200 }),
+	mentions: fc.integer({ min: 0, max: MAX_STATUS_MENTION_ROWS }),
 	tags: fc.integer({ min: 0, max: 80 }),
 	media: fc.integer({ min: 0, max: 5 }),
-	poll: fc.integer({ min: 0, max: 100 }),
+	poll: fc.integer({ min: 0, max: MAX_REMOTE_OPTIONS }),
 	viewer: fc.boolean(),
 }) satisfies fc.Arbitrary<Item>
 
@@ -477,7 +479,7 @@ describe('the backstop (RES-3)', () => {
 				ids,
 				cap,
 				same: JSON.stringify(low.items) === JSON.stringify(whole.items),
-				abandoned: { ids: abandoned!.ids, heap: rows.reduce((sum, row) => sum + rowHeapBytes(row), 0) },
+				abandoned: { ids: abandoned!.ids, heap: heap(rows) },
 				last: rowHeapBytes(rows.at(-1)!),
 				after: after.map((segment) => segment.ids),
 			}
@@ -533,13 +535,7 @@ describe('query ceilings of grouped notifications (RES-3)', () => {
 					`favourite-${id}`
 				)
 			}
-			const reads: string[] = []
-			const counting = {
-				exec: (query: string, ...params: SqlStorageValue[]) => {
-					reads.push(query)
-					return watchedCursor(real.exec(query, ...params), () => {})
-				},
-			} as unknown as SqlStorage
+			const { sql: counting, reads } = recordingSql(real)
 			const result = listGroupedNotifications.run(counting, {
 				credential: { tokenHash, scope: 'read:notifications', now: NOW },
 				page: { limit: 80 },
@@ -565,8 +561,7 @@ describe('query ceilings of grouped notifications (RES-3)', () => {
 							([name, columns]) => name !== 'accounts' && query.includes(selectSql(columns))
 						)
 				).length,
-				windows: reads.filter((query) => query === statusRowBoundSql()).length,
-				chunks: reads.filter((query) => query.includes('SELECT reblog_of_id FROM statuses WHERE id IN')).length,
+				...planCounts(reads),
 			}
 		})
 		expect(counted.groups).toBe(80)
@@ -604,23 +599,13 @@ async function countedContext(store: StoreStub, f: Fixture, tokenHash: string) {
 			})
 			sql.exec("UPDATE statuses SET in_reply_to_id = ?, in_reply_to_uri = 'r' WHERE id = ?", root, reply)
 		}
-		const reads: string[] = []
-		const counting = {
-			exec: (query: string, ...params: SqlStorageValue[]) => {
-				reads.push(query)
-				return watchedCursor(state.storage.sql.exec(query, ...params), () => {})
-			},
-		} as unknown as SqlStorage
+		const { sql: counting, reads } = recordingSql(state.storage.sql)
 		statusContext.run(counting, {
 			credential: { tokenHash, scope: 'read:statuses', now: NOW },
 			id: root,
 			present: { origin: ORIGIN },
 			now: NOW,
 		} as never)
-		return {
-			queries: reads.length,
-			windows: reads.filter((query) => query === statusRowBoundSql()).length,
-			chunks: reads.filter((query) => query.includes('SELECT reblog_of_id FROM statuses WHERE id IN')).length,
-		}
+		return { queries: reads.length, ...planCounts(reads) }
 	})
 }

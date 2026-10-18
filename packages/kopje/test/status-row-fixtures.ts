@@ -6,6 +6,7 @@ import { type SqlRow, watchedCursor } from './read-helpers'
 import { community } from './status-helpers'
 import { Db, rowHeapBytes } from '../src/db/sql'
 import { type VisibleStatusId } from '../src/domain/audience'
+import { MAX_STATUS_MENTION_ROWS } from '../src/domain/status-bounds'
 import { type ChunkPlan, presentation, presentStatusesWithin, type Status } from '../src/domain/status-presenter'
 import { statusRowBoundSql } from '../src/domain/status-rows'
 
@@ -33,7 +34,7 @@ export type Item = {
 
 export type Fixture = { viewer: string; token: string; mentioned: string[]; filter: string }
 
-// alice, 200 remote accounts to mention (on hosts of 60 characters) and one filter of hers that names the statuses
+// alice, MAX_STATUS_MENTION_ROWS remote accounts to mention (on hosts of 60 characters) and one filter of hers that names the statuses
 // built (so each carries a filter result) with a keyword.
 export async function fixture(): Promise<{ h: ApiHarness; f: Fixture }> {
 	const h = await community(['alice'])
@@ -42,7 +43,7 @@ export async function fixture(): Promise<{ h: ApiHarness; f: Fixture }> {
 	const mentioned = await runInDurableObject(h.store, (_instance, state) => {
 		const sql = state.storage.sql
 		const ids: string[] = []
-		for (let i = 0; i < 200; i++) {
+		for (let i = 0; i < MAX_STATUS_MENTION_ROWS; i++) {
 			const id = nextId()
 			const host = `${'m'.repeat(48)}${i}.example`
 			sql.exec(
@@ -217,6 +218,26 @@ export function observedPresentation(
 		segments.at(-1)!.reads.push(read)
 	}
 	return { items, reads, segments }
+}
+
+// A SqlStorage over `real` that records the statements it runs, in order.
+export function recordingSql(real: SqlStorage): { sql: SqlStorage; reads: string[] } {
+	const reads: string[] = []
+	const sql = {
+		exec: (query: string, ...params: SqlStorageValue[]) => {
+			reads.push(query)
+			return watchedCursor(real.exec(query, ...params), () => {})
+		},
+	} as unknown as SqlStorage
+	return { sql, reads }
+}
+
+// How many windows of R and chunks of the presenter the statements `reads` hold.
+export function planCounts(reads: readonly string[]): { windows: number; chunks: number } {
+	return {
+		windows: reads.filter((query) => query === statusRowBoundSql()).length,
+		chunks: reads.filter((query) => query.includes('SELECT reblog_of_id FROM statuses WHERE id IN')).length,
+	}
 }
 
 // The heap of `rows` as RowMeter counts it (rowHeapBytes), which R bounds.
