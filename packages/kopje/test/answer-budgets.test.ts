@@ -1,0 +1,545 @@
+import { runInDurableObject } from 'cloudflare:test'
+
+import { describe, expect, it } from 'vitest'
+
+import { type ApiHarness, sql } from './api-helpers'
+import { NOW } from './app-helpers'
+import { BUILD } from './helpers'
+import { observedSql } from './read-helpers'
+import { community, domainBlock, mute, remoteAccount, seedStatus } from './status-helpers'
+import { Db } from '../src/db/sql'
+import { admit, admittedPage, ANSWER_BYTES, jsonBytes } from '../src/domain/answer-budget'
+import { type VisibleStatusId } from '../src/domain/audience'
+import { filterTextLimits } from '../src/domain/filters'
+import { presentation, presentStatuses, presentStatusesWithin } from '../src/domain/status-presenter'
+import { utf8Length } from '../src/platform/dump-format'
+import { sha256Hex } from '../src/security/tokens'
+
+// RES-3: one answer that presents statuses is within ANSWER_BYTES as serialized, containers included, owned by the
+// Store operation that returns it (docs/response-inventory.md). Items are admitted whole in traversal order, the
+// first whatever its size; a cut page continues from its last admitted item in both directions; a context keeps the
+// nearest ancestors and history the newest revisions; search, an offset endpoint, returns fewer results.
+
+const ORIGIN = 'https://kopje.test'
+// A control character, which JSON escapes to six bytes.
+const C = '\u0001'
+const DAY = 86_400_000
+
+let sequence = 700_000_000_000_000_000n
+const nextId = () => String(sequence++)
+
+// A public remote status of about 0.97 MB of JSON: content of 20,000 escaping characters (and "needle", which search
+// finds), a poll of 100 choices of 1,000 and 4 attachments with descriptions of 10,000, each at its bound (RES-2).
+// Nine such pass ANSWER_BYTES, so a page of them is cut.
+async function bigStatus(
+	h: ApiHarness,
+	author: string,
+	published: number,
+	extra: { tags?: string[]; inReplyToId?: string } = {}
+): Promise<string> {
+	const id = await seedStatus(h.store, {
+		accountId: author,
+		visibility: 'public',
+		content: `<p>needle ${C.repeat(20_000)}</p>`,
+		published,
+		...extra,
+	})
+	await sql(
+		h.store,
+		`INSERT INTO polls (status_id, options, tallies, votes_count, voters_count, expires_at)
+		VALUES (?, ?, ?, 0, 0, ?)`,
+		id,
+		JSON.stringify(Array.from({ length: 100 }, () => C.repeat(1000))),
+		JSON.stringify(Array.from({ length: 100 }, () => 0)),
+		new Date(NOW + DAY).toISOString()
+	)
+	for (let position = 0; position < 4; position++) {
+		await sql(
+			h.store,
+			`INSERT INTO media_attachments (id, account_id, status_id, position, type, url, description)
+			VALUES (?, ?, ?, ?, 'image', 'https://remote.example/m.png', ?)`,
+			nextId(),
+			author,
+			id,
+			position,
+			C.repeat(10_000)
+		)
+	}
+	return id
+}
+
+type Answer<T> = { status: number; bytes: number; body: T; next: string | null; prev: string | null }
+
+// The answer of a GET as the client receives it: its body's bytes and its Link header's next and prev paths.
+async function answer<T = { id: string }[]>(h: ApiHarness, path: string, token?: string): Promise<Answer<T>> {
+	const response = await h.request(path, token === undefined ? {} : { headers: { authorization: `Bearer ${token}` } })
+	const text = await response.text()
+	const link = (rel: string) => {
+		const url = new RegExp(`<([^>]+)>; rel="${rel}"`).exec(response.headers.get('link') ?? '')?.[1]
+		return url === undefined ? null : `${new URL(url).pathname}${new URL(url).search}`
+	}
+	return {
+		status: response.status,
+		bytes: utf8Length(text),
+		body: JSON.parse(text) as T,
+		next: link('next'),
+		prev: link('prev'),
+	}
+}
+
+// Walks a list by its Link header from `path`: `next` (older, newest first) or `prev` (newer, each page shown newest
+// first, collected oldest first). `keep` is added back to each link (since_id, which links drop, as Mastodon's).
+async function walk(
+	h: ApiHarness,
+	path: string,
+	rel: 'next' | 'prev',
+	token?: string,
+	keep = ''
+): Promise<{ ids: string[]; pages: number; cut: number }> {
+	const ids: string[] = []
+	let pages = 0
+	let cut = 0
+	for (let at: string | null = path; at !== null;) {
+		const page: Answer<{ id: string }[]> = await answer(h, at, token)
+		expect(page.status).toBe(200)
+		expect(page.bytes).toBeLessThanOrEqual(ANSWER_BYTES)
+		const shown = page.body.map((status) => status.id)
+		if (shown.length === 0) {
+			break
+		}
+		pages++
+		cut += page.bytes > ANSWER_BYTES - 1_000_000 ? 1 : 0
+		ids.push(...(rel === 'next' ? shown : shown.toReversed()))
+		const link: string | null = page[rel]
+		at = link === null ? null : `${link}${keep}`
+		expect(pages).toBeLessThan(40)
+	}
+	return { ids, pages, cut }
+}
+
+type World = Awaited<ReturnType<typeof world>>
+
+// Alice, a remote author of twelve big statuses (V[0] newest), tagged #big, which alice follows, lists, bookmarks and
+// favourites; and a muted author whose 135 small public statuses lie between them, newest first: V[0..9], 115 muted,
+// V[10..11], 20 muted. A public page of 40 reads a window of 120 candidates, so its first window ends in muted
+// statuses and is cut (B0b) after V[0..9], which the answer budget cuts first.
+async function world() {
+	const h = await community(['alice', 'bob'])
+	const { alice } = h.users
+	const author = await remoteAccount(h.store, 'big')
+	const muted = await remoteAccount(h.store, 'muted')
+	await mute(h.store, alice.id, muted)
+	const kinds = ['V', ...Array(9).fill('V'), ...Array(115).fill('M'), 'V', 'V', ...Array(20).fill('M')].toReversed()
+	const big: string[] = []
+	const small: string[] = []
+	for (const [i, kind] of kinds.entries()) {
+		const published = NOW - (kinds.length - i) * 60_000
+		if (kind === 'V') {
+			big.push(await bigStatus(h, author, published, { tags: ['big'] }))
+		} else {
+			small.push(await seedStatus(h.store, { accountId: muted, visibility: 'public', published }))
+		}
+	}
+	const V = big.toReversed()
+	await sql(
+		h.store,
+		"INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'accepted')",
+		alice.id,
+		author
+	)
+	const list = nextId()
+	await sql(h.store, "INSERT INTO lists (id, account_id, title) VALUES (?, ?, 'big')", list, alice.id)
+	await sql(h.store, 'INSERT INTO list_accounts (list_id, account_id) VALUES (?, ?)', list, author)
+	for (const id of big) {
+		await sql(h.store, 'INSERT INTO bookmarks (account_id, status_id) VALUES (?, ?)', alice.id, id)
+		await sql(h.store, 'INSERT INTO favourites (account_id, status_id) VALUES (?, ?)', alice.id, id)
+	}
+	return { h, alice, author, muted, V, small: small.toReversed(), list }
+}
+
+// The JSON of one status as the viewer is shown it alone.
+async function statusBytes(w: World, id: string): Promise<number> {
+	const one = await answer<unknown>(w.h, `/api/v1/statuses/${id}`, w.alice.token)
+	return one.bytes
+}
+
+describe('admission (RES-3)', () => {
+	it('admits whole items while they fit, the first whatever its size', () => {
+		const items = ['a'.repeat(8), 'b'.repeat(8), 'c'.repeat(8)]
+		const size = jsonBytes(items[0]) + 1
+		// Exactly the budget: all; one byte less: the last is the first rejected.
+		expect(admit(items, 3 * size, true)).toEqual({ items, bytes: 3 * size, consumed: 3, cut: false })
+		expect(admit(items, 3 * size - 1, true)).toEqual({
+			items: items.slice(0, 2),
+			bytes: 2 * size,
+			consumed: 2,
+			cut: true,
+		})
+		// An item past the whole budget is admitted first, and only first.
+		expect(admit(items, 1, true)).toEqual({ items: items.slice(0, 1), bytes: size, consumed: 1, cut: true })
+		expect(admit(items, 1, false)).toEqual({ items: [], bytes: 0, consumed: 0, cut: true })
+		// Nothing to show is consumed, never admitted.
+		expect(admit([undefined, 'x', undefined], 4, true)).toEqual({ items: ['x'], bytes: 4, consumed: 3, cut: false })
+	})
+
+	it('continues a cut page from its last admitted row, dropping a window continuation', () => {
+		const rows = ['5', '4', '3', '2', '1']
+		const page = { rows, newest: '6', oldest: '0', cut: true }
+		const two = (traversal: readonly string[]) => ({ items: traversal.slice(0, 2), bytes: 0, consumed: 2, cut: true })
+		expect(admittedPage(page, false, (r) => r, two)).toEqual({ items: ['5', '4'], newest: '6', oldest: '4', cut: true })
+		// min_id walks oldest first and shows newest first.
+		expect(admittedPage(page, true, (r) => r, two)).toEqual({ items: ['2', '1'], newest: '2', oldest: '0', cut: true })
+		const all = (traversal: readonly string[]) => ({ items: [...traversal], bytes: 0, consumed: 5, cut: false })
+		expect(admittedPage(page, true, (r) => r, all)).toEqual({ items: rows, newest: '6', oldest: '0', cut: true })
+	})
+})
+
+describe('status pages are answers within ANSWER_BYTES (RES-3)', () => {
+	it('walk every status once in both directions, a byte cut before a window continuation included', async () => {
+		const w = await world()
+		const { h, alice, V } = w
+		const lists = [
+			['public', '/api/v1/timelines/public?limit=40'],
+			['home', '/api/v1/timelines/home?limit=40'],
+			['list', `/api/v1/timelines/list/${w.list}?limit=40`],
+			['tag', '/api/v1/timelines/tag/big?limit=40'],
+			['account statuses', `/api/v1/accounts/${w.author}/statuses?limit=40`],
+		]
+		for (const [name, path] of lists) {
+			const older = await walk(h, path!, 'next', alice.token)
+			expect([name, older.ids]).toEqual([name, V])
+			expect(older.cut).toBeGreaterThan(0)
+			const newer = await walk(h, `${path!}&min_id=1`, 'prev', alice.token)
+			expect([name, newer.ids]).toEqual([name, V.toReversed()])
+			// since_id walks newest first above its bound; with max_id, between both.
+			const since = `&since_id=${w.small.at(-1)!}`
+			expect([name, (await walk(h, `${path!}${since}`, 'next', alice.token, since)).ids]).toEqual([name, V])
+			const between = `&since_id=${V[10]!}`
+			const bounded = await walk(h, `${path!}&max_id=${V[1]!}${between}`, 'next', alice.token, between)
+			expect([name, bounded.ids]).toEqual([name, V.slice(2, 10)])
+		}
+		// The public timeline's first page: V[0..9] passed in a window cut at muted statuses, cut by bytes before them,
+		// so its next link starts below its last status, not below the window.
+		const first = await answer(h, '/api/v1/timelines/public?limit=40', alice.token)
+		const shown = first.body.map((s) => s.id)
+		expect(shown.length).toBeLessThan(10)
+		expect(first.next).toContain(`max_id=${shown.at(-1)!}`)
+		// The first rejected status is the one that does not fit.
+		const next = V[shown.length]!
+		expect(first.bytes + (await statusBytes(w, next)) + 1).toBeGreaterThan(ANSWER_BYTES)
+		for (const [name, path] of [
+			['bookmarks', '/api/v1/bookmarks?limit=40'],
+			['favourites', '/api/v1/favourites?limit=40'],
+		]) {
+			expect([name, (await walk(h, path!, 'next', alice.token)).ids]).toEqual([name, V])
+			expect([name, (await walk(h, `${path!}&min_id=0`, 'prev', alice.token)).ids]).toEqual([name, V.toReversed()])
+		}
+	}, 600_000)
+
+	it('reads at most one status past the cut out of SQLite', async () => {
+		const w = await world()
+		const one = await sqliteBytes(w, (db, viewer) => {
+			const shared = presentation(db, [w.V[0] as VisibleStatusId], { origin: ORIGIN, viewer })
+			return presentStatusesWithin(db, shared, [w.V[0] as VisibleStatusId], ANSWER_BYTES, true).items.length
+		})
+		const page = await sqliteBytes(w, (db, viewer) => {
+			const ids = w.V as VisibleStatusId[]
+			const shared = presentation(db, ids, { origin: ORIGIN, viewer })
+			return presentStatusesWithin(db, shared, ids, ANSWER_BYTES - 1, true).items.length
+		})
+		expect(one.result).toBe(1)
+		expect(page.result).toBeLessThan(w.V.length)
+		// Each status is read as one chunk: the admitted ones and the first rejected, each about its own bytes.
+		expect(page.largest).toBeLessThanOrEqual(one.largest)
+		expect(page.bytes).toBeLessThanOrEqual((page.result + 1) * one.bytes * 1.01)
+	})
+})
+
+// What a read takes out of SQLite as alice: all its bytes and the most one query returns.
+async function sqliteBytes(
+	w: World,
+	read: (db: Db, viewer: { accountId: string; now: string }) => number
+): Promise<{ result: number; bytes: number; largest: number }> {
+	return runInDurableObject(w.h.store, (_instance, state) => {
+		let bytes = 0
+		let largest = 0
+		const counting = observedSql(state.storage.sql, (rows) => {
+			let query = 0
+			for (const row of rows) {
+				for (const value of Object.values(row)) {
+					query += typeof value === 'string' ? utf8Length(value) : 8
+				}
+			}
+			bytes += query
+			largest = Math.max(largest, query)
+		})
+		const result = read(new Db(counting), { accountId: w.alice.id, now: new Date(NOW).toISOString() })
+		return { result, bytes, largest }
+	})
+}
+
+describe('composite answers within ANSWER_BYTES (RES-3)', () => {
+	it('keeps the nearest ancestors on half the budget, and the descendants on the rest', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const author = await remoteAccount(h.store, 'thread')
+		const chain: string[] = []
+		for (let i = 0; i < 14; i++) {
+			chain.push(await bigStatus(h, author, NOW - (20 - i) * 60_000, i === 0 ? {} : { inReplyToId: chain[i - 1]! }))
+		}
+		const size = (await answer<unknown>(h, `/api/v1/statuses/${chain[1]!}`, alice.token)).bytes + 1
+		const frame = jsonBytes({ ancestors: [], descendants: [] })
+		type Context = { ancestors: { id: string }[]; descendants: { id: string }[] }
+		const context = async (at: number) => {
+			const read = await answer<Context>(h, `/api/v1/statuses/${chain[at]!}/context`, alice.token)
+			expect(read.bytes).toBeLessThanOrEqual(ANSWER_BYTES)
+			return { ancestors: read.body.ancestors.map((s) => s.id), descendants: read.body.descendants.map((s) => s.id) }
+		}
+		// Every status here is the same size: half the budget takes `half`, and the descendants the rest.
+		const half = Math.floor(Math.floor((ANSWER_BYTES - frame) / 2) / size)
+		const rest = (taken: number) => Math.floor((ANSWER_BYTES - frame - taken * size) / size)
+		const middle = await context(7)
+		expect(middle.ancestors).toEqual(chain.slice(7 - half, 7))
+		expect(middle.descendants).toEqual(chain.slice(8, 8 + rest(half)))
+		// Few ancestors leave the rest to the descendants; no descendants leave the ancestors their half.
+		const early = await context(1)
+		expect(early.ancestors).toEqual(chain.slice(0, 1))
+		expect(early.descendants).toEqual(chain.slice(2, 2 + rest(1)))
+		expect(early.descendants.length).toBeGreaterThan(half)
+		const last = await context(13)
+		expect(last).toEqual({ ancestors: chain.slice(13 - half, 13), descendants: [] })
+	}, 300_000)
+
+	it('keeps the newest revisions of an edit history, oldest first', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const author = await remoteAccount(h.store, 'editor')
+		const status = await bigStatus(h, author, NOW - DAY)
+		const edits = 16
+		for (let i = 0; i < edits; i++) {
+			await sql(
+				h.store,
+				`INSERT INTO status_edits (status_id, content, spoiler_text, media_json, poll_options, created_at)
+				VALUES (?, ?, ?, '[]', ?, ?)`,
+				status,
+				`<p>${String(i).padStart(2, '0')} ${C.repeat(20_000)}</p>`,
+				String(i).padStart(2, '0'),
+				JSON.stringify(Array.from({ length: 100 }, () => C.repeat(1000))),
+				new Date(NOW - DAY + i * 60_000).toISOString()
+			)
+		}
+		const read = await answer<{ spoiler_text: string }[]>(h, `/api/v1/statuses/${status}/history`, alice.token)
+		expect(read.bytes).toBeLessThanOrEqual(ANSWER_BYTES)
+		const shown = read.body.map((edit) => Number(edit.spoiler_text))
+		expect(shown.length).toBeLessThan(edits)
+		expect(shown).toEqual(Array.from({ length: shown.length }, (_, i) => edits - shown.length + i))
+		// The next older revision is the first that does not fit.
+		const each = jsonBytes(read.body[0]) + 1
+		expect(read.bytes + each).toBeGreaterThan(ANSWER_BYTES)
+	})
+
+	it('answers a fixed-id lookup with the ids that fit, in the order asked', async () => {
+		const w = await world()
+		const query = w.V.map((id) => `id[]=${id}`).join('&')
+		const read = await answer(w.h, `/api/v1/statuses?${query}`, w.alice.token)
+		expect(read.bytes).toBeLessThanOrEqual(ANSWER_BYTES)
+		const shown = read.body.map((s) => s.id)
+		expect(shown).toEqual(w.V.slice(0, shown.length))
+		expect(read.bytes + (await statusBytes(w, w.V[shown.length]!)) + 1).toBeGreaterThan(ANSWER_BYTES)
+	}, 300_000)
+
+	it('answers search as one answer: fewer statuses, the offset continuing after them', async () => {
+		const w = await world()
+		const { h, alice } = w
+		const found: string[] = []
+		for (let offset = 0, page = 0; page < 10; page++) {
+			const read = await answer<{ accounts: unknown[]; statuses: { id: string }[]; hashtags: unknown[] }>(
+				h,
+				`/api/v2/search?q=needle&limit=40&offset=${offset}`,
+				alice.token
+			)
+			expect(read.bytes).toBeLessThanOrEqual(ANSWER_BYTES)
+			if (read.body.statuses.length === 0) {
+				break
+			}
+			// A client advancing by the number received (Tusky, Ivory) continues after the cut; Mastodon's web client
+			// takes a short answer for the last one.
+			expect(page > 0 || read.body.statuses.length < w.V.length).toBe(true)
+			found.push(...read.body.statuses.map((s) => s.id))
+			offset += read.body.statuses.length
+		}
+		expect(found).toEqual(w.V)
+	}, 300_000)
+
+	it('puts the resolved account first within the same answer, when the viewer may find it', async () => {
+		const w = await world()
+		const { h, alice } = w
+		const blocked = await remoteAccount(h.store, 'big', 'blocked.example')
+		await domainBlock(h.store, alice.id, 'blocked.example')
+		const credential = { tokenHash: await sha256Hex(alice.token), scope: 'read' as const, now: NOW }
+		const search = (resolvedAccountId?: string) =>
+			h.store.search(BUILD, {
+				credential,
+				query: 'big',
+				types: ['accounts', 'statuses', 'hashtags'],
+				limit: 40,
+				offset: 0,
+				following: false,
+				localDomain: 'kopje.test',
+				present: { origin: ORIGIN },
+				resolvedAccountId,
+			})
+		const found = await search(w.author)
+		expect(found.status).toBe('ok')
+		if (found.status !== 'ok') {
+			return
+		}
+		expect(found.value.accounts.map((a) => a.id)).toEqual([w.author])
+		expect(found.value.hashtags.map((t) => t.name)).toEqual(['big'])
+		expect(jsonBytes(found.value)).toBeLessThanOrEqual(ANSWER_BYTES)
+		const hidden = await search(blocked)
+		expect(hidden.status === 'ok' && hidden.value.accounts.map((a) => a.id)).toEqual([w.author])
+	}, 300_000)
+
+	it('shares a profile page between its account and its statuses, next following the last one shown', async () => {
+		const h = await community(['bob'])
+		const { bob } = h.users
+		const posts: string[] = []
+		for (let i = 0; i < 12; i++) {
+			posts.push(await bigStatus(h, bob.id, NOW - (20 - i) * 60_000))
+		}
+		const newest = posts.toReversed()
+		const shown: string[] = []
+		let maxId: string | null = null
+		for (let page = 0; page < 5; page++) {
+			const read = await h.store.profilePage(BUILD, { username: 'bob', maxId, present: { origin: ORIGIN }, now: NOW })
+			expect(read.status).toBe('ok')
+			if (read.status !== 'ok') {
+				return
+			}
+			expect(jsonBytes(read)).toBeLessThanOrEqual(ANSWER_BYTES)
+			shown.push(...read.statuses.map((s) => s.id))
+			if (read.next === null) {
+				break
+			}
+			expect(read.next).toBe(read.statuses.at(-1)!.id)
+			maxId = read.next
+		}
+		expect(shown).toEqual(newest)
+	}, 300_000)
+})
+
+describe('the shared filter allowance (RES-3)', () => {
+	it('matches each status as the unchunked presentation does, past the allowance', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const author = await remoteAccount(h.store, 'long')
+		// 60 statuses of 9,000 code units (540,000 in all, past MAX_FILTER_REQUEST_TEXT), each with "needle" at a
+		// different depth, so the level decides which match.
+		const ids: string[] = []
+		for (let i = 0; i < 60; i++) {
+			const depth = 150 * i
+			const text = `${'x'.repeat(depth)} needle ${'y'.repeat(9_000 - depth)}`
+			ids.push(await seedStatus(h.store, { accountId: author, visibility: 'public', content: `<p>${text}</p>` }))
+		}
+		await h.request('/api/v2/filters', {
+			method: 'POST',
+			headers: { authorization: `Bearer ${alice.token}`, 'content-type': 'application/json' },
+			body: JSON.stringify({ title: 'n', context: ['public'], keywords_attributes: [{ keyword: 'needle' }] }),
+		})
+		const [whole, chunked] = await runInDurableObject(h.store, (_instance, state) => {
+			const db = new Db(state.storage.sql)
+			const options = { origin: ORIGIN, viewer: { accountId: alice.id, now: new Date(NOW).toISOString() } }
+			const visible = ids as VisibleStatusId[]
+			const shared = presentation(db, visible, options)
+			return [
+				presentStatuses(db, visible, options),
+				[
+					...presentStatusesWithin(db, shared, visible.slice(0, 7), ANSWER_BYTES, true).items,
+					...presentStatusesWithin(db, shared, visible.slice(7), ANSWER_BYTES, true).items,
+				],
+			]
+		})
+		expect(chunked).toEqual(whole)
+		// The allowance cuts as filterTextLimits gives it over the 60 texts: a needle matches when it ends by its level.
+		const [level] = filterTextLimits(Array.from({ length: 60 }, () => 9_008))
+		const matched = whole.map((s) => (s.filtered ?? []).length > 0)
+		expect(matched).toEqual(ids.map((_, i) => 150 * i + 7 <= level!))
+		expect(matched).toContain(false)
+	}, 300_000)
+})
+
+describe('realistic content is never cut (RES-3)', () => {
+	it('answers a page of 40 long realistic statuses whole', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const author = await remoteAccount(h.store, 'real')
+		// Pleroma's and Akkoma's 5,000 characters of Japanese with links, a poll of 4 and 4 described attachments.
+		const text = `<p>${'東京在住のソフトウェア開発者です。'.repeat(280)}<a href="https://example.com/">link</a></p>`
+		for (let i = 0; i < 40; i++) {
+			const id = await seedStatus(h.store, { accountId: author, visibility: 'public', content: text, tags: ['real'] })
+			await sql(
+				h.store,
+				`INSERT INTO polls (status_id, options, tallies, votes_count, voters_count, expires_at)
+				VALUES (?, '["はい","いいえ","たぶん","わからない"]', '[0,0,0,0]', 0, 0, ?)`,
+				id,
+				new Date(NOW + DAY).toISOString()
+			)
+			for (let position = 0; position < 4; position++) {
+				await sql(
+					h.store,
+					`INSERT INTO media_attachments (id, account_id, status_id, position, type, url, description)
+					VALUES (?, ?, ?, ?, 'image', 'https://remote.example/m.png', ?)`,
+					nextId(),
+					author,
+					id,
+					position,
+					'写真の説明。'.repeat(250)
+				)
+			}
+		}
+		const read = await answer(h, '/api/v1/timelines/tag/real?limit=40', alice.token)
+		expect(read.body).toHaveLength(40)
+		expect(read.bytes).toBeLessThan(ANSWER_BYTES / 4)
+	}, 300_000)
+})
+
+describe('the Store RPC returns a maximal answer (RES-3)', () => {
+	it('returns a timeline page, a context and search at the budget, under the 32 MiB RPC limit', async () => {
+		const w = await world()
+		const { h, alice } = w
+		// Ten replies under V[11], so its context passes the budget.
+		let parent = w.V[11]!
+		for (let i = 0; i < 10; i++) {
+			parent = await bigStatus(h, w.author, NOW - 1000 + i, { inReplyToId: parent })
+		}
+		const credential = { tokenHash: await sha256Hex(alice.token), scope: 'read' as const, now: NOW }
+		const present = { origin: ORIGIN }
+		const page = await h.store.publicTimeline(BUILD, {
+			credential,
+			now: NOW,
+			page: { limit: 40 },
+			local: false,
+			remote: false,
+			onlyMedia: false,
+			present,
+		})
+		const context = await h.store.statusContext(BUILD, { credential, now: NOW, id: w.V[11]!, present })
+		const search = await h.store.search(BUILD, {
+			credential,
+			query: 'needle',
+			types: ['accounts', 'statuses', 'hashtags'],
+			limit: 40,
+			offset: 0,
+			following: false,
+			localDomain: 'kopje.test',
+			present,
+		})
+		const sizes = [page, context, search].map((value) => jsonBytes(value))
+		for (const size of sizes) {
+			expect(size).toBeGreaterThan(ANSWER_BYTES - 1_100_000)
+			expect(size).toBeLessThanOrEqual(ANSWER_BYTES + 100)
+		}
+		console.info(`Store RPC answers (JSON bytes): page ${sizes[0]}, context ${sizes[1]}, search ${sizes[2]}`)
+	}, 300_000)
+})
