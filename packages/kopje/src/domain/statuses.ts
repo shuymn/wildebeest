@@ -1241,7 +1241,10 @@ export const statusHistory = optionalUserReadOperation<{ id: string; present: Pr
 		if (resolved === null || status === null) {
 			return { status: 'not_found' }
 		}
-		const edits = db.all<{ id: number }>('SELECT id FROM status_edits WHERE status_id = ? ORDER BY id DESC', resolved)
+		const edits = db.all<{ id: string }>(
+			'SELECT CAST(e.id AS TEXT) AS id FROM status_edits e WHERE e.status_id = ? ORDER BY e.id DESC',
+			resolved
+		)
 		if (edits.length === 0) {
 			return {
 				status: 'ok',
@@ -1272,7 +1275,7 @@ export const statusHistory = optionalUserReadOperation<{ id: string; present: Pr
 				}>(
 					`SELECT ${contentSql('content')} AS content, ${spoilerSql('spoiler_text')} AS spoiler_text, sensitive,
 						${editMediaSql('media_json')} AS media_json, ${pollOptionsSql('poll_options')} AS poll_options, created_at
-					FROM status_edits WHERE id = ?`,
+					FROM status_edits WHERE id = CAST(? AS INTEGER)`,
 					editId
 				)
 				yield edit === undefined
