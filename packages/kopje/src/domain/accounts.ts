@@ -1,6 +1,6 @@
 import { followActivity, followAnswerActivity, followUri, recordOutbound, undoFollowActivity } from './activities'
 import { actorSnapshot, recordActorUpdate } from './actor-update'
-import { ANSWER_BYTES } from './answer-budget'
+import { ANSWER_BYTES, ARRAY_ANSWER_BYTES } from './answer-budget'
 import {
 	activeMuteJoinSql,
 	availableJoinedSql,
@@ -248,14 +248,15 @@ export function accountStream(
 
 // The presented accounts of `ids` (accounts' ids, each once), in order, while their serialized bytes stay within
 // `budget`, read in chunks that stop once it is reached. `leading`: the first account is shown whatever its size
-// (RES-2 bounds it), so an answer continued from its last account moves on. `cut`: an account was left out.
+// (RES-2 bounds it), so an answer continued from its last account moves on. `cut`: an account was left out. `bytes`:
+// the admitted accounts' JSON, each with a separator.
 export function presentAccountsWithin(
 	db: Db,
 	ids: readonly string[],
 	present: Present,
 	budget: number,
 	leading: boolean
-): { items: Account[]; cut: boolean } {
+): { items: Account[]; cut: boolean; bytes: number } {
 	const stream = accountStream(db, ids, present)
 	const items: Account[] = []
 	let bytes = 0
@@ -266,7 +267,7 @@ export function presentAccountsWithin(
 		bytes += next.bytes
 		items.push(next.account)
 	}
-	return { items, cut: items.length < ids.length }
+	return { items, cut: items.length < ids.length, bytes }
 }
 
 // An account's profile URL. A stored url is used only when it is http(s) (HTML-3); otherwise it is derived from the
@@ -808,9 +809,12 @@ export type SearchInput = {
 
 // Local and known remote accounts whose search_text contains every term (in any of its variants). An exact username
 // ranks first, then local accounts. Only accounts the viewer may find are listed (findableBySql, R14): not suspended,
-// and not on a domain the viewer blocks.
-export const searchAccounts = userReadOperation<SearchInput, Account[]>((db, input, viewer) =>
-	findAccounts(db, input, viewer.accountId)
+// and not on a domain the viewer blocks. One answer within ANSWER_BYTES (RES-3): an offset endpoint, so a cut answer
+// holds fewer accounts and a client advancing by the number received continues after them.
+export const searchAccounts = userReadOperation<SearchInput, Account[]>(
+	(db, input, viewer) =>
+		presentAccountsWithin(db, findAccountIds(db, input, viewer.accountId), input.present, ARRAY_ANSWER_BYTES, true)
+			.items
 )
 
 // The work of an account search is bounded (RES-7): it matches only candidates from indexed sources, never the whole
@@ -826,7 +830,8 @@ export const ACCOUNT_RECENT_LIMIT = 5000
 // The largest code point, as UTF-8 compares: every string with a prefix sorts below prefix + this.
 const PREFIX_END = '\u{10FFFF}'
 
-export function findAccounts(db: Db, input: SearchInput, viewerId: string): Account[] {
+// The ids of the accounts the search finds, in its order.
+export function findAccountIds(db: Db, input: SearchInput, viewerId: string): string[] {
 	// An address is read with the shared parser, so a Unicode domain finds the account stored under its punycode.
 	const address = parseAddress(input.query.trim())
 	const query = (address === null ? input.query : `${address.username}@${address.domain}`)
@@ -860,7 +865,7 @@ export function findAccounts(db: Db, input: SearchInput, viewerId: string): Acco
 	const candidateParams: SqlStorageValue[] = input.following
 		? [viewerId, ...exactParams, viewerId]
 		: [...exactParams, prefix, `${prefix}${PREFIX_END}`]
-	const ids = db
+	return db
 		.all<{ id: string }>(
 			`WITH candidates(id) AS (${candidates})
 			SELECT a.id FROM candidates c JOIN accounts a ON a.id = c.id
@@ -875,11 +880,6 @@ export function findAccounts(db: Db, input: SearchInput, viewerId: string): Acco
 			input.offset
 		)
 		.map((row) => row.id)
-	const accounts = presentAccountsById(db, ids, input.present)
-	return ids.flatMap((id) => {
-		const account = accounts.get(id)
-		return account === undefined ? [] : [account]
-	})
 }
 
 function escapeRegExp(text: string): string {
