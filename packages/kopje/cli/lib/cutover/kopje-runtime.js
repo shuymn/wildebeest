@@ -65,5 +65,5 @@ export const {
 	storedMediaUrl,
 	storedProfileUrl,
 	storedStatusUrl,
-	withoutNul,
+	storedText,
 } = runtime

@@ -43,7 +43,7 @@ import {
 	storedProfileUrl,
 	storedStatusUrl,
 	withinIdentityBound,
-	withoutNul,
+	storedText,
 } from './kopje-runtime.js'
 import { digestOf } from './sql-script.js'
 import { fit, FULL_EDGE, SMALL_EDGE } from './upload-rules.js'
@@ -448,7 +448,7 @@ export function convertLegacy(
 	 * @param {string} column
 	 */
 	const sanitizedWithin = (value, bytes, within, code, column) => {
-		const text = stored(column, carried(value), withoutNul)
+		const text = stored(column, carried(value), storedText)
 		if (text.length > REMOTE_HTML_RAW_LIMIT) {
 			count(acceptTruncation ? normalized : problems, 'html:longer-than-sanitizer-limit')
 		}
@@ -476,7 +476,7 @@ export function convertLegacy(
 	}
 	/** @param {string} text @param {string} column */
 	const spoilerOf = (text, column) =>
-		bounded(stored(column, text, withoutNul), SPOILER_BYTES, 'text:spoiler-longer-than-bound')
+		bounded(stored(column, text, storedText), SPOILER_BYTES, 'text:spoiler-longer-than-bound')
 	/** @param {string} table @param {string | null} time @param {string} key */
 	const localId = (table, time, key) => ids.local(table, time, key)
 	/** @param {string} table @param {string | null} time @param {string} key */
@@ -1001,7 +1001,7 @@ export function convertLegacy(
 				properties.source !== null &&
 				typeof properties.source.content === 'string'
 				? bounded(
-						stored('statuses.source_text', carried(properties.source.content), withoutNul),
+						stored('statuses.source_text', carried(properties.source.content), storedText),
 						STATUS_CONTENT_BYTES,
 						'text:source-longer-than-bound'
 					)

@@ -1,9 +1,14 @@
 import { runInDurableObject } from 'cloudflare:test'
 
+import { Person } from '@fedify/vocab'
 import fc from 'fast-check'
 import { describe, expect, it } from 'vitest'
 
-import { freshStore } from './helpers'
+import { NOW } from './app-helpers'
+import { freshStore, migratedStore } from './helpers'
+import { Db } from '../src/db/sql'
+import { upsertRemoteActor } from '../src/domain/inbox'
+import { remoteActorInput } from '../src/federation/remote-actor'
 import { STATUS_URI_LIMIT } from '../src/platform/identity-bounds'
 import { mediaUrl, SERVED_TYPES } from '../src/platform/media-files'
 import {
@@ -37,7 +42,7 @@ import {
 	storedMediaUrl,
 	storedProfileUrl,
 	storedStatusUrl,
-	withoutNul,
+	storedText,
 } from '../src/platform/stored-bounds'
 import {
 	cutJsonString,
@@ -153,6 +158,8 @@ type Column = {
 	name: string
 	projection: (column: string) => string
 	writer: (value: string) => string | null
+	// A text column: its writer's output is well-formed and holds no U+0000.
+	text?: true
 	bounds: [Unit, number][]
 	runs: number
 }
@@ -163,6 +170,7 @@ const COLUMNS: Column[] = [
 		name: 'accounts.display_name',
 		projection: displayNameSql,
 		writer: storedDisplayName,
+		text: true,
 		bounds: [
 			['points', DISPLAY_NAME_LIMIT],
 			['bytes', DISPLAY_NAME_LIMIT],
@@ -172,7 +180,8 @@ const COLUMNS: Column[] = [
 	{
 		name: 'accounts.note',
 		projection: noteSql,
-		writer: (value) => sanitizeRemoteBio(withoutNul(value)),
+		writer: (value) => sanitizeRemoteBio(storedText(value)),
+		text: true,
 		bounds: [
 			['json', BIO_JSON_BYTES],
 			['bytes', BIO_JSON_BYTES],
@@ -189,7 +198,8 @@ const COLUMNS: Column[] = [
 	{
 		name: 'statuses.content, status_edits.content',
 		projection: contentSql,
-		writer: (value) => sanitizeRemoteContent(withoutNul(value)),
+		writer: (value) => sanitizeRemoteContent(storedText(value)),
+		text: true,
 		bounds: [
 			['json', CONTENT_JSON_BYTES],
 			['bytes', CONTENT_JSON_BYTES],
@@ -199,7 +209,8 @@ const COLUMNS: Column[] = [
 	{
 		name: 'statuses.spoiler_text, status_edits.spoiler_text',
 		projection: spoilerSql,
-		writer: (value) => cutJsonString(withoutNul(value), SPOILER_JSON_BYTES),
+		writer: (value) => cutJsonString(storedText(value), SPOILER_JSON_BYTES),
+		text: true,
 		bounds: [
 			['json', SPOILER_JSON_BYTES],
 			['bytes', SPOILER_JSON_BYTES],
@@ -210,7 +221,8 @@ const COLUMNS: Column[] = [
 	{
 		name: 'statuses.source_text',
 		projection: sourceTextSql,
-		writer: (value) => cutJsonString(withoutNul(value), CONTENT_JSON_BYTES),
+		writer: (value) => cutJsonString(storedText(value), CONTENT_JSON_BYTES),
+		text: true,
 		bounds: [
 			['json', CONTENT_JSON_BYTES],
 			['bytes', CONTENT_JSON_BYTES],
@@ -242,6 +254,7 @@ const COLUMNS: Column[] = [
 		name: 'media_attachments.description',
 		projection: mediaDescriptionSql,
 		writer: storedMediaDescription,
+		text: true,
 		bounds: [
 			['points', MAX_MEDIA_DESCRIPTION_LENGTH],
 			['bytes', MAX_MEDIA_DESCRIPTION_LENGTH],
@@ -270,11 +283,15 @@ function idempotent(sql: Sql, projection: (column: string) => string, input: str
 }
 
 // P(P(x)) = P(x), and P(writer(x)) = writer(x) as stored.
-function checkColumn(sql: Sql, { projection, writer }: Column, input: string): void {
+function checkColumn(sql: Sql, { projection, writer, text }: Column, input: string): void {
 	expect(idempotent(sql, projection, input)).toBe(true)
 	const written = writer(input)
 	if (written !== null) {
 		expect(valueOf(sql, `(${projection('?1')}) IS ?1`, written)).toBe(1)
+	}
+	if (text === true) {
+		expect(written?.isWellFormed()).toBe(true)
+		expect(written).not.toContain('\u0000')
 	}
 }
 
@@ -313,12 +330,45 @@ describe('stored bounds (RES-2)', () => {
 		})
 	}
 
+	it('runs where String.prototype.toWellFormed exists', () => {
+		expect(typeof String.prototype.toWellFormed).toBe('function')
+		expect(storedText('a\ud800b\u0000\udc00')).toBe('a\ufffdb\ufffd')
+	})
+
+	// An actor's display name of lone surrogates is stored as U+FFFD, three bytes each, and reads back at that size.
+	it('stores a display name of lone surrogates from ingestion within three bytes a character, read back alike', async () => {
+		const actor = await Person.fromJsonLd({
+			'@context': 'https://www.w3.org/ns/activitystreams',
+			id: 'https://remote.example/users/s',
+			type: 'Person',
+			preferredUsername: 's',
+			name: '\ud800'.repeat(DISPLAY_NAME_LIMIT),
+			inbox: 'https://remote.example/users/s/inbox',
+		})
+		const input = await remoteActorInput(actor, {})
+		expect(input).not.toBeNull()
+		const store = await migratedStore()
+		const stored = await runInDurableObject(store, (_instance, state) =>
+			state.storage.transactionSync(() => {
+				const db = new Db(state.storage.sql)
+				upsertRemoteActor(db, input!, 'https://kopje.test', NOW)
+				return db.first<{ name: string; bytes: number }>(
+					'SELECT display_name AS name, length(CAST(display_name AS BLOB)) AS bytes FROM accounts WHERE uri = ?',
+					'https://remote.example/users/s'
+				)
+			})
+		)
+		expect(stored?.bytes).toBeLessThanOrEqual(3 * DISPLAY_NAME_LIMIT)
+		expect(ENCODER.encode(stored?.name).length).toBe(stored?.bytes)
+		expect(stored?.name).toBe('\ufffd'.repeat(DISPLAY_NAME_LIMIT))
+	})
+
 	it('writers remove U+0000 and cut by code points', () => {
 		fc.assert(
 			fc.property(inputs([['points', DISPLAY_NAME_LIMIT]]), (input) => {
 				const name = storedDisplayName(input)
 				expect(name).not.toContain('\u0000')
-				expect([...name].length).toBe(Math.min([...withoutNul(input)].length, DISPLAY_NAME_LIMIT))
+				expect([...name].length).toBe(Math.min([...storedText(input)].length, DISPLAY_NAME_LIMIT))
 			}),
 			{ numRuns: 100 }
 		)
@@ -326,7 +376,7 @@ describe('stored bounds (RES-2)', () => {
 			fc.property(inputs([['points', MAX_MEDIA_DESCRIPTION_LENGTH]]), (input) => {
 				const description = storedMediaDescription(input)
 				expect(description).not.toContain('\u0000')
-				expect([...description].length).toBe(Math.min([...withoutNul(input)].length, MAX_MEDIA_DESCRIPTION_LENGTH))
+				expect([...description].length).toBe(Math.min([...storedText(input)].length, MAX_MEDIA_DESCRIPTION_LENGTH))
 			}),
 			{ numRuns: 100 }
 		)

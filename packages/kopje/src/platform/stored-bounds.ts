@@ -3,9 +3,9 @@
 // cutover's conversion and its verification apply. Every writer's output, as SQLite stores it, is a fixed point of
 // the column's P, and P(P(x)) = P(x) for any stored string (test/stored-bounds.test.ts).
 //
-// Writers remove U+0000 from text (PostgreSQL text cannot hold it, so Mastodon never stores one; SQLite's substr and
-// length stop at it) and cut by code points, as SQLite's substr and length count them. JSON-bounded columns (bio,
-// content, content warning, source text) keep the writers of security/html.ts, applied to text without U+0000.
+// Text writers replace a lone surrogate with U+FFFD and remove U+0000 (storedText), then cut by code points, as
+// SQLite's substr and length count them. JSON-bounded columns (bio, content, content warning, source text) keep the
+// writers of security/html.ts, applied to storedText's output.
 //
 // No relative imports: the cutover runs it from the sources on Node (cli/lib/cutover/kopje-runtime.js). The JSON
 // bounds of security/html.ts and the status URI bound of identity-bounds.ts are therefore repeated here;
@@ -123,14 +123,18 @@ export function pollOptionsSql(column: string): string {
 
 const ENCODER = new TextEncoder()
 
-// UTF-8 bytes as SQLite stores the string (a lone surrogate becomes U+FFFD, three bytes, either way).
+// UTF-8 bytes as SQLite stores the string (a lone surrogate takes three bytes, as U+FFFD or as workerd binds it).
 function utf8Bytes(text: string): number {
 	return ENCODER.encode(text).length
 }
 
-// Text without U+0000.
-export function withoutNul(text: string): string {
-	return text.includes('\u0000') ? text.replaceAll('\u0000', '') : text
+// Text as stored: well-formed and without U+0000. workerd binds a lone surrogate as its three-byte surrogate encoding,
+// which reads back as three U+FFFD; replaced first, it is one U+FFFD either way. Mastodon's JSON parsing refuses
+// invalid UTF-8, so nothing it would keep is lost. PostgreSQL text cannot hold U+0000, so Mastodon never stores one;
+// SQLite's substr and length stop at it.
+export function storedText(text: string): string {
+	const wellFormed = text.toWellFormed()
+	return wellFormed.includes('\u0000') ? wellFormed.replaceAll('\u0000', '') : wellFormed
 }
 
 // The first `limit` code points of `text`. A string has at least as many code units as code points.
@@ -150,14 +154,14 @@ function cutCodePoints(text: string, limit: number): string {
 	return text
 }
 
-// accounts.display_name as stored: without U+0000, at most DISPLAY_NAME_LIMIT code points.
+// accounts.display_name as stored: storedText's output, at most DISPLAY_NAME_LIMIT code points.
 export function storedDisplayName(text: string): string {
-	return cutCodePoints(withoutNul(text), DISPLAY_NAME_LIMIT)
+	return cutCodePoints(storedText(text), DISPLAY_NAME_LIMIT)
 }
 
-// media_attachments.description as stored: without U+0000, at most MAX_MEDIA_DESCRIPTION_LENGTH code points.
+// media_attachments.description as stored: storedText's output, at most MAX_MEDIA_DESCRIPTION_LENGTH code points.
 export function storedMediaDescription(text: string): string {
-	return cutCodePoints(withoutNul(text), MAX_MEDIA_DESCRIPTION_LENGTH)
+	return cutCodePoints(storedText(text), MAX_MEDIA_DESCRIPTION_LENGTH)
 }
 
 // accounts.url, avatar_url and header_url as stored: none past PROFILE_URL_LIMIT.

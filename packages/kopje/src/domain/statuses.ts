@@ -114,7 +114,7 @@ import {
 import { streamDelete } from './streaming'
 import { readWindow, singleWindow, windowJson, windowPage } from './windows'
 import type { Db } from '../db/sql'
-import { storedMediaDescription, withoutNul } from '../platform/stored-bounds'
+import { storedMediaDescription, storedText } from '../platform/stored-bounds'
 import { jsonStringBytes, SPOILER_BYTES, STATUS_CONTENT_BYTES } from '../security/html'
 
 // Statuses (B4a): posting, editing and deleting local statuses, the per-status reads, and favourite, reblog and
@@ -501,8 +501,8 @@ export function writePost(
 	{ author, parent, media, visibility, quoted }: PreparedPost
 ): string {
 	const origin = new URL(author.uri).origin
-	const text = withoutNul(input.text)
-	const spoilerText = withoutNul(input.spoilerText)
+	const text = storedText(input.text)
+	const spoilerText = storedText(input.spoilerText)
 	const composed = compose(db, text, author, input.origin, quoted === null ? null : quoteLink(db, quoted.id))
 	const sensitive = (input.sensitive ?? author.default_sensitive === 1) || spoilerText !== ''
 	const language = input.language ?? author.default_language
@@ -805,8 +805,8 @@ export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db
 	if (current === null || current.reblog_of_id !== null) {
 		return { status: 'not_found' }
 	}
-	const text = withoutNul(input.text)
-	const spoilerText = withoutNul(input.spoilerText)
+	const text = storedText(input.text)
+	const spoilerText = storedText(input.spoilerText)
 	if (exceedsRawLength(text, spoilerText)) {
 		return { status: 'invalid', error: TOO_LONG }
 	}

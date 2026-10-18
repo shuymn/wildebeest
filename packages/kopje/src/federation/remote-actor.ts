@@ -7,14 +7,14 @@ import { ACTOR_URI_LIMIT } from '../domain/profile-bounds'
 import { hostDomain } from '../platform/domain-name'
 import { httpUrl } from '../platform/http-url'
 import { isRemoteUsername, isStorableActorId } from '../platform/identity-bounds'
-import { storedDisplayName, storedProfileUrl, withoutNul } from '../platform/stored-bounds'
+import { storedDisplayName, storedProfileUrl, storedText } from '../platform/stored-bounds'
 import { sanitizeRemoteBio } from '../security/html'
 
 // Remote actors as Kopje stores them: fetched through the safe loader (NET-1, ID-8), parsed by Fedify's lookupObject,
 // which checks the parsed id against the document's origin (ID-2), and reduced to bounded, safe columns.
 
 // Raw caps (RES-1): the display name is plain text and is cut (storedDisplayName), as Mastodon cuts what it
-// receives. Text has U+0000 removed (platform/stored-bounds.ts).
+// receives. Text is stored as platform/stored-bounds.ts storedText writes it.
 // Actor ids and inbox URLs (RES-6): a delivery target is an inbox and, for a silent recipient, an actor id, so their
 // length bounds a target. This cap is Kopje's own interoperability policy, not another server's behaviour: Mastodon
 // sets no length limit, and Misskey stores inbox URLs in 512-character columns. Real servers use far shorter URLs.
@@ -142,7 +142,7 @@ export async function remoteActorInput(actor: Actor, document: unknown): Promise
 		domain: hostDomain(uri.href),
 		actorType: getActorTypeName(actor),
 		displayName: storedDisplayName(text(actor.name) ?? ''),
-		note: sanitizeRemoteBio(withoutNul(text(actor.summary) ?? '')),
+		note: sanitizeRemoteBio(storedText(text(actor.summary) ?? '')),
 		url: href(actor.url),
 		avatarUrl: await imageUrl(() => images.getIcon(options)),
 		headerUrl: await imageUrl(() => images.getImage(options)),

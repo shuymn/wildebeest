@@ -31,7 +31,7 @@ export {
 	storedMediaUrl,
 	storedProfileUrl,
 	storedStatusUrl,
-	withoutNul,
+	storedText,
 } from './platform/stored-bounds'
 export {
 	cutJsonString,

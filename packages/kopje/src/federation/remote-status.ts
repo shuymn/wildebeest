@@ -22,7 +22,7 @@ import { hashtagObjectName } from '../domain/tag-name'
 import { httpUrl } from '../platform/http-url'
 import { STATUS_URI_LIMIT, withinIdentityBound } from '../platform/identity-bounds'
 import { withinJsonBounds } from '../platform/json-bounds'
-import { storedMediaDescription, storedMediaLink, withoutNul } from '../platform/stored-bounds'
+import { storedMediaDescription, storedMediaLink, storedText } from '../platform/stored-bounds'
 import { cutJsonString, remoteHtmlText, sanitizeRemoteContent, SPOILER_BYTES } from '../security/html'
 
 // Remote statuses as Mastodon 4.7.3 reads them (ActivityPub::Parser::StatusParser and MediaAttachmentParser): compacted
@@ -359,7 +359,7 @@ export function parseRemoteStatus(
 	} else {
 		html = languageString(object, 'content') ?? ''
 	}
-	const content = sanitizeRemoteContent(withoutNul(html))
+	const content = sanitizeRemoteContent(storedText(html))
 	const { mentions, tags } = tagsOf(object)
 	const inReplyTo = idOf(object.inReplyTo)
 	// Mastodon's `conversation` (ActivityPub::Activity::Create reads it, and not `context`): any identifier, a tag: URI
@@ -371,7 +371,7 @@ export function parseRemoteStatus(
 		attributedTo: idOf(asArray(object.attributedTo)[0]),
 		content,
 		text: remoteHtmlText(content),
-		spoilerText: converted ? '' : cutJsonString(withoutNul(summary ?? '').slice(0, MAX_SPOILER_LENGTH), SPOILER_BYTES),
+		spoilerText: converted ? '' : cutJsonString(storedText(summary ?? '').slice(0, MAX_SPOILER_LENGTH), SPOILER_BYTES),
 		sensitive: object.sensitive === true,
 		language: languageOf(object),
 		published: timeOf(object.published),

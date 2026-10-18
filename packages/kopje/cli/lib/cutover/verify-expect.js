@@ -31,7 +31,7 @@ import {
 	storedMediaLink,
 	storedMediaUrl,
 	storedProfileUrl,
-	withoutNul,
+	storedText,
 } from './kopje-runtime.js'
 
 const PUBLIC = 'https://www.w3.org/ns/activitystreams#Public'
@@ -347,9 +347,9 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 	}
 	/** @param {string} sql */
 	const all = (sql) => /** @type {Json[]} */ (db.prepare(sql).all())
-	// Text as the Worker stores it: without U+0000 (src/platform/stored-bounds.ts).
+	// Text as the Worker stores it (src/platform/stored-bounds.ts storedText).
 	/** @param {unknown} value */
-	const stripped = (value) => withoutNul(text(value))
+	const stripped = (value) => storedText(text(value))
 	/** @param {unknown} value */
 	const sanitized = (value) => {
 		if (stripped(value).length > REMOTE_HTML_RAW_LIMIT) {
@@ -375,7 +375,7 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 	// A content warning and source text cut to their bounds (cutJsonString), each cut a truncation.
 	/** @param {string} text @param {number} bytes */
 	const bounded = (text, bytes) => {
-		const value = withoutNul(text)
+		const value = storedText(text)
 		const cut = cutJsonString(value, bytes)
 		if (cut !== value) {
 			overLimit++
