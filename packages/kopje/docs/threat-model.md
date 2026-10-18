@@ -8,13 +8,19 @@ status, updates this file. IDs are never reused: an invariant that no longer app
 
 ## Status of an invariant
 
-Paths are relative to `packages/kopje`. **Enforced (main):** the cited source and test exist on `main`. **Implemented on
-branch `kopje/<name>`:** on a branch not yet in a PR (`kopje/inbound-statuses` is B1b-2). **Planned (stage):** not
-implemented; required before the stage ships.
+Each part of an invariant carries one of three statuses:
 
-A **Gap** note names a part that no test pins yet; that part does not count as enforced. Stages: B1b inbound activities,
-B2 delivery, B4 statuses, media and search, B5 web UI and `/setup`, B6b backups and restore, B8 cutover tools. "Push"
-and "polls" are the stages that add Web Push and polls.
+- _Enforced (main)_: the cited source and tests exist on `main`. A test file cited with quoted names, `test/a.test.ts`
+  ("name"), holds a test of each name; `…` stands for a part of a name a parameter supplies.
+- _Planned (topic)_: not implemented; the text names what is missing.
+- _Retired_: no longer applies, with the reason. Its ID is never reused.
+
+A **Gap** note (`_Gap:_`) names a part that no test pins yet; that part does not count as enforced. Paths are relative
+to `packages/kopje`; those starting with `packages/` or `/` are relative to the repository root.
+`test-node/threat-model.test.ts` checks the marks and the citations.
+
+Planned topics: the KV sweep (expired signed-fetch cache rows: NET-4, RES-4), remote media (a fetch sink for remote
+media: NET-3) and restore (DATA-8).
 
 ## Deployment assumptions
 
@@ -59,30 +65,30 @@ against their own instance. TLS is assumed between all parties.
 
 ## Entry points
 
-| Entry point                                                    | Reached by | Authenticated by                                              | Status and code                                                                                                                                                                                                                       |
-| -------------------------------------------------------------- | ---------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /inbox`, `/ap/users/:username/inbox`, `/actor/inbox`     | R1, R2     | HTTP signature, also on replay from the spool                 | main: `src/federation/inbound.ts`                                                                                                                                                                                                     |
-| Actor, `/actor`, WebFinger, NodeInfo, followers and following  | R1, R2     | none (public)                                                 | main: `src/federation/*`                                                                                                                                                                                                              |
-| `/ap/o/:uuid`, status documents and the outbox                 | R1, R2     | none (VIS-4)                                                  | main: `src/federation/federation.ts`                                                                                                                                                                                                  |
-| Outbound document fetches                                      | R1 answers | final URL and parsed id (ID-2)                                | main: `src/federation/loader.ts`                                                                                                                                                                                                      |
-| Deliveries, remote media fetches, Web Push POSTs               | R1 answers | sink policy (NET-3)                                           | main (deliveries, Web Push: `src/jobs/push.ts`); Planned (B4)                                                                                                                                                                         |
-| Mastodon API `/api/*`                                          | R2–R4, R7  | bearer token and route access                                 | main: `src/mastodon/*`, `src/domain/auth.ts`                                                                                                                                                                                          |
-| Mastodon admin API `/api/v1/admin/*`, `/api/v2/admin/*`        | R2–R4      | bearer token with an admin scope, of the OAuth admin (VIS-29) | main: `src/mastodon/admin.ts`, `src/domain/auth.ts`, `src/domain/admin-authority.ts`, `src/domain/reports.ts`, `src/domain/admin-*.ts`, `src/domain/suspension.ts`                                                                    |
-| `/oauth/authorize`                                             | R2, R6, R7 | Access JWT, Origin, consent                                   | main: `src/app/authorize.tsx`                                                                                                                                                                                                         |
-| `/oauth/token`, `/oauth/revoke`                                | R2, R3     | client credentials                                            | main: `src/mastodon/oauth.ts`                                                                                                                                                                                                         |
-| `/oauth/userinfo`                                              | R2, R3     | bearer token with `profile`                                   | main: `src/mastodon/oauth.ts`                                                                                                                                                                                                         |
-| `/.well-known/oauth-authorization-server`                      | R2         | none (public)                                                 | main: `src/mastodon/oauth.ts`                                                                                                                                                                                                         |
-| `/admin/*` and the `kopje-admin` CLI                           | R2, R6     | admin Access JWT, service token, `IMPORT_TOKEN`, session      | main: `src/app/admin.ts`                                                                                                                                                                                                              |
-| `/setup` and its Cloudflare API calls                          | R2, R7     | `SETUP_TOKEN`, then the admin's web session (SETUP-2)         | `kopje/setup`: `src/app/setup.tsx`                                                                                                                                                                                                    |
-| Web UI (profiles, permalinks, embeds, settings)                | R2, R4, R7 | session (AUTH-8), Origin and form token (WEB-4)               | branch `kopje/web-ui`: `src/app/web.tsx`, `src/web/*`                                                                                                                                                                                 |
-| Media upload and serving, Images transformation                | R2–R4      | bearer token; capability URL for reads                        | main: `src/mastodon/media.ts`                                                                                                                                                                                                         |
-| Web Push registration                                          | R3         | bearer token with `push`                                      | main: `src/mastodon/push.ts`, `src/domain/push.ts`                                                                                                                                                                                    |
-| Streaming API `/api/v1/streaming` (WebSocket)                  | R2–R4      | bearer token or subprotocol (VIS-26)                          | `kopje/streaming-1`: `src/mastodon/streaming.ts`, `src/stream-hub.ts`, `src/domain/streaming.ts`                                                                                                                                      |
-| Queue consumer, alarms, cron                                   | internal   | —                                                             | main: `src/jobs/queue.ts`, `src/platform/store-kernel.ts`                                                                                                                                                                             |
-| Delivery doorbell and cron (`src/jobs/deliver.ts`)             | internal   | —                                                             | main: `src/jobs/deliver.ts`                                                                                                                                                                                                           |
-| Dump import, backup restore, cutover tools                     | R5, R8     | admin authority, then digest chain and manifest               | main (import, convert, verify-conversion: DATA-11 to DATA-15); `kopje/scheduled-backup` (`backup-verify`); `kopje/cutover-ops` (`cutover-preflight`, `maintenance-worker`, `fingerprint`, `cutover`: OPS-4, OPS-7 to OPS-10, DATA-16) |
-| Cutover maintenance worker (the legacy Pages routes, step 3)   | R1, R2     | none; inbox requests as above, on replay (OPS-1)              | `kopje/cutover-ops`: `src/maintenance.ts` (OPS-6, OPS-7)                                                                                                                                                                              |
-| Backup bucket (S3-compatible, outside Cloudflare) and its cron | R5, R8     | SigV4 credentials scoped to the prefix (DATA-9)               | `kopje/scheduled-backup`: `src/jobs/backup.ts`                                                                                                                                                                                        |
+| Entry point                                                    | Reached by | Authenticated by                                              | Status and code                                                                                                                                                                                                                                                                                              |
+| -------------------------------------------------------------- | ---------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `POST /inbox`, `/ap/users/:username/inbox`, `/actor/inbox`     | R1, R2     | HTTP signature, also on replay from the spool                 | main: `src/federation/inbound.ts`                                                                                                                                                                                                                                                                            |
+| Actor, `/actor`, WebFinger, NodeInfo, followers and following  | R1, R2     | none (public)                                                 | main: `src/federation/*`                                                                                                                                                                                                                                                                                     |
+| `/ap/o/:uuid`, status documents and the outbox                 | R1, R2     | none (VIS-4)                                                  | main: `src/federation/federation.ts`                                                                                                                                                                                                                                                                         |
+| Outbound document fetches                                      | R1 answers | final URL and parsed id (ID-2)                                | main: `src/federation/loader.ts`                                                                                                                                                                                                                                                                             |
+| Deliveries, remote media fetches, Web Push POSTs               | R1 answers | sink policy (NET-3)                                           | main: `src/federation/delivery.ts`, `src/jobs/push.ts`; Planned (remote media: NET-3)                                                                                                                                                                                                                        |
+| Mastodon API `/api/*`                                          | R2–R4, R7  | bearer token and route access                                 | main: `src/mastodon/*`, `src/domain/auth.ts`                                                                                                                                                                                                                                                                 |
+| Mastodon admin API `/api/v1/admin/*`, `/api/v2/admin/*`        | R2–R4      | bearer token with an admin scope, of the OAuth admin (VIS-29) | main: `src/mastodon/admin.ts`, `src/domain/auth.ts`, `src/domain/admin-authority.ts`, `src/domain/reports.ts`, `src/domain/admin-*.ts`, `src/domain/suspension.ts`                                                                                                                                           |
+| `/oauth/authorize`                                             | R2, R6, R7 | Access JWT, Origin, consent                                   | main: `src/app/authorize.tsx`                                                                                                                                                                                                                                                                                |
+| `/oauth/token`, `/oauth/revoke`                                | R2, R3     | client credentials                                            | main: `src/mastodon/oauth.ts`                                                                                                                                                                                                                                                                                |
+| `/oauth/userinfo`                                              | R2, R3     | bearer token with `profile`                                   | main: `src/mastodon/oauth.ts`                                                                                                                                                                                                                                                                                |
+| `/.well-known/oauth-authorization-server`                      | R2         | none (public)                                                 | main: `src/mastodon/oauth.ts`                                                                                                                                                                                                                                                                                |
+| `/admin/*` and the `kopje-admin` CLI                           | R2, R6     | admin Access JWT, service token, `IMPORT_TOKEN`, session      | main: `src/app/admin.ts`                                                                                                                                                                                                                                                                                     |
+| `/setup` and its Cloudflare API calls                          | R2, R7     | `SETUP_TOKEN`, then the admin's web session (SETUP-2)         | main: `src/app/setup.tsx`, `src/platform/cloudflare-api.ts`                                                                                                                                                                                                                                                  |
+| Web UI (profiles, permalinks, embeds, settings)                | R2, R4, R7 | session (AUTH-8), Origin and form token (WEB-4)               | main: `src/app/web.tsx`, `src/web/*`                                                                                                                                                                                                                                                                         |
+| Media upload and serving, Images transformation                | R2–R4      | bearer token; capability URL for reads                        | main: `src/mastodon/media.ts`                                                                                                                                                                                                                                                                                |
+| Web Push registration                                          | R3         | bearer token with `push`                                      | main: `src/mastodon/push.ts`, `src/domain/push.ts`                                                                                                                                                                                                                                                           |
+| Streaming API `/api/v1/streaming` (WebSocket)                  | R2–R4      | bearer token or subprotocol (VIS-26)                          | main: `src/mastodon/streaming.ts`, `src/stream-hub.ts`, `src/domain/streaming.ts`                                                                                                                                                                                                                            |
+| Queue consumer, alarms, cron                                   | internal   | —                                                             | main: `src/jobs/queue.ts`, `src/platform/store-kernel.ts`                                                                                                                                                                                                                                                    |
+| Delivery doorbell and cron (`src/jobs/deliver.ts`)             | internal   | —                                                             | main: `src/jobs/deliver.ts`                                                                                                                                                                                                                                                                                  |
+| Dump import, backup restore, cutover tools                     | R5, R8     | admin authority, then digest chain and manifest               | main: `src/platform/store-import.ts`, `cli/lib/commands.js`, `cli/lib/cutover/*`, `src/app/cutover.ts` (import, `backup-verify`, `convert`, `verify-conversion`, `cutover-preflight`, `maintenance-worker`, `fingerprint`, `cutover`: DATA-10 to DATA-16, OPS-4, OPS-7 to OPS-10); Planned (restore: DATA-8) |
+| Cutover maintenance worker (the legacy Pages routes, step 3)   | R1, R2     | none; inbox requests as above, on replay (OPS-1)              | main: `src/maintenance.ts` (OPS-6, OPS-7)                                                                                                                                                                                                                                                                    |
+| Backup bucket (S3-compatible, outside Cloudflare) and its cron | R5, R8     | SigV4 credentials scoped to the prefix (DATA-9)               | main: `src/jobs/backup.ts`                                                                                                                                                                                                                                                                                   |
 
 ## Invariants
 
@@ -107,8 +113,7 @@ against their own instance. TLS is assumed between all parties.
   verify the actor's accepted quote naming the stamp again; a proof that does not verify answers 401; any other
   activity signed by a key its actor does not own still answers 401. Fedify 2.4.4 refuses `@graph`, `@included` and
   `@reverse` (and their aliases) before and after compacting a signed document and verifies the compacted form it
-  parses, the class of Linked Data Signature bypass Mastodon fixed in 4.5.10 (GHSA-53m7-2wrh-q839). _Implemented on
-  branch `kopje/quotes-1a`:_ `relayed` in `src/federation/inbound.ts`, `src/federation/author-proof.ts`,
+  parses, the class of Linked Data Signature bypass Mastodon fixed in 4.5.10 (GHSA-53m7-2wrh-q839). _Enforced (main):_ `relayed` in `src/federation/inbound.ts`, `src/federation/author-proof.ts`,
   `relayedDelete` in `src/domain/inbox.ts`; `test/quotes.test.ts` ("relayed revocations (ID-1’s one exception)": a
   missing proof, a forged signature, a proof by another actor's key, a proof covering another object, a valid proof on
   another activity type and on the `Delete` of a status), `test/inbox.test.ts` ("records no retraction for input that
@@ -121,7 +126,7 @@ against their own instance. TLS is assumed between all parties.
 - **ID-3: remote input never changes local actors or local objects.** No inbound activity updates, deletes, moves or
   attributes anything to a local account or local status. _Enforced (main)_ for actors and relationships: `upsertRemoteActor` and
   `localAccount` in `src/domain/inbox.ts`; `test/inbox.test.ts` ("a local actor URI is never written", "an actor updates
-  only itself"). _Implemented on branch `kopje/inbound-statuses`_ for statuses, favourites and boosts: a remote object
+  only itself"). _Enforced (main)_ for statuses, favourites and boosts: a remote object
   must have its actor's origin and name no other author, and only its stored author updates or deletes it, so a local
   status is never created, updated or deleted from outside (`storeRemoteStatus` and `updateRemoteStatus` in
   `src/domain/remote-statuses.ts`, `deleteObject` in `src/domain/inbox.ts`); `test/inbox-statuses.test.ts` ("nobody
@@ -139,14 +144,14 @@ against their own instance. TLS is assumed between all parties.
   the object's current author, and an update never changes the author. A same-origin but different actor is refused like
   a cross-origin one. _Enforced (main)_ for Follow, Accept, Reject, Undo, Block, Move and
   Update and Delete of actors: the table in `src/domain/inbox.ts`; `test/inbox.test.ts` ("ID-6: the authorization
-  table"). _Implemented on branch `kopje/inbound-statuses`_ for Create, Update and Delete of statuses, Like and
+  table"). _Enforced (main)_ for Create, Update and Delete of statuses, Like and
   Announce (the rows of the same table): `Create` needs the actor's origin and no other `attributedTo`; `Update` and
   `Delete` the stored status's author (a refused `Delete` records no retraction); `Like` a local status the actor may
   see (VIS-1, which Mastodon does not check); `Announce` an original that is public, unlisted or the actor's own
   (VIS-6); `Undo` of a `Like` or `Announce` the actor's own; `test/inbox-statuses.test.ts` ("ID-6: another actor of
   the same origin cannot update a status", "deletes the author’s status with its children, and nothing of anyone
   else’s (ID-6, ID-3)", "ID-6, ID-7: keeps an Undo that arrived before its Like", "ID-6, VIS-6: a boost of a private,
-  direct or unfetchable object stores nothing"). _Implemented on branch `kopje/quotes-1a`_ for the `Delete` of a quote's
+  direct or unfetchable object stores nothing"). _Enforced (main)_ for the `Delete` of a quote's
   stamp (FEP-044f's `QuoteAuthorization`, a row of the same table): only the quoted status's author revokes, and only
   the quotes of that author's statuses that name the stamp; the revocation is recorded once, for good, under the stamp
   and that author (`quote_revocations`), so the stamp never verifies a quote of that author's statuses again, and
@@ -181,7 +186,7 @@ against their own instance. TLS is assumed between all parties.
   that a redelivered pair Undo or Reject after a new Follow cannot be told from a new one. `test/inbox.test.ts` ("ID-7: replay changes nothing twice", "OPS-1"), `test/inbox-regressions.test.ts`,
   `test/inbox-verify4.test.ts` ("keeps a Block with a pair-shaped id undone", "changes nothing when a Block takes a new
   id at the retraction cap").
-  _Implemented on branch `kopje/inbound-statuses`_ for statuses, favourites and boosts: a status, favourite or boost
+  _Enforced (main)_ for statuses, favourites and boosts: a status, favourite or boost
   exists once per natural key (its uri; one favourite and one boost per account and status), so a repeated `Create`,
   `Like` or `Announce` adds no row or notification; a `Delete` or `Undo` that arrives first is recorded and keeps the
   object, favourite or boost from appearing, and a replay after it changes nothing; an `Update` applies only if its
@@ -224,7 +229,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
 - **VIS-1: one rule decides who may see a status**, Mastodon's `StatusPolicy#show?`: the statuses of an unavailable
   author (a suspended local account, or a remote account whose deletion has started) are seen by nobody; the author sees all their own; an author who blocks the viewer hides everything from them; `public`
   and `unlisted` are seen by everyone else; `private` by accepted followers and the mentioned (silent included);
-  `direct` and `limited` by the mentioned (silent included) only. Every read path uses the same SQL rule, from the one policy module (`docs/visibility.md`; `test/policy.test.ts` keeps the rule out of other modules). A remote account is unavailable from the first transaction of its purge (`accounts.deleted_at`), so nothing of it is shown while the purge's batches remove its relationships and statuses (`test/inbox-regressions.test.ts`, "shows nothing of the actor from the Delete on"). _Enforced (main):_ `src/domain/audience.ts` (`visibleSql`, `canView`); `test/audience.test.ts`,
+  `direct` and `limited` by the mentioned (silent included) only. Every read path uses the same SQL rule, from the one policy module (`docs/visibility.md`; `test/policy.test.ts` keeps the rule out of other modules). A remote account is unavailable from the first transaction of its purge (`accounts.deleted_at`), so nothing of it is shown while the purge's batches remove its relationships and statuses (`test/inbox-regressions.test.ts` ("shows nothing of the actor from the Delete on")). _Enforced (main):_ `src/domain/audience.ts` (`visibleSql`, `canView`); `test/audience.test.ts`,
   `test/visibility.test.ts` (single status, context, history, source, `favourited_by`, timelines, account statuses,
   notifications, bookmarks, favourites). _Enforced (main)_ for search: `src/domain/search.ts`;
   `test/search.test.ts` ("never returns a status the viewer may not see", "drops a boosted status that became
@@ -233,10 +238,10 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   mentions included). Hashtag search is recent autocomplete over the viewer's own library windows and the newest
   public statuses, not a catalogue: a tag outside the windows is not found. _Gap:_ a status the viewer saved that later
   became hidden still takes a slot of the viewer's own window, which reveals that something changed, not what. Media
-  URLs appear only in statuses that pass the rule (see the capability URL accepted risk). The object endpoint serves only what VIS-4 allows (enforced on main). The web UI's public pages apply the rule with no viewer: _Implemented on branch `kopje/web-ui`:_ `src/domain/web-pages.ts`; `test/web-pages.test.ts`. oEmbed (`GET /api/oembed`) and the embed page take the status page's read: `test/oembed.test.ts`.
+  URLs appear only in statuses that pass the rule (see the capability URL accepted risk). The object endpoint serves only what VIS-4 allows. The web UI's public pages apply the rule with no viewer: _Enforced (main):_ `src/domain/web-pages.ts`; `test/web-pages.test.ts`. oEmbed (`GET /api/oembed`) and the embed page take the status page's read: `test/oembed.test.ts`.
 - **VIS-2: limited stays limited.** A direct status with silent recipients (Misskey `specified`) is `limited`: shown
   only to its addressed recipients, presented as `private` by the API, never widened by an edit. _Enforced (main):_ `interpretAddressing` in `src/domain/audience.ts`; `test/audience.test.ts` ("reads Misskey
-  specified"). _Implemented on branch `kopje/inbound-statuses`_ for inbound statuses: addressing goes through
+  specified"). _Enforced (main)_ for inbound statuses: addressing goes through
   `interpretAddressing`, including the owner of the personal inbox a status came to, and an edit never changes the
   visibility or adds a recipient to a private, direct or limited status; `test/inbox-statuses.test.ts` ("VIS-2: a
   Misskey specified note is limited", "never widens a private audience"). Outbound: each silent recipient gets a copy of its own at
@@ -269,7 +274,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   A profile change (API or settings page, images and fields included) records an `Update` of the actor to Public for
   the followers, only when the published document changed; it replaces the earlier actor Updates still waiting, and
   is never turned into a Create. A suspended actor sends none. Publication of a cutover records the same Update for
-  each local profile whose images the conversion changed (OPS-8). _Implemented on branch `kopje/web-ui`:_
+  each local profile whose images the conversion changed (OPS-8). _Enforced (main):_
   `src/domain/actor-update.ts`, `enqueueActivity` in `src/domain/deliveries.ts`; `test/actor-update.test.ts`.
 - **VIS-4: the object endpoint serves public and unlisted local statuses only.** `/ap/o/:uuid` and status documents
   answer for local `public` and `unlisted` statuses, as Mastodon does for an unauthenticated fetch. `private`, `direct`,
@@ -281,7 +286,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   moves to a public original, a legacy image shows only with a servable status. Boosts (`Announce` ids) answer 404; Mastodon serves them. The permalink `/@user/:id`
   shows the same set as HTML, and answers every other case (private, direct, limited, a boost, a remote status, another
   author, a suspended author, no status) with the same 404 page; with an ActivityPub `Accept` it serves the object
-  endpoint's Note. A profile page lists only the account's public and unlisted originals. _Implemented on branch `kopje/web-ui`:_
+  endpoint's Note. A profile page lists only the account's public and unlisted originals. _Enforced (main):_
   `statusPage` and `profilePage` in `src/domain/web-pages.ts`; `test/web-pages.test.ts` ("answers the same 404 for
   private, direct, limited, boosts, remote, another author and nothing", "hides the statuses of a suspended account").
 - **VIS-5: lists also apply the viewer's filters**, Mastodon's `StatusFilter`. Feeds, context, notifications, bookmarks,
@@ -289,7 +294,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   by id is not filtered. A mute counts only until it expires (VIS-14), and home also drops a status or boosted
   original that mentions an account the viewer blocks or mutes (`FeedManager#filter_from_home`; VIS-13, VIS-14). _Enforced (main):_ `filteredForSql`, `listableSql` and `homeFilterSql` in
   `src/domain/audience.ts`; `test/audience.test.ts`, `test/visibility.test.ts` ("blocked and muted accounts stay out of
-  lists"). _Implemented on branch `kopje/inbound-statuses`:_ a domain block matches an account by its stored domain
+  lists"). _Enforced (main):_ a domain block matches an account by its stored domain
   and by the host of its actor id, the account's side normalized (lowercase, no port, no trailing dot) and compared with the block's stored, normalized domain through its index (`inDomainSql`, `domainBlocksSql`), everywhere a domain block applies (lists, notifications,
   relationships, inbound Follows and Moves, account search and search resolution), so an account confirmed under
   another WebFinger domain cannot escape a block of the server it lives on; `test/inbox-canonical-address.test.ts`
@@ -297,13 +302,13 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   evade a block on it"). Account search finds an account that is available and not on a domain the viewer blocks
   (`findableBySql`). Search resolution answers an account only when account search would find it, and a status by the
   rule of a single status (VIS-1, `canView`, as Mastodon's `ResolveURLService` authorizes `show?`) unless the viewer
-  blocks its author's domain. _Implemented on branch `kopje/account-lists`:_ `findAccounts` in
+  blocks its author's domain. _Enforced (main):_ `findAccounts` in
   `src/domain/accounts.ts`, `resolveSearch` in `src/domain/remote-statuses.ts`; `test/inbox-statuses.test.ts`
   ("answers a status by the single-status rule"), `test/policy-endpoints.test.ts`.
 - **VIS-6: a wrapper reveals nothing its target hides.** A boost is visible only if its original is; boosting is limited
   to `public` and `unlisted` statuses and one's own `private` ones (`StatusPolicy#reblog?`). _Enforced (main):_ `viewableSql`; `test/visibility.test.ts` ("a boost of an original the viewer may not see is hidden
   with it"), `test/statuses.test.ts` ("refuses to boost direct and others’ private statuses"). A quote embeds its quoted
-  status only as VIS-27 allows. _Implemented on branch `kopje/inbound-statuses`_ for
+  status only as VIS-27 allows. _Enforced (main)_ for
   inbound boosts: an `Announce` is stored only for an original that is public, unlisted or the booster's own, decided
   before anything is stored, so a boost of a private, direct, limited or unfetchable object stores nothing (neither
   the boost nor the fetched original); an embedded copy of someone else's object is never trusted (it is fetched); a
@@ -325,7 +330,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   without pending requests"). `GET /api/v1/accounts/familiar_followers` reads accepted follows on both sides only,
   leaves out suspended accounts and the followers the viewer filters out of lists (VIS-5, VIS-14, VIS-15: blocks,
   mutes while they apply, domain blocks; `filteredForSql`), and shows no follow that the followers and following lists
-  would not show the same viewer: _Implemented on branch `kopje/startup-reads`:_ `familiarFollowers` in
+  would not show the same viewer: _Enforced (main):_ `familiarFollowers` in
   `src/domain/accounts.ts`; `test/account-reads.test.ts` ("counts accepted follows only (VIS-8)", "leaves out
   accounts the viewer blocks or mutes", "shows a follower whose mute has expired, and hides one on a domain the viewer
   blocks", "shows no more than the followers and following lists show"). The followers and following lists
@@ -340,7 +345,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   it (its followers or following collection shows no first page) and hides its lists the same way; one Kopje has not
   learned yet hides nothing, and a collection that cannot be read for now leaves what was learned unless the other
   one is known to hide its items (`src/federation/collections.ts`, `accounts.hide_collections`;
-  `test/remote-collections.test.ts`). _Implemented on branch `kopje/account-lists`:_ `followListsShownSql` and
+  `test/remote-collections.test.ts`). _Enforced (main):_ `followListsShownSql` and
   `followListedSql` in
   `src/domain/audience.ts`, `listFollows` and `familiarFollowers` in `src/domain/accounts.ts`, `getCollection` in
   `src/domain/actors.ts`; `test/accounts.test.ts` ("follower lists for the viewer (R13)"), `test/account-reads.test.ts`
@@ -375,7 +380,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `src/domain/statuses.ts`, `ACCOUNT_COLUMNS` in `src/domain/accounts.ts`; `test/statuses.test.ts` ("review
   regressions"). A tag's `history` (`GET /api/v1/tags/:id`) counts only public originals (as Mastodon's
   `Trends::Tags`) of accounts that are not suspended, the same for every viewer, so it counts no status the caller may
-  not see: _Implemented on branch `kopje/startup-reads`:_ `getTag` in `src/domain/tags.ts`; `test/tags.test.ts`
+  not see: _Enforced (main):_ `getTag` in `src/domain/tags.ts`; `test/tags.test.ts`
   ("shows a tag with seven days of history", "leaves out the statuses of a suspended account", "keeps the public
   history whatever hidden statuses the window holds", "counts public statuses only"). The rule is applied in the query
   with no row limit, so hidden statuses cannot change the public counts.
@@ -395,7 +400,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   as it would anyone (`recipientsFor` and `outboundKind` in `src/domain/audience.ts`). Deliveries queued before the block are
   sent as queued, as in Mastodon (see the accepted risks). A local block always applies: the ended remote `Follow` is recorded as retracted (ID-7)
   only within that actor's retraction cap, since the block itself refuses the actor's Follows while it lasts.
-  _Implemented on branch `kopje/blocks-mutes`:_ `block` and `unblock` in `src/domain/blocks.ts`, the inbound `block`
+  _Enforced (main):_ `block` and `unblock` in `src/domain/blocks.ts`, the inbound `block`
   in `src/domain/inbox.ts`, `resolveMentions` and `editStatus` in `src/domain/statuses.ts`, `audienceTargets` in
   `src/domain/deliveries.ts`, `shownSql` and `homeFilterSql` in `src/domain/audience.ts`, `homeTimeline` in
   `src/domain/timelines.ts`, `mayInteract` in `src/domain/inbox.ts`; `test/blocks.test.ts` ("blocks a local account",
@@ -412,8 +417,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   judged at the time of each request or write (the credential's time, or the activity's), so it stops applying at its
   time whether or not the sweep has removed it; the inbound sweep removes 100 expired mutes per call (RES-4). A `Move`
   carries the muter's active mutes to the target with their expiry, replacing an expired mute of the target but never
-  an active one (`move` in `src/domain/inbox.ts`; `test/inbox.test.ts`, "carries an active mute over an expired one").
-  _Implemented on branch `kopje/blocks-mutes`:_ `activeMuteSql`, `filteredForSql`, `homeFilterSql` and `shownSql` in
+  an active one (`move` in `src/domain/inbox.ts`; `test/inbox.test.ts` ("carries an active mute over an expired one")).
+  _Enforced (main):_ `activeMuteSql`, `filteredForSql`, `homeFilterSql` and `shownSql` in
   `src/domain/audience.ts`, `mute` in `src/domain/blocks.ts`; `test/blocks.test.ts` ("hides the
   muted account from timelines and search", "stops applying an expired mute at its time", "keeps the viewer's own
   statuses in home", "leaves out post notifications from a sender the recipient mutes"), `test/push-send.test.ts`
@@ -436,7 +441,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   profile `Update`, a `Delete` or an `Undo` still reaches them, as Mastodon 4.5 sends those to `followers.inboxes`. An
   unblock
   stops the cleanup: what it removed stays removed. The domain is normalized (lowercase, punycode, no trailing dot or
-  slash) and this instance's own domain is refused. _Implemented on branch `kopje/blocks-mutes`:_ `blockDomain` and
+  slash) and this instance's own domain is refused. _Enforced (main):_ `blockDomain` and
   `runDomainBlockCleanups` in `src/domain/blocks.ts`, `runInboundJobs` in `src/store.ts`, `audienceTargets` in
   `src/domain/deliveries.ts`; `test/blocks.test.ts` ("ends our follows there with an Undo and theirs
   with a Reject", "finishes the cleanup in later rounds", "stops the cleanup when the domain is unblocked", "reads a
@@ -452,7 +457,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   members (the owner, and accounts followed with an accepted follow) through `homeFilterSql` (VIS-1, VIS-5, VIS-13 to
   VIS-15) and the follow's options, with the list's `replies_policy`; a pending member contributes nothing. An
   exclusive list only removes its members' statuses from the owner's home; post notifications are unchanged, as
-  Mastodon's `FeedInsertWorker#notify?` lets `:skip_home` through. _Implemented on branch `kopje/lists`:_
+  Mastodon's `FeedInsertWorker#notify?` lets `:skip_home` through. _Enforced (main):_
   `src/domain/lists.ts`, `listTimeline` and `EXCLUSIVE_MEMBERS` in `src/domain/timelines.ts`, migration
   `0007_list_members` (trigger `list_members_follow_ended`), `moveBatch` in `src/domain/inbox.ts`; `test/lists.test.ts`,
   `test/inbox.test.ts` ("list members and inbound activities"), `test/migrations.test.ts`,
@@ -469,7 +474,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   reads the blocker's conversations to find those with the blocked account; both are a local user's action on their
   own data, and rare. Its last
   status is shown only while the read rule (VIS-1) lets the owner see it, else as null; a block ends the blocker's
-  conversations with the blocked account. _Implemented on branch `kopje/conversations`:_ `src/domain/conversations.ts`,
+  conversations with the blocked account. _Enforced (main):_ `src/domain/conversations.ts`,
   `src/domain/conversation-rows.ts`, migration `0009_conversations` (triggers `statuses_thread` and
   `conversation_statuses_removed`);
   `test/conversations.test.ts`, `test/migrations.test.ts`, `test/policy-endpoints.test.ts`,
@@ -485,8 +490,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   status matched on at most 10,000 code units of its text and the statuses of one response on 400,000 together, shared
   by water-filling (short texts whole, long ones up to one level; a page of 40 is always matched in full, but a keyword
   deep in a long status of a very large response may be missed, while filter statuses always match), each keyword an
-  escaped literal pattern (the `iu` flags, no quantifier) that cannot backtrack. _Implemented on branch
-  `kopje/filters`:_ `src/domain/filters.ts`, `src/domain/status-presenter.ts`, migration `0012_filters`;
+  escaped literal pattern (the `iu` flags, no quantifier) that cannot backtrack. _Enforced (main):_ `src/domain/filters.ts`, `src/domain/status-presenter.ts`, migration `0012_filters`;
   `test/filters.test.ts` (API, ownership, matching, the worst case at the caps), `test/policy-filters.test.ts`
   (generated worlds), `test/policy-bounds.test.ts` (rows read up to the caps).
 - **VIS-19: a private note is its author's alone, and an endorsement lasts only as long as the follow.** A note
@@ -498,7 +502,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   it back. Endorsements are public, as Mastodon 4.5's: an account's list is shown to anyone while the account is
   available, leaving out unavailable endorsed accounts (R28). They are not federated (Mastodon 4.5's actor has no
   endorsements collection). A remote account's purge deletes the endorsements of it and the notes on it within its
-  batches (RES-6). _Implemented on branch `kopje/account-relations`:_ `src/domain/endorsements.ts`, `setNote` and
+  batches (RES-6). _Enforced (main):_ `src/domain/endorsements.ts`, `setNote` and
   `relationshipsOf` in `src/domain/accounts.ts`, `removeFromFollowers` in `src/domain/blocks.ts`, `purgeRelationships`
   in `src/domain/inbox.ts`, migration `0014_account_notes_and_pins` (trigger `account_pins_follow_ended`);
   `test/account-relations.test.ts`, `test/inbox.test.ts` ("endorsements and inbound activities"),
@@ -514,7 +518,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   account's public and unlisted statuses carry it and the date of the newest, never which; an unavailable account
   shows none (VIS-1). The counts are kept on write, so no read counts the account's history; featuring a hashtag counts
   the account's own history once, and deleting or editing the newest tagged status walks back to the one before it, as
-  Mastodon does (accepted: a local user's action on their own data). _Implemented on branch `kopje/tags`:_
+  Mastodon does (accepted: a local user's action on their own data). _Enforced (main):_
   `src/domain/tags.ts`, `src/domain/featured-tags.ts`, `homeTimeline` in `src/domain/timelines.ts`, `TagWindows` in
   `src/domain/audience.ts`, migration `0016_tags`; `test/followed-tags.test.ts`, `test/featured-tags.test.ts`,
   `test/policy-endpoints.test.ts`, `test/policy-bounds.test.ts`, `test/migrations.test.ts`.
@@ -527,7 +531,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   (`ConversationMute`) is read only by the policy module (`conversationMutedSql`, `test/policy.test.ts`): it shows in
   its owner's `muted` and keeps notify from writing a notification about a status of the muted conversation
   (`notifiedSql`, R15 with R31); it is never federated. A remote status's removal deletes its pins within its batches
-  (RES-6). _Implemented on branch `kopje/status-actions`:_ `src/domain/status-actions.ts`, `getFeatured` and
+  (RES-6). _Enforced (main):_ `src/domain/status-actions.ts`, `getFeatured` and
   `featuredActivity` in `src/domain/activities.ts`, `accountStatuses` in `src/domain/timelines.ts`, the presenter's
   viewer flags, `notifiedSql` and `conversationMutedSql` in `src/domain/audience.ts`, `deleteStatusWithin` in
   `src/domain/inbox.ts`, migration `0018_status_pins_and_conversation_mutes`; `test/status-actions.test.ts`,
@@ -551,7 +555,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   paged by their index and the summary reads at most 100; a request's count is kept as it is written; the private
   mention walk reads at most 101 statuses; answering a request, or a bulk form of at most 100 ids, walks at most 2,000
   of the senders' notifications in the request and the rest in the inbound job rounds; and a remote sender's purge
-  deletes its requests, permissions and jobs within its batches. _Implemented on branch `kopje/notification-policy`:_
+  deletes its requests, permissions and jobs within its batches. _Enforced (main):_
   `notificationPolicySql` and `UNFILTERED_SQL` in `src/domain/audience.ts`, `notify` in
   `src/domain/notifications.ts`, `src/domain/notification-requests.ts`, `src/domain/notification-groups.ts`,
   `src/domain/push.ts`, `purgeRelationships` and `STATUS_CHILDREN` in `src/domain/inbox.ts`, migration
@@ -571,7 +575,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   Kopje's rule for an activity without `to`, each by shared inbox when it has one. A replied-to server may so learn the
   uri of a status it was not sent, as with Mastodon; the uri carries no content, and the status is served, or not, by
   its own server, the reported account's. The work is bounded (RES-7): at most 100 statuses and 100 domains, the
-  statuses and replied-to accounts read by key. _Implemented on branch `kopje/reports`:_ `src/domain/reports.ts`,
+  statuses and replied-to accounts read by key. _Enforced (main):_ `src/domain/reports.ts`,
   `accountStatusIds` in `src/domain/timelines.ts`, `reportForwardees` in `src/domain/audience.ts`, `flagActivity` in
   `src/domain/activities.ts`, `purgeRelationships` and `PURGED_ACCOUNT_CHILDREN` in `src/domain/inbox.ts`, migration
   `0022_reports`; `test/reports.test.ts`, `test/policy.test.ts`, `test/policy-bounds.test.ts`,
@@ -610,23 +614,20 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   token, a signed-out web session or a suspended account closes (1008) at the next turn, which any write starts, and an
   expired token's at the cron's turn within 5 minutes. A conversation's change is sent at most once to each socket:
   its convSeq is raised and written before the send. Every stream Mastodon's streaming server knows is served; any other
-  name answers `Unknown stream type`. The work is bounded (RES-6, RES-7). _Implemented on branch
-  `kopje/streaming-1`:_ `src/mastodon/streaming.ts`, `src/stream-hub.ts`, `src/domain/streaming.ts`,
+  name answers `Unknown stream type`. The work is bounded (RES-6, RES-7). _Enforced (main):_ `src/mastodon/streaming.ts`, `src/stream-hub.ts`, `src/domain/streaming.ts`,
   `authorizeStream` in `src/domain/auth.ts`, `streamedNotification` in `src/domain/notifications.ts`, migration
   `0026_streaming`; `test/streaming/streaming.test.ts`, `test/policy-bounds.test.ts`, `test/log-redaction.test.ts`,
-  `test/migrations.test.ts`, `test/cascade-guard.test.ts`. _Implemented on branch `kopje/streaming-2`:_ the home
+  `test/migrations.test.ts`, `test/cascade-guard.test.ts`. _Enforced (main):_ the home
   events: `homeStatus` in `src/domain/timelines.ts` (with `statusReads`' `only`), `mentionedStatus` in
   `src/domain/notifications.ts`, `deleteAudience` in `src/domain/audience.ts`, `streamUnit` and `streamDelete` in
   `src/domain/streaming.ts`, migration `0028_streaming_home`; `test/streaming/home.test.ts`,
   `test/streaming-oracle.test.ts`, `test/stream-delete.test.ts`, `test/layering.test.ts`,
-  `test/policy-bounds.test.ts`, `test/migrations.test.ts`, `test/cascade-guard.test.ts`. _Implemented on branch
-  `kopje/streaming-3`:_ lists, direct and merged: `listStatus` in `src/domain/timelines.ts`, `streamedConversation`
+  `test/policy-bounds.test.ts`, `test/migrations.test.ts`, `test/cascade-guard.test.ts`. _Enforced (main):_ lists, direct and merged: `listStatus` in `src/domain/timelines.ts`, `streamedConversation`
   and the change sequence in `src/domain/conversations.ts`, the merge transition in
   `src/domain/notification-requests.ts`, `streamUnit`, `streamDelete` and `streamConversations` in
   `src/domain/streaming.ts`, migration `0032_streaming_lists`; `test/streaming/lists.test.ts`,
   `test/streaming/direct.test.ts`, `test/streaming-oracle.test.ts`, `test/stream-delete.test.ts`,
-  `test/policy-bounds.test.ts`, `test/migrations.test.ts`, `test/cascade-guard.test.ts`. _Implemented on branch
-  `kopje/streaming-4`:_ public and hashtag: `publicStatus` and `tagStatus` in `src/domain/timelines.ts`,
+  `test/policy-bounds.test.ts`, `test/migrations.test.ts`, `test/cascade-guard.test.ts`. _Enforced (main):_ public and hashtag: `publicStatus` and `tagStatus` in `src/domain/timelines.ts`,
   `mentionsFilteredFor` in `src/domain/audience.ts`, `streamUnit` and `streamDelete` (the tombstone) in
   `src/domain/streaming.ts`, the hashtag subscription in `src/stream-hub.ts`, migration `0035_streaming_public`;
   `test/streaming/public.test.ts`, `test/streaming-oracle.test.ts`, `test/stream-delete.test.ts`,
@@ -640,7 +641,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   source also requires R2. States, legacy quotes and Mastodon's behaviour: [visibility.md](visibility.md). Embedding
   stops after one level; the inner quote is a state and an id. The quotes list answers 404 under R3, then applies R8
   to quoting statuses, or R2 for the quoted author. Quotes never widen feed membership. The work is bounded (RES-7).
-  Implementation: `quoteReads` in `src/domain/audience.ts`, the presenter in `src/domain/status-presenter.ts`,
+  _Enforced (main):_ `quoteReads` in `src/domain/audience.ts`, the presenter in `src/domain/status-presenter.ts`,
   `statusQuotes` in `src/domain/statuses.ts`, `acceptedQuoteWindow` in `src/domain/quotes.ts`, migration
   `0036_quotes_list`; `test/quotes-api.test.ts`, `test/policy-oracle.test.ts`, `test/policy-bounds.test.ts`,
   `test/policy.test.ts`, `test/migrations.test.ts`.
@@ -660,7 +661,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   its `Delete` was signed for, the quoted author's LD-signed `Delete` (signed once in the Worker, delivered byte for
   byte to the quoter and to the receipts and audiences of both statuses), then a `Reject` of every live request the
   quoting author had answered for the quote, by id, in the same lane, recorded as retractions like the `Delete`. Accepted risk: a receiver that applies an `Accept` and a `Reject`
-  concurrently (Mastodon 4.5.11 checks `pending?` in memory) may keep the quote. Implementation: `answerQuoteRequest`,
+  concurrently (Mastodon 4.5.11 checks `pending?` in memory) may keep the quote. _Enforced (main):_ `answerQuoteRequest`,
   `quoteAuthorization`, `retireQuoteOf` and `revokeQuoteRow` in `src/domain/quotes.ts`, `mayQuoteSql` and
   `reachQuoters` in `src/domain/audience.ts`, `revokeQuote` in `src/domain/statuses.ts`, the immutable and `reachOf`
   envelopes in `src/domain/deliveries.ts`, migration `0038_quote_requests`; `test/quote-requests.test.ts`,
@@ -672,7 +673,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   local quote takes it, until the `Delete` records it for good in `quote_revocations`; a `Delete` proven by
   the author's own signature is also forwarded unedited, once, to every inbox that received the quoting status, signed
   by its local author, as a retraction (FEP-044f "Handling a revocation"). No verification round ever decides a local
-  quote. Implementation: `recordLocalQuote`, `acceptOurQuote`, `rejectOurQuote` and `revokeStamp` in
+  quote. _Enforced (main):_ `recordLocalQuote`, `acceptOurQuote`, `rejectOurQuote` and `revokeStamp` in
   `src/domain/quotes.ts`, `preparePost` in `src/domain/statuses.ts`, migration `0039_quotes_local`;
   `test/quote-authoring.test.ts`.
 
@@ -802,11 +803,9 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `profile` or `read:accounts`); one helper decides scope coverage (parents cover children, `follow` expands to its
   split scopes, nothing else is implied: `read` does not cover `profile`, which covers nothing else). _Enforced (main):_ `src/mastodon/routes.ts`, `src/security/scopes.ts`;
   `test/scopes.test.ts`, `test/vectors.test.ts` ("Mastodon's scope hierarchy"), `test/oauth.test.ts` ("scopes on
-  routes"). Main adds `optional` scopes (no token reads as anonymous; a token sent must be valid). _Implemented on
-  branch `kopje/startup-reads`:_ an `optional` route may declare no scope (`GET /api/v1/tags/:id`: any valid token,
+  routes"). A route may also be `optional`: no token reads as anonymous, and a token sent must be valid; such a route may declare no scope (`GET /api/v1/tags/:id`: any valid token,
   app tokens read as anonymous), and a `token` route may still require a user (`GET /api/v1/announcements`: any user
-  token, whatever its scopes; app tokens 422); `test/tags.test.ts`, `test/placeholders.test.ts`. _Implemented on branch
-  `kopje/admin-a1`:_ the admin API's routes are optional-token routes with admin scopes (Mastodon's
+  token, whatever its scopes; app tokens 422); `test/tags.test.ts`, `test/placeholders.test.ts`. _Enforced (main):_ the admin API's routes are optional-token routes with admin scopes (Mastodon's
   `authorize_if_got_token!`): a token sent must be valid and cover the route's scope, and who may act is decided in
   the Store (VIS-29); `test/mastodon-access.test.ts` compares them with Mastodon's, setting aside only each admin
   route's role policy, and `test/admin-api.test.ts` ("admin routes").
@@ -837,13 +836,12 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `src/security/tokens.ts` and `sessionMatches` in `src/platform/store-admin.ts`; `test/ops-authority.test.ts`
   ("constantTimeEqual"). - The OAuth admin of the Mastodon admin API (VIS-29) is not an admin here: it never
   holds an `ImportAuthority`, and `/api/v1/admin/*` is outside the Access application's `/admin` path. Its state is
-  shown only to Access, as `oauthAdmin` in `GET /admin/health`. _Implemented on branch `kopje/admin-a1`:_
+  shown only to Access, as `oauthAdmin` in `GET /admin/health`. _Enforced (main):_
   `src/app/admin.ts`; `test/admin-api.test.ts` ("GET /admin/health: oauthAdmin"). The operations that repair it,
-  setting an account's email and unsuspending an account, are Access-only: setting an email is _implemented on branch
-  `kopje/admin-a2`_ (`POST /admin/accounts/email`, `setAccountEmail` in `src/domain/admin-accounts.ts`, checked with
+  setting an account's email and unsuspending an account, are Access-only. _Enforced (main)_ for setting an email
+  (`POST /admin/accounts/email`, `setAccountEmail` in `src/domain/admin-accounts.ts`, checked with
   `accessAdminRefusal` in its transaction, refusing an email that another local account's matches after normalization;
-  `test/admin-reports.test.ts` ("set-email"), `test/cli.test.ts`); unsuspending is _implemented on branch
-  `kopje/admin-a3b`_ (`POST /admin/accounts/unsuspend` and `kopje-admin account unsuspend <username>`,
+  `test/admin-reports.test.ts` ("set-email"), `test/cli.test.ts`). _Enforced (main)_ for unsuspending (`POST /admin/accounts/unsuspend` and `kopje-admin account unsuspend <username>`,
   `unsuspendAccount` in `src/domain/admin-accounts.ts`, checked with `accessAdminRefusal` in its transaction, the same
   unsuspension as the admin API's, its credential epoch kept, logged with the Access identity;
   `test/admin-suspension.test.ts` ("POST /admin/accounts/unsuspend"), `test/cli.test.ts`). It is how a suspended
@@ -890,7 +888,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   families and deletes the web client's unexchanged codes for the user in the same transaction, so their sign-ins in
   flight install nothing. Only a signed-in browser's sign-out (Origin and form token, WEB-4) can end
   a family. Authorizations and sessions are listed and revoked only by a session of the web client, for the viewer's
-  own tokens (AUTH-6). _Implemented on branch `kopje/web-ui`:_ `src/domain/web-session.ts`, `src/web/session.ts`,
+  own tokens (AUTH-6). _Enforced (main):_ `src/domain/web-session.ts`, `src/web/session.ts`,
   `src/app/web.tsx`; `test/web-session.test.ts` ("signs in through Access and sets an opaque, HttpOnly, Secure,
   SameSite session cookie", "refuses a callback without the login cookie, or with another state", "uses a code once",
   "consumes a sign-in attempt once", "keeps one session per browser", "trusts nothing but the attempt id from the
@@ -908,14 +906,13 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   requires a valid Access identity, an `Origin` equal to the instance origin (missing, `null` or foreign answers 403),
   and `decision=approve`; the Store revalidates client, redirect URI, scopes and account when it writes the code.
   _Enforced (main):_ `src/app/authorize.tsx`, `issueCode` in `src/domain/oauth.ts`; `test/oauth.test.ts` ("refuses a
-  decision posted from another origin", "refuses an account suspended between the consent page and approval"). Missing
-  and `null` Origin: _Implemented on branch `kopje/web-ui`:_ `test/oauth.test.ts` ("refuses a decision posted from another origin, a null
-  origin or none").
+  decision posted from another origin, a null origin or none", "refuses an account suspended between the consent page
+  and approval").
 - **WEB-2: Kopje's HTML pages cannot be framed, scripted or cached.** Consent and code pages send a CSP with `script-src
 'none'` and `frame-ancestors 'none'`, `X-Frame-Options: DENY`, `Referrer-Policy: same-origin` and `Cache-Control:
 no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize.tsx`, `src/web/consent.tsx`;
   `test/oauth.test.ts` ("logs in through Access and calls the API with the token"). _Gap: only `script-src`,
-  `X-Frame-Options` and escaping are asserted._ Web UI pages: _Implemented on branch `kopje/web-ui`:_ a CSP of `default-src 'none'` with only
+  `X-Frame-Options` and escaping are asserted._ Web UI pages: _Enforced (main):_ a CSP of `default-src 'none'` with only
   `style-src 'self'` (the stylesheet is a static asset), `img-src 'self' https:`, `form-action 'self'`, `base-uri 'none'`
   and `frame-ancestors 'none'` (no script source at all), `X-Frame-Options: DENY`; pages of a signed-in user and the
   sign-in flow send `Cache-Control: no-store` and `Referrer-Policy: same-origin`; public pages may be kept 60 s and vary
@@ -926,8 +923,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `/assets/embed-status.js`, which only answers the embedding page's height request), and it may be kept 180 s. It
   shows only the status its status page shows (VIS-4), has no form and no signed-in state, and links open outside the
   frame; its 404 is the ordinary framing-denied page. `src/app/web.tsx`; `test/oembed.test.ts` ("may be framed by any
-  site", "leaves every other page unframable"). `/setup`: _Implemented on branch
-  `kopje/setup`:_ the same CSP, `X-Frame-Options: DENY`, `Referrer-Policy: same-origin` and `Cache-Control: no-store`
+  site", "leaves every other page unframable"). `/setup`: _Enforced (main):_ the same CSP, `X-Frame-Options: DENY`, `Referrer-Policy: same-origin` and `Cache-Control: no-store`
   on every page. Not `no-referrer`: under it browsers post a same-origin form with `Origin: null`, which WEB-1's
   Origin check refuses; `same-origin` still sends no referrer to other origins; `src/app/setup.tsx`; `test/setup.test.ts` ("WEB-2, WEB-3, WEB-5: is never cached, framed, scripted
   or opened to other origins").
@@ -935,13 +931,15 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `/api/*`, `/oauth/token`, `/oauth/revoke`, `/oauth/userinfo` (bearer tokens), and for GET to the public documents
   `/.well-known/*`, `/nodeinfo/*` and local actor documents (`/ap/users/:username`), as Mastodon opens them, only.
   `/oauth/authorize`, `/admin/*`, `/setup` and the web UI send no CORS headers; the profile page `/@:username`, which
-  Mastodon opens, is open only in its ActivityPub form (the actor document), not as HTML. _Enforced (main):_ `src/app/app.ts`; `test/oauth.test.ts` ("opens the API and token
-  endpoints to browser clients, errors included"), `test/federation.test.ts` ("documents open to browsers"). Admin, setup and UI routes: _Planned (B5); `/admin/*` on main sends no CORS headers._
-  UI routes: _Implemented on branch `kopje/web-ui`:_ no CORS headers even for a request with a foreign `Origin`; `test/web-pages.test.ts`,
-  `test/web-session.test.ts`. `/setup`: _Implemented on branch `kopje/setup`:_ no CORS headers, preflight included;
-  `test/setup.test.ts`.
+  Mastodon opens, is open only in its ActivityPub form (the actor document), not as HTML. _Enforced (main):_ CORS is
+  added on those paths only (`API_CORS_PATHS` and `DOCUMENT_CORS_PATHS` in `src/app/app.ts`); `test/oauth.test.ts`
+  ("opens the API and token endpoints to browser clients, errors included", which also finds none on the consent
+  page), `test/federation.test.ts` ("documents open to browsers", "opens the profile page only as the actor document,
+  not as HTML"); UI routes send none even for a request with a foreign `Origin` (`test/web-pages.test.ts`,
+  `test/web-session.test.ts`), nor does `/setup`, preflight included (`test/setup.test.ts`). _Gap:_ no test sends
+  `/admin/*` a foreign `Origin`.
 - **WEB-4: the web UI applies WEB-1 to every state change.** Each form that changes state checks `Origin` and its
-  session; a return or redirect target is a validated local path. _Implemented on branch `kopje/web-ui`:_ every POST (profile, avatar, header,
+  session; a return or redirect target is a validated local path. _Enforced (main):_ every POST (profile, avatar, header,
   revoking an app, signing out other sessions, sign-out) first requires `Origin` equal to the instance origin (missing,
   `null` and foreign answer 403 before the body is read), then the session and an anti-forgery token derived from it
   (SHA-256 of the session token under its own context, compared in constant time). The only redirect targets are fixed
@@ -951,20 +949,19 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `/settings`. A legacy permalink moves to the author's stored username, not the request's text. `src/web/session.ts`,
   `src/app/web.tsx`; `test/web-session.test.ts` ("refuses a missing, null or foreign Origin on every form", "refuses a
   missing or wrong anti-forgery token on every form", "accepts only local paths (WEB-4: unsafe return path)", "returns after sign-in only to a
-  validated local path", "ignores a tampered return path in the login cookie"), `test/web-images.test.ts` ("refuses a
-  foreign, null or missing Origin and a wrong token before any transformation"). `/setup`: _Implemented on branch
-  `kopje/setup`:_ every POST, sign-in with `SETUP_TOKEN` included, first requires `Origin` equal to the instance origin;
+  validated local path", "trusts nothing but the attempt id from the login cookie"), `test/web-images.test.ts` ("refuses a
+  foreign, null or missing Origin and a wrong token before any transformation"). `/setup`: _Enforced (main):_ every POST, sign-in with `SETUP_TOKEN` included, first requires `Origin` equal to the instance origin;
   every other POST then requires the session that authorizes it (the setup session, or after bootstrap the admin's web
   session) and an anti-forgery token derived from it under a context of its own (`kopje-setup-csrf`). The only
   redirect target is `/setup`. `test/setup.test.ts` ("WEB-1, WEB-4: refuse a missing, null or foreign Origin on every
   form", "WEB-4: refuse a missing or wrong anti-forgery token on every form", "WEB-1: refuses a sign-in posted from
   another origin, a null origin or none").
 - **WEB-5: responses declare their type.** API and federation responses carry their exact JSON media type and
-  `X-Content-Type-Options: nosniff`. _Implemented on branch `kopje/inbound-statuses`:_ one middleware sets `nosniff`
+  `X-Content-Type-Options: nosniff`. _Enforced (main):_ one middleware sets `nosniff`
   on every response (API, federation, inbox, media, errors and maintenance answers), and API and federation bodies
   are written by Hono's `c.json` and Fedify with their JSON types; `src/app/app.ts`; `test/inbox-statuses.test.ts`
   ("WEB-5: responses declare their type").
-  Web UI pages: _Implemented on branch `kopje/web-ui`:_ `text/html; charset=UTF-8` and `nosniff` on every page and error page; static assets
+  Web UI pages: _Enforced (main):_ `text/html; charset=UTF-8` and `nosniff` on every page and error page; static assets
   get `nosniff` from `public/_headers`; `test/web-pages.test.ts`, `test/web-session.test.ts`.
 
 ### Setup (SETUP)
@@ -977,7 +974,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   the request came to, and refuses workers.dev, IP addresses and ports").
 - **SETUP-2: `SETUP_TOKEN` only bootstraps.** `/setup` changes require `SETUP_TOKEN`, compared as fixed-size digests.
   Once the domain and admin exist, the token cannot change the domain, the admin or the Access configuration.
-  _Implemented on branch `kopje/setup`:_ the Worker compares the token with `constantTimeEqual` (AUTH-5; it must be at
+  _Enforced (main):_ the Worker compares the token with `constantTimeEqual` (AUTH-5; it must be at
   least 32 characters) and opens a setup session: an opaque id in a `__Host-` cookie (HttpOnly, Secure,
   SameSite=Strict) for at most an hour, of which the Store keeps only the SHA-256. Every setup operation authorizes in
   its own transaction: a live setup session only while nothing is bootstrapped (any configuration row or local account
@@ -998,24 +995,24 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   whose ids it recorded or a single checked object of its name (adopting or recreating is an explicit recovery
   choice). `test/setup-access.test.ts` ("a run paused before its reservation makes no external write after bootstrap",
   "a run whose checkpoint answer arrives after its lease dispatches nothing; the next waits out the grace", "stops at
-  the next checkpoint when the admin's session expires during the run", "refuses a team that is not the selected
+  the next checkpoint when the admin’s session expires during the run", "refuses a team that is not the selected
   account’s organization, before any write", "refuses a reusable policy attached to other applications"). `src/domain/setup.ts`, `src/app/setup.tsx`; `test/setup.test.ts` ("a reused setup token opens nothing", "a
   setup session opened before bootstrap cannot change the domain, the admin or Access", "shows the status to the
   admin, runs the checks, and reconciles Access with a new token", "refuses a signed-in user who is not the admin",
   "AUTH-5: refuses when SETUP_TOKEN is unset or shorter than 32 characters").
 - **SETUP-3: bootstrap happens once.** The domain and the first admin are written in one Store transaction that fails if
-  either exists, so concurrent requests cannot create two. _Implemented on branch `kopje/setup`:_ `bootstrapInstance`
+  either exists, so concurrent requests cannot create two. _Enforced (main):_ `bootstrapInstance`
   writes the domain, the Access configuration, `admin_email` and the admin's local account together, refuses once any
   configuration row or local account exists, while a reconciliation runs or is unresolved (a failure, or a lease that
   ran out without an outcome), or when the session's Access outcome is not the latest completed revision; it ends
   every setup session. `src/domain/setup.ts`;
-  `test/setup.test.ts` ("SETUP-3: concurrent bootstraps create one admin", "SETUP-3: refuses when a domain or an
-  account exists already", "SETUP-3: writes the domain, the Access configuration and the admin together", "SETUP-3: a
+  `test/setup.test.ts` ("SETUP-3: concurrent bootstraps create one admin", "SETUP-3: refuses when … is configured
+  already", "SETUP-3: refuses when a local account exists already", "SETUP-3: writes the domain, the Access configuration and the admin together", "SETUP-3: a
   failure at the last insert rolls the whole bootstrap back"), `test/setup-access.test.ts` ("only the latest completed
-  run bootstraps", "bootstrap waits while a run is in progress", "a failure after external write n of 4 leaves the
+  run bootstraps", "bootstrap waits while a run is in progress", "a failure after external write … of 4 leaves the
   state unresolved").
 - **SETUP-4: the Cloudflare API token is transient.** It is used only within the request that received it and is never
-  stored, logged or returned. _Implemented on branch `kopje/setup`:_ it is read from the form of one POST, sent only to
+  stored, logged or returned. _Enforced (main):_ it is read from the form of one POST, sent only to
   `api.cloudflare.com` as a bearer token, never rendered (token fields are never filled), never put in a cookie or
   redirect; redirects are refused, not followed. A failure is reported as a fixed category with the step, the HTTP
   status and the API's validated numeric error codes; no text of the API's answer or of a thrown error is rendered,
@@ -1060,12 +1057,17 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   (`sendPush` in `src/jobs/push.ts`), and the rules that need no lookup at registration (`publicShapeRefusal` in
   `src/platform/http-url.ts`, shared with `assertPublicShape`); `test/push.test.ts` ("NET-3: refuses endpoints that are
   not public https URLs"), `test/push-send.test.ts` ("PUSH-2: the endpoint is an outbound sink at every send", "never
-  follows a redirect, and retries instead"). Media: _Planned (B4)._
+  follows a redirect, and retries instead"). Remote media: _Planned (remote media):_ Kopje fetches no remote media
+  (remote attachments, avatars and headers are kept as http(s) URLs, HTML-3); a cache of them needs its own sink with a
+  size cap, a time limit and a type allowlist.
 - **NET-4: signed fetches stay with their signer.** A document fetched with a signature is cached under a key that
   includes the signing key id and is never served to another key or to the unsigned path. _Enforced (main):_
   `signedLoader` in `src/federation/federation.ts`; `test/signed-fetch.test.ts` ("caches signed documents per signing
-  key"). Expiry within 5 minutes and a sweep of expired rows: _Planned (B1b); the TTL is Fedify's `kvCache` default and
-  no test pins it._ _Implemented on branch `kopje/inbound-statuses`_ for the fetches of inbound processing and search:
+  key"). Expiry within 5 minutes: _Enforced (main):_ an entry carries Fedify `kvCache`'s default lifetime of 5
+  minutes, and the KV store reads an expired entry as absent (`src/federation/kv-store.ts`, `src/domain/fedify-kv.ts`);
+  `test/kv-store.test.ts` ("honors expires_at with the injected clock"). _Gap:_ no test pins the 5 minutes, Fedify's
+  default. A sweep of expired rows: _Planned (KV sweep):_ nothing deletes expired `fedify_kv` rows yet.
+  _Enforced (main)_ for the fetches of inbound processing and search:
   the original of a boost (and its author) is fetched as the request's other fetches are, with the personal inbox
   owner's key or the instance actor's, never from the signed-document cache; search with `resolve=true` fetches as
   the instance actor only, for a request whose token is valid and has the scope (401 or 403 otherwise, before
@@ -1107,20 +1109,21 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   sanitizer (or custom code that passes the vector suites below). Sanitized HTML enters only rich-content sinks
   (`content`, `note`, field values) and is not escaped a second time. _Enforced (main)_ for bios:
   `sanitizeRemoteHtml` in `src/security/html.ts` (sanitize-html with Mastodon's `MASTODON_STRICT` allowlist, styles never allowed and postcss stubbed out);
-  `test/html.test.ts`. _Implemented on branch `kopje/inbound-statuses`_ for status content (sanitized once by the
+  `test/html.test.ts`. _Enforced (main)_ for status content (sanitized once by the
   Worker before it is stored, the converted text of an Article or Page included) and profile field values (read from
   the stored actor document and sanitized when presented, at most 16 fields): the same `sanitizeRemoteHtml`;
   `test/inbox-statuses.test.ts` ("sanitizes content by allowlist with http(s) links only", "shows PropertyValue fields
   with sanitized values").
   The web UI sanitizes again at the sink: bios, status content and field values reach a page only as the sanitizer's
-  output (`SafeHtml` in `src/web/safe-html.ts`), whatever the Store holds. _Implemented on branch `kopje/web-ui`:_ `test/web-pages.test.ts`
+  output (`SafeHtml` in `src/web/safe-html.ts`), whatever the Store holds. _Enforced (main):_ `test/web-pages.test.ts`
   ("sanitizes stored HTML at the sink and drops non-http links").
 - **HTML-2: local text becomes HTML only by escaping and linking.** Status text and bios are escaped, then absolute
   http(s) URLs, known mentions and hashtags are linked. Display names stay plain strings. _Enforced (main)_ for bios:
   `src/domain/plain-text.ts`; `test/accounts.test.ts` ("stores plain-text profile fields safely"). _Enforced (main)_ for status text: `src/domain/status-text.ts`; `test/status-text.test.ts`.
   Local profile fields are stored as plain text and presented escaped with http(s) URLs linked (`renderFieldValue`),
-  in the API and as the actor's `PropertyValue` attachments: _Implemented on branch `kopje/web-ui`:_ `test/web-session.test.ts` ("saves the
-  profile", "publishes fields as PropertyValue attachments of the actor").
+  in the API and as the actor's `PropertyValue` attachments: _Enforced (main):_ `renderFieldValue` in
+  `src/domain/status-text.ts`; `test/web-session.test.ts` ("saves the profile"), `test/profile-fields.test.ts`
+  ("publishes fields as PropertyValue attachments of the actor").
 - **HTML-3: navigable URLs are http(s) only.** Before a profile URL, avatar, header, attachment URL, field link or app
   website is emitted, it is parsed and must be http or https; anything else becomes absent or the default. This applies
   to fetched and imported data too. _Enforced (main)_ for app websites at registration: `validWebsite` in
@@ -1131,11 +1134,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   in the API and in Note attachments: `presentMedia` in `src/domain/status-presenter.ts`, `noteOf` in
   `src/domain/activities.ts` (_Gap: no test with a non-http stored attachment URL_). _Enforced (main)_ for remote actors at ingest (profile URL, avatar, header, inboxes) and links in remote
   HTML: `src/federation/remote-actor.ts`, `src/security/html.ts`; `test/inbox.test.ts` ("stores the remote actor"),
-  `test/html.test.ts`. _Implemented on branch `kopje/inbound-statuses`_ for field links and remote statuses at ingest
+  `test/html.test.ts`. _Enforced (main)_ for field links and remote statuses at ingest
   (the status url and attachment and preview URLs, which are dropped unless http(s)); `src/federation/remote-status.ts`;
   `test/inbox-statuses.test.ts` ("keeps only http(s) media (HTML-1, HTML-3)", "http(s) links only").
   Web UI pages emit only local paths and http(s) URLs (avatars, headers, media, field and app links, the parent of a
-  reply); field links carry `rel="me"`: _Implemented on branch `kopje/web-ui`:_ `src/web/pages.tsx`; `test/web-pages.test.ts`.
+  reply); field links carry `rel="me"`: _Enforced (main):_ `src/web/pages.tsx`; `test/web-pages.test.ts`.
 
 ### Media (MEDIA)
 
@@ -1200,7 +1203,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   otherwise; `test/image-bytes.test.ts` ("refuses every EXIF block", "refuses XMP, IPTC, comments"),
   `test/media.test.ts` ("re-encodes an image without its location", "refuses a failed transformation", "refuses an
   output that keeps ..."). Tests use Miniflare's local Images binding (sharp); the production binding's output is
-  verified on the verification instance (B9). The media rebuild, which makes the served files of restored or moved
+  verified on a deployed instance. The media rebuild, which makes the served files of restored or moved
   media from their originals, goes through the same `processImage` and writes nothing for an original that fails, and
   never serves an original instead; it refuses an original whose served type differs from the row's (its URLs name that
   type). `test/media-rebuild.test.ts` ("makes both files ... and corrects meta", "reports a missing original and a type
@@ -1268,7 +1271,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   match nothing); a status's or account's votes go in bounded batches of a purge, and the votes an edit drops (a new
   generation of the poll) in bounded rounds of the cron. _Enforced (main):_
   `test/policy-bounds.test.ts` ("polls are presented from their counts, not their votes"), `test/polls.test.ts`
-  ("ends at most 25 polls a run", "falls due a while after the first vote", "RES-6: votes go in bounded batches").
+  ("ends at most … polls a run", "falls due a while after the first vote", "RES-6: votes go in bounded batches").
 - **POLL-4: polls federate as Mastodon's (AP).** A local poll's status is a Question (`oneOf`/`anyOf`, `endTime`,
   `closed` once ended, `votersCount`, each choice's `replies.totalItems`) in its Create, Update and served object; a
   local vote in a remote poll is a Create of a Note (`name`, `inReplyTo`, to the author) to the author alone, through
@@ -1285,7 +1288,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   ("raw input bound"). _Enforced (main)_ for search terms (500 characters) and media (16 MB
   and 16,777,216 pixels, read with the body bound before parsing): `src/mastodon/search.ts`, `src/mastodon/media.ts`;
   `test/search.test.ts` ("bounds the query"), `test/media.test.ts` ("refuses a file over 16 MB"). _Enforced (main)_ for remote profiles: bios are cut at 50,000 code units before sanitizing and
-  display names at 2,048 (`src/security/html.ts`, `src/federation/remote-actor.ts`). _Implemented on branch `kopje/markers`:_ a timeline marker's `last_read_id` stops at 255 characters, which Mastodon bounds as a bigint (`src/domain/markers.ts`; `test/markers.test.ts`, "answers 422 with Mastodon's validation message"). _Enforced (main)_ for scheduled statuses: `scheduled_at` is read only up to 64 characters, and a scheduled status's params are a JSON object of a fixed shape built from checked fields (the status text's raw bound, at most four media ids), refused over 128 KiB in the Store and by the schema (migration `0011_scheduled_statuses`); `test/migrations.test.ts`, `test/scheduled-statuses.test.ts`. `scheduled_at` must name a date and time the calendar has (Ruby's `DateTime.parse`: no February 29 outside leap years, no 31st of a 30-day month, minutes and hours in range), checked before its offset applies. Other query strings: _Gap._
+  display names at 2,048 (`src/security/html.ts`, `src/federation/remote-actor.ts`). _Enforced (main):_ a timeline marker's `last_read_id` stops at 255 characters, which Mastodon bounds as a bigint (`src/domain/markers.ts`; `test/markers.test.ts` ("answers 422 with Mastodon's validation message")). _Enforced (main)_ for scheduled statuses: `scheduled_at` is read only up to 64 characters, and a scheduled status's params are a JSON object of a fixed shape built from checked fields (the status text's raw bound, at most four media ids), refused over 128 KiB in the Store and by the schema (migration `0011_scheduled_statuses`); `test/migrations.test.ts`, `test/scheduled-statuses.test.ts`. `scheduled_at` must name a date and time the calendar has (Ruby's `DateTime.parse`: no February 29 outside leap years, no 31st of a 30-day month, minutes and hours in range), checked before its offset applies. Other query strings: _Gap._
   _Enforced (main)_ for status text a remote server sends: content is stored within `STATUS_CONTENT_BYTES` (128 KiB)
   as a JSON string, the sanitized form of a shorter raw prefix when the whole does not fit, so it stays sanitizer
   output (`sanitizeRemoteContent` in `src/security/html.ts`, the search `sanitizeRemoteBio` uses); a content warning
@@ -1297,7 +1300,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   adversarial fixture with a time bound. _Enforced (main)_ for status text:
   `test/statuses.test.ts` ("handles the worst case at the bound within a generous time"). _Enforced (main)_ for the image metadata walk: `test/image-bytes.test.ts` ("walks a worst-case file at the upload
   bound"). Remote HTML: _Enforced (main):_ `test/html.test.ts` ("at the raw cap
-  within a generous time"). _Implemented on branch `kopje/inbound-statuses`_ for JSON-LD processing and inbound JSON:
+  within a generous time"). _Enforced (main)_ for JSON-LD processing and inbound JSON:
   every inbound activity and every fetched document must stay within 10,000 values and 32 levels of nesting before
   anything reads it or hands it to JSON-LD (`withinJsonBounds` in `src/platform/json-bounds.ts`, applied by
   `parseActivity` and by the loaders of `createRemoteLoaders`); JSON-LD contexts too, before they are cached and again
@@ -1312,9 +1315,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   collection names its count and byte bound. _Enforced (main):_ `src/mastodon/pagination.ts`, `MAX_RELATIONSHIP_IDS` in
   `src/domain/accounts.ts`. _Gap: neither cap is tested._ _Enforced (main)_ for search: at
   most 40 results per type (80 for the account search), and offsets past 10,000 answer an empty page;
-  `test/search.test.ts` ("bounds the query, the limit and the offset"). _Implemented on branch `kopje/blocks-mutes`:_
+  `test/search.test.ts` ("bounds the query, the limit and the offset"). _Enforced (main):_
   the domain block list (`GET /api/v1/domain_blocks`) returns at most 200 domains, as Mastodon's does
-  (`src/mastodon/blocks.ts`). _Implemented on branch `kopje/startup-reads`:_ `GET /api/v1/instance/peers` lists at most
+  (`src/mastodon/blocks.ts`). _Enforced (main):_ `GET /api/v1/instance/peers` lists at most
   10,000 domains (`MAX_PEERS` in `src/domain/instance.ts`); `familiar_followers` reads at most 20 ids and shows at
   most 80 accounts for each (`src/domain/accounts.ts`); `test/instance-reads.test.ts` ("bounds the peers"),
   `test/account-reads.test.ts` ("bounds the ids and the accounts shown"). _Enforced (main)_ for the profile fields
@@ -1347,7 +1350,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   that pass what one leaves unused to the others, so the answer does not depend on their order (`presentAccountsWithin`
   and `familiarFollowers` in `src/domain/accounts.ts`, `unlimitedResponse` in `src/mastodon/pagination.ts`;
   `test/account-answer-bytes.test.ts`).
-  _Implemented on branches `kopje/rb1b` and `kopje/rb2`_ for every answer that presents statuses, accounts or
+  _Enforced (main)_ for every answer that presents statuses, accounts or
   notifications: the Store operation that returns it owns one budget of `ANSWER_BYTES` (8 MiB of the answer's JSON,
   containers included) or a stated unit or count bound. Items are admitted whole in traversal order, the first
   whatever its size, each atomic item presented and measured only when it is reached, its rows read in small chunks,
@@ -1394,7 +1397,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   it checks, where it fails closed, and its known gaps. It is an architectural aid; the aggregate response tests prove
   the budgets. Maxima of each presented shape: "Maxima of presented units" below (`test/status-bounds.test.ts`).
 - **RES-4: stored derived data is bounded.** Snapshots, the KV cache, the spool and deliveries each have a size cap, a
-  count cap or an expiry with a sweeper. _Implemented on branch `kopje/inbound-statuses`_ for remote statuses: one
+  count cap or an expiry with a sweeper. _Enforced (main)_ for remote statuses: one
   status stores at most 4 attachments (Mastodon's limit) with 10,000 code units of description each, 100 hashtags
   of at most 256 code units, 200 `status_mentions` rows (local accounts first; 100 `Mention` tags and 1,000 `to` and
   `cc` entries are read; a redelivery to a personal inbox keeps the bound, its owner taking a remote recipient's
@@ -1405,8 +1408,13 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   it (its mentions, then its content and audience) within that budget. `src/domain/remote-statuses.ts`;
   `test/inbox-statuses.test.ts` ("caps the attachments, tags and content one status stores", "deletes a status with
   many children in bounded batches"), `test/inbox-statuses-edge.test.ts` ("RES-4: bounds at their limits", "writes at
-  most PURGE*BATCH rows per batch, hiding included"). \_Enforced (main)* for snapshots: `test/snapshot.test.ts` ("snapshot caps"). KV
-  sweep and spool: _Planned (B1b)._ Deliveries: _Enforced (main):_ delivered rows are deleted
+  most … rows per batch, hiding included"). _Enforced (main)_ for snapshots: `test/snapshot.test.ts` ("snapshot caps"). KV
+  cache: _Planned (KV sweep):_ its entries expire (NET-4), but expired rows are never deleted, so the table has no count
+  or size cap. Spool: _Enforced (main):_ a request is spooled only within one Queue message (`SPOOL_MESSAGE_LIMIT`) and
+  while the Queue's backlog is under `SPOOL_BACKLOG_MESSAGES` (10,000) and `SPOOL_BACKLOG_BYTES` (256 MiB), failing
+  closed when it cannot be read (`createAdmission` in `src/federation/spool.ts`); `test/gate.test.ts` ("answers 503 when
+  the deflated request does not fit one message"), `test/maintenance-worker.test.ts` ("in Kopje's own maintenance gate:
+  the same budget, failing closed"). Deliveries: _Enforced (main):_ delivered rows are deleted
   at once and given-up rows after 30 days by the 5-minute cron (`sweepDeliveries`); receipts belong to their status
   (foreign key) and are dropped when its retraction is recorded; a lane holds at most 500 and the Store 10,000 active
   rows, and a row over either cap is written as `gave_up` with `backlog full`, visible in `kopje-admin deliveries`.
@@ -1428,12 +1436,15 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `/admin/deliveries` and `kopje-admin deliveries`; in maintenance nothing is claimed, so no attempt is counted. An
   activity a later one about the same object follows (an `Undo`, `Delete` or `Update`) is superseded and never sent
   again: naming it answers 409 `superseded`, and `--all` skips it, choosing eligible rows before its batch limit and
-  continuing from the cursor it returns (`test/delivery-regressions.test.ts`, "refuses to retry a Like that its Undo
-  has superseded"; `test/delivery-verify.test.ts`, "operator retries", "the `all` cursor").
+  continuing from the cursor it returns (`test/delivery-regressions.test.ts` ("refuses to retry a Like that its Undo
+  has superseded"); `test/delivery-verify.test.ts` ("operator retries", "the `all` cursor")).
   _Enforced (main):_ `src/domain/deliveries.ts`, `src/jobs/deliver.ts`;
   `test/deliveries.test.ts` ("retries after min(30 s·2^n, 12 h)"), `test/delivery-post.test.ts` ("RES-5: claims
-  nothing and counts no attempt in maintenance"), `test/cli.test.ts`. Spool messages that fail terminally are kept and
-  inspectable before acknowledgement: _Planned (B1b)._ Web Push: _Enforced (main):_ the deliveries' schedule and limit,
+  nothing and counts no attempt in maintenance"), `test/cli.test.ts`. Spool messages: _Enforced (main):_ a message whose
+  retries run out goes to the dead-letter queue (OPS-10), where it is kept for inspection, and a request refused for
+  good (401, 404, 415) is dropped as the live inbox answers it (`handleQueue` in `src/jobs/queue.ts`, the consumer's
+  `dead_letter_queue` in `wrangler.jsonc`); `test/gate.test.ts` ("retries, and so counts against max_retries, only on
+  real processing errors"). Web Push: _Enforced (main):_ the deliveries' schedule and limit,
   a push older than 48 hours is dropped, a 4xx other than 408 and 429 (or an endpoint the sink refuses outright)
   deletes the subscription and its pending pushes, as Mastodon 4.5 does, and nothing is claimed in maintenance or
   without a `VAPID_JWK`; at most 1,000 pushes wait (`MAX_PUSH_BACKLOG`): a notification gets only the room left,
@@ -1445,11 +1456,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   subscriptions fills the backlog only up to its cap", "records no push beyond the backlog cap").
 - **RES-6: one request cannot trigger unbounded work.** An inbound activity has fixed limits on dereferences,
   recipients, collection expansion and notifications. Delivery backlog and concurrency are bounded. Anonymous app
-  registration, inbox spooling and media transformations have rate or storage budgets with a visible refusal. _Planned
-  (B1b)._ Domain blocks: _Implemented on branch `kopje/blocks-mutes`:_ a domain block's cleanup scans at most 500 follows
+  registration, inbox spooling and media transformations have rate or storage budgets with a visible refusal. Inbox
+  spooling: _Enforced (main):_ the spool's budget (RES-4), refused with 503. Domain blocks: _Enforced (main):_ a domain block's cleanup scans at most 500 follows
   per batch and does at most 4 batches a round, its first batch in the request, so blocking a domain stays bounded
   however many follows the user has, and always succeeds (VIS-15, `test/blocks.test.ts`). Local suspension:
-  _Implemented on branch `kopje/admin-a3b`:_ the suspension's transaction writes a fixed number of rows whatever the
+  _Enforced (main):_ the suspension's transaction writes a fixed number of rows whatever the
   account's history; its work runs in durable `moderation_jobs` rounds with the inbound jobs, the jobs taking turns, at
   most 4 rounds a run. The tokens job deletes an earlier epoch's token's push deliveries, then its subscription, then the token
   (`TOKEN_CHILDREN`, which the cascade guard keeps complete), so no delete cascades, at most 200 rows a round
@@ -1458,7 +1469,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `AccountReachFinder` caps it, then writes the inboxes as the `Update`'s targets and deletes their staging rows, 500 a
   round; every round writes at most 600 rows, and each cursor is persisted, so every round makes progress
   (`src/domain/suspension.ts`; `test/admin-suspension.test.ts`: a history of 600 tokens, 250 subscriptions and 650
-  pushes, and 10,000 followers, each round within its budget). App registration: _Implemented on branch `kopje/web-ui`:_ `POST /api/v1/apps` is limited to 5 per minute per client IP by the Workers
+  pushes, and 10,000 followers, each round within its budget). App registration: _Enforced (main):_ `POST /api/v1/apps` is limited to 5 per minute per client IP by the Workers
   Rate Limiting binding before its body is read (429), and the Store keeps at most 500 never-authorized apps (no token or
   code of a user); when full it first removes unused apps (no token of any kind) older than a day, then the oldest
   never-authorized apps older than an hour (app tokens and all), and otherwise refuses with 429. Only a user's token or
@@ -1474,7 +1485,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   dropped (its media detached) after 5 attempts, so failures back off and never hold back what is newly due. Nothing is published while
   the Store is in maintenance or readonly; what is due waits. `publishScheduled` in `src/store.ts`,
   `src/domain/scheduled-statuses.ts`, `src/jobs/scheduled.ts`; `test/scheduled-statuses.test.ts` ("publishes a due
-  status once", "publishes at most 25 a run", "backs off what keeps failing", "waits while the Store is readonly").
+  status once", "publishes at most … a run", "backs off what keeps failing", "waits while the Store is readonly").
   _Enforced (main)_ for media: before the body is read or Images is called, the Store
   counts upload attempts (deleted and failed ones included) to at most 30 per 30 minutes per account (Mastodon's
   limit) and checks the monthly budgets; right before Images is called it revalidates the reservation with fresh time
@@ -1517,7 +1528,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   boost of its statuses is accepted and no status of it fetched while it lasts. Its follows, notifications, mentions
   and other relationships go first; then local boosts of its statuses, each withdrawn once: the Undo intent is recorded, then its targets
   (the boost's receipts among them) are staged a chunk per row over as many batches as they need, the receipts kept
-  until all are written (`beginRetraction` and `stageRetraction` in `src/domain/deliveries.ts`); B2's delivery rounds
+  until all are written (`beginRetraction` and `stageRetraction` in `src/domain/deliveries.ts`); the delivery rounds
   expand them 100 at a time; then the purge deletes the receipts a batch at a time before the boost and its
   booster's recount; then its statuses, each
   deleted only after its children (edits, media, mentions, tags, favourites, bookmarks, notifications, receipts,
@@ -1525,8 +1536,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `src/domain/inbox.ts` (`STATUS_CHILDREN`, `PURGED_ACCOUNT_CHILDREN`), which `test/cascade-guard.test.ts` checks
   against the schema's cascading foreign keys; the same test requires every trigger that writes to be named with
   where a batch that fires it counts its writes. Blocks and mutes of the account go last, once nothing they filter is
-  left (`test/inbox-regressions.test.ts`, "keeps filtering a post that mentions the actor"). A user's own unboost keeps B2's path unchanged. Local media is detached
-  for B4b's media sweep, never deleted from R2 here. Both are durable jobs in the Store (`inbound_jobs`), continued by the Queue and by cron, so neither a lost
+  left (`test/inbox-regressions.test.ts` ("keeps filtering a post that mentions the actor")). A user's own unboost takes the ordinary delivery path. Local media is detached
+  for the media sweep (MEDIA-1), never deleted from R2 here. Both are durable jobs in the Store (`inbound_jobs`), continued by the Queue and by cron, so neither a lost
   Queue message nor maintenance stops them, and waiting out maintenance spends no retry. `test/inbox.test.ts`,
   `test/inbox-regressions.test.ts`, `test/inbox-verify4.test.ts` ("writes the targets of a withdrawal that needs more
   than a batch of rows, every batch within the budget", "reaches every target when purge batches and delivery claims
@@ -1535,7 +1546,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   and sorts all the targets left, so a boost's withdrawal (by a purge, or by a remote author's `Delete` of the boosted
   status) costs work proportional to its audience in every batch until it is staged. Receipt enumeration has this in
   common with follower enumeration.
-  _Implemented on branch `kopje/quotes-1a`_ for received quotes: a quote's verification goes in stages of one
+  _Enforced (main)_ for received quotes: a quote's verification goes in stages of one
   document each (the quoted status, its author when Kopje lacks it, the status again, the stamp), each through loaders
   of its own, so no stage reads another's fetch; between stages only the author's address is kept, never a fetched
   document, so the status is stored only from a fresh fetch. Each stage's outcome applies only to the generation of
@@ -1555,7 +1566,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   500 rows counted with `total_changes()` (a row and its count trigger), the first in the request and the rest in the
   inbound job rounds. A newly stored status links at most 100 unresolved quotes naming it. `src/domain/quotes.ts`,
   `src/federation/quotes.ts`; `test/quotes.test.ts` ("verifies a chain two levels below the status that arrived",
-  "processes 3000 quotes naming the stamp in bounded batches"), `test/cascade-guard.test.ts` (a purged status's
+  "processes … quotes naming the stamp in bounded batches"), `test/cascade-guard.test.ts` (a purged status's
   accepted quote within the exact budget), `test/policy-bounds.test.ts` ("received quotes cost their work a bounded
   read").
   QuoteRequests: one fetch (the instrument, between Store rounds, which write nothing) and one answer per request id,
@@ -1564,7 +1575,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   author's answered requests). A Delete of a quoting status retires its one authorization before its batches (three
   rows); a purge's batch deletes a quote holding one within a third of the rows left. `test/quote-requests.test.ts`,
   `test/cascade-guard.test.ts`.
-  Streaming (VIS-26): _Implemented on branch `kopje/streaming-1`:_ at most 16 sockets per account (429) and 256 per
+  Streaming (VIS-26): _Enforced (main):_ at most 16 sockets per account (429) and 256 per
   instance (503); 16 subscriptions per socket, 16 stream keys per account and a socket's attachment at most 12 KiB
   (`Too many subscriptions`, 429); incoming messages text only (1003), at most 4 KiB and 120 a minute (1008). The
   fan-out runs in turns, one at a time, each an incoming request to the Store's own stub, which restores the CPU
@@ -1574,13 +1585,12 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   rest to the next turn; a payload over 512 KiB is skipped and logged. The journal records nothing once it spans 4,096
   ids, and is pruned behind the position, at most 500 rows a call: the finished journal rows first, so the span shrinks
   at once, then a delete's capture rows, in further turns until none is left. A turn that read anything moves the
-  position, also past what it read with nothing to send, before it stops for its budget. _Implemented on branch
-  `kopje/streaming-2`:_ a delete's capture is one journal row and at most one row per account in the registry (256),
+  position, also past what it read with nothing to send, before it stops for its budget. _Enforced (main):_ a delete's capture is one journal row and at most one row per account in the registry (256),
   each at most 16 KiB (40 boosts); a row over it drops boosts, then list ids, and is logged, and the delete goes on.
   A unit is one subject (the status, or one captured boost) for one viewer, so a delete with 40 boosts is 41 units for
   each viewer, each within a unit's worst case; the position names the viewer and the subject within the event. The status and edit
   triggers write one journal row per status write, under the same span, and no batched delete or purge fires them.
-  _Implemented on branch `kopje/streaming-3`:_ a delete's capture also holds each viewer's lists (at most 16 for the
+  _Enforced (main):_ a delete's capture also holds each viewer's lists (at most 16 for the
   status and each boost, within the same 16 KiB); a list's check is one narrowed read. A conversation's change moves its owner's mark,
   which journals one 'conversation' event for the owner unless one is still ahead of the position, so a burst is one
   row and a busy owner waits behind the others (FIFO); its units are the owner's newest 20 changes up to a
@@ -1589,7 +1599,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   ends however fast its owner writes. A conversation's last status moved back by
   a status's removal writes the owner's mark and that journal row too, so the batched delete of a status's conversation
   links takes a fourth of the rows left (`LIMIT ?2 / 4`). `notifications_merged` is one journal
-  row per transition, under the span. _Implemented on branch `kopje/streaming-4`:_ a public status's delete adds one
+  row per transition, under the span. _Enforced (main):_ a public status's delete adds one
   tombstone row of at most 27 KiB (100 hashtags, each a subscribed key's of at most 256 bytes; over it, the last
   hashtags are dropped and logged, and the delete goes on), and a viewer row without boosts for each account listening
   on feeds alone; `streamPrune` deletes tombstones after the viewer rows, in the same 500-row calls. A hashtag `tag` is
@@ -1629,7 +1639,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   (`src/domain/search.ts`, `findAccounts` in `src/domain/accounts.ts`); `test/search.test.ts` ("filters before
   LIMIT"), `test/search-edge.test.ts` (rows read stay flat as favourites, bookmarks, accounts and tagged statuses grow
   fourfold, pending follows included; `max_id` reaches past each window; an exact address outside every window is
-  found). _Implemented on branch `kopje/startup-reads`:_ the peers list seeks each next domain on the (domain,
+  found). _Enforced (main):_ the peers list seeks each next domain on the (domain,
   username) index, so it reads rows by domain returned, not by account known; a tag's history reads its public statuses
   received in the last seven days only, a range of the (name, status_id) index of public hashtags cut by status id, so
   the work follows the instance's own receive volume (ids carry publication time, or receipt time where a cutover kept them); the rules
@@ -1638,50 +1648,55 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `test/account-reads.test.ts` (rows read stay flat as accounts per domain, accounts known, statuses outside the
   window, and the account's other followers grow). _Enforced (main)_ for scheduled statuses: a page reads the
   account's own index by id, and a publication round reads the due ones through the index by time, so neither grows
-  with the accounts that schedule or their scheduled statuses (`test/policy-bounds.test.ts`, "however many accounts
-  schedule"). _Enforced (main)_ for grouped notifications: a page of groups walks the viewer's notifications from the
+  with the accounts that schedule or their scheduled statuses (`test/policy-bounds.test.ts` ("however many accounts
+  schedule")). _Enforced (main)_ for grouped notifications: a page of groups walks the viewer's notifications from the
   cursor, as the list does, and reads at most 2,000 of those the rule shows; each group's count, samples and ends are
   read through the `(account_id, group_key, id)` index, at most 400 notifications per group; a group's accounts are
-  paged through the same index; so none grows with the notifications of one group (`test/policy-bounds.test.ts`,
-  "however many notifications a group holds"). Accepted: a group of more than 400 counts 400, and a page whose walk
+  paged through the same index; so none grows with the notifications of one group (`test/policy-bounds.test.ts`
+  ("however many notifications a group holds")). Accepted: a group of more than 400 counts 400, and a page whose walk
   meets more than 2,000 notifications of the groups it found (one group that large, in practice) ends with those groups,
   its Link going on from the last notification read. Clearing notifications and dismissing a group hide what they
   remove from every read at once and delete it in bounded batches: the request records the highest id removed
   (migration `0023_notification_clears`) and deletes at most 2,000 notifications, newest first, and each round of the
   inbound jobs up to 2,000 more; every read of an account's notifications starts above its clear, and every read of
   one group above its dismissal (`keptFloorSql` in `src/domain/audience.ts`), so neither the request, a round nor such
-  a read grows with what is hidden (`test/policy-bounds.test.ts`, "touch a bounded batch";
+  a read grows with what is hidden (`test/policy-bounds.test.ts` ("touch a bounded batch");
   `test/notification-clears.test.ts`). _Gap:_ until the rounds have deleted a dismissed group larger than the request
   deletes, a walk of all the account's notifications (the lists, the grouped walk, the unread counts) that reaches what
   is left of it passes over each with a key lookup, as it passes over notifications R15 hides for other reasons (a
-  muted sender's); a clear has no such gap. Context traversal and edit history: _Planned (B4a fixes)._
+  muted sender's); a clear has no such gap. Context traversal and edit history: _Enforced (main):_ a context reads at most
+  8,192 replies of the tree (240 for an anonymous viewer), breadth first, before the list rule and the order apply
+  (`CONTEXT_LIMITS` in `src/domain/statuses.ts`), and a status keeps at most `MAX_STATUS_EDITS` (100) versions, each
+  within the status text's bound (RES-1); `test/context-work.test.ts` ("a tree several times wider costs about the
+  same", "a chain twice as deep costs about the same"), `test/statuses.test.ts` ("bounds the edit history at write
+  time"), `test/inbox-statuses-edge.test.ts` ("versions of history: the 101st replaces the newest").
   The streaming fan-out reads a window of the journal from its position (64 events, each bound of the journal one
   seek) and each unit's notification by key, positioned at it, so neither grows with the journal, the recipient's
-  notifications or anyone else's (`test/policy-bounds.test.ts`, "a streamed notification reads its item").
-  _Implemented on branch `kopje/streaming-2`:_ a streamed status's checks are narrowed to it: home positioned at it
+  notifications or anyone else's (`test/policy-bounds.test.ts` ("a streamed notification reads its item")).
+  _Enforced (main):_ a streamed status's checks are narrowed to it: home positioned at it
   reads its author's window alone, the exclusive-list exclusion for that author from the viewer's lists (at most 50),
   and the viewer's followed hashtags among the status's own by key; the mention reference is one key lookup
   (`notifications_natural`). They read the same rows however many statuses an author has, however many accounts,
   exclusive-list members and hashtags the viewer follows, and however many notifications they have; a delete's
   capture reads, for each listening account, the smaller side: the status's boosts (read once, at most 2,000, each
   booster checked against the account's follows by key), or past that the account's follows, one key lookup each
-  (`test/policy-bounds.test.ts`, "a streamed status reads its item" and "R32: a delete's capture"). A turn reads a
+  (`test/policy-bounds.test.ts` ("a streamed status reads its item" and "R32: a delete's capture")). A turn reads a
   delete's units eight viewers at a time from the position, each page charged to the turn, never the whole capture.
   _Gap:_ a status with more than 2,000 boosts costs each listening account its follows (at most 256 accounts, each
-  within the follow limit). _Implemented on branch `kopje/streaming-4`:_ a feed's check is the public or the hashtag's
+  within the follow limit). _Enforced (main):_ a feed's check is the public or the hashtag's
   timeline positioned at the status, read by the status's key (the hashtag's by the status's row of it); the mention
   filter reads the status's mentions by its key, each checked by key; an event's feed listeners are the `public*`
   keys' (one range of `stream_subscriptions_key` a scan) and one seek per hashtag of the status; a tombstone reads the
   status's hashtags by its key. They read the same rows however many statuses the author, others, the hashtag or the
-  accounts the viewer filters have (`test/policy-bounds.test.ts`, "streamed public and hashtag statuses").
+  accounts the viewer filters have (`test/policy-bounds.test.ts` ("streamed public and hashtag statuses")).
   Quotes (R35, VIS-27): a response reads its statuses' quote rows by key in one query and the quoted statuses' in a
   second, each over the response's ids, and embeds one level only, so a page reads the same rows however many quotes
-  its quoted statuses have and however long the chain they start (`test/policy-bounds.test.ts`, "statuses with quotes
-  are presented from their quote rows"). The quotes list reads one window of the status's accepted quotes from its
+  its quoted statuses have and however long the chain they start (`test/policy-bounds.test.ts` ("statuses with quotes
+  are presented from their quote rows")). The quotes list reads one window of the status's accepted quotes from its
   cursor through the partial index `quotes_accepted` (migration `0036_quotes_list`), at most `limit`, and applies the
   rule to that window alone, whatever the count of quotes in any state; when the rule hides the window, the page is
   empty and its next link moves on by the window, so hidden quotes cost a request one window
-  (`test/policy-bounds.test.ts`, "the quotes list reads a window"). A client that stops at an empty page sees fewer
+  (`test/policy-bounds.test.ts` ("the quotes list reads a window")). A client that stops at an empty page sees fewer
   quotes than exist, as on Mastodon (accepted). The stamp endpoint is one read by its id's unique index; a request's
   cap reads at most 100 rows of its actor; a revoke's `Reject`s read at most 100 rows of the quoting author by one
   seek of `quote_requests_instrument`, whatever other actors' requests name the same instrument; quoters' reach reads
@@ -1700,7 +1715,7 @@ keywords of 512 characters, the first held by the status, and naming the statuse
 filter results (about 0.24 MB each set) and every read takes the 1,000 keywords. SQLite bytes are the UTF-8 bytes of every value read (8 per number); nodes are the
 objects, arrays and strings presented. Measured shapes are read through the Store operation. Through the real Store
 RPC, a public timeline page, a context and a search answer of statuses of about 0.97 MB each, each cut at the budget,
-return 7.72 MB of JSON each (`test/answer-budgets.test.ts`, "the Store RPC returns a maximal answer"), and the boost
+return 7.72 MB of JSON each (`test/answer-budgets.test.ts` ("the Store RPC returns a maximal answer")), and the boost
 of a quote above, alone or as the one status a lookup of it, the quote and the quoted status admits, returns 5.56 MB
 (escaped fill) and 4.53 MB (raw fill, the most serialized bytes) (`test/status-bounds.test.ts`), well under the 32 MiB
 RPC limit.
@@ -1804,7 +1819,7 @@ Both stay within half of the isolate's 128 MB; the Worker's side is the table ab
 - **DATA-4: backups leave Cloudflare only encrypted.** Dump chunks, R2 originals, media indexes and manifests are
   age-encrypted (typage, `age-encryption`) to the run's pinned recipients before upload; the identity never reaches
   Cloudflare. A media copy counts only for the bucket and recipients it was made under, so a key change re-encrypts
-  everything. _Implemented on branch `kopje/scheduled-backup`:_ `src/jobs/backup.ts`, `src/platform/backup-crypto.ts`;
+  everything. _Enforced (main):_ `src/jobs/backup.ts`, `src/platform/backup-crypto.ts`;
   `test/backup.test.ts` ("writes the dump, the originals the dump references": every body the bucket receives is age
   ciphertext without plaintext markers; "abandons a run whose recipients changed").
 - **DATA-5: logs carry no secrets or content.** Log entries are structured events. They never include request bodies,
@@ -1815,8 +1830,8 @@ Both stay within half of the isolate's 128 MB; the Worker's side is the table ab
   `kopje.store.upgrade.failed`, which reaches only logs and the admin health report. Tests inject marker values into
   errors and assert they are absent. _Enforced (main):_ `errorFields` in
   `src/platform/error-message.ts`, used by `app.onError` (`src/app/app.ts`), the queue and spool handlers, the snapshot
-  saver and the Store kernel; `test/log-redaction.test.ts`. Access failures log only jose's error code (main), and the
-  CLI never prints secrets (main, `test/cli.test.ts`). Later stages: _Planned (all stages)._
+  saver and the Store kernel; `test/log-redaction.test.ts`. Access failures log only jose's error code, and the
+  CLI never prints secrets (`test/cli.test.ts`).
 - **DATA-6: ids stay strings end to end.** Ids never pass through JS numbers. INTEGER edge and notification ids are read
   with `CAST(id AS TEXT)` and compared with `CAST(? AS INTEGER)`. 18-digit TEXT status ids compare as TEXT; a shorter
   client cursor is zero-padded first. _Enforced (main)_ for edges: `listFollows` in `src/domain/accounts.ts`;
@@ -1835,12 +1850,11 @@ Both stay within half of the isolate's 128 MB; the Worker's side is the table ab
   signs is a forwarded report's `Flag`, whose actor is the instance actor (Mastodon's `Account.representative`).
   _Enforced (main)_ for fetches: `src/federation/federation.ts`; `test/signed-fetch.test.ts` ("signed fetches").
   Activities: _Enforced (main):_ a delivery is signed with the key of its lane's account, unwrapped once per round
-  (`src/jobs/deliver.ts`); `test/delivery-post.test.ts` ("signs the activity with its author key"). _Implemented on
-  branch `kopje/reports`:_ an intent recorded with `signedBy: 'instance'` (only `flagActivity` in
+  (`src/jobs/deliver.ts`); `test/delivery-post.test.ts` ("signs the activity with its author key"). _Enforced (main):_ an intent recorded with `signedBy: 'instance'` (only `flagActivity` in
   `src/domain/activities.ts` makes one, with the instance actor as its actor) is signed with the instance key, which the
   delivery round loads through `instanceActorKey` (`src/federation/federation.ts`, the race-safe initialization signed
   fetches and `/actor` use), creating it if nothing has yet (`deliveryRound` in `src/jobs/deliver.ts`);
-  `test/reports.test.ts` ("posts the Flag signed with the instance actor's key", "creates the instance actor's key
+  `test/reports.test.ts` ("posts the Flag signed with the instance actor’s key", "creates the instance actor’s key
   when no fetch has yet").
 - **DATA-9: backup credentials stay out of the Store, logs and reports, and are scoped.** The S3 key is a Worker
   secret, read apart from the main config so a bad backup setting stops only the backup. Config issues name the
@@ -1848,7 +1862,7 @@ Both stay within half of the isolate's 128 MB; the Worker's side is the table ab
   Store refusal codes), never an error message, a response body, a URL or a signature. The Store keeps only keys,
   upload ids, fingerprints, sizes and digests. The documented policy grants put under the prefix, delete and abort only
   under `backups/` (never `media/`), and prefix-conditioned listing; multipart listing, which cannot be
-  prefix-conditioned, is optional (`docs/backup.md`). _Implemented on branch `kopje/scheduled-backup`:_
+  prefix-conditioned, is optional (`docs/backup.md`). _Enforced (main):_
   `src/platform/backup-config.ts`, `src/platform/s3.ts`, `failureReason` in `src/jobs/backup.ts`;
   `test/backup.test.ts` ("never logs, saves or reports a secret", "refuses invalid settings without naming their
   values"). The S3 test double verifies every SigV4 signature with an independent implementation checked against AWS's
@@ -1867,14 +1881,17 @@ Both stay within half of the isolate's 128 MB; the Worker's side is the table ab
 backup-verify` (index-only before any media is downloaded). `backup-verify` stops at the first mismatch and rejects
   any index entry whose source is not exactly `originals/<18-digit id>` or whose object is not under its run's
   `media/` prefix. The runbook builds local paths only from validated ids, in a new directory. It reports incomplete
-  media coverage with exit code 3. The import re-checks the dump's own trailer. _Implemented on branch `kopje/scheduled-backup`:_ `src/jobs/backup.ts`,
+  media coverage with exit code 3. The import re-checks the dump's own trailer. _Enforced (main):_ `src/jobs/backup.ts`,
   `src/platform/backup-state.ts`, `verifyBackup` in `cli/lib/commands.js`; `test/backup.test.ts` ("verifies the whole
   restore set after retention removed the backup that copied an original", "reports incomplete media coverage",
   "verifies the index alone before any media is downloaded", "rejects index entries that name anything but
   originals/<id>", "a restarted dump replaces the membership", "round-trips"). Gap: comparing `manifestSha256` is a manual step of the restore runbook (DATA-8).
 - **DATA-8: a restore has selected authority.** Restore uses a manifest the operator selected by digest, checks schema
   version, domain and every referenced component before use, and before leaving maintenance invalidates OAuth grants
-  restored from the checkpoint and reconciles suspension and admin state. _Planned (B6b)._
+  restored from the checkpoint and reconciles suspension and admin state. _Planned (restore):_ a restore is the
+  runbook in `docs/backup.md`: the operator compares the manifest's digest by hand (DATA-10), and the import requires an
+  empty Store of the same schema (DATA-3). Nothing yet invalidates the OAuth grants a restored dump brings back or
+  reconciles suspension and admin state before publication.
 - **DATA-11: the conversion runs on the operator's machine and never writes the source.** `kopje-admin convert` and
   `verify-conversion` read export files only and make no network request; bridging the legacy schema runs the canonical
   migrations on a local copy, never on the legacy D1. Nothing from the export runs as written: a strict grammar accepts
@@ -1886,7 +1903,7 @@ VALUES` of literal values, decoded within nesting and size bounds and bound, and
   is `NOT NULL`, and then a `NULL` in it stops the load (`null-in-not-null-column`); rows always go into the canonical
   schema by column name.
   Outputs are created exclusively under temporary names with mode 0600 and published with `link(2)`, so no existing
-  file or symbolic link is followed or reused. _Implemented on branch `kopje/cutover-convert`:_
+  file or symbolic link is followed or reused. _Enforced (main):_
   `cli/lib/cutover/sql-script.js`, `cli/lib/cutover/legacy-load.js`, `cli/lib/cutover/run.js`;
   `test-node/cutover-safety.test.ts` ("the export grammar", "outputs"), `test-node/cutover-load.test.ts`.
 - **DATA-12: a conversion is verified independently, record by record.** The expected records come from the legacy
@@ -1897,22 +1914,21 @@ VALUES` of literal values, decoded within nesting and size bounds and bound, and
   counter, relationships with their preferences, list policies, settings and client scopes. Missing content, content
   rewritten to the same length, a dropped relationship, a removed or added recipient, a widened visibility, a dropped
   reply link and any count difference FAIL, as does HTML cut by the sanitizer unless accepted. The sanitizer the two
-  sides share is pinned by a hand-written expectation. _Implemented on branch `kopje/cutover-convert`:_
+  sides share is pinned by a hand-written expectation. _Enforced (main):_
   `test-node/cutover-convert.test.ts` ("the check fails on damage", one tampered dump per kind),
   `test-node/cutover-safety.test.ts` ("HTML is never cut silently"), `test/cutover-import.test.ts` (the check passes
   on the Store's own dump after a real import).
 - **DATA-13: conversion reports carry aggregates only, on failure too.** What the commands print and the manifest holds
   are counts, fixed codes and messages, SHA-256 digests and table checksums; never rows, keys, emails, URIs, the domain
   (only its digest) or KEK values, which the CLI also redacts. An untrusted name (a table, an object type) appears only
-  as a digest prefix, and a parser or database error only as its class. _Implemented on branch
-  `kopje/cutover-convert`:_ `test-node/cutover-safety.test.ts` ("failure reports carry codes, counts and digests only",
+  as a digest prefix, and a parser or database error only as its class. _Enforced (main):_ `test-node/cutover-safety.test.ts` ("failure reports carry codes, counts and digests only",
   through the real CLI), `test-node/cutover-convert.test.ts` ("runs from the real CLI under Node").
 - **DATA-16: cutover fingerprints and preflight reports are aggregate or configuration only.** A fingerprint holds,
   per table of an export, the row count and a SHA-256 over its rows' hashes, plus the notification counter;
   `fingerprint compare` prints table names, counts and the changed tables. `cutover-preflight` prints binding names,
   resource identifiers, variable names and types and the writers it sees, never a secret value (the API does not return
   them, and a value in the file is not read) and no instance data but the public `DOMAIN`. `maintenance-worker` reports
-  counts, KEK candidate names and digests. _Implemented on branch `kopje/cutover-ops`:_ `cli/lib/cutover/fingerprint.js`,
+  counts, KEK candidate names and digests. _Enforced (main):_ `cli/lib/cutover/fingerprint.js`,
   `cli/lib/cutover/preflight.js`, `cli/lib/cutover/maintenance.js`; `test-node/cutover-fingerprint.test.ts` ("holds
   table names, counts and digests only (DATA-16)", "through the real CLI"), `test-node/cutover-maintenance.test.ts`
   ("reports aggregates", "finds the resources from the bindings").
@@ -1925,14 +1941,14 @@ images-export` reads the Images API token from the environment only (`CF_IMAGES_
   (MEDIA-3). Each is checked by its signature against the upload path's types and limits before it is recorded, and
   against its SHA-256 before it is copied. Each media row the converter makes has a file token of its own,
   HMAC-SHA256 under a per-image secret that only `images.json` holds, so a token cannot be derived from the public
-  URIs and image ids, and the per-row sweep never deletes the files of another row showing the same image. _Implemented on branch `kopje/images-export`:_
+  URIs and image ids, and the per-row sweep never deletes the files of another row showing the same image. _Enforced (main):_
   `cli/lib/cutover/images-export.js`, `cli/lib/main.js`; `test-node/cutover-images.test.ts` ("uses the Images API with
   the token when given an account id", "runs from the CLI with the token from the environment only, and never prints
   it", "marks a 404, a wrong type, an oversized file and too many pixels missing"), `test/cutover-images-lifecycle.test.ts`.
 - **DATA-14: legacy keys are carried over as bytes, under one KEK.** Wrapped private keys, salts and public keys move
   unchanged (DATA-1; no re-wrapping, the owner's decision). The converter stops unless one KEK candidate (empty,
   `userKEK`, `USER_KEY`) unwraps every local key and verifies against its public key, reports which candidate by name,
-  and flags an empty KEK. _Implemented on branch `kopje/cutover-convert`:_ `cli/lib/cutover/kek.js`;
+  and flags an empty KEK. _Enforced (main):_ `cli/lib/cutover/kek.js`;
   `test-node/cutover-convert.test.ts` ("checks that one KEK candidate unwraps every key", "keeps wrapped keys byte for
   byte"). `USER_KEK` starts as the KEK the converter named. After publication the operator moves the keys to a new KEK
   with `kopje-admin keys rewrap` (docs/setup.md, "Rotating the KEK"): the same key pairs, nothing announced to other
@@ -1943,8 +1959,8 @@ images-export` reads the Images API token from the environment only (`CF_IMAGES_
   Access admin where it writes; the response carries counts, owners and reason codes only (DATA-1, DATA-5). It
   refuses an empty `USER_KEK` and one equal to the previous KEK. There is no fallback in the keyring, so keys under the
   previous KEK cannot sign until the rewrap has run (deliveries retry; the procedure holds them with
-  `MAINTENANCE=readonly`). _Implemented on branch `kopje/kek-rewrap`:_ `src/app/key-rewrap.ts`, `src/domain/actors.ts`
-  (`listRewrapKeys`, `rewrapLocalKey`), `cli/lib/main.js`; `test/key-rewrap.test.ts`. _Not covered:_ backups, dumps and
+  `MAINTENANCE=readonly`). _Enforced (main):_ `src/app/key-rewrap.ts`, `src/domain/actors.ts`
+  (`listRewrapKeys`, `rewrapLocalKey`), `cli/lib/main.js`; `test/key-rewrap.test.ts`. Backups, dumps and
   cutover exports made before the rewrap still hold the keys under the previous KEK; the operator deletes them or
   accepts that (accepted risk below).
 - **DATA-15: the cutover never widens an audience.** A converted status is visible to exactly whom legacy Wildebeest
@@ -1957,7 +1973,7 @@ images-export` reads the Images API token from the environment only (`CF_IMAGES_
   legacy; a Mention tag or `cc` entry outside these sets is no recipient (counted, kept in `raw`). A non-public status
   whose author a bridge migration changed, conflicting outbox addressing, and a boost with no exported audience stop the
   conversion instead of being guessed. Legacy `/ap/o/<uuid>` aliases answer only for what VIS-4 serves: a remote proxy
-  moves to a public original, an image shows with a servable status. _Implemented on branch `kopje/cutover-convert`:_
+  moves to a public original, an image shows with a servable status. _Enforced (main):_
   `cli/lib/cutover/convert.js`, `getLegacyObject` in `src/domain/activities.ts`, `src/federation/routes.ts`;
   `test-node/cutover-audience.test.ts` ("the audience never widens", "legacy address semantics (getApId), pinned by
   hand"), `test-node/cutover-convert.test.ts` (recipient, author and visibility tampering, boosts included),
@@ -1973,8 +1989,8 @@ images-export` reads the Images API token from the environment only (`CF_IMAGES_
   ActivityStreams (415) and a personal inbox of no local account (404) are refused before anything is spooled.
   _Enforced (main):_
   `src/app/app.ts`, `src/app/gate.ts`, `src/federation/spool.ts`; `test/gate.test.ts` ("maintenance gate"). A PITR
-  restore requires env `MAINTENANCE=full`: _Enforced (main)_ (`test/admin.test.ts`, "restores
-  only under MAINTENANCE=full"). Replay that verifies the signature against the spool time:
+  restore requires env `MAINTENANCE=full`: _Enforced (main)_ (`test/admin.test.ts` ("restores
+  only under MAINTENANCE=full")). Replay that verifies the signature against the spool time:
   _Enforced (main):_ `src/jobs/queue.ts`, `src/federation/inbound.ts`; `test/inbox.test.ts`
   ("OPS-1"), `test/gate.test.ts` ("refuses a personal inbox of nobody").
 - **OPS-2: no upgrade runs under a dump freeze or an import.** Migrations wait while either exists. The freeze also
@@ -2011,7 +2027,7 @@ images-export` reads the Images API token from the environment only (`CF_IMAGES_
       runs older than the newest `BACKUP_RETENTION` complete ones, and manifests first. Nothing is deleted from R2 or
       `media/`.
 
-    _Implemented on branch `kopje/scheduled-backup`:_ `src/jobs/backup.ts`, `src/platform/backup-state.ts`,
+    _Enforced (main):_ `src/jobs/backup.ts`, `src/platform/backup-state.ts`,
     `dumpAbort` in `src/platform/store-admin.ts`; `test/backup.test.ts` ("backup fencing", "backup resumption",
     "backup deadline", "backup destination and recipients", "ends the freeze as soon as the last chunk is read",
     "releases the freeze before it cleans up the upload", "restarts a dump whose freeze ended before its last step",
@@ -2025,7 +2041,7 @@ images-export` reads the Images API token from the environment only (`CF_IMAGES_
   whole and bound to its key, `sqlite_sequence` included, and again before publication; the conversion manifest must
   match the fingerprinted export's counts and notification counter; publication requires the independent per-row
   verification (DATA-12) on the converted dump and on the Store's own dump. After publication, recovery uses the
-  Store, PITR and backups. _Implemented on branch `kopje/cutover-ops`:_ `cli/lib/cutover/fingerprint.js`,
+  Store, PITR and backups. _Enforced (main):_ `cli/lib/cutover/fingerprint.js`,
   `cli/lib/cutover/preflight.js`, `docs/cutover-runbook.md`; `test-node/cutover-fingerprint.test.ts` (an insert, a
   delete, a short value changed at the same length, values swapped between rows, two characters swapped inside a long
   value, emptied content and a moved notification counter all FAIL; a missing counter, an incomplete manifest and
@@ -2034,12 +2050,12 @@ images-export` reads the Images API token from the environment only (`CF_IMAGES_
   checks the operator makes; the tools cannot see them.
 - **OPS-6: the maintenance worker accepts no write but the spool.** The cutover's Pages `_worker.js` answers actor and
   WebFinger GETs from its snapshot and spools every inbox POST (shared and personal) to Kopje's Queue through Kopje's
-  own code (`federation/inbox-request.ts`, `federation/spool.ts`): the same refusals before spooling (413, 415, 404 for
+  own code (`src/federation/inbox-request.ts`, `src/federation/spool.ts`): the same refusals before spooling (413, 415, 404 for
   a personal inbox of no local account by its exact username), the same message format and size limit, 202 only after
   the Queue accepted the message, 503 when it cannot spool. Every other request, any method, is 503 with
   `Retry-After`. It reads no legacy binding and imports no runtime module, so it runs on the legacy project's
   compatibility settings. The spooled request keeps its URL, headers and body as received and the time it arrived, so
-  Kopje's replay verifies the signature against that time (OPS-1). _Implemented on branch `kopje/cutover-ops`:_
+  Kopje's replay verifies the signature against that time (OPS-1). _Enforced (main):_
   `src/maintenance.ts`, `scripts/build-maintenance.mjs`; `test/maintenance-worker.test.ts` ("refuses every other
   write with 503 and touches no legacy binding", "refuses before spooling what Kopje refuses", "answers 503 rather than
   202 when it cannot spool", "spools a signed Follow ... and Kopje replays it" with the replaying clock a day later,
@@ -2056,10 +2072,10 @@ images-export` reads the Images API token from the environment only (`CF_IMAGES_
   snapshot rule; `maintenance-worker` refuses unless one KEK unwraps every local key and verifies against its public key
   (DATA-14), and every actor document publishes exactly its legacy public key, under `<actor>#main-key`, owned by that
   actor, at that actor's path, for every local actor. The snapshot holds no private key, no email and no instance
-  actor (its key does not exist before the import; `/actor` is 503). _Implemented on branch `kopje/cutover-ops`:_
+  actor (its key does not exist before the import; `/actor` is 503). _Enforced (main):_
   `src/maintenance-render.ts`, `cli/lib/cutover/maintenance.js`; `test/maintenance-worker.test.ts` ("serves byte for
   byte what the Store serves after the import, keys included"), `test-node/cutover-maintenance.test.ts` ("refuses a
-  snapshot with another public key / key id / owner / actor", "leaves a local actor out", mixed KEKs, another domain,
+  snapshot with …": another public key, key id, owner or actor at the path; "leaves a local actor out", mixed KEKs, another domain,
   "the snapshot is fresh when it is deployed": a profile changed or keys swapped make `maintenance-worker-check` say
   stale).
 - **OPS-8: nothing an import brought is written or delivered before publication, and a cutover is reset only
@@ -2094,7 +2110,7 @@ reset` takes such a
   refused while a dump holds the Store", "is for the Access admin only", "has the Store check the admin again", "keeps
   the lease until it expires", "keeps its lease by the Store clock", "fences imports, resets and publication while the
   lease is held").
-  _Implemented on branch `kopje/cutover-ops`:_ `src/platform/store-flags.ts` (`admitFlags`),
+  _Enforced (main):_ `src/platform/store-flags.ts` (`admitFlags`),
   `src/platform/store-admin.ts` (`publish`, `importBegin`, `cutoverReset`), `inboxWritable` in
   `src/federation/inbox.ts`, `backupClaim` in `src/store.ts`, `src/app/admin.ts`; `test/cutover-rollback.test.ts` ("the
   cutover reset after a completed import": publish without an import, import into a published Store, both marks at
@@ -2119,7 +2135,7 @@ reset` takes such a
   does not finish in 10 seconds is given up; either way the lease is kept until it expires. A record is marked before its send and sent again
   after a crash. A handed-off request leaves a receipt in `kopje_state`, outside dumped, imported and reset data,
   consulted before journaling and before any replay, until the operator closes the rollback with Kopje's Queue and its
-  dead-letter queue empty. _Implemented on branch `kopje/cutover-ops`:_
+  dead-letter queue empty. _Enforced (main):_
   `src/app/cutover.ts`, `src/federation/legacy-inbox.ts`, the journal in `src/platform/store-admin.ts`,
   `verifySpooledRequest` in `src/federation/inbound.ts`; `test/cutover-rollback.test.ts` ("the rollback drain": a
   delayed Follow before its Undo and a delayed Create before its Delete, a legacy retry holding the next request, the
@@ -2148,21 +2164,20 @@ reset` takes such a
   for good, at the cost of ordinary delivery reordering for the requests still in the Queue; there is no protocol that
   drains a bounded journal in full order before the barrier closes.
 - **OPS-10: no accepted message is dropped by Kopje's Queue.** The consumer has a dead-letter queue in the package's and
-  the template's configuration; the runbook inspects, reconciles and redrives it. _Implemented on branch
-  `kopje/cutover-ops`:_ `wrangler.jsonc`, `deploy/wrangler.jsonc`, `scripts/check-kopje-package.mjs`.
+  the template's configuration; the runbook inspects, reconciles and redrives it. _Enforced (main):_ `wrangler.jsonc`, `/deploy/wrangler.jsonc`, `/scripts/check-kopje-package.mjs`.
 
 ## Negative cases by stage
 
 Each stage ships tests for these cases, named with the invariant IDs.
 
-| Stage                      | Required negative cases                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| B1b inbound                | Wrong signer or actor; foreign activity id; same-origin different actor; unauthorized Undo, Accept, Update, Delete; duplicate and reordered Delete and Create; non-AS media type; private and unlisted object fetches                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| B2 delivery                | Redirect of a private activity; recipient outside the audience; duplicate inbox; expired lease; stale completion; commit followed by response loss (`test/deliveries.test.ts`, `test/delivery-post.test.ts`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| B4 statuses, media, search | Edit, source or history of another's status; history seen by a recipient added later; private boost in `reblogged_by`; hidden parent in reply fields; DM moving `last_status_at`; unbounded edits or reply tree; boost or quote of an invisible status; foreign attachment; unsafe R2 key; retained EXIF; failed transform; active media type; private status in search                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| B5 UI and setup            | Missing, `null` and foreign Origin; framing headers; unsafe return path; session fixation and reuse after logout (`test/web-session.test.ts`, `test/web-images.test.ts`, `test/web-pages.test.ts`); reused setup token, concurrent bootstrap, missing, `null` and foreign Origin on `/setup` (`test/setup.test.ts`, B5b)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| B6b backup and restore     | Plaintext dump, media or manifest egress; interrupted upload; missing component; unselected manifest; restored obsolete credentials (`kopje/scheduled-backup` covers egress, interrupted uploads and changed components in `test/backup.test.ts`; selection and credential invalidation are DATA-8)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| B8 cutover                 | Wrong target resources, domain or keys; writes to the source; an alternate Pages route still writable; unreconciled Queue or DLQ; changed content with unchanged length. B8a conversion (`test-node/cutover-*.test.ts`, `test/cutover-import.test.ts`): the audience never widens (a DM made public by bridge defaults; an author rewritten by 0021; an href-only address; a followers value spelled differently from its address; a followers-only mention that outlives an unfollow; a recipient added to a private boost; a tag or cc outside `to` made a recipient; a non-follower recipient of a followers-only status; conflicting or missing addressing); missing, emptied or same-length rewritten content; a removed or added recipient; a widened visibility; a dropped reply link, alias, follow, boost, notification or list member; a changed source, raw, edit, attachment, profile, key, setting, preference, policy, scope or counter; an extra row; an image moved to another owner or status; a lost or taken legacy id; a lost notification high-water mark; mixed KEKs; unaccepted deletions or truncation; `INSERT ... SELECT`, functions in `VALUES`, `CREATE TABLE ... AS SELECT`, non-canonical default or check expressions, bookkeeping DDL, nested or oversized `replace` expansion and stray statements; content in failure reports; an existing output file or link; an oversized export, total or dump; alias requests for hidden statuses and their images; B8b operations (`test/maintenance-worker.test.ts`, `test/cutover-token.test.ts`, `test-node/cutover-fingerprint.test.ts`, `test-node/cutover-maintenance.test.ts`): a write through the maintenance worker (any method, API, outbox, actor path), a personal inbox of nobody or under another case, a non-AS body, an oversized or undeflatable body, a missing or failing spool Queue, a legacy binding touched, a spooled request altered before replay, a replay a day after the signature, a snapshot key, key id, owner or actor that is not the legacy one, a local actor left out, mixed KEKs, another domain, a second import or a configuration change with `IMPORT_TOKEN` after the first import or once Access is set, a fingerprint after an insert, a delete, a same-length update of a short value, values swapped between rows, an edit inside a long value, emptied content or a moved notification counter, an export without the counter, an incomplete manifest, an export whose counts differ from the fingerprinted database, a secret or instance data in a report; an unsigned or oddly signed spool request, the rate limit, a full backlog; a stale snapshot; a cutover reset after publication, without MAINTENANCE=full, by the import token, during an import or with a non-empty journal; a drain past a request that may verify later, a forged request drained, a drain without the legacy binding, journaling after publication (`test/cutover-rollback.test.ts`); round 3: an isolate that first saw an empty Store, a delayed request overtaken by a newer one, a legacy retry overtaken, a dead-lettered legacy message, unreadable backlogs in the drain and in admission, a concurrent drain, a crash while sending, a late redelivery, a missing recipient, a flood against the journal quotas, Rollback A from bootstrap, an emptied notifications table without its counter, a manifest with a missing or extra zero-count table; round 4: a failing mark RPC, an import completing while the Worker served, publication with a journal, a drain after publication, re-import after Rollback A, redelivery after a reset and after the mode is removed, a suspended send past its lease, dead-lettering between readings, activities without context or id, valid requests over the quota, bookkeeping keys in a manifest; round 5: queue replay and deliveries of an unpublished import with MAINTENANCE=off, a restore published without Access, a mark answered after the lease ran out, a handed-off copy in Kopje's DLQ at close, bookkeeping keys with matching counts, a journal-full stop through a transient key failure and the CLI deadline, the unordered escape; round 6: a Queue reading that outlasts the round, a report that outlasts the lease, a live or replayed request while unpublished (no fetch, no retry), a scheduled backup before publication, a publication without an import, an import into a published Store, both publication marks at once, an unordered drain without a reported stop |
+| Stage                      | Required negative cases                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| B1b inbound                | Wrong signer or actor; foreign activity id; same-origin different actor; unauthorized Undo, Accept, Update, Delete; duplicate and reordered Delete and Create; non-AS media type; private and unlisted object fetches                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| B2 delivery                | Redirect of a private activity; recipient outside the audience; duplicate inbox; expired lease; stale completion; commit followed by response loss (`test/deliveries.test.ts`, `test/delivery-post.test.ts`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| B4 statuses, media, search | Edit, source or history of another's status; history seen by a recipient added later; private boost in `reblogged_by`; hidden parent in reply fields; DM moving `last_status_at`; unbounded edits or reply tree; boost or quote of an invisible status; foreign attachment; unsafe R2 key; retained EXIF; failed transform; active media type; private status in search                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| B5 UI and setup            | Missing, `null` and foreign Origin; framing headers; unsafe return path; session fixation and reuse after logout (`test/web-session.test.ts`, `test/web-images.test.ts`, `test/web-pages.test.ts`); reused setup token, concurrent bootstrap, missing, `null` and foreign Origin on `/setup` (`test/setup.test.ts`, B5b)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| B6b backup and restore     | Plaintext dump, media or manifest egress; interrupted upload; missing component; unselected manifest; restored obsolete credentials (`test/backup.test.ts` covers egress, interrupted uploads and changed components; selection and credential invalidation are DATA-8, planned)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| B8 cutover                 | Wrong target resources, domain or keys; writes to the source; an alternate Pages route still writable; unreconciled Queue or DLQ; changed content with unchanged length. B8a conversion (`test-node/cutover-*.test.ts`, `test/cutover-import.test.ts`): the audience never widens (a DM made public by bridge defaults; an author rewritten by 0021; an href-only address; a followers value spelled differently from its address; a followers-only mention that outlives an unfollow; a recipient added to a private boost; a tag or cc outside `to` made a recipient; a non-follower recipient of a followers-only status; conflicting or missing addressing); missing, emptied or same-length rewritten content; a removed or added recipient; a widened visibility; a dropped reply link, alias, follow, boost, notification or list member; a changed source, raw, edit, attachment, profile, key, setting, preference, policy, scope or counter; an extra row; an image moved to another owner or status; a lost or taken legacy id; a lost notification high-water mark; mixed KEKs; unaccepted deletions or truncation; `INSERT ... SELECT`, functions in `VALUES`, `CREATE TABLE ... AS SELECT`, non-canonical default or check expressions, bookkeeping DDL, nested or oversized `replace` expansion and stray statements; content in failure reports; an existing output file or link; an oversized export, total or dump; alias requests for hidden statuses and their images; B8b operations (`test/maintenance-worker.test.ts`, `test/cutover-token.test.ts`, `test-node/cutover-fingerprint.test.ts`, `test-node/cutover-maintenance.test.ts`): a write through the maintenance worker (any method, API, outbox, actor path), a personal inbox of nobody or under another case, a non-AS body, an oversized or undeflatable body, a missing or failing spool Queue, a legacy binding touched, a spooled request altered before replay, a replay a day after the signature, a snapshot key, key id, owner or actor that is not the legacy one, a local actor left out, mixed KEKs, another domain, a second import or a configuration change with `IMPORT_TOKEN` after the first import or once Access is set, a fingerprint after an insert, a delete, a same-length update of a short value, values swapped between rows, an edit inside a long value, emptied content or a moved notification counter, an export without the counter, an incomplete manifest, an export whose counts differ from the fingerprinted database, a secret or instance data in a report; an unsigned or oddly signed spool request, the rate limit, a full backlog; a stale snapshot; a cutover reset after publication, without MAINTENANCE=full, by the import token, during an import or with a non-empty journal; a drain past a request that may verify later, a forged request drained, a drain without the legacy binding, journaling after publication (`test/cutover-rollback.test.ts`); an isolate that first saw an empty Store, a delayed request overtaken by a newer one, a legacy retry overtaken, a dead-lettered legacy message, unreadable backlogs in the drain and in admission, a concurrent drain, a crash while sending, a late redelivery, a missing recipient, a flood against the journal quotas, Rollback A from bootstrap, an emptied notifications table without its counter, a manifest with a missing or extra zero-count table; a failing mark RPC, an import completing while the Worker served, publication with a journal, a drain after publication, re-import after Rollback A, redelivery after a reset and after the mode is removed, a suspended send past its lease, dead-lettering between readings, activities without context or id, valid requests over the quota, bookkeeping keys in a manifest; queue replay and deliveries of an unpublished import with MAINTENANCE=off, a restore published without Access, a mark answered after the lease ran out, a handed-off copy in Kopje's DLQ at close, bookkeeping keys with matching counts, a journal-full stop through a transient key failure and the CLI deadline, the unordered escape; a Queue reading that outlasts the round, a report that outlasts the lease, a live or replayed request while unpublished (no fetch, no retry), a scheduled backup before publication, a publication without an import, an import into a published Store, both publication marks at once, an unordered drain without a reported stop |
 
 ## IDs to check by change type
 
@@ -2216,7 +2231,7 @@ activity specs, cited in test names.
 | A lease taken just before maintenance and not completed counts one attempt when it expires                                                                                                                                                                                                            | Bounded by one attempt per lease; maintenance itself claims nothing (RES-5)                                                                                                                                                                                       | maintenance windows become frequent                                  |
 | Fedify's own fetch-failure logs include response headers; they are silent only because logtape is unconfigured                                                                                                                                                                                        | Kopje configures no logtape sink (DATA-5); a sink without redaction must not be added                                                                                                                                                                             | Kopje configures logtape                                             |
 | Remote HTML is sanitized by sanitize-html, whose htmlparser2 is a tokenizer rather than an HTML5 tree builder                                                                                                                                                                                         | It emits only allowlisted tags with quoted, escaped attributes and escapes all other text; the parse5-checked vector suites pass                                                                                                                                  | a vector fails, or a maintained tree-based sanitizer fits the budget |
-| Backup media copies are never pruned, so an original deleted from R2 stays in the bucket (and copies from abandoned or stale attempts stay too); served `files/` variants are not backed up                                                                                                           | Copies are reused across backups and the kept indexes refer to them; originals are the source of the variants (B8 restore tools)                                                                                                                                  | a restore tool re-encodes variants, or backups track deletions       |
+| Backup media copies are never pruned, so an original deleted from R2 stays in the bucket (and copies from abandoned or stale attempts stay too); served `files/` variants are not backed up                                                                                                           | Copies are reused across backups and the kept indexes refer to them; originals are the source of the variants (the media rebuild, MEDIA-2)                                                                                                                        | a restore tool re-encodes variants, or backups track deletions       |
 | The backup's S3 credentials can delete backups under `backups/` (not `media/`)                                                                                                                                                                                                                        | Retention needs delete; versioning or object lock on the bucket is the documented protection                                                                                                                                                                      | the job can work with put-only credentials                           |
 | Activities signed by someone other than their actor (forwarded, with LD signatures) are refused                                                                                                                                                                                                       | ID-1. Replies that reach Kopje only by forwarding (to a collection the author cannot deliver to) and deliveries through relays are missed                                                                                                                         | relays or forwarded replies must be supported                        |
 | The app registration limit is approximate: the Rate Limiting binding counts per Cloudflare location and is eventually consistent, and many addresses together can fill the 500 never-authorized slots, evicting never-authorized apps older than an hour or refusing registration for an hour at most | The Store's bound holds exactly whatever the limiter lets through, and every refusal is visible (429); Workers offers no exact global limiter without a paid product                                                                                              | registrations are seen to be refused or evicted in practice          |
