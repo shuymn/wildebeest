@@ -1,14 +1,6 @@
-import {
-	ACCOUNT_COLUMNS,
-	ACCOUNT_FROM,
-	type Account,
-	type AccountRow,
-	type Page,
-	type PageQuery,
-	type Present,
-	presentAccount,
-} from './accounts'
+import { type Account, accountsOf, type Page, type PageQuery, type Present } from './accounts'
 import { accessAdminRefusal, normalizedEmail } from './admin-authority'
+import { admit, ARRAY_ANSWER_BYTES } from './answer-budget'
 import { activeSql, availableJoinedSql, availableLocalSql, deletingSql, suspendedSql } from './audience'
 import {
 	ADMIN_PERMISSION,
@@ -58,46 +50,65 @@ export type AdminAccount = {
 	role: Role | null
 }
 
-// The admin entities of `ids`, read in one query; an id with no account is left out. `adminId` is the OAuth admin the
-// calling admin operation has just checked (adminGuarded), whose account shows the admin role.
-export function presentAdminAccounts(
+// The admin entities of `ids` in order (an id may repeat), for an admission (admit): read `chunk` at a time as the
+// stream reaches them, each account through accountsOf (RES-2); undefined for an id with no account. `adminId` is the
+// OAuth admin the calling admin operation has just checked (adminGuarded), whose account shows the admin role.
+export function* adminAccountStream(
 	db: Db,
 	ids: readonly string[],
 	adminId: string,
-	present: Present
-): Map<string, AdminAccount> {
-	const rows = db.all<AccountRow & { email: string | null }>(
-		`SELECT ${ACCOUNT_COLUMNS}, l.email FROM ${ACCOUNT_FROM} WHERE a.id IN (SELECT value FROM json_each(?1))`,
-		JSON.stringify([...new Set(ids)])
-	)
-	return new Map(
-		rows.map((row) => {
-			const account = presentAccount(row, present)
+	present: Present,
+	chunk = ADMIN_ACCOUNT_CHUNK
+): Generator<AdminAccount | undefined, undefined> {
+	for (let next = 0; next < ids.length; next += chunk) {
+		const slice = ids.slice(next, next + chunk)
+		const rows = new Map(
+			db
+				.all<{ id: string; domain: string | null; email: string | null }>(
+					`SELECT a.id, a.domain, l.email FROM json_each(?1) c CROSS JOIN accounts a ON a.id = c.value
+						LEFT JOIN local_accounts l ON l.account_id = a.id`,
+					JSON.stringify([...new Set(slice)])
+				)
+				.map((row) => [row.id, row])
+		)
+		const accounts = accountsOf(db, slice, present, chunk)
+		for (const id of slice) {
+			const account = accounts.next().value
+			const row = rows.get(id)
+			if (account === undefined || row === undefined) {
+				yield undefined
+				continue
+			}
 			const local = row.domain === null
-			return [
-				row.id,
-				{
-					id: row.id,
-					username: row.username,
-					domain: row.domain,
-					created_at: row.created_at,
-					email: local ? row.email : null,
-					ip: null,
-					confirmed: local ? true : null,
-					suspended: account.suspended === true,
-					silenced: false,
-					sensitized: false,
-					disabled: local ? false : null,
-					approved: local ? true : null,
-					locale: null,
-					invite_request: null,
-					ips: [],
-					account,
-					role: local ? (row.id === adminId ? OWNER_ROLE : EVERYONE_ROLE) : null,
-				},
-			]
-		})
-	)
+			yield {
+				id: row.id,
+				username: account.username,
+				domain: row.domain,
+				created_at: account.created_at,
+				email: local ? row.email : null,
+				ip: null,
+				confirmed: local ? true : null,
+				suspended: account.suspended === true,
+				silenced: false,
+				sensitized: false,
+				disabled: local ? false : null,
+				approved: local ? true : null,
+				locale: null,
+				invite_request: null,
+				ips: [],
+				account,
+				role: local ? (row.id === adminId ? OWNER_ROLE : EVERYONE_ROLE) : null,
+			}
+		}
+	}
+}
+
+// Admin entities read per query while an answer is admitted: one chunk at their bound is about 2.5 MB (RES-2).
+const ADMIN_ACCOUNT_CHUNK = 20
+
+// One admin entity, a unit (RES-2); undefined for an id with no account.
+export function presentAdminAccount(db: Db, id: string, adminId: string, present: Present): AdminAccount | undefined {
+	return adminAccountStream(db, [id], adminId, present, 1).next().value
 }
 
 // The longest email set-email takes (RFC 5321's path limit).
@@ -499,18 +510,21 @@ export function adminAccountOperations(read: AdminDeclare, write: AdminDeclare) 
 			if (found === 'too_broad' || found === 'moderating') {
 				return { status: found }
 			}
-			const kept = found.slice(0, page.limit)
+			// The page's accounts in its order, within ANSWER_BYTES (RES-3): cut there, the page ends at its last admitted
+			// account, and `more` offers the next.
+			const read = found.slice(0, page.limit).map((row) => row.id)
+			const admitted = admit(adminAccountStream(db, read, admin.accountId, present), ARRAY_ANSWER_BYTES, true)
+			const ids = read.slice(0, admitted.consumed)
 			const more = bounds.ascending
-				? kept.length > 0
-				: found.length > page.limit || (bounds.min !== null && kept.length > 0)
+				? ids.length > 0
+				: admitted.cut || found.length > page.limit || (bounds.min !== null && ids.length > 0)
 			if (bounds.ascending) {
-				kept.reverse()
+				ids.reverse()
+				admitted.items.reverse()
 			}
-			const ids = kept.map((row) => row.id)
-			const accounts = presentAdminAccounts(db, ids, admin.accountId, present)
 			return {
 				status: 'ok',
-				items: ids.map((id) => accounts.get(id)!),
+				items: admitted.items,
 				newest: ids[0] ?? null,
 				oldest: ids.at(-1) ?? null,
 				more,
@@ -522,7 +536,7 @@ export function adminAccountOperations(read: AdminDeclare, write: AdminDeclare) 
 	const getAdminAccount = read<{ id: string; present: Present }, AdminAccountResult>(
 		ADMIN_PERMISSION.manageUsers,
 		(db, { id, present }, admin) => {
-			const account = presentAdminAccounts(db, [id], admin.accountId, present).get(id)
+			const account = presentAdminAccount(db, id, admin.accountId, present)
 			return account === undefined ? { status: 'not_found' } : { status: 'ok', account }
 		}
 	)
@@ -531,7 +545,7 @@ export function adminAccountOperations(read: AdminDeclare, write: AdminDeclare) 
 	const actOnAdminAccount = write<{ id: string; action: AdminAccountAction; present: Present }, AdminAccountResult>(
 		ADMIN_PERMISSION.manageUsers,
 		(db, { id, action, present }, admin) => {
-			const account = presentAdminAccounts(db, [id], admin.accountId, present).get(id)
+			const account = presentAdminAccount(db, id, admin.accountId, present)
 			if (account === undefined) {
 				return { status: 'not_found' }
 			}
@@ -605,7 +619,7 @@ export function adminAccountOperations(read: AdminDeclare, write: AdminDeclare) 
 				return { status: 'not_allowed' }
 			}
 			logAction(db, admin, 'unsuspend', { type: 'Account', id }, {}, admin.now)
-			return { status: 'ok', account: presentAdminAccounts(db, [id], admin.accountId, present).get(id)! }
+			return { status: 'ok', account: presentAdminAccount(db, id, admin.accountId, present)! }
 		}
 	)
 

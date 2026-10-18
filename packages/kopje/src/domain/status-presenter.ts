@@ -1,4 +1,4 @@
-import { type Account, accountUrl, acctOf, type Present, presentAccountsById } from './accounts'
+import { type Account, accountsOf, accountUrl, acctOf, type Present } from './accounts'
 import { admit, type Admitted } from './answer-budget'
 import {
 	type ApiQuoteState,
@@ -222,6 +222,9 @@ export type Presentation = {
 	// The filter results of each quoted status matched so far, by its id: a quoted status counts once in the level's
 	// allowance however many statuses of the answer quote it, so it is matched once (results only, no rows, are kept).
 	readonly quoted: Map<string, FilterResult[]>
+	// The same for each status of the answer, by its id: an answer that presents a status again (a grouped page's
+	// re-admission pass) matches it once.
+	readonly top: Map<string, FilterResult[]>
 	// The code units of text matched against the keywords so far, at most MAX_FILTER_REQUEST_TEXT.
 	readonly matched: { units: number }
 }
@@ -240,6 +243,7 @@ function presentationOf(db: Db, candidates: readonly string[], options: PresentO
 		filters,
 		level: keywords ? textLevel(db, candidates, options) : Infinity,
 		quoted: new Map(),
+		top: new Map(),
 		matched: { units: 0 },
 	}
 }
@@ -332,47 +336,47 @@ function statusGraph<R extends GraphRow>(
 	return { byId, quotes, quoted }
 }
 
-// Statuses the read rule passed for the viewer, in the order of `ids`; ids with no row, and boosts whose original the
-// viewer may not see, are left out. Unbudgeted: an answer of many statuses goes through presentStatusesWithin
-// (docs/response-inventory.md lists the callers left).
-export function presentStatuses(db: Db, ids: readonly VisibleStatusId[], options: PresentOptions): Status[] {
-	return presented(present(db, ids, presentationOf(db, ids, options), false))
-}
-
 // The statuses whose rows are read together while an answer is admitted: what is read past the budget is at most one
 // chunk of rows at the unit maximum ("Heap at 8 MiB per answer" in docs/threat-model.md); each status is presented
 // and measured on its own, only when admission reaches it.
 const STATUS_CHUNK = 2
 
 // Admission of statuses (RES-3, admit): the statuses of `ids` in traversal order, their rows read STATUS_CHUNK at a
-// time, each presented as one atomic item (with its boosted original and quoted status) when it is reached, while
-// their JSON fits `budget`, under one presentation. An id with nothing to show is consumed.
+// time (`chunk`, which a test sets to compare chunked presentation with one whole), each presented as one atomic item
+// (with its boosted original and quoted status) when it is reached, while their JSON fits `budget`, under one
+// presentation. An id with nothing to show is consumed.
 export function presentStatusesWithin(
 	db: Db,
 	shared: Presentation,
 	ids: readonly VisibleStatusId[],
 	budget: number,
-	leading: boolean
+	leading: boolean,
+	chunk = STATUS_CHUNK
 ): Admitted<Status> {
-	function* each(): Generator<Status | undefined> {
-		for (let next = 0; next < ids.length; next += STATUS_CHUNK) {
-			const chunk = ids.slice(next, next + STATUS_CHUNK)
-			const at = hydrate(db, chunk, shared, false)
-			for (const id of chunk) {
-				yield at(id)
-			}
-		}
-	}
-	return admit(each(), budget, leading)
+	return admit(statusStream(db, shared, ids, chunk), budget, leading)
 }
 
-function presented(statuses: readonly (Status | undefined)[]): Status[] {
-	return statuses.flatMap((status) => (status === undefined ? [] : [status]))
+// The statuses of `ids` in order, under one presentation, for an admission (admit) of items that embed them: their
+// rows read STATUS_CHUNK at a time, each status presented only when the stream reaches it, undefined for an id with
+// nothing to show. What the stream holds past what its consumer kept is one chunk of rows.
+export function* statusStream(
+	db: Db,
+	shared: Presentation,
+	ids: readonly VisibleStatusId[],
+	chunk = STATUS_CHUNK
+): Generator<Status | undefined, undefined> {
+	for (let next = 0; next < ids.length; next += chunk) {
+		const slice = ids.slice(next, next + chunk)
+		const at = hydrate(db, slice, shared, false)
+		for (const id of slice) {
+			yield at(id)
+		}
+	}
 }
 
 // One status, bounded as a unit (RES-3, "Maxima of presented units").
 export function presentStatus(db: Db, id: VisibleStatusId, options: PresentOptions): Status | null {
-	return presentStatuses(db, [id], options)[0] ?? null
+	return present(db, [id], presentationOf(db, [id], options), false)[0] ?? null
 }
 
 // The viewer's own status, for the response to their write; a boost of an original they may not see has reblog: null.
@@ -436,13 +440,14 @@ function hydrate(
 	const all = JSON.stringify([...byId.keys()])
 	// The statuses matched by filters: each status of the response, and each quoted status shown in it.
 	const targets = [
-		...ids.map((id) => ({ key: id, row: byId.get(id), matched: false })),
+		...ids.map((id) => ({ key: id, row: byId.get(id), matched: shared.top.has(id) })),
 		...quoted.map((id) => ({ key: quotedKey(id), row: byId.get(id), matched: shared.quoted.has(id) })),
 	]
-	const accounts = presentAccountsById(
-		db,
-		[...byId.values()].map((row) => row.account_id),
-		options
+	// The authors of the chunk's statuses, their originals and quoted statuses.
+	const authors = [...new Set([...byId.values()].map((row) => row.account_id))]
+	const presented = accountsOf(db, authors, options, Math.max(authors.length, 1))
+	const accounts = new Map(
+		authors.flatMap((id) => presented.next().value ?? []).map((account) => [account.id, account])
 	)
 	// At most MAX_STATUS_MEDIA attachments, MAX_STATUS_MENTION_ROWS mentions and MAX_PRESENTED_TAGS hashtags of each
 	// status (each status once), cut in SQL: a converted row may hold more. Each cap reads at most that many rows of
@@ -510,7 +515,7 @@ function hydrate(
 		}
 		const top = kind === 'top'
 		let reblog: Status | null = null
-		const cached = kind === 'quoted' ? shared.quoted.get(row.id) : undefined
+		const cached = kind === 'quoted' ? shared.quoted.get(row.id) : top ? shared.top.get(row.id) : undefined
 		if (cached !== undefined) {
 			filtered = cached
 		} else if (kind !== 'reblog' && filters !== null) {
@@ -525,6 +530,8 @@ function hydrate(
 			}
 			if (kind === 'quoted') {
 				shared.quoted.set(row.id, filtered)
+			} else if (top) {
+				shared.top.set(row.id, filtered)
 			}
 		}
 		if (row.reblog_of_id !== null) {

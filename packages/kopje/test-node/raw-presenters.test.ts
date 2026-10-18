@@ -9,15 +9,11 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 // RES-3 (docs/response-inventory.md): an answer of many statuses or accounts is presented within its answer budget by
 // the Store operation that owns it, through the budgeted presenters (presentStatusesWithin, presentAccountsWithin,
-// admit). The raw presenters build an answer of any size, so they stay in their modules: this test reads the program
-// that tsconfig.json declares, through TypeScript's own parser, and fails on any import, re-export or namespace
-// access of a raw presenter in src/ outside its module, and on a dynamic import of its module.
-//
-// LEFT_FOR_RB2 counts, per module and raw presenter, the uses it still makes (each mention of the imported name):
-// the answers RB2 budgets (notifications, conversations, reports, admin account lists, edge-cursor account pages and
-// the directory). It is exact: a further use of an allowed import fails, and so does an entry no longer used, so it
-// shrinks with each change. The guard is architectural; the aggregate response
-// tests (test/answer-budgets.test.ts) prove the budgets.
+// admit and the streams they admit). The raw presenters build an answer of any size, so they stay in their modules:
+// this test reads the program that tsconfig.json declares, through TypeScript's own parser, and fails on any import,
+// re-export, namespace access or use of a raw presenter in src/ outside its module, and on a dynamic import of its
+// module. No module is exempt. The guard is architectural; the aggregate response tests (test/answer-budgets.test.ts
+// and the families' budget tests) prove the budgets.
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 
@@ -25,20 +21,6 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const RAW: Readonly<Record<string, readonly string[]>> = {
 	'src/domain/status-presenter': ['presentStatuses'],
 	'src/domain/accounts': ['presentAccountsById', 'presentAccount'],
-}
-
-const LEFT_FOR_RB2: Readonly<Record<string, Readonly<Record<string, number>>>> = {
-	'src/domain/admin-accounts.ts': { presentAccount: 1 },
-	'src/domain/blocks.ts': { presentAccount: 2 },
-	'src/domain/conversations.ts': { presentAccountsById: 1, presentStatuses: 1 },
-	'src/domain/directory.ts': { presentAccount: 1 },
-	'src/domain/notification-groups.ts': { presentAccountsById: 2, presentStatuses: 1 },
-	'src/domain/notification-requests.ts': { presentAccountsById: 1, presentStatuses: 1 },
-	'src/domain/notifications.ts': { presentAccountsById: 1, presentStatuses: 1 },
-	'src/domain/reports.ts': { presentAccountsById: 2, presentStatuses: 1 },
-	// present() hydrates the accounts of the ids it is given: a page for presentStatuses until RB2 removes it, then
-	// one chunk of statuses.
-	'src/domain/status-presenter.ts': { presentAccountsById: 1 },
 }
 
 type SourceNode = Node & Record<string, unknown>
@@ -259,38 +241,16 @@ describe('raw presenters (RES-3)', () => {
 		expect(program.map(({ file }) => file).toSorted()).toEqual(onDisk('src').toSorted())
 	})
 
-	it('are used only by their modules and the counted sites left for RB2', () => {
-		const imported: Record<string, string[]> = {}
-		const used: Record<string, Record<string, number>> = {}
-		const other: Finding[] = []
-		for (const { file, root } of program) {
-			for (const finding of findings(file, root)) {
-				if (finding.how === 'import') {
-					imported[file] = [...(imported[file] ?? []), finding.name].toSorted()
-				} else if (finding.how === 'use') {
-					const counts = (used[file] ??= {})
-					counts[finding.name] = (counts[finding.name] ?? 0) + 1
-				} else {
-					other.push(finding)
-				}
-			}
-		}
-		expect(other).toEqual([])
-		expect(used).toEqual(LEFT_FOR_RB2)
-		expect(imported).toEqual(
-			Object.fromEntries(Object.entries(LEFT_FOR_RB2).map(([file, uses]) => [file, Object.keys(uses).toSorted()]))
-		)
+	it('are used only by their modules', () => {
+		const found = program.flatMap(({ file, root }) => findings(file, root))
+		expect(found).toEqual([])
 	})
 
-	it('are allowed only where the response inventory names an exemption', () => {
+	it('leave no exemption in the response inventory', () => {
 		const inventory = readFileSync(join(ROOT, 'docs/response-inventory.md'), 'utf8')
-		// The last cell of each table row: the module exempt until its answer is budgeted.
+		// The last cell of a table row naming a module: an exemption until its answer is budgeted.
 		const exempt = [...inventory.matchAll(/\| `(src\/[^`]+)` +\|$/gm)].map((m) => m[1] ?? '')
-		expect(inventory).toContain('(`src/domain/status-presenter.ts`) imports `presentAccountsById`')
-		expect(exempt.toSorted()).toEqual(
-			Object.keys(LEFT_FOR_RB2)
-				.filter((file) => file !== 'src/domain/status-presenter.ts')
-				.toSorted()
-		)
+		expect(exempt).toEqual([])
+		expect(inventory).not.toMatch(/\| Exemption +\|/)
 	})
 })

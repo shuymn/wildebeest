@@ -1,12 +1,11 @@
 import {
-	ACCOUNT_COLUMNS,
 	type Account,
-	type AccountRow,
+	accountPage,
+	accountsOf,
 	edgeRangeSql,
 	type Page,
 	type PageQuery,
 	type Present,
-	presentAccount,
 	relationshipResult,
 	type RelationshipResult,
 	resolveAccountId,
@@ -20,6 +19,7 @@ import {
 	undoBlockActivity,
 	undoFollowActivity,
 } from './activities'
+import { admit, admittedPage, ARRAY_ANSWER_BYTES } from './answer-budget'
 import { activeMuteSql, inDomainSql } from './audience'
 import { userReadOperation, userWriteOperation } from './auth'
 import { leaveConversationsWith } from './conversations'
@@ -286,40 +286,43 @@ export type MutedAccount = Account & { mute_expires_at: string | null }
 
 // Keyset pages over an edge table's INTEGER id (the cursor), newest first, as listFollows pages.
 function edgePage<R extends { cursor: string }, T>(rows: R[], ascending: boolean, item: (row: R) => T): Page<T> {
+	const read = edgeRows(rows, ascending)
+	return { ...read, items: read.rows.map(item) }
+}
+
+function edgeRows<R extends { cursor: string }>(rows: R[], ascending: boolean) {
 	if (ascending) {
 		rows.reverse()
 	}
-	return { items: rows.map(item), newest: rows[0]?.cursor ?? null, oldest: rows.at(-1)?.cursor ?? null }
+	return { rows, newest: rows[0]?.cursor ?? null, oldest: rows.at(-1)?.cursor ?? null }
 }
 
-// GET /api/v1/blocks: the accounts the viewer blocks, by the block's id.
+// GET /api/v1/blocks: the accounts the viewer blocks, by the block's id, within ANSWER_BYTES (accountPage).
 export const listBlocks = userReadOperation<{ page: PageQuery; present: Present }, Page<Account>>(
 	(db, { page, present }, { accountId }) => {
 		const ascending = page.minId !== undefined
-		const rows = db.all<AccountRow & { cursor: string }>(
-			`SELECT CAST(b.id AS TEXT) AS cursor, ${ACCOUNT_COLUMNS}
-			FROM blocks b JOIN accounts a ON a.id = b.target_account_id LEFT JOIN local_accounts l ON l.account_id = a.id
-			WHERE b.account_id = ?1
-				AND ${edgeRangeSql('b.id', '?2', '?3')}
+		const rows = db.all<{ cursor: string; id: string }>(
+			`SELECT CAST(b.id AS TEXT) AS cursor, b.target_account_id AS id
+			FROM blocks b WHERE b.account_id = ?1 AND ${edgeRangeSql('b.id', '?2', '?3')}
 			ORDER BY b.id ${ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
 			accountId,
 			page.maxId ?? null,
 			page.minId ?? page.sinceId ?? null,
 			page.limit
 		)
-		return edgePage(rows, ascending, (row) => presentAccount(row, present))
+		return accountPage(db, edgeRows(rows, ascending), ascending, (row) => row.cursor, present)
 	}
 )
 
 // GET /api/v1/mutes: the accounts the viewer mutes now, by the mute's id, each with its expiry (Mastodon's
-// REST::MutedAccountSerializer).
+// REST::MutedAccountSerializer), within ANSWER_BYTES: admitted in traversal order, a page cut there continuing from
+// its last admitted account (admittedPage).
 export const listMutes = userReadOperation<{ page: PageQuery; present: Present }, Page<MutedAccount>>(
 	(db, { page, present }, _viewer, { accountId, now }) => {
 		const ascending = page.minId !== undefined
-		const rows = db.all<AccountRow & { cursor: string; mute_expires_at: string | null }>(
-			`SELECT CAST(m.id AS TEXT) AS cursor, m.expires_at AS mute_expires_at, ${ACCOUNT_COLUMNS}
-			FROM mutes m JOIN accounts a ON a.id = m.target_account_id LEFT JOIN local_accounts l ON l.account_id = a.id
-			WHERE m.account_id = ?1 AND ${activeMuteSql('m', '?5')}
+		const rows = db.all<{ cursor: string; id: string; mute_expires_at: string | null }>(
+			`SELECT CAST(m.id AS TEXT) AS cursor, m.target_account_id AS id, m.expires_at AS mute_expires_at
+			FROM mutes m WHERE m.account_id = ?1 AND ${activeMuteSql('m', '?5')}
 				AND ${edgeRangeSql('m.id', '?2', '?3')}
 			ORDER BY m.id ${ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
 			accountId,
@@ -328,10 +331,25 @@ export const listMutes = userReadOperation<{ page: PageQuery; present: Present }
 			page.limit,
 			now
 		)
-		return edgePage(rows, ascending, (row) => ({
-			...presentAccount(row, present),
-			mute_expires_at: row.mute_expires_at,
-		}))
+		return admittedPage(
+			edgeRows(rows, ascending),
+			ascending,
+			(row) => row.cursor,
+			(traversal) => {
+				const accounts = accountsOf(
+					db,
+					traversal.map((row) => row.id),
+					present
+				)
+				function* muted(): Generator<MutedAccount | undefined> {
+					for (const row of traversal) {
+						const account = accounts.next().value
+						yield account === undefined ? undefined : { ...account, mute_expires_at: row.mute_expires_at }
+					}
+				}
+				return admit(muted(), ARRAY_ANSWER_BYTES, true)
+			}
+		)
 	}
 )
 

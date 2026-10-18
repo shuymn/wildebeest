@@ -18,6 +18,7 @@ import {
 } from './cutover-helpers.js'
 import type { FixtureOptions } from './legacy-fixture.js'
 import { threadsOf } from '../cli/lib/cutover/verify-expect.js'
+import { MAX_LOCAL_ADDRESSED } from '../src/platform/identity-bounds.js'
 
 // The converter end to end on synthetic exports (DATA-11 to DATA-14): convert, then check the result against
 // expectations computed independently from the export, and show the check fails on each kind of damage.
@@ -527,6 +528,31 @@ describe('rows legacy never showed, and outbox rows written before 0016', () => 
 		expect(row).toEqual({ visibility: 'unlisted' })
 		expect((await verify(exportPath, dumpPath)).ok).toBe(true)
 	})
+
+	// RES-3: a local status's Create stays within an outbox page: one addressing more than MAX_LOCAL_ADDRESSED accounts
+	// stops the conversion, named by its object id, and no recipient is dropped; one at the bound converts.
+	it('stops on a local status that addresses more accounts than its bound', async () => {
+		const over = await exportOf({ level: 39, addressed: MAX_LOCAL_ADDRESSED + 1 })
+		const refused = await convert(over)
+		expect(refused.ok).toBe(false)
+		const problems = Object.keys((refused.manifest.conversion as { problems: Record<string, number> }).problems)
+		expect(problems).toEqual([expect.stringMatching(/^statuses:local-addressing-over-bound:https:\/\/kopje\.test\//)])
+	}, 300_000)
+
+	it('converts a local status at its addressing bound with every recipient', async () => {
+		const at = await exportOf({ level: 39, addressed: MAX_LOCAL_ADDRESSED })
+		const converted = await convert(at)
+		expect(converted.manifest.stop).toBeUndefined()
+		expect(converted.ok).toBe(true)
+		const db = await opened(converted.dumpPath)
+		const row = db
+			.prepare(
+				"SELECT count(*) AS n FROM status_mentions m JOIN statuses s ON s.id = m.status_id WHERE s.content LIKE '%to many%' AND m.silent = 0"
+			)
+			.get()
+		db.close()
+		expect(row).toEqual({ n: MAX_LOCAL_ADDRESSED })
+	}, 300_000)
 
 	// DATA-15: the status keeps its own audience; a target outside it is a conflict, and so is any row while the time of
 	// 0016 is unknown.

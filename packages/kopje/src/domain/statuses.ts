@@ -1,12 +1,12 @@
 import {
 	type Account,
+	accountPage,
 	accountUrl,
 	edgeRangeSql,
 	type Page,
 	type PageQuery,
 	type Present,
 	presentAccountById,
-	presentedRows,
 	resolveApiId,
 } from './accounts'
 import {
@@ -1742,12 +1742,7 @@ export const interactors = optionalUserReadOperation<InteractorsInput, Viewed<Pa
 		const shown = windowPage(window, rows, (row) => row.cursor, page.limit, ascending)
 		return {
 			status: 'ok',
-			value: {
-				items: presentedRows(db, shown.rows, present),
-				newest: shown.newest,
-				oldest: shown.oldest,
-				cut: shown.cut,
-			},
+			value: accountPage(db, shown, ascending, (row) => row.cursor, present),
 		}
 	}
 )

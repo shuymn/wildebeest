@@ -5,12 +5,13 @@ import {
 	type Page,
 	type PageQuery,
 	type Present,
-	presentAccountsById,
+	presentAccountById,
 	resolveAccountId,
 } from './accounts'
 import { flagActivity, instanceActorUri, recordOutbound } from './activities'
-import { type AdminAccount, presentAdminAccounts } from './admin-accounts'
+import { type AdminAccount, adminAccountStream } from './admin-accounts'
 import { accessAdminRefusal, adminAccountIdOnce } from './admin-authority'
+import { admit, ARRAY_ANSWER_BYTES, jsonBytes } from './answer-budget'
 import { availableSql, reportForwardees } from './audience'
 import {
 	ADMIN_PERMISSION,
@@ -25,7 +26,7 @@ import { logAction } from './moderation-log'
 import { notify } from './notifications'
 import { readOperation } from './operation'
 import { actorUriSql, profileUrlSql, usernameSql } from './profile-bounds'
-import { presentStatuses, type Status } from './status-presenter'
+import { presentation, presentStatusesWithin, type Status, statusStream } from './status-presenter'
 import { accountStatusIds } from './timelines'
 import type { Db } from '../db/sql'
 import { blockedDomain } from '../platform/domain-name'
@@ -175,7 +176,7 @@ export const createReport = userWriteOperation<ReportInput, ReportResult>((db, i
 			)
 		}
 	}
-	return { status: 'ok', report: userReport(row, presentAccountsById(db, [target], input.present).get(target)!) }
+	return { status: 'ok', report: userReport(row, presentAccountById(db, target, input.present)!) }
 })
 
 // ReportService#notify_staff! (report_service.rb:44-51) for a report just written, in its transaction: the OAuth admin
@@ -208,28 +209,13 @@ function notifyStaff(db: Db, report: ReportRow, now: number): void {
 	})
 }
 
-// The reporter's Report entities of the reports `ids` (REST::ReportSerializer), by id, with their reported accounts
-// read in one query: an admin.report notification shows its report so (REST::NotificationSerializer#report). An id
-// that names no report is left out.
-export function presentReportsById(db: Db, ids: readonly string[], present: Present): Map<string, Report> {
-	if (ids.length === 0) {
-		return new Map()
-	}
-	const rows = db.all<ReportRow>(
-		`SELECT ${REPORT_COLUMNS} FROM reports WHERE id IN (SELECT CAST(value AS INTEGER) FROM json_each(?))`,
-		JSON.stringify([...new Set(ids)])
-	)
-	const accounts = presentAccountsById(
-		db,
-		rows.map((row) => row.target_account_id),
-		present
-	)
-	return new Map(
-		rows.flatMap((row) => {
-			const target = accounts.get(row.target_account_id)
-			return target === undefined ? [] : [[row.id, userReport(row, target)] as const]
-		})
-	)
+// The reporter's Report entity of report `id` (REST::ReportSerializer), a unit (its reported account and its fields):
+// an admin.report notification shows its report so (REST::NotificationSerializer#report). Undefined for an id that
+// names no report.
+export function presentReport(db: Db, id: string, present: Present): Report | undefined {
+	const row = db.first<ReportRow>(`SELECT ${REPORT_COLUMNS} FROM reports WHERE id = CAST(? AS INTEGER)`, id)
+	const target = row === undefined ? undefined : presentAccountById(db, row.target_account_id, present)
+	return row === undefined || target === undefined ? undefined : userReport(row, target)
 }
 
 export type ReportRow = {
@@ -330,8 +316,8 @@ export type AdminReport = {
 export const ADMIN_REPORTS_LIMIT = 100
 export const MAX_ADMIN_REPORTS_LIMIT = 200
 // The statuses one page of the index presents at most: a page stops before a report that would pass this, after at
-// least one, and offers the next page. One report's worth (MAX_REPORT_STATUSES), so a page of remote statuses at their
-// size limits (content and poll options) stays well inside the Store's RPC response limit.
+// least one, and offers the next page. One report's worth (MAX_REPORT_STATUSES), which bounds the statuses a page
+// reads and presents; its bytes are bounded by ANSWER_BYTES (listAdminReports).
 export const ADMIN_REPORT_STATUS_BUDGET = MAX_REPORT_STATUSES
 
 // The rules of the instance, read once per response.
@@ -339,31 +325,68 @@ function instanceRules(db: Db): InstanceRule[] {
 	return parseRules(db.first<{ value: string }>("SELECT value FROM instance_settings WHERE name = 'rules'")?.value)
 }
 
-// The admin entities of `rows`, in their order. The accounts are read in one query. A report's statuses are shown only
-// while its reporter may still see them by the account statuses rule (R11, accountStatusIds, with the reporter as the
-// viewer at the admin's request time), and presented with the admin as the viewer: Mastodon shows them regardless,
-// discarded ones included (Report#statuses, app/models/report.rb:78-80); Kopje keeps the rule the report was made
-// under (R37). The rules are the instance's that the report names, in the instance's order; Mastodon keeps discarded
-// rules (Rule.with_discarded), which Kopje does not store.
-function presentAdminReports(db: Db, rows: readonly ReportRow[], admin: Admin, present: Present): AdminReport[] {
-	const accounts = presentAdminAccounts(
+// The bytes of the statuses one report embeds at most past its first (RES-3): its statuses are admitted in the order
+// it shows them while their JSON fits, the first whatever its size (a unit), so a report is at most its accounts and
+// fields, its first status and this allowance ("Maxima of presented units" in docs/threat-model.md). A report whose
+// statuses pass it is shown with fewer statuses than it holds: a projection of the report, which keeps them all.
+export const REPORT_STATUS_BYTES = 2 * 1024 * 1024
+
+// The admin entities of `rows`, in their order, for an admission (admit): each report atomic, presented when the
+// admission reaches it, with its four accounts read for it alone and its statuses within REPORT_STATUS_BYTES. A
+// report's statuses are shown only while its reporter may still see them by the account statuses rule (R11,
+// accountStatusIds, with the reporter as the viewer at the admin's request time), and presented with the admin as the
+// viewer. Mastodon shows them regardless, discarded ones included (Report#statuses, app/models/report.rb:78-80);
+// Kopje keeps the rule the report was made under (R37). The page's statuses share one presentation, so a keyword deep
+// in a long status of a large page may be missed where the report read alone matches it, as on timelines (filters.ts).
+// The rules are the instance's that the report names, in the instance's order; Mastodon keeps discarded rules
+// (Rule.with_discarded), which Kopje does not store.
+function* adminReportStream(
+	db: Db,
+	rows: readonly ReportRow[],
+	admin: Admin,
+	present: Present
+): Generator<AdminReport, undefined> {
+	const rules = rows.some((row) => row.rule_ids !== null) ? instanceRules(db) : []
+	const shown = rows.map((row) =>
+		accountStatusIds(db, viewerOf(admin, row.account_id), row.target_account_id, JSON.parse(row.status_ids) as string[])
+	)
+	// One presentation for the answer: its keywords are matched against at most MAX_FILTER_REQUEST_TEXT in all.
+	const shared = presentation(
 		db,
-		rows.flatMap((row) => [
+		shown.flatMap((statuses) => statuses.map((status) => status.id)),
+		{ ...present, viewer: admin.context }
+	)
+	for (const [i, row] of rows.entries()) {
+		const ids = [
 			row.account_id,
 			row.target_account_id,
-			...(row.assigned_account_id === null ? [] : [row.assigned_account_id]),
-			...(row.action_taken_by_account_id === null ? [] : [row.action_taken_by_account_id]),
-		]),
-		admin.accountId,
-		present
-	)
-	const rules = rows.some((row) => row.rule_ids !== null) ? instanceRules(db) : []
-	return rows.map((row) => {
-		const named = JSON.parse(row.status_ids) as string[]
-		const shown = accountStatusIds(db, viewerOf(admin, row.account_id), row.target_account_id, named)
+			row.assigned_account_id ?? '',
+			row.action_taken_by_account_id ?? '',
+		]
+		const [account, target, assigned, actor] = [...adminAccountStream(db, ids, admin.accountId, present, ids.length)]
 		const ruleIds = new Set(row.rule_ids === null ? [] : (JSON.parse(row.rule_ids) as string[]))
-		const account = (id: string | null) => (id === null ? null : (accounts.get(id) ?? null))
-		return {
+		const statuses = (shown[i] ?? []).map((status) => status.id)
+		// Statuses are read one at a time ("Heap at 8 MiB per answer" in docs/threat-model.md). The first presented,
+		// whatever its size (a unit); the next ones only while room is left, so a first status that uses up the
+		// allowance stops the report's statuses without reading the next.
+		const one = statusStream(db, shared, statuses, 1)
+		let first: Status | undefined
+		let next = 0
+		while (first === undefined && next < statuses.length) {
+			first = one.next().value
+			next++
+		}
+		const used = first === undefined ? 0 : jsonBytes(first) + 1
+		const embedded =
+			first === undefined
+				? []
+				: [
+						first,
+						...(used >= REPORT_STATUS_BYTES
+							? []
+							: presentStatusesWithin(db, shared, statuses.slice(next), REPORT_STATUS_BYTES - used, false, 1).items),
+					]
+		yield {
 			id: row.id,
 			action_taken: row.action_taken_at !== null,
 			action_taken_at: row.action_taken_at,
@@ -372,18 +395,14 @@ function presentAdminReports(db: Db, rows: readonly ReportRow[], admin: Admin, p
 			forwarded: row.forwarded === 1,
 			created_at: row.created_at,
 			updated_at: row.updated_at ?? row.created_at,
-			account: accounts.get(row.account_id)!,
-			target_account: accounts.get(row.target_account_id)!,
-			assigned_account: account(row.assigned_account_id),
-			action_taken_by_account: account(row.action_taken_by_account_id),
-			statuses: presentStatuses(
-				db,
-				shown.map((status) => status.id),
-				{ ...present, viewer: admin.context }
-			),
+			account: account!,
+			target_account: target!,
+			assigned_account: assigned ?? null,
+			action_taken_by_account: actor ?? null,
+			statuses: embedded,
 			rules: rules.filter((rule) => ruleIds.has(rule.id)),
 		}
-	})
+	}
 }
 
 // ReportFilter (app/models/report_filter.rb:18-25) over the parameters the controller permits (reports_controller.rb:
@@ -398,8 +417,9 @@ export type AdminReportPage = Page<AdminReport> & { more: boolean }
 // Each filter reads one index whose range is already in id order for the state: reports_state alone,
 // reports_account_state for a reporter, reports_target_state for a reported account, with the reporter as a residual
 // when both are given (its skip is the other reporters' reports of that account, which only local users write). A
-// page holds `limit` reports, or fewer when the status budget stops it after at least one report; `more` offers the
-// next page then too, so a short page with `more` false is the end (Mastodon offers it when the page is full).
+// page holds `limit` reports, or fewer when the status budget or ANSWER_BYTES stops it after at least one report;
+// `more` offers the next page then too, so a short page with `more` false is the end (Mastodon offers it when the
+// page is full).
 export const listAdminReports = adminReadOperation<
 	{ filter: AdminReportFilter; page: PageQuery; present: Present },
 	AdminReportPage
@@ -440,14 +460,19 @@ export const listAdminReports = adminReadOperation<
 		kept.push(row)
 		statuses += count
 	}
+	// Within ANSWER_BYTES (RES-3), cut at a report: the page ends at its last admitted report, and `more` offers the
+	// next.
+	const admitted = admit(adminReportStream(db, kept, admin, present), ARRAY_ANSWER_BYTES, true)
+	const shown = kept.slice(0, admitted.consumed)
 	if (ascending) {
-		kept.reverse()
+		shown.reverse()
+		admitted.items.reverse()
 	}
 	return {
-		items: presentAdminReports(db, kept, admin, present),
-		newest: kept[0]?.id ?? null,
-		oldest: kept.at(-1)?.id ?? null,
-		more: rows.length === page.limit || kept.length < rows.length,
+		items: admitted.items,
+		newest: shown[0]?.id ?? null,
+		oldest: shown.at(-1)?.id ?? null,
+		more: rows.length === page.limit || shown.length < rows.length,
 	}
 })
 
@@ -461,8 +486,9 @@ function reportRow(db: Db, id: string): ReportRow | undefined {
 		: undefined
 }
 
+// One report, a unit (its statuses within REPORT_STATUS_BYTES).
 function presented(db: Db, row: ReportRow, admin: Admin, present: Present): AdminReportResult {
-	return { status: 'ok', report: presentAdminReports(db, [row], admin, present)[0]! }
+	return { status: 'ok', report: adminReportStream(db, [row], admin, present).next().value! }
 }
 
 // GET /api/v1/admin/reports/:id.

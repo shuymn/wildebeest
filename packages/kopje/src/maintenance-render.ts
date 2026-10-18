@@ -16,6 +16,7 @@ export { blockedDomain } from './platform/domain-name'
 export {
 	ACTOR_URI_LIMIT,
 	isRemoteUsername,
+	MAX_LOCAL_ADDRESSED,
 	isStorableActorId,
 	STATUS_URI_LIMIT,
 	withinIdentityBound,

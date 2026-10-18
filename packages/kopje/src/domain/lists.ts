@@ -1,10 +1,10 @@
 import {
 	type Account,
+	accountPage,
 	type Page,
 	type PageQuery,
 	type Present,
 	presentAccountsWithin,
-	presentedRows,
 	resolveAccountId,
 	windowAccountIds,
 } from './accounts'
@@ -171,7 +171,7 @@ export function ownedAccountsPage(
 	if (page !== null) {
 		const window = singleWindow(db, candidates(ascending ? 'ASC' : 'DESC'), size, owner, max, min, size)
 		const shown = windowPage(window, windowAccountIds(db, window, rule), key, page.limit, ascending)
-		return { items: presentedRows(db, shown.rows, present), newest: shown.newest, oldest: shown.oldest, cut: shown.cut }
+		return accountPage(db, shown, ascending, key, present)
 	}
 	// Ids first, through the rule, then the profiles of the answer's own accounts only.
 	const ids: string[] = []

@@ -21,7 +21,7 @@ import {
 	viewableStatusId,
 	type Visibility,
 } from '../src/domain/audience'
-import { presentOwnStatus, presentStatuses } from '../src/domain/status-presenter'
+import { presentOwnStatus, presentStatus } from '../src/domain/status-presenter'
 import type { StoreStub } from '../src/platform/store-client'
 
 const FOLLOWERS = 'https://remote.example/users/author/followers'
@@ -416,13 +416,7 @@ describe('statusReads, the id brands and the presenter guard', () => {
 			const rows = read.select(db, 'visible', { where: 's.id = ?2' }, booster, boost)
 			expect(rows.map((row) => row.id)).toEqual([boost])
 			const options = { ...PRESENT, viewer: { accountId: booster, now: NOW_ISO } }
-			expect(
-				presentStatuses(
-					db,
-					rows.map((row) => row.id),
-					options
-				)
-			).toEqual([])
+			expect(presentStatus(db, rows[0]!.id, options)).toBeNull()
 			expect(viewableStatusId(db, booster, boost)).toBeNull()
 			const own = ownStatusId(db, booster, boost)
 			expect(own).toBe(boost)
@@ -431,12 +425,13 @@ describe('statusReads, the id brands and the presenter guard', () => {
 			expect(ownStatusId(db, booster, original)).toBeNull()
 			// The original's author sees both.
 			const visible = viewableStatusId(db, author, boost)
+			expect(visible).not.toBeNull()
 			expect(
-				presentStatuses(db, visible === null ? [] : [visible], {
+				presentStatus(db, visible!, {
 					...PRESENT,
 					viewer: { accountId: author, now: NOW_ISO },
 				})
-			).toMatchObject([{ id: boost, reblog: { id: original } }])
+			).toMatchObject({ id: boost, reblog: { id: original } })
 		})
 	})
 })

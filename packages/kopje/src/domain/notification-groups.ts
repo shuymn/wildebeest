@@ -1,5 +1,15 @@
-import { type Account, type Page, type PageQuery, type Present, presentAccountsById } from './accounts'
+import {
+	type Account,
+	accountsOf,
+	admitAccounts,
+	type Page,
+	type PageQuery,
+	type PartialAccount,
+	partialAccountsOf,
+	type Present,
+} from './accounts'
 import { adminAccountIdOnce } from './admin-authority'
+import { admittedPage, ANSWER_BYTES, ARRAY_ANSWER_BYTES, firstUses, jsonBytes } from './answer-budget'
 import { statusReads } from './audience'
 import { type UserContext, userReadOperation, userWriteOperation } from './auth'
 import {
@@ -11,8 +21,8 @@ import {
 	type ShownColumns,
 	shownWindow,
 } from './notifications'
-import { presentReportsById, type Report } from './reports'
-import { presentStatuses, type Status } from './status-presenter'
+import { presentReport, type Report } from './reports'
+import { presentation, type Status, statusStream } from './status-presenter'
 import { readWindow, windowOf, windowPage } from './windows'
 import type { Db } from '../db/sql'
 
@@ -78,9 +88,6 @@ export type NotificationGroup = {
 	// An admin.report's report (REST::NotificationGroupSerializer#report_type?).
 	report?: Report
 }
-
-// REST::DedupNotificationGroupSerializer::PartialAccountSerializer.
-export type PartialAccount = Pick<Account, 'id' | 'acct' | 'locked' | 'bot' | 'url' | 'avatar' | 'avatar_static'>
 
 // REST::DedupNotificationGroupSerializer: partial_accounts only with expand_accounts=partial_avatars.
 export type GroupedNotifications = {
@@ -253,91 +260,172 @@ function oldestOf(db: Db, viewer: UserContext, group: Found, lower: string | nul
 	)
 }
 
-// The groups presented (NotificationGroup.from_notifications and GroupedNotificationsPresenter): each with the
-// notifications found of it, newest first, its first one standing for it (type and status). With `paged`, the page
-// fields of each. A group whose status or accounts the presenter cannot show is left out, as v1 leaves out such a
-// notification.
-function presentGroups(
+// A group as the answer holds it: its entity, the ids of its sample accounts that are shown, and its status.
+type PresentedGroup = { group: NotificationGroup; samples: string[]; status: Status | undefined }
+
+// The groups admitted into an answer, with the accounts and statuses they add, each once.
+type AdmittedGroups = {
+	groups: PresentedGroup[]
+	// The groups walked: the admitted ones, and those with nothing to show before the first one left out.
+	consumed: number
+	// The groups walked up to the first one admitted, that one included.
+	leading: number
+	cut: boolean
+	accounts: Map<string, Account>
+	partial: Map<string, { account: PartialAccount; bytes: number }>
+	statuses: Map<string, Status>
+}
+
+// The empty answer of a mode, whose JSON (keys and brackets) the budget reserves.
+function emptyAnswer(expandAccounts: ExpandAccounts): GroupedNotifications {
+	return expandAccounts === 'full'
+		? { accounts: [], statuses: [], notification_groups: [] }
+		: { accounts: [], partial_accounts: [], statuses: [], notification_groups: [] }
+}
+
+// The groups presented (NotificationGroup.from_notifications and GroupedNotificationsPresenter) and admitted (RES-3) in
+// discovery order (`groups`, as the walk found them): each with its notifications found up to the range (membersOf,
+// read when admission reaches the group), newest first, its first one standing for it (type and status). With a
+// `range`, the page fields of each. A group counts with what it adds to the answer, each account and status once: its
+// entity, its status unless an admitted group shows it, and its sample accounts unless shown; with partial_avatars,
+// its first sample as an account (a partial account shown so far moves to the accounts), the others as partial
+// accounts unless shown either way. Admission stops at the first group that does not fit `budget`, after the first.
+// A group whose status or accounts the presenter cannot show is left out, as v1 leaves out such a notification.
+function admitGroups(
 	db: Db,
 	viewer: UserContext,
-	groups: readonly { key: string; first: Shown; rows: Shown[]; oldest?: string }[],
-	options: { paged: boolean; expandAccounts: ExpandAccounts; present: Present }
-): GroupedNotifications {
-	const samples = groups.map((group) => group.rows.slice(0, SAMPLE_ACCOUNTS).map((row) => row.from_account_id))
-	const accounts = presentAccountsById(db, samples.flat(), options.present)
-	const statusIds = [...new Set(groups.flatMap(({ first }) => (first.status_id === null ? [] : [first.status_id])))]
-	const statuses = new Map(
-		presentStatuses(db, statusIds, { ...options.present, viewer }).map((status) => [status.id, status])
-	)
-	const reports = presentReportsById(
-		db,
-		groups.flatMap(({ first }) => (first.report_id === null ? [] : [first.report_id])),
-		options.present
-	)
-	const shown: { group: NotificationGroup; accounts: Account[]; status: Status | undefined }[] = []
-	groups.forEach(({ key, first, rows, oldest: pageMin }, i) => {
-		const sampled = (samples[i] ?? []).flatMap((id) => {
-			const account = accounts.get(id)
-			return account === undefined ? [] : [account]
-		})
-		const status = first.status_id === null ? undefined : statuses.get(first.status_id)
-		const newest = rows[0]
-		if (newest === undefined || sampled.length === 0) {
-			return
-		}
-		const report = first.report_id === null ? undefined : reports.get(first.report_id)
-		if ((first.status_id !== null && status === undefined) || (first.report_id !== null && report === undefined)) {
-			return
-		}
-		shown.push({
-			group: {
-				group_key: key,
-				notifications_count: rows.length,
-				type: first.type,
-				most_recent_notification_id: Number(newest.id),
-				...(options.paged
-					? {
-							page_min_id: pageMin ?? newest.id,
-							page_max_id: newest.id,
-							latest_page_notification_at: newest.created_at,
-						}
-					: {}),
-				sample_account_ids: sampled.map((account) => account.id),
-				...(STATUS_TYPES.has(first.type) ? { status_id: status?.id ?? null } : {}),
-				...(report === undefined ? {} : { report }),
-			},
-			accounts: sampled,
-			status,
-		})
-	})
-	// Each id names one object (the presenters' maps), so a Set keeps the first of each, in order.
-	const unique = <T>(items: T[]) => [...new Set(items)]
-	const statusesShown = unique(shown.flatMap(({ status }) => (status === undefined ? [] : [status])))
-	const notification_groups = shown.map(({ group }) => group)
-	if (options.expandAccounts === 'full') {
-		return {
-			accounts: unique(shown.flatMap(({ accounts: sampled }) => sampled)),
-			statuses: statusesShown,
-			notification_groups,
-		}
+	groups: readonly Found[],
+	range: Range | null,
+	statusOf: (id: string) => Status | undefined,
+	options: { expandAccounts: ExpandAccounts; present: Present },
+	budget: number
+): AdmittedGroups {
+	const admitted: AdmittedGroups = {
+		groups: [],
+		consumed: 0,
+		leading: 0,
+		cut: false,
+		accounts: new Map(),
+		partial: new Map(),
+		statuses: new Map(),
 	}
-	const full = unique(shown.flatMap(({ accounts: sampled }) => sampled.slice(0, 1)))
-	const fullIds = new Set(full.map((account) => account.id))
-	const partial = unique(shown.flatMap(({ accounts: sampled }) => sampled.slice(1))).filter(
-		(account) => !fullIds.has(account.id)
-	)
+	const partialMode = options.expandAccounts === 'partial_avatars'
+	let bytes = 0
+	for (const found of groups) {
+		const { key, first } = found
+		const rows = membersOf(db, viewer, found, range?.upper ?? null)
+		const newest = rows[0]
+		const sampleIds = [...new Set(rows.slice(0, SAMPLE_ACCOUNTS).map((row) => row.from_account_id))]
+		// The sample accounts the group would add: whole (all of them, or the first shown with partial_avatars), and
+		// partial (the others with partial_avatars), each with its JSON bytes.
+		const unknown = sampleIds.filter((id) => !admitted.accounts.has(id) && !admitted.partial.has(id))
+		const partial = new Map<string, { account: PartialAccount; bytes: number }>()
+		if (partialMode) {
+			const reading = partialAccountsOf(db, unknown, options.present, SAMPLE_ACCOUNTS)
+			for (const id of unknown) {
+				const account = reading.next().value
+				if (account !== undefined) {
+					partial.set(id, { account, bytes: jsonBytes(account) + 1 })
+				}
+			}
+		}
+		const shown = (id: string) => admitted.accounts.has(id) || admitted.partial.has(id) || partial.has(id)
+		const sampled = partialMode ? sampleIds.filter(shown) : []
+		const whole = new Map<string, Account>()
+		const wholeIds = partialMode
+			? sampled.slice(0, 1).filter((id) => !admitted.accounts.has(id))
+			: unknown.filter((id) => !admitted.accounts.has(id))
+		const presented = accountsOf(db, wholeIds, options.present, SAMPLE_ACCOUNTS)
+		for (const id of wholeIds) {
+			const account = presented.next().value
+			if (account !== undefined) {
+				whole.set(id, account)
+			}
+		}
+		const samples = partialMode ? sampled : sampleIds.filter((id) => admitted.accounts.has(id) || whole.has(id))
+		const status = first.status_id === null ? undefined : statusOf(first.status_id)
+		const report = first.report_id === null ? undefined : presentReport(db, first.report_id, options.present)
+		if (
+			newest === undefined ||
+			samples.length === 0 ||
+			(first.status_id !== null && status === undefined) ||
+			(first.report_id !== null && report === undefined)
+		) {
+			admitted.consumed++
+			continue
+		}
+		const group: NotificationGroup = {
+			group_key: key,
+			notifications_count: rows.length,
+			type: first.type,
+			most_recent_notification_id: Number(newest.id),
+			...(range === null
+				? {}
+				: {
+						page_min_id: oldestOf(db, viewer, found, range.lower),
+						page_max_id: newest.id,
+						latest_page_notification_at: newest.created_at,
+					}),
+			sample_account_ids: samples,
+			...(STATUS_TYPES.has(first.type) ? { status_id: status?.id ?? null } : {}),
+			...(report === undefined ? {} : { report }),
+		}
+		// What the group adds, each with a separator.
+		let size = jsonBytes(group) + 1
+		if (status !== undefined && !admitted.statuses.has(status.id)) {
+			size += jsonBytes(status) + 1
+		}
+		for (const account of whole.values()) {
+			size += jsonBytes(account) + 1
+		}
+		const promoted = [...whole.keys()].flatMap((id) => admitted.partial.get(id) ?? [])
+		size -= promoted.reduce((sum, entry) => sum + entry.bytes, 0)
+		const added = [...partial].filter(([id]) => !whole.has(id) && samples.includes(id))
+		size += added.reduce((sum, [, entry]) => sum + entry.bytes, 0)
+		if (bytes + size > budget && admitted.groups.length > 0) {
+			admitted.cut = true
+			return admitted
+		}
+		bytes += size
+		admitted.consumed++
+		if (admitted.groups.length === 0) {
+			admitted.leading = admitted.consumed
+		}
+		for (const [id, account] of whole) {
+			admitted.accounts.set(id, account)
+			admitted.partial.delete(id)
+		}
+		for (const [id, entry] of added) {
+			admitted.partial.set(id, entry)
+		}
+		if (status !== undefined) {
+			admitted.statuses.set(status.id, status)
+		}
+		admitted.groups.push({ group, samples, status })
+	}
+	return admitted
+}
+
+// The answer of admitted groups, `ordered` (newest first): each array in the groups' order, each item once; with
+// partial_avatars, the first sample of each group as an account and the others as partial accounts.
+function answerOf(
+	admitted: AdmittedGroups,
+	ordered: readonly PresentedGroup[],
+	expandAccounts: ExpandAccounts
+): GroupedNotifications {
+	const unique = <T>(items: readonly T[]) => [...new Set(items)]
+	const statuses = unique(ordered.flatMap(({ status }) => (status === undefined ? [] : [status])))
+	const notification_groups = ordered.map(({ group }) => group)
+	const accountsOf = (ids: readonly string[]) => ids.flatMap((id) => admitted.accounts.get(id) ?? [])
+	if (expandAccounts === 'full') {
+		return { accounts: unique(ordered.flatMap(({ samples }) => accountsOf(samples))), statuses, notification_groups }
+	}
 	return {
-		accounts: full,
-		partial_accounts: partial.map(({ id, acct, locked, bot, url, avatar, avatar_static }) => ({
-			id,
-			acct,
-			locked,
-			bot,
-			url,
-			avatar,
-			avatar_static,
-		})),
-		statuses: statusesShown,
+		accounts: unique(ordered.flatMap(({ samples }) => accountsOf(samples.slice(0, 1)))),
+		partial_accounts: unique(
+			ordered.flatMap(({ samples }) => samples.flatMap((id) => admitted.partial.get(id) ?? []))
+		).map((entry) => entry.account),
+		statuses,
 		notification_groups,
 	}
 }
@@ -373,9 +461,21 @@ function pageRange(walk: Walk, ordered: readonly Found[], ascending: boolean, pa
 	return { lower: walk.cut ? walk.last : above, upper: newest }
 }
 
+// Admission passes over a page's groups after the first, each over the range of the groups the one before kept,
+// before the page falls back to its first group alone: at most four passes in all (the first, MAX_READMISSIONS, and the
+// first group alone).
+const MAX_READMISSIONS = 2
+
 // GET /api/v2/notifications: newest first by each group's first notification read; with min_id, the groups right
 // above it, walked oldest first (each group's oldest notification above min_id stands for it) and answered newest
 // first.
+// The answer is within ANSWER_BYTES (RES-3): groups are admitted in discovery order (admitGroups). Cut by bytes, the
+// page is the groups up to the last one admitted, as if the walk had found those alone: its range (membersOf,
+// oldestOf) and cursors are of those groups, and the walk's continuation (a walk cut at GROUP_WALK), which lies past
+// a group left out, is dropped. Those groups are then admitted again over that range, since sampling below a lower
+// upper end can show other accounts; while they do not all fit, the last ones are dropped the same way, at most
+// MAX_READMISSIONS times, after which the page is its first group alone, over its own range. A group left out is
+// found again by the next page.
 export const listGroupedNotifications = userReadOperation<ListGroupedInput, GroupedPage>(
 	(db, input, _viewer, viewer) => {
 		const { page } = input
@@ -390,27 +490,43 @@ export const listGroupedNotifications = userReadOperation<ListGroupedInput, Grou
 			includeFiltered: input.includeFiltered,
 			limit: page.limit,
 		})
-		const ordered = ascending ? walk.groups.toReversed() : walk.groups
-		const range = pageRange(walk, ordered, ascending, page)
-		const groups = ordered.map((group) => ({
-			key: group.key,
-			first: group.first,
-			rows: membersOf(db, viewer, group, range.upper),
-			oldest: oldestOf(db, viewer, group, range.lower),
-		}))
-		const presented = presentGroups(db, viewer, groups, {
-			paged: true,
-			expandAccounts: input.expandAccounts,
-			present: input.present,
-		})
-		// The page's ends are its groups' first notifications (pagination_max_id and pagination_since_id); a walk cut
-		// short continues from the last notification read, so the next page does not read the same ones again.
-		const newest = groups[0]?.first.id ?? null
-		const oldest = groups.at(-1)?.first.id ?? null
-		return {
-			...presented,
-			next: walk.cut && !ascending ? walk.last : oldest,
-			prev: walk.cut && ascending ? walk.last : newest,
+		// One presentation of the groups' statuses; each pass presents the statuses of its own groups, each once, so a
+		// pass holds nothing of a group an earlier pass dropped.
+		const statusesOf = (groups: readonly Found[]) => [
+			...new Set(groups.flatMap(({ first }) => (first.status_id === null ? [] : [first.status_id]))),
+		]
+		const shared = presentation(db, statusesOf(walk.groups), { ...input.present, viewer })
+		const budget = ANSWER_BYTES - jsonBytes(emptyAnswer(input.expandAccounts))
+		let read = walk
+		for (let round = 0; ; round++) {
+			const ordered = ascending ? read.groups.toReversed() : read.groups
+			const statusIds = statusesOf(read.groups)
+			const admitted = admitGroups(
+				db,
+				viewer,
+				read.groups,
+				pageRange(read, ordered, ascending, page),
+				// One status's rows at a time ("Heap at 8 MiB per answer" in docs/threat-model.md).
+				firstUses(statusIds, statusStream(db, shared, statusIds, 1)),
+				input,
+				budget
+			)
+			if (admitted.cut) {
+				// After MAX_READMISSIONS passes that still do not fit, the first group alone, over its own range.
+				const groups = read.groups.slice(0, round < MAX_READMISSIONS ? admitted.consumed : admitted.leading)
+				read = { groups, full: true, cut: false, last: groups.at(-1)?.first.id ?? null }
+				continue
+			}
+			const shown = ascending ? admitted.groups.toReversed() : admitted.groups
+			// The page's ends are its groups' first notifications (pagination_max_id and pagination_since_id); a walk cut
+			// short continues from the last notification read, so the next page does not read the same ones again.
+			const newest = ordered[0]?.first.id ?? null
+			const oldest = ordered.at(-1)?.first.id ?? null
+			return {
+				...answerOf(admitted, shown, input.expandAccounts),
+				next: read.cut && !ascending ? read.last : oldest,
+				prev: read.cut && ascending ? read.last : newest,
+			}
 		}
 	}
 )
@@ -462,13 +578,13 @@ export const getNotificationGroup = userReadOperation<
 	if (first === undefined) {
 		return null
 	}
-	const key = groupOf(first, GROUPABLE_TYPES)
-	const rows = membersOf(db, viewer, { key, first }, null)
-	return presentGroups(db, viewer, [{ key, first, rows }], {
-		paged: false,
-		expandAccounts: 'full',
-		present,
-	})
+	// One group, a unit (RES-3, "Maxima of presented units").
+	const found = { key: groupOf(first, GROUPABLE_TYPES), first }
+	const status = first.status_id === null ? [] : [first.status_id]
+	const statusOf = firstUses(status, statusStream(db, presentation(db, status, { ...present, viewer }), status))
+	const options = { expandAccounts: 'full', present } as const
+	const admitted = admitGroups(db, viewer, [found], null, statusOf, options, Infinity)
+	return answerOf(admitted, admitted.groups, 'full')
 })
 
 // GET /api/v2/notifications/:group_key/accounts: the senders of the group's shown notifications, newest first, paged
@@ -492,20 +608,19 @@ export const notificationGroupAccounts = userReadOperation<
 		size
 	)
 	const shown = windowPage(windowOf(candidates, size), rows, (row) => row.id, page.limit, false)
-	const accounts = presentAccountsById(
-		db,
-		shown.rows.map((row) => row.from_account_id),
-		present
+	return admittedPage(
+		shown,
+		false,
+		(row) => row.id,
+		(traversal) =>
+			admitAccounts(
+				db,
+				traversal.map((row) => row.from_account_id),
+				present,
+				ARRAY_ANSWER_BYTES,
+				true
+			)
 	)
-	return {
-		items: shown.rows.flatMap((row) => {
-			const account = accounts.get(row.from_account_id)
-			return account === undefined ? [] : [account]
-		}),
-		newest: shown.newest,
-		oldest: shown.oldest,
-		cut: shown.cut,
-	}
 })
 
 // POST /api/v2/notifications/:group_key/dismiss: removes the viewer's notifications of the group, shown or not, as

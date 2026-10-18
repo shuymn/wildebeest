@@ -1,6 +1,6 @@
 import { followActivity, followAnswerActivity, followUri, recordOutbound, undoFollowActivity } from './activities'
 import { actorSnapshot, recordActorUpdate } from './actor-update'
-import { ANSWER_BYTES, ARRAY_ANSWER_BYTES } from './answer-budget'
+import { admit, type Admitted, admittedPage, ANSWER_BYTES, ARRAY_ANSWER_BYTES, jsonBytes } from './answer-budget'
 import {
 	activeMuteJoinSql,
 	availableJoinedSql,
@@ -37,7 +37,6 @@ import { renderFieldValue } from './status-text'
 import { readWindow, singleWindow, type Window, windowJson, windowPage } from './windows'
 import type { Db } from '../db/sql'
 import { normalizeDomain, parseAddress } from '../platform/domain-name'
-import { utf8Length } from '../platform/dump-format'
 import { boundedHref, httpUrl } from '../platform/http-url'
 import { sanitizeRemoteHtml } from '../security/html'
 
@@ -222,28 +221,29 @@ export const ACCOUNT_FROM = 'accounts a LEFT JOIN local_accounts l ON l.account_
 const ANSWER_CHUNK = 50
 
 // The presented accounts of `ids` (accounts' ids), in order, `chunk` at a time, each with its serialized size (and a
-// separator): only the profiles asked for so far are read, so the attachment projection runs for those alone.
+// separator), an id with no account skipped: only the profiles asked for so far are read, so the attachment projection
+// runs for those alone.
 export function accountStream(
 	db: Db,
 	ids: readonly string[],
 	present: Present,
 	chunk = ANSWER_CHUNK
 ): () => { account: Account; bytes: number } | undefined {
-	let next = 0
-	let read: Account[] = []
+	const accounts = accountsOf(db, ids, present, chunk)
 	return () => {
-		while (read.length === 0 && next < ids.length) {
-			read = accountRowsOf(db, ids.slice(next, (next += chunk))).map((row) => presentAccount(row, present))
+		for (let next = accounts.next(); next.done !== true; next = accounts.next()) {
+			if (next.value !== undefined) {
+				return { account: next.value, bytes: jsonBytes(next.value) + 1 }
+			}
 		}
-		const account = read.shift()
-		return account === undefined ? undefined : { account, bytes: utf8Length(JSON.stringify(account)) + 1 }
+		return undefined
 	}
 }
 
 // The presented accounts of `ids` (accounts' ids, each once), in order, while their serialized bytes stay within
-// `budget`, read in chunks that stop once it is reached. `leading`: the first account is shown whatever its size
-// (RES-2 bounds it), so an answer continued from its last account moves on. `cut`: an account was left out. `bytes`:
-// the admitted accounts' JSON, each with a separator.
+// `budget`, read in chunks that stop once it is reached (admitAccounts). `leading`: the first account is shown whatever
+// its size (RES-2 bounds it), so an answer continued from its last account moves on. `cut`: an account was left out,
+// by the budget or for having none. `bytes`: the admitted accounts' JSON, each with a separator.
 export function presentAccountsWithin(
 	db: Db,
 	ids: readonly string[],
@@ -251,17 +251,88 @@ export function presentAccountsWithin(
 	budget: number,
 	leading: boolean
 ): { items: Account[]; cut: boolean; bytes: number } {
-	const stream = accountStream(db, ids, present)
-	const items: Account[] = []
-	let bytes = 0
-	for (let next = stream(); next !== undefined; next = stream()) {
-		if (bytes + next.bytes > budget && !(leading && items.length === 0)) {
-			break
-		}
-		bytes += next.bytes
-		items.push(next.account)
-	}
+	const { items, bytes } = admitAccounts(db, ids, present, budget, leading)
 	return { items, cut: items.length < ids.length, bytes }
+}
+
+// The presented accounts of `ids` in order (an id may repeat), for an admission (admit) of items that embed them:
+// read `chunk` at a time as the stream reaches them, undefined for an id with no account. What the stream holds past
+// what its consumer kept is one chunk of accounts at their bound (RES-2).
+export function* accountsOf(
+	db: Db,
+	ids: readonly string[],
+	present: Present,
+	chunk = ANSWER_CHUNK
+): Generator<Account | undefined, undefined> {
+	for (let next = 0; next < ids.length; next += chunk) {
+		const slice = ids.slice(next, next + chunk)
+		const rows = new Map(accountRowsOf(db, [...new Set(slice)]).map((row) => [row.id, row]))
+		for (const id of slice) {
+			const row = rows.get(id)
+			yield row === undefined ? undefined : presentAccount(row, present)
+		}
+	}
+}
+
+// REST::DedupNotificationGroupSerializer::PartialAccountSerializer.
+export type PartialAccount = Pick<Account, 'id' | 'acct' | 'locked' | 'bot' | 'url' | 'avatar' | 'avatar_static'>
+
+type PartialRow = Pick<AccountRow, 'id' | 'uri' | 'username' | 'domain' | 'actor_type' | 'url' | 'avatar_url'> &
+	Pick<AccountRow, 'locked' | 'available'>
+
+// The partial accounts of `ids` in order (an id may repeat), as presentAccount shows those fields, reading only their
+// columns, `chunk` at a time as the stream reaches them; undefined for an id with no account.
+export function* partialAccountsOf(
+	db: Db,
+	ids: readonly string[],
+	present: Present,
+	chunk = ANSWER_CHUNK
+): Generator<PartialAccount | undefined, undefined> {
+	for (let next = 0; next < ids.length; next += chunk) {
+		const slice = ids.slice(next, next + chunk)
+		const rows = new Map(
+			db
+				.all<PartialRow>(
+					`SELECT a.id, ${actorUriSql('a.uri')} AS uri, ${usernameSql('a.username')} AS username, a.domain, a.actor_type,
+						${profileUrlSql('a.url')} AS url, ${profileUrlSql('a.avatar_url')} AS avatar_url, a.locked,
+						${availableJoinedSql('a', 'l')} AS available
+					FROM json_each(?1) c CROSS JOIN accounts a ON a.id = c.value LEFT JOIN local_accounts l ON l.account_id = a.id`,
+					JSON.stringify([...new Set(slice)])
+				)
+				.map((row) => [row.id, row])
+		)
+		for (const id of slice) {
+			const row = rows.get(id)
+			if (row === undefined) {
+				yield undefined
+				continue
+			}
+			const suspended = row.available === 0
+			const avatar =
+				(suspended ? null : boundedHref(row.avatar_url, PROFILE_URL_LIMIT)) ?? `${present.origin}${DEFAULT_AVATAR}`
+			yield {
+				id: row.id,
+				acct: acctOf(row),
+				locked: !suspended && row.locked === 1,
+				bot: !suspended && (row.actor_type === 'Service' || row.actor_type === 'Application'),
+				url: accountUrl(row, present.origin),
+				avatar,
+				avatar_static: avatar,
+			}
+		}
+	}
+}
+
+// Admission of accounts (RES-3, admit): the accounts of `ids` in traversal order while their JSON fits `budget`, read
+// in chunks of ANSWER_CHUNK; an id with no account is consumed.
+export function admitAccounts(
+	db: Db,
+	ids: readonly string[],
+	present: Present,
+	budget: number,
+	leading: boolean
+): Admitted<Account> {
+	return admit(accountsOf(db, ids, present), budget, leading)
 }
 
 // An account's profile URL. A stored url is used only when it is http(s) (HTML-3); otherwise it is derived from the
@@ -358,7 +429,7 @@ function remoteFields(attachment: string | null): Field[] {
 	for (const entry of JSON.parse(attachment) as { name: string; value: string }[]) {
 		const name = entry.name.slice(0, FIELD_NAME_LIMIT)
 		const value = sanitizeRemoteHtml(entry.value.slice(0, FIELD_VALUE_RAW_LIMIT))
-		bytes += utf8Length(JSON.stringify(name)) + utf8Length(JSON.stringify(value))
+		bytes += jsonBytes(name) + jsonBytes(value)
 		if (bytes > REMOTE_FIELDS_BYTES) {
 			break
 		}
@@ -385,8 +456,8 @@ export function resolveAccountId(db: Db, id: string): string | null {
 	return resolveApiId(db, 'accounts', id)
 }
 
-// Presented accounts by id, read in one query.
-export function presentAccountsById(db: Db, ids: readonly string[], present: Present): Map<string, Account> {
+// Presented accounts by id, read in one query: for getAccounts' MAX_ACCOUNTS_BY_ID only.
+function presentAccountsById(db: Db, ids: readonly string[], present: Present): Map<string, Account> {
 	return new Map(
 		db
 			.all<AccountRow>(
@@ -752,10 +823,7 @@ export const familiarFollowers = userReadOperation<{ ids: string[]; present: Pre
 			return [{ id: target, followers }]
 		})
 		// The answer's own JSON: brackets and each entry's id, keys and separator; accountStream counts each account's.
-		const frame = entries.reduce(
-			(sum, entry) => sum + utf8Length(JSON.stringify({ id: entry.id, accounts: [] })) + 1,
-			1
-		)
+		const frame = entries.reduce((sum, entry) => sum + jsonBytes({ id: entry.id, accounts: [] }) + 1, 1)
 		const shown = sharedAnswer(
 			db,
 			entries.map((entry) => entry.followers),
@@ -1171,12 +1239,25 @@ export function accountRowsOf(db: Db, ids: readonly string[]): AccountRow[] {
 	return ids.flatMap((id) => rows.get(id) ?? [])
 }
 
-// Read profiles only for the filtered page, in page order (RES-2); candidate windows read ids alone.
-export function presentedRows(db: Db, rows: readonly { id: string }[], present: Present): Account[] {
-	return accountRowsOf(
-		db,
-		rows.map((row) => row.id)
-	).map((row) => presentAccount(row, present))
+// A page of accounts (the rows of a window's page, newest first, each by its cursor `key`), their profiles read for
+// the page only (RES-2; candidate windows read ids alone), within ANSWER_BYTES (RES-3): admitted in traversal order,
+// a page cut there continues from its last admitted account (admittedPage).
+export function accountPage<R extends { id: string }>(
+	db: Db,
+	page: { rows: readonly R[]; newest: string | null; oldest: string | null; cut?: boolean },
+	ascending: boolean,
+	key: (row: R) => string,
+	present: Present
+): Page<Account> {
+	return admittedPage(page, ascending, key, (traversal) =>
+		admitAccounts(
+			db,
+			traversal.map((row) => row.id),
+			present,
+			ARRAY_ANSWER_BYTES,
+			true
+		)
+	)
 }
 
 // GET /api/v1/accounts/:id/followers and /following as the viewer (null: anonymous) may see them (R13, Mastodon's
@@ -1227,12 +1308,7 @@ export const listFollows = optionalUserReadOperation<ListFollowsInput, Page<Acco
 						windowJson(window)
 					)
 		const shown = windowPage(window, rows, (row) => row.cursor, page.limit, ascending)
-		return {
-			items: presentedRows(db, shown.rows, present),
-			newest: shown.newest,
-			oldest: shown.oldest,
-			cut: shown.cut,
-		}
+		return accountPage(db, shown, ascending, (row) => row.cursor, present)
 	}
 )
 
@@ -1267,12 +1343,7 @@ export const listFollowRequests = userReadOperation<{ page: PageQuery; present: 
 						windowJson(window)
 					)
 		const shown = windowPage(window, rows, (row) => row.cursor, page.limit, ascending)
-		return {
-			items: presentedRows(db, shown.rows, present),
-			newest: shown.newest,
-			oldest: shown.oldest,
-			cut: shown.cut,
-		}
+		return accountPage(db, shown, ascending, (row) => row.cursor, present)
 	}
 )
 

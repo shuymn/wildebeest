@@ -1,4 +1,5 @@
-import { type Account, edgeRangeSql, type Page, type PageQuery, type Present, presentAccountsById } from './accounts'
+import { type Account, accountsOf, edgeRangeSql, type Page, type PageQuery, type Present } from './accounts'
+import { admit, admittedPage, ARRAY_ANSWER_BYTES, firstUses } from './answer-budget'
 import {
 	availableSql,
 	keptSql,
@@ -11,9 +12,9 @@ import {
 } from './audience'
 import { userReadOperation, userWriteOperation } from './auth'
 import { addToConversation } from './conversations'
-import { MAX_MEANINGFUL_COUNT, REMOVAL_BATCHES, runRemovals } from './notifications'
+import { MAX_MEANINGFUL_COUNT, NOTIFICATION_CHUNK, REMOVAL_BATCHES, runRemovals } from './notifications'
 import { writeOperation } from './operation'
-import { presentStatuses, type Status } from './status-presenter'
+import { presentation, type Status, statusStream } from './status-presenter'
 import { streamMerged } from './streaming'
 import { readWindow, singleWindow, windowJson, windowPage } from './windows'
 import type { Db } from '../db/sql'
@@ -134,17 +135,15 @@ type RequestRow = {
 const REQUEST_COLUMNS = `CAST(r.id AS TEXT) AS id, r.from_account_id, r.last_status_id, r.notifications_count,
 	r.created_at, r.updated_at`
 
-function presentRequests(
+// The requests of `rows` in order, for an admission (admit): each one atomic, with its sender and its last status,
+// presented when the admission reaches it (NOTIFICATION_CHUNK at a time); undefined for one whose sender the presenter
+// cannot show.
+function* requestStream(
 	db: Db,
 	viewer: { accountId: string; now: string },
-	rows: RequestRow[],
+	rows: readonly RequestRow[],
 	present: Present
-): NotificationRequest[] {
-	const accounts = presentAccountsById(
-		db,
-		rows.map((row) => row.from_account_id),
-		present
-	)
+): Generator<NotificationRequest | undefined, undefined> {
 	// The last status of each request whose mention the notification rule still shows the viewer (R15 at the time of
 	// the read, which includes R2): not after the viewer blocks or mutes its sender, or one it mentions.
 	const visible = statusReads(viewer, { viewer: '?1', now: '?3' }).select(
@@ -162,29 +161,32 @@ function presentRequests(
 		JSON.stringify(rows.map((row) => row.id)),
 		viewer.now
 	)
-	const statuses = new Map(
-		presentStatuses(
-			db,
-			visible.map((row) => row.id),
-			{ ...present, viewer }
-		).map((status) => [status.id, status])
+	const shown = new Map(visible.map((row) => [row.id as string, row.id]))
+	const statusIds = [
+		...new Set(rows.flatMap((row) => (row.last_status_id === null ? [] : (shown.get(row.last_status_id) ?? [])))),
+	]
+	const statusOf = firstUses(
+		statusIds,
+		statusStream(db, presentation(db, statusIds, { ...present, viewer }), statusIds)
 	)
-	return rows.flatMap((row) => {
-		const account = accounts.get(row.from_account_id)
-		if (account === undefined) {
-			return []
-		}
-		return [
-			{
-				id: row.id,
-				created_at: row.created_at,
-				updated_at: row.updated_at,
-				notifications_count: String(row.notifications_count),
-				account,
-				last_status: row.last_status_id === null ? null : (statuses.get(row.last_status_id) ?? null),
-			},
-		]
-	})
+	const accountIds = [...new Set(rows.map((row) => row.from_account_id))]
+	const accountOf = firstUses(accountIds, accountsOf(db, accountIds, present, NOTIFICATION_CHUNK))
+	for (const row of rows) {
+		const account = accountOf(row.from_account_id)
+		yield account === undefined
+			? undefined
+			: {
+					id: row.id,
+					created_at: row.created_at,
+					updated_at: row.updated_at,
+					notifications_count: String(row.notifications_count),
+					account,
+					last_status:
+						row.last_status_id === null || !shown.has(row.last_status_id)
+							? null
+							: (statusOf(row.last_status_id) ?? null),
+				}
+	}
 }
 
 // GET /api/v1/notifications/requests: the viewer's requests from available senders (without_suspended), newest
@@ -218,12 +220,12 @@ export const listNotificationRequests = userReadOperation<
 					windowJson(window)
 				)
 	const shown = windowPage(window, rows, (row) => row.id, page.limit, ascending)
-	return {
-		items: presentRequests(db, viewer, shown.rows, present),
-		newest: shown.newest,
-		oldest: shown.oldest,
-		cut: shown.cut,
-	}
+	return admittedPage(
+		shown,
+		ascending,
+		(row) => row.id,
+		(traversal) => admit(requestStream(db, viewer, traversal, present), ARRAY_ANSWER_BYTES, true)
+	)
 })
 
 // GET /api/v1/notifications/requests/:id: one of the viewer's requests, whoever its sender (Mastodon's find has no
@@ -238,7 +240,7 @@ export const getNotificationRequest = userReadOperation<{ id: string; present: P
 			viewer.accountId,
 			id
 		)
-		return row === undefined ? null : (presentRequests(db, viewer, [row], present)[0] ?? null)
+		return row === undefined ? null : (requestStream(db, viewer, [row], present).next().value ?? null)
 	}
 )
 

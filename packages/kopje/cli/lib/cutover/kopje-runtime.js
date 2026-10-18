@@ -49,6 +49,7 @@ export const {
 	backfillConversations,
 	ACTOR_URI_LIMIT,
 	isRemoteUsername,
+	MAX_LOCAL_ADDRESSED,
 	isStorableActorId,
 	STATUS_URI_LIMIT,
 	withinIdentityBound,

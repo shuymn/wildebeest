@@ -411,6 +411,14 @@ describe('HTML is never cut silently', () => {
 		}, 'remote-actor-uri-over-limit')
 	})
 
+	it('refuses an actor id whose JSON escapes take it over its bound, though its spelling and URL fit', () => {
+		// URL parsing drops the newlines, and each is one byte as written but two as JSON writes it (\n).
+		const padded = `https://remote.example/users/r2${'\n'.repeat(1_500)}`
+		expect(new TextEncoder().encode(padded).length).toBeLessThanOrEqual(ACTOR_URI_LIMIT)
+		expect(new URL(padded).href).toBe('https://remote.example/users/r2')
+		expect([withinIdentityBound(padded, ACTOR_URI_LIMIT), isStorableActorId(padded)]).toEqual([false, false])
+	})
+
 	it('refuses a boost whose Announce id is over the bound of a status uri', async () => {
 		const announce = 'https://remote.example/users/r1/statuses/900/activity'
 		await refusesIdentity(async (exportPath) => {

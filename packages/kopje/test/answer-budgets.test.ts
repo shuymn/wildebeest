@@ -1,18 +1,32 @@
 import { runInDurableObject } from 'cloudflare:test'
 
+import fc from 'fast-check'
 import { describe, expect, it } from 'vitest'
 
 import { type ApiHarness, sql } from './api-helpers'
 import { NOW } from './app-helpers'
+import {
+	acceptQuote,
+	answer,
+	bigStatus,
+	C,
+	DAY,
+	expectByteCutFirstPage,
+	expectByteCutWalk,
+	maximalAccounts,
+	nextId,
+	ORIGIN,
+	walk,
+	type Walked,
+} from './budget-helpers'
 import { BUILD } from './helpers'
-import { MAX_BIO, maxFields } from './profile-fixtures'
 import { observedSql } from './read-helpers'
 import { act, community, domainBlock, mute, post, remoteAccount, seedStatus } from './status-helpers'
 import { Db } from '../src/db/sql'
 import { admit, admittedPage, ANSWER_BYTES, jsonBytes } from '../src/domain/answer-budget'
 import { type VisibleStatusId } from '../src/domain/audience'
 import { filterTextLimits, MAX_FILTER_REQUEST_TEXT } from '../src/domain/filters'
-import { presentation, presentStatuses, presentStatusesWithin } from '../src/domain/status-presenter'
+import { type PresentOptions, presentation, presentStatus, presentStatusesWithin } from '../src/domain/status-presenter'
 import { utf8Length } from '../src/platform/dump-format'
 import { sha256Hex } from '../src/security/tokens'
 
@@ -20,139 +34,6 @@ import { sha256Hex } from '../src/security/tokens'
 // Store operation that returns it (docs/response-inventory.md). Items are admitted whole in traversal order, the
 // first whatever its size; a cut page continues from its last admitted item in both directions; a context keeps the
 // nearest ancestors and history the newest revisions; search, an offset endpoint, returns fewer results.
-
-const ORIGIN = 'https://kopje.test'
-// A control character, which JSON escapes to six bytes.
-const C = '\u0001'
-const DAY = 86_400_000
-
-let sequence = 700_000_000_000_000_000n
-const nextId = () => String(sequence++)
-
-// A public remote status of about 0.97 MB of JSON: content of 20,000 escaping characters (and "needle", which search
-// finds), a poll of 100 choices of 1,000 and 4 attachments with descriptions of 10,000, each at its bound (RES-2).
-// Nine such pass ANSWER_BYTES, so a page of them is cut.
-async function bigStatus(
-	h: ApiHarness,
-	author: string,
-	published: number,
-	extra: { tags?: string[]; inReplyToId?: string } = {}
-): Promise<string> {
-	const id = await seedStatus(h.store, {
-		accountId: author,
-		visibility: 'public',
-		content: `<p>needle ${C.repeat(20_000)}</p>`,
-		published,
-		...extra,
-	})
-	await sql(
-		h.store,
-		`INSERT INTO polls (status_id, options, tallies, votes_count, voters_count, expires_at)
-		VALUES (?, ?, ?, 0, 0, ?)`,
-		id,
-		JSON.stringify(Array.from({ length: 100 }, () => C.repeat(1000))),
-		JSON.stringify(Array.from({ length: 100 }, () => 0)),
-		new Date(NOW + DAY).toISOString()
-	)
-	for (let position = 0; position < 4; position++) {
-		await sql(
-			h.store,
-			`INSERT INTO media_attachments (id, account_id, status_id, position, type, url, description)
-			VALUES (?, ?, ?, ?, 'image', 'https://remote.example/m.png', ?)`,
-			nextId(),
-			author,
-			id,
-			position,
-			C.repeat(10_000)
-		)
-	}
-	return id
-}
-
-// An accepted quote of `target` by `status`.
-async function acceptQuote(h: ApiHarness, status: string, target: string) {
-	return sql(
-		h.store,
-		`INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, quoted_account_id, state, updated_at)
-		SELECT ?1, uri, id, account_id, 'accepted', ?3 FROM statuses WHERE id = ?2`,
-		status,
-		target,
-		new Date(NOW).toISOString()
-	)
-}
-
-type Answer<T> = {
-	status: number
-	bytes: number
-	body: T
-	next: string | null
-	prev: string | null
-	link: string | null
-}
-
-// The answer of a GET as the client receives it: its body's bytes and its Link header's next and prev paths.
-async function answer<T = { id: string }[]>(h: ApiHarness, path: string, token?: string): Promise<Answer<T>> {
-	const response = await h.request(path, token === undefined ? {} : { headers: { authorization: `Bearer ${token}` } })
-	const text = await response.text()
-	const link = (rel: string) => {
-		const url = new RegExp(`<([^>]+)>; rel="${rel}"`).exec(response.headers.get('link') ?? '')?.[1]
-		return url === undefined ? null : `${new URL(url).pathname}${new URL(url).search}`
-	}
-	return {
-		status: response.status,
-		bytes: utf8Length(text),
-		body: JSON.parse(text) as T,
-		next: link('next'),
-		prev: link('prev'),
-		link: response.headers.get('link'),
-	}
-}
-
-type Walked = { ids: string[]; pages: { shown: string[]; bytes: number; cursor: string | null }[] }
-
-// Walks a list by its Link header from `path`: `next` (older, newest first) or `prev` (newer, each page shown newest
-// first, collected oldest first). `keep` is added back to each link (since_id or max_id, which links drop, as
-// Mastodon's). Each page keeps the cursor its link carries.
-async function walk(h: ApiHarness, path: string, rel: 'next' | 'prev', token?: string, keep = ''): Promise<Walked> {
-	const walked: Walked = { ids: [], pages: [] }
-	for (let at: string | null = path; at !== null;) {
-		const page: Answer<{ id: string }[]> = await answer(h, at, token)
-		expect(page.status).toBe(200)
-		expect(page.bytes).toBeLessThanOrEqual(ANSWER_BYTES)
-		const shown = page.body.map((status) => status.id)
-		if (shown.length === 0) {
-			break
-		}
-		const link: string | null = page[rel]
-		const cursor =
-			link === null ? null : new URLSearchParams(link.split('?')[1]).get(rel === 'next' ? 'max_id' : 'min_id')
-		walked.pages.push({ shown, bytes: page.bytes, cursor })
-		walked.ids.push(...(rel === 'next' ? shown : shown.toReversed()))
-		at = link === null ? null : `${link}${keep}`
-		expect(walked.pages.length).toBeLessThan(40)
-	}
-	return walked
-}
-
-// A walk cut by the answer budget: every status once, in order, at least one page cut by bytes (one more status of
-// `size` would pass ANSWER_BYTES), and each such page continuing from its last status in traversal order (`cursorOf`
-// gives its cursor: the status id, or a bookmark's or favourite's id).
-function expectByteCutWalk(
-	name: string,
-	walked: Walked,
-	expected: readonly string[],
-	rel: 'next' | 'prev',
-	size: number,
-	cursorOf: (id: string) => string = (id) => id
-): void {
-	expect([name, walked.ids]).toEqual([name, expected])
-	const cut = walked.pages.filter((page) => page.bytes + size + 1 > ANSWER_BYTES)
-	expect([name, cut.length]).not.toEqual([name, 0])
-	for (const page of cut) {
-		const last = rel === 'next' ? page.shown.at(-1)! : page.shown[0]!
-		expect([name, page.cursor]).toEqual([name, cursorOf(last)])
-	}
-}
 
 type World = Awaited<ReturnType<typeof world>>
 
@@ -220,27 +101,13 @@ async function bytesOf(h: ApiHarness, token: string, id: string): Promise<number
 	return (await answer<unknown>(h, `/api/v1/statuses/${id}`, token)).bytes
 }
 
-// `count` remote accounts named `prefix` and a number, in id order, each at its bounds (RES-2): a bio of 64 KiB,
-// a display name of 2,048 escaping characters and 16 fields at theirs, about 121 KB of JSON each.
-async function maximalAccounts(h: ApiHarness, prefix: string, count: number): Promise<string[]> {
-	const ids: string[] = []
-	for (let i = 0; i < count; i++) {
-		const id = await remoteAccount(h.store, `${prefix}${String(i).padStart(3, '0')}`)
-		await sql(
-			h.store,
-			'UPDATE accounts SET note = ?, display_name = ?, raw = ? WHERE id = ?',
-			MAX_BIO,
-			C.repeat(2048),
-			JSON.stringify({ type: 'Person', attachment: maxFields() }),
-			id
-		)
-		ids.push(id)
-	}
-	return ids.toSorted()
-}
-
 async function statusBytes(w: World, id: string): Promise<number> {
 	return bytesOf(w.h, w.alice.token, id)
+}
+
+// The statuses of `ids` presented as one whole, their rows read in one chunk, as a page was before admission.
+function presentedWhole(db: Db, ids: readonly VisibleStatusId[], options: PresentOptions) {
+	return presentStatusesWithin(db, presentation(db, ids, options), ids, Infinity, true, Math.max(ids.length, 1)).items
 }
 
 describe('admission (RES-3)', () => {
@@ -260,6 +127,25 @@ describe('admission (RES-3)', () => {
 		expect(admit(items, 1, false)).toEqual({ items: [], bytes: 0, consumed: 0, cut: true })
 		// Nothing to show is consumed, never admitted.
 		expect(admit([undefined, 'x', undefined], 4, true)).toEqual({ items: ['x'], bytes: 4, consumed: 3, cut: false })
+	})
+
+	it('counts JSON bytes as JSON.stringify writes them, without building the string', () => {
+		const stringified = (value: unknown) => utf8Length(JSON.stringify(value))
+		fc.assert(
+			fc.property(fc.jsonValue({ stringUnit: 'binary', maxDepth: 4 }), (value) => {
+				expect(jsonBytes(value)).toBe(stringified(value))
+			}),
+			{ numRuns: 2_000 }
+		)
+		const edges = [
+			{ a: undefined, b: [undefined, () => 1, null], c: new Date(0), d: -0, e: Number.NaN, f: Infinity },
+			'\ud800x\udc00\u0000\u001f"\\\b\f\n\r\t\u007f\u0080\u07ff\u0800\uffff\ud83d\ude00',
+			[],
+			{},
+		]
+		for (const value of edges) {
+			expect(jsonBytes(value)).toBe(stringified(value))
+		}
 	})
 
 	it('continues a cut page from its last admitted row, dropping a window continuation', () => {
@@ -296,15 +182,14 @@ describe('status pages are answers within ANSWER_BYTES (RES-3)', () => {
 				firstPages.next = older.pages[0]
 				firstPages.prev = newer.pages[0]
 			}
-			// since_id walks newest first above its bound; with max_id, between both, either way.
-			const since = `&since_id=${w.small.at(-1)!}`
-			expectByteCutWalk(name, await walk(h, `${path}${since}`, 'next', alice.token, since), V, 'next', size)
-			const below = `&since_id=${V[19]!}`
-			const down = await walk(h, `${path}&max_id=${V[0]!}${below}`, 'next', alice.token, below)
-			expectByteCutWalk(`${name} between`, down, inner, 'next', size)
-			const above = `&max_id=${V[0]!}`
-			const up = await walk(h, `${path}&min_id=${V[19]!}${above}`, 'prev', alice.token, above)
-			expectByteCutWalk(`${name} between`, up, inner.toReversed(), 'prev', size)
+			// since_id reads newest first above its bound; with max_id, between both, either way: a cut first page is a
+			// prefix of the uncut answer, its link in Mastodon's form.
+			const token = alice.token
+			await expectByteCutFirstPage(h, name, `${path}&since_id=${w.small.at(-1)!}`, 'next', token, V, size)
+			const down = `${path}&max_id=${V[0]!}&since_id=${V[19]!}`
+			await expectByteCutFirstPage(h, `${name} between`, down, 'next', token, inner, size)
+			const up = `${path}&min_id=${V[19]!}&max_id=${V[0]!}`
+			await expectByteCutFirstPage(h, `${name} between`, up, 'prev', token, inner.toReversed(), size)
 		}
 		// The public timeline's first pages from either end: ten big statuses passed in a window cut at muted statuses
 		// (B0b), cut by bytes before them, so the link continues from the last one shown, not from the window's end.
@@ -323,14 +208,13 @@ describe('status pages are answers within ANSWER_BYTES (RES-3)', () => {
 			expectByteCutWalk(name, await walk(h, path, 'next', alice.token), V, 'next', size, cursorOf)
 			const ascending = await walk(h, `${path}&min_id=0`, 'prev', alice.token)
 			expectByteCutWalk(name, ascending, V.toReversed(), 'prev', size, cursorOf)
+			const token = alice.token
 			const since = `&since_id=${cursorOf(V[19]!)}`
-			const above = await walk(h, `${path}${since}`, 'next', alice.token, since)
-			expectByteCutWalk(name, above, V.slice(0, 19), 'next', size, cursorOf)
-			const down = await walk(h, `${path}&max_id=${cursorOf(V[0]!)}${since}`, 'next', alice.token, since)
-			expectByteCutWalk(`${name} between`, down, inner, 'next', size, cursorOf)
-			const max = `&max_id=${cursorOf(V[0]!)}`
-			const up = await walk(h, `${path}&min_id=${cursorOf(V[19]!)}${max}`, 'prev', alice.token, max)
-			expectByteCutWalk(`${name} between`, up, inner.toReversed(), 'prev', size, cursorOf)
+			await expectByteCutFirstPage(h, name, `${path}${since}`, 'next', token, V.slice(0, 19), size, cursorOf)
+			const down = `${path}&max_id=${cursorOf(V[0]!)}${since}`
+			await expectByteCutFirstPage(h, `${name} between`, down, 'next', token, inner, size, cursorOf)
+			const up = `${path}&min_id=${cursorOf(V[19]!)}&max_id=${cursorOf(V[0]!)}`
+			await expectByteCutFirstPage(h, `${name} between`, up, 'prev', token, inner.toReversed(), size, cursorOf)
 		}
 	}, 600_000)
 
@@ -450,7 +334,7 @@ describe('admission at a chunk boundary (RES-3)', () => {
 			const db = new Db(state.storage.sql)
 			const options = { origin: ORIGIN, viewer: { accountId: alice.id, now: new Date(NOW).toISOString() } }
 			const admitted = presentStatusesWithin(db, presentation(db, ids, options), ids, ANSWER_BYTES - 1, true)
-			const [boost] = presentStatuses(db, boosts.slice(0, 1) as VisibleStatusId[], options)
+			const boost = presentStatus(db, boosts[0] as VisibleStatusId, options)
 			return { admitted, boost: jsonBytes(boost) }
 		})
 		expect(result.admitted.items.map((s) => s.id)).toEqual(small)
@@ -697,7 +581,7 @@ describe('the shared filter allowance (RES-3)', () => {
 			const visible = ids as VisibleStatusId[]
 			const shared = presentation(db, visible, options)
 			return [
-				presentStatuses(db, visible, options),
+				presentedWhole(db, visible, options),
 				[
 					...presentStatusesWithin(db, shared, visible.slice(0, 7), ANSWER_BYTES, true).items,
 					...presentStatusesWithin(db, shared, visible.slice(7), ANSWER_BYTES, true).items,
@@ -710,6 +594,38 @@ describe('the shared filter allowance (RES-3)', () => {
 		const matched = whole.map((s) => (s.filtered ?? []).length > 0)
 		expect(matched).toEqual(ids.map((_, i) => 150 * i + 7 <= level!))
 		expect(matched).toContain(false)
+	}, 300_000)
+
+	it('matches each status once over passes that present it again, within the allowance', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const author = await remoteAccount(h.store, 'passes')
+		// 80 statuses of 10,000 code units, presented three times under one presentation, as a grouped page's
+		// re-admission passes present the groups they keep.
+		const ids: string[] = []
+		for (let i = 0; i < 80; i++) {
+			const content = `<p>needle ${'y'.repeat(9_993)}</p>`
+			ids.push(await seedStatus(h.store, { accountId: author, visibility: 'public', content }))
+		}
+		await h.request('/api/v2/filters', {
+			method: 'POST',
+			headers: { authorization: `Bearer ${alice.token}`, 'content-type': 'application/json' },
+			body: JSON.stringify({ title: 'n', context: ['public'], keywords_attributes: [{ keyword: 'needle' }] }),
+		})
+		const result = await runInDurableObject(h.store, (_instance, state) => {
+			const db = new Db(state.storage.sql)
+			const options = { origin: ORIGIN, viewer: { accountId: alice.id, now: new Date(NOW).toISOString() } }
+			const visible = ids as VisibleStatusId[]
+			const shared = presentation(db, visible, options)
+			const passes = [80, 79, 78].map((n) => presentStatusesWithin(db, shared, visible.slice(0, n), ANSWER_BYTES, true))
+			return { passes: passes.map((pass) => pass.items), units: shared.matched.units, level: shared.level }
+		})
+		const [level] = filterTextLimits(Array.from({ length: 80 }, () => 10_000))
+		expect(result.level).toBe(level)
+		expect(result.units).toBe(80 * level!)
+		expect(result.units).toBeLessThanOrEqual(MAX_FILTER_REQUEST_TEXT)
+		expect(result.passes[1]).toEqual(result.passes[0]!.slice(0, 79))
+		expect(result.passes[2]).toEqual(result.passes[0]!.slice(0, 78))
 	}, 300_000)
 
 	it('matches a status quoted by many once, within the allowance', async () => {
@@ -741,7 +657,7 @@ describe('the shared filter allowance (RES-3)', () => {
 			const visible = ids as VisibleStatusId[]
 			const shared = presentation(db, visible, options)
 			const items = presentStatusesWithin(db, shared, visible, ANSWER_BYTES, true).items
-			return { items, level: shared.level, units: shared.matched.units, whole: presentStatuses(db, visible, options) }
+			return { items, level: shared.level, units: shared.matched.units, whole: presentedWhole(db, visible, options) }
 		})
 		expect(result.items).toHaveLength(41)
 		expect(result.items).toEqual(result.whole)

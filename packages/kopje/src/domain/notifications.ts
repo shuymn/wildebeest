@@ -1,5 +1,6 @@
-import { type Account, type Page, type PageQuery, type Present, presentAccountsById } from './accounts'
+import { type Account, accountsOf, type Page, type PageQuery, type Present } from './accounts'
 import { adminAccountIdOnce } from './admin-authority'
+import { admit, admittedPage, ARRAY_ANSWER_BYTES, firstUses } from './answer-budget'
 import {
 	FILTERABLE_TYPES,
 	keptFloorSql,
@@ -12,8 +13,8 @@ import {
 } from './audience'
 import { currentCredentialSql, type UserContext, userReadOperation, userWriteOperation } from './auth'
 import { addToConversation } from './conversations'
-import { presentReportsById, type Report } from './reports'
-import { presentStatuses, type Status } from './status-presenter'
+import { presentReport, type Report } from './reports'
+import { presentation, type Status, statusStream } from './status-presenter'
 import { readWindow, windowJson, windowOf, windowPage } from './windows'
 import type { Db } from '../db/sql'
 
@@ -283,47 +284,47 @@ export const NOTIFICATION_COLUMNS = {
 	report_id: 'CAST(n.report_id AS TEXT)',
 }
 
-function presentNotifications(
+// Notifications are read this many at a time while an answer is admitted: their accounts and statuses (and reports,
+// one at a time) are read for this many rows together.
+export const NOTIFICATION_CHUNK = 2
+
+// The notifications of `rows` in order, for an admission (admit): each one atomic, with its account, its status and its
+// report, presented when the admission reaches it; undefined for one whose account, status or report the presenter
+// cannot show (left out, as Mastodon leaves out a notification it cannot render). An account or status that several
+// notifications share is presented once (firstUses), under one presentation of the rows' statuses.
+export function* notificationStream(
 	db: Db,
-	rows: WithVisibleStatus<NotificationRow, 'status_id'>[],
+	rows: readonly WithVisibleStatus<NotificationRow, 'status_id'>[],
 	viewer: UserContext,
 	present: Present
-): Notification[] {
-	const accounts = presentAccountsById(
-		db,
-		rows.map((row) => row.from_account_id),
-		present
-	)
+): Generator<Notification | undefined, undefined> {
 	const statusIds = [...new Set(rows.flatMap((row) => (row.status_id === null ? [] : [row.status_id])))]
-	const statuses = new Map(presentStatuses(db, statusIds, { ...present, viewer }).map((status) => [status.id, status]))
-	const reports = presentReportsById(
-		db,
-		rows.flatMap((row) => (row.report_id === null ? [] : [row.report_id])),
-		present
-	)
-	return rows.flatMap((row) => {
-		const account = accounts.get(row.from_account_id)
-		const status = row.status_id === null ? undefined : statuses.get(row.status_id)
-		const report = row.report_id === null ? undefined : reports.get(row.report_id)
+	const shared = presentation(db, statusIds, { ...present, viewer })
+	const statusOf = firstUses(statusIds, statusStream(db, shared, statusIds))
+	const accountIds = [...new Set(rows.map((row) => row.from_account_id))]
+	const accountOf = firstUses(accountIds, accountsOf(db, accountIds, present, NOTIFICATION_CHUNK))
+	for (const row of rows) {
+		const account = accountOf(row.from_account_id)
+		const status = row.status_id === null ? undefined : statusOf(row.status_id)
+		const report = row.report_id === null ? undefined : presentReport(db, row.report_id, present)
 		if (
 			account === undefined ||
 			(row.status_id !== null && status === undefined) ||
 			(row.report_id !== null && report === undefined)
 		) {
-			return []
+			yield undefined
+			continue
 		}
-		return [
-			{
-				id: row.id,
-				type: row.type,
-				created_at: row.created_at,
-				group_key: row.group_key ?? `ungrouped-${row.id}`,
-				account,
-				...(status === undefined ? {} : { status }),
-				...(report === undefined ? {} : { report }),
-			},
-		]
-	})
+		yield {
+			id: row.id,
+			type: row.type,
+			created_at: row.created_at,
+			group_key: row.group_key ?? `ungrouped-${row.id}`,
+			account,
+			...(status === undefined ? {} : { status }),
+			...(report === undefined ? {} : { report }),
+		}
+	}
 }
 
 export type ListNotificationsInput = {
@@ -401,12 +402,12 @@ export const listNotifications = userReadOperation<ListNotificationsInput, Page<
 			size
 		)
 		const shown = windowPage(windowOf(candidates, size), rows, (row) => row.id, page.limit, ascending)
-		return {
-			items: presentNotifications(db, shown.rows, viewer, input.present),
-			newest: shown.newest,
-			oldest: shown.oldest,
-			cut: shown.cut,
-		}
+		return admittedPage(
+			shown,
+			ascending,
+			(row) => row.id,
+			(traversal) => admit(notificationStream(db, traversal, viewer, input.present), ARRAY_ANSWER_BYTES, true)
+		)
 	}
 )
 
@@ -475,7 +476,7 @@ function notificationById(
 		id,
 		viewer.now
 	)
-	return presentNotifications(db, rows, viewer, present)[0] ?? null
+	return notificationStream(db, rows, viewer, present).next().value ?? null
 }
 
 export const dismissNotification = userWriteOperation<{ id: string }, boolean>((db, { id }, { accountId }) => {

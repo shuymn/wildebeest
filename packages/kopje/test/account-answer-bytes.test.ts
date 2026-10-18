@@ -423,7 +423,7 @@ describe('one account has a known size (RES-2)', () => {
 		expectMention(byId.get(dave)!, dave, named)
 	})
 
-	it('reads and answers a page of 80 followers at every bound from a window of 240', async () => {
+	it('reads a page of 80 followers at every bound from a window of 240, and answers those within the budget', async () => {
 		const t = await setup()
 		const ids = await accounts(t, 240, BASE, maximal)
 		await follows(t, ids, [ALICE])
@@ -437,11 +437,14 @@ describe('one account has a known size (RES-2)', () => {
 		})
 		expect(read.profiles).toBe(80)
 		expect(read.bytes).toBeLessThanOrEqual(80 * READ_MAX)
+		// 80 accounts near their bound pass ANSWER_BYTES (RES-3): the page answers those that fit, cut by bytes.
 		const { body, bytes } = await shownBytes(t, `/api/v1/accounts/${ALICE}/followers?limit=80`)
-		expect((body as unknown[]).length).toBe(80)
-		expect(bytes).toBeLessThanOrEqual(80 * SHOWN_MAX)
+		const shown = (body as unknown[]).length
+		expect(shown).toBeLessThan(80)
+		expect(bytes).toBeLessThanOrEqual(ANSWER_BYTES)
+		expect(bytes + SHOWN_MAX).toBeGreaterThan(ANSWER_BYTES)
 		// Each account is near its bound.
-		expect(bytes).toBeGreaterThan(80 * 100_000)
+		expect(bytes).toBeGreaterThan(shown * 100_000)
 	}, 60_000)
 })
 

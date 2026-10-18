@@ -5,18 +5,25 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { adminClaims, adminHarness, adminTeam, setTeamAccess, type AccessTeam } from './access-helpers'
 import { type ApiHarness, bearer, form, json, login, registerApp, seedAccount, setSetting, sql } from './api-helpers'
 import { NOW } from './app-helpers'
+import { type Answer, answer, hugeStatus, ORIGIN } from './budget-helpers'
 import { migratedStore } from './helpers'
 import { ACCESS, ADMIN_EMAIL } from './ops-helpers'
+import { observedSql } from './read-helpers'
 import { community, remoteAccount, remoteFollows, seedStatus, type User } from './status-helpers'
 import { Db } from '../src/db/sql'
 import type { PageQuery } from '../src/domain/accounts'
 import { setAccountEmail } from '../src/domain/admin-accounts'
+import { ANSWER_BYTES } from '../src/domain/answer-budget'
+import { filterTextLimits, MAX_FILTER_REQUEST_TEXT, MAX_FILTER_TEXT } from '../src/domain/filters'
 import { logAction, MODERATION_LOG_KEEP, MODERATION_LOG_PRUNE } from '../src/domain/moderation-log'
 import {
 	ADMIN_REPORT_STATUS_BUDGET,
+	actOnReport,
 	type AdminReportFilter,
+	getAdminReport,
 	listAdminReports,
 	REPORT_COLUMNS,
+	REPORT_STATUS_BYTES,
 	type ReportRow,
 	userReport,
 } from '../src/domain/reports'
@@ -733,4 +740,153 @@ describe('POST /admin/accounts/email (set-email)', () => {
 		expect(await sql(store, 'SELECT * FROM admin_actions')).toEqual([])
 		expect(await sql(store, 'SELECT email FROM local_accounts WHERE email = ?', ADMIN_EMAIL)).toEqual([])
 	})
+})
+
+describe('report answers within ANSWER_BYTES (RES-3)', () => {
+	it('embed a first status past the allowance alone, on the list, the report and an action, and cut a page at a report', async () => {
+		const w = await world()
+		const huge = await hugeStatus(w.h, w.carol, NOW - 3_600_000)
+		const small = await seedStatus(w.h.store, { accountId: w.carol, visibility: 'public' })
+		await seedReports(w.h.store, w.alice.id, w.carol, 5, { statuses: [small, huge] })
+		const reports = (
+			await sql<{ id: string }>(w.h.store, 'SELECT CAST(id AS TEXT) AS id FROM reports ORDER BY id DESC')
+		).map((row) => row.id)
+		// Newest first: each page is cut at a report, `more` linking the next; every report once.
+		const walked: string[] = []
+		for (let at: string | null = '/api/v1/admin/reports?limit=10'; at !== null;) {
+			const page: Answer<AdminReportBody[]> = await answer<AdminReportBody[]>(w.h, at, w.admin)
+			expect(page.bytes).toBeLessThanOrEqual(ANSWER_BYTES)
+			expect(page.body.length).toBeLessThan(5)
+			for (const report of page.body) {
+				// The first status, past REPORT_STATUS_BYTES alone, is the one shown.
+				expect(report.statuses.map((status) => status.id)).toEqual([huge])
+			}
+			walked.push(...page.body.map((report) => report.id))
+			at = page.next
+		}
+		expect(walked).toEqual(reports)
+		const ascending: string[] = []
+		for (let at: string | null = '/api/v1/admin/reports?limit=10&min_id=0'; at !== null;) {
+			const page: Answer<AdminReportBody[]> = await answer<AdminReportBody[]>(w.h, at, w.admin)
+			expect(page.bytes).toBeLessThanOrEqual(ANSWER_BYTES)
+			ascending.push(...page.body.map((report) => report.id).toReversed())
+			at = page.body.length === 0 ? null : page.prev
+		}
+		expect(ascending).toEqual(reports.toReversed())
+		const one = await answer<AdminReportBody>(w.h, `/api/v1/admin/reports/${reports[0]!}`, w.admin)
+		expect(one.body.statuses.map((status) => status.id)).toEqual([huge])
+		expect(one.bytes).toBeGreaterThan(REPORT_STATUS_BYTES)
+		const acted = await call(w.h, `/api/v1/admin/reports/${reports[0]!}/assign_to_self`, w.admin, { method: 'POST' })
+		expect((acted.body as AdminReportBody).statuses.map((status) => status.id)).toEqual([huge])
+		// A small first status leaves room: the statuses within the allowance follow it.
+		await seedReports(w.h.store, w.alice.id, w.carol, 1, { statuses: [small, ...w.statuses] })
+		const [last] = await sql<{ id: string }>(w.h.store, 'SELECT CAST(max(id) AS TEXT) AS id FROM reports')
+		const smallOnes = await reportOf(w.h, last!.id, w.admin)
+		expect(smallOnes.statuses.map((status) => status.id).toSorted()).toEqual([small, ...w.statuses].toSorted())
+		// A first status that uses up the allowance stops the report's statuses: the next one is not read.
+		const credential = { tokenHash: await sha256Hex(w.admin), scope: 'admin:read:reports', now: NOW }
+		const read = await runInDurableObject(w.h.store, (_instance, state) => {
+			const ids: unknown[] = []
+			const counting = observedSql(state.storage.sql, (rows) => {
+				for (const row of rows) {
+					if ('content' in row) {
+						ids.push(row.id)
+					}
+				}
+			})
+			getAdminReport.run(counting, { credential, id: reports[0]!, present: { origin: ORIGIN } } as never)
+			return ids
+		})
+		expect(read).toContain(huge)
+		expect(read).not.toContain(small)
+	}, 300_000)
+
+	it('find the first status a report presents one at a time, and stop when it uses up the allowance', async () => {
+		const w = await world()
+		// Carol's boost of her own private status, which alice (who follows her) may see and the admin may not, then a
+		// status past the allowance, then a small one: the boost presents nothing to the admin, so the large status is
+		// the report's first, and the small one is never read.
+		await sql(
+			w.h.store,
+			"INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'accepted')",
+			w.alice.id,
+			w.carol
+		)
+		const own = await seedStatus(w.h.store, { accountId: w.carol, visibility: 'private', published: NOW - 9_000_000 })
+		const boost = await seedStatus(w.h.store, {
+			accountId: w.carol,
+			visibility: 'private',
+			reblogOfId: own,
+			published: NOW - 8_000_000,
+		})
+		const huge = await hugeStatus(w.h, w.carol, NOW - 3_600_000)
+		const small = await seedStatus(w.h.store, { accountId: w.carol, visibility: 'public' })
+		await seedReports(w.h.store, w.alice.id, w.carol, 1, { statuses: [boost, huge, small] })
+		const [report] = await sql<{ id: string }>(w.h.store, 'SELECT CAST(max(id) AS TEXT) AS id FROM reports')
+		const id = report!.id
+		const tokenHash = await sha256Hex(w.admin)
+		const present = { origin: ORIGIN }
+		const filter = { resolved: false, accountId: null, targetAccountId: null }
+		const reads = [
+			[
+				listAdminReports,
+				{ credential: { tokenHash, scope: 'admin:read:reports', now: NOW }, filter, page: { limit: 10 }, present },
+			],
+			[getAdminReport, { credential: { tokenHash, scope: 'admin:read:reports', now: NOW }, id, present }],
+			[
+				actOnReport,
+				{ credential: { tokenHash, scope: 'admin:write:reports', now: NOW }, id, action: 'assign_to_self', present },
+			],
+		] as const
+		for (const [operation, input] of reads) {
+			const read = await runInDurableObject(w.h.store, (_instance, state) => {
+				const ids: unknown[] = []
+				const counting = observedSql(state.storage.sql, (rows) => {
+					for (const row of rows) {
+						if ('content' in row) {
+							ids.push(row.id)
+						}
+					}
+				})
+				let output = operation.run(counting, input as never) as unknown as Record<string, unknown>
+				while (output.status === 'ok' && 'value' in output) {
+					output = output.value as Record<string, unknown>
+				}
+				return { ids, output: JSON.stringify(output) }
+			})
+			expect(read.ids).toContain(huge)
+			expect(read.ids).not.toContain(small)
+			const shown = JSON.parse(read.output) as { items?: AdminReportBody[]; report?: AdminReportBody }
+			const body = shown.report ?? shown.items!.find((item) => item.id === id)!
+			expect(body.statuses.map((status) => status.id)).toEqual([huge])
+		}
+	}, 300_000)
+
+	it("keep a list page's filter text within MAX_FILTER_REQUEST_TEXT, shared by its reports", async () => {
+		const w = await world()
+		// The admin filters "needle", which each status holds at its 9,000th character. Fifty statuses of 10,000
+		// characters share the page's allowance, so each is matched up to the level it gives, before the needle; one
+		// report read alone is matched whole.
+		const filter = await w.h.request('/api/v2/filters', {
+			method: 'POST',
+			headers: { authorization: `Bearer ${w.admin}`, 'content-type': 'application/json' },
+			body: JSON.stringify({ title: 'n', context: ['home'], keywords_attributes: [{ keyword: 'needle' }] }),
+		})
+		expect(filter.status).toBe(200)
+		const status = await seedStatus(w.h.store, {
+			accountId: w.carol,
+			visibility: 'public',
+			content: `<p>${'a '.repeat(4_500)}needle ${'a '.repeat(490)}</p>`,
+		})
+		await seedReports(w.h.store, w.alice.id, w.carol, 50, { statuses: [status] })
+		const [level] = filterTextLimits(Array.from({ length: 50 }, () => MAX_FILTER_TEXT))
+		expect(50 * level!).toBeLessThanOrEqual(MAX_FILTER_REQUEST_TEXT)
+		expect(level).toBeLessThan(9_000)
+		const list = await answer<AdminReportBody[]>(w.h, '/api/v1/admin/reports?limit=100', w.admin)
+		expect(list.body).toHaveLength(50)
+		const matched = (report: AdminReportBody) =>
+			(report.statuses[0] as unknown as { filtered?: unknown[] }).filtered?.length ?? 0
+		expect(list.body.map(matched)).toEqual(list.body.map(() => 0))
+		expect(matched(await reportOf(w.h, list.body[0]!.id, w.admin))).toBe(1)
+	}, 300_000)
 })

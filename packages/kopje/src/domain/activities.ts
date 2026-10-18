@@ -1,3 +1,4 @@
+import { ANSWER_BYTES } from './answer-budget'
 import {
 	addresses,
 	addressingOf,
@@ -15,9 +16,20 @@ import {
 } from './audience'
 import { type DeliveryEnvelope, enqueueActivity, type ReachOf } from './deliveries'
 import { readOperation } from './operation'
+import { actorUriSql, usernameSql } from './profile-bounds'
 import { type NoteQuote, noteQuote } from './quotes'
+import {
+	MAX_PRESENTED_TAGS,
+	MAX_STATUS_MEDIA,
+	MAX_STATUS_MENTION_ROWS,
+	mediaDescriptionSql,
+	mediaUrlSql,
+	pollOptionsSql,
+	tagNameSql,
+} from './status-bounds'
 import { readWindow, singleWindow, windowJson } from './windows'
 import type { Db } from '../db/sql'
+import { utf8Length } from '../platform/dump-format'
 import { httpUrl } from '../platform/http-url'
 import { sha256Hex } from '../platform/sha256'
 
@@ -117,8 +129,9 @@ export type StatusFacts = {
 	quotePolicy: number
 	quote: NoteQuote | null
 	tags: { name: string; href: string }[]
-	media: { url: string; content_type: string | null; description: string }[]
-	mentionNames: Map<string, string>
+	media: { url: string | null; content_type: string | null; description: string }[]
+	// The Mention tags (href, name) the Note shows.
+	mentions: { href: string; name: string }[]
 	// The status's poll, which makes its object a Question.
 	poll: PollFacts | null
 }
@@ -145,7 +158,8 @@ function pollFacts(db: Db, statusId: string): PollFacts | null {
 		ended: number
 		voters_count: number | null
 	}>(
-		'SELECT options, tallies, multiple, hide_totals, expires_at, ended, voters_count FROM polls WHERE status_id = ? AND removed = 0',
+		`SELECT ${pollOptionsSql('options')} AS options, tallies, multiple, hide_totals, expires_at, ended, voters_count
+		FROM polls WHERE status_id = ? AND removed = 0 AND ${pollOptionsSql('options')} IS NOT NULL`,
 		statusId
 	)
 	return row === undefined
@@ -189,14 +203,8 @@ export function statusFacts(db: Db, statusId: string, options: { reached?: boole
 	if (row === undefined) {
 		return null
 	}
-	const mentioned = db.all<{
-		account_id: string
-		uri: string
-		silent: number
-		username: string
-		domain: string | null
-	}>(
-		`SELECT m.account_id, a.uri, m.silent, a.username, a.domain FROM status_mentions m JOIN accounts a ON a.id = m.account_id
+	const mentioned = db.all<{ account_id: string; uri: string; silent: number }>(
+		`SELECT m.account_id, a.uri, m.silent FROM status_mentions m JOIN accounts a ON a.id = m.account_id
 		WHERE m.status_id = ? ORDER BY a.id`,
 		statusId
 	)
@@ -218,6 +226,29 @@ export function statusFacts(db: Db, statusId: string, options: { reached?: boole
 				]
 			: []
 	const { host, origin } = new URL(row.actor_uri)
+	// The Mention tags, hashtags and attachments the Note shows, read through the projections the API presenter reads
+	// them with (status-bounds.ts, profile-bounds.ts), so the Note shows what the Status entity shows (RES-3): at most
+	// MAX_STATUS_MENTION_ROWS mentions that are not silent, by account id; MAX_PRESENTED_TAGS hashtags by name, one
+	// whose name is past its bound left out; MAX_STATUS_MEDIA shown attachments, URLs past their bound as none and
+	// descriptions cut. The addressing (to, cc) and the delivery keep every recipient.
+	const mentionTags = db.all<{ uri: string; username: string; domain: string | null }>(
+		`SELECT ${actorUriSql('a.uri')} AS uri, ${usernameSql('a.username')} AS username, a.domain FROM accounts a
+		WHERE a.id IN (SELECT m.account_id FROM status_mentions m INDEXED BY status_mentions_shown
+			WHERE m.status_id = ?1 AND m.silent = 0 ORDER BY m.account_id LIMIT ${MAX_STATUS_MENTION_ROWS})
+		ORDER BY a.id`,
+		statusId
+	)
+	const tags = db.all<{ name: string }>(
+		`SELECT n.name FROM (SELECT ${tagNameSql('name')} AS name FROM status_tags WHERE status_id = ?1 ORDER BY name
+			LIMIT ${MAX_PRESENTED_TAGS}) n WHERE n.name IS NOT NULL`,
+		statusId
+	)
+	const media = db.all<{ url: string | null; content_type: string | null; description: string }>(
+		`SELECT ${mediaUrlSql('url')} AS url, content_type, ${mediaDescriptionSql('description')} AS description
+		FROM media_attachments INDEXED BY media_attachments_status WHERE status_id = ?1 AND shown = 1
+		ORDER BY position, id LIMIT ${MAX_STATUS_MEDIA}`,
+		statusId
+	)
 	return {
 		id: row.id,
 		uri: row.uri,
@@ -233,14 +264,9 @@ export function statusFacts(db: Db, statusId: string, options: { reached?: boole
 		inReplyToUri: row.in_reply_to_uri,
 		recipients: mentioned.map((m) => ({ accountId: m.account_id, uri: m.uri, silent: m.silent === 1 })),
 		reached,
-		tags: db
-			.all<{ name: string }>('SELECT name FROM status_tags WHERE status_id = ? ORDER BY name', statusId)
-			.map((t) => ({ name: t.name, href: `${origin}/tags/${encodeURIComponent(t.name)}` })),
-		media: db.all<{ url: string; content_type: string | null; description: string }>(
-			'SELECT url, content_type, description FROM media_attachments WHERE status_id = ? AND shown = 1 ORDER BY position, id',
-			statusId
-		),
-		mentionNames: new Map(mentioned.map((m) => [m.uri, `@${m.username}@${m.domain ?? host}`])),
+		tags: tags.map((t) => ({ name: t.name, href: `${origin}/tags/${encodeURIComponent(t.name)}` })),
+		media,
+		mentions: mentionTags.map((m) => ({ href: m.uri, name: `@${m.username}@${m.domain ?? host}` })),
 		poll: pollFacts(db, statusId),
 		quotePolicy: row.quote_policy,
 		quote: noteQuote(db, statusId),
@@ -283,7 +309,7 @@ export function noteOf(facts: StatusFacts): Record<string, unknown> {
 		...(facts.language === null ? {} : { contentMap: { [facts.language]: facts.content } }),
 		// Only http(s) URLs are published (HTML-3).
 		attachment: facts.media.flatMap((m) => {
-			const url = httpUrl(m.url)
+			const url = m.url === null ? null : httpUrl(m.url)
 			return url === null
 				? []
 				: [
@@ -296,9 +322,7 @@ export function noteOf(facts: StatusFacts): Record<string, unknown> {
 					]
 		}),
 		tag: [
-			...facts.recipients
-				.filter((r) => !r.silent)
-				.map((r) => ({ type: 'Mention', href: r.uri, name: facts.mentionNames.get(r.uri) ?? r.uri })),
+			...facts.mentions.map((m) => ({ type: 'Mention', href: m.href, name: m.name })),
 			...facts.tags.map((t) => ({ type: 'Hashtag', href: t.href, name: `#${t.name}` })),
 		],
 		...(facts.poll === null ? {} : questionOf(facts.poll)),
@@ -883,6 +907,11 @@ export const getLegacyObject = readOperation<{ uuid: string; origin: string }, L
 
 export const OUTBOX_PAGE_SIZE = 20
 
+// The bytes of an outbox page's serialized activities at most (RES-3): ANSWER_BYTES less a reserve for the
+// collection page around them, which the Worker builds. Activities are admitted newest first while they fit, the first
+// whatever its size (one Create of a local status, a unit); a page cut there continues from its last activity.
+export const OUTBOX_BYTES = ANSWER_BYTES - 64 * 1024
+
 // Items are serialized JSON: RPC types cannot carry `unknown`.
 export type OutboxPage = { total: number | null; items: string[]; next: string | null }
 
@@ -943,9 +972,20 @@ export const getOutbox = readOperation<{ username: string; before: string | null
 						windowJson(window)
 					)
 		const items: string[] = []
+		let bytes = 0
+		let consumed = 0
+		const admitted = (item: string): boolean => {
+			const size = utf8Length(item) + 1
+			if (bytes + size > OUTBOX_BYTES && items.length > 0) {
+				return false
+			}
+			bytes += size
+			items.push(item)
+			return true
+		}
 		for (const row of rows.slice(0, OUTBOX_PAGE_SIZE)) {
 			if (row.original_uri !== null && row.original_author_uri !== null && row.original_author_id !== null) {
-				items.push(
+				const announce = admitted(
 					JSON.stringify(
 						announceActivity(
 							boostAnnounce(
@@ -964,20 +1004,28 @@ export const getOutbox = readOperation<{ username: string; before: string | null
 						).activity
 					)
 				)
+				if (!announce) {
+					break
+				}
+				consumed++
 				continue
 			}
 			const facts = statusFacts(db, row.id, { reached: false })
-			if (facts !== null) {
-				items.push(JSON.stringify(createActivity(facts).activity))
+			if (facts !== null && !admitted(JSON.stringify(createActivity(facts).activity))) {
+				break
 			}
+			consumed++
 		}
 		const last = rows[OUTBOX_PAGE_SIZE - 1]
+		// Cut by bytes, the page continues from its last activity, before the window's continuation.
 		const next =
-			rows.length > OUTBOX_PAGE_SIZE && last !== undefined
-				? last.id
-				: window.cut
-					? (window.candidates.at(-1)?.id ?? null)
-					: null
+			consumed < Math.min(rows.length, OUTBOX_PAGE_SIZE)
+				? (rows[consumed - 1]?.id ?? null)
+				: rows.length > OUTBOX_PAGE_SIZE && last !== undefined
+					? last.id
+					: window.cut
+						? (window.candidates.at(-1)?.id ?? null)
+						: null
 		return { total: null, items, next }
 	}
 )
@@ -1007,11 +1055,21 @@ export const getFeatured = readOperation<{ username: string }, FeaturedItem[] | 
 		owner.id,
 		PIN_LIMIT
 	)
+	// The Notes within OUTBOX_BYTES (RES-3), in pin order, the first whatever its size; from the first that does not
+	// fit, each pin is shown by its uri alone, as a pin that is not distributable is, and a receiver fetches it.
+	let bytes = 0
+	let full = false
 	return rows.map((row) => {
-		const facts = row.servable === 1 ? statusFacts(db, row.id, { reached: false }) : null
-		return {
-			uri: row.uri,
-			note: facts === null ? null : JSON.stringify({ '@context': contextOf(facts), ...noteOf(facts) }),
+		const facts = row.servable === 1 && !full ? statusFacts(db, row.id, { reached: false }) : null
+		const note = facts === null ? null : JSON.stringify({ '@context': contextOf(facts), ...noteOf(facts) })
+		const size = note === null ? 0 : utf8Length(note) + 1
+		if (note !== null && bytes > 0 && bytes + size > OUTBOX_BYTES) {
+			full = true
 		}
+		if (note === null || full) {
+			return { uri: row.uri, note: null }
+		}
+		bytes += size
+		return { uri: row.uri, note }
 	})
 })

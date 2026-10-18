@@ -3,17 +3,21 @@ import { runInDurableObject } from 'cloudflare:test'
 import { parseFragment } from 'parse5'
 import { describe, expect, it } from 'vitest'
 
-import { sql } from './api-helpers'
+import { setSetting, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { BUILD } from './helpers'
 import { ALICE, setup, type Setup } from './inbox-status-helpers'
 import { MAX_BIO, maxFields } from './profile-fixtures'
 import { observedSql, rowsRead } from './read-helpers'
 import { community, post, remoteAccount } from './status-helpers'
+import { Db } from '../src/db/sql'
+import { createActivity, getFeatured, noteOf, OUTBOX_BYTES, PIN_LIMIT, statusFacts } from '../src/domain/activities'
 import { ANSWER_BYTES } from '../src/domain/answer-budget'
 import { listConversations, MAX_PRESENTED_PARTICIPANTS } from '../src/domain/conversations'
 import { MAX_FILTER_KEYWORD, MAX_FILTER_KEYWORDS, MAX_FILTER_TITLE, MAX_FILTERS } from '../src/domain/filters'
+import { listGroupedNotifications } from '../src/domain/notification-groups'
 import { ACTOR_URI_LIMIT, PROFILE_URL_LIMIT, USERNAME_LIMIT } from '../src/domain/profile-bounds'
+import { getAdminReport } from '../src/domain/reports'
 import {
 	MAX_MEDIA_DESCRIPTION_LENGTH,
 	MAX_REMOTE_OPTION_LENGTH,
@@ -28,6 +32,7 @@ import {
 import { getStatus, getStatuses, statusHistory, statusSource } from '../src/domain/statuses'
 import { parseRemoteStatus } from '../src/federation/remote-status'
 import { utf8Length } from '../src/platform/dump-format'
+import { MAX_LOCAL_ADDRESSED } from '../src/platform/identity-bounds'
 import type { StoreOperation } from '../src/platform/store-kernel'
 import {
 	jsonStringBytes,
@@ -841,6 +846,69 @@ async function measureShapes(fill: Fill): Promise<Record<string, Shape>> {
 	const [talk] = (listed.answer as { items: { accounts: { id: string }[]; last_status: unknown }[] }).items
 	expect(talk!.accounts.map((a) => a.id)).toEqual(participants.toSorted().slice(0, MAX_PRESENTED_PARTICIPANTS))
 	expect(talk!.last_status).not.toBeNull()
+	// A favourite group of alice's with its 8 sample accounts at their bounds, its status the quote, read as a page of
+	// one group.
+	for (let i = 0; i < 8; i++) {
+		await sql(
+			t.store,
+			`INSERT INTO notifications (account_id, type, from_account_id, status_id, created_at, group_key)
+			VALUES (?, 'favourite', ?, ?, ?, 'favourite-maximal-1')`,
+			ALICE,
+			await maximalAccount(t, false, fill),
+			quote,
+			new Date(NOW).toISOString()
+		)
+	}
+	const grouped = await measured(
+		t,
+		listGroupedNotifications as never,
+		{
+			credential: await credential(t),
+			page: { limit: 1 },
+			types: [],
+			excludeTypes: [],
+			groupedTypes: null,
+			includeFiltered: false,
+			expandAccounts: 'full',
+			present: { origin: ORIGIN },
+		} as never
+	)
+	const { next: _next, prev: _prev, ...group } = grouped.answer as Record<string, unknown> & { accounts: unknown[] }
+	expect(group.accounts).toHaveLength(8)
+	// A report of the quoter by alice naming the quote (its first status, past REPORT_STATUS_BYTES alone), assigned to
+	// and resolved by alice (local accounts only), read by alice as the OAuth admin.
+	await sql(t.store, "UPDATE local_accounts SET email = 'alice@kopje.test' WHERE account_id = ?", ALICE)
+	await setSetting(t.store, 'admin_email', 'alice@kopje.test')
+	const adminToken = 'admin-token'
+	await sql(
+		t.store,
+		"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES (?, 'access', 'test', ?, 'admin:read')",
+		await sha256Hex(adminToken),
+		ALICE
+	)
+	const [report] = await sql<{ id: string }>(
+		t.store,
+		`INSERT INTO reports (account_id, target_account_id, status_ids, uri, created_at, assigned_account_id,
+			action_taken_by_account_id)
+		VALUES (?, ?, ?, 'https://kopje.test/actor#reports/maximal', ?, ?, ?) RETURNING CAST(id AS TEXT) AS id`,
+		ALICE,
+		(await sql<{ account_id: string }>(t.store, 'SELECT account_id FROM statuses WHERE id = ?', quote))[0]!.account_id,
+		JSON.stringify([quote, quoted]),
+		new Date(NOW).toISOString(),
+		ALICE,
+		ALICE
+	)
+	const reported = await measured(
+		t,
+		getAdminReport as never,
+		{
+			credential: { tokenHash: await sha256Hex(adminToken), scope: 'admin:read', now: NOW },
+			id: report!.id,
+			present: { origin: ORIGIN },
+		} as never
+	)
+	const shownReport = (reported.answer as { report: { statuses: { id: string }[] } }).report
+	expect(shownReport.statuses.map((status) => status.id)).toEqual([quote])
 	const account = (one.answer as Presented).account
 	return {
 		account: { sqlite: one.profileBytes, json: jsonBytes(account), rows: 1, nodes: nodes(account) },
@@ -848,6 +916,8 @@ async function measureShapes(fill: Fill): Promise<Record<string, Shape>> {
 		quote: shape(await read(t, getStatus as never, quote)),
 		boostOfQuote: shape(pair),
 		conversation: { ...shape({ ...listed, answer: talk }), sqlite: listed.sqliteBytes },
+		group: shape({ ...grouped, answer: group }),
+		report: shape({ ...reported, answer: shownReport }),
 	}
 }
 
@@ -866,6 +936,8 @@ describe('the table of maxima (RES-3)', () => {
 				quote: { sqlite: 4_873_529, json: 5_190_925, rows: 1_710, nodes: 4_536 },
 				boostOfQuote: { sqlite: 4_981_776, json: 5_564_762, rows: 1_763, nodes: 5_439 },
 				conversation: { sqlite: 6_048_097, json: 6_651_414, rows: 1_723, nodes: 4_959 },
+				group: { sqlite: 5_657_219, json: 6_165_029, rows: 1_736, nodes: 4_836 },
+				report: { sqlite: 4_978_009, json: 5_318_285, rows: 1_718, nodes: 4_661 },
 			},
 		],
 		[
@@ -877,6 +949,8 @@ describe('the table of maxima (RES-3)', () => {
 				quote: { sqlite: 4_057_529, json: 4_371_725, rows: 1_710, nodes: 4_536 },
 				boostOfQuote: { sqlite: 4_165_776, json: 4_745_562, rows: 1_763, nodes: 5_439 },
 				conversation: { sqlite: 5_232_097, json: 5_832_214, rows: 1_723, nodes: 4_959 },
+				group: { sqlite: 4_841_219, json: 5_345_829, rows: 1_736, nodes: 4_836 },
+				report: { sqlite: 4_162_009, json: 4_499_085, rows: 1_718, nodes: 4_661 },
 			},
 		],
 		[
@@ -888,6 +962,8 @@ describe('the table of maxima (RES-3)', () => {
 				quote: { sqlite: 6_491_023, json: 4_315_539, rows: 1_710, nodes: 4_536 },
 				boostOfQuote: { sqlite: 6_616_340, json: 4_531_681, rows: 1_763, nodes: 5_439 },
 				conversation: { sqlite: 7_870_431, json: 5_726_888, rows: 1_723, nodes: 4_959 },
+				group: { sqlite: 7_411_273, json: 5_256_883, rows: 1_736, nodes: 4_836 },
+				report: { sqlite: 6_612_573, json: 4_438_804, rows: 1_718, nodes: 4_661 },
 			},
 		],
 	])('measures %s', async (_name, fill, expected) => {
@@ -925,4 +1001,107 @@ describe('the table of maxima (RES-3)', () => {
 		},
 		120_000
 	)
+})
+
+describe('ActivityPub Notes of a local status at its bounds (RES-3)', () => {
+	// A converted local status with every part at its bound,
+	// built as statusFacts and noteOf build the object endpoint's Note, the outbox's Create and the featured
+	// collection's Notes. docs/threat-model.md "Maxima of presented units" states the Note and the Create.
+	it('measures the Note and the Create, within OUTBOX_BYTES, and five Notes of the featured collection', async () => {
+		const t = await setup()
+		const parts = await maximalParts(t)
+		// Addressed to MAX_LOCAL_ADDRESSED accounts, each actor id at ACTOR_URI_LIMIT: the mentions above and more.
+		const base = 950_000_000_000_000_000n
+		const more = MAX_LOCAL_ADDRESSED - parts.mentions.length
+		await sql(
+			t.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO accounts (id, uri, username, domain)
+			SELECT CAST(?2 + i AS TEXT), substr(?3 || (?2 + i) || '/' || ?4, 1, ?5), 'a' || i, ?6 FROM n`,
+			more,
+			String(base),
+			`https://${HOST}/users/`,
+			'u'.repeat(ACTOR_URI_LIMIT),
+			ACTOR_URI_LIMIT,
+			HOST
+		)
+		parts.mentions = [...parts.mentions, ...Array.from({ length: more }, (_, i) => String(base + BigInt(i + 1)))]
+		const ids: string[] = []
+		for (let i = 0; i < PIN_LIMIT; i++) {
+			const id = await storedStatus(t, ALICE, parts)
+			await sql(t.store, 'INSERT INTO status_pins (account_id, status_id) VALUES (?, ?)', ALICE, id)
+			ids.push(id)
+		}
+		const measuredNote = await runInDurableObject(t.store, (_instance, state) => {
+			let sqlite = 0
+			let rows = 0
+			const counting = observedSql(state.storage.sql, (read) => {
+				for (const row of read) {
+					rows++
+					for (const value of Object.values(row)) {
+						sqlite += typeof value === 'string' ? utf8Length(value) : 8
+					}
+				}
+			})
+			const facts = statusFacts(new Db(counting), ids[0]!, { reached: false })!
+			const note = noteOf(facts)
+			return {
+				sqlite,
+				rows,
+				nodes: nodes(note),
+				note: jsonBytes(note),
+				create: jsonBytes(createActivity(facts).activity),
+				tags: facts.tags.length,
+				longest: Math.max(...facts.tags.map((tag) => [...tag.name].length)),
+				mentions: facts.mentions.length,
+				media: facts.media.length,
+			}
+		})
+		expect(measuredNote).toMatchObject({ tags: MAX_PRESENTED_TAGS, mentions: MAX_STATUS_MENTION_ROWS, media: 4 })
+		expect(measuredNote.longest).toBeLessThanOrEqual(MAX_TAG_LENGTH)
+		expect(measuredNote.create).toBeLessThanOrEqual(OUTBOX_BYTES)
+		const featured = await runInDurableObject(t.store, (_instance, state) =>
+			getFeatured.run(state.storage.sql, { username: 'alice' } as never)
+		)
+		// Five such Notes pass the bound: the first ones are shown whole, the rest by their uri.
+		let items = featured as unknown
+		while (!Array.isArray(items)) {
+			items = (items as { value: unknown }).value
+		}
+		const pins = items as { uri: string; note: string | null }[]
+		const featuredBytes = jsonBytes(pins)
+		expect(featuredBytes).toBeLessThanOrEqual(ANSWER_BYTES)
+		const whole = pins.filter((item) => item.note !== null).length
+		expect(whole).toBeGreaterThan(0)
+		expect(whole).toBeLessThan(PIN_LIMIT)
+		expect(pins).toHaveLength(PIN_LIMIT)
+		// Three hashtags far past their bound, as a converted row may hold them, are left out, as the Status entity leaves
+		// them out.
+		const long = await storedStatus(t, ALICE, {
+			...parts,
+			mentions: [],
+			media: [],
+			poll: null,
+			tags: [1, 2, 3].map((i) => `${i}${'x'.repeat(240_000)}`),
+		})
+		const shown = await runInDurableObject(t.store, (_instance, state) => {
+			const facts = statusFacts(new Db(state.storage.sql), long, { reached: false })!
+			return { tags: facts.tags.length, create: jsonBytes(createActivity(facts).activity) }
+		})
+		expect(shown.tags).toBe(0)
+		expect(shown.create).toBeLessThan(200_000)
+		expect({ ...measuredNote, featured: featuredBytes, whole }).toEqual({
+			sqlite: 3_685_367,
+			rows: 1_276,
+			nodes: 2_616,
+			note: 4_220_294,
+			create: 6_276_334,
+			tags: MAX_PRESENTED_TAGS,
+			longest: MAX_TAG_LENGTH,
+			mentions: MAX_STATUS_MENTION_ROWS,
+			media: 4,
+			featured: 4_413_221,
+			whole: 1,
+		})
+	}, 300_000)
 })
