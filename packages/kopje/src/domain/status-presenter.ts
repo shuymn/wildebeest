@@ -29,23 +29,21 @@ import {
 } from './filters'
 import { htmlToPlainText } from './plain-text'
 import { type Poll, presentPolls } from './polls'
-import { actorUriSql, profileUrlSql, usernameSql } from './profile-bounds'
+import { contentSql, MEDIA_URL_LIMIT, sourceTextSql, spoilerSql } from './status-bounds'
 import {
-	contentSql,
-	MAX_STATUS_MEDIA,
-	MAX_STATUS_MENTION_ROWS,
-	MAX_PRESENTED_TAGS,
-	mediaDescriptionSql,
-	mediaMetaSql,
-	MEDIA_URL_LIMIT,
-	mediaUrlSql,
-	sourceTextSql,
-	spoilerSql,
-	statusUriSql,
-	statusUrlSql,
-	tagNameSql,
-} from './status-bounds'
-import type { Db } from '../db/sql'
+	MENTION_COLUMN_MAP,
+	SHOWN_MENTIONS_SQL,
+	SHOWN_TAGS_SQL,
+	shownMediaSql,
+	STATUS_COLUMN_MAP,
+	STATUS_FROM,
+	STATUS_MEDIA_COLUMN_MAP,
+	statusRowBoundSql,
+	TAG_COLUMN_MAP,
+	VIEWER_FLAG_COLUMNS,
+} from './status-rows'
+import { selectSql } from '../db/columns'
+import { type Db, RowCapExceeded, RowMeter } from '../db/sql'
 import { boundedHref } from '../platform/http-url'
 import { remotePlainText } from '../security/html'
 
@@ -61,7 +59,8 @@ import { remotePlainText } from '../security/html'
 // ShallowStatusSerializer: a status's `quote` embeds the quoted status, when the viewer is shown it, as a full status
 // for the same viewer (its flags, filters, media and poll), whose own `quote` is a ShallowQuote (the state and the id
 // of the status it quotes). The quotes are read twice, for the statuses and their originals, then for the quoted
-// statuses, each one query over json_each, never along a chain. A boost shows its original's quote in its `reblog`.
+// statuses, each one query over json_each, never along a chain. A boost shows its original's quote in its `reblog`
+// and has none of its own, as Mastodon never gives a reblog a quote (a quote row attached to a boost row is not read).
 // For a signed-in viewer every status carries `filtered` (REST::StatusSerializer, StatusRelationshipsPresenter): the
 // viewer's active filters that match it, whatever their context and action, as CustomFilter.apply_cached_filters finds
 // them (filters.ts); a boost and its original carry the same. Nothing is left out for a filter: the client decides by
@@ -164,20 +163,6 @@ export type StatusRow = {
 	author_domain: string | null
 }
 
-// in_reply_to_id and in_reply_to_account_id are shown as Mastodon shows them, even when the viewer may not see the
-// parent: they belong to the reply, whose ActivityPub object carries inReplyTo to every recipient anyway, and its
-// author chose to publish them. The parent itself (content, author profile, context entry) stays behind the audience
-// rule. in_reply_to_account_id is the conversation partner carried through self-replies.
-// The text and URLs are bounded (status-bounds.ts, RES-2).
-export const STATUS_COLUMNS = `s.id, ${statusUriSql('s.uri')} AS uri, ${statusUrlSql('s.url')} AS url, s.account_id,
-	s.reblog_of_id, s.in_reply_to_id, s.in_reply_to_account_id, s.visibility, ${spoilerSql('s.spoiler_text')} AS spoiler_text,
-	${contentSql('s.content')} AS content, ${sourceTextSql('s.source_text')} AS source_text, s.sensitive,
-	s.language, s.published_at, s.edited_at, s.replies_count, s.reblogs_count, s.favourites_count, s.quotes_count,
-	s.quote_policy, ${actorUriSql('au.uri')} AS author_uri, ${usernameSql('au.username')} AS author_username,
-	au.domain AS author_domain`
-
-export const STATUS_FROM = 'statuses s JOIN accounts au ON au.id = s.account_id'
-
 // viewer: the viewer (accountId null: anonymous) and the request time, which a poll's expiry is judged at.
 export type PresentOptions = Present & { viewer: ViewerContext }
 
@@ -187,10 +172,6 @@ export type PresentOwnOptions = PresentOptions & {
 	// original.
 	source?: boolean
 }
-
-// The columns presentMedia reads, bounded (status-bounds.ts), for every query that presents media.
-export const MEDIA_COLUMNS = `id, type, ${mediaUrlSql('url')} AS url, ${mediaUrlSql('preview_url')} AS preview_url,
-	${mediaDescriptionSql('description')} AS description, ${mediaMetaSql('meta')} AS meta, focus_x, focus_y`
 
 export type MediaRow = {
 	id: string
@@ -294,7 +275,7 @@ type GraphRow = { id: string; reblog_of_id: string | null }
 
 // The statuses of `ids` with their columns, and the originals of the boosts among them that the viewer may see.
 function statusRows(db: Db, where: string, ...params: SqlStorageValue[]): StatusRow[] {
-	return db.all<StatusRow>(`SELECT ${STATUS_COLUMNS} FROM ${STATUS_FROM} WHERE ${where}`, ...params)
+	return db.all<StatusRow>(`SELECT ${selectSql(STATUS_COLUMN_MAP)} FROM ${STATUS_FROM} WHERE ${where}`, ...params)
 }
 
 function idRows(db: Db, where: string, ...params: SqlStorageValue[]): GraphRow[] {
@@ -319,59 +300,131 @@ function statusGraph<R extends GraphRow>(
 			options.viewer.accountId
 		).map((row) => [row.id, row])
 	)
+	// A boost has no quote of its own (R35: its original's is shown in `reblog`), so only other statuses' are read.
+	const quoting = (from: Iterable<R>) => [...from].flatMap((row) => (row.reblog_of_id === null ? [row.id] : []))
 	const reads = quoteReads(options.viewer)
 	const quotes = new Map(
-		reads.of(db, [...byId.keys()], options.source === true ? ids : []).map((quote) => [quote.status_id, quote])
+		reads.of(db, quoting(byId.values()), options.source === true ? ids : []).map((quote) => [quote.status_id, quote])
 	)
 	const quoted = [...new Set([...quotes.values()].flatMap((quote) => quote.quoted_status_id ?? []))]
 	const unread = quoted.filter((id) => !byId.has(id))
 	if (unread.length > 0) {
-		for (const row of rows(db, 's.id IN (SELECT value FROM json_each(?1))', JSON.stringify(unread))) {
+		const added = rows(db, 's.id IN (SELECT value FROM json_each(?1))', JSON.stringify(unread))
+		for (const row of added) {
 			byId.set(row.id, row)
 		}
-		for (const quote of reads.of(db, unread)) {
+		for (const quote of reads.of(db, quoting(added))) {
 			quotes.set(quote.status_id, quote)
 		}
 	}
 	return { byId, quotes, quoted }
 }
 
-// The statuses whose rows are read together while an answer is admitted: what is read past the budget is at most one
-// chunk of rows at the unit maximum ("Heap at 8 MiB per answer" in docs/threat-model.md); each status is presented
-// and measured on its own, only when admission reaches it.
-const STATUS_CHUNK = 2
+// How statusStream reads the rows of an answer's statuses ("Heap at 8 MiB per answer" in docs/threat-model.md): in
+// chunks of consecutive statuses whose R (statusRowBoundSql in status-rows.ts, a bound of the heap the rows each reads
+// take, as RowMeter counts it) sums to at most `target`, within one window of R_WINDOW and at least one. A chunk of
+// several is read through a RowMeter of `cap`, which only a fault in R passes; past it the chunk is read again one
+// status at a time (a status alone is not capped: its rows are bounded as a unit, "Maxima of presented units").
+export type ChunkPlan = { readonly target: number; readonly cap: number }
 
-// Admission of statuses (RES-3, admit): the statuses of `ids` in traversal order, their rows read STATUS_CHUNK at a
-// time (`chunk`, which a test sets to compare chunked presentation with one whole), each presented as one atomic item
-// (with its boosted original and quoted status) when it is reached, while their JSON fits `budget`, under one
-// presentation. An id with nothing to show is consumed.
+// Pages, contexts, search, histories and lookups: 3 MiB of heap.
+export const PAGE_CHUNKS: ChunkPlan = { target: 3 * 1024 * 1024, cap: 3 * 1024 * 1024 }
+// Grouped notifications and admin reports, which keep the most besides their statuses: 1 MiB.
+export const LARGE_ITEM_CHUNKS: ChunkPlan = { target: 1024 * 1024, cap: 1024 * 1024 }
+
+// R is read for at most this many statuses at a time (a page's limit), and a chunk lies within one window.
+const R_WINDOW = 80
+
+// Admission of statuses (RES-3, admit): the statuses of `ids` in traversal order, their rows read in chunks
+// (statusStream), each presented as one atomic item (with its boosted original and quoted status) when it is reached,
+// while their JSON fits `budget`, under one presentation. An id with nothing to show is consumed.
 export function presentStatusesWithin(
 	db: Db,
 	shared: Presentation,
 	ids: readonly VisibleStatusId[],
 	budget: number,
 	leading: boolean,
-	chunk = STATUS_CHUNK
+	chunks: ChunkPlan | number = PAGE_CHUNKS
 ): Admitted<Status> {
-	return admit(statusStream(db, shared, ids, chunk), budget, leading)
+	return admit(statusStream(db, shared, ids, chunks), budget, leading)
 }
 
 // The statuses of `ids` in order, under one presentation, for an admission (admit) of items that embed them: their
-// rows read STATUS_CHUNK at a time, each status presented only when the stream reaches it, undefined for an id with
-// nothing to show. What the stream holds past what its consumer kept is one chunk of rows.
+// rows read in the chunks `chunks` plans (or, given a number, which a test sets to compare chunked presentation with
+// one whole, that many at a time and unmetered), each status presented only when the stream reaches it, undefined for
+// an id with nothing to show. What the stream holds past what its consumer kept is one chunk of rows. The chunks do
+// not change what is presented: each status is presented under the shared presentation as one whole would.
 export function* statusStream(
 	db: Db,
 	shared: Presentation,
 	ids: readonly VisibleStatusId[],
-	chunk = STATUS_CHUNK
+	chunks: ChunkPlan | number = PAGE_CHUNKS
 ): Generator<Status | undefined, undefined> {
-	for (let next = 0; next < ids.length; next += chunk) {
-		const slice = ids.slice(next, next + chunk)
-		const at = hydrate(db, slice, shared, false)
-		for (const id of slice) {
-			yield at(id)
+	const planned = typeof chunks === 'number' ? fixedChunks(ids, chunks) : plannedChunks(db, shared, ids, chunks.target)
+	for (const chunk of planned) {
+		let at: ((id: string) => Status | undefined) | null = null
+		if (typeof chunks === 'number' || chunk.length === 1) {
+			at = hydrate(db, chunk, shared, false)
+		} else {
+			try {
+				at = hydrate(db.metered(new RowMeter(chunks.cap)), chunk, shared, false)
+			} catch (error) {
+				if (!(error instanceof RowCapExceeded)) {
+					throw error
+				}
+				// R was below what the rows took: it misses a term.
+				console.warn({ event: 'kopje.presenter.row-cap-exceeded', ids: chunk })
+			}
+		}
+		for (const id of chunk) {
+			yield at === null ? hydrate(db, [id], shared, false)(id) : at(id)
 		}
 	}
+}
+
+function* fixedChunks(ids: readonly string[], size: number): Generator<string[]> {
+	for (let next = 0; next < ids.length; next += size) {
+		yield ids.slice(next, next + size)
+	}
+}
+
+// Consecutive statuses of `ids` whose R sums to at most `target`, at least one, R read a window of R_WINDOW statuses at
+// a time as the stream reaches it; a chunk never spans two windows.
+function* plannedChunks(db: Db, shared: Presentation, ids: readonly string[], target: number): Generator<string[]> {
+	const filterRows = shared.filters?.filters.filter((filter) => filter.hasStatuses).length ?? 0
+	for (let next = 0; next < ids.length; next += R_WINDOW) {
+		const window = ids.slice(next, next + R_WINDOW)
+		const bounds = statusRowBounds(db, window, shared.options.viewer.accountId, filterRows)
+		let chunk: string[] = []
+		let sum = 0
+		for (const [i, id] of window.entries()) {
+			const bytes = bounds[i] ?? 0
+			if (chunk.length > 0 && sum + bytes > target) {
+				yield chunk
+				chunk = []
+				sum = 0
+			}
+			chunk.push(id)
+			sum += bytes
+		}
+		if (chunk.length > 0) {
+			yield chunk
+		}
+	}
+}
+
+// R of each status of `ids`, in their order.
+function statusRowBounds(db: Db, ids: readonly string[], viewer: string | null, filterRows: number): number[] {
+	const bounds = Array.from(ids, () => 0)
+	for (const row of db.all<{ k: number; bytes: number }>(
+		statusRowBoundSql(),
+		JSON.stringify(ids),
+		viewer,
+		filterRows
+	)) {
+		bounds[row.k] = row.bytes
+	}
+	return bounds
 }
 
 // One status, bounded as a unit (RES-3, "Maxima of presented units").
@@ -387,18 +440,14 @@ export function presentOwnStatus(db: Db, id: OwnStatusId, options: PresentOwnOpt
 const STATUS_IDS = 'SELECT DISTINCT value FROM json_each(?1)'
 
 // The shown attachments of each status of `ids` (a JSON list), at most MAX_STATUS_MEDIA, through
-// media_attachments_status (see present()).
+// media_attachments_status (see present()), each status's by position.
 function mediaOf(db: Db, ids: string): Map<string, MediaRow[]> {
-	return groupBy(
-		db.all<MediaRow & { status_id: string }>(
-			`SELECT ${MEDIA_COLUMNS}, status_id FROM media_attachments
-			WHERE id IN (SELECT x.id FROM (${STATUS_IDS}) j CROSS JOIN media_attachments x ON x.id IN (SELECT y.id
-				FROM media_attachments y WHERE y.status_id = j.value AND y.shown = 1 ORDER BY y.position
-				LIMIT ${MAX_STATUS_MEDIA}))
-			ORDER BY status_id, position, id`,
-			ids
-		)
+	const rows = db.all<MediaRow & { status_id: string; position: number }>(
+		`SELECT ${selectSql(STATUS_MEDIA_COLUMN_MAP)} FROM media_attachments m
+		WHERE m.id IN (SELECT x.id FROM (${STATUS_IDS}) j CROSS JOIN media_attachments x ON x.id IN (${shownMediaSql('j.value')}))`,
+		ids
 	)
+	return groupBy(rows.sort((a, b) => a.position - b.position || byCodePoints(a.id, b.id)))
 }
 
 type TextRow = Pick<StatusRow, 'spoiler_text' | 'content' | 'source_text' | 'author_domain'>
@@ -455,28 +504,25 @@ function hydrate(
 	// position), status_mentions_shown (mentions that are not silent, migration 0047) and status_tags (names). A
 	// hashtag name past its bound (tagNameSql) among the first ones read is left out rather than replaced by a later
 	// one, so a status holding one shows one fewer: a remote status stores none, and a local one (a name over 256 code
-	// units, which Mastodon also records) only when it sorts before more than MAX_PRESENTED_TAGS others.
+	// units, which Mastodon also records) only when it sorts before more than MAX_PRESENTED_TAGS others. Each status's
+	// rows are put in order in JavaScript (by position, account id and name), so no query sorts the chunk's payload.
 	const media = mediaOf(db, all)
 	const mentions = groupBy(
-		db.all<MentionRow>(
-			`SELECT j.value AS status_id, a.id, ${usernameSql('a.username')} AS username, a.domain,
-				${profileUrlSql('a.url')} AS url, ${actorUriSql('a.uri')} AS uri
-			FROM (${STATUS_IDS}) j CROSS JOIN accounts a
-			WHERE a.id IN (SELECT m.account_id FROM status_mentions m INDEXED BY status_mentions_shown
-				WHERE m.status_id = j.value AND m.silent = 0 ORDER BY m.account_id LIMIT ${MAX_STATUS_MENTION_ROWS})
-			ORDER BY j.value, a.id`,
-			all
-		)
+		db
+			.all<MentionRow>(
+				`SELECT ${selectSql(MENTION_COLUMN_MAP)} FROM (${STATUS_IDS}) j CROSS JOIN accounts a
+				WHERE a.id IN (${SHOWN_MENTIONS_SQL})`,
+				all
+			)
+			.sort((a, b) => byCodePoints(a.id, b.id))
 	)
 	const tags = groupBy(
-		db.all<{ status_id: string; name: string }>(
-			`SELECT j.value AS status_id, ${tagNameSql('t.name')} AS name FROM (${STATUS_IDS}) j CROSS JOIN status_tags t
-			WHERE t.status_id = j.value AND t.name IN (SELECT n.name FROM (SELECT ${tagNameSql('name')} AS name
-				FROM status_tags WHERE status_id = j.value ORDER BY status_tags.name LIMIT ${MAX_PRESENTED_TAGS}) n
-				WHERE n.name IS NOT NULL)
-			ORDER BY j.value, t.name`,
-			all
-		)
+		db
+			.all<{ status_id: string; name: string }>(
+				`SELECT ${selectSql(TAG_COLUMN_MAP)} FROM (${STATUS_IDS}) j CROSS JOIN status_tags t WHERE ${SHOWN_TAGS_SQL}`,
+				all
+			)
+			.sort((a, b) => byCodePoints(a.name, b.name))
 	)
 	const flags = viewerFlags(db, viewerId, all)
 	// R36 for the viewer, of every status presented by its own row (a boost answers denied: its original's is shown).
@@ -697,22 +743,38 @@ function viewerFlags(db: Db, viewerId: string | null, ids: string): ViewerFlags 
 		return { favourited: new Set(), reblogged: new Set(), bookmarked: new Set(), pinned: new Set(), muted: new Set() }
 	}
 	const rows = db.all<{ kind: string; status_id: string }>(
-		`SELECT 'f' AS kind, status_id FROM favourites WHERE account_id = ?1 AND status_id IN (SELECT value FROM json_each(?2))
-		UNION ALL
-		SELECT 'r', reblog_of_id FROM statuses WHERE account_id = ?1 AND reblog_of_id IN (SELECT value FROM json_each(?2))
-		UNION ALL
-		SELECT 'b', status_id FROM bookmarks WHERE account_id = ?1 AND status_id IN (SELECT value FROM json_each(?2))
-		UNION ALL
-		SELECT 'p', value FROM json_each(?2)
-		WHERE EXISTS (SELECT 1 FROM status_pins WHERE account_id = ?1 AND status_id = value)
-		UNION ALL
-		SELECT 'm', ms.id FROM statuses ms
-		WHERE ms.id IN (SELECT value FROM json_each(?2)) AND ${conversationMutedSql('?1', 'ms.thread')}`,
+		`SELECT ${selectSql(VIEWER_FLAG_COLUMNS.columns)} FROM (
+			SELECT 'f' AS kind, status_id FROM favourites WHERE account_id = ?1 AND status_id IN (SELECT value FROM json_each(?2))
+			UNION ALL
+			SELECT 'r', reblog_of_id FROM statuses WHERE account_id = ?1 AND reblog_of_id IN (SELECT value FROM json_each(?2))
+			UNION ALL
+			SELECT 'b', status_id FROM bookmarks WHERE account_id = ?1 AND status_id IN (SELECT value FROM json_each(?2))
+			UNION ALL
+			SELECT 'p', value FROM json_each(?2)
+			WHERE EXISTS (SELECT 1 FROM status_pins WHERE account_id = ?1 AND status_id = value)
+			UNION ALL
+			SELECT 'm', ms.id FROM statuses ms
+			WHERE ms.id IN (SELECT value FROM json_each(?2)) AND ${conversationMutedSql('?1', 'ms.thread')}) f`,
 		viewerId,
 		ids
 	)
 	const of = (kind: string) => new Set(rows.filter((row) => row.kind === kind).map((row) => row.status_id))
 	return { favourited: of('f'), reblogged: of('r'), bookmarked: of('b'), pinned: of('p'), muted: of('m') }
+}
+
+// SQLite's BINARY order of two strings: their UTF-8 bytes, which is their code points' order (JavaScript's `<`, by
+// UTF-16 code units, orders a character past U+FFFF before U+E000 to U+FFFF).
+function byCodePoints(a: string, b: string): number {
+	for (let i = 0, j = 0; i < a.length && j < b.length;) {
+		const x = a.codePointAt(i)!
+		const y = b.codePointAt(j)!
+		if (x !== y) {
+			return x - y
+		}
+		i += x > 0xffff ? 2 : 1
+		j += y > 0xffff ? 2 : 1
+	}
+	return a.length - b.length
 }
 
 function groupBy<T extends { status_id: string }>(rows: T[]): Map<string, T[]> {

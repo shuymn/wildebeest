@@ -26,7 +26,7 @@ import { logAction } from './moderation-log'
 import { notify } from './notifications'
 import { readOperation } from './operation'
 import { actorUriSql, profileUrlSql, usernameSql } from './profile-bounds'
-import { presentation, presentStatusesWithin, type Status, statusStream } from './status-presenter'
+import { LARGE_ITEM_CHUNKS, presentation, type Status, statusStream } from './status-presenter'
 import { accountStatusIds } from './timelines'
 import type { Db } from '../db/sql'
 import { blockedDomain } from '../platform/domain-name'
@@ -366,26 +366,21 @@ function* adminReportStream(
 		const [account, target, assigned, actor] = [...adminAccountStream(db, ids, admin.accountId, present, ids.length)]
 		const ruleIds = new Set(row.rule_ids === null ? [] : (JSON.parse(row.rule_ids) as string[]))
 		const statuses = (shown[i] ?? []).map((status) => status.id)
-		// Statuses are read one at a time ("Heap at 8 MiB per answer" in docs/threat-model.md). The first presented,
-		// whatever its size (a unit); the next ones only while room is left, so a first status that uses up the
-		// allowance stops the report's statuses without reading the next.
-		const one = statusStream(db, shared, statuses, 1)
+		// Statuses are read in chunks of LARGE_ITEM_CHUNKS ("Heap at 8 MiB per answer" in docs/threat-model.md). The
+		// first presented, whatever its size (a unit); the next ones only while room is left in REPORT_STATUS_BYTES, so a
+		// first status that uses up the allowance stops the report's statuses past the rows of its chunk.
+		const stream = statusStream(db, shared, statuses, LARGE_ITEM_CHUNKS)
 		let first: Status | undefined
 		let next = 0
 		while (first === undefined && next < statuses.length) {
-			first = one.next().value
+			first = stream.next().value
 			next++
 		}
 		const used = first === undefined ? 0 : jsonBytes(first) + 1
 		const embedded =
 			first === undefined
 				? []
-				: [
-						first,
-						...(used >= REPORT_STATUS_BYTES
-							? []
-							: presentStatusesWithin(db, shared, statuses.slice(next), REPORT_STATUS_BYTES - used, false, 1).items),
-					]
+				: [first, ...(used >= REPORT_STATUS_BYTES ? [] : admit(stream, REPORT_STATUS_BYTES - used, false).items)]
 		yield {
 			id: row.id,
 			action_taken: row.action_taken_at !== null,

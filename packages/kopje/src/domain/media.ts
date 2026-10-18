@@ -3,7 +3,9 @@ import { actorSnapshot, recordActorUpdate } from './actor-update'
 import { userMediaDeleteOperation, userReadOperation, userWriteOperation } from './auth'
 import { allocateLocalId } from './ids'
 import { mediaDeleteOperation } from './operation'
-import { MEDIA_COLUMNS, type MediaAttachment, type MediaRow, presentMedia } from './status-presenter'
+import { type MediaAttachment, type MediaRow, presentMedia } from './status-presenter'
+import { MEDIA_COLUMN_MAP } from './status-rows'
+import { selectSql } from '../db/columns'
 import type { Db } from '../db/sql'
 import { mediaUrl } from '../platform/media-files'
 import { storedMediaDescription, storedMediaMeta } from '../platform/stored-bounds'
@@ -103,7 +105,7 @@ export function liveMediaSql(m: string, now: string): string {
 
 function ownUpload(db: Db, accountId: string, id: string, now: number): MediaRow | undefined {
 	return db.first<MediaRow>(
-		`SELECT ${MEDIA_COLUMNS} FROM media_attachments m
+		`SELECT ${selectSql(MEDIA_COLUMN_MAP)} FROM media_attachments m
 		WHERE m.id = ?1 AND m.account_id = ?2 AND m.status_id IS NULL AND ${liveMediaSql('m', '?3')}`,
 		id,
 		accountId,

@@ -1,4 +1,5 @@
 import type { QuoteState } from './quotes'
+import { fixedColumns, selectSql } from '../db/columns'
 import type { Db } from '../db/sql'
 
 // Audience and visibility (design §4 "audience and visibility", Mastodon 4.7.3; docs/visibility.md). One module decides
@@ -117,7 +118,7 @@ export function availableLocalSql(l: string): string {
 
 // The same rule for an account `a` with its local_accounts row `l` LEFT JOINed (NULL for a remote account), read
 // from the two rows without another lookup of the account (domain coverage seeks the blocks only): account
-// presentation (accounts.ts ACCOUNT_COLUMNS) and the admin's list of accounts (admin-accounts.ts) read both rows
+// presentation (accounts.ts ACCOUNT_COLUMN_MAP) and the admin's list of accounts (admin-accounts.ts) read both rows
 // anyway.
 export function availableJoinedSql(a: string, l: string): string {
 	return `(${availableLocalSql(l)} AND ${a}.deleted_at IS NULL AND NOT ${individuallySuspendedSql(a)}
@@ -846,6 +847,24 @@ export type QuoteReads = {
 	of(db: Db, statusIds: readonly string[], source?: readonly string[]): QuoteRead[]
 }
 
+// A quote read: the quoting status's id, the state (at most 15 bytes, 'blocked_account') and the quoted status's id.
+export const QUOTE_READ_COLUMNS = fixedColumns(
+	{
+		status_id: 'r.status_id',
+		state: 'r.state',
+		quoted_status_id: `CASE WHEN r.state IN ('accepted', 'blocked_domain', 'blocked_account', 'muted_account')
+			OR (r.stored <> 'accepted' AND r.visible AND r.status_id IN (SELECT value FROM json_each(?4)))
+		THEN r.quoted END`,
+	},
+	{ status_id: 18, state: 15, quoted_status_id: 18 }
+)
+
+// The status a stored quote by `status` names, whatever its state, or NULL: what the presenter may embed, for the
+// bound of the rows it reads (statusRowBoundSql in status-rows.ts), never shown by itself.
+export function quotedStatusIdSql(status: string): string {
+	return `(SELECT q.quoted_status_id FROM main.quotes q WHERE q.status_id = ${status})`
+}
+
 export function quoteReads(viewer: ViewerContext): QuoteReads {
 	return {
 		of(db, statusIds, source = []) {
@@ -854,10 +873,7 @@ export function quoteReads(viewer: ViewerContext): QuoteReads {
 			}
 			// visible is R2 for the quoted status, read once; the state uses it where StatusFilter checks show?.
 			return db.all<QuoteRead>(
-				`SELECT r.status_id, r.state,
-					CASE WHEN r.state IN ('accepted', 'blocked_domain', 'blocked_account', 'muted_account')
-						OR (r.stored <> 'accepted' AND r.visible AND r.status_id IN (SELECT value FROM json_each(?4)))
-					THEN r.quoted END AS quoted_status_id
+				`SELECT ${selectSql(QUOTE_READ_COLUMNS.columns)}
 				FROM (SELECT v.status_id, v.stored, v.quoted, v.visible,
 						CASE WHEN v.stored <> 'accepted' THEN v.stored
 							WHEN v.quoted IS NULL THEN 'deleted'
@@ -965,6 +981,17 @@ export type QuoteApprovalReads = {
 	of(db: Db, statusIds: readonly string[]): Map<string, 'automatic' | 'manual' | 'unknown' | 'denied'>
 }
 
+// The viewer's answer of a status's quote policy: its id and one of four words (at most 9 bytes, 'automatic').
+export const QUOTE_APPROVAL_COLUMNS = fixedColumns(
+	{
+		id: 't.id',
+		current_user: `CASE WHEN ${mayQuoteSql('t', '?2')}
+			THEN CASE WHEN t.account_id = ?2 THEN 'automatic' ELSE ${quotePolicySql('t', '?2')} END
+			ELSE 'denied' END`,
+	},
+	{ id: 18, current_user: 9 }
+)
+
 export function quoteApprovalReads(viewer: ViewerContext): QuoteApprovalReads {
 	return {
 		of(db, statusIds) {
@@ -972,10 +999,7 @@ export function quoteApprovalReads(viewer: ViewerContext): QuoteApprovalReads {
 				return new Map()
 			}
 			const rows = db.all<{ id: string; current_user: 'automatic' | 'manual' | 'unknown' | 'denied' }>(
-				`SELECT t.id, CASE WHEN ${mayQuoteSql('t', '?2')}
-					THEN CASE WHEN t.account_id = ?2 THEN 'automatic' ELSE ${quotePolicySql('t', '?2')} END
-					ELSE 'denied' END AS current_user
-				FROM main.statuses t WHERE t.id IN (SELECT value FROM json_each(?1))`,
+				`SELECT ${selectSql(QUOTE_APPROVAL_COLUMNS.columns)} FROM main.statuses t WHERE t.id IN (SELECT value FROM json_each(?1))`,
 				JSON.stringify(statusIds),
 				viewer.accountId
 			)

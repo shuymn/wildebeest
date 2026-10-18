@@ -2,8 +2,9 @@ import { describe, expect, it } from 'vitest'
 
 import { seedFollows, sql } from './api-helpers'
 import { ALICE, setup, type Setup } from './inbox-status-helpers'
+import { selectSql } from '../src/db/columns'
 import {
-	ACCOUNT_COLUMNS,
+	ACCOUNT_COLUMN_MAP,
 	ACCOUNT_FROM,
 	type Field,
 	MAX_REMOTE_FIELDS,
@@ -49,7 +50,7 @@ async function storeAttachment(t: Setup, ids: readonly string[], attachment: unk
 async function projected(t: Setup, ids: readonly string[]): Promise<{ attachment: string; bytes: number }[]> {
 	return sql<{ attachment: string; bytes: number }>(
 		t.store,
-		`SELECT attachment, length(CAST(attachment AS BLOB)) AS bytes FROM (SELECT ${ACCOUNT_COLUMNS} FROM ${ACCOUNT_FROM}
+		`SELECT attachment, length(CAST(attachment AS BLOB)) AS bytes FROM (SELECT ${selectSql(ACCOUNT_COLUMN_MAP)} FROM ${ACCOUNT_FROM}
 			WHERE a.id IN (SELECT value FROM json_each(?))) ORDER BY id`,
 		JSON.stringify(ids)
 	)

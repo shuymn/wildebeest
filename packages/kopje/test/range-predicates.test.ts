@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 import { NOW } from './app-helpers'
 import { migratedStore } from './helpers'
+import { watchedCursor } from './read-helpers'
 import { listFollowRequests, type PageQuery } from '../src/domain/accounts'
 import { listBlocks, listDomainBlocks, listMutes } from '../src/domain/blocks'
 import { deliveriesReport } from '../src/domain/deliveries'
@@ -60,7 +61,7 @@ const pageItems = (output: unknown) =>
 const READS: Read[] = [
 	{
 		name: 'blocks',
-		operation: listBlocks as never,
+		operation: listBlocks,
 		input: (page) => ({ credential, page, present: PRESENT }),
 		items: pageItems,
 		item: target,
@@ -71,7 +72,7 @@ const READS: Read[] = [
 	},
 	{
 		name: 'mutes',
-		operation: listMutes as never,
+		operation: listMutes,
 		input: (page) => ({ credential, page, present: PRESENT }),
 		items: pageItems,
 		item: target,
@@ -82,7 +83,7 @@ const READS: Read[] = [
 	},
 	{
 		name: 'domain blocks',
-		operation: listDomainBlocks as never,
+		operation: listDomainBlocks,
 		input: (page) => ({ credential, page }),
 		items: pageItems,
 		item: (i) => `d${i}.example`,
@@ -93,7 +94,7 @@ const READS: Read[] = [
 	},
 	{
 		name: 'follow requests',
-		operation: listFollowRequests as never,
+		operation: listFollowRequests,
 		input: (page) => ({ credential, page, present: PRESENT }),
 		items: pageItems,
 		item: target,
@@ -104,7 +105,7 @@ const READS: Read[] = [
 	},
 	{
 		name: 'scheduled statuses',
-		operation: listScheduled as never,
+		operation: listScheduled,
 		input: (page) => ({ credential, page }),
 		items: pageItems,
 		item: scheduledCursor,
@@ -114,7 +115,7 @@ const READS: Read[] = [
 	},
 	{
 		name: 'given-up deliveries',
-		operation: deliveriesReport as never,
+		operation: deliveriesReport,
 		input: (page) => ({ before: page.maxId, limit: page.limit }),
 		items: (output) => (answerOf(output).gaveUp as { id: string }[]).map((d) => d.id),
 		item: integerCursor,
@@ -218,13 +219,7 @@ async function probe(store: StoreStub, r: Read, page: PageQuery): Promise<{ plan
 					.map((row) => row.detail)
 				const entry = { plan, rows: 0 }
 				found.push(entry)
-				return {
-					toArray: () => {
-						const rows = cursor.toArray()
-						entry.rows += cursor.rowsRead
-						return rows
-					},
-				}
+				return watchedCursor(cursor, () => (entry.rows += cursor.rowsRead))
 			},
 		} as unknown as SqlStorage
 		r.operation.run(capturing, r.input(page) as never)

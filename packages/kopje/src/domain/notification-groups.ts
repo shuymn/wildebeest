@@ -22,7 +22,7 @@ import {
 	shownWindow,
 } from './notifications'
 import { presentReport, type Report } from './reports'
-import { presentation, type Status, statusStream } from './status-presenter'
+import { LARGE_ITEM_CHUNKS, presentation, type Status, statusStream } from './status-presenter'
 import { readWindow, windowOf, windowPage } from './windows'
 import type { Db } from '../db/sql'
 
@@ -506,8 +506,8 @@ export const listGroupedNotifications = userReadOperation<ListGroupedInput, Grou
 				viewer,
 				read.groups,
 				pageRange(read, ordered, ascending, page),
-				// One status's rows at a time ("Heap at 8 MiB per answer" in docs/threat-model.md).
-				firstUses(statusIds, statusStream(db, shared, statusIds, 1)),
+				// The statuses' rows in chunks of LARGE_ITEM_CHUNKS ("Heap at 8 MiB per answer" in docs/threat-model.md).
+				firstUses(statusIds, statusStream(db, shared, statusIds, LARGE_ITEM_CHUNKS)),
 				input,
 				budget
 			)

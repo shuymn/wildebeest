@@ -10,9 +10,11 @@ import { ALICE, setup, type Setup } from './inbox-status-helpers'
 import { MAX_BIO, maxFields } from './profile-fixtures'
 import { observedSql, rowsRead } from './read-helpers'
 import { community, post, remoteAccount } from './status-helpers'
+import { heap } from './status-row-fixtures'
 import { Db } from '../src/db/sql'
 import { createActivity, getFeatured, noteOf, OUTBOX_BYTES, PIN_LIMIT, statusFacts } from '../src/domain/activities'
 import { ANSWER_BYTES } from '../src/domain/answer-budget'
+import { type VisibleStatusId } from '../src/domain/audience'
 import { listConversations, MAX_PRESENTED_PARTICIPANTS } from '../src/domain/conversations'
 import { MAX_FILTER_KEYWORD, MAX_FILTER_KEYWORDS, MAX_FILTER_TITLE, MAX_FILTERS } from '../src/domain/filters'
 import { listGroupedNotifications } from '../src/domain/notification-groups'
@@ -29,6 +31,8 @@ import {
 	MAX_TAG_LENGTH,
 	MEDIA_URL_LIMIT,
 } from '../src/domain/status-bounds'
+import { presentation, presentStatusesWithin } from '../src/domain/status-presenter'
+import { statusRowBoundSql } from '../src/domain/status-rows'
 import { getStatus, getStatuses, statusHistory, statusSource } from '../src/domain/statuses'
 import { parseRemoteStatus } from '../src/federation/remote-status'
 import { utf8Length } from '../src/platform/dump-format'
@@ -375,7 +379,7 @@ describe('a stored status is read within its bounds (RES-2)', () => {
 			uri: atLimit(`https://${HOST}/objects/long/`, 4097),
 			url: atLimit(`https://${HOST}/notes/long/`, 4097),
 		})
-		const { answer, longest } = await read(t, getStatus as never, id)
+		const { answer, longest } = await read(t, getStatus, id)
 		const status = answer as Presented
 		expect(status.content).toBe('')
 		expect(status.spoiler_text).toBe(C.repeat(Math.floor((SPOILER_BYTES - 2) / 6)))
@@ -460,7 +464,7 @@ describe('a stored status is read within its bounds (RES-2)', () => {
 			]),
 			JSON.stringify(['a', 'b'])
 		)
-		const { answer, longest } = await read(t, statusHistory as never, id)
+		const { answer, longest } = await read(t, statusHistory, id)
 		const [first, second] = answer as {
 			content: string
 			spoiler_text: string
@@ -498,7 +502,7 @@ describe('a stored status is read within its bounds (RES-2)', () => {
 			id
 		)
 		await sql(t.store, 'UPDATE statuses SET account_id = ? WHERE id = ?', ALICE, id)
-		const source = await read(t, statusSource as never, id)
+		const source = await read(t, statusSource, id)
 		expect(source.answer).toEqual({ id, text: '', spoiler_text: '' })
 		expect(source.longest).toBeLessThanOrEqual(STATUS_CONTENT_BYTES)
 	})
@@ -559,7 +563,7 @@ describe('each per-status cap reads a bounded number of rows (RES-7)', () => {
 		expect(once).toBeLessThan(MAX_STATUS_MENTION_ROWS + MAX_PRESENTED_TAGS + MAX_STATUS_MEDIA + 200)
 		// Repeating the id adds only the rows of reading the repeated ids, not another status's worth.
 		expect(await rows([id, id, id, id])).toBeLessThanOrEqual(once + 8)
-		const { answer } = await read(t, getStatus as never, id)
+		const { answer } = await read(t, getStatus, id)
 		expect(answer).toMatchObject({ media_attachments: [], mentions: [], tags: [] })
 	})
 })
@@ -721,7 +725,7 @@ describe('realistic content is never cut (RES-2)', () => {
 			tags: [],
 			poll: null,
 		})
-		const { answer } = await read(t, getStatus as never, id)
+		const { answer } = await read(t, getStatus, id)
 		expect(answer).toMatchObject({ content: stored, spoiler_text: spoiler })
 	})
 })
@@ -809,8 +813,8 @@ async function measureShapes(fill: Fill): Promise<Record<string, Shape>> {
 		rows: m.rows,
 		nodes: nodes(m.answer),
 	})
-	const one = await read(t, getStatus as never, quoted)
-	const pair = await read(t, getStatus as never, boost)
+	const one = await read(t, getStatus, quoted)
+	const pair = await read(t, getStatus, boost)
 	// Every part at its bound is shown, and every filter with its match.
 	const shown = one.answer as Presented & { filtered: { keyword_matches: string[]; status_matches: string[] }[] }
 	expect(shown.media_attachments).toHaveLength(MAX_STATUS_MEDIA)
@@ -913,7 +917,7 @@ async function measureShapes(fill: Fill): Promise<Record<string, Shape>> {
 	return {
 		account: { sqlite: one.profileBytes, json: jsonBytes(account), rows: 1, nodes: nodes(account) },
 		status: shape(one),
-		quote: shape(await read(t, getStatus as never, quote)),
+		quote: shape(await read(t, getStatus, quote)),
 		boostOfQuote: shape(pair),
 		conversation: { ...shape({ ...listed, answer: talk }), sqlite: listed.sqliteBytes },
 		group: shape({ ...grouped, answer: group }),
@@ -932,12 +936,12 @@ describe('the table of maxima (RES-3)', () => {
 			'escaped',
 			{
 				account: { sqlite: 97_844, json: 121_710, rows: 1, nodes: 36 },
-				status: { sqlite: 2_723_443, json: 2_595_446, rows: 1_381, nodes: 2_267 },
-				quote: { sqlite: 4_873_529, json: 5_190_925, rows: 1_710, nodes: 4_536 },
-				boostOfQuote: { sqlite: 4_981_776, json: 5_564_762, rows: 1_763, nodes: 5_439 },
-				conversation: { sqlite: 6_048_097, json: 6_651_414, rows: 1_723, nodes: 4_959 },
-				group: { sqlite: 5_657_219, json: 6_165_029, rows: 1_736, nodes: 4_836 },
-				report: { sqlite: 4_978_009, json: 5_318_285, rows: 1_718, nodes: 4_661 },
+				status: { sqlite: 2_723_475, json: 2_595_446, rows: 1_381, nodes: 2_267 },
+				quote: { sqlite: 4_873_593, json: 5_190_925, rows: 1_710, nodes: 4_536 },
+				boostOfQuote: { sqlite: 4_981_840, json: 5_564_762, rows: 1_763, nodes: 5_439 },
+				conversation: { sqlite: 6_048_177, json: 6_651_414, rows: 1_724, nodes: 4_959 },
+				group: { sqlite: 5_657_299, json: 6_165_029, rows: 1_737, nodes: 4_836 },
+				report: { sqlite: 4_978_089, json: 5_318_285, rows: 1_719, nodes: 4_661 },
 			},
 		],
 		[
@@ -945,12 +949,12 @@ describe('the table of maxima (RES-3)', () => {
 			'derived',
 			{
 				account: { sqlite: 97_844, json: 121_710, rows: 1, nodes: 36 },
-				status: { sqlite: 2_315_443, json: 2_185_846, rows: 1_381, nodes: 2_267 },
-				quote: { sqlite: 4_057_529, json: 4_371_725, rows: 1_710, nodes: 4_536 },
-				boostOfQuote: { sqlite: 4_165_776, json: 4_745_562, rows: 1_763, nodes: 5_439 },
-				conversation: { sqlite: 5_232_097, json: 5_832_214, rows: 1_723, nodes: 4_959 },
-				group: { sqlite: 4_841_219, json: 5_345_829, rows: 1_736, nodes: 4_836 },
-				report: { sqlite: 4_162_009, json: 4_499_085, rows: 1_718, nodes: 4_661 },
+				status: { sqlite: 2_315_475, json: 2_185_846, rows: 1_381, nodes: 2_267 },
+				quote: { sqlite: 4_057_593, json: 4_371_725, rows: 1_710, nodes: 4_536 },
+				boostOfQuote: { sqlite: 4_165_840, json: 4_745_562, rows: 1_763, nodes: 5_439 },
+				conversation: { sqlite: 5_232_177, json: 5_832_214, rows: 1_724, nodes: 4_959 },
+				group: { sqlite: 4_841_299, json: 5_345_829, rows: 1_737, nodes: 4_836 },
+				report: { sqlite: 4_162_089, json: 4_499_085, rows: 1_719, nodes: 4_661 },
 			},
 		],
 		[
@@ -958,21 +962,83 @@ describe('the table of maxima (RES-3)', () => {
 			'raw',
 			{
 				account: { sqlite: 114_914, json: 117_615, rows: 1, nodes: 36 },
-				status: { sqlite: 4_280_990, json: 2_157_753, rows: 1_381, nodes: 2_267 },
-				quote: { sqlite: 6_491_023, json: 4_315_539, rows: 1_710, nodes: 4_536 },
-				boostOfQuote: { sqlite: 6_616_340, json: 4_531_681, rows: 1_763, nodes: 5_439 },
-				conversation: { sqlite: 7_870_431, json: 5_726_888, rows: 1_723, nodes: 4_959 },
-				group: { sqlite: 7_411_273, json: 5_256_883, rows: 1_736, nodes: 4_836 },
-				report: { sqlite: 6_612_573, json: 4_438_804, rows: 1_718, nodes: 4_661 },
+				status: { sqlite: 4_281_022, json: 2_157_753, rows: 1_381, nodes: 2_267 },
+				quote: { sqlite: 6_491_087, json: 4_315_539, rows: 1_710, nodes: 4_536 },
+				boostOfQuote: { sqlite: 6_616_404, json: 4_531_681, rows: 1_763, nodes: 5_439 },
+				conversation: { sqlite: 7_870_511, json: 5_726_888, rows: 1_724, nodes: 4_959 },
+				group: { sqlite: 7_411_353, json: 5_256_883, rows: 1_737, nodes: 4_836 },
+				report: { sqlite: 6_612_653, json: 4_438_804, rows: 1_719, nodes: 4_661 },
 			},
 		],
-	])('measures %s', async (_name, fill, expected) => {
-		const shapes = await measureShapes(fill)
-		expect(shapes).toEqual(expected)
-		for (const shape of Object.values(shapes)) {
-			expect(shape.json).toBeLessThanOrEqual(LIMIT)
+	])(
+		'measures %s',
+		async (_name, fill, expected) => {
+			const shapes = await measureShapes(fill)
+			expect(shapes).toEqual(expected)
+			for (const shape of Object.values(shapes)) {
+				expect(shape.json).toBeLessThanOrEqual(LIMIT)
+			}
+		},
+		300_000
+	)
+
+	// R (status-rows.ts), which statusStream plans its chunks by, is at least the heap RowMeter counts of the rows each
+	// shape reads, with every part at its bound: the viewer's filters naming each status, her votes in every choice,
+	// and every flag of hers.
+	it('bounds the rows each shape reads by R', async () => {
+		const { t, quoted, quote, boost } = await maximalStatuses('raw')
+		for (const id of [quoted, quote]) {
+			await sql(t.store, 'UPDATE polls SET multiple = 1 WHERE status_id = ?', id)
+			await sql(
+				t.store,
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ? - 1)
+				INSERT INTO poll_votes (poll_id, account_id, choice, generation, created_at) SELECT ?, ?, i, 0, ? FROM n`,
+				MAX_REMOTE_OPTIONS,
+				id,
+				ALICE,
+				new Date(NOW).toISOString()
+			)
 		}
-	})
+		for (const id of [quoted, quote, boost]) {
+			const at = new Date(NOW).toISOString()
+			await sql(t.store, 'INSERT INTO favourites (account_id, status_id, created_at) VALUES (?, ?, ?)', ALICE, id, at)
+			await sql(t.store, 'INSERT INTO bookmarks (account_id, status_id, created_at) VALUES (?, ?, ?)', ALICE, id, at)
+			await sql(
+				t.store,
+				"INSERT INTO statuses (id, uri, account_id, reblog_of_id, visibility, published_at) VALUES (?, ?, ?, ?, 'public', ?)",
+				nextId(),
+				`https://kopje.test/boosts/${id}`,
+				ALICE,
+				id,
+				at
+			)
+		}
+		const measuredShapes = await runInDurableObject(t.store, (_instance, state) => {
+			const real = state.storage.sql
+			const viewer = { accountId: ALICE, now: new Date(NOW).toISOString() }
+			return [quoted, quote, boost].map((id) => {
+				const visible = [id as VisibleStatusId]
+				const shared = presentation(new Db(real), visible, { origin: ORIGIN, viewer })
+				let bytes = 0
+				let rows = 0
+				const counting = observedSql(real, (read) => {
+					rows += read.length
+					bytes += heap(read)
+				})
+				presentStatusesWithin(new Db(counting), shared, visible, Infinity, true, 1)
+				const [bound] = real
+					.exec<{ bytes: number }>(statusRowBoundSql(), JSON.stringify(visible), ALICE, MAX_FILTERS)
+					.toArray()
+				return { bytes, rows, bound: bound!.bytes }
+			})
+		})
+		for (const shape of measuredShapes) {
+			expect(shape.bytes).toBeLessThanOrEqual(shape.bound)
+		}
+		console.info(
+			`R at the maxima (status, quote, boost of a quote): ${measuredShapes.map((m) => `${m.bound} for ${m.bytes} counted in ${m.rows} rows`).join('; ')}`
+		)
+	}, 300_000)
 
 	// The largest atomic items through the real Store RPC (32 MiB per return): the boost of a quote alone, and an
 	// answer of the boost, the quote and the quoted status, which admits the boost and stops at the quote. Raw fill is
@@ -1061,7 +1127,7 @@ describe('ActivityPub Notes of a local status at its bounds (RES-3)', () => {
 		expect(measuredNote.longest).toBeLessThanOrEqual(MAX_TAG_LENGTH)
 		expect(measuredNote.create).toBeLessThanOrEqual(OUTBOX_BYTES)
 		const featured = await runInDurableObject(t.store, (_instance, state) =>
-			getFeatured.run(state.storage.sql, { username: 'alice' } as never)
+			getFeatured.run(state.storage.sql, { username: 'alice' })
 		)
 		// Five such Notes pass the bound: the first ones are shown whole, the rest by their uri.
 		let items = featured as unknown

@@ -10,6 +10,14 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Changed
 
+- A boost no longer shows a quote of its own (a converted row could attach one to the boost): as on Mastodon, a
+  reblog has no `quote`, and its original's quote is shown inside `reblog`.
+- Statuses are read in chunks sized by a bound of the memory their rows take, so a page of 40 statuses takes about a
+  dozen queries instead of about two hundred, and grouped notifications and admin reports no longer read their statuses
+  one at a time. The chunks do not change answers (the dropped quote of a boost above can change which other statuses'
+  text a keyword filter matches, as the answer's text allowance is shared). A chunk whose rows pass that bound is read
+  again one status at a time and logs `kopje.presenter.row-cap-exceeded` with the status ids: it means the bound misses
+  something, so report it.
 - Incoming text has U+0000 removed, and a lone surrogate (half of a character outside the Basic Multilingual Plane)
   becomes U+FFFD, one character where a read showed three: display names, bios, status content, content warnings,
   source text and media descriptions, from remote servers and from the API alike. Display names are cut at 2,048 and

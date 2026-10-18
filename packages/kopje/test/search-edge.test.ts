@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 import { bearer, sql } from './api-helpers'
 import { NOW } from './app-helpers'
+import { watchedCursor } from './read-helpers'
 import { act, community, post, seedStatus } from './status-helpers'
 import { LIBRARY_SOURCE_LIMIT, search, type SearchRequest } from '../src/domain/search'
 import { sha256Hex } from '../src/security/tokens'
@@ -108,16 +109,7 @@ async function rowsRead(
 		const counting = {
 			exec: (query: string, ...params: SqlStorageValue[]) => {
 				const cursor = real.exec(query, ...params)
-				return {
-					toArray: () => {
-						const rows = cursor.toArray()
-						read += cursor.rowsRead
-						return rows
-					},
-					get rowsWritten() {
-						return cursor.rowsWritten
-					},
-				}
+				return watchedCursor(cursor, () => (read += cursor.rowsRead))
 			},
 		} as unknown as SqlStorage
 		const result = search.run(counting, {

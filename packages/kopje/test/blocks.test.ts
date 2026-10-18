@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { type ApiHarness, bearer, json, login, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { BUILD, claimSent } from './helpers'
+import { watchedCursor } from './read-helpers'
 import {
 	act,
 	community,
@@ -773,18 +774,17 @@ describe('domain blocks', () => {
 		const sql = {
 			exec: (query: string, ...params: SqlStorageValue[]) => {
 				const cursor = real.exec(query, ...params)
-				return {
-					toArray: () => {
-						const rows = cursor.toArray()
-						read += cursor.rowsRead
-						return rows
-					},
-					get rowsWritten() {
-						const written = cursor.rowsWritten
-						read += cursor.rowsRead
-						return written
-					},
-				}
+				return Object.defineProperty(
+					watchedCursor(cursor, () => (read += cursor.rowsRead)),
+					'rowsWritten',
+					{
+						get() {
+							const written = cursor.rowsWritten
+							read += cursor.rowsRead
+							return written
+						},
+					}
+				)
 			},
 		} as unknown as SqlStorage
 		return { sql, read: () => read }

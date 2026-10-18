@@ -7,7 +7,7 @@ import { NOW } from './app-helpers'
 import { migratedStore } from './helpers'
 import { PolicyModel } from './policy-model'
 import { accountId, REMOTE_DOMAINS, statusId, statusUri, type World, worldArb, writeWorld } from './policy-world'
-import { rowsRead } from './read-helpers'
+import { rowsRead, watchedCursor } from './read-helpers'
 import { Db } from '../src/db/sql'
 import { getAccounts, listFollows, type PageQuery, relationships, userinfo } from '../src/domain/accounts'
 import { getFeatured, getLocalNote, getOutbox } from '../src/domain/activities'
@@ -806,13 +806,19 @@ const UNRELATED = 1000
 
 // Endpoints allowed more than ALLOWANCE in the unrelated-rows case, each with why. The extra rows are constant: the same
 // with ten times the unrelated rows.
+// R (statusRowBoundSql, status-rows.ts) seeks each status's rows by index once more before its chunk is read, and a
+// seek reads the next index entry, which unrelated rows provide (3 rows with 1,000 or 10,000 unrelated rows).
+const R_SEEKS = 'R (statusRowBoundSql) seeks the rows of each status once more, each seek reading the next index entry'
 const UNRELATED_EXTRA: Record<string, { rows: number; why: string }> = {
 	home: {
-		rows: 1,
+		rows: 3,
 		why:
 			"each followed hashtag's window judges its statuses again through homeFilterSql, and its probe of the viewer's " +
-			'blocks and mutes reads the next index entry, which unrelated accounts provide',
+			`blocks and mutes reads the next index entry, which unrelated accounts provide; and ${R_SEEKS}`,
 	},
+	list: { rows: 2, why: R_SEEKS },
+	notifications: { rows: 1, why: R_SEEKS },
+	'grouped notifications': { rows: 2, why: R_SEEKS },
 }
 
 // What an endpoint showed: the items of a page, the members of a context, the results of a search, the entries of a
@@ -2003,18 +2009,17 @@ async function rowsTouched<I>(store: StoreStub, operation: StoreOperation<I, unk
 		const counting = {
 			exec: (query: string, ...params: SqlStorageValue[]) => {
 				const cursor = real.exec(query, ...params)
-				return {
-					toArray: () => {
-						const rows = cursor.toArray()
-						read += cursor.rowsRead
-						return rows
-					},
-					get rowsWritten() {
-						cursor.toArray()
-						read += cursor.rowsRead
-						return cursor.rowsWritten
-					},
-				}
+				return Object.defineProperty(
+					watchedCursor(cursor, () => (read += cursor.rowsRead)),
+					'rowsWritten',
+					{
+						get() {
+							cursor.toArray()
+							read += cursor.rowsRead
+							return cursor.rowsWritten
+						},
+					}
+				)
 			},
 		} as unknown as SqlStorage
 		operation.run(counting, input)
