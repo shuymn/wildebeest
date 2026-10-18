@@ -1813,7 +1813,8 @@ within its target and is read again one status at a time; the answer is the same
 
 A page of 40 statuses, presented through `presentation` and `presentStatusesWithin`, mean of 20 runs on a loaded
 machine; `test/status-rows.test.ts` ("read an ordinary page of 40 statuses in at most 13 queries", "a context of 200
-statuses reads its statuses in planned chunks") holds the planned queries to their ceilings:
+statuses reads its statuses in planned chunks", "a page of 80 groups reads its statuses in planned chunks") holds the
+planned queries to their ceilings:
 
 | Page                                                                    | Chunks of 2         | Planned            | One chunk          |
 | ----------------------------------------------------------------------- | ------------------- | ------------------ | ------------------ |

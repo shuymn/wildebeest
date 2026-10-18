@@ -24,6 +24,7 @@ import {
 import { selectSql } from '../src/db/columns'
 import { Db, rowHeapBytes, RowMeter } from '../src/db/sql'
 import { ACCOUNT_COLUMN_MAP } from '../src/domain/accounts'
+import { listGroupedNotifications } from '../src/domain/notification-groups'
 import { POLL_COLUMN_MAP } from '../src/domain/polls'
 import { type ChunkPlan, PAGE_CHUNKS } from '../src/domain/status-presenter'
 import { hydrateQueries, PER_ROW_SORTS, statusRowBoundSql } from '../src/domain/status-rows'
@@ -362,6 +363,80 @@ describe('query ceilings (RES-3)', () => {
 		expect(counted.windows).toBe(3)
 		expect(counted.chunks).toBe(3)
 		expect(counted.queries).toBeLessThanOrEqual(60)
+	}, 120_000)
+})
+
+describe('query ceilings of grouped notifications (RES-3)', () => {
+	it('a page of 80 groups reads its statuses in planned chunks', async () => {
+		const { h, f } = await fixture()
+		await sql(h.store, 'DELETE FROM filter_keywords')
+		const tokenHash = await sha256Hex(f.token)
+		const counted = await runInDurableObject(h.store, (_instance, state) => {
+			const real = state.storage.sql
+			// 80 favourite groups, each of one of alice's own statuses (a group's status is the owner's), by remote
+			// accounts.
+			for (let i = 0; i < 80; i++) {
+				const id = nextId()
+				real.exec(
+					`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+					VALUES (?, ?, ?, 'public', '<p>mine</p>', ?)`,
+					id,
+					`https://kopje.test/ap/o/${id}`,
+					f.viewer,
+					VIEWER_NOW
+				)
+				real.exec(
+					`INSERT INTO notifications (account_id, type, from_account_id, status_id, created_at, group_key)
+					VALUES (?, 'favourite', ?, ?, ?, ?)`,
+					f.viewer,
+					f.mentioned[i]!,
+					id,
+					VIEWER_NOW,
+					`favourite-${id}`
+				)
+			}
+			const reads: string[] = []
+			const counting = {
+				exec: (query: string, ...params: SqlStorageValue[]) => {
+					reads.push(query)
+					return watchedCursor(real.exec(query, ...params), () => {})
+				},
+			} as unknown as SqlStorage
+			const result = listGroupedNotifications.run(counting, {
+				credential: { tokenHash, scope: 'read:notifications', now: NOW },
+				page: { limit: 80 },
+				types: [],
+				excludeTypes: [],
+				groupedTypes: null,
+				includeFiltered: false,
+				expandAccounts: 'partial_avatars',
+				present: { origin: ORIGIN },
+			} as never)
+			let answer = result as Record<string, unknown>
+			while (answer.status === 'ok' && 'value' in answer) {
+				answer = answer.value as Record<string, unknown>
+			}
+			return {
+				groups: (answer.notification_groups as unknown[]).length,
+				// The presenter's reads but its authors': R and the hydrate queries, each by its map's select list (the
+				// sample accounts of each group are read by the account map too, apart from the statuses).
+				queries: reads.filter(
+					(query) =>
+						query === statusRowBoundSql() ||
+						Object.entries(hydrateQueries()).some(
+							([name, columns]) => name !== 'accounts' && query.includes(selectSql(columns))
+						)
+				).length,
+				windows: reads.filter((query) => query === statusRowBoundSql()).length,
+				chunks: reads.filter((query) => query.includes('SELECT reblog_of_id FROM statuses WHERE id IN')).length,
+			}
+		})
+		expect(counted.groups).toBe(80)
+		// One window of R and one chunk of 80 small statuses (LARGE_ITEM_CHUNKS), where a chunk of one read each status
+		// apart, about 9 queries each.
+		expect(counted.windows).toBe(1)
+		expect(counted.chunks).toBe(1)
+		expect(counted.queries).toBeLessThanOrEqual(12)
 	}, 120_000)
 })
 
