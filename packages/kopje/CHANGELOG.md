@@ -8,6 +8,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+## [0.1.0-rc.16] - 2026-10-18
+
+A sixteenth release candidate of the first release, published under the npm dist-tag `next`.
+
 ### Changed
 
 - Answers that present statuses stop at a response body of 8 MiB, a whole status at a time; realistic content does
@@ -43,6 +47,11 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - The cutover's conversion stops on a local status that addresses more than 1,000 accounts, naming it
   (`statuses:local-addressing-over-bound:<object id>`), rather than drop any recipient: its Create would not fit an
   outbox page. A post's 500 characters name at most about 170.
+
+### Instance changes
+
+- Store schema: unchanged.
+- `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.15] - 2026-10-18
 
