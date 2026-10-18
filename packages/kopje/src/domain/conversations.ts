@@ -1,8 +1,9 @@
-import { type Account, type Page, type PageQuery, type Present, presentAccountsById } from './accounts'
+import { type Account, accountsOf, type Page, type PageQuery, type Present } from './accounts'
+import { admit, admittedPage, ARRAY_ANSWER_BYTES, firstUses } from './answer-budget'
 import { statusReads, type ViewerContext } from './audience'
 import { userReadOperation, userWriteOperation } from './auth'
 import { participantsSql } from './conversation-rows'
-import { presentStatuses, type Status } from './status-presenter'
+import { presentation, type Status, statusStream } from './status-presenter'
 import { statusCursor } from './statuses'
 import type { Db } from '../db/sql'
 
@@ -112,13 +113,15 @@ export function leaveConversationsWith(db: Db, ownerId: string, accountId: strin
 	)
 }
 
-// The rows as the API shows them: each last status the owner may see (R2), and the participants.
-function presentConversations(
+// The conversations of `rows` in order, for an admission (admit): each one atomic, with its participants and its last
+// status if the owner may see it (R2), presented when the admission reaches it, its accounts and its status read for
+// it alone (one conversation is a chunk).
+function* conversationStream(
 	db: Db,
 	rows: readonly ConversationRow[],
 	viewer: ViewerContext & { readonly accountId: string },
 	present: Present
-): Conversation[] {
+): Generator<Conversation, undefined> {
 	const visible = statusReads(viewer, { viewer: '?1' }).select(
 		db,
 		'visible',
@@ -126,28 +129,24 @@ function presentConversations(
 		viewer.accountId,
 		JSON.stringify(rows.map((row) => row.last_status_id))
 	)
-	const statuses = new Map(
-		presentStatuses(
-			db,
-			visible.map((row) => row.id),
-			{ ...present, viewer }
-		).map((status) => [status.id, status])
+	const shown = new Map(visible.map((row) => [row.id as string, row.id]))
+	const statusIds = [...new Set(rows.flatMap((row) => shown.get(row.last_status_id) ?? []))]
+	const statusOf = firstUses(
+		statusIds,
+		statusStream(db, presentation(db, statusIds, { ...present, viewer }), statusIds)
 	)
-	const participants = rows.map((row) => JSON.parse(row.participants) as string[])
-	const accounts = presentAccountsById(db, [viewer.accountId, ...participants.flat()], present)
-	const owner = accounts.get(viewer.accountId)
-	return rows.map((row, i) => {
-		const others = (participants[i] ?? []).flatMap((id) => {
-			const account = accounts.get(id)
-			return account === undefined ? [] : [account]
-		})
-		return {
+	for (const row of rows) {
+		const participants = JSON.parse(row.participants) as string[]
+		const presented = accountsOf(db, [viewer.accountId, ...participants], present, MAX_PRESENTED_PARTICIPANTS + 1)
+		const owner = presented.next().value
+		const others = [...presented].flatMap((account) => account ?? [])
+		yield {
 			id: row.id,
 			unread: row.unread === 1,
 			accounts: others.length > 0 || owner === undefined ? others : [owner],
-			last_status: statuses.get(row.last_status_id) ?? null,
+			last_status: shown.has(row.last_status_id) ? (statusOf(row.last_status_id) ?? null) : null,
 		}
-	})
+	}
 }
 
 // GET /api/v1/conversations: the viewer's conversations, newest last status first, paged by the last status's id
@@ -168,11 +167,13 @@ export const listConversations = userReadOperation<{ page: PageQuery; present: P
 		if (ascending) {
 			rows.reverse()
 		}
-		return {
-			items: presentConversations(db, rows, viewer, present),
-			newest: rows[0]?.last_status_id ?? null,
-			oldest: rows.at(-1)?.last_status_id ?? null,
-		}
+		const read = { rows, newest: rows[0]?.last_status_id ?? null, oldest: rows.at(-1)?.last_status_id ?? null }
+		return admittedPage(
+			read,
+			ascending,
+			(row) => row.last_status_id,
+			(traversal) => admit(conversationStream(db, traversal, viewer, present), ARRAY_ANSWER_BYTES, true)
+		)
 	}
 )
 
@@ -193,7 +194,7 @@ export function streamedConversation(
 		id,
 		viewer.accountId
 	)
-	return row === undefined ? null : (presentConversations(db, [row], viewer, present)[0] ?? null)
+	return row === undefined ? null : (conversationStream(db, [row], viewer, present).next().value ?? null)
 }
 
 // POST /api/v1/conversations/:id/read and /unread: the viewer's conversation, marked; null when it is not theirs.
@@ -221,7 +222,7 @@ export const markConversation = userWriteOperation<
 		unread ? 1 : 0,
 		nextStreamSeq(db, viewer.accountId)
 	)
-	return row === undefined ? null : (presentConversations(db, [row], viewer, present)[0] ?? null)
+	return row === undefined ? null : (conversationStream(db, [row], viewer, present).next().value ?? null)
 })
 
 // DELETE /api/v1/conversations/:id: the viewer's conversation goes (its statuses stay). Whether it was theirs.

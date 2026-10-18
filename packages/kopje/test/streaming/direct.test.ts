@@ -7,12 +7,13 @@ import { addToConversation } from '../../src/domain/conversations'
 import { runNotificationRequestJobs } from '../../src/domain/notification-requests'
 import { type ApiHarness, bearer, sql } from '../api-helpers'
 import { NOW } from '../app-helpers'
+import { bigStatus } from '../budget-helpers'
 import { BUILD } from '../helpers'
 import { scopedToken } from '../read-helpers'
 import { act, community, follow, getJson, post, remoteAccount, seedStatus, type User } from '../status-helpers'
 import { connect, drained, echo, type Inbox, type StreamMessage, subscribed } from './stream-helpers'
 import { sha256Hex } from '../../src/security/tokens'
-import { STREAM_FAULTS } from '../../src/stream-hub'
+import { STREAM_FAULTS, STREAM_LIMITS } from '../../src/stream-hub'
 
 // The `direct` stream and `notifications_merged` (design "Kopje streaming API" PR 3). `conversation` is sent when a
 // conversation of the viewer changes, as the conversation list presents it (R33: the row of the viewer, R25), by the
@@ -77,6 +78,38 @@ describe('conversation on direct', () => {
 		expect(deleted.status).toBe(200)
 		await drained(h, inbox)
 		expect(inbox.rest()).toEqual([])
+	})
+
+	it('sends each conversation whole, and skips one past the payload bound whole (RES-3)', async () => {
+		const h = await community(['alice', 'bob'])
+		const { alice, bob } = h.users
+		await follow(h, alice, bob.id)
+		const inbox = await subscribed(h, alice.token, 'direct')
+		// A conversation whose last status presents about 0.97 MB, past the 512 KiB of one message, and a small one.
+		const author = await remoteAccount(h.store, 'big')
+		const big = await bigStatus(h, author, NOW, { visibility: 'direct', mentions: [{ accountId: alice.id }] })
+		await runInDurableObject(h.store, (_instance, state) => addToConversation(new Db(state.storage.sql), alice.id, big))
+		const small = await post(h, bob, { status: '@alice hi', visibility: 'direct' })
+		await drained(h, inbox)
+		const listed = await getJson<Conversation[]>(h, '/api/v1/conversations', alice.token)
+		expect(listed.body.map((c) => c.last_status?.id).toSorted()).toEqual([small.id, big].toSorted())
+		const sent = inbox.rest().filter((m) => m.event === 'conversation')
+		expect(sent.map((m) => (JSON.parse(m.payload!) as Conversation).last_status?.id)).toEqual([small.id])
+		expect(JSON.parse(sent[0]!.payload!)).toEqual(listed.body.find((c) => c.last_status?.id === small.id))
+		// Under a larger bound, a change of the big one is sent whole.
+		const bound = STREAM_LIMITS.payloadBytes
+		STREAM_LIMITS.payloadBytes = 2 * 1024 * 1024
+		try {
+			const id = listed.body.find((c) => c.last_status?.id === big)!.id
+			expect((await act(h, alice, `/api/v1/conversations/${id}/read`)).status).toBe(200)
+			await drained(h, inbox)
+			const read = conversations(inbox).filter((c) => c.id === id)
+			// Whole: the status as the list presents it, but the poll, which the stream presents at the real time.
+			const { poll: _poll, ...status } = listed.body.find((c) => c.id === id)!.last_status as Record<string, unknown>
+			expect(read).toMatchObject([{ id, unread: false, last_status: status }])
+		} finally {
+			STREAM_LIMITS.payloadBytes = bound
+		}
 	})
 
 	it('coalesces changes written before a turn into one message with the latest state', async () => {

@@ -3,7 +3,7 @@ import { expect } from 'vitest'
 import { type ApiHarness, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { MAX_BIO, maxFields } from './profile-fixtures'
-import { remoteAccount, seedStatus } from './status-helpers'
+import { remoteAccount, type SeedStatus, seedStatus } from './status-helpers'
 import { ANSWER_BYTES } from '../src/domain/answer-budget'
 import { utf8Length } from '../src/platform/dump-format'
 
@@ -24,7 +24,7 @@ export async function bigStatus(
 	h: ApiHarness,
 	author: string,
 	published: number,
-	extra: { tags?: string[]; inReplyToId?: string } = {}
+	extra: Partial<Pick<SeedStatus, 'tags' | 'inReplyToId' | 'visibility' | 'mentions'>> = {}
 ): Promise<string> {
 	const id = await seedStatus(h.store, {
 		accountId: author,
