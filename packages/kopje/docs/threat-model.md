@@ -1338,8 +1338,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `favourited_by`, `reblogged_by`) select ids for their window and read the profiles of the page only
   (`test/account-answer-bytes.test.ts`, `test/admin-accounts.test.ts`). _Enforced (main)_ for answers of many accounts
   (a list's members and endorsements with `limit=0`, familiar followers): the whole response body is at most
-  `ANSWER_BYTES` (8 MiB, `src/domain/answer-budget.ts`), its own JSON reserved first, only an answer's first account standing alone past it;
-  accounts are read in chunks of 50 that stop once it is reached, so at most one chunk (about 6 MB) is read past it. A
+  `ANSWER_BYTES` (8 MiB, `src/domain/answer-budget.ts`), its own JSON reserved first, only an answer's first account
+  standing alone past it; accounts are read in chunks of 50 that stop once it is reached, so at most one chunk (about
+  6 MB) is read past it. A
   `limit=0` answer cut there links `next` to the rest with `max_id`, a deliberate deviation (Mastodon ignores `max_id`
   with `limit=0`). Familiar followers share the bytes among the requested accounts with followers to show, in rounds
   that pass what one leaves unused to the others, so the answer does not depend on their order (`presentAccountsWithin`
@@ -1351,13 +1352,13 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   [response-inventory.md](response-inventory.md). Items are admitted whole in traversal order, the first whatever its
   size, each atomic item (a status with its boosted original and quoted status) presented and measured only when it
   is reached, its rows read in chunks of 2 statuses, so what is held past the admitted answer is one chunk of rows and
-  one item at their maxima ("Heap at 8 MiB per answer"). Id-cursor status pages
-  (home, public, hashtag and list timelines, account statuses, bookmarks, favourites, quotes) cut there are `Page.cut`
-  and continue from their last admitted status in traversal order, `min_id` walking oldest first; a candidate-window
-  continuation is kept only when no status was left out by bytes before it. Pinned statuses (`pinned=true`) are a
-  limit: their answers carry no paging links, cut or not, since a status-id cursor cannot follow pin order; `limit`
-  caps the count, a client's bounds stay Mastodon's status-id bounds, and an answer that reaches the budget shows the
-  pins that fit, in pin order. An account pins few statuses, which clients fetch in one request. A context gives the ancestors half,
+  one item at their maxima ("Heap at 8 MiB per answer"). Id-cursor status pages (home, public, hashtag and list
+  timelines, account statuses, bookmarks, favourites, quotes) cut there are `Page.cut` and continue from their last
+  admitted status in traversal order, `min_id` walking oldest first; a candidate-window continuation is kept only when
+  no status was left out by bytes before it. Pinned statuses (`pinned=true`) are a limit: their answers carry no
+  paging links, cut or not, since a status-id cursor cannot follow pin order; `limit` caps the count, a client's
+  bounds stay Mastodon's status-id bounds, and an answer that reaches the budget shows the pins that fit, in pin
+  order. An account pins few statuses, which clients fetch in one request. A context gives the ancestors half,
   nearest first, and the descendants the rest; an edit history admits the newest versions; `GET /api/v1/statuses`
   leaves out the ids past the budget; search, its resolved account included, and the account search return fewer
   results (offset endpoints); a profile web page shares the budget between its account and statuses. One presentation
@@ -1365,9 +1366,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   answer's candidates in a preparation pass, so chunked presentation matches as one whole presentation does, and
   matches each quoted status once. When the viewer has keyword filters, that pass reads every candidate's searchable
   text (content, source, poll choices, media descriptions) in chunks of 4 statuses: its memory is one chunk, and its
-  work is bounded by the candidate caps (a context's 8,192), not by the answer budget, as the unchunked presentation's
-  was (`src/domain/answer-budget.ts`, `presentation` and `presentStatusesWithin` in `src/domain/status-presenter.ts`;
-  `test/answer-budgets.test.ts`). `test-node/raw-presenters.test.ts` reads the program with TypeScript's parser and
+  work is bounded by the candidate caps (a context's 8,192), not by the answer budget (`src/domain/answer-budget.ts`,
+  `presentation` and `presentStatusesWithin` in `src/domain/status-presenter.ts`; `test/answer-budgets.test.ts`).
+  `test-node/raw-presenters.test.ts` reads the program with TypeScript's parser and
   fails on an import, re-export or namespace access of a raw presenter (`presentStatuses`, `presentAccountsById`,
   `presentAccount`) outside its module, but for the exact list of modules the inventory names as left for RB2
   (notifications, notification requests, grouped notifications, conversations, reports, admin account lists, blocks

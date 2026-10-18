@@ -32,7 +32,8 @@ two lists agree).
 | Operation                                                                   | Mechanism                                                                     | Continuation | PR   | Exemption                     |
 | --------------------------------------------------------------------------- | ----------------------------------------------------------------------------- | ------------ | ---- | ----------------------------- |
 | `homeTimeline`, `listTimeline`, `publicTimeline`, `tagTimeline`             | Budget                                                                        | Id cursor    | RB1b |                               |
-| `accountStatuses` (pinned included), `bookmarksList`, `favouritesList`      | Budget                                                                        | Id cursor    | RB1b |                               |
+| `accountStatuses`, `bookmarksList`, `favouritesList`                        | Budget                                                                        | Id cursor    | RB1b |                               |
+| `accountStatuses` with `pinned=true`                                        | Budget: the pins that fit, in pin order                                       | None         | RB1b |                               |
 | `statusQuotes`                                                              | Budget                                                                        | Id cursor    | RB1b |                               |
 | `statusContext`                                                             | Budget: ancestors on half, nearest first; descendants on the rest, in order   | None         | RB1b |                               |
 | `statusHistory`                                                             | Budget: newest revisions first, returned oldest first                         | None         | RB1b |                               |
