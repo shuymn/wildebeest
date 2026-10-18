@@ -379,6 +379,13 @@ describe('convert and verify-conversion', () => {
 				'accounts',
 			],
 			['an actor type changes', "UPDATE accounts SET actor_type = 'Person' WHERE actor_type = 'Service'", 'accounts'],
+			// A URL within its stored bound is kept (src/platform/stored-bounds.ts).
+			['a remote profile loses its URL', 'UPDATE accounts SET url = NULL WHERE domain IS NOT NULL', 'accounts'],
+			[
+				'a remote status loses its URL',
+				'UPDATE statuses SET url = NULL WHERE url IS NOT NULL AND reblog_of_id IS NULL',
+				'statuses',
+			],
 			['an alias is dropped', "UPDATE local_accounts SET also_known_as = '[]'", 'keys'],
 			['the default visibility changes', "UPDATE local_accounts SET default_visibility = 'public'", 'keys'],
 			['the default sensitivity changes', 'UPDATE local_accounts SET default_sensitive = 0', 'keys'],

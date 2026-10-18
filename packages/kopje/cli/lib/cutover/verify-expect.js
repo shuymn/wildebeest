@@ -31,6 +31,7 @@ import {
 	storedMediaLink,
 	storedMediaUrl,
 	storedProfileUrl,
+	storedStatusUrl,
 	storedText,
 } from './kopje-runtime.js'
 
@@ -496,6 +497,8 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 			// Unset: a local account stays undiscoverable, as legacy showed and published it (false); a remote one is unknown,
 			// as Kopje stores a fetched actor that omits it (src/federation/remote-actor.ts).
 			typeof p.discoverable === 'boolean' ? (p.discoverable ? 1 : 0) : isLocal ? 0 : null,
+			// A remote profile's URL, as the Worker stores it (none past its bound).
+			isLocal ? null : storedProfileUrl(href(p.url)),
 		])
 		if (!isLocal) {
 			put('raw', `account ${uri}`, String(actor.properties))
@@ -632,6 +635,8 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 			published,
 			languageOf(p),
 			updated !== published ? updated : null,
+			// A remote status's url, as the Worker stores it (none past its bound).
+			isLocal ? null : storedStatusUrl(href(p.url)),
 			[...new Set(hashtags.filter((x) => x !== ''))].sort().map((name) => [name, listed]),
 		])
 
