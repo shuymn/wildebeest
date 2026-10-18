@@ -18,6 +18,16 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   text a keyword filter matches, as the answer's text allowance is shared). A chunk whose rows pass that bound is read
   again one status at a time and logs `kopje.presenter.row-cap-exceeded` with the status ids: it means the bound misses
   something, so report it.
+- Incoming text has U+0000 removed, and a lone surrogate (half of a character outside the Basic Multilingual Plane)
+  becomes U+FFFD, one character where a read showed three: display names, bios, status content, content warnings,
+  source text and media descriptions, from remote servers and from the API alike. Display names are cut at 2,048 and
+  media descriptions at 10,000 code points, as Mastodon counts them, where they were cut by UTF-16 code units.
+- A post whose text is only U+0000 is refused as blank, as an edit is.
+- `kopje-admin convert` stores display names, profile, status and media URLs, media descriptions and the attachments
+  of earlier versions as the Worker stores them, which is what the API already showed: a URL past its bound becomes
+  empty (null for a profile or status URL), a long text is cut, and U+0000 is removed from text. Each change is
+  counted among the normalized values as `stored:<table>.<column>`; `edits:media-field-over-bound` is now
+  `stored:status_edits.media_json`. Verification expects the same values.
 
 ### Fixed
 

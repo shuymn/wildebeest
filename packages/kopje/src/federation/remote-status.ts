@@ -6,7 +6,6 @@ import { isConversationId } from '../domain/conversation-rows'
 import { languageOf } from '../domain/language'
 import { MAX_REMOTE_OPTION_LENGTH, MAX_REMOTE_OPTIONS, type RemotePollInput } from '../domain/polls'
 import {
-	MAX_MEDIA_DESCRIPTION_LENGTH,
 	MAX_SPOILER_LENGTH,
 	MAX_STATUS_AUDIENCE,
 	MAX_STATUS_MEDIA,
@@ -18,13 +17,13 @@ import {
 	type RemoteQuotePolicyInput,
 	type RemoteStatusInput,
 } from '../domain/remote-statuses'
-import { MEDIA_URL_LIMIT } from '../domain/status-bounds'
 import { MAX_URL_LENGTH } from '../domain/status-text'
 import { hashtagObjectName } from '../domain/tag-name'
 import { httpUrl } from '../platform/http-url'
 import { STATUS_URI_LIMIT, withinIdentityBound } from '../platform/identity-bounds'
 import { withinJsonBounds } from '../platform/json-bounds'
-import { cutJsonString, remoteHtmlText, sanitizeRemoteContent, SPOILER_BYTES } from '../security/html'
+import { storedMediaDescription, storedMediaLink, storedText } from '../platform/stored-bounds'
+import { cutCodeUnits, cutJsonString, remoteHtmlText, sanitizeRemoteContent, SPOILER_BYTES } from '../security/html'
 
 // Remote statuses as Mastodon 4.7.3 reads them (ActivityPub::Parser::StatusParser and MediaAttachmentParser): compacted
 // JSON with the ActivityStreams context, values as strings, objects with an id, or arrays of either. Note and Question
@@ -162,11 +161,6 @@ function focusOf(value: unknown): { x: number; y: number } | null {
 	return valid(x) && valid(y) ? { x, y } : null
 }
 
-// A media URL within MEDIA_URL_LIMIT (RES-2), else none.
-function mediaUrl(url: string | null): string | null {
-	return url !== null && url.length <= MEDIA_URL_LIMIT ? url : null
-}
-
 // Create#process_attachments: links (an href) are preview cards, not media; at most MAX_STATUS_MEDIA with a usable url.
 function mediaOf(object: Json): RemoteMediaInput[] {
 	const media: RemoteMediaInput[] = []
@@ -177,7 +171,7 @@ function mediaOf(object: Json): RemoteMediaInput[] {
 		if (!isObject(attachment) || attachment.href !== undefined) {
 			continue
 		}
-		const url = mediaUrl(urlOf(attachment.url))
+		const url = storedMediaLink(urlOf(attachment.url))
 		if (url === null) {
 			continue
 		}
@@ -186,10 +180,10 @@ function mediaOf(object: Json): RemoteMediaInput[] {
 		media.push({
 			type: mediaType(attachment.type, attachment.mediaType),
 			url,
-			previewUrl: mediaUrl(
+			previewUrl: storedMediaLink(
 				httpString(typeof icon === 'string' ? icon : isObject(icon) ? (text(icon.url) ?? null) : null)
 			),
-			description: description.slice(0, MAX_MEDIA_DESCRIPTION_LENGTH),
+			description: storedMediaDescription(description),
 			focus: focusOf(attachment.focalPoint),
 			width: dimension(attachment.width),
 			height: dimension(attachment.height),
@@ -232,7 +226,8 @@ function isoOf(value: unknown): string | null {
 // ActivityPub::Parser::PollParser: the poll of a Question, from its anyOf (multiple) or oneOf items, each a choice by
 // its name (or content) with its votes in replies.totalItems; it ends when closed says (a time, or now for any other
 // true value), else at endTime. Choices without a name are left out with their votes. At most MAX_REMOTE_OPTIONS
-// choices, each cut to MAX_REMOTE_OPTION_LENGTH code units (RES-4). null: not a poll.
+// choices, each well-formed (a lone surrogate becomes U+FFFD) and cut to MAX_REMOTE_OPTION_LENGTH code units without
+// splitting a surrogate pair (RES-4); a choice so changed is marked cut, as a vote could not name it. null: not a poll.
 function pollOf(object: Json): RemotePollInput | null {
 	const items = Array.isArray(object.anyOf) ? object.anyOf : Array.isArray(object.oneOf) ? object.oneOf : null
 	if (!typeIs(object.type, ['Question']) || items === null) {
@@ -249,10 +244,11 @@ function pollOf(object: Json): RemotePollInput | null {
 		if (title === null || !isObject(item)) {
 			continue
 		}
-		if (title.length > MAX_REMOTE_OPTION_LENGTH) {
+		const kept = cutCodeUnits(title.toWellFormed(), MAX_REMOTE_OPTION_LENGTH)
+		if (kept !== title) {
 			cut.push(options.length)
 		}
-		options.push(title.slice(0, MAX_REMOTE_OPTION_LENGTH))
+		options.push(kept)
 		tallies.push((isObject(item.replies) ? count(item.replies.totalItems) : null) ?? 0)
 	}
 	if (options.length === 0) {
@@ -365,7 +361,7 @@ export function parseRemoteStatus(
 	} else {
 		html = languageString(object, 'content') ?? ''
 	}
-	const content = sanitizeRemoteContent(html)
+	const content = sanitizeRemoteContent(storedText(html))
 	const { mentions, tags } = tagsOf(object)
 	const inReplyTo = idOf(object.inReplyTo)
 	// Mastodon's `conversation` (ActivityPub::Activity::Create reads it, and not `context`): any identifier, a tag: URI
@@ -377,7 +373,9 @@ export function parseRemoteStatus(
 		attributedTo: idOf(asArray(object.attributedTo)[0]),
 		content,
 		text: remoteHtmlText(content),
-		spoilerText: converted ? '' : cutJsonString((summary ?? '').slice(0, MAX_SPOILER_LENGTH), SPOILER_BYTES),
+		spoilerText: converted
+			? ''
+			: cutJsonString(cutCodeUnits(storedText(summary ?? ''), MAX_SPOILER_LENGTH), SPOILER_BYTES),
 		sensitive: object.sensitive === true,
 		language: languageOf(object),
 		published: timeOf(object.published),

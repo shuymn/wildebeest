@@ -7,7 +7,8 @@ import { type MediaAttachment, type MediaRow, presentMedia } from './status-pres
 import { MEDIA_COLUMN_MAP } from './status-rows'
 import { selectSql } from '../db/columns'
 import type { Db } from '../db/sql'
-import { mediaPath } from '../platform/media-files'
+import { mediaUrl } from '../platform/media-files'
+import { storedMediaDescription, storedMediaMeta } from '../platform/stored-bounds'
 
 // Local media attachments (B4b). An upload takes four Store calls, because re-encoding and R2 are external I/O the
 // Store does not do:
@@ -267,11 +268,11 @@ export const completeMedia = userWriteOperation<CompleteMediaInput, MediaAttachm
 			`UPDATE media_attachments SET url = ?, preview_url = ?, content_type = ?, meta = ?, description = ?,
 				focus_x = ?, focus_y = ?, processed = 1, gc_at = ?
 			WHERE id = ?`,
-			`${origin}${mediaPath(row.token, 'full', input.contentType)}`,
-			`${origin}${mediaPath(row.token, 'small', input.contentType)}`,
+			mediaUrl(origin, row.token, 'full', input.contentType),
+			mediaUrl(origin, row.token, 'small', input.contentType),
 			input.contentType,
-			JSON.stringify({ original: input.original, small: input.small }),
-			input.description,
+			storedMediaMeta(JSON.stringify({ original: input.original, small: input.small })),
+			storedMediaDescription(input.description),
 			input.focus.x,
 			input.focus.y,
 			iso(input.now + DETACHED_GRACE_MS),
@@ -384,7 +385,7 @@ export const updateMedia = userWriteOperation<
 		`UPDATE media_attachments SET description = COALESCE(?, description), focus_x = COALESCE(?, focus_x),
 				focus_y = COALESCE(?, focus_y)
 			WHERE id = ?`,
-		changes.description ?? null,
+		changes.description === undefined ? null : storedMediaDescription(changes.description),
 		changes.focus?.x ?? null,
 		changes.focus?.y ?? null,
 		id

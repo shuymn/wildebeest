@@ -1414,7 +1414,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   the budgets. Maxima of each presented shape: "Maxima of presented units" below (`test/status-bounds.test.ts`).
 - **RES-4: stored derived data is bounded.** Snapshots, the KV cache, the spool and deliveries each have a size cap, a
   count cap or an expiry with a sweeper. _Enforced (main)_ for remote statuses: one
-  status stores at most 4 attachments (Mastodon's limit) with 10,000 code units of description each, 100 hashtags
+  status stores at most 4 attachments (Mastodon's limit) with 10,000 code points of description each, 100 hashtags
   of at most 256 code units, 200 `status_mentions` rows (local accounts first; 100 `Mention` tags and 1,000 `to` and
   `cc` entries are read; a redelivery to a personal inbox keeps the bound, its owner taking a remote recipient's
   place, and so does an edit of a public or unlisted status that newly mentions and addresses a local account), 10,000 code units of content warning, and content cut at 50,000 code units before sanitizing; its history

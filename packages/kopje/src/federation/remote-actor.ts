@@ -3,17 +3,18 @@ import { type Actor, getActorTypeName, type Image, isActor, Link, lookupObject }
 
 import { isTransientLoadError, loadFailureOf } from './loader'
 import type { RemoteActorInput } from '../domain/inbox'
-import { ACTOR_URI_LIMIT, DISPLAY_NAME_LIMIT, PROFILE_URL_LIMIT } from '../domain/profile-bounds'
+import { ACTOR_URI_LIMIT } from '../domain/profile-bounds'
 import { hostDomain } from '../platform/domain-name'
 import { httpUrl } from '../platform/http-url'
 import { isRemoteUsername, isStorableActorId } from '../platform/identity-bounds'
+import { storedDisplayName, storedProfileUrl, storedText } from '../platform/stored-bounds'
 import { sanitizeRemoteBio } from '../security/html'
 
 // Remote actors as Kopje stores them: fetched through the safe loader (NET-1, ID-8), parsed by Fedify's lookupObject,
 // which checks the parsed id against the document's origin (ID-2), and reduced to bounded, safe columns.
 
-// Raw caps (RES-1): the display name is plain text and is cut (DISPLAY_NAME_LIMIT), as Mastodon cuts what it
-// receives.
+// Raw caps (RES-1): the display name is plain text and is cut (storedDisplayName), as Mastodon cuts what it
+// receives. Text is stored as platform/stored-bounds.ts storedText writes it.
 // Actor ids and inbox URLs (RES-6): a delivery target is an inbox and, for a silent recipient, an actor id, so their
 // length bounds a target. This cap is Kopje's own interoperability policy, not another server's behaviour: Mastodon
 // sets no length limit, and Misskey stores inbox URLs in 512-character columns. Real servers use far shorter URLs.
@@ -71,11 +72,10 @@ function text(value: string | { toString(): string } | null | undefined): string
 	return value === null || value === undefined ? null : value.toString()
 }
 
-// A profile URL (url, icon, image): http(s) (HTML-3) and at most PROFILE_URL_LIMIT long, else none, as an invalid one.
+// A profile URL (url, icon, image): http(s) (HTML-3) and within its stored bound, else none, as an invalid one.
 function href(value: URL | Link | null | undefined): string | null {
 	const target = value instanceof Link ? value.href : value
-	const url = httpUrl(target?.href ?? null)?.href ?? null
-	return url !== null && url.length <= PROFILE_URL_LIMIT ? url : null
+	return storedProfileUrl(httpUrl(target?.href ?? null)?.href ?? null)
 }
 
 // Icons and headers are taken only when embedded: a reference would cost another fetch per actor (RES-6).
@@ -141,8 +141,8 @@ export async function remoteActorInput(actor: Actor, document: unknown): Promise
 		username,
 		domain: hostDomain(uri.href),
 		actorType: getActorTypeName(actor),
-		displayName: (text(actor.name) ?? '').slice(0, DISPLAY_NAME_LIMIT),
-		note: sanitizeRemoteBio(text(actor.summary) ?? ''),
+		displayName: storedDisplayName(text(actor.name) ?? ''),
+		note: sanitizeRemoteBio(storedText(text(actor.summary) ?? '')),
 		url: href(actor.url),
 		avatarUrl: await imageUrl(() => images.getIcon(options)),
 		headerUrl: await imageUrl(() => images.getImage(options)),

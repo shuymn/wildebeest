@@ -6,7 +6,7 @@ import { promisify } from 'node:util'
 
 import { describe, expect, it } from 'vitest'
 
-import { convert, exportOf, opened, verify, workspace } from './cutover-helpers.js'
+import { convert, exportOf, opened, rewriteExport, verify, workspace } from './cutover-helpers.js'
 import {
 	ACTOR_URI_LIMIT,
 	cutJsonString,
@@ -307,17 +307,8 @@ describe('HTML is never cut silently', () => {
 	})
 
 	// Replaces `from` with `to` in every file of the export; returns how many files held it.
-	const replacedIn = async (exportPath: string, from: string, to: string) => {
-		let replaced = 0
-		for (const name of (await readdir(exportPath)).filter((n) => n.endsWith('.sql'))) {
-			const text = await readFile(join(exportPath, name), 'utf8')
-			if (text.includes(from)) {
-				await writeFile(join(exportPath, name), text.replaceAll(from, to))
-				replaced++
-			}
-		}
-		return replaced
-	}
+	const replacedIn = (exportPath: string, from: string, to: string) =>
+		rewriteExport(exportPath, (text) => (text.includes(from) ? text.replaceAll(from, to) : undefined))
 
 	it('stops on status text over its bounds unless truncation is accepted, and stores it cut as the Worker does', async () => {
 		const exportPath = await exportOf(space.dir, { level: 39 })
@@ -353,7 +344,7 @@ describe('HTML is never cut silently', () => {
 		expect((await verify(exportPath, accepted.dumpPath, { acceptTruncation: true })).ok).toBe(true)
 	})
 
-	it('counts an attachment of an earlier version that the Worker shows cut', async () => {
+	it('stores an attachment of an earlier version as the Worker shows it, counted', async () => {
 		const exportPath = await exportOf(space.dir, { level: 39 })
 		const long = `[{"type":"Document","mediaType":"image/png","url":"https://remote.example/a.png","name":"${'d'.repeat(10_001)}"}]`
 		expect(
@@ -367,9 +358,15 @@ describe('HTML is never cut silently', () => {
 		expect(converted.ok).toBe(true)
 		expect(
 			(converted.manifest.conversion as { normalized: Record<string, number> }).normalized[
-				'edits:media-field-over-bound'
+				'stored:status_edits.media_json'
 			]
 		).toBe(1)
+		const db = await opened(converted.dumpPath)
+		const snapshots = db.prepare('SELECT media_json FROM status_edits').all() as { media_json: string }[]
+		db.close()
+		const described = snapshots.flatMap((row) => JSON.parse(row.media_json) as { description: string | null }[])
+		expect(described.map((m) => m.description)).toContain('d'.repeat(10_000))
+		expect((await verify(exportPath, converted.dumpPath)).ok).toBe(true)
 	})
 
 	// Converts `exportPath` as changed by `change`, which must refuse an identity: the conversion stops with `problem`,

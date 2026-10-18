@@ -22,6 +22,17 @@ export {
 	withinIdentityBound,
 } from './platform/identity-bounds'
 export { sniffImageType } from './platform/image-bytes'
+export { mediaUrl } from './platform/media-files'
+export {
+	storedDisplayName,
+	storedMediaDescription,
+	storedMediaLink,
+	storedMediaMeta,
+	storedMediaUrl,
+	storedProfileUrl,
+	storedStatusUrl,
+	storedText,
+} from './platform/stored-bounds'
 export {
 	cutJsonString,
 	jsonStringBytes,

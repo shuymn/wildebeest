@@ -155,7 +155,10 @@ folded to ASCII, and the characters a hashtag cannot hold, such as `#`, dropped)
 first language in `contentMap`, else `nameMap`, `summaryMap`, when it is two or three letters); remote statuses and
 actors keep the legacy JSON as `raw`, byte for byte. A lone surrogate in carried text (half of a character outside the
 Basic Multilingual Plane, as a cut string leaves it in legacy JSON) cannot be stored as UTF-8, so it becomes U+FFFD,
-counted as `text:lone-surrogate-replaced`; `raw` keeps the escaped original.
+counted as `text:lone-surrogate-replaced`; `raw` keeps the escaped original. Every other value is stored as the
+Worker stores it (`src/platform/stored-bounds.ts`, RES-2): U+0000 is removed from text, display names and media
+descriptions are cut at 2,048 and 10,000 code points, and a profile, status or media URL past its bound is dropped;
+each change is counted as `stored:<table>.<column>`.
 
 **The audience never widens (DATA-15).** Who may read a status is what legacy allowed
 (`packages/backend/src/mastodon/status_visibility.ts`, `isVisible`): it reads the object's own `to` and `cc` and the

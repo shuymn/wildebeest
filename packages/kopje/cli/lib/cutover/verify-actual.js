@@ -153,6 +153,7 @@ export function actualFromDump(text) {
 					int(row.locked),
 					t('actor_type'),
 					int(row.discoverable),
+					t('url'),
 				])
 				if (row.raw !== 'NULL') {
 					put('raw', `account ${uri}`, t('raw'))
@@ -201,6 +202,7 @@ export function actualFromDump(text) {
 						t('published_at'),
 						t('language'),
 						t('edited_at'),
+						t('url'),
 					],
 					visibility: legacyVisibility(t('visibility')),
 					inReplyTo: t('in_reply_to_uri'),
