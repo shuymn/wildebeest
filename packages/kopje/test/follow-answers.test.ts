@@ -726,7 +726,7 @@ describe('cancellation against claims and expansion, in both serialized orders',
 		const sent: { type: string; object: { id?: string } }[] = []
 		const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
 			const request = new Request(input, init)
-			if (request.url.startsWith(REMOTE)) {
+			if (new URL(request.url).origin === REMOTE) {
 				sent.push(JSON.parse(await request.text()) as (typeof sent)[number])
 			}
 			return new Response(null, { status: 202 })
