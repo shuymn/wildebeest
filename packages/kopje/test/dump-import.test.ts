@@ -262,6 +262,29 @@ describe('dump', () => {
 		expect(await read(target)).toEqual(await read(source))
 	}, 120_000)
 
+	// RES-2: a snapshot holding a raw NUL after a complete JSON value, which SQLite's JSON functions read as valid, is
+	// refused by the importer's insert (the triggers of 0053), so no stored row can fail its presentation.
+	it('refuses a snapshot with a raw NUL after a complete value on import', async () => {
+		const source = await seeded(3)
+		await runInDurableObject(source, (_instance, state) => {
+			const sql = state.storage.sql
+			// Written past the trigger, as a dump from elsewhere could hold it.
+			sql.exec('DROP TRIGGER accounts_emojis_update')
+			sql.exec('UPDATE accounts SET emojis = ? WHERE domain IS NOT NULL', '[["a","http://a/"]]\u0000junk')
+			expect(
+				sql.exec("SELECT instr(CAST(emojis AS BLOB), X'00') AS at FROM accounts WHERE domain IS NOT NULL").one().at
+			).toBe(20)
+		})
+		const { text } = await dumpViaRpc(source)
+		const target = await migratedStore()
+		await copyConfig(source, target)
+		const refused = await importViaRpc(target, text).then(
+			() => null,
+			(error: unknown) => String(error)
+		)
+		expect(refused).toMatch(/accounts: emojis past their stored bound/)
+	}, 120_000)
+
 	it('writes the documented format and leaves out bookkeeping', async () => {
 		const { text } = await dumpViaRpc(await seeded(0))
 		const lines = text.split('\n')

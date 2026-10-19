@@ -182,7 +182,7 @@ The custom emoji an object tagged are `statuses.emojis`, `status_edits.emojis` a
 shortcode is 1 to 128 ASCII characters of `A-Z a-z 0-9 _ + -`, each once in the array; a url is `http://` or
 `https://`, at most 512 bytes, of the characters `!` to `~` but `"` and `\`. The text is at most 12,288 UTF-8 bytes
 (6,144 for an account), and so are its entities as presented, each `67 + n + 2u` bytes for a shortcode of n and a url
-of u, plus 1; `[]` is refused, write NULL. A boost row's value is never read. A file built from legacy data writes NULL
+of u, plus 1, with no NUL anywhere in the text; `[]` is refused, write NULL. A boost row's value is never read. A file built from legacy data writes NULL
 (legacy has no custom emoji, and `verify-conversion` fails on any other value). A chunk holding any other value fails
 with `<table>: emojis past their stored bound`.
 

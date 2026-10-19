@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { sql } from './api-helpers'
-import { emojiUrl, maximalEntry, shortcode } from './emoji-fixtures'
+import { accountAtCap, emojiUrl, maximalEntry, shortcode, statusAtCap } from './emoji-fixtures'
 import { MASTODON, mastodonActor, MISSKEY, MISSKEY_CONTEXT, misskeyActor, type TestActor } from './inbox-helpers'
 import {
 	announce,
@@ -328,6 +328,46 @@ describe('remote custom emoji on accounts', () => {
 			expect([name, shown.body.emojis.map((e) => e.shortcode)]).toEqual([name, ['near']])
 			expect(shown.body.fields.length).toBe({ aggregate: 8, sanitized: 1, astral: 2 }[name])
 		}
+	})
+})
+
+// The writer at each presented bound and one byte past it, through the inbox and the real triggers: at the bound
+// every entry is stored and shown; one byte past it, the last entry is left out and the write still succeeds.
+describe('snapshots at their bounds through ingestion (RES-2)', () => {
+	const references = (pairs: [string, string][]) => pairs.map(([name]) => `:${name}:`).join(' ')
+	const tags = (pairs: [string, string][]) => pairs.map(([name, url]) => mastodonEmoji(name, url))
+
+	it.each([
+		['at 12,288 bytes', false],
+		['one byte past', true],
+	])('keeps a status snapshot %s', async (_name, over) => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		await followed(t, bob)
+		const pairs = statusAtCap(over)
+		const shown = await stored(t, bob, mastodonNote(bob, { content: `<p>${references(pairs)}</p>`, tag: tags(pairs) }))
+		const kept = over ? pairs.slice(0, -1) : pairs
+		const [row] = await sql<{ emojis: string }>(t.store, 'SELECT emojis FROM statuses WHERE id = ?', shown.id)
+		expect(row!.emojis).toBe(JSON.stringify(kept))
+		expect(new TextEncoder().encode(JSON.stringify(shown.emojis)).length).toBe(over ? 12_288 - 97 : 12_288)
+		expect(shown.emojis.map((e) => e.shortcode)).toEqual(kept.map(([name]) => name))
+	})
+
+	it.each([
+		['at 6,144 bytes', false],
+		['one byte past', true],
+	])('keeps an account snapshot %s', async (_name, over) => {
+		const t = await setup()
+		const pairs = accountAtCap(over)
+		const bob = await mastodonActor(t.web, 'bob', {
+			extra: { summary: `<p>${references(pairs)}</p>`, tag: tags(pairs) },
+		})
+		const id = await followed(t, bob)
+		const kept = over ? pairs.slice(0, -1) : pairs
+		const [row] = await sql<{ emojis: string }>(t.store, 'SELECT emojis FROM accounts WHERE id = ?', id)
+		expect(row!.emojis).toBe(JSON.stringify(kept))
+		const shown = await t.api<{ emojis: Emoji[] }>(`/api/v1/accounts/${id}`)
+		expect(new TextEncoder().encode(JSON.stringify(shown.body.emojis)).length).toBe(over ? 6_144 + 1 - 86 : 6_144)
 	})
 })
 

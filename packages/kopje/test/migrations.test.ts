@@ -5558,6 +5558,16 @@ describe('0053_custom_emoji_snapshots', () => {
 						'https://r.example/u/' || i, 'u' || i, 'r.example' FROM n`,
 					rows
 				)
+				sql.exec(
+					`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+					SELECT CAST(CAST(id AS INTEGER) + 100000000000000000 AS TEXT), uri || '/s', id, 'public', '<p>x</p>', 'x'
+					FROM accounts WHERE domain IS NOT NULL`
+				)
+				sql.exec(
+					`INSERT INTO status_edits (status_id, content, spoiler_text, media_json, created_at)
+					SELECT id, '<p>x</p>', '', '[]', 'x' FROM statuses`
+				)
+				expect(sql.exec('SELECT count(*) AS n FROM status_edits').one().n).toBe(rows)
 				let read = 0
 				for (const statement of (MIGRATIONS[at]?.sql ?? '').split('\n\n').filter((part) => !part.startsWith('--'))) {
 					const cursor = sql.exec(statement)

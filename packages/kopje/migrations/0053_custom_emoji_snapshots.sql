@@ -7,20 +7,20 @@
 --   statuses.emojis, status_edits.emojis, accounts.emojis   NULL, or a JSON array of 1 to 64 [shortcode, url] pairs:
 --                            a shortcode of 1 to 128 of A-Z a-z 0-9 _ + -, once each; a url http(s), of at most 512
 --                            bytes of '!' to '~' but '"' and '\'; the presented entries within 12,288 bytes (6,144 for
---                            an account), and the stored text within the same bytes.
+--                            an account), and the stored text within the same bytes, with no NUL anywhere.
 --   <table>_emojis_insert    BEFORE INSERT and BEFORE UPDATE OF emojis on the three tables:
 --   <table>_emojis_update    RAISE(ABORT, '<table>: emojis past their stored bound') for any other value.
 --
 -- The columns have no default or CHECK, so adding them reads no row; existing rows read NULL (no emoji). The
 -- statements below are the output of emojiBoundsMigrationSql (test/migrations.test.ts compares them).
 --
--- Cost: three schema-only column additions and six triggers, which read no row. Measured on the benchmark store of
--- test/bench/migration-cost.ts (1,000,000 accounts, 2,000,000 statuses, 100,000 earlier versions and the rest of that
--- store) in workerd's local Durable Object SQLite, timing the whole upgrade through the kernel: this file alone 6,537
--- and 6,465 ms (load averages 4 to 12). The release range 0049_instance_bounds to this file, in one upgrade: 13,177,
--- 14,203 and 8,447 ms at load averages of 4 to 9, and 25,919, 22,750, 22,431 and 32,791 ms at 3.5 to 10, past the
--- 20,000 ms an upgrade may take; 0049 to 0052 without this file measured 8,544, 13,581 and 25,714 ms on the same machine, so the spread is
--- the machine's, not this file's.
+-- Cost: three schema-only column additions and six triggers, which read no row. Measured under concurrent load on
+-- the benchmark store of test/bench/migration-cost.ts (1,000,000 accounts, 2,000,000 statuses, 100,000 earlier
+-- versions and the rest of that store) in workerd's local Durable Object SQLite, timing the whole upgrade through the
+-- kernel (its verification included): this file alone 6,537 and 6,465 ms (load averages 4 to 12). The release range
+-- 0049_instance_bounds to this file, in one upgrade: 8,447 to 32,791 ms over seven runs at load averages of 3.5 to 10,
+-- four past the 20,000 ms an upgrade may take; 0049 to 0052 alone measured 8,544 to 25,714 ms the same way. The
+-- serial release-range run is pending.
 
 ALTER TABLE statuses ADD COLUMN emojis TEXT;
 
@@ -31,6 +31,7 @@ ALTER TABLE accounts ADD COLUMN emojis TEXT;
 CREATE TRIGGER statuses_emojis_insert BEFORE INSERT ON statuses
 WHEN CASE WHEN NEW.emojis IS NULL THEN 0
 	WHEN typeof(NEW.emojis) <> 'text' THEN 1
+	WHEN instr(CAST(NEW.emojis AS BLOB), X'00') > 0 THEN 1
 	WHEN length(CAST(NEW.emojis AS BLOB)) > 12288 THEN 1
 	WHEN NOT json_valid(NEW.emojis) THEN 1
 	WHEN json_type(NEW.emojis) <> 'array' THEN 1
@@ -57,6 +58,7 @@ END;
 CREATE TRIGGER statuses_emojis_update BEFORE UPDATE OF emojis ON statuses
 WHEN CASE WHEN NEW.emojis IS NULL THEN 0
 	WHEN typeof(NEW.emojis) <> 'text' THEN 1
+	WHEN instr(CAST(NEW.emojis AS BLOB), X'00') > 0 THEN 1
 	WHEN length(CAST(NEW.emojis AS BLOB)) > 12288 THEN 1
 	WHEN NOT json_valid(NEW.emojis) THEN 1
 	WHEN json_type(NEW.emojis) <> 'array' THEN 1
@@ -83,6 +85,7 @@ END;
 CREATE TRIGGER status_edits_emojis_insert BEFORE INSERT ON status_edits
 WHEN CASE WHEN NEW.emojis IS NULL THEN 0
 	WHEN typeof(NEW.emojis) <> 'text' THEN 1
+	WHEN instr(CAST(NEW.emojis AS BLOB), X'00') > 0 THEN 1
 	WHEN length(CAST(NEW.emojis AS BLOB)) > 12288 THEN 1
 	WHEN NOT json_valid(NEW.emojis) THEN 1
 	WHEN json_type(NEW.emojis) <> 'array' THEN 1
@@ -109,6 +112,7 @@ END;
 CREATE TRIGGER status_edits_emojis_update BEFORE UPDATE OF emojis ON status_edits
 WHEN CASE WHEN NEW.emojis IS NULL THEN 0
 	WHEN typeof(NEW.emojis) <> 'text' THEN 1
+	WHEN instr(CAST(NEW.emojis AS BLOB), X'00') > 0 THEN 1
 	WHEN length(CAST(NEW.emojis AS BLOB)) > 12288 THEN 1
 	WHEN NOT json_valid(NEW.emojis) THEN 1
 	WHEN json_type(NEW.emojis) <> 'array' THEN 1
@@ -135,6 +139,7 @@ END;
 CREATE TRIGGER accounts_emojis_insert BEFORE INSERT ON accounts
 WHEN CASE WHEN NEW.emojis IS NULL THEN 0
 	WHEN typeof(NEW.emojis) <> 'text' THEN 1
+	WHEN instr(CAST(NEW.emojis AS BLOB), X'00') > 0 THEN 1
 	WHEN length(CAST(NEW.emojis AS BLOB)) > 6144 THEN 1
 	WHEN NOT json_valid(NEW.emojis) THEN 1
 	WHEN json_type(NEW.emojis) <> 'array' THEN 1
@@ -161,6 +166,7 @@ END;
 CREATE TRIGGER accounts_emojis_update BEFORE UPDATE OF emojis ON accounts
 WHEN CASE WHEN NEW.emojis IS NULL THEN 0
 	WHEN typeof(NEW.emojis) <> 'text' THEN 1
+	WHEN instr(CAST(NEW.emojis AS BLOB), X'00') > 0 THEN 1
 	WHEN length(CAST(NEW.emojis AS BLOB)) > 6144 THEN 1
 	WHEN NOT json_valid(NEW.emojis) THEN 1
 	WHEN json_type(NEW.emojis) <> 'array' THEN 1

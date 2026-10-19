@@ -140,10 +140,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       2,000,000 favourites each holding a Like id, the whole upgrade took 7.6 to 8.0 seconds in four runs in workerd's local Durable
       Object SQLite, within the 20 seconds an upgrade may take.
     - `0053_custom_emoji_snapshots`: adds the three emoji columns, which read as none on every existing row, and the
-      triggers that bound them; no row is read or changed. On the benchmark store its upgrade took 6.5 seconds. This
-      release's five files (0049 to 0053) in one upgrade took 8.4 to 14.2 seconds in three runs and 22.4 to 32.8 seconds in
-      four others, past the 20 seconds an upgrade may take; the same range without it ranged from 8.5 to 25.7 seconds on
-      that machine.
+      triggers that bound them; no row is read or changed. Measured under concurrent load on the benchmark store, its
+      upgrade took 6.5 seconds, and this release's five files (0049 to 0053) in one upgrade 8.4 to 32.8 seconds over seven runs
+      (four past the 20 seconds an upgrade may take; 0049 to 0052 alone 8.5 to 25.7 seconds). The serial release-range
+      run is pending.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.17] - 2026-10-19

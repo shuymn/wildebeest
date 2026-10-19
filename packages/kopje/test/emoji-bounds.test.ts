@@ -74,6 +74,8 @@ const CASES: [string, string, number, boolean][] = [
 	['a name with a space', one('a b'), S, false],
 	['a name with an escaped NUL', '[["a\\u0000","http://a/"]]', S, false],
 	['a name with a raw NUL', '[["a\u0000","http://a/"]]', S, false],
+	['a complete value followed by a raw NUL and junk', '[["a","http://a/"]]\u0000junk', S, false],
+	['a complete value, whitespace and a raw NUL', '[["a","http://a/"]] \u0000', S, false],
 	['a non-ASCII name', one('é'), S, false],
 	['an escaped non-ASCII name', '[["\\u00e9","http://a/"]]', S, false],
 	['an astral name', one('😀'), S, false],
@@ -140,6 +142,24 @@ describe('the emoji snapshot predicate and its JS twin (RES-2)', () => {
 		)
 		const verdicts = CASES.map(([name, text, bound], i) => [name, emojisValid(text, bound), sqlVerdicts[i] === 0])
 		expect(verdicts).toEqual(CASES.map(([name, , , valid]) => [name, valid, valid]))
+	})
+
+	// A NUL after a complete value, written as the dump format writes such text (CAST(X'..' AS TEXT)): SQLite's JSON
+	// functions stop at the NUL and see one valid pair.
+	it('refuse a raw NUL after a complete value, as an import writes it', async () => {
+		const hex = [...new TextEncoder().encode('[["a","http://a/"]]\u0000junk')]
+			.map((b) => b.toString(16).padStart(2, '0'))
+			.join('')
+		const seen = await runInDurableObject(freshStore(), (_instance, state) => {
+			const value = `CAST(X'${hex}' AS TEXT)`
+			return state.storage.sql
+				.exec<{ past: number; valid: number; n: number }>(
+					`SELECT ${emojisPastBoundSql(value, S)} AS past, json_valid(${value}) AS valid,
+						json_array_length(${value}) AS n`
+				)
+				.one()
+		})
+		expect(seen).toEqual({ past: 1, valid: 1, n: 1 })
 	})
 
 	it('take NULL as no emoji, and refuse a value that is not text', async () => {

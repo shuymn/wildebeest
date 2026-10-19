@@ -532,7 +532,7 @@ export function emojisValid(text: string | null, bytes: number): boolean {
 	if (text === null) {
 		return true
 	}
-	if (new TextEncoder().encode(text).length > bytes) {
+	if (text.includes('\u0000') || new TextEncoder().encode(text).length > bytes) {
 		return false
 	}
 	let parsed: unknown
@@ -563,8 +563,9 @@ export function emojisValid(text: string | null, bytes: number): boolean {
 	return presentedEmojiBytes(pairs) <= bytes
 }
 
-// True when `column` holds a value emojisValid refuses: false for NULL, true for a value that is not text. Judged as
-// stored: the byte bound first, so no JSON work runs on a value past it; then the shape, each element (`->>` decodes
+// True when `column` holds a value emojisValid refuses: false for NULL, true for a value that is not text or holds a
+// raw NUL anywhere (SQLite's JSON functions stop at one, so a complete value followed by NUL and anything would pass
+// them). Judged as stored: the byte bound first, so no JSON work runs on a value past it; then the shape, each element (`->>` decodes
 // escapes, and a decoded name or url whose bytes and characters differ holds a NUL or a non-ASCII character), the
 // names once each, and the presented size.
 export function emojisPastBoundSql(column: string, bytes: number): string {
@@ -583,6 +584,7 @@ export function emojisPastBoundSql(column: string, bytes: number): string {
 		ELSE 0 END`
 	return `CASE WHEN ${column} IS NULL THEN 0
 	WHEN typeof(${column}) <> 'text' THEN 1
+	WHEN instr(CAST(${column} AS BLOB), X'00') > 0 THEN 1
 	WHEN length(CAST(${column} AS BLOB)) > ${bytes} THEN 1
 	WHEN NOT json_valid(${column}) THEN 1
 	WHEN json_type(${column}) <> 'array' THEN 1

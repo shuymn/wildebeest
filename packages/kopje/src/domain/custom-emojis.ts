@@ -87,15 +87,25 @@ export function emojiSnapshot(
 // The entities of a stored snapshot (HTML-3, RES-3), imported rows included: each url normalized again through
 // emojiHref, an entry whose url does not pass dropped and the rest kept, then entries admitted while
 // 1 + Σ(67 + n + 2·url) stays within `bytes`, stopping at the first that does not fit (normalizing an imported value
-// may grow it).
+// may grow it). A stored value that is not a JSON array (the triggers refuse one) shows none, so a row never fails
+// the request that presents it.
 export function presentEmojis(stored: string | null, bytes: number): CustomEmoji[] {
-	if (stored === null) {
-		return []
+	let entries: unknown
+	try {
+		entries = stored === null ? [] : JSON.parse(stored)
+	} catch {
+		entries = []
 	}
 	const emojis: CustomEmoji[] = []
 	let size = 1
-	for (const entry of JSON.parse(stored) as unknown[]) {
-		const [shortcode, raw] = entry as [string, string]
+	for (const entry of Array.isArray(entries) ? (entries as unknown[]) : []) {
+		if (!Array.isArray(entry) || entry.length !== 2) {
+			continue
+		}
+		const [shortcode, raw] = entry as [unknown, unknown]
+		if (typeof shortcode !== 'string' || typeof raw !== 'string') {
+			continue
+		}
 		const url = emojiHref(raw)
 		if (url === null || !isShortcode(shortcode)) {
 			continue
