@@ -182,15 +182,57 @@ describe('setInstanceSettings', () => {
 		expect(await values(s)).toEqual(before)
 	}, 60_000)
 
+	// The terms of service and their date are sent with a valid partner, so either may be accepted alone.
+	const PARTNER: Record<string, Record<string, string>> = {
+		terms_of_service: { terms_of_service_effective_date: '2026-11-01' },
+		terms_of_service_effective_date: { terms_of_service: '<p>Terms</p>' },
+	}
+	// One value each name accepts, trimmed as stored: the property's examples, which fast-check always runs first.
+	const ACCEPTED: [name: (typeof INSTANCE_ADMIN_NAMES)[number], raw: string][] = [
+		['title', ' Herd '],
+		['description', 'A herd'],
+		['contact_email', ' a@example.com '],
+		['extended_description', '<p>About</p>'],
+		['privacy_policy', '<p>Policy</p>'],
+		['terms_of_service', '<p>Terms</p>'],
+		['terms_of_service_effective_date', '2026-12-01'],
+		['show_domain_blocks', 'users'],
+		['show_domain_blocks_rationale', 'all'],
+	]
+
+	// Runs one admin write inside the transaction the operation would have, and checks that every stored value is one
+	// its name's writer keeps unchanged (the triggers would raise otherwise); a refusal writes nothing.
+	function written(sql: SqlStorage, name: string, raw: unknown) {
+		const result = setInstanceSettings.run(sql, {
+			authority: ACCESS,
+			values: { ...PARTNER[name], [name]: raw },
+			now: NOW,
+		})
+		if (result.ok) {
+			for (const [stored, value] of Object.entries(result.values)) {
+				const bound = INSTANCE_SETTING_BOUNDS[stored as keyof typeof INSTANCE_SETTING_BOUNDS]
+				expect(bound.writer(value), stored).toBe(value)
+			}
+		}
+		return result
+	}
+
+	it('accepts a value for each of the nine names', async () => {
+		expect(ACCEPTED.map(([name]) => name).sort()).toEqual([...INSTANCE_ADMIN_NAMES].sort())
+		const s = await store()
+		await runInDurableObject(s, (_instance, state) => {
+			for (const [name, raw] of ACCEPTED) {
+				state.storage.transactionSync(() => {
+					const result = written(state.storage.sql, name, raw)
+					expect(result, name).toMatchObject({ ok: true, values: { [name]: raw.trim() } })
+				})
+			}
+		})
+	})
+
 	it("stores only what INSTANCE_SETTING_BOUNDS' writers keep, whatever the input", async () => {
 		const s = await store()
 		await runInDurableObject(s, (_instance, state) => {
-			// The terms of service and their date are sent with a valid partner, so either may be accepted alone.
-			const partner: Record<string, Record<string, string>> = {
-				terms_of_service: { terms_of_service_effective_date: '2026-11-01' },
-				terms_of_service_effective_date: { terms_of_service: '<p>Terms</p>' },
-			}
-			const accepted = new Set<string>()
 			fc.assert(
 				fc.property(
 					fc.constantFrom(...INSTANCE_ADMIN_NAMES),
@@ -200,27 +242,13 @@ describe('setInstanceSettings', () => {
 						fc.date({ noInvalidDate: true }).map((d) => d.toISOString().slice(0, 10))
 					),
 					(name, raw) => {
-						// Run inside the transaction the operation would have; a refusal writes nothing, an acceptance only
-						// fixed points (the triggers would raise otherwise).
 						state.storage.transactionSync(() => {
-							const result = setInstanceSettings.run(state.storage.sql, {
-								authority: ACCESS,
-								values: { ...partner[name], [name]: raw },
-								now: NOW,
-							})
-							if (result.ok) {
-								accepted.add(name)
-								for (const [stored, value] of Object.entries(result.values)) {
-									const bound = INSTANCE_SETTING_BOUNDS[stored as keyof typeof INSTANCE_SETTING_BOUNDS]
-									expect(bound.writer(value), stored).toBe(value)
-								}
-							}
+							written(state.storage.sql, name, raw)
 						})
 					}
 				),
-				{ numRuns: 600 }
+				{ numRuns: 600, examples: ACCEPTED }
 			)
-			expect([...accepted].sort()).toEqual([...INSTANCE_ADMIN_NAMES].sort())
 		})
 	}, 60_000)
 
