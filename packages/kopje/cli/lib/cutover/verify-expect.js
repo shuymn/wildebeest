@@ -13,6 +13,8 @@ import { domainToASCII } from 'node:url'
 
 import {
 	cutJsonString,
+	INSTANCE_DOCUMENTS,
+	isBlank,
 	jsonStringBytes,
 	isRemoteUsername,
 	isStorableActorId,
@@ -23,10 +25,12 @@ import {
 	REMOTE_HTML_RAW_LIMIT,
 	sanitizeRemoteBio,
 	sanitizeRemoteContent,
+	remoteHtmlText,
 	sanitizeRemoteHtml,
 	SPOILER_BYTES,
 	STATUS_CONTENT_BYTES,
 	storedDisplayName,
+	storedInstanceSetting,
 	storedMediaDescription,
 	storedMediaLink,
 	storedMediaUrl,
@@ -1059,20 +1063,46 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 		put('conversations', key, [members.sort(), true, true])
 	}
 
-	// Settings, under Kopje's names, and clients.
+	// Settings, under Kopje's names, as the Worker stores them (src/platform/stored-bounds.ts INSTANCE_SETTING_BOUNDS):
+	// a blank one, and a document within its bound that sanitizes to no text, has no row; one past its bound is cut or
+	// has no row, a truncation. A setting with no row is expected absent (settings_absent): the comparison of settings
+	// checks only the expected keys otherwise.
+	/** @param {string} name @param {string} value */
+	const putSetting = (name, value) => {
+		const text = storedText(value)
+		/** @type {string | null} */
+		let written = null
+		if (!isBlank(text)) {
+			written = storedInstanceSetting(/** @type {any} */ (name), text)
+			if (written !== text) {
+				overLimit++
+			} else if (
+				INSTANCE_DOCUMENTS.includes(/** @type {any} */ (name)) &&
+				isBlank(remoteHtmlText(sanitizeRemoteHtml(text)))
+			) {
+				written = null
+			}
+		}
+		if (written === null) {
+			put('settings_absent', name, null)
+		} else {
+			put('settings', name, written)
+		}
+	}
 	for (const s of all('SELECT setting_name, setting_value FROM server_settings')) {
-		put(
-			'settings',
-			SETTING_NAMES.get(String(s.setting_name)) ?? `unknown ${String(s.setting_name)}`,
-			String(s.setting_value)
-		)
+		const name = SETTING_NAMES.get(String(s.setting_name))
+		if (name === undefined) {
+			put('settings', `unknown ${String(s.setting_name)}`, String(s.setting_value))
+		} else {
+			putSetting(name, String(s.setting_value))
+		}
 	}
 	const rules = all('SELECT id, text FROM server_rules ORDER BY id').map((r) => ({
 		id: String(r.id),
 		text: String(r.text),
 	}))
 	if (rules.length > 0) {
-		put('settings', 'rules', JSON.stringify(rules))
+		putSetting('rules', JSON.stringify(rules))
 	}
 	for (const c of all('SELECT id, secret, name, redirect_uris, website, scopes FROM clients')) {
 		put('clients', String(c.id), [
