@@ -533,6 +533,7 @@ describe('mastodon-scopes.mjs parameter helpers and reviewed readings', () => {
 				'    %i(second).each { |key| found = key if params[key].present? }',
 				'    %i(outer).each do |key|',
 				'      KEYS.each { |key| found = key if params[key].present? }',
+				'      KEYS.select { |k| k }.each { |key| found = key if params[key].present? }',
 				'      %i(inner).each do |key|',
 				'        found = key if params[key].present?',
 				'      end',

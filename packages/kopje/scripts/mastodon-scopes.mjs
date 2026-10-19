@@ -1010,8 +1010,10 @@ function permitNames(args, prefix, mode, ctx) {
 /** @param {string} body @param {string} variable @param {number} offset */
 function loopValues(body, variable, offset) {
 	if (!/^[a-z_]\w*$/.test(variable)) return null
-	const loops = /(%[iw]\([^)]*\)|\[[^\]]*\]|[\w:.]+)\.each\s*(do\s*|\{\s*)\|([^|]*)\|/g
-	/** @type {{ start: number, collection: string } | null} */
+	// Every `.each` block counts, whatever precedes it; a collection that is not a literal list (or not one of these
+	// simple forms, as `x.select { ... }.each`) leaves the read unresolved.
+	const loops = /(%[iw]\([^)]*\)|\[[^\]]*\]|[\w:.]+)?\.each\s*(do\s*|\{\s*)\|([^|]*)\|/g
+	/** @type {{ start: number, collection: string | undefined } | null} */
 	let innermost = null
 	for (const m of body.matchAll(loops)) {
 		const names = /** @type {string} */ (m[3]).split(',').map((v) => v.trim())
@@ -1028,10 +1030,10 @@ function loopValues(body, variable, offset) {
 			end = close === null ? -1 : start + close.index
 		}
 		if (end >= 0 && start <= offset && offset < end && (innermost === null || start > innermost.start)) {
-			innermost = { start, collection: /** @type {string} */ (m[1]) }
+			innermost = { start, collection: m[1] }
 		}
 	}
-	const list = innermost === null ? null : literal(innermost.collection)
+	const list = innermost?.collection === undefined ? null : literal(innermost.collection)
 	return Array.isArray(list) ? list : null
 }
 
