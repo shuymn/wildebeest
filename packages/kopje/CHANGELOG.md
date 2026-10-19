@@ -90,8 +90,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       store that size.
     - `0051_follow_answer_pairs`: records the remote follower of each follow answer and whether a delivery was ever
       claimed; every existing delivery of a follow answer counts as claimed, so none of them is cancelled. On the
-      benchmark store its [header](migrations/0051_follow_answer_pairs.sql) describes, the whole upgrade took 7.4 to
-      7.5 seconds in three runs in workerd's local Durable Object SQLite.
+      benchmark store its [header](migrations/0051_follow_answer_pairs.sql) describes, the whole upgrade took 7.3 and
+      8.0 seconds in two runs in workerd's local Durable Object SQLite.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.17] - 2026-10-19

@@ -21,9 +21,9 @@
 -- tagged answers' rows through deliveries_activity. Measured on the benchmark store of test/bench/migration-cost.ts
 -- (1,000,000 accounts, 2,000,000 statuses, 550,000 outbound activities of which 50,000 follow answers, a delivery row
 -- of each, 10,000 of them active and the rest given up, and the rest of that store) in workerd's local Durable Object
--- SQLite: 7,515 ms for the upgrade of this file through the kernel (7,404 and 7,396 ms in two more runs, at load
--- averages of 7 to 13), within the 10,000 ms each migration file may take; about 6 s of it is the overhead of an
--- upgrade on a store that size.
+-- SQLite: 7,346 and 8,011 ms for the upgrade of this file through the kernel, with 0049 and 0050 on the store, at load
+-- averages of 4 to 6 (7.4 to 7.5 s before them), within the 20,000 ms an upgrade may take; most of it is the
+-- overhead of an upgrade on a store that size.
 
 ALTER TABLE outbound_activities ADD COLUMN follow_pair TEXT;
 ALTER TABLE deliveries ADD COLUMN exposed INTEGER NOT NULL DEFAULT 0 CHECK (exposed IN (0, 1));
