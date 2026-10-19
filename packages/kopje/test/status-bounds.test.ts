@@ -97,6 +97,8 @@ async function maximalAccount(t: Setup, light = false, fill: Fill = 'escaped'): 
 type Parts = {
 	content: string
 	spoiler: string
+	// The source text a local status keeps for editing; none for a remote one.
+	source?: string | null
 	media: { url: string; preview: string | null; description: string; meta: string | null }[]
 	mentions: string[]
 	tags: string[]
@@ -105,24 +107,25 @@ type Parts = {
 	url?: string
 }
 
-// A public remote status of `author` with the given parts, written as a converted row held them before
-// 0048_stored_bounds (its statuses and media rows without the triggers).
-async function storedStatus(t: Setup, author: string, parts: Parts): Promise<string> {
+// A public remote status of `author` with the given parts, written directly in SQL: the stored-bound triggers of
+// 0048_stored_bounds accept every part at its bound.
+async function storedStatus(t: Setup, author: string, parts: Parts, write = sql): Promise<string> {
 	const id = nextId()
-	await legacySql(
+	await write(
 		t.store,
-		`INSERT INTO statuses (id, uri, url, account_id, visibility, spoiler_text, content, published_at)
-		VALUES (?, ?, ?, ?, 'public', ?, ?, ?)`,
+		`INSERT INTO statuses (id, uri, url, account_id, visibility, spoiler_text, content, source_text, published_at)
+		VALUES (?, ?, ?, ?, 'public', ?, ?, ?, ?)`,
 		id,
 		parts.uri ?? atLimit(`https://${HOST}/objects/${id}/`, 4096),
 		parts.url ?? atLimit(`https://${HOST}/notes/${id}/`, 4096),
 		author,
 		parts.spoiler,
 		parts.content,
+		parts.source ?? null,
 		new Date(NOW - 60_000).toISOString()
 	)
 	for (const [position, m] of parts.media.entries()) {
-		await legacySql(
+		await write(
 			t.store,
 			`INSERT INTO media_attachments (id, account_id, status_id, position, type, url, preview_url, description, meta,
 				focus_x, focus_y)
@@ -176,8 +179,8 @@ const MAX_META = (() => {
 // A tag name of MAX_TAG_LENGTH code points of four bytes each: the longest URL encodeURIComponent makes of one.
 const maxTag = (i: number) => `${String.fromCodePoint(0x20000 + i)}${'𠀀'.repeat(MAX_TAG_LENGTH - 1)}`
 
-// A status with every part at its bound: content of STATUS_CONTENT_BYTES and a warning of SPOILER_BYTES as JSON
-// strings, MAX_STATUS_MEDIA attachments at theirs, MAX_STATUS_MENTION_ROWS mentions of accounts at theirs,
+// A status with every part at its bound: content and source text of STATUS_CONTENT_BYTES and a warning of
+// SPOILER_BYTES as JSON strings (each the largest value its stored-bound trigger accepts), MAX_STATUS_MEDIA attachments at theirs, MAX_STATUS_MENTION_ROWS mentions of accounts at theirs,
 // MAX_STATUS_TAGS tags and a poll of MAX_REMOTE_OPTIONS choices of MAX_REMOTE_OPTION_LENGTH escaping characters.
 async function maximalParts(t: Setup, fill: Fill = 'escaped'): Promise<Parts> {
 	const mentions: string[] = []
@@ -185,8 +188,10 @@ async function maximalParts(t: Setup, fill: Fill = 'escaped'): Promise<Parts> {
 		mentions.push(await maximalAccount(t, true, fill))
 	}
 	const counted = fill === 'raw' ? W : C
+	const content = fill === 'raw' ? 'x'.repeat(STATUS_CONTENT_BYTES - 2) : C.repeat((STATUS_CONTENT_BYTES - 2) / 6)
 	return {
-		content: fill === 'raw' ? 'x'.repeat(STATUS_CONTENT_BYTES - 2) : C.repeat((STATUS_CONTENT_BYTES - 2) / 6),
+		content,
+		source: content,
 		spoiler: fill === 'raw' ? 'x'.repeat(SPOILER_BYTES - 2) : C.repeat(Math.floor((SPOILER_BYTES - 2) / 6)),
 		media: Array.from({ length: MAX_STATUS_MEDIA }, (_, i) => ({
 			url: atLimit(`https://${HOST}/m/${i}/`, MEDIA_URL_LIMIT),
@@ -363,24 +368,29 @@ describe('a stored status is read within its bounds (RES-2)', () => {
 		// A converted username outside Mastodon's remote format, of characters that escape to six bytes.
 		await sql(t.store, 'UPDATE accounts SET username = ? WHERE id = ?', C.repeat(300), mentions[1]!)
 		await sql(t.store, 'UPDATE accounts SET username = ? WHERE id = ?', `u\u0000${C.repeat(253)}`, mentions[2]!)
-		const id = await storedStatus(t, author, {
-			content: C.repeat(Math.floor(STATUS_CONTENT_BYTES / 6) + 1),
-			spoiler: C.repeat(SPOILER_BYTES),
-			media: Array.from({ length: MAX_STATUS_MEDIA + 2 }, (_, i) => ({
-				url: atLimit(`https://${HOST}/m/${i}/`, MEDIA_URL_LIMIT + i),
-				preview: atLimit(`https://${HOST}/p/${i}/`, MEDIA_URL_LIMIT + 1),
-				description: C.repeat(MAX_MEDIA_DESCRIPTION_LENGTH + 100),
-				meta: `{"x":"${'x'.repeat(2000)}"}`,
-			})),
-			mentions,
-			tags: [
-				...Array.from({ length: MAX_STATUS_TAGS + 50 }, (_, i) => `t${String(i).padStart(3, '0')}`),
-				'a'.repeat(300),
-			],
-			poll: Array.from({ length: MAX_REMOTE_OPTIONS }, () => 'x'.repeat(6_000)),
-			uri: atLimit(`https://${HOST}/objects/long/`, 4097),
-			url: atLimit(`https://${HOST}/notes/long/`, 4097),
-		})
+		const id = await storedStatus(
+			t,
+			author,
+			{
+				content: C.repeat(Math.floor(STATUS_CONTENT_BYTES / 6) + 1),
+				spoiler: C.repeat(SPOILER_BYTES),
+				media: Array.from({ length: MAX_STATUS_MEDIA + 2 }, (_, i) => ({
+					url: atLimit(`https://${HOST}/m/${i}/`, MEDIA_URL_LIMIT + i),
+					preview: atLimit(`https://${HOST}/p/${i}/`, MEDIA_URL_LIMIT + 1),
+					description: C.repeat(MAX_MEDIA_DESCRIPTION_LENGTH + 100),
+					meta: `{"x":"${'x'.repeat(2000)}"}`,
+				})),
+				mentions,
+				tags: [
+					...Array.from({ length: MAX_STATUS_TAGS + 50 }, (_, i) => `t${String(i).padStart(3, '0')}`),
+					'a'.repeat(300),
+				],
+				poll: Array.from({ length: MAX_REMOTE_OPTIONS }, () => 'x'.repeat(6_000)),
+				uri: atLimit(`https://${HOST}/objects/long/`, 4097),
+				url: atLimit(`https://${HOST}/notes/long/`, 4097),
+			},
+			legacySql
+		)
 		const { answer, longest } = await read(t, getStatus, id)
 		const status = answer as Presented
 		expect(status.content).toBe('')
@@ -938,12 +948,12 @@ describe('the table of maxima (RES-3)', () => {
 			'escaped',
 			{
 				account: { sqlite: 97_844, json: 121_710, rows: 1, nodes: 36 },
-				status: { sqlite: 2_723_475, json: 2_595_446, rows: 1_381, nodes: 2_267 },
-				quote: { sqlite: 4_873_593, json: 5_190_925, rows: 1_710, nodes: 4_536 },
-				boostOfQuote: { sqlite: 4_981_840, json: 5_564_762, rows: 1_763, nodes: 5_439 },
-				conversation: { sqlite: 6_048_177, json: 6_651_414, rows: 1_724, nodes: 4_959 },
-				group: { sqlite: 5_657_299, json: 6_165_029, rows: 1_737, nodes: 4_836 },
-				report: { sqlite: 4_978_089, json: 5_318_285, rows: 1_719, nodes: 4_661 },
+				status: { sqlite: 2_745_312, json: 2_595_446, rows: 1_381, nodes: 2_267 },
+				quote: { sqlite: 4_917_267, json: 5_190_925, rows: 1_710, nodes: 4_536 },
+				boostOfQuote: { sqlite: 5_025_514, json: 5_564_762, rows: 1_763, nodes: 5_439 },
+				conversation: { sqlite: 6_091_851, json: 6_651_414, rows: 1_724, nodes: 4_959 },
+				group: { sqlite: 5_700_973, json: 6_165_029, rows: 1_737, nodes: 4_836 },
+				report: { sqlite: 5_021_763, json: 5_318_285, rows: 1_719, nodes: 4_661 },
 			},
 		],
 		[
@@ -951,12 +961,12 @@ describe('the table of maxima (RES-3)', () => {
 			'derived',
 			{
 				account: { sqlite: 97_844, json: 121_710, rows: 1, nodes: 36 },
-				status: { sqlite: 2_315_475, json: 2_185_846, rows: 1_381, nodes: 2_267 },
-				quote: { sqlite: 4_057_593, json: 4_371_725, rows: 1_710, nodes: 4_536 },
-				boostOfQuote: { sqlite: 4_165_840, json: 4_745_562, rows: 1_763, nodes: 5_439 },
-				conversation: { sqlite: 5_232_177, json: 5_832_214, rows: 1_724, nodes: 4_959 },
-				group: { sqlite: 4_841_299, json: 5_345_829, rows: 1_737, nodes: 4_836 },
-				report: { sqlite: 4_162_089, json: 4_499_085, rows: 1_719, nodes: 4_661 },
+				status: { sqlite: 2_337_312, json: 2_185_846, rows: 1_381, nodes: 2_267 },
+				quote: { sqlite: 4_101_267, json: 4_371_725, rows: 1_710, nodes: 4_536 },
+				boostOfQuote: { sqlite: 4_209_514, json: 4_745_562, rows: 1_763, nodes: 5_439 },
+				conversation: { sqlite: 5_275_851, json: 5_832_214, rows: 1_724, nodes: 4_959 },
+				group: { sqlite: 4_884_973, json: 5_345_829, rows: 1_737, nodes: 4_836 },
+				report: { sqlite: 4_205_763, json: 4_499_085, rows: 1_719, nodes: 4_661 },
 			},
 		],
 		[
@@ -964,12 +974,12 @@ describe('the table of maxima (RES-3)', () => {
 			'raw',
 			{
 				account: { sqlite: 114_914, json: 117_615, rows: 1, nodes: 36 },
-				status: { sqlite: 4_281_022, json: 2_157_753, rows: 1_381, nodes: 2_267 },
-				quote: { sqlite: 6_491_087, json: 4_315_539, rows: 1_710, nodes: 4_536 },
-				boostOfQuote: { sqlite: 6_616_404, json: 4_531_681, rows: 1_763, nodes: 5_439 },
-				conversation: { sqlite: 7_870_511, json: 5_726_888, rows: 1_724, nodes: 4_959 },
-				group: { sqlite: 7_411_353, json: 5_256_883, rows: 1_737, nodes: 4_836 },
-				report: { sqlite: 6_612_653, json: 4_438_804, rows: 1_719, nodes: 4_661 },
+				status: { sqlite: 4_412_084, json: 2_157_753, rows: 1_381, nodes: 2_267 },
+				quote: { sqlite: 6_753_211, json: 4_315_539, rows: 1_710, nodes: 4_536 },
+				boostOfQuote: { sqlite: 6_878_528, json: 4_531_681, rows: 1_763, nodes: 5_439 },
+				conversation: { sqlite: 8_132_635, json: 5_726_888, rows: 1_724, nodes: 4_959 },
+				group: { sqlite: 7_673_477, json: 5_256_883, rows: 1_737, nodes: 4_836 },
+				report: { sqlite: 6_874_777, json: 4_438_804, rows: 1_719, nodes: 4_661 },
 			},
 		],
 	])(

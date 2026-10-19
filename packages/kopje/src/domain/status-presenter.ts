@@ -327,8 +327,9 @@ function statusGraph<R extends GraphRow>(
 // status at a time (a status alone is not capped: its rows are bounded as a unit, "Maxima of presented units").
 export type ChunkPlan = { readonly target: number; readonly cap: number }
 
-// Pages, contexts, search, histories and lookups: 3 MiB of heap.
-export const PAGE_CHUNKS: ChunkPlan = { target: 3 * 1024 * 1024, cap: 3 * 1024 * 1024 }
+// Pages, contexts, search, histories and lookups: 2.5 MiB of heap, so a timeline's peak with the backstop fired stays
+// within half of the Store isolate (docs/threat-model.md, the peaks table).
+export const PAGE_CHUNKS: ChunkPlan = { target: 2.5 * 1024 * 1024, cap: 2.5 * 1024 * 1024 }
 // Grouped notifications and admin reports, which keep the most besides their statuses: 1 MiB.
 export const LARGE_ITEM_CHUNKS: ChunkPlan = { target: 1024 * 1024, cap: 1024 * 1024 }
 

@@ -1741,7 +1741,7 @@ out of SQLite and what it presents, three ways: filled with characters JSON esca
 same with mentioned accounts that have no stored url, so their url is derived; and filled with what reads the most
 bytes for each bound (ASCII where the bound is in bytes, four-byte characters where it is in characters: a 10,000
 character description reads 40,000 bytes). Every part is at the bound RES-3 states for a presented status and account
-above, with accounts on 2,000-character domains (the longest an actor id of 2,048 holds), hashtag names of four-byte
+above, at the largest value its stored-bound trigger accepts (RES-2), the source text a status row reads included, with accounts on 2,000-character domains (the longest an actor id of 2,048 holds), hashtag names of four-byte
 characters, and the viewer's filters at theirs: 50 filters in every context, each with a 256-character title and 20
 keywords of 512 characters, the first held by the status, and naming the statuses read, so every status carries 50
 filter results (about 0.24 MB each set) and every read takes the 1,000 keywords. SQLite bytes are the UTF-8 bytes of every value read (8 per number); nodes are the
@@ -1755,16 +1755,16 @@ RPC limit.
 | Shape                                                            | Most SQLite bytes | Most JSON bytes | Rows read | Nodes | Share of 8 MiB |
 | ---------------------------------------------------------------- | ----------------- | --------------- | --------- | ----- | -------------- |
 | Account occurrence                                               | 114,914           | 121,710         | 1         | 36    | 1.5%           |
-| Status                                                           | 4,281,022         | 2,595,446       | 1,381     | 2,267 | 31%            |
-| Quote (the status and its quoted status)                         | 6,491,087         | 5,190,925       | 1,710     | 4,536 | 62%            |
-| Boost of a quote                                                 | 6,616,404         | 5,564,762       | 1,763     | 5,439 | 66%            |
-| Conversation: 12 participants presented, its last status a quote | 7,870,511         | 6,651,414       | 1,724     | 4,959 | 79.3%          |
-| Notification group: 8 sample accounts, its status a quote        | 7,411,353         | 6,165,029       | 1,737     | 4,836 | 73.5%          |
-| Report: its first status a quote past the 2 MiB allowance        | 6,612,653         | 5,318,285       | 1,719     | 4,661 | 63.4%          |
+| Status                                                           | 4,412,084         | 2,595,446       | 1,381     | 2,267 | 31%            |
+| Quote (the status and its quoted status)                         | 6,753,211         | 5,190,925       | 1,710     | 4,536 | 62%            |
+| Boost of a quote                                                 | 6,878,528         | 5,564,762       | 1,763     | 5,439 | 66%            |
+| Conversation: 12 participants presented, its last status a quote | 8,132,635         | 6,651,414       | 1,724     | 4,959 | 79.3%          |
+| Notification group: 8 sample accounts, its status a quote        | 7,673,477         | 6,165,029       | 1,737     | 4,836 | 73.5%          |
+| Report: its first status a quote past the 2 MiB allowance        | 6,874,777         | 5,318,285       | 1,719     | 4,661 | 63.4%          |
 | ActivityPub Note: a local status at its bounds, 1,000 addressed  | 3,685,367         | 4,220,294       | 1,276     | 2,616 | 50.3%          |
 | Its Create (the Note and its addressing again)                   |                   | 6,276,334       |           |       | 74.8%          |
 
-Mentions whose url is derived read and present less (the conversation: 5,232,177 and 5,832,214 bytes): a derived url
+Mentions whose url is derived read and present less (the conversation: 5,275,851 and 5,832,214 bytes): a derived url
 within the bound is at most the stored bound, and a longer one presents as ''.
 
 A Note shows what the Status entity shows: its hashtags, mentions and attachments are read through the same
@@ -1802,7 +1802,7 @@ bytes, which are at least its UTF-16 code units): the status, its boosted origin
 or, for a boost, of its original (a boost has no quote of its own, R35). One query per window of 80 statuses computes it
 (`statusRowBoundSql` in `src/domain/status-rows.ts`) from the same column maps that generate every hydrate query's
 select list (`src/db/columns.ts`), so it cannot drift from what is read; it counts a row whether or not the viewer is
-shown it. A chunk holds statuses while their R sums to at most its target, at most 80 and at least one: 3 MiB of heap
+shown it. A chunk holds statuses while their R sums to at most its target, at most 80 and at least one: 2.5 MiB of heap
 for pages, contexts, search, histories and lookups, and 1 MiB for grouped notifications and admin reports, which hold
 the most besides their statuses. A chunk of several is read through a `RowMeter` (`src/db/sql.ts`), which adds each
 row's heap under the model as the cursor returns it (workerd's cursor runs the statement lazily, one row ahead of the
@@ -1835,15 +1835,15 @@ planned queries to their ceilings:
 
 R takes about 0.7 ms a window of 40 statuses. It is 1.2 to 1.5 times the meter's count for an ordinary status (its
 constant terms count rows that may not exist), 2.4 for the realistic one (Japanese text), 1.02 for a status with 200
-short mentions and 70 hashtags, and 1.17 at the maxima.
+short mentions and 70 hashtags, and 1.15 at the maxima.
 
 Single items at their maxima (Store isolate), from the table above at about 6 values a row:
 
 | Item                                         | Payload        | Rows  | Heap with 25% headroom | Rejected-item objects |
 | -------------------------------------------- | -------------- | ----- | ---------------------- | --------------------- |
-| Boost of a quote                             | 6.62 MB        | 1,763 | 17.1 MB                | 16.7 MB               |
-| Group status (a quote) and 8 sample accounts | 6.49 + 0.92 MB |       | 16.8 + 2.3 MB          | 18.5 MB               |
-| Report status and 4 accounts                 | 6.61 MB        | 1,718 | 18.3 MB                | 16.0 MB               |
+| Boost of a quote                             | 6.88 MB        | 1,763 | 17.8 MB                | 16.7 MB               |
+| Group status (a quote) and 8 sample accounts | 6.75 + 0.92 MB |       | 17.5 + 2.3 MB          | 18.5 MB               |
+| Report status and 4 accounts                 | 6.87 MB        | 1,718 | 19.0 MB                | 16.0 MB               |
 
 Groups and reports also keep the presentation's state: the compiled filters (50 filters of 20 keywords, about
 0.5 MB) and the filter results cached by status (at most 50 results of about 1.2 KB each, 60 KB a status) for the
@@ -1854,14 +1854,14 @@ pass, and the passes are at most four), 200 for a page of reports (its at most 1
 
 | Answer (Store isolate)                      | Normal  | Backstop fired, the dropped chunk still live | A single item |
 | ------------------------------------------- | ------- | -------------------------------------------- | ------------- |
-| Timelines (largest item a boost of a quote) | 59.0 MB | 63.9 MB                                      | 59.0 MB       |
-| Groups                                      | 72.9 MB | 75.2 MB                                      | 72.9 MB       |
-| Reports                                     | 72.0 MB | 74.3 MB                                      | 72.0 MB       |
+| Timelines (largest item a boost of a quote) | 59.7 MB | 63.9 MB                                      | 59.7 MB       |
+| Groups                                      | 73.6 MB | 75.9 MB                                      | 73.6 MB       |
+| Reports                                     | 72.7 MB | 75.0 MB                                      | 72.7 MB       |
 
-A chunk of several takes at most its target of heap, 3 MiB (3.15 MB) or 1 MiB (1.05 MB). Timelines: rows max(1.25 ×
-3.15, 17.1) MB, the admitted answer 25.2 MB and the rejected item 16.7 MB; with the backstop fired, 1.25 × (3.15 + 0.8)
-MB of dropped rows more. Groups: 16.8 + 2.3 + 25.2 + 18.5 + 10.1 MB, and reports 18.3 + 25.2 + 16.0 + 12.5 MB, each with
-1.25 × (1.05 + 0.8) MB more when the backstop fires. The cap is 3 MiB so that the fallback fits within half of the
+A chunk of several takes at most its target of heap, 2.5 MiB (2.62 MB) or 1 MiB (1.05 MB). Timelines: rows max(1.25 ×
+2.62, 17.8) MB, the admitted answer 25.2 MB and the rejected item 16.7 MB; with the backstop fired, 1.25 × (2.62 + 0.8)
+MB of dropped rows more (63.94 MB). Groups: 17.5 + 2.3 + 25.2 + 18.5 + 10.1 MB, and reports 19.0 + 25.2 + 16.0 + 12.5 MB,
+each with 1.25 × (1.05 + 0.8) MB more when the backstop fires. The cap is 2.5 MiB so that the fallback fits within half of the
 isolate even when the dropped chunk is still live: the backstop-fired figures bound the fallback whenever the dropped
 rows are collected. A boost that showed a quote of its own (a legacy row) would make a timeline's largest item a boost carrying
 its own quote whose original quotes another status: about 22.8 MB of rows and 24.5 MB of objects, 72.5 MB at a chunk of
@@ -1871,12 +1871,12 @@ one; it shows none (R35).
 | ------------------------------------------------- | ------------- | -------------- |
 | RPC copy (serialized; deserialized in the Worker) | 8.4 MB        | 25.2 MB        |
 | The Worker's JSON string and the body             |               | 25.2 MB        |
-| Peak                                              | 59.0 MB       | 50 MB          |
+| Peak                                              | 59.7 MB       | 50 MB          |
 
 The Store's peak is the timelines' (above), while an item is admitted; the RPC copy comes after it. The Worker's JSON
 string is counted at two bytes a character (16.8 MB) and the body at its UTF-8 bytes. Timelines stay within half of
 the Store isolate's 128 MB, and the Worker within half of its own. One isolate holding both sides at
-once, the Store's objects alive while the Worker's are built, would reach about 105 MB; it stays within half (59 MB)
+once, the Store's objects alive while the Worker's are built, would reach about 106 MB; it stays within half (59.7 MB)
 when the Store drops its objects once they are serialized. Groups and reports pass half of the Store isolate (RES-3,
 the Gap note on their heap).
 
