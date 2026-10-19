@@ -115,16 +115,21 @@ describe('dump', () => {
 		expect(withoutState(await tableSnapshot(target))).toEqual(withoutState(await tableSnapshot(source)))
 	})
 
-	// RES-2: a dump taken before 0048_stored_bounds, of rows past their stored bounds, restores into a Store at the
-	// same migrations (the import requires them equal), which then upgrades through 0048 to P(x) of every value.
-	it('restores a dump taken before 0048_stored_bounds, which then upgrades through it', async () => {
-		const before = MIGRATIONS.slice(0, MIGRATION_NAMES.indexOf('0048_stored_bounds'))
+	// A dump of a Store migrated to just before `migration`, seeded by `seed`, imported and verified into a Store at the
+	// same migrations (the import requires them equal), all through StoreAdmin over kernels of those migrations, so
+	// nothing upgrades the Store on its own. `check` then runs in the target, given the kernel that applies `migration`.
+	async function restoredBefore(
+		migration: string,
+		seed: (sql: SqlStorage) => void,
+		check: (sql: SqlStorage, upgrade: () => ReturnType<ReturnType<typeof testKernel>['upgrade']>) => Promise<void>
+	): Promise<void> {
+		const before = MIGRATIONS.slice(0, MIGRATION_NAMES.indexOf(migration))
 		const options = { source: { build: BUILD, version: 'test' }, log: () => {} }
 		const source = freshStore()
 		const text = await runInDurableObject(source, async (_instance, state) => {
 			await state.storage.deleteAlarm()
 			expect(await testKernel(state, before).upgrade()).toMatchObject({ ok: true })
-			seedBounded(state.storage.sql)
+			seed(state.storage.sql)
 			const dumping = new StoreAdmin(state, testKernel(state, before), options)
 			return (
 				await collectDump({
@@ -169,16 +174,57 @@ describe('dump', () => {
 					break
 				}
 			}
+			await check(sql, () => testKernel(state, MIGRATIONS.slice(0, before.length + 1)).upgrade())
+		})
+	}
+
+	// RES-2: a dump taken before 0048_stored_bounds, of rows past their stored bounds, restores into a Store at the
+	// same migrations, which then upgrades through 0048 to P(x) of every value.
+	it('restores a dump taken before 0048_stored_bounds, which then upgrades through it', async () => {
+		await restoredBefore('0048_stored_bounds', seedBounded, async (sql, upgrade) => {
 			const expected = TABLES.map((table) => sql.exec(storedSql(table)).toArray())
 			expect(TABLES.map((table) => sql.exec<{ n: number }>(movedCountSql(table)).one().n).every((n) => n > 0)).toBe(
 				true
 			)
-			expect(await testKernel(state).upgrade()).toMatchObject({
-				ok: true,
-				applied: MIGRATION_NAMES.slice(before.length),
-			})
+			expect(await upgrade()).toMatchObject({ ok: true, applied: ['0048_stored_bounds'] })
 			expect(TABLES.map((table) => sql.exec(columnsSql(table)).toArray())).toEqual(expected)
 			expect(TABLES.map((table) => sql.exec<{ n: number }>(movedCountSql(table)).one().n)).toEqual([0, 0, 0, 0])
+		})
+	}, 120_000)
+
+	// RES-2: a dump taken before 0049_instance_bounds, of instance settings past their stored bounds, restores into a
+	// Store at the same migrations, which then upgrades through 0049 to P(x) of every value (no row where P is none).
+	it('restores a dump taken before 0049_instance_bounds, which then upgrades through it', async () => {
+		const settings = {
+			title: 'T'.repeat(1500),
+			description: `${' '.repeat(200)}tail`,
+			contact_email: `${'e'.repeat(300)}@example.com`,
+			privacy_policy: `<p>${'p'.repeat(50_000)}</p>`,
+			extended_description: '<p>kept</p>',
+			terms_of_service: ' \v ',
+			show_domain_blocks: 'everyone',
+		}
+		const seed = (sql: SqlStorage) => {
+			for (const [name, value] of Object.entries(settings)) {
+				sql.exec('INSERT INTO instance_settings (name, value) VALUES (?, ?)', name, value)
+			}
+		}
+		await restoredBefore('0049_instance_bounds', seed, async (sql, upgrade) => {
+			const names = Object.keys(settings)
+			const read = () =>
+				sql
+					.exec<{ name: string; value: string }>(
+						`SELECT name, value FROM instance_settings WHERE name IN (${names.map(() => '?').join(', ')}) ORDER BY name`,
+						...names
+					)
+					.toArray()
+			expect(read()).toHaveLength(names.length)
+			expect(await upgrade()).toMatchObject({ ok: true, applied: ['0049_instance_bounds'] })
+			// The description's first 200 code points are blank, so it goes too.
+			expect(read()).toEqual([
+				{ name: 'extended_description', value: '<p>kept</p>' },
+				{ name: 'title', value: 'T'.repeat(1024) },
+			])
 		})
 	}, 120_000)
 

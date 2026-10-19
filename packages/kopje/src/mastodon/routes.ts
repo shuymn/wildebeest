@@ -23,6 +23,7 @@ import * as reports from './reports'
 import * as scheduled from './scheduled-statuses'
 import * as search from './search'
 import * as statuses from './statuses'
+import * as suggestions from './suggestions'
 import * as tags from './tags'
 import * as timelines from './timelines'
 
@@ -71,13 +72,13 @@ export const ROUTES: readonly Route[] = [
 		handler: instance.extendedDescription,
 	},
 	{ method: 'GET', path: '/api/v1/instance/languages', access: 'public', handler: instance.languages },
-	{ method: 'GET', path: '/api/v1/instance/privacy_policy', access: 'public', handler: instance.notConfigured },
-	{ method: 'GET', path: '/api/v1/instance/terms_of_service', access: 'public', handler: instance.notConfigured },
+	{ method: 'GET', path: '/api/v1/instance/privacy_policy', access: 'public', handler: instance.privacyPolicy },
+	{ method: 'GET', path: '/api/v1/instance/terms_of_service', access: 'public', handler: instance.termsOfService },
 	{
 		method: 'GET',
 		path: '/api/v1/instance/terms_of_service/:date',
 		access: 'public',
-		handler: instance.notConfigured,
+		handler: instance.termsOfService,
 	},
 	{
 		method: 'GET',
@@ -86,8 +87,14 @@ export const ROUTES: readonly Route[] = [
 		handler: instance.translationLanguages,
 	},
 	{ method: 'GET', path: '/api/v1/peers/search', access: 'public', handler: instance.searchPeers },
-	{ method: 'GET', path: '/api/v1/instance/activity', access: 'public', handler: instance.notConfigured },
-	{ method: 'GET', path: '/api/v1/instance/domain_blocks', access: 'public', handler: instance.notConfigured },
+	{ method: 'GET', path: '/api/v1/instance/activity', access: 'public', handler: instance.activity },
+	// A token is read: a suspended user's is refused, and show_domain_blocks may list to users only.
+	{
+		method: 'GET',
+		path: '/api/v1/instance/domain_blocks',
+		access: { optional: true },
+		handler: instance.domainBlocks,
+	},
 	{ method: 'GET', path: '/api/v1/preferences', access: { scope: 'read:accounts' }, handler: accounts.preferences },
 	{
 		method: 'GET',
@@ -169,23 +176,24 @@ export const ROUTES: readonly Route[] = [
 	{ method: 'GET', path: '/api/v1/trends/tags', access: 'public', handler: placeholders.emptyList },
 	{ method: 'GET', path: '/api/v1/trends/statuses', access: 'public', handler: placeholders.emptyList },
 	{ method: 'GET', path: '/api/v1/trends/links', access: 'public', handler: placeholders.emptyList },
+	// Follow suggestions (mastodon/suggestions.ts).
 	{
 		method: 'GET',
 		path: '/api/v1/suggestions',
 		access: { scope: 'read:accounts' },
-		handler: placeholders.emptyUserList,
+		handler: suggestions.suggestionsV1,
 	},
 	{
 		method: 'DELETE',
 		path: '/api/v1/suggestions/:id',
 		access: { scope: 'write:accounts' },
-		handler: placeholders.removeSuggestion,
+		handler: suggestions.dismissSuggestion,
 	},
 	{
 		method: 'GET',
 		path: '/api/v2/suggestions',
 		access: { scope: 'read:accounts' },
-		handler: placeholders.emptyUserList,
+		handler: suggestions.suggestionsV2,
 	},
 	{
 		method: 'GET',

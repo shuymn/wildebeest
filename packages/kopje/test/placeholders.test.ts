@@ -1,27 +1,15 @@
 import { describe, expect, it } from 'vitest'
 
-import { type ApiHarness, apiHarness, bearer, form, registerApp, seedAccount, sql } from './api-helpers'
-import { appToken, scopedToken } from './read-helpers'
+import { type ApiHarness, apiHarness, bearer, seedAccount, sql } from './api-helpers'
+import { appToken, appTokenWith, scopedToken } from './read-helpers'
 import { community, getJson } from './status-helpers'
 
 // Features Kopje has no data for yet answer empty, under the access Mastodon gives each route (AUTH-2).
-
-// An app token (no user) with the given scope.
-async function appTokenWith(h: ApiHarness, scope: string): Promise<string> {
-	const app = await registerApp(h, { scopes: scope })
-	const response = await h.request(
-		'/oauth/token',
-		form({ grant_type: 'client_credentials', client_id: app.client_id, client_secret: app.client_secret, scope })
-	)
-	return (await response.json<{ access_token: string }>()).access_token
-}
 
 describe('features without data yet', () => {
 	const userLists: [string, string][] = [
 		['/api/v1/filters', 'read:filters'],
 		['/api/v2/filters', 'read:filters'],
-		['/api/v1/suggestions', 'read:accounts'],
-		['/api/v2/suggestions', 'read:accounts'],
 	]
 
 	it.each(userLists)('%s is an empty list of the user, under %s (AUTH-2)', async (route, scope) => {
@@ -70,7 +58,6 @@ describe('features without data yet', () => {
 	const recordNotFound = { error: 'Record not found' }
 	const notFound = { error: 'Not Found' }
 	const userAnswers: [string, string, string, number, unknown][] = [
-		['DELETE', '/api/v1/suggestions/123', 'write:accounts', 200, {}],
 		['GET', '/api/v1/annual_reports', 'read:accounts', 200, { annual_reports: [], accounts: [], statuses: [] }],
 		['GET', '/api/v1/annual_reports/2025', 'write:accounts', 404, recordNotFound],
 		['POST', '/api/v1/annual_reports/2025/read', 'write:accounts', 404, recordNotFound],

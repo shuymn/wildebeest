@@ -273,8 +273,12 @@ describe("the severing round's budget and its preparatory steps", () => {
 		const uri = await uriOf(w.h.store, r)
 		const alice = await uriOf(w.h.store, w.alice.id)
 		const follow = { type: 'Follow', id: PAIR, object: alice }
+		// Earlier generations' Accepts as a store upgraded through 0051_follow_answer_pairs holds those recorded before
+		// it: untagged while the next Follow arrives (a Follow of this version cancels its pair's unclaimed answers),
+		// then tagged and exposed as the migration's backfill leaves them.
 		for (let generation = 1; generation < generations; generation++) {
 			expect(await receive(w.h.store, uri, follow)).toMatchObject({ applied: true })
+			await sql(w.h.store, 'UPDATE outbound_activities SET follow_pair = NULL')
 			expect(
 				await receive(w.h.store, uri, { type: 'Undo', object: { id: PAIR, type: 'Follow', actor: uri, object: alice } })
 			).toMatchObject({ applied: true })
@@ -282,6 +286,17 @@ describe("the severing round's budget and its preparatory steps", () => {
 		expect(await receive(w.h.store, uri, generations > 1 ? follow : { type: 'Follow', object: alice })).toMatchObject({
 			applied: true,
 		})
+		await sql(
+			w.h.store,
+			`UPDATE outbound_activities SET follow_pair = ?
+			WHERE follow_pair IS NULL AND json_extract(body, '$.activity.type') = 'Accept'`,
+			r
+		)
+		await sql(
+			w.h.store,
+			'UPDATE deliveries SET exposed = 1 WHERE activity_id IN (SELECT id FROM outbound_activities WHERE follow_pair = ?)',
+			r
+		)
 		return { r, uri }
 	}
 

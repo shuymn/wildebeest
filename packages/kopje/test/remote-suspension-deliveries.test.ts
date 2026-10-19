@@ -5,10 +5,10 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { bearer, json, settle, sql, userToken } from './api-helpers'
 import { NOW } from './app-helpers'
-import { LEGACY } from './federation-helpers'
-import { BUILD } from './helpers'
+import { LEGACY, signAsLegacy } from './federation-helpers'
+import { BUILD, claimAndSettle } from './helpers'
 import { newClient, VAPID } from './push-helpers'
-import { deferred, deliveryDeps, recordingFetch } from './quote-helpers'
+import { deferred, deliveryDeps, gatedHost, recordingFetch } from './quote-helpers'
 import { act, receive, unsuspend, uriOf, world, type World } from './remote-suspension-helpers'
 import { follow, post, remoteAccount, remoteFollows, seedStatus } from './status-helpers'
 import { Db } from '../src/db/sql'
@@ -29,30 +29,28 @@ const deliveries = (store: StoreStub) =>
 		FROM deliveries d JOIN outbound_activities o ON o.id = d.activity_id ORDER BY d.id`
 	)
 
-// Claims until nothing is due; the activity type, signer and inbox of each row sent, in order.
-async function drain(store: StoreStub): Promise<[string, string, string][]> {
-	const sent: [string, string, string][] = []
+type SentBody = { type: string; actor: string; object: { id?: string } }
+
+// Claims until nothing is due; each row sent, in order: its body and inbox.
+async function drainSent(store: StoreStub): Promise<{ body: SentBody; inbox: string }[]> {
+	const sent: { body: SentBody; inbox: string }[] = []
 	for (let round = 0; round < 1_000; round++) {
-		const leaseToken = `drain-${round}`
-		const claimed = await store.claimDeliveries(BUILD, { now: NOW, leaseToken })
-		for (const delivery of claimed.deliveries) {
-			const confirmation = await store.confirmDelivery(BUILD, { id: delivery.id, leaseToken, now: NOW })
-			if (confirmation.status === 'send') {
-				const body = JSON.parse(confirmation.body) as { type: string; actor: string }
-				sent.push([body.type, body.actor, delivery.inbox])
-				await store.completeDelivery(BUILD, {
-					id: delivery.id,
-					leaseToken,
-					now: NOW,
-					outcome: { kind: 'delivered', status: 202 },
-				})
-			}
-		}
-		if (claimed.deliveries.length === 0 && claimed.nextDueAt === null) {
+		const { claim, sent: rows } = await claimAndSettle(store, {
+			now: NOW,
+			leaseToken: `drain-${round}`,
+			outcome: { kind: 'delivered', status: 202 },
+		})
+		sent.push(...rows.map(({ inbox, body }) => ({ body: JSON.parse(body) as SentBody, inbox })))
+		if (claim.deliveries.length === 0 && claim.nextDueAt === null) {
 			return sent
 		}
 	}
 	throw new Error('the deliveries did not drain')
+}
+
+// The activity type, signer and inbox of each row sent, in order.
+async function drain(store: StoreStub): Promise<[string, string, string][]> {
+	return (await drainSent(store)).map(({ body, inbox }) => [body.type, body.actor, inbox])
 }
 
 const suspend = async (w: World, id: string) =>
@@ -197,7 +195,7 @@ describe('lane order with the withdrawing Rejects', () => {
 })
 
 describe('a re-formed follow after the severing', () => {
-	it("delivers the Reject before the new follow's Accept in their shared lane, and no stale Accept after it", async () => {
+	it("sends only the new follow's Accept: the first follow's Accept and Reject, never claimed, are cancelled", async () => {
 		const w = await world()
 		const r = await remoteAccount(w.h.store, 'r', 'remote.example')
 		const uri = await uriOf(w.h.store, r)
@@ -206,16 +204,16 @@ describe('a re-formed follow after the severing', () => {
 		await suspend(w, r)
 		await settle(w.h.store)
 		expect(await unsuspend(w, r)).toMatchObject({ status: 200 })
-		// r follows alice again: her Accept is queued behind the Reject in the lane to remote.example.
-		expect(await receive(w.h.store, uri, { type: 'Follow', object: alice })).toMatchObject({ applied: true })
+		// The lane holds the first follow's Accept, queued before the suspension, and the Reject that withdraws it.
+		expect((await deliveries(w.h.store)).map((d) => d.type)).toEqual(['Accept', 'Reject'])
+		// r follows alice again: both are stale, and only the new follow's Accept goes.
+		const renewal = 'https://remote.example/follows/renewed'
+		expect(await receive(w.h.store, uri, { id: renewal, type: 'Follow', object: alice })).toMatchObject({
+			applied: true,
+		})
 		await settle(w.h.store)
-		// The lane in order: the first follow's Accept, queued before the suspension (r is available again), then the
-		// Reject that withdraws it, then the new follow's Accept; nothing of the first follow comes after its Reject.
-		expect((await drain(w.h.store)).map(([type, actor, inbox]) => [type, actor, inbox])).toEqual([
-			['Accept', alice, 'https://remote.example/inbox'],
-			['Reject', alice, 'https://remote.example/inbox'],
-			['Accept', alice, 'https://remote.example/inbox'],
-		])
+		const sent = await drainSent(w.h.store)
+		expect(sent.map(({ body }) => [body.type, body.actor, body.object.id])).toEqual([['Accept', alice, renewal]])
 	})
 })
 
@@ -225,33 +223,22 @@ describe('the send boundary is confirmation', () => {
 	// A delivery round over `store` held at its host check, after the claim and before confirmation: `reached` resolves
 	// when it gets there, and `release` lets it go on.
 	function heldAtHostCheck(store: StoreStub, fetch: typeof globalThis.fetch) {
-		const reached = deferred()
-		const release = deferred()
+		const { checkHost, reached, release } = gatedHost()
 		const round = deliveryRound(testEnv, {
 			...deliveryDeps(
 				() => store,
 				fetch,
 				() => NOW
 			),
-			checkHost: async () => {
-				reached.resolve()
-				await release.promise
-			},
+			checkHost,
 		})
-		return { reached: reached.promise, release: release.resolve, round }
+		return { reached, release, round }
 	}
 
 	// alice signs with the legacy fixture key, so the round can load her signer; r follows her.
 	async function signed() {
 		const w = await world()
-		await sql(
-			w.h.store,
-			'UPDATE local_accounts SET privkey = ?, privkey_salt = ?, pubkey = ? WHERE account_id = ?',
-			LEGACY.privkey.slice().buffer,
-			LEGACY.salt.slice().buffer,
-			LEGACY.pubkey,
-			w.alice.id
-		)
+		await signAsLegacy(w.h.store, w.alice.id)
 		const r = await remoteAccount(w.h.store, 'r', 'remote.example')
 		await remoteFollows(w.h.store, r, w.alice.id)
 		return { w, r }

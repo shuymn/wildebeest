@@ -26,7 +26,14 @@ import { moderationRound } from '../src/domain/suspension'
 import { normalizeTag } from '../src/domain/tag-name'
 import { parseRemoteStatus } from '../src/federation/remote-status'
 import { StoreUnavailableError, toStoreUnavailable } from '../src/platform/store-errors'
-import { storedBoundsMigrationSql } from '../src/platform/stored-bounds'
+import {
+	INSTANCE_SETTING_BOUNDS,
+	INSTANCE_SETTING_NAMES,
+	instanceBoundsMigrationSql,
+	type InstanceSettingName,
+	storedBoundsMigrationSql,
+	storedInstanceSetting,
+} from '../src/platform/stored-bounds'
 
 // The shipped migrations, in order; test-only files are named after them (9999_*).
 const NAMES = MIGRATIONS.map((m) => m.name)
@@ -49,6 +56,7 @@ const SCHEMA_TABLES = [
 	'favourite_likes',
 	'favourites',
 	'fedify_kv',
+	'follow_recommendation_mutes',
 	'follows',
 	'inbound_jobs',
 	'inbound_retractions',
@@ -5055,6 +5063,307 @@ describe('0048_stored_bounds', () => {
 			).toEqual([])
 		})
 	}, 120_000)
+})
+
+describe('0049_instance_bounds', () => {
+	const NAME = '0049_instance_bounds'
+	const at = NAMES.indexOf(NAME)
+	const REFUSED = /instance_settings: a value past its stored bound/
+	const astral = '\u{1F600}'
+	const ENCODER = new TextEncoder()
+	const bytes = (text: string) => ENCODER.encode(text).length
+	// 50,000 UTF-8 bytes exactly, of three-byte characters and two ASCII ones.
+	const documentAt = `${'日'.repeat(16_666)}aa`
+	const emailAt = `${'a'.repeat(254 - '@example.com'.length)}@example.com`
+	const rulesAt = JSON.stringify([`${'r'.repeat(65_536 - 4)}`])
+	// Each covered name at its bound (kept), and one past it in its unit (refused, and rewritten by the migration).
+	const BOUNDS: Record<InstanceSettingName, { at: string; past: string[] }> = {
+		title: { at: astral.repeat(1024), past: [astral.repeat(1025), `${'t'.repeat(1024)}\u3000`] },
+		description: { at: astral.repeat(200), past: [astral.repeat(201)] },
+		contact_email: { at: emailAt, past: [`a${emailAt}`] },
+		rules: { at: rulesAt, past: [JSON.stringify([`${'r'.repeat(65_536 - 3)}`]), '{"a":1}', '[1,', ''] },
+		extended_description: { at: documentAt, past: [`${documentAt}a`, ' \t\n\v\f\r'] },
+		privacy_policy: { at: documentAt, past: [`${documentAt}a`, ''] },
+		terms_of_service: { at: documentAt, past: [`${documentAt}a`, '\v'] },
+		terms_of_service_effective_date: {
+			at: '2026-11-01',
+			past: ['2026-02-30', '2026-1-05', ' 2026-11-01', '2026-11-1 '],
+		},
+		show_domain_blocks: { at: 'users', past: ['everyone', 'Users', 'all '] },
+		show_domain_blocks_rationale: { at: 'all', past: ['', 'disabled\u0000'] },
+		extended_description_updated_at: {
+			at: '2026-10-19T00:00:00.000Z',
+			past: ['2026-10-19T00:00:00Z', '2026-10-19T24:00:00.000Z', '2026-02-30T00:00:00.000Z'],
+		},
+		privacy_policy_updated_at: { at: '9999-12-31T23:59:59.999Z', past: ['2026-10-19 00:00:00.000Z'] },
+	}
+	// Names 0049 does not cover, with values far past any covered bound.
+	const UNCOVERED = { domain: 'd'.repeat(70_000), admin_email: ' ', web_client_id: '' }
+	const rows = (sql: SqlStorage) =>
+		sql.exec<{ name: string; value: string }>('SELECT name, value FROM instance_settings ORDER BY name').toArray()
+	const insert = (sql: SqlStorage, values: Record<string, string>) => {
+		for (const [name, value] of Object.entries(values)) {
+			sql.exec('INSERT OR REPLACE INTO instance_settings (name, value) VALUES (?, ?)', name, value)
+		}
+	}
+
+	it("holds instanceBoundsMigrationSql's output after its header", () => {
+		const sql = MIGRATIONS[at]?.sql ?? ''
+		const end = sql.indexOf('\n\n')
+		expect(
+			sql
+				.slice(0, end)
+				.split('\n')
+				.every((line) => line.startsWith('--'))
+		).toBe(true)
+		expect(sql.slice(end + 2)).toBe(instanceBoundsMigrationSql())
+	})
+
+	it('measures each bound in its unit', () => {
+		expect([bytes(documentAt), documentAt.length, bytes(emailAt), bytes(rulesAt)]).toEqual([
+			50_000, 16_668, 254, 65_536,
+		])
+		expect([...BOUNDS.title.at].length).toBe(1024)
+		expect(bytes(BOUNDS.rules.past[0] ?? '')).toBe(65_537)
+	})
+
+	// One round per value of each name (a name holds one row): every value at its bound, then each value past it in
+	// turn, with the uncovered names beside them.
+	const rounds: Record<string, string>[] = [
+		Object.fromEntries(INSTANCE_SETTING_NAMES.map((name) => [name, BOUNDS[name].at])),
+		...[0, 1, 2, 3].map((i) =>
+			Object.fromEntries(
+				INSTANCE_SETTING_NAMES.flatMap((name) => {
+					const past = BOUNDS[name].past[i]
+					return past === undefined ? [] : [[name, past]]
+				})
+			)
+		),
+	]
+	for (const [round, values] of rounds.entries()) {
+		it(`stores each covered value as P(x) and leaves the other names alone (round ${round})`, async () => {
+			const store = freshStore()
+			await runInDurableObject(store, async (_instance, state) => {
+				const sql = state.storage.sql
+				await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+				insert(sql, { ...values, ...UNCOVERED })
+				const expected = rows(sql).flatMap(({ name, value }) => {
+					const bound = INSTANCE_SETTING_BOUNDS[name as InstanceSettingName]
+					if (bound === undefined) {
+						return [{ name, value }]
+					}
+					const stored = sql.exec<{ v: string | null }>(`SELECT ${bound.projection('?1')} AS v`, value).one().v
+					// The writer agrees with P on these normalized values.
+					expect(storedInstanceSetting(name as InstanceSettingName, value), name).toBe(stored)
+					return stored === null ? [] : [{ name, value: stored }]
+				})
+				expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+				expect(rows(sql)).toEqual(expected)
+				if (round === 0) {
+					expect(rows(sql)).toHaveLength(INSTANCE_SETTING_NAMES.length + 3)
+				} else {
+					// Only the cut names keep a row past their bound, cut.
+					expect(rows(sql).map((row) => row.name)).toEqual(
+						[
+							'admin_email',
+							'domain',
+							'web_client_id',
+							...(round === 1 ? ['description', 'title'] : round === 2 ? ['title'] : []),
+						].sort()
+					)
+				}
+			})
+		}, 120_000)
+	}
+
+	it('refuses a value one past its bound on insert and update, and accepts one at it', async () => {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			for (const name of INSTANCE_SETTING_NAMES) {
+				const { at: value, past } = BOUNDS[name]
+				for (const over of past) {
+					expect(() => sql.exec('INSERT INTO instance_settings (name, value) VALUES (?, ?)', name, over), name).toThrow(
+						REFUSED
+					)
+				}
+				sql.exec('INSERT INTO instance_settings (name, value) VALUES (?, ?)', name, value)
+				for (const over of past) {
+					expect(() => sql.exec('UPDATE instance_settings SET value = ? WHERE name = ?', over, name), name).toThrow(
+						REFUSED
+					)
+				}
+				expect(sql.exec('SELECT value AS v FROM instance_settings WHERE name = ?', name).one().v).toBe(value)
+			}
+			// A rename into a covered name is checked too; uncovered names take anything.
+			sql.exec("INSERT INTO instance_settings (name, value) VALUES ('scratch', ?)", 'x'.repeat(300))
+			expect(() =>
+				sql.exec("UPDATE instance_settings SET name = 'contact_email_x' WHERE name = 'scratch'")
+			).not.toThrow()
+			sql.exec("DELETE FROM instance_settings WHERE name = 'contact_email'")
+			expect(() =>
+				sql.exec("UPDATE instance_settings SET name = 'contact_email' WHERE name = 'contact_email_x'")
+			).toThrow(REFUSED)
+			insert(sql, UNCOVERED)
+			// A Unicode space is text, not blank.
+			expect(() => sql.exec("UPDATE instance_settings SET value = '\u3000' WHERE name = 'title'")).not.toThrow()
+		})
+	}, 120_000)
+
+	it("indexes the suspend blocks by domain, which the public list's chunk query searches", async () => {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			const plan = state.storage.sql
+				.exec<{ detail: string }>(
+					`EXPLAIN QUERY PLAN SELECT domain, obfuscate, public_comment FROM instance_domain_blocks
+					INDEXED BY instance_domain_blocks_public WHERE severity = 'suspend' AND domain > ?1 ORDER BY domain LIMIT 500`,
+					''
+				)
+				.toArray()
+				.map((row) => row.detail)
+			expect(plan).toEqual(['SEARCH instance_domain_blocks USING INDEX instance_domain_blocks_public (domain>?)'])
+		})
+	})
+})
+
+describe('0050_follow_recommendation_mutes', () => {
+	const NAME = '0050_follow_recommendation_mutes'
+	const at = NAMES.indexOf(NAME)
+
+	it('stores one dismissal per local account and known account, gone with either, found by target', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+			// Nothing of the existing schema is read: a store with accounts upgrades the same way.
+			sql.exec(
+				`INSERT INTO accounts (id, uri, username, domain) VALUES
+					('100000000000000001', 'https://kopje.test/ap/users/a', 'a', NULL),
+					('100000000000000002', 'https://r.example/b', 'b', 'r.example'),
+					('100000000000000003', 'https://r.example/c', 'c', 'r.example')`
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES ('100000000000000001', 'a@example.com', X'00', X'00', 'test')"
+			)
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+			const dismiss = (owner: string, target: string) =>
+				sql.exec('INSERT INTO follow_recommendation_mutes (account_id, target_account_id) VALUES (?, ?)', owner, target)
+			dismiss('100000000000000001', '100000000000000002')
+			dismiss('100000000000000001', '100000000000000003')
+			expect(() => dismiss('100000000000000001', '100000000000000002')).toThrow(/UNIQUE constraint failed/)
+			// The owner is a local account, the target a known one.
+			expect(() => dismiss('100000000000000002', '100000000000000003')).toThrow(/FOREIGN KEY constraint failed/)
+			expect(() => dismiss('100000000000000001', '100000000000000009')).toThrow(/FOREIGN KEY constraint failed/)
+			const { created_at } = sql
+				.exec<{ created_at: string }>('SELECT created_at FROM follow_recommendation_mutes LIMIT 1')
+				.one()
+			expect(created_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/)
+			const plan = sql
+				.exec<{ detail: string }>(
+					'EXPLAIN QUERY PLAN SELECT account_id FROM follow_recommendation_mutes WHERE target_account_id = ?',
+					'100000000000000002'
+				)
+				.toArray()
+				.map((row) => row.detail)
+			expect(plan).toEqual([
+				'SEARCH follow_recommendation_mutes USING COVERING INDEX follow_recommendation_mutes_target (target_account_id=?)',
+			])
+			sql.exec("DELETE FROM accounts WHERE id = '100000000000000003'")
+			expect(sql.exec('SELECT target_account_id FROM follow_recommendation_mutes').toArray()).toEqual([
+				{ target_account_id: '100000000000000002' },
+			])
+		})
+	})
+})
+
+describe('0051_follow_answer_pairs', () => {
+	const NAME = '0051_follow_answer_pairs'
+	const at = NAMES.indexOf(NAME)
+	const LOCAL = '100000000000000001'
+	const REMOTE = '100000000000000002'
+	const answer = (type: string, objectType: string, actor: string) =>
+		JSON.stringify({
+			activity: {
+				type,
+				actor: 'https://kopje.test/ap/users/a',
+				object: { id: 'https://r.example/f/1', type: objectType, actor, object: 'https://kopje.test/ap/users/a' },
+			},
+			audience: { followers: false, accounts: [REMOTE] },
+		})
+
+	it('tags every Follow answer with its remote pair, exposes their existing rows, and nothing else', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+			sql.exec(
+				`INSERT INTO accounts (id, uri, username, domain) VALUES
+					(?1, 'https://kopje.test/ap/users/a', 'a', NULL), (?2, 'https://r.example/u', 'u', 'r.example')`,
+				LOCAL,
+				REMOTE
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'a@example.com', X'00', X'00', 'k')",
+				LOCAL
+			)
+			const bodies = [
+				answer('Accept', 'Follow', 'https://r.example/u'),
+				answer('Reject', 'Follow', 'https://r.example/u'),
+				// Not tagged: a QuoteRequest's answer, another activity, an answer to an actor never stored, and one to a
+				// local actor's Follow.
+				answer('Accept', 'QuoteRequest', 'https://r.example/u'),
+				'{"activity":{"type":"Create","object":{"type":"Note"}},"audience":{"followers":true,"accounts":[]}}',
+				answer('Accept', 'Follow', 'https://gone.example/u'),
+				answer('Accept', 'Follow', 'https://kopje.test/ap/users/a'),
+			]
+			for (const [i, body] of bodies.entries()) {
+				sql.exec(
+					'INSERT INTO outbound_activities (id, account_id, body, created_at) VALUES (?, ?, ?, 0)',
+					i + 1,
+					LOCAL,
+					body
+				)
+				sql.exec(
+					`INSERT INTO deliveries (activity_id, account_id, inbox_url, lane, state, next_attempt_at, updated_at)
+					VALUES (?, ?, 'https://r.example/inbox', 'https://r.example', ?, 0, 0)`,
+					i + 1,
+					LOCAL,
+					i % 2 === 0 ? 'pending' : 'gave_up'
+				)
+			}
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+			expect(
+				sql
+					.exec(
+						'SELECT o.id, o.follow_pair, d.exposed FROM outbound_activities o JOIN deliveries d ON d.activity_id = o.id ORDER BY o.id'
+					)
+					.toArray()
+			).toEqual([
+				{ id: 1, follow_pair: REMOTE, exposed: 1 },
+				{ id: 2, follow_pair: REMOTE, exposed: 1 },
+				{ id: 3, follow_pair: null, exposed: 0 },
+				{ id: 4, follow_pair: null, exposed: 0 },
+				{ id: 5, follow_pair: null, exposed: 0 },
+				{ id: 6, follow_pair: null, exposed: 0 },
+			])
+			expect(() => sql.exec('UPDATE deliveries SET exposed = 2 WHERE id = 1')).toThrow(/CHECK constraint failed/)
+			const plan = (query: string) =>
+				sql
+					.exec<{ detail: string }>(`EXPLAIN QUERY PLAN ${query}`)
+					.toArray()
+					.map((row) => row.detail)
+			expect(
+				plan(
+					`SELECT d.id FROM outbound_activities o INDEXED BY outbound_activities_follow_swept
+					CROSS JOIN deliveries d INDEXED BY deliveries_activity ON d.activity_id = o.id
+					WHERE o.follow_pair IS NOT NULL AND o.superseded = 1 AND d.state = 'gave_up' ORDER BY o.id LIMIT 500`
+				)
+			).toEqual([
+				'SCAN o USING INDEX outbound_activities_follow_swept',
+				'SEARCH d USING INDEX deliveries_activity (activity_id=?)',
+			])
+		})
+	})
 })
 
 describe('0052_favourite_likes', () => {

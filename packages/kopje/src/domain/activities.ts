@@ -627,6 +627,7 @@ export function followAnswerActivity(kind: 'Accept' | 'Reject', input: FollowAns
 			},
 		},
 		audience: { followers: false, accounts: [input.followerId] },
+		followPair: input.followerId,
 	} satisfies OutboundEnvelope
 }
 

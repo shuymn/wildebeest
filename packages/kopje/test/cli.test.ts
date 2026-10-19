@@ -290,6 +290,49 @@ describe('kopje-admin', () => {
 		expect((await cli(['deliveries', '--before', 'x'], { fetch })).code).toBe(2)
 	})
 
+	it("sets the instance's public settings, a document from a file with its other values in one request", async () => {
+		const store = await sourceStore(0)
+		const { fetch, seen } = edge(store)
+		const io = memoryIO(new Map([['terms.html', new TextEncoder().encode('<p>Terms</p>\n')]]))
+		const set = await cli(['instance', 'title=Herd', 'show_domain_blocks=users'], { fetch })
+		expect(set.code, set.err).toBe(0)
+		expect(JSON.parse(set.out)).toMatchObject({ values: { title: 'Herd', show_domain_blocks: 'users' } })
+		const before = seen.length
+		const terms = await cli(
+			['instance', 'terms_of_service', '--file', 'terms.html', 'terms_of_service_effective_date=2026-11-01'],
+			{ fetch, io }
+		)
+		expect(terms.code, terms.err).toBe(0)
+		// One request carried both: the first terms of service needs its date.
+		expect(seen.length - before).toBe(1)
+		expect(await seen.at(-1)?.json()).toEqual({
+			values: { terms_of_service: '<p>Terms</p>\n', terms_of_service_effective_date: '2026-11-01' },
+		})
+		expect(JSON.parse((await cli(['instance'], { fetch })).out)).toEqual({
+			values: {
+				title: 'Herd',
+				terms_of_service: '<p>Terms</p>',
+				terms_of_service_effective_date: '2026-11-01',
+				show_domain_blocks: 'users',
+			},
+		})
+		// An empty value removes.
+		expect((await cli(['instance', 'title='], { fetch })).code).toBe(0)
+		expect(JSON.parse((await cli(['instance'], { fetch })).out).values).not.toHaveProperty('title')
+		// A refused value exits 1; malformed arguments and the import token exit 2 before any request.
+		expect((await cli(['instance', 'title= '], { fetch })).code).toBe(1)
+		const count = seen.length
+		for (const argv of [
+			['instance', 'title'],
+			['instance', 'title=a', 'title=b'],
+			['instance', 'terms_of_service=x', '--file', 'terms.html'],
+			['instance', '--import-token'],
+		]) {
+			expect((await cli(argv, { fetch, io })).code, argv.join(' ')).toBe(2)
+		}
+		expect(seen.length).toBe(count)
+	})
+
 	it("sets a local account's email and shows the moderation log (VIS-29, AUTH-5)", async () => {
 		const store = await sourceStore(0)
 		const { fetch } = edge(store)

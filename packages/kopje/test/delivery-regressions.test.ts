@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { bearer, json, sql } from './api-helpers'
 import { NOW } from './app-helpers'
-import { LEGACY } from './federation-helpers'
+import { LEGACY, signAsLegacy } from './federation-helpers'
 import { BUILD, claimSent, type SentClaim } from './helpers'
 import { QueueSim } from './queue-sim'
 import { act, community, post, remoteAccount, remoteFollows, seedStatus } from './status-helpers'
@@ -170,17 +170,6 @@ function batchOf(count: number) {
 		retry: vi.fn(),
 	}))
 	return { queue: 'kopje', messages, ackAll: vi.fn(), retryAll: vi.fn() } as unknown as MessageBatch
-}
-
-async function signAsLegacy(store: StoreStub, accountId: string) {
-	await sql(
-		store,
-		'UPDATE local_accounts SET privkey = ?, privkey_salt = ?, pubkey = ? WHERE account_id = ?',
-		LEGACY.privkey.slice().buffer,
-		LEGACY.salt.slice().buffer,
-		LEGACY.pubkey,
-		accountId
-	)
 }
 
 describe('wake-ups', () => {

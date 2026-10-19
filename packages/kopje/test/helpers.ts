@@ -2,7 +2,7 @@ import { runInDurableObject } from 'cloudflare:test'
 import { env } from 'cloudflare:workers'
 
 import { MIGRATIONS } from '../src/db/migrations'
-import type { Claim, ClaimedDelivery } from '../src/domain/deliveries'
+import type { Claim, ClaimedDelivery, DeliveryOutcome } from '../src/domain/deliveries'
 import type { StoreStub } from '../src/platform/store-client'
 import { type KernelOptions, type Migration, StoreKernel } from '../src/platform/store-kernel'
 
@@ -78,4 +78,25 @@ export async function claimSent(
 		deliveries.push({ ...delivery, body: confirmation.body })
 	}
 	return { ...claim, deliveries }
+}
+
+// One claim at `now`: each claimed row is confirmed, and each one confirmation lets through is completed with
+// `outcome` (null: left leased), one row at a time. Returns the claim and, in order, each sent row's inbox and body.
+export async function claimAndSettle(
+	store: StoreStub,
+	input: { now: number; leaseToken: string; outcome: DeliveryOutcome | null }
+): Promise<{ claim: Claim; sent: { inbox: string; body: string }[] }> {
+	const { now, leaseToken, outcome } = input
+	const claim = await store.claimDeliveries(BUILD, { now, leaseToken })
+	const sent: { inbox: string; body: string }[] = []
+	for (const delivery of claim.deliveries) {
+		const confirmation = await store.confirmDelivery(BUILD, { id: delivery.id, leaseToken, now })
+		if (confirmation.status === 'send') {
+			sent.push({ inbox: delivery.inbox, body: confirmation.body })
+			if (outcome !== null) {
+				await store.completeDelivery(BUILD, { id: delivery.id, leaseToken, now, outcome })
+			}
+		}
+	}
+	return { claim, sent }
 }

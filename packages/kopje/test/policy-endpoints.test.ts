@@ -18,6 +18,13 @@ import { search } from '../src/domain/search'
 import type { Status } from '../src/domain/status-presenter'
 import { getStatus, getStatuses, interactors, MAX_STATUSES_BY_ID, statusContext } from '../src/domain/statuses'
 import {
+	SUGGESTION_EDGES,
+	SUGGESTION_EDGES_PER_SOURCE,
+	SUGGESTION_SOURCES,
+	suggestions,
+	SUGGESTIONS_KEPT,
+} from '../src/domain/suggestions'
+import {
 	accountStatuses,
 	bookmarks,
 	favourites,
@@ -30,14 +37,14 @@ import type { StoreStub } from '../src/platform/store-client'
 import type { StoreOperation } from '../src/platform/store-kernel'
 
 // The endpoint oracle (docs/visibility.md, "The oracle and the bounds harness"): the status read endpoints, the
-// follower and following lists, account search, the profile directory and search resolution run on generated worlds
-// (test/policy-world.ts) for every available local viewer and, where the endpoint allows it, the anonymous one. No
-// endpoint may show a status (or a boosted original) or an account the model of its rule (test/policy-model.ts) does
-// not allow the viewer. The lists (home with exclusive lists, a list's timeline, public, tag, account statuses,
-// favourites, bookmarks, followers, following, account search, the profile directory) must also show exactly what the
-// model allows of their members, in order, page after page; search resolution must answer an account exactly when
-// account search finds it, and a status exactly when the single-status read shows it, unless the viewer blocks its
-// author's domain.
+// follower and following lists, account search, the profile directory, suggestions and search resolution run on
+// generated worlds (test/policy-world.ts) for every available local viewer and, where the endpoint allows it, the
+// anonymous one. No endpoint may show a status (or a boosted original) or an account the model of its rule
+// (test/policy-model.ts) does not allow the viewer. The lists (home with exclusive lists, a list's timeline, public,
+// tag, account statuses, favourites, bookmarks, followers, following, account search, the profile directory,
+// suggestions) must also show exactly what the model allows of their members, in order, page after page; search
+// resolution must answer an account exactly when account search finds it, and a status exactly when the single-status
+// read shows it, unless the viewer blocks its author's domain.
 
 // Cases per property: each writes a world and runs every endpoint for every viewer.
 const CASES = 60
@@ -230,6 +237,7 @@ describe('the status read endpoints agree with the model of their rules', () => 
 				'status',
 				'status search',
 				'statuses by id',
+				'suggestions',
 				'tag',
 			].sort()
 		)
@@ -671,6 +679,34 @@ function check(sql: SqlStorage, c: Case): string[] {
 					if (JSON.stringify(actual) !== JSON.stringify(expected)) {
 						problems.push(
 							`directory ${order}${local ? ' local' : ''} ${offset}+${limit} ${nameOf(viewer)}: lists [${actual.map(nameOf).join(' ')}], the model [${expected.map(nameOf).join(' ')}]`
+						)
+					}
+				}
+			}
+		}
+
+		// Suggestions (R39), both versions, from each offset: exactly the model's, in order, over the Store's windows.
+		const suggested = m.suggestions(viewer, (x) => c.discoverable[x] === 1, {
+			sources: SUGGESTION_SOURCES,
+			edgesPerSource: SUGGESTION_EDGES_PER_SOURCE,
+			edges: SUGGESTION_EDGES,
+			kept: SUGGESTIONS_KEPT,
+		})
+		for (const version of [1, 2] as const) {
+			for (const offset of [0, 1, 39, 40]) {
+				for (const limit of [1, 40, 80]) {
+					const answered = ok<(Account | { account: Account })[]>(
+						run(suggestions, { ...user, version, offset, limit, present: PRESENT }),
+						'suggestions'
+					)
+					const actual = answered.map((item) => accountIndex.get('account' in item ? item.account.id : item.id) ?? -1)
+					if (actual.length > 0) {
+						shown.add('suggestions')
+					}
+					const expected = suggested.slice(offset, offset + limit)
+					if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+						problems.push(
+							`suggestions v${version} ${offset}+${limit} ${nameOf(viewer)}: suggests [${actual.map(nameOf).join(' ')}], the model [${expected.map(nameOf).join(' ')}]`
 						)
 					}
 				}

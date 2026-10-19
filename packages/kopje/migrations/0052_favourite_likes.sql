@@ -24,8 +24,8 @@
 -- Cost: an empty table, its two indexes and a trigger, and one index over the favourites holding a Like id. Measured
 -- on the benchmark store of test/bench/migration-cost.ts (1,000,000 accounts, 2,000,000 favourites each holding a Like
 -- id, and the rest of that store) in workerd's local Durable Object SQLite, timing the whole upgrade through the kernel
--- (its bookmark, this file's transaction and the verification): 7,644, 7,894 and 7,997 ms at load averages of 2.9 to
--- 3.9, within the 10,000 ms each migration file may take.
+-- (its bookmark, this file's transaction and the verification): 7,644, 7,894, 7,997 and 7,810 ms at load averages of
+-- 2.9 to 4.9, within the 20,000 ms an upgrade may take.
 
 CREATE TABLE favourite_likes (
   id INTEGER PRIMARY KEY,

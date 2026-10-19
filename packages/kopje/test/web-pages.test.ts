@@ -31,7 +31,19 @@ describe('public pages: headers (WEB-2, WEB-3, WEB-5)', () => {
 	it('sends a CSP without script, denies framing, declares the type and opens no CORS', async () => {
 		const h = await community(['alice'])
 		const status = await post(h, h.users.alice, { status: 'hello' })
-		for (const path of ['/@alice', statusPath(status), '/@nobody', '/about']) {
+		await setSetting(h.store, 'privacy_policy', '<p>Policy</p>')
+		await setSetting(h.store, 'terms_of_service', '<p>Terms</p>')
+		await setSetting(h.store, 'terms_of_service_effective_date', '2026-11-01')
+		for (const path of [
+			'/@alice',
+			statusPath(status),
+			'/@nobody',
+			'/about',
+			'/privacy-policy',
+			'/terms-of-service',
+			'/terms-of-service/2026-11-01',
+			'/terms-of-service/2026-11-02',
+		]) {
 			const response = await h.request(path, { headers: { origin: 'https://evil.example' } })
 			expect(response.headers.get('content-type'), path).toBe('text/html; charset=UTF-8')
 			expect(response.headers.get('x-content-type-options')).toBe('nosniff')
@@ -84,6 +96,58 @@ describe('about page', () => {
 		expect(html).toContain('<h1>kopje.test</h1>')
 		expect(html).not.toContain('class="rules"')
 		expect(html).not.toContain('class="contact"')
+		expect(html).not.toContain('class="extended"')
+		expect(html).not.toContain('class="documents"')
+	})
+
+	it('shows the extended description sanitized at the sink, and links the documents while they are available', async () => {
+		const h = await community(['alice'])
+		await setSetting(
+			h.store,
+			'extended_description',
+			'<p>About <a href="https://example.com/">us</a><script>alert(1)</script></p>'
+		)
+		await setSetting(h.store, 'privacy_policy', '<p>Policy</p>')
+		const { html } = await page(h, '/about')
+		expect(html).toContain(
+			'<div class="extended"><p>About <a href="https://example.com/" rel="nofollow noopener" target="_blank">us</a></p></div>'
+		)
+		expect(html).not.toContain('alert(1)')
+		expect(html).toContain('<a href="/privacy-policy">Privacy policy</a>')
+		expect(html).not.toContain('/terms-of-service')
+	})
+})
+
+describe('document pages', () => {
+	it('serve the privacy policy and the terms of service as stored, sanitized at the sink, and 404 without them', async () => {
+		const h = await community(['alice'])
+		for (const path of ['/privacy-policy', '/terms-of-service', '/terms-of-service/2026-11-01']) {
+			expect((await h.request(path)).status, path).toBe(404)
+		}
+		const raw = '<h2>Data</h2><p>We keep <a href="https://example.com/x">little</a>.<script>alert(1)</script></p>'
+		const safe =
+			'<p><strong>Data</strong></p><p>We keep <a href="https://example.com/x" rel="nofollow noopener" target="_blank">little</a>.</p>'
+		await setSetting(h.store, 'privacy_policy', raw)
+		await setSetting(h.store, 'privacy_policy_updated_at', '2026-10-01T12:30:00.000Z')
+		const policy = await page(h, '/privacy-policy')
+		expect(policy.response.status).toBe(200)
+		expect(policy.html).toContain('<h1>Privacy policy</h1>')
+		expect(policy.html).toContain(`<div class="document">${safe}</div>`)
+		expect(policy.html).toContain('<time datetime="2026-10-01T12:30:00.000Z">2026-10-01 12:30 UTC</time>')
+		expect(policy.html).not.toContain('alert(1)')
+		await setSetting(h.store, 'terms_of_service', raw)
+		// Without its date the terms of service is not available.
+		expect((await h.request('/terms-of-service')).status).toBe(404)
+		await setSetting(h.store, 'terms_of_service_effective_date', '2026-11-01')
+		for (const path of ['/terms-of-service', '/terms-of-service/2026-11-01']) {
+			const terms = await page(h, path)
+			expect(terms.response.status, path).toBe(200)
+			expect(terms.html).toContain('<time datetime="2026-11-01">2026-11-01</time>')
+			expect(terms.html).toContain(`<div class="document">${safe}</div>`)
+		}
+		for (const path of ['/terms-of-service/2026-11-02', '/terms-of-service/2026-11-1']) {
+			expect((await h.request(path)).status, path).toBe(404)
+		}
 	})
 })
 

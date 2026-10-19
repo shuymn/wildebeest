@@ -285,12 +285,27 @@ endorsements.
 
 **Clients and settings.** OAuth clients keep their id, secret and scopes. Legacy settings take Kopje's names:
 `server name` becomes `title` and `server description` becomes `description` (both shown by `/api/v1/instance`);
-`extended description` and `privacy policy` are kept as `extended_description` and `privacy_policy` for the matching
-Mastodon endpoints, which Kopje does not serve yet. Rules become `rules`. Any other setting name stops the conversion
-(`settings:unknown-name`), since it could collide with Kopje's own settings.
+`extended description` and `privacy policy` become `extended_description` and `privacy_policy`, served sanitized by
+`/api/v1/instance/extended_description` and `/api/v1/instance/privacy_policy` and on `/about` and `/privacy-policy`,
+with `updated_at: null` until an admin edits them (`kopje-admin instance`, see [setup.md](setup.md)). Rules become
+`rules`. Any other setting name stops the conversion (`settings:unknown-name`), since it could collide with Kopje's
+own settings. Each setting is stored as the Worker stores it (`INSTANCE_SETTING_BOUNDS` in
+`src/platform/stored-bounds.ts`), in this order:
+
+- a blank value (only spaces, tabs, line feeds, vertical tabs, form feeds and carriage returns) is dropped, counted
+  among the normalized values as `settings:<name>-blank`;
+- a value past its bound is a truncation, a problem (`settings:<name>-longer-than-bound`) unless
+  `--accept-truncation` is given, then counted among the normalized values: a title is cut at 1,024 and a description
+  at 200 code points; a document past 50,000 bytes and rules past 65,536 bytes are dropped. A document whose only text
+  lies past the bound is a truncation too;
+- a document within its bound that sanitizes to no text (only a `<script>`, for example) is dropped, counted as
+  `settings:<name>-no-text`.
+
+`verify-conversion` expects the same values, and expects each dropped setting to be absent from the dump.
 Access tokens, push subscriptions, app credentials, the outbox and inbox queues and the full-text index are not carried
 over: users sign in again and clients register push again. Legacy never wrote its filter tables (`filters`,
-`filter_keywords`, `filter_statuses`), so a converted Store starts without filters.
+`filter_keywords`, `filter_statuses`), so a converted Store starts without filters. Legacy has no follow suggestions,
+so a converted Store starts without dismissed ones (`follow_recommendation_mutes`).
 
 **Stops.** The converter writes no dump when it finds rows it cannot carry over (`conversion.problems`: rows in tables
 the legacy code never wrote, unknown object types, statuses whose author is not local where it must be, duplicate URIs,

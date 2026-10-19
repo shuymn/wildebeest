@@ -35,8 +35,9 @@ import { hostDomain } from '../platform/domain-name'
 //     or leased; the rows behind it are queued and promoted when it settles. So the due index holds lane heads only,
 //     and a claim reads at most `limit` rows.
 //   - Claims run inside one Store transaction, so they are serialized. Each claim issues a fresh lease token, counts
-//     an attempt and leases the row for LEASE_MS. A completion settles a row only with the token of its current
-//     lease, so a completion that arrives after the lease expired and the row was claimed again changes nothing.
+//     an attempt, marks the row exposed (it may be POSTed from then on; nothing clears it) and leases it for LEASE_MS.
+//     A completion settles a row only with the token of its current lease, so a completion that arrives after the
+//     lease expired and the row was claimed again changes nothing.
 //   - An expired lease (the Worker died, or the completion was lost after the POST) is claimed again like a due row.
 //     The remote inbox may then see the activity twice; receivers deduplicate by activity id.
 //   - A failure is retried after min(30 s·2^n, 12 h), n being the attempts so far; after MAX_ATTEMPTS, or on a
@@ -198,13 +199,16 @@ export type ReachOf = { owner: string; object: string; audience: DeliveryAudienc
 // immutable: every destination receives the activity as recorded, byte for byte (a body signed by its author, whose
 // proof an edit would break); a would-be personal copy goes to its recipient's personal inbox unedited. reachOf: the
 // audiences of other statuses it reaches too (a stamp's Delete reaches the quoted and the quoting status's), only
-// selecting inboxes: the signer, its lanes and the subject stay the envelope's own.
+// selecting inboxes: the signer, its lanes and the subject stay the envelope's own. followPair: the remote follower a
+// local account's Accept or Reject of a Follow answers (outbound_activities.follow_pair, cancelFollowAnswers); kept in
+// its column, not in the body.
 export type DeliveryEnvelope = {
 	activity: Activity
 	audience: DeliveryAudience
 	signedBy?: 'instance'
 	immutable?: true
 	reachOf?: ReachOf[]
+	followPair?: string
 }
 
 // The targets an activity goes to (NET-2), from the stored audience only, for the recipients the policy gives it
@@ -526,13 +530,18 @@ export function supersedeEarlier(db: Db, signerId: string, object: string, limit
 		limit
 	)
 	for (const { id } of earlier) {
-		db.run('UPDATE outbound_activities SET superseded = 1, staged = NULL WHERE id = CAST(? AS INTEGER)', id)
-		dropSettledActivity(db, id)
+		supersedeIntent(db, id)
 	}
 	return (
 		db.first(`SELECT 1 AS x FROM outbound_activities WHERE ${SUPERSEDED} LIMIT 1`, signerId, object, 1, '[]', 0) !==
 		undefined
 	)
+}
+
+// Marks one intent superseded (final: staged cleared too) and drops it if nothing of it is left.
+function supersedeIntent(db: Db, id: string): void {
+	db.run('UPDATE outbound_activities SET superseded = 1, staged = NULL WHERE id = CAST(? AS INTEGER)', id)
+	dropSettledActivity(db, id)
 }
 
 // A retraction recorded in bounded steps: a purge's Undo of a local boost (RES-6), whose receipts alone may be more
@@ -718,14 +727,16 @@ function insertIntent(
 	if (chunks.length === 0) {
 		return
 	}
+	const { followPair, ...stored } = envelope
 	const intent = db.first<{ id: string }>(
-		`INSERT INTO outbound_activities (account_id, body, object_uri, retracts, created_at)
-		VALUES (?, ?, ?, ?, ?) RETURNING CAST(id AS TEXT) AS id`,
+		`INSERT INTO outbound_activities (account_id, body, object_uri, retracts, created_at, follow_pair)
+		VALUES (?, ?, ?, ?, ?, ?) RETURNING CAST(id AS TEXT) AS id`,
 		signerId,
-		JSON.stringify(envelope),
+		JSON.stringify(stored),
 		object,
 		retracts ? 1 : 0,
-		now
+		now,
+		followPair ?? null
 	)!
 	for (const chunk of chunks) {
 		db.run('INSERT INTO outbound_targets (activity_id, targets) VALUES (CAST(? AS INTEGER), ?)', intent.id, chunk.json)
@@ -931,6 +942,89 @@ function nextDueAt(db: Db, now: number, ownLease: string | null = null): number 
 }
 
 // ---------------------------------------------------------------------------------------------------------------
+// Follow answers
+// ---------------------------------------------------------------------------------------------------------------
+
+// A remote Follow cancels its pair's answers (Accept, Reject) that were never claimed or are unexpanded (inbox.ts
+// follow): for interoperability with servers that match an answer by account pair, not only by the Follow it names
+// (Misskey's UserFollowingService; Mastodon's Accept and Reject fall back to the pair), so a stale one would act on
+// the new request. A row a claim has leased (exposed) may have been POSTed and is left to be sent; its intent is
+// superseded, so the operator cannot retry it (the accepted risk in docs/threat-model.md).
+//
+// Bounds (RES-6): a Follow reads at most FOLLOW_ANSWER_INTENTS + 1 unsettled answers of its pair, and of them
+// FOLLOW_ANSWER_ROWS + 1 rows (exposed or not) and FOLLOW_ANSWER_CHUNKS + 1 unexpanded chunks; over any bound it is
+// refused (followAnswersOf returns null) before anything is written, and the peer delivers it again. An answer has
+// one target, so one row or chunk: the intent bound bites first, and the others bound stored rows from elsewhere (an
+// imported store). Answers leave the bound as their rows deliver, and as sweepDeliveries deletes the given-up rows of
+// superseded ones.
+export const FOLLOW_ANSWER_INTENTS = 32
+export const FOLLOW_ANSWER_ROWS = 64
+export const FOLLOW_ANSWER_CHUNKS = 32
+
+// rows: those never claimed (exposed 0), which are cancelled.
+export type FollowAnswers = {
+	intents: string[]
+	rows: { id: string; account_id: string; lane: string; state: string }[]
+	chunks: string[]
+}
+
+// The discovery's statements (exported for their plan and rows-read tests). Each LIMIT stops an index seek: the
+// intents are ordered by the numeric column (`ORDER BY id` would name the text alias and sort the whole backlog), and
+// the rows and chunks need no order.
+export const FOLLOW_ANSWER_INTENTS_SQL = `SELECT CAST(o.id AS TEXT) AS id
+	FROM outbound_activities o INDEXED BY outbound_activities_follow_pair
+	WHERE o.account_id = ? AND o.follow_pair = ? ORDER BY o.id LIMIT ?`
+export const FOLLOW_ANSWER_ROWS_SQL = `SELECT CAST(id AS TEXT) AS id, account_id, lane, state, exposed FROM deliveries
+	WHERE activity_id IN (SELECT CAST(value AS INTEGER) FROM json_each(?)) LIMIT ?`
+export const FOLLOW_ANSWER_CHUNKS_SQL = `SELECT CAST(id AS TEXT) AS id FROM outbound_targets
+	WHERE activity_id IN (SELECT CAST(value AS INTEGER) FROM json_each(?)) LIMIT ?`
+
+// Reads only: the unsettled answers of signerId to followerId, or null over a bound.
+export function followAnswersOf(db: Db, signerId: string, followerId: string): FollowAnswers | null {
+	const intents = db
+		.all<{ id: string }>(FOLLOW_ANSWER_INTENTS_SQL, signerId, followerId, FOLLOW_ANSWER_INTENTS + 1)
+		.map((r) => r.id)
+	if (intents.length > FOLLOW_ANSWER_INTENTS) {
+		return null
+	}
+	if (intents.length === 0) {
+		return { intents, rows: [], chunks: [] }
+	}
+	const ids = JSON.stringify(intents)
+	const rows = db.all<FollowAnswers['rows'][number] & { exposed: number }>(
+		FOLLOW_ANSWER_ROWS_SQL,
+		ids,
+		FOLLOW_ANSWER_ROWS + 1
+	)
+	const chunks = db.all<{ id: string }>(FOLLOW_ANSWER_CHUNKS_SQL, ids, FOLLOW_ANSWER_CHUNKS + 1).map((r) => r.id)
+	if (rows.length > FOLLOW_ANSWER_ROWS || chunks.length > FOLLOW_ANSWER_CHUNKS) {
+		return null
+	}
+	const unexposed = rows
+		.filter((row) => row.exposed === 0)
+		.map(({ id, account_id, lane, state }) => ({ id, account_id, lane, state }))
+	return { intents, rows: unexposed, chunks }
+}
+
+// Cancels what followAnswersOf found, in the transaction that read it. Every row goes before any lane is promoted, so
+// a promotion never picks a row about to be deleted and a lane never has two heads.
+export function cancelFollowAnswers(db: Db, found: FollowAnswers, now: number): void {
+	for (const row of found.rows) {
+		db.run('DELETE FROM deliveries WHERE id = CAST(? AS INTEGER)', row.id)
+	}
+	const heads = new Map(found.rows.filter((r) => r.state === 'pending').map((r) => [`${r.account_id} ${r.lane}`, r]))
+	for (const head of heads.values()) {
+		promoteLane(db, head.account_id, head.lane, now)
+	}
+	for (const chunk of found.chunks) {
+		db.run('DELETE FROM outbound_targets WHERE id = CAST(? AS INTEGER)', chunk)
+	}
+	for (const intent of found.intents) {
+		supersedeIntent(db, intent)
+	}
+}
+
+// ---------------------------------------------------------------------------------------------------------------
 // Claims and completions
 // ---------------------------------------------------------------------------------------------------------------
 
@@ -1129,7 +1223,7 @@ export const claimDeliveries = writeOperation<{ now: number; leaseToken: string;
 			}
 			db.run(
 				`UPDATE deliveries SET state = 'leased', lease_token = ?, attempts = attempts + 1, next_attempt_at = ?,
-					updated_at = ?, last_error = CASE WHEN state = 'leased' THEN 'lease expired' ELSE last_error END
+					updated_at = ?, last_error = CASE WHEN state = 'leased' THEN 'lease expired' ELSE last_error END, exposed = 1
 				WHERE id = CAST(? AS INTEGER)`,
 				leaseToken,
 				leaseUntil,
@@ -1498,13 +1592,26 @@ export const retryDeliveries = writeOperation<{ ids: string[] | 'all'; now: numb
 )
 
 // RES-4: given-up rows are kept for GAVE_UP_RETENTION_MS, then deleted with their activity once it has no row left.
+// A superseded follow answer's given-up row goes at once (retryDeliveries refuses it, so nothing can send it again),
+// so its intent stops counting toward its pair's FOLLOW_ANSWER_INTENTS once its other rows settle. Both deletes share
+// SWEEP_BATCH rows a round, the answers first. The answers' read also passes the superseded answers whose rows are
+// still active, at most the delivery backlog (RES-4).
 export const sweepDeliveries = writeOperation<{ now: number }, { swept: number }>((db, { now }) => {
-	const swept = db.all<{ activity_id: string }>(
+	const answers = db.all<{ activity_id: string }>(
+		`DELETE FROM deliveries WHERE id IN (SELECT d.id
+			FROM outbound_activities o INDEXED BY outbound_activities_follow_swept
+				CROSS JOIN deliveries d INDEXED BY deliveries_activity ON d.activity_id = o.id
+			WHERE o.follow_pair IS NOT NULL AND o.superseded = 1 AND d.state = 'gave_up' ORDER BY o.id LIMIT ?)
+		RETURNING CAST(activity_id AS TEXT) AS activity_id`,
+		SWEEP_BATCH
+	)
+	const expired = db.all<{ activity_id: string }>(
 		`DELETE FROM deliveries WHERE id IN (SELECT id FROM deliveries WHERE state = 'gave_up' AND updated_at < ?
 			ORDER BY updated_at LIMIT ?) RETURNING CAST(activity_id AS TEXT) AS activity_id`,
 		now - GAVE_UP_RETENTION_MS,
-		SWEEP_BATCH
+		SWEEP_BATCH - answers.length
 	)
+	const swept = [...answers, ...expired]
 	for (const activityId of new Set(swept.map((r) => r.activity_id))) {
 		dropSettledActivity(db, activityId)
 	}

@@ -65,6 +65,7 @@ h1 {
 .address,
 .meta,
 .hint,
+.document-date,
 .empty {
 	color: var(--muted);
 	font-size: 0.9rem;

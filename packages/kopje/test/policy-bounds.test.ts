@@ -95,6 +95,7 @@ import {
 	streamTokens,
 	streamUnit,
 } from '../src/domain/streaming'
+import { suggestions } from '../src/domain/suggestions'
 import { featuredTagSuggestions, followedTags, MAX_FOLLOWED_TAGS } from '../src/domain/tags'
 import {
 	accountStatuses,
@@ -121,7 +122,7 @@ import type { StoreOperation } from '../src/platform/store-kernel'
 // The world, the same in every run: the first of fast-check's samples for a fixed seed in which every endpoint has
 // something to show the viewer (the first available local account). The viewer then follows everyone, favourites and
 // bookmarks every status, has a notification from every account, has a list (VIEWER_LIST) of every account and a
-// marker on each timeline; LISTED follows the viewer.
+// marker on each timeline; LISTED follows the viewer, and an account outside the world (SUGGESTED).
 function viewerOf(world: World): number {
 	return world.accounts.findIndex((account) => account.local && !account.suspended)
 }
@@ -193,6 +194,7 @@ const EMBEDDED = WORLD.statuses.findIndex((status) => {
 })
 
 const VIEWER_LIST = '700000000000000001'
+const SUGGESTED = '800000000000000001'
 // The viewer's filter: warn, in every context, by keywords some of the world's statuses match and by the target status.
 const VIEWER_FILTER = '720000000000000001'
 const TOKEN_HASH = 'policy-bounds-token'
@@ -243,6 +245,17 @@ function writeViewer(sql: SqlStorage): void {
 		ON CONFLICT (account_id, target_account_id) DO UPDATE SET state = 'accepted'`,
 		accountId(LISTED),
 		viewer
+	)
+	// An account outside the world LISTED follows, which the viewer is suggested (R39).
+	sql.exec(
+		`INSERT INTO accounts (id, uri, username, domain, discoverable)
+		VALUES (?, 'https://far.example/users/suggested', 'suggested', 'far.example', 1)`,
+		SUGGESTED
+	)
+	sql.exec(
+		"INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'accepted')",
+		accountId(LISTED),
+		SUGGESTED
 	)
 	// The viewer endorses every account it follows and keeps a note on each.
 	sql.exec(
@@ -760,6 +773,7 @@ const ENDPOINTS: [string, StoreOperation<never, unknown>, unknown, Paging?][] = 
 		{ credential, now: NOW, account: accountId(VIEWER), page: PAGE, present: PRESENT },
 	],
 	['accounts by id', getAccounts, { ids: WORLD.accounts.map((_, x) => accountId(x)), present: PRESENT }],
+	['suggestions', suggestions, { credential, version: 2, offset: 0, limit: 40, present: PRESENT }],
 	[
 		'pinned statuses',
 		accountStatuses,

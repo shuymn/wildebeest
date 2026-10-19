@@ -5,22 +5,26 @@ import { expect, inject, it } from 'vitest'
 import { MIGRATIONS } from '../../src/db/migrations'
 import { freshStore, testKernel } from '../helpers'
 
-// The migration cost benchmark (design: "Migrations", acceptance criterion): one migration file applied to a large,
-// representative Store in workerd's local Durable Object SQLite, timed. A file must finish in at most
-// MIGRATION_BUDGET_MS, a third of the 30 seconds a migration transaction may take, before its PR merges; the time
-// goes in the file's header comment and in the PR description. The owner's instance is not representative. On this
-// store, upgrading one file in isolation costs about 6 s before the file's own work (the kernel's bookmark,
-// transaction and schema verification, which an upgrade runs once after all pending files): 0042_report_action_fence,
-// which does little else, measured 5,981 and 5,893 ms.
+// The migration cost benchmark (design: "Migrations", acceptance criterion): pending migration files applied to a
+// large, representative Store in workerd's local Durable Object SQLite, as an upgrade applies them, timed. The whole
+// upgrade (the kernel's bookmark, each file's transaction and the schema verification, which runs once after all
+// pending files) must finish in at most UPGRADE_BUDGET_MS, two thirds of the default 30 seconds of CPU an invocation
+// may use (an alarm's upgrade included; committing each file does not start a new invocation). Local elapsed time
+// stands in for that CPU time. A file is measured before its
+// PR merges, and a release's files together before it is tagged (RELEASING.md); the time goes in the file's header
+// comment and in the PR description. The owner's instance is not representative. Most of a small file's time is the
+// upgrade's own cost on a store this size, which grows with the store and varies with the machine's load: a file
+// that only creates an empty table (0050_follow_recommendation_mutes) measured 6.6 s, and 9.1 to 13.7 s once the
+// store held 0049's fixtures.
 //
 //   pnpm --filter kopje bench:migration                            the newest migration
 //   KOPJE_BENCH_MIGRATION=0029_admin_reports pnpm --filter kopje bench:migration
 //   KOPJE_BENCH_SCALE=0.01 pnpm --filter kopje bench:migration     a quick check of the script itself (not a measure)
 //   KOPJE_BENCH_FROM=0040_report_notifications pnpm --filter kopje bench:migration
 //                                                                  a release: every file from 0040 to the newest (or
-//                                                                  to KOPJE_BENCH_MIGRATION) in one upgrade, within
-//                                                                  RELEASE_BUDGET_MS. Run it before tagging, from the
-//                                                                  first file the previous release did not carry.
+//                                                                  to KOPJE_BENCH_MIGRATION) in one upgrade. Run it
+//                                                                  before tagging, from the first file the previous
+//                                                                  release did not carry.
 //
 // The Store is migrated up to the file before the one measured, then seeded with SQL of the current schema, in this
 // file's shape (scaled by KOPJE_BENCH_SCALE):
@@ -37,24 +41,31 @@ import { freshStore, testKernel } from '../helpers'
 //     remote account;
 //   - 500,000 outbound activities of the local accounts in turn, each about one status, one in ten superseded (what
 //     waits for delivery, and what given-up rows keep for retries);
+//   - 50,000 follow answers of the local accounts in turn (Accept and Reject alternately, as followAnswerActivity
+//     builds them), each of a remote account's Follow;
+//   - a delivery row of every outbound activity, the retained history: the first 10,000 (the backlog cap) active,
+//     the rest given up;
 //   - 500,000 media attachments, one of every fourth status, with a URL, a description and a meta of 75 bytes;
 //   - 100,000 earlier versions (status_edits), one of every twentieth status;
-//   - before 0048_stored_bounds, values past their stored bounds (RES-2), which are not scaled: 100 statuses with
-//     140,000 bytes of content, 10 of them with a content warning of 400,000 U+0001; 1,000 remote accounts with a
-//     display name of 3,000 characters and a 2,210-byte profile URL; 1,000 media rows with a 2,210-byte URL and a
-//     description of 12,000 characters.
+//   - 100,000 instance domain blocks (from migration 0046_instance_domain_blocks on), one in ten a suspend;
+//   - values past their stored bounds, which are not scaled, each set only while the migration that bounds it is
+//     still to apply (its triggers refuse them after): for 0048_stored_bounds (RES-2) 100 statuses with 140,000 bytes
+//     of content, 10 of them with a content warning of 400,000 U+0001, 1,000 remote accounts with a display name of
+//     3,000 characters and a 2,210-byte profile URL, and 1,000 media rows with a 2,210-byte URL and a description of
+//     12,000 characters; for 0049_instance_bounds one row past its bound of each covered instance setting (a 2,000
+//     code point title and description, a 300-byte contact address, 70,000 bytes of rules, three 60,000-byte
+//     documents, a malformed date, switch and two stamps).
 // It grows every table a phase A migration reads (accounts, follows, statuses with their mentions and tags,
 // notifications, reports, quotes), what 0043_read_window_indexes indexes (favourites, boosts), what
 // 0045_remote_suspension indexes (accounts, outbound activities), what 0048_stored_bounds rewrites (accounts,
-// statuses, media attachments, earlier versions); a migration that reads another table must add it here before it is
-// measured. The measured time is the file's
-// transaction as the kernel applies it, from before the first statement to after the commit: Date.now() in workerd
+// statuses, media attachments, earlier versions), what 0049_instance_bounds rewrites and indexes (instance
+// settings, instance domain blocks), what 0051_follow_answer_pairs reads and rewrites (outbound activities,
+// accounts, deliveries) and what 0052_favourite_likes indexes (the favourites' Like ids); a migration that reads
+// another table must add it here before it is measured.
+// The measured time is the whole upgrade, from before the bookmark to after the verification: Date.now() in workerd
 // moves only between I/O events, so the clock is read across an await on each side.
 
-export const MIGRATION_BUDGET_MS = 10_000
-// A release's pending files applied in one upgrade, as an instance applies them after a deploy: two thirds of the
-// 30 seconds, since the verification is paid once for the whole set.
-export const RELEASE_BUDGET_MS = 20_000
+export const UPGRADE_BUDGET_MS = 20_000
 
 declare module 'vitest' {
 	interface ProvidedContext {
@@ -76,8 +87,11 @@ const SHAPE = {
 	favourites: 2_000_000,
 	boosts: 200_000,
 	outbound: 500_000,
+	followAnswers: 50_000,
+	active: 10_000,
 	media: 500_000,
 	edits: 100_000,
+	instanceBlocks: 100_000,
 	// Rows past their stored bounds (not scaled).
 	longContent: 100,
 	longSpoilers: 10,
@@ -96,7 +110,7 @@ it('applies the migration to the benchmark store within the budget', async () =>
 	expect(at, `no migration named ${from}`).toBeGreaterThan(0)
 	expect(at, `${from} comes after ${name}`).toBeLessThanOrEqual(last)
 	const applied = MIGRATIONS.slice(at, last + 1).map((migration) => migration.name)
-	const budgetMs = applied.length === 1 ? MIGRATION_BUDGET_MS : RELEASE_BUDGET_MS
+	const budgetMs = UPGRADE_BUDGET_MS
 	const accounts = Math.round(SHAPE.accounts * scale)
 	const statuses = Math.round(SHAPE.statuses * scale)
 	const notifications = Math.min(Math.round(SHAPE.notifications * scale), statuses)
@@ -105,8 +119,10 @@ it('applies the migration to the benchmark store within the budget', async () =>
 	const favourites = Math.min(Math.round(SHAPE.favourites * scale), statuses)
 	const boosts = Math.min(Math.round(SHAPE.boosts * scale), Math.floor(statuses / 10))
 	const outbound = Math.round(SHAPE.outbound * scale)
+	const followAnswers = Math.round(SHAPE.followAnswers * scale)
 	const media = Math.min(Math.round(SHAPE.media * scale), Math.floor(statuses / 4))
 	const edits = Math.min(Math.round(SHAPE.edits * scale), Math.floor(statuses / 20))
+	const instanceBlocks = Math.round(SHAPE.instanceBlocks * scale)
 
 	const store = freshStore()
 	// One call: between calls, the Store's own alarm would apply every migration.
@@ -288,6 +304,45 @@ it('applies the migration to the benchmark store within the budget', async () =>
 				Date.parse(now)
 			)
 		}
+		// Follow answers: answer i by local account i mod the local ones, of remote account i's Follow, Accept and
+		// Reject in turn.
+		run(
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1),
+			a(i, local, follower, follow) AS (SELECT i, 'https://kopje.bench/ap/users/l' || (i % ?2),
+				'https://d' || ((?2 + i) % ?3) || '.bench/users/u' || (?2 + i),
+				'https://d' || ((?2 + i) % ?3) || '.bench/users/u' || (?2 + i) || '#follows/' || i FROM n)
+			INSERT INTO outbound_activities (account_id, body, object_uri, retracts, superseded, created_at)
+			SELECT CAST(100000000000000000 + i % ?2 AS TEXT),
+				json_object('activity', json_object('@context', 'https://www.w3.org/ns/activitystreams',
+					'id', local || CASE i % 2 WHEN 0 THEN '#accepts' ELSE '#rejects' END || '/follows/' || hex(randomblob(32)),
+					'type', CASE i % 2 WHEN 0 THEN 'Accept' ELSE 'Reject' END, 'actor', local,
+					'object', json_object('id', follow, 'type', 'Follow', 'actor', follower, 'object', local)),
+					'audience', json_object('followers', json('false'), 'accounts',
+						json_array(CAST(100000000000000000 + ?2 + i AS TEXT)))),
+				follow, i % 2, 0, ?4
+			FROM a`,
+			followAnswers,
+			SHAPE.local,
+			SHAPE.domains,
+			Date.parse(now)
+		)
+		// Deliveries: a row of each outbound activity, to one of the 1,000 servers; the first SHAPE.active waiting, the
+		// rest given up.
+		for (let start = 0; start < outbound + followAnswers; start += batch) {
+			run(
+				`INSERT INTO deliveries (activity_id, account_id, inbox_url, lane, state, attempts, next_attempt_at,
+					last_status, last_error, updated_at)
+				SELECT id, account_id, 'https://d' || (id % ?3) || '.bench/inbox', 'https://d' || (id % ?3) || '.bench',
+					CASE WHEN id <= ?4 THEN 'queued' ELSE 'gave_up' END, CASE WHEN id <= ?4 THEN 0 ELSE 15 END, ?5,
+					CASE WHEN id <= ?4 THEN NULL ELSE 503 END, CASE WHEN id <= ?4 THEN NULL ELSE 'HTTP 503' END, ?5
+				FROM outbound_activities WHERE id > ?1 AND id <= ?2`,
+				start,
+				start + batch,
+				SHAPE.domains,
+				SHAPE.active,
+				Date.parse(now)
+			)
+		}
 		// Media: attachment i (ids after the boosts) is of status 4i, by its author.
 		run(
 			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
@@ -309,33 +364,56 @@ it('applies the migration to the benchmark store within the budget', async () =>
 			edits,
 			now
 		)
-		// Values past their stored bounds, on the first statuses, remote accounts and media rows: only before
-		// 0048_stored_bounds, whose triggers refuse them (a store past it holds none).
-		const bounded =
-			sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = 'statuses_bounds_update'").toArray()
+		// Instance domain blocks: block i of b<i>.bench, a suspend when i is a multiple of ten.
+		const hasInstanceBlocks =
+			sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'instance_domain_blocks'").toArray()
 				.length > 0
+		if (hasInstanceBlocks) {
+			run(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+				INSERT INTO instance_domain_blocks (domain, severity, public_comment, created_at, updated_at)
+				SELECT 'b' || i || '.bench', CASE WHEN i % 10 = 0 THEN 'suspend' ELSE 'noop' END, 'Block ' || i, ?2, ?2
+				FROM n WHERE ?1 > 0`,
+				instanceBlocks,
+				now
+			)
+		}
+		// Values past their stored bounds, set while the migration that bounds them is still to apply.
+		const pending = (migration: string) => at <= MIGRATIONS.findIndex((m) => m.name === migration)
 		const filler = (n: number, char: string) => `replace(hex(zeroblob(${n / 2})), '0', ${char})`
-		const pastBounds = (query: string, ...params: SqlStorageValue[]) => (bounded ? [] : run(query, ...params))
-		pastBounds(
-			`UPDATE statuses SET content = ${filler(140_000, "'x'")}, spoiler_text = CASE WHEN id < CAST(500000000000000000 + ?2 AS TEXT)
-				THEN ${filler(400_000, 'char(1)')} ELSE '' END
-			WHERE id < CAST(500000000000000000 + ?1 AS TEXT) AND id >= '500000000000000000'`,
-			SHAPE.longContent,
-			SHAPE.longSpoilers
-		)
-		pastBounds(
-			`UPDATE accounts SET display_name = ${filler(3000, "'n'")},
-				url = 'https://d.bench/u/' || ${filler(2192, "'x'")}
-			WHERE id >= CAST(100000000000000000 + ?1 AS TEXT) AND id < CAST(100000000000000000 + ?1 + ?2 AS TEXT)`,
-			SHAPE.local,
-			SHAPE.longAccounts
-		)
-		pastBounds(
-			`UPDATE media_attachments SET url = 'https://f.bench/m/' || ${filler(2192, "'x'")},
-				description = ${filler(12_000, "'d'")}
-			WHERE id < CAST(700000000000000000 + ?1 AS TEXT)`,
-			SHAPE.longMedia
-		)
+		if (pending('0049_instance_bounds')) {
+			run(
+				`INSERT OR REPLACE INTO instance_settings (name, value) VALUES
+					('title', ${filler(2000, "'t'")}), ('description', ${filler(2000, "'d'")}),
+					('contact_email', ${filler(300, "'e'")} || '@example.com'), ('rules', '[' || ${filler(70_000, "' '")} || ']'),
+					('extended_description', ${filler(60_000, "'x'")}), ('privacy_policy', ${filler(60_000, "'p'")}),
+					('terms_of_service', ${filler(60_000, "'s'")}), ('terms_of_service_effective_date', '2026-02-30'),
+					('show_domain_blocks', 'everyone'), ('privacy_policy_updated_at', 'yesterday')`
+			)
+			run("INSERT OR REPLACE INTO instance_settings (name, value) VALUES ('extended_description_updated_at', ' ')")
+		}
+		if (pending('0048_stored_bounds')) {
+			run(
+				`UPDATE statuses SET content = ${filler(140_000, "'x'")}, spoiler_text = CASE WHEN id < CAST(500000000000000000 + ?2 AS TEXT)
+					THEN ${filler(400_000, 'char(1)')} ELSE '' END
+				WHERE id < CAST(500000000000000000 + ?1 AS TEXT) AND id >= '500000000000000000'`,
+				SHAPE.longContent,
+				SHAPE.longSpoilers
+			)
+			run(
+				`UPDATE accounts SET display_name = ${filler(3000, "'n'")},
+					url = 'https://d.bench/u/' || ${filler(2192, "'x'")}
+				WHERE id >= CAST(100000000000000000 + ?1 AS TEXT) AND id < CAST(100000000000000000 + ?1 + ?2 AS TEXT)`,
+				SHAPE.local,
+				SHAPE.longAccounts
+			)
+			run(
+				`UPDATE media_attachments SET url = 'https://f.bench/m/' || ${filler(2192, "'x'")},
+					description = ${filler(12_000, "'d'")}
+				WHERE id < CAST(700000000000000000 + ?1 AS TEXT)`,
+				SHAPE.longMedia
+			)
+		}
 		const count = (table: string) => sql.exec<{ n: number }>(`SELECT count(*) AS n FROM ${table}`).one().n
 		const seeded = {
 			accounts: count('accounts'),
@@ -350,8 +428,10 @@ it('applies the migration to the benchmark store within the budget', async () =>
 			reports: count('reports'),
 			quotes: hasQuotes ? count('quotes') : 0,
 			outbound: count('outbound_activities'),
+			deliveries: count('deliveries'),
 			media: count('media_attachments'),
 			edits: count('status_edits'),
+			instanceBlocks: hasInstanceBlocks ? count('instance_domain_blocks') : 0,
 		}
 		expect(sql.exec('SELECT count(*) AS n FROM kopje_migrations').one().n).toBe(at)
 

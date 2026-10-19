@@ -62,12 +62,25 @@ export type AboutView = {
 	description: string
 	contactEmail: string
 	rules: InstanceRule[]
+	// The extended description as stored, sanitized here at the sink (HTML-1); null when none is set.
+	extendedDescription: string | null
+	privacyPolicy: boolean
+	termsOfService: boolean
 }
 
 // /about, the page Mastodon's configuration.urls.about names and the instance actor's url: the server's title,
-// description, rules and contact address, as the instance endpoints give them. The address is text, not a mailto: link
-// (HTML-3).
-export const AboutPage: FC<AboutView> = ({ title, domain, description, contactEmail, rules }) => (
+// description, extended description, rules and contact address, as the instance endpoints give them, and links to the
+// privacy policy and the terms of service when they are available. The address is text, not a mailto: link (HTML-3).
+export const AboutPage: FC<AboutView> = ({
+	title,
+	domain,
+	description,
+	contactEmail,
+	rules,
+	extendedDescription,
+	privacyPolicy,
+	termsOfService,
+}) => (
 	<Layout
 		title={title}
 		head={
@@ -79,6 +92,7 @@ export const AboutPage: FC<AboutView> = ({ title, domain, description, contactEm
 	>
 		<h1>{title}</h1>
 		{description === '' ? null : <p class="about">{description}</p>}
+		{extendedDescription === null ? null : <Rich html={sanitized(extendedDescription)} class="extended" />}
 		{rules.length === 0 ? null : (
 			<>
 				<h2>{STRINGS.aboutRules}</h2>
@@ -97,6 +111,50 @@ export const AboutPage: FC<AboutView> = ({ title, domain, description, contactEm
 				{STRINGS.aboutContact}: {contactEmail}
 			</p>
 		)}
+		{!privacyPolicy && !termsOfService ? null : (
+			<ul class="documents">
+				{privacyPolicy ? (
+					<li>
+						<a href="/privacy-policy">{STRINGS.privacyPolicy}</a>
+					</li>
+				) : null}
+				{termsOfService ? (
+					<li>
+						<a href="/terms-of-service">{STRINGS.termsOfService}</a>
+					</li>
+				) : null}
+			</ul>
+		)}
+	</Layout>
+)
+
+export type DocumentView = {
+	title: string
+	domain: string
+	path: string
+	// The document as stored, sanitized here at the sink (HTML-1).
+	html: string
+	// The privacy policy's stamp, or the terms of service's effective date.
+	updatedAt: string | null
+	effectiveDate: string | null
+}
+
+// /privacy-policy, /terms-of-service and /terms-of-service/:date (Mastodon's paths, config/routes.rb:230-232): the
+// document an instance endpoint serves, with its effective date or the time it was last changed.
+export const DocumentPage: FC<DocumentView> = ({ title, domain, path, html, updatedAt, effectiveDate }) => (
+	<Layout title={title} head={<link rel="canonical" href={`https://${domain}${path}`} />}>
+		<h1>{title}</h1>
+		{effectiveDate === null ? null : (
+			<p class="document-date">
+				{STRINGS.effectiveFrom} <time datetime={effectiveDate}>{effectiveDate}</time>
+			</p>
+		)}
+		{updatedAt === null ? null : (
+			<p class="document-date">
+				{STRINGS.lastUpdated} <DateTime iso={updatedAt} />
+			</p>
+		)}
+		<Rich html={sanitized(html)} class="document" />
 	</Layout>
 )
 
