@@ -9,6 +9,7 @@ import { community, remoteAccount, seedStatus } from './status-helpers'
 import { Db } from '../src/db/sql'
 import {
 	deleteStatusBatch,
+	MAX_TRACKED_LIKES,
 	PURGE_BATCH,
 	purgeBatch,
 	PURGED_ACCOUNT_CHILDREN,
@@ -240,6 +241,35 @@ describe('cascade guard (RES-6)', () => {
 // no code deletes a local account. A foreign key to local_accounts that cascades or sets null is therefore bounded
 // only while that holds; this pins it, so a delete of local accounts cannot be added without bounding them first. That
 // no code deletes one is test-node/policy-boundary.test.ts's.
+
+// A local status's own delete (statuses.ts deleteStatus, in its author's request) cascades its children, and below them
+// only what the schema bounds per row, so a converted or imported Store holds no more: each such table, with its bound
+// per parent row and the trigger that holds it.
+const LOCAL_DELETE_BOUNDS: Record<string, { per: string; bound: number; trigger: string }> = {
+	favourite_likes: { per: 'favourites', bound: MAX_TRACKED_LIKES, trigger: 'favourite_likes_cap' },
+}
+
+describe('cascade guard below a local status’s own children (RES-6)', () => {
+	it.each(Object.entries(LOCAL_DELETE_BOUNDS))('%s: refuses a row past its bound per parent', async (table, held) => {
+		const h = await community(['alice'])
+		const remote = await remoteAccount(h.store, 'carol')
+		const status = await seedStatus(h.store, { accountId: h.users.alice.id, visibility: 'public' })
+		await sql(h.store, "INSERT INTO favourites (account_id, status_id, created_at) VALUES (?, ?, 'x')", remote, status)
+		const insert = (n: number) =>
+			sql(
+				h.store,
+				`INSERT INTO ${table} (favourite_id, uri, received_at) SELECT id, 'https://remote.example/likes/' || ?, 0 FROM ${held.per}`,
+				n
+			)
+		for (let n = 0; n < held.bound; n++) {
+			await insert(n)
+		}
+		await expect(insert(held.bound)).rejects.toThrow(/more than 4 Like ids for one favourite/)
+		expect(await sql(h.store, "SELECT name FROM sqlite_schema WHERE type = 'trigger' AND tbl_name = ?", table)).toEqual(
+			[{ name: held.trigger }]
+		)
+	})
+})
 
 describe('cascade guard below local_accounts (RES-6)', () => {
 	it('meets nothing: local_accounts restricts the delete of its account, and nothing deletes a local account', async () => {

@@ -46,6 +46,7 @@ const SCHEMA_TABLES = [
 	'deliveries',
 	'domain_block_cleanups',
 	'domain_blocks',
+	'favourite_likes',
 	'favourites',
 	'fedify_kv',
 	'follows',
@@ -5054,4 +5055,84 @@ describe('0048_stored_bounds', () => {
 			).toEqual([])
 		})
 	}, 120_000)
+})
+
+describe('0052_favourite_likes', () => {
+	const NAME = '0052_favourite_likes'
+	const at = NAMES.indexOf(NAME)
+
+	it('moves each remote favourite’s Like id to its tracked ids, leaves local ones, and holds MAX_TRACKED_LIKES', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+			sql.exec(
+				`INSERT INTO accounts (id, uri, username, domain) VALUES
+					('100000000000000001', 'https://kopje.test/ap/users/alice', 'alice', NULL),
+					('100000000000000002', 'https://r.example/u/bob', 'bob', 'r.example'),
+					('100000000000000003', 'https://r.example/u/carol', 'carol', 'r.example')`
+			)
+			sql.exec(
+				`INSERT INTO statuses (id, uri, account_id, visibility, published_at) VALUES
+					('200000000000000001', 'https://kopje.test/ap/o/1', '100000000000000001', 'public', 'x'),
+					('200000000000000002', 'https://r.example/n/2', '100000000000000003', 'public', 'x')`
+			)
+			// alice's own (local) favourite, bob's Like of alice's status, a converted favourite of a remote status that
+			// kept its id, and carol's converted favourite without one and with a created_at that does not parse.
+			sql.exec(
+				`INSERT INTO favourites (id, account_id, status_id, uri, created_at) VALUES
+					(1, '100000000000000001', '200000000000000002', 'https://kopje.test/ap/users/alice#likes/1', '2026-10-01T00:00:00.000Z'),
+					(2, '100000000000000002', '200000000000000001', 'https://r.example/likes/2', '2026-10-02T00:00:00.500Z'),
+					(3, '100000000000000002', '200000000000000002', 'https://r.example/likes/3', '2026-10-03T00:00:00.000Z'),
+					(4, '100000000000000003', '200000000000000001', NULL, 'x')`
+			)
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+			expect(sql.exec('SELECT id, uri FROM favourites ORDER BY id').toArray()).toEqual([
+				{ id: 1, uri: 'https://kopje.test/ap/users/alice#likes/1' },
+				{ id: 2, uri: null },
+				{ id: 3, uri: null },
+				{ id: 4, uri: null },
+			])
+			expect(
+				sql.exec('SELECT favourite_id, uri, received_at FROM favourite_likes ORDER BY favourite_id').toArray()
+			).toEqual([
+				{ favourite_id: 2, uri: 'https://r.example/likes/2', received_at: Date.parse('2026-10-02T00:00:00.500Z') },
+				{ favourite_id: 3, uri: 'https://r.example/likes/3', received_at: Date.parse('2026-10-03T00:00:00.000Z') },
+			])
+			// An Undo's lookup (inbox.ts trackedLike, interactionOf) names favourite_likes_uri: the actor's favourites,
+			// any number, are never ranged over.
+			const plan = sql
+				.exec<{ detail: string }>(
+					`EXPLAIN QUERY PLAN SELECT l.id FROM favourite_likes l INDEXED BY favourite_likes_uri
+					JOIN favourites f ON f.id = l.favourite_id WHERE l.uri = ? AND f.account_id = ?`,
+					'https://r.example/likes/2',
+					'100000000000000002'
+				)
+				.toArray()
+				.map((row) => row.detail)
+			expect(plan).toEqual([
+				'SEARCH l USING INDEX favourite_likes_uri (uri=?)',
+				'SEARCH f USING INTEGER PRIMARY KEY (rowid=?)',
+			])
+			// The bound, for a dump's rows too; a deleted favourite's ids go with it.
+			for (let n = 0; n < 3; n++) {
+				sql.exec(
+					'INSERT INTO favourite_likes (favourite_id, uri, received_at) VALUES (2, ?, 0)',
+					`https://r.example/likes/2-${n}`
+				)
+			}
+			expect(() =>
+				sql.exec(
+					"INSERT INTO favourite_likes (favourite_id, uri, received_at) VALUES (2, 'https://r.example/likes/2-x', 0)"
+				)
+			).toThrow(/favourite_likes: more than 4 Like ids for one favourite/)
+			expect(() =>
+				sql.exec(
+					"INSERT INTO favourite_likes (favourite_id, uri, received_at) VALUES (3, 'https://r.example/likes/3', 0)"
+				)
+			).toThrow(/UNIQUE constraint failed/)
+			sql.exec('DELETE FROM favourites WHERE id = 2')
+			expect(sql.exec('SELECT count(*) AS n FROM favourite_likes WHERE favourite_id = 2').one().n).toBe(0)
+		})
+	})
 })

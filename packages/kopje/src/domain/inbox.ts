@@ -2307,10 +2307,11 @@ function retireStaleLike(db: Db, favouriteId: number, now: number): boolean {
 
 type TrackedLike = { id: number; favourite: string; status_id: string }
 
-// The actor's favourite tracking the Like id `uri` (one at most: like tracks an id once).
+// The actor's favourite tracking the Like id `uri` (one at most: like tracks an id once). By the id's index, never by
+// the actor's favourites, which are any number.
 function trackedLike(db: Db, actorId: string, uri: string): TrackedLike | undefined {
 	return db.first<TrackedLike>(
-		`SELECT l.id, CAST(f.id AS TEXT) AS favourite, f.status_id FROM favourite_likes l
+		`SELECT l.id, CAST(f.id AS TEXT) AS favourite, f.status_id FROM favourite_likes l INDEXED BY favourite_likes_uri
 			JOIN favourites f ON f.id = l.favourite_id
 		WHERE l.uri = ? AND f.account_id = ? ORDER BY l.id LIMIT 1`,
 		uri,
@@ -2319,13 +2320,13 @@ function trackedLike(db: Db, actorId: string, uri: string): TrackedLike | undefi
 }
 
 // The actor's legacy favourite of the status `uri`, local or remote: one tracking no Like id (a cutover or an import
-// stores none).
+// stores none). The status first (CROSS JOIN keeps the order), then its favourite by the pair.
 function legacyFavourite(db: Db, actorId: string, uri: string): { id: string; status_id: string } | undefined {
 	return db.first<{ id: string; status_id: string }>(
-		`SELECT CAST(f.id AS TEXT) AS id, f.status_id FROM favourites f JOIN statuses s ON s.id = f.status_id
-		WHERE f.account_id = ? AND s.uri = ? AND NOT EXISTS (SELECT 1 FROM favourite_likes l WHERE l.favourite_id = f.id)`,
-		actorId,
-		uri
+		`SELECT CAST(f.id AS TEXT) AS id, f.status_id FROM statuses s CROSS JOIN favourites f ON f.status_id = s.id
+		WHERE s.uri = ? AND f.account_id = ? AND NOT EXISTS (SELECT 1 FROM favourite_likes l WHERE l.favourite_id = f.id)`,
+		uri,
+		actorId
 	)
 }
 
@@ -2333,8 +2334,8 @@ function legacyFavourite(db: Db, actorId: string, uri: string): { id: string; st
 function interactionOf(db: Db, actor: RemoteRow, uri: string): boolean {
 	return (
 		db.first(
-			`SELECT 1 AS x WHERE EXISTS (SELECT 1 FROM favourite_likes l JOIN favourites f ON f.id = l.favourite_id
-					WHERE l.uri = ?2 AND f.account_id = ?1)
+			`SELECT 1 AS x WHERE EXISTS (SELECT 1 FROM favourite_likes l INDEXED BY favourite_likes_uri
+					JOIN favourites f ON f.id = l.favourite_id WHERE l.uri = ?2 AND f.account_id = ?1)
 				OR EXISTS (SELECT 1 FROM statuses WHERE account_id = ?1 AND uri = ?2 AND reblog_of_id IS NOT NULL)`,
 			actor.id,
 			uri
