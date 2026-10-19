@@ -144,6 +144,48 @@ Checks show pass, warning or fail, with a hint on what to fix. Each can be run a
 - Before the first update, read [upgrade.md](upgrade.md): how updates arrive, what the Store does on a new version,
   and how to roll back.
 
+## Instance details
+
+The instance's public settings are data, not configuration: a dump carries them, an import brings them in, and a
+reset (`import-reset`, `cutover reset`) removes them. A Store that holds any is not empty, so an import into it is
+refused: after a cutover, set them once the import is published. Only the Access admin sets them, through `/admin`:
+
+```sh
+kopje-admin instance                                   # show them, with the documents' stamps
+kopje-admin instance title='Our herd' description='A small server' contact_email=admin@example.com
+kopje-admin instance privacy_policy --file privacy.html
+kopje-admin instance terms_of_service --file terms.html terms_of_service_effective_date=2026-11-01
+kopje-admin instance show_domain_blocks=users show_domain_blocks_rationale=disabled
+kopje-admin instance description=                      # an empty value removes it
+```
+
+| Name                                                 | Bound                              | Shown by                                                 |
+| ---------------------------------------------------- | ---------------------------------- | -------------------------------------------------------- |
+| `title`                                              | 1,024 code points                  | `/api/v1/instance`, `/api/v2/instance`, `/about`         |
+| `description`                                        | 200 code points (Mastodon's limit) | the same                                                 |
+| `contact_email`                                      | an email address, 254 UTF-8 bytes  | the same                                                 |
+| `extended_description`                               | HTML, 50,000 UTF-8 bytes           | `/api/v1/instance/extended_description`, `/about`        |
+| `privacy_policy`                                     | HTML, 50,000 UTF-8 bytes           | `/api/v1/instance/privacy_policy`, `/privacy-policy`     |
+| `terms_of_service`                                   | HTML, 50,000 UTF-8 bytes           | `/api/v1/instance/terms_of_service`, `/terms-of-service` |
+| `terms_of_service_effective_date`                    | a date, `YYYY-MM-DD`               | the same                                                 |
+| `show_domain_blocks`, `show_domain_blocks_rationale` | `disabled`, `users` or `all`       | `/api/v1/instance/domain_blocks`                         |
+
+- Values are trimmed of spaces, tabs, line feeds, vertical tabs, form feeds and carriage returns; a blank value is
+  refused (send an empty value to remove one). The whole request is refused if any value is.
+- Documents are HTML, sanitized when served: convert Markdown to HTML first. A document that sanitizes to no text is
+  refused. `--file` sends the file's text and the other values in one request.
+- The terms of service and their effective date are set together: a first `terms_of_service` needs
+  `terms_of_service_effective_date` in the same request; later either may change alone; the date cannot be removed
+  while the text stays; removing `terms_of_service` removes its date. They are served as soon as they are set, a
+  future date included (as Mastodon serves an upcoming version); `effective` becomes true on the day after the
+  effective date (UTC). `/terms-of-service/<date>` answers only that date.
+- A changed `extended_description` or `privacy_policy` is stamped with the time of the change (`updated_at`); the same
+  value sent again changes nothing. Each change is logged in the moderation log (`update_setting`, `remove_setting`)
+  without its value.
+- `show_domain_blocks` lists the instance's suspend blocks at `/api/v1/instance/domain_blocks`: to anyone at `all`,
+  to signed-in users at `users`, to no one at `disabled` (the default). `show_domain_blocks_rationale` shows their
+  public comments by the same rule. A block with `obfuscate` set is listed with part of its domain replaced by `*`.
+
 ## Rotating the KEK
 
 `USER_KEK` wraps the private key of every local account and of the instance actor. `kopje-admin keys rewrap` moves

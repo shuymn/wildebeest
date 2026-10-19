@@ -273,7 +273,7 @@ describe('convert and verify-conversion', () => {
 			['a boost is dropped', 'DELETE FROM statuses WHERE reblog_of_id IS NOT NULL', 'boosts'],
 			['a notification is dropped', 'DELETE FROM notifications WHERE id = 1', 'notifications'],
 			['a list member is dropped', 'DELETE FROM list_accounts', 'list_accounts'],
-			['a setting changes', "UPDATE instance_settings SET value = 'x' WHERE name = 'rules'", 'settings'],
+			['a setting changes', "UPDATE instance_settings SET value = '[\"x\"]' WHERE name = 'rules'", 'settings'],
 			['a client secret changes', "UPDATE oauth_clients SET secret = 'x'", 'clients'],
 			['a legacy id is lost', 'UPDATE statuses SET legacy_id = NULL', 'legacy_ids'],
 			[

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { apiHarness, seedAccount, setSetting } from './api-helpers'
+import { apiHarness, seedAccount, setSetting, sql } from './api-helpers'
 
 // A fixed P-256 key; only its public half appears in responses.
 const VAPID_JWK = JSON.stringify({
@@ -121,6 +121,23 @@ describe('instance contract', () => {
 		})
 	})
 
+	it('names the privacy policy and terms of service pages on v2 only while they are available', async () => {
+		const h = await configured()
+		const urls = async () =>
+			(await (await h.request('/api/v2/instance')).json<{ configuration: { urls: Record<string, unknown> } }>())
+				.configuration.urls
+		await setSetting(h.store, 'privacy_policy', '<p>Policy</p>')
+		await setSetting(h.store, 'terms_of_service', '<p>Terms</p>')
+		expect(await urls()).toMatchObject({ privacy_policy: 'https://kopje.test/privacy-policy', terms_of_service: null })
+		await setSetting(h.store, 'terms_of_service_effective_date', '2026-11-01')
+		expect(await urls()).toMatchObject({
+			privacy_policy: 'https://kopje.test/privacy-policy',
+			terms_of_service: 'https://kopje.test/terms-of-service',
+		})
+		await sql(h.store, "DELETE FROM instance_settings WHERE name IN ('privacy_policy', 'terms_of_service')")
+		expect(await urls()).toMatchObject({ privacy_policy: null, terms_of_service: null })
+	})
+
 	it('declares the same version on both endpoints, and api_versions on v2 only as Mastodon does', async () => {
 		const h = await configured()
 		const v1 = await (await h.request('/api/v1/instance')).json<Record<string, unknown>>()
@@ -133,7 +150,8 @@ describe('instance contract', () => {
 
 	it('falls back to the request host before setup and to no rules', async () => {
 		const h = await apiHarness()
-		await setSetting(h.store, 'rules', 'not json')
+		// rules that are no JSON array cannot be stored (0049_instance_bounds); none of these elements is a rule.
+		await setSetting(h.store, 'rules', JSON.stringify([1, null, { text: '' }, { text: 3 }]))
 		const body = await (await h.request('/api/v2/instance')).json<Record<string, unknown>>()
 		expect(body).toMatchObject({ domain: 'kopje.test', title: 'kopje.test', rules: [] })
 		expect(body.configuration).toMatchObject({ vapid: { public_key: '' } })

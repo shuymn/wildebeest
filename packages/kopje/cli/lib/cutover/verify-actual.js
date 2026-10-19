@@ -12,7 +12,8 @@ import { readDumpText, textOf } from './dump-parse.js'
 /** @typedef {Record<string, Record<string, string>>} Records */
 
 // Categories where only the expected keys are checked: the Store holds more ids than the legacy instance had, and
-// its own settings (configuration, keys made at setup) besides the imported ones.
+// its own settings (configuration, keys made at setup) besides the imported ones. The keys the expected side names in
+// <category>_absent (a setting the conversion drops) must still be absent.
 const SUBSET = new Set(['legacy_ids', 'settings'])
 
 export const CATEGORIES = [
@@ -482,7 +483,9 @@ export async function compareConversion(expected, actual) {
 				changed++
 			}
 		}
-		const extra = subset ? 0 : haveKeys.filter((k) => !(k in want)).length
+		// A subset category's keys the expected side names absent (verify-expect.js settings_absent) must be absent.
+		const absent = Object.keys(expected[`${name}_absent`] ?? {}).filter((k) => k in have).length
+		const extra = subset ? absent : haveKeys.filter((k) => !(k in want)).length
 		failed ||= missing + changed + extra > 0
 		categories[name] = {
 			expected: wantKeys.length,
