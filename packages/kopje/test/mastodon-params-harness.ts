@@ -49,9 +49,17 @@ export function observeReads() {
 		},
 		reads(): Read[] {
 			return spies.flatMap(([method, spy, at]) =>
-				spy.mock.calls.flatMap((args) => {
+				spy.mock.calls.flatMap((args, i): Read[] => {
 					const name = (args as unknown[])[at]
-					return typeof name === 'string' ? [{ method, name }] : []
+					if (typeof name !== 'string') {
+						return []
+					}
+					if (method !== 'objects') {
+						return [{ method, name }]
+					}
+					// The members of the records objects() returned.
+					const records = spy.mock.results[i]?.value as Record<string, string>[] | undefined
+					return [{ method, name, fields: [...new Set((records ?? []).flatMap((r) => Object.keys(r)))] }]
 				})
 			)
 		},

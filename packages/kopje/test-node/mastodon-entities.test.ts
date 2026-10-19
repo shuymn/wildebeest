@@ -43,8 +43,8 @@ const MAPPING: Record<string, Mapping> = {
 	'REST::NotificationSerializer': { file: 'src/domain/notifications.ts', typeName: 'Notification' },
 	'REST::NotificationGroupSerializer': { file: 'src/domain/notification-groups.ts', typeName: 'NotificationGroup' },
 	'REST::RelationshipSerializer': { file: 'src/domain/accounts.ts', typeName: 'Relationship' },
-	'REST::ApplicationSerializer': { deferred: 'answered inline by mastodon/oauth.ts, no named type' },
-	'REST::CredentialApplicationSerializer': { deferred: 'answered inline by mastodon/oauth.ts, no named type' },
+	'REST::ApplicationSerializer': { file: 'src/mastodon/oauth.ts', typeName: 'Application' },
+	'REST::CredentialApplicationSerializer': { file: 'src/mastodon/oauth.ts', typeName: 'CredentialApplication' },
 	'REST::FilterSerializer': { file: 'src/domain/filters.ts', typeName: 'Filter' },
 }
 
@@ -57,6 +57,13 @@ const ACCOUNT: Record<string, Exception> = {
 }
 
 export const ENTITY_EXCEPTIONS: Exceptions = {
+	'REST::ApplicationSerializer': open('verify_credentials lacks them', 'id', 'redirect_uri', 'redirect_uris', 'scopes'),
+	'REST::CredentialApplicationSerializer': open(
+		'app registration lacks them',
+		'client_secret_expires_at',
+		'redirect_uris',
+		'scopes'
+	),
 	'REST::AccountSerializer': ACCOUNT,
 	'REST::CredentialAccountSerializer': ACCOUNT,
 	'REST::AccountSerializer::FieldSerializer': open('no rel=me verification', 'verified_at'),
@@ -157,21 +164,30 @@ function typeProperties(program: Node, decl: Node, seen: readonly string[]): Pro
 	throw new Error(`cannot read a ${decl.type}`)
 }
 
-// A constant placeholder: the literal null, an empty tuple, or never[].
-function constant(type: Node): string | null {
+// A constant placeholder: the literal null, an empty tuple, or never[], directly or through aliases of the same file
+// (a cycle of aliases is no placeholder).
+function constant(program: Node, type: Node, seen: readonly string[] = []): string | null {
+	if (type.type === 'TSTypeReference' && type.typeName.type === 'Identifier' && type.typeArguments === null) {
+		const name = type.typeName.name
+		const decl = seen.includes(name) ? undefined : declaration(program, name)
+		return decl?.type === 'TSTypeAliasDeclaration' ? constant(program, decl.typeAnnotation, [...seen, name]) : null
+	}
 	if (type.type === 'TSNullKeyword') {
 		return 'null'
 	}
 	if (type.type === 'TSTupleType' && type.elementTypes.length === 0) {
 		return '[]'
 	}
-	if (type.type === 'TSArrayType' && type.elementType.type === 'TSNeverKeyword') {
+	if (type.type === 'TSArrayType' && constant(program, type.elementType, seen) === 'never') {
 		return 'never[]'
+	}
+	if (type.type === 'TSNeverKeyword') {
+		return 'never'
 	}
 	return null
 }
 
-function targetProperties(all: readonly Source[], target: Target): Property[] {
+function targetProperties(all: readonly Source[], target: Target): { program: Node; props: Property[] } {
 	const source = all.find((s) => s.path === target.file)
 	if (source === undefined) {
 		throw new Error(`${target.file} not found`)
@@ -183,13 +199,13 @@ function targetProperties(all: readonly Source[], target: Target): Property[] {
 	}
 	const props = typeProperties(program, decl, [target.typeName])
 	if (target.property === undefined) {
-		return props
+		return { program, props }
 	}
 	const nested = props.find((p) => p.name === target.property)
 	if (nested === undefined) {
 		throw new Error(`${target.typeName} has no property ${target.property}`)
 	}
-	return properties(program, nested.type, [target.typeName])
+	return { program, props: properties(program, nested.type, [target.typeName]) }
 }
 
 // What fails of the entities: a Mastodon field missing from its Kopje type, a property typed as a constant
@@ -213,13 +229,14 @@ function findings(
 		if ('deferred' in map) {
 			continue
 		}
-		let props: Property[]
+		let read: ReturnType<typeof targetProperties>
 		try {
-			props = targetProperties(all, map)
+			read = targetProperties(all, map)
 		} catch (error) {
 			out.push(`${entity}: ${(error as Error).message}`)
 			continue
 		}
+		const { program, props } = read
 		const flagged = new Map<string, string>()
 		for (const field of theirs.fields) {
 			if (!props.some((p) => p.name === field.name)) {
@@ -227,8 +244,8 @@ function findings(
 			}
 		}
 		for (const prop of props) {
-			const placeholder = constant(prop.type)
-			if (placeholder !== null) {
+			const placeholder = constant(program, prop.type)
+			if (placeholder !== null && placeholder !== 'never') {
 				flagged.set(prop.name, `typed as the constant ${placeholder}`)
 			}
 		}
@@ -247,6 +264,11 @@ function findings(
 	for (const entity of Object.keys(exceptions)) {
 		if (entities[entity] === undefined) {
 			out.push(`${entity}: not an entity of the fixture; remove its exceptions`)
+		}
+	}
+	for (const entity of Object.keys(acknowledged)) {
+		if (entities[entity] === undefined) {
+			out.push(`${entity}: not an entity of the fixture; remove its acknowledgement`)
 		}
 	}
 	return out
@@ -303,6 +325,22 @@ describe(`entity fields match Mastodon v${mastodon.mastodon}`, () => {
 					'type Nested = { y: string }\nexport type Probe = { a: string; nested: Nested }',
 					'Probe#nested: x missing from src/domain/probe.ts Probe.nested',
 				],
+				'an alias of null': [
+					'type Nothing = null\nexport type Probe = { a: Nothing; nested: { x: string } }',
+					'Probe: a typed as the constant null',
+				],
+				'an alias of an alias of []': [
+					'type Empty = []\ntype None = Empty\nexport type Probe = { a: None; nested: { x: string } }',
+					'Probe: a typed as the constant []',
+				],
+				'an alias of never[]': [
+					'type Never = never[]\nexport type Probe = { a: string; nested: { x: Never } }',
+					'Probe#nested: x typed as the constant never[]',
+				],
+				'an array of an alias of never': [
+					'type No = never\nexport type Probe = { a: No[]; nested: { x: string } }',
+					'Probe: a typed as the constant never[]',
+				],
 				'a type it cannot follow': [
 					"import type { Other } from './other'\nexport type Probe = Other & { nested: { x: string } }",
 					'Probe: cannot follow Other (not an alias of this file)',
@@ -310,6 +348,7 @@ describe(`entity fields match Mastodon v${mastodon.mastodon}`, () => {
 			},
 			passed: {
 				'real fields': 'type Base = { a: string | null }\nexport type Probe = Base & { nested: { x: string[] } }',
+				'a cycle of aliases': 'type A = B\ntype B = A\nexport type Probe = { a: A; nested: { x: string } }',
 			},
 		})
 
@@ -327,6 +366,9 @@ describe(`entity fields match Mastodon v${mastodon.mastodon}`, () => {
 			const entities = { ...ENTITIES, Probe: { ...ENTITIES.Probe, unresolved: ['x.rb: `attributes(*FIELDS)`'] } }
 			expect(findings(all, PROBE, entities, {}, {})).toHaveLength(1)
 			expect(findings(all, PROBE, entities, {}, { Probe: ['x.rb: `attributes(*FIELDS)`'] })).toEqual([])
+			expect(findings(all, PROBE, ENTITIES, {}, { Gone: [] })).toEqual([
+				'Gone: not an entity of the fixture; remove its acknowledgement',
+			])
 		})
 	})
 })

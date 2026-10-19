@@ -12,12 +12,14 @@ export type Exceptions = Record<string, Record<string, Exception>>
 // One read of a request parameter, as the spies of the parameter test record it: an accessor of Params, Hono's
 // c.req.query/queries, or the upload form's file part (mastodon/media.ts formFiles).
 export type ReadMethod = 'get' | 'has' | 'getAll' | 'list' | 'objects' | 'hasObject' | 'query' | 'queries' | 'file'
-export type Read = { method: ReadMethod; name: string }
+// `fields`: for objects(), the members the returned records carry (a member the request sent but the parser dropped,
+// such as a file part, is not among them).
+export type Read = { method: ReadMethod; name: string; fields?: readonly string[] }
 
 // Whether a read returns `name` (a fixture name in Params form). get/query/queries/file return their name; has and
-// getAll read `n` and `n[]`; list reads `n[]`; objects returns whole records, so it covers every `n[][f]` and `n[i][f]`
-// (whether each member is then used is not established: a limit of this check). hasObject records presence only and
-// covers no leaf: `poll[expires_in]` must itself be read.
+// getAll read `n` and `n[]`; list reads `n[]`; objects returns whole records, so it covers `n[][f]` and `n[i][f]` for
+// every member `f` a returned record carries (whether each member is then used is not established: a limit of this
+// check). hasObject records presence only and covers no leaf: `poll[expires_in]` must itself be read.
 export function covers(read: Read, name: string): boolean {
 	switch (read.method) {
 		case 'get':
@@ -30,8 +32,10 @@ export function covers(read: Read, name: string): boolean {
 			return name === read.name || name === `${read.name}[]`
 		case 'list':
 			return name === `${read.name}[]`
-		case 'objects':
-			return name.startsWith(`${read.name}[`) && /^\[\d*\]\[[^\]]+\]$/.test(name.slice(read.name.length))
+		case 'objects': {
+			const member = /^\[\d*\]\[([^\]]+)\]$/.exec(name.slice(read.name.length))?.[1]
+			return name.startsWith(`${read.name}[`) && member !== undefined && (read.fields ?? []).includes(member)
+		}
 		case 'hasObject':
 			return false
 	}

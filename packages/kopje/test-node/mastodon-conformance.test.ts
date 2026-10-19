@@ -35,10 +35,24 @@ describe('the coverage rule', () => {
 		}
 		expect(covers({ method: 'list', name: 'types' }, 'types[]')).toBe(true)
 		expect(covers({ method: 'list', name: 'types' }, 'types')).toBe(false)
-		expect(covers({ method: 'objects', name: 'fields_attributes' }, 'fields_attributes[][name]')).toBe(true)
-		expect(covers({ method: 'objects', name: 'fields_attributes' }, 'fields_attributes[0][value]')).toBe(true)
-		expect(covers({ method: 'objects', name: 'fields_attributes' }, 'fields_attributes[name]')).toBe(false)
-		expect(covers({ method: 'objects', name: 'fields' }, 'fields_attributes[][name]')).toBe(false)
+		const records = { method: 'objects', name: 'fields_attributes', fields: ['name', 'value'] } as const
+		expect(covers(records, 'fields_attributes[][name]')).toBe(true)
+		expect(covers(records, 'fields_attributes[0][value]')).toBe(true)
+		expect(covers(records, 'fields_attributes[name]')).toBe(false)
+		expect(covers({ ...records, name: 'fields' }, 'fields_attributes[][name]')).toBe(false)
+	})
+
+	it('takes an object-array read for a member only when a returned record carries it', () => {
+		// A status edit's media_attributes[][thumbnail] is a file part, which the parser drops: objects() returns no record.
+		const dropped = { method: 'objects', name: 'media_attributes', fields: [] } as const
+		expect(covers(dropped, 'media_attributes[][thumbnail]')).toBe(false)
+		expect(covers({ method: 'objects', name: 'media_attributes' }, 'media_attributes[][thumbnail]')).toBe(false)
+		expect(covers({ ...dropped, fields: ['id', 'description'] }, 'media_attributes[][thumbnail]')).toBe(false)
+		expect(
+			paramFailures(
+				evidence({ names: ['media_attributes[][thumbnail]'], reads: { 'media_attributes[][thumbnail]': [dropped] } })
+			)
+		).toEqual(['media_attributes[][thumbnail]: Mastodon reads it, Kopje does not (read it, or add an exception)'])
 	})
 
 	it('takes a container read for no leaf: hasObject alone does not read poll[expires_in]', () => {

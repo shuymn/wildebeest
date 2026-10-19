@@ -196,12 +196,16 @@ describe(`request parameters match Mastodon v${mastodon.mastodon}`, () => {
 	it.each(served)(
 		'%s',
 		async (name, route, theirs) => {
-			const names = theirs.params?.names ?? []
+			// Every compared route has extraction metadata: a fixture without it is not read as "no parameters".
+			if (theirs.params === undefined) {
+				expect.fail(`${name}: the fixture has no params for ${theirs.controller}#${theirs.action}`)
+			}
+			const names = theirs.params.names
 			const recipe = RECIPES[name] ?? {}
 			const observation = await observeRoute(w, route, names, recipe, observer, defaultBaseline(route))
 			const failures = paramFailures({
 				names,
-				unresolved: theirs.params?.unresolved ?? [],
+				unresolved: theirs.params.unresolved,
 				observation,
 				exceptions: PARAM_EXCEPTIONS[name],
 				acknowledged: UNRESOLVED_PARAMS[name]?.reasons,
