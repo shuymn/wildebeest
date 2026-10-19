@@ -450,6 +450,101 @@ describe('mastodon-scopes.mjs request parameters', () => {
 	})
 })
 
+describe('mastodon-scopes.mjs parameter helpers and reviewed readings', () => {
+	const params = (path: string, method = 'GET') => route(path, method)?.params
+
+	it('reads literal helper arguments, and leaves any other argument unresolved', async () => {
+		await checkout({
+			'config/routes/api.rb':
+				'namespace :api do\n  namespace :v1 do\n    resources :things, only: :index\n  end\nend\n',
+			'app/controllers/api/v1/things_controller.rb': [
+				'class Api::V1::ThingsController < Api::BaseController',
+				'  def index',
+				"    truthy_param?('only_media')",
+				'    truthy_param? :local',
+				'    truthy_param?(key_name)',
+				'    params_slice(:max_id, *KEYS)',
+				'    limit_param(DEFAULT_LIMIT)',
+				'  end',
+				'end',
+				'',
+			].join('\n'),
+		})
+		const file = 'app/controllers/api/v1/things_controller.rb'
+		expect(params('/api/v1/things')).toEqual({
+			names: ['limit', 'local', 'only_media'],
+			unresolved: [
+				`${file} index: unreadable \`params_slice(:max_id, *KEYS)\``,
+				`${file} index: unreadable \`truthy_param?(key_name)\``,
+			],
+		})
+	})
+
+	const markers = (timelines: string) => ({
+		'config/routes/api.rb':
+			'namespace :api do\n  namespace :v1 do\n    resources :markers, only: :create\n  end\nend\n',
+		'app/controllers/api/v1/markers_controller.rb': [
+			'class Api::V1::MarkersController < Api::BaseController',
+			'  def create',
+			'    resource_params.each_pair do |timeline, timeline_params|',
+			'      Marker.find_or_create_by(timeline: timeline).update!(timeline_params)',
+			'    end',
+			'  end',
+			'',
+			'  private',
+			'',
+			'  def resource_params',
+			'    params.slice(*Marker::TIMELINES).permit(*Marker::TIMELINES.map { |timeline| { timeline.to_sym => [:last_read_id] } })',
+			'  end',
+			'end',
+			'',
+		].join('\n'),
+		'app/models/marker.rb': `class Marker < ApplicationRecord\n  TIMELINES = ${timelines}.freeze\nend\n`,
+	})
+
+	it("derives a reviewed reading's names from the list it depends on", async () => {
+		await checkout(markers('%w(home notifications lists)'))
+		expect(params('/api/v1/markers', 'POST')).toEqual({
+			names: ['home[last_read_id]', 'lists[last_read_id]', 'notifications[last_read_id]'],
+			unresolved: [],
+		})
+	})
+
+	it('leaves a reviewed reading unresolved when its list is no longer a literal', async () => {
+		await checkout(markers('TIMELINE_NAMES + EXTRA'))
+		expect(params('/api/v1/markers', 'POST')).toEqual({
+			names: [],
+			unresolved: [
+				'app/controllers/api/v1/markers_controller.rb resource_params: unreadable `*Marker::TIMELINES.map { |timeline| { timeline.to_sym => [:last_read_id] } }`',
+			],
+		})
+	})
+
+	it('reads params[v] in a loop over a literal list as each value, and any other dynamic key as unresolved', async () => {
+		await checkout({
+			'config/routes/api.rb':
+				'namespace :api do\n  namespace :v1 do\n    resources :things, only: :index\n  end\nend\n',
+			'app/controllers/api/v1/things_controller.rb': [
+				'class Api::V1::ThingsController < Api::BaseController',
+				'  def index',
+				'    %i(active pending archived).each do |status|',
+				'      found = status if params[status].present?',
+				'    end',
+				'    STATES.each do |state|',
+				'      found = state if params[state].present?',
+				'    end',
+				'  end',
+				'end',
+				'',
+			].join('\n'),
+		})
+		expect(params('/api/v1/things')).toEqual({
+			names: ['active', 'archived', 'pending'],
+			unresolved: ['app/controllers/api/v1/things_controller.rb index: dynamic key `params[state]`'],
+		})
+	})
+})
+
 describe('mastodon-scopes.mjs entity fields', () => {
 	it("reads a serializer's own fields after its superclass's, inner classes apart, and a method's hash keys", async () => {
 		await checkout({

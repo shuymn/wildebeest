@@ -784,22 +784,15 @@ const PERMIT_SHAPES = {
 	'app/controllers/api/v2/filters_controller.rb keywords_attributes': 'array',
 }
 
-// Reviewed readings of expressions the extraction cannot read alone, keyed by the unresolved reason it would give: the
-// names, or a constant whose literal list the names are.
-/** @type {Record<string, string[] | { constant: string }>} */
+// Reviewed readings of expressions the extraction cannot read alone, keyed by the unresolved reason it would give. The
+// names come from a constant's literal list (with `member` appended to each, for records), so a change of the list
+// changes them; a constant that is no longer a literal list leaves the reason unresolved.
+/** @type {Record<string, { constant: string, member?: string }>} */
 const PARAM_READINGS = {
 	// resource_params.each_pair: one record per timeline of Marker::TIMELINES (app/models/marker.rb), each with
 	// last_read_id.
 	'app/controllers/api/v1/markers_controller.rb resource_params: unreadable `*Marker::TIMELINES.map { |timeline| { timeline.to_sym => [:last_read_id] } }`':
-		['home[last_read_id]', 'notifications[last_read_id]'],
-	// `%i(active pending disabled silenced suspended).each do |status|` around the read.
-	'app/controllers/api/v1/admin/accounts_controller.rb translated_filter_params: dynamic key `params[status]`': [
-		'active',
-		'pending',
-		'disabled',
-		'silenced',
-		'suspended',
-	],
+		{ constant: 'Marker::TIMELINES', member: 'last_read_id' },
 	// AccountStatusesFilter (app/lib/account_statuses_filter.rb) reads its KEYS from the params it is given.
 	'app/controllers/api/v1/accounts/statuses_controller.rb preloaded_account_statuses: params used whole `params).results,`':
 		{ constant: 'AccountStatusesFilter::KEYS' },
@@ -1012,6 +1005,17 @@ function permitNames(args, prefix, mode, ctx) {
 	return names
 }
 
+// The values a block variable takes in `<literal list>.each do |v|` (or `{ |v| ... }`), or null.
+/** @param {string} body @param {string} variable */
+function loopValues(body, variable) {
+	if (!/^[a-z_]\w*$/.test(variable)) return null
+	const loop = new RegExp(
+		`(%[iw]\\([^)]*\\)|\\[[^\\]]*\\])\\.each\\s*(?:do\\s*|\\{\\s*)\\|\\s*${variable}\\s*\\|`
+	).exec(body)
+	const list = loop === null ? null : literal(/** @type {string} */ (loop[1]))
+	return Array.isArray(list) ? list : null
+}
+
 /**
  * The parameters one method body reads, and the methods it calls.
  * @param {string} body
@@ -1028,11 +1032,9 @@ function bodyReads(body, where, file, sources, checkout) {
 	const unresolved = (reason) => {
 		const key = `${where}: ${reason}`
 		const reading = PARAM_READINGS[key]
-		const names = Array.isArray(reading)
-			? reading
-			: reading === undefined
-				? null
-				: constantList(reading.constant, sources, checkout)
+		const list = reading === undefined ? null : constantList(reading.constant, sources, checkout)
+		const names =
+			list === null ? null : list.map((v) => (reading?.member === undefined ? v : `${v}[${reading.member}]`))
 		if (names === null) {
 			reads.unresolved.push(key)
 		} else {
@@ -1064,7 +1066,13 @@ function bodyReads(body, where, file, sources, checkout) {
 				const end = closing(body, i)
 				const key = literal(body.slice(i + 1, end - 1))
 				if (typeof key !== 'string') {
-					unresolved(`dynamic key \`${body.slice(from, end).trim()}\``)
+					// params[v] in `<literal list>.each do |v|`: one read per value of the list.
+					const values = path.length === 0 ? loopValues(body, body.slice(i + 1, end - 1).trim()) : null
+					if (values === null) {
+						unresolved(`dynamic key \`${body.slice(from, end).trim()}\``)
+					} else {
+						for (const value of values) record([value])
+					}
 					return undefined
 				}
 				path.push(key)
@@ -1160,20 +1168,27 @@ function bodyReads(body, where, file, sources, checkout) {
 		for (const m of uses) chain(m.index + alias.length, path, alias, false)
 		if (uses.length === 0) record(path)
 	}
-	for (const m of body.matchAll(/(?<![\w.:@$])truthy_param\?\s*\(?\s*:(\w+)/g)) {
-		record([/** @type {string} */ (m[1])])
-	}
-	if (/(?<![\w.:@$])limit_param\b/.test(body)) {
-		reads.names.add('limit')
-	}
-	for (const m of body.matchAll(/(?<![\w.:@$])params_slice\(([^)]*)\)/g)) {
-		for (const key of splitArgs(/** @type {string} */ (m[1])).map(literal)) {
-			if (typeof key === 'string') {
-				reads.names.add(key)
-			} else {
-				unresolved(`unreadable \`${m[0]}\``)
-			}
+	// The helpers: limit_param reads `limit` whatever its arguments; truthy_param? and params_slice read the names
+	// their arguments give, which must be symbol or string literals.
+	for (const m of body.matchAll(/(?<![\w.:@$])(truthy_param\?|limit_param|params_slice)(?![\w?!])/g)) {
+		const helper = /** @type {string} */ (m[1])
+		if (helper === 'limit_param') {
+			reads.names.add('limit')
+			continue
 		}
+		const at = m.index + helper.length
+		const open = /^\s*\(/.exec(body.slice(at))
+		const args = open
+			? body.slice(at + open[0].length, closing(body, at + open[0].length - 1) - 1)
+			: (/^[ \t]+([^\n]*)/.exec(body.slice(at))?.[1] ?? '')
+		const parts = splitArgs(args)
+		const taken = helper === 'truthy_param?' ? parts.slice(0, 1) : parts
+		const keys = taken.map(literal)
+		if (taken.length === 0 || keys.some((k) => typeof k !== 'string')) {
+			unresolved(`unreadable \`${helper}${open ? `(${args})` : ` ${args}`}\``)
+			continue
+		}
+		for (const key of /** @type {string[]} */ (keys)) record([key])
 	}
 	const locals = new Set([
 		...[...body.matchAll(/(?<![\w.:@$])(\w+)\s*(?:\|\|)?=(?![=~>])/g)].map((m) => m[1]),
