@@ -1,10 +1,9 @@
-import { readFileSync } from 'node:fs'
 import type { SQLInputValue } from 'node:sqlite'
 
-import * as acorn from 'acorn'
-import type { AnyNode } from 'acorn'
+import type { Node } from 'oxc-parser'
 import { describe, expect, it } from 'vitest'
 
+import { parse as parseSource, sources, walk } from './source-scan.js'
 import { createKopjeDatabase, readCatalog } from '../cli/lib/cutover/kopje-db.js'
 import { splitStatements } from '../cli/lib/cutover/sql-script.js'
 import { CATEGORIES } from '../cli/lib/cutover/verify-actual.js'
@@ -242,10 +241,6 @@ function schemaColumns(): Map<string, string[]> {
 	return columns
 }
 
-function source(path: string): string {
-	return readFileSync(new URL(path, import.meta.url), 'utf8')
-}
-
 function add(into: Map<string, Set<string>>, table: string, columns: Iterable<string>) {
 	const set = into.get(table) ?? new Set<string>()
 	for (const column of columns) {
@@ -254,34 +249,26 @@ function add(into: Map<string, Set<string>>, table: string, columns: Iterable<st
 	into.set(table, set)
 }
 
-// A JavaScript source parsed by acorn: each node with its ancestors, nearest first.
-type Parsed = { text: string; nodes: { node: AnyNode; parents: AnyNode[] }[] }
+// A JavaScript source (source-scan.ts): each node with its ancestors, nearest first.
+type Parsed = { text: string; nodes: { node: Node; parents: Node[] }[] }
 
 function parse<Name extends string>(sources: Record<Name, string>): Record<Name, Parsed> {
 	const parsed = Object.entries<string>(sources).map(([name, text]) => {
 		const nodes: Parsed['nodes'] = []
-		const visit = (node: AnyNode, parents: AnyNode[]) => {
-			nodes.push({ node, parents })
-			for (const child of Object.values(node).flat()) {
-				if (typeof child === 'object' && child !== null && typeof child.type === 'string') {
-					visit(child as AnyNode, [node, ...parents])
-				}
-			}
-		}
-		visit(acorn.parse(text, { ecmaVersion: 'latest', sourceType: 'module' }), [])
+		walk(parseSource({ path: `${name}.js`, text }).program, (node, parents) => nodes.push({ node, parents }))
 		return [name, { text, nodes }] as const
 	})
 	return Object.fromEntries(parsed) as Record<Name, Parsed>
 }
 
-const literal = (node: AnyNode | null | undefined) =>
+const literal = (node: Node | null | undefined) =>
 	node?.type === 'Literal' && typeof node.value === 'string'
 		? node.value
 		: node?.type === 'TemplateLiteral' && node.expressions.length === 0
 			? (node.quasis[0]?.value.cooked ?? undefined)
 			: undefined
-const named = (node: AnyNode | null | undefined, name: string) => node?.type === 'Identifier' && node.name === name
-const declaredIn = (parents: AnyNode[], name: string) =>
+const named = (node: Node | null | undefined, name: string) => node?.type === 'Identifier' && node.name === name
+const declaredIn = (parents: Node[], name: string) =>
 	parents.some((p) => p.type === 'VariableDeclarator' && named(p.id, name))
 
 // The assigned columns of an UPDATE's SET clause, up to its WHERE or end; null when an assignment has another form.
@@ -360,12 +347,12 @@ function converterWrites({ text, nodes }: Parsed) {
 	return { columns, stateNames, unparsed }
 }
 
-const isTableOfStatement = (node: AnyNode) =>
+const isTableOfStatement = (node: Node) =>
 	node.type === 'MemberExpression' && named(node.object, 'statement') && named(node.property, 'table')
 
 // The table a node of verify-actual.js reads for: the case clause of `switch (statement.table)` around it, or the
 // block of `if (statement.table === 'table')` around it.
-function tableOf(chain: AnyNode[]): string | undefined {
+function tableOf(chain: Node[]): string | undefined {
 	for (const [i, at] of chain.entries()) {
 		const up = chain[i + 1]
 		if (at.type === 'SwitchCase' && up?.type === 'SwitchStatement' && isTableOfStatement(up.discriminant)) {
@@ -447,9 +434,16 @@ const sorted = (names: Iterable<string>) => [...names].sort()
 // The categories put records that compareConversion does not iterate (verify-actual.js CATEGORIES).
 const unregistered = (categories: Iterable<string>) => sorted(categories).filter((c) => !CATEGORIES.includes(c))
 
+function cutover(name: string): string {
+	const source = sources('cli/lib/cutover', ['.js']).find((s) => s.path === `cli/lib/cutover/${name}`)
+	if (source === undefined) {
+		throw new Error(`no cli/lib/cutover/${name}`)
+	}
+	return source.text
+}
 const files = parse({
-	convert: source('../cli/lib/cutover/convert.js'),
-	verify: source('../cli/lib/cutover/verify-actual.js'),
+	convert: cutover('convert.js'),
+	verify: cutover('verify-actual.js'),
 })
 const schema = schemaColumns()
 const converted = converterWrites(files.convert)

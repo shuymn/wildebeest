@@ -1,8 +1,7 @@
-import { readdirSync, readFileSync } from 'node:fs'
-import { join, relative } from 'node:path'
-import { fileURLToPath } from 'node:url'
-
+import type { Node } from 'oxc-parser'
 import { describe, expect, it } from 'vitest'
+
+import { guardFixtures, lineOf, parse, sources, walk, type Literal, type Part, type Source } from './source-scan.js'
 
 // RES-2: a column a remote server controls that keeps a read-time projection (an identity, a hashtag name, a poll's
 // choices, an edit's media snapshot; the other columns are bounded as stored, STORED_COLUMNS in
@@ -28,9 +27,10 @@ import { describe, expect, it } from 'vitest'
 // The guard is an architectural aid, not a proof: the aggregate response tests prove the budgets (test/status-bounds.
 // test.ts). It reads SQL as tokens, not as a grammar, and has known gaps: a column qualified by an outer query's alias
 // inside a correlated subquery is read against the subquery's own tables only; a bounded column passed as a property
-// value is found only as a plain literal right after `:` (not parenthesized, computed or spread); and an expression
-// is resolved only as a constant or a single call by name. A helper call counts only when the interpolation is that
-// one call and nothing joined to it; quoted identifiers read as bare ones; concatenated SQL is found in any case.
+// value is found only as a literal there (directly or as a branch of a condition), not through a variable or spread;
+// and an expression is resolved only as a constant or a single call by name. A helper call counts only when the
+// interpolation is that one call and nothing joined to it; quoted identifiers read as bare ones; concatenated SQL is
+// found in any case.
 
 type Bounded = { table: string; column: string; helpers: readonly string[] }
 
@@ -228,155 +228,71 @@ export function boundedReads(sql: string): string[] {
 	return found
 }
 
-// ---- TypeScript sources, read by a small lexer (comments, strings, templates with nested interpolations, regular
-// expression literals), as range-predicates.test.ts reads them as text: the package has no TypeScript parser API.
+// ---- TypeScript sources (source-scan.ts)
 
-type Part = { text: string } | { expression: string }
-
-type Literal = {
-	path: string
-	offset: number
-	end: number
-	parts: Part[]
-	inHelper: boolean
-	constant: string | null
-}
-
-const HELPER_CALL = new RegExp(String.raw`^\s*(${[...HELPERS].join('|')})\s*\(`)
-
-function lex(path: string, text: string): Literal[] {
-	const literals: Literal[] = []
-	let i = 0
-	// Reads code until `stop` (a closing brace of an interpolation at depth 0) or the end; returns where it stopped.
-	const code = (inHelper: boolean, stop: boolean): number => {
-		let depth = 0
-		let last = ''
-		while (i < text.length) {
-			const c = text[i]!
-			if (c === '/' && text[i + 1] === '/') {
-				i = text.indexOf('\n', i)
-				i = i === -1 ? text.length : i
-				continue
-			}
-			if (c === '/' && text[i + 1] === '*') {
-				i = text.indexOf('*/', i + 2) + 2
-				continue
-			}
-			if (c === '/' && (last === '' || '(,=:[!&|?{};'.includes(last))) {
-				i++
-				let inClass = false
-				while (i < text.length && (text[i] !== '/' || inClass)) {
-					if (text[i] === '\\') {
-						i++
-					} else if (text[i] === '[') {
-						inClass = true
-					} else if (text[i] === ']') {
-						inClass = false
-					}
-					i++
-				}
-				i++
-				last = '/'
-				continue
-			}
-			if (c === "'" || c === '"') {
-				const start = i
-				i++
-				let value = ''
-				while (i < text.length && text[i] !== c) {
-					if (text[i] === '\\') {
-						i++
-					}
-					value += text[i]
-					i++
-				}
-				i++
-				literals.push({ path, offset: start, end: i, parts: [{ text: value }], inHelper, constant: constantAt(start) })
-				last = c
-				continue
-			}
-			if (c === '`') {
-				template(inHelper)
-				last = '`'
-				continue
-			}
-			if (c === '{') {
-				depth++
-			} else if (c === '}') {
-				if (stop && depth === 0) {
-					return i
-				}
-				depth--
-			}
-			if (!/\s/.test(c)) {
-				last = c
-			}
-			i++
-		}
-		return i
+// A literal's expression when it is a bare name or a single call by name, with no template or `+` in its arguments:
+// the name. Null otherwise, as joined text could hide an unbounded column.
+function singleCall(expression: Node): string | null {
+	if (expression.type === 'Identifier') {
+		return expression.name
 	}
-	const constantAt = (start: number): string | null =>
-		/\bconst\s+(\w+)\s*(?::[^=]+)?=\s*$/.exec(text.slice(Math.max(0, start - 200), start))?.[1] ?? null
-	const template = (inHelper: boolean): void => {
-		const start = i
-		const constant = constantAt(start)
-		const parts: Part[] = []
-		let value = ''
-		i++
-		while (i < text.length && text[i] !== '`') {
-			if (text[i] === '\\') {
-				value += text[i + 1]
-				i += 2
-				continue
-			}
-			if (text[i] === '$' && text[i + 1] === '{') {
-				parts.push({ text: value })
-				value = ''
-				i += 2
-				const from = i
-				const helper = HELPER_CALL.test(text.slice(from, from + 64))
-				const end = code(inHelper || helper, true)
-				parts.push({ expression: text.slice(from, end) })
-				i = end + 1
-				continue
-			}
-			value += text[i]
-			i++
-		}
-		i++
-		parts.push({ text: value })
-		literals.push({ path, offset: start, end: i, parts, inHelper, constant })
+	if (expression.type !== 'CallExpression' || expression.callee.type !== 'Identifier') {
+		return null
 	}
-	code(false, false)
-	return literals
+	let joined = false
+	for (const argument of expression.arguments) {
+		walk(argument, (node) => {
+			joined ||= node.type === 'TemplateLiteral' || (node.type === 'BinaryExpression' && node.operator === '+')
+		})
+	}
+	return joined ? null : expression.callee.name
 }
 
-export type Source = { path: string; text: string; literals: Literal[] }
-
-export function source(path: string, text: string): Source {
-	return { path, text, literals: lex(path, text) }
+// Whether `literal` is a property's value, directly or as a branch of a conditional or logical expression there.
+function propertyValue(literal: Literal): boolean {
+	let child = literal.node
+	for (const parent of literal.parents) {
+		if (parent.type === 'Property') {
+			return parent.value === child
+		}
+		if (!['ConditionalExpression', 'LogicalExpression', 'TSAsExpression'].includes(parent.type)) {
+			return false
+		}
+		child = parent
+	}
+	return false
 }
 
-function sources(dir: string): Source[] {
-	return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
-		const path = join(dir, entry.name)
-		if (entry.isDirectory()) {
-			return sources(path)
-		}
-		if (!entry.name.endsWith('.ts')) {
-			return []
-		}
-		return [source(path, readFileSync(path, 'utf8'))]
-	})
+// The helper a call calls, by its own name or as a static member (`bounds.statusUriSql`); null for any other call.
+function helperOf(call: Node): string | null {
+	if (call.type !== 'CallExpression') {
+		return null
+	}
+	const { callee } = call
+	const name =
+		callee.type === 'Identifier'
+			? callee.name
+			: callee.type === 'MemberExpression' && !callee.computed && callee.property.type === 'Identifier'
+				? callee.property.name
+				: null
+	return name !== null && HELPERS.has(name) ? name : null
+}
+
+// The column a helper is given: its first argument, itself. A literal nested deeper (a database call's SQL inside the
+// argument) is read as any other.
+const inHelper = (literal: Literal) => {
+	const call = literal.parents[0]
+	return call?.type === 'CallExpression' && helperOf(call) !== null && call.arguments[0] === literal.node
 }
 
 // The text of a literal, constants inlined (the module's own first, then another module's by a unique name), helper
 // calls and other interpolations opaque.
 function render(
+	path: string,
 	literal: Literal,
-	local: Map<string, Literal>,
-	global: Map<string, Literal | null>,
-	exprs: string[],
+	local: Map<string, [string, Literal]>,
+	global: Map<string, [string, Literal] | null>,
+	exprs: Exclude<Part, { text: string }>[],
 	seen: ReadonlySet<Literal> = new Set()
 ): string {
 	return literal.parts
@@ -388,36 +304,18 @@ function render(
 			if (call !== null && HELPERS.has(call)) {
 				return ' __bounded__ '
 			}
-			const name = /^\s*(\w+)\s*$/.exec(part.expression)?.[1]
-			const target = name === undefined ? undefined : (local.get(`${literal.path}#${name}`) ?? global.get(name))
-			if (target === undefined || target === null || seen.has(target)) {
-				exprs.push(part.expression.replace(/\s+/g, ' ').trim())
+			const name = part.expression.type === 'Identifier' ? part.expression.name : undefined
+			const target = name === undefined ? undefined : (local.get(`${path}#${name}`) ?? global.get(name))
+			if (target === undefined || target === null || seen.has(target[1])) {
+				exprs.push(part)
 				return ` __expr${exprs.length - 1}__ `
 			}
-			return ` ${render(target, local, global, exprs, new Set([...seen, target]))} `
+			return ` ${render(target[0], target[1], local, global, exprs, new Set([...seen, target[1]]))} `
 		})
 		.join('')
 }
 
 type Finding = { path: string; line: number; read: string }
-
-// The name when the expression is exactly `name` or `name(arguments)` with balanced arguments holding no template
-// and no `+`; null otherwise, as joined text could hide an unbounded column.
-function singleCall(expression: string): string | null {
-	const match = /^\s*(\w+)\s*(\(([\s\S]*)\))?\s*$/.exec(expression)
-	if (match === null) {
-		return null
-	}
-	const args = match[3] ?? ''
-	let depth = 0
-	for (const c of args) {
-		depth += c === '(' ? 1 : c === ')' ? -1 : 0
-		if (depth < 0) {
-			return null
-		}
-	}
-	return depth === 0 && !/[`+]/.test(args) ? match[1]! : null
-}
 
 // Builders an interpolation in a result list may name without a finding: each yields a predicate, a number, ids, or a
 // value it bounds itself (cutSql); none passes a bounded column through. Any other interpolation there is a finding,
@@ -459,50 +357,62 @@ const SQL_TEXT = /\b(?:SELECT|FROM|WHERE|RETURNING|INSERT|UPDATE)\b/i
 
 // The findings of the file header; misuses are helper calls given a column the helper does not bound.
 export function scan(all: readonly Source[]): { reads: Finding[]; misuses: Finding[] } {
-	const local = new Map<string, Literal>()
-	const global = new Map<string, Literal | null>()
-	for (const literal of all.flatMap((source) => source.literals)) {
-		if (literal.constant !== null) {
-			local.set(`${literal.path}#${literal.constant}`, literal)
-			global.set(literal.constant, global.has(literal.constant) ? null : literal)
+	const local = new Map<string, [string, Literal]>()
+	const global = new Map<string, [string, Literal] | null>()
+	for (const source of all) {
+		for (const literal of parse(source).literals) {
+			if (literal.constant !== null) {
+				local.set(`${source.path}#${literal.constant}`, [source.path, literal])
+				global.set(literal.constant, global.has(literal.constant) ? null : [source.path, literal])
+			}
 		}
 	}
 	const reads: Finding[] = []
 	const misuses: Finding[] = []
-	const call = new RegExp(String.raw`\b(${[...HELPERS].join('|')})\(\s*(['"\`])([^'"\`$]*)\2`, 'g')
-	for (const { path, text, literals } of all) {
-		const lineOf = (offset: number) => text.slice(0, offset).split('\n').length
-		for (const match of text.matchAll(call)) {
-			const [, helper, , argument] = match
-			const column = argument!.slice(argument!.lastIndexOf('.') + 1)
-			if (!BOUNDED.some((b) => b.column === column && b.helpers.includes(helper!))) {
-				misuses.push({ path, line: lineOf(match.index), read: `${helper}(${argument})` })
+	for (const source of all) {
+		const { path, text } = source
+		const { program, literals } = parse(source)
+		walk(program, (node) => {
+			const helper = helperOf(node)
+			if (helper === null || node.type !== 'CallExpression') {
+				return
 			}
-		}
+			const first = node.arguments[0]
+			const argument =
+				first?.type === 'Literal' && typeof first.value === 'string'
+					? first.value
+					: first?.type === 'TemplateLiteral' && first.expressions.length === 0
+						? first.quasis[0]?.value.cooked
+						: undefined
+			const column = argument?.slice(argument.lastIndexOf('.') + 1)
+			if (argument !== undefined && !BOUNDED.some((b) => b.column === column && b.helpers.includes(helper))) {
+				misuses.push({ path, line: lineOf(text, node.start), read: `${helper}(${argument})` })
+			}
+		})
 		for (const literal of literals) {
-			if (literal.inHelper) {
+			if (inHelper(literal)) {
 				continue
 			}
-			const exprs: string[] = []
-			const sql = render(literal, local, global, exprs)
-			const line = lineOf(literal.offset)
-			const before = text.slice(0, literal.offset).trimEnd().at(-1)
-			const after = text.slice(literal.end).trimStart()[0]
-			if ((before === '+' || after === '+') && SQL_TEXT.test(sql)) {
+			const exprs: Exclude<Part, { text: string }>[] = []
+			const sql = render(path, literal, local, global, exprs)
+			const line = lineOf(text, literal.node.start)
+			const parent = literal.parents[0]
+			if (parent?.type === 'BinaryExpression' && parent.operator === '+' && SQL_TEXT.test(sql)) {
 				reads.push({ path, line, read: 'concatenated SQL' })
 			}
 			// A property-valued bounded column is selected by SQL built elsewhere (see the file header).
 			const named = /^\s*\w+\.(\w+)\s*$/.exec(sql)?.[1]
-			if (before === ':' && named !== undefined && BOUNDED.some((b) => b.column === named)) {
+			if (propertyValue(literal) && named !== undefined && BOUNDED.some((b) => b.column === named)) {
 				reads.push({ path, line, read: `column ${sql.trim()}` })
 			}
 			if (/\b(?:SELECT|RETURNING)\b/i.test(sql)) {
 				for (const read of boundedReads(sql)) {
 					const opaque = /^unresolved:(\d+)$/.exec(read)
-					const expression = opaque === null ? null : (exprs[Number(opaque[1])] ?? '')
-					if (expression !== null && SAFE_INTERPOLATIONS.has(singleCall(expression) ?? '')) {
+					const part = opaque === null ? null : exprs[Number(opaque[1])]
+					if (part !== null && part !== undefined && SAFE_INTERPOLATIONS.has(singleCall(part.expression) ?? '')) {
 						continue
 					}
+					const expression = part === null ? null : (part?.source.replace(/\s+/g, ' ').trim() ?? '')
 					reads.push({ path, line, read: expression === null ? read : `interpolation ${expression}` })
 				}
 			}
@@ -633,52 +543,67 @@ describe('the bounded-read matcher', () => {
 })
 
 describe('the source scanner', () => {
-	const findings = (text: string) => scan([source('src/domain/probe.ts', text)]).reads.map((finding) => finding.read)
+	const find = (all: Source[]) => {
+		const { reads, misuses } = scan(all)
+		return [...reads.map((r) => r.read), ...misuses.map((m) => `misuse ${m.read}`)]
+	}
 
-	it.each([
-		['a raw column', 'db.all(`SELECT s.uri FROM statuses s`)', 'statuses.uri'],
-		['an interpolated string', "db.all(`SELECT ${'s.uri'} FROM statuses s`)", "interpolation 's.uri'"],
-		[
-			'an import alias of a helper',
-			"import { statusUriSql as c } from './status-bounds'\ndb.all(`SELECT ${c('s.uri')} AS uri FROM statuses s`)",
-			"interpolation c('s.uri')",
-		],
-		['concatenated SQL', "db.all('SELECT s.uri ' + 'FROM statuses s')", 'concatenated SQL'],
-		['lower-case concatenated SQL', "db.all('select s.uri ' + 'from statuses s')", 'concatenated SQL'],
-		[
-			'a helper call with more joined to it',
-			"db.all(`SELECT ${statusUriSql('s.uri') + ', s.uri'} FROM statuses s`)",
-			"interpolation statusUriSql('s.uri') + ', s.uri'",
-		],
-		['quoted identifiers', 'db.all(`SELECT "s"."uri" FROM statuses AS "s"`)', 'statuses.uri'],
-		['a column passed as a property', "read.select(db, { columns: { text: 's.uri' } })", 'column s.uri'],
-		[
-			'a constant of raw columns',
-			"const COLUMNS = 's.id, s.uri'\ndb.all(`SELECT ${COLUMNS} FROM statuses s`)",
-			'statuses.uri',
-		],
-	])('finds %s', (_name, text, read) => {
-		expect(findings(text)).toContain(read)
-	})
-
-	it.each([
-		['a helper', "db.all(`SELECT ${statusUriSql('s.uri')} AS uri FROM statuses s`)"],
-		['a comparison', 'db.all(`SELECT s.id FROM statuses s WHERE s.uri = ?`)'],
-		['a safe builder', "db.all(`SELECT s.id, ${availableSql('s.account_id')} AS a FROM statuses s`)"],
-	])('leaves %s', (_name, text) => {
-		expect(findings(text)).toEqual([])
+	guardFixtures(find, {
+		flagged: {
+			'a raw column': ['db.all(`SELECT s.uri FROM statuses s`)', 'statuses.uri'],
+			'an interpolated string': ["db.all(`SELECT ${'s.uri'} FROM statuses s`)", "interpolation 's.uri'"],
+			'an import alias of a helper': [
+				"import { statusUriSql as c } from './status-bounds'\ndb.all(`SELECT ${c('s.uri')} AS uri FROM statuses s`)",
+				"interpolation c('s.uri')",
+			],
+			'concatenated SQL': ["db.all('SELECT s.uri ' + 'FROM statuses s')", 'concatenated SQL'],
+			'lower-case concatenated SQL': ["db.all('select s.uri ' + 'from statuses s')", 'concatenated SQL'],
+			'a helper call with more joined to it': [
+				"db.all(`SELECT ${statusUriSql('s.uri') + ', s.uri'} FROM statuses s`)",
+				"interpolation statusUriSql('s.uri') + ', s.uri'",
+			],
+			'quoted identifiers': ['db.all(`SELECT "s"."uri" FROM statuses AS "s"`)', 'statuses.uri'],
+			'a column passed as a property': ["read.select(db, { columns: { text: 's.uri' } })", 'column s.uri'],
+			'a parenthesized property value': ["read.select(db, { columns: { text: ('s.uri') } })", 'column s.uri'],
+			'a computed property': ["read.select(db, { columns: { [key]: 's.uri' } })", 'column s.uri'],
+			'a property value chosen by a condition': ["f({ text: own ? 's.uri' : 's.id' })", 'column s.uri'],
+			'a constant of raw columns': [
+				"const COLUMNS = 's.id, s.uri'\ndb.all(`SELECT ${COLUMNS} FROM statuses s`)",
+				'statuses.uri',
+			],
+			'a helper given another column': ["statusUriSql('s.content')", 'misuse statusUriSql(s.content)'],
+			'a namespaced helper given another column': ["bounds.statusUriSql('t.name')", 'misuse statusUriSql(t.name)'],
+			'a read nested in a helper argument': [
+				"statusUriSql(db.first<{ uri: string }>('SELECT s.uri FROM statuses s')!.uri)",
+				'statuses.uri',
+			],
+			'a reassigned let': [
+				"let COLUMNS = 's.id'\nCOLUMNS = 's.id, s.uri'\ndb.all(`SELECT ${COLUMNS} FROM statuses s`)",
+				'interpolation COLUMNS',
+			],
+			'a reassigned var': [
+				"var COLUMNS = 's.id'\nCOLUMNS = 's.id, s.uri'\ndb.all(`SELECT ${COLUMNS} FROM statuses s`)",
+				'interpolation COLUMNS',
+			],
+		},
+		passed: {
+			'a helper': "db.all(`SELECT ${statusUriSql('s.uri')} AS uri FROM statuses s`)",
+			'a comparison': 'db.all(`SELECT s.id FROM statuses s WHERE s.uri = ?`)',
+			'a namespaced helper': "db.all(`SELECT s.id FROM statuses s WHERE x = ?`, bounds.statusUriSql('s.uri'))",
+			'a constant of bounded columns': "const COLUMNS = 's.id'\ndb.all(`SELECT ${COLUMNS} FROM statuses s`)",
+			'a safe builder': "db.all(`SELECT s.id, ${availableSql('s.account_id')} AS a FROM statuses s`)",
+			'a comment': "// db.all(`SELECT s.uri FROM statuses s`), statusUriSql('s.content')\nf()",
+		},
 	})
 })
 
 describe('bounded columns in src/domain', () => {
-	const root = fileURLToPath(new URL('../src/domain', import.meta.url))
-	const { reads, misuses } = scan(sources(root))
-	const name = (path: string) => `src/domain/${relative(root, path).replaceAll('\\', '/')}`
+	const { reads, misuses } = scan(sources('src/domain'))
 
 	it('are read only through their helpers', () => {
 		const counts = new Map<string, Finding[]>()
 		for (const finding of reads) {
-			const key = `${name(finding.path)} ${finding.read}`
+			const key = `${finding.path} ${finding.read}`
 			counts.set(key, [...(counts.get(key) ?? []), finding])
 		}
 		const unexpected = [...counts].flatMap(([key, found]) =>
@@ -689,6 +614,6 @@ describe('bounded columns in src/domain', () => {
 	})
 
 	it('bound the column each helper is given', () => {
-		expect(misuses.map((m) => `${name(m.path)}:${m.line} ${m.read}`)).toEqual([])
+		expect(misuses.map((m) => `${m.path}:${m.line} ${m.read}`)).toEqual([])
 	})
 })

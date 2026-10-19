@@ -41,7 +41,8 @@ export function isDistributable(visibility: Visibility): boolean {
 // ---------------------------------------------------------------------------------------------------------------
 // The policy, as SQL fragments (docs/visibility.md): who may be seen, who sees what, what a viewer filters out, who is
 // notified, and whom an author may address. This is the only module that reads blocks, mutes, domain_blocks or
-// suspended_at to decide any of that, and the only one that spells a set of visibilities in SQL (test/policy.test.ts).
+// suspended_at to decide any of that, and the only one that spells a set of visibilities in SQL
+// (test-node/policy-boundary.test.ts).
 //
 // Fragments take SQL expressions, normally numbered parameters: `s` is the alias of a statuses row, `x` an account id,
 // `viewer` the viewer's account id (NULL for an anonymous viewer), and `now` the time the viewer's time-bound choices
@@ -440,8 +441,8 @@ export function canView(db: Db, viewerId: string | null, statusId: string): bool
 
 // ---- Status ids the presenter accepts (status-presenter.ts). Types only: a brand costs nothing at run time, and only
 // the functions below make one: from the rows of a query they wrote with the rule in it, or after canView or the
-// author's check. test/policy.test.ts keeps every other module from making one (no cast, type argument or type
-// predicate names a brand).
+// author's check. test-node/policy-boundary.test.ts keeps every other module from making one (no cast, type argument
+// or type predicate names a brand).
 
 declare const visibleStatus: unique symbol
 declare const ownStatus: unique symbol
@@ -839,7 +840,8 @@ export type ApiQuoteState = QuoteState | 'unauthorized' | 'blocked_domain' | 'bl
 
 export type QuoteRead = { status_id: string; state: ApiQuoteState; quoted_status_id: VisibleStatusId | null }
 
-// R35: the quotes of statuses, read for one viewer. The presenter reads quotes only through this (test/policy.test.ts).
+// R35: the quotes of statuses, read for one viewer. The presenter reads quotes only through this
+// (test-node/policy-boundary.test.ts).
 export type QuoteReads = {
 	// One key lookup per quoting status, in status id order. States, their precedence and Mastodon's
 	// Quote#acceptable?: docs/visibility.md (R35). `source` lists the statuses deleted in this response: their quote

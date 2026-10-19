@@ -60,7 +60,8 @@ import { createKeyring, type KeyOwner, requestSigner, type Signer } from '../sec
 // The Fedify Federation of one request: dispatchers for actors, key pairs, WebFinger, NodeInfo, the followers,
 // following, featured and featured hashtags collections, local Notes and the outbox, over the Store, with ids under the domain fixed at /setup. It
 // never sends: Fedify's queue,
-// sendActivity and forwardActivity are not used (test/fedify-usage.test.ts); outbound delivery goes through deliveries.
+// sendActivity and forwardActivity are not used (test-node/fedify-usage.test.ts); outbound delivery goes through
+// deliveries.
 
 // The identifier of the instance actor, served at /actor. It cannot collide with a username, which has no ':'.
 export const INSTANCE_ACTOR = 'kopje:instance'

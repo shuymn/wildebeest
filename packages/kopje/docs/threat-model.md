@@ -130,7 +130,7 @@ against their own instance. TLS is assumed between all parties.
   missing proof, a forged signature, a proof by another actor's key, a proof covering another object, a valid proof on
   another activity type and on the `Delete` of a status), `test/inbox.test.ts` ("records no retraction for input that
   fails ID-1"). Kopje's own stamp `Delete`s carry such a proof (VIS-28), so a server relaying one can be believed.
-  See `src/federation/ld-sign.ts`, `test/quote-requests.test.ts` and `test/fedify-usage.test.ts`.
+  See `src/federation/ld-sign.ts`, `test/quote-requests.test.ts` and `test-node/fedify-usage.test.ts`.
 - **ID-2: a fetched document is trusted only for its own origin.** The identity of a fetched object is its parsed `id`
   after JSON-LD processing, and it must have the origin of the final response URL. The loader's literal `id` check is a
   pre-filter. Cross-origin redirects are refused. _Enforced (main):_ `src/federation/loader.ts`;
@@ -241,7 +241,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
 - **VIS-1: one rule decides who may see a status**, Mastodon's `StatusPolicy#show?`: the statuses of an unavailable
   author (a suspended local account, or a remote account whose deletion has started) are seen by nobody; the author sees all their own; an author who blocks the viewer hides everything from them; `public`
   and `unlisted` are seen by everyone else; `private` by accepted followers and the mentioned (silent included);
-  `direct` and `limited` by the mentioned (silent included) only. Every read path uses the same SQL rule, from the one policy module (`docs/visibility.md`; `test/policy.test.ts` keeps the rule out of other modules). A remote account is unavailable from the first transaction of its purge (`accounts.deleted_at`), so nothing of it is shown while the purge's batches remove its relationships and statuses (`test/inbox-regressions.test.ts` ("shows nothing of the actor from the Delete on")). _Enforced (main):_ `src/domain/audience.ts` (`visibleSql`, `canView`); `test/audience.test.ts`,
+  `direct` and `limited` by the mentioned (silent included) only. Every read path uses the same SQL rule, from the one policy module (`docs/visibility.md`; `test-node/policy-boundary.test.ts` keeps the rule out of other modules). A remote account is unavailable from the first transaction of its purge (`accounts.deleted_at`), so nothing of it is shown while the purge's batches remove its relationships and statuses (`test/inbox-regressions.test.ts` ("shows nothing of the actor from the Delete on")). _Enforced (main):_ `src/domain/audience.ts` (`visibleSql`, `canView`); `test/audience.test.ts`,
   `test/visibility.test.ts` (single status, context, history, source, `favourited_by`, timelines, account statuses,
   notifications, bookmarks, favourites). _Enforced (main)_ for search: `src/domain/search.ts`;
   `test/search.test.ts` ("never returns a status the viewer may not see", "drops a boosted status that became
@@ -507,12 +507,12 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   (generated worlds), `test/policy-bounds.test.ts` (rows read up to the caps).
 - **VIS-19: a private note is its author's alone, and an endorsement lasts only as long as the follow.** A note
   (`AccountNote`) on an account is shown only to the local account that wrote it, as the `note` of its Relationship
-  with that account; no other read path reads the notes (`test/policy.test.ts`), and they are never federated. An
-  endorsement (`AccountPin`) needs the endorser's accepted follow of the account, and goes when that follow ends,
-  whatever ends it (an unfollow, a block either way, a removal from followers, a domain block's cleanup, a `Reject`, a
-  `Move`, a purge): a trigger deletes it with the follow, so no path can forget it, and a later follow does not bring
-  it back. Endorsements are public, as Mastodon 4.5's: an account's list is shown to anyone while the account is
-  available, leaving out unavailable endorsed accounts (R28). They are not federated (Mastodon 4.5's actor has no
+  with that account; no other read path reads the notes (`test-node/policy-boundary.test.ts`), and they are never
+  federated. An endorsement (`AccountPin`) needs the endorser's accepted follow of the account, and goes when that
+  follow ends, whatever ends it (an unfollow, a block either way, a removal from followers, a domain block's cleanup, a
+  `Reject`, a `Move`, a purge): a trigger deletes it with the follow, so no path can forget it, and a later follow does
+  not bring it back. Endorsements are public, as Mastodon 4.5's: an account's list is shown to anyone while the account
+  is available, leaving out unavailable endorsed accounts (R28). They are not federated (Mastodon 4.5's actor has no
   endorsements collection). A remote account's purge deletes the endorsements of it and the notes on it within its
   batches (RES-6). _Enforced (main):_ `src/domain/endorsements.ts`, `setNote` and
   `relationshipsOf` in `src/domain/accounts.ts`, `removeFromFollowers` in `src/domain/blocks.ts`, `purgeRelationships`
@@ -540,8 +540,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   through the account statuses rule (R11, VIS-1), so a viewer sees only the pins it may see; the actor's `featured`
   collection serves the Note of a public or unlisted pin, as the object endpoint does (VIS-4), and only the uri of any
   other; `Add` and `Remove` carry the uri alone to the pinner's followers (R23). A conversation mute
-  (`ConversationMute`) is read only by the policy module (`conversationMutedSql`, `test/policy.test.ts`): it shows in
-  its owner's `muted` and keeps notify from writing a notification about a status of the muted conversation
+  (`ConversationMute`) is read only by the policy module (`conversationMutedSql`, `test-node/policy-boundary.test.ts`):
+  it shows in its owner's `muted` and keeps notify from writing a notification about a status of the muted conversation
   (`notifiedSql`, R15 with R31); it is never federated. A remote status's removal deletes its pins within its batches
   (RES-6). _Enforced (main):_ `src/domain/status-actions.ts`, `getFeatured` and
   `featuredActivity` in `src/domain/activities.ts`, `accountStatuses` in `src/domain/timelines.ts`, the presenter's
@@ -577,20 +577,20 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
 
 - **VIS-25: a report reveals to the servers it is forwarded to only what its reporter may see, and never its reporter.**
   A report (`Report`) is its reporter's: it is read only where it is written and answered once to its reporter (R34,
-  `test/policy.test.ts`), and goes with the reported account's purge. It names an available account and only statuses of
-  that account the reporter may see by the account statuses rule (R11, VIS-1); any other status refuses the whole report
-  as not found, so a report cannot probe for a status the reporter may not see. Forwarded (only for a remote account and
-  `forward`), it is a `Flag` from the instance actor carrying the reporter's comment and the uris of the account and its
-  reported statuses, never the reporter's identity (DATA-7). It goes only to the inboxes Mastodon's `ReportService`
-  chooses (R23, `reportForwardees`): the account's server when its domain is listed (by default its own), and the
-  servers of the accounts the reported statuses reply to on the listed domains, less the account's own inboxes; by
-  Kopje's rule for an activity without `to`, each by shared inbox when it has one. A replied-to server may so learn the
-  uri of a status it was not sent, as with Mastodon; the uri carries no content, and the status is served, or not, by
-  its own server, the reported account's. The work is bounded (RES-7): at most 100 statuses and 100 domains, the
-  statuses and replied-to accounts read by key. _Enforced (main):_ `src/domain/reports.ts`,
+  `test-node/policy-boundary.test.ts`), and goes with the reported account's purge. It names an available account and
+  only statuses of that account the reporter may see by the account statuses rule (R11, VIS-1); any other status refuses
+  the whole report as not found, so a report cannot probe for a status the reporter may not see. Forwarded (only for a
+  remote account and `forward`), it is a `Flag` from the instance actor carrying the reporter's comment and the uris of
+  the account and its reported statuses, never the reporter's identity (DATA-7). It goes only to the inboxes Mastodon's
+  `ReportService` chooses (R23, `reportForwardees`): the account's server when its domain is listed (by default its
+  own), and the servers of the accounts the reported statuses reply to on the listed domains, less the account's own
+  inboxes; by Kopje's rule for an activity without `to`, each by shared inbox when it has one. A replied-to server may
+  so learn the uri of a status it was not sent, as with Mastodon; the uri carries no content, and the status is served,
+  or not, by its own server, the reported account's. The work is bounded (RES-7): at most 100 statuses and 100 domains,
+  the statuses and replied-to accounts read by key. _Enforced (main):_ `src/domain/reports.ts`,
   `accountStatusIds` in `src/domain/timelines.ts`, `reportForwardees` in `src/domain/audience.ts`, `flagActivity` in
   `src/domain/activities.ts`, `purgeRelationships` and `PURGED_ACCOUNT_CHILDREN` in `src/domain/inbox.ts`, migration
-  `0022_reports`; `test/reports.test.ts`, `test/policy.test.ts`, `test/policy-bounds.test.ts`,
+  `0022_reports`; `test/reports.test.ts`, `test-node/policy-boundary.test.ts`, `test/policy-bounds.test.ts`,
   `test/migrations.test.ts`, `test/cascade-guard.test.ts`.
 
 - **VIS-26: streaming reveals no more than the REST reads, judged when each message is made.** A socket of the
@@ -633,7 +633,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   events: `homeStatus` in `src/domain/timelines.ts` (with `statusReads`' `only`), `mentionedStatus` in
   `src/domain/notifications.ts`, `deleteAudience` in `src/domain/audience.ts`, `streamUnit` and `streamDelete` in
   `src/domain/streaming.ts`, migration `0028_streaming_home`; `test/streaming/home.test.ts`,
-  `test/streaming-oracle.test.ts`, `test/stream-delete.test.ts`, `test/layering.test.ts`,
+  `test/streaming-oracle.test.ts`, `test/stream-delete.test.ts`, `test-node/layering.test.ts`,
   `test/policy-bounds.test.ts`, `test/migrations.test.ts`, `test/cascade-guard.test.ts`. _Enforced (main):_ lists, direct and merged: `listStatus` in `src/domain/timelines.ts`, `streamedConversation`
   and the change sequence in `src/domain/conversations.ts`, the merge transition in
   `src/domain/notification-requests.ts`, `streamUnit`, `streamDelete` and `streamConversations` in
@@ -656,7 +656,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   _Enforced (main):_ `quoteReads` in `src/domain/audience.ts`, the presenter in `src/domain/status-presenter.ts`,
   `statusQuotes` in `src/domain/statuses.ts`, `acceptedQuoteWindow` in `src/domain/quotes.ts`, migration
   `0036_quotes_list`; `test/quotes-api.test.ts`, `test/policy-oracle.test.ts`, `test/policy-bounds.test.ts`,
-  `test/policy.test.ts`, `test/migrations.test.ts`.
+  `test-node/policy-boundary.test.ts`, `test/migrations.test.ts`.
 
 - **VIS-28: a quote is approved only by the quoted author, and a revoked approval never becomes valid again.** A quote
   is `accepted` only as a self-quote, by a remote stamp that passes every check (section 5 of the quotes design), or,
@@ -867,9 +867,9 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `test/statuses.test.ts` ("cannot edit someone else's status", "gives the source for editing to the author only"),
   `test/notifications.test.ts` ("only the viewer’s own notifications"). _Enforced (main)_ for scheduled statuses: every read and change
   of `scheduled_statuses` is the owner's (`scheduledOwnSql`, R26, all in `src/domain/scheduled-statuses.ts`, which
-  `test/policy.test.ts` keeps alone in touching the table), so another account's is not found (404), and the media a
-  scheduled status holds is the poster's own, checked as for a post; publication runs as the scheduled status's owner
-  and through the checks of a post (`preparePost`), and an account suspended meanwhile publishes nothing;
+  `test-node/policy-boundary.test.ts` keeps alone in touching the table), so another account's is not found (404), and
+  the media a scheduled status holds is the poster's own, checked as for a post; publication runs as the scheduled
+  status's owner and through the checks of a post (`preparePost`), and an account suspended meanwhile publishes nothing;
   `test/scheduled-statuses.test.ts` ("never shows or changes another account's scheduled status", "nothing leaks
   before publication").
 - **AUTH-7: opaque credentials are unguessable and stored as digests.** Client ids and secrets, codes and access tokens
@@ -1062,7 +1062,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   sink client that applies NET-1's host rules (https, public address, re-checked hops, a hop limit) plus its own budget:
   documents as NET-1; remote media a size cap, a time limit and a type allowlist; Web Push and deliveries no redirects.
   Credentials and signatures never follow a redirect to another origin. Fedify's sending and queueing are not used.
-  _Enforced (main)_ for documents and the Fedify rule: `test/fedify-usage.test.ts` ("never sends or queues through
+  _Enforced (main)_ for documents and the Fedify rule: `test-node/fedify-usage.test.ts` ("never sends or queues through
   Fedify"). Deliveries: _Enforced (main):_ `assertPublicShape` and the DNS check before every
   POST, no redirects, 30 s (`postActivity` in `src/federation/delivery.ts`); `test/delivery-post.test.ts` ("NET-3:
   refuses inboxes that fail the public-host rules"). Web Push: _Enforced (main):_ the same sink before every POST
@@ -1272,9 +1272,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   whoever may see its status by itself (R3), and a vote needs R27 (`mayVoteSql`: the voter blocks neither the
   author nor its domain); otherwise 404 (403 for a voter who blocks the author, as Mastodon). Only counts and the viewer's own votes
   are shown; `hide_totals` hides each choice's count from everyone until the poll ends, in the API and in the
-  Question (no `totalItems`). `poll_votes` is read in `polls.ts` alone (`test/policy.test.ts`, R27). A remote vote
-  passes the same rule (Mastodon checks none). _Enforced (main):_ `test/polls.test.ts` ("shows a poll only to whoever
-  may see its status", "refuses a voter who blocks the author (R27)", "hides the counts … from everyone"),
+  Question (no `totalItems`). `poll_votes` is read in `polls.ts` alone (`test-node/policy-boundary.test.ts`, R27). A
+  remote vote passes the same rule (Mastodon checks none). _Enforced (main):_ `test/polls.test.ts` ("shows a poll only
+  to whoever may see its status", "refuses a voter who blocks the author (R27)", "hides the counts … from everyone"),
   `test/polls-federation.test.ts` ("is refused from an account the author blocks (R27)").
 - **POLL-3: polls cost bounded work (RES).** Presenting reads each poll's row and the viewer's own votes, never the
   votes; the cron ends at most 25 polls and records at most 25 Updates of counts a run, through partial indexes; the
