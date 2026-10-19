@@ -177,6 +177,15 @@ an Undo naming its status removes it. A chunk holding a fifth row for
 one favourite fails with `favourite_likes: more than 4 Like ids for one favourite`, a repeated id with
 `UNIQUE constraint failed: favourite_likes.uri`, and a longer one with `like_id_within_4096_json_bytes`.
 
+The custom emoji an object tagged are `statuses.emojis`, `status_edits.emojis` and `accounts.emojis` (migration
+`0053_custom_emoji_snapshots`): NULL for none, or a JSON array of 1 to 64 `[shortcode, url]` pairs in tag order. A
+shortcode is 1 to 128 ASCII characters of `A-Z a-z 0-9 _ + -`, each once in the array; a url is `http://` or
+`https://`, at most 512 bytes, of the characters `!` to `~` but `"` and `\`. The text is at most 12,288 UTF-8 bytes
+(6,144 for an account), and so are its entities as presented, each `67 + n + 2u` bytes for a shortcode of n and a url
+of u, plus 1, with no NUL anywhere in the text; `[]` is refused, write NULL. A boost row's value is never read. A file built from legacy data writes NULL
+(legacy has no custom emoji, and `verify-conversion` fails on any other value). A chunk holding any other value fails
+with `<table>: emojis past their stored bound`.
+
 1. Read the catalog from the empty target: `GET /admin/catalog`.
 2. Build the converted data in a local SQLite database created from the same migrations. Use the target's catalog
    order for tables, columns and rows.

@@ -1117,8 +1117,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `src/platform/http-url.ts`, shared with `assertPublicShape`); `test/push.test.ts` ("NET-3: refuses endpoints that are
   not public https URLs"), `test/push-send.test.ts` ("PUSH-2: the endpoint is an outbound sink at every send", "never
   follows a redirect, and retries instead"). Remote media: _Planned (remote media):_ Kopje fetches no remote media
-  (remote attachments, avatars and headers are kept as http(s) URLs, HTML-3); a cache of them needs its own sink with a
-  size cap, a time limit and a type allowlist.
+  (remote attachments, avatars, headers and custom emoji images are kept as http(s) URLs, HTML-3); a cache of them
+  needs its own sink with a size cap, a time limit and a type allowlist.
 - **NET-4: signed fetches stay with their signer.** A document fetched with a signature is cached under a key that
   includes the signing key id and is never served to another key or to the unsigned path. _Enforced (main):_
   `signedLoader` in `src/federation/federation.ts`; `test/signed-fetch.test.ts` ("caches signed documents per signing
@@ -1203,6 +1203,12 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `test/html.test.ts`. _Enforced (main)_ for field links and remote statuses at ingest
   (the status url and attachment and preview URLs, which are dropped unless http(s)); `src/federation/remote-status.ts`;
   `test/inbox-statuses.test.ts` ("keeps only http(s) media (HTML-1, HTML-3)", "http(s) links only").
+  _Enforced (main)_ for custom emoji: an emoji's `url` and `static_url` pass `emojiHref` (http(s), serialized, within
+  512 bytes and `EMOJI_URL_ALPHABET`) when an `Emoji` tag is read and again whenever a snapshot is presented, so an
+  imported row is normalized too and an entry whose URL does not pass is dropped (`src/domain/custom-emojis.ts`,
+  `src/federation/remote-emoji.ts`); the stored-bound triggers refuse any other scheme (RES-2);
+  `test/custom-emojis.test.ts` ("drops what the trigger would refuse and still stores the status", "normalizes stored
+  urls again, drops one that does not pass, and cuts at the presented bound"), `test/emoji-bounds.test.ts`.
   Web UI pages emit only local paths and http(s) URLs (avatars, headers, media, field and app links, the parent of a
   reply); field links carry `rel="me"`: _Enforced (main):_ `src/web/pages.tsx`; `test/web-pages.test.ts`.
 
@@ -1363,6 +1369,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `MEDIA_URL_LIMIT` (2,048) is not stored (`src/federation/remote-status.ts`). A local post or edit whose rendered
   content or warning passes those bounds, which only hundreds of mentions of accounts with long profile URLs reach, is
   refused with Mastodon's length error (`src/domain/statuses.ts`; `test/status-bounds.test.ts`).
+  _Enforced (main)_ for custom emoji: at most `MAX_EMOJI_TAGS` (64) `Emoji` tags of an object are examined, each url
+  at most `MAX_URL_LENGTH` as received (`emojiCandidates` in `src/federation/remote-emoji.ts`);
+  `test/custom-emojis.test.ts` ("keeps the first valid tag of a name, examines 64 tags only, and stops at the first that does not fit").
 - **RES-2: parsing work is bounded.** Every regex, parser and normalization over input at the RES-1 cap has an
   adversarial fixture with a time bound. _Enforced (main)_ for status text:
   `test/statuses.test.ts` ("handles the worst case at the bound within a generous time"). _Enforced (main)_ for the image metadata walk: `test/image-bytes.test.ts` ("walks a worst-case file at the upload
@@ -1397,7 +1406,21 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   agree"), `test/migrations.test.ts` (0049: "stores each covered value as P(x)", "refuses a value one past its
   bound on insert and update"), `test/dump-import.test.ts` ("restores a dump taken before 0049_instance_bounds"),
   `test/admin-instance.test.ts` ("accepts each value at its bound in its unit"),
-  `test-node/cutover-stored-bounds.test.ts` ("cuts or drops values past their bounds as truncations").
+  `test-node/cutover-stored-bounds.test.ts` ("cuts or drops values past their bounds as truncations"). _Enforced
+  (main)_ for emoji snapshots: `statuses.emojis`, `status_edits.emojis` and `accounts.emojis` hold NULL or a snapshot
+  within the form and bounds of `EMOJI_COLUMNS` in `src/platform/stored-bounds.ts` (docs/dump-format.md): in its
+  stored bytes and in the presented JSON bytes of its entities, so a presented entry needs no escape, and with no NUL
+  anywhere (SQLite's JSON functions stop at one). The triggers
+  `<table>_emojis_insert` and `<table>_emojis_update` of migration `0053_custom_emoji_snapshots` refuse any other
+  value, imports included (`emojisPastBoundSql`, whose JS twin is `emojisValid`). The writer (`emojiSnapshot` in
+  `src/domain/custom-emojis.ts`) shares `emojiHref` and the url alphabet with them, so ingestion drops an emoji the
+  triggers would refuse and the write succeeds; it keeps the tagged emoji the object's final texts reference, found by
+  `shortcodesIn`, a split on `:` that is linear and builds no pattern from data. An edit's snapshot is copied in SQL
+  (`recordEdit`). `test/emoji-bounds.test.ts` (the predicate and its twin over a hand-written table of inputs, each
+  with its own verdict), `test/migrations.test.ts` (0053), `test/custom-emojis.test.ts` ("writes only what the trigger
+  accepts, at every bound", "scans adversarial texts in linear time"), `test/dump-import.test.ts` ("restores a dump
+  taken before 0053_custom_emoji_snapshots, and round-trips snapshots at their caps"), `test/cutover-import.test.ts`
+  ("fails the check on a converted row holding an emoji snapshot, counting them by table").
 - **RES-3: lists are bounded.** Pageable lists return at most 80 items; relationships read at most 100 ids; any other
   collection names its count and byte bound. _Enforced (main):_ `src/mastodon/pagination.ts`, `MAX_RELATIONSHIP_IDS` in
   `src/domain/accounts.ts`. _Gap: neither cap is tested._ _Enforced (main)_ for search: at
@@ -1819,10 +1842,14 @@ triggers and the schema's CHECKs) allows, and each column that no CHECK bounds a
 (writers' invariants: `polls.tallies` holds one integer count per choice, which the poll writers in
 `src/domain/polls.ts` keep; no CHECK bounds its elements' type or size).
 `test/status-bounds.test.ts` ("the table of maxima") builds every part at its bound and measures what one read takes
-out of SQLite and what it presents, three ways: filled with characters JSON escapes to six bytes (the most JSON); the
-same with mentioned accounts that have no stored url, so their url is derived; and filled with what reads the most
+out of SQLite and what it presents, four ways: filled with characters JSON escapes to six bytes (the most JSON); the
+same with mentioned accounts that have no stored url, so their url is derived; filled with what reads the most
 bytes for each bound (ASCII where the bound is in bytes, four-byte characters where it is in characters: a 10,000
-character description reads 40,000 bytes). The parts include the source text of each status row, the boost's own
+character description reads 40,000 bytes); and the escaped fill with each poll's choices referencing the status's
+emoji in the fewest characters (37), so each poll shows all of them. Emoji arrays are at their presented bounds
+(12,288 and 6,144 JSON bytes) in the escaped and derived fills, and their stored values padded to the same bounds in
+the raw fill; the boost's own row holds one too, which is not read.
+The parts include the source text of each status row, the boost's own
 row (all but its content, which the CHECK keeps empty, with its own attachments, mentions, hashtags and poll, which
 are not read), the viewer's profile, her votes in every choice of both polls shown and every flag of hers included, each remote profile's fields at the largest list a read takes (32 KiB
 of JSON), with accounts on
@@ -1830,26 +1857,33 @@ of JSON), with accounts on
 viewer's filters at theirs: 50 filters in every context, each with a 256-character title and 20 keywords of 512
 characters, the first held by the status, and naming the statuses read, so every status carries 50 filter results
 (about 0.24 MB each set) and every read takes the 1,000 keywords. SQLite bytes are the UTF-8 bytes of every value read
-(8 per number); nodes are the objects, arrays and strings presented. Measured shapes are read through the Store operation. Through the real Store
-RPC, a public timeline page, a context and a search answer of statuses of about 0.97 MB each, each cut at the budget,
-return 7.72 MB of JSON each (`test/answer-budgets.test.ts` ("the Store RPC returns a maximal answer")), and the boost
-of a quote above, alone or as the one status a lookup of it, the quote and the quoted status admits, returns 5.59 MB
-(escaped fill) and 4.56 MB (raw fill, the most serialized bytes) (`test/status-bounds.test.ts`), well under the 32 MiB
+(8 per number); nodes are the objects, arrays and strings presented. Measured shapes are read through the Store operation. No
+one fill holds a status's emoji arrays and its polls' at their bounds at once (the references a poll's choices need
+displace escaped characters), so the conservative JSON of a shape is the escaped fill's plus 12,286 bytes for each
+poll it shows, at least every fill's (`test/status-bounds.test.ts` ("keeps the conservative JSON of every shape within
+85%, above every fill")); shares are of it. Through the real Store
+RPC, a public timeline page, a context and a search answer of statuses of about 0.98 MB each, each cut at the budget,
+return 7.82 MB of JSON each (`test/answer-budgets.test.ts` ("the Store RPC returns a maximal answer")), and the boost
+of a quote above, alone or as the one status a lookup of it, the quote and the quoted status admits, returns 5.63 MB
+(escaped fill) and 4.60 MB (raw fill, the most serialized bytes) (`test/status-bounds.test.ts`), well under the 32 MiB
 RPC limit.
 
-| Shape                                                            | Most SQLite bytes | Most JSON bytes | Rows read | Nodes | Share of 8 MiB |
-| ---------------------------------------------------------------- | ----------------- | --------------- | --------- | ----- | -------------- |
-| Account occurrence                                               | 117,063           | 123,878         | 1         | 39    | 1.5%           |
-| Status                                                           | 4,416,890         | 2,597,898       | 1,484     | 2,270 | 31%            |
-| Quote (the status and its quoted status)                         | 6,762,823         | 5,195,829       | 1,916     | 4,542 | 62%            |
-| Boost of a quote                                                 | 7,041,878         | 5,588,211       | 1,972     | 5,448 | 66.6%          |
-| Conversation: 12 participants presented, its last status a quote | 8,247,883         | 6,682,334       | 1,930     | 5,001 | 79.7%          |
-| Notification group: 8 sample accounts, its status a quote        | 7,700,281         | 6,187,277       | 1,943     | 4,866 | 73.8%          |
-| Report: its first status a quote past the 2 MiB allowance        | 6,966,386         | 5,589,057       | 1,925     | 4,673 | 66.6%          |
-| ActivityPub Note: a local status at its bounds, 1,000 addressed  | 3,685,367         | 4,220,294       | 1,276     | 2,616 | 50.3%          |
-| Its Create (the Note and its addressing again)                   |                   | 6,276,334       |           |       | 74.8%          |
+| Shape                                                            | Most SQLite bytes | Most JSON bytes | Conservative JSON | Rows read | Nodes | Share of 8 MiB |
+| ---------------------------------------------------------------- | ----------------- | --------------- | ----------------- | --------- | ----- | -------------- |
+| Account occurrence                                               | 123,207           | 130,020         | 130,020           | 1         | 63    | 1.6%           |
+| Status                                                           | 4,435,322         | 2,628,427       | 2,628,612         | 1,484     | 2,390 | 31.3%          |
+| Quote (the status and its quoted status)                         | 6,799,687         | 5,256,887       | 5,257,257         | 1,916     | 4,782 | 62.7%          |
+| Boost of a quote                                                 | 7,084,894         | 5,655,411       | 5,655,781         | 1,972     | 5,712 | 67.4%          |
+| Conversation: 12 participants presented, its last status a quote | 8,364,619         | 6,817,096       | 6,817,466         | 1,930     | 5,529 | 81.3%          |
+| Notification group: 8 sample accounts, its status a quote        | 7,786,297         | 6,297,471       | 6,297,841         | 1,943     | 5,298 | 75.1%          |
+| Report: its first status a quote past the 2 MiB allowance        | 7,015,538         | 5,674,683       | 5,675,053         | 1,925     | 5,009 | 67.7%          |
+| ActivityPub Note: a local status at its bounds, 1,000 addressed  | 3,685,367         | 4,220,294       |                   | 1,276     | 2,616 | 50.3%          |
+| Its Create (the Note and its addressing again)                   |                   | 6,276,334       |                   |           |       | 74.8%          |
 
-Mentions whose url is derived read and present less (the conversation: 5,374,029 and 5,863,134 bytes): a derived url
+The most JSON is the emoji-poll fill's, the most SQLite bytes the raw fill's; the escaped fill presents the
+conversation in 6,792,894 bytes. Notes carry no emoji: local rows hold none.
+
+Mentions whose url is derived read and present less (the conversation: 5,435,360 and 5,973,694 bytes): a derived url
 within the bound is at most the stored bound, and a longer one presents as ''.
 
 A Note shows what the Status entity shows: its hashtags and mentions are read through the same projections and
@@ -1861,10 +1895,12 @@ and 1,000 actor ids of 2,048 bytes, the Create is 75% of `OUTBOX_BYTES`; five su
 featured collection shows its Notes within `OUTBOX_BYTES` and the pins past them by uri (4.41 MB with one Note whole,
 `test/status-bounds.test.ts`). A group's status is the owner's own (favourites and boosts group), so it is at most a quote. A report's statuses after
 the first stop at 2 MiB, so a report is at most its accounts, its first status (a quote) and nothing more, or a small
-first status and 2 MiB; its staff accounts are local. Every measured shape stays within 80% of an answer of 8 MiB
-with filter results included, so an answer that admits whole items always fits its first. Through the real Store RPC,
-maximal answers of plain notifications, grouped notifications, conversations, admin reports and the directory return
-7.73, 7.73, 7.73, 7.07 and 8.30 MB of JSON (`test/rpc-budgets.test.ts`).
+first status and 2 MiB; its staff accounts are local. Every shape stays within 85% of an answer of 8 MiB with filter
+results included, measured and conservative alike, so an answer that admits whole items always fits its first. The
+ceiling was 80% until emoji: the conversation would then leave about 28 KB for its 14 accounts' and 4 status and poll
+arrays, short of 40 emoji per status and 20 per profile. Through the real Store RPC, maximal answers of plain
+notifications, grouped notifications, conversations, admin reports and the directory return 7.83, 7.82, 7.83, 7.14
+and 8.30 MB of JSON (`test/rpc-budgets.test.ts`).
 
 Heap at 8 MiB per answer. Assumptions: one request at a time per isolate; the answer's JSON is at most 8 MiB, since
 every item is below it. The model:
@@ -1888,9 +1924,9 @@ or, for a boost, of its original (a boost has no quote of its own, R35, and its 
 and poll are neither read nor shown, as on Mastodon). One query per window of 80 statuses computes it
 (`statusRowBoundSql` in `src/domain/status-rows.ts`) from the same column maps that generate every hydrate query's
 select list (`src/db/columns.ts`), so it cannot drift from what is read; it counts a row whether or not the viewer is
-shown it. A chunk holds statuses while their R sums to at most its target, at most 80 and at least one: 1 MiB of heap
-for every answer (`PAGE_CHUNKS` for pages, contexts, search, histories and lookups, and `LARGE_ITEM_CHUNKS` for grouped
-notifications and admin reports). A chunk of several is read through a `RowMeter` (`src/db/sql.ts`), which adds each
+shown it. A chunk holds statuses while their R sums to at most its target, at most 80 and at least one: 768 KiB of
+heap for pages, contexts, search, histories and lookups (`PAGE_CHUNKS`), and 1 MiB for grouped notifications and admin
+reports (`LARGE_ITEM_CHUNKS`). A chunk of several is read through a `RowMeter` (`src/db/sql.ts`), which adds each
 row's heap under the model as the cursor returns it (workerd's cursor runs the statement lazily, one row ahead of the
 one it returns) and throws past its cap, which equals the target, so only a term R misses passes it. The chunk is then
 dropped, `kopje.presenter.row-cap-exceeded` is logged with its ids, and its statuses are read one at a time. A status
@@ -1909,15 +1945,22 @@ payload", "reads a chunk past its cap again one status at a time, with the same 
 where the meter counts its UTF-16 code units twice, so it overstates text that is not ASCII (up to three times for CJK)
 and plans such chunks smaller than the cap; it never understates.
 
-A page of 40 statuses, presented through `presentation` and `presentStatusesWithin`, mean of 20 runs on a loaded
-machine (planned at 1 MiB); `test/status-rows.test.ts` ("read an ordinary page of 40 statuses in at most 13 queries", "a context of 200
-statuses reads its statuses in planned chunks", "a page of 80 groups reads its statuses in planned chunks") holds the
-planned queries to their ceilings:
+A page of 40 statuses, each with 3 Misskey-shaped emoji and its author with 2, presented through `presentation` and
+`presentStatusesWithin`, mean of two sets of 20 runs at a load average of 6 (planned at 768 KiB);
+`test/status-rows.test.ts`
+("read an ordinary page of 40 statuses in one chunk of at most 13 queries", "a context of 200 statuses reads its
+statuses in planned chunks", "a page of 80 groups reads its statuses in planned chunks") holds the planned queries to
+their ceilings:
 
-| Page                                                                    | Chunks of 2         | Planned            | One chunk          |
-| ----------------------------------------------------------------------- | ------------------- | ------------------ | ------------------ |
-| Ordinary: short posts with a hashtag and a mention, every other a quote | 220 queries, 6.1 ms | 12 queries, 4.4 ms | 11 queries, 3.8 ms |
-| Realistic: 5,000 Japanese characters, a poll of 4, 4 described media    | 200 queries, 8.6 ms | 31 queries, 7.8 ms | 10 queries, 6.7 ms |
+| Page                                                                    | Chunks of 2          | Planned             | One chunk          |
+| ----------------------------------------------------------------------- | -------------------- | ------------------- | ------------------ |
+| Ordinary: short posts with a hashtag and a mention, every other a quote | 220 queries, 9.1 ms  | 12 queries, 6.8 ms  | 11 queries, 5.6 ms |
+| Realistic: 5,000 Japanese characters, a poll of 4, 4 described media    | 200 queries, 11.3 ms | 41 queries, 10.1 ms | 10 queries, 8.6 ms |
+
+The ordinary page's R is 410,480 bytes (349,640 without emoji), one chunk. With every status and author at the
+stored emoji caps it is 2,561,480 (at most 85,316 a status, far below the target), planned in 4 chunks of at most
+768,444 bytes, as few as the target allows, with the backstop never fired ("read a saturated page of 40 statuses in
+planned chunks").
 
 R takes about 0.7 ms a window of 40 statuses. It is 1.2 to 1.5 times the meter's count for an ordinary status (its
 constant terms count rows that may not exist), 2.4 for the realistic one (Japanese text), 1.02 for a status with 200
@@ -1927,16 +1970,16 @@ Peaks, as `test/status-bounds.test.ts` ("keeps the peaks of the heap model withi
 column") computes them, per column: an item's rows are, for each query and column its read returns, the most heap
 any fill gives that column under the model, summed (so poll choices count as escaped and the other text as raw), with
 25% headroom; the largest single row sums each column's largest value the same way (1.20 MB, the escaped poll row,
-which is at least RowMeter's count); the rejected item is three times the most JSON any fill presents (the escaped
-fill, each column's most JSON); the admitted answer three times 8 MiB (25.17 MB). The test measures its own maxima,
+which is at least RowMeter's count); the rejected item is three times the item's conservative JSON (above); the
+admitted answer three times 8 MiB (25.17 MB). The test measures its own maxima,
 whatever runs before it, and asserts the timelines' peaks within half of the Store isolate's 128 MB, and the groups'
 and reports' within the whole.
 
 | Item                                           | Rows, with 25% headroom | Rejected-item objects |
 | ---------------------------------------------- | ----------------------- | --------------------- |
-| Boost of a quote (the largest timeline item)   | 19.05 MB                | 16.76 MB              |
-| Group: its status (a quote), 8 sample accounts | 20.70 MB                | 18.56 MB              |
-| Report: its status and 4 accounts              | 18.86 MB                | 16.77 MB              |
+| Boost of a quote (the largest timeline item)   | 19.16 MB                | 16.97 MB              |
+| Group: its status (a quote), 8 sample accounts | 20.91 MB                | 18.89 MB              |
+| Report: its status and 4 accounts              | 18.98 MB                | 17.03 MB              |
 
 Groups and reports also keep the presentation's state: the compiled filters (50 filters of 20 keywords, about
 0.5 MB) and the filter results cached by status (at most 50 results of about 1.2 KB each, 60 KB a status) for the
@@ -1947,15 +1990,17 @@ pass, and the passes are at most four), 200 for a page of reports (its at most 1
 
 | Answer (Store isolate)                      | Normal   | Backstop fired, the dropped chunk still live | A single item |
 | ------------------------------------------- | -------- | -------------------------------------------- | ------------- |
-| Timelines (largest item a boost of a quote) | 60.98 MB | 63.80 MB                                     | 60.98 MB      |
-| Groups                                      | 74.53 MB | 77.34 MB                                     | 74.53 MB      |
-| Reports                                     | 73.29 MB | 76.11 MB                                     | 73.29 MB      |
+| Timelines (largest item a boost of a quote) | 61.29 MB | 63.78 MB                                     | 61.29 MB      |
+| Groups                                      | 75.07 MB | 77.89 MB                                     | 75.07 MB      |
+| Reports                                     | 73.67 MB | 76.49 MB                                     | 73.67 MB      |
 
-A chunk of several takes at most its target of heap, 1 MiB (1.05 MB). Normal: the rows are the larger of 1.25 × 1.05 MB
-and the item's rows, plus the admitted answer, the rejected item and, for groups and reports, their state. With the
-backstop fired, 1.25 × (1.05 + 1.20) MB of dropped rows more. The cap is 1 MiB so that the fallback fits within half of
-the isolate even when the dropped chunk is still live, with 0.20 MB to spare: the margin is thin, every row term already
-carries 25% headroom, and the peak test fails on any growth that passes half. The backstop-fired figures bound the
+A chunk of several takes at most its target of heap: 768 KiB (0.79 MB) for timelines, 1 MiB (1.05 MB) for groups and
+reports. Normal: the rows are the larger of 1.25 × the target and the item's rows, plus the admitted answer, the
+rejected item and, for groups and reports, their state. With the backstop fired, 1.25 × (the target + 1.20 MB) of
+dropped rows more. The timelines' cap is 768 KiB so that the fallback fits within half of the isolate even when the
+dropped chunk is still live, with 0.22 MB to spare; the cap was lowered from 1 MiB, at which emoji at their bounds
+took the backstop past half: the margin is thin, every row term already carries 25% headroom, and the peak test fails on
+any growth that passes half. The backstop-fired figures bound the
 fallback whenever the dropped rows are collected. A boost that showed a quote, attachments, mentions, hashtags or a
 poll of its own (a legacy row may hold them) would make a timeline's largest item pass half at a chunk of one; it shows
 none.
@@ -1964,12 +2009,12 @@ none.
 | ------------------------------------------------- | ------------- | -------------- |
 | RPC copy (serialized; deserialized in the Worker) | 8.4 MB        | 25.2 MB        |
 | The Worker's JSON string and the body             |               | 25.2 MB        |
-| Peak                                              | 61.0 MB       | 50 MB          |
+| Peak                                              | 61.3 MB       | 50 MB          |
 
 The Store's peak is the timelines' (above), while an item is admitted; the RPC copy comes after it. The Worker's JSON
 string is counted at two bytes a character (16.8 MB) and the body at its UTF-8 bytes. Timelines stay within half of
 the Store isolate's 128 MB, and the Worker within half of its own. One isolate holding both sides at
-once, the Store's objects alive while the Worker's are built, would reach about 107 MB; it stays within half (61.0 MB)
+once, the Store's objects alive while the Worker's are built, would reach about 107 MB; it stays within half (61.3 MB)
 when the Store drops its objects once they are serialized. Groups and reports pass half of the Store isolate (RES-3,
 the Gap note on their heap).
 
@@ -2422,6 +2467,10 @@ activity specs, cited in test names.
 | A local block of a remote actor at its retraction cap does not record the ended Follow as retracted, so after an unblock a redelivery of that Follow is accepted as a new one                                                                                                                                | The block must apply whatever the blocked actor did to its own cap; while the block lasts its Follows are refused (VIS-13)                                                                                                                                                 | redelivered Follows are seen after unblocks                          |
 | Deliveries queued before a block or a domain block (retries of them included) are still sent as queued, to the blocked account's inboxes too                                                                                                                                                                 | Mastodon does not rewrite deliveries already queued either; a re-check at claim cannot tell, for a shared inbox or a follower target, which recipients it serves (VIS-13, VIS-15)                                                                                          | deliveries keep their recipients                                     |
 | A follow answer (`Accept`, `Reject`) a delivery claim took is still sent after the follower follows again; a server matching answers by account pair may apply it to the new request, so the sides can disagree (NET-2). The new `Follow` also cancels an untaken withdrawing `Reject` that would counter it | A server's application of a POSTed answer cannot be observed: servers queue, process concurrently and retry. A new `Follow` makes earlier answers stale by policy; Kopje's follow of a locked account stays pending until authorized. Recovery: the follower follows again | a server offers answer correlation, or such a disagreement is seen   |
+| Clients load custom emoji images from the remote hosts the tags name, as they load avatars and media                                                                                                                                                                                                         | Kopje fetches no remote image (NET-3); the URLs are http(s) and bounded (HTML-3, RES-2)                                                                                                                                                                                    | a media proxy or cache is added                                      |
+| An emoji snapshot goes stale until its object is delivered again: an emoji the author's server changes or removes keeps its old URL                                                                                                                                                                          | Each object keeps what it tagged; a global (shortcode, domain) registry, as Mastodon keeps, is not stored                                                                                                                                                                  | emoji are kept in a registry                                         |
+| `static_url` is the same as `url`, so an animated emoji stays animated where a client asked for still images                                                                                                                                                                                                 | Mastodon serves a still image it generates; Kopje processes no remote image                                                                                                                                                                                                | remote images are processed                                          |
+| Rows stored before migration `0053_custom_emoji_snapshots`, and converted ones, show no emoji: an account until its next refresh, a status until its next Update                                                                                                                                             | Backfilling from the stored documents would put the upgrade's time budget at risk                                                                                                                                                                                          | a backfill fits the upgrade budget                                   |
 
 ## How to use
 

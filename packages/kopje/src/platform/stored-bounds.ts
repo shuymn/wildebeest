@@ -239,6 +239,16 @@ export const STORED_COLUMNS: Readonly<Record<string, readonly StoredColumn[]>> =
 	],
 }
 
+// The BEFORE INSERT and BEFORE UPDATE OF `watched` triggers `<prefix>_insert` and `<prefix>_update` on `table` that
+// abort with `message` when `when` holds of the NEW row.
+function boundTriggers(prefix: string, table: string, watched: string, when: string, message: string): string[] {
+	const body = `BEGIN\n  SELECT RAISE(ABORT, '${message}');\nEND;`
+	return [
+		`CREATE TRIGGER ${prefix}_insert BEFORE INSERT ON ${table}\nWHEN ${when}\n${body}`,
+		`CREATE TRIGGER ${prefix}_update BEFORE UPDATE OF ${watched} ON ${table}\nWHEN ${when}\n${body}`,
+	]
+}
+
 // True when `column` is not a fixed point of its projection: P(x) IS NOT x, with JSON-bounded columns short of a sixth
 // of their bound skipped before P.
 function pastBoundSql({ projection, jsonBytes }: StoredColumn, column: string): string {
@@ -267,12 +277,8 @@ WHERE file_token IS NOT NULL AND length(CAST(url AS BLOB)) > ${MEDIA_URL_LIMIT};
 	}
 	for (const [table, columns] of Object.entries(STORED_COLUMNS)) {
 		const when = columns.map((c) => pastBoundSql(c, `NEW.${c.column}`)).join('\n  OR ')
-		const body = `BEGIN\n  SELECT RAISE(ABORT, '${table}: a value past its stored bound');\nEND;`
 		const names = columns.map((c) => c.column).join(', ')
-		statements.push(`CREATE TRIGGER ${table}_bounds_insert BEFORE INSERT ON ${table}\nWHEN ${when}\n${body}`)
-		statements.push(
-			`CREATE TRIGGER ${table}_bounds_update BEFORE UPDATE OF ${names} ON ${table}\nWHEN ${when}\n${body}`
-		)
+		statements.push(...boundTriggers(`${table}_bounds`, table, names, when, `${table}: a value past its stored bound`))
 	}
 	return `${statements.join('\n\n')}\n`
 }
@@ -478,16 +484,142 @@ export function instanceBoundsMigrationSql(): string {
 	statements.push(
 		`DELETE FROM instance_settings\nWHERE name IN (${names}) AND ${settingPastBoundSql('name', 'value')};`
 	)
-	const body = "BEGIN\n  SELECT RAISE(ABORT, 'instance_settings: a value past its stored bound');\nEND;"
 	const when = settingPastBoundSql('NEW.name', 'NEW.value')
 	statements.push(
-		`CREATE TRIGGER instance_settings_bounds_insert BEFORE INSERT ON instance_settings\nWHEN ${when}\n${body}`
-	)
-	statements.push(
-		`CREATE TRIGGER instance_settings_bounds_update BEFORE UPDATE OF name, value ON instance_settings\nWHEN ${when}\n${body}`
+		...boundTriggers(
+			'instance_settings_bounds',
+			'instance_settings',
+			'name, value',
+			when,
+			'instance_settings: a value past its stored bound'
+		)
 	)
 	statements.push(
 		"CREATE INDEX instance_domain_blocks_public ON instance_domain_blocks (domain) WHERE severity = 'suspend';"
 	)
+	return `${statements.join('\n\n')}\n`
+}
+
+// ---- Custom emoji snapshots: migration 0053_custom_emoji_snapshots and its triggers
+
+// statuses.emojis, status_edits.emojis and accounts.emojis (RES-2): NULL, or a JSON array of [shortcode, url] pairs in
+// tag order, written by domain/custom-emojis.ts emojiSnapshot and presented by its presentEmojis. A shortcode matches
+// EMOJI_SHORTCODE, as Mastodon's MAX_SHORTCODE_SIZE (app/models/custom_emoji.rb:29) and Misskey's name column
+// (models/Emoji.ts) bound it; a url is http(s), at most EMOJI_URL_LIMIT bytes and within EMOJI_URL_ALPHABET, so a
+// presented entry needs no JSON escape. A boost row's value is never read (status-rows.ts STATUS_COLUMN_MAP).
+export const EMOJI_SHORTCODE = /^[A-Za-z0-9_+-]{1,128}$/
+export const EMOJI_SHORTCODE_LIMIT = 128
+// In UTF-8 bytes of the normalized href: Misskey's url columns hold 512 characters (models/Emoji.ts).
+export const EMOJI_URL_LIMIT = 512
+// '!' to '~' but '"' and '\': a literal '\' can survive WHATWG normalization in a query or fragment.
+export const EMOJI_URL_ALPHABET = /^[!#-[\]-~]+$/
+// Emoji tags examined per object (RES-1), and entries per snapshot.
+export const MAX_EMOJI_TAGS = 64
+export const MAX_EMOJIS = 64
+// The presented JSON bytes of Status.emojis (and StatusEdit's, and a Poll's, a subset) and of Account.emojis; also the
+// stored UTF-8 bytes of the columns. An entry {"shortcode":n,"url":u,"static_url":u,"visible_in_picker":true} takes
+// EMOJI_ENTRY_BYTES + n + 2u, a nonempty array of them 1 + Σ(entry + 1) (presentedEmojiBytes).
+export const STATUS_EMOJIS_BYTES = 12_288
+export const ACCOUNT_EMOJIS_BYTES = 6_144
+export const EMOJI_ENTRY_BYTES = 67
+
+// The presented JSON bytes of `pairs` as Status.emojis: none needs an escape (EMOJI_SHORTCODE, EMOJI_URL_ALPHABET).
+export function presentedEmojiBytes(pairs: readonly (readonly [string, string])[]): number {
+	return pairs.length === 0
+		? 2
+		: 1 + pairs.reduce((sum, [n, u]) => sum + EMOJI_ENTRY_BYTES + n.length + 2 * u.length, 0)
+}
+
+// Whether `url` may be stored and presented as an emoji's: http(s), within EMOJI_URL_LIMIT and EMOJI_URL_ALPHABET.
+export function isEmojiUrl(url: string): boolean {
+	return url.length <= EMOJI_URL_LIMIT && EMOJI_URL_ALPHABET.test(url) && /^https?:\/\/./.test(url)
+}
+
+// The JS twin of emojisPastBoundSql: whether `text`, as stored, is a snapshot within `bytes` (NULL is).
+export function emojisValid(text: string | null, bytes: number): boolean {
+	if (text === null) {
+		return true
+	}
+	if (text.includes('\u0000') || new TextEncoder().encode(text).length > bytes) {
+		return false
+	}
+	let parsed: unknown
+	try {
+		parsed = JSON.parse(text)
+	} catch {
+		return false
+	}
+	if (!Array.isArray(parsed) || parsed.length < 1 || parsed.length > MAX_EMOJIS) {
+		return false
+	}
+	const names = new Set<string>()
+	const pairs: [string, string][] = []
+	for (const entry of parsed as unknown[]) {
+		if (!Array.isArray(entry) || entry.length !== 2) {
+			return false
+		}
+		const [name, url] = entry as unknown[]
+		if (typeof name !== 'string' || typeof url !== 'string' || !EMOJI_SHORTCODE.test(name) || !isEmojiUrl(url)) {
+			return false
+		}
+		if (names.has(name)) {
+			return false
+		}
+		names.add(name)
+		pairs.push([name, url])
+	}
+	return presentedEmojiBytes(pairs) <= bytes
+}
+
+// True when `column` holds a value emojisValid refuses: false for NULL, true for a value that is not text. Judged as
+// stored: the byte bound first, so nothing else scans a value past it; then a raw NUL anywhere (SQLite's JSON
+// functions stop at one, so a complete value followed by NUL and anything would pass them); then the shape, each
+// element (`->>` decodes escapes, and a decoded name or url whose bytes and characters differ holds a NUL or a
+// non-ASCII character), the names once each, and the presented size.
+export function emojisPastBoundSql(column: string, bytes: number): string {
+	const name = "e.value ->> '$[0]'"
+	const url = "e.value ->> '$[1]'"
+	const element = `CASE WHEN e.type <> 'array' THEN 1
+		WHEN json_array_length(e.value) <> 2 THEN 1
+		WHEN json_type(e.value, '$[0]') <> 'text' OR json_type(e.value, '$[1]') <> 'text' THEN 1
+		WHEN length(CAST(${name} AS BLOB)) NOT BETWEEN 1 AND ${EMOJI_SHORTCODE_LIMIT} THEN 1
+		WHEN length(CAST(${name} AS BLOB)) <> length(${name}) THEN 1
+		WHEN ${name} GLOB '*[^A-Za-z0-9_+-]*' THEN 1
+		WHEN length(CAST(${url} AS BLOB)) > ${EMOJI_URL_LIMIT} THEN 1
+		WHEN length(CAST(${url} AS BLOB)) <> length(${url}) THEN 1
+		WHEN NOT (${url} GLOB 'https://?*' OR ${url} GLOB 'http://?*') THEN 1
+		WHEN ${url} GLOB '*[^!-~]*' OR ${url} GLOB '*["\\]*' THEN 1
+		ELSE 0 END`
+	return `CASE WHEN ${column} IS NULL THEN 0
+	WHEN typeof(${column}) <> 'text' THEN 1
+	WHEN length(CAST(${column} AS BLOB)) > ${bytes} THEN 1
+	WHEN instr(CAST(${column} AS BLOB), X'00') > 0 THEN 1
+	WHEN NOT json_valid(${column}) THEN 1
+	WHEN json_type(${column}) <> 'array' THEN 1
+	WHEN json_array_length(${column}) NOT BETWEEN 1 AND ${MAX_EMOJIS} THEN 1
+	WHEN EXISTS (SELECT 1 FROM json_each(${column}) e WHERE ${element}) THEN 1
+	WHEN (SELECT count(DISTINCT ${name}) FROM json_each(${column}) e) <> json_array_length(${column}) THEN 1
+	WHEN 1 + (SELECT sum(${EMOJI_ENTRY_BYTES} + length(${name}) + 2 * length(${url})) FROM json_each(${column}) e)
+		> ${bytes} THEN 1
+	ELSE 0 END`
+}
+
+// The snapshot columns and their stored bounds.
+export const EMOJI_COLUMNS: Readonly<Record<'statuses' | 'status_edits' | 'accounts', number>> = {
+	statuses: STATUS_EMOJIS_BYTES,
+	status_edits: STATUS_EMOJIS_BYTES,
+	accounts: ACCOUNT_EMOJIS_BYTES,
+}
+
+// Migration 0053_custom_emoji_snapshots after its header (test/migrations.test.ts compares them): the three columns,
+// added without a default or CHECK so no row is read, then triggers that refuse a write where emojisPastBoundSql holds.
+export function emojiBoundsMigrationSql(): string {
+	const statements = Object.keys(EMOJI_COLUMNS).map((table) => `ALTER TABLE ${table} ADD COLUMN emojis TEXT;`)
+	for (const [table, bytes] of Object.entries(EMOJI_COLUMNS)) {
+		const when = emojisPastBoundSql('NEW.emojis', bytes)
+		statements.push(
+			...boundTriggers(`${table}_emojis`, table, 'emojis', when, `${table}: emojis past their stored bound`)
+		)
+	}
 	return `${statements.join('\n\n')}\n`
 }
