@@ -7,13 +7,16 @@
 --   UNIQUE (uri, target_account_id)  one report per Flag id and reported account (a Flag may name several accounts;
 --                                its redelivery writes nothing). A local report's uri is its own Flag id, as before.
 --   id AUTOINCREMENT             a report id is never given twice. The counter starts above every retained reference
---                                to a report id: the reports, the moderation log's Report targets and both job
+--                                to a report id: the reports, the moderation log's Report targets (those that spell a
+--                                signed 64-bit integer, leading zeros allowed; no other names a report) and both job
 --                                tables' report_bound. Dumps restore it by name (sqlite_sequence).
 --   report_uri_within_4096_json_bytes        uri within ACTIVITY_ID_LIMIT (4,096 JSON-escaped UTF-8 bytes,
 --                                withinIdentityBound; 682 raw bytes cannot escape past it).
 --   report_comment_within_20000_bytes        comment within 20,000 UTF-8 bytes and, up to its first NUL (SQLite's
 --                                length), 5,000 code points (RES-2; the writers bound the code points with NULs too).
---   report_status_ids_at_most_100            status_ids a JSON array of at most MAX_REPORT_STATUSES ids.
+--   report_status_ids_within_100_ids_and_2101_bytes  status_ids a JSON array of at most MAX_REPORT_STATUSES ids,
+--                                within 2,101 UTF-8 bytes: 100 status ids (18-digit snowflakes, 0000_initial) of 20
+--                                bytes quoted, 99 commas and the brackets, as JSON.stringify writes them.
 --   reports_pair_state           a reported account's reports by reporter and state: the admin's list filtered by
 --                                both (listAdminReports) and a local suspension's walk of its reporters.
 --
@@ -54,8 +57,9 @@ CREATE TABLE reports_0054 (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   account_id TEXT NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,
   target_account_id TEXT NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,
-  status_ids TEXT NOT NULL DEFAULT '[]' CONSTRAINT report_status_ids_at_most_100
-    CHECK (json_valid(status_ids) AND json_type(status_ids) = 'array' AND json_array_length(status_ids) <= 100),
+  status_ids TEXT NOT NULL DEFAULT '[]' CONSTRAINT report_status_ids_within_100_ids_and_2101_bytes
+    CHECK (length(CAST(status_ids AS BLOB)) <= 2101 AND json_valid(status_ids) AND json_type(status_ids) = 'array'
+      AND json_array_length(status_ids) <= 100),
   comment TEXT NOT NULL DEFAULT '' CONSTRAINT report_comment_within_20000_bytes
     CHECK (length(CAST(comment AS BLOB)) <= 20000 AND length(comment) <= 5000),
   category TEXT NOT NULL DEFAULT 'other' CHECK (category IN ('other', 'spam', 'legal', 'violation')),
@@ -88,7 +92,9 @@ INSERT INTO sqlite_sequence (name, seq)
 SELECT 'reports', max(n) FROM (
   SELECT max(id) AS n FROM reports
   UNION ALL SELECT max(CAST(target_id AS INTEGER)) FROM admin_actions
-    WHERE target_type = 'Report' AND target_id <> '' AND target_id NOT GLOB '*[^0-9]*' AND length(target_id) <= 18
+    WHERE target_type = 'Report' AND target_id <> '' AND target_id NOT GLOB '*[^0-9]*'
+      AND (length(ltrim(target_id, '0')) < 19
+        OR (length(ltrim(target_id, '0')) = 19 AND ltrim(target_id, '0') <= '9223372036854775807'))
   UNION ALL SELECT max(report_bound) FROM moderation_jobs
   UNION ALL SELECT max(report_bound) FROM remote_moderation_jobs
 ) HAVING max(n) IS NOT NULL;

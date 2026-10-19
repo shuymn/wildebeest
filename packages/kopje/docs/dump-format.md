@@ -178,9 +178,9 @@ one favourite fails with `favourite_likes: more than 4 Like ids for one favourit
 `UNIQUE constraint failed: favourite_likes.uri`, and a longer one with `like_id_within_4096_json_bytes`.
 
 A report (migration `0054_remote_reports`) names any account as its reporter (`account_id`), once per `uri` and
-reported account, with at most 100 `status_ids`, a `uri` within 4,096 JSON-escaped UTF-8 bytes and a `comment` within
+reported account, with `status_ids` of at most 100 ids within 2,101 UTF-8 bytes (compact JSON of 18-digit ids), a `uri` within 4,096 JSON-escaped UTF-8 bytes and a `comment` within
 20,000 UTF-8 bytes (and 5,000 code points up to any NUL). A chunk past these fails with
-`report_status_ids_at_most_100`, `report_uri_within_4096_json_bytes`, `report_comment_within_20000_bytes` or
+`report_status_ids_within_100_ids_and_2101_bytes`, `report_uri_within_4096_json_bytes`, `report_comment_within_20000_bytes` or
 `UNIQUE constraint failed: reports.uri, reports.target_account_id`. `sqlite_sequence` carries the report id counter,
 so a restored Store never gives a report id twice.
 

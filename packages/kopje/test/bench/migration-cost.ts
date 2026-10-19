@@ -289,19 +289,20 @@ it('applies the migration to the benchmark store within the budget', async () =>
 		// The moderation log: row i names report i (past the newest report for the last tenth) when i is even, else an
 		// account.
 		const moderationLog = has('admin_actions') ? Math.round(SHAPE.moderationLog * scale) : 0
-		run(
-			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+		if (moderationLog > 0) {
+			run(
+				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
 			INSERT INTO admin_actions (actor, action, target_type, target_id, created_at)
 			SELECT 'access', CASE i % 2 WHEN 0 THEN 'resolve' ELSE 'suspend' END,
 				CASE i % 2 WHEN 0 THEN 'Report' ELSE 'Account' END,
 				CASE i % 2 WHEN 0 THEN CAST(CASE WHEN i > ?1 * 9 / 10 THEN ?2 + i ELSE i % ?2 + 1 END AS TEXT)
 					ELSE CAST(100000000000000000 + i AS TEXT) END, ?3
-			FROM n WHERE ?1 > 0 AND ?4`,
-			moderationLog,
-			reports,
-			now,
-			moderationLog > 0 ? 1 : 0
-		)
+			FROM n`,
+				moderationLog,
+				reports,
+				now
+			)
+		}
 		// Local jobs: each local account's tokens, suspension and reach jobs in three generations, with a report bound.
 		const hasLocalJobs = has('moderation_jobs')
 		if (hasLocalJobs) {

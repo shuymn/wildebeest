@@ -957,7 +957,8 @@ async function measureShapes(fill: Fill): Promise<FillMeasure> {
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING CAST(id AS TEXT) AS id`,
 		reporter,
 		(await sql<{ account_id: string }>(t.store, 'SELECT account_id FROM statuses WHERE id = ?', quote))[0]!.account_id,
-		JSON.stringify([quote, quoted]),
+		// status_ids at its stored bound: 100 ids (2,101 bytes), the rest naming no stored status.
+		JSON.stringify([quote, quoted, ...Array.from({ length: 98 }, (_, i) => String(990000000000000000 + i))]),
 		atLimit(`https://${HOST}/payloads/`, 4096),
 		REPORT_COMMENTS[fill],
 		new Date(NOW).toISOString(),
@@ -1083,8 +1084,8 @@ describe('the table of maxima (RES-3)', () => {
 				boostOfQuote: { sqlite: 5_065_987, json: 5_588_211, rows: 1_972, nodes: 5_448 },
 				conversation: { sqlite: 6_190_029, json: 6_682_334, rows: 1_930, nodes: 5_001 },
 				group: { sqlite: 5_727_777, json: 6_187_277, rows: 1_943, nodes: 4_866 },
-				report: { sqlite: 5_216_223, json: 5_746_628, rows: 1_926, nodes: 4_691 },
-				reportNotification: { sqlite: 795_719, json: 368_102, rows: 1_059, nodes: 90 },
+				report: { sqlite: 5_218_281, json: 5_746_628, rows: 1_926, nodes: 4_691 },
+				reportNotification: { sqlite: 797_777, json: 370_160, rows: 1_059, nodes: 188 },
 			},
 		],
 		[
@@ -1097,8 +1098,8 @@ describe('the table of maxima (RES-3)', () => {
 				boostOfQuote: { sqlite: 4_249_987, json: 4_769_011, rows: 1_972, nodes: 5_448 },
 				conversation: { sqlite: 5_374_029, json: 5_863_134, rows: 1_930, nodes: 5_001 },
 				group: { sqlite: 4_911_777, json: 5_368_077, rows: 1_943, nodes: 4_866 },
-				report: { sqlite: 4_385_223, json: 4_837_428, rows: 1_926, nodes: 4_691 },
-				reportNotification: { sqlite: 780_719, json: 278_102, rows: 1_059, nodes: 90 },
+				report: { sqlite: 4_387_281, json: 4_837_428, rows: 1_926, nodes: 4_691 },
+				reportNotification: { sqlite: 782_777, json: 280_160, rows: 1_059, nodes: 188 },
 			},
 		],
 		[
@@ -1111,8 +1112,8 @@ describe('the table of maxima (RES-3)', () => {
 				boostOfQuote: { sqlite: 7_041_878, json: 4_555_132, rows: 1_972, nodes: 5_448 },
 				conversation: { sqlite: 8_247_883, json: 5_757_808, rows: 1_930, nodes: 5_001 },
 				group: { sqlite: 7_700_281, json: 5_279_131, rows: 1_943, nodes: 4_866 },
-				report: { sqlite: 7_103_377, json: 4_754_862, rows: 1_926, nodes: 4_691 },
-				reportNotification: { sqlite: 2_327_459, json: 259_912, rows: 1_059, nodes: 90 },
+				report: { sqlite: 7_105_435, json: 4_754_862, rows: 1_926, nodes: 4_691 },
+				reportNotification: { sqlite: 2_329_517, json: 261_970, rows: 1_059, nodes: 188 },
 			},
 		],
 	])(

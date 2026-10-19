@@ -5645,6 +5645,53 @@ describe('0054_remote_reports', () => {
 		})
 	})
 
+	// A log target names a report when it spells a signed 64-bit integer (leading zeros allowed); anything else is
+	// skipped, and an id past the integer range cannot be a report's.
+	it.each([
+		['18 digits', '999999999999999999', 999999999999999999n],
+		['19 digits', '1000000000000000000', 1000000000000000000n],
+		['the largest id', '9223372036854775807', 9223372036854775807n],
+		['leading zeros', '0000000000000000000009', 9n],
+		['past the largest id', '9223372036854775808', 4n],
+		['digits and more', '12a', 4n],
+		['an empty id', '', 4n],
+	])('reads a log Report target of %s', async (_name, target, expected) => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, BEFORE).upgrade()).toMatchObject({ ok: true })
+			seed(sql, 4)
+			sql.exec(
+				"INSERT INTO admin_actions (actor, action, target_type, target_id, created_at) VALUES ('access', 'resolve', 'Report', ?, 'x')",
+				target
+			)
+			expect(await kernel(state, WITH).upgrade()).toMatchObject({ ok: true })
+			const seq = sql
+				.exec<{ seq: string }>("SELECT CAST(seq AS TEXT) AS seq FROM sqlite_sequence WHERE name = 'reports'")
+				.one().seq
+			expect(BigInt(seq)).toBe(expected)
+		})
+	})
+
+	it('fails before any write when a local account holds a notification type in the tag range', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, BEFORE).upgrade()).toMatchObject({ ok: true })
+			seed(sql, 3)
+			sql.exec(
+				"INSERT INTO notifications (account_id, type, from_account_id) VALUES (?, 'admin.report#2', ?)",
+				ADMIN,
+				CAROL
+			)
+			const before = snapshot(sql)
+			const result = await kernel(state, WITH).upgrade()
+			expect(result).toMatchObject({ ok: false, reason: 'upgrade-failed' })
+			expect(JSON.stringify(result)).toMatch(/report_notifications_are_admin_reports/)
+			expect(snapshot(sql)).toEqual(before)
+		})
+	})
+
 	it('starts the counter above a deleted report the log alone still names, and at 1 with nothing', async () => {
 		const store = freshStore()
 		await runInDurableObject(store, async (_instance, state) => {

@@ -517,7 +517,7 @@ describe('Flag: bounds (RES-2, RES-7)', () => {
 		expect(new TextEncoder().encode('\u0000' + emoji.repeat(MAX_REMOTE_REPORT_COMMENT - 1)).length).toBe(19_997)
 	})
 
-	it('refuses a stored comment past 20,000 bytes and more than 100 status ids, as an import writes them', async () => {
+	it('refuses a stored comment past 20,000 bytes and status_ids past 100 ids or 2,101 bytes, as an import writes them', async () => {
 		const t = await world()
 		const insert = (comment: string, statusIds: string) =>
 			sql(
@@ -530,10 +530,17 @@ describe('Flag: bounds (RES-2, RES-7)', () => {
 				comment,
 				`${LOCAL}/r/${crypto.randomUUID()}`
 			)
-		const ids = (n: number) => JSON.stringify(Array.from({ length: n }, (_, i) => String(i)))
+		// Status ids as stored (18-digit snowflakes): 100 of them, compact, are the most a writer makes, 2,101 bytes.
+		const ids = (n: number) => JSON.stringify(Array.from({ length: n }, (_, i) => String(900000000000000000 + i)))
+		expect(new TextEncoder().encode(ids(100)).length).toBe(2101)
 		await insert('\u0000' + '\u0001'.repeat(19_999), ids(100))
 		await expect(insert('\u0000' + '\u0001'.repeat(20_000), '[]')).rejects.toThrow(/report_comment_within_20000_bytes/)
 		await expect(insert('x'.repeat(5001), '[]')).rejects.toThrow(/report_comment_within_20000_bytes/)
-		await expect(insert('', ids(101))).rejects.toThrow(/report_status_ids_at_most_100/)
+		await expect(insert('', ids(101))).rejects.toThrow(/report_status_ids_within_100_ids_and_2101_bytes/)
+		// Within 100 elements but past the bytes: whitespace padding, an oversized element, and one byte over.
+		const bound = /report_status_ids_within_100_ids_and_2101_bytes/
+		await expect(insert('', `[${' '.repeat(1 << 20)}]`)).rejects.toThrow(bound)
+		await expect(insert('', JSON.stringify(['9'.repeat(2100)]))).rejects.toThrow(bound)
+		await expect(insert('', ids(100).replace('[', '[ '))).rejects.toThrow(bound)
 	})
 })

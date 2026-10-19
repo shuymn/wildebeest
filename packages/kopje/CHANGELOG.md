@@ -111,7 +111,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - Stored format (migration `0054_remote_reports`): a report's reporter may be any account; a report id is never given
   twice (also after the newest report is deleted); one report per Flag id and reported account; a report's comment
   holds at most 20,000 bytes (and 5,000 code points up to any NUL), its uri at most 4,096 JSON-escaped bytes and its
-  `status_ids` at most 100 ids. A dump past these is refused ([docs/dump-format.md](docs/dump-format.md)). Every
+  `status_ids` at most 100 ids in 2,101 bytes. A dump past these is refused ([docs/dump-format.md](docs/dump-format.md)). Every
   report, its notifications and their pushes keep their ids.
 - The admin's list of reports filtered by both reporter and reported account reads its own index, however many others
   report that account.

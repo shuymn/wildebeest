@@ -1411,8 +1411,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   bound on insert and update"), `test/dump-import.test.ts` ("restores a dump taken before 0049_instance_bounds"),
   `test/admin-instance.test.ts` ("accepts each value at its bound in its unit"),
   _Enforced (main)_ for reports (migration `0054_remote_reports`): CHECKs hold every stored report, an imported one
-  included, to a uri within 4,096 JSON-escaped UTF-8 bytes (`report_uri_within_4096_json_bytes`), at most 100
-  `status_ids` (`report_status_ids_at_most_100`) and a comment within 20,000 UTF-8 bytes and, up to its first NUL
+  included, to a uri within 4,096 JSON-escaped UTF-8 bytes (`report_uri_within_4096_json_bytes`), `status_ids` of at most 100
+  ids within 2,101 UTF-8 bytes (100 quoted 18-digit status ids, commas and brackets;
+  `report_status_ids_within_100_ids_and_2101_bytes`) and a comment within 20,000 UTF-8 bytes and, up to its first NUL
   (SQLite's `length` stops there), 5,000 code points (`report_comment_within_20000_bytes`); Kopje's writers keep 5,000
   code points with a NUL too (`reportComment`, a lone surrogate read as U+FFFD), where other text writers remove NUL
   (accepted: the comment is plain text, never rendered as HTML, and its JSON is at most about 120 KB). A Flag's comment
@@ -1881,8 +1882,8 @@ RPC limit.
 | Boost of a quote                                                 | 7,041,878         | 5,588,211       | 1,972     | 5,448 | 66.6%          |
 | Conversation: 12 participants presented, its last status a quote | 8,247,883         | 6,682,334       | 1,930     | 5,001 | 79.7%          |
 | Notification group: 8 sample accounts, its status a quote        | 7,700,281         | 6,187,277       | 1,943     | 4,866 | 73.8%          |
-| Report: its first status a quote past the 2 MiB allowance        | 7,103,377         | 5,746,628       | 1,926     | 4,691 | 68.5%          |
-| An admin.report notification of that report                      | 2,327,459         | 368,102         | 1,059     | 90    | 4.4%           |
+| Report: its first status a quote past the 2 MiB allowance        | 7,105,435         | 5,746,628       | 1,926     | 4,691 | 68.5%          |
+| An admin.report notification of that report                      | 2,329,517         | 370,160         | 1,059     | 188   | 4.4%           |
 | ActivityPub Note: a local status at its bounds, 1,000 addressed  | 3,685,367         | 4,220,294       | 1,276     | 2,616 | 50.3%          |
 | Its Create (the Note and its addressing again)                   |                   | 6,276,334       |           |       | 74.8%          |
 
