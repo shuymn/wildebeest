@@ -12,13 +12,12 @@
 -- The columns have no default or CHECK, so adding them reads no row; existing rows read NULL (no emoji). The
 -- statements below are the output of emojiBoundsMigrationSql (test/migrations.test.ts compares them).
 --
--- Cost: three schema-only column additions and six triggers, which read no row. Measured under concurrent load on
--- the benchmark store of test/bench/migration-cost.ts (1,000,000 accounts, 2,000,000 statuses, 100,000 earlier
--- versions and the rest of that store) in workerd's local Durable Object SQLite, timing the whole upgrade through the
--- kernel (its verification included): this file alone 6,537 and 6,465 ms (load averages 4 to 12). The release range
--- 0049_instance_bounds to this file, in one upgrade: 8,447 to 32,791 ms over seven runs at load averages of 3.5 to 10,
--- four past the 20,000 ms an upgrade may take; 0049 to 0052 alone measured 8,544 to 25,714 ms the same way. The
--- serial release-range run is pending.
+-- Cost: three schema-only column additions and six triggers, which read no row. On the benchmark store of
+-- test/bench/migration-cost.ts (1,000,000 accounts, 2,000,000 statuses, 100,000 earlier versions and the rest of that
+-- store) in workerd's local Durable Object SQLite, timing the whole upgrade through the kernel (its verification
+-- included), run serially and alternated with the same range without this file: the release range
+-- 0049_instance_bounds to this file in one upgrade took 8,243, 8,265 and 8,420 ms (load averages 3.3 to 4.8), and
+-- 0049 to 0052 alone 8,115, 8,168 and 8,468 ms, within the 20,000 ms an upgrade may take.
 
 ALTER TABLE statuses ADD COLUMN emojis TEXT;
 
