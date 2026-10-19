@@ -31,12 +31,11 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       past 1,024 bytes;
     - the content, content warning and poll choices of earlier versions change the same way.
 
-    From then on the Store refuses a write of such a value. A local status stored past a bound now shows the same value
-    in its ActivityPub Note as in the API. To recover a rewritten value, restore the point-in-time bookmark taken before
-    the upgrade (it restores the whole database, within the last 30 days; see [docs/upgrade.md](docs/upgrade.md)); for
-    a remote row, re-derive it from its stored `raw` document (refetching does not restore content); for a converted
-    row, run the conversion again from the legacy export.
-
+  From then on the Store refuses a write of such a value. A local status stored past a bound now shows the same value
+  in its ActivityPub Note as in the API. To recover a rewritten value, restore the point-in-time bookmark taken before
+  the upgrade (it restores the whole database, within the last 30 days; see [docs/upgrade.md](docs/upgrade.md)); for
+  a remote row, re-derive it from its stored `raw` document (refetching does not restore content); for a converted
+  row, run the conversion again from the legacy export.
 - `kopje-admin convert` stores display names, profile, status and media URLs, media descriptions and the attachments
   of earlier versions as the Worker stores them, which is what the API already showed: a URL past its bound becomes
   empty (null for a profile or status URL), a long text is cut, and U+0000 is removed from text. Each change is
