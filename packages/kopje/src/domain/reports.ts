@@ -473,8 +473,9 @@ export const REPORT_STATUS_BYTES = 2 * 1024 * 1024
 // admin's request time), for a remote one the remote reporter rule (remoteReportStatusIds); they are presented with
 // the admin as the viewer. Mastodon shows them regardless, discarded ones included (Report#statuses,
 // app/models/report.rb:78-80). The report's own status_ids (the ids admitted when it was filed) are its metadata,
-// shown as stored in the admin's admin.report notifications (userReport). The page's statuses share one presentation, so a keyword deep
-// in a long status of a large page may be missed where the report read alone matches it, as on timelines (filters.ts).
+// shown as stored in the admin's admin.report notifications (userReport). The page's statuses share one
+// presentation, so a keyword deep in a long status of a large page may be missed where the report read alone matches
+// it, as on timelines (filters.ts).
 // The rules are the instance's that the report names, in the instance's order; Mastodon keeps discarded rules
 // (Rule.with_discarded), which Kopje does not store.
 function* adminReportStream(

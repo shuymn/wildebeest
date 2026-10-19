@@ -6,8 +6,9 @@
 
 export const ACTOR_URI_LIMIT = 2048
 export const STATUS_URI_LIMIT = 4096
-// A Like id Kopje stores (favourite_likes.uri, migration 0052_favourite_likes, whose CHECK holds it for imports): an
-// activity id, bounded as a status's uri is. Mastodon sets no bound; the inbox's body bound is 1 MiB.
+// An activity id Kopje stores: a Like id (favourite_likes.uri, migration 0052_favourite_likes) and a Flag id
+// (reports.uri, migration 0054_remote_reports), each held by a CHECK for imports too; bounded as a status's uri is.
+// Mastodon sets no bound; the inbox's body bound is 1 MiB.
 export const ACTIVITY_ID_LIMIT = 4096
 
 // The accounts a local status addresses at most (its mentions that are not silent, which its Note's to or cc lists

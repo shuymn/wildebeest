@@ -15,7 +15,7 @@
 --                                length), 5,000 code points (RES-2; the writers bound the code points with NULs too).
 --   report_status_ids_at_most_100            status_ids a JSON array of at most MAX_REPORT_STATUSES ids.
 --   reports_pair_state           a reported account's reports by reporter and state: the admin's list filtered by
---                                both (listAdminReports) and a local suspension's walk of the reporters (suspension.ts).
+--                                both (listAdminReports) and a local suspension's walk of its reporters.
 --
 -- Rebuilding a parent table would delete its children (0000_initial): notifications.report_id cascades from reports
 -- (0040) and push_deliveries from notifications, and DROP TABLE deletes its rows first. So the file first fails, before
@@ -28,7 +28,11 @@
 -- Cost: the guard reads the report notifications (notifications_report) and one empty range per local account; the
 -- detach and the relink write each report notification once; the copy, the drop and the six indexes read the reports;
 -- the counter scans the moderation log (at most MODERATION_LOG_KEEP rows) and both job tables, which no index covers.
--- Nothing reads the other notifications.
+-- Nothing reads the other notifications (test/migrations.test.ts, 0054). Measured on the benchmark store of
+-- test/bench/migration-cost.ts (1,000,000 accounts, 2,000,000 notifications, 10,000 reports each with its admin.report
+-- and 1,000 pushes of them, 10,000 moderation log rows, 180 local and 11,001 remote moderation jobs, and the rest of
+-- that store) in workerd's local Durable Object SQLite, timing the whole upgrade through the kernel: 8,959 and 8,607 ms
+-- at load averages of 3.8 to 4.8, within the 20,000 ms an upgrade may take.
 
 CREATE TABLE reports_0054_check (
   n INTEGER CONSTRAINT report_notifications_are_admin_reports CHECK (n = 0)

@@ -177,6 +177,13 @@ an Undo naming its status removes it. A chunk holding a fifth row for
 one favourite fails with `favourite_likes: more than 4 Like ids for one favourite`, a repeated id with
 `UNIQUE constraint failed: favourite_likes.uri`, and a longer one with `like_id_within_4096_json_bytes`.
 
+A report (migration `0054_remote_reports`) names any account as its reporter (`account_id`), once per `uri` and
+reported account, with at most 100 `status_ids`, a `uri` within 4,096 JSON-escaped UTF-8 bytes and a `comment` within
+20,000 UTF-8 bytes (and 5,000 code points up to any NUL). A chunk past these fails with
+`report_status_ids_at_most_100`, `report_uri_within_4096_json_bytes`, `report_comment_within_20000_bytes` or
+`UNIQUE constraint failed: reports.uri, reports.target_account_id`. `sqlite_sequence` carries the report id counter,
+so a restored Store never gives a report id twice.
+
 1. Read the catalog from the empty target: `GET /admin/catalog`.
 2. Build the converted data in a local SQLite database created from the same migrations. Use the target's catalog
    order for tables, columns and rows.

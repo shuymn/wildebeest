@@ -178,12 +178,21 @@ against their own instance. TLS is assumed between all parties.
   that arrives after it"). For locally authored quotes of remote statuses, `Accept`/`Reject` must come from the quoted
   author and name our request by id or inline it with our quoting status as instrument and their status as object.
   An `Accept`'s `result` must share their origin; `test/quote-authoring.test.ts` ("7: Accept and Reject are each one
-  compare-and-set").
+  compare-and-set"). _Enforced (main)_ for `Flag` (a row of the same table): the actor is the reporter, available and
+  not covered by a domain block (the inbox gate), and a domain block with `reject_reports` refuses it; the reported
+  accounts are local ones named by exact actor id, or stored remote ones only with a named status of theirs replying
+  to a local account (Mastodon's `flag.rb:15-17`), available (R1); a named status is attached only when it is the
+  reported account's original and passes the remote reporter rule (R34, `remoteReportableSql`). Nothing is fetched.
+  `fileRemoteReports` in `src/domain/reports.ts`; `test/inbox.test.ts` ("Flag: the actor is the reporter"),
+  `test/inbox-flag.test.ts`.
 - **ID-7: replay changes nothing twice.** A repeated activity creates no second relationship, counter change,
   notification, push or outbound intent (natural keys). A valid `Delete` or `Undo` that arrives before its target is
   recorded for 30 days and prevents the target from appearing later. Input that fails ID-1 or ID-6 reserves no key and
   records no retraction. _Enforced (main):_ natural keys and `retract` and `isRetracted` in
-  `src/domain/inbox.ts`. A Follow has generations: a superseded, undone, refused or blocked Follow id is recorded as retracted, so
+  `src/domain/inbox.ts`. A `Flag` files one report per Flag id and reported account (`UNIQUE (uri,
+  target_account_id)`, migration `0054_remote_reports`): a redelivery writes nothing, and a Flag id past
+  `ACTIVITY_ID_LIMIT` (4,096 JSON-escaped UTF-8 bytes) is ignored by the Worker and by the Store before any write,
+  which the column's CHECK holds for dumps too (`test/inbox-flag.test.ts`). A Follow has generations: a superseded, undone, refused or blocked Follow id is recorded as retracted, so
   no late Undo, Accept, Reject or replay reaches a newer generation, and no Accept or Reject is recorded twice; an
   answer's id derives from the Follow it answers; a new generation cancels the earlier generations' answers no claim
   has taken (NET-2). A Move is a job keyed by its id that never moves a follow made after
@@ -782,11 +791,15 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   pruned) resolves none, and leaves them to the admin. `resolveSuspensionReports` and `writeReport` in
   `src/domain/reports.ts`, `suspendLocal` in `src/domain/suspension.ts`, `logAction` in `src/domain/moderation-log.ts`,
   migration `0042_report_action_fence`; `test/admin-suspension.test.ts` ("the report fence"), `test/migrations.test.ts`.
-  A report another local account files notifies the OAuth admin (`admin.report`) when no other report of the same
-  account is unresolved, read in the report's transaction; the notification carries the report as its reporter sees it,
+  A remote report (an inbound `Flag`) is shown the same way, its reporter the remote actor in the remote admin account
+  shape; its statuses are shown while they pass the remote reporter rule (`remoteReportStatusIds`), and its
+  `status_ids`, the ids admitted when it was filed, are metadata the admin alone sees in its notifications (R15, R37),
+  whatever the rule says later. A report another account files notifies the OAuth admin (`admin.report`) when no
+  other report of the same account is unresolved, read in the report's transaction; the notification carries the report as its reporter sees it,
   and R15 shows it, lists it, streams it and pushes it only while its recipient is the current OAuth admin (R37), so it
   leaves every read when `admin_email` changes or the match fails closed, and comes back with the match; it goes with
-  its report (a remote account's purge deletes it before the report). `GET /admin/reports/:id`, where clients open it,
+  its report (a remote account's purge deletes it before the report, whether the account is the report's target or
+  its reporter). `GET /admin/reports/:id`, where clients open it,
   redirects the Access admin to the reported account's web page and reads nothing for anyone else: the Access admin is
   checked again against the saved settings in the read's transaction (`accessAdminRefusal`), so a settings change during
   the request's authentication refuses it. `notifyStaff` and `reportTargetPage` in `src/domain/reports.ts`, `shownSql`
@@ -1397,6 +1410,13 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   agree"), `test/migrations.test.ts` (0049: "stores each covered value as P(x)", "refuses a value one past its
   bound on insert and update"), `test/dump-import.test.ts` ("restores a dump taken before 0049_instance_bounds"),
   `test/admin-instance.test.ts` ("accepts each value at its bound in its unit"),
+  _Enforced (main)_ for reports (migration `0054_remote_reports`): CHECKs hold every stored report, an imported one
+  included, to a uri within 4,096 JSON-escaped UTF-8 bytes (`report_uri_within_4096_json_bytes`), at most 100
+  `status_ids` (`report_status_ids_at_most_100`) and a comment within 20,000 UTF-8 bytes and, up to its first NUL
+  (SQLite's `length` stops there), 5,000 code points (`report_comment_within_20000_bytes`); Kopje's writers keep 5,000
+  code points with a NUL too (`reportComment`, a lone surrogate read as U+FFFD), where other text writers remove NUL
+  (accepted: the comment is plain text, never rendered as HTML, and its JSON is at most about 120 KB). A Flag's comment
+  that is not a string reads as none (`test/inbox-flag.test.ts` ("Flag: bounds"), `test/migrations.test.ts` (0054)).
   `test-node/cutover-stored-bounds.test.ts` ("cuts or drops values past their bounds as truncations").
 - **RES-3: lists are bounded.** Pageable lists return at most 80 items; relationships read at most 100 ids; any other
   collection names its count and byte bound. _Enforced (main):_ `src/mastodon/pagination.ts`, `MAX_RELATIONSHIP_IDS` in
@@ -1561,7 +1581,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   most 4 rounds a run. The tokens job deletes an earlier epoch's token's push deliveries, then its subscription, then the token
   (`TOKEN_CHILDREN`, which the cascade guard keeps complete), so no delete cascades, at most 200 rows a round
   (`total_changes()`, its own row included). The suspension job resolves at most 100 reports a round, then stages the
-  `Update`'s audience into `moderation_reach` from indexed ranges, 500 rows a round, each source capped as Mastodon's
+  `Update`'s audience (its followers, its reporters, the accounts it mentioned and followed) into `moderation_reach`
+  from indexed ranges, 500 rows a round, each source capped as Mastodon's
   `AccountReachFinder` caps it, then writes the inboxes as the `Update`'s targets and deletes their staging rows, 500 a
   round; every round writes at most 600 rows, and each cursor is persisted, so every round makes progress
   (`src/domain/suspension.ts`; `test/admin-suspension.test.ts`: a history of 600 tokens, 250 subscriptions and 650
@@ -1638,7 +1659,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   cascades at most that many per favourite, a bound a trigger holds for imported rows too;
   `test/inbox-reactions.test.ts` ("RES-6: tracked Like ids in bounded deletions"). The child tables of a status and of
   a purged account are each one list in
-  `src/domain/inbox.ts` (`STATUS_CHILDREN`, `PURGED_ACCOUNT_CHILDREN`), which `test/cascade-guard.test.ts` checks
+  `src/domain/inbox.ts` (`STATUS_CHILDREN`, `PURGED_ACCOUNT_CHILDREN`; each foreign key naming the account has its own
+  check), and the account's reports (of it and by it) and its other notifications go child-first: each from a window of
+  their first rows, the pushes of a notification before it and a report's notifications before the report, so no delete
+  cascades and the whole batch, the job's completion included, stays within `PURGE_BATCH` (`test/report-notifications.test.ts`
+  ("a remote reporter's purge")). `test/cascade-guard.test.ts` checks the lists
   against the schema's cascading foreign keys; the same test requires every trigger that writes to be named with
   where a batch that fires it counts its writes. Blocks and mutes of the account go last, once nothing they filter is
   left (`test/inbox-regressions.test.ts` ("keeps filtering a post that mentions the actor")). A user's own unboost takes the ordinary delivery path. Local media is detached
@@ -1811,6 +1836,17 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   cap reads at most 100 rows of its actor; a revoke's `Reject`s read at most 100 rows of the quoting author by one
   seek of `quote_requests_instrument`, whatever other actors' requests name the same instrument; quoters' reach reads
   the accepted quotes of the status through `quotes_accepted`, as its boosts are read.
+  _Enforced (main)_ for inbound `Flag`s (R34): at most `MAX_FLAG_OBJECTS` (101) object entries are read, each by key;
+  one remote actor may have at most `MAX_UNRESOLVED_REMOTE_REPORTS` (100) unresolved reports, counted by one bounded
+  range of `reports_account_state` and checked against the Flag's new reports before any is written (per actor, not per
+  server: a server's several actors each have theirs; a server-wide quota is not kept); whether the reported account
+  has a follower on the reporter's server is two probes of at most `FOLLOWER_PROBE` (1,000) rows each (its followers,
+  the server's accounts), so a private status of an account with more followers, on a server with more stored
+  accounts, none of them in either window, is not attached (accepted). The admin's list filtered by reporter and
+  reported account reads `reports_pair_state` (no residual, however many others report the account), and a local
+  suspension's reach reads the account's reporters a round of `REPORTER_ROUND` (250) at a time, a seek and an account
+  read each, resumed by account id (`test/inbox-flag.test.ts`, `test/policy-bounds.test.ts`,
+  `test/admin-suspension.test.ts` ("the account's reporters")).
 
 #### Maxima of presented units (RES-3)
 
@@ -1845,7 +1881,8 @@ RPC limit.
 | Boost of a quote                                                 | 7,041,878         | 5,588,211       | 1,972     | 5,448 | 66.6%          |
 | Conversation: 12 participants presented, its last status a quote | 8,247,883         | 6,682,334       | 1,930     | 5,001 | 79.7%          |
 | Notification group: 8 sample accounts, its status a quote        | 7,700,281         | 6,187,277       | 1,943     | 4,866 | 73.8%          |
-| Report: its first status a quote past the 2 MiB allowance        | 6,966,386         | 5,589,057       | 1,925     | 4,673 | 66.6%          |
+| Report: its first status a quote past the 2 MiB allowance        | 7,103,377         | 5,746,628       | 1,926     | 4,691 | 68.5%          |
+| An admin.report notification of that report                      | 2,327,459         | 368,102         | 1,059     | 90    | 4.4%           |
 | ActivityPub Note: a local status at its bounds, 1,000 addressed  | 3,685,367         | 4,220,294       | 1,276     | 2,616 | 50.3%          |
 | Its Create (the Note and its addressing again)                   |                   | 6,276,334       |           |       | 74.8%          |
 
@@ -1861,7 +1898,9 @@ and 1,000 actor ids of 2,048 bytes, the Create is 75% of `OUTBOX_BYTES`; five su
 featured collection shows its Notes within `OUTBOX_BYTES` and the pins past them by uri (4.41 MB with one Note whole,
 `test/status-bounds.test.ts`). A group's status is the owner's own (favourites and boosts group), so it is at most a quote. A report's statuses after
 the first stop at 2 MiB, so a report is at most its accounts, its first status (a quote) and nothing more, or a small
-first status and 2 MiB; its staff accounts are local. Every measured shape stays within 80% of an answer of 8 MiB
+first status and 2 MiB; its staff accounts are local, and its reporter (a remote one, from a `Flag`) and its comment
+are at their bounds: the comment's CHECK (migration `0054_remote_reports`) holds 20,000 bytes, which a stored NUL
+followed by U+0001 makes about 120 KB of JSON (Kopje's writers make at most 30,000: 5,000 code points). Every measured shape stays within 80% of an answer of 8 MiB
 with filter results included, so an answer that admits whole items always fits its first. Through the real Store RPC,
 maximal answers of plain notifications, grouped notifications, conversations, admin reports and the directory return
 7.73, 7.73, 7.73, 7.07 and 8.30 MB of JSON (`test/rpc-budgets.test.ts`).
@@ -2396,6 +2435,10 @@ activity specs, cited in test names.
 | Signed-fetch cache entries may outlive a remote block or key change by up to 5 minutes                                                                                                                                                                                                                       | Measured CPU savings on personal inboxes                                                                                                                                                                                                                                   | blocks must apply at once                                            |
 | OAuth client secrets are stored in plaintext, so R5 can act as any registered app (no user scopes)                                                                                                                                                                                                           | Matches Mastodon; app tokens carry no user authority                                                                                                                                                                                                                       | app tokens gain user-level powers                                    |
 | Aggregate counters (`reblogs_count`, `favourites_count`, `replies_count`) include interactions the viewer cannot see                                                                                                                                                                                         | Mastodon parity; clients rely on the counts                                                                                                                                                                                                                                | counters must hide private interactions                              |
+| An inbound `Flag` differs from Mastodon's: one whose id is not on its actor's server is ignored (Mastodon files it without a uri); a redelivery files nothing (one report per Flag id and account, where Mastodon files one per delivery); a status's own mention admits it, where Mastodon's mention term is any mention of the domain (`report_service.rb:89`); only originals are attached; at most 101 objects are read | Each keeps a report tied to one signed activity of its server, and the uncorrelated term would attach any status once one mentions the domain | Mastodon changes its `Flag` handling |
+| One remote actor may have at most 100 unresolved reports, not one server: a server with several actors that send Flags has 100 for each | Mastodon and Misskey send Flags from one instance or system actor; a server-wide quota would need its own counter | a server is seen spreading reports over actors |
+| The follower probe (two windows of 1,000 rows) can leave out a private status of an account with more followers when the reporter's server has more stored accounts and neither window holds a follower there | It bounds the work of a Flag (RES-7); the report is still filed with its other statuses | such reports are seen missing statuses |
+| The admin is shown a report's statuses only while its reporter may still see them, and a remote report's `status_ids` keep the ids admitted when it was filed; a remote report's comment (which may hold a NUL, Mastodon's PostgreSQL stores none) is kept until its reporter's or its target's purge | The rule the report was made under (R37); the comment is plain text the admin alone reads | Mastodon changes what it shows |
 | `GET /api/v1/instance/peers` lists the domain of every known remote account, including one known only from a direct or limited status, a follow or a search                                                                                                                                                  | Mastodon parity (`Instance.searchable`); the instance's `domain_count` already counts the same set                                                                                                                                                                         | peers must hide how a domain became known                            |
 | `GET /api/v1/accounts/familiar_followers` does not show a match past the viewer's first 10,000 accepted follows (in account id order)                                                                                                                                                                        | The window is above Mastodon's default follow limit (7,500); a complete intersection would need maintained overlap data                                                                                                                                                    | a viewer follows more than 10,000 accounts                           |
 | `GET /api/v1/lists/:id/accounts?limit=0`, which Mastodon answers with every member, answers the newest 1,000 by account id, and at most 8 MiB of accounts, linking `next` to the rest                                                                                                                        | One answer presents whole accounts (remote bios included), and 1,000 and 8 MiB keep it well within the isolate's 128 MB; the answer stays bounded (RES-3)                                                                                                                  | a list holds more than 1,000 members and a client relies on limit=0  |
