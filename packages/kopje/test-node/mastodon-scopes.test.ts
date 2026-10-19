@@ -520,7 +520,7 @@ describe('mastodon-scopes.mjs parameter helpers and reviewed readings', () => {
 		})
 	})
 
-	it('resolves a loop variable by the block that encloses the read, and an ambiguous one not at all', async () => {
+	it('resolves a loop variable by the innermost block that binds it, unresolved when its collection is no literal', async () => {
 		await checkout({
 			'config/routes/api.rb':
 				'namespace :api do\n  namespace :v1 do\n    resources :things, only: :index\n  end\nend\n',
@@ -532,6 +532,7 @@ describe('mastodon-scopes.mjs parameter helpers and reviewed readings', () => {
 				'    end',
 				'    %i(second).each { |key| found = key if params[key].present? }',
 				'    %i(outer).each do |key|',
+				'      KEYS.each { |key| found = key if params[key].present? }',
 				'      %i(inner).each do |key|',
 				'        found = key if params[key].present?',
 				'      end',
@@ -541,8 +542,9 @@ describe('mastodon-scopes.mjs parameter helpers and reviewed readings', () => {
 				'',
 			].join('\n'),
 		})
+		// The inner literal loop decides for its read; KEYS (no literal) leaves its read unresolved, not the outer list's.
 		expect(params('/api/v1/things')).toEqual({
-			names: ['first', 'second'],
+			names: ['first', 'inner', 'second'],
 			unresolved: ['app/controllers/api/v1/things_controller.rb index: dynamic key `params[key]`'],
 		})
 	})

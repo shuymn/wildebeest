@@ -1005,13 +1005,18 @@ function permitNames(args, prefix, mode, ctx) {
 	return names
 }
 
-// The values a block variable takes at `offset`: the one `<literal list>.each do |v|` (or `{ |v| ... }`) whose block
-// encloses the offset, or null when none does, more than one does, or the list is not a literal.
+// The values a block variable takes at `offset`. Every `<collection>.each do |...|` or `{ |...| }` whose block encloses
+// the offset and binds the name is a candidate; the innermost decides. Null when none binds it or when the innermost
+// one's collection is not a literal list.
 /** @param {string} body @param {string} variable @param {number} offset */
 function loopValues(body, variable, offset) {
 	if (!/^[a-z_]\w*$/.test(variable)) return null
-	const loops = new RegExp(`(%[iw]\\([^)]*\\)|\\[[^\\]]*\\])\\.each\\s*(do\\s*|\\{\\s*)\\|\\s*${variable}\\s*\\|`, 'g')
-	const enclosing = [...body.matchAll(loops)].filter((m) => {
+	const loops = /(%[iw]\([^)]*\)|\[[^\]]*\]|[\w:.]+)\.each\s*(do\s*|\{\s*)\|([^|]*)\|/g
+	/** @type {{ start: number, collection: string } | null} */
+	let innermost = null
+	for (const m of body.matchAll(loops)) {
+		const names = /** @type {string} */ (m[3]).split(',').map((v) => v.trim())
+		if (!names.includes(variable)) continue
 		const start = m.index + m[0].length
 		let end
 		if (/** @type {string} */ (m[2]).startsWith('{')) {
@@ -1023,10 +1028,12 @@ function loopValues(body, variable, offset) {
 			const close = new RegExp(`^${indent}end\\b`, 'm').exec(body.slice(start))
 			end = close === null ? -1 : start + close.index
 		}
-		return end >= 0 && start <= offset && offset < end
-	})
-	const only = enclosing.length === 1 ? literal(/** @type {string} */ (enclosing[0]?.[1])) : null
-	return Array.isArray(only) ? only : null
+		if (end >= 0 && start <= offset && offset < end && (innermost === null || start > innermost.start)) {
+			innermost = { start, collection: /** @type {string} */ (m[1]) }
+		}
+	}
+	const list = innermost === null ? null : literal(innermost.collection)
+	return Array.isArray(list) ? list : null
 }
 
 /**
