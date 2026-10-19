@@ -46,6 +46,7 @@ import m0045 from '../../migrations/0045_remote_suspension.sql'
 import m0046 from '../../migrations/0046_instance_domain_blocks.sql'
 import m0047 from '../../migrations/0047_status_mentions_shown.sql'
 import m0048 from '../../migrations/0048_stored_bounds.sql'
+import m0049 from '../../migrations/0049_instance_bounds.sql'
 import m0050 from '../../migrations/0050_follow_recommendation_mutes.sql'
 
 // Store migrations in apply order. Append only: an applied file is recorded by name and checksum and must
@@ -99,5 +100,6 @@ export const MIGRATIONS: readonly { name: string; sql: string }[] = [
 	{ name: '0046_instance_domain_blocks', sql: m0046 },
 	{ name: '0047_status_mentions_shown', sql: m0047 },
 	{ name: '0048_stored_bounds', sql: m0048 },
+	{ name: '0049_instance_bounds', sql: m0049 },
 	{ name: '0050_follow_recommendation_mutes', sql: m0050 },
 ]

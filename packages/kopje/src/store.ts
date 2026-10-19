@@ -42,7 +42,17 @@ import * as featuredTags from './domain/featured-tags'
 import { kvCas, kvDelete, kvGet, kvList, kvSet } from './domain/fedify-kv'
 import * as filters from './domain/filters'
 import * as inbox from './domain/inbox'
-import { instanceInfo, instancePeers, instanceRules, instanceSettings, searchPeers } from './domain/instance'
+import {
+	instanceAdminSettings,
+	instanceDocument,
+	instanceDocumentSource,
+	instanceInfo,
+	instancePeers,
+	instanceRules,
+	instanceSettings,
+	searchPeers,
+	setInstanceSettings,
+} from './domain/instance'
 import * as instanceDomainBlocks from './domain/instance-domain-blocks'
 import * as lists from './domain/lists'
 import * as markers from './domain/markers'
@@ -404,6 +414,15 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, setAccountEmail, input)
 	}
 
+	// GET and POST /admin/instance: the Access admin's public settings (domain/instance.ts).
+	instanceAdminSettings(callerBuild: string) {
+		return this.#kernel.execute(callerBuild, instanceAdminSettings, undefined)
+	}
+
+	setInstanceSettings(callerBuild: string, input: OperationInput<typeof setInstanceSettings>) {
+		return this.#kernel.execute(callerBuild, setInstanceSettings, input)
+	}
+
 	// POST /admin/accounts/unsuspend: the Access admin's recovery of a suspended account (domain/admin-accounts.ts).
 	unsuspendAccount(callerBuild: string, input: OperationInput<typeof unsuspendAccount>) {
 		return this.#kernel.execute(callerBuild, unsuspendAccount, input)
@@ -743,6 +762,21 @@ export class Store extends DurableObject<Env> {
 
 	instanceRules(callerBuild: string) {
 		return this.#kernel.execute(callerBuild, instanceRules, undefined)
+	}
+
+	// GET /api/v1/instance/{extended_description,privacy_policy,terms_of_service}: sanitized (domain/instance.ts).
+	instanceDocument(callerBuild: string, input: OperationInput<typeof instanceDocument>) {
+		return this.#kernel.execute(callerBuild, instanceDocument, input)
+	}
+
+	// The web pages of the documents: as stored, sanitized at the page's sink.
+	instanceDocumentSource(callerBuild: string, input: OperationInput<typeof instanceDocumentSource>) {
+		return this.#kernel.execute(callerBuild, instanceDocumentSource, input)
+	}
+
+	// GET /api/v1/instance/domain_blocks (domain/instance-domain-blocks.ts).
+	publicDomainBlocks(callerBuild: string, input: OperationInput<typeof instanceDomainBlocks.publicDomainBlocks>) {
+		return this.#kernel.execute(callerBuild, instanceDomainBlocks.publicDomainBlocks, input)
 	}
 
 	instancePeers(callerBuild: string) {

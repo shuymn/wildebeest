@@ -119,6 +119,29 @@ export class PolicyModel {
 		return !account.local && (this.covered((account.domain ?? '').replace(/\.$/, '')) || this.covered(host))
 	}
 
+	// VIS-30, the public block list (docs/visibility.md, "Instance domain blocks"): a suspended local viewer's token is
+	// refused whatever the settings; show_domain_blocks lists to anyone at `all`, to a signed-in viewer at `users`, and
+	// to no one otherwise (an absent setting included). The list is the suspend blocks, never a noop, in domain order;
+	// each carries its public comment when show_domain_blocks_rationale shows it to the viewer by the same rule.
+	publicDomainBlocks(
+		viewer: Viewer,
+		list: string | null,
+		rationale: string | null
+	): 'refused' | 'hidden' | { domain: string; comment: boolean }[] {
+		if (viewer !== null && this.account(viewer).suspended) {
+			return 'refused'
+		}
+		const shown = (setting: string | null) => setting === 'all' || (setting === 'users' && viewer !== null)
+		if (!shown(list)) {
+			return 'hidden'
+		}
+		return this.world.instanceBlocks
+			.filter((b) => b.severity === 'suspend')
+			.map((b) => b.domain)
+			.sort()
+			.map((domain) => ({ domain, comment: shown(rationale) }))
+	}
+
 	// The account lives on `domain`: its stored domain or the host of its actor id, exactly. Local accounts live nowhere
 	// a domain block can name.
 	inDomain(x: number, domain: string): boolean {

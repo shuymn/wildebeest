@@ -15,7 +15,16 @@ import { receiveImageUpload } from '../mastodon/media'
 import { type Params, readParams } from '../mastodon/params'
 import type { Scope } from '../security/scopes'
 import { pkceChallenge, sha256Hex } from '../security/tokens'
-import { AboutPage, EMBED_SCRIPT, EmbedPage, MessagePage, ProfilePage, SettingsPage, StatusPage } from '../web/pages'
+import {
+	AboutPage,
+	DocumentPage,
+	EMBED_SCRIPT,
+	EmbedPage,
+	MessagePage,
+	ProfilePage,
+	SettingsPage,
+	StatusPage,
+} from '../web/pages'
 import {
 	csrfMatches,
 	csrfToken,
@@ -184,9 +193,38 @@ export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 				description={info.description ?? ''}
 				contactEmail={info.contactEmail ?? ''}
 				rules={info.rules}
+				extendedDescription={info.extendedDescription}
+				privacyPolicy={info.privacyPolicy}
+				termsOfService={info.termsOfService}
 			/>
 		)
 	})
+	// The documents the instance endpoints serve (domain/instance.ts), as stored and sanitized at the page's sink; a
+	// /:date matches the stored effective date exactly, as GET /api/v1/instance/terms_of_service/:date.
+	const documentPage = async (c: WebContext, name: 'privacy_policy' | 'terms_of_service', date?: string) => {
+		const source = await storeCall(c, deps, (s, b) => s.instanceDocumentSource(b, { name }))
+		if (source === null || (date !== undefined && date !== source.effectiveDate)) {
+			return notFound(c)
+		}
+		const domain = c.get('domain')
+		return publicPage(
+			c,
+			200,
+			<DocumentPage
+				title={name === 'privacy_policy' ? STRINGS.privacyPolicy : STRINGS.termsOfService}
+				domain={domain}
+				path={
+					name === 'privacy_policy' ? '/privacy-policy' : `/terms-of-service${date === undefined ? '' : `/${date}`}`
+				}
+				html={source.text}
+				updatedAt={source.updatedAt}
+				effectiveDate={source.effectiveDate}
+			/>
+		)
+	}
+	app.get('/privacy-policy', setup, (c) => documentPage(c, 'privacy_policy'))
+	app.get('/terms-of-service', setup, (c) => documentPage(c, 'terms_of_service'))
+	app.get('/terms-of-service/:date', setup, (c) => documentPage(c, 'terms_of_service', c.req.param('date')))
 	// A remote account's featured hashtag URL (/@username@domain/tagged/:tag, featured-tags.ts taggedUrl): its profile
 	// on its own server, while it is available; Kopje shows no remote account's posts by hashtag.
 	const remoteTagged = async (c: WebContext, handle: string) => {

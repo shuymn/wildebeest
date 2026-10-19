@@ -72,13 +72,13 @@ export const ROUTES: readonly Route[] = [
 		handler: instance.extendedDescription,
 	},
 	{ method: 'GET', path: '/api/v1/instance/languages', access: 'public', handler: instance.languages },
-	{ method: 'GET', path: '/api/v1/instance/privacy_policy', access: 'public', handler: instance.notConfigured },
-	{ method: 'GET', path: '/api/v1/instance/terms_of_service', access: 'public', handler: instance.notConfigured },
+	{ method: 'GET', path: '/api/v1/instance/privacy_policy', access: 'public', handler: instance.privacyPolicy },
+	{ method: 'GET', path: '/api/v1/instance/terms_of_service', access: 'public', handler: instance.termsOfService },
 	{
 		method: 'GET',
 		path: '/api/v1/instance/terms_of_service/:date',
 		access: 'public',
-		handler: instance.notConfigured,
+		handler: instance.termsOfService,
 	},
 	{
 		method: 'GET',
@@ -87,8 +87,14 @@ export const ROUTES: readonly Route[] = [
 		handler: instance.translationLanguages,
 	},
 	{ method: 'GET', path: '/api/v1/peers/search', access: 'public', handler: instance.searchPeers },
-	{ method: 'GET', path: '/api/v1/instance/activity', access: 'public', handler: instance.notConfigured },
-	{ method: 'GET', path: '/api/v1/instance/domain_blocks', access: 'public', handler: instance.notConfigured },
+	{ method: 'GET', path: '/api/v1/instance/activity', access: 'public', handler: instance.activity },
+	// A token is read: a suspended user's is refused, and show_domain_blocks may list to users only.
+	{
+		method: 'GET',
+		path: '/api/v1/instance/domain_blocks',
+		access: { optional: true },
+		handler: instance.domainBlocks,
+	},
 	{ method: 'GET', path: '/api/v1/preferences', access: { scope: 'read:accounts' }, handler: accounts.preferences },
 	{
 		method: 'GET',

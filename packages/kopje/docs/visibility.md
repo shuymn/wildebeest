@@ -597,9 +597,18 @@ that fetches nothing. A block names a domain, stored as `blockedDomain` returns 
   `MAX_BLOCK_COMMENT` (1,000) characters, which bounds a page of `MAX_DOMAIN_BLOCKS_LIMIT` (500) blocks. The domain is
   validated on create only, since an update never changes it: a raw domain longer than `MAX_DOMAIN_INPUT` is refused
   before it is normalized, a normalized one beyond Mastodon's 255 characters or 63 per label is invalid, and one
-  deeper than `MAX_BLOCK_LABELS` is refused before any ruling block is looked up. `reject_reports` and `obfuscate` are stored and shown, and change nothing:
-  Kopje receives no remote reports, and the public block list (`GET /api/v1/instance/domain_blocks`) stays 404, as
-  Mastodon's default `show_domain_blocks` hides it.
+  deeper than `MAX_BLOCK_LABELS` is refused before any ruling block is looked up. `reject_reports` is stored and shown, and changes nothing:
+  Kopje receives no remote reports. `obfuscate` changes only how the public block list shows the domain.
+- **The public block list** (`GET /api/v1/instance/domain_blocks`, `publicDomainBlocks` in
+  `src/domain/instance-domain-blocks.ts`; Mastodon's `Api::V1::Instances::DomainBlocksController`). A suspended
+  user's token is answered 403 (`Your login is currently disabled`) first, whatever the settings. Then the setting
+  `show_domain_blocks` decides: `all` lists to anyone, `users` to a user's valid token, `disabled` (also when unset)
+  to no one, with Mastodon's empty 404. An unknown, expired or stale token and an app token read as anonymous. The
+  list holds the suspend blocks only, never a noop, in domain order (SQLite's binary order), each as
+  `{domain, digest, severity, comment}`: `domain` obfuscated as Mastodon's `DomainBlock#public_domain` when the block
+  has `obfuscate`, `digest` the SHA-256 of the stored domain, and `comment` the public comment when
+  `show_domain_blocks_rationale` shows it to the viewer by the same rule, else null. The private comment is never
+  shown. The digest lets anyone test a guessed domain, as on Mastodon: obfuscation is not secrecy.
 - **The measure `instance_follows`** (`src/domain/admin-measures.ts`), which Fediblockhole reads before a block
   stricter than silence, counts the accepted follows of the domain's accounts (with `include_subdomains`, of its
   subdomains' too). It walks from the local accounts (a `CROSS JOIN`, so a remote account's follow of a local one is

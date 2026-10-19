@@ -36,6 +36,9 @@ import {
 	STATUS_CONTENT_BYTES,
 	STATUS_URI_LIMIT,
 	storedDisplayName,
+	storedInstanceSetting,
+	INSTANCE_DOCUMENTS,
+	isBlank,
 	storedMediaDescription,
 	storedMediaLink,
 	storedMediaMeta,
@@ -1837,6 +1840,32 @@ export function convertLegacy(
 		)
 	}
 	const settingInsert = insert('INSERT INTO instance_settings (name, value) VALUES (?, ?)')
+	// RES-2: a setting as the Worker stores it (src/platform/stored-bounds.ts INSTANCE_SETTING_BOUNDS), in this order:
+	// a blank one (after storedText) is dropped, normalized; any other past its bound is a truncation (cut, or dropped
+	// where P keeps no row), a problem unless truncation is accepted; and a document within its bound that sanitizes to
+	// no text is dropped, normalized. A document whose text lies past the bound is therefore a truncation, never a
+	// normalization.
+	/** @param {string} name @param {unknown} value */
+	const putSetting = (name, value) => {
+		const text = stored(`instance_settings.${name}`, carried(value), storedText)
+		if (isBlank(text)) {
+			count(normalized, `settings:${name}-blank`)
+			return
+		}
+		const written = storedInstanceSetting(/** @type {any} */ (name), text)
+		if (written !== text) {
+			count(acceptTruncation ? normalized : problems, `settings:${name}-longer-than-bound`)
+		} else if (
+			INSTANCE_DOCUMENTS.includes(/** @type {any} */ (name)) &&
+			isBlank(remoteHtmlText(sanitizeRemoteHtml(text)))
+		) {
+			count(normalized, `settings:${name}-no-text`)
+			return
+		}
+		if (written !== null) {
+			settingInsert.run(name, written)
+		}
+	}
 	for (const setting of rows('SELECT setting_name, setting_value FROM server_settings ORDER BY rowid')) {
 		const legacyName = String(setting.setting_name)
 		const name = Object.hasOwn(LEGACY_SETTINGS, legacyName) ? LEGACY_SETTINGS[legacyName] : undefined
@@ -1844,14 +1873,14 @@ export function convertLegacy(
 			count(problems, 'settings:unknown-name')
 			continue
 		}
-		settingInsert.run(name, String(setting.setting_value))
+		putSetting(name, setting.setting_value)
 	}
 	const rules = rows('SELECT id, text FROM server_rules ORDER BY id').map((r) => ({
 		id: String(r.id),
 		text: String(r.text),
 	}))
 	if (rules.length > 0) {
-		settingInsert.run('rules', JSON.stringify(rules))
+		putSetting('rules', JSON.stringify(rules))
 	}
 
 	// ---------------------------------------------------------------- counters

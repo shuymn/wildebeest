@@ -60,6 +60,18 @@ Commands
                                 access_team_domain, access_admin_aud, admin_email, access_service_token_client_id.
                                 An import never changes them. With --import-token only while the Store has no
                                 usable admin access (bootstrap)
+  instance                      show the instance's public settings and the documents' stamps
+  instance <name>=<value>|<name>= ...
+                                set (or with an empty value, remove) them in one request; names: title,
+                                description, contact_email, extended_description, privacy_policy, terms_of_service,
+                                terms_of_service_effective_date (YYYY-MM-DD), show_domain_blocks and
+                                show_domain_blocks_rationale (disabled, users or all). They are data: set them after a
+                                cutover import, which refuses a Store that holds them
+  instance <document> --file <path> [<name>=<value> ...]
+                                set a document (extended_description, privacy_policy or terms_of_service) to the HTML
+                                in <path>, with the other values in the same request, e.g. terms_of_service --file
+                                terms.html terms_of_service_effective_date=2026-11-01. Documents are HTML (convert
+                                Markdown first), sanitized when served
   catalog                       migrations and tables a dump for this Store must declare
   cutover status                the cutover's publication mark, rollback journal and import state
   cutover drain --worker <dir> [--fallback <username>] [--unordered --yes]
@@ -179,6 +191,7 @@ function parseArgs(argv) {
 		'images',
 		'images-account',
 		'account-id',
+		'file',
 	])
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i] ?? ''
@@ -722,6 +735,39 @@ export async function run({
 					values[pair.slice(0, at)] = value === '' ? null : value
 				}
 				print(await client.post('/admin/config', { values }))
+				return 0
+			}
+			case 'instance': {
+				const file = flags.file
+				if (rest.length === 0 && file === undefined) {
+					print(await client.get('/admin/instance'))
+					return 0
+				}
+				/** @type {Record<string, string | null>} */
+				const values = {}
+				let pairs = rest
+				if (file !== undefined) {
+					// A document's text and the other values in one request, so a first terms of service carries its date.
+					const [document, ...others] = rest
+					if (typeof file !== 'string' || document === undefined || document.includes('=')) {
+						throw new UsageError('instance <document> --file <path> [<name>=<value> ...]')
+					}
+					const text = await io.readText(file)
+					if (text === null) {
+						throw new Error(`cannot read ${file}`)
+					}
+					values[document] = text
+					pairs = others
+				}
+				for (const pair of pairs) {
+					const at = pair.indexOf('=')
+					if (at <= 0 || Object.hasOwn(values, pair.slice(0, at))) {
+						throw new UsageError('instance <name>=<value> ... (each name once)')
+					}
+					const value = pair.slice(at + 1)
+					values[pair.slice(0, at)] = value === '' ? null : value
+				}
+				print(await client.post('/admin/instance', { values }))
 				return 0
 			}
 			case 'maintenance': {

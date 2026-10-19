@@ -95,6 +95,15 @@ below the cursor. Unread counts and markers are not read by admission.
 | `adminAccount`, `actOnAdminAccount`, `unsuspendAdminAccount`              | Unit                                     |                      |
 | `createReport`                                                            | Unit                                     |                      |
 
+## Instance
+
+Blocks are not statuses, accounts or notifications, but the public block list is a list of unbounded length (the
+admin API is its only writer, and nothing bounds how many blocks it writes).
+
+| Operation            | Mechanism                                                                  | Continuation |
+| -------------------- | -------------------------------------------------------------------------- | ------------ |
+| `publicDomainBlocks` | Budget: whole blocks in domain order, read in chunks of 500 suspend blocks | None         |
+
 ## ActivityPub
 
 These build activities and Notes from local statuses (`statusFacts`, `noteOf` in `src/domain/activities.ts`), not
