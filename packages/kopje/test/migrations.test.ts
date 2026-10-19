@@ -2,6 +2,7 @@ import { runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test'
 
 import { describe, expect, it, vi } from 'vitest'
 
+import { NOW } from './app-helpers'
 import { BUILD, freshStore, migratedStore, rejectionOf, tableNames, testKernel as kernel } from './helpers'
 import {
 	BOUNDED,
@@ -22,6 +23,7 @@ import { CONVERSATIONS_BACKFILL } from '../src/domain/conversation-rows'
 import { MODERATION_LOG_KEEP } from '../src/domain/moderation-log'
 import { readOperation, sessionOperation, writeOperation } from '../src/domain/operation'
 import { storeRemoteStatus } from '../src/domain/remote-statuses'
+import { actOnReport, fileRemoteReports, getAdminReport } from '../src/domain/reports'
 import { moderationRound } from '../src/domain/suspension'
 import { normalizeTag } from '../src/domain/tag-name'
 import { parseRemoteStatus } from '../src/federation/remote-status'
@@ -5648,9 +5650,7 @@ describe('0054_remote_reports', () => {
 	// A log target names a report when it spells a signed 64-bit integer (leading zeros allowed); anything else is
 	// skipped, and an id past the integer range cannot be a report's.
 	it.each([
-		['18 digits', '999999999999999999', 999999999999999999n],
-		['19 digits', '1000000000000000000', 1000000000000000000n],
-		['the largest id', '9223372036854775807', 9223372036854775807n],
+		['18 digits, the last that leaves room', '999999999999999998', 999999999999999998n],
 		['leading zeros', '0000000000000000000009', 9n],
 		['past the largest id', '9223372036854775808', 4n],
 		['digits and more', '12a', 4n],
@@ -5670,6 +5670,95 @@ describe('0054_remote_reports', () => {
 				.exec<{ seq: string }>("SELECT CAST(seq AS TEXT) AS seq FROM sqlite_sequence WHERE name = 'reports'")
 				.one().seq
 			expect(BigInt(seq)).toBe(expected)
+		})
+	})
+
+	// A next report id past 18 digits could not be read by id (reportRow) nor linked: the upgrade is held first.
+	it.each([
+		[
+			'a log target of 999999999999999999',
+			"INSERT INTO admin_actions (actor, action, target_type, target_id, created_at) VALUES ('access', 'resolve', 'Report', '999999999999999999', 'x')",
+		],
+		[
+			'a 19-digit log target',
+			"INSERT INTO admin_actions (actor, action, target_type, target_id, created_at) VALUES ('access', 'resolve', 'Report', '1000000000000000000', 'x')",
+		],
+		[
+			'the largest log target',
+			"INSERT INTO admin_actions (actor, action, target_type, target_id, created_at) VALUES ('access', 'resolve', 'Report', '09223372036854775807', 'x')",
+		],
+		[
+			'a local job bound',
+			`INSERT INTO moderation_jobs (kind, account_id, generation, report_bound, phase) VALUES ('suspension', '${ADMIN}', 1, 999999999999999999, 'reports')`,
+		],
+		[
+			'a remote job bound',
+			`INSERT INTO remote_moderation_jobs (kind, subject, mode, follow_bound, report_bound, phase) VALUES ('account', '${CAROL}', 'account', 0, 1000000000000000000, 'out')`,
+		],
+		[
+			'a live report',
+			`INSERT INTO reports (id, account_id, target_account_id, uri, created_at) VALUES (999999999999999999, '${ADMIN}', '${CAROL}', 'u:last', 'x')`,
+		],
+	])('holds the upgrade, writing nothing, for %s', async (_name, statement) => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, BEFORE).upgrade()).toMatchObject({ ok: true })
+			seed(sql, 4)
+			sql.exec(statement)
+			const before = snapshot(sql)
+			const k = kernel(state, WITH)
+			const result = await k.upgrade()
+			expect(result).toMatchObject({ ok: false, reason: 'upgrade-failed' })
+			expect(JSON.stringify(result)).toMatch(/report_ids_within_18_digits/)
+			expect(snapshot(sql)).toEqual(before)
+			expect(leftovers(sql)).toEqual({ tags: 0, tables: [] })
+			expect(bookkeeping(sql).map((m) => m.name)).not.toContain(NAME)
+			expect(await k.health(BUILD)).toMatchObject({ readonly: true, hold: 'upgrade-failed' })
+		})
+	})
+
+	// A counter seeded near the end of the 18-digit range still gives a remote report the admin reads and resolves.
+	it('files, shows and resolves a remote report at the last 18-digit id', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, BEFORE).upgrade()).toMatchObject({ ok: true })
+			seed(sql, 4)
+			sql.exec(
+				"INSERT INTO admin_actions (actor, action, target_type, target_id, created_at) VALUES ('access', 'resolve', 'Report', '999999999999999998', 'x')"
+			)
+			expect(await kernel(state, WITH).upgrade()).toMatchObject({ ok: true })
+			sql.exec("INSERT INTO instance_settings (name, value) VALUES ('admin_email', 'a@x')")
+			sql.exec(
+				"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES ('admin-token', 'access', 'c', ?, 'admin:read admin:write')",
+				ADMIN
+			)
+			const db = new Db(sql)
+			const filed = state.storage.transactionSync(() =>
+				fileRemoteReports(
+					db,
+					{ id: CAROL, domain: 'r.example' },
+					{ id: 'https://r.example/flags/last', objects: ['https://kopje.test/ap/users/former'], content: 'x' },
+					NOW
+				)
+			)
+			expect(filed).toEqual({ filed: true, reason: 'reported' })
+			const id = sql
+				.exec<{ id: string }>("SELECT CAST(id AS TEXT) AS id FROM reports WHERE uri = 'https://r.example/flags/last'")
+				.one().id
+			expect(id).toBe('999999999999999999')
+			const present = { origin: 'https://kopje.test' }
+			const read = { tokenHash: 'admin-token', scope: 'admin:read:reports', now: NOW } as const
+			expect(getAdminReport.run(sql, { credential: read, id, present })).toMatchObject({
+				status: 'ok',
+				value: { status: 'ok', report: { id, account: { id: CAROL } } },
+			})
+			const write = { tokenHash: 'admin-token', scope: 'admin:write:reports', now: NOW } as const
+			expect(actOnReport.run(sql, { credential: write, id, action: 'resolve', present })).toMatchObject({
+				status: 'ok',
+				value: { status: 'ok', report: { id, action_taken: true } },
+			})
 		})
 	})
 

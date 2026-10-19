@@ -537,6 +537,10 @@ describe('Flag: bounds (RES-2, RES-7)', () => {
 		await expect(insert('\u0000' + '\u0001'.repeat(20_000), '[]')).rejects.toThrow(/report_comment_within_20000_bytes/)
 		await expect(insert('x'.repeat(5001), '[]')).rejects.toThrow(/report_comment_within_20000_bytes/)
 		await expect(insert('', ids(101))).rejects.toThrow(/report_status_ids_within_100_ids_and_2101_bytes/)
+		// 101 short ids, well within the bytes: the count alone refuses them.
+		const short = JSON.stringify(Array.from({ length: 101 }, (_, i) => String(i)))
+		expect(new TextEncoder().encode(short).length).toBeLessThan(2101)
+		await expect(insert('', short)).rejects.toThrow(/report_status_ids_within_100_ids_and_2101_bytes/)
 		// Within 100 elements but past the bytes: whitespace padding, an oversized element, and one byte over.
 		const bound = /report_status_ids_within_100_ids_and_2101_bytes/
 		await expect(insert('', `[${' '.repeat(1 << 20)}]`)).rejects.toThrow(bound)

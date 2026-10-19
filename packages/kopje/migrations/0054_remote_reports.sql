@@ -20,6 +20,10 @@
 --   reports_pair_state           a reported account's reports by reporter and state: the admin's list filtered by
 --                                both (listAdminReports) and a local suspension's walk of its reporters.
 --
+-- The file also fails before any write (report_ids_within_18_digits) when a report or a retained reference would
+-- start the counter above 999,999,999,999,999,998: a report's API id stays within 18 digits, as reads of a report by
+-- id (reports.ts reportRow) and the Access admin's report link require.
+--
 -- Rebuilding a parent table would delete its children (0000_initial): notifications.report_id cascades from reports
 -- (0040) and push_deliveries from notifications, and DROP TABLE deletes its rows first. So the file first fails, before
 -- any write, unless every notification naming a report is an admin.report and no local account holds a type in the
@@ -38,16 +42,28 @@
 -- at load averages of 3.8 to 4.8, within the 20,000 ms an upgrade may take.
 
 CREATE TABLE reports_0054_check (
-  n INTEGER CONSTRAINT report_notifications_are_admin_reports CHECK (n = 0)
+  n INTEGER CONSTRAINT report_notifications_are_admin_reports CHECK (n = 0),
+  m INTEGER CONSTRAINT report_ids_within_18_digits CHECK (m = 0)
 );
 
-INSERT INTO reports_0054_check
+INSERT INTO reports_0054_check (n)
 SELECT count(*) FROM notifications INDEXED BY notifications_report
 WHERE report_id IS NOT NULL AND type <> 'admin.report';
 
-INSERT INTO reports_0054_check
+INSERT INTO reports_0054_check (n)
 SELECT count(*) FROM notifications
 WHERE account_id IN (SELECT account_id FROM local_accounts) AND type >= 'admin.report#' AND type < 'admin.report$';
+
+INSERT INTO reports_0054_check (n, m)
+SELECT 0, count(*) FROM (
+  SELECT 1 FROM reports WHERE id > 999999999999999998
+  UNION ALL SELECT 1 FROM admin_actions
+    WHERE target_type = 'Report' AND target_id <> '' AND target_id NOT GLOB '*[^0-9]*'
+      AND ((length(ltrim(target_id, '0')) = 18 AND ltrim(target_id, '0') = '999999999999999999')
+        OR (length(ltrim(target_id, '0')) = 19 AND ltrim(target_id, '0') <= '9223372036854775807'))
+  UNION ALL SELECT 1 FROM moderation_jobs WHERE report_bound > 999999999999999998
+  UNION ALL SELECT 1 FROM remote_moderation_jobs WHERE report_bound > 999999999999999998
+);
 
 DROP TABLE reports_0054_check;
 

@@ -148,7 +148,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       2,000,000 favourites each holding a Like id, the whole upgrade took 7.6 to 8.0 seconds in four runs in workerd's local Durable
       Object SQLite, within the 20 seconds an upgrade may take.
     - `0054_remote_reports`: rebuilds `reports` for remote reporters (above), keeping every report, notification,
-      push and id. It fails before writing anything if a notification naming a report is not an `admin.report`; a
+      push and id. It fails before writing anything if a notification naming a report is not an `admin.report`, or if a report,
+      a moderation log entry or a moderation job names a report id that would start new ids past 18 digits (which the
+      admin API could not read); a
       stored report past the new bounds (none of Kopje's writers makes one) fails the upgrade and leaves the Store
       held until it is fixed and retried (`kopje-admin upgrade retry`, [docs/upgrade.md](docs/upgrade.md)).
       On the benchmark store (1,000,000 accounts, 10,000 reports with their notifications, 10,000 moderation log
