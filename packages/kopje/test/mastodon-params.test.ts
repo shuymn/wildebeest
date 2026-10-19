@@ -7,7 +7,6 @@ import { covers, paramFailures } from './mastodon-conformance'
 import { PARAM_EXCEPTIONS, UNRESOLVED_PARAMS } from './mastodon-params-exceptions'
 import {
 	appToken,
-	defaultBaseline,
 	fixtureRoute,
 	type Observer,
 	observeReads,
@@ -202,7 +201,7 @@ describe(`request parameters match Mastodon v${mastodon.mastodon}`, () => {
 			}
 			const names = theirs.params.names
 			const recipe = RECIPES[name] ?? {}
-			const observation = await observeRoute(w, route, names, recipe, observer, defaultBaseline(route))
+			const observation = await observeRoute(w, route, names, recipe, observer)
 			const failures = paramFailures({
 				names,
 				unresolved: theirs.params.unresolved,

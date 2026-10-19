@@ -10,6 +10,7 @@ import {
 	deviationsCited,
 	type Exception,
 	type Exceptions,
+	open,
 	unresolvedFailures,
 } from '../test/mastodon-conformance.js'
 import { PARAM_EXCEPTIONS } from '../test/mastodon-params-exceptions.js'
@@ -48,15 +49,12 @@ const MAPPING: Record<string, Mapping> = {
 	'REST::FilterSerializer': { file: 'src/domain/filters.ts', typeName: 'Filter' },
 }
 
-const open = (note: string, ...names: string[]): Record<string, Exception> =>
-	Object.fromEntries(names.map((name) => [name, { status: 'open', issue: 1142, note }]))
-
 const ACCOUNT: Record<string, Exception> = {
 	...open('missing', 'indexable', 'moved', 'noindex', 'roles', 'uri'),
 	...open('missing (Mastodon emits it for a limited or memorial account)', 'limited', 'memorial'),
 }
 
-export const ENTITY_EXCEPTIONS: Exceptions = {
+const ENTITY_EXCEPTIONS: Exceptions = {
 	'REST::ApplicationSerializer': open('verify_credentials lacks them', 'id', 'redirect_uri', 'redirect_uris', 'scopes'),
 	'REST::CredentialApplicationSerializer': open(
 		'app registration lacks them',

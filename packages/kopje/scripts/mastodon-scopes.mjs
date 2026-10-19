@@ -40,8 +40,7 @@ function statements(text) {
 	const out = []
 	let pending = ''
 	let indent = 0
-	for (const raw of text.split('\n')) {
-		const line = raw.replace(/\s+#(?![{]).*$/, '').replace(/^\s*#.*$/, '')
+	for (const line of stripComments(text).split('\n')) {
 		if (pending === '') {
 			if (line.trim() === '') {
 				continue
@@ -1179,12 +1178,8 @@ function bodyReads(body, where, file, sources, checkout) {
 		listContext = /\bArray\(\s*$/.test(before)
 		const assign = /(\w+)\s*(?:\|\|)?=\s*$/.exec(before)
 		const path = chain(m.index + 'params'.length, [], 'params', assign !== null)
-		if (assign !== null && Array.isArray(path)) {
-			if (path.length === 0) {
-				unresolved(`params assigned to \`${assign[1]}\``)
-			} else {
-				aliases.set(/** @type {string} */ (assign[1]), path)
-			}
+		if (assign !== null && path !== undefined) {
+			aliases.set(/** @type {string} */ (assign[1]), path)
 		}
 	}
 	listContext = false

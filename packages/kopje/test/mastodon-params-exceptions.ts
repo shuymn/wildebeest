@@ -1,11 +1,8 @@
-import type { Exception, Exceptions } from './mastodon-conformance.js'
+import { type Exception, type Exceptions, open } from './mastodon-conformance.js'
 
 // The request parameters Mastodon reads and Kopje does not, by route (test/mastodon-params.test.ts). Each is a real
 // gap: tracked by an issue (open) or a decided deviation of docs/mastodon-deviations.md (accepted). A harness
 // limitation is fixed in the test's recipes or world, never written here.
-
-const open = (note: string, ...names: string[]): Record<string, Exception> =>
-	Object.fromEntries(names.map((name) => [name, { status: 'open', issue: 1142, note }]))
 
 const accepted = (deviation: `MD-${number}`, ...names: string[]): Record<string, Exception> =>
 	Object.fromEntries(names.map((name) => [name, { status: 'accepted', deviation }]))

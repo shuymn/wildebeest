@@ -9,6 +9,20 @@ export type Exception =
 // Exceptions by 'METHOD /path' (or entity), then by parameter (or field) name.
 export type Exceptions = Record<string, Record<string, Exception>>
 
+// Open exceptions of #1142 for `names`, with the same note.
+export const open = (note: string, ...names: string[]): Record<string, Exception> =>
+	Object.fromEntries(names.map((name) => [name, { status: 'open', issue: 1142, note }]))
+
+// The route of `routes` with `method` and `path`, path parameters matched whatever their names.
+export function sameRoute<R extends { method: string; path: string }>(
+	routes: readonly R[],
+	method: string,
+	path: string
+): R | undefined {
+	const shape = (p: string) => p.replace(/:\w+/g, ':')
+	return routes.find((route) => route.method === method && shape(route.path) === shape(path))
+}
+
 // One read of a request parameter, as the spies of the parameter test record it: an accessor of Params, Hono's
 // c.req.query/queries, or the upload form's file part (mastodon/media.ts formFiles).
 export type ReadMethod = 'get' | 'has' | 'getAll' | 'list' | 'objects' | 'hasObject' | 'query' | 'queries' | 'file'

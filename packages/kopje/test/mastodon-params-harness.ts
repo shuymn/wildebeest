@@ -15,7 +15,7 @@ import {
 import { NOW } from './app-helpers'
 import { PNG_PLAIN } from './fixtures/images'
 import mastodon from './fixtures/mastodon-4.5.11-api-access.json'
-import type { Read, ReadMethod, RouteObservation } from './mastodon-conformance'
+import { type Read, type ReadMethod, type RouteObservation, sameRoute } from './mastodon-conformance'
 import { bytes, mediaForm, TestCodec } from './media-helpers'
 import { newClient, VAPID } from './push-helpers'
 import type { User } from './status-helpers'
@@ -76,9 +76,9 @@ export type Observer = ReturnType<typeof observeReads>
 // ---- The world ----
 
 // Every scope a token can hold, so no route refuses the token for its scope.
-export const ALL_SCOPES = 'read write follow push profile admin:read admin:write'
+const ALL_SCOPES = 'read write follow push profile admin:read admin:write'
 
-export const OWNER_EMAIL = 'owner@example.com'
+const OWNER_EMAIL = 'owner@example.com'
 
 export type World = {
 	h: ApiHarness
@@ -88,9 +88,7 @@ export type World = {
 	remote: string
 	app: Awaited<ReturnType<typeof registerApp>>
 	ids: Record<string, string>
-	// Sends one API request as `token` (the owner's by default).
-	call: (method: string, path: string, body?: Record<string, unknown>, token?: string) => Promise<Response>
-	// The same, failing unless it answers 200; its JSON body.
+	// Sends one API request as `token` (the owner's by default), failing unless it answers 200; its JSON body.
 	ok: <T = Record<string, unknown>>(
 		method: string,
 		path: string,
@@ -123,20 +121,15 @@ export async function world(): Promise<World> {
 		return response.json<T>()
 	}
 	const remote = await seedAccount(h.store, { username: 'carol', domain: 'remote.example' })
-	const ids: Record<string, string> = { remote }
+	const ids: Record<string, string> = {}
 	await ok('PATCH', '/api/v1/accounts/update_credentials', { locked: true })
 
-	const status = await ok<{ id: string }>('POST', '/api/v1/statuses', { status: 'hello #kopje', visibility: 'public' })
-	ids.status = status.id
-	const poll = await ok<{ id: string; poll: { id: string } }>('POST', '/api/v1/statuses', {
-		status: 'a poll',
-		poll: { options: ['a', 'b'], expires_in: 3600 },
-	})
-	ids.pollStatus = poll.id
-	const media = await uploadMedia(h, owner)
-	ids.media = media
-	const withMedia = await ok<{ id: string }>('POST', '/api/v1/statuses', { status: 'media', media_ids: [media] })
-	ids.mediaStatus = withMedia.id
+	ids.status = (
+		await ok<{ id: string }>('POST', '/api/v1/statuses', { status: 'hello #kopje', visibility: 'public' })
+	).id
+	// A status with a poll and one with media, for the reads that show them.
+	await ok('POST', '/api/v1/statuses', { status: 'a poll', poll: { options: ['a', 'b'], expires_in: 3600 } })
+	await ok('POST', '/api/v1/statuses', { status: 'media', media_ids: [await uploadMedia(h, owner)] })
 	ids.unattached = await uploadMedia(h, owner)
 	// Bob's poll, for the owner's votes.
 	ids.bobPoll = (
@@ -186,7 +179,7 @@ export async function world(): Promise<World> {
 	ids.notification = (await ok<{ id: string }[]>('GET', '/api/v1/notifications'))[0]?.id ?? ''
 	ids.groupKey = groups.notification_groups[0]?.group_key ?? ''
 	ids.conversation = (await ok<{ id: string }[]>('GET', '/api/v1/conversations'))[0]?.id ?? ''
-	return { h, owner, bob, remote, app, ids, call, ok }
+	return { h, owner, bob, remote, app, ids, ok }
 }
 
 async function uploadMedia(h: ApiHarness, user: User): Promise<string> {
@@ -200,7 +193,7 @@ async function uploadMedia(h: ApiHarness, user: User): Promise<string> {
 	return (await response.json<{ id: string }>()).id
 }
 
-export async function subscribePush(ok: World['ok']): Promise<void> {
+async function subscribePush(ok: World['ok']): Promise<void> {
 	const client = await newClient()
 	await ok('POST', '/api/v1/push/subscription', {
 		subscription: { endpoint: 'https://push.example/send/abc', keys: { p256dh: client.p256dh, auth: client.auth } },
@@ -224,9 +217,9 @@ export async function appToken(w: World): Promise<string> {
 // ---- Requests ----
 
 // Parameters sent as a file part (multipart): the image fields of Mastodon's media and profile endpoints.
-export const FILE_PARAMS = new Set(['avatar', 'header', 'file', 'thumbnail'])
+const FILE_PARAMS = new Set(['avatar', 'header', 'file', 'thumbnail'])
 
-export type Baseline = {
+type Baseline = {
 	// The path with its ids filled.
 	path: string
 	// Parameters every request of the route sends (the route's own minimum), by name.
@@ -246,7 +239,7 @@ export type Recipe = {
 const leaf = (name: string) => /([^[\]]+)\]?$/.exec(name)?.[1] ?? name
 
 // One request: `params` in the query for GET and DELETE, else in a form body (multipart when a file name is sent).
-export async function send(
+async function send(
 	w: World,
 	method: string,
 	baseline: Baseline,
@@ -279,36 +272,33 @@ export async function send(
 
 // The fixture route Kopje's route matches (parameters matched whatever their names).
 export function fixtureRoute(method: string, path: string) {
-	const shape = (p: string) => p.replace(/:\w+/g, ':')
-	return mastodon.routes.find((route) => route.method === method && shape(route.path) === shape(path))
+	return sameRoute(mastodon.routes, method, path)
 }
 
 export const routeName = (route: Pick<Route, 'method' | 'path'>) => `${route.method} ${route.path}`
 
 // The baseline, then one request per fixture name with that name added (`1`; a file for FILE_PARAMS), each preceded by
-// the recipe's baseline; the reads each request made.
+// the recipe's baseline (by default the route with its ids filled); the reads each request made.
 export async function observeRoute(
 	w: World,
 	route: Pick<Route, 'method' | 'path'>,
 	names: readonly string[],
 	recipe: Recipe,
-	observer: Observer,
-	defaultBaseline: (w: World) => Baseline
-): Promise<RouteObservation & { requests: number }> {
+	observer: Observer
+): Promise<RouteObservation> {
 	if (names.length === 0) {
 		// Nothing to observe: the route's unresolved extraction is still checked.
-		return { baseline: { ok: true }, reads: new Map(), requests: 0 }
+		return { baseline: { ok: true }, reads: new Map() }
 	}
-	const baselineOf = () => (recipe.baseline === undefined ? defaultBaseline(w) : recipe.baseline(w))
-	const first = await baselineOf()
-	const response = await send(w, route.method, first)
+	const baselineOf = async (): Promise<Baseline> =>
+		recipe.baseline === undefined ? { path: filledPath(w, route.path) } : recipe.baseline(w)
+	const response = await send(w, route.method, await baselineOf())
 	const expected = recipe.status?.code
 	const good = expected === undefined ? response.status >= 200 && response.status < 300 : response.status === expected
 	if (!good) {
 		return {
 			baseline: { ok: false, detail: `${response.status} ${(await response.text()).slice(0, 200)}` },
 			reads: new Map(),
-			requests: 1,
 		}
 	}
 	await response.body?.cancel()
@@ -320,7 +310,7 @@ export async function observeRoute(
 		await probe.body?.cancel()
 		reads.set(name, observer.reads())
 	}
-	return { baseline: { ok: true }, reads, requests: 1 + names.length }
+	return { baseline: { ok: true }, reads }
 }
 
 // ---- Path ids ----
@@ -351,14 +341,10 @@ const PATH_IDS: [RegExp, (w: World) => string][] = [
 	[/^\/api\/v1\/suggestions$/, (w) => w.remote],
 ]
 
-export function filledPath(w: World, path: string): string {
+function filledPath(w: World, path: string): string {
 	return path.replace(/:(\w+)/g, (_match, _name, offset: number) => {
 		const before = path.slice(0, offset - 1)
 		const rule = PATH_IDS.find(([pattern]) => pattern.test(before))
 		return rule === undefined ? '1' : rule[1](w)
 	})
 }
-
-export const defaultBaseline =
-	(route: Pick<Route, 'path'>) =>
-	(w: World): Baseline => ({ path: filledPath(w, route.path) })
