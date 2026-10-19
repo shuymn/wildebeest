@@ -1,4 +1,4 @@
-import { MAX_REMOTE_FIELDS } from '../src/domain/accounts'
+import { MAX_REMOTE_FIELDS, REMOTE_FIELDS_BYTES } from '../src/domain/accounts'
 import { sanitizeRemoteBio } from '../src/security/html'
 
 // Remote profile parts at their bounds (RES-2), shared by the answer-size tests.
@@ -12,3 +12,15 @@ export const MAX_BIO = sanitizeRemoteBio(`<p>${'\u0001"<a>x</a>'.repeat(20_000)}
 
 // MAX_REMOTE_FIELDS fields of names and values at their read bounds, about REMOTE_FIELDS_BYTES of JSON.
 export const maxFields = () => Array.from({ length: MAX_REMOTE_FIELDS }, () => field('n'.repeat(255), 'v'.repeat(4096)))
+
+// The largest attachment a read takes (REMOTE_ATTACHMENT_SQL): seven fields at their name and value bounds, and an
+// eighth whose value fills the list's JSON to exactly REMOTE_FIELDS_BYTES.
+export function fullestFields() {
+	const entry = (value: number) => JSON.stringify({ name: 'n'.repeat(255), value: 'v'.repeat(value) }).length
+	const seven = 1 + 7 * (entry(4096) + 1)
+	const last = 4096 - (entry(4096) + 1 - (REMOTE_FIELDS_BYTES - seven))
+	return [
+		...Array.from({ length: 7 }, () => field('n'.repeat(255), 'v'.repeat(4096))),
+		field('n'.repeat(255), 'v'.repeat(last)),
+	]
+}

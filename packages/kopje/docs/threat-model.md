@@ -1734,6 +1734,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
 
 #### Maxima of presented units (RES-3)
 
+The maxima are per column: each column a shape reads at the largest value its stored bound (RES-2: the stored-bound
+triggers and the schema's CHECKs) allows, and each column that no CHECK bounds at the largest its writers produce
+(writers' invariants: `polls.tallies` holds one integer count per choice, which the poll writers in
+`src/domain/polls.ts` keep; no CHECK bounds its elements' type or size).
 `test/status-bounds.test.ts` ("the table of maxima") builds every part at its bound and measures what one read takes
 out of SQLite and what it presents, three ways: filled with characters JSON escapes to six bytes (the most JSON); the
 same with mentioned accounts that have no stored url, so their url is derived; and filled with what reads the most
@@ -1741,7 +1745,9 @@ bytes for each bound (ASCII where the bound is in bytes, four-byte characters wh
 character description reads 40,000 bytes). Every part of every row a shape reads is at the bound RES-3 states for a
 presented status and account above, at the largest value its stored-bound trigger and CHECKs accept (RES-2): the
 source text of each status row, the boost's own row (all but its content, which the CHECK keeps empty, with its own
-attachments, mentions, hashtags and poll, which are not read) and the viewer's profile included, with accounts on
+attachments, mentions, hashtags and poll, which are not read), the viewer's profile, her votes in every choice of both
+polls shown and every flag of hers included, each remote profile's fields at the largest list a read takes (32 KiB
+of JSON), with accounts on
 2,000-character domains (the longest an actor id of 2,048 holds), hashtag names of four-byte characters, and the
 viewer's filters at theirs: 50 filters in every context, each with a 256-character title and 20 keywords of 512
 characters, the first held by the status, and naming the statuses read, so every status carries 50 filter results
@@ -1749,23 +1755,23 @@ characters, the first held by the status, and naming the statuses read, so every
 (8 per number); nodes are the objects, arrays and strings presented. Measured shapes are read through the Store operation. Through the real Store
 RPC, a public timeline page, a context and a search answer of statuses of about 0.97 MB each, each cut at the budget,
 return 7.72 MB of JSON each (`test/answer-budgets.test.ts` ("the Store RPC returns a maximal answer")), and the boost
-of a quote above, alone or as the one status a lookup of it, the quote and the quoted status admits, returns 5.58 MB
-(escaped fill) and 4.55 MB (raw fill, the most serialized bytes) (`test/status-bounds.test.ts`), well under the 32 MiB
+of a quote above, alone or as the one status a lookup of it, the quote and the quoted status admits, returns 5.59 MB
+(escaped fill) and 4.56 MB (raw fill, the most serialized bytes) (`test/status-bounds.test.ts`), well under the 32 MiB
 RPC limit.
 
 | Shape                                                            | Most SQLite bytes | Most JSON bytes | Rows read | Nodes | Share of 8 MiB |
 | ---------------------------------------------------------------- | ----------------- | --------------- | --------- | ----- | -------------- |
-| Account occurrence                                               | 114,914           | 121,710         | 1         | 36    | 1.5%           |
-| Status                                                           | 4,412,084         | 2,595,446       | 1,381     | 2,267 | 31%            |
-| Quote (the status and its quoted status)                         | 6,753,211         | 5,190,925       | 1,710     | 4,536 | 62%            |
-| Boost of a quote                                                 | 7,030,060         | 5,581,142       | 1,763     | 5,439 | 66.5%          |
-| Conversation: 12 participants presented, its last status a quote | 8,212,481         | 6,651,414       | 1,724     | 4,959 | 79.3%          |
-| Notification group: 8 sample accounts, its status a quote        | 7,673,477         | 6,165,029       | 1,737     | 4,836 | 73.5%          |
-| Report: its first status a quote past the 2 MiB allowance        | 6,954,623         | 5,581,961       | 1,719     | 4,661 | 66.5%          |
+| Account occurrence                                               | 117,063           | 123,878         | 1         | 39    | 1.5%           |
+| Status                                                           | 4,416,890         | 2,597,898       | 1,484     | 2,270 | 31%            |
+| Quote (the status and its quoted status)                         | 6,762,823         | 5,195,829       | 1,916     | 4,542 | 62%            |
+| Boost of a quote                                                 | 7,041,878         | 5,588,211       | 1,972     | 5,448 | 66.6%          |
+| Conversation: 12 participants presented, its last status a quote | 8,247,883         | 6,682,334       | 1,930     | 5,001 | 79.7%          |
+| Notification group: 8 sample accounts, its status a quote        | 7,700,281         | 6,187,277       | 1,943     | 4,866 | 73.8%          |
+| Report: its first status a quote past the 2 MiB allowance        | 6,966,386         | 5,589,057       | 1,925     | 4,673 | 66.6%          |
 | ActivityPub Note: a local status at its bounds, 1,000 addressed  | 3,685,367         | 4,220,294       | 1,276     | 2,616 | 50.3%          |
 | Its Create (the Note and its addressing again)                   |                   | 6,276,334       |           |       | 74.8%          |
 
-Mentions whose url is derived read and present less (the conversation: 5,338,627 and 5,832,214 bytes): a derived url
+Mentions whose url is derived read and present less (the conversation: 5,374,029 and 5,863,134 bytes): a derived url
 within the bound is at most the stored bound, and a longer one presents as ''.
 
 A Note shows what the Status entity shows: its hashtags and mentions are read through the same projections and
@@ -1839,18 +1845,20 @@ R takes about 0.7 ms a window of 40 statuses. It is 1.2 to 1.5 times the meter's
 constant terms count rows that may not exist), 2.4 for the realistic one (Japanese text), 1.02 for a status with 200
 short mentions and 70 hashtags, and 1.15 at the maxima.
 
-Peaks, as `test/status-bounds.test.ts` ("keeps the peaks of the heap model within their bounds, from the measured
-maxima") computes them from the maxima above, each term the largest any fill measured: an item's rows are the heap of
-every row its read returns under the model, with 25% headroom; the rejected item is three times its JSON; the admitted
-answer three times 8 MiB (25.17 MB); the largest single row is the most of the model and RowMeter's count over every
-row read (1.20 MB, the escaped poll row). The test asserts the timelines' peaks at least 1 MB under half of the Store
-isolate's 128 MB, and the groups' and reports' under the whole.
+Peaks, as `test/status-bounds.test.ts` ("keeps the peaks of the heap model within their bounds, from the maxima per
+column") computes them, per column: an item's rows are, for each query and column its read returns, the most heap
+any fill gives that column under the model, summed (so poll choices count as escaped and the other text as raw), with
+25% headroom; the largest single row sums each column's largest value the same way (1.20 MB, the escaped poll row,
+which is at least RowMeter's count); the rejected item is three times the most JSON any fill presents (the escaped
+fill, each column's most JSON); the admitted answer three times 8 MiB (25.17 MB). The test measures its own maxima,
+whatever runs before it, and asserts the timelines' peaks within half of the Store isolate's 128 MB, and the groups'
+and reports' within the whole.
 
 | Item                                           | Rows, with 25% headroom | Rejected-item objects |
 | ---------------------------------------------- | ----------------------- | --------------------- |
-| Boost of a quote (the largest timeline item)   | 17.99 MB                | 16.74 MB              |
-| Group: its status (a quote), 8 sample accounts | 19.60 MB                | 18.50 MB              |
-| Report: its status and 4 accounts              | 17.80 MB                | 16.75 MB              |
+| Boost of a quote (the largest timeline item)   | 19.05 MB                | 16.76 MB              |
+| Group: its status (a quote), 8 sample accounts | 20.70 MB                | 18.56 MB              |
+| Report: its status and 4 accounts              | 18.86 MB                | 16.77 MB              |
 
 Groups and reports also keep the presentation's state: the compiled filters (50 filters of 20 keywords, about
 0.5 MB) and the filter results cached by status (at most 50 results of about 1.2 KB each, 60 KB a status) for the
@@ -1861,14 +1869,15 @@ pass, and the passes are at most four), 200 for a page of reports (its at most 1
 
 | Answer (Store isolate)                      | Normal   | Backstop fired, the dropped chunk still live | A single item |
 | ------------------------------------------- | -------- | -------------------------------------------- | ------------- |
-| Timelines (largest item a boost of a quote) | 59.90 MB | 62.72 MB                                     | 59.90 MB      |
-| Groups                                      | 73.36 MB | 76.18 MB                                     | 73.36 MB      |
-| Reports                                     | 72.21 MB | 75.03 MB                                     | 72.21 MB      |
+| Timelines (largest item a boost of a quote) | 60.98 MB | 63.80 MB                                     | 60.98 MB      |
+| Groups                                      | 74.53 MB | 77.34 MB                                     | 74.53 MB      |
+| Reports                                     | 73.29 MB | 76.11 MB                                     | 73.29 MB      |
 
 A chunk of several takes at most its target of heap, 1 MiB (1.05 MB). Normal: the rows are the larger of 1.25 × 1.05 MB
 and the item's rows, plus the admitted answer, the rejected item and, for groups and reports, their state. With the
 backstop fired, 1.25 × (1.05 + 1.20) MB of dropped rows more. The cap is 1 MiB so that the fallback fits within half of
-the isolate, with 1.28 MB to spare, even when the dropped chunk is still live: the backstop-fired figures bound the
+the isolate even when the dropped chunk is still live, with 0.20 MB to spare: the margin is thin, every row term already
+carries 25% headroom, and the peak test fails on any growth that passes half. The backstop-fired figures bound the
 fallback whenever the dropped rows are collected. A boost that showed a quote, attachments, mentions, hashtags or a
 poll of its own (a legacy row may hold them) would make a timeline's largest item pass half at a chunk of one; it shows
 none.
@@ -1877,12 +1886,12 @@ none.
 | ------------------------------------------------- | ------------- | -------------- |
 | RPC copy (serialized; deserialized in the Worker) | 8.4 MB        | 25.2 MB        |
 | The Worker's JSON string and the body             |               | 25.2 MB        |
-| Peak                                              | 59.9 MB       | 50 MB          |
+| Peak                                              | 61.0 MB       | 50 MB          |
 
 The Store's peak is the timelines' (above), while an item is admitted; the RPC copy comes after it. The Worker's JSON
 string is counted at two bytes a character (16.8 MB) and the body at its UTF-8 bytes. Timelines stay within half of
 the Store isolate's 128 MB, and the Worker within half of its own. One isolate holding both sides at
-once, the Store's objects alive while the Worker's are built, would reach about 106 MB; it stays within half (59.9 MB)
+once, the Store's objects alive while the Worker's are built, would reach about 107 MB; it stays within half (61.0 MB)
 when the Store drops its objects once they are serialized. Groups and reports pass half of the Store isolate (RES-3,
 the Gap note on their heap).
 
