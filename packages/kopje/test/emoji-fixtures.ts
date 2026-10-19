@@ -50,8 +50,8 @@ export function accountAtCap(over = false): Pairs {
 }
 
 // Exactly STATUS_EMOJIS_BYTES presented with the shortest names: 11 one-character names at 512-byte urls and one
-// two-character name at a 103-byte url (1 + 11 × 1,092 + 275); `over`: a three-character one. The names a poll's choices can reference with the
-// fewest characters (the emoji-poll fill of test/status-bounds.test.ts).
+// two-character name at a 103-byte url (1 + 11 × 1,092 + 275); `over`: a three-character one. The names a poll's
+// choices can reference with the fewest characters (the emoji-poll fill of test/status-bounds.test.ts).
 export function statusShortNames(over = false): Pairs {
 	return [
 		...Array.from({ length: 11 }, (_, i): [string, string] => ['abcdefghijk'[i]!, emojiUrl(EMOJI_URL_LIMIT, `${i}/`)]),

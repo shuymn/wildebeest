@@ -26,8 +26,8 @@ import { withinJsonBounds } from '../platform/json-bounds'
 import { storedMediaDescription, storedMediaLink, storedText } from '../platform/stored-bounds'
 import { cutCodeUnits, cutJsonString, remoteHtmlText, sanitizeRemoteContent, SPOILER_BYTES } from '../security/html'
 
-// Remote statuses as Mastodon 4.5.11 reads them (ActivityPub::Parser::StatusParser and MediaAttachmentParser): compacted
-// JSON with the ActivityStreams context, values as strings, objects with an id, or arrays of either. Note and Question
+// Remote statuses as Mastodon 4.5.11 reads them (ActivityPub::Parser::StatusParser and MediaAttachmentParser):
+// compacted JSON with the ActivityStreams context, values as strings, objects with an id, or arrays of either. Note and Question
 // are statuses; Article, Page, Image, Audio, Video and Event are converted as Mastodon converts them (the name as a
 // heading, the summary, and a link to the url, with no content warning). Everything is bounded (RES-2, RES-4) and
 // sanitized (HTML-1); URLs are http(s) only (HTML-3). Quotes are read from quote, _misskey_quote, quoteUrl and quoteUri

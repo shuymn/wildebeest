@@ -564,9 +564,9 @@ export function emojisValid(text: string | null, bytes: number): boolean {
 }
 
 // True when `column` holds a value emojisValid refuses: false for NULL, true for a value that is not text. Judged as
-// stored: the byte bound first, so no JSON work runs on a value past it; then the shape, each element (`->>` decodes escapes, and a decoded name or url
-// whose bytes and characters differ holds a NUL or a non-ASCII character), the names once each, and the presented
-// size.
+// stored: the byte bound first, so no JSON work runs on a value past it; then the shape, each element (`->>` decodes
+// escapes, and a decoded name or url whose bytes and characters differ holds a NUL or a non-ASCII character), the
+// names once each, and the presented size.
 export function emojisPastBoundSql(column: string, bytes: number): string {
 	const name = "e.value ->> '$[0]'"
 	const url = "e.value ->> '$[1]'"

@@ -44,6 +44,16 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       mutes and dismissals stay the same.
 - Dismissing a suggestion (`DELETE /api/v1/suggestions/:id`) is stored, and the account is not suggested again; it
   still answers `{}` whatever the id.
+- Remote custom emoji, as Mastodon 4.5 shows them: the `Emoji` tags of a remote status (a Note, a Question, a converted
+  object) and of a remote account are kept, and `emojis` (which used to be `[]`) lists the ones its texts reference on
+  statuses, polls (those its choices reference), edit history versions and accounts. Each object keeps what it tagged:
+  an account's are replaced by every refresh and `Update`, a status's by every newer `Update` (a change of emoji alone
+  adds no history entry). A boost shows none of its own and a suspended account none. `static_url` is the same as
+  `url`, and images are linked, never fetched. Limits: 64 tags are read per object; a kept emoji has a shortcode of at
+  most 128 characters of `A-Z a-z 0-9 _ + -` and a URL of at most 512 bytes; a status keeps at most 64 of them within
+  12,288 bytes of JSON and an account within 6,144 (40 and 20 typical ones fit), dropping the rest from the first that
+  does not fit. A reference is any shortcode between two colons, so `:aa:bb:` shows both where Mastodon shows neither.
+  `GET /api/v1/custom_emojis` still answers `[]`.
 
 ### Changed
 
@@ -87,6 +97,13 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - An Undo of a Like naming a status that is not a local one, and that no stored favourite matches, records nothing:
   servers also send the Undos of reactions to other servers' posts to the reactor's followers, and these took the
   actor's retraction allowance.
+- An answer's single item may now take up to 85% of its 8 MiB (it was 80%): emoji at their bounds would otherwise
+  leave a conversation too little room for 40 emoji per status and 20 per profile. To keep the memory peak of a
+  timeline within its bound, pages, contexts, search, histories and lookups read their statuses in chunks of 768 KiB
+  of row memory instead of 1 MiB (`PAGE_CHUNKS`), which can take a few more queries for a page of large statuses.
+- Stored format: `statuses.emojis`, `status_edits.emojis` and `accounts.emojis` hold the custom emoji snapshots; a dump
+  past their bounds is refused, and `verify-conversion` fails on a converted row holding one, reporting `emojis`
+  counts by table ([docs/dump-format.md](docs/dump-format.md), [docs/cutover.md](docs/cutover.md)).
 - Stored format: a remote favourite's Like ids are rows of the new `favourite_likes` table, and its `favourites.uri`
   holds only the id it kept from before the upgrade, until that id's Undo. A dump past the new table's bounds is
   refused ([docs/dump-format.md](docs/dump-format.md)).
@@ -104,7 +121,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds four migrations, applied on the first request after the deploy; a rollback to an earlier
+- Store schema: adds five migrations, applied on the first request after the deploy; a rollback to an earlier
   version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0049_instance_bounds`: rewrites instance settings past their bounds (above), adds the triggers that refuse
       them, and indexes the suspend blocks by domain. On a benchmark store of 1,000,000 accounts, 2,000,000 statuses
@@ -122,6 +139,11 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       the favourites by stored Like id; no existing row is changed. On a benchmark store of 1,000,000 accounts and
       2,000,000 favourites each holding a Like id, the whole upgrade took 7.6 to 8.0 seconds in four runs in workerd's local Durable
       Object SQLite, within the 20 seconds an upgrade may take.
+    - `0053_custom_emoji_snapshots`: adds the three emoji columns, which read as none on every existing row, and the
+      triggers that bound them; no row is read or changed. On the benchmark store its upgrade took 6.5 seconds. This
+      release's five files (0049 to 0053) in one upgrade took 8.4 to 14.2 seconds in three runs and 22.8 and 25.9 seconds in
+      two others, past the 20 seconds an upgrade may take; the same range without it ranged from 8.5 to 25.7 seconds on
+      that machine.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.17] - 2026-10-19
