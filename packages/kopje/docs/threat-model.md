@@ -1679,10 +1679,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   the work follows the instance's own receive volume (ids carry publication time, or receipt time where a cutover kept them); the rules
   read only their setting; familiar followers reads at most 10,000 of the viewer's accepted follows (above
   Mastodon's default follow limit of 7,500) and checks each against the account through the pair index; suggestions
-  read windows of follow ids as ranges of `follows_following` (the viewer's 1,000 newest follows, each source's 100
-  newest, 10,000 edges in all) whatever the planner's statistics, and judge at most 10,000 distinct candidates,
-  315,844 rows at the measured maximum (docs/visibility.md, "Read bounds"; `test/suggestions-bounds.test.ts`: the plan
-  with fresh and stale statistics, rows read below and past each window); `test/instance-reads.test.ts`, `test/tags.test.ts`,
+  read fixed windows of follow ids as index ranges and judge at most 10,000 distinct candidates (docs/visibility.md,
+  "Suggestions" and "Read bounds"; `test/suggestions-bounds.test.ts`); `test/instance-reads.test.ts`, `test/tags.test.ts`,
   `test/account-reads.test.ts` (rows read stay flat as accounts per domain, accounts known, statuses outside the
   window, and the account's other followers grow). _Enforced (main)_ for scheduled statuses: a page reads the
   account's own index by id, and a publication round reads the due ones through the index by time, so neither grows

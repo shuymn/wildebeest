@@ -3,29 +3,11 @@ import { admit, ARRAY_ANSWER_BYTES } from './answer-budget'
 import { listedForSql, suggestionCandidateSql, suggestionSourceSql } from './audience'
 import { userReadOperation, userWriteOperation } from './auth'
 
-// Follow suggestions (Mastodon 4.5's AccountSuggestions, GET /api/v1/suggestions and /api/v2/suggestions, DELETE
-// /api/v1/suggestions/:id; docs/visibility.md, "Suggestions"). Of Mastodon's sources only friends of friends
-// (FriendsOfFriendsSource) has data in Kopje: the accounts the viewer's follows follow, ranked by how many of them
-// follow each (frequency, highest first), then by follower count (lowest first), then by id (newest first). A
-// stored remote follower count is 0 (Kopje does not learn it), so at equal frequency remote accounts come first.
-//
-// Rule R39: an edge counts when its source is shown to the viewer by R13 (suggestionSourceSql) and its target passes
-// suggestionCandidateSql (someone else, discoverable, not followed or requested, not dismissed); the candidates R12
-// lists to the viewer (listedForSql) are ranked, and the first SUGGESTIONS_KEPT kept.
-//
-// Work is bounded (RES-7) by windows of follow ids, fixed whatever the planner's statistics: each a range of
-// follows_following (account_id, id) from the id of its last entry, which a scalar lookup of that index finds.
-//   - sources: the viewer's SUGGESTION_SOURCES accepted follows with the highest ids; one R13 hides takes a slot and
-//     brings nothing;
-//   - edges: each source's SUGGESTION_EDGES_PER_SOURCE accepted follows with the highest ids, every one taking a slot,
-//     its target whatever it is;
-//   - cutoff: the first SUGGESTION_EDGES edges, sources by descending follow id, each source's edges by descending
-//     follow id (the order of the two ranges, so no sort holds them);
-//   - candidates: the distinct targets of the kept edges that pass suggestionCandidateSql, at most SUGGESTION_EDGES,
-//     each judged by R12 before the ranking, so a hidden account takes no place in it.
-// The answer is a ranking over that bounded graph, not a prefix of Mastodon's: an edge outside the windows is not
-// counted, which can reorder two candidates or bring in one Mastodon ranks lower. No cache: each request ranks
-// anew, so offsets are stable only while the follows, blocks, mutes and dismissals stay as they were.
+// Follow suggestions (Mastodon 4.5's AccountSuggestions, friends of friends only; R39, docs/visibility.md
+// "Suggestions", which states the ranking and the windows). Work is bounded (RES-7) by windows of follow ids that the
+// query reads as ranges of follows_following (account_id, id), each from the id of its last entry, which a scalar
+// lookup of that index finds, so neither window depends on the planner's statistics; the edges come in the order of
+// the two ranges, so no sort holds them before the cutoff, and R12 judges each distinct candidate before the ranking.
 
 export const SUGGESTION_SOURCES = 1000
 export const SUGGESTION_EDGES_PER_SOURCE = 100
