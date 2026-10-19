@@ -6,7 +6,9 @@
 		"token: required (doorkeeper_authorize!, require_user!, valid_doorkeeper_token?), optional (authorize_if_got_token!, or the controller reads the current user), none.",
 		"scopes: any one of them is accepted (null: no scope check). user: a token without a user is refused.",
 		"Not read: instance settings (DISALLOW_UNAUTHENTICATED_API_ACCESS, limited federation mode), serializers that read the current user.",
-		"unresolved: the Ruby could not be read with certainty; the route is not compared until an exception says why."
+		"unresolved: the Ruby could not be read with certainty; the route is not compared until an exception says why.",
+		"params: the request parameters the action reads (names in Params form: a, a[], a[b], a[][b]); params.unresolved: reads it could not name.",
+		"On a Mastodon version bump: regenerate, review the new exceptions the tests report, and run a Claude + Codex audit for read-but-dropped parameters."
 	],
 	"routes": [
 		{
@@ -16,7 +18,8 @@
 			"action": "show",
 			"token": "required",
 			"scopes": ["profile"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -25,7 +28,8 @@
 			"action": "show",
 			"token": "required",
 			"scopes": ["profile"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -35,7 +39,8 @@
 			"token": "none",
 			"scopes": null,
 			"user": false,
-			"guards": ["require_public_status!"]
+			"guards": ["require_public_status!"],
+			"params": { "names": ["maxheight", "maxwidth", "url"], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -44,7 +49,8 @@
 			"action": "show",
 			"token": "required",
 			"scopes": ["read"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -54,7 +60,8 @@
 			"token": "optional",
 			"scopes": ["read", "read:accounts"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize @status, :show?"]
+			"unresolved": ["Pundit policy: authorize @status, :show?"],
+			"params": { "names": ["limit", "max_id", "since_id"], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -64,7 +71,8 @@
 			"token": "optional",
 			"scopes": ["read", "read:accounts"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize @status, :show?"]
+			"unresolved": ["Pundit policy: authorize @status, :show?"],
+			"params": { "names": ["limit", "max_id", "since_id"], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -73,7 +81,8 @@
 			"action": "create",
 			"token": "required",
 			"scopes": ["write", "write:statuses"],
-			"user": true
+			"user": true,
+			"params": { "names": ["visibility"], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -82,7 +91,8 @@
 			"action": "destroy",
 			"token": "required",
 			"scopes": ["write", "write:statuses"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -92,7 +102,8 @@
 			"token": "required",
 			"scopes": ["write", "write:statuses"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize @quote, :revoke?; authorize @status, :show?"]
+			"unresolved": ["Pundit policy: authorize @quote, :revoke?; authorize @status, :show?"],
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -102,7 +113,8 @@
 			"token": "required",
 			"scopes": ["read", "read:statuses"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize @status, :show?"]
+			"unresolved": ["Pundit policy: authorize @status, :show?"],
+			"params": { "names": ["limit", "max_id", "since_id"], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -111,7 +123,8 @@
 			"action": "create",
 			"token": "required",
 			"scopes": ["write", "write:favourites"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -120,7 +133,8 @@
 			"action": "destroy",
 			"token": "required",
 			"scopes": ["write", "write:favourites"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -129,7 +143,8 @@
 			"action": "create",
 			"token": "required",
 			"scopes": ["write", "write:bookmarks"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -138,7 +153,8 @@
 			"action": "destroy",
 			"token": "required",
 			"scopes": ["write", "write:bookmarks"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -147,7 +163,8 @@
 			"action": "create",
 			"token": "required",
 			"scopes": ["write", "write:mutes"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -156,7 +173,8 @@
 			"action": "destroy",
 			"token": "required",
 			"scopes": ["write", "write:mutes"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -165,7 +183,8 @@
 			"action": "create",
 			"token": "required",
 			"scopes": ["write", "write:accounts"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -174,7 +193,8 @@
 			"action": "destroy",
 			"token": "required",
 			"scopes": ["write", "write:accounts"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -184,7 +204,8 @@
 			"token": "optional",
 			"scopes": ["read", "read:statuses"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize @status, :show?"]
+			"unresolved": ["Pundit policy: authorize @status, :show?"],
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -194,7 +215,8 @@
 			"token": "required",
 			"scopes": ["read", "read:statuses"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize @status, :show?"]
+			"unresolved": ["Pundit policy: authorize @status, :show?"],
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "PATCH",
@@ -204,7 +226,8 @@
 			"token": "required",
 			"scopes": ["write", "write:statuses"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize @status, :update?; authorize @status, :show?"]
+			"unresolved": ["Pundit policy: authorize @status, :update?; authorize @status, :show?"],
+			"params": { "names": ["quote_approval_policy"], "unresolved": [] }
 		},
 		{
 			"method": "PUT",
@@ -214,7 +237,8 @@
 			"token": "required",
 			"scopes": ["write", "write:statuses"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize @status, :update?; authorize @status, :show?"]
+			"unresolved": ["Pundit policy: authorize @status, :update?; authorize @status, :show?"],
+			"params": { "names": ["quote_approval_policy"], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -223,7 +247,8 @@
 			"action": "create",
 			"token": "required",
 			"scopes": ["read", "read:statuses"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -233,7 +258,8 @@
 			"token": "optional",
 			"scopes": ["read", "read:statuses"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize @status, :show?"]
+			"unresolved": ["Pundit policy: authorize @status, :show?"],
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -242,7 +268,8 @@
 			"action": "index",
 			"token": "optional",
 			"scopes": ["read", "read:statuses"],
-			"user": false
+			"user": false,
+			"params": { "names": ["id[]"], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -251,7 +278,27 @@
 			"action": "create",
 			"token": "required",
 			"scopes": ["write", "write:statuses"],
-			"user": true
+			"user": true,
+			"params": {
+				"names": [
+					"allowed_mentions[]",
+					"in_reply_to_id",
+					"language",
+					"media_ids[]",
+					"poll[expires_in]",
+					"poll[hide_totals]",
+					"poll[multiple]",
+					"poll[options][]",
+					"quote_approval_policy",
+					"quoted_status_id",
+					"scheduled_at",
+					"sensitive",
+					"spoiler_text",
+					"status",
+					"visibility"
+				],
+				"unresolved": []
+			}
 		},
 		{
 			"method": "GET",
@@ -261,7 +308,8 @@
 			"token": "optional",
 			"scopes": ["read", "read:statuses"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize @status, :show?"]
+			"unresolved": ["Pundit policy: authorize @status, :show?"],
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "PATCH",
@@ -270,7 +318,26 @@
 			"action": "update",
 			"token": "required",
 			"scopes": ["write", "write:statuses"],
-			"user": true
+			"user": true,
+			"params": {
+				"names": [
+					"language",
+					"media_attributes[][description]",
+					"media_attributes[][focus]",
+					"media_attributes[][id]",
+					"media_attributes[][thumbnail]",
+					"media_ids[]",
+					"poll[expires_in]",
+					"poll[hide_totals]",
+					"poll[multiple]",
+					"poll[options][]",
+					"quote_approval_policy",
+					"sensitive",
+					"spoiler_text",
+					"status"
+				],
+				"unresolved": []
+			}
 		},
 		{
 			"method": "PUT",
@@ -279,7 +346,26 @@
 			"action": "update",
 			"token": "required",
 			"scopes": ["write", "write:statuses"],
-			"user": true
+			"user": true,
+			"params": {
+				"names": [
+					"language",
+					"media_attributes[][description]",
+					"media_attributes[][focus]",
+					"media_attributes[][id]",
+					"media_attributes[][thumbnail]",
+					"media_ids[]",
+					"poll[expires_in]",
+					"poll[hide_totals]",
+					"poll[multiple]",
+					"poll[options][]",
+					"quote_approval_policy",
+					"sensitive",
+					"spoiler_text",
+					"status"
+				],
+				"unresolved": []
+			}
 		},
 		{
 			"method": "DELETE",
@@ -288,7 +374,8 @@
 			"action": "destroy",
 			"token": "required",
 			"scopes": ["write", "write:statuses"],
-			"user": true
+			"user": true,
+			"params": { "names": ["delete_media"], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -297,7 +384,8 @@
 			"action": "show",
 			"token": "required",
 			"scopes": ["read", "read:statuses"],
-			"user": true
+			"user": true,
+			"params": { "names": ["limit", "max_id", "min_id", "since_id"], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -307,7 +395,11 @@
 			"token": "required",
 			"scopes": ["read", "read:statuses"],
 			"user": true,
-			"unresolved": ["require_user! if: \"require_auth?\""]
+			"unresolved": ["require_user! if: \"require_auth?\""],
+			"params": {
+				"names": ["limit", "local", "max_id", "min_id", "only_media", "remote", "since_id"],
+				"unresolved": []
+			}
 		},
 		{
 			"method": "GET",
@@ -317,7 +409,8 @@
 			"token": "required",
 			"scopes": ["read", "read:statuses"],
 			"user": true,
-			"unresolved": ["require_user! if: \"require_auth?\""]
+			"unresolved": ["require_user! if: \"require_auth?\""],
+			"params": { "names": ["limit", "local", "max_id", "min_id", "remote", "since_id", "url"], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -327,7 +420,11 @@
 			"token": "required",
 			"scopes": ["read", "read:statuses"],
 			"user": true,
-			"unresolved": ["require_user! if: \"require_auth?\""]
+			"unresolved": ["require_user! if: \"require_auth?\""],
+			"params": {
+				"names": ["all[]", "any[]", "limit", "local", "max_id", "min_id", "none[]", "only_media", "remote", "since_id"],
+				"unresolved": []
+			}
 		},
 		{
 			"method": "GET",
@@ -336,7 +433,8 @@
 			"action": "show",
 			"token": "required",
 			"scopes": ["read", "read:lists"],
-			"user": true
+			"user": true,
+			"params": { "names": ["limit", "max_id", "min_id", "since_id"], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -345,7 +443,8 @@
 			"action": "index",
 			"token": "none",
 			"scopes": null,
-			"user": false
+			"user": false,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -354,7 +453,8 @@
 			"action": "index",
 			"token": "none",
 			"scopes": null,
-			"user": false
+			"user": false,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -363,7 +463,8 @@
 			"action": "index",
 			"token": "none",
 			"scopes": null,
-			"user": false
+			"user": false,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -372,7 +473,8 @@
 			"action": "index",
 			"token": "required",
 			"scopes": ["read", "read:accounts"],
-			"user": true
+			"user": true,
+			"params": { "names": ["limit", "offset"], "unresolved": [] }
 		},
 		{
 			"method": "DELETE",
@@ -381,7 +483,8 @@
 			"action": "destroy",
 			"token": "required",
 			"scopes": ["write", "write:accounts"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -390,7 +493,8 @@
 			"action": "index",
 			"token": "required",
 			"scopes": ["read", "read:statuses"],
-			"user": true
+			"user": true,
+			"params": { "names": ["limit", "max_id", "min_id", "since_id"], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -399,7 +503,8 @@
 			"action": "show",
 			"token": "required",
 			"scopes": ["read", "read:statuses"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "PATCH",
@@ -408,7 +513,8 @@
 			"action": "update",
 			"token": "required",
 			"scopes": ["write", "write:statuses"],
-			"user": true
+			"user": true,
+			"params": { "names": ["scheduled_at"], "unresolved": [] }
 		},
 		{
 			"method": "PUT",
@@ -417,7 +523,8 @@
 			"action": "update",
 			"token": "required",
 			"scopes": ["write", "write:statuses"],
-			"user": true
+			"user": true,
+			"params": { "names": ["scheduled_at"], "unresolved": [] }
 		},
 		{
 			"method": "DELETE",
@@ -426,7 +533,8 @@
 			"action": "destroy",
 			"token": "required",
 			"scopes": ["write", "write:statuses"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -435,7 +543,8 @@
 			"action": "index",
 			"token": "required",
 			"scopes": ["read", "read:accounts"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -444,7 +553,8 @@
 			"action": "read",
 			"token": "required",
 			"scopes": ["write", "write:accounts"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -453,7 +563,8 @@
 			"action": "index",
 			"token": "required",
 			"scopes": ["read", "read:accounts"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -462,7 +573,8 @@
 			"action": "show",
 			"token": "required",
 			"scopes": ["write", "write:accounts"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "PATCH",
@@ -471,7 +583,8 @@
 			"action": "update",
 			"token": "required",
 			"scopes": ["write", "write:favourites"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "PUT",
@@ -480,7 +593,8 @@
 			"action": "update",
 			"token": "required",
 			"scopes": ["write", "write:favourites"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "DELETE",
@@ -489,7 +603,8 @@
 			"action": "destroy",
 			"token": "required",
 			"scopes": ["write", "write:favourites"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -498,7 +613,8 @@
 			"action": "dismiss",
 			"token": "required",
 			"scopes": ["write", "write:accounts"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -507,7 +623,8 @@
 			"action": "index",
 			"token": "required",
 			"scopes": null,
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -516,7 +633,8 @@
 			"action": "read",
 			"token": "required",
 			"scopes": ["write", "write:conversations"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -525,7 +643,8 @@
 			"action": "unread",
 			"token": "required",
 			"scopes": ["write", "write:conversations"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -534,7 +653,8 @@
 			"action": "index",
 			"token": "required",
 			"scopes": ["read", "read:statuses"],
-			"user": true
+			"user": true,
+			"params": { "names": ["limit", "max_id", "min_id", "since_id"], "unresolved": [] }
 		},
 		{
 			"method": "DELETE",
@@ -543,7 +663,8 @@
 			"action": "destroy",
 			"token": "required",
 			"scopes": ["write", "write:conversations"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -552,7 +673,8 @@
 			"action": "create",
 			"token": "required",
 			"scopes": ["write", "write:media"],
-			"user": true
+			"user": true,
+			"params": { "names": ["description", "file", "focus", "thumbnail"], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -561,7 +683,8 @@
 			"action": "show",
 			"token": "required",
 			"scopes": ["write", "write:media"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "PATCH",
@@ -570,7 +693,8 @@
 			"action": "update",
 			"token": "required",
 			"scopes": ["write", "write:media"],
-			"user": true
+			"user": true,
+			"params": { "names": ["description", "focus", "thumbnail"], "unresolved": [] }
 		},
 		{
 			"method": "PUT",
@@ -579,7 +703,8 @@
 			"action": "update",
 			"token": "required",
 			"scopes": ["write", "write:media"],
-			"user": true
+			"user": true,
+			"params": { "names": ["description", "focus", "thumbnail"], "unresolved": [] }
 		},
 		{
 			"method": "DELETE",
@@ -588,7 +713,8 @@
 			"action": "destroy",
 			"token": "required",
 			"scopes": ["write", "write:media"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -597,7 +723,8 @@
 			"action": "index",
 			"token": "required",
 			"scopes": ["follow", "read", "read:blocks"],
-			"user": true
+			"user": true,
+			"params": { "names": ["limit", "max_id", "since_id"], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -606,7 +733,8 @@
 			"action": "index",
 			"token": "required",
 			"scopes": ["follow", "read", "read:mutes"],
-			"user": true
+			"user": true,
+			"params": { "names": ["limit", "max_id", "since_id"], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -615,7 +743,8 @@
 			"action": "index",
 			"token": "required",
 			"scopes": ["read", "read:favourites"],
-			"user": true
+			"user": true,
+			"params": { "names": ["limit", "max_id", "min_id", "since_id"], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -624,7 +753,8 @@
 			"action": "index",
 			"token": "required",
 			"scopes": ["read", "read:bookmarks"],
-			"user": true
+			"user": true,
+			"params": { "names": ["limit", "max_id", "min_id", "since_id"], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -633,7 +763,11 @@
 			"action": "create",
 			"token": "required",
 			"scopes": ["write", "write:reports"],
-			"user": true
+			"user": true,
+			"params": {
+				"names": ["account_id", "category", "comment", "forward", "forward_to_domains[]", "rule_ids[]", "status_ids[]"],
+				"unresolved": []
+			}
 		},
 		{
 			"method": "GET",
@@ -642,7 +776,8 @@
 			"action": "index",
 			"token": "optional",
 			"scopes": null,
-			"user": false
+			"user": false,
+			"params": { "names": ["limit", "offset"], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -651,7 +786,8 @@
 			"action": "index",
 			"token": "required",
 			"scopes": ["read", "read:filters"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -660,7 +796,8 @@
 			"action": "create",
 			"token": "required",
 			"scopes": ["write", "write:filters"],
-			"user": true
+			"user": true,
+			"params": { "names": ["context[]", "expires_in", "irreversible", "phrase", "whole_word"], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -669,7 +806,8 @@
 			"action": "show",
 			"token": "required",
 			"scopes": ["read", "read:filters"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "PATCH",
@@ -678,7 +816,8 @@
 			"action": "update",
 			"token": "required",
 			"scopes": ["write", "write:filters"],
-			"user": true
+			"user": true,
+			"params": { "names": ["context[]", "expires_in", "irreversible", "phrase", "whole_word"], "unresolved": [] }
 		},
 		{
 			"method": "PUT",
@@ -687,7 +826,8 @@
 			"action": "update",
 			"token": "required",
 			"scopes": ["write", "write:filters"],
-			"user": true
+			"user": true,
+			"params": { "names": ["context[]", "expires_in", "irreversible", "phrase", "whole_word"], "unresolved": [] }
 		},
 		{
 			"method": "DELETE",
@@ -696,7 +836,8 @@
 			"action": "destroy",
 			"token": "required",
 			"scopes": ["write", "write:filters"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -705,7 +846,8 @@
 			"action": "index",
 			"token": "required",
 			"scopes": ["read", "read:accounts"],
-			"user": true
+			"user": true,
+			"params": { "names": ["limit", "max_id", "since_id"], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -714,7 +856,8 @@
 			"action": "index",
 			"token": "required",
 			"scopes": ["read", "read:statuses"],
-			"user": true
+			"user": true,
+			"params": { "names": ["timeline[]"], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -723,7 +866,8 @@
 			"action": "create",
 			"token": "required",
 			"scopes": ["write", "write:statuses"],
-			"user": true
+			"user": true,
+			"params": { "names": ["home[last_read_id]", "notifications[last_read_id]"], "unresolved": [] }
 		},
 		{
 			"method": "DELETE",
@@ -732,7 +876,8 @@
 			"action": "destroy",
 			"token": "required",
 			"scopes": ["write", "write:accounts"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "DELETE",
@@ -741,7 +886,8 @@
 			"action": "destroy",
 			"token": "required",
 			"scopes": ["write", "write:accounts"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -750,7 +896,8 @@
 			"action": "show",
 			"token": "required",
 			"scopes": null,
-			"user": false
+			"user": false,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -759,7 +906,8 @@
 			"action": "create",
 			"token": "none",
 			"scopes": null,
-			"user": false
+			"user": false,
+			"params": { "names": ["client_name", "redirect_uris", "redirect_uris[]", "scopes", "website"], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -768,7 +916,8 @@
 			"action": "index",
 			"token": "optional",
 			"scopes": null,
-			"user": false
+			"user": false,
+			"params": { "names": ["limit", "offset"], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -777,7 +926,8 @@
 			"action": "index",
 			"token": "optional",
 			"scopes": null,
-			"user": false
+			"user": false,
+			"params": { "names": ["limit", "offset"], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -786,7 +936,8 @@
 			"action": "index",
 			"token": "optional",
 			"scopes": null,
-			"user": false
+			"user": false,
+			"params": { "names": ["limit", "offset"], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -796,7 +947,8 @@
 			"token": "required",
 			"scopes": ["write", "write:accounts"],
 			"user": false,
-			"guards": ["require_user_owned_by_application!", "require_user_not_confirmed!"]
+			"guards": ["require_user_owned_by_application!", "require_user_not_confirmed!"],
+			"params": { "names": ["email"], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -805,7 +957,8 @@
 			"action": "check",
 			"token": "required",
 			"scopes": ["read", "read:accounts"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -815,7 +968,8 @@
 			"token": "none",
 			"scopes": null,
 			"user": false,
-			"guards": ["require_enabled_api!"]
+			"guards": ["require_enabled_api!"],
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -824,7 +978,8 @@
 			"action": "index",
 			"token": "none",
 			"scopes": null,
-			"user": false
+			"user": false,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -834,7 +989,8 @@
 			"token": "optional",
 			"scopes": null,
 			"user": false,
-			"guards": ["require_enabled_api!"]
+			"guards": ["require_enabled_api!"],
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -843,7 +999,8 @@
 			"action": "show",
 			"token": "none",
 			"scopes": null,
-			"user": false
+			"user": false,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -852,7 +1009,8 @@
 			"action": "show",
 			"token": "none",
 			"scopes": null,
-			"user": false
+			"user": false,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -861,7 +1019,8 @@
 			"action": "show",
 			"token": "none",
 			"scopes": null,
-			"user": false
+			"user": false,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -870,7 +1029,8 @@
 			"action": "show",
 			"token": "none",
 			"scopes": null,
-			"user": false
+			"user": false,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -879,7 +1039,8 @@
 			"action": "show",
 			"token": "none",
 			"scopes": null,
-			"user": false
+			"user": false,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -889,7 +1050,8 @@
 			"token": "none",
 			"scopes": null,
 			"user": false,
-			"guards": ["require_enabled_api!"]
+			"guards": ["require_enabled_api!"],
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -898,7 +1060,8 @@
 			"action": "show",
 			"token": "none",
 			"scopes": null,
-			"user": false
+			"user": false,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -907,7 +1070,8 @@
 			"action": "show",
 			"token": "none",
 			"scopes": null,
-			"user": false
+			"user": false,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -917,7 +1081,8 @@
 			"token": "none",
 			"scopes": null,
 			"user": false,
-			"guards": ["require_enabled_api!"]
+			"guards": ["require_enabled_api!"],
+			"params": { "names": ["q"], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -926,7 +1091,8 @@
 			"action": "show",
 			"token": "required",
 			"scopes": ["follow", "write", "write:blocks"],
-			"user": true
+			"user": true,
+			"params": { "names": ["domain"], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -935,7 +1101,8 @@
 			"action": "create",
 			"token": "required",
 			"scopes": ["follow", "write", "write:blocks"],
-			"user": true
+			"user": true,
+			"params": { "names": ["domain"], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -944,7 +1111,8 @@
 			"action": "show",
 			"token": "required",
 			"scopes": ["follow", "read", "read:blocks"],
-			"user": true
+			"user": true,
+			"params": { "names": ["limit", "max_id", "since_id"], "unresolved": [] }
 		},
 		{
 			"method": "DELETE",
@@ -953,7 +1121,8 @@
 			"action": "destroy",
 			"token": "required",
 			"scopes": ["follow", "write", "write:blocks"],
-			"user": true
+			"user": true,
+			"params": { "names": ["domain"], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -963,7 +1132,8 @@
 			"token": "optional",
 			"scopes": null,
 			"user": false,
-			"guards": ["require_enabled!"]
+			"guards": ["require_enabled!"],
+			"params": { "names": ["limit", "local", "offset", "order"], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -972,7 +1142,8 @@
 			"action": "authorize",
 			"token": "required",
 			"scopes": ["follow", "write", "write:follows"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -981,7 +1152,8 @@
 			"action": "reject",
 			"token": "required",
 			"scopes": ["follow", "write", "write:follows"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -990,7 +1162,8 @@
 			"action": "index",
 			"token": "required",
 			"scopes": ["follow", "read", "read:follows"],
-			"user": true
+			"user": true,
+			"params": { "names": ["limit", "max_id", "since_id"], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -999,7 +1172,8 @@
 			"action": "accept_bulk",
 			"token": "required",
 			"scopes": ["write", "write:notifications"],
-			"user": true
+			"user": true,
+			"params": { "names": ["id[]"], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -1008,7 +1182,8 @@
 			"action": "dismiss_bulk",
 			"token": "required",
 			"scopes": ["write", "write:notifications"],
-			"user": true
+			"user": true,
+			"params": { "names": ["id[]"], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -1017,7 +1192,8 @@
 			"action": "merged?",
 			"token": "required",
 			"scopes": ["read", "read:notifications"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -1026,7 +1202,8 @@
 			"action": "accept",
 			"token": "required",
 			"scopes": ["write", "write:notifications"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -1035,7 +1212,8 @@
 			"action": "dismiss",
 			"token": "required",
 			"scopes": ["write", "write:notifications"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -1044,7 +1222,8 @@
 			"action": "index",
 			"token": "required",
 			"scopes": ["read", "read:notifications"],
-			"user": true
+			"user": true,
+			"params": { "names": ["limit", "max_id", "min_id", "since_id"], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -1053,7 +1232,8 @@
 			"action": "show",
 			"token": "required",
 			"scopes": ["read", "read:notifications"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -1062,7 +1242,8 @@
 			"action": "show",
 			"token": "required",
 			"scopes": ["read", "read:notifications"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "PATCH",
@@ -1071,7 +1252,11 @@
 			"action": "update",
 			"token": "required",
 			"scopes": ["write", "write:notifications"],
-			"user": true
+			"user": true,
+			"params": {
+				"names": ["filter_new_accounts", "filter_not_followers", "filter_not_following", "filter_private_mentions"],
+				"unresolved": []
+			}
 		},
 		{
 			"method": "PUT",
@@ -1080,7 +1265,11 @@
 			"action": "update",
 			"token": "required",
 			"scopes": ["write", "write:notifications"],
-			"user": true
+			"user": true,
+			"params": {
+				"names": ["filter_new_accounts", "filter_not_followers", "filter_not_following", "filter_private_mentions"],
+				"unresolved": []
+			}
 		},
 		{
 			"method": "POST",
@@ -1089,7 +1278,8 @@
 			"action": "clear",
 			"token": "required",
 			"scopes": ["write", "write:notifications"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -1098,7 +1288,8 @@
 			"action": "unread_count",
 			"token": "required",
 			"scopes": ["read", "read:notifications"],
-			"user": true
+			"user": true,
+			"params": { "names": ["account_id", "exclude_types[]", "include_filtered", "limit", "types[]"], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -1107,7 +1298,8 @@
 			"action": "dismiss",
 			"token": "required",
 			"scopes": ["write", "write:notifications"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -1116,7 +1308,20 @@
 			"action": "index",
 			"token": "required",
 			"scopes": ["read", "read:notifications"],
-			"user": true
+			"user": true,
+			"params": {
+				"names": [
+					"account_id",
+					"exclude_types[]",
+					"include_filtered",
+					"limit",
+					"max_id",
+					"min_id",
+					"since_id",
+					"types[]"
+				],
+				"unresolved": []
+			}
 		},
 		{
 			"method": "GET",
@@ -1125,7 +1330,8 @@
 			"action": "show",
 			"token": "required",
 			"scopes": ["read", "read:notifications"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -1134,7 +1340,8 @@
 			"action": "show",
 			"token": "required",
 			"scopes": ["profile", "read", "read:accounts"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "PATCH",
@@ -1143,7 +1350,28 @@
 			"action": "update",
 			"token": "required",
 			"scopes": ["write", "write:accounts"],
-			"user": true
+			"user": true,
+			"params": {
+				"names": [
+					"attribution_domains[]",
+					"avatar",
+					"bot",
+					"discoverable",
+					"display_name",
+					"fields_attributes[][name]",
+					"fields_attributes[][value]",
+					"header",
+					"hide_collections",
+					"indexable",
+					"locked",
+					"note",
+					"source[language]",
+					"source[privacy]",
+					"source[quote_policy]",
+					"source[sensitive]"
+				],
+				"unresolved": []
+			}
 		},
 		{
 			"method": "GET",
@@ -1152,7 +1380,8 @@
 			"action": "show",
 			"token": "required",
 			"scopes": ["read", "read:accounts"],
-			"user": true
+			"user": true,
+			"params": { "names": ["following", "limit", "offset", "q", "resolve"], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -1161,7 +1390,8 @@
 			"action": "show",
 			"token": "optional",
 			"scopes": ["read", "read:accounts"],
-			"user": false
+			"user": false,
+			"params": { "names": ["acct"], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -1170,7 +1400,8 @@
 			"action": "index",
 			"token": "required",
 			"scopes": ["read", "read:follows"],
-			"user": true
+			"user": true,
+			"params": { "names": ["id[]", "with_suspended"], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -1179,7 +1410,8 @@
 			"action": "index",
 			"token": "required",
 			"scopes": ["read", "read:follows"],
-			"user": true
+			"user": true,
+			"params": { "names": ["id[]"], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -1188,7 +1420,21 @@
 			"action": "index",
 			"token": "optional",
 			"scopes": ["read", "read:statuses"],
-			"user": false
+			"user": false,
+			"params": {
+				"names": [
+					"exclude_reblogs",
+					"exclude_replies",
+					"limit",
+					"max_id",
+					"min_id",
+					"only_media",
+					"pinned",
+					"since_id",
+					"tagged"
+				],
+				"unresolved": []
+			}
 		},
 		{
 			"method": "GET",
@@ -1197,7 +1443,8 @@
 			"action": "index",
 			"token": "optional",
 			"scopes": ["read", "read:accounts"],
-			"user": false
+			"user": false,
+			"params": { "names": ["limit", "max_id", "since_id"], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -1206,7 +1453,8 @@
 			"action": "index",
 			"token": "optional",
 			"scopes": ["read", "read:accounts"],
-			"user": false
+			"user": false,
+			"params": { "names": ["limit", "max_id", "since_id"], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -1215,7 +1463,8 @@
 			"action": "index",
 			"token": "required",
 			"scopes": ["read", "read:lists"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -1224,7 +1473,8 @@
 			"action": "index",
 			"token": "required",
 			"scopes": null,
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -1233,7 +1483,8 @@
 			"action": "index",
 			"token": "none",
 			"scopes": null,
-			"user": false
+			"user": false,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -1242,7 +1493,8 @@
 			"action": "index",
 			"token": "optional",
 			"scopes": ["read", "read:accounts"],
-			"user": false
+			"user": false,
+			"params": { "names": ["limit", "max_id", "since_id"], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -1251,7 +1503,8 @@
 			"action": "follow",
 			"token": "required",
 			"scopes": ["follow", "write", "write:follows"],
-			"user": true
+			"user": true,
+			"params": { "names": ["languages[]", "notify", "reblogs"], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -1260,7 +1513,8 @@
 			"action": "unfollow",
 			"token": "required",
 			"scopes": ["follow", "write", "write:follows"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -1269,7 +1523,8 @@
 			"action": "remove_from_followers",
 			"token": "required",
 			"scopes": ["follow", "write", "write:follows"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -1278,7 +1533,8 @@
 			"action": "block",
 			"token": "required",
 			"scopes": ["follow", "write", "write:blocks"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -1287,7 +1543,8 @@
 			"action": "unblock",
 			"token": "required",
 			"scopes": ["follow", "write", "write:blocks"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -1296,7 +1553,8 @@
 			"action": "mute",
 			"token": "required",
 			"scopes": ["follow", "write", "write:mutes"],
-			"user": true
+			"user": true,
+			"params": { "names": ["duration", "notifications"], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -1305,7 +1563,8 @@
 			"action": "unmute",
 			"token": "required",
 			"scopes": ["follow", "write", "write:mutes"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -1314,7 +1573,8 @@
 			"action": "create",
 			"token": "required",
 			"scopes": ["write", "write:accounts"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -1323,7 +1583,8 @@
 			"action": "create",
 			"token": "required",
 			"scopes": ["write", "write:accounts"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -1332,7 +1593,8 @@
 			"action": "destroy",
 			"token": "required",
 			"scopes": ["write", "write:accounts"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -1341,7 +1603,8 @@
 			"action": "destroy",
 			"token": "required",
 			"scopes": ["write", "write:accounts"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -1350,7 +1613,8 @@
 			"action": "create",
 			"token": "required",
 			"scopes": ["write", "write:accounts"],
-			"user": true
+			"user": true,
+			"params": { "names": ["comment"], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -1359,7 +1623,8 @@
 			"action": "index",
 			"token": "optional",
 			"scopes": ["read", "read:accounts"],
-			"user": false
+			"user": false,
+			"params": { "names": ["id[]"], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -1369,7 +1634,21 @@
 			"token": "required",
 			"scopes": ["write", "write:accounts"],
 			"user": false,
-			"guards": ["require_client_credentials!"]
+			"guards": ["require_client_credentials!"],
+			"params": {
+				"names": [
+					"agreement",
+					"date_of_birth",
+					"email",
+					"invite_code",
+					"locale",
+					"password",
+					"reason",
+					"time_zone",
+					"username"
+				],
+				"unresolved": []
+			}
 		},
 		{
 			"method": "GET",
@@ -1378,7 +1657,8 @@
 			"action": "show",
 			"token": "optional",
 			"scopes": ["read", "read:accounts"],
-			"user": false
+			"user": false,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -1387,7 +1667,8 @@
 			"action": "follow",
 			"token": "required",
 			"scopes": ["follow", "write", "write:follows"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -1396,7 +1677,8 @@
 			"action": "unfollow",
 			"token": "required",
 			"scopes": ["follow", "write", "write:follows"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -1405,7 +1687,8 @@
 			"action": "feature",
 			"token": "required",
 			"scopes": ["write", "write:accounts"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -1414,7 +1697,8 @@
 			"action": "unfeature",
 			"token": "required",
 			"scopes": ["write", "write:accounts"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -1423,7 +1707,8 @@
 			"action": "show",
 			"token": "optional",
 			"scopes": null,
-			"user": false
+			"user": false,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -1432,7 +1717,8 @@
 			"action": "index",
 			"token": "required",
 			"scopes": ["follow", "read", "read:follows"],
-			"user": true
+			"user": true,
+			"params": { "names": ["limit", "max_id", "min_id", "since_id"], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -1441,7 +1727,8 @@
 			"action": "create",
 			"token": "required",
 			"scopes": ["write", "write:lists"],
-			"user": true
+			"user": true,
+			"params": { "names": ["account_ids[]"], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -1450,7 +1737,8 @@
 			"action": "show",
 			"token": "required",
 			"scopes": ["read", "read:lists"],
-			"user": true
+			"user": true,
+			"params": { "names": ["limit", "max_id", "since_id"], "unresolved": [] }
 		},
 		{
 			"method": "DELETE",
@@ -1459,7 +1747,8 @@
 			"action": "destroy",
 			"token": "required",
 			"scopes": ["write", "write:lists"],
-			"user": true
+			"user": true,
+			"params": { "names": ["account_ids[]"], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -1468,7 +1757,8 @@
 			"action": "index",
 			"token": "required",
 			"scopes": ["read", "read:lists"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -1477,7 +1767,8 @@
 			"action": "create",
 			"token": "required",
 			"scopes": ["write", "write:lists"],
-			"user": true
+			"user": true,
+			"params": { "names": ["exclusive", "replies_policy", "title"], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -1486,7 +1777,8 @@
 			"action": "show",
 			"token": "required",
 			"scopes": ["read", "read:lists"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "PATCH",
@@ -1495,7 +1787,8 @@
 			"action": "update",
 			"token": "required",
 			"scopes": ["write", "write:lists"],
-			"user": true
+			"user": true,
+			"params": { "names": ["exclusive", "replies_policy", "title"], "unresolved": [] }
 		},
 		{
 			"method": "PUT",
@@ -1504,7 +1797,8 @@
 			"action": "update",
 			"token": "required",
 			"scopes": ["write", "write:lists"],
-			"user": true
+			"user": true,
+			"params": { "names": ["exclusive", "replies_policy", "title"], "unresolved": [] }
 		},
 		{
 			"method": "DELETE",
@@ -1513,7 +1807,8 @@
 			"action": "destroy",
 			"token": "required",
 			"scopes": ["write", "write:lists"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -1522,7 +1817,8 @@
 			"action": "index",
 			"token": "required",
 			"scopes": ["read", "read:accounts"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -1531,7 +1827,8 @@
 			"action": "index",
 			"token": "required",
 			"scopes": ["read", "read:accounts"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -1540,7 +1837,8 @@
 			"action": "create",
 			"token": "required",
 			"scopes": ["write", "write:accounts"],
-			"user": true
+			"user": true,
+			"params": { "names": ["name"], "unresolved": [] }
 		},
 		{
 			"method": "DELETE",
@@ -1549,7 +1847,8 @@
 			"action": "destroy",
 			"token": "required",
 			"scopes": ["write", "write:accounts"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -1558,7 +1857,8 @@
 			"action": "create",
 			"token": "required",
 			"scopes": ["write", "write:statuses"],
-			"user": true
+			"user": true,
+			"params": { "names": ["choices[]"], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -1568,7 +1868,8 @@
 			"token": "optional",
 			"scopes": ["read", "read:statuses"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize @poll.status, :show?"]
+			"unresolved": ["Pundit policy: authorize @poll.status, :show?"],
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -1577,7 +1878,32 @@
 			"action": "create",
 			"token": "required",
 			"scopes": ["push"],
-			"user": true
+			"user": true,
+			"params": {
+				"names": [
+					"data[alerts][admin.report]",
+					"data[alerts][admin.sign_up]",
+					"data[alerts][annual_report]",
+					"data[alerts][favourite]",
+					"data[alerts][follow]",
+					"data[alerts][follow_request]",
+					"data[alerts][mention]",
+					"data[alerts][moderation_warning]",
+					"data[alerts][poll]",
+					"data[alerts][quote]",
+					"data[alerts][quoted_update]",
+					"data[alerts][reblog]",
+					"data[alerts][severed_relationships]",
+					"data[alerts][status]",
+					"data[alerts][update]",
+					"data[policy]",
+					"subscription[endpoint]",
+					"subscription[keys][auth]",
+					"subscription[keys][p256dh]",
+					"subscription[standard]"
+				],
+				"unresolved": []
+			}
 		},
 		{
 			"method": "GET",
@@ -1586,7 +1912,8 @@
 			"action": "show",
 			"token": "required",
 			"scopes": ["push"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "PATCH",
@@ -1595,7 +1922,28 @@
 			"action": "update",
 			"token": "required",
 			"scopes": ["push"],
-			"user": true
+			"user": true,
+			"params": {
+				"names": [
+					"data[alerts][admin.report]",
+					"data[alerts][admin.sign_up]",
+					"data[alerts][annual_report]",
+					"data[alerts][favourite]",
+					"data[alerts][follow]",
+					"data[alerts][follow_request]",
+					"data[alerts][mention]",
+					"data[alerts][moderation_warning]",
+					"data[alerts][poll]",
+					"data[alerts][quote]",
+					"data[alerts][quoted_update]",
+					"data[alerts][reblog]",
+					"data[alerts][severed_relationships]",
+					"data[alerts][status]",
+					"data[alerts][update]",
+					"data[policy]"
+				],
+				"unresolved": []
+			}
 		},
 		{
 			"method": "PUT",
@@ -1604,7 +1952,28 @@
 			"action": "update",
 			"token": "required",
 			"scopes": ["push"],
-			"user": true
+			"user": true,
+			"params": {
+				"names": [
+					"data[alerts][admin.report]",
+					"data[alerts][admin.sign_up]",
+					"data[alerts][annual_report]",
+					"data[alerts][favourite]",
+					"data[alerts][follow]",
+					"data[alerts][follow_request]",
+					"data[alerts][mention]",
+					"data[alerts][moderation_warning]",
+					"data[alerts][poll]",
+					"data[alerts][quote]",
+					"data[alerts][quoted_update]",
+					"data[alerts][reblog]",
+					"data[alerts][severed_relationships]",
+					"data[alerts][status]",
+					"data[alerts][update]",
+					"data[policy]"
+				],
+				"unresolved": []
+			}
 		},
 		{
 			"method": "DELETE",
@@ -1613,7 +1982,8 @@
 			"action": "destroy",
 			"token": "required",
 			"scopes": ["push"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -1624,7 +1994,8 @@
 			"scopes": ["admin:write", "admin:write:accounts"],
 			"user": false,
 			"guards": ["require_local_account!"],
-			"unresolved": ["Pundit policy: authorize @account.user, :enable?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize @account.user, :enable?; verify_authorized"],
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -1634,7 +2005,8 @@
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:accounts"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize @account, :unsensitive?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize @account, :unsensitive?; verify_authorized"],
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -1644,7 +2016,8 @@
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:accounts"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize @account, :unsilence?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize @account, :unsilence?; verify_authorized"],
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -1654,7 +2027,8 @@
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:accounts"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize @account, :unsuspend?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize @account, :unsuspend?; verify_authorized"],
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -1665,7 +2039,8 @@
 			"scopes": ["admin:write", "admin:write:accounts"],
 			"user": false,
 			"guards": ["require_local_account!"],
-			"unresolved": ["Pundit policy: authorize @account.user, :approve?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize @account.user, :approve?; verify_authorized"],
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -1676,7 +2051,8 @@
 			"scopes": ["admin:write", "admin:write:accounts"],
 			"user": false,
 			"guards": ["require_local_account!"],
-			"unresolved": ["Pundit policy: authorize @account.user, :reject?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize @account.user, :reject?; verify_authorized"],
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -1686,7 +2062,11 @@
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:accounts"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize @account, :show?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize @account, :show?; verify_authorized"],
+			"params": {
+				"names": ["report_id", "send_email_notification", "text", "type", "warning_preset_id"],
+				"unresolved": []
+			}
 		},
 		{
 			"method": "GET",
@@ -1696,7 +2076,30 @@
 			"token": "optional",
 			"scopes": ["admin:read", "admin:read:accounts"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize :account, :index?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize :account, :index?; verify_authorized"],
+			"params": {
+				"names": [
+					"active",
+					"by_domain",
+					"disabled",
+					"display_name",
+					"email",
+					"ip",
+					"limit",
+					"local",
+					"max_id",
+					"min_id",
+					"pending",
+					"remote",
+					"sensitized",
+					"silenced",
+					"since_id",
+					"staff",
+					"suspended",
+					"username"
+				],
+				"unresolved": []
+			}
 		},
 		{
 			"method": "GET",
@@ -1706,7 +2109,8 @@
 			"token": "optional",
 			"scopes": ["admin:read", "admin:read:accounts"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize @account, :show?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize @account, :show?; verify_authorized"],
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "DELETE",
@@ -1716,7 +2120,8 @@
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:accounts"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize @account, :destroy?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize @account, :destroy?; verify_authorized"],
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -1726,7 +2131,8 @@
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:reports"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize @report, :update?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize @report, :update?; verify_authorized"],
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -1736,7 +2142,8 @@
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:reports"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize @report, :update?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize @report, :update?; verify_authorized"],
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -1746,7 +2153,8 @@
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:reports"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize @report, :update?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize @report, :update?; verify_authorized"],
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -1756,7 +2164,8 @@
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:reports"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize @report, :update?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize @report, :update?; verify_authorized"],
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -1766,7 +2175,11 @@
 			"token": "optional",
 			"scopes": ["admin:read", "admin:read:reports"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize :report, :index?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize :report, :index?; verify_authorized"],
+			"params": {
+				"names": ["account_id", "limit", "max_id", "min_id", "resolved", "since_id", "target_account_id"],
+				"unresolved": []
+			}
 		},
 		{
 			"method": "GET",
@@ -1776,7 +2189,8 @@
 			"token": "optional",
 			"scopes": ["admin:read", "admin:read:reports"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize @report, :show?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize @report, :show?; verify_authorized"],
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "PATCH",
@@ -1786,7 +2200,8 @@
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:reports"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize @report, :update?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize @report, :update?; verify_authorized"],
+			"params": { "names": ["category", "rule_ids[]"], "unresolved": [] }
 		},
 		{
 			"method": "PUT",
@@ -1796,7 +2211,8 @@
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:reports"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize @report, :update?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize @report, :update?; verify_authorized"],
+			"params": { "names": ["category", "rule_ids[]"], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -1806,7 +2222,8 @@
 			"token": "optional",
 			"scopes": ["admin:read", "admin:read:domain_allows"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize :domain_allow, :index?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize :domain_allow, :index?; verify_authorized"],
+			"params": { "names": ["limit", "max_id", "min_id", "since_id"], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -1816,7 +2233,8 @@
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:domain_allows"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize :domain_allow, :create?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize :domain_allow, :create?; verify_authorized"],
+			"params": { "names": ["domain"], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -1826,7 +2244,8 @@
 			"token": "optional",
 			"scopes": ["admin:read", "admin:read:domain_allows"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize @domain_allow, :show?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize @domain_allow, :show?; verify_authorized"],
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "DELETE",
@@ -1836,7 +2255,8 @@
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:domain_allows"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize @domain_allow, :destroy?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize @domain_allow, :destroy?; verify_authorized"],
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -1846,7 +2266,8 @@
 			"token": "optional",
 			"scopes": ["admin:read", "admin:read:domain_blocks"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize :domain_block, :index?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize :domain_block, :index?; verify_authorized"],
+			"params": { "names": ["limit", "max_id", "min_id", "since_id"], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -1856,7 +2277,19 @@
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:domain_blocks"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize :domain_block, :create?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize :domain_block, :create?; verify_authorized"],
+			"params": {
+				"names": [
+					"domain",
+					"obfuscate",
+					"private_comment",
+					"public_comment",
+					"reject_media",
+					"reject_reports",
+					"severity"
+				],
+				"unresolved": []
+			}
 		},
 		{
 			"method": "GET",
@@ -1866,7 +2299,8 @@
 			"token": "optional",
 			"scopes": ["admin:read", "admin:read:domain_blocks"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize @domain_block, :show?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize @domain_block, :show?; verify_authorized"],
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "PATCH",
@@ -1876,7 +2310,11 @@
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:domain_blocks"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize @domain_block, :update?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize @domain_block, :update?; verify_authorized"],
+			"params": {
+				"names": ["obfuscate", "private_comment", "public_comment", "reject_media", "reject_reports", "severity"],
+				"unresolved": []
+			}
 		},
 		{
 			"method": "PUT",
@@ -1886,7 +2324,11 @@
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:domain_blocks"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize @domain_block, :update?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize @domain_block, :update?; verify_authorized"],
+			"params": {
+				"names": ["obfuscate", "private_comment", "public_comment", "reject_media", "reject_reports", "severity"],
+				"unresolved": []
+			}
 		},
 		{
 			"method": "DELETE",
@@ -1896,7 +2338,8 @@
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:domain_blocks"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize @domain_block, :destroy?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize @domain_block, :destroy?; verify_authorized"],
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -1906,7 +2349,8 @@
 			"token": "optional",
 			"scopes": ["admin:read", "admin:read:email_domain_blocks"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize :email_domain_block, :index?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize :email_domain_block, :index?; verify_authorized"],
+			"params": { "names": ["limit", "max_id", "min_id", "since_id"], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -1916,7 +2360,8 @@
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:email_domain_blocks"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize :email_domain_block, :create?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize :email_domain_block, :create?; verify_authorized"],
+			"params": { "names": ["allow_with_approval", "domain"], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -1926,7 +2371,8 @@
 			"token": "optional",
 			"scopes": ["admin:read", "admin:read:email_domain_blocks"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize @email_domain_block, :show?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize @email_domain_block, :show?; verify_authorized"],
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "DELETE",
@@ -1936,7 +2382,8 @@
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:email_domain_blocks"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize @email_domain_block, :destroy?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize @email_domain_block, :destroy?; verify_authorized"],
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -1946,7 +2393,8 @@
 			"token": "optional",
 			"scopes": ["admin:read", "admin:read:ip_blocks"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize :ip_block, :index?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize :ip_block, :index?; verify_authorized"],
+			"params": { "names": ["limit", "max_id", "min_id", "since_id"], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -1956,7 +2404,8 @@
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:ip_blocks"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize :ip_block, :create?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize :ip_block, :create?; verify_authorized"],
+			"params": { "names": ["comment", "expires_in", "ip", "severity"], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -1966,7 +2415,8 @@
 			"token": "optional",
 			"scopes": ["admin:read", "admin:read:ip_blocks"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize @ip_block, :show?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize @ip_block, :show?; verify_authorized"],
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "PATCH",
@@ -1976,7 +2426,8 @@
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:ip_blocks"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize @ip_block, :update?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize @ip_block, :update?; verify_authorized"],
+			"params": { "names": ["comment", "expires_in", "ip", "severity"], "unresolved": [] }
 		},
 		{
 			"method": "PUT",
@@ -1986,7 +2437,8 @@
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:ip_blocks"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize @ip_block, :update?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize @ip_block, :update?; verify_authorized"],
+			"params": { "names": ["comment", "expires_in", "ip", "severity"], "unresolved": [] }
 		},
 		{
 			"method": "DELETE",
@@ -1996,7 +2448,8 @@
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:ip_blocks"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize @ip_block, :destroy?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize @ip_block, :destroy?; verify_authorized"],
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -2006,7 +2459,8 @@
 			"token": "optional",
 			"scopes": ["admin:write"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize :tag, :review?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize :tag, :review?; verify_authorized"],
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -2016,7 +2470,8 @@
 			"token": "optional",
 			"scopes": ["admin:write"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize :tag, :review?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize :tag, :review?; verify_authorized"],
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -2025,7 +2480,8 @@
 			"action": "index",
 			"token": "optional",
 			"scopes": ["admin:read"],
-			"user": false
+			"user": false,
+			"params": { "names": ["limit", "offset"], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -2035,7 +2491,8 @@
 			"token": "optional",
 			"scopes": ["admin:write"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize :preview_card, :review?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize :preview_card, :review?; verify_authorized"],
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -2045,7 +2502,8 @@
 			"token": "optional",
 			"scopes": ["admin:write"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize :preview_card, :review?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize :preview_card, :review?; verify_authorized"],
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -2054,7 +2512,8 @@
 			"action": "index",
 			"token": "optional",
 			"scopes": ["admin:read"],
-			"user": false
+			"user": false,
+			"params": { "names": ["limit", "offset"], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -2064,7 +2523,8 @@
 			"token": "optional",
 			"scopes": ["admin:write"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize [:admin, :status], :review?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize [:admin, :status], :review?; verify_authorized"],
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -2074,7 +2534,8 @@
 			"token": "optional",
 			"scopes": ["admin:write"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize [:admin, :status], :review?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize [:admin, :status], :review?; verify_authorized"],
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -2083,7 +2544,8 @@
 			"action": "index",
 			"token": "optional",
 			"scopes": ["admin:read"],
-			"user": false
+			"user": false,
+			"params": { "names": ["limit", "offset"], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -2093,7 +2555,8 @@
 			"token": "optional",
 			"scopes": ["admin:write"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize :preview_card_provider, :review?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize :preview_card_provider, :review?; verify_authorized"],
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -2103,7 +2566,8 @@
 			"token": "optional",
 			"scopes": ["admin:write"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize :preview_card_provider, :review?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize :preview_card_provider, :review?; verify_authorized"],
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -2113,7 +2577,8 @@
 			"token": "optional",
 			"scopes": ["admin:read"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize :preview_card_provider, :index?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize :preview_card_provider, :index?; verify_authorized"],
+			"params": { "names": ["limit", "max_id", "min_id", "since_id"], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -2123,7 +2588,11 @@
 			"token": "optional",
 			"scopes": ["admin:read"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize :dashboard, :index?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize :dashboard, :index?; verify_authorized"],
+			"params": {
+				"names": ["end_at", "keys[]", "start_at"],
+				"unresolved": ["app/controllers/api/v1/admin/measures_controller.rb set_measures: params used whole `params`"]
+			}
 		},
 		{
 			"method": "POST",
@@ -2133,7 +2602,13 @@
 			"token": "optional",
 			"scopes": ["admin:read"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize :dashboard, :index?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize :dashboard, :index?; verify_authorized"],
+			"params": {
+				"names": ["end_at", "keys[]", "limit", "start_at"],
+				"unresolved": [
+					"app/controllers/api/v1/admin/dimensions_controller.rb set_dimensions: params used whole `params`"
+				]
+			}
 		},
 		{
 			"method": "POST",
@@ -2143,7 +2618,8 @@
 			"token": "optional",
 			"scopes": ["admin:read"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize :dashboard, :index?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize :dashboard, :index?; verify_authorized"],
+			"params": { "names": ["end_at", "frequency", "start_at"], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -2153,7 +2629,8 @@
 			"token": "optional",
 			"scopes": ["admin:read", "admin:read:canonical_email_blocks"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize :canonical_email_block, :test?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize :canonical_email_block, :test?; verify_authorized"],
+			"params": { "names": ["email"], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -2163,7 +2640,8 @@
 			"token": "optional",
 			"scopes": ["admin:read", "admin:read:canonical_email_blocks"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize :canonical_email_block, :index?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize :canonical_email_block, :index?; verify_authorized"],
+			"params": { "names": ["limit", "max_id", "min_id", "since_id"], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -2173,7 +2651,8 @@
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:canonical_email_blocks"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize :canonical_email_block, :create?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize :canonical_email_block, :create?; verify_authorized"],
+			"params": { "names": ["canonical_email_hash", "email"], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -2183,7 +2662,8 @@
 			"token": "optional",
 			"scopes": ["admin:read", "admin:read:canonical_email_blocks"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize @canonical_email_block, :show?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize @canonical_email_block, :show?; verify_authorized"],
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "DELETE",
@@ -2193,7 +2673,8 @@
 			"token": "optional",
 			"scopes": ["admin:write", "admin:write:canonical_email_blocks"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize @canonical_email_block, :destroy?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize @canonical_email_block, :destroy?; verify_authorized"],
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -2203,7 +2684,8 @@
 			"token": "optional",
 			"scopes": ["admin:read"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize :tag, :index?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize :tag, :index?; verify_authorized"],
+			"params": { "names": ["limit", "max_id", "min_id", "since_id"], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -2213,7 +2695,8 @@
 			"token": "optional",
 			"scopes": ["admin:read"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize @tag, :show?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize @tag, :show?; verify_authorized"],
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "PATCH",
@@ -2223,7 +2706,8 @@
 			"token": "optional",
 			"scopes": ["admin:write"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize @tag, :update?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize @tag, :update?; verify_authorized"],
+			"params": { "names": ["display_name", "listable", "trendable", "usable"], "unresolved": [] }
 		},
 		{
 			"method": "PUT",
@@ -2233,7 +2717,8 @@
 			"token": "optional",
 			"scopes": ["admin:write"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize @tag, :update?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize @tag, :update?; verify_authorized"],
+			"params": { "names": ["display_name", "listable", "trendable", "usable"], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -2243,7 +2728,22 @@
 			"token": "optional",
 			"scopes": ["read", "read:search"],
 			"user": false,
-			"guards": ["require_valid_pagination_options!"]
+			"guards": ["require_valid_pagination_options!"],
+			"params": {
+				"names": [
+					"account_id",
+					"exclude_unreviewed",
+					"following",
+					"limit",
+					"max_id",
+					"min_id",
+					"offset",
+					"q",
+					"resolve",
+					"type"
+				],
+				"unresolved": []
+			}
 		},
 		{
 			"method": "POST",
@@ -2252,7 +2752,8 @@
 			"action": "create",
 			"token": "required",
 			"scopes": ["write", "write:media"],
-			"user": true
+			"user": true,
+			"params": { "names": ["description", "file", "focus", "thumbnail"], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -2261,7 +2762,8 @@
 			"action": "index",
 			"token": "required",
 			"scopes": ["read", "read:accounts"],
-			"user": true
+			"user": true,
+			"params": { "names": ["limit", "offset"], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -2270,7 +2772,8 @@
 			"action": "show",
 			"token": "none",
 			"scopes": null,
-			"user": false
+			"user": false,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -2279,7 +2782,8 @@
 			"action": "index",
 			"token": "required",
 			"scopes": ["read", "read:filters"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -2288,7 +2792,8 @@
 			"action": "create",
 			"token": "required",
 			"scopes": ["write", "write:filters"],
-			"user": true
+			"user": true,
+			"params": { "names": ["keyword", "whole_word"], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -2297,7 +2802,8 @@
 			"action": "index",
 			"token": "required",
 			"scopes": ["read", "read:filters"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -2306,7 +2812,8 @@
 			"action": "create",
 			"token": "required",
 			"scopes": ["write", "write:filters"],
-			"user": true
+			"user": true,
+			"params": { "names": ["status_id"], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -2315,7 +2822,8 @@
 			"action": "index",
 			"token": "required",
 			"scopes": ["read", "read:filters"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -2324,7 +2832,20 @@
 			"action": "create",
 			"token": "required",
 			"scopes": ["write", "write:filters"],
-			"user": true
+			"user": true,
+			"params": {
+				"names": [
+					"context[]",
+					"expires_in",
+					"filter_action",
+					"keywords_attributes[][_destroy]",
+					"keywords_attributes[][id]",
+					"keywords_attributes[][keyword]",
+					"keywords_attributes[][whole_word]",
+					"title"
+				],
+				"unresolved": []
+			}
 		},
 		{
 			"method": "GET",
@@ -2333,7 +2854,8 @@
 			"action": "show",
 			"token": "required",
 			"scopes": ["read", "read:filters"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "PATCH",
@@ -2342,7 +2864,20 @@
 			"action": "update",
 			"token": "required",
 			"scopes": ["write", "write:filters"],
-			"user": true
+			"user": true,
+			"params": {
+				"names": [
+					"context[]",
+					"expires_in",
+					"filter_action",
+					"keywords_attributes[][_destroy]",
+					"keywords_attributes[][id]",
+					"keywords_attributes[][keyword]",
+					"keywords_attributes[][whole_word]",
+					"title"
+				],
+				"unresolved": []
+			}
 		},
 		{
 			"method": "PUT",
@@ -2351,7 +2886,20 @@
 			"action": "update",
 			"token": "required",
 			"scopes": ["write", "write:filters"],
-			"user": true
+			"user": true,
+			"params": {
+				"names": [
+					"context[]",
+					"expires_in",
+					"filter_action",
+					"keywords_attributes[][_destroy]",
+					"keywords_attributes[][id]",
+					"keywords_attributes[][keyword]",
+					"keywords_attributes[][whole_word]",
+					"title"
+				],
+				"unresolved": []
+			}
 		},
 		{
 			"method": "DELETE",
@@ -2360,7 +2908,8 @@
 			"action": "destroy",
 			"token": "required",
 			"scopes": ["write", "write:filters"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -2369,7 +2918,8 @@
 			"action": "show",
 			"token": "required",
 			"scopes": ["read", "read:filters"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "PATCH",
@@ -2378,7 +2928,8 @@
 			"action": "update",
 			"token": "required",
 			"scopes": ["write", "write:filters"],
-			"user": true
+			"user": true,
+			"params": { "names": ["keyword", "whole_word"], "unresolved": [] }
 		},
 		{
 			"method": "PUT",
@@ -2387,7 +2938,8 @@
 			"action": "update",
 			"token": "required",
 			"scopes": ["write", "write:filters"],
-			"user": true
+			"user": true,
+			"params": { "names": ["keyword", "whole_word"], "unresolved": [] }
 		},
 		{
 			"method": "DELETE",
@@ -2396,7 +2948,8 @@
 			"action": "destroy",
 			"token": "required",
 			"scopes": ["write", "write:filters"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -2405,7 +2958,8 @@
 			"action": "show",
 			"token": "required",
 			"scopes": ["read", "read:filters"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "DELETE",
@@ -2414,7 +2968,8 @@
 			"action": "destroy",
 			"token": "required",
 			"scopes": ["write", "write:filters"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -2424,7 +2979,27 @@
 			"token": "optional",
 			"scopes": ["admin:read", "admin:read:accounts"],
 			"user": false,
-			"unresolved": ["Pundit policy: authorize :account, :index?; verify_authorized"]
+			"unresolved": ["Pundit policy: authorize :account, :index?; verify_authorized"],
+			"params": {
+				"names": [
+					"by_domain",
+					"display_name",
+					"email",
+					"invited_by",
+					"ip",
+					"limit",
+					"max_id",
+					"min_id",
+					"origin",
+					"permissions",
+					"role_ids",
+					"role_ids[]",
+					"since_id",
+					"status",
+					"username"
+				],
+				"unresolved": []
+			}
 		},
 		{
 			"method": "GET",
@@ -2433,7 +3008,8 @@
 			"action": "show",
 			"token": "required",
 			"scopes": ["read", "read:notifications"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "PATCH",
@@ -2442,7 +3018,17 @@
 			"action": "update",
 			"token": "required",
 			"scopes": ["write", "write:notifications"],
-			"user": true
+			"user": true,
+			"params": {
+				"names": [
+					"for_limited_accounts",
+					"for_new_accounts",
+					"for_not_followers",
+					"for_not_following",
+					"for_private_mentions"
+				],
+				"unresolved": []
+			}
 		},
 		{
 			"method": "PUT",
@@ -2451,7 +3037,17 @@
 			"action": "update",
 			"token": "required",
 			"scopes": ["write", "write:notifications"],
-			"user": true
+			"user": true,
+			"params": {
+				"names": [
+					"for_limited_accounts",
+					"for_new_accounts",
+					"for_not_followers",
+					"for_not_following",
+					"for_private_mentions"
+				],
+				"unresolved": []
+			}
 		},
 		{
 			"method": "POST",
@@ -2460,7 +3056,8 @@
 			"action": "clear",
 			"token": "required",
 			"scopes": ["write", "write:notifications"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -2469,7 +3066,11 @@
 			"action": "unread_count",
 			"token": "required",
 			"scopes": ["read", "read:notifications"],
-			"user": true
+			"user": true,
+			"params": {
+				"names": ["exclude_types[]", "grouped_types", "include_filtered", "limit", "types[]"],
+				"unresolved": []
+			}
 		},
 		{
 			"method": "POST",
@@ -2478,7 +3079,8 @@
 			"action": "dismiss",
 			"token": "required",
 			"scopes": ["write", "write:notifications"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -2487,7 +3089,8 @@
 			"action": "index",
 			"token": "required",
 			"scopes": ["read", "read:notifications"],
-			"user": true
+			"user": true,
+			"params": { "names": ["limit", "max_id", "since_id"], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -2496,7 +3099,22 @@
 			"action": "index",
 			"token": "required",
 			"scopes": ["read", "read:notifications"],
-			"user": true
+			"user": true,
+			"params": {
+				"names": [
+					"exclude_types[]",
+					"expand_accounts",
+					"grouped_types",
+					"grouped_types[]",
+					"include_filtered",
+					"limit",
+					"max_id",
+					"min_id",
+					"since_id",
+					"types[]"
+				],
+				"unresolved": []
+			}
 		},
 		{
 			"method": "GET",
@@ -2505,7 +3123,8 @@
 			"action": "show",
 			"token": "required",
 			"scopes": ["read", "read:notifications"],
-			"user": true
+			"user": true,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "PATCH",
@@ -2514,7 +3133,8 @@
 			"action": "update",
 			"token": "required",
 			"scopes": null,
-			"user": true
+			"user": true,
+			"params": { "names": ["data"], "unresolved": [] }
 		},
 		{
 			"method": "PUT",
@@ -2523,7 +3143,8 @@
 			"action": "update",
 			"token": "required",
 			"scopes": null,
-			"user": true
+			"user": true,
+			"params": { "names": ["data"], "unresolved": [] }
 		},
 		{
 			"method": "GET",
@@ -2533,7 +3154,8 @@
 			"token": "optional",
 			"scopes": null,
 			"user": false,
-			"unresolved": ["Pundit policy: authorize @status, :show?"]
+			"unresolved": ["Pundit policy: authorize @status, :show?"],
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -2542,7 +3164,32 @@
 			"action": "create",
 			"token": "required",
 			"scopes": null,
-			"user": true
+			"user": true,
+			"params": {
+				"names": [
+					"data[alerts][admin.report]",
+					"data[alerts][admin.sign_up]",
+					"data[alerts][annual_report]",
+					"data[alerts][favourite]",
+					"data[alerts][follow]",
+					"data[alerts][follow_request]",
+					"data[alerts][mention]",
+					"data[alerts][moderation_warning]",
+					"data[alerts][poll]",
+					"data[alerts][quote]",
+					"data[alerts][quoted_update]",
+					"data[alerts][reblog]",
+					"data[alerts][severed_relationships]",
+					"data[alerts][status]",
+					"data[alerts][update]",
+					"data[policy]",
+					"subscription[endpoint]",
+					"subscription[keys][auth]",
+					"subscription[keys][p256dh]",
+					"subscription[standard]"
+				],
+				"unresolved": []
+			}
 		},
 		{
 			"method": "PATCH",
@@ -2551,7 +3198,28 @@
 			"action": "update",
 			"token": "required",
 			"scopes": null,
-			"user": true
+			"user": true,
+			"params": {
+				"names": [
+					"data[alerts][admin.report]",
+					"data[alerts][admin.sign_up]",
+					"data[alerts][annual_report]",
+					"data[alerts][favourite]",
+					"data[alerts][follow]",
+					"data[alerts][follow_request]",
+					"data[alerts][mention]",
+					"data[alerts][moderation_warning]",
+					"data[alerts][poll]",
+					"data[alerts][quote]",
+					"data[alerts][quoted_update]",
+					"data[alerts][reblog]",
+					"data[alerts][severed_relationships]",
+					"data[alerts][status]",
+					"data[alerts][update]",
+					"data[policy]"
+				],
+				"unresolved": []
+			}
 		},
 		{
 			"method": "PUT",
@@ -2560,7 +3228,28 @@
 			"action": "update",
 			"token": "required",
 			"scopes": null,
-			"user": true
+			"user": true,
+			"params": {
+				"names": [
+					"data[alerts][admin.report]",
+					"data[alerts][admin.sign_up]",
+					"data[alerts][annual_report]",
+					"data[alerts][favourite]",
+					"data[alerts][follow]",
+					"data[alerts][follow_request]",
+					"data[alerts][mention]",
+					"data[alerts][moderation_warning]",
+					"data[alerts][poll]",
+					"data[alerts][quote]",
+					"data[alerts][quoted_update]",
+					"data[alerts][reblog]",
+					"data[alerts][severed_relationships]",
+					"data[alerts][status]",
+					"data[alerts][update]",
+					"data[policy]"
+				],
+				"unresolved": []
+			}
 		},
 		{
 			"method": "DELETE",
@@ -2569,7 +3258,8 @@
 			"action": "destroy",
 			"token": "none",
 			"scopes": null,
-			"user": false
+			"user": false,
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -2579,7 +3269,8 @@
 			"token": "none",
 			"scopes": null,
 			"user": false,
-			"guards": ["require_authentication"]
+			"guards": ["require_authentication"],
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -2589,7 +3280,8 @@
 			"token": "none",
 			"scopes": null,
 			"user": false,
-			"guards": ["require_authentication"]
+			"guards": ["require_authentication"],
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -2599,7 +3291,8 @@
 			"token": "none",
 			"scopes": null,
 			"user": false,
-			"guards": ["require_authentication"]
+			"guards": ["require_authentication"],
+			"params": { "names": ["category", "maxCount"], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -2609,7 +3302,13 @@
 			"token": "none",
 			"scopes": null,
 			"user": false,
-			"guards": ["require_authentication"]
+			"guards": ["require_authentication"],
+			"params": {
+				"names": ["category", "maxBatchSize", "subscriptionType"],
+				"unresolved": [
+					"app/controllers/api/fasp/data_sharing/v0/event_subscriptions_controller.rb subscription_params: any hash `threshold: {}`"
+				]
+			}
 		},
 		{
 			"method": "DELETE",
@@ -2619,7 +3318,8 @@
 			"token": "none",
 			"scopes": null,
 			"user": false,
-			"guards": ["require_authentication"]
+			"guards": ["require_authentication"],
+			"params": { "names": [], "unresolved": [] }
 		},
 		{
 			"method": "POST",
@@ -2628,7 +3328,8 @@
 			"action": "create",
 			"token": "none",
 			"scopes": null,
-			"user": false
+			"user": false,
+			"params": { "names": ["baseUrl", "name", "publicKey", "serverId"], "unresolved": [] }
 		}
 	]
 }

@@ -31,7 +31,12 @@ async function checkout(files: Record<string, string>) {
 	}
 }
 
-type Entry = { method: string; path: string; unresolved?: string[] }
+type Entry = {
+	method: string
+	path: string
+	unresolved?: string[]
+	params?: { names: string[]; unresolved: string[] }
+}
 
 const route = (path: string, method = 'GET') =>
 	(mastodonAccessTable(dir).routes as Entry[]).find((r) => r.path === path && r.method === method)
@@ -146,5 +151,301 @@ describe('mastodon-scopes.mjs', () => {
 			'GET /oauth/userinfo',
 			'POST /oauth/userinfo',
 		])
+	})
+})
+
+// The Ruby forms are copied from Mastodon v4.5.11's controllers, trimmed to what the extraction reads.
+describe('mastodon-scopes.mjs request parameters', () => {
+	const params = (path: string, method = 'GET') => route(path, method)?.params
+
+	const api = (lines: string) => `namespace :api do\n  namespace :v1 do\n${lines}\n  end\nend\n`
+
+	it("reads an alias of params.require, a method's permit by the keys read, and a presence check", async () => {
+		await checkout({
+			'config/routes/api.rb': api(
+				'    resource :credentials, only: [:update], path: "accounts/update_credentials"\n    resources :statuses, only: [:create, :update]'
+			),
+			'app/controllers/api/v1/credentials_controller.rb': [
+				'class Api::V1::CredentialsController < Api::BaseController',
+				'  def update',
+				'    UpdateAccountService.new.call(@account, account_params, raise_error: true)',
+				'    current_user.update(user_params) if user_params',
+				'  end',
+				'',
+				'  private',
+				'',
+				'  def account_params',
+				'    params.permit(:display_name, :avatar, attribution_domains: [])',
+				'  end',
+				'',
+				'  def user_params',
+				'    return nil if params[:source].blank?',
+				'',
+				'    source_params = params.require(:source)',
+				'',
+				'    {',
+				'      default_privacy: source_params.fetch(:privacy, @account.user.setting_default_privacy),',
+				'      default_language: source_params[:language],',
+				'    }',
+				'  end',
+				'end',
+				'',
+			].join('\n'),
+			'app/controllers/api/v1/statuses_controller.rb': [
+				'class Api::V1::StatusesController < Api::BaseController',
+				'  before_action :set_thread, only: [:create]',
+				'',
+				'  def create',
+				'    PostStatusService.new.call(text: status_params[:status], poll: status_params[:poll], x: status_params[:extra])',
+				'  end',
+				'',
+				'  def update',
+				'    UpdateStatusService.new.call(text: status_params[:status], media_ids: status_params[:media_ids])',
+				'  end',
+				'',
+				'  private',
+				'',
+				'  def set_thread',
+				'    @thread = Status.find(status_params[:in_reply_to_id]) if status_params[:in_reply_to_id].present?',
+				'  end',
+				'',
+				'  def status_params',
+				'    params.permit(:status, :in_reply_to_id, media_ids: [], poll: [:multiple, options: []], extra: [:a])',
+				'  end',
+				'end',
+				'',
+			].join('\n'),
+		})
+		expect(params('/api/v1/accounts/update_credentials', 'PATCH')).toEqual({
+			names: ['attribution_domains[]', 'avatar', 'display_name', 'source[language]', 'source[privacy]'],
+			unresolved: [],
+		})
+		// The Ruby does not fix whether a nested permit is a record or a list of records: poll's is in PERMIT_SHAPES,
+		// extra's is not.
+		const shape =
+			'app/controllers/api/v1/statuses_controller.rb status_params: shape of `extra:` (a record or a list of records: add it to PERMIT_SHAPES)'
+		// The callback applies to create only; update reads the keys it takes of status_params, not the whole permit.
+		expect(params('/api/v1/statuses', 'POST')).toEqual({
+			names: ['in_reply_to_id', 'poll[multiple]', 'poll[options][]', 'status'],
+			unresolved: [shape],
+		})
+		expect(params('/api/v1/statuses/:id', 'PATCH')).toEqual({ names: ['media_ids[]', 'status'], unresolved: [shape] })
+	})
+
+	it('reads truthy_param?, limit_param, conditions of callbacks, and Array(params[:x]) as a list', async () => {
+		await checkout({
+			'config/routes/api.rb': api('    get :search, to: "search#index"\n    resources :relationships, only: :index'),
+			'app/controllers/api/v1/search_controller.rb': [
+				'class Api::V1::SearchController < Api::BaseController',
+				'  before_action :validate_search_params!',
+				'  before_action :remote_resolve_error, if: :remote_resolve_requested?',
+				'',
+				'  def index',
+				'    @search = Search.new(search_results)',
+				'  end',
+				'',
+				'  private',
+				'',
+				'  def validate_search_params!',
+				'    params.require(:q)',
+				'  end',
+				'',
+				'  def remote_resolve_error',
+				"    render json: { error: 'no' }, status: 401",
+				'  end',
+				'',
+				'  def remote_resolve_requested?',
+				'    truthy_param?(:resolve)',
+				'  end',
+				'',
+				'  def search_results',
+				'    SearchService.new.call(params[:q], limit_param(RESULTS_LIMIT), search_params.merge(following: truthy_param?(:following)))',
+				'  end',
+				'',
+				'  def search_params',
+				'    params.permit(:type, :offset)',
+				'  end',
+				'end',
+				'',
+			].join('\n'),
+			'app/controllers/api/v1/relationships_controller.rb': [
+				'class Api::V1::RelationshipsController < Api::BaseController',
+				'  def index',
+				'    render json: Account.where(id: account_ids)',
+				'  end',
+				'',
+				'  private',
+				'',
+				'  def account_ids',
+				'    Array(params[:id]).map(&:to_i)',
+				'  end',
+				'end',
+				'',
+			].join('\n'),
+		})
+		expect(params('/api/v1/search')).toEqual({
+			names: ['following', 'limit', 'offset', 'q', 'resolve', 'type'],
+			unresolved: [],
+		})
+		expect(params('/api/v1/relationships')).toEqual({ names: ['id[]'], unresolved: [] })
+	})
+
+	it('follows helpers through an inherited method and the concerns a controller includes, and ends a cycle', async () => {
+		await checkout({
+			'config/routes/api.rb':
+				'namespace :api do\n  namespace :v2 do\n    resources :media, only: [:create]\n  end\nend\n',
+			// v2 media reaches its permit through two hops: its own helper, then one inherited from v1.
+			'app/controllers/api/v1/media_controller.rb': [
+				'class Api::V1::MediaController < Api::BaseController',
+				'  private',
+				'',
+				'  def media_attachment_params',
+				'    params.permit(:file, :thumbnail, :description, :focus)',
+				'  end',
+				'end',
+				'',
+			].join('\n'),
+			'app/controllers/api/v2/media_controller.rb': [
+				'class Api::V2::MediaController < Api::V1::MediaController',
+				'  include Api::Paging',
+				'',
+				'  def create',
+				'    @media_attachment = current_account.media_attachments.create!(media_and_delay_params)',
+				'    page_hint',
+				'  end',
+				'',
+				'  private',
+				'',
+				'  def media_and_delay_params',
+				'    { delay_processing: true }.merge(media_attachment_params)',
+				'  end',
+				'end',
+				'',
+			].join('\n'),
+			'app/controllers/concerns/api/paging.rb': [
+				'module Api::Paging',
+				'  def page_hint',
+				'    params[:min_id] if again',
+				'  end',
+				'',
+				'  def again',
+				'    page_hint',
+				'  end',
+				'end',
+				'',
+			].join('\n'),
+		})
+		expect(params('/api/v2/media', 'POST')).toEqual({
+			names: ['description', 'file', 'focus', 'min_id', 'thumbnail'],
+			unresolved: [],
+		})
+	})
+
+	it('reads expect() records, slice(...).permit, and constants holding a literal list or the keys of a hash', async () => {
+		await checkout({
+			'config/routes/api.rb': api('    resource :subscription, only: [:create]\n    resources :accounts, only: :index'),
+			'app/controllers/api/v1/subscriptions_controller.rb': [
+				'class Api::V1::SubscriptionsController < Api::BaseController',
+				'  def create',
+				'    Web::PushSubscription.create!(endpoint: subscription_params[:endpoint], key_auth: subscription_params[:keys][:auth], data: data_params)',
+				'  end',
+				'',
+				'  private',
+				'',
+				'  def subscription_params',
+				'    params.expect(subscription: [:endpoint, keys: [:auth, :p256dh]])',
+				'  end',
+				'',
+				'  def data_params',
+				'    params.expect(data: [:policy, alerts: Notification::TYPES])',
+				'  end',
+				'end',
+				'',
+			].join('\n'),
+			'app/models/notification.rb': [
+				'class Notification < ApplicationRecord',
+				'  PROPERTIES = {',
+				'    mention: {',
+				'      filterable: true,',
+				'    }.freeze,',
+				"    'admin.sign_up': {",
+				'      filterable: false,',
+				'    }.freeze,',
+				'  }.freeze',
+				'',
+				'  TYPES = PROPERTIES.keys.freeze',
+				'end',
+				'',
+			].join('\n'),
+			'app/controllers/api/v1/accounts_controller.rb': [
+				'class Api::V1::AccountsController < Api::BaseController',
+				'  FILTER_PARAMS = %i(',
+				'    local',
+				'    by_domain',
+				'  ).freeze',
+				'',
+				'  def index',
+				'    AccountFilter.new(filter_params).results',
+				'  end',
+				'',
+				'  private',
+				'',
+				'  def filter_params',
+				'    params.slice(*FILTER_PARAMS).permit(*FILTER_PARAMS)',
+				'  end',
+				'end',
+				'',
+			].join('\n'),
+		})
+		expect(params('/api/v1/subscription', 'POST')).toEqual({
+			names: [
+				'data[alerts][admin.sign_up]',
+				'data[alerts][mention]',
+				'data[policy]',
+				'subscription[endpoint]',
+				'subscription[keys][auth]',
+			],
+			unresolved: [],
+		})
+		expect(params('/api/v1/accounts')).toEqual({ names: ['by_domain', 'local'], unresolved: [] })
+	})
+
+	it('leaves what it cannot name unresolved, and drops path parameters and Rails keys', async () => {
+		await checkout({
+			'config/routes/api.rb': api('    resources :measures, only: [:create, :update]'),
+			'app/controllers/api/v1/measures_controller.rb': [
+				'class Api::V1::MeasuresController < Api::BaseController',
+				'  def create',
+				'    Measure.retrieve(params[:keys], params[:id], params[:format], params)',
+				'    params[key_name]',
+				'    params.permit!',
+				'    params.permit(threshold: {})',
+				'    missing_params[:a]',
+				'  end',
+				'',
+				'  def update',
+				'    Measure.find(params[:id]).update!(params.to_unsafe_h)',
+				'  end',
+				'end',
+				'',
+			].join('\n'),
+		})
+		const file = 'app/controllers/api/v1/measures_controller.rb'
+		// params[:format] is Rails' own key.
+		expect(params('/api/v1/measures', 'POST')).toEqual({
+			names: ['id', 'keys'],
+			unresolved: [
+				`${file} create: any hash \`threshold: {}\``,
+				`${file} create: dynamic key \`params[key_name]\``,
+				`${file} create: params used whole \`params)\``,
+				`${file} create: unsupported .permit! \`params.permit!\``,
+				`${file}: method missing_params not found`,
+			],
+		})
+		// :id is the route's path parameter.
+		expect(params('/api/v1/measures/:id', 'PATCH')).toEqual({
+			names: [],
+			unresolved: [`${file} update: unsupported .to_unsafe_h \`params.to_unsafe_h)\``],
+		})
 	})
 })
