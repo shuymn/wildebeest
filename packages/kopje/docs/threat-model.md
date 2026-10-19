@@ -363,6 +363,14 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `src/domain/actors.ts`; `test/accounts.test.ts` ("follower lists for the viewer (R13)"), `test/account-reads.test.ts`
   ("shows no followers of an account that hides its network"), `test/federation.test.ts` ("shows only the size of the
   collections of an actor that hides its network"), `test/policy-oracle.test.ts`, `test/policy-endpoints.test.ts`.
+  Follow suggestions (R39) count only accepted follows on both sides: the viewer's follows of sources whose following
+  R13 shows them, and those sources' follows of candidates R12 lists to them, so a counted edge is one the source's
+  following list shows the viewer; a pending follow by the viewer only keeps its target out. Kopje also asks the source
+  to be available and not to block the viewer, which Mastodon's `FriendsOfFriendsSource` does not. _Gap:_ the edge
+  window counts each of a source's newest 100 follows, so a candidate's absence can tell the viewer that one more of
+  them is an account the list hides from them (docs/visibility.md, "Suggestions"); accepted. _Enforced (main):_
+  `suggestionSourceSql` and `suggestionCandidateSql` in `src/domain/audience.ts`, `suggestions` in
+  `src/domain/suggestions.ts`; `test/suggestions.test.ts`, `test/policy-endpoints.test.ts`.
 - **VIS-9: only the followed side accepts.** A pending follow of a local account becomes `accepted` only by that
   account's own authorize call; a pending remote follow only by an `Accept` that passes ID-6. _Enforced (main):_ `answerFollowRequest` in `src/domain/accounts.ts` (`POST
 /api/v1/follow_requests/:id/authorize` and `/reject`, the viewer from the credential; a remote requester gets the
@@ -1343,7 +1351,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   (`src/mastodon/blocks.ts`). _Enforced (main):_ `GET /api/v1/instance/peers` lists at most
   10,000 domains (`MAX_PEERS` in `src/domain/instance.ts`); `familiar_followers` reads at most 20 ids and shows at
   most 80 accounts for each (`src/domain/accounts.ts`); `test/instance-reads.test.ts` ("bounds the peers"),
-  `test/account-reads.test.ts` ("bounds the ids and the accounts shown"). _Enforced (main)_ for the profile fields
+  `test/account-reads.test.ts` ("bounds the ids and the accounts shown"). _Enforced (main):_ follow suggestions answer
+  at most 40 accounts (`SUGGESTIONS_KEPT`) within `ANSWER_BYTES` in both versions, v2's wrapper counted with each
+  account (`src/domain/suggestions.ts`); `test/suggestions-bounds.test.ts` ("answers SUGGESTIONS_KEPT accounts at
+  their bounds"). _Enforced (main)_ for the profile fields
   of each presented account: a remote account's row carries at most 16 fields, each name and value cut, 32 KiB of
   JSON in all, chosen in SQL from the stored actor document; the presenter then shows only the leading fields whose
   sanitized names and values fit 32 KiB once serialized as JSON, dropping the rest whole. So one account answers at
@@ -1667,7 +1678,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   received in the last seven days only, a range of the (name, status_id) index of public hashtags cut by status id, so
   the work follows the instance's own receive volume (ids carry publication time, or receipt time where a cutover kept them); the rules
   read only their setting; familiar followers reads at most 10,000 of the viewer's accepted follows (above
-  Mastodon's default follow limit of 7,500) and checks each against the account through the pair index; `test/instance-reads.test.ts`, `test/tags.test.ts`,
+  Mastodon's default follow limit of 7,500) and checks each against the account through the pair index; suggestions
+  read windows of follow ids as ranges of `follows_following` (the viewer's 1,000 newest follows, each source's 100
+  newest, 10,000 edges in all) whatever the planner's statistics, and judge at most 10,000 distinct candidates,
+  283,844 rows at the measured maximum (docs/visibility.md, "Read bounds"; `test/suggestions-bounds.test.ts`: the plan
+  with fresh and stale statistics, rows read below and past each window); `test/instance-reads.test.ts`, `test/tags.test.ts`,
   `test/account-reads.test.ts` (rows read stay flat as accounts per domain, accounts known, statuses outside the
   window, and the account's other followers grow). _Enforced (main)_ for scheduled statuses: a page reads the
   account's own index by id, and a publication round reads the due ones through the index by time, so neither grows

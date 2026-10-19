@@ -11,7 +11,11 @@
 --
 -- The rows go with their local account (ON DELETE CASCADE). The cutover carries none: legacy has no suggestions.
 --
--- Cost: a new empty table and its index; no existing row is read.
+-- Cost: a new empty table and its index; no existing row is read. Measured on the benchmark store of
+-- test/bench/migration-cost.ts (1,000,000 accounts, 3,000,000 follows, 2,000,000 statuses and the rest of that store)
+-- in workerd's local Durable Object SQLite: 6,554 ms for the upgrade of this file through the kernel, within the 10,000
+-- ms each migration file may take; it is the overhead of an upgrade on a store that size (0046_instance_domain_blocks,
+-- which also only adds a table, took 6,522 ms in the next run).
 
 CREATE TABLE follow_recommendation_mutes (
   account_id TEXT NOT NULL REFERENCES local_accounts (account_id) ON DELETE CASCADE,

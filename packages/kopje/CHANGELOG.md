@@ -8,6 +8,33 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+### Added
+
+- Follow suggestions (`GET /api/v1/suggestions` and `/api/v2/suggestions`, which used to answer `[]`): the accounts
+  the people you follow follow, Mastodon's "friends of friends", ranked by how many of them follow each account, then
+  by follower count (fewest first), then newest first. Only accounts that chose to be discoverable are suggested, never
+  one you follow or requested to follow, block, mute, or block the domain of, one that blocks you, or an unavailable
+  one; a follow only counts when you are shown that account's following list. Mastodon's other sources (accounts the
+  admin features, trending accounts, similar profiles) are not offered. v2 shows each with
+  `"sources": ["friends_of_friends"]`.
+    - The ranking reads bounded windows (your 1,000 newest follows, each one's 100 newest follows, 10,000 in all), so
+      it is an approximation of Mastodon's: a follow outside them does not count.
+    - Kopje does not learn a remote account's follower count, so it ranks one as having none: at equal counts, remote
+      accounts come before local ones.
+    - At most 40 accounts are suggested; an offset of 40 or more answers `[]`, where Mastodon answers 500. There is no
+      15-minute cache: the list is worked out on each request, so an offset is stable only while follows, blocks,
+      mutes and dismissals stay the same.
+- Dismissing a suggestion (`DELETE /api/v1/suggestions/:id`) is stored, and the account is not suggested again; it
+  still answers `{}` whatever the id.
+
+### Instance changes
+
+- Store schema: adds one migration, applied on the first request after the deploy; a rollback to an earlier version
+  needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
+    - `0050_follow_recommendation_mutes`: the table of dismissed suggestions. It adds an empty table and reads nothing:
+      on the benchmark store its upgrade took 6.6 seconds, the overhead of an upgrade on a store that size.
+- `wrangler.jsonc`: unchanged.
+
 ## [0.1.0-rc.17] - 2026-10-19
 
 A seventeenth release candidate of the first release, published under the npm dist-tag `next`.
