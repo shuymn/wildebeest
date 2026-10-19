@@ -12,6 +12,7 @@ import {
 	seedAccount,
 	setSetting,
 } from './api-helpers'
+import { NOW } from './app-helpers'
 import { PNG_PLAIN } from './fixtures/images'
 import mastodon from './fixtures/mastodon-4.5.11-api-access.json'
 import type { Read, ReadMethod, RouteObservation } from './mastodon-conformance'
@@ -75,7 +76,7 @@ export type World = {
 	h: ApiHarness
 	owner: User
 	bob: User
-	// A remote account, and one only for actions that change it (blocks, mutes, notes).
+	// A remote account (carol@remote.example).
 	remote: string
 	app: Awaited<ReturnType<typeof registerApp>>
 	ids: Record<string, string>
@@ -115,7 +116,6 @@ export async function world(): Promise<World> {
 	}
 	const remote = await seedAccount(h.store, { username: 'carol', domain: 'remote.example' })
 	const ids: Record<string, string> = { remote }
-	ids.other = await seedAccount(h.store, { username: 'dave', domain: 'remote.example' })
 	await ok('PATCH', '/api/v1/accounts/update_credentials', { locked: true })
 
 	const status = await ok<{ id: string }>('POST', '/api/v1/statuses', { status: 'hello #kopje', visibility: 'public' })
@@ -161,7 +161,7 @@ export async function world(): Promise<World> {
 	ids.scheduled = (
 		await ok<{ id: string }>('POST', '/api/v1/statuses', {
 			status: 'later',
-			scheduled_at: new Date(Date.now() + 86_400_000).toISOString(),
+			scheduled_at: new Date(NOW + 86_400_000).toISOString(),
 		})
 	).id
 	ids.report = (await ok<{ id: string }>('POST', '/api/v1/reports', { account_id: remote, comment: 'spam' })).id
@@ -213,11 +213,6 @@ export async function appToken(w: World): Promise<string> {
 	return (await response.json<{ access_token: string }>()).access_token
 }
 
-// A fresh token of the owner from the world's app.
-export async function ownerToken(w: World): Promise<string> {
-	return (await login(w.h, { app: w.app, email: OWNER_EMAIL, scope: ALL_SCOPES })).token
-}
-
 // ---- Requests ----
 
 // Parameters sent as a file part (multipart): the image fields of Mastodon's media and profile endpoints.
@@ -228,9 +223,8 @@ export type Baseline = {
 	path: string
 	// Parameters every request of the route sends (the route's own minimum), by name.
 	params?: Record<string, string>
+	// The bearer token (the owner's by default).
 	token?: string
-	// Parameters only the probe of one name adds (a member that is read only beside another).
-	with?: Record<string, Record<string, string>>
 }
 
 export type Recipe = {
@@ -252,7 +246,7 @@ export async function send(
 ): Promise<Response> {
 	const params = Object.entries({ ...baseline.params, ...extra })
 	const token = baseline.token ?? w.owner.token
-	const headers: Record<string, string> = token === '' ? {} : { authorization: `Bearer ${token}` }
+	const headers = { authorization: `Bearer ${token}` }
 	if (method === 'GET' || method === 'DELETE') {
 		const query = new URLSearchParams(params).toString()
 		return w.h.request(`${baseline.path}${query === '' ? '' : `?${query}`}`, { method, headers })
@@ -314,7 +308,7 @@ export async function observeRoute(
 	for (const name of names) {
 		const baseline = await baselineOf()
 		observer.clear()
-		const probe = await send(w, route.method, baseline, { ...baseline.with?.[name], [name]: '1' })
+		const probe = await send(w, route.method, baseline, { [name]: '1' })
 		await probe.body?.cancel()
 		reads.set(name, observer.reads())
 	}

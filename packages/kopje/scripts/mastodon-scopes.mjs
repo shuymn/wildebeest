@@ -453,7 +453,19 @@ function verbRoutes(verb, args, stack) {
 // ---- Controllers ----
 
 /**
- * @typedef {{ file: string, callback: string, args: string, only: string[] | null, except: string[] | null, conditional: string | null, conditions: string[], nested: boolean, skip: boolean, after: boolean, unreadable: string | null }} Callback
+ * @typedef {{
+ *   file: string,
+ *   callback: string,
+ *   args: string,
+ *   only: string[] | null,
+ *   except: string[] | null,
+ *   conditional: string | null,
+ *   conditions: string[],
+ *   nested: boolean,
+ *   skip: boolean,
+ *   after: boolean,
+ *   unreadable: string | null,
+ * }} Callback
  * @typedef {{ callbacks: Callback[], unresolved: string[], chain: string[] }} Controller
  */
 
@@ -846,7 +858,12 @@ const paramName = (path) =>
 
 /**
  * @typedef {{ file: string, text: string }} Source
- * @typedef {{ names: Set<string>, unresolved: string[], calls: { name: string, paths: string[][] | null }[], root: string[] }} Reads
+ * @typedef {{
+ *   names: Set<string>,
+ *   unresolved: string[],
+ *   calls: { name: string, paths: string[][] | null }[],
+ *   root: string[],
+ * }} Reads
  */
 
 // The files whose methods an action can call, lowest precedence first: for each class of the chain (base first), the
