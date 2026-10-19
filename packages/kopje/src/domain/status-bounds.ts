@@ -1,11 +1,9 @@
 import { STATUS_URI_LIMIT } from '../platform/identity-bounds'
 import { cutSql, mediaDescriptionSql, mediaMetaSql, mediaUrlSql } from '../platform/stored-bounds'
 
-// RES-2: the bounds of one presented status. The status columns of STORED_COLUMNS (platform/stored-bounds.ts) hold
-// values within their bounds, which triggers enforce, and are read directly; the status uri, hashtag names, poll
-// choices and an edit's media snapshot are read through the projections here and pollOptionsSql
-// (test-node/bounded-columns.test.ts). Maxima: docs/threat-model.md, RES-3. Like profile-bounds.ts, this imports only
-// leaves, so modules that build SQL at load can use it whatever the import order.
+// RES-2: read projections of the status uri, hashtag names, poll choices (with pollOptionsSql) and an edit's media
+// snapshot (test-node/bounded-columns.test.ts); stored bounds: STORED_COLUMNS in platform/stored-bounds.ts. Maxima:
+// docs/threat-model.md, RES-3. Imports only leaves, so modules that build SQL at load can use it whatever the order.
 
 export {
 	MAX_MEDIA_DESCRIPTION_LENGTH,

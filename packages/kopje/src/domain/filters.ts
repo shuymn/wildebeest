@@ -799,7 +799,6 @@ export function activeFilters(db: Db, viewer: ViewerContext): ActiveFilters | nu
 	}
 }
 
-// A filter that names a status: two ids.
 export const FILTER_MATCH_COLUMNS = fixedColumns(
 	{ filter_id: 'fs.filter_id', status_id: 'fs.status_id' },
 	{ filter_id: 18, status_id: 18 }

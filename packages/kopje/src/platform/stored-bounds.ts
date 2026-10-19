@@ -205,7 +205,7 @@ type StoredColumn = {
 	stored?: (column: string) => string
 }
 
-// The covered columns of each table (design §3.2). accounts.uri and username, statuses.uri, status_tags.name,
+// The columns 0048_stored_bounds and its triggers cover. accounts.uri and username, statuses.uri, status_tags.name,
 // polls.options and status_edits.media_json keep their read-time projections and are not here.
 export const STORED_COLUMNS: Readonly<Record<string, readonly StoredColumn[]>> = {
 	statuses: [
@@ -222,8 +222,7 @@ export const STORED_COLUMNS: Readonly<Record<string, readonly StoredColumn[]>> =
 		{ column: 'header_url', projection: profileUrlSql },
 	],
 	media_attachments: [
-		// A row with a file token holds a URL Kopje built (storedMediaUrl), within the bound, as the migration checks
-		// first.
+		// A row with a file token holds a URL storedMediaUrl built within the bound, which the migration checks first.
 		{
 			column: 'url',
 			projection: mediaUrlSql,
@@ -249,9 +248,8 @@ function pastBoundSql({ projection, jsonBytes }: StoredColumn, column: string): 
 		: `CASE WHEN length(CAST(${column} AS BLOB)) <= ${Math.floor((jsonBytes - 2) / 6)} THEN 0 ELSE ${moved} END`
 }
 
-// The statements of migration 0048_stored_bounds, which its file holds after its header (test/migrations.test.ts):
-// the tokened media URL check, one rewrite per table setting each covered column to what it stores, and the triggers
-// that refuse a write of a value that is not a fixed point.
+// Migration 0048_stored_bounds after its header (test/migrations.test.ts compares them): the tokened media URL check,
+// one rewrite per table, then triggers that refuse a write where P(NEW.x) IS NOT NEW.x.
 export function storedBoundsMigrationSql(): string {
 	const statements = [
 		`CREATE TABLE stored_bounds_check (

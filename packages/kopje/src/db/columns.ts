@@ -1,9 +1,8 @@
 import { ROW_OBJECT_BYTES, VALUE_BYTES } from './sql'
 
-// The result columns of a query as one map, name to SQL expression, from which both the select list and a bound of
-// the heap a row takes are generated, so the bound cannot drift from what the query reads (RES-3, "Heap at 8 MiB per
-// answer" in docs/threat-model.md). It imports only src/db/sql.ts, a leaf, so modules that build SQL at load can use
-// it whatever the import order.
+// A query's result columns as one map (name to SQL expression) generate both its select list and its row heap bound,
+// so the bound cannot drift from what it reads (RES-3, "Heap at 8 MiB per answer" in docs/threat-model.md). Imports
+// only src/db/sql.ts, a leaf, so modules that build SQL at load can use it whatever the import order.
 
 export type ColumnMap = Readonly<Record<string, string>>
 
@@ -13,11 +12,10 @@ export function selectSql(columns: ColumnMap): string {
 		.join(', ')
 }
 
-// An upper bound on the heap one row of `columns` takes as RowMeter counts it (rowHeapBytes in src/db/sql.ts):
-// ROW_OBJECT_BYTES, and for each value VALUE_BYTES and twice its UTF-8 bytes (octet_length, which does not load the
-// value). A string's UTF-16 code units are at most its UTF-8 bytes; a number counts its decimal digits, which the
-// meter does not, and NULL nothing. The sum is a balanced tree, so its expression depth grows with the logarithm of
-// the column count (SQLite refuses a tree deeper than 100; test-node/sql-depth.ts).
+// Bounds rowHeapBytes (src/db/sql.ts): ROW_OBJECT_BYTES, plus VALUE_BYTES and twice each value's UTF-8 bytes.
+// octet_length loads no value; UTF-8 bytes bound UTF-16 code units. A number overcounts by its decimal digits, NULL
+// adds nothing. balancedSum keeps the expression depth logarithmic (SQLite refuses deeper than 100;
+// test-node/sql-depth.ts).
 export function rowHeapSql(columns: ColumnMap): string {
 	return balancedSum([
 		String(ROW_OBJECT_BYTES),

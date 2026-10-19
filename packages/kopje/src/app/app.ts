@@ -55,9 +55,8 @@ const MODERATION_WRITE = /^\/api\/v1\/admin\/accounts\/[^/]+\/(?:action|unsuspen
 
 const API_CORS_PATHS = ['/api/*', '/oauth/token', '/oauth/revoke', '/oauth/userinfo']
 
-// The public documents browsers read, for GET as Mastodon opens them (config/initializers/cors.rb, v4.5.11): the
-// /.well-known documents, NodeInfo and a local actor's document. The profile page is the web UI and stays closed
-// (WEB-3).
+// WEB-3: cross-origin GET for /.well-known, NodeInfo and local actor documents; the profile page (HTML) stays closed.
+// As Mastodon v4.5.11 opens them (config/initializers/cors.rb).
 const DOCUMENT_CORS_PATHS = ['/.well-known/*', '/nodeinfo/*', '/ap/users/:username']
 
 type AppEnv = { Bindings: Env; Variables: { requestClass: RequestClass; inboxBody: Uint8Array; domain: string } }

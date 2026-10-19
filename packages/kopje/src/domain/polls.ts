@@ -290,7 +290,6 @@ export const POLL_COLUMN_MAP = {
 
 export const POLL_FROM = 'polls p JOIN statuses s ON s.id = p.status_id'
 
-// A viewer's own vote: a poll id and a choice.
 export const OWN_VOTE_COLUMNS = fixedColumns({ poll_id: 'v.poll_id', choice: 'v.choice' }, { poll_id: 18, choice: 0 })
 
 // How many votes `viewer` cast in the current generation of the poll of `status`, which presentPolls reads as their
