@@ -468,6 +468,7 @@ describe('pushes from a suspended account', () => {
 					cc: [aliceUri],
 					mentions: [aliceUri],
 					tags: [],
+					emojiTags: [],
 					media: [],
 					raw: '{}',
 				},
