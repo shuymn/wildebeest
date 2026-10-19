@@ -74,7 +74,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       Durable Object SQLite, most of it the upgrade's fixed cost on a store that size (runs under heavy outside load
       took up to 15.6 seconds).
     - `0050_follow_recommendation_mutes`: the table of dismissed suggestions. It adds an empty table and reads nothing:
-      on the benchmark store its upgrade took 6.6 seconds, the overhead of an upgrade on a store that size.
+      on the same benchmark store its upgrade took 9.1 seconds (13.7 in a first run), the overhead of an upgrade on a
+      store that size.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.17] - 2026-10-19
