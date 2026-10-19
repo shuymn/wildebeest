@@ -1,6 +1,9 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 
+import type { CallExpression, Node } from 'oxc-parser'
 import { describe, expect, it } from 'vitest'
+
+import { parse, walk } from './source-scan.js'
 
 // docs/threat-model.md and the code agree, by the contract its "Status of an invariant" states:
 // - every `_..._` emphasis outside code is a status (_Enforced (main)_, _Planned (topic)_, _Retired_) or a _Gap_ note,
@@ -171,135 +174,51 @@ function parenthesized(text: string): string {
 
 // A title's interpolation (`${...}` in a template literal), whose text is unknown: no fragment matches across it.
 const HOLE = '\u0000'
-const ESCAPES: Record<string, string> = { n: '\n', t: '\t', r: '\r', b: '\b', f: '\f', v: '\v', 0: '\0' }
 
 /**
  * The titles a test file declares: the first argument of `it`, `test` and `describe`, with any chain (`.each(...)`,
- * `.skip`, `.skipIf(...)`) before it, when that argument is a string or template literal. Comments, strings and regular
- * expressions are skipped as tokens, so a name in a comment or in a test's body is no title.
+ * `.skip`, `.skipIf(...)`) before it, when that argument is a string or template literal. Read from the parsed file
+ * (source-scan.ts), so a name in a comment or in a test's body is no title.
  */
-function titles(source: string): string[] {
+function titles(path: string, text: string): string[] {
 	const found: string[] = []
-	let i = 0
-	let previous = ''
-	while (i < source.length) {
-		const c = source[i] ?? ''
-		if (/\s/.test(c)) {
-			i++
-		} else if (source.startsWith('//', i)) {
-			i = source.indexOf('\n', i) === -1 ? source.length : source.indexOf('\n', i)
-		} else if (source.startsWith('/*', i)) {
-			i = source.indexOf('*/', i + 2) === -1 ? source.length : source.indexOf('*/', i + 2) + 2
-		} else if (c === "'" || c === '"' || c === '`') {
-			i = literal(source, i).end
-			previous = c
-		} else if (c === '/' && (previous === '' || /[(,=:[!&|?{};+\-*%<>~^]/.test(previous))) {
-			i = regex(source, i)
-			previous = '/'
-		} else if (/[A-Za-z_$]/.test(c)) {
-			const word = /^[\w$]+/.exec(source.slice(i))?.[0] ?? c
-			const start = i
-			i += word.length
-			if (['it', 'test', 'describe'].includes(word) && previous !== '.') {
-				const title = callTitle(source, i)
-				if (title !== undefined) found.push(title)
+	walk(parse({ path, text }).program, (node, parents) => {
+		const parent = parents[0]
+		const chained =
+			(parent?.type === 'CallExpression' && parent.callee === node) ||
+			(parent?.type === 'MemberExpression' && parent.object === node)
+		if (node.type !== 'CallExpression' || chained) {
+			return
+		}
+		// The calls of the chain, innermost first, down to its root name.
+		const calls: CallExpression[] = []
+		let at: Node = node
+		for (;;) {
+			if (at.type === 'CallExpression') {
+				calls.unshift(at)
+				at = at.callee
+			} else if (at.type === 'MemberExpression') {
+				at = at.object
+			} else {
+				break
 			}
-			previous = source[start + word.length - 1] ?? ''
-			if (word === 'return' || word === 'typeof') previous = '('
-		} else {
-			i++
-			previous = c
 		}
-	}
+		if (at.type !== 'Identifier' || !['it', 'test', 'describe'].includes(at.name)) {
+			return
+		}
+		for (const call of calls) {
+			const first = call.arguments[0]
+			if (first?.type === 'Literal' && typeof first.value === 'string') {
+				found.push(first.value)
+				return
+			}
+			if (first?.type === 'TemplateLiteral') {
+				found.push(first.quasis.map((q) => q.value.cooked ?? q.value.raw).join(HOLE))
+				return
+			}
+		}
+	})
 	return found
-}
-
-/** The title of a call whose callee ends at `i`: the first literal argument after any chain of members and calls. */
-function callTitle(source: string, i: number): string | undefined {
-	let j = i
-	for (;;) {
-		while (/\s/.test(source[j] ?? '')) j++
-		if (source[j] === '.') {
-			j++
-			j += /^[\w$]*/.exec(source.slice(j))?.[0].length ?? 0
-		} else if (source[j] === '<') {
-			j = typeArguments(source, j)
-		} else if (source[j] === '(') {
-			let k = j + 1
-			while (/\s/.test(source[k] ?? '')) k++
-			const quote = source[k]
-			if (quote === "'" || quote === '"' || quote === '`') return literal(source, k).value
-			j = balanced(source, j)
-		} else {
-			return undefined
-		}
-	}
-}
-
-/** The index after the type arguments at `i` (`<[string, (h: H) => T]>`), an arrow's `>` not closing them. */
-function typeArguments(source: string, i: number): number {
-	let depth = 0
-	for (let j = i; j < source.length; j++) {
-		const c = source[j]
-		if (c === '<') depth++
-		else if (c === '>' && source[j - 1] !== '=' && --depth === 0) return j + 1
-	}
-	return source.length
-}
-
-/** The end of the bracketed group that starts at `i`, skipping literals and comments. */
-function balanced(source: string, i: number): number {
-	let depth = 0
-	let j = i
-	while (j < source.length) {
-		const c = source[j] ?? ''
-		if (c === "'" || c === '"' || c === '`') {
-			j = literal(source, j).end
-			continue
-		}
-		if (source.startsWith('//', j)) j = source.indexOf('\n', j) === -1 ? source.length : source.indexOf('\n', j)
-		else if (c === '(' || c === '[' || c === '{') depth++
-		else if ((c === ')' || c === ']' || c === '}') && --depth === 0) return j + 1
-		j++
-	}
-	return j
-}
-
-/** A string or template literal at `i`: its value (interpolations as HOLE) and the index after it. */
-function literal(source: string, i: number): { value: string; end: number } {
-	const quote = source[i]
-	let value = ''
-	let j = i + 1
-	while (j < source.length && source[j] !== quote) {
-		const c = source[j] ?? ''
-		if (c === '\\') {
-			const next = source[j + 1] ?? ''
-			value += ESCAPES[next] ?? next
-			j += 2
-		} else if (quote === '`' && source.startsWith('${', j)) {
-			value += HOLE
-			j = balanced(source, j + 1)
-		} else {
-			value += c
-			j++
-		}
-	}
-	return { value, end: j + 1 }
-}
-
-/** The index after a regular expression literal at `i`. */
-function regex(source: string, i: number): number {
-	let j = i + 1
-	let inClass = false
-	while (j < source.length && source[j] !== '\n') {
-		const c = source[j]
-		if (c === '\\') j++
-		else if (c === '[') inClass = true
-		else if (c === ']') inClass = false
-		else if (c === '/' && !inClass) return j + 1
-		j++
-	}
-	return j
 }
 
 /** The fragments of a quoted name: the parts around `…`, or none when it names nothing. */
@@ -342,7 +261,7 @@ function citationProblems(where: string, part: string, files: Files): string[] {
 			continue
 		}
 		if (loose) problems.push(`${where}: ${path} has a name outside parentheses`)
-		const declared = names.length > 0 ? titles(files.read(path) ?? '') : []
+		const declared = names.length > 0 ? titles(path, files.read(path) ?? '') : []
 		for (const name of names) {
 			const parts = fragments(name)
 			if (parts.length === 0) problems.push(`${where}: ${path} has an empty name "${name}"`)
@@ -390,7 +309,9 @@ describe("the threat model's statuses", () => {
 		expect(cited.filter(({ path }) => TEST_FILE.test(path)).length).toBeGreaterThan(300)
 		expect(cited.flatMap(({ names }) => names).length).toBeGreaterThan(300)
 		expect(entryPointStatuses(document).length).toBeGreaterThan(15)
-		expect(titles(readFileSync(new URL('test-node/threat-model.test.ts', PACKAGE), 'utf8'))).toEqual([
+		expect(
+			titles('test-node/threat-model.test.ts', readFileSync(new URL('test-node/threat-model.test.ts', PACKAGE), 'utf8'))
+		).toEqual([
 			"the threat model's statuses",
 			'reads the invariants, their enforced parts and their citations',
 			'marks every part with a known status, and cites what exists',
@@ -414,7 +335,7 @@ describe("the threat model's statuses", () => {
 			"\tit.each<[string, (h: H) => Promise<void>]>([['a', f]])('typed %s', async () => {})",
 			'})',
 		].join('\n')
-		expect(titles(source)).toEqual([
+		expect(titles('test/probe.test.ts', source)).toEqual([
 			'a suite',
 			'each %s of %i',
 			`a ${HOLE} title`,
