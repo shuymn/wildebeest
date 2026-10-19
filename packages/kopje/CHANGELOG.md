@@ -141,8 +141,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       Object SQLite, within the 20 seconds an upgrade may take.
     - `0053_custom_emoji_snapshots`: adds the three emoji columns, which read as none on every existing row, and the
       triggers that bound them; no row is read or changed. On the benchmark store its upgrade took 6.5 seconds. This
-      release's five files (0049 to 0053) in one upgrade took 8.4 to 14.2 seconds in three runs and 22.8 and 25.9 seconds in
-      two others, past the 20 seconds an upgrade may take; the same range without it ranged from 8.5 to 25.7 seconds on
+      release's five files (0049 to 0053) in one upgrade took 8.4 to 14.2 seconds in three runs and 22.4 to 32.8 seconds in
+      four others, past the 20 seconds an upgrade may take; the same range without it ranged from 8.5 to 25.7 seconds on
       that machine.
 - `wrangler.jsonc`: unchanged.
 
