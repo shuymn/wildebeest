@@ -33,7 +33,13 @@ import { freshStore, testKernel } from '../helpers'
 //   - 2,000,000 statuses, two per remote account in turn, each with a mention of another account and a hashtag (one
 //     of 1,000 names);
 //   - 2,000,000 notifications of the local accounts in turn, a mention by each status's author;
-//   - 10,000 reports by the local accounts of remote accounts, naming one status each;
+//   - 10,000 reports by the local accounts of remote accounts, naming one status each, and (from migration
+//     0040_report_notifications on) an admin.report of each to the first local account; 1,000 pushes (MAX_PUSH_BACKLOG)
+//     of those notifications, to one subscription;
+//   - 10,000 moderation log rows (MODERATION_LOG_KEEP), half of them naming reports (some above the newest report),
+//     the rest accounts; and the moderation jobs that name a report bound: 180 local ones (the tokens, suspension and
+//     reach jobs of each local account over three generations) and (from 0045_remote_suspension on) 1,000 remote
+//     account jobs with a bound, and a domain job with its fan-out of 10,000 account jobs without one;
 //   - 200,000 quotes (from migration 0033_quotes on), one by every tenth status, each of the status after it, in each
 //     stored state in turn (a quarter accepted);
 //   - 2,000,000 favourites, one of each status in a scattered order, by remote accounts in turn, each with its Like id;
@@ -60,8 +66,9 @@ import { freshStore, testKernel } from '../helpers'
 // 0045_remote_suspension indexes (accounts, outbound activities), what 0048_stored_bounds rewrites (accounts,
 // statuses, media attachments, earlier versions), what 0049_instance_bounds rewrites and indexes (instance
 // settings, instance domain blocks), what 0051_follow_answer_pairs reads and rewrites (outbound activities,
-// accounts, deliveries) and what 0052_favourite_likes indexes (the favourites' Like ids); a migration that reads
-// another table must add it here before it is measured.
+// accounts, deliveries), what 0052_favourite_likes indexes (the favourites' Like ids) and what 0054_remote_reports
+// reads and rewrites (reports, their notifications and pushes, the moderation log and both job tables); a migration
+// that reads another table must add it here before it is measured.
 // The measured time is the whole upgrade, from before the bookmark to after the verification: Date.now() in workerd
 // moves only between I/O events, so the clock is read across an await on each side.
 
@@ -83,6 +90,10 @@ const SHAPE = {
 	statuses: 2_000_000,
 	notifications: 2_000_000,
 	reports: 10_000,
+	pushes: 1_000,
+	moderationLog: 10_000,
+	remoteJobs: 1_000,
+	domainFanOut: 10_000,
 	quotes: 200_000,
 	favourites: 2_000_000,
 	boosts: 200_000,
@@ -240,6 +251,90 @@ it('applies the migration to the benchmark store within the budget', async () =>
 			statuses,
 			now
 		)
+		// The reports' admin.report notifications, to the first local account, with MAX_PUSH_BACKLOG pushes of them.
+		const has = (table: string, column?: string) =>
+			sql
+				.exec(
+					column === undefined
+						? "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?"
+						: 'SELECT 1 FROM pragma_table_info(?) WHERE name = ?',
+					...(column === undefined ? [table] : [table, column])
+				)
+				.toArray().length > 0
+		const hasReportNotifications = has('notifications', 'report_id')
+		if (hasReportNotifications) {
+			run(
+				`INSERT INTO notifications (account_id, type, from_account_id, report_id, created_at)
+				SELECT '100000000000000000', 'admin.report', account_id, id, ?1 FROM reports`,
+				now
+			)
+			run(
+				"INSERT INTO oauth_clients (id, secret, name, redirect_uris) VALUES ('bench', 's', 'bench', 'urn:ietf:wg:oauth:2.0:oob')"
+			)
+			run(
+				`INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes)
+				VALUES ('bench', 'access', 'bench', '100000000000000000', 'push')`
+			)
+			run(
+				`INSERT INTO push_subscriptions (token_hash, endpoint, key_p256dh, key_auth)
+				VALUES ('bench', 'https://push.bench/1', 'p', 'a')`
+			)
+			run(
+				`INSERT INTO push_deliveries (subscription_id, notification_id, next_attempt_at, updated_at)
+				SELECT (SELECT id FROM push_subscriptions), id, 0, 0 FROM notifications WHERE report_id IS NOT NULL
+				ORDER BY id LIMIT ?1`,
+				Math.round(SHAPE.pushes * scale)
+			)
+		}
+		// The moderation log: row i names report i (past the newest report for the last tenth) when i is even, else an
+		// account.
+		const moderationLog = has('admin_actions') ? Math.round(SHAPE.moderationLog * scale) : 0
+		run(
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO admin_actions (actor, action, target_type, target_id, created_at)
+			SELECT 'access', CASE i % 2 WHEN 0 THEN 'resolve' ELSE 'suspend' END,
+				CASE i % 2 WHEN 0 THEN 'Report' ELSE 'Account' END,
+				CASE i % 2 WHEN 0 THEN CAST(CASE WHEN i > ?1 * 9 / 10 THEN ?2 + i ELSE i % ?2 + 1 END AS TEXT)
+					ELSE CAST(100000000000000000 + i AS TEXT) END, ?3
+			FROM n WHERE ?1 > 0 AND ?4`,
+			moderationLog,
+			reports,
+			now,
+			moderationLog > 0 ? 1 : 0
+		)
+		// Local jobs: each local account's tokens, suspension and reach jobs in three generations, with a report bound.
+		const hasLocalJobs = has('moderation_jobs')
+		if (hasLocalJobs) {
+			run(
+				`INSERT INTO moderation_jobs (kind, account_id, generation, report_bound, phase)
+			SELECT k.value, l.account_id, g.value, ?1, 'reports'
+			FROM local_accounts l CROSS JOIN json_each('["tokens","suspension","reach"]') k
+				CROSS JOIN json_each('[1,2,3]') g`,
+				reports
+			)
+		}
+		const hasRemoteJobs = has('remote_moderation_jobs')
+		const remoteJobs = Math.min(Math.round(SHAPE.remoteJobs * scale), accounts - SHAPE.local)
+		const domainFanOut = Math.min(Math.round(SHAPE.domainFanOut * scale), accounts - SHAPE.local - remoteJobs)
+		if (hasRemoteJobs) {
+			// Remote jobs: account jobs of the first remote accounts with a bound, then the domain job's fan-out (mode
+			// domain, no bound) over the next ones.
+			run(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 + ?2 - 1)
+				INSERT INTO remote_moderation_jobs (kind, subject, mode, follow_bound, report_bound, phase)
+				SELECT 'account', CAST(100000000000000000 + ?3 + i AS TEXT), CASE WHEN i < ?1 THEN 'account' ELSE 'domain' END,
+					0, CASE WHEN i < ?1 THEN ?4 END, 'out'
+				FROM n WHERE ?1 + ?2 > 0`,
+				remoteJobs,
+				domainFanOut,
+				SHAPE.local,
+				reports
+			)
+			run(
+				`INSERT OR IGNORE INTO remote_moderation_jobs (kind, subject, mode, follow_bound, phase)
+				VALUES ('domain', '', 'domain', 0, 'clear')`
+			)
+		}
 		// Quotes: status 10i quotes status 10i + 1, in the states pending, accepted, rejected and revoked in turn.
 		const hasQuotes =
 			sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'quotes'").toArray().length > 0
@@ -424,8 +519,13 @@ it('applies the migration to the benchmark store within the budget', async () =>
 			favourites: count('favourites'),
 			mentions: count('status_mentions'),
 			tags: count('status_tags'),
-			notifications: count('notifications'),
+			notifications: count("notifications WHERE type <> 'admin.report'"),
 			reports: count('reports'),
+			reportNotifications: hasReportNotifications ? count('notifications WHERE report_id IS NOT NULL') : 0,
+			pushes: count('push_deliveries'),
+			moderationLog: moderationLog > 0 ? count('admin_actions') : 0,
+			localJobs: hasLocalJobs ? count('moderation_jobs') : 0,
+			remoteJobs: hasRemoteJobs ? count('remote_moderation_jobs') : 0,
 			quotes: hasQuotes ? count('quotes') : 0,
 			outbound: count('outbound_activities'),
 			deliveries: count('deliveries'),
