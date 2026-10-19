@@ -37,16 +37,21 @@ import { freshStore, testKernel } from '../helpers'
 //     remote account;
 //   - 500,000 outbound activities of the local accounts in turn, each about one status, one in ten superseded (what
 //     waits for delivery, and what given-up rows keep for retries);
+//   - 50,000 follow answers of the local accounts in turn (Accept and Reject alternately, as followAnswerActivity
+//     builds them), each of a remote account's Follow;
+//   - a delivery row of every outbound activity, the retained history: the first 10,000 (the backlog cap) active,
+//     the rest given up;
 //   - 500,000 media attachments, one of every fourth status, with a URL, a description and a meta of 75 bytes;
 //   - 100,000 earlier versions (status_edits), one of every twentieth status;
 //   - values past their stored bounds (RES-2, 0048_stored_bounds), which are not scaled: 100 statuses with 140,000
 //     bytes of content, 10 of them with a content warning of 400,000 U+0001; 1,000 remote accounts with a display
 //     name of 3,000 characters and a 2,210-byte profile URL; 1,000 media rows with a 2,210-byte URL and a
-//     description of 12,000 characters.
+//     description of 12,000 characters (only on a store before that file: its triggers refuse them).
 // It grows every table a phase A migration reads (accounts, follows, statuses with their mentions and tags,
 // notifications, reports, quotes), what 0043_read_window_indexes indexes (favourites, boosts), what
-// 0045_remote_suspension indexes (accounts, outbound activities) and what 0048_stored_bounds rewrites (accounts,
-// statuses, media attachments, earlier versions); a migration that
+// 0045_remote_suspension indexes (accounts, outbound activities), what 0048_stored_bounds rewrites (accounts,
+// statuses, media attachments, earlier versions) and what 0051_follow_answer_pairs reads and rewrites (outbound
+// activities, accounts, deliveries); a migration that
 // reads another table must add it here before it is measured. The measured time is the file's transaction as the kernel
 // applies it, from before the first statement to after the commit: Date.now() in workerd moves only between I/O events,
 // so the clock is read across an await on each side.
@@ -76,6 +81,8 @@ const SHAPE = {
 	favourites: 2_000_000,
 	boosts: 200_000,
 	outbound: 500_000,
+	followAnswers: 50_000,
+	active: 10_000,
 	media: 500_000,
 	edits: 100_000,
 	// Rows past their stored bounds (not scaled).
@@ -105,6 +112,7 @@ it('applies the migration to the benchmark store within the budget', async () =>
 	const favourites = Math.min(Math.round(SHAPE.favourites * scale), statuses)
 	const boosts = Math.min(Math.round(SHAPE.boosts * scale), Math.floor(statuses / 10))
 	const outbound = Math.round(SHAPE.outbound * scale)
+	const followAnswers = Math.round(SHAPE.followAnswers * scale)
 	const media = Math.min(Math.round(SHAPE.media * scale), Math.floor(statuses / 4))
 	const edits = Math.min(Math.round(SHAPE.edits * scale), Math.floor(statuses / 20))
 
@@ -286,6 +294,45 @@ it('applies the migration to the benchmark store within the budget', async () =>
 				Date.parse(now)
 			)
 		}
+		// Follow answers: answer i by local account i mod the local ones, of remote account i's Follow, Accept and
+		// Reject in turn.
+		run(
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1),
+			a(i, local, follower, follow) AS (SELECT i, 'https://kopje.bench/ap/users/l' || (i % ?2),
+				'https://d' || ((?2 + i) % ?3) || '.bench/users/u' || (?2 + i),
+				'https://d' || ((?2 + i) % ?3) || '.bench/users/u' || (?2 + i) || '#follows/' || i FROM n)
+			INSERT INTO outbound_activities (account_id, body, object_uri, retracts, superseded, created_at)
+			SELECT CAST(100000000000000000 + i % ?2 AS TEXT),
+				json_object('activity', json_object('@context', 'https://www.w3.org/ns/activitystreams',
+					'id', local || CASE i % 2 WHEN 0 THEN '#accepts' ELSE '#rejects' END || '/follows/' || hex(randomblob(32)),
+					'type', CASE i % 2 WHEN 0 THEN 'Accept' ELSE 'Reject' END, 'actor', local,
+					'object', json_object('id', follow, 'type', 'Follow', 'actor', follower, 'object', local)),
+					'audience', json_object('followers', json('false'), 'accounts',
+						json_array(CAST(100000000000000000 + ?2 + i AS TEXT)))),
+				follow, i % 2, 0, ?4
+			FROM a`,
+			followAnswers,
+			SHAPE.local,
+			SHAPE.domains,
+			Date.parse(now)
+		)
+		// Deliveries: a row of each outbound activity, to one of the 1,000 servers; the first SHAPE.active waiting, the
+		// rest given up.
+		for (let start = 0; start < outbound + followAnswers; start += batch) {
+			run(
+				`INSERT INTO deliveries (activity_id, account_id, inbox_url, lane, state, attempts, next_attempt_at,
+					last_status, last_error, updated_at)
+				SELECT id, account_id, 'https://d' || (id % ?3) || '.bench/inbox', 'https://d' || (id % ?3) || '.bench',
+					CASE WHEN id <= ?4 THEN 'queued' ELSE 'gave_up' END, CASE WHEN id <= ?4 THEN 0 ELSE 15 END, ?5,
+					CASE WHEN id <= ?4 THEN NULL ELSE 503 END, CASE WHEN id <= ?4 THEN NULL ELSE 'HTTP 503' END, ?5
+				FROM outbound_activities WHERE id > ?1 AND id <= ?2`,
+				start,
+				start + batch,
+				SHAPE.domains,
+				SHAPE.active,
+				Date.parse(now)
+			)
+		}
 		// Media: attachment i (ids after the boosts) is of status 4i, by its author.
 		run(
 			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
@@ -307,28 +354,34 @@ it('applies the migration to the benchmark store within the budget', async () =>
 			edits,
 			now
 		)
-		// Values past their stored bounds, on the first statuses, remote accounts and media rows.
 		const filler = (n: number, char: string) => `replace(hex(zeroblob(${n / 2})), '0', ${char})`
-		run(
-			`UPDATE statuses SET content = ${filler(140_000, "'x'")}, spoiler_text = CASE WHEN id < CAST(500000000000000000 + ?2 AS TEXT)
-				THEN ${filler(400_000, 'char(1)')} ELSE '' END
-			WHERE id < CAST(500000000000000000 + ?1 AS TEXT) AND id >= '500000000000000000'`,
-			SHAPE.longContent,
-			SHAPE.longSpoilers
-		)
-		run(
-			`UPDATE accounts SET display_name = ${filler(3000, "'n'")},
-				url = 'https://d.bench/u/' || ${filler(2192, "'x'")}
-			WHERE id >= CAST(100000000000000000 + ?1 AS TEXT) AND id < CAST(100000000000000000 + ?1 + ?2 AS TEXT)`,
-			SHAPE.local,
-			SHAPE.longAccounts
-		)
-		run(
-			`UPDATE media_attachments SET url = 'https://f.bench/m/' || ${filler(2192, "'x'")},
-				description = ${filler(12_000, "'d'")}
-			WHERE id < CAST(700000000000000000 + ?1 AS TEXT)`,
-			SHAPE.longMedia
-		)
+		// Values past their stored bounds, on the first statuses, remote accounts and media rows; only on a store
+		// before 0048_stored_bounds, whose triggers refuse them from then on.
+		const bounded =
+			sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = 'statuses_bounds_update'").toArray()
+				.length > 0
+		if (!bounded) {
+			run(
+				`UPDATE statuses SET content = ${filler(140_000, "'x'")}, spoiler_text = CASE WHEN id < CAST(500000000000000000 + ?2 AS TEXT)
+					THEN ${filler(400_000, 'char(1)')} ELSE '' END
+				WHERE id < CAST(500000000000000000 + ?1 AS TEXT) AND id >= '500000000000000000'`,
+				SHAPE.longContent,
+				SHAPE.longSpoilers
+			)
+			run(
+				`UPDATE accounts SET display_name = ${filler(3000, "'n'")},
+					url = 'https://d.bench/u/' || ${filler(2192, "'x'")}
+				WHERE id >= CAST(100000000000000000 + ?1 AS TEXT) AND id < CAST(100000000000000000 + ?1 + ?2 AS TEXT)`,
+				SHAPE.local,
+				SHAPE.longAccounts
+			)
+			run(
+				`UPDATE media_attachments SET url = 'https://f.bench/m/' || ${filler(2192, "'x'")},
+					description = ${filler(12_000, "'d'")}
+				WHERE id < CAST(700000000000000000 + ?1 AS TEXT)`,
+				SHAPE.longMedia
+			)
+		}
 		const count = (table: string) => sql.exec<{ n: number }>(`SELECT count(*) AS n FROM ${table}`).one().n
 		const seeded = {
 			accounts: count('accounts'),
@@ -343,6 +396,7 @@ it('applies the migration to the benchmark store within the budget', async () =>
 			reports: count('reports'),
 			quotes: hasQuotes ? count('quotes') : 0,
 			outbound: count('outbound_activities'),
+			deliveries: count('deliveries'),
 			media: count('media_attachments'),
 			edits: count('status_edits'),
 		}

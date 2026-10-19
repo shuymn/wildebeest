@@ -16,14 +16,22 @@
 -- delivery of a follow answer is backfilled as exposed. The pair is read from the answered Follow's actor, as the
 -- answer names it (activities.ts followAnswerActivity), joined to the remote account with that uri.
 --
--- Cost: TBD.
+-- Cost: two ALTERs (the CHECK on the added column tests every delivery), one scan of the outbound activities for the
+-- backfill (a body without 'Follow' is not parsed), two partial index builds (a scan each) and an update of the
+-- tagged answers' rows through deliveries_activity. Measured on the benchmark store of test/bench/migration-cost.ts
+-- (1,000,000 accounts, 2,000,000 statuses, 550,000 outbound activities of which 50,000 follow answers, a delivery row
+-- of each, 10,000 of them active and the rest given up, and the rest of that store) in workerd's local Durable Object
+-- SQLite: 7,515 ms for the upgrade of this file through the kernel (7,404 and 7,396 ms in two more runs, at load
+-- averages of 7 to 13), within the 10,000 ms each migration file may take; about 6 s of it is the overhead of an
+-- upgrade on a store that size.
 
 ALTER TABLE outbound_activities ADD COLUMN follow_pair TEXT;
 ALTER TABLE deliveries ADD COLUMN exposed INTEGER NOT NULL DEFAULT 0 CHECK (exposed IN (0, 1));
 
 UPDATE outbound_activities SET follow_pair =
   (SELECT a.id FROM accounts a WHERE a.uri = json_extract(body, '$.activity.object.actor') AND a.domain IS NOT NULL)
-WHERE json_extract(body, '$.activity.type') IN ('Accept', 'Reject')
+WHERE instr(body, 'Follow') > 0
+  AND json_extract(body, '$.activity.type') IN ('Accept', 'Reject')
   AND json_extract(body, '$.activity.object.type') = 'Follow';
 
 CREATE INDEX outbound_activities_follow_pair ON outbound_activities (account_id, follow_pair, id)
