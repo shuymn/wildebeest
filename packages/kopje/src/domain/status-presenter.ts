@@ -29,7 +29,7 @@ import {
 } from './filters'
 import { htmlToPlainText } from './plain-text'
 import { type Poll, presentPolls } from './polls'
-import { contentSql, MEDIA_URL_LIMIT, sourceTextSql, spoilerSql } from './status-bounds'
+import { MEDIA_URL_LIMIT } from './status-bounds'
 import {
 	MENTION_COLUMN_MAP,
 	SHOWN_MENTIONS_SQL,
@@ -260,8 +260,7 @@ function textLevel(db: Db, ids: readonly string[], options: PresentOwnOptions): 
 		const polls = presentPolls(db, chunk, null, options.viewer.now)
 		const media = mediaOf(db, json)
 		for (const row of db.all<TextRow & { id: string }>(
-			`SELECT s.id, ${spoilerSql('s.spoiler_text')} AS spoiler_text, ${contentSql('s.content')} AS content,
-				${sourceTextSql('s.source_text')} AS source_text, au.domain AS author_domain
+			`SELECT s.id, s.spoiler_text, s.content, s.source_text, au.domain AS author_domain
 			FROM ${STATUS_FROM} WHERE s.id IN (SELECT value FROM json_each(?1))`,
 			json
 		)) {
@@ -707,7 +706,7 @@ function statusUrl(row: StatusRow): string {
 // MediaAttachment as REST::MediaAttachmentSerializer shows it. URLs are emitted only when they are http(s) (HTML-3);
 // meta carries the stored dimensions (Mastodon's original and small) and the focal point.
 export function presentMedia(row: MediaRow): MediaAttachment {
-	// URLs within MEDIA_URL_LIMIT as serialized, as stored (mediaUrlSql).
+	// URLs within MEDIA_URL_LIMIT as serialized, as stored (STORED_COLUMNS in platform/stored-bounds.ts).
 	const url = boundedHref(row.url, MEDIA_URL_LIMIT)
 	const stored = row.meta === null ? {} : (JSON.parse(row.meta) as { original?: Size; small?: Size })
 	const meta: MediaMeta = {

@@ -66,7 +66,7 @@ import { allocateLocalId } from './ids'
 import { DETACHED_GRACE_MS, DOOMED_AT, liveMediaSql } from './media'
 import { notify } from './notifications'
 import { editPoll, type PollInput, pollOptionsJson, writePoll } from './polls'
-import { actorUriSql, profileUrlSql, usernameSql } from './profile-bounds'
+import { actorUriSql, usernameSql } from './profile-bounds'
 import {
 	acceptedQuoteWindow,
 	answeredRequests,
@@ -81,15 +81,7 @@ import {
 	revokeQuoteRow,
 } from './quotes'
 import { normalizeSearchText } from './search-text'
-import {
-	contentSql,
-	editMediaSql,
-	pollOptionsSql,
-	sourceTextSql,
-	spoilerSql,
-	statusUriSql,
-	statusUrlSql,
-} from './status-bounds'
+import { editMediaSql, pollOptionsSql, statusUriSql } from './status-bounds'
 import {
 	type MediaAttachment,
 	type MediaRow,
@@ -196,7 +188,7 @@ function resolveMentions(
 		d: ref.domain === null || ref.domain === localHost ? null : ref.domain,
 	}))
 	const rows = db.all<ResolvedMention & { key: string }>(
-		`SELECT json_extract(j.value, '$.key') AS key, a.id, ${actorUriSql('a.uri')} AS uri, ${profileUrlSql('a.url')} AS url, ${usernameSql('a.username')} AS username, a.domain
+		`SELECT json_extract(j.value, '$.key') AS key, a.id, ${actorUriSql('a.uri')} AS uri, a.url, ${usernameSql('a.username')} AS username, a.domain
 		FROM json_each(?1) j
 		JOIN accounts a ON a.domain IS json_extract(j.value, '$.d') AND lower(a.username) = json_extract(j.value, '$.u')
 		WHERE ${mentionableBySql('a.id', '?2')}`,
@@ -246,7 +238,7 @@ function quoteLink(db: Db, id: string): QuoteLink | null {
 		domain: string | null
 		author_uri: string
 	}>(
-		`SELECT ${statusUriSql('s.uri')} AS uri, ${statusUrlSql('s.url')} AS url, ${usernameSql('a.username')} AS username,
+		`SELECT ${statusUriSql('s.uri')} AS uri, s.url, ${usernameSql('a.username')} AS username,
 			a.domain, ${actorUriSql('a.uri')} AS author_uri
 		FROM statuses s JOIN accounts a ON a.id = s.account_id WHERE s.id = ?`,
 		id
@@ -1279,8 +1271,7 @@ export const statusHistory = optionalUserReadOperation<{ id: string; present: Pr
 					poll_options: string | null
 					created_at: string
 				}>(
-					`SELECT ${contentSql('content')} AS content, ${spoilerSql('spoiler_text')} AS spoiler_text, sensitive,
-						${editMediaSql('media_json')} AS media_json, ${pollOptionsSql('poll_options')} AS poll_options, created_at
+					`SELECT content, spoiler_text, sensitive, ${editMediaSql('media_json')} AS media_json, poll_options, created_at
 					FROM status_edits WHERE id = CAST(? AS INTEGER)`,
 					editId
 				)
@@ -1312,8 +1303,7 @@ export const statusSource = userReadOperation<{ id: string }, Viewed<StatusSourc
 		resolved === null
 			? undefined
 			: db.first<{ id: string; source_text: string | null; content: string; spoiler_text: string }>(
-					`SELECT id, ${sourceTextSql('source_text')} AS source_text, ${contentSql('content')} AS content,
-						${spoilerSql('spoiler_text')} AS spoiler_text
+					`SELECT id, source_text, content, spoiler_text
 					FROM statuses WHERE id = ? AND account_id = ? AND reblog_of_id IS NULL`,
 					resolved,
 					accountId

@@ -25,10 +25,7 @@ import {
 	actorUriSql,
 	cutSql,
 	DISPLAY_NAME_LIMIT,
-	displayNameSql,
-	noteSql,
 	PROFILE_URL_LIMIT,
-	profileUrlSql,
 	USERNAME_LIMIT,
 	usernameSql,
 } from './profile-bounds'
@@ -194,8 +191,9 @@ const REMOTE_ATTACHMENT_SQL = `CASE WHEN a.domain IS NOT NULL THEN (
 				ORDER BY e.key LIMIT ${MAX_REMOTE_FIELDS}) c) k
 		WHERE k.size <= ${REMOTE_FIELDS_BYTES}) END`
 
-// RES-2: profiles are bounded as stored (federation/remote-actor.ts) and again as read (profile-bounds.ts), so
-// converted rows are bounded too; fields use REMOTE_ATTACHMENT_SQL and remoteFields. See docs/threat-model.md, RES-3.
+// RES-2: profiles are bounded as stored (federation/remote-actor.ts, the triggers of 0048_stored_bounds), converted rows
+// too, and the username and actor id again as read (profile-bounds.ts); fields use REMOTE_ATTACHMENT_SQL and
+// remoteFields. See docs/threat-model.md, RES-3.
 // One account reads at most about 113 KB and serializes to 123 KB (bio 64 KiB, escaped display name 12 KiB,
 // fields 33 KB, five URLs 10 KiB, the rest about 2 KB), so a page of 80 serializes to at most about 10 MB.
 export const ACCOUNT_COLUMN_MAP = {
@@ -204,11 +202,11 @@ export const ACCOUNT_COLUMN_MAP = {
 	username: usernameSql('a.username'),
 	domain: 'a.domain',
 	actor_type: 'a.actor_type',
-	display_name: displayNameSql('a.display_name'),
-	note: noteSql('a.note'),
-	url: profileUrlSql('a.url'),
-	avatar_url: profileUrlSql('a.avatar_url'),
-	header_url: profileUrlSql('a.header_url'),
+	display_name: 'a.display_name',
+	note: 'a.note',
+	url: 'a.url',
+	avatar_url: 'a.avatar_url',
+	header_url: 'a.header_url',
 	locked: 'a.locked',
 	discoverable: 'a.discoverable',
 	followers_count: 'a.followers_count',
@@ -223,7 +221,7 @@ export const ACCOUNT_COLUMN_MAP = {
 	attachment: REMOTE_ATTACHMENT_SQL,
 } as const satisfies ColumnMap
 
-export { DISPLAY_NAME_LIMIT, PROFILE_URL_LIMIT, profileUrlSql, USERNAME_LIMIT, usernameSql }
+export { DISPLAY_NAME_LIMIT, PROFILE_URL_LIMIT, USERNAME_LIMIT, usernameSql }
 
 export const ACCOUNT_FROM = 'accounts a LEFT JOIN local_accounts l ON l.account_id = a.id'
 
@@ -309,7 +307,7 @@ export function* partialAccountsOf(
 			db
 				.all<PartialRow>(
 					`SELECT a.id, ${actorUriSql('a.uri')} AS uri, ${usernameSql('a.username')} AS username, a.domain, a.actor_type,
-						${profileUrlSql('a.url')} AS url, ${profileUrlSql('a.avatar_url')} AS avatar_url, a.locked,
+						a.url, a.avatar_url, a.locked,
 						${availableJoinedSql('a', 'l')} AS available
 					FROM json_each(?1) c CROSS JOIN accounts a ON a.id = c.value LEFT JOIN local_accounts l ON l.account_id = a.id`,
 					JSON.stringify([...new Set(slice)])

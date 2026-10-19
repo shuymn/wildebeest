@@ -1,7 +1,9 @@
 // RES-2: the stored bounds of the columns a remote server controls or a converted row may carry. Each column has a
-// projection P, the SQL builder below that every read applies, and a writer that ingestion, the local write paths, the
-// cutover's conversion and its verification apply. Every writer's output, as SQLite stores it, is a fixed point of
-// the column's P, and P(P(x)) = P(x) for any stored string (test/stored-bounds.test.ts).
+// projection P, the SQL builder below, and a writer that ingestion, the local write paths, the cutover's conversion and
+// its verification apply. Migration 0048_stored_bounds and its triggers are generated from P, and reads take the
+// columns of STORED_COLUMNS as stored; pollOptionsSql is also the read projection of polls.options. Every writer's
+// output, as SQLite stores it, is a fixed point of the column's P, and P(P(x)) = P(x) for any stored string
+// (test/stored-bounds.test.ts).
 //
 // Text writers replace a lone surrogate with U+FFFD and remove U+0000 (storedText), then cut by code points, as
 // SQLite's substr and length count them. JSON-bounded columns (bio, content, content warning, source text) keep the

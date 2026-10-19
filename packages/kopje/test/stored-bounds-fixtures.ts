@@ -1,6 +1,3 @@
-import { runInDurableObject } from 'cloudflare:test'
-
-import type { StoreStub } from '../src/platform/store-client'
 import {
 	BIO_JSON_BYTES,
 	CONTENT_JSON_BYTES,
@@ -229,37 +226,3 @@ export const MALFORMED: { table: string; column: string; characters: number }[] 
 	{ table: 'status_edits', column: 'content', characters: Math.floor(CONTENT_JSON_BYTES / 3) + 1 },
 	{ table: 'status_edits', column: 'spoiler_text', characters: Math.floor(SPOILER_JSON_BYTES / 3) + 1 },
 ]
-
-// Runs `fn` with the stored-bound triggers of 0048_stored_bounds lifted, as a Store before 0048 (a converted or
-// legacy row) held values past their bounds; the triggers are made again after it. For tests of the read-time
-// projections that A3 removes.
-export function withoutStoredBounds<T>(sql: SqlStorage, fn: () => T): T {
-	const triggers = sql
-		.exec<{ name: string; sql: string }>(
-			`SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND name IN (${TABLES.map(
-				(table) => `'${table}_bounds_insert', '${table}_bounds_update'`
-			).join(', ')})`
-		)
-		.toArray()
-	for (const { name } of triggers) {
-		sql.exec(`DROP TRIGGER ${name}`)
-	}
-	try {
-		return fn()
-	} finally {
-		for (const trigger of triggers) {
-			sql.exec(trigger.sql)
-		}
-	}
-}
-
-// One statement over `store` with the stored-bound triggers lifted (withoutStoredBounds).
-export async function legacySql<T extends Record<string, SqlStorageValue>>(
-	store: StoreStub,
-	query: string,
-	...params: SqlStorageValue[]
-): Promise<T[]> {
-	return runInDurableObject(store, (_instance, state) =>
-		withoutStoredBounds(state.storage.sql, () => state.storage.sql.exec<T>(query, ...params).toArray())
-	)
-}

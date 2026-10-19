@@ -2,19 +2,12 @@ import { ACCOUNT_COLUMN_MAP } from './accounts'
 import { QUOTE_APPROVAL_COLUMNS, QUOTE_READ_COLUMNS, quotedStatusIdSql } from './audience'
 import { FILTER_MATCH_COLUMNS } from './filters'
 import { OWN_VOTE_COLUMNS, ownVoteCountSql, POLL_COLUMN_MAP, POLL_FROM } from './polls'
-import { actorUriSql, profileUrlSql, usernameSql } from './profile-bounds'
+import { actorUriSql, usernameSql } from './profile-bounds'
 import {
-	contentSql,
 	MAX_PRESENTED_TAGS,
 	MAX_STATUS_MEDIA,
 	MAX_STATUS_MENTION_ROWS,
-	mediaDescriptionSql,
-	mediaMetaSql,
-	mediaUrlSql,
-	sourceTextSql,
-	spoilerSql,
 	statusUriSql,
-	statusUrlSql,
 	tagNameSql,
 } from './status-bounds'
 import { balancedSum, type ColumnMap, fixedColumns, type FixedColumns, rowHeapSql } from '../db/columns'
@@ -28,19 +21,19 @@ import { balancedSum, type ColumnMap, fixedColumns, type FixedColumns, rowHeapSq
 // parent: they belong to the reply, whose ActivityPub object carries inReplyTo to every recipient anyway, and its
 // author chose to publish them. The parent itself (content, author profile, context entry) stays behind the audience
 // rule. in_reply_to_account_id is the conversation partner carried through self-replies.
-// The text and URLs are bounded (status-bounds.ts, RES-2).
+// The text and URLs are bounded as stored (platform/stored-bounds.ts), the uri and author as read (RES-2).
 export const STATUS_COLUMN_MAP = {
 	id: 's.id',
 	uri: statusUriSql('s.uri'),
-	url: statusUrlSql('s.url'),
+	url: 's.url',
 	account_id: 's.account_id',
 	reblog_of_id: 's.reblog_of_id',
 	in_reply_to_id: 's.in_reply_to_id',
 	in_reply_to_account_id: 's.in_reply_to_account_id',
 	visibility: 's.visibility',
-	spoiler_text: spoilerSql('s.spoiler_text'),
-	content: contentSql('s.content'),
-	source_text: sourceTextSql('s.source_text'),
+	spoiler_text: 's.spoiler_text',
+	content: 's.content',
+	source_text: 's.source_text',
 	sensitive: 's.sensitive',
 	language: 's.language',
 	published_at: 's.published_at',
@@ -57,15 +50,15 @@ export const STATUS_COLUMN_MAP = {
 
 export const STATUS_FROM = 'statuses s JOIN accounts au ON au.id = s.account_id'
 
-// The columns presentMedia reads, bounded (status-bounds.ts), for every query that presents media, over
-// media_attachments as `m`.
+// The columns presentMedia reads, bounded as stored (platform/stored-bounds.ts), for every query that presents media,
+// over media_attachments as `m`.
 export const MEDIA_COLUMN_MAP = {
 	id: 'm.id',
 	type: 'm.type',
-	url: mediaUrlSql('m.url'),
-	preview_url: mediaUrlSql('m.preview_url'),
-	description: mediaDescriptionSql('m.description'),
-	meta: mediaMetaSql('m.meta'),
+	url: 'm.url',
+	preview_url: 'm.preview_url',
+	description: 'm.description',
+	meta: 'm.meta',
 	focus_x: 'm.focus_x',
 	focus_y: 'm.focus_y',
 } as const satisfies ColumnMap
@@ -90,7 +83,7 @@ export const MENTION_COLUMN_MAP = {
 	id: 'a.id',
 	username: usernameSql('a.username'),
 	domain: 'a.domain',
-	url: profileUrlSql('a.url'),
+	url: 'a.url',
 	uri: actorUriSql('a.uri'),
 } as const satisfies ColumnMap
 

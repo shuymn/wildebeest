@@ -4,9 +4,11 @@ import { fileURLToPath } from 'node:url'
 
 import { describe, expect, it } from 'vitest'
 
-// RES-2: a column a remote server controls (or a converted row may carry past today's ingestion bounds) leaves SQLite
-// only through its projection helper (src/domain/profile-bounds.ts, src/domain/status-bounds.ts), which bounds it.
-// This test reads every SQL string in src/domain and fails on a raw read.
+// RES-2: a column a remote server controls that keeps a read-time projection (an identity, a hashtag name, a poll's
+// choices, an edit's media snapshot; the other columns are bounded as stored, STORED_COLUMNS in
+// src/platform/stored-bounds.ts) leaves SQLite only through its projection helper (src/domain/profile-bounds.ts,
+// src/domain/status-bounds.ts), which bounds it. This test reads every SQL string in src/domain and fails on a raw
+// read.
 //
 // - Reading is naming the column in a SELECT's result list (a subquery's included) or in RETURNING; a reference inside
 //   a helper call's argument is the helper's. Comparing is naming it anywhere else: WHERE, ON, ORDER BY, GROUP BY, a
@@ -33,26 +35,10 @@ import { describe, expect, it } from 'vitest'
 type Bounded = { table: string; column: string; helpers: readonly string[] }
 
 export const BOUNDED: readonly Bounded[] = [
-	{ table: 'accounts', column: 'note', helpers: ['noteSql'] },
-	{ table: 'accounts', column: 'display_name', helpers: ['displayNameSql'] },
 	{ table: 'accounts', column: 'username', helpers: ['usernameSql'] },
-	{ table: 'accounts', column: 'url', helpers: ['profileUrlSql'] },
-	{ table: 'accounts', column: 'avatar_url', helpers: ['profileUrlSql'] },
-	{ table: 'accounts', column: 'header_url', helpers: ['profileUrlSql'] },
 	{ table: 'accounts', column: 'uri', helpers: ['actorUriSql'] },
-	{ table: 'statuses', column: 'content', helpers: ['contentSql'] },
-	{ table: 'statuses', column: 'spoiler_text', helpers: ['spoilerSql'] },
-	{ table: 'statuses', column: 'source_text', helpers: ['sourceTextSql'] },
-	{ table: 'statuses', column: 'url', helpers: ['statusUrlSql'] },
 	{ table: 'statuses', column: 'uri', helpers: ['statusUriSql'] },
-	{ table: 'media_attachments', column: 'description', helpers: ['mediaDescriptionSql'] },
-	{ table: 'media_attachments', column: 'url', helpers: ['mediaUrlSql'] },
-	{ table: 'media_attachments', column: 'preview_url', helpers: ['mediaUrlSql'] },
-	{ table: 'media_attachments', column: 'meta', helpers: ['mediaMetaSql'] },
-	{ table: 'status_edits', column: 'content', helpers: ['contentSql'] },
-	{ table: 'status_edits', column: 'spoiler_text', helpers: ['spoilerSql'] },
 	{ table: 'status_edits', column: 'media_json', helpers: ['editMediaSql'] },
-	{ table: 'status_edits', column: 'poll_options', helpers: ['pollOptionsSql'] },
 	{ table: 'polls', column: 'options', helpers: ['pollOptionsSql'] },
 	{ table: 'status_tags', column: 'name', helpers: ['tagNameSql'] },
 ]
@@ -450,6 +436,10 @@ const SAFE_INTERPOLATIONS = new Set([
 	'hidesCollectionsSql',
 	'hostCoveredSql',
 	'mayQuoteSql',
+	// Projections of a value inside an edit's media snapshot (editMediaSql), which bound it.
+	'mediaDescriptionSql',
+	'mediaMetaSql',
+	'mediaUrlSql',
 	'mutesSql',
 	'notificationPolicySql',
 	'participantsSql',
@@ -586,22 +576,9 @@ const ALLOWED: Record<string, { count: number; reason: string }> = {
 	'src/domain/statuses.ts accounts.uri': { count: 6, reason: IDENTITY },
 	'src/domain/statuses.ts statuses.uri': { count: 9, reason: IDENTITY },
 	'src/domain/accounts.ts accounts.username': { count: 1, reason: LOCAL },
-	'src/domain/accounts.ts accounts.display_name': { count: 1, reason: LOCAL },
-	'src/domain/activities.ts statuses.content': { count: 1, reason: ACTIVITYPUB },
-	'src/domain/activities.ts statuses.spoiler_text': { count: 1, reason: ACTIVITYPUB },
 	'src/domain/activities.ts accounts.username': { count: 1, reason: ACTIVITYPUB },
-	'src/domain/activities.ts media_attachments.url': { count: 1, reason: ACTIVITYPUB },
-	'src/domain/activities.ts media_attachments.description': { count: 1, reason: ACTIVITYPUB },
 	'src/domain/actor-update.ts accounts.username': { count: 1, reason: ACTIVITYPUB },
-	'src/domain/actor-update.ts accounts.display_name': { count: 1, reason: ACTIVITYPUB },
-	'src/domain/actor-update.ts accounts.note': { count: 1, reason: ACTIVITYPUB },
-	'src/domain/actor-update.ts accounts.avatar_url': { count: 1, reason: ACTIVITYPUB },
-	'src/domain/actor-update.ts accounts.header_url': { count: 1, reason: ACTIVITYPUB },
 	'src/domain/actors.ts accounts.username': { count: 7, reason: LOCAL },
-	'src/domain/actors.ts accounts.display_name': { count: 1, reason: LOCAL },
-	'src/domain/actors.ts accounts.note': { count: 1, reason: LOCAL },
-	'src/domain/actors.ts accounts.avatar_url': { count: 1, reason: LOCAL },
-	'src/domain/actors.ts accounts.header_url': { count: 1, reason: LOCAL },
 	'src/domain/admin-accounts.ts accounts.username': { count: 2, reason: LOCAL },
 	'src/domain/admin-authority.ts accounts.username': { count: 1, reason: LOCAL },
 	'src/domain/deliveries.ts accounts.username': {
@@ -612,32 +589,11 @@ const ALLOWED: Record<string, { count: number; reason: string }> = {
 		count: 1,
 		reason: "compared with the author's featured tags to count them, never presented",
 	},
-	'src/domain/media.ts media_attachments.url': { count: 3, reason: UPLOAD },
 	'src/domain/oauth.ts accounts.username': { count: 1, reason: LOCAL },
 	'src/domain/polls.ts polls.options': { count: 3, reason: POLL },
 	'src/domain/quotes.ts accounts.username': { count: 2, reason: `a local signer or quoted author (${LOCAL})` },
-	'src/domain/remote-statuses.ts statuses.content': { count: 1, reason: COMPARED },
-	'src/domain/remote-statuses.ts statuses.spoiler_text': { count: 1, reason: COMPARED },
-	'src/domain/remote-statuses.ts media_attachments.url': { count: 2, reason: COMPARED },
-	'src/domain/remote-statuses.ts media_attachments.description': { count: 1, reason: COMPARED },
 	'src/domain/snapshot.ts accounts.username': { count: 1, reason: LOCAL },
 	'src/domain/statuses.ts accounts.username': { count: 1, reason: LOCAL },
-	'src/domain/statuses.ts statuses.content': {
-		count: 1,
-		reason: "the author's own status, compared with an edit, never presented",
-	},
-	'src/domain/statuses.ts statuses.source_text': {
-		count: 1,
-		reason: "the author's own status, compared with an edit, never presented",
-	},
-	'src/domain/statuses.ts statuses.spoiler_text': {
-		count: 1,
-		reason: "the author's own status, compared with an edit, never presented",
-	},
-	'src/domain/statuses.ts media_attachments.description': {
-		count: 1,
-		reason: "the author's own media, compared with an edit, never presented",
-	},
 	'src/domain/streaming.ts status_tags.name': {
 		count: 1,
 		reason: 'matched against stream subscriptions, within the capture limit, never presented',
@@ -646,13 +602,13 @@ const ALLOWED: Record<string, { count: number; reason: string }> = {
 
 describe('the bounded-read matcher', () => {
 	it.each([
-		['SELECT s.content FROM statuses s', ['statuses.content']],
-		['SELECT content, id FROM statuses WHERE id = ?', ['statuses.content']],
-		['SELECT x.note AS bio FROM accounts x', ['accounts.note']],
-		['SELECT a.* FROM accounts a', ['accounts.note', 'accounts.display_name']],
-		['SELECT m.url FROM media_attachments m JOIN statuses s ON s.id = m.status_id', ['media_attachments.url']],
-		['SELECT (SELECT e.content FROM status_edits e LIMIT 1) AS c FROM statuses s', ['status_edits.content']],
-		['UPDATE statuses SET content = ? WHERE id = ? RETURNING content', ['statuses.content']],
+		['SELECT s.uri FROM statuses s', ['statuses.uri']],
+		['SELECT uri, id FROM statuses WHERE id = ?', ['statuses.uri']],
+		['SELECT x.username AS name FROM accounts x', ['accounts.username']],
+		['SELECT a.* FROM accounts a', ['accounts.username', 'accounts.uri']],
+		['SELECT s.uri FROM media_attachments m JOIN statuses s ON s.id = m.status_id', ['statuses.uri']],
+		['SELECT (SELECT e.media_json FROM status_edits e LIMIT 1) AS c FROM statuses s', ['status_edits.media_json']],
+		['UPDATE statuses SET uri = ? WHERE id = ? RETURNING uri', ['statuses.uri']],
 		['SELECT j.value FROM json_each(?1) j JOIN status_tags t ON t.status_id = j.value', []],
 		['SELECT t.name FROM json_each(?1) j JOIN status_tags t ON t.status_id = j.value', ['status_tags.name']],
 	])('reads %j', (sql, expected) => {
@@ -666,12 +622,12 @@ describe('the bounded-read matcher', () => {
 	})
 
 	it.each([
-		'SELECT s.id FROM statuses s WHERE s.content = ?',
-		'SELECT a.id FROM accounts a WHERE lower(a.username) = ?1 ORDER BY a.display_name',
-		'SELECT  __bounded__  AS content FROM statuses s',
-		'INSERT INTO status_edits (status_id, content) SELECT id, content FROM statuses WHERE id = ?',
+		'SELECT s.id FROM statuses s WHERE s.uri = ?',
+		'SELECT a.id FROM accounts a WHERE lower(a.username) = ?1 ORDER BY a.uri',
+		'SELECT  __bounded__  AS uri FROM statuses s',
+		'INSERT INTO status_edits (status_id, media_json) SELECT id, uri FROM statuses WHERE id = ?',
 		'SELECT count(*) AS n FROM statuses',
-		'SELECT s.url FROM accounts s2 JOIN follows s ON s.id = s2.id',
+		'SELECT s.uri FROM accounts s2 JOIN follows s ON s.id = s2.id',
 	])('leaves %j', (sql) => {
 		expect(boundedReads(sql)).toEqual([])
 	})
@@ -681,34 +637,34 @@ describe('the source scanner', () => {
 	const findings = (text: string) => scan([source('src/domain/probe.ts', text)]).reads.map((finding) => finding.read)
 
 	it.each([
-		['a raw column', 'db.all(`SELECT s.content FROM statuses s`)', 'statuses.content'],
-		['an interpolated string', "db.all(`SELECT ${'s.content'} FROM statuses s`)", "interpolation 's.content'"],
+		['a raw column', 'db.all(`SELECT s.uri FROM statuses s`)', 'statuses.uri'],
+		['an interpolated string', "db.all(`SELECT ${'s.uri'} FROM statuses s`)", "interpolation 's.uri'"],
 		[
 			'an import alias of a helper',
-			"import { contentSql as c } from './status-bounds'\ndb.all(`SELECT ${c('s.content')} AS content FROM statuses s`)",
-			"interpolation c('s.content')",
+			"import { statusUriSql as c } from './status-bounds'\ndb.all(`SELECT ${c('s.uri')} AS uri FROM statuses s`)",
+			"interpolation c('s.uri')",
 		],
-		['concatenated SQL', "db.all('SELECT s.content ' + 'FROM statuses s')", 'concatenated SQL'],
-		['lower-case concatenated SQL', "db.all('select s.content ' + 'from statuses s')", 'concatenated SQL'],
+		['concatenated SQL', "db.all('SELECT s.uri ' + 'FROM statuses s')", 'concatenated SQL'],
+		['lower-case concatenated SQL', "db.all('select s.uri ' + 'from statuses s')", 'concatenated SQL'],
 		[
 			'a helper call with more joined to it',
-			"db.all(`SELECT ${contentSql('s.content') + ', s.source_text'} FROM statuses s`)",
-			"interpolation contentSql('s.content') + ', s.source_text'",
+			"db.all(`SELECT ${statusUriSql('s.uri') + ', s.uri'} FROM statuses s`)",
+			"interpolation statusUriSql('s.uri') + ', s.uri'",
 		],
-		['quoted identifiers', 'db.all(`SELECT "s"."content" FROM statuses AS "s"`)', 'statuses.content'],
-		['a column passed as a property', "read.select(db, { columns: { text: 's.content' } })", 'column s.content'],
+		['quoted identifiers', 'db.all(`SELECT "s"."uri" FROM statuses AS "s"`)', 'statuses.uri'],
+		['a column passed as a property', "read.select(db, { columns: { text: 's.uri' } })", 'column s.uri'],
 		[
 			'a constant of raw columns',
-			"const COLUMNS = 's.id, s.content'\ndb.all(`SELECT ${COLUMNS} FROM statuses s`)",
-			'statuses.content',
+			"const COLUMNS = 's.id, s.uri'\ndb.all(`SELECT ${COLUMNS} FROM statuses s`)",
+			'statuses.uri',
 		],
 	])('finds %s', (_name, text, read) => {
 		expect(findings(text)).toContain(read)
 	})
 
 	it.each([
-		['a helper', "db.all(`SELECT ${contentSql('s.content')} AS content FROM statuses s`)"],
-		['a comparison', 'db.all(`SELECT s.id FROM statuses s WHERE s.content = ?`)'],
+		['a helper', "db.all(`SELECT ${statusUriSql('s.uri')} AS uri FROM statuses s`)"],
+		['a comparison', 'db.all(`SELECT s.id FROM statuses s WHERE s.uri = ?`)'],
 		['a safe builder', "db.all(`SELECT s.id, ${availableSql('s.account_id')} AS a FROM statuses s`)"],
 	])('leaves %s', (_name, text) => {
 		expect(findings(text)).toEqual([])

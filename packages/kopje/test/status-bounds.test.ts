@@ -11,7 +11,6 @@ import { MAX_BIO, maxFields } from './profile-fixtures'
 import { observedSql, rowsRead } from './read-helpers'
 import { community, post, remoteAccount } from './status-helpers'
 import { heap } from './status-row-fixtures'
-import { legacySql } from './stored-bounds-fixtures'
 import { Db } from '../src/db/sql'
 import { createActivity, getFeatured, noteOf, OUTBOX_BYTES, PIN_LIMIT, statusFacts } from '../src/domain/activities'
 import { ANSWER_BYTES } from '../src/domain/answer-budget'
@@ -34,7 +33,7 @@ import {
 } from '../src/domain/status-bounds'
 import { presentation, presentStatusesWithin } from '../src/domain/status-presenter'
 import { statusRowBoundSql } from '../src/domain/status-rows'
-import { getStatus, getStatuses, statusHistory, statusSource } from '../src/domain/statuses'
+import { getStatus, getStatuses, statusHistory } from '../src/domain/statuses'
 import { parseRemoteStatus } from '../src/federation/remote-status'
 import { utf8Length } from '../src/platform/dump-format'
 import { MAX_LOCAL_ADDRESSED } from '../src/platform/identity-bounds'
@@ -50,8 +49,9 @@ import {
 import { sha256Hex } from '../src/security/tokens'
 
 // RES-2: one presented status has a known size. Each column a remote server controls is bounded where it is stored
-// and again as it is read (status-bounds.ts), so a row stored before a bound, or converted at the cutover, leaves
-// SQLite within it too. The maxima measured here are docs/threat-model.md's table (RES-3).
+// (the stored-bound triggers of 0048_stored_bounds), and identities, hashtag names and poll choices again as they are
+// read (status-bounds.ts), so a converted row leaves SQLite within them too. The maxima measured here are
+// docs/threat-model.md's table (RES-3).
 
 const ORIGIN = 'https://kopje.test'
 // A control character: one code point that JSON escapes to six bytes, the most any code point takes.
@@ -109,9 +109,9 @@ type Parts = {
 
 // A public remote status of `author` with the given parts, written directly in SQL: the stored-bound triggers of
 // 0048_stored_bounds accept every part at its bound.
-async function storedStatus(t: Setup, author: string, parts: Parts, write = sql): Promise<string> {
+async function storedStatus(t: Setup, author: string, parts: Parts): Promise<string> {
 	const id = nextId()
-	await write(
+	await sql(
 		t.store,
 		`INSERT INTO statuses (id, uri, url, account_id, visibility, spoiler_text, content, source_text, published_at)
 		VALUES (?, ?, ?, ?, 'public', ?, ?, ?, ?)`,
@@ -125,7 +125,7 @@ async function storedStatus(t: Setup, author: string, parts: Parts, write = sql)
 		new Date(NOW - 60_000).toISOString()
 	)
 	for (const [position, m] of parts.media.entries()) {
-		await write(
+		await sql(
 			t.store,
 			`INSERT INTO media_attachments (id, account_id, status_id, position, type, url, preview_url, description, meta,
 				focus_x, focus_y)
@@ -180,8 +180,9 @@ const MAX_META = (() => {
 const maxTag = (i: number) => `${String.fromCodePoint(0x20000 + i)}${'𠀀'.repeat(MAX_TAG_LENGTH - 1)}`
 
 // A status with every part at its bound: content and source text of STATUS_CONTENT_BYTES and a warning of
-// SPOILER_BYTES as JSON strings (each the largest value its stored-bound trigger accepts), MAX_STATUS_MEDIA attachments at theirs, MAX_STATUS_MENTION_ROWS mentions of accounts at theirs,
-// MAX_STATUS_TAGS tags and a poll of MAX_REMOTE_OPTIONS choices of MAX_REMOTE_OPTION_LENGTH escaping characters.
+// SPOILER_BYTES as JSON strings (each the largest value its stored-bound trigger accepts), MAX_STATUS_MEDIA
+// attachments at theirs, MAX_STATUS_MENTION_ROWS mentions of accounts at theirs, MAX_STATUS_TAGS tags and a poll of
+// MAX_REMOTE_OPTIONS choices of MAX_REMOTE_OPTION_LENGTH escaping characters.
 async function maximalParts(t: Setup, fill: Fill = 'escaped'): Promise<Parts> {
 	const mentions: string[] = []
 	for (let i = 0; i < MAX_STATUS_MENTION_ROWS; i++) {
@@ -343,10 +344,10 @@ describe('a local status is written within its bounds (RES-2)', () => {
 })
 
 describe('a stored status is read within its bounds (RES-2)', () => {
-	it('projects over-long stored columns within their bounds, as the bytes leaving SQLite show', async () => {
+	it('projects identities, hashtags and poll choices, and caps the rows, as the bytes leaving SQLite show', async () => {
 		const t = await setup()
 		const author = await maximalAccount(t)
-		await legacySql(
+		await sql(
 			t.store,
 			'UPDATE accounts SET uri = ? WHERE id = ?',
 			atLimit(`https://${HOST}/users/long/`, ACTOR_URI_LIMIT + 1),
@@ -356,59 +357,43 @@ describe('a stored status is read within its bounds (RES-2)', () => {
 		for (let i = 0; i < MAX_STATUS_MENTION_ROWS + 50; i++) {
 			mentions.push(await maximalAccount(t, true))
 		}
-		// A converted username of 64 KiB and URLs past their bounds.
-		await legacySql(
+		// A converted username of 64 KiB and an actor id past its bound, with no stored url.
+		await sql(
 			t.store,
-			'UPDATE accounts SET username = ?, url = ?, uri = ? WHERE id = ?',
+			'UPDATE accounts SET username = ?, url = NULL, uri = ? WHERE id = ?',
 			`u${'v'.repeat(64 * 1024)}`,
-			atLimit('https://remote.example/@u/', PROFILE_URL_LIMIT + 1),
 			atLimit('https://remote.example/users/u/', ACTOR_URI_LIMIT + 1),
 			mentions[0]!
 		)
 		// A converted username outside Mastodon's remote format, of characters that escape to six bytes.
 		await sql(t.store, 'UPDATE accounts SET username = ? WHERE id = ?', C.repeat(300), mentions[1]!)
 		await sql(t.store, 'UPDATE accounts SET username = ? WHERE id = ?', `u\u0000${C.repeat(253)}`, mentions[2]!)
-		const id = await storedStatus(
-			t,
-			author,
-			{
-				content: C.repeat(Math.floor(STATUS_CONTENT_BYTES / 6) + 1),
-				spoiler: C.repeat(SPOILER_BYTES),
-				media: Array.from({ length: MAX_STATUS_MEDIA + 2 }, (_, i) => ({
-					url: atLimit(`https://${HOST}/m/${i}/`, MEDIA_URL_LIMIT + i),
-					preview: atLimit(`https://${HOST}/p/${i}/`, MEDIA_URL_LIMIT + 1),
-					description: C.repeat(MAX_MEDIA_DESCRIPTION_LENGTH + 100),
-					meta: `{"x":"${'x'.repeat(2000)}"}`,
-				})),
-				mentions,
-				tags: [
-					...Array.from({ length: MAX_STATUS_TAGS + 50 }, (_, i) => `t${String(i).padStart(3, '0')}`),
-					'a'.repeat(300),
-				],
-				poll: Array.from({ length: MAX_REMOTE_OPTIONS }, () => 'x'.repeat(6_000)),
-				uri: atLimit(`https://${HOST}/objects/long/`, 4097),
-				url: atLimit(`https://${HOST}/notes/long/`, 4097),
-			},
-			legacySql
-		)
+		const url = atLimit(`https://${HOST}/notes/long/`, 4096)
+		const id = await storedStatus(t, author, {
+			content: '<p>x</p>',
+			spoiler: '',
+			media: Array.from({ length: MAX_STATUS_MEDIA + 2 }, (_, i) => ({
+				url: atLimit(`https://${HOST}/m/${i}/`, MEDIA_URL_LIMIT),
+				preview: null,
+				description: '',
+				meta: null,
+			})),
+			mentions,
+			tags: [
+				...Array.from({ length: MAX_STATUS_TAGS + 50 }, (_, i) => `t${String(i).padStart(3, '0')}`),
+				'a'.repeat(300),
+			],
+			poll: Array.from({ length: MAX_REMOTE_OPTIONS }, () => 'x'.repeat(6_000)),
+			uri: atLimit(`https://${HOST}/objects/long/`, 4097),
+			url,
+		})
 		const { answer, longest } = await read(t, getStatus, id)
 		const status = answer as Presented
-		expect(status.content).toBe('')
-		expect(status.spoiler_text).toBe(C.repeat(Math.floor((SPOILER_BYTES - 2) / 6)))
-		expect(jsonStringBytes(status.spoiler_text)).toBeLessThanOrEqual(SPOILER_BYTES)
-		expect([status.uri, status.url]).toEqual(['', ''])
+		expect([status.uri, status.url]).toEqual(['', url])
 		expect(status.account.url).toBe(atLimit(`https://${HOST}/@${author}/`, PROFILE_URL_LIMIT))
-		expect(status.media_attachments).toHaveLength(MAX_STATUS_MEDIA)
-		expect(status.media_attachments.map((m) => m.url)).toEqual([
-			atLimit(`https://${HOST}/m/0/`, MEDIA_URL_LIMIT),
-			null,
-			null,
-			null,
-		])
-		for (const m of status.media_attachments) {
-			expect(m).toMatchObject({ preview_url: m.url, meta: null })
-			expect(m.description).toBe(C.repeat(MAX_MEDIA_DESCRIPTION_LENGTH))
-		}
+		expect(status.media_attachments.map((m) => m.url)).toEqual(
+			Array.from({ length: MAX_STATUS_MEDIA }, (_, i) => atLimit(`https://${HOST}/m/${i}/`, MEDIA_URL_LIMIT))
+		)
 		expect(status.mentions).toHaveLength(MAX_STATUS_MENTION_ROWS)
 		expect(status.mentions.map((m) => m.id)).toEqual(mentions.toSorted().slice(0, MAX_STATUS_MENTION_ROWS))
 		const cut = status.mentions.find((m) => m.id === mentions[0])!
@@ -434,12 +419,11 @@ describe('a stored status is read within its bounds (RES-2)', () => {
 			Array.from({ length: MAX_REMOTE_OPTIONS }, () => 'x'.repeat(MAX_REMOTE_OPTION_LENGTH))
 		)
 		// The longest value that left SQLite is the poll's choices as a JSON array, within their bound: the 64 KiB
-		// username, the over-long content and the 600 KB of stored choices stayed.
+		// username, the actor ids and the 600 KB of stored choices stayed.
 		expect(longest).toBeLessThanOrEqual(MAX_REMOTE_OPTIONS * (6 * MAX_REMOTE_OPTION_LENGTH + 3) + 1)
-		expect(longest).toBeLessThan(STATUS_CONTENT_BYTES)
 	})
 
-	it('projects edit history snapshots and the source within their bounds', async () => {
+	it("projects edit history snapshots' media within their bounds", async () => {
 		const t = await setup()
 		const author = await maximalAccount(t)
 		const id = await storedStatus(t, author, {
@@ -451,15 +435,12 @@ describe('a stored status is read within its bounds (RES-2)', () => {
 			poll: null,
 		})
 		const snapshot = (i: number) => ({ id: `m${i}`, type: 'image', description: C.repeat(10_000) })
-		await legacySql(
+		await sql(
 			t.store,
 			`INSERT INTO status_edits (status_id, content, spoiler_text, media_json, poll_options, created_at) VALUES
-				(?1, ?2, ?3, ?4, ?5, ?6), (?1, '<p>b</p>', '', ?7, ?8, ?6)`,
+				(?1, '<p>a</p>', '', ?2, NULL, ?3), (?1, '<p>b</p>', '', ?4, ?5, ?3)`,
 			id,
-			C.repeat(STATUS_CONTENT_BYTES),
-			'注'.repeat(SPOILER_BYTES),
 			JSON.stringify(Array.from({ length: 10 }, (_, i) => snapshot(i))),
-			JSON.stringify(Array.from({ length: 150 }, (_, i) => `${i}${'o'.repeat(2_000)}`)),
 			new Date(NOW).toISOString(),
 			// A small snapshot whose single fields are past their bounds: a long URL, description and meta.
 			JSON.stringify([
@@ -478,16 +459,11 @@ describe('a stored status is read within its bounds (RES-2)', () => {
 		)
 		const { answer, longest } = await read(t, statusHistory, id)
 		const [first, second] = answer as {
-			content: string
-			spoiler_text: string
 			media_attachments: unknown[]
 			poll: { options: { title: string }[] } | null
 		}[]
-		expect(first!.content).toBe('')
-		expect(first!.spoiler_text).toBe('注'.repeat(Math.floor((SPOILER_BYTES - 2) / 6)))
+		// Past EDIT_MEDIA_BYTES, a snapshot reads as no media.
 		expect(first!.media_attachments).toEqual([])
-		expect(first!.poll!.options).toHaveLength(MAX_REMOTE_OPTIONS)
-		expect(first!.poll!.options[7]!.title).toBe(`7${'o'.repeat(MAX_REMOTE_OPTION_LENGTH - 1)}`)
 		// The first MAX_STATUS_MEDIA entries (the string among them left out), each rebuilt within the column bounds.
 		expect(second!.media_attachments).toEqual(
 			Array.from({ length: MAX_STATUS_MEDIA - 1 }, (_, i) => ({
@@ -505,18 +481,6 @@ describe('a stored status is read within its bounds (RES-2)', () => {
 		)
 		expect(second!.poll!.options.map((o) => o.title)).toEqual(['a', 'b'])
 		expect(longest).toBeLessThanOrEqual(STATUS_CONTENT_BYTES)
-		// The source a local author reads back for editing.
-		await legacySql(
-			t.store,
-			'UPDATE statuses SET source_text = ?, content = ? WHERE id = ?',
-			C.repeat(STATUS_CONTENT_BYTES),
-			C.repeat(STATUS_CONTENT_BYTES),
-			id
-		)
-		await sql(t.store, 'UPDATE statuses SET account_id = ? WHERE id = ?', ALICE, id)
-		const source = await read(t, statusSource, id)
-		expect(source.answer).toEqual({ id, text: '', spoiler_text: '' })
-		expect(source.longest).toBeLessThanOrEqual(STATUS_CONTENT_BYTES)
 	})
 })
 

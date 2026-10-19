@@ -1325,14 +1325,14 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   and content one status stores"), `test/inbox-statuses-edge.test.ts` ("RES-2: JSON-LD contexts past the JSON
   bounds", "the Store asks for documents at most three times"). _Enforced (main)_ for stored values: each column that
   a remote server controls or a converted row carries (`STORED_COLUMNS` in `src/platform/stored-bounds.ts`) holds a
-  fixed point of its read projection P, in the bound's own unit. Writers store such values; migration
+  fixed point of its projection P, in the bound's own unit. Writers store such values; migration
   `0048_stored_bounds` set every existing value to P(x) (an uploaded media URL past 2,048 bytes fails it first, by the
   check `tokened_media_url_within_2048_bytes`); and on statuses, accounts, media_attachments and status_edits the
   triggers `<table>_bounds_insert` and `<table>_bounds_update` (`migrations/0048_stored_bounds.sql`) abort any write
-  where `P(NEW.x) IS NOT NEW.x`. `accounts.uri`, `accounts.username`, `statuses.uri`, `status_tags.name`,
+  where `P(NEW.x) IS NOT NEW.x`. Reads take these columns as stored: since P(P(x)) = P(x), a rewritten row presents
+  what a read through P presented before. `accounts.uri`, `accounts.username`, `statuses.uri`, `status_tags.name`,
   `polls.options` and `status_edits.media_json` keep their read-time projections. `test/stored-bounds.test.ts` ("P is
-  idempotent and the writer's output is its fixed point", "answers the same for every converted row before and after
-  the rewrite"), `test/migrations.test.ts` (0048: "stores each covered value as P(x)", "refuses a value one past its
+  idempotent and the writer's output is its fixed point", "answers every converted row after the rewrite"), `test/migrations.test.ts` (0048: "stores each covered value as P(x)", "refuses a value one past its
   bound on insert and update", "fails by its check on an uploaded media URL past the bound"),
   `test/dump-import.test.ts` ("restores a dump taken before 0048_stored_bounds"),
   `test-node/cutover-stored-bounds.test.ts`.
@@ -1354,11 +1354,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `REMOTE_BIO_BYTES` (64 KiB) as a JSON string, cut by sanitizing a shorter raw prefix so it stays sanitized HTML
   (`sanitizeRemoteBio` in `src/security/html.ts`, which the cutover's converter and verification share); a remote
   profile URL (`url`, icon, image) over `PROFILE_URL_LIMIT` (2,048) is not stored; the display name is cut at 2,048 code
-  units, and a username over 255 is refused. Reads apply the same bounds to stored rows, so a row stored earlier or
-  converted is bounded until the account is fetched again: `ACCOUNT_COLUMN_MAP` reads a longer bio as '' and a longer URL
-  as NULL, and cuts the display name at 2,048 and the username at 255 code points; mentions read the username and URL
-  through the same projections (`src/domain/profile-bounds.ts`) and derive `acct` and a fallback url from the cut
-  username; the admin account search reads candidates' ids and flags only and tests their text in SQL. The actor URI is
+  units, and a username over 255 is refused. Converted rows hold the same bounds (RES-2, stored values), so
+  `ACCOUNT_COLUMN_MAP` reads the bio, display name and URLs as stored and cuts the username at 255 code points; mentions
+  read the username through the same projection (`src/domain/profile-bounds.ts`) and derive `acct` and a fallback url
+  from the cut username; the admin account search reads candidates' ids and flags only and tests their text in SQL. The actor URI is
   bounded as stored (`ACTOR_URI_LIMIT`), read through `actorUriSql`, and refused at the cutover. One account is then
   at most about 113 KB as read and 123 KB serialized (94 KB and 119 KB measured with every part at its bound), so a
   page of 80 serializes to at
@@ -1398,15 +1397,14 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   over 512 KiB is skipped whole. The raw presenters (`present` and `hydrate` in status-presenter.ts,
   `presentAccountsById` and `presentAccount` in accounts.ts) are not exported, so the compiler refuses direct use
   outside their module; the exported paths present one unit or admit within a budget.
-  _Enforced (main)_ for each presented status: every status column a remote server controls, or a converted row may hold
-  past the ingestion bounds, is read through its helper in `src/domain/status-bounds.ts` (accounts and actor ids through
-  `src/domain/profile-bounds.ts`). Content and source text over 128 KiB as a JSON string read as '' (the status keeps
-  its url); a content warning over 16 KiB is cut to the 2,730 code points that fit however they escape; a status url
-  over 4,096 bytes reads as NULL and a uri as ''; at most 4 attachments per status, their URLs over 2,048 as NULL,
-  descriptions cut at 10,000 code points and meta over 1 KiB as NULL; at most 200 mentions and 70 hashtags (of the 100
-  stored) per status, the first by account id and by name; at most 100 poll choices of 1,000 code points, and an edit's
-  choices over 640 KiB as none; each edit-history snapshot is read the same way, each of its first 4 attachments rebuilt
-  through the attachment bounds and '[]' over 288 KiB; a conversation presents its first 12 participants in stored
+  _Enforced (main)_ for each presented status: the status columns of `STORED_COLUMNS` hold their stored bounds (RES-2)
+  and are read as stored: content and source text within 128 KiB as a JSON string, a content warning within 16 KiB, a
+  status url within 4,096 bytes, attachment URLs within 2,048, descriptions within 10,000 code points and meta within
+  1 KiB, and an edit's content, warning and choices the same. Columns that keep a read-time projection are read through
+  their helper in `src/domain/status-bounds.ts` (accounts and actor ids through `src/domain/profile-bounds.ts`): a uri
+  over 4,096 bytes reads as ''; at most 4 attachments per status; at most 200 mentions and 70 hashtags (of the 100
+  stored) per status, the first by account id and by name; at most 100 poll choices of 1,000 code points; each
+  edit-history snapshot's first 4 attachments rebuilt through the attachment bounds and '[]' over 288 KiB; a conversation presents its first 12 participants in stored
   order, cut in SQL. Every presented URL stays within its bound as serialized, derived or stored: a profile URL, avatar
   or header within 2,048 (a profile URL falls back from the stored one to the actor's origin and to this instance's
   `/@acct` page, and to '' when none fits), a media URL within 2,048. Each per-status cap reads at most its own number
@@ -1420,9 +1418,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   before the cutover refused such usernames) is cut at 42 code points, which escape to at most 255 bytes. Identities are
   bounded by `src/platform/identity-bounds.ts`, which ingestion, the cutover's conversion and its verification share: an
   actor id whose serialized URL or stored spelling is over 2,048 bytes, or a status uri over 4,096, is refused, never
-  cut, and reads as '' where a converted row holds one. `test-node/bounded-columns.test.ts` fails when a bounded column
-  (uris included) is read outside its helper in `src/domain` or a helper is given another column; its header states what
-  it checks, where it fails closed, and its known gaps. It is an architectural aid; the aggregate response tests prove
+  cut, and reads as '' where a converted row holds one. `test-node/bounded-columns.test.ts` fails when a column that
+  keeps a read-time projection (uris included) is read outside its helper in `src/domain` or a helper is given another
+  column; its header states what it checks, where it fails closed, and its known gaps. It is an architectural aid; the aggregate response tests prove
   the budgets. Maxima of each presented shape: "Maxima of presented units" below (`test/status-bounds.test.ts`).
 - **RES-4: stored derived data is bounded.** Snapshots, the KV cache, the spool and deliveries each have a size cap, a
   count cap or an expiry with a sweeper. _Enforced (main)_ for remote statuses: one
@@ -1767,8 +1765,8 @@ RPC limit.
 Mentions whose url is derived read and present less (the conversation: 5,275,851 and 5,832,214 bytes): a derived url
 within the bound is at most the stored bound, and a longer one presents as ''.
 
-A Note shows what the Status entity shows: its hashtags, mentions and attachments are read through the same
-projections (`statusFacts` in `src/domain/activities.ts`), so a converted row's hashtag past its bound is left out of
+A Note shows what the Status entity shows: its hashtags and mentions are read through the same projections and
+its text and attachments as stored (`statusFacts` in `src/domain/activities.ts`), so a converted row's hashtag past its bound is left out of
 both. A Note's addressing (to, cc) keeps every recipient, and the Create repeats it: a local status addresses at most
 `MAX_LOCAL_ADDRESSED` (1,000) accounts, which a post's 500 characters (about 170 mentions) never reach and the
 cutover's conversion refuses past, naming the status (`src/platform/identity-bounds.ts`). With every part at its bound
