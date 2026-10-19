@@ -655,6 +655,65 @@ describe('ID-7: a legacy favourite of a local status (no tracked id)', () => {
 	})
 })
 
+describe('ID-7: a remote favourite stored before 0052_favourite_likes', () => {
+	// As the earlier inbox stored it: one row per actor and status, its Like id in favourites.uri, which is no longer
+	// read for a remote favourite (it tracks no id: legacy, matched by its status).
+	async function preUpgrade(t: Setup, bob: TestActor) {
+		const receive = receiver(t, bob)
+		await t.post(bob, like(bob, `${LOCAL}/ap/o/unknown`))
+		const uri = await seededLocal(t)
+		const bobId = (await accountId(t.store, bob.uri))!
+		const old = likeOf(bob, uri, 'before-upgrade')
+		await sql(
+			t.store,
+			`INSERT INTO favourites (account_id, status_id, uri, created_at)
+			SELECT ?, id, ?, '2026-01-01T00:00:00.000Z' FROM statuses WHERE uri = ?`,
+			bobId,
+			old.id,
+			uri
+		)
+		await sql(t.store, 'UPDATE statuses SET favourites_count = 1 WHERE uri = ?', uri)
+		return { receive, uri, old }
+	}
+
+	it('is removed by a typed Undo naming its status, whichever id it names', async () => {
+		const t = await setup()
+		const bob = await misskeyActor(t.web, '9abcdefghi', 'neko')
+		for (const id of ['before-upgrade', 'another']) {
+			const { receive, uri } = await preUpgrade(t, bob)
+			expect(await receive(undoOf(bob, likeOf(bob, uri, id)))).toMatchObject({ applied: true, reason: 'undone' })
+			expect(await sql(t.store, 'SELECT * FROM favourites')).toEqual([])
+			expect((await statusRow(t.store, uri))?.favourites_count).toBe(0)
+		}
+	})
+
+	it('is not matched by an untyped Undo of its stored id, which only records the tombstone', async () => {
+		const t = await setup()
+		const bob = await misskeyActor(t.web, '9abcdefghi', 'neko')
+		const { receive, uri, old } = await preUpgrade(t, bob)
+		expect(await receive(untypedUndoOf(old))).toMatchObject({ applied: true, reason: 'retraction-recorded' })
+		expect((await statusRow(t.store, uri))?.favourites_count).toBe(1)
+		expect(await sql(t.store, 'SELECT target_uri FROM inbound_retractions')).toEqual([{ target_uri: old.id }])
+	})
+
+	it.each(UNDO_STYLES)(
+		'becomes tracked by a new Like; the old id’s Undo then keeps it, the new one’s removes it (%s Undos)',
+		async (style) => {
+			const t = await setup()
+			const bob = await misskeyActor(t.web, '9abcdefghi', 'neko')
+			const { receive, uri, old } = await preUpgrade(t, bob)
+			const fresh = likeOf(bob, uri, 'after-upgrade')
+			expect(await receive(fresh)).toMatchObject({ applied: true, reason: 'favourite-kept' })
+			expect(await tracked(t, uri)).toEqual([fresh.id])
+			expect(await receive(undoIn(style, bob, old, 0))).toMatchObject({ applied: true, reason: 'retraction-recorded' })
+			expect(await tracked(t, uri)).toEqual([fresh.id])
+			expect((await statusRow(t.store, uri))?.favourites_count).toBe(1)
+			expect(await receive(undoIn(style, bob, fresh, 1))).toMatchObject({ applied: true, reason: 'undone' })
+			expect(await sql(t.store, 'SELECT * FROM favourites')).toEqual([])
+		}
+	)
+})
+
 describe('VIS-10: the favourite notification follows the aggregate', () => {
 	it.each([
 		['an Undo, then the new Like: removed, then notified and pushed again', 'undo-first', 2],

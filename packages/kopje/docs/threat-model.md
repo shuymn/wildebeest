@@ -223,7 +223,8 @@ against their own instance. TLS is assumed between all parties.
   only its own id and records only it; a `Like` id is tracked once in the instance (`favourite_likes_uri` is unique,
   for imports too, so another actor's `Like` under it is ignored and its `Undo` reaches only its own), and one past
   `ACTIVITY_ID_LIMIT` (4,096 JSON-escaped UTF-8 bytes, a CHECK for imports) is not stored. An `Undo` naming a status the actor holds a legacy
-  favourite of (one tracking no id: the cutover and earlier imports keep none for a remote favourite) removes it, as
+  favourite of (one tracking no id: the cutover keeps none for a remote favourite, and one stored before migration
+  `0052_favourite_likes` tracks none, its old `favourites.uri` no longer read) removes it, as
   Mastodon's `undo_like` finds the favourite by its object; a `Like` of it makes it tracked. These stored matches come
   first; then an `Undo` of a `Like` naming anything but a local original records nothing (Mastodon's `undo_like`), so
   a server's Undos of reactions to other servers' notes, which it also sends to the reactor's followers, spend no

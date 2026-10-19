@@ -1381,6 +1381,8 @@ export const favourite = userWriteOperation<ActionInput, Acted<Status>>((db, inp
 	if (inserted !== undefined) {
 		const actorUri = viewerUri(db, accountId)
 		const likeUri = `${actorUri}#likes/${inserted.id}`
+		// favourites.uri holds a local favourite's own Like id only: a remote one's are favourite_likes rows, and the
+		// uri a remote row kept from before migration 0052_favourite_likes is never read.
 		db.run('UPDATE favourites SET uri = ? WHERE id = CAST(? AS INTEGER)', likeUri, inserted.id)
 		recountStatus(db, target.id)
 		notify(db, {
@@ -1405,6 +1407,7 @@ export const unfavourite = userWriteOperation<ActionInput, Acted<Status>>((db, i
 	if (id === null) {
 		return { status: 'not_found' }
 	}
+	// The local favourite's own Like id (favourites.uri; see favourite), for its Undo.
 	const removed = db.all<{ uri: string | null; author_id: string; author_uri: string; object_uri: string }>(
 		`DELETE FROM favourites WHERE account_id = ?1 AND status_id = ?2
 		RETURNING uri, (SELECT account_id FROM statuses WHERE id = ?2) AS author_id,

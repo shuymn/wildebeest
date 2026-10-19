@@ -2336,8 +2336,9 @@ function trackedLike(db: Db, actorId: string, uri: string): TrackedLike | undefi
 	)
 }
 
-// The actor's legacy favourite of the status `uri`, local or remote: one tracking no Like id (a cutover or an import
-// stores none). The status first (CROSS JOIN keeps the order), then its favourite by the pair.
+// The actor's legacy favourite of the status `uri`, local or remote: one tracking no Like id (a cutover stores none,
+// and a favourite stored before migration 0052_favourite_likes tracks none; its favourites.uri is not read). The
+// status first (CROSS JOIN keeps the order), then its favourite by the pair.
 function legacyFavourite(db: Db, actorId: string, uri: string): { id: string; status_id: string } | undefined {
 	return db.first<{ id: string; status_id: string }>(
 		`SELECT CAST(f.id AS TEXT) AS id, f.status_id FROM statuses s CROSS JOIN favourites f ON f.status_id = s.id

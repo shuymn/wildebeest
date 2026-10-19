@@ -32,8 +32,7 @@ import { freshStore, testKernel } from '../helpers'
 //   - 10,000 reports by the local accounts of remote accounts, naming one status each;
 //   - 200,000 quotes (from migration 0033_quotes on), one by every tenth status, each of the status after it, in each
 //     stored state in turn (a quarter accepted);
-//   - 2,000,000 favourites, one of each status in a scattered order, by remote accounts in turn, each with its Like id
-//     (what 0052_favourite_likes moves: every remote favourite holding one is its worst case);
+//   - 2,000,000 favourites, one of each status in a scattered order, by remote accounts in turn, each with its Like id;
 //   - 200,000 boosts on top of the statuses, public and unlisted in turn, each of a different status by another
 //     remote account;
 //   - 500,000 outbound activities of the local accounts in turn, each about one status, one in ten superseded (what
@@ -47,8 +46,8 @@ import { freshStore, testKernel } from '../helpers'
 // It grows every table a phase A migration reads (accounts, follows, statuses with their mentions and tags,
 // notifications, reports, quotes), what 0043_read_window_indexes indexes (favourites, boosts), what
 // 0045_remote_suspension indexes (accounts, outbound activities), what 0048_stored_bounds rewrites (accounts,
-// statuses, media attachments, earlier versions) and what 0052_favourite_likes moves (the favourites' Like ids); a
-// migration that reads another table must add it here before it is measured. The measured time is the file's
+// statuses, media attachments, earlier versions); a migration that reads another table must add it here before it is
+// measured. The measured time is the file's
 // transaction as the kernel applies it, from before the first statement to after the commit: Date.now() in workerd
 // moves only between I/O events, so the clock is read across an await on each side.
 
