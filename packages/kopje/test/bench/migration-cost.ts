@@ -51,9 +51,9 @@ import { freshStore, testKernel } from '../helpers'
 // notifications, reports, quotes), what 0043_read_window_indexes indexes (favourites, boosts), what
 // 0045_remote_suspension indexes (accounts, outbound activities), what 0048_stored_bounds rewrites (accounts,
 // statuses, media attachments, earlier versions) and what 0049_instance_bounds rewrites and indexes (instance
-// settings, instance domain blocks); a migration that reads another table must add it here before it is measured. The measured time is the file's transaction as the kernel
-// applies it, from before the first statement to after the commit: Date.now() in workerd moves only between I/O events,
-// so the clock is read across an await on each side.
+// settings, instance domain blocks); a migration that reads another table must add it here before it is measured.
+// The measured time is the file's transaction as the kernel applies it, from before the first statement to after the
+// commit: Date.now() in workerd moves only between I/O events, so the clock is read across an await on each side.
 
 export const MIGRATION_BUDGET_MS = 10_000
 // A release's pending files applied in one upgrade, as an instance applies them after a deploy: two thirds of the
