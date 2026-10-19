@@ -1558,7 +1558,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   chunks, and cancels at most those (NET-2); over any bound it answers 503 and writes nothing (`followAnswersOf` in
   `src/domain/deliveries.ts`). The bound clears as the answers deliver, or once given up and superseded, at the next
   sweep (RES-4); a server whose own retries of the `Follow` run out before then needs its user to follow again
-  (`test/follow-answers.test.ts`, "bounds and refusals"). A Move moves 100
+  `test/follow-answers.test.ts` ("bounds and refusals"). A Move moves 100
   followers per batch and carries at most 100 blocks and mutes; a deleted actor's purge writes at most 500 rows per batch in all, every
   write counted (SQLite's `total_changes()`): deletions, counter recounts (`followers_count`, `following_count`,
   `statuses_count`, status counters) and the Undo intent of a withdrawn boost with its target chunks. The account is
