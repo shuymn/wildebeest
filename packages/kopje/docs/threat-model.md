@@ -1323,7 +1323,19 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   statuses are read as compacted JSON, without JSON-LD, as Mastodon reads them; `test/inbox-statuses.test.ts`
   ("refuses an activity or a fetched document past the JSON bounds before reading it", "caps the attachments, tags
   and content one status stores"), `test/inbox-statuses-edge.test.ts` ("RES-2: JSON-LD contexts past the JSON
-  bounds", "the Store asks for documents at most three times").
+  bounds", "the Store asks for documents at most three times"). _Enforced (main)_ for stored values: each column that
+  a remote server controls or a converted row carries (`STORED_COLUMNS` in `src/platform/stored-bounds.ts`) holds a
+  fixed point of its read projection P, in the bound's own unit. Writers store such values; migration
+  `0048_stored_bounds` set every existing value to P(x) (an uploaded media URL past 2,048 bytes fails it first, by the
+  check `tokened_media_url_within_2048_bytes`); and on statuses, accounts, media_attachments and status_edits the
+  triggers `<table>_bounds_insert` and `<table>_bounds_update` (`migrations/0048_stored_bounds.sql`) abort any write
+  where `P(NEW.x) IS NOT NEW.x`. `accounts.uri`, `accounts.username`, `statuses.uri`, `status_tags.name`,
+  `polls.options` and `status_edits.media_json` keep their read-time projections. `test/stored-bounds.test.ts` ("P is
+  idempotent and the writer's output is its fixed point", "answers the same for every converted row before and after
+  the rewrite"), `test/migrations.test.ts` (0048: "stores each covered value as P(x)", "refuses a value one past its
+  bound on insert and update", "fails by its check on an uploaded media URL past the bound"),
+  `test/dump-import.test.ts` ("restores a dump taken before 0048_stored_bounds"),
+  `test-node/cutover-stored-bounds.test.ts`.
 - **RES-3: lists are bounded.** Pageable lists return at most 80 items; relationships read at most 100 ids; any other
   collection names its count and byte bound. _Enforced (main):_ `src/mastodon/pagination.ts`, `MAX_RELATIONSHIP_IDS` in
   `src/domain/accounts.ts`. _Gap: neither cap is tested._ _Enforced (main)_ for search: at

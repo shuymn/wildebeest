@@ -216,7 +216,7 @@ async function addLargeRows(store: StoreStub, rows: number, bytes: number): Prom
 	await runInDurableObject(store, (_instance, state) => {
 		for (let i = 0; i < rows; i++) {
 			state.storage.sql.exec(
-				`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at) VALUES (?, ?, ?, 'public', ?, ?)`,
+				`INSERT INTO statuses (id, uri, account_id, visibility, search_text, published_at) VALUES (?, ?, ?, 'public', ?, ?)`,
 				String(120_000_000_000_000_000n + BigInt(i)),
 				`https://kopje.test/ap/o/large-${i}`,
 				ACCOUNT,

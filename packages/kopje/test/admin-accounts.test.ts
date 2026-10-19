@@ -7,6 +7,7 @@ import { NOW } from './app-helpers'
 import { longestString, observedSql } from './read-helpers'
 import { storeWith } from './setup-helpers'
 import { community } from './status-helpers'
+import { legacySql } from './stored-bounds-fixtures'
 import { instanceActorUri } from '../src/domain/activities'
 import {
 	ADMIN_ACCOUNT_CANDIDATES,
@@ -540,7 +541,7 @@ describe('the admin account list: converted text of any length (RES-2)', () => {
 	it('matches the prefix of a huge display name without reading it, and shows it cut', async () => {
 		const { h, ids, admin } = await world()
 		const huge = `Alice${'x'.repeat(1_500_000)}`
-		await sql(h.store, 'UPDATE accounts SET display_name = ? WHERE id IN (?, ?)', huge, ids.carol, ids.erin)
+		await legacySql(h.store, 'UPDATE accounts SET display_name = ? WHERE id IN (?, ?)', huge, ids.carol, ids.erin)
 		const list = async (query: string) => (await call(h, `/api/v2/admin/accounts?${query}`, admin)).body
 		// The display name drives the read (its index range), and is a residual of the suspended accounts' read.
 		const searched = (await list('origin=remote&display_name=ali')) as AdminAccountBody[]

@@ -286,7 +286,11 @@ describe('snapshot caps', () => {
 	it('does not store a document over the size cap', async () => {
 		const store = await migratedStore()
 		await setDomain(store, DOMAIN)
-		await seedLocalAccount(store, DOMAIN, { id: '111111111111111111', username: 'Alice', note: 'x'.repeat(70 * 1024) })
+		await seedLocalAccount(store, DOMAIN, {
+			id: '111111111111111111',
+			username: 'Alice',
+			note: 'x'.repeat(64 * 1024 - 2),
+		})
 		const { request } = harness(store, { USER_KEK: LEGACY.kek }, BUILD, offline)
 		expect((await request('/ap/users/Alice', AP)).status).toBe(200)
 		expect(await store.rescueSnapshot(BUILD, 'path:/ap/users/Alice')).toBeNull()

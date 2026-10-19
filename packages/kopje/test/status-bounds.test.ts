@@ -11,6 +11,7 @@ import { MAX_BIO, maxFields } from './profile-fixtures'
 import { observedSql, rowsRead } from './read-helpers'
 import { community, post, remoteAccount } from './status-helpers'
 import { heap } from './status-row-fixtures'
+import { legacySql } from './stored-bounds-fixtures'
 import { Db } from '../src/db/sql'
 import { createActivity, getFeatured, noteOf, OUTBOX_BYTES, PIN_LIMIT, statusFacts } from '../src/domain/activities'
 import { ANSWER_BYTES } from '../src/domain/answer-budget'
@@ -104,10 +105,11 @@ type Parts = {
 	url?: string
 }
 
-// A public remote status of `author` with the given parts, written as a converted row may hold them.
+// A public remote status of `author` with the given parts, written as a converted row held them before
+// 0048_stored_bounds (its statuses and media rows without the triggers).
 async function storedStatus(t: Setup, author: string, parts: Parts): Promise<string> {
 	const id = nextId()
-	await sql(
+	await legacySql(
 		t.store,
 		`INSERT INTO statuses (id, uri, url, account_id, visibility, spoiler_text, content, published_at)
 		VALUES (?, ?, ?, ?, 'public', ?, ?, ?)`,
@@ -120,7 +122,7 @@ async function storedStatus(t: Setup, author: string, parts: Parts): Promise<str
 		new Date(NOW - 60_000).toISOString()
 	)
 	for (const [position, m] of parts.media.entries()) {
-		await sql(
+		await legacySql(
 			t.store,
 			`INSERT INTO media_attachments (id, account_id, status_id, position, type, url, preview_url, description, meta,
 				focus_x, focus_y)
@@ -339,7 +341,7 @@ describe('a stored status is read within its bounds (RES-2)', () => {
 	it('projects over-long stored columns within their bounds, as the bytes leaving SQLite show', async () => {
 		const t = await setup()
 		const author = await maximalAccount(t)
-		await sql(
+		await legacySql(
 			t.store,
 			'UPDATE accounts SET uri = ? WHERE id = ?',
 			atLimit(`https://${HOST}/users/long/`, ACTOR_URI_LIMIT + 1),
@@ -350,7 +352,7 @@ describe('a stored status is read within its bounds (RES-2)', () => {
 			mentions.push(await maximalAccount(t, true))
 		}
 		// A converted username of 64 KiB and URLs past their bounds.
-		await sql(
+		await legacySql(
 			t.store,
 			'UPDATE accounts SET username = ?, url = ?, uri = ? WHERE id = ?',
 			`u${'v'.repeat(64 * 1024)}`,
@@ -439,7 +441,7 @@ describe('a stored status is read within its bounds (RES-2)', () => {
 			poll: null,
 		})
 		const snapshot = (i: number) => ({ id: `m${i}`, type: 'image', description: C.repeat(10_000) })
-		await sql(
+		await legacySql(
 			t.store,
 			`INSERT INTO status_edits (status_id, content, spoiler_text, media_json, poll_options, created_at) VALUES
 				(?1, ?2, ?3, ?4, ?5, ?6), (?1, '<p>b</p>', '', ?7, ?8, ?6)`,
@@ -494,7 +496,7 @@ describe('a stored status is read within its bounds (RES-2)', () => {
 		expect(second!.poll!.options.map((o) => o.title)).toEqual(['a', 'b'])
 		expect(longest).toBeLessThanOrEqual(STATUS_CONTENT_BYTES)
 		// The source a local author reads back for editing.
-		await sql(
+		await legacySql(
 			t.store,
 			'UPDATE statuses SET source_text = ?, content = ? WHERE id = ?',
 			C.repeat(STATUS_CONTENT_BYTES),

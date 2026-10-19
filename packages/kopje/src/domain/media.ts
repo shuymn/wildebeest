@@ -333,7 +333,13 @@ export const setProfileImage = userMediaDeleteOperation<{ id: string; kind: Prof
 		const before = actorSnapshot(db, accountId)
 		const column = kind === 'avatar' ? 'avatar_url' : 'header_url'
 		const previous = db.first<{ url: string | null }>(`SELECT ${column} AS url FROM accounts WHERE id = ?`, accountId)
-		db.run(`UPDATE accounts SET ${column} = ? WHERE id = ?`, upload.url, accountId)
+		// Copied within SQL (RES-2): read into the Worker and bound again, a legacy URL of lone surrogate bytes would
+		// come back as three U+FFFD for each, past the profile URL's bound. A media URL's bound is the same.
+		db.run(
+			`UPDATE accounts SET ${column} = (SELECT url FROM media_attachments WHERE id = ?) WHERE id = ?`,
+			id,
+			accountId
+		)
 		db.run('UPDATE media_attachments SET gc_at = NULL WHERE id = ?', id)
 		releaseProfileImage(db, accountId, previous?.url ?? null)
 		recordActorUpdate(db, accountId, before, now)

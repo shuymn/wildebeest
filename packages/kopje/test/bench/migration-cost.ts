@@ -36,10 +36,17 @@ import { freshStore, testKernel } from '../helpers'
 //   - 200,000 boosts on top of the statuses, public and unlisted in turn, each of a different status by another
 //     remote account;
 //   - 500,000 outbound activities of the local accounts in turn, each about one status, one in ten superseded (what
-//     waits for delivery, and what given-up rows keep for retries).
+//     waits for delivery, and what given-up rows keep for retries);
+//   - 500,000 media attachments, one of every fourth status, with a URL, a description and a meta of 75 bytes;
+//   - 100,000 earlier versions (status_edits), one of every twentieth status;
+//   - values past their stored bounds (RES-2, 0048_stored_bounds), which are not scaled: 100 statuses with 140,000
+//     bytes of content, 10 of them with a content warning of 400,000 U+0001; 1,000 remote accounts with a display
+//     name of 3,000 characters and a 2,210-byte profile URL; 1,000 media rows with a 2,210-byte URL and a
+//     description of 12,000 characters.
 // It grows every table a phase A migration reads (accounts, follows, statuses with their mentions and tags,
-// notifications, reports, quotes), what 0043_read_window_indexes indexes (favourites, boosts) and what
-// 0045_remote_suspension indexes (accounts, outbound activities); a migration that
+// notifications, reports, quotes), what 0043_read_window_indexes indexes (favourites, boosts), what
+// 0045_remote_suspension indexes (accounts, outbound activities) and what 0048_stored_bounds rewrites (accounts,
+// statuses, media attachments, earlier versions); a migration that
 // reads another table must add it here before it is measured. The measured time is the file's transaction as the kernel
 // applies it, from before the first statement to after the commit: Date.now() in workerd moves only between I/O events,
 // so the clock is read across an await on each side.
@@ -69,6 +76,13 @@ const SHAPE = {
 	favourites: 2_000_000,
 	boosts: 200_000,
 	outbound: 500_000,
+	media: 500_000,
+	edits: 100_000,
+	// Rows past their stored bounds (not scaled).
+	longContent: 100,
+	longSpoilers: 10,
+	longAccounts: 1_000,
+	longMedia: 1_000,
 }
 
 it('applies the migration to the benchmark store within the budget', async () => {
@@ -91,6 +105,8 @@ it('applies the migration to the benchmark store within the budget', async () =>
 	const favourites = Math.min(Math.round(SHAPE.favourites * scale), statuses)
 	const boosts = Math.min(Math.round(SHAPE.boosts * scale), Math.floor(statuses / 10))
 	const outbound = Math.round(SHAPE.outbound * scale)
+	const media = Math.min(Math.round(SHAPE.media * scale), Math.floor(statuses / 4))
+	const edits = Math.min(Math.round(SHAPE.edits * scale), Math.floor(statuses / 20))
 
 	const store = freshStore()
 	// One call: between calls, the Store's own alarm would apply every migration.
@@ -270,6 +286,49 @@ it('applies the migration to the benchmark store within the budget', async () =>
 				Date.parse(now)
 			)
 		}
+		// Media: attachment i (ids after the boosts) is of status 4i, by its author.
+		run(
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+			INSERT INTO media_attachments (id, account_id, status_id, type, url, description, meta)
+			SELECT CAST(700000000000000000 + i AS TEXT), CAST(100000000000000000 + ?2 + (4 * i) % ?3 AS TEXT),
+				CAST(500000000000000000 + 4 * i AS TEXT), 'image', 'https://files.bench.example/m/' || i || '.png',
+				'Media ' || i, '{"original":{"width":1200,"height":800},"small":{"width":640,"height":427}}'
+			FROM n WHERE ?1 > 0`,
+			media,
+			SHAPE.local,
+			remote
+		)
+		// Earlier versions: edit i is of status 20i.
+		run(
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+			INSERT INTO status_edits (status_id, content, created_at)
+			SELECT CAST(500000000000000000 + 20 * i AS TEXT), '<p>status ' || (20 * i) || ', before</p>', ?2
+			FROM n WHERE ?1 > 0`,
+			edits,
+			now
+		)
+		// Values past their stored bounds, on the first statuses, remote accounts and media rows.
+		const filler = (n: number, char: string) => `replace(hex(zeroblob(${n / 2})), '0', ${char})`
+		run(
+			`UPDATE statuses SET content = ${filler(140_000, "'x'")}, spoiler_text = CASE WHEN id < CAST(500000000000000000 + ?2 AS TEXT)
+				THEN ${filler(400_000, 'char(1)')} ELSE '' END
+			WHERE id < CAST(500000000000000000 + ?1 AS TEXT) AND id >= '500000000000000000'`,
+			SHAPE.longContent,
+			SHAPE.longSpoilers
+		)
+		run(
+			`UPDATE accounts SET display_name = ${filler(3000, "'n'")},
+				url = 'https://d.bench/u/' || ${filler(2192, "'x'")}
+			WHERE id >= CAST(100000000000000000 + ?1 AS TEXT) AND id < CAST(100000000000000000 + ?1 + ?2 AS TEXT)`,
+			SHAPE.local,
+			SHAPE.longAccounts
+		)
+		run(
+			`UPDATE media_attachments SET url = 'https://f.bench/m/' || ${filler(2192, "'x'")},
+				description = ${filler(12_000, "'d'")}
+			WHERE id < CAST(700000000000000000 + ?1 AS TEXT)`,
+			SHAPE.longMedia
+		)
 		const count = (table: string) => sql.exec<{ n: number }>(`SELECT count(*) AS n FROM ${table}`).one().n
 		const seeded = {
 			accounts: count('accounts'),
@@ -284,6 +343,8 @@ it('applies the migration to the benchmark store within the budget', async () =>
 			reports: count('reports'),
 			quotes: hasQuotes ? count('quotes') : 0,
 			outbound: count('outbound_activities'),
+			media: count('media_attachments'),
+			edits: count('status_edits'),
 		}
 		expect(sql.exec('SELECT count(*) AS n FROM kopje_migrations').one().n).toBe(at)
 

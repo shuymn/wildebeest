@@ -155,9 +155,18 @@ export async function setAccess(store: StoreStub, overrides: Record<string, stri
 	})
 }
 
-// A full dump through the Store RPCs, as the CLI does it but in memory.
-export async function dumpViaRpc(store: StoreStub, maxBytes?: number): Promise<{ text: string; chunks: number }> {
-	const started = await store.dumpStart(BUILD)
+type Refused = { ok: false; message: string }
+
+// The dump calls of a Store: its RPCs, or a StoreAdmin over a kernel of chosen migrations.
+export type DumpCalls = {
+	start: () => Promise<{ ok: true; headerLine: string; cursor: DumpCursor } | Refused>
+	next: (cursor: DumpCursor) => Promise<{ ok: true; chunk: Uint8Array; cursor: DumpCursor; done: boolean } | Refused>
+	finish: (cursor: DumpCursor) => Promise<{ ok: true; trailerText: string | null } | Refused>
+}
+
+// A full dump through `calls`, as the CLI does it but in memory.
+export async function collectDump(calls: DumpCalls): Promise<{ text: string; chunks: number }> {
+	const started = await calls.start()
 	if (!started.ok) {
 		throw new Error(started.message)
 	}
@@ -165,7 +174,7 @@ export async function dumpViaRpc(store: StoreStub, maxBytes?: number): Promise<{
 	let cursor: DumpCursor = started.cursor
 	let chunks = 0
 	for (;;) {
-		const step = await store.dumpNext(BUILD, cursor, maxBytes)
+		const step = await calls.next(cursor)
 		if (!step.ok) {
 			throw new Error(step.message)
 		}
@@ -176,11 +185,20 @@ export async function dumpViaRpc(store: StoreStub, maxBytes?: number): Promise<{
 			break
 		}
 	}
-	const finished = await store.dumpFinish(BUILD, cursor)
+	const finished = await calls.finish(cursor)
 	if (!finished.ok) {
 		throw new Error(finished.message)
 	}
 	return { text: text + (finished.trailerText ?? ''), chunks }
+}
+
+// A full dump through the Store RPCs.
+export function dumpViaRpc(store: StoreStub, maxBytes?: number): Promise<{ text: string; chunks: number }> {
+	return collectDump({
+		start: () => store.dumpStart(BUILD),
+		next: (cursor) => store.dumpNext(BUILD, cursor, maxBytes),
+		finish: (cursor) => store.dumpFinish(BUILD, cursor),
+	})
 }
 
 export function splitDump(text: string): { header: unknown; body: string; trailer: unknown } {

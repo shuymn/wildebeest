@@ -2,7 +2,19 @@ import { runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test'
 
 import { describe, expect, it, vi } from 'vitest'
 
-import { BUILD, freshStore, rejectionOf, tableNames, testKernel as kernel } from './helpers'
+import { BUILD, freshStore, migratedStore, rejectionOf, tableNames, testKernel as kernel } from './helpers'
+import {
+	BOUNDED,
+	columnsSql,
+	inserter,
+	JSON_BOUNDED,
+	movedCountSql,
+	seedBounded,
+	storedSql,
+	TABLES,
+	textSql,
+	valuesOf,
+} from './stored-bounds-fixtures'
 import { MIGRATIONS } from '../src/db/migrations'
 import { Db } from '../src/db/sql'
 import { DISTRIBUTABLE_SQL, REACHES_FOLLOWERS_SQL, REQUIRES_MENTION_SQL } from '../src/domain/audience'
@@ -14,6 +26,7 @@ import { moderationRound } from '../src/domain/suspension'
 import { normalizeTag } from '../src/domain/tag-name'
 import { parseRemoteStatus } from '../src/federation/remote-status'
 import { StoreUnavailableError, toStoreUnavailable } from '../src/platform/store-errors'
+import { storedBoundsMigrationSql } from '../src/platform/stored-bounds'
 
 // The shipped migrations, in order; test-only files are named after them (9999_*).
 const NAMES = MIGRATIONS.map((m) => m.name)
@@ -4939,4 +4952,106 @@ describe('0047_status_mentions_shown', () => {
 			expect(plan).toEqual(['SEARCH status_mentions USING COVERING INDEX status_mentions_shown (status_id=?)'])
 		})
 	})
+})
+
+describe('0048_stored_bounds', () => {
+	const NAME = '0048_stored_bounds'
+	const at = NAMES.indexOf(NAME)
+	const REFUSED = (table: string) => new RegExp(`${table}: a value past its stored bound`)
+
+	it("holds storedBoundsMigrationSql's output after its header", () => {
+		const sql = MIGRATIONS[at]?.sql ?? ''
+		const end = sql.indexOf('\n\n')
+		expect(
+			sql
+				.slice(0, end)
+				.split('\n')
+				.every((line) => line.startsWith('--'))
+		).toBe(true)
+		expect(sql.slice(end + 2)).toBe(storedBoundsMigrationSql())
+	})
+
+	it('stores each covered value as P(x), keeps values at their bounds, and leaves only fixed points', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+			seedBounded(sql)
+			const tables = TABLES
+			const expected = tables.map((table) => sql.exec(storedSql(table)).toArray())
+			for (const table of tables) {
+				expect(sql.exec<{ n: number }>(movedCountSql(table)).one().n, table).toBeGreaterThanOrEqual(2)
+			}
+
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+			// Each stored value is, byte for byte (hex), P of the value before, row by row.
+			expect(tables.map((table) => sql.exec(columnsSql(table)).toArray())).toEqual(expected)
+			expect(tables.map((table) => sql.exec<{ n: number }>(movedCountSql(table)).one().n)).toEqual([0, 0, 0, 0])
+			// The rows at their bounds are unchanged; the JSON-bounded values of 400,000 U+0001 are past their bounds.
+			for (const table of tables) {
+				const rows = sql.exec(textSql(table)).toArray()
+				expect(rows[0]).toMatchObject(valuesOf(table, 'at'))
+				const flood = rows[2] ?? {}
+				for (const { column } of JSON_BOUNDED.filter((j) => j.table === table)) {
+					expect(flood[column]).toBe(column === 'spoiler_text' ? '\u0001'.repeat(2730) : '')
+				}
+			}
+			// Lone surrogate bytes are cut by SQLite's characters: the display name at its bound is kept, the one past it
+			// keeps 2,048 of its three-byte characters.
+			const names = sql
+				.exec<{ bytes: number }>(
+					"SELECT length(CAST(display_name AS BLOB)) AS bytes FROM accounts WHERE hex(display_name) GLOB 'EDA080*'"
+				)
+				.toArray()
+			expect(names).toEqual([{ bytes: 3 * 2048 }, { bytes: 3 * 2048 }])
+			// A media URL past its bound is stored as '', the column being NOT NULL.
+			expect(sql.exec("SELECT count(*) AS n FROM media_attachments WHERE url = ''").one().n).toBe(2)
+		})
+	}, 120_000)
+
+	it('refuses a value one past its bound on insert and update, and accepts one at it', async () => {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			const insert = inserter(sql)
+			insert('accounts', {})
+			insert('statuses', {})
+			for (const { table, column, at: value, past } of BOUNDED) {
+				const own = insert(table, { [column]: value })
+				const key = table === 'status_edits' ? 'rowid' : 'id'
+				for (const over of past) {
+					expect(() => insert(table, { [column]: over }), `${table}.${column}`).toThrow(REFUSED(table))
+					expect(() => sql.exec(`UPDATE ${table} SET ${column} = ? WHERE ${key} = ?`, over, own)).toThrow(
+						REFUSED(table)
+					)
+				}
+				sql.exec(`UPDATE ${table} SET ${column} = ? WHERE ${key} = ?`, value, own)
+				expect(sql.exec(`SELECT ${column} AS v FROM ${table} WHERE ${key} = ?`, own).one().v).toBe(value)
+			}
+		})
+	}, 120_000)
+
+	it('fails by its check on an uploaded media URL past the bound, and leaves the Store unmigrated', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+			seedBounded(sql)
+			sql.exec(
+				"UPDATE media_attachments SET file_token = 'token', url = ? WHERE id = '300000000000000001'",
+				'https://kopje.test/'.padEnd(2049, 'x')
+			)
+			const before = TABLES.map((table) => sql.exec(columnsSql(table)).toArray())
+			const result = await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()
+			expect(result).toMatchObject({ ok: false, reason: 'upgrade-failed' })
+			expect(result.ok === false && result.detail).toContain(
+				'CHECK constraint failed: tokened_media_url_within_2048_bytes'
+			)
+			expect(bookkeeping(sql).map((m) => m.name)).toEqual(NAMES.slice(0, at))
+			expect(TABLES.map((table) => sql.exec(columnsSql(table)).toArray())).toEqual(before)
+			expect(
+				sql.exec("SELECT name FROM sqlite_master WHERE type = 'trigger' AND name GLOB '*_bounds_*'").toArray()
+			).toEqual([])
+		})
+	}, 120_000)
 })

@@ -4,8 +4,12 @@ import { Person } from '@fedify/vocab'
 import fc from 'fast-check'
 import { describe, expect, it } from 'vitest'
 
+import { bearer } from './api-helpers'
 import { NOW } from './app-helpers'
-import { freshStore, migratedStore } from './helpers'
+import { BUILD, freshStore, migratedStore } from './helpers'
+import { community } from './status-helpers'
+import { loneSurrogates, movedCountSql, seedBounded, STATUS, TABLES } from './stored-bounds-fixtures'
+import { MIGRATIONS } from '../src/db/migrations'
 import { Db } from '../src/db/sql'
 import { jsonBytes } from '../src/domain/answer-budget'
 import { upsertRemoteActor } from '../src/domain/inbox'
@@ -60,6 +64,7 @@ import {
 	SPOILER_BYTES,
 	STATUS_CONTENT_BYTES,
 } from '../src/security/html'
+import { sha256Hex } from '../src/security/tokens'
 
 // RES-2 (src/platform/stored-bounds.ts): for every covered column, evaluated in the Store's SQLite, a writer's output
 // as stored is a fixed point of the column's projection P, and P(P(x)) = P(x). The inputs are random strings with
@@ -512,5 +517,131 @@ describe('cuts after normalization (RES-2)', () => {
 		expect(html).toContain(`<span class="ellipsis">example.com/${'p'.repeat(17)}</span>`)
 		expect(html.isWellFormed()).toBe(true)
 		expect(renderFieldValue(`${'v'.repeat(MAX_RAW_LENGTH - 1)}${PAIR}`).isWellFormed()).toBe(true)
+	})
+})
+
+// Migration 0048_stored_bounds keeps what the API shows: a converted-row fixture with every covered column at its
+// bound, past it (all together), of 400,000 U+0001 and with U+0000, stored without the triggers as a Store before
+// 0048 holds it, answers the same before and after the file's statements run.
+describe('0048_stored_bounds and presented output (RES-2)', () => {
+	it('answers the same for every converted row before and after the rewrite', async () => {
+		const h = await community(['alice'])
+		const { token } = h.users.alice
+		await runInDurableObject(h.store, (_instance, state) => {
+			const sql = state.storage.sql
+			for (const table of TABLES) {
+				sql.exec(`DROP TRIGGER ${table}_bounds_insert`)
+				sql.exec(`DROP TRIGGER ${table}_bounds_update`)
+			}
+			seedBounded(sql)
+			sql.exec("UPDATE statuses SET edited_at = '2026-10-02T00:00:00.000Z' WHERE id = ?", STATUS)
+		})
+		const ids = (table: string) =>
+			runInDurableObject(h.store, (_instance, state) =>
+				state.storage.sql
+					.exec<{ id: string }>(`SELECT id FROM ${table} ORDER BY id`)
+					.toArray()
+					.map((row) => row.id)
+			)
+		const paths = [
+			...(await ids('accounts')).filter((id) => id.startsWith('1')).map((id) => `/api/v1/accounts/${id}`),
+			...(await ids('statuses')).filter((id) => id.startsWith('2')).map((id) => `/api/v1/statuses/${id}`),
+			`/api/v1/statuses/${STATUS}/history`,
+		]
+		const answers = async () => {
+			const read: [string, number, string][] = []
+			for (const path of paths) {
+				const response = await h.request(path, { headers: { authorization: `Bearer ${token}` } })
+				read.push([path, response.status, await response.text()])
+			}
+			return read
+		}
+		const before = await answers()
+		expect(before.map(([, status]) => status)).toEqual(paths.map(() => 200))
+		const shown = (path: string) =>
+			JSON.parse(before.find(([p]) => p === path)?.[2] ?? 'null') as Record<string, unknown>
+		// The status at its bounds shows its four attachments, and its history every version.
+		expect(shown(`/api/v1/statuses/${STATUS}`).media_attachments).toHaveLength(4)
+		expect(shown(`/api/v1/statuses/${STATUS}/history`)).toHaveLength(8)
+		const sql = MIGRATIONS.find((m) => m.name === '0048_stored_bounds')?.sql ?? ''
+		const moved = await runInDurableObject(h.store, (_instance, state) => {
+			const store = state.storage.sql
+			const count = () => TABLES.map((table) => store.exec<{ n: number }>(movedCountSql(table)).one().n)
+			const was = count()
+			state.storage.transactionSync(() => store.exec(sql))
+			return { was, now: count() }
+		})
+		expect(moved.was.every((n) => n > 0)).toBe(true)
+		expect(moved.now).toEqual([0, 0, 0, 0])
+		expect(await answers()).toEqual(before)
+	}, 120_000)
+})
+
+// A display name of lone surrogate bytes at its bound is a fixed point SQLite stores as given, which a value read into
+// the Worker and bound again is not (three U+FFFD for each): a profile update that leaves the display name keeps it in
+// SQL, and the trigger accepts it.
+describe('a legacy display name after 0048_stored_bounds (RES-2)', () => {
+	it('keeps the stored bytes through a profile update that does not change the display name', async () => {
+		const h = await community(['alice'])
+		const { id, token } = h.users.alice
+		const bytes = () =>
+			runInDurableObject(
+				h.store,
+				(_instance, state) =>
+					state.storage.sql
+						.exec<{ h: string }>('SELECT hex(CAST(display_name AS BLOB)) AS h FROM accounts WHERE id = ?', id)
+						.one().h
+			)
+		await runInDurableObject(h.store, (_instance, state) => {
+			state.storage.sql.exec(
+				'UPDATE accounts SET display_name = CAST(? AS TEXT) WHERE id = ?',
+				loneSurrogates(DISPLAY_NAME_LIMIT),
+				id
+			)
+		})
+		const stored = await bytes()
+		expect(stored).toBe('EDA080'.repeat(DISPLAY_NAME_LIMIT))
+		const body = new FormData()
+		body.set('note', 'a new bio')
+		const response = await h.request('/api/v1/accounts/update_credentials', bearer(token, { method: 'PATCH', body }))
+		expect(response.status).toBe(200)
+		expect(await bytes()).toBe(stored)
+	})
+})
+
+// A media URL of lone surrogate bytes within its bound (921 stored bytes, which a read into the Worker would decode to
+// 2,721) is copied to the profile within SQL when made the avatar, so the account's trigger accepts it.
+describe('a legacy media URL made a profile image after 0048_stored_bounds (RES-2)', () => {
+	it("stores the media row's bytes as the avatar", async () => {
+		const h = await community(['alice'])
+		const { id, token } = h.users.alice
+		const media = '300000000000000001'
+		const url = new Uint8Array([...new TextEncoder().encode('https://kopje.test/m/'), ...loneSurrogates(300)])
+		expect(url.length).toBe(921)
+		await runInDurableObject(h.store, (_instance, state) => {
+			state.storage.sql.exec(
+				"INSERT INTO media_attachments (id, account_id, type, url) VALUES (?, ?, 'image', CAST(? AS TEXT))",
+				media,
+				id,
+				url
+			)
+		})
+		const credential = { tokenHash: await sha256Hex(token), scope: 'write', now: NOW } as const
+		expect(await h.store.setProfileImage(BUILD, { credential, id: media, kind: 'avatar', now: NOW })).toEqual({
+			status: 'ok',
+			value: true,
+		})
+		const stored = await runInDurableObject(h.store, (_instance, state) =>
+			state.storage.sql
+				.exec<{ avatar: string; media: string }>(
+					`SELECT hex(CAST(a.avatar_url AS BLOB)) AS avatar, hex(CAST(m.url AS BLOB)) AS media
+					FROM accounts a, media_attachments m WHERE a.id = ? AND m.id = ?`,
+					id,
+					media
+				)
+				.one()
+		)
+		expect(stored.avatar).toBe(stored.media)
+		expect(stored.avatar.length).toBe(2 * 921)
 	})
 })
