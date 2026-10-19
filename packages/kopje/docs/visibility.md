@@ -916,9 +916,10 @@ stay within 10 past it: a source's follows from 100 to 100,000, the viewer's fro
 sources the same, and from 100 to 1,000 saturated sources only by the lookup of the source window's bound, one entry
 per source. Every candidate is judged, so the work grows with the distinct candidates up to 10,000, not with the graph:
 75,244 rows with 1,000 sources of 10 distinct candidates each, fewer as the viewer hides more of them (a mute ends R12
-early), and 283,844 at the measured maximum, where every source and candidate is on a domain of eight labels with its
+early), and 315,844 at the measured maximum, where every source and candidate is on a domain of eight labels with its
 actor id on another such host and the instance has a suspend block, so each walks every suffix of both keys
-(`availableSql`). The ranking returns at most 40 ids.
+(`availableSql`), each keeps a stale domain mark and the viewer's mute of each candidate has expired, each read and
+passed. The ranking returns at most 40 ids.
 
 A cursor range is a direct range (`id < coalesce(?2, ':')`, `edgeRangeSql`), never `(?2 IS NULL OR id < ?2)`, which
 no index can seek; `test-node/range-predicates.test.ts` checks every statement in `src`.

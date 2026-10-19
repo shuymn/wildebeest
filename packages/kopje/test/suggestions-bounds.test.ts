@@ -29,8 +29,8 @@ const credential = { tokenHash: TOKEN, scope: 'read', now: NOW } as const
 const INPUT = { credential, version: 1 as const, offset: 0, limit: 80, present: { origin: 'https://kopje.test' } }
 // How many rows a read may add where the work is meant to be flat: a few for a planner's choice.
 const ALLOWANCE = 10
-// The rows a request reads at most: the maximum case below measures 283,844 (docs/visibility.md, "Read bounds").
-const SUGGESTION_ROWS = 300_000
+// The rows a request reads at most: the maximum case below measures 315,844 (docs/visibility.md, "Read bounds").
+const SUGGESTION_ROWS = 330_000
 // The statement that ranks the candidates.
 const RANKING = /edges\(x\) AS/
 
@@ -189,6 +189,7 @@ function expectRanges(rows: { id: number; parent: number; detail: string }[]): v
 describe('suggestions read their windows as ranges (RES-7)', () => {
 	it('keeps the plan with fresh statistics and with statistics taken before a source grew', async () => {
 		const fresh = await store(graph(0, 3, 5))
+		await sql(fresh, 'ANALYZE')
 		expectRanges((await plan(fresh)).plan)
 		// Statistics of a small Store, then one source grows to 100,001 follows without them being taken again.
 		const stale = await store(graph(0, 3, 5))
@@ -282,7 +283,9 @@ describe('suggestions read rows within their windows (RES-7)', () => {
 		// Every window full of distinct candidates, each judged through every term of R12 (none hidden, so no term
 		// stops early), every account on a domain of the most labels an instance block walks with its actor id on
 		// another such host (two keys to walk), and a suspend block on the instance that names neither, so each source
-		// and each candidate walks every suffix of both keys; the viewer blocks other domains.
+		// and each candidate walks every suffix of both keys; each account keeps a stale domain mark (R38: read by the
+		// availability seek, then its row), the viewer's mute of each candidate has expired (read, then passed), and
+		// the viewer blocks other domains.
 		const sources = SUGGESTION_SOURCES
 		const where = { domain: 'a.b.c.d.e.f.g.example', host: 'h.b.c.d.e.f.g.example' }
 		const { rows, shown } = await rowsOf((run) => {
@@ -292,6 +295,15 @@ describe('suggestions read rows within their windows (RES-7)', () => {
 				VALUES ('elsewhere.example', 'suspend', 'x', 'x')`
 			)
 			run(`${n(100)} INSERT INTO domain_blocks (account_id, domain) SELECT ?1, 'd' || i || '.example' FROM n`, VIEWER)
+			run(
+				`UPDATE accounts SET suspended_at = '2026-01-01T00:00:00.000Z', suspension_source = 'domain'
+				WHERE id >= '${BASE}'`
+			)
+			run(
+				`${n(SUGGESTION_EDGES)} INSERT INTO mutes (account_id, target_account_id, expires_at)
+				SELECT ?1, CAST(${BASE} + ${sources} + i AS TEXT), '2026-01-01T00:00:00.000Z' FROM n`,
+				VIEWER
+			)
 		})
 		console.log(JSON.stringify({ maximum: rows }))
 		expect(shown).toHaveLength(SUGGESTIONS_KEPT)

@@ -448,35 +448,55 @@ describe('suggestion windows at their bounds', () => {
 	it('judges every candidate before the ranking: a hidden account takes no place in it', async () => {
 		const h = await community(['alice'])
 		const { alice } = h.users
-		const [a = '', b = '', c = ''] = await remotes(h.store, 0, 3)
-		// 199 muted accounts that a, b and c all follow; y, followed by a alone; h0 not discoverable and h1 discoverable,
-		// both blocking alice, h1 newer than y.
-		const muted = await remotes(h.store, 3, 199)
-		const [y = '', h0 = '', h1 = ''] = await remotes(h.store, 202, 3)
+		const [a = '', b = '', c = '', d = ''] = await remotes(h.store, 0, 4)
+		// 199 muted accounts, each followed by two sources: a and b follow the first 100, c and d the other 99, then y
+		// (by c) and h (by d) in their hundredth slot. h is h0, not discoverable, or h1, discoverable and newer than y;
+		// both block alice. So every edge is in its source's window, and before R12 the candidates are 200 (h0) or 201
+		// (h1): the 199 muted ones at two edges each, then h1 above y at one.
+		const muted = await remotes(h.store, 4, 199)
+		const [y = '', h0 = '', h1 = ''] = await remotes(h.store, 203, 3)
 		await sql(h.store, 'UPDATE accounts SET discoverable = 0 WHERE id = ?', h0)
-		await fan(h.store, alice.id, [a, b, c])
-		for (const source of [a, b, c]) {
-			await fan(h.store, source, muted)
+		await fan(h.store, alice.id, [a, b, c, d])
+		for (const source of [a, b]) {
+			await fan(h.store, source, muted.slice(0, 100))
 		}
-		await follows(h.store, [
-			[a, y],
-			[c, h0],
-		])
+		await fan(h.store, c, [...muted.slice(100), y])
+		await fan(h.store, d, [...muted.slice(100), h0])
 		for (const m of muted) {
 			await mute(h.store, alice.id, m)
 		}
 		for (const blocker of [h0, h1]) {
 			await block(h.store, blocker, alice.id)
 		}
+		// The discoverable targets of the four sources' windows, every one of their follows here.
+		const groups = async () =>
+			(
+				await sql<{ n: number }>(
+					h.store,
+					`SELECT count(DISTINCT f.target_account_id) AS n FROM follows f JOIN accounts a ON a.id = f.target_account_id
+					WHERE f.account_id IN (?, ?, ?, ?) AND a.discoverable = 1`,
+					a,
+					b,
+					c,
+					d
+				)
+			)[0]?.n
+		for (const source of [a, b, c, d]) {
+			expect(await sql(h.store, 'SELECT 1 FROM follows WHERE account_id = ?', source)).toHaveLength(
+				SUGGESTION_EDGES_PER_SOURCE
+			)
+		}
+		expect(await groups()).toBe(200)
 		expect(await suggested(h, alice)).toEqual([y])
 		// The same edge to h1 instead: h1 ranks above y and is hidden; what alice is shown does not change.
 		await sql(
 			h.store,
 			'UPDATE follows SET target_account_id = ? WHERE account_id = ? AND target_account_id = ?',
 			h1,
-			c,
+			d,
 			h0
 		)
+		expect(await groups()).toBe(201)
 		expect(await suggested(h, alice)).toEqual([y])
 	}, 60_000)
 
