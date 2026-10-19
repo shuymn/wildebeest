@@ -1,4 +1,4 @@
-import type { Exception, Exceptions } from './mastodon-conformance'
+import type { Exception, Exceptions } from './mastodon-conformance.js'
 
 // The request parameters Mastodon reads and Kopje does not, by route (test/mastodon-params.test.ts). Each is a real
 // gap: tracked by an issue (open) or a decided deviation of docs/mastodon-deviations.md (accepted). A harness

@@ -1,9 +1,18 @@
+import { readFileSync } from 'node:fs'
+
 import type { Node } from 'oxc-parser'
 import { describe, expect, it } from 'vitest'
 
 import { guardFixtures, parse, sources, type Source } from './source-scan.js'
 import mastodon from '../test/fixtures/mastodon-4.5.11-api-access.json' with { type: 'json' }
-import { type Exception, type Exceptions, unresolvedFailures } from '../test/mastodon-conformance.js'
+import {
+	deviationIds,
+	deviationsCited,
+	type Exception,
+	type Exceptions,
+	unresolvedFailures,
+} from '../test/mastodon-conformance.js'
+import { PARAM_EXCEPTIONS } from '../test/mastodon-params-exceptions.js'
 
 // Every field Mastodon's serializers emit (the fixture's entities, read from Mastodon's source by
 // scripts/mastodon-scopes.mjs) is a property of Kopje's response type for that entity, and no property of those types
@@ -251,6 +260,13 @@ const ALL = sources('src')
 describe(`entity fields match Mastodon v${mastodon.mastodon}`, () => {
 	it('finds no field missing or typed as a placeholder beyond the exceptions', () => {
 		expect(findings(ALL, MAPPING, mastodon.entities, ENTITY_EXCEPTIONS, UNRESOLVED_ENTITIES)).toEqual([])
+	})
+
+	it('cites only defined deviations, and every deviation is cited by an exception of either check', () => {
+		const defined = deviationIds(readFileSync(new URL('../docs/mastodon-deviations.md', import.meta.url), 'utf8'))
+		const cited = new Set(deviationsCited(PARAM_EXCEPTIONS, ENTITY_EXCEPTIONS))
+		expect([...cited].filter((id) => !defined.includes(id))).toEqual([])
+		expect(defined.filter((id) => !cited.has(id))).toEqual([])
 	})
 
 	it('maps every entity of the fixture and only those', () => {
