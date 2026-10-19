@@ -5086,30 +5086,25 @@ describe('0052_favourite_likes', () => {
 			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
 			expect(sql.exec('SELECT * FROM favourites ORDER BY id').toArray()).toEqual(before)
 			expect(sql.exec('SELECT count(*) AS n FROM favourite_likes').one().n).toBe(0)
-			// An Undo's lookup (inbox.ts trackedLike, interactionOf) names favourite_likes_uri: the actor's favourites,
-			// any number, are never ranged over.
-			const plan = sql
-				.exec<{ detail: string }>(
-					`EXPLAIN QUERY PLAN SELECT l.id FROM favourite_likes l INDEXED BY favourite_likes_uri
-					JOIN favourites f ON f.id = l.favourite_id WHERE l.uri = ? AND f.account_id = ?`,
-					'https://r.example/likes/2',
-					'100000000000000002'
-				)
-				.toArray()
-				.map((row) => row.detail)
-			expect(plan).toEqual([
-				'SEARCH l USING INDEX favourite_likes_uri (uri=?)',
-				'SEARCH f USING INTEGER PRIMARY KEY (rowid=?)',
-			])
-			// A retained id, the actor's own (inbox.ts retainedLike) and any actor's (like's admission), one seek each.
 			const planOf = (query: string, ...params: string[]) =>
 				sql
 					.exec<{ detail: string }>(`EXPLAIN QUERY PLAN ${query}`, ...params)
 					.toArray()
 					.map((row) => row.detail)
+			// An Undo's lookup (inbox.ts trackedLike, interactionOf) names favourite_likes_uri: the actor's favourites,
+			// any number, are never ranged over.
 			expect(
 				planOf(
-					`SELECT f.id, f.status_id, f.uri FROM favourites f INDEXED BY favourites_like_uri
+					`SELECT l.id FROM favourite_likes l INDEXED BY favourite_likes_uri
+					JOIN favourites f ON f.id = l.favourite_id WHERE l.uri = ? AND f.account_id = ?`,
+					'https://r.example/likes/2',
+					'100000000000000002'
+				)
+			).toEqual(['SEARCH l USING INDEX favourite_likes_uri (uri=?)', 'SEARCH f USING INTEGER PRIMARY KEY (rowid=?)'])
+			// A retained id, the actor's own (inbox.ts retainedLike) and any actor's (like's admission), one seek each.
+			expect(
+				planOf(
+					`SELECT f.id, f.status_id FROM favourites f INDEXED BY favourites_like_uri
 					WHERE f.uri = ? AND f.account_id = ? LIMIT 1`,
 					'https://r.example/likes/2',
 					'100000000000000002'

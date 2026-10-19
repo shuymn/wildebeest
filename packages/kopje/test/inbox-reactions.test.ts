@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { sql } from './api-helpers'
 import { NOW } from './app-helpers'
-import { BUILD, migratedStore } from './helpers'
+import { migratedStore } from './helpers'
 import { LOCAL, MASTODON, MISSKEY, mastodonActor, misskeyActor, type TestActor } from './inbox-helpers'
 import {
 	accountId,
@@ -23,7 +23,9 @@ import {
 	setup,
 	statusRow,
 	undo,
+	retractionsAtCap,
 } from './inbox-status-helpers'
+import { storeReceive, writtenBy } from './inbox-store-helpers'
 import { copyConfig, dumpViaRpc, importViaRpc, tableSnapshot } from './ops-helpers'
 import { seedStatus } from './status-helpers'
 import { Db } from '../src/db/sql'
@@ -31,7 +33,6 @@ import {
 	deleteStatusBatch,
 	type InboundActivity,
 	LIKE_RETIRE_AFTER_MS,
-	MAX_RETRACTIONS_PER_ACTOR,
 	MAX_TRACKED_LIKES,
 	PURGE_BATCH,
 	purgeBatch,
@@ -70,22 +71,10 @@ async function state(t: Setup) {
 	}
 }
 
-async function retractionsAtCap(t: Setup, actor: TestActor): Promise<void> {
-	await sql(
-		t.store,
-		`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
-		INSERT INTO inbound_retractions (actor_uri, target_uri, expires_at) SELECT ?, ? || '/filler/' || i, ? FROM n`,
-		MAX_RETRACTIONS_PER_ACTOR,
-		actor.uri,
-		actor.uri,
-		NOW + DAY
-	)
-}
-
 // The Store's receive, as the Worker calls it once it has verified and parsed the activity (the actor stored).
 function receiver(t: Setup, actor: TestActor) {
 	return (activity: InboundActivity, now = NOW): Promise<ReceiveResult> =>
-		t.store.receiveActivity(BUILD, { now, origin: LOCAL, actorUri: actor.uri, actor: null, activity })
+		storeReceive(t.store, actor.uri, activity, now)
 }
 
 const likeOf = (actor: TestActor, object: string, n: string): Extract<InboundActivity, { type: 'Like' }> => ({
@@ -114,6 +103,32 @@ type UndoStyle = (typeof UNDO_STYLES)[number]
 function undoIn(style: UndoStyle, actor: TestActor, liked: { id: string; object: string }, n: number): InboundActivity {
 	return style === 'typed' || (style === 'mixed' && n % 2 === 0) ? undoOf(actor, liked) : untypedUndoOf(liked)
 }
+
+// The setup most cases share: a Misskey actor, stored by a first Like of an unknown object.
+async function withNeko(): Promise<{ t: Setup; bob: TestActor }> {
+	const t = await setup()
+	const bob = await misskeyActor(t.web, '9abcdefghi', 'neko')
+	await t.post(bob, like(bob, `${LOCAL}/ap/o/unknown`))
+	return { t, bob }
+}
+
+// alice's push subscription for favourites, and the pushes recorded so far (the push_deliveries sequence).
+async function favouritePushes(t: Setup): Promise<() => Promise<number>> {
+	await sql(
+		t.store,
+		`INSERT INTO push_subscriptions (token_hash, endpoint, key_p256dh, key_auth, alerts)
+		VALUES (?, 'https://push.example/alice', 'p256dh', 'auth', '{"favourite":true}')`,
+		await sha256Hex(t.tokens.alice)
+	)
+	return async () =>
+		(await sql<{ seq: number }>(t.store, "SELECT seq FROM sqlite_sequence WHERE name = 'push_deliveries'"))[0]?.seq ?? 0
+}
+
+// An embedded (typed) or by-id (untyped) Undo; the mixed style is UNDO_STYLES'.
+const EITHER_STYLE = ['typed', 'untyped'] as const
+
+const undoneBoost = (style: (typeof EITHER_STYLE)[number], actor: TestActor, id: string, object: string) =>
+	style === 'typed' ? { id, type: 'Announce', actor: actor.uri, object } : id
 
 // A local status of alice's, seeded as a fixture (the cases below need many), with its uri.
 async function seededLocal(t: Setup): Promise<string> {
@@ -242,9 +257,7 @@ describe('ID-7: reaction changes in every arrival order', () => {
 	it.each(UNDO_STYLES)(
 		'keeps the favourite exactly while the last Like is outstanding: every order of L1 U1 L2 U2 L3 (%s Undos)',
 		async (style) => {
-			const t = await setup()
-			const bob = await misskeyActor(t.web, '9abcdefghi', 'neko')
-			await t.post(bob, like(bob, `${LOCAL}/ap/o/unknown`))
+			const { t, bob } = await withNeko()
 			for (const order of permutations([L(1), U(1), L(2), U(2), L(3)])) {
 				await replay(t, bob, order, style)
 			}
@@ -255,9 +268,7 @@ describe('ID-7: reaction changes in every arrival order', () => {
 	it.each(UNDO_STYLES)(
 		'removes it once every Like is undone: every order of L1 U1 L2 U2 L3 U3 (%s Undos)',
 		async (style) => {
-			const t = await setup()
-			const bob = await misskeyActor(t.web, '9abcdefghi', 'neko')
-			await t.post(bob, like(bob, `${LOCAL}/ap/o/unknown`))
+			const { t, bob } = await withNeko()
 			for (const order of permutations([L(1), U(1), L(2), U(2), L(3), U(3)])) {
 				await replay(t, bob, order, style)
 			}
@@ -266,9 +277,7 @@ describe('ID-7: reaction changes in every arrival order', () => {
 	)
 
 	it('keeps the current Like that arrived first while the old ones and their Undos follow (L5, L1-L3, U1-U3)', async () => {
-		const t = await setup()
-		const bob = await misskeyActor(t.web, '9abcdefghi', 'neko')
-		await t.post(bob, like(bob, `${LOCAL}/ap/o/unknown`))
+		const { t, bob } = await withNeko()
 		const receive = receiver(t, bob)
 		const uri = await seededLocal(t)
 		const [l1, l2, l3, l5] = ['1', '2', '3', '5'].map((n) => likeOf(bob, uri, n))
@@ -280,9 +289,7 @@ describe('ID-7: reaction changes in every arrival order', () => {
 	})
 
 	it('answers 503 to a fifth outstanding Like, and tracks it when it is delivered again after an Undo (L1-L4, L5)', async () => {
-		const t = await setup()
-		const bob = await misskeyActor(t.web, '9abcdefghi', 'neko')
-		await t.post(bob, like(bob, `${LOCAL}/ap/o/unknown`))
+		const { t, bob } = await withNeko()
 		const receive = receiver(t, bob)
 		const uri = await seededLocal(t)
 		const [l1, l2, l3, l4, l5] = ['1', '2', '3', '4', '5'].map((n) => likeOf(bob, uri, n))
@@ -310,9 +317,7 @@ describe('ID-7: reaction changes in every arrival order', () => {
 	// any arrival order; a 503 is delivered again later, as the sending server retries it. Transient 503s are valid
 	// (five Likes can overtake their Undos); the state once everything is delivered is the last reaction.
 	it('ends at the last reaction whatever order a burst arrives in, retrying what was answered 503', async () => {
-		const t = await setup()
-		const bob = await misskeyActor(t.web, '9abcdefghi', 'neko')
-		await t.post(bob, like(bob, `${LOCAL}/ap/o/unknown`))
+		const { t, bob } = await withNeko()
 		const receive = receiver(t, bob)
 		let run = 0
 		await fc.assert(
@@ -390,19 +395,9 @@ describe('ID-7: a tracked Like whose Undo was lost', () => {
 	}
 
 	it('is retired by the Store’s clock to make room, with its tombstone; a younger one never is', async () => {
-		const t = await setup()
-		const bob = await misskeyActor(t.web, '9abcdefghi', 'neko')
-		await t.post(bob, like(bob, `${LOCAL}/ap/o/unknown`))
+		const { t, bob } = await withNeko()
 		const uri = await seededLocal(t)
-		await sql(
-			t.store,
-			`INSERT INTO push_subscriptions (token_hash, endpoint, key_p256dh, key_auth, alerts)
-			VALUES (?, 'https://push.example/alice', 'p256dh', 'auth', '{"favourite":true}')`,
-			await sha256Hex(t.tokens.alice)
-		)
-		const pushes = async () =>
-			(await sql<{ seq: number }>(t.store, "SELECT seq FROM sqlite_sequence WHERE name = 'push_deliveries'"))[0]?.seq ??
-			0
+		const pushes = await favouritePushes(t)
 		// Three reactions whose Undos never arrived (the sending server gave up), then a young one.
 		const { receive, lost, young } = await lostLikes(t, bob, uri)
 		expect(await pushes()).toBe(1)
@@ -447,9 +442,7 @@ describe('ID-7: a tracked Like whose Undo was lost', () => {
 	})
 
 	it('answers 503 and writes nothing when the retired id’s tombstone cannot be recorded', async () => {
-		const t = await setup()
-		const bob = await misskeyActor(t.web, '9abcdefghi', 'neko')
-		await t.post(bob, like(bob, `${LOCAL}/ap/o/unknown`))
+		const { t, bob } = await withNeko()
 		const uri = await seededLocal(t)
 		const { receive } = await lostLikes(t, bob, uri)
 		await retractionsAtCap(t, bob)
@@ -482,9 +475,7 @@ describe('ID-7: Like ids are unique instance-wide, and bounded', () => {
 	})
 
 	it('stores a Like id up to ACTIVITY_ID_LIMIT JSON-escaped UTF-8 bytes, NUL and astral characters included', async () => {
-		const t = await setup()
-		const bob = await misskeyActor(t.web, '9abcdefghi', 'neko')
-		await t.post(bob, like(bob, `${LOCAL}/ap/o/unknown`))
+		const { t, bob } = await withNeko()
 		const receive = receiver(t, bob)
 		const prefix = `${MISSKEY}/likes/`
 		// '\0' is 6 bytes escaped (\u0000), '😀' 4: a prefix, then fillers to exactly the bound.
@@ -561,8 +552,7 @@ describe('ID-7: an Undo of a reaction to a status that is not local', () => {
 			await t.post(bob, undo(bob, { id: `${unmatched}-2`, type: 'Like', actor: bob.uri, object: `${OTHER}/n/9` }))
 		).toBe(202)
 		expect(await sql(t.store, 'SELECT * FROM inbound_retractions')).toEqual([])
-		// A converted favourite of each remote status: one legacy (the cutover keeps no remote Like id), one tracking
-		// the id 0052_favourite_likes moved out of favourites.uri.
+		// A favourite of each remote status: one id-less (the cutover keeps no remote Like id), one with a tracked id.
 		const ids = await sql<{ id: string; uri: string }>(
 			t.store,
 			'SELECT id, uri FROM statuses WHERE uri IN (?, ?)',
@@ -578,11 +568,11 @@ describe('ID-7: an Undo of a reaction to a status that is not local', () => {
 			statusId(other.id),
 			new Date(NOW).toISOString()
 		)
-		const moved = `${MASTODON}/likes/moved`
+		const trackedId = `${MASTODON}/likes/tracked`
 		await sql(
 			t.store,
 			'INSERT INTO favourite_likes (favourite_id, uri, received_at) SELECT id, ?, 0 FROM favourites WHERE status_id = ?',
-			moved,
+			trackedId,
 			statusId(other.id)
 		)
 		await sql(
@@ -593,7 +583,7 @@ describe('ID-7: an Undo of a reaction to a status that is not local', () => {
 		)
 		const legacyUndo = `${MASTODON}/likes/legacy`
 		expect(await t.post(bob, undo(bob, { id: legacyUndo, type: 'Like', actor: bob.uri, object: remote.id }))).toBe(202)
-		expect(await t.post(bob, undo(bob, { id: moved, type: 'Like', actor: bob.uri, object: other.id }))).toBe(202)
+		expect(await t.post(bob, undo(bob, { id: trackedId, type: 'Like', actor: bob.uri, object: other.id }))).toBe(202)
 		expect(await sql(t.store, 'SELECT * FROM favourites')).toEqual([])
 		expect(await sql(t.store, 'SELECT * FROM favourite_likes')).toEqual([])
 		expect((await statusRow(t.store, remote.id))?.favourites_count).toBe(0)
@@ -602,7 +592,7 @@ describe('ID-7: an Undo of a reaction to a status that is not local', () => {
 			(
 				await sql<{ target_uri: string }>(t.store, 'SELECT target_uri FROM inbound_retractions ORDER BY target_uri')
 			).map((row) => row.target_uri)
-		).toEqual([legacyUndo, moved])
+		).toEqual([legacyUndo, trackedId])
 	})
 })
 
@@ -663,7 +653,6 @@ describe('ID-7: a remote favourite stored before 0052_favourite_likes', () => {
 	// its outstanding ids until its own Undo.
 	async function preUpgrade(t: Setup, bob: TestActor, name?: string) {
 		const receive = receiver(t, bob)
-		await t.post(bob, like(bob, `${LOCAL}/ap/o/unknown`))
 		const uri = await seededLocal(t)
 		const bobId = (await accountId(t.store, bob.uri))!
 		const old = likeOf(bob, uri, name ?? `before-upgrade-${uri}`)
@@ -685,24 +674,19 @@ describe('ID-7: a remote favourite stored before 0052_favourite_likes', () => {
 		expect((await statusRow(t.store, uri))?.favourites_count).toBe(0)
 	}
 
-	it.each(['typed', 'untyped'] as const)(
-		'is removed by a %s Undo of its stored id, with its tombstone',
-		async (style) => {
-			const t = await setup()
-			const bob = await misskeyActor(t.web, '9abcdefghi', 'neko')
-			const { receive, uri, old } = await preUpgrade(t, bob)
-			expect(await receive(undoIn(style, bob, old, 0))).toMatchObject({ applied: true, reason: 'undone' })
-			await gone(t, uri)
-			expect(await receive(old)).toMatchObject({ applied: false, reason: 'retracted' })
-			await gone(t, uri)
-			// The typed Undo that a server retries after its untyped one changes nothing more.
-			expect(await receive(undoOf(bob, old))).toMatchObject({ applied: false, reason: 'retracted' })
-		}
-	)
+	it.each(EITHER_STYLE)('is removed by a %s Undo of its stored id, with its tombstone', async (style) => {
+		const { t, bob } = await withNeko()
+		const { receive, uri, old } = await preUpgrade(t, bob)
+		expect(await receive(undoIn(style, bob, old, 0))).toMatchObject({ applied: true, reason: 'undone' })
+		await gone(t, uri)
+		expect(await receive(old)).toMatchObject({ applied: false, reason: 'retracted' })
+		await gone(t, uri)
+		// The typed Undo that a server retries after its untyped one changes nothing more.
+		expect(await receive(undoOf(bob, old))).toMatchObject({ applied: false, reason: 'retracted' })
+	})
 
 	it('is removed by an Undo of its stored id that a Delete of the id tombstoned first', async () => {
-		const t = await setup()
-		const bob = await misskeyActor(t.web, '9abcdefghi', 'neko')
+		const { t, bob } = await withNeko()
 		const { receive, uri, old } = await preUpgrade(t, bob)
 		expect(await receive({ type: 'Delete', id: `${old.id}/delete`, object: old.id })).toMatchObject({ applied: true })
 		expect(await receive(untypedUndoOf(old))).toMatchObject({ applied: true, reason: 'undone' })
@@ -710,8 +694,7 @@ describe('ID-7: a remote favourite stored before 0052_favourite_likes', () => {
 	})
 
 	it('is kept by a typed Undo of another id naming its status, which records only that id', async () => {
-		const t = await setup()
-		const bob = await misskeyActor(t.web, '9abcdefghi', 'neko')
+		const { t, bob } = await withNeko()
 		const { receive, uri, old } = await preUpgrade(t, bob)
 		const other = likeOf(bob, uri, 'other')
 		expect(await receive(undoOf(bob, other))).toMatchObject({ applied: true, reason: 'retraction-recorded' })
@@ -727,8 +710,7 @@ describe('ID-7: a remote favourite stored before 0052_favourite_likes', () => {
 	// Retained L0, Like L1, Undo L1, then a typed Undo of L2 naming the status that overtakes L2: L0 is still
 	// outstanding, so the favourite, its count and notification stay, and L0 is not tombstoned.
 	it('keeps its retained id outstanding after its last tracked one is undone, whatever Undo overtakes a Like', async () => {
-		const t = await setup()
-		const bob = await misskeyActor(t.web, '9abcdefghi', 'neko')
+		const { t, bob } = await withNeko()
 		const { receive, uri, old } = await preUpgrade(t, bob)
 		const bobId = (await accountId(t.store, bob.uri))!
 		await sql(
@@ -773,8 +755,7 @@ describe('ID-7: a remote favourite stored before 0052_favourite_likes', () => {
 				] as const
 		)
 	)('keeps its retained id beside a new Like’s; then %s Undos, %s, end it', async (style, order) => {
-		const t = await setup()
-		const bob = await misskeyActor(t.web, '9abcdefghi', 'neko')
+		const { t, bob } = await withNeko()
 		const { receive, uri, old } = await preUpgrade(t, bob)
 		const fresh = likeOf(bob, uri, 'after-upgrade')
 		expect(await receive(fresh)).toMatchObject({ applied: true, reason: 'favourite-kept' })
@@ -796,8 +777,7 @@ describe('ID-7: a remote favourite stored before 0052_favourite_likes', () => {
 	})
 
 	it('refuses another actor’s Like under its retained id as a duplicate; its own Undos are unaffected', async () => {
-		const t = await setup()
-		const bob = await misskeyActor(t.web, '9abcdefghi', 'neko')
+		const { t, bob } = await withNeko()
 		const carol = await misskeyActor(t.web, '9bcdefghij', 'carol', { key: 2 })
 		const { receive, uri, old } = await preUpgrade(t, bob)
 		await t.post(carol, like(carol, `${LOCAL}/ap/o/unknown`))
@@ -816,8 +796,7 @@ describe('ID-7: a remote favourite stored before 0052_favourite_likes', () => {
 	})
 
 	it('keeps a retained id past ACTIVITY_ID_LIMIT working (the bound applies to new ids only)', async () => {
-		const t = await setup()
-		const bob = await misskeyActor(t.web, '9abcdefghi', 'neko')
+		const { t, bob } = await withNeko()
 		const { receive, uri, old } = await preUpgrade(t, bob, `oversized-${'x'.repeat(ACTIVITY_ID_LIMIT)}`)
 		const fresh = likeOf(bob, uri, 'after-upgrade')
 		expect(await receive(fresh)).toMatchObject({ applied: true, reason: 'favourite-kept' })
@@ -828,8 +807,7 @@ describe('ID-7: a remote favourite stored before 0052_favourite_likes', () => {
 	})
 
 	it('counts its retained id under MAX_TRACKED_LIKES', async () => {
-		const t = await setup()
-		const bob = await misskeyActor(t.web, '9abcdefghi', 'neko')
+		const { t, bob } = await withNeko()
 		const { receive, uri } = await preUpgrade(t, bob)
 		const likes = ['a', 'b', 'c', 'd'].map((n) => likeOf(bob, uri, n))
 		for (const liked of likes.slice(0, MAX_TRACKED_LIKES - 1)) {
@@ -841,8 +819,7 @@ describe('ID-7: a remote favourite stored before 0052_favourite_likes', () => {
 	})
 
 	it('ignores a replay of its stored Like as a duplicate', async () => {
-		const t = await setup()
-		const bob = await misskeyActor(t.web, '9abcdefghi', 'neko')
+		const { t, bob } = await withNeko()
 		const { receive, uri, old } = await preUpgrade(t, bob)
 		expect(await receive(old)).toMatchObject({ applied: false, reason: 'duplicate' })
 		expect(await sql(t.store, 'SELECT uri FROM favourites')).toEqual([{ uri: old.id }])
@@ -851,7 +828,7 @@ describe('ID-7: a remote favourite stored before 0052_favourite_likes', () => {
 })
 
 describe('ID-7: an Undo of a boost whose id a tombstone already holds', () => {
-	it.each(['typed', 'untyped'] as const)('removes a stored boost all the same (%s Undo)', async (style) => {
+	it.each(EITHER_STYLE)('removes a stored boost all the same (%s Undo)', async (style) => {
 		const t = await setup()
 		const bob = await mastodonActor(t.web, 'bob')
 		const local = await localStatus(t, { status: 'boost me', visibility: 'public' })
@@ -865,7 +842,7 @@ describe('ID-7: an Undo of a boost whose id a tombstone already holds', () => {
 			boost.id,
 			NOW + DAY
 		)
-		const object = style === 'typed' ? { id: boost.id, type: 'Announce', actor: bob.uri, object: local.uri } : boost.id
+		const object = undoneBoost(style, bob, boost.id, local.uri)
 		expect(await t.post(bob, undo(bob, object))).toBe(202)
 		expect(await sql(t.store, 'SELECT * FROM statuses WHERE uri = ?', boost.id)).toEqual([])
 		expect((await statusRow(t.store, local.uri))?.reblogs_count).toBe(0)
@@ -873,7 +850,7 @@ describe('ID-7: an Undo of a boost whose id a tombstone already holds', () => {
 		expect(await sql(t.store, 'SELECT * FROM statuses WHERE uri = ?', boost.id)).toEqual([])
 	})
 
-	it.each(['typed', 'untyped'] as const)(
+	it.each(EITHER_STYLE)(
 		'keeps a Delete, then an Undo (%s), then a replayed Announce from restoring it',
 		async (style) => {
 			const t = await setup()
@@ -882,8 +859,7 @@ describe('ID-7: an Undo of a boost whose id a tombstone already holds', () => {
 			const boost = announce(bob, local.uri)
 			expect(await t.post(bob, boost)).toBe(202)
 			expect(await t.post(bob, remove(bob, boost.id))).toBe(202)
-			const object =
-				style === 'typed' ? { id: boost.id, type: 'Announce', actor: bob.uri, object: local.uri } : boost.id
+			const object = undoneBoost(style, bob, boost.id, local.uri)
 			expect(await t.post(bob, undo(bob, object))).toBe(202)
 			expect(await t.post(bob, boost)).toBe(202)
 			expect(await sql(t.store, 'SELECT * FROM statuses WHERE uri = ?', boost.id)).toEqual([])
@@ -897,15 +873,8 @@ describe('VIS-10: the favourite notification follows the aggregate', () => {
 		['an Undo, then the new Like: removed, then notified and pushed again', 'undo-first', 2],
 		['the new Like, then the Undo: one notification and one push', 'like-first', 1],
 	] as const)('%s', async (_name, order, expectedPushes) => {
-		const t = await setup()
-		const bob = await misskeyActor(t.web, '9abcdefghi', 'neko')
-		await t.post(bob, like(bob, `${LOCAL}/ap/o/unknown`))
-		await sql(
-			t.store,
-			`INSERT INTO push_subscriptions (token_hash, endpoint, key_p256dh, key_auth, alerts)
-			VALUES (?, 'https://push.example/alice', 'p256dh', 'auth', '{"favourite":true}')`,
-			await sha256Hex(t.tokens.alice)
-		)
+		const { t, bob } = await withNeko()
+		const pushes = await favouritePushes(t)
 		const receive = receiver(t, bob)
 		const uri = await seededLocal(t)
 		const [first, second] = ['1', '2'].map((n) => likeOf(bob, uri, n))
@@ -918,9 +887,7 @@ describe('VIS-10: the favourite notification follows the aggregate', () => {
 		const rows = await sql<{ id: number }>(t.store, "SELECT id FROM notifications WHERE type = 'favourite'")
 		expect(rows).toHaveLength(1)
 		expect(rows[0]!.id === notified[0]!.id).toBe(order === 'like-first')
-		expect(
-			(await sql<{ seq: number }>(t.store, "SELECT seq FROM sqlite_sequence WHERE name = 'push_deliveries'"))[0]?.seq
-		).toBe(expectedPushes)
+		expect(await pushes()).toBe(expectedPushes)
 	})
 })
 
@@ -928,14 +895,8 @@ describe('RES-6: tracked Like ids in bounded deletions', () => {
 	async function batches(t: Setup, step: (db: Db) => boolean): Promise<number[]> {
 		const wrote: number[] = []
 		for (let i = 0; i < 50; i++) {
-			const { n, more } = await runInDurableObject(t.store, (_instance, state) => {
-				const db = new Db(state.storage.sql)
-				const changes = () => db.first<{ n: number }>('SELECT total_changes() AS n')!.n
-				const before = changes()
-				const more = state.storage.transactionSync(() => step(db))
-				return { n: changes() - before, more }
-			})
-			wrote.push(n)
+			const { result: more, rows } = await writtenBy(t.store, step)
+			wrote.push(rows)
 			if (!more) {
 				break
 			}
@@ -944,9 +905,7 @@ describe('RES-6: tracked Like ids in bounded deletions', () => {
 	}
 
 	it('purges an actor whose favourites each track MAX_TRACKED_LIKES ids, every batch within PURGE_BATCH', async () => {
-		const t = await setup()
-		const bob = await misskeyActor(t.web, '9abcdefghi', 'neko')
-		await t.post(bob, like(bob, `${LOCAL}/ap/o/unknown`))
+		const { t, bob } = await withNeko()
 		const receive = receiver(t, bob)
 		// 150 favourites through the inbox, 600 tracked ids: more than a batch writes.
 		for (let s = 0; s < 150; s++) {
@@ -987,7 +946,7 @@ describe('RES-6: tracked Like ids in bounded deletions', () => {
 		const note = mastodonNote(carol)
 		await t.post(carol, create(carol, note))
 		const statusId = (await sql<{ id: string }>(t.store, 'SELECT id FROM statuses WHERE uri = ?', note.id))[0]!.id
-		// 200 remote favourites of it with 4 ids each, as 0052_favourite_likes moves them from earlier rows.
+		// 200 remote favourites of it with 4 tracked ids each (a fixture: inbound Likes are of local statuses only).
 		await sql(
 			t.store,
 			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i <= 200)

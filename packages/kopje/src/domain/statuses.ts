@@ -1381,8 +1381,7 @@ export const favourite = userWriteOperation<ActionInput, Acted<Status>>((db, inp
 	if (inserted !== undefined) {
 		const actorUri = viewerUri(db, accountId)
 		const likeUri = `${actorUri}#likes/${inserted.id}`
-		// favourites.uri is used for interaction matching only for a local favourite (its own Like id) and for a remote
-		// favourite's retained id (kept from before migration 0052_favourite_likes, inbox.ts retainedLike).
+		// A local favourite's own Like id (favourites.uri: docs/dump-format.md).
 		db.run('UPDATE favourites SET uri = ? WHERE id = CAST(? AS INTEGER)', likeUri, inserted.id)
 		recountStatus(db, target.id)
 		notify(db, {

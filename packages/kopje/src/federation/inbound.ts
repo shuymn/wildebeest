@@ -198,6 +198,9 @@ function activityOf(
 	json: Json,
 	object: string | null
 ): InboundActivity | Dereference | null {
+	if (LIKE_TYPES.has(type)) {
+		return object === null ? null : { type: 'Like', id, object }
+	}
 	switch (type) {
 		case 'Follow':
 		case 'Block':
@@ -250,11 +253,6 @@ function activityOf(
 			return object === actor
 				? { type: 'DeleteActor', id }
 				: { type: 'Delete', id, object, ...(hasAuthorProof(json) ? { signed: true } : {}) }
-		// LIKE_TYPES.
-		case 'Like':
-		case 'EmojiReact':
-		case 'EmojiReaction':
-			return object === null ? null : { type: 'Like', id, object }
 		// The target is matched against the actor's own collections by the Store. A Hashtag is named by its name; anything
 		// else by its id, as a status (Mastodon's Add and Remove read any other object as one).
 		case 'Add':

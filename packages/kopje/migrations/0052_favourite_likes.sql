@@ -1,16 +1,13 @@
 -- Kopje Store schema 0052: the outstanding Like ids of a remote favourite. Never edit after release (checksummed).
 --
--- A remote favourite (one per actor and status, as before) tracks the ids of the actor's Likes of the status
--- whose Undo has not arrived, and exists while it tracks one, or while it is legacy (src/domain/inbox.ts, like and
--- undoInteraction; ID-7). A server that replaces a reaction undoes the old Like and sends a new one, which arrive in
--- either order, so an Undo removes only its own id.
+-- The outstanding Like ids of a remote favourite (one per actor and status, as before): its matching is ID-6 and ID-7
+-- (src/domain/inbox.ts like and undoInteraction), its deletion RES-6, its stored form docs/dump-format.md.
 --
 --   favourite_likes          one row per tracked Like id: with the favourite's retained id, at most MAX_TRACKED_LIKES
 --                            (4) per favourite, and an id once in the instance (a Like id names one activity). uri
 --                            is within ACTIVITY_ID_LIMIT (4,096 JSON-escaped UTF-8 bytes, the CHECK
 --                            like_id_within_4096_json_bytes; 682 bytes cannot escape past it). received_at is the
---                            Store's own clock in ms since the epoch: an id older than LIKE_RETIRE_AFTER_MS by it may
---                            make room for a new Like at the cap (a retained id has none and is never retired).
+--                            Store's own clock in ms since the epoch (LIKE_RETIRE_AFTER_MS ages it).
 --   favourite_likes_uri      UNIQUE, the rows by Like id: an Undo finds its own id. inbox.ts names it (INDEXED BY), so
 --                            the actor's favourites are never ranged over; renaming or dropping it breaks those reads.
 --   favourite_likes_favourite  a favourite's ids: its count at the cap, and the cascade of its delete.
@@ -21,12 +18,8 @@
 --                            when the favourite's rows and its retained id already make 4, so the bound holds for
 --                            imported dumps too and a favourite's delete cascades at most 4 rows (RES-6).
 --
--- Nothing is copied: a remote favourite stored before this file keeps its Like id in favourites.uri, retained as one
--- of its outstanding ids. Nothing moves or clears it but its own Undo, typed or not, which clears it (and removes the
--- favourite when no tracked id remains); an Undo naming the status removes only a favourite with no id at all (a
--- converted one). No bound applies to a retained id (the CHECK covers favourite_likes only). favourites.uri is used
--- for interaction matching only for a local favourite (its own Like id) and for a remote favourite's retained id; dumps
--- carry it verbatim.
+-- Nothing is copied: a remote favourite stored before this file keeps its Like id in favourites.uri as a retained
+-- outstanding id (ID-7), unbounded (the CHECK covers favourite_likes only).
 --
 -- Cost: an empty table, its two indexes and a trigger, and one index over the favourites holding a Like id. Measured
 -- on the benchmark store of test/bench/migration-cost.ts (1,000,000 accounts, 2,000,000 favourites each holding a Like

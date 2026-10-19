@@ -31,9 +31,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   servers also send the Undos of reactions to other servers' posts to the reactor's followers, and these took the
   actor's retraction allowance.
 - Stored format: a remote favourite's Like ids are rows of the new `favourite_likes` table, and its `favourites.uri`
-  holds only the id it kept from before the upgrade, until that id's Undo ([docs/dump-format.md](docs/dump-format.md)).
-  A dump in which a favourite's rows and kept id make more than 4 is refused. A dump holding more than 4 for one favourite, an id twice or
-  an id past 4,096 bytes is refused.
+  holds only the id it kept from before the upgrade, until that id's Undo. A dump past the new table's bounds is
+  refused ([docs/dump-format.md](docs/dump-format.md)).
 
 ### Fixed
 

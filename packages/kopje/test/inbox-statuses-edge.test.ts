@@ -6,15 +6,7 @@ import { sql } from './api-helpers'
 import { harness, inboxDeps, NOW } from './app-helpers'
 import { fixtureKeyGen } from './federation-helpers'
 import { BUILD } from './helpers'
-import {
-	LOCAL,
-	MASTODON,
-	mastodonActor,
-	MISSKEY_CONTEXT,
-	misskeyActor,
-	signedInit,
-	type TestActor,
-} from './inbox-helpers'
+import { LOCAL, MASTODON, mastodonActor, MISSKEY_CONTEXT, misskeyActor, signedInit } from './inbox-helpers'
 import {
 	accountId,
 	ALICE,
@@ -40,10 +32,11 @@ import {
 	statusRow,
 	undo,
 	update,
+	retractionsAtCap,
 } from './inbox-status-helpers'
 import { Db } from '../src/db/sql'
 import { MAX_REMOTE_FIELDS } from '../src/domain/accounts'
-import { deleteStatusBatch, MAX_RETRACTIONS_PER_ACTOR, PURGE_BATCH } from '../src/domain/inbox'
+import { deleteStatusBatch, PURGE_BATCH } from '../src/domain/inbox'
 import { MAX_LINKED_REPLIES, MAX_STATUS_MENTION_ROWS } from '../src/domain/remote-statuses'
 import { MAX_STATUS_EDITS } from '../src/domain/statuses'
 import { handleQueue } from '../src/jobs/queue'
@@ -56,18 +49,6 @@ import { sha256Hex } from '../src/security/tokens'
 // without a valid token, and the canonical WebFinger domain. Test names cite the invariants.
 
 const at = (minutes: number) => new Date(Date.parse('2026-10-11T12:00:00Z') + minutes * 60_000).toISOString()
-
-async function retractionsAtCap(t: Setup, actor: TestActor): Promise<void> {
-	await sql(
-		t.store,
-		`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
-		INSERT INTO inbound_retractions (actor_uri, target_uri, expires_at) SELECT ?, ? || '/filler/' || i, ? FROM n`,
-		MAX_RETRACTIONS_PER_ACTOR,
-		actor.uri,
-		actor.uri,
-		NOW + 86_400_000
-	)
-}
 
 async function remoteAccounts(t: Setup, count: number, host = 'many.example'): Promise<string[]> {
 	await sql(

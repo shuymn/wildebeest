@@ -2054,20 +2054,12 @@ function mayInteract(db: Db, actor: RemoteRow, statusId: string): boolean {
 }
 
 // Mastodon's ActivityPub::Activity::Like: a favourite of a local status, once per account, unless an Undo of this Like
-// arrived first (ID-7), by an actor that may interact with it (mayInteract). A remote favourite's outstanding Like ids
-// are its favourite_likes rows and its retained favourites.uri (the id a favourite stored before migration
-// 0052_favourite_likes kept, until its Undo), at most MAX_TRACKED_LIKES in all, so a reaction replaced by an Undo and
-// a new Like keeps the favourite whatever order they arrive in. An activity id names one activity: a Like whose id
-// either table holds, for any actor, is a duplicate (a remote actor's id has its own origin, so a local favourite's
-// own id is never one). A new id past ACTIVITY_ID_LIMIT is not stored, nor favourited. A further Like of a favourited
-// status is tracked without a recount or a notification (VIS-10).
+// arrived first (ID-7), by an actor that may interact with it (mayInteract). Its outstanding Like ids (favourite_likes
+// rows and a retained favourites.uri, at most MAX_TRACKED_LIKES) and their admission: ID-7. A further Like of a
+// favourited status notifies nothing (VIS-10).
 const like: Handler<'Like'> = (db, actor, activity, { now, storeNow }) => {
-	const status = db.first<{ id: string; account_id: string }>(
-		`SELECT s.id, s.account_id FROM statuses s JOIN local_accounts l ON l.account_id = s.account_id
-		WHERE s.uri = ? AND s.reblog_of_id IS NULL`,
-		activity.object
-	)
-	if (status === undefined) {
+	const status = originalByUri(db, activity.object)
+	if (status?.local !== 1) {
 		return ignored('unknown-object')
 	}
 	if (isRetracted(db, actor.uri, activity.id, now)) {
@@ -2344,7 +2336,7 @@ function trackedLike(db: Db, actorId: string, uri: string): TrackedLike | undefi
 	return db.first<TrackedLike>(
 		`SELECT l.id, CAST(f.id AS TEXT) AS favourite, f.status_id FROM favourite_likes l INDEXED BY favourite_likes_uri
 			JOIN favourites f ON f.id = l.favourite_id
-		WHERE l.uri = ? AND f.account_id = ? ORDER BY l.id LIMIT 1`,
+		WHERE l.uri = ? AND f.account_id = ?`,
 		uri,
 		actorId
 	)
@@ -2354,11 +2346,11 @@ function trackedLike(db: Db, actorId: string, uri: string): TrackedLike | undefi
 // (a cutover stores none). A favourite with an id of its own, tracked or retained, goes only by that id's Undo, so an
 // Undo that overtakes its Like never removes it. The status first (CROSS JOIN keeps the order), then its favourite by
 // the pair.
-type LegacyFavourite = { id: string; status_id: string; uri: string | null }
+type LegacyFavourite = { id: string; status_id: string }
 
 function legacyFavourite(db: Db, actorId: string, uri: string): LegacyFavourite | undefined {
 	return db.first<LegacyFavourite>(
-		`SELECT CAST(f.id AS TEXT) AS id, f.status_id, f.uri FROM statuses s CROSS JOIN favourites f ON f.status_id = s.id
+		`SELECT CAST(f.id AS TEXT) AS id, f.status_id FROM statuses s CROSS JOIN favourites f ON f.status_id = s.id
 		WHERE s.uri = ? AND f.account_id = ? AND f.uri IS NULL
 			AND NOT EXISTS (SELECT 1 FROM favourite_likes l WHERE l.favourite_id = f.id)`,
 		uri,
@@ -2371,7 +2363,7 @@ function legacyFavourite(db: Db, actorId: string, uri: string): LegacyFavourite 
 // seek, never a range of the actor's favourites; owner-scoped, so a local favourite's own id is never matched.
 function retainedLike(db: Db, actorId: string, uri: string): LegacyFavourite | undefined {
 	return db.first<LegacyFavourite>(
-		`SELECT CAST(f.id AS TEXT) AS id, f.status_id, f.uri FROM favourites f INDEXED BY favourites_like_uri
+		`SELECT CAST(f.id AS TEXT) AS id, f.status_id FROM favourites f INDEXED BY favourites_like_uri
 		WHERE f.uri = ? AND f.account_id = ? LIMIT 1`,
 		uri,
 		actorId
@@ -2458,15 +2450,13 @@ function undoInteraction(db: Db, actor: RemoteRow, ref: ActivityRef & { id: stri
 		retained === undefined &&
 		legacy === undefined &&
 		ref.object !== null &&
-		db.first(
-			`SELECT 1 AS x FROM statuses s JOIN local_accounts l ON l.account_id = s.account_id
-			WHERE s.uri = ? AND s.reblog_of_id IS NULL`,
-			ref.object
-		) === undefined
+		originalByUri(db, ref.object)?.local !== 1
 	) {
 		return ignored('unrelated')
 	}
-	if (!canRetract(db, actor.uri, [ref.id], now)) {
+	// Recorded first (the id has the actor's origin, checked by undo): at the cap nothing is written and the Undo is
+	// answered 503, the transaction rolled back.
+	if (!retract(db, actor.uri, ref.id, now)) {
 		return retryLater('retraction-cap')
 	}
 	let reason = 'retraction-recorded'
@@ -2492,7 +2482,6 @@ function undoInteraction(db: Db, actor: RemoteRow, ref: ActivityRef & { id: stri
 		removeBoost(db, actor.id, boost)
 		reason = 'undone'
 	}
-	retract(db, actor.uri, ref.id, now)
 	return applied(reason)
 }
 
