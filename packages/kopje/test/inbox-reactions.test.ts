@@ -1,12 +1,12 @@
 import { runInDurableObject } from 'cloudflare:test'
 
 import fc from 'fast-check'
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { BUILD, migratedStore } from './helpers'
-import { LOCAL, MASTODON, mastodonActor, misskeyActor, type TestActor } from './inbox-helpers'
+import { LOCAL, MASTODON, MISSKEY, mastodonActor, misskeyActor, type TestActor } from './inbox-helpers'
 import {
 	accountId,
 	ALICE,
@@ -35,6 +35,7 @@ import {
 	purgeBatch,
 	type ReceiveResult,
 } from '../src/domain/inbox'
+import { ACTIVITY_ID_LIMIT } from '../src/platform/identity-bounds'
 import { sha256Hex } from '../src/security/tokens'
 
 // Remote favourites that track their outstanding Like ids (migration 0052_favourite_likes; src/domain/inbox.ts like
@@ -95,6 +96,21 @@ const undoOf = (actor: TestActor, liked: { id: string; object: string }): Inboun
 	id: `${liked.id}/undo`,
 	object: { id: liked.id, type: 'Like', actor: actor.uri, object: liked.object },
 })
+
+// An Undo naming its Like by id alone, as a server that does not embed the object sends it.
+const untypedUndoOf = (liked: { id: string }): InboundActivity => ({
+	type: 'Undo',
+	id: `${liked.id}/undo`,
+	object: { id: liked.id, type: null, actor: null, object: null },
+})
+
+// Typed (embedded) Undos, untyped ones, or the two in turn.
+const UNDO_STYLES = ['typed', 'untyped', 'mixed'] as const
+type UndoStyle = (typeof UNDO_STYLES)[number]
+
+function undoIn(style: UndoStyle, actor: TestActor, liked: { id: string; object: string }, n: number): InboundActivity {
+	return style === 'typed' || (style === 'mixed' && n % 2 === 0) ? undoOf(actor, liked) : untypedUndoOf(liked)
+}
 
 // A local status of alice's, seeded as a fixture (the cases below need many), with its uri.
 async function seededLocal(t: Setup): Promise<string> {
@@ -184,16 +200,16 @@ describe('ID-7: reaction changes in every arrival order', () => {
 
 	type Step = { kind: 'like' | 'undo'; n: number }
 
-	async function replay(t: Setup, bob: TestActor, order: readonly Step[]): Promise<void> {
+	async function replay(t: Setup, bob: TestActor, order: readonly Step[], style: UndoStyle): Promise<void> {
 		const receive = receiver(t, bob)
 		const uri = await seededLocal(t)
-		const key = order.map((step) => `${step.kind[0]}${step.n}`).join('')
+		const key = `${style}-${order.map((step) => `${step.kind[0]}${step.n}`).join('')}`
 		const likes = new Map([1, 2, 3].map((n) => [n, likeOf(bob, uri, `${key}-${n}`)]))
 		const arrived: number[] = []
 		const undone = new Set<number>()
 		for (const step of order) {
 			const liked = likes.get(step.n)!
-			expect((await receive(step.kind === 'like' ? liked : undoOf(bob, liked))).retry).toBeUndefined()
+			expect((await receive(step.kind === 'like' ? liked : undoIn(style, bob, liked, step.n))).retry).toBeUndefined()
 			if (step.kind === 'like' && !undone.has(step.n)) {
 				arrived.push(step.n)
 			} else if (step.kind === 'undo') {
@@ -220,23 +236,31 @@ describe('ID-7: reaction changes in every arrival order', () => {
 	const L = (n: number): Step => ({ kind: 'like', n })
 	const U = (n: number): Step => ({ kind: 'undo', n })
 
-	it('keeps the favourite exactly while the last Like is outstanding: every order of L1 U1 L2 U2 L3', async () => {
-		const t = await setup()
-		const bob = await misskeyActor(t.web, '9abcdefghi', 'neko')
-		await t.post(bob, like(bob, `${LOCAL}/ap/o/unknown`))
-		for (const order of permutations([L(1), U(1), L(2), U(2), L(3)])) {
-			await replay(t, bob, order)
-		}
-	}, 120_000)
+	it.each(UNDO_STYLES)(
+		'keeps the favourite exactly while the last Like is outstanding: every order of L1 U1 L2 U2 L3 (%s Undos)',
+		async (style) => {
+			const t = await setup()
+			const bob = await misskeyActor(t.web, '9abcdefghi', 'neko')
+			await t.post(bob, like(bob, `${LOCAL}/ap/o/unknown`))
+			for (const order of permutations([L(1), U(1), L(2), U(2), L(3)])) {
+				await replay(t, bob, order, style)
+			}
+		},
+		120_000
+	)
 
-	it('removes it once every Like is undone: every order of L1 U1 L2 U2 L3 U3', async () => {
-		const t = await setup()
-		const bob = await misskeyActor(t.web, '9abcdefghi', 'neko')
-		await t.post(bob, like(bob, `${LOCAL}/ap/o/unknown`))
-		for (const order of permutations([L(1), U(1), L(2), U(2), L(3), U(3)])) {
-			await replay(t, bob, order)
-		}
-	}, 600_000)
+	it.each(UNDO_STYLES)(
+		'removes it once every Like is undone: every order of L1 U1 L2 U2 L3 U3 (%s Undos)',
+		async (style) => {
+			const t = await setup()
+			const bob = await misskeyActor(t.web, '9abcdefghi', 'neko')
+			await t.post(bob, like(bob, `${LOCAL}/ap/o/unknown`))
+			for (const order of permutations([L(1), U(1), L(2), U(2), L(3), U(3)])) {
+				await replay(t, bob, order, style)
+			}
+		},
+		600_000
+	)
 
 	it('keeps the current Like that arrived first while the old ones and their Undos follow (L5, L1-L3, U1-U3)', async () => {
 		const t = await setup()
@@ -293,15 +317,16 @@ describe('ID-7: reaction changes in every arrival order', () => {
 				fc.integer({ min: 1, max: 8 }),
 				fc.boolean(),
 				fc.array(fc.nat(), { minLength: 16, maxLength: 16 }),
-				async (reactions, removed, keys) => {
+				fc.constantFrom(...UNDO_STYLES),
+				async (reactions, removed, keys, style) => {
 					const uri = await seededLocal(t)
 					run++
 					const likes = Array.from({ length: reactions }, (_, n) => likeOf(bob, uri, `${run}-${n}`))
 					const activities: InboundActivity[] = likes.flatMap((liked, n) =>
-						n === 0 ? [liked] : [undoOf(bob, likes[n - 1]!), liked]
+						n === 0 ? [liked] : [undoIn(style, bob, likes[n - 1]!, n - 1), liked]
 					)
 					if (removed) {
-						activities.push(undoOf(bob, likes.at(-1)!))
+						activities.push(undoIn(style, bob, likes.at(-1)!, reactions - 1))
 					}
 					// The arrival order: by the generated keys, ties in sending order.
 					const queue = activities
@@ -326,17 +351,45 @@ describe('ID-7: reaction changes in every arrival order', () => {
 					).toEqual([{ n: removed ? 0 : 1 }])
 				}
 			),
-			{ numRuns: 60 }
+			{ numRuns: 90 }
 		)
 	}, 300_000)
 })
 
 describe('ID-7: a tracked Like whose Undo was lost', () => {
-	it('is retired to make room once older than LIKE_RETIRE_AFTER_MS, and a younger one never is', async () => {
+	// The Store's clock (Date in the Durable Object) and the Worker's (`now` of the call) are set apart: the age of a
+	// tracked id is the Store's.
+	beforeEach(() => {
+		vi.useFakeTimers({ toFake: ['Date'] })
+		vi.setSystemTime(NOW)
+	})
+	afterEach(() => {
+		vi.useRealTimers()
+	})
+
+	async function lostLikes(t: Setup, bob: TestActor, uri: string) {
+		const receive = receiver(t, bob)
+		const lost = ['1', '2', '3'].map((n) => likeOf(bob, uri, n))
+		for (const liked of lost) {
+			expect(await receive(liked)).toMatchObject({ applied: true })
+		}
+		vi.setSystemTime(NOW + 6 * DAY)
+		const young = likeOf(bob, uri, 'young')
+		// A call whose Worker clock is a month ahead: the id is still stamped with the Store's time.
+		expect(await receive(young, NOW + 30 * DAY)).toMatchObject({ applied: true })
+		expect(await sql(t.store, 'SELECT received_at FROM favourite_likes ORDER BY id')).toEqual([
+			{ received_at: NOW },
+			{ received_at: NOW },
+			{ received_at: NOW },
+			{ received_at: NOW + 6 * DAY },
+		])
+		return { receive, lost, young }
+	}
+
+	it('is retired by the Store’s clock to make room, with its tombstone; a younger one never is', async () => {
 		const t = await setup()
 		const bob = await misskeyActor(t.web, '9abcdefghi', 'neko')
 		await t.post(bob, like(bob, `${LOCAL}/ap/o/unknown`))
-		const receive = receiver(t, bob)
 		const uri = await seededLocal(t)
 		await sql(
 			t.store,
@@ -347,37 +400,118 @@ describe('ID-7: a tracked Like whose Undo was lost', () => {
 		const pushes = async () =>
 			(await sql<{ seq: number }>(t.store, "SELECT seq FROM sqlite_sequence WHERE name = 'push_deliveries'"))[0]?.seq ??
 			0
-		// Four reactions whose Undos never arrived (the sending server gave up), then a young one.
-		const lost = ['1', '2', '3'].map((n) => likeOf(bob, uri, n))
-		for (const liked of lost) {
-			await receive(liked)
-		}
-		const young = likeOf(bob, uri, 'young')
-		await receive(young, NOW + 6 * DAY)
+		// Three reactions whose Undos never arrived (the sending server gave up), then a young one.
+		const { receive, lost, young } = await lostLikes(t, bob, uri)
 		expect(await pushes()).toBe(1)
-		// Within the window the pair waits: 503, nothing written.
 		const fresh = ['a', 'b', 'c', 'd'].map((n) => likeOf(bob, uri, n))
-		expect(await receive(fresh[0]!, NOW + LIKE_RETIRE_AFTER_MS - 1)).toMatchObject({ retry: true })
-		// Past it, each new Like retires the earliest aged id; the aggregate, its count and notification stay.
-		const later = NOW + LIKE_RETIRE_AFTER_MS
+		// Within the window by the Store's clock the pair waits, 503 and nothing written, though the Worker's clock is
+		// past it.
+		vi.setSystemTime(NOW + LIKE_RETIRE_AFTER_MS - 1)
+		const waiting = await state(t)
+		expect(await receive(fresh[0]!, NOW + 30 * DAY)).toMatchObject({ retry: true, reason: 'like-tracking-cap' })
+		expect(await state(t)).toEqual(waiting)
+		// Past it by the Store's clock, even for a call the Worker stamped long before (a delayed call), each new Like
+		// retires the earliest aged id and records it as retracted; the aggregate, its count and notification stay.
+		vi.setSystemTime(NOW + LIKE_RETIRE_AFTER_MS)
 		for (const [i, liked] of fresh.slice(0, 3).entries()) {
-			expect(await receive(liked, later)).toMatchObject({ applied: true, reason: 'favourite-kept' })
+			expect(await receive(liked, NOW)).toMatchObject({ applied: true, reason: 'favourite-kept' })
 			expect(await tracked(t, uri)).toEqual([
 				...lost.slice(i + 1).map((l) => l.id),
 				young.id,
 				...fresh.slice(0, i + 1).map((l) => l.id),
 			])
 		}
+		expect(
+			(
+				await sql<{ target_uri: string }>(t.store, 'SELECT target_uri FROM inbound_retractions ORDER BY target_uri')
+			).map((row) => row.target_uri)
+		).toEqual(lost.map((l) => l.id).sort())
 		// Only young ids are left: the next Like waits.
 		const before = await state(t)
-		expect(await receive(fresh[3]!, later)).toMatchObject({ retry: true, reason: 'like-tracking-cap' })
+		expect(await receive(fresh[3]!)).toMatchObject({ retry: true, reason: 'like-tracking-cap' })
 		expect(await state(t)).toEqual(before)
 		expect((await statusRow(t.store, uri))?.favourites_count).toBe(1)
 		expect(await notifications(t.store)).toEqual([{ account_id: ALICE, type: 'favourite' }])
 		expect(await pushes()).toBe(1)
-		// The retired ids' late Undos only record their tombstones.
-		expect(await receive(undoOf(bob, lost[0]!), later)).toMatchObject({ reason: 'retraction-recorded' })
-		expect(await tracked(t, uri)).toHaveLength(MAX_TRACKED_LIKES)
+		// The aggregate emptied by the Undos of the rest, a replay of a retired Like does not bring it back.
+		for (const liked of [young, ...fresh.slice(0, 3)]) {
+			expect(await receive(undoOf(bob, liked))).toMatchObject({ applied: true })
+		}
+		expect(await sql(t.store, 'SELECT * FROM favourites')).toEqual([])
+		expect(await receive(lost[0]!)).toMatchObject({ applied: false, reason: 'retracted' })
+		expect(await sql(t.store, 'SELECT * FROM favourites')).toEqual([])
+		expect(await receive(undoOf(bob, lost[1]!))).toMatchObject({ applied: false, reason: 'retracted' })
+	})
+
+	it('answers 503 and writes nothing when the retired id’s tombstone cannot be recorded', async () => {
+		const t = await setup()
+		const bob = await misskeyActor(t.web, '9abcdefghi', 'neko')
+		await t.post(bob, like(bob, `${LOCAL}/ap/o/unknown`))
+		const uri = await seededLocal(t)
+		const { receive } = await lostLikes(t, bob, uri)
+		await retractionsAtCap(t, bob)
+		vi.setSystemTime(NOW + LIKE_RETIRE_AFTER_MS)
+		const before = await state(t)
+		expect(await receive(likeOf(bob, uri, 'new'))).toMatchObject({ retry: true, reason: 'retraction-cap' })
+		expect(await state(t)).toEqual(before)
+	})
+})
+
+describe('ID-7: Like ids are unique instance-wide, and bounded', () => {
+	it('ignores another actor’s Like under an id already tracked (same origin), and neither Undo reaches the other', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const carol = await mastodonActor(t.web, 'carol', { key: 2 })
+		const first = await localStatus(t, { status: 'one', visibility: 'public' })
+		const second = await localStatus(t, { status: 'two', visibility: 'public' })
+		const liked = like(bob, first.uri)
+		expect(await t.post(bob, liked)).toBe(202)
+		expect(await t.post(carol, { ...liked, actor: carol.uri, object: second.uri })).toBe(202)
+		expect((await statusRow(t.store, second.uri))?.favourites_count).toBe(0)
+		expect(await tracked(t, first.uri)).toEqual([liked.id])
+		// Carol's Undo of the id records her own tombstone only.
+		expect(await t.post(carol, undo(carol, { id: liked.id, type: 'Like', actor: carol.uri, object: second.uri }))).toBe(
+			202
+		)
+		expect(await tracked(t, first.uri)).toEqual([liked.id])
+		expect(await t.post(bob, undo(bob, liked.id))).toBe(202)
+		expect(await sql(t.store, 'SELECT * FROM favourites')).toEqual([])
+	})
+
+	it('stores a Like id up to ACTIVITY_ID_LIMIT JSON-escaped UTF-8 bytes, NUL and astral characters included', async () => {
+		const t = await setup()
+		const bob = await misskeyActor(t.web, '9abcdefghi', 'neko')
+		await t.post(bob, like(bob, `${LOCAL}/ap/o/unknown`))
+		const receive = receiver(t, bob)
+		const prefix = `${MISSKEY}/likes/`
+		// '\0' is 6 bytes escaped (\u0000), '😀' 4: a prefix, then fillers to exactly the bound.
+		const at = (extra: number) => {
+			const room = ACTIVITY_ID_LIMIT - new TextEncoder().encode(prefix).length + extra
+			const k = Math.floor(room / 10)
+			return `${prefix}${'\0'.repeat(k)}${'😀'.repeat(k)}${'x'.repeat(room % 10)}`
+		}
+		const jsonBytes = (value: string) => new TextEncoder().encode(JSON.stringify(value)).length - 2
+		expect([jsonBytes(at(0)), jsonBytes(at(1))]).toEqual([ACTIVITY_ID_LIMIT, ACTIVITY_ID_LIMIT + 1])
+		const [inside, past] = [await seededLocal(t), await seededLocal(t)]
+		expect(await receive({ type: 'Like', id: at(0), object: inside })).toMatchObject({ applied: true })
+		expect(await receive({ type: 'Like', id: at(1), object: past })).toMatchObject({
+			applied: false,
+			reason: 'id-past-bound',
+		})
+		expect(await tracked(t, inside)).toEqual([at(0)])
+		expect(await sql(t.store, 'SELECT count(*) AS n FROM favourites')).toEqual([{ n: 1 }])
+		// The CHECK measures the same unit, for what an import writes.
+		const favourite = (await sql<{ id: number }>(t.store, 'SELECT id FROM favourites'))[0]!.id
+		await expect(
+			sql(t.store, 'INSERT INTO favourite_likes (favourite_id, uri, received_at) VALUES (?, ?, 0)', favourite, at(1))
+		).rejects.toThrow(/like_id_within_4096_json_bytes/)
+		await sql(t.store, 'DELETE FROM favourite_likes')
+		await sql(
+			t.store,
+			'INSERT INTO favourite_likes (favourite_id, uri, received_at) VALUES (?, ?, 0)',
+			favourite,
+			at(0)
+		)
 	})
 })
 

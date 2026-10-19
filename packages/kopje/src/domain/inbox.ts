@@ -66,6 +66,7 @@ import { recountStatus, recountStatuses, withdrawLocalBoost } from './statuses'
 import { streamDelete } from './streaming'
 import type { Db } from '../db/sql'
 import { hostDomain } from '../platform/domain-name'
+import { ACTIVITY_ID_LIMIT, withinIdentityBound } from '../platform/identity-bounds'
 
 // Inbound activities about actors and relationships (B1b-1), applied in one Store transaction each. The Worker has
 // already verified the HTTP signature, bound the signer to the actor (ID-1), fetched and sanitized what it needed
@@ -720,11 +721,15 @@ function recordFollowAnswer(
 // The activities
 // ---------------------------------------------------------------------------------------------------------------
 
+// What the Store's RPC adds to a receive (store.ts): its own clock, which ages tracked Like ids (LIKE_RETIRE_AFTER_MS),
+// whatever the Worker's clock (`now`) says or however late the call comes.
+export type StoreReceiveInput = ReceiveInput & { storeNow: number }
+
 type Handler<T extends InboundActivity['type']> = (
 	db: Db,
 	actor: RemoteRow,
 	activity: Extract<InboundActivity, { type: T }>,
-	input: ReceiveInput
+	input: StoreReceiveInput
 ) => ReceiveResult
 
 // Mastodon's ActivityPub::Activity::Follow, for a local target.
@@ -2049,9 +2054,9 @@ function mayInteract(db: Db, actor: RemoteRow, statusId: string): boolean {
 // arrived first (ID-7), by an actor that may interact with it (mayInteract). The favourite tracks the id of every Like
 // it was given whose Undo has not arrived (favourite_likes, at most MAX_TRACKED_LIKES), so a reaction replaced by an
 // Undo and a new Like keeps the favourite whatever order they arrive in. A Like id is tracked once, for one status: an
-// activity id names one activity. A further Like of a favourited status is tracked without a recount or a
-// notification (VIS-10).
-const like: Handler<'Like'> = (db, actor, activity, { now }) => {
+// activity id names one activity (favourite_likes_uri is unique). An id past ACTIVITY_ID_LIMIT is not stored, nor
+// favourited. A further Like of a favourited status is tracked without a recount or a notification (VIS-10).
+const like: Handler<'Like'> = (db, actor, activity, { now, storeNow }) => {
 	const status = db.first<{ id: string; account_id: string }>(
 		`SELECT s.id, s.account_id FROM statuses s JOIN local_accounts l ON l.account_id = s.account_id
 		WHERE s.uri = ? AND s.reblog_of_id IS NULL`,
@@ -2066,7 +2071,10 @@ const like: Handler<'Like'> = (db, actor, activity, { now }) => {
 	if (!mayInteract(db, actor, status.id)) {
 		return ignored('not-visible')
 	}
-	if (db.first('SELECT 1 AS x FROM favourite_likes WHERE uri = ?', activity.id) !== undefined) {
+	if (!withinIdentityBound(activity.id, ACTIVITY_ID_LIMIT)) {
+		return ignored('id-past-bound')
+	}
+	if (db.first('SELECT 1 AS x FROM favourite_likes WHERE uri = ? LIMIT 1', activity.id) !== undefined) {
 		return ignored('duplicate')
 	}
 	const favourite = db.first<{ id: number; likes: number }>(
@@ -2076,10 +2084,10 @@ const like: Handler<'Like'> = (db, actor, activity, { now }) => {
 		status.id
 	)
 	if (favourite !== undefined) {
-		if (favourite.likes >= MAX_TRACKED_LIKES && !retireStaleLike(db, favourite.id, now)) {
-			return retryLater('like-tracking-cap')
+		if (favourite.likes >= MAX_TRACKED_LIKES) {
+			retireStaleLike(db, actor, favourite.id, now, storeNow)
 		}
-		trackLike(db, favourite.id, activity.id, now)
+		trackLike(db, favourite.id, activity.id, storeNow)
 		return applied('favourite-kept')
 	}
 	const inserted = db.first<{ id: number }>(
@@ -2088,7 +2096,7 @@ const like: Handler<'Like'> = (db, actor, activity, { now }) => {
 		status.id,
 		new Date(now).toISOString()
 	)!
-	trackLike(db, inserted.id, activity.id, now)
+	trackLike(db, inserted.id, activity.id, storeNow)
 	recountStatus(db, status.id)
 	notify(db, { recipientId: status.account_id, type: 'favourite', fromId: actor.id, statusId: status.id, now })
 	return applied('favourited')
@@ -2289,27 +2297,35 @@ function authorDeleted(db: Db, id: string, now: number): boolean {
 	return uri !== undefined && isDeletedActor(db, uri, now)
 }
 
-function trackLike(db: Db, favouriteId: number, uri: string, now: number): void {
-	db.run('INSERT INTO favourite_likes (favourite_id, uri, received_at) VALUES (?, ?, ?)', favouriteId, uri, now)
+// received_at: the Store's clock (StoreReceiveInput).
+function trackLike(db: Db, favouriteId: number, uri: string, storeNow: number): void {
+	db.run('INSERT INTO favourite_likes (favourite_id, uri, received_at) VALUES (?, ?, ?)', favouriteId, uri, storeNow)
 }
 
-// Makes room at the cap: the earliest tracked id (by row id) received at least LIKE_RETIRE_AFTER_MS ago goes. The
-// favourite keeps the new Like, so its count and notification stay. Returns whether one went.
-function retireStaleLike(db: Db, favouriteId: number, now: number): boolean {
-	return (
-		db.run(
-			`DELETE FROM favourite_likes WHERE id = (SELECT id FROM favourite_likes
-				WHERE favourite_id = ?1 AND received_at <= ?2 ORDER BY id LIMIT 1)`,
-			favouriteId,
-			now - LIKE_RETIRE_AFTER_MS
-		) > 0
+// Makes room at the cap: the earliest tracked id (by row id) the Store received at least LIKE_RETIRE_AFTER_MS ago, by
+// its own clock, goes and is recorded as retracted, so a replay of its Like does not bring the favourite back (ID-7).
+// The favourite keeps the new Like, so its count and notification stay. Without such an id, or without room for its
+// retraction, nothing is written and the Like is answered 503.
+function retireStaleLike(db: Db, actor: RemoteRow, favouriteId: number, now: number, storeNow: number): void {
+	const stale = db.first<{ id: number; uri: string }>(
+		`SELECT id, uri FROM favourite_likes WHERE favourite_id = ? AND received_at <= ? ORDER BY id LIMIT 1`,
+		favouriteId,
+		storeNow - LIKE_RETIRE_AFTER_MS
 	)
+	if (stale === undefined) {
+		retryLater('like-tracking-cap')
+	}
+	if (!canRetract(db, actor.uri, [stale.uri], now)) {
+		retryLater('retraction-cap')
+	}
+	db.run('DELETE FROM favourite_likes WHERE id = ?', stale.id)
+	retract(db, actor.uri, stale.uri, now)
 }
 
 type TrackedLike = { id: number; favourite: string; status_id: string }
 
-// The actor's favourite tracking the Like id `uri` (one at most: like tracks an id once). By the id's index, never by
-// the actor's favourites, which are any number.
+// The actor's favourite tracking the Like id `uri`: one row at most (favourite_likes_uri is unique), found by that
+// index, never by the actor's favourites, which are any number.
 function trackedLike(db: Db, actorId: string, uri: string): TrackedLike | undefined {
 	return db.first<TrackedLike>(
 		`SELECT l.id, CAST(f.id AS TEXT) AS favourite, f.status_id FROM favourite_likes l INDEXED BY favourite_likes_uri
@@ -2519,7 +2535,7 @@ const HANDLERS: { [T in InboundActivity['type']]: Handler<T> } = {
 	Remove: remove,
 }
 
-export const receiveActivity = writeOperation<ReceiveInput, ReceiveResult>((db, input) => {
+export const receiveActivity = writeOperation<StoreReceiveInput, ReceiveResult>((db, input) => {
 	const before = outboundMark(db)
 	const result = receive(db, input)
 	return { ...result, delivers: outboundSince(db, before) }
@@ -2536,7 +2552,7 @@ const SUSPENDED_ADMITS: ReadonlySet<InboundActivity['type']> = new Set([
 	'Reject',
 ])
 
-function receive(db: Db, input: ReceiveInput): ReceiveResult {
+function receive(db: Db, input: StoreReceiveInput): ReceiveResult {
 	const { activity, actorUri, now, origin } = input
 	sweep(db, now)
 	// ID-1/ID-3, again where it is written: a remote actor only, and an activity id of its origin.

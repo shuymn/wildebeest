@@ -32,9 +32,8 @@ import { freshStore, testKernel } from '../helpers'
 //   - 10,000 reports by the local accounts of remote accounts, naming one status each;
 //   - 200,000 quotes (from migration 0033_quotes on), one by every tenth status, each of the status after it, in each
 //     stored state in turn (a quarter accepted);
-//   - 2,000,000 favourites, one of each status in a scattered order, by remote accounts in turn, one in four with its
-//     Like id (remote Likes of local statuses, what 0052_favourite_likes moves; the rest as a cutover stores remote
-//     favourites, without one);
+//   - 2,000,000 favourites, one of each status in a scattered order, by remote accounts in turn, each with its Like id
+//     (what 0052_favourite_likes moves: every remote favourite holding one is its worst case);
 //   - 200,000 boosts on top of the statuses, public and unlisted in turn, each of a different status by another
 //     remote account;
 //   - 500,000 outbound activities of the local accounts in turn, each about one status, one in ten superseded (what
@@ -250,7 +249,7 @@ it('applies the migration to the benchmark store within the budget', async () =>
 				`WITH RECURSIVE n(i) AS (SELECT ?1 UNION ALL SELECT i + 1 FROM n WHERE i < ?2 - 1)
 				INSERT OR IGNORE INTO favourites (account_id, status_id, uri, created_at)
 				SELECT CAST(100000000000000000 + ?3 + i % ?4 AS TEXT), CAST(500000000000000000 + (7919 * i) % ?5 AS TEXT),
-					CASE WHEN i % 4 = 0 THEN 'https://d' || ((?3 + i % ?4) % ?7) || '.bench/likes/' || i END, ?6
+					'https://d' || ((?3 + i % ?4) % ?7) || '.bench/likes/' || i, ?6
 				FROM n`,
 				start,
 				Math.min(start + batch, favourites),

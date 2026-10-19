@@ -5061,6 +5061,32 @@ describe('0052_favourite_likes', () => {
 	const NAME = '0052_favourite_likes'
 	const at = NAMES.indexOf(NAME)
 
+	it('leaves no count when every id moved', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+			sql.exec(
+				`INSERT INTO accounts (id, uri, username, domain) VALUES
+					('100000000000000001', 'https://kopje.test/ap/users/alice', 'alice', NULL),
+					('100000000000000002', 'https://r.example/u/bob', 'bob', 'r.example')`
+			)
+			sql.exec(
+				`INSERT INTO statuses (id, uri, account_id, visibility, published_at)
+				VALUES ('200000000000000001', 'https://kopje.test/ap/o/1', '100000000000000001', 'public', 'x')`
+			)
+			sql.exec(
+				`INSERT INTO favourites (account_id, status_id, uri, created_at)
+				VALUES ('100000000000000002', '200000000000000001', 'https://r.example/likes/1', 'x')`
+			)
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+			expect(sql.exec("SELECT * FROM kopje_state WHERE name = 'favourite_likes_dropped'").toArray()).toEqual([])
+			expect(sql.exec('SELECT uri, received_at FROM favourite_likes').toArray()).toEqual([
+				{ uri: 'https://r.example/likes/1', received_at: 0 },
+			])
+		})
+	})
+
 	it('moves each remote favourite’s Like id to its tracked ids, leaves local ones, and holds MAX_TRACKED_LIKES', async () => {
 		const store = freshStore()
 		await runInDurableObject(store, async (_instance, state) => {
@@ -5077,14 +5103,25 @@ describe('0052_favourite_likes', () => {
 					('200000000000000001', 'https://kopje.test/ap/o/1', '100000000000000001', 'public', 'x'),
 					('200000000000000002', 'https://r.example/n/2', '100000000000000003', 'public', 'x')`
 			)
+			sql.exec(
+				`INSERT INTO statuses (id, uri, account_id, visibility, published_at) VALUES
+					('200000000000000003', 'https://kopje.test/ap/o/3', '100000000000000001', 'public', 'x'),
+					('200000000000000004', 'https://kopje.test/ap/o/4', '100000000000000001', 'public', 'x')`
+			)
 			// alice's own (local) favourite, bob's Like of alice's status, a converted favourite of a remote status that
-			// kept its id, and carol's converted favourite without one and with a created_at that does not parse.
+			// kept its id, carol's converted favourite without one and with a created_at that does not parse, carol's
+			// favourite stored under bob's id (a repeated id: the lowest favourite keeps it), and one whose id passes
+			// ACTIVITY_ID_LIMIT (4,097 JSON-escaped bytes).
+			const long = `https://r.example/likes/${'x'.repeat(4097 - 'https://r.example/likes/'.length)}`
 			sql.exec(
 				`INSERT INTO favourites (id, account_id, status_id, uri, created_at) VALUES
 					(1, '100000000000000001', '200000000000000002', 'https://kopje.test/ap/users/alice#likes/1', '2026-10-01T00:00:00.000Z'),
 					(2, '100000000000000002', '200000000000000001', 'https://r.example/likes/2', '2026-10-02T00:00:00.500Z'),
 					(3, '100000000000000002', '200000000000000002', 'https://r.example/likes/3', '2026-10-03T00:00:00.000Z'),
-					(4, '100000000000000003', '200000000000000001', NULL, 'x')`
+					(4, '100000000000000003', '200000000000000001', NULL, 'x'),
+					(5, '100000000000000003', '200000000000000003', 'https://r.example/likes/2', '2026-10-04T00:00:00.000Z'),
+					(6, '100000000000000003', '200000000000000004', ?, '2026-10-05T00:00:00.000Z')`,
+				long
 			)
 			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
 			expect(sql.exec('SELECT id, uri FROM favourites ORDER BY id').toArray()).toEqual([
@@ -5092,6 +5129,12 @@ describe('0052_favourite_likes', () => {
 				{ id: 2, uri: null },
 				{ id: 3, uri: null },
 				{ id: 4, uri: null },
+				{ id: 5, uri: null },
+				{ id: 6, uri: null },
+			])
+			// The ids not moved are counted for the operator.
+			expect(sql.exec("SELECT value FROM kopje_state WHERE name = 'favourite_likes_dropped'").toArray()).toEqual([
+				{ value: '{"past_bound":1,"repeated":1}' },
 			])
 			expect(
 				sql.exec('SELECT favourite_id, uri, received_at FROM favourite_likes ORDER BY favourite_id').toArray()
