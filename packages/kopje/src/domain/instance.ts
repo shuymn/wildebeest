@@ -196,12 +196,11 @@ export const searchPeers = readOperation<{ prefix: string }, string[]>((db, { pr
 // terms of service, its effective date. null when it is not available (documentsOf).
 export type InstanceDocumentSource = { text: string; updatedAt: string | null; effectiveDate: string | null }
 
+// The stamped documents' stamps, set by setInstanceSettings with each change of the document.
+const STAMPED = { extended_description: 'extended_description_updated_at', privacy_policy: 'privacy_policy_updated_at' }
+
 // The setting that goes with each document: its stamp, or the terms of service's effective date.
-const COMPANION: Record<InstanceDocument, string> = {
-	extended_description: 'extended_description_updated_at',
-	privacy_policy: 'privacy_policy_updated_at',
-	terms_of_service: 'terms_of_service_effective_date',
-}
+const COMPANION: Record<InstanceDocument, string> = { ...STAMPED, terms_of_service: 'terms_of_service_effective_date' }
 
 function documentSource(db: Db, name: InstanceDocument): InstanceDocumentSource | null {
 	const companion = COMPANION[name]
@@ -257,7 +256,6 @@ export const INSTANCE_ADMIN_NAMES = [
 
 type AdminName = (typeof INSTANCE_ADMIN_NAMES)[number]
 
-const STAMPED = { extended_description: 'extended_description_updated_at', privacy_policy: 'privacy_policy_updated_at' }
 const SHOWN_NAMES = [...INSTANCE_ADMIN_NAMES, ...Object.values(STAMPED)]
 
 export type InstanceAdminValues = Record<string, string>
@@ -295,18 +293,15 @@ function adminValue(name: AdminName, raw: unknown): string | null | { refused: s
 	if (value === '') {
 		return { refused: `${name} is blank; send null to remove it` }
 	}
-	const points = [...value].length
 	switch (name) {
 		case 'title':
-			if (points > INSTANCE_TITLE_LIMIT) {
-				return { refused: `title is at most ${INSTANCE_TITLE_LIMIT} characters` }
+		case 'description': {
+			const limit = name === 'title' ? INSTANCE_TITLE_LIMIT : INSTANCE_DESCRIPTION_LIMIT
+			if ([...value].length > limit) {
+				return { refused: `${name} is at most ${limit} characters` }
 			}
 			break
-		case 'description':
-			if (points > INSTANCE_DESCRIPTION_LIMIT) {
-				return { refused: `description is at most ${INSTANCE_DESCRIPTION_LIMIT} characters` }
-			}
-			break
+		}
 		case 'contact_email':
 			if (ENCODER.encode(value).length > CONTACT_EMAIL_BYTES || !EMAIL_SHAPE.test(value)) {
 				return { refused: `contact_email must be an email address of at most ${CONTACT_EMAIL_BYTES} bytes` }

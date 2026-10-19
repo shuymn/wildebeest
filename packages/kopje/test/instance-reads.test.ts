@@ -250,15 +250,16 @@ describe('instance documents', () => {
 		const marker = '<p>END-OF-DOCUMENT</p>'
 		const document = `${link.repeat(Math.floor((INSTANCE_DOCUMENT_BYTES - marker.length) / link.length))}${marker}`
 		expect(new TextEncoder().encode(document).length).toBeLessThanOrEqual(INSTANCE_DOCUMENT_BYTES)
-		expect(sanitizeRemoteHtml(document).length).toBeGreaterThan(REMOTE_HTML_RAW_LIMIT)
-		expect(sanitizeRemoteHtml(document)).toContain('END-OF-DOCUMENT')
+		const sanitized = sanitizeRemoteHtml(document)
+		expect(sanitized.length).toBeGreaterThan(REMOTE_HTML_RAW_LIMIT)
+		expect(sanitized).toContain('END-OF-DOCUMENT')
 		for (const name of ['extended_description', 'privacy_policy', 'terms_of_service']) {
 			await setSetting(h.store, name, document)
 		}
 		await setSetting(h.store, 'terms_of_service_effective_date', '2026-11-01')
 		for (const name of ['extended_description', 'privacy_policy', 'terms_of_service']) {
 			const { body } = await getJson<{ content: string }>(h, `/api/v1/instance/${name}`)
-			expect(body.content, name).toBe(sanitizeRemoteHtml(document))
+			expect(body.content, name).toBe(sanitized)
 		}
 		for (const path of ['/about', '/privacy-policy', '/terms-of-service']) {
 			const response = await h.request(path)
