@@ -22,9 +22,9 @@
 -- Cost: a scan of the favourites for each of the copy and the clear, a write of every remote favourite with an id,
 -- and the index of the copied ids. Measured on the benchmark store of test/bench/migration-cost.ts (1,000,000
 -- accounts, 2,000,000 favourites of which 500,000 hold a Like id, and the rest of that store) in workerd's local
--- Durable Object SQLite: 8,557 ms for the upgrade of this file through the kernel (its bookmark, this file's
--- transaction and the verification), within the 10,000 ms each migration file may take; with every one of the
--- 2,000,000 favourites holding an id, 11,890 ms.
+-- Durable Object SQLite, timing the whole upgrade through the kernel (its bookmark, this file's transaction and the
+-- verification): 8,000 to 8,766 ms in five runs at load averages of 3 to 7, within the 10,000 ms each migration file
+-- may take; 10,920 and 21,743 ms in two runs at load averages above 7. With all 2,000,000 holding an id, 10,868 ms.
 
 CREATE TABLE favourite_likes (
   id INTEGER PRIMARY KEY,

@@ -159,8 +159,10 @@ against their own instance. TLS is assumed between all parties.
   table"). _Enforced (main)_ for Create, Update and Delete of statuses, Like and
   Announce (the rows of the same table): `Create` needs the actor's origin and no other `attributedTo`; `Update` and
   `Delete` the stored status's author (a refused `Delete` records no retraction); `Like` a local status the actor may
-  see (VIS-1, which Mastodon does not check); `Announce` an original that is public, unlisted or the actor's own
-  (VIS-6); `Undo` of a `Like` or `Announce` the actor's own; `test/inbox-statuses.test.ts` ("ID-6: another actor of
+  see (VIS-1, which Mastodon does not check), whichever of `Like`, `EmojiReact` or `EmojiReaction` it is spelled as
+  (an embedded `Undo` object too, `LIKE_TYPES` in `src/federation/inbound.ts`); `Announce` an original that is public,
+  unlisted or the actor's own (VIS-6); `Undo` of a `Like` or `Announce` the actor's own, and of a `Like` only the
+  actor's own favourite that tracks its id, or a legacy favourite of the status it names; `test/inbox-statuses.test.ts` ("ID-6: another actor of
   the same origin cannot update a status", "deletes the author’s status with its children, and nothing of anyone
   else’s (ID-6, ID-3)", "ID-6, ID-7: keeps an Undo that arrived before its Like", "ID-6, VIS-6: a boost of a private,
   direct or unfetchable object stores nothing"). _Enforced (main)_ for the `Delete` of a quote's
@@ -213,16 +215,30 @@ against their own instance. TLS is assumed between all parties.
   with it). A change whose retraction cannot be recorded (the per-actor cap) is not made: the `Delete` of a stored
   status or boost, and an `Undo` of a `Like` or `Announce`, answer 503 and the whole receive transaction rolls back,
   the actor document and keys refreshed for it included (`RetryLater`, turned into the answer by the Store's RPC); a
-  `Delete` of an unknown object at the cap is not recorded and answers 202. An `Undo` of a `Like` records both its
-  own reference and the id the matched favourite was stored under, or neither. A local boost of a status that is
+  `Delete` of an unknown object at the cap is not recorded and answers 202, and an untyped `Undo` that matches nothing
+  stored answers 503 (it may name a `Like` or `Announce` on its way), while one naming a stored follow or block keeps
+  its answer. A remote favourite (one per actor and status) tracks the ids of the actor's `Like`s of it whose `Undo`
+  has not arrived (`favourite_likes`, migration `0052_favourite_likes`) and exists while it tracks one: a server that
+  replaces a reaction undoes the old `Like` and sends a new one, and they arrive in any order, so an `Undo` removes
+  only its own id and records only it; a `Like` id is tracked once. An `Undo` naming a status the actor holds a legacy
+  favourite of (one tracking no id: the cutover and earlier imports keep none for a remote favourite) removes it, as
+  Mastodon's `undo_like` finds the favourite by its object; a `Like` of it makes it tracked. These stored matches come
+  first; then an `Undo` of a `Like` naming anything but a local original records nothing (Mastodon's `undo_like`), so
+  a server's Undos of reactions to other servers' notes, which it also sends to the reactor's followers, spend no
+  tombstone. A favourite tracks at most `MAX_TRACKED_LIKES` (4) ids (a trigger holds it for imports too); at the cap
+  a further `Like` answers 503 with nothing written, and the `Undo`s it waits for make room, except that the earliest
+  id received `LIKE_RETIRE_AFTER_MS` (7 days, above Mastodon's and Misskey's delivery retry windows) before is retired
+  for it, so ids whose `Undo` was lost for good never strand the pair; a younger id never is. A local boost of a status that is
   deleted while its author is purged is withdrawn once: the boost row's own marker (`statuses.withdrawn`) records
   that its Undo was recorded, whichever job did it, and lives until the boost is deleted, however soon the intent
   itself goes once its deliveries settle; both jobs wait for the intent's staging before they delete the boost.
   `test/inbox-statuses.test.ts` ("ID-7: duplicate and reordered Create and Delete", "ignores an Update that is not
   newer"), `test/inbox-statuses-edge.test.ts` ("ID-7: the Update watermark", "leaves nothing for every order of
-  Create, Update and Delete", "ID-7: retractions at the per-actor cap", "retracts both ids", "withdraws a local boost
-  once", "ID-7: a retryable refusal commits nothing", "ID-6, ID-7: a deleted status is not created again by anyone",
-  "after its deliveries are done").
+  Create, Update and Delete", "ID-7: retractions at the per-actor cap", "removes only its own id", "withdraws a local
+  boost once", "ID-7: a retryable refusal commits nothing", "ID-6, ID-7: a deleted status is not created again by anyone",
+  "after its deliveries are done"), `test/inbox-reactions.test.ts` (every arrival order of three reactions and their
+  Undos, a burst retried after its 503s, "is retired to make room", "Undos at the retraction cap", "records no
+  tombstone, unless a stored favourite needs it removed", "a legacy favourite of a local status").
 - **ID-8: only ActivityStreams media types become objects.** A fetched document is used as an actor, key or object only
   if served as `application/activity+json` or `application/ld+json` with the ActivityStreams profile, as Mastodon
   requires, and only if its root is a JSON object (JSON-LD would fetch a string root through the context loader). Other
@@ -371,7 +387,10 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   outbound delivery").
 - **VIS-10: a notification is emitted once.** It is written only if the recipient is local and may see the status, and
   only when new under its natural key; a repeat inserts nothing (`update` replaces the previous one). Its push is sent
-  only for a newly inserted row. _Enforced (main):_ `notify` in `src/domain/notifications.ts`;
+  only for a newly inserted row. A remote favourite notifies when it is created and its notification goes with it, as
+  Mastodon's does: a further `Like` it tracks notifies nothing, and an `Undo` followed by the next reaction's `Like`
+  notifies (and pushes) again, while the reverse order does not (`test/inbox-reactions.test.ts`, "VIS-10: the
+  favourite notification follows the aggregate"). _Enforced (main):_ `notify` in `src/domain/notifications.ts`;
   `test/statuses.test.ts` ("a retry has no second side effect"), `test/timelines.test.ts` ("notifies followers who
   asked to be notified, once"). Push: _Enforced (main):_ `notify` records pushes for the row it inserted only, never for a
   repeat (`queuePushes` in `src/domain/notifications.ts`); `test/push-send.test.ts` ("pushes every notification type
@@ -1555,7 +1574,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   expand them 100 at a time; then the purge deletes the receipts a batch at a time before the boost and its
   booster's recount; then its statuses, each
   deleted only after its children (edits, media, mentions, tags, favourites, bookmarks, notifications, receipts,
-  boosts, reply links), so no delete cascades. The child tables of a status and of a purged account are each one list in
+  boosts, reply links), so no delete cascades. A favourite's tracked `Like` ids go before it, read from a window of
+  the account's or the status's first favourites, at most `MAX_TRACKED_LIKES` each; a local status's own delete
+  cascades at most that many per favourite, a bound a trigger holds for imported rows too
+  (`test/inbox-reactions.test.ts`, "RES-6: tracked Like ids in bounded deletions"). The child tables of a status and of a purged account are each one list in
   `src/domain/inbox.ts` (`STATUS_CHILDREN`, `PURGED_ACCOUNT_CHILDREN`), which `test/cascade-guard.test.ts` checks
   against the schema's cascading foreign keys; the same test requires every trigger that writes to be named with
   where a batch that fires it counts its writes. Blocks and mutes of the account go last, once nothing they filter is

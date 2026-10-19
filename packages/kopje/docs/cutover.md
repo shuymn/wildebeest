@@ -268,7 +268,9 @@ are kept without a status either way. To move the images into Kopje's own media 
    `publish` is refused while a dump holds its freeze (`dump-in-progress`), so a dump is of one state.
 
 **Relationships.** Follows, favourites, boosts, bookmarks, blocks, mutes, domain blocks and lists carry over. A
-follow's `uri` is its legacy value, or for a local follower the id of its latest Follow activity; an accepted follow
+remote account's favourite keeps no Like id, so it tracks none (`favourite_likes`, [dump-format.md](dump-format.md)):
+an Undo naming its status removes it. A follow's `uri` is its legacy value, or for a local follower the id of its
+latest Follow activity; an accepted follow
 with no Follow record keeps `uri` NULL and is counted. Self-follows, self-blocks and self-mutes cannot exist in Kopje
 and are left out (counted). A list member that is neither the list's owner nor an account the owner follows or has
 asked to follow is left out too (counted, `list_accounts:not-followed-left-out`): legacy kept members whatever the

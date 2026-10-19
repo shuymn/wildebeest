@@ -79,7 +79,8 @@ import { hostDomain } from '../platform/domain-name'
 //                author of our pending quote, with a result on its origin (quotes.ts acceptOurQuote;
 //                test/quote-authoring.test.ts)
 //   Reject       as Accept (quotes.ts rejectOurQuote)
-//   Undo         the undone activity's actor is the actor, and it names the current Follow or Block (see undo)
+//   Undo         the undone activity's actor is the actor, and it names the current Follow or Block (see undo), a Like
+//                its favourite tracks or a legacy favourite's status, or its boost (undoInteraction)
 //   Block        the object is a local account; the actor is the blocker
 //   Move         the object is the actor, and the target lists the actor in alsoKnownAs (ID-4)
 //   Update       of an actor: the object is the actor itself; of a status: the stored status's author is the actor
