@@ -262,10 +262,27 @@ function propertyValue(literal: Literal): boolean {
 	return false
 }
 
-const inHelper = (literal: Literal) =>
-	literal.parents.some(
-		(p) => p.type === 'CallExpression' && p.callee.type === 'Identifier' && HELPERS.has(p.callee.name)
-	)
+// The helper a call calls, by its own name or as a static member (`bounds.statusUriSql`); null for any other call.
+function helperOf(call: Node): string | null {
+	if (call.type !== 'CallExpression') {
+		return null
+	}
+	const { callee } = call
+	const name =
+		callee.type === 'Identifier'
+			? callee.name
+			: callee.type === 'MemberExpression' && !callee.computed && callee.property.type === 'Identifier'
+				? callee.property.name
+				: null
+	return name !== null && HELPERS.has(name) ? name : null
+}
+
+// The column a helper is given: its first argument, itself. A literal nested deeper (a database call's SQL inside the
+// argument) is read as any other.
+const inHelper = (literal: Literal) => {
+	const call = literal.parents[0]
+	return call?.type === 'CallExpression' && helperOf(call) !== null && call.arguments[0] === literal.node
+}
 
 // The text of a literal, constants inlined (the module's own first, then another module's by a unique name), helper
 // calls and other interpolations opaque.
@@ -355,10 +372,10 @@ export function scan(all: readonly Source[]): { reads: Finding[]; misuses: Findi
 		const { path, text } = source
 		const { program, literals } = parse(source)
 		walk(program, (node) => {
-			if (node.type !== 'CallExpression' || node.callee.type !== 'Identifier' || !HELPERS.has(node.callee.name)) {
+			const helper = helperOf(node)
+			if (helper === null || node.type !== 'CallExpression') {
 				return
 			}
-			const helper = node.callee.name
 			const first = node.arguments[0]
 			const argument =
 				first?.type === 'Literal' && typeof first.value === 'string'
@@ -554,10 +571,25 @@ describe('the source scanner', () => {
 				'statuses.uri',
 			],
 			'a helper given another column': ["statusUriSql('s.content')", 'misuse statusUriSql(s.content)'],
+			'a namespaced helper given another column': ["bounds.statusUriSql('t.name')", 'misuse statusUriSql(t.name)'],
+			'a read nested in a helper argument': [
+				"statusUriSql(db.first<{ uri: string }>('SELECT s.uri FROM statuses s')!.uri)",
+				'statuses.uri',
+			],
+			'a reassigned let': [
+				"let COLUMNS = 's.id'\nCOLUMNS = 's.id, s.uri'\ndb.all(`SELECT ${COLUMNS} FROM statuses s`)",
+				'interpolation COLUMNS',
+			],
+			'a reassigned var': [
+				"var COLUMNS = 's.id'\nCOLUMNS = 's.id, s.uri'\ndb.all(`SELECT ${COLUMNS} FROM statuses s`)",
+				'interpolation COLUMNS',
+			],
 		},
 		passed: {
 			'a helper': "db.all(`SELECT ${statusUriSql('s.uri')} AS uri FROM statuses s`)",
 			'a comparison': 'db.all(`SELECT s.id FROM statuses s WHERE s.uri = ?`)',
+			'a namespaced helper': "db.all(`SELECT s.id FROM statuses s WHERE x = ?`, bounds.statusUriSql('s.uri'))",
+			'a constant of bounded columns': "const COLUMNS = 's.id'\ndb.all(`SELECT ${COLUMNS} FROM statuses s`)",
 			'a safe builder': "db.all(`SELECT s.id, ${availableSql('s.account_id')} AS a FROM statuses s`)",
 			'a comment': "// db.all(`SELECT s.uri FROM statuses s`), statusUriSql('s.content')\nf()",
 		},

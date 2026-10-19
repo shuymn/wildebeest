@@ -39,7 +39,8 @@ export function sources(dir: string, extensions: readonly string[] = ['.ts', '.t
 }
 
 // A string or template literal: its text parts and interpolated expressions in order, its ancestors (nearest first),
-// and the name of the constant it initializes (`const NAME = '...'`, with or without `as const` or a type).
+// and the name of the constant it initializes (`const NAME = '...'`, with or without `as const` or a type; never a `let`
+// or `var`, which may be reassigned).
 export type Part = { text: string } | { expression: Node; source: string }
 export type Literal = { node: Node; parts: Part[]; parents: Node[]; constant: string | null }
 
@@ -95,12 +96,17 @@ export function parse(source: Source): Parsed {
 
 function constantOf(node: Node, parents: readonly Node[]): string | null {
 	let child: Node = node
-	for (const parent of parents) {
+	for (const [i, parent] of parents.entries()) {
 		if (parent.type === 'TSAsExpression' || parent.type === 'TSSatisfiesExpression') {
 			child = parent
 			continue
 		}
-		return parent.type === 'VariableDeclarator' && parent.init === child && parent.id.type === 'Identifier'
+		const declaration = parents[i + 1]
+		return parent.type === 'VariableDeclarator' &&
+			parent.init === child &&
+			parent.id.type === 'Identifier' &&
+			declaration?.type === 'VariableDeclaration' &&
+			declaration.kind === 'const'
 			? parent.id.name
 			: null
 	}

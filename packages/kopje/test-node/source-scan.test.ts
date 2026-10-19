@@ -22,6 +22,11 @@ describe('the source scan', () => {
 		expect(lineOf(text, literals[1]?.node.start ?? 0)).toBe(2)
 	})
 
+	it('names only a const as a constant', () => {
+		const text = "const A = 'a'\nlet B = 'b'\nvar C = 'c'\nexport const D: string = 'd'"
+		expect(parse({ path: 'src/probe.ts', text }).literals.map((l) => l.constant)).toEqual(['A', null, null, 'D'])
+	})
+
 	it('blanks comments, keeping lines, and not a // inside a string or a regular expression', () => {
 		const text = "a // one\n/* two\nthree */ b('//', /\\/\\//)"
 		expect(parse({ path: 'src/probe.ts', text }).code).toBe("a       \n      \n         b('//', /\\/\\//)")
