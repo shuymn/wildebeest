@@ -678,6 +678,8 @@ describe('ID-7: a remote favourite stored before 0052_favourite_likes', () => {
 		await sql(t.store, 'UPDATE statuses SET favourites_count = 1 WHERE uri = ?', uri)
 		return { receive, uri, old }
 	}
+	const retainedUri = async (t: Setup) =>
+		(await sql<{ uri: string | null }>(t.store, 'SELECT uri FROM favourites'))[0]?.uri
 	const gone = async (t: Setup, uri: string) => {
 		expect(await sql(t.store, 'SELECT * FROM favourites')).toEqual([])
 		expect((await statusRow(t.store, uri))?.favourites_count).toBe(0)
@@ -707,41 +709,60 @@ describe('ID-7: a remote favourite stored before 0052_favourite_likes', () => {
 		await gone(t, uri)
 	})
 
-	it('is removed by a typed Undo of another id naming its status, which records both ids', async () => {
+	it('is kept by a typed Undo of another id naming its status, which records only that id', async () => {
 		const t = await setup()
 		const bob = await misskeyActor(t.web, '9abcdefghi', 'neko')
 		const { receive, uri, old } = await preUpgrade(t, bob)
 		const other = likeOf(bob, uri, 'other')
-		expect(await receive(undoOf(bob, other))).toMatchObject({ applied: true, reason: 'undone' })
+		expect(await receive(undoOf(bob, other))).toMatchObject({ applied: true, reason: 'retraction-recorded' })
+		expect((await statusRow(t.store, uri))?.favourites_count).toBe(1)
+		expect(await sql(t.store, 'SELECT target_uri FROM inbound_retractions')).toEqual([{ target_uri: other.id }])
+		// The Like that Undo overtook does not apply; the retained id's own Undo ends the favourite.
+		expect(await receive(other)).toMatchObject({ applied: false, reason: 'retracted' })
+		expect(await receive(undoOf(bob, old))).toMatchObject({ applied: true, reason: 'undone' })
 		await gone(t, uri)
-		expect(
-			(
-				await sql<{ target_uri: string }>(t.store, 'SELECT target_uri FROM inbound_retractions ORDER BY target_uri')
-			).map((row) => row.target_uri)
-		).toEqual([old.id, other.id].sort())
-		// A replay of the Like it was stored under does not bring it back.
 		expect(await receive(old)).toMatchObject({ applied: false, reason: 'retracted' })
-		await gone(t, uri)
 	})
 
-	it('answers 503 to that Undo, writing nothing, when only one of the two ids fits under the cap', async () => {
+	// Retained L0, Like L1, Undo L1, then a typed Undo of L2 naming the status that overtakes L2: L0 is still
+	// outstanding, so the favourite, its count and notification stay, and L0 is not tombstoned.
+	it('keeps its retained id outstanding after its last tracked one is undone, whatever Undo overtakes a Like', async () => {
 		const t = await setup()
 		const bob = await misskeyActor(t.web, '9abcdefghi', 'neko')
-		const { receive, uri } = await preUpgrade(t, bob)
-		await retractionsAtCap(t, bob)
+		const { receive, uri, old } = await preUpgrade(t, bob)
+		const bobId = (await accountId(t.store, bob.uri))!
 		await sql(
 			t.store,
-			'DELETE FROM inbound_retractions WHERE actor_uri = ? AND target_uri LIKE ?',
-			bob.uri,
-			'%/filler/1'
+			"INSERT INTO notifications (account_id, type, from_account_id, status_id) SELECT ?, 'favourite', ?, id FROM statuses WHERE uri = ?",
+			ALICE,
+			bobId,
+			uri
 		)
-		const before = await state(t)
-		expect(await receive(undoOf(bob, likeOf(bob, uri, 'other')))).toMatchObject({ retry: true })
-		expect(await state(t)).toEqual(before)
+		const [l1, l2] = ['l1', 'l2'].map((n) => likeOf(bob, uri, n))
+		expect(await receive(l1!)).toMatchObject({ reason: 'favourite-kept' })
+		expect(await receive(undoOf(bob, l1!))).toMatchObject({ reason: 'like-undone' })
+		expect(await receive(undoOf(bob, l2!))).toMatchObject({ reason: 'retraction-recorded' })
+		expect(await retainedUri(t)).toBe(old.id)
+		expect((await statusRow(t.store, uri))?.favourites_count).toBe(1)
+		expect(await notifications(t.store)).toEqual([{ account_id: ALICE, type: 'favourite' }])
+		expect(
+			(await sql<{ target_uri: string }>(t.store, 'SELECT target_uri FROM inbound_retractions')).map(
+				(r) => r.target_uri
+			)
+		).not.toContain(old.id)
+		// L2 arrives after its Undo and does not apply; replays of L1 do not either.
+		expect(await receive(l2!)).toMatchObject({ applied: false, reason: 'retracted' })
+		expect(await receive(l1!)).toMatchObject({ applied: false, reason: 'retracted' })
+		expect(await tracked(t, uri)).toEqual([])
+		// A new reaction is tracked beside L0, and each id's Undo ends only its own.
+		const l3 = likeOf(bob, uri, 'l3')
+		expect(await receive(l3)).toMatchObject({ reason: 'favourite-kept' })
+		expect(await receive(untypedUndoOf(old))).toMatchObject({ reason: 'like-undone' })
+		expect(await receive(undoOf(bob, l3))).toMatchObject({ reason: 'undone' })
+		await gone(t, uri)
+		expect(await notifications(t.store)).toEqual([])
+		expect(await receive(old)).toMatchObject({ applied: false, reason: 'retracted' })
 	})
-
-	const retainedUri = async (t: Setup) =>
-		(await sql<{ uri: string | null }>(t.store, 'SELECT uri FROM favourites'))[0]?.uri
 
 	it.each(
 		UNDO_STYLES.flatMap(

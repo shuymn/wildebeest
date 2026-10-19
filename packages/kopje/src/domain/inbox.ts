@@ -2350,15 +2350,17 @@ function trackedLike(db: Db, actorId: string, uri: string): TrackedLike | undefi
 	)
 }
 
-// The actor's legacy favourite of the status `uri`, local or remote: one tracking no Like id (a cutover stores none,
-// and a favourite stored before migration 0052_favourite_likes tracks none), with its stored Like id if it kept one.
-// The status first (CROSS JOIN keeps the order), then its favourite by the pair.
+// The actor's id-less favourite of the status `uri`, local or remote: one with no tracked Like id and no retained one
+// (a cutover stores none). A favourite with an id of its own, tracked or retained, goes only by that id's Undo, so an
+// Undo that overtakes its Like never removes it. The status first (CROSS JOIN keeps the order), then its favourite by
+// the pair.
 type LegacyFavourite = { id: string; status_id: string; uri: string | null }
 
 function legacyFavourite(db: Db, actorId: string, uri: string): LegacyFavourite | undefined {
 	return db.first<LegacyFavourite>(
 		`SELECT CAST(f.id AS TEXT) AS id, f.status_id, f.uri FROM statuses s CROSS JOIN favourites f ON f.status_id = s.id
-		WHERE s.uri = ? AND f.account_id = ? AND NOT EXISTS (SELECT 1 FROM favourite_likes l WHERE l.favourite_id = f.id)`,
+		WHERE s.uri = ? AND f.account_id = ? AND f.uri IS NULL
+			AND NOT EXISTS (SELECT 1 FROM favourite_likes l WHERE l.favourite_id = f.id)`,
 		uri,
 		actorId
 	)
@@ -2426,14 +2428,14 @@ function removeBoost(db: Db, actorId: string, boost: { id: string; original: str
 // Undo of a Like or an Announce, by the undone activity's id (ID-7). For a Like, in this order:
 //   - the actor's favourite tracking the id, or retaining it (favourites.uri, retainedLike), typed or untyped: the id
 //     goes (its row, or the retained uri cleared), and the favourite with its last outstanding one (removeFavourite);
-//   - for a typed Like naming a status the actor has a legacy favourite of (legacyFavourite: no tracked id, its
-//     retained id another): that favourite goes, as Mastodon's undo_like finds the actor's favourite of the object;
+//   - for a typed Like naming a status the actor has an id-less favourite of (legacyFavourite: no tracked or retained
+//     id, a converted one): that favourite goes, as Mastodon's undo_like finds the actor's favourite of the object;
 //   - for a typed Like naming anything but a local original: nothing (Mastodon's undo_like). A server sends a
 //     reaction's Undo to the reactor's followers too, and these would spend the actor's retraction cap;
 //   - otherwise the id is recorded as retracted, so a Like that arrives after its Undo does not apply.
 // The stored matches come before that check: a converted favourite may be of a remote status. An Announce is found by
-// its id. Whatever changes, the Undo's id is recorded as retracted, and a removed legacy favourite's stored id with it;
-// if they cannot be (the per-actor cap), nothing changes and the Undo is answered 503.
+// its id. Whatever changes, the Undo's id is recorded as retracted; if it cannot be (the per-actor cap), nothing
+// changes and the Undo is answered 503.
 function undoInteraction(db: Db, actor: RemoteRow, ref: ActivityRef & { id: string }, now: number): ReceiveResult {
 	const tracked = ref.type === 'Announce' ? undefined : trackedLike(db, actor.id, ref.id)
 	const retained = tracked !== undefined || ref.type === 'Announce' ? undefined : retainedLike(db, actor.id, ref.id)
@@ -2464,10 +2466,7 @@ function undoInteraction(db: Db, actor: RemoteRow, ref: ActivityRef & { id: stri
 	) {
 		return ignored('unrelated')
 	}
-	// A legacy favourite found by its status may hold another Like id: it is recorded too, so a replay of that Like
-	// does not bring the favourite back.
-	const retracted = [ref.id, ...(legacy?.uri == null || legacy.uri === ref.id ? [] : [legacy.uri])]
-	if (!canRetract(db, actor.uri, retracted, now)) {
+	if (!canRetract(db, actor.uri, [ref.id], now)) {
 		return retryLater('retraction-cap')
 	}
 	let reason = 'retraction-recorded'
@@ -2493,9 +2492,7 @@ function undoInteraction(db: Db, actor: RemoteRow, ref: ActivityRef & { id: stri
 		removeBoost(db, actor.id, boost)
 		reason = 'undone'
 	}
-	for (const uri of retracted) {
-		retract(db, actor.uri, uri, now)
-	}
+	retract(db, actor.uri, ref.id, now)
 	return applied(reason)
 }
 

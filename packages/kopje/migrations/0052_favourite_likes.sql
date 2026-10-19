@@ -23,8 +23,8 @@
 --
 -- Nothing is copied: a remote favourite stored before this file keeps its Like id in favourites.uri, retained as one
 -- of its outstanding ids. Nothing moves or clears it but its own Undo, typed or not, which clears it (and removes the
--- favourite when no tracked id remains); an Undo naming the status of a favourite with no tracked id removes it and
--- records both ids. No bound applies to a retained id (the CHECK covers favourite_likes only). favourites.uri is used
+-- favourite when no tracked id remains); an Undo naming the status removes only a favourite with no id at all (a
+-- converted one). No bound applies to a retained id (the CHECK covers favourite_likes only). favourites.uri is used
 -- for interaction matching only for a local favourite (its own Like id) and for a remote favourite's retained id; dumps
 -- carry it verbatim.
 --

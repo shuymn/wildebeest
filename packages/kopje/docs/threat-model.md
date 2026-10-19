@@ -223,12 +223,15 @@ against their own instance. TLS is assumed between all parties.
   only its own id and records only it; a `Like` id is tracked once in the instance (`favourite_likes_uri` is unique,
   for imports too, so another actor's `Like` under it is ignored and its `Undo` reaches only its own), and one past
   `ACTIVITY_ID_LIMIT` (4,096 JSON-escaped UTF-8 bytes, a CHECK for imports) is not stored. An `Undo` naming a status the actor holds a legacy
-  favourite of (one tracking no id: the cutover keeps none for a remote favourite, and one stored before migration
-  `0052_favourite_likes` tracks none) removes it, recording that favourite's stored id with its own, as
+  favourite of (one with no id at all: the cutover keeps none for a remote favourite) removes it, as
   Mastodon's `undo_like` finds the favourite by its object; a `Like` of it makes it tracked. A favourite stored before
   that migration retains its `Like` id in `favourites.uri` as one of its outstanding ids, counted under the cap, never
   retired, held instance-wide like a tracked one, and cleared only by its own `Undo`, typed or not, even after a
-  `Delete` of the id tombstoned it; the favourite goes when no outstanding id remains. These stored matches come
+  `Delete` of the id tombstoned it; the favourite goes when no outstanding id remains. A favourite with an id of its
+  own, tracked or retained, goes only by an `Undo` of one of its ids; the fallback by object applies only to an
+  id-less (converted) one, so an `Undo` that overtakes its `Like` never removes it. Accepted limits: old data holding
+  the same id on several of one actor's favourites has only one of them ended by that id's `Undo`, and a retained id
+  whose `Undo` was lost for good keeps one of its favourite's 4 slots (the tracked ones still retire by age). These stored matches come
   first; then an `Undo` of a `Like` naming anything but a local original records nothing (Mastodon's `undo_like`), so
   a server's Undos of reactions to other servers' notes, which it also sends to the reactor's followers, spend no
   tombstone. A favourite tracks at most `MAX_TRACKED_LIKES` (4) ids (a trigger holds it for imports too); at the cap

@@ -13,9 +13,11 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - A remote favourite tracks the id of each of the actor's Likes of the status whose Undo has not arrived, and stays
   while it tracks one (up to 4). An Undo removes only the Like it names; before, an Undo naming the status removed the
   favourite whatever Like it named, and a second Like of a favourited status was dropped. A remote favourite stored
-  before the upgrade keeps its stored Like id as one of its outstanding Likes until that id's Undo (typed or not); an
-  Undo naming its status removes it while it tracks no other id, and keeps both ids from coming back. One converted
-  without a Like id is removed by an Undo naming its status.
+  before the upgrade keeps its stored Like id as one of its outstanding Likes until that id's Undo (typed or not),
+  and is removed only by the Undo of one of its ids. One converted without a Like id is removed by an Undo naming its
+  status. Known limits: if old data holds the same Like id on several of one actor's favourites, its Undo ends only
+  one of them (the others go by an Undo of another of their ids); and a kept id whose Undo was lost stays one of its
+  favourite's 4 outstanding ids for good (the other 3 make room by age).
 - A Like that would be a fifth outstanding one for the same favourite is answered 503 with nothing written; the
   sending server's retry is taken once an Undo makes room. A tracked Like the Store received 7 days before, by its own
   clock (longer than the delivery retries of common servers), makes room for it instead and is recorded as undone, so
