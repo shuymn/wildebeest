@@ -12,9 +12,9 @@ const accepted = (deviation: `MD-${number}`, ...names: string[]): Record<string,
 
 const PAGE = ['limit', 'max_id', 'min_id', 'since_id']
 
-// Admin features Kopje does not serve: refused as Mastodon refuses a role without the permission, or no record.
-const NOT_SERVED = 'admin feature not served: refused before any parameter is read'
-const PLACEHOLDER = 'placeholder: answered empty or 404 without reading the request'
+// Admin features Kopje does not serve (MD-2) and features not built yet (MD-3).
+const NOT_SERVED = (...names: string[]) => accepted('MD-2', ...names)
+const PLACEHOLDER = (...names: string[]) => accepted('MD-3', ...names)
 
 export const PARAM_EXCEPTIONS: Exceptions = {
 	'PATCH /api/v1/accounts/update_credentials': {
@@ -54,34 +54,34 @@ export const PARAM_EXCEPTIONS: Exceptions = {
 		'start_at'
 	),
 
-	// Placeholders (#1142 leaves them out of its checklist; tracked here until they are served).
-	'GET /api/v1/trends': open(PLACEHOLDER, 'limit', 'offset'),
-	'GET /api/v1/trends/tags': open(PLACEHOLDER, 'limit', 'offset'),
-	'GET /api/v1/trends/statuses': open(PLACEHOLDER, 'limit', 'offset'),
-	'GET /api/v1/trends/links': open(PLACEHOLDER, 'limit', 'offset'),
-	'GET /api/v1/timelines/link': open(PLACEHOLDER, ...PAGE, 'local', 'remote', 'url'),
-	'GET /api/v1/admin/trends/links': open(PLACEHOLDER, 'limit', 'offset'),
-	'GET /api/v1/admin/trends/statuses': open(PLACEHOLDER, 'limit', 'offset'),
-	'GET /api/v1/admin/trends/tags': open(PLACEHOLDER, 'limit', 'offset'),
-	'GET /api/v1/admin/domain_allows': open(PLACEHOLDER, ...PAGE),
-	'POST /api/v1/admin/dimensions': open(PLACEHOLDER, 'end_at', 'keys[]', 'limit', 'start_at'),
-	'POST /api/v1/admin/retention': open(PLACEHOLDER, 'end_at', 'frequency', 'start_at'),
+	// Features not built yet: answered as Mastodon with the feature off.
+	'GET /api/v1/trends': PLACEHOLDER('limit', 'offset'),
+	'GET /api/v1/trends/tags': PLACEHOLDER('limit', 'offset'),
+	'GET /api/v1/trends/statuses': PLACEHOLDER('limit', 'offset'),
+	'GET /api/v1/trends/links': PLACEHOLDER('limit', 'offset'),
+	'GET /api/v1/timelines/link': PLACEHOLDER(...PAGE, 'local', 'remote', 'url'),
+	'GET /api/v1/admin/trends/links': PLACEHOLDER('limit', 'offset'),
+	'GET /api/v1/admin/trends/statuses': PLACEHOLDER('limit', 'offset'),
+	'GET /api/v1/admin/trends/tags': PLACEHOLDER('limit', 'offset'),
+	'GET /api/v1/admin/domain_allows': PLACEHOLDER(...PAGE),
 
 	// Admin features not served.
-	'POST /api/v1/admin/domain_allows': open(NOT_SERVED, 'domain'),
-	'GET /api/v1/admin/ip_blocks': open(NOT_SERVED, ...PAGE),
-	'POST /api/v1/admin/ip_blocks': open(NOT_SERVED, 'comment', 'expires_in', 'ip', 'severity'),
-	'PUT /api/v1/admin/ip_blocks/:id': open(NOT_SERVED, 'comment', 'expires_in', 'ip', 'severity'),
-	'PATCH /api/v1/admin/ip_blocks/:id': open(NOT_SERVED, 'comment', 'expires_in', 'ip', 'severity'),
-	'GET /api/v1/admin/email_domain_blocks': open(NOT_SERVED, ...PAGE),
-	'POST /api/v1/admin/email_domain_blocks': open(NOT_SERVED, 'allow_with_approval', 'domain'),
-	'GET /api/v1/admin/canonical_email_blocks': open(NOT_SERVED, ...PAGE),
-	'POST /api/v1/admin/canonical_email_blocks': open(NOT_SERVED, 'canonical_email_hash', 'email'),
-	'POST /api/v1/admin/canonical_email_blocks/test': open(NOT_SERVED, 'email'),
-	'GET /api/v1/admin/trends/links/publishers': open(NOT_SERVED, ...PAGE),
-	'GET /api/v1/admin/tags': open(NOT_SERVED, ...PAGE),
-	'PUT /api/v1/admin/tags/:id': open(NOT_SERVED, 'display_name', 'listable', 'trendable', 'usable'),
-	'PATCH /api/v1/admin/tags/:id': open(NOT_SERVED, 'display_name', 'listable', 'trendable', 'usable'),
+	'POST /api/v1/admin/dimensions': NOT_SERVED('end_at', 'keys[]', 'limit', 'start_at'),
+	'POST /api/v1/admin/retention': NOT_SERVED('end_at', 'frequency', 'start_at'),
+	'POST /api/v1/admin/domain_allows': NOT_SERVED('domain'),
+	'GET /api/v1/admin/ip_blocks': NOT_SERVED(...PAGE),
+	'POST /api/v1/admin/ip_blocks': NOT_SERVED('comment', 'expires_in', 'ip', 'severity'),
+	'PUT /api/v1/admin/ip_blocks/:id': NOT_SERVED('comment', 'expires_in', 'ip', 'severity'),
+	'PATCH /api/v1/admin/ip_blocks/:id': NOT_SERVED('comment', 'expires_in', 'ip', 'severity'),
+	'GET /api/v1/admin/email_domain_blocks': NOT_SERVED(...PAGE),
+	'POST /api/v1/admin/email_domain_blocks': NOT_SERVED('allow_with_approval', 'domain'),
+	'GET /api/v1/admin/canonical_email_blocks': NOT_SERVED(...PAGE),
+	'POST /api/v1/admin/canonical_email_blocks': NOT_SERVED('canonical_email_hash', 'email'),
+	'POST /api/v1/admin/canonical_email_blocks/test': NOT_SERVED('email'),
+	'GET /api/v1/admin/trends/links/publishers': NOT_SERVED(...PAGE),
+	'GET /api/v1/admin/tags': NOT_SERVED(...PAGE),
+	'PUT /api/v1/admin/tags/:id': NOT_SERVED('display_name', 'listable', 'trendable', 'usable'),
+	'PATCH /api/v1/admin/tags/:id': NOT_SERVED('display_name', 'listable', 'trendable', 'usable'),
 }
 
 // Routes whose fixture entry has unresolved extraction, with exactly the reasons acknowledged and why the names read

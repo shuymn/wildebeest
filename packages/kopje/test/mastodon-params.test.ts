@@ -37,9 +37,9 @@ async function newStatus(w: World): Promise<string> {
 
 const NOT_SERVED = {
 	code: 403,
-	reason: 'not served: refused as Mastodon refuses a role without the permission (mastodon/admin.ts notAllowed)',
+	reason: 'not served (MD-2): refused as Mastodon refuses a role without the permission (mastodon/admin.ts notAllowed)',
 }
-const NO_RECORD = { code: 404, reason: 'not served: no record exists (mastodon/admin.ts recordNotFound)' }
+const NO_RECORD = { code: 404, reason: 'not served (MD-2): no record exists (mastodon/admin.ts recordNotFound)' }
 
 // Baselines beyond the default (the route with its ids filled, no parameters): the parameters a route needs to answer
 // 2xx, fresh targets for routes that consume theirs, and the answer of routes that do not serve the feature.
@@ -131,7 +131,7 @@ const RECIPES: Record<string, Recipe> = {
 	// Placeholders and features Kopje does not serve: the answer they give.
 	'GET /api/v1/timelines/link': {
 		baseline: () => ({ path: '/api/v1/timelines/link', params: { url: 'https://news.example/a' } }),
-		status: { code: 404, reason: 'no trending links (mastodon/placeholders.ts linkTimeline)' },
+		status: { code: 404, reason: 'not built yet (MD-3): no trending links (mastodon/placeholders.ts linkTimeline)' },
 	},
 	'POST /api/v1/emails/confirmations': {
 		status: { code: 403, reason: 'no sign-ups (MD-1): no user was signed up through an app' },

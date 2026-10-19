@@ -54,7 +54,6 @@ const open = (note: string, ...names: string[]): Record<string, Exception> =>
 const ACCOUNT: Record<string, Exception> = {
 	...open('missing', 'indexable', 'moved', 'noindex', 'roles', 'uri'),
 	...open('missing (Mastodon emits it for a limited or memorial account)', 'limited', 'memorial'),
-	...open('custom emoji are not served yet', 'emojis'),
 }
 
 export const ENTITY_EXCEPTIONS: Exceptions = {
@@ -69,7 +68,6 @@ export const ENTITY_EXCEPTIONS: Exceptions = {
 	'REST::StatusSerializer': {
 		...open('missing', 'application'),
 		...open('no link previews', 'card'),
-		...open('custom emoji are not served yet', 'emojis'),
 	},
 	'REST::MediaAttachmentSerializer': open(
 		'always null, also for remote media',
@@ -77,7 +75,6 @@ export const ENTITY_EXCEPTIONS: Exceptions = {
 		'preview_remote_url',
 		'text_url'
 	),
-	'REST::PollSerializer': open('custom emoji are not served yet', 'emojis'),
 	'REST::NotificationSerializer': {
 		...open('never present', 'filtered'),
 		...open('the notification types that carry them are not sent', 'event', 'moderation_warning'),

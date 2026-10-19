@@ -14,8 +14,13 @@ reason and who decided it, and change the exceptions that cite the gap.
 
 ## Departures
 
-- **MD-1: Registration through the API is closed.** `POST /api/v1/accounts` answers 403 as Mastodon does when an
-  administrator closes registrations, so the sign-up parameters are never read; `POST /api/v1/emails/confirmations`
-  refuses for the same reason, since no user signed up through an app. Accounts are made by signing in through
-  Cloudflare Access, not by sign-up. Mastodon offers this as an instance setting.
-  Decided by the coordinator with the account endpoints (2026-10-15); recorded here 2026-10-20.
+- **MD-1: Registration through the API is closed.** `POST /api/v1/accounts` answers 403, as Mastodon does with
+  registrations closed, and `POST /api/v1/emails/confirmations` refuses, since no user signs up through an app. Accounts
+  are made by signing in through Cloudflare Access. Decided by the coordinator, 2026-10-15.
+- **MD-2: Admin features with nothing to act on are not served.** Domain allows, IP, email domain and canonical email
+  blocks, trends review and link publishers, admin tags, dimensions and retention answer 403 or 404, as Mastodon
+  answers a role without the permission. Kopje has no sign-ups, recorded IPs, allowlist mode or trends data. Decided
+  by the coordinator, 2026-10-16.
+- **MD-3: Features not built yet answer as Mastodon with the feature off.** Trends (and the admin trends lists), the
+  link timeline, announcements, annual reports, translation, async refreshes and the admin domain allows list answer
+  empty or 404 until the feature is built; the backlog tracks them. Decided by the coordinator, 2026-10-20.
