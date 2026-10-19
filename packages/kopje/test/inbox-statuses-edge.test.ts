@@ -199,7 +199,7 @@ describe('ID-7: retractions at the per-actor cap', () => {
 		expect(await t.post(bob, remove(bob, note.id))).toBe(503)
 		expect((await statuses(t.store)).map((s) => s.uri)).toContain(note.id)
 		expect(await t.post(bob, undo(bob, { id: liked.id, type: 'Like', actor: bob.uri, object: local.uri }))).toBe(503)
-		expect(await sql(t.store, 'SELECT uri FROM favourites')).toEqual([{ uri: liked.id }])
+		expect(await sql(t.store, 'SELECT uri FROM favourite_likes')).toEqual([{ uri: liked.id }])
 		// A stored boost's Delete and an Announce's Undo at the cap: 503, the boost stays.
 		// (Storing a boost records no retraction, so it is taken at the cap.)
 		const boost = announce(bob, local.uri)
@@ -217,8 +217,8 @@ describe('ID-7: retractions at the per-actor cap', () => {
 	})
 })
 
-describe('ID-7: an embedded Undo of a Like stored under another id', () => {
-	it('retracts both ids, so a replay of the stored Like does not restore the favourite', async () => {
+describe('ID-7: an Undo of one of two outstanding Likes of a status', () => {
+	it('removes only its own id, so the favourite stays, and a replay of the undone Like does not come back', async () => {
 		const t = await setup()
 		const bob = await mastodonActor(t.web, 'bob')
 		const local = await localStatus(t, { status: 'liked twice', visibility: 'public' })
@@ -227,16 +227,12 @@ describe('ID-7: an embedded Undo of a Like stored under another id', () => {
 		await t.post(bob, first)
 		await t.post(bob, second)
 		await t.post(bob, undo(bob, { id: second.id, type: 'Like', actor: bob.uri, object: local.uri }))
-		expect(await sql(t.store, 'SELECT * FROM favourites')).toEqual([])
-		expect(
-			(await sql<{ target_uri: string }>(t.store, 'SELECT target_uri FROM inbound_retractions'))
-				.map((r) => r.target_uri)
-				.sort()
-		).toEqual([first.id, second.id].sort())
-		await t.post(bob, first)
-		expect(await sql(t.store, 'SELECT * FROM favourites')).toEqual([])
-		expect((await statusRow(t.store, local.uri))?.favourites_count).toBe(0)
-		expect(await notifications(t.store)).toEqual([])
+		expect(await sql(t.store, 'SELECT uri FROM favourite_likes')).toEqual([{ uri: first.id }])
+		expect(await sql(t.store, 'SELECT target_uri FROM inbound_retractions')).toEqual([{ target_uri: second.id }])
+		await t.post(bob, second)
+		expect(await sql(t.store, 'SELECT uri FROM favourite_likes')).toEqual([{ uri: first.id }])
+		expect((await statusRow(t.store, local.uri))?.favourites_count).toBe(1)
+		expect(await notifications(t.store)).toEqual([{ account_id: ALICE, type: 'favourite' }])
 	})
 })
 
@@ -662,7 +658,7 @@ describe('ID-7: a retryable refusal commits nothing', () => {
 		expect((await statuses(t.store)).map((s) => s.uri)).toContain(note.id)
 	})
 
-	it('needs room for both ids of an Undo: with one free slot, nothing changes', async () => {
+	it('needs room for the Undo’s own id only: with one free slot, it applies', async () => {
 		const t = await setup()
 		const bob = await mastodonActor(t.web, 'bob')
 		const local = await localStatus(t, { status: 'liked twice', visibility: 'public' })
@@ -671,16 +667,19 @@ describe('ID-7: a retryable refusal commits nothing', () => {
 		await t.post(bob, first)
 		await t.post(bob, second)
 		await retractionsAtCap(t, bob)
+		expect(await t.post(bob, undo(bob, { id: second.id, type: 'Like', actor: bob.uri, object: local.uri }))).toBe(503)
+		expect(await sql(t.store, 'SELECT uri FROM favourite_likes ORDER BY id')).toEqual([
+			{ uri: first.id },
+			{ uri: second.id },
+		])
 		await sql(
 			t.store,
 			'DELETE FROM inbound_retractions WHERE actor_uri = ? AND target_uri LIKE ?',
 			bob.uri,
 			'%/filler/1'
 		)
-		const before = await sql(t.store, 'SELECT * FROM inbound_retractions ORDER BY actor_uri, target_uri')
-		expect(await t.post(bob, undo(bob, { id: second.id, type: 'Like', actor: bob.uri, object: local.uri }))).toBe(503)
-		expect(await sql(t.store, 'SELECT * FROM inbound_retractions ORDER BY actor_uri, target_uri')).toEqual(before)
-		expect(await sql(t.store, 'SELECT uri FROM favourites')).toEqual([{ uri: first.id }])
+		expect(await t.post(bob, undo(bob, { id: second.id, type: 'Like', actor: bob.uri, object: local.uri }))).toBe(202)
+		expect(await sql(t.store, 'SELECT uri FROM favourite_likes')).toEqual([{ uri: first.id }])
 		expect((await statusRow(t.store, local.uri))?.favourites_count).toBe(1)
 		expect(await notifications(t.store)).toEqual([{ account_id: ALICE, type: 'favourite' }])
 	})

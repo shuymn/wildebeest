@@ -132,6 +132,17 @@ export const MOVE_MAX_CARRIED = 100
 export const PURGE_BATCH = 500
 // Job batches one runInboundJobs call does at most.
 export const JOB_BATCHES_PER_RUN = 4
+// Outstanding Like ids one remote favourite tracks at most (favourite_likes; its trigger favourite_likes_cap holds the
+// bound for imports too, so a favourite's delete cascades at most this many rows, RES-6). A server that replaces a
+// reaction (Undo of the old Like, then a new Like) has one outstanding once its deliveries settle; more are transient,
+// while reordered changes are in flight. A Like past the cap is answered 503 with nothing written (the Undos it waits
+// for free the room), unless a tracked id older than LIKE_RETIRE_AFTER_MS makes room.
+export const MAX_TRACKED_LIKES = 4
+// A tracked Like id this old has outlived every redelivery of its Undo: Mastodon retries a delivery 16 times with
+// Sidekiq's (count^4 + 15) s backoff plus at most 50% jitter, about 3.1 days in all (ActivityPub::DeliveryWorker), and
+// Misskey 12 times by default with 1 min to 8 h backoff plus at most 20% jitter, about 1.6 days (core/QueueService.ts,
+// queue/QueueProcessorService.ts httpRelatedBackoff). Its Undo was lost; it is retired only to make room at the cap.
+export const LIKE_RETIRE_AFTER_MS = 7 * 24 * 60 * 60 * 1000
 
 // A remote actor as the Worker extracted it from a fetched, origin-checked document (ID-2). Text is bounded,
 // display_name is plain text, note is sanitized HTML (HTML-1) and URLs are http(s) or null (HTML-3). keys are the
@@ -192,7 +203,7 @@ export type InboundActivity =
 	| { type: 'QuoteRequest'; id: string; object: string; instrument: string; embedded: RemoteStatusInput | null }
 	| { type: 'Create'; id: string; object: RemoteStatusInput }
 	| { type: 'UpdateStatus'; id: string; object: RemoteStatusInput }
-	// A Like, a Misskey reaction (Like with _misskey_reaction) or an EmojiReact: a favourite of `object`.
+	// A Like in any spelling federation/inbound.ts reads as one (LIKE_TYPES): a favourite of `object`.
 	| { type: 'Like'; id: string; object: string }
 	// An Add or Remove of a status (by its id) or of a Hashtag (by its name) to or from the collection `target`.
 	| { type: 'Add'; id: string; target: string; object: CollectionItem }
@@ -907,12 +918,7 @@ const undo: Handler<'Undo'> = (db, actor, activity, { now }) => {
 	if (isRetracted(db, actor.uri, ref.id, now)) {
 		return ignored('retracted')
 	}
-	if (
-		ref.type === 'Like' ||
-		ref.type === 'EmojiReact' ||
-		ref.type === 'Announce' ||
-		(ref.type === null && interactionOf(db, actor, ref.id))
-	) {
+	if (ref.type === 'Like' || ref.type === 'Announce' || (ref.type === null && interactionOf(db, actor, ref.id))) {
 		return undoInteraction(db, actor, { ...ref, id: ref.id }, now)
 	}
 	const pair = ref.type === 'Follow' && isMisskeyPairId(ref.id)
@@ -947,7 +953,11 @@ const undo: Handler<'Undo'> = (db, actor, activity, { now }) => {
 		...(edge?.uri == null || isMisskeyPairId(edge.uri) ? [] : [edge.uri]),
 	]
 	if (!canRetract(db, actor.uri, retracted, now)) {
-		return ignored('retraction-cap')
+		// An untyped Undo that matches nothing stored may name a Like or Announce still on its way: answered 503, so its
+		// tombstone is not lost (ID-7). One that names a stored follow or block keeps its answer.
+		return ref.type === null && edge === undefined && !undoesBlock
+			? retryLater('retraction-cap')
+			: ignored('retraction-cap')
 	}
 	let undone = false
 	if (edge !== undefined) {
@@ -1259,17 +1269,17 @@ const deleteActor: Handler<'DeleteActor'> = (db, actor, _activity, { now }) => {
 // local boost and its target chunks. Each step is limited beforehand to what is left, so a batch never writes more
 // than PURGE_BATCH rows:
 //   1. the account's list memberships, the endorsements of it and the notes on it, its follows, notifications,
-//      mentions, favourites and keys, with the counters they counted;
+//      mentions, favourites (their tracked Like ids first) and keys, with the counters they counted;
 //   2. local boosts of its statuses: each boost's Undo is recorded once (withdrawLocalBoost; the job's cursor keeps
 //      the boost being withdrawn), its targets are written a chunk per row over as many batches as they need
 //      (stageRetraction), and B2's delivery rounds expand them in their own bounded steps; then the boost is deleted
 //      like any status, its receipts included, and its booster's count recounted;
 //   3. remote boosts of its statuses, then its own statuses;
 //   4. once nothing else of it is left, the blocks and mutes of it, which filter what remains until then.
-// A status is deleted only once its children (edits, media, mentions, tags, favourites, bookmarks, notifications,
-// receipts, boosts and the reply links to it) are gone, so deleting it cascades nothing. Local media is detached for
-// the media sweep (its R2 objects go only through B4b's path), never deleted here. Returns whether anything remains;
-// when nothing does, the account row goes and the job is done.
+// A status is deleted only once its children (edits, media, mentions, tags, favourites and their tracked Like ids,
+// bookmarks, notifications, receipts, boosts and the reply links to it) are gone, so deleting it cascades nothing.
+// Local media is detached for the media sweep (its R2 objects go only through B4b's path), never deleted here. Returns
+// whether anything remains; when nothing does, the account row goes and the job is done.
 export function purgeBatch(db: Db, uri: string, now: number): boolean {
 	const account = remoteAccount(db, uri)
 	if (account === undefined) {
@@ -1345,6 +1355,10 @@ function spend(db: Db, budget: Budget, sql: string, ...params: SqlStorageValue[]
 const REPORT_WINDOW = `SELECT id FROM reports INDEXED BY reports_target_state WHERE target_account_id = ?1
 	ORDER BY (action_taken_at IS NULL), id LIMIT ?2`
 
+// The first ?2 favourites of the account ?1 by id (favourites_account), so the purge reads one bounded range for
+// their tracked Like ids and for the favourites themselves, however many the account has (purgeRelationships).
+const FAVOURITE_WINDOW = 'SELECT id, status_id FROM favourites WHERE account_id = ?1 ORDER BY id LIMIT ?2'
+
 function purgeRelationships(db: Db, id: string, budget: Budget): void {
 	// The account's list memberships and endorsements go before its follows: a follow's delete also deletes the followed
 	// account's rows in the follower's lists and its endorsement (migrations 0007_list_members and
@@ -1387,9 +1401,18 @@ function purgeRelationships(db: Db, id: string, budget: Budget): void {
 		db,
 		follows.map((f) => f.other)
 	)
-	// A favourite's delete and its status's recount.
+	// The tracked Like ids of its first favourites (FAVOURITE_WINDOW), at most MAX_TRACKED_LIKES each; then each
+	// favourite of the window that tracks none: its delete and its status's recount, two rows, cascading nothing.
+	spend(
+		db,
+		budget,
+		`DELETE FROM favourite_likes WHERE id IN
+			(SELECT l.id FROM (${FAVOURITE_WINDOW}) w JOIN favourite_likes l ON l.favourite_id = w.id LIMIT ?2)`,
+		id
+	)
 	const favourites = db.all<{ id: string; status: string }>(
-		'SELECT CAST(id AS TEXT) AS id, status_id AS status FROM favourites WHERE account_id = ? ORDER BY id LIMIT ?',
+		`SELECT CAST(w.id AS TEXT) AS id, w.status_id AS status FROM (${FAVOURITE_WINDOW}) w
+		WHERE NOT EXISTS (SELECT 1 FROM favourite_likes l WHERE l.favourite_id = w.id)`,
 		id,
 		Math.floor(budget.left() / 2)
 	)
@@ -1579,8 +1602,16 @@ function withdrawLocalBoosts(
 // column and its bounded delete or detach statements, in order: `?1` the status id, `?2` the row limit.
 // deleteStatusWithin spends each statement and deletes the status only once none of these tables names it, so a new
 // child table goes here, or its rows would go in the status's delete unbounded; test/cascade-guard.test.ts checks the
-// list against the schema. Votes (deletePollVotes) and the status's replies and boosts have their own steps.
-export const STATUS_CHILDREN: readonly { table: string; column: string; remove: readonly string[] }[] = [
+// list against the schema. A table below another child (`parent`, whose rows it names by `column`) comes before it,
+// with the existence check (`exists`, of `?1`) that joins through it. Votes (deletePollVotes) and the status's replies
+// and boosts have their own steps.
+export const STATUS_CHILDREN: readonly {
+	table: string
+	column: string
+	parent?: string
+	exists?: string
+	remove: readonly string[]
+}[] = [
 	{
 		table: 'status_edits',
 		column: 'status_id',
@@ -1613,10 +1644,27 @@ export const STATUS_CHILDREN: readonly { table: string; column: string; remove: 
 			'DELETE FROM status_tags WHERE status_id = ?1 AND name IN (SELECT name FROM status_tags WHERE status_id = ?1 LIMIT ?2)',
 		],
 	},
+	// The tracked Like ids of the status's favourites (migration 0052_favourite_likes), at most MAX_TRACKED_LIKES per
+	// favourite, read from the status's first favourites; then the favourites that track none, so none cascades.
+	{
+		table: 'favourite_likes',
+		column: 'favourite_id',
+		parent: 'favourites',
+		exists:
+			'EXISTS (SELECT 1 FROM favourites f JOIN favourite_likes l ON l.favourite_id = f.id WHERE f.status_id = ?1)',
+		remove: [
+			`DELETE FROM favourite_likes WHERE id IN (SELECT l.id FROM
+				(SELECT id FROM favourites WHERE status_id = ?1 ORDER BY id LIMIT ?2) w JOIN favourite_likes l ON l.favourite_id = w.id
+				LIMIT ?2)`,
+		],
+	},
 	{
 		table: 'favourites',
 		column: 'status_id',
-		remove: ['DELETE FROM favourites WHERE id IN (SELECT id FROM favourites WHERE status_id = ? LIMIT ?)'],
+		remove: [
+			`DELETE FROM favourites WHERE id IN (SELECT w.id FROM (SELECT id FROM favourites WHERE status_id = ?1 ORDER BY id LIMIT ?2) w
+				WHERE NOT EXISTS (SELECT 1 FROM favourite_likes l WHERE l.favourite_id = w.id))`,
+		],
 	},
 	{
 		table: 'bookmarks',
@@ -1706,7 +1754,7 @@ export const STATUS_CHILDREN: readonly { table: string; column: string; remove: 
 ]
 
 const STATUS_CHILDREN_EXIST = STATUS_CHILDREN.map(
-	(child) => `EXISTS (SELECT 1 FROM ${child.table} WHERE ${child.column} = ?1)`
+	(child) => child.exists ?? `EXISTS (SELECT 1 FROM ${child.table} WHERE ${child.column} = ?1)`
 ).join(' OR ')
 
 // Deletes a status's children within the budget, and the status itself once none remain (so nothing cascades).
@@ -1757,6 +1805,7 @@ function deleteStatusWithin(db: Db, statusId: string, budget: Budget, after = 0)
 export const PURGED_ACCOUNT_CHILDREN: readonly { table: string; check: string; filter?: true }[] = [
 	{ table: 'statuses', check: 'account_id = ?1' },
 	{ table: 'favourites', check: 'account_id = ?1' },
+	{ table: 'favourite_likes', check: 'favourite_id IN (SELECT id FROM favourites WHERE account_id = ?1)' },
 	{ table: 'follows', check: 'account_id = ?1 OR target_account_id = ?1' },
 	{ table: 'blocks', check: 'account_id = ?1 OR target_account_id = ?1', filter: true },
 	{ table: 'mutes', check: 'target_account_id = ?1', filter: true },
@@ -1996,7 +2045,11 @@ function mayInteract(db: Db, actor: RemoteRow, statusId: string): boolean {
 }
 
 // Mastodon's ActivityPub::Activity::Like: a favourite of a local status, once per account, unless an Undo of this Like
-// arrived first (ID-7), by an actor that may interact with it (mayInteract).
+// arrived first (ID-7), by an actor that may interact with it (mayInteract). The favourite tracks the id of every Like
+// it was given whose Undo has not arrived (favourite_likes, at most MAX_TRACKED_LIKES), so a reaction replaced by an
+// Undo and a new Like keeps the favourite whatever order they arrive in. A Like id is tracked once, for one status: an
+// activity id names one activity. A further Like of a favourited status is tracked without a recount or a
+// notification (VIS-10).
 const like: Handler<'Like'> = (db, actor, activity, { now }) => {
 	const status = db.first<{ id: string; account_id: string }>(
 		`SELECT s.id, s.account_id FROM statuses s JOIN local_accounts l ON l.account_id = s.account_id
@@ -2012,17 +2065,29 @@ const like: Handler<'Like'> = (db, actor, activity, { now }) => {
 	if (!mayInteract(db, actor, status.id)) {
 		return ignored('not-visible')
 	}
-	const inserted = db.first<{ id: number }>(
-		`INSERT INTO favourites (account_id, status_id, uri, created_at) VALUES (?, ?, ?, ?)
-		ON CONFLICT DO NOTHING RETURNING id`,
-		actor.id,
-		status.id,
-		activity.id,
-		new Date(now).toISOString()
-	)
-	if (inserted === undefined) {
+	if (db.first('SELECT 1 AS x FROM favourite_likes WHERE uri = ?', activity.id) !== undefined) {
 		return ignored('duplicate')
 	}
+	const favourite = db.first<{ id: number; likes: number }>(
+		`SELECT f.id, (SELECT count(*) FROM favourite_likes l WHERE l.favourite_id = f.id) AS likes
+		FROM favourites f WHERE f.account_id = ? AND f.status_id = ?`,
+		actor.id,
+		status.id
+	)
+	if (favourite !== undefined) {
+		if (favourite.likes >= MAX_TRACKED_LIKES && !retireStaleLike(db, favourite.id, now)) {
+			return retryLater('like-tracking-cap')
+		}
+		trackLike(db, favourite.id, activity.id, now)
+		return applied('favourite-kept')
+	}
+	const inserted = db.first<{ id: number }>(
+		'INSERT INTO favourites (account_id, status_id, created_at) VALUES (?, ?, ?) RETURNING id',
+		actor.id,
+		status.id,
+		new Date(now).toISOString()
+	)!
+	trackLike(db, inserted.id, activity.id, now)
 	recountStatus(db, status.id)
 	notify(db, { recipientId: status.account_id, type: 'favourite', fromId: actor.id, statusId: status.id, now })
 	return applied('favourited')
@@ -2223,11 +2288,53 @@ function authorDeleted(db: Db, id: string, now: number): boolean {
 	return uri !== undefined && isDeletedActor(db, uri, now)
 }
 
+function trackLike(db: Db, favouriteId: number, uri: string, now: number): void {
+	db.run('INSERT INTO favourite_likes (favourite_id, uri, received_at) VALUES (?, ?, ?)', favouriteId, uri, now)
+}
+
+// Makes room at the cap: the earliest tracked id (by row id) received at least LIKE_RETIRE_AFTER_MS ago goes. The
+// favourite keeps the new Like, so its count and notification stay. Returns whether one went.
+function retireStaleLike(db: Db, favouriteId: number, now: number): boolean {
+	return (
+		db.run(
+			`DELETE FROM favourite_likes WHERE id = (SELECT id FROM favourite_likes
+				WHERE favourite_id = ?1 AND received_at <= ?2 ORDER BY id LIMIT 1)`,
+			favouriteId,
+			now - LIKE_RETIRE_AFTER_MS
+		) > 0
+	)
+}
+
+type TrackedLike = { id: number; favourite: string; status_id: string }
+
+// The actor's favourite tracking the Like id `uri` (one at most: like tracks an id once).
+function trackedLike(db: Db, actorId: string, uri: string): TrackedLike | undefined {
+	return db.first<TrackedLike>(
+		`SELECT l.id, CAST(f.id AS TEXT) AS favourite, f.status_id FROM favourite_likes l
+			JOIN favourites f ON f.id = l.favourite_id
+		WHERE l.uri = ? AND f.account_id = ? ORDER BY l.id LIMIT 1`,
+		uri,
+		actorId
+	)
+}
+
+// The actor's legacy favourite of the status `uri`, local or remote: one tracking no Like id (a cutover or an import
+// stores none).
+function legacyFavourite(db: Db, actorId: string, uri: string): { id: string; status_id: string } | undefined {
+	return db.first<{ id: string; status_id: string }>(
+		`SELECT CAST(f.id AS TEXT) AS id, f.status_id FROM favourites f JOIN statuses s ON s.id = f.status_id
+		WHERE f.account_id = ? AND s.uri = ? AND NOT EXISTS (SELECT 1 FROM favourite_likes l WHERE l.favourite_id = f.id)`,
+		actorId,
+		uri
+	)
+}
+
 // A favourite or boost the actor made under this id.
 function interactionOf(db: Db, actor: RemoteRow, uri: string): boolean {
 	return (
 		db.first(
-			`SELECT 1 AS x WHERE EXISTS (SELECT 1 FROM favourites WHERE account_id = ?1 AND uri = ?2)
+			`SELECT 1 AS x WHERE EXISTS (SELECT 1 FROM favourite_likes l JOIN favourites f ON f.id = l.favourite_id
+					WHERE l.uri = ?2 AND f.account_id = ?1)
 				OR EXISTS (SELECT 1 FROM statuses WHERE account_id = ?1 AND uri = ?2 AND reblog_of_id IS NOT NULL)`,
 			actor.id,
 			uri
@@ -2257,31 +2364,24 @@ function removeBoost(db: Db, actorId: string, boost: { id: string; original: str
 	)
 }
 
-// Undo of a Like (or a reaction) or an Announce. A Like is found by its id or, as Mastodon's undo_like does, as the
-// actor's favourite of the embedded Like's object; an Announce by its id. Every id involved is recorded as retracted:
-// the Undo's own reference, and the id the matched favourite was stored under (another Like of the same status, which
-// a replay must not restore). An Undo that overtook its activity keeps it from applying (ID-7). If they cannot all be
-// recorded (the per-actor cap), nothing changes and the Undo is answered 503.
+// Undo of a Like or an Announce, by the undone activity's id (ID-7). For a Like, in this order:
+//   - the actor's favourite tracking the id: the id goes, and the favourite with its last one (removeFavourite);
+//   - for a typed Like naming a status the actor has a legacy favourite of (legacyFavourite): that favourite goes, as
+//     Mastodon's undo_like finds the actor's favourite of the object;
+//   - for a typed Like naming anything but a local original: nothing (Mastodon's undo_like). A server sends a
+//     reaction's Undo to the reactor's followers too, and these would spend the actor's retraction cap;
+//   - otherwise the id is recorded as retracted, so a Like that arrives after its Undo does not apply.
+// The stored matches come before that check: a converted favourite may be of a remote status. An Announce is found by
+// its id. Whatever changes, the Undo's id is recorded as retracted; if it cannot be (the per-actor cap), nothing
+// changes and the Undo is answered 503.
 function undoInteraction(db: Db, actor: RemoteRow, ref: ActivityRef & { id: string }, now: number): ReceiveResult {
-	type Favourite = { id: string; status_id: string; uri: string | null }
-	const favourite =
-		ref.type === 'Announce'
-			? undefined
-			: (db.first<Favourite>(
-					'SELECT CAST(id AS TEXT) AS id, status_id, uri FROM favourites WHERE account_id = ? AND uri = ?',
-					actor.id,
-					ref.id
-				) ??
-				(ref.object === null
-					? undefined
-					: db.first<Favourite>(
-							`SELECT CAST(f.id AS TEXT) AS id, f.status_id, f.uri FROM favourites f JOIN statuses s ON s.id = f.status_id
-							WHERE f.account_id = ? AND s.uri = ?`,
-							actor.id,
-							ref.object
-						)))
+	const tracked = ref.type === 'Announce' ? undefined : trackedLike(db, actor.id, ref.id)
+	const legacy =
+		tracked === undefined && ref.type === 'Like' && ref.object !== null
+			? legacyFavourite(db, actor.id, ref.object)
+			: undefined
 	const boost =
-		ref.type === 'Like' || ref.type === 'EmojiReact'
+		ref.type === 'Like'
 			? undefined
 			: db.first<{ id: string; original: string }>(
 					`SELECT id, reblog_of_id AS original FROM statuses
@@ -2289,22 +2389,42 @@ function undoInteraction(db: Db, actor: RemoteRow, ref: ActivityRef & { id: stri
 					actor.id,
 					ref.id
 				)
-	const retracted = [ref.id, ...(favourite?.uri == null || favourite.uri === ref.id ? [] : [favourite.uri])]
-	if (!canRetract(db, actor.uri, retracted, now)) {
+	if (
+		ref.type === 'Like' &&
+		tracked === undefined &&
+		legacy === undefined &&
+		ref.object !== null &&
+		db.first(
+			`SELECT 1 AS x FROM statuses s JOIN local_accounts l ON l.account_id = s.account_id
+			WHERE s.uri = ? AND s.reblog_of_id IS NULL`,
+			ref.object
+		) === undefined
+	) {
+		return ignored('unrelated')
+	}
+	if (!canRetract(db, actor.uri, [ref.id], now)) {
 		return retryLater('retraction-cap')
 	}
-	if (favourite !== undefined) {
-		removeFavourite(db, actor.id, favourite)
+	let reason = 'retraction-recorded'
+	if (tracked !== undefined) {
+		db.run('DELETE FROM favourite_likes WHERE id = ?', tracked.id)
+		reason = 'like-undone'
+		if (db.first('SELECT 1 AS x FROM favourite_likes WHERE favourite_id = ?', tracked.favourite) === undefined) {
+			removeFavourite(db, actor.id, { id: tracked.favourite, status_id: tracked.status_id })
+			reason = 'undone'
+		}
+	} else if (legacy !== undefined) {
+		removeFavourite(db, actor.id, legacy)
+		reason = 'undone'
 	}
 	if (boost !== undefined) {
 		// R32: the streaming delete of the boost, captured before it goes.
 		streamDelete(db, boost.id, now)
 		removeBoost(db, actor.id, boost)
+		reason = 'undone'
 	}
-	for (const uri of retracted) {
-		retract(db, actor.uri, uri, now)
-	}
-	return favourite !== undefined || boost !== undefined ? applied('undone') : applied('retraction-recorded')
+	retract(db, actor.uri, ref.id, now)
+	return applied(reason)
 }
 
 // Mastodon's ActivityPub::Activity::Add and Remove (remote-collections.ts): the target is the actor's own featured

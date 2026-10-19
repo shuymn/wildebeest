@@ -173,12 +173,32 @@ describe('cascade guard (RES-6)', () => {
 	it('lists each foreign key naming statuses, not only its table', async () => {
 		await runInDurableObject(await migratedStore(), (_instance, state) => {
 			const direct = directKeys(foreignKeys(state.storage.sql), 'statuses')
-			const listed = STATUS_CHILDREN.map((child) => `${child.table}.${child.column}`)
+			const listed = STATUS_CHILDREN.filter((child) => child.parent === undefined).map(
+				(child) => `${child.table}.${child.column}`
+			)
 			expect(
 				direct.filter((key) => !listed.includes(key) && STATUS_EXEMPT[key.split('.')[0]!] === undefined),
 				'each of these foreign keys cascades from statuses: give it its own STATUS_CHILDREN entry in src/domain/inbox.ts'
 			).toEqual([])
 			expect(listed.filter((key) => !direct.includes(key))).toEqual([])
+		})
+	})
+
+	// A table below another child names it by its own foreign key, comes before it (so the parent's delete finds none
+	// of its rows left), and has its own existence check: it has no status column.
+	it('lists a table below another child before it, by its foreign key to it', async () => {
+		await runInDurableObject(await migratedStore(), (_instance, state) => {
+			const keys = foreignKeys(state.storage.sql)
+			const below = STATUS_CHILDREN.filter((child) => child.parent !== undefined)
+			expect(below.map((child) => child.table)).toEqual(['favourite_likes'])
+			for (const child of below) {
+				expect(
+					keys.filter((key) => key.from === child.table && key.table === child.parent && key.onDelete === 'CASCADE')
+				).toEqual([{ from: child.table, table: child.parent, column: child.column, onDelete: 'CASCADE' }])
+				const at = STATUS_CHILDREN.findIndex((entry) => entry === child)
+				expect(STATUS_CHILDREN.findIndex((entry) => entry.table === child.parent)).toBeGreaterThan(at)
+				expect(child.exists).toMatch(new RegExp(`\\b${child.parent}\\b.*\\bstatus_id = \\?1`))
+			}
 		})
 	})
 
