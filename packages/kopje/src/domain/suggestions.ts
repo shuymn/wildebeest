@@ -43,7 +43,7 @@ export type SuggestionsInput = { version: 1 | 2; offset: number; limit: number; 
 // The id of the `n`th accepted follow of `owner` from the newest (1 the newest), or 0 when it has fewer: the lower end
 // of its window in follows_following.
 function windowStartSql(owner: string, n: number, alias: string): string {
-	return `coalesce((SELECT ${alias}.id FROM follows ${alias} INDEXED BY follows_following
+	return `coalesce((SELECT id FROM follows ${alias} INDEXED BY follows_following
 		WHERE ${alias}.account_id = ${owner} AND ${alias}.state = 'accepted'
 		ORDER BY ${alias}.id DESC LIMIT 1 OFFSET ${n - 1}), 0)`
 }
