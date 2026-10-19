@@ -487,6 +487,10 @@ function hydrate(
 	// quoted statuses the viewer is shown with their own quotes.
 	const { byId, quotes, quoted } = statusGraph(db, ids, options, statusRows)
 	const all = JSON.stringify([...byId.keys()])
+	// A boost shows no attachments, mentions, hashtags or poll of its own, as Mastodon's reblog wrapper (its original's
+	// are in `reblog`), so they are read for the other statuses only; a legacy boost row may hold some.
+	const notBoosts = [...byId.values()].filter((row) => row.reblog_of_id === null).map((row) => row.id)
+	const notBoostsJson = JSON.stringify(notBoosts)
 	// The statuses matched by filters: each status of the response, and each quoted status shown in it.
 	const targets = [
 		...ids.map((id) => ({ key: id, row: byId.get(id), matched: shared.top.has(id) })),
@@ -506,13 +510,13 @@ function hydrate(
 	// one, so a status holding one shows one fewer: a remote status stores none, and a local one (a name over 256 code
 	// units, which Mastodon also records) only when it sorts before more than MAX_PRESENTED_TAGS others. Each status's
 	// rows are put in order in JavaScript (by position, account id and name), so no query sorts the chunk's payload.
-	const media = mediaOf(db, all)
+	const media = mediaOf(db, notBoostsJson)
 	const mentions = groupBy(
 		db
 			.all<MentionRow>(
 				`SELECT ${selectSql(MENTION_COLUMN_MAP)} FROM (${STATUS_IDS}) j CROSS JOIN accounts a
 				WHERE a.id IN (${SHOWN_MENTIONS_SQL})`,
-				all
+				notBoostsJson
 			)
 			.sort((a, b) => byCodePoints(a.id, b.id))
 	)
@@ -520,14 +524,14 @@ function hydrate(
 		db
 			.all<{ status_id: string; name: string }>(
 				`SELECT ${selectSql(TAG_COLUMN_MAP)} FROM (${STATUS_IDS}) j CROSS JOIN status_tags t WHERE ${SHOWN_TAGS_SQL}`,
-				all
+				notBoostsJson
 			)
 			.sort((a, b) => byCodePoints(a.name, b.name))
 	)
 	const flags = viewerFlags(db, viewerId, all)
 	// R36 for the viewer, of every status presented by its own row (a boost answers denied: its original's is shown).
 	const approvals = quoteApprovalReads(options.viewer).of(db, [...byId.keys()])
-	const polls = presentPolls(db, [...byId.keys()], viewerId, options.viewer.now)
+	const polls = presentPolls(db, notBoosts, viewerId, options.viewer.now)
 	const statusMatches =
 		filters === null ? new Map<string, Set<string>>() : filterStatusMatches(db, filters, [...byId.keys()])
 	// The text each status is matched on, cut at the presentation's level (filterTextLimits): read only when a filter

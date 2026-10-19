@@ -148,15 +148,12 @@ export const PER_ROW_SORTS: readonly { query: HydrateQuery; column: string }[] =
 
 // The heap of every row read for the status `x.id` (one status row of an item), summed: what each query of
 // hydrateQueries() returns for it, each row by its map (rowHeapSql), or a FixedColumns constant times the rows. Its
-// author's account counts once per status row, though a chunk reads it once.
+// author's account counts once per status row, though a chunk reads it once. A boost's own attachments, mentions,
+// hashtags, poll and votes are not read (hydrate in status-presenter.ts), so they count for another status only.
 function statusRowTerms(viewer: string, filterRows: string): string {
 	const fixed = (columns: FixedColumns, rows: string) => `(${rows}) * ${columns.rowHeap}`
 	const one = (sql: string) => `coalesce((${sql}), 0)`
-	return balancedSum([
-		one(`SELECT ${rowHeapSql(STATUS_COLUMN_MAP)} FROM ${STATUS_FROM} WHERE s.id = x.id`),
-		fixed(QUOTE_READ_COLUMNS, '1'),
-		one(`SELECT ${rowHeapSql(ACCOUNT_COLUMN_MAP)} FROM statuses w JOIN accounts a ON a.id = w.account_id
-			LEFT JOIN local_accounts l ON l.account_id = a.id WHERE w.id = x.id`),
+	const children = balancedSum([
 		one(
 			`SELECT sum(${rowHeapSql(STATUS_MEDIA_COLUMN_MAP)}) FROM media_attachments m WHERE m.id IN (${shownMediaSql('x.id')})`
 		),
@@ -165,11 +162,18 @@ function statusRowTerms(viewer: string, filterRows: string): string {
 		one(`SELECT sum(${rowHeapSql(TAG_COLUMN_MAP)}) FROM (SELECT x.id AS value) j CROSS JOIN status_tags t
 			WHERE ${SHOWN_TAGS_SQL}`),
 		one(`SELECT ${rowHeapSql(POLL_COLUMN_MAP)} FROM ${POLL_FROM} WHERE p.status_id = x.id AND p.removed = 0`),
+		`CASE WHEN ${viewer} IS NULL THEN 0 ELSE ${fixed(OWN_VOTE_COLUMNS, ownVoteCountSql('x.id', viewer))} END`,
+	])
+	return balancedSum([
+		one(`SELECT ${rowHeapSql(STATUS_COLUMN_MAP)} FROM ${STATUS_FROM} WHERE s.id = x.id`),
+		fixed(QUOTE_READ_COLUMNS, '1'),
+		one(`SELECT ${rowHeapSql(ACCOUNT_COLUMN_MAP)} FROM statuses w JOIN accounts a ON a.id = w.account_id
+			LEFT JOIN local_accounts l ON l.account_id = a.id WHERE w.id = x.id`),
+		`CASE WHEN (SELECT o.reblog_of_id FROM statuses o WHERE o.id = x.id) IS NULL THEN ${children} ELSE 0 END`,
 		fixed(FILTER_MATCH_COLUMNS, filterRows),
 		`CASE WHEN ${viewer} IS NULL THEN 0 ELSE ${balancedSum([
 			fixed(VIEWER_FLAG_COLUMNS, String(VIEWER_FLAGS)),
 			fixed(QUOTE_APPROVAL_COLUMNS, '1'),
-			fixed(OWN_VOTE_COLUMNS, ownVoteCountSql('x.id', viewer)),
 		])} END`,
 	])
 }
