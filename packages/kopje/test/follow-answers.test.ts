@@ -6,17 +6,25 @@ import { bearer, json, settle, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { LEGACY } from './federation-helpers'
 import { BUILD } from './helpers'
+import { mastodonActor } from './inbox-helpers'
+import { ALICE, ALICE_URI, AS, DAVE_URI, setup as inboxSetup } from './inbox-status-helpers'
 import { deferred, deliveryDeps } from './quote-helpers'
+import { rowsRead } from './read-helpers'
 import { act, receive, toFollows, unsuspend, uriOf, world } from './remote-suspension-helpers'
 import { post, remoteAccount, remoteFollows } from './status-helpers'
 import {
 	type DeliveryOutcome,
 	FOLLOW_ANSWER_CHUNKS,
+	FOLLOW_ANSWER_CHUNKS_SQL,
 	FOLLOW_ANSWER_INTENTS,
+	FOLLOW_ANSWER_INTENTS_SQL,
 	FOLLOW_ANSWER_ROWS,
+	FOLLOW_ANSWER_ROWS_SQL,
+	followAnswersOf,
 	LEASE_MS,
 } from '../src/domain/deliveries'
 import { MAX_RETRACTIONS_PER_ACTOR } from '../src/domain/inbox'
+import { readOperation } from '../src/domain/operation'
 import { deliveryRound } from '../src/jobs/deliver'
 import type { StoreStub } from '../src/platform/store-client'
 
@@ -500,16 +508,41 @@ describe('bounds and refusals (RES-6)', () => {
 		}
 	)
 
-	it('shares the sweep budget with the 30-day retention, answers first', { timeout: 120_000 }, async () => {
+	// More candidates than one round's 500 rows: 300 given-up rows of superseded answers (an imported history) and 300
+	// ordinary given-up rows past the retention. The answers go first, and the retention takes only what is left.
+	it('shares the sweep budget with the 30-day retention, answers first', async () => {
 		const t = await setup()
-		await overflow(t)
-		// An ordinary given-up row past the retention, which the same round also deletes.
-		await post(t.w.h, t.w.alice, { status: 'given up' })
-		expect(await claimOnce(t, FORBIDDEN)).toEqual(['Create'])
-		expect(await t.store.sweepDeliveries(BUILD, { now: NOW + 31 * 24 * 60 * 60 * 1000 })).toEqual({
-			swept: FOLLOW_ANSWER_INTENTS + 2,
-		})
-		expect(await sql(t.store, 'SELECT * FROM deliveries')).toEqual([])
+		const old = NOW - 31 * 24 * 60 * 60 * 1000
+		await sql(
+			t.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 600)
+			INSERT INTO outbound_activities (id, account_id, body, object_uri, superseded, created_at, follow_pair)
+			SELECT i, ?1, '{"activity":{"type":"Accept"},"audience":{"followers":false,"accounts":[]}}', 'x' || i,
+				i <= 300, 0, CASE WHEN i <= 300 THEN ?2 END
+			FROM n`,
+			t.w.alice.id,
+			t.r
+		)
+		await sql(
+			t.store,
+			`INSERT INTO deliveries (activity_id, account_id, inbox_url, lane, state, next_attempt_at, updated_at, exposed)
+			SELECT id, account_id, 'https://remote.example/inbox', 'https://remote.example', 'gave_up', 0,
+				CASE WHEN id <= 300 THEN ?1 ELSE ?2 END, 1
+			FROM outbound_activities`,
+			NOW,
+			old
+		)
+		const left = async () =>
+			sql<{ answers: number; others: number }>(
+				t.store,
+				`SELECT count(*) FILTER (WHERE activity_id <= 300) AS answers,
+					count(*) FILTER (WHERE activity_id > 300) AS others
+				FROM deliveries`
+			)
+		expect(await t.store.sweepDeliveries(BUILD, { now: NOW })).toEqual({ swept: 500 })
+		expect(await left()).toEqual([{ answers: 0, others: 100 }])
+		expect(await t.store.sweepDeliveries(BUILD, { now: NOW })).toEqual({ swept: 100 })
+		expect(await sql(t.store, 'SELECT * FROM outbound_activities')).toEqual([])
 	})
 
 	// Stored state no Follow of this version leaves (each answer has one target): an imported store's answer with more
@@ -595,14 +628,95 @@ describe('bounds and refusals (RES-6)', () => {
 		])
 	})
 
-	it('reads the pair’s answers through their indexes', async () => {
+	it('seeks the pair’s answers through their indexes, in the statements the discovery runs', async () => {
 		const t = await setup()
-		const plan = await sql<{ detail: string }>(
-			t.store,
-			`EXPLAIN QUERY PLAN SELECT CAST(id AS TEXT) AS id, account_id, lane, state, exposed FROM deliveries
-			WHERE activity_id IN (SELECT CAST(value AS INTEGER) FROM json_each('[1]')) LIMIT 65`
+		const plan = async (query: string, ...params: SqlStorageValue[]) =>
+			(await sql<{ detail: string }>(t.store, `EXPLAIN QUERY PLAN ${query}`, ...params)).map((row) => row.detail)
+		expect(await plan(FOLLOW_ANSWER_INTENTS_SQL, '1', '2', 33)).toEqual([
+			'SEARCH o USING COVERING INDEX outbound_activities_follow_pair (account_id=? AND follow_pair=?)',
+		])
+		for (const query of [FOLLOW_ANSWER_ROWS_SQL, FOLLOW_ANSWER_CHUNKS_SQL]) {
+			const detail = await plan(query, '[1]', 65)
+			expect(detail.join('\n')).toMatch(/USING (COVERING )?INDEX (deliveries|outbound_targets)_activity/)
+			expect(detail.join('\n')).not.toContain('TEMP B-TREE')
+		}
+	})
+
+	// An imported pair history far past the bound: the discovery reads the same rows as at the bound, then refuses.
+	it('reads a bounded number of rows however long the pair’s history is, before its 503', async () => {
+		const discovery = readOperation<{ signer: string; follower: string }, unknown>((db, { signer, follower }) =>
+			followAnswersOf(db, signer, follower)
 		)
-		expect(plan.map((row) => row.detail)).toContainEqual(expect.stringContaining('USING INDEX deliveries_activity'))
+		const read = async (intents: number) => {
+			const t = await setup()
+			await sql(
+				t.store,
+				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?3)
+				INSERT INTO outbound_activities (id, account_id, body, object_uri, superseded, created_at, follow_pair)
+				SELECT i, ?1, '{"activity":{"type":"Accept"},"audience":{"followers":false,"accounts":[]}}', 'x', 1, 0, ?2
+				FROM n`,
+				t.w.alice.id,
+				t.r,
+				intents
+			)
+			await sql(
+				t.store,
+				`INSERT INTO deliveries (activity_id, account_id, inbox_url, lane, state, next_attempt_at, updated_at, exposed)
+				SELECT id, account_id, 'https://remote.example/inbox', 'https://remote.example', 'gave_up', 0, 0, 1
+				FROM outbound_activities`
+			)
+			const rows = await rowsRead(t.w.h, discovery, { signer: t.w.alice.id, follower: t.r })
+			expect((await followFrom(t)).result).toMatchObject({ reason: 'follow-answer-backlog', retry: true })
+			return rows
+		}
+		const atBound = await read(FOLLOW_ANSWER_INTENTS + 1)
+		expect(await read(5_000)).toBe(atBound)
+		expect(atBound).toBeLessThanOrEqual(2 * (FOLLOW_ANSWER_INTENTS + 1))
+	}, 120_000)
+})
+
+describe('a refused Follow rolls back the whole request', () => {
+	it('keeps the actor document and keys a 503 Follow refreshed as they were', async () => {
+		const t = await inboxSetup()
+		const bob = await mastodonActor(t.web, 'bob')
+		await t.post(bob, {
+			'@context': AS,
+			id: `${bob.uri}#follows/dave`,
+			type: 'Follow',
+			actor: bob.uri,
+			object: DAVE_URI,
+		})
+		const [stored] = await sql<{ id: string }>(t.store, 'SELECT id FROM accounts WHERE uri = ?', bob.uri)
+		// FOLLOW_ANSWER_INTENTS + 1 unsettled answers of alice's to bob (an imported history).
+		await sql(
+			t.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?3)
+			INSERT INTO outbound_activities (account_id, body, object_uri, superseded, created_at, follow_pair)
+			SELECT ?1, '{"activity":{"type":"Accept"},"audience":{"followers":false,"accounts":[]}}', 'x' || i, 1, 0, ?2
+			FROM n`,
+			ALICE,
+			stored!.id,
+			FOLLOW_ANSWER_INTENTS + 1
+		)
+		// The stored key is stale, so the Follow fetches the actor anew, whose document has changed.
+		await sql(t.store, 'UPDATE remote_keys SET fetched_at = 0')
+		const accountsBefore = await sql(t.store, 'SELECT * FROM accounts WHERE uri = ?', bob.uri)
+		const keysBefore = await sql(t.store, 'SELECT * FROM remote_keys')
+		bob.document.name = 'renamed'
+		t.web.serve(bob.uri, bob.document)
+		t.web.fetched.length = 0
+		const refused = {
+			'@context': AS,
+			id: `${bob.uri}#follows/alice`,
+			type: 'Follow',
+			actor: bob.uri,
+			object: ALICE_URI,
+		}
+		expect(await t.post(bob, refused)).toBe(503)
+		expect(t.web.fetched).toContain(bob.uri)
+		expect(await sql(t.store, 'SELECT * FROM accounts WHERE uri = ?', bob.uri)).toEqual(accountsBefore)
+		expect(await sql(t.store, 'SELECT * FROM remote_keys')).toEqual(keysBefore)
+		expect(await sql(t.store, 'SELECT 1 FROM follows WHERE target_account_id = ?', ALICE)).toEqual([])
 	})
 })
 
@@ -633,7 +747,7 @@ describe('cancellation against claims and expansion, in both serialized orders',
 			}
 			return new Response(null, { status: 202 })
 		}
-		return { fetch: fetch as typeof globalThis.fetch, sent }
+		return { fetch: fetch, sent }
 	}
 
 	// A round held at a gate: before its claim (`claim`), or after it, at the host check before confirmation ('host').

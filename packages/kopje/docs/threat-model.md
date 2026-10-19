@@ -1554,11 +1554,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `src/federation/loader.ts`; cached contexts cost nothing; icons are taken only when embedded). Running out of the budget is retryable: the
   request answers 503, records nothing and its spooled copy is retried; a document refused for itself stays a permanent
   refusal. A key an actor lists by reference is taken from the verification that just resolved it, not fetched again.
-  A `Follow` reads at most 33 unsettled answers of its pair, of them at most 65 rows never claimed and 33 unexpanded
-  chunks, and cancels at most those (NET-2); over any bound it answers 503 and writes nothing (`followAnswersOf` in
-  `src/domain/deliveries.ts`). The bound clears as the answers deliver, or once given up and superseded, at the next
-  sweep (RES-4); a server whose own retries of the `Follow` run out before then needs its user to follow again
-  `test/follow-answers.test.ts` ("bounds and refusals"). A Move moves 100
+  A `Follow` reads at most 33 unsettled answers of its pair, of them at most 65 delivery rows, including exposed rows,
+  and 33 unexpanded chunks, and cancels at most those (NET-2); over any bound it answers 503 and writes nothing
+  (`followAnswersOf` in `src/domain/deliveries.ts`). The bound clears as the answers deliver, or once given up
+  and superseded, at the next sweep (RES-4); a server whose own retries of the `Follow` run out before then needs its
+  user to follow again `test/follow-answers.test.ts` ("bounds and refusals"). A Move moves 100
   followers per batch and carries at most 100 blocks and mutes; a deleted actor's purge writes at most 500 rows per batch in all, every
   write counted (SQLite's `total_changes()`): deletions, counter recounts (`followers_count`, `following_count`,
   `statuses_count`, status counters) and the Undo intent of a withdrawn boost with its target chunks. The account is

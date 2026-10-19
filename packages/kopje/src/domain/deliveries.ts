@@ -963,16 +963,21 @@ export type FollowAnswers = {
 	chunks: string[]
 }
 
+// The discovery's statements (exported for their plan and rows-read tests). Each LIMIT stops an index seek: the
+// intents are ordered by the numeric column (`ORDER BY id` would name the text alias and sort the whole backlog), and
+// the rows and chunks need no order.
+export const FOLLOW_ANSWER_INTENTS_SQL = `SELECT CAST(o.id AS TEXT) AS id
+	FROM outbound_activities o INDEXED BY outbound_activities_follow_pair
+	WHERE o.account_id = ? AND o.follow_pair = ? ORDER BY o.id LIMIT ?`
+export const FOLLOW_ANSWER_ROWS_SQL = `SELECT CAST(id AS TEXT) AS id, account_id, lane, state, exposed FROM deliveries
+	WHERE activity_id IN (SELECT CAST(value AS INTEGER) FROM json_each(?)) LIMIT ?`
+export const FOLLOW_ANSWER_CHUNKS_SQL = `SELECT CAST(id AS TEXT) AS id FROM outbound_targets
+	WHERE activity_id IN (SELECT CAST(value AS INTEGER) FROM json_each(?)) LIMIT ?`
+
 // Reads only: the unsettled answers of signerId to followerId, or null over a bound.
 export function followAnswersOf(db: Db, signerId: string, followerId: string): FollowAnswers | null {
 	const intents = db
-		.all<{ id: string }>(
-			`SELECT CAST(id AS TEXT) AS id FROM outbound_activities INDEXED BY outbound_activities_follow_pair
-			WHERE account_id = ? AND follow_pair = ? ORDER BY id LIMIT ?`,
-			signerId,
-			followerId,
-			FOLLOW_ANSWER_INTENTS + 1
-		)
+		.all<{ id: string }>(FOLLOW_ANSWER_INTENTS_SQL, signerId, followerId, FOLLOW_ANSWER_INTENTS + 1)
 		.map((r) => r.id)
 	if (intents.length > FOLLOW_ANSWER_INTENTS) {
 		return null
@@ -982,19 +987,11 @@ export function followAnswersOf(db: Db, signerId: string, followerId: string): F
 	}
 	const ids = JSON.stringify(intents)
 	const rows = db.all<FollowAnswers['rows'][number] & { exposed: number }>(
-		`SELECT CAST(id AS TEXT) AS id, account_id, lane, state, exposed FROM deliveries
-		WHERE activity_id IN (SELECT CAST(value AS INTEGER) FROM json_each(?)) LIMIT ?`,
+		FOLLOW_ANSWER_ROWS_SQL,
 		ids,
 		FOLLOW_ANSWER_ROWS + 1
 	)
-	const chunks = db
-		.all<{ id: string }>(
-			`SELECT CAST(id AS TEXT) AS id FROM outbound_targets
-			WHERE activity_id IN (SELECT CAST(value AS INTEGER) FROM json_each(?)) ORDER BY id LIMIT ?`,
-			ids,
-			FOLLOW_ANSWER_CHUNKS + 1
-		)
-		.map((r) => r.id)
+	const chunks = db.all<{ id: string }>(FOLLOW_ANSWER_CHUNKS_SQL, ids, FOLLOW_ANSWER_CHUNKS + 1).map((r) => r.id)
 	if (rows.length > FOLLOW_ANSWER_ROWS || chunks.length > FOLLOW_ANSWER_CHUNKS) {
 		return null
 	}

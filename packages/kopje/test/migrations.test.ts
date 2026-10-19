@@ -5134,14 +5134,6 @@ describe('0051_follow_answer_pairs', () => {
 					.map((row) => row.detail)
 			expect(
 				plan(
-					`SELECT id FROM outbound_activities INDEXED BY outbound_activities_follow_pair
-					WHERE account_id = '1' AND follow_pair = '2' ORDER BY id LIMIT 33`
-				)
-			).toEqual([
-				'SEARCH outbound_activities USING COVERING INDEX outbound_activities_follow_pair (account_id=? AND follow_pair=?)',
-			])
-			expect(
-				plan(
 					`SELECT d.id FROM outbound_activities o INDEXED BY outbound_activities_follow_swept
 					CROSS JOIN deliveries d INDEXED BY deliveries_activity ON d.activity_id = o.id
 					WHERE o.follow_pair IS NOT NULL AND o.superseded = 1 AND d.state = 'gave_up' ORDER BY o.id LIMIT 500`
