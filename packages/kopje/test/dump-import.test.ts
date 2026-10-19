@@ -99,6 +99,40 @@ describe('dump', () => {
 		expect(await target.setupState(BUILD)).toEqual({ complete: true })
 	})
 
+	it('round-trips a remote report and the report id counter (0054_remote_reports)', async () => {
+		const source = await seeded()
+		await runInDurableObject(source, (_instance, state) => {
+			const sql = state.storage.sql
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username, domain) VALUES ('190000000000000001', 'https://r.example/actor', 'actor', 'r.example')"
+			)
+			const target = sql.exec<{ id: string }>('SELECT account_id AS id FROM local_accounts LIMIT 1').one().id
+			sql.exec(
+				`INSERT INTO reports (id, account_id, target_account_id, comment, uri, created_at)
+				VALUES (7, '190000000000000001', ?1, 'remote', 'https://r.example/flags/1', 'x'),
+					(9, '190000000000000001', ?1, '', 'https://r.example/flags/2', 'x')`,
+				target
+			)
+			sql.exec('DELETE FROM reports WHERE id = 9')
+		})
+		const { text } = await dumpViaRpc(source, 4096)
+		expect(text).toMatch(/^INSERT INTO "sqlite_sequence" \("name","seq"\) VALUES \('reports',9\);$/m)
+		const target = await migratedStore()
+		await copyConfig(source, target)
+		const { report } = await importViaRpc(target, text, 8 * 1024)
+		expect(report).toMatchObject({ ok: true, foreignKeyViolations: 0, problems: [] })
+		expect(withoutState(await tableSnapshot(target))).toEqual(withoutState(await tableSnapshot(source)))
+		const next = await runInDurableObject(target, (_instance, state) => {
+			const sql = state.storage.sql
+			sql.exec(
+				`INSERT INTO reports (account_id, target_account_id, uri, created_at)
+				SELECT account_id, target_account_id, 'https://r.example/flags/3', 'x' FROM reports WHERE id = 7`
+			)
+			return sql.exec<{ id: number }>("SELECT id FROM reports WHERE uri = 'https://r.example/flags/3'").one().id
+		})
+		expect(next).toBe(10)
+	})
+
 	// The streaming journal's trigger (migration 0026_streaming) makes SQLite start the journal's AUTOINCREMENT counter
 	// on the first notification insert, recording or not; restored notifications must not leave a counter the dump lacks.
 	it('round-trips a Store upgraded to 0026_streaming with notifications written before it', async () => {

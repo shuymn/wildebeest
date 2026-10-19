@@ -25,6 +25,7 @@ import { storeRemoteStatus } from '../src/domain/remote-statuses'
 import { moderationRound } from '../src/domain/suspension'
 import { normalizeTag } from '../src/domain/tag-name'
 import { parseRemoteStatus } from '../src/federation/remote-status'
+import { ACTIVITY_ID_LIMIT, withinIdentityBound } from '../src/platform/identity-bounds'
 import { StoreUnavailableError, toStoreUnavailable } from '../src/platform/store-errors'
 import {
 	INSTANCE_SETTING_BOUNDS,
@@ -5444,4 +5445,351 @@ describe('0052_favourite_likes', () => {
 			expect(sql.exec('SELECT count(*) AS n FROM favourite_likes WHERE favourite_id = 2').one().n).toBe(0)
 		})
 	})
+})
+
+describe('0054_remote_reports', () => {
+	const NAME = '0054_remote_reports'
+	const at = NAMES.indexOf(NAME)
+	const BEFORE = MIGRATIONS.slice(0, at)
+	const WITH = MIGRATIONS.slice(0, at + 1)
+	const ADMIN = '100000000000000001'
+	const FORMER = '100000000000000002'
+	const CAROL = '100000000000000003'
+	const DAN = '100000000000000004'
+
+	// Two local accounts (the admin and a former admin), two remote ones, and `reports` reports by the admin, each with
+	// its admin.report for both admins and two pushes of the first.
+	function seed(sql: SqlStorage, reports = 4): void {
+		sql.exec(
+			`INSERT INTO accounts (id, uri, username, domain) VALUES
+				(?1, 'https://kopje.test/ap/users/admin', 'admin', NULL),
+				(?2, 'https://kopje.test/ap/users/former', 'former', NULL),
+				(?3, 'https://r.example/users/carol', 'carol', 'r.example'),
+				(?4, 'https://r.example/users/dan', 'dan', 'r.example')`,
+			ADMIN,
+			FORMER,
+			CAROL,
+			DAN
+		)
+		sql.exec(
+			`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey)
+			VALUES (?1, 'a@x', X'00', X'00', 'k'), (?2, 'f@x', X'00', X'00', 'k')`,
+			ADMIN,
+			FORMER
+		)
+		sql.exec(
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO reports (id, account_id, target_account_id, status_ids, comment, category, rule_ids, forwarded, uri,
+				created_at, action_taken_at, action_taken_by_account_id, assigned_account_id, updated_at, last_action_id)
+			SELECT i, CASE i % 2 WHEN 0 THEN ?2 ELSE ?3 END, CASE i % 3 WHEN 0 THEN ?4 ELSE ?5 END, '["1","2"]',
+				printf('%.*c', 1000, 'c'), CASE i % 2 WHEN 0 THEN 'violation' ELSE 'spam' END,
+				CASE i % 2 WHEN 0 THEN '["1"]' END, i % 2, 'https://kopje.test/actor#reports/' || i, 'x',
+				CASE WHEN i % 4 = 0 THEN 'y' END, CASE WHEN i % 4 = 0 THEN ?2 END, CASE WHEN i % 5 = 0 THEN ?3 END,
+				CASE WHEN i % 4 = 0 THEN 'z' END, CASE WHEN i % 4 = 0 THEN i END
+			FROM n WHERE ?1 > 0`,
+			reports,
+			ADMIN,
+			FORMER,
+			CAROL,
+			DAN
+		)
+		sql.exec(
+			`INSERT INTO notifications (account_id, type, from_account_id, report_id, group_key, filtered)
+			SELECT l.account_id, 'admin.report', r.account_id, r.id, 'ungrouped-' || r.id, r.id % 2
+			FROM reports r CROSS JOIN local_accounts l WHERE r.account_id <> l.account_id OR r.id % 3 = 0`
+		)
+		sql.exec(
+			"INSERT INTO notifications (account_id, type, from_account_id) VALUES (?1, 'follow', ?2), (?1, 'mention', ?3)",
+			ADMIN,
+			CAROL,
+			DAN
+		)
+		sql.exec('INSERT INTO notification_clears (account_id, max_id) VALUES (?, 1)', FORMER)
+		sql.exec("INSERT INTO notification_dismissals (account_id, group_key, max_id) VALUES (?, 'ungrouped-2', 9)", ADMIN)
+		sql.exec(
+			"INSERT INTO oauth_clients (id, secret, name, redirect_uris) VALUES ('c', 's', 'c', 'urn:ietf:wg:oauth:2.0:oob')"
+		)
+		sql.exec(
+			"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES ('t1', 'access', 'c', ?1, 'push'), ('t2', 'access', 'c', ?1, 'push')",
+			ADMIN
+		)
+		sql.exec(
+			"INSERT INTO push_subscriptions (token_hash, endpoint, key_p256dh, key_auth) VALUES ('t1', 'https://p/1', 'p', 'a'), ('t2', 'https://p/2', 'p', 'a')"
+		)
+		sql.exec(
+			`INSERT INTO push_deliveries (subscription_id, notification_id, next_attempt_at, updated_at)
+			SELECT p.id, n.id, 0, 0 FROM push_subscriptions p
+			JOIN (SELECT min(id) AS id FROM notifications WHERE report_id IS NOT NULL) n ON n.id IS NOT NULL`
+		)
+	}
+
+	const snapshot = (sql: SqlStorage) => ({
+		reports: sql.exec('SELECT * FROM reports ORDER BY id').toArray(),
+		notifications: sql.exec('SELECT * FROM notifications ORDER BY id').toArray(),
+		pushes: sql.exec('SELECT * FROM push_deliveries ORDER BY id').toArray(),
+		clears: sql.exec('SELECT * FROM notification_clears').toArray(),
+		dismissals: sql.exec('SELECT * FROM notification_dismissals').toArray(),
+	})
+	const leftovers = (sql: SqlStorage) => ({
+		tags: sql.exec("SELECT count(*) AS n FROM notifications WHERE type GLOB 'admin.report#*'").one().n,
+		tables: sql.exec("SELECT name FROM sqlite_schema WHERE name GLOB 'reports_0054*'").toArray(),
+	})
+	const sequence = (sql: SqlStorage) =>
+		sql.exec<{ seq: number }>("SELECT seq FROM sqlite_sequence WHERE name = 'reports'").toArray()[0]?.seq ?? null
+
+	it('keeps every report, notification, push and id, and rebuilds the table for remote reporters', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, BEFORE).upgrade()).toMatchObject({ ok: true })
+			seed(sql, 12)
+			const before = snapshot(sql)
+			expect(before.notifications.length).toBeGreaterThan(12)
+			expect(await kernel(state, WITH).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+			expect(snapshot(sql)).toEqual(before)
+			expect(leftovers(sql)).toEqual({ tags: 0, tables: [] })
+			expect(sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
+			expect(
+				sql
+					.exec<{ table: string; from: string }>('SELECT "table", "from" FROM pragma_foreign_key_list(?)', 'reports')
+					.toArray()
+					.map((key) => `${key.from}>${key.table}`)
+					.sort()
+			).toEqual([
+				'account_id>accounts',
+				'action_taken_by_account_id>local_accounts',
+				'assigned_account_id>local_accounts',
+				'target_account_id>accounts',
+			])
+			expect(
+				sql
+					.exec<{ name: string }>(
+						"SELECT name FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'reports' ORDER BY name"
+					)
+					.toArray()
+					.map((row) => row.name)
+			).toEqual([
+				'reports_account_state',
+				'reports_action_taken_by',
+				'reports_assigned',
+				'reports_pair_state',
+				'reports_state',
+				'reports_target_state',
+				'sqlite_autoindex_reports_1',
+			])
+			expect(sequence(sql)).toBe(12)
+			// A report's delete still takes its notifications and their pushes.
+			sql.exec(
+				'DELETE FROM reports WHERE id = (SELECT report_id FROM push_deliveries d JOIN notifications n ON n.id = d.notification_id LIMIT 1)'
+			)
+			expect(sql.exec('SELECT count(*) AS n FROM push_deliveries').one().n).toBe(0)
+			// A remote reporter; one report per Flag id and account; the uri within 4,096 JSON-escaped bytes.
+			const insert = (uri: string, target = ADMIN) =>
+				sql.exec(
+					"INSERT INTO reports (account_id, target_account_id, uri, created_at) VALUES (?, ?, ?, 'x')",
+					CAROL,
+					target,
+					uri
+				)
+			insert('https://r.example/flags/1')
+			insert('https://r.example/flags/1', FORMER)
+			expect(() => insert('https://r.example/flags/1')).toThrow(
+				/UNIQUE constraint failed: reports.uri, reports.target_account_id/
+			)
+			const prefix = 'https://r.example/flags/'
+			const units = Math.floor((4096 - prefix.length) / 6)
+			const at4096 = prefix + 'a'.repeat(4096 - prefix.length - 6 * units) + '\u0001'.repeat(units)
+			expect(withinIdentityBound(at4096, ACTIVITY_ID_LIMIT)).toBe(true)
+			insert(at4096)
+			expect(() => insert(`${at4096}x`)).toThrow(/report_uri_within_4096_json_bytes/)
+			expect(withinIdentityBound(`${at4096}x`, ACTIVITY_ID_LIMIT)).toBe(false)
+			// Ids are never given twice: the next is above the deleted one.
+			expect(sql.exec('SELECT max(id) AS id FROM reports').one().id).toBe(15)
+		})
+	})
+
+	it.each([
+		['a log Report target', 9, 3, 3, 9],
+		['a local job bound', 3, 9, 3, 9],
+		['a remote job bound', 3, 3, 9, 9],
+		['only the live reports', 3, 3, 3, 4],
+	])('starts the id counter above %s', async (_name, logged, local, remote, expected) => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, BEFORE).upgrade()).toMatchObject({ ok: true })
+			seed(sql, 4)
+			sql.exec(
+				"INSERT INTO admin_actions (actor, action, target_type, target_id, created_at) VALUES ('access', 'resolve', 'Report', ?, 'x'), ('access', 'x', 'Report', 'not-a-number', 'x'), ('access', 'x', 'Account', '99', 'x')",
+				String(logged)
+			)
+			sql.exec(
+				"INSERT INTO moderation_jobs (kind, account_id, generation, report_bound, phase) VALUES ('suspension', ?, 1, ?, 'reports')",
+				ADMIN,
+				local
+			)
+			sql.exec(
+				`INSERT INTO remote_moderation_jobs (kind, subject, mode, follow_bound, report_bound, phase)
+				VALUES ('account', ?, 'account', 0, ?, 'reports'), ('domain', '', 'domain', 0, NULL, 'clear')`,
+				CAROL,
+				remote
+			)
+			expect(await kernel(state, WITH).upgrade()).toMatchObject({ ok: true })
+			expect(sequence(sql)).toBe(expected)
+			sql.exec(
+				"INSERT INTO reports (account_id, target_account_id, uri, created_at) VALUES (?, ?, 'u:new', 'x')",
+				CAROL,
+				ADMIN
+			)
+			expect(sql.exec("SELECT id FROM reports WHERE uri = 'u:new'").one().id).toBe(expected + 1)
+		})
+	})
+
+	it('starts the counter above a deleted report the log alone still names, and at 1 with nothing', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, BEFORE).upgrade()).toMatchObject({ ok: true })
+			seed(sql, 2)
+			sql.exec(
+				"INSERT INTO admin_actions (actor, action, target_type, target_id, created_at) VALUES ('access', 'resolve', 'Report', '2', 'x')"
+			)
+			sql.exec('DELETE FROM reports WHERE id = 2')
+			expect(await kernel(state, WITH).upgrade()).toMatchObject({ ok: true })
+			expect(sequence(sql)).toBe(2)
+		})
+		const empty = freshStore()
+		await runInDurableObject(empty, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, WITH).upgrade()).toMatchObject({ ok: true })
+			expect(sequence(sql)).toBeNull()
+			seed(sql, 0)
+			sql.exec(
+				"INSERT INTO reports (account_id, target_account_id, uri, created_at) VALUES (?, ?, 'u:1', 'x')",
+				CAROL,
+				ADMIN
+			)
+			expect(sql.exec('SELECT id FROM reports').one().id).toBe(1)
+		})
+	})
+
+	it('rolls the whole file back when the copy fails after the detach, stays held, and applies on retry', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, BEFORE).upgrade()).toMatchObject({ ok: true })
+			seed(sql, 6)
+			sql.exec("UPDATE reports SET comment = printf('%.*c', 5001, 'c') WHERE id = 3")
+			const before = snapshot(sql)
+			const k = kernel(state, WITH)
+			expect(await k.upgrade()).toMatchObject({ ok: false, reason: 'upgrade-failed' })
+			expect(snapshot(sql)).toEqual(before)
+			expect(leftovers(sql)).toEqual({ tags: 0, tables: [] })
+			expect(bookkeeping(sql).map((m) => m.name)).not.toContain(NAME)
+			expect(await k.health(BUILD)).toMatchObject({ readonly: true, hold: 'upgrade-failed' })
+			expect(await kernel(state, WITH).upgrade()).toMatchObject({ ok: false, detail: 'held' })
+			sql.exec("UPDATE reports SET comment = 'short' WHERE id = 3")
+			const retried = await kernel(state, WITH).retryUpgrade(BUILD)
+			expect(retried).toMatchObject({ ok: true, applied: [NAME] })
+			expect(sql.exec('SELECT count(*) AS n FROM reports').one().n).toBe(6)
+		})
+	})
+
+	it('keeps the new schema when verification fails after the commit, held; a retry verifies only', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, BEFORE).upgrade()).toMatchObject({ ok: true })
+			seed(sql, 6)
+			const before = snapshot(sql)
+			const failing = kernel(state, WITH, {
+				inject: (phase) => {
+					if (phase === 'verify') {
+						throw new Error('injected verify failure')
+					}
+				},
+			})
+			expect(await failing.upgrade()).toMatchObject({ ok: false, reason: 'verify-failed' })
+			expect(bookkeeping(sql).map((m) => m.name)).toContain(NAME)
+			expect(snapshot(sql)).toEqual(before)
+			expect(sql.exec("SELECT count(*) AS n FROM sqlite_schema WHERE name = 'reports_pair_state'").one().n).toBe(1)
+			expect(await kernel(state, WITH).upgrade()).toMatchObject({ ok: false, detail: 'held' })
+			expect(await kernel(state, WITH).retryUpgrade(BUILD)).toMatchObject({ ok: true, applied: [] })
+			expect(sequence(sql)).toBe(6)
+		})
+	})
+
+	it('fails before any write on a report notification of another type', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, BEFORE).upgrade()).toMatchObject({ ok: true })
+			seed(sql, 3)
+			sql.exec(
+				"UPDATE notifications SET type = 'mention' WHERE id = (SELECT min(id) FROM notifications WHERE report_id IS NOT NULL)"
+			)
+			const before = snapshot(sql)
+			const result = await kernel(state, WITH).upgrade()
+			expect(result).toMatchObject({ ok: false, reason: 'upgrade-failed' })
+			expect(JSON.stringify(result)).toMatch(/report_notifications_are_admin_reports/)
+			expect(snapshot(sql)).toEqual(before)
+		})
+	})
+
+	it('detaches through notifications_report and relinks through notifications_natural', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, BEFORE).upgrade()).toMatchObject({ ok: true })
+			const plan = (query: string) =>
+				sql
+					.exec<{ detail: string }>(`EXPLAIN QUERY PLAN ${query}`)
+					.toArray()
+					.map((row) => row.detail)
+					.join(' | ')
+			expect(
+				plan(
+					"UPDATE notifications SET type = 'admin.report#' || report_id, report_id = NULL WHERE report_id IS NOT NULL"
+				)
+			).toMatch(/notifications_report/)
+			expect(
+				plan(
+					`UPDATE notifications SET report_id = CAST(substr(type, 14) AS INTEGER), type = 'admin.report'
+					WHERE account_id IN (SELECT account_id FROM local_accounts) AND type > 'admin.report#' AND type < 'admin.report$'`
+				)
+			).toMatch(/notifications_natural \(account_id=\? AND type>\? AND type<\?\)/)
+		})
+	})
+
+	// The rows read grow with the reports and their notifications, and not with the other notifications.
+	it('reads the reports and their notifications, and not the other notifications', async () => {
+		const measure = async (reports: number, others: number) => {
+			const store = freshStore()
+			return runInDurableObject(store, async (_instance, state) => {
+				const sql = state.storage.sql
+				await kernel(state, BEFORE).upgrade()
+				seed(sql, reports)
+				sql.exec(
+					`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+					INSERT INTO statuses (id, uri, account_id, visibility, published_at)
+					SELECT CAST(500000000000000000 + i AS TEXT), 'https://r.example/s/' || i, ?2, 'public', 'x' FROM n`,
+					others,
+					CAROL
+				)
+				sql.exec(
+					`INSERT INTO notifications (account_id, type, from_account_id, status_id)
+					SELECT ?1, 'mention', account_id, id FROM statuses`,
+					ADMIN
+				)
+				const cursor = sql.exec(MIGRATIONS[at]?.sql ?? '')
+				cursor.toArray()
+				return cursor.rowsRead
+			})
+		}
+		const base = await measure(100, 0)
+		expect(Math.abs((await measure(100, 2_000)) - base)).toBeLessThanOrEqual(2)
+		const some = (await measure(1_100, 0)) - base
+		const twice = (await measure(2_100, 0)) - base
+		expect(Math.abs(twice - 2 * some)).toBeLessThanOrEqual(0.02 * some)
+	}, 120_000)
 })
