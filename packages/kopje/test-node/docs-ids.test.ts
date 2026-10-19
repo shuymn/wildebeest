@@ -2,8 +2,11 @@ import { readFileSync } from 'node:fs'
 
 import { describe, expect, it } from 'vitest'
 
-// The ids other documents, code comments and tests cite: each threat-model entry (`- **VIS-17: ...**`) and each rule of
-// docs/visibility.md's rule table (`| R18 reblog, R19 favourite |`) is defined once. Branches written in parallel each
+import { deviationIds } from '../test/mastodon-conformance.js'
+
+// The ids other documents, code comments and tests cite: each threat-model entry (`- **VIS-17: ...**`), each rule of
+// docs/visibility.md's rule table (`| R18 reblog, R19 favourite |`) and each accepted Mastodon departure
+// (docs/mastodon-deviations.md, `- **MD-1: ...**`) is defined once. Branches written in parallel each
 // take the next free id, so a merge can bring two definitions of one id.
 function doc(name: string): string {
 	return readFileSync(new URL(`../docs/${name}`, import.meta.url), 'utf8')
@@ -34,7 +37,15 @@ describe('document ids', () => {
 		expect(repeated(ids)).toEqual([])
 	})
 
+	it('defines each Mastodon deviation id once', () => {
+		const ids = deviationIds(doc('mastodon-deviations.md'))
+		expect(ids.length).toBeGreaterThan(0)
+		expect(repeated(ids)).toEqual([])
+	})
+
 	it('finds an id defined twice, and not one only cited again', () => {
+		const deviations = '- **MD-1: a.** text\n- **MD-2: b.** MD-1 again\n- **MD-1: c.** text\n'
+		expect(repeated(deviationIds(deviations))).toEqual(['MD-1'])
 		const threats = '- **VIS-1: a.** text\n- **VIS-2: b.** VIS-1 again\n- **VIS-1: c.** text\n'
 		expect(repeated(threatIds(threats))).toEqual(['VIS-1'])
 		const rules = [

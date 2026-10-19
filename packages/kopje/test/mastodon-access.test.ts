@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import mastodon from './fixtures/mastodon-4.5.11-api-access.json'
+import { sameRoute } from './mastodon-conformance'
 import type { RouteAccess } from '../src/mastodon/access'
 import { ROUTES } from '../src/mastodon/routes'
 import { grants, type RequiredScope, SCOPES } from '../src/security/scopes'
@@ -249,8 +250,7 @@ function mastodonAccess(route: MastodonRoute): Access {
 
 // Mastodon's route for a method and path, its parameters matched whatever their names.
 function mastodonRoute(method: string, path: string): MastodonRoute | undefined {
-	const shape = (p: string) => p.replace(/:\w+/g, ':')
-	return mastodon.routes.find((route) => route.method === method && shape(route.path) === shape(path))
+	return sameRoute(mastodon.routes, method, path)
 }
 
 const show = (access: Access) =>

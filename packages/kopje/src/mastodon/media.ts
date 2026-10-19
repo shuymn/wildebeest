@@ -108,6 +108,15 @@ async function readWithin(request: Request, ms: number): Promise<Uint8Array | 't
 	}
 }
 
+// The one read of a file part of an upload form. A seam for test/mastodon-params.test.ts, which observes the request
+// parameters a route reads.
+export const formFiles = {
+	// FormData.get is typed as string-only by the runtime types; a file part is a File.
+	get(form: FormData, name: string): unknown {
+		return form.get(name)
+	},
+}
+
 async function readMediaForm(request: Request, ms: number): Promise<MediaForm> {
 	const body = await readWithin(request, ms)
 	if (body === 'expired') {
@@ -126,8 +135,7 @@ async function readMediaForm(request: Request, ms: number): Promise<MediaForm> {
 	} catch {
 		return { error: "Validation failed: File can't be blank" }
 	}
-	// FormData.get is typed as string-only by the runtime types; a file part is a File.
-	const file: unknown = form.get('file')
+	const file = formFiles.get(form, 'file')
 	if (!(file instanceof File)) {
 		return { error: "Validation failed: File can't be blank" }
 	}

@@ -25,6 +25,18 @@ const MAX_URI = 2000
 // the body is read, as Mastodon throttles its unauthenticated API per IP; the Store bounds what registrations may
 // keep (domain/oauth.ts). The binding counts per Cloudflare location and is eventually consistent, so the limit is
 // approximate; the Store's bound is exact.
+// The application as GET /api/v1/apps/verify_credentials answers it (REST::ApplicationSerializer), and as
+// POST /api/v1/apps answers it (REST::CredentialApplicationSerializer); test-node/mastodon-entities.test.ts compares
+// both with Mastodon's fields.
+export type Application = { name: string; website: string | null; vapid_key: string }
+
+export type CredentialApplication = Application & {
+	id: string
+	redirect_uri: string
+	client_id: string
+	client_secret: string
+}
+
 export const registerApp: ApiHandler = async (c, deps) => {
 	const ip = c.req.header('cf-connecting-ip') ?? 'unknown'
 	if (!(await c.env.APP_REGISTRATION_LIMIT.limit({ key: ip })).success) {
@@ -81,13 +93,13 @@ export const registerApp: ApiHandler = async (c, deps) => {
 		client_id: clientId,
 		client_secret: secret,
 		vapid_key: vapidKey(c.env),
-	})
+	} satisfies CredentialApplication)
 }
 
 export const verifyApp: ApiHandler = async (c, deps) => {
 	const token = credential(c, deps)
 	const { client } = authorized(await storeCall(c, deps, (s, b) => s.checkCredential(b, token)))
-	return c.json({ name: client.name, website: client.website, vapid_key: vapidKey(c.env) })
+	return c.json({ name: client.name, website: client.website, vapid_key: vapidKey(c.env) } satisfies Application)
 }
 
 // Absolute, no fragment (RFC 6749 §3.1.2), and not a script URL. Custom schemes of native apps are allowed.
