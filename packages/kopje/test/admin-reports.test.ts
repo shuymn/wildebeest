@@ -16,6 +16,7 @@ import { setAccountEmail } from '../src/domain/admin-accounts'
 import { ANSWER_BYTES } from '../src/domain/answer-budget'
 import { filterTextLimits, MAX_FILTER_REQUEST_TEXT, MAX_FILTER_TEXT } from '../src/domain/filters'
 import { logAction, MODERATION_LOG_KEEP, MODERATION_LOG_PRUNE } from '../src/domain/moderation-log'
+import { streamedNotification } from '../src/domain/notifications'
 import {
 	ADMIN_REPORT_STATUS_BUDGET,
 	actOnReport,
@@ -23,6 +24,7 @@ import {
 	getAdminReport,
 	listAdminReports,
 	REPORT_COLUMNS,
+	fileRemoteReports,
 	REPORT_STATUS_BYTES,
 	type ReportRow,
 	userReport,
@@ -323,6 +325,95 @@ describe('GET /api/v1/admin/reports/:id', () => {
 	})
 })
 
+describe('a remote report (an inbound Flag) through the admin API', () => {
+	// A report of alice by a remote moderator on other.example (fileRemoteReports, the Store's handler of a Flag), naming
+	// a public and a private status of alice's; another account on that domain follows alice.
+	async function remoteWorld() {
+		const w = await world()
+		const reporter = await remoteAccount(w.h.store, 'moderator', 'other.example')
+		const follower = await remoteAccount(w.h.store, 'follower', 'other.example')
+		await remoteFollows(w.h.store, follower, w.alice.id)
+		const open = await seedStatus(w.h.store, {
+			accountId: w.alice.id,
+			visibility: 'public',
+			uri: 'https://kopje.test/ap/o/open',
+		})
+		const secret = await seedStatus(w.h.store, {
+			accountId: w.alice.id,
+			visibility: 'private',
+			uri: 'https://kopje.test/ap/o/secret',
+		})
+		const filed = await runInDurableObject(w.h.store, (_instance, state) =>
+			state.storage.transactionSync(() =>
+				fileRemoteReports(
+					new Db(state.storage.sql),
+					{ id: reporter, domain: 'other.example' },
+					{
+						id: 'https://other.example/flags/1',
+						objects: [
+							'https://kopje.test/ap/users/alice',
+							'https://kopje.test/ap/o/open',
+							'https://kopje.test/ap/o/secret',
+						],
+						content: 'remote spam',
+					},
+					NOW
+				)
+			)
+		)
+		expect(filed).toEqual({ filed: true, reason: 'reported' })
+		const id = String((await sql<{ id: number }>(w.h.store, 'SELECT id FROM reports'))[0]!.id)
+		return { ...w, reporter, follower, open, secret, id }
+	}
+
+	it('shows the reporter in the remote AdminAccount shape, and filters by its id', async () => {
+		const { h, admin, reporter, alice, id, open, secret } = await remoteWorld()
+		const body = await reportOf(h, id, admin)
+		expect(body).toMatchObject({ id, category: 'other', comment: 'remote spam', forwarded: false, rules: [] })
+		expect(body.account).toMatchObject({
+			id: reporter,
+			username: 'moderator',
+			domain: 'other.example',
+			email: null,
+			confirmed: null,
+			role: null,
+			account: { id: reporter, acct: 'moderator@other.example' },
+		})
+		expect(body.statuses.map((status) => status.id)).toEqual([open, secret])
+		const listed = await call(h, `/api/v1/admin/reports?account_id=${reporter}`, admin)
+		expect((listed.body as { id: string }[]).map((report) => report.id)).toEqual([id])
+		const both = await call(h, `/api/v1/admin/reports?account_id=${reporter}&target_account_id=${alice.id}`, admin)
+		expect((both.body as { id: string }[]).map((report) => report.id)).toEqual([id])
+	})
+
+	it("drops a private status from the admin's statuses once no follower is left on the domain; status_ids keeps it", async () => {
+		const { h, admin, owner, follower, alice, id, open, secret } = await remoteWorld()
+		await sql(h.store, 'DELETE FROM follows WHERE account_id = ? AND target_account_id = ?', follower, alice.id)
+		expect((await reportOf(h, id, admin)).statuses.map((status) => status.id)).toEqual([open])
+		// The report's status_ids (metadata, the admin's alone, R15/R37) keep both, in v1, v2 and on the stream.
+		const v1 = (await call(h, '/api/v1/notifications', owner.token)).body as {
+			id: string
+			type: string
+			report?: { id: string; status_ids: string[] }
+		}[]
+		const notification = v1.find((n) => n.type === 'admin.report')!
+		expect(notification.report).toMatchObject({ id, status_ids: [open, secret] })
+		const v2 = (await call(h, '/api/v2/notifications', owner.token)).body as {
+			notification_groups: { type: string; report?: { id: string; status_ids: string[] } }[]
+		}
+		expect(v2.notification_groups.find((g) => g.type === 'admin.report')?.report).toMatchObject({
+			id,
+			status_ids: [open, secret],
+		})
+		await runInDurableObject(h.store, (_instance, state) => {
+			const viewer = { accountId: owner.id, now: new Date(NOW).toISOString() }
+			expect(
+				streamedNotification(new Db(state.storage.sql), viewer, notification.id, { origin: 'https://kopje.test' })
+			).toMatchObject({ type: 'admin.report', report: { id, status_ids: [open, secret] } })
+		})
+	})
+})
+
 describe('GET /api/v1/admin/reports: ReportFilter', () => {
 	async function filtered() {
 		const w = await world()
@@ -403,18 +494,21 @@ describe('GET /api/v1/admin/reports: ReportFilter', () => {
 				).toMatchObject({ status: 'ok' })
 				return plans
 			})
+		// Each with the reporter's domain read by key (REPORT_COLUMNS).
 		const none = { resolved: false, accountId: null, targetAccountId: null }
 		expect(await planOf(none, { limit: 5 })).toEqual([
-			expect.stringMatching(/^SEARCH reports USING INDEX reports_state \(<expr>=\? AND rowid>\? AND rowid<\?\)$/),
+			expect.stringMatching(
+				/^SEARCH reports USING INDEX reports_state \(<expr>=\? AND rowid>\? AND rowid<\?\) \| CORRELATED SCALAR SUBQUERY 1 \| SEARCH accounts USING INDEX sqlite_autoindex_accounts_1 \(id=\?\)$/
+			),
 		])
 		expect(await planOf({ ...none, resolved: true, accountId: alice.id }, { limit: 5, maxId: '5' })).toEqual([
 			expect.stringMatching(
-				/^SEARCH reports USING INDEX reports_account_state \(account_id=\? AND <expr>=\? AND rowid>\? AND rowid<\?\)$/
+				/^SEARCH reports USING INDEX reports_account_state \(account_id=\? AND <expr>=\? AND rowid>\? AND rowid<\?\) \| CORRELATED SCALAR SUBQUERY 1 \| SEARCH accounts USING INDEX sqlite_autoindex_accounts_1 \(id=\?\)$/
 			),
 		])
 		expect(await planOf({ ...none, targetAccountId: carol, accountId: alice.id }, { limit: 5, minId: '5' })).toEqual([
 			expect.stringMatching(
-				/^SEARCH reports USING INDEX reports_target_state \(target_account_id=\? AND <expr>=\? AND rowid>\? AND rowid<\?\)$/
+				/^SEARCH reports USING INDEX reports_pair_state \(target_account_id=\? AND account_id=\? AND <expr>=\? AND rowid>\? AND rowid<\?\) \| CORRELATED SCALAR SUBQUERY 1 \| SEARCH accounts USING INDEX sqlite_autoindex_accounts_1 \(id=\?\)$/
 			),
 		])
 	})
@@ -474,10 +568,10 @@ describe('GET /api/v1/admin/reports: ReportFilter', () => {
 		const rest = await call(h, next!.replace('https://kopje.test', ''), admin)
 		expect((rest.body as unknown[]).length).toBe(2)
 		expect(rest.link).not.toMatch(/rel="next"/)
-		// One report over the budget alone still makes a page.
+		// A report naming the budget's statuses (the most a report holds, 0054_remote_reports' CHECK) is a page alone.
 		await sql(h.store, 'DELETE FROM reports')
 		await seedReports(h.store, alice.id, carol, 2, {
-			statuses: Array.from({ length: ADMIN_REPORT_STATUS_BUDGET + 1 }, (_, i) => String(i)),
+			statuses: Array.from({ length: ADMIN_REPORT_STATUS_BUDGET }, (_, i) => String(i)),
 		})
 		const single = await call(h, '/api/v1/admin/reports', admin)
 		expect((single.body as unknown[]).length).toBe(1)
