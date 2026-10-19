@@ -43,6 +43,8 @@ const NOT_CARRIED: Record<string, string> = {
 		'legacy never wrote its conversation_mutes table, and a legacy row there stops the conversion (UNUSED_LEGACY_TABLES)',
 	deliveries: 'outbound queue; legacy queues are not carried',
 	domain_block_cleanups: 'pending work of a domain block made in Kopje',
+	favourite_likes:
+		"a remote favourite's outstanding Like ids; legacy keeps none for a remote favourite, so a carried one tracks none",
 	fedify_kv: 'federation cache',
 	filter_keywords:
 		'legacy never wrote filters (its filter_keywords is in UNUSED_LEGACY_TABLES, which stops the conversion)',

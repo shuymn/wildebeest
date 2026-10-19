@@ -389,7 +389,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   only when new under its natural key; a repeat inserts nothing (`update` replaces the previous one). Its push is sent
   only for a newly inserted row. A remote favourite notifies when it is created and its notification goes with it, as
   Mastodon's does: a further `Like` it tracks notifies nothing, and an `Undo` followed by the next reaction's `Like`
-  notifies (and pushes) again, while the reverse order does not (`test/inbox-reactions.test.ts`, "VIS-10: the
+  notifies (and pushes) again, while the reverse order does not; `test/inbox-reactions.test.ts` ("VIS-10: the
   favourite notification follows the aggregate"). _Enforced (main):_ `notify` in `src/domain/notifications.ts`;
   `test/statuses.test.ts` ("a retry has no second side effect"), `test/timelines.test.ts` ("notifies followers who
   asked to be notified, once"). Push: _Enforced (main):_ `notify` records pushes for the row it inserted only, never for a
@@ -1576,8 +1576,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   deleted only after its children (edits, media, mentions, tags, favourites, bookmarks, notifications, receipts,
   boosts, reply links), so no delete cascades. A favourite's tracked `Like` ids go before it, read from a window of
   the account's or the status's first favourites, at most `MAX_TRACKED_LIKES` each; a local status's own delete
-  cascades at most that many per favourite, a bound a trigger holds for imported rows too
-  (`test/inbox-reactions.test.ts`, "RES-6: tracked Like ids in bounded deletions"). The child tables of a status and of a purged account are each one list in
+  cascades at most that many per favourite, a bound a trigger holds for imported rows too;
+  `test/inbox-reactions.test.ts` ("RES-6: tracked Like ids in bounded deletions"). The child tables of a status and of
+  a purged account are each one list in
   `src/domain/inbox.ts` (`STATUS_CHILDREN`, `PURGED_ACCOUNT_CHILDREN`), which `test/cascade-guard.test.ts` checks
   against the schema's cascading foreign keys; the same test requires every trigger that writes to be named with
   where a batch that fires it counts its writes. Blocks and mutes of the account go last, once nothing they filter is
