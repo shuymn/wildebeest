@@ -1,0 +1,741 @@
+import { env } from 'cloudflare:workers'
+
+import { describe, expect, it } from 'vitest'
+
+import { bearer, json, settle, sql } from './api-helpers'
+import { NOW } from './app-helpers'
+import { LEGACY } from './federation-helpers'
+import { BUILD } from './helpers'
+import { deferred, deliveryDeps } from './quote-helpers'
+import { act, receive, toFollows, unsuspend, uriOf, world } from './remote-suspension-helpers'
+import { post, remoteAccount, remoteFollows } from './status-helpers'
+import {
+	type DeliveryOutcome,
+	FOLLOW_ANSWER_CHUNKS,
+	FOLLOW_ANSWER_INTENTS,
+	FOLLOW_ANSWER_ROWS,
+	LEASE_MS,
+} from '../src/domain/deliveries'
+import { MAX_RETRACTIONS_PER_ACTOR } from '../src/domain/inbox'
+import { deliveryRound } from '../src/jobs/deliver'
+import type { StoreStub } from '../src/platform/store-client'
+
+// Stale follow answers (deliveries.ts cancelFollowAnswers; NET-2, RES-4, RES-5, RES-6, ID-7, and the accepted risk of
+// exposed answers in docs/threat-model.md): a remote Follow cancels its pair's Accepts and Rejects that were never
+// claimed or expanded; an answer a claim leased stays, superseded. Kopje's own send sequence is the oracle: a peer's
+// application of what it receives is not observable. Each case is driven deterministically through the Store's
+// production operations (expand, claim, confirm, complete), with no Queue.
+
+const REMOTE = 'https://remote.example'
+const LATER = NOW + 24 * 60 * 60 * 1000
+
+const OK: DeliveryOutcome = { kind: 'delivered', status: 202 }
+const FAIL: DeliveryOutcome = { kind: 'failed', status: 503, error: 'HTTP 503', permanent: false }
+const FORBIDDEN: DeliveryOutcome = { kind: 'failed', status: 403, error: 'HTTP 403', permanent: true }
+const MISSING: DeliveryOutcome = { kind: 'failed', status: 404, error: 'HTTP 404', permanent: true }
+
+type T = Awaited<ReturnType<typeof setup>>
+
+// alice, and r on remote.example, which s (alice's follower there) shares a lane with.
+async function setup(options: { locked?: boolean } = {}) {
+	const w = await world()
+	const r = await remoteAccount(w.h.store, 'r')
+	const s = await remoteAccount(w.h.store, 's')
+	await remoteFollows(w.h.store, s, w.alice.id)
+	if (options.locked === true) {
+		await sql(w.h.store, 'UPDATE accounts SET locked = 1 WHERE id = ?', w.alice.id)
+	}
+	return { w, store: w.h.store, r, rUri: await uriOf(w.h.store, r), aliceUri: await uriOf(w.h.store, w.alice.id) }
+}
+
+let sequence = 0
+const followId = () => `${REMOTE}/follows/${++sequence}`
+
+async function followFrom(t: T, id = followId()) {
+	return { id, result: await receive(t.store, t.rUri, { id, type: 'Follow', object: t.aliceUri }) }
+}
+
+async function undoFrom(t: T, id: string) {
+	return receive(t.store, t.rUri, { type: 'Undo', object: { id, type: 'Follow', actor: t.rUri, object: t.aliceUri } })
+}
+
+async function api(t: T, path: string) {
+	const response = await t.w.h.request(path, bearer(t.w.alice.token, json({})))
+	expect(response.status, path).toBe(200)
+}
+
+let lease = 0
+
+// One claim at `now`, every claimed row completed with `outcome`; the claimed rows' types.
+async function claimOnce(t: T, outcome: DeliveryOutcome | null, now = NOW): Promise<string[]> {
+	const leaseToken = `once-${++lease}`
+	const claim = await t.store.claimDeliveries(BUILD, { now, leaseToken })
+	const types: string[] = []
+	for (const delivery of claim.deliveries) {
+		const confirmation = await t.store.confirmDelivery(BUILD, { id: delivery.id, leaseToken, now })
+		if (confirmation.status === 'send') {
+			types.push((JSON.parse(confirmation.body) as { type: string }).type)
+			if (outcome !== null) {
+				await t.store.completeDelivery(BUILD, { id: delivery.id, leaseToken, now, outcome })
+			}
+		}
+	}
+	return types
+}
+
+// The outage shape the cancellation covers: a claim took alice's lane head to remote.example and it failed, so every
+// row behind it waits queued and is never claimed.
+async function outage(t: T): Promise<void> {
+	await post(t.w.h, t.w.alice, { status: 'head' })
+	expect(await claimOnce(t, FAIL)).toEqual(['Create'])
+}
+
+type LaneRow = { type: string; object: string | null; state: string; exposed: number; superseded: number }
+
+// alice's rows to remote.example in lane order: the activity type, what it answers (a Follow's id) or is about, its
+// state and whether it was ever claimed.
+async function lane(t: T): Promise<LaneRow[]> {
+	return sql<LaneRow>(
+		t.store,
+		`SELECT json_extract(o.body, '$.activity.type') AS type,
+			coalesce(json_extract(o.body, '$.activity.object.id'), json_extract(o.body, '$.activity.object')) AS object,
+			d.state, d.exposed, o.superseded
+		FROM deliveries d JOIN outbound_activities o ON o.id = d.activity_id
+		WHERE d.account_id = ? AND d.lane = ? ORDER BY d.id`,
+		t.w.alice.id,
+		REMOTE
+	)
+}
+
+// Delivers everything due by LATER, in lane order; each POST as [type, the Follow it answers or the object].
+async function drain(t: T): Promise<[string, string | null][]> {
+	const sent: [string, string | null][] = []
+	for (let round = 0; round < 1_000; round++) {
+		const leaseToken = `drain-${++lease}`
+		const claim = await t.store.claimDeliveries(BUILD, { now: LATER, leaseToken })
+		for (const delivery of claim.deliveries) {
+			const confirmation = await t.store.confirmDelivery(BUILD, { id: delivery.id, leaseToken, now: LATER })
+			if (confirmation.status === 'send') {
+				const body = JSON.parse(confirmation.body) as { type: string; object: unknown }
+				const object = typeof body.object === 'string' ? body.object : (body.object as { id?: string }).id
+				sent.push([body.type, object ?? null])
+				await t.store.completeDelivery(BUILD, { id: delivery.id, leaseToken, now: LATER, outcome: OK })
+			}
+		}
+		if (claim.deliveries.length === 0 && (claim.nextDueAt === null || claim.nextDueAt > LATER)) {
+			return sent
+		}
+	}
+	throw new Error('the deliveries did not drain')
+}
+
+// The answers among what was sent.
+const answers = (sent: [string, string | null][]) => sent.filter(([type]) => type === 'Accept' || type === 'Reject')
+
+// Every table a Follow writes, whole: a refusal must leave each as it was.
+async function snapshot(store: StoreStub) {
+	const tables = [
+		'accounts',
+		'follows',
+		'notifications',
+		'outbound_activities',
+		'outbound_targets',
+		'deliveries',
+		'inbound_retractions',
+	]
+	return Promise.all(
+		tables.map(async (table) => (await sql(store, `SELECT * FROM ${table}`)).map((row) => JSON.stringify(row)).sort())
+	)
+}
+
+describe('each renewal path sends only its own answer when the stale ones were never claimed', () => {
+	it('block, unblock, re-follow: the old Accept and the withdrawing Reject go, the new Accept is sent', async () => {
+		const t = await setup()
+		await outage(t)
+		const first = await followFrom(t)
+		await api(t, `/api/v1/accounts/${t.r}/block`)
+		await api(t, `/api/v1/accounts/${t.r}/unblock`)
+		expect((await lane(t)).map((row) => [row.type, row.object, row.state])).toEqual([
+			['Create', expect.any(String), 'pending'],
+			['Accept', first.id, 'queued'],
+			['Reject', first.id, 'queued'],
+			['Block', t.rUri, 'queued'],
+			['Undo', expect.any(String), 'queued'],
+		])
+		const second = await followFrom(t)
+		expect(second.result).toMatchObject({ applied: true, reason: 'followed' })
+		const sent = await drain(t)
+		expect(answers(sent)).toEqual([['Accept', second.id]])
+		expect(sent.map(([type]) => type)).toEqual(['Create', 'Block', 'Undo', 'Accept'])
+	})
+
+	it.each([
+		['completed', true],
+		['interrupted before its follows', false],
+	])('remote suspension (%s), unsuspension, re-follow', async (_, completed) => {
+		const t = await setup()
+		await outage(t)
+		await followFrom(t)
+		expect(await act(t.w, t.r, { type: 'suspend' })).toMatchObject({ status: 200 })
+		if (completed) {
+			await settle(t.store)
+		} else {
+			await toFollows(t.store)
+		}
+		expect(await unsuspend(t.w, t.r)).toMatchObject({ status: 200 })
+		await settle(t.store)
+		const stale = (await lane(t)).filter((row) => row.type === 'Accept' || row.type === 'Reject')
+		expect(stale.map((row) => [row.type, row.exposed])).toEqual(
+			completed
+				? [
+						['Accept', 0],
+						['Reject', 0],
+					]
+				: [['Accept', 0]]
+		)
+		const second = await followFrom(t)
+		expect(second.result).toMatchObject({ applied: true })
+		expect(answers(await drain(t))).toEqual([['Accept', second.id]])
+	})
+
+	it('locked, authorized, then renewed: only the renewal’s Accept', async () => {
+		const t = await setup({ locked: true })
+		await outage(t)
+		const first = await followFrom(t)
+		expect(first.result).toMatchObject({ reason: 'follow-requested' })
+		await api(t, `/api/v1/follow_requests/${t.r}/authorize`)
+		const second = await followFrom(t)
+		expect(second.result).toMatchObject({ reason: 'follow-reaccepted' })
+		expect(answers(await drain(t))).toEqual([['Accept', second.id]])
+	})
+
+	it('locked, rejected, then asked again: the Reject goes, and the new request waits for the owner', async () => {
+		const t = await setup({ locked: true })
+		await outage(t)
+		const first = await followFrom(t)
+		await api(t, `/api/v1/follow_requests/${t.r}/reject`)
+		expect((await lane(t)).map((row) => [row.type, row.object])).toEqual([
+			['Create', expect.any(String)],
+			['Reject', first.id],
+		])
+		const second = await followFrom(t)
+		expect(second.result).toMatchObject({ reason: 'follow-requested' })
+		expect(answers(await drain(t))).toEqual([])
+		expect(await sql(t.store, 'SELECT state, uri FROM follows WHERE account_id = ?', t.r)).toEqual([
+			{ state: 'pending', uri: second.id },
+		])
+		await api(t, `/api/v1/follow_requests/${t.r}/authorize`)
+		expect(answers(await drain(t))).toEqual([['Accept', second.id]])
+	})
+
+	it('Undo Follow, then Follow: only the new Accept', async () => {
+		const t = await setup()
+		await outage(t)
+		const first = await followFrom(t)
+		expect(await undoFrom(t, first.id)).toMatchObject({ applied: true })
+		const second = await followFrom(t)
+		expect(answers(await drain(t))).toEqual([['Accept', second.id]])
+	})
+
+	// A request stored before this version (a converted or older row) with an answer of an earlier generation queued:
+	// a renewal of the pending request cancels it too.
+	it('a pending request renewed: the earlier generation’s Accept goes, and the request keeps waiting', async () => {
+		const t = await setup()
+		await outage(t)
+		const first = await followFrom(t)
+		const pending = followId()
+		await sql(
+			t.store,
+			"UPDATE follows SET state = 'pending', uri = ? WHERE account_id = ? AND target_account_id = ?",
+			pending,
+			t.r,
+			t.w.alice.id
+		)
+		expect((await lane(t)).map((row) => [row.type, row.object])).toContainEqual(['Accept', first.id])
+		const second = await followFrom(t)
+		expect(second.result).toMatchObject({ reason: 'follow-request-updated' })
+		expect(answers(await drain(t))).toEqual([])
+		expect(await sql(t.store, 'SELECT state, uri FROM follows WHERE account_id = ?', t.r)).toEqual([
+			{ state: 'pending', uri: second.id },
+		])
+	})
+})
+
+describe('lanes after a cancellation', () => {
+	it('deletes queued rows on both sides of a surviving row behind a surviving head; no promotion', async () => {
+		const t = await setup()
+		await outage(t)
+		const first = await followFrom(t)
+		await post(t.w.h, t.w.alice, { status: 'between' })
+		await api(t, `/api/v1/accounts/${t.r}/block`)
+		await api(t, `/api/v1/accounts/${t.r}/unblock`)
+		expect((await lane(t)).map((row) => [row.type, row.object === first.id, row.state])).toEqual([
+			['Create', false, 'pending'],
+			['Accept', true, 'queued'],
+			['Create', false, 'queued'],
+			['Reject', true, 'queued'],
+			['Block', false, 'queued'],
+			['Undo', false, 'queued'],
+		])
+		const second = await followFrom(t)
+		expect(second.result).toMatchObject({ applied: true })
+		const after = await lane(t)
+		expect(after.map((row) => [row.type, row.state, row.exposed])).toEqual([
+			['Create', 'pending', 1],
+			['Create', 'queued', 0],
+			['Block', 'queued', 0],
+			['Undo', 'queued', 0],
+			['Accept', 'queued', 0],
+		])
+		expect(answers(await drain(t))).toEqual([['Accept', second.id]])
+	})
+
+	it('deletes a pending head never claimed and promotes the oldest row behind it; new work is admitted queued', async () => {
+		const t = await setup()
+		const first = await followFrom(t)
+		await post(t.w.h, t.w.alice, { status: 'behind' })
+		expect((await lane(t)).map((row) => [row.type, row.object, row.state])).toEqual([
+			['Accept', first.id, 'pending'],
+			['Create', expect.any(String), 'queued'],
+		])
+		const second = await followFrom(t)
+		expect((await lane(t)).map((row) => [row.type, row.object, row.state])).toEqual([
+			['Create', expect.any(String), 'pending'],
+			['Accept', second.id, 'queued'],
+		])
+		expect(await claimOnce(t, OK)).toEqual(['Create'])
+		expect(await claimOnce(t, OK)).toEqual(['Accept'])
+		expect(await lane(t)).toEqual([])
+	})
+
+	it('removes an answer still in an unexpanded chunk; later expansion sends nothing older for the pair', async () => {
+		const t = await setup()
+		await manyFollowers(t, 199)
+		await post(t.w.h, t.w.alice, { status: 'wide' })
+		const first = await followFrom(t)
+		// The Create's second chunk was expanded with the Accept's recording; the Accept's own chunk waits.
+		const chunked = await sql<{ type: string }>(
+			t.store,
+			`SELECT json_extract(o.body, '$.activity.type') AS type FROM outbound_targets c
+			JOIN outbound_activities o ON o.id = c.activity_id ORDER BY c.id`
+		)
+		expect(chunked).toEqual([{ type: 'Accept' }])
+		const second = await followFrom(t)
+		expect(second.result).toMatchObject({ applied: true })
+		const sent = await drain(t)
+		expect(answers(sent)).toEqual([['Accept', second.id]])
+		expect(await sql(t.store, 'SELECT * FROM outbound_targets')).toEqual([])
+		expect(await sql(t.store, 'SELECT * FROM outbound_activities')).toEqual([])
+		expect(sent.filter(([type]) => type === 'Create')).toHaveLength(200)
+	})
+})
+
+// `count` remote followers of alice, each on a server of its own (a lane each), whose names sort before remote.example.
+async function manyFollowers(t: T, count: number): Promise<void> {
+	await sql(
+		t.store,
+		`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+		INSERT INTO accounts (id, uri, username, domain, inbox_url, shared_inbox_url)
+		SELECT printf('%018d', 900000000000000000 + i), 'https://d' || printf('%03d', i) || '.example/u', 'u',
+			'd' || printf('%03d', i) || '.example', 'https://d' || printf('%03d', i) || '.example/u/inbox',
+			'https://d' || printf('%03d', i) || '.example/inbox'
+		FROM n`,
+		count
+	)
+	await sql(
+		t.store,
+		`INSERT INTO follows (account_id, target_account_id, state)
+		SELECT id, ?, 'accepted' FROM accounts WHERE domain GLOB 'd[0-9][0-9][0-9].example'`,
+		t.w.alice.id
+	)
+}
+
+describe('exposed answers are left, superseded, and the renewal proceeds as before', () => {
+	it.each<[string, (t: T) => Promise<void>]>([
+		['leased', async (t) => void (await claimOnce(t, null))],
+		['failed and pending', async (t) => void (await claimOnce(t, FAIL))],
+		['given up after a claim', async (t) => void (await claimOnce(t, FORBIDDEN))],
+		[
+			'claimed again after its lease expired',
+			async (t) => {
+				await claimOnce(t, null)
+				expect(await claimOnce(t, null, NOW + LEASE_MS + 1)).toEqual(['Accept'])
+			},
+		],
+		[
+			'retried by the operator',
+			async (t) => {
+				await claimOnce(t, FORBIDDEN)
+				const [row] = await sql<{ id: string }>(t.store, 'SELECT CAST(id AS TEXT) AS id FROM deliveries')
+				expect(await t.store.retryDeliveries(BUILD, { ids: [row!.id], now: NOW })).toMatchObject({ retried: 1 })
+			},
+		],
+		[
+			'moved to the personal inbox after the shared one answered 404',
+			async (t) => {
+				await claimOnce(t, MISSING)
+				expect(await sql(t.store, 'SELECT inbox_url, state FROM deliveries')).toEqual([
+					{ inbox_url: `${t.rUri}/inbox`, state: 'pending' },
+				])
+			},
+		],
+	])('%s', async (_, expose) => {
+		const t = await setup()
+		const first = await followFrom(t)
+		await expose(t)
+		expect((await lane(t)).map((row) => [row.type, row.exposed, row.superseded])).toEqual([['Accept', 1, 0]])
+		const second = await followFrom(t)
+		expect(second.result).toMatchObject({ applied: true, reason: 'follow-reaccepted' })
+		expect((await lane(t)).map((row) => [row.object, row.exposed, row.superseded])).toEqual([
+			[first.id, 1, 1],
+			[second.id, 0, 0],
+		])
+		// The operator may not send the superseded one again once it gives up.
+		const [old] = await sql<{ id: string; state: string }>(
+			t.store,
+			'SELECT CAST(id AS TEXT) AS id, state FROM deliveries ORDER BY id LIMIT 1'
+		)
+		if (old!.state === 'gave_up') {
+			expect(await t.store.retryDeliveries(BUILD, { ids: [old!.id], now: NOW })).toEqual({
+				ok: false,
+				code: 'superseded',
+				ids: [old!.id],
+			})
+		}
+	})
+
+	it('leaves the operator nothing to retry of a cancelled answer', async () => {
+		const t = await setup()
+		await outage(t)
+		await followFrom(t)
+		const [row] = await sql<{ id: string }>(
+			t.store,
+			'SELECT CAST(d.id AS TEXT) AS id FROM deliveries d JOIN outbound_activities o ON o.id = d.activity_id WHERE o.follow_pair IS NOT NULL'
+		)
+		await followFrom(t)
+		expect(await sql(t.store, 'SELECT 1 FROM deliveries WHERE id = ?', row!.id)).toEqual([])
+		expect(await t.store.retryDeliveries(BUILD, { ids: [row!.id], now: NOW })).toMatchObject({ ok: true, retried: 0 })
+	})
+
+	it('keeps a locked account’s new request pending until the owner authorizes it', async () => {
+		const t = await setup()
+		const first = await followFrom(t)
+		expect(await claimOnce(t, FAIL)).toEqual(['Accept'])
+		expect(await undoFrom(t, first.id)).toMatchObject({ applied: true })
+		await sql(t.store, 'UPDATE accounts SET locked = 1 WHERE id = ?', t.w.alice.id)
+		const second = await followFrom(t)
+		expect(second.result).toMatchObject({ reason: 'follow-requested' })
+		// The exposed Accept still goes (the accepted risk); Kopje's edge waits for the owner.
+		expect(answers(await drain(t))).toEqual([['Accept', first.id]])
+		expect(await sql(t.store, 'SELECT state FROM follows WHERE account_id = ?', t.r)).toEqual([{ state: 'pending' }])
+		await api(t, `/api/v1/follow_requests/${t.r}/authorize`)
+		expect(answers(await drain(t))).toEqual([['Accept', second.id]])
+	})
+
+	// The accepted risk's mixed case: the withdrawing Reject that would have countered the exposed Accept is itself
+	// stale by the policy (never claimed), and is cancelled.
+	it('an exposed old Accept, an unexposed withdrawing Reject, then a new locked request', async () => {
+		const t = await setup()
+		const first = await followFrom(t)
+		expect(await claimOnce(t, FAIL)).toEqual(['Accept'])
+		await api(t, `/api/v1/accounts/${t.r}/block`)
+		await api(t, `/api/v1/accounts/${t.r}/unblock`)
+		await sql(t.store, 'UPDATE accounts SET locked = 1 WHERE id = ?', t.w.alice.id)
+		expect((await lane(t)).map((row) => [row.type, row.object, row.exposed])).toEqual([
+			['Accept', first.id, 1],
+			['Reject', first.id, 0],
+			['Block', t.rUri, 0],
+			['Undo', expect.any(String), 0],
+		])
+		const second = await followFrom(t)
+		expect(second.result).toMatchObject({ reason: 'follow-requested' })
+		expect((await drain(t)).map(([type, object]) => [type, object === first.id])).toEqual([
+			['Accept', true],
+			['Block', false],
+			['Undo', false],
+		])
+		expect(await sql(t.store, 'SELECT state FROM follows WHERE account_id = ?', t.r)).toEqual([{ state: 'pending' }])
+	})
+})
+
+describe('bounds and refusals (RES-6)', () => {
+	// FOLLOW_ANSWER_INTENTS + 1 cycles, each Accept given up after a claim, then a withdrawal that supersedes the last
+	// and is delivered: every unsettled answer of the pair is superseded, exposed and given up.
+	async function overflow(t: T) {
+		for (let i = 0; i <= FOLLOW_ANSWER_INTENTS; i++) {
+			expect((await followFrom(t)).result, `cycle ${i}`).toMatchObject({ applied: true })
+			expect(await claimOnce(t, FORBIDDEN)).toEqual(['Accept'])
+		}
+		await api(t, `/api/v1/accounts/${t.r}/block`)
+		expect(await claimOnce(t, OK)).toEqual(['Reject'])
+		expect(await claimOnce(t, OK)).toEqual(['Block'])
+		await api(t, `/api/v1/accounts/${t.r}/unblock`)
+		expect(await claimOnce(t, OK)).toEqual(['Undo'])
+	}
+
+	it(
+		'answers 503 with nothing written over the intent bound; the sweep clears given-up superseded answers',
+		{ timeout: 120_000 },
+		async () => {
+			const t = await setup()
+			await overflow(t)
+			const unsettled = await sql<{ superseded: number; state: string; exposed: number }>(
+				t.store,
+				`SELECT o.superseded, d.state, d.exposed FROM outbound_activities o JOIN deliveries d ON d.activity_id = o.id
+				WHERE o.follow_pair = ?`,
+				t.r
+			)
+			expect(unsettled).toHaveLength(FOLLOW_ANSWER_INTENTS + 1)
+			expect(unsettled.every((row) => row.superseded === 1 && row.state === 'gave_up' && row.exposed === 1)).toBe(true)
+			const before = await snapshot(t.store)
+			const refused = await followFrom(t)
+			expect(refused.result).toMatchObject({ applied: false, reason: 'follow-answer-backlog', retry: true })
+			expect(await snapshot(t.store)).toEqual(before)
+			// The 30-day retention does not hold them: the next sweep deletes them, and the redelivered Follow applies.
+			expect(await t.store.sweepDeliveries(BUILD, { now: NOW })).toEqual({ swept: FOLLOW_ANSWER_INTENTS + 1 })
+			expect(await sql(t.store, 'SELECT * FROM outbound_activities WHERE follow_pair IS NOT NULL')).toEqual([])
+			const again = await receive(t.store, t.rUri, { id: refused.id, type: 'Follow', object: t.aliceUri })
+			expect(again).toMatchObject({ applied: true, reason: 'followed' })
+			expect(answers(await drain(t))).toEqual([['Accept', refused.id]])
+		}
+	)
+
+	it('shares the sweep budget with the 30-day retention, answers first', { timeout: 120_000 }, async () => {
+		const t = await setup()
+		await overflow(t)
+		// An ordinary given-up row past the retention, which the same round also deletes.
+		await post(t.w.h, t.w.alice, { status: 'given up' })
+		expect(await claimOnce(t, FORBIDDEN)).toEqual(['Create'])
+		expect(await t.store.sweepDeliveries(BUILD, { now: NOW + 31 * 24 * 60 * 60 * 1000 })).toEqual({
+			swept: FOLLOW_ANSWER_INTENTS + 2,
+		})
+		expect(await sql(t.store, 'SELECT * FROM deliveries')).toEqual([])
+	})
+
+	// Stored state no Follow of this version leaves (each answer has one target): an imported store's answer with more
+	// rows or chunks than the bounds.
+	it.each([
+		['rows never claimed', FOLLOW_ANSWER_ROWS + 1, 0],
+		['unexpanded chunks', 0, FOLLOW_ANSWER_CHUNKS + 1],
+	])('answers 503 with nothing written over the bound of %s', async (_, rows, chunks) => {
+		const t = await setup()
+		await sql(
+			t.store,
+			`INSERT INTO outbound_activities (id, account_id, body, object_uri, created_at, follow_pair)
+			VALUES (77, ?, '{"activity":{"type":"Accept"},"audience":{"followers":false,"accounts":[]}}', 'x', 0, ?)`,
+			t.w.alice.id,
+			t.r
+		)
+		await sql(
+			t.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?2)
+			INSERT INTO deliveries (activity_id, account_id, inbox_url, lane, state, next_attempt_at, updated_at)
+			SELECT 77, ?1, 'https://e' || i || '.example/inbox', 'https://e' || i || '.example', 'pending', 0, 0
+			FROM n WHERE ?2 > 0`,
+			t.w.alice.id,
+			rows
+		)
+		await sql(
+			t.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO outbound_targets (activity_id, targets) SELECT 77, '[]' FROM n WHERE ?1 > 0`,
+			chunks
+		)
+		const before = await snapshot(t.store)
+		expect((await followFrom(t)).result).toMatchObject({ reason: 'follow-answer-backlog', retry: true })
+		expect(await snapshot(t.store)).toEqual(before)
+		// One fewer fits.
+		await sql(t.store, 'DELETE FROM deliveries WHERE id = (SELECT max(id) FROM deliveries)')
+		await sql(t.store, 'DELETE FROM outbound_targets WHERE id = (SELECT max(id) FROM outbound_targets)')
+		expect((await followFrom(t)).result).toMatchObject({ applied: true })
+	})
+
+	it('cancels nothing for a duplicate Follow or a renewal at the retraction cap', async () => {
+		const t = await setup()
+		await outage(t)
+		const first = await followFrom(t)
+		const before = await snapshot(t.store)
+		expect((await followFrom(t, first.id)).result).toMatchObject({ applied: false, reason: 'duplicate' })
+		expect(await snapshot(t.store)).toEqual(before)
+		await sql(
+			t.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?2)
+			INSERT INTO inbound_retractions (actor_uri, target_uri, expires_at) SELECT ?1, ?1 || '/gone/' || i, ?3 FROM n`,
+			t.rUri,
+			MAX_RETRACTIONS_PER_ACTOR,
+			LATER
+		)
+		const capped = await snapshot(t.store)
+		expect((await followFrom(t)).result).toMatchObject({ applied: false, reason: 'retraction-cap' })
+		expect(await snapshot(t.store)).toEqual(capped)
+		expect((await lane(t)).map((row) => [row.type, row.object])).toContainEqual(['Accept', first.id])
+	})
+
+	it('cancels nothing for a Follow the target refuses (it blocks the follower)', async () => {
+		const t = await setup()
+		await outage(t)
+		const first = await followFrom(t)
+		await api(t, `/api/v1/accounts/${t.r}/block`)
+		const refused = await followFrom(t)
+		expect(refused.result).toMatchObject({ applied: true, reason: 'follow-rejected' })
+		expect((await lane(t)).map((row) => [row.type, row.object])).toEqual([
+			['Create', expect.any(String)],
+			['Accept', first.id],
+			['Reject', first.id],
+			['Block', t.rUri],
+			['Reject', refused.id],
+		])
+	})
+
+	it('reads the pair’s answers through their indexes', async () => {
+		const t = await setup()
+		const plan = await sql<{ detail: string }>(
+			t.store,
+			`EXPLAIN QUERY PLAN SELECT CAST(id AS TEXT) AS id, account_id, lane, state FROM deliveries
+			WHERE activity_id IN (SELECT CAST(value AS INTEGER) FROM json_each('[1]')) AND exposed = 0 ORDER BY id LIMIT 65`
+		)
+		expect(plan.map((row) => row.detail)).toContainEqual(expect.stringContaining('USING INDEX deliveries_activity'))
+	})
+})
+
+describe('cancellation against claims and expansion, in both serialized orders', () => {
+	const testEnv = { ...env, USER_KEK: LEGACY.kek } as unknown as Env
+
+	// alice signs with the legacy fixture key, so a delivery round can load her signer.
+	async function signed(): Promise<T> {
+		const t = await setup()
+		await sql(
+			t.store,
+			'UPDATE local_accounts SET privkey = ?, privkey_salt = ?, pubkey = ? WHERE account_id = ?',
+			LEGACY.privkey.slice().buffer,
+			LEGACY.salt.slice().buffer,
+			LEGACY.pubkey,
+			t.w.alice.id
+		)
+		return t
+	}
+
+	// A fetch that answers every POST 202 and records each body sent to remote.example.
+	function recording() {
+		const sent: { type: string; object: { id?: string } }[] = []
+		const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+			const request = new Request(input, init)
+			if (request.url.startsWith(REMOTE)) {
+				sent.push(JSON.parse(await request.text()) as (typeof sent)[number])
+			}
+			return new Response(null, { status: 202 })
+		}
+		return { fetch: fetch as typeof globalThis.fetch, sent }
+	}
+
+	// A round held at a gate: before its claim (`claim`), or after it, at the host check before confirmation ('host').
+	function heldRound(store: StoreStub, fetch: typeof globalThis.fetch, at: 'claim' | 'host') {
+		const reached = deferred()
+		const release = deferred()
+		const hold = async () => {
+			reached.resolve()
+			await release.promise
+		}
+		const gated = new Proxy(store, {
+			get(target, name) {
+				if (name === 'claimDeliveries' && at === 'claim') {
+					return async (...args: Parameters<StoreStub['claimDeliveries']>) => {
+						await hold()
+						return target.claimDeliveries(...args)
+					}
+				}
+				if (typeof name !== 'string' || name === 'then') {
+					return undefined
+				}
+				const methods = target as unknown as Record<string, (...a: unknown[]) => unknown>
+				return (...args: unknown[]) => methods[name]!(...args)
+			},
+		})
+		let hostHeld = false
+		const round = deliveryRound(testEnv, {
+			...deliveryDeps(
+				() => gated,
+				fetch,
+				() => NOW
+			),
+			checkHost: async () => {
+				if (at === 'host' && !hostHeld) {
+					hostHeld = true
+					await hold()
+				}
+			},
+		})
+		return { reached: reached.promise, release: release.resolve, round }
+	}
+
+	it('a claim that commits first exposes the old Accept, which is still sent', async () => {
+		const t = await signed()
+		const first = await followFrom(t)
+		const { fetch, sent } = recording()
+		const held = heldRound(t.store, fetch, 'host')
+		await held.reached
+		expect((await lane(t)).map((row) => [row.state, row.exposed])).toEqual([['leased', 1]])
+		const second = await followFrom(t)
+		expect(second.result).toMatchObject({ applied: true })
+		held.release()
+		await held.round
+		expect(sent.map((body) => [body.type, body.object.id])).toEqual([['Accept', first.id]])
+		expect(answers(await drain(t))).toEqual([['Accept', second.id]])
+	})
+
+	it('a cancellation that commits first leaves the claim nothing older to send', async () => {
+		const t = await signed()
+		const first = await followFrom(t)
+		const { fetch, sent } = recording()
+		const held = heldRound(t.store, fetch, 'claim')
+		await held.reached
+		const second = await followFrom(t)
+		expect(second.result).toMatchObject({ applied: true })
+		expect((await lane(t)).map((row) => row.object)).toEqual([second.id])
+		held.release()
+		await held.round
+		expect(sent.map((body) => [body.type, body.object.id])).toEqual([['Accept', second.id]])
+		expect(sent.map((body) => body.object.id)).not.toContain(first.id)
+	})
+
+	it('an expansion that commits first leaves a queued row, which the cancellation deletes', async () => {
+		const t = await signed()
+		await manyFollowers(t, 199)
+		await post(t.w.h, t.w.alice, { status: 'wide' })
+		const first = await followFrom(t)
+		const { fetch, sent } = recording()
+		const held = heldRound(t.store, fetch, 'host')
+		await held.reached
+		// The claim expanded the Accept behind the lane's Create, which it did not lease (16 earlier lanes were due).
+		expect((await lane(t)).map((row) => [row.type, row.state, row.exposed])).toEqual([
+			['Create', 'pending', 0],
+			['Accept', 'queued', 0],
+		])
+		const second = await followFrom(t)
+		expect(second.result).toMatchObject({ applied: true })
+		expect((await lane(t)).map((row) => [row.type, row.object === first.id])).toEqual([
+			['Create', false],
+			['Accept', false],
+		])
+		held.release()
+		await held.round
+		expect(sent).toEqual([])
+		expect(answers(await drain(t))).toEqual([['Accept', second.id]])
+	})
+
+	it('a cancellation that commits first deletes the unexpanded chunk before the claim expands it', async () => {
+		const t = await signed()
+		await manyFollowers(t, 199)
+		await post(t.w.h, t.w.alice, { status: 'wide' })
+		await followFrom(t)
+		const { fetch, sent } = recording()
+		const held = heldRound(t.store, fetch, 'claim')
+		await held.reached
+		const second = await followFrom(t)
+		expect(second.result).toMatchObject({ applied: true })
+		held.release()
+		await held.round
+		expect(sent).toEqual([])
+		expect(answers(await drain(t))).toEqual([['Accept', second.id]])
+	})
+})
