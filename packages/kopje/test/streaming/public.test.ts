@@ -2,13 +2,9 @@ import { runInDurableObject } from 'cloudflare:test'
 
 import { describe, expect, it } from 'vitest'
 
-import { Db } from '../../src/db/sql'
-import { streamDelete } from '../../src/domain/streaming'
-import { ACCOUNT_EMOJIS_BYTES, STATUS_EMOJIS_BYTES } from '../../src/platform/stored-bounds'
-import { sha256Hex } from '../../src/security/tokens'
-import { STREAM_LIMITS } from '../../src/stream-hub'
 import { type ApiHarness, bearer, json, sql } from '../api-helpers'
 import { NOW } from '../app-helpers'
+import { accountAtCap, statusAtCap } from '../emoji-fixtures'
 import { BUILD } from '../helpers'
 import {
 	act,
@@ -23,7 +19,11 @@ import {
 	type Status,
 } from '../status-helpers'
 import { connect, drained, echo, type Inbox, settled, type StreamMessage, subscribed, takeAll } from './stream-helpers'
-import { accountAtCap, statusAtCap } from '../emoji-fixtures'
+import { Db } from '../../src/db/sql'
+import { streamDelete } from '../../src/domain/streaming'
+import { ACCOUNT_EMOJIS_BYTES, STATUS_EMOJIS_BYTES } from '../../src/platform/stored-bounds'
+import { sha256Hex } from '../../src/security/tokens'
+import { STREAM_LIMITS } from '../../src/stream-hub'
 
 // The `public*` and `hashtag*` streams (design "Kopje streaming API" PR 4): `update` and `status.update` when the public
 // or the hashtag's timeline positioned at the status returns it (R33), less a status that mentions an account the
