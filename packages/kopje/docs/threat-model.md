@@ -1323,16 +1323,14 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   statuses are read as compacted JSON, without JSON-LD, as Mastodon reads them; `test/inbox-statuses.test.ts`
   ("refuses an activity or a fetched document past the JSON bounds before reading it", "caps the attachments, tags
   and content one status stores"), `test/inbox-statuses-edge.test.ts` ("RES-2: JSON-LD contexts past the JSON
-  bounds", "the Store asks for documents at most three times"). _Enforced (main)_ for stored values: each column that
-  a remote server controls or a converted row carries (`STORED_COLUMNS` in `src/platform/stored-bounds.ts`) holds a
-  fixed point of its projection P, in the bound's own unit. Writers store such values; migration
-  `0048_stored_bounds` set every existing value to P(x) (an uploaded media URL past 2,048 bytes fails it first, by the
-  check `tokened_media_url_within_2048_bytes`); and on statuses, accounts, media_attachments and status_edits the
+  bounds", "the Store asks for documents at most three times"). _Enforced (main)_ for stored values: each column of
+  `STORED_COLUMNS` in `src/platform/stored-bounds.ts` holds a fixed point of its projection P, in the bound's own unit.
+  Writers store such values; migration `0048_stored_bounds` set every existing value to P(x) without a copy (an
+  uploaded media URL past 2,048 bytes fails it first, by the check `tokened_media_url_within_2048_bytes`); and the
   triggers `<table>_bounds_insert` and `<table>_bounds_update` (`migrations/0048_stored_bounds.sql`) abort any write
   where `P(NEW.x) IS NOT NEW.x`. Reads take these columns as stored: since P(P(x)) = P(x), a rewritten row presents
-  what a read through P presented before. `accounts.uri`, `accounts.username`, `statuses.uri`, `status_tags.name`,
-  `polls.options` and `status_edits.media_json` keep their read-time projections. `test/stored-bounds.test.ts` ("P is
-  idempotent and the writer's output is its fixed point", "answers every converted row after the rewrite"), `test/migrations.test.ts` (0048: "stores each covered value as P(x)", "refuses a value one past its
+  what a read through P presented before. The columns that keep read-time projections are listed at `STORED_COLUMNS`.
+  `test/stored-bounds.test.ts` ("P is idempotent and the writer's output is its fixed point", "answers every converted row after the rewrite"), `test/migrations.test.ts` (0048: "stores each covered value as P(x)", "refuses a value one past its
   bound on insert and update", "fails by its check on an uploaded media URL past the bound"),
   `test/dump-import.test.ts` ("restores a dump taken before 0048_stored_bounds"),
   `test-node/cutover-stored-bounds.test.ts`.
@@ -1375,18 +1373,14 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `test/account-answer-bytes.test.ts`).
   _Enforced (main)_ for every answer that presents statuses, accounts or
   notifications: the Store operation that returns it owns one budget of `ANSWER_BYTES` (8 MiB of the answer's JSON,
-  containers included) or a stated unit or count bound. Items are admitted whole in traversal order, the first
-  whatever its size, each atomic item presented and measured only when it is reached, its rows read in small chunks
-  (statuses in chunks planned by a bound of their rows' heap and capped by a runtime meter of the same heap), so
-  what is held past the admitted answer is one chunk of rows and one item at their maxima ("Heap at 8 MiB per
-  answer"). _Gap:_ under that section's heap model, a page of grouped notifications or of admin reports passes half of
+  containers included) or a stated unit or count bound, and admits items whole in traversal order, the first whatever
+  its size, so what is held past the admitted answer is one chunk of rows and one item at their maxima ("Heap at 8 MiB
+  per answer"). _Gap:_ under that section's heap model, a page of grouped notifications or of admin reports passes half of
   the Store isolate's 128 MB, below 128 MB (the peaks table there): their single item dominates, so no chunk target or cap lowers it. A measured factor for presented objects and the strings they
-  share with rows, or lower unit maxima, would close it. Each operation's mechanism and continuation, the families' admission rules (grouped notifications'
-  discovery positions and passes, reports' status allowance, pinned statuses, contexts, histories, offset endpoints)
-  and the ActivityPub collections are in [response-inventory.md](response-inventory.md) ("Statuses", "Notifications",
-  "Accounts", "ActivityPub"). One presentation per answer compiles the viewer's filters once and fixes the filter text
-  level (`MAX_FILTER_REQUEST_TEXT`) over the answer's candidates in a preparation pass, so chunked presentation matches
-  as one whole presentation does, and matches each status and quoted status once. When the viewer has keyword
+  share with rows, or lower unit maxima, would close it. Each operation's mechanism, continuation and admission rules,
+  and the ActivityPub collections, are in [response-inventory.md](response-inventory.md). One presentation per answer
+  compiles the viewer's filters once and fixes the filter text level (`MAX_FILTER_REQUEST_TEXT`) over the answer's
+  candidates in a preparation pass, so chunked presentation matches as one whole presentation does, and matches each status and quoted status once. When the viewer has keyword
   filters, that pass reads every candidate's searchable text (content, source, poll choices, media descriptions) in
   chunks of 4 statuses: its memory is one chunk, and its work is bounded by the candidate caps (a context's 8,192),
   not by the answer budget (`src/domain/answer-budget.ts`, `presentation` and `presentStatusesWithin` in
@@ -1741,11 +1735,9 @@ triggers and the schema's CHECKs) allows, and each column that no CHECK bounds a
 out of SQLite and what it presents, three ways: filled with characters JSON escapes to six bytes (the most JSON); the
 same with mentioned accounts that have no stored url, so their url is derived; and filled with what reads the most
 bytes for each bound (ASCII where the bound is in bytes, four-byte characters where it is in characters: a 10,000
-character description reads 40,000 bytes). Every part of every row a shape reads is at the bound RES-3 states for a
-presented status and account above, at the largest value its stored-bound trigger and CHECKs accept (RES-2): the
-source text of each status row, the boost's own row (all but its content, which the CHECK keeps empty, with its own
-attachments, mentions, hashtags and poll, which are not read), the viewer's profile, her votes in every choice of both
-polls shown and every flag of hers included, each remote profile's fields at the largest list a read takes (32 KiB
+character description reads 40,000 bytes). The parts include the source text of each status row, the boost's own
+row (all but its content, which the CHECK keeps empty, with its own attachments, mentions, hashtags and poll, which
+are not read), the viewer's profile, her votes in every choice of both polls shown and every flag of hers included, each remote profile's fields at the largest list a read takes (32 KiB
 of JSON), with accounts on
 2,000-character domains (the longest an actor id of 2,048 holds), hashtag names of four-byte characters, and the
 viewer's filters at theirs: 50 filters in every context, each with a 256-character title and 20 keywords of 512
