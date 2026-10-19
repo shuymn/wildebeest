@@ -1,8 +1,26 @@
+import { accessAdminRefusal } from './admin-authority'
 import { availableLocalSql } from './audience'
-import { readOperation } from './operation'
+import { logAction } from './moderation-log'
+import { readOperation, writeOperation } from './operation'
 import type { Db } from '../db/sql'
+import type { ImportAuthority } from '../platform/store-admin'
+import {
+	CONTACT_EMAIL_BYTES,
+	INSTANCE_DESCRIPTION_LIMIT,
+	INSTANCE_DOCUMENT_BYTES,
+	INSTANCE_TITLE_LIMIT,
+	type InstanceDocument,
+	isBlank,
+	storedInstanceSetting,
+	storedText,
+	trimBlank,
+} from '../platform/stored-bounds'
+import { remoteHtmlText, sanitizeRemoteHtml } from '../security/html'
 
-// What the instance endpoints show, from instance_settings (the only settings store) and cached counters.
+// What the instance endpoints show, from instance_settings (the only settings store) and cached counters. The public
+// settings are data, not configuration (platform/access-settings.ts CONFIG_KEYS): dumped and imported, erased by a
+// reset, written only by the Access admin (setInstanceSettings), and bounded as stored (platform/stored-bounds.ts
+// INSTANCE_SETTING_BOUNDS, migration 0049_instance_bounds), so reads take them as stored.
 
 // Mastodon's REST::RuleSerializer: a hint (default "") and the rule's translations by language. Kopje stores no
 // translations, so they are always {}.
@@ -19,6 +37,9 @@ export type InstanceSettings = {
 	description: string | null
 	contactEmail: string | null
 	rules: InstanceRule[]
+	// Whether the privacy policy and the terms of service are available (documentsOf).
+	privacyPolicy: boolean
+	termsOfService: boolean
 }
 
 export type InstanceInfo = InstanceSettings & {
@@ -27,8 +48,29 @@ export type InstanceInfo = InstanceSettings & {
 	domainCount: number
 }
 
+// The about page's settings: the extended description as stored (at most INSTANCE_DOCUMENT_BYTES), which the page
+// sanitizes at its sink (web/safe-html.ts).
+export type AboutSettings = InstanceSettings & { extendedDescription: string | null }
+
 const PUBLIC_SETTINGS = ['domain', 'title', 'description', 'contact_email', 'rules'] as const
 const SETTINGS_QUERY = `SELECT name, value FROM instance_settings WHERE name IN (${PUBLIC_SETTINGS.map(() => '?').join(', ')})`
+
+// A document is available exactly when its row exists, the terms of service when its effective date's row exists too
+// (setInstanceSettings writes and removes them together). The writers store no blank document and none that
+// sanitizes to no text; one converted by an earlier release that sanitizes to no text stays available, empty.
+function documentsOf(db: Db): Pick<InstanceSettings, 'privacyPolicy' | 'termsOfService'> {
+	const names = new Set(
+		db
+			.all<{ name: string }>(
+				"SELECT name FROM instance_settings WHERE name IN ('privacy_policy', 'terms_of_service', 'terms_of_service_effective_date')"
+			)
+			.map((row) => row.name)
+	)
+	return {
+		privacyPolicy: names.has('privacy_policy'),
+		termsOfService: names.has('terms_of_service') && names.has('terms_of_service_effective_date'),
+	}
+}
 
 function settingsOf(db: Db): InstanceSettings {
 	const settings = new Map(
@@ -40,11 +82,17 @@ function settingsOf(db: Db): InstanceSettings {
 		description: settings.get('description') ?? null,
 		contactEmail: settings.get('contact_email') ?? null,
 		rules: parseRules(settings.get('rules')),
+		...documentsOf(db),
 	}
 }
 
 // The settings alone, without the counters (the about page).
-export const instanceSettings = readOperation<void, InstanceSettings>((db) => settingsOf(db))
+export const instanceSettings = readOperation<void, AboutSettings>((db) => ({
+	...settingsOf(db),
+	extendedDescription:
+		db.first<{ value: string }>("SELECT value FROM instance_settings WHERE name = 'extended_description'")?.value ??
+		null,
+}))
 
 export const instanceInfo = readOperation<void, InstanceInfo>((db) => {
 	const counts = db.first<{ users: number; statuses: number | null; domains: number }>(
@@ -66,8 +114,8 @@ export const instanceRules = readOperation<void, InstanceRule[]>((db) =>
 	parseRules(db.first<{ value: string }>("SELECT value FROM instance_settings WHERE name = 'rules'")?.value)
 )
 
-// rules is a JSON array of strings or of { id?, text, hint? } objects. Anything unreadable shows as no rules, and a
-// hint that is not a string as none.
+// rules is a JSON array (of at most INSTANCE_RULES_BYTES) of strings or of { id?, text, hint? } objects. Anything
+// unreadable shows as no rules, and a hint that is not a string as none.
 export function parseRules(value: string | undefined): InstanceRule[] {
 	if (value === undefined) {
 		return []
@@ -141,3 +189,254 @@ export const searchPeers = readOperation<{ prefix: string }, string[]>((db, { pr
 		)
 		.map((row) => row.domain)
 )
+
+// ---- The instance's documents: the extended description, the privacy policy and the terms of service (HTML)
+
+// A document as stored, with its stamp (the time an admin write last changed it; none for a converted one) or, for the
+// terms of service, its effective date. null when it is not available (documentsOf).
+export type InstanceDocumentSource = { text: string; updatedAt: string | null; effectiveDate: string | null }
+
+// The setting that goes with each document: its stamp, or the terms of service's effective date.
+const COMPANION: Record<InstanceDocument, string> = {
+	extended_description: 'extended_description_updated_at',
+	privacy_policy: 'privacy_policy_updated_at',
+	terms_of_service: 'terms_of_service_effective_date',
+}
+
+function documentSource(db: Db, name: InstanceDocument): InstanceDocumentSource | null {
+	const companion = COMPANION[name]
+	const rows = new Map(
+		db
+			.all<{ name: string; value: string }>(
+				'SELECT name, value FROM instance_settings WHERE name IN (?, ?)',
+				name,
+				companion
+			)
+			.map((row) => [row.name, row.value])
+	)
+	const text = rows.get(name)
+	if (text === undefined) {
+		return null
+	}
+	if (name === 'terms_of_service') {
+		const effectiveDate = rows.get(companion)
+		return effectiveDate === undefined ? null : { text, updatedAt: null, effectiveDate }
+	}
+	return { text, updatedAt: rows.get(companion) ?? null, effectiveDate: null }
+}
+
+// The API's presentation (mastodon/instance.ts): the document sanitized once here (HTML-1). A stored document is at
+// most INSTANCE_DOCUMENT_BYTES, so at most as many UTF-16 code units: REMOTE_HTML_RAW_LIMIT never cuts it.
+export const instanceDocument = readOperation<{ name: InstanceDocument }, InstanceDocumentSource | null>(
+	(db, { name }) => {
+		const source = documentSource(db, name)
+		return source === null ? null : { ...source, text: sanitizeRemoteHtml(source.text) }
+	}
+)
+
+// The web pages' source (app/web.tsx): the document as stored, which the page sanitizes at its sink (web/safe-html.ts).
+export const instanceDocumentSource = readOperation<{ name: InstanceDocument }, InstanceDocumentSource | null>(
+	(db, { name }) => documentSource(db, name)
+)
+
+// ---- The Access admin's write of the public settings (`kopje-admin instance`, POST /admin/instance)
+
+// The names an admin write sets, in the order GET /admin/instance lists them. rules has no editor; the stamps are
+// written with their documents.
+export const INSTANCE_ADMIN_NAMES = [
+	'title',
+	'description',
+	'contact_email',
+	'extended_description',
+	'privacy_policy',
+	'terms_of_service',
+	'terms_of_service_effective_date',
+	'show_domain_blocks',
+	'show_domain_blocks_rationale',
+] as const
+
+type AdminName = (typeof INSTANCE_ADMIN_NAMES)[number]
+
+const STAMPED = { extended_description: 'extended_description_updated_at', privacy_policy: 'privacy_policy_updated_at' }
+const SHOWN_NAMES = [...INSTANCE_ADMIN_NAMES, ...Object.values(STAMPED)]
+
+export type InstanceAdminValues = Record<string, string>
+
+export type SetInstanceSettingsResult =
+	| { ok: true; values: InstanceAdminValues }
+	| { ok: false; code: 'wrong-authority' | 'invalid-instance-setting'; message: string }
+
+function adminValues(db: Db): InstanceAdminValues {
+	const rows = db.all<{ name: string; value: string }>(
+		`SELECT name, value FROM instance_settings WHERE name IN (${SHOWN_NAMES.map(() => '?').join(', ')})`,
+		...SHOWN_NAMES
+	)
+	const values = new Map(rows.map((row) => [row.name, row.value]))
+	return Object.fromEntries(SHOWN_NAMES.flatMap((name) => (values.has(name) ? [[name, values.get(name)!]] : [])))
+}
+
+// GET /admin/instance: the public settings and the documents' stamps, as stored.
+export const instanceAdminSettings = readOperation<void, InstanceAdminValues>((db) => adminValues(db))
+
+const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+$/u
+const ENCODER = new TextEncoder()
+
+// What an admin write stores for `raw`: null to remove, the text otherwise, or why it is refused. The text is
+// storedText's output without blank characters at either end, and must be what the name's writer stores unchanged
+// (INSTANCE_SETTING_BOUNDS), so the triggers accept it; a document must also leave text once sanitized.
+function adminValue(name: AdminName, raw: unknown): string | null | { refused: string } {
+	if (raw === null) {
+		return null
+	}
+	if (typeof raw !== 'string') {
+		return { refused: `${name} must be a string, or null to remove it` }
+	}
+	const value = trimBlank(storedText(raw))
+	if (value === '') {
+		return { refused: `${name} is blank; send null to remove it` }
+	}
+	const points = [...value].length
+	switch (name) {
+		case 'title':
+			if (points > INSTANCE_TITLE_LIMIT) {
+				return { refused: `title is at most ${INSTANCE_TITLE_LIMIT} characters` }
+			}
+			break
+		case 'description':
+			if (points > INSTANCE_DESCRIPTION_LIMIT) {
+				return { refused: `description is at most ${INSTANCE_DESCRIPTION_LIMIT} characters` }
+			}
+			break
+		case 'contact_email':
+			if (ENCODER.encode(value).length > CONTACT_EMAIL_BYTES || !EMAIL_SHAPE.test(value)) {
+				return { refused: `contact_email must be an email address of at most ${CONTACT_EMAIL_BYTES} bytes` }
+			}
+			break
+		case 'extended_description':
+		case 'privacy_policy':
+		case 'terms_of_service':
+			if (ENCODER.encode(value).length > INSTANCE_DOCUMENT_BYTES) {
+				return { refused: `${name} is at most ${INSTANCE_DOCUMENT_BYTES} bytes of HTML` }
+			}
+			if (isBlank(remoteHtmlText(sanitizeRemoteHtml(value)))) {
+				return { refused: `${name} has no text once sanitized` }
+			}
+			break
+		case 'terms_of_service_effective_date':
+			if (storedInstanceSetting(name, value) !== value) {
+				return { refused: 'terms_of_service_effective_date must be a date, YYYY-MM-DD' }
+			}
+			break
+		case 'show_domain_blocks':
+		case 'show_domain_blocks_rationale':
+			if (storedInstanceSetting(name, value) !== value) {
+				return { refused: `${name} must be disabled, users or all` }
+			}
+			break
+	}
+	if (storedInstanceSetting(name, value) !== value) {
+		throw new Error(`${name}: a value the admin write accepts is past its stored bound`)
+	}
+	return value
+}
+
+const DATE = 'terms_of_service_effective_date'
+
+// The terms of service and their effective date exist together or not at all (documentsOf), checked on the merged
+// state of a request that names either: one request may set both. Removing the text removes the date.
+function termsRefusal(
+	stored: InstanceAdminValues,
+	changes: Map<AdminName, string | null>,
+	final: Map<string, string>
+): string | null {
+	if (!changes.has('terms_of_service') && !changes.has(DATE)) {
+		return null
+	}
+	if (changes.get('terms_of_service') === null) {
+		final.delete(DATE)
+		return null
+	}
+	const text = final.has('terms_of_service')
+	const date = final.has(DATE)
+	if (text && !date) {
+		return changes.get(DATE) === null && stored[DATE] !== undefined
+			? 'terms_of_service_effective_date cannot be removed while terms_of_service stays; remove terms_of_service'
+			: 'terms_of_service needs terms_of_service_effective_date'
+	}
+	if (date && !text) {
+		return 'no terms_of_service to date'
+	}
+	return null
+}
+
+// POST /admin/instance (`kopje-admin instance`), Access only (AUTH-5): sets or removes (null) the public settings in
+// one transaction, refused whole if any value is. Only the names whose value changes are written and logged
+// ('update_setting' or 'remove_setting', target Setting; values are not logged); a document's stamp is set with each
+// change of it and removed with it, so an identical resubmission changes nothing (as Mastodon leaves a Setting saved
+// with its value), and a converted document stays unstamped until it is edited.
+export const setInstanceSettings = writeOperation<
+	{ authority: ImportAuthority; values: unknown; now: number },
+	SetInstanceSettingsResult
+>((db, { authority, values, now }) => {
+	const refused = accessAdminRefusal(db, authority, 'only an Access admin sets the instance settings')
+	if (refused !== null || authority.kind !== 'access') {
+		return { ok: false, code: 'wrong-authority', message: refused ?? 'only an Access admin sets the instance settings' }
+	}
+	const invalid = (message: string) => ({ ok: false as const, code: 'invalid-instance-setting' as const, message })
+	if (typeof values !== 'object' || values === null || Array.isArray(values)) {
+		return invalid('expected {"values": {"<name>": string | null}}')
+	}
+	const changes = new Map<AdminName, string | null>()
+	for (const [name, raw] of Object.entries(values)) {
+		if (!(INSTANCE_ADMIN_NAMES as readonly string[]).includes(name)) {
+			return invalid(`unknown setting ${JSON.stringify(name)}; names: ${INSTANCE_ADMIN_NAMES.join(', ')}`)
+		}
+		const value = adminValue(name as AdminName, raw)
+		if (value !== null && typeof value === 'object') {
+			return invalid(value.refused)
+		}
+		changes.set(name as AdminName, value)
+	}
+	const stored = adminValues(db)
+	const final = new Map(Object.entries(stored))
+	for (const [name, value] of changes) {
+		if (value === null) {
+			final.delete(name)
+		} else {
+			final.set(name, value)
+		}
+	}
+	const terms = termsRefusal(stored, changes, final)
+	if (terms !== null) {
+		return invalid(terms)
+	}
+	const at = new Date(now).toISOString()
+	for (const name of INSTANCE_ADMIN_NAMES) {
+		const value = final.get(name)
+		if (value === stored[name]) {
+			continue
+		}
+		if (value === undefined) {
+			db.run('DELETE FROM instance_settings WHERE name = ?', name)
+		} else {
+			db.run('INSERT OR REPLACE INTO instance_settings (name, value) VALUES (?, ?)', name, value)
+		}
+		const stamp = STAMPED[name as keyof typeof STAMPED] as string | undefined
+		if (stamp !== undefined) {
+			if (value === undefined) {
+				db.run('DELETE FROM instance_settings WHERE name = ?', stamp)
+			} else {
+				db.run('INSERT OR REPLACE INTO instance_settings (name, value) VALUES (?, ?)', stamp, at)
+			}
+		}
+		logAction(
+			db,
+			authority,
+			value === undefined ? 'remove_setting' : 'update_setting',
+			{ type: 'Setting', id: name },
+			{},
+			now
+		)
+	}
+	return { ok: true, values: adminValues(db) }
+})

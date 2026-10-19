@@ -1,8 +1,11 @@
 import { type PageQuery, edgeRangeSql } from './accounts'
+import { admit, ARRAY_ANSWER_BYTES } from './answer-budget'
 import { domainCoveredSql, hostCoveredSql, MAX_BLOCK_LABELS } from './audience'
+import { authorize, type Authorized, type Credential } from './auth'
 import { readOperation, writeOperation } from './operation'
 import type { Db } from '../db/sql'
 import { blockedDomain, hostDomain } from '../platform/domain-name'
+import { sha256Hex } from '../platform/sha256'
 
 // Instance domain blocks (R38, VIS-30; Mastodon's DomainBlock), migration 0046_instance_domain_blocks. Each Store
 // operation commits in one transaction and fetches nothing. A host's rule is its longest matching block (audience.ts
@@ -269,3 +272,88 @@ export function actorDomainBlocked(db: Db, uri: string): boolean {
 export const inboundDomainBlocked = readOperation<{ uri: string }, boolean>((db, { uri }) =>
 	actorDomainBlocked(db, uri)
 )
+
+// ---- The public block list (GET /api/v1/instance/domain_blocks; Mastodon's Api::V1::Instances::DomainBlocksController)
+
+// One listed block, as Mastodon's REST::DomainBlockSerializer: the domain obfuscated when the block says so, the
+// SHA-256 of the stored domain, and the public comment only when the rationale is shown. At most about 6.4 KB: a domain
+// of MAX_DOMAIN_LENGTH, a digest of 64 and a public comment of MAX_BLOCK_COMMENT (admin-domain-blocks.ts, the only
+// writer) characters at up to 6 JSON bytes each (test/instance-reads.test.ts measures it).
+export type PublicDomainBlock = { domain: string; digest: string; severity: 'suspend'; comment: string | null }
+
+// Mastodon's DomainBlock#public_domain (app/models/domain_block.rb:89-102): with r = length / 4 (integer division),
+// each character at an index i with r < i < length - r becomes '*', except '.'.
+export function publicDomain(domain: string): string {
+	const chars = [...domain]
+	const visible = Math.floor(chars.length / 4)
+	return chars.map((char, i) => (i > visible && i < chars.length - visible && char !== '.' ? '*' : char)).join('')
+}
+
+// Suspend blocks read per query, in domain order.
+const PUBLIC_BLOCK_CHUNK = 500
+
+// The suspend blocks in domain order (SQLite's binary order), a chunk at a time from the partial index of 0049 (named,
+// as availableSql names its sibling), each chunk read only once the one before is used up. noop blocks are never
+// visited: the index holds suspends only.
+function* publicBlocks(db: Db, rationale: boolean): Generator<PublicDomainBlock> {
+	let after = ''
+	for (;;) {
+		const rows = db.all<{ domain: string; obfuscate: number; public_comment: string | null }>(
+			`SELECT domain, obfuscate, public_comment FROM instance_domain_blocks INDEXED BY instance_domain_blocks_public
+			WHERE severity = 'suspend' AND domain > ?1 ORDER BY domain LIMIT ?2`,
+			after,
+			PUBLIC_BLOCK_CHUNK
+		)
+		for (const row of rows) {
+			yield {
+				domain: row.obfuscate === 1 ? publicDomain(row.domain) : row.domain,
+				digest: sha256Hex(row.domain),
+				severity: 'suspend',
+				comment: rationale ? row.public_comment : null,
+			}
+		}
+		const last = rows.at(-1)
+		if (last === undefined || rows.length < PUBLIC_BLOCK_CHUNK) {
+			return
+		}
+		after = last.domain
+	}
+}
+
+// The public block list, as Mastodon's controller serves it: a suspended user's token is refused first
+// (require_not_suspended!, 403), then show_domain_blocks decides (absent: disabled): `all` lists to anyone, `users` to
+// a user's valid token, `disabled` to no one (null: Mastodon's empty 404). An unknown, expired or stale token and an app
+// token read as anonymous. show_domain_blocks_rationale decides the comments alike. RES-3: the blocks are admitted
+// whole in domain order within ARRAY_ANSWER_BYTES, with no continuation; rows read are at most the admitted ones and
+// one chunk.
+export const publicDomainBlocks = readOperation<
+	{ credential: Credential | null },
+	Authorized<PublicDomainBlock[] | null>
+>((db, { credential }) => {
+	let user = false
+	if (credential !== null) {
+		const auth = authorize(db, credential)
+		if (auth.status === 'suspended') {
+			return auth
+		}
+		user = auth.status === 'ok' && auth.viewer.accountId !== null
+	}
+	const settings = new Map(
+		db
+			.all<{ name: string; value: string }>(
+				"SELECT name, value FROM instance_settings WHERE name IN ('show_domain_blocks', 'show_domain_blocks_rationale')"
+			)
+			.map((row) => [row.name, row.value])
+	)
+	const shown = (name: string) => {
+		const value = settings.get(name)
+		return value === 'all' || (value === 'users' && user)
+	}
+	if (!shown('show_domain_blocks')) {
+		return { status: 'ok', value: null }
+	}
+	return {
+		status: 'ok',
+		value: admit(publicBlocks(db, shown('show_domain_blocks_rationale')), ARRAY_ANSWER_BYTES, true).items,
+	}
+})
