@@ -7,7 +7,7 @@ import { adminClaims, adminHarness, adminTeam, setTeamAccess, type AccessTeam } 
 import { json, setSetting, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { BUILD, migratedStore, rejectionOf } from './helpers'
-import { ACCESS, dumpViaRpc, importViaRpc, setAccess } from './ops-helpers'
+import { ACCESS, beginImport, dumpViaRpc, importChunks, importViaRpc, resetImport, setAccess } from './ops-helpers'
 import { INSTANCE_ADMIN_NAMES, setInstanceSettings } from '../src/domain/instance'
 import type { StoreStub } from '../src/platform/store-client'
 import { INSTANCE_SETTING_BOUNDS } from '../src/platform/stored-bounds'
@@ -296,5 +296,20 @@ describe('instance settings are data', () => {
 		}
 		expect(await values(target)).toEqual({})
 		expect((await target.config(BUILD)).values).toMatchObject({ domain: 'target.example' })
+	})
+
+	it('are removed by an import-reset of an import in progress', async () => {
+		const source = await store()
+		await set(source, { title: 'Herd', privacy_policy: '<p>Policy</p>' })
+		const { text } = await dumpViaRpc(source)
+		const target = await store()
+		const id = await beginImport(target, text)
+		let seq = 0
+		for (const chunk of await importChunks(text, 64 * 1024)) {
+			expect(await target.importChunk(BUILD, ACCESS, id, ++seq, chunk)).toMatchObject({ ok: true })
+		}
+		expect(await sql(target, "SELECT name FROM instance_settings WHERE name = 'title'")).toEqual([{ name: 'title' }])
+		expect(await resetImport(target, id)).toMatchObject({ ok: true, done: true })
+		expect(await values(target)).toEqual({})
 	})
 })
