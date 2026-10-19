@@ -1,5 +1,3 @@
-import { runInDurableObject } from 'cloudflare:test'
-
 import { describe, expect, it } from 'vitest'
 
 import { setSetting, sql } from './api-helpers'
@@ -7,10 +5,11 @@ import { mastodonFlag, mastodonInstanceActor, misskeyFlag, misskeySystemActor } 
 import { LOCAL, MASTODON, mastodonActor, type TestActor } from './inbox-helpers'
 import { accountId, ALICE, ALICE_URI, DAVE, DAVE_URI, type Setup, setup } from './inbox-status-helpers'
 import { storeReceive } from './inbox-store-helpers'
+import { rowsRead } from './read-helpers'
 import { seedStatus } from './status-helpers'
-import { Db } from '../src/db/sql'
 import { FOLLOWER_PROBE, remoteReportStatusIds } from '../src/domain/audience'
 import type { InboundActivity } from '../src/domain/inbox'
+import { readOperation } from '../src/domain/operation'
 import { MAX_REMOTE_REPORT_COMMENT, MAX_REPORT_STATUSES, MAX_UNRESOLVED_REMOTE_REPORTS } from '../src/domain/reports'
 import { ACTIVITY_ID_LIMIT, withinIdentityBound } from '../src/platform/identity-bounds'
 import { sha256Hex } from '../src/security/tokens'
@@ -77,6 +76,30 @@ async function statusOf(
 function flagOf(id: string, objects: string[], content = ''): Extract<InboundActivity, { type: 'Flag' }> {
 	return { type: 'Flag', id, objects, content }
 }
+
+// `count` accepted followers of dave on far.example (account ids 4000...), in id order.
+async function seedFarFollowers(t: Setup, count: number): Promise<void> {
+	await sql(
+		t.store,
+		`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+		INSERT INTO accounts (id, uri, username, domain)
+		SELECT CAST(400000000000000000 + i AS TEXT), 'https://far.example/users/f' || i, 'f' || i, 'far.example' FROM n`,
+		count
+	)
+	await sql(
+		t.store,
+		`INSERT INTO follows (account_id, target_account_id, state)
+		SELECT id, ?, 'accepted' FROM accounts WHERE domain = 'far.example'`,
+		DAVE
+	)
+}
+
+// The remote reporter rule over dave's private status `id` for a reporter on mastodon.example, which no follower
+// there admits.
+const probe = readOperation<string, null>((db, id) => {
+	expect(remoteReportStatusIds(db, 'mastodon.example', DAVE, [id])).toEqual([])
+	return null
+})
 
 // Stores the actor (a Flag naming nothing Kopje holds files nothing) and returns its account id.
 async function stored(t: Setup, actor: TestActor): Promise<string> {
@@ -298,18 +321,7 @@ describe('Flag: the remote reporter status rule (R34, remoteReportableSql)', () 
 		const reporter = await stored(t, actor)
 		const closed = await statusOf(t, 'private')
 		// More than a probe's followers of dave, none on the domain, ahead of any follow from it.
-		await sql(
-			t.store,
-			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1001)
-				INSERT INTO accounts (id, uri, username, domain)
-				SELECT CAST(400000000000000000 + i AS TEXT), 'https://far.example/users/f' || i, 'f' || i, 'far.example' FROM n`
-		)
-		await sql(
-			t.store,
-			`INSERT INTO follows (account_id, target_account_id, state)
-				SELECT id, ?, 'accepted' FROM accounts WHERE domain = 'far.example'`,
-			DAVE
-		)
+		await seedFarFollowers(t, 1001)
 		// The domain's accounts probe finds the reporter's follow past the followers' window.
 		await sql(
 			t.store,
@@ -343,37 +355,8 @@ describe('Flag: the follower probe reads a bounded window (RES-7, hasFollowerOn)
 		const measure = async (followers: number) => {
 			const t = await world()
 			const closed = await statusOf(t, 'private')
-			await sql(
-				t.store,
-				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
-					INSERT INTO accounts (id, uri, username, domain)
-					SELECT CAST(400000000000000000 + i AS TEXT), 'https://far.example/users/f' || i, 'f' || i, 'far.example' FROM n`,
-				followers
-			)
-			await sql(
-				t.store,
-				`INSERT INTO follows (account_id, target_account_id, state)
-					SELECT id, ?, 'accepted' FROM accounts WHERE domain = 'far.example'`,
-				DAVE
-			)
-			return runInDurableObject(t.store, (_instance, state) => {
-				let read = 0
-				const real = state.storage.sql
-				const counting = {
-					exec: (query: string, ...params: SqlStorageValue[]) => {
-						const cursor = real.exec(query, ...params)
-						return {
-							toArray: () => {
-								const rows = cursor.toArray()
-								read += cursor.rowsRead
-								return rows
-							},
-						}
-					},
-				} as unknown as SqlStorage
-				expect(remoteReportStatusIds(new Db(counting), 'mastodon.example', DAVE, [closed.id])).toEqual([])
-				return read
-			})
+			await seedFarFollowers(t, followers)
+			return rowsRead(t, probe, closed.id)
 		}
 		const few = await measure(1_000)
 		const many = await measure(100_000)

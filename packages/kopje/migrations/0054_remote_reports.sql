@@ -20,9 +20,10 @@
 --   reports_pair_state           a reported account's reports by reporter and state: the admin's list filtered by
 --                                both (listAdminReports) and a local suspension's walk of its reporters.
 --
--- The file also fails before any write (report_ids_within_18_digits) when a report or a retained reference would
--- start the counter above 999,999,999,999,999,998: a report's API id stays within 18 digits, as reads of a report by
--- id (reports.ts reportRow) and the Access admin's report link require.
+-- A report's API id stays within 18 digits, as reads of a report by id (reports.ts reportRow) and the Access admin's
+-- report link require: the file fails before any write (report_ids_within_18_digits) when a report or a retained
+-- reference would start the counter above 999,999,999,999,999,998, and the CHECK report_id_within_18_digits refuses
+-- any report past 999,999,999,999,999,999, so a writer's transaction fails whole once the ids are used up.
 --
 -- Rebuilding a parent table would delete its children (0000_initial): notifications.report_id cascades from reports
 -- (0040) and push_deliveries from notifications, and DROP TABLE deletes its rows first. So the file first fails, before
@@ -70,7 +71,7 @@ DROP TABLE reports_0054_check;
 UPDATE notifications SET type = 'admin.report#' || report_id, report_id = NULL WHERE report_id IS NOT NULL;
 
 CREATE TABLE reports_0054 (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id INTEGER PRIMARY KEY AUTOINCREMENT CONSTRAINT report_id_within_18_digits CHECK (id <= 999999999999999999),
   account_id TEXT NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,
   target_account_id TEXT NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,
   status_ids TEXT NOT NULL DEFAULT '[]' CONSTRAINT report_status_ids_within_100_ids_and_2101_bytes

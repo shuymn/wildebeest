@@ -99,8 +99,8 @@ function ruleFor(db: Db, domain: string): BlockRow | undefined {
 }
 
 // Whether the block that rules `domain` (ruleFor) rejects reports (Mastodon's DomainBlock.reject_reports?,
-// app/models/domain_block.rb:62-64): an inbound Flag from it files nothing (reports.ts fileRemoteReports). A nearer block
-// without reject_reports, a noop included, exempts its subdomains from a parent's.
+// app/models/domain_block.rb:62-64): an inbound Flag from it files nothing (reports.ts fileRemoteReports). A nearer
+// block without reject_reports, a noop included, exempts its subdomains from a parent's.
 export function reportsRejected(db: Db, domain: string): boolean {
 	return ruleFor(db, domain)?.reject_reports === 1
 }

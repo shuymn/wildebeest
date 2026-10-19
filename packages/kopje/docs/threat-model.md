@@ -195,7 +195,9 @@ against their own instance. TLS is assumed between all parties.
   which the column's CHECK holds for dumps too (`test/inbox-flag.test.ts`). Report ids are never given twice: the id counter starts
   above every retained reference (the reports, the moderation log's Report targets, both job tables' bounds), and the
   upgrade is held, writing nothing, when one would start it past the 18 digits a report's API id has
-  (`report_ids_within_18_digits`; `test/migrations.test.ts` (0054)). A Follow has generations: a superseded, undone, refused or blocked Follow id is recorded as retracted, so
+  (`report_ids_within_18_digits`), and a report past 999,999,999,999,999,999 fails its CHECK
+  (`report_id_within_18_digits`): once the ids are used up, every new report is refused, its writer's transaction
+  failing whole (`test/migrations.test.ts` (0054)). A Follow has generations: a superseded, undone, refused or blocked Follow id is recorded as retracted, so
   no late Undo, Accept, Reject or replay reaches a newer generation, and no Accept or Reject is recorded twice; an
   answer's id derives from the Follow it answers; a new generation cancels the earlier generations' answers no claim
   has taken (NET-2). A Move is a job keyed by its id that never moves a follow made after

@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { adminClaims, adminHarness, adminTeam, setTeamAccess } from './access-helpers'
 import { type ApiHarness, bearer, form, json, login, registerApp, setSetting, sql } from './api-helpers'
 import { NOW } from './app-helpers'
+import { mastodonFlag } from './fixtures/flags'
 import { BUILD } from './helpers'
 import { mastodonActor, type TestActor } from './inbox-helpers'
 import { ALICE, type Setup, setup } from './inbox-status-helpers'
@@ -81,6 +82,29 @@ async function get<T>(h: ApiHarness, path: string, token: string | null): Promis
 async function reportsShown(h: ApiHarness, user: User): Promise<[string, string][]> {
 	const { body } = await get<NotificationBody[]>(h, '/api/v1/notifications', user.token)
 	return body.filter((n) => n.type === 'admin.report').map((n) => [n.account.id, n.report!.id])
+}
+
+// A SqlStorage over `real` that counts the rows each statement reads, whether its rows or its rowsWritten are taken.
+function countingSql(real: SqlStorage): { sql: SqlStorage; read: () => number } {
+	let read = 0
+	const sql = {
+		exec: (query: string, ...params: SqlStorageValue[]) => {
+			const cursor = real.exec(query, ...params)
+			return {
+				toArray: () => {
+					const rows = cursor.toArray()
+					read += cursor.rowsRead
+					return rows
+				},
+				get rowsWritten() {
+					const written = cursor.rowsWritten
+					read += cursor.rowsRead
+					return written
+				},
+			}
+		},
+	} as unknown as SqlStorage
+	return { sql, read: () => read }
 }
 
 const stored = (store: StoreStub) =>
@@ -177,14 +201,7 @@ describe('admin.report: who is notified (ReportService#notify_staff!)', () => {
 		const t = await setup()
 		await setSetting(t.store, 'admin_email', 'alice@mail.example')
 		const bob = await mastodonActor(t.web, 'bob')
-		const flag = {
-			'@context': 'https://www.w3.org/ns/activitystreams',
-			id: `${bob.uri}#flags/1`,
-			type: 'Flag',
-			actor: bob.uri,
-			content: 'spam',
-			object: ['https://kopje.test/ap/users/dave'],
-		}
+		const flag = mastodonFlag(bob, ['https://kopje.test/ap/users/dave'], 'spam', `${bob.uri}#flags/1`)
 		expect(await t.post(bob, flag)).toBe(202)
 		const reports = await sql<{ id: number; account_id: string }>(t.store, 'SELECT id, account_id FROM reports')
 		expect(reports).toEqual([{ id: expect.any(Number), account_id: expect.any(String) }])
@@ -473,29 +490,12 @@ describe('admin.report: the purge of reports, bounded (RES-6, RES-7)', () => {
 	const batch = (store: StoreStub, uri: string) =>
 		runInDurableObject(store, (_instance, state) => {
 			const real = state.storage.sql
-			let read = 0
-			const counting = {
-				exec: (query: string, ...params: SqlStorageValue[]) => {
-					const cursor = real.exec(query, ...params)
-					return {
-						toArray: () => {
-							const rows = cursor.toArray()
-							read += cursor.rowsRead
-							return rows
-						},
-						get rowsWritten() {
-							const written = cursor.rowsWritten
-							read += cursor.rowsRead
-							return written
-						},
-					}
-				},
-			} as unknown as SqlStorage
+			const { sql: counting, read } = countingSql(real)
 			const db = new Db(counting)
 			const changes = () => new Db(real).first<{ n: number }>('SELECT total_changes() AS n')!.n
 			const before = changes()
 			const more = state.storage.transactionSync(() => purgeBatch(db, uri, NOW))
-			return { wrote: changes() - before, read, more }
+			return { wrote: changes() - before, read: read(), more }
 		})
 
 	it("deletes a report notification's pushes child-first, every batch within PURGE_BATCH", async () => {
@@ -574,14 +574,7 @@ describe("admin.report: a remote reporter's purge, child-first and whole-batch b
 		const t = await setup()
 		await setSetting(t.store, 'admin_email', 'alice@mail.example')
 		const bob = await mastodonActor(t.web, 'bob')
-		const flag = {
-			'@context': 'https://www.w3.org/ns/activitystreams',
-			id: `${bob.uri}#flags/1`,
-			type: 'Flag',
-			actor: bob.uri,
-			content: 'spam',
-			object: ['https://kopje.test/ap/users/dave'],
-		}
+		const flag = mastodonFlag(bob, ['https://kopje.test/ap/users/dave'], 'spam', `${bob.uri}#flags/1`)
 		expect(await t.post(bob, flag)).toBe(202)
 		const id = (await sql<{ id: string }>(t.store, 'SELECT id FROM accounts WHERE uri = ?', bob.uri))[0]!.id
 		// No delete may cascade: a notification's delete aborts while a push names it, a report's while a notification
@@ -659,29 +652,12 @@ describe("admin.report: a remote reporter's purge, child-first and whole-batch b
 		for (let i = 0; i < 100 && first.result.jobsPending; i++) {
 			const next = await runInDurableObject(t.store, (_instance, state) => {
 				const real = state.storage.sql
-				let read = 0
-				const counting = {
-					exec: (query: string, ...params: SqlStorageValue[]) => {
-						const cursor = real.exec(query, ...params)
-						return {
-							toArray: () => {
-								const rows = cursor.toArray()
-								read += cursor.rowsRead
-								return rows
-							},
-							get rowsWritten() {
-								const written = cursor.rowsWritten
-								read += cursor.rowsRead
-								return written
-							},
-						}
-					},
-				} as unknown as SqlStorage
+				const { sql: counting, read } = countingSql(real)
 				const db = new Db(real)
 				const changes = () => db.first<{ n: number }>('SELECT total_changes() AS n')!.n
 				const [before, rows] = [changes(), rowsOf(db)]
 				const more = state.storage.transactionSync(() => purgeBatch(new Db(counting), bob.uri, NOW))
-				return { more, wrote: changes() - before, removed: rows - rowsOf(db), read }
+				return { more, wrote: changes() - before, removed: rows - rowsOf(db), read: read() }
 			})
 			batches.push(next)
 			if (!next.more) {

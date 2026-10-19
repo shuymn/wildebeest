@@ -561,8 +561,8 @@ export const listAdminReports = adminReadOperation<
 	AdminReportPage
 >(ADMIN_PERMISSION.manageReports, (db, { filter, page, present }, admin) => {
 	const ascending = page.minId !== undefined
-	// The index, and the equality on its leading columns (and the residual reporter): ?4 on, after the cursor's. The
-	// range and the order name reports.id, not the text id the columns answer.
+	// The index, and the equality on its leading columns: ?4 on, after the cursor's. The range and the order name
+	// reports.id, not the text id the columns answer.
 	const [index, keys, ...values] =
 		filter.targetAccountId !== null
 			? filter.accountId !== null

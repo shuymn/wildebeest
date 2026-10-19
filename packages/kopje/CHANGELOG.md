@@ -46,16 +46,12 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   still answers `{}` whatever the id.
 - Reports from other servers: an inbound `Flag` (what Mastodon sends when a user forwards a report, and Misskey when a
   moderator forwards one) files a report of each local account it names, and of a remote one only with a named status
-  of it that replies to a local account, as Mastodon does. The report's reporter is the remote actor (an instance or
-  system actor), its comment the Flag's first 5,000 characters, its category `other`; the named statuses are attached
-  while the remote reporter may see them (public and unlisted ones, private ones while the account has a follower on
-  that server, and any that mentions an account there). The OAuth admin is notified (`admin.report`) as for a local
-  report, and sees the report in the admin API with the remote reporter as its `account`.
-    - A Flag is read for its first 101 objects; an id or object past 4,096 bytes (JSON-escaped UTF-8) is ignored.
-    - A redelivered Flag files nothing again (one report per Flag id and account), where Mastodon files one per
-      delivery. A Flag whose id is not on its actor's server is ignored, where Mastodon files it without a uri.
-    - One remote actor may have at most 100 unresolved reports: a Flag that would pass that files nothing. Several
-      actors of one server each have their own 100.
+  of it that replies to a local account, as Mastodon does. Its reporter is the remote actor, its category `other`; the
+  named statuses it may attach and what the admin is shown: R34 and R37 in [docs/visibility.md](docs/visibility.md).
+  The OAuth admin is notified (`admin.report`) as for a local report.
+    - Its bounds (101 objects, 4,096-byte ids, a 5,000-character comment, 100 unresolved reports per remote actor)
+      and where it differs from Mastodon (a redelivery or a Flag whose id is not on its actor's server files nothing):
+      ID-6, ID-7, RES-7 and the accepted risks in [docs/threat-model.md](docs/threat-model.md).
 
 ### Changed
 
@@ -109,10 +105,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - A remote account's purge deletes the pushes of its notifications before the notifications, and the reports it made
   with theirs, so a batch never removes more than its 500 rows through a cascade.
 - Stored format (migration `0054_remote_reports`): a report's reporter may be any account; a report id is never given
-  twice (also after the newest report is deleted); one report per Flag id and reported account; a report's comment
-  holds at most 20,000 bytes (and 5,000 code points up to any NUL), its uri at most 4,096 JSON-escaped bytes and its
-  `status_ids` at most 100 ids in 2,101 bytes. A dump past these is refused ([docs/dump-format.md](docs/dump-format.md)). Every
-  report, its notifications and their pushes keep their ids.
+  twice and stays within 18 digits; one report per Flag id and reported account; the comment, uri and `status_ids`
+  have stored bounds ([docs/dump-format.md](docs/dump-format.md)), and a dump past them is refused. Every report, its
+  notifications and their pushes keep their ids.
 - The admin's list of reports filtered by both reporter and reported account reads its own index, however many others
   report that account.
 
@@ -148,15 +143,11 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       2,000,000 favourites each holding a Like id, the whole upgrade took 7.6 to 8.0 seconds in four runs in workerd's local Durable
       Object SQLite, within the 20 seconds an upgrade may take.
     - `0054_remote_reports`: rebuilds `reports` for remote reporters (above), keeping every report, notification,
-      push and id. It fails before writing anything if a notification naming a report is not an `admin.report`, or if a report,
-      a moderation log entry or a moderation job names a report id that would start new ids past 18 digits (which the
-      admin API could not read); a
-      stored report past the new bounds (none of Kopje's writers makes one) fails the upgrade and leaves the Store
-      held until it is fixed and retried (`kopje-admin upgrade retry`, [docs/upgrade.md](docs/upgrade.md)).
-      On the benchmark store (1,000,000 accounts, 10,000 reports with their notifications, 10,000 moderation log
-      rows and 11,181 moderation jobs), the whole upgrade took 8.6 and 9.0 seconds in workerd's local Durable Object
-      SQLite; with `0049` to `0052` in the same upgrade, 8.8 to 22.7 seconds in four runs at load averages of 3.5 to
-      7.6 (one run past the 20 seconds an upgrade may take).
+      push and id. It fails before writing anything on the conditions its [header](migrations/0054_remote_reports.sql)
+      names; a stored report past the new bounds (none of Kopje's writers makes one) leaves the Store held until it is
+      fixed and retried (`kopje-admin upgrade retry`, [docs/upgrade.md](docs/upgrade.md)). With `0049` to `0052` in the
+      same upgrade on the benchmark store, the whole upgrade took 8.8 to 22.7 seconds in six runs at load averages of
+      3.5 to 9.9 (two runs past the 20 seconds an upgrade may take, under outside load; to be measured again).
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.17] - 2026-10-19

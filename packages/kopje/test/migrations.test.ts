@@ -5536,6 +5536,15 @@ describe('0054_remote_reports', () => {
 		tags: sql.exec("SELECT count(*) AS n FROM notifications WHERE type GLOB 'admin.report#*'").one().n,
 		tables: sql.exec("SELECT name FROM sqlite_schema WHERE name GLOB 'reports_0054*'").toArray(),
 	})
+	// A fresh Store upgraded to the file before 0054, seeded with 4 reports.
+	const withSeeded = (step: (sql: SqlStorage, state: DurableObjectState) => Promise<void>) =>
+		runInDurableObject(freshStore(), async (_instance, state) => {
+			const sql = state.storage.sql
+			expect(await kernel(state, BEFORE).upgrade()).toMatchObject({ ok: true })
+			seed(sql, 4)
+			await step(sql, state)
+		})
+
 	const sequence = (sql: SqlStorage) =>
 		sql.exec<{ seq: number }>("SELECT seq FROM sqlite_sequence WHERE name = 'reports'").toArray()[0]?.seq ?? null
 
@@ -5616,11 +5625,7 @@ describe('0054_remote_reports', () => {
 		['a remote job bound', 3, 3, 9, 9],
 		['only the live reports', 3, 3, 3, 4],
 	])('starts the id counter above %s', async (_name, logged, local, remote, expected) => {
-		const store = freshStore()
-		await runInDurableObject(store, async (_instance, state) => {
-			const sql = state.storage.sql
-			expect(await kernel(state, BEFORE).upgrade()).toMatchObject({ ok: true })
-			seed(sql, 4)
+		await withSeeded(async (sql, state) => {
 			sql.exec(
 				"INSERT INTO admin_actions (actor, action, target_type, target_id, created_at) VALUES ('access', 'resolve', 'Report', ?, 'x'), ('access', 'x', 'Report', 'not-a-number', 'x'), ('access', 'x', 'Account', '99', 'x')",
 				String(logged)
@@ -5656,11 +5661,7 @@ describe('0054_remote_reports', () => {
 		['digits and more', '12a', 4n],
 		['an empty id', '', 4n],
 	])('reads a log Report target of %s', async (_name, target, expected) => {
-		const store = freshStore()
-		await runInDurableObject(store, async (_instance, state) => {
-			const sql = state.storage.sql
-			expect(await kernel(state, BEFORE).upgrade()).toMatchObject({ ok: true })
-			seed(sql, 4)
+		await withSeeded(async (sql, state) => {
 			sql.exec(
 				"INSERT INTO admin_actions (actor, action, target_type, target_id, created_at) VALUES ('access', 'resolve', 'Report', ?, 'x')",
 				target
@@ -5700,11 +5701,7 @@ describe('0054_remote_reports', () => {
 			`INSERT INTO reports (id, account_id, target_account_id, uri, created_at) VALUES (999999999999999999, '${ADMIN}', '${CAROL}', 'u:last', 'x')`,
 		],
 	])('holds the upgrade, writing nothing, for %s', async (_name, statement) => {
-		const store = freshStore()
-		await runInDurableObject(store, async (_instance, state) => {
-			const sql = state.storage.sql
-			expect(await kernel(state, BEFORE).upgrade()).toMatchObject({ ok: true })
-			seed(sql, 4)
+		await withSeeded(async (sql, state) => {
 			sql.exec(statement)
 			const before = snapshot(sql)
 			const k = kernel(state, WITH)
@@ -5719,12 +5716,8 @@ describe('0054_remote_reports', () => {
 	})
 
 	// A counter seeded near the end of the 18-digit range still gives a remote report the admin reads and resolves.
-	it('files, shows and resolves a remote report at the last 18-digit id', async () => {
-		const store = freshStore()
-		await runInDurableObject(store, async (_instance, state) => {
-			const sql = state.storage.sql
-			expect(await kernel(state, BEFORE).upgrade()).toMatchObject({ ok: true })
-			seed(sql, 4)
+	it('refuses a Flag past the last 18-digit id whole, and files, shows and resolves one at it', async () => {
+		await withSeeded(async (sql, state) => {
 			sql.exec(
 				"INSERT INTO admin_actions (actor, action, target_type, target_id, created_at) VALUES ('access', 'resolve', 'Report', '999999999999999998', 'x')"
 			)
@@ -5735,15 +5728,17 @@ describe('0054_remote_reports', () => {
 				ADMIN
 			)
 			const db = new Db(sql)
-			const filed = state.storage.transactionSync(() =>
-				fileRemoteReports(
-					db,
-					{ id: CAROL, domain: 'r.example' },
-					{ id: 'https://r.example/flags/last', objects: ['https://kopje.test/ap/users/former'], content: 'x' },
-					NOW
+			const flag = (id: string, objects: string[]) =>
+				state.storage.transactionSync(() =>
+					fileRemoteReports(db, { id: CAROL, domain: 'r.example' }, { id, objects, content: 'x' }, NOW)
 				)
-			)
-			expect(filed).toEqual({ filed: true, reason: 'reported' })
+			const users = (...names: string[]) => names.map((name) => `https://kopje.test/ap/users/${name}`)
+			const before = { ...snapshot(sql), sequence: sequence(sql) }
+			// Two new reports need two ids, and only one is left: the second insert fails its CHECK, and the whole Flag
+			// with it (its first report and both notifications included).
+			expect(() => flag('https://r.example/flags/two', users('admin', 'former'))).toThrow(/report_id_within_18_digits/)
+			expect({ ...snapshot(sql), sequence: sequence(sql) }).toEqual(before)
+			expect(flag('https://r.example/flags/last', users('former'))).toEqual({ filed: true, reason: 'reported' })
 			const id = sql
 				.exec<{ id: string }>("SELECT CAST(id AS TEXT) AS id FROM reports WHERE uri = 'https://r.example/flags/last'")
 				.one().id
@@ -5759,6 +5754,10 @@ describe('0054_remote_reports', () => {
 				status: 'ok',
 				value: { status: 'ok', report: { id, action_taken: true } },
 			})
+			// The ids are used up: a further report is refused whole.
+			const after = snapshot(sql)
+			expect(() => flag('https://r.example/flags/more', users('admin'))).toThrow(/report_id_within_18_digits/)
+			expect(snapshot(sql)).toEqual(after)
 		})
 	})
 
