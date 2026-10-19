@@ -767,12 +767,13 @@ describe('second review: deletion, keys and generations', () => {
 		expect(await count(t.store, 'SELECT 1 FROM outbound_activities')).toBe(1)
 	})
 
-	it('purges the endorsements of the account and the notes on it in bounded batches too (RES-6)', async () => {
+	it('purges the endorsements of the account and the notes and dismissals on it in bounded batches too (RES-6)', async () => {
 		const t = await setup()
 		const bob = await mastodonActor(t.web, 'bob')
 		await t.post(bob, follow(bob))
 		const bobId = (await accountId(t.store, bob.uri))!
-		// More local accounts than a batch, each following and endorsing bob, with a note on him.
+		// More local accounts than a batch, each following and endorsing bob, with a note on him, and each dismissing him
+		// from its suggestions.
 		const locals = PURGE_BATCH + 1
 		await sql(
 			t.store,
@@ -790,22 +791,26 @@ describe('second review: deletion, keys and generations', () => {
 			"INSERT INTO follows (account_id, target_account_id, state) SELECT id, ?, 'accepted' FROM accounts WHERE id GLOB '5*'",
 			"INSERT INTO account_pins (account_id, target_account_id) SELECT id, ? FROM accounts WHERE id GLOB '5*'",
 			"INSERT INTO account_notes (account_id, target_account_id, comment) SELECT id, ?, 'bob' FROM accounts WHERE id GLOB '5*'",
+			"INSERT INTO follow_recommendation_mutes (account_id, target_account_id) SELECT id, ? FROM accounts WHERE id GLOB '5*'",
 		]) {
 			await sql(t.store, query, bobId)
 		}
 		const left = async () => [
 			await count(t.store, 'SELECT 1 FROM account_pins'),
 			await count(t.store, 'SELECT 1 FROM account_notes'),
+			await count(t.store, 'SELECT 1 FROM follow_recommendation_mutes'),
 			await count(t.store, 'SELECT 1 FROM follows'),
 		]
 		t.web.fail(bob.uri, 410)
 		expect(await t.post(bob, deleteSelf(bob))).toBe(202)
 		// One batch writes at most PURGE_BATCH rows: the endorsements go first, before any follow is read.
-		const [pins, notes, edges] = await left()
+		const [pins, notes, dismissals, edges] = await left()
 		expect(pins).toBe(locals - PURGE_BATCH)
-		expect([notes, edges]).toEqual([locals, locals + 1])
+		expect([notes, dismissals, edges]).toEqual([locals, locals, locals + 1])
+		// Each cron run takes a bounded number of batches; two finish this purge.
 		await runScheduledJobs({ ...t.env, MAINTENANCE: 'off' } as Env, t.deps)
-		expect(await left()).toEqual([0, 0, 0])
+		await runScheduledJobs({ ...t.env, MAINTENANCE: 'off' } as Env, t.deps)
+		expect(await left()).toEqual([0, 0, 0, 0])
 		expect(await accountId(t.store, bob.uri)).toBeUndefined()
 	})
 
