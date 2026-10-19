@@ -152,6 +152,16 @@ describe('setInstanceSettings', () => {
 			expect(await set(s, { [name]: at }), name).toMatchObject({ ok: true })
 			expect((await values(s))[name]).toBe(at)
 		}
+		// The terms of service go with their date: at the bound and one byte past it.
+		const date = { terms_of_service_effective_date: '2026-11-01' }
+		expect(await set(s, { terms_of_service: `${DOCUMENT_AT}a`, ...date })).toEqual(
+			refusal('terms_of_service is at most 50000 bytes of HTML')
+		)
+		expect(await set(s, { terms_of_service: DOCUMENT_AT, ...date })).toMatchObject({ ok: true })
+		expect(await values(s)).toMatchObject({ terms_of_service: DOCUMENT_AT, ...date })
+		expect(await set(s, { terms_of_service: `${DOCUMENT_AT}a` })).toEqual(
+			refusal('terms_of_service is at most 50000 bytes of HTML')
+		)
 		// Blank (only space, tab, LF, VT, FF and CR) is refused; a Unicode space is text. NUL is removed.
 		expect(await set(s, { title: ' \t\n\v\f\r' })).toEqual(refusal('title is blank; send null to remove it'))
 		expect(await set(s, { title: '　' })).toMatchObject({ ok: true })
@@ -175,25 +185,42 @@ describe('setInstanceSettings', () => {
 	it("stores only what INSTANCE_SETTING_BOUNDS' writers keep, whatever the input", async () => {
 		const s = await store()
 		await runInDurableObject(s, (_instance, state) => {
-			const names = INSTANCE_ADMIN_NAMES.filter((name) => name !== 'terms_of_service_effective_date')
+			// The terms of service and their date are sent with a valid partner, so either may be accepted alone.
+			const partner: Record<string, Record<string, string>> = {
+				terms_of_service: { terms_of_service_effective_date: '2026-11-01' },
+				terms_of_service_effective_date: { terms_of_service: '<p>Terms</p>' },
+			}
+			const accepted = new Set<string>()
 			fc.assert(
-				fc.property(fc.constantFrom(...names), fc.string({ unit: 'binary', maxLength: 300 }), (name, raw) => {
-					// Run inside the transaction the operation would have; a refusal writes nothing, an acceptance only
-					// fixed points (the triggers would raise otherwise).
-					state.storage.transactionSync(() => {
-						const result = setInstanceSettings.run(state.storage.sql, {
-							authority: ACCESS,
-							values: { [name]: raw },
-							now: NOW,
+				fc.property(
+					fc.constantFrom(...INSTANCE_ADMIN_NAMES),
+					fc.oneof(
+						fc.constantFrom('all', 'users', 'disabled', ' a@example.com '),
+						fc.string({ unit: 'binary', maxLength: 300 }),
+						fc.date({ noInvalidDate: true }).map((d) => d.toISOString().slice(0, 10))
+					),
+					(name, raw) => {
+						// Run inside the transaction the operation would have; a refusal writes nothing, an acceptance only
+						// fixed points (the triggers would raise otherwise).
+						state.storage.transactionSync(() => {
+							const result = setInstanceSettings.run(state.storage.sql, {
+								authority: ACCESS,
+								values: { ...partner[name], [name]: raw },
+								now: NOW,
+							})
+							if (result.ok) {
+								accepted.add(name)
+								for (const [stored, value] of Object.entries(result.values)) {
+									const bound = INSTANCE_SETTING_BOUNDS[stored as keyof typeof INSTANCE_SETTING_BOUNDS]
+									expect(bound.writer(value), stored).toBe(value)
+								}
+							}
 						})
-						if (result.ok) {
-							const stored = result.values[name]
-							expect(stored === undefined || INSTANCE_SETTING_BOUNDS[name].writer(stored) === stored).toBe(true)
-						}
-					})
-				}),
-				{ numRuns: 300 }
+					}
+				),
+				{ numRuns: 600 }
 			)
+			expect([...accepted].sort()).toEqual([...INSTANCE_ADMIN_NAMES].sort())
 		})
 	}, 60_000)
 
