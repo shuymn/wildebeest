@@ -8,6 +8,7 @@
 		"Not read: instance settings (DISALLOW_UNAUTHENTICATED_API_ACCESS, limited federation mode), serializers that read the current user.",
 		"unresolved: the Ruby could not be read with certainty; the route is not compared until an exception says why.",
 		"params: the request parameters the action reads (names in Params form: a, a[], a[b], a[][b]); params.unresolved: reads it could not name.",
+		"entities: the fields each serializer of ENTITIES emits (optional: an if:/unless: decides); entities.unresolved: what could not be read.",
 		"On a Mastodon version bump: regenerate, review the new exceptions the tests report, and run a Claude + Codex audit for read-but-dropped parameters."
 	],
 	"routes": [
@@ -3331,5 +3332,298 @@
 			"user": false,
 			"params": { "names": ["baseUrl", "name", "publicKey", "serverId"], "unresolved": [] }
 		}
-	]
+	],
+	"entities": {
+		"REST::AccountSerializer": {
+			"fields": [
+				{ "name": "acct", "optional": false },
+				{ "name": "avatar", "optional": false },
+				{ "name": "avatar_static", "optional": false },
+				{ "name": "bot", "optional": false },
+				{ "name": "created_at", "optional": false },
+				{ "name": "discoverable", "optional": false },
+				{ "name": "display_name", "optional": false },
+				{ "name": "emojis", "optional": false },
+				{ "name": "fields", "optional": false },
+				{ "name": "followers_count", "optional": false },
+				{ "name": "following_count", "optional": false },
+				{ "name": "group", "optional": false },
+				{ "name": "header", "optional": false },
+				{ "name": "header_static", "optional": false },
+				{ "name": "hide_collections", "optional": false },
+				{ "name": "id", "optional": false },
+				{ "name": "indexable", "optional": false },
+				{ "name": "last_status_at", "optional": false },
+				{ "name": "limited", "optional": true },
+				{ "name": "locked", "optional": false },
+				{ "name": "memorial", "optional": true },
+				{ "name": "moved", "optional": true },
+				{ "name": "noindex", "optional": true },
+				{ "name": "note", "optional": false },
+				{ "name": "roles", "optional": true },
+				{ "name": "statuses_count", "optional": false },
+				{ "name": "suspended", "optional": true },
+				{ "name": "uri", "optional": false },
+				{ "name": "url", "optional": false },
+				{ "name": "username", "optional": false }
+			],
+			"unresolved": []
+		},
+		"REST::AccountSerializer::FieldSerializer": {
+			"fields": [
+				{ "name": "name", "optional": false },
+				{ "name": "value", "optional": false },
+				{ "name": "verified_at", "optional": false }
+			],
+			"unresolved": []
+		},
+		"REST::CredentialAccountSerializer": {
+			"fields": [
+				{ "name": "acct", "optional": false },
+				{ "name": "avatar", "optional": false },
+				{ "name": "avatar_static", "optional": false },
+				{ "name": "bot", "optional": false },
+				{ "name": "created_at", "optional": false },
+				{ "name": "discoverable", "optional": false },
+				{ "name": "display_name", "optional": false },
+				{ "name": "emojis", "optional": false },
+				{ "name": "fields", "optional": false },
+				{ "name": "followers_count", "optional": false },
+				{ "name": "following_count", "optional": false },
+				{ "name": "group", "optional": false },
+				{ "name": "header", "optional": false },
+				{ "name": "header_static", "optional": false },
+				{ "name": "hide_collections", "optional": false },
+				{ "name": "id", "optional": false },
+				{ "name": "indexable", "optional": false },
+				{ "name": "last_status_at", "optional": false },
+				{ "name": "limited", "optional": true },
+				{ "name": "locked", "optional": false },
+				{ "name": "memorial", "optional": true },
+				{ "name": "moved", "optional": true },
+				{ "name": "noindex", "optional": true },
+				{ "name": "note", "optional": false },
+				{ "name": "role", "optional": false },
+				{ "name": "roles", "optional": true },
+				{ "name": "source", "optional": false },
+				{ "name": "statuses_count", "optional": false },
+				{ "name": "suspended", "optional": true },
+				{ "name": "uri", "optional": false },
+				{ "name": "url", "optional": false },
+				{ "name": "username", "optional": false }
+			],
+			"unresolved": []
+		},
+		"REST::CredentialAccountSerializer#source": {
+			"fields": [
+				{ "name": "attribution_domains", "optional": false },
+				{ "name": "discoverable", "optional": false },
+				{ "name": "fields", "optional": false },
+				{ "name": "follow_requests_count", "optional": false },
+				{ "name": "hide_collections", "optional": false },
+				{ "name": "indexable", "optional": false },
+				{ "name": "language", "optional": false },
+				{ "name": "note", "optional": false },
+				{ "name": "privacy", "optional": false },
+				{ "name": "quote_policy", "optional": false },
+				{ "name": "sensitive", "optional": false }
+			],
+			"unresolved": []
+		},
+		"REST::StatusSerializer": {
+			"fields": [
+				{ "name": "account", "optional": false },
+				{ "name": "application", "optional": true },
+				{ "name": "bookmarked", "optional": true },
+				{ "name": "card", "optional": false },
+				{ "name": "content", "optional": true },
+				{ "name": "created_at", "optional": false },
+				{ "name": "edited_at", "optional": false },
+				{ "name": "emojis", "optional": false },
+				{ "name": "favourited", "optional": true },
+				{ "name": "favourites_count", "optional": false },
+				{ "name": "filtered", "optional": true },
+				{ "name": "id", "optional": false },
+				{ "name": "in_reply_to_account_id", "optional": false },
+				{ "name": "in_reply_to_id", "optional": false },
+				{ "name": "language", "optional": false },
+				{ "name": "media_attachments", "optional": false },
+				{ "name": "mentions", "optional": false },
+				{ "name": "muted", "optional": true },
+				{ "name": "pinned", "optional": true },
+				{ "name": "poll", "optional": false },
+				{ "name": "quote", "optional": false },
+				{ "name": "quote_approval", "optional": false },
+				{ "name": "quotes_count", "optional": false },
+				{ "name": "reblog", "optional": false },
+				{ "name": "reblogged", "optional": true },
+				{ "name": "reblogs_count", "optional": false },
+				{ "name": "replies_count", "optional": false },
+				{ "name": "sensitive", "optional": false },
+				{ "name": "spoiler_text", "optional": false },
+				{ "name": "tags", "optional": false },
+				{ "name": "text", "optional": true },
+				{ "name": "uri", "optional": false },
+				{ "name": "url", "optional": false },
+				{ "name": "visibility", "optional": false }
+			],
+			"unresolved": []
+		},
+		"REST::MediaAttachmentSerializer": {
+			"fields": [
+				{ "name": "blurhash", "optional": false },
+				{ "name": "description", "optional": false },
+				{ "name": "id", "optional": false },
+				{ "name": "meta", "optional": false },
+				{ "name": "preview_remote_url", "optional": false },
+				{ "name": "preview_url", "optional": false },
+				{ "name": "remote_url", "optional": false },
+				{ "name": "text_url", "optional": false },
+				{ "name": "type", "optional": false },
+				{ "name": "url", "optional": false }
+			],
+			"unresolved": []
+		},
+		"REST::PollSerializer": {
+			"fields": [
+				{ "name": "emojis", "optional": false },
+				{ "name": "expired", "optional": false },
+				{ "name": "expires_at", "optional": false },
+				{ "name": "id", "optional": false },
+				{ "name": "multiple", "optional": false },
+				{ "name": "options", "optional": false },
+				{ "name": "own_votes", "optional": true },
+				{ "name": "voted", "optional": true },
+				{ "name": "voters_count", "optional": false },
+				{ "name": "votes_count", "optional": false }
+			],
+			"unresolved": []
+		},
+		"REST::PreviewCardSerializer": {
+			"fields": [
+				{ "name": "author_name", "optional": false },
+				{ "name": "author_url", "optional": false },
+				{ "name": "authors", "optional": false },
+				{ "name": "blurhash", "optional": false },
+				{ "name": "description", "optional": false },
+				{ "name": "embed_url", "optional": false },
+				{ "name": "height", "optional": false },
+				{ "name": "html", "optional": false },
+				{ "name": "image", "optional": false },
+				{ "name": "image_description", "optional": false },
+				{ "name": "language", "optional": false },
+				{ "name": "provider_name", "optional": false },
+				{ "name": "provider_url", "optional": false },
+				{ "name": "published_at", "optional": false },
+				{ "name": "title", "optional": false },
+				{ "name": "type", "optional": false },
+				{ "name": "url", "optional": false },
+				{ "name": "width", "optional": false }
+			],
+			"unresolved": []
+		},
+		"REST::TagSerializer": {
+			"fields": [
+				{ "name": "featuring", "optional": true },
+				{ "name": "following", "optional": true },
+				{ "name": "history", "optional": false },
+				{ "name": "id", "optional": false },
+				{ "name": "name", "optional": false },
+				{ "name": "url", "optional": false }
+			],
+			"unresolved": []
+		},
+		"REST::NotificationSerializer": {
+			"fields": [
+				{ "name": "account", "optional": false },
+				{ "name": "created_at", "optional": false },
+				{ "name": "event", "optional": true },
+				{ "name": "filtered", "optional": true },
+				{ "name": "group_key", "optional": false },
+				{ "name": "id", "optional": false },
+				{ "name": "moderation_warning", "optional": true },
+				{ "name": "report", "optional": true },
+				{ "name": "status", "optional": true },
+				{ "name": "type", "optional": false }
+			],
+			"unresolved": []
+		},
+		"REST::NotificationGroupSerializer": {
+			"fields": [
+				{ "name": "annual_report", "optional": true },
+				{ "name": "event", "optional": true },
+				{ "name": "group_key", "optional": false },
+				{ "name": "latest_page_notification_at", "optional": true },
+				{ "name": "moderation_warning", "optional": true },
+				{ "name": "most_recent_notification_id", "optional": false },
+				{ "name": "notifications_count", "optional": false },
+				{ "name": "page_max_id", "optional": true },
+				{ "name": "page_min_id", "optional": true },
+				{ "name": "report", "optional": true },
+				{ "name": "sample_account_ids", "optional": false },
+				{ "name": "status_id", "optional": true },
+				{ "name": "type", "optional": false }
+			],
+			"unresolved": []
+		},
+		"REST::RelationshipSerializer": {
+			"fields": [
+				{ "name": "blocked_by", "optional": false },
+				{ "name": "blocking", "optional": false },
+				{ "name": "domain_blocking", "optional": false },
+				{ "name": "endorsed", "optional": false },
+				{ "name": "followed_by", "optional": false },
+				{ "name": "following", "optional": false },
+				{ "name": "id", "optional": false },
+				{ "name": "languages", "optional": false },
+				{ "name": "muting", "optional": false },
+				{ "name": "muting_notifications", "optional": false },
+				{ "name": "note", "optional": false },
+				{ "name": "notifying", "optional": false },
+				{ "name": "requested", "optional": false },
+				{ "name": "requested_by", "optional": false },
+				{ "name": "showing_reblogs", "optional": false }
+			],
+			"unresolved": []
+		},
+		"REST::ApplicationSerializer": {
+			"fields": [
+				{ "name": "id", "optional": false },
+				{ "name": "name", "optional": false },
+				{ "name": "redirect_uri", "optional": false },
+				{ "name": "redirect_uris", "optional": false },
+				{ "name": "scopes", "optional": false },
+				{ "name": "vapid_key", "optional": false },
+				{ "name": "website", "optional": false }
+			],
+			"unresolved": []
+		},
+		"REST::CredentialApplicationSerializer": {
+			"fields": [
+				{ "name": "client_id", "optional": false },
+				{ "name": "client_secret", "optional": false },
+				{ "name": "client_secret_expires_at", "optional": false },
+				{ "name": "id", "optional": false },
+				{ "name": "name", "optional": false },
+				{ "name": "redirect_uri", "optional": false },
+				{ "name": "redirect_uris", "optional": false },
+				{ "name": "scopes", "optional": false },
+				{ "name": "vapid_key", "optional": false },
+				{ "name": "website", "optional": false }
+			],
+			"unresolved": []
+		},
+		"REST::FilterSerializer": {
+			"fields": [
+				{ "name": "context", "optional": false },
+				{ "name": "expires_at", "optional": false },
+				{ "name": "filter_action", "optional": false },
+				{ "name": "id", "optional": false },
+				{ "name": "keywords", "optional": true },
+				{ "name": "statuses", "optional": true },
+				{ "name": "title", "optional": false }
+			],
+			"unresolved": []
+		}
+	}
 }

@@ -9,11 +9,13 @@
 //   guards  other require_* callbacks the action runs (informative, not compared)
 //   params  the request parameters the action reads (see "Request parameters" below), which
 //           test/mastodon-params.test.ts checks Kopje reads
+// and, for the serializers of ENTITIES, the fields they emit (see "Entity fields"), which
+// test-node/mastodon-entities.test.ts checks Kopje's response types carry.
 // Where the Ruby cannot be read with certainty (a conditional callback, an unknown routing statement, a controller
 // not found), the route carries `unresolved` with the reasons instead of a guess.
 //
 // It only reads the checkout: config/routes.rb (and the files it draws), app/controllers/api/** and the controllers of
-// OUTSIDE_API, the concerns they include, and the model/lib constants they name.
+// OUTSIDE_API, the concerns they include, the model/lib constants they name, and app/serializers.
 //
 // On a Mastodon version bump: regenerate the fixture, review every new exception the tests that read it report
 // (mastodon-access, mastodon-params, mastodon-entities), and run a Claude + Codex audit for parameters Kopje reads
@@ -1301,6 +1303,148 @@ function requestParams(route, checkout, cache, siblingPathParams) {
 	return { names: kept.toSorted(), unresolved: [...read.unresolved].toSorted() }
 }
 
+// ---- Entity fields ----
+
+// The fields the serializers of ENTITIES emit, which test-node/mastodon-entities.test.ts checks Kopje's response types
+// carry: `attribute`/`attributes` and `has_one`/`has_many`/`belongs_to` (named by `key:` when given), `optional` when
+// an `if:`/`unless:` decides whether the field is emitted. A class's own body only (an inner class such as
+// AccountSerializer::FieldSerializer is an entity of its own), after its superclass's fields when that is a serializer
+// of app/serializers. `<Class>#<method>` is the hash a method returns, read from its literal keys. What cannot be read
+// with certainty is `unresolved`.
+export const ENTITIES = [
+	'REST::AccountSerializer',
+	'REST::AccountSerializer::FieldSerializer',
+	'REST::CredentialAccountSerializer',
+	'REST::CredentialAccountSerializer#source',
+	'REST::StatusSerializer',
+	'REST::MediaAttachmentSerializer',
+	'REST::PollSerializer',
+	'REST::PreviewCardSerializer',
+	'REST::TagSerializer',
+	'REST::NotificationSerializer',
+	'REST::NotificationGroupSerializer',
+	'REST::RelationshipSerializer',
+	'REST::ApplicationSerializer',
+	'REST::CredentialApplicationSerializer',
+	'REST::FilterSerializer',
+]
+
+const DECLARATIONS = /^(attributes|attribute|has_one|has_many|belongs_to)\b\s*(.*)$/s
+
+/**
+ * @typedef {{ name: string, optional: boolean }} Field
+ * @typedef {{ fields: Field[], unresolved: string[] }} Entity
+ */
+
+// The lines of a class body (`class <name>` up to its `end`), the bodies of classes nested in it blanked.
+/** @param {string} text @param {string} name */
+function classBody(text, name) {
+	const lines = text.split('\n')
+	const start = lines.findIndex((line) => new RegExp(`^\\s*class ${escapeRegExp(name)}\\b`).test(line))
+	if (start < 0) return null
+	const indent = /^\s*/.exec(lines[start] ?? '')?.[0].length ?? 0
+	const end = lines.findIndex((line, i) => i > start && new RegExp(`^\\s{${indent}}end\\b`).test(line))
+	const body = lines.slice(start + 1, end < 0 ? lines.length : end)
+	/** @type {string[]} */
+	const own = []
+	let nested = -1
+	for (const line of body) {
+		const lead = /^\s*/.exec(line)?.[0].length ?? 0
+		if (nested >= 0) {
+			if (lead === nested && /^\s*end\b/.test(line)) nested = -1
+			own.push('')
+			continue
+		}
+		if (/^\s*class\s/.test(line)) {
+			nested = lead
+			own.push('')
+			continue
+		}
+		own.push(line)
+	}
+	return { lines: own, indent: indent + 2, superclass: /<\s*([\w:]+)/.exec(lines[start] ?? '')?.[1] ?? null }
+}
+
+/** @param {string} className */
+const serializerFile = (className) => classFile(className).replace('app/controllers/', 'app/serializers/')
+
+/**
+ * @param {string} checkout
+ * @param {string} entity
+ * @returns {Entity}
+ */
+export function entityFields(checkout, entity) {
+	const [className = '', method] = entity.split('#')
+	const parts = className.split('::')
+	// An inner class lives in its outer class's file.
+	const outer = parts.length > 2 && /Serializer$/.test(parts.at(-2) ?? '') ? parts.slice(0, -1).join('::') : className
+	const file = serializerFile(outer)
+	if (!existsSync(join(checkout, file))) {
+		return { fields: [], unresolved: [`${file} not found`] }
+	}
+	const text = stripComments(readFileSync(join(checkout, file), 'utf8'))
+	if (method !== undefined) {
+		return hashKeys(text, method, file)
+	}
+	const body = classBody(text, outer === className ? className : /** @type {string} */ (parts.at(-1)))
+	if (body === null) {
+		return { fields: [], unresolved: [`${file}: no class ${className}`] }
+	}
+	/** @type {Map<string, boolean>} */
+	const fields = new Map()
+	/** @type {string[]} */
+	const unresolved = []
+	const inherited = body.superclass
+	if (inherited !== null && inherited !== 'ActiveModel::Serializer') {
+		if (existsSync(join(checkout, serializerFile(inherited)))) {
+			const parent = entityFields(checkout, inherited)
+			for (const field of parent.fields) fields.set(field.name, field.optional)
+			unresolved.push(...parent.unresolved)
+		} else {
+			unresolved.push(`${file}: superclass ${inherited} not read`)
+		}
+	}
+	for (const { indent, text: stmt } of statements(body.lines.join('\n'))) {
+		const m = DECLARATIONS.exec(stmt)
+		if (m === null || indent !== body.indent) continue
+		const { positional, options } = callArgs(/** @type {string} */ (m[2]).replace(/^\((.*)\)$/s, '$1'))
+		const optional = options.if !== undefined || options.unless !== undefined
+		const names = m[1] === 'attributes' ? positional : positional.slice(0, 1)
+		if (names.length === 0 || names.some((n) => typeof n !== 'string')) {
+			unresolved.push(`${file}: \`${stmt}\``)
+			continue
+		}
+		for (const name of /** @type {string[]} */ (names)) {
+			const key = m[1] === 'attributes' ? name : typeof options.key === 'string' ? options.key : name
+			fields.set(key, (fields.get(key) ?? true) && optional)
+		}
+	}
+	return {
+		fields: [...fields].map(([name, optional]) => ({ name, optional })).toSorted((a, b) => (a.name < b.name ? -1 : 1)),
+		unresolved,
+	}
+}
+
+// The keys of the hash literal a method returns (its last expression).
+/** @param {string} text @param {string} method @param {string} file @returns {Entity} */
+function hashKeys(text, method, file) {
+	const body = actionBody(text, method)
+	const literalHash = body === null ? null : /\{([\s\S]*)\}\s*end\b/.exec(body)
+	if (literalHash === null) {
+		return { fields: [], unresolved: [`${file} ${method}: no hash literal returned`] }
+	}
+	/** @type {Field[]} */
+	const fields = []
+	for (const part of splitArgs(/** @type {string} */ (literalHash[1]).trim())) {
+		const key = /^(\w+):\s/.exec(part)?.[1]
+		if (key === undefined) {
+			return { fields: [], unresolved: [`${file} ${method}: unreadable \`${part}\``] }
+		}
+		fields.push({ name: key, optional: false })
+	}
+	return { fields: fields.toSorted((a, b) => (a.name < b.name ? -1 : 1)), unresolved: [] }
+}
+
 // ---- Output ----
 
 /** @param {string} checkout */
@@ -1346,9 +1490,11 @@ export function mastodonAccessTable(/** @type {string} */ checkout) {
 			'Not read: instance settings (DISALLOW_UNAUTHENTICATED_API_ACCESS, limited federation mode), serializers that read the current user.',
 			'unresolved: the Ruby could not be read with certainty; the route is not compared until an exception says why.',
 			'params: the request parameters the action reads (names in Params form: a, a[], a[b], a[][b]); params.unresolved: reads it could not name.',
+			'entities: the fields each serializer of ENTITIES emits (optional: an if:/unless: decides); entities.unresolved: what could not be read.',
 			'On a Mastodon version bump: regenerate, review the new exceptions the tests report, and run a Claude + Codex audit for read-but-dropped parameters.',
 		],
 		routes,
+		entities: Object.fromEntries(ENTITIES.map((entity) => [entity, entityFields(checkout, entity)])),
 	}
 }
 

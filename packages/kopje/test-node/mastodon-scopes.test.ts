@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { mastodonAccessTable } from '../scripts/mastodon-scopes.mjs'
+import { entityFields, mastodonAccessTable } from '../scripts/mastodon-scopes.mjs'
 
 // scripts/mastodon-scopes.mjs on a minimal Mastodon checkout: what it resolves and what it leaves unresolved.
 let dir: string
@@ -446,6 +446,78 @@ describe('mastodon-scopes.mjs request parameters', () => {
 		expect(params('/api/v1/measures/:id', 'PATCH')).toEqual({
 			names: [],
 			unresolved: [`${file} update: unsupported .to_unsafe_h \`params.to_unsafe_h)\``],
+		})
+	})
+})
+
+describe('mastodon-scopes.mjs entity fields', () => {
+	it("reads a serializer's own fields after its superclass's, inner classes apart, and a method's hash keys", async () => {
+		await checkout({
+			'app/serializers/rest/account_serializer.rb': [
+				'class REST::AccountSerializer < ActiveModel::Serializer',
+				'  attributes :id, :username,',
+				'             :note',
+				'',
+				'  has_one :moved_to_account, key: :moved, serializer: REST::AccountSerializer, if: :moved?',
+				'  has_many :emojis, serializer: REST::CustomEmojiSerializer',
+				'  attribute :silenced, key: :limited, if: :silenced?',
+				'',
+				'  class FieldSerializer < ActiveModel::Serializer',
+				'    attributes :name, :value, :verified_at',
+				'',
+				'    def value',
+				'      object.value',
+				'    end',
+				'  end',
+				'',
+				'  has_many :fields',
+				'',
+				'  def note',
+				'    attributes :not_a_field',
+				'  end',
+				'end',
+				'',
+			].join('\n'),
+			'app/serializers/rest/credential_account_serializer.rb': [
+				'class REST::CredentialAccountSerializer < REST::AccountSerializer',
+				'  attributes :source',
+				'  attributes(*EXTRA)',
+				'',
+				'  def source',
+				'    user = object.user',
+				'',
+				'    {',
+				'      privacy: user.setting_default_privacy,',
+				'      fields: object.fields.map(&:to_h),',
+				'    }',
+				'  end',
+				'end',
+				'',
+			].join('\n'),
+		})
+		const names = (entity: string) =>
+			(entityFields(dir, entity) as { fields: { name: string; optional: boolean }[] }).fields.map(
+				(f) => `${f.name}${f.optional ? '?' : ''}`
+			)
+		expect(names('REST::AccountSerializer')).toEqual([
+			'emojis',
+			'fields',
+			'id',
+			'limited?',
+			'moved?',
+			'note',
+			'username',
+		])
+		expect(names('REST::AccountSerializer::FieldSerializer')).toEqual(['name', 'value', 'verified_at'])
+		expect(entityFields(dir, 'REST::CredentialAccountSerializer')).toMatchObject({
+			unresolved: ['app/serializers/rest/credential_account_serializer.rb: `attributes(*EXTRA)`'],
+		})
+		expect(names('REST::CredentialAccountSerializer')).toContain('source')
+		expect(names('REST::CredentialAccountSerializer')).toContain('limited?')
+		expect(names('REST::CredentialAccountSerializer#source')).toEqual(['fields', 'privacy'])
+		expect(entityFields(dir, 'REST::MissingSerializer')).toEqual({
+			fields: [],
+			unresolved: ['app/serializers/rest/missing_serializer.rb not found'],
 		})
 	})
 })
