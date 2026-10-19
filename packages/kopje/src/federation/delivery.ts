@@ -10,7 +10,7 @@ import { errorFields } from '../platform/error-message'
 //   - The body is the stored activity, as application/activity+json (what Mastodon and Fedify send), signed by its
 //     author's key with draft-cavage HTTP Signatures and a Digest (Fedify's signRequest via the keyring). Fedify's
 //     own sending path (sendActivity, its queue) is not used: it follows redirects and owns retries and keys
-//     (test/fedify-usage.test.ts).
+//     (test-node/fedify-usage.test.ts).
 //   - The whole path from the claim (key loading, DNS, signing, POST, response) is budgeted: it ends after
 //     DELIVERY_TIMEOUT_MS or at the round's deadline inside the lease, whichever is first, and sends nothing after.
 //   - The answer is classified as Mastodon's DeliveryWorker does: 2xx delivered; 401, 408, 429, other 4xx is permanent
