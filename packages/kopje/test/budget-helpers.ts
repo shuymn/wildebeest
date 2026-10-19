@@ -2,6 +2,7 @@ import { expect } from 'vitest'
 
 import { type ApiHarness, sql } from './api-helpers'
 import { NOW } from './app-helpers'
+import { accountAtCap, statusAtCap } from './emoji-fixtures'
 import { MAX_BIO, maxFields } from './profile-fixtures'
 import { remoteAccount, type SeedStatus, seedStatus } from './status-helpers'
 import { ANSWER_BYTES } from '../src/domain/answer-budget'
@@ -17,9 +18,9 @@ export const DAY = 86_400_000
 let sequence = 700_000_000_000_000_000n
 export const nextId = () => String(sequence++)
 
-// A public remote status of about 0.97 MB of JSON: content of 20,000 escaping characters (and "needle", which search
-// finds), a poll of 100 choices of 1,000 and 4 attachments with descriptions of 10,000, each at its bound (RES-2).
-// Nine such pass ANSWER_BYTES, so a page of them is cut.
+// A public remote status of about 0.98 MB of JSON: content of 20,000 escaping characters (and "needle", which search
+// finds), a poll of 100 choices of 1,000, 4 attachments with descriptions of 10,000 and emojis at their presented
+// bound, each at its bound (RES-2). Nine such pass ANSWER_BYTES, so a page of them is cut.
 export async function bigStatus(
 	h: ApiHarness,
 	author: string,
@@ -33,6 +34,7 @@ export async function bigStatus(
 		published,
 		...extra,
 	})
+	await sql(h.store, 'UPDATE statuses SET emojis = ? WHERE id = ?', JSON.stringify(statusAtCap()), id)
 	await sql(
 		h.store,
 		`INSERT INTO polls (status_id, options, tallies, votes_count, voters_count, expires_at)
@@ -192,10 +194,11 @@ export async function maximalAccounts(h: ApiHarness, prefix: string, count: numb
 		const id = await remoteAccount(h.store, `${prefix}${String(i).padStart(3, '0')}`)
 		await sql(
 			h.store,
-			'UPDATE accounts SET note = ?, display_name = ?, raw = ? WHERE id = ?',
+			'UPDATE accounts SET note = ?, display_name = ?, raw = ?, emojis = ? WHERE id = ?',
 			MAX_BIO,
 			C.repeat(2048),
 			JSON.stringify({ type: 'Person', attachment: maxFields() }),
+			JSON.stringify(accountAtCap()),
 			id
 		)
 		ids.push(id)

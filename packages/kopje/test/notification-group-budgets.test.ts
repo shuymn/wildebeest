@@ -289,6 +289,9 @@ describe('grouped notifications within ANSWER_BYTES (RES-3)', () => {
 		await favourite(h, alice.id, fan, tuner)
 		const s2 = await seedStatus(h.store, { accountId: alice.id, visibility: 'public' })
 		await favourite(h, alice.id, x!, s2)
+		// Sized without emoji: the eight groups and T must leave G2 within the budget.
+		await sql(h.store, 'UPDATE statuses SET emojis = NULL')
+		await sql(h.store, 'UPDATE accounts SET emojis = NULL')
 		const path = '/api/v2/notifications?limit=20&min_id=0&expand_accounts=partial_avatars'
 		const groupsOf = (page: Answer<Grouped>) => page.body.notification_groups.map((group) => group.group_key)
 		const before = await answer<Grouped>(h, path, alice.token)
