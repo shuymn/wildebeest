@@ -434,8 +434,13 @@ const sorted = (names: Iterable<string>) => [...names].sort()
 // The categories put records that compareConversion does not iterate (verify-actual.js CATEGORIES).
 const unregistered = (categories: Iterable<string>) => sorted(categories).filter((c) => !CATEGORIES.includes(c))
 
-const cutover = (name: string) =>
-	sources('cli/lib/cutover', ['.js']).find((s) => s.path === `cli/lib/cutover/${name}`)?.text ?? ''
+function cutover(name: string): string {
+	const source = sources('cli/lib/cutover', ['.js']).find((s) => s.path === `cli/lib/cutover/${name}`)
+	if (source === undefined) {
+		throw new Error(`no cli/lib/cutover/${name}`)
+	}
+	return source.text
+}
 const files = parse({
 	convert: cutover('convert.js'),
 	verify: cutover('verify-actual.js'),

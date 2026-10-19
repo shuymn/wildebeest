@@ -219,6 +219,75 @@ function violations(all: readonly Source[], rules: readonly Rule[] = RULES): str
 	return found
 }
 
+// A source each rule flags in a module it does not allow, and a near miss it passes, in the order of RULES.
+const RULE_FIXTURES: readonly [name: string, flagged: string, passed: string][] = [
+	['reads blocks', "db.all('SELECT 1 FROM blocks b')", "db.all('SELECT 1 FROM blocks_archive b')"],
+	['reads mutes', "db.all('SELECT 1 FROM x JOIN mutes m ON true')", "db.all('SELECT mutes FROM accounts')"],
+	['reads domain_blocks', "db.all('SELECT 1 FROM main.domain_blocks d')", "db.all('SELECT 1 FROM x_domain_blocks d')"],
+	[
+		'judges suspension or deletion',
+		"db.all('SELECT 1 FROM accounts a WHERE a.suspended_at IS NOT NULL')",
+		"db.run('UPDATE accounts SET suspended_at = ?')",
+	],
+	[
+		'spells a set of visibilities',
+		"db.all(\"SELECT 1 FROM statuses WHERE visibility IN ('public', 'unlisted')\")",
+		'db.all(`SELECT 1 FROM statuses WHERE visibility IN ${DISTRIBUTABLE_SQL}`)',
+	],
+	[
+		'writes notifications',
+		"db.run('INSERT OR IGNORE INTO notifications (id) VALUES (1)')",
+		"db.run('DELETE FROM notifications WHERE id = ?')",
+	],
+	[
+		'writes outbound activities or deliveries',
+		"db.run('REPLACE INTO deliveries (id) VALUES (1)')",
+		"db.run('INSERT INTO push_deliveries (id) VALUES (1)')",
+	],
+	[
+		'writes status_mentions',
+		'db.run(\'INSERT INTO "status_mentions" (id) VALUES (1)\')',
+		"db.all('SELECT 1 FROM status_mentions')",
+	],
+	[
+		'expands followers into inboxes',
+		"db.all('SELECT a.inbox_url FROM accounts a JOIN follows f ON f.account_id = a.id')",
+		"f('SELECT 1 FROM follows', 'SELECT inbox_url FROM x')",
+	],
+	['reads shared inboxes', 'const url = row.shared_inbox_url', "db.all('SELECT a.inbox_url FROM accounts a')"],
+	[
+		'reads account_notes',
+		"db.all('SELECT note FROM account_notes')",
+		"db.run('INSERT INTO account_notes (id) VALUES (1)')",
+	],
+	[
+		'reads conversation_mutes',
+		"db.all('SELECT 1 FROM conversation_mutes')",
+		"db.run('INSERT INTO conversation_mutes (id) VALUES (1)')",
+	],
+	[
+		'reads or writes scheduled_statuses',
+		"db.run('UPDATE scheduled_statuses SET x = 1')",
+		"db.all('SELECT 1 FROM scheduled_statuses_archive')",
+	],
+	[
+		'reads or writes poll_votes',
+		"db.run('INSERT INTO poll_votes (id) VALUES (1)')",
+		"db.all('SELECT votes_count FROM polls')",
+	],
+	[
+		'reads or writes tag_follows',
+		"db.all('SELECT 1 FROM x JOIN tag_follows t ON true')",
+		"db.all('SELECT 1 FROM tags')",
+	],
+	['reads or writes reports', "db.all('SELECT 1 FROM reports r')", "db.all('SELECT reports FROM x')"],
+	[
+		'reads or writes quotes',
+		"db.run('UPDATE quote_requests SET x = 1')",
+		"db.all('SELECT quotes_count FROM statuses')",
+	],
+]
+
 describe('policy boundary', () => {
 	it('sees the source tree', () => {
 		expect(SOURCES.map((s) => s.path)).toEqual(expect.arrayContaining([POLICY, 'src/domain/timelines.ts']))
@@ -257,8 +326,18 @@ describe('policy boundary', () => {
 	guardFixtures(find, {
 		flagged: {
 			'a read in a template': ['db.all(`SELECT 1 FROM ${t} JOIN blocks b`)', 'src/domain/probe.ts reads blocks'],
+			...Object.fromEntries(
+				RULE_FIXTURES.map(([name, flagged]) => [name, [flagged, `src/domain/probe.ts ${name}`] as [string, string]])
+			),
 		},
-		passed: { 'a read named in a comment': '// SELECT 1 FROM blocks b\nf()' },
+		passed: {
+			'a read named in a comment': '// SELECT 1 FROM blocks b\nf()',
+			...Object.fromEntries(RULE_FIXTURES.map(([name, , passed]) => [name, passed])),
+		},
+	})
+
+	it('has a fixture for every rule', () => {
+		expect(RULE_FIXTURES.map(([name]) => name)).toEqual(RULES.map((rule) => rule.name))
 	})
 	guardFixtures(
 		find,
@@ -393,9 +472,23 @@ function g(
 	})
 })
 
-describe('recipient selection', () => {
-	const rule = (name: string) => RULES.find((r) => r.name === name)!.pattern
+// Whether the rule `name` flags `text` as the source of a module it does not allow, through violations().
+function flags(name: string, text: string): boolean {
+	const rule = RULES.find((r) => r.name === name)
+	expect(rule, name).toBeDefined()
+	return (
+		violations([{ path: 'src/domain/probe.ts', text }], rule === undefined ? [] : [{ ...rule, allowed: {} }]).length > 0
+	)
+}
 
+// `sql` as a string literal, in a quote it does not hold.
+function literal(sql: string): string {
+	const quote = ["'", '"', '`'].find((q) => !sql.includes(q))
+	expect(quote, sql).toBeDefined()
+	return `db.all(${quote}${sql}${quote})`
+}
+
+describe('recipient selection', () => {
 	it('finds follows turned into inboxes, in either order, and any read of a shared inbox', () => {
 		for (const sql of [
 			"SELECT DISTINCT COALESCE(NULLIF(a.shared_inbox_url, ''), a.inbox_url) FROM follows f JOIN accounts a",
@@ -403,22 +496,20 @@ describe('recipient selection', () => {
 			'SELECT a.inbox_url FROM accounts a WHERE a.id IN (SELECT account_id FROM "follows")',
 			'FROM follows f JOIN accounts a ON a.id = f.account_id WHERE f.state = 1 ORDER BY a.inbox_url',
 		]) {
-			expect(rule('expands followers into inboxes').test(sql), sql).toBe(true)
+			expect(flags('expands followers into inboxes', literal(sql)), sql).toBe(true)
 		}
-		expect(rule('reads shared inboxes').test('SELECT a.shared_inbox_url FROM accounts a')).toBe(true)
+		expect(flags('reads shared inboxes', literal('SELECT a.shared_inbox_url FROM accounts a'))).toBe(true)
 	})
 
 	it('does not join two strings or statements', () => {
-		expect(rule('expands followers into inboxes').test("'SELECT 1 FROM follows', 'SELECT inbox_url FROM x'")).toBe(
-			false
-		)
-		expect(rule('expands followers into inboxes').test('SELECT 1 FROM follows; SELECT inbox_url FROM x')).toBe(false)
-		expect(rule('expands followers into inboxes').test('SELECT inbox_url FROM deliveries')).toBe(false)
+		const rule = 'expands followers into inboxes'
+		expect(flags(rule, "f('SELECT 1 FROM follows', 'SELECT inbox_url FROM x')")).toBe(false)
+		expect(flags(rule, literal('SELECT 1 FROM follows; SELECT inbox_url FROM x'))).toBe(false)
+		expect(flags(rule, literal('SELECT inbox_url FROM deliveries'))).toBe(false)
 	})
 })
 
 describe('the guarded spellings', () => {
-	const rule = (name: string) => RULES.find((r) => r.name === name)!.pattern
 	const SPELLINGS = (t: string) => [t, `"${t}"`, `\`${t}\``, `[${t}]`, `main.${t}`, `main."${t}"`, `"main" . [${t}]`]
 
 	for (const [name, tables] of [
@@ -429,8 +520,8 @@ describe('the guarded spellings', () => {
 		it(`${name}: FROM and JOIN, any quoting, with or without main.`, () => {
 			for (const t of tables) {
 				for (const spelled of SPELLINGS(t)) {
-					expect(rule(name).test(`SELECT 1 FROM ${spelled} b`), spelled).toBe(true)
-					expect(rule(name).test(`SELECT 1 FROM x JOIN ${spelled} b ON true`), spelled).toBe(true)
+					expect(flags(name, literal(`SELECT 1 FROM ${spelled} b`)), spelled).toBe(true)
+					expect(flags(name, literal(`SELECT 1 FROM x JOIN ${spelled} b ON true`)), spelled).toBe(true)
 				}
 			}
 		})
@@ -445,7 +536,7 @@ describe('the guarded spellings', () => {
 			for (const t of tables) {
 				for (const spelled of SPELLINGS(t)) {
 					for (const verb of ['INSERT', 'insert or ignore', 'INSERT OR REPLACE', 'INSERT OR ABORT', 'REPLACE']) {
-						expect(rule(name).test(`${verb} INTO ${spelled} (id) VALUES (1)`), `${verb} ${spelled}`).toBe(true)
+						expect(flags(name, literal(`${verb} INTO ${spelled} (id) VALUES (1)`)), `${verb} ${spelled}`).toBe(true)
 					}
 				}
 			}
@@ -453,13 +544,13 @@ describe('the guarded spellings', () => {
 	}
 
 	it('does not mistake another table or a column for a guarded one', () => {
-		expect(rule('reads blocks').test('SELECT 1 FROM domain_blocks d')).toBe(false)
-		expect(rule('reads blocks').test('SELECT 1 FROM blocks_archive b')).toBe(false)
-		expect(rule('reads blocks').test('SELECT blocks FROM accounts')).toBe(false)
-		expect(rule('writes notifications').test('INSERT INTO notifications_seen (id) VALUES (1)')).toBe(false)
-		expect(rule('writes outbound activities or deliveries').test('INSERT INTO push_deliveries (id) VALUES (1)')).toBe(
-			false
-		)
+		expect(flags('reads blocks', literal('SELECT 1 FROM domain_blocks d'))).toBe(false)
+		expect(flags('reads blocks', literal('SELECT 1 FROM blocks_archive b'))).toBe(false)
+		expect(flags('reads blocks', literal('SELECT blocks FROM accounts'))).toBe(false)
+		expect(flags('writes notifications', literal('INSERT INTO notifications_seen (id) VALUES (1)'))).toBe(false)
+		expect(
+			flags('writes outbound activities or deliveries', literal('INSERT INTO push_deliveries (id) VALUES (1)'))
+		).toBe(false)
 	})
 })
 
