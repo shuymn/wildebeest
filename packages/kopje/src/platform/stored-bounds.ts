@@ -222,7 +222,7 @@ export const STORED_COLUMNS: Readonly<Record<string, readonly StoredColumn[]>> =
 		{ column: 'header_url', projection: profileUrlSql },
 	],
 	media_attachments: [
-		// A row with a file token holds a URL storedMediaUrl built within the bound, which the migration checks first.
+		// A row with a file token holds a URL mediaUrl (media-files.ts) built within the bound; the migration checks it.
 		{
 			column: 'url',
 			projection: mediaUrlSql,

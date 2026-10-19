@@ -55,7 +55,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
     - `0048_stored_bounds`: rewrites stored values past their bounds (above) and adds the triggers that refuse them.
       On a benchmark store of 1,000,000 accounts, 2,000,000 statuses, 500,000 media attachments and 100,000 earlier
       versions, the whole upgrade (a check of the media attachments, one rewrite scan of each of the four tables and
-      the foreign-key check of the whole Store) took 7.3 to 7.5 seconds in workerd's local Durable Object SQLite. The
+      the foreign-key check of the whole Store) took 7.3, 7.3 and 7.5 seconds in three runs in workerd's local Durable Object SQLite. The
       upgrade fails, and the Store stays readonly and unchanged, with
       `CHECK constraint failed: tokened_media_url_within_2048_bytes` if the URL of an uploaded media file passes 2,048
       bytes, which Kopje never builds: report it.
