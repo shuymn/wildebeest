@@ -609,6 +609,7 @@ describe('follows toward remote accounts', () => {
 				},
 			},
 			audience: { followers: false, accounts: [answer.followerId] },
+			followPair: answer.followerId,
 		})
 		expect(followAnswerActivity('Reject', { ...answer, followUri: null }).activity).toMatchObject({
 			id: 'https://kopje.test/ap/users/alice#rejects/follows/9',

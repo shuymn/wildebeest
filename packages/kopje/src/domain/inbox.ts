@@ -15,7 +15,7 @@ import {
 	mentionStatusSql,
 	type Visibility,
 } from './audience'
-import { stageRetraction } from './deliveries'
+import { cancelFollowAnswers, followAnswersOf, stageRetraction } from './deliveries'
 import { insertWithFreshId, NEW_GENERATION, remoteId } from './ids'
 import { actorDomainBlocked, hostCovered } from './instance-domain-blocks'
 import { listsHolding } from './lists'
@@ -746,12 +746,24 @@ const follow: Handler<'Follow'> = (db, actor, activity, { now }) => {
 	if (existing !== undefined && existing.uri === activity.id) {
 		return ignored('duplicate')
 	}
+	// Every Follow stored from here on defines the pair's next state (its own answer, or the owner's decision on a
+	// request), so the pair's answers never claimed are cancelled (cancelFollowAnswers in deliveries.ts) once nothing
+	// below can bail out. Over the bound: 503, nothing written.
+	const answers = followAnswersOf(db, target.id, actor.id)
+	if (answers === null) {
+		return retryLater('follow-answer-backlog')
+	}
 	if (existing !== undefined) {
 		// A newer generation: the edge takes the new id, and the superseded one is recorded as dead, so a late Undo,
 		// or a replay, of it changes nothing (ID-7). A pending request keeps waiting; an accepted follow is accepted
 		// again under the new id (Mastodon's fast-forward: the follower lost track of our Accept).
-		if (existing.uri !== null && !retractFollow(db, actor.uri, existing.uri, now)) {
+		// Checked before the cancellation, so a Follow ignored at the cap cancels nothing; then it is recorded.
+		if (existing.uri !== null && !isMisskeyPairId(existing.uri) && !canRetract(db, actor.uri, [existing.uri], now)) {
 			return ignored('retraction-cap')
+		}
+		cancelFollowAnswers(db, answers, now)
+		if (existing.uri !== null) {
+			retractFollow(db, actor.uri, existing.uri, now)
 		}
 		db.run('UPDATE follows SET uri = ? WHERE id = CAST(? AS INTEGER)', activity.id, existing.id)
 		if (existing.state === 'pending') {
@@ -760,6 +772,7 @@ const follow: Handler<'Follow'> = (db, actor, activity, { now }) => {
 		recordFollowAnswer(db, 'Accept', target, actor, activity.id, now)
 		return applied('follow-reaccepted')
 	}
+	cancelFollowAnswers(db, answers, now)
 	const state = target.locked === 1 ? 'pending' : 'accepted'
 	db.run(
 		'INSERT INTO follows (account_id, target_account_id, state, uri, created_at) VALUES (?, ?, ?, ?, ?)',

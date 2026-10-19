@@ -173,7 +173,8 @@ describe('dump', () => {
 			expect(TABLES.map((table) => sql.exec<{ n: number }>(movedCountSql(table)).one().n).every((n) => n > 0)).toBe(
 				true
 			)
-			expect(await testKernel(state).upgrade()).toMatchObject({ ok: true, applied: ['0048_stored_bounds'] })
+			const through = MIGRATIONS.slice(0, MIGRATION_NAMES.indexOf('0048_stored_bounds') + 1)
+			expect(await testKernel(state, through).upgrade()).toMatchObject({ ok: true, applied: ['0048_stored_bounds'] })
 			expect(TABLES.map((table) => sql.exec(columnsSql(table)).toArray())).toEqual(expected)
 			expect(TABLES.map((table) => sql.exec<{ n: number }>(movedCountSql(table)).one().n)).toEqual([0, 0, 0, 0])
 		})
