@@ -824,6 +824,7 @@ describe('ID-6: the authorization table, one negative case per row', () => {
 				sharedInboxUrl: null,
 				published: null,
 				keys: [],
+				emojiTags: [],
 				raw: '{}',
 			},
 			activity: { type: 'UpdateActor', id: `${LOCAL}/u` },

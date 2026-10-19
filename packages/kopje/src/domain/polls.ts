@@ -2,11 +2,13 @@ import { resolveApiId } from './accounts'
 import { pollUpdateActivity, recordOutbound, statusFacts, voteActivity } from './activities'
 import { mayVoteSql, viewableStatusId } from './audience'
 import { optionalUserReadOperation, userWriteOperation } from './auth'
+import { type CustomEmoji, pollEmojis, presentEmojis } from './custom-emojis'
 import { notify } from './notifications'
 import { writeOperation } from './operation'
 import { MAX_REMOTE_OPTION_LENGTH, MAX_REMOTE_OPTIONS, pollOptionsSql } from './status-bounds'
 import { type ColumnMap, fixedColumns, selectSql } from '../db/columns'
 import type { Db } from '../db/sql'
+import { STATUS_EMOJIS_BYTES } from '../platform/stored-bounds'
 
 // Polls (Mastodon 4.5's Poll, PollVote, VoteService, Api::V1::PollsController and Polls::VotesController,
 // REST::PollSerializer and PollExpirationNotifyWorker). A poll belongs to its status, local or remote, and its API id is
@@ -49,7 +51,9 @@ export type Poll = {
 	votes_count: number
 	voters_count: number | null
 	options: { title: string; votes_count: number | null }[]
-	emojis: []
+	// The status's emojis its choices reference: set by the status presenter, which has read the status, and by
+	// presentPoll for a poll shown alone.
+	emojis: CustomEmoji[]
 	voted?: boolean
 	own_votes?: number[]
 }
@@ -299,7 +303,7 @@ export function ownVoteCountSql(status: string, viewer: string): string {
 		AND v.account_id = ${viewer} WHERE p.status_id = ${status})`
 }
 
-function presentPoll(row: PollRow, viewer: { id: string | null; votes: number[] }, now: string): Poll {
+function presentPollRow(row: PollRow, viewer: { id: string | null; votes: number[] }, now: string): Poll {
 	const expired = hasEnded(row.expires_at, now)
 	// Poll#show_totals_now?: for everyone, the author included.
 	const shown = expired || row.hide_totals === 0
@@ -359,8 +363,31 @@ export function presentPolls(
 		}
 	}
 	return new Map(
-		rows.map((row) => [row.status_id, presentPoll(row, { id: viewerId, votes: votes.get(row.status_id) ?? [] }, now)])
+		rows.map((row) => [
+			row.status_id,
+			presentPollRow(row, { id: viewerId, votes: votes.get(row.status_id) ?? [] }, now),
+		])
 	)
+}
+
+// The poll of `statusId` as shown alone (GET /api/v1/polls/:id, a vote's answer), with its status's emojis.
+function presentPoll(db: Db, statusId: string, viewerId: string | null, now: string): Poll | null {
+	const poll = presentPolls(db, [statusId], viewerId, now).get(statusId)
+	if (poll === undefined) {
+		return null
+	}
+	const stored = db.first<{ emojis: string | null }>(
+		'SELECT CASE WHEN reblog_of_id IS NULL THEN emojis END AS emojis FROM statuses WHERE id = ?',
+		statusId
+	)
+	const emojis = presentEmojis(stored?.emojis ?? null, STATUS_EMOJIS_BYTES)
+	return {
+		...poll,
+		emojis: pollEmojis(
+			emojis,
+			poll.options.map((option) => option.title)
+		),
+	}
 }
 
 // The status of the poll `id` if the viewer may see it (R3, viewableStatusId), or null; whether it has a live poll is
@@ -374,7 +401,7 @@ function viewablePoll(db: Db, viewerId: string | null, id: string): string | nul
 // StatusPolicy#show?); otherwise not found.
 export const getPoll = optionalUserReadOperation<{ id: string }, Poll | null>((db, { id }, { accountId, now }) => {
 	const pollId = viewablePoll(db, accountId, id)
-	return pollId === null ? null : (presentPolls(db, [pollId], accountId, now).get(pollId) ?? null)
+	return pollId === null ? null : presentPoll(db, pollId, accountId, now)
 })
 
 // ---- Voting.
@@ -567,8 +594,8 @@ export const vote = userWriteOperation<{ id: string; choices: string[]; now: num
 				)
 			})
 		}
-		const value = presentPolls(db, [pollId], accountId, now).get(pollId)
-		return value === undefined ? { status: 'not_found' } : { status: 'ok', value }
+		const value = presentPoll(db, pollId, accountId, now)
+		return value === null ? { status: 'not_found' } : { status: 'ok', value }
 	}
 )
 

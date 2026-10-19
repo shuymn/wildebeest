@@ -1,6 +1,7 @@
 import type { DocumentLoader } from '@fedify/fedify'
 
 import { isTransientLoadError } from './loader'
+import { emojiCandidates } from './remote-emoji'
 import { isPublicCollection } from '../domain/audience'
 import { isConversationId } from '../domain/conversation-rows'
 import { languageOf } from '../domain/language'
@@ -25,7 +26,7 @@ import { withinJsonBounds } from '../platform/json-bounds'
 import { storedMediaDescription, storedMediaLink, storedText } from '../platform/stored-bounds'
 import { cutCodeUnits, cutJsonString, remoteHtmlText, sanitizeRemoteContent, SPOILER_BYTES } from '../security/html'
 
-// Remote statuses as Mastodon 4.7.3 reads them (ActivityPub::Parser::StatusParser and MediaAttachmentParser): compacted
+// Remote statuses as Mastodon 4.5.11 reads them (ActivityPub::Parser::StatusParser and MediaAttachmentParser): compacted
 // JSON with the ActivityStreams context, values as strings, objects with an id, or arrays of either. Note and Question
 // are statuses; Article, Page, Image, Audio, Video and Event are converted as Mastodon converts them (the name as a
 // heading, the summary, and a link to the url, with no content warning). Everything is bounded (RES-2, RES-4) and
@@ -386,6 +387,7 @@ export function parseRemoteStatus(
 		cc: audience(object, 'cc', activity),
 		mentions,
 		tags,
+		emojiTags: emojiCandidates(object.tag),
 		media: mediaOf(object),
 		// A Note's name: in reply to a local poll, a vote (ActivityPub::Activity::Create#poll_vote?).
 		name: converted ? null : text(object.name),

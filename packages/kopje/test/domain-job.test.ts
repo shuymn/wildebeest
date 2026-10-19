@@ -58,6 +58,7 @@ const ACTOR = {
 	sharedInboxUrl: null,
 	published: null,
 	keys: [],
+	emojiTags: [],
 	raw: '{}',
 }
 const BASE = 600_000_000_000_000_000

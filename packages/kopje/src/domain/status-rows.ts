@@ -41,6 +41,8 @@ export const STATUS_COLUMN_MAP = {
 	favourites_count: 's.favourites_count',
 	quotes_count: 's.quotes_count',
 	quote_policy: 's.quote_policy',
+	// A boost shows no emoji of its own (its original's are in `reblog`), whatever its row holds.
+	emojis: 'CASE WHEN s.reblog_of_id IS NULL THEN s.emojis END',
 	author_uri: actorUriSql('au.uri'),
 	author_username: usernameSql('au.username'),
 	author_domain: 'au.domain',
