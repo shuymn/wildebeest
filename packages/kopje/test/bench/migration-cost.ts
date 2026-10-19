@@ -39,10 +39,10 @@ import { freshStore, testKernel } from '../helpers'
 //     waits for delivery, and what given-up rows keep for retries);
 //   - 500,000 media attachments, one of every fourth status, with a URL, a description and a meta of 75 bytes;
 //   - 100,000 earlier versions (status_edits), one of every twentieth status;
-//   - values past their stored bounds (RES-2, 0048_stored_bounds), which are not scaled: 100 statuses with 140,000
-//     bytes of content, 10 of them with a content warning of 400,000 U+0001; 1,000 remote accounts with a display
-//     name of 3,000 characters and a 2,210-byte profile URL; 1,000 media rows with a 2,210-byte URL and a
-//     description of 12,000 characters.
+//   - values past their stored bounds (RES-2, 0048_stored_bounds), set only while that file is still to apply (its
+//     triggers refuse them after), and not scaled: 100 statuses with 140,000 bytes of content, 10 of them with a
+//     content warning of 400,000 U+0001; 1,000 remote accounts with a display name of 3,000 characters and a
+//     2,210-byte profile URL; 1,000 media rows with a 2,210-byte URL and a description of 12,000 characters.
 // It grows every table a phase A migration reads (accounts, follows, statuses with their mentions and tags,
 // notifications, reports, quotes), what 0043_read_window_indexes indexes (favourites, boosts), what
 // 0045_remote_suspension indexes (accounts, outbound activities) and what 0048_stored_bounds rewrites (accounts,
@@ -307,13 +307,15 @@ it('applies the migration to the benchmark store within the budget', async () =>
 			edits,
 			now
 		)
-		// Values past their stored bounds, on the first statuses, remote accounts and media rows.
+		// Values past their stored bounds, on the first statuses, remote accounts and media rows, while
+		// 0048_stored_bounds is still to apply (its triggers refuse them after).
 		const filler = (n: number, char: string) => `replace(hex(zeroblob(${n / 2})), '0', ${char})`
+		const bounded = at > MIGRATIONS.findIndex((migration) => migration.name === '0048_stored_bounds')
 		run(
 			`UPDATE statuses SET content = ${filler(140_000, "'x'")}, spoiler_text = CASE WHEN id < CAST(500000000000000000 + ?2 AS TEXT)
 				THEN ${filler(400_000, 'char(1)')} ELSE '' END
 			WHERE id < CAST(500000000000000000 + ?1 AS TEXT) AND id >= '500000000000000000'`,
-			SHAPE.longContent,
+			bounded ? 0 : SHAPE.longContent,
 			SHAPE.longSpoilers
 		)
 		run(
@@ -321,13 +323,13 @@ it('applies the migration to the benchmark store within the budget', async () =>
 				url = 'https://d.bench/u/' || ${filler(2192, "'x'")}
 			WHERE id >= CAST(100000000000000000 + ?1 AS TEXT) AND id < CAST(100000000000000000 + ?1 + ?2 AS TEXT)`,
 			SHAPE.local,
-			SHAPE.longAccounts
+			bounded ? 0 : SHAPE.longAccounts
 		)
 		run(
 			`UPDATE media_attachments SET url = 'https://f.bench/m/' || ${filler(2192, "'x'")},
 				description = ${filler(12_000, "'d'")}
-			WHERE id < CAST(700000000000000000 + ?1 AS TEXT)`,
-			SHAPE.longMedia
+			WHERE id < CAST(700000000000000000 + ?1 AS TEXT) AND ?1 > 0`,
+			bounded ? 0 : SHAPE.longMedia
 		)
 		const count = (table: string) => sql.exec<{ n: number }>(`SELECT count(*) AS n FROM ${table}`).one().n
 		const seeded = {
