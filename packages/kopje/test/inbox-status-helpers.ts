@@ -5,6 +5,7 @@ import { harness, NOW } from './app-helpers'
 import { fixtureKeyGen, LEGACY_EMPTY_KEK, seedLocalAccount } from './federation-helpers'
 import { completeSetup, migratedStore } from './helpers'
 import { LOCAL, MISSKEY, RemoteWeb, type SignOptions, signedInit, type TestActor } from './inbox-helpers'
+import { MAX_RETRACTIONS_PER_ACTOR } from '../src/domain/inbox'
 import type { StoreStub } from '../src/platform/store-client'
 import { sha256Hex } from '../src/security/tokens'
 
@@ -249,4 +250,17 @@ export async function localStatus(t: Setup, body: Record<string, unknown>, as: '
 	})
 	expect(response.status).toBe(200)
 	return (await response.json()) as { id: string; uri: string }
+}
+
+// The actor's live retractions at MAX_RETRACTIONS_PER_ACTOR (fillers of its origin, expiring in a day).
+export async function retractionsAtCap(t: Setup, actor: TestActor): Promise<void> {
+	await sql(
+		t.store,
+		`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
+		INSERT INTO inbound_retractions (actor_uri, target_uri, expires_at) SELECT ?, ? || '/filler/' || i, ? FROM n`,
+		MAX_RETRACTIONS_PER_ACTOR,
+		actor.uri,
+		actor.uri,
+		NOW + 24 * 60 * 60 * 1000
+	)
 }

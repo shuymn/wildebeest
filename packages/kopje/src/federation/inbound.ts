@@ -94,13 +94,18 @@ function idOf(value: unknown): string | null {
 	return isObject(value) && typeof value.id === 'string' ? value.id : null
 }
 
+// The types read as a Like: Misskey's reactions (a Like with _misskey_reaction or content), EmojiReact and
+// EmojiReaction (Misskey's isLike, core/activitypub/type.ts). A favourite; the emoji is not kept (as Mastodon).
+const LIKE_TYPES: ReadonlySet<string> = new Set(['Like', 'EmojiReact', 'EmojiReaction'])
+
 function refOf(value: unknown): ActivityRef {
 	if (!isObject(value)) {
 		return { id: idOf(value), type: null, actor: null, object: null, instrument: null }
 	}
+	const type = typeof value.type === 'string' ? value.type : null
 	return {
 		id: idOf(value),
-		type: typeof value.type === 'string' ? value.type : null,
+		type: type !== null && LIKE_TYPES.has(type) ? 'Like' : type,
 		actor: idOf(value.actor),
 		object: idOf(value.object),
 		instrument: idOf(value.instrument),
@@ -193,6 +198,9 @@ function activityOf(
 	json: Json,
 	object: string | null
 ): InboundActivity | Dereference | null {
+	if (LIKE_TYPES.has(type)) {
+		return object === null ? null : { type: 'Like', id, object }
+	}
 	switch (type) {
 		case 'Follow':
 		case 'Block':
@@ -245,11 +253,6 @@ function activityOf(
 			return object === actor
 				? { type: 'DeleteActor', id }
 				: { type: 'Delete', id, object, ...(hasAuthorProof(json) ? { signed: true } : {}) }
-		// Misskey's reactions arrive as a Like with _misskey_reaction (or content), and Pleroma's as EmojiReact: both are
-		// a favourite, and the emoji is not kept (as Mastodon).
-		case 'Like':
-		case 'EmojiReact':
-			return object === null ? null : { type: 'Like', id, object }
 		// The target is matched against the actor's own collections by the Store. A Hashtag is named by its name; anything
 		// else by its id, as a status (Mastodon's Add and Remove read any other object as one).
 		case 'Add':

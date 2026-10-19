@@ -703,7 +703,8 @@ describe('Like and reactions (Mastodon and Misskey)', () => {
 		expect(await t.post(bob, liked)).toBe(202)
 		expect(await t.post(bob, liked)).toBe(202)
 		const bobId = (await accountId(t.store, bob.uri))!
-		expect(await sql(t.store, 'SELECT account_id, uri FROM favourites')).toEqual([{ account_id: bobId, uri: liked.id }])
+		expect(await sql(t.store, 'SELECT account_id, uri FROM favourites')).toEqual([{ account_id: bobId, uri: null }])
+		expect(await sql(t.store, 'SELECT uri FROM favourite_likes')).toEqual([{ uri: liked.id }])
 		expect((await statusRow(t.store, local.uri))?.favourites_count).toBe(1)
 		expect(await notifications(t.store)).toEqual([{ account_id: ALICE, type: 'favourite' }])
 
@@ -739,13 +740,14 @@ describe('Like and reactions (Mastodon and Misskey)', () => {
 		const emojiReact = { ...like(bob, local.uri), type: 'EmojiReact', content: '🍮' }
 		expect(await t.post(bob, emojiReact)).toBe(202)
 		expect((await statusRow(t.store, local.uri))?.favourites_count).toBe(2)
-		expect(await sql(t.store, 'SELECT uri FROM favourites ORDER BY id')).toEqual([
+		expect(await sql(t.store, 'SELECT uri FROM favourite_likes ORDER BY id')).toEqual([
 			{ uri: reaction.id },
 			{ uri: emojiReact.id },
 		])
 		// Misskey undoes a reaction by the Like's id.
 		expect(await t.post(neko, undo(neko, reaction.id))).toBe(202)
-		expect(await sql(t.store, 'SELECT uri FROM favourites')).toEqual([{ uri: emojiReact.id }])
+		expect(await sql(t.store, 'SELECT uri FROM favourite_likes')).toEqual([{ uri: emojiReact.id }])
+		expect((await statusRow(t.store, local.uri))?.favourites_count).toBe(1)
 	})
 
 	it('ID-6, ID-7: keeps an Undo that arrived before its Like, and ignores Likes of remote, unknown or hidden statuses (VIS-1)', async () => {

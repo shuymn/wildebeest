@@ -9,6 +9,7 @@ import { community, remoteAccount, seedStatus } from './status-helpers'
 import { Db } from '../src/db/sql'
 import {
 	deleteStatusBatch,
+	MAX_TRACKED_LIKES,
 	PURGE_BATCH,
 	purgeBatch,
 	PURGED_ACCOUNT_CHILDREN,
@@ -173,12 +174,32 @@ describe('cascade guard (RES-6)', () => {
 	it('lists each foreign key naming statuses, not only its table', async () => {
 		await runInDurableObject(await migratedStore(), (_instance, state) => {
 			const direct = directKeys(foreignKeys(state.storage.sql), 'statuses')
-			const listed = STATUS_CHILDREN.map((child) => `${child.table}.${child.column}`)
+			const listed = STATUS_CHILDREN.filter((child) => child.parent === undefined).map(
+				(child) => `${child.table}.${child.column}`
+			)
 			expect(
 				direct.filter((key) => !listed.includes(key) && STATUS_EXEMPT[key.split('.')[0]!] === undefined),
 				'each of these foreign keys cascades from statuses: give it its own STATUS_CHILDREN entry in src/domain/inbox.ts'
 			).toEqual([])
 			expect(listed.filter((key) => !direct.includes(key))).toEqual([])
+		})
+	})
+
+	// A table below another child names it by its own foreign key, comes before it (so the parent's delete finds none
+	// of its rows left), and has its own existence check: it has no status column.
+	it('lists a table below another child before it, by its foreign key to it', async () => {
+		await runInDurableObject(await migratedStore(), (_instance, state) => {
+			const keys = foreignKeys(state.storage.sql)
+			const below = STATUS_CHILDREN.filter((child) => child.parent !== undefined)
+			expect(below.map((child) => child.table)).toEqual(['favourite_likes'])
+			for (const child of below) {
+				expect(
+					keys.filter((key) => key.from === child.table && key.table === child.parent && key.onDelete === 'CASCADE')
+				).toEqual([{ from: child.table, table: child.parent, column: child.column, onDelete: 'CASCADE' }])
+				const at = STATUS_CHILDREN.findIndex((entry) => entry === child)
+				expect(STATUS_CHILDREN.findIndex((entry) => entry.table === child.parent)).toBeGreaterThan(at)
+				expect(child.exists).toMatch(new RegExp(`\\b${child.parent}\\b.*\\bstatus_id = \\?1`))
+			}
 		})
 	})
 
@@ -220,6 +241,35 @@ describe('cascade guard (RES-6)', () => {
 // no code deletes a local account. A foreign key to local_accounts that cascades or sets null is therefore bounded
 // only while that holds; this pins it, so a delete of local accounts cannot be added without bounding them first. That
 // no code deletes one is test-node/policy-boundary.test.ts's.
+
+// A local status's own delete (statuses.ts deleteStatus, in its author's request) cascades its children, and below them
+// only what the schema bounds per row, so a converted or imported Store holds no more: each such table, with its bound
+// per parent row and the trigger that holds it.
+const LOCAL_DELETE_BOUNDS: Record<string, { per: string; bound: number; trigger: string }> = {
+	favourite_likes: { per: 'favourites', bound: MAX_TRACKED_LIKES, trigger: 'favourite_likes_cap' },
+}
+
+describe('cascade guard below a local status’s own children (RES-6)', () => {
+	it.each(Object.entries(LOCAL_DELETE_BOUNDS))('%s: refuses a row past its bound per parent', async (table, held) => {
+		const h = await community(['alice'])
+		const remote = await remoteAccount(h.store, 'carol')
+		const status = await seedStatus(h.store, { accountId: h.users.alice.id, visibility: 'public' })
+		await sql(h.store, "INSERT INTO favourites (account_id, status_id, created_at) VALUES (?, ?, 'x')", remote, status)
+		const insert = (n: number) =>
+			sql(
+				h.store,
+				`INSERT INTO ${table} (favourite_id, uri, received_at) SELECT id, 'https://remote.example/likes/' || ?, 0 FROM ${held.per}`,
+				n
+			)
+		for (let n = 0; n < held.bound; n++) {
+			await insert(n)
+		}
+		await expect(insert(held.bound)).rejects.toThrow(/more than 4 Like ids for one favourite/)
+		expect(await sql(h.store, "SELECT name FROM sqlite_schema WHERE type = 'trigger' AND tbl_name = ?", table)).toEqual(
+			[{ name: held.trigger }]
+		)
+	})
+})
 
 describe('cascade guard below local_accounts (RES-6)', () => {
 	it('meets nothing: local_accounts restricts the delete of its account, and nothing deletes a local account', async () => {

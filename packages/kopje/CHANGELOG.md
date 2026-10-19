@@ -67,6 +67,29 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   server whose own retries run out meanwhile needs its user to follow again.
 - A given-up answer to a Follow that a later activity superseded is deleted by the next delivery sweep instead of
   after 30 days, and no longer shows in `kopje-admin deliveries`: nothing could send it again.
+- A remote favourite tracks the id of each of the actor's Likes of the status whose Undo has not arrived, and stays
+  while it tracks one (up to 4). An Undo removes only the Like it names; before, an Undo naming the status removed the
+  favourite whatever Like it named, and a second Like of a favourited status was dropped. A remote favourite stored
+  before the upgrade keeps its stored Like id as one of its outstanding Likes until that id's Undo (typed or not),
+  and is removed only by the Undo of one of its ids. One converted without a Like id is removed by an Undo naming its
+  status. Known limits: if old data holds the same Like id on several of one actor's favourites, its Undo ends only
+  one of them (the others go by an Undo of another of their ids); and a kept id whose Undo was lost stays one of its
+  favourite's 4 outstanding ids for good (the other 3 make room by age).
+- A Like that would be a fifth outstanding one for the same favourite is answered 503 with nothing written; the
+  sending server's retry is taken once an Undo makes room. A tracked Like the Store received 7 days before, by its own
+  clock (longer than the delivery retries of common servers), makes room for it instead and is recorded as undone, so
+  Likes whose Undo was lost do not block the pair and do not come back when delivered again.
+- A Like id is held once in the instance (a Like under an id any favourite already holds is ignored), and a new one
+  longer than 4,096 bytes (JSON-escaped UTF-8) is not stored: such a Like is ignored. An id stored before the upgrade
+  keeps working whatever its length.
+- An untyped Undo (an id alone) that matches nothing stored is answered 503 when the actor's retractions are at their
+  cap (10,000), where it was answered 202 and not recorded: it may undo a Like or boost still on its way.
+- An Undo of a Like naming a status that is not a local one, and that no stored favourite matches, records nothing:
+  servers also send the Undos of reactions to other servers' posts to the reactor's followers, and these took the
+  actor's retraction allowance.
+- Stored format: a remote favourite's Like ids are rows of the new `favourite_likes` table, and its `favourites.uri`
+  holds only the id it kept from before the upgrade, until that id's Undo. A dump past the new table's bounds is
+  refused ([docs/dump-format.md](docs/dump-format.md)).
 
 ### Fixed
 
@@ -75,10 +98,13 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   the delivery queue: only the new Follow's answer, or the owner's decision on a request, is sent (NET-2 in
   [docs/threat-model.md](docs/threat-model.md)). An answer a delivery attempt has already taken is still sent, so the
   two sides can disagree until the follower follows again (see the accepted risks there).
+- A server that replaces a reaction by an Undo of the old Like and a new Like, delivered in either order, no longer
+  loses the favourite (an Undo arriving after the new Like removed it) or brings back an undone one.
+- `EmojiReaction` is read as a Like, as `Like` and `EmojiReact` are, and an Undo of one removes it.
 
 ### Instance changes
 
-- Store schema: adds three migrations, applied on the first request after the deploy; a rollback to an earlier
+- Store schema: adds four migrations, applied on the first request after the deploy; a rollback to an earlier
   version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0049_instance_bounds`: rewrites instance settings past their bounds (above), adds the triggers that refuse
       them, and indexes the suspend blocks by domain. On a benchmark store of 1,000,000 accounts, 2,000,000 statuses
@@ -92,6 +118,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       claimed; every existing delivery of a follow answer counts as claimed, so none of them is cancelled. On the
       benchmark store its [header](migrations/0051_follow_answer_pairs.sql) describes, the whole upgrade took 7.3 and
       8.0 seconds in two runs in workerd's local Durable Object SQLite.
+    - `0052_favourite_likes`: adds the empty `favourite_likes` table with its indexes and triggers, and an index of
+      the favourites by stored Like id; no existing row is changed. On a benchmark store of 1,000,000 accounts and
+      2,000,000 favourites each holding a Like id, the whole upgrade took 7.6 to 8.0 seconds in four runs in workerd's local Durable
+      Object SQLite, within the 20 seconds an upgrade may take.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.17] - 2026-10-19

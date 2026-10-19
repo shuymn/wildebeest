@@ -53,6 +53,7 @@ const SCHEMA_TABLES = [
 	'deliveries',
 	'domain_block_cleanups',
 	'domain_blocks',
+	'favourite_likes',
 	'favourites',
 	'fedify_kv',
 	'follow_recommendation_mutes',
@@ -5361,6 +5362,86 @@ describe('0051_follow_answer_pairs', () => {
 				'SCAN o USING INDEX outbound_activities_follow_swept',
 				'SEARCH d USING INDEX deliveries_activity (activity_id=?)',
 			])
+		})
+	})
+})
+
+describe('0052_favourite_likes', () => {
+	const NAME = '0052_favourite_likes'
+	const at = NAMES.indexOf(NAME)
+
+	it('copies nothing: favourites keep their uri; the new table holds each id once, within its bound and cap', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+			sql.exec(
+				`INSERT INTO accounts (id, uri, username, domain) VALUES
+					('100000000000000001', 'https://kopje.test/ap/users/alice', 'alice', NULL),
+					('100000000000000002', 'https://r.example/u/bob', 'bob', 'r.example')`
+			)
+			sql.exec(
+				`INSERT INTO statuses (id, uri, account_id, visibility, published_at) VALUES
+					('200000000000000001', 'https://kopje.test/ap/o/1', '100000000000000001', 'public', 'x'),
+					('200000000000000002', 'https://kopje.test/ap/o/2', '100000000000000001', 'public', 'x')`
+			)
+			sql.exec(
+				`INSERT INTO favourites (id, account_id, status_id, uri, created_at) VALUES
+					(1, '100000000000000001', '200000000000000002', 'https://kopje.test/ap/users/alice#likes/1', 'x'),
+					(2, '100000000000000002', '200000000000000001', 'https://r.example/likes/2', 'x'),
+					(3, '100000000000000002', '200000000000000002', 'https://r.example/likes/3', 'x')`
+			)
+			const before = sql.exec('SELECT * FROM favourites ORDER BY id').toArray()
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+			expect(sql.exec('SELECT * FROM favourites ORDER BY id').toArray()).toEqual(before)
+			expect(sql.exec('SELECT count(*) AS n FROM favourite_likes').one().n).toBe(0)
+			const planOf = (query: string, ...params: string[]) =>
+				sql
+					.exec<{ detail: string }>(`EXPLAIN QUERY PLAN ${query}`, ...params)
+					.toArray()
+					.map((row) => row.detail)
+			// An Undo's lookup (inbox.ts trackedLike, interactionOf) names favourite_likes_uri: the actor's favourites,
+			// any number, are never ranged over.
+			expect(
+				planOf(
+					`SELECT l.id FROM favourite_likes l INDEXED BY favourite_likes_uri
+					JOIN favourites f ON f.id = l.favourite_id WHERE l.uri = ? AND f.account_id = ?`,
+					'https://r.example/likes/2',
+					'100000000000000002'
+				)
+			).toEqual(['SEARCH l USING INDEX favourite_likes_uri (uri=?)', 'SEARCH f USING INTEGER PRIMARY KEY (rowid=?)'])
+			// A retained id, the actor's own (inbox.ts retainedLike) and any actor's (like's admission), one seek each.
+			expect(
+				planOf(
+					`SELECT f.id, f.status_id FROM favourites f INDEXED BY favourites_like_uri
+					WHERE f.uri = ? AND f.account_id = ? LIMIT 1`,
+					'https://r.example/likes/2',
+					'100000000000000002'
+				)
+			).toEqual(['SEARCH f USING INDEX favourites_like_uri (uri=? AND account_id=?)'])
+			expect(
+				planOf(
+					'SELECT 1 FROM favourites INDEXED BY favourites_like_uri WHERE uri = ? LIMIT 1',
+					'https://r.example/likes/2'
+				)
+			).toEqual(['SEARCH favourites USING COVERING INDEX favourites_like_uri (uri=?)'])
+			const insert = (favourite: number, uri: string) =>
+				sql.exec('INSERT INTO favourite_likes (favourite_id, uri, received_at) VALUES (?, ?, 0)', favourite, uri)
+			// Favourite 2 retains its id, which counts: three rows make its four.
+			for (let n = 0; n < 3; n++) {
+				insert(2, `https://r.example/likes/2-${n}`)
+			}
+			// The cap, a repeated id (for another favourite too) and an id past ACTIVITY_ID_LIMIT, as an import writes them.
+			expect(() => insert(2, 'https://r.example/likes/2-x')).toThrow(
+				/favourite_likes: more than 4 Like ids for one favourite/
+			)
+			expect(() => insert(3, 'https://r.example/likes/2-0')).toThrow(/UNIQUE constraint failed: favourite_likes.uri/)
+			const long = `https://r.example/likes/${'x'.repeat(4097 - 'https://r.example/likes/'.length)}`
+			expect(() => insert(3, long)).toThrow(/like_id_within_4096_json_bytes/)
+			insert(3, long.slice(0, -1))
+			// A favourite's delete takes its ids.
+			sql.exec('DELETE FROM favourites WHERE id = 2')
+			expect(sql.exec('SELECT count(*) AS n FROM favourite_likes WHERE favourite_id = 2').one().n).toBe(0)
 		})
 	})
 })

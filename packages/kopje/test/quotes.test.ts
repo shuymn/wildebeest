@@ -652,6 +652,7 @@ describe('revocation: the Delete of a stamp', () => {
 			const request = await changes((sql) =>
 				receiveActivity.run(sql, {
 					now: NOW,
+					storeNow: NOW,
 					origin: LOCAL,
 					actorUri: carol.uri,
 					actor: null,

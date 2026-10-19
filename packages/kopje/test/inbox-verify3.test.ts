@@ -8,6 +8,7 @@ import { harness, inboxDeps, NOW } from './app-helpers'
 import { fixtureKeyGen } from './federation-helpers'
 import { BUILD } from './helpers'
 import { MASTODON, mastodonActor, RemoteWeb, signedInit, type TestActor } from './inbox-helpers'
+import { writtenBy } from './inbox-store-helpers'
 import { community, seedStatus } from './status-helpers'
 import { Db } from '../src/db/sql'
 import { recordOutbound } from '../src/domain/activities'
@@ -126,13 +127,8 @@ describe('ID-7: Block generations and Misskey pair ids', () => {
 describe('RES-6: a purge batch writes at most PURGE_BATCH rows in all', () => {
 	// Runs one purge batch inside the Store and returns how many rows it wrote (SQLite's total_changes()).
 	async function batch(store: StoreStub, uri: string): Promise<{ wrote: number; remaining: boolean }> {
-		return runInDurableObject(store, (_instance, state) => {
-			const db = new Db(state.storage.sql)
-			const changes = () => db.first<{ n: number }>('SELECT total_changes() AS n')!.n
-			const before = changes()
-			const remaining = state.storage.transactionSync(() => purgeBatch(db, uri, NOW))
-			return { wrote: changes() - before, remaining }
-		})
+		const { result: remaining, rows: wrote } = await writtenBy(store, (db) => purgeBatch(db, uri, NOW))
+		return { wrote, remaining }
 	}
 
 	it('withdraws a local boost with more receipts than a batch once, across resumed and repeated batches', async () => {

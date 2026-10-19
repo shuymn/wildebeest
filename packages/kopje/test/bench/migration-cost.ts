@@ -36,7 +36,7 @@ import { freshStore, testKernel } from '../helpers'
 //   - 10,000 reports by the local accounts of remote accounts, naming one status each;
 //   - 200,000 quotes (from migration 0033_quotes on), one by every tenth status, each of the status after it, in each
 //     stored state in turn (a quarter accepted);
-//   - 2,000,000 favourites, one of each status in a scattered order, by remote accounts in turn;
+//   - 2,000,000 favourites, one of each status in a scattered order, by remote accounts in turn, each with its Like id;
 //   - 200,000 boosts on top of the statuses, public and unlisted in turn, each of a different status by another
 //     remote account;
 //   - 500,000 outbound activities of the local accounts in turn, each about one status, one in ten superseded (what
@@ -59,8 +59,9 @@ import { freshStore, testKernel } from '../helpers'
 // notifications, reports, quotes), what 0043_read_window_indexes indexes (favourites, boosts), what
 // 0045_remote_suspension indexes (accounts, outbound activities), what 0048_stored_bounds rewrites (accounts,
 // statuses, media attachments, earlier versions), what 0049_instance_bounds rewrites and indexes (instance
-// settings, instance domain blocks) and what 0051_follow_answer_pairs reads and rewrites (outbound activities,
-// accounts, deliveries); a migration that reads another table must add it here before it is measured.
+// settings, instance domain blocks), what 0051_follow_answer_pairs reads and rewrites (outbound activities,
+// accounts, deliveries) and what 0052_favourite_likes indexes (the favourites' Like ids); a migration that reads
+// another table must add it here before it is measured.
 // The measured time is the whole upgrade, from before the bookmark to after the verification: Date.now() in workerd
 // moves only between I/O events, so the clock is read across an await on each side.
 
@@ -261,15 +262,17 @@ it('applies the migration to the benchmark store within the budget', async () =>
 		for (let start = 0; start < favourites; start += batch) {
 			run(
 				`WITH RECURSIVE n(i) AS (SELECT ?1 UNION ALL SELECT i + 1 FROM n WHERE i < ?2 - 1)
-				INSERT OR IGNORE INTO favourites (account_id, status_id, created_at)
-				SELECT CAST(100000000000000000 + ?3 + i % ?4 AS TEXT), CAST(500000000000000000 + (7919 * i) % ?5 AS TEXT), ?6
+				INSERT OR IGNORE INTO favourites (account_id, status_id, uri, created_at)
+				SELECT CAST(100000000000000000 + ?3 + i % ?4 AS TEXT), CAST(500000000000000000 + (7919 * i) % ?5 AS TEXT),
+					'https://d' || ((?3 + i % ?4) % ?7) || '.bench/likes/' || i, ?6
 				FROM n`,
 				start,
 				Math.min(start + batch, favourites),
 				SHAPE.local,
 				remote,
 				statuses,
-				now
+				now,
+				SHAPE.domains
 			)
 		}
 		// Boosts: boost i (ids after the statuses) is of status 10i + 3, by the remote account after its author, public

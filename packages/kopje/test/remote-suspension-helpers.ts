@@ -1,12 +1,10 @@
-import { runInDurableObject } from 'cloudflare:test'
-
 import { expect } from 'vitest'
 
 import { bearer, form, setSetting, sql, userToken } from './api-helpers'
 import { NOW } from './app-helpers'
-import { BUILD } from './helpers'
+import { storeReceive, writtenBy } from './inbox-store-helpers'
 import { community } from './status-helpers'
-import { Db } from '../src/db/sql'
+import type { InboundActivity, ReceiveResult } from '../src/domain/inbox'
 import { remoteModerationRound } from '../src/domain/remote-suspension'
 import type { StoreStub } from '../src/platform/store-client'
 
@@ -64,15 +62,8 @@ export async function round(
 	store: StoreStub,
 	after = 0
 ): Promise<{ id: number; delivers: boolean; rows: number } | null> {
-	return runInDurableObject(store, (_instance, state) =>
-		state.storage.transactionSync(() => {
-			const db = new Db(state.storage.sql)
-			const before = db.first<{ n: number }>('SELECT total_changes() AS n')!.n
-			const ran = remoteModerationRound(db, NOW, after)
-			const rows = db.first<{ n: number }>('SELECT total_changes() AS n')!.n - before
-			return ran === null ? null : { ...ran, rows }
-		})
-	)
+	const { result: ran, rows } = await writtenBy(store, (db) => remoteModerationRound(db, NOW, after))
+	return ran === null ? null : { ...ran, rows }
 }
 
 // Rounds until the job is in the follows phase: the gate before its first Reject.
@@ -105,12 +96,9 @@ export async function receive(
 	store: StoreStub,
 	uri: string,
 	activity: Record<string, unknown> & { type: string }
-): Promise<{ applied: boolean; reason: string }> {
-	return store.receiveActivity(BUILD, {
-		now: NOW,
-		origin: ORIGIN,
-		actorUri: uri,
-		actor: null,
-		activity: { id: `${new URL(uri).origin}/activities/${++sequence}`, ...activity },
-	} as Parameters<StoreStub['receiveActivity']>[1])
+): Promise<ReceiveResult> {
+	return storeReceive(store, uri, {
+		id: `${new URL(uri).origin}/activities/${++sequence}`,
+		...activity,
+	} as InboundActivity)
 }
