@@ -176,8 +176,9 @@ kopje-admin instance description=                      # an empty value removes 
   refused. `--file` sends the file's text and the other values in one request.
 - The terms of service and their effective date are set together: a first `terms_of_service` needs
   `terms_of_service_effective_date` in the same request; later either may change alone; the date cannot be removed
-  while the text stays; removing `terms_of_service` removes its date. They are served as the current version from the
-  date on (`effective` is true the day after it), and `/terms-of-service/<date>` answers only that date.
+  while the text stays; removing `terms_of_service` removes its date. They are served as soon as they are set, a
+  future date included (as Mastodon serves an upcoming version); `effective` becomes true on the day after the
+  effective date (UTC). `/terms-of-service/<date>` answers only that date.
 - A changed `extended_description` or `privacy_policy` is stamped with the time of the change (`updated_at`); the same
   value sent again changes nothing. Each change is logged in the moderation log (`update_setting`, `remove_setting`)
   without its value.
