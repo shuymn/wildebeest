@@ -191,11 +191,9 @@ const REMOTE_ATTACHMENT_SQL = `CASE WHEN a.domain IS NOT NULL THEN (
 				ORDER BY e.key LIMIT ${MAX_REMOTE_FIELDS}) c) k
 		WHERE k.size <= ${REMOTE_FIELDS_BYTES}) END`
 
-// RES-2: profiles are bounded as stored (federation/remote-actor.ts, the triggers of 0048_stored_bounds), converted rows
-// too, and the username and actor id again as read (profile-bounds.ts); fields use REMOTE_ATTACHMENT_SQL and
-// remoteFields. See docs/threat-model.md, RES-3.
-// One account reads at most about 113 KB and serializes to 123 KB (bio 64 KiB, escaped display name 12 KiB,
-// fields 33 KB, five URLs 10 KiB, the rest about 2 KB), so a page of 80 serializes to at most about 10 MB.
+// RES-2: profiles are bounded as stored (federation/remote-actor.ts, the triggers of 0048_stored_bounds), converted
+// rows too, and the username and actor id again as read (profile-bounds.ts); fields use REMOTE_ATTACHMENT_SQL and
+// remoteFields. One account's size: the account occurrence in docs/threat-model.md, "Maxima of presented units".
 export const ACCOUNT_COLUMN_MAP = {
 	id: 'a.id',
 	uri: actorUriSql('a.uri'),

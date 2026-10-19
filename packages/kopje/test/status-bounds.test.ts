@@ -222,8 +222,6 @@ async function maximalParts(t: Setup, fill: Fill = 'escaped'): Promise<Parts> {
 type ColumnHeap = { total: number; largest: number }
 type Heaps = Map<string, { rows: number; columns: Map<string, ColumnHeap> }>
 
-const valueHeap = (value: unknown) => 32 + (typeof value === 'string' ? 2 * utf8Length(value) : 0)
-
 type Measure = {
 	answer: unknown
 	rows: number
@@ -248,17 +246,16 @@ async function measured<I>(t: Setup, operation: StoreOperation<I, unknown>, inpu
 			for (const row of read) {
 				rows++
 				heap.rows++
-				for (const [column, value] of Object.entries(row)) {
-					const one = valueHeap(value)
-					const sum = heap.columns.get(column) ?? { total: 0, largest: 0 }
-					heap.columns.set(column, { total: sum.total + one, largest: Math.max(sum.largest, one) })
-				}
 				const profile = 'note' in row && 'display_name' in row
-				for (const value of Object.values(row)) {
-					const bytes = typeof value === 'string' ? utf8Length(value) : 8
+				for (const [column, value] of Object.entries(row)) {
+					const text = typeof value === 'string' ? utf8Length(value) : null
+					const bytes = text ?? 8
 					sqliteBytes += bytes
 					profileBytes += profile ? bytes : 0
 					longest = Math.max(longest, bytes)
+					const one = 32 + 2 * (text ?? 0)
+					const sum = heap.columns.get(column) ?? { total: 0, largest: 0 }
+					heap.columns.set(column, { total: sum.total + one, largest: Math.max(sum.largest, one) })
 				}
 			}
 		})
@@ -844,9 +841,9 @@ async function maximalStatuses(fill: Fill) {
 	return { t, quoted, quote, boost }
 }
 
-// What each fill measures: the table of maxima, and for each item of the heap model (its rows by query and column, and
-// its JSON). Measured once per fill, by whichever test asks first.
-type FillMeasure = { shapes: Record<string, Shape>; items: Record<string, { heaps: Heaps; json: number }> }
+// What each fill measures: the table of maxima, and for each item of the heap model its rows by query and column (its
+// JSON is the table's). Measured once per fill, by whichever test asks first.
+type FillMeasure = { shapes: Record<string, Shape>; heaps: Record<string, Heaps> }
 const fills = new Map<Fill, Promise<FillMeasure>>()
 
 function measureFill(fill: Fill): Promise<FillMeasure> {
@@ -965,7 +962,6 @@ async function measureShapes(fill: Fill): Promise<FillMeasure> {
 	expect(shownReport.statuses.map((status) => status.id)).toEqual([quote])
 	const account = (one.answer as Presented).account
 	const two = await read(t, getStatus, quote)
-	const item = (m: Measure, answer: unknown) => ({ heaps: m.heaps, json: jsonBytes(answer) })
 	return {
 		shapes: {
 			account: { sqlite: one.profileBytes, json: jsonBytes(account), rows: 1, nodes: nodes(account) },
@@ -976,12 +972,12 @@ async function measureShapes(fill: Fill): Promise<FillMeasure> {
 			group: shape({ ...grouped, answer: group }),
 			report: shape({ ...reported, answer: shownReport }),
 		},
-		items: {
-			status: item(one, one.answer),
-			quote: item(two, two.answer),
-			boostOfQuote: item(pair, pair.answer),
-			group: item(grouped, group),
-			report: item(reported, shownReport),
+		heaps: {
+			status: one.heaps,
+			quote: two.heaps,
+			boostOfQuote: pair.heaps,
+			group: grouped.heaps,
+			report: reported.heaps,
 		},
 	}
 }
@@ -1012,16 +1008,14 @@ function perColumn(measures: readonly Heaps[]): { heap: number; largestRow: numb
 	return { heap, largestRow }
 }
 
-// The peaks of "Heap at 8 MiB per answer" (docs/threat-model.md) for answers whose largest item is one of `items`:
-// that item's rows at their per-column maxima with 25% headroom, the admitted answer at three times ANSWER_BYTES, the
-// rejected item at three times the most JSON any fill presented (the escaped fill is each column's most JSON), the
-// answer's `state`, and a chunk of several at its cap, past it by the largest row when the backstop fires.
+// The peaks of "Heap at 8 MiB per answer" (docs/threat-model.md, its model and terms) for answers whose largest item
+// is one of `items`, with that item's rows and largest row at their per-column maxima.
 async function peaks(items: readonly string[], chunks: ChunkPlan, state: number) {
 	const measures = await Promise.all((['escaped', 'derived', 'raw'] as const).map(measureFill))
-	const each = items.map((item) => perColumn(measures.map((m) => m.items[item]!.heaps)))
+	const each = items.map((item) => perColumn(measures.map((m) => m.heaps[item]!)))
 	const rows = 1.25 * Math.max(...each.map((e) => e.heap))
 	const largestRow = Math.max(...each.map((e) => e.largestRow))
-	const json = Math.max(...measures.flatMap((m) => items.map((item) => m.items[item]!.json)))
+	const json = Math.max(...measures.flatMap((m) => items.map((item) => m.shapes[item]!.json)))
 	const rest = 3 * ANSWER_BYTES + 3 * json + state
 	return {
 		rows,
@@ -1111,8 +1105,7 @@ describe('the table of maxima (RES-3)', () => {
 	}, 900_000)
 
 	// R (status-rows.ts), which statusStream plans its chunks by, is at least the heap RowMeter counts of the rows each
-	// shape reads, with every part at its bound (maximalStatuses): the viewer's filters naming each status, her votes in
-	// every choice, and every flag of hers.
+	// shape reads, with every part at its bound (maximalStatuses).
 	it('bounds the rows each shape reads by R', async () => {
 		const { t, quoted, quote, boost } = await maximalStatuses('raw')
 		const measuredShapes = await runInDurableObject(t.store, (_instance, state) => {

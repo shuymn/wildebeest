@@ -1359,9 +1359,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   read the username through the same projection (`src/domain/profile-bounds.ts`) and derive `acct` and a fallback url
   from the cut username; the admin account search reads candidates' ids and flags only and tests their text in SQL. The actor URI is
   bounded as stored (`ACTOR_URI_LIMIT`), read through `actorUriSql`, and refused at the cutover. One account is then
-  at most about 113 KB as read and 123 KB serialized (94 KB and 119 KB measured with every part at its bound), so a
-  page of 80 serializes to at
-  most about 10 MB; realistic bios (Mastodon's 500 characters, Misskey's 1,500, Pleroma's and GoToSocial's 5,000 of
+  at most the account occurrence of "Maxima of presented units" below, so a page of 80 serializes to at most about
+  10 MB; realistic bios (Mastodon's 500 characters, Misskey's 1,500, Pleroma's and GoToSocial's 5,000 of
   Japanese with links) render to at most about 28 KB. Windowed account reads (followers, following, follow requests,
   `favourited_by`, `reblogged_by`) select ids for their window and read the profiles of the page only
   (`test/account-answer-bytes.test.ts`, `test/admin-accounts.test.ts`). _Enforced (main)_ for answers of many accounts

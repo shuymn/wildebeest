@@ -10,11 +10,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Changed
 
-- A boost no longer shows a quote of its own (a converted row could attach one to the boost): as on Mastodon, a
-  reblog has no `quote`, and its original's quote is shown inside `reblog`.
-- A boost no longer shows attachments, mentions, hashtags or a poll of its own (a converted row could attach them to
-  the boost): as on Mastodon, a reblog's `media_attachments`, `mentions` and `tags` are empty and its `poll` is null,
-  and its original's are shown inside `reblog`.
+- A boost no longer shows a quote, attachments, mentions, hashtags or a poll of its own (a converted row could attach
+  them to the boost): as on Mastodon, a reblog's `quote` and `poll` are null and its `media_attachments`, `mentions` and
+  `tags` are empty, and its original's are shown inside `reblog`.
 - Statuses are read in chunks sized by a bound of the memory their rows take, so a page of 40 statuses takes about a
   dozen queries instead of about two hundred, and grouped notifications and admin reports no longer read their statuses
   one at a time. The chunks do not change answers (the dropped quote of a boost above can change which other statuses'
