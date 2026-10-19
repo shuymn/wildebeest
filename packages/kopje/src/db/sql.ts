@@ -7,7 +7,6 @@ export class Db {
 		private readonly meter?: RowMeter
 	) {}
 
-	// With a meter, every row is counted as it leaves SQLite (iterate).
 	all<T extends Row>(query: string, ...params: SqlStorageValue[]): T[] {
 		return this.meter === undefined
 			? this.sql.exec<T>(query, ...params).toArray()
@@ -31,15 +30,13 @@ export class Db {
 		}
 	}
 
-	// This database, its reads counted by `meter`.
 	metered(meter: RowMeter): Db {
 		return new Db(this.sql, meter)
 	}
 }
 
-// The heap a row takes once it is a JavaScript object, as the heap model of "Heap at 8 MiB per answer"
-// (docs/threat-model.md) estimates it: ROW_OBJECT_BYTES for the object, VALUE_BYTES for each value, and two bytes per
-// UTF-16 code unit of each string (the most a string's characters take).
+// A row's heap as a JavaScript object, in bytes, by the model of "Heap at 8 MiB per answer" (docs/threat-model.md);
+// shared by rowHeapSql (src/db/columns.ts) and RowMeter.
 export const ROW_OBJECT_BYTES = 64
 export const VALUE_BYTES = 32
 

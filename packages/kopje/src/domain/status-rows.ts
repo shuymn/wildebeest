@@ -12,10 +12,8 @@ import {
 } from './status-bounds'
 import { balancedSum, type ColumnMap, fixedColumns, type FixedColumns, rowHeapSql } from '../db/columns'
 
-// The rows the status presenter reads (hydrate in status-presenter.ts), each query's result columns as one column map
-// (src/db/columns.ts), and R: an upper bound on the heap the rows of one status of an answer take as RowMeter counts
-// them, generated from the same maps, which statusStream plans its chunks by (RES-3, "Heap at 8 MiB per answer" in
-// docs/threat-model.md).
+// hydrate's queries (status-presenter.ts) and R, statusStream's bound on one status's row heap, share these column maps
+// (src/db/columns.ts), so R cannot drift from what is read (RES-3, "Heap at 8 MiB per answer" in docs/threat-model.md).
 
 // in_reply_to_id and in_reply_to_account_id are shown as Mastodon shows them, even when the viewer may not see the
 // parent: they belong to the reply, whose ActivityPub object carries inReplyTo to every recipient anyway, and its
@@ -77,7 +75,6 @@ export function shownMediaSql(id: string): string {
 		LIMIT ${MAX_STATUS_MEDIA}`
 }
 
-// A mention of the status `j.value`: the mentioned account's id, username, domain and URLs.
 export const MENTION_COLUMN_MAP = {
 	status_id: 'j.value',
 	id: 'a.id',
@@ -91,7 +88,6 @@ export const MENTION_COLUMN_MAP = {
 export const SHOWN_MENTIONS_SQL = `SELECT m.account_id FROM status_mentions m INDEXED BY status_mentions_shown
 	WHERE m.status_id = j.value AND m.silent = 0 ORDER BY m.account_id LIMIT ${MAX_STATUS_MENTION_ROWS}`
 
-// A hashtag of the status `j.value`.
 export const TAG_COLUMN_MAP = { status_id: 'j.value', name: tagNameSql('t.name') } as const satisfies ColumnMap
 
 // The hashtags the status `j.value` shows, at most MAX_PRESENTED_TAGS, first by name (status_tags' order).

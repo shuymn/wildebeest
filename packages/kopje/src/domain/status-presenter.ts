@@ -229,13 +229,11 @@ function presentationOf(db: Db, candidates: readonly string[], options: PresentO
 	}
 }
 
-// The preparation pass of the filter text level: the targets present() matches (each status of the answer, by its
-// boosted original for a boost, and each quoted status shown in it), read as ids first when there may be more than
-// the allowance holds whole. When the viewer has keyword filters and the targets could pass it, every target's
-// searchable text is read (content, source, poll choices, media descriptions), in chunks of TEXT_CHUNK statuses, each
-// chunk's rows dropped once measured: SQL cannot give the length of the plain text matched (searchableText), and the
-// level must be the one presenting all at once gives. The pass's work is bounded by the candidate caps (a context's
-// 8,192), not by the answer budget, as the unchunked presentation's was; its memory is one chunk.
+// The preparation pass of the filter text level over present()'s targets: each status (its original for a boost) and
+// each quoted status, read as ids first when they may pass the allowance. With keyword filters, their searchable text
+// (content, source, poll choices, media descriptions) is read in chunks of TEXT_CHUNK statuses, each dropped once
+// measured: SQL cannot measure searchableText's plain text, and the level must be the one presenting all at once
+// gives. Memory is one chunk; work is bounded by the candidate caps (a context's 8,192), not by the answer budget.
 const TEXT_CHUNK = 4
 
 function textLevel(db: Db, ids: readonly string[], options: PresentOwnOptions): number {
@@ -319,11 +317,8 @@ function statusGraph<R extends GraphRow>(
 	return { byId, quotes, quoted }
 }
 
-// How statusStream reads the rows of an answer's statuses ("Heap at 8 MiB per answer" in docs/threat-model.md): in
-// chunks of consecutive statuses whose R (statusRowBoundSql in status-rows.ts, a bound of the heap the rows each reads
-// take, as RowMeter counts it) sums to at most `target`, within one window of R_WINDOW and at least one. A chunk of
-// several is read through a RowMeter of `cap`, which only a fault in R passes; past it the chunk is read again one
-// status at a time (a status alone is not capped: its rows are bounded as a unit, "Maxima of presented units").
+// statusStream's chunk target and RowMeter cap, in bytes of row heap. R (status-rows.ts), R_WINDOW, the fallback of a
+// chunk of several past its cap and the uncapped single status: "Heap at 8 MiB per answer" in docs/threat-model.md.
 export type ChunkPlan = { readonly target: number; readonly cap: number }
 
 // Pages, contexts, search, histories and lookups: 1 MiB of heap, so a timeline's peak with the backstop fired stays
@@ -335,9 +330,8 @@ export const LARGE_ITEM_CHUNKS: ChunkPlan = { target: 1024 * 1024, cap: 1024 * 1
 // R is read for at most this many statuses at a time (a page's limit), and a chunk lies within one window.
 const R_WINDOW = 80
 
-// Admission of statuses (RES-3, admit): the statuses of `ids` in traversal order, their rows read in chunks
-// (statusStream), each presented as one atomic item (with its boosted original and quoted status) when it is reached,
-// while their JSON fits `budget`, under one presentation. An id with nothing to show is consumed.
+// RES-3: admit over statusStream; each status is one atomic item with its boosted original and quoted status. An id
+// with nothing to show is consumed.
 export function presentStatusesWithin(
 	db: Db,
 	shared: Presentation,
@@ -349,11 +343,9 @@ export function presentStatusesWithin(
 	return admit(statusStream(db, shared, ids, chunks), budget, leading)
 }
 
-// The statuses of `ids` in order, under one presentation, for an admission (admit) of items that embed them: their
-// rows read in the chunks `chunks` plans (or, given a number, which a test sets to compare chunked presentation with
-// one whole, that many at a time and unmetered), each status presented only when the stream reaches it, undefined for
-// an id with nothing to show. What the stream holds past what its consumer kept is one chunk of rows. The chunks do
-// not change what is presented: each status is presented under the shared presentation as one whole would.
+// The statuses of `ids` in order, each presented when reached under one presentation, undefined for an id with nothing
+// to show; past what its consumer kept it holds one chunk of rows. A ChunkPlan is metered; a number (a test comparing
+// chunked with whole presentation) reads that many at a time unmetered. Chunks do not change what is presented.
 export function* statusStream(
 	db: Db,
 	shared: Presentation,
@@ -372,7 +364,6 @@ export function* statusStream(
 				if (!(error instanceof RowCapExceeded)) {
 					throw error
 				}
-				// R was below what the rows took: it misses a term.
 				console.warn({ event: 'kopje.presenter.row-cap-exceeded', ids: chunk })
 			}
 		}
@@ -413,7 +404,6 @@ function* plannedChunks(db: Db, shared: Presentation, ids: readonly string[], ta
 	}
 }
 
-// R of each status of `ids`, in their order.
 function statusRowBounds(db: Db, ids: readonly string[], viewer: string | null, filterRows: number): number[] {
 	const bounds = Array.from(ids, () => 0)
 	for (const row of db.all<{ k: number; bytes: number }>(

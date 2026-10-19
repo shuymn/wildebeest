@@ -1,11 +1,9 @@
 import { ACTOR_URI_LIMIT, REMOTE_USERNAME_LIMIT } from '../platform/identity-bounds'
 import { cutSql } from '../platform/stored-bounds'
 
-// RES-2: the bounds of the profile columns a remote server controls. The display name, bio and profile URLs hold
-// values within their stored bounds (STORED_COLUMNS in platform/stored-bounds.ts), which triggers enforce, and are
-// read directly; the username and the actor id are read through the projections here (test-node/
-// bounded-columns.test.ts). It imports only leaves (platform/identity-bounds.ts, platform/stored-bounds.ts), so modules
-// that build SQL at load (status-rows.ts) can use it whatever the import order.
+// RES-2: read projections of the username and actor id (test-node/bounded-columns.test.ts). Stored profile bounds and
+// read exceptions: STORED_COLUMNS in platform/stored-bounds.ts. Imports only leaves, so modules that build SQL at load
+// (status-rows.ts) can use it whatever the import order.
 
 export { cutSql, DISPLAY_NAME_LIMIT, PROFILE_URL_LIMIT } from '../platform/stored-bounds'
 // Mastodon's remote usernames are short; Kopje refuses a longer one as stored (federation/remote-actor.ts, RES-1).

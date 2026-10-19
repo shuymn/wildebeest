@@ -1,9 +1,9 @@
 -- Kopje Store schema 0048: stored values are fixed points of their read projections. Never edit after release
 -- (checksummed).
 --
--- RES-2 (src/platform/stored-bounds.ts): each covered column (STORED_COLUMNS) has a projection P that reads apply and
--- that its writers' output already satisfies. This file sets every stored value x to P(x), keeping no copy, so what
--- the API shows does not change, and adds triggers that refuse any later write of a value that is not a fixed point:
+-- RES-2: set every covered value x to P(x), keeping no copy, then refuse writes outside P's fixed points. Projections,
+-- writers and read exceptions: src/platform/stored-bounds.ts (STORED_COLUMNS); P(P(x)) = P(x), so the API's output
+-- does not change. It adds:
 --
 --   stored_bounds_check          a table made and dropped here, whose named CHECK fails the upgrade before anything
 --                                is rewritten when an uploaded media row (file_token set) holds a URL past 2,048

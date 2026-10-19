@@ -30,79 +30,69 @@ Continuations:
 - **None**: the answer has no paging; what is left out is a Kopje bound. Pinned statuses are one: a status-id cursor
   cannot follow pin order.
 
-The raw presenters (`present` and `hydrate` in status-presenter.ts, `presentAccountsById` and `presentAccount` in
-accounts.ts) are not exported, so no operation uses them directly; the exported paths present one unit or admit within
-a budget.
+The raw presenters are module-private; [threat-model.md](threat-model.md), RES-3, states the enforced presenter
+boundary.
 
 ## Statuses
 
-| Operation                                                                   | Mechanism                                                                     | Continuation | PR   |
-| --------------------------------------------------------------------------- | ----------------------------------------------------------------------------- | ------------ | ---- |
-| `homeTimeline`, `listTimeline`, `publicTimeline`, `tagTimeline`             | Budget                                                                        | Id cursor    | RB1b |
-| `accountStatuses`, `bookmarksList`, `favouritesList`                        | Budget                                                                        | Id cursor    | RB1b |
-| `accountStatuses` with `pinned=true`                                        | Budget: the pins that fit, in pin order                                       | None         | RB1b |
-| `statusQuotes`                                                              | Budget                                                                        | Id cursor    | RB1b |
-| `statusContext`                                                             | Budget: ancestors on half, nearest first; descendants on the rest, in order   | None         | RB1b |
-| `statusHistory`                                                             | Budget: newest revisions first, returned oldest first                         | None         | RB1b |
-| `getStatuses`                                                               | Budget: the ids past the first that does not fit are left out as unknown ones | None         | RB1b |
-| `search`                                                                    | Budget over accounts (the resolved account first), statuses and hashtags      | Offset       | RB1b |
-| `profilePage`                                                               | Budget shared by the account and its statuses                                 | Id cursor    | RB1b |
-| `statusPage`, `embeddedStatus`, `resolveSearch`                             | Unit                                                                          |              | RB1b |
-| `getStatus`, `createStatus`, `postStatus`, `editStatus`, `deleteStatus`     | Unit                                                                          |              | RB1a |
-| `favourite`, `unfavourite`, `reblog`, `unreblog`, `bookmark`, `unbookmark`  | Unit                                                                          |              | RB1a |
-| `pin`, `unpin`, `muteConversation`, `unmuteConversation`, `getPoll`, `vote` | Unit                                                                          |              | RB1a |
-| `listConversations`                                                         | Budget: whole conversations (12 participants each, cut in SQL)                | Id cursor    | RB2  |
-| `markConversation`                                                          | Unit (one conversation)                                                       |              | RB2  |
-| `adminReports`                                                              | Budget: whole reports; a report's statuses as below                           | More         | RB2  |
-| `adminReport`, `updateAdminReport`, `actOnReport`                           | Unit: a report's statuses in its order within 2 MiB, the first always         |              | RB2  |
+| Operation                                                                   | Mechanism                                                                     | Continuation |
+| --------------------------------------------------------------------------- | ----------------------------------------------------------------------------- | ------------ |
+| `homeTimeline`, `listTimeline`, `publicTimeline`, `tagTimeline`             | Budget                                                                        | Id cursor    |
+| `accountStatuses`, `bookmarksList`, `favouritesList`                        | Budget                                                                        | Id cursor    |
+| `accountStatuses` with `pinned=true`                                        | Budget: the pins that fit, in pin order                                       | None         |
+| `statusQuotes`                                                              | Budget                                                                        | Id cursor    |
+| `statusContext`                                                             | Budget: ancestors on half, nearest first; descendants on the rest, in order   | None         |
+| `statusHistory`                                                             | Budget: newest revisions first, returned oldest first                         | None         |
+| `getStatuses`                                                               | Budget: the ids past the first that does not fit are left out as unknown ones | None         |
+| `search`                                                                    | Budget over accounts (the resolved account first), statuses and hashtags      | Offset       |
+| `profilePage`                                                               | Budget shared by the account and its statuses                                 | Id cursor    |
+| `statusPage`, `embeddedStatus`, `resolveSearch`                             | Unit                                                                          |              |
+| `getStatus`, `createStatus`, `postStatus`, `editStatus`, `deleteStatus`     | Unit                                                                          |              |
+| `favourite`, `unfavourite`, `reblog`, `unreblog`, `bookmark`, `unbookmark`  | Unit                                                                          |              |
+| `pin`, `unpin`, `muteConversation`, `unmuteConversation`, `getPoll`, `vote` | Unit                                                                          |              |
+| `listConversations`                                                         | Budget: whole conversations (12 participants each, cut in SQL)                | Id cursor    |
+| `markConversation`                                                          | Unit (one conversation)                                                       |              |
+| `adminReports`                                                              | Budget: whole reports; a report's statuses as below                           | More         |
+| `adminReport`, `updateAdminReport`, `actOnReport`                           | Unit: a report's statuses in its order within 2 MiB, the first always         |              |
 
-A report's statuses are admitted in the order the report shows them while their JSON fits `REPORT_STATUS_BYTES`
-(2 MiB, `src/domain/reports.ts`), the first whatever its size; a first status that uses up the allowance ends them
-without reading the next. The admin then sees a projection of the report: fewer
-statuses than it holds when they pass the allowance; the report itself keeps them all. A page of reports also stops
-at `ADMIN_REPORT_STATUS_BUDGET` statuses, which bounds the statuses it reads.
+A report keeps all its statuses; the admin sees those that fit `REPORT_STATUS_BYTES` (2 MiB), the first whatever its
+size (a first that uses it up ends them without reading the next), and a page of reports stops at `ADMIN_REPORT_STATUS_BUDGET` statuses, which bounds the statuses it reads. See
+`src/domain/reports.ts` (`REPORT_STATUS_BYTES`, `ADMIN_REPORT_STATUS_BUDGET`, `adminReportStream`).
 
 ## Notifications
 
-| Operation                                       | Mechanism                                                      | Continuation       | PR  |
-| ----------------------------------------------- | -------------------------------------------------------------- | ------------------ | --- |
-| `listNotifications`                             | Budget: whole notifications                                    | Id cursor          | RB2 |
-| `getNotification`                               | Unit (one notification)                                        |                    | RB2 |
-| `listGroupedNotifications`                      | Budget: whole groups with the accounts and statuses they add   | Discovery position | RB2 |
-| `getNotificationGroup`                          | Unit (one group: 8 sample accounts and its status or report)   |                    | RB2 |
-| `notificationGroupAccounts`                     | Budget                                                         | Id cursor          | RB2 |
-| `listNotificationRequests`                      | Budget: whole requests with their sender and last status       | Id cursor          | RB2 |
-| `getNotificationRequest`                        | Unit (one request)                                             |                    | RB2 |
-| `claimPushes`, `confirmPush`                    | Count: 16 pushes, each one notification's title, body and icon |                    | RB2 |
-| Streaming events and catch-up (`stream-hub.ts`) | Unit per event; an event over 512 KiB is skipped whole         |                    | RB2 |
+| Operation                                       | Mechanism                                                      | Continuation       |
+| ----------------------------------------------- | -------------------------------------------------------------- | ------------------ |
+| `listNotifications`                             | Budget: whole notifications                                    | Id cursor          |
+| `getNotification`                               | Unit (one notification)                                        |                    |
+| `listGroupedNotifications`                      | Budget: whole groups with the accounts and statuses they add   | Discovery position |
+| `getNotificationGroup`                          | Unit (one group: 8 sample accounts and its status or report)   |                    |
+| `notificationGroupAccounts`                     | Budget                                                         | Id cursor          |
+| `listNotificationRequests`                      | Budget: whole requests with their sender and last status       | Id cursor          |
+| `getNotificationRequest`                        | Unit (one request)                                             |                    |
+| `claimPushes`, `confirmPush`                    | Count: 16 pushes, each one notification's title, body and icon |                    |
+| Streaming events and catch-up (`stream-hub.ts`) | Unit per event; an event over 512 KiB is skipped whole         |                    |
 
-Grouped notifications walk the notifications as before (`GROUP_WALK`), then admit the groups in the order the walk
-found them, each counting what it adds to the answer: its entity, its status unless an admitted group shows it, and
-its sample accounts unless shown (with `partial_avatars`, the first sample as an account, which moves an account
-shown as partial to the accounts, and the others as partial accounts read from their own columns only). Cut by
-bytes, the page is the admitted groups as if the walk had found those alone: its range, which `membersOf` and the
-`page_min_id` and `page_max_id` fields read, and its `next` and `prev` cursors are those of the groups kept, and a
-walk's continuation past a group left out is dropped. The kept groups are admitted again over that range, since
-sampling below a lower upper end can show larger accounts, and the last are dropped the same way: at most four passes
-in all, the first, two more over the kept groups, and then the first group alone, over its own range. A
-group may appear again on the next page with its notifications below the cursor. Unread counts and markers are not
-read by admission.
+Grouped notifications admit whole groups in discovery order; for the cut page's range and cursors, readmission (at
+most four passes) and `partial_avatars` (partial accounts read from their own columns only), see `src/domain/notification-groups.ts` (`admitGroups`,
+`listGroupedNotifications`, `MAX_READMISSIONS`). A group may appear again on the next page with its notifications
+below the cursor. Unread counts and markers are not read by admission.
 
 ## Accounts
 
-| Operation                                                                 | Mechanism                                | Continuation         | PR    |
-| ------------------------------------------------------------------------- | ---------------------------------------- | -------------------- | ----- |
-| `searchAccounts`                                                          | Budget                                   | Offset               | RB1b  |
-| `listAccounts` and `listEndorsements` with `limit=0`, `familiarFollowers` | Budget                                   | Id cursor (`max_id`) | #1114 |
-| `getAccounts`                                                             | Count (40 accounts)                      |                      | #1114 |
-| `getAccount`, `lookupAccount`, `verifyCredentials`, `updateCredentials`   | Unit                                     |                      | #1114 |
-| `listAccounts`, `accountEndorsements`, `listEndorsements` (paged)         | Budget                                   | Id cursor            | RB2   |
-| `listFollows`, `listFollowRequests`, `interactors`                        | Budget                                   | Id cursor            | RB2   |
-| `listBlocks`, `listMutes`                                                 | Budget                                   | Id cursor            | RB2   |
-| `directory`                                                               | Budget                                   | Offset               | RB2   |
-| `adminAccounts`                                                           | Budget: accounts with their admin fields | More                 | RB2   |
-| `adminAccount`, `actOnAdminAccount`, `unsuspendAdminAccount`              | Unit                                     |                      | RB2   |
-| `createReport`                                                            | Unit                                     |                      | RB2   |
+| Operation                                                                 | Mechanism                                | Continuation         |
+| ------------------------------------------------------------------------- | ---------------------------------------- | -------------------- |
+| `searchAccounts`                                                          | Budget                                   | Offset               |
+| `listAccounts` and `listEndorsements` with `limit=0`, `familiarFollowers` | Budget                                   | Id cursor (`max_id`) |
+| `getAccounts`                                                             | Count (40 accounts)                      |                      |
+| `getAccount`, `lookupAccount`, `verifyCredentials`, `updateCredentials`   | Unit                                     |                      |
+| `listAccounts`, `accountEndorsements`, `listEndorsements` (paged)         | Budget                                   | Id cursor            |
+| `listFollows`, `listFollowRequests`, `interactors`                        | Budget                                   | Id cursor            |
+| `listBlocks`, `listMutes`                                                 | Budget                                   | Id cursor            |
+| `directory`                                                               | Budget                                   | Offset               |
+| `adminAccounts`                                                           | Budget: accounts with their admin fields | More                 |
+| `adminAccount`, `actOnAdminAccount`, `unsuspendAdminAccount`              | Unit                                     |                      |
+| `createReport`                                                            | Unit                                     |                      |
 
 ## ActivityPub
 

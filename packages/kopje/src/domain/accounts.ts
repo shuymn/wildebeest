@@ -191,9 +191,9 @@ const REMOTE_ATTACHMENT_SQL = `CASE WHEN a.domain IS NOT NULL THEN (
 				ORDER BY e.key LIMIT ${MAX_REMOTE_FIELDS}) c) k
 		WHERE k.size <= ${REMOTE_FIELDS_BYTES}) END`
 
-// RES-2: profiles are bounded as stored (federation/remote-actor.ts, the triggers of 0048_stored_bounds), converted
-// rows too, and the username and actor id again as read (profile-bounds.ts); fields use REMOTE_ATTACHMENT_SQL and
-// remoteFields. One account's size: the account occurrence in docs/threat-model.md, "Maxima of presented units".
+// RES-2: stored profile bounds: platform/stored-bounds.ts; username and actor id read projections: profile-bounds.ts;
+// fields: REMOTE_ATTACHMENT_SQL and remoteFields. Maxima: the account occurrence in docs/threat-model.md, "Maxima of
+// presented units".
 export const ACCOUNT_COLUMN_MAP = {
 	id: 'a.id',
 	uri: actorUriSql('a.uri'),
