@@ -170,8 +170,9 @@ dump starts, so repeating the finish with the same cursor returns the same trail
 A remote favourite's Like ids are rows of `favourite_likes` (migration `0052_favourite_likes`): the ids of the
 actor's Likes whose Undo has not arrived, each with the time the Store received it (`received_at`, ms since the
 epoch), at most 4 per favourite, each id once in the file and within 4,096 JSON-escaped UTF-8 bytes. `favourites.uri`
-is used for interaction matching only for a local favourite (its own Like id) and for a remote favourite that tracks
-no id yet (the id a row stored before that migration kept, its one outstanding Like); dumps carry it verbatim. A file that keeps no remote Like id writes no rows there: such a favourite is legacy, and
+is used for interaction matching only for a local favourite (its own Like id) and for a remote favourite's retained
+id (the one a row stored before that migration kept, outstanding until its Undo, which counts among the 4); dumps carry
+it verbatim, and no length bound applies to it. A file that keeps no remote Like id writes no rows there: such a favourite is legacy, and
 an Undo naming its status removes it. A chunk holding a fifth row for
 one favourite fails with `favourite_likes: more than 4 Like ids for one favourite`, a repeated id with
 `UNIQUE constraint failed: favourite_likes.uri`, and a longer one with `like_id_within_4096_json_bytes`.

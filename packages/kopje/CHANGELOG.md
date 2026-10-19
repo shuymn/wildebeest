@@ -13,23 +13,24 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - A remote favourite tracks the id of each of the actor's Likes of the status whose Undo has not arrived, and stays
   while it tracks one (up to 4). An Undo removes only the Like it names; before, an Undo naming the status removed the
   favourite whatever Like it named, and a second Like of a favourited status was dropped. A remote favourite stored
-  before the upgrade keeps its stored Like id as its one outstanding Like: an Undo of that id removes it, an Undo
-  naming its status removes it and keeps both ids from coming back, and a new Like tracks the stored id beside its own.
-  One converted without a Like id is removed by an Undo naming its status.
+  before the upgrade keeps its stored Like id as one of its outstanding Likes until that id's Undo (typed or not); an
+  Undo naming its status removes it while it tracks no other id, and keeps both ids from coming back. One converted
+  without a Like id is removed by an Undo naming its status.
 - A Like that would be a fifth outstanding one for the same favourite is answered 503 with nothing written; the
   sending server's retry is taken once an Undo makes room. A tracked Like the Store received 7 days before, by its own
   clock (longer than the delivery retries of common servers), makes room for it instead and is recorded as undone, so
   Likes whose Undo was lost do not block the pair and do not come back when delivered again.
-- A Like id is tracked once in the instance, and one longer than 4,096 bytes (JSON-escaped UTF-8) is not stored: such
-  a Like is ignored.
+- A Like id is held once in the instance (a Like under an id any favourite already holds is ignored), and a new one
+  longer than 4,096 bytes (JSON-escaped UTF-8) is not stored: such a Like is ignored. An id stored before the upgrade
+  keeps working whatever its length.
 - An untyped Undo (an id alone) that matches nothing stored is answered 503 when the actor's retractions are at their
   cap (10,000), where it was answered 202 and not recorded: it may undo a Like or boost still on its way.
 - An Undo of a Like naming a status that is not a local one, and that no stored favourite matches, records nothing:
   servers also send the Undos of reactions to other servers' posts to the reactor's followers, and these took the
   actor's retraction allowance.
 - Stored format: a remote favourite's Like ids are rows of the new `favourite_likes` table, and its `favourites.uri`
-  is NULL once it tracks its ids (one stored before the upgrade keeps its id there until a new Like moves it;
-  [docs/dump-format.md](docs/dump-format.md)). A dump holding more than 4 for one favourite, an id twice or
+  holds only the id it kept from before the upgrade, until that id's Undo ([docs/dump-format.md](docs/dump-format.md)).
+  A dump in which a favourite's rows and kept id make more than 4 is refused. A dump holding more than 4 for one favourite, an id twice or
   an id past 4,096 bytes is refused.
 
 ### Fixed
@@ -44,7 +45,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0052_favourite_likes`: adds the empty `favourite_likes` table with its indexes and triggers, and an index of the
       favourites by stored Like id; no existing row is changed. On a benchmark store of 1,000,000 accounts and 2,000,000 favourites each holding a Like id,
-      the whole upgrade took 7.6 to 7.9 seconds in four runs (10.2 and 14.0 in two under heavier load) in workerd's local Durable Object SQLite.
+      the whole upgrade took 7.6 to 8.0 seconds in three runs in workerd's local Durable Object SQLite.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.17] - 2026-10-19

@@ -10,6 +10,7 @@ import { LOCAL, MASTODON, MISSKEY, mastodonActor, misskeyActor, type TestActor }
 import {
 	accountId,
 	ALICE,
+	announce,
 	create,
 	followed,
 	like,
@@ -17,6 +18,7 @@ import {
 	mastodonNote,
 	notifications,
 	OTHER,
+	remove,
 	type Setup,
 	setup,
 	statusRow,
@@ -657,14 +659,14 @@ describe('ID-7: a legacy favourite of a local status (no tracked id)', () => {
 })
 
 describe('ID-7: a remote favourite stored before 0052_favourite_likes', () => {
-	// As the earlier inbox stored it: one row per actor and status, its Like id in favourites.uri, its one outstanding
-	// Like until it is tracked.
-	async function preUpgrade(t: Setup, bob: TestActor) {
+	// As the earlier inbox stored it: one row per actor and status, its Like id in favourites.uri, retained as one of
+	// its outstanding ids until its own Undo.
+	async function preUpgrade(t: Setup, bob: TestActor, name?: string) {
 		const receive = receiver(t, bob)
 		await t.post(bob, like(bob, `${LOCAL}/ap/o/unknown`))
 		const uri = await seededLocal(t)
 		const bobId = (await accountId(t.store, bob.uri))!
-		const old = likeOf(bob, uri, `before-upgrade-${uri}`)
+		const old = likeOf(bob, uri, name ?? `before-upgrade-${uri}`)
 		await sql(
 			t.store,
 			`INSERT INTO favourites (account_id, status_id, uri, created_at)
@@ -738,6 +740,9 @@ describe('ID-7: a remote favourite stored before 0052_favourite_likes', () => {
 		expect(await state(t)).toEqual(before)
 	})
 
+	const retainedUri = async (t: Setup) =>
+		(await sql<{ uri: string | null }>(t.store, 'SELECT uri FROM favourites'))[0]?.uri
+
 	it.each(
 		UNDO_STYLES.flatMap(
 			(style) =>
@@ -746,24 +751,72 @@ describe('ID-7: a remote favourite stored before 0052_favourite_likes', () => {
 					[style, 'new first'],
 				] as const
 		)
-	)('moves its stored id into its tracked ids on a new Like; then %s Undos, %s, end it', async (style, order) => {
+	)('keeps its retained id beside a new Like’s; then %s Undos, %s, end it', async (style, order) => {
 		const t = await setup()
 		const bob = await misskeyActor(t.web, '9abcdefghi', 'neko')
 		const { receive, uri, old } = await preUpgrade(t, bob)
 		const fresh = likeOf(bob, uri, 'after-upgrade')
 		expect(await receive(fresh)).toMatchObject({ applied: true, reason: 'favourite-kept' })
-		expect(await tracked(t, uri)).toEqual([old.id, fresh.id])
-		expect(await sql(t.store, 'SELECT uri FROM favourites')).toEqual([{ uri: null }])
+		expect(await tracked(t, uri)).toEqual([fresh.id])
+		expect(await retainedUri(t)).toBe(old.id)
 		expect((await statusRow(t.store, uri))?.favourites_count).toBe(1)
 		expect(await notifications(t.store)).toEqual([])
 		const [first, second] = order === 'old first' ? [old, fresh] : [fresh, old]
 		expect(await receive(undoIn(style, bob, first, 0))).toMatchObject({ applied: true, reason: 'like-undone' })
-		expect(await tracked(t, uri)).toEqual([second.id])
+		expect([await retainedUri(t), await tracked(t, uri)]).toEqual(
+			order === 'old first' ? [null, [fresh.id]] : [old.id, []]
+		)
+		expect((await statusRow(t.store, uri))?.favourites_count).toBe(1)
 		expect(await receive(undoIn(style, bob, second, 1))).toMatchObject({ applied: true, reason: 'undone' })
 		await gone(t, uri)
 		for (const liked of [old, fresh]) {
 			expect(await receive(liked)).toMatchObject({ applied: false, reason: 'retracted' })
 		}
+	})
+
+	it('refuses another actor’s Like under its retained id as a duplicate; its own Undos are unaffected', async () => {
+		const t = await setup()
+		const bob = await misskeyActor(t.web, '9abcdefghi', 'neko')
+		const carol = await misskeyActor(t.web, '9bcdefghij', 'carol', { key: 2 })
+		const { receive, uri, old } = await preUpgrade(t, bob)
+		await t.post(carol, like(carol, `${LOCAL}/ap/o/unknown`))
+		const other = await seededLocal(t)
+		expect(await receiver(t, carol)({ type: 'Like', id: old.id, object: other })).toMatchObject({
+			applied: false,
+			reason: 'duplicate',
+		})
+		expect((await statusRow(t.store, other))?.favourites_count).toBe(0)
+		const fresh = likeOf(bob, uri, 'after-upgrade')
+		await receive(fresh)
+		expect(await receive(undoOf(bob, fresh))).toMatchObject({ applied: true, reason: 'like-undone' })
+		expect(await retainedUri(t)).toBe(old.id)
+		expect(await receive(untypedUndoOf(old))).toMatchObject({ applied: true, reason: 'undone' })
+		await gone(t, uri)
+	})
+
+	it('keeps a retained id past ACTIVITY_ID_LIMIT working (the bound applies to new ids only)', async () => {
+		const t = await setup()
+		const bob = await misskeyActor(t.web, '9abcdefghi', 'neko')
+		const { receive, uri, old } = await preUpgrade(t, bob, `oversized-${'x'.repeat(ACTIVITY_ID_LIMIT)}`)
+		const fresh = likeOf(bob, uri, 'after-upgrade')
+		expect(await receive(fresh)).toMatchObject({ applied: true, reason: 'favourite-kept' })
+		expect(await retainedUri(t)).toBe(old.id)
+		expect(await receive(undoOf(bob, fresh))).toMatchObject({ applied: true, reason: 'like-undone' })
+		expect(await receive(untypedUndoOf(old))).toMatchObject({ applied: true, reason: 'undone' })
+		await gone(t, uri)
+	})
+
+	it('counts its retained id under MAX_TRACKED_LIKES', async () => {
+		const t = await setup()
+		const bob = await misskeyActor(t.web, '9abcdefghi', 'neko')
+		const { receive, uri } = await preUpgrade(t, bob)
+		const likes = ['a', 'b', 'c', 'd'].map((n) => likeOf(bob, uri, n))
+		for (const liked of likes.slice(0, MAX_TRACKED_LIKES - 1)) {
+			expect(await receive(liked)).toMatchObject({ applied: true })
+		}
+		const before = await state(t)
+		expect(await receive(likes[MAX_TRACKED_LIKES - 1]!)).toMatchObject({ retry: true, reason: 'like-tracking-cap' })
+		expect(await state(t)).toEqual(before)
 	})
 
 	it('ignores a replay of its stored Like as a duplicate', async () => {
@@ -774,6 +827,48 @@ describe('ID-7: a remote favourite stored before 0052_favourite_likes', () => {
 		expect(await sql(t.store, 'SELECT uri FROM favourites')).toEqual([{ uri: old.id }])
 		expect(await tracked(t, uri)).toEqual([])
 	})
+})
+
+describe('ID-7: an Undo of a boost whose id a tombstone already holds', () => {
+	it.each(['typed', 'untyped'] as const)('removes a stored boost all the same (%s Undo)', async (style) => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const local = await localStatus(t, { status: 'boost me', visibility: 'public' })
+		const boost = announce(bob, local.uri)
+		expect(await t.post(bob, boost)).toBe(202)
+		// A tombstone of the boost's id, as an earlier state could hold it beside the stored boost.
+		await sql(
+			t.store,
+			'INSERT INTO inbound_retractions (actor_uri, target_uri, expires_at) VALUES (?, ?, ?)',
+			bob.uri,
+			boost.id,
+			NOW + DAY
+		)
+		const object = style === 'typed' ? { id: boost.id, type: 'Announce', actor: bob.uri, object: local.uri } : boost.id
+		expect(await t.post(bob, undo(bob, object))).toBe(202)
+		expect(await sql(t.store, 'SELECT * FROM statuses WHERE uri = ?', boost.id)).toEqual([])
+		expect((await statusRow(t.store, local.uri))?.reblogs_count).toBe(0)
+		expect(await t.post(bob, boost)).toBe(202)
+		expect(await sql(t.store, 'SELECT * FROM statuses WHERE uri = ?', boost.id)).toEqual([])
+	})
+
+	it.each(['typed', 'untyped'] as const)(
+		'keeps a Delete, then an Undo (%s), then a replayed Announce from restoring it',
+		async (style) => {
+			const t = await setup()
+			const bob = await mastodonActor(t.web, 'bob')
+			const local = await localStatus(t, { status: 'boost me', visibility: 'public' })
+			const boost = announce(bob, local.uri)
+			expect(await t.post(bob, boost)).toBe(202)
+			expect(await t.post(bob, remove(bob, boost.id))).toBe(202)
+			const object =
+				style === 'typed' ? { id: boost.id, type: 'Announce', actor: bob.uri, object: local.uri } : boost.id
+			expect(await t.post(bob, undo(bob, object))).toBe(202)
+			expect(await t.post(bob, boost)).toBe(202)
+			expect(await sql(t.store, 'SELECT * FROM statuses WHERE uri = ?', boost.id)).toEqual([])
+			expect((await statusRow(t.store, local.uri))?.reblogs_count).toBe(0)
+		}
+	)
 })
 
 describe('VIS-10: the favourite notification follows the aggregate', () => {

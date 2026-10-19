@@ -5101,20 +5101,30 @@ describe('0052_favourite_likes', () => {
 				'SEARCH l USING INDEX favourite_likes_uri (uri=?)',
 				'SEARCH f USING INTEGER PRIMARY KEY (rowid=?)',
 			])
-			// And a not-yet-tracked remote favourite by its stored id (inbox.ts legacyByLike), one seek.
-			const legacyPlan = sql
-				.exec<{ detail: string }>(
-					`EXPLAIN QUERY PLAN SELECT f.id, f.status_id, f.uri FROM favourites f INDEXED BY favourites_like_uri
-					WHERE f.account_id = ? AND f.uri = ? LIMIT 1`,
-					'100000000000000002',
+			// A retained id, the actor's own (inbox.ts retainedLike) and any actor's (like's admission), one seek each.
+			const planOf = (query: string, ...params: string[]) =>
+				sql
+					.exec<{ detail: string }>(`EXPLAIN QUERY PLAN ${query}`, ...params)
+					.toArray()
+					.map((row) => row.detail)
+			expect(
+				planOf(
+					`SELECT f.id, f.status_id, f.uri FROM favourites f INDEXED BY favourites_like_uri
+					WHERE f.uri = ? AND f.account_id = ? LIMIT 1`,
+					'https://r.example/likes/2',
+					'100000000000000002'
+				)
+			).toEqual(['SEARCH f USING INDEX favourites_like_uri (uri=? AND account_id=?)'])
+			expect(
+				planOf(
+					'SELECT 1 FROM favourites INDEXED BY favourites_like_uri WHERE uri = ? LIMIT 1',
 					'https://r.example/likes/2'
 				)
-				.toArray()
-				.map((row) => row.detail)
-			expect(legacyPlan).toEqual(['SEARCH f USING INDEX favourites_like_uri (account_id=? AND uri=?)'])
+			).toEqual(['SEARCH favourites USING COVERING INDEX favourites_like_uri (uri=?)'])
 			const insert = (favourite: number, uri: string) =>
 				sql.exec('INSERT INTO favourite_likes (favourite_id, uri, received_at) VALUES (?, ?, 0)', favourite, uri)
-			for (let n = 0; n < 4; n++) {
+			// Favourite 2 retains its id, which counts: three rows make its four.
+			for (let n = 0; n < 3; n++) {
 				insert(2, `https://r.example/likes/2-${n}`)
 			}
 			// The cap, a repeated id (for another favourite too) and an id past ACTIVITY_ID_LIMIT, as an import writes them.

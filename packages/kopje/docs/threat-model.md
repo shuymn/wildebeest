@@ -226,8 +226,9 @@ against their own instance. TLS is assumed between all parties.
   favourite of (one tracking no id: the cutover keeps none for a remote favourite, and one stored before migration
   `0052_favourite_likes` tracks none) removes it, recording that favourite's stored id with its own, as
   Mastodon's `undo_like` finds the favourite by its object; a `Like` of it makes it tracked. A favourite stored before
-  that migration keeps its `Like` id in `favourites.uri` as its one outstanding `Like` until a new `Like` moves it into
-  the tracked ids: an `Undo` of it, typed or not, removes the favourite, even after a `Delete` of the id tombstoned it. These stored matches come
+  that migration retains its `Like` id in `favourites.uri` as one of its outstanding ids, counted under the cap, never
+  retired, held instance-wide like a tracked one, and cleared only by its own `Undo`, typed or not, even after a
+  `Delete` of the id tombstoned it; the favourite goes when no outstanding id remains. These stored matches come
   first; then an `Undo` of a `Like` naming anything but a local original records nothing (Mastodon's `undo_like`), so
   a server's Undos of reactions to other servers' notes, which it also sends to the reactor's followers, spend no
   tombstone. A favourite tracks at most `MAX_TRACKED_LIKES` (4) ids (a trigger holds it for imports too); at the cap

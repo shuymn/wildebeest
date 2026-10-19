@@ -2054,11 +2054,13 @@ function mayInteract(db: Db, actor: RemoteRow, statusId: string): boolean {
 }
 
 // Mastodon's ActivityPub::Activity::Like: a favourite of a local status, once per account, unless an Undo of this Like
-// arrived first (ID-7), by an actor that may interact with it (mayInteract). The favourite tracks the id of every Like
-// it was given whose Undo has not arrived (favourite_likes, at most MAX_TRACKED_LIKES), so a reaction replaced by an
-// Undo and a new Like keeps the favourite whatever order they arrive in. A Like id is tracked once, for one status: an
-// activity id names one activity (favourite_likes_uri is unique). An id past ACTIVITY_ID_LIMIT is not stored, nor
-// favourited. A further Like of a favourited status is tracked without a recount or a notification (VIS-10).
+// arrived first (ID-7), by an actor that may interact with it (mayInteract). A remote favourite's outstanding Like ids
+// are its favourite_likes rows and its retained favourites.uri (the id a favourite stored before migration
+// 0052_favourite_likes kept, until its Undo), at most MAX_TRACKED_LIKES in all, so a reaction replaced by an Undo and
+// a new Like keeps the favourite whatever order they arrive in. An activity id names one activity: a Like whose id
+// either table holds, for any actor, is a duplicate (a remote actor's id has its own origin, so a local favourite's
+// own id is never one). A new id past ACTIVITY_ID_LIMIT is not stored, nor favourited. A further Like of a favourited
+// status is tracked without a recount or a notification (VIS-10).
 const like: Handler<'Like'> = (db, actor, activity, { now, storeNow }) => {
 	const status = db.first<{ id: string; account_id: string }>(
 		`SELECT s.id, s.account_id FROM statuses s JOIN local_accounts l ON l.account_id = s.account_id
@@ -2078,27 +2080,24 @@ const like: Handler<'Like'> = (db, actor, activity, { now, storeNow }) => {
 		return ignored('id-past-bound')
 	}
 	if (
-		db.first('SELECT 1 AS x FROM favourite_likes WHERE uri = ? LIMIT 1', activity.id) !== undefined ||
-		legacyByLike(db, actor.id, activity.id) !== undefined
+		db.first(
+			`SELECT 1 AS x FROM favourite_likes WHERE uri = ?1
+			UNION ALL SELECT 1 FROM favourites INDEXED BY favourites_like_uri WHERE uri = ?1 LIMIT 1`,
+			activity.id
+		) !== undefined
 	) {
 		return ignored('duplicate')
 	}
-	const favourite = db.first<{ id: number; likes: number; uri: string | null }>(
-		`SELECT f.id, (SELECT count(*) FROM favourite_likes l WHERE l.favourite_id = f.id) AS likes, f.uri
+	// Outstanding: the tracked ids and the retained one.
+	const favourite = db.first<{ id: number; outstanding: number }>(
+		`SELECT f.id, (SELECT count(*) FROM favourite_likes l WHERE l.favourite_id = f.id) + (f.uri IS NOT NULL)
+			AS outstanding
 		FROM favourites f WHERE f.account_id = ? AND f.status_id = ?`,
 		actor.id,
 		status.id
 	)
-	if (favourite?.uri != null) {
-		// A legacy favourite's stored Like id becomes tracked first (and leaves favourites.uri), so the set holds both.
-		moveLegacyLike(db, { id: favourite.id, uri: favourite.uri }, storeNow)
-		favourite.likes = db.first<{ n: number }>(
-			'SELECT count(*) AS n FROM favourite_likes WHERE favourite_id = ?',
-			favourite.id
-		)!.n
-	}
 	if (favourite !== undefined) {
-		if (favourite.likes >= MAX_TRACKED_LIKES) {
+		if (favourite.outstanding >= MAX_TRACKED_LIKES) {
 			retireStaleLike(db, actor, favourite.id, now, storeNow)
 		}
 		trackLike(db, favourite.id, activity.id, storeNow)
@@ -2311,28 +2310,16 @@ function authorDeleted(db: Db, id: string, now: number): boolean {
 	return uri !== undefined && isDeletedActor(db, uri, now)
 }
 
-// Moves a legacy remote favourite's stored Like id (favourites.uri) into favourite_likes, received now by the Store's
-// clock (it is not retired before LIKE_RETIRE_AFTER_MS), and clears it. An id past ACTIVITY_ID_LIMIT, or one tracked
-// already (another favourite holds it), is not stored, and is cleared all the same.
-function moveLegacyLike(db: Db, favourite: { id: number; uri: string }, storeNow: number): void {
-	if (
-		withinIdentityBound(favourite.uri, ACTIVITY_ID_LIMIT) &&
-		db.first('SELECT 1 AS x FROM favourite_likes WHERE uri = ? LIMIT 1', favourite.uri) === undefined
-	) {
-		trackLike(db, favourite.id, favourite.uri, storeNow)
-	}
-	db.run('UPDATE favourites SET uri = NULL WHERE id = ?', favourite.id)
-}
-
 // received_at: the Store's clock (StoreReceiveInput).
 function trackLike(db: Db, favouriteId: number, uri: string, storeNow: number): void {
 	db.run('INSERT INTO favourite_likes (favourite_id, uri, received_at) VALUES (?, ?, ?)', favouriteId, uri, storeNow)
 }
 
 // Makes room at the cap: the earliest tracked id (by row id) the Store received at least LIKE_RETIRE_AFTER_MS ago, by
-// its own clock, goes and is recorded as retracted, so a replay of its Like does not bring the favourite back (ID-7).
-// The favourite keeps the new Like, so its count and notification stay. Without such an id, or without room for its
-// retraction, nothing is written and the Like is answered 503.
+// its own clock, goes and is recorded as retracted, so a replay of its Like does not bring the favourite back (ID-7);
+// a retained favourites.uri has no time of receipt and is never retired. The favourite keeps the new Like, so its
+// count and notification stay. Without such an id, or without room for its retraction, nothing is written and the
+// Like is answered 503.
 function retireStaleLike(db: Db, actor: RemoteRow, favouriteId: number, now: number, storeNow: number): void {
 	const stale = db.first<{ id: number; uri: string }>(
 		`SELECT id, uri FROM favourite_likes WHERE favourite_id = ? AND received_at <= ? ORDER BY id LIMIT 1`,
@@ -2377,15 +2364,26 @@ function legacyFavourite(db: Db, actorId: string, uri: string): LegacyFavourite 
 	)
 }
 
-// The actor's legacy favourite whose stored Like id (favourites.uri, kept from before migration 0052_favourite_likes)
-// is `uri`: its one outstanding Like until it is tracked (like moves it). By favourites_like_uri, one row at most per
-// actor and id in practice, never a range of the actor's favourites.
-function legacyByLike(db: Db, actorId: string, uri: string): LegacyFavourite | undefined {
+// The actor's favourite whose retained Like id (favourites.uri, kept from before migration 0052_favourite_likes) is
+// `uri`, tracked ids or not: it stays outstanding until its own Undo. By favourites_like_uri (uri, account_id), one
+// seek, never a range of the actor's favourites; owner-scoped, so a local favourite's own id is never matched.
+function retainedLike(db: Db, actorId: string, uri: string): LegacyFavourite | undefined {
 	return db.first<LegacyFavourite>(
 		`SELECT CAST(f.id AS TEXT) AS id, f.status_id, f.uri FROM favourites f INDEXED BY favourites_like_uri
-		WHERE f.account_id = ? AND f.uri = ? LIMIT 1`,
-		actorId,
-		uri
+		WHERE f.uri = ? AND f.account_id = ? LIMIT 1`,
+		uri,
+		actorId
+	)
+}
+
+// Whether the favourite `id` still has an outstanding Like id: a tracked one, or its retained one.
+function outstanding(db: Db, id: string): boolean {
+	return (
+		db.first(
+			`SELECT 1 AS x FROM favourite_likes WHERE favourite_id = ?1
+			UNION ALL SELECT 1 FROM favourites WHERE id = ?1 AND uri IS NOT NULL LIMIT 1`,
+			id
+		) !== undefined
 	)
 }
 
@@ -2395,7 +2393,7 @@ function interactionOf(db: Db, actor: RemoteRow, uri: string): boolean {
 		db.first(
 			`SELECT 1 AS x WHERE EXISTS (SELECT 1 FROM favourite_likes l INDEXED BY favourite_likes_uri
 					JOIN favourites f ON f.id = l.favourite_id WHERE l.uri = ?2 AND f.account_id = ?1)
-				OR EXISTS (SELECT 1 FROM favourites INDEXED BY favourites_like_uri WHERE account_id = ?1 AND uri = ?2)
+				OR EXISTS (SELECT 1 FROM favourites INDEXED BY favourites_like_uri WHERE uri = ?2 AND account_id = ?1)
 				OR EXISTS (SELECT 1 FROM statuses WHERE account_id = ?1 AND uri = ?2 AND reblog_of_id IS NOT NULL)`,
 			actor.id,
 			uri
@@ -2426,10 +2424,10 @@ function removeBoost(db: Db, actorId: string, boost: { id: string; original: str
 }
 
 // Undo of a Like or an Announce, by the undone activity's id (ID-7). For a Like, in this order:
-//   - the actor's favourite tracking the id: the id goes, and the favourite with its last one (removeFavourite);
-//   - a legacy favourite whose stored Like id (favourites.uri) it is, typed or untyped (legacyByLike): it goes;
-//   - for a typed Like naming a status the actor has a legacy favourite of (legacyFavourite): that favourite goes, as
-//     Mastodon's undo_like finds the actor's favourite of the object;
+//   - the actor's favourite tracking the id, or retaining it (favourites.uri, retainedLike), typed or untyped: the id
+//     goes (its row, or the retained uri cleared), and the favourite with its last outstanding one (removeFavourite);
+//   - for a typed Like naming a status the actor has a legacy favourite of (legacyFavourite: no tracked id, its
+//     retained id another): that favourite goes, as Mastodon's undo_like finds the actor's favourite of the object;
 //   - for a typed Like naming anything but a local original: nothing (Mastodon's undo_like). A server sends a
 //     reaction's Undo to the reactor's followers too, and these would spend the actor's retraction cap;
 //   - otherwise the id is recorded as retracted, so a Like that arrives after its Undo does not apply.
@@ -2438,11 +2436,11 @@ function removeBoost(db: Db, actorId: string, boost: { id: string; original: str
 // if they cannot be (the per-actor cap), nothing changes and the Undo is answered 503.
 function undoInteraction(db: Db, actor: RemoteRow, ref: ActivityRef & { id: string }, now: number): ReceiveResult {
 	const tracked = ref.type === 'Announce' ? undefined : trackedLike(db, actor.id, ref.id)
+	const retained = tracked !== undefined || ref.type === 'Announce' ? undefined : retainedLike(db, actor.id, ref.id)
 	const legacy =
-		tracked !== undefined || ref.type === 'Announce'
-			? undefined
-			: (legacyByLike(db, actor.id, ref.id) ??
-				(ref.type === 'Like' && ref.object !== null ? legacyFavourite(db, actor.id, ref.object) : undefined))
+		tracked === undefined && retained === undefined && ref.type === 'Like' && ref.object !== null
+			? legacyFavourite(db, actor.id, ref.object)
+			: undefined
 	const boost =
 		ref.type === 'Like'
 			? undefined
@@ -2455,6 +2453,7 @@ function undoInteraction(db: Db, actor: RemoteRow, ref: ActivityRef & { id: stri
 	if (
 		ref.type === 'Like' &&
 		tracked === undefined &&
+		retained === undefined &&
 		legacy === undefined &&
 		ref.object !== null &&
 		db.first(
@@ -2472,11 +2471,16 @@ function undoInteraction(db: Db, actor: RemoteRow, ref: ActivityRef & { id: stri
 		return retryLater('retraction-cap')
 	}
 	let reason = 'retraction-recorded'
+	const undone = tracked === undefined ? retained : { id: tracked.favourite, status_id: tracked.status_id }
 	if (tracked !== undefined) {
 		db.run('DELETE FROM favourite_likes WHERE id = ?', tracked.id)
+	} else if (retained !== undefined) {
+		db.run('UPDATE favourites SET uri = NULL WHERE id = CAST(? AS INTEGER)', retained.id)
+	}
+	if (undone !== undefined) {
 		reason = 'like-undone'
-		if (db.first('SELECT 1 AS x FROM favourite_likes WHERE favourite_id = ?', tracked.favourite) === undefined) {
-			removeFavourite(db, actor.id, { id: tracked.favourite, status_id: tracked.status_id })
+		if (!outstanding(db, undone.id)) {
+			removeFavourite(db, actor.id, undone)
 			reason = 'undone'
 		}
 	} else if (legacy !== undefined) {
