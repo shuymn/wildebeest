@@ -13,12 +13,11 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - A boost no longer shows a quote, attachments, mentions, hashtags or a poll of its own (a converted row could attach
   them to the boost): as on Mastodon, a reblog's `quote` and `poll` are null and its `media_attachments`, `mentions` and
   `tags` are empty, and its original's are shown inside `reblog`.
-- Statuses are read in chunks sized by a bound of the memory their rows take, so a page of 40 statuses takes about a
-  dozen queries instead of about two hundred, and grouped notifications and admin reports no longer read their statuses
-  one at a time. The chunks do not change answers (the dropped quote of a boost above can change which other statuses'
-  text a keyword filter matches, as the answer's text allowance is shared). A chunk whose rows pass that bound is read
-  again one status at a time and logs `kopje.presenter.row-cap-exceeded` with the status ids: it means the bound misses
-  something, so report it.
+- A page of 40 statuses now takes about a dozen queries instead of about two hundred, and grouped notifications and
+  admin reports batch their status reads too. Answers stay the same, except that the dropped quote of a boost above
+  can change which other statuses' text a keyword filter matches, as the answer's text allowance is shared. A batch
+  whose rows pass its memory bound is read again one status at a time and logs `kopje.presenter.row-cap-exceeded`
+  with the status ids: the bound misses a row cost, so report it.
 - Incoming text has U+0000 removed, and a lone surrogate (half of a character outside the Basic Multilingual Plane)
   becomes U+FFFD, one character where a read showed three: display names, bios, status content, content warnings,
   source text and media descriptions, from remote servers and from the API alike. Display names are cut at 2,048 and
@@ -32,11 +31,12 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       past 1,024 bytes;
     - the content, content warning and poll choices of earlier versions change the same way.
 
-  From then on the Store refuses a write of such a value. A local status stored past a bound now shows the same value
-  in its ActivityPub Note as in the API. To recover a rewritten value, restore the point-in-time bookmark taken before
-  the upgrade (it restores the whole database, within the last 30 days; see [docs/upgrade.md](docs/upgrade.md)); for
-  a remote row, re-derive it from its stored `raw` document (refetching does not restore content); for a converted
-  row, run the conversion again from the legacy export.
+    From then on the Store refuses a write of such a value. A local status stored past a bound now shows the same value
+    in its ActivityPub Note as in the API. To recover a rewritten value, restore the point-in-time bookmark taken before
+    the upgrade (it restores the whole database, within the last 30 days; see [docs/upgrade.md](docs/upgrade.md)); for
+    a remote row, re-derive it from its stored `raw` document (refetching does not restore content); for a converted
+    row, run the conversion again from the legacy export.
+
 - `kopje-admin convert` stores display names, profile, status and media URLs, media descriptions and the attachments
   of earlier versions as the Worker stores them, which is what the API already showed: a URL past its bound becomes
   empty (null for a profile or status URL), a long text is cut, and U+0000 is removed from text. Each change is
@@ -54,12 +54,12 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - Store schema: adds one migration, applied on the first request after the deploy; a rollback to an earlier version
   needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0048_stored_bounds`: rewrites stored values past their bounds (above) and adds the triggers that refuse them.
-      It scans the media attachments once for a check, then rewrites each of the four tables in one scan, and the
-      upgrade's verification checks the foreign keys of the whole Store: on a benchmark store of 1,000,000 accounts,
-      2,000,000 statuses, 500,000 media attachments and 100,000 earlier versions the whole upgrade took 7.3
-      seconds (7.3 and 7.5 in two more runs) in workerd's local Durable Object SQLite. The upgrade fails, and
-      the Store stays readonly and unchanged, with `CHECK constraint failed: tokened_media_url_within_2048_bytes` if
-      the URL of an uploaded media file passes 2,048 bytes, which Kopje never builds: report it.
+      On a benchmark store of 1,000,000 accounts, 2,000,000 statuses, 500,000 media attachments and 100,000 earlier
+      versions, the whole upgrade (a check of the media attachments, one rewrite scan of each of the four tables and
+      the foreign-key check of the whole Store) took 7.3 to 7.5 seconds in workerd's local Durable Object SQLite. The
+      upgrade fails, and the Store stays readonly and unchanged, with
+      `CHECK constraint failed: tokened_media_url_within_2048_bytes` if the URL of an uploaded media file passes 2,048
+      bytes, which Kopje never builds: report it.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.16] - 2026-10-18
