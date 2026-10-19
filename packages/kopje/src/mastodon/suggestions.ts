@@ -1,4 +1,5 @@
 import { type ApiHandler, authorized, present, requestParams, storeCall, userCredential } from './context'
+import { limitParam, offsetParam } from './params'
 import { SUGGESTIONS_DEFAULT_LIMIT, SUGGESTIONS_MAX_LIMIT } from '../domain/suggestions'
 
 // Follow suggestions (domain/suggestions.ts): Api::V1::SuggestionsController and Api::V2::SuggestionsController.
@@ -13,15 +14,11 @@ function suggestionsHandler(version: 1 | 2): ApiHandler {
 		if (p instanceof Response) {
 			return p
 		}
-		const limit = p.get('limit')
 		const input = {
 			credential: userCredential(c, deps),
 			version,
-			offset: Math.max(Number.parseInt(p.get('offset') ?? '0', 10) || 0, 0),
-			limit:
-				limit === undefined
-					? SUGGESTIONS_DEFAULT_LIMIT
-					: Math.min(Math.abs(Number.parseInt(limit, 10) || 0), SUGGESTIONS_MAX_LIMIT),
+			offset: offsetParam(p),
+			limit: limitParam(p, SUGGESTIONS_DEFAULT_LIMIT, SUGGESTIONS_MAX_LIMIT),
 			present: present(c),
 		}
 		return c.json(authorized(await storeCall(c, deps, (s, b) => s.suggestions(b, input))))

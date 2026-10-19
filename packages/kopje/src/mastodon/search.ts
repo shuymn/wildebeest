@@ -9,7 +9,7 @@ import {
 } from './context'
 import { mastodonError } from './errors'
 import { pageQuery } from './pagination'
-import { type Params, parseBoolean } from './params'
+import { offsetParam, type Params, parseBoolean } from './params'
 import { isUrlQuery } from '../domain/remote-statuses'
 import type { SearchType } from '../domain/search'
 import { parseAddress } from '../platform/domain-name'
@@ -43,8 +43,7 @@ export function searchParams(p: Params): SearchParams {
 	if (query.length > MAX_QUERY_LENGTH) {
 		return { error: mastodonError(400, `Search query is too long (maximum is ${MAX_QUERY_LENGTH} characters)`) }
 	}
-	const offset = Math.max(Number.parseInt(p.get('offset') ?? '0', 10) || 0, 0)
-	return { query, offset }
+	return { query, offset: offsetParam(p) }
 }
 
 export const search: ApiHandler = async (c, deps) => {
