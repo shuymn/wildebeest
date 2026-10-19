@@ -21,10 +21,20 @@ import { STATUS_URI_LIMIT } from '../src/platform/identity-bounds'
 import { mediaUrl, SERVED_TYPES } from '../src/platform/media-files'
 import {
 	BIO_JSON_BYTES,
+	CONTACT_EMAIL_BYTES,
 	CONTENT_JSON_BYTES,
 	contentSql,
 	DISPLAY_NAME_LIMIT,
 	displayNameSql,
+	DOMAIN_BLOCKS_SHOWN,
+	INSTANCE_DESCRIPTION_LIMIT,
+	INSTANCE_DOCUMENT_BYTES,
+	INSTANCE_RULES_BYTES,
+	INSTANCE_SETTING_BOUNDS,
+	INSTANCE_SETTING_NAMES,
+	INSTANCE_TITLE_LIMIT,
+	type InstanceSettingName,
+	isBlank,
 	MAX_MEDIA_DESCRIPTION_LENGTH,
 	MAX_REMOTE_OPTION_LENGTH,
 	MAX_REMOTE_OPTIONS,
@@ -44,6 +54,7 @@ import {
 	STATUS_URL_LIMIT,
 	statusUrlSql,
 	storedDisplayName,
+	storedInstanceSetting,
 	storedMediaDescription,
 	storedMediaLink,
 	storedMediaMeta,
@@ -51,6 +62,7 @@ import {
 	storedProfileUrl,
 	storedStatusUrl,
 	storedText,
+	trimBlank,
 } from '../src/platform/stored-bounds'
 import {
 	cutCodeUnits,
@@ -643,5 +655,118 @@ describe('a legacy media URL made a profile image after 0048_stored_bounds (RES-
 		)
 		expect(stored.avatar).toBe(stored.media)
 		expect(stored.avatar.length).toBe(2 * 921)
+	})
+})
+
+// RES-2 for the instance settings (INSTANCE_SETTING_BOUNDS, migration 0049_instance_bounds): P is idempotent, a
+// writer's output is P's fixed point (the triggers accept it), and on normalized inputs (storedText's output) the
+// writer and P agree, a writer's null being P's NULL. What the admin write refuses besides (blank after trimming, a
+// document that sanitizes to no text, an email's shape, the terms of service's pairing) is tested in
+// test/admin-instance.test.ts.
+describe('instance setting bounds (RES-2)', () => {
+	type Sql = DurableObjectState['storage']['sql']
+	// Blank characters (BLANK_CODES), and spaces outside the set, which are text.
+	const BLANKS = [' ', '\t', '\n', '\v', '\f', '\r']
+	const SETTING_ALPHABET = [...ALPHABET, ...BLANKS, '\u3000', '\u00a0', '\u2028']
+	const settingMix = mixOf(SETTING_ALPHABET)
+	const near = (unit: Unit, bound: number) =>
+		fc.tuple(fc.constantFrom(bound - 1, bound, bound + 1), settingMix).map(([target, m]) => measured(m, unit, target))
+	const blank = fc.array(fc.constantFrom(...BLANKS, '\u3000', '\u00a0', 'a'), { maxLength: 8 }).map((c) => c.join(''))
+	const text = (bounds: [Unit, number][]) =>
+		fc.oneof(blank, fc.string({ unit: 'binary', maxLength: 40 }), ...bounds.map(([unit, bound]) => near(unit, bound)))
+	// rules as the cutover writes them (JSON.stringify of an array), at INSTANCE_RULES_BYTES, and other JSON.
+	const rules = fc.oneof(
+		fc
+			.array(fc.record({ id: fc.string(), text: fc.string({ unit: 'binary' }) }), { maxLength: 4 })
+			.map((r) => JSON.stringify(r)),
+		fc.jsonValue({ maxDepth: 3 }).map((value) => JSON.stringify(value)),
+		fc
+			.tuple(fc.constantFrom(-1, 0, 1), settingMix)
+			.map(([delta, m]) => JSON.stringify([measured(m, 'json', INSTANCE_RULES_BYTES - 2 + delta)])),
+		blank
+	)
+	const digits = (n: number) => fc.array(fc.constantFrom(...'0123456789'), { minLength: n, maxLength: n })
+	const date = fc.oneof(
+		fc.tuple(digits(4), digits(2), digits(2)).map(([y, m, d]) => `${y.join('')}-${m.join('')}-${d.join('')}`),
+		fc.date({ noInvalidDate: true }).map((d) => d.toISOString().slice(0, 10)),
+		fc.string({ maxLength: 12 })
+	)
+	const stamp = fc.oneof(
+		fc
+			.date({ min: new Date(0), max: new Date('9999-12-31T23:59:59.999Z'), noInvalidDate: true })
+			.map((d) => d.toISOString()),
+		fc
+			.tuple(digits(4), digits(2), digits(2), digits(2), digits(2), digits(2), digits(3))
+			.map(
+				([y, mo, d, h, mi, s, ms]) =>
+					`${y.join('')}-${mo.join('')}-${d.join('')}T${h.join('')}:${mi.join('')}:${s.join('')}.${ms.join('')}Z`
+			),
+		fc.string({ maxLength: 26 })
+	)
+	const shown = fc.oneof(fc.constantFrom(...DOMAIN_BLOCKS_SHOWN, 'Users', ' all', ''), fc.string({ maxLength: 8 }))
+	const INPUTS: Record<InstanceSettingName, fc.Arbitrary<string>> = {
+		title: text([
+			['points', INSTANCE_TITLE_LIMIT],
+			['bytes', INSTANCE_TITLE_LIMIT],
+		]),
+		description: text([
+			['points', INSTANCE_DESCRIPTION_LIMIT],
+			['bytes', INSTANCE_DESCRIPTION_LIMIT],
+		]),
+		contact_email: text([['bytes', CONTACT_EMAIL_BYTES]]),
+		rules,
+		extended_description: text([['bytes', INSTANCE_DOCUMENT_BYTES]]),
+		privacy_policy: text([['bytes', INSTANCE_DOCUMENT_BYTES]]),
+		terms_of_service: text([['bytes', INSTANCE_DOCUMENT_BYTES]]),
+		terms_of_service_effective_date: date,
+		show_domain_blocks: shown,
+		show_domain_blocks_rationale: shown,
+		extended_description_updated_at: stamp,
+		privacy_policy_updated_at: stamp,
+	}
+
+	// P of ?1, as SQLite stores it (NULL for no row).
+	const projected = (sql: Sql, name: InstanceSettingName, value: string) =>
+		valueOf(sql, INSTANCE_SETTING_BOUNDS[name].projection('?1'), value)
+
+	for (const name of INSTANCE_SETTING_NAMES) {
+		it(`${name}: P is idempotent, the writer's output its fixed point, and on normalized input they agree`, async () => {
+			const { projection } = INSTANCE_SETTING_BOUNDS[name]
+			await runInDurableObject(freshStore(), (_instance, state) => {
+				const sql = state.storage.sql
+				fc.assert(
+					fc.property(INPUTS[name], (input) => {
+						expect(idempotent(sql, projection, input)).toBe(true)
+						const written = storedInstanceSetting(name, input)
+						if (written !== null) {
+							expect(valueOf(sql, `(${projection('?1')}) IS ?1`, written)).toBe(1)
+							expect(written.isWellFormed()).toBe(true)
+							expect(written).not.toContain('\u0000')
+						}
+						const normalized = storedText(input)
+						expect(storedInstanceSetting(name, normalized)).toBe(projected(sql, name, normalized))
+					}),
+					{ numRuns: name.endsWith('description') || name.endsWith('policy') || name.endsWith('service') ? 60 : 200 }
+				)
+			})
+		}, 120_000)
+	}
+
+	it('counts blank only over its six ASCII characters, in SQL and JS alike', async () => {
+		await runInDurableObject(freshStore(), (_instance, state) => {
+			for (const [value, blankValue] of [
+				[' \t\n\v\f\r', true],
+				['\v', true],
+				['', true],
+				['\u3000', false],
+				['\u00a0', false],
+				[' a ', false],
+			] as const) {
+				expect(isBlank(value), JSON.stringify(value)).toBe(blankValue)
+				expect(projected(state.storage.sql, 'title', value), JSON.stringify(value)).toBe(blankValue ? null : value)
+				expect(storedInstanceSetting('privacy_policy', value)).toBe(blankValue ? null : value)
+			}
+			expect(trimBlank('\v\u3000 x \t\r')).toBe('\u3000 x')
+		})
 	})
 })

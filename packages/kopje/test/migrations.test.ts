@@ -26,7 +26,14 @@ import { moderationRound } from '../src/domain/suspension'
 import { normalizeTag } from '../src/domain/tag-name'
 import { parseRemoteStatus } from '../src/federation/remote-status'
 import { StoreUnavailableError, toStoreUnavailable } from '../src/platform/store-errors'
-import { storedBoundsMigrationSql } from '../src/platform/stored-bounds'
+import {
+	INSTANCE_SETTING_BOUNDS,
+	INSTANCE_SETTING_NAMES,
+	instanceBoundsMigrationSql,
+	type InstanceSettingName,
+	storedBoundsMigrationSql,
+	storedInstanceSetting,
+} from '../src/platform/stored-bounds'
 
 // The shipped migrations, in order; test-only files are named after them (9999_*).
 const NAMES = MIGRATIONS.map((m) => m.name)
@@ -5054,4 +5061,165 @@ describe('0048_stored_bounds', () => {
 			).toEqual([])
 		})
 	}, 120_000)
+})
+
+describe('0049_instance_bounds', () => {
+	const NAME = '0049_instance_bounds'
+	const at = NAMES.indexOf(NAME)
+	const REFUSED = /instance_settings: a value past its stored bound/
+	const astral = '\u{1F600}'
+	const ENCODER = new TextEncoder()
+	const bytes = (text: string) => ENCODER.encode(text).length
+	// 50,000 UTF-8 bytes exactly, of three-byte characters and two ASCII ones.
+	const documentAt = `${'日'.repeat(16_666)}aa`
+	const emailAt = `${'a'.repeat(254 - '@example.com'.length)}@example.com`
+	const rulesAt = JSON.stringify([`${'r'.repeat(65_536 - 4)}`])
+	// Each covered name at its bound (kept), and one past it in its unit (refused, and rewritten by the migration).
+	const BOUNDS: Record<InstanceSettingName, { at: string; past: string[] }> = {
+		title: { at: astral.repeat(1024), past: [astral.repeat(1025), `${'t'.repeat(1024)}\u3000`] },
+		description: { at: astral.repeat(200), past: [astral.repeat(201)] },
+		contact_email: { at: emailAt, past: [`a${emailAt}`] },
+		rules: { at: rulesAt, past: [JSON.stringify([`${'r'.repeat(65_536 - 3)}`]), '{"a":1}', '[1,', ''] },
+		extended_description: { at: documentAt, past: [`${documentAt}a`, ' \t\n\v\f\r'] },
+		privacy_policy: { at: documentAt, past: [`${documentAt}a`, ''] },
+		terms_of_service: { at: documentAt, past: [`${documentAt}a`, '\v'] },
+		terms_of_service_effective_date: {
+			at: '2026-11-01',
+			past: ['2026-02-30', '2026-1-05', ' 2026-11-01', '2026-11-1 '],
+		},
+		show_domain_blocks: { at: 'users', past: ['everyone', 'Users', 'all '] },
+		show_domain_blocks_rationale: { at: 'all', past: ['', 'disabled\u0000'] },
+		extended_description_updated_at: {
+			at: '2026-10-19T00:00:00.000Z',
+			past: ['2026-10-19T00:00:00Z', '2026-10-19T24:00:00.000Z', '2026-02-30T00:00:00.000Z'],
+		},
+		privacy_policy_updated_at: { at: '9999-12-31T23:59:59.999Z', past: ['2026-10-19 00:00:00.000Z'] },
+	}
+	// Names 0049 does not cover, with values far past any covered bound.
+	const UNCOVERED = { domain: 'd'.repeat(70_000), admin_email: ' ', web_client_id: '' }
+	const rows = (sql: SqlStorage) =>
+		sql.exec<{ name: string; value: string }>('SELECT name, value FROM instance_settings ORDER BY name').toArray()
+	const insert = (sql: SqlStorage, values: Record<string, string>) => {
+		for (const [name, value] of Object.entries(values)) {
+			sql.exec('INSERT OR REPLACE INTO instance_settings (name, value) VALUES (?, ?)', name, value)
+		}
+	}
+
+	it("holds instanceBoundsMigrationSql's output after its header", () => {
+		const sql = MIGRATIONS[at]?.sql ?? ''
+		const end = sql.indexOf('\n\n')
+		expect(
+			sql
+				.slice(0, end)
+				.split('\n')
+				.every((line) => line.startsWith('--'))
+		).toBe(true)
+		expect(sql.slice(end + 2)).toBe(instanceBoundsMigrationSql())
+	})
+
+	it('measures each bound in its unit', () => {
+		expect([bytes(documentAt), documentAt.length, bytes(emailAt), bytes(rulesAt)]).toEqual([
+			50_000, 16_668, 254, 65_536,
+		])
+		expect([...BOUNDS.title.at].length).toBe(1024)
+		expect(bytes(BOUNDS.rules.past[0] ?? '')).toBe(65_537)
+	})
+
+	// One round per value of each name (a name holds one row): every value at its bound, then each value past it in
+	// turn, with the uncovered names beside them.
+	const rounds: Record<string, string>[] = [
+		Object.fromEntries(INSTANCE_SETTING_NAMES.map((name) => [name, BOUNDS[name].at])),
+		...[0, 1, 2, 3].map((i) =>
+			Object.fromEntries(
+				INSTANCE_SETTING_NAMES.flatMap((name) => {
+					const past = BOUNDS[name].past[i]
+					return past === undefined ? [] : [[name, past]]
+				})
+			)
+		),
+	]
+	for (const [round, values] of rounds.entries()) {
+		it(`stores each covered value as P(x) and leaves the other names alone (round ${round})`, async () => {
+			const store = freshStore()
+			await runInDurableObject(store, async (_instance, state) => {
+				const sql = state.storage.sql
+				await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+				insert(sql, { ...values, ...UNCOVERED })
+				const expected = rows(sql).flatMap(({ name, value }) => {
+					const bound = INSTANCE_SETTING_BOUNDS[name as InstanceSettingName]
+					if (bound === undefined) {
+						return [{ name, value }]
+					}
+					const stored = sql.exec<{ v: string | null }>(`SELECT ${bound.projection('?1')} AS v`, value).one().v
+					// The writer agrees with P on these normalized values.
+					expect(storedInstanceSetting(name as InstanceSettingName, value), name).toBe(stored)
+					return stored === null ? [] : [{ name, value: stored }]
+				})
+				expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+				expect(rows(sql)).toEqual(expected)
+				if (round === 0) {
+					expect(rows(sql)).toHaveLength(INSTANCE_SETTING_NAMES.length + 3)
+				} else {
+					// Only the cut names keep a row past their bound, cut.
+					expect(rows(sql).map((row) => row.name)).toEqual(
+						[
+							'admin_email',
+							'domain',
+							'web_client_id',
+							...(round === 1 ? ['description', 'title'] : round === 2 ? ['title'] : []),
+						].sort()
+					)
+				}
+			})
+		}, 120_000)
+	}
+
+	it('refuses a value one past its bound on insert and update, and accepts one at it', async () => {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			const sql = state.storage.sql
+			for (const name of INSTANCE_SETTING_NAMES) {
+				const { at: value, past } = BOUNDS[name]
+				for (const over of past) {
+					expect(() => sql.exec('INSERT INTO instance_settings (name, value) VALUES (?, ?)', name, over), name).toThrow(
+						REFUSED
+					)
+				}
+				sql.exec('INSERT INTO instance_settings (name, value) VALUES (?, ?)', name, value)
+				for (const over of past) {
+					expect(() => sql.exec('UPDATE instance_settings SET value = ? WHERE name = ?', over, name), name).toThrow(
+						REFUSED
+					)
+				}
+				expect(sql.exec('SELECT value AS v FROM instance_settings WHERE name = ?', name).one().v).toBe(value)
+			}
+			// A rename into a covered name is checked too; uncovered names take anything.
+			sql.exec("INSERT INTO instance_settings (name, value) VALUES ('scratch', ?)", 'x'.repeat(300))
+			expect(() =>
+				sql.exec("UPDATE instance_settings SET name = 'contact_email_x' WHERE name = 'scratch'")
+			).not.toThrow()
+			sql.exec("DELETE FROM instance_settings WHERE name = 'contact_email'")
+			expect(() =>
+				sql.exec("UPDATE instance_settings SET name = 'contact_email' WHERE name = 'contact_email_x'")
+			).toThrow(REFUSED)
+			insert(sql, UNCOVERED)
+			// A Unicode space is text, not blank.
+			expect(() => sql.exec("UPDATE instance_settings SET value = '\u3000' WHERE name = 'title'")).not.toThrow()
+		})
+	}, 120_000)
+
+	it("indexes the suspend blocks by domain, which the public list's chunk query searches", async () => {
+		const store = await migratedStore()
+		await runInDurableObject(store, (_instance, state) => {
+			const plan = state.storage.sql
+				.exec<{ detail: string }>(
+					`EXPLAIN QUERY PLAN SELECT domain, obfuscate, public_comment FROM instance_domain_blocks
+					INDEXED BY instance_domain_blocks_public WHERE severity = 'suspend' AND domain > ?1 ORDER BY domain LIMIT 500`,
+					''
+				)
+				.toArray()
+				.map((row) => row.detail)
+			expect(plan).toEqual(['SEARCH instance_domain_blocks USING INDEX instance_domain_blocks_public (domain>?)'])
+		})
+	})
 })
