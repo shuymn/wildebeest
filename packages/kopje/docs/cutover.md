@@ -381,5 +381,7 @@ object type) appears only as a 12-hex-digit SHA-256 prefix, and a parser or data
 | `result`, `stop` | `converted`, or `stopped` with a fixed `code`, a fixed `message` and `detail` (counts, levels, digests)                                                                                                      |
 
 `verify-conversion` prints `{ "result": "PASS" | "FAIL", "categories": { <name>: { expected, actual, missing, extra,
-changed, expectedSha256, actualSha256 } }, "truncation": { overLimit, accepted }, "dropped": { <code>: count, accepted } }`. The digests are SHA-256 over the sorted records of each side, so two runs
+changed, expectedSha256, actualSha256 } }, "emojis": { accounts, statuses, status_edits }, "truncation": { overLimit, accepted }, "dropped": { <code>: count, accepted } }`.
+`emojis` counts the rows holding a custom emoji snapshot, boosts included; legacy has none, so any is a FAIL (the
+category `emojis`). The digests are SHA-256 over the sorted records of each side, so two runs
 can be compared without seeing any record.

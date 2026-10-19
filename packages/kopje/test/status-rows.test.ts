@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { type ApiHarness, sql } from './api-helpers'
 import { NOW } from './app-helpers'
+import { ACCOUNT_EMOJIS_FULL, STATUS_EMOJIS_FULL } from './emoji-fixtures'
 import { freshStore } from './helpers'
 import { runs } from './policy-world'
 import {
@@ -321,28 +322,92 @@ describe('the hydrate queries (RES-3)', () => {
 		expect(POLL_COLUMN_MAP.options).toContain('ORDER BY')
 	})
 
-	it('read an ordinary page of 40 statuses in at most 13 queries', async () => {
+	// The ordinary page: 40 short posts, every other one a quote, with a hashtag, a mention and typical emoji (3
+	// Misskey-shaped ones per status, 2 per author).
+	const ordinary = (emojis: Item['emojis']): Item[] =>
+		Array.from({ length: 40 }, (_, i) => ({
+			kind: i % 2 === 0 ? 'quote' : 'status',
+			text: 200,
+			wide: false,
+			mentions: 1,
+			tags: 1,
+			media: 0,
+			poll: 0,
+			viewer: false,
+			emojis,
+		}))
+	const misskeyShaped = (n: number) =>
+		JSON.stringify(
+			Array.from({ length: n }, (_, i) => [
+				`emoji_${String(i).padStart(10, '0')}`,
+				`https://media.misskey.example/files/${crypto.randomUUID()}.webp`,
+			])
+		)
+
+	it('read an ordinary page of 40 statuses in one chunk of at most 13 queries', async () => {
 		const { h, f } = await fixture()
 		const counts = await runInDurableObject(h.store, (_instance, state) => {
-			// Short posts with a hashtag and a mention, every other one a quote.
-			const ids = Array.from({ length: 40 }, (_, i) =>
-				build(state.storage.sql, f, {
-					kind: i % 2 === 0 ? 'quote' : 'status',
-					text: 200,
-					wide: false,
-					mentions: 1,
-					tags: 1,
-					media: 0,
-					poll: 0,
-					viewer: false,
-				})
-			)
+			const items = ordinary({ status: misskeyShaped(3), author: misskeyShaped(2) })
+			const ids = items.map((item) => build(state.storage.sql, f, item))
+			const plain = ordinary(undefined).map((item) => build(state.storage.sql, f, item))
 			const planned = observedPresentation(state, f.viewer, ids, PAGE_CHUNKS)
-			return { queries: planned.reads.length, chunks: planned.segments.length }
+			const sum = (of: string[]) => [...boundsOf(state, f.viewer, of, 1).values()].reduce((a, b) => a + b, 0)
+			return {
+				queries: planned.reads.length,
+				chunks: planned.segments.length,
+				sum: sum(ids),
+				plain: sum(plain),
+				shown: planned.items.map((status) => status.emojis.length),
+			}
 		})
+		console.info(`R of the ordinary page: ${counts.sum} for 40 statuses, ${counts.plain} without emoji`)
+		expect(counts.shown).toEqual(Array.from({ length: 40 }, () => 3))
 		expect(counts.chunks).toBe(1)
 		expect(counts.queries).toBeLessThanOrEqual(13)
 	})
+
+	// The same page with every status and author at the stored emoji caps: one window of R (40 of R_WINDOW's 80) whose
+	// chunks each stay within the target, as few as the target allows, of the ordinary page's kinds of query, with the
+	// backstop never fired.
+	it('read a saturated page of 40 statuses in planned chunks', async () => {
+		const { h, f } = await fixture()
+		const warn = vi.spyOn(console, 'warn')
+		const result = await runInDurableObject(h.store, (_instance, state) => {
+			const plain = ordinary(undefined).map((item) => build(state.storage.sql, f, item))
+			const one = observedPresentation(state, f.viewer, plain, PAGE_CHUNKS)
+			const items = ordinary({ status: STATUS_EMOJIS_FULL, author: ACCOUNT_EMOJIS_FULL })
+			const ids = items.map((item) => build(state.storage.sql, f, item))
+			const planned = observedPresentation(state, f.viewer, ids, PAGE_CHUNKS)
+			const bounds = boundsOf(state, f.viewer, ids, 1)
+			return {
+				oneChunk: { queries: one.reads.length, chunks: one.segments.length },
+				queries: planned.reads.length,
+				windows: planned.reads.filter((read) => read.query === statusRowBoundSql()).length,
+				chunks: planned.segments.map((segment) => segment.ids.reduce((sum, id) => sum + bounds.get(id)!, 0)),
+				bounds: [...bounds.values()],
+				ids: planned.segments.flatMap((segment) => segment.ids),
+				expected: ids,
+			}
+		})
+		const { target } = PAGE_CHUNKS
+		const max = Math.max(...result.bounds)
+		const sum = result.bounds.reduce((a, b) => a + b, 0)
+		console.info(
+			`R of the saturated page: ${sum} for 40 statuses, at most ${max} each, in ${result.chunks.length} chunks of ${result.chunks.join(', ')}`
+		)
+		expect(result.ids).toEqual(result.expected)
+		expect(result.oneChunk.chunks).toBe(1)
+		expect(result.windows).toBe(1)
+		expect(max).toBeLessThan(target)
+		for (const chunk of result.chunks) {
+			expect(chunk).toBeLessThanOrEqual(target)
+		}
+		// A chunk closes only when the next status would pass the target, so each but the last holds more than
+		// target − R_max.
+		expect(result.chunks.length).toBeLessThanOrEqual(1 + Math.floor(sum / (target - max)))
+		expect(result.queries).toBeLessThanOrEqual(result.windows + result.chunks.length * (result.oneChunk.queries - 1))
+		expect(warn).not.toHaveBeenCalledWith(expect.objectContaining({ event: 'kopje.presenter.row-cap-exceeded' }))
+	}, 120_000)
 })
 
 describe('the order of the rows of a status (RES-3)', () => {

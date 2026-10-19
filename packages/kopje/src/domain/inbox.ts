@@ -1,3 +1,4 @@
+import { presentedRemoteFields } from './accounts'
 import { followActivity, followAnswerActivity, followUri, recordOutbound, undoFollowActivity } from './activities'
 import {
 	activeMuteSql,
@@ -15,6 +16,7 @@ import {
 	mentionStatusSql,
 	type Visibility,
 } from './audience'
+import { type EmojiCandidate, emojiSnapshot } from './custom-emojis'
 import { cancelFollowAnswers, followAnswersOf, stageRetraction } from './deliveries'
 import { insertWithFreshId, NEW_GENERATION, remoteId } from './ids'
 import { actorDomainBlocked, hostCovered } from './instance-domain-blocks'
@@ -67,6 +69,7 @@ import { streamDelete } from './streaming'
 import type { Db } from '../db/sql'
 import { hostDomain } from '../platform/domain-name'
 import { ACTIVITY_ID_LIMIT, withinIdentityBound } from '../platform/identity-bounds'
+import { ACCOUNT_EMOJIS_BYTES } from '../platform/stored-bounds'
 
 // Inbound activities about actors and relationships (B1b-1), applied in one Store transaction each. The Worker has
 // already verified the HTTP signature, bound the signer to the actor (ID-1), fetched and sanitized what it needed
@@ -165,6 +168,8 @@ export type RemoteActorInput = {
 	sharedInboxUrl: string | null
 	published: string | null
 	keys: { id: string; pem: string }[]
+	// Emoji tags as read (federation/remote-emoji.ts); the snapshot is chosen when the account is written.
+	emojiTags: EmojiCandidate[]
 	// The document as received; followers, alsoKnownAs and fields are read from it.
 	raw: string
 	// The canonical domain of the actor's address for this username, set by the search resolver only after the actor's
@@ -430,6 +435,14 @@ export function upsertRemoteActor(
 		const row = remoteAccount(db, actor.uri)
 		return row === undefined ? undefined : { ...row, syncWaiting: false, frozen: true }
 	}
+	// The snapshot of the emoji the stored name, bio and presented fields reference (custom-emojis.ts), replaced by
+	// every refresh and Update(Person).
+	const fields = presentedRemoteFields(db, actor.raw, domain)
+	const emojis = emojiSnapshot(
+		actor.emojiTags,
+		[actor.displayName, actor.note, ...fields.flatMap((field) => [field.name, field.value])],
+		ACCOUNT_EMOJIS_BYTES
+	)
 	const values = [
 		actor.uri,
 		actor.username,
@@ -449,6 +462,7 @@ export function upsertRemoteActor(
 		accountSearchText(actor.username, domain, actor.displayName),
 		createdAt,
 		confirmedUsername,
+		emojis,
 	]
 	insertWithFreshId(
 		'accounts',
@@ -457,15 +471,15 @@ export function upsertRemoteActor(
 			db.run(
 				`INSERT INTO accounts (id, uri, username, domain, actor_type, display_name, note, url, avatar_url, header_url,
 					locked, discoverable, inbox_url, shared_inbox_url, raw, fetched_at, search_text, created_at,
-					confirmed_username)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+					confirmed_username, emojis)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 				ON CONFLICT (uri) DO UPDATE SET username = excluded.username, actor_type = excluded.actor_type,
 					display_name = excluded.display_name, note = excluded.note, url = excluded.url,
 					avatar_url = excluded.avatar_url, header_url = excluded.header_url, locked = excluded.locked,
 					discoverable = excluded.discoverable, inbox_url = excluded.inbox_url,
 					shared_inbox_url = excluded.shared_inbox_url, raw = excluded.raw, fetched_at = excluded.fetched_at,
 					search_text = excluded.search_text, domain = excluded.domain,
-					confirmed_username = excluded.confirmed_username,
+					confirmed_username = excluded.confirmed_username, emojis = excluded.emojis,
 					suspended_at = CASE WHEN accounts.suspension_source = 'domain' THEN NULL ELSE accounts.suspended_at END,
 					suspension_source = CASE WHEN accounts.suspension_source = 'domain' THEN NULL
 						ELSE accounts.suspension_source END

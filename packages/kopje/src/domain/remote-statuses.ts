@@ -14,6 +14,7 @@ import {
 	type Visibility,
 } from './audience'
 import { userWriteOperation } from './auth'
+import { type EmojiCandidate, emojiSnapshot } from './custom-emojis'
 import { insertWithFreshId, remoteId } from './ids'
 import { isDeleted, type RemoteActorInput, upsertRemoteActor } from './inbox'
 import { notify } from './notifications'
@@ -30,7 +31,7 @@ import {
 import { presentStatus, type Status } from './status-presenter'
 import { MAX_STATUS_EDITS, notifyQuotedUpdate, recordEdit, recountStatus, writeTags } from './statuses'
 import type { Db } from '../db/sql'
-import { storedMediaMeta } from '../platform/stored-bounds'
+import { STATUS_EMOJIS_BYTES, storedMediaMeta } from '../platform/stored-bounds'
 
 // Remote statuses (B1b-2): Create, Update and the originals of boosts and search results, stored as Mastodon 4.7.3's
 // ActivityPub::Activity::Create and ProcessStatusUpdateService store them. The Worker has parsed the object as
@@ -88,6 +89,8 @@ export type RemoteStatusInput = {
 	// hrefs of Mention tags, and normalized names of Hashtag tags.
 	mentions: string[]
 	tags: string[]
+	// Emoji tags as read (federation/remote-emoji.ts); the snapshot is chosen when the status is written.
+	emojiTags: EmojiCandidate[]
 	media: RemoteMediaInput[]
 	// The Note's name (a vote names its choice), and the poll of a Question.
 	name?: string | null
@@ -364,6 +367,13 @@ function writeMedia(db: Db, statusId: string, author: Author, media: readonly Re
 	}
 }
 
+// The snapshot of the emoji the status's stored texts reference (custom-emojis.ts): its content warning, the text of
+// its content and its poll's choices, each scanned alone.
+function statusEmojis(input: RemoteStatusInput): string | null {
+	const texts = [input.spoilerText, input.text, ...(input.poll?.options ?? [])]
+	return emojiSnapshot(input.emojiTags, texts, STATUS_EMOJIS_BYTES)
+}
+
 function searchText(input: RemoteStatusInput): string {
 	return normalizeSearchText(`${input.spoilerText} ${input.text}`)
 }
@@ -458,9 +468,9 @@ export function storeRemoteStatus(db: Db, author: Author, input: RemoteStatusInp
 			db.run(
 				`INSERT INTO statuses (id, uri, url, account_id, in_reply_to_uri, in_reply_to_id, in_reply_to_account_id,
 					visibility, spoiler_text, content, sensitive, language, published_at, edited_at, remote_version, raw,
-					search_text, created_at, thread, quote_policy)
+					search_text, created_at, thread, quote_policy, emojis)
 				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-					COALESCE((SELECT p.thread FROM statuses p WHERE p.id = ?6), ?), ?)`,
+					COALESCE((SELECT p.thread FROM statuses p WHERE p.id = ?6), ?), ?, ?)`,
 				candidate,
 				input.uri,
 				input.url,
@@ -480,7 +490,8 @@ export function storeRemoteStatus(db: Db, author: Author, input: RemoteStatusInp
 				searchText(input),
 				iso(ctx.now),
 				input.conversation ?? null,
-				quotePolicy
+				quotePolicy,
+				statusEmojis(input)
 			)
 			return candidate
 		}
@@ -706,7 +717,7 @@ export function updateRemoteStatus(db: Db, author: Author, input: RemoteStatusIn
 	storeRemotePoll(db, existing.id, input.poll ?? null, true, ctx.now)
 	db.run(
 		`UPDATE statuses SET content = ?, spoiler_text = ?, sensitive = ?, language = ?, raw = ?, search_text = ?,
-			remote_version = ?, edited_at = CASE WHEN ? THEN ? ELSE edited_at END, quote_policy = ?
+			remote_version = ?, edited_at = CASE WHEN ? THEN ? ELSE edited_at END, quote_policy = ?, emojis = ?
 		WHERE id = ?`,
 		input.content,
 		input.spoilerText,
@@ -718,6 +729,7 @@ export function updateRemoteStatus(db: Db, author: Author, input: RemoteStatusIn
 		significant ? 1 : 0,
 		editedAt,
 		remoteQuotePolicy(db, author, input.quotePolicy),
+		statusEmojis(input),
 		existing.id
 	)
 	// As for a Create: a newly mentioned local account is notified if the status addresses it.

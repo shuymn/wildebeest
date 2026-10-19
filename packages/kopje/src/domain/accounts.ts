@@ -17,6 +17,7 @@ import {
 	REACHES_FOLLOWERS_SQL,
 } from './audience'
 import { localRole, optionalUserReadOperation, type Role, userReadOperation, userWriteOperation } from './auth'
+import { type CustomEmoji, presentEmojis } from './custom-emojis'
 import { retractFollow } from './inbox'
 import { notify } from './notifications'
 import { readOperation } from './operation'
@@ -36,7 +37,7 @@ import { type ColumnMap, selectSql } from '../db/columns'
 import type { Db } from '../db/sql'
 import { normalizeDomain, parseAddress } from '../platform/domain-name'
 import { boundedHref, httpUrl } from '../platform/http-url'
-import { storedDisplayName, storedText } from '../platform/stored-bounds'
+import { ACCOUNT_EMOJIS_BYTES, storedDisplayName, storedText } from '../platform/stored-bounds'
 import { sanitizeRemoteHtml } from '../security/html'
 
 // Accounts as the Mastodon API (4.0.2) shows them: one presenter, and the account and relationship operations of B3.
@@ -68,7 +69,7 @@ export type Account = {
 	// Whether the account hides its network (Account#hide_collections): set by a local account, learned of a remote one
 	// (remote-collections.ts); null for a remote account Kopje has not learned it of.
 	hide_collections: boolean | null
-	emojis: []
+	emojis: CustomEmoji[]
 	fields: Field[]
 	suspended?: true
 }
@@ -154,6 +155,8 @@ export type AccountRow = {
 	hide_collections: number | null
 	// A remote account's PropertyValue attachments, bounded (REMOTE_ATTACHMENT_SQL), as JSON; null for a local one.
 	attachment: string | null
+	// The account's emoji snapshot (custom-emojis.ts); null for none.
+	emojis: string | null
 }
 
 // Fields a remote profile shows: its PropertyValue attachments (ProcessAccountService#property_values), the name as
@@ -217,6 +220,7 @@ export const ACCOUNT_COLUMN_MAP = {
 	local_fields: 'l.fields',
 	hide_collections: 'COALESCE(l.hide_collections, a.hide_collections)',
 	attachment: REMOTE_ATTACHMENT_SQL,
+	emojis: 'a.emojis',
 } as const satisfies ColumnMap
 
 export { DISPLAY_NAME_LIMIT, PROFILE_URL_LIMIT, USERNAME_LIMIT, usernameSql }
@@ -397,7 +401,7 @@ function presentAccount(row: AccountRow, { origin }: Present): Account {
 		statuses_count: row.statuses_count,
 		last_status_at: row.last_status_at,
 		hide_collections: row.hide_collections === null ? null : row.hide_collections === 1,
-		emojis: [],
+		emojis: suspended ? [] : presentEmojis(row.emojis, ACCOUNT_EMOJIS_BYTES),
 		fields: suspended
 			? []
 			: row.domain === null
@@ -447,6 +451,17 @@ function remoteFields(attachment: string | null): Field[] {
 		fields.push({ name, value, verified_at: null })
 	}
 	return fields
+}
+
+// The fields a remote account whose document is `raw` will show, chosen and cut as presentation chooses and cuts them
+// (REMOTE_ATTACHMENT_SQL over the document, then remoteFields): what the account's emoji snapshot is scanned over.
+export function presentedRemoteFields(db: Db, raw: string, domain: string): Field[] {
+	const row = db.first<{ attachment: string | null }>(
+		`SELECT ${REMOTE_ATTACHMENT_SQL} AS attachment FROM (SELECT ?1 AS raw, ?2 AS domain) a`,
+		raw,
+		domain
+	)
+	return remoteFields(row?.attachment ?? null)
 }
 
 // API ids are 18 digits; legacy ids are UUIDs or other short strings. Anything longer is not an id.

@@ -1,8 +1,8 @@
 import type { Page } from './accounts'
 
 // RES-3: the UTF-8 bytes of one answer's JSON, containers and separators included; a composite answer's parts share
-// it. Owners and admission: docs/response-inventory.md. Every atomic item is at most 66% of it (docs/threat-model.md,
-// "Maxima of presented units"), so an answer always admits its first item.
+// it. Owners and admission: docs/response-inventory.md. Every atomic item is within 85% of it (docs/threat-model.md,
+// "Maxima of presented units", which test/status-bounds.test.ts measures), so an answer always admits its first item.
 export const ANSWER_BYTES = 8 * 1024 * 1024
 
 // The budget of the items of an answer that is one JSON array: its brackets, less the separator its last item does

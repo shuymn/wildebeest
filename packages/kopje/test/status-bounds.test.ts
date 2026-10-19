@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 
 import { setSetting, sql } from './api-helpers'
 import { NOW } from './app-helpers'
+import { ACCOUNT_EMOJIS_FULL, accountAtCap, STATUS_EMOJIS_FULL, statusAtCap, statusShortNames } from './emoji-fixtures'
 import { BUILD } from './helpers'
 import { ALICE, setup, type Setup } from './inbox-status-helpers'
 import { fullestFields, MAX_BIO } from './profile-fixtures'
@@ -44,6 +45,7 @@ import { parseRemoteStatus } from '../src/federation/remote-status'
 import { utf8Length } from '../src/platform/dump-format'
 import { MAX_LOCAL_ADDRESSED } from '../src/platform/identity-bounds'
 import type { StoreOperation } from '../src/platform/store-kernel'
+import { STATUS_EMOJIS_BYTES } from '../src/platform/stored-bounds'
 import {
 	jsonStringBytes,
 	REMOTE_BIO_BYTES,
@@ -73,8 +75,21 @@ const atLimit = (prefix: string, limit: number) => prefix.padEnd(limit, 'u')
 // How a fixture fills text at its bound: `escaped` with characters JSON escapes to six bytes (the most JSON for the
 // fewest bytes read); `derived`, the same with mentioned accounts that have no stored url, so their url is derived
 // from the host and the username; `raw` with what reads the most bytes from SQLite for each bound: ASCII where the
-// bound is in bytes, and four-byte characters (W) where it is in characters.
-type Fill = 'escaped' | 'derived' | 'raw'
+// bound is in bytes, and four-byte characters (W) where it is in characters. Emoji snapshots: at their presented
+// bounds (escaped and derived), padded to their stored bounds (raw). `emoji-poll` is escaped with every poll's choices
+// referencing the status's emoji in the fewest characters (statusShortNames), so each poll shows them all: the
+// escaped poll, untouched, keeps the row bounds, and the conservative JSON (conservativeJson) both.
+type Fill = 'escaped' | 'derived' | 'raw' | 'emoji-poll'
+const FILLS = ['escaped', 'derived', 'raw', 'emoji-poll'] as const
+
+// The emoji snapshots of a fill: a status's (its boost's own row too) and an account's.
+const statusEmojis = (fill: Fill) =>
+	fill === 'raw' ? STATUS_EMOJIS_FULL : JSON.stringify(fill === 'emoji-poll' ? statusShortNames() : statusAtCap())
+const accountEmojis = (fill: Fill) => (fill === 'raw' ? ACCOUNT_EMOJIS_FULL : JSON.stringify(accountAtCap()))
+// The 37 characters that reference every name of statusShortNames.
+const SHORT_REFERENCES = statusShortNames()
+	.map(([name]) => `:${name}:`)
+	.join('')
 const W = '𠀀'
 const RAW_BIO = `<p>${'x'.repeat(REMOTE_BIO_BYTES - 9)}</p>`
 
@@ -84,8 +99,8 @@ async function maximalAccount(t: Setup, light = false, fill: Fill = 'escaped'): 
 	const username = `${'u'.repeat(USERNAME_LIMIT - 18)}${id}`
 	await sql(
 		t.store,
-		`INSERT INTO accounts (id, uri, username, domain, display_name, note, url, avatar_url, header_url, raw)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO accounts (id, uri, username, domain, display_name, note, url, avatar_url, header_url, raw, emojis)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id,
 		atLimit(`https://${HOST}/users/${id}/`, ACTOR_URI_LIMIT),
 		username,
@@ -95,7 +110,8 @@ async function maximalAccount(t: Setup, light = false, fill: Fill = 'escaped'): 
 		light && fill === 'derived' ? null : atLimit(`https://${HOST}/@${id}/`, PROFILE_URL_LIMIT),
 		light ? null : atLimit(`https://${HOST}/a/${id}/`, PROFILE_URL_LIMIT),
 		light ? null : atLimit(`https://${HOST}/h/${id}/`, PROFILE_URL_LIMIT),
-		light ? null : JSON.stringify({ type: 'Person', attachment: fullestFields() })
+		light ? null : JSON.stringify({ type: 'Person', attachment: fullestFields() }),
+		light ? null : accountEmojis(fill)
 	)
 	return id
 }
@@ -113,6 +129,7 @@ type Parts = {
 	url?: string
 	// The status a boost boosts; a boost's content is '' (the statuses CHECK).
 	reblogOf?: string
+	emojis?: string | null
 }
 
 // A public remote status of `author` with the given parts, written directly in SQL: the stored-bound triggers of
@@ -122,8 +139,8 @@ async function storedStatus(t: Setup, author: string, parts: Parts): Promise<str
 	await sql(
 		t.store,
 		`INSERT INTO statuses (id, uri, url, account_id, reblog_of_id, visibility, spoiler_text, content, source_text,
-			published_at)
-		VALUES (?, ?, ?, ?, ?, 'public', ?, ?, ?, ?)`,
+			published_at, emojis)
+		VALUES (?, ?, ?, ?, ?, 'public', ?, ?, ?, ?, ?)`,
 		id,
 		parts.uri ?? atLimit(`https://${HOST}/objects/${id}/`, 4096),
 		parts.url ?? atLimit(`https://${HOST}/notes/${id}/`, 4096),
@@ -132,7 +149,8 @@ async function storedStatus(t: Setup, author: string, parts: Parts): Promise<str
 		parts.spoiler,
 		parts.reblogOf === undefined ? parts.content : '',
 		parts.source ?? null,
-		new Date(NOW - 60_000).toISOString()
+		new Date(NOW - 60_000).toISOString(),
+		parts.emojis ?? null
 	)
 	for (const [position, m] of parts.media.entries()) {
 		await sql(
@@ -212,7 +230,12 @@ async function maximalParts(t: Setup, fill: Fill = 'escaped'): Promise<Parts> {
 		})),
 		mentions,
 		tags: Array.from({ length: MAX_STATUS_TAGS }, (_, i) => maxTag(i)),
-		poll: Array.from({ length: MAX_REMOTE_OPTIONS }, () => counted.repeat(MAX_REMOTE_OPTION_LENGTH)),
+		poll: Array.from({ length: MAX_REMOTE_OPTIONS }, (_, i) =>
+			fill === 'emoji-poll' && i === 0
+				? `${SHORT_REFERENCES}${counted.repeat(MAX_REMOTE_OPTION_LENGTH - SHORT_REFERENCES.length)}`
+				: counted.repeat(MAX_REMOTE_OPTION_LENGTH)
+		),
+		emojis: statusEmojis(fill),
 	}
 }
 
@@ -787,12 +810,13 @@ async function maximalStatuses(fill: Fill) {
 	const t = await setup()
 	await sql(
 		t.store,
-		'UPDATE accounts SET display_name = ?, note = ?, url = ?, avatar_url = ?, header_url = ? WHERE id = ?',
+		'UPDATE accounts SET display_name = ?, note = ?, url = ?, avatar_url = ?, header_url = ?, emojis = ? WHERE id = ?',
 		(fill === 'raw' ? W : C).repeat(2048),
 		fill === 'raw' ? RAW_BIO : MAX_BIO,
 		atLimit(`https://kopje.test/@alice/`, PROFILE_URL_LIMIT),
 		atLimit(`https://kopje.test/a/alice/`, PROFILE_URL_LIMIT),
 		atLimit(`https://kopje.test/h/alice/`, PROFILE_URL_LIMIT),
+		accountEmojis(fill),
 		ALICE
 	)
 	const [booster, quoter, quotedAuthor] = [
@@ -1008,14 +1032,38 @@ function perColumn(measures: readonly Heaps[]): { heap: number; largestRow: numb
 	return { heap, largestRow }
 }
 
+// The polls each shape shows (a quote shows its quoted status's too), and the most a poll's emojis add to its JSON.
+const POLLS_SHOWN: Record<string, number> = {
+	account: 0,
+	status: 1,
+	quote: 2,
+	boostOfQuote: 2,
+	conversation: 2,
+	group: 2,
+	report: 2,
+}
+const POLL_EMOJIS_JSON = STATUS_EMOJIS_BYTES - 2
+
+// The conservative JSON of each shape: the escaped fill's, whose status and account emoji arrays are at their bounds,
+// plus a poll's emoji array at its bound for each poll shown. No one fill holds both: the references a poll's choices
+// need displace escaped characters (the emoji-poll fill), so this bounds every combination from above.
+async function conservativeJson(): Promise<Record<string, number>> {
+	const { shapes } = await measureFill('escaped')
+	return Object.fromEntries(
+		Object.entries(shapes).map(([name, shape]) => [name, shape.json + (POLLS_SHOWN[name] ?? 0) * POLL_EMOJIS_JSON])
+	)
+}
+
 // The peaks of "Heap at 8 MiB per answer" (docs/threat-model.md, its model and terms) for answers whose largest item
-// is one of `items`, with that item's rows and largest row at their per-column maxima.
+// is one of `items`, with that item's rows and largest row at their per-column maxima, and its rejected item's JSON at
+// its conservative bound.
 async function peaks(items: readonly string[], chunks: ChunkPlan, state: number) {
-	const measures = await Promise.all((['escaped', 'derived', 'raw'] as const).map(measureFill))
+	const measures = await Promise.all(FILLS.map(measureFill))
 	const each = items.map((item) => perColumn(measures.map((m) => m.heaps[item]!)))
 	const rows = 1.25 * Math.max(...each.map((e) => e.heap))
 	const largestRow = Math.max(...each.map((e) => e.largestRow))
-	const json = Math.max(...measures.flatMap((m) => items.map((item) => m.shapes[item]!.json)))
+	const conservative = await conservativeJson()
+	const json = Math.max(...items.map((item) => conservative[item]!))
 	const rest = 3 * ANSWER_BYTES + 3 * json + state
 	return {
 		rows,
@@ -1028,47 +1076,60 @@ async function peaks(items: readonly string[], chunks: ChunkPlan, state: number)
 
 describe('the table of maxima (RES-3)', () => {
 	// docs/threat-model.md "Maxima of presented units" states these. An answer admits a whole item, so every atomic
-	// shape stays within 80% of ANSWER_BYTES (8 MiB) with filters included.
-	const LIMIT = 0.8 * 8 * 1024 * 1024
+	// shape stays within 85% of ANSWER_BYTES (8 MiB) with filters included, measured and conservative alike.
+	const LIMIT = 0.85 * 8 * 1024 * 1024
 
 	it.each<[string, Fill, Record<string, Shape>]>([
 		[
 			'the escaped worst case: the most JSON',
 			'escaped',
 			{
-				account: { sqlite: 99_993, json: 123_878, rows: 1, nodes: 39 },
-				status: { sqlite: 2_750_118, json: 2_597_898, rows: 1_484, nodes: 2_270 },
-				quote: { sqlite: 4_926_879, json: 5_195_829, rows: 1_916, nodes: 4_542 },
-				boostOfQuote: { sqlite: 5_065_987, json: 5_588_211, rows: 1_972, nodes: 5_448 },
-				conversation: { sqlite: 6_190_029, json: 6_682_334, rows: 1_930, nodes: 5_001 },
-				group: { sqlite: 5_727_777, json: 6_187_277, rows: 1_943, nodes: 4_866 },
-				report: { sqlite: 5_096_302, json: 5_589_057, rows: 1_925, nodes: 4_673 },
+				account: { sqlite: 103_214, json: 130_020, rows: 1, nodes: 63 },
+				status: { sqlite: 2_759_847, json: 2_616_326, rows: 1_484, nodes: 2_338 },
+				quote: { sqlite: 4_946_337, json: 5_232_685, rows: 1_916, nodes: 4_678 },
+				boostOfQuote: { sqlite: 5_088_674, json: 5_631_209, rows: 1_972, nodes: 5_608 },
+				conversation: { sqlite: 6_251_360, json: 6_792_894, rows: 1_930, nodes: 5_425 },
+				group: { sqlite: 5_773_003, json: 6_273_269, rows: 1_943, nodes: 5_194 },
+				report: { sqlite: 5_122_202, json: 5_650_481, rows: 1_925, nodes: 4_905 },
 			},
 		],
 		[
 			'mentions whose url is derived',
 			'derived',
 			{
-				account: { sqlite: 99_993, json: 123_878, rows: 1, nodes: 39 },
-				status: { sqlite: 2_342_118, json: 2_188_298, rows: 1_484, nodes: 2_270 },
-				quote: { sqlite: 4_110_879, json: 4_376_629, rows: 1_916, nodes: 4_542 },
-				boostOfQuote: { sqlite: 4_249_987, json: 4_769_011, rows: 1_972, nodes: 5_448 },
-				conversation: { sqlite: 5_374_029, json: 5_863_134, rows: 1_930, nodes: 5_001 },
-				group: { sqlite: 4_911_777, json: 5_368_077, rows: 1_943, nodes: 4_866 },
-				report: { sqlite: 4_280_302, json: 4_769_857, rows: 1_925, nodes: 4_673 },
+				account: { sqlite: 103_214, json: 130_020, rows: 1, nodes: 63 },
+				status: { sqlite: 2_351_847, json: 2_206_726, rows: 1_484, nodes: 2_338 },
+				quote: { sqlite: 4_130_337, json: 4_413_485, rows: 1_916, nodes: 4_678 },
+				boostOfQuote: { sqlite: 4_272_674, json: 4_812_009, rows: 1_972, nodes: 5_608 },
+				conversation: { sqlite: 5_435_360, json: 5_973_694, rows: 1_930, nodes: 5_425 },
+				group: { sqlite: 4_957_003, json: 5_454_069, rows: 1_943, nodes: 5_194 },
+				report: { sqlite: 4_306_202, json: 4_831_281, rows: 1_925, nodes: 4_905 },
 			},
 		],
 		[
 			'the raw worst case: the most bytes read from SQLite',
 			'raw',
 			{
-				account: { sqlite: 117_063, json: 119_783, rows: 1, nodes: 39 },
-				status: { sqlite: 4_416_890, json: 2_160_205, rows: 1_484, nodes: 2_270 },
-				quote: { sqlite: 6_762_823, json: 4_320_443, rows: 1_916, nodes: 4_542 },
-				boostOfQuote: { sqlite: 7_041_878, json: 4_555_132, rows: 1_972, nodes: 5_448 },
-				conversation: { sqlite: 8_247_883, json: 5_757_808, rows: 1_930, nodes: 5_001 },
-				group: { sqlite: 7_700_281, json: 5_279_131, rows: 1_943, nodes: 4_866 },
-				report: { sqlite: 6_966_386, json: 4_697_291, rows: 1_925, nodes: 4_673 },
+				account: { sqlite: 123_207, json: 125_925, rows: 1, nodes: 63 },
+				status: { sqlite: 4_435_322, json: 2_178_633, rows: 1_484, nodes: 2_338 },
+				quote: { sqlite: 6_799_687, json: 4_357_299, rows: 1_916, nodes: 4_678 },
+				boostOfQuote: { sqlite: 7_084_894, json: 4_598_130, rows: 1_972, nodes: 5_608 },
+				conversation: { sqlite: 8_364_619, json: 5_868_368, rows: 1_930, nodes: 5_425 },
+				group: { sqlite: 7_786_297, json: 5_365_123, rows: 1_943, nodes: 5_194 },
+				report: { sqlite: 7_015_538, json: 4_758_715, rows: 1_925, nodes: 4_905 },
+			},
+		],
+		[
+			'short emoji references in every poll: the most poll emojis',
+			'emoji-poll',
+			{
+				account: { sqlite: 103_214, json: 130_020, rows: 1, nodes: 63 },
+				status: { sqlite: 2_758_999, json: 2_628_427, rows: 1_484, nodes: 2_390 },
+				quote: { sqlite: 4_944_641, json: 5_256_887, rows: 1_916, nodes: 4_782 },
+				boostOfQuote: { sqlite: 5_086_978, json: 5_655_411, rows: 1_972, nodes: 5_712 },
+				conversation: { sqlite: 6_249_664, json: 6_817_096, rows: 1_930, nodes: 5_529 },
+				group: { sqlite: 5_771_307, json: 6_297_471, rows: 1_943, nodes: 5_298 },
+				report: { sqlite: 5_120_506, json: 5_674_683, rows: 1_925, nodes: 5_009 },
 			},
 		],
 	])(
@@ -1082,6 +1143,32 @@ describe('the table of maxima (RES-3)', () => {
 		},
 		300_000
 	)
+
+	// The conservative JSON of every shape is within the ceiling too, and bounds the emoji-poll fill, whose polls each
+	// show the most emoji JSON less what their references displace (37 escaped characters: 185 bytes).
+	it('keeps the conservative JSON of every shape within 85%, above every fill', async () => {
+		const conservative = await conservativeJson()
+		const [escaped, emojiPoll] = await Promise.all([measureFill('escaped'), measureFill('emoji-poll')])
+		const displaced = SHORT_REFERENCES.length * 5
+		for (const [name, json] of Object.entries(conservative)) {
+			expect(json).toBeLessThanOrEqual(LIMIT)
+			for (const fill of await Promise.all(FILLS.map(measureFill))) {
+				expect(fill.shapes[name]!.json).toBeLessThanOrEqual(json)
+			}
+			expect(emojiPoll.shapes[name]!.json - escaped.shapes[name]!.json).toBe(
+				(POLLS_SHOWN[name] ?? 0) * (POLL_EMOJIS_JSON - displaced)
+			)
+		}
+		expect(conservative).toEqual({
+			account: 130_020,
+			status: 2_628_612,
+			quote: 5_257_257,
+			boostOfQuote: 5_655_781,
+			conversation: 6_817_466,
+			group: 6_297_841,
+			report: 5_675_053,
+		})
+	}, 600_000)
 
 	// Half of the Store isolate's 128 MB. A timeline's largest item is a status, a quote or a boost of a quote; groups
 	// and reports keep the presentation's state besides (10.1 and 12.5 MB, docs/threat-model.md) and pass half, below

@@ -2,6 +2,7 @@ import { type DocumentLoader, exportSpki, FetchError } from '@fedify/fedify'
 import { type Actor, getActorTypeName, type Image, isActor, Link, lookupObject } from '@fedify/vocab'
 
 import { isTransientLoadError, loadFailureOf } from './loader'
+import { emojiCandidates } from './remote-emoji'
 import type { RemoteActorInput } from '../domain/inbox'
 import { ACTOR_URI_LIMIT } from '../domain/profile-bounds'
 import { hostDomain } from '../platform/domain-name'
@@ -153,6 +154,10 @@ export async function remoteActorInput(actor: Actor, document: unknown): Promise
 		// A Temporal.Instant, whose type the polyfill's globals leave unresolved for the linter.
 		keys: await ownKeys(actor, uri),
 		published: (actor.published as { toString(): string } | null)?.toString() ?? null,
+		// The document's own tag, as ProcessAccountService#process_tags reads @json['tag'].
+		emojiTags: emojiCandidates(
+			typeof document === 'object' && document !== null ? (document as { tag?: unknown }).tag : null
+		),
 		raw: JSON.stringify(document),
 	}
 }

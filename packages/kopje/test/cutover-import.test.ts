@@ -51,6 +51,34 @@ describe('cutover import of a converted legacy export', () => {
 		expect(result.categories.statuses?.expected).toBeGreaterThan(5)
 	})
 
+	// Legacy has no custom emoji: a conversion writes no snapshot, and the check fails on any, by table, a boost's too.
+	it('fails the check on a converted row holding an emoji snapshot, counting them by table', async () => {
+		const { h, expected } = await imported()
+		const { text: clean } = await dumpViaRpc(h.store)
+		expect((await compareConversion(expected, actualFromDump(clean))).emojis).toEqual({
+			accounts: 0,
+			statuses: 0,
+			status_edits: 0,
+		})
+		const snapshot = '[["a","https://remote.example/a.png"]]'
+		await sql(h.store, 'UPDATE accounts SET emojis = ? WHERE id = (SELECT min(id) FROM accounts)', snapshot)
+		await sql(
+			h.store,
+			`UPDATE statuses SET emojis = ? WHERE id IN (SELECT min(id) FROM statuses WHERE reblog_of_id IS NULL
+				UNION ALL SELECT min(id) FROM statuses WHERE reblog_of_id IS NOT NULL)`,
+			snapshot
+		)
+		await sql(h.store, 'UPDATE status_edits SET emojis = ? WHERE id = (SELECT min(id) FROM status_edits)', snapshot)
+		const { text } = await dumpViaRpc(h.store)
+		const result = await compareConversion(expected, actualFromDump(text))
+		expect(result.result).toBe('FAIL')
+		expect(result.emojis).toEqual({ accounts: 1, statuses: 2, status_edits: 1 })
+		expect(result.categories.emojis).toMatchObject({ expected: 0, extra: 3 })
+		// Nothing else differs.
+		const failing = Object.entries(result.categories).filter(([, c]) => c.missing + c.extra + c.changed > 0)
+		expect(failing.map(([name]) => name)).toEqual(['emojis'])
+	})
+
 	it('serves accounts, statuses, relationships, edits and legacy ids through the API', async () => {
 		const { h } = await imported()
 		const { token } = await login(h, { email: 'alice@example.com' })

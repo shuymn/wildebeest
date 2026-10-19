@@ -116,6 +116,7 @@ const DEFAULT = 'left at its default by the converter (NOT_CONVERTED)'
 // Columns of carried tables the converter leaves at their schema defaults.
 const NOT_CONVERTED: Record<string, string> = {
 	'accounts.confirmed_username': 'set when Kopje confirms a WebFinger domain; legacy has none',
+	'accounts.emojis': 'legacy has no custom emoji',
 	'accounts.deleted_at': 'set when a remote actor deletes itself in Kopje; legacy has no account being deleted',
 	'accounts.suspended_at': 'set when the admin suspends a remote account in Kopje; legacy has no such suspension',
 	'accounts.suspension_source': 'set with accounts.suspended_at; legacy has no such suspension',
@@ -146,7 +147,9 @@ const NOT_CONVERTED: Record<string, string> = {
 		'legacy never grouped notifications: carried ones stay ungrouped, as stored ones do in 0017',
 	'notifications.report_id': 'legacy never notified of a report: carried ones name none, as stored ones do in 0040',
 	'status_edits.id': ASSIGNED,
+	'status_edits.emojis': 'legacy has no custom emoji',
 	'status_edits.poll_options': 'legacy has no polls',
+	'statuses.emojis': 'legacy has no custom emoji',
 	'statuses.quotes_count': 'counts accepted quotes, which legacy has none of',
 	'statuses.quote_policy':
 		'legacy has no quote policies: a carried status stays unquotable, as 0037_quote_policy leaves it',
