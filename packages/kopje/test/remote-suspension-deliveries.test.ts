@@ -5,10 +5,10 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { bearer, json, settle, sql, userToken } from './api-helpers'
 import { NOW } from './app-helpers'
-import { LEGACY } from './federation-helpers'
-import { BUILD } from './helpers'
+import { LEGACY, signAsLegacy } from './federation-helpers'
+import { BUILD, claimAndSettle } from './helpers'
 import { newClient, VAPID } from './push-helpers'
-import { deferred, deliveryDeps, recordingFetch } from './quote-helpers'
+import { deferred, deliveryDeps, gatedHost, recordingFetch } from './quote-helpers'
 import { act, receive, unsuspend, uriOf, world, type World } from './remote-suspension-helpers'
 import { follow, post, remoteAccount, remoteFollows, seedStatus } from './status-helpers'
 import { Db } from '../src/db/sql'
@@ -35,21 +35,13 @@ type SentBody = { type: string; actor: string; object: { id?: string } }
 async function drainSent(store: StoreStub): Promise<{ body: SentBody; inbox: string }[]> {
 	const sent: { body: SentBody; inbox: string }[] = []
 	for (let round = 0; round < 1_000; round++) {
-		const leaseToken = `drain-${round}`
-		const claimed = await store.claimDeliveries(BUILD, { now: NOW, leaseToken })
-		for (const delivery of claimed.deliveries) {
-			const confirmation = await store.confirmDelivery(BUILD, { id: delivery.id, leaseToken, now: NOW })
-			if (confirmation.status === 'send') {
-				sent.push({ body: JSON.parse(confirmation.body) as SentBody, inbox: delivery.inbox })
-				await store.completeDelivery(BUILD, {
-					id: delivery.id,
-					leaseToken,
-					now: NOW,
-					outcome: { kind: 'delivered', status: 202 },
-				})
-			}
-		}
-		if (claimed.deliveries.length === 0 && claimed.nextDueAt === null) {
+		const { claim, sent: rows } = await claimAndSettle(store, {
+			now: NOW,
+			leaseToken: `drain-${round}`,
+			outcome: { kind: 'delivered', status: 202 },
+		})
+		sent.push(...rows.map(({ inbox, body }) => ({ body: JSON.parse(body) as SentBody, inbox })))
+		if (claim.deliveries.length === 0 && claim.nextDueAt === null) {
 			return sent
 		}
 	}
@@ -231,33 +223,22 @@ describe('the send boundary is confirmation', () => {
 	// A delivery round over `store` held at its host check, after the claim and before confirmation: `reached` resolves
 	// when it gets there, and `release` lets it go on.
 	function heldAtHostCheck(store: StoreStub, fetch: typeof globalThis.fetch) {
-		const reached = deferred()
-		const release = deferred()
+		const { checkHost, reached, release } = gatedHost()
 		const round = deliveryRound(testEnv, {
 			...deliveryDeps(
 				() => store,
 				fetch,
 				() => NOW
 			),
-			checkHost: async () => {
-				reached.resolve()
-				await release.promise
-			},
+			checkHost,
 		})
-		return { reached: reached.promise, release: release.resolve, round }
+		return { reached, release, round }
 	}
 
 	// alice signs with the legacy fixture key, so the round can load her signer; r follows her.
 	async function signed() {
 		const w = await world()
-		await sql(
-			w.h.store,
-			'UPDATE local_accounts SET privkey = ?, privkey_salt = ?, pubkey = ? WHERE account_id = ?',
-			LEGACY.privkey.slice().buffer,
-			LEGACY.salt.slice().buffer,
-			LEGACY.pubkey,
-			w.alice.id
-		)
+		await signAsLegacy(w.h.store, w.alice.id)
 		const r = await remoteAccount(w.h.store, 'r', 'remote.example')
 		await remoteFollows(w.h.store, r, w.alice.id)
 		return { w, r }

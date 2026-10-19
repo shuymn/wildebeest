@@ -4,11 +4,11 @@ import { describe, expect, it } from 'vitest'
 
 import { bearer, json, settle, sql } from './api-helpers'
 import { NOW } from './app-helpers'
-import { LEGACY } from './federation-helpers'
-import { BUILD } from './helpers'
+import { LEGACY, signAsLegacy } from './federation-helpers'
+import { BUILD, claimAndSettle } from './helpers'
 import { mastodonActor } from './inbox-helpers'
 import { ALICE, ALICE_URI, AS, DAVE_URI, setup as inboxSetup } from './inbox-status-helpers'
-import { deferred, deliveryDeps } from './quote-helpers'
+import { deliveryDeps, gatedHost } from './quote-helpers'
 import { rowsRead } from './read-helpers'
 import { act, receive, toFollows, unsuspend, uriOf, world } from './remote-suspension-helpers'
 import { post, remoteAccount, remoteFollows } from './status-helpers'
@@ -28,11 +28,10 @@ import { readOperation } from '../src/domain/operation'
 import { deliveryRound } from '../src/jobs/deliver'
 import type { StoreStub } from '../src/platform/store-client'
 
-// Stale follow answers (deliveries.ts cancelFollowAnswers; NET-2, RES-4, RES-5, RES-6, ID-7, and the accepted risk of
-// exposed answers in docs/threat-model.md): a remote Follow cancels its pair's Accepts and Rejects that were never
-// claimed or expanded; an answer a claim leased stays, superseded. Kopje's own send sequence is the oracle: a peer's
-// application of what it receives is not observable. Each case is driven deterministically through the Store's
-// production operations (expand, claim, confirm, complete), with no Queue.
+// Stale follow answers (cancelFollowAnswers in deliveries.ts; NET-2, RES-4, RES-5, RES-6, ID-7 and the accepted risks
+// in docs/threat-model.md). Kopje's own send sequence is the oracle: a peer's application of what it receives is not
+// observable. Each case is driven deterministically through the Store's production operations (expand, claim,
+// confirm, complete), with no Queue.
 
 const REMOTE = 'https://remote.example'
 const LATER = NOW + 24 * 60 * 60 * 1000
@@ -74,21 +73,10 @@ async function api(t: T, path: string) {
 
 let lease = 0
 
-// One claim at `now`, every claimed row completed with `outcome`; the claimed rows' types.
+// One claim at `now`, every sent row completed with `outcome` (null: left leased); the sent rows' types.
 async function claimOnce(t: T, outcome: DeliveryOutcome | null, now = NOW): Promise<string[]> {
-	const leaseToken = `once-${++lease}`
-	const claim = await t.store.claimDeliveries(BUILD, { now, leaseToken })
-	const types: string[] = []
-	for (const delivery of claim.deliveries) {
-		const confirmation = await t.store.confirmDelivery(BUILD, { id: delivery.id, leaseToken, now })
-		if (confirmation.status === 'send') {
-			types.push((JSON.parse(confirmation.body) as { type: string }).type)
-			if (outcome !== null) {
-				await t.store.completeDelivery(BUILD, { id: delivery.id, leaseToken, now, outcome })
-			}
-		}
-	}
-	return types
+	const { sent } = await claimAndSettle(t.store, { now, leaseToken: `once-${++lease}`, outcome })
+	return sent.map(({ body }) => (JSON.parse(body) as { type: string }).type)
 }
 
 // The outage shape the cancellation covers: a claim took alice's lane head to remote.example and it failed, so every
@@ -119,17 +107,13 @@ async function lane(t: T): Promise<LaneRow[]> {
 async function drain(t: T): Promise<[string, string | null][]> {
 	const sent: [string, string | null][] = []
 	for (let round = 0; round < 1_000; round++) {
-		const leaseToken = `drain-${++lease}`
-		const claim = await t.store.claimDeliveries(BUILD, { now: LATER, leaseToken })
-		for (const delivery of claim.deliveries) {
-			const confirmation = await t.store.confirmDelivery(BUILD, { id: delivery.id, leaseToken, now: LATER })
-			if (confirmation.status === 'send') {
-				const body = JSON.parse(confirmation.body) as { type: string; object: unknown }
-				const object = typeof body.object === 'string' ? body.object : (body.object as { id?: string }).id
-				sent.push([body.type, object ?? null])
-				await t.store.completeDelivery(BUILD, { id: delivery.id, leaseToken, now: LATER, outcome: OK })
-			}
+		const settled = await claimAndSettle(t.store, { now: LATER, leaseToken: `drain-${++lease}`, outcome: OK })
+		for (const row of settled.sent) {
+			const body = JSON.parse(row.body) as { type: string; object: unknown }
+			const object = typeof body.object === 'string' ? body.object : (body.object as { id?: string }).id
+			sent.push([body.type, object ?? null])
 		}
+		const { claim } = settled
 		if (claim.deliveries.length === 0 && (claim.nextDueAt === null || claim.nextDueAt > LATER)) {
 			return sent
 		}
@@ -318,9 +302,7 @@ describe('lanes after a cancellation', () => {
 
 	it('removes an answer still in an unexpanded chunk; later expansion sends nothing older for the pair', async () => {
 		const t = await setup()
-		await manyFollowers(t, 199)
-		await post(t.w.h, t.w.alice, { status: 'wide' })
-		const first = await followFrom(t)
+		await wideFollow(t)
 		// The Create's second chunk was expanded with the Accept's recording; the Accept's own chunk waits.
 		const chunked = await sql<{ type: string }>(
 			t.store,
@@ -356,6 +338,15 @@ async function manyFollowers(t: T, count: number): Promise<void> {
 		SELECT id, ?, 'accepted' FROM accounts WHERE domain GLOB 'd[0-9][0-9][0-9].example'`,
 		t.w.alice.id
 	)
+}
+
+// 199 followers on lanes of their own and s: alice's Create has 200 targets, two chunks, the first expanded as it is
+// recorded. r's Follow then records an Accept whose expansion budget the Create's second chunk uses up, so the Accept
+// waits unexpanded, behind a Create to remote.example that no claim has taken.
+async function wideFollow(t: T) {
+	await manyFollowers(t, 199)
+	await post(t.w.h, t.w.alice, { status: 'wide' })
+	return followFrom(t)
 }
 
 describe('exposed answers are left, superseded, and the renewal proceeds as before', () => {
@@ -726,14 +717,7 @@ describe('cancellation against claims and expansion, in both serialized orders',
 	// alice signs with the legacy fixture key, so a delivery round can load her signer.
 	async function signed(): Promise<T> {
 		const t = await setup()
-		await sql(
-			t.store,
-			'UPDATE local_accounts SET privkey = ?, privkey_salt = ?, pubkey = ? WHERE account_id = ?',
-			LEGACY.privkey.slice().buffer,
-			LEGACY.salt.slice().buffer,
-			LEGACY.pubkey,
-			t.w.alice.id
-		)
+		await signAsLegacy(t.store, t.w.alice.id)
 		return t
 	}
 
@@ -752,12 +736,7 @@ describe('cancellation against claims and expansion, in both serialized orders',
 
 	// A round held at a gate: before its claim (`claim`), or after it, at the host check before confirmation ('host').
 	function heldRound(store: StoreStub, fetch: typeof globalThis.fetch, at: 'claim' | 'host') {
-		const reached = deferred()
-		const release = deferred()
-		const hold = async () => {
-			reached.resolve()
-			await release.promise
-		}
+		const { checkHost: hold, reached, release } = gatedHost()
 		const gated = new Proxy(store, {
 			get(target, name) {
 				if (name === 'claimDeliveries' && at === 'claim') {
@@ -787,7 +766,7 @@ describe('cancellation against claims and expansion, in both serialized orders',
 				}
 			},
 		})
-		return { reached: reached.promise, release: release.resolve, round }
+		return { reached, release, round }
 	}
 
 	it('a claim that commits first exposes the old Accept, which is still sent', async () => {
@@ -822,9 +801,7 @@ describe('cancellation against claims and expansion, in both serialized orders',
 
 	it('an expansion that commits first leaves a queued row, which the cancellation deletes', async () => {
 		const t = await signed()
-		await manyFollowers(t, 199)
-		await post(t.w.h, t.w.alice, { status: 'wide' })
-		const first = await followFrom(t)
+		const first = await wideFollow(t)
 		const { fetch, sent } = recording()
 		const held = heldRound(t.store, fetch, 'host')
 		await held.reached
@@ -847,9 +824,7 @@ describe('cancellation against claims and expansion, in both serialized orders',
 
 	it('a cancellation that commits first deletes the unexpanded chunk before the claim expands it', async () => {
 		const t = await signed()
-		await manyFollowers(t, 199)
-		await post(t.w.h, t.w.alice, { status: 'wide' })
-		await followFrom(t)
+		await wideFollow(t)
 		const { fetch, sent } = recording()
 		const held = heldRound(t.store, fetch, 'claim')
 		await held.reached
