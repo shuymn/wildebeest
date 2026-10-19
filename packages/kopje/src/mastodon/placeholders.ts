@@ -11,8 +11,8 @@ import {
 import { mastodonError } from './errors'
 import { grantsAny } from '../security/scopes'
 
-// Features Kopje has no data for (announcements, trends, suggestions, annual reports, link timelines, translation,
-// e-mail confirmation, async refreshes), answered as Mastodon answers when the feature has nothing to show or is not
+// Features Kopje has no data for (announcements, trends, annual reports, link timelines, translation, e-mail
+// confirmation, async refreshes), answered as Mastodon answers when the feature has nothing to show or is not
 // configured, because clients call them and a missing route can stop a client. Each is replaced when its feature
 // arrives with its own tables. The writes act on records that never exist, so they change nothing.
 
@@ -41,11 +41,6 @@ const forUser =
 
 // A list of the signed-in user. announcements declares no scope, as Mastodon's (any user token).
 export const emptyUserList = forUser((c) => c.json([]))
-
-// DELETE /api/v1/suggestions/:id: Api::V1::SuggestionsController#destroy renders {} whatever the id
-// (AccountSuggestions#remove creates a mute with create, not create!). Kopje suggests no one, so there is nothing to
-// hide.
-export const removeSuggestion = forUser((c) => c.json({}))
 
 // GET /api/v1/annual_reports: Api::V1::AnnualReportsController#index with no pending report
 // (REST::AnnualReportsSerializer). Kopje makes no annual reports.

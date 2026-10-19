@@ -20,8 +20,6 @@ describe('features without data yet', () => {
 	const userLists: [string, string][] = [
 		['/api/v1/filters', 'read:filters'],
 		['/api/v2/filters', 'read:filters'],
-		['/api/v1/suggestions', 'read:accounts'],
-		['/api/v2/suggestions', 'read:accounts'],
 	]
 
 	it.each(userLists)('%s is an empty list of the user, under %s (AUTH-2)', async (route, scope) => {
@@ -70,7 +68,6 @@ describe('features without data yet', () => {
 	const recordNotFound = { error: 'Record not found' }
 	const notFound = { error: 'Not Found' }
 	const userAnswers: [string, string, string, number, unknown][] = [
-		['DELETE', '/api/v1/suggestions/123', 'write:accounts', 200, {}],
 		['GET', '/api/v1/annual_reports', 'read:accounts', 200, { annual_reports: [], accounts: [], statuses: [] }],
 		['GET', '/api/v1/annual_reports/2025', 'write:accounts', 404, recordNotFound],
 		['POST', '/api/v1/annual_reports/2025/read', 'write:accounts', 404, recordNotFound],
