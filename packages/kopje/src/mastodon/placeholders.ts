@@ -43,7 +43,9 @@ const forUser =
 export const emptyUserList = forUser((c) => c.json([]))
 
 // GET /api/v1/annual_reports: Api::V1::AnnualReportsController#index with no pending report
-// (REST::AnnualReportsSerializer). Kopje makes no annual reports.
+// (REST::AnnualReportsSerializer). Kopje makes no annual reports; neither does a stock Mastodon 4.5.11 unless its admin
+// generates them by hand: AnnualReport#generate has no automatic trigger (GenerateAnnualReportWorker is enqueued by
+// nothing but its spec), so these answers are a stock instance's.
 export const annualReports = forUser((c) => c.json({ annual_reports: [], accounts: [], statuses: [] }))
 
 // GET /api/v1/annual_reports/:id and POST /api/v1/annual_reports/:id/read: AnnualReportsController#set_annual_report
