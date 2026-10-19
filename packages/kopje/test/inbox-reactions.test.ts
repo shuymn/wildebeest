@@ -33,6 +33,7 @@ import {
 	MAX_TRACKED_LIKES,
 	PURGE_BATCH,
 	purgeBatch,
+	receiveActivity,
 	type ReceiveResult,
 } from '../src/domain/inbox'
 import { ACTIVITY_ID_LIMIT } from '../src/platform/identity-bounds'
@@ -656,14 +657,14 @@ describe('ID-7: a legacy favourite of a local status (no tracked id)', () => {
 })
 
 describe('ID-7: a remote favourite stored before 0052_favourite_likes', () => {
-	// As the earlier inbox stored it: one row per actor and status, its Like id in favourites.uri, which is no longer
-	// read for a remote favourite (it tracks no id: legacy, matched by its status).
+	// As the earlier inbox stored it: one row per actor and status, its Like id in favourites.uri, its one outstanding
+	// Like until it is tracked.
 	async function preUpgrade(t: Setup, bob: TestActor) {
 		const receive = receiver(t, bob)
 		await t.post(bob, like(bob, `${LOCAL}/ap/o/unknown`))
 		const uri = await seededLocal(t)
 		const bobId = (await accountId(t.store, bob.uri))!
-		const old = likeOf(bob, uri, 'before-upgrade')
+		const old = likeOf(bob, uri, `before-upgrade-${uri}`)
 		await sql(
 			t.store,
 			`INSERT INTO favourites (account_id, status_id, uri, created_at)
@@ -675,43 +676,104 @@ describe('ID-7: a remote favourite stored before 0052_favourite_likes', () => {
 		await sql(t.store, 'UPDATE statuses SET favourites_count = 1 WHERE uri = ?', uri)
 		return { receive, uri, old }
 	}
+	const gone = async (t: Setup, uri: string) => {
+		expect(await sql(t.store, 'SELECT * FROM favourites')).toEqual([])
+		expect((await statusRow(t.store, uri))?.favourites_count).toBe(0)
+	}
 
-	it('is removed by a typed Undo naming its status, whichever id it names', async () => {
-		const t = await setup()
-		const bob = await misskeyActor(t.web, '9abcdefghi', 'neko')
-		for (const id of ['before-upgrade', 'another']) {
-			const { receive, uri } = await preUpgrade(t, bob)
-			expect(await receive(undoOf(bob, likeOf(bob, uri, id)))).toMatchObject({ applied: true, reason: 'undone' })
-			expect(await sql(t.store, 'SELECT * FROM favourites')).toEqual([])
-			expect((await statusRow(t.store, uri))?.favourites_count).toBe(0)
-		}
-	})
-
-	it('is not matched by an untyped Undo of its stored id, which only records the tombstone', async () => {
-		const t = await setup()
-		const bob = await misskeyActor(t.web, '9abcdefghi', 'neko')
-		const { receive, uri, old } = await preUpgrade(t, bob)
-		expect(await receive(untypedUndoOf(old))).toMatchObject({ applied: true, reason: 'retraction-recorded' })
-		expect((await statusRow(t.store, uri))?.favourites_count).toBe(1)
-		expect(await sql(t.store, 'SELECT target_uri FROM inbound_retractions')).toEqual([{ target_uri: old.id }])
-	})
-
-	it.each(UNDO_STYLES)(
-		'becomes tracked by a new Like; the old id’s Undo then keeps it, the new one’s removes it (%s Undos)',
+	it.each(['typed', 'untyped'] as const)(
+		'is removed by a %s Undo of its stored id, with its tombstone',
 		async (style) => {
 			const t = await setup()
 			const bob = await misskeyActor(t.web, '9abcdefghi', 'neko')
 			const { receive, uri, old } = await preUpgrade(t, bob)
-			const fresh = likeOf(bob, uri, 'after-upgrade')
-			expect(await receive(fresh)).toMatchObject({ applied: true, reason: 'favourite-kept' })
-			expect(await tracked(t, uri)).toEqual([fresh.id])
-			expect(await receive(undoIn(style, bob, old, 0))).toMatchObject({ applied: true, reason: 'retraction-recorded' })
-			expect(await tracked(t, uri)).toEqual([fresh.id])
-			expect((await statusRow(t.store, uri))?.favourites_count).toBe(1)
-			expect(await receive(undoIn(style, bob, fresh, 1))).toMatchObject({ applied: true, reason: 'undone' })
-			expect(await sql(t.store, 'SELECT * FROM favourites')).toEqual([])
+			expect(await receive(undoIn(style, bob, old, 0))).toMatchObject({ applied: true, reason: 'undone' })
+			await gone(t, uri)
+			expect(await receive(old)).toMatchObject({ applied: false, reason: 'retracted' })
+			await gone(t, uri)
+			// The typed Undo that a server retries after its untyped one changes nothing more.
+			expect(await receive(undoOf(bob, old))).toMatchObject({ applied: false, reason: 'retracted' })
 		}
 	)
+
+	it('is removed by an Undo of its stored id that a Delete of the id tombstoned first', async () => {
+		const t = await setup()
+		const bob = await misskeyActor(t.web, '9abcdefghi', 'neko')
+		const { receive, uri, old } = await preUpgrade(t, bob)
+		expect(await receive({ type: 'Delete', id: `${old.id}/delete`, object: old.id })).toMatchObject({ applied: true })
+		expect(await receive(untypedUndoOf(old))).toMatchObject({ applied: true, reason: 'undone' })
+		await gone(t, uri)
+	})
+
+	it('is removed by a typed Undo of another id naming its status, which records both ids', async () => {
+		const t = await setup()
+		const bob = await misskeyActor(t.web, '9abcdefghi', 'neko')
+		const { receive, uri, old } = await preUpgrade(t, bob)
+		const other = likeOf(bob, uri, 'other')
+		expect(await receive(undoOf(bob, other))).toMatchObject({ applied: true, reason: 'undone' })
+		await gone(t, uri)
+		expect(
+			(
+				await sql<{ target_uri: string }>(t.store, 'SELECT target_uri FROM inbound_retractions ORDER BY target_uri')
+			).map((row) => row.target_uri)
+		).toEqual([old.id, other.id].sort())
+		// A replay of the Like it was stored under does not bring it back.
+		expect(await receive(old)).toMatchObject({ applied: false, reason: 'retracted' })
+		await gone(t, uri)
+	})
+
+	it('answers 503 to that Undo, writing nothing, when only one of the two ids fits under the cap', async () => {
+		const t = await setup()
+		const bob = await misskeyActor(t.web, '9abcdefghi', 'neko')
+		const { receive, uri } = await preUpgrade(t, bob)
+		await retractionsAtCap(t, bob)
+		await sql(
+			t.store,
+			'DELETE FROM inbound_retractions WHERE actor_uri = ? AND target_uri LIKE ?',
+			bob.uri,
+			'%/filler/1'
+		)
+		const before = await state(t)
+		expect(await receive(undoOf(bob, likeOf(bob, uri, 'other')))).toMatchObject({ retry: true })
+		expect(await state(t)).toEqual(before)
+	})
+
+	it.each(
+		UNDO_STYLES.flatMap(
+			(style) =>
+				[
+					[style, 'old first'],
+					[style, 'new first'],
+				] as const
+		)
+	)('moves its stored id into its tracked ids on a new Like; then %s Undos, %s, end it', async (style, order) => {
+		const t = await setup()
+		const bob = await misskeyActor(t.web, '9abcdefghi', 'neko')
+		const { receive, uri, old } = await preUpgrade(t, bob)
+		const fresh = likeOf(bob, uri, 'after-upgrade')
+		expect(await receive(fresh)).toMatchObject({ applied: true, reason: 'favourite-kept' })
+		expect(await tracked(t, uri)).toEqual([old.id, fresh.id])
+		expect(await sql(t.store, 'SELECT uri FROM favourites')).toEqual([{ uri: null }])
+		expect((await statusRow(t.store, uri))?.favourites_count).toBe(1)
+		expect(await notifications(t.store)).toEqual([])
+		const [first, second] = order === 'old first' ? [old, fresh] : [fresh, old]
+		expect(await receive(undoIn(style, bob, first, 0))).toMatchObject({ applied: true, reason: 'like-undone' })
+		expect(await tracked(t, uri)).toEqual([second.id])
+		expect(await receive(undoIn(style, bob, second, 1))).toMatchObject({ applied: true, reason: 'undone' })
+		await gone(t, uri)
+		for (const liked of [old, fresh]) {
+			expect(await receive(liked)).toMatchObject({ applied: false, reason: 'retracted' })
+		}
+	})
+
+	it('ignores a replay of its stored Like as a duplicate', async () => {
+		const t = await setup()
+		const bob = await misskeyActor(t.web, '9abcdefghi', 'neko')
+		const { receive, uri, old } = await preUpgrade(t, bob)
+		expect(await receive(old)).toMatchObject({ applied: false, reason: 'duplicate' })
+		expect(await sql(t.store, 'SELECT uri FROM favourites')).toEqual([{ uri: old.id }])
+		expect(await tracked(t, uri)).toEqual([])
+	})
 })
 
 describe('VIS-10: the favourite notification follows the aggregate', () => {
@@ -839,7 +901,7 @@ describe('RES-6: tracked Like ids in bounded deletions', () => {
 })
 
 describe('a dump round trip of tracked and legacy favourites', () => {
-	it('restores both as they were, and an import past MAX_TRACKED_LIKES per favourite is refused', async () => {
+	it('restores both as they were, a retained stored id included, and an import past MAX_TRACKED_LIKES per favourite is refused', async () => {
 		const t = await setup()
 		const bob = await mastodonActor(t.web, 'bob')
 		const local = await localStatus(t, { status: 'react', visibility: 'public' })
@@ -855,6 +917,16 @@ describe('a dump round trip of tracked and legacy favourites', () => {
 			bobId,
 			legacyOf.id
 		)
+		// A favourite stored before 0052_favourite_likes, its Like id kept in favourites.uri.
+		const retained = await localStatus(t, { status: 'before the upgrade', visibility: 'public' })
+		const kept = `${MASTODON}/likes/kept`
+		await sql(
+			t.store,
+			"INSERT INTO favourites (account_id, status_id, uri, created_at) VALUES (?, ?, ?, 'x')",
+			bobId,
+			retained.id,
+			kept
+		)
 		const { text } = await dumpViaRpc(t.store)
 		const target = await migratedStore()
 		await copyConfig(t.store, target)
@@ -866,6 +938,28 @@ describe('a dump round trip of tracked and legacy favourites', () => {
 			expect(snapshot[table]).toEqual(source[table])
 		}
 		expect(source.favourite_likes).toHaveLength(MAX_TRACKED_LIKES)
+		// Restored, the retained id is still the favourite's outstanding Like: its untyped Undo removes it, and a replay
+		// of the Like is ignored.
+		const after = await runInDurableObject(target, (_instance, state) => {
+			const run = (activity: InboundActivity) =>
+				state.storage.transactionSync(() =>
+					receiveActivity.run(state.storage.sql, {
+						now: NOW,
+						storeNow: NOW,
+						origin: LOCAL,
+						actorUri: bob.uri,
+						actor: null,
+						activity,
+					})
+				)
+			const undone = run(untypedUndoOf({ id: kept }))
+			const replayed = run({ type: 'Like', id: kept, object: retained.uri })
+			const left = state.storage.sql
+				.exec('SELECT count(*) AS n FROM favourites WHERE status_id = ?', retained.id)
+				.one().n
+			return { undone: undone.reason, replayed: replayed.reason, left }
+		})
+		expect(after).toEqual({ undone: 'undone', replayed: 'retracted', left: 0 })
 
 		// A fifth id for the same favourite, in a file built by hand: the trigger refuses its chunk.
 		const line = text.split('\n').find((l) => l.startsWith('INSERT INTO "favourite_likes"'))!

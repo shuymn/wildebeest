@@ -5101,6 +5101,17 @@ describe('0052_favourite_likes', () => {
 				'SEARCH l USING INDEX favourite_likes_uri (uri=?)',
 				'SEARCH f USING INTEGER PRIMARY KEY (rowid=?)',
 			])
+			// And a not-yet-tracked remote favourite by its stored id (inbox.ts legacyByLike), one seek.
+			const legacyPlan = sql
+				.exec<{ detail: string }>(
+					`EXPLAIN QUERY PLAN SELECT f.id, f.status_id, f.uri FROM favourites f INDEXED BY favourites_like_uri
+					WHERE f.account_id = ? AND f.uri = ? LIMIT 1`,
+					'100000000000000002',
+					'https://r.example/likes/2'
+				)
+				.toArray()
+				.map((row) => row.detail)
+			expect(legacyPlan).toEqual(['SEARCH f USING INDEX favourites_like_uri (account_id=? AND uri=?)'])
 			const insert = (favourite: number, uri: string) =>
 				sql.exec('INSERT INTO favourite_likes (favourite_id, uri, received_at) VALUES (?, ?, 0)', favourite, uri)
 			for (let n = 0; n < 4; n++) {
