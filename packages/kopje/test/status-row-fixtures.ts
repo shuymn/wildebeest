@@ -9,6 +9,7 @@ import { type VisibleStatusId } from '../src/domain/audience'
 import { MAX_STATUS_MENTION_ROWS } from '../src/domain/status-bounds'
 import { type ChunkPlan, presentation, presentStatusesWithin, type Status } from '../src/domain/status-presenter'
 import { statusRowBoundSql } from '../src/domain/status-rows'
+import { CONTENT_JSON_BYTES } from '../src/platform/stored-bounds'
 
 // Fixtures of the chunk planning tests (test/status-rows.test.ts): answers of statuses of mixed shapes and sizes, built
 // in SQL, and what a presentation of them reads.
@@ -71,11 +72,15 @@ export async function fixture(): Promise<{ h: ApiHarness; f: Fixture }> {
 	return { h, f: { viewer, token: h.users.alice.token, mentioned, filter } }
 }
 
-// Wide text of `points` code points within the content's stored bound (CONTENT_JSON_BYTES, RES-2) for every `text` the
-// generator draws (at most 40,000): at most WIDE_ASTRAL four-byte characters outside the BMP, then three-byte ones.
-const WIDE_ASTRAL = 10_000
-const wideText = (points: number) =>
-	`${'𠀀'.repeat(Math.min(points, WIDE_ASTRAL))}${'名'.repeat(Math.max(0, points - WIDE_ASTRAL))}`
+// Wide text of `points` code points whose content (`<p>needle …</p>`) stays within its stored bound
+// (CONTENT_JSON_BYTES as a JSON string, RES-2): four-byte characters outside the BMP while they fit WIDE_BYTES, and
+// past that as many as fit with three-byte ones for the rest, which cover every `text` the generator draws (at most
+// 40,000, 120,000 bytes of three-byte characters).
+const WIDE_BYTES = CONTENT_JSON_BYTES - JSON.stringify('<p>needle </p>').length
+function wideText(points: number): string {
+	const astral = Math.min(points, Math.max(0, WIDE_BYTES - 3 * points))
+	return `${'𠀀'.repeat(astral)}${'名'.repeat(points - astral)}`
+}
 
 // Writes the status rows of `item` (its original, quoted status and boost too) and returns its top-level id.
 export function build(sql: SqlStorage, f: Fixture, item: Item): string {

@@ -436,10 +436,6 @@ const SAFE_INTERPOLATIONS = new Set([
 	'hidesCollectionsSql',
 	'hostCoveredSql',
 	'mayQuoteSql',
-	// Projections of a value inside an edit's media snapshot (editMediaSql), which bound it.
-	'mediaDescriptionSql',
-	'mediaMetaSql',
-	'mediaUrlSql',
 	'mutesSql',
 	'notificationPolicySql',
 	'participantsSql',
@@ -519,14 +515,13 @@ export function scan(all: readonly Source[]): { reads: Finding[]; misuses: Findi
 const LOCAL = "a local account's own row (its username, profile and media are bounded where the account writes them)"
 const ACTIVITYPUB =
 	'an ActivityPub document built from a local status or actor (statusFacts, the actor documents), not an API answer'
-const COMPARED = 'compared in the Worker with an incoming value, never presented'
-const UPLOAD = "a local upload's stored URL, for its R2 objects, never presented"
 const IDENTITY = 'an identity compared, stored or sent in an activity, never presented'
 const PREDICATE = 'inside a predicate builder: its SELECTs compute values that are compared, never returned'
 const EXTRA_COLUMNS = "a status or notification read's extra columns, checked where they are named (column findings)"
 const COMPARED_SQL = 'a tag name a stream matches in SQL, never returned'
 const WINDOW = "a merged window's stream key, order value or aggregate name, over ids"
 const POLL = "a poll's stored choices, matched against a vote or an update, never presented"
+const SNAPSHOT = "a field of an edit's media snapshot, bounded as an attachment's column (editMediaSql)"
 
 const ALLOWED: Record<string, { count: number; reason: string }> = {
 	'src/domain/remote-suspension.ts accounts.uri': { count: 1, reason: IDENTITY },
@@ -591,6 +586,10 @@ const ALLOWED: Record<string, { count: number; reason: string }> = {
 	},
 	'src/domain/oauth.ts accounts.username': { count: 1, reason: LOCAL },
 	'src/domain/polls.ts polls.options': { count: 3, reason: POLL },
+	"src/domain/status-bounds.ts interpolation mediaUrlSql(text('url'))": { count: 1, reason: SNAPSHOT },
+	"src/domain/status-bounds.ts interpolation mediaUrlSql(text('preview_url'))": { count: 1, reason: SNAPSHOT },
+	'src/domain/status-bounds.ts interpolation mediaMetaSql(meta)': { count: 1, reason: SNAPSHOT },
+	"src/domain/status-bounds.ts interpolation mediaDescriptionSql(text('description'))": { count: 1, reason: SNAPSHOT },
 	'src/domain/quotes.ts accounts.username': { count: 2, reason: `a local signer or quoted author (${LOCAL})` },
 	'src/domain/snapshot.ts accounts.username': { count: 1, reason: LOCAL },
 	'src/domain/statuses.ts accounts.username': { count: 1, reason: LOCAL },

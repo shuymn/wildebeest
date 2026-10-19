@@ -1354,7 +1354,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `REMOTE_BIO_BYTES` (64 KiB) as a JSON string, cut by sanitizing a shorter raw prefix so it stays sanitized HTML
   (`sanitizeRemoteBio` in `src/security/html.ts`, which the cutover's converter and verification share); a remote
   profile URL (`url`, icon, image) over `PROFILE_URL_LIMIT` (2,048) is not stored; the display name is cut at 2,048 code
-  units, and a username over 255 is refused. Converted rows hold the same bounds (RES-2, stored values), so
+  points, and a username over 255 is refused. Converted rows hold the same bounds (RES-2, stored values), so
   `ACCOUNT_COLUMN_MAP` reads the bio, display name and URLs as stored and cuts the username at 255 code points; mentions
   read the username through the same projection (`src/domain/profile-bounds.ts`) and derive `acct` and a fallback url
   from the cut username; the admin account search reads candidates' ids and flags only and tests their text in SQL. The actor URI is
