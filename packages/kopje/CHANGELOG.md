@@ -165,9 +165,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
     - `0054_remote_reports`: rebuilds `reports` for remote reporters (above), keeping every report, notification,
       push and id. It fails before writing anything on the conditions its [header](migrations/0054_remote_reports.sql)
       names; a stored report past the new bounds (none of Kopje's writers makes one) leaves the Store held until it is
-      fixed and retried (`kopje-admin upgrade retry`, [docs/upgrade.md](docs/upgrade.md)). Before 0053, with `0049`
-      to `0052` in the same upgrade on the benchmark store, the whole upgrade took 8.8 to 22.7 seconds in six runs at load averages of
-      3.5 to 9.9 (two runs past the 20 seconds an upgrade may take, under outside load; to be measured again).
+      fixed and retried (`kopje-admin upgrade retry`, [docs/upgrade.md](docs/upgrade.md)). On the benchmark store,
+      this release's six files (0049 to 0054) in one upgrade took 8.7 to 9.0 seconds in three serial runs (0049 to
+      0053 alone: 8.4 to 8.8 seconds), within the 20 seconds an upgrade may take.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.17] - 2026-10-19
