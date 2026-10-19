@@ -48,6 +48,7 @@ import m0047 from '../../migrations/0047_status_mentions_shown.sql'
 import m0048 from '../../migrations/0048_stored_bounds.sql'
 import m0049 from '../../migrations/0049_instance_bounds.sql'
 import m0050 from '../../migrations/0050_follow_recommendation_mutes.sql'
+import m0051 from '../../migrations/0051_follow_answer_pairs.sql'
 
 // Store migrations in apply order. Append only: an applied file is recorded by name and checksum and must
 // never change. Each file runs in its own transaction, must finish well under 30 seconds, and must be pure SQL.
@@ -102,4 +103,5 @@ export const MIGRATIONS: readonly { name: string; sql: string }[] = [
 	{ name: '0048_stored_bounds', sql: m0048 },
 	{ name: '0049_instance_bounds', sql: m0049 },
 	{ name: '0050_follow_recommendation_mutes', sql: m0050 },
+	{ name: '0051_follow_answer_pairs', sql: m0051 },
 ]

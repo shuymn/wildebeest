@@ -313,6 +313,8 @@ describe('Follow generations (ID-6, ID-7)', () => {
 		const f1 = follow(bob)
 		const f2 = follow(bob)
 		await t.post(bob, f1)
+		// The first Accept is claimed (exposed), so the second Follow leaves it (cancelFollowAnswers).
+		expect((await t.store.claimDeliveries(BUILD, { now: NOW, leaseToken: 'first' })).deliveries).toHaveLength(1)
 		await t.post(bob, f2)
 		const ids = (
 			await sql<{ id: string }>(t.store, "SELECT json_extract(body, '$.activity.id') AS id FROM outbound_activities")

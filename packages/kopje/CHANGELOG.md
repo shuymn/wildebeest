@@ -63,11 +63,23 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   sanitizes to no text, is dropped, and one past its bound is cut or dropped and stops the conversion unless
   `--accept-truncation` is given (the counts: [docs/cutover.md](docs/cutover.md), "What the conversion does").
   `verify-conversion` expects the same, and fails when a dropped setting is in the dump.
+- A Follow whose pair has more than 32 answers still waiting is answered 503, writing nothing, until they settle; a
+  server whose own retries run out meanwhile needs its user to follow again.
+- A given-up answer to a Follow that a later activity superseded is deleted by the next delivery sweep instead of
+  after 30 days, and no longer shows in `kopje-admin deliveries`: nothing could send it again.
+
+### Fixed
+
+- A remote account that follows again (after its Undo, a block and unblock, a rejected request, or a remote
+  suspension and unsuspension) no longer receives the earlier answers (`Accept`, `Reject`) still waiting for it in
+  the delivery queue: only the new Follow's answer, or the owner's decision on a request, is sent (NET-2 in
+  [docs/threat-model.md](docs/threat-model.md)). An answer a delivery attempt has already taken is still sent, so the
+  two sides can disagree until the follower follows again (see the accepted risks there).
 
 ### Instance changes
 
-- Store schema: adds two migrations, applied on the first request after the deploy; a rollback to an earlier version
-  needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
+- Store schema: adds three migrations, applied on the first request after the deploy; a rollback to an earlier
+  version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0049_instance_bounds`: rewrites instance settings past their bounds (above), adds the triggers that refuse
       them, and indexes the suspend blocks by domain. On a benchmark store of 1,000,000 accounts, 2,000,000 statuses
       and 100,000 instance domain blocks, the whole upgrade took 6.2 to 6.7 seconds in four runs in workerd's local
@@ -76,6 +88,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
     - `0050_follow_recommendation_mutes`: the table of dismissed suggestions. It adds an empty table and reads nothing:
       on the same benchmark store its upgrade took 9.1 seconds (13.7 in a first run), the overhead of an upgrade on a
       store that size.
+    - `0051_follow_answer_pairs`: records the remote follower of each follow answer and whether a delivery was ever
+      claimed; every existing delivery of a follow answer counts as claimed, so none of them is cancelled. On the
+      benchmark store its [header](migrations/0051_follow_answer_pairs.sql) describes, the whole upgrade took 7.3 and
+      8.0 seconds in two runs in workerd's local Durable Object SQLite.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.17] - 2026-10-19

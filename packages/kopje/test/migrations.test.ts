@@ -5274,3 +5274,93 @@ describe('0050_follow_recommendation_mutes', () => {
 		})
 	})
 })
+
+describe('0051_follow_answer_pairs', () => {
+	const NAME = '0051_follow_answer_pairs'
+	const at = NAMES.indexOf(NAME)
+	const LOCAL = '100000000000000001'
+	const REMOTE = '100000000000000002'
+	const answer = (type: string, objectType: string, actor: string) =>
+		JSON.stringify({
+			activity: {
+				type,
+				actor: 'https://kopje.test/ap/users/a',
+				object: { id: 'https://r.example/f/1', type: objectType, actor, object: 'https://kopje.test/ap/users/a' },
+			},
+			audience: { followers: false, accounts: [REMOTE] },
+		})
+
+	it('tags every Follow answer with its remote pair, exposes their existing rows, and nothing else', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+			sql.exec(
+				`INSERT INTO accounts (id, uri, username, domain) VALUES
+					(?1, 'https://kopje.test/ap/users/a', 'a', NULL), (?2, 'https://r.example/u', 'u', 'r.example')`,
+				LOCAL,
+				REMOTE
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'a@example.com', X'00', X'00', 'k')",
+				LOCAL
+			)
+			const bodies = [
+				answer('Accept', 'Follow', 'https://r.example/u'),
+				answer('Reject', 'Follow', 'https://r.example/u'),
+				// Not tagged: a QuoteRequest's answer, another activity, an answer to an actor never stored, and one to a
+				// local actor's Follow.
+				answer('Accept', 'QuoteRequest', 'https://r.example/u'),
+				'{"activity":{"type":"Create","object":{"type":"Note"}},"audience":{"followers":true,"accounts":[]}}',
+				answer('Accept', 'Follow', 'https://gone.example/u'),
+				answer('Accept', 'Follow', 'https://kopje.test/ap/users/a'),
+			]
+			for (const [i, body] of bodies.entries()) {
+				sql.exec(
+					'INSERT INTO outbound_activities (id, account_id, body, created_at) VALUES (?, ?, ?, 0)',
+					i + 1,
+					LOCAL,
+					body
+				)
+				sql.exec(
+					`INSERT INTO deliveries (activity_id, account_id, inbox_url, lane, state, next_attempt_at, updated_at)
+					VALUES (?, ?, 'https://r.example/inbox', 'https://r.example', ?, 0, 0)`,
+					i + 1,
+					LOCAL,
+					i % 2 === 0 ? 'pending' : 'gave_up'
+				)
+			}
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+			expect(
+				sql
+					.exec(
+						'SELECT o.id, o.follow_pair, d.exposed FROM outbound_activities o JOIN deliveries d ON d.activity_id = o.id ORDER BY o.id'
+					)
+					.toArray()
+			).toEqual([
+				{ id: 1, follow_pair: REMOTE, exposed: 1 },
+				{ id: 2, follow_pair: REMOTE, exposed: 1 },
+				{ id: 3, follow_pair: null, exposed: 0 },
+				{ id: 4, follow_pair: null, exposed: 0 },
+				{ id: 5, follow_pair: null, exposed: 0 },
+				{ id: 6, follow_pair: null, exposed: 0 },
+			])
+			expect(() => sql.exec('UPDATE deliveries SET exposed = 2 WHERE id = 1')).toThrow(/CHECK constraint failed/)
+			const plan = (query: string) =>
+				sql
+					.exec<{ detail: string }>(`EXPLAIN QUERY PLAN ${query}`)
+					.toArray()
+					.map((row) => row.detail)
+			expect(
+				plan(
+					`SELECT d.id FROM outbound_activities o INDEXED BY outbound_activities_follow_swept
+					CROSS JOIN deliveries d INDEXED BY deliveries_activity ON d.activity_id = o.id
+					WHERE o.follow_pair IS NOT NULL AND o.superseded = 1 AND d.state = 'gave_up' ORDER BY o.id LIMIT 500`
+				)
+			).toEqual([
+				'SCAN o USING INDEX outbound_activities_follow_swept',
+				'SEARCH d USING INDEX deliveries_activity (activity_id=?)',
+			])
+		})
+	})
+})

@@ -859,10 +859,8 @@ describe('ID-7: replay changes nothing twice', () => {
 		await t.post(bob, first)
 		await t.post(bob, second)
 		expect((await follows(t.store)).map((f) => f.uri)).toEqual([second.id])
-		expect((await outbound(t.store)).map((o) => (o.activity.object as { id: string }).id)).toEqual([
-			first.id,
-			second.id,
-		])
+		// The first Accept, never claimed, is cancelled by the second Follow (cancelFollowAnswers).
+		expect((await outbound(t.store)).map((o) => (o.activity.object as { id: string }).id)).toEqual([second.id])
 		expect(await notifications(t.store)).toHaveLength(1)
 	})
 

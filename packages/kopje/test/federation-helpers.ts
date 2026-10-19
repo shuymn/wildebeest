@@ -13,6 +13,19 @@ export const LEGACY = {
 	pkcs8: base64ToBytes(legacy.kek.pkcs8),
 }
 
+// Makes `accountId` sign with LEGACY's key, so a delivery round can load its signer.
+export async function signAsLegacy(store: StoreStub, accountId: string): Promise<void> {
+	await runInDurableObject(store, (_instance, state) => {
+		state.storage.sql.exec(
+			'UPDATE local_accounts SET privkey = ?, privkey_salt = ?, pubkey = ? WHERE account_id = ?',
+			LEGACY.privkey.slice().buffer,
+			LEGACY.salt.slice().buffer,
+			LEGACY.pubkey,
+			accountId
+		)
+	})
+}
+
 export const LEGACY_EMPTY_KEK = {
 	kek: legacy.emptyKek.kek,
 	privkey: base64ToBytes(legacy.emptyKek.privkey),
