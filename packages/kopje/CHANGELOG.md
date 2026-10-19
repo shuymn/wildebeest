@@ -12,11 +12,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 - A remote account that follows again (after its Undo, a block and unblock, a rejected request, or a remote
   suspension and unsuspension) no longer receives the earlier answers (`Accept`, `Reject`) still waiting for it in
-  the delivery queue. For interoperability with servers that match answers by account pair, a Follow cancels its
-  pair's answers that no delivery attempt has taken or that are not expanded yet, so only the new Follow's answer
-  (or the owner's decision on a request) is sent. An answer a delivery attempt has taken may have been sent and is
-  still sent; the two sides can then disagree until the follower follows again (an accepted risk in
-  [docs/threat-model.md](docs/threat-model.md)).
+  the delivery queue: only the new Follow's answer, or the owner's decision on a request, is sent (NET-2 in
+  [docs/threat-model.md](docs/threat-model.md)). An answer a delivery attempt has already taken is still sent, so the
+  two sides can disagree until the follower follows again (see the accepted risks there).
 
 ### Changed
 
@@ -30,9 +28,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - Store schema: adds one migration, applied on the first request after the deploy; a rollback to an earlier version
   needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0051_follow_answer_pairs`: records the remote follower of each follow answer and whether a delivery was ever
-      claimed; every existing delivery of a follow answer counts as claimed, so none of them is cancelled. On a
-      benchmark store of 1,000,000 accounts, 2,000,000 statuses and 550,000 outbound activities with a delivery row
-      each, the whole upgrade took 7.4 to 7.5 seconds in three runs in workerd's local Durable Object SQLite.
+      claimed; every existing delivery of a follow answer counts as claimed, so none of them is cancelled. On the
+      benchmark store its [header](migrations/0051_follow_answer_pairs.sql) describes, the whole upgrade took 7.4 to
+      7.5 seconds in three runs in workerd's local Durable Object SQLite.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.17] - 2026-10-19
