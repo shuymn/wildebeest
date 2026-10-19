@@ -44,6 +44,15 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       mutes and dismissals stay the same.
 - Dismissing a suggestion (`DELETE /api/v1/suggestions/:id`) is stored, and the account is not suggested again; it
   still answers `{}` whatever the id.
+- Remote custom emoji, as Mastodon 4.5 shows them: the `Emoji` tags of a remote status (a Note, a Question, a converted
+  object) and of a remote account are kept, and `emojis` (which used to be `[]`) lists the ones its texts reference on
+  statuses, polls (those its choices reference), edit history versions and accounts. Each object keeps what it tagged:
+  an account's are replaced by every refresh and `Update`, a status's by every newer `Update` (a change of emoji alone
+  adds no history entry). A boost shows none of its own and a suspended account none. `static_url` is the same as
+  `url`, and images are linked, never fetched. 64 tags are read per object, and a snapshot keeps the emoji that fit
+  its bounds ([docs/dump-format.md](docs/dump-format.md); 40 typical ones per status and 20 per account fit), dropping
+  the rest from the first that does not fit. A reference is any shortcode between two colons, so `:aa:bb:` shows both where Mastodon shows neither.
+  `GET /api/v1/custom_emojis` still answers `[]`.
 - Reports from other servers: an inbound `Flag` (what Mastodon sends when a user forwards a report, and Misskey when a
   moderator forwards one) files a report of each local account it names, and of a remote one only with a named status
   of it that replies to a local account, as Mastodon does. Its reporter is the remote actor, its category `other`; the
@@ -95,6 +104,13 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - An Undo of a Like naming a status that is not a local one, and that no stored favourite matches, records nothing:
   servers also send the Undos of reactions to other servers' posts to the reactor's followers, and these took the
   actor's retraction allowance.
+- An answer's single item may now take up to 85% of its 8 MiB (it was 80%): emoji at their bounds would otherwise
+  leave a conversation too little room for 40 emoji per status and 20 per profile. To keep the memory peak of a
+  timeline within its bound, pages, contexts, search, histories and lookups read their statuses in chunks of 768 KiB
+  of row memory instead of 1 MiB (`PAGE_CHUNKS`), which can take a few more queries for a page of large statuses.
+- Stored format: `statuses.emojis`, `status_edits.emojis` and `accounts.emojis` hold the custom emoji snapshots; a dump
+  past their bounds is refused, and `verify-conversion` fails on a converted row holding one, reporting `emojis`
+  counts by table ([docs/dump-format.md](docs/dump-format.md), [docs/cutover.md](docs/cutover.md)).
 - Stored format: a remote favourite's Like ids are rows of the new `favourite_likes` table, and its `favourites.uri`
   holds only the id it kept from before the upgrade, until that id's Undo. A dump past the new table's bounds is
   refused ([docs/dump-format.md](docs/dump-format.md)).
@@ -124,7 +140,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds five migrations, applied on the first request after the deploy; a rollback to an earlier
+- Store schema: adds six migrations, applied on the first request after the deploy; a rollback to an earlier
   version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0049_instance_bounds`: rewrites instance settings past their bounds (above), adds the triggers that refuse
       them, and indexes the suspend blocks by domain. On a benchmark store of 1,000,000 accounts, 2,000,000 statuses
@@ -142,11 +158,15 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       the favourites by stored Like id; no existing row is changed. On a benchmark store of 1,000,000 accounts and
       2,000,000 favourites each holding a Like id, the whole upgrade took 7.6 to 8.0 seconds in four runs in workerd's local Durable
       Object SQLite, within the 20 seconds an upgrade may take.
+    - `0053_custom_emoji_snapshots`: adds the three emoji columns, which read as none on every existing row, and the
+      triggers that bound them; no row is read or changed. On the benchmark store, this release's five files (0049 to
+      0053) in one upgrade took 8.2 to 8.4 seconds in three serial runs (0049 to 0052 alone: 8.1 to 8.5 seconds),
+      within the 20 seconds an upgrade may take.
     - `0054_remote_reports`: rebuilds `reports` for remote reporters (above), keeping every report, notification,
       push and id. It fails before writing anything on the conditions its [header](migrations/0054_remote_reports.sql)
       names; a stored report past the new bounds (none of Kopje's writers makes one) leaves the Store held until it is
-      fixed and retried (`kopje-admin upgrade retry`, [docs/upgrade.md](docs/upgrade.md)). With `0049` to `0052` in the
-      same upgrade on the benchmark store, the whole upgrade took 8.8 to 22.7 seconds in six runs at load averages of
+      fixed and retried (`kopje-admin upgrade retry`, [docs/upgrade.md](docs/upgrade.md)). Before 0053, with `0049`
+      to `0052` in the same upgrade on the benchmark store, the whole upgrade took 8.8 to 22.7 seconds in six runs at load averages of
       3.5 to 9.9 (two runs past the 20 seconds an upgrade may take, under outside load; to be measured again).
 - `wrangler.jsonc`: unchanged.
 

@@ -60,6 +60,7 @@ import {
 	userWriteOperation,
 } from './auth'
 import { addToConversation } from './conversations'
+import { type CustomEmoji, presentEmojis } from './custom-emojis'
 import { beginRetraction } from './deliveries'
 import { countFeaturedTags, featuredOfStatus, uncountFeaturedTags } from './featured-tags'
 import { allocateLocalId } from './ids'
@@ -107,7 +108,7 @@ import { streamDelete } from './streaming'
 import { readWindow, singleWindow, windowJson, windowPage } from './windows'
 import { selectSql } from '../db/columns'
 import type { Db } from '../db/sql'
-import { storedMediaDescription, storedText } from '../platform/stored-bounds'
+import { STATUS_EMOJIS_BYTES, storedMediaDescription, storedText } from '../platform/stored-bounds'
 import { jsonStringBytes, SPOILER_BYTES, STATUS_CONTENT_BYTES } from '../security/html'
 
 // Statuses (B4a): posting, editing and deleting local statuses, the per-status reads, and favourite, reblog and
@@ -769,11 +770,12 @@ function mediaSnapshot(db: Db, statusId: string): MediaAttachment[] {
 // activity is named after it).
 export function recordEdit(db: Db, statusId: string, at: string): string {
 	// The poll's choices are copied as P projects them (pollOptionsSql) inside SQLite: read into the Worker and bound
-	// again, a lone surrogate stored by an earlier version would come back as three U+FFFD (RES-2).
+	// again, a lone surrogate stored by an earlier version would come back as three U+FFFD (RES-2). The emoji snapshot
+	// is copied as stored: both columns have the same bound (EMOJI_COLUMNS).
 	const row = db.all<{ id: string }>(
-		`INSERT INTO status_edits (status_id, content, spoiler_text, sensitive, media_json, poll_options, created_at)
+		`INSERT INTO status_edits (status_id, content, spoiler_text, sensitive, media_json, poll_options, created_at, emojis)
 		SELECT id, content, spoiler_text, sensitive, ?2,
-			(SELECT ${pollOptionsSql('p.options')} FROM polls p WHERE p.status_id = ?1 AND p.removed = 0), ?3
+			(SELECT ${pollOptionsSql('p.options')} FROM polls p WHERE p.status_id = ?1 AND p.removed = 0), ?3, emojis
 		FROM statuses WHERE id = ?1
 		RETURNING CAST(id AS TEXT) AS id`,
 		statusId,
@@ -1220,7 +1222,7 @@ export type StatusEdit = {
 	account: Account
 	poll: { options: { title: string }[] } | null
 	media_attachments: MediaAttachment[]
-	emojis: []
+	emojis: CustomEmoji[]
 }
 
 // StatusEdit's poll as REST::StatusEditSerializer shows it: the choices' titles a version had.
@@ -1255,7 +1257,7 @@ export const statusHistory = optionalUserReadOperation<{ id: string; present: Pr
 						account: status.account,
 						poll: status.poll === null ? null : { options: status.poll.options.map(({ title }) => ({ title })) },
 						media_attachments: status.media_attachments,
-						emojis: [],
+						emojis: status.emojis,
 					},
 				],
 			}
@@ -1270,8 +1272,10 @@ export const statusHistory = optionalUserReadOperation<{ id: string; present: Pr
 					media_json: string
 					poll_options: string | null
 					created_at: string
+					emojis: string | null
 				}>(
-					`SELECT content, spoiler_text, sensitive, ${editMediaSql('media_json')} AS media_json, poll_options, created_at
+					`SELECT content, spoiler_text, sensitive, ${editMediaSql('media_json')} AS media_json, poll_options, created_at,
+						emojis
 					FROM status_edits WHERE id = CAST(? AS INTEGER)`,
 					editId
 				)
@@ -1285,7 +1289,7 @@ export const statusHistory = optionalUserReadOperation<{ id: string; present: Pr
 							account,
 							poll: editPollOf(edit.poll_options),
 							media_attachments: JSON.parse(edit.media_json) as MediaAttachment[],
-							emojis: [],
+							emojis: presentEmojis(edit.emojis, STATUS_EMOJIS_BYTES),
 						}
 			}
 		}

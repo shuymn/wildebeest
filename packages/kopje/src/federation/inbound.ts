@@ -4,6 +4,7 @@ import { Temporal } from 'temporal-polyfill'
 
 import { hasAuthorProof, verifyAuthorProof } from './author-proof'
 import { createRemoteLoaders, type FederationDeps, type FederationState, type RemoteLoaders } from './federation'
+import { typeIs } from './json-shapes'
 import {
 	createContextLoader,
 	createSafeLoader,
@@ -16,14 +17,7 @@ import {
 	requireObjectRoot,
 } from './loader'
 import { fetchActor } from './remote-actor'
-import {
-	ACTOR_TYPES,
-	CONVERTED_TYPES,
-	fetchRemoteStatus,
-	parseRemoteStatus,
-	STATUS_TYPES,
-	typeIs,
-} from './remote-status'
+import { ACTOR_TYPES, CONVERTED_TYPES, fetchRemoteStatus, parseRemoteStatus, STATUS_TYPES } from './remote-status'
 import type { ActivityRef, InboundActivity, Prefetched, ReceiveResult, RemoteActorInput } from '../domain/inbox'
 import { flagObjects, MAX_FLAG_OBJECTS, reportComment } from '../domain/reports'
 import { ACTIVITY_ID_LIMIT, withinIdentityBound } from '../platform/identity-bounds'

@@ -45,6 +45,7 @@ export const CATEGORIES = [
 	'conversations',
 	'settings',
 	'clients',
+	'emojis',
 ]
 
 // Kopje's limited is legacy's direct with silent recipients: the same audience, its mentions.
@@ -111,6 +112,9 @@ export function actualFromDump(text) {
 	const conversations = new Map()
 	/** @type {Map<string, string[]>} conversation id -> its status ids */
 	const conversationStatuses = new Map()
+	// Rows holding an emoji snapshot, by table, boosts included: legacy has no custom emoji, so a conversion writes none
+	// (each is an extra record of `emojis`, and the report counts them).
+	const emojiRows = { accounts: 0, statuses: 0, status_edits: 0 }
 	/** @type {unknown} the kopje_state profile_updates value: ids of local accounts that publication announces */
 	let profileUpdates = []
 	const account = (/** @type {string | null} */ id) => (id === null ? undefined : accounts.get(id))
@@ -143,6 +147,7 @@ export function actualFromDump(text) {
 			case 'accounts': {
 				const uri = t('uri') ?? ''
 				const local = row.domain === 'NULL'
+				emojiRows.accounts += row.emojis === undefined || row.emojis === 'NULL' ? 0 : 1
 				accounts.set(t('id') ?? '', { uri, local })
 				put('accounts', uri, [
 					local ? 1 : 0,
@@ -191,6 +196,7 @@ export function actualFromDump(text) {
 				const owner = account(t('account_id'))
 				const author = owner?.uri ?? ''
 				const id = t('id') ?? ''
+				emojiRows.statuses += row.emojis === undefined || row.emojis === 'NULL' ? 0 : 1
 				statuses.set(id, {
 					uri,
 					author,
@@ -245,6 +251,7 @@ export function actualFromDump(text) {
 				break
 			case 'status_edits': {
 				const uri = status(t('status_id'))?.uri ?? ''
+				emojiRows.status_edits += row.emojis === undefined || row.emojis === 'NULL' ? 0 : 1
 				// The attachments a version shows, as its media_json presents them.
 				/** @type {any[]} */
 				let shown = []
@@ -435,6 +442,11 @@ export function actualFromDump(text) {
 	for (const [uri, versions] of edits) {
 		put('edits', uri, versions)
 	}
+	for (const [table, rows] of Object.entries(emojiRows)) {
+		if (rows > 0) {
+			put('emojis', table, rows)
+		}
+	}
 	for (const [uri, items] of media) {
 		put(
 			'attachments',
@@ -497,5 +509,9 @@ export async function compareConversion(expected, actual) {
 			actualSha256: await sha256(canonical(have, haveKeys)),
 		}
 	}
-	return { result: failed ? 'FAIL' : 'PASS', categories }
+	// The rows holding an emoji snapshot, by table (none expected).
+	const emojis = Object.fromEntries(
+		['accounts', 'statuses', 'status_edits'].map((table) => [table, Number(actual.emojis?.[table] ?? 0)])
+	)
+	return { result: failed ? 'FAIL' : 'PASS', categories, emojis }
 }

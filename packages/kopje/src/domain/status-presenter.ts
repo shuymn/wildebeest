@@ -17,6 +17,7 @@ import {
 	type VisibleStatusId,
 	visibleSql,
 } from './audience'
+import { type CustomEmoji, presentEmojis } from './custom-emojis'
 import {
 	type ActiveFilters,
 	activeFilters,
@@ -28,7 +29,7 @@ import {
 	MAX_FILTER_TEXT,
 } from './filters'
 import { htmlToPlainText } from './plain-text'
-import { type Poll, presentPolls } from './polls'
+import { type Poll, presentPolls, withStatusEmojis } from './polls'
 import { MEDIA_URL_LIMIT } from './status-bounds'
 import {
 	MENTION_COLUMN_MAP,
@@ -45,6 +46,7 @@ import {
 import { selectSql } from '../db/columns'
 import { type Db, RowCapExceeded, RowMeter } from '../db/sql'
 import { boundedHref } from '../platform/http-url'
+import { STATUS_EMOJIS_BYTES } from '../platform/stored-bounds'
 import { remotePlainText } from '../security/html'
 
 // The Status entity as Mastodon 4.0.2's REST::StatusSerializer shows it. One presenter for every read path: it takes
@@ -130,7 +132,7 @@ export type Status = {
 	media_attachments: MediaAttachment[]
 	mentions: Mention[]
 	tags: Tag[]
-	emojis: []
+	emojis: CustomEmoji[]
 	quote: Quote | ShallowQuote | null
 	quote_approval: QuoteApproval
 	card: null
@@ -158,6 +160,7 @@ export type StatusRow = {
 	favourites_count: number
 	quotes_count: number
 	quote_policy: number
+	emojis: string | null
 	author_uri: string
 	author_username: string
 	author_domain: string | null
@@ -321,9 +324,9 @@ function statusGraph<R extends GraphRow>(
 // chunk of several past its cap and the uncapped single status: "Heap at 8 MiB per answer" in docs/threat-model.md.
 export type ChunkPlan = { readonly target: number; readonly cap: number }
 
-// Pages, contexts, search, histories and lookups: 1 MiB of heap, so a timeline's peak with the backstop fired stays
+// Pages, contexts, search, histories and lookups: 768 KiB of heap, so a timeline's peak with the backstop fired stays
 // within half of the Store isolate (docs/threat-model.md, the peaks table, which test/status-bounds.test.ts computes).
-export const PAGE_CHUNKS: ChunkPlan = { target: 1024 * 1024, cap: 1024 * 1024 }
+export const PAGE_CHUNKS: ChunkPlan = { target: 768 * 1024, cap: 768 * 1024 }
 // Grouped notifications and admin reports, which keep the most besides their statuses: 1 MiB.
 export const LARGE_ITEM_CHUNKS: ChunkPlan = { target: 1024 * 1024, cap: 1024 * 1024 }
 
@@ -618,6 +621,8 @@ function hydrate(
 							: {}),
 						filtered,
 					}
+		const emojis = presentEmojis(row.emojis, STATUS_EMOJIS_BYTES)
+		const poll = polls.get(row.id)
 		const body =
 			top && options.source === true
 				? { text: row.source_text ?? htmlToPlainText(row.content) }
@@ -653,7 +658,7 @@ function hydrate(
 				name: t.name,
 				url: `${options.origin}/tags/${encodeURIComponent(t.name)}`,
 			})),
-			emojis: [],
+			emojis,
 			quote,
 			quote_approval: {
 				automatic: quotePolicyFlags(policy, 'automatic'),
@@ -661,7 +666,7 @@ function hydrate(
 				current_user: approvals.get(proper.id) ?? 'denied',
 			},
 			card: null,
-			poll: polls.get(row.id) ?? null,
+			poll: poll === undefined ? null : withStatusEmojis(poll, emojis),
 		}
 	}
 	// A quoted status is presented once however many statuses of the response quote it: its presentation depends on its

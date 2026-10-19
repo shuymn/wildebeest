@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 import { type ApiHarness, bearer, json, sql } from '../api-helpers'
 import { NOW } from '../app-helpers'
+import { accountAtCap, statusAtCap } from '../emoji-fixtures'
 import { BUILD } from '../helpers'
 import {
 	act,
@@ -20,7 +21,9 @@ import {
 import { connect, drained, echo, type Inbox, settled, type StreamMessage, subscribed, takeAll } from './stream-helpers'
 import { Db } from '../../src/db/sql'
 import { streamDelete } from '../../src/domain/streaming'
+import { ACCOUNT_EMOJIS_BYTES, STATUS_EMOJIS_BYTES } from '../../src/platform/stored-bounds'
 import { sha256Hex } from '../../src/security/tokens'
+import { STREAM_LIMITS } from '../../src/stream-hub'
 
 // The `public*` and `hashtag*` streams (design "Kopje streaming API" PR 4): `update` and `status.update` when the public
 // or the hashtag's timeline positioned at the status returns it (R33), less a status that mentions an account the
@@ -297,6 +300,28 @@ describe('update on public and hashtag streams', () => {
 			['hashtag #Cats', 'status.update', status.id],
 			['hashtag:local #Cats', 'status.update', status.id],
 		])
+	})
+})
+
+describe('custom emoji on public streams (RES-2)', () => {
+	// G6 of the emoji snapshot bounds: a status at its presented emoji bound, by an author at the account bound, is sent
+	// whole, well within the stream's payload bound.
+	it('sends a status and its author with their emojis at the bound', async () => {
+		const h = await community(['alice'])
+		const erin = await remoteAccount(h.store, 'erin')
+		const inbox = await feeds(h, h.users.alice.token)
+		const status = await remoteStatus(h, erin)
+		await sql(h.store, 'UPDATE statuses SET emojis = ? WHERE id = ?', JSON.stringify(statusAtCap()), status)
+		await sql(h.store, 'UPDATE accounts SET emojis = ? WHERE id = ?', JSON.stringify(accountAtCap()), erin)
+		await h.store.streamTick(BUILD)
+		await drained(h, inbox)
+		expect(events(inbox)[0]).toEqual(['public', 'update', status])
+		const sent = (await inbox.next()).payload!
+		const payload = JSON.parse(sent) as { emojis: unknown[]; account: { emojis: unknown[] } }
+		expect([payload.emojis.length, payload.account.emojis.length]).toEqual([11, 6])
+		const bytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).length
+		expect([bytes(payload.emojis), bytes(payload.account.emojis)]).toEqual([STATUS_EMOJIS_BYTES, ACCOUNT_EMOJIS_BYTES])
+		expect(new TextEncoder().encode(sent).length).toBeLessThan(STREAM_LIMITS.payloadBytes)
 	})
 })
 

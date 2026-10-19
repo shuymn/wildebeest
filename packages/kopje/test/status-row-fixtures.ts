@@ -31,6 +31,8 @@ export type Item = {
 	media: number
 	poll: number
 	viewer: boolean
+	// The stored emoji snapshots of its statuses and of its author, if any.
+	emojis?: { status: string | null; author: string | null }
 }
 
 export type Fixture = { viewer: string; token: string; mentioned: string[]; filter: string }
@@ -86,23 +88,26 @@ function wideText(points: number): string {
 export function build(sql: SqlStorage, f: Fixture, item: Item): string {
 	const author = nextId()
 	sql.exec(
-		"INSERT INTO accounts (id, uri, username, domain, display_name, raw) VALUES (?, ?, 'author', 'remote.example', ?, ?)",
+		`INSERT INTO accounts (id, uri, username, domain, display_name, raw, emojis)
+		VALUES (?, ?, 'author', 'remote.example', ?, ?, ?)`,
 		author,
 		`https://remote.example/users/${author}`,
 		(item.wide ? '名' : 'n').repeat(item.text % 300),
-		JSON.stringify({ attachment: [{ type: 'PropertyValue', name: 'k', value: 'v'.repeat(item.text % 500) }] })
+		JSON.stringify({ attachment: [{ type: 'PropertyValue', name: 'k', value: 'v'.repeat(item.text % 500) }] }),
+		item.emojis?.author ?? null
 	)
 	const status = (parts: Item): string => {
 		const id = nextId()
 		sql.exec(
-			`INSERT INTO statuses (id, uri, account_id, visibility, content, spoiler_text, published_at)
-			VALUES (?, ?, ?, 'public', ?, ?, ?)`,
+			`INSERT INTO statuses (id, uri, account_id, visibility, content, spoiler_text, published_at, emojis)
+			VALUES (?, ?, ?, 'public', ?, ?, ?, ?)`,
 			id,
 			`https://remote.example/objects/${id}`,
 			author,
 			`<p>needle ${parts.wide ? wideText(parts.text) : 'x'.repeat(parts.text)}</p>`,
 			'w'.repeat(parts.text % 100),
-			VIEWER_NOW
+			VIEWER_NOW,
+			parts.emojis?.status ?? null
 		)
 		for (const account of f.mentioned.slice(0, parts.mentions)) {
 			sql.exec(

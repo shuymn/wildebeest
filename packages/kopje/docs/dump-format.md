@@ -177,6 +177,15 @@ an Undo naming its status removes it. A chunk holding a fifth row for
 one favourite fails with `favourite_likes: more than 4 Like ids for one favourite`, a repeated id with
 `UNIQUE constraint failed: favourite_likes.uri`, and a longer one with `like_id_within_4096_json_bytes`.
 
+The custom emoji an object tagged are `statuses.emojis`, `status_edits.emojis` and `accounts.emojis` (migration
+`0053_custom_emoji_snapshots`): NULL for none, or a JSON array of 1 to 64 `[shortcode, url]` pairs in tag order. A
+shortcode is 1 to 128 ASCII characters of `A-Z a-z 0-9 _ + -`, each once in the array; a url is `http://` or
+`https://`, at most 512 bytes, of the characters `!` to `~` but `"` and `\`. The text is at most 12,288 UTF-8 bytes
+(6,144 for an account), and so are its entities as presented, each `67 + n + 2u` bytes for a shortcode of n and a url
+of u, plus 1, with no NUL anywhere in the text; `[]` is refused, write NULL. A boost row's value is never read. A file built from legacy data writes NULL
+(legacy has no custom emoji, and `verify-conversion` fails on any other value). A chunk holding any other value fails
+with `<table>: emojis past their stored bound`.
+
 A report (migration `0054_remote_reports`) names any account as its reporter (`account_id`), once per `uri` and
 reported account, with `status_ids` of at most 100 ids within 2,101 UTF-8 bytes (compact JSON of 18-digit ids), a `uri` within 4,096 JSON-escaped UTF-8 bytes and a `comment` within
 20,000 UTF-8 bytes (and 5,000 code points up to any NUL). A chunk past these fails with

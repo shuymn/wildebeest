@@ -2,6 +2,7 @@ import { runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test'
 
 import { describe, expect, it, vi } from 'vitest'
 
+import { ACCOUNT_EMOJIS_FULL, STATUS_EMOJIS_FULL } from './emoji-fixtures'
 import { BUILD, freshStore, MIGRATION_NAMES, migratedStore, rejectionOf, testKernel } from './helpers'
 import {
 	ACCESS,
@@ -260,6 +261,62 @@ describe('dump', () => {
 				{ name: 'title', value: 'T'.repeat(1024) },
 			])
 		})
+	}, 120_000)
+
+	// RES-2: a dump taken before 0053_custom_emoji_snapshots restores and upgrades with no emoji; one taken after carries
+	// the snapshots verbatim, at their stored caps, and the import's triggers accept them.
+	it('restores a dump taken before 0053_custom_emoji_snapshots, and round-trips snapshots at their caps', async () => {
+		const seedAccounts = (sql: SqlStorage) =>
+			sql.exec(
+				`INSERT INTO accounts (id, uri, username, domain) VALUES
+					('100000000000000001', 'https://kopje.test/ap/users/alice', 'alice', NULL),
+					('100000000000000002', 'https://remote.test/users/bob', 'bob', 'remote.test')`
+			)
+		await restoredBefore('0053_custom_emoji_snapshots', seedAccounts, async (sql, upgrade) => {
+			expect(await upgrade()).toMatchObject({ ok: true, applied: ['0053_custom_emoji_snapshots'] })
+			expect(sql.exec('SELECT DISTINCT emojis FROM accounts').toArray()).toEqual([{ emojis: null }])
+		})
+		const source = await seeded(3)
+		await runInDurableObject(source, (_instance, state) => {
+			const sql = state.storage.sql
+			sql.exec('UPDATE accounts SET emojis = ? WHERE domain IS NOT NULL', ACCOUNT_EMOJIS_FULL)
+			sql.exec('UPDATE statuses SET emojis = ? WHERE reblog_of_id IS NULL', STATUS_EMOJIS_FULL)
+		})
+		const { text } = await dumpViaRpc(source)
+		const target = await migratedStore()
+		await copyConfig(source, target)
+		const { report } = await importViaRpc(target, text)
+		expect(report).toMatchObject({ ok: true, problems: [] })
+		expect(withoutState(await tableSnapshot(target))).toEqual(withoutState(await tableSnapshot(source)))
+		const read = (store: StoreStub) =>
+			runInDurableObject(store, (_instance, state) =>
+				state.storage.sql.exec('SELECT emojis FROM accounts UNION ALL SELECT emojis FROM statuses').toArray()
+			)
+		expect((await read(target)).filter((row) => row.emojis !== null).length).toBeGreaterThan(1)
+		expect(await read(target)).toEqual(await read(source))
+	}, 120_000)
+
+	// RES-2: a snapshot holding a raw NUL after a complete JSON value, which SQLite's JSON functions read as valid, is
+	// refused by the importer's insert (the triggers of 0053), so no stored row can fail its presentation.
+	it('refuses a snapshot with a raw NUL after a complete value on import', async () => {
+		const source = await seeded(3)
+		await runInDurableObject(source, (_instance, state) => {
+			const sql = state.storage.sql
+			// Written past the trigger, as a dump from elsewhere could hold it.
+			sql.exec('DROP TRIGGER accounts_emojis_update')
+			sql.exec('UPDATE accounts SET emojis = ? WHERE domain IS NOT NULL', '[["a","http://a/"]]\u0000junk')
+			expect(
+				sql.exec("SELECT instr(CAST(emojis AS BLOB), X'00') AS at FROM accounts WHERE domain IS NOT NULL").one().at
+			).toBe(20)
+		})
+		const { text } = await dumpViaRpc(source)
+		const target = await migratedStore()
+		await copyConfig(source, target)
+		const refused = await importViaRpc(target, text).then(
+			() => null,
+			(error: unknown) => String(error)
+		)
+		expect(refused).toMatch(/accounts: emojis past their stored bound/)
 	}, 120_000)
 
 	it('writes the documented format and leaves out bookkeeping', async () => {
