@@ -84,6 +84,7 @@ const STATUS: Record<string, ContentfulStatusCode> = {
 	'not-suspended': 409,
 	'not-bootstrap': 403,
 	'invalid-config': 400,
+	'invalid-instance-setting': 400,
 	'invalid-op-id': 400,
 	'import-id-required': 400,
 	'import-not-found': 404,
@@ -537,6 +538,17 @@ export function adminRoutes({ build, store, fetch, now, doorbell, jobs, loader, 
 			)
 		}
 		return reply(c, await stub(c).importReset(build(c.env), c.get('auth'), id, abandonStale === true))
+	})
+
+	// ---- the instance's public settings (domain/instance.ts): data, not configuration (dumped, imported and reset with
+	// the rest). Access admin only: the import token and import sessions never reach these paths, and the Store checks
+	// the admin again where it writes. JSON_BODY_LIMIT holds the three documents at their bound escaped at worst.
+
+	admin.get('/instance', async (c) => c.json({ values: await stub(c).instanceAdminSettings(build(c.env)) }))
+
+	admin.post('/instance', async (c) => {
+		const { values } = await jsonBody(c)
+		return reply(c, await stub(c).setInstanceSettings(build(c.env), { authority: c.get('auth'), values, now: now() }))
 	})
 
 	// ---- configuration (instance values and Access authority; never changed by an import)

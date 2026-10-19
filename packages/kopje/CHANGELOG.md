@@ -8,6 +8,66 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+### Added
+
+- The instance's documents and public block list, as Mastodon 4.5 serves them:
+    - `GET /api/v1/instance/privacy_policy` and `GET /api/v1/instance/terms_of_service` (and `/:date`) serve the
+      privacy policy and the terms of service, and `GET /api/v1/instance/extended_description` the extended
+      description, each sanitized as remote HTML is. The terms of service are one current version with its effective
+      date (`effective` once the date has passed, `succeeded_by` always null). A converted document's `updated_at` is
+      null until it is edited.
+    - `/api/v2/instance` names `configuration.urls.privacy_policy` and `terms_of_service` while they are set.
+    - The web pages `/privacy-policy`, `/terms-of-service` and `/terms-of-service/:date`; `/about` shows the extended
+      description and links to them.
+    - `GET /api/v1/instance/domain_blocks` lists the suspend blocks by `show_domain_blocks` and their public comments
+      by `show_domain_blocks_rationale` (`disabled`, `users` or `all`; unset is `disabled`), obfuscated where a block
+      says so, with the SHA-256 of each domain.
+- `kopje-admin instance` and `GET`/`POST /admin/instance`: the Access admin sets the title, description, contact
+  address, the three documents (HTML; `--file` reads one from a file and sends it with the other values in one
+  request), the effective date and the two block-list settings, each change logged in the moderation log
+  (`update_setting`, `remove_setting`, target `Setting`) without its value. They are data: dumped, imported and reset
+  with the rest, so set them after a cutover import is published ([docs/setup.md](docs/setup.md), "Instance
+  details").
+- Follow suggestions (`GET /api/v1/suggestions` and `/api/v2/suggestions`, which used to answer `[]`): the accounts
+  the people you follow follow, Mastodon's "friends of friends", ranked by how many of them follow each account, then
+  by follower count (fewest first), then newest first. Only accounts that chose to be discoverable are suggested, never
+  one you follow or requested to follow, block, mute, or block the domain of, one that blocks you, or an unavailable
+  one; a follow only counts when you are shown that account's following list. Mastodon's other sources (accounts the
+  admin features, trending accounts, similar profiles) are not offered. v2 shows each with
+  `"sources": ["friends_of_friends"]`.
+    - The ranking reads bounded windows (your 1,000 newest follows, each one's 100 newest follows, 10,000 in all), so
+      it is an approximation of Mastodon's: a follow outside them does not count.
+    - Kopje does not learn a remote account's follower count, so it ranks one as having none: at equal counts, remote
+      accounts come before local ones.
+    - At most 40 accounts are suggested; an offset of 40 or more answers `[]`, where Mastodon answers 500. There is no
+      15-minute cache: the list is worked out on each request, so an offset is stable only while follows, blocks,
+      mutes and dismissals stay the same.
+- Dismissing a suggestion (`DELETE /api/v1/suggestions/:id`) is stored, and the account is not suggested again; it
+  still answers `{}` whatever the id.
+
+### Changed
+
+- Answers of the instance endpoints Kopje did not serve change shape, as Mastodon's: an unset privacy policy or terms
+  of service answers 404 `{"error":"Not Found"}` (a `/terms-of-service/:date` other than the stored date still
+  answers `Record not found`), and `GET /api/v1/instance/activity` and a hidden block list answer 404 with an empty
+  body. The activity stays unserved: its weekly logins count requests Kopje does not record.
+- `GET /api/v1/instance/domain_blocks` now reads the token: a suspended user's is refused with 403 `Your login is
+  currently disabled` whatever the settings; any other invalid token reads as anonymous.
+- The upgrade (migration `0049_instance_bounds`) rewrites instance settings past their bounds and keeps no copy: a
+  title is cut at 1,024 and a description at 200 code points; a contact address past 254 bytes, rules past 65,536
+  bytes or not a JSON array, and an extended description, privacy policy or terms of service past 50,000 bytes are
+  removed, as is any of these that is blank (only spaces, tabs, line feeds, vertical tabs, form feeds and carriage
+  returns). From then on the Store refuses such a value. To recover one, restore the point-in-time bookmark taken
+  before the upgrade ([docs/upgrade.md](docs/upgrade.md)), or run the conversion again for a converted one.
+- `kopje-admin convert` stores the legacy settings as the Worker stores them: a blank one, or a document that
+  sanitizes to no text, is dropped, and one past its bound is cut or dropped and stops the conversion unless
+  `--accept-truncation` is given (the counts: [docs/cutover.md](docs/cutover.md), "What the conversion does").
+  `verify-conversion` expects the same, and fails when a dropped setting is in the dump.
+- A Follow whose pair has more than 32 answers still waiting is answered 503, writing nothing, until they settle; a
+  server whose own retries run out meanwhile needs its user to follow again.
+- A given-up answer to a Follow that a later activity superseded is deleted by the next delivery sweep instead of
+  after 30 days, and no longer shows in `kopje-admin deliveries`: nothing could send it again.
+
 ### Fixed
 
 - A remote account that follows again (after its Undo, a block and unblock, a rejected request, or a remote
@@ -16,17 +76,18 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   [docs/threat-model.md](docs/threat-model.md)). An answer a delivery attempt has already taken is still sent, so the
   two sides can disagree until the follower follows again (see the accepted risks there).
 
-### Changed
-
-- A Follow whose pair has more than 32 answers still waiting is answered 503, writing nothing, until they settle; a
-  server whose own retries run out meanwhile needs its user to follow again.
-- A given-up answer to a Follow that a later activity superseded is deleted by the next delivery sweep instead of
-  after 30 days, and no longer shows in `kopje-admin deliveries`: nothing could send it again.
-
 ### Instance changes
 
-- Store schema: adds one migration, applied on the first request after the deploy; a rollback to an earlier version
-  needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
+- Store schema: adds three migrations, applied on the first request after the deploy; a rollback to an earlier
+  version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
+    - `0049_instance_bounds`: rewrites instance settings past their bounds (above), adds the triggers that refuse
+      them, and indexes the suspend blocks by domain. On a benchmark store of 1,000,000 accounts, 2,000,000 statuses
+      and 100,000 instance domain blocks, the whole upgrade took 6.2 to 6.7 seconds in four runs in workerd's local
+      Durable Object SQLite, most of it the upgrade's fixed cost on a store that size (runs under heavy outside load
+      took up to 15.6 seconds).
+    - `0050_follow_recommendation_mutes`: the table of dismissed suggestions. It adds an empty table and reads nothing:
+      on the same benchmark store its upgrade took 9.1 seconds (13.7 in a first run), the overhead of an upgrade on a
+      store that size.
     - `0051_follow_answer_pairs`: records the remote follower of each follow answer and whether a delivery was ever
       claimed; every existing delivery of a follow answer counts as claimed, so none of them is cancelled. On the
       benchmark store its [header](migrations/0051_follow_answer_pairs.sql) describes, the whole upgrade took 7.4 to

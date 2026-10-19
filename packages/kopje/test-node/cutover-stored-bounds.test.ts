@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { convert, exportOf, opened, rewriteExport, verify, workspace } from './cutover-helpers.js'
+import { convert, exportOf, failing, opened, rewriteExport, tampered, verify, workspace } from './cutover-helpers.js'
 import {
 	cutJsonString,
 	jsonStringBytes,
@@ -276,5 +276,116 @@ describe('converted rows at the stored bounds', () => {
 			db.close()
 		}
 		expect((await verify(exportPath, converted.dumpPath, { acceptTruncation: true })).ok).toBe(true)
+	})
+})
+
+// RES-2: converted instance settings hold what the Worker would store (INSTANCE_SETTING_BOUNDS). Blank ones go
+// (normalized); one past its bound is cut or goes, a truncation (a problem unless accepted); a document within its
+// bound that sanitizes to no text goes (normalized). A document past its bound whose only text lies past the
+// sanitizer's cap is a truncation, not a normalization. Verification expects the same, and the absence of each
+// dropped setting.
+describe('converted instance settings at their stored bounds', () => {
+	const sqlText = (text: string) => `'${text.replaceAll("'", "''")}'`
+	// The legacy settings of the fixture replaced by `values` (by legacy name), the rules' second text by `rule`.
+	async function exportWith(values: Record<string, string>, rule?: string) {
+		const exportPath = await exportOf(space.dir, { level: 39 })
+		await rewriteExport(exportPath, (text) => {
+			if (!text.includes('"server_settings"')) {
+				return rule !== undefined && text.includes('スパム禁止') ? text.replace('スパム禁止', rule) : undefined
+			}
+			const kept = text
+				.split('\n')
+				.filter((line) => !Object.keys(values).some((name) => line.includes(`'${name}'`)))
+				.join('\n')
+			const added = Object.entries(values)
+				.map(
+					([name, value]) =>
+						`INSERT INTO "server_settings" ("setting_name","setting_value") VALUES(${sqlText(name)},${sqlText(value)});`
+				)
+				.join('\n')
+			return `${kept.trimEnd()}\n${added}\n`
+		})
+		return exportPath
+	}
+	const settingsOf = async (dumpPath: string) => {
+		const db = await opened(dumpPath)
+		try {
+			return Object.fromEntries(
+				(
+					db.prepare('SELECT name, value FROM instance_settings ORDER BY name').all() as {
+						name: string
+						value: string
+					}[]
+				).map((r) => [r.name, r.value])
+			)
+		} finally {
+			db.close()
+		}
+	}
+	const documentAt = `<p>${'日'.repeat(16_664)}a</p>`
+	// Past INSTANCE_DOCUMENT_BYTES, with its only text past REMOTE_HTML_RAW_LIMIT, which the sanitizer never reaches.
+	const hiddenPast = `<script>${'x'.repeat(50_000)}</script><p>Keep this policy</p>`
+
+	it('cuts or drops values past their bounds as truncations, and drops blank and textless ones', async () => {
+		expect(new TextEncoder().encode(documentAt).length).toBe(50_000)
+		const exportPath = await exportWith(
+			{
+				'server name': 'T'.repeat(1025),
+				'server description': '\v \t',
+				'extended description': documentAt,
+				'privacy policy': '<script>only a script</script>',
+			},
+			'r'.repeat(66_000)
+		)
+		const refused = await convert(space.dir, exportPath, { out: 'refused' })
+		expect(refused.ok).toBe(false)
+		expect((refused.manifest.conversion as { problems: Record<string, number> }).problems).toEqual({
+			'settings:title-longer-than-bound': 1,
+			'settings:rules-longer-than-bound': 1,
+		})
+		const converted = await convert(space.dir, exportPath, { acceptTruncation: true })
+		expect(converted.ok).toBe(true)
+		expect((converted.manifest.conversion as { normalized: Record<string, number> }).normalized).toMatchObject({
+			'settings:title-longer-than-bound': 1,
+			'settings:rules-longer-than-bound': 1,
+			'settings:description-blank': 1,
+			'settings:privacy_policy-no-text': 1,
+		})
+		expect(await settingsOf(converted.dumpPath)).toEqual({ extended_description: documentAt, title: 'T'.repeat(1024) })
+		expect((await verify(exportPath, converted.dumpPath)).ok).toBe(false)
+		expect((await verify(exportPath, converted.dumpPath, { acceptTruncation: true })).ok).toBe(true)
+	})
+
+	it('counts a document past its bound whose text the sanitizer never reaches as a truncation', async () => {
+		expect(sanitizeRemoteHtml(hiddenPast)).toBe('')
+		const exportPath = await exportWith({ 'privacy policy': hiddenPast })
+		const refused = await convert(space.dir, exportPath, { out: 'refused' })
+		expect(refused.ok).toBe(false)
+		expect((refused.manifest.conversion as { problems: Record<string, number> }).problems).toEqual({
+			'settings:privacy_policy-longer-than-bound': 1,
+		})
+		const converted = await convert(space.dir, exportPath, { acceptTruncation: true })
+		expect(converted.ok).toBe(true)
+		const normalized = (converted.manifest.conversion as { normalized: Record<string, number> }).normalized
+		expect(normalized['settings:privacy_policy-longer-than-bound']).toBe(1)
+		expect(normalized).not.toHaveProperty('settings:privacy_policy-no-text')
+		expect(await settingsOf(converted.dumpPath)).not.toHaveProperty('privacy_policy')
+		expect((await verify(exportPath, converted.dumpPath, { acceptTruncation: true })).ok).toBe(true)
+	})
+
+	it('fails verification when a dropped setting is in the dump', async () => {
+		const exportPath = await exportWith({ 'privacy policy': '<script>only a script</script>' })
+		const converted = await convert(space.dir, exportPath)
+		expect(converted.ok).toBe(true)
+		expect((await verify(exportPath, converted.dumpPath)).ok).toBe(true)
+		const dumpPath = await tampered(
+			space.dir,
+			converted.dumpPath,
+			"INSERT INTO instance_settings (name, value) VALUES ('privacy_policy', '<script>only a script</script>')"
+		)
+		const { ok, categories } = await verify(exportPath, dumpPath)
+		expect(ok).toBe(false)
+		expect(failing(categories)).toEqual(['settings'])
+		expect(categories.settings).toMatchObject({ extra: 1 })
 	})
 })

@@ -276,3 +276,218 @@ WHERE file_token IS NOT NULL AND length(CAST(url AS BLOB)) > ${MEDIA_URL_LIMIT};
 	}
 	return `${statements.join('\n\n')}\n`
 }
+
+// ---- Instance settings: migration 0049_instance_bounds and its triggers
+
+// The instance's public settings (instance_settings rows, data rather than configuration: access-settings.ts
+// CONFIG_KEYS). Each name has a projection P, the SQL value stored for a value, NULL where no row is stored, and a
+// writer, its JS twin over storedText's output. The admin write (domain/instance.ts setInstanceSettings) refuses what
+// its writer would change or drop; the cutover's conversion and verification store the writer's output and count
+// what it changed (cli/lib/cutover). Reads take these rows as stored.
+
+// title, in code points (at most 4 KiB): a label, cut past the bound. Mastodon sets no limit.
+export const INSTANCE_TITLE_LIMIT = 1024
+// description, in code points: Mastodon's DESCRIPTION_LIMIT (app/models/form/admin_settings.rb:86,107), cut past it.
+export const INSTANCE_DESCRIPTION_LIMIT = 200
+// contact_email, in UTF-8 bytes (RFC 5321's path limit); no row past it.
+export const CONTACT_EMAIL_BYTES = 254
+// rules, a JSON array, in UTF-8 bytes; no row past it (a cut array is not JSON).
+export const INSTANCE_RULES_BYTES = 65_536
+// extended_description, privacy_policy and terms_of_service, HTML in UTF-8 bytes; no row past it (a cut document
+// loses its end). At most 50,000 UTF-16 code units too, so security/html.ts REMOTE_HTML_RAW_LIMIT never cuts one.
+export const INSTANCE_DOCUMENT_BYTES = 50_000
+
+export const INSTANCE_DOCUMENTS = ['extended_description', 'privacy_policy', 'terms_of_service'] as const
+export type InstanceDocument = (typeof INSTANCE_DOCUMENTS)[number]
+
+// show_domain_blocks and show_domain_blocks_rationale, as Mastodon's settings (config/settings.yml:29-30).
+export const DOMAIN_BLOCKS_SHOWN = ['disabled', 'users', 'all'] as const
+export type DomainBlocksShown = (typeof DOMAIN_BLOCKS_SHOWN)[number]
+
+// The characters a blank value consists of, SQL's and JS's alike: space, tab, LF, VT, FF and CR. Not String#trim's
+// set, which SQLite's trim cannot list (it includes U+00A0, U+3000 and the other Unicode spaces).
+const BLANK_CODES = [32, 9, 10, 11, 12, 13]
+const BLANK = new Set(BLANK_CODES.map((code) => String.fromCharCode(code)))
+
+export function isBlank(text: string): boolean {
+	for (const char of text) {
+		if (!BLANK.has(char)) {
+			return false
+		}
+	}
+	return true
+}
+
+// `text` without blank characters at either end.
+export function trimBlank(text: string): string {
+	let start = 0
+	let end = text.length
+	while (start < end && BLANK.has(text[start] ?? '')) {
+		start++
+	}
+	while (end > start && BLANK.has(text[end - 1] ?? '')) {
+		end--
+	}
+	return text.slice(start, end)
+}
+
+function blankSql(column: string): string {
+	return `trim(${column}, char(${BLANK_CODES.join(', ')})) = ''`
+}
+
+// A calendar date, YYYY-MM-DD, as SQLite's date() writes it.
+function isCalendarDate(text: string): boolean {
+	if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+		return false
+	}
+	const parsed = new Date(`${text}T00:00:00.000Z`)
+	return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === text
+}
+
+// A time as Date#toISOString writes it for years 0 to 9999 (24 bytes), as SQLite's strftime('%Y-%m-%dT%H:%M:%fZ').
+function isIsoTime(text: string): boolean {
+	if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(text)) {
+		return false
+	}
+	const parsed = new Date(text)
+	return !Number.isNaN(parsed.getTime()) && parsed.toISOString() === text
+}
+
+function isJsonArray(text: string): boolean {
+	try {
+		return Array.isArray(JSON.parse(text))
+	} catch {
+		return false
+	}
+}
+
+const ISO_TIME_FORMAT = '%Y-%m-%dT%H:%M:%fZ'
+
+// A setting's projection P and writer. `cut`, for a name cut past its bound: the value 0049 rewrites it to before it
+// deletes the rows whose P is NULL.
+type InstanceSettingBound = {
+	projection: (column: string) => string
+	writer: (value: string) => string | null
+	cut?: (column: string) => string
+}
+
+// Text cut at `points` code points, and no row when blank.
+function cutText(points: number): InstanceSettingBound {
+	return {
+		projection: (column) =>
+			`CASE WHEN ${blankSql(cutSql(column, points))} THEN NULL ELSE ${cutSql(column, points)} END`,
+		writer: (value) => {
+			const cut = cutCodePoints(storedText(value), points)
+			return isBlank(cut) ? null : cut
+		},
+		cut: (column) => cutSql(column, points),
+	}
+}
+
+// Text of at most `bytes` UTF-8 bytes, and no row when blank or past them.
+function boundedText(bytes: number): InstanceSettingBound {
+	return {
+		projection: (column) =>
+			`CASE WHEN length(CAST(${column} AS BLOB)) > ${bytes} THEN NULL WHEN ${blankSql(column)} THEN NULL ELSE ${column} END`,
+		writer: (value) => {
+			const text = withinBytes(storedText(value), bytes)
+			return text === null || isBlank(text) ? null : text
+		},
+	}
+}
+
+// One of `values`, else no row.
+function oneOf(values: readonly string[]): InstanceSettingBound {
+	return {
+		projection: (column) => `CASE WHEN ${column} IN (${values.map((v) => `'${v}'`).join(', ')}) THEN ${column} END`,
+		writer: (value) => (values.includes(value) ? value : null),
+	}
+}
+
+const DOCUMENT = boundedText(INSTANCE_DOCUMENT_BYTES)
+const SHOWN = oneOf(DOMAIN_BLOCKS_SHOWN)
+// A document's stamp (the time an admin write changed it): written only by setInstanceSettings. SQLite's strftime
+// writes an hour of 24 back as given, which Date#toISOString never writes.
+const STAMP: InstanceSettingBound = {
+	projection: (column) =>
+		`CASE WHEN length(CAST(${column} AS BLOB)) = 24 AND substr(${column}, 12, 2) < '24'
+	AND strftime('${ISO_TIME_FORMAT}', ${column}) = ${column} THEN ${column} END`,
+	writer: (value) => (isIsoTime(value) ? value : null),
+}
+
+// Every bounded name. Other names (CONFIG_KEYS, the instance actor's key, the web client) are not covered.
+export const INSTANCE_SETTING_BOUNDS = {
+	title: cutText(INSTANCE_TITLE_LIMIT),
+	description: cutText(INSTANCE_DESCRIPTION_LIMIT),
+	contact_email: boundedText(CONTACT_EMAIL_BYTES),
+	rules: {
+		projection: (column) =>
+			`CASE WHEN length(CAST(${column} AS BLOB)) > ${INSTANCE_RULES_BYTES} THEN NULL
+	WHEN json_valid(${column}) THEN CASE WHEN json_type(${column}) = 'array' THEN ${column} END END`,
+		writer: (value) => {
+			const text = withinBytes(storedText(value), INSTANCE_RULES_BYTES)
+			return text !== null && isJsonArray(text) ? text : null
+		},
+	},
+	extended_description: DOCUMENT,
+	privacy_policy: DOCUMENT,
+	terms_of_service: DOCUMENT,
+	terms_of_service_effective_date: {
+		projection: (column) =>
+			`CASE WHEN length(CAST(${column} AS BLOB)) = 10 AND ${column} GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
+	AND date(${column}) = ${column} THEN ${column} END`,
+		writer: (value) => (isCalendarDate(value) ? value : null),
+	},
+	show_domain_blocks: SHOWN,
+	show_domain_blocks_rationale: SHOWN,
+	extended_description_updated_at: STAMP,
+	privacy_policy_updated_at: STAMP,
+} as const satisfies Record<string, InstanceSettingBound>
+
+export type InstanceSettingName = keyof typeof INSTANCE_SETTING_BOUNDS
+
+export const INSTANCE_SETTING_NAMES = Object.keys(INSTANCE_SETTING_BOUNDS) as InstanceSettingName[]
+
+// The value `name` stores for `value` (storedText's output where it is text), or null for no row.
+export function storedInstanceSetting(name: InstanceSettingName, value: string): string | null {
+	return INSTANCE_SETTING_BOUNDS[name].writer(value)
+}
+
+// True when a row named `name` holding `value` is not a fixed point of its name's P; 0 for an uncovered name.
+function settingPastBoundSql(name: string, value: string): string {
+	const cases = INSTANCE_SETTING_NAMES.map(
+		(n) => `WHEN '${n}' THEN (${INSTANCE_SETTING_BOUNDS[n].projection(value)}) IS NOT ${value}`
+	)
+	return `CASE ${name}\n  ${cases.join('\n  ')}\n  ELSE 0 END`
+}
+
+// Migration 0049_instance_bounds after its header (test/migrations.test.ts compares them): the cut names rewritten,
+// then every row whose P is NULL deleted, then triggers that refuse a write where P(NEW.value) IS NOT NEW.value, and
+// the partial index of the public block list (domain/instance-domain-blocks.ts publicDomainBlocks).
+export function instanceBoundsMigrationSql(): string {
+	const statements: string[] = []
+	const names = INSTANCE_SETTING_NAMES.map((n) => `'${n}'`).join(', ')
+	for (const name of INSTANCE_SETTING_NAMES) {
+		const { cut } = INSTANCE_SETTING_BOUNDS[name] as InstanceSettingBound
+		if (cut !== undefined) {
+			statements.push(
+				`UPDATE instance_settings SET value = ${cut('value')}\nWHERE name = '${name}' AND (${cut('value')}) IS NOT value;`
+			)
+		}
+	}
+	statements.push(
+		`DELETE FROM instance_settings\nWHERE name IN (${names}) AND ${settingPastBoundSql('name', 'value')};`
+	)
+	const body = "BEGIN\n  SELECT RAISE(ABORT, 'instance_settings: a value past its stored bound');\nEND;"
+	const when = settingPastBoundSql('NEW.name', 'NEW.value')
+	statements.push(
+		`CREATE TRIGGER instance_settings_bounds_insert BEFORE INSERT ON instance_settings\nWHEN ${when}\n${body}`
+	)
+	statements.push(
+		`CREATE TRIGGER instance_settings_bounds_update BEFORE UPDATE OF name, value ON instance_settings\nWHEN ${when}\n${body}`
+	)
+	statements.push(
+		"CREATE INDEX instance_domain_blocks_public ON instance_domain_blocks (domain) WHERE severity = 'suspend';"
+	)
+	return `${statements.join('\n\n')}\n`
+}

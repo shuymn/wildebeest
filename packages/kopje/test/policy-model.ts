@@ -119,6 +119,29 @@ export class PolicyModel {
 		return !account.local && (this.covered((account.domain ?? '').replace(/\.$/, '')) || this.covered(host))
 	}
 
+	// VIS-30, the public block list (docs/visibility.md, "Instance domain blocks"): a suspended local viewer's token is
+	// refused whatever the settings; show_domain_blocks lists to anyone at `all`, to a signed-in viewer at `users`, and
+	// to no one otherwise (an absent setting included). The list is the suspend blocks, never a noop, in domain order;
+	// each carries its public comment when show_domain_blocks_rationale shows it to the viewer by the same rule.
+	publicDomainBlocks(
+		viewer: Viewer,
+		list: string | null,
+		rationale: string | null
+	): 'refused' | 'hidden' | { domain: string; comment: boolean }[] {
+		if (viewer !== null && this.account(viewer).suspended) {
+			return 'refused'
+		}
+		const shown = (setting: string | null) => setting === 'all' || (setting === 'users' && viewer !== null)
+		if (!shown(list)) {
+			return 'hidden'
+		}
+		return this.world.instanceBlocks
+			.filter((b) => b.severity === 'suspend')
+			.map((b) => b.domain)
+			.sort()
+			.map((domain) => ({ domain, comment: shown(rationale) }))
+	}
+
 	// The account lives on `domain`: its stored domain or the host of its actor id, exactly. Local accounts live nowhere
 	// a domain block can name.
 	inDomain(x: number, domain: string): boolean {
@@ -182,6 +205,45 @@ export class PolicyModel {
 			viewer === owner ||
 			!(this.blocks(viewer, x) || this.blocks(x, viewer) || this.mutes(viewer, x))
 		)
+	}
+
+	// R39: the viewer's suggestions, friends of friends over the windows of the Store (docs/visibility.md,
+	// "Suggestions"). A follow's id follows its place in world.follows. The sources are the viewer's `sources` newest
+	// accepted follows, those whose following R13 shows the viewer (followListsShown) bringing each its
+	// `edgesPerSource` newest accepted follows, source after source, newest first, of which the first `edges` count.
+	// A candidate is someone else, discoverable (`discoverable`, accounts.discoverable by index), neither followed nor
+	// requested by the viewer, not dismissed by them, and listed to them (R12). The candidates are ranked by how many
+	// counted edges reach them, then by follower count (none is stored in a world: 0 each), then newest first; the
+	// first `kept` are the answer.
+	suggestions(
+		viewer: number,
+		discoverable: (x: number) => boolean,
+		windows: { sources: number; edgesPerSource: number; edges: number; kept: number }
+	): number[] {
+		const newest = (from: number, count: number) =>
+			this.world.follows
+				.filter((f) => f.from === from && f.accepted)
+				.slice(-count)
+				.reverse()
+				.map((f) => f.to)
+		const counted = newest(viewer, windows.sources)
+			.filter((source) => this.followListsShown(source, viewer))
+			.flatMap((source) => newest(source, windows.edgesPerSource))
+			.slice(0, windows.edges)
+		const candidate = (x: number) =>
+			x !== viewer &&
+			discoverable(x) &&
+			!this.world.follows.some((f) => f.from === viewer && f.to === x) &&
+			!this.world.dismissals.some((d) => d.owner === viewer && d.target === x) &&
+			this.listedFor(x, viewer)
+		const frequency = new Map<number, number>()
+		for (const x of counted.filter(candidate)) {
+			frequency.set(x, (frequency.get(x) ?? 0) + 1)
+		}
+		return [...frequency]
+			.sort(([a, fa], [b, fb]) => fb - fa || b - a)
+			.slice(0, windows.kept)
+			.map(([x]) => x)
 	}
 
 	// R28: the accounts an owner endorses are listed to anyone, the owner included, while the owner is available; no

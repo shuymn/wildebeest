@@ -364,6 +364,14 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `src/domain/actors.ts`; `test/accounts.test.ts` ("follower lists for the viewer (R13)"), `test/account-reads.test.ts`
   ("shows no followers of an account that hides its network"), `test/federation.test.ts` ("shows only the size of the
   collections of an actor that hides its network"), `test/policy-oracle.test.ts`, `test/policy-endpoints.test.ts`.
+  Follow suggestions (R39) count only accepted follows on both sides: the viewer's follows of sources whose following
+  R13 shows them, and those sources' follows of candidates R12 lists to them, so a counted edge is one the source's
+  following list shows the viewer; a pending follow by the viewer only keeps its target out. Kopje also asks the source
+  to be available and not to block the viewer, which Mastodon's `FriendsOfFriendsSource` does not. _Gap:_ the edge
+  window counts each of a source's newest 100 follows, so a candidate's absence can tell the viewer that one more of
+  them is an account the list hides from them (docs/visibility.md, "Suggestions"); accepted. _Enforced (main):_
+  `suggestionSourceSql` and `suggestionCandidateSql` in `src/domain/audience.ts`, `suggestions` in
+  `src/domain/suggestions.ts`; `test/suggestions.test.ts`, `test/policy-endpoints.test.ts`.
 - **VIS-9: only the followed side accepts.** A pending follow of a local account becomes `accepted` only by that
   account's own authorize call; a pending remote follow only by an `Accept` that passes ID-6. _Enforced (main):_ `answerFollowRequest` in `src/domain/accounts.ts` (`POST
 /api/v1/follow_requests/:id/authorize` and `/reject`, the viewer from the credential; a remote requester gets the
@@ -1137,6 +1145,13 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   The web UI sanitizes again at the sink: bios, status content and field values reach a page only as the sanitizer's
   output (`SafeHtml` in `src/web/safe-html.ts`), whatever the Store holds. _Enforced (main):_ `test/web-pages.test.ts`
   ("sanitizes stored HTML at the sink and drops non-http links").
+  The operator's documents (the extended description, the privacy policy and the terms of service) are stored as the
+  admin wrote them or the cutover converted them and sanitized once per sink: in the Store for the API
+  (`instanceDocument` in `src/domain/instance.ts`), at the page for the web (`instanceDocumentSource`, then
+  `SafeHtml`). At most 50,000 UTF-8 bytes each (RES-2), so the sanitizer's raw cap never cuts one, however sanitizing
+  lengthens it. _Enforced (main):_ `test/instance-reads.test.ts` ("serves the privacy policy sanitized", "keeps the end
+  of a document that sanitizing lengthens past the raw cap"), `test/web-pages.test.ts` ("serve the privacy policy and
+  the terms of service as stored, sanitized at the sink", "shows the extended description sanitized at the sink").
 - **HTML-2: local text becomes HTML only by escaping and linking.** Status text and bios are escaped, then absolute
   http(s) URLs, known mentions and hashtags are linked. Display names stay plain strings. _Enforced (main)_ for bios:
   `src/domain/plain-text.ts`; `test/accounts.test.ts` ("stores plain-text profile fields safely"). _Enforced (main)_ for status text: `src/domain/status-text.ts`; `test/status-text.test.ts`.
@@ -1341,7 +1356,17 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `test/stored-bounds.test.ts` ("P is idempotent and the writer's output is its fixed point", "answers every converted row after the rewrite"), `test/migrations.test.ts` (0048: "stores each covered value as P(x)", "refuses a value one past its
   bound on insert and update", "fails by its check on an uploaded media URL past the bound"),
   `test/dump-import.test.ts` ("restores a dump taken before 0048_stored_bounds"),
-  `test-node/cutover-stored-bounds.test.ts`.
+  `test-node/cutover-stored-bounds.test.ts`. _Enforced (main)_ for the instance's public settings: each name of
+  `INSTANCE_SETTING_BOUNDS` in `src/platform/stored-bounds.ts` has a projection P (no row where it keeps none) and a
+  writer; migration `0049_instance_bounds` cut titles and descriptions and deleted every other row past its bound or
+  blank, and the triggers `instance_settings_bounds_insert` and `instance_settings_bounds_update` abort a write where
+  `P(NEW.value) IS NOT NEW.value`. The admin write refuses what its writer would change; the cutover's conversion and
+  verification store the writer's output. Rules are a JSON array of at most 64 KiB, which `parseRules` parses.
+  `test/stored-bounds.test.ts` ("P is idempotent, the writer's output its fixed point, and on normalized input they
+  agree"), `test/migrations.test.ts` (0049: "stores each covered value as P(x)", "refuses a value one past its
+  bound on insert and update"), `test/dump-import.test.ts` ("restores a dump taken before 0049_instance_bounds"),
+  `test/admin-instance.test.ts` ("accepts each value at its bound in its unit"),
+  `test-node/cutover-stored-bounds.test.ts` ("cuts or drops values past their bounds as truncations").
 - **RES-3: lists are bounded.** Pageable lists return at most 80 items; relationships read at most 100 ids; any other
   collection names its count and byte bound. _Enforced (main):_ `src/mastodon/pagination.ts`, `MAX_RELATIONSHIP_IDS` in
   `src/domain/accounts.ts`. _Gap: neither cap is tested._ _Enforced (main)_ for search: at
@@ -1349,9 +1374,16 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `test/search.test.ts` ("bounds the query, the limit and the offset"). _Enforced (main):_
   the domain block list (`GET /api/v1/domain_blocks`) returns at most 200 domains, as Mastodon's does
   (`src/mastodon/blocks.ts`). _Enforced (main):_ `GET /api/v1/instance/peers` lists at most
-  10,000 domains (`MAX_PEERS` in `src/domain/instance.ts`); `familiar_followers` reads at most 20 ids and shows at
-  most 80 accounts for each (`src/domain/accounts.ts`); `test/instance-reads.test.ts` ("bounds the peers"),
-  `test/account-reads.test.ts` ("bounds the ids and the accounts shown"). _Enforced (main)_ for the profile fields
+  10,000 domains (`MAX_PEERS` in `src/domain/instance.ts`); `GET /api/v1/instance/domain_blocks` admits whole
+  blocks in domain order within `ANSWER_BYTES`, with no continuation, each block at most 6,378 JSON bytes (a
+  255-character domain, its digest and a public comment of `MAX_BLOCK_COMMENT` control characters;
+  `publicDomainBlocks` in `src/domain/instance-domain-blocks.ts`); `familiar_followers` reads at most 20 ids and shows at
+  most 80 accounts for each (`src/domain/accounts.ts`); `test/instance-reads.test.ts` ("bounds the peers", "admits
+  whole blocks in domain order within ANSWER_BYTES"),
+  `test/account-reads.test.ts` ("bounds the ids and the accounts shown"). _Enforced (main):_ follow suggestions answer
+  at most 40 accounts (`SUGGESTIONS_KEPT`) within `ANSWER_BYTES` in both versions, v2's wrapper counted with each
+  account (`src/domain/suggestions.ts`); `test/suggestions-bounds.test.ts` ("answers SUGGESTIONS_KEPT accounts at
+  their bounds"). _Enforced (main)_ for the profile fields
   of each presented account: a remote account's row carries at most 16 fields, each name and value cut, 32 KiB of
   JSON in all, chosen in SQL from the stored actor document; the presenter then shows only the leading fields whose
   sanitized names and values fit 32 KiB once serialized as JSON, dropping the rest whole. So one account answers at
@@ -1678,11 +1710,16 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   LIMIT"), `test/search-edge.test.ts` (rows read stay flat as favourites, bookmarks, accounts and tagged statuses grow
   fourfold, pending follows included; `max_id` reaches past each window; an exact address outside every window is
   found). _Enforced (main):_ the peers list seeks each next domain on the (domain,
-  username) index, so it reads rows by domain returned, not by account known; a tag's history reads its public statuses
+  username) index, so it reads rows by domain returned, not by account known; the public block list reads the suspend
+  blocks in chunks of 500 from the partial index `instance_domain_blocks_public` (migration `0049_instance_bounds`),
+  so its rows read are the admitted blocks and at most one chunk more, whatever the noop blocks
+  (`test/instance-reads.test.ts` ("reads the same rows whatever the noop blocks")); a tag's history reads its public statuses
   received in the last seven days only, a range of the (name, status_id) index of public hashtags cut by status id, so
   the work follows the instance's own receive volume (ids carry publication time, or receipt time where a cutover kept them); the rules
   read only their setting; familiar followers reads at most 10,000 of the viewer's accepted follows (above
-  Mastodon's default follow limit of 7,500) and checks each against the account through the pair index; `test/instance-reads.test.ts`, `test/tags.test.ts`,
+  Mastodon's default follow limit of 7,500) and checks each against the account through the pair index; suggestions
+  read fixed windows of follow ids as index ranges and judge at most 10,000 distinct candidates (docs/visibility.md,
+  "Suggestions" and "Read bounds"; `test/suggestions-bounds.test.ts`); `test/instance-reads.test.ts`, `test/tags.test.ts`,
   `test/account-reads.test.ts` (rows read stay flat as accounts per domain, accounts known, statuses outside the
   window, and the account's other followers grow). _Enforced (main)_ for scheduled statuses: a page reads the
   account's own index by id, and a publication round reads the due ones through the index by time, so neither grows

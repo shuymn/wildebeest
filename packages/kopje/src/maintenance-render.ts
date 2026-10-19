@@ -24,7 +24,10 @@ export {
 export { sniffImageType } from './platform/image-bytes'
 export { mediaUrl } from './platform/media-files'
 export {
+	INSTANCE_DOCUMENTS,
+	isBlank,
 	storedDisplayName,
+	storedInstanceSetting,
 	storedMediaDescription,
 	storedMediaLink,
 	storedMediaMeta,

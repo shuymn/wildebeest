@@ -1,4 +1,12 @@
-import { type ApiContext, type ApiDeps, type ApiHandler, storeCall, vapidKey } from './context'
+import {
+	type ApiContext,
+	type ApiDeps,
+	type ApiHandler,
+	authorized,
+	optionalTokenCredential,
+	storeCall,
+	vapidKey,
+} from './context'
 import { mastodonError } from './errors'
 import { LANGUAGES } from './languages'
 import { MAX_DESCRIPTION } from './media'
@@ -88,14 +96,15 @@ export const instanceV2: ApiHandler = async (c, deps) => {
 		// Kopje ships no app icons (Mastodon lists its own defaults).
 		icon: [],
 		configuration: {
-			// The about page is /about (app/web.tsx). No status page, privacy policy or terms of service (the last two
-			// answer 404 at /api/v1/instance/*).
+			// The about page is /about, the documents' pages /privacy-policy and /terms-of-service (app/web.tsx), each
+			// named only while its document is available (Mastodon always names its privacy policy, served from a template
+			// when none is set). No status page.
 			urls: {
 				streaming: `wss://${domain}`,
 				status: null,
 				about: `https://${domain}/about`,
-				privacy_policy: null,
-				terms_of_service: null,
+				privacy_policy: info.privacyPolicy ? `https://${domain}/privacy-policy` : null,
+				terms_of_service: info.termsOfService ? `https://${domain}/terms-of-service` : null,
 			},
 			vapid: { public_key: vapidKey(c.env) },
 			...CONFIGURATION,
@@ -163,18 +172,56 @@ function normalizeDomain(value: string): string | null {
 	return written.replace(/\.$/, '')
 }
 
-// No extended description is configured: Mastodon's answer when none is set.
-export const extendedDescription: ApiHandler = (c) => Promise.resolve(c.json({ updated_at: null, content: '' }))
+// GET /api/v1/instance/extended_description, as Mastodon's REST::ExtendedDescriptionSerializer: the stored HTML
+// sanitized, with its stamp (null for a converted one until it is edited), or Mastodon's answer when none is set.
+export const extendedDescription: ApiHandler = async (c, deps) => {
+	const document = await storeCall(c, deps, (s, b) => s.instanceDocument(b, { name: 'extended_description' }))
+	return c.json({ updated_at: document?.updatedAt ?? null, content: document?.text ?? '' })
+}
 
-// Answered 404 as Mastodon answers when nothing is configured or the feature is off:
-//   - terms_of_service: none is published. For a /:date, Mastodon's Api::V1::Instances::TermsOfServicesController
-//     #set_terms_of_service raises RecordNotFound (find_by!), answered "Record not found".
-//   - privacy_policy: none is configured. Mastodon would serve its built-in template, which describes Mastodon's data
-//     handling and is not true of Kopje, so Kopje answers as for terms of service.
-//   - activity: Mastodon's weekly counts include logins, which Kopje does not record; the API is off.
-//   - domain_blocks: Kopje has no server-wide domain blocks to show; off, as Mastodon's default (show_domain_blocks
-//     disabled).
-export const notConfigured: ApiHandler = () => Promise.resolve(mastodonError(404, 'Record not found'))
+// GET /api/v1/instance/privacy_policy, as Mastodon's REST::PrivacyPolicySerializer. None set answers Mastodon's
+// not_found (app/controllers/api/base_controller.rb:100-102) instead of its built-in template, which describes
+// Mastodon's data handling and is not true of Kopje. updated_at is null for a converted policy until it is edited.
+export const privacyPolicy: ApiHandler = async (c, deps) => {
+	const document = await storeCall(c, deps, (s, b) => s.instanceDocument(b, { name: 'privacy_policy' }))
+	return document === null
+		? mastodonError(404, 'Not Found')
+		: c.json({ updated_at: document.updatedAt, content: document.text })
+}
+
+// GET /api/v1/instance/terms_of_service and /:date, as Mastodon's TermsOfServicesController#set_terms_of_service with
+// one current version: none answers not_found ("Not Found"), and a /:date other than the stored date, spelled exactly
+// (Rails would also cast 2026-1-5), answers RecordNotFound ("Record not found"). effective is the date strictly before
+// today (UTC), as effective_date&.past?; a future date is still the current version (TermsOfService.current's
+// upcoming.first). Kopje keeps no earlier versions, so succeeded_by is null.
+export const termsOfService: ApiHandler = async (c, deps) => {
+	const date = c.req.param('date')
+	const document = await storeCall(c, deps, (s, b) => s.instanceDocument(b, { name: 'terms_of_service' }))
+	if (document?.effectiveDate == null || (date !== undefined && date !== document.effectiveDate)) {
+		return mastodonError(404, date === undefined ? 'Not Found' : 'Record not found')
+	}
+	const today = new Date(deps.now()).toISOString().slice(0, 10)
+	return c.json({
+		effective_date: document.effectiveDate,
+		effective: document.effectiveDate < today,
+		content: document.text,
+		succeeded_by: null,
+	})
+}
+
+// GET /api/v1/instance/domain_blocks (domain/instance-domain-blocks.ts publicDomainBlocks): a suspended user's token
+// is answered 403 whatever the settings; a list the settings hide answers Mastodon's head 404 (an empty body).
+export const domainBlocks: ApiHandler = async (c, deps) => {
+	const credential = optionalTokenCredential(c, deps)
+	const blocks = authorized(await storeCall(c, deps, (s, b) => s.publicDomainBlocks(b, { credential })))
+	return blocks === null ? new Response(null, { status: 404 }) : c.json(blocks)
+}
+
+// GET /api/v1/instance/activity: Mastodon's head 404 with the API off
+// (app/controllers/api/v1/instances/activity_controller.rb:50-52). Its weekly logins count users with an authenticated
+// request, which Kopje does not record (tokens are deleted on logout, revoke and expiry), and its statuses a counter
+// Mastodon never decrements; no truthful history can be served.
+export const activity: ApiHandler = () => Promise.resolve(new Response(null, { status: 404 }))
 
 // GET /api/v1/instance/translation_languages: {} when no translation service is configured, as Mastodon's
 // Api::V1::Instances::TranslationLanguagesController#set_languages leaves it. Kopje has none.

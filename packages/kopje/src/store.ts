@@ -42,7 +42,17 @@ import * as featuredTags from './domain/featured-tags'
 import { kvCas, kvDelete, kvGet, kvList, kvSet } from './domain/fedify-kv'
 import * as filters from './domain/filters'
 import * as inbox from './domain/inbox'
-import { instanceInfo, instancePeers, instanceRules, instanceSettings, searchPeers } from './domain/instance'
+import {
+	instanceAdminSettings,
+	instanceDocument,
+	instanceDocumentSource,
+	instanceInfo,
+	instancePeers,
+	instanceRules,
+	instanceSettings,
+	searchPeers,
+	setInstanceSettings,
+} from './domain/instance'
 import * as instanceDomainBlocks from './domain/instance-domain-blocks'
 import * as lists from './domain/lists'
 import * as markers from './domain/markers'
@@ -65,6 +75,7 @@ import * as setup from './domain/setup'
 import { saveSnapshot } from './domain/snapshot'
 import * as statusActions from './domain/status-actions'
 import * as statuses from './domain/statuses'
+import * as suggestions from './domain/suggestions'
 import { runModerationJobs, suspendAccount } from './domain/suspension'
 import * as tags from './domain/tags'
 import * as timelines from './domain/timelines'
@@ -401,6 +412,15 @@ export class Store extends DurableObject<Env> {
 	// POST /admin/accounts/email: the Access admin's repair of the OAuth admin's match (domain/admin-accounts.ts).
 	setAccountEmail(callerBuild: string, input: OperationInput<typeof setAccountEmail>) {
 		return this.#kernel.execute(callerBuild, setAccountEmail, input)
+	}
+
+	// GET and POST /admin/instance: the Access admin's public settings (domain/instance.ts).
+	instanceAdminSettings(callerBuild: string) {
+		return this.#kernel.execute(callerBuild, instanceAdminSettings, undefined)
+	}
+
+	setInstanceSettings(callerBuild: string, input: OperationInput<typeof setInstanceSettings>) {
+		return this.#kernel.execute(callerBuild, setInstanceSettings, input)
 	}
 
 	// POST /admin/accounts/unsuspend: the Access admin's recovery of a suspended account (domain/admin-accounts.ts).
@@ -744,6 +764,21 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, instanceRules, undefined)
 	}
 
+	// GET /api/v1/instance/{extended_description,privacy_policy,terms_of_service}: sanitized (domain/instance.ts).
+	instanceDocument(callerBuild: string, input: OperationInput<typeof instanceDocument>) {
+		return this.#kernel.execute(callerBuild, instanceDocument, input)
+	}
+
+	// The web pages of the documents: as stored, sanitized at the page's sink.
+	instanceDocumentSource(callerBuild: string, input: OperationInput<typeof instanceDocumentSource>) {
+		return this.#kernel.execute(callerBuild, instanceDocumentSource, input)
+	}
+
+	// GET /api/v1/instance/domain_blocks (domain/instance-domain-blocks.ts).
+	publicDomainBlocks(callerBuild: string, input: OperationInput<typeof instanceDomainBlocks.publicDomainBlocks>) {
+		return this.#kernel.execute(callerBuild, instanceDomainBlocks.publicDomainBlocks, input)
+	}
+
 	instancePeers(callerBuild: string) {
 		return this.#kernel.execute(callerBuild, instancePeers, undefined)
 	}
@@ -914,6 +949,15 @@ export class Store extends DurableObject<Env> {
 	// The profile directory (domain/directory.ts).
 	directory(callerBuild: string, input: OperationInput<typeof directory>) {
 		return this.#kernel.execute(callerBuild, directory, input)
+	}
+
+	// Follow suggestions and their dismissals (domain/suggestions.ts).
+	suggestions(callerBuild: string, input: OperationInput<typeof suggestions.suggestions>) {
+		return this.#kernel.execute(callerBuild, suggestions.suggestions, input)
+	}
+
+	dismissSuggestion(callerBuild: string, input: OperationInput<typeof suggestions.dismissSuggestion>) {
+		return this.#kernel.execute(callerBuild, suggestions.dismissSuggestion, input)
 	}
 
 	removeFromFollowers(callerBuild: string, input: OperationInput<typeof blocks.removeFromFollowers>) {

@@ -43,18 +43,22 @@ import { freshStore, testKernel } from '../helpers'
 //     the rest given up;
 //   - 500,000 media attachments, one of every fourth status, with a URL, a description and a meta of 75 bytes;
 //   - 100,000 earlier versions (status_edits), one of every twentieth status;
-//   - values past their stored bounds (RES-2, 0048_stored_bounds), which are not scaled: 100 statuses with 140,000
-//     bytes of content, 10 of them with a content warning of 400,000 U+0001; 1,000 remote accounts with a display
-//     name of 3,000 characters and a 2,210-byte profile URL; 1,000 media rows with a 2,210-byte URL and a
-//     description of 12,000 characters (only on a store before that file: its triggers refuse them).
+//   - 100,000 instance domain blocks (from migration 0046_instance_domain_blocks on), one in ten a suspend;
+//   - values past their stored bounds, which are not scaled, each set only while the migration that bounds it is
+//     still to apply (its triggers refuse them after): for 0048_stored_bounds (RES-2) 100 statuses with 140,000 bytes
+//     of content, 10 of them with a content warning of 400,000 U+0001, 1,000 remote accounts with a display name of
+//     3,000 characters and a 2,210-byte profile URL, and 1,000 media rows with a 2,210-byte URL and a description of
+//     12,000 characters; for 0049_instance_bounds one row past its bound of each covered instance setting (a 2,000
+//     code point title and description, a 300-byte contact address, 70,000 bytes of rules, three 60,000-byte
+//     documents, a malformed date, switch and two stamps).
 // It grows every table a phase A migration reads (accounts, follows, statuses with their mentions and tags,
 // notifications, reports, quotes), what 0043_read_window_indexes indexes (favourites, boosts), what
 // 0045_remote_suspension indexes (accounts, outbound activities), what 0048_stored_bounds rewrites (accounts,
-// statuses, media attachments, earlier versions) and what 0051_follow_answer_pairs reads and rewrites (outbound
-// activities, accounts, deliveries); a migration that
-// reads another table must add it here before it is measured. The measured time is the file's transaction as the kernel
-// applies it, from before the first statement to after the commit: Date.now() in workerd moves only between I/O events,
-// so the clock is read across an await on each side.
+// statuses, media attachments, earlier versions), what 0049_instance_bounds rewrites and indexes (instance
+// settings, instance domain blocks) and what 0051_follow_answer_pairs reads and rewrites (outbound activities,
+// accounts, deliveries); a migration that reads another table must add it here before it is measured.
+// The measured time is the file's transaction as the kernel applies it, from before the first statement to after the
+// commit: Date.now() in workerd moves only between I/O events, so the clock is read across an await on each side.
 
 export const MIGRATION_BUDGET_MS = 10_000
 // A release's pending files applied in one upgrade, as an instance applies them after a deploy: two thirds of the
@@ -85,6 +89,7 @@ const SHAPE = {
 	active: 10_000,
 	media: 500_000,
 	edits: 100_000,
+	instanceBlocks: 100_000,
 	// Rows past their stored bounds (not scaled).
 	longContent: 100,
 	longSpoilers: 10,
@@ -115,6 +120,7 @@ it('applies the migration to the benchmark store within the budget', async () =>
 	const followAnswers = Math.round(SHAPE.followAnswers * scale)
 	const media = Math.min(Math.round(SHAPE.media * scale), Math.floor(statuses / 4))
 	const edits = Math.min(Math.round(SHAPE.edits * scale), Math.floor(statuses / 20))
+	const instanceBlocks = Math.round(SHAPE.instanceBlocks * scale)
 
 	const store = freshStore()
 	// One call: between calls, the Store's own alarm would apply every migration.
@@ -354,13 +360,35 @@ it('applies the migration to the benchmark store within the budget', async () =>
 			edits,
 			now
 		)
-		const filler = (n: number, char: string) => `replace(hex(zeroblob(${n / 2})), '0', ${char})`
-		// Values past their stored bounds, on the first statuses, remote accounts and media rows; only on a store
-		// before 0048_stored_bounds, whose triggers refuse them from then on.
-		const bounded =
-			sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = 'statuses_bounds_update'").toArray()
+		// Instance domain blocks: block i of b<i>.bench, a suspend when i is a multiple of ten.
+		const hasInstanceBlocks =
+			sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'instance_domain_blocks'").toArray()
 				.length > 0
-		if (!bounded) {
+		if (hasInstanceBlocks) {
+			run(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+				INSERT INTO instance_domain_blocks (domain, severity, public_comment, created_at, updated_at)
+				SELECT 'b' || i || '.bench', CASE WHEN i % 10 = 0 THEN 'suspend' ELSE 'noop' END, 'Block ' || i, ?2, ?2
+				FROM n WHERE ?1 > 0`,
+				instanceBlocks,
+				now
+			)
+		}
+		// Values past their stored bounds, set while the migration that bounds them is still to apply.
+		const pending = (migration: string) => at <= MIGRATIONS.findIndex((m) => m.name === migration)
+		const filler = (n: number, char: string) => `replace(hex(zeroblob(${n / 2})), '0', ${char})`
+		if (pending('0049_instance_bounds')) {
+			run(
+				`INSERT OR REPLACE INTO instance_settings (name, value) VALUES
+					('title', ${filler(2000, "'t'")}), ('description', ${filler(2000, "'d'")}),
+					('contact_email', ${filler(300, "'e'")} || '@example.com'), ('rules', '[' || ${filler(70_000, "' '")} || ']'),
+					('extended_description', ${filler(60_000, "'x'")}), ('privacy_policy', ${filler(60_000, "'p'")}),
+					('terms_of_service', ${filler(60_000, "'s'")}), ('terms_of_service_effective_date', '2026-02-30'),
+					('show_domain_blocks', 'everyone'), ('privacy_policy_updated_at', 'yesterday')`
+			)
+			run("INSERT OR REPLACE INTO instance_settings (name, value) VALUES ('extended_description_updated_at', ' ')")
+		}
+		if (pending('0048_stored_bounds')) {
 			run(
 				`UPDATE statuses SET content = ${filler(140_000, "'x'")}, spoiler_text = CASE WHEN id < CAST(500000000000000000 + ?2 AS TEXT)
 					THEN ${filler(400_000, 'char(1)')} ELSE '' END
@@ -399,6 +427,7 @@ it('applies the migration to the benchmark store within the budget', async () =>
 			deliveries: count('deliveries'),
 			media: count('media_attachments'),
 			edits: count('status_edits'),
+			instanceBlocks: hasInstanceBlocks ? count('instance_domain_blocks') : 0,
 		}
 		expect(sql.exec('SELECT count(*) AS n FROM kopje_migrations').one().n).toBe(at)
 

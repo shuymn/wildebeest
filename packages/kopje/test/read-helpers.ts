@@ -17,6 +17,16 @@ export async function appToken(h: ApiHarness): Promise<string> {
 	return (await response.json<{ access_token: string }>()).access_token
 }
 
+// An app token (no user) with the given scope.
+export async function appTokenWith(h: ApiHarness, scope: string): Promise<string> {
+	const app = await registerApp(h, { scopes: scope })
+	const response = await h.request(
+		'/oauth/token',
+		form({ grant_type: 'client_credentials', client_id: app.client_id, client_secret: app.client_secret, scope })
+	)
+	return (await response.json<{ access_token: string }>()).access_token
+}
+
 // A token of alice's with only the given scope.
 export async function scopedToken(h: ApiHarness, scope: string): Promise<string> {
 	const app = await registerApp(h, { scopes: scope })

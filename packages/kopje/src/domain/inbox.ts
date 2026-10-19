@@ -1385,6 +1385,14 @@ function purgeRelationships(db: Db, id: string, budget: Budget): void {
 			AND account_id IN (SELECT account_id FROM account_notes WHERE target_account_id = ?1 LIMIT ?2)`,
 		id
 	)
+	// Local users' dismissals of the account from their suggestions (migration 0050_follow_recommendation_mutes).
+	spend(
+		db,
+		budget,
+		`DELETE FROM follow_recommendation_mutes WHERE target_account_id = ?1
+			AND account_id IN (SELECT account_id FROM follow_recommendation_mutes WHERE target_account_id = ?1 LIMIT ?2)`,
+		id
+	)
 	// A follow's delete and its local side's recount: two rows each at most.
 	const follows = db.all<{ id: string; other: string }>(
 		`SELECT CAST(id AS TEXT) AS id, CASE WHEN account_id = ?1 THEN target_account_id ELSE account_id END AS other
@@ -1776,6 +1784,7 @@ export const PURGED_ACCOUNT_CHILDREN: readonly { table: string; check: string; f
 	{ table: 'list_accounts', check: 'account_id = ?1' },
 	{ table: 'account_pins', check: 'target_account_id = ?1' },
 	{ table: 'account_notes', check: 'target_account_id = ?1' },
+	{ table: 'follow_recommendation_mutes', check: 'target_account_id = ?1' },
 	{ table: 'notifications', check: 'from_account_id = ?1' },
 	{ table: 'notification_permissions', check: 'from_account_id = ?1' },
 	{ table: 'notification_requests', check: 'from_account_id = ?1' },

@@ -61,11 +61,6 @@ const EXCEPTIONS: Record<string, Exception> = {
 		mastodon: 'optional token, scopes any, no user required',
 		reason: 'answered empty to everyone; Mastodon filters trends for the viewer',
 	},
-	'GET /api/v1/instance/domain_blocks': {
-		kopje: 'none token, scopes any, no user required',
-		mastodon: 'optional token, scopes any, no user required',
-		reason: 'answered "not configured" to everyone; Mastodon may show it to users only',
-	},
 
 	// Differences RouteAccess cannot express, enforced elsewhere or left open.
 	'GET /api/v1/announcements': {

@@ -33,6 +33,7 @@ import {
 	shownSql,
 	visibleSql,
 } from '../src/domain/audience'
+import { publicDomainBlocks } from '../src/domain/instance-domain-blocks'
 import type { StoreStub } from '../src/platform/store-client'
 
 // The policy oracle (docs/visibility.md, "The oracle and the bounds harness"): each fragment of src/domain/audience.ts
@@ -409,4 +410,81 @@ describe('the policy fragments agree with the model of their rules', () => {
 						)
 					)
 		))
+
+	// VIS-30: the public block list (instance-domain-blocks.ts publicDomainBlocks) for every setting pair and every
+	// viewer that can hold a token (the local accounts, each with a token of its own) and the anonymous viewer.
+	it('publicDomainBlocks (VIS-30)', async () => {
+		const SETTINGS = [null, 'disabled', 'users', 'all'] as const
+		await fc.assert(
+			fc.asyncProperty(worldArb, async (world) => {
+				const locals = listViewers(world).filter((v): v is number => v !== null)
+				const actual = await runInDurableObject(store, (_instance, state) => {
+					const sql = state.storage.sql
+					writeWorld(sql, world)
+					sql.exec("UPDATE instance_domain_blocks SET public_comment = 'why ' || domain")
+					sql.exec(
+						`INSERT OR REPLACE INTO oauth_clients (id, secret, name, redirect_uris, scopes, created_at)
+						VALUES ('oracle', 's', 'oracle', 'urn:ietf:wg:oauth:2.0:oob', 'read', ?)`,
+						world.now
+					)
+					sql.exec("DELETE FROM oauth_tokens WHERE client_id = 'oracle'")
+					for (const x of locals) {
+						sql.exec(
+							`INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes, created_at, epoch)
+							VALUES (?, 'access', 'oracle', ?, 'read', ?,
+								(SELECT credential_epoch FROM local_accounts WHERE account_id = ?))`,
+							`oracle-${x}`,
+							accountId(x),
+							world.now,
+							accountId(x)
+						)
+					}
+					const answers: string[] = []
+					for (const list of SETTINGS) {
+						for (const rationale of SETTINGS) {
+							sql.exec(
+								"DELETE FROM instance_settings WHERE name IN ('show_domain_blocks', 'show_domain_blocks_rationale')"
+							)
+							for (const [settingName, value] of [
+								['show_domain_blocks', list],
+								['show_domain_blocks_rationale', rationale],
+							] as const) {
+								if (value !== null) {
+									sql.exec('INSERT INTO instance_settings (name, value) VALUES (?, ?)', settingName, value)
+								}
+							}
+							for (const viewer of [null, ...locals]) {
+								const credential =
+									viewer === null ? null : { tokenHash: `oracle-${viewer}`, scope: null, now: Date.parse(world.now) }
+								const result = publicDomainBlocks.run(sql, { credential })
+								const shown =
+									result.status !== 'ok'
+										? result.status === 'suspended'
+											? 'refused'
+											: result.status
+										: result.value === null
+											? 'hidden'
+											: result.value.map((b) => `${b.domain}${b.comment === null ? '' : ' +'}`).join(',')
+								answers.push(`${list}/${rationale} ${name(world, viewer)}: ${shown}`)
+							}
+						}
+					}
+					return answers
+				})
+				const model = new PolicyModel(world)
+				const expected = SETTINGS.flatMap((list) =>
+					SETTINGS.flatMap((rationale) =>
+						[null, ...locals].map((viewer) => {
+							const result = model.publicDomainBlocks(viewer, list, rationale)
+							const shown =
+								typeof result === 'string' ? result : result.map((b) => `${b.domain}${b.comment ? ' +' : ''}`).join(',')
+							return `${list}/${rationale} ${name(world, viewer)}: ${shown}`
+						})
+					)
+				)
+				expect(actual).toEqual(expected)
+			}),
+			runs(CASES / 3)
+		)
+	})
 })
