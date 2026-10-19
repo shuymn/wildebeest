@@ -2,6 +2,7 @@ import { runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test'
 
 import { describe, expect, it, vi } from 'vitest'
 
+import { ACCOUNT_EMOJIS_FULL, accountAtCap, padded, STATUS_EMOJIS_FULL, statusAtCap } from './emoji-fixtures'
 import { BUILD, freshStore, migratedStore, rejectionOf, tableNames, testKernel as kernel } from './helpers'
 import {
 	BOUNDED,
@@ -27,6 +28,7 @@ import { normalizeTag } from '../src/domain/tag-name'
 import { parseRemoteStatus } from '../src/federation/remote-status'
 import { StoreUnavailableError, toStoreUnavailable } from '../src/platform/store-errors'
 import {
+	emojiBoundsMigrationSql,
 	INSTANCE_SETTING_BOUNDS,
 	INSTANCE_SETTING_NAMES,
 	instanceBoundsMigrationSql,
@@ -5443,5 +5445,128 @@ describe('0052_favourite_likes', () => {
 			sql.exec('DELETE FROM favourites WHERE id = 2')
 			expect(sql.exec('SELECT count(*) AS n FROM favourite_likes WHERE favourite_id = 2').one().n).toBe(0)
 		})
+	})
+})
+
+describe('0053_custom_emoji_snapshots', () => {
+	const NAME = '0053_custom_emoji_snapshots'
+	const at = NAMES.indexOf(NAME)
+
+	it("holds emojiBoundsMigrationSql's output after its header", () => {
+		const sql = MIGRATIONS[at]?.sql ?? ''
+		const end = sql.indexOf('\n\n')
+		expect(
+			sql
+				.slice(0, end)
+				.split('\n')
+				.every((line) => line.startsWith('--'))
+		).toBe(true)
+		expect(sql.slice(end + 2)).toBe(emojiBoundsMigrationSql())
+	})
+
+	it('keeps every row as it was, with no emoji, then refuses a snapshot past its bound on insert and update', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+			sql.exec(
+				`INSERT INTO accounts (id, uri, username, domain) VALUES
+					('100000000000000001', 'https://kopje.test/ap/users/alice', 'alice', NULL),
+					('100000000000000002', 'https://r.example/u/bob', 'bob', 'r.example')`
+			)
+			sql.exec(
+				`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at) VALUES
+					('200000000000000001', 'https://kopje.test/ap/o/1', '100000000000000001', 'public', '<p>a</p>', 'x'),
+					('200000000000000002', 'https://r.example/n/2', '100000000000000002', 'public', '<p>b</p>', 'x')`
+			)
+			sql.exec(
+				`INSERT INTO status_edits (status_id, content, spoiler_text, media_json, created_at)
+				VALUES ('200000000000000002', '<p>a</p>', '', '[]', 'x')`
+			)
+			const tables = ['accounts', 'statuses', 'status_edits'] as const
+			const before = tables.map((table) => sql.exec(`SELECT * FROM ${table} ORDER BY rowid`).toArray())
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+			tables.forEach((table, i) => {
+				expect(sql.exec(`SELECT * FROM ${table} ORDER BY rowid`).toArray()).toEqual(
+					before[i]!.map((row) => ({ ...row, emojis: null }))
+				)
+			})
+			const cases = {
+				accounts: { key: 'id', id: '100000000000000002', at: ACCOUNT_EMOJIS_FULL, past: padded(accountAtCap(), 6145) },
+				statuses: { key: 'id', id: '200000000000000002', at: STATUS_EMOJIS_FULL, past: padded(statusAtCap(), 12_289) },
+				status_edits: {
+					key: 'status_id',
+					id: '200000000000000002',
+					at: STATUS_EMOJIS_FULL,
+					past: JSON.stringify(statusAtCap(true)),
+				},
+			}
+			for (const [table, c] of Object.entries(cases)) {
+				const refused = new RegExp(`${table}: emojis past their stored bound`)
+				const update = (value: string | null) =>
+					sql.exec(`UPDATE ${table} SET emojis = ? WHERE ${c.key} = ?`, value, c.id)
+				expect(() => update(c.past)).toThrow(refused)
+				expect(() => update('[]')).toThrow(refused)
+				expect(() => update('[["a","javascript:alert(1)"]]')).toThrow(refused)
+				update(c.at)
+				expect(sql.exec(`SELECT emojis FROM ${table} WHERE ${c.key} = ?`, c.id).one().emojis).toBe(c.at)
+				update(null)
+				update(c.at)
+				// A write that leaves emojis alone does not judge it again.
+				sql.exec(`UPDATE ${table} SET rowid = rowid WHERE ${c.key} = ?`, c.id)
+			}
+			const insertAccount = (id: string, emojis: string) =>
+				sql.exec(
+					"INSERT INTO accounts (id, uri, username, domain, emojis) VALUES (?, ?, 'u', 'r.example', ?)",
+					id,
+					`https://r.example/u/${id}`,
+					emojis
+				)
+			expect(() => insertAccount('100000000000000003', cases.accounts.past)).toThrow(/accounts: emojis past/)
+			insertAccount('100000000000000003', cases.accounts.at)
+			const insertStatus = (id: string, emojis: string) =>
+				sql.exec(
+					`INSERT INTO statuses (id, uri, account_id, visibility, published_at, emojis)
+					VALUES (?, ?, '100000000000000002', 'public', 'x', ?)`,
+					id,
+					`https://r.example/n/${id}`,
+					emojis
+				)
+			expect(() => insertStatus('200000000000000003', cases.statuses.past)).toThrow(/statuses: emojis past/)
+			insertStatus('200000000000000003', cases.statuses.at)
+			const insertEdit = (emojis: string) =>
+				sql.exec(
+					`INSERT INTO status_edits (status_id, content, spoiler_text, media_json, created_at, emojis)
+					VALUES ('200000000000000003', '', '', '[]', 'x', ?)`,
+					emojis
+				)
+			expect(() => insertEdit(cases.status_edits.past)).toThrow(/status_edits: emojis past/)
+			insertEdit(cases.status_edits.at)
+		})
+	})
+
+	// Adding the columns rewrites only the schema: what the file reads does not grow with the rows of the tables.
+	it('reads no row of the tables', async () => {
+		const readFor = async (rows: number) => {
+			const store = freshStore()
+			return runInDurableObject(store, async (_instance, state) => {
+				await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+				const sql = state.storage.sql
+				sql.exec(
+					`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+					INSERT INTO accounts (id, uri, username, domain) SELECT CAST(300000000000000000 + i AS TEXT),
+						'https://r.example/u/' || i, 'u' || i, 'r.example' FROM n`,
+					rows
+				)
+				let read = 0
+				for (const statement of (MIGRATIONS[at]?.sql ?? '').split('\n\n').filter((part) => !part.startsWith('--'))) {
+					const cursor = sql.exec(statement)
+					cursor.toArray()
+					read += cursor.rowsRead
+				}
+				return read
+			})
+		}
+		expect(await readFor(10_000)).toBe(await readFor(1))
 	})
 })
