@@ -184,6 +184,45 @@ export class PolicyModel {
 		)
 	}
 
+	// R39: the viewer's suggestions, friends of friends over the windows of the Store (docs/visibility.md,
+	// "Suggestions"). A follow's id follows its place in world.follows. The sources are the viewer's `sources` newest
+	// accepted follows, those whose following R13 shows the viewer (followListsShown) bringing each its
+	// `edgesPerSource` newest accepted follows, source after source, newest first, of which the first `edges` count.
+	// A candidate is someone else, discoverable (`discoverable`, accounts.discoverable by index), neither followed nor
+	// requested by the viewer, not dismissed by them, and listed to them (R12). The candidates are ranked by how many
+	// counted edges reach them, then by follower count (none is stored in a world: 0 each), then newest first; the
+	// first `kept` are the answer.
+	suggestions(
+		viewer: number,
+		discoverable: (x: number) => boolean,
+		windows: { sources: number; edgesPerSource: number; edges: number; kept: number }
+	): number[] {
+		const newest = (from: number, count: number) =>
+			this.world.follows
+				.filter((f) => f.from === from && f.accepted)
+				.slice(-count)
+				.reverse()
+				.map((f) => f.to)
+		const counted = newest(viewer, windows.sources)
+			.filter((source) => this.followListsShown(source, viewer))
+			.flatMap((source) => newest(source, windows.edgesPerSource))
+			.slice(0, windows.edges)
+		const candidate = (x: number) =>
+			x !== viewer &&
+			discoverable(x) &&
+			!this.world.follows.some((f) => f.from === viewer && f.to === x) &&
+			!this.world.dismissals.some((d) => d.owner === viewer && d.target === x) &&
+			this.listedFor(x, viewer)
+		const frequency = new Map<number, number>()
+		for (const x of counted.filter(candidate)) {
+			frequency.set(x, (frequency.get(x) ?? 0) + 1)
+		}
+		return [...frequency]
+			.sort(([a, fa], [b, fb]) => fb - fa || b - a)
+			.slice(0, windows.kept)
+			.map(([x]) => x)
+	}
+
 	// R28: the accounts an owner endorses are listed to anyone, the owner included, while the owner is available; no
 	// block, mute or hidden network changes that.
 	endorsementsShown(owner: number): boolean {

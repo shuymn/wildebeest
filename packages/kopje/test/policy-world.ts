@@ -7,16 +7,16 @@ import type { RepliesPolicy } from '../src/domain/lists'
 // A generated world for the policy oracle (test/policy-oracle.test.ts) and the bounds harness
 // (test/policy-bounds.test.ts): local accounts (one of them may be suspended, some may hide their network), remote
 // accounts on two domains (one of them may be being deleted, its statuses and edges still stored, and some may hide
-// their network, as Kopje learned of them), statuses of every
-// visibility with mentions (some silent), boosts and replies (some to a status never stored, and some continuing such
-// a reply, as a purge leaves a reply to the account it removes), and the edges the rules read: follows (pending and
-// accepted), blocks both ways, mutes with and without an expiry and with and without notifications, and domain blocks
-// in their stored form; and local accounts' lists, exclusive or not, with each replies_policy, whose members are their
+// their network, as Kopje learned of them), statuses of every visibility with mentions (some silent), boosts and
+// replies (some to a status never stored, and some continuing such a reply, as a purge leaves a reply to the account it
+// removes), and the edges the rules read: follows (pending and accepted, local accounts following local ones more
+// often), blocks both ways, mutes with and without an expiry and with and without notifications, and domain blocks in
+// their stored form; and local accounts' lists, exclusive or not, with each replies_policy, whose members are their
 // owner and accounts it follows, accepted or pending (whatever else the owner blocks, mutes or domain-blocks); and the
 // local accounts that follow the hashtag tagged statuses carry; and quotes (R35) in every stored state, legacy or not,
 // self-quotes among them, of statuses of every visibility, and quotes whose quoted status is gone; and each original's
-// quote policy (R36), any combination of Mastodon's flags. Accounts, statuses and lists are referred to by index;
-// writeWorld gives them fixed ids.
+// quote policy (R36), any combination of Mastodon's flags; and local accounts' dismissed suggestions (R39). Accounts,
+// statuses and lists are referred to by index; writeWorld gives them fixed ids.
 
 declare module 'vitest' {
 	interface ProvidedContext {
@@ -147,6 +147,8 @@ export type World = {
 	tagFollowers: number[]
 	// Quotes, at most one by each status (an original).
 	quotes: WorldQuote[]
+	// Local accounts' dismissed follow suggestions (R39), each of an account.
+	dismissals: { owner: number; target: number }[]
 	now: string
 }
 
@@ -264,6 +266,12 @@ export const worldArb: fc.Arbitrary<World> = fc
 			fc.record({ domain: fc.constantFrom(...BLOCKABLE_DOMAINS), severity: fc.constantFrom('suspend', 'noop') }),
 			{ maxLength: 2 }
 		),
+		// Last, as above: accepted follows by local accounts, of local accounts more often than not, so the accounts the
+		// viewer's follows follow (R39) are often there; and dismissed suggestions.
+		localFollows: fc.array(fc.record({ from: fc.nat(), to: fc.nat(), local: fc.constantFrom(true, true, false) }), {
+			maxLength: 10,
+		}),
+		dismissals: fc.array(fc.record({ owner: fc.nat(), target: fc.nat() }), { maxLength: 3 }),
 	})
 	.map((raw): World => {
 		const accounts: WorldAccount[] = []
@@ -340,7 +348,16 @@ export const worldArb: fc.Arbitrary<World> = fc
 		}
 		const pair = (e: { from: number; to: number }) => `${e.from}:${e.to}`
 		const follows = unique(
-			raw.follows.map((f) => ({ ...f, from: f.from % n, to: f.to % n })).filter((f) => f.from !== f.to),
+			[
+				...raw.follows.map((f) => ({ ...f, from: f.from % n, to: f.to % n })),
+				...raw.localFollows.map((f) => ({
+					from: f.from % LOCALS,
+					to: f.to % (f.local ? LOCALS : n),
+					accepted: true,
+					showReblogs: true,
+					notify: false,
+				})),
+			].filter((f) => f.from !== f.to),
 			pair
 		)
 		return {
@@ -433,12 +450,17 @@ export const worldArb: fc.Arbitrary<World> = fc
 				const state = quoted === null && drawn === 'accepted' ? 'deleted' : drawn
 				return [{ status: s, quoted, state, legacy: Math.floor(bits / 5) % 2 === 1 }]
 			}),
+			dismissals: unique(
+				raw.dismissals.map((d) => ({ owner: d.owner % LOCALS, target: d.target % n })),
+				(d) => `${d.owner}:${d.target}`
+			),
 			now: raw.now,
 		}
 	})
 
 // The tables a world fills, in an order that deletes children first.
 const WORLD_TABLES = [
+	'follow_recommendation_mutes',
 	'status_pins',
 	'conversation_mutes',
 	'conversation_statuses',
@@ -576,6 +598,13 @@ export function writeWorld(sql: SqlStorage, world: World): void {
 			b.severity,
 			world.now,
 			world.now
+		)
+	}
+	for (const d of world.dismissals) {
+		sql.exec(
+			'INSERT INTO follow_recommendation_mutes (account_id, target_account_id) VALUES (?, ?)',
+			accountId(d.owner),
+			accountId(d.target)
 		)
 	}
 	for (const follower of world.tagFollowers) {
