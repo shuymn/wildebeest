@@ -1005,15 +1005,28 @@ function permitNames(args, prefix, mode, ctx) {
 	return names
 }
 
-// The values a block variable takes in `<literal list>.each do |v|` (or `{ |v| ... }`), or null.
-/** @param {string} body @param {string} variable */
-function loopValues(body, variable) {
+// The values a block variable takes at `offset`: the one `<literal list>.each do |v|` (or `{ |v| ... }`) whose block
+// encloses the offset, or null when none does, more than one does, or the list is not a literal.
+/** @param {string} body @param {string} variable @param {number} offset */
+function loopValues(body, variable, offset) {
 	if (!/^[a-z_]\w*$/.test(variable)) return null
-	const loop = new RegExp(
-		`(%[iw]\\([^)]*\\)|\\[[^\\]]*\\])\\.each\\s*(?:do\\s*|\\{\\s*)\\|\\s*${variable}\\s*\\|`
-	).exec(body)
-	const list = loop === null ? null : literal(/** @type {string} */ (loop[1]))
-	return Array.isArray(list) ? list : null
+	const loops = new RegExp(`(%[iw]\\([^)]*\\)|\\[[^\\]]*\\])\\.each\\s*(do\\s*|\\{\\s*)\\|\\s*${variable}\\s*\\|`, 'g')
+	const enclosing = [...body.matchAll(loops)].filter((m) => {
+		const start = m.index + m[0].length
+		let end
+		if (/** @type {string} */ (m[2]).startsWith('{')) {
+			end = closing(body, m.index + m[0].lastIndexOf('{'))
+		} else {
+			// A do block ends at the `end` indented as the line that opens it.
+			const lineStart = body.lastIndexOf('\n', m.index) + 1
+			const indent = /^[ \t]*/.exec(body.slice(lineStart))?.[0] ?? ''
+			const close = new RegExp(`^${indent}end\\b`, 'm').exec(body.slice(start))
+			end = close === null ? -1 : start + close.index
+		}
+		return end >= 0 && start <= offset && offset < end
+	})
+	const only = enclosing.length === 1 ? literal(/** @type {string} */ (enclosing[0]?.[1])) : null
+	return Array.isArray(only) ? only : null
 }
 
 /**
@@ -1053,9 +1066,16 @@ function bodyReads(body, where, file, sources, checkout) {
 
 	// Reads the chain after a root (params, or an alias standing for `start`) that ends at `at`. Returns the path when
 	// the chain is assigned and ends at a container (an alias), else records what it reads.
-	/** @param {number} at @param {string[]} start @param {string} root @param {boolean} assigned */
-	const chain = (at, start, root, assigned) => {
-		const from = at - root.length
+	// `from` is where the expression starts, for reasons.
+	/**
+	 * @param {number} at
+	 * @param {string[]} start
+	 * @param {string} root
+	 * @param {boolean} assigned
+	 * @param {number} from
+	 * @returns {string[] | undefined}
+	 */
+	const chain = (at, start, root, assigned, from = at - root.length) => {
 		const eol = body.indexOf('\n', at)
 		/** @param {string} reason */
 		const fail = (reason) => unresolved(`${reason} \`${body.slice(from, eol < 0 ? body.length : eol).trim()}\``)
@@ -1066,12 +1086,12 @@ function bodyReads(body, where, file, sources, checkout) {
 				const end = closing(body, i)
 				const key = literal(body.slice(i + 1, end - 1))
 				if (typeof key !== 'string') {
-					// params[v] in `<literal list>.each do |v|`: one read per value of the list.
-					const values = path.length === 0 ? loopValues(body, body.slice(i + 1, end - 1).trim()) : null
+					// params[v] in `<literal list>.each do |v|`: the chain read once per value of the list.
+					const values = path.length === 0 ? loopValues(body, body.slice(i + 1, end - 1).trim(), i) : null
 					if (values === null) {
 						unresolved(`dynamic key \`${body.slice(from, end).trim()}\``)
 					} else {
-						for (const value of values) record([value])
+						for (const value of values) chain(end, [value], root, false, from)
 					}
 					return undefined
 				}

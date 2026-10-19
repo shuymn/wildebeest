@@ -520,6 +520,55 @@ describe('mastodon-scopes.mjs parameter helpers and reviewed readings', () => {
 		})
 	})
 
+	it('resolves a loop variable by the block that encloses the read, and an ambiguous one not at all', async () => {
+		await checkout({
+			'config/routes/api.rb':
+				'namespace :api do\n  namespace :v1 do\n    resources :things, only: :index\n  end\nend\n',
+			'app/controllers/api/v1/things_controller.rb': [
+				'class Api::V1::ThingsController < Api::BaseController',
+				'  def index',
+				'    %i(first).each do |key|',
+				'      found = key if params[key].present?',
+				'    end',
+				'    %i(second).each { |key| found = key if params[key].present? }',
+				'    %i(outer).each do |key|',
+				'      %i(inner).each do |key|',
+				'        found = key if params[key].present?',
+				'      end',
+				'    end',
+				'  end',
+				'end',
+				'',
+			].join('\n'),
+		})
+		expect(params('/api/v1/things')).toEqual({
+			names: ['first', 'second'],
+			unresolved: ['app/controllers/api/v1/things_controller.rb index: dynamic key `params[key]`'],
+		})
+	})
+
+	it('reads the rest of the chain after a resolved loop key, and leaves an unsupported tail unresolved', async () => {
+		await checkout({
+			'config/routes/api.rb':
+				'namespace :api do\n  namespace :v1 do\n    resources :things, only: :index\n  end\nend\n',
+			'app/controllers/api/v1/things_controller.rb': [
+				'class Api::V1::ThingsController < Api::BaseController',
+				'  def index',
+				'    %i(first second).each { |key| params[key][:nested] }',
+				'    %i(third).each { |key| params[key].each_pair { |k, v| k } }',
+				'  end',
+				'end',
+				'',
+			].join('\n'),
+		})
+		expect(params('/api/v1/things')).toEqual({
+			names: ['first[nested]', 'second[nested]'],
+			unresolved: [
+				'app/controllers/api/v1/things_controller.rb index: unsupported .each_pair `params[key].each_pair { |k, v| k } }`',
+			],
+		})
+	})
+
 	it('reads params[v] in a loop over a literal list as each value, and any other dynamic key as unresolved', async () => {
 		await checkout({
 			'config/routes/api.rb':
