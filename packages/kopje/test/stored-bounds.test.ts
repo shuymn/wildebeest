@@ -520,11 +520,12 @@ describe('cuts after normalization (RES-2)', () => {
 	})
 })
 
-// Migration 0048_stored_bounds keeps what the API shows: a converted-row fixture with every covered column at its
-// bound, past it (all together), of 400,000 U+0001 and with U+0000, stored without the triggers as a Store before
-// 0048 holds it, answers the same before and after the file's statements run.
+// Migration 0048_stored_bounds stores P(x) for every covered value (test/migrations.test.ts), and reads present the
+// stored value, which P(P(x)) = P(x) makes what a read through P showed before the rewrite. A converted-row fixture
+// with every covered column at its bound, past it (all together), of 400,000 U+0001 and with U+0000, stored without
+// the triggers as a Store before 0048 holds it, is rewritten and then read whole.
 describe('0048_stored_bounds and presented output (RES-2)', () => {
-	it('answers the same for every converted row before and after the rewrite', async () => {
+	it('answers every converted row after the rewrite', async () => {
 		const h = await community(['alice'])
 		const { token } = h.users.alice
 		await runInDurableObject(h.store, (_instance, state) => {
@@ -556,13 +557,6 @@ describe('0048_stored_bounds and presented output (RES-2)', () => {
 			}
 			return read
 		}
-		const before = await answers()
-		expect(before.map(([, status]) => status)).toEqual(paths.map(() => 200))
-		const shown = (path: string) =>
-			JSON.parse(before.find(([p]) => p === path)?.[2] ?? 'null') as Record<string, unknown>
-		// The status at its bounds shows its four attachments, and its history every version.
-		expect(shown(`/api/v1/statuses/${STATUS}`).media_attachments).toHaveLength(4)
-		expect(shown(`/api/v1/statuses/${STATUS}/history`)).toHaveLength(8)
 		const sql = MIGRATIONS.find((m) => m.name === '0048_stored_bounds')?.sql ?? ''
 		const moved = await runInDurableObject(h.store, (_instance, state) => {
 			const store = state.storage.sql
@@ -573,7 +567,13 @@ describe('0048_stored_bounds and presented output (RES-2)', () => {
 		})
 		expect(moved.was.every((n) => n > 0)).toBe(true)
 		expect(moved.now).toEqual([0, 0, 0, 0])
-		expect(await answers()).toEqual(before)
+		const after = await answers()
+		expect(after.map(([, status]) => status)).toEqual(paths.map(() => 200))
+		const shown = (path: string) =>
+			JSON.parse(after.find(([p]) => p === path)?.[2] ?? 'null') as Record<string, unknown>
+		// The status at its bounds shows its four attachments, and its history every version.
+		expect(shown(`/api/v1/statuses/${STATUS}`).media_attachments).toHaveLength(4)
+		expect(shown(`/api/v1/statuses/${STATUS}/history`)).toHaveLength(8)
 	}, 120_000)
 })
 

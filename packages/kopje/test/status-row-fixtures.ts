@@ -4,12 +4,12 @@ import { type ApiHarness } from './api-helpers'
 import { NOW } from './app-helpers'
 import { type SqlRow, watchedCursor } from './read-helpers'
 import { community } from './status-helpers'
-import { withoutStoredBounds } from './stored-bounds-fixtures'
 import { Db, rowHeapBytes } from '../src/db/sql'
 import { type VisibleStatusId } from '../src/domain/audience'
 import { MAX_STATUS_MENTION_ROWS } from '../src/domain/status-bounds'
 import { type ChunkPlan, presentation, presentStatusesWithin, type Status } from '../src/domain/status-presenter'
 import { statusRowBoundSql } from '../src/domain/status-rows'
+import { CONTENT_JSON_BYTES } from '../src/platform/stored-bounds'
 
 // Fixtures of the chunk planning tests (test/status-rows.test.ts): answers of statuses of mixed shapes and sizes, built
 // in SQL, and what a presentation of them reads.
@@ -72,13 +72,18 @@ export async function fixture(): Promise<{ h: ApiHarness; f: Fixture }> {
 	return { h, f: { viewer, token: h.users.alice.token, mentioned, filter } }
 }
 
-// Writes the status rows of `item` (its original, quoted status and boost too) and returns its top-level id. The rows
-// may pass their stored bounds, as converted rows held them before 0048_stored_bounds: the triggers are lifted.
-export function build(sql: SqlStorage, f: Fixture, item: Item): string {
-	return withoutStoredBounds(sql, () => buildRows(sql, f, item))
+// Wide text of `points` code points whose content (`<p>needle …</p>`) stays within its stored bound
+// (CONTENT_JSON_BYTES as a JSON string, RES-2): four-byte characters outside the BMP while they fit WIDE_BYTES, and
+// past that as many as fit with three-byte ones for the rest, which cover every `text` the generator draws (at most
+// 40,000, 120,000 bytes of three-byte characters).
+const WIDE_BYTES = CONTENT_JSON_BYTES - JSON.stringify('<p>needle </p>').length
+function wideText(points: number): string {
+	const astral = Math.min(points, Math.max(0, WIDE_BYTES - 3 * points))
+	return `${'𠀀'.repeat(astral)}${'名'.repeat(points - astral)}`
 }
 
-function buildRows(sql: SqlStorage, f: Fixture, item: Item): string {
+// Writes the status rows of `item` (its original, quoted status and boost too) and returns its top-level id.
+export function build(sql: SqlStorage, f: Fixture, item: Item): string {
 	const author = nextId()
 	sql.exec(
 		"INSERT INTO accounts (id, uri, username, domain, display_name, raw) VALUES (?, ?, 'author', 'remote.example', ?, ?)",
@@ -95,7 +100,7 @@ function buildRows(sql: SqlStorage, f: Fixture, item: Item): string {
 			id,
 			`https://remote.example/objects/${id}`,
 			author,
-			`<p>needle ${(parts.wide ? '𠀀' : 'x').repeat(parts.text)}</p>`,
+			`<p>needle ${parts.wide ? wideText(parts.text) : 'x'.repeat(parts.text)}</p>`,
 			'w'.repeat(parts.text % 100),
 			VIEWER_NOW
 		)

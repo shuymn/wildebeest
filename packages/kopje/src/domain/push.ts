@@ -5,7 +5,6 @@ import { userReadOperation, userSessionOperation, userWriteOperation } from './a
 import { CLAIM_LIMIT, type DeliveryOutcome, LEASE_MS, MAX_ATTEMPTS, retryDelay } from './deliveries'
 import { pushWantedSql } from './notifications'
 import { writeOperation } from './operation'
-import { contentSql, spoilerSql } from './status-bounds'
 import type { Db } from '../db/sql'
 import { remoteHtmlText } from '../security/html'
 
@@ -221,8 +220,8 @@ type TargetRow = {
 function target(db: Db, id: string, now: number): TargetRow | undefined {
 	return db.first<TargetRow>(
 		`SELECT p.endpoint, p.key_p256dh, p.key_auth, p.standard, p.token_hash, p.token_sealed,
-			n.id AS notification_id, n.type, n.from_account_id, ${spoilerSql('s.spoiler_text')} AS spoiler_text,
-			${contentSql('s.content')} AS content
+			n.id AS notification_id, n.type, n.from_account_id, s.spoiler_text,
+			s.content
 		FROM push_deliveries d
 			JOIN push_subscriptions p ON p.id = d.subscription_id
 			JOIN oauth_tokens t ON t.token_hash = p.token_hash

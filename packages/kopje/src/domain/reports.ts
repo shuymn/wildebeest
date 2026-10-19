@@ -25,7 +25,7 @@ import { type InstanceRule, parseRules } from './instance'
 import { logAction } from './moderation-log'
 import { notify } from './notifications'
 import { readOperation } from './operation'
-import { actorUriSql, profileUrlSql, usernameSql } from './profile-bounds'
+import { actorUriSql, usernameSql } from './profile-bounds'
 import { LARGE_ITEM_CHUNKS, presentation, type Status, statusStream } from './status-presenter'
 import { accountStatusIds } from './timelines'
 import type { Db } from '../db/sql'
@@ -665,7 +665,7 @@ export const reportTargetPage = readOperation<
 	}
 	const row = /^\d{1,18}$/.test(id)
 		? db.first<{ url: string | null; uri: string; username: string; domain: string | null }>(
-				`SELECT ${profileUrlSql('a.url')} AS url, ${actorUriSql('a.uri')} AS uri, ${usernameSql('a.username')} AS username,
+				`SELECT a.url, ${actorUriSql('a.uri')} AS uri, ${usernameSql('a.username')} AS username,
 					a.domain
 				FROM reports r JOIN accounts a ON a.id = r.target_account_id
 				WHERE r.id = CAST(? AS INTEGER)`,

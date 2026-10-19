@@ -7,11 +7,10 @@ import { setSetting, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { BUILD } from './helpers'
 import { ALICE, setup, type Setup } from './inbox-status-helpers'
-import { MAX_BIO, maxFields } from './profile-fixtures'
+import { fullestFields, MAX_BIO } from './profile-fixtures'
 import { observedSql, rowsRead } from './read-helpers'
 import { community, post, remoteAccount } from './status-helpers'
 import { heap } from './status-row-fixtures'
-import { legacySql } from './stored-bounds-fixtures'
 import { Db } from '../src/db/sql'
 import { createActivity, getFeatured, noteOf, OUTBOX_BYTES, PIN_LIMIT, statusFacts } from '../src/domain/activities'
 import { ANSWER_BYTES } from '../src/domain/answer-budget'
@@ -32,9 +31,15 @@ import {
 	MAX_TAG_LENGTH,
 	MEDIA_URL_LIMIT,
 } from '../src/domain/status-bounds'
-import { presentation, presentStatusesWithin } from '../src/domain/status-presenter'
+import {
+	type ChunkPlan,
+	LARGE_ITEM_CHUNKS,
+	PAGE_CHUNKS,
+	presentation,
+	presentStatusesWithin,
+} from '../src/domain/status-presenter'
 import { statusRowBoundSql } from '../src/domain/status-rows'
-import { getStatus, getStatuses, statusHistory, statusSource } from '../src/domain/statuses'
+import { getStatus, getStatuses, statusHistory } from '../src/domain/statuses'
 import { parseRemoteStatus } from '../src/federation/remote-status'
 import { utf8Length } from '../src/platform/dump-format'
 import { MAX_LOCAL_ADDRESSED } from '../src/platform/identity-bounds'
@@ -50,8 +55,9 @@ import {
 import { sha256Hex } from '../src/security/tokens'
 
 // RES-2: one presented status has a known size. Each column a remote server controls is bounded where it is stored
-// and again as it is read (status-bounds.ts), so a row stored before a bound, or converted at the cutover, leaves
-// SQLite within it too. The maxima measured here are docs/threat-model.md's table (RES-3).
+// (the stored-bound triggers of 0048_stored_bounds), and identities, hashtag names and poll choices again as they are
+// read (status-bounds.ts), so a converted row leaves SQLite within them too. The maxima measured here are
+// docs/threat-model.md's table (RES-3).
 
 const ORIGIN = 'https://kopje.test'
 // A control character: one code point that JSON escapes to six bytes, the most any code point takes.
@@ -89,7 +95,7 @@ async function maximalAccount(t: Setup, light = false, fill: Fill = 'escaped'): 
 		light && fill === 'derived' ? null : atLimit(`https://${HOST}/@${id}/`, PROFILE_URL_LIMIT),
 		light ? null : atLimit(`https://${HOST}/a/${id}/`, PROFILE_URL_LIMIT),
 		light ? null : atLimit(`https://${HOST}/h/${id}/`, PROFILE_URL_LIMIT),
-		light ? null : JSON.stringify({ type: 'Person', attachment: maxFields() })
+		light ? null : JSON.stringify({ type: 'Person', attachment: fullestFields() })
 	)
 	return id
 }
@@ -97,32 +103,39 @@ async function maximalAccount(t: Setup, light = false, fill: Fill = 'escaped'): 
 type Parts = {
 	content: string
 	spoiler: string
+	// The source text a local status keeps for editing; none for a remote one.
+	source?: string | null
 	media: { url: string; preview: string | null; description: string; meta: string | null }[]
 	mentions: string[]
 	tags: string[]
 	poll: string[] | null
 	uri?: string
 	url?: string
+	// The status a boost boosts; a boost's content is '' (the statuses CHECK).
+	reblogOf?: string
 }
 
-// A public remote status of `author` with the given parts, written as a converted row held them before
-// 0048_stored_bounds (its statuses and media rows without the triggers).
+// A public remote status of `author` with the given parts, written directly in SQL: the stored-bound triggers of
+// 0048_stored_bounds accept every part at its bound.
 async function storedStatus(t: Setup, author: string, parts: Parts): Promise<string> {
 	const id = nextId()
-	await legacySql(
+	await sql(
 		t.store,
-		`INSERT INTO statuses (id, uri, url, account_id, visibility, spoiler_text, content, published_at)
-		VALUES (?, ?, ?, ?, 'public', ?, ?, ?)`,
+		`INSERT INTO statuses (id, uri, url, account_id, reblog_of_id, visibility, spoiler_text, content, source_text,
+			published_at)
+		VALUES (?, ?, ?, ?, ?, 'public', ?, ?, ?, ?)`,
 		id,
 		parts.uri ?? atLimit(`https://${HOST}/objects/${id}/`, 4096),
 		parts.url ?? atLimit(`https://${HOST}/notes/${id}/`, 4096),
 		author,
+		parts.reblogOf ?? null,
 		parts.spoiler,
-		parts.content,
+		parts.reblogOf === undefined ? parts.content : '',
+		parts.source ?? null,
 		new Date(NOW - 60_000).toISOString()
 	)
 	for (const [position, m] of parts.media.entries()) {
-		await legacySql(
+		await sql(
 			t.store,
 			`INSERT INTO media_attachments (id, account_id, status_id, position, type, url, preview_url, description, meta,
 				focus_x, focus_y)
@@ -176,17 +189,20 @@ const MAX_META = (() => {
 // A tag name of MAX_TAG_LENGTH code points of four bytes each: the longest URL encodeURIComponent makes of one.
 const maxTag = (i: number) => `${String.fromCodePoint(0x20000 + i)}${'𠀀'.repeat(MAX_TAG_LENGTH - 1)}`
 
-// A status with every part at its bound: content of STATUS_CONTENT_BYTES and a warning of SPOILER_BYTES as JSON
-// strings, MAX_STATUS_MEDIA attachments at theirs, MAX_STATUS_MENTION_ROWS mentions of accounts at theirs,
-// MAX_STATUS_TAGS tags and a poll of MAX_REMOTE_OPTIONS choices of MAX_REMOTE_OPTION_LENGTH escaping characters.
+// A status with every part at its bound: content and source text of STATUS_CONTENT_BYTES and a warning of
+// SPOILER_BYTES as JSON strings (each the largest value its stored-bound trigger accepts), MAX_STATUS_MEDIA
+// attachments at theirs, MAX_STATUS_MENTION_ROWS mentions of accounts at theirs, MAX_STATUS_TAGS tags and a poll of
+// MAX_REMOTE_OPTIONS choices of MAX_REMOTE_OPTION_LENGTH escaping characters.
 async function maximalParts(t: Setup, fill: Fill = 'escaped'): Promise<Parts> {
 	const mentions: string[] = []
 	for (let i = 0; i < MAX_STATUS_MENTION_ROWS; i++) {
 		mentions.push(await maximalAccount(t, true, fill))
 	}
 	const counted = fill === 'raw' ? W : C
+	const content = fill === 'raw' ? 'x'.repeat(STATUS_CONTENT_BYTES - 2) : C.repeat((STATUS_CONTENT_BYTES - 2) / 6)
 	return {
-		content: fill === 'raw' ? 'x'.repeat(STATUS_CONTENT_BYTES - 2) : C.repeat((STATUS_CONTENT_BYTES - 2) / 6),
+		content,
+		source: content,
 		spoiler: fill === 'raw' ? 'x'.repeat(SPOILER_BYTES - 2) : C.repeat(Math.floor((SPOILER_BYTES - 2) / 6)),
 		media: Array.from({ length: MAX_STATUS_MEDIA }, (_, i) => ({
 			url: atLimit(`https://${HOST}/m/${i}/`, MEDIA_URL_LIMIT),
@@ -200,25 +216,46 @@ async function maximalParts(t: Setup, fill: Fill = 'escaped'): Promise<Parts> {
 	}
 }
 
-type Measure = { answer: unknown; rows: number; sqliteBytes: number; longest: number; profileBytes: number }
+// The heap of the rows one read returns under the model of "Heap at 8 MiB per answer" (docs/threat-model.md), by query
+// (its SQL) and column: each query's rows (64 B each for the object), and for each column its values' heap summed and
+// its largest value's (32 B and twice its UTF-8 bytes, which is at least RowMeter's twice its UTF-16 code units).
+type ColumnHeap = { total: number; largest: number }
+type Heaps = Map<string, { rows: number; columns: Map<string, ColumnHeap> }>
+
+type Measure = {
+	answer: unknown
+	rows: number
+	sqliteBytes: number
+	longest: number
+	profileBytes: number
+	heaps: Heaps
+}
 
 // Runs a read over a SqlStorage that measures what leaves SQLite: the rows, the UTF-8 bytes of their values (eight per
-// number) and the longest value's bytes.
+// number), the longest value's bytes, and their heap by query and column.
 async function measured<I>(t: Setup, operation: StoreOperation<I, unknown>, input: I): Promise<Measure> {
 	return runInDurableObject(t.store, (_instance, state) => {
 		let rows = 0
 		let sqliteBytes = 0
 		let longest = 0
 		let profileBytes = 0
-		const counting = observedSql(state.storage.sql, (read) => {
+		const heaps: Heaps = new Map()
+		const counting = observedSql(state.storage.sql, (read, query) => {
+			const heap = heaps.get(query) ?? { rows: 0, columns: new Map<string, ColumnHeap>() }
+			heaps.set(query, heap)
 			for (const row of read) {
 				rows++
+				heap.rows++
 				const profile = 'note' in row && 'display_name' in row
-				for (const value of Object.values(row)) {
-					const bytes = typeof value === 'string' ? utf8Length(value) : 8
+				for (const [column, value] of Object.entries(row)) {
+					const text = typeof value === 'string' ? utf8Length(value) : null
+					const bytes = text ?? 8
 					sqliteBytes += bytes
 					profileBytes += profile ? bytes : 0
 					longest = Math.max(longest, bytes)
+					const one = 32 + 2 * (text ?? 0)
+					const sum = heap.columns.get(column) ?? { total: 0, largest: 0 }
+					heap.columns.set(column, { total: sum.total + one, largest: Math.max(sum.largest, one) })
 				}
 			}
 		})
@@ -226,7 +263,7 @@ async function measured<I>(t: Setup, operation: StoreOperation<I, unknown>, inpu
 		while (answer.status === 'ok' && 'value' in answer) {
 			answer = answer.value as Record<string, unknown>
 		}
-		return { answer, rows, sqliteBytes, longest, profileBytes }
+		return { answer, rows, sqliteBytes, longest, profileBytes, heaps }
 	})
 }
 
@@ -338,10 +375,10 @@ describe('a local status is written within its bounds (RES-2)', () => {
 })
 
 describe('a stored status is read within its bounds (RES-2)', () => {
-	it('projects over-long stored columns within their bounds, as the bytes leaving SQLite show', async () => {
+	it('projects identities, hashtags and poll choices, and caps the rows, as the bytes leaving SQLite show', async () => {
 		const t = await setup()
 		const author = await maximalAccount(t)
-		await legacySql(
+		await sql(
 			t.store,
 			'UPDATE accounts SET uri = ? WHERE id = ?',
 			atLimit(`https://${HOST}/users/long/`, ACTOR_URI_LIMIT + 1),
@@ -351,26 +388,26 @@ describe('a stored status is read within its bounds (RES-2)', () => {
 		for (let i = 0; i < MAX_STATUS_MENTION_ROWS + 50; i++) {
 			mentions.push(await maximalAccount(t, true))
 		}
-		// A converted username of 64 KiB and URLs past their bounds.
-		await legacySql(
+		// A converted username of 64 KiB and an actor id past its bound, with no stored url.
+		await sql(
 			t.store,
-			'UPDATE accounts SET username = ?, url = ?, uri = ? WHERE id = ?',
+			'UPDATE accounts SET username = ?, url = NULL, uri = ? WHERE id = ?',
 			`u${'v'.repeat(64 * 1024)}`,
-			atLimit('https://remote.example/@u/', PROFILE_URL_LIMIT + 1),
 			atLimit('https://remote.example/users/u/', ACTOR_URI_LIMIT + 1),
 			mentions[0]!
 		)
 		// A converted username outside Mastodon's remote format, of characters that escape to six bytes.
 		await sql(t.store, 'UPDATE accounts SET username = ? WHERE id = ?', C.repeat(300), mentions[1]!)
 		await sql(t.store, 'UPDATE accounts SET username = ? WHERE id = ?', `u\u0000${C.repeat(253)}`, mentions[2]!)
+		const url = atLimit(`https://${HOST}/notes/long/`, 4096)
 		const id = await storedStatus(t, author, {
-			content: C.repeat(Math.floor(STATUS_CONTENT_BYTES / 6) + 1),
-			spoiler: C.repeat(SPOILER_BYTES),
+			content: '<p>x</p>',
+			spoiler: '',
 			media: Array.from({ length: MAX_STATUS_MEDIA + 2 }, (_, i) => ({
-				url: atLimit(`https://${HOST}/m/${i}/`, MEDIA_URL_LIMIT + i),
-				preview: atLimit(`https://${HOST}/p/${i}/`, MEDIA_URL_LIMIT + 1),
-				description: C.repeat(MAX_MEDIA_DESCRIPTION_LENGTH + 100),
-				meta: `{"x":"${'x'.repeat(2000)}"}`,
+				url: atLimit(`https://${HOST}/m/${i}/`, MEDIA_URL_LIMIT),
+				preview: null,
+				description: '',
+				meta: null,
 			})),
 			mentions,
 			tags: [
@@ -379,26 +416,15 @@ describe('a stored status is read within its bounds (RES-2)', () => {
 			],
 			poll: Array.from({ length: MAX_REMOTE_OPTIONS }, () => 'x'.repeat(6_000)),
 			uri: atLimit(`https://${HOST}/objects/long/`, 4097),
-			url: atLimit(`https://${HOST}/notes/long/`, 4097),
+			url,
 		})
 		const { answer, longest } = await read(t, getStatus, id)
 		const status = answer as Presented
-		expect(status.content).toBe('')
-		expect(status.spoiler_text).toBe(C.repeat(Math.floor((SPOILER_BYTES - 2) / 6)))
-		expect(jsonStringBytes(status.spoiler_text)).toBeLessThanOrEqual(SPOILER_BYTES)
-		expect([status.uri, status.url]).toEqual(['', ''])
+		expect([status.uri, status.url]).toEqual(['', url])
 		expect(status.account.url).toBe(atLimit(`https://${HOST}/@${author}/`, PROFILE_URL_LIMIT))
-		expect(status.media_attachments).toHaveLength(MAX_STATUS_MEDIA)
-		expect(status.media_attachments.map((m) => m.url)).toEqual([
-			atLimit(`https://${HOST}/m/0/`, MEDIA_URL_LIMIT),
-			null,
-			null,
-			null,
-		])
-		for (const m of status.media_attachments) {
-			expect(m).toMatchObject({ preview_url: m.url, meta: null })
-			expect(m.description).toBe(C.repeat(MAX_MEDIA_DESCRIPTION_LENGTH))
-		}
+		expect(status.media_attachments.map((m) => m.url)).toEqual(
+			Array.from({ length: MAX_STATUS_MEDIA }, (_, i) => atLimit(`https://${HOST}/m/${i}/`, MEDIA_URL_LIMIT))
+		)
 		expect(status.mentions).toHaveLength(MAX_STATUS_MENTION_ROWS)
 		expect(status.mentions.map((m) => m.id)).toEqual(mentions.toSorted().slice(0, MAX_STATUS_MENTION_ROWS))
 		const cut = status.mentions.find((m) => m.id === mentions[0])!
@@ -424,12 +450,11 @@ describe('a stored status is read within its bounds (RES-2)', () => {
 			Array.from({ length: MAX_REMOTE_OPTIONS }, () => 'x'.repeat(MAX_REMOTE_OPTION_LENGTH))
 		)
 		// The longest value that left SQLite is the poll's choices as a JSON array, within their bound: the 64 KiB
-		// username, the over-long content and the 600 KB of stored choices stayed.
+		// username, the actor ids and the 600 KB of stored choices stayed.
 		expect(longest).toBeLessThanOrEqual(MAX_REMOTE_OPTIONS * (6 * MAX_REMOTE_OPTION_LENGTH + 3) + 1)
-		expect(longest).toBeLessThan(STATUS_CONTENT_BYTES)
 	})
 
-	it('projects edit history snapshots and the source within their bounds', async () => {
+	it("projects edit history snapshots' media within their bounds", async () => {
 		const t = await setup()
 		const author = await maximalAccount(t)
 		const id = await storedStatus(t, author, {
@@ -441,15 +466,12 @@ describe('a stored status is read within its bounds (RES-2)', () => {
 			poll: null,
 		})
 		const snapshot = (i: number) => ({ id: `m${i}`, type: 'image', description: C.repeat(10_000) })
-		await legacySql(
+		await sql(
 			t.store,
 			`INSERT INTO status_edits (status_id, content, spoiler_text, media_json, poll_options, created_at) VALUES
-				(?1, ?2, ?3, ?4, ?5, ?6), (?1, '<p>b</p>', '', ?7, ?8, ?6)`,
+				(?1, '<p>a</p>', '', ?2, NULL, ?3), (?1, '<p>b</p>', '', ?4, ?5, ?3)`,
 			id,
-			C.repeat(STATUS_CONTENT_BYTES),
-			'注'.repeat(SPOILER_BYTES),
 			JSON.stringify(Array.from({ length: 10 }, (_, i) => snapshot(i))),
-			JSON.stringify(Array.from({ length: 150 }, (_, i) => `${i}${'o'.repeat(2_000)}`)),
 			new Date(NOW).toISOString(),
 			// A small snapshot whose single fields are past their bounds: a long URL, description and meta.
 			JSON.stringify([
@@ -468,16 +490,11 @@ describe('a stored status is read within its bounds (RES-2)', () => {
 		)
 		const { answer, longest } = await read(t, statusHistory, id)
 		const [first, second] = answer as {
-			content: string
-			spoiler_text: string
 			media_attachments: unknown[]
 			poll: { options: { title: string }[] } | null
 		}[]
-		expect(first!.content).toBe('')
-		expect(first!.spoiler_text).toBe('注'.repeat(Math.floor((SPOILER_BYTES - 2) / 6)))
+		// Past EDIT_MEDIA_BYTES, a snapshot reads as no media.
 		expect(first!.media_attachments).toEqual([])
-		expect(first!.poll!.options).toHaveLength(MAX_REMOTE_OPTIONS)
-		expect(first!.poll!.options[7]!.title).toBe(`7${'o'.repeat(MAX_REMOTE_OPTION_LENGTH - 1)}`)
 		// The first MAX_STATUS_MEDIA entries (the string among them left out), each rebuilt within the column bounds.
 		expect(second!.media_attachments).toEqual(
 			Array.from({ length: MAX_STATUS_MEDIA - 1 }, (_, i) => ({
@@ -495,18 +512,6 @@ describe('a stored status is read within its bounds (RES-2)', () => {
 		)
 		expect(second!.poll!.options.map((o) => o.title)).toEqual(['a', 'b'])
 		expect(longest).toBeLessThanOrEqual(STATUS_CONTENT_BYTES)
-		// The source a local author reads back for editing.
-		await legacySql(
-			t.store,
-			'UPDATE statuses SET source_text = ?, content = ? WHERE id = ?',
-			C.repeat(STATUS_CONTENT_BYTES),
-			C.repeat(STATUS_CONTENT_BYTES),
-			id
-		)
-		await sql(t.store, 'UPDATE statuses SET account_id = ? WHERE id = ?', ALICE, id)
-		const source = await read(t, statusSource, id)
-		expect(source.answer).toEqual({ id, text: '', spoiler_text: '' })
-		expect(source.longest).toBeLessThanOrEqual(STATUS_CONTENT_BYTES)
 	})
 })
 
@@ -774,9 +779,22 @@ async function maximalFilters(t: Setup, fill: Fill, statuses: readonly string[])
 type Shape = { sqlite: number; json: number; rows: number; nodes: number }
 
 // A quote of a status and a boost of the quote, each part of every status at its bound and each account at its
-// bounds, filled as `fill`, with alice's filters at their bounds naming all three.
+// bounds, filled as `fill`, with alice's profile and filters at their bounds, the filters naming all three, her votes
+// in every choice of both polls shown, and every flag of hers on each. The boost's own row holds every part its CHECK
+// and triggers accept (all but content), and attachments, mentions, hashtags and a poll of its own, which the presenter
+// neither reads nor shows.
 async function maximalStatuses(fill: Fill) {
 	const t = await setup()
+	await sql(
+		t.store,
+		'UPDATE accounts SET display_name = ?, note = ?, url = ?, avatar_url = ?, header_url = ? WHERE id = ?',
+		(fill === 'raw' ? W : C).repeat(2048),
+		fill === 'raw' ? RAW_BIO : MAX_BIO,
+		atLimit(`https://kopje.test/@alice/`, PROFILE_URL_LIMIT),
+		atLimit(`https://kopje.test/a/alice/`, PROFILE_URL_LIMIT),
+		atLimit(`https://kopje.test/h/alice/`, PROFILE_URL_LIMIT),
+		ALICE
+	)
 	const [booster, quoter, quotedAuthor] = [
 		await maximalAccount(t, false, fill),
 		await maximalAccount(t, false, fill),
@@ -792,22 +810,49 @@ async function maximalStatuses(fill: Fill) {
 		quoted,
 		new Date(NOW).toISOString()
 	)
-	const boost = nextId()
-	await sql(
-		t.store,
-		`INSERT INTO statuses (id, uri, account_id, reblog_of_id, visibility, published_at)
-		VALUES (?, ?, ?, ?, 'public', ?)`,
-		boost,
-		atLimit(`https://${HOST}/announces/${boost}/`, 4096),
-		booster,
-		quote,
-		new Date(NOW).toISOString()
-	)
+	const boost = await storedStatus(t, booster, { ...(await maximalParts(t, fill)), reblogOf: quote })
 	await maximalFilters(t, fill, [quoted, quote, boost])
+	const at = new Date(NOW).toISOString()
+	for (const id of [quoted, quote]) {
+		await sql(t.store, 'UPDATE polls SET multiple = 1 WHERE status_id = ?', id)
+		await sql(
+			t.store,
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ? - 1)
+			INSERT INTO poll_votes (poll_id, account_id, choice, generation, created_at) SELECT ?, ?, i, 0, ? FROM n`,
+			MAX_REMOTE_OPTIONS,
+			id,
+			ALICE,
+			at
+		)
+	}
+	for (const id of [quoted, quote, boost]) {
+		await sql(t.store, 'INSERT INTO favourites (account_id, status_id, created_at) VALUES (?, ?, ?)', ALICE, id, at)
+		await sql(t.store, 'INSERT INTO bookmarks (account_id, status_id, created_at) VALUES (?, ?, ?)', ALICE, id, at)
+		await sql(
+			t.store,
+			"INSERT INTO statuses (id, uri, account_id, reblog_of_id, visibility, published_at) VALUES (?, ?, ?, ?, 'public', ?)",
+			nextId(),
+			`https://kopje.test/boosts/${id}`,
+			ALICE,
+			id,
+			at
+		)
+	}
 	return { t, quoted, quote, boost }
 }
 
-async function measureShapes(fill: Fill): Promise<Record<string, Shape>> {
+// What each fill measures: the table of maxima, and for each item of the heap model its rows by query and column (its
+// JSON is the table's). Measured once per fill, by whichever test asks first.
+type FillMeasure = { shapes: Record<string, Shape>; heaps: Record<string, Heaps> }
+const fills = new Map<Fill, Promise<FillMeasure>>()
+
+function measureFill(fill: Fill): Promise<FillMeasure> {
+	const measure = fills.get(fill) ?? measureShapes(fill)
+	fills.set(fill, measure)
+	return measure
+}
+
+async function measureShapes(fill: Fill): Promise<FillMeasure> {
 	const { t, quoted, quote, boost } = await maximalStatuses(fill)
 	const shape = (m: Measure): Shape => ({
 		sqlite: m.sqliteBytes,
@@ -916,14 +961,68 @@ async function measureShapes(fill: Fill): Promise<Record<string, Shape>> {
 	const shownReport = (reported.answer as { report: { statuses: { id: string }[] } }).report
 	expect(shownReport.statuses.map((status) => status.id)).toEqual([quote])
 	const account = (one.answer as Presented).account
+	const two = await read(t, getStatus, quote)
 	return {
-		account: { sqlite: one.profileBytes, json: jsonBytes(account), rows: 1, nodes: nodes(account) },
-		status: shape(one),
-		quote: shape(await read(t, getStatus, quote)),
-		boostOfQuote: shape(pair),
-		conversation: { ...shape({ ...listed, answer: talk }), sqlite: listed.sqliteBytes },
-		group: shape({ ...grouped, answer: group }),
-		report: shape({ ...reported, answer: shownReport }),
+		shapes: {
+			account: { sqlite: one.profileBytes, json: jsonBytes(account), rows: 1, nodes: nodes(account) },
+			status: shape(one),
+			quote: shape(two),
+			boostOfQuote: shape(pair),
+			conversation: { ...shape({ ...listed, answer: talk }), sqlite: listed.sqliteBytes },
+			group: shape({ ...grouped, answer: group }),
+			report: shape({ ...reported, answer: shownReport }),
+		},
+		heaps: {
+			status: one.heaps,
+			quote: two.heaps,
+			boostOfQuote: pair.heaps,
+			group: grouped.heaps,
+			report: reported.heaps,
+		},
+	}
+}
+
+// An item's rows at their per-column maxima: for each query and column, the most any fill read (each fill puts a column
+// at the bound in the unit that reads the most heap for it or the most JSON), summed, so a combination of columns no
+// single fill holds is counted. Returns their heap and the largest single row such a combination makes.
+function perColumn(measures: readonly Heaps[]): { heap: number; largestRow: number } {
+	const queries = new Map<string, { rows: number; columns: Map<string, ColumnHeap> }>()
+	for (const heaps of measures) {
+		for (const [query, { rows, columns }] of heaps) {
+			const most = queries.get(query) ?? { rows: 0, columns: new Map<string, ColumnHeap>() }
+			most.rows = Math.max(most.rows, rows)
+			for (const [column, { total, largest }] of columns) {
+				const was = most.columns.get(column) ?? { total: 0, largest: 0 }
+				most.columns.set(column, { total: Math.max(was.total, total), largest: Math.max(was.largest, largest) })
+			}
+			queries.set(query, most)
+		}
+	}
+	let heap = 0
+	let largestRow = 0
+	for (const { rows, columns } of queries.values()) {
+		const values = [...columns.values()]
+		heap += 64 * rows + values.reduce((sum, c) => sum + c.total, 0)
+		largestRow = Math.max(largestRow, 64 + values.reduce((sum, c) => sum + c.largest, 0))
+	}
+	return { heap, largestRow }
+}
+
+// The peaks of "Heap at 8 MiB per answer" (docs/threat-model.md, its model and terms) for answers whose largest item
+// is one of `items`, with that item's rows and largest row at their per-column maxima.
+async function peaks(items: readonly string[], chunks: ChunkPlan, state: number) {
+	const measures = await Promise.all((['escaped', 'derived', 'raw'] as const).map(measureFill))
+	const each = items.map((item) => perColumn(measures.map((m) => m.heaps[item]!)))
+	const rows = 1.25 * Math.max(...each.map((e) => e.heap))
+	const largestRow = Math.max(...each.map((e) => e.largestRow))
+	const json = Math.max(...measures.flatMap((m) => items.map((item) => m.shapes[item]!.json)))
+	const rest = 3 * ANSWER_BYTES + 3 * json + state
+	return {
+		rows,
+		largestRow,
+		rejected: 3 * json,
+		normal: Math.max(1.25 * chunks.cap, rows) + rest,
+		backstop: 1.25 * (chunks.cap + largestRow) + rows + rest,
 	}
 }
 
@@ -937,45 +1036,45 @@ describe('the table of maxima (RES-3)', () => {
 			'the escaped worst case: the most JSON',
 			'escaped',
 			{
-				account: { sqlite: 97_844, json: 121_710, rows: 1, nodes: 36 },
-				status: { sqlite: 2_723_475, json: 2_595_446, rows: 1_381, nodes: 2_267 },
-				quote: { sqlite: 4_873_593, json: 5_190_925, rows: 1_710, nodes: 4_536 },
-				boostOfQuote: { sqlite: 4_981_840, json: 5_564_762, rows: 1_763, nodes: 5_439 },
-				conversation: { sqlite: 6_048_177, json: 6_651_414, rows: 1_724, nodes: 4_959 },
-				group: { sqlite: 5_657_299, json: 6_165_029, rows: 1_737, nodes: 4_836 },
-				report: { sqlite: 4_978_089, json: 5_318_285, rows: 1_719, nodes: 4_661 },
+				account: { sqlite: 99_993, json: 123_878, rows: 1, nodes: 39 },
+				status: { sqlite: 2_750_118, json: 2_597_898, rows: 1_484, nodes: 2_270 },
+				quote: { sqlite: 4_926_879, json: 5_195_829, rows: 1_916, nodes: 4_542 },
+				boostOfQuote: { sqlite: 5_065_987, json: 5_588_211, rows: 1_972, nodes: 5_448 },
+				conversation: { sqlite: 6_190_029, json: 6_682_334, rows: 1_930, nodes: 5_001 },
+				group: { sqlite: 5_727_777, json: 6_187_277, rows: 1_943, nodes: 4_866 },
+				report: { sqlite: 5_096_302, json: 5_589_057, rows: 1_925, nodes: 4_673 },
 			},
 		],
 		[
 			'mentions whose url is derived',
 			'derived',
 			{
-				account: { sqlite: 97_844, json: 121_710, rows: 1, nodes: 36 },
-				status: { sqlite: 2_315_475, json: 2_185_846, rows: 1_381, nodes: 2_267 },
-				quote: { sqlite: 4_057_593, json: 4_371_725, rows: 1_710, nodes: 4_536 },
-				boostOfQuote: { sqlite: 4_165_840, json: 4_745_562, rows: 1_763, nodes: 5_439 },
-				conversation: { sqlite: 5_232_177, json: 5_832_214, rows: 1_724, nodes: 4_959 },
-				group: { sqlite: 4_841_299, json: 5_345_829, rows: 1_737, nodes: 4_836 },
-				report: { sqlite: 4_162_089, json: 4_499_085, rows: 1_719, nodes: 4_661 },
+				account: { sqlite: 99_993, json: 123_878, rows: 1, nodes: 39 },
+				status: { sqlite: 2_342_118, json: 2_188_298, rows: 1_484, nodes: 2_270 },
+				quote: { sqlite: 4_110_879, json: 4_376_629, rows: 1_916, nodes: 4_542 },
+				boostOfQuote: { sqlite: 4_249_987, json: 4_769_011, rows: 1_972, nodes: 5_448 },
+				conversation: { sqlite: 5_374_029, json: 5_863_134, rows: 1_930, nodes: 5_001 },
+				group: { sqlite: 4_911_777, json: 5_368_077, rows: 1_943, nodes: 4_866 },
+				report: { sqlite: 4_280_302, json: 4_769_857, rows: 1_925, nodes: 4_673 },
 			},
 		],
 		[
 			'the raw worst case: the most bytes read from SQLite',
 			'raw',
 			{
-				account: { sqlite: 114_914, json: 117_615, rows: 1, nodes: 36 },
-				status: { sqlite: 4_281_022, json: 2_157_753, rows: 1_381, nodes: 2_267 },
-				quote: { sqlite: 6_491_087, json: 4_315_539, rows: 1_710, nodes: 4_536 },
-				boostOfQuote: { sqlite: 6_616_404, json: 4_531_681, rows: 1_763, nodes: 5_439 },
-				conversation: { sqlite: 7_870_511, json: 5_726_888, rows: 1_724, nodes: 4_959 },
-				group: { sqlite: 7_411_353, json: 5_256_883, rows: 1_737, nodes: 4_836 },
-				report: { sqlite: 6_612_653, json: 4_438_804, rows: 1_719, nodes: 4_661 },
+				account: { sqlite: 117_063, json: 119_783, rows: 1, nodes: 39 },
+				status: { sqlite: 4_416_890, json: 2_160_205, rows: 1_484, nodes: 2_270 },
+				quote: { sqlite: 6_762_823, json: 4_320_443, rows: 1_916, nodes: 4_542 },
+				boostOfQuote: { sqlite: 7_041_878, json: 4_555_132, rows: 1_972, nodes: 5_448 },
+				conversation: { sqlite: 8_247_883, json: 5_757_808, rows: 1_930, nodes: 5_001 },
+				group: { sqlite: 7_700_281, json: 5_279_131, rows: 1_943, nodes: 4_866 },
+				report: { sqlite: 6_966_386, json: 4_697_291, rows: 1_925, nodes: 4_673 },
 			},
 		],
 	])(
 		'measures %s',
 		async (_name, fill, expected) => {
-			const shapes = await measureShapes(fill)
+			const { shapes } = await measureFill(fill)
 			expect(shapes).toEqual(expected)
 			for (const shape of Object.values(shapes)) {
 				expect(shape.json).toBeLessThanOrEqual(LIMIT)
@@ -984,37 +1083,31 @@ describe('the table of maxima (RES-3)', () => {
 		300_000
 	)
 
+	// Half of the Store isolate's 128 MB. A timeline's largest item is a status, a quote or a boost of a quote; groups
+	// and reports keep the presentation's state besides (10.1 and 12.5 MB, docs/threat-model.md) and pass half, below
+	// the whole (the RES-3 gap).
+	const HALF = 64_000_000
+	it('keeps the peaks of the heap model within their bounds, from the maxima per column', async () => {
+		const timelines = await peaks(['status', 'quote', 'boostOfQuote'], PAGE_CHUNKS, 0)
+		const groups = await peaks(['group'], LARGE_ITEM_CHUNKS, 10_100_000)
+		const reports = await peaks(['report'], LARGE_ITEM_CHUNKS, 12_500_000)
+		const mb = (bytes: number) => (bytes / 1e6).toFixed(2)
+		for (const [name, p] of Object.entries({ timelines, groups, reports })) {
+			console.info(
+				`Peak, ${name}: rows ${mb(p.rows)}, largest row ${mb(p.largestRow)}, rejected ${mb(p.rejected)}, normal ${mb(p.normal)}, backstop fired ${mb(p.backstop)} MB`
+			)
+		}
+		expect(timelines.normal).toBeLessThanOrEqual(HALF)
+		expect(timelines.backstop).toBeLessThanOrEqual(HALF)
+		for (const p of [groups, reports]) {
+			expect(p.backstop).toBeLessThanOrEqual(2 * HALF)
+		}
+	}, 900_000)
+
 	// R (status-rows.ts), which statusStream plans its chunks by, is at least the heap RowMeter counts of the rows each
-	// shape reads, with every part at its bound: the viewer's filters naming each status, her votes in every choice,
-	// and every flag of hers.
+	// shape reads, with every part at its bound (maximalStatuses).
 	it('bounds the rows each shape reads by R', async () => {
 		const { t, quoted, quote, boost } = await maximalStatuses('raw')
-		for (const id of [quoted, quote]) {
-			await sql(t.store, 'UPDATE polls SET multiple = 1 WHERE status_id = ?', id)
-			await sql(
-				t.store,
-				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ? - 1)
-				INSERT INTO poll_votes (poll_id, account_id, choice, generation, created_at) SELECT ?, ?, i, 0, ? FROM n`,
-				MAX_REMOTE_OPTIONS,
-				id,
-				ALICE,
-				new Date(NOW).toISOString()
-			)
-		}
-		for (const id of [quoted, quote, boost]) {
-			const at = new Date(NOW).toISOString()
-			await sql(t.store, 'INSERT INTO favourites (account_id, status_id, created_at) VALUES (?, ?, ?)', ALICE, id, at)
-			await sql(t.store, 'INSERT INTO bookmarks (account_id, status_id, created_at) VALUES (?, ?, ?)', ALICE, id, at)
-			await sql(
-				t.store,
-				"INSERT INTO statuses (id, uri, account_id, reblog_of_id, visibility, published_at) VALUES (?, ?, ?, ?, 'public', ?)",
-				nextId(),
-				`https://kopje.test/boosts/${id}`,
-				ALICE,
-				id,
-				at
-			)
-		}
 		const measuredShapes = await runInDurableObject(t.store, (_instance, state) => {
 			const real = state.storage.sql
 			const viewer = { accountId: ALICE, now: new Date(NOW).toISOString() }

@@ -10,7 +10,6 @@ import { ALICE, setup, type Setup } from './inbox-status-helpers'
 import { field, MAX_BIO, maxFields } from './profile-fixtures'
 import { longestString, observedSql } from './read-helpers'
 import { community, post, remoteAccount, seedStatus } from './status-helpers'
-import { legacySql } from './stored-bounds-fixtures'
 import { Db } from '../src/db/sql'
 import {
 	DISPLAY_NAME_LIMIT,
@@ -284,61 +283,13 @@ describe('one account has a known size (RES-2)', () => {
 		expect(Math.max(...sizes)).toBeLessThan(REMOTE_BIO_BYTES / 2)
 	})
 
-	it('reads a stored over-long bio as empty and over-long URLs as none', async () => {
-		const t = await setup()
-		const [id] = await accounts(t, 1, BASE, typical)
-		const long = `https://example.com/${'x'.repeat(PROFILE_URL_LIMIT)}`
-		await legacySql(
-			t.store,
-			'UPDATE accounts SET note = ?, display_name = ?, url = ?, avatar_url = ?, header_url = ? WHERE id = ?',
-			`<p>${'x'.repeat(REMOTE_BIO_BYTES)}</p>`,
-			'n'.repeat(DISPLAY_NAME_LIMIT + 100),
-			long,
-			long,
-			long,
-			id!
-		)
-		const { body } = await shownBytes(t, `/api/v1/accounts/${id}`)
-		expect(body).toMatchObject({
-			note: '',
-			display_name: 'n'.repeat(DISPLAY_NAME_LIMIT),
-			url: `https://m.example/@u${id}`,
-			avatar: `${ORIGIN}/assets/avatar.png`,
-			header: `${ORIGIN}/assets/header.png`,
-		})
-		// A bio within the raw bound that escapes past it reads as empty too; one at the bound is kept.
-		await legacySql(t.store, 'UPDATE accounts SET note = ? WHERE id = ?', '\u0001'.repeat(REMOTE_BIO_BYTES / 2), id!)
-		expect((await shownBytes(t, `/api/v1/accounts/${id}`)).body).toMatchObject({ note: '' })
-		await legacySql(t.store, 'UPDATE accounts SET note = ? WHERE id = ?', MAX_BIO, id!)
-		expect((await shownBytes(t, `/api/v1/accounts/${id}`)).body).toMatchObject({ note: MAX_BIO })
-	})
-
-	it('guards a stored bio with an embedded NUL by its whole bytes, and cuts a display name by code points', async () => {
-		const t = await setup()
-		const [id] = await accounts(t, 1, BASE, typical)
-		const shown = async (note: string, displayName = 'n') => {
-			await legacySql(t.store, 'UPDATE accounts SET note = ?, display_name = ? WHERE id = ?', note, displayName, id!)
-			return (await shownBytes(t, `/api/v1/accounts/${id}`)).body as { note: string; display_name: string }
-		}
-		// A NUL does not hide the rest from the guards: past the raw bound, or escaping past it, the bio reads as empty.
-		expect((await shown(`<p>a\u0000${'x'.repeat(REMOTE_BIO_BYTES)}</p>`)).note).toBe('')
-		expect((await shown(`<p>a${'\u0000'.repeat(REMOTE_BIO_BYTES / 4)}</p>`)).note).toBe('')
-		expect((await shown('<p>a\u0000b</p>')).note).toBe('<p>a\u0000b</p>')
-		// Supplementary characters count once each: 2,048 of them, 4,096 UTF-16 units.
-		const bisons = '🦬'.repeat(DISPLAY_NAME_LIMIT + 10)
-		expect((await shown('', bisons)).display_name).toBe('🦬'.repeat(DISPLAY_NAME_LIMIT))
-		expect((await shown('', `a${bisons}`)).display_name).toBe(`a${'🦬'.repeat(DISPLAY_NAME_LIMIT - 1)}`)
-	})
-
-	it('shows a mention with a stored over-long URL by its derived URL, in a status and in a composed one', async () => {
+	it('shows a mention with no stored URL by its derived URL, in a status and in a composed one', async () => {
 		const h = await community(['alice'])
 		const carol = await remoteAccount(h.store, 'carol')
-		const long = `https://remote.example/${'x'.repeat(PROFILE_URL_LIMIT)}`
-		await legacySql(h.store, 'UPDATE accounts SET url = ? WHERE id = ?', long, carol)
+		await sql(h.store, 'UPDATE accounts SET url = NULL WHERE id = ?', carol)
 		const derived = 'https://remote.example/@carol'
 		// Composed: the mention links the derived URL.
 		const status = await post(h, h.users.alice, { status: '@carol@remote.example hi' })
-		expect(status.content).not.toContain(long)
 		expect(status.content).toContain(`href="${derived}"`)
 		expect(status.mentions).toEqual([{ id: carol, username: 'carol', url: derived, acct: 'carol@remote.example' }])
 		// Presented: a stored status mentioning the account.
@@ -349,20 +300,18 @@ describe('one account has a known size (RES-2)', () => {
 		})
 		const response = await h.request(`/api/v1/statuses/${stored}`, bearer(h.users.alice.token))
 		const body = await response.text()
-		expect(body).not.toContain(long)
 		expect((JSON.parse(body) as { mentions: { url: string }[] }).mentions.map((m) => m.url)).toEqual([derived])
 	})
 
 	it('shows a mention of a converted account by its cut username, in a status and in a composed one', async () => {
 		const h = await community(['alice'])
 		const [carol, dave] = [await remoteAccount(h.store, 'carol'), await remoteAccount(h.store, 'dave')]
-		const long = `https://remote.example/${'x'.repeat(PROFILE_URL_LIMIT)}`
-		// A converted 64 KiB username (no text can name it), and one of 300 characters a post can name; both with an
-		// over-long stored URL.
+		// A converted 64 KiB username (no text can name it), and one of 300 characters a post can name; both with no
+		// stored URL.
 		const huge = `c${'u'.repeat(64 * 1024)}`
 		const named = `d${'v'.repeat(299)}`
-		await legacySql(h.store, 'UPDATE accounts SET username = ?, url = ? WHERE id = ?', huge, long, carol)
-		await legacySql(h.store, 'UPDATE accounts SET username = ?, url = ? WHERE id = ?', named, long, dave)
+		await sql(h.store, 'UPDATE accounts SET username = ?, url = NULL WHERE id = ?', huge, carol)
+		await sql(h.store, 'UPDATE accounts SET username = ?, url = NULL WHERE id = ?', named, dave)
 		const credential = (scope: string) =>
 			sha256Hex(h.users.alice.token).then((tokenHash) => ({ tokenHash, scope, now: NOW }))
 		// Each mention carries the username cut at USERNAME_LIMIT, and the acct and URL derived from it.
@@ -400,7 +349,6 @@ describe('one account has a known size (RES-2)', () => {
 			present: { origin: ORIGIN },
 		})
 		expect(composed.most).toBeLessThanOrEqual(2048)
-		expect(composed.status.content).not.toContain(long)
 		expect(composed.status.mentions).toHaveLength(1)
 		expectMention(composed.status.mentions[0] as Record<string, unknown>, dave, named)
 		// Presented: a stored status mentioning both.
@@ -417,7 +365,6 @@ describe('one account has a known size (RES-2)', () => {
 		expect(read.most).toBeLessThanOrEqual(2048)
 		const response = await h.request(`/api/v1/statuses/${stored}`, bearer(h.users.alice.token))
 		const body = await response.text()
-		expect(body).not.toContain(long)
 		const mentions = (JSON.parse(body) as { mentions: Record<string, unknown>[] }).mentions
 		const byId = new Map(mentions.map((mention) => [mention.id, mention]))
 		expectMention(byId.get(carol)!, carol, huge)

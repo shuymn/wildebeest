@@ -22,8 +22,6 @@ import {
 	MAX_PRESENTED_TAGS,
 	MAX_STATUS_MEDIA,
 	MAX_STATUS_MENTION_ROWS,
-	mediaDescriptionSql,
-	mediaUrlSql,
 	pollOptionsSql,
 	tagNameSql,
 } from './status-bounds'
@@ -226,11 +224,11 @@ export function statusFacts(db: Db, statusId: string, options: { reached?: boole
 				]
 			: []
 	const { host, origin } = new URL(row.actor_uri)
-	// The Mention tags, hashtags and attachments the Note shows, read through the projections the API presenter reads
-	// them with (status-bounds.ts, profile-bounds.ts), so the Note shows what the Status entity shows (RES-3): at most
-	// MAX_STATUS_MENTION_ROWS mentions that are not silent, by account id; MAX_PRESENTED_TAGS hashtags by name, one
-	// whose name is past its bound left out; MAX_STATUS_MEDIA shown attachments, URLs past their bound as none and
-	// descriptions cut. The addressing (to, cc) and the delivery keep every recipient.
+	// The Mention tags, hashtags and attachments the Note shows, read as the API presenter reads them (the projections of
+	// status-bounds.ts and profile-bounds.ts, attachments as stored), so the Note shows what the Status entity shows
+	// (RES-3): at most MAX_STATUS_MENTION_ROWS mentions that are not silent, by account id; MAX_PRESENTED_TAGS hashtags
+	// by name, one whose name is past its bound left out; MAX_STATUS_MEDIA shown attachments. The addressing (to, cc)
+	// and the delivery keep every recipient.
 	const mentionTags = db.all<{ uri: string; username: string; domain: string | null }>(
 		`SELECT ${actorUriSql('a.uri')} AS uri, ${usernameSql('a.username')} AS username, a.domain FROM accounts a
 		WHERE a.id IN (SELECT m.account_id FROM status_mentions m INDEXED BY status_mentions_shown
@@ -244,7 +242,7 @@ export function statusFacts(db: Db, statusId: string, options: { reached?: boole
 		statusId
 	)
 	const media = db.all<{ url: string | null; content_type: string | null; description: string }>(
-		`SELECT ${mediaUrlSql('url')} AS url, content_type, ${mediaDescriptionSql('description')} AS description
+		`SELECT url, content_type, description
 		FROM media_attachments INDEXED BY media_attachments_status WHERE status_id = ?1 AND shown = 1
 		ORDER BY position, id LIMIT ${MAX_STATUS_MEDIA}`,
 		statusId

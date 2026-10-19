@@ -450,6 +450,49 @@ describe('a boost (R35)', () => {
 		expect(shown[1]!.quote).toBeNull()
 		expect(shown[1]!.reblogQuoted).not.toBeNull()
 	})
+
+	it("shows no attachments, mentions, hashtags or poll of its own, and its original's in its reblog", async () => {
+		const { h, f } = await fixture()
+		const item: Item = { kind: 'boost', text: 10, wide: false, mentions: 2, tags: 2, media: 2, poll: 2, viewer: true }
+		const shown = await runInDurableObject(h.store, (_instance, state) => {
+			const sql = state.storage.sql
+			const boost = build(sql, f, item)
+			const present = () => observedPresentation(state, f.viewer, [boost], PAGE_CHUNKS).items[0]!
+			const before = present()
+			const bound = () => boundsOf(state, f.viewer, [boost], 1).get(boost)
+			const boundBefore = bound()
+			// The boost row's own attachment, mention, hashtag and poll, as a converted row may hold them.
+			const author = sql.exec<{ a: string }>('SELECT account_id AS a FROM statuses WHERE id = ?', boost).one().a
+			sql.exec(
+				`INSERT INTO media_attachments (id, account_id, status_id, position, type, url)
+				VALUES (?, ?, ?, 0, 'image', 'https://remote.example/own.png')`,
+				nextId(),
+				author,
+				boost
+			)
+			sql.exec(
+				`INSERT INTO status_mentions (status_id, account_id, silent, requires_mention, author_id)
+				VALUES (?, ?, 0, 0, ?)`,
+				boost,
+				f.mentioned[0],
+				author
+			)
+			sql.exec("INSERT INTO status_tags (status_id, name, public) VALUES (?, 'own', 1)", boost)
+			sql.exec(
+				`INSERT INTO polls (status_id, options, tallies, multiple, votes_count, voters_count, expires_at)
+				VALUES (?, '["a","b"]', '[0,0]', 0, 0, 0, ?)`,
+				boost,
+				new Date(NOW + 86_400_000).toISOString()
+			)
+			return { before, after: present(), boundBefore, boundAfter: bound() }
+		})
+		expect(shown.after).toMatchObject({ media_attachments: [], mentions: [], tags: [], poll: null })
+		expect(shown.after.reblog).toEqual(shown.before.reblog)
+		expect(shown.before.reblog).toMatchObject({ media_attachments: [{}, {}], tags: [{}, {}] })
+		expect(shown.after).toEqual(shown.before)
+		// R counts no rows the presenter does not read.
+		expect(shown.boundAfter).toBe(shown.boundBefore)
+	})
 })
 
 describe('the backstop (RES-3)', () => {

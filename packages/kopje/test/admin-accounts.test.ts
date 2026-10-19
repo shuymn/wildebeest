@@ -7,7 +7,7 @@ import { NOW } from './app-helpers'
 import { longestString, observedSql } from './read-helpers'
 import { storeWith } from './setup-helpers'
 import { community } from './status-helpers'
-import { legacySql } from './stored-bounds-fixtures'
+import { DISPLAY_NAME_LIMIT } from '../src/domain/accounts'
 import { instanceActorUri } from '../src/domain/activities'
 import {
 	ADMIN_ACCOUNT_CANDIDATES,
@@ -538,10 +538,10 @@ describe('the admin account list: converted text of any length (RES-2)', () => {
 		})
 	}
 
-	it('matches the prefix of a huge display name without reading it, and shows it cut', async () => {
+	it('matches the prefix of a display name at its bound without reading it', async () => {
 		const { h, ids, admin } = await world()
-		const huge = `Alice${'x'.repeat(1_500_000)}`
-		await legacySql(h.store, 'UPDATE accounts SET display_name = ? WHERE id IN (?, ?)', huge, ids.carol, ids.erin)
+		const huge = `Alice${'x'.repeat(DISPLAY_NAME_LIMIT - 5)}`
+		await sql(h.store, 'UPDATE accounts SET display_name = ? WHERE id IN (?, ?)', huge, ids.carol, ids.erin)
 		const list = async (query: string) => (await call(h, `/api/v2/admin/accounts?${query}`, admin)).body
 		// The display name drives the read (its index range), and is a residual of the suspended accounts' read.
 		const searched = (await list('origin=remote&display_name=ali')) as AdminAccountBody[]
@@ -550,7 +550,7 @@ describe('the admin account list: converted text of any length (RES-2)', () => {
 		expect(idsOf(named)).toEqual(expected(ids, ['erin']))
 		expect(await list('origin=remote&status=suspended&display_name=alicey')).toEqual([])
 		const shown = searched.find((account) => account.id === ids.carol)!.account as unknown as { display_name: string }
-		expect(shown.display_name).toBe(huge.slice(0, 2048))
+		expect(shown.display_name).toBe(huge)
 		for (const filter of [
 			filterOf({ origin: 'remote', displayName: 'ali' }),
 			filterOf({ origin: 'remote', status: 'suspended', displayName: 'alicex' }),
