@@ -8,6 +8,7 @@ import { answer, maximalAccounts } from './budget-helpers'
 import { migratedStore } from './helpers'
 import { observedSql, rowsRead, watchedCursor } from './read-helpers'
 import { community, follow } from './status-helpers'
+import { numbers, remoteAccountsSql, SUGGESTION_BASE } from './suggestion-fixtures'
 import { ANSWER_BYTES } from '../src/domain/answer-budget'
 import {
 	SUGGESTION_EDGES,
@@ -37,7 +38,7 @@ const RANKING = /edges\(x\) AS/
 type Sql = (query: string, ...params: SqlStorageValue[]) => void
 
 // A Store with the viewer (local) and its token, and the accounts and follows `build` writes. Accounts are numbered:
-// account(i) is a remote account, made by `accounts`.
+// account i is a remote account (test/suggestion-fixtures.ts).
 async function store(build: (run: Sql) => void): Promise<StoreStub> {
 	const stub = await migratedStore()
 	await runInDurableObject(stub, (_instance, state) => {
@@ -65,27 +66,8 @@ async function store(build: (run: Sql) => void): Promise<StoreStub> {
 	return stub
 }
 
-const BASE = 500_000_000_000_000_000n
-const account = (i: number) => String(BASE + BigInt(i))
-// The integers 0..count - 1, none for 0.
-const n = (count: number) =>
-	`WITH RECURSIVE n(i) AS (SELECT 0 WHERE ${count} > 0 UNION ALL SELECT i + 1 FROM n WHERE i < ${count} - 1)`
-
-// Remote accounts from..from + count - 1, discoverable unless said otherwise, on `domain`, their actor ids on `host`.
-function accounts(
-	run: Sql,
-	from: number,
-	count: number,
-	discoverable: 0 | 1 = 1,
-	domain = 'remote.example',
-	host = domain
-): void {
-	run(
-		`${n(count)} INSERT INTO accounts (id, uri, username, domain, discoverable)
-		SELECT CAST(${BASE} + ${from} + i AS TEXT), 'https://${host}/users/r' || (${from} + i), 'r' || (${from} + i),
-			'${domain}', ${discoverable} FROM n`
-	)
-}
+const BASE = SUGGESTION_BASE
+const n = numbers
 
 // The viewer follows sources from..from + count - 1, in order. A converted Store holds the follows the cutover
 // carried: no activity id and legacy's time, oldest first, as the converter writes them.
@@ -98,35 +80,28 @@ function followSources(run: Sql, from: number, count: number, converted = false)
 	)
 }
 
-// Each of the sources from..from + count - 1 follows `edges` accounts: the edges-th block of targets from `targets`
-// (source k follows targets + ((k * edges + j) mod pool) for j < edges, pool distinct targets in all), source after
-// source.
-function edges(run: Sql, from: number, count: number, perSource: number, targets: number, pool: number): void {
+// Each of the sources from..from + count - 1 follows `perSource` targets of its own, source after source: source k
+// follows targets + k * perSource + j for j < perSource.
+function edges(run: Sql, from: number, count: number, perSource: number, targets: number): void {
 	run(
 		`${n(count * perSource)} INSERT INTO follows (account_id, target_account_id, state)
-		SELECT CAST(${BASE} + ${from} + i / ${perSource} AS TEXT), CAST(${BASE} + ${targets} + (i % ${pool}) AS TEXT),
-			'accepted' FROM n`
+		SELECT CAST(${BASE} + ${from} + i / ${perSource} AS TEXT), CAST(${BASE} + ${targets} + i AS TEXT), 'accepted'
+		FROM n`
 	)
 }
 
 // The graph of the growth cases: `older` sources followed first (converted follows, each with an edge to a candidate
-// of its own), then `sources` sources, each following `perSource` of `pool` candidates; every account on `domain`
+// of its own), then `sources` sources, each following `perSource` distinct candidates; every account on `domain`
 // with its actor id on `host`.
-function graph(
-	older: number,
-	sources: number,
-	perSource: number,
-	pool = sources * perSource,
-	where: { domain?: string; host?: string } = {}
-) {
+function graph(older: number, sources: number, perSource: number, where: { domain?: string; host?: string } = {}) {
 	return (run: Sql) => {
 		const candidates = older + sources
-		accounts(run, 0, candidates, 1, where.domain, where.host)
-		accounts(run, candidates, Math.max(pool, older), 1, where.domain, where.host)
+		run(remoteAccountsSql(0, candidates, where))
+		run(remoteAccountsSql(candidates, Math.max(sources * perSource, older), where))
 		followSources(run, 0, older, true)
-		edges(run, 0, older, 1, candidates, older)
+		edges(run, 0, older, 1, candidates)
 		followSources(run, older, sources)
-		edges(run, older, sources, perSource, candidates, pool)
+		edges(run, older, sources, perSource, candidates)
 	}
 }
 
@@ -197,8 +172,8 @@ describe('suggestions read their windows as ranges (RES-7)', () => {
 		expect((await sql(stale, "SELECT stat FROM sqlite_stat1 WHERE idx = 'follows_following'")).length).toBe(1)
 		await runInDurableObject(stale, (_instance, state) => {
 			const run: Sql = (query, ...params) => void state.storage.sql.exec(query, ...params)
-			accounts(run, 1_000, 100_001, 0)
-			edges(run, 0, 1, 100_001, 1_000, 100_001)
+			run(remoteAccountsSql(1_000, 100_001, { discoverable: 0 }))
+			edges(run, 0, 1, 100_001, 1_000)
 		})
 		const grown = await plan(stale)
 		expectRanges(grown.plan)
@@ -289,7 +264,7 @@ describe('suggestions read rows within their windows (RES-7)', () => {
 		const sources = SUGGESTION_SOURCES
 		const where = { domain: 'a.b.c.d.e.f.g.example', host: 'h.b.c.d.e.f.g.example' }
 		const { rows, shown } = await rowsOf((run) => {
-			graph(0, sources, SUGGESTION_EDGES / sources, SUGGESTION_EDGES, where)(run)
+			graph(0, sources, SUGGESTION_EDGES / sources, where)(run)
 			run(
 				`INSERT INTO instance_domain_blocks (domain, severity, created_at, updated_at)
 				VALUES ('elsewhere.example', 'suspend', 'x', 'x')`

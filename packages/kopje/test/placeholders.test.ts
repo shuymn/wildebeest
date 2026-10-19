@@ -1,20 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
-import { type ApiHarness, apiHarness, bearer, form, registerApp, seedAccount, sql } from './api-helpers'
-import { appToken, scopedToken } from './read-helpers'
+import { type ApiHarness, apiHarness, bearer, seedAccount, sql } from './api-helpers'
+import { appToken, appTokenWith, scopedToken } from './read-helpers'
 import { community, getJson } from './status-helpers'
 
 // Features Kopje has no data for yet answer empty, under the access Mastodon gives each route (AUTH-2).
-
-// An app token (no user) with the given scope.
-async function appTokenWith(h: ApiHarness, scope: string): Promise<string> {
-	const app = await registerApp(h, { scopes: scope })
-	const response = await h.request(
-		'/oauth/token',
-		form({ grant_type: 'client_credentials', client_id: app.client_id, client_secret: app.client_secret, scope })
-	)
-	return (await response.json<{ access_token: string }>()).access_token
-}
 
 describe('features without data yet', () => {
 	const userLists: [string, string][] = [

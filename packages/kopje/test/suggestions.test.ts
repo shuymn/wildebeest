@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest'
 
-import { type ApiHarness, bearer, form, registerApp, sql } from './api-helpers'
+import { type ApiHarness, bearer, sql } from './api-helpers'
 import { harness } from './app-helpers'
 import { fixtureKeyGen } from './federation-helpers'
 import { BUILD } from './helpers'
 import { mastodonActor, RemoteWeb, signedInit } from './inbox-helpers'
-import { appToken, scopedToken } from './read-helpers'
+import { appToken, appTokenWith, scopedToken } from './read-helpers'
 import { block, community, domainBlock, follow, getJson, mute, type User } from './status-helpers'
+import { remoteAccountsSql, suggestionAccount } from './suggestion-fixtures'
 import { SUGGESTION_EDGES, SUGGESTION_EDGES_PER_SOURCE, SUGGESTION_SOURCES } from '../src/domain/suggestions'
 import type { StoreStub } from '../src/platform/store-client'
 
@@ -14,9 +15,7 @@ import type { StoreStub } from '../src/platform/store-client'
 // the access rules, each exclusion, the sources R13 hides, the parameters, dismissals, and witnesses at each window's
 // real bound.
 
-// Remote accounts by index: ids BASE + i, in the order they are made.
-const BASE = 500_000_000_000_000_000n
-const id = (i: number) => String(BASE + BigInt(i))
+const id = suggestionAccount
 const newestFirst = (ids: readonly string[]) => [...ids].sort((a, b) => (BigInt(a) < BigInt(b) ? 1 : -1))
 
 // `count` remote accounts from index `from` (discoverable unless said otherwise) on `domain`; their ids.
@@ -26,19 +25,7 @@ async function remotes(
 	count: number,
 	options: { discoverable?: 0 | 1 | null; domain?: string } = {}
 ): Promise<string[]> {
-	const domain = options.domain ?? 'remote.example'
-	await sql(
-		store,
-		`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
-		INSERT INTO accounts (id, uri, username, domain, discoverable)
-		SELECT CAST(?2 + i AS TEXT), 'https://' || ?3 || '/users/r' || (CAST(?4 AS INTEGER) + i),
-			'r' || (CAST(?4 AS INTEGER) + i), ?3, ?5 FROM n`,
-		count,
-		id(from),
-		domain,
-		from,
-		options.discoverable === undefined ? 1 : options.discoverable
-	)
+	await sql(store, remoteAccountsSql(from, count, options))
 	return Array.from({ length: count }, (_, i) => id(from + i))
 }
 
@@ -61,16 +48,6 @@ const fan = (store: StoreStub, source: string, targets: readonly string[]) =>
 
 const unfollow = (store: StoreStub, from: string, to: string) =>
 	sql(store, 'DELETE FROM follows WHERE account_id = ? AND target_account_id = ?', from, to)
-
-// An app token (no user) with the given scope.
-async function appTokenWith(h: ApiHarness, scope: string): Promise<string> {
-	const app = await registerApp(h, { scopes: scope })
-	const response = await h.request(
-		'/oauth/token',
-		form({ grant_type: 'client_credentials', client_id: app.client_id, client_secret: app.client_secret, scope })
-	)
-	return (await response.json<{ access_token: string }>()).access_token
-}
 
 type Listed = { id: string }
 type Wrapped = { source: string; sources: string[]; account: Listed }
