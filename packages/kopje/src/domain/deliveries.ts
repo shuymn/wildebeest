@@ -530,13 +530,18 @@ export function supersedeEarlier(db: Db, signerId: string, object: string, limit
 		limit
 	)
 	for (const { id } of earlier) {
-		db.run('UPDATE outbound_activities SET superseded = 1, staged = NULL WHERE id = CAST(? AS INTEGER)', id)
-		dropSettledActivity(db, id)
+		supersedeIntent(db, id)
 	}
 	return (
 		db.first(`SELECT 1 AS x FROM outbound_activities WHERE ${SUPERSEDED} LIMIT 1`, signerId, object, 1, '[]', 0) !==
 		undefined
 	)
+}
+
+// Marks one intent superseded (final: staged cleared too) and drops it if nothing of it is left.
+function supersedeIntent(db: Db, id: string): void {
+	db.run('UPDATE outbound_activities SET superseded = 1, staged = NULL WHERE id = CAST(? AS INTEGER)', id)
+	dropSettledActivity(db, id)
 }
 
 // A retraction recorded in bounded steps: a purge's Undo of a local boost (RES-6), whose receipts alone may be more
@@ -1001,10 +1006,8 @@ export function followAnswersOf(db: Db, signerId: string, followerId: string): F
 	return { intents, rows: unexposed, chunks }
 }
 
-// Cancels what followAnswersOf found, in the transaction that read it: deletes the rows, then promotes each lane whose
-// pending head was among them (so a lane never has two heads), deletes the chunks, and supersedes the intents, which
-// go once nothing of them is left. At most FOLLOW_ANSWER_ROWS + FOLLOW_ANSWER_CHUNKS deletes and
-// FOLLOW_ANSWER_INTENTS updates.
+// Cancels what followAnswersOf found, in the transaction that read it. Every row goes before any lane is promoted, so
+// a promotion never picks a row about to be deleted and a lane never has two heads.
 export function cancelFollowAnswers(db: Db, found: FollowAnswers, now: number): void {
 	for (const row of found.rows) {
 		db.run('DELETE FROM deliveries WHERE id = CAST(? AS INTEGER)', row.id)
@@ -1017,8 +1020,7 @@ export function cancelFollowAnswers(db: Db, found: FollowAnswers, now: number): 
 		db.run('DELETE FROM outbound_targets WHERE id = CAST(? AS INTEGER)', chunk)
 	}
 	for (const intent of found.intents) {
-		db.run('UPDATE outbound_activities SET superseded = 1, staged = NULL WHERE id = CAST(? AS INTEGER)', intent)
-		dropSettledActivity(db, intent)
+		supersedeIntent(db, intent)
 	}
 }
 
