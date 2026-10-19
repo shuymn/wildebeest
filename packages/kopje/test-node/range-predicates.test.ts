@@ -1,8 +1,6 @@
-import { readdirSync, readFileSync } from 'node:fs'
-import { join, relative } from 'node:path'
-import { fileURLToPath } from 'node:url'
-
 import { describe, expect, it } from 'vitest'
+
+import { parse, sources, type Source } from './source-scan.js'
 
 // Cursor ranges are direct ranges (docs/visibility.md "Read bounds"). A range on a nullable parameter written as
 // `(?2 IS NULL OR s.id < ?2)` is an OR, and SQLite does not seek a range through an index for an OR term: a page below
@@ -49,12 +47,12 @@ function nullableRanges(text: string): { line: number; text: string }[] {
 	return [...found.entries()].toSorted(([a], [b]) => a - b).map(([, value]) => value)
 }
 
-function sources(dir: string): string[] {
-	return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
-		const path = join(dir, entry.name)
-		return entry.isDirectory() ? sources(path) : entry.name.endsWith('.ts') ? [path] : []
-	})
+// Each match in the code of `all` (comments are no code), as `path:line: text`.
+function find(all: readonly Source[]): string[] {
+	return all.flatMap((source) => nullableRanges(parse(source).code).map((m) => `${source.path}:${m.line}: ${m.text}`))
 }
+
+const probe = (sql: string) => [{ path: 'src/domain/probe.ts', text: `db.all(\`SELECT id FROM t WHERE ${sql}\`)` }]
 
 describe('the nullable-range matcher', () => {
 	it.each([
@@ -75,7 +73,7 @@ describe('the nullable-range matcher', () => {
 		'(id < ? OR ? IS NULL)',
 		'(?2 IS NULL\n\t\t\t\tOR s.id < ?2)',
 	])('catches %j', (sql) => {
-		expect(nullableRanges(`db.all(\`SELECT id FROM t WHERE a = ?1 AND ${sql} ORDER BY id\`)`)).toHaveLength(1)
+		expect(find(probe(`a = ?1 AND ${sql} ORDER BY id`))).toHaveLength(1)
 	})
 
 	it.each([
@@ -91,25 +89,29 @@ describe('the nullable-range matcher', () => {
 		"s.id < coalesce(?2, ':') AND s.id > coalesce(?3, '')",
 		'b.id < coalesce(CAST(?2 AS INTEGER), 1e19)',
 	])('leaves %j', (sql) => {
-		expect(nullableRanges(`db.all(\`SELECT id FROM t WHERE ${sql}\`)`)).toEqual([])
+		expect(find(probe(sql))).toEqual([])
+	})
+
+	it('leaves a range named in a comment', () => {
+		expect(
+			find([{ path: 'src/domain/probe.ts', text: '// not (?2 IS NULL OR s.id < ?2)\n/* (id < ? OR ? IS NULL) */' }])
+		).toEqual([])
 	})
 
 	it('names the line of each match', () => {
-		const text = 'a\nWHERE (?2 IS NULL OR id < ?2)\nb\nAND (id > ?3 OR ?3 IS NULL)\n'
-		expect(nullableRanges(text).map((m) => m.line)).toEqual([2, 4])
+		const text = 'db.all(`a\nWHERE (?2 IS NULL OR id < ?2)\nb\nAND (id > ?3 OR ?3 IS NULL)\n`)'
+		expect(find([{ path: 'src/domain/probe.ts', text }])).toEqual([
+			'src/domain/probe.ts:2: (?2 IS NULL OR id < ?2)',
+			'src/domain/probe.ts:4: (id > ?3 OR ?3 IS NULL)',
+		])
 	})
 })
 
 describe('cursor ranges in src', () => {
 	it('are direct ranges, never a nullable parameter ORed with a comparison', () => {
-		const root = fileURLToPath(new URL('../src', import.meta.url))
-		const files = sources(root)
+		const files = sources('src')
 		expect(files.length).toBeGreaterThan(50)
-		const found = files.flatMap((file) =>
-			nullableRanges(readFileSync(file, 'utf8')).map(
-				(m) => `src/${relative(root, file).replaceAll('\\', '/')}:${m.line}: ${m.text}`
-			)
-		)
+		const found = find(files)
 		expect(found).toEqual([])
 	})
 })
