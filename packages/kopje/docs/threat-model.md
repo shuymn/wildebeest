@@ -220,15 +220,19 @@ against their own instance. TLS is assumed between all parties.
   its answer. A remote favourite (one per actor and status) tracks the ids of the actor's `Like`s of it whose `Undo`
   has not arrived (`favourite_likes`, migration `0052_favourite_likes`) and exists while it tracks one: a server that
   replaces a reaction undoes the old `Like` and sends a new one, and they arrive in any order, so an `Undo` removes
-  only its own id and records only it; a `Like` id is tracked once. An `Undo` naming a status the actor holds a legacy
+  only its own id and records only it; a `Like` id is tracked once in the instance (`favourite_likes_uri` is unique,
+  for imports too, so another actor's `Like` under it is ignored and its `Undo` reaches only its own), and one past
+  `ACTIVITY_ID_LIMIT` (4,096 JSON-escaped UTF-8 bytes, a CHECK for imports) is not stored. An `Undo` naming a status the actor holds a legacy
   favourite of (one tracking no id: the cutover and earlier imports keep none for a remote favourite) removes it, as
   Mastodon's `undo_like` finds the favourite by its object; a `Like` of it makes it tracked. These stored matches come
   first; then an `Undo` of a `Like` naming anything but a local original records nothing (Mastodon's `undo_like`), so
   a server's Undos of reactions to other servers' notes, which it also sends to the reactor's followers, spend no
   tombstone. A favourite tracks at most `MAX_TRACKED_LIKES` (4) ids (a trigger holds it for imports too); at the cap
   a further `Like` answers 503 with nothing written, and the `Undo`s it waits for make room, except that the earliest
-  id received `LIKE_RETIRE_AFTER_MS` (7 days, above Mastodon's and Misskey's delivery retry windows) before is retired
-  for it, so ids whose `Undo` was lost for good never strand the pair; a younger id never is. A local boost of a status that is
+  id the Store received `LIKE_RETIRE_AFTER_MS` (7 days, above Mastodon's and Misskey's delivery retry windows) before,
+  by its own clock (never the Worker's), is retired for it and recorded as retracted, so ids whose `Undo` was lost
+  for good never strand the pair and a replay of a retired `Like` does not come back; a younger id never is, and
+  without room for the retraction nothing is written (503). A local boost of a status that is
   deleted while its author is purged is withdrawn once: the boost row's own marker (`statuses.withdrawn`) records
   that its Undo was recorded, whichever job did it, and lives until the boost is deleted, however soon the intent
   itself goes once its deliveries settle; both jobs wait for the intent's staging before they delete the boost.
@@ -237,7 +241,8 @@ against their own instance. TLS is assumed between all parties.
   Create, Update and Delete", "ID-7: retractions at the per-actor cap", "removes only its own id", "withdraws a local
   boost once", "ID-7: a retryable refusal commits nothing", "ID-6, ID-7: a deleted status is not created again by anyone",
   "after its deliveries are done"), `test/inbox-reactions.test.ts` (every arrival order of three reactions and their
-  Undos, a burst retried after its 503s, "is retired to make room", "Undos at the retraction cap", "records no
+  Undos, a burst retried after its 503s, "is retired by the Store’s clock", "Like ids are unique instance-wide, and bounded", "Undos at the
+  retraction cap", "records no
   tombstone, unless a stored favourite needs it removed", "a legacy favourite of a local status").
 - **ID-8: only ActivityStreams media types become objects.** A fetched document is used as an actor, key or object only
   if served as `application/activity+json` or `application/ld+json` with the ActivityStreams profile, as Mastodon

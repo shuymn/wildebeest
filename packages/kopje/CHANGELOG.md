@@ -15,15 +15,19 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   favourite whatever Like it named, and a second Like of a favourited status was dropped. A favourite converted or
   imported without a Like id is still removed by an Undo naming its status.
 - A Like that would be a fifth outstanding one for the same favourite is answered 503 with nothing written; the
-  sending server's retry is taken once an Undo makes room. A tracked Like received 7 days before (longer than the
-  delivery retries of common servers) makes room for it instead, so Likes whose Undo was lost do not block the pair.
+  sending server's retry is taken once an Undo makes room. A tracked Like the Store received 7 days before, by its own
+  clock (longer than the delivery retries of common servers), makes room for it instead and is recorded as undone, so
+  Likes whose Undo was lost do not block the pair and do not come back when delivered again.
+- A Like id is tracked once in the instance, and one longer than 4,096 bytes (JSON-escaped UTF-8) is not stored: such
+  a Like is ignored.
 - An untyped Undo (an id alone) that matches nothing stored is answered 503 when the actor's retractions are at their
   cap (10,000), where it was answered 202 and not recorded: it may undo a Like or boost still on its way.
 - An Undo of a Like naming a status that is not a local one, and that no stored favourite matches, records nothing:
   servers also send the Undos of reactions to other servers' posts to the reactor's followers, and these took the
   actor's retraction allowance.
 - Stored format: a remote favourite's Like ids are rows of the new `favourite_likes` table, and its `favourites.uri`
-  is NULL ([docs/dump-format.md](docs/dump-format.md)). A dump holding more than 4 for one favourite is refused.
+  is NULL ([docs/dump-format.md](docs/dump-format.md)). A dump holding more than 4 for one favourite, an id twice or
+  an id past 4,096 bytes is refused.
 
 ### Fixed
 
@@ -36,9 +40,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - Store schema: adds one migration, applied on the first request after the deploy; a rollback to an earlier version
   needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0052_favourite_likes`: adds `favourite_likes`, moves each remote favourite's stored Like id into it and clears
-      that `favourites.uri`. On a benchmark store of 1,000,000 accounts and 2,000,000 favourites of which 500,000
-      hold a Like id, the whole upgrade took 8.0 to 8.8 seconds in five runs in workerd's local Durable Object SQLite
-      (10.9 seconds with all 2,000,000 holding one).
+      that `favourites.uri`. An id past 4,096 bytes, or one an earlier favourite holds too, is not moved (that
+      favourite is removed by an Undo naming its status); how many is left in the Store's `kopje_state` row
+      `favourite_likes_dropped` when any were. On a benchmark store of 1,000,000 accounts and 2,000,000 favourites each holding a Like id,
+      the whole upgrade took 13.1 to 15.5 seconds in three runs in workerd's local Durable Object SQLite.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.17] - 2026-10-19
