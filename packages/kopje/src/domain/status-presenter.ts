@@ -17,7 +17,7 @@ import {
 	type VisibleStatusId,
 	visibleSql,
 } from './audience'
-import { type CustomEmoji, pollEmojis, presentEmojis } from './custom-emojis'
+import { type CustomEmoji, presentEmojis } from './custom-emojis'
 import {
 	type ActiveFilters,
 	activeFilters,
@@ -29,7 +29,7 @@ import {
 	MAX_FILTER_TEXT,
 } from './filters'
 import { htmlToPlainText } from './plain-text'
-import { type Poll, presentPolls } from './polls'
+import { type Poll, presentPolls, withStatusEmojis } from './polls'
 import { MEDIA_URL_LIMIT } from './status-bounds'
 import {
 	MENTION_COLUMN_MAP,
@@ -666,16 +666,7 @@ function hydrate(
 				current_user: approvals.get(proper.id) ?? 'denied',
 			},
 			card: null,
-			poll:
-				poll === undefined
-					? null
-					: {
-							...poll,
-							emojis: pollEmojis(
-								emojis,
-								poll.options.map((option) => option.title)
-							),
-						},
+			poll: poll === undefined ? null : withStatusEmojis(poll, emojis),
 		}
 	}
 	// A quoted status is presented once however many statuses of the response quote it: its presentation depends on its

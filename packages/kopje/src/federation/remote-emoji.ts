@@ -1,3 +1,4 @@
+import { asArray, isObject, typeIs } from './json-shapes'
 import { type EmojiCandidate, emojiHref, isShortcode } from '../domain/custom-emojis'
 import { MAX_URL_LENGTH } from '../domain/status-text'
 import { MAX_EMOJI_TAGS } from '../platform/stored-bounds'
@@ -7,14 +8,6 @@ import { MAX_EMOJI_TAGS } from '../platform/stored-bounds'
 // { type: 'Emoji', name: ':name:', icon: { type: 'Image', url } }. Which of them a snapshot keeps is the Store's to
 // decide (domain/custom-emojis.ts emojiSnapshot). A tag's id, updated and host confer nothing.
 
-function isObject(value: unknown): value is Record<string, unknown> {
-	return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-function typeIs(value: unknown, type: string): boolean {
-	return (Array.isArray(value) ? value : [value]).includes(type)
-}
-
 // The candidates of an object's `tag`, in order: the first MAX_EMOJI_TAGS Emoji tags are examined (RES-1), and one
 // that does not parse is dropped alone.
 //   - name: a string, every ':' deleted (CustomEmojiParser#shortcode; Misskey's ApNoteService#extractEmojis), within
@@ -23,11 +16,10 @@ function typeIs(value: unknown, type: string): boolean {
 //   - icon.url: a string, or a Link's href, at most MAX_URL_LENGTH as received (the parse bound), then normalized by
 //     emojiHref: one that does not pass (past EMOJI_URL_LIMIT once normalized, or keeping '"' or '\') is dropped.
 export function emojiCandidates(tag: unknown): EmojiCandidate[] {
-	const tags = tag === undefined || tag === null ? [] : Array.isArray(tag) ? tag : [tag]
 	const candidates: EmojiCandidate[] = []
 	let examined = 0
-	for (const entry of tags) {
-		if (!isObject(entry) || !typeIs(entry.type, 'Emoji')) {
+	for (const entry of asArray(tag)) {
+		if (!isObject(entry) || !typeIs(entry.type, ['Emoji'])) {
 			continue
 		}
 		if (examined++ === MAX_EMOJI_TAGS) {

@@ -4,10 +4,8 @@
 -- Bounds, the predicate and its JS twin (emojisValid): src/platform/stored-bounds.ts (EMOJI_COLUMNS); the writer and
 -- presenter: src/domain/custom-emojis.ts; the stored form: docs/dump-format.md. It adds:
 --
---   statuses.emojis, status_edits.emojis, accounts.emojis   NULL, or a JSON array of 1 to 64 [shortcode, url] pairs:
---                            a shortcode of 1 to 128 of A-Z a-z 0-9 _ + -, once each; a url http(s), of at most 512
---                            bytes of '!' to '~' but '"' and '\'; the presented entries within 12,288 bytes (6,144 for
---                            an account), and the stored text within the same bytes, with no NUL anywhere.
+--   statuses.emojis, status_edits.emojis, accounts.emojis   NULL, or a snapshot within the form and bounds of
+--                            EMOJI_COLUMNS (docs/dump-format.md).
 --   <table>_emojis_insert    BEFORE INSERT and BEFORE UPDATE OF emojis on the three tables:
 --   <table>_emojis_update    RAISE(ABORT, '<table>: emojis past their stored bound') for any other value.
 --
@@ -31,8 +29,8 @@ ALTER TABLE accounts ADD COLUMN emojis TEXT;
 CREATE TRIGGER statuses_emojis_insert BEFORE INSERT ON statuses
 WHEN CASE WHEN NEW.emojis IS NULL THEN 0
 	WHEN typeof(NEW.emojis) <> 'text' THEN 1
-	WHEN instr(CAST(NEW.emojis AS BLOB), X'00') > 0 THEN 1
 	WHEN length(CAST(NEW.emojis AS BLOB)) > 12288 THEN 1
+	WHEN instr(CAST(NEW.emojis AS BLOB), X'00') > 0 THEN 1
 	WHEN NOT json_valid(NEW.emojis) THEN 1
 	WHEN json_type(NEW.emojis) <> 'array' THEN 1
 	WHEN json_array_length(NEW.emojis) NOT BETWEEN 1 AND 64 THEN 1
@@ -58,8 +56,8 @@ END;
 CREATE TRIGGER statuses_emojis_update BEFORE UPDATE OF emojis ON statuses
 WHEN CASE WHEN NEW.emojis IS NULL THEN 0
 	WHEN typeof(NEW.emojis) <> 'text' THEN 1
-	WHEN instr(CAST(NEW.emojis AS BLOB), X'00') > 0 THEN 1
 	WHEN length(CAST(NEW.emojis AS BLOB)) > 12288 THEN 1
+	WHEN instr(CAST(NEW.emojis AS BLOB), X'00') > 0 THEN 1
 	WHEN NOT json_valid(NEW.emojis) THEN 1
 	WHEN json_type(NEW.emojis) <> 'array' THEN 1
 	WHEN json_array_length(NEW.emojis) NOT BETWEEN 1 AND 64 THEN 1
@@ -85,8 +83,8 @@ END;
 CREATE TRIGGER status_edits_emojis_insert BEFORE INSERT ON status_edits
 WHEN CASE WHEN NEW.emojis IS NULL THEN 0
 	WHEN typeof(NEW.emojis) <> 'text' THEN 1
-	WHEN instr(CAST(NEW.emojis AS BLOB), X'00') > 0 THEN 1
 	WHEN length(CAST(NEW.emojis AS BLOB)) > 12288 THEN 1
+	WHEN instr(CAST(NEW.emojis AS BLOB), X'00') > 0 THEN 1
 	WHEN NOT json_valid(NEW.emojis) THEN 1
 	WHEN json_type(NEW.emojis) <> 'array' THEN 1
 	WHEN json_array_length(NEW.emojis) NOT BETWEEN 1 AND 64 THEN 1
@@ -112,8 +110,8 @@ END;
 CREATE TRIGGER status_edits_emojis_update BEFORE UPDATE OF emojis ON status_edits
 WHEN CASE WHEN NEW.emojis IS NULL THEN 0
 	WHEN typeof(NEW.emojis) <> 'text' THEN 1
-	WHEN instr(CAST(NEW.emojis AS BLOB), X'00') > 0 THEN 1
 	WHEN length(CAST(NEW.emojis AS BLOB)) > 12288 THEN 1
+	WHEN instr(CAST(NEW.emojis AS BLOB), X'00') > 0 THEN 1
 	WHEN NOT json_valid(NEW.emojis) THEN 1
 	WHEN json_type(NEW.emojis) <> 'array' THEN 1
 	WHEN json_array_length(NEW.emojis) NOT BETWEEN 1 AND 64 THEN 1
@@ -139,8 +137,8 @@ END;
 CREATE TRIGGER accounts_emojis_insert BEFORE INSERT ON accounts
 WHEN CASE WHEN NEW.emojis IS NULL THEN 0
 	WHEN typeof(NEW.emojis) <> 'text' THEN 1
-	WHEN instr(CAST(NEW.emojis AS BLOB), X'00') > 0 THEN 1
 	WHEN length(CAST(NEW.emojis AS BLOB)) > 6144 THEN 1
+	WHEN instr(CAST(NEW.emojis AS BLOB), X'00') > 0 THEN 1
 	WHEN NOT json_valid(NEW.emojis) THEN 1
 	WHEN json_type(NEW.emojis) <> 'array' THEN 1
 	WHEN json_array_length(NEW.emojis) NOT BETWEEN 1 AND 64 THEN 1
@@ -166,8 +164,8 @@ END;
 CREATE TRIGGER accounts_emojis_update BEFORE UPDATE OF emojis ON accounts
 WHEN CASE WHEN NEW.emojis IS NULL THEN 0
 	WHEN typeof(NEW.emojis) <> 'text' THEN 1
-	WHEN instr(CAST(NEW.emojis AS BLOB), X'00') > 0 THEN 1
 	WHEN length(CAST(NEW.emojis AS BLOB)) > 6144 THEN 1
+	WHEN instr(CAST(NEW.emojis AS BLOB), X'00') > 0 THEN 1
 	WHEN NOT json_valid(NEW.emojis) THEN 1
 	WHEN json_type(NEW.emojis) <> 'array' THEN 1
 	WHEN json_array_length(NEW.emojis) NOT BETWEEN 1 AND 64 THEN 1

@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
 	accountAtCap,
+	customEmoji,
 	emojiUrl,
 	escaped,
 	maximalEntry,
@@ -122,12 +123,7 @@ describe('the emoji snapshot predicate and its JS twin (RES-2)', () => {
 		expect(presentedEmojiBytes(accountAtCap())).toBe(A)
 		expect(presentedEmojiBytes(accountAtCap(true))).toBe(A + 1)
 		// The presented size is the JSON of the entity's entries, which need no escapes.
-		const entities = statusAtCap().map(([shortcode, url]) => ({
-			shortcode,
-			url,
-			static_url: url,
-			visible_in_picker: true,
-		}))
+		const entities = statusAtCap().map(([name, url]) => customEmoji(name, url))
 		expect(new TextEncoder().encode(JSON.stringify(entities)).length).toBe(S)
 		expect(new TextEncoder().encode(padded(statusAtCap(), S)).length).toBe(S)
 		expect(new TextEncoder().encode(escaped(statusAtCap().slice(0, 5), S)).length).toBe(S)

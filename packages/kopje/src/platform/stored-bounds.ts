@@ -239,6 +239,16 @@ export const STORED_COLUMNS: Readonly<Record<string, readonly StoredColumn[]>> =
 	],
 }
 
+// The BEFORE INSERT and BEFORE UPDATE OF `watched` triggers `<prefix>_insert` and `<prefix>_update` on `table` that
+// abort with `message` when `when` holds of the NEW row.
+function boundTriggers(prefix: string, table: string, watched: string, when: string, message: string): string[] {
+	const body = `BEGIN\n  SELECT RAISE(ABORT, '${message}');\nEND;`
+	return [
+		`CREATE TRIGGER ${prefix}_insert BEFORE INSERT ON ${table}\nWHEN ${when}\n${body}`,
+		`CREATE TRIGGER ${prefix}_update BEFORE UPDATE OF ${watched} ON ${table}\nWHEN ${when}\n${body}`,
+	]
+}
+
 // True when `column` is not a fixed point of its projection: P(x) IS NOT x, with JSON-bounded columns short of a sixth
 // of their bound skipped before P.
 function pastBoundSql({ projection, jsonBytes }: StoredColumn, column: string): string {
@@ -267,12 +277,8 @@ WHERE file_token IS NOT NULL AND length(CAST(url AS BLOB)) > ${MEDIA_URL_LIMIT};
 	}
 	for (const [table, columns] of Object.entries(STORED_COLUMNS)) {
 		const when = columns.map((c) => pastBoundSql(c, `NEW.${c.column}`)).join('\n  OR ')
-		const body = `BEGIN\n  SELECT RAISE(ABORT, '${table}: a value past its stored bound');\nEND;`
 		const names = columns.map((c) => c.column).join(', ')
-		statements.push(`CREATE TRIGGER ${table}_bounds_insert BEFORE INSERT ON ${table}\nWHEN ${when}\n${body}`)
-		statements.push(
-			`CREATE TRIGGER ${table}_bounds_update BEFORE UPDATE OF ${names} ON ${table}\nWHEN ${when}\n${body}`
-		)
+		statements.push(...boundTriggers(`${table}_bounds`, table, names, when, `${table}: a value past its stored bound`))
 	}
 	return `${statements.join('\n\n')}\n`
 }
@@ -478,13 +484,15 @@ export function instanceBoundsMigrationSql(): string {
 	statements.push(
 		`DELETE FROM instance_settings\nWHERE name IN (${names}) AND ${settingPastBoundSql('name', 'value')};`
 	)
-	const body = "BEGIN\n  SELECT RAISE(ABORT, 'instance_settings: a value past its stored bound');\nEND;"
 	const when = settingPastBoundSql('NEW.name', 'NEW.value')
 	statements.push(
-		`CREATE TRIGGER instance_settings_bounds_insert BEFORE INSERT ON instance_settings\nWHEN ${when}\n${body}`
-	)
-	statements.push(
-		`CREATE TRIGGER instance_settings_bounds_update BEFORE UPDATE OF name, value ON instance_settings\nWHEN ${when}\n${body}`
+		...boundTriggers(
+			'instance_settings_bounds',
+			'instance_settings',
+			'name, value',
+			when,
+			'instance_settings: a value past its stored bound'
+		)
 	)
 	statements.push(
 		"CREATE INDEX instance_domain_blocks_public ON instance_domain_blocks (domain) WHERE severity = 'suspend';"
@@ -563,11 +571,11 @@ export function emojisValid(text: string | null, bytes: number): boolean {
 	return presentedEmojiBytes(pairs) <= bytes
 }
 
-// True when `column` holds a value emojisValid refuses: false for NULL, true for a value that is not text or holds a
-// raw NUL anywhere (SQLite's JSON functions stop at one, so a complete value followed by NUL and anything would pass
-// them). Judged as stored: the byte bound first, so no JSON work runs on a value past it; then the shape, each element (`->>` decodes
-// escapes, and a decoded name or url whose bytes and characters differ holds a NUL or a non-ASCII character), the
-// names once each, and the presented size.
+// True when `column` holds a value emojisValid refuses: false for NULL, true for a value that is not text. Judged as
+// stored: the byte bound first, so nothing else scans a value past it; then a raw NUL anywhere (SQLite's JSON
+// functions stop at one, so a complete value followed by NUL and anything would pass them); then the shape, each
+// element (`->>` decodes escapes, and a decoded name or url whose bytes and characters differ holds a NUL or a
+// non-ASCII character), the names once each, and the presented size.
 export function emojisPastBoundSql(column: string, bytes: number): string {
 	const name = "e.value ->> '$[0]'"
 	const url = "e.value ->> '$[1]'"
@@ -584,8 +592,8 @@ export function emojisPastBoundSql(column: string, bytes: number): string {
 		ELSE 0 END`
 	return `CASE WHEN ${column} IS NULL THEN 0
 	WHEN typeof(${column}) <> 'text' THEN 1
-	WHEN instr(CAST(${column} AS BLOB), X'00') > 0 THEN 1
 	WHEN length(CAST(${column} AS BLOB)) > ${bytes} THEN 1
+	WHEN instr(CAST(${column} AS BLOB), X'00') > 0 THEN 1
 	WHEN NOT json_valid(${column}) THEN 1
 	WHEN json_type(${column}) <> 'array' THEN 1
 	WHEN json_array_length(${column}) NOT BETWEEN 1 AND ${MAX_EMOJIS} THEN 1
@@ -609,9 +617,9 @@ export function emojiBoundsMigrationSql(): string {
 	const statements = Object.keys(EMOJI_COLUMNS).map((table) => `ALTER TABLE ${table} ADD COLUMN emojis TEXT;`)
 	for (const [table, bytes] of Object.entries(EMOJI_COLUMNS)) {
 		const when = emojisPastBoundSql('NEW.emojis', bytes)
-		const body = `BEGIN\n  SELECT RAISE(ABORT, '${table}: emojis past their stored bound');\nEND;`
-		statements.push(`CREATE TRIGGER ${table}_emojis_insert BEFORE INSERT ON ${table}\nWHEN ${when}\n${body}`)
-		statements.push(`CREATE TRIGGER ${table}_emojis_update BEFORE UPDATE OF emojis ON ${table}\nWHEN ${when}\n${body}`)
+		statements.push(
+			...boundTriggers(`${table}_emojis`, table, 'emojis', when, `${table}: emojis past their stored bound`)
+		)
 	}
 	return `${statements.join('\n\n')}\n`
 }

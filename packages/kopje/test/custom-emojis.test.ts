@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { sql } from './api-helpers'
-import { accountAtCap, emojiUrl, maximalEntry, shortcode, statusAtCap } from './emoji-fixtures'
+import { accountAtCap, customEmoji, emojiUrl, maximalEntry, shortcode, statusAtCap } from './emoji-fixtures'
 import { MASTODON, mastodonActor, MISSKEY, MISSKEY_CONTEXT, misskeyActor, type TestActor } from './inbox-helpers'
 import {
 	announce,
@@ -38,7 +38,7 @@ type Shown = {
 	edited_at: string | null
 }
 
-const entity = (shortcode: string, url: string): Emoji => ({ shortcode, url, static_url: url, visible_in_picker: true })
+const entity = (shortcode: string, url: string): Emoji => customEmoji(shortcode, url)
 
 // A Mastodon Emoji tag (ActivityPub::NoteSerializer, CustomEmojiSerializer).
 const mastodonEmoji = (
@@ -421,6 +421,37 @@ describe('the snapshot writer and presenter (RES-2, HTML-3)', () => {
 		const fits = 1 + (67 + 1 + 2 * 500) + (67 + 1 + 2 * 12)
 		expect(presentEmojis(tight, fits - 1)).toEqual([entity('a', emojiUrl(500))])
 		expect(presentEmojis(tight, fits)).toEqual([entity('a', emojiUrl(500)), entity('b', 'http://a/%7B')])
+	})
+
+	// A stored value the triggers refuse (SQLite's JSON functions stop at a NUL; an older Store; a hand edit) shows no
+	// emoji, or skips the entries that are not pairs, and never fails the request.
+	it('shows a malformed stored value as none, and skips malformed entries', () => {
+		for (const stored of [
+			'[["a","http://a/"]',
+			'[["a","http://a/"]]\u0000junk',
+			'{"a":"http://a/"}',
+			'"a"',
+			'1',
+			'null',
+		]) {
+			expect(presentEmojis(stored, STATUS_EMOJIS_BYTES)).toEqual([])
+		}
+		const mixed = JSON.stringify([
+			'a',
+			['b'],
+			['c', 'http://a/c', 'x'],
+			[1, 'http://a/d'],
+			['e', null],
+			{ shortcode: 'f', url: 'http://a/f' },
+			['ok', 'http://a/ok'],
+			['bad name', 'http://a/g'],
+			['js', 'javascript:alert(1)'],
+			['ok2', 'https://a/ok2'],
+		])
+		expect(presentEmojis(mixed, STATUS_EMOJIS_BYTES)).toEqual([
+			entity('ok', 'http://a/ok'),
+			entity('ok2', 'https://a/ok2'),
+		])
 	})
 
 	it('reads the names and urls of Emoji tags as Mastodon and Misskey write them', () => {

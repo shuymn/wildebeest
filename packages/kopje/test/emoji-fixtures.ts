@@ -10,6 +10,11 @@ import {
 
 export type Pairs = [string, string][]
 
+// The CustomEmoji entity a test expects for a shortcode and its url, as REST::CustomEmojiSerializer shows it.
+export function customEmoji(shortcode: string, url: string) {
+	return { shortcode, url, static_url: url, visible_in_picker: true }
+}
+
 // An http url of exactly `bytes` bytes, distinct by `key`.
 export function emojiUrl(bytes: number, key = ''): string {
 	const prefix = `http://a/${key}`

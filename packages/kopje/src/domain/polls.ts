@@ -380,7 +380,11 @@ function presentPoll(db: Db, statusId: string, viewerId: string | null, now: str
 		'SELECT CASE WHEN reblog_of_id IS NULL THEN emojis END AS emojis FROM statuses WHERE id = ?',
 		statusId
 	)
-	const emojis = presentEmojis(stored?.emojis ?? null, STATUS_EMOJIS_BYTES)
+	return withStatusEmojis(poll, presentEmojis(stored?.emojis ?? null, STATUS_EMOJIS_BYTES))
+}
+
+// `poll` with the emojis of its status (`emojis`) its choices reference (custom-emojis.ts pollEmojis).
+export function withStatusEmojis(poll: Poll, emojis: readonly CustomEmoji[]): Poll {
 	return {
 		...poll,
 		emojis: pollEmojis(

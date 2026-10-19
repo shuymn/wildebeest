@@ -49,10 +49,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   statuses, polls (those its choices reference), edit history versions and accounts. Each object keeps what it tagged:
   an account's are replaced by every refresh and `Update`, a status's by every newer `Update` (a change of emoji alone
   adds no history entry). A boost shows none of its own and a suspended account none. `static_url` is the same as
-  `url`, and images are linked, never fetched. Limits: 64 tags are read per object; a kept emoji has a shortcode of at
-  most 128 characters of `A-Z a-z 0-9 _ + -` and a URL of at most 512 bytes; a status keeps at most 64 of them within
-  12,288 bytes of JSON and an account within 6,144 (40 and 20 typical ones fit), dropping the rest from the first that
-  does not fit. A reference is any shortcode between two colons, so `:aa:bb:` shows both where Mastodon shows neither.
+  `url`, and images are linked, never fetched. 64 tags are read per object, and a snapshot keeps the emoji that fit
+  its bounds ([docs/dump-format.md](docs/dump-format.md); 40 typical ones per status and 20 per account fit), dropping
+  the rest from the first that does not fit. A reference is any shortcode between two colons, so `:aa:bb:` shows both where Mastodon shows neither.
   `GET /api/v1/custom_emojis` still answers `[]`.
 
 ### Changed

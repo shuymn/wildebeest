@@ -1,5 +1,6 @@
 import type { DocumentLoader } from '@fedify/fedify'
 
+import { asArray, isObject, typeIs } from './json-shapes'
 import { isTransientLoadError } from './loader'
 import { emojiCandidates } from './remote-emoji'
 import { isPublicCollection } from '../domain/audience'
@@ -27,9 +28,9 @@ import { storedMediaDescription, storedMediaLink, storedText } from '../platform
 import { cutCodeUnits, cutJsonString, remoteHtmlText, sanitizeRemoteContent, SPOILER_BYTES } from '../security/html'
 
 // Remote statuses as Mastodon 4.5.11 reads them (ActivityPub::Parser::StatusParser and MediaAttachmentParser):
-// compacted JSON with the ActivityStreams context, values as strings, objects with an id, or arrays of either. Note and Question
-// are statuses; Article, Page, Image, Audio, Video and Event are converted as Mastodon converts them (the name as a
-// heading, the summary, and a link to the url, with no content warning). Everything is bounded (RES-2, RES-4) and
+// compacted JSON with the ActivityStreams context, values as strings, objects with an id, or arrays of either. Note and
+// Question are statuses; Article, Page, Image, Audio, Video and Event are converted as Mastodon converts them (the name
+// as a heading, the summary, and a link to the url, with no content warning). Everything is bounded (RES-2, RES-4) and
 // sanitized (HTML-1); URLs are http(s) only (HTML-3). Quotes are read from quote, _misskey_quote, quoteUrl and quoteUri
 // (quoteOf); Misskey's other extensions (_misskey_content, _misskey_summary) and everything else not read here stay in
 // raw.
@@ -40,24 +41,11 @@ export const STATUS_TYPES = ['Note', 'Question']
 export const CONVERTED_TYPES = ['Image', 'Audio', 'Video', 'Article', 'Page', 'Event']
 export const ACTOR_TYPES = ['Application', 'Group', 'Organization', 'Person', 'Service']
 
-function isObject(value: unknown): value is Json {
-	return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-function asArray(value: unknown): unknown[] {
-	return value === undefined || value === null ? [] : Array.isArray(value) ? value : [value]
-}
-
 export function idOf(value: unknown): string | null {
 	if (typeof value === 'string') {
 		return value
 	}
 	return isObject(value) && typeof value.id === 'string' ? value.id : null
-}
-
-// JsonLdHelper#equals_or_includes_any?
-export function typeIs(value: unknown, types: readonly string[]): boolean {
-	return asArray(value).some((type) => typeof type === 'string' && types.includes(type))
 }
 
 function text(value: unknown): string | null {

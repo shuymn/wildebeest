@@ -1407,11 +1407,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   bound on insert and update"), `test/dump-import.test.ts` ("restores a dump taken before 0049_instance_bounds"),
   `test/admin-instance.test.ts` ("accepts each value at its bound in its unit"),
   `test-node/cutover-stored-bounds.test.ts` ("cuts or drops values past their bounds as truncations"). _Enforced
-  (main)_ for emoji snapshots: `statuses.emojis`, `status_edits.emojis` and `accounts.emojis` hold NULL or 1 to 64
-  `[shortcode, url]` pairs: a shortcode of 1 to 128 ASCII characters of `A-Za-z0-9_+-`, once each; a url http(s) of at
-  most 512 bytes of `!` to `~` but `"` and `\`; the stored UTF-8 bytes and the presented JSON bytes of the entities
-  within 12,288 (an account's 6,144), and no NUL anywhere in the text (SQLite's JSON functions stop at one)
-  (`EMOJI_COLUMNS` in `src/platform/stored-bounds.ts`). The triggers
+  (main)_ for emoji snapshots: `statuses.emojis`, `status_edits.emojis` and `accounts.emojis` hold NULL or a snapshot
+  within the form and bounds of `EMOJI_COLUMNS` in `src/platform/stored-bounds.ts` (docs/dump-format.md): in its
+  stored bytes and in the presented JSON bytes of its entities, so a presented entry needs no escape, and with no NUL
+  anywhere (SQLite's JSON functions stop at one). The triggers
   `<table>_emojis_insert` and `<table>_emojis_update` of migration `0053_custom_emoji_snapshots` refuse any other
   value, imports included (`emojisPastBoundSql`, whose JS twin is `emojisValid`). The writer (`emojiSnapshot` in
   `src/domain/custom-emojis.ts`) shares `emojiHref` and the url alphabet with them, so ingestion drops an emoji the
@@ -1999,8 +1998,8 @@ A chunk of several takes at most its target of heap: 768 KiB (0.79 MB) for timel
 reports. Normal: the rows are the larger of 1.25 × the target and the item's rows, plus the admitted answer, the
 rejected item and, for groups and reports, their state. With the backstop fired, 1.25 × (the target + 1.20 MB) of
 dropped rows more. The timelines' cap is 768 KiB so that the fallback fits within half of the isolate even when the
-dropped chunk is still live, with 0.22 MB to spare; at 1 MiB, with emoji at their bounds, it took 64.11 MB,
-past half (the peak test computes and logs both): the margin is thin, every row term already carries 25% headroom, and the peak test fails on
+dropped chunk is still live, with 0.22 MB to spare; the cap was lowered from 1 MiB, at which emoji at their bounds
+took the backstop past half: the margin is thin, every row term already carries 25% headroom, and the peak test fails on
 any growth that passes half. The backstop-fired figures bound the
 fallback whenever the dropped rows are collected. A boost that showed a quote, attachments, mentions, hashtags or a
 poll of its own (a legacy row may hold them) would make a timeline's largest item pass half at a chunk of one; it shows
