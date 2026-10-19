@@ -62,10 +62,9 @@ After a successful upgrade, `versionMatch` is true, `schema.status` is `current`
 `lastBookmark` is the bookmark taken before the upgrade. **Write it down** before you do anything else: it is what a
 rollback across this upgrade restores, and the next upgrade replaces it.
 
-Some migrations rewrite stored values and keep no copy: `0048_stored_bounds` (values past their stored bounds) and
-`0049_instance_bounds` (instance settings past theirs: a title or description is cut, and a contact address, rules
-or document past its bound, or blank, is removed). A restore to this bookmark is how to recover such a value; the
-release notes of each say which values it rewrites.
+Some migrations rewrite stored values and keep no copy, such as `0048_stored_bounds` and `0049_instance_bounds`; the
+release notes ([CHANGELOG.md](../CHANGELOG.md)) say which values each rewrites. A restore to this bookmark is how to
+recover such a value.
 
 ## Rolling back
 

@@ -44,10 +44,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   returns). From then on the Store refuses such a value. To recover one, restore the point-in-time bookmark taken
   before the upgrade ([docs/upgrade.md](docs/upgrade.md)), or run the conversion again for a converted one.
 - `kopje-admin convert` stores the legacy settings as the Worker stores them: a blank one, or a document that
-  sanitizes to no text, is dropped and counted among the normalized values (`settings:<name>-blank`,
-  `settings:<name>-no-text`); one past its bound is cut or dropped and stops the conversion
-  (`settings:<name>-longer-than-bound`) unless `--accept-truncation` is given. `verify-conversion` expects the same,
-  and fails when a dropped setting is in the dump.
+  sanitizes to no text, is dropped, and one past its bound is cut or dropped and stops the conversion unless
+  `--accept-truncation` is given (the counts: [docs/cutover.md](docs/cutover.md), "What the conversion does").
+  `verify-conversion` expects the same, and fails when a dropped setting is in the dump.
 
 ### Instance changes
 
