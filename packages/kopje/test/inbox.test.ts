@@ -767,6 +767,25 @@ describe('ID-6: the authorization table, one negative case per row', () => {
 		expect(await sql(t.store, 'SELECT * FROM blocks')).toEqual([])
 	})
 
+	it('Flag: the actor is the reporter; another actor of the same origin does not report as it', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const carol = await mastodonActor(t.web, 'carol', { key: 2 })
+		const flag = (actor: TestActor, object: string) => ({
+			'@context': AS,
+			id: activityId(MASTODON),
+			type: 'Flag',
+			actor: actor.uri,
+			content: 'spam',
+			object: [object],
+		})
+		// Signed by carol, naming bob as its actor: not bob's.
+		expect(await t.post(carol, flag(bob, DAVE_URI))).toBe(401)
+		// A remote account that no named status shows replying to a local account is no target.
+		expect(await t.post(carol, flag(carol, bob.uri))).toBe(202)
+		expect(await sql(t.store, 'SELECT * FROM reports')).toEqual([])
+	})
+
 	it('Update: an actor updates only itself; Delete: an actor deletes only itself (ID-3)', async () => {
 		const t = await setup()
 		const bob = await mastodonActor(t.web, 'bob')

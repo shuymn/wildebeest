@@ -98,6 +98,13 @@ function ruleFor(db: Db, domain: string): BlockRow | undefined {
 	)
 }
 
+// Whether the block that rules `domain` (ruleFor) rejects reports (Mastodon's DomainBlock.reject_reports?,
+// app/models/domain_block.rb:62-64): an inbound Flag from it files nothing (reports.ts fileRemoteReports). A nearer block
+// without reject_reports, a noop included, exempts its subdomains from a parent's.
+export function reportsRejected(db: Db, domain: string): boolean {
+	return ruleFor(db, domain)?.reject_reports === 1
+}
+
 // Resets the domain job (remote-suspension.ts) in the caller's transaction: its walks start again, and its follow
 // bound is the newest follow. Here, not there: deliveries.ts reads hostCovered, and remote-suspension.ts deliveries.ts.
 export function resetDomainJob(db: Db): void {
