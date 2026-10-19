@@ -513,9 +513,9 @@ describe('bounds and refusals (RES-6)', () => {
 	})
 
 	// Stored state no Follow of this version leaves (each answer has one target): an imported store's answer with more
-	// rows or chunks than the bounds.
+	// rows (every other one exposed: they count too) or chunks than the bounds.
 	it.each([
-		['rows never claimed', FOLLOW_ANSWER_ROWS + 1, 0],
+		['rows', FOLLOW_ANSWER_ROWS + 1, 0],
 		['unexpanded chunks', 0, FOLLOW_ANSWER_CHUNKS + 1],
 	])('answers 503 with nothing written over the bound of %s', async (_, rows, chunks) => {
 		const t = await setup()
@@ -529,8 +529,8 @@ describe('bounds and refusals (RES-6)', () => {
 		await sql(
 			t.store,
 			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?2)
-			INSERT INTO deliveries (activity_id, account_id, inbox_url, lane, state, next_attempt_at, updated_at)
-			SELECT 77, ?1, 'https://e' || i || '.example/inbox', 'https://e' || i || '.example', 'pending', 0, 0
+			INSERT INTO deliveries (activity_id, account_id, inbox_url, lane, state, next_attempt_at, updated_at, exposed)
+			SELECT 77, ?1, 'https://e' || i || '.example/inbox', 'https://e' || i || '.example', 'pending', 0, 0, i % 2
 			FROM n WHERE ?2 > 0`,
 			t.w.alice.id,
 			rows
@@ -548,6 +548,14 @@ describe('bounds and refusals (RES-6)', () => {
 		await sql(t.store, 'DELETE FROM deliveries WHERE id = (SELECT max(id) FROM deliveries)')
 		await sql(t.store, 'DELETE FROM outbound_targets WHERE id = (SELECT max(id) FROM outbound_targets)')
 		expect((await followFrom(t)).result).toMatchObject({ applied: true })
+		// The rows never claimed and the chunks are cancelled; the exposed rows stay, their intent superseded.
+		expect(
+			await sql(t.store, 'SELECT exposed, count(*) AS n FROM deliveries WHERE activity_id = 77 GROUP BY exposed')
+		).toEqual(rows === 0 ? [] : [{ exposed: 1, n: FOLLOW_ANSWER_ROWS / 2 }])
+		expect(await sql(t.store, 'SELECT * FROM outbound_targets WHERE activity_id = 77')).toEqual([])
+		expect(await sql(t.store, 'SELECT superseded FROM outbound_activities WHERE id = 77')).toEqual(
+			rows === 0 ? [] : [{ superseded: 1 }]
+		)
 	})
 
 	it('cancels nothing for a duplicate Follow or a renewal at the retraction cap', async () => {
@@ -591,8 +599,8 @@ describe('bounds and refusals (RES-6)', () => {
 		const t = await setup()
 		const plan = await sql<{ detail: string }>(
 			t.store,
-			`EXPLAIN QUERY PLAN SELECT CAST(id AS TEXT) AS id, account_id, lane, state FROM deliveries
-			WHERE activity_id IN (SELECT CAST(value AS INTEGER) FROM json_each('[1]')) AND exposed = 0 ORDER BY id LIMIT 65`
+			`EXPLAIN QUERY PLAN SELECT CAST(id AS TEXT) AS id, account_id, lane, state, exposed FROM deliveries
+			WHERE activity_id IN (SELECT CAST(value AS INTEGER) FROM json_each('[1]')) LIMIT 65`
 		)
 		expect(plan.map((row) => row.detail)).toContainEqual(expect.stringContaining('USING INDEX deliveries_activity'))
 	})

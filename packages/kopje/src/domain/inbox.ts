@@ -747,8 +747,8 @@ const follow: Handler<'Follow'> = (db, actor, activity, { now }) => {
 		return ignored('duplicate')
 	}
 	// Every Follow stored from here on defines the pair's next state (its own answer, or the owner's decision on a
-	// request), so the pair's answers never claimed are cancelled (cancelFollowAnswers in deliveries.ts) once nothing
-	// below can bail out. Over the bound: 503, nothing written.
+	// request), so the pair's answers never claimed or unexpanded are cancelled (cancelFollowAnswers in deliveries.ts)
+	// once nothing below can bail out, in this transaction. Over the bound (RES-6): 503, nothing written.
 	const answers = followAnswersOf(db, target.id, actor.id)
 	if (answers === null) {
 		return retryLater('follow-answer-backlog')

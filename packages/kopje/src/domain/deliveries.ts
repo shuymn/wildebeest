@@ -35,8 +35,9 @@ import { hostDomain } from '../platform/domain-name'
 //     or leased; the rows behind it are queued and promoted when it settles. So the due index holds lane heads only,
 //     and a claim reads at most `limit` rows.
 //   - Claims run inside one Store transaction, so they are serialized. Each claim issues a fresh lease token, counts
-//     an attempt and leases the row for LEASE_MS. A completion settles a row only with the token of its current
-//     lease, so a completion that arrives after the lease expired and the row was claimed again changes nothing.
+//     an attempt, marks the row exposed (it may be POSTed from then on; nothing clears it) and leases it for LEASE_MS.
+//     A completion settles a row only with the token of its current lease, so a completion that arrives after the
+//     lease expired and the row was claimed again changes nothing.
 //   - An expired lease (the Worker died, or the completion was lost after the POST) is claimed again like a due row.
 //     The remote inbox may then see the activity twice; receivers deduplicate by activity id.
 //   - A failure is retried after min(30 s·2^n, 12 h), n being the attempts so far; after MAX_ATTEMPTS, or on a
@@ -939,20 +940,23 @@ function nextDueAt(db: Db, now: number, ownLease: string | null = null): number 
 // Follow answers
 // ---------------------------------------------------------------------------------------------------------------
 
-// A remote Follow cancels the answers (Accept, Reject) its pair's earlier generations left that were never claimed or
-// expanded (inbox.ts follow): peers match an answer by account pair, not only by the Follow it names (Misskey's
-// acceptFollowRequest and rejectFollowRequest; Mastodon's Accept and Reject fall back to the pair), so a stale one
-// would act on the new request. A row a claim has leased (exposed) may have been POSTed and is left to be sent; its
-// intent is superseded, so the operator cannot retry it (the accepted risk in docs/threat-model.md).
+// A remote Follow cancels its pair's answers (Accept, Reject) that were never claimed or are unexpanded (inbox.ts
+// follow): for interoperability with servers that match an answer by account pair, not only by the Follow it names
+// (Misskey's UserFollowingService; Mastodon's Accept and Reject fall back to the pair), so a stale one would act on
+// the new request. A row a claim has leased (exposed) may have been POSTed and is left to be sent; its intent is
+// superseded, so the operator cannot retry it (the accepted risk in docs/threat-model.md).
 //
 // Bounds (RES-6): a Follow reads at most FOLLOW_ANSWER_INTENTS + 1 unsettled answers of its pair, and of them
-// FOLLOW_ANSWER_ROWS + 1 rows never claimed and FOLLOW_ANSWER_CHUNKS + 1 unexpanded chunks; over any bound it is
-// refused (followAnswersOf returns null) before anything is written, and the peer delivers it again. Answers leave the
-// bound as their rows deliver, and as sweepDeliveries deletes the given-up rows of superseded ones.
+// FOLLOW_ANSWER_ROWS + 1 rows (exposed or not) and FOLLOW_ANSWER_CHUNKS + 1 unexpanded chunks; over any bound it is
+// refused (followAnswersOf returns null) before anything is written, and the peer delivers it again. An answer has
+// one target, so one row or chunk: the intent bound bites first, and the others bound stored rows from elsewhere (an
+// imported store). Answers leave the bound as their rows deliver, and as sweepDeliveries deletes the given-up rows of
+// superseded ones.
 export const FOLLOW_ANSWER_INTENTS = 32
 export const FOLLOW_ANSWER_ROWS = 64
 export const FOLLOW_ANSWER_CHUNKS = 32
 
+// rows: those never claimed (exposed 0), which are cancelled.
 export type FollowAnswers = {
 	intents: string[]
 	rows: { id: string; account_id: string; lane: string; state: string }[]
@@ -977,9 +981,9 @@ export function followAnswersOf(db: Db, signerId: string, followerId: string): F
 		return { intents, rows: [], chunks: [] }
 	}
 	const ids = JSON.stringify(intents)
-	const rows = db.all<FollowAnswers['rows'][number]>(
-		`SELECT CAST(id AS TEXT) AS id, account_id, lane, state FROM deliveries
-		WHERE activity_id IN (SELECT CAST(value AS INTEGER) FROM json_each(?)) AND exposed = 0 ORDER BY id LIMIT ?`,
+	const rows = db.all<FollowAnswers['rows'][number] & { exposed: number }>(
+		`SELECT CAST(id AS TEXT) AS id, account_id, lane, state, exposed FROM deliveries
+		WHERE activity_id IN (SELECT CAST(value AS INTEGER) FROM json_each(?)) LIMIT ?`,
 		ids,
 		FOLLOW_ANSWER_ROWS + 1
 	)
@@ -991,7 +995,13 @@ export function followAnswersOf(db: Db, signerId: string, followerId: string): F
 			FOLLOW_ANSWER_CHUNKS + 1
 		)
 		.map((r) => r.id)
-	return rows.length > FOLLOW_ANSWER_ROWS || chunks.length > FOLLOW_ANSWER_CHUNKS ? null : { intents, rows, chunks }
+	if (rows.length > FOLLOW_ANSWER_ROWS || chunks.length > FOLLOW_ANSWER_CHUNKS) {
+		return null
+	}
+	const unexposed = rows
+		.filter((row) => row.exposed === 0)
+		.map(({ id, account_id, lane, state }) => ({ id, account_id, lane, state }))
+	return { intents, rows: unexposed, chunks }
 }
 
 // Cancels what followAnswersOf found, in the transaction that read it: deletes the rows, then promotes each lane whose
