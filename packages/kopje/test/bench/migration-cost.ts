@@ -5,22 +5,26 @@ import { expect, inject, it } from 'vitest'
 import { MIGRATIONS } from '../../src/db/migrations'
 import { freshStore, testKernel } from '../helpers'
 
-// The migration cost benchmark (design: "Migrations", acceptance criterion): one migration file applied to a large,
-// representative Store in workerd's local Durable Object SQLite, timed. A file must finish in at most
-// MIGRATION_BUDGET_MS, a third of the 30 seconds a migration transaction may take, before its PR merges; the time
-// goes in the file's header comment and in the PR description. The owner's instance is not representative. On this
-// store, upgrading one file in isolation costs about 6 s before the file's own work (the kernel's bookmark,
-// transaction and schema verification, which an upgrade runs once after all pending files): 0042_report_action_fence,
-// which does little else, measured 5,981 and 5,893 ms.
+// The migration cost benchmark (design: "Migrations", acceptance criterion): pending migration files applied to a
+// large, representative Store in workerd's local Durable Object SQLite, as an upgrade applies them, timed. The whole
+// upgrade (the kernel's bookmark, each file's transaction and the schema verification, which runs once after all
+// pending files) must finish in at most UPGRADE_BUDGET_MS, two thirds of the default 30 seconds of CPU an invocation
+// may use (an alarm's upgrade included; committing each file does not start a new invocation). Local elapsed time
+// stands in for that CPU time. A file is measured before its
+// PR merges, and a release's files together before it is tagged (RELEASING.md); the time goes in the file's header
+// comment and in the PR description. The owner's instance is not representative. Most of a small file's time is the
+// upgrade's own cost on a store this size, which grows with the store and varies with the machine's load: a file
+// that only creates an empty table (0050_follow_recommendation_mutes) measured 6.6 s, and 9.1 to 13.7 s once the
+// store held 0049's fixtures.
 //
 //   pnpm --filter kopje bench:migration                            the newest migration
 //   KOPJE_BENCH_MIGRATION=0029_admin_reports pnpm --filter kopje bench:migration
 //   KOPJE_BENCH_SCALE=0.01 pnpm --filter kopje bench:migration     a quick check of the script itself (not a measure)
 //   KOPJE_BENCH_FROM=0040_report_notifications pnpm --filter kopje bench:migration
 //                                                                  a release: every file from 0040 to the newest (or
-//                                                                  to KOPJE_BENCH_MIGRATION) in one upgrade, within
-//                                                                  RELEASE_BUDGET_MS. Run it before tagging, from the
-//                                                                  first file the previous release did not carry.
+//                                                                  to KOPJE_BENCH_MIGRATION) in one upgrade. Run it
+//                                                                  before tagging, from the first file the previous
+//                                                                  release did not carry.
 //
 // The Store is migrated up to the file before the one measured, then seeded with SQL of the current schema, in this
 // file's shape (scaled by KOPJE_BENCH_SCALE):
@@ -57,13 +61,10 @@ import { freshStore, testKernel } from '../helpers'
 // statuses, media attachments, earlier versions), what 0049_instance_bounds rewrites and indexes (instance
 // settings, instance domain blocks) and what 0051_follow_answer_pairs reads and rewrites (outbound activities,
 // accounts, deliveries); a migration that reads another table must add it here before it is measured.
-// The measured time is the file's transaction as the kernel applies it, from before the first statement to after the
-// commit: Date.now() in workerd moves only between I/O events, so the clock is read across an await on each side.
+// The measured time is the whole upgrade, from before the bookmark to after the verification: Date.now() in workerd
+// moves only between I/O events, so the clock is read across an await on each side.
 
-export const MIGRATION_BUDGET_MS = 10_000
-// A release's pending files applied in one upgrade, as an instance applies them after a deploy: two thirds of the
-// 30 seconds, since the verification is paid once for the whole set.
-export const RELEASE_BUDGET_MS = 20_000
+export const UPGRADE_BUDGET_MS = 20_000
 
 declare module 'vitest' {
 	interface ProvidedContext {
@@ -108,7 +109,7 @@ it('applies the migration to the benchmark store within the budget', async () =>
 	expect(at, `no migration named ${from}`).toBeGreaterThan(0)
 	expect(at, `${from} comes after ${name}`).toBeLessThanOrEqual(last)
 	const applied = MIGRATIONS.slice(at, last + 1).map((migration) => migration.name)
-	const budgetMs = applied.length === 1 ? MIGRATION_BUDGET_MS : RELEASE_BUDGET_MS
+	const budgetMs = UPGRADE_BUDGET_MS
 	const accounts = Math.round(SHAPE.accounts * scale)
 	const statuses = Math.round(SHAPE.statuses * scale)
 	const notifications = Math.min(Math.round(SHAPE.notifications * scale), statuses)
