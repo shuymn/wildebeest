@@ -336,6 +336,24 @@ export class PolicyModel {
 		return !mentions.some((m) => !m.silent && (this.blocks(viewer, m.account) || this.mutes(viewer, m.account)))
 	}
 
+	// R34, the remote reporter rule (remoteReportStatusIds): a status a reporter on `domain` may attach to a report of
+	// `target` is the target's own original, of an available author, public or unlisted; private while an account
+	// stored on `domain` follows the target (accepted); and of any visibility when it mentions (silently too) an account
+	// stored on `domain`.
+	remoteReportable(s: number, target: number, domain: string): boolean {
+		const { author, visibility, reblogOf, mentions } = this.status(s)
+		if (author !== target || reblogOf !== null || !this.available(author)) {
+			return false
+		}
+		const onDomain = (x: number) => this.account(x).domain === domain
+		return (
+			visibility === 'public' ||
+			visibility === 'unlisted' ||
+			(visibility === 'private' && this.world.follows.some((f) => f.to === target && f.accepted && onDomain(f.from))) ||
+			mentions.some((m) => onDomain(m.account))
+		)
+	}
+
 	// Whether the status is a reply, to a stored status or to one never stored.
 	isReply(s: number): boolean {
 		const { replyTo, replyToUnknown } = this.status(s)

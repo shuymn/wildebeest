@@ -18,6 +18,7 @@ import { type VisibleStatusId } from '../src/domain/audience'
 import { listConversations, MAX_PRESENTED_PARTICIPANTS } from '../src/domain/conversations'
 import { MAX_FILTER_KEYWORD, MAX_FILTER_KEYWORDS, MAX_FILTER_TITLE, MAX_FILTERS } from '../src/domain/filters'
 import { listGroupedNotifications } from '../src/domain/notification-groups'
+import { listNotifications } from '../src/domain/notifications'
 import { ACTOR_URI_LIMIT, PROFILE_URL_LIMIT, USERNAME_LIMIT } from '../src/domain/profile-bounds'
 import { getAdminReport } from '../src/domain/reports'
 import {
@@ -75,6 +76,16 @@ const atLimit = (prefix: string, limit: number) => prefix.padEnd(limit, 'u')
 // from the host and the username; `raw` with what reads the most bytes from SQLite for each bound: ASCII where the
 // bound is in bytes, and four-byte characters (W) where it is in characters.
 type Fill = 'escaped' | 'derived' | 'raw'
+
+// A report's comment at its stored bound for each fill (migration 0054_remote_reports, CHECK
+// report_comment_within_20000_bytes): the most JSON an imported one holds (a NUL, which SQLite's length stops at, then
+// 19,999 bytes of U+0001, each 6 JSON-escaped bytes), what Kopje's writers make at most in JSON (5,000 code points of
+// U+0001), and the most SQLite bytes (5,000 four-byte code points).
+const REPORT_COMMENTS: Record<Fill, string> = {
+	escaped: '\u0000' + '\u0001'.repeat(19_999),
+	derived: '\u0001'.repeat(5_000),
+	raw: '𠀀'.repeat(5_000),
+}
 const W = '𠀀'
 const RAW_BIO = `<p>${'x'.repeat(REMOTE_BIO_BYTES - 9)}</p>`
 
@@ -926,8 +937,9 @@ async function measureShapes(fill: Fill): Promise<FillMeasure> {
 	)
 	const { next: _next, prev: _prev, ...group } = grouped.answer as Record<string, unknown> & { accounts: unknown[] }
 	expect(group.accounts).toHaveLength(8)
-	// A report of the quoter by alice naming the quote (its first status, past REPORT_STATUS_BYTES alone), assigned to
-	// and resolved by alice (local accounts only), read by alice as the OAuth admin.
+	// A report of the quoter naming the quote (its first status, past REPORT_STATUS_BYTES alone), by a remote reporter at
+	// its bounds (an inbound Flag's, migration 0054_remote_reports) with the comment at its stored bound for the fill
+	// (REPORT_COMMENTS), assigned to and resolved by alice (local accounts only), read by alice as the OAuth admin.
 	await sql(t.store, "UPDATE local_accounts SET email = 'alice@kopje.test' WHERE account_id = ?", ALICE)
 	await setSetting(t.store, 'admin_email', 'alice@kopje.test')
 	const adminToken = 'admin-token'
@@ -937,18 +949,46 @@ async function measureShapes(fill: Fill): Promise<FillMeasure> {
 		await sha256Hex(adminToken),
 		ALICE
 	)
+	const reporter = await maximalAccount(t, false, fill)
 	const [report] = await sql<{ id: string }>(
 		t.store,
-		`INSERT INTO reports (account_id, target_account_id, status_ids, uri, created_at, assigned_account_id,
+		`INSERT INTO reports (account_id, target_account_id, status_ids, uri, comment, created_at, assigned_account_id,
 			action_taken_by_account_id)
-		VALUES (?, ?, ?, 'https://kopje.test/actor#reports/maximal', ?, ?, ?) RETURNING CAST(id AS TEXT) AS id`,
-		ALICE,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING CAST(id AS TEXT) AS id`,
+		reporter,
 		(await sql<{ account_id: string }>(t.store, 'SELECT account_id FROM statuses WHERE id = ?', quote))[0]!.account_id,
 		JSON.stringify([quote, quoted]),
+		atLimit(`https://${HOST}/payloads/`, 4096),
+		REPORT_COMMENTS[fill],
 		new Date(NOW).toISOString(),
 		ALICE,
 		ALICE
 	)
+	// Its admin.report, as the OAuth admin's list of notifications presents it (the report as its reporter's entity).
+	await sql(
+		t.store,
+		`INSERT INTO notifications (account_id, type, from_account_id, report_id, created_at)
+		VALUES (?, 'admin.report', ?, ?, ?)`,
+		ALICE,
+		reporter,
+		report!.id,
+		new Date(NOW).toISOString()
+	)
+	const notified = await measured(
+		t,
+		listNotifications as never,
+		{
+			credential: await credential(t),
+			page: { limit: 1 },
+			types: ['admin.report'],
+			excludeTypes: [],
+			accountId: null,
+			includeFiltered: false,
+			present: { origin: ORIGIN },
+		} as never
+	)
+	const [adminReport] = (notified.answer as { items: { report: { comment: string } }[] }).items
+	expect(adminReport!.report.comment).toBe(REPORT_COMMENTS[fill])
 	const reported = await measured(
 		t,
 		getAdminReport as never,
@@ -971,6 +1011,7 @@ async function measureShapes(fill: Fill): Promise<FillMeasure> {
 			conversation: { ...shape({ ...listed, answer: talk }), sqlite: listed.sqliteBytes },
 			group: shape({ ...grouped, answer: group }),
 			report: shape({ ...reported, answer: shownReport }),
+			reportNotification: shape({ ...notified, answer: adminReport }),
 		},
 		heaps: {
 			status: one.heaps,
@@ -1042,7 +1083,8 @@ describe('the table of maxima (RES-3)', () => {
 				boostOfQuote: { sqlite: 5_065_987, json: 5_588_211, rows: 1_972, nodes: 5_448 },
 				conversation: { sqlite: 6_190_029, json: 6_682_334, rows: 1_930, nodes: 5_001 },
 				group: { sqlite: 5_727_777, json: 6_187_277, rows: 1_943, nodes: 4_866 },
-				report: { sqlite: 5_096_302, json: 5_589_057, rows: 1_925, nodes: 4_673 },
+				report: { sqlite: 5_216_223, json: 5_746_628, rows: 1_926, nodes: 4_691 },
+				reportNotification: { sqlite: 795_719, json: 368_102, rows: 1_059, nodes: 90 },
 			},
 		],
 		[
@@ -1055,7 +1097,8 @@ describe('the table of maxima (RES-3)', () => {
 				boostOfQuote: { sqlite: 4_249_987, json: 4_769_011, rows: 1_972, nodes: 5_448 },
 				conversation: { sqlite: 5_374_029, json: 5_863_134, rows: 1_930, nodes: 5_001 },
 				group: { sqlite: 4_911_777, json: 5_368_077, rows: 1_943, nodes: 4_866 },
-				report: { sqlite: 4_280_302, json: 4_769_857, rows: 1_925, nodes: 4_673 },
+				report: { sqlite: 4_385_223, json: 4_837_428, rows: 1_926, nodes: 4_691 },
+				reportNotification: { sqlite: 780_719, json: 278_102, rows: 1_059, nodes: 90 },
 			},
 		],
 		[
@@ -1068,7 +1111,8 @@ describe('the table of maxima (RES-3)', () => {
 				boostOfQuote: { sqlite: 7_041_878, json: 4_555_132, rows: 1_972, nodes: 5_448 },
 				conversation: { sqlite: 8_247_883, json: 5_757_808, rows: 1_930, nodes: 5_001 },
 				group: { sqlite: 7_700_281, json: 5_279_131, rows: 1_943, nodes: 4_866 },
-				report: { sqlite: 6_966_386, json: 4_697_291, rows: 1_925, nodes: 4_673 },
+				report: { sqlite: 7_103_377, json: 4_754_862, rows: 1_926, nodes: 4_691 },
+				reportNotification: { sqlite: 2_327_459, json: 259_912, rows: 1_059, nodes: 90 },
 			},
 		],
 	])(

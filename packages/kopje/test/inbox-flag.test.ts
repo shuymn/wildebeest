@@ -1,3 +1,5 @@
+import { runInDurableObject } from 'cloudflare:test'
+
 import { describe, expect, it } from 'vitest'
 
 import { setSetting, sql } from './api-helpers'
@@ -6,8 +8,10 @@ import { LOCAL, MASTODON, mastodonActor, type TestActor } from './inbox-helpers'
 import { accountId, ALICE, ALICE_URI, DAVE, DAVE_URI, type Setup, setup } from './inbox-status-helpers'
 import { storeReceive } from './inbox-store-helpers'
 import { seedStatus } from './status-helpers'
+import { Db } from '../src/db/sql'
+import { FOLLOWER_PROBE, remoteReportStatusIds } from '../src/domain/audience'
 import type { InboundActivity } from '../src/domain/inbox'
-import { MAX_REMOTE_REPORT_COMMENT, MAX_UNRESOLVED_REMOTE_REPORTS } from '../src/domain/reports'
+import { MAX_REMOTE_REPORT_COMMENT, MAX_REPORT_STATUSES, MAX_UNRESOLVED_REMOTE_REPORTS } from '../src/domain/reports'
 import { ACTIVITY_ID_LIMIT, withinIdentityBound } from '../src/platform/identity-bounds'
 import { sha256Hex } from '../src/security/tokens'
 
@@ -332,6 +336,50 @@ describe('Flag: the remote reporter status rule (R34, remoteReportableSql)', () 
 		)
 		expect(await reported(t, actor, [closed], 3)).toEqual([closed.id])
 	}, 60_000)
+})
+
+describe('Flag: the follower probe reads a bounded window (RES-7, hasFollowerOn)', () => {
+	it('reads the same rows with 1,000 or 100,000 followers of the account, none on the domain', async () => {
+		const measure = async (followers: number) => {
+			const t = await world()
+			const closed = await statusOf(t, 'private')
+			await sql(
+				t.store,
+				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+					INSERT INTO accounts (id, uri, username, domain)
+					SELECT CAST(400000000000000000 + i AS TEXT), 'https://far.example/users/f' || i, 'f' || i, 'far.example' FROM n`,
+				followers
+			)
+			await sql(
+				t.store,
+				`INSERT INTO follows (account_id, target_account_id, state)
+					SELECT id, ?, 'accepted' FROM accounts WHERE domain = 'far.example'`,
+				DAVE
+			)
+			return runInDurableObject(t.store, (_instance, state) => {
+				let read = 0
+				const real = state.storage.sql
+				const counting = {
+					exec: (query: string, ...params: SqlStorageValue[]) => {
+						const cursor = real.exec(query, ...params)
+						return {
+							toArray: () => {
+								const rows = cursor.toArray()
+								read += cursor.rowsRead
+								return rows
+							},
+						}
+					},
+				} as unknown as SqlStorage
+				expect(remoteReportStatusIds(new Db(counting), 'mastodon.example', DAVE, [closed.id])).toEqual([])
+				return read
+			})
+		}
+		const few = await measure(1_000)
+		const many = await measure(100_000)
+		expect(many).toBe(few)
+		expect(few).toBeLessThanOrEqual(2 * FOLLOWER_PROBE + 2 * MAX_REPORT_STATUSES + 20)
+	}, 120_000)
 })
 
 describe('Flag: the per-actor cap of unresolved reports (RES-7)', () => {
