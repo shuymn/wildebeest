@@ -28,8 +28,9 @@ import { guardFixtures, lineOf, parse, sources, walk, type Literal, type Part, t
 // test.ts). It reads SQL as tokens, not as a grammar, and has known gaps: a column qualified by an outer query's alias
 // inside a correlated subquery is read against the subquery's own tables only; a bounded column passed as a property
 // value is found only as a literal there (directly or as a branch of a condition), not through a variable or spread;
-// and an expression is resolved only as a constant or a single call by name. A helper call counts only when the interpolation is that
-// one call and nothing joined to it; quoted identifiers read as bare ones; concatenated SQL is found in any case.
+// and an expression is resolved only as a constant or a single call by name. A helper call counts only when the
+// interpolation is that one call and nothing joined to it; quoted identifiers read as bare ones; concatenated SQL is
+// found in any case.
 
 type Bounded = { table: string; column: string; helpers: readonly string[] }
 

@@ -198,7 +198,6 @@ const RULES: readonly Rule[] = [
 	},
 ]
 
-// Fixture files from their texts.
 const files = (texts: Record<string, string>): Source[] => Object.entries(texts).map(([path, text]) => ({ path, text }))
 
 function violations(all: readonly Source[], rules: readonly Rule[] = RULES): string[] {
@@ -320,27 +319,28 @@ describe('policy boundary', () => {
 		])
 	})
 
-	// Each fixture file joins the real sources, replacing the file of its path.
-	const find = (fixtures: readonly Source[]) =>
-		violations([...SOURCES.filter((s) => !fixtures.some((f) => f.path === s.path)), ...fixtures])
-	guardFixtures(find, {
-		flagged: {
-			'a read in a template': ['db.all(`SELECT 1 FROM ${t} JOIN blocks b`)', 'src/domain/probe.ts reads blocks'],
-			...Object.fromEntries(
-				RULE_FIXTURES.map(([name, flagged]) => [name, [flagged, `src/domain/probe.ts ${name}`] as [string, string]])
-			),
+	guardFixtures(
+		violations,
+		{
+			flagged: {
+				'a read in a template': ['db.all(`SELECT 1 FROM ${t} JOIN blocks b`)', 'src/domain/probe.ts reads blocks'],
+				...Object.fromEntries(
+					RULE_FIXTURES.map(([name, flagged]) => [name, [flagged, `src/domain/probe.ts ${name}`] as [string, string]])
+				),
+			},
+			passed: {
+				'a read named in a comment': '// SELECT 1 FROM blocks b\nf()',
+				...Object.fromEntries(RULE_FIXTURES.map(([name, , passed]) => [name, passed])),
+			},
 		},
-		passed: {
-			'a read named in a comment': '// SELECT 1 FROM blocks b\nf()',
-			...Object.fromEntries(RULE_FIXTURES.map(([name, , passed]) => [name, passed])),
-		},
-	})
+		{ over: SOURCES }
+	)
 
 	it('has a fixture for every rule', () => {
 		expect(RULE_FIXTURES.map(([name]) => name)).toEqual(RULES.map((rule) => rule.name))
 	})
 	guardFixtures(
-		find,
+		violations,
 		{
 			flagged: {
 				'an allowed file that reads only in a comment': [
@@ -350,7 +350,7 @@ describe('policy boundary', () => {
 			},
 			passed: {},
 		},
-		'src/domain/scheduled-statuses.ts'
+		{ path: 'src/domain/scheduled-statuses.ts', over: SOURCES }
 	)
 })
 

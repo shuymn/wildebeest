@@ -29,7 +29,6 @@ function violations(files: readonly Source[]): string[] {
 	return found
 }
 
-// The files whose code names one of `names`.
 const naming = (files: readonly Source[], names: RegExp) =>
 	files.filter((source) => names.test(parse(source).code)).map((source) => source.path)
 

@@ -233,10 +233,8 @@ describe('the streaming delete capture sites', () => {
 	expect(inbox).toContain(UNDO)
 	const ON_CREATE = '\tif (created !== undefined) {\n\t\tstreamDelete(db, status.id, now)\n\t}'
 	expect(inbox).toContain(ON_CREATE)
-	const find = (fixtures: readonly Source[]) =>
-		captureProblems([...SOURCES.filter((s) => !fixtures.some((f) => f.path === s.path)), ...fixtures])
 	guardFixtures(
-		find,
+		captureProblems,
 		{
 			flagged: {
 				'a capture in a comment only': [inbox.replace(UNDO, `// ${UNDO}`), 'undoInteraction does not capture'],
@@ -259,6 +257,6 @@ describe('the streaming delete capture sites', () => {
 			},
 			passed: { 'a capture named in a comment': `${inbox}\n// streamDelete(db, id, now) runs above.\n` },
 		},
-		'src/domain/inbox.ts'
+		{ path: 'src/domain/inbox.ts', over: SOURCES }
 	)
 })

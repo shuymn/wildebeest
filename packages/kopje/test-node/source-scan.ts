@@ -39,8 +39,8 @@ export function sources(dir: string, extensions: readonly string[] = ['.ts', '.t
 }
 
 // A string or template literal: its text parts and interpolated expressions in order, its ancestors (nearest first),
-// and the name of the constant it initializes (`const NAME = '...'`, with or without `as const` or a type; never a `let`
-// or `var`, which may be reassigned).
+// and the name of the constant it initializes (`const NAME = '...'`, with or without `as const` or a type; never a
+// `let` or `var`, which may be reassigned).
 export type Part = { text: string } | { expression: Node; source: string }
 export type Literal = { node: Node; parts: Part[]; parents: Node[]; constant: string | null }
 
@@ -132,16 +132,18 @@ export function lineOf(text: string, offset: number): number {
 }
 
 // The self-check of a guard: `find` (the guard's own finder, given sources) reports each `flagged` fixture's finding
-// and nothing for each `passed` fixture. A fixture is the text of one file at `path`.
+// and nothing for each `passed` fixture. A fixture is the text of one file at `path`; with `over`, it joins those
+// sources in place of the one at its path.
 export function guardFixtures(
 	find: (sources: Source[]) => readonly string[],
 	cases: { flagged: Record<string, [text: string, finding: string]>; passed: Record<string, string> },
-	path = 'src/domain/probe.ts'
+	{ path = 'src/domain/probe.ts', over = [] }: { path?: string; over?: readonly Source[] } = {}
 ): void {
+	const sources = (text: string) => [...over.filter((s) => s.path !== path), { path, text }]
 	it.each(Object.entries(cases.flagged))('flags %s', (_name, [text, finding]) => {
-		expect(find([{ path, text }])).toContain(finding)
+		expect(find(sources(text))).toContain(finding)
 	})
 	it.each(Object.entries(cases.passed))('passes %s', (_name, text) => {
-		expect(find([{ path, text }])).toEqual([])
+		expect(find(sources(text))).toEqual([])
 	})
 }
