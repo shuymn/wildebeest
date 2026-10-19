@@ -11,7 +11,7 @@ import { MAX_BIO, maxFields } from './profile-fixtures'
 import { observedSql, rowsRead } from './read-helpers'
 import { community, post, remoteAccount } from './status-helpers'
 import { heap } from './status-row-fixtures'
-import { Db } from '../src/db/sql'
+import { Db, rowHeapBytes } from '../src/db/sql'
 import { createActivity, getFeatured, noteOf, OUTBOX_BYTES, PIN_LIMIT, statusFacts } from '../src/domain/activities'
 import { ANSWER_BYTES } from '../src/domain/answer-budget'
 import { type VisibleStatusId } from '../src/domain/audience'
@@ -31,7 +31,13 @@ import {
 	MAX_TAG_LENGTH,
 	MEDIA_URL_LIMIT,
 } from '../src/domain/status-bounds'
-import { presentation, presentStatusesWithin } from '../src/domain/status-presenter'
+import {
+	type ChunkPlan,
+	LARGE_ITEM_CHUNKS,
+	PAGE_CHUNKS,
+	presentation,
+	presentStatusesWithin,
+} from '../src/domain/status-presenter'
 import { statusRowBoundSql } from '../src/domain/status-rows'
 import { getStatus, getStatuses, statusHistory } from '../src/domain/statuses'
 import { parseRemoteStatus } from '../src/federation/remote-status'
@@ -105,6 +111,8 @@ type Parts = {
 	poll: string[] | null
 	uri?: string
 	url?: string
+	// The status a boost boosts; a boost's content is '' (the statuses CHECK).
+	reblogOf?: string
 }
 
 // A public remote status of `author` with the given parts, written directly in SQL: the stored-bound triggers of
@@ -113,14 +121,16 @@ async function storedStatus(t: Setup, author: string, parts: Parts): Promise<str
 	const id = nextId()
 	await sql(
 		t.store,
-		`INSERT INTO statuses (id, uri, url, account_id, visibility, spoiler_text, content, source_text, published_at)
-		VALUES (?, ?, ?, ?, 'public', ?, ?, ?, ?)`,
+		`INSERT INTO statuses (id, uri, url, account_id, reblog_of_id, visibility, spoiler_text, content, source_text,
+			published_at)
+		VALUES (?, ?, ?, ?, ?, 'public', ?, ?, ?, ?)`,
 		id,
 		parts.uri ?? atLimit(`https://${HOST}/objects/${id}/`, 4096),
 		parts.url ?? atLimit(`https://${HOST}/notes/${id}/`, 4096),
 		author,
+		parts.reblogOf ?? null,
 		parts.spoiler,
-		parts.content,
+		parts.reblogOf === undefined ? parts.content : '',
 		parts.source ?? null,
 		new Date(NOW - 60_000).toISOString()
 	)
@@ -206,19 +216,42 @@ async function maximalParts(t: Setup, fill: Fill = 'escaped'): Promise<Parts> {
 	}
 }
 
-type Measure = { answer: unknown; rows: number; sqliteBytes: number; longest: number; profileBytes: number }
+type Measure = {
+	answer: unknown
+	rows: number
+	sqliteBytes: number
+	longest: number
+	profileBytes: number
+	heap: number
+	largestRow: number
+}
+
+// The heap of one row under the model of "Heap at 8 MiB per answer" (docs/threat-model.md): 64 B for its object, and
+// for each value 32 B and twice its UTF-8 bytes.
+function modelHeap(row: Record<string, unknown>): number {
+	return Object.values(row).reduce<number>(
+		(sum, value) => sum + 32 + (typeof value === 'string' ? 2 * utf8Length(value) : 0),
+		64
+	)
+}
 
 // Runs a read over a SqlStorage that measures what leaves SQLite: the rows, the UTF-8 bytes of their values (eight per
-// number) and the longest value's bytes.
+// number), the longest value's bytes, the rows' heap under the model, and the largest single row's heap under the
+// model or as RowMeter counts it (rowHeapBytes), whichever is more.
 async function measured<I>(t: Setup, operation: StoreOperation<I, unknown>, input: I): Promise<Measure> {
 	return runInDurableObject(t.store, (_instance, state) => {
 		let rows = 0
 		let sqliteBytes = 0
 		let longest = 0
 		let profileBytes = 0
+		let heap = 0
+		let largestRow = 0
 		const counting = observedSql(state.storage.sql, (read) => {
 			for (const row of read) {
 				rows++
+				const model = modelHeap(row)
+				heap += model
+				largestRow = Math.max(largestRow, model, rowHeapBytes(row))
 				const profile = 'note' in row && 'display_name' in row
 				for (const value of Object.values(row)) {
 					const bytes = typeof value === 'string' ? utf8Length(value) : 8
@@ -232,7 +265,7 @@ async function measured<I>(t: Setup, operation: StoreOperation<I, unknown>, inpu
 		while (answer.status === 'ok' && 'value' in answer) {
 			answer = answer.value as Record<string, unknown>
 		}
-		return { answer, rows, sqliteBytes, longest, profileBytes }
+		return { answer, rows, sqliteBytes, longest, profileBytes, heap, largestRow }
 	})
 }
 
@@ -748,9 +781,21 @@ async function maximalFilters(t: Setup, fill: Fill, statuses: readonly string[])
 type Shape = { sqlite: number; json: number; rows: number; nodes: number }
 
 // A quote of a status and a boost of the quote, each part of every status at its bound and each account at its
-// bounds, filled as `fill`, with alice's filters at their bounds naming all three.
+// bounds, filled as `fill`, with alice's profile and filters at their bounds, the filters naming all three. The
+// boost's own row holds every part its CHECK and triggers accept (all but content), with its own attachments,
+// mentions, hashtags and poll: the presenter reads them, though it shows the original's.
 async function maximalStatuses(fill: Fill) {
 	const t = await setup()
+	await sql(
+		t.store,
+		'UPDATE accounts SET display_name = ?, note = ?, url = ?, avatar_url = ?, header_url = ? WHERE id = ?',
+		(fill === 'raw' ? W : C).repeat(2048),
+		fill === 'raw' ? RAW_BIO : MAX_BIO,
+		atLimit(`https://kopje.test/@alice/`, PROFILE_URL_LIMIT),
+		atLimit(`https://kopje.test/a/alice/`, PROFILE_URL_LIMIT),
+		atLimit(`https://kopje.test/h/alice/`, PROFILE_URL_LIMIT),
+		ALICE
+	)
 	const [booster, quoter, quotedAuthor] = [
 		await maximalAccount(t, false, fill),
 		await maximalAccount(t, false, fill),
@@ -766,20 +811,14 @@ async function maximalStatuses(fill: Fill) {
 		quoted,
 		new Date(NOW).toISOString()
 	)
-	const boost = nextId()
-	await sql(
-		t.store,
-		`INSERT INTO statuses (id, uri, account_id, reblog_of_id, visibility, published_at)
-		VALUES (?, ?, ?, ?, 'public', ?)`,
-		boost,
-		atLimit(`https://${HOST}/announces/${boost}/`, 4096),
-		booster,
-		quote,
-		new Date(NOW).toISOString()
-	)
+	const boost = await storedStatus(t, booster, { ...(await maximalParts(t, fill)), reblogOf: quote })
 	await maximalFilters(t, fill, [quoted, quote, boost])
 	return { t, quoted, quote, boost }
 }
+
+// The terms of the heap model each fill measured, by shape: the rows' heap, the largest row and the presented JSON.
+type Terms = { heap: number; largestRow: number; json: number }
+const measuredTerms = new Map<Fill, Record<string, Terms>>()
 
 async function measureShapes(fill: Fill): Promise<Record<string, Shape>> {
 	const { t, quoted, quote, boost } = await maximalStatuses(fill)
@@ -890,14 +929,43 @@ async function measureShapes(fill: Fill): Promise<Record<string, Shape>> {
 	const shownReport = (reported.answer as { report: { statuses: { id: string }[] } }).report
 	expect(shownReport.statuses.map((status) => status.id)).toEqual([quote])
 	const account = (one.answer as Presented).account
+	const two = await read(t, getStatus, quote)
+	const terms = (m: Measure, answer: unknown): Terms => ({
+		heap: m.heap,
+		largestRow: m.largestRow,
+		json: jsonBytes(answer),
+	})
+	measuredTerms.set(fill, {
+		status: terms(one, one.answer),
+		quote: terms(two, two.answer),
+		boostOfQuote: terms(pair, pair.answer),
+		group: terms(grouped, group),
+		report: terms(reported, shownReport),
+	})
 	return {
 		account: { sqlite: one.profileBytes, json: jsonBytes(account), rows: 1, nodes: nodes(account) },
 		status: shape(one),
-		quote: shape(await read(t, getStatus, quote)),
+		quote: shape(two),
 		boostOfQuote: shape(pair),
 		conversation: { ...shape({ ...listed, answer: talk }), sqlite: listed.sqliteBytes },
 		group: shape({ ...grouped, answer: group }),
 		report: shape({ ...reported, answer: shownReport }),
+	}
+}
+
+// The peaks of "Heap at 8 MiB per answer" (docs/threat-model.md), from the terms the fills measured, each the largest
+// any fill measured: an item's rows with 25% headroom, the admitted answer at three times ANSWER_BYTES, the rejected
+// item at three times its JSON, and a chunk of several at its cap, past it by the largest row when the backstop fires.
+function peaks(items: readonly string[], chunks: ChunkPlan, state: number) {
+	const all = [...measuredTerms.values()].flatMap((byShape) => items.map((item) => byShape[item]!))
+	const rows = 1.25 * Math.max(...all.map((terms) => terms.heap))
+	const largestRow = Math.max(...all.map((terms) => terms.largestRow))
+	const rest = 3 * ANSWER_BYTES + 3 * Math.max(...all.map((terms) => terms.json)) + state
+	return {
+		rows,
+		largestRow,
+		normal: Math.max(1.25 * chunks.cap, rows) + rest,
+		backstop: 1.25 * (chunks.cap + largestRow) + rows + rest,
 	}
 }
 
@@ -914,10 +982,10 @@ describe('the table of maxima (RES-3)', () => {
 				account: { sqlite: 97_844, json: 121_710, rows: 1, nodes: 36 },
 				status: { sqlite: 2_745_312, json: 2_595_446, rows: 1_381, nodes: 2_267 },
 				quote: { sqlite: 4_917_267, json: 5_190_925, rows: 1_710, nodes: 4_536 },
-				boostOfQuote: { sqlite: 5_025_514, json: 5_564_762, rows: 1_763, nodes: 5_439 },
-				conversation: { sqlite: 6_091_851, json: 6_651_414, rows: 1_724, nodes: 4_959 },
+				boostOfQuote: { sqlite: 5_054_169, json: 5_581_142, rows: 1_763, nodes: 5_439 },
+				conversation: { sqlite: 6_154_627, json: 6_651_414, rows: 1_724, nodes: 4_959 },
 				group: { sqlite: 5_700_973, json: 6_165_029, rows: 1_737, nodes: 4_836 },
-				report: { sqlite: 5_021_763, json: 5_318_285, rows: 1_719, nodes: 4_661 },
+				report: { sqlite: 5_084_539, json: 5_581_961, rows: 1_719, nodes: 4_661 },
 			},
 		],
 		[
@@ -927,10 +995,10 @@ describe('the table of maxima (RES-3)', () => {
 				account: { sqlite: 97_844, json: 121_710, rows: 1, nodes: 36 },
 				status: { sqlite: 2_337_312, json: 2_185_846, rows: 1_381, nodes: 2_267 },
 				quote: { sqlite: 4_101_267, json: 4_371_725, rows: 1_710, nodes: 4_536 },
-				boostOfQuote: { sqlite: 4_209_514, json: 4_745_562, rows: 1_763, nodes: 5_439 },
-				conversation: { sqlite: 5_275_851, json: 5_832_214, rows: 1_724, nodes: 4_959 },
+				boostOfQuote: { sqlite: 4_238_169, json: 4_761_942, rows: 1_763, nodes: 5_439 },
+				conversation: { sqlite: 5_338_627, json: 5_832_214, rows: 1_724, nodes: 4_959 },
 				group: { sqlite: 4_884_973, json: 5_345_829, rows: 1_737, nodes: 4_836 },
-				report: { sqlite: 4_205_763, json: 4_499_085, rows: 1_719, nodes: 4_661 },
+				report: { sqlite: 4_268_539, json: 4_762_761, rows: 1_719, nodes: 4_661 },
 			},
 		],
 		[
@@ -940,10 +1008,10 @@ describe('the table of maxima (RES-3)', () => {
 				account: { sqlite: 114_914, json: 117_615, rows: 1, nodes: 36 },
 				status: { sqlite: 4_412_084, json: 2_157_753, rows: 1_381, nodes: 2_267 },
 				quote: { sqlite: 6_753_211, json: 4_315_539, rows: 1_710, nodes: 4_536 },
-				boostOfQuote: { sqlite: 6_878_528, json: 4_531_681, rows: 1_763, nodes: 5_439 },
-				conversation: { sqlite: 8_132_635, json: 5_726_888, rows: 1_724, nodes: 4_959 },
+				boostOfQuote: { sqlite: 7_030_060, json: 4_548_063, rows: 1_763, nodes: 5_439 },
+				conversation: { sqlite: 8_212_481, json: 5_726_888, rows: 1_724, nodes: 4_959 },
 				group: { sqlite: 7_673_477, json: 5_256_883, rows: 1_737, nodes: 4_836 },
-				report: { sqlite: 6_874_777, json: 4_438_804, rows: 1_719, nodes: 4_661 },
+				report: { sqlite: 6_954_623, json: 4_690_195, rows: 1_719, nodes: 4_661 },
 			},
 		],
 	])(
@@ -958,12 +1026,35 @@ describe('the table of maxima (RES-3)', () => {
 		300_000
 	)
 
+	// Half of the Store isolate's 128 MB. A timeline's largest item is a status, a quote or a boost of a quote; groups
+	// and reports keep the presentation's state besides (10.1 and 12.5 MB, docs/threat-model.md) and pass half, below
+	// the whole (the RES-3 gap).
+	const HALF = 64_000_000
+	it('keeps the peaks of the heap model within their bounds, from the measured maxima', () => {
+		expect([...measuredTerms.keys()].toSorted()).toEqual(['derived', 'escaped', 'raw'])
+		const timelines = peaks(['status', 'quote', 'boostOfQuote'], PAGE_CHUNKS, 0)
+		const groups = peaks(['group'], LARGE_ITEM_CHUNKS, 10_100_000)
+		const reports = peaks(['report'], LARGE_ITEM_CHUNKS, 12_500_000)
+		const mb = (bytes: number) => (bytes / 1e6).toFixed(2)
+		for (const [name, p] of Object.entries({ timelines, groups, reports })) {
+			console.info(
+				`Peak, ${name}: rows ${mb(p.rows)}, largest row ${mb(p.largestRow)}, normal ${mb(p.normal)}, backstop fired ${mb(p.backstop)} MB`
+			)
+		}
+		// PAGE_CHUNKS leaves at least 1 MB of the half to spare.
+		expect(timelines.normal).toBeLessThanOrEqual(HALF - 1_000_000)
+		expect(timelines.backstop).toBeLessThanOrEqual(HALF - 1_000_000)
+		for (const p of [groups, reports]) {
+			expect(p.backstop).toBeLessThanOrEqual(2 * HALF)
+		}
+	})
+
 	// R (status-rows.ts), which statusStream plans its chunks by, is at least the heap RowMeter counts of the rows each
 	// shape reads, with every part at its bound: the viewer's filters naming each status, her votes in every choice,
 	// and every flag of hers.
 	it('bounds the rows each shape reads by R', async () => {
 		const { t, quoted, quote, boost } = await maximalStatuses('raw')
-		for (const id of [quoted, quote]) {
+		for (const id of [quoted, quote, boost]) {
 			await sql(t.store, 'UPDATE polls SET multiple = 1 WHERE status_id = ?', id)
 			await sql(
 				t.store,
