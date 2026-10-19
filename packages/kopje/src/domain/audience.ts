@@ -326,6 +326,24 @@ export function followListedSql(x: string, owner: string, viewer: string, now: s
 		OR NOT (${blocksSql(viewer, x)} OR ${blocksSql(x, viewer)} OR ${mutesSql(viewer, x, now)}))`
 }
 
+// R39 (AccountSuggestions::FriendsOfFriendsSource): whether the viewer's follow of `owner` brings the accounts the
+// owner follows into the viewer's suggestions: R13 shows the viewer the owner's following. Mastodon asks only that the
+// owner does not hide its network; Kopje also asks R13's availability and no block of the viewer (VIS-8).
+export function suggestionSourceSql(owner: string, viewer: string): string {
+	return followListsShownSql(owner, viewer)
+}
+
+// R39: whether the account `x`, with its accounts row `a` in scope, is a candidate for the suggestions of `viewer`:
+// someone else, discoverable (accounts.discoverable = 1), neither followed nor requested by the viewer (a follow in
+// either state, one seek of follows_pair), and not dismissed by them (follow_recommendation_mutes). R12
+// (listedForSql) judges each candidate after this.
+export function suggestionCandidateSql(x: string, a: string, viewer: string): string {
+	return `(${x} <> ${viewer} AND ${a}.discoverable = 1
+		AND NOT EXISTS (SELECT 1 FROM main.follows pf WHERE pf.account_id = ${viewer} AND pf.target_account_id = ${x})
+		AND NOT EXISTS (SELECT 1 FROM main.follow_recommendation_mutes pr
+			WHERE pr.account_id = ${viewer} AND pr.target_account_id = ${x}))`
+}
+
 // R28 (Accounts::EndorsementsController#set_endorsed_accounts): whether the accounts `owner` endorses are listed. They
 // are public: to anyone, the owner itself included, while the owner is available (an unavailable one lists none).
 export function endorsementsShownSql(owner: string): string {

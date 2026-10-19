@@ -134,6 +134,16 @@ const RULES: readonly Rule[] = [
 		},
 	},
 	{
+		// R39: a dismissal is its owner's alone; only the policy module reads it (suggestionCandidateSql).
+		name: 'reads or writes follow_recommendation_mutes',
+		pattern: new RegExp(`\\b(?:FROM|JOIN|INTO|UPDATE)\\s+${table(['follow_recommendation_mutes'])}`, 'i'),
+		allowed: {
+			...POLICY_ONLY,
+			'src/domain/suggestions.ts': 'the viewer’s own dismissals (dismissSuggestion)',
+			'src/domain/inbox.ts': 'an actor purge deletes the dismissals of the account',
+		},
+	},
+	{
 		// R31: a conversation mute is its owner's alone; only the policy module reads it (conversationMutedSql).
 		name: 'reads conversation_mutes',
 		pattern: reads('conversation_mutes'),
@@ -258,6 +268,11 @@ const RULE_FIXTURES: readonly [name: string, flagged: string, passed: string][] 
 		'reads account_notes',
 		"db.all('SELECT note FROM account_notes')",
 		"db.run('INSERT INTO account_notes (id) VALUES (1)')",
+	],
+	[
+		'reads or writes follow_recommendation_mutes',
+		"db.run('INSERT OR IGNORE INTO follow_recommendation_mutes (id) VALUES (1)')",
+		"db.all('SELECT 1 FROM follow_recommendation_mutes_archive')",
 	],
 	[
 		'reads conversation_mutes',

@@ -14,7 +14,7 @@ import {
 import { mastodonError } from './errors'
 import { sweepSoon } from './media'
 import { pageQuery, pageResponse, unlimitedResponse } from './pagination'
-import { type Params, parseBoolean } from './params'
+import { limitParam, offsetParam, type Params, parseBoolean } from './params'
 import { MAX_SEARCH_OFFSET, searchParams } from './search'
 import {
 	type CredentialChanges,
@@ -400,16 +400,12 @@ export const directory: ApiHandler = async (c, deps) => {
 		return p
 	}
 	const credential = optionalTokenCredential(c, deps)
-	const limit = p.get('limit')
 	const input = {
 		credential,
 		order: p.get('order') === 'new' ? ('new' as const) : ('active' as const),
 		local: parseBoolean(p.get('local')) ?? false,
-		offset: Math.max(Number.parseInt(p.get('offset') ?? '0', 10) || 0, 0),
-		limit:
-			limit === undefined
-				? DIRECTORY_DEFAULT_LIMIT
-				: Math.min(Math.abs(Number.parseInt(limit, 10) || 0), DIRECTORY_MAX_LIMIT),
+		offset: offsetParam(p),
+		limit: limitParam(p, DIRECTORY_DEFAULT_LIMIT, DIRECTORY_MAX_LIMIT),
 		now: deps.now(),
 		present: present(c),
 	}

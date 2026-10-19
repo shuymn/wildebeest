@@ -28,6 +28,22 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   (`update_setting`, `remove_setting`, target `Setting`) without its value. They are data: dumped, imported and reset
   with the rest, so set them after a cutover import is published ([docs/setup.md](docs/setup.md), "Instance
   details").
+- Follow suggestions (`GET /api/v1/suggestions` and `/api/v2/suggestions`, which used to answer `[]`): the accounts
+  the people you follow follow, Mastodon's "friends of friends", ranked by how many of them follow each account, then
+  by follower count (fewest first), then newest first. Only accounts that chose to be discoverable are suggested, never
+  one you follow or requested to follow, block, mute, or block the domain of, one that blocks you, or an unavailable
+  one; a follow only counts when you are shown that account's following list. Mastodon's other sources (accounts the
+  admin features, trending accounts, similar profiles) are not offered. v2 shows each with
+  `"sources": ["friends_of_friends"]`.
+    - The ranking reads bounded windows (your 1,000 newest follows, each one's 100 newest follows, 10,000 in all), so
+      it is an approximation of Mastodon's: a follow outside them does not count.
+    - Kopje does not learn a remote account's follower count, so it ranks one as having none: at equal counts, remote
+      accounts come before local ones.
+    - At most 40 accounts are suggested; an offset of 40 or more answers `[]`, where Mastodon answers 500. There is no
+      15-minute cache: the list is worked out on each request, so an offset is stable only while follows, blocks,
+      mutes and dismissals stay the same.
+- Dismissing a suggestion (`DELETE /api/v1/suggestions/:id`) is stored, and the account is not suggested again; it
+  still answers `{}` whatever the id.
 
 ### Changed
 
@@ -50,13 +66,16 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds one migration, applied on the first request after the deploy; a rollback to an earlier version
+- Store schema: adds two migrations, applied on the first request after the deploy; a rollback to an earlier version
   needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0049_instance_bounds`: rewrites instance settings past their bounds (above), adds the triggers that refuse
       them, and indexes the suspend blocks by domain. On a benchmark store of 1,000,000 accounts, 2,000,000 statuses
       and 100,000 instance domain blocks, the whole upgrade took 6.2 to 6.7 seconds in four runs in workerd's local
       Durable Object SQLite, most of it the upgrade's fixed cost on a store that size (runs under heavy outside load
       took up to 15.6 seconds).
+    - `0050_follow_recommendation_mutes`: the table of dismissed suggestions. It adds an empty table and reads nothing:
+      on the same benchmark store its upgrade took 9.1 seconds (13.7 in a first run), the overhead of an upgrade on a
+      store that size.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.17] - 2026-10-19

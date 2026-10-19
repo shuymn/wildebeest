@@ -90,6 +90,7 @@ below the cursor. Unread counts and markers are not read by admission.
 | `listFollows`, `listFollowRequests`, `interactors`                        | Budget                                   | Id cursor            |
 | `listBlocks`, `listMutes`                                                 | Budget                                   | Id cursor            |
 | `directory`                                                               | Budget                                   | Offset               |
+| `suggestions` (v1 and v2, at most 40 accounts)                            | Budget                                   | Offset               |
 | `adminAccounts`                                                           | Budget: accounts with their admin fields | More                 |
 | `adminAccount`, `actOnAdminAccount`, `unsuspendAdminAccount`              | Unit                                     |                      |
 | `createReport`                                                            | Unit                                     |                      |

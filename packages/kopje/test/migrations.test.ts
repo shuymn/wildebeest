@@ -55,6 +55,7 @@ const SCHEMA_TABLES = [
 	'domain_blocks',
 	'favourites',
 	'fedify_kv',
+	'follow_recommendation_mutes',
 	'follows',
 	'inbound_jobs',
 	'inbound_retractions',
@@ -5220,6 +5221,56 @@ describe('0049_instance_bounds', () => {
 				.toArray()
 				.map((row) => row.detail)
 			expect(plan).toEqual(['SEARCH instance_domain_blocks USING INDEX instance_domain_blocks_public (domain>?)'])
+		})
+	})
+})
+
+describe('0050_follow_recommendation_mutes', () => {
+	const NAME = '0050_follow_recommendation_mutes'
+	const at = NAMES.indexOf(NAME)
+
+	it('stores one dismissal per local account and known account, gone with either, found by target', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+			// Nothing of the existing schema is read: a store with accounts upgrades the same way.
+			sql.exec(
+				`INSERT INTO accounts (id, uri, username, domain) VALUES
+					('100000000000000001', 'https://kopje.test/ap/users/a', 'a', NULL),
+					('100000000000000002', 'https://r.example/b', 'b', 'r.example'),
+					('100000000000000003', 'https://r.example/c', 'c', 'r.example')`
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES ('100000000000000001', 'a@example.com', X'00', X'00', 'test')"
+			)
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+			const dismiss = (owner: string, target: string) =>
+				sql.exec('INSERT INTO follow_recommendation_mutes (account_id, target_account_id) VALUES (?, ?)', owner, target)
+			dismiss('100000000000000001', '100000000000000002')
+			dismiss('100000000000000001', '100000000000000003')
+			expect(() => dismiss('100000000000000001', '100000000000000002')).toThrow(/UNIQUE constraint failed/)
+			// The owner is a local account, the target a known one.
+			expect(() => dismiss('100000000000000002', '100000000000000003')).toThrow(/FOREIGN KEY constraint failed/)
+			expect(() => dismiss('100000000000000001', '100000000000000009')).toThrow(/FOREIGN KEY constraint failed/)
+			const { created_at } = sql
+				.exec<{ created_at: string }>('SELECT created_at FROM follow_recommendation_mutes LIMIT 1')
+				.one()
+			expect(created_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/)
+			const plan = sql
+				.exec<{ detail: string }>(
+					'EXPLAIN QUERY PLAN SELECT account_id FROM follow_recommendation_mutes WHERE target_account_id = ?',
+					'100000000000000002'
+				)
+				.toArray()
+				.map((row) => row.detail)
+			expect(plan).toEqual([
+				'SEARCH follow_recommendation_mutes USING COVERING INDEX follow_recommendation_mutes_target (target_account_id=?)',
+			])
+			sql.exec("DELETE FROM accounts WHERE id = '100000000000000003'")
+			expect(sql.exec('SELECT target_account_id FROM follow_recommendation_mutes').toArray()).toEqual([
+				{ target_account_id: '100000000000000002' },
+			])
 		})
 	})
 })

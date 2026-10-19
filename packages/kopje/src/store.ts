@@ -75,6 +75,7 @@ import * as setup from './domain/setup'
 import { saveSnapshot } from './domain/snapshot'
 import * as statusActions from './domain/status-actions'
 import * as statuses from './domain/statuses'
+import * as suggestions from './domain/suggestions'
 import { runModerationJobs, suspendAccount } from './domain/suspension'
 import * as tags from './domain/tags'
 import * as timelines from './domain/timelines'
@@ -948,6 +949,15 @@ export class Store extends DurableObject<Env> {
 	// The profile directory (domain/directory.ts).
 	directory(callerBuild: string, input: OperationInput<typeof directory>) {
 		return this.#kernel.execute(callerBuild, directory, input)
+	}
+
+	// Follow suggestions and their dismissals (domain/suggestions.ts).
+	suggestions(callerBuild: string, input: OperationInput<typeof suggestions.suggestions>) {
+		return this.#kernel.execute(callerBuild, suggestions.suggestions, input)
+	}
+
+	dismissSuggestion(callerBuild: string, input: OperationInput<typeof suggestions.dismissSuggestion>) {
+		return this.#kernel.execute(callerBuild, suggestions.dismissSuggestion, input)
 	}
 
 	removeFromFollowers(callerBuild: string, input: OperationInput<typeof blocks.removeFromFollowers>) {

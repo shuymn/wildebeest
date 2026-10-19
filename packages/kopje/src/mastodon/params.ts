@@ -133,6 +133,18 @@ function flatten(prefix: string, value: unknown, out: [string, string][]): void 
 	}
 }
 
+// `offset` as Mastodon's offset endpoints read it (params[:offset].to_i): a negative or unreadable one is 0.
+export function offsetParam(p: Params): number {
+	return Math.max(Number.parseInt(p.get('offset') ?? '0', 10) || 0, 0)
+}
+
+// `limit` as Api::BaseController#limit_param reads it: `fallback` when absent, else the absolute value, at most `max`
+// (an unreadable one is 0).
+export function limitParam(p: Params, fallback: number, max: number): number {
+	const limit = p.get('limit')
+	return limit === undefined ? fallback : Math.min(Math.abs(Number.parseInt(limit, 10) || 0), max)
+}
+
 // Rails' boolean casting: blank is absent, "0", "f", "false" and "off" are false, anything else is true.
 export function parseBoolean(value: string | undefined): boolean | undefined {
 	if (value === undefined || value === '') {

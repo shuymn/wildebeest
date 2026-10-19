@@ -228,6 +228,7 @@ function witness(
 			conversationMutes: [],
 			tagFollowers: [],
 			quotes: world.quotes ?? [],
+			dismissals: [],
 			now: '2026-10-12T00:00:00.000Z',
 		},
 		shared: [false],
@@ -653,6 +654,12 @@ function readWorld(sql: SqlStorage, base: World): Snapshot {
 			instanceBlocks: sql
 				.exec<{ domain: string; severity: 'suspend' | 'noop' }>('SELECT domain, severity FROM instance_domain_blocks')
 				.toArray(),
+			dismissals: sql
+				.exec<{ account_id: string; target_account_id: string }>(
+					'SELECT account_id, target_account_id FROM follow_recommendation_mutes'
+				)
+				.toArray()
+				.map((d) => ({ owner: account(d.account_id), target: account(d.target_account_id) })),
 			// The case's lists, with the members they hold now.
 			lists: base.lists.map((list, l) => ({
 				...list,

@@ -302,7 +302,8 @@ own settings. Each setting is stored as the Worker stores it (`INSTANCE_SETTING_
 `verify-conversion` expects the same values, and expects each dropped setting to be absent from the dump.
 Access tokens, push subscriptions, app credentials, the outbox and inbox queues and the full-text index are not carried
 over: users sign in again and clients register push again. Legacy never wrote its filter tables (`filters`,
-`filter_keywords`, `filter_statuses`), so a converted Store starts without filters.
+`filter_keywords`, `filter_statuses`), so a converted Store starts without filters. Legacy has no follow suggestions,
+so a converted Store starts without dismissed ones (`follow_recommendation_mutes`).
 
 **Stops.** The converter writes no dump when it finds rows it cannot carry over (`conversion.problems`: rows in tables
 the legacy code never wrote, unknown object types, statuses whose author is not local where it must be, duplicate URIs,
