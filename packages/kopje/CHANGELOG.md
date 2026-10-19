@@ -8,6 +8,58 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+### Added
+
+- The instance's documents and public block list, as Mastodon 4.5 serves them:
+    - `GET /api/v1/instance/privacy_policy` and `GET /api/v1/instance/terms_of_service` (and `/:date`) serve the
+      privacy policy and the terms of service, and `GET /api/v1/instance/extended_description` the extended
+      description, each sanitized as remote HTML is. The terms of service are one current version with its effective
+      date (`effective` once the date has passed, `succeeded_by` always null). A converted document's `updated_at` is
+      null until it is edited.
+    - `/api/v2/instance` names `configuration.urls.privacy_policy` and `terms_of_service` while they are set.
+    - The web pages `/privacy-policy`, `/terms-of-service` and `/terms-of-service/:date`; `/about` shows the extended
+      description and links to them.
+    - `GET /api/v1/instance/domain_blocks` lists the suspend blocks by `show_domain_blocks` and their public comments
+      by `show_domain_blocks_rationale` (`disabled`, `users` or `all`; unset is `disabled`), obfuscated where a block
+      says so, with the SHA-256 of each domain.
+- `kopje-admin instance` and `GET`/`POST /admin/instance`: the Access admin sets the title, description, contact
+  address, the three documents (HTML; `--file` reads one from a file and sends it with the other values in one
+  request), the effective date and the two block-list settings, each change logged in the moderation log
+  (`update_setting`, `remove_setting`, target `Setting`) without its value. They are data: dumped, imported and reset
+  with the rest, so set them after a cutover import is published ([docs/setup.md](docs/setup.md), "Instance
+  details").
+
+### Changed
+
+- Answers of the instance endpoints Kopje did not serve change shape, as Mastodon's: an unset privacy policy or terms
+  of service answers 404 `{"error":"Not Found"}` (a `/terms-of-service/:date` other than the stored date still
+  answers `Record not found`), and `GET /api/v1/instance/activity` and a hidden block list answer 404 with an empty
+  body. The activity stays unserved: its weekly logins count requests Kopje does not record.
+- `GET /api/v1/instance/domain_blocks` now reads the token: a suspended user's is refused with 403 `Your login is
+  currently disabled` whatever the settings; any other invalid token reads as anonymous.
+- The upgrade (migration `0049_instance_bounds`) rewrites instance settings past their bounds and keeps no copy: a
+  title is cut at 1,024 and a description at 200 code points; a contact address past 254 bytes, rules past 65,536
+  bytes or not a JSON array, and an extended description, privacy policy or terms of service past 50,000 bytes are
+  removed, as is any of these that is blank (only spaces, tabs, line feeds, vertical tabs, form feeds and carriage
+  returns). From then on the Store refuses such a value. To recover one, restore the point-in-time bookmark taken
+  before the upgrade ([docs/upgrade.md](docs/upgrade.md)), or run the conversion again for a converted one.
+- `kopje-admin convert` stores the legacy settings as the Worker stores them: a blank one, or a document that
+  sanitizes to no text, is dropped and counted among the normalized values (`settings:<name>-blank`,
+  `settings:<name>-no-text`); one past its bound is cut or dropped and stops the conversion
+  (`settings:<name>-longer-than-bound`) unless `--accept-truncation` is given. `verify-conversion` expects the same,
+  and fails when a dropped setting is in the dump.
+
+### Instance changes
+
+- Store schema: adds one migration, applied on the first request after the deploy; a rollback to an earlier version
+  needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
+    - `0049_instance_bounds`: rewrites instance settings past their bounds (above), adds the triggers that refuse
+      them, and indexes the suspend blocks by domain. On a benchmark store of 1,000,000 accounts, 2,000,000 statuses
+      and 100,000 instance domain blocks, the whole upgrade took 6.2 to 6.7 seconds in four runs in workerd's local
+      Durable Object SQLite, most of it the upgrade's fixed cost on a store that size (runs under heavy outside load
+      took up to 15.6 seconds).
+- `wrangler.jsonc`: unchanged.
+
 ## [0.1.0-rc.17] - 2026-10-19
 
 A seventeenth release candidate of the first release, published under the npm dist-tag `next`.
