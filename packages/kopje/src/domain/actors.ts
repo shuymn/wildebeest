@@ -1,10 +1,12 @@
 import { type FieldSource, fieldSources } from './accounts'
 import { accessAdminRefusal } from './admin-authority'
 import { availableLocalSql, availableSql, followListsShownSql } from './audience'
+import { type EmojiTag, localEmojiTags } from './custom-emojis'
 import { taggedUrl } from './featured-tags'
 import { readOperation, writeOperation } from './operation'
 import type { Db } from '../db/sql'
 import type { ImportAuthority } from '../platform/store-admin'
+import { ACCOUNT_EMOJIS_BYTES } from '../platform/stored-bounds'
 import { base64ToBytes, bytesToBase64 } from '../security/key-wrap'
 
 // What the federation layer needs from the Store to publish local actors: profiles, wrapped keys, collections, and
@@ -26,6 +28,8 @@ export type LocalActor = {
 	attributionDomains: string[]
 	// A suspended actor is published redacted (federation.ts).
 	suspended: boolean
+	// The Emoji tags of the profile's local emoji snapshot (custom-emojis.ts localEmojiTags); none while suspended.
+	emojis: EmojiTag[]
 	pubkey: string
 	createdAt: string
 }
@@ -33,6 +37,7 @@ export type LocalActor = {
 export type StoredKey = { privkey: Uint8Array; salt: Uint8Array; pubkey: string }
 
 type ActorRow = {
+	uri: string
 	username: string
 	actor_type: string
 	display_name: string
@@ -47,6 +52,7 @@ type ActorRow = {
 	suspended_at: string | null
 	pubkey: string
 	created_at: string
+	emojis: string | null
 }
 
 const LOCAL_BY_USERNAME =
@@ -59,8 +65,9 @@ export const getInstanceDomain = readOperation<void, string | null>(
 // A local actor by username, case-insensitively (local usernames are unique regardless of case).
 export function localActorOf(db: Db, username: string): LocalActor | null {
 	const row = db.first<ActorRow>(
-		`SELECT a.username, a.actor_type, a.display_name, a.note, a.avatar_url, a.header_url, a.locked, a.discoverable,
-			l.also_known_as, l.fields, l.attribution_domains, l.suspended_at, l.pubkey, a.created_at ${LOCAL_BY_USERNAME}`,
+		`SELECT a.uri, a.username, a.actor_type, a.display_name, a.note, a.avatar_url, a.header_url, a.locked,
+			a.discoverable, l.also_known_as, l.fields, l.attribution_domains, l.suspended_at, l.pubkey, a.created_at, a.emojis
+		${LOCAL_BY_USERNAME}`,
 		username
 	)
 	if (row === undefined) {
@@ -79,6 +86,8 @@ export function localActorOf(db: Db, username: string): LocalActor | null {
 		fields: fieldSources(row.fields),
 		attributionDomains: JSON.parse(row.attribution_domains) as string[],
 		suspended: row.suspended_at !== null,
+		emojis:
+			row.suspended_at === null ? localEmojiTags(db, row.emojis, new URL(row.uri).origin, ACCOUNT_EMOJIS_BYTES) : [],
 		pubkey: row.pubkey,
 		createdAt: row.created_at,
 	}

@@ -14,6 +14,7 @@ import {
 	type Recipient,
 	type Visibility,
 } from './audience'
+import { type EmojiTag, localEmojiTags } from './custom-emojis'
 import { type DeliveryEnvelope, enqueueActivity, type ReachOf } from './deliveries'
 import { readOperation } from './operation'
 import { actorUriSql, usernameSql } from './profile-bounds'
@@ -30,6 +31,7 @@ import type { Db } from '../db/sql'
 import { utf8Length } from '../platform/dump-format'
 import { httpUrl } from '../platform/http-url'
 import { sha256Hex } from '../platform/sha256'
+import { STATUS_EMOJIS_BYTES } from '../platform/stored-bounds'
 
 // Outbound intents. A local change that federates records the ActivityPub activity it means and the audience it is
 // for in outbound_activities, in the transaction of the change. Nothing is delivered here: B2 expands the audience
@@ -77,8 +79,12 @@ const POLL_CONTEXT = [
 	},
 ] as const
 
-function contextOf(facts: StatusFacts) {
-	return facts.poll === null ? NOTE_CONTEXT : POLL_CONTEXT
+// Mastodon's emoji context extension (app/helpers/context_helper.rb:15), added only when the Note tags an emoji.
+const EMOJI_TERMS = { toot: 'http://joinmastodon.org/ns#', Emoji: 'toot:Emoji' } as const
+
+function contextOf(facts: StatusFacts): readonly [string, Record<string, unknown>] {
+	const [as, terms] = facts.poll === null ? NOTE_CONTEXT : POLL_CONTEXT
+	return facts.emojis.length === 0 ? [as, terms] : [as, { ...terms, ...EMOJI_TERMS }]
 }
 
 // signedBy 'instance': signed by the instance actor rather than the lane's account (a report's Flag, deliveries.ts);
@@ -130,6 +136,8 @@ export type StatusFacts = {
 	media: { url: string | null; content_type: string | null; description: string }[]
 	// The Mention tags (href, name) the Note shows.
 	mentions: { href: string; name: string }[]
+	// The Emoji tags of the status's local emoji snapshot (custom-emojis.ts localEmojiTags).
+	emojis: EmojiTag[]
 	// The status's poll, which makes its object a Question.
 	poll: PollFacts | null
 }
@@ -190,11 +198,12 @@ export function statusFacts(db: Db, statusId: string, options: { reached?: boole
 		in_reply_to_uri: string | null
 		in_reply_to_id: string | null
 		quote_policy: number
+		emojis: string | null
 		actor_uri: string
 		username: string
 	}>(
 		`SELECT s.id, s.uri, s.visibility, s.content, s.spoiler_text, s.sensitive, s.language, s.published_at, s.edited_at,
-			s.in_reply_to_uri, s.in_reply_to_id, s.quote_policy, a.uri AS actor_uri, a.username
+			s.in_reply_to_uri, s.in_reply_to_id, s.quote_policy, s.emojis, a.uri AS actor_uri, a.username
 		FROM statuses s JOIN accounts a ON a.id = s.account_id WHERE s.id = ?`,
 		statusId
 	)
@@ -265,6 +274,7 @@ export function statusFacts(db: Db, statusId: string, options: { reached?: boole
 		tags: tags.map((t) => ({ name: t.name, href: `${origin}/tags/${encodeURIComponent(t.name)}` })),
 		media,
 		mentions: mentionTags.map((m) => ({ href: m.uri, name: `@${m.username}@${m.domain ?? host}` })),
+		emojis: localEmojiTags(db, row.emojis, origin, STATUS_EMOJIS_BYTES),
 		poll: pollFacts(db, statusId),
 		quotePolicy: row.quote_policy,
 		quote: noteQuote(db, statusId),
@@ -322,6 +332,8 @@ export function noteOf(facts: StatusFacts): Record<string, unknown> {
 		tag: [
 			...facts.mentions.map((m) => ({ type: 'Mention', href: m.href, name: m.name })),
 			...facts.tags.map((t) => ({ type: 'Hashtag', href: t.href, name: `#${t.name}` })),
+			// After Mentions and Hashtags, as ActivityPub::NoteSerializer#virtual_tags orders them (note_serializer.rb:142).
+			...facts.emojis,
 		],
 		...(facts.poll === null ? {} : questionOf(facts.poll)),
 		...(facts.quote === null ? {} : quoteOf(facts.quote)),

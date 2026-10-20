@@ -24,6 +24,7 @@ export const FEDERATION_GET_ROUTES = [
 	'/ap/users/:username/collections/tags',
 	'/ap/o/:uuid',
 	'/ap/users/:username/quote_authorizations/:authorization_id',
+	'/emojis/:id',
 ]
 
 export type FederationRouteDeps = {
@@ -76,6 +77,9 @@ async function respond(c: Context<FederationEnv>, deps: FederationRouteDeps, url
 			if (stamp !== null) {
 				return { response: await quoteAuthorization(c, deps, stamp[1]!, stamp[2]!), source: null }
 			}
+			if (url.pathname.startsWith('/emojis/')) {
+				return { response: await emojiObject(c, deps, url.pathname), source: null }
+			}
 			return LEGACY_OBJECT.test(url.pathname) ? objectOrAlias(c, deps, url) : viaFedify(c, deps, url)
 		}
 	}
@@ -120,6 +124,30 @@ async function quoteAuthorization(
 		headers: { 'content-type': 'application/activity+json', 'cache-control': 'no-store' },
 	})
 }
+
+const EMOJI = /^\/emojis\/(\d{18})$/
+
+// A local custom emoji as its Emoji object (Mastodon's EmojisController#show, app/controllers/emojis_controller.rb:8-17;
+// domain/local-emojis.ts localEmojiObject), one primary-key read: any local emoji, disabled ones included. It names
+// only public data, so it is served unsigned to anyone, cached for three minutes as Mastodon's (expires_in 3.minutes,
+// public: true), and never kept as a snapshot. Any other id answers 404.
+async function emojiObject(c: Context<FederationEnv>, deps: FederationRouteDeps, path: string): Promise<Response> {
+	const id = EMOJI.exec(path)?.[1]
+	const origin = `https://${c.get('domain')}`
+	const emoji =
+		id === undefined
+			? null
+			: await callStore(() => deps.store(c.env).localEmojiObject(deps.build(c.env), { id, origin }))
+	if (emoji === null) {
+		return new Response('Not Found', { status: 404 })
+	}
+	const body = { '@context': ['https://www.w3.org/ns/activitystreams', EMOJI_CONTEXT], ...emoji }
+	return new Response(JSON.stringify(body), {
+		headers: { 'content-type': 'application/activity+json', 'cache-control': 'public, max-age=180' },
+	})
+}
+
+const EMOJI_CONTEXT = { toot: 'http://joinmastodon.org/ns#', Emoji: 'toot:Emoji' }
 
 const LEGACY_OBJECT = /^\/ap\/o\/[0-9A-Za-z-]{1,64}$/
 

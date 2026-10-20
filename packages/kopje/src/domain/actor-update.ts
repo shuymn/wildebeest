@@ -1,12 +1,14 @@
 import { fieldSources } from './accounts'
 import { featuredUri, followersUri, recordOutbound } from './activities'
 import { PUBLIC_COLLECTION } from './audience'
+import { localEmojiTags } from './custom-emojis'
 import type { DeliveryEnvelope } from './deliveries'
 import { allocateLocalId } from './ids'
 import { renderFieldValue } from './status-text'
 import type { Db } from '../db/sql'
 import { parseProfileUpdates, PROFILE_UPDATES } from '../platform/dump-catalog'
 import { httpUrl } from '../platform/http-url'
+import { ACCOUNT_EMOJIS_BYTES } from '../platform/stored-bounds'
 
 // Profile changes reach other servers as Update(Person), as Mastodon's ActivityPub::UpdateDistributionWorker sends
 // them: to Public, delivered to the followers' inboxes through B2 (domain/deliveries.ts). An Update supersedes earlier
@@ -28,6 +30,7 @@ const CONTEXT = [
 		value: 'schema:value',
 		alsoKnownAs: { '@id': 'as:alsoKnownAs', '@type': '@id' },
 		attributionDomains: { '@id': 'toot:attributionDomains', '@container': '@set' },
+		Emoji: 'toot:Emoji',
 	},
 ]
 
@@ -50,6 +53,7 @@ type ActorRow = {
 	pubkey: string
 	created_at: string
 	suspended_at: string | null
+	emojis: string | null
 }
 
 function image(stored: string | null): { type: 'Image'; url: string } | undefined {
@@ -60,7 +64,7 @@ function image(stored: string | null): { type: 'Image'; url: string } | undefine
 function actorRow(db: Db, accountId: string): ActorRow | undefined {
 	return db.first<ActorRow>(
 		`SELECT a.uri, a.username, a.actor_type, a.display_name, a.note, a.avatar_url, a.header_url, a.locked,
-			a.discoverable, l.also_known_as, l.fields, l.attribution_domains, l.pubkey, a.created_at, l.suspended_at
+			a.discoverable, l.also_known_as, l.fields, l.attribution_domains, l.pubkey, a.created_at, l.suspended_at, a.emojis
 		FROM accounts a JOIN local_accounts l ON l.account_id = a.id WHERE a.id = ?`,
 		accountId
 	)
@@ -69,9 +73,10 @@ function actorRow(db: Db, accountId: string): ActorRow | undefined {
 // The document of an actor row. A suspended actor is presented as the actor endpoint presents it (federation.ts, as
 // Mastodon's ActivityPub::ActorSerializer): no name, summary, icon, image, aliases or fields, not locked or
 // discoverable, and `suspended: true`; its keys, inboxes and collections stay.
-function documentOf(row: ActorRow): Record<string, unknown> {
+function documentOf(db: Db, row: ActorRow): Record<string, unknown> {
 	const origin = new URL(row.uri).origin
 	const suspended = row.suspended_at !== null
+	const emojis = suspended ? [] : localEmojiTags(db, row.emojis, origin, ACCOUNT_EMOJIS_BYTES)
 	return {
 		id: row.uri,
 		type: row.actor_type,
@@ -100,6 +105,8 @@ function documentOf(row: ActorRow): Record<string, unknown> {
 						name: field.name,
 						value: renderFieldValue(field.value),
 					})),
+					// The profile's local emoji, as the actor endpoint publishes them (federation.ts).
+					...(emojis.length === 0 ? {} : { tag: emojis }),
 				}),
 		...attributionDomainsOf(row.attribution_domains),
 	}
@@ -108,7 +115,7 @@ function documentOf(row: ActorRow): Record<string, unknown> {
 // The local actor document of an account, or null for none (or a suspended one, which sends no profile Update).
 export function actorDocument(db: Db, accountId: string): Record<string, unknown> | null {
 	const row = actorRow(db, accountId)
-	return row === undefined || row.suspended_at !== null ? null : documentOf(row)
+	return row === undefined || row.suspended_at !== null ? null : documentOf(db, row)
 }
 
 // The Update of the account's actor that a suspension or an unsuspension sends (SuspendAccountService and
@@ -127,7 +134,7 @@ export function moderationUpdate(db: Db, accountId: string, now: number): Delive
 			type: 'Update',
 			actor: row.uri,
 			to: [PUBLIC_COLLECTION],
-			object: documentOf(row),
+			object: documentOf(db, row),
 		},
 		audience: { followers: false, accounts: [] },
 	}
