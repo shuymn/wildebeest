@@ -1,3 +1,4 @@
+import { runInDurableObject } from 'cloudflare:test'
 import { env } from 'cloudflare:workers'
 
 import { beforeEach, describe, expect, it } from 'vitest'
@@ -7,7 +8,7 @@ import { announcementAdmin, seedAnnouncement, T0 } from './announcement-helpers'
 import { seedAccount, sql } from './api-helpers'
 import { BUILD, completeSetup, migratedStore } from './helpers'
 import { ACCESS, setAccess } from './ops-helpers'
-import type { AnnouncementInput } from '../src/domain/announcements'
+import { ANNOUNCEMENT_DELETE_ROWS, type AnnouncementInput, deleteAnnouncement } from '../src/domain/announcements'
 import { handleScheduled } from '../src/jobs/scheduled'
 import type { StoreStub } from '../src/platform/store-client'
 
@@ -207,6 +208,75 @@ describe('the Access admin’s writes', () => {
 		).toMatchObject({ ok: false, code: 'wrong-authority' })
 		expect((await log(store)).map((row) => row.action)).toEqual(['create'])
 	})
+})
+
+describe('an announcement’s delete (RES-6)', () => {
+	// `accounts` local accounts, each with a dismissal and (`reacting` of them) every one of 8 reactions.
+	async function saturated(accounts: number, reacting: number) {
+		const store = await adminStore()
+		await sql(store, "INSERT INTO stream_subscriptions (account_id, stream_key, sockets) VALUES ('1', 'user', 1)")
+		const { id: announcement } = await announcementAdmin(store).create()
+		await sql(
+			store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO accounts (id, uri, username) SELECT CAST(150000000000000000 + i AS TEXT),
+				'https://kopje.test/ap/users/s' || i, 's' || i FROM n`,
+			accounts
+		)
+		await sql(
+			store,
+			`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey)
+			SELECT id, username || '@example.com', X'00', X'00', 'k' FROM accounts WHERE id LIKE '15%'`
+		)
+		await sql(
+			store,
+			`INSERT INTO announcement_dismissals (account_id, announcement_id) SELECT account_id, ?1 FROM local_accounts`,
+			announcement
+		)
+		await sql(
+			store,
+			`INSERT INTO announcement_reactions (announcement_id, account_id, name)
+			SELECT ?1, l.account_id, n.value FROM (SELECT account_id FROM local_accounts ORDER BY account_id LIMIT ?2) l
+				CROSS JOIN json_each('["1⃣","2⃣","3⃣","4⃣","5⃣","6⃣","7⃣","8⃣"]') n`,
+			announcement,
+			reacting
+		)
+		return { store, announcement }
+	}
+
+	it('writes every row it removes within its budget, counted with total_changes()', async () => {
+		const { store, announcement } = await saturated(10, 10)
+		const written = await runInDurableObject(store, (_instance, state) => {
+			const changes = () => state.storage.sql.exec<{ n: number }>('SELECT total_changes() AS n').one().n
+			const start = changes()
+			expect(
+				deleteAnnouncement.run(state.storage.sql, { authority: ACCESS, id: announcement, now: Date.now() })
+			).toEqual({
+				ok: true,
+				deleted: announcement,
+			})
+			return changes() - start
+		})
+		// 80 reactions, 10 dismissals, the row, its log row and its journal row.
+		expect(written).toBe(93)
+		expect(await sql(store, 'SELECT count(*) AS n FROM announcement_reactions')).toEqual([{ n: 0 }])
+	})
+
+	it('is refused, writing nothing, past the rows one delete removes', async () => {
+		const room = ANNOUNCEMENT_DELETE_ROWS - 13
+		const fits = await saturated(room, 0)
+		expect(await fits.store.deleteAnnouncement(BUILD, { authority: ACCESS, id: fits.announcement })).toEqual({
+			ok: true,
+			deleted: fits.announcement,
+		})
+		const over = await saturated(room + 1, 0)
+		expect(await over.store.deleteAnnouncement(BUILD, { authority: ACCESS, id: over.announcement })).toMatchObject({
+			ok: false,
+			code: 'announcement-too-large',
+		})
+		expect(await sql(over.store, 'SELECT count(*) AS n FROM announcement_dismissals')).toEqual([{ n: room + 1 }])
+		expect((await log(over.store)).map((row) => row.action)).toEqual(['create'])
+	}, 60_000)
 })
 
 describe('/admin/announcements', () => {

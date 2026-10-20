@@ -1598,7 +1598,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   column; its header states what it checks, where it fails closed, and its known gaps. It is an architectural aid; the aggregate response tests prove
   the budgets. Maxima of each presented shape: "Maxima of presented units" below (`test/status-bounds.test.ts`).
   _Enforced (main)_ for announcements: the list holds at most 16 (every live one), each within its measured conservative
-  sum of 176,011 JSON bytes ("Maxima of presented units"), admitted within `ARRAY_ANSWER_BYTES` as a backstop that never
+  sum of 218,118 JSON bytes ("Maxima of presented units"), admitted within `ARRAY_ANSWER_BYTES` as a backstop that never
   cuts; the Access admin's page holds at most 50; `test/announcement-bounds.test.ts`.
 - **RES-4: stored derived data is bounded.** Snapshots, the KV cache, the spool and deliveries each have a size cap, a
   count cap or an expiry with a sweeper. _Enforced (main)_ for remote statuses: one
@@ -1638,7 +1638,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `test/inbox-regressions.test.ts`.
   _Enforced (main)_ for announcements: at most 1,000 kept and 16 published or scheduled (triggers and writers), 8
   reaction names per announcement, so reactions grow at most 8 rows and dismissals one per local account and
-  announcement, and a delete cascades to at most that many rows; `test/migrations.test.ts`,
+  announcement; `test/migrations.test.ts`,
   `test/admin-announcements.test.ts`.
 - **RES-5: retries are bounded, but maintenance is not a failure.** Waiting out maintenance consumes no processing
   retry; real processing errors count against `max_retries`. _Enforced (main):_ `src/jobs/queue.ts`; `test/gate.test.ts`
@@ -1851,7 +1851,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   a restore are paid indefinitely ([backup.md](backup.md)).
   _Enforced (main)_ for announcements: the cron's round (`announcementRound`) publishes at most the 16 due and takes
   down at most the 16 ended, in one transaction, so one round does all that is due; `test/admin-announcements.test.ts`
-  ("the cron’s round").
+  ("the cron’s round"). An announcement's delete removes its reactions and dismissals before the row and counts every
+  row it writes with `total_changes()` within `ANNOUNCEMENT_DELETE_ROWS` (4,096), refused before it writes past it;
+  `test/admin-announcements.test.ts` ("an announcement’s delete").
 - **RES-7: query work is bounded, not only the rows returned.** Feeds apply visibility and filters in the query before
   `LIMIT`. Context traversal visits a bounded number of statuses before sorting. A status keeps a bounded number and
   size of edits. _Enforced (main)_ for filtering before `LIMIT`: `src/domain/timelines.ts` (_Gap:

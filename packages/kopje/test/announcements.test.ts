@@ -327,6 +327,11 @@ describe('reactions', () => {
 			{ name: '❤', count: 1, me: true },
 			{ name: 'blob', count: 1, me: false, url, static_url: url },
 		])
+		// Its removal reads no id back.
+		expect(await send(h, 'DELETE', reactionPath(id, 'blob'), h.users.bob.token)).toEqual({ status: 200, body: {} })
+		expect(
+			await sql(h.store, 'SELECT CAST(id AS TEXT) AS id FROM announcement_reactions ORDER BY announcement_reactions.id')
+		).toEqual([{ id: '9' }, { id: '10' }])
 	})
 
 	it('accepts RGI emoji and their unqualified forms at the route', async () => {

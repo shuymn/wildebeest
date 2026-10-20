@@ -5,7 +5,7 @@ import { announcementShownSql, availableSql } from './audience'
 import { tokenUserReadOperation, userWriteOperation } from './auth'
 import { type CustomEmoji, emojiHref, localEmojiSnapshot, MAX_LOCAL_EMOJI_NAMES, presentEmojis } from './custom-emojis'
 import { allocateLocalId } from './ids'
-import { logAction } from './moderation-log'
+import { logAction, MODERATION_LOG_PRUNE } from './moderation-log'
 import { readOperation, writeOperation } from './operation'
 import { ACTOR_URI_LIMIT, actorUriSql, PROFILE_URL_LIMIT, USERNAME_LIMIT, usernameSql } from './profile-bounds'
 import { instanceOrigin } from './push'
@@ -523,7 +523,7 @@ export const unreactToAnnouncement = userWriteOperation<{ id: string; name: stri
 			return 'not-found'
 		}
 		const deleted = db.first(
-			'DELETE FROM announcement_reactions WHERE announcement_id = ? AND name = ? AND account_id = ? RETURNING id',
+			'DELETE FROM announcement_reactions WHERE announcement_id = ? AND name = ? AND account_id = ? RETURNING 1 AS x',
 			id,
 			name,
 			viewer.accountId
@@ -593,6 +593,7 @@ export type AnnouncementRefusal = {
 		| 'announcement-limit'
 		| 'announcement-published'
 		| 'announcement-not-found'
+		| 'announcement-too-large'
 	message: string
 }
 
@@ -873,9 +874,19 @@ export const unpublishAnnouncement = writeOperation<
 
 export type AnnouncementDeleted = { ok: true; deleted: string } | AnnouncementRefusal
 
-// POST /admin/announcements/:id/delete (Admin::AnnouncementsController#destroy): the row, with its reactions and
-// dismissals by cascade (at most MAX_REACTION_NAMES + 1 rows per local account, RES-4); the log keeps the text's first
-// 200 code units. Streamed as announcement.delete when it was published.
+// The rows one delete writes at most (RES-6), counted with total_changes() as a batched delete counts its own: the
+// reactions and dismissals (deleted first, so the row's own delete cascades nothing), the row, its log row with the
+// rows the log prunes, and its journal row. MAX_REACTION_NAMES + 1 rows per local account: 4,096 holds 453 accounts
+// that all reacted with every name; past it the delete is refused before it writes (unpublish it instead).
+export const ANNOUNCEMENT_DELETE_ROWS = 4096
+const DELETE_ANCILLARY = 1 + 1 + MODERATION_LOG_PRUNE + 1
+
+function totalChanges(db: Db): number {
+	return db.first<{ n: number }>('SELECT total_changes() AS n')?.n ?? 0
+}
+
+// POST /admin/announcements/:id/delete (Admin::AnnouncementsController#destroy): the row with its reactions and
+// dismissals; the log keeps the text's first 200 code units. Streamed as announcement.delete when it was published.
 export const deleteAnnouncement = writeOperation<
 	{ authority: ImportAuthority; id: string; now: number },
 	AnnouncementDeleted
@@ -885,16 +896,41 @@ export const deleteAnnouncement = writeOperation<
 		return refused
 	}
 	const row = db.first<{ text: string; published: number }>(
-		'DELETE FROM announcements WHERE id = ? RETURNING text, published',
+		'SELECT text, published FROM announcements WHERE id = ?',
 		id
 	)
 	if (row === undefined) {
 		return refusal('announcement-not-found', `no announcement has id ${id}`)
 	}
+	// The children, counted up to one past what the budget leaves them, each a seek of its announcement's index.
+	const room = ANNOUNCEMENT_DELETE_ROWS - DELETE_ANCILLARY
+	const children =
+		db.first<{ n: number }>(
+			`SELECT (SELECT count(*) FROM (SELECT 1 FROM announcement_reactions INDEXED BY announcement_reactions_name
+					WHERE announcement_id = ?1 LIMIT ?2))
+				+ (SELECT count(*) FROM (SELECT 1 FROM announcement_dismissals INDEXED BY announcement_dismissals_announcement
+					WHERE announcement_id = ?1 LIMIT ?2)) AS n`,
+			id,
+			room + 1
+		)?.n ?? 0
+	if (children > room) {
+		return refusal(
+			'announcement-too-large',
+			`it has more reactions and dismissals than one delete removes (${room}); unpublish it instead`
+		)
+	}
+	const start = totalChanges(db)
+	db.run('DELETE FROM announcement_reactions WHERE announcement_id = ?', id)
+	db.run('DELETE FROM announcement_dismissals WHERE announcement_id = ?', id)
+	db.run('DELETE FROM announcements WHERE id = ?', id)
 	const actor = authority as Extract<ImportAuthority, { kind: 'access' }>
 	logAction(db, actor, 'delete', { type: 'Announcement', id }, { excerpt: excerpt(row.text) }, now)
 	if (row.published === 1) {
 		streamAnnouncement(db, 'announcement', id, iso(now))
+	}
+	const written = totalChanges(db) - start
+	if (written > ANNOUNCEMENT_DELETE_ROWS) {
+		throw new Error(`an announcement delete wrote ${written} rows, past ${ANNOUNCEMENT_DELETE_ROWS}`)
 	}
 	return { ok: true, deleted: id }
 })

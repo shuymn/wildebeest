@@ -117,6 +117,7 @@ const STATUS: Record<string, ContentfulStatusCode> = {
 	'announcement-limit': 409,
 	'announcement-published': 409,
 	'announcement-not-found': 404,
+	'announcement-too-large': 409,
 }
 
 function refusal(c: Context, result: Refusal): Response {
