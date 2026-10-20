@@ -200,18 +200,32 @@ async function tagListStore(per: number) {
 	await runInDurableObject(store, (_instance, state) => {
 		const s = state.storage.sql
 		const at = '2026-10-01T00:00:00.000Z'
-		s.exec(
-			`INSERT INTO instance_domain_blocks (domain, severity, created_at, updated_at) VALUES ('blocked.example', 'suspend', ?1, ?1)`,
-			at
-		)
+		// 100 suspend blocks; 10,000 accounts on their own eight-label domains, each actor id on another eight-label
+		// host; of the 100 authors, a quarter on a blocked domain and a quarter suspended.
 		s.exec(
 			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 99)
-			INSERT INTO accounts (id, uri, username, domain, suspended_at, suspension_source)
-			SELECT CAST(500000000000000000 + i AS TEXT), 'https://u' || i || '.example/users/u',
-				'u' || i, CASE WHEN i % 4 = 1 THEN 'a.b.c.d.e.f.blocked.example' ELSE 'a.b.c.d.e.f' || i || '.example' END,
-				CASE WHEN i % 4 = 3 THEN ?1 END, CASE WHEN i % 4 = 3 THEN 'account' END FROM n`,
+			INSERT INTO instance_domain_blocks (domain, severity, created_at, updated_at)
+			SELECT 'blocked' || i || '.example', 'suspend', ?1, ?1 FROM n`,
 			at
 		)
+		s.exec(
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 9999)
+			INSERT INTO accounts (id, uri, username, domain, suspended_at, suspension_source)
+			SELECT CAST(500000000000000000 + i AS TEXT), 'https://h.i.j.k.l.m.n' || i || '.example/users/u',
+				'u' || i,
+				CASE WHEN i < 100 AND i % 4 = 1 THEN 'a.b.c.d.e.f.blocked' || i || '.example'
+					ELSE 'a.b.c.d.e.f.g' || i || '.example' END,
+				CASE WHEN i < 100 AND i % 4 = 3 THEN ?1 END, CASE WHEN i < 100 AND i % 4 = 3 THEN 'account' END FROM n`,
+			at
+		)
+		// Each review table at 10,000.
+		s.exec(
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 9999)
+			INSERT INTO tag_trend_reviews (name, trendable, reviewed_at)
+			SELECT CASE WHEN i < 20 THEN 'tag' || i ELSE 'r' || i END, 1, ?1 FROM n`,
+			at
+		)
+		s.exec('INSERT INTO account_trend_reviews (account_id, trendable, reviewed_at) SELECT id, 1, ?1 FROM accounts', at)
 		const since = (BigInt(AT - 6 * DAY) << 16n) + 1n
 		for (let t = 0; t < 20; t++) {
 			s.exec(
@@ -237,6 +251,17 @@ async function tagListStore(per: number) {
 				`https://w.example/${t}/*`
 			)
 		}
+		s.exec(
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 9999)
+			INSERT INTO statuses (id, uri, account_id, visibility, published_at)
+			SELECT CAST(117000000000000000 + i AS TEXT), 'https://o.example/' || i, '500000000000000000', 'public', ?1 FROM n`,
+			at
+		)
+		s.exec(
+			`INSERT INTO status_trend_reviews (status_id, trendable, reviewed_at)
+			SELECT id, 1, ?1 FROM statuses WHERE uri GLOB 'https://o.example/*'`,
+			at
+		)
 	})
 	return store
 }
@@ -248,23 +273,26 @@ describe('the hashtag list’s reads (RES-7)', () => {
 			const h = { store }
 			const input = { credential: null, offset: 0, limit: 20, now: AT, present: { origin: ORIGIN } }
 			const rows = await rowsRead(h, trendingTags, input)
+			// The production statements, explained as they run.
 			const plans = await runInDurableObject(store, (_instance, state) => {
-				const explain = (query: string, ...params: SqlStorageValue[]) =>
-					state.storage.sql
-						.exec<{ detail: string }>(`EXPLAIN QUERY PLAN ${query}`, ...params)
-						.toArray()
-						.map((r) => r.detail)
-						.join(' | ')
+				const real = state.storage.sql
+				const seen: string[] = []
+				const capturing = {
+					exec: (query: string, ...params: SqlStorageValue[]) => {
+						seen.push(
+							`${query.replace(/\s+/g, ' ').slice(0, 40)} => ${real
+								.exec<{ detail: string }>(`EXPLAIN QUERY PLAN ${query}`, ...params)
+								.toArray()
+								.map((r) => r.detail)
+								.join(' | ')}`
+						)
+						return real.exec(query, ...params)
+					},
+				} as unknown as SqlStorage
+				trendingTags.run(capturing, input)
 				return {
-					list: explain(
-						`SELECT t.name FROM trend_tags t INDEXED BY trend_tags_listed WHERE t.score >= 1 ORDER BY t.score DESC, t.name LIMIT 200`
-					),
-					history: explain(
-						`SELECT t.status_id FROM status_tags t INDEXED BY status_tags_public
-						WHERE t.name = ?1 AND t.public = 1 AND t.status_id >= ?2 ORDER BY t.status_id DESC LIMIT 200`,
-						'tag0',
-						'0'
-					),
+					list: seen.find((p) => p.includes('SELECT hex(name) AS key FROM')) ?? '',
+					history: seen.find((p) => p.includes('SELECT substr(s.published_at')) ?? '',
 				}
 			})
 			return { rows, plans }
@@ -275,9 +303,9 @@ describe('the hashtag list’s reads (RES-7)', () => {
 		expect(many.rows).toBeLessThanOrEqual(140_000)
 		expect(many.rows).toBe(few.rows)
 		expect(many.plans.list).toMatch(/SEARCH t USING COVERING INDEX trend_tags_listed \(score>\?\)/)
-		expect(many.plans.list).not.toMatch(/TEMP B-TREE/)
+		expect(many.plans.list).toMatch(/SEARCH r USING PRIMARY KEY \(name=\?\)/)
 		expect(many.plans.history).toMatch(/SEARCH t USING COVERING INDEX status_tags_public \(name=\? AND status_id>\?\)/)
-		expect(many.plans.history).not.toMatch(/TEMP B-TREE/)
+		expect(many.plans.history).not.toMatch(/SCAN s\b|SCAN t\b/)
 	}, 300_000)
 })
 

@@ -1995,12 +1995,16 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   _Enforced (main)_ for trends (MD-5): the round reads the newest 4,000 public originals from yesterday 00:00 UTC, at
   most 100 hashtag rows of each and 8,000 in all, cut raw before any rule (materialized), returns at most 1,600 hashtag
   groups (each takes 5 of the 8,000 rows), keeps the first 400 whose names are well-formed and in their own normalized
-  form, and scores at most 400 + 250 statuses; measured at saturation (an active suspend block over 8-label
-  domains, 4,000 distinct authors or 40 authors of 100 statuses, a status of 10,000 rejected hashtag rows) it reads
-  153,693 rows with distinct authors and 80,716 with repeated ones, the same with 10,000 or 1,000,000 older statuses
-  and 0 or 100,000 hidden ones in the window (`test/trends-cost.test.ts`). `GET /api/v1/trends/tags` reads 51,042 rows
-  for 20 hashtags with 201 or 10,000 public statuses each, half of them by unavailable authors
-  (`test/trends-maxima.test.ts`); both plans seek their indexes, with statistics taken before the data grew.
+  form, and scores at most 400 + 250 statuses; measured at saturation (100 active suspend blocks, every author on its
+  own eight-label domain with its actor id on another eight-label host, 4,000 distinct authors or 40 authors of 100
+  statuses, every candidate quoting another, each review table at 10,000, and a status of 10,000 rejected hashtag rows)
+  it reads 237,789 rows with distinct authors and 97,706 with repeated ones, the same with 10,000 or 1,000,000 older
+  statuses and 0 or 100,000 hidden ones in the window (`test/trends-cost.test.ts`, ceiling 240,000). `GET
+  /api/v1/trends/tags` reads 68,062 rows for 20 hashtags with 201 or 10,000 public statuses each, half of them by
+  unavailable authors, on the same kind of accounts and full review tables (`test/trends-maxima.test.ts`). Each plan is
+  of the production statement as it runs, with statistics taken before the data grew; the review lookups are key
+  seeks, and an instance block's match is a seek by domain (`coveredSql`'s CROSS JOIN: with stale statistics and 100
+  blocks the planner had scanned the blocks for each suffix, 16,376,673 rows).
 
 #### Maxima of presented units (RES-3)
 

@@ -12,7 +12,10 @@ import type { StoreStub } from '../src/platform/store-client'
 // The round's cost at saturation (RES-6, RES-7): the rows it reads against its ceiling, flat however many statuses lie
 // outside its windows, and the plan of each of its production queries with statistics taken before the data grew.
 
-const ROUND_CEILING = 215_000
+// The design's estimate was 215,000; with every candidate's quote judged (the quoted author's availability walked
+// too), both of each author's keys walked under 100 suspend blocks and full review tables, the round measures
+// 237,789 rows, so the asserted ceiling is 240,000 (docs/threat-model.md RES-7 quotes the figure).
+const ROUND_CEILING = 240_000
 const idOf = (ms: number) => BigInt(ms) << 16n
 
 type Saturation = { older: number; hidden: number; repeated: boolean }
@@ -26,16 +29,20 @@ async function saturate(store: StoreStub, { older, hidden, repeated }: Saturatio
 	await runInDurableObject(store, (_instance, state) => {
 		const s = state.storage.sql
 		const at = '2026-10-01T00:00:00.000Z'
+		// 100 active suspend blocks, none covering an author, so each author's coverage walks both of its keys.
 		s.exec(
-			`INSERT INTO instance_domain_blocks (domain, severity, created_at, updated_at)
-			VALUES ('blocked.example', 'suspend', ?1, ?1)`,
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 99)
+			INSERT INTO instance_domain_blocks (domain, severity, created_at, updated_at)
+			SELECT 'blocked' || i || '.example', 'suspend', ?1, ?1 FROM n`,
 			at
 		)
+		// 10,000 accounts (the first 4,000 the authors), each on its own eight-label domain with its actor id on another
+		// eight-label host.
 		s.exec(
-			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 3999)
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 9999)
 			INSERT INTO accounts (id, uri, username, domain, discoverable)
-			SELECT CAST(500000000000000000 + i AS TEXT), 'https://a.b.c.d.e.f' || (i % 50) || '.example/users/u' || i,
-				'u' || i, 'a.b.c.d.e.f' || (i % 50) || '.example', 1 FROM n`
+			SELECT CAST(500000000000000000 + i AS TEXT), 'https://h.i.j.k.l.m.n' || i || '.example/users/u' || i,
+				'u' || i, 'a.b.c.d.e.f.g' || i || '.example', 1 FROM n`
 		)
 		const today = idOf(TODAY + HOUR)
 		s.exec(
@@ -71,6 +78,27 @@ async function saturate(store: StoreStub, { older, hidden, repeated }: Saturatio
 			SELECT id, account_id, 1 FROM (SELECT id, account_id, row_number() OVER (PARTITION BY account_id ORDER BY id) AS k
 				FROM statuses WHERE uri GLOB 'https://w.example/*') WHERE k <= 3 ORDER BY id LIMIT 250`
 		)
+		// Every window status quotes the next one (accepted), so each candidate's quote is judged.
+		s.exec(
+			`INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, quoted_account_id, state, updated_at)
+			SELECT q.id, n.uri, n.id, n.account_id, 'accepted', ?1
+			FROM statuses q JOIN statuses n ON n.uri = 'https://w.example/' || (CAST(substr(q.uri, 19) AS INTEGER) + 1)
+			WHERE q.uri GLOB 'https://w.example/*'`,
+			at
+		)
+		// Each review table at 10,000: the tags' over the stored names and others, the statuses' over the window and
+		// older statuses, the accounts' over every account.
+		s.exec(
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 9999)
+			INSERT INTO tag_trend_reviews (name, trendable, reviewed_at)
+			SELECT CASE WHEN i < 250 THEN 'stored' || i WHEN i < 750 THEN 't' || (i - 250) ELSE 'r' || i END, i % 2, ?1 FROM n`,
+			at
+		)
+		s.exec(
+			`INSERT INTO account_trend_reviews (account_id, trendable, reviewed_at)
+			SELECT id, CAST(id AS INTEGER) % 2, ?1 FROM accounts`,
+			at
+		)
 		const before = idOf(TODAY - 30 * DAY)
 		s.exec(
 			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
@@ -79,6 +107,11 @@ async function saturate(store: StoreStub, { older, hidden, repeated }: Saturatio
 			FROM n`,
 			older,
 			String(before)
+		)
+		s.exec(
+			`INSERT INTO status_trend_reviews (status_id, trendable, reviewed_at)
+			SELECT id, CAST(substr(id, 18) AS INTEGER) % 2, ?1 FROM statuses ORDER BY id DESC LIMIT 10000`,
+			at
 		)
 		if (hidden > 0) {
 			s.exec(
@@ -148,12 +181,12 @@ describe('the round at saturation (RES-6, RES-7)', () => {
 			const many = await roundRowsRead(big)
 			const ms = await timedRound(big)
 			console.log(JSON.stringify({ event: 'trends-round-cost', repeated, few: few.read, many: many.read, ms }))
+			console.log(JSON.stringify({ event: 'trends-round-plans', plans: many.plans }))
 			expect(many.read).toBeLessThanOrEqual(ROUND_CEILING)
 			expect(Math.abs(many.read - few.read)).toBeLessThanOrEqual(10)
 			const plans = Object.entries(many.plans)
 			const plan = (pattern: RegExp) => plans.find(([query]) => pattern.test(query))?.[1] ?? ''
 			const tags = plan(/WITH w AS MATERIALIZED/)
-			console.log(JSON.stringify({ event: 'trends-round-plans', plans: many.plans }))
 			expect(tags).toMatch(/MATERIALIZE w/)
 			expect(tags).toMatch(/MATERIALIZE r/)
 			expect(tags).toMatch(/SEARCH s USING INDEX statuses_public \(id>\?\)/)
@@ -161,7 +194,14 @@ describe('the round at saturation (RES-6, RES-7)', () => {
 			expect(tags).toMatch(/CORRELATED LIST SUBQUERY/)
 			expect(tags).toMatch(/SEARCH x USING PRIMARY KEY \(status_id=\?\)/)
 			expect(tags).not.toMatch(/SCAN s\b|SCAN t\b|SCAN x\b/)
+			// The review lookups are key seeks of full review tables.
+			expect(tags).toMatch(/SEARCH v USING PRIMARY KEY \(name=\?\)/)
+			const stored = plan(/FROM trend_tags t$/m)
+			expect(stored).toMatch(/SEARCH r USING PRIMARY KEY \(name=\?\)/)
 			const candidates = plan(/LIMIT 400\) c/)
+			expect(candidates).toMatch(/SEARCH v USING PRIMARY KEY \(status_id=\?\)/)
+			expect(candidates).toMatch(/SEARCH v USING PRIMARY KEY \(account_id=\?\)/)
+			expect(candidates).toMatch(/SEARCH s_tq USING (?:COVERING )?INDEX sqlite_autoindex_quotes_1 \(status_id=\?\)/)
 			expect(candidates).toMatch(/SEARCH statuses USING (?:COVERING )?INDEX statuses_public \(id>\?\)/)
 			expect(candidates).not.toMatch(/SCAN statuses\b|SCAN s\b/)
 			expect(plan(/FROM trend_statuses t CROSS JOIN statuses s/)).toMatch(

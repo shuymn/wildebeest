@@ -222,7 +222,8 @@ function guardedSql(covered: string): string {
 // domain when it is a suspend. A child noop therefore exempts its subdomain tree from a parent's suspend. Each key's
 // suffixes are walked from the longest, and the walk stops at the first one a block names (the nearest), so the rule
 // is that block's; only suffixes of 2 to MAX_BLOCK_LABELS labels are sought, at most two unique seeks each (the walk's
-// and the match's). The keys and the walk are CTEs, whose expressions do not add to the depth of the expression that
+// and the match's; CROSS JOIN keeps the match a seek by domain for each suffix, whatever the statistics say of the
+// blocks). The keys and the walk are CTEs, whose expressions do not add to the depth of the expression that
 // holds this one (SQLite limits it to 100 in workerd).
 function coveredSql(keys: string): string {
 	const sought = `BETWEEN 1 AND ${MAX_BLOCK_LABELS - 1}`
@@ -230,7 +231,7 @@ function coveredSql(keys: string): string {
 			ps(d, dots) AS (SELECT d, length(d) - length(replace(d, '.', '')) FROM pk
 				UNION ALL SELECT substr(d, instr(d, '.') + 1), dots - 1 FROM ps WHERE dots > 1
 					AND NOT EXISTS (SELECT 1 FROM main.instance_domain_blocks pn WHERE ps.dots ${sought} AND pn.domain = ps.d))
-		SELECT 1 FROM ps JOIN main.instance_domain_blocks pr ON pr.domain = ps.d
+		SELECT 1 FROM ps CROSS JOIN main.instance_domain_blocks pr ON pr.domain = ps.d
 		WHERE ps.dots ${sought} AND pr.severity = 'suspend')`
 }
 
