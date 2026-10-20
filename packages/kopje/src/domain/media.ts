@@ -347,22 +347,24 @@ export function profileUploadReady(db: Db, accountId: string, id: string, now: n
 	return upload !== undefined && upload.url !== '' && held === undefined
 }
 
+// The release of the upload behind the account's `kind` image (?1 the account, ?2 the doom time): applyProfileImage.
+export function profileReleaseSql(kind: ProfileImage): string {
+	const { own, other } = PROFILE_COLUMNS[kind]
+	return `UPDATE media_attachments SET gc_at = ?2
+		WHERE account_id = ?1 AND status_id IS NULL AND gc_at IS NULL
+			AND url = (SELECT ${own} FROM accounts WHERE id = ?1)
+			AND NOT EXISTS (SELECT 1 FROM accounts a WHERE a.id = ?1 AND a.${other} = media_attachments.url)
+			AND ${notEmojiSql('media_attachments')}`
+}
+
 // Sets (an upload id) or clears (null) the account's avatar or header. Before the account changes, the upload behind
 // the image it replaces is doomed, so the sweep deletes it and its files, unless the account's other image still names
 // it. The old and new URLs are compared and copied within SQL (RES-2): read into the Worker and bound again, an
 // imported URL of malformed UTF-8 would come back changed and match nothing. The release reads the account's own media
 // through media_attachments_account and probes the account row by key (test/profile-images.test.ts shows the plan).
 export function applyProfileImage(db: Db, accountId: string, kind: ProfileImage, id: string | null): void {
-	const { own, other } = PROFILE_COLUMNS[kind]
-	db.run(
-		`UPDATE media_attachments SET gc_at = ?2
-		WHERE account_id = ?1 AND status_id IS NULL AND gc_at IS NULL
-			AND url = (SELECT ${own} FROM accounts WHERE id = ?1)
-			AND NOT EXISTS (SELECT 1 FROM accounts a WHERE a.id = ?1 AND a.${other} = media_attachments.url)
-			AND ${notEmojiSql('media_attachments')}`,
-		accountId,
-		DOOMED_AT
-	)
+	const { own } = PROFILE_COLUMNS[kind]
+	db.run(profileReleaseSql(kind), accountId, DOOMED_AT)
 	if (id === null) {
 		db.run(`UPDATE accounts SET ${own} = NULL WHERE id = ?`, accountId)
 		return

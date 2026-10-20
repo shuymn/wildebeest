@@ -9,7 +9,7 @@ import { bytes, r2Keys, TestCodec } from './media-helpers'
 import { scopedToken } from './read-helpers'
 import { community, outbound, remoteAccount, remoteFollows } from './status-helpers'
 import { ORIGIN } from './web-helpers'
-import { DOOMED_AT } from '../src/domain/media'
+import { DOOMED_AT, profileReleaseSql } from '../src/domain/media'
 import { API_BODY_LIMIT, FILE_PART_SLACK } from '../src/mastodon/params'
 import { PROFILE_IMAGE_LIMIT } from '../src/platform/images'
 import type { StoreStub } from '../src/platform/store-client'
@@ -370,43 +370,59 @@ async function wrapped(
 }
 
 describe('profile image release', () => {
-	it('dooms an imported avatar whose URL is malformed UTF-8, and keeps one the header still names', async () => {
+	it('dooms an imported avatar whose URL is malformed UTF-8, reading the account index at 10,000 uploads', async () => {
 		const h = await setup()
 		const alice = h.users.alice.id
 		const raw = "CAST(X'68747470733a2f2f6b6f706a652e746573742f6d656469612f78ff2f66756c6c2e706e67' AS TEXT)"
 		await runInDurableObject(h.store, (_instance, state) => {
+			// The account's other uploads: kept, unattached rows of their own URLs, as many as the plan must not scan.
 			state.storage.sql.exec(
-				`INSERT INTO media_attachments (id, account_id, type, url) VALUES ('900000000000000001', ?1, 'image', ${raw}),
-					('900000000000000002', ?1, 'image', 'https://kopje.test/media/shared/full.png')`,
+				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 10000)
+				INSERT INTO media_attachments (id, account_id, type, url)
+				SELECT CAST(910000000000000000 + i AS TEXT), ?1, 'image', 'https://kopje.test/media/k' || i || '/full.png' FROM n`,
 				alice
 			)
 			state.storage.sql.exec(
-				`UPDATE accounts SET avatar_url = ${raw}, header_url = 'https://kopje.test/media/shared/full.png' WHERE id = ?`,
+				`INSERT INTO media_attachments (id, account_id, type, url) VALUES ('900000000000000001', ?1, 'image', ${raw})`,
 				alice
 			)
+			state.storage.sql.exec(`UPDATE accounts SET avatar_url = ${raw} WHERE id = ?`, alice)
 		})
+		// No ANALYZE: the plan holds with no statistics.
 		const plan = await runInDurableObject(h.store, (_instance, state) =>
 			state.storage.sql
-				.exec<{ detail: string }>(
-					`EXPLAIN QUERY PLAN UPDATE media_attachments SET gc_at = ?2
-					WHERE account_id = ?1 AND status_id IS NULL AND gc_at IS NULL
-						AND url = (SELECT avatar_url FROM accounts WHERE id = ?1)
-						AND NOT EXISTS (SELECT 1 FROM accounts a WHERE a.id = ?1 AND a.header_url = media_attachments.url)
-						AND NOT EXISTS (SELECT 1 FROM custom_emojis media_attachments_e WHERE media_attachments_e.id = media_attachments.id)`,
-					alice,
-					'x'
-				)
+				.exec<{ detail: string }>(`EXPLAIN QUERY PLAN ${profileReleaseSql('avatar')}`, alice, 'x')
 				.toArray()
 				.map((row) => row.detail)
+				.join('\n')
 		)
-		expect(plan.join('\n')).toMatch(/SEARCH media_attachments USING INDEX media_attachments_account \(account_id=\?\)/)
-		expect(plan.join('\n')).not.toMatch(/SCAN/)
+		expect(plan).toMatch(/SEARCH media_attachments USING INDEX media_attachments_account \(account_id=\?\)/)
+		expect(plan).not.toMatch(/SCAN/)
 		expect((await patch(h, h.users.alice.token, formOf([['avatar', png()]]))).status).toBe(200)
-		const rows = await sql<{ id: string; doomed: number }>(
-			h.store,
-			"SELECT id, gc_at IS NOT NULL AS doomed FROM media_attachments WHERE id LIKE '9000%' ORDER BY id"
-		)
-		expect(rows).toEqual([{ id: '900000000000000002', doomed: 0 }])
+		expect(await sql(h.store, "SELECT count(*) AS n FROM media_attachments WHERE id = '900000000000000001'")).toEqual([
+			{ n: 0 },
+		])
+		expect(
+			await sql(h.store, "SELECT count(*) AS n FROM media_attachments WHERE id LIKE '91%' AND gc_at IS NULL")
+		).toEqual([{ n: 10_000 }])
+	}, 60_000)
+
+	it('keeps an upload both images name until the last of them is replaced', async () => {
+		const h = await setup()
+		expect((await patch(h, h.users.alice.token, formOf([['avatar', png()]]))).status).toBe(200)
+		await sql(h.store, "UPDATE accounts SET header_url = avatar_url WHERE username = 'alice'")
+		const [shared] = await media(h.store)
+		const keys = [`files/${shared!.file_token}/full`, `files/${shared!.file_token}/small`, `originals/${shared!.id}`]
+		const present = async () => (await r2Keys()).filter((key) => keys.includes(key)).sort()
+		expect(await present()).toEqual([...keys].sort())
+		// Replacing the header leaves the avatar naming it: the row and its objects stay, after the sweep too.
+		expect((await patch(h, h.users.alice.token, formOf([['header', png('h.png')]]))).status).toBe(200)
+		expect((await media(h.store)).find((row) => row.id === shared!.id)?.gc_at).toBeNull()
+		expect(await present()).toEqual([...keys].sort())
+		// Replacing the avatar, its last reference, releases it.
+		expect((await patch(h, h.users.alice.token, formOf([['avatar', png('a2.png')]]))).status).toBe(200)
+		expect((await media(h.store)).find((row) => row.id === shared!.id)).toBeUndefined()
+		expect(await present()).toEqual([])
 	})
 })
 
