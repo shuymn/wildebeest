@@ -272,9 +272,13 @@ describe('an announcement’s delete (RES-6)', () => {
 		const over = await saturated(room + 1, 1)
 		const snapshot = () =>
 			Promise.all(
-				['announcements', 'announcement_reactions', 'announcement_dismissals', 'stream_events', 'admin_actions'].map(
-					(table) => sql(over.store, `SELECT count(*) AS n, max(rowid) AS last FROM ${table}`)
-				)
+				[
+					'SELECT id, text, published, updated_at FROM announcements',
+					'SELECT count(*) AS n, max(id) AS last FROM announcement_reactions',
+					'SELECT count(*) AS n FROM announcement_dismissals',
+					'SELECT count(*) AS n, max(id) AS last FROM stream_events',
+					'SELECT count(*) AS n, max(id) AS last FROM admin_actions',
+				].map((query) => sql(over.store, query))
 			)
 		const before = await snapshot()
 		const refused = await runInDurableObject(over.store, (_instance, state) => {
