@@ -36,7 +36,6 @@ export const PARAM_EXCEPTIONS: Exceptions = {
 	'POST /api/v2/media': open('the thumbnail file is dropped', 'thumbnail'),
 	'PUT /api/v1/media/:id': open('the thumbnail file is dropped', 'thumbnail'),
 	'PATCH /api/v1/media/:id': open('the thumbnail file is dropped', 'thumbnail'),
-	'GET /api/v2/search': open('ignored', 'exclude_unreviewed'),
 	'POST /api/v1/admin/accounts/:account_id/action': open(
 		'no warning or notification reaches a local target',
 		'send_email_notification',

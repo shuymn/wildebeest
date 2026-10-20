@@ -1051,6 +1051,39 @@ describe('search with resolve=true (NET-4, VIS-1)', () => {
 		expect(own.body.statuses.map((s) => s.id)).toEqual([local.id])
 		expect(t.web.fetched).toEqual([])
 	})
+
+	it('leaves out a resolved address the viewer does not follow with following=true (exact_match)', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		t.web.serve(
+			`${MASTODON}/.well-known/webfinger?resource=${encodeURIComponent('acct:bob@mastodon.example')}`,
+			{
+				subject: 'acct:bob@mastodon.example',
+				links: [{ rel: 'self', type: AP, href: bob.uri }],
+			},
+			'application/jrd+json'
+		)
+		const accts = async (q: string) =>
+			(
+				await t.api<{ accounts: { acct: string }[] }>(
+					`/api/v2/search?resolve=true&following=true&type=accounts&q=${encodeURIComponent(q)}`
+				)
+			).body.accounts.map((a) => a.acct)
+		expect(await accts('bob@mastodon.example')).toEqual([])
+		const bobId = (await accountId(t.store, bob.uri))!
+		await sql(
+			t.store,
+			"INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'pending')",
+			ALICE,
+			bobId
+		)
+		expect(await accts('bob@mastodon.example')).toEqual([])
+		await sql(t.store, "UPDATE follows SET state = 'accepted'")
+		expect(await accts('bob@mastodon.example')).toEqual(['bob@mastodon.example'])
+		// A URL query has no following filter (SearchService#perform_accounts_search! is not reached).
+		await sql(t.store, 'DELETE FROM follows')
+		expect(await accts(bob.uri)).toEqual(['bob@mastodon.example'])
+	})
 })
 
 describe('bounds (RES-2, RES-4)', () => {

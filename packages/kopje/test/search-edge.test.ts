@@ -6,7 +6,15 @@ import { bearer, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { watchedCursor } from './read-helpers'
 import { act, community, post, seedStatus } from './status-helpers'
-import { LIBRARY_SOURCE_LIMIT, search, type SearchRequest } from '../src/domain/search'
+import {
+	HASHTAG_LIBRARY_LIMIT,
+	HASHTAG_PUBLIC_WINDOW,
+	LIBRARY_SOURCE_LIMIT,
+	search,
+	type SearchRequest,
+	type SearchType,
+} from '../src/domain/search'
+import { MAX_TREND_REVIEWS } from '../src/platform/stored-bounds'
 import { sha256Hex } from '../src/security/tokens'
 
 // Search under the B4b review: cursors that reach past each library source's window, work that stays bounded as the
@@ -317,5 +325,184 @@ describe('verification review', () => {
 			})
 		}
 		expect((await search('needle', '&type=hashtags')).hashtags.map((t) => t.name)).toEqual(before)
+	}, 60_000)
+})
+
+// The search operation over `h`'s Store with `input`, its results, and the plan and rows read of each statement whose
+// SQL matches `pattern` (EXPLAIN QUERY PLAN of the production statement with its parameters).
+async function planned(
+	h: Awaited<ReturnType<typeof fixture>>['h'],
+	pattern: RegExp,
+	input: Omit<SearchRequest, 'present' | 'localDomain' | 'limit' | 'offset'> & { limit?: number; offset?: number }
+) {
+	const tokenHash = await sha256Hex(h.users.alice.token)
+	return runInDurableObject(h.store, (_instance, state) => {
+		const real = state.storage.sql
+		const plans: { plan: string[]; rows: number }[] = []
+		const capturing = {
+			exec: (query: string, ...params: SqlStorageValue[]) => {
+				const cursor = real.exec(query, ...params)
+				if (!pattern.test(query)) {
+					return cursor
+				}
+				const entry = {
+					plan: real
+						.exec<{ detail: string }>(`EXPLAIN QUERY PLAN ${query}`, ...params)
+						.toArray()
+						.map((row) => row.detail),
+					rows: 0,
+				}
+				plans.push(entry)
+				return watchedCursor(cursor, () => (entry.rows += cursor.rowsRead))
+			},
+		} as unknown as SqlStorage
+		const result = search.run(capturing, {
+			credential: { tokenHash, scope: 'read:search', now: NOW },
+			limit: 20,
+			offset: 0,
+			localDomain: 'kopje.test',
+			present: { origin: 'https://kopje.test' },
+			...input,
+		})
+		if (result.status !== 'ok') {
+			throw new Error(`search failed: ${result.status}`)
+		}
+		return { value: result.value as Results, plans }
+	})
+}
+
+describe('exclude_unreviewed and following at saturation (RES-7)', () => {
+	it('probes the reviews by name for each candidate, before the page, with stale statistics', async () => {
+		const { h } = await fixture()
+		const { alice, bob } = h.users
+		await post(h, bob, { status: '#catseed' })
+		// Statistics of a small Store, not taken again after it grows.
+		await sql(h.store, 'ANALYZE')
+		// Every window full: bob's public statuses past the public window, alice's own statuses, favourites, bookmarks
+		// and boosts past the library window, each status with a hashtag of its own.
+		const count = HASHTAG_PUBLIC_WINDOW + 100
+		await fillerStatuses(h, bob.id, count, 300000000000000000n)
+		await fillerStatuses(h, alice.id, HASHTAG_LIBRARY_LIMIT + 50, 400000000000000000n)
+		for (const table of ['favourites', 'bookmarks']) {
+			await sql(
+				h.store,
+				`INSERT INTO ${table} (account_id, status_id)
+				SELECT ?, id FROM statuses WHERE account_id = ? AND id >= '300000000000000000' ORDER BY id LIMIT ?`,
+				alice.id,
+				bob.id,
+				HASHTAG_LIBRARY_LIMIT + 50
+			)
+		}
+		await sql(
+			h.store,
+			`INSERT INTO statuses (id, uri, account_id, reblog_of_id, visibility, published_at)
+			SELECT CAST(CAST(id AS INTEGER) + 200000000000000000 AS TEXT), uri || '/boost', ?, id, 'public', published_at
+			FROM statuses WHERE account_id = ? AND id >= '300000000000000000' ORDER BY id DESC LIMIT ?`,
+			alice.id,
+			bob.id,
+			HASHTAG_LIBRARY_LIMIT + 50
+		)
+		await sql(
+			h.store,
+			`INSERT INTO status_tags (status_id, name)
+			SELECT id, 'cat' || (CAST(id AS INTEGER) % 100000) FROM statuses WHERE id >= '300000000000000000'
+				AND reblog_of_id IS NULL`
+		)
+		// Two names that differ only in bytes that are not UTF-8 (both read into JS as "cat" and U+FFFD); only the first
+		// is reviewed, compared in SQL.
+		await sql(
+			h.store,
+			`INSERT INTO status_tags (status_id, name)
+			SELECT (SELECT max(id) FROM statuses WHERE account_id = ?1), CAST(b AS TEXT)
+			FROM (SELECT x'63617480' AS b UNION ALL SELECT x'63617481')`,
+			bob.id
+		)
+		// The reviews at their cap (MAX_TREND_REVIEWS): the names of bob's ten newest statuses, the first malformed one,
+		// and the rest names no candidate has.
+		await sql(
+			h.store,
+			`INSERT INTO tag_trend_reviews (name, trendable, reviewed_at)
+			SELECT t.name, 1, '2026-10-01T00:00:00.000Z' FROM status_tags t
+			WHERE t.status_id IN (SELECT id FROM statuses WHERE account_id = ?1 ORDER BY id DESC LIMIT 10)
+				AND t.name GLOB 'cat[0-9]*'
+			UNION ALL SELECT CAST(x'63617480' AS TEXT), 0, '2026-10-01T00:00:00.000Z'`,
+			bob.id
+		)
+		await sql(
+			h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < CAST(?1 AS INTEGER) - 1)
+			INSERT INTO tag_trend_reviews (name, trendable, reviewed_at)
+			SELECT 'other' || i, i % 2, '2026-10-01T00:00:00.000Z' FROM n`,
+			MAX_TREND_REVIEWS - 11
+		)
+		expect(await sql(h.store, 'SELECT count(*) AS n FROM tag_trend_reviews')).toEqual([{ n: MAX_TREND_REVIEWS }])
+		const input = { query: 'cat', types: ['hashtags'] as SearchType[], following: false }
+		const all = await planned(h, /tag_trend_reviews/, { ...input, excludeUnreviewed: false, limit: 40 })
+		const reviewed = await planned(h, /tag_trend_reviews/, { ...input, excludeUnreviewed: true, limit: 40 })
+		expect(all.value.hashtags).toHaveLength(40)
+		// The reviewed candidates only: ten names and one of the two malformed ones.
+		expect(reviewed.value.hashtags).toHaveLength(11)
+		expect(reviewed.value.hashtags.filter((t) => t.name === 'cat\uFFFD')).toHaveLength(1)
+		expect(all.value.hashtags.filter((t) => t.name === 'cat\uFFFD')).toHaveLength(2)
+		const paged = await planned(h, /tag_trend_reviews/, { ...input, excludeUnreviewed: true, limit: 5, offset: 8 })
+		expect(paged.value.hashtags.map((t) => t.name)).toEqual(reviewed.value.hashtags.slice(8).map((t) => t.name))
+		for (const run of [all, reviewed]) {
+			expect(run.plans).toHaveLength(1)
+			const plan = run.plans[0]?.plan ?? []
+			expect(plan).toContain('SEARCH r USING PRIMARY KEY (name=?)')
+			// Each candidate's status is looked up by id, inside the candidates: with these statistics SQLite otherwise
+			// scans statuses once per candidate (about 30 million rows here).
+			expect(plan).toContain('SEARCH s USING INDEX sqlite_autoindex_statuses_1 (id=?)')
+			expect(plan.filter((detail) => /\bSCAN (r|s|t)\b/.test(detail))).toEqual([])
+		}
+		// One probe per candidate hashtag row at most: the windows' statuses, one name each, and the two malformed ones.
+		const candidates = HASHTAG_PUBLIC_WINDOW + 4 * HASHTAG_LIBRARY_LIMIT + 2
+		expect((reviewed.plans[0]?.rows ?? 0) - (all.plans[0]?.rows ?? 0)).toBeLessThanOrEqual(candidates)
+		expect(reviewed.plans[0]?.rows ?? Infinity).toBeLessThan(10 * candidates)
+	}, 120_000)
+
+	it('probes the follow of a resolved account through its index, accepted and pending follows present', async () => {
+		const { h } = await fixture()
+		const { alice } = h.users
+		await sql(h.store, 'ANALYZE')
+		await sql(
+			h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 4000 - 1)
+			INSERT INTO accounts (id, uri, username, domain, search_text)
+			SELECT CAST(500000000000000000 + i AS TEXT), 'https://d' || i || '.example/users/u', 'u', 'd' || i || '.example',
+				'u@d' || i || '.example'
+			FROM n`
+		)
+		await sql(
+			h.store,
+			`INSERT INTO follows (account_id, target_account_id, state)
+			SELECT ?, id, CASE WHEN CAST(id AS INTEGER) % 2 = 0 THEN 'accepted' ELSE 'pending' END FROM accounts
+			WHERE domain IS NOT NULL`,
+			alice.id
+		)
+		const run = (resolvedAccountId: string, following: boolean) =>
+			planned(h, /FROM follows f/, {
+				query: 'zzz-nobody',
+				types: ['accounts'],
+				following,
+				resolvedAccountId,
+			})
+		const accepted = await run('500000000000000000', true)
+		const pending = await run('500000000000000001', true)
+		const unfollowed = await run('500000000000000001', false)
+		expect(accepted.value.accounts.map((a) => a.id)).toEqual(['500000000000000000'])
+		expect(pending.value.accounts).toEqual([])
+		expect(unfollowed.value.accounts.map((a) => a.id)).toEqual(['500000000000000001'])
+		for (const { plans } of [accepted, pending]) {
+			expect(plans).toHaveLength(1)
+			const plan = plans[0]?.plan ?? []
+			expect(
+				plan.some((detail) =>
+					/^SEARCH f USING (COVERING )?INDEX follows_\w+ \(account_id=\? AND target_account_id=\?\)$/.test(detail)
+				)
+			).toBe(true)
+			expect(plan.filter((detail) => /\bSCAN f\b/.test(detail))).toEqual([])
+			expect(plans[0]?.rows ?? 0).toBeLessThan(20)
+		}
 	}, 60_000)
 })

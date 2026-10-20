@@ -120,6 +120,12 @@ export function trendSettings(db: Db): TrendSettings {
 
 // ---- Allowance (Tag#trendable?, Status#trendable?, Account#trendable?): judged in the round and on every read.
 
+// Tag.reviewed (Reviewable: reviewed_at set): whether the hashtag named by `name` (an SQL expression of a stored name)
+// has a review, approved or rejected. One primary-key probe; names are compared as stored, in SQL.
+export function tagReviewedSql(name: string): string {
+	return `EXISTS (SELECT 1 FROM tag_trend_reviews r WHERE r.name = ${name})`
+}
+
 // Whether the trend_tags row `t` is allowed: its review, else `byDefault` (an expression, 0 or 1).
 export function trendAllowedTagSql(t: string, byDefault: string): string {
 	return `coalesce((SELECT r.trendable FROM tag_trend_reviews r WHERE r.name = ${t}.name), ${byDefault}) = 1`

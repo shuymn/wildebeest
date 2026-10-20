@@ -60,6 +60,7 @@ export const search: ApiHandler = async (c, deps) => {
 	const { limit, maxId, minId } = pageQuery(p, 20, 40)
 	const type = p.get('type')
 	const types = type === undefined || type === '' ? TYPES : TYPES.filter((t) => t === type)
+	const excludeUnreviewed = parseBoolean(p.get('exclude_unreviewed')) === true
 	const credential = userCredential(c, deps)
 	const offset = parsed.offset > MAX_SEARCH_OFFSET ? null : parsed.offset
 	if (offset === null || types.length === 0) {
@@ -88,6 +89,7 @@ export const search: ApiHandler = async (c, deps) => {
 			limit,
 			offset,
 			following: parseBoolean(p.get('following')) ?? false,
+			excludeUnreviewed,
 			accountId: accountId === undefined || accountId === '' ? undefined : accountId,
 			maxId,
 			minId,
