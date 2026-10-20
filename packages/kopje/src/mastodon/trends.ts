@@ -33,8 +33,10 @@ export function preferredLanguage(header: string | undefined): string {
 		.split(',')
 		.map((part, index) => {
 			const [tag = '', ...parameters] = part.trim().split(';')
-			const q = parameters.map((p) => /^\s*q\s*=\s*([01](?:\.\d{0,3})?)\s*$/i.exec(p)?.[1]).find((v) => v !== undefined)
-			return { code: tag.trim().split('-')[0]!.toLowerCase(), q: q === undefined ? 1 : Number(q), index }
+			// RFC 9110 qvalue: 0 to 1 with at most three decimals; a q parameter of any other form drops the tag.
+			const q = parameters.find((p) => /^\s*q\s*=/i.test(p))
+			const value = q === undefined ? '1' : /^\s*q\s*=\s*(0(?:\.\d{0,3})?|1(?:\.0{0,3})?)\s*$/i.exec(q)?.[1]
+			return { code: tag.trim().split('-')[0]!.toLowerCase(), q: value === undefined ? 0 : Number(value), index }
 		})
 		.filter((entry) => entry.q > 0 && ISO_639_1.has(entry.code))
 		.sort((a, b) => b.q - a.q || a.index - b.index)

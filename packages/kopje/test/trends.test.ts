@@ -8,6 +8,7 @@ import { ACCESS, setAccess } from './ops-helpers'
 import { appToken, scopedToken } from './read-helpers'
 import { block, community, getJson } from './status-helpers'
 import { authors, review, round, setTrendSetting, trendStatuses } from './trend-helpers'
+import { preferredLanguage } from '../src/mastodon/trends'
 import type { StoreStub } from '../src/platform/store-client'
 
 // GET /api/v1/trends/tags (and /api/v1/trends), /statuses and /links (mastodon/trends.ts, domain/trends.ts): Mastodon
@@ -200,6 +201,13 @@ describe('GET /api/v1/trends/statuses', () => {
 		expect(await listed({})).toEqual({ ids: [en, ja], vary: 'Authorization, Accept-Language' })
 		expect((await listed({ 'accept-language': 'ja-JP;q=0.9, xx, fr;q=0.1' })).ids).toEqual([ja, en])
 		expect((await listed({ 'accept-language': 'fr, ja;q=0.5' })).ids).toEqual([en, ja])
+		// q-values outside [0, 1] or not qvalues drop their tag.
+		expect((await listed({ 'accept-language': 'ja;q=1.000' })).ids).toEqual([ja, en])
+		for (const header of ['ja;q=1.5', 'ja;q=-1', 'ja;q=abc', 'ja;q=0.1234', 'ja;q=0']) {
+			expect((await listed({ 'accept-language': header })).ids, header).toEqual([en, ja])
+		}
+		expect(preferredLanguage('en;q=1.5, ja;q=0.2')).toBe('ja')
+		expect(preferredLanguage(undefined)).toBe('en')
 		expect((await listed({ 'accept-language': `${'x'.repeat(1100)}, ja` })).ids).toEqual([en, ja])
 		await block(h.store, h.users.viewer.id, a[0]!)
 		expect(ids((await getJson(h, '/api/v1/trends/statuses', h.users.viewer.token)).body)).toEqual([ja])
