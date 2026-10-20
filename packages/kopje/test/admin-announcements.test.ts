@@ -7,6 +7,7 @@ import { announcementAdmin, seedAnnouncement, T0 } from './announcement-helpers'
 import { seedAccount, sql } from './api-helpers'
 import { BUILD, completeSetup, migratedStore } from './helpers'
 import { ACCESS, setAccess } from './ops-helpers'
+import type { AnnouncementInput } from '../src/domain/announcements'
 import { handleScheduled } from '../src/jobs/scheduled'
 import type { StoreStub } from '../src/platform/store-client'
 
@@ -24,7 +25,7 @@ async function adminStore(): Promise<StoreStub> {
 	return store
 }
 
-const base = { text: 'hello', startsAt: null, endsAt: null, allDay: false, scheduledAt: null }
+const base: AnnouncementInput = { text: 'hello', startsAt: null, endsAt: null, allDay: false, scheduledAt: null }
 
 async function log(store: StoreStub) {
 	return sql<{ action: string; target_type: string; target_id: string; detail: string }>(
@@ -223,7 +224,8 @@ describe('/admin/announcements', () => {
 
 	it('creates, lists a page at a time, changes, publishes, unpublishes and deletes', async () => {
 		const { post, as } = await harness()
-		const json = async (response: Response) => [response.status, await response.json<Record<string, unknown>>()]
+		const json = async (response: Response) =>
+			[response.status, await response.json<Record<string, unknown>>()] as const
 		const [status, created] = await json(
 			await post(adminClaims(), '/admin/announcements', {
 				text: 'Hello',
@@ -321,7 +323,7 @@ describe('/admin/announcements', () => {
 			{ 'Kopje-Import-Session': 'a'.repeat(43) },
 		] as Record<string, string>[]) {
 			for (const [method, path] of [
-				['GET', '/admin/announcements'],
+				['GET', '/admin/announcements'] as const,
 				['POST', '/admin/announcements'],
 				['POST', `/admin/announcements/${id(1)}`],
 				['POST', `/admin/announcements/${id(1)}/delete`],
