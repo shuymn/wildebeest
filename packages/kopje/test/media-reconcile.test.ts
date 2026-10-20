@@ -10,6 +10,7 @@ import { added } from './local-emoji-helpers'
 import { bytes, mediaForm, TestCodec, upload, uploaded } from './media-helpers'
 import { ACCESS, setAccess } from './ops-helpers'
 import { community, getJson, post } from './status-helpers'
+import { DETACHED_GRACE_MS } from '../src/domain/media'
 import { reconcileMedia, sweepMedia } from '../src/mastodon/media'
 import type { StoreStub } from '../src/platform/store-client'
 import { sha256Hex } from '../src/security/tokens'
@@ -226,12 +227,17 @@ describe('completion fence', () => {
 			})
 		const h = await users({ wrapStore: lose })
 		expect((await upload(h, h.users.alice, png())).status).toBe(500)
-		const [row] = await sql<{ id: string; file_token: string; processed: number; url: string }>(
+		const [row] = await sql<{ id: string; file_token: string; processed: number; url: string; gc_at: string }>(
 			h.store,
-			'SELECT id, file_token, processed, url FROM media_attachments'
+			'SELECT id, file_token, processed, url, gc_at FROM media_attachments'
 		)
 		expect(row?.processed).toBe(1)
 		expect(row?.url).not.toBe('')
+		// Kept as an ordinary unattached upload: its grace period runs from the completion, and a sweep before it ends
+		// leaves the row and its files.
+		expect(row?.gc_at).toBe(new Date(NOW + DETACHED_GRACE_MS).toISOString())
+		const deps = { build: () => env.CF_VERSION_METADATA.id, store: () => h.store, now: () => NOW + HOUR }
+		expect(await sweepMedia(env, deps)).toBe(0)
 		expect(await env.MEDIA.head(`files/${row?.file_token}/full`)).not.toBeNull()
 		expect(await env.MEDIA.head(`originals/${row?.id}`)).not.toBeNull()
 	})

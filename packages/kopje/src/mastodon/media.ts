@@ -223,11 +223,11 @@ export async function receiveImageUpload(
 	try {
 		outcome = await processUpload(c, deps, upload, check)
 	} catch (error) {
-		await discard(c, deps, upload)
+		await discard(c, deps, upload, 'keep')
 		throw error
 	}
 	if ('error' in outcome) {
-		await discard(c, deps, upload)
+		await discard(c, deps, upload, 'keep')
 		return { ok: false, ...outcome }
 	}
 	return { ok: true, media: outcome }
@@ -394,12 +394,19 @@ export async function writeFiles(
 }
 
 // A failed or unused upload. The Store decides first: it dooms a reservation that never completed (its writer, this
-// request, has settled every write), or keeps an upload whose completion committed although its answer was lost; a
-// kept upload is then doomed as DELETE /api/v1/media/:id dooms one, and the sweep deletes its objects. Only a doomed or
+// request, has settled every write), or keeps an upload whose completion committed although its answer was lost. A
+// kept upload stays for POST /api/v{1,2}/media (`keep`: an unattached upload the client may still find, swept after
+// its grace period), and is doomed as DELETE /api/v1/media/:id dooms one for a profile image (`doom`: nobody else can
+// use it), the sweep deleting its objects. Only a doomed or
 // vanished reservation's objects are deleted here. If the Store cannot be asked, the objects stay for the sweep, which
 // deletes them with the reservation once its writer deadline has passed, or with a completed upload once its grace
 // period has (DETACHED_GRACE_MS).
-export async function discard(c: UploadContext, deps: ApiDeps, upload: ProfileUpload): Promise<void> {
+export async function discard(
+	c: UploadContext,
+	deps: ApiDeps,
+	upload: ProfileUpload,
+	completed: 'keep' | 'doom' = 'doom'
+): Promise<void> {
 	const { id, token } = upload
 	try {
 		const outcome = authorized(
@@ -407,6 +414,9 @@ export async function discard(c: UploadContext, deps: ApiDeps, upload: ProfileUp
 		)
 		if (outcome !== 'kept') {
 			await c.env.MEDIA.delete(mediaKeys(id, token))
+			return
+		}
+		if (completed === 'keep') {
 			return
 		}
 		authorized(
