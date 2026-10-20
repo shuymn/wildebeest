@@ -15,7 +15,9 @@ import { DEFAULT_UNREAD_LIMIT, type ExpandAccounts, MAX_UNREAD_LIMIT } from '../
 // Grouped notifications (Mastodon 4.5's /api/v2/notifications) and the unread counts of /api/v1 and /api/v2; the Store
 // does the work (domain/notification-groups.ts).
 
-const types = (p: Params, name: string) => p.getAll(name).filter((type) => type !== '')
+// types[] and exclude_types[] as Mastodon permits them (`types: []`): a scalar is dropped, and an empty value is kept,
+// so `types[]=` matches no type (Notification.select_types: `types.map(&:to_sym) & TYPES`).
+const types = (p: Params, name: string) => p.list(name) ?? []
 
 // include_filtered (truthy_param?, Rails' boolean casting): filtered notifications too.
 const includeFiltered = (p: Params) => parseBoolean(p.get('include_filtered')) === true

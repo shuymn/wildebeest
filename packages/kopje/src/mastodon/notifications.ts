@@ -21,8 +21,8 @@ export const listNotifications: ApiHandler = async (c, deps) => {
 			s.listNotifications(b, {
 				credential,
 				page,
-				types: p.getAll('types').filter((type) => type !== ''),
-				excludeTypes: p.getAll('exclude_types').filter((type) => type !== ''),
+				types: p.list('types') ?? [],
+				excludeTypes: p.list('exclude_types') ?? [],
 				accountId: accountId === undefined || accountId === '' ? null : accountId,
 				includeFiltered: parseBoolean(p.get('include_filtered')) === true,
 				present: present(c),
