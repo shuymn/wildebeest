@@ -78,6 +78,22 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       100 unresolved reports per remote actor) and where it differs from Mastodon (a redelivery or a Flag whose id is
       not on its actor's server files nothing): ID-6, ID-7, RES-7 and the accepted risks in
       [docs/threat-model.md](docs/threat-model.md).
+- Announcements, as Mastodon 4.5 serves them:
+    - `GET /api/v1/announcements` (which answered `[]`) lists the published ones, oldest first, with `read`, the
+      mentions of known accounts, the hashtags, the enabled local emoji the text references and the reactions.
+      `with_dismissed` is ignored, as Mastodon ignores it.
+    - `POST /api/v1/announcements/:id/dismiss` marks one read, and `PUT`/`DELETE
+      /api/v1/announcements/:id/reactions/:name` (which answered 404) adds or removes a reaction: a Unicode emoji or
+      an enabled local custom emoji, at most 8 different ones, with Mastodon's errors.
+    - The `user` stream carries `announcement`, `announcement.reaction` and `announcement.delete`.
+    - The Access admin writes them with `kopje-admin announcement` (`GET`/`POST /admin/announcements`, `POST
+      /admin/announcements/:id`, `…/publish`, `…/unpublish`, `…/delete`), each write logged in the moderation log
+      (a delete keeps the text's first 200 characters). The text is plain text of at most 10,000 bytes, linked when
+      shown.
+    - Scheduled ones are published by the cron within 5 minutes, and ended ones are taken down there, with no event.
+    - Where they differ from Mastodon (`statuses` is always `[]`, at most 16 mentions and 16 hashtags, a text that
+      renders past 64 KiB is refused, at most 16 published or scheduled and 1,000 kept, reactions grouped by name):
+      MD-4 in [docs/mastodon-deviations.md](docs/mastodon-deviations.md).
 
 ### Changed
 
@@ -129,7 +145,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds seven migrations (0049–0055), applied on the first request after the deploy; a rollback to an
+- Store schema: adds eight migrations (0049–0056), applied on the first request after the deploy; a rollback to an
   earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). On the
   representative store defined in `test/bench/migration-cost.ts`, migrations 0049–0055 together took 16.7–17.0
   seconds in three runs of the migration bench workflow on a 4-CPU GitHub-hosted runner, in workerd's local Durable
@@ -158,6 +174,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       row. A dump whose emoji image is not a kept local PNG or WebP upload within the recorded 1024-pixel edges, or
       with more than 1,000 enabled emoji, is refused ([docs/dump-format.md](docs/dump-format.md)), and
       `verify-conversion` fails on any `custom_emojis` row, counted in `emojis`.
+    - `0056_announcements`: the empty `announcements`, `announcement_reactions` and `announcement_dismissals` tables
+      with their indexes and triggers; the streaming journal (`stream_events`) is rebuilt to admit the announcement
+      events, with its rows, ids, triggers and index kept. A dump past the new bounds is refused
+      ([docs/dump-format.md](docs/dump-format.md)).
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.17] - 2026-10-19

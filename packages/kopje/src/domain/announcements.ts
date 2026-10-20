@@ -562,7 +562,8 @@ export type AnnouncementInput = {
 }
 
 // POST /admin/announcements (Admin::AnnouncementsController#create): published now unless scheduledAt is after `now`
-// (Announcement#set_published; a past one is cleared), at most MAX_ANNOUNCEMENTS in all and MAX_LIVE_ANNOUNCEMENTS live.
+// (Announcement#set_published; a past one is cleared), at most MAX_ANNOUNCEMENTS in all and MAX_LIVE_ANNOUNCEMENTS
+// live.
 export const createAnnouncement = writeOperation<
 	AnnouncementInput & { authority: ImportAuthority; now: number },
 	AnnouncementWritten

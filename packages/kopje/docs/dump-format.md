@@ -152,6 +152,24 @@ image is not a kept local upload within the emoji limits`, `custom_emojis: more 
 constraint failed: custom_emojis.shortcode`. A file built from legacy data has no row (`verify-conversion` fails on
 any).
 
+An announcement is a row of `announcements` (migration `0056_announcements`): an 18-digit `id`; `text` of 1 to 10,000
+UTF-8 bytes with no NUL and not blank in SQLite's ASCII sense; `starts_at` and `ends_at` both NULL or both set, the
+end not before the start; `published_at`, `scheduled_at`, `created_at` and `updated_at` as `YYYY-MM-DDTHH:MM:SS.sssZ`
+with an hour of 00 to 23 (NULL allowed but for the last two); `all_day` and `published` 0 or 1; a published row has
+a `published_at` and no `scheduled_at`. At most 1,000 rows, and at most 16 published or scheduled. A scheduled row
+whose time has passed is published by the next cron run. `announcement_reactions` rows name a local account and a
+`name` of 1 to 128 bytes with no NUL, C0 control or DEL: the shortcode of their `custom_emoji_id`'s emoji (ASCII of
+`A-Z a-z 0-9 _`), or, with no emoji, a name holding a character past ASCII; at most 8 names per announcement, one row
+per name and account; a reaction whose emoji was disabled since still imports. `announcement_dismissals` rows are one
+per local account and announcement. The tables come after `accounts`, `local_accounts` and `custom_emojis`. A chunk
+past these fails with the CHECK's name (`announcement_id_is_a_snowflake`, `announcement_text_within_10000_bytes`,
+`announcement_times_iso`, `announcement_range`, `announcement_flags`, `announcement_publication`,
+`announcement_reaction_name_within_128_bytes`), `announcements: more than 1000`, `announcements: more than 16
+published or scheduled`, `announcement_reactions: more than 8 names for one announcement`, `announcement_reactions: a
+custom emoji reaction is named by its shortcode` or a `UNIQUE` or `FOREIGN KEY` failure. A dump taken before 0056
+lists none of these tables: it restores into a Store at its own migrations (begin checks them), which then upgrades.
+A file built from legacy data has no row.
+
 A report (migration `0054_remote_reports`) names any account as its reporter (`account_id`), once per `uri` and
 reported account, with `status_ids` of at most 100 ids within 2,101 UTF-8 bytes (compact JSON of 18-digit ids), a
 `uri` within 4,096 JSON-escaped UTF-8 bytes and a `comment` within 20,000 UTF-8 bytes (and 5,000 code points up to any

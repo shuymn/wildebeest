@@ -13,7 +13,8 @@ import { grantsAny } from '../security/scopes'
 
 // Features Kopje has no data for (trends, annual reports, link timelines, translation, e-mail confirmation, async
 // refreshes), answered as Mastodon answers when the feature has nothing to show or is not configured, because clients
-// call them and a missing route can stop a client. Each is replaced when its feature arrives with its own tables. The writes act on records that never exist, so they change nothing.
+// call them and a missing route can stop a client. Each is replaced when its feature arrives with its own tables. The
+// writes act on records that never exist, so they change nothing.
 
 const RECORD_NOT_FOUND = () => mastodonError(404, 'Record not found')
 // Mastodon's not_found (ApplicationController#not_found, Api::BaseController#respond_with_error), as opposed to the

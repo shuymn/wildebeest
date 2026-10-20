@@ -84,8 +84,9 @@ export async function seedAnnouncement(
 	return row.id
 }
 
-// The widest mentions a 10,000-byte text reaches (RES-3): 16 remote accounts of 255-character usernames on 367-character
-// domains (625 bytes of text each), each with a 2,048-byte profile URL. Returns the text that mentions them all.
+// The widest mentions a 10,000-byte text reaches (RES-3): 16 remote accounts of 255-character usernames on
+// 367-character domains (625 bytes of text each), each with a 2,048-byte profile URL. Returns the text that mentions
+// them all.
 export async function mentionFill(store: StoreStub): Promise<string> {
 	const label = (c: string, n: number) => c.repeat(n)
 	const domain = (i: number) =>
