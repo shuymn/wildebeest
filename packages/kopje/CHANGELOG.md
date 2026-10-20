@@ -8,6 +8,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+## [0.1.0-rc.18] - 2026-10-20
+
+An eighteenth release candidate of the first release, published under the npm dist-tag `next`.
+
 ### Added
 
 - The instance's documents and public block list, as Mastodon 4.5 serves them:
@@ -155,9 +159,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 - Store schema: adds nine migrations (0049–0057), applied on the first request after the deploy; a rollback to an
   earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). On the
-  representative store defined in `test/bench/migration-cost.ts`, migrations 0049–0056 together took 16.9–17.2
+  representative store defined in `test/bench/migration-cost.ts`, migrations 0049–0057 together took 10.7–11.1
   seconds in three runs of the migration bench workflow on a 4-CPU GitHub-hosted runner, in workerd's local Durable
-  Object SQLite (0049–0055 alongside: 17.0–17.7 seconds), within the 20-second upgrade budget.
+  Object SQLite, within the 20-second upgrade budget; on slower runners of the same size, 0049–0056 took up to 17.2
+  seconds.
     - `0049_instance_bounds`: rewrites instance settings past their bounds (above), adds the triggers that refuse
       them, and indexes the suspend blocks by domain.
     - `0050_follow_recommendation_mutes`: the table of dismissed suggestions; it reads no existing row.
