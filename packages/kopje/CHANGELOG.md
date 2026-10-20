@@ -92,19 +92,14 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       shown.
     - Scheduled ones are published by the cron within 5 minutes, and ended ones are taken down there, with no event.
     - Where they differ from Mastodon: MD-4 in [docs/mastodon-deviations.md](docs/mastodon-deviations.md).
-- Trends, as Mastodon 4.5 works them out:
-    - `GET /api/v1/trends/tags` (and `/api/v1/trends`) and `GET /api/v1/trends/statuses`, which answered `[]`, list the
-      trending hashtags and posts with Mastodon's scores, thresholds (5 accounts using a hashtag today, more than
-      yesterday; 5 boosts and favourites on a post) and decay. They are worked out every 5 minutes from bounded
-      windows of stored posts.
-    - Nothing shows until the Access admin approves it (`kopje-admin trends`, `GET /admin/trends/tags|statuses`, `POST
-      /admin/trends/tags/approve|reject`, `POST /admin/trends/statuses/:id/approve|reject`, each logged), unless
-      `trendable_by_default=true`; `trends=false` turns trends off. Both are settings of `kopje-admin instance`.
-    - Posts are public, original, without a content warning, in a language Mastodon supports, by discoverable
-      authors, filtered for the viewer, one per author, the request's `Accept-Language` language first.
-    - Link trends and the link timeline are not implemented (MD-5 in
-      [docs/mastodon-deviations.md](docs/mastodon-deviations.md)).
-    - The admin trends lists of the Mastodon admin API answer the public trends; its approve and reject answer 403.
+- Trends, as Mastodon 4.5 works them out: `GET /api/v1/trends/tags` (and `/api/v1/trends`) and
+  `GET /api/v1/trends/statuses`, which answered `[]`, list the trending hashtags and posts, worked out every 5 minutes
+  from stored posts with Mastodon's scores and thresholds. Nothing trends until the Access admin approves it
+  (`kopje-admin trends`, logged) unless `trendable_by_default=true`, and `trends=false` turns trends off
+  ([docs/setup.md](docs/setup.md#instance-details)). Which posts may trend, and for whom:
+  [docs/visibility.md](docs/visibility.md) (R41). Link trends are not implemented, and where trends differ from
+  Mastodon: MD-5 in [docs/mastodon-deviations.md](docs/mastodon-deviations.md). The Mastodon admin API's trends lists
+  answer the public trends; its approve and reject answer 403.
 
 ### Changed
 

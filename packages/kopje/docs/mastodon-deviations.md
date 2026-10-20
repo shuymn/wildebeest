@@ -39,14 +39,13 @@ reason and who decided it, and change the exceptions that cite the gap.
   (Mastodon counts on receipt); at most 100 hashtags per post and 8,000 in all are read, and the 400 hashtags with the
   most accounts today are scored. Only the 400 posts of that window with the most boosts and favourites (counted up to
   10,000,000) are scored. A post published earlier but given a later id, or the reverse, is counted only within that
-  window. Deleted posts and suspended accounts stop counting at once. At most 200 allowed hashtags and 200 allowed
-  posts are kept, with 50 of each awaiting review, and 3 posts per author; the lists end at the top 200 allowed now,
-  and an offset of 200 or more answers `[]`. A trending hashtag's `history` counts at most its newest 200 public posts
-  of the 7 days, and a hashtag whose stored name is not well-formed UTF-8 or not in its own normalized form (an
-  imported one) never trends. Reviews are made by the Access
-  admin, take effect at once and send no e-mail; while trends are off nothing is scored and the admin lists are empty.
-  Posts are ordered by the `Accept-Language` language among ISO 639-1 codes (no user locale, chosen languages or
-  `lang`). `limit=0` answers `[]` without a Link, and a page cut by the 8 MiB budget continues after its last post.
-  Link trends, `GET /api/v1/timelines/link` and the admin link lists are not implemented: Kopje fetches no link
-  previews, so they answer `[]` or 404 as Mastodon does with no trending link. Decided by the owner (delegated),
-  2026-10-20.
+  window. Deleted posts and suspended accounts stop counting at once. At most 200 allowed hashtags and 200 allowed posts
+  are kept, with 50 of each awaiting review, and 3 posts per author; the lists end at the top 200 allowed now, and an
+  offset of 200 or more answers `[]`. A trending hashtag's `history` counts at most its newest 200 public posts of the 7
+  days, and a hashtag whose stored name is not well-formed UTF-8 or not in its own normalized form (an imported one)
+  never trends. Reviews are made by the Access admin, take effect at once and send no e-mail; while trends are off
+  nothing is scored and the admin lists are empty. Posts are ordered by the `Accept-Language` language among ISO 639-1
+  codes (no user locale, chosen languages or `lang`). `limit=0` answers `[]` without a Link, and a page cut by the 8 MiB
+  budget continues after its last post. Link trends, `GET /api/v1/timelines/link` and the admin link lists are not
+  implemented: Kopje fetches no link previews, so they answer `[]` or 404 as Mastodon does with no trending link.
+  Decided by the owner (delegated), 2026-10-20.

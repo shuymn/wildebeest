@@ -1887,9 +1887,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `test/admin-announcements.test.ts` ("an announcement’s delete").
   _Enforced (main)_ for trends: the cron's round (`trendsRound`) deletes and writes at most 500 rows of each trend table
   in one transaction, and its reads are metered against `TREND_ROW_CAPS.round` (8,222,200 bytes of row heap, which the
-  widest rows fill exactly: 1,600 hashtag groups of 1,024-byte names among them); a status's batched delete reserves its trend row and review (6 + after) and an account's
-  final delete its review (3); `test/trends-bounds.test.ts` ("meters the round’s rows"), `test/cascade-guard.test.ts`
-  ("trend rows within a batch").
+  widest rows fill exactly: 1,600 hashtag groups of 1,024-byte names among them); a status's batched delete reserves its
+  trend row and review (6 + after) and an account's final delete its review (3); `test/trends-bounds.test.ts` ("meters
+  the round’s rows"), `test/cascade-guard.test.ts` ("trend rows within a batch").
 - **RES-7: query work is bounded, not only the rows returned.** Feeds apply visibility and filters in the query before
   `LIMIT`. Context traversal visits a bounded number of statuses before sorting. A status keeps a bounded number and
   size of edits. _Enforced (main)_ for filtering before `LIMIT`: `src/domain/timelines.ts` (_Gap:
@@ -1998,12 +1998,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   form, and scores at most 400 + 250 statuses; measured at saturation (100 active suspend blocks, every author on its
   own eight-label domain with its actor id on another eight-label host, 4,000 distinct authors or 40 authors of 100
   statuses, every candidate quoting another, each review table at 10,000, and a status of 10,000 rejected hashtag rows)
-  it reads 272,587 rows with distinct authors and 100,435 with repeated ones (its writes' reads included), the same
-  with 10,000 or 1,000,000 older statuses and 0 or 100,000 hidden ones in the window (`test/trends-cost.test.ts`,
-  ceiling 275,000). `GET
-  /api/v1/trends/tags` reads 68,062 rows for 20 hashtags with 201 or 10,000 public statuses each, half of them by
-  unavailable authors, on the same kind of accounts and full review tables (`test/trends-maxima.test.ts`). Each plan is
-  of the production statement as it runs, with statistics taken before the data grew; the review lookups are key
+  it reads 272,587 rows with distinct authors and 100,435 with repeated ones (its writes' reads included), the same with
+  10,000 or 1,000,000 older statuses and 0 or 100,000 hidden ones in the window (`test/trends-cost.test.ts`, ceiling
+  275,000). `GET /api/v1/trends/tags` reads 68,062 rows for 20 hashtags with 201 or 10,000 public statuses each, half of
+  them by unavailable authors, on the same kind of accounts and full review tables (`test/trends-maxima.test.ts`). Each
+  plan is of the production statement as it runs, with statistics taken before the data grew; the review lookups are key
   seeks, and an instance block's match is a seek by domain (`coveredSql`'s CROSS JOIN: with stale statistics and 100
   blocks the planner had scanned the blocks for each suffix, 16,376,673 rows).
 

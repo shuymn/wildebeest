@@ -170,21 +170,22 @@ custom emoji reaction is named by its shortcode` or a `UNIQUE` or `FOREIGN KEY` 
 lists none of these tables: it restores into a Store at its own migrations (begin checks them), which then upgrades.
 A file built from legacy data has no row.
 
-Trends (migration `0057_trends`): `trend_tags` rows hold a hashtag `name` of 1 to 1,024 UTF-8 bytes with no NUL, at
-most 256 characters and no ASCII but `0-9 _ a-z`, a `score` and a `max_score` with 0 ≤ score ≤ max_score ≤ 1e15 and a
-24-byte ISO `max_score_at`; `trend_statuses` rows an 18-digit `status_id` and its author's `account_id`, a `score`
-from 0.3 to 1e15; at most 250 rows in each and 3 per author. `tag_trend_reviews` (a name of the same rule),
-`status_trend_reviews` and `account_trend_reviews` hold `trendable` 0 or 1 and a 24-byte ISO `reviewed_at`, at most
-10,000 each. `instance_settings` rows named `trends` and `trendable_by_default` hold `true` or `false`. The tables come
-after `statuses` and `accounts`. The rows are a snapshot: the next cron round works them out again, dropping a stored
-name that is not well-formed UTF-8 or not in its normalized form and decaying a peak dated in the future from the round's time. A chunk past these
-fails with the CHECK's name (`trend_tag_name`, `trend_tag_scores`, `trend_tag_max_score_at_iso`, `trend_status_ids`,
-`trend_status_score`, `tag_trend_review_name`, `tag_trend_review_at_iso`, `status_trend_review_at_iso`,
-`account_trend_review_at_iso`), `trend_tags: more than 250`, `trend_statuses: more than 250`, `trend_statuses: more
-than 3 for one author`, `trend_statuses: account_id is the status's author`, `tag_trend_reviews: more than 10000` (and
-the same for the other two review tables), `instance_settings: a value past its stored bound`, or a `FOREIGN KEY`
-failure. A dump taken before 0057 lists none of these tables: it restores into a Store at its own migrations, which then
-upgrades. A file built from legacy data has no row.
+Trends (migration `0057_trends`): `trend_tags` rows hold a hashtag `name` of 1 to 1,024 UTF-8 bytes with no NUL, at most
+256 characters and no ASCII but `0-9 _ a-z`, a `score` and a `max_score` with 0 ≤ score ≤ max_score ≤ 1e15 and a 24-byte
+ISO `max_score_at`; `trend_statuses` rows an 18-digit `status_id` and its author's `account_id`, a `score` from 0.3 to
+1e15; at most 250 rows in each and 3 per author. `tag_trend_reviews` (a name of the same rule), `status_trend_reviews`
+and `account_trend_reviews` hold `trendable` 0 or 1 and a 24-byte ISO `reviewed_at`, at most 10,000 each.
+`instance_settings` rows named `trends` and `trendable_by_default` hold `true` or `false`. The tables come after
+`statuses` and `accounts`. The rows are a snapshot: the next cron round works them out again, dropping a stored name
+that is not well-formed UTF-8 or not in its normalized form and decaying a peak dated in the future from the round's
+time. A chunk past these fails with the CHECK's name (`trend_tag_name`, `trend_tag_scores`,
+`trend_tag_max_score_at_iso`, `trend_status_ids`, `trend_status_score`, `tag_trend_review_name`,
+`tag_trend_review_at_iso`, `status_trend_review_at_iso`, `account_trend_review_at_iso`), `trend_tags: more than 250`,
+`trend_statuses: more than 250`, `trend_statuses: more than 3 for one author`, `trend_statuses: account_id is the
+status's author`, `tag_trend_reviews: more than 10000` (and the same for the other two review tables),
+`instance_settings: a value past its stored bound`, or a `FOREIGN KEY` failure. A dump taken before 0057 lists none of
+these tables: it restores into a Store at its own migrations, which then upgrades. A file built from legacy data has no
+row.
 
 A report (migration `0054_remote_reports`) names any account as its reporter (`account_id`), once per `uri` and
 reported account, with `status_ids` of at most 100 ids within 2,101 UTF-8 bytes (compact JSON of 18-digit ids), a
