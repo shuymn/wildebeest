@@ -19,6 +19,8 @@ import {
 import { fetchActor } from './remote-actor'
 import { ACTOR_TYPES, CONVERTED_TYPES, fetchRemoteStatus, parseRemoteStatus, STATUS_TYPES } from './remote-status'
 import type { ActivityRef, InboundActivity, Prefetched, ReceiveResult, RemoteActorInput } from '../domain/inbox'
+import { flagObjects, MAX_FLAG_OBJECTS, reportComment } from '../domain/reports'
+import { ACTIVITY_ID_LIMIT, withinIdentityBound } from '../platform/identity-bounds'
 import { withinJsonBounds } from '../platform/json-bounds'
 import { isActivityPubMediaType, parseMediaType } from '../platform/media-type'
 import { callStore } from '../platform/store-client'
@@ -124,7 +126,7 @@ export function hasActivityStreamsContext(context: unknown): boolean {
 }
 
 // The activity as Mastodon reads it: compacted JSON with the ActivityStreams context, ids as strings or objects with
-// an id. Other types (Flag, ...) and objects Kopje does not store are 'unsupported'.
+// an id. Other types and objects Kopje does not store are 'unsupported'.
 // The envelope every activity must have before anything reads it: the ActivityStreams context, a string id and type,
 // and an actor with an http(s) origin. Shared by the inbox and the cutover rollback's drain, so neither hands on an
 // activity the other would ignore.
@@ -259,6 +261,17 @@ function activityOf(
 				return typeof json.object.name === 'string' ? { type, id, target, object: { hashtag: json.object.name } } : null
 			}
 			return object === null ? null : { type, id, target, object: { status: object } }
+		}
+		// A report (Mastodon's ActivityPub::Activity::Flag): its id within ACTIVITY_ID_LIMIT, else unsupported; the
+		// objects by id, read as reports.ts flagObjects bounds them (MAX_FLAG_OBJECTS, each within ACTIVITY_ID_LIMIT), and
+		// the comment cut by reportComment. The Store checks all of it again (fileRemoteReports). Nothing is fetched.
+		case 'Flag': {
+			if (!withinIdentityBound(id, ACTIVITY_ID_LIMIT)) {
+				return null
+			}
+			const listed: unknown[] = Array.isArray(json.object) ? json.object : [json.object]
+			const objects = flagObjects(listed.slice(0, MAX_FLAG_OBJECTS).flatMap((entry) => idOf(entry) ?? []))
+			return objects.length === 0 ? null : { type: 'Flag', id, objects, content: reportComment(json.content) }
 		}
 		case 'Announce':
 			return object === null

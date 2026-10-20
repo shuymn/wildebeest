@@ -5,9 +5,10 @@ import { describe, expect, it, vi } from 'vitest'
 import { adminClaims, adminHarness, adminTeam, setTeamAccess } from './access-helpers'
 import { type ApiHarness, bearer, form, json, login, registerApp, setSetting, sql } from './api-helpers'
 import { NOW } from './app-helpers'
+import { mastodonFlag } from './fixtures/flags'
 import { BUILD } from './helpers'
-import { mastodonActor } from './inbox-helpers'
-import { ALICE, setup } from './inbox-status-helpers'
+import { mastodonActor, type TestActor } from './inbox-helpers'
+import { ALICE, type Setup, setup } from './inbox-status-helpers'
 import { ADMIN_EMAIL } from './ops-helpers'
 import { type Client, newClient, readPush, VAPID } from './push-helpers'
 import { deferred, deliveryDeps } from './quote-helpers'
@@ -15,7 +16,7 @@ import { appToken, rowsRead } from './read-helpers'
 import { community, remoteAccount, type User } from './status-helpers'
 import { Db } from '../src/db/sql'
 import { PURGE_BATCH, purgeBatch } from '../src/domain/inbox'
-import { streamedNotification } from '../src/domain/notifications'
+import { MAX_PUSH_BACKLOG, streamedNotification } from '../src/domain/notifications'
 import { createReport } from '../src/domain/reports'
 import { MODERATION_ROUNDS, REPORT_ROUND } from '../src/domain/suspension'
 import { pushRound } from '../src/jobs/push'
@@ -81,6 +82,29 @@ async function get<T>(h: ApiHarness, path: string, token: string | null): Promis
 async function reportsShown(h: ApiHarness, user: User): Promise<[string, string][]> {
 	const { body } = await get<NotificationBody[]>(h, '/api/v1/notifications', user.token)
 	return body.filter((n) => n.type === 'admin.report').map((n) => [n.account.id, n.report!.id])
+}
+
+// A SqlStorage over `real` that counts the rows each statement reads, whether its rows or its rowsWritten are taken.
+function countingSql(real: SqlStorage): { sql: SqlStorage; read: () => number } {
+	let read = 0
+	const sql = {
+		exec: (query: string, ...params: SqlStorageValue[]) => {
+			const cursor = real.exec(query, ...params)
+			return {
+				toArray: () => {
+					const rows = cursor.toArray()
+					read += cursor.rowsRead
+					return rows
+				},
+				get rowsWritten() {
+					const written = cursor.rowsWritten
+					read += cursor.rowsRead
+					return written
+				},
+			}
+		},
+	} as unknown as SqlStorage
+	return { sql, read: () => read }
 }
 
 const stored = (store: StoreStub) =>
@@ -173,23 +197,17 @@ describe('admin.report: who is notified (ReportService#notify_staff!)', () => {
 		expect(await stored(h.store)).toEqual([])
 	})
 
-	it('notifies no one of a remote report: an inbound Flag is not stored (Mastodon stores it and notifies)', async () => {
+	it('notifies the admin of a remote report, from its remote reporter (ActivityPub::Activity::Flag)', async () => {
 		const t = await setup()
 		await setSetting(t.store, 'admin_email', 'alice@mail.example')
 		const bob = await mastodonActor(t.web, 'bob')
-		const flag = {
-			'@context': 'https://www.w3.org/ns/activitystreams',
-			id: `${bob.uri}#flags/1`,
-			type: 'Flag',
-			actor: bob.uri,
-			content: 'spam',
-			object: ['https://kopje.test/ap/users/dave'],
-		}
+		const flag = mastodonFlag(bob, ['https://kopje.test/ap/users/dave'], 'spam', `${bob.uri}#flags/1`)
 		expect(await t.post(bob, flag)).toBe(202)
-		expect(await sql(t.store, 'SELECT count(*) AS n FROM reports')).toEqual([{ n: 0 }])
-		expect(await sql(t.store, 'SELECT count(*) AS n FROM notifications WHERE account_id = ?', ALICE)).toEqual([
-			{ n: 0 },
-		])
+		const reports = await sql<{ id: number; account_id: string }>(t.store, 'SELECT id, account_id FROM reports')
+		expect(reports).toEqual([{ id: expect.any(Number), account_id: expect.any(String) }])
+		expect(
+			await sql(t.store, 'SELECT type, from_account_id, report_id FROM notifications WHERE account_id = ?', ALICE)
+		).toEqual([{ type: 'admin.report', from_account_id: reports[0]!.account_id, report_id: reports[0]!.id }])
 	})
 })
 
@@ -472,29 +490,12 @@ describe('admin.report: the purge of reports, bounded (RES-6, RES-7)', () => {
 	const batch = (store: StoreStub, uri: string) =>
 		runInDurableObject(store, (_instance, state) => {
 			const real = state.storage.sql
-			let read = 0
-			const counting = {
-				exec: (query: string, ...params: SqlStorageValue[]) => {
-					const cursor = real.exec(query, ...params)
-					return {
-						toArray: () => {
-							const rows = cursor.toArray()
-							read += cursor.rowsRead
-							return rows
-						},
-						get rowsWritten() {
-							const written = cursor.rowsWritten
-							read += cursor.rowsRead
-							return written
-						},
-					}
-				},
-			} as unknown as SqlStorage
+			const { sql: counting, read } = countingSql(real)
 			const db = new Db(counting)
 			const changes = () => new Db(real).first<{ n: number }>('SELECT total_changes() AS n')!.n
 			const before = changes()
 			const more = state.storage.transactionSync(() => purgeBatch(db, uri, NOW))
-			return { wrote: changes() - before, read, more }
+			return { wrote: changes() - before, read: read(), more }
 		})
 
 	it("deletes a report notification's pushes child-first, every batch within PURGE_BATCH", async () => {
@@ -563,6 +564,212 @@ describe('admin.report: the purge of reports, bounded (RES-6, RES-7)', () => {
 		const many = await history(20_000)
 		expect([few.wrote, many.wrote]).toEqual([PURGE_BATCH, PURGE_BATCH])
 		expect(many.read).toBeLessThanOrEqual(few.read + 10)
+	}, 120_000)
+})
+
+describe("admin.report: a remote reporter's purge, child-first and whole-batch bounded (RES-6)", () => {
+	// alice is the OAuth admin; bob, a remote reporter on mastodon.example, filed a report of dave by a Flag and is then
+	// deleted (an inbound DeleteActor writes the purge job and its first batch).
+	async function reporterWorld() {
+		const t = await setup()
+		await setSetting(t.store, 'admin_email', 'alice@mail.example')
+		const bob = await mastodonActor(t.web, 'bob')
+		const flag = mastodonFlag(bob, ['https://kopje.test/ap/users/dave'], 'spam', `${bob.uri}#flags/1`)
+		expect(await t.post(bob, flag)).toBe(202)
+		const id = (await sql<{ id: string }>(t.store, 'SELECT id FROM accounts WHERE uri = ?', bob.uri))[0]!.id
+		// No delete may cascade: a notification's delete aborts while a push names it, a report's while a notification
+		// does (test-only guards on this Store).
+		await sql(
+			t.store,
+			`CREATE TRIGGER test_no_push_cascade BEFORE DELETE ON notifications
+			WHEN EXISTS (SELECT 1 FROM push_deliveries WHERE notification_id = OLD.id)
+			BEGIN SELECT RAISE(ABORT, 'a notification deleted with its pushes'); END`
+		)
+		await sql(
+			t.store,
+			`CREATE TRIGGER test_no_report_cascade BEFORE DELETE ON reports
+			WHEN EXISTS (SELECT 1 FROM notifications WHERE report_id = OLD.id)
+			BEGIN SELECT RAISE(ABORT, 'a report deleted with its notifications'); END`
+		)
+		return { t, bob, id }
+	}
+
+	// `count` pushes of each notification `where` selects, to that many subscriptions of alice's.
+	async function pushes(store: StoreStub, where: string, count: number): Promise<void> {
+		await sql(
+			store,
+			"INSERT OR IGNORE INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('seed', 's', 'seed', 'urn:ietf:wg:oauth:2.0:oob', 'push')"
+		)
+		await sql(
+			store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT OR IGNORE INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes)
+			SELECT 'seed-' || i, 'access', 'seed', ?2, 'push' FROM n`,
+			count,
+			ALICE
+		)
+		await sql(
+			store,
+			`INSERT OR IGNORE INTO push_subscriptions (token_hash, endpoint, key_p256dh, key_auth)
+			SELECT token_hash, 'https://push.example/' || token_hash, 'p', 'a' FROM oauth_tokens WHERE client_id = 'seed'`
+		)
+		await sql(
+			store,
+			`INSERT OR IGNORE INTO push_deliveries (subscription_id, notification_id, next_attempt_at, updated_at)
+			SELECT p.id, n.id, 0, 0 FROM (SELECT id FROM push_subscriptions WHERE token_hash GLOB 'seed-*' ORDER BY id LIMIT ?1) p
+			CROSS JOIN (SELECT id FROM notifications WHERE ${where}) n`,
+			count
+		)
+	}
+
+	// The rows of the tables a purge deletes from, summed: what the batch removed, cascades included, whatever
+	// counted them.
+	const TABLES = ['reports', 'notifications', 'push_deliveries', 'statuses', 'status_mentions', 'accounts', 'follows']
+	const rowsOf = (db: Db) =>
+		TABLES.reduce((sum, table) => sum + db.first<{ n: number }>(`SELECT count(*) AS n FROM ${table}`)!.n, 0)
+
+	// Deletes bob (the DeleteActor's batch), then runs the job's batches to its end: each batch's writes
+	// (total_changes(), its job's completion included) and the rows it removed, which no cascade adds to.
+	async function purge(t: Setup, bob: TestActor) {
+		const batches: { wrote: number; removed: number; read: number }[] = []
+		const first = await runInDurableObject(t.store, async (instance, state) => {
+			const db = new Db(state.storage.sql)
+			const changes = () => db.first<{ n: number }>('SELECT total_changes() AS n')!.n
+			const [before, rows] = [changes(), rowsOf(db)]
+			const result = await instance.receiveActivity(BUILD, {
+				now: NOW,
+				origin: 'https://kopje.test',
+				actorUri: bob.uri,
+				actor: null,
+				activity: { type: 'DeleteActor', id: `${bob.uri}#delete` },
+			})
+			return { result, wrote: changes() - before, removed: rows - rowsOf(db) }
+		})
+		expect(first.result).toMatchObject({ applied: true, reason: 'actor-deleted' })
+		// The DeleteActor's own two rows (the job and the account's deleted_at) come before the batch's budget.
+		expect(first.wrote).toBeLessThanOrEqual(PURGE_BATCH + 2)
+		batches.push({ wrote: first.wrote - 2, removed: first.removed, read: 0 })
+		for (let i = 0; i < 100 && first.result.jobsPending; i++) {
+			const next = await runInDurableObject(t.store, (_instance, state) => {
+				const real = state.storage.sql
+				const { sql: counting, read } = countingSql(real)
+				const db = new Db(real)
+				const changes = () => db.first<{ n: number }>('SELECT total_changes() AS n')!.n
+				const [before, rows] = [changes(), rowsOf(db)]
+				const more = state.storage.transactionSync(() => purgeBatch(new Db(counting), bob.uri, NOW))
+				return { more, wrote: changes() - before, removed: rows - rowsOf(db), read: read() }
+			})
+			batches.push(next)
+			if (!next.more) {
+				break
+			}
+		}
+		for (const batch of batches) {
+			expect(batch.wrote).toBeLessThanOrEqual(PURGE_BATCH)
+			expect(batch.removed).toBeLessThanOrEqual(batch.wrote)
+		}
+		expect(await sql(t.store, 'SELECT count(*) AS n FROM accounts WHERE uri = ?', bob.uri)).toEqual([{ n: 0 }])
+		expect(
+			await sql(
+				t.store,
+				"SELECT done_at IS NOT NULL AS done FROM inbound_jobs WHERE kind = 'purge' AND key = ?",
+				bob.uri
+			)
+		).toEqual([{ done: 1 }])
+		return batches
+	}
+
+	it(`deletes its report's notification after its ${MAX_PUSH_BACKLOG} pushes, over several batches`, async () => {
+		const { t, bob, id } = await reporterWorld()
+		await pushes(t.store, `type = 'admin.report' AND from_account_id = '${id}'`, MAX_PUSH_BACKLOG)
+		const batches = await purge(t, bob)
+		expect(batches.length).toBeGreaterThan(2)
+		expect(await sql(t.store, 'SELECT count(*) AS n FROM reports')).toEqual([{ n: 0 }])
+		expect(await sql(t.store, 'SELECT count(*) AS n FROM push_deliveries')).toEqual([{ n: 0 }])
+		expect(await sql(t.store, 'SELECT count(*) AS n FROM notifications')).toEqual([{ n: 0 }])
+	}, 60_000)
+
+	it('purges 1,200 reports by it, resolved and unresolved, with notifications and pushes, and those of it', async () => {
+		const { t, bob, id } = await reporterWorld()
+		await sql(
+			t.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1199)
+			INSERT INTO reports (account_id, target_account_id, uri, created_at, action_taken_at)
+			SELECT ?1, CASE i % 2 WHEN 0 THEN ?2 ELSE ?3 END, ?4 || '#flags/seed-' || i, 'x', CASE WHEN i % 3 = 0 THEN 'x' END
+			FROM n`,
+			id,
+			'222222222222222222',
+			ALICE,
+			bob.uri
+		)
+		await sql(
+			t.store,
+			`INSERT INTO notifications (account_id, type, from_account_id, report_id)
+			SELECT ?1, 'admin.report', account_id, id FROM reports WHERE uri GLOB '*#flags/seed-*' AND id % 2 = 0`,
+			ALICE
+		)
+		// It is also reported (by alice), with that report's notification: the account is reporter and target.
+		await sql(
+			t.store,
+			"INSERT INTO reports (account_id, target_account_id, uri, created_at) VALUES (?, ?, 'https://kopje.test/r/of-bob', 'x')",
+			ALICE,
+			id
+		)
+		await sql(
+			t.store,
+			`INSERT INTO notifications (account_id, type, from_account_id, report_id)
+			SELECT ?1, 'admin.report', ?1, id FROM reports WHERE uri = 'https://kopje.test/r/of-bob'`,
+			ALICE
+		)
+		await pushes(t.store, "type = 'admin.report' AND report_id % 7 = 0", 3)
+		await purge(t, bob)
+		expect(await sql(t.store, 'SELECT count(*) AS n FROM reports')).toEqual([{ n: 0 }])
+		expect(await sql(t.store, 'SELECT count(*) AS n FROM notifications')).toEqual([{ n: 0 }])
+		expect(await sql(t.store, 'SELECT count(*) AS n FROM push_deliveries')).toEqual([{ n: 0 }])
+	}, 60_000)
+
+	it("deletes its mention notifications' pushes before them (the sender window)", async () => {
+		const { t, bob, id } = await reporterWorld()
+		await sql(
+			t.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 5)
+			INSERT INTO statuses (id, uri, account_id, visibility, published_at)
+			SELECT CAST(900000000000000000 + i AS TEXT), ?2 || '/statuses/' || i, ?1, 'public', 'x' FROM n`,
+			id,
+			bob.uri
+		)
+		await sql(
+			t.store,
+			`INSERT INTO notifications (account_id, type, from_account_id, status_id)
+			SELECT l.account_id, 'mention', ?1, s.id FROM local_accounts l CROSS JOIN statuses s WHERE s.account_id = ?1`,
+			id
+		)
+		await pushes(t.store, `type = 'mention' AND status_id = '900000000000000001'`, MAX_PUSH_BACKLOG)
+		await pushes(t.store, `type = 'mention'`, 10)
+		await purge(t, bob)
+		expect(await sql(t.store, 'SELECT count(*) AS n FROM notifications')).toEqual([{ n: 0 }])
+		expect(await sql(t.store, 'SELECT count(*) AS n FROM push_deliveries')).toEqual([{ n: 0 }])
+	}, 60_000)
+
+	it('reads the same rows per batch with 2,000 or 20,000 reports by it', async () => {
+		const read = async (count: number) => {
+			const { t, bob, id } = await reporterWorld()
+			await sql(
+				t.store,
+				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+				INSERT INTO reports (account_id, target_account_id, uri, created_at, action_taken_at)
+				SELECT ?2, ?3, ?4 || '#flags/seed-' || i, 'x', CASE WHEN i % 2 = 0 THEN 'x' END FROM n`,
+				count,
+				id,
+				'222222222222222222',
+				bob.uri
+			)
+			const batches = await purge(t, bob)
+			return batches[1]!.read
+		}
+		const few = await read(2_000)
+		const many = await read(20_000)
+		expect(many).toBeLessThanOrEqual(few + 10)
 	}, 120_000)
 })
 

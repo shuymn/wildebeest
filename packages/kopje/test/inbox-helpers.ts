@@ -149,10 +149,10 @@ const MASTODON_CONTEXT = [
 export async function mastodonActor(
 	web: RemoteWeb,
 	username: string,
-	options: { key?: number; origin?: string; extra?: Record<string, unknown> } = {}
+	options: { key?: number; origin?: string; uri?: string; extra?: Record<string, unknown> } = {}
 ): Promise<TestActor> {
 	const origin = options.origin ?? MASTODON
-	const uri = `${origin}/users/${username}`
+	const uri = options.uri ?? `${origin}/users/${username}`
 	const pair = await keyPair(options.key ?? 0)
 	const pem = await exportSpki(pair.publicKey)
 	const document: Record<string, unknown> = {

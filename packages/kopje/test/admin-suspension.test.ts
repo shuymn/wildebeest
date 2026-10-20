@@ -31,6 +31,7 @@ import {
 	REACH_ROUND,
 	RECENT_MS,
 	REPORT_ROUND,
+	REPORTER_ROUND,
 	suspendLocal,
 	TOKEN_ROUND_ROWS,
 } from '../src/domain/suspension'
@@ -793,6 +794,115 @@ describe('the reach of both Updates (AccountReachFinder)', () => {
 		expect(most(many.measured)).toBeLessThanOrEqual(most(few.measured) + 10)
 		expect(REACH_ROUND / TARGET_CHUNK_SIZE).toBeLessThan(MODERATION_ROUND_ROWS - REACH_ROUND)
 	}, 300_000)
+})
+
+describe("the reach of both Updates: the account's reporters (AccountReachFinder#reporters_inboxes)", () => {
+	// `count` remote reporters of `target` (account ids 75...), each on its own server; every third also reported it a
+	// second time, and the local `locals` reported it too (they stage nothing).
+	async function reporters(store: StoreStub, target: string, count: number, locals: string[]): Promise<void> {
+		await sql(
+			store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO accounts (id, uri, username, domain, inbox_url, shared_inbox_url)
+			SELECT printf('%018d', 750000000000000000 + i), 'https://r' || i || '.example/actor', 'actor', 'r' || i || '.example',
+				'https://r' || i || '.example/actor/inbox', 'https://r' || i || '.example/inbox' FROM n`,
+			count
+		)
+		await sql(
+			store,
+			`INSERT INTO reports (account_id, target_account_id, uri, created_at)
+			SELECT id, ?1, uri || '#flags/1', 'x' FROM accounts WHERE id GLOB '75*'
+			UNION ALL SELECT id, ?1, uri || '#flags/2', 'x' FROM accounts WHERE id GLOB '75*' AND CAST(id AS INTEGER) % 3 = 0
+			UNION ALL SELECT value, ?1, 'https://kopje.test/r/' || value, 'x' FROM json_each(?2)`,
+			target,
+			JSON.stringify(locals)
+		)
+	}
+
+	const targets = async (store: StoreStub) =>
+		(
+			await sql<{ n: number }>(
+				store,
+				'SELECT coalesce(sum(json_array_length(targets)), 0) + (SELECT count(*) FROM deliveries) AS n FROM outbound_targets'
+			)
+		)[0]!.n
+
+	// The rows a full reporters round reads past its 2 × REPORTER_ROUND (a seek and an account read per reporter): a
+	// staging row's key lookup per remote reporter (INSERT OR IGNORE) and the job's own reads (its row, the epoch check,
+	// the save), measured with this suite's fixtures: 754 rows a round.
+	const ROUND_OVERHEAD = REPORTER_ROUND + 4
+
+	it('stages each remote reporter once, a round of REPORTER_ROUND reporters at a time, whatever is behind the cursor', async () => {
+		const measure = async (count: number) => {
+			const { h, admin, alice, bob, owner } = await world()
+			await reporters(h.store, alice.id, count, [bob.id, owner.id])
+			expect(await act(h, admin, alice.id, { type: 'suspend' })).toEqual({ status: 200, body: {} })
+			const measured = (await rounds(h.store)).filter((round) => round.kind === 'suspension')
+			return { measured, targets: await targets(h.store) }
+		}
+		const few = await measure(1_201)
+		const many = await measure(3_000 + REPORTER_ROUND)
+		expect(few.targets).toBe(1_201)
+		expect(many.targets).toBe(3_000 + REPORTER_ROUND)
+		const walk = (measured: Round[]) => measured.filter((round) => round.phase === 'reporters')
+		expect(walk(few.measured).length).toBeGreaterThanOrEqual(5)
+		// Every full round reads the same, in both stores, within its allowance and the job's overhead; a round that meets
+		// a local reporter (the first, here) stages one inbox fewer, and reads 2 rows fewer for each.
+		const full = [...walk(few.measured).slice(0, -1), ...walk(many.measured).slice(0, -1)].map((round) => round.read)
+		const most = Math.max(...full)
+		expect(most).toBe(2 * REPORTER_ROUND + ROUND_OVERHEAD)
+		expect(full.every((read) => read === most || read === most - 2)).toBe(true)
+		expect(walk(few.measured)[1]!.read).toBe(walk(many.measured)[1]!.read)
+		for (const round of [...few.measured, ...many.measured]) {
+			expect(round.wrote, round.phase).toBeLessThanOrEqual(MODERATION_ROUND_ROWS)
+		}
+	}, 300_000)
+
+	it('ends a suspension walk the unsuspension overtakes, and the restoration reaches the reporters', async () => {
+		const { h, admin, alice, bob } = await world()
+		await reporters(h.store, alice.id, 2 * REPORTER_ROUND + 1, [bob.id])
+		expect(await act(h, admin, alice.id, { type: 'suspend' })).toEqual({ status: 200, body: {} })
+		// The suspension job's rounds until its walk has read one round of reporters.
+		const step = () =>
+			runInDurableObject(h.store, (_instance, state) => {
+				const db = new Db(state.storage.sql)
+				const job = () =>
+					db.first<{ id: number; phase: string; state: string }>(
+						"SELECT id, phase, state FROM moderation_jobs WHERE kind = 'suspension'"
+					)
+				const before = job()
+				if (before === undefined) {
+					return null
+				}
+				state.storage.transactionSync(() => moderationRound(db, NOW, before.id - 1))
+				return { before: before.phase, after: job() ?? null }
+			})
+		for (let i = 0; i < 20; i++) {
+			const ran = await step()
+			if (ran?.before === 'reporters') {
+				expect(ran.after).toMatchObject({ phase: 'reporters' })
+				break
+			}
+		}
+		// The first REPORTER_ROUND reporters by account id, less bob (local), are staged.
+		const remote = await sql<{ n: number }>(
+			h.store,
+			`SELECT count(*) AS n FROM (SELECT DISTINCT r.account_id FROM reports r ORDER BY r.account_id LIMIT ?) w
+			JOIN accounts a ON a.id = w.account_id WHERE a.domain IS NOT NULL`,
+			REPORTER_ROUND
+		)
+		expect(await sql(h.store, 'SELECT count(*) AS n FROM moderation_reach')).toEqual(remote)
+		expect((await unsuspend(h, admin, alice.id)).status).toBe(200)
+		// The next round finds the generation over: the walk ends, its staged inboxes go unwritten.
+		expect(await step()).toMatchObject({ before: 'reporters', after: null })
+		expect(await sql(h.store, "SELECT count(*) AS n FROM moderation_jobs WHERE kind = 'suspension'")).toEqual([
+			{ n: 0 },
+		])
+		// The restoration's reach job walks the reporters the same way.
+		const restored = (await rounds(h.store)).filter((round) => round.kind === 'reach')
+		expect(restored.filter((round) => round.phase === 'reporters').length).toBe(3)
+		expect(await targets(h.store)).toBe(2 * REPORTER_ROUND + 1)
+	}, 120_000)
 })
 
 describe('the sender rule (R1)', () => {

@@ -12,7 +12,7 @@ import { flagActivity, instanceActorUri, recordOutbound } from './activities'
 import { type AdminAccount, adminAccountStream } from './admin-accounts'
 import { accessAdminRefusal, adminAccountIdOnce } from './admin-authority'
 import { admit, ARRAY_ANSWER_BYTES, jsonBytes } from './answer-budget'
-import { availableSql, reportForwardees } from './audience'
+import { availableSql, type ReachedAccount, reachAccount, remoteReportStatusIds, reportForwardees } from './audience'
 import {
 	ADMIN_PERMISSION,
 	type Admin,
@@ -22,6 +22,7 @@ import {
 	viewerOf,
 } from './auth'
 import { type InstanceRule, parseRules } from './instance'
+import { reportsRejected } from './instance-domain-blocks'
 import { logAction } from './moderation-log'
 import { notify } from './notifications'
 import { readOperation } from './operation'
@@ -30,13 +31,15 @@ import { LARGE_ITEM_CHUNKS, presentation, type Status, statusStream } from './st
 import { accountStatusIds } from './timelines'
 import type { Db } from '../db/sql'
 import { blockedDomain } from '../platform/domain-name'
+import { ACTIVITY_ID_LIMIT, withinIdentityBound } from '../platform/identity-bounds'
 import type { ImportAuthority } from '../platform/store-admin'
 
-// Reports (Mastodon 4.5's POST /api/v1/reports: Api::V1::ReportsController, ReportService, Report; migration
-// 0022_reports). A local account reports an account, optionally naming statuses of it and instance rules, and may ask
-// that the report be forwarded to the servers concerned. The report is its reporter's (R34): it is stored for the
-// instance's moderation, answered once to its reporter, and read otherwise only by the OAuth admin through the
-// Mastodon admin API (R37, below).
+// Reports (Mastodon 4.5's POST /api/v1/reports: Api::V1::ReportsController, ReportService, Report; migrations
+// 0022_reports and 0054_remote_reports). A local account reports an account, optionally naming statuses of it and
+// instance rules, and may ask that the report be forwarded to the servers concerned; a remote server reports local
+// accounts and statuses by an inbound Flag (fileRemoteReports, below). The report is its reporter's (R34): it is stored
+// for the instance's moderation, answered once to a local reporter, and read otherwise only by the OAuth admin through
+// the Mastodon admin API (R37, below).
 //
 //   - The reported account must be available (ReportService#call raises RecordNotFound when it is unavailable,
 //     app/services/report_service.rb:16): anything else is not found.
@@ -179,15 +182,144 @@ export const createReport = userWriteOperation<ReportInput, ReportResult>((db, i
 	return { status: 'ok', report: userReport(row, presentAccountById(db, target, input.present)!) }
 })
 
+// ---- Remote reports: an inbound Flag (Mastodon's ActivityPub::Activity::Flag, app/lib/activitypub/activity/flag.rb;
+// migration 0054_remote_reports). Misskey sends one when a moderator forwards a report (from its system actor, an
+// Application, with the account's uri as the object and the comment as plain text, AbuseReportService.ts:121-143);
+// Mastodon when a user forwards one (from its instance actor, naming the account and the statuses).
+
+// The object entries a Flag is read for at most: one account and MAX_REPORT_STATUSES statuses (RES-7). Mastodon reads
+// them all.
+export const MAX_FLAG_OBJECTS = MAX_REPORT_STATUSES + 1
+// ActivityPub::Activity::Flag::COMMENT_SIZE_LIMIT (flag.rb:4), in code points.
+export const MAX_REMOTE_REPORT_COMMENT = 5_000
+// The unresolved reports one remote actor may have at most (RES-7): a Flag that would pass it files none. Per actor,
+// not per server (Mastodon and Misskey send Flags from one instance or system actor). Mastodon sets no bound.
+export const MAX_UNRESOLVED_REMOTE_REPORTS = 100
+
+// A Flag's comment as stored: a string's first MAX_REMOTE_REPORT_COMMENT code points (a lone surrogate read as
+// U+FFFD, a NUL kept), '' for anything else or a blank one (Mastodon's `content[0...5000]` and `presence || ''`). It is
+// plain text, never rendered as HTML. At most 20,000 UTF-8 bytes, which the CHECK of 0054_remote_reports holds.
+export function reportComment(content: unknown): string {
+	if (typeof content !== 'string') {
+		return ''
+	}
+	const cut = [...content.toWellFormed()].slice(0, MAX_REMOTE_REPORT_COMMENT).join('')
+	return blank(cut) ? '' : cut
+}
+
+// The Flag's object ids Kopje reads: the first MAX_FLAG_OBJECTS entries, each once, each within ACTIVITY_ID_LIMIT
+// (a longer one is skipped: no stored account or status has it).
+export function flagObjects(listed: readonly string[]): string[] {
+	return [...new Set(listed.slice(0, MAX_FLAG_OBJECTS))].filter((uri) => withinIdentityBound(uri, ACTIVITY_ID_LIMIT))
+}
+
+export type RemoteFlag = { id: string; objects: readonly string[]; content: string }
+
+export type FiledReports = { filed: boolean; reason: string }
+
+// Files the reports of an inbound Flag by the remote account `actor` (the inbox's gate has passed it: available, not
+// covered by a domain block, its id on its origin), in the Store's transaction, re-checking what the Worker parsed
+// (an RPC caller may send anything): the id within ACTIVITY_ID_LIMIT (id-past-bound), the objects (flagObjects) and the
+// comment (reportComment). A refusal writes nothing.
+//   1. reports-rejected: an instance domain block ruling the actor's domain rejects reports (reportsRejected).
+//   2. The objects by exact id (ID-5): stored accounts, and stored originals (a boost is never attached).
+//   3. The targets, the accounts named, each once in object order: an unavailable one (R1) is skipped, and a remote
+//      one unless one of its named statuses replies to a local account (flag.rb:15-17). None left: no-target.
+//   4. Each target once per Flag id (UNIQUE (uri, target_account_id)): none new is a duplicate. The new ones must fit
+//      MAX_UNRESOLVED_REMOTE_REPORTS with the actor's unresolved reports (one bounded range of reports_account_state),
+//      or the whole Flag is refused (report-limit).
+//   5. Each new target's report, with its named statuses that pass the remote reporter rule (remoteReportStatusIds),
+//      category other, no rules, not forwarded, uri the Flag id, and its admin.report (notifyStaff).
+export function fileRemoteReports(
+	db: Db,
+	actor: { id: string; domain: string },
+	flag: RemoteFlag,
+	now: number
+): FiledReports {
+	if (!withinIdentityBound(flag.id, ACTIVITY_ID_LIMIT)) {
+		return { filed: false, reason: 'id-past-bound' }
+	}
+	if (reportsRejected(db, actor.domain)) {
+		return { filed: false, reason: 'reports-rejected' }
+	}
+	const objects = JSON.stringify(flagObjects(flag.objects))
+	const accounts = db.all<{ id: string; local: number; available: number }>(
+		`SELECT a.id, a.domain IS NULL AS local, ${availableSql('a.id')} AS available
+		FROM json_each(?1) j JOIN accounts a ON a.uri = j.value ORDER BY j.key`,
+		objects
+	)
+	const statuses = db.all<{ id: string; account_id: string; replies_to_local: number }>(
+		`SELECT s.id, s.account_id,
+			EXISTS (SELECT 1 FROM local_accounts l WHERE l.account_id = s.in_reply_to_account_id) AS replies_to_local
+		FROM json_each(?1) j JOIN statuses s ON s.uri = j.value WHERE s.reblog_of_id IS NULL ORDER BY j.key`,
+		objects
+	)
+	const repliesToLocal = (target: string) =>
+		statuses.some((status) => status.account_id === target && status.replies_to_local === 1)
+	const distinct = [
+		...new Set(
+			accounts
+				.filter((account) => account.available === 1 && (account.local === 1 || repliesToLocal(account.id)))
+				.map((account) => account.id)
+		),
+	]
+	if (distinct.length === 0) {
+		return { filed: false, reason: 'no-target' }
+	}
+	const filed = new Set(
+		db
+			.all<{ target: string }>(
+				`SELECT target_account_id AS target FROM reports
+				WHERE uri = ?1 AND target_account_id IN (SELECT value FROM json_each(?2))`,
+				flag.id,
+				JSON.stringify(distinct)
+			)
+			.map((row) => row.target)
+	)
+	const fresh = distinct.filter((target) => !filed.has(target))
+	if (fresh.length === 0) {
+		return { filed: false, reason: 'duplicate' }
+	}
+	const unresolved =
+		db.first<{ n: number }>(
+			`SELECT count(*) AS n FROM (SELECT 1 FROM reports INDEXED BY reports_account_state
+				WHERE account_id = ?1 AND (action_taken_at IS NULL) = 1 LIMIT ?2)`,
+			actor.id,
+			MAX_UNRESOLVED_REMOTE_REPORTS + 1
+		)?.n ?? 0
+	if (unresolved + fresh.length > MAX_UNRESOLVED_REMOTE_REPORTS) {
+		return { filed: false, reason: 'report-limit' }
+	}
+	const comment = reportComment(flag.content)
+	for (const target of fresh) {
+		const named = statuses.filter((status) => status.account_id === target).map((status) => status.id)
+		const statusIds = remoteReportStatusIds(db, actor.domain, target, named.slice(0, MAX_REPORT_STATUSES))
+		const row = db.first<ReportRow>(
+			`INSERT INTO reports (account_id, target_account_id, status_ids, comment, category, rule_ids, forwarded, uri,
+				created_at)
+			VALUES (?, ?, ?, ?, 'other', NULL, 0, ?, ?) ON CONFLICT (uri, target_account_id) DO NOTHING
+			RETURNING ${REPORT_COLUMNS}`,
+			actor.id,
+			target,
+			JSON.stringify(statusIds.map((status) => status.id)),
+			comment,
+			flag.id,
+			new Date(now).toISOString()
+		)
+		if (row !== undefined) {
+			notifyStaff(db, row, now)
+		}
+	}
+	return { filed: true, reason: 'reported' }
+}
+
 // ReportService#notify_staff! (report_service.rb:44-51) for a report just written, in its transaction: the OAuth admin
 // (R37) is notified (admin.report) unless another report of the same account is unresolved
 // (Report#unresolved_siblings?, app/models/report.rb:128-130), so only the first unresolved report of an account
 // notifies. One seek in reports_target_state finds a sibling, however many reports the account has. Mastodon notifies
 // every user who can manage reports; Kopje's one is the OAuth admin, none when there is none. The rule then refuses the
 // admin's own report (NotifyService's from_self?), a reporter the admin blocks, mutes with notifications or
-// domain-blocks, and an unavailable reporter (shownSql). Kopje stores no remote report (an inbound Flag is
-// unsupported), so only a local reporter notifies, where Mastodon's ActivityPub::Activity::Flag goes through
-// ReportService and notifies too.
+// domain-blocks, and an unavailable reporter (shownSql). A remote report's notification is from its remote reporter.
 function notifyStaff(db: Db, report: ReportRow, now: number): void {
 	const sibling = db.first(
 		`SELECT 1 AS x FROM reports INDEXED BY reports_target_state
@@ -232,10 +364,13 @@ export type ReportRow = {
 	action_taken_by_account_id: string | null
 	assigned_account_id: string | null
 	updated_at: string | null
+	// The reporter's domain: null for a local reporter.
+	reporter_domain: string | null
 }
 
 export const REPORT_COLUMNS = `CAST(id AS TEXT) AS id, account_id, target_account_id, status_ids, comment, category, rule_ids,
-	forwarded, created_at, action_taken_at, action_taken_by_account_id, assigned_account_id, updated_at`
+	forwarded, created_at, action_taken_at, action_taken_by_account_id, assigned_account_id, updated_at,
+	(SELECT domain FROM accounts WHERE accounts.id = reports.account_id) AS reporter_domain`
 
 // The reporter's Report entity (REST::ReportSerializer): action_taken once the OAuth admin resolved it.
 export function userReport(row: ReportRow, targetAccount: Account): Report {
@@ -333,11 +468,14 @@ export const REPORT_STATUS_BYTES = 2 * 1024 * 1024
 
 // The admin entities of `rows`, in their order, for an admission (admit): each report atomic, presented when the
 // admission reaches it, with its four accounts read for it alone and its statuses within REPORT_STATUS_BYTES. A
-// report's statuses are shown only while its reporter may still see them by the account statuses rule (R11,
-// accountStatusIds, with the reporter as the viewer at the admin's request time), and presented with the admin as the
-// viewer. Mastodon shows them regardless, discarded ones included (Report#statuses, app/models/report.rb:78-80);
-// Kopje keeps the rule the report was made under (R37). The page's statuses share one presentation, so a keyword deep
-// in a long status of a large page may be missed where the report read alone matches it, as on timelines (filters.ts).
+// report's statuses are shown only while its reporter may still see them by the rule the report was made under (R37):
+// for a local reporter the account statuses rule (R11, accountStatusIds, with the reporter as the viewer at the
+// admin's request time), for a remote one the remote reporter rule (remoteReportStatusIds); they are presented with
+// the admin as the viewer. Mastodon shows them regardless, discarded ones included (Report#statuses,
+// app/models/report.rb:78-80). The report's own status_ids (the ids admitted when it was filed) are its metadata,
+// shown as stored in the admin's admin.report notifications (userReport). The page's statuses share one
+// presentation, so a keyword deep in a long status of a large page may be missed where the report read alone matches
+// it, as on timelines (filters.ts).
 // The rules are the instance's that the report names, in the instance's order; Mastodon keeps discarded rules
 // (Rule.with_discarded), which Kopje does not store.
 function* adminReportStream(
@@ -347,9 +485,12 @@ function* adminReportStream(
 	present: Present
 ): Generator<AdminReport, undefined> {
 	const rules = rows.some((row) => row.rule_ids !== null) ? instanceRules(db) : []
-	const shown = rows.map((row) =>
-		accountStatusIds(db, viewerOf(admin, row.account_id), row.target_account_id, JSON.parse(row.status_ids) as string[])
-	)
+	const shown = rows.map((row) => {
+		const ids = JSON.parse(row.status_ids) as string[]
+		return row.reporter_domain === null
+			? accountStatusIds(db, viewerOf(admin, row.account_id), row.target_account_id, ids)
+			: remoteReportStatusIds(db, row.reporter_domain, row.target_account_id, ids)
+	})
 	// One presentation for the answer: its keywords are matched against at most MAX_FILTER_REQUEST_TEXT in all.
 	const shared = presentation(
 		db,
@@ -410,8 +551,8 @@ export type AdminReportPage = Page<AdminReport> & { more: boolean }
 
 // GET /api/v1/admin/reports: newest first by id, paged by max_id, since_id and min_id (Paginable#to_a_paginated_by_id).
 // Each filter reads one index whose range is already in id order for the state: reports_state alone,
-// reports_account_state for a reporter, reports_target_state for a reported account, with the reporter as a residual
-// when both are given (its skip is the other reporters' reports of that account, which only local users write). A
+// reports_account_state for a reporter, reports_target_state for a reported account, and reports_pair_state when both
+// are given (RES-7: no residual, however many others report the account). A
 // page holds `limit` reports, or fewer when the status budget or ANSWER_BYTES stops it after at least one report;
 // `more` offers the next page then too, so a short page with `more` false is the end (Mastodon offers it when the
 // page is full).
@@ -420,13 +561,13 @@ export const listAdminReports = adminReadOperation<
 	AdminReportPage
 >(ADMIN_PERMISSION.manageReports, (db, { filter, page, present }, admin) => {
 	const ascending = page.minId !== undefined
-	// The index, and the equality on its leading columns (and the residual reporter): ?4 on, after the cursor's. The
-	// range and the order name reports.id, not the text id the columns answer.
+	// The index, and the equality on its leading columns: ?4 on, after the cursor's. The range and the order name
+	// reports.id, not the text id the columns answer.
 	const [index, keys, ...values] =
 		filter.targetAccountId !== null
 			? filter.accountId !== null
 				? ([
-						'reports_target_state',
+						'reports_pair_state',
 						'target_account_id = ?4 AND account_id = ?5',
 						filter.targetAccountId,
 						filter.accountId,
@@ -599,6 +740,35 @@ export const updateAdminReport = adminWriteOperation<
 // The newest report, which bounds the reports a local suspension resolves (domain/suspension.ts).
 export function reportBound(db: Db): number {
 	return db.first<{ id: number | null }>('SELECT max(id) AS id FROM reports')?.id ?? 0
+}
+
+// The reporters of the account `target` after the account id `after`, in account id order, at most `limit`, each with
+// its reach (AccountReachFinder#reporters_inboxes, app/lib/account_reach_finder.rb:22-23: every reporter of the
+// account, whatever its reports' state): a seek of reports_pair_state and a read of the account by key per reporter,
+// so a reporter costs two reads however many reports it made. Fewer than `limit` means the walk is done.
+export function reachReporters(
+	db: Db,
+	target: string,
+	after: string,
+	limit: number
+): (ReachedAccount & { account_id: string })[] {
+	const reached: (ReachedAccount & { account_id: string })[] = []
+	let cursor = after
+	while (reached.length < limit) {
+		const next = db.first<{ id: string | null }>(
+			`SELECT min(account_id) AS id FROM reports INDEXED BY reports_pair_state
+			WHERE target_account_id = ?1 AND account_id > ?2`,
+			target,
+			cursor
+		)?.id
+		if (next == null) {
+			break
+		}
+		const account = reachAccount(db, next)
+		reached.push({ account_id: next, domain: account?.domain ?? null, inbox: account?.inbox ?? null })
+		cursor = next
+	}
+	return reached
 }
 
 // The newest moderation log row, which a suspension freezes in its transaction: the action bound of the report fence

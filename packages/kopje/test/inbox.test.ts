@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { seedFollows, sql } from './api-helpers'
 import { harness, inboxDeps, NOW } from './app-helpers'
 import { fixtureKeyGen, LEGACY_EMPTY_KEK, seedLocalAccount } from './federation-helpers'
+import { mastodonFlag } from './fixtures/flags'
 import { BUILD, completeSetup, migratedStore } from './helpers'
 import {
 	AP,
@@ -765,6 +766,18 @@ describe('ID-6: the authorization table, one negative case per row', () => {
 		}
 		expect(await t.post(bob, block)).toBe(202)
 		expect(await sql(t.store, 'SELECT * FROM blocks')).toEqual([])
+	})
+
+	it('Flag: the actor is the reporter; another actor of the same origin does not report as it', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const carol = await mastodonActor(t.web, 'carol', { key: 2 })
+		const flag = (actor: TestActor, object: string) => mastodonFlag(actor, [object], 'spam', activityId(MASTODON))
+		// Signed by carol, naming bob as its actor: not bob's.
+		expect(await t.post(carol, flag(bob, DAVE_URI))).toBe(401)
+		// A remote account that no named status shows replying to a local account is no target.
+		expect(await t.post(carol, flag(carol, bob.uri))).toBe(202)
+		expect(await sql(t.store, 'SELECT * FROM reports')).toEqual([])
 	})
 
 	it('Update: an actor updates only itself; Delete: an actor deletes only itself (ID-3)', async () => {

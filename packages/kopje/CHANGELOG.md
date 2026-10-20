@@ -53,6 +53,14 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   its bounds ([docs/dump-format.md](docs/dump-format.md); 40 typical ones per status and 20 per account fit), dropping
   the rest from the first that does not fit. A reference is any shortcode between two colons, so `:aa:bb:` shows both where Mastodon shows neither.
   `GET /api/v1/custom_emojis` still answers `[]`.
+- Reports from other servers: an inbound `Flag` (what Mastodon sends when a user forwards a report, and Misskey when a
+  moderator forwards one) files a report of each local account it names, and of a remote one only with a named status
+  of it that replies to a local account, as Mastodon does. Its reporter is the remote actor, its category `other`; the
+  named statuses it may attach and what the admin is shown: R34 and R37 in [docs/visibility.md](docs/visibility.md).
+  The OAuth admin is notified (`admin.report`) as for a local report.
+    - Its bounds (101 objects, 4,096-byte ids, a 5,000-character comment, 100 unresolved reports per remote actor)
+      and where it differs from Mastodon (a redelivery or a Flag whose id is not on its actor's server files nothing):
+      ID-6, ID-7, RES-7 and the accepted risks in [docs/threat-model.md](docs/threat-model.md).
 
 ### Changed
 
@@ -106,6 +114,18 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - Stored format: a remote favourite's Like ids are rows of the new `favourite_likes` table, and its `favourites.uri`
   holds only the id it kept from before the upgrade, until that id's Undo. A dump past the new table's bounds is
   refused ([docs/dump-format.md](docs/dump-format.md)).
+- An instance domain block's `reject_reports` is enforced: a Flag from a server it covers files nothing (it was stored
+  but never applied). A nearer block without it, a `noop` included, exempts its subdomains, as on Mastodon.
+- A local suspension's `Update` (and the unsuspension's) also reaches the servers of the accounts that reported the
+  suspended account, as Mastodon's reach includes reporters.
+- A remote account's purge deletes the pushes of its notifications before the notifications, and the reports it made
+  with theirs, so a batch never removes more than its 500 rows through a cascade.
+- Stored format (migration `0054_remote_reports`): a report's reporter may be any account; a report id is never given
+  twice and stays within 18 digits; one report per Flag id and reported account; the comment, uri and `status_ids`
+  have stored bounds ([docs/dump-format.md](docs/dump-format.md)), and a dump past them is refused. Every report, its
+  notifications and their pushes keep their ids.
+- The admin's list of reports filtered by both reporter and reported account reads its own index, however many others
+  report that account.
 
 ### Fixed
 
@@ -120,7 +140,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds five migrations, applied on the first request after the deploy; a rollback to an earlier
+- Store schema: adds six migrations, applied on the first request after the deploy; a rollback to an earlier
   version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
     - `0049_instance_bounds`: rewrites instance settings past their bounds (above), adds the triggers that refuse
       them, and indexes the suspend blocks by domain. On a benchmark store of 1,000,000 accounts, 2,000,000 statuses
@@ -142,6 +162,12 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       triggers that bound them; no row is read or changed. On the benchmark store, this release's five files (0049 to
       0053) in one upgrade took 8.2 to 8.4 seconds in three serial runs (0049 to 0052 alone: 8.1 to 8.5 seconds),
       within the 20 seconds an upgrade may take.
+    - `0054_remote_reports`: rebuilds `reports` for remote reporters (above), keeping every report, notification,
+      push and id. It fails before writing anything on the conditions its [header](migrations/0054_remote_reports.sql)
+      names; a stored report past the new bounds (none of Kopje's writers makes one) leaves the Store held until it is
+      fixed and retried (`kopje-admin upgrade retry`, [docs/upgrade.md](docs/upgrade.md)). On the benchmark store,
+      this release's six files (0049 to 0054) in one upgrade took 8.7 to 9.0 seconds in three serial runs (0049 to
+      0053 alone: 8.4 to 8.8 seconds), within the 20 seconds an upgrade may take.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.17] - 2026-10-19

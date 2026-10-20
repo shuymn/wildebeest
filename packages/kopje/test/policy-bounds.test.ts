@@ -4998,10 +4998,10 @@ describe("streamed public and hashtag statuses read their items, however large t
 
 // The admin's list of reports (R37, GET /api/v1/admin/reports) reads one index range per filter, in id order: the
 // unresolved reports through reports_state, a reporter's through reports_account_state, a reported account's through
-// reports_target_state (with the reporter as a residual when both are given). Each case holds FEW matching reports,
-// spread among `bulk` that do not match (the other state, other reporters, other accounts), and reads the same rows on
-// the newest, a middle and the final page with 20 or 2,000 of them. The reporter residual's skip is the other
-// reporters' reports of that account (local users' writes), left out of the case where both are given.
+// reports_target_state, and one reporter's of one account through reports_pair_state. Each case holds FEW matching
+// reports, spread among `bulk` that do not match (the other state, other reporters, other accounts: with remote
+// reporters, any number of them may report the account), and reads the same rows on the newest, a middle and the final
+// page with 20 or 2,000 of them.
 describe("the admin's report list reads a page, however many reports do not match (RES-7)", () => {
 	const ADMIN_ID = '680000000000000000'
 	const A = '680000000000000001'
@@ -5054,6 +5054,7 @@ describe("the admin's report list reads a page, however many reports do not matc
 			bulk: [
 				{ reporter: A, target: T, resolved: true },
 				{ reporter: A, target: U, resolved: false },
+				{ reporter: B, target: T, resolved: false },
 				{ reporter: B, target: U, resolved: false },
 			],
 		},

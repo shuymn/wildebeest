@@ -42,7 +42,8 @@ const ACCOUNT_EXEMPT: Record<string, string> = {
 	stream_conversation_marks:
 		"a local account's only (made at its `direct` subscription, one row); a remote account is the only one purged",
 	poll_votes: 'deleted a batch at a time by deleteAccountVotes, checked by hasPollVotes in accountHasRows',
-	push_deliveries: 'below notifications, which go a batch at a time; at most MAX_PUSH_BACKLOG (1,000) wait in all',
+	push_deliveries:
+		"below notifications: deleted child-first by the purge's sender and report windows (purgeRelationships), so no notification's delete cascades",
 }
 
 // Triggers that write. A batched delete or purge counts every row changed (total_changes()), so a trigger its writes
@@ -234,6 +235,24 @@ describe('cascade guard (RES-6)', () => {
 			expect(PURGED_ACCOUNT_CHILDREN.filter((child) => !found.includes(child.table))).toEqual([])
 		})
 	})
+
+	// A table with two foreign keys naming accounts (follows, blocks, reports) has its rows found by each: the
+	// completion check names every such column, so the account's delete finds none of its rows by either.
+	it('lists each foreign key naming accounts, not only its table', async () => {
+		await runInDurableObject(await migratedStore(), (_instance, state) => {
+			const direct = directKeys(foreignKeys(state.storage.sql), 'accounts')
+			const checked = (key: string) => {
+				const [table, column] = key.split('.') as [string, string]
+				return PURGED_ACCOUNT_CHILDREN.some(
+					(child) => child.table === table && new RegExp(`(^|\\W)${column} = \\?1\\b`).test(child.check)
+				)
+			}
+			expect(
+				direct.filter((key) => !checked(key) && ACCOUNT_EXEMPT[key.split('.')[0]!] === undefined),
+				'each of these foreign keys cascades from accounts: check its column in a PURGED_ACCOUNT_CHILDREN entry in src/domain/inbox.ts'
+			).toEqual([])
+		})
+	})
 })
 
 // The tables that name local_accounts (a local user's own rows, and the moderation columns of migration
@@ -279,18 +298,23 @@ describe('cascade guard below local_accounts (RES-6)', () => {
 				{ from: 'local_accounts', table: 'accounts', column: 'account_id', onDelete: 'RESTRICT' },
 			])
 			expect(cascadesFrom(keys, 'accounts', ['statuses'])).not.toContain('local_accounts')
-			// The report's moderation columns name the admin's account, and let go of it if it ever went.
+			// The report's moderation columns name the admin's account, and let go of it if it ever went; its reporter is any
+			// account (migration 0054_remote_reports), found by the purge's completion check.
 			expect(
 				keys
 					.filter((key) => key.table === 'local_accounts' && key.from === 'reports')
 					.map((key) => [key.column, key.onDelete])
-			).toEqual(
-				expect.arrayContaining([
-					['account_id', 'CASCADE'],
-					['assigned_account_id', 'SET NULL'],
-					['action_taken_by_account_id', 'SET NULL'],
-				])
-			)
+					.sort()
+			).toEqual([
+				['action_taken_by_account_id', 'SET NULL'],
+				['assigned_account_id', 'SET NULL'],
+			])
+			expect(
+				keys
+					.filter((key) => key.table === 'accounts' && key.from === 'reports')
+					.map((key) => key.column)
+					.sort()
+			).toEqual(['account_id', 'target_account_id'])
 		})
 	})
 })

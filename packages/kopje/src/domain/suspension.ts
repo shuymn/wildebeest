@@ -5,7 +5,7 @@ import { beginStagedUpdate, endStaging, isDeliverableInbox, stageTargets } from 
 import { logAction } from './moderation-log'
 import { writeOperation } from './operation'
 import { remoteModerationRound } from './remote-suspension'
-import { actionBound, reportBound, resolveSuspensionReports } from './reports'
+import { actionBound, reachReporters, reportBound, resolveSuspensionReports } from './reports'
 import { forgetActorSnapshots } from './snapshot'
 import type { Db } from '../db/sql'
 
@@ -30,13 +30,14 @@ import type { Db } from '../db/sql'
 //
 // The audience is AccountReachFinder's (app/lib/account_reach_finder.rb), read from indexed ranges at most REACH_ROUND
 // rows per round into moderation_reach, so each inbox appears once: the accepted followers up to the frozen bound
-// (follows_target), the accounts mentioned by its newest STATUS_LIMIT statuses since the cutoff (statuses_account,
-// then status_mentions by key, at most RECENT_LIMIT inboxes), and the accounts it followed or requested to follow
-// since the cutoff (follows_pair over its whole following, a round at a time, at most RECENT_LIMIT inboxes of each
-// state). A capped source counts only the inboxes it stages first, as Mastodon caps each source's distinct inboxes. The
-// cutoff is two days before S, as Mastodon's for a locally suspended account; the restoration uses the same one. Kopje
-// has no relays, and its reporters are local, so neither adds inboxes. Then the inboxes are written as the Update's
-// targets in inbox order (deliveries.ts stageTargets), and their staging rows deleted, a round at a time.
+// (follows_target), the accounts that reported it (reports_pair_state, REPORTER_ROUND reporters a round, each read by
+// key; reports.ts reachReporters), the accounts mentioned by its newest STATUS_LIMIT statuses since the cutoff
+// (statuses_account, then status_mentions by key, at most RECENT_LIMIT inboxes), and the accounts it followed or
+// requested to follow since the cutoff (follows_pair over its whole following, a round at a time, at most RECENT_LIMIT
+// inboxes of each state). A capped source counts only the inboxes it stages first, as Mastodon caps each source's
+// distinct inboxes. The cutoff is two days before S, as Mastodon's for a locally suspended account; the restoration
+// uses the same one. Kopje has no relays, so they add no inboxes. Then the inboxes are written as the Update's targets
+// in inbox order (deliveries.ts stageTargets), and their staging rows deleted, a round at a time.
 //
 // A suspended sender's queued content is dropped when claimed (deliveries.ts REFUSED_SENDER), so only the Update and
 // retractions leave its lanes.
@@ -47,6 +48,8 @@ export const TOKEN_ROUND_ROWS = 200
 export const REPORT_ROUND = 100
 // Rows a staging round reads at most, and staged inboxes a writing round reads (and deletes) at most.
 export const REACH_ROUND = 500
+// Reporters a staging round reads at most: a seek and an account read each, REACH_ROUND rows.
+export const REPORTER_ROUND = REACH_ROUND / 2
 // AccountReachFinder's limits.
 export const STATUS_LIMIT = 200
 export const RECENT_LIMIT = 2_000
@@ -63,7 +66,7 @@ export const MODERATION_ROUNDS = 4
 export const TOKEN_CHILDREN = ['push_deliveries', 'push_subscriptions'] as const
 
 type JobKind = 'tokens' | 'suspension' | 'reach'
-type Phase = 'tokens' | 'reports' | 'followers' | 'mentions' | 'following' | 'write' | 'end'
+type Phase = 'tokens' | 'reports' | 'followers' | 'reporters' | 'mentions' | 'following' | 'write' | 'end'
 
 type Job = {
 	id: number
@@ -310,8 +313,9 @@ function stage(db: Db, job: Job, rows: readonly ReachedAccount[]): number {
 	return staged
 }
 
-const NEXT: Record<'followers' | 'mentions' | 'following', Phase> = {
-	followers: 'mentions',
+const NEXT: Record<'followers' | 'reporters' | 'mentions' | 'following', Phase> = {
+	followers: 'reporters',
+	reporters: 'mentions',
 	mentions: 'following',
 	following: 'write',
 }
@@ -344,6 +348,15 @@ function reachRound(db: Db, job: Job, state: JobState, now: number): boolean {
 			const rows = reachFollowers(db, job.account_id, Number(state.cursor ?? 0), job.follow_bound ?? 0, REACH_ROUND)
 			stage(db, job, rows)
 			next(db, job, 'followers', rows.length < REACH_ROUND, { cursor: rows.at(-1)?.id ?? state.cursor ?? 0 })
+			return false
+		}
+		case 'reporters': {
+			// Every reporter of the account, in account id order (reports_pair_state); local ones stage nothing.
+			const rows = reachReporters(db, job.account_id, String(state.cursor ?? ''), REPORTER_ROUND)
+			stage(db, job, rows)
+			next(db, job, 'reporters', rows.length < REPORTER_ROUND, {
+				cursor: rows.at(-1)?.account_id ?? state.cursor ?? '',
+			})
 			return false
 		}
 		case 'mentions':

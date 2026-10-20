@@ -63,6 +63,7 @@ import {
 	updateRemoteStatus,
 	visibilityOf,
 } from './remote-statuses'
+import { fileRemoteReports } from './reports'
 import { accountSearchText } from './search-text'
 import { recountStatus, recountStatuses, withdrawLocalBoost } from './statuses'
 import { streamDelete } from './streaming'
@@ -107,6 +108,9 @@ import { ACCOUNT_EMOJIS_BYTES } from '../platform/stored-bounds'
 //   Announce     the actor is the booster; the original is public, unlisted or the actor's own (VIS-6)
 //   Add, Remove  the target is the actor's own featured or featuredTags collection, on its origin; a pinned status
 //                is the actor's own (remote-collections.ts; test/remote-collections.test.ts)
+//   Flag         the actor is the reporter; the reported accounts are local, or remote with a named status replying
+//                to a local account, and available; the statuses are the reported accounts' own (reports.ts
+//                fileRemoteReports; test/inbox-flag.test.ts)
 // B1b-2's rows (Create, Update and Delete of statuses, Like, Announce) are applied in domain/remote-statuses.ts and
 // below; test/inbox-statuses.test.ts has one negative test per row.
 // The activity id has the actor's origin (checked by the Worker before anything is written, and again here).
@@ -212,6 +216,8 @@ export type InboundActivity =
 	| { type: 'UpdateStatus'; id: string; object: RemoteStatusInput }
 	// A Like in any spelling federation/inbound.ts reads as one (LIKE_TYPES): a favourite of `object`.
 	| { type: 'Like'; id: string; object: string }
+	// A report of the accounts and statuses `objects` names (reports.ts fileRemoteReports), with its comment.
+	| { type: 'Flag'; id: string; objects: string[]; content: string }
 	// An Add or Remove of a status (by its id) or of a Hashtag (by its name) to or from the collection `target`.
 	| { type: 'Add'; id: string; target: string; object: CollectionItem }
 	| { type: 'Remove'; id: string; target: string; object: CollectionItem }
@@ -1391,6 +1397,45 @@ function spend(db: Db, budget: Budget, sql: string, ...params: SqlStorageValue[]
 const REPORT_WINDOW = `SELECT id FROM reports INDEXED BY reports_target_state WHERE target_account_id = ?1
 	ORDER BY (action_taken_at IS NULL), id LIMIT ?2`
 
+// The first ?2 reports by the account ?1, in reports_account_state's order, as REPORT_WINDOW.
+const REPORTER_WINDOW = `SELECT id FROM reports INDEXED BY reports_account_state WHERE account_id = ?1
+	ORDER BY (action_taken_at IS NULL), id LIMIT ?2`
+
+// The first ?2 notifications from the account ?1 by id, one bounded range of notifications_from.
+const SENDER_WINDOW = `SELECT id FROM notifications INDEXED BY notifications_from WHERE from_account_id = ?1
+	ORDER BY id LIMIT ?2`
+
+// The reports of a window (REPORT_WINDOW, REPORTER_WINDOW) of the account ?1, child-first so no delete cascades, as
+// Mastodon's DeleteAccountService destroys an account's reports and targeted_reports: the pushes of their admin.report
+// notifications (up to MAX_PUSH_BACKLOG each), then the notifications (one per report and recipient, migration
+// 0040_report_notifications), then the reports. Each statement reads only the window, as many reports as the budget
+// has left, and takes what it deletes from them: a report waits until its notifications are gone, a notification
+// until its pushes are, so every row written is counted and none is read past the window, however many reports the
+// account has or made.
+function purgeReports(db: Db, budget: Budget, id: string, window: string): void {
+	spend(
+		db,
+		budget,
+		`DELETE FROM push_deliveries WHERE id IN (SELECT d.id FROM (${window}) w
+			JOIN notifications n ON n.report_id = w.id JOIN push_deliveries d ON d.notification_id = n.id LIMIT ?2)`,
+		id
+	)
+	spend(
+		db,
+		budget,
+		`DELETE FROM notifications WHERE id IN (SELECT n.id FROM (${window}) w JOIN notifications n ON n.report_id = w.id
+			WHERE NOT EXISTS (SELECT 1 FROM push_deliveries d WHERE d.notification_id = n.id) LIMIT ?2)`,
+		id
+	)
+	spend(
+		db,
+		budget,
+		`DELETE FROM reports WHERE id IN (SELECT w.id FROM (${window}) w
+			WHERE NOT EXISTS (SELECT 1 FROM notifications n WHERE n.report_id = w.id) LIMIT ?2)`,
+		id
+	)
+}
+
 // The first ?2 favourites of the account ?1 by id (favourites_account), so the purge reads one bounded range for
 // their tracked Like ids and for the favourites themselves, however many the account has (purgeRelationships).
 const FAVOURITE_WINDOW = 'SELECT id, status_id FROM favourites WHERE account_id = ?1 ORDER BY id LIMIT ?2'
@@ -1467,10 +1512,24 @@ function purgeRelationships(db: Db, id: string, budget: Budget): void {
 	for (const status of new Set(favourites.map((f) => f.status))) {
 		recountStatus(db, status)
 	}
+	// The reports of the account and by it (migrations 0022_reports and 0054_remote_reports), each window child-first
+	// (purgeReports), before its other notifications: a report's admin.report is from its reporter.
+	purgeReports(db, budget, id, REPORT_WINDOW)
+	purgeReports(db, budget, id, REPORTER_WINDOW)
+	// Its other notifications, child-first from its first ones by id (SENDER_WINDOW): their pushes (up to
+	// MAX_PUSH_BACKLOG each), then each notification left without one, so no delete cascades.
 	spend(
 		db,
 		budget,
-		'DELETE FROM notifications WHERE id IN (SELECT id FROM notifications WHERE from_account_id = ? LIMIT ?)',
+		`DELETE FROM push_deliveries WHERE id IN (SELECT d.id FROM (${SENDER_WINDOW}) w
+			JOIN push_deliveries d ON d.notification_id = w.id LIMIT ?2)`,
+		id
+	)
+	spend(
+		db,
+		budget,
+		`DELETE FROM notifications WHERE id IN (SELECT w.id FROM (${SENDER_WINDOW}) w
+			WHERE NOT EXISTS (SELECT 1 FROM push_deliveries d WHERE d.notification_id = w.id) LIMIT ?2)`,
 		id
 	)
 	// The local users' notification permissions for the account, its requests to them and the jobs of those answered
@@ -1493,34 +1552,6 @@ function purgeRelationships(db: Db, id: string, budget: Budget): void {
 		budget,
 		`DELETE FROM notification_request_jobs
 			WHERE id IN (SELECT id FROM notification_request_jobs WHERE from_account_id = ? LIMIT ?)`,
-		id
-	)
-	// The local users' reports of the account (migration 0022_reports), as Mastodon's DeleteAccountService destroys an
-	// account's targeted_reports, child-first so no delete cascades: the pushes of their admin.report notifications
-	// (up to MAX_PUSH_BACKLOG each), then the notifications (one per report and recipient, migration
-	// 0040_report_notifications), then the reports. Each statement reads only the account's first reports in
-	// reports_target_state's own order (resolution state, then id), as many as the budget has left (REPORT_WINDOW), and
-	// takes what it deletes from them: a report waits until its notifications are gone, a notification until its pushes
-	// are, so every row written is counted and none is read past the window, however many reports the account has.
-	spend(
-		db,
-		budget,
-		`DELETE FROM push_deliveries WHERE id IN (SELECT d.id FROM (${REPORT_WINDOW}) w
-			JOIN notifications n ON n.report_id = w.id JOIN push_deliveries d ON d.notification_id = n.id LIMIT ?2)`,
-		id
-	)
-	spend(
-		db,
-		budget,
-		`DELETE FROM notifications WHERE id IN (SELECT n.id FROM (${REPORT_WINDOW}) w JOIN notifications n ON n.report_id = w.id
-			WHERE NOT EXISTS (SELECT 1 FROM push_deliveries d WHERE d.notification_id = n.id) LIMIT ?2)`,
-		id
-	)
-	spend(
-		db,
-		budget,
-		`DELETE FROM reports WHERE id IN (SELECT w.id FROM (${REPORT_WINDOW}) w
-			WHERE NOT EXISTS (SELECT 1 FROM notifications n WHERE n.report_id = w.id) LIMIT ?2)`,
 		id
 	)
 	// Its pins and featured hashtags, at most MAX_REMOTE_PINS and MAX_FEATURED_TAGS, the sync of them that waits
@@ -1867,6 +1898,7 @@ export const PURGED_ACCOUNT_CHILDREN: readonly { table: string; check: string; f
 	{ table: 'remote_keys', check: 'account_id = ?1' },
 	{ table: 'inbound_jobs', check: 'target_account_id = ?1' },
 	{ table: 'reports', check: 'target_account_id = ?1' },
+	{ table: 'reports', check: 'account_id = ?1' },
 	{ table: 'status_pins', check: 'account_id = ?1' },
 	{ table: 'featured_tags', check: 'account_id = ?1' },
 	{ table: 'collection_syncs', check: 'account_id = ?1' },
@@ -2591,6 +2623,12 @@ const remove: Handler<'Remove'> = (db, actor, activity) => {
 	return unpinRemote(db, actor.id, object.status) ? applied('unpinned') : ignored('not-pinned')
 }
 
+// Mastodon's ActivityPub::Activity::Flag: the actor's reports of local accounts (reports.ts fileRemoteReports, R34).
+const flag: Handler<'Flag'> = (db, actor, activity, { now }) => {
+	const filed = fileRemoteReports(db, actor, activity, now)
+	return filed.filed ? applied(filed.reason) : ignored(filed.reason)
+}
+
 const HANDLERS: { [T in InboundActivity['type']]: Handler<T> } = {
 	Follow: follow,
 	Accept: accept,
@@ -2609,6 +2647,7 @@ const HANDLERS: { [T in InboundActivity['type']]: Handler<T> } = {
 	Announce: announce,
 	Add: add,
 	Remove: remove,
+	Flag: flag,
 }
 
 export const receiveActivity = writeOperation<StoreReceiveInput, ReceiveResult>((db, input) => {

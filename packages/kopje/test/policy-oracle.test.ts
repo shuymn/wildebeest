@@ -5,7 +5,16 @@ import { beforeAll, describe, expect, it } from 'vitest'
 
 import { migratedStore } from './helpers'
 import { NOTIFICATION_TYPES, PolicyModel, type Viewer } from './policy-model'
-import { accountId, BLOCKABLE_DOMAINS, runs, statusId, type World, worldArb, writeWorld } from './policy-world'
+import {
+	accountId,
+	BLOCKABLE_DOMAINS,
+	REMOTE_DOMAINS,
+	runs,
+	statusId,
+	type World,
+	worldArb,
+	writeWorld,
+} from './policy-world'
 import { Db } from '../src/db/sql'
 import {
 	availableLocalSql,
@@ -30,6 +39,7 @@ import {
 	notifiedSql,
 	quotePolicySql,
 	quoteReads,
+	remoteReportStatusIds,
 	shownSql,
 	visibleSql,
 } from '../src/domain/audience'
@@ -272,6 +282,46 @@ describe('the policy fragments agree with the model of their rules', () => {
 	it('listableSql (R8)', () => viewerStatusPairs(listableSql, (m, s, viewer) => m.listable(s, viewer), true))
 
 	it('homeFilterSql (R9)', () => viewerStatusPairs(homeFilterSql, (m, s, viewer) => m.homeFilter(s, viewer), true))
+
+	// Every (reported account, reporter's domain, status) the remote reporter rule admits, each account's statuses named
+	// at once, as an inbound Flag names them. The worlds stay below the follower probes' caps. Each branch of the rule
+	// (a private status by a follower on the domain, a direct one by its mention) must occur in the run.
+	it('remoteReportStatusIds (R34, a remote reporter)', async () => {
+		const seen = { follower: 0, mention: 0 }
+		await agree(
+			(db, world) => {
+				// Remote accounts are always drawn, so shownSql's admin.report rows (R15) judge remote senders too.
+				expect(world.accounts.filter((account) => !account.local).length).toBeGreaterThanOrEqual(2)
+				const named = namer(world)
+				return accounts(world).flatMap((t) =>
+					[...REMOTE_DOMAINS, 'three.example'].flatMap((domain) =>
+						remoteReportStatusIds(
+							db,
+							domain,
+							accountId(t),
+							world.statuses.map((_, s) => statusId(s))
+						).map((row) => `${named(accountId(t))} ${domain} ${named(row.id)}`)
+					)
+				)
+			},
+			(m) =>
+				accounts(m.world).flatMap((t) =>
+					[...REMOTE_DOMAINS, 'three.example'].flatMap((domain) =>
+						statuses(m.world).flatMap((s) => {
+							if (!m.remoteReportable(s, t, domain)) {
+								return []
+							}
+							const visibility = m.status(s).visibility
+							seen.follower += visibility === 'private' ? 1 : 0
+							seen.mention += visibility === 'direct' || visibility === 'limited' ? 1 : 0
+							return [`${name(m.world, t)} ${domain} ${m.status(s).name}`]
+						})
+					)
+				)
+		)
+		expect(seen.follower).toBeGreaterThan(0)
+		expect(seen.mention).toBeGreaterThan(0)
+	})
 
 	it('canView (R3)', () =>
 		agree(

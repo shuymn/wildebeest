@@ -1457,6 +1457,75 @@ export function reportForwardees(
 		.map((row) => row.id)
 }
 
+// R34 for a remote reporter (Mastodon's ReportService#reported_status_ids for a remote source account,
+// app/services/report_service.rb:84-93): whether the status `s` may be attached to a report of the account `target`
+// by a reporter on `domain` (accounts.domain), with `follower` (SQL) holding when the target has a follower on that
+// domain (hasFollowerOn). It is an available target's original, public or unlisted; private while it has such a
+// follower; or of any visibility when it mentions (silently too) an account of the domain. Mastodon's mention term is
+// not correlated to the status (any mention of the domain anywhere admits every status, report_service.rb:89); here
+// it is the status's own mention.
+export function remoteReportableSql(s: string, target: string, domain: string, follower: string): string {
+	return `(${s}.account_id = ${target} AND ${s}.reblog_of_id IS NULL AND ${availableSql(`${s}.account_id`)} AND (
+		${s}.visibility IN ${DISTRIBUTABLE_SQL}
+		OR (${s}.visibility = 'private' AND ${follower})
+		OR EXISTS (SELECT 1 FROM main.status_mentions rm JOIN main.accounts ra ON ra.id = rm.account_id
+			WHERE rm.status_id = ${s}.id AND ra.domain = ${domain})))`
+}
+
+// The rows each probe of hasFollowerOn reads at most (RES-7).
+export const FOLLOWER_PROBE = 1000
+
+// Whether `target` has an accepted follower on `domain` (Mastodon's `followers.with_domain(domain).exists?`), by two
+// probes of at most FOLLOWER_PROBE rows each, either of which may find one: the target's followers (follows_target),
+// each account read by key; and the domain's accounts (accounts_domain_username), each follow sought by follows_pair.
+// A target with more followers whose domain has more accounts than that, none of them in either window, is answered
+// false: its private statuses are not attached (docs/threat-model.md RES-7).
+export function hasFollowerOn(db: Db, target: string, domain: string): boolean {
+	return (
+		db.first(
+			`SELECT 1 AS x FROM (SELECT f.account_id FROM main.follows f INDEXED BY follows_target
+				WHERE f.target_account_id = ?1 AND f.state = 'accepted' LIMIT ?3) w
+			JOIN main.accounts a ON a.id = w.account_id WHERE a.domain = ?2
+			UNION ALL
+			SELECT 1 FROM (SELECT a.id FROM main.accounts a INDEXED BY accounts_domain_username WHERE a.domain = ?2 LIMIT ?3) d
+			WHERE EXISTS (SELECT 1 FROM main.follows f INDEXED BY follows_pair
+				WHERE f.account_id = d.id AND f.target_account_id = ?1 AND f.state = 'accepted')
+			LIMIT 1`,
+			target,
+			domain,
+			FOLLOWER_PROBE
+		) !== undefined
+	)
+}
+
+// The statuses among `ids` that a reporter on `domain` may attach to a report of `target` (remoteReportableSql), by
+// id, read by key; hasFollowerOn runs only when one of them is private. The OAuth admin is shown a remote report's
+// statuses only while they still pass (R37); the ids are the presenter's then (presented with the admin as the
+// viewer), as accountStatusIds' are for a local reporter.
+export function remoteReportStatusIds(
+	db: Db,
+	domain: string,
+	target: string,
+	ids: readonly string[]
+): { id: VisibleStatusId }[] {
+	if (ids.length === 0) {
+		return []
+	}
+	const read = (follower: boolean) =>
+		db.all<{ id: VisibleStatusId; is_private: number }>(
+			`SELECT s.id, s.visibility = 'private' AS is_private FROM main.statuses s
+			WHERE s.id IN (SELECT value FROM json_each(?1)) AND ${remoteReportableSql('s', '?2', '?3', follower ? '1' : '0')}
+			ORDER BY s.id`,
+			JSON.stringify(ids),
+			target,
+			domain
+		)
+	const admitted = read(true)
+	const rows =
+		admitted.some((row) => row.is_private === 1) && !hasFollowerOn(db, target, domain) ? read(false) : admitted
+	return rows.map((row) => ({ id: row.id }))
+}
+
 // A remote recipient, as a target's provenance records it (VIS-30, deliveries.ts): its account id, and the host of
 // its actor id (uriHostSql), which an inbox on another host does not reveal.
 export type RemoteRecipient = { id: string; host: string }
@@ -1608,6 +1677,15 @@ export function reachMentioned(
 		statusId,
 		after,
 		limit
+	)
+}
+
+// One account's reach, by key: a reporter of the account (reports.ts reachReporters, AccountReachFinder
+// #reporters_inboxes).
+export function reachAccount(db: Db, accountId: string): ReachedAccount | undefined {
+	return db.first<ReachedAccount>(
+		`SELECT a.domain, ${REACH_INBOX} AS inbox FROM main.accounts a WHERE a.id = ?1`,
+		accountId
 	)
 }
 
