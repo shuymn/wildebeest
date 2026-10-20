@@ -8,9 +8,10 @@ import { utf8Length } from '../platform/dump-format'
 // Bounds (RES-1), all in force before or while parsing:
 // - the body: `limit` bytes (API_BODY_LIMIT by default); a multipart body on a route with a file rule may also carry
 //   each declared file, so it may be `limit + names.length * (maxBytes + FILE_PART_SLACK)` bytes;
-// - the text: the UTF-8 bytes of every text entry's name and value and of the query, at most `limit`;
-// - JSON paths: at most MAX_PARAM_PATHS generated keys (entries and object prefixes), PARAM_PATH_BUDGET UTF-16 code
-//   units of them, charged before each key is built, and MAX_PARAM_DEPTH levels of nesting.
+// - a form body's text: the UTF-8 bytes of every text entry's name and value and of the query, at most `limit`;
+// - JSON paths: at most MAX_PARAM_PATHS generated keys (object members, array objects, empty lists; a list's scalar
+//   items are not counted), PARAM_PATH_BUDGET UTF-16 code units of every generated key, charged before each key is
+//   built, and MAX_PARAM_DEPTH levels of nesting.
 
 export const API_BODY_LIMIT = 1024 * 1024
 // The part headers and boundary of one declared file.
@@ -159,8 +160,10 @@ export async function readParams(request: Request, options: ReadOptions = {}): P
 		return value === undefined ? [] : [[name, value]]
 	})
 	const entries = [...parsed.entries, ...query.filter(([key]) => !names.has(key)), ...declaredQuery]
+	// A JSON body's names are generated, bounded by the path budget, and its values by the body; a form body's text is
+	// bounded here, so the files a multipart body may carry cannot make room for more text.
 	let text = 0
-	for (const [key, value] of [...parsed.entries, ...query]) {
+	for (const [key, value] of mediaTypeOf(contentType) === 'application/json' ? [] : [...parsed.entries, ...query]) {
 		text += utf8Length(key) + utf8Length(value)
 		if (text > limit) {
 			return { ok: false, status: 413 }
@@ -234,10 +237,10 @@ function selectDeclared(
 
 type Flattening = { entries: [string, string][]; objects: Set<string>; paths: number; units: number }
 
-// Charges one generated key before its string is built: past MAX_PARAM_PATHS keys or PARAM_PATH_BUDGET code units,
-// the body is refused (413).
-function charge(state: Flattening, prefix: string, key: string): void {
-	state.paths += 1
+// Charges one generated key before its string is built: past MAX_PARAM_PATHS object keys, array objects and empty
+// lists, or PARAM_PATH_BUDGET code units of every generated key, the body is refused (413).
+function charge(state: Flattening, prefix: string, key: string, path = true): void {
+	state.paths += path ? 1 : 0
 	state.units += prefix.length + key.length + 2
 	if (state.paths > MAX_PARAM_PATHS || state.units > PARAM_PATH_BUDGET) {
 		throw new ParamsRefused(413)
@@ -257,7 +260,9 @@ function flatten(value: unknown, state: Flattening, prefix = '', depth = 0): voi
 		value.forEach((item, index) => {
 			const scalar = item === null || typeof item !== 'object'
 			const key = scalar ? '' : String(index)
-			charge(state, prefix, key)
+			// A scalar item is charged its code units only: it costs at least two body bytes of its own, and a list of
+			// many values (Mastodon reads one of any length) is not a key amplification.
+			charge(state, prefix, key, !scalar)
 			flatten(item, state, `${prefix}[${key}]`, depth + 1)
 		})
 	} else if (typeof value === 'object' && value !== null) {

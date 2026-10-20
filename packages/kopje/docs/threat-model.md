@@ -1436,8 +1436,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   route that reads files (`readParams`' file rule: `update_credentials`' avatar and header, the settings page's
   image) takes a multipart body of the limit plus each file and its part headers (17,858,560 bytes for
   `update_credentials`), chosen from `Content-Type` before any byte is read, while its text stays within the limit in
-  UTF-8 bytes; a JSON body is refused past 10,000 generated keys or 2,097,152 UTF-16 code units of them, charged before
-  each key is built, and past 32 levels of nesting; `update_credentials` checks the token before reading a multipart
+  UTF-8 bytes; a JSON body is refused past 10,000 generated object keys or 2,097,152 UTF-16 code units of all its
+  keys, charged before each key is built, and past 32 levels of nesting; `update_credentials` checks the token before reading a multipart
   body; `test/params.test.ts`, `test/profile-images.test.ts` ("takes a multipart body up to the text limit plus two
   files and refuses one byte more", "answers an invalid or under-scoped token without reading a multipart body"). _Enforced (main)_ for status text: `test/status-text.test.ts`
   ("raw input bound"). _Enforced (main)_ for search terms (500 characters) and media (16 MB

@@ -21,8 +21,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   and files from 8 MB to 16 MB are refused.
 - Breaking: for repeated parts of a file parameter the last one is read, as Rails does: on `POST /api/v{1,2}/media`
   a text part followed by a file now uploads, and a file followed by a text part now answers 422.
-- Breaking: a JSON request body that flattens to more than 10,000 keys answers 413, and one nested more than 32 levels
-  answers 400.
+- Breaking: a JSON request body that flattens to more than 10,000 object keys answers 413, and one nested more than
+  32 levels answers 400.
 - Breaking: the Store operation `setProfileImage` is removed; `updateCredentials` takes the images and answers a
   status (`ok`, `not_found` or `upload_gone`).
 

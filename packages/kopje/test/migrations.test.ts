@@ -5887,7 +5887,8 @@ describe('0054_remote_reports', () => {
 			sql.exec(
 				"INSERT INTO admin_actions (actor, action, target_type, target_id, created_at) VALUES ('access', 'resolve', 'Report', '999999999999999998', 'x')"
 			)
-			expect(await kernel(state, WITH).upgrade()).toMatchObject({ ok: true })
+			// Through every migration: the admin's reads below are the current code's, which read later columns too.
+			expect(await kernel(state, MIGRATIONS).upgrade()).toMatchObject({ ok: true })
 			sql.exec("INSERT INTO instance_settings (name, value) VALUES ('admin_email', 'a@x')")
 			sql.exec(
 				"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES ('admin-token', 'access', 'c', ?, 'admin:read admin:write')",

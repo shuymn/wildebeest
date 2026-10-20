@@ -203,6 +203,15 @@ describe('readParams: JSON path expansion', () => {
 		expect(await readParams(json(`{"o":{${members(MAX_PARAM_PATHS)}}}`))).toEqual({ ok: false, status: 413 })
 	})
 
+	it('counts a long list of scalars in code units only, so it is not refused for its length', async () => {
+		const list = `{"context":[${Array.from({ length: 100_000 }, () => '"home"').join(',')}]}`
+		expect((await readParams(json(list))).ok).toBe(true)
+		// The same items under a long name pass the code-unit budget.
+		const name = 'n'.repeat(1000)
+		const amplified = `{"${name}":[${Array.from({ length: 3_000 }, () => '1').join(',')}]}`
+		expect(await readParams(json(amplified))).toEqual({ ok: false, status: 413 })
+	})
+
 	it('refuses past PARAM_PATH_BUDGET code units', async () => {
 		// Each member costs prefix (1) + key + 2 units; the top-level key `o` costs 0 + 1 + 2 = 3.
 		const key = 'k'.repeat(1000)

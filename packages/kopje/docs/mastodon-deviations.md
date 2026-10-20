@@ -81,7 +81,7 @@ Request parameters:
 - A query value of a declared file parameter is read only when the body has none (Rails lets the query win).
 - A multipart part with an empty filename is read as a text value, as workerd's parser reads it (Rack drops it as an
   empty file field): empty, it reads as absent; with bytes, a profile image answers 400.
-- A JSON body that flattens to more than 10,000 keys, or to keys of more than 2,097,152 UTF-16 code units together,
-  answers 413; one nested more than 32 levels answers 400 (Rack's `param_depth_limit`).
+- A JSON body that flattens to more than 10,000 keys (object members; a list's values are not counted), or to keys of
+  more than 2,097,152 UTF-16 code units together, answers 413; one nested more than 32 levels answers 400 (Rack's `param_depth_limit`).
 - An empty JSON object counts as sent: `{"fields_attributes":{}}` clears the fields and `{"home":{}}` saves the home
   marker, as in Mastodon; `{"poll":{}}` is still no poll.
