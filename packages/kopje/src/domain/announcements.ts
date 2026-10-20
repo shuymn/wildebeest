@@ -48,21 +48,9 @@ import {
 } from '../platform/stored-bounds'
 import { cutCodeUnits } from '../security/html'
 
-// Announcements (migration 0056_announcements), as Mastodon 4.5 serves them: the list, dismissals and reactions
-// (Api::V1::AnnouncementsController, Announcements::ReactionsController; mastodon/announcements.ts), the Access admin's
-// writes (app/admin.ts /admin/announcements, `kopje-admin announcement`), the cron's round of scheduled publication
-// and expiry (jobs/scheduled.ts), and the `user` stream's events (streaming.ts). The only module that reads or writes
+// Announcements (migration 0056_announcements), as Mastodon 4.5 serves them. The only module that reads or writes
 // announcements, announcement_reactions and announcement_dismissals (test-node/policy-boundary.test.ts).
-//
-// R40 (docs/visibility.md): a published announcement is shown to every signed-in local user (announcementShownSql in
-// audience.ts), any other answers 404; dismissals and a reaction's `me` are the viewer's own, counts are everyone's,
-// mentions name available accounts only (R1). The text is the operator's own: stored as written, rendered when
-// presented (HTML-2), so no stored HTML is ever served. Deviations from Mastodon: MD-4 (docs/mastodon-deviations.md).
-//
-// Bounds (RES-3, docs/threat-model.md "Maxima of presented units", measured by test/announcement-bounds.test.ts): the
-// content within ANNOUNCEMENT_CONTENT_BYTES, at most MAX_ANNOUNCEMENT_MENTIONS mentions (of the first
-// MAX_MENTION_REFS references looked up) and MAX_ANNOUNCEMENT_TAGS hashtags, the emoji within STATUS_EMOJIS_BYTES,
-// at most MAX_REACTION_NAMES reactions; the list holds at most MAX_LIVE_ANNOUNCEMENTS.
+// Rules: R40 (docs/visibility.md), AUTH-5, HTML-2 and RES-3 (docs/threat-model.md), MD-4 (docs/mastodon-deviations.md).
 
 // The content's JSON, quotes included, in UTF-8 bytes. An admin write whose rendering passes it is refused; a stored
 // row whose rendering passes it later (a mentioned account's url grew) presents its text escaped, with no link.
@@ -74,13 +62,7 @@ export const MAX_ANNOUNCEMENT_MENTIONS = 16
 // (an actor id of ACTOR_URI_LIMIT bytes, less "https://").
 export const MENTION_CANDIDATES = 8
 export const MENTION_DOMAIN_BYTES = ACTOR_URI_LIMIT - 'https://'.length
-// The row heap (db/sql.ts rowHeapBytes: 64 bytes a row, 32 a value, two a code unit of text) the reads take, from each
-// column's maximum (test/announcement-bounds.test.ts builds those rows and measures them): the list's rows (an id, a
-// text of ANNOUNCEMENT_TEXT_BYTES, six times, two flags) and its dismissals; one presentation's mention rows (an id,
-// a username of USERNAME_LIMIT, a domain of MENTION_DOMAIN_BYTES, a url of PROFILE_URL_LIMIT and an actor id of
-// ACTOR_URI_LIMIT, MAX_MENTION_REFS rows), emoji rows (a shortcode of 128 and a media url of MEDIA_URL_LIMIT,
-// MAX_LOCAL_EMOJI_NAMES rows) and reaction rows (a name of REACTION_NAME_BYTES and a media url, MAX_REACTION_NAMES
-// rows), each a statement of its own.
+// Row heap derived from stored column caps (RES-3), verified by test/announcement-bounds.test.ts.
 const ROW = (values: number, units: number) => ROW_OBJECT_BYTES + VALUE_BYTES * values + 2 * units
 const LIST_ROWS_HEAP =
 	MAX_LIVE_ANNOUNCEMENTS * ROW(10, 18 + ANNOUNCEMENT_TEXT_BYTES + 6 * 24) + MAX_LIVE_ANNOUNCEMENTS * ROW(1, 18)
@@ -200,11 +182,8 @@ function resolveMentions(db: Db, refs: readonly MentionRef[], origin: string): M
 	return kept
 }
 
-// The JSON size, in UTF-8 bytes with its quotes, of the content renderStatusHtml makes of a sequence of inline HTML
-// pieces, fed one at a time: it follows the paragraphs as renderStatusHtml cuts them (a run of two or more newlines
-// ends one, each is trimmed of JavaScript white space, an empty one dropped, a newline kept inside one is <br />, and
-// each is wrapped in <p></p>) without joining the pieces. `bound` is what is certain so far (the characters kept, and
-// the markup of a paragraph begun), which only grows, and is the exact size once every piece is fed.
+// Incremental JSON size of renderStatusHtml output, matching its paragraph and trimming semantics.
+// The bound grows monotonically and is exact after the final piece, without joining the pieces.
 class ContentMeter {
 	#kept = 2
 	#begun = false
@@ -252,10 +231,9 @@ const WHITE = /^\s$/
 
 // The content of a text's segments within ANNOUNCEMENT_CONTENT_BYTES as JSON, and whether it is the linked rendering
 // (renderStatusHtml). Each segment's inline HTML is built and measured on its own (ContentMeter), and the rendering
-// stops at the first segment that passes the budget, so what is built past the budget is at most one segment (A7 of
-// the design: a text of thousands of references to one account with a 2,048-byte URL builds a few links, not 34 MB;
-// the largest single segment, a hashtag of 3,333 U+FDFA, is about 310 KB). Within the budget the content is built
-// whole, at most the budget once trimmed; past it the text is escaped instead, at most 60,009 bytes.
+// stops at the first segment that passes the budget, so what is built past the budget is at most one segment (the
+// largest, a hashtag of 3,333 U+FDFA, is 310,064 bytes of JSON). Within the budget the content is built whole, at most
+// the budget once trimmed; past it the text is escaped instead, at most 60,009 bytes.
 function renderContent(
 	segments: readonly Segment[],
 	options: Parameters<typeof renderStatusHtml>[1]

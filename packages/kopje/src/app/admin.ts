@@ -481,9 +481,7 @@ export function adminRoutes({ build, store, fetch, now, doorbell, jobs, loader, 
 		return reply(c, result)
 	})
 
-	// ---- local custom emoji (domain/local-emojis.ts, mastodon/emoji-upload.ts): upload, change, disable and enable, and
-	// the list of every emoji. Access admin only: the import token and import sessions never reach these paths, and the
-	// Store checks the admin again where it writes. Nothing is deleted and nothing is delivered.
+	// ---- local emoji administration (domain/local-emojis.ts; AUTH-5, MEDIA-5)
 
 	admin.get('/emojis', async (c) => {
 		const after = c.req.query('after')
@@ -553,9 +551,7 @@ export function adminRoutes({ build, store, fetch, now, doorbell, jobs, loader, 
 		return result.ok ? c.json(result.emoji) : refusal(c, result)
 	})
 
-	// ---- announcements (domain/announcements.ts): create, change, publish, unpublish and delete, each logged, and the
-	// list of every one. Access admin only: the import token and import sessions never reach these paths, and the Store
-	// checks the admin again where it writes. The text and times are judged here first (announcementBody).
+	// ---- announcement administration (domain/announcements.ts; AUTH-5)
 
 	admin.get('/announcements', async (c) => {
 		const before = c.req.query('before')
@@ -618,9 +614,7 @@ export function adminRoutes({ build, store, fetch, now, doorbell, jobs, loader, 
 		return result.ok ? c.json(result.announcement) : refusal(c, result)
 	})
 
-	// ---- trends (domain/trends.ts): the stored hashtags and statuses with their reviews, and the reviews, each logged.
-	// Access admin only: the import token and import sessions never reach these paths, and the Store checks the admin
-	// again where it reads or writes.
+	// ---- trend administration (domain/trends.ts; AUTH-5)
 
 	const offsetQuery = (c: Context) => {
 		const offset = c.req.query('offset') ?? '0'
