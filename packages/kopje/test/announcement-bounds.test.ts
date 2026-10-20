@@ -77,16 +77,41 @@ function hashtagContentBytes(text: string): number {
 	)
 }
 
+// 600 hashtags, then plain characters up to exactly the content budget.
+function contentAtCap(): string {
+	const tags = '#a '.repeat(600)
+	let pad = 0
+	while (hashtagContentBytes(`${tags}${'x'.repeat(pad + 1)}`) <= ANNOUNCEMENT_CONTENT_BYTES) {
+		pad++
+	}
+	return `${tags}${'x'.repeat(pad)}`
+}
+
+// A SqlStorage over `real` that hands `capture` the joined EXPLAIN QUERY PLAN of each statement matching `pattern`,
+// then runs the statement.
+function planCapturing(real: SqlStorage, pattern: RegExp, capture: (plan: string) => void): SqlStorage {
+	return {
+		exec: (query: string, ...params: SqlStorageValue[]) => {
+			if (pattern.test(query)) {
+				capture(explained(real, query, ...params))
+			}
+			return real.exec(query, ...params)
+		},
+	} as unknown as SqlStorage
+}
+
+function explained(real: SqlStorage, query: string, ...params: SqlStorageValue[]): string {
+	return real
+		.exec<{ detail: string }>(`EXPLAIN QUERY PLAN ${query}`, ...params)
+		.toArray()
+		.map((row) => row.detail)
+		.join(' | ')
+}
+
 describe('an announcement’s content (RES-3)', () => {
 	it('is refused past 64 KiB of JSON when written, and admitted at exactly 65,536 bytes', async () => {
 		const h = await announcementHarness(['alice'])
-		// 600 hashtags, then plain characters up to the budget.
-		const tags = '#a '.repeat(600)
-		let pad = 0
-		while (hashtagContentBytes(`${tags}${'x'.repeat(pad + 1)}`) <= ANNOUNCEMENT_CONTENT_BYTES) {
-			pad++
-		}
-		const fits = `${tags}${'x'.repeat(pad)}`
+		const fits = contentAtCap()
 		expect(hashtagContentBytes(fits)).toBe(ANNOUNCEMENT_CONTENT_BYTES)
 		expect(bytes(fits)).toBeLessThanOrEqual(10_000)
 		await h.admin.create({ text: fits })
@@ -233,18 +258,9 @@ describe('an announcement’s mentions and hashtags (MD-4)', () => {
 			const read = await rowsRead(h, listAnnouncements, { credential, origin: ORIGIN })
 			const plan = await runInDurableObject(h.store, (_instance, state) => {
 				let found = ''
-				const capturing = {
-					exec: (query: string, ...params: SqlStorageValue[]) => {
-						if (/accounts_domain_username/.test(query)) {
-							found = state.storage.sql
-								.exec<{ detail: string }>(`EXPLAIN QUERY PLAN ${query}`, ...params)
-								.toArray()
-								.map((row) => row.detail)
-								.join(' | ')
-						}
-						return state.storage.sql.exec(query, ...params)
-					},
-				} as unknown as SqlStorage
+				const capturing = planCapturing(state.storage.sql, /accounts_domain_username/, (plan) => {
+					found = plan
+				})
 				listAnnouncements.run(capturing, { credential, origin: ORIGIN })
 				return found
 			})
@@ -297,12 +313,7 @@ describe('the maxima of an announcement (RES-3)', () => {
 			return { announcement, entity }
 		}
 		// Content: exactly the budget (the content witness above).
-		const pound = '#a '.repeat(600)
-		let pad = 0
-		while (hashtagContentBytes(`${pound}${'x'.repeat(pad + 1)}`) <= ANNOUNCEMENT_CONTENT_BYTES) {
-			pad++
-		}
-		await part('content', `${pound}${'x'.repeat(pad)}`)
+		await part('content', contentAtCap())
 		// Mentions: 16 of the widest accounts, their URLs of backslashes.
 		const mentionText = await mentionFill(h.store)
 		expect(bytes(mentionText)).toBeLessThanOrEqual(10_000)
@@ -532,20 +543,7 @@ describe('announcement query plans at saturation, with stale statistics', () => 
 			const real = state.storage.sql
 			const seen: Record<string, string[]> = {}
 			const capturing = (label: string, pattern: RegExp) =>
-				({
-					exec: (query: string, ...params: SqlStorageValue[]) => {
-						if (pattern.test(query)) {
-							;(seen[label] ??= []).push(
-								real
-									.exec<{ detail: string }>(`EXPLAIN QUERY PLAN ${query}`, ...params)
-									.toArray()
-									.map((row) => row.detail)
-									.join(' | ')
-							)
-						}
-						return real.exec(query, ...params)
-					},
-				}) as unknown as SqlStorage
+				planCapturing(real, pattern, (plan) => (seen[label] ??= []).push(plan))
 			const credential = { tokenHash: alice, scope: null, now: Date.now() }
 			const user = { tokenHash: alice, scope: 'write:favourites' as const, now: Date.now() }
 			listAnnouncements.run(capturing('list', /INDEXED BY announcements_published/), { credential, origin: ORIGIN })
@@ -567,12 +565,7 @@ describe('announcement query plans at saturation, with stale statistics', () => 
 			})
 			real.exec("INSERT INTO stream_subscriptions (account_id, stream_key, sockets) VALUES ('1', 'user', 1)")
 			streamAnnouncement(new Db(capturing('journal', /max\(id\) FROM stream_events/)), 'announcement', id(1), 'now')
-			const plan = (query: string) =>
-				real
-					.exec<{ detail: string }>(`EXPLAIN QUERY PLAN ${query}`)
-					.toArray()
-					.map((row) => row.detail)
-					.join(' | ')
+			const plan = (query: string) => explained(real, query)
 			seen.live = [
 				plan(`SELECT (SELECT count(*) FROM announcements WHERE published = 1)
 					+ (SELECT count(*) FROM announcements WHERE scheduled_at IS NOT NULL) AS n`),

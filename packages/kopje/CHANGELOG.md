@@ -91,9 +91,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       (a delete keeps the text's first 200 characters). The text is plain text of at most 10,000 bytes, linked when
       shown.
     - Scheduled ones are published by the cron within 5 minutes, and ended ones are taken down there, with no event.
-    - Where they differ from Mastodon (`statuses` is always `[]`, at most 16 mentions and 16 hashtags, a text that
-      renders past 64 KiB is refused, at most 16 published or scheduled and 1,000 kept, reactions grouped by name):
-      MD-4 in [docs/mastodon-deviations.md](docs/mastodon-deviations.md).
+    - Where they differ from Mastodon: MD-4 in [docs/mastodon-deviations.md](docs/mastodon-deviations.md).
 
 ### Changed
 

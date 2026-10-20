@@ -76,9 +76,7 @@ describe('announcement events on user', () => {
 			['announcement.reaction', { name: '👍', count: 1, announcement_id: created.id }],
 			['announcement.reaction', { name: '👍', count: 0, announcement_id: created.id }],
 		])
-		for (let left = events(inbox).length; left > 0; left--) {
-			await inbox.next((m) => EVENTS.includes(m.event ?? ''))
-		}
+		await takeAllEvents(inbox)
 
 		// An update of a published one, an unpublish, a publish and a delete; the delete's payload is the id itself.
 		const take = async (): Promise<unknown[]> => {

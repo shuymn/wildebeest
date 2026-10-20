@@ -1,6 +1,6 @@
 import { accountUrl, acctOf } from './accounts'
 import { accessAdminRefusal } from './admin-authority'
-import { admit, ARRAY_ANSWER_BYTES, jsonBytes } from './answer-budget'
+import { admit, ARRAY_ANSWER_BYTES, jsonBytes, unitJsonBytes } from './answer-budget'
 import { announcementShownSql, availableSql } from './audience'
 import { tokenUserReadOperation, userWriteOperation } from './auth'
 import {
@@ -31,7 +31,7 @@ import {
 	type Segment,
 } from './status-text'
 import { streamAnnouncement } from './streaming'
-import { type Db, RowCapExceeded, RowMeter } from '../db/sql'
+import { type Db, ROW_OBJECT_BYTES, RowCapExceeded, RowMeter, VALUE_BYTES } from '../db/sql'
 import { isUnicodeEmoji } from '../platform/emoji-names'
 import type { ImportAuthority } from '../platform/store-admin'
 import {
@@ -81,7 +81,7 @@ export const MENTION_DOMAIN_BYTES = ACTOR_URI_LIMIT - 'https://'.length
 // ACTOR_URI_LIMIT, MAX_MENTION_REFS rows), emoji rows (a shortcode of 128 and a media url of MEDIA_URL_LIMIT,
 // MAX_LOCAL_EMOJI_NAMES rows) and reaction rows (a name of REACTION_NAME_BYTES and a media url, MAX_REACTION_NAMES
 // rows), each a statement of its own.
-const ROW = (values: number, units: number) => 64 + 32 * values + 2 * units
+const ROW = (values: number, units: number) => ROW_OBJECT_BYTES + VALUE_BYTES * values + 2 * units
 const LIST_ROWS_HEAP =
 	MAX_LIVE_ANNOUNCEMENTS * ROW(10, 18 + ANNOUNCEMENT_TEXT_BYTES + 6 * 24) + MAX_LIVE_ANNOUNCEMENTS * ROW(1, 18)
 const PRESENTATION_ROWS_HEAP =
@@ -231,7 +231,7 @@ class ContentMeter {
 			}
 			this.#newlines = 0
 			const pair = c >= 0xd800 && c <= 0xdbff && (piece.charCodeAt(i + 1) & 0xfc00) === 0xdc00
-			const bytes = pair ? 4 : charJsonBytes(c)
+			const bytes = pair ? 4 : unitJsonBytes(c)
 			if (pair) {
 				i++
 			} else if (WHITE.test(piece[i]!)) {
@@ -249,17 +249,6 @@ class ContentMeter {
 
 // JavaScript's trim set (WhiteSpace and LineTerminator), one code unit.
 const WHITE = /^\s$/
-
-// A UTF-16 code unit's bytes in JSON, as JSON.stringify writes it (a lone surrogate as \uXXXX).
-function charJsonBytes(c: number): number {
-	if (c === 0x22 || c === 0x5c || c === 0x08 || c === 0x0c || c === 0x0a || c === 0x0d || c === 0x09) {
-		return 2
-	}
-	if (c < 0x20 || (c >= 0xd800 && c <= 0xdfff)) {
-		return 6
-	}
-	return c < 0x80 ? 1 : c < 0x800 ? 2 : 3
-}
 
 // The content of a text's segments within ANNOUNCEMENT_CONTENT_BYTES as JSON, and whether it is the linked rendering
 // (renderStatusHtml). Each segment's inline HTML is built and measured on its own (ContentMeter), and the rendering
@@ -378,8 +367,8 @@ function presentAnnouncement(
 		emojis: parts.emojis,
 		reactions: parts.reactions,
 	})
-	// The reads' runtime backstop: their row heap is at most ANNOUNCEMENT_ROW_CAPS.presentation by the per-column maxima; past it
-	// (only a bound broken elsewhere could), the announcement is shown escaped with nothing read for it.
+	// The reads' runtime backstop: their row heap is at most ANNOUNCEMENT_ROW_CAPS.presentation by the per-column
+	// maxima; past it (only a bound broken elsewhere could), the announcement is shown escaped with nothing read for it.
 	const metered = db.metered(new RowMeter(ANNOUNCEMENT_ROW_CAPS.presentation))
 	try {
 		const { content, mentions, tags } = render(metered, row.text, options.origin)
@@ -422,7 +411,8 @@ function publishedRow(db: Db, id: string): AnnouncementRow | undefined {
 // read, as Mastodon 4.5 reads it no more.
 export const listAnnouncements = tokenUserReadOperation<{ origin: string }, Announcement[]>(
 	(db, { origin }, viewer) => {
-		// The runtime backstop of ANNOUNCEMENT_ROW_CAPS.list (it throws past it, which only a broken stored bound could reach).
+		// The runtime backstop of ANNOUNCEMENT_ROW_CAPS.list: it throws past it, which only a broken stored bound could
+		// reach.
 		const listing = db.metered(new RowMeter(ANNOUNCEMENT_ROW_CAPS.list))
 		const rows = listing
 			.all<AnnouncementRow>(

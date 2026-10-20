@@ -102,6 +102,14 @@ export async function seedAnnouncement(
 	return row.id
 }
 
+// A remote account of `username` on `domain` with a 2,048-byte profile URL of backslashes on the shortest host (the
+// `i`th), so the most of it is backslashes, which the URL keeps in its query and JSON escapes to two bytes each.
+async function widestAccount(store: StoreStub, i: number, username: string, domain: string): Promise<void> {
+	const account = await seedAccount(store, { username, domain })
+	const prefix = `https://${(i + 10).toString(36)}/?`
+	await sql(store, 'UPDATE accounts SET url = ? WHERE id = ?', `${prefix}${'\\'.repeat(2048 - prefix.length)}`, account)
+}
+
 // The widest mentions a 10,000-byte text reaches (RES-3): `count` (16) remote accounts of 255-character usernames on
 // 367-character domains (625 bytes of text each), each with a 2,048-byte profile URL of backslashes in its query, which
 // the URL keeps and JSON escapes to two bytes each. Returns the text that mentions them all.
@@ -116,15 +124,7 @@ export async function mentionFill(store: StoreStub, count = 16, first = 0): Prom
 	const username = (i: number) => `${String(i).padStart(2, '0')}${'u'.repeat(253)}`
 	const refs: string[] = []
 	for (let i = first; i < first + count; i++) {
-		const account = await seedAccount(store, { username: username(i), domain: domain(i) })
-		// The shortest host, so the most of the URL is backslashes.
-		const prefix = `https://${(i + 10).toString(36)}/?`
-		await sql(
-			store,
-			'UPDATE accounts SET url = ? WHERE id = ?',
-			`${prefix}${'\\'.repeat(2048 - prefix.length)}`,
-			account
-		)
+		await widestAccount(store, i, username(i), domain(i))
 		refs.push(`@${username(i)}@${domain(i)}`)
 	}
 	return refs.join(' ')
@@ -215,14 +215,7 @@ export async function idnMentionFill(store: StoreStub): Promise<string> {
 	const refs: string[] = []
 	for (let i = 0; i < 16; i++) {
 		const username = `${String(i).padStart(2, '0')}${'u'.repeat(253)}`
-		const account = await seedAccount(store, { username, domain })
-		const prefix = `https://${(i + 10).toString(36)}/?`
-		await sql(
-			store,
-			'UPDATE accounts SET url = ? WHERE id = ?',
-			`${prefix}${'\\'.repeat(2048 - prefix.length)}`,
-			account
-		)
+		await widestAccount(store, i, username, domain)
 		refs.push(`@${username}@${spelled}`)
 	}
 	return refs.join(' ')
