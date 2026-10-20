@@ -304,8 +304,7 @@ describe('update on public and hashtag streams', () => {
 })
 
 describe('custom emoji on public streams (RES-2)', () => {
-	// G6 of the emoji snapshot bounds: a status at its presented emoji bound, by an author at the account bound, is sent
-	// whole, well within the stream's payload bound.
+	// RES-3: a status and author at their presented emoji bounds are streamed whole within the payload bound.
 	it('sends a status and its author with their emojis at the bound', async () => {
 		const h = await community(['alice'])
 		const erin = await remoteAccount(h.store, 'erin')

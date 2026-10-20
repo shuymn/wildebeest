@@ -97,8 +97,7 @@ below the cursor. Unread counts and markers are not read by admission.
 
 ## Instance
 
-Blocks are not statuses, accounts or notifications, but the public block list is a list of unbounded length (the
-admin API is its only writer, and nothing bounds how many blocks it writes).
+The public block list has no count cap; RES-3 bounds its response bytes.
 
 | Operation            | Mechanism                                                                  | Continuation |
 | -------------------- | -------------------------------------------------------------------------- | ------------ |

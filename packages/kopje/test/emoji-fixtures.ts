@@ -33,7 +33,8 @@ export function shortcode(length: number, i: number): string {
 	return key.padEnd(length, '_')
 }
 
-// The maximal entry: a 128-character name and a 512-byte url, 1,219 presented bytes.
+// The maximal entry: a 128-character name and a 512-byte url. A maximal entry contributes 1,219 bytes to a nonempty
+// presented array, including its separator.
 export function maximalEntry(i: number): [string, string] {
 	return [shortcode(EMOJI_SHORTCODE_LIMIT, i), emojiUrl(EMOJI_URL_LIMIT, `${i}/`)]
 }

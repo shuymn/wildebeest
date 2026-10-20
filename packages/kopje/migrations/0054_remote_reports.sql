@@ -36,13 +36,9 @@
 -- Cost: the guard reads the report notifications (notifications_report) and one empty range per local account; the
 -- detach and the relink write each report notification once; the copy, the drop and the six indexes read the reports;
 -- the counter scans the moderation log (at most MODERATION_LOG_KEEP rows) and both job tables, which no index covers.
--- Nothing reads the other notifications (test/migrations.test.ts, 0054). Measured on the benchmark store of
--- test/bench/migration-cost.ts (1,000,000 accounts, 2,000,000 notifications, 10,000 reports each with its admin.report
--- and 1,000 pushes of them, 10,000 moderation log rows, 180 local and 11,001 remote moderation jobs, and the rest of
--- that store) in workerd's local Durable Object SQLite, timing the whole upgrade through the kernel: 8,959 and 8,607 ms
--- at load averages of 3.8 to 4.8. Run serially and alternated with the same range without this file, the release
--- range 0049_instance_bounds to this file in one upgrade took 9,038, 8,886 and 8,726 ms, and 0049 to 0053 alone 8,756,
--- 8,709 and 8,441 ms, within the 20,000 ms an upgrade may take.
+-- Nothing reads the other notifications (test/migrations.test.ts, 0054). Measured whole-file upgrade on the
+-- representative store in test/bench/migration-cost.ts, in workerd's local Durable Object SQLite: 8.6–9.0 seconds;
+-- budget 20 seconds. The release-range measurement is in CHANGELOG.md.
 
 CREATE TABLE reports_0054_check (
   n INTEGER CONSTRAINT report_notifications_are_admin_reports CHECK (n = 0),

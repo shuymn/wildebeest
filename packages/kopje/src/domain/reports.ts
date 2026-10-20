@@ -36,10 +36,10 @@ import type { ImportAuthority } from '../platform/store-admin'
 
 // Reports (Mastodon 4.5's POST /api/v1/reports: Api::V1::ReportsController, ReportService, Report; migrations
 // 0022_reports and 0054_remote_reports). A local account reports an account, optionally naming statuses of it and
-// instance rules, and may ask that the report be forwarded to the servers concerned; a remote server reports local
-// accounts and statuses by an inbound Flag (fileRemoteReports, below). The report is its reporter's (R34): it is stored
-// for the instance's moderation, answered once to a local reporter, and read otherwise only by the OAuth admin through
-// the Mastodon admin API (R37, below).
+// instance rules, and may ask that the report be forwarded to the servers concerned; a remote server reports through
+// an inbound Flag (fileRemoteReports, below). The report is its reporter's (R34): it is stored for the instance's
+// moderation, answered once to a local reporter, and read otherwise only by the OAuth admin through the Mastodon admin
+// API (R37, below).
 //
 //   - The reported account must be available (ReportService#call raises RecordNotFound when it is unavailable,
 //     app/services/report_service.rb:16): anything else is not found.
@@ -217,19 +217,10 @@ export type RemoteFlag = { id: string; objects: readonly string[]; content: stri
 
 export type FiledReports = { filed: boolean; reason: string }
 
-// Files the reports of an inbound Flag by the remote account `actor` (the inbox's gate has passed it: available, not
-// covered by a domain block, its id on its origin), in the Store's transaction, re-checking what the Worker parsed
-// (an RPC caller may send anything): the id within ACTIVITY_ID_LIMIT (id-past-bound), the objects (flagObjects) and the
-// comment (reportComment). A refusal writes nothing.
-//   1. reports-rejected: an instance domain block ruling the actor's domain rejects reports (reportsRejected).
-//   2. The objects by exact id (ID-5): stored accounts, and stored originals (a boost is never attached).
-//   3. The targets, the accounts named, each once in object order: an unavailable one (R1) is skipped, and a remote
-//      one unless one of its named statuses replies to a local account (flag.rb:15-17). None left: no-target.
-//   4. Each target once per Flag id (UNIQUE (uri, target_account_id)): none new is a duplicate. The new ones must fit
-//      MAX_UNRESOLVED_REMOTE_REPORTS with the actor's unresolved reports (one bounded range of reports_account_state),
-//      or the whole Flag is refused (report-limit).
-//   5. Each new target's report, with its named statuses that pass the remote reporter rule (remoteReportStatusIds),
-//      category other, no rules, not forwarded, uri the Flag id, and its admin.report (notifyStaff).
+// R34, ID-5, ID-6, ID-7: file reports from a verified remote Flag in the receive transaction.
+// Recheck Worker-parsed bounds for direct RPC callers. reject_reports or the unresolved-report cap
+// refuses the whole Flag without writes. Target/status admission: docs/visibility.md R34;
+// bounds: docs/threat-model.md RES-2 and RES-7. notifyStaff records each new report's notification.
 export function fileRemoteReports(
 	db: Db,
 	actor: { id: string; domain: string },

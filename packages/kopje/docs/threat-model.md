@@ -192,14 +192,12 @@ against their own instance. TLS is assumed between all parties.
   `src/domain/inbox.ts`. A `Flag` files one report per Flag id and reported account (`UNIQUE (uri,
   target_account_id)`, migration `0054_remote_reports`): a redelivery writes nothing, and a Flag id past
   `ACTIVITY_ID_LIMIT` (4,096 JSON-escaped UTF-8 bytes) is ignored by the Worker and by the Store before any write,
-  which the column's CHECK holds for dumps too (`test/inbox-flag.test.ts`). Report ids are never given twice: the id counter starts
-  above every retained reference (the reports, the moderation log's Report targets, both job tables' bounds), and the
-  upgrade is held, writing nothing, when one would start it past the 18 digits a report's API id has
-  (`report_ids_within_18_digits`), and a report past 999,999,999,999,999,999 fails its CHECK
-  (`report_id_within_18_digits`): once the ids are used up, every new report is refused, its writer's transaction
-  failing whole (`test/migrations.test.ts` (0054)). A Follow has generations: a superseded, undone, refused or blocked Follow id is recorded as retracted, so
-  no late Undo, Accept, Reject or replay reaches a newer generation, and no Accept or Reject is recorded twice; an
-  answer's id derives from the Follow it answers; a new generation cancels the earlier generations' answers no claim
+  which the column's CHECK holds for dumps too (`test/inbox-flag.test.ts`). Report ids are never reused and remain
+  within 18 digits. Migration 0054 starts the counter above retained references and holds the upgrade before writing
+  when that start would pass 18 digits; exhaustion aborts the writer's whole transaction. See the migration header and
+  `test/migrations.test.ts` (0054). A Follow has generations: a superseded, undone, refused or blocked Follow id is
+  recorded as retracted, so no late Undo, Accept, Reject or replay reaches a newer generation, and no Accept or
+  Reject is recorded twice; an answer's id derives from the Follow it answers; a new generation cancels the earlier generations' answers no claim
   has taken (NET-2). A Move is a job keyed by its id that never moves a follow made after
   it. An actor's deletion is a tombstone (`inbound_jobs`) independent of the retraction cap and TTL, honoured by every
   upsert and by every Move batch, and recorded even for a verified Delete of an actor never stored. A generation change
@@ -406,12 +404,9 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `src/domain/actors.ts`; `test/accounts.test.ts` ("follower lists for the viewer (R13)"), `test/account-reads.test.ts`
   ("shows no followers of an account that hides its network"), `test/federation.test.ts` ("shows only the size of the
   collections of an actor that hides its network"), `test/policy-oracle.test.ts`, `test/policy-endpoints.test.ts`.
-  Follow suggestions (R39) count only accepted follows on both sides: the viewer's follows of sources whose following
-  R13 shows them, and those sources' follows of candidates R12 lists to them, so a counted edge is one the source's
-  following list shows the viewer; a pending follow by the viewer only keeps its target out. Kopje also asks the source
-  to be available and not to block the viewer, which Mastodon's `FriendsOfFriendsSource` does not. _Gap:_ the edge
-  window counts each of a source's newest 100 follows, so a candidate's absence can tell the viewer that one more of
-  them is an account the list hides from them (docs/visibility.md, "Suggestions"); accepted. _Enforced (main):_
+  Suggestions count only accepted edges readable under R13 and R12 (R39). Mastodon does not apply all of Kopje's
+  source checks. Accepted inference from the raw edge window is described in
+  [Suggestions](visibility.md#suggestions-r39). _Enforced (main):_
   `suggestionSourceSql` and `suggestionCandidateSql` in `src/domain/audience.ts`, `suggestions` in
   `src/domain/suggestions.ts`; `test/suggestions.test.ts`, `test/policy-endpoints.test.ts`.
 - **VIS-9: only the followed side accepts.** A pending follow of a local account becomes `accepted` only by that
@@ -1884,7 +1879,7 @@ triggers and the schema's CHECKs) allows, and each column that no CHECK bounds a
 (writers' invariants: `polls.tallies` holds one integer count per choice, which the poll writers in
 `src/domain/polls.ts` keep; no CHECK bounds its elements' type or size).
 `test/status-bounds.test.ts` ("the table of maxima") builds every part at its bound and measures what one read takes
-out of SQLite and what it presents, four ways: filled with characters JSON escapes to six bytes (the most JSON); the
+out of SQLite and what it presents, four ways: the escaped-text fill, using characters JSON escapes to six bytes; the
 same with mentioned accounts that have no stored url, so their url is derived; filled with what reads the most
 bytes for each bound (ASCII where the bound is in bytes, four-byte characters where it is in characters: a 10,000
 character description reads 40,000 bytes); and the escaped fill with each poll's choices referencing the status's
@@ -1907,7 +1902,7 @@ poll it shows, at least every fill's (`test/status-bounds.test.ts` ("keeps the c
 RPC, a public timeline page, a context and a search answer of statuses of about 0.98 MB each, each cut at the budget,
 return 7.82 MB of JSON each (`test/answer-budgets.test.ts` ("the Store RPC returns a maximal answer")), and the boost
 of a quote above, alone or as the one status a lookup of it, the quote and the quoted status admits, returns 5.63 MB
-(escaped fill) and 4.60 MB (raw fill, the most serialized bytes) (`test/status-bounds.test.ts`), well under the 32 MiB
+(escaped fill) and 4.60 MB (raw fill, the largest SQLite read) (`test/status-bounds.test.ts`), well under the 32 MiB
 RPC limit.
 
 | Shape                                                            | Most SQLite bytes | Most JSON bytes | Conservative JSON | Rows read | Nodes | Share of 8 MiB |
@@ -1940,12 +1935,12 @@ featured collection shows its Notes within `OUTBOX_BYTES` and the pins past them
 the first stop at 2 MiB, so a report is at most its accounts, its first status (a quote) and nothing more, or a small
 first status and 2 MiB; its staff accounts are local, and its reporter (a remote one, from a `Flag`) and its comment
 are at their bounds: the comment's CHECK (migration `0054_remote_reports`) holds 20,000 bytes, which a stored NUL
-followed by U+0001 makes about 120 KB of JSON (Kopje's writers make at most 30,000: 5,000 code points). Every shape stays within 85% of an answer of 8 MiB with filter
-results included, measured and conservative alike, so an answer that admits whole items always fits its first. The
-ceiling was 80% until emoji: the conversation would then leave about 28 KB for its 14 accounts' and 4 status and poll
-arrays, short of 40 emoji per status and 20 per profile. Through the real Store RPC, maximal answers of plain
-notifications, grouped notifications, conversations, admin reports and the directory return 7.83, 7.82, 7.83, 7.14
-and 8.30 MB of JSON (`test/rpc-budgets.test.ts`).
+followed by U+0001 makes about 120 KB of JSON (Kopje's writers make about 30 KB: 5,000 code points). Every shape
+stays within 85% of an answer of 8 MiB with filter results included, measured and conservative alike, so an answer
+that admits whole items always fits its first. The 85% ceiling accommodates the conversation's 14 account arrays and
+four status/poll arrays, allowing 40 typical emoji per status and 20 per profile. Through the real Store RPC,
+maximal answers of plain notifications, grouped notifications, conversations, admin reports and the directory return
+7.83, 7.82, 7.83, 7.14 and 8.30 MB of JSON (`test/rpc-budgets.test.ts`).
 
 Heap at 8 MiB per answer. Assumptions: one request at a time per isolate; the answer's JSON is at most 8 MiB, since
 every item is below it. The model:
@@ -2042,10 +2037,9 @@ pass, and the passes are at most four), 200 for a page of reports (its at most 1
 A chunk of several takes at most its target of heap: 768 KiB (0.79 MB) for timelines, 1 MiB (1.05 MB) for groups and
 reports. Normal: the rows are the larger of 1.25 × the target and the item's rows, plus the admitted answer, the
 rejected item and, for groups and reports, their state. With the backstop fired, 1.25 × (the target + 1.20 MB) of
-dropped rows more. The timelines' cap is 768 KiB so that the fallback fits within half of the isolate even when the
-dropped chunk is still live, with 0.22 MB to spare; the cap was lowered from 1 MiB, at which emoji at their bounds
-took the backstop past half: the margin is thin, every row term already carries 25% headroom, and the peak test fails on
-any growth that passes half. The backstop-fired figures bound the
+dropped rows more. The 768 KiB timeline cap keeps the fallback below half the isolate's memory even while the dropped
+chunk remains live, with 0.22 MB to spare. Every row term carries 25% headroom; the peak test rejects growth past that
+boundary. The backstop-fired figures bound the
 fallback whenever the dropped rows are collected. A boost that showed a quote, attachments, mentions, hashtags or a
 poll of its own (a legacy row may hold them) would make a timeline's largest item pass half at a chunk of one; it shows
 none.

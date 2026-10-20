@@ -3,11 +3,9 @@ import { admit, ARRAY_ANSWER_BYTES } from './answer-budget'
 import { listedForSql, suggestionCandidateSql, suggestionSourceSql } from './audience'
 import { userReadOperation, userWriteOperation } from './auth'
 
-// Follow suggestions (Mastodon 4.5's AccountSuggestions, friends of friends only; R39, docs/visibility.md
-// "Suggestions", which states the ranking and the windows). Work is bounded (RES-7) by windows of follow ids that the
-// query reads as ranges of follows_following (account_id, id), each from the id of its last entry, which a scalar
-// lookup of that index finds, so neither window depends on the planner's statistics; the edges come in the order of
-// the two ranges, so no sort holds them before the cutoff, and R12 judges each distinct candidate before the ranking.
+// R39: friends-of-friends suggestions; ranking and windows: docs/visibility.md, "Suggestions".
+// RES-7: seek both follows_following windows independently of planner statistics; do not sort edges
+// before the cutoff. Apply R12 to each candidate before ranking.
 
 export const SUGGESTION_SOURCES = 1000
 export const SUGGESTION_EDGES_PER_SOURCE = 100

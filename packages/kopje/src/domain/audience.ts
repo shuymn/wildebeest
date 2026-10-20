@@ -1478,8 +1478,8 @@ export const FOLLOWER_PROBE = 1000
 // Whether `target` has an accepted follower on `domain` (Mastodon's `followers.with_domain(domain).exists?`), by two
 // probes of at most FOLLOWER_PROBE rows each, either of which may find one: the target's followers (follows_target),
 // each account read by key; and the domain's accounts (accounts_domain_username), each follow sought by follows_pair.
-// A target with more followers whose domain has more accounts than that, none of them in either window, is answered
-// false: its private statuses are not attached (docs/threat-model.md RES-7).
+// If the target's followers and the reporter domain's accounts both exceed FOLLOWER_PROBE, a follower
+// outside both windows is missed and private statuses are not attached (docs/threat-model.md RES-7).
 export function hasFollowerOn(db: Db, target: string, domain: string): boolean {
 	return (
 		db.first(

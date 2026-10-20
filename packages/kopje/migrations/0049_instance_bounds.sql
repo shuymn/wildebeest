@@ -18,12 +18,8 @@
 -- Recovery of a rewritten value: the point-in-time bookmark the kernel records before the upgrade (docs/upgrade.md).
 --
 -- Cost: the instance settings (a few rows), and the partial index built over the suspend blocks; the upgrade's
--- verification then runs PRAGMA foreign_key_check over the Store. Measured on the benchmark store of
--- test/bench/migration-cost.ts (1,000,000 accounts, 2,000,000 statuses, 100,000 instance domain blocks of which 10,000
--- suspend, a value past its bound for each covered setting, and the rest of that store) in workerd's local Durable
--- Object SQLite, timing the whole upgrade through the kernel: 6,226 ms (6,515, 6,640 and 6,651 ms in three more runs,
--- at load averages of 5 to 30), within the 20,000 ms an upgrade may take; it is the overhead of an upgrade on a store
--- that size. Runs under heavier outside load took up to 15.6 s, while 0048_stored_bounds took 21 and 31 s.
+-- verification then runs PRAGMA foreign_key_check over the Store. Measured whole-file upgrade on the representative
+-- store in test/bench/migration-cost.ts, in workerd's local Durable Object SQLite: 6.2–6.7 seconds; budget 20 seconds.
 
 UPDATE instance_settings SET value = CASE WHEN length(CAST(value AS BLOB)) <= 1024 THEN value ELSE substr(value, 1, 1024) END
 WHERE name = 'title' AND (CASE WHEN length(CAST(value AS BLOB)) <= 1024 THEN value ELSE substr(value, 1, 1024) END) IS NOT value;
