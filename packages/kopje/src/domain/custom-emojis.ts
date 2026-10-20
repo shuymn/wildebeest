@@ -194,14 +194,34 @@ export function localEmojiTags(db: Db, stored: string | null, origin: string, by
 	const byUrl = new Map(rows.map((row) => [row.url, row]))
 	return entries.flatMap(({ shortcode, url }) => {
 		const row = byUrl.get(url)
-		return row === undefined || row.shortcode !== shortcode ? [] : [emojiTag(origin, row)]
+		const tag = row === undefined || row.shortcode !== shortcode ? null : emojiTag(origin, row)
+		return tag === null ? [] : [tag]
 	})
 }
 
+// An ISO 8601 instant as Kopje writes one (Date#toISOString), hour 00 to 23: what Temporal.Instant.from and peers
+// parse.
+const INSTANT = /^\d{4}-\d{2}-\d{2}T([01]\d|2[0-3]):[0-5]\d:[0-5]\d\.\d{3}Z$/
+
+// Whether a stored time may be an Emoji's `updated`: an instant that Date reads back as itself. The one check every
+// presenter of an Emoji tag goes through (Notes and Questions, the actor, Update(Person), /emojis/:id), so a stored
+// value the 0055 CHECK should have refused drops the tag (or answers 404) rather than failing the document.
+export function emojiInstant(stored: string): boolean {
+	if (!INSTANT.test(stored)) {
+		return false
+	}
+	const ms = Date.parse(stored)
+	return Number.isFinite(ms) && new Date(ms).toISOString() === stored
+}
+
+// The tag of an emoji row, or null when its time is not an instant (emojiInstant).
 export function emojiTag(
 	origin: string,
 	row: { id: string; shortcode: string; created_at: string; content_type: string; url: string }
-): EmojiTag {
+): EmojiTag | null {
+	if (!emojiInstant(row.created_at)) {
+		return null
+	}
 	return {
 		id: `${origin}/emojis/${row.id}`,
 		type: 'Emoji',

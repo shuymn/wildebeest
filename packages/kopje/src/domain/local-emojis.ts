@@ -354,8 +354,8 @@ export type ListedEmoji = {
 
 // GET /api/v1/custom_emojis (Mastodon's CustomEmojisController#index: CustomEmoji.listed, local, enabled and visible in
 // the picker). In shortcode order, through custom_emojis_enabled (Mastodon's order is unspecified). RES-3: at most
-// MAX_ENABLED_EMOJIS rows, each within 1,489 JSON bytes with its separator (docs/threat-model.md), admitted whole within
-// ARRAY_ANSWER_BYTES with no continuation; an entry whose url fails emojiHref is left out (HTML-3).
+// MAX_ENABLED_EMOJIS rows, each within 1,489 JSON bytes with its separator (docs/threat-model.md), admitted whole
+// within ARRAY_ANSWER_BYTES with no continuation; an entry whose url fails emojiHref is left out (HTML-3).
 export const customEmojis = readOperation<void, ListedEmoji[]>((db) => {
 	const rows = db.all<{ shortcode: string; category: string | null; url: string }>(
 		`SELECT e.shortcode, e.category, m.url FROM custom_emojis e INDEXED BY custom_emojis_enabled
@@ -381,7 +381,7 @@ export const customEmojis = readOperation<void, ListedEmoji[]>((db) => {
 })
 
 // GET /emojis/:id (Mastodon's EmojisController#show, CustomEmoji.local.find): any local emoji, disabled ones included,
-// as its Emoji object; null for none, or when its url fails emojiHref.
+// as its Emoji object; null for none, or when its url fails emojiHref or its time is not an instant (emojiTag).
 export const localEmojiObject = readOperation<{ id: string; origin: string }, EmojiTag | null>((db, { id, origin }) => {
 	const row = db.first<{ id: string; shortcode: string; created_at: string; content_type: string; url: string }>(
 		`SELECT e.id, e.shortcode, e.created_at, m.content_type, m.url

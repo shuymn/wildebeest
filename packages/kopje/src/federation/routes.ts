@@ -127,10 +127,11 @@ async function quoteAuthorization(
 
 const EMOJI = /^\/emojis\/(\d{18})$/
 
-// A local custom emoji as its Emoji object (Mastodon's EmojisController#show, app/controllers/emojis_controller.rb:8-17;
-// domain/local-emojis.ts localEmojiObject), one primary-key read: any local emoji, disabled ones included. It names
-// only public data, so it is served unsigned to anyone, cached for three minutes as Mastodon's (expires_in 3.minutes,
-// public: true), and never kept as a snapshot. Any other id answers 404.
+// A local custom emoji as its Emoji object (Mastodon's EmojisController#show,
+// app/controllers/emojis_controller.rb:8-17; domain/local-emojis.ts localEmojiObject), one primary-key read: any local
+// emoji, disabled ones included. It names only public data, so it is served unsigned to anyone, cached for three
+// minutes as Mastodon's (expires_in 3.minutes, public: true), and never kept as a snapshot. Any other id, or an emoji
+// whose time is not an instant (custom-emojis.ts emojiInstant), answers 404.
 async function emojiObject(c: Context<FederationEnv>, deps: FederationRouteDeps, path: string): Promise<Response> {
 	const id = EMOJI.exec(path)?.[1]
 	const origin = `https://${c.get('domain')}`
