@@ -150,6 +150,10 @@ it('applies the migration to the benchmark store within the budget', async () =>
 	const { seeded, measured } = await runInDurableObject(store, async (_instance, state) => {
 		await state.storage.deleteAlarm()
 		expect(await testKernel(state, MIGRATIONS.slice(0, at)).upgrade()).toMatchObject({ ok: true })
+		// A kernel that finds work unfinished sets an alarm for now unless one is set, and the Store's own alarm then runs
+		// in any yield of this call: it would apply the files, or verify the retry's marker, untimed. One an hour off
+		// keeps it from running here.
+		await state.storage.setAlarm(Date.now() + 3_600_000)
 		const sql = state.storage.sql
 		// Numbers are bound as REAL by workerd, which SQLite's % keeps REAL: every number is cast to an integer first.
 		const run = (query: string, ...params: SqlStorageValue[]) =>
@@ -583,14 +587,27 @@ it('applies the migration to the benchmark store within the budget', async () =>
 			"INSERT INTO kopje_state (name, value) VALUES ('upgrade', ?)",
 			JSON.stringify({ build: BUILD, bookmark: result.bookmark, at: 0 })
 		)
-		const { value: resumed, ms: resumedMs } = await timed(() => testKernel(state, migrations).retryUpgrade(BUILD))
-		expect(resumed).toMatchObject({ ok: true, applied: [] })
+		const retryLogs: Record<string, unknown>[] = []
+		const { value: resumed, ms: resumedMs } = await timed(() =>
+			testKernel(state, migrations, { log: (entry) => retryLogs.push(entry) }).retryUpgrade(BUILD)
+		)
+		// It took the marker's path: the whole-Store check, and the bookmark the marker kept.
+		expect(resumed).toEqual({ ok: true, bookmark: result.bookmark, applied: [] })
+		expect(retryLogs).toContainEqual(
+			expect.objectContaining({ event: 'kopje.store.upgrade.start', foreignKeyCheck: 'store' })
+		)
+		await state.storage.deleteAlarm()
 		return { seeded, measured: { result, ms, foreignKeyCheck, retryEstimateMs: ms + resumedMs } }
 	})
 	expect(seeded).toMatchObject({ accounts, local: SHAPE.local, statuses, notifications, reports })
 	expect(measured.result).toMatchObject({ ok: true, applied })
 	const { ms, foreignKeyCheck, retryEstimateMs } = measured
 	console.log(JSON.stringify({ migrations: applied, scale, seeded, ms, budgetMs, foreignKeyCheck, retryEstimateMs }))
+	if (scale >= 1 && foreignKeyCheck === 'skipped') {
+		// The retry's whole-Store check reads every reference of the full store: a retry no slower than the upgrade
+		// did not run it.
+		expect(retryEstimateMs).toBeGreaterThan(ms)
+	}
 	// KOPJE_BENCH_REPORT_ONLY: CI judges the median of several runs against the budget (scripts/kopje-bench-range.sh).
 	if (scale >= 1 && !inject('benchReportOnly')) {
 		expect(ms).toBeLessThanOrEqual(budgetMs)
