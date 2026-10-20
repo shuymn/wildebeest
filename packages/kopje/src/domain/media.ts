@@ -40,8 +40,8 @@ import { storedMediaDescription, storedMediaMeta } from '../platform/stored-boun
 // bounded batches, objects first.
 //
 // A profile image (avatar or header, set by update_credentials or the settings page) is a completed upload that the
-// account's avatar_url or header_url names, kept with neither status_id nor gc_at: it is never swept, and never attached, read or updated
-// through the API. Replacing or removing it dooms it.
+// account's avatar_url or header_url names, kept with neither status_id nor gc_at: it is never swept, and never
+// attached, read or updated through the API. Replacing or removing it dooms it.
 //
 // Only the uploader reads, updates or attaches an upload, and only while it is unattached (MEDIA-1); Mastodon's
 // MediaController finds `current_account.media_attachments.where(status_id: nil)`.

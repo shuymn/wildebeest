@@ -3,10 +3,10 @@ import { availableSql, blockedSql } from './audience'
 import { writeOperation } from './operation'
 import type { Db } from '../db/sql'
 
-// Unlocking an account accepts its pending follow requests (Mastodon's UpdateAccountService#authorize_all_follow_requests,
-// app/services/update_account_service.rb:5-11, 22-28, which queues AuthorizeFollowWorker for each). Kopje runs it as a
-// cursor job: local_accounts.accept_requests_after (migration 0058) holds the last follows.id the job has passed, NULL
-// for no job.
+// Unlocking an account accepts its pending follow requests (Mastodon's
+// UpdateAccountService#authorize_all_follow_requests, app/services/update_account_service.rb:5-11, 22-28, which queues
+// AuthorizeFollowWorker for each). Kopje runs it as a cursor job: local_accounts.accept_requests_after (migration
+// 0058) holds the last follows.id the job has passed, NULL for no job.
 //
 // - The 1 -> 0 transition of `locked` starts the job at 0 when a request is pending (unlockChanged, in the update's
 //   transaction); relocking clears it (Kopje stops accepting, docs/mastodon-deviations.md).

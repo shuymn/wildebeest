@@ -512,8 +512,8 @@ async function localActorObject(ctx: RequestContext<FederationState>, actor: Loc
 	const id = ctx.getActorUri(actor.username)
 	const cls = ACTOR_CLASSES[actor.actorType as keyof typeof ACTOR_CLASSES] ?? Person
 	// A suspended actor, as Mastodon's ActivityPub::ActorSerializer presents one: no name, summary, icon, image, aliases
-	// or fields, not locked, discoverable or indexable, and `suspended: true`; its keys, inboxes and collections stay, so other
-	// servers can still verify what it signed and learn of the suspension.
+	// or fields, not locked, discoverable or indexable, and `suspended: true`; its keys, inboxes and collections stay, so
+	// other servers can still verify what it signed and learn of the suspension.
 	const profile = actor.suspended
 		? { manuallyApprovesFollowers: false, discoverable: false, indexable: false, suspended: true }
 		: {
