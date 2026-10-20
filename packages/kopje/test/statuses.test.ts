@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { type ApiHarness, bearer, form, json, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { BUILD } from './helpers'
-import { watchedCursor } from './read-helpers'
+import { type PlannedStatement, plannedSql } from './read-helpers'
 import {
 	act,
 	block,
@@ -18,6 +18,8 @@ import {
 	remoteAccount,
 	remoteFollows,
 	seedStatus,
+	mediaNotFound,
+	posting,
 	type Status,
 	type User,
 } from './status-helpers'
@@ -28,25 +30,6 @@ import type { StoreStub } from '../src/platform/store-client'
 import { sha256Hex } from '../src/security/tokens'
 
 const HOUR = 60 * 60 * 1000
-
-// Mastodon's media_attachments.validations.not_found (MEDIA-1: one message whatever the reason).
-const mediaNotFound = (...ids: string[]) => ({
-	status: 422,
-	body: { error: `Media ${ids.join(', ')} not found or already attached to another post` },
-})
-
-async function posting(
-	h: Awaited<ReturnType<typeof community>>,
-	token: string,
-	body: Record<string, unknown>,
-	init: { method?: string; path?: string; headers?: Record<string, string> } = {}
-): Promise<{ status: number; body: unknown }> {
-	const response = await h.request(
-		init.path ?? '/api/v1/statuses',
-		bearer(token, json(body, { method: init.method ?? 'POST', headers: init.headers ?? {} }))
-	)
-	return { status: response.status, body: await response.json() }
-}
 
 // Puts the pending Creates in flight and records their servers as having the object (the receipt a delivered Create
 // leaves): an edit then goes to them as an Update (a server without a receipt gets a Create of the current version
@@ -1083,7 +1066,7 @@ describe('media_ids (PostStatusService#validate_media!, MEDIA-1)', () => {
 		expect(await posting(h, token, { status: 'x', media_ids: ['9007199254740993'] })).toEqual(
 			mediaNotFound('9007199254740993')
 		)
-		// A trailing space, a 0d prefix and leading zeros find the media; a repeated id attaches it once, where it is first.
+		// A trailing space, a 0d prefix and leading zeros find the media; a repeated id attaches it once, where first.
 		const status = await post(h, h.users.alice, {
 			status: 'x',
 			media_ids: [`${ID} `, '100000000000000002', `0d${ID}`, ` +0${ID}`],
@@ -1312,26 +1295,11 @@ async function postPlans(
 	token: string,
 	input: Partial<ScheduleInput>,
 	pattern: RegExp
-): Promise<{ result: unknown; plans: { query: string; plan: string[]; rows: number }[] }> {
+): Promise<{ result: unknown; plans: PlannedStatement[] }> {
 	const tokenHash = await sha256Hex(token)
 	return runInDurableObject(h.store, (_instance, state) => {
-		const real = state.storage.sql
-		const plans: { query: string; plan: string[]; rows: number }[] = []
-		const capturing = {
-			exec: (query: string, ...params: SqlStorageValue[]) => {
-				if (!pattern.test(query)) {
-					return real.exec(query, ...params)
-				}
-				const plan = real
-					.exec<{ detail: string }>(`EXPLAIN QUERY PLAN ${query}`, ...params)
-					.toArray()
-					.map((row) => row.detail)
-				const cursor = real.exec(query, ...params)
-				const entry = { query, plan, rows: 0 }
-				plans.push(entry)
-				return watchedCursor(cursor, () => (entry.rows += cursor.rowsRead))
-			},
-		} as unknown as SqlStorage
+		const plans: PlannedStatement[] = []
+		const capturing = plannedSql(state.storage.sql, pattern, plans)
 		const result = postStatus.run(capturing, {
 			credential: { tokenHash, scope: 'write:statuses', now: NOW },
 			text: 'plan',

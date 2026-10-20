@@ -672,11 +672,6 @@ export function ownStatusByKey(db: Db, viewer: UserContext, key: string, present
 	return existing === undefined ? null : presentOwn(db, viewer.accountId, existing.id, { ...present, viewer })
 }
 
-// Frees an expired key for a new post (statuses_client_key is unique per account): the older status keeps no key.
-export function releaseStatusKey(db: Db, accountId: string, key: string): void {
-	db.run('UPDATE statuses SET client_key = NULL WHERE account_id = ?1 AND client_key = ?2', accountId, key)
-}
-
 // The answer to a post its checks refused. Unexpected mentions are answered with the accounts, as
 // StatusesController#create's UnexpectedMentionsError answers them: within ANSWER_BYTES with the error, in mention
 // order, the first always (docs/response-inventory.md).

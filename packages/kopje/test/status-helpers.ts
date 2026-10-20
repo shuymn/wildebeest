@@ -114,6 +114,27 @@ export async function post(h: ApiHarness, user: User, body: Record<string, unkno
 	return response.json()
 }
 
+// A post or an edit's answer, as its status code and body (`path` and `method` for an edit).
+export async function posting(
+	h: ApiHarness,
+	token: string,
+	body: Record<string, unknown>,
+	init: { method?: string; path?: string; headers?: Record<string, string> } = {}
+): Promise<{ status: number; body: unknown }> {
+	const response = await h.request(
+		init.path ?? '/api/v1/statuses',
+		bearer(token, json(body, { method: init.method ?? 'POST', headers: init.headers ?? {} }))
+	)
+	return { status: response.status, body: await response.json() }
+}
+
+// Mastodon's media_attachments.validations.not_found, answered 422 for every id it cannot attach (MEDIA-1: one message
+// whatever the reason).
+export const mediaNotFound = (...ids: string[]) => ({
+	status: 422,
+	body: { error: `Media ${ids.join(', ')} not found or already attached to another post` },
+})
+
 export async function act(h: ApiHarness, user: User, path: string, body: Record<string, unknown> = {}) {
 	return h.request(path, bearer(user.token, json(body)))
 }

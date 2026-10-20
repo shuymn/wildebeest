@@ -28,7 +28,6 @@ import {
 	postNow,
 	preparePost,
 	refusedPost,
-	releaseStatusKey,
 	statusCursor,
 	writePost,
 } from './statuses'
@@ -273,9 +272,10 @@ function invalid(errors: string[]): { status: 'invalid'; error: string } {
 	return { status: 'invalid', error: `Validation failed: ${errors.join(', ')}` }
 }
 
-// Frees an expired key for a new post (unique per account among scheduled statuses): the older row keeps no key, and
-// is published without one.
-function releaseScheduledKey(db: Db, accountId: string, key: string): void {
+// Frees an expired key for a new post, as both tables keep it unique per account (statuses_client_key and the
+// scheduled statuses' UNIQUE): the older rows keep no key, and an older scheduled status is published without one.
+function releaseKey(db: Db, accountId: string, key: string): void {
+	db.run('UPDATE statuses SET client_key = NULL WHERE account_id = ?1 AND client_key = ?2', accountId, key)
 	db.run('UPDATE scheduled_statuses SET client_key = NULL WHERE account_id = ?1 AND client_key = ?2', accountId, key)
 }
 
@@ -326,8 +326,7 @@ export const postStatus = userWriteOperation<ScheduleInput, ScheduleResult>((db,
 		if (scheduled !== undefined) {
 			return { status: 'scheduled', value: presentScheduled(db, scheduled) }
 		}
-		releaseStatusKey(db, accountId, input.idempotencyKey)
-		releaseScheduledKey(db, accountId, input.idempotencyKey)
+		releaseKey(db, accountId, input.idempotencyKey)
 	}
 	if (input.scheduledAt === undefined || Date.parse(input.scheduledAt) <= input.now) {
 		return postNow(db, viewer, input)

@@ -26,7 +26,17 @@ import {
 	upload,
 	uploaded,
 } from './media-helpers'
-import { community, getJson, outbound, post, remoteAccount, remoteFollows, type Status } from './status-helpers'
+import {
+	community,
+	getJson,
+	mediaNotFound,
+	outbound,
+	post,
+	posting,
+	remoteAccount,
+	remoteFollows,
+	type Status,
+} from './status-helpers'
 import { TRANSFORMS_PER_UPLOAD, UPLOAD_BUDGET } from '../src/domain/media'
 import { handleScheduled } from '../src/jobs/scheduled'
 import { sweepMedia } from '../src/mastodon/media'
@@ -43,18 +53,6 @@ async function users(names: readonly string[] = ['alice', 'bob'], codec = new Te
 
 function sweep(h: { store: Parameters<typeof sql>[0] }, at: number) {
 	return sweepMedia(env, { build: () => env.CF_VERSION_METADATA.id, now: () => at, store: () => h.store })
-}
-
-// Mastodon's media_attachments.validations.not_found, answered 422 for every id it cannot attach (MEDIA-1).
-const notFound = (...ids: string[]) => ({
-	status: 422,
-	body: { error: `Media ${ids.join(', ')} not found or already attached to another post` },
-})
-
-// A post's answer, as its status code and body.
-async function posting(h: Awaited<ReturnType<typeof users>>, token: string, body: Record<string, unknown>) {
-	const response = await h.request('/api/v1/statuses', bearer(token, json(body)))
-	return { status: response.status, body: await response.json() }
 }
 
 async function row(h: { store: Parameters<typeof sql>[0] }, id: string) {
@@ -360,14 +358,14 @@ describe('GET and PUT /api/v1/media/:id', () => {
 		expect((await put(alice.token, { description: 'x'.repeat(1501) })).status).toBe(422)
 
 		// bob cannot attach it; alice can, after which it is no longer read or updated through /media.
-		expect(await posting(h, bob.token, { status: 'x', media_ids: [media.id] })).toEqual(notFound(media.id))
+		expect(await posting(h, bob.token, { status: 'x', media_ids: [media.id] })).toEqual(mediaNotFound(media.id))
 		expect(await sql(h.store, 'SELECT id FROM statuses')).toEqual([])
 		const status = await post(h, alice, { status: 'with media', media_ids: [media.id] })
 		expect(status.media_attachments).toMatchObject([{ id: media.id, description: 'described' }])
 		expect((await getJson(h, `/api/v1/media/${media.id}`, alice.token)).status).toBe(404)
 		expect((await put(alice.token, { description: 'later' })).status).toBe(404)
 		// Attached media cannot be moved to another status either.
-		expect(await posting(h, alice.token, { status: 'other', media_ids: [media.id] })).toEqual(notFound(media.id))
+		expect(await posting(h, alice.token, { status: 'other', media_ids: [media.id] })).toEqual(mediaNotFound(media.id))
 		expect(await sql(h.store, 'SELECT id FROM statuses')).toEqual([{ id: status.id }])
 	})
 })
@@ -404,7 +402,7 @@ describe('PATCH and DELETE /api/v1/media/:id', () => {
 		expect(await row(h, media.id)).toBeUndefined()
 		expect((await h.request(pathOf(media.url))).status).toBe(404)
 		expect((await destroy(alice.token)).status).toBe(404)
-		expect(await posting(h, alice.token, { status: 'x', media_ids: [media.id] })).toEqual(notFound(media.id))
+		expect(await posting(h, alice.token, { status: 'x', media_ids: [media.id] })).toEqual(mediaNotFound(media.id))
 	})
 
 	it('refuses media a status uses, and deletes it once a status deletion detached it', async () => {
@@ -488,13 +486,13 @@ describe('media an edit drops', () => {
 		const { alice } = h.users
 		const { status, kept, drop } = await dropped(h)
 
-		expect(await posting(h, alice.token, { status: 'other', media_ids: [drop.id] })).toEqual(notFound(drop.id))
+		expect(await posting(h, alice.token, { status: 'other', media_ids: [drop.id] })).toEqual(mediaNotFound(drop.id))
 		const scheduled = await posting(h, alice.token, {
 			status: 'later',
 			media_ids: [drop.id],
 			scheduled_at: new Date(NOW + HOUR).toISOString(),
 		})
-		expect(scheduled).toEqual(notFound(drop.id))
+		expect(scheduled).toEqual(mediaNotFound(drop.id))
 		expect(await sql(h.store, 'SELECT id FROM scheduled_statuses')).toEqual([])
 		// An edit of another status cannot take it: the edit target is a status made without it.
 		const other = await post(h, alice, { status: 'other' })
@@ -502,7 +500,7 @@ describe('media an edit drops', () => {
 			`/api/v1/statuses/${other.id}`,
 			bearer(alice.token, json({ status: 'other', media_ids: [drop.id] }, { method: 'PUT' }))
 		)
-		expect({ status: otherEdit.status, body: await otherEdit.json() }).toEqual(notFound(drop.id))
+		expect({ status: otherEdit.status, body: await otherEdit.json() }).toEqual(mediaNotFound(drop.id))
 		expect(await row(h, drop.id)).toMatchObject({ status_id: status.id })
 
 		const again = await h.request(
@@ -613,14 +611,14 @@ describe('explicit deletion', () => {
 		expect(removed.status).toBe('ok')
 
 		expect(await posting(h, alice.token, { status: 'late', media_ids: [deleted.id, viaStatus.id] })).toEqual(
-			notFound(deleted.id, viaStatus.id)
+			mediaNotFound(deleted.id, viaStatus.id)
 		)
 		const scheduled = await posting(h, alice.token, {
 			status: 'later',
 			media_ids: [held.id],
 			scheduled_at: new Date(NOW + HOUR).toISOString(),
 		})
-		expect(scheduled).toEqual(notFound(held.id))
+		expect(scheduled).toEqual(mediaNotFound(held.id))
 		expect(await sql(h.store, 'SELECT id FROM statuses WHERE id <> ?', status.id)).toEqual([])
 		expect(
 			await sql(

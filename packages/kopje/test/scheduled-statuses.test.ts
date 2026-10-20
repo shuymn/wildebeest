@@ -90,6 +90,13 @@ function round(h: ApiHarness, now: number, doorbell = vi.fn(() => Promise.resolv
 	return publishScheduled(h.env, { build: () => BUILD, now: () => now, store: () => h.store, doorbell })
 }
 
+// The publication of the scheduled status `id` at `now`, by the Store operation itself, with its answer.
+function publishDirectly(h: ApiHarness, id: string, now: number) {
+	return runInDurableObject(h.store, (_instance, state) =>
+		publishOne.run(state.storage.sql, { id, now, objectId: crypto.randomUUID() })
+	)
+}
+
 async function count(h: ApiHarness, table: string): Promise<number> {
 	return (await sql<{ n: number }>(h.store, `SELECT count(*) AS n FROM ${table}`))[0]?.n ?? 0
 }
@@ -332,9 +339,7 @@ describe('an Idempotency-Key expires an hour after what it made', () => {
 				`UPDATE scheduled_statuses SET client_key = 'direct', created_at = ${value} WHERE id = ?`,
 				created.id
 			)
-			const publication = await runInDurableObject(h.store, (_instance, state) =>
-				publishOne.run(state.storage.sql, { id: created.id, now: publishedAt, objectId: crypto.randomUUID() })
-			)
+			const publication = await publishDirectly(h, created.id, publishedAt)
 			expect(publication, name).toMatchObject({ status: 'published' })
 			expect(await keys(h, 'statuses'), name).toEqual([publishedAt === NOW + HOUR - 1 ? 'direct' : null])
 		}
@@ -608,9 +613,7 @@ describe('publication', () => {
 		const held = await scheduled(h, alice, { status: 'x', media_ids: [media], scheduled_at: at(NOW + HOUR) })
 		await sql(h.store, 'DELETE FROM media_attachments WHERE id = ?', media)
 		// As PublishScheduledStatusWorker loses a post whose validate_media! raises.
-		const publication = await runInDurableObject(h.store, (_instance, state) =>
-			publishOne.run(state.storage.sql, { id: held.id, now: NOW + HOUR, objectId: crypto.randomUUID() })
-		)
+		const publication = await publishDirectly(h, held.id, NOW + HOUR)
 		expect(publication).toEqual({ status: 'dropped', reason: 'invalid' })
 		expect(await count(h, 'statuses')).toBe(0)
 		expect(await count(h, 'scheduled_statuses')).toBe(0)
@@ -654,10 +657,7 @@ describe('publication', () => {
 			scheduled_at: when,
 			allowed_mentions: [],
 		})
-		const publish = (id: string) =>
-			runInDurableObject(h.store, (_instance, state) =>
-				publishOne.run(state.storage.sql, { id, now: NOW + HOUR, objectId: crypto.randomUUID() })
-			)
+		const publish = (id: string) => publishDirectly(h, id, NOW + HOUR)
 		for (const [name, , , publishes] of cases) {
 			const publication = await publish(made.get(name)!.id)
 			expect(publication, name).toMatchObject(
@@ -714,9 +714,7 @@ describe('publication', () => {
 			const params = { ...created.params }
 			change(params)
 			await sql(h.store, 'UPDATE scheduled_statuses SET params = ? WHERE id = ?', JSON.stringify(params), created.id)
-			const publication = await runInDurableObject(h.store, (_instance, state) =>
-				publishOne.run(state.storage.sql, { id: created.id, now: NOW + HOUR, objectId: crypto.randomUUID() })
-			)
+			const publication = await publishDirectly(h, created.id, NOW + HOUR)
 			expect(publication, name).toMatchObject(
 				outcome === 'published' ? { status: 'published' } : { status: 'dropped', reason: 'params' }
 			)

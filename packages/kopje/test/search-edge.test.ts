@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 import { bearer, sql } from './api-helpers'
 import { NOW } from './app-helpers'
-import { watchedCursor } from './read-helpers'
+import { type PlannedStatement, plannedSql, watchedCursor } from './read-helpers'
 import { act, community, post, seedStatus } from './status-helpers'
 import {
 	HASHTAG_LIBRARY_LIMIT,
@@ -337,25 +337,8 @@ async function planned(
 ) {
 	const tokenHash = await sha256Hex(h.users.alice.token)
 	return runInDurableObject(h.store, (_instance, state) => {
-		const real = state.storage.sql
-		const plans: { plan: string[]; rows: number }[] = []
-		const capturing = {
-			exec: (query: string, ...params: SqlStorageValue[]) => {
-				const cursor = real.exec(query, ...params)
-				if (!pattern.test(query)) {
-					return cursor
-				}
-				const entry = {
-					plan: real
-						.exec<{ detail: string }>(`EXPLAIN QUERY PLAN ${query}`, ...params)
-						.toArray()
-						.map((row) => row.detail),
-					rows: 0,
-				}
-				plans.push(entry)
-				return watchedCursor(cursor, () => (entry.rows += cursor.rowsRead))
-			},
-		} as unknown as SqlStorage
+		const plans: PlannedStatement[] = []
+		const capturing = plannedSql(state.storage.sql, pattern, plans, false)
 		const result = search.run(capturing, {
 			credential: { tokenHash, scope: 'read:search', now: NOW },
 			limit: 20,
