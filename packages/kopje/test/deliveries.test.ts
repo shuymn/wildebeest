@@ -3,9 +3,11 @@ import { describe, expect, it } from 'vitest'
 import { bearer, json, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { BUILD, claimSent, type SentClaim } from './helpers'
+import { plannedRun, scansOf } from './read-helpers'
 import { act, community, post, remoteAccount, remoteFollows, seedStatus } from './status-helpers'
 import { followAnswerActivity, followActivity, followUri, undoFollowActivity } from '../src/domain/activities'
 import {
+	completeDelivery,
 	type DeliveryOutcome,
 	GAVE_UP_RETENTION_MS,
 	LEASE_MS,
@@ -616,5 +618,58 @@ describe('follows toward remote accounts', () => {
 			type: 'Reject',
 			object: { type: 'Follow', actor: answer.followerUri },
 		})
+	})
+})
+
+describe('lane promotion with stale statistics (RES-7)', () => {
+	it("seeks the lane's next row through deliveries_lane, with other lanes and given-up rows grown after ANALYZE", async () => {
+		const { h, alice } = await audience()
+		for (const status of ['first', 'second', 'third']) {
+			await post(h, alice, { status })
+		}
+		await sql(h.store, 'ANALYZE')
+		const leased = await claim(h.store, NOW, 'a')
+		const [fans, other] = leased.deliveries
+		expect([fans?.inbox, other?.inbox]).toEqual(['https://fans.example/inbox', 'https://other.example/inbox'])
+		const settle = (id: string) =>
+			plannedRun(h, /^UPDATE deliveries SET state = 'pending'/, completeDelivery, {
+				id,
+				leaseToken: 'a',
+				now: NOW + 1,
+				outcome: OK,
+			})
+		const before = await settle(fans!.id)
+		// The pending heads of many other lanes of alice's, and given-up rows of the lane itself.
+		await sql(
+			h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 10000 - 1)
+			INSERT INTO deliveries (activity_id, account_id, inbox_url, lane, state, next_attempt_at, updated_at)
+			SELECT d.activity_id, d.account_id, 'https://s' || n.i || '.example/inbox',
+				CASE WHEN n.i % 2 = 0 THEN 'https://s' || n.i || '.example' ELSE d.lane END,
+				CASE WHEN n.i % 2 = 0 THEN 'pending' ELSE 'gave_up' END, ?2, ?2
+			FROM n CROSS JOIN deliveries d WHERE d.id = CAST(?1 AS INTEGER)`,
+			other!.id,
+			NOW
+		)
+		const after = await settle(other!.id)
+		for (const [name, run] of Object.entries({ before, after })) {
+			expect(run.result, name).toMatchObject({ status: 'delivered' })
+			expect(run.plans, name).toHaveLength(1)
+		}
+		const { query, plan, rows } = after.plans[0]!
+		expect(plan.filter((detail) => detail.includes('deliveries_lane (account_id=? AND lane=?)'))).toHaveLength(2)
+		expect(scansOf(query, plan, ['deliveries'])).toEqual([])
+		expect(rows).toBe(before.plans[0]!.rows)
+		// Each lane's next row is pending, the others still queued.
+		expect(
+			(
+				await sql<{ state: string; inbox_url: string }>(
+					h.store,
+					"SELECT state, inbox_url FROM deliveries WHERE inbox_url IN ('https://fans.example/inbox', 'https://other.example/inbox') ORDER BY id"
+				)
+			)
+				.filter((r) => r.state === 'pending')
+				.map((r) => r.inbox_url)
+		).toEqual(['https://fans.example/inbox', 'https://other.example/inbox'])
 	})
 })

@@ -1042,12 +1042,16 @@ export type Claim = {
 	nextDueAt: number | null
 }
 
-// Promotes the oldest queued row of a lane once the lane has no pending or leased row.
+// Promotes the oldest queued row of a lane once the lane has no pending or leased row, both read through the lane's
+// entries of deliveries_lane (RES-7). Each names the index's own WHERE term (state IN ACTIVE): SQLite uses a partial
+// index only for a query that does (https://sqlite.org/partialindex.html#queries_using_partial_indexes).
 function promoteLane(db: Db, accountId: string, lane: string, now: number): void {
 	db.run(
 		`UPDATE deliveries SET state = 'pending', next_attempt_at = ?3, updated_at = ?3
-		WHERE id = (SELECT id FROM deliveries WHERE account_id = ?1 AND lane = ?2 AND state = 'queued' ORDER BY id LIMIT 1)
-			AND NOT EXISTS (SELECT 1 FROM deliveries WHERE account_id = ?1 AND lane = ?2 AND state IN ('pending', 'leased'))`,
+		WHERE id = (SELECT id FROM deliveries INDEXED BY deliveries_lane
+				WHERE account_id = ?1 AND lane = ?2 AND state IN ${ACTIVE} AND state = 'queued' ORDER BY id LIMIT 1)
+			AND NOT EXISTS (SELECT 1 FROM deliveries INDEXED BY deliveries_lane
+				WHERE account_id = ?1 AND lane = ?2 AND state IN ${ACTIVE} AND state IN ('pending', 'leased'))`,
 		accountId,
 		lane,
 		now
