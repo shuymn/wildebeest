@@ -265,7 +265,7 @@ describe('dump', () => {
 
 	// RES-2: a dump taken before 0053_custom_emoji_snapshots restores and upgrades with no emoji; one taken after carries
 	// the snapshots verbatim, at their stored caps, and the import's triggers accept them.
-	// A3 of the announcements design: a dump taken before 0056_announcements restores into a Store at its migrations
+	// A dump taken before 0056_announcements restores into a Store at its migrations
 	// (an import requires the same migrations), which then upgrades through 0056 with its rows and no announcement.
 	// A dump taken before 0057_trends restores into a Store at its migrations, which then upgrades through 0057 with its
 	// rows and no trend.

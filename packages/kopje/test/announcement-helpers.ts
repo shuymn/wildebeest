@@ -206,7 +206,7 @@ export function derivedAnnouncementMaxima() {
 	return { parts, entity, list: MAX_LIVE_ANNOUNCEMENTS * entity + MAX_LIVE_ANNOUNCEMENTS + 1, stream: 2 * entity + 2 }
 }
 
-// The widest IDN mentions (the review's): 16 remote accounts of 255-character usernames on a domain spelled with 120
+// The widest IDN mentions: 16 remote accounts of 255-character usernames on a domain spelled with 120
 // "é." labels, which URL.hostname makes punycode of 966 ASCII bytes (the account's stored domain), each with a
 // 2,048-byte profile URL of backslashes. Returns the text that mentions them in the Unicode spelling.
 export async function idnMentionFill(store: StoreStub): Promise<string> {

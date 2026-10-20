@@ -153,7 +153,7 @@ describe('readParams: body and text bounds', () => {
 
 	it('refuses multipart text past the limit in UTF-8 bytes, astral characters included', async () => {
 		const limit = 64
-		// 'a' and '=' are not counted as text: the entry is name 'a' (1 byte) and its value.
+		// The name 'a' contributes 1 byte; the value contributes 63 bytes.
 		const fits = await readParams(multipart([['a', '\u{1F600}'.repeat(15) + 'xyz']]), { limit: 1024, files: FILES })
 		expect(fits.ok).toBe(true)
 		const value = '\u{1F600}'.repeat(15) + 'xyz' // 63 bytes
@@ -214,7 +214,7 @@ describe('readParams: JSON path expansion', () => {
 	it('counts a long list of scalars in code units only, so it is not refused for its length', async () => {
 		const list = `{"context":[${Array.from({ length: 100_000 }, () => '"home"').join(',')}]}`
 		expect((await readParams(json(list))).ok).toBe(true)
-		// The same items under a long name pass the code-unit budget.
+		// 3,000 scalar items under a 1,000-character name exceed the code-unit budget.
 		const name = 'n'.repeat(1000)
 		const amplified = `{"${name}":[${Array.from({ length: 3_000 }, () => '1').join(',')}]}`
 		expect(await readParams(json(amplified))).toEqual({ ok: false, status: 413 })

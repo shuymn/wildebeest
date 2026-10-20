@@ -33,7 +33,7 @@ import { connect, drained, echo, type Inbox, type StreamMessage, subscribed } fr
 // The `user` stream's announcement events (R33, R40; Mastodon's PublishScheduledAnnouncementWorker,
 // UnpublishAnnouncementWorker and PublishAnnouncementReactionWorker): `announcement` with the entity as REST presents
 // it, less the viewer's `read` and `me`; `announcement.reaction` with the name's count; `announcement.delete` with the
-// id. Journaled per subject until sent, so the state when sent decides. Absence is proved with the drain barrier.
+// id. Each write journals its own event, so the state when sent decides. Absence is proved with the drain barrier.
 
 const EVENTS = ['announcement', 'announcement.reaction', 'announcement.delete']
 
@@ -269,7 +269,7 @@ describe('announcement events at their bounds (RES-3)', () => {
 		expect(new TextEncoder().encode(combo).length).toBeLessThanOrEqual(10_000)
 		await seedAnnouncement(h.store, { id: '200000000000000009', text: combo, published: 0, published_at: null })
 		const widest = await h.admin.publish('200000000000000009')
-		// A7: 3,332 references to one account whose URL is 2,048 bytes of ampersands, imported, then published.
+		// 3,332 references to one account whose URL is 2,048 bytes of ampersands, imported, then published.
 		const u = await seedAccount(h.store, { username: 'u', email: 'u@example.com' })
 		await sql(h.store, 'UPDATE accounts SET url = ? WHERE id = ?', `https://r.example/?${'&'.repeat(2029)}`, u)
 		await seedAnnouncement(h.store, {
@@ -279,7 +279,7 @@ describe('announcement events at their bounds (RES-3)', () => {
 			published_at: null,
 		})
 		await h.admin.publish('200000000000000001')
-		// The review's texts: one hashtag that renders to 310 KB alone, and 600 hashtags with 8,200 quotes after them.
+		// IDN mentions, a hashtag rendering to 310 KB, and linked hashtags followed by 8,200 quotes.
 		const reviewed: [string, string][] = [
 			['200000000000000004', await idnMentionFill(h.store)],
 			['200000000000000002', `#${'\uFDFA'.repeat(3333)}`],
