@@ -354,7 +354,6 @@ export class PolicyModel {
 		)
 	}
 
-	// Whether the status is a reply, to a stored status or to one never stored.
 	// R41 (Trends::Statuses#eligible?, trendableStatusSql), over a world whose statuses carry no content warning, are
 	// not sensitive, are published before its time and are in a supported language (as policy-endpoints seeds them):
 	// a public original that is not a reply (an unresolved one included) by an available, discoverable author, quoting
@@ -410,6 +409,7 @@ export class PolicyModel {
 			.filter((s) => this.listable(s, viewer))
 	}
 
+	// Whether the status is a reply, to a stored status or to one never stored.
 	isReply(s: number): boolean {
 		const { replyTo, replyToUnknown } = this.status(s)
 		return replyTo !== null || replyToUnknown

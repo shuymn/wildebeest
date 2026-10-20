@@ -1,11 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
 import { sql } from './api-helpers'
-import { BUILD, completeSetup, migratedStore } from './helpers'
-import { ACCESS, setAccess } from './ops-helpers'
+import { BUILD } from './helpers'
+import { ACCESS, accessAdminStore } from './ops-helpers'
 import { AT, author, HOUR, round, trendStatus } from './trend-helpers'
 import { tagId } from '../src/domain/tags'
-import type { StoreStub } from '../src/platform/store-client'
 import { MAX_TREND_REVIEWS } from '../src/platform/stored-bounds'
 
 // The Access admin's trends reviews (domain/trends.ts, app/admin.ts /admin/trends): Access only (AUTH-5), logged
@@ -13,16 +12,9 @@ import { MAX_TREND_REVIEWS } from '../src/platform/stored-bounds'
 
 const ORIGIN = 'https://kopje.test'
 
-async function adminStore(): Promise<StoreStub> {
-	const store = await migratedStore()
-	await setAccess(store)
-	await completeSetup(store)
-	return store
-}
-
 describe('trends reviews', () => {
 	it('refuses anyone but the Access admin, and a name that is not a hashtag', async () => {
-		const store = await adminStore()
+		const store = await accessAdminStore()
 		const token = { kind: 'import-token' } as const
 		for (const result of [
 			await store.reviewTrendTag(BUILD, { authority: token, name: 'x', trendable: true, origin: ORIGIN }),
@@ -49,7 +41,7 @@ describe('trends reviews', () => {
 	})
 
 	it('logs each decision and updates a stored one at 10,000, refusing a new one', async () => {
-		const store = await adminStore()
+		const store = await accessAdminStore()
 		await sql(
 			store,
 			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)

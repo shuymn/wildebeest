@@ -43,7 +43,7 @@ export function tagId(name: string): string {
 	return (hash & MASK_63).toString()
 }
 
-const HISTORY_DAYS = 7
+export const HISTORY_DAYS = 7
 const DAY_MS = 86_400_000
 
 // Kopje's cap on the hashtags an account follows, where Mastodon has none: home reads a window of each followed
@@ -72,6 +72,15 @@ function tagHistory(db: Db, tag: string, now: number): TagHistory[] {
 		tag,
 		(BigInt(since) << 16n).toString()
 	)
+	return historyDays(rows, today)
+}
+
+// The seven days from `today` (a UTC midnight) back, each with its row of `rows` (by YYYY-MM-DD) or zeros, as
+// Mastodon's TagSerializer#history writes them.
+export function historyDays(
+	rows: readonly { day: string; uses: number; accounts: number }[],
+	today: number
+): TagHistory[] {
 	const byDay = new Map(rows.map((row) => [row.day, row]))
 	return Array.from({ length: HISTORY_DAYS }, (_, index) => {
 		const start = today - index * DAY_MS

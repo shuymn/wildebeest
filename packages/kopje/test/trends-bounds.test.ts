@@ -239,9 +239,9 @@ describe('what the round holds (RES-3)', () => {
 		expect(returned).toBe(0)
 	}, 120_000)
 
-	// The heaviest rows each read can return: 400 candidates and 250 stored hashtags of 1,024-byte names, 250 stored
-	// statuses and 400 + 250 status candidates. Their measured heap is within the cap; a cap one byte below stops the
-	// round.
+	// The heaviest rows each read can return: TREND_TAG_GROUPS (1,600) hashtag groups and 250 stored hashtags of
+	// 1,024-byte names, 250 stored statuses and 400 + 250 status candidates. Their measured heap is within the cap; a
+	// cap one byte below stops the round.
 	it('meters the round’s rows within TREND_ROW_CAPS.round', async () => {
 		const store = await migratedStore()
 		const a = await authors(store, 650)

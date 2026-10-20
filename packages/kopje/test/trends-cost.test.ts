@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 import { sql } from './api-helpers'
 import { BUILD, migratedStore } from './helpers'
-import { watchedCursor } from './read-helpers'
+import { explainPlan, watchedCursor } from './read-helpers'
 import { AT, DAY, HOUR, TODAY } from './trend-helpers'
 import { writeOperation } from '../src/domain/operation'
 import { trendsRound } from '../src/domain/trends'
@@ -13,10 +13,9 @@ import type { StoreStub } from '../src/platform/store-client'
 // The round's cost at saturation (RES-6, RES-7): the rows it reads against its ceiling, flat however many statuses lie
 // outside its windows, and the plan of each of its production queries with statistics taken before the data grew.
 
-// The design's estimate was 215,000; with every candidate's quote judged (the quoted author's availability walked
-// too), both of each author's keys walked under 100 suspend blocks, full review tables, and the reads of the round's
-// own deletes, updates and inserts counted, the round measures 272,587 rows, so the asserted ceiling is 275,000
-// (docs/threat-model.md RES-7 quotes the figure).
+// With every candidate's quote judged (the quoted author's availability walked too), both of each author's keys walked
+// under 100 suspend blocks, full review tables, and the reads of the round's own deletes, updates and inserts counted,
+// the round measures 272,587 rows; the ceiling is 275,000 (docs/threat-model.md RES-7 quotes the figure).
 const ROUND_CEILING = 275_000
 const idOf = (ms: number) => BigInt(ms) << 16n
 
@@ -139,11 +138,7 @@ async function roundRowsRead(store: StoreStub): Promise<{ read: number; plans: R
 		const counting = {
 			exec: (query: string, ...params: SqlStorageValue[]) => {
 				if (/^\s*(WITH|SELECT)/.test(query)) {
-					plans[query] = real
-						.exec<{ detail: string }>(`EXPLAIN QUERY PLAN ${query}`, ...params)
-						.toArray()
-						.map((r) => r.detail)
-						.join(' | ')
+					plans[query] = explainPlan(real, query, ...params)
 				}
 				const cursor = real.exec(query, ...params)
 				return watchedCursor(cursor, () => (read += cursor.rowsRead))

@@ -256,8 +256,8 @@ describe('retention (RES-4)', () => {
 	})
 })
 
-describe('status retention (review round 1)', () => {
-	// M2: an older approved row and three newer unreviewed ties of one author: the approved one is the witness, so it
+describe('status retention: witnesses and the review pool', () => {
+	// an older approved row and three newer unreviewed ties of one author: the approved one is the witness, so it
 	// stays (and two of the ties with it), whatever the id order.
 	it('keeps an approved maximum when three newer unreviewed ties come', async () => {
 		const store = await migratedStore()
@@ -274,7 +274,7 @@ describe('status retention (review round 1)', () => {
 		expect(ties.filter((id) => rows.includes(id))).toHaveLength(2)
 	})
 
-	// Round 2: a newer rejected and an older unreviewed tie of one author (180.5), and fifty other authors' unreviewed
+	// A newer rejected and an older unreviewed tie of one author (180.5), and fifty other authors' unreviewed
 	// statuses (12.5): the unreviewed tie is the author's witness, so it takes a review place ahead of the fifty.
 	it('keeps an unreviewed maximum tied with a rejected one', async () => {
 		const store = await migratedStore()
@@ -292,7 +292,7 @@ describe('status retention (review round 1)', () => {
 		expect(rows).toHaveLength(50)
 	})
 
-	// M3: the review pool takes unreviewed rows before rejected ones, as the hashtags' does.
+	// the review pool takes unreviewed rows before rejected ones, as the hashtags' does.
 	it('reviews a fresh unreviewed status before 50 higher-scoring rejected ones', async () => {
 		const store = await migratedStore()
 		const [fresh, ...spam] = await authors(store, 51)

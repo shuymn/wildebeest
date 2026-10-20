@@ -8,8 +8,9 @@ import { readOperation, writeOperation } from './operation'
 import { USERNAME_LIMIT, usernameSql } from './profile-bounds'
 import { MAX_STATUS_TAGS, tagNameSql } from './status-bounds'
 import { presentation, presentStatusesWithin, type Status } from './status-presenter'
-import { presentTags, type Tag, type TagHistory, tagId, tagName } from './tags'
+import { HISTORY_DAYS, historyDays, presentTags, type Tag, type TagHistory, tagId, tagName } from './tags'
 import { type Db, ROW_OBJECT_BYTES, RowMeter, VALUE_BYTES } from '../db/sql'
+import { fromHex } from '../platform/dump-literals'
 import type { ImportAuthority } from '../platform/store-admin'
 import {
 	isoTimeSql,
@@ -78,11 +79,11 @@ export const TAG_DECAY_THRESHOLD = 1
 export const STATUS_THRESHOLD = 5
 export const STATUS_HALFLIFE_MS = HOUR_MS
 export const STATUS_DECAY_THRESHOLD = 0.3
-// The round's windows (RES-7, MD-5): the newest TREND_WINDOW public originals with ids from yesterday 00:00 UTC; at most
-// MAX_STATUS_TAGS hashtag rows of each and TREND_TAG_ROWS in all, cut raw before any rule; the TREND_TAG_CANDIDATES
-// hashtags with the most accounts today; the TREND_STATUS_CANDIDATES statuses with the most boosts and favourites,
-// counted up to TREND_OBSERVED_MAX. A trending hashtag's history counts at most its newest TREND_HISTORY_ROWS public
-// statuses of the 7 days.
+// The round's windows (RES-7, MD-5): the newest TREND_WINDOW public originals with ids from yesterday 00:00 UTC; at
+// most MAX_STATUS_TAGS hashtag rows of each and TREND_TAG_ROWS in all, cut raw before any rule; the
+// TREND_TAG_CANDIDATES hashtags with the most accounts today; the TREND_STATUS_CANDIDATES statuses with the most boosts
+// and favourites, counted up to TREND_OBSERVED_MAX. A trending hashtag's history counts at most its newest
+// TREND_HISTORY_ROWS public statuses of the 7 days.
 export const TREND_WINDOW = 4000
 export const TREND_TAG_ROWS = 8000
 export const TREND_TAG_CANDIDATES = 400
@@ -133,22 +134,8 @@ export function trendAllowedStatusSql(t: string, byDefault: string): string {
 // ---- The round (jobs/scheduled.ts, every 5 minutes), in one transaction (RES-6: at most MAX_TREND_TAGS +
 // MAX_TREND_STATUSES rows deleted and as many written).
 
-// The bytes of a hex key, and whether they are well-formed UTF-8: a name that is not never trends (it could not be
-// named back by its text), and a stored row of one is dropped.
+// Strict UTF-8: a stored name whose bytes are not well-formed never trends (it could not be named back by its text).
 const STRICT = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
-
-function wellFormed(hex: string): boolean {
-	const bytes = new Uint8Array(hex.length / 2)
-	for (let i = 0; i < bytes.length; i++) {
-		bytes[i] = Number.parseInt(hex.slice(2 * i, 2 * i + 2), 16)
-	}
-	try {
-		STRICT.decode(bytes)
-		return true
-	} catch {
-		return false
-	}
-}
 
 // The row heap (db/sql.ts rowHeapBytes: 64 bytes a row, 32 a value, two a code unit of text) the round's reads take
 // at most, from each column's maximum: the hashtag groups (TREND_TAG_GROUPS, a hex key of 2 × TREND_TAG_NAME_BYTES and
@@ -170,10 +157,10 @@ type ScoredTag = { key: string; score: number; max: number; at: string; review: 
 // The hashtags of the window with today's and yesterday's accounts (distinct authors per publication day, R1), every
 // one with TAG_THRESHOLD or more today, the most first (ties by key): at most TREND_TAG_GROUPS, since each takes that
 // many of the TREND_TAG_ROWS raw rows (the LIMIT states the bound). candidateTags keeps the first TREND_TAG_CANDIDATES
-// whose names are representable. Both CTEs are
-// materialized, so the window and the raw rows are cut before any rule is applied: a status's first MAX_STATUS_TAGS
-// rows by name, TREND_TAG_ROWS in all, whatever they hold. Then: public rows, names within the bound and the name rule,
-// published today or yesterday and by `now`, by available authors. The membership read of `x.name` presents nothing.
+// whose names are representable. Both CTEs are materialized, so the window and the raw rows are cut before any rule is
+// applied: a status's first MAX_STATUS_TAGS rows by name, TREND_TAG_ROWS in all, whatever they hold. Then: public rows,
+// names within the bound and the name rule, published today or yesterday and by `now`, by available authors. The
+// membership read of `x.name` presents nothing.
 function tagGroups(db: Db, now: number): TagCandidate[] {
 	const today = day(now)
 	const yesterday = day(now - DAY_MS)
@@ -375,11 +362,10 @@ function roundStatuses(db: Db, now: number, byDefault: boolean): number {
 	type Scored = (typeof scored)[number]
 	// Each author's maximum (StatusTrend.allowed lists the author's top-scoring rows that are allowed): the rows tied at
 	// it are its top group, met first. Its witness is the first allowed row of the group, else its first unreviewed row,
-	// else its first row. Witnesses
-	// fill the pools first, then the other rows of authors whose witness was kept, so the stored maximum is always the
-	// author's real one and an approved maximum is never pushed out by its unreviewed ties; TREND_STATUSES_PER_AUTHOR
-	// rows at most. Each pool takes allowed rows by score; the review pool takes unreviewed rows before rejected ones,
-	// each by score, as the hashtags' does.
+	// else its first row. Witnesses fill the pools first, then the other rows of authors whose witness was kept, so the
+	// stored maximum is always the author's real one and an approved maximum is never pushed out by its unreviewed ties;
+	// TREND_STATUSES_PER_AUTHOR rows at most. Each pool takes allowed rows by score; the review pool takes unreviewed
+	// rows before rejected ones, each by score, as the hashtags' does.
 	const byAuthor = new Map<string, Scored[]>()
 	for (const c of scored) {
 		byAuthor.set(c.account_id, [...(byAuthor.get(c.account_id) ?? []), c])
@@ -450,8 +436,6 @@ export const trendsRound = writeOperation<{ now: number }, { tags: number; statu
 
 // ---- The lists (GET /api/v1/trends/tags and /statuses, mastodon/trends.ts)
 
-const HISTORY_DAYS = 7
-
 // A hashtag's history as Mastodon's TagSerializer gives it (tags.ts tagHistory), for the trends lists: the newest
 // TREND_HISTORY_ROWS entries of its public range of the seven days (status_tags_public; `public = 1` is the index's
 // own condition, so the entries are raw), then the rule (public originals anyone may see, VIS-12), then the days.
@@ -468,26 +452,19 @@ export function trendTagHistory(db: Db, name: string, now: number): TagHistory[]
 		name,
 		idOf(since)
 	)
-	const byDay = new Map(rows.map((row) => [row.day, row]))
-	return Array.from({ length: HISTORY_DAYS }, (_, index) => {
-		const start = today - index * DAY_MS
-		const row = byDay.get(day(start))
-		return { day: String(start / 1000), uses: String(row?.uses ?? 0), accounts: String(row?.accounts ?? 0) }
-	})
+	return historyDays(rows, today)
 }
 
 // The text of a stored name, or null when it is not representable: its bytes are not well-formed UTF-8, or it is not
 // its own normalized form within the name rule (reviewName), so a review or a history by the presented name would name
 // another key. The round never admits such a name and drops a stored row of one (an import's).
 function nameOf(hex: string): string | null {
-	if (!wellFormed(hex)) {
+	let name: string
+	try {
+		name = STRICT.decode(fromHex(hex))
+	} catch {
 		return null
 	}
-	const bytes = new Uint8Array(hex.length / 2)
-	for (let i = 0; i < bytes.length; i++) {
-		bytes[i] = Number.parseInt(hex.slice(2 * i, 2 * i + 2), 16)
-	}
-	const name = STRICT.decode(bytes)
 	return reviewName(name) === name ? name : null
 }
 
@@ -684,7 +661,7 @@ function byteCut(column: string, bytes: number): string {
 }
 
 // Every variable field through its bounded projection (RES-3): the stored URL bound, the 24-byte ISO time, a
-// supported language, the username's and the domain's bounds, the content's first EXCERPT_SOURCE code points.
+// supported language, the username's and the domain's bounds, the content's first EXCERPT_SOURCE bytes.
 const ADMIN_STATUS_COLUMNS = `t.status_id AS id, ${statusUrlSql('s.url')} AS url, s.account_id,
 	${byteCut(usernameSql('a.username'), USERNAME_LIMIT)} AS username, ${byteCut('a.domain', DOMAIN_BYTES)} AS domain,
 	${isoTimeSql('s.published_at')} AS published_at,

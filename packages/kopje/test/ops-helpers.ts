@@ -1,7 +1,7 @@
 import { runInDurableObject } from 'cloudflare:test'
 
 import { LEGACY_EMPTY_KEK } from './federation-helpers'
-import { BUILD } from './helpers'
+import { BUILD, completeSetup, migratedStore } from './helpers'
 import { IMPORT_CHUNK_STATEMENTS, readDumpFile, statementChunks } from '../cli/lib/format.js'
 import { CONFIG_KEYS } from '../src/platform/access-settings'
 import { readCatalog } from '../src/platform/dump-catalog'
@@ -398,4 +398,12 @@ export function footprint(sql: SqlStorage): number {
 		}
 	}
 	return total
+}
+
+// A migrated Store whose Access admin is ACCESS, with setup complete.
+export async function accessAdminStore(): Promise<StoreStub> {
+	const store = await migratedStore()
+	await setAccess(store)
+	await completeSetup(store)
+	return store
 }

@@ -724,8 +724,8 @@ export function trendTagNameCheckSql(column: string): string {
     AND ${column} NOT GLOB ('*[' || char(1) || '-/:-^\`{-' || char(127) || ']*')`
 }
 
-// The trends settings (Mastodon's `trends` and `trendable_by_default`, config/settings.yml), 'true' or 'false', bound by
-// the triggers of 0057 rather than 0049's (whose literal stays instanceBoundsMigrationSql's).
+// The trends settings (Mastodon's `trends` and `trendable_by_default`, config/settings.yml), 'true' or 'false', bound
+// by the triggers of 0057 rather than 0049's (whose literal stays instanceBoundsMigrationSql's).
 export const TREND_SETTING_BOUNDS = {
 	trends: oneOf(['true', 'false']),
 	trendable_by_default: oneOf(['true', 'false']),
@@ -752,6 +752,5 @@ export function settingProjectionSql(name: StoredSettingName, column: string): s
 // A stored time read as the 24-byte ISO form Kopje writes (hour 00 to 23, read back by strftime as itself), else NULL:
 // the bytes judged before strftime reads the value, so a long imported value costs one length.
 export function isoTimeSql(column: string): string {
-	return `(CASE WHEN length(CAST(${column} AS BLOB)) = 24 AND substr(${column}, 12, 2) < '24'
-	AND strftime('${ISO_TIME_FORMAT}', ${column}) = ${column} THEN ${column} END)`
+	return `(${STAMP.projection(column)})`
 }

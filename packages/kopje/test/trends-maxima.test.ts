@@ -3,9 +3,9 @@ import { runInDurableObject } from 'cloudflare:test'
 import { describe, expect, it } from 'vitest'
 
 import { sql } from './api-helpers'
-import { BUILD, completeSetup, migratedStore } from './helpers'
-import { ACCESS, setAccess } from './ops-helpers'
-import { rowsRead } from './read-helpers'
+import { BUILD, migratedStore } from './helpers'
+import { ACCESS, accessAdminStore } from './ops-helpers'
+import { explainPlan, rowsRead } from './read-helpers'
 import { AT, DAY, setTrendSetting } from './trend-helpers'
 import { ANSWER_BYTES, jsonBytes } from '../src/domain/answer-budget'
 import { USERNAME_LIMIT } from '../src/domain/profile-bounds'
@@ -19,7 +19,6 @@ import {
 	trendingStatuses,
 	trendingTags,
 } from '../src/domain/trends'
-import type { StoreStub } from '../src/platform/store-client'
 import { STATUS_URL_LIMIT, TREND_TAG_NAME_BYTES, TREND_TAG_NAME_LENGTH } from '../src/platform/stored-bounds'
 
 // RES-3: the presented maxima of the trends shapes, derived from the stored and read bounds at worst JSON escaping
@@ -72,13 +71,6 @@ export const ADMIN_STATUS_MAX = jsonBytes({
 	excerpt: C.repeat(EXCERPT_UNITS),
 })
 
-async function adminStore(): Promise<StoreStub> {
-	const store = await migratedStore()
-	await setAccess(store)
-	await completeSetup(store)
-	return store
-}
-
 // `n` distinct names of TREND_TAG_NAME_LENGTH four-byte characters, TREND_TAG_NAME_BYTES each.
 const names = (n: number) =>
 	Array.from({ length: n }, (_, i) => String.fromCodePoint(0x20000 + i) + '\u{20001}'.repeat(TREND_TAG_NAME_LENGTH - 1))
@@ -99,7 +91,7 @@ describe('trends maxima (RES-3)', () => {
 	})
 
 	it('presents full hashtag pages of maximal names within the maxima, through the Store', async () => {
-		const store = await adminStore()
+		const store = await accessAdminStore()
 		await setTrendSetting(store, 'trendable_by_default', true)
 		await runInDurableObject(store, (_instance, state) => {
 			for (const [i, name] of names(20).entries()) {
@@ -138,7 +130,7 @@ describe('trends maxima (RES-3)', () => {
 	// T6: 40 imported trend rows whose parents pass every presented bound: a 1 MiB language, a long domain of control
 	// characters, an odd published_at, a url of STATUS_URL_LIMIT control characters and content of control characters.
 	it('presents 40 imported admin rows with oversized parents within the maximum, through the Store', async () => {
-		const store = await adminStore()
+		const store = await accessAdminStore()
 		await runInDurableObject(store, (_instance, state) => {
 			const s = state.storage.sql
 			for (let i = 0; i < 40; i++) {
@@ -279,13 +271,7 @@ describe('the hashtag list’s reads (RES-7)', () => {
 				const seen: string[] = []
 				const capturing = {
 					exec: (query: string, ...params: SqlStorageValue[]) => {
-						seen.push(
-							`${query.replace(/\s+/g, ' ').slice(0, 40)} => ${real
-								.exec<{ detail: string }>(`EXPLAIN QUERY PLAN ${query}`, ...params)
-								.toArray()
-								.map((r) => r.detail)
-								.join(' | ')}`
-						)
+						seen.push(`${query.replace(/\s+/g, ' ').slice(0, 40)} => ${explainPlan(real, query, ...params)}`)
 						return real.exec(query, ...params)
 					},
 				} as unknown as SqlStorage
@@ -340,11 +326,7 @@ describe('the status list’s plan', () => {
 			const capturing = {
 				exec: (query: string, ...params: SqlStorageValue[]) => {
 					if (/FROM \(SELECT t\.status_id, t\.score FROM trend_statuses t/.test(query)) {
-						found = real
-							.exec<{ detail: string }>(`EXPLAIN QUERY PLAN ${query}`, ...params)
-							.toArray()
-							.map((r) => r.detail)
-							.join(' | ')
+						found = explainPlan(real, query, ...params)
 					}
 					return real.exec(query, ...params)
 				},
