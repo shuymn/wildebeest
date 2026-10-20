@@ -15,6 +15,9 @@ import { StoreUnavailableError } from '../platform/store-errors'
 //   - scheduled statuses: publishes up to PUBLISH_ROUND that are due, each in its own transaction that deletes it, then
 //     rings the delivery doorbell for what they record (domain/scheduled-statuses.ts). In the Store's maintenance or
 //     readonly state nothing is published and what is due waits for the next run.
+//   - announcements: one round (domain/announcements.ts announcementRound): publishes the scheduled ones that are due
+//     and takes down the published ones that ended, at most the live cap of each. In the Store's maintenance or
+//     readonly state, they wait.
 //   - polls: one round (domain/polls.ts): ends up to POLL_ROUND polls whose time has come (the 'poll' notifications,
 //     once, and a local poll's final Update), and records up to POLL_ROUND Updates of local polls' counts that are due,
 //     then rings the delivery doorbell for what they record. In the Store's maintenance or readonly state, they wait.
@@ -44,6 +47,13 @@ export async function handleScheduled(env: Env, deps: ScheduledDeps): Promise<vo
 	} catch (error) {
 		if (!(error instanceof StoreUnavailableError)) {
 			console.error({ event: 'kopje.scheduled.publish_round_failed', ...errorFields(error) })
+		}
+	}
+	try {
+		await callStore(() => deps.store(env).announcementRound(deps.build(env), { now: deps.now() }))
+	} catch (error) {
+		if (!(error instanceof StoreUnavailableError)) {
+			console.error({ event: 'kopje.scheduled.announcement_round_failed', ...errorFields(error) })
 		}
 	}
 	try {
