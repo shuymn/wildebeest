@@ -29,6 +29,11 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   32 levels answers 400.
 - Breaking: the Store operation `setProfileImage` is removed; `updateCredentials` takes the images and answers a
   status (`ok`, `not_found` or `upload_gone`).
+- Breaking: notifications read `types` and `exclude_types` only as `types[]` and `exclude_types[]`; a value sent
+  without `[]` is ignored, as Mastodon ignores it.
+- Breaking: the Store operation `createStatus` is removed (`postStatus` posts with or without `scheduled_at`).
+  `postStatus` answers a new status, `unexpected_mentions`, with the accounts, and a scheduled publication can be
+  dropped for `unexpected_mentions`.
 
 ### Fixed
 
@@ -39,6 +44,19 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   `{"home":{}}` saves the marker.
 - Unlocking an account accepts its pending follow requests, in job rounds of at most 20 after the response, and sends
   the Accepts. Relocking stops it; requests from unavailable or blocked requesters stay pending.
+- `POST /api/v1/statuses` and `PUT /api/v1/statuses/:id` answer 422 `Media … not found or already attached to another
+  post` for a `media_ids[]` entry that is unknown, another account's, attached to another post or held by a scheduled
+  post, instead of leaving it out. A scheduled post whose media is gone when it is due is dropped.
+- `POST /api/v1/statuses` reads `allowed_mentions[]`: a post that would mention an account not listed answers 422
+  with `unexpected_accounts`. A scheduled post is checked when it is published and dropped if it would; its
+  `params.allowed_mentions` shows the list.
+- Notifications (`/api/v1/notifications`, `/api/v2/notifications` and both `unread_count`): `types[]=` with an empty
+  value matches no type instead of all.
+- The public and hashtag timelines with `local=true&remote=true` answer local and remote posts.
+- An `Idempotency-Key` is kept for one hour after the post it made; reused later, it posts anew.
+- `GET /api/v2/search` reads `exclude_unreviewed` (hashtags the admin reviewed, and the exact match). With
+  `resolve=true&following=true`, a resolved account the viewer does not follow is left out. Hashtag search looks each
+  candidate status up by id, so statistics of a small Store no longer make it scan statuses once per candidate.
 
 ### Instance changes
 

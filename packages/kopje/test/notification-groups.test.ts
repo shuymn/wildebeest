@@ -177,6 +177,15 @@ describe('grouped notifications (API v2)', () => {
 			[expect.stringMatching(/^favourite-/), 3],
 			[expect.stringMatching(/^reblog-/), 1],
 		])
+		// Mastodon's `params.permit(types: [])` and Notification.select_types: an empty value matches no type, a scalar is
+		// dropped, and an empty excluded type excludes nothing.
+		const all = await read('')
+		expect(all).toHaveLength(4)
+		expect(await read('?types[]=')).toEqual([])
+		expect(await read('?types[]=&types[]=mention')).toEqual([['ungrouped', 1]])
+		expect(await read('?types=mention')).toEqual(all)
+		expect(await read('?exclude_types[]=')).toEqual(all)
+		expect(await read('?types[]=bogus')).toEqual([])
 	})
 
 	it('pages by the groups found, a group going on in the page after, with Link headers', async () => {
@@ -394,6 +403,18 @@ describe('grouped notifications (API v2)', () => {
 		expect(await count('/api/v2/notifications/unread_count?limit=2')).toBe(2)
 		expect(await count('/api/v1/notifications/unread_count?limit=-3')).toBe(3)
 		expect(await count('/api/v1/notifications/unread_count?limit=none')).toBe(0)
+		// types[] as the lists read it: an empty value matches no type, a scalar is dropped.
+		for (const [version, all] of [
+			['v1', 7],
+			['v2', 4],
+		] as const) {
+			const path = `/api/${version}/notifications/unread_count`
+			expect(await count(`${path}?types[]=`)).toBe(0)
+			expect(await count(`${path}?types[]=&types[]=mention`)).toBe(1)
+			expect(await count(`${path}?types=mention`)).toBe(all)
+			expect(await count(`${path}?exclude_types[]=`)).toBe(all)
+			expect(await count(`${path}?types[]=bogus`)).toBe(0)
+		}
 		const marked = await act(h, alice, '/api/v1/markers', { notifications: { last_read_id: id('follow', carol.id) } })
 		expect(marked.status).toBe(200)
 		expect(await count('/api/v1/notifications/unread_count')).toBe(3)

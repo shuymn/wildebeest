@@ -33,7 +33,9 @@ export class Params {
 		readonly entries: readonly (readonly [string, string])[],
 		readonly files: ReadonlyMap<string, File> = new Map(),
 		// The JSON object prefixes the body sent, empty objects included (sentObject).
-		readonly objectPrefixes: ReadonlySet<string> = new Set()
+		readonly objectPrefixes: ReadonlySet<string> = new Set(),
+		// The names a JSON body sent as an empty array (list).
+		readonly emptyLists: ReadonlySet<string> = new Set()
 	) {}
 
 	// The body's value wins over the query's.
@@ -100,9 +102,14 @@ export class Params {
 	}
 
 	// Values of `name[]` only, or undefined when none was sent: an array parameter as Rails' strong parameters permit
-	// it (`name: []`), which drop a scalar `name`. An explicitly empty list reads as one blank value.
+	// it (`name: []`), which drop a scalar `name`. A form's `name[]=` is one blank value, as Rack reads it; a JSON
+	// empty array is an empty list (its blank entry, which has() and getAll() read, is not a value).
 	list(name: string): string[] | undefined {
 		const values = this.entries.filter(([key]) => key === `${name}[]`).map(([, value]) => value)
+		if (this.emptyLists.has(name)) {
+			values.splice(values.indexOf(''), 1)
+			return values
+		}
 		return values.length === 0 ? undefined : values
 	}
 
@@ -173,7 +180,7 @@ export async function readParams(request: Request, options: ReadOptions = {}): P
 			return { ok: false, status: 413 }
 		}
 	}
-	return { ok: true, params: new Params(entries, parsed.files, parsed.objectPrefixes) }
+	return { ok: true, params: new Params(entries, parsed.files, parsed.objectPrefixes, parsed.emptyLists) }
 }
 
 // The parameters of a body (without the query). For each name of `files`, one effective value is chosen as Rails
@@ -200,10 +207,11 @@ async function parseCounted(
 	if (type === 'application/json') {
 		const entries: [string, string][] = []
 		const objects = new Set<string>()
+		const empty = new Set<string>()
 		// JSON.parse keeps the last of duplicate keys, so repeated() sees form and query duplicates only. RFC 6749 defines
 		// form bodies alone, and Doorkeeper (Mastodon) lets the last JSON key win as well.
-		flatten(JSON.parse(new TextDecoder().decode(body)), { entries, objects, paths: 0, units: 0 })
-		return { params: selectDeclared(entries, new Map(), objects, declared), formText: null }
+		flatten(JSON.parse(new TextDecoder().decode(body)), { entries, objects, empty, paths: 0, units: 0 })
+		return { params: selectDeclared(entries, new Map(), objects, empty, declared), formText: null }
 	}
 	if (type === 'application/x-www-form-urlencoded' || type === 'multipart/form-data') {
 		const form = await new Response(body, { headers: { 'content-type': contentType } }).formData()
@@ -239,10 +247,11 @@ function selectDeclared(
 	entries: [string, string][],
 	files: Map<string, File>,
 	objects: Set<string>,
+	empty: Set<string>,
 	declared: ReadonlySet<string>
 ): Params {
 	if (declared.size === 0) {
-		return new Params(entries, files, objects)
+		return new Params(entries, files, objects, empty)
 	}
 	const last = new Map<string, string>()
 	for (const [key, value] of entries) {
@@ -250,10 +259,16 @@ function selectDeclared(
 			last.set(key, value)
 		}
 	}
-	return new Params([...entries.filter(([key]) => !declared.has(key)), ...last], files, objects)
+	return new Params([...entries.filter(([key]) => !declared.has(key)), ...last], files, objects, empty)
 }
 
-type Flattening = { entries: [string, string][]; objects: Set<string>; paths: number; units: number }
+type Flattening = {
+	entries: [string, string][]
+	objects: Set<string>
+	empty: Set<string>
+	paths: number
+	units: number
+}
 
 // Charges one generated key before its string is built: past MAX_PARAM_PATHS object keys, array objects and empty
 // lists, or PARAM_PATH_BUDGET code units of every generated key, the body is refused (413).
@@ -270,10 +285,11 @@ function flatten(value: unknown, state: Flattening, prefix = '', depth = 0): voi
 		throw new ParamsRefused(400)
 	}
 	if (Array.isArray(value)) {
-		// An empty array reads as `name[]=` with no value, as a form sends an empty list.
+		// An empty array reads as `name[]=` with no value, as a form sends an empty list, and is marked as one (list).
 		if (value.length === 0 && prefix !== '') {
 			charge(state, prefix, '')
 			state.entries.push([`${prefix}[]`, ''])
+			state.empty.add(prefix)
 		}
 		value.forEach((item, index) => {
 			const scalar = item === null || typeof item !== 'object'

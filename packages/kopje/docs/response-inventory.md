@@ -47,7 +47,8 @@ boundary.
 | `search`                                                                    | Budget over accounts (the resolved account first), statuses and hashtags      | Offset       |
 | `profilePage`                                                               | Budget shared by the account and its statuses                                 | Id cursor    |
 | `statusPage`, `embeddedStatus`, `resolveSearch`                             | Unit                                                                          |              |
-| `getStatus`, `createStatus`, `postStatus`, `editStatus`, `deleteStatus`     | Unit                                                                          |              |
+| `getStatus`, `postStatus`, `editStatus`, `deleteStatus`                     | Unit                                                                          |              |
+| `postStatus` refused for unexpected mentions                                | Budget over its unexpected accounts, in mention order                         | None         |
 | `favourite`, `unfavourite`, `reblog`, `unreblog`, `bookmark`, `unbookmark`  | Unit                                                                          |              |
 | `pin`, `unpin`, `muteConversation`, `unmuteConversation`, `getPoll`, `vote` | Unit                                                                          |              |
 | `listConversations`                                                         | Budget: whole conversations (12 participants each, cut in SQL)                | Id cursor    |

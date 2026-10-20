@@ -29,14 +29,12 @@ export const PARAM_EXCEPTIONS: Exceptions = {
 		'username'
 	),
 	'POST /api/v1/emails/confirmations': accepted('MD-1', 'email'),
-	'POST /api/v1/statuses': open('ignored (Mastodon answers 422 with unexpected_accounts)', 'allowed_mentions[]'),
 	'PUT /api/v1/statuses/:id': open('the thumbnail file is dropped', 'media_attributes[][thumbnail]'),
 	'PATCH /api/v1/statuses/:id': open('the thumbnail file is dropped', 'media_attributes[][thumbnail]'),
 	'POST /api/v1/media': open('the thumbnail file is dropped', 'thumbnail'),
 	'POST /api/v2/media': open('the thumbnail file is dropped', 'thumbnail'),
 	'PUT /api/v1/media/:id': open('the thumbnail file is dropped', 'thumbnail'),
 	'PATCH /api/v1/media/:id': open('the thumbnail file is dropped', 'thumbnail'),
-	'GET /api/v2/search': open('ignored', 'exclude_unreviewed'),
 	'POST /api/v1/admin/accounts/:account_id/action': open(
 		'no warning or notification reaches a local target',
 		'send_email_notification',

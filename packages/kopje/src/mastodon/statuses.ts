@@ -16,7 +16,14 @@ import { type Params, parseBoolean } from './params'
 import { API_VISIBILITIES, type ApiVisibility, QUOTE_POLICY_NAMES, type QuotePolicyName } from '../domain/audience'
 import { checkPoll, isPollInput, type PollInput } from '../domain/polls'
 import { exceedsRawLength, statusLength } from '../domain/status-text'
-import { type Acted, MAX_STATUSES_BY_ID, type MediaAttributes, TOO_MANY_FILES, type Viewed } from '../domain/statuses'
+import {
+	type Acted,
+	MAX_STATUSES_BY_ID,
+	type MediaAttributes,
+	TOO_MANY_FILES,
+	UNEXPECTED_MENTIONS,
+	type Viewed,
+} from '../domain/statuses'
 import { sha256Hex } from '../security/tokens'
 
 // /api/v1/statuses (B4a): posting, editing, deleting, the per-status reads, favourite, reblog and bookmark, pins and
@@ -97,8 +104,9 @@ function pollOf(p: Params): PollInput | string | undefined {
 }
 
 // What POST and PUT share: text, spoiler, sensitive, language, media and a poll, with Mastodon's request validation:
-// the media first (PostStatusService#validate_media!, which also refuses media with a poll), then the text, then the
-// poll.
+// the number of media first (PostStatusService#validate_media!'s too_many, which also refuses media with a poll), then
+// the text, then the poll. Which ids are usable is the Store's (statuses.ts mediaToAttach), checked after these. An
+// empty entry is no id, so JSON `media_ids: []` (which the parser reads as one empty entry) removes an edit's media.
 function composition(p: Params): Composition | string {
 	const text = p.get('status') ?? ''
 	const spoilerText = p.get('spoiler_text') ?? ''
@@ -227,6 +235,8 @@ export const createStatus: ApiHandler = async (c, deps) => {
 		inReplyToId,
 		quotedStatusId,
 		quotePolicy,
+		// Strong params permit allowed_mentions as an array only: a scalar is dropped (Params#list).
+		allowedMentions: p.list('allowed_mentions'),
 		idempotencyKey,
 		objectId: crypto.randomUUID(),
 		now: deps.now(),
@@ -245,6 +255,9 @@ export const createStatus: ApiHandler = async (c, deps) => {
 			return QUOTE_NOT_FOUND()
 		case 'invalid':
 			return mastodonError(422, result.error)
+		case 'unexpected_mentions':
+			// StatusesController#create rescues UnexpectedMentionsError with the accounts (REST::AccountSerializer).
+			return c.json({ error: UNEXPECTED_MENTIONS, unexpected_accounts: result.accounts }, 422)
 	}
 }
 

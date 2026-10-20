@@ -364,13 +364,14 @@ describe('custom emoji images after every grace period', () => {
 					.status
 			).toBe(404)
 			expect((await h.request(`/api/v1/media/${id}`, bearer(admin.token, { method: 'DELETE' }))).status).toBe(404)
-			const posted = await post(h, admin, { status: 'x', media_ids: [id] })
-			expect(posted.media_attachments).toEqual([])
+			const refused = { error: `Media ${id} not found or already attached to another post` }
+			const posted = await h.request('/api/v1/statuses', bearer(admin.token, json({ status: 'x', media_ids: [id] })))
+			expect([posted.status, await posted.json()]).toEqual([422, refused])
 			const scheduled = await h.request(
 				'/api/v1/statuses',
 				bearer(admin.token, json({ status: 'x', media_ids: [id], scheduled_at: new Date(NOW + DAY).toISOString() }))
 			)
-			expect(await scheduled.json()).toMatchObject({ media_attachments: [] })
+			expect([scheduled.status, await scheduled.json()]).toEqual([422, refused])
 			expect(await sql(h.store, 'SELECT scheduled_status_id FROM media_attachments WHERE id = ?', id)).toEqual([
 				{ scheduled_status_id: null },
 			])

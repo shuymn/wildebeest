@@ -23,7 +23,8 @@ import {
 } from '../src/domain/accounts'
 import { ANSWER_BYTES } from '../src/domain/answer-budget'
 import { listAccounts, MAX_LIST_MEMBERS_ANSWERED } from '../src/domain/lists'
-import { createStatus, getStatus } from '../src/domain/statuses'
+import { postStatus } from '../src/domain/scheduled-statuses'
+import { getStatus } from '../src/domain/statuses'
 import { remoteActorInput } from '../src/federation/remote-actor'
 import { utf8Length } from '../src/platform/dump-format'
 import type { StoreOperation } from '../src/platform/store-kernel'
@@ -339,7 +340,7 @@ describe('one account has a known size (RES-2)', () => {
 				return { most, status: answer as unknown as { content: string; mentions: unknown[] } }
 			})
 		// Composed: the 300-character username resolves and is shown cut; the 64 KiB one stays text.
-		const composed = await runLongest(createStatus, {
+		const composed = await runLongest(postStatus, {
 			credential: await credential('write:statuses'),
 			text: `@${named}@remote.example @${huge.slice(0, 100)}@remote.example hi`,
 			spoilerText: '',
@@ -583,4 +584,55 @@ describe('familiar followers share the answer bytes (RES-3)', () => {
 		expect(read.profiles).toBeLessThanOrEqual(shown.length + 1 + 19 * MAX_FAMILIAR_FOLLOWERS)
 		expect(read.bytes).toBeLessThanOrEqual(ANSWER_BYTES + 20 * READ_MAX)
 	}, 60_000)
+})
+
+describe('unexpected_accounts (RES-3)', () => {
+	it('answers as many of the post’s unexpected accounts as fit, in mention order, the first always', async () => {
+		const t = await setup()
+		// As many mentions as 500 characters allow: `@a@d<i>.example ` counts three (the local part and a space), each
+		// of an account at every bound of its profile on a domain of its own.
+		const count = Math.floor(500 / 3)
+		const ids = await accounts(t, count, BASE, maximal)
+		await sql(
+			t.store,
+			`UPDATE accounts SET username = 'a', domain = 'd' || (CAST(id AS INTEGER) - CAST(?1 AS INTEGER)) || '.example'
+			WHERE id IN (SELECT value FROM json_each(?2))`,
+			String(BASE),
+			JSON.stringify(ids)
+		)
+		// Mentioned newest first, so mention order is not id order.
+		const mentioned = [...ids].reverse()
+		const text = mentioned.map((id) => `@a@d${BigInt(id) - BASE}.example`).join(' ')
+		const whole = await runInDurableObject(t.store, (_instance, state) =>
+			presentAccountsWithin(new Db(state.storage.sql), mentioned, { origin: ORIGIN }, Infinity, true)
+		)
+		expect(whole.items).toHaveLength(count)
+		expect(whole.bytes).toBeGreaterThan(ANSWER_BYTES)
+		const response = await t.request('/api/v1/statuses', {
+			method: 'POST',
+			headers: { authorization: `Bearer ${t.tokens.alice}`, 'content-type': 'application/json' },
+			body: JSON.stringify({ status: text, allowed_mentions: [] }),
+		})
+		const body = await response.text()
+		expect(response.status).toBe(422)
+		const answer = JSON.parse(body) as { error: string; unexpected_accounts: { id: string }[] }
+		expect(answer.error).toBe('Post would be sent to unexpected accounts')
+		const shown = answer.unexpected_accounts.map((a) => a.id)
+		expect(shown.length).toBeGreaterThan(0)
+		expect(shown.length).toBeLessThan(count)
+		expect(shown).toEqual(mentioned.slice(0, shown.length))
+		expect(utf8Length(body)).toBeLessThanOrEqual(ANSWER_BYTES)
+		console.log(
+			JSON.stringify({
+				event: 'unexpected-accounts',
+				mentioned: count,
+				whole: whole.bytes,
+				shown: shown.length,
+				bytes: utf8Length(body),
+			})
+		)
+		// Nothing was written.
+		expect(await sql(t.store, 'SELECT count(*) AS n FROM statuses')).toEqual([{ n: 0 }])
+		expect(await sql(t.store, 'SELECT count(*) AS n FROM outbound_activities')).toEqual([{ n: 0 }])
+	}, 120_000)
 })

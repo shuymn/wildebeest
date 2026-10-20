@@ -1240,10 +1240,6 @@ export class Store extends DurableObject<Env> {
 
 	// Statuses, timelines and notifications (B4a).
 
-	createStatus(callerBuild: string, input: OperationInput<typeof statuses.createStatus>) {
-		return this.#kernel.execute(callerBuild, statuses.createStatus, input)
-	}
-
 	editStatus(callerBuild: string, input: OperationInput<typeof statuses.editStatus>) {
 		return this.#kernel.execute(callerBuild, statuses.editStatus, input)
 	}

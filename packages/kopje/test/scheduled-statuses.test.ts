@@ -22,6 +22,7 @@ import {
 	DAILY_LIMIT,
 	MAX_ATTEMPTS,
 	PUBLISH_ROUND,
+	publishScheduled as publishOne,
 	RETRY_DELAYS_MS,
 	TOTAL_LIMIT,
 } from '../src/domain/scheduled-statuses'
@@ -87,6 +88,13 @@ async function upload(h: ApiHarness, user: User, n: number): Promise<string> {
 
 function round(h: ApiHarness, now: number, doorbell = vi.fn(() => Promise.resolve())) {
 	return publishScheduled(h.env, { build: () => BUILD, now: () => now, store: () => h.store, doorbell })
+}
+
+// The publication of the scheduled status `id` at `now`, by the Store operation itself, with its answer.
+function publishDirectly(h: ApiHarness, id: string, now: number) {
+	return runInDurableObject(h.store, (_instance, state) =>
+		publishOne.run(state.storage.sql, { id, now, objectId: crypto.randomUUID() })
+	)
 }
 
 async function count(h: ApiHarness, table: string): Promise<number> {
@@ -231,17 +239,125 @@ describe('scheduling a status', () => {
 	it('answers a repeated Idempotency-Key with what the first request made', async () => {
 		const h = await community(['alice'])
 		const { alice } = h.users
-		const body = { status: 'once', scheduled_at: at(NOW + HOUR) }
+		const body = { status: 'once', scheduled_at: at(NOW + 10 * MINUTE) }
 		const first = await (await schedule(h, alice, body, { 'Idempotency-Key': 'k1' })).json<Scheduled>()
 		const again = await (await schedule(h, alice, body, { 'Idempotency-Key': 'k1' })).json<Scheduled>()
 		expect(again).toEqual(first)
 		expect(await count(h, 'scheduled_statuses')).toBe(1)
 		// Once published, the repeat is answered with the status.
-		await round(h, NOW + HOUR)
+		await round(h, NOW + 10 * MINUTE)
 		const published = await (await schedule(h, alice, body, { 'Idempotency-Key': 'k1' })).json<Status>()
 		expect(published).toMatchObject({ content: '<p>once</p>' })
 		expect(await count(h, 'statuses')).toBe(1)
 		expect(await count(h, 'scheduled_statuses')).toBe(0)
+	})
+})
+
+describe('an Idempotency-Key expires an hour after what it made', () => {
+	const key = { 'Idempotency-Key': 'hour' }
+	const keys = async (h: ApiHarness, table: string) =>
+		(await sql<{ k: string | null }>(h.store, `SELECT client_key AS k FROM ${table} ORDER BY id`)).map((r) => r.k)
+
+	it('answers the scheduled status within the hour; at the hour a repeat posts anew and frees the key', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const first = await (
+			await schedule(h, alice, { status: 'later', scheduled_at: at(NOW + 3 * HOUR) }, key)
+		).json<Scheduled>()
+		h.now.mockReturnValue(NOW + HOUR - 1)
+		expect(await (await schedule(h, alice, { status: 'again' }, key)).json()).toEqual(first)
+		h.now.mockReturnValue(NOW + HOUR)
+		const fresh = await schedule(h, alice, { status: 'again' }, key)
+		expect(fresh.status).toBe(200)
+		expect(await fresh.json()).toMatchObject({ content: '<p>again</p>' })
+		const hash = await sha256Hex('hour')
+		expect(await keys(h, 'scheduled_statuses')).toEqual([null])
+		expect(await keys(h, 'statuses')).toEqual([hash])
+		// The older scheduled status publishes without the key, which stays with the new status.
+		await round(h, NOW + 3 * HOUR)
+		expect(await count(h, 'scheduled_statuses')).toBe(0)
+		expect(await keys(h, 'statuses')).toEqual([hash, null])
+		h.now.mockReturnValue(NOW + HOUR + 1)
+		expect(await (await schedule(h, alice, { status: 'third' }, key)).json()).toMatchObject({
+			content: '<p>again</p>',
+		})
+	})
+
+	it('a repeat that schedules again replaces the expired key without a unique error', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		await scheduled(h, alice, { status: 'one', scheduled_at: at(NOW + 3 * HOUR) })
+		await schedule(h, alice, { status: 'one', scheduled_at: at(NOW + 3 * HOUR) }, key)
+		h.now.mockReturnValue(NOW + HOUR)
+		const again = await schedule(h, alice, { status: 'two', scheduled_at: at(NOW + 4 * HOUR) }, key)
+		expect(again.status).toBe(200)
+		expect(await keys(h, 'scheduled_statuses')).toEqual([null, null, await sha256Hex('hour')])
+	})
+
+	it('keeps the key on a status published within the hour until an hour after the publication', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		await schedule(h, alice, { status: 'soon', scheduled_at: at(NOW + 10 * MINUTE) }, key)
+		await round(h, NOW + 10 * MINUTE)
+		expect(await keys(h, 'statuses')).toEqual([await sha256Hex('hour')])
+		h.now.mockReturnValue(NOW + 10 * MINUTE + HOUR - 1)
+		expect(await (await schedule(h, alice, { status: 'repeat' }, key)).json()).toMatchObject({
+			content: '<p>soon</p>',
+		})
+		h.now.mockReturnValue(NOW + 10 * MINUTE + HOUR)
+		expect(await (await schedule(h, alice, { status: 'repeat' }, key)).json()).toMatchObject({
+			content: '<p>repeat</p>',
+		})
+		expect(await keys(h, 'statuses')).toEqual([null, await sha256Hex('hour')])
+	})
+
+	it('publishes a status without the key when the key expired before the publication', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		await schedule(h, alice, { status: 'late', scheduled_at: at(NOW + 3 * HOUR) }, key)
+		await round(h, NOW + 3 * HOUR)
+		expect(await keys(h, 'statuses')).toEqual([null])
+		expect(await (await schedule(h, alice, { status: 'repeat' }, key)).json()).toMatchObject({
+			content: '<p>repeat</p>',
+		})
+	})
+
+	it('publishes without the key a row whose stored created_at is not a time, or is exactly an hour old', async () => {
+		const stored: [string, string, number][] = [
+			['now', "'now'", NOW + 10 * MINUTE],
+			['an embedded NUL', "strftime('%Y-%m-%dT%H:%M:%fZ', 'now') || char(0) || 'x'", NOW + 10 * MINUTE],
+			['an hour old', 'created_at', NOW + HOUR],
+			['an hour old less a millisecond', 'created_at', NOW + HOUR - 1],
+		]
+		for (const [name, value, publishedAt] of stored) {
+			const h = await community(['alice'])
+			const { alice } = h.users
+			const created = await scheduled(h, alice, { status: name, scheduled_at: at(NOW + 10 * MINUTE) })
+			// The key is set directly: no repeated request clears it before the publication.
+			await sql(
+				h.store,
+				`UPDATE scheduled_statuses SET client_key = 'direct', created_at = ${value} WHERE id = ?`,
+				created.id
+			)
+			const publication = await publishDirectly(h, created.id, publishedAt)
+			expect(publication, name).toMatchObject({ status: 'published' })
+			expect(await keys(h, 'statuses'), name).toEqual([publishedAt === NOW + HOUR - 1 ? 'direct' : null])
+		}
+	})
+
+	it('counts a restored created_at that is not a time Kopje writes as expired', async () => {
+		for (const stored of ["'now'", "'not a time'", "strftime('%Y-%m-%dT%H:%M:%fZ', 'now') || char(0) || 'x'"]) {
+			const h = await community(['alice'])
+			const { alice } = h.users
+			await schedule(h, alice, { status: 'kept', scheduled_at: at(NOW + 3 * HOUR) }, key)
+			await sql(h.store, `UPDATE scheduled_statuses SET created_at = ${stored}`)
+			const repeat = await schedule(h, alice, { status: 'anew' }, key)
+			expect(await repeat.json(), stored).toMatchObject({ content: '<p>anew</p>' })
+			expect(await keys(h, 'scheduled_statuses')).toEqual([null])
+			// Published, it carries no key.
+			await round(h, NOW + 3 * HOUR)
+			expect(await keys(h, 'statuses')).toEqual([await sha256Hex('hour'), null])
+		}
 	})
 })
 
@@ -251,13 +367,13 @@ describe('an Idempotency-Key shared by an immediate and a scheduled post', () =>
 		const { alice } = h.users
 		const key = { 'Idempotency-Key': 'shared' }
 		const first = await (
-			await schedule(h, alice, { status: 'once', scheduled_at: at(NOW + HOUR) }, key)
+			await schedule(h, alice, { status: 'once', scheduled_at: at(NOW + 10 * MINUTE) }, key)
 		).json<Scheduled>()
 		const now = await (await schedule(h, alice, { status: 'once' }, key)).json<Scheduled>()
 		expect(now).toEqual(first)
 		expect(await count(h, 'statuses')).toBe(0)
-		await round(h, NOW + HOUR)
-		await round(h, NOW + HOUR + 5 * MINUTE)
+		await round(h, NOW + 10 * MINUTE)
+		await round(h, NOW + 15 * MINUTE)
 		expect(await count(h, 'statuses')).toBe(1)
 		expect(await (await schedule(h, alice, { status: 'once' }, key)).json()).toMatchObject({ content: '<p>once</p>' })
 		expect(await count(h, 'statuses')).toBe(1)
@@ -386,8 +502,11 @@ describe('the scheduled_statuses endpoints', () => {
 			expiredMedia.run(state.storage.sql, { now: NOW + 2 * DAY, limit: 100 })
 		)
 		expect(due).toEqual([])
-		const other = await post(h, alice, { status: 'other', media_ids: [media] })
-		expect(other.media_attachments).toEqual([])
+		expect(await refusal(await schedule(h, alice, { status: 'other', media_ids: [media] }))).toEqual({
+			status: 422,
+			body: { error: `Media ${media} not found or already attached to another post` },
+		})
+		expect(await count(h, 'statuses')).toBe(0)
 		const credential = { tokenHash: await sha256Hex(alice.token), scope: 'write', now: NOW } as const
 		expect(
 			await h.store.updateCredentials(BUILD, {
@@ -481,6 +600,125 @@ describe('publication', () => {
 		expect(await sql(h.store, 'SELECT status_id, scheduled_status_id, gc_at FROM media_attachments')).toEqual([
 			{ status_id: null, scheduled_status_id: null, gc_at: at(NOW + HOUR + DAY) },
 		])
+	})
+
+	it('refuses to schedule unusable media, and drops a post whose held media is gone when it is due', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		expect(
+			await refusal(await schedule(h, alice, { status: 'x', media_ids: ['7'], scheduled_at: at(NOW + HOUR) }))
+		).toEqual({ status: 422, body: { error: 'Media 7 not found or already attached to another post' } })
+		expect(await count(h, 'scheduled_statuses')).toBe(0)
+		const media = await upload(h, alice, 1)
+		const held = await scheduled(h, alice, { status: 'x', media_ids: [media], scheduled_at: at(NOW + HOUR) })
+		await sql(h.store, 'DELETE FROM media_attachments WHERE id = ?', media)
+		// As PublishScheduledStatusWorker loses a post whose validate_media! raises.
+		const publication = await publishDirectly(h, held.id, NOW + HOUR)
+		expect(publication).toEqual({ status: 'dropped', reason: 'invalid' })
+		expect(await count(h, 'statuses')).toBe(0)
+		expect(await count(h, 'scheduled_statuses')).toBe(0)
+	})
+
+	it('keeps allowed_mentions as sent and checks it when it publishes, dropping a post it refuses', async () => {
+		const h = await community(['alice', 'bob'])
+		const { alice, bob } = h.users
+		const when = at(NOW + HOUR)
+		const cases: [string, Record<string, unknown> | string, unknown, boolean][] = [
+			['absent', { status: '@bob absent', scheduled_at: when }, null, true],
+			['null', { status: '@bob null', scheduled_at: when, allowed_mentions: null }, null, true],
+			['listed', { status: '@bob listed', scheduled_at: when, allowed_mentions: [bob.id] }, [bob.id], true],
+			['JSON []', { status: '@bob json', scheduled_at: when, allowed_mentions: [] }, [], false],
+			['form []=', `status=%40bob%20form&scheduled_at=${encodeURIComponent(when)}&allowed_mentions[]=`, [''], false],
+		]
+		const made = new Map<string, Scheduled>()
+		for (const [name, body, shown] of cases) {
+			const response =
+				typeof body === 'string'
+					? await h.request(
+							'/api/v1/statuses',
+							bearer(alice.token, {
+								method: 'POST',
+								headers: { 'content-type': 'application/x-www-form-urlencoded' },
+								body,
+							})
+						)
+					: await schedule(h, alice, body)
+			expect(response.status, name).toBe(200)
+			const created = await response.json<Scheduled>()
+			expect(created.params.allowed_mentions, name).toEqual(shown)
+			const read = await getJson<Scheduled>(h, `/api/v1/scheduled_statuses/${created.id}`, alice.token)
+			expect(read.body.params.allowed_mentions, name).toEqual(shown)
+			made.set(name, created)
+		}
+		const media = await upload(h, alice, 1)
+		const refused = await scheduled(h, alice, {
+			status: '@bob with media',
+			media_ids: [media],
+			scheduled_at: when,
+			allowed_mentions: [],
+		})
+		const publish = (id: string) => publishDirectly(h, id, NOW + HOUR)
+		for (const [name, , , publishes] of cases) {
+			const publication = await publish(made.get(name)!.id)
+			expect(publication, name).toMatchObject(
+				publishes ? { status: 'published' } : { status: 'dropped', reason: 'unexpected_mentions' }
+			)
+		}
+		expect(await publish(refused.id)).toEqual({ status: 'dropped', reason: 'unexpected_mentions' })
+		expect((await sql<{ content: string }>(h.store, 'SELECT content FROM statuses ORDER BY id')).length).toBe(3)
+		expect(await count(h, 'scheduled_statuses')).toBe(0)
+		expect(await sql(h.store, 'SELECT status_id, scheduled_status_id, gc_at FROM media_attachments')).toEqual([
+			{ status_id: null, scheduled_status_id: null, gc_at: at(NOW + HOUR + DAY) },
+		])
+	})
+
+	it('keeps numbers in allowed_mentions as strings, and publishes an imported media id with leading zeros', async () => {
+		const h = await community(['alice', 'bob'])
+		const { alice, bob } = h.users
+		const created = await scheduled(h, alice, {
+			status: `@bob numbers`,
+			scheduled_at: at(NOW + HOUR),
+			allowed_mentions: [Number(bob.id.slice(0, 15))],
+		})
+		expect(created.params.allowed_mentions).toEqual([bob.id.slice(0, 15)])
+		const read = await getJson<Scheduled>(h, `/api/v1/scheduled_statuses/${created.id}`, alice.token)
+		expect(read.body.params.allowed_mentions).toEqual([bob.id.slice(0, 15)])
+		const imported = '000000000000000123'
+		await sql(
+			h.store,
+			`INSERT INTO media_attachments (id, account_id, type, url, file_token, processed, gc_at)
+			VALUES (?, ?, 'image', 'https://kopje.test/files/z/full', 'z', 1, ?)`,
+			imported,
+			alice.id,
+			at(NOW + DAY)
+		)
+		const held = await scheduled(h, alice, { status: 'zeros', media_ids: [imported], scheduled_at: at(NOW + HOUR) })
+		expect(held.params.media_ids).toEqual([imported])
+		await round(h, NOW + HOUR)
+		expect(
+			await sql(h.store, 'SELECT status_id IS NOT NULL AS attached FROM media_attachments WHERE id = ?', imported)
+		).toEqual([{ attached: 1 }])
+	})
+
+	it('publishes a restored row without allowed_mentions, and drops one with another shape as params', async () => {
+		const h = await community(['alice', 'bob'])
+		const { alice } = h.users
+		const restored: [string, (params: Record<string, unknown>) => void, string][] = [
+			['absent', (params) => delete params.allowed_mentions, 'published'],
+			['null', (params) => (params.allowed_mentions = null), 'published'],
+			['a string', (params) => (params.allowed_mentions = 'x'), 'params'],
+			['numbers', (params) => (params.allowed_mentions = [1]), 'params'],
+		]
+		for (const [name, change, outcome] of restored) {
+			const created = await scheduled(h, alice, { status: `@bob ${name}`, scheduled_at: at(NOW + HOUR) })
+			const params = { ...created.params }
+			change(params)
+			await sql(h.store, 'UPDATE scheduled_statuses SET params = ? WHERE id = ?', JSON.stringify(params), created.id)
+			const publication = await publishDirectly(h, created.id, NOW + HOUR)
+			expect(publication, name).toMatchObject(
+				outcome === 'published' ? { status: 'published' } : { status: 'dropped', reason: 'params' }
+			)
+		}
 	})
 
 	it('waits while the Store is readonly, then publishes', async () => {

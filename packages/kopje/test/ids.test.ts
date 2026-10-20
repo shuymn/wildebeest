@@ -3,7 +3,15 @@ import { runInDurableObject } from 'cloudflare:test'
 import { describe, expect, it } from 'vitest'
 
 import { BUILD, freshStore, migratedStore, testKernel } from './helpers'
-import { allocateLocalId, cryptoRandomInt, insertWithFreshId, type RandomInt, remoteId } from '../src/domain/ids'
+import {
+	allocateLocalId,
+	cryptoRandomInt,
+	insertWithFreshId,
+	type RandomInt,
+	remoteId,
+	requestedId,
+	storedIdOf,
+} from '../src/domain/ids'
 import { writeOperation } from '../src/domain/operation'
 
 const NOW = Date.parse('2026-10-12T12:34:56.789Z')
@@ -101,5 +109,78 @@ describe('ID generator', () => {
 				insertWithFreshId('accounts', () => remoteId('2026-10-12T00:00:00Z', NOW, fixed(3)), insert('https://x.test/1'))
 			).toThrow('UNIQUE constraint failed: accounts.uri')
 		})
+	})
+})
+
+describe('requestedId', () => {
+	// Each input with what Ruby's String#to_i gives for it (measured with Ruby; Mastodon's `.map(&:to_i)`).
+	const RUBY: [string, string][] = [
+		['', '0'],
+		['abc', '0'],
+		[' 12', '12'],
+		['\t\n\v\f\r 7', '7'],
+		['\u00a07', '0'],
+		['\u30007', '0'],
+		['\u00007', '0'],
+		['1_0', '10'],
+		['1_2_3', '123'],
+		['_1', '0'],
+		['1_', '1'],
+		['1__2', '1'],
+		['0_1', '1'],
+		['0__1', '0'],
+		['00_1', '1'],
+		['0_', '0'],
+		['0012', '12'],
+		['07', '7'],
+		['0d12', '12'],
+		['0D12', '12'],
+		['+0d12', '12'],
+		['-0d12', '-12'],
+		[' +0d00_12', '12'],
+		['0d', '0'],
+		['0d_1', '0'],
+		['0d+1', '0'],
+		['0d0d1', '0'],
+		['0d1_2', '12'],
+		['0d1__2', '1'],
+		['0_d1', '0'],
+		['0x10', '0'],
+		['0b1', '0'],
+		['0o7', '0'],
+		['+5', '5'],
+		['-12', '-12'],
+		['- 5', '0'],
+		['+-1', '0'],
+		['-_1', '0'],
+		['-0', '0'],
+		['-00_0', '0'],
+		['-0d0', '0'],
+		['12abc', '12'],
+		['1 2', '1'],
+		['100000000000000001 ', '100000000000000001'],
+		['9007199254740993', '9007199254740993'],
+		['0d9007199254740993', '9007199254740993'],
+		['-99999999999999999999999', '-99999999999999999999999'],
+	]
+
+	it.each(RUBY)('reads %j as Ruby does', (input, expected) => {
+		expect(requestedId(input)).toBe(expected)
+	})
+
+	it('gives the stored form of a normalized id: 18 characters, padded with zeros', () => {
+		expect(storedIdOf('123')).toBe('000000000000000123')
+		expect(storedIdOf('0')).toBe('000000000000000000')
+		expect(storedIdOf('117424993075228525')).toBe('117424993075228525')
+		expect(storedIdOf('1'.repeat(19))).toBe('1'.repeat(19))
+		expect(storedIdOf('-12')).toBe('-12')
+	})
+
+	it('is never longer than its input', () => {
+		for (const [input] of RUBY) {
+			expect(requestedId(input).length).toBeLessThanOrEqual(Math.max(input.length, 1))
+		}
+		const long = `${'0'.repeat(100_000)}${'9'.repeat(100_000)}x`
+		expect(requestedId(long)).toBe('9'.repeat(100_000))
 	})
 })

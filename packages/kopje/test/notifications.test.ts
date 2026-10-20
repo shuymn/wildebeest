@@ -58,6 +58,14 @@ describe('notifications', () => {
 		expect(await types('?types[]=mention&types[]=follow')).toEqual(['follow', 'mention'])
 		expect(await types('?exclude_types[]=follow&exclude_types[]=mention')).toEqual(['favourite'])
 		expect(await types(`?account_id=${bob.id}`)).toEqual(['favourite'])
+		// As Mastodon's `params.permit(types: [])` and Notification.select_types: an empty value matches no type, a
+		// scalar is dropped, and an empty excluded type excludes nothing.
+		expect(await types('?types[]=')).toEqual([])
+		expect(await types('?types[]=&types[]=mention')).toEqual(['mention'])
+		expect(await types('?types=mention')).toEqual(['follow', 'mention', 'favourite'])
+		expect(await types('?exclude_types=mention')).toEqual(['follow', 'mention', 'favourite'])
+		expect(await types('?exclude_types[]=')).toEqual(['follow', 'mention', 'favourite'])
+		expect(await types('?types[]=bogus')).toEqual([])
 	})
 
 	it('pages with a Link header', async () => {

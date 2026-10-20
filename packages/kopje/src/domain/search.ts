@@ -8,6 +8,7 @@ import { presentation, presentStatusesWithin, type Status } from './status-prese
 import { statusCursor } from './statuses'
 import { normalizeTag } from './tag-name'
 import { presentTags, type Tag } from './tags'
+import { tagReviewedSql } from './trends'
 import type { Db } from '../db/sql'
 
 // GET /api/v2/search (design §6, "search"): local data only, matched with instr on search_text (NFKC); no virtual
@@ -48,13 +49,16 @@ export type SearchRequest = {
 	limit: number
 	offset: number
 	following: boolean
+	// exclude_unreviewed (Tag.search_for): only hashtags the admin reviewed (trends.ts tagReviewedSql), and the exact
+	// match.
+	excludeUnreviewed?: boolean
 	accountId?: string
 	maxId?: string
 	minId?: string
 	localDomain: string
 	present: Present
 	// The account resolve=true found (remote-statuses.ts resolveSearch), shown first among the accounts, as Mastodon's
-	// AccountSearchService puts the exact match first, when the viewer may find it.
+	// AccountSearchService puts the exact match first, when the viewer may find it and, with `following`, follows it.
 	resolvedAccountId?: string
 }
 
@@ -80,14 +84,20 @@ export const search = userReadOperation<SearchRequest, SearchResults>((db, input
 	return { accounts: accounts.items, statuses: statuses.items, hashtags: admit(hashtags, left, leading).items }
 })
 
-// The accounts' ids: the account resolve=true found, when the viewer may find it (findableBySql, R14), then the
-// search's own, within the limit.
+// The accounts' ids: the account resolve=true found, when the viewer may find it (findableBySql, R14) and, with
+// `following`, follows it (accepted; AccountSearchService#exact_match), then the search's own, within the limit.
 function accountIds(db: Db, input: SearchRequest, viewer: UserContext): string[] {
 	const found = findAccountIds(db, input, viewer.accountId)
 	const resolved = input.resolvedAccountId
 	if (
 		resolved === undefined ||
-		db.first(`SELECT 1 AS found WHERE ${findableBySql('?2', '?1')}`, viewer.accountId, resolved) === undefined
+		db.first(
+			`SELECT 1 AS found WHERE ${findableBySql('?2', '?1')} AND (?3 = 0 OR EXISTS (SELECT 1 FROM follows f
+				WHERE f.account_id = ?1 AND f.target_account_id = ?2 AND f.state = 'accepted'))`,
+			viewer.accountId,
+			resolved,
+			input.following ? 1 : 0
+		) === undefined
 	) {
 		return found
 	}
@@ -182,7 +192,8 @@ function searchStatuses(db: Db, input: SearchRequest, viewer: UserContext) {
 const PREFIX_END = '\u{10FFFF}'
 
 // Tags whose name starts with the query, from the statuses in the two windows that the viewer may see (see above), exact
-// match first, then shorter names.
+// match first, then shorter names. With excludeUnreviewed, only reviewed tags and the exact match, filtered before the
+// page (Tag.search_for: `matching_name(term).or(reviewed)`).
 function searchHashtags(db: Db, input: SearchRequest, { accountId: viewerId, now }: UserContext): Hashtag[] {
 	// Tag.matches_name: the query normalized as a hashtag name, so spaces and other characters a hashtag cannot hold
 	// are dropped from it.
@@ -192,14 +203,16 @@ function searchHashtags(db: Db, input: SearchRequest, { accountId: viewerId, now
 	}
 	const rows = db.all<{ name: string }>(
 		// The Store's SQLite allows five terms per compound SELECT, so the windows are two CTEs. CROSS JOIN keeps the
-		// windows on the outside: tags are looked up per visible status, never scanned by name.
+		// windows on the outside: statuses are looked up by id per candidate (the index named, so statistics of a small
+		// Store cannot turn it into a scan per candidate), and tags per visible status, never scanned by name.
 		`WITH library(id) AS (${librarySources('?4', () => '', false)}),
 		public(id) AS (SELECT id FROM statuses WHERE visibility = 'public' AND reblog_of_id IS NULL ORDER BY id DESC LIMIT ?5),
 		candidates(id) AS (SELECT id FROM library UNION SELECT id FROM public),
-		visible(id) AS (SELECT s.id FROM candidates c JOIN statuses s ON s.id = c.id WHERE ${listableSql('s', '?1', '?8')})
+		visible(id) AS (SELECT s.id FROM candidates c
+			CROSS JOIN statuses s INDEXED BY sqlite_autoindex_statuses_1 ON s.id = c.id WHERE ${listableSql('s', '?1', '?8')})
 		SELECT DISTINCT ${tagNameSql('t.name')} AS name FROM visible v
 			CROSS JOIN status_tags t ON t.status_id = v.id AND t.name >= ?2 AND t.name < ?3
-		WHERE ${tagNameSql('t.name')} IS NOT NULL
+		WHERE ${tagNameSql('t.name')} IS NOT NULL AND (?9 = 0 OR t.name = ?2 OR ${tagReviewedSql('t.name')})
 		ORDER BY t.name = ?2 DESC, length(t.name), t.name LIMIT ?6 OFFSET ?7`,
 		viewerId,
 		prefix,
@@ -208,7 +221,8 @@ function searchHashtags(db: Db, input: SearchRequest, { accountId: viewerId, now
 		HASHTAG_PUBLIC_WINDOW,
 		input.limit,
 		input.offset,
-		now
+		now,
+		input.excludeUnreviewed === true ? 1 : 0
 	)
 	return presentTags(
 		db,

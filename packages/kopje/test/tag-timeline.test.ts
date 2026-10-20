@@ -29,6 +29,7 @@ const QUERIES: Query[] = [
 	{ tag: 'cats', any: ['dogs'], all: ['birds'], none: [], local: false, remote: false, onlyMedia: false },
 	{ tag: 'cats', any: ['dogs'], all: [], none: [], local: true, remote: false, onlyMedia: false },
 	{ tag: 'cats', any: ['birds'], all: [], none: [], local: false, remote: true, onlyMedia: true },
+	{ tag: 'cats', any: ['dogs'], all: [], none: [], local: true, remote: true, onlyMedia: true },
 ]
 
 // A list of names as the query binds it: normalized, each once.
@@ -42,7 +43,7 @@ function previousSql(q: Query, ascending: boolean): string {
 				WHERE NOT EXISTS (SELECT 1 FROM status_tags st WHERE st.status_id = s.id AND st.name = t.value))
 			AND NOT EXISTS (SELECT 1 FROM status_tags st WHERE st.status_id = s.id AND st.name IN (SELECT value FROM json_each(?7)))
 			AND s.visibility = 'public' AND s.reblog_of_id IS NULL
-			${q.local ? 'AND pa.domain IS NULL' : ''} ${q.remote ? 'AND pa.domain IS NOT NULL' : ''}
+			${q.local && !q.remote ? 'AND pa.domain IS NULL' : ''} ${q.remote && !q.local ? 'AND pa.domain IS NOT NULL' : ''}
 			${q.onlyMedia ? 'AND EXISTS (SELECT 1 FROM media_attachments pm WHERE pm.status_id = s.id)' : ''}
 			AND ${listableSql('s', '?1', '?8')}
 			AND (?2 IS NULL OR s.id < ?2) AND (?3 IS NULL OR s.id > ?3)

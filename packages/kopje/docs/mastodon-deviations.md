@@ -85,3 +85,23 @@ Request parameters:
   more than 2,097,152 UTF-16 code units together, answers 413; one nested more than 32 levels answers 400 (Rack's `param_depth_limit`).
 - An empty JSON object counts as sent: `{"fields_attributes":{}}` clears the fields and `{"home":{}}` saves the home
   marker, as in Mastodon; `{"poll":{}}` is still no poll.
+
+Posting (`POST` and `PUT /api/v1/statuses`):
+
+- A form's empty `media_ids[]=` reads as no media, the same as JSON `[]` (which removes an edit's media); Mastodon
+  answers 422 `Media 0 not found or already attached to another post` for the form's.
+- Media a scheduled status holds cannot be attached by another post (422, not found); Mastodon attaches it, and the
+  scheduled post is then lost when it is published.
+- An upload is processed before its answer, so no media id is ever still processing: an unfinished upload reads as
+  not found (no `not_ready`).
+- Text length, the poll, `scheduled_at` and the visibility are checked before the media ids and `allowed_mentions`;
+  Mastodon checks the media first.
+- `allowed_mentions[]` is compared with the mentions Kopje writes: accounts it already knows (nothing is fetched), not
+  blocked by the author and not suspended. `unexpected_accounts` lists the accounts that fit the 8 MiB answer, in
+  mention order. A scheduled post's parameters, the list included, must fit 128 KiB of JSON (`Record invalid`); the
+  list is checked when the post is published, and a post it refuses is dropped, as in Mastodon. Numbers sent in a JSON
+  list are kept as strings in `params.allowed_mentions` (Mastodon keeps the JSON types).
+- An `Idempotency-Key` lasts one hour after the status or scheduled status it made; a scheduled post published within
+  that hour keeps it until one hour after its publication. A repeated key answers the scheduled status it made
+  (Mastodon answers 404 for an immediate repeat), and a key whose status was deleted posts anew (Mastodon answers 404
+  within the hour).

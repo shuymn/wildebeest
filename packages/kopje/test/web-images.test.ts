@@ -82,7 +82,10 @@ describe('profile images', () => {
 				'/api/v1/statuses',
 				bearer(alice.token, json({ status: 'x', media_ids: [row.id] }))
 			)
-			expect((await attach.json<{ media_attachments: unknown[] }>()).media_attachments).toEqual([])
+			expect([attach.status, await attach.json()]).toEqual([
+				422,
+				{ error: `Media ${row.id} not found or already attached to another post` },
+			])
 		}
 		// The page shows the new avatar.
 		expect(await (await h.request('/@alice')).text()).toContain(`src="${urls?.avatar_url}"`)

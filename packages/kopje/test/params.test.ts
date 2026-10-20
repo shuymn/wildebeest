@@ -247,3 +247,29 @@ describe('readParams: JSON path expansion', () => {
 		expect(p.sentObject('notifications')).toBe(false)
 	})
 })
+
+describe('Params#list', () => {
+	const json = (value: unknown, query = '') => read(post(JSON.stringify(value), 'application/json', query))
+	const urlencoded = (value: string, query = '') => read(post(value, 'application/x-www-form-urlencoded', query))
+
+	it('reads JSON [] as an empty list and a form name[]= as one blank value, as Rails permits them', async () => {
+		expect((await json({ a: [] })).list('a')).toEqual([])
+		expect((await urlencoded('a[]=')).list('a')).toEqual([''])
+		expect((await json({ a: ['1', ''] })).list('a')).toEqual(['1', ''])
+		expect((await json({})).list('a')).toBeUndefined()
+		expect((await json({ a: null })).list('a')).toBeUndefined()
+		// A scalar is not a list (strong parameters drop it).
+		expect((await json({ a: '1' })).list('a')).toBeUndefined()
+		expect((await urlencoded('a=1')).list('a')).toBeUndefined()
+		// Nested names and the query's own entries.
+		expect((await json({ o: { a: [] } })).list('o[a]')).toEqual([])
+		expect((await json({ a: [] }, '?a[]=2')).list('a')).toEqual(['2'])
+		expect((await urlencoded('a[]=', '?a[]=')).list('a')).toEqual(['', ''])
+	})
+
+	it('keeps has() and getAll() of a JSON [] as they were', async () => {
+		const p = await json({ a: [] })
+		expect(p.has('a')).toBe(true)
+		expect(p.getAll('a')).toEqual([''])
+	})
+})

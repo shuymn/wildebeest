@@ -152,6 +152,26 @@ describe('GET /api/v2/search', () => {
 		void alice
 	})
 
+	it('lists only reviewed hashtags and the exact match with exclude_unreviewed (Tag.search_for)', async () => {
+		const { h, search } = await fixture()
+		await post(h, h.users.bob, { status: '#catnip #catalog #cats' })
+		// Either decision is a review (Reviewable#reviewed?: reviewed_at is set by an approve and a reject).
+		await sql(
+			h.store,
+			`INSERT INTO tag_trend_reviews (name, trendable, reviewed_at)
+			VALUES ('catnip', 1, '2026-10-01T00:00:00.000Z'), ('catalog', 0, '2026-10-01T00:00:00.000Z')`
+		)
+		const names = async (q: string, extra = '') =>
+			(await search(q, `&type=hashtags${extra}`)).hashtags.map((t) => t.name)
+		expect(await names('cat')).toEqual(['cats', 'catnip', 'catalog'])
+		expect(await names('cat', '&exclude_unreviewed=true')).toEqual(['catnip', 'catalog'])
+		expect(await names('cats', '&exclude_unreviewed=true')).toEqual(['cats'])
+		expect(await names('cat', '&exclude_unreviewed=false')).toEqual(['cats', 'catnip', 'catalog'])
+		// The filter comes before the page: the offset skips over reviewed tags only.
+		expect(await names('cat', '&exclude_unreviewed=true&offset=1')).toEqual(['catalog'])
+		expect(await names('cat', '&exclude_unreviewed=true&limit=1')).toEqual(['catnip'])
+	})
+
 	it('answers every type by default, accounts included, and an unknown type with nothing', async () => {
 		const { h, search } = await fixture()
 		await remoteAccount(h.store, 'alicia', 'remote.example')

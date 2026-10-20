@@ -31,15 +31,8 @@ import {
 } from '../src/domain/deliveries'
 import type { NotificationType } from '../src/domain/notifications'
 import { POLICIES } from '../src/domain/push'
-import {
-	createStatus,
-	deleteStatus,
-	editStatus,
-	favourite,
-	reblog,
-	unfavourite,
-	unreblog,
-} from '../src/domain/statuses'
+import { postStatus } from '../src/domain/scheduled-statuses'
+import { deleteStatus, editStatus, favourite, reblog, unfavourite, unreblog } from '../src/domain/statuses'
 import type { StoreStub } from '../src/platform/store-client'
 import type { StoreOperation } from '../src/platform/store-kernel'
 
@@ -953,7 +946,7 @@ function check(sql: SqlStorage, c: Case, saw: Set<Scenario>): string[] {
 		switch (action.kind) {
 			case 'post': {
 				const parent = action.reply ? pick(originals, action.target) : undefined
-				run(createStatus, {
+				run(postStatus, {
 					...credential(author),
 					text: `${text} post`,
 					visibility: action.visibility,

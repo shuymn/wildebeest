@@ -444,9 +444,11 @@ export type PublicTimelineInput = {
 
 // Local and remote public statuses that are not boosts, and not replies except to the author's own statuses
 // (Mastodon's PublicFeed). Never unlisted, private, direct or limited. The list rule (listableSql) follows these.
+// `local` and `remote` together select both, as PublicFeed#local_only? and #remote_only? read them (with Mastodon's
+// feed access settings open to everyone, the only setting Kopje has).
 function publicConditions(local: boolean, remote: boolean, onlyMedia: boolean): string {
 	return `s.visibility = 'public' AND s.reblog_of_id IS NULL
-		${local ? 'AND pa.domain IS NULL' : ''} ${remote ? 'AND pa.domain IS NOT NULL' : ''}
+		${local && !remote ? 'AND pa.domain IS NULL' : ''} ${remote && !local ? 'AND pa.domain IS NOT NULL' : ''}
 		${onlyMedia ? 'AND EXISTS (SELECT 1 FROM media_attachments pm WHERE pm.status_id = s.id AND pm.shown = 1)' : ''}`
 }
 
