@@ -2,7 +2,15 @@ import { errorFields, errorMessage } from './error-message'
 import { type MaintenanceReason, storeMaintenanceError } from './store-errors'
 import { activeDump, admitFlags, PITR_RESTORING, readFlags, rebuildLeaseLive } from './store-flags'
 
-export type Migration = { readonly name: string; readonly sql: string }
+export type Migration = {
+	readonly name: string
+	readonly sql: string
+	// 'unchanged': a reviewed claim that the file creates, drops, rebuilds or renames no table, adds no reference and
+	// removes or replaces no key. test/migration-lint.test.ts holds a declared file to statements that cannot (a guard
+	// against an author's mistake, not a proof against a hostile file: migrations are written and reviewed here) and
+	// applies it to a populated Store. Not checksummed. Without it, the upgrade checks every reference in the Store.
+	readonly foreignKeys?: 'unchanged'
+}
 
 // What an operation does, so the Store can apply the maintenance table (design §4) itself:
 //   read    : reads only
@@ -292,6 +300,11 @@ export class StoreKernel {
 			return this.#defer(blocked)
 		}
 
+		const pending = expected.filter((m) => pendingOf(schema).includes(m.name))
+		// The foreign-key check is skipped only when this run wrote the marker, so it applies every file it verifies, and
+		// each declares foreignKeys: 'unchanged'. A marker-bearing run (resumed, retried or verification only) cannot
+		// vouch for files applied before it and checks the whole Store.
+		const scoped = state.upgrading === null && pending.every((m) => m.foreignKeys === 'unchanged')
 		let phase: UpgradePhase = 'bookmark'
 		let marker = state.upgrading
 		let current: string | null = null
@@ -312,10 +325,15 @@ export class StoreKernel {
 				marker = started
 				this.#state = { ...state, upgrading: started }
 			}
-			this.#log({ event: 'kopje.store.upgrade.start', bookmark: marker.bookmark, pending: pendingOf(schema) })
+			this.#log({
+				event: 'kopje.store.upgrade.start',
+				bookmark: marker.bookmark,
+				pending: pendingOf(schema),
+				foreignKeyCheck: scoped ? 'skipped' : 'store',
+			})
 
 			phase = 'apply'
-			for (const migration of expected.filter((m) => pendingOf(schema).includes(m.name))) {
+			for (const migration of pending) {
 				current = migration.name
 				this.#transaction(() => {
 					this.#assertNotFrozen()
@@ -335,7 +353,7 @@ export class StoreKernel {
 			phase = 'verify'
 			const problem = this.#transaction(() => {
 				this.#inject('verify')
-				const found = this.#verify(expected)
+				const found = this.#verify(expected, scoped)
 				if (found === null) {
 					this.#writeState('upgrade', null)
 				}
@@ -417,10 +435,12 @@ export class StoreKernel {
 		return { ok: false, bookmark, reason, detail }
 	}
 
-	#verify(expected: ExpectedMigration[]): string | null {
-		const violations = this.#sql.exec('PRAGMA foreign_key_check').toArray()
-		if (violations.length > 0) {
-			return `foreign_key_check reported ${violations.length} violation(s)`
+	#verify(expected: ExpectedMigration[], scoped: boolean): string | null {
+		if (!scoped) {
+			const violations = this.#sql.exec('PRAGMA foreign_key_check').toArray()
+			if (violations.length > 0) {
+				return `foreign_key_check reported ${violations.length} violation(s)`
+			}
 		}
 		const schema = this.#compare(expected, this.#readApplied())
 		return schema.status === 'current' ? null : `bookkeeping is ${schema.status} after upgrade`

@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { NOW } from './app-helpers'
 import { ACCOUNT_EMOJIS_FULL, accountAtCap, padded, STATUS_EMOJIS_FULL, statusAtCap } from './emoji-fixtures'
 import { BUILD, freshStore, migratedStore, rejectionOf, tableNames, testKernel as kernel } from './helpers'
+import { BREAK_WITNESSES } from './migration-fixtures'
 import {
 	BOUNDED,
 	columnsSql,
@@ -2587,16 +2588,165 @@ describe('Store migration runner', () => {
 			expect(await failing.health(BUILD)).toMatchObject({ readonly: true })
 
 			// A new isolate sees every file applied but no successful verification.
-			const fresh = kernel(state, EXTRA)
+			const logs: Record<string, unknown>[] = []
+			const fresh = kernel(state, EXTRA, { log: (entry) => logs.push(entry) })
 			expect(await fresh.health(BUILD)).toMatchObject({ schema: { status: 'current' }, readonly: true, hold: null })
 			expect(await fresh.execute(BUILD, countSettings, undefined)).toBe(0)
 			await expect(fresh.execute(BUILD, putSetting, 'domain')).rejects.toThrow('kopje-maintenance: upgrade-in-progress')
 			expect(await state.storage.getAlarm()).not.toBeNull()
 
-			// The alarm re-runs verification only, then leaves readonly.
+			// The alarm re-runs verification only, over the whole Store, then leaves readonly.
 			expect(await fresh.upgrade()).toMatchObject({ ok: true, applied: [] })
+			expect(logs).toContainEqual(
+				expect.objectContaining({ event: 'kopje.store.upgrade.start', foreignKeyCheck: 'store' })
+			)
 			await fresh.execute(BUILD, putSetting, 'domain')
 			expect(await kernel(state, EXTRA).health(BUILD)).toMatchObject({ readonly: false })
+		})
+	})
+
+	// A reference no key serves, outside anything the files below touch: only a whole-Store check finds it.
+	const seedMismatch = (sql: SqlStorage) =>
+		sql.exec('CREATE TABLE fk_elsewhere (name TEXT REFERENCES accounts (display_name))')
+	const declared = (name: string, sql: string) => ({ name, sql, foreignKeys: 'unchanged' as const })
+	const DECLARED_EXTRA = [...MIGRATIONS, declared('9999_extra', 'ALTER TABLE accounts ADD COLUMN extra INTEGER;')]
+	const startLog = (logs: Record<string, unknown>[]) => logs.find((e) => e.event === 'kopje.store.upgrade.start')
+
+	it('skips the whole-Store foreign-key check on a fresh upgrade whose files are all declared unchanged', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS).upgrade()
+			seedMismatch(sql)
+			const logs: Record<string, unknown>[] = []
+
+			expect(await kernel(state, DECLARED_EXTRA, { log: (e) => logs.push(e) }).upgrade()).toMatchObject({
+				ok: true,
+				applied: ['9999_extra'],
+			})
+			// The mismatch the files did not make is still there: the upgrade did not scan the Store.
+			expect(() => sql.exec('PRAGMA foreign_key_check').toArray()).toThrow(/foreign key mismatch/)
+			expect(startLog(logs)).toMatchObject({ foreignKeyCheck: 'skipped' })
+			expect(await kernel(state, DECLARED_EXTRA).health(BUILD)).toMatchObject({ readonly: false })
+		})
+	})
+
+	it.each([
+		[
+			'an undeclared file',
+			[...MIGRATIONS, { name: '9999_extra', sql: 'ALTER TABLE accounts ADD COLUMN extra INTEGER;' }],
+		],
+		[
+			'a declared file followed by an undeclared one',
+			[...DECLARED_EXTRA, { name: '9999_more', sql: 'ALTER TABLE accounts ADD COLUMN more INTEGER;' }],
+		],
+	])('checks the whole Store on a fresh upgrade with %s', async (_label, migrations) => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			await kernel(state, MIGRATIONS).upgrade()
+			seedMismatch(state.storage.sql)
+			const logs: Record<string, unknown>[] = []
+
+			const result = await kernel(state, migrations, { log: (e) => logs.push(e) }).upgrade()
+			expect(result).toMatchObject({
+				ok: false,
+				reason: 'verify-failed',
+				detail: expect.stringMatching(/foreign key mismatch/),
+			})
+			expect(startLog(logs)).toMatchObject({ foreignKeyCheck: 'store' })
+			expect(await kernel(state, migrations).health(BUILD)).toMatchObject({ readonly: true, hold: 'verify-failed' })
+		})
+	})
+
+	it('checks the whole Store on a marker-bearing retry of declared files', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			await kernel(state, MIGRATIONS).upgrade()
+			seedMismatch(state.storage.sql)
+			expect(await kernel(state, DECLARED_EXTRA, { inject: failAt('apply') }).upgrade()).toMatchObject({
+				ok: false,
+				reason: 'upgrade-failed',
+			})
+			expect(bookkeeping(state.storage.sql).map((m) => m.name)).toEqual(NAMES)
+
+			expect(await kernel(state, DECLARED_EXTRA).retryUpgrade(BUILD)).toMatchObject({
+				ok: false,
+				reason: 'verify-failed',
+				detail: expect.stringMatching(/foreign key mismatch/),
+			})
+			expect(bookkeeping(state.storage.sql).map((m) => m.name)).toEqual([...NAMES, '9999_extra'])
+		})
+	})
+
+	it('checks the whole Store when verification alone re-runs after declared files', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			await kernel(state, MIGRATIONS).upgrade()
+			const failing = kernel(state, DECLARED_EXTRA, {
+				inject: (phase) => {
+					failAt('verify')(phase)
+					failAt('hold')(phase)
+				},
+			})
+			expect(await failing.upgrade()).toMatchObject({ ok: false, reason: 'verify-failed' })
+			seedMismatch(state.storage.sql)
+
+			// Nothing is pending, and the marker means this run cannot vouch for the files applied before it.
+			expect(await kernel(state, DECLARED_EXTRA).upgrade()).toMatchObject({
+				ok: false,
+				reason: 'verify-failed',
+				detail: expect.stringMatching(/foreign key mismatch/),
+			})
+		})
+	})
+
+	it("checks the whole Store when a new build resumes an older build's partial range of declared files", async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			await kernel(state, MIGRATIONS).upgrade()
+			const range = [
+				...MIGRATIONS,
+				declared('9999_a', 'ALTER TABLE accounts ADD COLUMN a INTEGER;'),
+				declared('9999_b', 'ALTER TABLE accounts ADD COLUMN b INTEGER;'),
+			]
+			let applies = 0
+			const secondApply = (phase: string) => {
+				if (phase === 'apply' && ++applies === 2) {
+					throw new Error('injected apply failure')
+				}
+			}
+			expect(await kernel(state, range, { build: 'old', inject: secondApply }).upgrade()).toMatchObject({
+				ok: false,
+				reason: 'upgrade-failed',
+			})
+			expect(bookkeeping(state.storage.sql).map((m) => m.name)).toEqual([...NAMES, '9999_a'])
+			seedMismatch(state.storage.sql)
+			const logs: Record<string, unknown>[] = []
+
+			// The new build clears the older build's hold, keeps its marker and applies only 9999_b.
+			expect(await kernel(state, range, { build: 'next', log: (e) => logs.push(e) }).upgrade()).toMatchObject({
+				ok: false,
+				reason: 'verify-failed',
+				detail: expect.stringMatching(/foreign key mismatch/),
+			})
+			expect(startLog(logs)).toMatchObject({ pending: ['9999_b'], foreignKeyCheck: 'store' })
+		})
+	})
+
+	it.each(BREAK_WITNESSES)('refuses $label', async ({ fixture, breaking, detail }) => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const fixed = [...MIGRATIONS, { name: '9999_a_fixture', sql: fixture }]
+			expect(await kernel(state, fixed).upgrade()).toMatchObject({ ok: true })
+			const broken = [...fixed, { name: '9999_b_break', sql: breaking }]
+
+			expect(await kernel(state, broken).upgrade()).toMatchObject({
+				ok: false,
+				reason: 'verify-failed',
+				detail: expect.stringMatching(detail),
+			})
+			expect(bookkeeping(state.storage.sql).map((m) => m.name)).toEqual([...NAMES, '9999_a_fixture', '9999_b_break'])
+			expect(await kernel(state, broken).health(BUILD)).toMatchObject({ readonly: true, hold: 'verify-failed' })
 		})
 	})
 

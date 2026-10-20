@@ -37,7 +37,13 @@ it with its own (both are the same script, so after the deploy both run the new 
     1. it records the Store's current point-in-time-recovery bookmark (`lastBookmark` in `kopje-admin health`), before
        it changes anything;
     2. it applies each pending migration in its own transaction and records it by name and checksum;
-    3. it verifies the result (`PRAGMA foreign_key_check` and the recorded migrations), and only then leaves readonly.
+    3. it verifies the result, and only then leaves readonly: the recorded migrations, and `PRAGMA foreign_key_check`
+       over the whole Store. The foreign-key check is skipped only when this upgrade started fresh (it found no upgrade
+       marker) and every migration it applies is declared `foreignKeys: 'unchanged'` in `src/db/migrations.ts`: a
+       reviewed claim that the file changes no reference and no key that a reference uses (what holds it, and against
+       what: `Migration` in `src/platform/store-kernel.ts`). An upgrade that finds the marker of an earlier attempt
+       (resumed, retried after a failure past the bookmark, or re-running verification only), or that applies an
+       undeclared file, checks the whole Store; on a large Store that check is most of the upgrade's time.
 
     An upgrade that is interrupted resumes from where it stopped. An upgrade waits for a backup dump or an import that
     is running, and starts when it ends.
