@@ -242,6 +242,15 @@ describe('announcement events at their bounds (RES-3)', () => {
 			published_at: null,
 		})
 		await h.admin.publish('200000000000000001')
+		// The review's texts: one hashtag that renders to 310 KB alone, and 600 hashtags with 8,200 quotes after them.
+		const reviewed: [string, string][] = [
+			['200000000000000002', `#${'\uFDFA'.repeat(3333)}`],
+			['200000000000000003', `${'#a '.repeat(600)}${'"'.repeat(8200)}`],
+		]
+		for (const [id, text] of reviewed) {
+			await seedAnnouncement(h.store, { id, text, published: 0, published_at: null })
+			await h.admin.publish(id)
+		}
 		await drained(h, inbox)
 		const sent = events(inbox).map((m) => ({
 			event: m.event,
@@ -252,6 +261,13 @@ describe('announcement events at their bounds (RES-3)', () => {
 		expect(sent.map((m) => [m.event, m.id])).toEqual([
 			['announcement', widest.id],
 			['announcement', '200000000000000001'],
+			['announcement', '200000000000000002'],
+			['announcement', '200000000000000003'],
+		])
+		const contents = events(inbox).map((m) => (JSON.parse(m.payload!) as { content: string }).content)
+		expect(contents.slice(2)).toEqual([
+			`<p>#${'\uFDFA'.repeat(3333)}</p>`,
+			`<p>${'#a '.repeat(599)}#a ${'&quot;'.repeat(8200)}</p>`,
 		])
 		for (const { bytes } of sent) {
 			expect(bytes).toBeLessThan(STREAM_LIMITS.payloadBytes)

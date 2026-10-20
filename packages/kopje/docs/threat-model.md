@@ -1505,9 +1505,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   _Enforced (main)_ for announcements: the CHECKs and triggers of migration `0056_announcements` (text bytes, NUL and
   blank; times; the range; publication; reaction names by bytes, controls and form; a custom emoji reaction named by its
   shortcode; 8 names per announcement), which imports meet too; the writers share their rules (`storedAnnouncementText`,
-  `isUnicodeEmoji`). A text within its bytes is within the parser's raw bound once decoded, and the rendering stops
-  summing links at the content budget, so a text of thousands of references to one account with a long URL never builds
-  them (A7 of the design); `test/migrations.test.ts` ("0056_announcements"), `test/announcement-bounds.test.ts`.
+  `isUnicodeEmoji`). A text within its bytes is within the parser's raw bound once decoded, and the rendering measures each segment's
+  HTML as it is built (text, escapes and paragraph markup included) and stops at the first that passes the content
+  budget, so what is built past the budget is one segment, at most 310,064 bytes of JSON (a hashtag of 3,333 U+FDFA,
+  NFKC-expanded and URL-encoded) (A7 of the design); `test/migrations.test.ts` ("0056_announcements"), `test/announcement-bounds.test.ts`.
 - **RES-3: lists are bounded.** Pageable lists return at most 80 items; relationships read at most 100 ids; any other
   collection names its count and byte bound. _Enforced (main):_ `src/mastodon/pagination.ts`, `MAX_RELATIONSHIP_IDS` in
   `src/domain/accounts.ts`. _Gap: neither cap is tested._ _Enforced (main)_ for search: at

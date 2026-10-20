@@ -17,11 +17,12 @@ import {
 	MAX_ANNOUNCEMENT_MENTIONS,
 	MAX_ANNOUNCEMENT_TAGS,
 	MAX_MENTION_REFS,
+	meteredContentBytes,
 	reactToAnnouncement,
 	updateAnnouncement,
 } from '../src/domain/announcements'
 import { ANSWER_BYTES, jsonBytes } from '../src/domain/answer-budget'
-import { parseStatusText, renderStatusHtml } from '../src/domain/status-text'
+import { parseStatusText, renderSegmentHtml, renderStatusHtml } from '../src/domain/status-text'
 import { streamAnnouncement } from '../src/domain/streaming'
 import { MAX_LIVE_ANNOUNCEMENTS, STATUS_EMOJIS_BYTES } from '../src/platform/stored-bounds'
 import { sha256Hex } from '../src/security/tokens'
@@ -120,6 +121,60 @@ describe('an announcement’s content (RES-3)', () => {
 		expect(fallen!.content).toBe(`<p>${'@u '.repeat(29)}@u</p>`)
 		expect(fallen!.mentions).toHaveLength(1)
 	}, 60_000)
+})
+
+describe('the content meter (A7)', () => {
+	const options = {
+		mention: (ref: { username: string }) =>
+			ref.username === 'u' ? { url: `https://r.example/?${'&'.repeat(40)}"\\`, username: 'u' } : undefined,
+		tagUrl: (name: string) => `${ORIGIN}/tags/${encodeURIComponent(name)}`,
+	}
+	it('gives the size renderStatusHtml makes, for texts of every paragraph shape', () => {
+		const texts = [
+			'',
+			'plain',
+			'  lead and trail  ',
+			'a\nb',
+			'a\n\nb',
+			'a\n\n\n\nb',
+			'a\n \nb',
+			'\n\n\na\n\n',
+			' \u3000a\u00a0\n\u2028b\ufeff ',
+			'tab\there "quote" \\ back <b>&</b> \u0001 \ud83d lone',
+			'@u and @nobody #Tag https://example.com/a?b="c" \u{1F600}',
+			'#a '.repeat(50) + '\n\n' + '@u\n'.repeat(20),
+			'日 '.repeat(100) + '\n',
+		]
+		for (const text of texts) {
+			const { segments } = parseStatusText(text)
+			expect(meteredContentBytes(segments, options), JSON.stringify(text.slice(0, 20))).toBe(
+				jsonBytes(renderStatusHtml(segments, options))
+			)
+		}
+	})
+
+	it('measures the largest single segment, the one segment built past the budget', () => {
+		const text = `#${'\uFDFA'.repeat(3333)}`
+		expect(bytes(text)).toBe(10_000)
+		const [segment] = parseStatusText(text).segments
+		const single = jsonBytes(renderSegmentHtml(segment!, options))
+		console.log(JSON.stringify({ event: 'announcement-largest-segment', bytes: single }))
+		expect(single).toBe(310_064)
+	})
+
+	it('shows the review’s texts escaped through the list, stopping at the segment that passes the budget', async () => {
+		const h = await announcementHarness(['alice'])
+		const wide = `#${'\uFDFA'.repeat(3333)}`
+		const quoted = `${'#a '.repeat(600)}${'"'.repeat(8200)}`
+		expect([bytes(wide), bytes(quoted)]).toEqual([10_000, 10_000])
+		await seedAnnouncement(h.store, { id: id(1), text: wide })
+		await seedAnnouncement(h.store, { id: id(2), text: quoted })
+		const [first, second] = await listed(h, h.users.alice.token)
+		expect(first!.content).toBe(`<p>#${'\uFDFA'.repeat(3333)}</p>`)
+		expect(second!.content).toBe(`<p>${'#a '.repeat(599)}#a ${'&quot;'.repeat(8200)}</p>`)
+		expect(first!.tags).toEqual([])
+		expect(second!.tags).toEqual([{ name: 'a', url: `${ORIGIN}/tags/a` }])
+	})
 })
 
 describe('an announcement’s mentions and hashtags (MD-4)', () => {
@@ -446,7 +501,7 @@ describe('announcement query plans at saturation, with stale statistics', () => 
 				now: Date.parse('2027-01-01T00:00:00.000Z'),
 			})
 			real.exec("INSERT INTO stream_subscriptions (account_id, stream_key, sockets) VALUES ('1', 'user', 1)")
-			streamAnnouncement(new Db(capturing('journal', /FROM stream_events WHERE id >/)), 'announcement', id(1), 'now')
+			streamAnnouncement(new Db(capturing('journal', /max\(id\) FROM stream_events/)), 'announcement', id(1), 'now')
 			const plan = (query: string) =>
 				real
 					.exec<{ detail: string }>(`EXPLAIN QUERY PLAN ${query}`)
@@ -496,7 +551,9 @@ describe('announcement query plans at saturation, with stale statistics', () => 
 			/SEARCH announcements USING (COVERING )?INDEX announcements_scheduled \(scheduled_at<\?\)/
 		)
 		expect(seen.round!.join(' / ')).toMatch(/announcements_published/)
-		expect(seen.journal!.join()).toMatch(/SEARCH stream_events USING INTEGER PRIMARY KEY \(rowid>\?\)/)
+		// The journal's span, each end one seek (journalFull).
+		expect(seen.journal).toHaveLength(1)
+		expect(seen.journal!.join()).not.toMatch(/SCAN stream_events/)
 		expect(seen.live![0]).toMatch(/SCAN announcements USING COVERING INDEX announcements_published/)
 		expect(seen.live![0]).toMatch(/(SCAN|SEARCH) announcements USING COVERING INDEX announcements_scheduled/)
 		expect(seen.total![0]).toMatch(/SCAN announcements USING COVERING INDEX/)

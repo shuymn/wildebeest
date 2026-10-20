@@ -17,6 +17,7 @@ import {
 	type MentionRef,
 	type MentionTarget,
 	parseStatusText,
+	renderSegmentHtml,
 	renderStatusHtml,
 	type Segment,
 } from './status-text'
@@ -170,31 +171,99 @@ function resolveMentions(db: Db, refs: readonly MentionRef[], origin: string): M
 	return kept
 }
 
-// The HTML of a text's segments within ANNOUNCEMENT_CONTENT_BYTES as JSON, and whether it is the linked rendering
-// (renderStatusHtml). Link markup is never cut or trimmed by the renderer's paragraphs and JSON escapes each character
-// on its own, so the links' JSON sizes summed are a lower bound of the content's: the sum is taken first, one link at
-// a time, and past the budget the links are never rendered together (a text of 3,332 references to one account with a
-// 2,048-byte URL would build 34 MB). Otherwise the linked rendering is built (at most the budget in links plus six
-// bytes per code unit of text) and kept if it fits; the fallback is the text escaped, at most 60,009 bytes.
+// The JSON size, in UTF-8 bytes with its quotes, of the content renderStatusHtml makes of a sequence of inline HTML
+// pieces, fed one at a time: it follows the paragraphs as renderStatusHtml cuts them (a run of two or more newlines
+// ends one, each is trimmed of JavaScript white space, an empty one dropped, a newline kept inside one is <br />, and
+// each is wrapped in <p></p>) without joining the pieces. `bound` is what is certain so far (the characters kept, and
+// the markup of a paragraph begun), which only grows, and is the exact size once every piece is fed.
+class ContentMeter {
+	#kept = 2
+	#begun = false
+	#trailing = 0
+	#newlines = 0
+
+	get bound(): number {
+		return this.#kept + (this.#begun ? 7 : 0)
+	}
+
+	feed(piece: string): void {
+		for (let i = 0; i < piece.length; i++) {
+			const c = piece.charCodeAt(i)
+			if (c === 0x0a) {
+				this.#newlines++
+				if (this.#newlines === 2) {
+					this.#kept += this.#begun ? 7 : 0
+					this.#begun = false
+					this.#trailing = 0
+				} else if (this.#newlines === 1 && this.#begun) {
+					this.#trailing += 6
+				}
+				continue
+			}
+			this.#newlines = 0
+			const pair = c >= 0xd800 && c <= 0xdbff && (piece.charCodeAt(i + 1) & 0xfc00) === 0xdc00
+			const bytes = pair ? 4 : charJsonBytes(c)
+			if (pair) {
+				i++
+			} else if (WHITE.test(piece[i]!)) {
+				if (this.#begun) {
+					this.#trailing += bytes
+				}
+				continue
+			}
+			this.#begun = true
+			this.#kept += this.#trailing + bytes
+			this.#trailing = 0
+		}
+	}
+}
+
+// JavaScript's trim set (WhiteSpace and LineTerminator), one code unit.
+const WHITE = /^\s$/
+
+// A UTF-16 code unit's bytes in JSON, as JSON.stringify writes it (a lone surrogate as \uXXXX).
+function charJsonBytes(c: number): number {
+	if (c === 0x22 || c === 0x5c || c === 0x08 || c === 0x0c || c === 0x0a || c === 0x0d || c === 0x09) {
+		return 2
+	}
+	if (c < 0x20 || (c >= 0xd800 && c <= 0xdfff)) {
+		return 6
+	}
+	return c < 0x80 ? 1 : c < 0x800 ? 2 : 3
+}
+
+// The content of a text's segments within ANNOUNCEMENT_CONTENT_BYTES as JSON, and whether it is the linked rendering
+// (renderStatusHtml). Each segment's inline HTML is built and measured on its own (ContentMeter), and the rendering
+// stops at the first segment that passes the budget, so what is built past the budget is at most one segment (A7 of
+// the design: a text of thousands of references to one account with a 2,048-byte URL builds a few links, not 34 MB;
+// the largest single segment, a hashtag of 3,333 U+FDFA, is about 310 KB). Within the budget the content is built
+// whole, at most the budget once trimmed; past it the text is escaped instead, at most 60,009 bytes.
 function renderContent(
 	segments: readonly Segment[],
 	options: Parameters<typeof renderStatusHtml>[1]
 ): { content: string; linked: boolean } {
 	const fallback = () => renderStatusHtml([{ kind: 'text', text: segments.map((s) => s.text).join('') }], options)
-	let links = 2
+	const meter = new ContentMeter()
 	for (const segment of segments) {
-		if (segment.kind !== 'text') {
-			// One segment alone renders as one paragraph, <p> and </p> around it.
-			links += jsonBytes(renderStatusHtml([segment], options)) - 2 - 7
-			if (links > ANNOUNCEMENT_CONTENT_BYTES) {
-				return { content: fallback(), linked: false }
-			}
+		meter.feed(renderSegmentHtml(segment, options))
+		if (meter.bound > ANNOUNCEMENT_CONTENT_BYTES) {
+			return { content: fallback(), linked: false }
 		}
 	}
 	const content = renderStatusHtml(segments, options)
 	return jsonBytes(content) <= ANNOUNCEMENT_CONTENT_BYTES
 		? { content, linked: true }
 		: { content: fallback(), linked: false }
+}
+
+// The JSON size ContentMeter gives a text's linked rendering with no mention resolved (tests compare it with
+// renderStatusHtml's).
+export function meteredContentBytes(segments: readonly Segment[], options: Parameters<typeof renderStatusHtml>[1]) {
+	const meter = new ContentMeter()
+	for (const segment of segments) {
+		meter.feed(renderSegmentHtml(segment, options))
+	}
+	return meter.bound
 }
 
 type Rendered = { content: string; linked: boolean; mentions: AnnouncementMention[]; tags: AnnouncementTag[] }

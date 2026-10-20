@@ -133,25 +133,27 @@ export type RenderOptions = {
 	tagUrl: (name: string) => string
 }
 
+// One segment's inline HTML, before paragraphs (renderStatusHtml): text escaped, a URL, a resolved mention or a
+// hashtag as its link.
+export function renderSegmentHtml(segment: Segment, options: RenderOptions): string {
+	switch (segment.kind) {
+		case 'text':
+			return escapeHtml(segment.text)
+		case 'url':
+			return linkHtml(segment.url)
+		case 'mention': {
+			const target = options.mention(segment)
+			return target === undefined
+				? escapeHtml(segment.text)
+				: `<span class="h-card"><a href="${escapeHtml(target.url)}" class="u-url mention">@<span>${escapeHtml(target.username)}</span></a></span>`
+		}
+		case 'tag':
+			return `<a href="${escapeHtml(options.tagUrl(normalizeTag(segment.name)))}" class="mention hashtag" rel="tag">#<span>${escapeHtml(segment.name)}</span></a>`
+	}
+}
+
 export function renderStatusHtml(segments: readonly Segment[], options: RenderOptions): string {
-	const inline = segments
-		.map((segment) => {
-			switch (segment.kind) {
-				case 'text':
-					return escapeHtml(segment.text)
-				case 'url':
-					return linkHtml(segment.url)
-				case 'mention': {
-					const target = options.mention(segment)
-					return target === undefined
-						? escapeHtml(segment.text)
-						: `<span class="h-card"><a href="${escapeHtml(target.url)}" class="u-url mention">@<span>${escapeHtml(target.username)}</span></a></span>`
-				}
-				case 'tag':
-					return `<a href="${escapeHtml(options.tagUrl(normalizeTag(segment.name)))}" class="mention hashtag" rel="tag">#<span>${escapeHtml(segment.name)}</span></a>`
-			}
-		})
-		.join('')
+	const inline = segments.map((segment) => renderSegmentHtml(segment, options)).join('')
 	// Every newline left in the output comes from text segments, so paragraphs can be cut on the rendered HTML.
 	return inline
 		.split(/\n{2,}/)
