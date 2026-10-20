@@ -51,9 +51,19 @@ import {
 	MAX_ENABLED_EMOJIS,
 	MAX_LIVE_ANNOUNCEMENTS,
 	MAX_REACTION_NAMES,
+	MAX_TREND_REVIEWS,
+	MAX_TREND_STATUSES,
+	MAX_TREND_TAGS,
 	REACTION_NAME_BYTES,
 	storedBoundsMigrationSql,
 	storedInstanceSetting,
+	storedSetting,
+	TREND_ALLOWED_ROWS,
+	TREND_REVIEW_POOL,
+	TREND_SCORE_MAX,
+	TREND_SETTING_BOUNDS,
+	TREND_STATUSES_PER_AUTHOR,
+	trendTagNameCheckSql,
 } from '../src/platform/stored-bounds'
 
 // The shipped migrations, in order; test-only files are named after them (9999_*).
@@ -6644,6 +6654,329 @@ describe('0056_announcements', () => {
 			expect(sql.exec<{ n: number }>('SELECT count(*) AS n FROM announcement_reactions').one().n).toBe(0)
 			expect(sql.exec<{ n: number }>('SELECT count(*) AS n FROM announcement_dismissals').one().n).toBe(0)
 			expect(sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
+		})
+	})
+})
+
+describe('0057_trends', () => {
+	const NAME = '0057_trends'
+	const at = NAMES.indexOf(NAME)
+	const T = '2026-10-20T00:00:00.000Z'
+	const accountId = (n: number) => String(100_000_000_000_000_000n + BigInt(n))
+	const statusId = (n: number) => String(300_000_000_000_000_000n + BigInt(n))
+
+	it('repeats the bounds of stored-bounds.ts in its literals', () => {
+		const sql = MIGRATIONS[at]?.sql ?? ''
+		expect([MAX_TREND_TAGS, MAX_TREND_STATUSES, TREND_STATUSES_PER_AUTHOR, MAX_TREND_REVIEWS, TREND_SCORE_MAX]).toEqual(
+			[250, 250, 3, 10_000, 1e15]
+		)
+		expect(TREND_ALLOWED_ROWS + TREND_REVIEW_POOL).toBe(MAX_TREND_TAGS)
+		expect(sql).toContain(`CONSTRAINT trend_tag_name CHECK (${trendTagNameCheckSql('name')})`)
+		expect(sql).toContain(`CONSTRAINT tag_trend_review_name CHECK (${trendTagNameCheckSql('name')})`)
+		expect(sql).toContain(`(SELECT count(*) FROM trend_tags) >= ${MAX_TREND_TAGS}\n`)
+		expect(sql).toContain(`(SELECT count(*) FROM trend_statuses) >= ${MAX_TREND_STATUSES}\n`)
+		expect(sql).toContain(`WHERE account_id = NEW.account_id) >= ${TREND_STATUSES_PER_AUTHOR}\n`)
+		for (const table of ['tag_trend_reviews', 'status_trend_reviews', 'account_trend_reviews']) {
+			expect(sql).toContain(`(SELECT count(*) FROM ${table}) >= ${MAX_TREND_REVIEWS}\n`)
+		}
+		expect(sql.match(/BETWEEN (?:score|0|0\.3) AND 1e15\b/g)).toHaveLength(3)
+		expect(Object.keys(TREND_SETTING_BOUNDS)).toEqual(['trends', 'trendable_by_default'])
+		// workerd refuses a LIKE or GLOB pattern over 50 bytes; the name pattern is built from char() and joined.
+		for (const [, pattern] of sql.matchAll(/GLOB\s+'([^']*)'/g)) {
+			expect(new TextEncoder().encode(pattern).length).toBeLessThanOrEqual(50)
+		}
+		const built = "'*[' || char(1) || '-/:-^`{-' || char(127) || ']*'"
+		expect(sql).toContain(built)
+		expect(2 + 1 + '-/:-^`{-'.length + 1 + 2).toBe(14)
+	})
+
+	async function migrated(state: DurableObjectState, authors = 2) {
+		const sql = state.storage.sql
+		await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()
+		sql.exec(
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO accounts (id, uri, username) SELECT CAST(100000000000000000 + i AS TEXT),
+				'https://kopje.test/ap/users/u' || i, 'u' || i FROM n`,
+			authors
+		)
+		return sql
+	}
+
+	// `count` public statuses of the author `author` from status number `first`.
+	function statuses(sql: SqlStorage, author: number, first: number, count: number) {
+		sql.exec(
+			`WITH RECURSIVE n(i) AS (SELECT CAST(?1 AS INTEGER) UNION ALL SELECT i + 1 FROM n WHERE i < ?1 + ?2 - 1)
+			INSERT INTO statuses (id, uri, account_id, visibility, published_at)
+			SELECT CAST(300000000000000000 + i AS TEXT), 'https://kopje.test/ap/o/' || i, ?3, 'public', ?4 FROM n`,
+			first,
+			count,
+			accountId(author),
+			T
+		)
+	}
+
+	it('holds tag names, scores and times at their bounds', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = await migrated(state)
+			for (const table of ['trend_tags', 'tag_trend_reviews'] as const) {
+				const insert = (name: SqlStorageValue, values: Record<string, SqlStorageValue> = {}) => {
+					const row =
+						table === 'trend_tags'
+							? { name, score: 1, max_score: 2, max_score_at: T, ...values }
+							: { name, trendable: 1, reviewed_at: T, ...values }
+					sql.exec(
+						`INSERT INTO ${table} (${Object.keys(row).join(', ')}) VALUES (${Object.keys(row)
+							.map(() => '?')
+							.join(', ')})`,
+						...Object.values(row)
+					)
+				}
+				const check = table === 'trend_tags' ? /trend_tag_name/ : /tag_trend_review_name/
+				// 1,024 bytes (256 four-byte characters) and 256 characters pass; 1,025 bytes, 257 characters fail.
+				for (const name of ['\u{1F600}'.repeat(256), 'é'.repeat(256), 'a_0', 'ß']) {
+					insert(name)
+				}
+				for (const name of [
+					'\u{1F600}'.repeat(256) + 'a',
+					'é'.repeat(257),
+					'a'.repeat(257),
+					'',
+					'a\u0000',
+					'\u0000',
+					'a\u0001',
+					'A',
+					'-',
+					'a b',
+					'a/b',
+					'a:b',
+					'a^b',
+					'a`b',
+					'a{b',
+					'a\u007f',
+				]) {
+					expect(() => insert(name), JSON.stringify(name)).toThrow(check)
+				}
+				expect(() => insert(new Uint8Array([0x61]).buffer)).toThrow(check)
+				// An imported malformed name: x'C0' and 1,023 continuation bytes, 1,024 bytes and one character.
+				sql.exec(
+					`INSERT INTO ${table} (name, ${table === 'trend_tags' ? 'score, max_score, max_score_at' : 'trendable, reviewed_at'})
+					VALUES (CAST(x'C0' || ?1 AS TEXT), ${table === 'trend_tags' ? '1, 1, ?2' : '0, ?2'})`,
+					new Uint8Array(1023).fill(0x80).buffer,
+					T
+				)
+				expect(() =>
+					sql.exec(
+						`INSERT INTO ${table} (name, ${table === 'trend_tags' ? 'score, max_score, max_score_at' : 'trendable, reviewed_at'})
+						VALUES (CAST(x'C080' || ?1 AS TEXT), ${table === 'trend_tags' ? '1, 1, ?2' : '0, ?2'})`,
+						new Uint8Array(1023).fill(0x80).buffer,
+						T
+					)
+				).toThrow(check)
+				const at = table === 'trend_tags' ? 'max_score_at' : 'reviewed_at'
+				const times = table === 'trend_tags' ? /trend_tag_max_score_at_iso/ : /tag_trend_review_at_iso/
+				for (const [i, value] of ['2026-10-20T23:59:59.999Z', '2026-02-28T00:00:00.001Z'].entries()) {
+					insert(`t${i}`, { [at]: value })
+				}
+				for (const value of [
+					'2026-02-30T00:00:00.000Z',
+					'2026-10-12T24:00:00.000Z',
+					'2026-10-12T24:01:00.000Z',
+					'2026-10-12T00:00:00.00Z',
+					'2026-10-12T00:00:00.000+00:00',
+					'not a time at all, 24 b.',
+				]) {
+					expect(() => insert('x', { [at]: value }), value).toThrow(times)
+				}
+				expect(() => sql.exec(`UPDATE ${table} SET ${at} = '2026-10-12T24:00:00.000Z' WHERE name = 't0'`)).toThrow(
+					times
+				)
+				sql.exec(`UPDATE ${table} SET ${at} = '2026-10-21T00:00:00.000Z' WHERE name = 't0'`)
+			}
+			// Scores: 0 <= score <= max_score <= 1e15, numbers only.
+			const score = (s: SqlStorageValue, max: SqlStorageValue) =>
+				sql.exec('INSERT INTO trend_tags (name, score, max_score, max_score_at) VALUES (?, ?, ?, ?)', 's', s, max, T)
+			for (const [s, max] of [
+				[-1, 1],
+				[null, 1],
+				[1, null],
+				[1e15 + 1, 1e15 + 1],
+				[2, 1],
+				[new Uint8Array([0x31]).buffer, 2],
+			] as const) {
+				expect(() => score(s, max), JSON.stringify([s instanceof ArrayBuffer ? 'blob' : s, max])).toThrow(
+					/trend_tag_scores|NOT NULL/
+				)
+			}
+			score(0, 1e15)
+			sql.exec("DELETE FROM trend_tags WHERE name = 's'")
+			score(1e15, 1e15)
+			// The settings: 'true' and 'false' only, for these two names; other names keep 0049's bounds.
+			const setting = /instance_settings: a value past its stored bound/
+			for (const name of ['trends', 'trendable_by_default']) {
+				for (const value of ['true', 'false']) {
+					sql.exec('INSERT OR REPLACE INTO instance_settings (name, value) VALUES (?, ?)', name, value)
+				}
+				for (const value of ['on', '', 'TRUE', 'true ', '1']) {
+					expect(() =>
+						sql.exec('INSERT OR REPLACE INTO instance_settings (name, value) VALUES (?, ?)', name, value)
+					).toThrow(setting)
+					expect(() => sql.exec('UPDATE instance_settings SET value = ? WHERE name = ?', value, name)).toThrow(setting)
+				}
+				expect(() =>
+					sql.exec("INSERT OR REPLACE INTO instance_settings (name, value) VALUES (?, X'74727565')", name)
+				).toThrow(setting)
+				expect(storedSetting(name as 'trends', 'true')).toBe('true')
+				expect(storedSetting(name as 'trends', 'yes')).toBeNull()
+			}
+			expect(() =>
+				sql.exec("UPDATE instance_settings SET name = 'trends', value = 'x' WHERE name = 'trendable_by_default'")
+			).toThrow(setting)
+			sql.exec("INSERT INTO instance_settings (name, value) VALUES ('domain', 'on')")
+			expect(MIGRATIONS.find((m) => m.name === '0049_instance_bounds')?.sql).toContain(instanceBoundsMigrationSql())
+		})
+	})
+
+	it('caps the trend tables for new keys only, so stored keys update and upsert at the cap', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = await migrated(state, 90)
+			// 250 trend tags; the 251st refused; an update and an upsert of a stored key pass.
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+				INSERT INTO trend_tags (name, score, max_score, max_score_at) SELECT 't' || i, 1, 1, ?2 FROM n`,
+				MAX_TREND_TAGS,
+				T
+			)
+			const tag = (name: string) =>
+				sql.exec(
+					`INSERT INTO trend_tags (name, score, max_score, max_score_at) VALUES (?, 2, 3, ?)
+					ON CONFLICT (name) DO UPDATE SET score = excluded.score, max_score = excluded.max_score`,
+					name,
+					T
+				)
+			expect(() => tag('new')).toThrow(/trend_tags: more than 250/)
+			tag('t1')
+			sql.exec("UPDATE trend_tags SET score = 5, max_score = 5 WHERE name = 't2'")
+			expect(sql.exec("SELECT score FROM trend_tags WHERE name = 't1'").one().score).toBe(2)
+			sql.exec("DELETE FROM trend_tags WHERE name = 't3'")
+			tag('new')
+			// 250 trend statuses of 84 authors at 3 each (the last at 1); the 251st refused, a stored one upserts.
+			for (let a = 1; a <= 84; a++) {
+				statuses(sql, a, a * 10, a === 84 ? 1 : 3)
+			}
+			statuses(sql, 85, 2000, 4)
+			sql.exec(
+				`INSERT INTO trend_statuses (status_id, account_id, score)
+				SELECT id, account_id, 1 FROM statuses WHERE account_id <> ?`,
+				accountId(85)
+			)
+			expect(sql.exec('SELECT count(*) AS n FROM trend_statuses').one().n).toBe(250)
+			const trend = (id: string, author: string, score = 1) =>
+				sql.exec(
+					`INSERT INTO trend_statuses (status_id, account_id, score) VALUES (?, ?, ?)
+					ON CONFLICT (status_id) DO UPDATE SET score = excluded.score`,
+					id,
+					author,
+					score
+				)
+			expect(() => trend(statusId(2000), accountId(85))).toThrow(/trend_statuses: more than 250/)
+			trend(statusId(10), accountId(1), 7)
+			expect(sql.exec('SELECT score FROM trend_statuses WHERE status_id = ?', statusId(10)).one().score).toBe(7)
+			// Three per author: a fourth refused, a stored one still upserted.
+			sql.exec('DELETE FROM trend_statuses WHERE account_id IN (?, ?)', accountId(83), accountId(84))
+			for (let i = 0; i < 3; i++) {
+				trend(statusId(2000 + i), accountId(85))
+			}
+			expect(() => trend(statusId(2003), accountId(85))).toThrow(/trend_statuses: more than 3 for one author/)
+			trend(statusId(2000), accountId(85), 9)
+			// The author is the status's, and a row's status and author never change.
+			sql.exec('DELETE FROM trend_statuses WHERE account_id = ?', accountId(85))
+			expect(() => trend(statusId(2000), accountId(1))).toThrow(/account_id is the status's author/)
+			expect(() => trend(statusId(99_999), accountId(1))).toThrow(/account_id is the status's author/)
+			trend(statusId(2000), accountId(85))
+			expect(() =>
+				sql.exec('UPDATE trend_statuses SET account_id = ? WHERE status_id = ?', accountId(1), statusId(2000))
+			).toThrow(/a row's status and author never change/)
+			expect(() =>
+				sql.exec('UPDATE trend_statuses SET status_id = ? WHERE status_id = ?', statusId(2001), statusId(2000))
+			).toThrow(/a row's status and author never change/)
+			expect(() => trend(statusId(2001), accountId(85), 0.29)).toThrow(/trend_status_score/)
+			expect(() => trend(statusId(2001), accountId(85), 1e15 + 1)).toThrow(/trend_status_score/)
+			// Rows go with their status, reviews with theirs.
+			sql.exec(
+				'INSERT INTO status_trend_reviews (status_id, trendable, reviewed_at) VALUES (?, 1, ?)',
+				statusId(2000),
+				T
+			)
+			sql.exec(
+				'INSERT INTO account_trend_reviews (account_id, trendable, reviewed_at) VALUES (?, 0, ?)',
+				accountId(85),
+				T
+			)
+			sql.exec('DELETE FROM statuses WHERE id = ?', statusId(2000))
+			expect(sql.exec('SELECT count(*) AS n FROM trend_statuses WHERE status_id = ?', statusId(2000)).one().n).toBe(0)
+			expect(sql.exec('SELECT count(*) AS n FROM status_trend_reviews').one().n).toBe(0)
+			sql.exec('DELETE FROM statuses WHERE account_id = ?', accountId(85))
+			sql.exec('DELETE FROM accounts WHERE id = ?', accountId(85))
+			expect(sql.exec('SELECT count(*) AS n FROM account_trend_reviews').one().n).toBe(0)
+			expect(sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
+		})
+	})
+
+	it('caps each review table at 10,000 new keys, and updates a stored decision at the cap', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = await migrated(state, MAX_TREND_REVIEWS + 1)
+			statuses(sql, 1, 1, MAX_TREND_REVIEWS + 1)
+			const fill = (table: string, key: string, from: string) =>
+				sql.exec(
+					`INSERT INTO ${table} (${key}, trendable, reviewed_at) SELECT k, 1, ?2 FROM (${from}) LIMIT ?1`,
+					MAX_TREND_REVIEWS,
+					T
+				)
+			fill(
+				'tag_trend_reviews',
+				'name',
+				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ${MAX_TREND_REVIEWS}) SELECT 't' || i AS k FROM n`
+			)
+			fill('status_trend_reviews', 'status_id', 'SELECT id AS k FROM statuses ORDER BY id')
+			fill('account_trend_reviews', 'account_id', 'SELECT id AS k FROM accounts ORDER BY id')
+			for (const [table, key, stored, fresh] of [
+				['tag_trend_reviews', 'name', 't1', 'fresh'],
+				['status_trend_reviews', 'status_id', statusId(1), statusId(MAX_TREND_REVIEWS + 1)],
+				['account_trend_reviews', 'account_id', accountId(1), accountId(MAX_TREND_REVIEWS + 1)],
+			] as const) {
+				const upsert = (value: string) =>
+					sql.exec(
+						`INSERT INTO ${table} (${key}, trendable, reviewed_at) VALUES (?, 0, ?)
+						ON CONFLICT (${key}) DO UPDATE SET trendable = excluded.trendable`,
+						value,
+						T
+					)
+				expect(() => upsert(fresh)).toThrow(new RegExp(`${table}: more than 10000`))
+				upsert(stored)
+				expect(sql.exec(`SELECT trendable FROM ${table} WHERE ${key} = ?`, stored).one().trendable).toBe(0)
+			}
+		})
+	}, 60_000)
+
+	it('plans each cap trigger as a key seek and a covering count', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = await migrated(state)
+			const plan = (query: string) =>
+				sql
+					.exec<{ detail: string }>(`EXPLAIN QUERY PLAN ${query}`)
+					.toArray()
+					.map((r) => r.detail)
+			expect(plan("SELECT 1 FROM trend_tags WHERE name = 'x'")).toEqual([
+				expect.stringMatching(/SEARCH trend_tags USING (?:COVERING INDEX|PRIMARY KEY) .*\(name=\?\)/),
+			])
+			expect(plan("SELECT count(*) FROM trend_statuses WHERE account_id = 'x'").join('\n')).toMatch(
+				/SEARCH trend_statuses USING COVERING INDEX trend_statuses_account \(account_id=\?\)/
+			)
+			expect(plan('SELECT count(*) FROM tag_trend_reviews').join('\n')).toMatch(/SCAN tag_trend_reviews/)
 		})
 	})
 })

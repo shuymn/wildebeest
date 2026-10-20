@@ -698,3 +698,53 @@ export function storedAnnouncementText(raw: string): string | null {
 	}
 	return ENCODER.encode(text).length <= ANNOUNCEMENT_TEXT_BYTES ? text : null
 }
+
+// ---- Trends: migration 0057_trends
+
+// trend_tags and trend_statuses rows at most: TREND_ALLOWED_ROWS the round keeps allowed and TREND_REVIEW_POOL awaiting
+// review or rejected (RES-4); TREND_STATUSES_PER_AUTHOR rows of one author; decisions per review table.
+export const TREND_ALLOWED_ROWS = 200
+export const TREND_REVIEW_POOL = 50
+export const MAX_TREND_TAGS = TREND_ALLOWED_ROWS + TREND_REVIEW_POOL
+export const MAX_TREND_STATUSES = TREND_ALLOWED_ROWS + TREND_REVIEW_POOL
+export const TREND_STATUSES_PER_AUTHOR = 3
+export const MAX_TREND_REVIEWS = 10_000
+// A stored score and peak at most (the round clamps what it scores; RES-2).
+export const TREND_SCORE_MAX = 1e15
+// A trend or review tag name (RES-2): 1 to TREND_TAG_NAME_BYTES UTF-8 bytes, no NUL, at most TREND_TAG_NAME_LENGTH
+// characters as SQLite's length counts them, and no ASCII but what a normalized hashtag holds (0-9, _ and a-z;
+// tag-name.ts normalizeTag). The GLOB pattern is 14 bytes (workerd refuses one over 50).
+export const TREND_TAG_NAME_BYTES = 1024
+export const TREND_TAG_NAME_LENGTH = 256
+
+// The name rule over `column`, as the CHECKs of 0057 write it and the round filters a status's hashtags with it.
+export function trendTagNameCheckSql(column: string): string {
+	return `typeof(${column}) = 'text' AND length(CAST(${column} AS BLOB)) BETWEEN 1 AND ${TREND_TAG_NAME_BYTES}
+    AND instr(CAST(${column} AS BLOB), x'00') = 0 AND length(${column}) <= ${TREND_TAG_NAME_LENGTH}
+    AND ${column} NOT GLOB ('*[' || char(1) || '-/:-^\`{-' || char(127) || ']*')`
+}
+
+// The trends settings (Mastodon's `trends` and `trendable_by_default`, config/settings.yml), 'true' or 'false', bound by
+// the triggers of 0057 rather than 0049's (whose literal stays instanceBoundsMigrationSql's).
+export const TREND_SETTING_BOUNDS = {
+	trends: oneOf(['true', 'false']),
+	trendable_by_default: oneOf(['true', 'false']),
+} as const satisfies Record<string, InstanceSettingBound>
+
+export type TrendSettingName = keyof typeof TREND_SETTING_BOUNDS
+
+export type StoredSettingName = InstanceSettingName | TrendSettingName
+
+// The value `name` stores for `value` (null: no row), through 0049's bounds or 0057's.
+export function storedSetting(name: StoredSettingName, value: string): string | null {
+	return name in TREND_SETTING_BOUNDS
+		? TREND_SETTING_BOUNDS[name as TrendSettingName].writer(value)
+		: INSTANCE_SETTING_BOUNDS[name as InstanceSettingName].writer(value)
+}
+
+// The projection of a stored setting `name` over `column`, through 0049's bounds or 0057's.
+export function settingProjectionSql(name: StoredSettingName, column: string): string {
+	return name in TREND_SETTING_BOUNDS
+		? TREND_SETTING_BOUNDS[name as TrendSettingName].projection(column)
+		: INSTANCE_SETTING_BOUNDS[name as InstanceSettingName].projection(column)
+}

@@ -39,6 +39,7 @@ const NOT_CARRIED: Record<string, string> = {
 	announcement_dismissals: 'dismissals of announcements, which legacy Wildebeest does not have',
 	announcement_reactions: 'reactions to announcements, which legacy Wildebeest does not have',
 	announcements: 'announcements of the Access admin; legacy Wildebeest has none',
+	account_trend_reviews: 'the Access admin’s trends reviews of accounts; legacy Wildebeest has no trends review',
 	backup_media: 'the backup media index of one bucket; a converted Store starts a fresh baseline',
 	collection_syncs: "work Kopje asks for when it stores a remote account's document; legacy has none",
 	collection_pins_pending: 'pinned statuses a sync of Kopje has yet to fetch; legacy has none',
@@ -95,6 +96,11 @@ const NOT_CARRIED: Record<string, string> = {
 	stream_delete_viewers: 'streaming state of one object; legacy has no streaming',
 	stream_events: 'streaming state of one object; legacy has no streaming',
 	stream_subscriptions: 'streaming state of one object; legacy has no streaming',
+	status_trend_reviews: 'the Access admin’s trends reviews of statuses; legacy Wildebeest has no trends review',
+	tag_trend_reviews:
+		'the Access admin’s trends reviews of hashtags; legacy tags.trendable defaults to 1 and was never reviewed',
+	trend_statuses: 'scores the cron works out again from stored statuses; legacy keeps none',
+	trend_tags: 'scores the cron works out again from stored statuses; legacy keeps none',
 	tag_follows:
 		'legacy never wrote its followed_tags table, and a legacy row there stops the conversion (UNUSED_LEGACY_TABLES)',
 	featured_tags:
