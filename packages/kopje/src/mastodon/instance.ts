@@ -133,8 +133,9 @@ export const instanceV2: ApiHandler = async (c, deps) => {
 	})
 }
 
-// No custom emoji yet; the route exists because clients call it at startup.
-export const customEmojis: ApiHandler = (c) => Promise.resolve(c.json([]))
+// GET /api/v1/custom_emojis: the enabled local emoji shown in the picker (domain/local-emojis.ts customEmojis), to
+// anyone, as Mastodon's CustomEmojisController#index.
+export const customEmojis: ApiHandler = async (c, deps) => c.json(await storeCall(c, deps, (s, b) => s.customEmojis(b)))
 
 // The rest of /api/v1/instance/*, the endpoints clients read at startup and on an instance's about page.
 

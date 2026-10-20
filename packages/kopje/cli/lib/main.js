@@ -1,4 +1,4 @@
-/* global globalThis */
+/* global globalThis, btoa */
 import { AdminError, createClient } from './client.js'
 import { dumpToFile, formatBytes, importFromFile, verifyBackup } from './commands.js'
 
@@ -31,6 +31,19 @@ Commands
                                 enough), one call at a time. Prints counts and the rows to look at; exits 3 when an original is
                                 missing, a type does not match, re-encoding failed, the Images quota or monthly budget
                                 stopped it, or the Store is not readonly (run it again later: made files are skipped)
+  emoji [--after <id>]          list the local custom emoji, enabled and disabled, oldest first
+  emoji add <shortcode> <file> [--category <name>] [--unlisted] [--replace]
+                                add a custom emoji: a PNG, GIF or WebP below 256 KiB, at most 1024x1024 pixels, and
+                                refused when the re-encoded image is 256 KiB or more. Its image belongs to the OAuth
+                                admin; costs two Images transformations. --unlisted keeps it out of the picker (posts
+                                may still use it); --replace disables the enabled emoji of that shortcode in the same
+                                step (posts that used it keep it, and peers may show either image)
+  emoji set <id> [category=<name>|category=] [picker=on|off]
+                                change an emoji's category (empty: none) or whether the picker lists it
+  emoji disable <id> | emoji enable <id>
+                                stop or resume offering an emoji to new posts. Nothing is deleted: a disabled emoji
+                                keeps its files, its place in every backup (each new backup destination copies it,
+                                and a restore rebuilds it) and every post and profile that used it
   keys rewrap                   move every local private key from USER_KEK_PREVIOUS (unset: the empty KEK) to
                                 USER_KEK, the same keys under a new wrapping (docs/setup.md, "Rotating the KEK").
                                 Resumable: keys already under USER_KEK are skipped. Prints counts and the keys it could
@@ -162,6 +175,18 @@ Environment
  */
 
 /**
+ * Standard padded base64, as POST /admin/emojis reads its image.
+ * @param {Uint8Array} bytes
+ */
+function base64(bytes) {
+	let binary = ''
+	for (let i = 0; i < bytes.length; i += 0x8000) {
+		binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+	}
+	return btoa(binary)
+}
+
+/**
  * @param {string[]} argv
  * @returns {{ positional: string[], flags: Record<string, string | true> }}
  */
@@ -192,6 +217,8 @@ function parseArgs(argv) {
 		'images-account',
 		'account-id',
 		'file',
+		'after',
+		'category',
 	])
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i] ?? ''
@@ -854,6 +881,65 @@ export async function run({
 					)
 				}
 				return stopped !== null || problems.length > 0 ? 3 : 0
+			}
+			case 'emoji': {
+				const [action, ...args] = rest
+				const id = args[0]
+				const emojiId = id !== undefined && /^\d{18}$/.test(id)
+				if (action === undefined) {
+					const after = flags.after
+					if (after !== undefined && (typeof after !== 'string' || !/^\d{18}$/.test(after))) {
+						throw new UsageError('--after takes an emoji id')
+					}
+					print(await client.get(`/admin/emojis${after === undefined ? '' : `?after=${after}`}`))
+					return 0
+				}
+				if (action === 'add') {
+					const [shortcode, file] = args
+					const category = flags.category
+					if (shortcode === undefined || file === undefined || args.length !== 2 || category === true) {
+						throw new UsageError('emoji add <shortcode> <file> [--category <name>] [--unlisted] [--replace]')
+					}
+					const bytes = await io.readBytes(file)
+					if (bytes === null) {
+						throw new Error(`cannot read ${file}`)
+					}
+					print(
+						await client.post('/admin/emojis', {
+							shortcode,
+							image: base64(bytes),
+							...(category === undefined ? {} : { category }),
+							visibleInPicker: flags.unlisted !== true,
+							replace: flags.replace === true,
+						})
+					)
+					return 0
+				}
+				if ((action === 'disable' || action === 'enable') && emojiId && args.length === 1) {
+					print(await client.post(`/admin/emojis/${id}`, { disabled: action === 'disable' }))
+					return 0
+				}
+				if (action === 'set' && emojiId && args.length > 1) {
+					/** @type {{ category?: string | null, visibleInPicker?: boolean }} */
+					const changes = {}
+					for (const pair of args.slice(1)) {
+						const at = pair.indexOf('=')
+						const name = pair.slice(0, at)
+						const value = pair.slice(at + 1)
+						if (name === 'category' && !('category' in changes)) {
+							changes.category = value === '' ? null : value
+						} else if (name === 'picker' && (value === 'on' || value === 'off') && !('visibleInPicker' in changes)) {
+							changes.visibleInPicker = value === 'on'
+						} else {
+							throw new UsageError('emoji set <id> [category=<name>|category=] [picker=on|off]')
+						}
+					}
+					print(await client.post(`/admin/emojis/${id}`, changes))
+					return 0
+				}
+				throw new UsageError(
+					'emoji [--after <id>] | emoji add <shortcode> <file> | emoji set <id> ... | emoji disable|enable <id>'
+				)
 			}
 			case 'keys': {
 				if (rest.length !== 1 || rest[0] !== 'rewrap') {

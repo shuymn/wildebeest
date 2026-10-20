@@ -121,7 +121,9 @@ export function fit(size: Size, edge: number): Size {
 	return { width: Math.max(1, Math.round(size.width * scale)), height: Math.max(1, Math.round(size.height * scale)) }
 }
 
-function failure(error: unknown): ProcessResult {
+// A codec error as processImage classifies it: quota (9422), an input the service refuses as unsupported, any other
+// service failure as failed. Anything that is not an ImageCodecError is thrown again.
+function failure(error: unknown): { ok: false; reason: ImageFailure; detail?: string } {
 	if (error instanceof ImageCodecError) {
 		if (error.code === QUOTA_ERROR) {
 			return { ok: false, reason: 'quota' }
@@ -150,6 +152,19 @@ async function encodeChecked(codec: ImageCodec, bytes: Uint8Array, options: Enco
 		throw new ImageCodecError(null, 'output has no dimensions')
 	}
 	return { bytes: output, contentType: options.format, width: info.width, height: info.height }
+}
+
+// The free info() of `bytes`, its codec errors classified as processImage classifies them: a preflight before any
+// transformation is charged (the custom emoji checks, platform/emoji-image.ts).
+export async function inspectImage(
+	codec: ImageCodec,
+	bytes: Uint8Array
+): Promise<{ ok: true; info: ImageInfo } | { ok: false; reason: ImageFailure; detail?: string }> {
+	try {
+		return { ok: true, info: await codec.info(bytes) }
+	} catch (error) {
+		return failure(error)
+	}
 }
 
 export async function processImage(codec: ImageCodec, bytes: Uint8Array): Promise<ProcessResult> {

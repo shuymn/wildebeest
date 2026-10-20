@@ -281,6 +281,7 @@ export function memoryIO(files = new Map<string, Uint8Array>()) {
 			const bytes = files.get(path)
 			return Promise.resolve(bytes === undefined ? null : new TextDecoder().decode(bytes))
 		},
+		readBytes: (path: string) => Promise.resolve(files.get(path) ?? null),
 		writeTextAtomic: (path: string, text: string) => {
 			files.set(path, new TextEncoder().encode(text))
 			return Promise.resolve()

@@ -6,6 +6,7 @@ import { drainJournal } from './cutover'
 import { healthReport } from './health'
 import { rewrapKeys } from './key-rewrap'
 import type { LoaderDeps } from '../federation/loader'
+import { uploadEmoji } from '../mastodon/emoji-upload'
 import { rebuildMedia } from '../mastodon/media-rebuild'
 import { type AccessSettings, adminRefusal, adminUsable, normalizeTeamDomain } from '../platform/access-settings'
 import { readBackupConfig } from '../platform/backup-config'
@@ -17,8 +18,9 @@ import { readQueueBacklog } from '../platform/queue-backlog'
 import type { ImportAuthority } from '../platform/store-admin'
 import type { StoreResolver, StoreStub } from '../platform/store-client'
 import { toStoreUnavailable } from '../platform/store-errors'
+import { storedEmojiCategory } from '../platform/stored-bounds'
 import { type AccessDeps, type AccessIdentity, verifyAccessClaims } from '../security/access-jwt'
-import { constantTimeEqual } from '../security/tokens'
+import { constantTimeEqual, randomToken } from '../security/tokens'
 
 // The admin HTTP API behind its own Access application. Every request is authenticated here as well, and every
 // import or configuration mutation passes its authority to the Store, which checks it where it writes:
@@ -95,6 +97,18 @@ const STATUS: Record<string, ContentfulStatusCode> = {
 	'not-unpublished': 409,
 	'pitr-unavailable': 503,
 	'chunk-failed': 500,
+	'invalid-shortcode': 400,
+	'invalid-category': 400,
+	'invalid-image': 400,
+	'image-too-large': 422,
+	'shortcode-taken': 409,
+	'emoji-limit': 409,
+	'no-oauth-admin': 409,
+	'upload-expired': 409,
+	'emoji-not-found': 404,
+	'budget-exhausted': 429,
+	'images-unavailable': 503,
+	'image-processing-failed': 500,
 }
 
 function refusal(c: Context, result: Refusal): Response {
@@ -416,6 +430,78 @@ export function adminRoutes({ build, store, fetch, now, doorbell, jobs, loader, 
 			{ after: typeof after === 'string' ? after : null, dryRun: dryRun === true }
 		)
 		return reply(c, result)
+	})
+
+	// ---- local custom emoji (domain/local-emojis.ts, mastodon/emoji-upload.ts): upload, change, disable and enable, and
+	// the list of every emoji. Access admin only: the import token and import sessions never reach these paths, and the
+	// Store checks the admin again where it writes. Nothing is deleted and nothing is delivered.
+
+	admin.get('/emojis', async (c) => {
+		const after = c.req.query('after')
+		const limit = c.req.query('limit')
+		if ((after !== undefined && !/^\d{18}$/.test(after)) || (limit !== undefined && !/^\d{1,3}$/.test(limit))) {
+			return c.json({ error: 'after must be an emoji id and limit a number' }, 400)
+		}
+		const input = {
+			...(after === undefined ? {} : { after }),
+			...(limit === undefined ? {} : { limit: Number(limit) }),
+		}
+		return c.json(await stub(c).adminEmojis(build(c.env), input))
+	})
+
+	admin.post('/emojis', async (c) => {
+		const body = await jsonBody(c)
+		const config = readConfig(c.env)
+		const result = await uploadEmoji(
+			{
+				build: build(c.env),
+				store: stub(c),
+				bucket: c.env.MEDIA,
+				images: images(c.env),
+				now,
+				authority: c.get('auth'),
+				monthlyTransforms: config.ok ? config.config.IMAGES_MONTHLY_TRANSFORMS : 0,
+				token: randomToken(),
+			},
+			body
+		)
+		return result.ok ? c.json(result.emoji) : refusal(c, result)
+	})
+
+	admin.post('/emojis/:id{[0-9]{18}}', async (c) => {
+		const { category, visibleInPicker, disabled } = await jsonBody(c)
+		const stored =
+			category === undefined || category === null
+				? category
+				: typeof category === 'string'
+					? storedEmojiCategory(category)
+					: undefined
+		if (stored === undefined && category !== undefined) {
+			return refusal(c, {
+				ok: false,
+				code: 'invalid-category',
+				message: 'a category is 1 to 64 characters within 256 bytes, with no control character',
+			})
+		}
+		if (
+			(visibleInPicker !== undefined && typeof visibleInPicker !== 'boolean') ||
+			(disabled !== undefined && typeof disabled !== 'boolean')
+		) {
+			return c.json(
+				{ error: 'expected {"category"?: string | null, "visibleInPicker"?: boolean, "disabled"?: boolean}' },
+				400
+			)
+		}
+		const result = await stub(c).updateEmoji(build(c.env), {
+			authority: c.get('auth'),
+			id: c.req.param('id'),
+			changes: {
+				...(stored === undefined ? {} : { category: stored }),
+				...(visibleInPicker === undefined ? {} : { visibleInPicker }),
+				...(disabled === undefined ? {} : { disabled }),
+			},
+		})
+		return result.ok ? c.json(result.emoji) : refusal(c, result)
 	})
 
 	// ---- the KEK rewrap (app/key-rewrap.ts): one page of local keys moved from USER_KEK_PREVIOUS to USER_KEK; the CLI

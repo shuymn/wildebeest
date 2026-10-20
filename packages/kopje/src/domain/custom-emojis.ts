@@ -1,10 +1,13 @@
+import type { Db } from '../db/sql'
 import { boundedHref } from '../platform/http-url'
+import { FILE_TOKEN } from '../platform/media-files'
 import {
 	EMOJI_ENTRY_BYTES,
 	EMOJI_SHORTCODE,
 	EMOJI_SHORTCODE_LIMIT,
 	EMOJI_URL_LIMIT,
 	isEmojiUrl,
+	LOCAL_EMOJI_SHORTCODE,
 	MAX_EMOJIS,
 } from '../platform/stored-bounds'
 
@@ -123,4 +126,83 @@ export function presentEmojis(stored: string | null, bytes: number): CustomEmoji
 export function pollEmojis(emojis: readonly CustomEmoji[], titles: readonly string[]): CustomEmoji[] {
 	const referenced = shortcodesIn(titles)
 	return emojis.filter((emoji) => referenced.has(emoji.shortcode))
+}
+
+// ---- Local custom emoji (migration 0055_local_custom_emojis, local-emojis.ts)
+
+// Names a local snapshot looks up at most (RES-2): the texts' first distinct shortcodes in the local grammar.
+export const MAX_LOCAL_EMOJI_NAMES = 1024
+
+// The snapshot of the enabled local emoji that `texts` reference, as emojiSnapshot stores it (null for none), so its
+// output always passes the column's trigger. The names are the texts' shortcodes in the local grammar
+// (LOCAL_EMOJI_SHORTCODE) in order of first occurrence, at most MAX_LOCAL_EMOJI_NAMES, looked up in one query through
+// custom_emojis_enabled; an emoji whose url fails emojiHref is left out. Unlisted emoji (visible_in_picker 0) are
+// used, disabled ones are not, as Mastodon's CustomEmoji.from_text uses every enabled local emoji (status.rb:279-286,
+// account.rb:450-451, 486-488). The texts are the stored ones a presenter shows.
+export function localEmojiSnapshot(db: Db, texts: readonly string[], bytes: number): string | null {
+	const names = [...shortcodesIn(texts)].filter((name) => LOCAL_EMOJI_SHORTCODE.test(name))
+	if (names.length === 0) {
+		return null
+	}
+	const rows = db.all<{ shortcode: string; url: string }>(
+		`SELECT e.shortcode, m.url FROM json_each(?1) j
+		JOIN custom_emojis e INDEXED BY custom_emojis_enabled ON e.shortcode = j.value AND e.disabled = 0
+		JOIN media_attachments m ON m.id = e.id ORDER BY j.key`,
+		JSON.stringify(names.slice(0, MAX_LOCAL_EMOJI_NAMES))
+	)
+	const candidates = rows.flatMap((row) => {
+		const url = emojiHref(row.url)
+		return url === null ? [] : [{ shortcode: row.shortcode, url }]
+	})
+	return emojiSnapshot(candidates, texts, bytes)
+}
+
+// An Emoji tag as ActivityPub::EmojiSerializer writes it (app/serializers/activitypub/emoji_serializer.rb:8-30, its
+// icon as ImageSerializer, image_serializer.rb:8-21): id /emojis/<id>, `:shortcode:`, its time and its image.
+export type EmojiTag = {
+	id: string
+	type: 'Emoji'
+	name: string
+	updated: string
+	icon: { type: 'Image'; mediaType: string; url: string }
+}
+
+// The local emoji a stored snapshot names (statuses.emojis of a local status, accounts.emojis of a local account), as
+// Emoji tags, in snapshot order: each entry presentEmojis keeps (within `bytes`) whose url is a served full image on
+// `origin` (/media/<token>/full.png or .webp) of an emoji row with the same url and shortcode. Disabled emoji are
+// kept (the object shows what was posted); an entry that resolves to none is left out. One query over at most
+// MAX_EMOJIS file tokens, each by the unique index of media_attachments.file_token.
+export function localEmojiTags(db: Db, stored: string | null, origin: string, bytes: number): EmojiTag[] {
+	const entries = presentEmojis(stored, bytes)
+	const prefix = `${origin}/media/`
+	const tokens = entries.flatMap(({ url }) => {
+		const match = url.startsWith(prefix) ? /^([^/]+)\/full\.(png|webp)$/.exec(url.slice(prefix.length)) : null
+		return match !== null && FILE_TOKEN.test(match[1]!) ? [match[1]!] : []
+	})
+	if (tokens.length === 0) {
+		return []
+	}
+	const rows = db.all<{ url: string; content_type: string; id: string; shortcode: string; created_at: string }>(
+		`SELECT m.url, m.content_type, e.id, e.shortcode, e.created_at FROM json_each(?1) j
+		JOIN media_attachments m ON m.file_token = j.value JOIN custom_emojis e ON e.id = m.id`,
+		JSON.stringify(tokens.slice(0, MAX_EMOJIS))
+	)
+	const byUrl = new Map(rows.map((row) => [row.url, row]))
+	return entries.flatMap(({ shortcode, url }) => {
+		const row = byUrl.get(url)
+		return row === undefined || row.shortcode !== shortcode ? [] : [emojiTag(origin, row)]
+	})
+}
+
+export function emojiTag(
+	origin: string,
+	row: { id: string; shortcode: string; created_at: string; content_type: string; url: string }
+): EmojiTag {
+	return {
+		id: `${origin}/emojis/${row.id}`,
+		type: 'Emoji',
+		name: `:${row.shortcode}:`,
+		updated: row.created_at,
+		icon: { type: 'Image', mediaType: row.content_type, url: row.url },
+	}
 }

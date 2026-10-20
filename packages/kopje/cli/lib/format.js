@@ -19,6 +19,7 @@ const decoder = new TextDecoder('utf-8', { fatal: true })
  *   append(path: string, bytes: Uint8Array): Promise<void>,
  *   truncate(path: string, length: number): Promise<void>,
  *   readText(path: string): Promise<string | null>,
+ *   readBytes(path: string): Promise<Uint8Array | null>,
  *   writeTextAtomic(path: string, text: string): Promise<void>,
  *   remove(path: string): Promise<void>,
  *   sha256(path: string): Promise<string | null> }} FileIO

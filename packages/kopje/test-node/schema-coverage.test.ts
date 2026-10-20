@@ -41,6 +41,7 @@ const NOT_CARRIED: Record<string, string> = {
 	collection_pins_pending: 'pinned statuses a sync of Kopje has yet to fetch; legacy has none',
 	conversation_mutes:
 		'legacy never wrote its conversation_mutes table, and a legacy row there stops the conversion (UNUSED_LEGACY_TABLES)',
+	custom_emojis: 'local custom emoji of Kopje; legacy Wildebeest has none (verify-actual fails on any row)',
 	deliveries: 'outbound queue; legacy queues are not carried',
 	domain_block_cleanups: 'pending work of a domain block made in Kopje',
 	favourite_likes:
