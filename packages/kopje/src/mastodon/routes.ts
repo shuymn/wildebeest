@@ -3,6 +3,7 @@ import { Hono } from 'hono'
 import { requireAccess, type RouteAccess } from './access'
 import * as accounts from './accounts'
 import * as admin from './admin'
+import * as announcements from './announcements'
 import * as blocks from './blocks'
 import type { ApiDeps, ApiEnv, ApiHandler } from './context'
 import * as conversations from './conversations'
@@ -147,30 +148,31 @@ export const ROUTES: readonly Route[] = [
 		access: { scope: 'read:accounts' },
 		handler: accounts.endorsements,
 	},
-	{ method: 'GET', path: '/api/v1/announcements', access: 'token', handler: placeholders.emptyUserList },
+	// Announcements (mastodon/announcements.ts): any user token lists them (require_user!, no scope).
+	{ method: 'GET', path: '/api/v1/announcements', access: 'token', handler: announcements.listAnnouncements },
 	{
 		method: 'POST',
 		path: '/api/v1/announcements/:id/dismiss',
 		access: { scope: 'write:accounts' },
-		handler: placeholders.announcement,
+		handler: announcements.dismissAnnouncement,
 	},
 	{
 		method: 'PUT',
 		path: '/api/v1/announcements/:announcement_id/reactions/:id',
 		access: { scope: 'write:favourites' },
-		handler: placeholders.announcement,
+		handler: announcements.reactToAnnouncement,
 	},
 	{
 		method: 'PATCH',
 		path: '/api/v1/announcements/:announcement_id/reactions/:id',
 		access: { scope: 'write:favourites' },
-		handler: placeholders.announcement,
+		handler: announcements.reactToAnnouncement,
 	},
 	{
 		method: 'DELETE',
 		path: '/api/v1/announcements/:announcement_id/reactions/:id',
 		access: { scope: 'write:favourites' },
-		handler: placeholders.announcement,
+		handler: announcements.unreactToAnnouncement,
 	},
 	{ method: 'GET', path: '/api/v1/trends', access: 'public', handler: placeholders.emptyList },
 	{ method: 'GET', path: '/api/v1/trends/tags', access: 'public', handler: placeholders.emptyList },

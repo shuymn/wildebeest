@@ -355,6 +355,12 @@ export function endorsementListedSql(x: string): string {
 	return availableSql(x)
 }
 
+// R40 (Announcement.published): whether the announcement row `a` is shown, to every signed-in local user alike, and its
+// dismissal and reactions are accepted; otherwise it answers 404. Its tables are announcements.ts's alone.
+export function announcementShownSql(a: string): string {
+	return `${a}.published = 1`
+}
+
 // ---- Statuses. `s` is the alias of a statuses row.
 
 // Whether `viewer` is a remote account (accounts.domain is set). It does not depend on a status, so SQLite evaluates

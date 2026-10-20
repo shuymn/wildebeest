@@ -67,7 +67,8 @@ const EXCEPTIONS: Record<string, Exception> = {
 	'GET /api/v1/announcements': {
 		kopje: 'required token, scopes any, no user required',
 		mastodon: 'required token, scopes any, user required',
-		reason: 'any token at the route; placeholders.emptyUserList refuses one without a user',
+		reason:
+			'any token at the route; announcements.listAnnouncements (tokenUserReadOperation) refuses one without a user',
 	},
 	'GET /api/v1/accounts/:id/identity_proofs': {
 		kopje: 'required token, scopes any, no user required',

@@ -158,6 +158,24 @@ export const userWriteOperation = guarded(writeOperation)
 export const userSessionOperation = guarded(sessionOperation)
 export const userMediaDeleteOperation = guarded(mediaDeleteOperation)
 
+// Operations of a route that declares no scope but serves only a user (Mastodon's require_user! without
+// doorkeeper_authorize!): any valid token of a user, whatever its scopes; an app token answers user_required.
+export function tokenUserReadOperation<I, O>(
+	run: (db: Db, input: I, viewer: UserViewer, context: UserContext) => O
+): StoreOperation<I & { credential: Credential }, Authorized<O>> {
+	return readOperation<I & { credential: Credential }, Authorized<O>>((db, input) => {
+		const auth = authorize(db, input.credential)
+		if (auth.status !== 'ok') {
+			return auth
+		}
+		if (auth.viewer.accountId === null) {
+			return { status: 'user_required' }
+		}
+		const viewer = auth.viewer as UserViewer
+		return { status: 'ok', value: run(db, input, viewer, contextOf(viewer.accountId, viewer.now)) }
+	})
+}
+
 // Checks a credential without doing anything else: lets the Worker answer an authentication failure before a
 // request error it found on its own, as Mastodon does.
 export const checkCredential = readOperation<Credential, Authorized<Viewer>>((db, credential) => {
