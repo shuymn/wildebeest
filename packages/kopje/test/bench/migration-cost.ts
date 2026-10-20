@@ -560,13 +560,19 @@ it('applies the migration to the benchmark store within the budget', async () =>
 
 		// The files, through the kernel, as an upgrade applies them: the bookmark, each file's transaction and the
 		// verification of the schema.
+		// Date.now() moves only between I/O events: the clock is read across an await on each side (header).
+		const timed = async <T>(run: () => Promise<T>): Promise<{ value: T; ms: number }> => {
+			await scheduler.wait(1)
+			const started = Date.now()
+			const value = await run()
+			await scheduler.wait(1)
+			return { value, ms: Date.now() - started - 1 }
+		}
 		const migrations = MIGRATIONS.slice(0, last + 1)
 		const logs: Record<string, unknown>[] = []
-		await scheduler.wait(1)
-		const started = Date.now()
-		const result = await testKernel(state, migrations, { log: (entry) => logs.push(entry) }).upgrade()
-		await scheduler.wait(1)
-		const ms = Date.now() - started - 1
+		const { value: result, ms } = await timed(() =>
+			testKernel(state, migrations, { log: (entry) => logs.push(entry) }).upgrade()
+		)
 		const foreignKeyCheck = logs.find((entry) => entry.event === 'kopje.store.upgrade.start')?.foreignKeyCheck
 		if (foreignKeyCheck !== 'skipped') {
 			return { seeded, measured: { result, ms, foreignKeyCheck, retryEstimateMs: ms } }
@@ -577,11 +583,7 @@ it('applies the migration to the benchmark store within the budget', async () =>
 			"INSERT INTO kopje_state (name, value) VALUES ('upgrade', ?)",
 			JSON.stringify({ build: BUILD, bookmark: result.bookmark, at: 0 })
 		)
-		await scheduler.wait(1)
-		const resumedAt = Date.now()
-		const resumed = await testKernel(state, migrations).retryUpgrade(BUILD)
-		await scheduler.wait(1)
-		const resumedMs = Date.now() - resumedAt - 1
+		const { value: resumed, ms: resumedMs } = await timed(() => testKernel(state, migrations).retryUpgrade(BUILD))
 		expect(resumed).toMatchObject({ ok: true, applied: [] })
 		return { seeded, measured: { result, ms, foreignKeyCheck, retryEstimateMs: ms + resumedMs } }
 	})

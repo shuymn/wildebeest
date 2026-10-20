@@ -1,8 +1,8 @@
 import { type SqlToken, tokenizeSql } from '../src/platform/readonly-sql'
 
 // Lints of migration SQL (test/migration-lint.test.ts), over the tokens of src/platform/readonly-sql.ts, so comments,
-// strings and quoted identifiers never hide a keyword or pass for one. They guard against an author's mistake, not
-// against a hostile file (Migration in src/platform/store-kernel.ts).
+// strings and quoted identifiers never hide a keyword or pass for one. Their threat assumption: Migration in
+// src/platform/store-kernel.ts.
 
 const isWord = (token: SqlToken | undefined, text: string): boolean => token?.kind === 'word' && token.text === text
 

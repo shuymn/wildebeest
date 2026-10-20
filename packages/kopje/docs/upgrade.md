@@ -40,9 +40,8 @@ it with its own (both are the same script, so after the deploy both run the new 
     3. it verifies the result, and only then leaves readonly: the recorded migrations, and `PRAGMA foreign_key_check`
        over the whole Store. The foreign-key check is skipped only when this upgrade started fresh (it found no upgrade
        marker) and every migration it applies is declared `foreignKeys: 'unchanged'` in `src/db/migrations.ts`: a
-       reviewed claim that the file changes no reference and no key that a reference uses. A test holds a declared
-       file to statements that cannot (a guard against mistakes by the trusted authors who write and review the
-       migrations here, not a proof against a hostile file). An upgrade that finds the marker of an earlier attempt
+       reviewed claim that the file changes no reference and no key that a reference uses (what holds it, and against
+       what: `Migration` in `src/platform/store-kernel.ts`). An upgrade that finds the marker of an earlier attempt
        (resumed, retried after a failure past the bookmark, or re-running verification only), or that applies an
        undeclared file, checks the whole Store; on a large Store that check is most of the upgrade's time.
 

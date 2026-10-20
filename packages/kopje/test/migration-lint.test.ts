@@ -3,16 +3,12 @@ import { runInDurableObject } from 'cloudflare:test'
 import { describe, expect, it } from 'vitest'
 
 import { freshStore, testKernel as kernel } from './helpers'
+import { BREAK_WITNESSES } from './migration-fixtures'
 import { forbiddenProblem, unchangedProblem } from './migration-sql'
 import { MIGRATIONS } from '../src/db/migrations'
 
 const DECLARED = MIGRATIONS.filter((m) => m.foreignKeys === 'unchanged')
 
-// The undeclared break witnesses of test/migrations.test.ts ('Store migration runner').
-const DROP_BEHIND_INDEX =
-	'DROP INDEX fk_p_key; DROP TABLE fk_p; CREATE TABLE fk_p (id TEXT); CREATE UNIQUE INDEX fk_p_key ON fk_p (id);'
-const REPEATED_REBUILD = `CREATE TABLE fk_q_next (id TEXT); INSERT INTO fk_q_next SELECT id FROM fk_q; DROP TABLE fk_q;
-	ALTER TABLE fk_q_next RENAME TO fk_q;`.repeat(2)
 const HIDDEN = 'DROP INDEX p_key; DROP TABLE p; CREATE TABLE p (id TEXT); CREATE UNIQUE INDEX p_key ON p (id);'
 const LONG = 'x'.repeat(256)
 
@@ -59,8 +55,7 @@ describe('migration lint', () => {
 		'DROP INDEX i;',
 		'DROP TABLE t;',
 		'PRAGMA foreign_keys = OFF;',
-		DROP_BEHIND_INDEX,
-		REPEATED_REBUILD,
+		...BREAK_WITNESSES.map((w) => w.breaking),
 		// Words SQLite reads as identifiers, balanced so that counting them as blocks would hide the statements between.
 		`SELECT 1 AS begin; ${HIDDEN} SELECT 1 AS end;`,
 		`SELECT 1 AS "begin"; SELECT 1 AS end; ${HIDDEN}`,

@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { NOW } from './app-helpers'
 import { ACCOUNT_EMOJIS_FULL, accountAtCap, padded, STATUS_EMOJIS_FULL, statusAtCap } from './emoji-fixtures'
 import { BUILD, freshStore, migratedStore, rejectionOf, tableNames, testKernel as kernel } from './helpers'
+import { BREAK_WITNESSES } from './migration-fixtures'
 import {
 	BOUNDED,
 	columnsSql,
@@ -2732,25 +2733,7 @@ describe('Store migration runner', () => {
 		})
 	})
 
-	// Undeclared rebuilds that break a reference, each applied after its fixture: the whole-Store check refuses them.
-	// test/migration-lint.test.ts shows that declaring either one unchanged fails the lint.
-	it.each([
-		[
-			'a populated child whose parent is dropped and recreated behind an external unique index',
-			`CREATE TABLE fk_p (id TEXT); CREATE UNIQUE INDEX fk_p_key ON fk_p (id);
-			CREATE TABLE fk_c (pid TEXT REFERENCES fk_p (id));
-			INSERT INTO fk_p VALUES ('a'); INSERT INTO fk_c VALUES ('a');`,
-			`DROP INDEX fk_p_key; DROP TABLE fk_p; CREATE TABLE fk_p (id TEXT); CREATE UNIQUE INDEX fk_p_key ON fk_p (id);`,
-			/violation\(s\)/,
-		],
-		[
-			'a repeated rebuild that removes the inline key',
-			'CREATE TABLE fk_q (id TEXT PRIMARY KEY); CREATE TABLE fk_d (qid TEXT REFERENCES fk_q (id));',
-			`CREATE TABLE fk_q_next (id TEXT); INSERT INTO fk_q_next SELECT id FROM fk_q; DROP TABLE fk_q;
-			ALTER TABLE fk_q_next RENAME TO fk_q;`.repeat(2),
-			/foreign key mismatch/,
-		],
-	])('refuses %s', async (_label, fixture, breaking, detail) => {
+	it.each(BREAK_WITNESSES)('refuses $label', async ({ fixture, breaking, detail }) => {
 		const store = freshStore()
 		await runInDurableObject(store, async (_instance, state) => {
 			const fixed = [...MIGRATIONS, { name: '9999_a_fixture', sql: fixture }]
