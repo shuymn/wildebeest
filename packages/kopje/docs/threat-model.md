@@ -2016,11 +2016,12 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   them by unavailable authors, on the same kind of accounts and full review tables (`test/trends-maxima.test.ts`). Each
   plan is of the production statement as it runs, with statistics taken before the data grew. Review lookups are key
   seeks; `coveredSql` uses `CROSS JOIN` to keep instance-block matches as domain seeks even with stale statistics.
-  _Enforced (main)_ for reads from bounded inputs: the presenter's status graph, R, media and filter rules, status
-  and account search candidates, relationship and account batches, mention resolution, media attachment, inbound
-  addressing and lane promotion drive key seeks from their inputs (`CROSS JOIN`, `INDEXED BY` on the inner side), so
-  statistics older than the Store's growth cannot turn them into scans. Each witness plans the production statement on
-  a Store grown after `ANALYZE` and checks the seek and flat rows read (`test/status-rows.test.ts`,
+  _Enforced (main)_ for reads from bounded inputs: the presenter's status graph, R, its authors, polls, votes, media
+  and filter rules, the visibility rule's account lookups, status and account search candidates, relationship and
+  account batches, mention resolution, media attachment, inbound addressing and lane promotion drive key seeks from
+  their inputs (`CROSS JOIN`, `INDEXED BY` on the inner side), so statistics older than the Store's growth, even taken
+  with one account and one poll, cannot turn them into scans. Each witness plans the production statement on a Store
+  grown after `ANALYZE` and checks the seek and flat rows read (`test/status-rows.test.ts`,
   `test/filters.test.ts`, `test/search-edge.test.ts`, `test/account-relations.test.ts`, `test/statuses.test.ts`,
   `test/inbox-statuses.test.ts`, `test/deliveries.test.ts`).
 
