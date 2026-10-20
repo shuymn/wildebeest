@@ -528,6 +528,6 @@ describe('Flag: bounds (RES-2, RES-7)', () => {
 		const bound = /report_status_ids_within_100_ids_and_2101_bytes/
 		await expect(insert('', `[${' '.repeat(1 << 20)}]`)).rejects.toThrow(bound)
 		await expect(insert('', JSON.stringify(['9'.repeat(2100)]))).rejects.toThrow(bound)
-		await expect(insert('', ids(100).replace('[', '[ '))).rejects.toThrow(bound)
+		await expect(insert('', `[ ${ids(100).slice(1)}`)).rejects.toThrow(bound)
 	})
 })
