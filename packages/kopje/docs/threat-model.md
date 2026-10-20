@@ -1328,7 +1328,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   from a reservation the Store records before any write (`reserveEmoji` in `src/domain/local-emojis.ts`); completion
   and promotion are one transaction (`completeEmoji`: the row is kept, gc_at NULL, with its emoji row), and a failure
   abandons the reservation (`abandonEmoji`, only that id and token), whose keys go only when the Store does not keep
-  it. The sweep, the purge and `releaseProfileImage` exclude emoji images, and the foreign key of `custom_emojis`
+  it. The sweep, the purge and `profileReleaseSql` exclude emoji images, and the foreign key of `custom_emojis`
   refuses deleting one; `test/local-emojis.test.ts` ("emoji completion").
 - **MEDIA-3: served images are re-encoded.** An image is served only as Images output with location metadata removed; if
   transformation fails, the upload is refused and original bytes are never served. _Enforced (main):_ outputs are PNG or WebP only, for which Images discards all metadata (the binding has no

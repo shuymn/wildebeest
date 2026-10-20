@@ -3,11 +3,12 @@ import { runInDurableObject } from 'cloudflare:test'
 import { describe, expect, it } from 'vitest'
 
 import { bearer, json, sql } from './api-helpers'
-import { LEGACY } from './federation-helpers'
 import { GIF, PNG_PLAIN } from './fixtures/images'
-import { bytes, r2Keys, TestCodec } from './media-helpers'
+import { bytes, multipartForm, r2Keys, TestCodec } from './media-helpers'
+import { aliceWithFollower } from './profile-fixtures'
 import { scopedToken } from './read-helpers'
-import { community, outbound, remoteAccount, remoteFollows } from './status-helpers'
+import { storeWith } from './setup-helpers'
+import { outbound } from './status-helpers'
 import { ORIGIN } from './web-helpers'
 import { DOOMED_AT, profileReleaseSql } from '../src/domain/media'
 import { API_BODY_LIMIT, FILE_PART_SLACK } from '../src/mastodon/params'
@@ -20,11 +21,9 @@ import type { StoreStub } from '../src/platform/store-client'
 
 const AVIF = new Uint8Array([0, 0, 0, 0x1c, ...new TextEncoder().encode('ftypavif'), 0, 0, 0, 0])
 
-async function setup(scope = 'read write follow') {
+async function setup(wrapStore?: (store: StoreStub) => StoreStub) {
 	const codec = new TestCodec()
-	const h = await community(['alice'], scope, { images: () => codec })
-	await sql(h.store, 'UPDATE local_accounts SET pubkey = ?', LEGACY.pubkey)
-	await remoteFollows(h.store, await remoteAccount(h.store, 'fan', 'fans.example'), h.users.alice.id)
+	const h = await aliceWithFollower({ images: () => codec, wrapStore })
 	return { ...h, codec }
 }
 
@@ -32,13 +31,7 @@ type H = Awaited<ReturnType<typeof setup>>
 
 const png = (name = 'a.png') => new File([bytes(PNG_PLAIN)], name, { type: 'image/png' })
 
-function formOf(parts: [string, string | File][]): FormData {
-	const form = new FormData()
-	for (const [name, value] of parts) {
-		form.append(name, value)
-	}
-	return form
-}
+const formOf = multipartForm
 
 function patch(h: H, token: string, body: BodyInit, headers: Record<string, string> = {}, query = '') {
 	return h.request(`/api/v1/accounts/update_credentials${query}`, {
@@ -316,8 +309,13 @@ describe('update_credentials: upload ownership', () => {
 	})
 
 	it('discards the uploads when the Store answers upload_gone', async () => {
-		const h = await wrapped((store, name, call) =>
-			name === 'updateCredentials' ? sql(store, 'UPDATE media_attachments SET gc_at = ?', DOOMED_AT).then(call) : call()
+		const h = await setup((store) =>
+			storeWith(store, {
+				updateCredentials: async (...args: unknown[]) => {
+					await sql(store, 'UPDATE media_attachments SET gc_at = ?', DOOMED_AT)
+					return (store.updateCredentials as (...a: unknown[]) => Promise<unknown>)(...args)
+				},
+			})
 		)
 		const { response, added } = await keysAfter(() => patch(h, h.users.alice.token, formOf([['avatar', png()]])))
 		expect(await answer(response)).toEqual({ status: 422, body: { error: 'Validation failed: The upload expired' } })
@@ -328,13 +326,14 @@ describe('update_credentials: upload ownership', () => {
 
 	it('discards an upload whose completion committed but whose answers were lost', async () => {
 		let completions = 0
-		const h = await wrapped((_store, name, call) =>
-			name === 'completeMedia'
-				? call().then(() => {
-						completions++
-						throw new Error('lost answer')
-					})
-				: call()
+		const h = await setup((store) =>
+			storeWith(store, {
+				completeMedia: async (...args: unknown[]) => {
+					await (store.completeMedia as (...a: unknown[]) => Promise<unknown>)(...args)
+					completions++
+					throw new Error('lost answer')
+				},
+			})
 		)
 		const { response, added } = await keysAfter(() => patch(h, h.users.alice.token, formOf([['avatar', png()]])))
 		expect(response.status).toBe(500)
@@ -345,29 +344,6 @@ describe('update_credentials: upload ownership', () => {
 		expect(added).toEqual([])
 	})
 })
-
-const INTERCEPTED = new Set(['updateCredentials', 'completeMedia'])
-
-// A harness whose app calls the Store through `intercept`, which may act around a named call.
-async function wrapped(
-	intercept: (store: StoreStub, name: string, call: () => Promise<unknown>) => Promise<unknown>
-): Promise<H> {
-	const codec = new TestCodec()
-	const wrapStore = (store: StoreStub) =>
-		new Proxy(store, {
-			get(target, name) {
-				const value = Reflect.get(target, name) as unknown
-				if (typeof name !== 'string' || !INTERCEPTED.has(name)) {
-					return value
-				}
-				// An RPC method is called on the stub as it is: detached from it, it does not reach the Store.
-				return (...args: unknown[]) =>
-					intercept(store, name, () => (value as (...a: unknown[]) => Promise<unknown>)(...args))
-			},
-		})
-	const h = await community(['alice'], 'read write follow', { images: () => codec, wrapStore })
-	return { ...h, codec }
-}
 
 describe('profile image release', () => {
 	it('dooms an imported avatar whose URL is malformed UTF-8, reading the account index at 10,000 uploads', async () => {

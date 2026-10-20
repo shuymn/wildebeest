@@ -69,6 +69,19 @@ import {
 
 // The shipped migrations, in order; test-only files are named after them (9999_*).
 const NAMES = MIGRATIONS.map((m) => m.name)
+
+// A generated migration: a header of comment lines, a blank line, then exactly the generator's output.
+function expectGenerated(at: number, generated: string): void {
+	const sql = MIGRATIONS[at]?.sql ?? ''
+	const end = sql.indexOf('\n\n')
+	expect(
+		sql
+			.slice(0, end)
+			.split('\n')
+			.every((line) => line.startsWith('--'))
+	).toBe(true)
+	expect(sql.slice(end + 2)).toBe(generated)
+}
 const LATEST = NAMES.at(-1)
 
 const SCHEMA_TABLES = [
@@ -5005,15 +5018,7 @@ describe('0048_stored_bounds', () => {
 	const REFUSED = (table: string) => new RegExp(`${table}: a value past its stored bound`)
 
 	it("holds storedBoundsMigrationSql's output after its header", () => {
-		const sql = MIGRATIONS[at]?.sql ?? ''
-		const end = sql.indexOf('\n\n')
-		expect(
-			sql
-				.slice(0, end)
-				.split('\n')
-				.every((line) => line.startsWith('--'))
-		).toBe(true)
-		expect(sql.slice(end + 2)).toBe(storedBoundsMigrationSql())
+		expectGenerated(at, storedBoundsMigrationSql())
 	})
 
 	it('stores each covered value as P(x), keeps values at their bounds, and leaves only fixed points', async () => {
@@ -5144,15 +5149,7 @@ describe('0049_instance_bounds', () => {
 	}
 
 	it("holds instanceBoundsMigrationSql's output after its header", () => {
-		const sql = MIGRATIONS[at]?.sql ?? ''
-		const end = sql.indexOf('\n\n')
-		expect(
-			sql
-				.slice(0, end)
-				.split('\n')
-				.every((line) => line.startsWith('--'))
-		).toBe(true)
-		expect(sql.slice(end + 2)).toBe(instanceBoundsMigrationSql())
+		expectGenerated(at, instanceBoundsMigrationSql())
 	})
 
 	it('measures each bound in its unit', () => {
@@ -5487,15 +5484,7 @@ describe('0053_custom_emoji_snapshots', () => {
 	const at = NAMES.indexOf(NAME)
 
 	it("holds emojiBoundsMigrationSql's output after its header", () => {
-		const sql = MIGRATIONS[at]?.sql ?? ''
-		const end = sql.indexOf('\n\n')
-		expect(
-			sql
-				.slice(0, end)
-				.split('\n')
-				.every((line) => line.startsWith('--'))
-		).toBe(true)
-		expect(sql.slice(end + 2)).toBe(emojiBoundsMigrationSql())
+		expectGenerated(at, emojiBoundsMigrationSql())
 	})
 
 	it('keeps every row as it was, with no emoji, then refuses a snapshot past its bound on insert and update', async () => {
@@ -6988,15 +6977,7 @@ describe('0058_profile_credentials', () => {
 	const at = NAMES.indexOf(NAME)
 
 	it("holds profileBoundsMigrationSql's output after its header", () => {
-		const sql = MIGRATIONS[at]?.sql ?? ''
-		const end = sql.indexOf('\n\n')
-		expect(
-			sql
-				.slice(0, end)
-				.split('\n')
-				.every((line) => line.startsWith('--'))
-		).toBe(true)
-		expect(sql.slice(end + 2)).toBe(profileBoundsMigrationSql())
+		expectGenerated(at, profileBoundsMigrationSql())
 	})
 
 	it('keeps rows as they were, then bounds indexable as stored and the cursor', async () => {

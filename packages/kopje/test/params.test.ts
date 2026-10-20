@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
+import { multipartForm } from './media-helpers'
 import {
 	API_BODY_LIMIT,
 	bodyLimit,
@@ -45,12 +46,8 @@ describe('Params#objects', () => {
 
 const FILES = { names: ['avatar'], maxBytes: 64 }
 
-function multipart(parts: [string, string | File][]): Request {
-	const body = new FormData()
-	for (const [name, value] of parts) {
-		body.append(name, value)
-	}
-	return new Request('https://kopje.test/x', { method: 'POST', body })
+function multipart(parts: [string, string | File][], query = ''): Request {
+	return new Request(`https://kopje.test/x${query}`, { method: 'POST', body: multipartForm(parts) })
 }
 
 function post(body: BodyInit, type: string, query = ''): Request {
@@ -108,16 +105,9 @@ describe('readParams: declared files (Rails last-part rule)', () => {
 	})
 
 	it('reads a query value of a declared name only when the body has none', async () => {
-		const request = (query: string, parts: [string, string | File][]) => {
-			const body = new FormData()
-			for (const [name, value] of parts) {
-				body.append(name, value)
-			}
-			return new Request(`https://kopje.test/x${query}`, { method: 'POST', body })
-		}
-		const bodyWins = await read(request('?avatar=q', [['avatar', png()]]), { files: FILES })
+		const bodyWins = await read(multipart([['avatar', png()]], '?avatar=q'), { files: FILES })
 		expect([bodyWins.get('avatar'), bodyWins.file('avatar')?.name]).toEqual([undefined, 'a.png'])
-		const queryOnly = await read(request('?avatar=q&avatar=r', [['note', 'n']]), { files: FILES })
+		const queryOnly = await read(multipart([['note', 'n']], '?avatar=q&avatar=r'), { files: FILES })
 		expect([queryOnly.get('avatar'), queryOnly.file('avatar')]).toEqual(['r', undefined])
 	})
 
@@ -196,15 +186,10 @@ describe('readParams: body and text bounds', () => {
 			true
 		)
 		// The query counts too.
-		const withQuery = new Request('https://kopje.test/x?q=1', {
-			method: 'POST',
-			body: (() => {
-				const f = new FormData()
-				f.append('a', value)
-				return f
-			})(),
+		expect(await readParams(multipart([['a', value]], '?q=1'), { limit, files: FILES })).toEqual({
+			ok: false,
+			status: 413,
 		})
-		expect(await readParams(withQuery, { limit, files: FILES })).toEqual({ ok: false, status: 413 })
 	})
 })
 

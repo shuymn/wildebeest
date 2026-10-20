@@ -15,7 +15,14 @@ import {
 	userCredential,
 } from './context'
 import { mastodonError } from './errors'
-import { discard, type Failure, type ProfileUpload, storeProfileImage, sweepSoon, type UploadContext } from './media'
+import {
+	discardProfileUploads,
+	type Failure,
+	type ProfileUpload,
+	storeProfileImage,
+	sweepSoon,
+	type UploadContext,
+} from './media'
 import { pageQuery, pageResponse, unlimitedResponse } from './pagination'
 import { limitParam, mediaTypeOf, offsetParam, type Params, parseBoolean, readParams } from './params'
 import { MAX_SEARCH_OFFSET, searchParams } from './search'
@@ -298,11 +305,7 @@ export const updateCredentials: ApiHandler = async (c, deps) => {
 		return c.json(result.account)
 	} finally {
 		if (!committed) {
-			for (const upload of owned) {
-				await discard(c, deps, upload)
-			}
-			// What was discarded, here or by storeProfileImage, goes now rather than at the next cron.
-			sweepSoon(c, deps)
+			await discardProfileUploads(c, deps, owned)
 		}
 	}
 }

@@ -8,7 +8,7 @@ import { LEGACY } from './federation-helpers'
 import { BUILD, migratedStore } from './helpers'
 import { ACCESS, dumpViaRpc, importViaRpc, setAccess } from './ops-helpers'
 import { community, domainBlock, follow, getJson, post, remoteAccount, type User } from './status-helpers'
-import { csrfOf, ORIGIN, signIn } from './web-helpers'
+import { csrfOf, postForm, signIn } from './web-helpers'
 import { Db } from '../src/db/sql'
 import { suspendLocal, unsuspendLocal } from '../src/domain/suspension'
 import { NEXT_REQUEST, UNLOCK_ACCEPTS_PER_ROUND, unlockAcceptStep } from '../src/domain/unlock-accepts'
@@ -259,11 +259,11 @@ describe('unlock acceptance', () => {
 		await remoteRequests(h.store, alice.id, ['one.example'], 3)
 		const browser = await signIn(h)
 		const csrf = await csrfOf(h, browser)
-		const body = new URLSearchParams({ csrf, locked: 'false', display_name: '', note: '' })
-		const response = await h.request('/settings/profile', {
-			method: 'POST',
-			body,
-			headers: { cookie: browser.cookie, origin: ORIGIN, 'content-type': 'application/x-www-form-urlencoded' },
+		const response = await postForm(h, browser, '/settings/profile', {
+			csrf,
+			locked: 'false',
+			display_name: '',
+			note: '',
 		})
 		expect(response.status).toBe(303)
 		expect(h.jobs).toHaveBeenCalled()

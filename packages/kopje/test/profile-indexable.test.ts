@@ -5,8 +5,8 @@ import { describe, expect, it } from 'vitest'
 
 import { bearer, json, sql } from './api-helpers'
 import { NOW } from './app-helpers'
-import { LEGACY } from './federation-helpers'
-import { community, getJson, outbound, remoteAccount, remoteFollows } from './status-helpers'
+import { aliceWithFollower } from './profile-fixtures'
+import { getJson, outbound } from './status-helpers'
 import { ORIGIN } from './web-helpers'
 import { Db } from '../src/db/sql'
 import { upsertRemoteActor } from '../src/domain/inbox'
@@ -22,12 +22,7 @@ type Credential = {
 	source: { indexable: boolean; discoverable: boolean | null }
 }
 
-async function setup() {
-	const h = await community(['alice'], 'read write follow')
-	await sql(h.store, 'UPDATE local_accounts SET pubkey = ?', LEGACY.pubkey)
-	await remoteFollows(h.store, await remoteAccount(h.store, 'fan', 'fans.example'), h.users.alice.id)
-	return h
-}
+const setup = () => aliceWithFollower()
 
 describe('indexable', () => {
 	it('round-trips through update_credentials, with source.discoverable null until set', async () => {

@@ -76,8 +76,8 @@ Profile credentials (`PATCH /api/v1/accounts/update_credentials`, the settings p
 Request parameters:
 
 - Of repeated parts of a declared file parameter (`avatar`, `header`, `file`), text or file, the last is the one read,
-  as Rails assigns them. On `/api/v{1,2}/media` this changes both orders: a string followed by a file now uploads, and a
-  file followed by a string now answers 422 `File can't be blank` (Mastodon answers 400).
+  as Rails assigns them; on `/api/v{1,2}/media` a file followed by a string answers 422 `File can't be blank`, where
+  Mastodon answers 400.
 - A query value of a declared file parameter is read only when the body has none (Rails lets the query win).
 - A multipart part with an empty filename is read as a text value, as workerd's parser reads it (Rack drops it as an
   empty file field): empty, it reads as absent; with bytes, a profile image answers 400.

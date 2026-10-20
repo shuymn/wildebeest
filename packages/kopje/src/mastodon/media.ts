@@ -427,6 +427,19 @@ export async function discard(
 	}
 }
 
+// The cleanup of a profile request that did not commit: each upload it owns is discarded in turn, then a sweep runs
+// after the response, so what was discarded, here or by storeProfileImage, goes now rather than at the next cron.
+export async function discardProfileUploads(
+	c: UploadContext & AfterResponse,
+	deps: ApiDeps,
+	owned: readonly ProfileUpload[]
+): Promise<void> {
+	for (const upload of owned) {
+		await discard(c, deps, upload)
+	}
+	sweepSoon(c, deps)
+}
+
 // GET /api/v1/media/:id.
 export const getMedia: ApiHandler = async (c, deps) => {
 	const credential = userCredential(c, deps)

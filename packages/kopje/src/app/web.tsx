@@ -11,7 +11,7 @@ import { SESSION_LIFETIME_MS, WEB_SCOPES } from '../domain/web-session'
 import { requireSetup } from '../federation/setup-gate'
 import { credentialChanges, profileFiles, storeProfileImages } from '../mastodon/accounts'
 import { type ApiDeps, present, requestJobsSoon, storeCall } from '../mastodon/context'
-import { discard, type ProfileUpload, sweepSoon } from '../mastodon/media'
+import { discardProfileUploads, type ProfileUpload, sweepSoon } from '../mastodon/media'
 import { Params, readParams } from '../mastodon/params'
 import { PROFILE_IMAGE_LIMIT } from '../platform/images'
 import type { Scope } from '../security/scopes'
@@ -580,10 +580,7 @@ export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 				throw error
 			} finally {
 				if (!committed) {
-					for (const upload of owned) {
-						await discard(c, deps, upload)
-					}
-					sweepSoon(c, deps)
+					await discardProfileUploads(c, deps, owned)
 				}
 			}
 		})
