@@ -73,7 +73,7 @@ export const MAX_ANNOUNCEMENT_MENTIONS = 16
 // Accounts of one handle (domain and lowercased username) a reference judges at most, and the longest domain looked up
 // (an actor id of ACTOR_URI_LIMIT bytes, less "https://").
 export const MENTION_CANDIDATES = 8
-const MENTION_DOMAIN_BYTES = ACTOR_URI_LIMIT - 'https://'.length
+export const MENTION_DOMAIN_BYTES = ACTOR_URI_LIMIT - 'https://'.length
 // The row heap (db/sql.ts rowHeapBytes: 64 bytes a row, 32 a value, two a code unit of text) the reads take, from each
 // column's maximum (test/announcement-bounds.test.ts builds those rows and measures them): the list's rows (an id, a
 // text of ANNOUNCEMENT_TEXT_BYTES, six times, two flags) and its dismissals; one presentation's mention rows (an id,
@@ -94,7 +94,7 @@ export const ANNOUNCEMENT_ROW_CAPS = { list: LIST_ROWS_HEAP, presentation: PRESE
 export const MAX_ANNOUNCEMENT_TAGS = 16
 // A hashtag name presented, at most MAX_TAG_LENGTH code units and this many UTF-8 bytes (as status-bounds.ts reads a
 // status's).
-const TAG_NAME_BYTES = 1024
+export const TAG_NAME_BYTES = 1024
 const ENCODER = new TextEncoder()
 
 export type AnnouncementMention = { id: string; username: string; url: string; acct: string }

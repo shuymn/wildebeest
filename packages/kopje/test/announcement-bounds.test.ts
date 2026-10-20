@@ -2,7 +2,14 @@ import { runInDurableObject } from 'cloudflare:test'
 
 import { describe, expect, it, vi } from 'vitest'
 
-import { announcementHarness, mentionFill, seedAnnouncement, tagFill } from './announcement-helpers'
+import {
+	announcementHarness,
+	derivedAnnouncementMaxima,
+	idnMentionFill,
+	mentionFill,
+	seedAnnouncement,
+	tagFill,
+} from './announcement-helpers'
 import { seedAccount, sql } from './api-helpers'
 import { BUILD } from './helpers'
 import { localSnapshotAtCap, seedEmojiRow } from './local-emoji-helpers'
@@ -37,11 +44,13 @@ import { sha256Hex } from '../src/security/tokens'
 const ORIGIN = 'https://kopje.test'
 const id = (n: number) => String(200_000_000_000_000_000n + BigInt(n))
 const bytes = (text: string) => new TextEncoder().encode(text).length
-// The measured parts (pinned by "measures each part at its widest fill") and their sum.
-const MENTIONS_MAX = 80_386
-const TAGS_MAX = 49_873
-const REACTIONS_MAX = 9753
-const CONSERVATIVE = ANNOUNCEMENT_CONTENT_BYTES + MENTIONS_MAX + TAGS_MAX + STATUS_EMOJIS_BYTES + REACTIONS_MAX + 282
+// The conservative maxima, derived from the caps (announcement-helpers.ts derivedAnnouncementMaxima).
+const DERIVED = derivedAnnouncementMaxima()
+const DERIVED_MENTIONS = 107_329
+const DERIVED_TAGS = 53_761
+const DERIVED_REACTIONS = 9801
+const DERIVED_REST = 282
+const DERIVED_ENTITY = 248_997
 
 type Entity = Record<string, unknown> & {
 	id: string
@@ -299,6 +308,12 @@ describe('the maxima of an announcement (RES-3)', () => {
 		expect(bytes(mentionText)).toBeLessThanOrEqual(10_000)
 		const mentioned = await part('mentions', mentionText)
 		expect(mentioned.entity.mentions).toHaveLength(MAX_ANNOUNCEMENT_MENTIONS)
+		// The same with a domain the text spells in Unicode, which IDNA makes 966 ASCII bytes.
+		const idnText = await idnMentionFill(h.store)
+		expect(bytes(idnText)).toBeLessThanOrEqual(10_000)
+		const idn = await part('mentions', idnText)
+		expect(idn.entity.mentions).toHaveLength(MAX_ANNOUNCEMENT_MENTIONS)
+		await sql(h.store, 'DELETE FROM announcements')
 		// Hashtags: 16 names of 256 three-byte code units after NFKC.
 		const tagged = await part('tags', tagFill())
 		expect(tagged.entity.tags.map((t) => t.name.length)).toEqual(Array.from({ length: 16 }, () => 256))
@@ -311,7 +326,7 @@ describe('the maxima of an announcement (RES-3)', () => {
 		const emojied = await part('emojis', emojiText)
 		expect(jsonBytes(emojied.entity.emojis)).toBe(STATUS_EMOJIS_BYTES)
 		// Reactions: 8 custom emoji of 128-character shortcodes and 512-byte URLs (whose alphabet needs no escape), by
-		// Bob. A count is at most the local accounts: measured at 1, so 9 bytes each are added for 10 digits.
+		// Bob.
 		const shortcodes: string[] = []
 		for (let i = 0; i < 8; i++) {
 			const shortcode = `${i}${'s'.repeat(127)}`
@@ -342,7 +357,7 @@ describe('the maxima of an announcement (RES-3)', () => {
 		await react(reacted)
 		const withReactions = (await listed(h, token)).find((a) => a.id === reacted)!
 		expect(withReactions.reactions).toHaveLength(8)
-		measured.reactions = jsonBytes(withReactions.reactions) + 8 * 9
+		measured.reactions = jsonBytes(withReactions.reactions)
 		// The rest: keys, the id, the times at their 24 bytes (a range set), flags at `false`, `read` and "statuses":[].
 		const bare = id(++n)
 		await seedAnnouncement(h.store, {
@@ -366,20 +381,27 @@ describe('the maxima of an announcement (RES-3)', () => {
 		return { h, measured, combo, react }
 	}
 
-	it('measures each part at its widest fill and keeps their conservative sum within 85% of an answer', async () => {
+	it('derives each part’s maximum from the caps, which every measured fill stays within', async () => {
 		const { h, measured, combo, react } = await fills()
-		const sum = Object.values(measured).reduce((a, b) => a + b, 0)
-		console.log(JSON.stringify({ event: 'announcement-maxima', measured, conservative: sum }))
-		expect(measured).toEqual({
-			content: ANNOUNCEMENT_CONTENT_BYTES,
-			mentions: MENTIONS_MAX,
-			tags: TAGS_MAX,
-			emojis: STATUS_EMOJIS_BYTES,
-			reactions: REACTIONS_MAX,
-			rest: 282,
+		console.log(JSON.stringify({ event: 'announcement-maxima', measured, derived: DERIVED }))
+		expect(DERIVED).toEqual({
+			parts: {
+				content: ANNOUNCEMENT_CONTENT_BYTES,
+				mentions: DERIVED_MENTIONS,
+				tags: DERIVED_TAGS,
+				emojis: STATUS_EMOJIS_BYTES,
+				reactions: DERIVED_REACTIONS,
+				rest: DERIVED_REST,
+			},
+			entity: DERIVED_ENTITY,
+			list: DERIVED_ENTITY * 16 + 17,
+			stream: DERIVED_ENTITY * 2 + 2,
 		})
-		expect(sum).toBe(CONSERVATIVE)
-		expect(sum).toBeLessThanOrEqual(0.85 * ANSWER_BYTES)
+		for (const [key, value] of Object.entries(measured)) {
+			expect(value, key).toBeLessThanOrEqual(DERIVED.parts[key as keyof typeof DERIVED.parts])
+		}
+		expect(DERIVED.entity).toBeLessThanOrEqual(0.85 * ANSWER_BYTES)
+		expect(DERIVED.stream).toBeLessThan(512 * 1024)
 		// The list: 16 announcements of the widest combined text, each with 8 reactions, through the real Store RPC.
 		for (let i = 0; i < MAX_LIVE_ANNOUNCEMENTS; i++) {
 			await seedAnnouncement(h.store, { id: id(100 + i), text: combo })
@@ -394,9 +416,9 @@ describe('the maxima of an announcement (RES-3)', () => {
 		expect(items).toHaveLength(MAX_LIVE_ANNOUNCEMENTS)
 		const listBytes = jsonBytes(items)
 		const each = Math.max(...items.map((item) => jsonBytes(item)))
-		console.log(JSON.stringify({ event: 'announcement-list', bytes: listBytes, each, ms, bound: 16 * sum + 1 }))
-		expect(each).toBeLessThanOrEqual(sum)
-		expect(listBytes).toBeLessThanOrEqual(MAX_LIVE_ANNOUNCEMENTS * sum + 1)
+		console.log(JSON.stringify({ event: 'announcement-list', bytes: listBytes, each, ms, bound: DERIVED.list }))
+		expect(each).toBeLessThanOrEqual(DERIVED.entity)
+		expect(listBytes).toBeLessThanOrEqual(DERIVED.list)
 		expect(ms).toBeLessThan(2000)
 	}, 120_000)
 
@@ -426,7 +448,7 @@ describe('the maxima of an announcement (RES-3)', () => {
 		// The heap model ("Heap at 8 MiB"): rows with 25% headroom (the list's, held throughout, and one presentation's at
 		// a time), the presented answer at three times its JSON, and one rendering: the budget, the one segment built
 		// past it and the fallback, two bytes a code unit.
-		const answer = MAX_LIVE_ANNOUNCEMENTS * CONSERVATIVE + 1
+		const answer = DERIVED.list
 		const transient = 2 * (ANNOUNCEMENT_CONTENT_BYTES + 310_064 + 60_009)
 		const heap = 1.25 * (list + presentation) + 3 * answer + transient
 		console.log(JSON.stringify({ event: 'announcement-heap', list, presentation, answer, transient, heap }))

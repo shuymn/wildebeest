@@ -15,6 +15,8 @@ import { sha256Hex } from '../../src/security/tokens'
 import { STREAM_LIMITS } from '../../src/stream-hub'
 import {
 	announcementHarness,
+	derivedAnnouncementMaxima,
+	idnMentionFill,
 	mentionFill,
 	reactionPath,
 	seedAnnouncement,
@@ -261,6 +263,7 @@ describe('announcement events at their bounds (RES-3)', () => {
 		await h.admin.publish('200000000000000001')
 		// The review's texts: one hashtag that renders to 310 KB alone, and 600 hashtags with 8,200 quotes after them.
 		const reviewed: [string, string][] = [
+			['200000000000000004', await idnMentionFill(h.store)],
 			['200000000000000002', `#${'\uFDFA'.repeat(3333)}`],
 			['200000000000000003', `${'#a '.repeat(600)}${'"'.repeat(8200)}`],
 		]
@@ -278,17 +281,22 @@ describe('announcement events at their bounds (RES-3)', () => {
 		expect(sent.map((m) => [m.event, m.id])).toEqual([
 			['announcement', widest.id],
 			['announcement', '200000000000000001'],
+			['announcement', '200000000000000004'],
 			['announcement', '200000000000000002'],
 			['announcement', '200000000000000003'],
 		])
 		const contents = events(inbox).map((m) => (JSON.parse(m.payload!) as { content: string }).content)
-		expect(contents.slice(2)).toEqual([
+		expect(contents.slice(3)).toEqual([
 			`<p>#${'\uFDFA'.repeat(3333)}</p>`,
 			`<p>${'#a '.repeat(599)}#a ${'&quot;'.repeat(8200)}</p>`,
 		])
+		// Each within the entity's derived maximum, and its double-encoded payload within the hub's limit.
+		const derived = derivedAnnouncementMaxima()
 		for (const { bytes } of sent) {
-			expect(bytes).toBeLessThan(STREAM_LIMITS.payloadBytes)
+			expect(bytes).toBeLessThanOrEqual(derived.entity)
 		}
+		expect(derived.stream).toBeLessThan(STREAM_LIMITS.payloadBytes)
+		expect((JSON.parse(events(inbox)[2]!.payload!) as { mentions: unknown[] }).mentions).toHaveLength(16)
 	}, 60_000)
 })
 
