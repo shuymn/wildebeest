@@ -256,6 +256,42 @@ describe('retention (RES-4)', () => {
 	})
 })
 
+describe('status retention (review round 1)', () => {
+	// M2: an older approved row and three newer unreviewed ties of one author: the approved one is the witness, so it
+	// stays (and two of the ties with it), whatever the id order.
+	it('keeps an approved maximum when three newer unreviewed ties come', async () => {
+		const store = await migratedStore()
+		const [x] = await authors(store, 1)
+		const [approved, ...ties] = await trendStatuses(
+			store,
+			[0, 1, 2, 3].map((seq) => ({ author: x!, published: AT - HOUR, seq, favourites: 20 }))
+		)
+		await review(store, 'status_trend_reviews', approved!, true)
+		await round(store)
+		const rows = (await trendRows(store)).map((r) => r.status_id)
+		expect(rows).toHaveLength(3)
+		expect(rows).toContain(approved)
+		expect(ties.filter((id) => rows.includes(id))).toHaveLength(2)
+	})
+
+	// M3: the review pool takes unreviewed rows before rejected ones, as the hashtags' does.
+	it('reviews a fresh unreviewed status before 50 higher-scoring rejected ones', async () => {
+		const store = await migratedStore()
+		const [fresh, ...spam] = await authors(store, 51)
+		const ids = await trendStatuses(store, [
+			{ author: fresh!, published: AT - HOUR, seq: 0, favourites: 6 },
+			...spam.map((author, i) => ({ author, published: AT - HOUR, seq: 10 + i, favourites: 100 })),
+		])
+		for (const id of ids.slice(1)) {
+			await review(store, 'status_trend_reviews', id, false)
+		}
+		await round(store)
+		const rows = (await trendRows(store)).map((r) => r.status_id)
+		expect(rows).toHaveLength(50)
+		expect(rows).toContain(ids[0])
+	})
+})
+
 describe('caps (0057_trends)', () => {
 	it('updates every score of 250 stored tags whose keys stay', async () => {
 		const store = await migratedStore()

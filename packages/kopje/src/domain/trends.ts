@@ -356,38 +356,52 @@ function roundStatuses(db: Db, now: number, byDefault: boolean): number {
 		.map((c) => ({
 			...c,
 			score: scoreStatus(c.observed, c.published_at, now),
+			reviewed: c.status_review !== null || c.account_review !== null,
 			allowed: (c.status_review ?? c.account_review ?? (byDefault ? 1 : 0)) === 1,
 		}))
 		.filter((c) => c.score >= STATUS_DECAY_THRESHOLD)
 		.sort((a, b) => b.score - a.score || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0))
+	type Scored = (typeof scored)[number]
 	// Each author's maximum (StatusTrend.allowed lists the author's top-scoring rows that are allowed): the rows tied at
-	// it are its top group, which the walk meets first. A lower row is kept only while one of its author's top group
-	// is, so the stored maximum is always the author's real one; TREND_STATUSES_PER_AUTHOR rows at most.
-	const top = new Map<string, number>()
+	// it are its top group, met first. Its witness is the first allowed row of the group, else its first row. Witnesses
+	// fill the pools first, then the other rows of authors whose witness was kept, so the stored maximum is always the
+	// author's real one and an approved maximum is never pushed out by its unreviewed ties; TREND_STATUSES_PER_AUTHOR
+	// rows at most. Each pool takes allowed rows by score; the review pool takes unreviewed rows before rejected ones,
+	// each by score, as the hashtags' does.
+	const byAuthor = new Map<string, Scored[]>()
 	for (const c of scored) {
-		if (!top.has(c.account_id)) {
-			top.set(c.account_id, c.score)
-		}
+		byAuthor.set(c.account_id, [...(byAuthor.get(c.account_id) ?? []), c])
 	}
-	const counts = new Map<string, { kept: number; top: boolean }>()
+	const witnesses = new Set<Scored>()
+	for (const rows of byAuthor.values()) {
+		const top = rows.filter((c) => c.score === rows[0]!.score)
+		witnesses.add(top.find((c) => c.allowed) ?? top[0]!)
+	}
+	const order = (a: Scored, b: Scored) =>
+		Number(a.reviewed) - Number(b.reviewed) || b.score - a.score || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0)
 	const pools = { allowed: 0, review: 0 }
-	const kept: typeof scored = []
-	for (const c of scored) {
-		const author = counts.get(c.account_id) ?? { kept: 0, top: false }
-		counts.set(c.account_id, author)
-		const inTop = c.score === top.get(c.account_id)
-		if (author.kept >= TREND_STATUSES_PER_AUTHOR || (!inTop && !author.top)) {
-			continue
+	const perAuthor = new Map<string, number>()
+	const kept: Scored[] = []
+	const fill = (rows: Scored[]) => {
+		const allowed = rows.filter((c) => c.allowed)
+		const review = rows.filter((c) => !c.allowed).sort(order)
+		for (const [pool, list, cap] of [
+			['allowed', allowed, TREND_ALLOWED_ROWS],
+			['review', review, TREND_REVIEW_POOL],
+		] as const) {
+			for (const c of list) {
+				const count = perAuthor.get(c.account_id) ?? 0
+				if (pools[pool] >= cap || count >= TREND_STATUSES_PER_AUTHOR) {
+					continue
+				}
+				pools[pool]++
+				perAuthor.set(c.account_id, count + 1)
+				kept.push(c)
+			}
 		}
-		const pool = c.allowed ? 'allowed' : 'review'
-		if (pools[pool] >= (c.allowed ? TREND_ALLOWED_ROWS : TREND_REVIEW_POOL)) {
-			continue
-		}
-		pools[pool]++
-		author.kept++
-		author.top ||= inTop
-		kept.push(c)
 	}
+	fill(scored.filter((c) => witnesses.has(c)))
+	fill(scored.filter((c) => !witnesses.has(c) && perAuthor.has(c.account_id)))
 	db.run(
 		'DELETE FROM trend_statuses WHERE status_id NOT IN (SELECT value FROM json_each(?1))',
 		JSON.stringify(kept.map((c) => c.id))
