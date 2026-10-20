@@ -107,13 +107,13 @@ export function trendSettings(db: Db): TrendSettings {
 
 // Whether the trend_tags row `t` is allowed: its review, else `byDefault` (an expression, 0 or 1).
 export function trendAllowedTagSql(t: string, byDefault: string): string {
-	return `coalesce((SELECT r.trendable FROM main.tag_trend_reviews r WHERE r.name = ${t}.name), ${byDefault}) = 1`
+	return `coalesce((SELECT r.trendable FROM tag_trend_reviews r WHERE r.name = ${t}.name), ${byDefault}) = 1`
 }
 
 // Whether the trend_statuses row `t` is allowed: the status's review, else its author's, else `byDefault`.
 export function trendAllowedStatusSql(t: string, byDefault: string): string {
-	return `coalesce((SELECT r.trendable FROM main.status_trend_reviews r WHERE r.status_id = ${t}.status_id),
-		(SELECT r.trendable FROM main.account_trend_reviews r WHERE r.account_id = ${t}.account_id), ${byDefault}) = 1`
+	return `coalesce((SELECT r.trendable FROM status_trend_reviews r WHERE r.status_id = ${t}.status_id),
+		(SELECT r.trendable FROM account_trend_reviews r WHERE r.account_id = ${t}.account_id), ${byDefault}) = 1`
 }
 
 // ---- The round (jobs/scheduled.ts, every 5 minutes), in one transaction (RES-6: at most MAX_TREND_TAGS +
@@ -136,14 +136,18 @@ function wellFormed(hex: string): boolean {
 	}
 }
 
-// The row heap (db/sql.ts rowHeapBytes) the round's reads take at most, from each column's maximum: a candidate
-// hashtag (a hex key of 2 × TREND_TAG_NAME_BYTES, three numbers), a stored one (the same and its time), a status
-// candidate (two ids, three numbers, a time). test/trends-round.test.ts builds those rows and measures them.
+// The row heap (db/sql.ts rowHeapBytes: 64 bytes a row, 32 a value, two a code unit of text) the round's reads take
+// at most, from each column's maximum: the candidate hashtags (a hex key of 2 × TREND_TAG_NAME_BYTES, three numbers),
+// the stored ones (a key, two numbers and a time), the stored status ids, and the status candidates (two ids, three
+// numbers and a time). test/trends-bounds.test.ts builds those rows and measures them.
 const ROW = (values: number, units: number) => ROW_OBJECT_BYTES + VALUE_BYTES * values + 2 * units
-export const TREND_ROUND_ROW_CAP =
+const ROUND_ROWS_HEAP =
 	TREND_TAG_CANDIDATES * ROW(4, 2 * TREND_TAG_NAME_BYTES) +
-	MAX_TREND_TAGS * ROW(6, 2 * TREND_TAG_NAME_BYTES + 24) +
+	MAX_TREND_TAGS * ROW(4, 2 * TREND_TAG_NAME_BYTES + 24) +
+	MAX_TREND_STATUSES * ROW(1, 18) +
 	(TREND_STATUS_CANDIDATES + MAX_TREND_STATUSES) * ROW(6, 18 + 18 + 24)
+// The RowMeter cap of the round's reads; tests lower it to see the backstop act.
+export const TREND_ROW_CAPS = { round: ROUND_ROWS_HEAP }
 
 type TagCandidate = { key: string; today: number; yesterday: number; review: number | null }
 type StoredTag = { key: string; max_score: number; max_score_at: string; review: number | null }
@@ -160,12 +164,12 @@ function tagCandidates(db: Db, now: number): TagCandidate[] {
 	return db.all<TagCandidate>(
 		`WITH w AS MATERIALIZED (
 			SELECT s.id, s.account_id, ${isoTimeSql('s.published_at')} AS published_at
-			FROM main.statuses s INDEXED BY statuses_public
+			FROM statuses s INDEXED BY statuses_public
 			WHERE s.visibility = 'public' AND s.reblog_of_id IS NULL AND s.id >= ?1 ORDER BY s.id DESC LIMIT ${TREND_WINDOW}),
 		r AS MATERIALIZED (
 			SELECT CAST(${tagNameSql('t.name')} AS BLOB) AS key, t.public, w.account_id, w.published_at
-			FROM w CROSS JOIN main.status_tags t ON t.status_id = w.id
-				AND t.name IN (SELECT x.name FROM main.status_tags x WHERE x.status_id = w.id ORDER BY x.name LIMIT ${MAX_STATUS_TAGS})
+			FROM w CROSS JOIN status_tags t ON t.status_id = w.id
+				AND t.name IN (SELECT x.name FROM status_tags x WHERE x.status_id = w.id ORDER BY x.name LIMIT ${MAX_STATUS_TAGS})
 			LIMIT ${TREND_TAG_ROWS}),
 		ok AS (SELECT a.account_id FROM (SELECT DISTINCT account_id FROM r) a WHERE ${availableSql('a.account_id')}),
 		g AS (
@@ -176,7 +180,7 @@ function tagCandidates(db: Db, now: number): TagCandidate[] {
 				AND ${trendTagNameCheckSql('CAST(key AS TEXT)')} AND account_id IN (SELECT account_id FROM ok)
 			GROUP BY key)
 		SELECT hex(key) AS key, today, yesterday,
-			(SELECT v.trendable FROM main.tag_trend_reviews v WHERE v.name = CAST(g.key AS TEXT)) AS review
+			(SELECT v.trendable FROM tag_trend_reviews v WHERE v.name = CAST(g.key AS TEXT)) AS review
 		FROM g WHERE today >= ${TAG_THRESHOLD} ORDER BY today DESC, key LIMIT ${TREND_TAG_CANDIDATES}`,
 		idOf(now - (now % DAY_MS) - DAY_MS),
 		today,
@@ -207,8 +211,8 @@ function roundTags(db: Db, now: number, byDefault: boolean): number {
 	const candidates = new Map(tagCandidates(db, now).map((c) => [c.key, c]))
 	const stored = db.all<StoredTag>(
 		`SELECT hex(t.name) AS key, t.max_score, t.max_score_at,
-			(SELECT r.trendable FROM main.tag_trend_reviews r WHERE r.name = t.name) AS review
-		FROM main.trend_tags t`
+			(SELECT r.trendable FROM tag_trend_reviews r WHERE r.name = t.name) AS review
+		FROM trend_tags t`
 	)
 	const scored: ScoredTag[] = []
 	const seen = new Set<string>()
@@ -256,12 +260,12 @@ function roundTags(db: Db, now: number, byDefault: boolean): number {
 	const kept = [...allowedPool, ...reviewPool]
 	// Deletes, then updates of stored keys, then inserts of new keys, so no cap trigger fires (0057_trends).
 	db.run(
-		'DELETE FROM main.trend_tags WHERE hex(name) NOT IN (SELECT value FROM json_each(?1))',
+		'DELETE FROM trend_tags WHERE hex(name) NOT IN (SELECT value FROM json_each(?1))',
 		JSON.stringify(kept.map((t) => t.key))
 	)
 	for (const t of kept.filter((t) => t.stored)) {
 		db.run(
-			'UPDATE main.trend_tags SET score = ?1, max_score = ?2, max_score_at = ?3 WHERE name = CAST(unhex(?4) AS TEXT)',
+			'UPDATE trend_tags SET score = ?1, max_score = ?2, max_score_at = ?3 WHERE name = CAST(unhex(?4) AS TEXT)',
 			t.score,
 			t.max,
 			t.at,
@@ -271,7 +275,7 @@ function roundTags(db: Db, now: number, byDefault: boolean): number {
 	const fresh = kept.filter((t) => !t.stored)
 	if (fresh.length > 0) {
 		db.run(
-			`INSERT INTO main.trend_tags (name, score, max_score, max_score_at)
+			`INSERT INTO trend_tags (name, score, max_score, max_score_at)
 			SELECT CAST(unhex(json_extract(value, '$.k')) AS TEXT), json_extract(value, '$.s'), json_extract(value, '$.m'),
 				json_extract(value, '$.a')
 			FROM json_each(?1)`,
@@ -293,8 +297,8 @@ type StatusCandidate = {
 // What the round reads of a trend status, with its reviews.
 const STATUS_COLUMNS = `s.id, s.account_id, min(s.reblogs_count + s.favourites_count, ${TREND_OBSERVED_MAX}) AS observed,
 	${isoTimeSql('s.published_at')} AS published_at,
-	(SELECT v.trendable FROM main.status_trend_reviews v WHERE v.status_id = s.id) AS status_review,
-	(SELECT v.trendable FROM main.account_trend_reviews v WHERE v.account_id = s.account_id) AS account_review`
+	(SELECT v.trendable FROM status_trend_reviews v WHERE v.status_id = s.id) AS status_review,
+	(SELECT v.trendable FROM account_trend_reviews v WHERE v.account_id = s.account_id) AS account_review`
 
 // The window's TREND_STATUS_CANDIDATES statuses with the most boosts and favourites (TREND_OBSERVED_MAX at most, ties
 // by id), of those with STATUS_THRESHOLD or more, then those trendableStatusSql passes; and the stored rows, scored
@@ -302,19 +306,19 @@ const STATUS_COLUMNS = `s.id, s.account_id, min(s.reblogs_count + s.favourites_c
 function statusCandidates(db: Db, now: number): StatusCandidate[] {
 	const window = db.all<StatusCandidate>(
 		`SELECT ${STATUS_COLUMNS} FROM (
-			SELECT s.id FROM (SELECT id FROM main.statuses INDEXED BY statuses_public
+			SELECT s.id FROM (SELECT id FROM statuses INDEXED BY statuses_public
 					WHERE visibility = 'public' AND reblog_of_id IS NULL AND id >= ?1 ORDER BY id DESC LIMIT ${TREND_WINDOW}) w
-				CROSS JOIN main.statuses s ON s.id = w.id
+				CROSS JOIN statuses s ON s.id = w.id
 			WHERE s.reblogs_count + s.favourites_count >= ${STATUS_THRESHOLD}
 			ORDER BY min(s.reblogs_count + s.favourites_count, ${TREND_OBSERVED_MAX}) DESC, s.id DESC
 			LIMIT ${TREND_STATUS_CANDIDATES}) c
-		CROSS JOIN main.statuses s ON s.id = c.id WHERE ${trendableStatusSql('s', '?2', '?3')}`,
+		CROSS JOIN statuses s ON s.id = c.id WHERE ${trendableStatusSql('s', '?2', '?3')}`,
 		idOf(now - (now % DAY_MS) - DAY_MS),
 		iso(now),
 		TREND_LANGUAGES_JSON
 	)
 	const stored = db.all<StatusCandidate>(
-		`SELECT ${STATUS_COLUMNS} FROM main.trend_statuses t CROSS JOIN main.statuses s ON s.id = t.status_id
+		`SELECT ${STATUS_COLUMNS} FROM trend_statuses t CROSS JOIN statuses s ON s.id = t.status_id
 		WHERE ${trendableStatusSql('s', '?1', '?2')}`,
 		iso(now),
 		TREND_LANGUAGES_JSON
@@ -334,7 +338,7 @@ function scoreStatus(observed: number, publishedAt: string, now: number): number
 }
 
 function roundStatuses(db: Db, now: number, byDefault: boolean): number {
-	const storedIds = new Set(db.all<{ id: string }>('SELECT status_id AS id FROM main.trend_statuses').map((r) => r.id))
+	const storedIds = new Set(db.all<{ id: string }>('SELECT status_id AS id FROM trend_statuses').map((r) => r.id))
 	const scored = statusCandidates(db, now)
 		.map((c) => ({
 			...c,
@@ -372,16 +376,16 @@ function roundStatuses(db: Db, now: number, byDefault: boolean): number {
 		kept.push(c)
 	}
 	db.run(
-		'DELETE FROM main.trend_statuses WHERE status_id NOT IN (SELECT value FROM json_each(?1))',
+		'DELETE FROM trend_statuses WHERE status_id NOT IN (SELECT value FROM json_each(?1))',
 		JSON.stringify(kept.map((c) => c.id))
 	)
 	for (const c of kept.filter((c) => storedIds.has(c.id))) {
-		db.run('UPDATE main.trend_statuses SET score = ?1 WHERE status_id = ?2', c.score, c.id)
+		db.run('UPDATE trend_statuses SET score = ?1 WHERE status_id = ?2', c.score, c.id)
 	}
 	const fresh = kept.filter((c) => !storedIds.has(c.id))
 	if (fresh.length > 0) {
 		db.run(
-			`INSERT INTO main.trend_statuses (status_id, account_id, score)
+			`INSERT INTO trend_statuses (status_id, account_id, score)
 			SELECT json_extract(value, '$.i'), json_extract(value, '$.a'), json_extract(value, '$.s') FROM json_each(?1)`,
 			JSON.stringify(fresh.map((c) => ({ i: c.id, a: c.account_id, s: c.score })))
 		)
@@ -390,19 +394,17 @@ function roundStatuses(db: Db, now: number, byDefault: boolean): number {
 }
 
 // One round at `now`: with trends off, both trend tables emptied; otherwise the hashtags, then the statuses, scored
-// again from the stored statuses and kept within their pools. The reads are metered against TREND_ROUND_ROW_CAP.
-export const trendsRound = writeOperation<{ now: number; rowCap?: number }, { tags: number; statuses: number }>(
-	(db, { now, rowCap }) => {
-		const settings = trendSettings(db)
-		if (!settings.trends) {
-			db.run('DELETE FROM main.trend_tags')
-			db.run('DELETE FROM main.trend_statuses')
-			return { tags: 0, statuses: 0 }
-		}
-		const metered = db.metered(new RowMeter(rowCap ?? TREND_ROUND_ROW_CAP))
-		return {
-			tags: roundTags(metered, now, settings.trendable_by_default),
-			statuses: roundStatuses(metered, now, settings.trendable_by_default),
-		}
+// again from the stored statuses and kept within their pools. The reads are metered against TREND_ROW_CAPS.round.
+export const trendsRound = writeOperation<{ now: number }, { tags: number; statuses: number }>((db, { now }) => {
+	const settings = trendSettings(db)
+	if (!settings.trends) {
+		db.run('DELETE FROM trend_tags')
+		db.run('DELETE FROM trend_statuses')
+		return { tags: 0, statuses: 0 }
 	}
-)
+	const metered = db.metered(new RowMeter(TREND_ROW_CAPS.round))
+	return {
+		tags: roundTags(metered, now, settings.trendable_by_default),
+		statuses: roundStatuses(metered, now, settings.trendable_by_default),
+	}
+})

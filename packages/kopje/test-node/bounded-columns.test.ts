@@ -333,6 +333,8 @@ const SAFE_INTERPOLATIONS = new Set([
 	'followListsShownSql',
 	'hidesCollectionsSql',
 	'hostCoveredSql',
+	// A stored time read as its 24-byte ISO form, or NULL (platform/stored-bounds.ts).
+	'isoTimeSql',
 	'mayQuoteSql',
 	'mutesSql',
 	'notificationPolicySql',
@@ -432,8 +434,13 @@ const COMPARED_SQL = 'a tag name a stream matches in SQL, never returned'
 const WINDOW = "a merged window's stream key, order value or aggregate name, over ids"
 const POLL = "a poll's stored choices, matched against a vote or an update, never presented"
 const SNAPSHOT = "a field of an edit's media snapshot, bounded as an attachment's column (editMediaSql)"
+const NUMBER = 'a number constant (the trends round’s count clamp, TREND_OBSERVED_MAX), naming no column'
 
 const ALLOWED: Record<string, { count: number; reason: string }> = {
+	'src/domain/trends.ts interpolation TREND_OBSERVED_MAX': { count: 2, reason: NUMBER },
+	// The round's raw cut: a status's first 100 names, matched by membership only (projecting them would change which
+	// rows count against the cut); the names the round returns go through tagNameSql.
+	'src/domain/trends.ts status_tags.name': { count: 1, reason: COMPARED_SQL },
 	'src/domain/remote-suspension.ts accounts.uri': { count: 1, reason: IDENTITY },
 	'src/domain/audience.ts interpolation host': { count: 1, reason: PREDICATE },
 	'src/domain/audience.ts interpolation a': { count: 1, reason: PREDICATE },
