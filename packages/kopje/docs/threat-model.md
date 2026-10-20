@@ -1528,8 +1528,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   _Enforced (main)_ for trends: the CHECKs and triggers of migration `0057_trends` (a hashtag name's bytes, then NUL,
   then characters, then the ASCII a normalized hashtag holds; scores within 0 and 1e15 and a peak at least the score;
   24-byte ISO times; 18-digit ids; `trends` and `trendable_by_default` only `'true'` or `'false'`), which imports meet
-  too; the round filters names by the same rule (`trendTagNameCheckSql`) and drops a stored name that is not
-  well-formed UTF-8; `test/migrations.test.ts` ("0057_trends"), `test/trends-round.test.ts` ("imported rows"),
+  too; the round filters names by the same rule (`trendTagNameCheckSql`), admits only names that are well-formed UTF-8
+  and their own normalized form (so a listed name is the one its review and history take), and drops a stored row of
+  any other; `test/migrations.test.ts` ("0057_trends"), `test/trends-round.test.ts` ("imported rows"),
   `test/trend-dump.test.ts`.
 - **RES-3: lists are bounded.** Pageable lists return at most 80 items; relationships read at most 100 ids; any other
   collection names its count and byte bound. _Enforced (main):_ `src/mastodon/pagination.ts`, `MAX_RELATIONSHIP_IDS` in
@@ -1885,8 +1886,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   row it writes with `total_changes()` within `ANNOUNCEMENT_DELETE_ROWS` (4,096), refused before it writes past it;
   `test/admin-announcements.test.ts` ("an announcement’s delete").
   _Enforced (main)_ for trends: the cron's round (`trendsRound`) deletes and writes at most 500 rows of each trend table
-  in one transaction, and its reads are metered against `TREND_ROW_CAPS.round` (3,076,600 bytes of row heap, which the
-  widest rows fill exactly); a status's batched delete reserves its trend row and review (6 + after) and an account's
+  in one transaction, and its reads are metered against `TREND_ROW_CAPS.round` (8,222,200 bytes of row heap, which the
+  widest rows fill exactly: 1,600 hashtag groups of 1,024-byte names among them); a status's batched delete reserves its trend row and review (6 + after) and an account's
   final delete its review (3); `test/trends-bounds.test.ts` ("meters the round’s rows"), `test/cascade-guard.test.ts`
   ("trend rows within a batch").
 - **RES-7: query work is bounded, not only the rows returned.** Feeds apply visibility and filters in the query before
@@ -1992,8 +1993,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   read each, resumed by account id (`test/inbox-flag.test.ts`, `test/policy-bounds.test.ts`,
   `test/admin-suspension.test.ts` ("the account's reporters")).
   _Enforced (main)_ for trends (MD-5): the round reads the newest 4,000 public originals from yesterday 00:00 UTC, at
-  most 100 hashtag rows of each and 8,000 in all, cut raw before any rule (materialized), returns at most 400 hashtag
-  candidates and scores at most 400 + 250 statuses; measured at saturation (an active suspend block over 8-label
+  most 100 hashtag rows of each and 8,000 in all, cut raw before any rule (materialized), returns at most 1,600 hashtag
+  groups (each takes 5 of the 8,000 rows), keeps the first 400 whose names are well-formed and in their own normalized
+  form, and scores at most 400 + 250 statuses; measured at saturation (an active suspend block over 8-label
   domains, 4,000 distinct authors or 40 authors of 100 statuses, a status of 10,000 rejected hashtag rows) it reads
   153,693 rows with distinct authors and 80,716 with repeated ones, the same with 10,000 or 1,000,000 older statuses
   and 0 or 100,000 hidden ones in the window (`test/trends-cost.test.ts`). `GET /api/v1/trends/tags` reads 51,042 rows

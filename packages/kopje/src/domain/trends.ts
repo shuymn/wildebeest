@@ -86,6 +86,7 @@ export const STATUS_DECAY_THRESHOLD = 0.3
 export const TREND_WINDOW = 4000
 export const TREND_TAG_ROWS = 8000
 export const TREND_TAG_CANDIDATES = 400
+export const TREND_TAG_GROUPS = TREND_TAG_ROWS / TAG_THRESHOLD
 export const TREND_STATUS_CANDIDATES = 400
 export const TREND_HISTORY_ROWS = 200
 export const TREND_OBSERVED_MAX = 10_000_000
@@ -150,12 +151,12 @@ function wellFormed(hex: string): boolean {
 }
 
 // The row heap (db/sql.ts rowHeapBytes: 64 bytes a row, 32 a value, two a code unit of text) the round's reads take
-// at most, from each column's maximum: the candidate hashtags (a hex key of 2 × TREND_TAG_NAME_BYTES, three numbers),
-// the stored ones (a key, two numbers and a time), the stored status ids, and the status candidates (two ids, three
-// numbers and a time). test/trends-bounds.test.ts builds those rows and measures them.
+// at most, from each column's maximum: the hashtag groups (TREND_TAG_GROUPS, a hex key of 2 × TREND_TAG_NAME_BYTES and
+// three numbers each), the stored ones (a key, two numbers and a time), the stored status ids, and the status
+// candidates (two ids, three numbers and a time). test/trends-bounds.test.ts builds those rows and measures them.
 const ROW = (values: number, units: number) => ROW_OBJECT_BYTES + VALUE_BYTES * values + 2 * units
 const ROUND_ROWS_HEAP =
-	TREND_TAG_CANDIDATES * ROW(4, 2 * TREND_TAG_NAME_BYTES) +
+	TREND_TAG_GROUPS * ROW(4, 2 * TREND_TAG_NAME_BYTES) +
 	MAX_TREND_TAGS * ROW(4, 2 * TREND_TAG_NAME_BYTES + 24) +
 	MAX_TREND_STATUSES * ROW(1, 18) +
 	(TREND_STATUS_CANDIDATES + MAX_TREND_STATUSES) * ROW(6, 18 + 18 + 24)
@@ -166,12 +167,14 @@ type TagCandidate = { key: string; today: number; yesterday: number; review: num
 type StoredTag = { key: string; max_score: number; max_score_at: string; review: number | null }
 type ScoredTag = { key: string; score: number; max: number; at: string; review: number | null; stored: boolean }
 
-// The hashtags of the window with today's and yesterday's accounts (distinct authors per publication day, R1), the
-// TREND_TAG_CANDIDATES with the most today of those with TAG_THRESHOLD or more (ties by key). Both CTEs are
+// The hashtags of the window with today's and yesterday's accounts (distinct authors per publication day, R1), every
+// one with TAG_THRESHOLD or more today, the most first (ties by key): at most TREND_TAG_GROUPS, since each takes that
+// many of the TREND_TAG_ROWS raw rows (the LIMIT states the bound). candidateTags keeps the first TREND_TAG_CANDIDATES
+// whose names are representable. Both CTEs are
 // materialized, so the window and the raw rows are cut before any rule is applied: a status's first MAX_STATUS_TAGS
 // rows by name, TREND_TAG_ROWS in all, whatever they hold. Then: public rows, names within the bound and the name rule,
 // published today or yesterday and by `now`, by available authors. The membership read of `x.name` presents nothing.
-function tagCandidates(db: Db, now: number): TagCandidate[] {
+function tagGroups(db: Db, now: number): TagCandidate[] {
 	const today = day(now)
 	const yesterday = day(now - DAY_MS)
 	return db.all<TagCandidate>(
@@ -194,7 +197,7 @@ function tagCandidates(db: Db, now: number): TagCandidate[] {
 			GROUP BY key)
 		SELECT hex(key) AS key, today, yesterday,
 			(SELECT v.trendable FROM tag_trend_reviews v WHERE v.name = CAST(g.key AS TEXT)) AS review
-		FROM g WHERE today >= ${TAG_THRESHOLD} ORDER BY today DESC, key LIMIT ${TREND_TAG_CANDIDATES}`,
+		FROM g WHERE today >= ${TAG_THRESHOLD} ORDER BY today DESC, key LIMIT ${TREND_TAG_GROUPS}`,
 		idOf(now - (now % DAY_MS) - DAY_MS),
 		today,
 		yesterday,
@@ -220,8 +223,16 @@ function scoreTag(observed: number, yesterday: number, peak: { max: number; at: 
 	return { score: Math.min(decayed, max), max, at }
 }
 
+// The TREND_TAG_CANDIDATES groups with the most accounts today whose names are representable (nameOf), so a key that
+// is not well-formed UTF-8 or not in its own normalized form never takes a candidate's place.
+export function candidateTags(db: Db, now: number): TagCandidate[] {
+	return tagGroups(db, now)
+		.filter((c) => nameOf(c.key) !== null)
+		.slice(0, TREND_TAG_CANDIDATES)
+}
+
 function roundTags(db: Db, now: number, byDefault: boolean): number {
-	const candidates = new Map(tagCandidates(db, now).map((c) => [c.key, c]))
+	const candidates = new Map(candidateTags(db, now).map((c) => [c.key, c]))
 	const stored = db.all<StoredTag>(
 		`SELECT hex(t.name) AS key, t.max_score, t.max_score_at,
 			(SELECT r.trendable FROM tag_trend_reviews r WHERE r.name = t.name) AS review
@@ -231,7 +242,7 @@ function roundTags(db: Db, now: number, byDefault: boolean): number {
 	const seen = new Set<string>()
 	for (const row of stored) {
 		seen.add(row.key)
-		if (!wellFormed(row.key)) {
+		if (nameOf(row.key) === null) {
 			continue
 		}
 		const candidate = candidates.get(row.key)
@@ -240,7 +251,7 @@ function roundTags(db: Db, now: number, byDefault: boolean): number {
 		scored.push({ key: row.key, score, max, at: iso(at), review: row.review, stored: true })
 	}
 	for (const candidate of candidates.values()) {
-		if (seen.has(candidate.key) || !wellFormed(candidate.key)) {
+		if (seen.has(candidate.key)) {
 			continue
 		}
 		const { score, max, at } = scoreTag(candidate.today, candidate.yesterday, null, now)
@@ -464,7 +475,9 @@ export function trendTagHistory(db: Db, name: string, now: number): TagHistory[]
 	})
 }
 
-// The text of a stored name, or null when its bytes are not well-formed UTF-8 (an imported row the next round drops).
+// The text of a stored name, or null when it is not representable: its bytes are not well-formed UTF-8, or it is not
+// its own normalized form within the name rule (reviewName), so a review or a history by the presented name would name
+// another key. The round never admits such a name and drops a stored row of one (an import's).
 function nameOf(hex: string): string | null {
 	if (!wellFormed(hex)) {
 		return null
@@ -473,7 +486,8 @@ function nameOf(hex: string): string | null {
 	for (let i = 0; i < bytes.length; i++) {
 		bytes[i] = Number.parseInt(hex.slice(2 * i, 2 * i + 2), 16)
 	}
-	return STRICT.decode(bytes)
+	const name = STRICT.decode(bytes)
+	return reviewName(name) === name ? name : null
 }
 
 // The listed hashtags (score of TAG_DECAY_THRESHOLD or more) that are allowed now, the top TREND_ALLOWED_ROWS by score

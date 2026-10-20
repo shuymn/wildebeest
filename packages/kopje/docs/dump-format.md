@@ -177,7 +177,7 @@ from 0.3 to 1e15; at most 250 rows in each and 3 per author. `tag_trend_reviews`
 `status_trend_reviews` and `account_trend_reviews` hold `trendable` 0 or 1 and a 24-byte ISO `reviewed_at`, at most
 10,000 each. `instance_settings` rows named `trends` and `trendable_by_default` hold `true` or `false`. The tables come
 after `statuses` and `accounts`. The rows are a snapshot: the next cron round works them out again, dropping a stored
-name that is not well-formed UTF-8 and decaying a peak dated in the future from the round's time. A chunk past these
+name that is not well-formed UTF-8 or not in its normalized form and decaying a peak dated in the future from the round's time. A chunk past these
 fails with the CHECK's name (`trend_tag_name`, `trend_tag_scores`, `trend_tag_max_score_at_iso`, `trend_status_ids`,
 `trend_status_score`, `tag_trend_review_name`, `tag_trend_review_at_iso`, `status_trend_review_at_iso`,
 `account_trend_review_at_iso`), `trend_tags: more than 250`, `trend_statuses: more than 250`, `trend_statuses: more

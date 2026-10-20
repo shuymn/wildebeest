@@ -17,8 +17,11 @@ import {
 	uses,
 } from './trend-helpers'
 import { rowHeapBytes } from '../src/db/sql'
+import { readOperation } from '../src/domain/operation'
 import {
+	candidateTags,
 	TREND_ROW_CAPS,
+	TREND_TAG_GROUPS,
 	TREND_STATUS_CANDIDATES,
 	TREND_TAG_CANDIDATES,
 	TREND_TAG_ROWS,
@@ -28,6 +31,8 @@ import {
 import type { StoreStub } from '../src/platform/store-client'
 
 // The round's raw windows (RES-7): each cut is crossed by one row, and the rows it returns are measured (RES-3).
+
+const candidates = readOperation<{ now: number }, string[]>((db, { now }) => candidateTags(db, now).map((c) => c.key))
 
 // A round run inside the Store over a SqlStorage that hands every statement's rows to `seen`.
 async function observedRound(store: StoreStub, seen: (rows: readonly SqlRow[], query: string) => void, now = AT) {
@@ -137,18 +142,56 @@ describe('the round’s windows (RES-7)', () => {
 			}))
 		)
 		await trendStatuses(store, statuses)
-		const returned: string[] = []
-		await observedRound(store, (rows, query) => {
-			if (CANDIDATES.test(query)) {
-				returned.push(...rows.map((r) => r.key as string))
-			}
-		})
+		const returned = await runInDurableObject(store, (_instance, state) =>
+			candidates.run(state.storage.sql, { now: AT })
+		)
 		const hex = (name: string) =>
 			[...new TextEncoder().encode(name)]
 				.map((b) => b.toString(16).padStart(2, '0'))
 				.join('')
 				.toUpperCase()
 		expect(returned).toEqual(names.slice(0, TREND_TAG_CANDIDATES).map(hex))
+	}, 60_000)
+
+	// M5: 400 keys that are not well-formed UTF-8, each with 6 accounts, do not starve a valid key with 5. M4: a name not
+	// in its own normalized form (é, which normalizeTag folds to e) never trends; one that is (カフェ) does.
+	it('keeps unrepresentable keys out of the candidates', async () => {
+		const store = await migratedStore()
+		const a = await authors(store, 6)
+		await setTrendSetting(store, 'trendable_by_default', true)
+		const ids = await trendStatuses(store, [
+			...uses(a.slice(0, 5), ['ok', '\u00e9', 'e\u0301', 'カフェ'], TODAY + HOUR),
+			// 4 statuses of each of 6 authors, each with 100 of the 400 malformed keys (a status's first 100 are read).
+			...a.flatMap((author, i) => [0, 1, 2, 3].map((j) => ({ author, published: TODAY + 2 * HOUR + i, seq: 1 + j }))),
+		])
+		await runInDurableObject(store, (_instance, state) => {
+			for (const [k, id] of ids.slice(5).entries()) {
+				state.storage.sql.exec(
+					`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 99)
+					INSERT INTO status_tags (status_id, name, public)
+					SELECT ?1, CAST(x'C0' || printf('%03d', ?2 * 100 + i) AS TEXT), 1 FROM n`,
+					id,
+					k % 4
+				)
+			}
+		})
+		// The statement returns every group of 5 or more: the 400 malformed ones, then the four of five accounts.
+		let groups = 0
+		await runInDurableObject(store, (_instance, state) => {
+			const watched = observedSql(state.storage.sql, (rows, query) => {
+				if (CANDIDATES.test(query)) {
+					groups = rows.length
+				}
+			})
+			candidates.run(watched, { now: AT })
+		})
+		expect(groups).toBe(404)
+		const returned = await runInDurableObject(store, (_instance, state) =>
+			candidates.run(state.storage.sql, { now: AT })
+		)
+		expect(returned).toHaveLength(2)
+		await round(store)
+		expect((await trendTags(store)).map((t) => t.name).sort()).toEqual(['ok', 'カフェ'].sort())
 	}, 60_000)
 
 	it('scores the 400 statuses with the most boosts and favourites and not a 401st', async () => {
@@ -171,11 +214,12 @@ describe('the round’s windows (RES-7)', () => {
 })
 
 describe('what the round holds (RES-3)', () => {
-	// T5: 4,000 statuses with 2 distinct one-use names of 1,024 bytes each are 8,000 groups, none a candidate.
-	it('returns at most 400 candidate rows when every name is distinct and maximal', async () => {
+	// T5: 4,000 statuses with 2 distinct one-use names of 1,024 bytes each are 8,000 groups, none of 5 accounts, so the
+	// statement returns none of them (it returns at most TREND_TAG_GROUPS).
+	it('returns no group of one-use names when every name is distinct and maximal', async () => {
 		const store = await migratedStore()
 		const [a] = await authors(store, 1)
-		const name = (i: number) => String.fromCodePoint(0x20000 + i) + '\u{1F600}'.repeat(255)
+		const name = (i: number) => String.fromCodePoint(0x20000 + i) + '\u{20001}'.repeat(255)
 		expect(new TextEncoder().encode(name(0)).length).toBe(1024)
 		await trendStatuses(
 			store,
@@ -202,13 +246,13 @@ describe('what the round holds (RES-3)', () => {
 		const store = await migratedStore()
 		const a = await authors(store, 650)
 		await setTrendSetting(store, 'trendable_by_default', true)
-		const name = (i: number) => String.fromCodePoint(0x20000 + i) + '\u{1F600}'.repeat(255)
-		// 400 candidates, each used by 5 accounts today.
-		const tags = Array.from({ length: TREND_TAG_CANDIDATES }, (_, i) => name(i))
+		const name = (i: number) => String.fromCodePoint(0x20000 + i) + '\u{20001}'.repeat(255)
+		// TREND_TAG_GROUPS (1,600) groups, each used by 5 accounts today: every one of the 8,000 raw rows.
+		const tags = Array.from({ length: TREND_TAG_GROUPS }, (_, i) => name(i))
 		await trendStatuses(
 			store,
 			a.slice(0, 5).flatMap((author, i) =>
-				Array.from({ length: 4 }, (_, j) => ({
+				Array.from({ length: TREND_TAG_GROUPS / 100 }, (_, j) => ({
 					author,
 					published: TODAY + HOUR + i,
 					seq: j,
@@ -221,7 +265,7 @@ describe('what the round holds (RES-3)', () => {
 			for (let i = 0; i < 250; i++) {
 				state.storage.sql.exec(
 					'INSERT INTO trend_tags (name, score, max_score, max_score_at) VALUES (?, 0.5, 0.5, ?)',
-					name(1000 + i),
+					name(2000 + i),
 					new Date(AT - HOUR).toISOString()
 				)
 			}

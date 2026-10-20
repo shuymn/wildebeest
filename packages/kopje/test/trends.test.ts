@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest'
 import { type ApiHarness, apiHarness, bearer, login, registerApp, seedAccount, setSetting, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { answer, bigStatus } from './budget-helpers'
+import { BUILD } from './helpers'
+import { ACCESS, setAccess } from './ops-helpers'
 import { appToken, scopedToken } from './read-helpers'
 import { block, community, getJson } from './status-helpers'
 import { authors, review, round, setTrendSetting, trendStatuses } from './trend-helpers'
@@ -120,6 +122,35 @@ describe('GET /api/v1/trends/tags', () => {
 		expect(all).toEqual(Array.from({ length: 200 }, (_, i) => `t${String(i).padStart(3, '0')}`))
 		expect(await walk(7, 3)).toEqual(all.slice(3))
 		expect(await walk(13, 0)).toEqual(all)
+	})
+})
+
+describe('a Unicode hashtag from listing to review (M4)', () => {
+	it('is reviewed and counted under the name it is listed by', async () => {
+		const h = await apiHarness()
+		await setAccess(h.store)
+		await setTrendSetting(h.store, 'trendable_by_default', true)
+		const a = await authors(h.store, 5)
+		await trendStatuses(
+			h.store,
+			a.map((author, i) => ({ author, published: NOW + i, tags: ['カフェ'] }))
+		)
+		await round(h.store, NOW + HOUR)
+		const listed = (await getJson(h, '/api/v1/trends/tags')).body as { name: string; history: { uses: string }[] }[]
+		expect(listed.map((t) => t.name)).toEqual(['カフェ'])
+		expect(listed[0]!.history[0]!.uses).toBe('5')
+		const rejected = await h.store.reviewTrendTag(BUILD, {
+			authority: ACCESS,
+			name: listed[0]!.name,
+			trendable: false,
+			origin: 'https://kopje.test',
+		})
+		expect(rejected).toMatchObject({ ok: true, tag: { name: 'カフェ', trendable: false, score: 16 } })
+		expect((await getJson(h, '/api/v1/trends/tags')).body).toEqual([])
+		const tag = (await getJson(h, `/api/v1/tags/${encodeURIComponent('カフェ')}`)).body as {
+			history: { uses: string }[]
+		}
+		expect(tag.history[0]!.uses).toBe('5')
 	})
 })
 

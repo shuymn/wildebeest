@@ -81,7 +81,7 @@ async function adminStore(): Promise<StoreStub> {
 
 // `n` distinct names of TREND_TAG_NAME_LENGTH four-byte characters, TREND_TAG_NAME_BYTES each.
 const names = (n: number) =>
-	Array.from({ length: n }, (_, i) => String.fromCodePoint(0x20000 + i) + '\u{1F600}'.repeat(TREND_TAG_NAME_LENGTH - 1))
+	Array.from({ length: n }, (_, i) => String.fromCodePoint(0x20000 + i) + '\u{20001}'.repeat(TREND_TAG_NAME_LENGTH - 1))
 
 describe('trends maxima (RES-3)', () => {
 	it('pins the derived maxima, each within 85% of an answer', () => {

@@ -42,7 +42,8 @@ reason and who decided it, and change the exceptions that cite the gap.
   window. Deleted posts and suspended accounts stop counting at once. At most 200 allowed hashtags and 200 allowed
   posts are kept, with 50 of each awaiting review, and 3 posts per author; the lists end at the top 200 allowed now,
   and an offset of 200 or more answers `[]`. A trending hashtag's `history` counts at most its newest 200 public posts
-  of the 7 days, and a hashtag whose stored name is not well-formed UTF-8 never trends. Reviews are made by the Access
+  of the 7 days, and a hashtag whose stored name is not well-formed UTF-8 or not in its own normalized form (an
+  imported one) never trends. Reviews are made by the Access
   admin, take effect at once and send no e-mail; while trends are off nothing is scored and the admin lists are empty.
   Posts are ordered by the `Accept-Language` language among ISO 639-1 codes (no user locale, chosen languages or
   `lang`). `limit=0` answers `[]` without a Link, and a page cut by the 8 MiB budget continues after its last post.
