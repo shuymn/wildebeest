@@ -1049,7 +1049,8 @@ export function quoteApprovalReads(viewer: ViewerContext): QuoteApprovalReads {
 				return new Map()
 			}
 			const rows = db.all<{ id: string; current_user: 'automatic' | 'manual' | 'unknown' | 'denied' }>(
-				`SELECT ${selectSql(QUOTE_APPROVAL_COLUMNS.columns)} FROM main.statuses t WHERE t.id IN (SELECT value FROM json_each(?1))`,
+				`SELECT ${selectSql(QUOTE_APPROVAL_COLUMNS.columns)} FROM main.statuses t INDEXED BY sqlite_autoindex_statuses_1
+				WHERE t.id IN (SELECT value FROM json_each(?1))`,
 				JSON.stringify(statusIds),
 				viewer.accountId
 			)

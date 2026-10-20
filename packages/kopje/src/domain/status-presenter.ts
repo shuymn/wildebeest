@@ -37,7 +37,7 @@ import {
 	SHOWN_TAGS_SQL,
 	shownMediaSql,
 	STATUS_COLUMN_MAP,
-	STATUS_FROM,
+	statusesOfSql,
 	STATUS_MEDIA_COLUMN_MAP,
 	statusRowBoundSql,
 	TAG_COLUMN_MAP,
@@ -262,7 +262,7 @@ function textLevel(db: Db, ids: readonly string[], options: PresentOwnOptions): 
 		const media = mediaOf(db, json)
 		for (const row of db.all<TextRow & { id: string }>(
 			`SELECT s.id, s.spoiler_text, s.content, s.source_text, au.domain AS author_domain
-			FROM ${STATUS_FROM} WHERE s.id IN (SELECT value FROM json_each(?1))`,
+			FROM ${statusesOfSql(STATUS_KEYS)}`,
 			json
 		)) {
 			lengths.set(row.id, searchableText(row, polls.get(row.id), media.get(row.id) ?? []).length)
@@ -273,29 +273,39 @@ function textLevel(db: Db, ids: readonly string[], options: PresentOwnOptions): 
 
 type GraphRow = { id: string; reblog_of_id: string | null }
 
-// The statuses of `ids` with their columns, and the originals of the boosts among them that the viewer may see.
-function statusRows(db: Db, where: string, ...params: SqlStorageValue[]): StatusRow[] {
-	return db.all<StatusRow>(`SELECT ${selectSql(STATUS_COLUMN_MAP)} FROM ${STATUS_FROM} WHERE ${where}`, ...params)
+// The ids of ?1 (a JSON list), each once, as `id`.
+const STATUS_KEYS = 'SELECT DISTINCT value AS id FROM json_each(?1)'
+
+// The statuses of `keys` (statusesOfSql) with their columns, those for which `where` holds.
+function statusRows(db: Db, keys: string, where: string, ...params: SqlStorageValue[]): StatusRow[] {
+	return db.all<StatusRow>(
+		`SELECT ${selectSql(STATUS_COLUMN_MAP)} FROM ${statusesOfSql(keys)} WHERE ${where}`,
+		...params
+	)
 }
 
-function idRows(db: Db, where: string, ...params: SqlStorageValue[]): GraphRow[] {
-	return db.all<GraphRow>(`SELECT s.id, s.reblog_of_id FROM ${STATUS_FROM} WHERE ${where}`, ...params)
+function idRows(db: Db, keys: string, where: string, ...params: SqlStorageValue[]): GraphRow[] {
+	return db.all<GraphRow>(`SELECT s.id, s.reblog_of_id FROM ${statusesOfSql(keys)} WHERE ${where}`, ...params)
 }
 
 // The rows an answer of `ids` presents, read by `rows`: the statuses, the originals of the boosts among them that the
 // viewer may see, and the quoted statuses of both that the viewer is shown (R35), with the quotes of all of them.
+// The originals are looked up through their boosts' rows, by key, each once and apart from `ids` (own = 0), so the
+// visibility rule applies to them alone.
 function statusGraph<R extends GraphRow>(
 	db: Db,
 	ids: readonly string[],
 	options: PresentOwnOptions,
-	rows: (db: Db, where: string, ...params: SqlStorageValue[]) => R[]
+	rows: (db: Db, keys: string, where: string, ...params: SqlStorageValue[]) => R[]
 ): { byId: Map<string, R>; quotes: Map<string, QuoteRead>; quoted: string[] } {
 	const byId = new Map(
 		rows(
 			db,
-			`s.id IN (SELECT value FROM json_each(?1))
-			OR (s.id IN (SELECT reblog_of_id FROM statuses WHERE id IN (SELECT value FROM json_each(?1)) AND reblog_of_id IS NOT NULL)
-				AND ${visibleSql('s', '?2')})`,
+			`SELECT DISTINCT value AS id, 1 AS own FROM json_each(?1)
+			UNION ALL SELECT DISTINCT value, 0 FROM (SELECT b.reblog_of_id AS value FROM json_each(?1) j
+				CROSS JOIN statuses b INDEXED BY sqlite_autoindex_statuses_1 ON b.id = j.value WHERE b.reblog_of_id IS NOT NULL)
+			WHERE value NOT IN (SELECT value FROM json_each(?1))`,
+			`g.own = 1 OR ${visibleSql('s', '?2')}`,
 			JSON.stringify(ids),
 			options.viewer.accountId
 		).map((row) => [row.id, row])
@@ -309,7 +319,7 @@ function statusGraph<R extends GraphRow>(
 	const quoted = [...new Set([...quotes.values()].flatMap((quote) => quote.quoted_status_id ?? []))]
 	const unread = quoted.filter((id) => !byId.has(id))
 	if (unread.length > 0) {
-		const added = rows(db, 's.id IN (SELECT value FROM json_each(?1))', JSON.stringify(unread))
+		const added = rows(db, STATUS_KEYS, 'true', JSON.stringify(unread))
 		for (const row of added) {
 			byId.set(row.id, row)
 		}
@@ -433,10 +443,10 @@ export function presentOwnStatus(db: Db, id: OwnStatusId, options: PresentOwnOpt
 const STATUS_IDS = 'SELECT DISTINCT value FROM json_each(?1)'
 
 // The shown attachments of each status of `ids` (a JSON list), at most MAX_STATUS_MEDIA, through
-// media_attachments_status (see present()), each status's by position.
+// media_attachments_status (see present()), each status's by position, then each read by its key (RES-7).
 function mediaOf(db: Db, ids: string): Map<string, MediaRow[]> {
 	const rows = db.all<MediaRow & { status_id: string; position: number }>(
-		`SELECT ${selectSql(STATUS_MEDIA_COLUMN_MAP)} FROM media_attachments m
+		`SELECT ${selectSql(STATUS_MEDIA_COLUMN_MAP)} FROM media_attachments m INDEXED BY sqlite_autoindex_media_attachments_1
 		WHERE m.id IN (SELECT x.id FROM (${STATUS_IDS}) j CROSS JOIN media_attachments x ON x.id IN (${shownMediaSql('j.value')}))`,
 		ids
 	)
@@ -752,7 +762,7 @@ function viewerFlags(db: Db, viewerId: string | null, ids: string): ViewerFlags 
 			SELECT 'p', value FROM json_each(?2)
 			WHERE EXISTS (SELECT 1 FROM status_pins WHERE account_id = ?1 AND status_id = value)
 			UNION ALL
-			SELECT 'm', ms.id FROM statuses ms
+			SELECT 'm', ms.id FROM statuses ms INDEXED BY sqlite_autoindex_statuses_1
 			WHERE ms.id IN (SELECT value FROM json_each(?2)) AND ${conversationMutedSql('?1', 'ms.thread')}) f`,
 		viewerId,
 		ids

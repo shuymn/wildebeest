@@ -299,8 +299,8 @@ export const OWN_VOTE_COLUMNS = fixedColumns({ poll_id: 'v.poll_id', choice: 'v.
 // How many votes `viewer` cast in the current generation of the poll of `status`, which presentPolls reads as their
 // own: for the bound of the rows a presentation reads (statusRowBoundSql in status-rows.ts).
 export function ownVoteCountSql(status: string, viewer: string): string {
-	return `(SELECT count(*) FROM polls p JOIN poll_votes v ON v.poll_id = p.status_id AND v.generation = p.generation
-		AND v.account_id = ${viewer} WHERE p.status_id = ${status})`
+	return `(SELECT count(*) FROM polls p CROSS JOIN poll_votes v INDEXED BY sqlite_autoindex_poll_votes_1
+		ON v.poll_id = p.status_id AND v.generation = p.generation AND v.account_id = ${viewer} WHERE p.status_id = ${status})`
 }
 
 function presentPollRow(row: PollRow, viewer: { id: string | null; votes: number[] }, now: string): Poll {

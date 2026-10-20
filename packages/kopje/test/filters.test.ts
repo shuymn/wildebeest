@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 import { type ApiHarness, bearer, json, sql } from './api-helpers'
 import { NOW } from './app-helpers'
+import { plannedRun } from './read-helpers'
 import {
 	act,
 	community,
@@ -18,12 +19,14 @@ import {
 import { Db } from '../src/db/sql'
 import {
 	filterTextLimits,
+	listFilters,
 	MAX_FILTER_KEYWORDS,
 	MAX_FILTER_REQUEST_TEXT,
 	MAX_FILTER_TEXT,
 	MAX_FILTERS,
 } from '../src/domain/filters'
 import { deleteStatusBatch, PURGE_BATCH } from '../src/domain/inbox'
+import { sha256Hex } from '../src/security/tokens'
 
 // Filters through the API (domain/filters.ts, mastodon/filters.ts), as Mastodon 4.5 has them: the v2 endpoints with
 // their keywords and statuses, the v1 layer over the same rows, their errors, and the filters applied where statuses
@@ -1074,5 +1077,69 @@ describe('filter matching at a cut, and filter statuses in batched deletes', () 
 		expect(batches.every((wrote) => wrote <= PURGE_BATCH)).toBe(true)
 		expect(await sql(h.store, 'SELECT count(*) AS n FROM statuses WHERE id = ?', status)).toEqual([{ n: 0 }])
 		expect(await sql(h.store, 'SELECT count(*) AS n FROM filter_statuses')).toEqual([{ n: 0 }])
+	})
+})
+
+describe('filter rules with stale statistics (RES-7)', () => {
+	it("seeks each filter's keywords and statuses through its index, with other accounts' rules grown after ANALYZE", async () => {
+		const h = await community(['alice', 'bob'])
+		const { alice, bob } = h.users
+		const status = await post(h, alice, { status: 'hello' })
+		for (const title of ['one', 'two']) {
+			const filter = await createFilter(h, alice, {
+				title,
+				context: ['home'],
+				keywords_attributes: [{ keyword: `${title}-a` }, { keyword: `${title}-b` }],
+			})
+			expect((await act(h, alice, `/api/v2/filters/${filter.id}/statuses`, { status_id: status.id })).status).toBe(200)
+		}
+		await sql(h.store, 'ANALYZE')
+		const tokenHash = await sha256Hex(alice.token)
+		const list = () =>
+			plannedRun(h, /FROM json_each\(\?1\) j/, listFilters, {
+				credential: { tokenHash, scope: 'read:filters', now: NOW },
+			})
+		const before = await list()
+		// Bob's filters at their cap, each with keywords and a status of its own.
+		await sql(
+			h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?2 - 1)
+			INSERT INTO filters (id, account_id, title, context) SELECT CAST(600000000000000000 + i AS TEXT), ?1, 'f', '["home"]' FROM n`,
+			bob.id,
+			MAX_FILTERS
+		)
+		await sql(
+			h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?2 - 1)
+			INSERT INTO filter_keywords (id, filter_id, keyword)
+			SELECT CAST(610000000000000000 + f.rowid * 100 + i AS TEXT), f.id, 'k' FROM filters f CROSS JOIN n WHERE f.account_id = ?1`,
+			bob.id,
+			MAX_FILTER_KEYWORDS
+		)
+		await sql(
+			h.store,
+			`INSERT INTO filter_statuses (id, filter_id, status_id)
+			SELECT CAST(620000000000000000 + f.rowid AS TEXT), f.id, ?2 FROM filters f WHERE f.account_id = ?1`,
+			bob.id,
+			status.id
+		)
+		const after = await list()
+		expect(after.result).toEqual(before.result)
+		expect(after.plans.map((p) => p.plan)).toEqual([
+			[
+				'SCAN j VIRTUAL TABLE INDEX 1:',
+				'SEARCH k USING INDEX filter_keywords_filter (filter_id=?)',
+				'USE TEMP B-TREE FOR ORDER BY',
+			],
+			[
+				'SCAN j VIRTUAL TABLE INDEX 1:',
+				'SEARCH fs USING INDEX filter_statuses_pair (filter_id=?)',
+				'USE TEMP B-TREE FOR ORDER BY',
+			],
+		])
+		// One row past each filter's range at most.
+		for (const [i, { rows }] of after.plans.entries()) {
+			expect(rows - before.plans[i]!.rows).toBeLessThanOrEqual(2)
+		}
 	})
 })

@@ -189,3 +189,44 @@ export function plannedSql(
 		},
 	} as unknown as SqlStorage
 }
+
+// The scans in `plan` (EXPLAIN QUERY PLAN details) of the tables of `tables` that `query` reads, by the alias or name
+// it gives each, but for names the query also gives a CTE or a subquery: a search by key is not one; a scan through an
+// index, covering or not, is (RES-7).
+export function scansOf(query: string, plan: readonly string[], tables: readonly string[]): string[] {
+	const names = new Set<string>()
+	const reads = new RegExp(
+		`\\b(?:main\\.)?(${tables.join('|')})\\b(?:\\s+INDEXED BY\\s+\\w+)?(?:\\s+(?:AS\\s+)?([a-z]\\w*))?`,
+		'g'
+	)
+	for (const [, table, alias] of query.matchAll(reads)) {
+		names.add(table!)
+		if (alias !== undefined) {
+			names.add(alias)
+		}
+	}
+	// A CTE's or a subquery's name is no table's alias (a plan names them alike).
+	for (const [, cte, subquery] of query.matchAll(
+		/\b(\w+)(?:\([^)]*\))?\s+AS\s+(?:MATERIALIZED\s+)?\(|\)\s+(?:AS\s+)?([a-z]\w*)/g
+	)) {
+		names.delete((cte ?? subquery)!)
+	}
+	return plan.filter((detail) => {
+		const scanned = /^SCAN (?:main\.)?(\S+)/.exec(detail)?.[1]
+		return scanned !== undefined && names.has(scanned) && !detail.includes('VIRTUAL TABLE')
+	})
+}
+
+// Runs `operation` over plannedSql: its result and the statements matching `pattern`, each with its plan and rows read.
+export async function plannedRun<I, O>(
+	h: Pick<ApiHarness, 'store'>,
+	pattern: RegExp,
+	operation: StoreOperation<I, O>,
+	input: I
+): Promise<{ result: O; plans: PlannedStatement[] }> {
+	return runInDurableObject(h.store, (_instance, state) => {
+		const plans: PlannedStatement[] = []
+		const result = operation.run(plannedSql(state.storage.sql, pattern, plans), input)
+		return { result, plans }
+	})
+}
