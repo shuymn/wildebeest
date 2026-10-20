@@ -1,15 +1,20 @@
+import { runInDurableObject } from 'cloudflare:test'
+
 import { describe, expect, it, vi } from 'vitest'
 
 import { bearer, json, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { BUILD } from './helpers'
 import { ALICE, setup } from './inbox-status-helpers'
-import { added } from './local-emoji-helpers'
+import { added, localSnapshotAtCap } from './local-emoji-helpers'
 import { ACCESS, setAccess } from './ops-helpers'
 import { community, getJson, outbound, post, remoteAccount, remoteFollows } from './status-helpers'
+import { Db } from '../src/db/sql'
+import { actorDocument } from '../src/domain/actor-update'
+import { jsonBytes } from '../src/domain/answer-budget'
 import { emojiCandidates } from '../src/federation/remote-emoji'
 import { publishScheduled } from '../src/jobs/scheduled'
-import { MAX_ENABLED_EMOJIS } from '../src/platform/stored-bounds'
+import { ACCOUNT_EMOJIS_BYTES, MAX_ENABLED_EMOJIS, presentedEmojiBytes } from '../src/platform/stored-bounds'
 
 // Local custom emoji as clients and peers see them: GET /api/v1/custom_emojis (REST::CustomEmojiSerializer), the
 // snapshots a post, a scheduled post, an edit and a profile save take (custom-emojis.ts localEmojiSnapshot), the Emoji
@@ -293,5 +298,21 @@ describe('GET /emojis/:id', () => {
 		for (const missing of ['123456789012345678', 'abc', `${on.id}0`, '']) {
 			expect((await h.request(`/emojis/${missing}`)).status).toBe(404)
 		}
+	})
+})
+
+describe('actor Emoji tags at their bound (RES-3)', () => {
+	it('resolves an account snapshot of 6,144 presented bytes to tags of at most 8,960 bytes', async () => {
+		const t = await setup()
+		const snapshot = await localSnapshotAtCap(t.store, ALICE, ACCOUNT_EMOJIS_BYTES)
+		expect(presentedEmojiBytes(JSON.parse(snapshot) as [string, string][])).toBe(ACCOUNT_EMOJIS_BYTES)
+		await sql(t.store, 'UPDATE accounts SET emojis = ? WHERE id = ?', snapshot, ALICE)
+		const measured = await runInDurableObject(t.store, (_instance, state) => {
+			const document = actorDocument(new Db(state.storage.sql), ALICE)!
+			const tags = document.tag as unknown[]
+			return { tags: tags.length, bytes: jsonBytes(tags), document: jsonBytes(document) }
+		})
+		expect(measured.bytes).toBeLessThanOrEqual(8_960)
+		expect(measured).toEqual({ tags: 30, bytes: 7_418, document: expect.any(Number) })
 	})
 })
