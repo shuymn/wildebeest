@@ -16,6 +16,7 @@ import {
 	EXCERPT_UNITS,
 	TREND_HISTORY_ROWS,
 	TREND_TAGS_MAX_LIMIT,
+	trendingStatuses,
 	trendingTags,
 } from '../src/domain/trends'
 import type { StoreStub } from '../src/platform/store-client'
@@ -271,4 +272,54 @@ describe('the hashtag list’s reads (RES-7)', () => {
 		expect(many.plans.history).toMatch(/SEARCH t USING COVERING INDEX status_tags_public \(name=\? AND status_id>\?\)/)
 		expect(many.plans.history).not.toMatch(/TEMP B-TREE/)
 	}, 300_000)
+})
+
+describe('the status list’s plan', () => {
+	it('reads the stored rows by their author index, with statistics taken before they grew', async () => {
+		const store = await migratedStore()
+		await sql(store, 'ANALYZE')
+		await setTrendSetting(store, 'trendable_by_default', true)
+		await runInDurableObject(store, (_instance, state) => {
+			const s = state.storage.sql
+			s.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 99)
+				INSERT INTO accounts (id, uri, username, domain, discoverable)
+				SELECT CAST(500000000000000000 + i AS TEXT), 'https://u' || i || '.example/u', 'u' || i, 'u' || i || '.example', 1
+				FROM n`
+			)
+			s.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 249)
+				INSERT INTO statuses (id, uri, account_id, visibility, language, published_at, favourites_count)
+				SELECT CAST(117474000000000000 + i AS TEXT), 'https://w.example/' || i,
+					CAST(500000000000000000 + (i % 100) AS TEXT), 'public', 'en', ?1, 9 FROM n`,
+				new Date(AT - 3_600_000).toISOString()
+			)
+			s.exec(
+				'INSERT INTO trend_statuses (status_id, account_id, score) SELECT id, account_id, 1 + (CAST(id AS INTEGER) % 7) FROM statuses'
+			)
+		})
+		const input = { credential: null, offset: 0, limit: 40, language: 'en', now: AT, present: { origin: ORIGIN } }
+		const plan = await runInDurableObject(store, (_instance, state) => {
+			let found = ''
+			const real = state.storage.sql
+			const capturing = {
+				exec: (query: string, ...params: SqlStorageValue[]) => {
+					if (/FROM \(SELECT t\.status_id, t\.score FROM trend_statuses t/.test(query)) {
+						found = real
+							.exec<{ detail: string }>(`EXPLAIN QUERY PLAN ${query}`, ...params)
+							.toArray()
+							.map((r) => r.detail)
+							.join(' | ')
+					}
+					return real.exec(query, ...params)
+				},
+			} as unknown as SqlStorage
+			trendingStatuses.run(capturing, input)
+			return found
+		})
+		console.log(JSON.stringify({ event: 'trends-statuses-plan', plan: plan.slice(0, 400) }))
+		expect(plan).toMatch(/SCAN t\b/)
+		expect(plan).toMatch(/SEARCH x USING COVERING INDEX trend_statuses_account \(account_id=\?\)/)
+		expect(plan).toMatch(/SEARCH e USING INDEX (?:statuses_public|sqlite_autoindex_statuses_1) \(id=\?\)/)
+	})
 })
