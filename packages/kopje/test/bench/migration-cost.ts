@@ -67,8 +67,8 @@ import { freshStore, testKernel } from '../helpers'
 // settings, instance domain blocks), what 0051_follow_answer_pairs reads and rewrites (outbound activities,
 // accounts, deliveries), what 0052_favourite_likes indexes (the favourites' Like ids), what 0053_custom_emoji_snapshots
 // alters (accounts, statuses, earlier versions) and what 0054_remote_reports reads and rewrites (reports, their
-// notifications and pushes, the moderation log and both job tables); a migration that reads another table must add it
-// here before it is measured.
+// notifications and pushes, the moderation log and both job tables); 0055_local_custom_emojis reads no row (it adds an
+// empty table); a migration that reads another table must add it here before it is measured.
 // The measured time is the whole upgrade, from before the bookmark to after the verification: Date.now() in workerd
 // moves only between I/O events, so the clock is read across an await on each side.
 
