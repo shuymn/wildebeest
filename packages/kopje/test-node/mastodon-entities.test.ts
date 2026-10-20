@@ -47,6 +47,12 @@ const MAPPING: Record<string, Mapping> = {
 	'REST::ApplicationSerializer': { file: 'src/mastodon/oauth.ts', typeName: 'Application' },
 	'REST::CredentialApplicationSerializer': { file: 'src/mastodon/oauth.ts', typeName: 'CredentialApplication' },
 	'REST::FilterSerializer': { file: 'src/domain/filters.ts', typeName: 'Filter' },
+	'REST::AnnouncementSerializer': { file: 'src/domain/announcements.ts', typeName: 'Announcement' },
+	'REST::AnnouncementSerializer::AccountSerializer': {
+		file: 'src/domain/announcements.ts',
+		typeName: 'AnnouncementMention',
+	},
+	'REST::ReactionSerializer': { file: 'src/domain/announcements.ts', typeName: 'Reaction' },
 }
 
 const ACCOUNT: Record<string, Exception> = {
@@ -90,6 +96,7 @@ const ENTITY_EXCEPTIONS: Exceptions = {
 		'event',
 		'moderation_warning'
 	),
+	'REST::AnnouncementSerializer': { statuses: { status: 'accepted', deviation: 'MD-4' } },
 }
 
 // Entities whose fixture entry has unresolved extraction, with exactly the reasons acknowledged.
