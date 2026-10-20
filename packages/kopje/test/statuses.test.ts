@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { type ApiHarness, bearer, form, json, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { BUILD } from './helpers'
-import { type PlannedStatement, plannedSql } from './read-helpers'
+import { type PlannedStatement, plannedRun, plannedSql, remoteAccounts, scansOf } from './read-helpers'
 import {
 	act,
 	block,
@@ -25,7 +25,7 @@ import {
 } from './status-helpers'
 import { postStatus, type ScheduleInput } from '../src/domain/scheduled-statuses'
 import { MAX_RAW_LENGTH } from '../src/domain/status-text'
-import { MAX_STATUS_EDITS } from '../src/domain/statuses'
+import { getStatuses, MAX_STATUS_EDITS } from '../src/domain/statuses'
 import type { StoreStub } from '../src/platform/store-client'
 import { sha256Hex } from '../src/security/tokens'
 
@@ -1386,5 +1386,105 @@ describe('the media lookup probes each id (RES-7)', () => {
 		expect(plan).toContain('SEARCH m USING INDEX sqlite_autoindex_media_attachments_1 (id=?) LEFT-JOIN')
 		expect(plan.filter((detail) => /^SCAN m\b/.test(detail))).toEqual([])
 		expect(plans[0]?.rows ?? Infinity).toBeLessThan(100)
+	}, 60_000)
+})
+
+describe('posting and batch reads with stale statistics (RES-7)', () => {
+	it('resolves mentions through accounts_domain_username and attaches media by id, the Store grown after ANALYZE', async () => {
+		const h = await community(['alice', 'bob'])
+		const { alice } = h.users
+		const carol = await remoteAccount(h.store, 'carol', 'remote.example')
+		let next = 0
+		const uploads = (n: number) =>
+			sql(
+				h.store,
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?2 - 1)
+				INSERT INTO media_attachments (id, account_id, type, url, processed)
+				SELECT CAST(?3 + i AS TEXT), ?1, 'image', 'https://kopje.test/m/' || (?3 + i), 1 FROM n`,
+				alice.id,
+				n,
+				String(700000000000000000n + BigInt((next += n) - n))
+			)
+		await uploads(8)
+		await sql(h.store, 'ANALYZE')
+		const media = (from: number) => [0, 1].map((i) => String(700000000000000000n + BigInt(from + i)))
+		const pattern =
+			/^UPDATE media_attachments (INDEXED BY \w+\s+)?SET (status_id|scheduled_status_id)|json_extract\(j.value, '\$.key'\)/
+		const run = async (from: number) => ({
+			now: await postPlans(h, alice.token, { text: '@bob @carol@remote.example', mediaIds: media(from) }, pattern),
+			scheduled: await postPlans(
+				h,
+				alice.token,
+				{
+					text: '@bob @carol@remote.example later',
+					mediaIds: media(from + 2),
+					scheduledAt: new Date(NOW + 86_400_000).toISOString(),
+				},
+				pattern
+			),
+		})
+		const before = await run(0)
+		// Other accounts, and many uploads of the author's not in the post.
+		await remoteAccounts(h, 100, 200)
+		await uploads(20_000)
+		const after = await run(4)
+		expect(after.now.result).toMatchObject({ status: 'ok', value: { status: 'ok' } })
+		const posted = (after.now.result as { value: { value: Status } }).value.value
+		expect(posted.mentions.map((m) => m.id).toSorted()).toEqual([h.users.bob.id, carol].toSorted())
+		expect(after.scheduled.result).toMatchObject({ status: 'ok', value: { status: 'scheduled' } })
+		for (const name of ['now', 'scheduled'] as const) {
+			const plans = after[name].plans
+			// The mentions, resolved for each text that names them, then the given media attached or held.
+			expect(plans.at(-1)!.query, name).toMatch(/^UPDATE/)
+			for (const { plan } of plans.slice(0, -1)) {
+				expect(plan, name).toContain('SEARCH a USING INDEX accounts_domain_username (domain=? AND <expr>=?)')
+			}
+			expect(
+				plans
+					.at(-1)!
+					.plan.filter((detail) =>
+						/^SEARCH media_attachments USING (COVERING )?INDEX sqlite_autoindex_media_attachments_1 \(id=\?\)$/.test(
+							detail
+						)
+					),
+				name
+			).toHaveLength(1)
+			for (const [i, { query, plan, rows }] of plans.entries()) {
+				expect(scansOf(query, plan, ['accounts', 'media_attachments']), `${name}: ${query}`).toEqual([])
+				expect(rows, `${name}: ${query}`).toBe(before[name].plans[i]!.rows)
+			}
+		}
+	}, 60_000)
+
+	it('reads a batch of statuses by id, the statuses grown after ANALYZE', async () => {
+		const h = await community(['alice', 'bob'])
+		const { alice, bob } = h.users
+		const mine = await post(h, alice, { status: 'mine' })
+		const theirs = await post(h, bob, { status: 'theirs', visibility: 'private' })
+		await sql(h.store, 'ANALYZE')
+		const tokenHash = await sha256Hex(alice.token)
+		const run = () =>
+			plannedRun(h, /^\s*SELECT s\.id AS id FROM/, getStatuses, {
+				credential: { tokenHash, scope: 'read:statuses', now: NOW },
+				ids: [theirs.id, mine.id, '999999999999999999'],
+				present: { origin: 'https://kopje.test' },
+			} as never)
+		const before = await run()
+		await sql(
+			h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 20000 - 1)
+			INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+			SELECT CAST(300000000000000000 + i AS TEXT), 'https://kopje.test/ap/o/f' || i, ?1, 'public', '', ?2 FROM n`,
+			bob.id,
+			new Date(NOW).toISOString()
+		)
+		const after = await run()
+		expect(after.result).toEqual(before.result)
+		expect((after.result as { value: Status[] }).value.map((s) => s.id)).toEqual([mine.id])
+		expect(after.plans).toHaveLength(1)
+		const { query, plan, rows } = after.plans[0]!
+		expect(plan).toContain('SEARCH s USING INDEX sqlite_autoindex_statuses_1 (id=?)')
+		expect(scansOf(query, plan, ['statuses'])).toEqual([])
+		expect(rows).toBe(before.plans[0]!.rows)
 	}, 60_000)
 })

@@ -174,7 +174,8 @@ type ResolvedMention = { id: string; uri: string; url: string | null; username: 
 
 // Mentions are resolved against accounts already known; nothing is fetched. A mention of the instance's own host is a
 // local mention. Suspended local accounts, and accounts the author blocks or whose domain it blocks, are not mentioned
-// (their mention stays text, as Mastodon's ProcessMentionsService drops it).
+// (their mention stays text, as Mastodon's ProcessMentionsService drops it). Each handle is sought through
+// accounts_domain_username (RES-7).
 function resolveMentions(
 	db: Db,
 	refs: readonly MentionRef[],
@@ -192,7 +193,8 @@ function resolveMentions(
 	const rows = db.all<ResolvedMention & { key: string }>(
 		`SELECT json_extract(j.value, '$.key') AS key, a.id, ${actorUriSql('a.uri')} AS uri, a.url, ${usernameSql('a.username')} AS username, a.domain
 		FROM json_each(?1) j
-		JOIN accounts a ON a.domain IS json_extract(j.value, '$.d') AND lower(a.username) = json_extract(j.value, '$.u')
+		CROSS JOIN accounts a INDEXED BY accounts_domain_username
+			ON a.domain IS json_extract(j.value, '$.d') AND lower(a.username) = json_extract(j.value, '$.u')
 		WHERE ${mentionableBySql('a.id', '?2')}`,
 		JSON.stringify(wanted),
 		authorId
@@ -291,7 +293,8 @@ function mediaToAttach(
 
 // Attaches `mediaIds` in order (from a scheduled status too). Media the status stops using stays attached but no
 // longer shown (migration 0015_media_shown), as Mastodon keeps it attached and leaves it out of
-// ordered_media_attachment_ids: earlier versions still show it, and a later edit may show it again.
+// ordered_media_attachment_ids: earlier versions still show it, and a later edit may show it again. Each given upload
+// is sought by its id, never found by a scan of the uploads (RES-7).
 function attachMedia(db: Db, statusId: string, mediaIds: readonly string[]): void {
 	db.run(
 		`UPDATE media_attachments SET shown = 0
@@ -300,7 +303,8 @@ function attachMedia(db: Db, statusId: string, mediaIds: readonly string[]): voi
 		JSON.stringify(mediaIds)
 	)
 	db.run(
-		`UPDATE media_attachments SET status_id = ?1, scheduled_status_id = NULL, gc_at = NULL, shown = 1,
+		`UPDATE media_attachments INDEXED BY sqlite_autoindex_media_attachments_1
+		SET status_id = ?1, scheduled_status_id = NULL, gc_at = NULL, shown = 1,
 			position = (SELECT j.key FROM json_each(?2) j WHERE j.value = media_attachments.id)
 		WHERE id IN (SELECT value FROM json_each(?2))`,
 		statusId,
@@ -1165,7 +1169,7 @@ export const getStatuses = optionalUserReadOperation<{ ids: readonly string[]; p
 		const rows = statusReads(viewer, { viewer: '?1', now: '?3' }).select(
 			db,
 			'listable',
-			{ where: 's.id IN (SELECT value FROM json_each(?2))' },
+			{ from: 'json_each(?2) c CROSS JOIN', join: 'INDEXED BY sqlite_autoindex_statuses_1 ON s.id = c.value' },
 			viewer.accountId,
 			JSON.stringify(resolved),
 			viewer.now

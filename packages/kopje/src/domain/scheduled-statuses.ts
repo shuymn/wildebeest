@@ -367,7 +367,8 @@ export const postStatus = userWriteOperation<ScheduleInput, ScheduleResult>((db,
 		throw new Error('the scheduled status was not written')
 	}
 	db.run(
-		`UPDATE media_attachments SET scheduled_status_id = ?1, gc_at = NULL,
+		`UPDATE media_attachments INDEXED BY sqlite_autoindex_media_attachments_1
+		SET scheduled_status_id = ?1, gc_at = NULL,
 			position = (SELECT j.key FROM json_each(?2) j WHERE j.value = media_attachments.id)
 		WHERE id IN (SELECT value FROM json_each(?2))`,
 		row.id,
