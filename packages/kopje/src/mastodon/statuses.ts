@@ -97,8 +97,9 @@ function pollOf(p: Params): PollInput | string | undefined {
 }
 
 // What POST and PUT share: text, spoiler, sensitive, language, media and a poll, with Mastodon's request validation:
-// the media first (PostStatusService#validate_media!, which also refuses media with a poll), then the text, then the
-// poll.
+// the number of media first (PostStatusService#validate_media!'s too_many, which also refuses media with a poll), then
+// the text, then the poll. Which ids are usable is the Store's (statuses.ts mediaToAttach), checked after these. An
+// empty entry is no id, so JSON `media_ids: []` (which the parser reads as one empty entry) removes an edit's media.
 function composition(p: Params): Composition | string {
 	const text = p.get('status') ?? ''
 	const spoilerText = p.get('spoiler_text') ?? ''

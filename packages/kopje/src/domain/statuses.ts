@@ -63,7 +63,7 @@ import { addToConversation } from './conversations'
 import { type CustomEmoji, localEmojiSnapshot, presentEmojis } from './custom-emojis'
 import { beginRetraction } from './deliveries'
 import { countFeaturedTags, featuredOfStatus, uncountFeaturedTags } from './featured-tags'
-import { allocateLocalId } from './ids'
+import { allocateLocalId, requestedId } from './ids'
 import { DETACHED_GRACE_MS, DOOMED_AT, liveMediaSql } from './media'
 import { notify } from './notifications'
 import { editPoll, type PollInput, pollOptionsJson, writePoll } from './polls'
@@ -251,35 +251,39 @@ function quoteLink(db: Db, id: string): QuoteLink | null {
 	return { url, uri: row.uri }
 }
 
-// Own media that is already attached to `statusId` (shown, or dropped by an earlier edit, as Mastodon's
-// `status_id: [nil, @status.id]`), or unattached, processed and not doomed, in the order given (MEDIA-1). Media of
-// other accounts, still processing, or past its grace period is left out, as Mastodon leaves out what
-// `current_account.media_attachments.where(status_id: nil)` does not find. Media a scheduled status holds is
-// attachable only by that scheduled status's publication (`scheduledId`).
-function attachableMedia(
+// The media a post or an edit attaches, in the order given, each once (MEDIA-1): own media already attached to
+// `statusId` (shown, or dropped by an earlier edit, as Mastodon's `status_id: [nil, @status.id]`), or unattached,
+// processed and not doomed. Media a scheduled status holds is attachable only by that scheduled status's publication
+// (`scheduledId`). Anything else, another account's media, media still processing or past its grace period included,
+// refuses the whole request as PostStatusService#validate_media! does, with one message for every reason: each id is
+// read as Ruby's to_i reads it (requestedId), and every one not found is listed in the order sent, repeats included.
+function mediaToAttach(
 	db: Db,
 	accountId: string,
 	mediaIds: readonly string[],
 	statusId: string | null,
 	now: number,
 	scheduledId: string | null = null
-): string[] {
+): string[] | { status: 'invalid'; error: string } {
 	if (mediaIds.length === 0) {
 		return []
 	}
-	return db
-		.all<{ id: string }>(
-			`SELECT m.id FROM json_each(?1) j JOIN media_attachments m ON m.id = j.value
-			WHERE m.account_id = ?2 AND (m.status_id = ?3
-				OR (m.status_id IS NULL AND m.scheduled_status_id IS ?5 AND ${liveMediaSql('m', '?4')}))
-			ORDER BY j.key`,
-			JSON.stringify([...new Set(mediaIds)]),
-			accountId,
-			statusId,
-			iso(now),
-			scheduledId
-		)
-		.map((row) => row.id)
+	const rows = db.all<{ requested: string; id: string | null }>(
+		`SELECT j.value AS requested, m.id FROM json_each(?1) j
+		LEFT JOIN media_attachments m ON m.id = j.value AND m.account_id = ?2 AND (m.status_id = ?3
+			OR (m.status_id IS NULL AND m.scheduled_status_id IS ?5 AND ${liveMediaSql('m', '?4')}))
+		ORDER BY j.key`,
+		JSON.stringify(mediaIds.map(requestedId)),
+		accountId,
+		statusId,
+		iso(now),
+		scheduledId
+	)
+	const missing = rows.filter((row) => row.id === null).map((row) => row.requested)
+	if (missing.length > 0) {
+		return { status: 'invalid', error: `Media ${missing.join(', ')} not found or already attached to another post` }
+	}
+	return [...new Set(rows.map((row) => row.id ?? ''))]
 }
 
 // Attaches `mediaIds` in order (from a scheduled status too). Media the status stops using stays attached but no
@@ -414,8 +418,13 @@ export function preparePost(db: Db, accountId: string, input: PostInput, schedul
 			return { status: 'quote_not_found' }
 		}
 	}
-	const media = attachableMedia(db, accountId, input.mediaIds, null, input.now, scheduledId)
-	// PostStatusService#validate_media!: a poll takes the place of media.
+	// PostStatusService#validate_media! checks a poll with media before the ids; the Worker does (composition), so this
+	// order only decides for a Store caller that skips it.
+	const media = mediaToAttach(db, accountId, input.mediaIds, null, input.now, scheduledId)
+	if (!Array.isArray(media)) {
+		return media
+	}
+	// A poll takes the place of media.
 	if (input.poll !== undefined && input.mediaIds.length > 0) {
 		return { status: 'invalid', error: TOO_MANY_FILES }
 	}
@@ -825,7 +834,11 @@ export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db
 	if (exceedsRawLength(text, spoilerText)) {
 		return { status: 'invalid', error: TOO_LONG }
 	}
-	const media = attachableMedia(db, accountId, input.mediaIds, current.id, input.now)
+	// Before the "unchanged" test: UpdateStatusService validates the media before NoChangesSubmittedError.
+	const media = mediaToAttach(db, accountId, input.mediaIds, current.id, input.now)
+	if (!Array.isArray(media)) {
+		return media
+	}
 	if (input.poll !== undefined && input.mediaIds.length > 0) {
 		return { status: 'invalid', error: TOO_MANY_FILES }
 	}
@@ -841,7 +854,7 @@ export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db
 		'SELECT id, description, focus_x, focus_y FROM media_attachments WHERE status_id = ? AND shown = 1 ORDER BY position, id',
 		current.id
 	)
-	// Only attributes of media this edit attaches (own media, checked by attachableMedia) are applied.
+	// Only attributes of media this edit attaches (own media, checked by mediaToAttach) are applied.
 	const attributes = input.mediaAttributes.filter((a) => media.includes(a.id))
 	const before = new Map(currentMedia.map((m) => [m.id, m]))
 	const changesMedia = (a: MediaAttributes): boolean => {

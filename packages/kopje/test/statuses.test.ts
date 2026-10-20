@@ -2,7 +2,7 @@ import { runInDurableObject } from 'cloudflare:test'
 
 import { describe, expect, it } from 'vitest'
 
-import { bearer, form, json, sql } from './api-helpers'
+import { type ApiHarness, bearer, form, json, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { BUILD } from './helpers'
 import { watchedCursor } from './read-helpers'
@@ -19,6 +19,7 @@ import {
 	remoteFollows,
 	seedStatus,
 	type Status,
+	type User,
 } from './status-helpers'
 import { postStatus, type ScheduleInput } from '../src/domain/scheduled-statuses'
 import { MAX_RAW_LENGTH } from '../src/domain/status-text'
@@ -27,6 +28,25 @@ import type { StoreStub } from '../src/platform/store-client'
 import { sha256Hex } from '../src/security/tokens'
 
 const HOUR = 60 * 60 * 1000
+
+// Mastodon's media_attachments.validations.not_found (MEDIA-1: one message whatever the reason).
+const mediaNotFound = (...ids: string[]) => ({
+	status: 422,
+	body: { error: `Media ${ids.join(', ')} not found or already attached to another post` },
+})
+
+async function posting(
+	h: Awaited<ReturnType<typeof community>>,
+	token: string,
+	body: Record<string, unknown>,
+	init: { method?: string; path?: string; headers?: Record<string, string> } = {}
+): Promise<{ status: number; body: unknown }> {
+	const response = await h.request(
+		init.path ?? '/api/v1/statuses',
+		bearer(token, json(body, { method: init.method ?? 'POST', headers: init.headers ?? {} }))
+	)
+	return { status: response.status, body: await response.json() }
+}
 
 // Puts the pending Creates in flight and records their servers as having the object (the receipt a delivered Create
 // leaves): an edit then goes to them as an Update (a server without a receipt gets a Create of the current version
@@ -259,7 +279,7 @@ describe('POST /api/v1/statuses', () => {
 		expect(readOnly.status).toBe(403)
 	})
 
-	it('attaches own unattached media in order and ignores anything else', async () => {
+	it('attaches own unattached media in order and refuses anything else', async () => {
 		const h = await community(['alice', 'bob'])
 		const media = async (accountId: string, id: string) =>
 			sql(
@@ -272,9 +292,15 @@ describe('POST /api/v1/statuses', () => {
 		await media(h.users.alice.id, '100000000000000001')
 		await media(h.users.alice.id, '100000000000000002')
 		await media(h.users.bob.id, '100000000000000003')
+		expect(
+			await posting(h, h.users.alice.token, {
+				status: '',
+				media_ids: ['100000000000000002', '100000000000000001', '100000000000000003'],
+			})
+		).toEqual(mediaNotFound('100000000000000003'))
 		const status = await post(h, h.users.alice, {
 			status: '',
-			media_ids: ['100000000000000002', '100000000000000001', '100000000000000003'],
+			media_ids: ['100000000000000002', '100000000000000001'],
 		})
 		expect(status.media_attachments).toEqual([
 			{
@@ -292,11 +318,9 @@ describe('POST /api/v1/statuses', () => {
 			expect.objectContaining({ id: '100000000000000001' }),
 		])
 		// Attached media cannot be attached again.
-		const again = await h.request(
-			'/api/v1/statuses',
-			bearer(h.users.alice.token, json({ status: '', media_ids: ['100000000000000001'] }))
+		expect(await posting(h, h.users.alice.token, { status: '', media_ids: ['100000000000000001'] })).toEqual(
+			mediaNotFound('100000000000000001')
 		)
-		expect(again.status).toBe(422)
 	})
 
 	it('uses the account defaults and marks a spoiler sensitive', async () => {
@@ -940,6 +964,190 @@ describe('reblogged_by pages after filtering', () => {
 	})
 })
 
+describe('media_ids (PostStatusService#validate_media!, MEDIA-1)', () => {
+	type Pair = ApiHarness & { users: Record<'alice' | 'bob', User> }
+	const ID = '100000000000000001'
+	const insertMedia = (h: Pair, accountId: string, id = ID, extra = '') =>
+		sql(
+			h.store,
+			`INSERT INTO media_attachments (id, account_id, type, url, processed, gc_at)
+			VALUES (?1, ?2, 'image', 'https://kopje.test/media/' || ?1 || '.png', 1, ?3)`,
+			id,
+			accountId,
+			new Date(NOW + 2 * HOUR).toISOString()
+		).then(() => (extra === '' ? undefined : sql(h.store, extra, id)))
+	const mediaRow = (h: Pair) =>
+		sql(h.store, 'SELECT status_id, scheduled_status_id, gc_at FROM media_attachments WHERE id = ?', ID)
+
+	it('refuses each kind of media it cannot attach, writing nothing', async () => {
+		const kinds: [string, (h: Pair) => Promise<unknown>][] = [
+			['an unknown id', async () => undefined],
+			['another account’s', async (h) => insertMedia(h, h.users.bob.id)],
+			[
+				'attached to another status',
+				async (h) => {
+					await insertMedia(h, h.users.alice.id)
+					await post(h, h.users.alice, { status: 'first', media_ids: [ID] })
+				},
+			],
+			[
+				'held by a scheduled status',
+				async (h) => {
+					await insertMedia(h, h.users.alice.id)
+					const held = await posting(h, h.users.alice.token, {
+						status: 'later',
+						media_ids: [ID],
+						scheduled_at: new Date(NOW + HOUR).toISOString(),
+					})
+					expect(held.status).toBe(200)
+				},
+			],
+			[
+				'past its grace period',
+				(h) =>
+					insertMedia(
+						h,
+						h.users.alice.id,
+						ID,
+						`UPDATE media_attachments SET gc_at = '${new Date(NOW).toISOString()}' WHERE id = ?1`
+					),
+			],
+			[
+				'still processing',
+				(h) => insertMedia(h, h.users.alice.id, ID, 'UPDATE media_attachments SET processed = 0 WHERE id = ?1'),
+			],
+			[
+				'the poster’s avatar',
+				(h) =>
+					insertMedia(
+						h,
+						h.users.alice.id,
+						ID,
+						"UPDATE accounts SET avatar_url = 'https://kopje.test/media/' || ?1 || '.png' WHERE domain IS NULL"
+					),
+			],
+			[
+				'a custom emoji’s image',
+				async (h) => {
+					await insertMedia(
+						h,
+						h.users.alice.id,
+						ID,
+						`UPDATE media_attachments SET gc_at = NULL, file_token = 'emoji', content_type = 'image/png',
+							meta = '{"original":{"width":1,"height":1}}' WHERE id = ?1`
+					)
+					await sql(
+						h.store,
+						"INSERT INTO custom_emojis (id, shortcode, created_at) VALUES (?, 'em', '2026-10-12T00:00:00.000Z')",
+						ID
+					)
+				},
+			],
+		]
+		for (const [kind, arrange] of kinds) {
+			const h: Pair = await community(['alice', 'bob'])
+			await arrange(h)
+			const before = { statuses: await sql(h.store, 'SELECT id FROM statuses'), media: await mediaRow(h) }
+			expect(await posting(h, h.users.alice.token, { status: 'x', media_ids: [ID] }), kind).toEqual(mediaNotFound(ID))
+			expect({ statuses: await sql(h.store, 'SELECT id FROM statuses'), media: await mediaRow(h) }, kind).toEqual(
+				before
+			)
+			expect(await sql(h.store, "SELECT id FROM notifications WHERE type = 'mention'"), kind).toEqual([])
+		}
+	})
+
+	it('attaches media whose grace period ends a millisecond later', async () => {
+		const h: Pair = await community(['alice', 'bob'])
+		await insertMedia(
+			h,
+			h.users.alice.id,
+			ID,
+			`UPDATE media_attachments SET gc_at = '${new Date(NOW + 1).toISOString()}' WHERE id = ?1`
+		)
+		const status = await post(h, h.users.alice, { status: 'x', media_ids: [ID] })
+		expect((status.media_attachments as { id: string }[]).map((m) => m.id)).toEqual([ID])
+	})
+
+	it('lists every id not found as Ruby’s to_i reads it, in request order with repeats', async () => {
+		const h: Pair = await community(['alice', 'bob'])
+		const { token } = h.users.alice
+		await insertMedia(h, h.users.alice.id)
+		await insertMedia(h, h.users.alice.id, '100000000000000002')
+		// The empty entry is no id (mastodon/statuses.ts composition), so each request has at most four.
+		expect(await posting(h, token, { status: 'x', media_ids: ['', 'abc', ' 12', '1_0'] })).toEqual(
+			mediaNotFound('0', '12', '10')
+		)
+		expect(await posting(h, token, { status: 'x', media_ids: ['0012', 'abc', '0012', `${ID}`] })).toEqual(
+			mediaNotFound('12', '0', '12')
+		)
+		expect(await posting(h, token, { status: 'x', media_ids: ['9007199254740993'] })).toEqual(
+			mediaNotFound('9007199254740993')
+		)
+		// A trailing space, a 0d prefix and leading zeros find the media; a repeated id attaches it once, where it is first.
+		const status = await post(h, h.users.alice, {
+			status: 'x',
+			media_ids: [`${ID} `, '100000000000000002', `0d${ID}`, ` +0${ID}`],
+		})
+		expect((status.media_attachments as { id: string }[]).map((m) => m.id)).toEqual([ID, '100000000000000002'])
+	})
+
+	it('answers an id of any length with a message no longer than the request', async () => {
+		const h: Pair = await community(['alice', 'bob'])
+		const id = `${'0'.repeat(1024 * 1024)}${'9'.repeat(1024 * 1024)}`
+		const { result } = await postPlans(h, h.users.alice.token, { mediaIds: [id] }, /^$/)
+		const error = (result as { status: string; value: { status: string; error: string } }).value
+		expect(error.status).toBe('invalid')
+		expect(error.error).toBe(`Media ${'9'.repeat(1024 * 1024)} not found or already attached to another post`)
+		expect(error.error.length).toBeLessThan(id.length)
+	}, 60_000)
+
+	it('names problems in Mastodon’s order', async () => {
+		const h: Pair = await community(['alice', 'bob'])
+		const { alice, bob } = h.users
+		const bad = ['100000000000000098']
+		expect(
+			await posting(h, alice.token, { status: 'x', media_ids: ['1', '2', '3', '4', '100000000000000098'] })
+		).toEqual({ status: 422, body: { error: 'Cannot attach more than 4 files' } })
+		expect(
+			await posting(h, alice.token, { status: 'x', media_ids: bad, in_reply_to_id: '100000000000000097' })
+		).toEqual({ status: 404, body: { error: 'The post you are trying to reply to does not appear to exist.' } })
+		const headers = { 'idempotency-key': 'media-key' }
+		const first = await posting(h, alice.token, { status: 'keyed' }, { headers })
+		expect(await posting(h, alice.token, { status: 'x', media_ids: bad }, { headers })).toEqual(first)
+		const quoted = await post(h, bob, { status: 'quote me' })
+		const direct = { status: 'psst', visibility: 'direct', quoted_status_id: quoted.id }
+		expect(await posting(h, alice.token, direct)).toEqual({
+			status: 422,
+			body: { error: 'Validation failed: Cannot quote a non-mentioned user in a Private Mention post.' },
+		})
+		expect(await posting(h, alice.token, { ...direct, media_ids: bad })).toEqual(mediaNotFound(bad[0]!))
+	})
+
+	it('checks an edit’s media before anything else, and reads an explicit empty list as no media', async () => {
+		const h: Pair = await community(['alice', 'bob'])
+		const { alice } = h.users
+		await insertMedia(h, alice.id)
+		const status = await post(h, alice, { status: 'same', media_ids: [ID] })
+		const path = `/api/v1/statuses/${status.id}`
+		// UpdateStatusService validates the media before NoChangesSubmittedError: an edit that changes nothing else.
+		expect(await posting(h, alice.token, { status: 'same', media_ids: [ID, '7'] }, { method: 'PUT', path })).toEqual(
+			mediaNotFound('7')
+		)
+		expect(await sql(h.store, 'SELECT id FROM status_edits')).toEqual([])
+		const removed = await posting(h, alice.token, { status: 'same', media_ids: [] }, { method: 'PUT', path })
+		expect(removed).toMatchObject({ status: 200, body: { media_attachments: [] } })
+		const again = await posting(h, alice.token, { status: 'same', media_ids: [ID] }, { method: 'PUT', path })
+		expect(again).toMatchObject({ status: 200, body: { media_attachments: [{ id: ID }] } })
+		// A form's media_ids[]= is no id either (Mastodon answers 422 "Media 0 not found"; docs/mastodon-deviations.md).
+		const formEdit = await h.request(
+			path,
+			bearer(alice.token, form({ status: 'same', 'media_ids[]': '' }, { method: 'PUT' }))
+		)
+		expect(formEdit.status).toBe(200)
+		expect(((await formEdit.json()) as Status).media_attachments).toEqual([])
+	})
+})
+
 // The plans and rows read of the statements a postStatus run makes whose SQL matches `pattern`, each as EXPLAIN QUERY
 // PLAN shows the production statement with its parameters.
 async function postPlans(
@@ -1027,5 +1235,31 @@ describe('Idempotency-Key reads and releases through the unique indexes (RES-7)'
 		expect(await sql(h.store, "SELECT count(*) AS n FROM scheduled_statuses WHERE client_key = 'key7'")).toEqual([
 			{ n: 0 },
 		])
+	}, 60_000)
+})
+
+describe('the media lookup probes each id (RES-7)', () => {
+	it('searches media_attachments by id for each requested id, with stale statistics and many uploads', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		await sql(h.store, 'ANALYZE')
+		await sql(
+			h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 20000 - 1)
+			INSERT INTO media_attachments (id, account_id, type, url, processed)
+			SELECT CAST(500000000000000000 + i AS TEXT), ?1, 'image', 'https://kopje.test/m/' || i, 1 FROM n`,
+			alice.id
+		)
+		const ids = ['500000000000000001', '500000000000000002', '7', '500000000000000003']
+		const { result, plans } = await postPlans(h, alice.token, { mediaIds: ids }, /LEFT JOIN media_attachments m/)
+		expect(result).toMatchObject({
+			status: 'ok',
+			value: { status: 'invalid', error: 'Media 7 not found or already attached to another post' },
+		})
+		expect(plans).toHaveLength(1)
+		const plan = plans[0]?.plan ?? []
+		expect(plan).toContain('SEARCH m USING INDEX sqlite_autoindex_media_attachments_1 (id=?) LEFT-JOIN')
+		expect(plan.filter((detail) => /^SCAN m\b/.test(detail))).toEqual([])
+		expect(plans[0]?.rows ?? Infinity).toBeLessThan(100)
 	}, 60_000)
 })

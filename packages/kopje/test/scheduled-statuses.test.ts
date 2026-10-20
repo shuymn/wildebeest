@@ -22,6 +22,7 @@ import {
 	DAILY_LIMIT,
 	MAX_ATTEMPTS,
 	PUBLISH_ROUND,
+	publishScheduled as publishOne,
 	RETRY_DELAYS_MS,
 	TOTAL_LIMIT,
 } from '../src/domain/scheduled-statuses'
@@ -471,8 +472,11 @@ describe('the scheduled_statuses endpoints', () => {
 			expiredMedia.run(state.storage.sql, { now: NOW + 2 * DAY, limit: 100 })
 		)
 		expect(due).toEqual([])
-		const other = await post(h, alice, { status: 'other', media_ids: [media] })
-		expect(other.media_attachments).toEqual([])
+		expect(await refusal(await schedule(h, alice, { status: 'other', media_ids: [media] }))).toEqual({
+			status: 422,
+			body: { error: `Media ${media} not found or already attached to another post` },
+		})
+		expect(await count(h, 'statuses')).toBe(0)
 		const credential = { tokenHash: await sha256Hex(alice.token), scope: 'write', now: NOW } as const
 		expect(
 			await h.store.updateCredentials(BUILD, {
@@ -566,6 +570,25 @@ describe('publication', () => {
 		expect(await sql(h.store, 'SELECT status_id, scheduled_status_id, gc_at FROM media_attachments')).toEqual([
 			{ status_id: null, scheduled_status_id: null, gc_at: at(NOW + HOUR + DAY) },
 		])
+	})
+
+	it('refuses to schedule unusable media, and drops a post whose held media is gone when it is due', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		expect(
+			await refusal(await schedule(h, alice, { status: 'x', media_ids: ['7'], scheduled_at: at(NOW + HOUR) }))
+		).toEqual({ status: 422, body: { error: 'Media 7 not found or already attached to another post' } })
+		expect(await count(h, 'scheduled_statuses')).toBe(0)
+		const media = await upload(h, alice, 1)
+		const held = await scheduled(h, alice, { status: 'x', media_ids: [media], scheduled_at: at(NOW + HOUR) })
+		await sql(h.store, 'DELETE FROM media_attachments WHERE id = ?', media)
+		// As PublishScheduledStatusWorker loses a post whose validate_media! raises.
+		const publication = await runInDurableObject(h.store, (_instance, state) =>
+			publishOne.run(state.storage.sql, { id: held.id, now: NOW + HOUR, objectId: crypto.randomUUID() })
+		)
+		expect(publication).toEqual({ status: 'dropped', reason: 'invalid' })
+		expect(await count(h, 'statuses')).toBe(0)
+		expect(await count(h, 'scheduled_statuses')).toBe(0)
 	})
 
 	it('waits while the Store is readonly, then publishes', async () => {
