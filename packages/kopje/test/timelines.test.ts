@@ -210,6 +210,17 @@ describe('public and tag timelines', () => {
 		expect(await ids(h, '/api/v1/timelines/public')).toEqual([selfReply.id, far, local.id])
 		expect(await ids(h, '/api/v1/timelines/public?local=true')).toEqual([selfReply.id, local.id])
 		expect(await ids(h, '/api/v1/timelines/public?remote=true')).toEqual([far])
+		// PublicFeed#local_only? and #remote_only?: both flags select both.
+		expect(await ids(h, '/api/v1/timelines/public?local=true&remote=true')).toEqual([selfReply.id, far, local.id])
+		expect(await ids(h, '/api/v1/timelines/public?local=false&remote=true')).toEqual([far])
+		expect(await ids(h, '/api/v1/timelines/tag/a?local=true&remote=true')).toEqual([
+			selfReply.id,
+			reply.id,
+			far,
+			local.id,
+		])
+		expect(await ids(h, '/api/v1/timelines/tag/a?local=true')).toEqual([selfReply.id, reply.id, local.id])
+		expect(await ids(h, '/api/v1/timelines/tag/a?remote=true')).toEqual([far])
 		await sql(
 			h.store,
 			"INSERT INTO media_attachments (id, account_id, status_id, type, url) VALUES ('100000000000000001', ?, ?, 'image', 'u')",
@@ -217,6 +228,8 @@ describe('public and tag timelines', () => {
 			local.id
 		)
 		expect(await ids(h, '/api/v1/timelines/public?only_media=true')).toEqual([local.id])
+		expect(await ids(h, '/api/v1/timelines/public?only_media=true&local=true&remote=true')).toEqual([local.id])
+		expect(await ids(h, '/api/v1/timelines/tag/a?only_media=true&local=true&remote=true')).toEqual([local.id])
 		// Unlike the public timeline, a hashtag timeline keeps replies (Mastodon's TagFeed).
 		expect(await ids(h, '/api/v1/timelines/tag/A')).toEqual([selfReply.id, reply.id, far, local.id])
 		expect(await ids(h, '/api/v1/timelines/tag/a?all[]=b')).toEqual([local.id])
