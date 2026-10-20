@@ -269,12 +269,30 @@ describe('an announcement’s delete (RES-6)', () => {
 			ok: true,
 			deleted: fits.announcement,
 		})
-		const over = await saturated(room + 1, 0)
-		expect(await over.store.deleteAnnouncement(BUILD, { authority: ACCESS, id: over.announcement })).toMatchObject({
-			ok: false,
-			code: 'announcement-too-large',
+		const over = await saturated(room + 1, 1)
+		const snapshot = () =>
+			Promise.all(
+				['announcements', 'announcement_reactions', 'announcement_dismissals', 'stream_events', 'admin_actions'].map(
+					(table) => sql(over.store, `SELECT count(*) AS n, max(rowid) AS last FROM ${table}`)
+				)
+			)
+		const before = await snapshot()
+		const refused = await runInDurableObject(over.store, (_instance, state) => {
+			const changes = () => state.storage.sql.exec<{ n: number }>('SELECT total_changes() AS n').one().n
+			const start = changes()
+			const result = deleteAnnouncement.run(state.storage.sql, {
+				authority: ACCESS,
+				id: over.announcement,
+				now: Date.now(),
+			})
+			return { result, written: changes() - start }
 		})
-		expect(await sql(over.store, 'SELECT count(*) AS n FROM announcement_dismissals')).toEqual([{ n: room + 1 }])
+		expect(refused).toEqual({
+			result: expect.objectContaining({ ok: false, code: 'announcement-too-large' }),
+			written: 0,
+		})
+		expect(await snapshot()).toEqual(before)
+		expect(await sql(over.store, 'SELECT count(*) AS n FROM announcement_reactions')).toEqual([{ n: 8 }])
 		expect((await log(over.store)).map((row) => row.action)).toEqual(['create'])
 	}, 60_000)
 })
