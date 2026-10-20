@@ -28,10 +28,14 @@ const FORBIDDEN = new Set([
 	'LOAD_EXTENSION',
 ])
 
-type Token = { kind: 'word' | 'punct' | 'other'; text: string }
+// A token outside comments: a word (upper-cased; at most 256 characters, so a longer one is split), one punctuation
+// character (every character that starts no other token, non-ASCII ones included), or 'other' (a string, a quoted
+// identifier or a number). at is its offset in the SQL. test/migration-sql.ts lints migrations with these tokens.
+export type SqlToken = { kind: 'word' | 'punct' | 'other'; text: string; at: number }
 
-function tokenize(sql: string): Token[] | string {
-	const tokens: Token[] = []
+// The tokens of sql, or why it cannot be tokenized (an unterminated comment, string or quoted identifier).
+export function tokenizeSql(sql: string): SqlToken[] | string {
+	const tokens: SqlToken[] = []
 	let i = 0
 	const closing = (open: string, close: string, label: string): string | null => {
 		let j = i + open.length
@@ -63,22 +67,23 @@ function tokenize(sql: string): Token[] | string {
 			}
 		} else if (c === "'" || c === '"' || c === '`' || c === '[') {
 			const close = c === '[' ? ']' : c
+			const start = i
 			const problem = closing(c, close, c === "'" ? 'string' : 'quoted identifier')
 			if (problem !== null) {
 				return problem
 			}
-			tokens.push({ kind: 'other', text: c })
+			tokens.push({ kind: 'other', text: c, at: start })
 		} else if (/[A-Za-z_]/.test(c)) {
 			const match = /^[A-Za-z_][A-Za-z0-9_$]*/.exec(sql.slice(i, i + 256))
 			const word = match?.[0] ?? c
-			tokens.push({ kind: 'word', text: word.toUpperCase() })
+			tokens.push({ kind: 'word', text: word.toUpperCase(), at: i })
 			i += word.length
 		} else if (/[0-9]/.test(c)) {
 			const match = /^[0-9A-Za-z_.]+/.exec(sql.slice(i, i + 256))
+			tokens.push({ kind: 'other', text: '0', at: i })
 			i += match?.[0].length ?? 1
-			tokens.push({ kind: 'other', text: '0' })
 		} else {
-			tokens.push({ kind: 'punct', text: c })
+			tokens.push({ kind: 'punct', text: c, at: i })
 			i++
 		}
 	}
@@ -87,7 +92,7 @@ function tokenize(sql: string): Token[] | string {
 
 // Returns why the statement is refused, or null if it may run.
 export function readOnlyProblem(sql: string): string | null {
-	const tokens = tokenize(sql)
+	const tokens = tokenizeSql(sql)
 	if (typeof tokens === 'string') {
 		return tokens
 	}

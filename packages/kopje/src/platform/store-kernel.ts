@@ -8,7 +8,7 @@ export type Migration = {
 	// 'unchanged': a reviewed claim that the file creates, drops, rebuilds or renames no table, adds no reference and
 	// removes or replaces no key. test/migration-lint.test.ts holds a declared file to statements that cannot (a guard
 	// against an author's mistake, not a proof against a hostile file: migrations are written and reviewed here) and
-	// applies it to a populated Store. It is not checksummed. Without it, the upgrade checks every reference in the Store.
+	// applies it to a populated Store. Not checksummed. Without it, the upgrade checks every reference in the Store.
 	readonly foreignKeys?: 'unchanged'
 }
 
