@@ -1840,11 +1840,8 @@ export function convertLegacy(
 		)
 	}
 	const settingInsert = insert('INSERT INTO instance_settings (name, value) VALUES (?, ?)')
-	// RES-2: a setting as the Worker stores it (src/platform/stored-bounds.ts INSTANCE_SETTING_BOUNDS), in this order:
-	// a blank one (after storedText) is dropped, normalized; any other past its bound is a truncation (cut, or dropped
-	// where P keeps no row), a problem unless truncation is accepted; and a document within its bound that sanitizes to
-	// no text is dropped, normalized. A document whose text lies past the bound is therefore a truncation, never a
-	// normalization.
+	// RES-2: setting normalization follows docs/cutover.md, "Clients and settings".
+	// Check the stored bound before sanitized text, so an over-bound document remains a truncation.
 	/** @param {string} name @param {unknown} value */
 	const putSetting = (name, value) => {
 		const text = stored(`instance_settings.${name}`, carried(value), storedText)

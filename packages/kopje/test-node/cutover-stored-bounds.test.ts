@@ -279,11 +279,8 @@ describe('converted rows at the stored bounds', () => {
 	})
 })
 
-// RES-2: converted instance settings hold what the Worker would store (INSTANCE_SETTING_BOUNDS). Blank ones go
-// (normalized); one past its bound is cut or goes, a truncation (a problem unless accepted); a document within its
-// bound that sanitizes to no text goes (normalized). A document past its bound whose only text lies past the
-// sanitizer's cap is a truncation, not a normalization. Verification expects the same, and the absence of each
-// dropped setting.
+// RES-2: conversion and verification enforce INSTANCE_SETTING_BOUNDS and absence of dropped settings.
+// An over-bound document is a truncation even when its only text lies beyond the sanitizer's cap.
 describe('converted instance settings at their stored bounds', () => {
 	const sqlText = (text: string) => `'${text.replaceAll("'", "''")}'`
 	// The legacy settings of the fixture replaced by `values` (by legacy name), the rules' second text by `rule`.

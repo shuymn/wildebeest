@@ -517,8 +517,9 @@ export const EMOJI_URL_ALPHABET = /^[!#-[\]-~]+$/
 export const MAX_EMOJI_TAGS = 64
 export const MAX_EMOJIS = 64
 // The presented JSON bytes of Status.emojis (and StatusEdit's, and a Poll's, a subset) and of Account.emojis; also the
-// stored UTF-8 bytes of the columns. An entry {"shortcode":n,"url":u,"static_url":u,"visible_in_picker":true} takes
-// EMOJI_ENTRY_BYTES + n + 2u, a nonempty array of them 1 + Σ(entry + 1) (presentedEmojiBytes).
+// stored UTF-8 bytes of the columns. Entries are {"shortcode":n,"url":u,"static_url":u,"visible_in_picker":true}.
+// For shortcode length n and URL length u, a nonempty presented array occupies
+// 1 + Σ(EMOJI_ENTRY_BYTES + n + 2u) bytes, including separators (presentedEmojiBytes).
 export const STATUS_EMOJIS_BYTES = 12_288
 export const ACCOUNT_EMOJIS_BYTES = 6_144
 export const EMOJI_ENTRY_BYTES = 67

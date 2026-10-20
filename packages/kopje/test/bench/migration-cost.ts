@@ -10,12 +10,11 @@ import { freshStore, testKernel } from '../helpers'
 // upgrade (the kernel's bookmark, each file's transaction and the schema verification, which runs once after all
 // pending files) must finish in at most UPGRADE_BUDGET_MS, two thirds of the default 30 seconds of CPU an invocation
 // may use (an alarm's upgrade included; committing each file does not start a new invocation). Local elapsed time
-// stands in for that CPU time. A file is measured before its
-// PR merges, and a release's files together before it is tagged (RELEASING.md); the time goes in the file's header
-// comment and in the PR description. The owner's instance is not representative. Most of a small file's time is the
-// upgrade's own cost on a store this size, which grows with the store and varies with the machine's load: a file
-// that only creates an empty table (0050_follow_recommendation_mutes) measured 6.6 s, and 9.1 to 13.7 s once the
-// store held 0049's fixtures.
+// stands in for that CPU time.
+// Measure each file before its PR merges and the complete pending range before the release branch
+// merges (RELEASING.md). Record file measurements in migration headers and PR descriptions.
+// Upgrade overhead grows with the representative Store and varies with competing machine load;
+// the owner's instance is not representative.
 //
 //   pnpm --filter kopje bench:migration                            the newest migration
 //   KOPJE_BENCH_MIGRATION=0029_admin_reports pnpm --filter kopje bench:migration

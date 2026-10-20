@@ -1063,10 +1063,8 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
 		put('conversations', key, [members.sort(), true, true])
 	}
 
-	// Settings, under Kopje's names, as the Worker stores them (src/platform/stored-bounds.ts INSTANCE_SETTING_BOUNDS):
-	// a blank one, and a document within its bound that sanitizes to no text, has no row; one past its bound is cut or
-	// has no row, a truncation. A setting with no row is expected absent (settings_absent): the comparison of settings
-	// checks only the expected keys otherwise.
+	// RES-2: apply the setting normalization documented in docs/cutover.md independently.
+	// Record dropped keys in settings_absent; comparing expected settings alone would miss extra rows.
 	/** @param {string} name @param {string} value */
 	const putSetting = (name, value) => {
 		const text = storedText(value)

@@ -147,10 +147,11 @@ export const JOB_BATCHES_PER_RUN = 4
 // while reordered changes are in flight. A Like past the cap is answered 503 with nothing written (the Undos it waits
 // for free the room), unless a tracked id older than LIKE_RETIRE_AFTER_MS makes room.
 export const MAX_TRACKED_LIKES = 4
-// A tracked Like id this old has outlived every redelivery of its Undo: Mastodon retries a delivery 16 times with
+// A tracked Like id this old exceeds the default Undo retry windows below: Mastodon retries a delivery 16 times with
 // Sidekiq's (count^4 + 15) s backoff plus at most 50% jitter, about 3.1 days in all (ActivityPub::DeliveryWorker), and
 // Misskey 12 times by default with 1 min to 8 h backoff plus at most 20% jitter, about 1.6 days (core/QueueService.ts,
-// queue/QueueProcessorService.ts httpRelatedBackoff). Its Undo was lost; it is retired only to make room at the cap.
+// queue/QueueProcessorService.ts httpRelatedBackoff). At the cap, treat its Undo as lost: it is retired only to make
+// room.
 export const LIKE_RETIRE_AFTER_MS = 7 * 24 * 60 * 60 * 1000
 
 // A remote actor as the Worker extracted it from a fetched, origin-checked document (ID-2). Text is bounded,
@@ -2623,7 +2624,7 @@ const remove: Handler<'Remove'> = (db, actor, activity) => {
 	return unpinRemote(db, actor.id, object.status) ? applied('unpinned') : ignored('not-pinned')
 }
 
-// Mastodon's ActivityPub::Activity::Flag: the actor's reports of local accounts (reports.ts fileRemoteReports, R34).
+// R34: receive an inbound Flag, as Mastodon's ActivityPub::Activity::Flag (reports.ts fileRemoteReports).
 const flag: Handler<'Flag'> = (db, actor, activity, { now }) => {
 	const filed = fileRemoteReports(db, actor, activity, now)
 	return filed.filed ? applied(filed.reason) : ignored(filed.reason)
