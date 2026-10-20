@@ -186,6 +186,15 @@ describe('readParams: body and text bounds', () => {
 			ok: false,
 			status: 413,
 		})
+		// An empty form body still counts its query.
+		const query = `?q=${'x'.repeat(64)}` // 1 + 64 bytes: one past the limit
+		expect(await readParams(post('', 'application/x-www-form-urlencoded', query), { limit })).toEqual({
+			ok: false,
+			status: 413,
+		})
+		expect((await readParams(post('', 'application/x-www-form-urlencoded', query.slice(0, -1)), { limit })).ok).toBe(
+			true
+		)
 		// The query counts too.
 		const withQuery = new Request('https://kopje.test/x?q=1', {
 			method: 'POST',

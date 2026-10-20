@@ -185,7 +185,7 @@ export async function parseBody(contentType: string, body: Uint8Array, files?: F
 	return (await parseCounted(contentType, body, files)).params
 }
 
-// parseBody, with the UTF-8 bytes of every text part's name and value of a form body (null for JSON and no body).
+// parseBody, with the UTF-8 bytes of every text part's name and value of a non-JSON body (null for JSON).
 async function parseCounted(
 	contentType: string,
 	body: Uint8Array,
@@ -194,7 +194,8 @@ async function parseCounted(
 	const declared = new Set(files?.names ?? [])
 	const type = mediaTypeOf(contentType)
 	if (body.byteLength === 0) {
-		return { params: new Params([]), formText: null }
+		// An empty body has no text of its own, but the query of a non-JSON request is still counted (readParams).
+		return { params: new Params([]), formText: type === 'application/json' ? null : 0 }
 	}
 	if (type === 'application/json') {
 		const entries: [string, string][] = []
