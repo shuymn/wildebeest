@@ -231,17 +231,102 @@ describe('scheduling a status', () => {
 	it('answers a repeated Idempotency-Key with what the first request made', async () => {
 		const h = await community(['alice'])
 		const { alice } = h.users
-		const body = { status: 'once', scheduled_at: at(NOW + HOUR) }
+		const body = { status: 'once', scheduled_at: at(NOW + 10 * MINUTE) }
 		const first = await (await schedule(h, alice, body, { 'Idempotency-Key': 'k1' })).json<Scheduled>()
 		const again = await (await schedule(h, alice, body, { 'Idempotency-Key': 'k1' })).json<Scheduled>()
 		expect(again).toEqual(first)
 		expect(await count(h, 'scheduled_statuses')).toBe(1)
 		// Once published, the repeat is answered with the status.
-		await round(h, NOW + HOUR)
+		await round(h, NOW + 10 * MINUTE)
 		const published = await (await schedule(h, alice, body, { 'Idempotency-Key': 'k1' })).json<Status>()
 		expect(published).toMatchObject({ content: '<p>once</p>' })
 		expect(await count(h, 'statuses')).toBe(1)
 		expect(await count(h, 'scheduled_statuses')).toBe(0)
+	})
+})
+
+describe('an Idempotency-Key expires an hour after what it made', () => {
+	const key = { 'Idempotency-Key': 'hour' }
+	const keys = async (h: ApiHarness, table: string) =>
+		(await sql<{ k: string | null }>(h.store, `SELECT client_key AS k FROM ${table} ORDER BY id`)).map((r) => r.k)
+
+	it('answers the scheduled status within the hour; at the hour a repeat posts anew and frees the key', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const first = await (
+			await schedule(h, alice, { status: 'later', scheduled_at: at(NOW + 3 * HOUR) }, key)
+		).json<Scheduled>()
+		h.now.mockReturnValue(NOW + HOUR - 1)
+		expect(await (await schedule(h, alice, { status: 'again' }, key)).json()).toEqual(first)
+		h.now.mockReturnValue(NOW + HOUR)
+		const fresh = await schedule(h, alice, { status: 'again' }, key)
+		expect(fresh.status).toBe(200)
+		expect(await fresh.json()).toMatchObject({ content: '<p>again</p>' })
+		const hash = await sha256Hex('hour')
+		expect(await keys(h, 'scheduled_statuses')).toEqual([null])
+		expect(await keys(h, 'statuses')).toEqual([hash])
+		// The older scheduled status publishes without the key, which stays with the new status.
+		await round(h, NOW + 3 * HOUR)
+		expect(await count(h, 'scheduled_statuses')).toBe(0)
+		expect(await keys(h, 'statuses')).toEqual([hash, null])
+		h.now.mockReturnValue(NOW + HOUR + 1)
+		expect(await (await schedule(h, alice, { status: 'third' }, key)).json()).toMatchObject({
+			content: '<p>again</p>',
+		})
+	})
+
+	it('a repeat that schedules again replaces the expired key without a unique error', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		await scheduled(h, alice, { status: 'one', scheduled_at: at(NOW + 3 * HOUR) })
+		await schedule(h, alice, { status: 'one', scheduled_at: at(NOW + 3 * HOUR) }, key)
+		h.now.mockReturnValue(NOW + HOUR)
+		const again = await schedule(h, alice, { status: 'two', scheduled_at: at(NOW + 4 * HOUR) }, key)
+		expect(again.status).toBe(200)
+		expect(await keys(h, 'scheduled_statuses')).toEqual([null, null, await sha256Hex('hour')])
+	})
+
+	it('keeps the key on a status published within the hour until an hour after the publication', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		await schedule(h, alice, { status: 'soon', scheduled_at: at(NOW + 10 * MINUTE) }, key)
+		await round(h, NOW + 10 * MINUTE)
+		expect(await keys(h, 'statuses')).toEqual([await sha256Hex('hour')])
+		h.now.mockReturnValue(NOW + 10 * MINUTE + HOUR - 1)
+		expect(await (await schedule(h, alice, { status: 'repeat' }, key)).json()).toMatchObject({
+			content: '<p>soon</p>',
+		})
+		h.now.mockReturnValue(NOW + 10 * MINUTE + HOUR)
+		expect(await (await schedule(h, alice, { status: 'repeat' }, key)).json()).toMatchObject({
+			content: '<p>repeat</p>',
+		})
+		expect(await keys(h, 'statuses')).toEqual([null, await sha256Hex('hour')])
+	})
+
+	it('publishes a status without the key when the key expired before the publication', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		await schedule(h, alice, { status: 'late', scheduled_at: at(NOW + 3 * HOUR) }, key)
+		await round(h, NOW + 3 * HOUR)
+		expect(await keys(h, 'statuses')).toEqual([null])
+		expect(await (await schedule(h, alice, { status: 'repeat' }, key)).json()).toMatchObject({
+			content: '<p>repeat</p>',
+		})
+	})
+
+	it('counts a restored created_at that is not a time Kopje writes as expired', async () => {
+		for (const stored of ["'now'", "'not a time'", "strftime('%Y-%m-%dT%H:%M:%fZ', 'now') || char(0) || 'x'"]) {
+			const h = await community(['alice'])
+			const { alice } = h.users
+			await schedule(h, alice, { status: 'kept', scheduled_at: at(NOW + 3 * HOUR) }, key)
+			await sql(h.store, `UPDATE scheduled_statuses SET created_at = ${stored}`)
+			const repeat = await schedule(h, alice, { status: 'anew' }, key)
+			expect(await repeat.json(), stored).toMatchObject({ content: '<p>anew</p>' })
+			expect(await keys(h, 'scheduled_statuses')).toEqual([null])
+			// Published, it carries no key.
+			await round(h, NOW + 3 * HOUR)
+			expect(await keys(h, 'statuses')).toEqual([await sha256Hex('hour'), null])
+		}
 	})
 })
 
@@ -251,13 +336,13 @@ describe('an Idempotency-Key shared by an immediate and a scheduled post', () =>
 		const { alice } = h.users
 		const key = { 'Idempotency-Key': 'shared' }
 		const first = await (
-			await schedule(h, alice, { status: 'once', scheduled_at: at(NOW + HOUR) }, key)
+			await schedule(h, alice, { status: 'once', scheduled_at: at(NOW + 10 * MINUTE) }, key)
 		).json<Scheduled>()
 		const now = await (await schedule(h, alice, { status: 'once' }, key)).json<Scheduled>()
 		expect(now).toEqual(first)
 		expect(await count(h, 'statuses')).toBe(0)
-		await round(h, NOW + HOUR)
-		await round(h, NOW + HOUR + 5 * MINUTE)
+		await round(h, NOW + 10 * MINUTE)
+		await round(h, NOW + 15 * MINUTE)
 		expect(await count(h, 'statuses')).toBe(1)
 		expect(await (await schedule(h, alice, { status: 'once' }, key)).json()).toMatchObject({ content: '<p>once</p>' })
 		expect(await count(h, 'statuses')).toBe(1)

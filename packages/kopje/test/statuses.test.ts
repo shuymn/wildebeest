@@ -1,8 +1,11 @@
+import { runInDurableObject } from 'cloudflare:test'
+
 import { describe, expect, it } from 'vitest'
 
 import { bearer, form, json, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { BUILD } from './helpers'
+import { watchedCursor } from './read-helpers'
 import {
 	act,
 	block,
@@ -17,9 +20,13 @@ import {
 	seedStatus,
 	type Status,
 } from './status-helpers'
+import { postStatus, type ScheduleInput } from '../src/domain/scheduled-statuses'
 import { MAX_RAW_LENGTH } from '../src/domain/status-text'
 import { MAX_STATUS_EDITS } from '../src/domain/statuses'
 import type { StoreStub } from '../src/platform/store-client'
+import { sha256Hex } from '../src/security/tokens'
+
+const HOUR = 60 * 60 * 1000
 
 // Puts the pending Creates in flight and records their servers as having the object (the receipt a delivered Create
 // leaves): an edit then goes to them as an Update (a server without a receipt gets a Create of the current version
@@ -124,6 +131,36 @@ describe('POST /api/v1/statuses', () => {
 		expect(second.id).toBe(first.id)
 		expect(second.content).toBe('<p>one</p>')
 		expect(await sql(h.store, 'SELECT id FROM statuses')).toHaveLength(1)
+		// For an hour after the status (PostStatusService's setex 3_600); then the key posts anew and moves to it.
+		h.now.mockReturnValue(NOW + HOUR - 1)
+		expect((await (await send('three')).json<Status>()).id).toBe(first.id)
+		h.now.mockReturnValue(NOW + HOUR)
+		const third = await (await send('three')).json<Status>()
+		expect(third.id).not.toBe(first.id)
+		expect(await sql(h.store, 'SELECT id, client_key FROM statuses ORDER BY id')).toEqual([
+			{ id: first.id, client_key: null },
+			{ id: third.id, client_key: await sha256Hex('k-1') },
+		])
+		expect((await (await send('four')).json<Status>()).id).toBe(third.id)
+	})
+
+	it('counts a restored created_at that is not a time Kopje writes as expired', async () => {
+		for (const stored of ["'now'", "'not a time'", "created_at || char(0) || 'x'", "'2026-10-12T12:34:56.789+00:00'"]) {
+			const h = await community(['alice'])
+			const send = (text: string) =>
+				h.request(
+					'/api/v1/statuses',
+					bearer(h.users.alice.token, json({ status: text }, { headers: { 'idempotency-key': 'k-1' } }))
+				)
+			const first = await (await send('one')).json<Status>()
+			await sql(h.store, `UPDATE statuses SET created_at = ${stored}`)
+			const second = await (await send('two')).json<Status>()
+			expect(second.id, stored).not.toBe(first.id)
+			expect(await sql(h.store, 'SELECT client_key FROM statuses ORDER BY id')).toEqual([
+				{ client_key: null },
+				{ client_key: await sha256Hex('k-1') },
+			])
+		}
 	})
 
 	it('refuses what Mastodon refuses', async () => {
@@ -620,6 +657,14 @@ describe('review regressions', () => {
 		expect(await sql(h.store, "SELECT id FROM notifications WHERE type = 'mention'")).toHaveLength(1)
 		expect((await outbound(h.store)).filter((o) => o.activity.type === 'Create')).toHaveLength(2)
 		expect((await getJson<{ statuses_count: number }>(h, `/api/v1/accounts/${alice.id}`)).body.statuses_count).toBe(2)
+		// Expired, the same key posts anew for each account, and each account's key moves to its new status.
+		h.now.mockReturnValue(NOW + HOUR)
+		const later = await (await send(alice.token, `${prefix}a`, 'later')).json<Status>()
+		const bobLater = await (await send(bob.token, `${prefix}a`, 'bob later')).json<Status>()
+		expect(new Set([first.id, bobs.id, later.id, bobLater.id]).size).toBe(4)
+		expect(
+			await sql(h.store, 'SELECT id FROM statuses WHERE client_key = ? ORDER BY id', await sha256Hex(`${prefix}a`))
+		).toEqual([{ id: later.id }, { id: bobLater.id }])
 	})
 
 	it('gives two edits in the same millisecond distinct Update ids', async () => {
@@ -893,4 +938,94 @@ describe('reblogged_by pages after filtering', () => {
 		await act(h, h.users.bob, `/api/v1/statuses/${status.id}/reblog`, { visibility: 'private' })
 		expect(await ids(h, `/api/v1/statuses/${status.id}/reblogged_by?limit=1`)).toEqual([h.users.carol.id])
 	})
+})
+
+// The plans and rows read of the statements a postStatus run makes whose SQL matches `pattern`, each as EXPLAIN QUERY
+// PLAN shows the production statement with its parameters.
+async function postPlans(
+	h: Awaited<ReturnType<typeof community>>,
+	token: string,
+	input: Partial<ScheduleInput>,
+	pattern: RegExp
+): Promise<{ result: unknown; plans: { query: string; plan: string[]; rows: number }[] }> {
+	const tokenHash = await sha256Hex(token)
+	return runInDurableObject(h.store, (_instance, state) => {
+		const real = state.storage.sql
+		const plans: { query: string; plan: string[]; rows: number }[] = []
+		const capturing = {
+			exec: (query: string, ...params: SqlStorageValue[]) => {
+				if (!pattern.test(query)) {
+					return real.exec(query, ...params)
+				}
+				const plan = real
+					.exec<{ detail: string }>(`EXPLAIN QUERY PLAN ${query}`, ...params)
+					.toArray()
+					.map((row) => row.detail)
+				const cursor = real.exec(query, ...params)
+				const entry = { query, plan, rows: 0 }
+				plans.push(entry)
+				return watchedCursor(cursor, () => (entry.rows += cursor.rowsRead))
+			},
+		} as unknown as SqlStorage
+		const result = postStatus.run(capturing, {
+			credential: { tokenHash, scope: 'write:statuses', now: NOW },
+			text: 'plan',
+			spoilerText: '',
+			mediaIds: [],
+			objectId: crypto.randomUUID(),
+			now: NOW,
+			present: { origin: 'https://kopje.test' },
+			...input,
+		})
+		return { result, plans }
+	})
+}
+
+describe('Idempotency-Key reads and releases through the unique indexes (RES-7)', () => {
+	it('probes and frees the key by index, with stale statistics and many keyed rows', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		await sql(h.store, 'ANALYZE')
+		// Many expired keyed statuses and scheduled statuses of the account, and one of each with the key.
+		await sql(
+			h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 5000 - 1)
+			INSERT INTO statuses (id, uri, account_id, visibility, content, published_at, client_key, created_at)
+			SELECT CAST(300000000000000000 + i AS TEXT), 'https://kopje.test/ap/o/k' || i, ?1, 'public', '', ?2, 'key' || i, ?2
+			FROM n`,
+			alice.id,
+			'2026-01-01T00:00:00.000Z'
+		)
+		await sql(
+			h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 300 - 1)
+			INSERT INTO scheduled_statuses (id, account_id, scheduled_at, params, client_key, created_at)
+			SELECT CAST(400000000000000000 + i AS TEXT), ?1, '2027-01-01T00:00:00.000Z', '{}', 'key' || i, ?2 FROM n`,
+			alice.id,
+			'2026-01-01T00:00:00.000Z'
+		)
+		const { plans } = await postPlans(h, alice.token, { idempotencyKey: 'key7' }, /client_key/)
+		const planOf = (pattern: RegExp) => plans.find((entry) => pattern.test(entry.query))?.plan ?? []
+		expect(planOf(/^SELECT id FROM statuses WHERE account_id = \?1 AND client_key/)).toEqual([
+			'SEARCH statuses USING INDEX statuses_client_key (account_id=? AND client_key=?)',
+		])
+		expect(planOf(/FROM scheduled_statuses ss WHERE/).join(' | ')).toMatch(
+			/SEARCH ss USING INDEX sqlite_autoindex_scheduled_statuses_\d \(account_id=\? AND client_key=\?\)/
+		)
+		expect(planOf(/^UPDATE statuses SET client_key = NULL/)).toEqual([
+			'SEARCH statuses USING INDEX statuses_client_key (account_id=? AND client_key=?)',
+		])
+		expect(planOf(/^UPDATE scheduled_statuses SET client_key = NULL/)).toEqual([
+			expect.stringMatching(
+				/^SEARCH scheduled_statuses USING INDEX sqlite_autoindex_scheduled_statuses_\d \(account_id=\? AND client_key=\?\)$/
+			),
+		])
+		for (const entry of plans) {
+			expect(entry.plan.filter((detail) => /^SCAN (statuses|ss|scheduled_statuses)\b/.test(detail))).toEqual([])
+		}
+		expect(await sql(h.store, "SELECT count(*) AS n FROM statuses WHERE client_key = 'key7'")).toEqual([{ n: 1 }])
+		expect(await sql(h.store, "SELECT count(*) AS n FROM scheduled_statuses WHERE client_key = 'key7'")).toEqual([
+			{ n: 0 },
+		])
+	}, 60_000)
 })

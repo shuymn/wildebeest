@@ -108,7 +108,7 @@ import { streamDelete } from './streaming'
 import { readWindow, singleWindow, windowJson, windowPage } from './windows'
 import { selectSql } from '../db/columns'
 import type { Db } from '../db/sql'
-import { STATUS_EMOJIS_BYTES, storedMediaDescription, storedText } from '../platform/stored-bounds'
+import { isoTimeSql, STATUS_EMOJIS_BYTES, storedMediaDescription, storedText } from '../platform/stored-bounds'
 import { jsonStringBytes, SPOILER_BYTES, STATUS_CONTENT_BYTES } from '../security/html'
 
 // Statuses (B4a): posting, editing and deleting local statuses, the per-status reads, and favourite, reblog and
@@ -610,14 +610,34 @@ function writeQuote(
 	}
 }
 
-// The status the Idempotency-Key `key` made for the account, as its own: a repeat answers with it.
-export function ownStatusByKey(db: Db, viewer: UserContext, key: string, present: Present): Status | null {
+// An Idempotency-Key answers for an hour after the post it made (PostStatusService: `redis.setex(key, 3_600, ...)`).
+export const IDEMPOTENCY_MS = 60 * 60 * 1000
+
+// Whether the row's `createdAt` is within the key's hour before the time whose cutoff `cutoff` binds (keyCutoff). The
+// time is read as the ISO form Kopje writes (isoTimeSql), so an imported value that is not one, SQLite's 'now'
+// included, has expired.
+export function keyFreshSql(createdAt: string, cutoff: string): string {
+	return `${isoTimeSql(createdAt)} > ${cutoff}`
+}
+
+export function keyCutoff(now: number): string {
+	return iso(now - IDEMPOTENCY_MS)
+}
+
+// The status the Idempotency-Key `key` made for the account within its hour, as its own: a repeat answers with it.
+export function ownStatusByKey(db: Db, viewer: UserContext, key: string, present: Present, now: number): Status | null {
 	const existing = db.first<{ id: string }>(
-		'SELECT id FROM statuses WHERE account_id = ? AND client_key = ?',
+		`SELECT id FROM statuses WHERE account_id = ?1 AND client_key = ?2 AND ${keyFreshSql('created_at', '?3')}`,
 		viewer.accountId,
-		key
+		key,
+		keyCutoff(now)
 	)
 	return existing === undefined ? null : presentOwn(db, viewer.accountId, existing.id, { ...present, viewer })
+}
+
+// Frees an expired key for a new post (statuses_client_key is unique per account): the older status keeps no key.
+export function releaseStatusKey(db: Db, accountId: string, key: string): void {
+	db.run('UPDATE statuses SET client_key = NULL WHERE account_id = ?1 AND client_key = ?2', accountId, key)
 }
 
 // Posts at once: the checks, then the write, answered with the new status.

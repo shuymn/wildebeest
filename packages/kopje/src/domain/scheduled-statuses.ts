@@ -21,10 +21,13 @@ import {
 	type CreateStatusResult,
 	iso,
 	isPrepared,
+	keyCutoff,
+	keyFreshSql,
 	ownStatusByKey,
 	type PostInput,
 	postNow,
 	preparePost,
+	releaseStatusKey,
 	statusCursor,
 	writePost,
 } from './statuses'
@@ -263,6 +266,12 @@ function invalid(errors: string[]): { status: 'invalid'; error: string } {
 	return { status: 'invalid', error: `Validation failed: ${errors.join(', ')}` }
 }
 
+// Frees an expired key for a new post (unique per account among scheduled statuses): the older row keeps no key, and
+// is published without one.
+function releaseScheduledKey(db: Db, accountId: string, key: string): void {
+	db.run('UPDATE scheduled_statuses SET client_key = NULL WHERE account_id = ?1 AND client_key = ?2', accountId, key)
+}
+
 // Detaches the uploads a scheduled status holds, attachable again for a day (as a deleted status's), and deletes it.
 function removeScheduled(db: Db, id: string, now: number): void {
 	db.run(
@@ -285,27 +294,33 @@ export type ScheduleResult = CreateStatusResult | { status: 'scheduled'; value: 
 
 // POST /api/v1/statuses (PostStatusService), with or without scheduled_at. An Idempotency-Key is resolved first,
 // against the account's statuses and its scheduled statuses alike, whether this request schedules or not: a repeat
-// answers with what the first request made, a Status or a ScheduledStatus, and makes nothing (so a key that reserved
-// a scheduled status is never posted twice, once now and once when it is published). Then no scheduled_at, or a time
-// not in the future, posts at once; otherwise the post is checked as an immediate one (the status replied to, the
-// media, a blank text), then against ScheduledStatus's validations, and kept with its media held.
+// within the key's hour (IDEMPOTENCY_MS, from the row's created_at) answers with what the first request made, a Status
+// or a ScheduledStatus, and makes nothing (so a key that reserved a scheduled status is never posted twice, once now
+// and once when it is published). An expired key is taken from the older rows, in this transaction, and posts anew.
+// Then no scheduled_at, or a time not in the future, posts at once; otherwise the post is checked as an immediate one
+// (the status replied to, the media, a blank text), then against ScheduledStatus's validations, and kept with its
+// media held.
 export const postStatus = userWriteOperation<ScheduleInput, ScheduleResult>((db, input, { accountId }, viewer) => {
 	if (input.scheduledAt !== undefined && !isTime(input.scheduledAt)) {
 		return { status: 'invalid', error: 'Record invalid' }
 	}
 	if (input.idempotencyKey !== undefined) {
-		const status: Status | null = ownStatusByKey(db, viewer, input.idempotencyKey, input.present)
+		const status: Status | null = ownStatusByKey(db, viewer, input.idempotencyKey, input.present, input.now)
 		if (status !== null) {
 			return { status: 'ok', value: status }
 		}
 		const scheduled = db.first<ScheduledRow>(
-			`SELECT ${COLUMNS} FROM scheduled_statuses ss WHERE ${scheduledOwnSql('ss', '?1')} AND ss.client_key = ?2`,
+			`SELECT ${COLUMNS} FROM scheduled_statuses ss WHERE ${scheduledOwnSql('ss', '?1')} AND ss.client_key = ?2
+				AND ${keyFreshSql('ss.created_at', '?3')}`,
 			accountId,
-			input.idempotencyKey
+			input.idempotencyKey,
+			keyCutoff(input.now)
 		)
 		if (scheduled !== undefined) {
 			return { status: 'scheduled', value: presentScheduled(db, scheduled) }
 		}
+		releaseStatusKey(db, accountId, input.idempotencyKey)
+		releaseScheduledKey(db, accountId, input.idempotencyKey)
 	}
 	if (input.scheduledAt === undefined || Date.parse(input.scheduledAt) <= input.now) {
 		return postNow(db, viewer, input)
@@ -496,15 +511,19 @@ export type Publication =
 // gone or hidden, the status quoted is gone or R36 no longer lets the author quote it, its text is blank without media,
 // its account is suspended) is dropped: deleted without a status,
 // its media detached. The status is created at the time of publication (PostStatusService does not take the scheduled
-// time), and its Idempotency-Key carries over, so a client repeating the request is answered with it.
+// time), and its Idempotency-Key carries over while it has not expired, so a client repeating the request within the
+// key's hour is answered with it, until an hour after the publication.
 export const publishScheduled = writeOperation<{ id: string; now: number; objectId: string }, Publication>(
 	(db, { id, now, objectId }) => {
-		const row = db.first<{ account_id: string; params: string; client_key: string | null; available: number }>(
-			`SELECT ss.account_id, ss.params, ss.client_key, ${availableSql('ss.account_id')} AS available
+		const row = db.first<PublishRow>(
+			`SELECT ss.account_id, ss.params,
+				CASE WHEN ${keyFreshSql('ss.created_at', '?3')} THEN ss.client_key END AS client_key,
+				${availableSql('ss.account_id')} AS available
 			FROM scheduled_statuses ss WHERE ss.id = ?1
 				AND (ss.attempts = 0 AND ss.scheduled_at <= ?2 OR ss.attempts > 0 AND ss.next_attempt_at <= ?2)`,
 			id,
-			iso(now)
+			iso(now),
+			keyCutoff(now)
 		)
 		if (row === undefined) {
 			return { status: 'gone' }
@@ -515,13 +534,10 @@ export const publishScheduled = writeOperation<{ id: string; now: number; object
 	}
 )
 
-function publish(
-	db: Db,
-	id: string,
-	row: { account_id: string; params: string; client_key: string | null; available: number },
-	now: number,
-	objectId: string
-): Publication {
+// client_key: the key while it has not expired, else null.
+type PublishRow = { account_id: string; params: string; client_key: string | null; available: number }
+
+function publish(db: Db, id: string, row: PublishRow, now: number, objectId: string): Publication {
 	if (row.available !== 1) {
 		return { status: 'dropped', reason: 'unavailable' }
 	}
