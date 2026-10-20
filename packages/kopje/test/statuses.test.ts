@@ -1148,6 +1148,124 @@ describe('media_ids (PostStatusService#validate_media!, MEDIA-1)', () => {
 	})
 })
 
+describe('allowed_mentions (PostStatusService#safeguard_mentions!)', () => {
+	type Trio = ApiHarness & { users: Record<'alice' | 'bob' | 'carol', User> }
+	const UNEXPECTED = 'Post would be sent to unexpected accounts'
+	const trio = async (): Promise<Trio> => community(['alice', 'bob', 'carol'])
+	const account = async (h: Trio, id: string) => (await getJson(h, `/api/v1/accounts/${id}`, h.users.alice.token)).body
+	const unexpected = async (h: Trio, ...ids: string[]) => ({
+		status: 422,
+		body: { error: UNEXPECTED, unexpected_accounts: await Promise.all(ids.map((id) => account(h, id))) },
+	})
+
+	it('posts when every mentioned account is listed, and refuses with the others when not', async () => {
+		const h = await trio()
+		const { alice, bob, carol } = h.users
+		expect((await posting(h, alice.token, { status: '@bob @carol absent' })).status).toBe(200)
+		expect((await posting(h, alice.token, { status: '@bob hi', allowed_mentions: [bob.id] })).status).toBe(200)
+		expect(await posting(h, alice.token, { status: '@bob @carol hi', allowed_mentions: [bob.id] })).toEqual(
+			await unexpected(h, carol.id)
+		)
+		// In the order of the text, each once.
+		expect(await posting(h, alice.token, { status: '@carol @bob @carol', allowed_mentions: [] })).toEqual(
+			await unexpected(h, carol.id, bob.id)
+		)
+		expect((await posting(h, alice.token, { status: 'nobody', allowed_mentions: [] })).status).toBe(200)
+		// A form's empty value lists no account either; a scalar is not the parameter (strong params drop it).
+		const formPost = await h.request(
+			'/api/v1/statuses',
+			bearer(alice.token, form({ status: '@bob form', 'allowed_mentions[]': '' }))
+		)
+		expect({ status: formPost.status, body: await formPost.json() }).toEqual(await unexpected(h, bob.id))
+		const scalar = await h.request(
+			'/api/v1/statuses',
+			bearer(alice.token, form({ status: '@bob scalar', allowed_mentions: carol.id }))
+		)
+		expect(scalar.status).toBe(200)
+	})
+
+	it('reads each id as Ruby’s to_i reads it, compared as text', async () => {
+		const h = await trio()
+		const { alice, carol } = h.users
+		expect((await posting(h, alice.token, { status: '@carol', allowed_mentions: [` 0${carol.id}`] })).status).toBe(200)
+		expect((await posting(h, alice.token, { status: '@carol', allowed_mentions: [`0d${carol.id}_`] })).status).toBe(200)
+		// Ids above 2^53: a neighbour that a JS number would confuse with carol's id is another id.
+		const near = [1n, -1n, 2n, -2n, 3n, -3n, 4n, -4n, 5n, -5n, 6n, -6n, 7n, -7n, 8n, -8n]
+		const neighbour = near.map((d) => String(BigInt(carol.id) + d)).find((id) => Number(id) === Number(carol.id))
+		if (neighbour === undefined) {
+			throw new Error('no neighbour within the double spacing')
+		}
+		expect(await posting(h, alice.token, { status: '@carol', allowed_mentions: [neighbour] })).toEqual(
+			await unexpected(h, carol.id)
+		)
+	})
+
+	it('counts the mentions the post would write: known and mentionable accounts, the author included', async () => {
+		const h = await trio()
+		const { alice, bob, carol } = h.users
+		const remote = await remoteAccount(h.store, 'rem', 'far.example')
+		await block(h.store, alice.id, bob.id)
+		await sql(
+			h.store,
+			'UPDATE local_accounts SET suspended_at = ? WHERE account_id = ?',
+			new Date(NOW).toISOString(),
+			carol.id
+		)
+		// Not counted: an unknown account (the mention stays text), a blocked and a suspended account.
+		expect(
+			(await posting(h, alice.token, { status: '@x@unknown.example @bob @carol', allowed_mentions: [] })).status
+		).toBe(200)
+		// Counted: oneself and a known remote account.
+		expect(await posting(h, alice.token, { status: '@alice @rem@far.example', allowed_mentions: [] })).toEqual(
+			await unexpected(h, alice.id, remote)
+		)
+	})
+
+	it('comes after the media and before the private mention quote check, and writes nothing when it refuses', async () => {
+		const h = await trio()
+		const { alice, bob, carol } = h.users
+		await remoteFollows(h.store, await remoteAccount(h.store, 'fan', 'fans.example'), alice.id)
+		expect(
+			await posting(h, alice.token, { status: '@bob', allowed_mentions: [], media_ids: ['100000000000000098'] })
+		).toEqual(mediaNotFound('100000000000000098'))
+		const quoted = await post(h, bob, { status: 'quote me' })
+		expect(
+			await posting(h, alice.token, {
+				status: '@carol psst',
+				visibility: 'direct',
+				quoted_status_id: quoted.id,
+				allowed_mentions: [],
+			})
+		).toEqual(await unexpected(h, carol.id))
+		await sql(
+			h.store,
+			"INSERT INTO media_attachments (id, account_id, type, url) VALUES ('100000000000000001', ?, 'image', 'u')",
+			alice.id
+		)
+		const before = {
+			statuses: await sql(h.store, 'SELECT id FROM statuses'),
+			outbound: await sql(h.store, 'SELECT id FROM outbound_activities'),
+		}
+		expect(
+			await posting(h, alice.token, {
+				status: '@bob @carol',
+				allowed_mentions: [bob.id],
+				media_ids: ['100000000000000001'],
+			})
+		).toEqual(await unexpected(h, carol.id))
+		expect({
+			statuses: await sql(h.store, 'SELECT id FROM statuses'),
+			outbound: await sql(h.store, 'SELECT id FROM outbound_activities'),
+		}).toEqual(before)
+		expect(await sql(h.store, "SELECT id FROM notifications WHERE type = 'mention'")).toEqual([])
+		expect(await sql(h.store, 'SELECT status_id FROM media_attachments')).toEqual([{ status_id: null }])
+		// A repeated Idempotency-Key is answered first.
+		const headers = { 'idempotency-key': 'mentions-key' }
+		const first = await posting(h, alice.token, { status: 'keyed' }, { headers })
+		expect(await posting(h, alice.token, { status: '@bob', allowed_mentions: [] }, { headers })).toEqual(first)
+	})
+})
+
 // The plans and rows read of the statements a postStatus run makes whose SQL matches `pattern`, each as EXPLAIN QUERY
 // PLAN shows the production statement with its parameters.
 async function postPlans(

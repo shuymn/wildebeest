@@ -591,6 +591,85 @@ describe('publication', () => {
 		expect(await count(h, 'scheduled_statuses')).toBe(0)
 	})
 
+	it('keeps allowed_mentions as sent and checks it when it publishes, dropping a post it refuses', async () => {
+		const h = await community(['alice', 'bob'])
+		const { alice, bob } = h.users
+		const when = at(NOW + HOUR)
+		const cases: [string, Record<string, unknown> | string, unknown, boolean][] = [
+			['absent', { status: '@bob absent', scheduled_at: when }, null, true],
+			['null', { status: '@bob null', scheduled_at: when, allowed_mentions: null }, null, true],
+			['listed', { status: '@bob listed', scheduled_at: when, allowed_mentions: [bob.id] }, [bob.id], true],
+			['JSON []', { status: '@bob json', scheduled_at: when, allowed_mentions: [] }, [], false],
+			['form []=', `status=%40bob%20form&scheduled_at=${encodeURIComponent(when)}&allowed_mentions[]=`, [''], false],
+		]
+		const made = new Map<string, Scheduled>()
+		for (const [name, body, shown] of cases) {
+			const response =
+				typeof body === 'string'
+					? await h.request(
+							'/api/v1/statuses',
+							bearer(alice.token, {
+								method: 'POST',
+								headers: { 'content-type': 'application/x-www-form-urlencoded' },
+								body,
+							})
+						)
+					: await schedule(h, alice, body)
+			expect(response.status, name).toBe(200)
+			const created = await response.json<Scheduled>()
+			expect(created.params.allowed_mentions, name).toEqual(shown)
+			const read = await getJson<Scheduled>(h, `/api/v1/scheduled_statuses/${created.id}`, alice.token)
+			expect(read.body.params.allowed_mentions, name).toEqual(shown)
+			made.set(name, created)
+		}
+		const media = await upload(h, alice, 1)
+		const refused = await scheduled(h, alice, {
+			status: '@bob with media',
+			media_ids: [media],
+			scheduled_at: when,
+			allowed_mentions: [],
+		})
+		const publish = (id: string) =>
+			runInDurableObject(h.store, (_instance, state) =>
+				publishOne.run(state.storage.sql, { id, now: NOW + HOUR, objectId: crypto.randomUUID() })
+			)
+		for (const [name, , , publishes] of cases) {
+			const publication = await publish(made.get(name)!.id)
+			expect(publication, name).toMatchObject(
+				publishes ? { status: 'published' } : { status: 'dropped', reason: 'unexpected_mentions' }
+			)
+		}
+		expect(await publish(refused.id)).toEqual({ status: 'dropped', reason: 'unexpected_mentions' })
+		expect((await sql<{ content: string }>(h.store, 'SELECT content FROM statuses ORDER BY id')).length).toBe(3)
+		expect(await count(h, 'scheduled_statuses')).toBe(0)
+		expect(await sql(h.store, 'SELECT status_id, scheduled_status_id, gc_at FROM media_attachments')).toEqual([
+			{ status_id: null, scheduled_status_id: null, gc_at: at(NOW + HOUR + DAY) },
+		])
+	})
+
+	it('publishes a restored row without allowed_mentions, and drops one with another shape as params', async () => {
+		const h = await community(['alice', 'bob'])
+		const { alice } = h.users
+		const restored: [string, (params: Record<string, unknown>) => void, string][] = [
+			['absent', (params) => delete params.allowed_mentions, 'published'],
+			['null', (params) => (params.allowed_mentions = null), 'published'],
+			['a string', (params) => (params.allowed_mentions = 'x'), 'params'],
+			['numbers', (params) => (params.allowed_mentions = [1]), 'params'],
+		]
+		for (const [name, change, outcome] of restored) {
+			const created = await scheduled(h, alice, { status: `@bob ${name}`, scheduled_at: at(NOW + HOUR) })
+			const params = { ...created.params }
+			change(params)
+			await sql(h.store, 'UPDATE scheduled_statuses SET params = ? WHERE id = ?', JSON.stringify(params), created.id)
+			const publication = await runInDurableObject(h.store, (_instance, state) =>
+				publishOne.run(state.storage.sql, { id: created.id, now: NOW + HOUR, objectId: crypto.randomUUID() })
+			)
+			expect(publication, name).toMatchObject(
+				outcome === 'published' ? { status: 'published' } : { status: 'dropped', reason: 'params' }
+			)
+		}
+	})
+
 	it('waits while the Store is readonly, then publishes', async () => {
 		const h = await community(['alice'])
 		const { alice } = h.users

@@ -27,6 +27,7 @@ import {
 	type PostInput,
 	postNow,
 	preparePost,
+	refusedPost,
 	releaseStatusKey,
 	statusCursor,
 	writePost,
@@ -48,7 +49,8 @@ export const DAILY_LIMIT = 25
 export const MINIMUM_OFFSET_MS = 5 * 60 * 1000
 
 // The bound of a stored params document (RES-1), as the schema checks it. What it holds is bounded before (the status
-// text's raw bound, at most four media ids of 18 digits, a parent id, a language tag), far under it.
+// text's raw bound, at most four media ids, a parent id, a language tag) far under it, but for allowed_mentions, which
+// may be as long as the request: a document past the bound is refused as "Record invalid".
 export const MAX_PARAMS_BYTES = 128 * 1024
 
 // At most this many scheduled statuses are published per cron run (RES-6), each in its own transaction.
@@ -72,7 +74,7 @@ export type ScheduledParams = {
 	application_id: null
 	idempotency: null
 	with_rate_limit: false
-	allowed_mentions: null
+	allowed_mentions: string[] | null
 	quoted_status_id: string | null
 	quote_approval_policy: QuotePolicyName
 }
@@ -115,7 +117,7 @@ function ownScheduled(db: Db, viewerId: string, id: string): ScheduledRow | unde
 
 // The params of a stored row, or null when not of the shape this module writes (a restored row has only schema
 // validation). A row without a quote policy has nobody, the policy such rows were scheduled with; one without a quoted
-// status quotes nothing.
+// status quotes nothing; one without allowed_mentions checks no mention.
 function readParams(text: string): ScheduledParams | null {
 	const p = JSON.parse(text) as Record<string, unknown>
 	const optional = (value: unknown, type: string) => value === null || typeof value === type
@@ -130,13 +132,17 @@ function readParams(text: string): ScheduledParams | null {
 		(p.poll === null || p.poll === undefined || isScheduledPoll(p.poll)) &&
 		(p.quote_approval_policy === undefined ||
 			QUOTE_POLICY_NAMES.includes(p.quote_approval_policy as QuotePolicyName)) &&
-		(p.quoted_status_id === undefined || optional(p.quoted_status_id, 'string'))
+		(p.quoted_status_id === undefined || optional(p.quoted_status_id, 'string')) &&
+		(p.allowed_mentions === undefined ||
+			p.allowed_mentions === null ||
+			(Array.isArray(p.allowed_mentions) && p.allowed_mentions.every((id) => typeof id === 'string')))
 	return valid
 		? ({
 				...p,
 				poll: p.poll ?? null,
 				quote_approval_policy: p.quote_approval_policy ?? 'nobody',
 				quoted_status_id: p.quoted_status_id ?? null,
+				allowed_mentions: p.allowed_mentions ?? null,
 			} as ScheduledParams)
 		: null
 }
@@ -185,7 +191,7 @@ function paramsOf(
 		application_id: null,
 		idempotency: null,
 		with_rate_limit: false,
-		allowed_mentions: null,
+		allowed_mentions: input.allowedMentions ?? null,
 		quoted_status_id: quotedStatusId,
 		quote_approval_policy: quotePolicy,
 	}
@@ -219,6 +225,7 @@ function postOf(params: ScheduledParams, now: number): PostInput | null {
 		mediaIds: params.media_ids ?? [],
 		quotePolicy: params.quote_approval_policy,
 		...(params.quoted_status_id === null ? {} : { quotedStatusId: params.quoted_status_id }),
+		...(params.allowed_mentions === null ? {} : { allowedMentions: params.allowed_mentions }),
 		now,
 	}
 }
@@ -326,9 +333,10 @@ export const postStatus = userWriteOperation<ScheduleInput, ScheduleResult>((db,
 		return postNow(db, viewer, input)
 	}
 	const scheduledAt = input.scheduledAt
-	const prepared = preparePost(db, accountId, input, null)
+	// As PostStatusService#schedule_status!: allowed_mentions is kept in the params and checked at publication.
+	const prepared = preparePost(db, accountId, { ...input, allowedMentions: undefined }, null)
 	if (!isPrepared(prepared)) {
-		return prepared
+		return refusedPost(db, prepared, input.present)
 	}
 	const errors = scheduleErrors(db, accountId, scheduledAt, input.now, null)
 	if (errors.length > 0) {
@@ -503,13 +511,17 @@ export const recordPublishFailure = writeOperation<{ id: string; now: number }, 
 export type Publication =
 	| { status: 'gone' }
 	| { status: 'published'; statusId: string }
-	| { status: 'dropped'; reason: 'unavailable' | 'params' | 'reply_not_found' | 'quote_not_found' | 'invalid' }
+	| {
+			status: 'dropped'
+			reason: 'unavailable' | 'params' | 'reply_not_found' | 'quote_not_found' | 'invalid' | 'unexpected_mentions'
+	  }
 
 // Publishes the scheduled status `id` if it is still due: deletes it and, in the same transaction, posts it through
 // the path of an immediate post (preparePost, writePost), with its held media, so it is published once however many
 // runs or retries reach it. As PublishScheduledStatusWorker, a post that no longer passes (the status replied to is
 // gone or hidden, the status quoted is gone or R36 no longer lets the author quote it, its text is blank without media,
-// its account is suspended) is dropped: deleted without a status,
+// its media is gone, it would mention an account its allowed_mentions does not list, its account is suspended) is
+// dropped: deleted without a status,
 // its media detached. The status is created at the time of publication (PostStatusService does not take the scheduled
 // time), and its Idempotency-Key carries over while it has not expired, so a client repeating the request within the
 // key's hour is answered with it, until an hour after the publication.
