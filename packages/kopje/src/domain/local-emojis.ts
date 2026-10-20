@@ -294,16 +294,29 @@ export const updateEmoji = writeOperation<
 		db.run('UPDATE custom_emojis SET disabled = 1 WHERE id = ?', id)
 		logAction(db, actor, 'disable', target, { shortcode: current.shortcode }, now)
 	}
-	const category = changes.category === undefined ? current.category : changes.category
+	// The category is bound only when the change names one: a stored value is kept in SQL, never read into the Worker
+	// and bound again (an imported value of malformed UTF-8 would come back as replacement characters, past its CHECK).
+	const category = changes.category !== undefined && changes.category !== current.category
 	const picker = changes.visibleInPicker === undefined ? current.visible_in_picker : changes.visibleInPicker ? 1 : 0
-	if (category !== current.category || picker !== current.visible_in_picker) {
-		db.run('UPDATE custom_emojis SET category = ?, visible_in_picker = ? WHERE id = ?', category, picker, id)
+	if (category || picker !== current.visible_in_picker) {
+		db.run(
+			`UPDATE custom_emojis SET category = CASE WHEN ?1 THEN ?2 ELSE category END, visible_in_picker = ?3
+			WHERE id = ?4`,
+			category ? 1 : 0,
+			category ? (changes.category ?? null) : null,
+			picker,
+			id
+		)
 		logAction(
 			db,
 			actor,
 			'update',
 			target,
-			{ shortcode: current.shortcode, ...(category === current.category ? {} : { category }), picker: picker === 1 },
+			{
+				shortcode: current.shortcode,
+				...(category ? { category: changes.category ?? null } : {}),
+				picker: picker === 1,
+			},
 			now
 		)
 	}
