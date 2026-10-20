@@ -58,6 +58,14 @@ Commands
   announcement delete <id> --yes
                                 delete one with its reactions and dismissals (the moderation log keeps its first 200
                                 characters)
+  trends [tags|statuses] [--offset <n>]
+                                list what trends now (both when neither is named), approved or not, with each one's
+                                review and the trends settings; empty while trends=false
+  trends approve-tag <name> | trends reject-tag <name>
+                                approve or reject a hashtag for the trends lists, at once (logged)
+  trends approve <status id> [--author] | trends reject <status id> [--author]
+                                approve or reject a post; --author decides for every post of its author without a
+                                decision of its own. Nothing trends until approved unless trendable_by_default=true
   keys rewrap                   move every local private key from USER_KEK_PREVIOUS (unset: the empty KEK) to
                                 USER_KEK, the same keys under a new wrapping (docs/setup.md, "Rotating the KEK").
                                 Resumable: keys already under USER_KEK are skipped. Prints counts and the keys it could
@@ -92,7 +100,8 @@ Commands
                                 set (or with an empty value, remove) them in one request; names: title,
                                 description, contact_email, extended_description, privacy_policy, terms_of_service,
                                 terms_of_service_effective_date (YYYY-MM-DD), show_domain_blocks and
-                                show_domain_blocks_rationale (disabled, users or all). They are data: set them after a
+                                show_domain_blocks_rationale (disabled, users or all), trends and
+                                trendable_by_default (true or false). They are data: set them after a
                                 cutover import, which refuses a Store that holds them
   instance <document> --file <path> [<name>=<value> ...]
                                 set a document (extended_description, privacy_policy or terms_of_service) to the HTML
@@ -235,6 +244,7 @@ function parseArgs(argv) {
 		'category',
 		'starts',
 		'ends',
+		'offset',
 	])
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i] ?? ''
@@ -1035,6 +1045,32 @@ export async function run({
 				throw new UsageError(
 					'announcement [--before <id>] | announcement add <file> ... | announcement set <id> ... | announcement publish|unpublish <id> | announcement delete <id> --yes'
 				)
+			}
+			case 'trends': {
+				const [action, ...args] = rest
+				const usage =
+					'trends [tags|statuses] [--offset <n>] | trends approve-tag|reject-tag <name> | trends approve|reject <status id> [--author]'
+				if (action === undefined || action === 'tags' || action === 'statuses') {
+					const offset = flags.offset
+					if (args.length > 0 || (offset !== undefined && (typeof offset !== 'string' || !/^\d{1,4}$/.test(offset)))) {
+						throw new UsageError(usage)
+					}
+					const query = offset === undefined ? '' : `?offset=${offset}`
+					for (const kind of action === undefined ? ['tags', 'statuses'] : [action]) {
+						print(await client.get(`/admin/trends/${kind}${query}`))
+					}
+					return 0
+				}
+				if ((action === 'approve-tag' || action === 'reject-tag') && args.length === 1) {
+					print(await client.post(`/admin/trends/tags/${action.slice(0, -4)}`, { name: args[0] }))
+					return 0
+				}
+				const id = args[0]
+				if ((action === 'approve' || action === 'reject') && args.length === 1 && /^\d{18}$/.test(id ?? '')) {
+					print(await client.post(`/admin/trends/statuses/${id}/${action}`, { author: flags.author === true }))
+					return 0
+				}
+				throw new UsageError(usage)
 			}
 			case 'keys': {
 				if (rest.length !== 1 || rest[0] !== 'rewrap') {

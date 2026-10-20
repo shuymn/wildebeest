@@ -139,7 +139,7 @@ export const getTag = optionalUserReadOperation<{ name: string; now: number; pre
 
 // The hashtag `name` names, as the request names it: a hashtag name (Tag::HASHTAG_NAME_RE) normalized, or null for one
 // that is not, or that leaves no name when normalized (a lone combining mark leaves none).
-function tagName(name: string): string | null {
+export function tagName(name: string): string | null {
 	const tag = isHashtagName(name) ? normalizeTag(name) : ''
 	return tag === '' ? null : tag
 }

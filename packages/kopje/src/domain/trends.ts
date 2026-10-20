@@ -1,23 +1,33 @@
-import type { Present } from './accounts'
+import { acctOf, type Present } from './accounts'
+import { accessAdminRefusal } from './admin-authority'
 import { ARRAY_ANSWER_BYTES } from './answer-budget'
 import { availableSql, statusReads, trendableStatusSql, visibleSql } from './audience'
 import { optionalUserReadOperation } from './auth'
-import { writeOperation } from './operation'
+import { logAction } from './moderation-log'
+import { readOperation, writeOperation } from './operation'
+import { htmlToPlainText } from './plain-text'
+import { usernameSql } from './profile-bounds'
 import { MAX_STATUS_TAGS, tagNameSql } from './status-bounds'
 import { presentation, presentStatusesWithin, type Status } from './status-presenter'
-import { presentTags, type Tag, type TagHistory } from './tags'
+import { presentTags, type Tag, type TagHistory, tagId, tagName } from './tags'
 import { type Db, ROW_OBJECT_BYTES, RowMeter, VALUE_BYTES } from '../db/sql'
+import type { ImportAuthority } from '../platform/store-admin'
 import {
+	cutSql,
 	isoTimeSql,
+	MAX_TREND_REVIEWS,
 	MAX_TREND_TAGS,
 	MAX_TREND_STATUSES,
 	TREND_ALLOWED_ROWS,
 	TREND_REVIEW_POOL,
 	TREND_SCORE_MAX,
 	TREND_STATUSES_PER_AUTHOR,
+	statusUrlSql,
 	TREND_TAG_NAME_BYTES,
+	TREND_TAG_NAME_LENGTH,
 	trendTagNameCheckSql,
 } from '../platform/stored-bounds'
+import { cutCodeUnits } from '../security/html'
 
 // Trends (migration 0057_trends), as Mastodon 4.5 works them out (app/models/trends/{tags,statuses}.rb): the hashtags
 // and statuses that trend, scored every 5 minutes by the cron's round (jobs/scheduled.ts trendsRound) from what the
@@ -534,4 +544,244 @@ export const trendingStatuses = optionalUserReadOperation<
 		true
 	)
 	return { items: admitted.items, read: ids.length, consumed: admitted.consumed, cut: admitted.cut }
+})
+
+// ---- The Access admin (app/admin.ts /admin/trends, `kopje-admin trends`): every read and write checks the admin in
+// its transaction (AUTH-5); each review is logged (moderation-log.ts, Tag, Status and Account targets).
+
+export const ADMIN_TREND_TAGS_LIMIT = 20
+export const ADMIN_TREND_STATUSES_LIMIT = 40
+// An admin status's excerpt: the plain text of its content's first EXCERPT_SOURCE code points, cut at EXCERPT_UNITS
+// code units; a domain shown at most DOMAIN_POINTS code points (a DNS name is at most 253 bytes).
+const EXCERPT_SOURCE = 4000
+export const EXCERPT_UNITS = 200
+export const DOMAIN_POINTS = 253
+
+export type AdminTrendTag = {
+	name: string
+	url: string
+	score: number
+	trendable: boolean
+	requires_review: boolean
+	reviewed_at: string | null
+	history: TagHistory[]
+}
+
+export type AdminTrendStatus = {
+	id: string
+	url: string | null
+	account: { id: string; acct: string }
+	published_at: string | null
+	language: string | null
+	score: number
+	trendable: boolean
+	requires_review: boolean
+	excerpt: string
+}
+
+export type TrendRefusal = {
+	ok: false
+	code: 'wrong-authority' | 'invalid-tag' | 'trend-status-not-found' | 'review-limit'
+	message: string
+}
+
+const ACCESS_ONLY = 'only an Access admin reviews trends'
+
+function authorityRefusal(db: Db, authority: ImportAuthority): TrendRefusal | null {
+	const refused = accessAdminRefusal(db, authority, ACCESS_ONLY)
+	return refused === null && authority.kind === 'access'
+		? null
+		: { ok: false, code: 'wrong-authority', message: refused ?? ACCESS_ONLY }
+}
+
+type TagReviewRow = { key: string; score: number | null; trendable: number | null; reviewed_at: string | null }
+
+function adminTag(db: Db, row: TagReviewRow, name: string, settings: TrendSettings, origin: string, now: number) {
+	return {
+		name,
+		url: `${origin}/tags/${encodeURIComponent(name)}`,
+		score: row.score ?? 0,
+		trendable: (row.trendable ?? (settings.trendable_by_default ? 1 : 0)) === 1,
+		requires_review: row.trendable === null,
+		reviewed_at: row.reviewed_at,
+		history: trendTagHistory(db, name, now),
+	} satisfies AdminTrendTag
+}
+
+const TAG_REVIEW_COLUMNS = `(SELECT r.trendable FROM tag_trend_reviews r WHERE r.name = t.name) AS trendable,
+	(SELECT r.reviewed_at FROM tag_trend_reviews r WHERE r.name = t.name) AS reviewed_at`
+
+// GET /admin/trends/tags: every listed stored hashtag (score of TAG_DECAY_THRESHOLD or more), allowed or not, by score.
+export const adminTrendTags = readOperation<
+	{ authority: ImportAuthority; offset: number; limit: number; now: number; origin: string },
+	{ ok: true; tags: AdminTrendTag[]; settings: TrendSettings } | TrendRefusal
+>((db, { authority, offset, limit, now, origin }) => {
+	const refused = authorityRefusal(db, authority)
+	if (refused !== null) {
+		return refused
+	}
+	const settings = trendSettings(db)
+	const rows = db.all<TagReviewRow>(
+		`SELECT hex(t.name) AS key, t.score, ${TAG_REVIEW_COLUMNS} FROM trend_tags t INDEXED BY trend_tags_listed
+		WHERE t.score >= ${TAG_DECAY_THRESHOLD} ORDER BY t.score DESC, t.name LIMIT ?1 OFFSET ?2`,
+		Math.min(Math.max(limit, 0), ADMIN_TREND_TAGS_LIMIT),
+		Math.max(offset, 0)
+	)
+	const tags = rows.flatMap((row) => {
+		const name = nameOf(row.key)
+		return name === null ? [] : [adminTag(db, row, name, settings, origin, now)]
+	})
+	return { ok: true, tags, settings }
+})
+
+type StatusReviewRow = {
+	id: string
+	url: string | null
+	account_id: string
+	username: string
+	domain: string | null
+	published_at: string | null
+	language: string | null
+	score: number
+	status_review: number | null
+	account_review: number | null
+	content: string
+}
+
+// Every variable field through its bounded projection (RES-3): the stored URL bound, the 24-byte ISO time, a
+// supported language, the username's and the domain's bounds, the content's first EXCERPT_SOURCE code points.
+const ADMIN_STATUS_COLUMNS = `t.status_id AS id, ${statusUrlSql('s.url')} AS url, s.account_id,
+	${usernameSql('a.username')} AS username, ${cutSql('a.domain', DOMAIN_POINTS)} AS domain,
+	${isoTimeSql('s.published_at')} AS published_at,
+	CASE WHEN s.language IN (SELECT value FROM json_each(?1)) THEN s.language END AS language, t.score,
+	(SELECT v.trendable FROM status_trend_reviews v WHERE v.status_id = t.status_id) AS status_review,
+	(SELECT v.trendable FROM account_trend_reviews v WHERE v.account_id = t.account_id) AS account_review,
+	${cutSql('s.content', EXCERPT_SOURCE)} AS content`
+
+function adminStatus(row: StatusReviewRow, settings: TrendSettings): AdminTrendStatus {
+	const review = row.status_review ?? row.account_review
+	return {
+		id: row.id,
+		url: row.url,
+		account: { id: row.account_id, acct: acctOf(row) },
+		published_at: row.published_at,
+		language: row.language,
+		score: row.score,
+		trendable: (review ?? (settings.trendable_by_default ? 1 : 0)) === 1,
+		requires_review: review === null,
+		excerpt: cutCodeUnits(htmlToPlainText(row.content), EXCERPT_UNITS),
+	}
+}
+
+function adminStatusRows(db: Db, where: string, tail: string, ...params: SqlStorageValue[]): StatusReviewRow[] {
+	return db.all<StatusReviewRow>(
+		`SELECT ${ADMIN_STATUS_COLUMNS} FROM trend_statuses t CROSS JOIN statuses s ON s.id = t.status_id
+			CROSS JOIN accounts a ON a.id = t.account_id
+		WHERE ${where} ${tail}`,
+		TREND_LANGUAGES_JSON,
+		...params
+	)
+}
+
+// GET /admin/trends/statuses: every stored status, allowed or not, by score.
+export const adminTrendStatuses = readOperation<
+	{ authority: ImportAuthority; offset: number; limit: number },
+	{ ok: true; statuses: AdminTrendStatus[]; settings: TrendSettings } | TrendRefusal
+>((db, { authority, offset, limit }) => {
+	const refused = authorityRefusal(db, authority)
+	if (refused !== null) {
+		return refused
+	}
+	const settings = trendSettings(db)
+	const rows = adminStatusRows(
+		db,
+		'1',
+		'ORDER BY t.score DESC, t.status_id DESC LIMIT ?2 OFFSET ?3',
+		Math.min(Math.max(limit, 0), ADMIN_TREND_STATUSES_LIMIT),
+		Math.max(offset, 0)
+	)
+	return { ok: true, statuses: rows.map((row) => adminStatus(row, settings)), settings }
+})
+
+// The name of a hashtag review: a hashtag name (Tag::HASHTAG_NAME_RE), normalized, within the stored name rule.
+function reviewName(raw: string): string | null {
+	const name = tagName(raw)
+	if (name === null || [...name].length > TREND_TAG_NAME_LENGTH) {
+		return null
+	}
+	const bytes = new TextEncoder().encode(name).length
+	const ascii = [...name].every((c) => c.charCodeAt(0) >= 0x80 || /[0-9_a-z]/.test(c))
+	return bytes <= TREND_TAG_NAME_BYTES && ascii ? name : null
+}
+
+// POST /admin/trends/tags/:action {name} (Admin::Trends::TagsController#approve, #reject): the hashtag's decision,
+// which takes effect at once; a new one is refused at MAX_TREND_REVIEWS.
+export const reviewTrendTag = writeOperation<
+	{ authority: ImportAuthority; name: string; trendable: boolean; now: number; origin: string },
+	{ ok: true; tag: AdminTrendTag } | TrendRefusal
+>((db, { authority, name: raw, trendable, now, origin }) => {
+	const refused = authorityRefusal(db, authority)
+	if (refused !== null) {
+		return refused
+	}
+	const name = reviewName(raw)
+	if (name === null) {
+		return { ok: false, code: 'invalid-tag', message: `${JSON.stringify(raw)} is not a hashtag name` }
+	}
+	const stored = db.first('SELECT 1 AS x FROM tag_trend_reviews WHERE name = ?', name) !== undefined
+	if (
+		!stored &&
+		(db.first<{ n: number }>('SELECT count(*) AS n FROM tag_trend_reviews')?.n ?? 0) >= MAX_TREND_REVIEWS
+	) {
+		return { ok: false, code: 'review-limit', message: `at most ${MAX_TREND_REVIEWS} hashtag reviews are kept` }
+	}
+	db.run(
+		`INSERT INTO tag_trend_reviews (name, trendable, reviewed_at) VALUES (?1, ?2, ?3)
+		ON CONFLICT (name) DO UPDATE SET trendable = excluded.trendable, reviewed_at = excluded.reviewed_at`,
+		name,
+		trendable ? 1 : 0,
+		iso(now)
+	)
+	const actor = authority as Extract<ImportAuthority, { kind: 'access' }>
+	logAction(db, actor, trendable ? 'approve' : 'reject', { type: 'Tag', id: tagId(name) }, { name }, now)
+	const row = db.first<TagReviewRow>(
+		`SELECT hex(t.name) AS key, (SELECT score FROM trend_tags WHERE name = t.name) AS score, ${TAG_REVIEW_COLUMNS}
+		FROM tag_trend_reviews t WHERE t.name = ?1`,
+		name
+	)!
+	return { ok: true, tag: adminTag(db, row, name, trendSettings(db), origin, now) }
+})
+
+// POST /admin/trends/statuses/:id/:action {author?} (Admin::Trends::StatusesController#approve, #reject): the status's
+// decision, or with `author` its author's (Account#trendable, for every status of theirs without one of its own).
+export const reviewTrendStatus = writeOperation<
+	{ authority: ImportAuthority; id: string; trendable: boolean; author: boolean; now: number },
+	{ ok: true; id: string; trendable: boolean; status: AdminTrendStatus | null } | TrendRefusal
+>((db, { authority, id, trendable, author, now }) => {
+	const refused = authorityRefusal(db, authority)
+	if (refused !== null) {
+		return refused
+	}
+	const status = db.first<{ account_id: string }>('SELECT account_id FROM statuses WHERE id = ?', id)
+	if (status === undefined) {
+		return { ok: false, code: 'trend-status-not-found', message: `no status has id ${id}` }
+	}
+	const [table, column, key, type] = author
+		? (['account_trend_reviews', 'account_id', status.account_id, 'Account'] as const)
+		: (['status_trend_reviews', 'status_id', id, 'Status'] as const)
+	const stored = db.first(`SELECT 1 AS x FROM ${table} WHERE ${column} = ?`, key) !== undefined
+	if (!stored && (db.first<{ n: number }>(`SELECT count(*) AS n FROM ${table}`)?.n ?? 0) >= MAX_TREND_REVIEWS) {
+		return { ok: false, code: 'review-limit', message: `at most ${MAX_TREND_REVIEWS} reviews of each kind are kept` }
+	}
+	db.run(
+		`INSERT INTO ${table} (${column}, trendable, reviewed_at) VALUES (?1, ?2, ?3)
+		ON CONFLICT (${column}) DO UPDATE SET trendable = excluded.trendable, reviewed_at = excluded.reviewed_at`,
+		key,
+		trendable ? 1 : 0,
+		iso(now)
+	)
+	const actor = authority as Extract<ImportAuthority, { kind: 'access' }>
+	logAction(db, actor, trendable ? 'approve' : 'reject', { type, id: key }, author ? { status: id } : {}, now)
+	const [row] = adminStatusRows(db, 't.status_id = ?2', '', id)
+	return { ok: true, id, trendable, status: row === undefined ? null : adminStatus(row, trendSettings(db)) }
 })

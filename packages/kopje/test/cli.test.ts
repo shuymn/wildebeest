@@ -5,6 +5,7 @@ import { beforeAll, describe, expect, it } from 'vitest'
 import { type AccessTeam, accessToken, adminHarness, adminTeam, serviceClaims, setTeamAccess } from './access-helpers'
 import { BUILD, LATEST_MIGRATION, migratedStore } from './helpers'
 import { ADMIN_AUD, ADMIN_EMAIL, memoryIO, SERVICE_CLIENT_ID, seedStore, tableSnapshot } from './ops-helpers'
+import { author as trendAuthor, trendStatus } from './trend-helpers'
 import { run } from '../cli/lib/main.js'
 import type { StoreStub } from '../src/platform/store-client'
 
@@ -377,6 +378,57 @@ describe('kopje-admin', () => {
 		expect((await cli(['account', 'unsuspend'], { fetch })).code).toBe(2)
 		expect((await cli(['account', 'unsuspend', 'alice', 'x'], { fetch })).code).toBe(2)
 		expect((await cli(['moderation-log', '--before', 'x'], { fetch })).code).toBe(2)
+	})
+
+	it('lists trends with their reviews, and approves and rejects hashtags and posts, each logged', async () => {
+		const store = await sourceStore(0)
+		const { fetch, seen } = edge(store)
+		const author = await trendAuthor(store, 'trender', { domain: 'remote.example' })
+		const post = await trendStatus(store, { author, published: Date.now() - 3_600_000, favourites: 9 })
+		await store.trendsRound(BUILD, { now: Date.now() })
+		const listed = await cli(['trends'], { fetch })
+		expect(listed.code, listed.err).toBe(0)
+		expect(listed.out).toContain('"tags": []')
+		expect(listed.out).toContain(`"id": "${post}"`)
+		expect(listed.out).toContain('"requires_review": true')
+		const tag = await cli(['trends', 'approve-tag', 'Kopje'], { fetch })
+		expect(JSON.parse(tag.out)).toMatchObject({ name: 'kopje', trendable: true, requires_review: false, score: 0 })
+		expect(JSON.parse((await cli(['trends', 'reject', post], { fetch })).out)).toMatchObject({
+			id: post,
+			trendable: false,
+			requires_review: false,
+		})
+		expect(JSON.parse((await cli(['trends', 'approve', post, '--author'], { fetch })).out)).toMatchObject({
+			id: post,
+			trendable: false,
+		})
+		expect(await seen.at(-1)?.json()).toEqual({ author: true })
+		expect(JSON.parse((await cli(['trends', 'statuses', '--offset', '1'], { fetch })).out)).toMatchObject({
+			statuses: [],
+		})
+		const log = JSON.parse((await cli(['moderation-log'], { fetch })).out) as {
+			entries: { action: string; target_type: string }[]
+		}
+		expect(log.entries.map((e) => [e.action, e.target_type])).toEqual([
+			['approve', 'Account'],
+			['reject', 'Status'],
+			['approve', 'Tag'],
+		])
+		// A refusal exits 1; malformed arguments exit 2 before any request.
+		expect((await cli(['trends', 'approve-tag', 'not a tag'], { fetch })).code).toBe(1)
+		expect((await cli(['trends', 'approve', '999999999999999999'], { fetch })).code).toBe(1)
+		const count = seen.length
+		for (const argv of [
+			['trends', 'links'],
+			['trends', 'tags', 'x'],
+			['trends', '--offset', 'x'],
+			['trends', 'approve', 'x'],
+			['trends', 'approve-tag'],
+			['trends', 'approve', post, post],
+		]) {
+			expect((await cli(argv, { fetch })).code, argv.join(' ')).toBe(2)
+		}
+		expect(seen.length).toBe(count)
 	})
 
 	it('adds, lists, changes, publishes, unpublishes and deletes announcements, each logged', async () => {

@@ -10,7 +10,7 @@ import { BUILD, migratedStore, rejectionOf } from './helpers'
 import { ACCESS, beginImport, dumpViaRpc, importChunks, importViaRpc, resetImport, setAccess } from './ops-helpers'
 import { INSTANCE_ADMIN_NAMES, setInstanceSettings } from '../src/domain/instance'
 import type { StoreStub } from '../src/platform/store-client'
-import { INSTANCE_SETTING_BOUNDS } from '../src/platform/stored-bounds'
+import { INSTANCE_SETTING_BOUNDS, type StoredSettingName, storedSetting } from '../src/platform/stored-bounds'
 
 // The Access admin's write of the instance's public settings (domain/instance.ts setInstanceSettings, POST
 // /admin/instance, `kopje-admin instance`): AUTH-5, the bounds of INSTANCE_SETTING_BOUNDS in their units, the terms of
@@ -198,6 +198,8 @@ describe('setInstanceSettings', () => {
 		['terms_of_service_effective_date', '2026-12-01'],
 		['show_domain_blocks', 'users'],
 		['show_domain_blocks_rationale', 'all'],
+		['trends', 'false'],
+		['trendable_by_default', 'true'],
 	]
 
 	// Runs one admin write inside the transaction the operation would have, and checks that every stored value is one
@@ -210,14 +212,13 @@ describe('setInstanceSettings', () => {
 		})
 		if (result.ok) {
 			for (const [stored, value] of Object.entries(result.values)) {
-				const bound = INSTANCE_SETTING_BOUNDS[stored as keyof typeof INSTANCE_SETTING_BOUNDS]
-				expect(bound.writer(value), stored).toBe(value)
+				expect(storedSetting(stored as StoredSettingName, value), stored).toBe(value)
 			}
 		}
 		return result
 	}
 
-	it('accepts a value for each of the nine names', async () => {
+	it('accepts a value for each of the eleven names', async () => {
 		expect(ACCEPTED.map(([name]) => name).sort()).toEqual([...INSTANCE_ADMIN_NAMES].sort())
 		const s = await store()
 		await runInDurableObject(s, (_instance, state) => {
@@ -230,14 +231,14 @@ describe('setInstanceSettings', () => {
 		})
 	})
 
-	it("stores only what INSTANCE_SETTING_BOUNDS' writers keep, whatever the input", async () => {
+	it("stores only what the stored bounds' writers keep, whatever the input", async () => {
 		const s = await store()
 		await runInDurableObject(s, (_instance, state) => {
 			fc.assert(
 				fc.property(
 					fc.constantFrom(...INSTANCE_ADMIN_NAMES),
 					fc.oneof(
-						fc.constantFrom('all', 'users', 'disabled', ' a@example.com '),
+						fc.constantFrom('all', 'users', 'disabled', ' a@example.com ', 'true', 'false', 'TRUE'),
 						fc.string({ unit: 'binary', maxLength: 300 }),
 						fc.date({ noInvalidDate: true }).map((d) => d.toISOString().slice(0, 10))
 					),
