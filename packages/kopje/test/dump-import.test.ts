@@ -265,6 +265,25 @@ describe('dump', () => {
 
 	// RES-2: a dump taken before 0053_custom_emoji_snapshots restores and upgrades with no emoji; one taken after carries
 	// the snapshots verbatim, at their stored caps, and the import's triggers accept them.
+	// A3 of the announcements design: a dump taken before 0056_announcements restores into a Store at its migrations
+	// (an import requires the same migrations), which then upgrades through 0056 with its rows and no announcement.
+	it('restores a dump taken before 0056_announcements, which then upgrades through it', async () => {
+		await restoredBefore(
+			'0056_announcements',
+			(sql) => {
+				sql.exec(
+					"INSERT INTO accounts (id, uri, username) VALUES ('100000000000000001', 'https://kopje.test/ap/users/a', 'a')"
+				)
+			},
+			async (sql, upgrade) => {
+				expect(sql.exec("SELECT 1 FROM sqlite_master WHERE name = 'announcements'").toArray()).toEqual([])
+				expect(await upgrade()).toMatchObject({ ok: true, applied: ['0056_announcements'] })
+				expect(sql.exec('SELECT username FROM accounts').toArray()).toEqual([{ username: 'a' }])
+				expect(sql.exec('SELECT count(*) AS n FROM announcements').one().n).toBe(0)
+			}
+		)
+	}, 120_000)
+
 	it('restores a dump taken before 0053_custom_emoji_snapshots, and round-trips snapshots at their caps', async () => {
 		const seedAccounts = (sql: SqlStorage) =>
 			sql.exec(

@@ -206,6 +206,18 @@ const RULES: readonly Rule[] = [
 				'a status’s batched delete detaches the quotes of it and deletes its own (STATUS_CHILDREN), never a revocation',
 		},
 	},
+	{
+		// R40: announcements are the operator's; who sees one, its dismissals and its reactions are decided in one module.
+		name: 'reads or writes announcements',
+		pattern: new RegExp(
+			`\\b(?:FROM|JOIN|INTO|UPDATE)\\s+${table(['announcements', 'announcement_reactions', 'announcement_dismissals'])}`,
+			'i'
+		),
+		allowed: {
+			'src/domain/announcements.ts':
+				'the published announcements (announcementShownSql), the viewer’s own dismissals and reactions, and the admin’s writes',
+		},
+	},
 ]
 
 const files = (texts: Record<string, string>): Source[] => Object.entries(texts).map(([path, text]) => ({ path, text }))
@@ -299,6 +311,11 @@ const RULE_FIXTURES: readonly [name: string, flagged: string, passed: string][] 
 		'reads or writes quotes',
 		"db.run('UPDATE quote_requests SET x = 1')",
 		"db.all('SELECT quotes_count FROM statuses')",
+	],
+	[
+		'reads or writes announcements',
+		"db.run('INSERT OR IGNORE INTO announcement_dismissals (id) VALUES (1)')",
+		"db.all('SELECT announcements_count FROM x')",
 	],
 ]
 
