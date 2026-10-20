@@ -254,13 +254,15 @@ export function domainCoveredSql(a: string): string {
 
 // Whether an instance domain block covers the account `x` by either key: its row read once by its key.
 function accountCoveredSql(x: string): string {
-	return coveredSql(`${accountKeysSql('pc', 'main.accounts pc CROSS JOIN')} AND pc.id = ${x}`)
+	return coveredSql(
+		`${accountKeysSql('pc', 'main.accounts pc INDEXED BY sqlite_autoindex_accounts_1 CROSS JOIN')} AND pc.id = ${x}`
+	)
 }
 
 // Whether `owner` blocks the domain of the account `x`: two seeks of the (account_id, domain) index, however many
 // domains the owner blocks.
 export function domainBlocksSql(owner: string, x: string): string {
-	return `EXISTS (SELECT 1 FROM main.accounts pda
+	return `EXISTS (SELECT 1 FROM main.accounts pda INDEXED BY sqlite_autoindex_accounts_1
 		CROSS JOIN main.domain_blocks pdb ON pdb.account_id = ${owner} AND ${inDomainSql('pda', 'pdb.domain')}
 		WHERE pda.id = ${x})`
 }
@@ -308,7 +310,7 @@ export function findableBySql(x: string, viewer: string): string {
 // 0025_remote_collections; a remote account it has not learned hides nothing). Two key lookups.
 export function hidesCollectionsSql(x: string): string {
 	return `(EXISTS (SELECT 1 FROM main.local_accounts ph WHERE ph.account_id = ${x} AND ph.hide_collections = 1)
-		OR EXISTS (SELECT 1 FROM main.accounts pha WHERE pha.id = ${x} AND pha.hide_collections = 1))`
+		OR EXISTS (SELECT 1 FROM main.accounts pha INDEXED BY sqlite_autoindex_accounts_1 WHERE pha.id = ${x} AND pha.hide_collections = 1))`
 }
 
 // R13 (FollowerAccountsController#hide_results?): whether `viewer` (NULL: anonymous) is shown the followers and
@@ -369,7 +371,7 @@ export function announcementShownSql(a: string): string {
 // it once per query, and a local viewer pays one row for it however many statuses are judged. A rule guards a lookup
 // with it in a CASE, which skips the lookup when it is false (an AND may evaluate both operands).
 function remoteSql(viewer: string): string {
-	return `EXISTS (SELECT 1 FROM main.accounts pv WHERE pv.id = ${viewer} AND pv.domain IS NOT NULL)`
+	return `EXISTS (SELECT 1 FROM main.accounts pv INDEXED BY sqlite_autoindex_accounts_1 WHERE pv.id = ${viewer} AND pv.domain IS NOT NULL)`
 }
 
 // R41 (Trends::Statuses#eligible?, app/models/trends/statuses.rb:91-115): whether the status row `s` may trend at
@@ -935,7 +937,7 @@ export function quoteReads(viewer: ViewerContext): QuoteReads {
 							ELSE 'accepted' END AS state
 					FROM (SELECT q.status_id, q.state AS stored, t.id AS quoted, t.account_id AS author,
 							CASE WHEN t.id IS NULL THEN 0 ELSE ${visibleSql('t', '?2')} END AS visible
-						FROM main.quotes q LEFT JOIN main.statuses t ON t.id = q.quoted_status_id
+						FROM main.quotes q LEFT JOIN main.statuses t INDEXED BY sqlite_autoindex_statuses_1 ON t.id = q.quoted_status_id
 						WHERE q.status_id IN (SELECT value FROM json_each(?1)) AND (q.legacy = 0 OR q.state = 'accepted')) v) r
 				ORDER BY r.status_id`,
 				JSON.stringify(statusIds),
@@ -1230,7 +1232,7 @@ function notFollowerSql(r: string, from: string, now: string): string {
 // BaseCondition#new_account? (:56-58): the sender's account was created less than 30 days ago (a remote account's
 // time is the actor's `published`, as Mastodon's ProcessAccountService takes it, or when it was first stored).
 function newAccountSql(from: string, now: string): string {
-	return `EXISTS (SELECT 1 FROM main.accounts pn WHERE pn.id = ${from}
+	return `EXISTS (SELECT 1 FROM main.accounts pn INDEXED BY sqlite_autoindex_accounts_1 WHERE pn.id = ${from}
 		AND pn.created_at > ${daysBeforeSql(now, NEW_ACCOUNT_DAYS)})`
 }
 

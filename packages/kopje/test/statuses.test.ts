@@ -1450,7 +1450,7 @@ describe('posting and batch reads with stale statistics (RES-7)', () => {
 				name
 			).toHaveLength(1)
 			for (const [i, { query, plan, rows }] of plans.entries()) {
-				expect(scansOf(query, plan, ['accounts', 'media_attachments']), `${name}: ${query}`).toEqual([])
+				expect(scansOf(plan, ['a', 'media_attachments']), `${name}: ${query}`).toEqual([])
 				expect(rows, `${name}: ${query}`).toBe(before[name].plans[i]!.rows)
 			}
 		}
@@ -1482,9 +1482,9 @@ describe('posting and batch reads with stale statistics (RES-7)', () => {
 		expect(after.result).toEqual(before.result)
 		expect((after.result as { value: Status[] }).value.map((s) => s.id)).toEqual([mine.id])
 		expect(after.plans).toHaveLength(1)
-		const { query, plan, rows } = after.plans[0]!
+		const { plan, rows } = after.plans[0]!
 		expect(plan).toContain('SEARCH s USING INDEX sqlite_autoindex_statuses_1 (id=?)')
-		expect(scansOf(query, plan, ['statuses'])).toEqual([])
+		expect(scansOf(plan, ['s'])).toEqual([])
 		expect(rows).toBe(before.plans[0]!.rows)
 	}, 60_000)
 })

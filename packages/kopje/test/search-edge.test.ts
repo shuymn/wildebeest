@@ -507,9 +507,9 @@ describe('ranking queries with stale statistics (RES-7)', () => {
 		expect(after.value.statuses.map((s) => s.id)).toEqual(before.value.statuses.map((s) => s.id))
 		expect(after.value.statuses).toHaveLength(2)
 		expect(after.plans).toHaveLength(1)
-		const { query, plan, rows } = after.plans[0]!
+		const { plan, rows } = after.plans[0]!
 		expect(plan).toContain('SEARCH s USING INDEX sqlite_autoindex_statuses_1 (id=?)')
-		expect(scansOf(query, plan, ['statuses'])).toEqual([])
+		expect(scansOf(plan, ['s', 'statuses'])).toEqual([])
 		expect(rows).toBe(before.plans[0]!.rows)
 	}, 60_000)
 
@@ -539,11 +539,11 @@ describe('ranking queries with stale statistics (RES-7)', () => {
 		expect(after.map((a) => a.value.accounts.length)).toEqual([20, 0])
 		for (const [i, { plans }] of after.entries()) {
 			expect(plans).toHaveLength(1)
-			const { query, plan, rows } = plans[0]!
+			const { plan, rows } = plans[0]!
 			expect(plan).toContain('SEARCH a USING INDEX sqlite_autoindex_accounts_1 (id=?)')
 			expect(plan).toContain('SEARCH accounts USING INDEX accounts_username (<expr>>? AND <expr><?)')
 			// The newest window alone reads accounts in rowid order, up to its LIMIT.
-			expect(scansOf(query, plan, ['accounts'])).toEqual(['SCAN accounts'])
+			expect(scansOf(plan, ['a', 'accounts'])).toEqual(['SCAN accounts'])
 			expect(rows).toBe(before[i]!.plans[0]!.rows)
 		}
 	}, 60_000)

@@ -48,13 +48,16 @@ export const STATUS_COLUMN_MAP = {
 	author_domain: 'au.domain',
 } as const satisfies ColumnMap
 
-export const STATUS_FROM = 'statuses s JOIN accounts au ON au.id = s.account_id'
+// Each status and its author by key (the indexes named, so statistics older than the Store's growth cannot turn either
+// into a scan: RES-7).
+export const STATUS_FROM = `statuses s INDEXED BY sqlite_autoindex_statuses_1
+	CROSS JOIN accounts au INDEXED BY sqlite_autoindex_accounts_1 ON au.id = s.account_id`
 
 // STATUS_FROM over the ids of `keys`, a subquery whose `id` column holds each id once: each status is sought by its
 // key (the index named, so statistics older than the Store's growth cannot turn the read into a scan: RES-7).
 export function statusesOfSql(keys: string): string {
 	return `(${keys}) g CROSS JOIN statuses s INDEXED BY sqlite_autoindex_statuses_1 ON s.id = g.id
-		CROSS JOIN accounts au ON au.id = s.account_id`
+		CROSS JOIN accounts au INDEXED BY sqlite_autoindex_accounts_1 ON au.id = s.account_id`
 }
 
 // The columns presentMedia reads, bounded as stored (platform/stored-bounds.ts), for every query that presents media,
@@ -163,7 +166,8 @@ function statusRowTerms(viewer: string, filterRows: string): string {
 			`SELECT sum(${rowHeapSql(STATUS_MEDIA_COLUMN_MAP)}) FROM media_attachments m INDEXED BY sqlite_autoindex_media_attachments_1
 				WHERE m.id IN (${shownMediaSql('x.id')})`
 		),
-		one(`SELECT sum(${rowHeapSql(MENTION_COLUMN_MAP)}) FROM (SELECT x.id AS value) j CROSS JOIN accounts a
+		one(`SELECT sum(${rowHeapSql(MENTION_COLUMN_MAP)}) FROM (SELECT x.id AS value) j
+			CROSS JOIN accounts a INDEXED BY sqlite_autoindex_accounts_1
 			WHERE a.id IN (${SHOWN_MENTIONS_SQL})`),
 		one(`SELECT sum(${rowHeapSql(TAG_COLUMN_MAP)}) FROM (SELECT x.id AS value) j CROSS JOIN status_tags t
 			WHERE ${SHOWN_TAGS_SQL}`),
@@ -174,7 +178,7 @@ function statusRowTerms(viewer: string, filterRows: string): string {
 		one(`SELECT ${rowHeapSql(STATUS_COLUMN_MAP)} FROM ${STATUS_FROM} WHERE s.id = x.id`),
 		fixed(QUOTE_READ_COLUMNS, '1'),
 		one(`SELECT ${rowHeapSql(ACCOUNT_COLUMN_MAP)} FROM statuses w INDEXED BY sqlite_autoindex_statuses_1
-			CROSS JOIN accounts a ON a.id = w.account_id LEFT JOIN local_accounts l ON l.account_id = a.id WHERE w.id = x.id`),
+			CROSS JOIN accounts a INDEXED BY sqlite_autoindex_accounts_1 ON a.id = w.account_id LEFT JOIN local_accounts l ON l.account_id = a.id WHERE w.id = x.id`),
 		`CASE WHEN (SELECT o.reblog_of_id FROM statuses o WHERE o.id = x.id) IS NULL THEN ${children} ELSE 0 END`,
 		fixed(FILTER_MATCH_COLUMNS, filterRows),
 		`CASE WHEN ${viewer} IS NULL THEN 0 ELSE ${balancedSum([

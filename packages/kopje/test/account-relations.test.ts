@@ -468,14 +468,14 @@ describe('account batches with stale statistics (RES-7)', () => {
 		expect((after.accounts.result as unknown[]).length).toBe(3)
 		for (const [name, { plans }] of Object.entries(after)) {
 			expect(plans, name).toHaveLength(1)
-			const { query, plan, rows } = plans[0]!
+			const { plan, rows } = plans[0]!
 			expect(
 				plan.filter((detail) =>
 					/^SEARCH a USING (COVERING )?INDEX sqlite_autoindex_accounts_1 \(id=\?\)$/.test(detail)
 				),
 				name
 			).toHaveLength(1)
-			expect(scansOf(query, plan, ['accounts']), name).toEqual([])
+			expect(scansOf(plan, ['a']), name).toEqual([])
 			expect(rows, name).toBe(before[name as keyof typeof before].plans[0]!.rows)
 		}
 	}, 60_000)

@@ -656,9 +656,9 @@ describe('lane promotion with stale statistics (RES-7)', () => {
 			expect(run.result, name).toMatchObject({ status: 'delivered' })
 			expect(run.plans, name).toHaveLength(1)
 		}
-		const { query, plan, rows } = after.plans[0]!
+		const { plan, rows } = after.plans[0]!
 		expect(plan.filter((detail) => detail.includes('deliveries_lane (account_id=? AND lane=?)'))).toHaveLength(2)
-		expect(scansOf(query, plan, ['deliveries'])).toEqual([])
+		expect(scansOf(plan, ['deliveries'])).toEqual([])
 		expect(rows).toBe(before.plans[0]!.rows)
 		// Each lane's next row is pending, the others still queued.
 		expect(

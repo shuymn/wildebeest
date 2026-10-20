@@ -330,7 +330,8 @@ export function* partialAccountsOf(
 					`SELECT a.id, ${actorUriSql('a.uri')} AS uri, ${usernameSql('a.username')} AS username, a.domain, a.actor_type,
 						a.url, a.avatar_url, a.locked,
 						${availableJoinedSql('a', 'l')} AS available
-					FROM json_each(?1) c CROSS JOIN accounts a ON a.id = c.value LEFT JOIN local_accounts l ON l.account_id = a.id`,
+					FROM json_each(?1) c CROSS JOIN accounts a INDEXED BY sqlite_autoindex_accounts_1 ON a.id = c.value
+					LEFT JOIN local_accounts l ON l.account_id = a.id`,
 					JSON.stringify([...new Set(slice)])
 				)
 				.map((row) => [row.id, row])
@@ -1328,7 +1329,7 @@ export function accountRowsOf(db: Db, ids: readonly string[]): AccountRow[] {
 	const rows = new Map(
 		db
 			.all<AccountRow>(
-				`SELECT ${selectSql(ACCOUNT_COLUMN_MAP)} FROM json_each(?1) c CROSS JOIN accounts a ON a.id = c.value
+				`SELECT ${selectSql(ACCOUNT_COLUMN_MAP)} FROM json_each(?1) c CROSS JOIN accounts a INDEXED BY sqlite_autoindex_accounts_1 ON a.id = c.value
 					LEFT JOIN local_accounts l ON l.account_id = a.id`,
 				JSON.stringify(ids)
 			)

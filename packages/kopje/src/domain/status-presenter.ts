@@ -517,8 +517,8 @@ function hydrate(
 	const mentions = groupBy(
 		db
 			.all<MentionRow>(
-				`SELECT ${selectSql(MENTION_COLUMN_MAP)} FROM (${STATUS_IDS}) j CROSS JOIN accounts a
-				WHERE a.id IN (${SHOWN_MENTIONS_SQL})`,
+				`SELECT ${selectSql(MENTION_COLUMN_MAP)} FROM (${STATUS_IDS}) j
+				CROSS JOIN accounts a INDEXED BY sqlite_autoindex_accounts_1 WHERE a.id IN (${SHOWN_MENTIONS_SQL})`,
 				notBoostsJson
 			)
 			.sort((a, b) => byCodePoints(a.id, b.id))

@@ -8,7 +8,7 @@ import { NOW } from './app-helpers'
 import { ACCOUNT_EMOJIS_FULL, STATUS_EMOJIS_FULL } from './emoji-fixtures'
 import { freshStore } from './helpers'
 import { runs } from './policy-world'
-import { type PlannedStatement, plannedSql, scansOf, watchedCursor } from './read-helpers'
+import { type PlannedStatement, plannedSql, remoteAccounts, scansOf, watchedCursor } from './read-helpers'
 import { community } from './status-helpers'
 import {
 	boundsOf,
@@ -723,15 +723,32 @@ async function countedContext(store: StoreStub, f: Fixture, tokenHash: string) {
 }
 
 describe('stale statistics (RES-7)', () => {
-	const LARGE_TABLES = [
-		'statuses',
-		'accounts',
-		'media_attachments',
-		'polls',
-		'poll_votes',
-		'filter_keywords',
-		'filter_statuses',
-	]
+	// The aliases a presentation's statements give the tables that grow (statuses, accounts, media, polls, votes, filter
+	// rules): R names its CTEs t, x and k, which no scan of a table may hide behind, so each list is the statement's own.
+	const presentationAliases = (query: string): string[] =>
+		query.includes('filter_keywords k')
+			? ['k']
+			: [
+					's',
+					'b',
+					'w',
+					'o',
+					'a',
+					'au',
+					'm',
+					'y',
+					'v',
+					'p',
+					'fs',
+					'ms',
+					// The visibility rule's account lookups (audience.ts).
+					'pc',
+					'pda',
+					'pha',
+					'pn',
+					...(query.includes('media_attachments x') ? ['x'] : []),
+					...(query.includes('statuses t ') ? ['t'] : []),
+				]
 
 	// Every statement a presentation runs (filters, R, the graph, the hydrate queries), with its plan and rows read.
 	function plannedPresentation(state: DurableObjectState, viewer: string, ids: readonly string[]) {
@@ -843,6 +860,65 @@ describe('stale statistics (RES-7)', () => {
 		)
 	}, 120_000)
 
+	// Statistics taken while the Store holds one account besides the viewer's and one poll: the author and poll lookups
+	// of the presentation and of R still seek by key once thousands of others arrive.
+	it('seeks authors and polls by key, statistics taken with one author and one poll', async () => {
+		const h = await community(['alice'])
+		const viewer = h.users.alice.id
+		const f: Fixture = { viewer, token: h.users.alice.token, mentioned: [], filter: nextId() }
+		await sql(
+			h.store,
+			"INSERT INTO filters (id, account_id, title, context, action) VALUES (?, ?, 'f', '[\"public\"]', 'warn')",
+			f.filter,
+			viewer
+		)
+		// A boost of a quote: the boost, its original and the quoted status, all by the one author.
+		const base: Item = {
+			kind: 'boostOfQuote',
+			text: 10,
+			wide: false,
+			mentions: 0,
+			tags: 0,
+			media: 0,
+			poll: 2,
+			viewer: true,
+		}
+		const ids = await runInDurableObject(h.store, (_instance, state) => [build(state.storage.sql, f, base)])
+		await sql(h.store, 'ANALYZE')
+		const before = await runInDurableObject(h.store, (_instance, state) => plannedPresentation(state, viewer, ids))
+		await remoteAccounts(h, 100, 200)
+		// Other accounts' statuses with polls.
+		await sql(
+			h.store,
+			`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+			SELECT CAST(CAST(id AS INTEGER) + 100000000000000000 AS TEXT), uri || '/s', id, 'public', '', ?1 FROM accounts
+			WHERE domain LIKE 'd%.example'`,
+			VIEWER_NOW
+		)
+		await sql(
+			h.store,
+			`INSERT INTO polls (status_id, options, tallies) SELECT id, '["a","b"]', '[0,0]' FROM statuses WHERE uri LIKE '%/s'`
+		)
+		const after = await runInDurableObject(h.store, (_instance, state) => plannedPresentation(state, viewer, ids))
+		expect(after.items).toEqual(before.items)
+		const bound = after.plans.find((p) => p.query === statusRowBoundSql())!.plan
+		expect(bound).toContain('SEARCH a USING INDEX sqlite_autoindex_accounts_1 (id=?)')
+		expect(
+			bound.filter((detail) => /^SEARCH p USING INDEX sqlite_autoindex_polls_1 \(status_id=\?\)$/.test(detail))
+		).not.toHaveLength(0)
+		for (const p of after.plans.filter((p) => p.query.includes('b.reblog_of_id AS value'))) {
+			expect(
+				p.plan.filter((detail) =>
+					/^SEARCH au USING (COVERING )?INDEX sqlite_autoindex_accounts_1 \(id=\?\)$/.test(detail)
+				)
+			).toHaveLength(1)
+		}
+		for (const [i, { query, plan, rows }] of after.plans.entries()) {
+			expect(scansOf(plan, presentationAliases(query)), `${query}\n${plan.join('\n')}`).toEqual([])
+			expect(rows - before.plans[i]!.rows, `${query}\n${plan.join('\n')}`).toBeLessThanOrEqual(1)
+		}
+	}, 60_000)
+
 	it('reads statuses, media, votes and filters by key after the Store grows past its statistics', async () => {
 		const { h, f } = await fixture()
 		const base: Item = { kind: 'status', text: 300, wide: true, mentions: 3, tags: 5, media: 2, poll: 3, viewer: true }
@@ -906,7 +982,7 @@ describe('stale statistics (RES-7)', () => {
 		expect(after.items).toEqual(before.items)
 		expect(after.plans.map((p) => p.query)).toEqual(before.plans.map((p) => p.query))
 		for (const [i, { query, plan, rows }] of after.plans.entries()) {
-			expect(scansOf(query, plan, LARGE_TABLES), `${query}\n${plan.join('\n')}`).toEqual([])
+			expect(scansOf(plan, presentationAliases(query)), `${query}\n${plan.join('\n')}`).toEqual([])
 			// Rows read stay flat as the Store grows: at most the entry past a range, where one now follows it.
 			expect(rows - before.plans[i]!.rows, `${query}\n${plan.join('\n')}`).toBeLessThanOrEqual(ids.length)
 		}

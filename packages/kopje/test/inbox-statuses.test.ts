@@ -1232,13 +1232,13 @@ describe('inbound addressing with stale statistics (RES-7)', () => {
 		for (const [i, { result, plans }] of after.entries()) {
 			expect(result).toMatchObject({ applied: true })
 			expect(plans).toHaveLength(1)
-			const { query, plan, rows } = plans[0]!
+			const { plan, rows } = plans[0]!
 			expect(
 				plan.filter((detail) =>
 					/^SEARCH (a|accounts) USING (COVERING )?INDEX sqlite_autoindex_accounts_2 \(uri=\?\)$/.test(detail)
 				)
 			).toHaveLength(1)
-			expect(scansOf(query, plan, ['accounts'])).toEqual([])
+			expect(scansOf(plan, ['a', 'accounts'])).toEqual([])
 			expect(rows).toBe(before[i]!.plans[0]!.rows)
 		}
 	}, 60_000)
