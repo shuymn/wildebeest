@@ -1,6 +1,6 @@
 import { runInDurableObject } from 'cloudflare:test'
 
-import { type ApiHarness, bearer } from './api-helpers'
+import { type ApiHarness, bearer, seedAccount, sql } from './api-helpers'
 import { BUILD } from './helpers'
 import { ACCESS, setAccess } from './ops-helpers'
 import { community } from './status-helpers'
@@ -82,4 +82,23 @@ export async function seedAnnouncement(
 		)
 	})
 	return row.id
+}
+
+// The widest mentions a 10,000-byte text reaches (RES-3): 16 remote accounts of 255-character usernames on 367-character
+// domains (625 bytes of text each), each with a 2,048-byte profile URL. Returns the text that mentions them all.
+export async function mentionFill(store: StoreStub): Promise<string> {
+	const label = (c: string, n: number) => c.repeat(n)
+	const domain = (i: number) =>
+		[`${String(i).padStart(2, '0')}${label('d', 60)}`, label('e', 60), label('f', 60), label('g', 60), label('h', 60)]
+			.concat(label('i', 55), 'example')
+			.join('.')
+			.slice(0, 367)
+	const username = (i: number) => `${String(i).padStart(2, '0')}${'u'.repeat(253)}`
+	const refs: string[] = []
+	for (let i = 0; i < 16; i++) {
+		const account = await seedAccount(store, { username: username(i), domain: domain(i) })
+		await sql(store, 'UPDATE accounts SET url = ? WHERE id = ?', `https://${'p'.repeat(2028)}.example/${i}`, account)
+		refs.push(`@${username(i)}@${domain(i)}`)
+	}
+	return refs.join(' ')
 }

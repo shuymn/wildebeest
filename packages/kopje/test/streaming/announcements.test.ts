@@ -12,8 +12,9 @@ import {
 } from '../../src/domain/announcements'
 import { streamAnnouncement } from '../../src/domain/streaming'
 import { sha256Hex } from '../../src/security/tokens'
-import { announcementHarness, reactionPath, send } from '../announcement-helpers'
-import { sql } from '../api-helpers'
+import { STREAM_LIMITS } from '../../src/stream-hub'
+import { announcementHarness, mentionFill, reactionPath, seedAnnouncement, send } from '../announcement-helpers'
+import { seedAccount, sql } from '../api-helpers'
 import { BUILD } from '../helpers'
 import { scopedToken } from '../read-helpers'
 import { getJson } from '../status-helpers'
@@ -166,6 +167,38 @@ describe('announcement events on user', () => {
 		await inbox.closed()
 		expect(events(inbox)).toEqual([])
 	})
+})
+
+describe('announcement events at their bounds (RES-3)', () => {
+	it('sends the widest mentions and an imported text of repeated references, neither skipped', async () => {
+		const h = await announcementHarness(['alice'])
+		const inbox = await subscribed(h, h.users.alice.token, 'user')
+		const widest = await h.admin.create({ text: await mentionFill(h.store) })
+		// A7: 3,332 references to one account whose URL is 2,048 bytes of ampersands, imported, then published.
+		const u = await seedAccount(h.store, { username: 'u', email: 'u@example.com' })
+		await sql(h.store, 'UPDATE accounts SET url = ? WHERE id = ?', `https://r.example/?${'&'.repeat(2029)}`, u)
+		await seedAnnouncement(h.store, {
+			id: '200000000000000001',
+			text: `日 ${'@u '.repeat(3332)}`,
+			published: 0,
+			published_at: null,
+		})
+		await h.admin.publish('200000000000000001')
+		await drained(h, inbox)
+		const sent = events(inbox).map((m) => ({
+			event: m.event,
+			id: (JSON.parse(m.payload!) as { id: string }).id,
+			bytes: new TextEncoder().encode(m.payload!).length,
+		}))
+		console.log(JSON.stringify({ event: 'announcement-stream-payloads', sent }))
+		expect(sent.map((m) => [m.event, m.id])).toEqual([
+			['announcement', widest.id],
+			['announcement', '200000000000000001'],
+		])
+		for (const { bytes } of sent) {
+			expect(bytes).toBeLessThan(STREAM_LIMITS.payloadBytes)
+		}
+	}, 60_000)
 })
 
 describe('the announcement journal', () => {
