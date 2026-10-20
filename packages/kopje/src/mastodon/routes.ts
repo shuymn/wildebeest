@@ -27,6 +27,7 @@ import * as statuses from './statuses'
 import * as suggestions from './suggestions'
 import * as tags from './tags'
 import * as timelines from './timelines'
+import * as trends from './trends'
 
 // The explicit API route table (design §4): every route names the access it requires, one middleware (requireAccess)
 // declares it, and the Store enforces it in each operation. Routes are matched in order, so fixed paths come before
@@ -174,10 +175,11 @@ export const ROUTES: readonly Route[] = [
 		access: { scope: 'write:favourites' },
 		handler: announcements.unreactToAnnouncement,
 	},
-	{ method: 'GET', path: '/api/v1/trends', access: 'public', handler: placeholders.emptyList },
-	{ method: 'GET', path: '/api/v1/trends/tags', access: 'public', handler: placeholders.emptyList },
-	{ method: 'GET', path: '/api/v1/trends/statuses', access: 'public', handler: placeholders.emptyList },
-	{ method: 'GET', path: '/api/v1/trends/links', access: 'public', handler: placeholders.emptyList },
+	// Trends (mastodon/trends.ts); link trends are not implemented (MD-5).
+	{ method: 'GET', path: '/api/v1/trends', access: { optional: true }, handler: trends.trendTags },
+	{ method: 'GET', path: '/api/v1/trends/tags', access: { optional: true }, handler: trends.trendTags },
+	{ method: 'GET', path: '/api/v1/trends/statuses', access: { optional: true }, handler: trends.trendStatuses },
+	{ method: 'GET', path: '/api/v1/trends/links', access: { optional: true }, handler: trends.trendLinks },
 	// Follow suggestions (mastodon/suggestions.ts).
 	{
 		method: 'GET',
@@ -937,19 +939,19 @@ export const ROUTES: readonly Route[] = [
 		method: 'GET',
 		path: '/api/v1/admin/trends/links',
 		access: { scope: 'admin:read', optional: true },
-		handler: admin.trends,
+		handler: trends.trendLinks,
 	},
 	{
 		method: 'GET',
 		path: '/api/v1/admin/trends/statuses',
 		access: { scope: 'admin:read', optional: true },
-		handler: admin.trends,
+		handler: trends.trendStatuses,
 	},
 	{
 		method: 'GET',
 		path: '/api/v1/admin/trends/tags',
 		access: { scope: 'admin:read', optional: true },
-		handler: admin.trends,
+		handler: trends.trendTags,
 	},
 	{
 		method: 'GET',

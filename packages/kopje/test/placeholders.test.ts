@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { type ApiHarness, apiHarness, bearer, seedAccount, sql } from './api-helpers'
 import { appToken, appTokenWith, scopedToken } from './read-helpers'
-import { community, getJson } from './status-helpers'
+import { community } from './status-helpers'
 
 // Features Kopje has no data for yet answer empty, under the access Mastodon gives each route (AUTH-2).
 
@@ -30,15 +30,6 @@ describe('features without data yet', () => {
 		await sql(h.store, "DELETE FROM oauth_tokens WHERE kind = 'access'")
 		expect((await h.request('/api/v2/filters', bearer(h.users.alice.token))).status).toBe(401)
 	})
-
-	it.each(['/api/v1/trends', '/api/v1/trends/tags', '/api/v1/trends/statuses', '/api/v1/trends/links'])(
-		'%s is a public empty list',
-		async (route) => {
-			const h = await apiHarness()
-			expect(await getJson(h, route)).toEqual({ status: 200, body: [] })
-			expect(await getJson(h, route, 'stale')).toEqual({ status: 200, body: [] })
-		}
-	)
 
 	// Mastodon's answers when the feature has nothing to show or is not configured, each under its route's scope.
 	const recordNotFound = { error: 'Record not found' }
@@ -76,22 +67,6 @@ describe('features without data yet', () => {
 		const token = await scopedToken(h, scope)
 		await sql(h.store, 'UPDATE local_accounts SET suspended_at = ? WHERE account_id = ?', '2026-01-01', alice)
 		expect((await send(h, method, route, token)).status).toBe(403)
-	})
-
-	it('/api/v1/timelines/link finds no trending link, for anyone a token sent lets through', async () => {
-		const h = await apiHarness()
-		await seedAccount(h.store, { username: 'alice', email: 'alice@example.com' })
-		const route = '/api/v1/timelines/link?url=https%3A%2F%2Fnews.example%2Fa'
-		const recordNotFound = { status: 404, body: { error: 'Record not found' } }
-		expect(await getJson(h, route)).toEqual(recordNotFound)
-		expect(await getJson(h, route, await scopedToken(h, 'read:statuses'))).toEqual(recordNotFound)
-		// An app token reads as anonymous (authorize_if_got_token!).
-		expect(await getJson(h, route, await appToken(h))).toEqual(recordNotFound)
-		expect((await h.request(route, bearer('nope'))).status).toBe(401)
-		expect(await getJson(h, route, await scopedToken(h, 'write'))).toEqual({
-			status: 403,
-			body: { error: 'This action is outside the authorized scopes' },
-		})
 	})
 
 	it('/api/v1/emails/confirmations refuses every token with write:accounts, as no user signed up through an app', async () => {

@@ -130,7 +130,7 @@ const RECIPES: Record<string, Recipe> = {
 	// Placeholders and features Kopje does not serve: the answer they give.
 	'GET /api/v1/timelines/link': {
 		baseline: () => ({ path: '/api/v1/timelines/link', params: { url: 'https://news.example/a' } }),
-		status: { code: 404, reason: 'not built yet (MD-3): no trending links (mastodon/placeholders.ts linkTimeline)' },
+		status: { code: 404, reason: 'not implemented (MD-5): no trending links (mastodon/placeholders.ts linkTimeline)' },
 	},
 	'POST /api/v1/emails/confirmations': {
 		status: { code: 403, reason: 'no sign-ups (MD-1): no user was signed up through an app' },

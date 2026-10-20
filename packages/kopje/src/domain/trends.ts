@@ -1,6 +1,11 @@
-import { availableSql, trendableStatusSql } from './audience'
+import type { Present } from './accounts'
+import { ARRAY_ANSWER_BYTES } from './answer-budget'
+import { availableSql, statusReads, trendableStatusSql, visibleSql } from './audience'
+import { optionalUserReadOperation } from './auth'
 import { writeOperation } from './operation'
 import { MAX_STATUS_TAGS, tagNameSql } from './status-bounds'
+import { presentation, presentStatusesWithin, type Status } from './status-presenter'
+import { presentTags, type Tag, type TagHistory } from './tags'
 import { type Db, ROW_OBJECT_BYTES, RowMeter, VALUE_BYTES } from '../db/sql'
 import {
 	isoTimeSql,
@@ -407,4 +412,126 @@ export const trendsRound = writeOperation<{ now: number }, { tags: number; statu
 		tags: roundTags(metered, now, settings.trendable_by_default),
 		statuses: roundStatuses(metered, now, settings.trendable_by_default),
 	}
+})
+
+// ---- The lists (GET /api/v1/trends/tags and /statuses, mastodon/trends.ts)
+
+const HISTORY_DAYS = 7
+
+// A hashtag's history as Mastodon's TagSerializer gives it (tags.ts tagHistory), for the trends lists: the newest
+// TREND_HISTORY_ROWS entries of its public range of the seven days (status_tags_public; `public = 1` is the index's
+// own condition, so the entries are raw), then the rule (public originals anyone may see, VIS-12), then the days.
+export function trendTagHistory(db: Db, name: string, now: number): TagHistory[] {
+	const today = now - (now % DAY_MS)
+	const since = today - (HISTORY_DAYS - 1) * DAY_MS
+	const rows = db.all<{ day: string; uses: number; accounts: number }>(
+		`SELECT substr(s.published_at, 1, 10) AS day, count(*) AS uses, count(DISTINCT s.account_id) AS accounts
+		FROM (SELECT t.status_id FROM status_tags t INDEXED BY status_tags_public
+			WHERE t.name = ?1 AND t.public = 1 AND t.status_id >= ?2 ORDER BY t.status_id DESC LIMIT ${TREND_HISTORY_ROWS}) c
+		CROSS JOIN statuses s ON s.id = c.status_id
+		WHERE s.visibility = 'public' AND s.reblog_of_id IS NULL AND ${visibleSql('s', 'NULL')}
+		GROUP BY day`,
+		name,
+		idOf(since)
+	)
+	const byDay = new Map(rows.map((row) => [row.day, row]))
+	return Array.from({ length: HISTORY_DAYS }, (_, index) => {
+		const start = today - index * DAY_MS
+		const row = byDay.get(day(start))
+		return { day: String(start / 1000), uses: String(row?.uses ?? 0), accounts: String(row?.accounts ?? 0) }
+	})
+}
+
+// The text of a stored name, or null when its bytes are not well-formed UTF-8 (an imported row the next round drops).
+function nameOf(hex: string): string | null {
+	if (!wellFormed(hex)) {
+		return null
+	}
+	const bytes = new Uint8Array(hex.length / 2)
+	for (let i = 0; i < bytes.length; i++) {
+		bytes[i] = Number.parseInt(hex.slice(2 * i, 2 * i + 2), 16)
+	}
+	return STRICT.decode(bytes)
+}
+
+// The listed hashtags (score of TAG_DECAY_THRESHOLD or more) that are allowed now, the top TREND_ALLOWED_ROWS by score
+// (ties by name) before the page is cut from them, so the list ends at the same place for every page.
+const LISTED_TAGS = `SELECT t.name, t.score FROM trend_tags t INDEXED BY trend_tags_listed
+	WHERE t.score >= ${TAG_DECAY_THRESHOLD} AND ${trendAllowedTagSql('t', '?1')}
+	ORDER BY t.score DESC, t.name LIMIT ${TREND_ALLOWED_ROWS}`
+
+export type TrendPage<T> = { items: T[]; read: number }
+
+// GET /api/v1/trends/tags (Api::V1::Trends::TagsController): the allowed trending hashtags, the same for everyone,
+// each with its trends history; `read` is the rows the page read toward its limit.
+export const trendingTags = optionalUserReadOperation<
+	{ offset: number; limit: number; now: number; present: Present },
+	TrendPage<Tag>
+>((db, { offset, limit, present, now }, viewer) => {
+	const settings = trendSettings(db)
+	if (!settings.trends || limit === 0 || offset >= TREND_ALLOWED_ROWS) {
+		return { items: [], read: 0 }
+	}
+	const rows = db.all<{ key: string }>(
+		`SELECT hex(name) AS key FROM (${LISTED_TAGS}) ORDER BY score DESC, name LIMIT ?2 OFFSET ?3`,
+		settings.trendable_by_default ? 1 : 0,
+		limit,
+		offset
+	)
+	const names = rows.flatMap((row) => nameOf(row.key) ?? [])
+	const tags = presentTags(db, names, viewer.accountId, present, null).map((tag) => ({
+		...tag,
+		history: trendTagHistory(db, tag.name, now),
+	}))
+	return { items: tags, read: rows.length }
+})
+
+// The allowed trending statuses: each author's top-scoring rows (StatusTrend.allowed, the maximum taken before
+// allowance), allowed and trendable now, the top TREND_ALLOWED_ROWS by score (ties by id, newest first).
+const LISTED_STATUSES = `SELECT t.status_id, t.score FROM trend_statuses t CROSS JOIN statuses e ON e.id = t.status_id
+	WHERE t.score = (SELECT max(x.score) FROM trend_statuses x INDEXED BY trend_statuses_account
+			WHERE x.account_id = t.account_id)
+		AND ${trendAllowedStatusSql('t', '?4')} AND ${trendableStatusSql('e', '?2', '?5')}
+	ORDER BY t.score DESC, t.status_id DESC LIMIT ${TREND_ALLOWED_ROWS}`
+
+export type TrendStatusPage = { items: Status[]; read: number; consumed: number; cut: boolean }
+
+// GET /api/v1/trends/statuses (Api::V1::Trends::StatusesController): of the allowed trending statuses, those the list
+// rule passes for the viewer (R8; R2 with no viewer), `language` first, then by score; within ARRAY_ANSWER_BYTES, the
+// first status always admitted (RES-3). `consumed` is how many of the ids read the answer took, so a page cut by its
+// bytes continues after its last status.
+export const trendingStatuses = optionalUserReadOperation<
+	{ offset: number; limit: number; language: string; now: number; present: Present },
+	TrendStatusPage
+>((db, { offset, limit, language, present, now }, viewer) => {
+	const settings = trendSettings(db)
+	if (!settings.trends || limit === 0 || offset >= TREND_ALLOWED_ROWS) {
+		return { items: [], read: 0, consumed: 0, cut: false }
+	}
+	const ids = statusReads(viewer, { viewer: '?1', now: '?2' })
+		.select(
+			db,
+			'listable',
+			{
+				from: `(${LISTED_STATUSES}) t JOIN`,
+				join: 'ON s.id = t.status_id',
+				tail: 'ORDER BY (s.language IS ?3) DESC, t.score DESC, t.status_id DESC LIMIT ?6 OFFSET ?7',
+			},
+			viewer.accountId,
+			viewer.now,
+			language,
+			settings.trendable_by_default ? 1 : 0,
+			TREND_LANGUAGES_JSON,
+			limit,
+			offset
+		)
+		.map((row) => row.id)
+	const admitted = presentStatusesWithin(
+		db,
+		presentation(db, ids, { ...present, viewer }),
+		ids,
+		ARRAY_ANSWER_BYTES,
+		true
+	)
+	return { items: admitted.items, read: ids.length, consumed: admitted.consumed, cut: admitted.cut }
 })

@@ -1704,7 +1704,15 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, announcements.announcementRound, input)
 	}
 
-	// Trends (domain/trends.ts): the cron's round.
+	// Trends (domain/trends.ts): the public lists, and the cron's round.
+
+	trendingTags(callerBuild: string, input: OperationInput<typeof trends.trendingTags>) {
+		return this.#kernel.execute(callerBuild, trends.trendingTags, input)
+	}
+
+	trendingStatuses(callerBuild: string, input: OperationInput<typeof trends.trendingStatuses>) {
+		return this.#kernel.execute(callerBuild, trends.trendingStatuses, input)
+	}
 
 	trendsRound(callerBuild: string, input: OperationInput<typeof trends.trendsRound>) {
 		return this.#kernel.execute(callerBuild, trends.trendsRound, input)
