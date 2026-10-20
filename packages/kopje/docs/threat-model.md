@@ -695,8 +695,9 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `test/policy-bounds.test.ts`, `test/migrations.test.ts`, `test/cascade-guard.test.ts`.
   _Enforced (main)_ for announcements (R40): `announcement`, `announcement.reaction` and `announcement.delete` go on
   `user` only, under `read:statuses` (or `read`), to every listener alike, presented with no viewer (no `read`, no
-  `me`); each journal row is one announcement (or one announcement and reaction name) while it is not yet sent, and the
-  unit presents it as it is when sent: published, its entity; otherwise its delete. An expiry by the cron sends nothing,
+  `me`); each write that changes what a listener may be shown journals its own row (nothing is coalesced, so a socket
+  opened while an event is pending is sent every later change), and the unit presents the announcement as it is when
+  sent: published, its entity; otherwise its delete. An expiry by the cron sends nothing,
   as Mastodon's. `streamAnnouncement` in `src/domain/streaming.ts`, `streamedAnnouncement` and
   `streamedAnnouncementReaction` in `src/domain/announcements.ts`; `test/streaming/announcements.test.ts`.
 

@@ -18,7 +18,7 @@ import { seedAccount, sql } from '../api-helpers'
 import { BUILD } from '../helpers'
 import { scopedToken } from '../read-helpers'
 import { getJson } from '../status-helpers'
-import { drained, type Inbox, type StreamMessage, subscribed } from './stream-helpers'
+import { connect, drained, echo, type Inbox, type StreamMessage, subscribed } from './stream-helpers'
 
 // The `user` stream's announcement events (R33, R40; Mastodon's PublishScheduledAnnouncementWorker,
 // UnpublishAnnouncementWorker and PublishAnnouncementReactionWorker): `announcement` with the entity as REST presents
@@ -26,6 +26,12 @@ import { drained, type Inbox, type StreamMessage, subscribed } from './stream-he
 // id. Journaled per subject until sent, so the state when sent decides. Absence is proved with the drain barrier.
 
 const EVENTS = ['announcement', 'announcement.reaction', 'announcement.delete']
+
+async function takeAllEvents(inbox: Inbox): Promise<void> {
+	for (let left = events(inbox).length; left > 0; left--) {
+		await inbox.next((m) => EVENTS.includes(m.event ?? ''))
+	}
+}
 
 function events(inbox: Inbox): StreamMessage[] {
 	return inbox.rest().filter((m) => EVENTS.includes(m.event ?? ''))
@@ -106,14 +112,19 @@ describe('announcement events on user', () => {
 		const read = await subscribed(h, await scopedToken(h, 'read'), 'user')
 		const notifications = await subscribed(h, await scopedToken(h, 'read:notifications'), 'user:notification')
 		const others = await subscribed(h, h.users.alice.token, 'user:notification', 'public', 'public:local', 'direct')
+		// A notifications-only token asking for `user` is refused the subscription.
+		const notificationsOnUser = await connect(h, await scopedToken(h, 'read:notifications'))
+		notificationsOnUser.send({ type: 'subscribe', stream: 'user' })
+		await echo(notificationsOnUser)
 		await h.admin.create()
-		await drained(h, statuses, read, notifications, others)
+		await drained(h, statuses, read, notifications, others, notificationsOnUser)
 		expect(events(statuses).map((m) => m.event)).toEqual(['announcement'])
 		expect(events(read).map((m) => m.event)).toEqual(['announcement'])
-		expect([events(notifications), events(others)]).toEqual([[], []])
+		expect([events(notifications), events(others), events(notificationsOnUser)]).toEqual([[], [], []])
+		expect(notificationsOnUser.messages.some((m) => m.error !== undefined && m.status === 401)).toBe(true)
 	})
 
-	it('sends one event per subject for a burst, as the state is when it is sent', async () => {
+	it('sends one event per write of a burst, each as the state is when it is sent', async () => {
 		const h = await announcementHarness(['alice', 'bob'])
 		const inbox = await subscribed(h, h.users.alice.token, 'user')
 		const authority = h.authority
@@ -147,15 +158,62 @@ describe('announcement events on user', () => {
 			}
 			return id
 		})
-		expect(await sql(h.store, 'SELECT kind, subject FROM stream_events')).toEqual([
-			{ kind: 'announcement', subject: created },
-			{ kind: 'announcement_reaction', subject: JSON.stringify([created, '👍']) },
+		const reaction = JSON.stringify([created, '👍'])
+		expect(await sql(h.store, 'SELECT kind, subject FROM stream_events ORDER BY id')).toEqual([
+			...Array.from({ length: 5 }, () => ({ kind: 'announcement', subject: created })),
+			{ kind: 'announcement_reaction', subject: reaction },
+			{ kind: 'announcement_reaction', subject: reaction },
 		])
 		await drained(h, inbox)
 		const sent = events(inbox)
-		expect(sent.map((m) => m.event)).toEqual(['announcement', 'announcement.reaction'])
-		expect(JSON.parse(sent[0]!.payload!).content).toBe('<p>three</p>')
-		expect(JSON.parse(sent[1]!.payload!)).toEqual({ name: '👍', count: 2, announcement_id: created })
+		expect(sent.map((m) => m.event)).toEqual([
+			...Array.from({ length: 5 }, () => 'announcement'),
+			'announcement.reaction',
+			'announcement.reaction',
+		])
+		// Each is presented when it is sent, so all show the last state.
+		for (const message of sent.slice(0, 5)) {
+			expect((JSON.parse(message.payload!) as { content: string }).content).toBe('<p>three</p>')
+		}
+		for (const message of sent.slice(5)) {
+			expect(JSON.parse(message.payload!)).toEqual({ name: '👍', count: 2, announcement_id: created })
+		}
+	})
+
+	it('sends a socket opened while an event is pending the changes written after it opened', async () => {
+		const h = await announcementHarness(['alice', 'bob'])
+		const early = await subscribed(h, h.users.alice.token, 'user')
+		const { id } = await h.admin.create({ text: 'first' })
+		await drained(h, early)
+		await takeAllEvents(early)
+		// An update journaled with no turn run, so its event is pending when the second socket opens.
+		await runInDurableObject(h.store, (_instance, state) => {
+			updateAnnouncement.run(state.storage.sql, {
+				authority: h.authority,
+				id,
+				changes: { text: 'pending' },
+				now: Date.now(),
+			})
+		})
+		const late = await connect(h, h.users.bob.token)
+		late.send({ type: 'subscribe', stream: 'user' })
+		await echo(late)
+		// Then a change of each kind, written after it opened.
+		await h.admin.update(id, { text: 'after' })
+		await send(h, 'PUT', reactionPath(id, '👍'), h.users.alice.token)
+		await drained(h, early, late)
+		expect(
+			events(late).map((m) => [
+				m.event,
+				m.event === 'announcement'
+					? (JSON.parse(m.payload!) as { content: string }).content
+					: (JSON.parse(m.payload!) as { count: number }).count,
+			])
+		).toEqual([
+			['announcement', '<p>after</p>'],
+			['announcement.reaction', 1],
+		])
+		expect(events(early).map((m) => m.event)).toEqual(['announcement', 'announcement', 'announcement.reaction'])
 	})
 
 	it('sends nothing to the socket of a revoked token, which is closed', async () => {
@@ -229,20 +287,17 @@ describe('the announcement journal', () => {
 		return { h, record, ids }
 	}
 
-	it('records an event anew unless the same one is ahead of the position: ahead, at and behind it', async () => {
-		const ahead = await journal([{ id: 6, kind: 'announcement', subject: 'a' }], 5)
-		await ahead.record('announcement', 'a')
-		expect(await ahead.ids()).toEqual([6])
-		// Another subject or kind is recorded.
-		await ahead.record('announcement', 'b')
-		await ahead.record('announcement_reaction', 'a')
-		expect(await ahead.ids()).toEqual([6, 7, 8])
-		const at = await journal([{ id: 5, kind: 'announcement', subject: 'a' }], 5)
-		await at.record('announcement', 'a')
-		expect(await at.ids()).toEqual([5, 6])
-		const behind = await journal([{ id: 4, kind: 'announcement', subject: 'a' }], 5)
-		await behind.record('announcement', 'a')
-		expect(await behind.ids()).toEqual([4, 5])
+	it('records every write, whether the same event is ahead of, at or behind the position', async () => {
+		for (const [at, cursor] of [
+			[6, 5],
+			[5, 5],
+			[4, 5],
+		] as const) {
+			const j = await journal([{ id: at, kind: 'announcement', subject: 'a' }], cursor)
+			await j.record('announcement', 'a')
+			await j.record('announcement_reaction', 'a')
+			expect(await j.ids()).toEqual([at, at + 1, at + 2])
+		}
 	})
 
 	it('records nothing while nobody listens on `user`, or once the journal spans 4,096 ids', async () => {

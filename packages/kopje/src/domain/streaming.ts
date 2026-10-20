@@ -935,9 +935,10 @@ export function streamMerged(db: Db, accountId: string, now: string): void {
 
 // The streaming API's announcement events (announcements.ts calls it on each write that changes what a listener may be
 // shown): an `announcement` event (subject: the id) or an `announcement_reaction` one (subject: ["<id>","<name>"]) in
-// the journal, while some account listens on `user` (the scope is checked when it is sent), unless the same event is
-// still ahead of the fan-out's position (a burst is one row, and the state when it is sent decides what it says), and
-// while the journal is not full. The dedupe reads the journal above the position by id, at most JOURNAL_SPAN rows.
+// the journal, one per write, while some account listens on `user` (the scope is checked when it is sent) and the
+// journal is not full. Nothing is coalesced: a socket opened after an earlier event is sent each later write's own
+// event (the hub sends an event only to sockets opened before it). The writes are admin- and user-rate, and
+// JOURNAL_SPAN bounds the journal as for every event.
 export function streamAnnouncement(
 	db: Db,
 	kind: 'announcement' | 'announcement_reaction',
@@ -947,13 +948,7 @@ export function streamAnnouncement(
 	if (db.first("SELECT 1 AS x FROM stream_subscriptions WHERE stream_key = 'user'") === undefined) {
 		return
 	}
-	const ahead = db.first(
-		`SELECT 1 AS x FROM stream_events WHERE id > (SELECT event_id FROM stream_cursor WHERE id = 1)
-			AND kind = ? AND subject = ?`,
-		kind,
-		subject
-	)
-	if (ahead !== undefined || journalFull(db, kind)) {
+	if (journalFull(db, kind)) {
 		return
 	}
 	db.run('INSERT INTO stream_events (kind, subject, created_at) VALUES (?, ?, ?)', kind, subject, now)
