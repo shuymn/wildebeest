@@ -52,6 +52,7 @@ import m0051 from '../../migrations/0051_follow_answer_pairs.sql'
 import m0052 from '../../migrations/0052_favourite_likes.sql'
 import m0053 from '../../migrations/0053_custom_emoji_snapshots.sql'
 import m0054 from '../../migrations/0054_remote_reports.sql'
+import m0055 from '../../migrations/0055_local_custom_emojis.sql'
 
 // Store migrations in apply order. Append only: an applied file is recorded by name and checksum and must
 // never change. Each file runs in its own transaction, must finish well under 30 seconds, and must be pure SQL.
@@ -110,4 +111,5 @@ export const MIGRATIONS: readonly { name: string; sql: string }[] = [
 	{ name: '0052_favourite_likes', sql: m0052 },
 	{ name: '0053_custom_emoji_snapshots', sql: m0053 },
 	{ name: '0054_remote_reports', sql: m0054 },
+	{ name: '0055_local_custom_emojis', sql: m0055 },
 ]

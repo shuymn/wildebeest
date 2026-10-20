@@ -55,6 +55,7 @@ import {
 } from './domain/instance'
 import * as instanceDomainBlocks from './domain/instance-domain-blocks'
 import * as lists from './domain/lists'
+import * as localEmojis from './domain/local-emojis'
 import * as markers from './domain/markers'
 import * as media from './domain/media'
 import * as mediaRebuild from './domain/media-rebuild'
@@ -1615,6 +1616,37 @@ export class Store extends DurableObject<Env> {
 
 	recordMediaRebuild(callerBuild: string, input: Omit<OperationInput<typeof mediaRebuild.recordRebuild>, 'now'>) {
 		return this.#kernel.execute(callerBuild, mediaRebuild.recordRebuild, { ...input, now: Date.now() })
+	}
+
+	// Local custom emoji (domain/local-emojis.ts): the Access admin's writes from /admin/emojis, each at the Store's own
+	// time, so the writer deadline is judged on one clock; the public list and the Emoji object.
+
+	reserveEmoji(callerBuild: string, input: Omit<OperationInput<typeof localEmojis.reserveEmoji>, 'now'>) {
+		return this.#kernel.execute(callerBuild, localEmojis.reserveEmoji, { ...input, now: Date.now() })
+	}
+
+	completeEmoji(callerBuild: string, input: Omit<OperationInput<typeof localEmojis.completeEmoji>, 'now'>) {
+		return this.#kernel.execute(callerBuild, localEmojis.completeEmoji, { ...input, now: Date.now() })
+	}
+
+	abandonEmoji(callerBuild: string, input: Omit<OperationInput<typeof localEmojis.abandonEmoji>, 'now'>) {
+		return this.#kernel.execute(callerBuild, localEmojis.abandonEmoji, { ...input, now: Date.now() })
+	}
+
+	updateEmoji(callerBuild: string, input: Omit<OperationInput<typeof localEmojis.updateEmoji>, 'now'>) {
+		return this.#kernel.execute(callerBuild, localEmojis.updateEmoji, { ...input, now: Date.now() })
+	}
+
+	adminEmojis(callerBuild: string, input: OperationInput<typeof localEmojis.adminEmojis>) {
+		return this.#kernel.execute(callerBuild, localEmojis.adminEmojis, input)
+	}
+
+	customEmojis(callerBuild: string) {
+		return this.#kernel.execute(callerBuild, localEmojis.customEmojis, undefined)
+	}
+
+	localEmojiObject(callerBuild: string, input: OperationInput<typeof localEmojis.localEmojiObject>) {
+		return this.#kernel.execute(callerBuild, localEmojis.localEmojiObject, input)
 	}
 
 	// Search (B4b).

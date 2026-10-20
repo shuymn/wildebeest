@@ -17,7 +17,7 @@ import {
 	REACHES_FOLLOWERS_SQL,
 } from './audience'
 import { localRole, optionalUserReadOperation, type Role, userReadOperation, userWriteOperation } from './auth'
-import { type CustomEmoji, presentEmojis } from './custom-emojis'
+import { type CustomEmoji, localEmojiSnapshot, presentEmojis } from './custom-emojis'
 import { retractFollow } from './inbox'
 import { notify } from './notifications'
 import { readOperation } from './operation'
@@ -710,6 +710,21 @@ export const updateCredentials = userWriteOperation<
 		changes.quotePolicy ?? null,
 		accountId
 	)
+	// Every save takes the profile's local emoji again (custom-emojis.ts localEmojiSnapshot), from the stored display
+	// name, note and fields, as Mastodon's Account#emojis reads them (app/models/account.rb:450-451, 486-488).
+	const profile = db.first<{ display_name: string; note: string; fields: string }>(
+		'SELECT a.display_name, a.note, l.fields FROM accounts a JOIN local_accounts l ON l.account_id = a.id WHERE a.id = ?',
+		accountId
+	)
+	const texts =
+		profile === undefined
+			? []
+			: [
+					profile.display_name,
+					profile.note,
+					...fieldSources(profile.fields).flatMap((field) => [field.name, field.value]),
+				]
+	db.run('UPDATE accounts SET emojis = ? WHERE id = ?', localEmojiSnapshot(db, texts, ACCOUNT_EMOJIS_BYTES), accountId)
 	// Other servers learn of the change (Update(Person)), only if the published document changed, or if the account
 	// shows or hides its network: the document does not carry that, but a server that receives the Update fetches the
 	// collections again and learns it from them, as Mastodon's ProcessAccountService does.

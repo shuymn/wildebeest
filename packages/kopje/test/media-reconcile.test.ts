@@ -5,10 +5,14 @@ import { describe, expect, it } from 'vitest'
 import { bearer, json, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { PNG_PLAIN } from './fixtures/images'
+import { BUILD } from './helpers'
+import { added } from './local-emoji-helpers'
 import { bytes, mediaForm, TestCodec, upload, uploaded } from './media-helpers'
+import { ACCESS, setAccess } from './ops-helpers'
 import { community, getJson, post } from './status-helpers'
 import { reconcileMedia, sweepMedia } from '../src/mastodon/media'
 import type { StoreStub } from '../src/platform/store-client'
+import { sha256Hex } from '../src/security/tokens'
 
 // The B4b verification review: R2 objects with no row are reconciled away; a reservation is revalidated, and its
 // transformations charged, right before Images runs; completion is fenced in the Store; field caps cover the query.
@@ -281,5 +285,113 @@ describe('duplicate media attributes', () => {
 		)
 		expect(response.status).toBe(200)
 		expect((await getJson<unknown[]>(h, `/api/v1/statuses/${status.id}/history`, alice.token)).body).toHaveLength(1)
+	})
+})
+
+// MEDIA-5: a custom emoji's image is never deleted, disabled or not, and never reached through the media API, whatever
+// the sweep and reconciliation do to the uploads around it (the positive controls, which they must still clean up).
+describe('custom emoji images after every grace period', () => {
+	const DAY = 24 * HOUR
+
+	it('keeps both emoji and their files while an expired upload and a due tombstone are cleaned up', async () => {
+		const h = await users()
+		const admin = h.users.alice
+		// alice is the OAuth admin (admin_email), so the emoji images are hers.
+		await setAccess(h.store, { admin_email: 'alice@example.com' })
+		const authority = { ...ACCESS, email: 'alice@example.com' }
+		const enabled = await added(h.store, 'kept', { authority })
+		const disabled = await added(h.store, 'gone', { authority })
+		await h.store.updateEmoji(BUILD, { authority, id: disabled.id, changes: { disabled: true } })
+		const emojiRows = [enabled, disabled].map((emoji) => ({
+			id: emoji.id,
+			token: new URL(emoji.url).pathname.split('/')[2]!,
+		}))
+		// Positive controls: an ordinary completed, unattached upload, and a failed one whose tombstone falls due.
+		const ordinary = await uploaded(h, admin, png())
+		const [control] = await sql<{ file_token: string }>(
+			h.store,
+			'SELECT file_token FROM media_attachments WHERE id = ?',
+			ordinary.id
+		)
+		h.codec.failEncode = 9523
+		expect((await upload(h, admin, png())).status).toBe(500)
+		h.codec.failEncode = null
+		const [failed] = await sql<{ id: string; file_token: string }>(
+			h.store,
+			"SELECT id, file_token FROM media_attachments WHERE url = ''"
+		)
+		const later = Math.max(NOW, Date.now()) + 3 * DAY + HOUR
+		const deps = { build: () => env.CF_VERSION_METADATA.id, store: () => h.store, now: () => later }
+		while ((await sweepMedia(env, deps)) > 0) {
+			// One bounded batch per run.
+		}
+		// A late write of the failed upload, which reconciliation deletes once its tombstone is due.
+		await env.MEDIA.put(`files/${failed!.file_token}/full`, 'late')
+		// The tombstone falls due ORPHAN_GRACE_MS after the sweep that left it.
+		expect(await reconcileMedia(env, { ...deps, now: () => later + DAY })).toBe(1)
+		expect(await env.MEDIA.head(`files/${failed!.file_token}/full`)).toBeNull()
+		expect(await sql(h.store, 'SELECT id FROM media_attachments WHERE id IN (?, ?)', ordinary.id, failed!.id)).toEqual(
+			[]
+		)
+		for (const key of [
+			`originals/${ordinary.id}`,
+			`files/${control!.file_token}/full`,
+			`files/${control!.file_token}/small`,
+		]) {
+			expect(await env.MEDIA.head(key)).toBeNull()
+		}
+		// Both emoji are kept: their rows with no gc_at, and every object, served.
+		for (const { id, token } of emojiRows) {
+			expect(await sql(h.store, 'SELECT gc_at, processed FROM media_attachments WHERE id = ?', id)).toEqual([
+				{ gc_at: null, processed: 1 },
+			])
+			for (const key of [`originals/${id}`, `files/${token}/full`, `files/${token}/small`]) {
+				expect(await env.MEDIA.head(key)).not.toBeNull()
+			}
+			expect((await h.request(`/media/${token}/full.png`)).status).toBe(200)
+		}
+		// The OAuth admin cannot reach them through the media API, a post, a scheduled post or a profile image.
+		for (const { id } of emojiRows) {
+			expect((await h.request(`/api/v1/media/${id}`, bearer(admin.token))).status).toBe(404)
+			expect(
+				(await h.request(`/api/v1/media/${id}`, bearer(admin.token, json({ description: 'x' }, { method: 'PUT' }))))
+					.status
+			).toBe(404)
+			expect((await h.request(`/api/v1/media/${id}`, bearer(admin.token, { method: 'DELETE' }))).status).toBe(404)
+			const posted = await post(h, admin, { status: 'x', media_ids: [id] })
+			expect(posted.media_attachments).toEqual([])
+			const scheduled = await h.request(
+				'/api/v1/statuses',
+				bearer(admin.token, json({ status: 'x', media_ids: [id], scheduled_at: new Date(NOW + DAY).toISOString() }))
+			)
+			expect(await scheduled.json()).toMatchObject({ media_attachments: [] })
+			expect(await sql(h.store, 'SELECT scheduled_status_id FROM media_attachments WHERE id = ?', id)).toEqual([
+				{ scheduled_status_id: null },
+			])
+			const credential = { tokenHash: await sha256Hex(admin.token), scope: 'write', now: NOW } as const
+			expect(await h.store.setProfileImage(BUILD, { credential, id, kind: 'avatar', now: NOW })).toEqual({
+				status: 'ok',
+				value: false,
+			})
+		}
+		// A raw delete of an emoji's image fails on the foreign key.
+		await expect(sql(h.store, 'DELETE FROM media_attachments WHERE id = ?', enabled.id)).rejects.toThrow(
+			/FOREIGN KEY constraint failed/
+		)
+	}, 60_000)
+
+	it('keeps an emoji whose image an imported avatar_url names when the avatar is replaced', async () => {
+		const h = await users()
+		await setAccess(h.store, { admin_email: 'alice@example.com' })
+		const authority = { ...ACCESS, email: 'alice@example.com' }
+		const emoji = await added(h.store, 'face', { authority })
+		await sql(h.store, 'UPDATE accounts SET avatar_url = ? WHERE id = ?', emoji.url, h.users.alice.id)
+		const replacement = await uploaded(h, h.users.alice, png())
+		const credential = { tokenHash: await sha256Hex(h.users.alice.token), scope: 'write', now: NOW } as const
+		expect(await h.store.setProfileImage(BUILD, { credential, id: replacement.id, kind: 'avatar', now: NOW })).toEqual({
+			status: 'ok',
+			value: true,
+		})
+		expect(await sql(h.store, 'SELECT gc_at FROM media_attachments WHERE id = ?', emoji.id)).toEqual([{ gc_at: null }])
 	})
 })

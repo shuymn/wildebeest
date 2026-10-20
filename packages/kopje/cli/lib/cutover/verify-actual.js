@@ -112,9 +112,10 @@ export function actualFromDump(text) {
 	const conversations = new Map()
 	/** @type {Map<string, string[]>} conversation id -> its status ids */
 	const conversationStatuses = new Map()
-	// Rows holding an emoji snapshot, by table, boosts included: legacy has no custom emoji, so a conversion writes none
-	// (each is an extra record of `emojis`, and the report counts them).
-	const emojiRows = { accounts: 0, statuses: 0, status_edits: 0 }
+	// Rows holding an emoji snapshot, by table, boosts included, and local custom emoji (migration
+	// 0055_local_custom_emojis): legacy has no custom emoji, so a conversion writes none (each is an extra record of
+	// `emojis`, and the report counts them).
+	const emojiRows = { accounts: 0, statuses: 0, status_edits: 0, custom_emojis: 0 }
 	/** @type {unknown} the kopje_state profile_updates value: ids of local accounts that publication announces */
 	let profileUpdates = []
 	const account = (/** @type {string | null} */ id) => (id === null ? undefined : accounts.get(id))
@@ -377,6 +378,9 @@ export function actualFromDump(text) {
 			case 'oauth_clients':
 				put('clients', t('id') ?? '', [t('secret'), t('name'), t('redirect_uris'), t('scopes'), t('website')])
 				break
+			case 'custom_emojis':
+				emojiRows.custom_emojis++
+				break
 			default:
 				break
 		}
@@ -509,9 +513,12 @@ export async function compareConversion(expected, actual) {
 			actualSha256: await sha256(canonical(have, haveKeys)),
 		}
 	}
-	// The rows holding an emoji snapshot, by table (none expected).
+	// The rows holding an emoji snapshot, and the local custom emoji, by table (none expected).
 	const emojis = Object.fromEntries(
-		['accounts', 'statuses', 'status_edits'].map((table) => [table, Number(actual.emojis?.[table] ?? 0)])
+		['accounts', 'statuses', 'status_edits', 'custom_emojis'].map((table) => [
+			table,
+			Number(actual.emojis?.[table] ?? 0),
+		])
 	)
 	return { result: failed ? 'FAIL' : 'PASS', categories, emojis }
 }

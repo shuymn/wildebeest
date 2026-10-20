@@ -320,7 +320,7 @@ async function processUpload(c: UploadContext, deps: ApiDeps, upload: Upload): P
 
 // The original is kept (private, for backups) next to the served files. Keys come from the Store's id and token only.
 // Every write settles before this returns, so cleanup after a failure never races a write still in flight.
-async function writeFiles(
+export async function writeFiles(
 	bucket: R2Bucket,
 	id: string,
 	token: string,

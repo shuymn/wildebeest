@@ -4,9 +4,11 @@ import { env } from 'cloudflare:workers'
 import { beforeEach, describe, expect, inject, it, vi } from 'vitest'
 
 import { type AccessTeam, adminClaims, adminHarness, adminTeam, serviceClaims, setTeamAccess } from './access-helpers'
+import { sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { JPEG_ORIENTATION_6, PNG_PLAIN, WIDE_PNG } from './fixtures/images'
 import { BUILD, completeSetup, migratedStore, rejectionOf } from './helpers'
+import { pngOf, pngOfBytes } from './local-emoji-helpers'
 import { bytes, TestCodec } from './media-helpers'
 import {
 	ACCESS,
@@ -24,6 +26,7 @@ import { REBUILD_LEASE_MS, REBUILD_PAGE, REBUILD_SETTLE_MS, SCAN_WINDOW } from '
 import { handleScheduled } from '../src/jobs/scheduled'
 import { sweepMedia } from '../src/mastodon/media'
 import { MAX_BUILDS_PER_CALL, rebuildMedia } from '../src/mastodon/media-rebuild'
+import { EMOJI_IMAGE_LIMIT, EMOJI_PREVIEW_LIMIT } from '../src/platform/emoji-image'
 import { IMAGE_SIZE_LIMIT } from '../src/platform/images'
 import type { StoreStub } from '../src/platform/store-client'
 import { toStoreUnavailable } from '../src/platform/store-errors'
@@ -381,31 +384,32 @@ describe('media rebuild authorization', () => {
 	})
 })
 
-describe('kopje-admin media-rebuild', () => {
-	async function cli(h: Awaited<ReturnType<typeof setup>>, argv: string[]) {
-		const out: string[] = []
-		const err: string[] = []
-		const fetch = async (input: string, init?: RequestInit) => {
-			const headers = new Headers(init?.headers)
-			headers.delete('CF-Access-Client-Id')
-			headers.delete('CF-Access-Client-Secret')
-			return h.as(serviceClaims(), new URL(input).pathname, { ...init, headers })
-		}
-		const code = await run({
-			argv,
-			env: {
-				KOPJE_ADMIN_URL: 'https://admin.kopje.test',
-				CF_ACCESS_CLIENT_ID: 'id',
-				CF_ACCESS_CLIENT_SECRET: 'secret',
-			},
-			io: memoryIO(),
-			stdout: { write: (text: string) => void out.push(text), isTTY: false },
-			stderr: { write: (text: string) => void err.push(text), isTTY: false },
-			fetch,
-		})
-		return { code, out: out.join(''), err: err.join('') }
+// kopje-admin through the admin app, as the service token.
+async function cli(h: Awaited<ReturnType<typeof setup>>, argv: string[]) {
+	const out: string[] = []
+	const err: string[] = []
+	const fetch = async (input: string, init?: RequestInit) => {
+		const headers = new Headers(init?.headers)
+		headers.delete('CF-Access-Client-Id')
+		headers.delete('CF-Access-Client-Secret')
+		return h.as(serviceClaims(), new URL(input).pathname, { ...init, headers })
 	}
+	const code = await run({
+		argv,
+		env: {
+			KOPJE_ADMIN_URL: 'https://admin.kopje.test',
+			CF_ACCESS_CLIENT_ID: 'id',
+			CF_ACCESS_CLIENT_SECRET: 'secret',
+		},
+		io: memoryIO(),
+		stdout: { write: (text: string) => void out.push(text), isTTY: false },
+		stderr: { write: (text: string) => void err.push(text), isTTY: false },
+		fetch,
+	})
+	return { code, out: out.join(''), err: err.join('') }
+}
 
+describe('kopje-admin media-rebuild', () => {
 	it('runs to the end and exits 0, or 3 when rows need a decision or it stopped', async () => {
 		const h = await setup()
 		for (let i = 0; i < MAX_BUILDS_PER_CALL + 1; i++) {
@@ -956,3 +960,123 @@ function flagsWith(lease: { until: number }): OperatorFlags {
 		media_rebuild_lease: { holder: 'h', ...lease },
 	}
 }
+
+// A custom emoji's image (migration 0055_local_custom_emojis) is held to the emoji limits of platform/emoji-image.ts
+// by the rebuild too, each a per-row problem that retains the row and writes nothing (mastodon/media-rebuild.ts).
+describe('media rebuild of custom emoji images', () => {
+	async function emojiRow(store: StoreStub, options: Parameters<typeof addRow>[1] & { meta?: string } = {}) {
+		const row = await addRow(store, options)
+		await runInDurableObject(store, (_instance, state) => {
+			if (options.meta !== undefined) {
+				state.storage.sql.exec('UPDATE media_attachments SET meta = ? WHERE id = ?', options.meta, row.id)
+			}
+			state.storage.sql.exec(
+				"INSERT INTO custom_emojis (id, shortcode, created_at) VALUES (?, ?, '2026-10-12T00:00:00.000Z')",
+				row.id,
+				`e${row.id}`
+			)
+		})
+		return row
+	}
+
+	const rebuild = async (h: Awaited<ReturnType<typeof setup>>, body: unknown = {}) =>
+		(await (await h.post(adminClaims(), '/admin/media/rebuild', body)).json()) as Step
+
+	it('builds the files of emoji restored from their originals, as an originals-only restore leaves them', async () => {
+		const h = await setup()
+		const emoji = await emojiRow(h.store, { original: await pngOf(32, 32) })
+		const step = await rebuild(h)
+		expect(step).toMatchObject({ done: true, problems: [] })
+		expect(step.counts).toMatchObject({ built: 1 })
+		expect(await files(emoji)).toEqual([true, true])
+		expect(await meta(h.store, emoji.id)).toEqual({
+			original: { width: 32, height: 32 },
+			small: { width: 32, height: 32 },
+		})
+	})
+
+	it('reports a rebuilt full image of 262,144 bytes before writing, keeping the charge, and builds an ordinary row', async () => {
+		const codec = new TestCodec()
+		codec.encodeResult = pngOfBytes(EMOJI_IMAGE_LIMIT, 1024, 60)
+		const h = await setup({ codec })
+		const emoji = await emojiRow(h.store)
+		const ordinary = await addRow(h.store)
+		const step = await rebuild(h)
+		expect(step.problems).toEqual([{ id: emoji.id, outcome: 'failed', detail: 'emoji-output' }])
+		expect(step.counts).toMatchObject({ built: 1, failed: 1 })
+		expect(await files(emoji)).toEqual([false, false])
+		expect(await files(ordinary)).toEqual([true, true])
+		expect(await transforms(h.store)).toBe(4)
+		expect(await sql(h.store, 'SELECT id FROM custom_emojis WHERE id = ?', emoji.id)).toEqual([{ id: emoji.id }])
+	})
+
+	it('reports existing files past their limits, full or small, deleting nothing, and rebuilds a missing variant', async () => {
+		const h = await setup()
+		const big = await emojiRow(h.store, { files: true })
+		await env.MEDIA.put(`files/${big.token}/full`, new Uint8Array(EMOJI_IMAGE_LIMIT))
+		const bigPreview = await emojiRow(h.store, { files: true })
+		await env.MEDIA.put(`files/${bigPreview.token}/small`, new Uint8Array(EMOJI_PREVIEW_LIMIT + 1))
+		const atPreview = await emojiRow(h.store, { files: true })
+		await env.MEDIA.put(`files/${atPreview.token}/small`, new Uint8Array(EMOJI_PREVIEW_LIMIT))
+		const noFull = await emojiRow(h.store, { files: true })
+		await env.MEDIA.delete(`files/${noFull.token}/full`)
+		const noSmall = await emojiRow(h.store, { files: true })
+		await env.MEDIA.delete(`files/${noSmall.token}/small`)
+		const step = await rebuild(h)
+		expect(step.problems).toEqual([
+			{ id: big.id, outcome: 'failed', detail: 'emoji-too-large' },
+			{ id: bigPreview.id, outcome: 'failed', detail: 'emoji-too-large' },
+		])
+		expect(step.counts).toMatchObject({ built: 2, 'skipped-existing': 1 })
+		expect(await files(big)).toEqual([true, true])
+		expect(await files(noFull)).toEqual([true, true])
+		expect(await files(noSmall)).toEqual([true, true])
+	})
+
+	it('reports an existing image whose actual edges pass 1,024 though its recorded ones do not, charging nothing', async () => {
+		const h = await setup()
+		const actual = await pngOf(2048, 2048)
+		expect(actual.length).toBeLessThan(EMOJI_IMAGE_LIMIT)
+		const emoji = await emojiRow(h.store, { files: true, meta: '{"original":{"width":64,"height":64}}' })
+		await env.MEDIA.put(`files/${emoji.token}/full`, actual)
+		const step = await rebuild(h)
+		expect(step.problems).toEqual([{ id: emoji.id, outcome: 'failed', detail: 'emoji-actual' }])
+		expect(h.codec.encodeCalls).toEqual([])
+		expect(await transforms(h.store)).toBe(0)
+		expect((await env.MEDIA.get(`files/${emoji.token}/full`))?.size).toBe(actual.length)
+	})
+
+	it('reports an original past the emoji input limits before charging; a corrupt first row does not stop the page', async () => {
+		const h = await setup()
+		const corrupt = await emojiRow(h.store, {
+			original: new Uint8Array([...bytes(PNG_PLAIN).subarray(0, 16), 1, 2, 3]),
+		})
+		const large = await emojiRow(h.store, { original: pngOfBytes(EMOJI_IMAGE_LIMIT, 1024, 60) })
+		const wide = await emojiRow(h.store, { original: await pngOf(1025, 1) })
+		const jpeg = await emojiRow(h.store, { contentType: 'image/webp', original: bytes(JPEG_ORIENTATION_6) })
+		const good = await emojiRow(h.store)
+		const step = await rebuild(h)
+		expect(step.problems).toEqual(
+			[corrupt, large, wide, jpeg].map((row) => ({ id: row.id, outcome: 'failed', detail: 'emoji-input' }))
+		)
+		expect(step).toMatchObject({ done: true, next: expect.any(String) })
+		expect(step.counts).toMatchObject({ built: 1, failed: 4 })
+		expect(await files(good)).toEqual([true, true])
+		expect(await transforms(h.store)).toBe(2)
+		expect(await sql(h.store, 'SELECT count(*) AS n FROM custom_emojis')).toEqual([{ n: 5 }])
+		expect((await cli(h, ['media-rebuild'])).code).toBe(3)
+	})
+
+	it('dry-runs emoji rows by size and signature only: no Images call, charge, write or lease', async () => {
+		const h = await setup()
+		await emojiRow(h.store)
+		await emojiRow(h.store, { original: pngOfBytes(EMOJI_IMAGE_LIMIT, 1024, 60) })
+		const existing = await emojiRow(h.store, { files: true })
+		await env.MEDIA.put(`files/${existing.token}/full`, new Uint8Array(EMOJI_IMAGE_LIMIT))
+		const step = await rebuild(h, { dryRun: true })
+		expect(step.counts).toMatchObject({ 'would-build': 1, failed: 2 })
+		expect(h.codec.calls).toBe(0)
+		expect(await transforms(h.store)).toBe(0)
+		expect(await sql(h.store, "SELECT name FROM kopje_state WHERE name = 'media_rebuild_lease'")).toEqual([])
+	})
+})

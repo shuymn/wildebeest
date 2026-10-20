@@ -3,10 +3,19 @@ import {
 	type RebuildCharge,
 	type RebuildLeaseResult,
 	type RebuildRecord,
+	type RebuildRow,
 } from '../domain/media-rebuild'
 import { DeadlinePassed, within } from '../platform/deadline'
+import {
+	EMOJI_EDGE_LIMIT,
+	EMOJI_IMAGE_LIMIT,
+	emojiFilesProblem,
+	emojiInputProblem,
+	emojiInputSizeProblem,
+	emojiOutputProblem,
+} from '../platform/emoji-image'
 import { sniffImageType } from '../platform/image-bytes'
-import { type ImageCodec, IMAGE_SIZE_LIMIT, processImage, servedTypeOf } from '../platform/images'
+import { type ImageCodec, IMAGE_SIZE_LIMIT, inspectImage, processImage, servedTypeOf } from '../platform/images'
 import { fileKey, MEDIA_VARIANTS, originalKey } from '../platform/media-files'
 import type { ImportAuthority } from '../platform/store-admin'
 import type { StoreStub } from '../platform/store-client'
@@ -28,8 +37,9 @@ import type { StoreStub } from '../platform/store-client'
 // renews the lease every REBUILD_HEARTBEAT_MS, so the lease cannot end under a write this call started while the call
 // runs. Each write or delete starts only after the Store confirms the lease is still this call's; once a renewal or that
 // check fails, the call starts no further write, reports `lease-overrun` and does not release the lease.
-// A call that gave up a step keeps the lease until it expires. The bound: per row, at most two R2 reads, five Images
-// calls and five Store calls, each given up within the lease, then at most three R2 writes, each awaited.
+// A call that gave up a step keeps the lease until it expires. The bound: per row, at most two R2 reads, six Images
+// calls (five for a row that is not an emoji's) and five Store calls, each given up within the lease, then at most
+// three R2 writes, each awaited.
 //
 // Each row that lacks a file: its original is read from originals/<id>; the original's type must be served as the
 // row's content_type (its URLs name that type, so a mismatch is reported and left alone, never rewritten); the
@@ -38,6 +48,14 @@ import type { StoreStub } from '../platform/store-client'
 // files/<token>/{full,small} written; and once both writes have completed the Store is asked whether the row is still
 // live, and the files are deleted again if it is not (defence in depth: nothing deletes rows while the rebuild may
 // run). Images refusing for quota (9422) or the monthly budget being spent stops the call.
+//
+// A custom emoji's image (RebuildRow.emoji) is held to the emoji limits of platform/emoji-image.ts, each a per-row
+// `failed` problem that retains the row and writes nothing: existing files past their byte limits (emoji-too-large)
+// or, in a real run, a served image whose actual edges or type are not an emoji's (emoji-actual, existingEmoji); an
+// original past the input size or not an input type (emoji-input, before any charge, a dry run included); its edges
+// read by the free info() (emoji-input, before the charge); and the re-encoded files (emoji-output, after the charge,
+// which stays spent). A dry run is a size and signature preflight only: its would-build certifies neither the edges
+// nor the encoded output.
 //
 // Bounds per call: one listing (at most SCAN_WINDOW rows scanned, REBUILD_PAGE candidates) and at most
 // MAX_BUILDS_PER_CALL re-encoded, one at a time (an original is at most 16 MB), so a call stays within a request's
@@ -169,6 +187,45 @@ export async function rebuildMedia(
 
 type Lease = { holder: string; lease: (release: boolean) => Promise<RebuildLeaseResult>; lost: boolean }
 
+// Why an emoji whose two files exist may not stay published, or null: its files' sizes past the emoji limits
+// (emoji-too-large); and, in a real run, its served image as it actually is, read within EMOJI_IMAGE_LIMIT bytes (the
+// range is the backstop of the size its head gave) and judged by the free info(): edges past EMOJI_EDGE_LIMIT, or a
+// type that is not the row's (emoji-actual). The trigger of 0055 holds only the recorded edges (meta.original), which
+// an import may misstate. Nothing is charged, rewritten or deleted; quota stops the call. A dry run checks sizes only.
+async function existingEmoji(
+	deps: RebuildDeps,
+	row: RebuildRow,
+	sizes: { full: number; small: number },
+	dryRun: boolean
+): Promise<'emoji-too-large' | 'emoji-actual' | 'quota' | null> {
+	if (emojiFilesProblem(sizes) !== null) {
+		return 'emoji-too-large'
+	}
+	if (dryRun) {
+		return null
+	}
+	const object = await deps.bucket.get(fileKey(row.token, 'full'), { range: { offset: 0, length: EMOJI_IMAGE_LIMIT } })
+	if (object === null) {
+		return 'emoji-actual'
+	}
+	if (object.size >= EMOJI_IMAGE_LIMIT) {
+		await object.body.cancel()
+		return 'emoji-too-large'
+	}
+	const bytes = new Uint8Array(await object.arrayBuffer())
+	const inspected = await inspectImage(deps.images, bytes)
+	if (!inspected.ok) {
+		return inspected.reason === 'quota' ? 'quota' : 'emoji-actual'
+	}
+	const { info } = inspected
+	const edges = [info.width, info.height]
+	return sniffImageType(bytes) === row.contentType &&
+		info.format === row.contentType &&
+		edges.every((edge) => edge !== undefined && edge >= 1 && edge <= EMOJI_EDGE_LIMIT)
+		? null
+		: 'emoji-actual'
+}
+
 async function pass(
 	deps: RebuildDeps,
 	input: { after: string | null; dryRun: boolean },
@@ -243,10 +300,22 @@ async function pass(
 			if (control !== null) {
 				await renew()
 			}
-			const heads = await bounded(() =>
+			const [full, small] = await bounded(() =>
 				Promise.all(MEDIA_VARIANTS.map((variant) => bucket.head(fileKey(row.token, variant))))
 			)
-			if (heads.every((head) => head !== null)) {
+			if (full !== null && full !== undefined && small !== null && small !== undefined) {
+				if (row.emoji) {
+					const sizes = { full: full.size, small: small.size }
+					const kept = await bounded(() => existingEmoji(deps, row, sizes, control === null))
+					if (kept === 'quota') {
+						return step('quota', false)
+					}
+					if (kept !== null) {
+						report({ id: row.id, outcome: 'failed', detail: kept })
+						handled = row.id
+						continue
+					}
+				}
 				counts['skipped-existing']++
 				handled = row.id
 				continue
@@ -279,6 +348,12 @@ async function pass(
 				handled = row.id
 				continue
 			}
+			// An emoji's original by its size and signature, before anything is charged; a dry run stops here.
+			if (row.emoji && emojiInputSizeProblem(original.size, type) !== null) {
+				report({ id: row.id, outcome: 'failed', detail: 'emoji-input' })
+				handled = row.id
+				continue
+			}
 			if (servedTypeOf(type) !== row.contentType) {
 				report({ id: row.id, outcome: 'type-mismatch', detail: `${type} is served as ${servedTypeOf(type)}` })
 				handled = row.id
@@ -290,6 +365,19 @@ async function pass(
 				continue
 			}
 			builds++
+			// An emoji's edges and type, read by the free info() before anything is charged (its codec errors classified
+			// as processImage classifies them).
+			if (row.emoji) {
+				const inspected = await bounded(() => inspectImage(deps.images, bytes))
+				if (!inspected.ok && inspected.reason === 'quota') {
+					return step('quota', false)
+				}
+				if (!inspected.ok || emojiInputProblem(bytes, inspected.info) !== null) {
+					report({ id: row.id, outcome: 'failed', detail: 'emoji-input' })
+					handled = row.id
+					continue
+				}
+			}
 			const charged = await bounded<RebuildCharge>(
 				async () =>
 					await store.chargeMediaRebuild(build, {
@@ -316,9 +404,15 @@ async function pass(
 				handled = row.id
 				continue
 			}
-			const { full, small } = processed.image
-			if (full.contentType !== row.contentType || small.contentType !== row.contentType) {
-				report({ id: row.id, outcome: 'type-mismatch', detail: `re-encoded as ${full.contentType}` })
+			const { full: built, small: preview } = processed.image
+			if (built.contentType !== row.contentType || preview.contentType !== row.contentType) {
+				report({ id: row.id, outcome: 'type-mismatch', detail: `re-encoded as ${built.contentType}` })
+				handled = row.id
+				continue
+			}
+			// The published files of an emoji, judged before any write; the charge is spent.
+			if (row.emoji && emojiOutputProblem(processed.image) !== null) {
+				report({ id: row.id, outcome: 'failed', detail: 'emoji-output' })
 				handled = row.id
 				continue
 			}
@@ -329,9 +423,9 @@ async function pass(
 						holder: control.holder,
 						id: row.id,
 						token: row.token,
-						contentType: full.contentType,
-						original: { width: full.width, height: full.height },
-						small: { width: small.width, height: small.height },
+						contentType: built.contentType,
+						original: { width: built.width, height: built.height },
+						small: { width: preview.width, height: preview.height },
 					})
 			)
 			if (recorded.status === 'denied') {
@@ -346,8 +440,8 @@ async function pass(
 				continue
 			}
 			const keys = [fileKey(row.token, 'full'), fileKey(row.token, 'small')] as const
-			await settled(() => bucket.put(keys[0], full.bytes, { httpMetadata: { contentType: full.contentType } }))
-			await settled(() => bucket.put(keys[1], small.bytes, { httpMetadata: { contentType: small.contentType } }))
+			await settled(() => bucket.put(keys[0], built.bytes, { httpMetadata: { contentType: built.contentType } }))
+			await settled(() => bucket.put(keys[1], preview.bytes, { httpMetadata: { contentType: preview.contentType } }))
 			// Defence in depth: nothing deletes rows while a rebuild holds the lease, but if the row went while the files
 			// were written, they are deleted again so nothing serves them.
 			const live = await bounded(() => store.mediaRebuildRowLive(build, { id: row.id, token: row.token }))

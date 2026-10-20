@@ -5,9 +5,10 @@ import { Decrypter, Encrypter, generateX25519Identity, identityToRecipient } fro
 import { AwsV4Signer } from 'aws4fetch'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { apiHarness } from './api-helpers'
+import { apiHarness, sql } from './api-helpers'
 import { harness as appHarness } from './app-helpers'
 import { BUILD, LATEST_MIGRATION, migratedStore } from './helpers'
+import { seedEmojiRow } from './local-emoji-helpers'
 import { copyConfig, importViaRpc, memoryIO, seedStore, tableSnapshot } from './ops-helpers'
 import { S3Mock } from './s3-mock'
 import { signatureOf } from './sigv4'
@@ -369,6 +370,29 @@ describe('backup configuration', () => {
 })
 
 describe('backup run', () => {
+	// Every custom emoji's original, enabled or disabled, is in the backup (MEDIA-5: never deleted, so always required).
+	it('copies the originals of enabled and disabled custom emoji', async () => {
+		const h = await harness()
+		const [owner] = await sql<{ id: string }>(h.store, 'SELECT account_id AS id FROM local_accounts LIMIT 1')
+		const emoji = [
+			await seedEmojiRow(h.store, { id: snowflake(NOW - 2 * DAY, 5), shortcode: 'on', owner: owner!.id }),
+			await seedEmojiRow(h.store, {
+				id: snowflake(NOW - 2 * DAY, 6),
+				shortcode: 'off',
+				owner: owner!.id,
+				disabled: true,
+			}),
+		]
+		for (const { id } of emoji) {
+			await env.MEDIA.put(`originals/${id}`, new Uint8Array([1, 2, 3]))
+		}
+		expect(await h.run()).toBe('done')
+		const { index } = await restore(h)
+		for (const { id } of emoji) {
+			expect(index).toContainEqual(expect.objectContaining({ source: `originals/${id}`, state: 'copied' }))
+		}
+	})
+
 	it('writes the dump, the originals the dump references, the complete media index and the manifest last (DATA-4, DATA-10)', async () => {
 		const h = await harness()
 		const photo = new Uint8Array([0xff, 0xd8, 0xff, 1, 2, 3, ...new TextEncoder().encode('exif-location-marker')])

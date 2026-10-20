@@ -33,7 +33,9 @@ import { storedMediaMeta } from '../platform/stored-bounds'
 export const REBUILD_PAGE = 50
 export const SCAN_WINDOW = 500
 
-export type RebuildRow = { id: string; token: string; contentType: string | null }
+// emoji: the row is a custom emoji's image (migration 0055_local_custom_emojis), which the rebuild holds to the emoji
+// limits too (mastodon/media-rebuild.ts, platform/emoji-image.ts).
+export type RebuildRow = { id: string; token: string; contentType: string | null; emoji: boolean }
 
 // rows: the candidates; next: the id the listing scanned to (the next listing starts after it); done: nothing is after
 // it.
@@ -57,14 +59,17 @@ export const rebuildCandidates = readOperation<{ after: string | null; now: numb
 		if (last === undefined) {
 			return { rows: [], next: after, done: true }
 		}
-		const rows = db.all<RebuildRow>(
-			`SELECT id, file_token AS token, content_type AS contentType FROM media_attachments
-			WHERE ${ELIGIBLE} AND id > ? AND id <= ? ORDER BY id LIMIT ?`,
-			iso(now),
-			after ?? '',
-			last,
-			REBUILD_PAGE
-		)
+		const rows = db
+			.all<Omit<RebuildRow, 'emoji'> & { emoji: number }>(
+				`SELECT id, file_token AS token, content_type AS contentType,
+				EXISTS (SELECT 1 FROM custom_emojis e WHERE e.id = media_attachments.id) AS emoji
+			FROM media_attachments WHERE ${ELIGIBLE} AND id > ? AND id <= ? ORDER BY id LIMIT ?`,
+				iso(now),
+				after ?? '',
+				last,
+				REBUILD_PAGE
+			)
+			.map((row) => ({ ...row, emoji: row.emoji === 1 }))
 		if (rows.length === REBUILD_PAGE) {
 			return { rows, next: rows.at(-1)?.id ?? last, done: false }
 		}

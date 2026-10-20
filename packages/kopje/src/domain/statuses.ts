@@ -60,7 +60,7 @@ import {
 	userWriteOperation,
 } from './auth'
 import { addToConversation } from './conversations'
-import { type CustomEmoji, presentEmojis } from './custom-emojis'
+import { type CustomEmoji, localEmojiSnapshot, presentEmojis } from './custom-emojis'
 import { beginRetraction } from './deliveries'
 import { countFeaturedTags, featuredOfStatus, uncountFeaturedTags } from './featured-tags'
 import { allocateLocalId } from './ids'
@@ -489,6 +489,12 @@ export function isPrepared(prepared: Prepared): prepared is PreparedPost {
 	return 'author' in prepared
 }
 
+// The texts a local status's emoji snapshot reads (custom-emojis.ts localEmojiSnapshot), as Mastodon's
+// Status#emojis: the content warning, the text and the poll's choices (app/models/status.rb:279-286).
+function emojiTexts(spoilerText: string, source: string, poll: PollInput | undefined): string[] {
+	return [spoilerText, source, ...(poll?.options ?? [])]
+}
+
 // Writes a prepared post: the status, its mentions, tags and media, its notifications and its Create (activities.ts),
 // all in the caller's transaction. The new status's id.
 export function writePost(
@@ -515,8 +521,8 @@ export function writePost(
 	db.run(
 		`INSERT INTO statuses (id, uri, account_id, in_reply_to_uri, in_reply_to_id, visibility, spoiler_text, content,
 			source_text, sensitive, language, published_at, client_key, search_text, in_reply_to_account_id, created_at,
-			quote_policy)
-		VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?12, ?16)`,
+			quote_policy, emojis)
+		VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?12, ?16, ?17)`,
 		id,
 		`${origin}/ap/o/${input.objectId}`,
 		accountId,
@@ -532,7 +538,8 @@ export function writePost(
 		input.idempotencyKey ?? null,
 		searchText(composed.source, spoilerText),
 		replyTarget,
-		quotePolicy
+		quotePolicy,
+		localEmojiSnapshot(db, emojiTexts(spoilerText, composed.source, input.poll), STATUS_EMOJIS_BYTES)
 	)
 	writeMentions(db, id, composed.mentions, [])
 	if (quoted !== null) {
@@ -876,7 +883,7 @@ export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db
 	editPoll(db, current.id, input.poll ?? null, input.now)
 	db.run(
 		`UPDATE statuses SET content = ?, source_text = ?, spoiler_text = ?, sensitive = ?, language = ?, edited_at = ?,
-			search_text = ?, quote_policy = COALESCE(?, quote_policy)
+			search_text = ?, quote_policy = COALESCE(?, quote_policy), emojis = ?
 		WHERE id = ?`,
 		composed.content,
 		composed.source,
@@ -886,6 +893,7 @@ export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db
 		editedAt,
 		searchText(composed.source, spoilerText),
 		policy,
+		localEmojiSnapshot(db, emojiTexts(spoilerText, composed.source, input.poll), STATUS_EMOJIS_BYTES),
 		current.id
 	)
 	const previous = db

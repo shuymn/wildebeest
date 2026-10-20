@@ -498,6 +498,14 @@ Kopje does not. `upsertRemoteActor` never refreshes an unavailable account's pro
 (search resolution, quotes, Announce originals, Move targets), and `storeRemoteStatus` stores nothing of an
 unavailable author.
 
+### Local custom emoji
+
+Local custom emoji (`local-emojis.ts`, migration `0055_local_custom_emojis`) are instance data shown to anyone, as
+Mastodon's: `GET /api/v1/custom_emojis` lists the enabled ones shown in the picker, and `GET /emojis/:id` serves any
+local emoji's `Emoji` object, disabled ones included (Mastodon's `CustomEmoji.local.find`). The snapshot a status or
+account keeps (`emojis`, and the `Emoji` tags of its Note or actor) is shown only where its status or account is (R1,
+R3, through `audience.ts`); no rule changes, and the policy model is unchanged.
+
 ### Suggestions (R39)
 
 Follow suggestions (`src/domain/suggestions.ts`, `GET /api/v1/suggestions` and `/api/v2/suggestions`, Mastodon's

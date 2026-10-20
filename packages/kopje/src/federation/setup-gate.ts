@@ -13,6 +13,7 @@ export const FEDERATION_PATHS = [
 	'/actor',
 	'/actor/*',
 	'/inbox',
+	'/emojis/*',
 ]
 
 export function requireSetup(build: (env: Env) => string, store: StoreResolver) {

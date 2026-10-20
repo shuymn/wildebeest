@@ -49,7 +49,26 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   `url`, and images are linked, never fetched. 64 tags are read per object, and a snapshot keeps the emoji that fit
   its bounds ([docs/dump-format.md](docs/dump-format.md); 40 typical ones per status and 20 per account fit), dropping
   the rest from the first that does not fit. A reference is any shortcode between two colons, so `:aa:bb:` shows both where Mastodon shows neither.
-  `GET /api/v1/custom_emojis` still answers `[]`.
+- Local custom emoji:
+    - The Access admin adds, changes, disables and enables them with `kopje-admin emoji` (`GET`/`POST /admin/emojis`,
+      `POST /admin/emojis/:id`), each logged in the moderation log. An image is a PNG, GIF or WebP below 256 KiB of at
+      most 1024x1024 pixels, re-encoded (GIF and WebP as WebP), and refused when the re-encoded image is 256 KiB or
+      more (what Mastodon downloads); it costs two Images transformations and belongs to the OAuth admin (refused with
+      `no-oauth-admin` when there is none). A shortcode is 2 to 128 ASCII letters, digits and underscores, one enabled
+      emoji each, at most 1,000 enabled; a category is up to 64 characters. `--replace` disables the enabled emoji of
+      the shortcode in the same step. Emoji are never deleted: a disabled one keeps its files, its place in backups and
+      in every post and profile that used it.
+    - `GET /api/v1/custom_emojis` (which answered `[]`) lists the enabled emoji shown in the picker, in shortcode
+      order, with `category` when there is one.
+    - A post, a scheduled post when it is published, an edit and a profile save keep the enabled local emoji their texts
+      reference (unlisted ones too) in `emojis`, as remote emoji are kept; earlier posts keep what they showed after a
+      disable or a replace.
+    - Notes, the actor and its `Update` carry the `Emoji` tags of those emoji (with `toot:Emoji` in the context), and
+      `GET /emojis/:id` serves any local emoji's `Emoji` object, disabled ones included. A disable, an enable or a
+      replace delivers nothing; peers keep emoji by shortcode, so a replaced image can change what they show on earlier
+      posts (the accepted risks in [docs/threat-model.md](docs/threat-model.md)).
+    - `kopje-admin media-rebuild` holds an emoji's image to the same limits and reports one past them (`failed` with
+      `emoji-input`, `emoji-output`, `emoji-too-large` or `emoji-actual`), writing and deleting nothing for it.
 - Reports from other servers: an inbound `Flag` (what Mastodon sends when a user forwards a report, and Misskey when a
   moderator forwards one) files a report of each local account it names, and of a remote one only with a named status
   of it that replies to a local account, as Mastodon does. Its reporter is the remote actor, its category `other`; the
@@ -110,10 +129,11 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds six migrations, applied on the first request after the deploy; a rollback to an earlier
-  version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). On the representative
-  store defined in `test/bench/migration-cost.ts`, migrations 0049–0054 together took 8.7–9.0 seconds in three serial
-  runs in workerd's local Durable Object SQLite (0049–0053: 8.2–8.4 seconds), within the 20-second upgrade budget.
+- Store schema: adds seven migrations (0049–0055), applied on the first request after the deploy; a rollback to an
+  earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). On the
+  representative store defined in `test/bench/migration-cost.ts`, migrations 0049–0055 together took 16.7–17.0
+  seconds in three runs of the migration bench workflow on a 4-CPU GitHub-hosted runner, in workerd's local Durable
+  Object SQLite (0049–0054 alongside: 16.3–17.0 seconds), within the 20-second upgrade budget.
     - `0049_instance_bounds`: rewrites instance settings past their bounds (above), adds the triggers that refuse
       them, and indexes the suspend blocks by domain.
     - `0050_follow_recommendation_mutes`: the table of dismissed suggestions; it reads no existing row.
@@ -134,6 +154,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       [header](migrations/0054_remote_reports.sql) names; a stored report past the new bounds (none of Kopje's writers
       makes one) leaves the Store held until it is fixed and retried (`kopje-admin upgrade retry`,
       [docs/upgrade.md](docs/upgrade.md)).
+    - `0055_local_custom_emojis`: the empty `custom_emojis` table with its index and triggers; it reads no existing
+      row. A dump whose emoji image is not a kept local PNG or WebP upload within the recorded 1024-pixel edges, or
+      with more than 1,000 enabled emoji, is refused ([docs/dump-format.md](docs/dump-format.md)), and
+      `verify-conversion` fails on any `custom_emojis` row, counted in `emojis`.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.17] - 2026-10-19

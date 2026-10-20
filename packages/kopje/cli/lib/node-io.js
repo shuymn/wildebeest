@@ -47,6 +47,16 @@ export const nodeIO = {
 	async truncate(path, length) {
 		await truncate(path, length)
 	},
+	async readBytes(path) {
+		try {
+			return new Uint8Array(await readFile(path))
+		} catch (error) {
+			if (/** @type {NodeJS.ErrnoException} */ (error).code === 'ENOENT') {
+				return null
+			}
+			throw error
+		}
+	},
 	async readText(path) {
 		try {
 			return await readFile(path, 'utf8')

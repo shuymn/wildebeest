@@ -11,6 +11,7 @@ import {
 	Activity,
 	Application,
 	CryptographicKey,
+	Emoji,
 	Endpoints,
 	Group,
 	Hashtag,
@@ -528,6 +529,8 @@ async function localActorObject(ctx: RequestContext<FederationState>, actor: Loc
 				attachments: actor.fields.map(
 					(field) => new PropertyValue({ name: field.name, value: renderFieldValue(field.value) })
 				),
+				// The profile's local emoji (ActivityPub::ActorSerializer#virtual_tags, none while suspended: :143).
+				tags: actor.emojis.map(emojiObject),
 			}
 	const object = new cls({
 		id,
@@ -581,6 +584,16 @@ function withAttributionDomains<T extends { toJsonLd(options?: object): Promise<
 		}
 	}
 	return object
+}
+
+// An Emoji tag as Fedify's Emoji. Its time passed emojiInstant (custom-emojis.ts emojiTag), so it parses.
+function emojiObject(emoji: LocalActor['emojis'][number]): Emoji {
+	return new Emoji({
+		id: new URL(emoji.id),
+		name: emoji.name,
+		updated: Temporal.Instant.from(emoji.updated),
+		icon: new Image({ mediaType: emoji.icon.mediaType, url: new URL(emoji.icon.url) }),
+	})
 }
 
 function image(stored: string | null): Image | null {

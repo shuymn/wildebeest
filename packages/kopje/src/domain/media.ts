@@ -95,12 +95,20 @@ function iso(ms: number): string {
 // deletion cannot attach the media again after it (liveMediaSql) while the sweep deletes its objects.
 export const DOOMED_AT = iso(0)
 
-// The condition for an unattached upload that may still be used: processed, not doomed, and not the uploader's
-// avatar or header. `now` is a parameter expression.
+// The condition for an unattached upload that may still be used: processed, not doomed, not the uploader's avatar or
+// header, and not a custom emoji's image (MEDIA-1, MEDIA-5). `now` is a parameter expression.
 export function liveMediaSql(m: string, now: string): string {
 	return `(${m}.processed = 1 AND (${m}.gc_at IS NULL OR ${m}.gc_at > ${now})
 		AND NOT EXISTS (SELECT 1 FROM accounts ${m}_pa WHERE ${m}_pa.id = ${m}.account_id
-			AND ${m}.url IN (${m}_pa.avatar_url, ${m}_pa.header_url)))`
+			AND ${m}.url IN (${m}_pa.avatar_url, ${m}_pa.header_url))
+		AND ${notEmojiSql(m)})`
+}
+
+// MEDIA-5: a custom emoji's image (migration 0055_local_custom_emojis) is kept for good, disabled or not, imported
+// rows included. Every selection that may delete, doom, attach, read or update media excludes it: liveMediaSql, the
+// sweep (expiredMedia, purgeMedia) and releaseProfileImage. A primary-key probe of custom_emojis.
+export function notEmojiSql(m: string): string {
+	return `NOT EXISTS (SELECT 1 FROM custom_emojis ${m}_e WHERE ${m}_e.id = ${m}.id)`
 }
 
 function ownUpload(db: Db, accountId: string, id: string, now: number): MediaRow | undefined {
@@ -140,6 +148,13 @@ export const reserveMedia = userWriteOperation<
 		return refused
 	}
 	setState(db, attemptsName, JSON.stringify([...attempts, now]))
+	const id = insertReservation(db, accountId, token, now)
+	return { status: 'ok', id, deadline: now + WRITE_WINDOW_MS }
+})
+
+// The row of a new reservation (step 1, and a custom emoji's, local-emojis.ts): processed = 0 with the Worker's token,
+// swept after RESERVATION_MS unless completed. Its id.
+export function insertReservation(db: Db, accountId: string, token: string, now: number): string {
 	const id = allocateLocalId(db, now)
 	db.run(
 		`INSERT INTO media_attachments (id, account_id, type, url, file_token, processed, gc_at, created_at)
@@ -150,8 +165,8 @@ export const reserveMedia = userWriteOperation<
 		iso(now + RESERVATION_MS),
 		iso(now)
 	)
-	return { status: 'ok', id, deadline: now + WRITE_WINDOW_MS }
-})
+	return id
+}
 
 // YYYY-MM of the month before the one `now` is in (UTC).
 function previousMonth(now: number): string {
@@ -355,7 +370,8 @@ function releaseProfileImage(db: Db, accountId: string, url: string | null): voi
 	}
 	db.run(
 		`UPDATE media_attachments SET gc_at = ?1 WHERE account_id = ?2 AND url = ?3 AND status_id IS NULL AND gc_at IS NULL
-			AND NOT EXISTS (SELECT 1 FROM accounts a WHERE a.id = ?2 AND ?3 IN (a.avatar_url, a.header_url))`,
+			AND NOT EXISTS (SELECT 1 FROM accounts a WHERE a.id = ?2 AND ?3 IN (a.avatar_url, a.header_url))
+			AND ${notEmojiSql('media_attachments')}`,
 		DOOMED_AT,
 		accountId,
 		url
@@ -453,7 +469,7 @@ export const expiredMedia = mediaDeleteOperation<{ now: number; limit: number },
 		setUp(db)
 			? db.all<ExpiredMedia>(
 					`SELECT id, file_token AS token FROM media_attachments
-				WHERE status_id IS NULL AND gc_at IS NOT NULL AND gc_at <= ?
+				WHERE status_id IS NULL AND gc_at IS NOT NULL AND gc_at <= ? AND ${notEmojiSql('media_attachments')}
 				ORDER BY gc_at LIMIT ?`,
 					iso(now),
 					Math.min(limit, SWEEP_BATCH)
@@ -467,7 +483,8 @@ export const expiredMedia = mediaDeleteOperation<{ now: number; limit: number },
 export const purgeMedia = mediaDeleteOperation<{ ids: string[]; now: number }, number>((db, { ids, now }) => {
 	const swept = db.all<{ id: string; token: string | null; url: string; created_at: string }>(
 		`SELECT id, file_token AS token, url, created_at FROM media_attachments
-		WHERE id IN (SELECT value FROM json_each(?)) AND status_id IS NULL AND gc_at IS NOT NULL AND gc_at <= ?`,
+		WHERE id IN (SELECT value FROM json_each(?)) AND status_id IS NULL AND gc_at IS NOT NULL AND gc_at <= ?
+			AND ${notEmojiSql('media_attachments')}`,
 		JSON.stringify(ids.slice(0, SWEEP_BATCH)),
 		iso(now)
 	)

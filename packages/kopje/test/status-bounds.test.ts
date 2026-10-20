@@ -8,6 +8,7 @@ import { NOW } from './app-helpers'
 import { ACCOUNT_EMOJIS_FULL, accountAtCap, STATUS_EMOJIS_FULL, statusAtCap, statusShortNames } from './emoji-fixtures'
 import { BUILD } from './helpers'
 import { ALICE, setup, type Setup } from './inbox-status-helpers'
+import { localSnapshotAtCap } from './local-emoji-helpers'
 import { fullestFields, MAX_BIO } from './profile-fixtures'
 import { observedSql, rowsRead } from './read-helpers'
 import { community, post, remoteAccount } from './status-helpers'
@@ -46,7 +47,7 @@ import { parseRemoteStatus } from '../src/federation/remote-status'
 import { utf8Length } from '../src/platform/dump-format'
 import { MAX_LOCAL_ADDRESSED } from '../src/platform/identity-bounds'
 import type { StoreOperation } from '../src/platform/store-kernel'
-import { STATUS_EMOJIS_BYTES } from '../src/platform/stored-bounds'
+import { presentedEmojiBytes, STATUS_EMOJIS_BYTES } from '../src/platform/stored-bounds'
 import {
 	jsonStringBytes,
 	REMOTE_BIO_BYTES,
@@ -1322,6 +1323,10 @@ describe('ActivityPub Notes of a local status at its bounds (RES-3)', () => {
 			HOST
 		)
 		parts.mentions = [...parts.mentions, ...Array.from({ length: more }, (_, i) => String(base + BigInt(i + 1)))]
+		// A local emoji snapshot at exactly STATUS_EMOJIS_BYTES presented bytes, every entry resolved to an Emoji tag
+		// (custom-emojis.ts localEmojiTags), with as many entries as fit (local-emoji-helpers.ts localSnapshotAtCap).
+		parts.emojis = await localSnapshotAtCap(t.store, ALICE, STATUS_EMOJIS_BYTES)
+		expect(presentedEmojiBytes(JSON.parse(parts.emojis) as [string, string][])).toBe(STATUS_EMOJIS_BYTES)
 		const ids: string[] = []
 		for (let i = 0; i < PIN_LIMIT; i++) {
 			const id = await storedStatus(t, ALICE, parts)
@@ -1351,6 +1356,8 @@ describe('ActivityPub Notes of a local status at its bounds (RES-3)', () => {
 				longest: Math.max(...facts.tags.map((tag) => [...tag.name].length)),
 				mentions: facts.mentions.length,
 				media: facts.media.length,
+				emojis: facts.emojis.length,
+				emojiTags: jsonBytes(facts.emojis),
 			}
 		})
 		expect(measuredNote).toMatchObject({ tags: MAX_PRESENTED_TAGS, mentions: MAX_STATUS_MENTION_ROWS, media: 4 })
@@ -1387,16 +1394,18 @@ describe('ActivityPub Notes of a local status at its bounds (RES-3)', () => {
 		expect(shown.tags).toBe(0)
 		expect(shown.create).toBeLessThan(200_000)
 		expect({ ...measuredNote, featured: featuredBytes, whole }).toEqual({
-			sqlite: 3_685_367,
-			rows: 1_276,
-			nodes: 2_616,
-			note: 4_220_294,
-			create: 6_276_334,
+			sqlite: 3_697_315,
+			rows: 1_337,
+			nodes: 3_165,
+			note: 4_235_143,
+			create: 6_291_204,
 			tags: MAX_PRESENTED_TAGS,
 			longest: MAX_TAG_LENGTH,
 			mentions: MAX_STATUS_MENTION_ROWS,
 			media: 4,
-			featured: 4_413_221,
+			emojis: 61,
+			emojiTags: 14_850,
+			featured: 4_429_925,
 			whole: 1,
 		})
 	}, 300_000)

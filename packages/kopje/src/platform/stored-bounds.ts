@@ -624,3 +624,52 @@ export function emojiBoundsMigrationSql(): string {
 	}
 	return `${statements.join('\n\n')}\n`
 }
+
+// ---- Local custom emoji: migration 0055_local_custom_emojis
+
+// custom_emojis.shortcode (RES-2): 2 to 128 ASCII letters, digits and underscores, as Mastodon's SHORTCODE_ONLY_RE,
+// MINIMUM_SHORTCODE_SIZE and MAX_SHORTCODE_SIZE for a local emoji (app/models/custom_emoji.rb:28-38, 50-51). A subset
+// of EMOJI_SHORTCODE, so a local snapshot passes the 0053 triggers.
+export const LOCAL_EMOJI_SHORTCODE = /^[A-Za-z0-9_]{2,128}$/
+// custom_emojis.category: at most this many code points within EMOJI_CATEGORY_BYTES UTF-8 bytes, with no C0 control
+// or DEL. The CHECK bounds the stored bytes only: SQLite cannot judge UTF-8 well-formedness, so presentedCategory
+// judges the decoded value again.
+export const EMOJI_CATEGORY_LENGTH = 64
+export const EMOJI_CATEGORY_BYTES = 256
+// Enabled local emoji at most (RES-3: the whole list is one answer); disabled ones are not counted.
+export const MAX_ENABLED_EMOJIS = 1000
+
+// eslint-disable-next-line no-control-regex
+const CATEGORY_CONTROL = /[\u0000-\u001f\u007f]/
+
+// Whether `text`, as decoded, is a category that may be stored and presented: well-formed, 1 to EMOJI_CATEGORY_LENGTH
+// code points within EMOJI_CATEGORY_BYTES UTF-8 bytes, and no C0 control or DEL.
+export function isEmojiCategory(text: string): boolean {
+	if (text === '' || text.length > EMOJI_CATEGORY_BYTES || !text.isWellFormed() || CATEGORY_CONTROL.test(text)) {
+		return false
+	}
+	let points = 0
+	for (const _ of text) {
+		if (++points > EMOJI_CATEGORY_LENGTH) {
+			return false
+		}
+	}
+	return ENCODER.encode(text).length <= EMOJI_CATEGORY_BYTES
+}
+
+// A category from the admin API: made well-formed (workerd stores a bound lone surrogate as its three-byte encoding,
+// which no check of the stored bytes would see), trimmed, then judged. null for an empty value (no category);
+// undefined when it is refused.
+export function storedEmojiCategory(raw: string): string | null | undefined {
+	const text = raw.toWellFormed().trim()
+	if (text === '') {
+		return null
+	}
+	return isEmojiCategory(text) ? text : undefined
+}
+
+// A stored category as it is presented: the value when isEmojiCategory holds for it as decoded, else none (an
+// imported value of malformed UTF-8 can pass the CHECK and decode to more, or to replacement characters).
+export function presentedCategory(stored: string | null): string | null {
+	return stored !== null && isEmojiCategory(stored) ? stored : null
+}
