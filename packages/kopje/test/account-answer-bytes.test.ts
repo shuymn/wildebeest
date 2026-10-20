@@ -404,8 +404,8 @@ describe('answers of many accounts are bounded in bytes (RES-3)', () => {
 		const answer = await membersAnswer(t, `/api/v1/lists/${LIST}/accounts?limit=0`)
 		expect(answer.ids).toEqual([...ids].reverse())
 		expect(answer.next).toBeNull()
-		// 2,083 bytes a member.
-		expect(answer.bytes).toBeLessThan(ANSWER_BYTES / 4)
+		// 2,101 bytes a member.
+		expect(answer.bytes).toBeLessThan((ANSWER_BYTES * 26) / 100)
 	}, 60_000)
 
 	it(`cuts ${MAX_LIST_MEMBERS_ANSWERED} members at Misskey's limits and links next to the rest`, async () => {

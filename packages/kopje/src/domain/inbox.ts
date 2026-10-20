@@ -169,6 +169,8 @@ export type RemoteActorInput = {
 	headerUrl: string | null
 	locked: boolean
 	discoverable: boolean | null
+	// The actor's toot:indexable, true only when the document says so (ProcessAccountService: `@json['indexable']`).
+	indexable: boolean
 	inboxUrl: string | null
 	sharedInboxUrl: string | null
 	published: string | null
@@ -462,6 +464,7 @@ export function upsertRemoteActor(
 		actor.headerUrl,
 		actor.locked ? 1 : 0,
 		actor.discoverable === null ? null : actor.discoverable ? 1 : 0,
+		actor.indexable ? 1 : 0,
 		actor.inboxUrl,
 		actor.sharedInboxUrl,
 		actor.raw,
@@ -477,13 +480,13 @@ export function upsertRemoteActor(
 		(id) =>
 			db.run(
 				`INSERT INTO accounts (id, uri, username, domain, actor_type, display_name, note, url, avatar_url, header_url,
-					locked, discoverable, inbox_url, shared_inbox_url, raw, fetched_at, search_text, created_at,
+					locked, discoverable, indexable, inbox_url, shared_inbox_url, raw, fetched_at, search_text, created_at,
 					confirmed_username, emojis)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 				ON CONFLICT (uri) DO UPDATE SET username = excluded.username, actor_type = excluded.actor_type,
 					display_name = excluded.display_name, note = excluded.note, url = excluded.url,
 					avatar_url = excluded.avatar_url, header_url = excluded.header_url, locked = excluded.locked,
-					discoverable = excluded.discoverable, inbox_url = excluded.inbox_url,
+					discoverable = excluded.discoverable, indexable = excluded.indexable, inbox_url = excluded.inbox_url,
 					shared_inbox_url = excluded.shared_inbox_url, raw = excluded.raw, fetched_at = excluded.fetched_at,
 					search_text = excluded.search_text, domain = excluded.domain,
 					confirmed_username = excluded.confirmed_username, emojis = excluded.emojis,

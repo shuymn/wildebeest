@@ -754,3 +754,33 @@ export function settingProjectionSql(name: StoredSettingName, column: string): s
 export function isoTimeSql(column: string): string {
 	return `(${STAMP.projection(column)})`
 }
+
+// ---- Profile credentials: migration 0058_profile_credentials
+
+// accounts.indexable as stored: NULL (a remote account not stored again since 0058), or the integer 0 or 1. True when
+// `column` holds anything else: the type first (an integer has no bytes to bound or NUL to hold), then the value.
+export function indexablePastBoundSql(column: string): string {
+	return `CASE WHEN ${column} IS NULL THEN 0
+	WHEN typeof(${column}) <> 'integer' THEN 1
+	WHEN ${column} NOT IN (0, 1) THEN 1
+	ELSE 0 END`
+}
+
+// Migration 0058_profile_credentials after its header (test/migrations.test.ts compares them): accounts.indexable,
+// added without a default or CHECK so no row is read, with triggers that refuse a write where indexablePastBoundSql
+// holds; and the unlock acceptance cursor (domain/unlock-accepts.ts), whose CHECK reads the local accounts only.
+export function profileBoundsMigrationSql(): string {
+	return `${[
+		'ALTER TABLE accounts ADD COLUMN indexable INTEGER;',
+		`ALTER TABLE local_accounts ADD COLUMN accept_requests_after INTEGER
+  CONSTRAINT accept_requests_after_cursor CHECK (accept_requests_after IS NULL
+    OR (typeof(accept_requests_after) = 'integer' AND accept_requests_after >= 0));`,
+		...boundTriggers(
+			'accounts_indexable',
+			'accounts',
+			'indexable',
+			indexablePastBoundSql('NEW.indexable'),
+			'accounts: indexable past its stored bound'
+		),
+	].join('\n\n')}\n`
+}

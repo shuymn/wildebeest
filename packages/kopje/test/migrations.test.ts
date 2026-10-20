@@ -54,6 +54,7 @@ import {
 	MAX_TREND_REVIEWS,
 	MAX_TREND_STATUSES,
 	MAX_TREND_TAGS,
+	profileBoundsMigrationSql,
 	REACTION_NAME_BYTES,
 	storedBoundsMigrationSql,
 	storedInstanceSetting,
@@ -6977,6 +6978,84 @@ describe('0057_trends', () => {
 				/SEARCH trend_statuses USING COVERING INDEX trend_statuses_account \(account_id=\?\)/
 			)
 			expect(plan('SELECT count(*) FROM tag_trend_reviews').join('\n')).toMatch(/SCAN tag_trend_reviews/)
+		})
+	})
+})
+
+describe('0058_profile_credentials', () => {
+	const NAME = '0058_profile_credentials'
+	const at = NAMES.indexOf(NAME)
+
+	it("holds profileBoundsMigrationSql's output after its header", () => {
+		const sql = MIGRATIONS[at]?.sql ?? ''
+		const end = sql.indexOf('\n\n')
+		expect(
+			sql
+				.slice(0, end)
+				.split('\n')
+				.every((line) => line.startsWith('--'))
+		).toBe(true)
+		expect(sql.slice(end + 2)).toBe(profileBoundsMigrationSql())
+	})
+
+	it('keeps rows as they were, then bounds indexable as stored and the cursor', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+			sql.exec(
+				`INSERT INTO accounts (id, uri, username) VALUES ('100000000000000001', 'https://kopje.test/ap/users/a', 'a'),
+					('100000000000000002', 'https://kopje.test/ap/users/b', 'b')`
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES ('100000000000000001', 'a@example.com', X'00', X'00', 'k')"
+			)
+			await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()
+			expect(sql.exec('SELECT id, indexable FROM accounts ORDER BY id').toArray()).toEqual([
+				{ id: '100000000000000001', indexable: null },
+				{ id: '100000000000000002', indexable: null },
+			])
+			expect(sql.exec('SELECT accept_requests_after FROM local_accounts').toArray()).toEqual([
+				{ accept_requests_after: null },
+			])
+			const setIndexable = (value: SqlStorageValue) =>
+				sql.exec("UPDATE accounts SET indexable = ? WHERE id = '100000000000000002'", value)
+			const insert = (value: SqlStorageValue) =>
+				sql.exec(
+					"INSERT INTO accounts (id, uri, username, indexable) VALUES ('100000000000000003', 'https://kopje.test/ap/users/c', 'c', ?)",
+					value
+				)
+			for (const value of [0, 1, null]) {
+				setIndexable(value)
+			}
+			// INTEGER affinity stores '1' as 1 (and '1' with a NUL after it, read up to the NUL), which is the stored value
+			// the trigger judges.
+			for (const value of ['1', '1\u0000']) {
+				setIndexable(value)
+				expect(
+					sql.exec("SELECT typeof(indexable) AS t, indexable FROM accounts WHERE id = '100000000000000002'").one()
+				).toEqual({ t: 'integer', indexable: 1 })
+			}
+			for (const value of ['yes', 1.5, 2, -1, new Uint8Array([1]).buffer, '\u00001']) {
+				expect(() => setIndexable(value), typeof value === 'string' ? JSON.stringify(value) : typeof value).toThrow(
+					/indexable past its stored bound/
+				)
+				expect(() => insert(value), typeof value === 'string' ? JSON.stringify(value) : typeof value).toThrow(
+					/indexable past its stored bound/
+				)
+			}
+			insert(1)
+			const setCursor = (value: SqlStorageValue) =>
+				sql.exec('UPDATE local_accounts SET accept_requests_after = ?', value)
+			for (const value of [0, null, '9007199254740993']) {
+				setCursor(value)
+			}
+			expect(sql.exec('SELECT CAST(accept_requests_after AS TEXT) AS c FROM local_accounts').one()).toEqual({
+				c: '9007199254740993',
+			})
+			for (const value of [-1, 'x', 1.5]) {
+				expect(() => setCursor(value), String(value)).toThrow(/accept_requests_after_cursor/)
+			}
 		})
 	})
 })

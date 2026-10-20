@@ -54,6 +54,9 @@ export type Account = {
 	locked: boolean
 	bot: boolean
 	discoverable: boolean | null
+	// Account#indexable: whether the account's public posts may be indexed for search. Kopje's status search reads
+	// only the viewer's own library (search.ts), so it changes no result here; it is stored, presented and federated.
+	indexable: boolean
 	group: boolean
 	created_at: string
 	note: string
@@ -100,6 +103,8 @@ export type CredentialAccount = Account & {
 		fields: (FieldSource & { verified_at: null })[]
 		follow_requests_count: number
 		hide_collections: boolean
+		discoverable: boolean | null
+		indexable: boolean
 		attribution_domains: string[]
 		quote_policy: QuotePolicyName
 	}
@@ -142,6 +147,8 @@ export type AccountRow = {
 	header_url: string | null
 	locked: number
 	discoverable: number | null
+	// NULL for a remote account not stored again since migration 0058.
+	indexable: number | null
 	followers_count: number
 	following_count: number
 	statuses_count: number
@@ -210,6 +217,7 @@ export const ACCOUNT_COLUMN_MAP = {
 	header_url: 'a.header_url',
 	locked: 'a.locked',
 	discoverable: 'a.discoverable',
+	indexable: 'a.indexable',
 	followers_count: 'a.followers_count',
 	following_count: 'a.following_count',
 	statuses_count: 'a.statuses_count',
@@ -373,7 +381,7 @@ export function acctOf(row: { username: string; domain: string | null }): string
 
 // An unavailable account (R1: suspended, or a remote account whose deletion has started, as the row's query read it
 // live) is shown redacted, as Mastodon's REST::AccountSerializer shows an unavailable one: no display name, note,
-// fields or emojis, the default avatar and header, locked, bot and discoverable false, and `suspended: true`.
+// fields or emojis, the default avatar and header, locked, bot, discoverable and indexable false, and `suspended: true`.
 function presentAccount(row: AccountRow, { origin }: Present): Account {
 	const suspended = row.available === 0
 	// Stored URLs are shown only when they are http(s) (httpUrl); anything else reads as unset.
@@ -388,6 +396,7 @@ function presentAccount(row: AccountRow, { origin }: Present): Account {
 		locked: !suspended && row.locked === 1,
 		bot: !suspended && (row.actor_type === 'Service' || row.actor_type === 'Application'),
 		discoverable: suspended ? false : row.discoverable === null ? null : row.discoverable === 1,
+		indexable: !suspended && row.indexable === 1,
 		group: row.actor_type === 'Group',
 		created_at: row.created_at,
 		note: suspended ? '' : row.note,
@@ -570,6 +579,8 @@ export function credentialAccount(db: Db, accountId: string, present: Present): 
 			fields: fieldSources(row.local_fields).map((field) => ({ ...field, verified_at: null })),
 			follow_requests_count: local.follow_requests_count,
 			hide_collections: row.hide_collections === 1,
+			discoverable: row.discoverable === null ? null : row.discoverable === 1,
+			indexable: row.indexable === 1,
 			attribution_domains: JSON.parse(local.attribution_domains) as string[],
 			quote_policy: local.default_quote_policy,
 		},
@@ -643,6 +654,7 @@ export type CredentialChanges = {
 	locked?: boolean
 	bot?: boolean
 	discoverable?: boolean
+	indexable?: boolean
 	hideCollections?: boolean
 	privacy?: Visibility
 	sensitive?: boolean
@@ -682,12 +694,13 @@ export const updateCredentials = userWriteOperation<
 	// surrogate bytes would come back as three U+FFFD for each, past its bound.
 	db.run(
 		`UPDATE accounts SET display_name = COALESCE(?, display_name), note = COALESCE(?, note), locked = COALESCE(?, locked),
-			discoverable = COALESCE(?, discoverable), actor_type = ?, search_text = ?
+			discoverable = COALESCE(?, discoverable), indexable = COALESCE(?, indexable), actor_type = ?, search_text = ?
 		WHERE id = ?`,
 		changedName,
 		changes.note === undefined ? null : plainTextToHtml(storedText(changes.note)),
 		bit(changes.locked),
 		bit(changes.discoverable),
+		bit(changes.indexable),
 		actorType,
 		accountSearchText(current.username, null, displayName),
 		accountId

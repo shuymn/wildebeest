@@ -125,6 +125,7 @@ export function credentialChanges(p: Params): { changes: CredentialChanges; prob
 	changes.locked = parseBoolean(p.get('locked'))
 	changes.bot = parseBoolean(p.get('bot'))
 	changes.discoverable = parseBoolean(p.get('discoverable'))
+	changes.indexable = parseBoolean(p.get('indexable'))
 	changes.hideCollections = parseBoolean(p.get('hide_collections'))
 	changes.sensitive = parseBoolean(p.get('source[sensitive]'))
 	return { changes, problems }

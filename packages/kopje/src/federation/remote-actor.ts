@@ -149,6 +149,7 @@ export async function remoteActorInput(actor: Actor, document: unknown): Promise
 		headerUrl: await imageUrl(() => images.getImage(options)),
 		locked: actor.manuallyApprovesFollowers === true,
 		discoverable: actor.discoverable,
+		indexable: actor.indexable === true,
 		inboxUrl,
 		sharedInboxUrl: sharedInboxUrl !== null && sharedInboxUrl.length <= INBOX_URL_LIMIT ? sharedInboxUrl : null,
 		// A Temporal.Instant, whose type the polyfill's globals leave unresolved for the linter.
