@@ -38,6 +38,7 @@ import {
 import { ACTIVITY_ID_LIMIT, withinIdentityBound } from '../src/platform/identity-bounds'
 import { StoreUnavailableError, toStoreUnavailable } from '../src/platform/store-errors'
 import {
+	ANNOUNCEMENT_TEXT_BYTES,
 	EMOJI_CATEGORY_BYTES,
 	EMOJI_CATEGORY_LENGTH,
 	emojiBoundsMigrationSql,
@@ -46,7 +47,11 @@ import {
 	instanceBoundsMigrationSql,
 	type InstanceSettingName,
 	LOCAL_EMOJI_SHORTCODE,
+	MAX_ANNOUNCEMENTS,
 	MAX_ENABLED_EMOJIS,
+	MAX_LIVE_ANNOUNCEMENTS,
+	MAX_REACTION_NAMES,
+	REACTION_NAME_BYTES,
 	storedBoundsMigrationSql,
 	storedInstanceSetting,
 } from '../src/platform/stored-bounds'
@@ -60,6 +65,9 @@ const SCHEMA_TABLES = [
 	'account_pins',
 	'accounts',
 	'admin_actions',
+	'announcement_dismissals',
+	'announcement_reactions',
+	'announcements',
 	'blocks',
 	'bookmarks',
 	'collection_syncs',
@@ -6294,6 +6302,348 @@ describe('0055_local_custom_emojis', () => {
 			// A write that leaves `disabled` as it is, or keeps an enabled emoji enabled, is not judged.
 			sql.exec("UPDATE custom_emojis SET disabled = 0 WHERE shortcode = 'e2'")
 			expect(sql.exec('SELECT count(*) AS n FROM custom_emojis WHERE disabled = 0').one().n).toBe(1000)
+		})
+	})
+})
+
+describe('0056_announcements', () => {
+	const NAME = '0056_announcements'
+	const at = NAMES.indexOf(NAME)
+	const ALICE = '100000000000000001'
+	const BOB = '100000000000000002'
+	const T = '2026-10-12T00:00:00.000Z'
+	const JOURNAL_OBJECTS = [
+		'stream_notification_inserted',
+		'stream_status_inserted',
+		'stream_status_edited',
+		'stream_conversation_changed',
+		'stream_events_conversation',
+	]
+	const objects = (sql: SqlStorage) =>
+		sql
+			.exec<{ type: string; name: string; tbl_name: string; sql: string }>(
+				`SELECT type, name, tbl_name, sql FROM sqlite_master WHERE name IN (${JOURNAL_OBJECTS.map(() => '?').join(', ')})
+				ORDER BY name`,
+				...JOURNAL_OBJECTS
+			)
+			.toArray()
+
+	it('repeats the bounds of stored-bounds.ts in its literals', () => {
+		const sql = MIGRATIONS[at]?.sql ?? ''
+		expect([ANNOUNCEMENT_TEXT_BYTES, MAX_ANNOUNCEMENTS, MAX_LIVE_ANNOUNCEMENTS, REACTION_NAME_BYTES]).toEqual([
+			10_000, 1000, 16, 128,
+		])
+		expect(MAX_REACTION_NAMES).toBe(8)
+		expect(sql).toContain(`length(CAST(text AS BLOB)) BETWEEN 1 AND ${ANNOUNCEMENT_TEXT_BYTES}`)
+		expect(sql).toContain(`(SELECT count(*) FROM announcements) >= ${MAX_ANNOUNCEMENTS}`)
+		expect(sql.match(new RegExp(`IS NOT NULL\\) >= ${MAX_LIVE_ANNOUNCEMENTS}\\n`, 'g'))).toHaveLength(2)
+		expect(sql).toContain(`length(CAST(name AS BLOB)) BETWEEN 1 AND ${REACTION_NAME_BYTES}`)
+		expect(sql).toContain(`WHERE announcement_id = NEW.announcement_id) >= ${MAX_REACTION_NAMES}`)
+		// workerd refuses a LIKE or GLOB pattern over 50 bytes.
+		for (const [, pattern] of sql.matchAll(/GLOB\s+'([^']*)'/g)) {
+			expect(new TextEncoder().encode(pattern).length).toBeLessThanOrEqual(50)
+		}
+	})
+
+	it('rebuilds the journal with its rows, ids, cursor, triggers and index, and journals as before', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+			const before = objects(sql)
+			expect(before.map((o) => o.name)).toEqual([...JOURNAL_OBJECTS].sort())
+			sql.exec(
+				`INSERT INTO stream_events (id, kind, subject, created_at) VALUES
+					(7, 'status', '1', ?1), (9, 'conversation', ?2, ?1), (4103, 'notification', '5', ?1)`,
+				T,
+				ALICE
+			)
+			sql.exec('UPDATE stream_cursor SET event_id = 9, account_id = ? WHERE id = 1', ALICE)
+			const rows = sql.exec('SELECT * FROM stream_events ORDER BY id').toArray()
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+			expect(sql.exec('SELECT * FROM stream_events ORDER BY id').toArray()).toEqual(rows)
+			expect(sql.exec('SELECT event_id, account_id FROM stream_cursor').toArray()).toEqual([
+				{ event_id: 9, account_id: ALICE },
+			])
+			// Byte for byte, as 0032_streaming_lists and 0035_streaming_public made them.
+			expect(objects(sql)).toEqual(before)
+			// The new kinds; an unknown one is refused; the next id follows the highest.
+			sql.exec('DELETE FROM stream_events WHERE id = 4103')
+			for (const kind of ['announcement', 'announcement_reaction']) {
+				sql.exec('INSERT INTO stream_events (kind, subject, created_at) VALUES (?, ?, ?)', kind, '1', T)
+			}
+			expect(() =>
+				sql.exec("INSERT INTO stream_events (kind, subject, created_at) VALUES ('announcement.delete', '1', ?)", T)
+			).toThrow(/CHECK constraint failed/)
+			// Statuses, edits and notifications still journal for a `user` listener.
+			sql.exec(
+				`INSERT INTO accounts (id, uri, username) VALUES (?, 'https://kopje.test/ap/users/alice', 'alice')`,
+				ALICE
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'a@example.com', X'00', X'00', 'k')",
+				ALICE
+			)
+			sql.exec("INSERT INTO stream_subscriptions (account_id, stream_key, sockets) VALUES (?, 'user', 1)", ALICE)
+			sql.exec(
+				`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+				VALUES ('300000000000000001', 'https://kopje.test/ap/o/1', ?, 'public', '<p>x</p>', ?)`,
+				ALICE,
+				T
+			)
+			sql.exec("UPDATE statuses SET edited_at = '2026-10-12T01:00:00.000Z'")
+			sql.exec("INSERT INTO notifications (account_id, type, from_account_id) VALUES (?, 'mention', ?)", ALICE, ALICE)
+			expect(
+				sql
+					.exec('SELECT id, kind FROM stream_events WHERE id > 9 ORDER BY id')
+					.toArray()
+					.map((r) => r.kind)
+			).toEqual(['announcement', 'announcement_reaction', 'status', 'edit', 'notification'])
+			expect(sql.exec<{ id: number }>('SELECT min(id) AS id FROM stream_events WHERE id > 9').one().id).toBe(10)
+			expect(sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
+		})
+	})
+
+	// A migrated Store with two local accounts and an enabled custom emoji `blob` (id EMOJI).
+	const EMOJI = '300000000000000001'
+	async function migrated(state: DurableObjectState) {
+		const sql = state.storage.sql
+		await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()
+		for (const [id, name] of [
+			[ALICE, 'alice'],
+			[BOB, 'bob'],
+		] as const) {
+			sql.exec(
+				'INSERT INTO accounts (id, uri, username) VALUES (?, ?, ?)',
+				id,
+				`https://kopje.test/ap/users/${name}`,
+				name
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, ?, X'00', X'00', 'k')",
+				id,
+				`${name}@example.com`
+			)
+		}
+		sql.exec(
+			`INSERT INTO media_attachments (id, account_id, type, url, file_token, content_type, meta, processed)
+			VALUES (?, ?, 'image', 'https://kopje.test/media/t/full.png', 't', 'image/png',
+				'{"original":{"width":1,"height":1}}', 1)`,
+			EMOJI,
+			ALICE
+		)
+		sql.exec("INSERT INTO custom_emojis (id, shortcode, created_at) VALUES (?, 'blob', ?)", EMOJI, T)
+		return sql
+	}
+
+	const announcementId = (n: number) => String(200_000_000_000_000_000n + BigInt(n))
+
+	function inserter(sql: SqlStorage) {
+		let n = 0
+		return (values: Record<string, string | number | null> = {}) => {
+			const row = { id: announcementId(++n), text: 'hello', created_at: T, updated_at: T, ...values }
+			const columns = Object.keys(row)
+			sql.exec(
+				`INSERT INTO announcements (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`,
+				...Object.values(row)
+			)
+			return row.id
+		}
+	}
+
+	it('holds the text, times, range, flags and publication at their bounds', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = await migrated(state)
+			const insert = inserter(sql)
+			const remove = (id: string) => sql.exec('DELETE FROM announcements WHERE id = ?', id)
+			// Text: 10,000 bytes (one- and four-byte characters), 10,001 refused, NUL anywhere, ASCII blank.
+			for (const text of ['x'.repeat(10_000), '\u{1F600}'.repeat(2500), ' a ', '　']) {
+				remove(insert({ text }))
+			}
+			for (const text of [
+				'x'.repeat(10_001),
+				'\u{1F600}'.repeat(2500) + 'x',
+				'a\u0000',
+				'\u0000a',
+				'',
+				' \t\n\r\v\f',
+			]) {
+				expect(() => insert({ text })).toThrow(/announcement_text_within_10000_bytes/)
+			}
+			expect(() =>
+				sql.exec(
+					"INSERT INTO announcements (id, text, created_at, updated_at) VALUES (?, X'41', ?, ?)",
+					announcementId(0),
+					T,
+					T
+				)
+			).toThrow(/announcement_text_within_10000_bytes/)
+			// Times: written by strftime's own form, fractions .001 and .999, NULL where nullable.
+			const times = /announcement_times_iso/
+			for (const column of ['starts_at', 'ends_at', 'published_at', 'scheduled_at', 'created_at', 'updated_at']) {
+				const pair = column === 'starts_at' || column === 'ends_at'
+				const fill = (value: string | null) => (pair ? { starts_at: value, ends_at: value } : { [column]: value })
+				for (const value of ['2026-10-12T23:59:59.999Z', '2026-02-28T00:00:00.001Z']) {
+					remove(insert(fill(value)))
+				}
+				if (column !== 'created_at' && column !== 'updated_at') {
+					remove(insert(fill(null)))
+				} else {
+					expect(() => insert(fill(null))).toThrow(/NOT NULL/)
+				}
+				for (const value of [
+					'2026-02-30T00:00:00.000Z',
+					'2026-10-12T24:00:00.000Z',
+					'2026-10-12T24:01:00.000Z',
+					'2026-10-12T00:00:00.00Z',
+					'2026-10-12T00:00:00.000+00:00',
+					'2026-10-12 00:00:00.000Z',
+					'not a time at all, 24 b.',
+				]) {
+					expect(() => insert(fill(value)), `${column} ${value}`).toThrow(times)
+				}
+			}
+			// An UPDATE is judged too.
+			const kept = insert({ starts_at: T, ends_at: T })
+			sql.exec("UPDATE announcements SET ends_at = '2026-10-13T00:00:00.000Z', updated_at = ? WHERE id = ?", T, kept)
+			expect(() =>
+				sql.exec("UPDATE announcements SET updated_at = '2026-10-12T24:00:00.000Z' WHERE id = ?", kept)
+			).toThrow(times)
+			// Both ends or neither, the end not before the start.
+			const range = /announcement_range/
+			expect(() => insert({ starts_at: T })).toThrow(range)
+			expect(() => insert({ ends_at: T })).toThrow(range)
+			expect(() => insert({ starts_at: '2026-10-12T00:00:00.001Z', ends_at: T })).toThrow(range)
+			// Flags and publication: a published row has a time and no schedule.
+			expect(() => insert({ all_day: 2 })).toThrow(/announcement_flags/)
+			expect(() => insert({ published: 1 })).toThrow(/announcement_publication/)
+			expect(() => insert({ published: 1, published_at: T, scheduled_at: T })).toThrow(/announcement_publication/)
+			remove(insert({ published: 1, published_at: T }))
+			remove(insert({ scheduled_at: T }))
+			// Ids are 18-digit snowflakes and never change; so is the creation time.
+			for (const id of ['1', `${announcementId(1)}0`, announcementId(1).replace('2', 'x')]) {
+				expect(() => insert({ id })).toThrow(/announcement_id_is_a_snowflake/)
+			}
+			const immutable = /announcements: an announcement's id and creation time never change/
+			expect(() => sql.exec('UPDATE announcements SET id = ? WHERE id = ?', announcementId(999), kept)).toThrow(
+				immutable
+			)
+			expect(() =>
+				sql.exec("UPDATE announcements SET created_at = '2026-10-13T00:00:00.000Z' WHERE id = ?", kept)
+			).toThrow(immutable)
+		})
+	})
+
+	it('holds 1,000 announcements, 16 of them published or scheduled, on every write that makes one live', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = await migrated(state)
+			const insert = inserter(sql)
+			const live = /announcements: more than 16 published or scheduled/
+			const published = { published: 1, published_at: T }
+			for (let i = 0; i < 8; i++) {
+				insert(published)
+				insert({ scheduled_at: T })
+			}
+			expect(() => insert(published)).toThrow(live)
+			expect(() => insert({ scheduled_at: T })).toThrow(live)
+			const draft = insert()
+			expect(() => sql.exec('UPDATE announcements SET published = 1, published_at = ? WHERE id = ?', T, draft)).toThrow(
+				live
+			)
+			expect(() => sql.exec('UPDATE announcements SET scheduled_at = ? WHERE id = ?', T, draft)).toThrow(live)
+			// Publishing a scheduled row makes nothing newly live, so it is not judged.
+			const scheduled = sql
+				.exec<{ id: string }>('SELECT id FROM announcements WHERE scheduled_at IS NOT NULL LIMIT 1')
+				.one().id
+			sql.exec(
+				'UPDATE announcements SET published = 1, published_at = scheduled_at, scheduled_at = NULL WHERE id = ?',
+				scheduled
+			)
+			// Unpublishing one frees a place.
+			sql.exec('UPDATE announcements SET published = 0 WHERE id = ?', scheduled)
+			sql.exec('UPDATE announcements SET scheduled_at = ? WHERE id = ?', T, draft)
+			// 1,000 in all.
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+				INSERT INTO announcements (id, text, created_at, updated_at)
+				SELECT CAST(210000000000000000 + i AS TEXT), 'x', ?2, ?2 FROM n`,
+				MAX_ANNOUNCEMENTS - 1 - 17,
+				T
+			)
+			insert()
+			expect(sql.exec<{ n: number }>('SELECT count(*) AS n FROM announcements').one().n).toBe(MAX_ANNOUNCEMENTS)
+			expect(() => insert()).toThrow(/announcements: more than 1000/)
+		})
+	})
+
+	it('holds reaction names at their bounds, 8 per announcement, and custom emoji by their shortcode', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = await migrated(state)
+			const announcement = inserter(sql)({ published: 1, published_at: T })
+			const react = (name: string, account = ALICE, emoji: string | null = null) =>
+				sql.exec(
+					'INSERT INTO announcement_reactions (announcement_id, account_id, name, custom_emoji_id) VALUES (?, ?, ?, ?)',
+					announcement,
+					account,
+					name,
+					emoji
+				)
+			const unreact = (name: string) => sql.exec('DELETE FROM announcement_reactions WHERE name = ?', name)
+			const check = /announcement_reaction_name_within_128_bytes/
+			// 128 bytes: 32 four-byte characters; 129 refused, NUL, U+0001, DEL, ASCII without a custom emoji.
+			for (const name of ['\u{1F600}'.repeat(32), '👍', 'é']) {
+				react(name)
+				unreact(name)
+			}
+			for (const name of [
+				'\u{1F600}'.repeat(32) + 'x',
+				'👍\u0000',
+				'\u0000👍',
+				'👍\u0001',
+				'👍\u007f',
+				'a',
+				'',
+				'blob',
+			]) {
+				expect(() => react(name), JSON.stringify(name)).toThrow(check)
+			}
+			// A custom emoji's reaction is its ASCII shortcode, and the emoji's.
+			react('blob', ALICE, EMOJI)
+			// (The trigger runs before the CHECK, which backs it up.)
+			expect(() => react('blob👍', BOB, EMOJI)).toThrow(/a custom emoji reaction is named by its shortcode/)
+			expect(() => react('blab', BOB, EMOJI)).toThrow(/a custom emoji reaction is named by its shortcode/)
+			expect(() => react('blob', BOB, '399999999999999999')).toThrow(/shortcode|FOREIGN KEY/)
+			// One per (name, account); never changed.
+			expect(() => react('blob', ALICE, EMOJI)).toThrow(/UNIQUE constraint failed/)
+			expect(() => sql.exec("UPDATE announcement_reactions SET name = '👎'")).toThrow(
+				/a reaction is added or removed, never changed/
+			)
+			// 8 names: the ninth refused, an existing one still added.
+			for (const name of ['1', '2', '3', '4', '5', '6', '7'].map((d) => `${d}⃣`)) {
+				react(name)
+			}
+			expect(() => react('👍')).toThrow(/announcement_reactions: more than 8 names for one announcement/)
+			react('1⃣', BOB)
+			react('blob', BOB, EMOJI)
+			// The rows go with the announcement or the account; dismissals are one per pair.
+			sql.exec('INSERT INTO announcement_dismissals (account_id, announcement_id) VALUES (?, ?)', ALICE, announcement)
+			expect(() =>
+				sql.exec('INSERT INTO announcement_dismissals (account_id, announcement_id) VALUES (?, ?)', ALICE, announcement)
+			).toThrow(/UNIQUE|PRIMARY KEY/)
+			expect(() =>
+				sql.exec(
+					'INSERT INTO announcement_dismissals (account_id, announcement_id) VALUES (?, ?)',
+					ALICE,
+					announcementId(9)
+				)
+			).toThrow(/FOREIGN KEY/)
+			sql.exec('DELETE FROM announcements')
+			expect(sql.exec<{ n: number }>('SELECT count(*) AS n FROM announcement_reactions').one().n).toBe(0)
+			expect(sql.exec<{ n: number }>('SELECT count(*) AS n FROM announcement_dismissals').one().n).toBe(0)
+			expect(sql.exec('PRAGMA foreign_key_check').toArray()).toEqual([])
 		})
 	})
 })
