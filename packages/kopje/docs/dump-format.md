@@ -145,7 +145,7 @@ media-rebuild`, which a restore runs). A `shortcode` is 2 to 128 ASCII character
 emoji; `category` is NULL or 1 to 256 bytes with no NUL, no C0 control and no DEL, and at most 64 SQLite characters (a
 stored-bytes bound: a value that is not well-formed UTF-8 is judged again as decoded when it is presented, and left
 out if it does not pass); `visible_in_picker` and `disabled` are 0 or 1; `created_at` is
-`YYYY-MM-DDTHH:MM:SS.sssZ`. At most 1,000 rows have `disabled` 0. The table comes after `media_attachments`. A chunk
+`YYYY-MM-DDTHH:MM:SS.sssZ` with an hour of 00 to 23. At most 1,000 rows have `disabled` 0. The table comes after `media_attachments`. A chunk
 past these fails with the CHECK's name (`custom_emoji_id_is_a_snowflake`, `custom_emoji_shortcode_2_to_128_ascii`,
 `custom_emoji_category_within_256_bytes`, `custom_emoji_flags`, `custom_emoji_created_at_iso`), `custom_emojis: the
 image is not a kept local upload within the emoji limits`, `custom_emojis: more than 1000 enabled` or `UNIQUE

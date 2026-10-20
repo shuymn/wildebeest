@@ -39,9 +39,10 @@ CREATE TABLE custom_emojis (
     AND length(category) <= 64
     AND category NOT GLOB ('*[' || char(1) || '-' || char(31) || char(127) || ']*'))),
   CONSTRAINT custom_emoji_flags CHECK (visible_in_picker IN (0, 1) AND disabled IN (0, 1)),
-  -- a time as Kopje writes one (workerd refuses a long GLOB pattern, so strftime judges it: it rewrites anything else)
+  -- a time as Kopje writes one (workerd refuses a long GLOB pattern, so strftime judges it: it rewrites anything else
+  -- but hour 24, which it keeps and an ISO 8601 instant parser such as Temporal's refuses, so the hour is 00 to 23)
   CONSTRAINT custom_emoji_created_at_iso CHECK (typeof(created_at) = 'text' AND length(CAST(created_at AS BLOB)) = 24
-    AND strftime('%Y-%m-%dT%H:%M:%fZ', created_at) IS created_at)
+    AND strftime('%Y-%m-%dT%H:%M:%fZ', created_at) IS created_at AND substr(created_at, 12, 2) BETWEEN '00' AND '23')
 );
 
 CREATE UNIQUE INDEX custom_emojis_enabled ON custom_emojis (shortcode) WHERE disabled = 0;

@@ -6195,7 +6195,17 @@ describe('0055_local_custom_emojis', () => {
 			>[]) {
 				expect(() => insert(kept, flags)).toThrow(/custom_emoji_flags|NOT NULL/)
 			}
-			for (const created_at of ['2026-10-12T00:00:00Z', '2026-10-12 00:00:00.000Z', '2026-13-12T00:00:00.000Z', 'x']) {
+			insert(kept, { created_at: '2026-10-12T23:59:59.999Z' })
+			remove(kept)
+			// strftime keeps hour 24, which Temporal.Instant.from (the actor's Emoji tags) refuses.
+			for (const created_at of [
+				'2026-10-12T00:00:00Z',
+				'2026-10-12 00:00:00.000Z',
+				'2026-13-12T00:00:00.000Z',
+				'2026-10-12T24:00:00.000Z',
+				'2026-10-12T24:01:00.000Z',
+				'x',
+			]) {
 				expect(() => insert(kept, { created_at })).toThrow(/custom_emoji_created_at_iso/)
 			}
 			// The image: a kept, complete, unattached local upload served as PNG or WebP within the recorded edges.
