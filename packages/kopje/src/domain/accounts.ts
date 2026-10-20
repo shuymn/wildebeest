@@ -242,6 +242,9 @@ export const ACCOUNT_COLUMN_MAP = {
 export { DISPLAY_NAME_LIMIT, PROFILE_URL_LIMIT, USERNAME_LIMIT, usernameSql }
 
 export const ACCOUNT_FROM = 'accounts a LEFT JOIN local_accounts l ON l.account_id = a.id'
+// ACCOUNT_FROM for a membership of ids: each account sought by its key (RES-7).
+const ACCOUNT_FROM_BY_ID =
+	'accounts a INDEXED BY sqlite_autoindex_accounts_1 LEFT JOIN local_accounts l ON l.account_id = a.id'
 
 // An answer of many accounts (a list's members and endorsements with limit=0, familiar followers) is within
 // ANSWER_BYTES, the JSON around the accounts reserved first (only its first account, bounded by RES-2, may stand
@@ -505,7 +508,7 @@ function presentAccountsById(db: Db, ids: readonly string[], present: Present): 
 	return new Map(
 		db
 			.all<AccountRow>(
-				`SELECT ${selectSql(ACCOUNT_COLUMN_MAP)} FROM ${ACCOUNT_FROM} WHERE a.id IN (SELECT value FROM json_each(?1))`,
+				`SELECT ${selectSql(ACCOUNT_COLUMN_MAP)} FROM ${ACCOUNT_FROM_BY_ID} WHERE a.id IN (SELECT value FROM json_each(?1))`,
 				JSON.stringify([...new Set(ids)])
 			)
 			.map((row) => [row.id, presentAccount(row, present)])
@@ -805,7 +808,7 @@ type RelationshipRow = {
 
 // The viewer's relationships with each account, as they stand at `now` (an expired mute no longer counts), with the
 // viewer's endorsement of it and the viewer's own private note on it (Account.endorsed_map and account_note_map), each
-// read through its pair key.
+// read through its pair key, each account sought by id from the requested ids (RES-7).
 export function relationshipsOf(db: Db, viewerId: string, accountIds: string[], now: number): Relationship[] {
 	const rows = db.all<RelationshipRow>(
 		`SELECT a.id,
@@ -817,7 +820,7 @@ export function relationshipsOf(db: Db, viewerId: string, accountIds: string[], 
 			${domainBlocksSql('?1', 'a.id')} AS domain_blocking,
 			p.account_id IS NOT NULL AS endorsed, n.comment AS note
 		FROM json_each(?2) j
-		JOIN accounts a ON a.id = j.value
+		CROSS JOIN accounts a INDEXED BY sqlite_autoindex_accounts_1 ON a.id = j.value
 		LEFT JOIN follows fo ON fo.account_id = ?1 AND fo.target_account_id = a.id
 		LEFT JOIN follows fb ON fb.account_id = a.id AND fb.target_account_id = ?1
 		LEFT JOIN account_pins p ON p.account_id = ?1 AND p.target_account_id = a.id

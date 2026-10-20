@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
 import { type ApiHarness, bearer, form, json, registerApp, seedAccount, sql } from './api-helpers'
-import { appToken, scopedToken } from './read-helpers'
+import { NOW } from './app-helpers'
+import { appToken, plannedRun, remoteAccounts, scansOf, scopedToken } from './read-helpers'
 import {
 	act,
 	community,
@@ -13,8 +14,14 @@ import {
 	remoteFollows,
 	type User,
 } from './status-helpers'
-import { MAX_ACCOUNTS_BY_ID, MAX_NOTE_COMMENT } from '../src/domain/accounts'
+import {
+	getAccounts,
+	MAX_ACCOUNTS_BY_ID,
+	MAX_NOTE_COMMENT,
+	relationships as relationshipsOperation,
+} from '../src/domain/accounts'
 import { MAX_ENDORSEMENTS_ANSWERED, NOT_FOLLOWING } from '../src/domain/endorsements'
+import { sha256Hex } from '../src/security/tokens'
 
 // The account endpoints of Mastodon 4.5 that complete /api/v1/accounts: private notes, endorsements, removing a
 // follower, accounts by id, identity proofs and registration (closed), through the API.
@@ -431,4 +438,45 @@ describe('identity proofs and registration', () => {
 		expect(await register(await writeAppToken(h))).toEqual({ status: 403, body: { error: 'Forbidden' } })
 		expect(await sql(h.store, "SELECT id FROM accounts WHERE username = 'new'")).toEqual([])
 	})
+})
+
+describe('account batches with stale statistics (RES-7)', () => {
+	it('seeks each requested account by id, the accounts grown after ANALYZE', async () => {
+		const h = await community(['alice', 'bob'])
+		const { alice, bob } = h.users
+		const carol = await remoteAccount(h.store, 'carol')
+		await follow(h, alice, bob.id)
+		await act(h, alice, `/api/v1/accounts/${carol}/note`, { comment: 'known' })
+		await sql(h.store, 'ANALYZE')
+		const tokenHash = await sha256Hex(alice.token)
+		const requested = [bob.id, carol, alice.id, '999999999999999999']
+		const run = async () => ({
+			relationships: await plannedRun(h, /FROM json_each\(\?2\) j/, relationshipsOperation, {
+				credential: { tokenHash, scope: 'read:follows', now: NOW },
+				ids: requested,
+			}),
+			accounts: await plannedRun(h, /^SELECT .* FROM accounts a/s, getAccounts, {
+				ids: requested,
+				present: { origin: 'https://kopje.test' },
+			}),
+		})
+		const before = await run()
+		await remoteAccounts(h, 100, 200)
+		const after = await run()
+		expect(after.relationships.result).toEqual(before.relationships.result)
+		expect(after.accounts.result).toEqual(before.accounts.result)
+		expect((after.accounts.result as unknown[]).length).toBe(3)
+		for (const [name, { plans }] of Object.entries(after)) {
+			expect(plans, name).toHaveLength(1)
+			const { query, plan, rows } = plans[0]!
+			expect(
+				plan.filter((detail) =>
+					/^SEARCH a USING (COVERING )?INDEX sqlite_autoindex_accounts_1 \(id=\?\)$/.test(detail)
+				),
+				name
+			).toHaveLength(1)
+			expect(scansOf(query, plan, ['accounts']), name).toEqual([])
+			expect(rows, name).toBe(before[name as keyof typeof before].plans[0]!.rows)
+		}
+	}, 60_000)
 })
