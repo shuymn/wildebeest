@@ -25,12 +25,10 @@ export type EmojiImageProblem = 'image-too-large' | 'invalid-image'
 // Why `bytes`, read by the free info() as `info`, is not an emoji input: past EMOJI_IMAGE_LIMIT, not an input type by
 // signature, read as another type, without dimensions, or an edge past EMOJI_EDGE_LIMIT. null when it is one.
 export function emojiInputProblem(bytes: Uint8Array, info: ImageInfo): EmojiImageProblem | null {
-	if (bytes.length >= EMOJI_IMAGE_LIMIT) {
-		return 'image-too-large'
-	}
 	const type = sniffImageType(bytes)
-	if (type === null || !EMOJI_INPUT_TYPES.includes(type) || info.format !== type) {
-		return 'invalid-image'
+	const preflight = emojiInputSizeProblem(bytes.length, type)
+	if (preflight !== null || info.format !== type) {
+		return preflight ?? 'invalid-image'
 	}
 	if (!validEdge(info.width) || !validEdge(info.height)) {
 		return info.width === undefined || info.height === undefined ? 'invalid-image' : 'image-too-large'
@@ -59,8 +57,9 @@ export function emojiOutputProblem(image: Pick<ProcessedImage, 'full' | 'small'>
 	if (!EMOJI_SERVED_TYPES.includes(full.contentType) || small.contentType !== full.contentType) {
 		return 'invalid-image'
 	}
-	if (full.bytes.length >= EMOJI_IMAGE_LIMIT || small.bytes.length > EMOJI_PREVIEW_LIMIT) {
-		return 'image-too-large'
+	const sizes = emojiFilesProblem({ full: full.bytes.length, small: small.bytes.length })
+	if (sizes !== null) {
+		return sizes
 	}
 	return validEdge(full.width) && validEdge(full.height) ? null : 'image-too-large'
 }

@@ -190,8 +190,8 @@ type Lease = { holder: string; lease: (release: boolean) => Promise<RebuildLease
 // Why an emoji whose two files exist may not stay published, or null: its files' sizes past the emoji limits
 // (emoji-too-large); and, in a real run, its served image as it actually is, read within EMOJI_IMAGE_LIMIT bytes (the
 // range is the backstop of the size its head gave) and judged by the free info(): edges past EMOJI_EDGE_LIMIT, or a
-// type that is not the row's (emoji-actual). The trigger of 0055 holds only the recorded edges (meta.original), which an
-// import may misstate. Nothing is charged, rewritten or deleted; quota stops the call. A dry run checks sizes only.
+// type that is not the row's (emoji-actual). The trigger of 0055 holds only the recorded edges (meta.original), which
+// an import may misstate. Nothing is charged, rewritten or deleted; quota stops the call. A dry run checks sizes only.
 async function existingEmoji(
 	deps: RebuildDeps,
 	row: RebuildRow,

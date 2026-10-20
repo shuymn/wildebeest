@@ -51,8 +51,8 @@ describe('cutover import of a converted legacy export', () => {
 		expect(result.categories.statuses?.expected).toBeGreaterThan(5)
 	})
 
-	// Legacy has no custom emoji: a conversion writes no snapshot and no local emoji, and the check fails on any, by table,
-	// a boost's too.
+	// Legacy has no custom emoji: a conversion writes no snapshot and no local emoji, and the check fails on any, by
+	// table, a boost's too.
 	it('fails the check on a converted row holding an emoji snapshot, counting them by table', async () => {
 		const { h, expected } = await imported()
 		const { text: clean } = await dumpViaRpc(h.store)

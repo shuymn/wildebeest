@@ -384,31 +384,32 @@ describe('media rebuild authorization', () => {
 	})
 })
 
-describe('kopje-admin media-rebuild', () => {
-	async function cli(h: Awaited<ReturnType<typeof setup>>, argv: string[]) {
-		const out: string[] = []
-		const err: string[] = []
-		const fetch = async (input: string, init?: RequestInit) => {
-			const headers = new Headers(init?.headers)
-			headers.delete('CF-Access-Client-Id')
-			headers.delete('CF-Access-Client-Secret')
-			return h.as(serviceClaims(), new URL(input).pathname, { ...init, headers })
-		}
-		const code = await run({
-			argv,
-			env: {
-				KOPJE_ADMIN_URL: 'https://admin.kopje.test',
-				CF_ACCESS_CLIENT_ID: 'id',
-				CF_ACCESS_CLIENT_SECRET: 'secret',
-			},
-			io: memoryIO(),
-			stdout: { write: (text: string) => void out.push(text), isTTY: false },
-			stderr: { write: (text: string) => void err.push(text), isTTY: false },
-			fetch,
-		})
-		return { code, out: out.join(''), err: err.join('') }
+// kopje-admin through the admin app, as the service token.
+async function cli(h: Awaited<ReturnType<typeof setup>>, argv: string[]) {
+	const out: string[] = []
+	const err: string[] = []
+	const fetch = async (input: string, init?: RequestInit) => {
+		const headers = new Headers(init?.headers)
+		headers.delete('CF-Access-Client-Id')
+		headers.delete('CF-Access-Client-Secret')
+		return h.as(serviceClaims(), new URL(input).pathname, { ...init, headers })
 	}
+	const code = await run({
+		argv,
+		env: {
+			KOPJE_ADMIN_URL: 'https://admin.kopje.test',
+			CF_ACCESS_CLIENT_ID: 'id',
+			CF_ACCESS_CLIENT_SECRET: 'secret',
+		},
+		io: memoryIO(),
+		stdout: { write: (text: string) => void out.push(text), isTTY: false },
+		stderr: { write: (text: string) => void err.push(text), isTTY: false },
+		fetch,
+	})
+	return { code, out: out.join(''), err: err.join('') }
+}
 
+describe('kopje-admin media-rebuild', () => {
 	it('runs to the end and exits 0, or 3 when rows need a decision or it stopped', async () => {
 		const h = await setup()
 		for (let i = 0; i < MAX_BUILDS_PER_CALL + 1; i++) {
@@ -1063,8 +1064,7 @@ describe('media rebuild of custom emoji images', () => {
 		expect(await files(good)).toEqual([true, true])
 		expect(await transforms(h.store)).toBe(2)
 		expect(await sql(h.store, 'SELECT count(*) AS n FROM custom_emojis')).toEqual([{ n: 5 }])
-		const code = await runCli(h, ['media-rebuild'])
-		expect(code).toBe(3)
+		expect((await cli(h, ['media-rebuild'])).code).toBe(3)
 	})
 
 	it('dry-runs emoji rows by size and signature only: no Images call, charge, write or lease', async () => {
@@ -1079,25 +1079,4 @@ describe('media rebuild of custom emoji images', () => {
 		expect(await transforms(h.store)).toBe(0)
 		expect(await sql(h.store, "SELECT name FROM kopje_state WHERE name = 'media_rebuild_lease'")).toEqual([])
 	})
-
-	async function runCli(h: Awaited<ReturnType<typeof setup>>, argv: string[]): Promise<number> {
-		const fetch = async (input: string, init?: RequestInit) => {
-			const headers = new Headers(init?.headers)
-			headers.delete('CF-Access-Client-Id')
-			headers.delete('CF-Access-Client-Secret')
-			return h.as(serviceClaims(), new URL(input).pathname, { ...init, headers })
-		}
-		return run({
-			argv,
-			env: {
-				KOPJE_ADMIN_URL: 'https://admin.kopje.test',
-				CF_ACCESS_CLIENT_ID: 'id',
-				CF_ACCESS_CLIENT_SECRET: 'secret',
-			},
-			io: memoryIO(),
-			stdout: { write: () => {}, isTTY: false },
-			stderr: { write: () => {}, isTTY: false },
-			fetch,
-		})
-	}
 })

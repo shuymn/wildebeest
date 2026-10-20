@@ -172,12 +172,11 @@ export async function processImage(codec: ImageCodec, bytes: Uint8Array): Promis
 	if (type === null) {
 		return { ok: false, reason: 'unsupported' }
 	}
-	let info: ImageInfo
-	try {
-		info = await codec.info(bytes)
-	} catch (error) {
-		return failure(error)
+	const inspected = await inspectImage(codec, bytes)
+	if (!inspected.ok) {
+		return inspected
 	}
+	const { info } = inspected
 	// The service must read it as the type its signature says (an SVG or polyglot is refused).
 	if (info.format !== type || info.width === undefined || info.height === undefined) {
 		return { ok: false, reason: 'unsupported' }
