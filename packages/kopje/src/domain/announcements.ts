@@ -3,7 +3,16 @@ import { accessAdminRefusal } from './admin-authority'
 import { admit, ARRAY_ANSWER_BYTES, jsonBytes } from './answer-budget'
 import { announcementShownSql, availableSql } from './audience'
 import { tokenUserReadOperation, userWriteOperation } from './auth'
-import { type CustomEmoji, emojiHref, localEmojiSnapshot, MAX_LOCAL_EMOJI_NAMES, presentEmojis } from './custom-emojis'
+import {
+	type CustomEmoji,
+	emojiHref,
+	// A time as the CHECKs of 0056 accept it (24 bytes, hour 00 to 23, read back by Date as itself), which the Worker
+	// makes with parseScheduledAt and toISOString.
+	emojiInstant,
+	localEmojiSnapshot,
+	MAX_LOCAL_EMOJI_NAMES,
+	presentEmojis,
+} from './custom-emojis'
 import { allocateLocalId } from './ids'
 import { logAction, MODERATION_LOG_PRUNE } from './moderation-log'
 import { readOperation, writeOperation } from './operation'
@@ -614,16 +623,6 @@ function iso(ms: number): string {
 	return new Date(ms).toISOString()
 }
 
-// A time as the CHECK accepts it: 24 bytes, YYYY-MM-DDTHH:MM:SS.sssZ, read back by Date as itself. The Worker parses
-// what the admin sent (mastodon/statuses.ts parseScheduledAt) and normalizes it with toISOString first.
-export function isAnnouncementTime(value: string): boolean {
-	if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)) {
-		return false
-	}
-	const ms = Date.parse(value)
-	return Number.isFinite(ms) && iso(ms) === value
-}
-
 const TEXT_RULE = 'the text is 1 to 10,000 UTF-8 bytes, not blank, with no NUL'
 const TIMES_RULE = 'times are ISO 8601; starts and ends are both set or both unset, and the end is not before the start'
 
@@ -665,7 +664,7 @@ const LIVE_LIMIT = `at most ${MAX_LIVE_ANNOUNCEMENTS} announcements are publishe
 
 function rangeRefusal(startsAt: string | null, endsAt: string | null): AnnouncementRefusal | null {
 	const times = [startsAt, endsAt].filter((t): t is string => t !== null)
-	if (!times.every(isAnnouncementTime) || (startsAt === null) !== (endsAt === null)) {
+	if (!times.every(emojiInstant) || (startsAt === null) !== (endsAt === null)) {
 		return refusal('invalid-times', TIMES_RULE)
 	}
 	return startsAt !== null && endsAt !== null && endsAt < startsAt ? refusal('invalid-times', TIMES_RULE) : null
@@ -703,7 +702,7 @@ export const createAnnouncement = writeOperation<
 		return refusal('invalid-text', TEXT_RULE)
 	}
 	const ranged = rangeRefusal(input.startsAt, input.endsAt)
-	if (ranged !== null || (input.scheduledAt !== null && !isAnnouncementTime(input.scheduledAt))) {
+	if (ranged !== null || (input.scheduledAt !== null && !emojiInstant(input.scheduledAt))) {
 		return ranged ?? refusal('invalid-times', TIMES_RULE)
 	}
 	if ((db.first<{ n: number }>('SELECT count(*) AS n FROM announcements')?.n ?? 0) >= MAX_ANNOUNCEMENTS) {
@@ -769,7 +768,7 @@ export const updateAnnouncement = writeOperation<
 		return ranged
 	}
 	const scheduledAt = changes.scheduledAt === undefined ? row.scheduled_at : changes.scheduledAt
-	if (scheduledAt !== null && !isAnnouncementTime(scheduledAt)) {
+	if (scheduledAt !== null && !emojiInstant(scheduledAt)) {
 		return refusal('invalid-times', TIMES_RULE)
 	}
 	const changed = [

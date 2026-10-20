@@ -67,6 +67,24 @@ describe('announcements in dumps', () => {
 		expect((await rows(target)).map((table) => table.length)).toEqual([17, 16, 8])
 	}, 60_000)
 
+	it('round-trip 1,000 announcements, the most kept (the 1,001st is the trigger’s: test/migrations.test.ts)', async () => {
+		const store = await source()
+		await sql(
+			store,
+			`WITH RECURSIVE n(i) AS (SELECT 2 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO announcements (id, text, created_at, updated_at)
+			SELECT CAST(210000000000000000 + i AS TEXT), 'draft ' || i, ?2, ?2 FROM n`,
+			1000 - 17 + 1,
+			'2026-10-12T00:00:00.000Z'
+		)
+		expect(await sql(store, 'SELECT count(*) AS n FROM announcements')).toEqual([{ n: 1000 }])
+		const { text } = await dumpViaRpc(store)
+		const target = await migratedStore()
+		await copyConfig(store, target)
+		expect((await importViaRpc(target, text)).report).toMatchObject({ ok: true, problems: [] })
+		expect(await rows(target)).toEqual(await rows(store))
+	}, 60_000)
+
 	it('are refused on import past their bounds, with the constraint’s name', async () => {
 		const store = await source()
 		const { text } = await dumpViaRpc(store)
