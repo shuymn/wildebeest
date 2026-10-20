@@ -1,6 +1,8 @@
 import { HTTPException } from 'hono/http-exception'
 
 import {
+	afterResponse,
+	type AfterResponse,
 	type ApiContext,
 	type ApiDeps,
 	type ApiHandler,
@@ -11,7 +13,7 @@ import {
 	userCredential,
 } from './context'
 import { mastodonError } from './errors'
-import { Params } from './params'
+import { Params, parseBody } from './params'
 import type { UserCredential } from '../domain/auth'
 import { type MediaChanges, type MonthlyTransforms, SWEEP_BATCH } from '../domain/media'
 import type { MediaAttachment } from '../domain/status-presenter'
@@ -108,15 +110,6 @@ async function readWithin(request: Request, ms: number): Promise<Uint8Array | 't
 	}
 }
 
-// The one read of a file part of an upload form. A seam for test/mastodon-params.test.ts, which observes the request
-// parameters a route reads.
-export const formFiles = {
-	// FormData.get is typed as string-only by the runtime types; a file part is a File.
-	get(form: FormData, name: string): unknown {
-		return form.get(name)
-	},
-}
-
 async function readMediaForm(request: Request, ms: number): Promise<MediaForm> {
 	const body = await readWithin(request, ms)
 	if (body === 'expired') {
@@ -129,22 +122,22 @@ async function readMediaForm(request: Request, ms: number): Promise<MediaForm> {
 	if (!contentType.toLowerCase().startsWith('multipart/form-data')) {
 		return { error: "Validation failed: File can't be blank" }
 	}
-	let form: FormData
+	let form: Params
 	try {
-		form = await new Response(body, { headers: { 'content-type': contentType } }).formData()
+		// Rails' last-part rule (params.ts): of repeated `file` parts, text or file, the last is the one read.
+		form = await parseBody(contentType, body, { names: ['file'], maxBytes: IMAGE_SIZE_LIMIT })
 	} catch {
 		return { error: "Validation failed: File can't be blank" }
 	}
-	const file = formFiles.get(form, 'file')
-	if (!(file instanceof File)) {
+	const file = form.file('file')
+	if (file === undefined) {
 		return { error: "Validation failed: File can't be blank" }
 	}
 	if (file.size > IMAGE_SIZE_LIMIT) {
 		return { error: TOO_LARGE }
 	}
-	const fields = [...form.entries()].filter((entry): entry is [string, string] => typeof entry[1] === 'string')
 	// The bounds hold for what is used: body fields and query parameters together.
-	const all = [...fields, ...new URL(request.url).searchParams.entries()]
+	const all = [...form.entries, ...new URL(request.url).searchParams.entries()]
 	if (all.length > MAX_FIELDS || all.some(([, value]) => value.length > MAX_FIELD_LENGTH)) {
 		return { error: 'Validation failed: A form field is too long' }
 	}
@@ -154,7 +147,7 @@ async function readMediaForm(request: Request, ms: number): Promise<MediaForm> {
 export type Failure = { status: number; error: string }
 
 // What the pipeline reads of the request context: the bindings and the raw request (its body is the form).
-type UploadContext = { env: Env; req: { raw: Request } }
+export type UploadContext = { env: Env; req: { raw: Request } }
 
 const PROCESSING_FAILURES: Record<'unsupported' | 'too_large' | 'quota' | 'failed', Failure> = {
 	unsupported: { status: 422, error: INVALID_TYPE },
@@ -172,17 +165,24 @@ function budgetRefusal(scope: 'account' | 'instance'): Failure {
 export type UploadOutcome = { ok: true; media: MediaAttachment } | ({ ok: false } & Failure)
 
 // What the caller checks in the form once it is read, before any transformation is spent: a failure refuses the
-// upload (the API checks the description, the settings page its anti-forgery token).
+// upload (the API checks the description).
 export type FormCheck = (params: Params) => Failure | null | Promise<Failure | null>
 
-// The upload pipeline of one image, for POST /api/v{1,2}/media and the settings page's avatar and header
-// (app/web.tsx): reserve, read the form, check it, transform, write, complete; a failure abandons the reservation.
-export async function receiveImageUpload(
+// A reservation (domain/media.ts reserveMedia): the row's id and file token, the writer deadline, and the budgets and
+// credential every later Store call of the upload takes.
+type Upload = {
+	id: string
+	token: string
+	deadline: number
+	monthlyTransforms: MonthlyTransforms
+	credential: () => UserCredential
+}
+
+async function reserve(
 	c: UploadContext,
 	deps: ApiDeps,
-	credential: () => UserCredential,
-	check: FormCheck
-): Promise<UploadOutcome> {
+	credential: () => UserCredential
+): Promise<{ ok: true; upload: Upload } | ({ ok: false } & Failure)> {
 	const token = deps.randomToken()
 	const config = readConfig(c.env)
 	// The app answers 503 before any route when the env is invalid, so this is the validated value.
@@ -195,7 +195,6 @@ export async function receiveImageUpload(
 		)
 	)
 	if (reserved.status !== 'ok') {
-		await c.req.raw.body?.cancel()
 		return {
 			ok: false,
 			...(reserved.status === 'rate_limited'
@@ -203,17 +202,32 @@ export async function receiveImageUpload(
 				: budgetRefusal(reserved.scope)),
 		}
 	}
-	const { id, deadline } = reserved
-	const upload = { id, token, deadline, monthlyTransforms, credential, check }
+	return { ok: true, upload: { id: reserved.id, token, deadline: reserved.deadline, monthlyTransforms, credential } }
+}
+
+// The upload pipeline of POST /api/v{1,2}/media: reserve, read the form, check it, transform, write, complete; a
+// failure abandons the reservation.
+export async function receiveImageUpload(
+	c: UploadContext,
+	deps: ApiDeps,
+	credential: () => UserCredential,
+	check: FormCheck
+): Promise<UploadOutcome> {
+	const reserved = await reserve(c, deps, credential)
+	if (!reserved.ok) {
+		await c.req.raw.body?.cancel()
+		return reserved
+	}
+	const { upload } = reserved
 	let outcome: Failure | MediaAttachment
 	try {
-		outcome = await processUpload(c, deps, upload)
+		outcome = await processUpload(c, deps, upload, check)
 	} catch (error) {
-		await abandon(c, deps, upload)
+		await discard(c, deps, upload, 'keep')
 		throw error
 	}
 	if ('error' in outcome) {
-		await abandon(c, deps, upload)
+		await discard(c, deps, upload, 'keep')
 		return { ok: false, ...outcome }
 	}
 	return { ok: true, media: outcome }
@@ -236,26 +250,36 @@ export const uploadMedia: ApiHandler = async (c, deps) => {
 const EXPIRED_MESSAGE = 'Validation failed: The upload expired'
 const EXPIRED: Failure = { status: 422, error: EXPIRED_MESSAGE }
 
-type Upload = {
-	id: string
-	token: string
-	deadline: number
-	monthlyTransforms: MonthlyTransforms
-	credential: () => UserCredential
+async function processUpload(
+	c: UploadContext,
+	deps: ApiDeps,
+	upload: Upload,
 	check: FormCheck
-}
-
-async function processUpload(c: UploadContext, deps: ApiDeps, upload: Upload): Promise<Failure | MediaAttachment> {
-	const { id, token, credential } = upload
+): Promise<Failure | MediaAttachment> {
 	const form = await readMediaForm(c.req.raw, upload.deadline - deps.now())
 	if ('error' in form) {
 		return { status: 422, error: form.error }
 	}
-	const refused = await upload.check(form.params)
+	const refused = await check(form.params)
 	if (refused !== null) {
 		return refused
 	}
-	const description = form.params.get('description')
+	return transformReserved(c, deps, upload, form.file, {
+		description: form.params.get('description') ?? '',
+		focus: parseFocus(form.params.get('focus')) ?? { x: 0, y: 0 },
+	})
+}
+
+// The transformation of a reserved upload's bytes: the Store revalidates the reservation and charges the
+// transformations, Images re-encodes, R2 keeps the original and the served files, and the Store completes the row.
+async function transformReserved(
+	c: UploadContext,
+	deps: ApiDeps,
+	upload: Upload,
+	bytes: Uint8Array,
+	fields: { description: string; focus: { x: number; y: number } }
+): Promise<Failure | MediaAttachment> {
+	const { id, token, credential } = upload
 	// The Store revalidates the reservation with the time now and charges the transformations to this month.
 	const started = authorized(
 		await storeCall(c, deps, (s, b) =>
@@ -273,7 +297,7 @@ async function processUpload(c: UploadContext, deps: ApiDeps, upload: Upload): P
 	if (started.status === 'budget_exhausted') {
 		return budgetRefusal(started.scope)
 	}
-	const processed = await processImage(deps.images(c.env), form.file)
+	const processed = await processImage(deps.images(c.env), bytes)
 	if (!processed.ok) {
 		if (processed.reason === 'quota') {
 			console.warn({ event: 'kopje.media.images_quota' })
@@ -287,7 +311,7 @@ async function processUpload(c: UploadContext, deps: ApiDeps, upload: Upload): P
 	if (deps.now() >= upload.deadline) {
 		return EXPIRED
 	}
-	await writeFiles(c.env.MEDIA, id, token, form.file, processed.image)
+	await writeFiles(c.env.MEDIA, id, token, bytes, processed.image)
 	const { full, small } = processed.image
 	const complete = async () =>
 		authorized(
@@ -298,8 +322,8 @@ async function processUpload(c: UploadContext, deps: ApiDeps, upload: Upload): P
 					contentType: full.contentType,
 					original: { width: full.width, height: full.height },
 					small: { width: small.width, height: small.height },
-					description: description ?? '',
-					focus: parseFocus(form.params.get('focus')) ?? { x: 0, y: 0 },
+					description: fields.description,
+					focus: fields.focus,
 					now: deps.now(),
 				})
 			)
@@ -317,6 +341,37 @@ async function processUpload(c: UploadContext, deps: ApiDeps, upload: Upload): P
 	}
 	return media ?? EXPIRED
 }
+
+// A completed upload that is to become an avatar or header, made from bytes the caller has read and checked. The
+// helper owns the reservation until it answers ok, and discards it on any failure, thrown errors and a lost completion
+// answer included (discard). After ok the caller owns the upload until the Store applies it, and discards it if that
+// does not commit.
+export async function storeProfileImage(
+	c: UploadContext,
+	deps: ApiDeps,
+	credential: () => UserCredential,
+	bytes: Uint8Array
+): Promise<{ ok: true; upload: ProfileUpload } | ({ ok: false } & Failure)> {
+	const reserved = await reserve(c, deps, credential)
+	if (!reserved.ok) {
+		return reserved
+	}
+	const { upload } = reserved
+	let outcome: Failure | MediaAttachment
+	try {
+		outcome = await transformReserved(c, deps, upload, bytes, { description: '', focus: { x: 0, y: 0 } })
+	} catch (error) {
+		await discard(c, deps, upload)
+		throw error
+	}
+	if ('error' in outcome) {
+		await discard(c, deps, upload)
+		return { ok: false, ...outcome }
+	}
+	return { ok: true, upload }
+}
+
+export type ProfileUpload = Pick<Upload, 'id' | 'token' | 'credential'>
 
 // The original is kept (private, for backups) next to the served files. Keys come from the Store's id and token only.
 // Every write settles before this returns, so cleanup after a failure never races a write still in flight.
@@ -338,11 +393,20 @@ export async function writeFiles(
 	}
 }
 
-// A failed upload. The Store decides first: it dooms a reservation that never completed (its writer, this request,
-// has settled every write), or keeps an upload whose completion committed although its answer was lost. Only then are
-// the R2 objects deleted, and only those of a doomed or vanished row. If the Store cannot be asked, the objects stay
-// for the sweep, which deletes them with the reservation once its writer deadline has passed.
-async function abandon(c: UploadContext, deps: ApiDeps, upload: Upload): Promise<void> {
+// A failed or unused upload. The Store decides first: it dooms a reservation that never completed (its writer, this
+// request, has settled every write), or keeps an upload whose completion committed although its answer was lost. A
+// kept upload stays for POST /api/v{1,2}/media (`keep`: an unattached upload the client may still find, swept after
+// its grace period), and is doomed as DELETE /api/v1/media/:id dooms one for a profile image (`doom`: nobody else can
+// use it), the sweep deleting its objects. Only a doomed or
+// vanished reservation's objects are deleted here. If the Store cannot be asked, the objects stay for the sweep, which
+// deletes them with the reservation once its writer deadline has passed, or with a completed upload once its grace
+// period has (DETACHED_GRACE_MS).
+export async function discard(
+	c: UploadContext,
+	deps: ApiDeps,
+	upload: ProfileUpload,
+	completed: 'keep' | 'doom' = 'doom'
+): Promise<void> {
 	const { id, token } = upload
 	try {
 		const outcome = authorized(
@@ -350,10 +414,30 @@ async function abandon(c: UploadContext, deps: ApiDeps, upload: Upload): Promise
 		)
 		if (outcome !== 'kept') {
 			await c.env.MEDIA.delete(mediaKeys(id, token))
+			return
 		}
+		if (completed === 'keep') {
+			return
+		}
+		authorized(
+			await storeCall(c, deps, (s, b) => s.deleteMedia(b, { credential: upload.credential(), id, now: deps.now() }))
+		)
 	} catch (error) {
 		console.error({ event: 'kopje.media.abandon_failed', ...errorFields(error) })
 	}
+}
+
+// The cleanup of a profile request that did not commit: each upload it owns is discarded in turn, then a sweep runs
+// after the response, so what was discarded, here or by storeProfileImage, goes now rather than at the next cron.
+export async function discardProfileUploads(
+	c: UploadContext & AfterResponse,
+	deps: ApiDeps,
+	owned: readonly ProfileUpload[]
+): Promise<void> {
+	for (const upload of owned) {
+		await discard(c, deps, upload)
+	}
+	sweepSoon(c, deps)
 }
 
 // GET /api/v1/media/:id.
@@ -427,15 +511,13 @@ export async function sweepMedia(env: Env, deps: SweepDeps): Promise<number> {
 
 // Runs a sweep after the response (delete_media, a deleted upload or profile image), so the files go now rather than
 // at the next cron.
-export function sweepSoon(c: ApiContext, deps: ApiDeps): void {
-	const sweep = sweepMedia(c.env, deps).catch((error: unknown) => {
-		console.error({ event: 'kopje.media.sweep_failed', ...errorFields(error) })
-	})
-	try {
-		c.executionCtx.waitUntil(sweep)
-	} catch {
-		// No execution context (not reachable in the Worker); the sweep still runs.
-	}
+export function sweepSoon(c: AfterResponse, deps: SweepDeps): void {
+	afterResponse(
+		c,
+		sweepMedia(c.env, deps).catch((error: unknown) => {
+			console.error({ event: 'kopje.media.sweep_failed', ...errorFields(error) })
+		})
+	)
 }
 
 // Deletes the R2 keys of tombstones that fell due (domain/media.ts), one bounded batch per run (the cron), then the

@@ -16,9 +16,17 @@ import {
 	type QuotePolicyName,
 	REACHES_FOLLOWERS_SQL,
 } from './audience'
-import { localRole, optionalUserReadOperation, type Role, userReadOperation, userWriteOperation } from './auth'
+import {
+	localRole,
+	optionalUserReadOperation,
+	type Role,
+	userMediaDeleteOperation,
+	userReadOperation,
+	userWriteOperation,
+} from './auth'
 import { type CustomEmoji, localEmojiSnapshot, presentEmojis } from './custom-emojis'
 import { retractFollow } from './inbox'
+import { applyProfileImage, PROFILE_IMAGES, type ProfileImage, profileUploadReady } from './media'
 import { notify } from './notifications'
 import { readOperation } from './operation'
 import { htmlToPlainText, plainTextToHtml } from './plain-text'
@@ -32,6 +40,7 @@ import {
 } from './profile-bounds'
 import { accountSearchText, queryTerms } from './search-text'
 import { renderFieldValue } from './status-text'
+import { unlockChanged } from './unlock-accepts'
 import { readWindow, singleWindow, type Window, windowJson, windowPage } from './windows'
 import { type ColumnMap, selectSql } from '../db/columns'
 import type { Db } from '../db/sql'
@@ -54,6 +63,9 @@ export type Account = {
 	locked: boolean
 	bot: boolean
 	discoverable: boolean | null
+	// Account#indexable: whether the account's public posts may be indexed for search. Kopje's status search reads
+	// only the viewer's own library (search.ts), so it changes no result here; it is stored, presented and federated.
+	indexable: boolean
 	group: boolean
 	created_at: string
 	note: string
@@ -100,6 +112,8 @@ export type CredentialAccount = Account & {
 		fields: (FieldSource & { verified_at: null })[]
 		follow_requests_count: number
 		hide_collections: boolean
+		discoverable: boolean | null
+		indexable: boolean
 		attribution_domains: string[]
 		quote_policy: QuotePolicyName
 	}
@@ -142,6 +156,8 @@ export type AccountRow = {
 	header_url: string | null
 	locked: number
 	discoverable: number | null
+	// NULL for a remote account not stored again since migration 0058.
+	indexable: number | null
 	followers_count: number
 	following_count: number
 	statuses_count: number
@@ -210,6 +226,7 @@ export const ACCOUNT_COLUMN_MAP = {
 	header_url: 'a.header_url',
 	locked: 'a.locked',
 	discoverable: 'a.discoverable',
+	indexable: 'a.indexable',
 	followers_count: 'a.followers_count',
 	following_count: 'a.following_count',
 	statuses_count: 'a.statuses_count',
@@ -373,7 +390,8 @@ export function acctOf(row: { username: string; domain: string | null }): string
 
 // An unavailable account (R1: suspended, or a remote account whose deletion has started, as the row's query read it
 // live) is shown redacted, as Mastodon's REST::AccountSerializer shows an unavailable one: no display name, note,
-// fields or emojis, the default avatar and header, locked, bot and discoverable false, and `suspended: true`.
+// fields or emojis, the default avatar and header, locked, bot, discoverable and indexable false, and
+// `suspended: true`.
 function presentAccount(row: AccountRow, { origin }: Present): Account {
 	const suspended = row.available === 0
 	// Stored URLs are shown only when they are http(s) (httpUrl); anything else reads as unset.
@@ -388,6 +406,7 @@ function presentAccount(row: AccountRow, { origin }: Present): Account {
 		locked: !suspended && row.locked === 1,
 		bot: !suspended && (row.actor_type === 'Service' || row.actor_type === 'Application'),
 		discoverable: suspended ? false : row.discoverable === null ? null : row.discoverable === 1,
+		indexable: !suspended && row.indexable === 1,
 		group: row.actor_type === 'Group',
 		created_at: row.created_at,
 		note: suspended ? '' : row.note,
@@ -570,6 +589,8 @@ export function credentialAccount(db: Db, accountId: string, present: Present): 
 			fields: fieldSources(row.local_fields).map((field) => ({ ...field, verified_at: null })),
 			follow_requests_count: local.follow_requests_count,
 			hide_collections: row.hide_collections === 1,
+			discoverable: row.discoverable === null ? null : row.discoverable === 1,
+			indexable: row.indexable === 1,
 			attribution_domains: JSON.parse(local.attribution_domains) as string[],
 			quote_policy: local.default_quote_policy,
 		},
@@ -643,6 +664,7 @@ export type CredentialChanges = {
 	locked?: boolean
 	bot?: boolean
 	discoverable?: boolean
+	indexable?: boolean
 	hideCollections?: boolean
 	privacy?: Visibility
 	sensitive?: boolean
@@ -654,21 +676,46 @@ export type CredentialChanges = {
 	attributionDomains?: string[]
 }
 
+// The uploads (completed, unattached, media.ts) a credentials update makes the account's avatar or header.
+export type ProfileImages = Partial<Record<ProfileImage, string>>
+
+export type CredentialsUpdated =
+	// accepting: the update unlocked the account, so the unlock job has pending requests to accept (unlock-accepts.ts).
+	| { status: 'ok'; account: CredentialAccount; accepting: boolean }
+	| { status: 'not_found' }
+	// An upload is no longer the viewer's own live upload (swept, deleted or attached since): nothing changed.
+	| { status: 'upload_gone' }
+
 // Lengths and values are validated by the caller. display_name and the note are plain text: display_name is stored
-// as is (JSON consumers escape it), the note is stored as escaped paragraphs.
-export const updateCredentials = userWriteOperation<
-	{ changes: CredentialChanges; present: Present; now: number },
-	CredentialAccount | null
->((db, { changes, present, now }, { accountId }) => {
-	const current = db.first<{ username: string; display_name: string; actor_type: string; hide_collections: number }>(
-		`SELECT a.username, a.display_name, a.actor_type, l.hide_collections
+// as is (JSON consumers escape it), the note is stored as escaped paragraphs. Everything applies in this transaction,
+// images included, with one Update(Person), or nothing does (Mastodon's single update!). A media-delete operation:
+// replacing an image dooms the upload behind it (MEDIA-2).
+export const updateCredentials = userMediaDeleteOperation<
+	{ changes: CredentialChanges; images?: ProfileImages; present: Present; now: number },
+	CredentialsUpdated
+>((db, { changes, images = {}, present, now }, { accountId }) => {
+	const current = db.first<{
+		username: string
+		display_name: string
+		actor_type: string
+		hide_collections: number
+		locked: number
+	}>(
+		`SELECT a.username, a.display_name, a.actor_type, l.hide_collections, a.locked
 		FROM accounts a JOIN local_accounts l ON l.account_id = a.id WHERE a.id = ?`,
 		accountId
 	)
 	if (current === undefined) {
-		return null
+		return { status: 'not_found' }
+	}
+	const kinds = PROFILE_IMAGES.filter((kind) => images[kind] !== undefined)
+	if (kinds.some((kind) => !profileUploadReady(db, accountId, images[kind]!, now))) {
+		return { status: 'upload_gone' }
 	}
 	const before = actorSnapshot(db, accountId)
+	for (const kind of kinds) {
+		applyProfileImage(db, accountId, kind, images[kind]!)
+	}
 	const changedName = changes.displayName === undefined ? null : storedDisplayName(changes.displayName)
 	const displayName = changedName ?? current.display_name
 	const hide = bit(changes.hideCollections)
@@ -682,12 +729,13 @@ export const updateCredentials = userWriteOperation<
 	// surrogate bytes would come back as three U+FFFD for each, past its bound.
 	db.run(
 		`UPDATE accounts SET display_name = COALESCE(?, display_name), note = COALESCE(?, note), locked = COALESCE(?, locked),
-			discoverable = COALESCE(?, discoverable), actor_type = ?, search_text = ?
+			discoverable = COALESCE(?, discoverable), indexable = COALESCE(?, indexable), actor_type = ?, search_text = ?
 		WHERE id = ?`,
 		changedName,
 		changes.note === undefined ? null : plainTextToHtml(storedText(changes.note)),
 		bit(changes.locked),
 		bit(changes.discoverable),
+		bit(changes.indexable),
 		actorType,
 		accountSearchText(current.username, null, displayName),
 		accountId
@@ -730,7 +778,9 @@ export const updateCredentials = userWriteOperation<
 	// collections again and learns it from them, as Mastodon's ProcessAccountService does.
 	const hideChanged = hide !== null && hide !== current.hide_collections
 	recordActorUpdate(db, accountId, hideChanged ? null : before, now)
-	return credentialAccount(db, accountId, present)
+	const accepting = unlockChanged(db, accountId, current.locked === 1, changes.locked)
+	const account = credentialAccount(db, accountId, present)
+	return account === null ? { status: 'not_found' } : { status: 'ok', account, accepting }
 })
 
 function bit(value: boolean | undefined): number | null {
@@ -1400,18 +1450,31 @@ export const answerFollowRequest = userWriteOperation<
 	RelationshipResult
 >((db, { account, decision, now }, { accountId: viewerId }) => {
 	const requesterId = resolveAccountId(db, account)
-	const request =
-		requesterId === null
-			? undefined
-			: db.first<{ id: string; uri: string | null; requester_uri: string; remote: number }>(
-					`SELECT CAST(f.id AS TEXT) AS id, f.uri, a.uri AS requester_uri, a.domain IS NOT NULL AS remote
-					FROM follows f JOIN accounts a ON a.id = f.account_id
-					WHERE f.account_id = ?1 AND f.target_account_id = ?2 AND f.state = 'pending' AND ${availableSql('?1')}`,
-					requesterId,
-					viewerId
-				)
-	if (requesterId === null || request === undefined) {
+	if (requesterId === null) {
 		return { status: 'not_found' }
+	}
+	const answered = answerPendingFollow(db, viewerId, requesterId, decision, now)
+	return answered === 'ok' ? relationshipResult(db, viewerId, requesterId, now) : { status: answered }
+})
+
+// The answer to one pending follow of `viewerId` by `requesterId`, as POST /api/v1/follow_requests/:id/authorize and
+// /reject run it, and as the unlock job (unlock-accepts.ts) authorizes each request.
+export function answerPendingFollow(
+	db: Db,
+	viewerId: string,
+	requesterId: string,
+	decision: 'authorize' | 'reject',
+	now: number
+): 'ok' | 'not_found' | 'unavailable' {
+	const request = db.first<{ id: string; uri: string | null; requester_uri: string; remote: number }>(
+		`SELECT CAST(f.id AS TEXT) AS id, f.uri, a.uri AS requester_uri, a.domain IS NOT NULL AS remote
+		FROM follows f JOIN accounts a ON a.id = f.account_id
+		WHERE f.account_id = ?1 AND f.target_account_id = ?2 AND f.state = 'pending' AND ${availableSql('?1')}`,
+		requesterId,
+		viewerId
+	)
+	if (request === undefined) {
+		return 'not_found'
 	}
 	if (decision === 'authorize') {
 		db.run("UPDATE follows SET state = 'accepted' WHERE id = CAST(? AS INTEGER)", request.id)
@@ -1420,7 +1483,7 @@ export const answerFollowRequest = userWriteOperation<
 		// (ID-7); a Misskey pair id is not recorded, and its redelivery asks again (the pair limit). If it
 		// cannot be recorded (the requester's retraction cap), nothing changes.
 		if (request.remote === 1 && request.uri !== null && !retractFollow(db, request.requester_uri, request.uri, now)) {
-			return { status: 'unavailable' }
+			return 'unavailable'
 		}
 		db.run('DELETE FROM follows WHERE id = CAST(? AS INTEGER)', request.id)
 	}
@@ -1454,5 +1517,5 @@ export const answerFollowRequest = userWriteOperation<
 			viewerId
 		)
 	}
-	return relationshipResult(db, viewerId, requesterId, now)
-})
+	return 'ok'
+}

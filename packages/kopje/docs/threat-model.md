@@ -1328,7 +1328,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   from a reservation the Store records before any write (`reserveEmoji` in `src/domain/local-emojis.ts`); completion
   and promotion are one transaction (`completeEmoji`: the row is kept, gc_at NULL, with its emoji row), and a failure
   abandons the reservation (`abandonEmoji`, only that id and token), whose keys go only when the Store does not keep
-  it. The sweep, the purge and `releaseProfileImage` exclude emoji images, and the foreign key of `custom_emojis`
+  it. The sweep, the purge and `profileReleaseSql` exclude emoji images, and the foreign key of `custom_emojis`
   refuses deleting one; `test/local-emojis.test.ts` ("emoji completion").
 - **MEDIA-3: served images are re-encoded.** An image is served only as Images output with location metadata removed; if
   transformation fails, the upload is refused and original bytes are never served. _Enforced (main):_ outputs are PNG or WebP only, for which Images discards all metadata (the binding has no
@@ -1432,7 +1432,14 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `Content-Length` or while streaming. Each text field has a raw cap before parsing or counting (status text: 10,000
   code units). Media uploads have their own limit. _Enforced (main)_ for bodies: `src/platform/body.ts`,
   `src/mastodon/params.ts`; `test/gate.test.ts` ("refuses an inbox body over 1 MiB", "stops reading a streamed inbox
-  body"). _Gap: no API body test._ _Enforced (main)_ for status text: `test/status-text.test.ts`
+  body"). _Enforced (main)_ for API bodies: a route's body stops at its limit (1 MiB unless the route sets one), and a
+  route that reads files (`readParams`' file rule: `update_credentials`' avatar and header, the settings page's
+  image) takes a multipart body of the limit plus each file and its part headers (17,858,560 bytes for
+  `update_credentials`), chosen from `Content-Type` before any byte is read, while its text stays within the limit in
+  UTF-8 bytes; a JSON body is refused past 10,000 generated object keys or 2,097,152 UTF-16 code units of all its
+  keys, charged before each key is built, and past 32 levels of nesting; `update_credentials` checks the token before reading a multipart
+  body; `test/params.test.ts`, `test/profile-images.test.ts` ("takes a multipart body up to the text limit plus two
+  files and refuses one byte more", "answers an invalid or under-scoped token without reading a multipart body"). _Enforced (main)_ for status text: `test/status-text.test.ts`
   ("raw input bound"). _Enforced (main)_ for search terms (500 characters) and media (16 MB
   and 16,777,216 pixels, read with the body bound before parsing): `src/mastodon/search.ts`, `src/mastodon/media.ts`;
   `test/search.test.ts` ("bounds the query"), `test/media.test.ts` ("refuses a file over 16 MB"). _Enforced (main)_ for remote profiles: bios are cut at 50,000 code units before sanitizing and
@@ -1725,7 +1732,12 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   code protects an app: anyone can get an app token without a user, so app tokens cannot hold a slot for good. The cron removes unused apps after a day,
   as Mastodon's `ApplicationsVacuum` does, and expired codes and web sessions, 500 of each per run. `registerApp` and
   `sweepOAuth` in `src/domain/oauth.ts`, `src/mastodon/oauth.ts`; `test/apps-budget.test.ts`. Avatar and header
-  uploads from the web UI go through the media budgets below.
+  uploads, from `update_credentials` and the settings page alike, go through the media budgets below, one reservation
+  and two transformations each, at most 8 MB each. Unlocking an account: _Enforced (main):_ the update starts a cursor
+  job (`local_accounts.accept_requests_after`) instead of accepting in the request; each job round authorizes at most
+  20 requests, each in its own transaction through the single authorize path (its delivery admission and recount
+  included), and every step advances or clears the cursor (`src/domain/unlock-accepts.ts`;
+  `test/unlock-accepts.test.ts`: 250 requests in rounds of at most 20).
   _Enforced (main)_ for scheduled statuses: an account holds at most 300, at most 25 on one UTC day, each at least 5
   minutes ahead (Mastodon's limits, 422 with its messages); the cron publishes at most 25 a run, the earliest due first,
   each in its own transaction that deletes the row as it writes the status, so overlapping runs and retries publish it
@@ -2041,14 +2053,14 @@ RPC limit.
 
 | Shape                                                            | Most SQLite bytes | Most JSON bytes | Conservative JSON | Rows read | Nodes | Share of 8 MiB |
 | ---------------------------------------------------------------- | ----------------- | --------------- | ----------------- | --------- | ----- | -------------- |
-| Account occurrence                                               | 123,207           | 130,020         | 130,020           | 1         | 63    | 1.6%           |
-| Status                                                           | 4,435,322         | 2,628,427       | 2,628,612         | 1,484     | 2,390 | 31.3%          |
-| Quote (the status and its quoted status)                         | 6,799,687         | 5,256,887       | 5,257,257         | 1,916     | 4,782 | 62.7%          |
-| Boost of a quote                                                 | 7,084,894         | 5,655,411       | 5,655,781         | 1,972     | 5,712 | 67.4%          |
-| Conversation: 12 participants presented, its last status a quote | 8,364,619         | 6,817,096       | 6,817,466         | 1,930     | 5,529 | 81.3%          |
-| Notification group: 8 sample accounts, its status a quote        | 7,786,297         | 6,297,471       | 6,297,841         | 1,943     | 5,298 | 75.1%          |
-| Report: its first status a quote past the 2 MiB allowance        | 7,160,731         | 5,832,254       | 5,832,624         | 1,926     | 5,027 | 69.5%          |
-| An admin.report notification of that report                      | 2,341,805         | 382,444         | 382,444           | 1,059     | 236   | 4.6%           |
+| Account occurrence                                               | 123,215           | 130,038         | 130,038           | 1         | 63    | 1.6%           |
+| Status                                                           | 4,435,330         | 2,628,445       | 2,628,630         | 1,484     | 2,390 | 31.3%          |
+| Quote (the status and its quoted status)                         | 6,799,703         | 5,256,923       | 5,257,293         | 1,916     | 4,782 | 62.7%          |
+| Boost of a quote                                                 | 7,084,918         | 5,655,465       | 5,655,835         | 1,972     | 5,712 | 67.4%          |
+| Conversation: 12 participants presented, its last status a quote | 8,364,739         | 6,817,348       | 6,817,718         | 1,930     | 5,529 | 81.3%          |
+| Notification group: 8 sample accounts, its status a quote        | 7,786,377         | 6,297,651       | 6,298,021         | 1,943     | 5,298 | 75.1%          |
+| Report: its first status a quote past the 2 MiB allowance        | 7,160,771         | 5,832,362       | 5,832,732         | 1,926     | 5,027 | 69.5%          |
+| An admin.report notification of that report                      | 2,341,821         | 382,480         | 382,480           | 1,059     | 236   | 4.6%           |
 | ActivityPub Note: a local status at its bounds, 1,000 addressed  | 3,697,315         | 4,235,143       |                   | 1,337     | 3,165 | 50.5%          |
 | Its Create (the Note and its addressing again)                   |                   | 6,291,204       |                   |           |       | 75.0%          |
 | Announcement: each part derived from its caps                    |                   | 121,774         | 248,997           |           |       | 3.0%           |
@@ -2057,7 +2069,7 @@ RPC limit.
 | Access admin's trending status, derived from its caps            |                   | 27,748          | 29,060            |           |       | 0.3%           |
 
 The most JSON is the emoji-poll fill's, the most SQLite bytes the raw fill's; the escaped fill presents the
-conversation in 6,792,894 bytes. The Note's local emoji snapshot is at its 12,288-byte bound with as many entries as
+conversation in 6,793,146 bytes. The Note's local emoji snapshot is at its 12,288-byte bound with as many entries as
 fit (61, every url at its shortest), resolved to 14,850 bytes of `Emoji` tags (at most 64 × 44 bytes past the
 snapshot); an actor's at 6,144 bytes resolves to 30 tags of 7,404 bytes (`test/local-emoji-api.test.ts`).
 
@@ -2693,6 +2705,8 @@ activity specs, cited in test names.
 | Local emoji too have `static_url` equal to `url`, and a status's snapshot shows `visible_in_picker: true` for an unlisted local emoji | Kopje makes no still rendition; the snapshot keeps two elements | clients need still images |
 | Disabled emoji versions' files, backup copies and rebuild transformations are kept and paid indefinitely | Emoji are never deleted (owner decision); the cost is documented in backup.md | the cost matters |
 | An imported emoji whose existing `full` is 256 KiB or more, or whose actual edges pass 1,024 while its recorded ones do not, is served until `kopje-admin media-rebuild` reports it | The Store never sees file bytes; a restore always runs the rebuild | imports come from untrusted dumps |
+| An account's `avatar_static` and `header_static` equal `avatar` and `header`, so an animated profile image stays animated where a client asked for a still one | Kopje makes no still rendition of profile images, local or remote | still renditions are built |
+| After an unlock, a request from an unavailable requester, or from one the account blocks or whose domain it blocks, stays pending | Accepting it would make a follower R1 or R21 refuses; the account can still reject it | Mastodon's handling of such requests is matched |
 
 ## How to use
 

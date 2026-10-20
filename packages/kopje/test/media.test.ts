@@ -73,6 +73,17 @@ async function stored(keys: string[]): Promise<string[]> {
 }
 
 describe('POST /api/v2/media', () => {
+	it('reads the last of repeated file parts, as Rails assigns them', async () => {
+		const h = await users()
+		const stringThenFile = new FormData()
+		stringThenFile.append('file', 'x')
+		stringThenFile.append('file', new File([bytes(PNG_PLAIN)], 'p.png', { type: 'image/png' }))
+		expect((await upload(h, h.users.alice, stringThenFile)).status).toBe(200)
+		const fileThenString = mediaForm(bytes(PNG_PLAIN), { file: 'x' }, 'p.png', 'image/png')
+		const refused = await upload(h, h.users.alice, fileThenString)
+		expect([refused.status, await refused.json()]).toEqual([422, { error: "Validation failed: File can't be blank" }])
+	})
+
 	it('re-encodes an image without its location, keeps the original private, and serves only the re-encoding (MEDIA-3)', async () => {
 		const h = await users()
 		const media = await uploaded(h, h.users.alice, mediaForm(bytes(JPEG_WITH_GPS), { description: 'a red square' }))

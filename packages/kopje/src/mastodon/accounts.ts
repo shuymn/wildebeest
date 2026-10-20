@@ -1,23 +1,34 @@
 import {
 	type ApiContext,
+	type ApiDeps,
 	type ApiHandler,
 	authorized,
+	credential,
 	credential as tokenCredential,
 	optionalCredential,
 	optionalTokenCredential,
 	present,
 	refuseAfterAuth,
+	requestJobsSoon,
 	requestParams,
 	storeCall,
 	userCredential,
 } from './context'
 import { mastodonError } from './errors'
-import { sweepSoon } from './media'
+import {
+	discardProfileUploads,
+	type Failure,
+	type ProfileUpload,
+	storeProfileImage,
+	sweepSoon,
+	type UploadContext,
+} from './media'
 import { pageQuery, pageResponse, unlimitedResponse } from './pagination'
-import { limitParam, offsetParam, type Params, parseBoolean } from './params'
+import { limitParam, mediaTypeOf, offsetParam, type Params, parseBoolean, readParams } from './params'
 import { MAX_SEARCH_OFFSET, searchParams } from './search'
 import {
 	type CredentialChanges,
+	type ProfileImages,
 	type FieldSource,
 	MAX_ACCOUNTS_BY_ID,
 	MAX_ATTRIBUTION_DOMAINS,
@@ -28,8 +39,10 @@ import {
 	type Visibility,
 } from '../domain/accounts'
 import { QUOTE_POLICY_NAMES, type QuotePolicyName } from '../domain/audience'
+import type { UserCredential } from '../domain/auth'
 import { DIRECTORY_DEFAULT_LIMIT, DIRECTORY_MAX_LIMIT } from '../domain/directory'
-import type { ProfileImage } from '../domain/media'
+import { PROFILE_IMAGES, type ProfileImage } from '../domain/media'
+import { PROFILE_IMAGE_LIMIT, PROFILE_TOO_LARGE, profileImageProblem, SIGNATURE_BYTES } from '../platform/images'
 import { grantsAny } from '../security/scopes'
 
 // /api/v1/accounts (B3): credentials, lookup, search, relationships, follow, follower lists, notes and endorsements.
@@ -96,8 +109,9 @@ export function credentialChanges(p: Params): { changes: CredentialChanges; prob
 		}
 		changes.language = language === '' ? null : language
 	}
-	// fields_attributes replaces every field; a pair with both parts blank is dropped, as Mastodon does.
-	if (p.has('fields_attributes') || p.objects('fields_attributes').length > 0) {
+	// fields_attributes replaces every field; a pair with both parts blank is dropped, as Mastodon does. An empty JSON
+	// object (`{}`, `{"0":{}}`) is a sent, empty hash, which clears them (Account#fields_attributes=).
+	if (p.has('fields_attributes') || p.sentObject('fields_attributes') || p.objects('fields_attributes').length > 0) {
 		const fields: FieldSource[] = p
 			.objects('fields_attributes')
 			.map((field) => ({ name: (field.name ?? '').trim(), value: (field.value ?? '').trim() }))
@@ -124,6 +138,7 @@ export function credentialChanges(p: Params): { changes: CredentialChanges; prob
 	changes.locked = parseBoolean(p.get('locked'))
 	changes.bot = parseBoolean(p.get('bot'))
 	changes.discoverable = parseBoolean(p.get('discoverable'))
+	changes.indexable = parseBoolean(p.get('indexable'))
 	changes.hideCollections = parseBoolean(p.get('hide_collections'))
 	changes.sensitive = parseBoolean(p.get('source[sensitive]'))
 	return { changes, problems }
@@ -170,22 +185,129 @@ export function compliantDomain(value: string): boolean {
 	return host.length < MAX_DOMAIN_LENGTH && labels.every((label) => DOMAIN_LABEL.test(label))
 }
 
-export const updateCredentials: ApiHandler = async (c, deps) => {
-	const p = await requestParams(c, deps)
-	if (p instanceof Response) {
-		return p
+const PROFILE_FILES = { names: PROFILE_IMAGES, maxBytes: PROFILE_IMAGE_LIMIT }
+
+const IMAGE_ATTRIBUTE: Record<ProfileImage, string> = { avatar: 'Avatar', header: 'Header' }
+
+// The avatar and header files of a credentials form (multipart), checked as Paperclip validates them before anything
+// is reserved, each problem with Mastodon's message; or 'string' for a file parameter sent as a non-empty text value
+// (Paperclip has no handler for it: 400). An empty value reads as absent. Only a file's first bytes are read here.
+export async function profileFiles(
+	p: Params
+): Promise<{ images: Partial<Record<ProfileImage, File>>; problems: string[] } | 'string'> {
+	const images: Partial<Record<ProfileImage, File>> = {}
+	const problems: string[] = []
+	for (const kind of PROFILE_IMAGES) {
+		if ((p.get(kind) ?? '') !== '') {
+			return 'string'
+		}
+		const file = p.file(kind)
+		if (file === undefined) {
+			continue
+		}
+		const problem =
+			file.size >= PROFILE_IMAGE_LIMIT
+				? PROFILE_TOO_LARGE
+				: profileImageProblem(new Uint8Array(await file.slice(0, SIGNATURE_BYTES).arrayBuffer()))
+		if (problem !== null) {
+			problems.push(`${IMAGE_ATTRIBUTE[kind]} ${problem}`)
+		} else {
+			images[kind] = file
+		}
 	}
+	return { images, problems }
+}
+
+// Each image through the upload pipeline (mastodon/media.ts storeProfileImage), in turn, its bytes read only then; the
+// uploads made so far are passed to `owned` as they complete, so the caller can discard them if the request fails.
+export async function storeProfileImages(
+	c: UploadContext,
+	deps: ApiDeps,
+	credential: () => UserCredential,
+	images: Partial<Record<ProfileImage, File>>,
+	owned: ProfileUpload[]
+): Promise<ProfileImages | Failure> {
+	const ids: ProfileImages = {}
+	for (const kind of PROFILE_IMAGES) {
+		const file = images[kind]
+		if (file === undefined) {
+			continue
+		}
+		const stored = await storeProfileImage(c, deps, credential, new Uint8Array(await file.arrayBuffer()))
+		if (!stored.ok) {
+			return { status: stored.status, error: profileFailure(kind, stored.error) }
+		}
+		owned.push(stored.upload)
+		ids[kind] = stored.upload.id
+	}
+	return ids
+}
+
+// The media pipeline's messages name the attribute `File`; a profile image's name it.
+function profileFailure(kind: ProfileImage, error: string): string {
+	return error.replace('Validation failed: File ', `Validation failed: ${IMAGE_ATTRIBUTE[kind]} `)
+}
+
+// PATCH /api/v1/accounts/update_credentials. A multipart body may carry the avatar and header files, so its token is
+// checked before the body is read (an invalid or under-scoped token reads no 17.9 MB body); text, then images, are
+// validated before anything is reserved, and the Store applies everything in one transaction (D3).
+export const updateCredentials: ApiHandler = async (c, deps) => {
+	const multipart = mediaTypeOf(c.req.header('content-type')) === 'multipart/form-data'
+	if (multipart) {
+		const value = credential(c, deps)
+		authorized(await storeCall(c, deps, (s, b) => s.checkCredential(b, value)))
+	}
+	const read = await readParams(c.req.raw, { files: PROFILE_FILES })
+	if (!read.ok) {
+		const response = mastodonError(
+			read.status,
+			read.status === 413 ? 'Request body is too large' : 'Malformed request body'
+		)
+		return multipart ? response : refuseAfterAuth(c, deps, response)
+	}
+	const p = read.params
 	const { changes, problems } = credentialChanges(p)
+	const files = await profileFiles(p)
+	if (files === 'string') {
+		return refuseAfterAuth(c, deps, mastodonError(400, 'Bad Request'))
+	}
+	problems.push(...files.problems)
 	if (problems.length > 0) {
 		return refuseAfterAuth(c, deps, mastodonError(422, `Validation failed: ${problems.join(', ')}`))
 	}
-	const credential = userCredential(c, deps)
-	const account = authorized(
-		await storeCall(c, deps, (s, b) =>
-			s.updateCredentials(b, { credential, changes, present: present(c), now: deps.now() })
+	const owned: ProfileUpload[] = []
+	let committed = false
+	try {
+		const images = await storeProfileImages(c, deps, () => userCredential(c, deps), files.images, owned)
+		if ('error' in images) {
+			return mastodonError(images.status, images.error)
+		}
+		const value = userCredential(c, deps)
+		const result = authorized(
+			await storeCall(c, deps, (s, b) =>
+				s.updateCredentials(b, { credential: value, changes, images, present: present(c), now: deps.now() })
+			)
 		)
-	)
-	return account === null ? NOT_FOUND() : c.json(account)
+		if (result.status === 'upload_gone') {
+			return mastodonError(422, 'Validation failed: The upload expired')
+		}
+		if (result.status === 'not_found') {
+			return NOT_FOUND()
+		}
+		committed = true
+		if (owned.length > 0) {
+			// The replaced images' uploads go with the sweep.
+			sweepSoon(c, deps)
+		}
+		if (result.accepting) {
+			requestJobsSoon(c, deps)
+		}
+		return c.json(result.account)
+	} finally {
+		if (!committed) {
+			await discardProfileUploads(c, deps, owned)
+		}
+	}
 }
 
 // DELETE /api/v1/profile/avatar and /api/v1/profile/header: the account shows the default image again and other

@@ -30,6 +30,15 @@ export function mediaForm(
 	return form
 }
 
+// A multipart form of `parts` in order, repeated names kept.
+export function multipartForm(parts: readonly [string, string | File][]): FormData {
+	const form = new FormData()
+	for (const [name, value] of parts) {
+		form.append(name, value)
+	}
+	return form
+}
+
 export type Attachment = {
 	id: string
 	type: string

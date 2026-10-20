@@ -54,6 +54,7 @@ const ACTOR = {
 	headerUrl: null,
 	locked: false,
 	discoverable: null,
+	indexable: false,
 	inboxUrl: 'https://moved.example/users/r/inbox',
 	sharedInboxUrl: null,
 	published: null,

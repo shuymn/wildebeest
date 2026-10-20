@@ -21,6 +21,7 @@ export type LocalActor = {
 	headerUrl: string | null
 	locked: boolean
 	discoverable: boolean | null
+	indexable: boolean
 	alsoKnownAs: string[]
 	// Profile fields as the owner wrote them; the actor document publishes them as PropertyValue attachments.
 	fields: FieldSource[]
@@ -46,6 +47,7 @@ type ActorRow = {
 	header_url: string | null
 	locked: number
 	discoverable: number | null
+	indexable: number | null
 	also_known_as: string
 	fields: string
 	attribution_domains: string
@@ -66,7 +68,8 @@ export const getInstanceDomain = readOperation<void, string | null>(
 export function localActorOf(db: Db, username: string): LocalActor | null {
 	const row = db.first<ActorRow>(
 		`SELECT a.uri, a.username, a.actor_type, a.display_name, a.note, a.avatar_url, a.header_url, a.locked,
-			a.discoverable, l.also_known_as, l.fields, l.attribution_domains, l.suspended_at, l.pubkey, a.created_at, a.emojis
+			a.discoverable, a.indexable, l.also_known_as, l.fields, l.attribution_domains, l.suspended_at, l.pubkey,
+			a.created_at, a.emojis
 		${LOCAL_BY_USERNAME}`,
 		username
 	)
@@ -82,6 +85,7 @@ export function localActorOf(db: Db, username: string): LocalActor | null {
 		headerUrl: row.header_url,
 		locked: row.locked === 1,
 		discoverable: row.discoverable === null ? null : row.discoverable === 1,
+		indexable: row.indexable === 1,
 		alsoKnownAs: JSON.parse(row.also_known_as) as string[],
 		fields: fieldSources(row.fields),
 		attributionDomains: JSON.parse(row.attribution_domains) as string[],

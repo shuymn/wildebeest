@@ -402,7 +402,7 @@ const ImageForm: FC<{ kind: 'avatar' | 'header'; current: string; csrf: string }
 		<h3>{kind === 'avatar' ? STRINGS.avatar : STRINGS.header}</h3>
 		<img class={kind === 'avatar' ? 'avatar' : 'header'} src={href(current)} alt="" />
 		<Csrf token={csrf} />
-		<input type="file" name="file" accept="image/jpeg,image/png,image/gif,image/webp,image/avif" required />
+		<input type="file" name="file" accept="image/jpeg,image/png,image/gif,image/webp" required />
 		<p class="hint">{STRINGS.imageHint}</p>
 		<button type="submit">{STRINGS.upload}</button>
 	</form>
@@ -473,6 +473,7 @@ export const SettingsPage: FC<SettingsView> = ({ account, authorizations, csrf, 
 					</fieldset>
 					<Checkbox name="locked" checked={account.locked} label={STRINGS.locked} />
 					<Checkbox name="discoverable" checked={account.discoverable === true} label={STRINGS.discoverable} />
+					<Checkbox name="indexable" checked={account.source.indexable} label={STRINGS.indexable} />
 					<label>
 						{STRINGS.defaultVisibility}
 						<select name="source[privacy]">

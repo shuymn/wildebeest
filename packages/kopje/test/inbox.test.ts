@@ -833,6 +833,7 @@ describe('ID-6: the authorization table, one negative case per row', () => {
 				headerUrl: null,
 				locked: false,
 				discoverable: null,
+				indexable: false,
 				inboxUrl: null,
 				sharedInboxUrl: null,
 				published: null,

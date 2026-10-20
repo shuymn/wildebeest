@@ -22,13 +22,14 @@ export const markers: ApiHandler = async (c, deps) => {
 }
 
 // POST /api/v1/markers: home[last_read_id] and notifications[last_read_id]. A timeline is named when it is sent as an
-// object (home[...]), whatever fields it has; only last_read_id is read (resource_params).
+// object (home[...]), whatever fields it has, an empty JSON object included; only last_read_id is read
+// (resource_params).
 export const saveMarkers: ApiHandler = async (c, deps) => {
 	const p = await requestParams(c, deps)
 	if (p instanceof Response) {
 		return p
 	}
-	const updates: MarkerUpdate[] = MARKER_TIMELINES.filter((timeline) => p.hasObject(timeline)).map((timeline) => ({
+	const updates: MarkerUpdate[] = MARKER_TIMELINES.filter((timeline) => p.sentObject(timeline)).map((timeline) => ({
 		timeline,
 		lastReadId: p.get(`${timeline}[last_read_id]`),
 	}))

@@ -39,9 +39,9 @@ import { storedMediaDescription, storedMediaMeta } from '../platform/stored-boun
 // it at once. The sweep (expiredMedia, then R2 deletes, then purgeMedia) removes doomed rows and their R2 objects in
 // bounded batches, objects first.
 //
-// A profile image (avatar or header, set from the settings page) is a completed upload that the account's avatar_url or
-// header_url names, kept with neither status_id nor gc_at: it is never swept, and never attached, read or updated
-// through the API. Replacing or removing it dooms it.
+// A profile image (avatar or header, set by update_credentials or the settings page) is a completed upload that the
+// account's avatar_url or header_url names, kept with neither status_id nor gc_at: it is never swept, and never
+// attached, read or updated through the API. Replacing or removing it dooms it.
 //
 // Only the uploader reads, updates or attaches an upload, and only while it is unattached (MEDIA-1); Mastodon's
 // MediaController finds `current_account.media_attachments.where(status_id: nil)`.
@@ -106,7 +106,7 @@ export function liveMediaSql(m: string, now: string): string {
 
 // MEDIA-5: a custom emoji's image (migration 0055_local_custom_emojis) is kept for good, disabled or not, imported
 // rows included. Every selection that may delete, doom, attach, read or update media excludes it: liveMediaSql, the
-// sweep (expiredMedia, purgeMedia) and releaseProfileImage. A primary-key probe of custom_emojis.
+// sweep (expiredMedia, purgeMedia) and applyProfileImage's release. A primary-key probe of custom_emojis.
 export function notEmojiSql(m: string): string {
 	return `NOT EXISTS (SELECT 1 FROM custom_emojis ${m}_e WHERE ${m}_e.id = ${m}.id)`
 }
@@ -331,51 +331,46 @@ export const getMedia = userReadOperation<{ id: string; now: number }, MediaAtta
 
 export type ProfileImage = 'avatar' | 'header'
 
-// Makes a completed upload of the viewer their avatar or header: the account points at its full file, the row is kept
-// for good (gc_at NULL), and the image it replaces, if it was one of the account's uploads, is doomed so the sweep
-// deletes its files. False when the upload is not the viewer's own live, unattached upload.
-export const setProfileImage = userMediaDeleteOperation<{ id: string; kind: ProfileImage; now: number }, boolean>(
-	(db, { id, kind, now }, { accountId }) => {
-		const upload = ownUpload(db, accountId, id, now)
-		// An upload a scheduled status holds stays for that status (scheduled-statuses.ts).
-		const held = db.first(
-			'SELECT 1 AS held FROM media_attachments WHERE id = ? AND scheduled_status_id IS NOT NULL',
-			id
-		)
-		if (upload === undefined || upload.url === '' || held !== undefined) {
-			return false
-		}
-		const before = actorSnapshot(db, accountId)
-		const column = kind === 'avatar' ? 'avatar_url' : 'header_url'
-		const previous = db.first<{ url: string | null }>(`SELECT ${column} AS url FROM accounts WHERE id = ?`, accountId)
-		// Copied within SQL (RES-2): read into the Worker and bound again, a legacy URL of lone surrogate bytes would
-		// come back as three U+FFFD for each, past the profile URL's bound. A media URL's bound is the same.
-		db.run(
-			`UPDATE accounts SET ${column} = (SELECT url FROM media_attachments WHERE id = ?) WHERE id = ?`,
-			id,
-			accountId
-		)
-		db.run('UPDATE media_attachments SET gc_at = NULL WHERE id = ?', id)
-		releaseProfileImage(db, accountId, previous?.url ?? null)
-		recordActorUpdate(db, accountId, before, now)
-		return true
-	}
-)
+// In the order a request applies them.
+export const PROFILE_IMAGES: readonly ProfileImage[] = ['avatar', 'header']
 
-// Dooms the upload behind a profile image the account no longer shows (replaced or removed), so the sweep deletes it
-// and its files, unless the account's other image still names it.
-function releaseProfileImage(db: Db, accountId: string, url: string | null): void {
-	if (url === null) {
+const PROFILE_COLUMNS: Record<ProfileImage, { own: string; other: string }> = {
+	avatar: { own: 'avatar_url', other: 'header_url' },
+	header: { own: 'header_url', other: 'avatar_url' },
+}
+
+// Whether `id` may become a profile image of the viewer: the viewer's own live, completed, unattached upload, not held
+// by a scheduled status (scheduled-statuses.ts).
+export function profileUploadReady(db: Db, accountId: string, id: string, now: number): boolean {
+	const upload = ownUpload(db, accountId, id, now)
+	const held = db.first('SELECT 1 AS held FROM media_attachments WHERE id = ? AND scheduled_status_id IS NOT NULL', id)
+	return upload !== undefined && upload.url !== '' && held === undefined
+}
+
+// The release of the upload behind the account's `kind` image (?1 the account, ?2 the doom time): applyProfileImage.
+export function profileReleaseSql(kind: ProfileImage): string {
+	const { own, other } = PROFILE_COLUMNS[kind]
+	return `UPDATE media_attachments SET gc_at = ?2
+		WHERE account_id = ?1 AND status_id IS NULL AND gc_at IS NULL
+			AND url = (SELECT ${own} FROM accounts WHERE id = ?1)
+			AND NOT EXISTS (SELECT 1 FROM accounts a WHERE a.id = ?1 AND a.${other} = media_attachments.url)
+			AND ${notEmojiSql('media_attachments')}`
+}
+
+// Sets (an upload id) or clears (null) the account's avatar or header. Before the account changes, the upload behind
+// the image it replaces is doomed, so the sweep deletes it and its files, unless the account's other image still names
+// it. The old and new URLs are compared and copied within SQL (RES-2): read into the Worker and bound again, an
+// imported URL of malformed UTF-8 would come back changed and match nothing. The release reads the account's own media
+// through media_attachments_account and probes the account row by key (test/profile-images.test.ts shows the plan).
+export function applyProfileImage(db: Db, accountId: string, kind: ProfileImage, id: string | null): void {
+	const { own } = PROFILE_COLUMNS[kind]
+	db.run(profileReleaseSql(kind), accountId, DOOMED_AT)
+	if (id === null) {
+		db.run(`UPDATE accounts SET ${own} = NULL WHERE id = ?`, accountId)
 		return
 	}
-	db.run(
-		`UPDATE media_attachments SET gc_at = ?1 WHERE account_id = ?2 AND url = ?3 AND status_id IS NULL AND gc_at IS NULL
-			AND NOT EXISTS (SELECT 1 FROM accounts a WHERE a.id = ?2 AND ?3 IN (a.avatar_url, a.header_url))
-			AND ${notEmojiSql('media_attachments')}`,
-		DOOMED_AT,
-		accountId,
-		url
-	)
+	db.run(`UPDATE accounts SET ${own} = (SELECT url FROM media_attachments WHERE id = ?) WHERE id = ?`, id, accountId)
+	db.run('UPDATE media_attachments SET gc_at = NULL WHERE id = ?', id)
 }
 
 // DELETE /api/v1/profile/avatar and /api/v1/profile/header (Mastodon's Profile::AvatarsController and
@@ -386,10 +381,7 @@ export const removeProfileImage = userMediaDeleteOperation<
 	CredentialAccount | null
 >((db, { kind, present, now }, { accountId }) => {
 	const before = actorSnapshot(db, accountId)
-	const column = kind === 'avatar' ? 'avatar_url' : 'header_url'
-	const previous = db.first<{ url: string | null }>(`SELECT ${column} AS url FROM accounts WHERE id = ?`, accountId)
-	db.run(`UPDATE accounts SET ${column} = NULL WHERE id = ?`, accountId)
-	releaseProfileImage(db, accountId, previous?.url ?? null)
+	applyProfileImage(db, accountId, kind, null)
 	recordActorUpdate(db, accountId, before, now)
 	return credentialAccount(db, accountId, present)
 })

@@ -45,7 +45,8 @@ export type AppDeps = {
 	images?: (env: Env) => ImageCodec
 	// Rings the delivery doorbell after an API write (default: a message on env.QUEUE).
 	doorbell?: (env: Env) => Promise<void>
-	// Asks for a round of the Store's jobs after an admin suspension or unsuspension (default: a message on env.QUEUE).
+	// Asks for a round of the Store's jobs (default: a message on env.QUEUE): after an admin suspension or unsuspension,
+	// an unlock that leaves follow requests to accept, and a resolved status's quote to verify.
 	jobs?: (env: Env) => Promise<unknown>
 }
 
@@ -196,7 +197,7 @@ export function createApp({
 		randomToken: seams.randomToken ?? randomToken,
 		images,
 		resolve: createResolver({ build, store, now, keygen, loader }),
-		requestJobs: (env: Env) => requestInboundJobs(env.QUEUE),
+		requestJobs: jobs,
 		signAsAuthor: (env: Env, sign: AuthorSignature) => {
 			const config = readConfig(env)
 			return signAsAuthor(config.ok ? userKek(config.config) : '', sign)

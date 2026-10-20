@@ -1,7 +1,19 @@
+import { sql } from './api-helpers'
+import { LEGACY } from './federation-helpers'
+import { community, remoteAccount, remoteFollows } from './status-helpers'
 import { MAX_REMOTE_FIELDS, REMOTE_FIELDS_BYTES } from '../src/domain/accounts'
 import { sanitizeRemoteBio } from '../src/security/html'
 
-// Remote profile parts at their bounds (RES-2), shared by the answer-size tests.
+// Remote profile parts at their bounds (RES-2), shared by the answer-size tests, and a local profile with a remote
+// follower, shared by the profile credential tests.
+
+// alice with the legacy public key and a remote follower (fan@fans.example), so her profile Updates are recorded.
+export async function aliceWithFollower(deps: Parameters<typeof community>[2] = {}, scope = 'read write follow') {
+	const h = await community(['alice'], scope, deps)
+	await sql(h.store, 'UPDATE local_accounts SET pubkey = ?', LEGACY.pubkey)
+	await remoteFollows(h.store, await remoteAccount(h.store, 'fan', 'fans.example'), h.users.alice.id)
+	return h
+}
 
 // One profile field of an actor document.
 export const field = (name: string, value: string) => ({ type: 'PropertyValue', name, value })

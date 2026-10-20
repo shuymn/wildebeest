@@ -127,6 +127,7 @@ const DEFAULT = 'left at its default by the converter (NOT_CONVERTED)'
 const NOT_CONVERTED: Record<string, string> = {
 	'accounts.confirmed_username': 'set when Kopje confirms a WebFinger domain; legacy has none',
 	'accounts.emojis': 'legacy has no custom emoji',
+	'accounts.indexable': 'legacy has no indexable setting: NULL, presented as false',
 	'accounts.deleted_at': 'set when a remote actor deletes itself in Kopje; legacy has no account being deleted',
 	'accounts.suspended_at': 'set when the admin suspends a remote account in Kopje; legacy has no such suspension',
 	'accounts.suspension_source': 'set with accounts.suspended_at; legacy has no such suspension',
@@ -144,6 +145,7 @@ const NOT_CONVERTED: Record<string, string> = {
 	'local_accounts.hide_collections': 'legacy has no setting to hide the network: every account shows it',
 	'local_accounts.suspended_at': 'legacy has no suspension',
 	'local_accounts.credential_epoch': 'the credential epoch a suspension in Kopje moves; legacy has no suspension',
+	'local_accounts.accept_requests_after': 'the unlock acceptance cursor; legacy has no job running',
 	'local_accounts.default_quote_policy':
 		"legacy has no quote policy setting: a carried account gets Mastodon's default",
 	'media_attachments.focus_x': 'legacy has no focal point',
@@ -182,6 +184,7 @@ const NOT_VERIFIED: Record<string, string> = {
 	'accounts.followers_count': COUNTER,
 	'accounts.following_count': COUNTER,
 	'accounts.hide_collections': DEFAULT,
+	'accounts.indexable': DEFAULT,
 	'accounts.suspended_at': DEFAULT,
 	'accounts.suspension_source': DEFAULT,
 	'accounts.inbox_url': FROM_RAW,
@@ -208,6 +211,7 @@ const NOT_VERIFIED: Record<string, string> = {
 	'local_accounts.hide_collections': DEFAULT,
 	'local_accounts.suspended_at': DEFAULT,
 	'local_accounts.credential_epoch': DEFAULT,
+	'local_accounts.accept_requests_after': DEFAULT,
 	'local_accounts.default_quote_policy': DEFAULT,
 	'media_attachments.created_at': TIME,
 	'media_attachments.focus_x': DEFAULT,

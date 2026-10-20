@@ -460,7 +460,6 @@ const ALLOWED: Record<string, { count: number; reason: string }> = {
 	'src/domain/audience.ts interpolation r': { count: 1, reason: PREDICATE },
 	"src/domain/audience.ts interpolation uriHostSql('a.uri')": { count: 3, reason: PREDICATE },
 	'src/domain/conversation-rows.ts interpolation s': { count: 1, reason: PREDICATE },
-	'src/domain/media.ts interpolation column': { count: 2, reason: LOCAL },
 	'src/domain/timelines.ts interpolation FOLLOWED_STREAM': { count: 2, reason: WINDOW },
 	'src/domain/timelines.ts interpolation OWN': { count: 1, reason: WINDOW },
 	'src/domain/timelines.ts interpolation TAG_STREAM': { count: 1, reason: WINDOW },

@@ -8,6 +8,7 @@ import type { StoredKey } from '../domain/actors'
 import type { AuthFailure, Authorized, Credential, UserCredential } from '../domain/auth'
 import type { Resolved } from '../domain/remote-statuses'
 import { webPushKeys } from '../platform/config'
+import { errorFields } from '../platform/error-message'
 import type { ImageCodec } from '../platform/images'
 import { callStore, type StoreResolver, type StoreStub } from '../platform/store-client'
 import type { RequiredScope } from '../security/scopes'
@@ -148,4 +149,30 @@ export async function requestParams(c: ApiContext, deps: ApiDeps): Promise<Param
 // The Web Push application server key clients subscribe with; empty until VAPID_JWK is set.
 export function vapidKey(env: Env): string {
 	return webPushKeys(env)?.publicKey ?? ''
+}
+
+// What runs after the response needs of the request: its bindings and its execution context.
+export type AfterResponse = { env: Env; executionCtx: Pick<ExecutionContext, 'waitUntil'> }
+
+// Runs `work` after the response; the execution context keeps it alive.
+export function afterResponse(c: AfterResponse, work: Promise<unknown>): void {
+	try {
+		c.executionCtx.waitUntil(work)
+	} catch {
+		// No execution context (not reachable in the Worker); the work still runs.
+	}
+}
+
+// Asks for a round of the Store's jobs after the response (the unlock job, domain/unlock-accepts.ts); the cron runs
+// one regardless.
+export function requestJobsSoon(c: AfterResponse, deps: Pick<ApiDeps, 'requestJobs'>): void {
+	const ring = deps.requestJobs?.(c.env)
+	if (ring !== undefined) {
+		afterResponse(
+			c,
+			ring.catch((error: unknown) => {
+				console.error({ event: 'kopje.jobs.request_failed', ...errorFields(error) })
+			})
+		)
+	}
 }

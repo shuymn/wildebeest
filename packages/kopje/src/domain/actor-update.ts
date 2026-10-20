@@ -25,6 +25,7 @@ const CONTEXT = [
 		featured: { '@id': 'toot:featured', '@type': '@id' },
 		featuredTags: { '@id': 'toot:featuredTags', '@type': '@id' },
 		discoverable: 'toot:discoverable',
+		indexable: 'toot:indexable',
 		schema: 'http://schema.org#',
 		PropertyValue: 'schema:PropertyValue',
 		value: 'schema:value',
@@ -47,6 +48,7 @@ type ActorRow = {
 	header_url: string | null
 	locked: number
 	discoverable: number | null
+	indexable: number | null
 	also_known_as: string
 	fields: string
 	attribution_domains: string
@@ -64,7 +66,8 @@ function image(stored: string | null): { type: 'Image'; url: string } | undefine
 function actorRow(db: Db, accountId: string): ActorRow | undefined {
 	return db.first<ActorRow>(
 		`SELECT a.uri, a.username, a.actor_type, a.display_name, a.note, a.avatar_url, a.header_url, a.locked,
-			a.discoverable, l.also_known_as, l.fields, l.attribution_domains, l.pubkey, a.created_at, l.suspended_at, a.emojis
+			a.discoverable, a.indexable, l.also_known_as, l.fields, l.attribution_domains, l.pubkey, a.created_at,
+			l.suspended_at, a.emojis
 		FROM accounts a JOIN local_accounts l ON l.account_id = a.id WHERE a.id = ?`,
 		accountId
 	)
@@ -72,7 +75,7 @@ function actorRow(db: Db, accountId: string): ActorRow | undefined {
 
 // The document of an actor row. A suspended actor is presented as the actor endpoint presents it (federation.ts, as
 // Mastodon's ActivityPub::ActorSerializer): no name, summary, icon, image, aliases or fields, not locked or
-// discoverable, and `suspended: true`; its keys, inboxes and collections stay.
+// discoverable or indexable, and `suspended: true`; its keys, inboxes and collections stay.
 function documentOf(db: Db, row: ActorRow): Record<string, unknown> {
 	const origin = new URL(row.uri).origin
 	const suspended = row.suspended_at !== null
@@ -93,10 +96,11 @@ function documentOf(db: Db, row: ActorRow): Record<string, unknown> {
 		publicKey: { id: `${row.uri}#main-key`, owner: row.uri, publicKeyPem: row.pubkey },
 		published: row.created_at,
 		...(suspended
-			? { manuallyApprovesFollowers: false, discoverable: false, suspended: true }
+			? { manuallyApprovesFollowers: false, discoverable: false, indexable: false, suspended: true }
 			: {
 					manuallyApprovesFollowers: row.locked === 1,
 					discoverable: row.discoverable === null ? undefined : row.discoverable === 1,
+					indexable: row.indexable === 1,
 					icon: image(row.avatar_url),
 					image: image(row.header_url),
 					alsoKnownAs: (JSON.parse(row.also_known_as) as string[]).flatMap((uri) => httpUrl(uri)?.href ?? []),

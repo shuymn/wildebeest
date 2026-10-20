@@ -315,7 +315,7 @@ export function setupRoutes(deps: SetupDeps): Hono<SetupEnv> {
 			await c.req.raw.body?.cancel()
 			return forbidden(c)
 		}
-		const read = await readParams(c.req.raw, FORM_LIMIT)
+		const read = await readParams(c.req.raw, { limit: FORM_LIMIT })
 		if (!read.ok) {
 			return page(c, 400, <SetupLoginPage problem="The form could not be read." />)
 		}
@@ -350,7 +350,7 @@ export function setupRoutes(deps: SetupDeps): Hono<SetupEnv> {
 			await c.req.raw.body?.cancel()
 			return page(c, 429, <SetupLoginPage problem="Too many attempts from this address. Try again in a minute." />)
 		}
-		const read = await readParams(c.req.raw, FORM_LIMIT)
+		const read = await readParams(c.req.raw, { limit: FORM_LIMIT })
 		const presented = read.ok ? read.params.get('token') : undefined
 		const secret = (c.env as { SETUP_TOKEN?: unknown }).SETUP_TOKEN
 		if (typeof secret !== 'string' || secret.length < MIN_SETUP_TOKEN_LENGTH) {
