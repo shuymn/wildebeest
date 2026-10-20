@@ -218,6 +218,18 @@ const RULES: readonly Rule[] = [
 				'the published announcements (announcementShownSql), the viewer’s own dismissals and reactions, and the admin’s writes',
 		},
 	},
+	{
+		// R41: trends and their reviews are decided in one module, which every list, round and review goes through.
+		name: 'reads or writes trends',
+		pattern: new RegExp(
+			`\\b(?:FROM|JOIN|INTO|UPDATE)\\s+${table(['trend_tags', 'trend_statuses', 'tag_trend_reviews', 'status_trend_reviews', 'account_trend_reviews'])}`,
+			'i'
+		),
+		allowed: {
+			'src/domain/trends.ts':
+				'the round, the lists (allowance, the per-author maximum, the 200-row bound) and the Access admin’s reviews',
+		},
+	},
 ]
 
 const files = (texts: Record<string, string>): Source[] => Object.entries(texts).map(([path, text]) => ({ path, text }))
@@ -316,6 +328,11 @@ const RULE_FIXTURES: readonly [name: string, flagged: string, passed: string][] 
 		'reads or writes announcements',
 		"db.run('INSERT OR IGNORE INTO announcement_dismissals (id) VALUES (1)')",
 		"db.all('SELECT announcements_count FROM x')",
+	],
+	[
+		'reads or writes trends',
+		"db.run('DELETE FROM status_trend_reviews WHERE status_id = ?')",
+		"db.all('SELECT trend_tags_listed FROM x')",
 	],
 ]
 
