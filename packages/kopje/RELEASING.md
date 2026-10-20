@@ -60,7 +60,10 @@ On GitHub, in the repository settings:
    time in the notes (the budget and the store: `test/bench/migration-cost.ts`). The measure is the "Kopje migration
    bench" workflow (`.github/workflows/kopje-bench.yml`): a GitHub-hosted runner takes the range from the newest
    `kopje-v*` tag and reports the median of three runs, for every pull request that changes a migration and by hand
-   (`gh workflow run kopje-bench.yml --ref <branch>`). It must pass before the branch merges. A local run measures
+   (`gh workflow run kopje-bench.yml --ref <branch>`). It must pass before the branch merges: the upgrade's median
+   must be within the budget. It also shows whether the upgrade checked foreign keys over the whole Store and an
+   estimate of a retry's cost (which always checks the whole Store); the estimate warns past the budget but does not
+   fail. A local run measures
    the same range, but only on an otherwise idle machine:
 
     ```sh
