@@ -56,13 +56,12 @@ import m0055 from '../../migrations/0055_local_custom_emojis.sql'
 import m0056 from '../../migrations/0056_announcements.sql'
 import m0057 from '../../migrations/0057_trends.sql'
 import m0058 from '../../migrations/0058_profile_credentials.sql'
-import type { Migration } from '../platform/store-kernel'
 
 // Store migrations in apply order. Append only: an applied file is recorded by name and checksum and must
 // never change. Each file runs in its own transaction, must finish well under 30 seconds, and must be pure SQL with no
 // PRAGMA and no DEFERRABLE (test/migration-lint.test.ts). foreignKeys: 'unchanged' only for a file that lint accepts;
 // see Migration in src/platform/store-kernel.ts.
-export const MIGRATIONS: readonly Migration[] = [
+export const MIGRATIONS: readonly { name: string; sql: string; foreignKeys?: 'unchanged' }[] = [
 	{ name: '0000_initial', sql: m0000 },
 	{ name: '0001_blocks_and_mutes', sql: m0001 },
 	{ name: '0002_web_push', sql: m0002 },
