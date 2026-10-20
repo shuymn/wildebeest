@@ -145,9 +145,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 - Store schema: adds eight migrations (0049–0056), applied on the first request after the deploy; a rollback to an
   earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). On the
-  representative store defined in `test/bench/migration-cost.ts`, migrations 0049–0055 together took 16.7–17.0
+  representative store defined in `test/bench/migration-cost.ts`, migrations 0049–0056 together took 16.9–17.2
   seconds in three runs of the migration bench workflow on a 4-CPU GitHub-hosted runner, in workerd's local Durable
-  Object SQLite (0049–0054 alongside: 16.3–17.0 seconds), within the 20-second upgrade budget.
+  Object SQLite (0049–0055 alongside: 17.0–17.7 seconds), within the 20-second upgrade budget.
     - `0049_instance_bounds`: rewrites instance settings past their bounds (above), adds the triggers that refuse
       them, and indexes the suspend blocks by domain.
     - `0050_follow_recommendation_mutes`: the table of dismissed suggestions; it reads no existing row.
