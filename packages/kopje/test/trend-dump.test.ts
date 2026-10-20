@@ -5,6 +5,7 @@ import { completeSetup, migratedStore } from './helpers'
 import { copyConfig, dumpViaRpc, importViaRpc, setAccess } from './ops-helpers'
 import { AT, authors, review, trendStatuses } from './trend-helpers'
 import type { StoreStub } from '../src/platform/store-client'
+import { MAX_TREND_REVIEWS } from '../src/platform/stored-bounds'
 
 // Trends in dumps (docs/dump-format.md "Stored bounds"): the five tables round-trip at their trend caps, and an import
 // is held to the CHECKs and triggers of 0057_trends (refused with their names).
@@ -51,6 +52,49 @@ describe('trends in dumps', () => {
 		expect(await rows(target)).toEqual(await rows(store))
 		expect((await rows(target)).map((table) => table.length)).toEqual([250, 250, 1, 1, 1])
 	}, 120_000)
+
+	it('round-trip each review table at 10,000', async () => {
+		const store = await source()
+		await sql(store, 'DELETE FROM tag_trend_reviews')
+		await sql(store, 'DELETE FROM status_trend_reviews')
+		await sql(store, 'DELETE FROM account_trend_reviews')
+		await authors(store, MAX_TREND_REVIEWS - 84, 600_000_000_000_000_000n)
+		await sql(
+			store,
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+			INSERT INTO statuses (id, uri, account_id, visibility, published_at)
+			SELECT CAST(117000000000000000 + i AS TEXT), 'https://o.example/' || i, '500000000000000000', 'public', ?2 FROM n`,
+			MAX_TREND_REVIEWS - 250,
+			PEAK
+		)
+		await sql(
+			store,
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+			INSERT INTO tag_trend_reviews (name, trendable, reviewed_at) SELECT 'r' || i, i % 2, ?2 FROM n`,
+			MAX_TREND_REVIEWS,
+			PEAK
+		)
+		await sql(
+			store,
+			'INSERT INTO status_trend_reviews (status_id, trendable, reviewed_at) SELECT id, 1, ?1 FROM statuses',
+			PEAK
+		)
+		await sql(
+			store,
+			'INSERT INTO account_trend_reviews (account_id, trendable, reviewed_at) SELECT id, 0, ?1 FROM accounts WHERE domain IS NOT NULL',
+			PEAK
+		)
+		expect((await rows(store)).slice(2).map((table) => table.length)).toEqual([
+			MAX_TREND_REVIEWS,
+			MAX_TREND_REVIEWS,
+			MAX_TREND_REVIEWS,
+		])
+		const { text } = await dumpViaRpc(store)
+		const target = await migratedStore()
+		await copyConfig(store, target)
+		expect((await importViaRpc(target, text)).report).toMatchObject({ ok: true, problems: [] })
+		expect(await rows(target)).toEqual(await rows(store))
+	}, 300_000)
 
 	it('are refused on import past their bounds, with the constraint’s name', async () => {
 		const store = await source()
