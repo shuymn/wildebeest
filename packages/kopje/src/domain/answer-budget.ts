@@ -62,29 +62,26 @@ function stringBytes(text: string): number {
 	let bytes = 2
 	for (let i = 0; i < text.length; i++) {
 		const c = text.charCodeAt(i)
-		if (c === 0x22 || c === 0x5c || c === 0x08 || c === 0x0c || c === 0x0a || c === 0x0d || c === 0x09) {
-			bytes += 2
-		} else if (c < 0x20) {
-			bytes += 6
-		} else if (c < 0x80) {
-			bytes += 1
-		} else if (c < 0x800) {
-			bytes += 2
-		} else if (c >= 0xd800 && c <= 0xdbff) {
-			const next = text.charCodeAt(i + 1)
-			if (next >= 0xdc00 && next <= 0xdfff) {
-				bytes += 4
-				i++
-			} else {
-				bytes += 6
-			}
-		} else if (c >= 0xdc00 && c <= 0xdfff) {
-			bytes += 6
+		if (c >= 0xd800 && c <= 0xdbff && (text.charCodeAt(i + 1) & 0xfc00) === 0xdc00) {
+			bytes += 4
+			i++
 		} else {
-			bytes += 3
+			bytes += unitJsonBytes(c)
 		}
 	}
 	return bytes
+}
+
+// One UTF-16 code unit's bytes in JSON, as JSON.stringify writes it when it is not half of a surrogate pair (a lone
+// surrogate as \uXXXX); the caller counts a pair as 4.
+export function unitJsonBytes(c: number): number {
+	if (c === 0x22 || c === 0x5c || c === 0x08 || c === 0x0c || c === 0x0a || c === 0x0d || c === 0x09) {
+		return 2
+	}
+	if (c < 0x20 || (c >= 0xd800 && c <= 0xdfff)) {
+		return 6
+	}
+	return c < 0x80 ? 1 : c < 0x800 ? 2 : 3
 }
 
 // What admit took: the items, their bytes (each with a separator), how many of the walked entries were consumed (the

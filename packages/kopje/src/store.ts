@@ -32,6 +32,7 @@ import {
 import { oauthAdminStatus } from './domain/admin-authority'
 import * as adminDomainBlocks from './domain/admin-domain-blocks'
 import { instanceFollowsMeasure } from './domain/admin-measures'
+import * as announcements from './domain/announcements'
 import { checkCredential, type Credential, type UserCredential } from './domain/auth'
 import * as blocks from './domain/blocks'
 import * as conversations from './domain/conversations'
@@ -1647,6 +1648,59 @@ export class Store extends DurableObject<Env> {
 
 	localEmojiObject(callerBuild: string, input: OperationInput<typeof localEmojis.localEmojiObject>) {
 		return this.#kernel.execute(callerBuild, localEmojis.localEmojiObject, input)
+	}
+
+	// Announcements (domain/announcements.ts): the signed-in user's list, dismissals and reactions; the Access admin's
+	// writes from /admin/announcements, each at the Store's own time, and its list; the cron's round.
+
+	listAnnouncements(callerBuild: string, input: OperationInput<typeof announcements.listAnnouncements>) {
+		return this.#kernel.execute(callerBuild, announcements.listAnnouncements, input)
+	}
+
+	dismissAnnouncement(callerBuild: string, input: OperationInput<typeof announcements.dismissAnnouncement>) {
+		return this.#kernel.execute(callerBuild, announcements.dismissAnnouncement, input)
+	}
+
+	reactToAnnouncement(callerBuild: string, input: OperationInput<typeof announcements.reactToAnnouncement>) {
+		return this.#kernel.execute(callerBuild, announcements.reactToAnnouncement, input)
+	}
+
+	unreactToAnnouncement(callerBuild: string, input: OperationInput<typeof announcements.unreactToAnnouncement>) {
+		return this.#kernel.execute(callerBuild, announcements.unreactToAnnouncement, input)
+	}
+
+	createAnnouncement(callerBuild: string, input: Omit<OperationInput<typeof announcements.createAnnouncement>, 'now'>) {
+		return this.#kernel.execute(callerBuild, announcements.createAnnouncement, { ...input, now: Date.now() })
+	}
+
+	updateAnnouncement(callerBuild: string, input: Omit<OperationInput<typeof announcements.updateAnnouncement>, 'now'>) {
+		return this.#kernel.execute(callerBuild, announcements.updateAnnouncement, { ...input, now: Date.now() })
+	}
+
+	publishAnnouncement(
+		callerBuild: string,
+		input: Omit<OperationInput<typeof announcements.publishAnnouncement>, 'now'>
+	) {
+		return this.#kernel.execute(callerBuild, announcements.publishAnnouncement, { ...input, now: Date.now() })
+	}
+
+	unpublishAnnouncement(
+		callerBuild: string,
+		input: Omit<OperationInput<typeof announcements.unpublishAnnouncement>, 'now'>
+	) {
+		return this.#kernel.execute(callerBuild, announcements.unpublishAnnouncement, { ...input, now: Date.now() })
+	}
+
+	deleteAnnouncement(callerBuild: string, input: Omit<OperationInput<typeof announcements.deleteAnnouncement>, 'now'>) {
+		return this.#kernel.execute(callerBuild, announcements.deleteAnnouncement, { ...input, now: Date.now() })
+	}
+
+	adminAnnouncements(callerBuild: string, input: OperationInput<typeof announcements.adminAnnouncements>) {
+		return this.#kernel.execute(callerBuild, announcements.adminAnnouncements, input)
+	}
+
+	announcementRound(callerBuild: string, input: OperationInput<typeof announcements.announcementRound>) {
+		return this.#kernel.execute(callerBuild, announcements.announcementRound, input)
 	}
 
 	// Search (B4b).

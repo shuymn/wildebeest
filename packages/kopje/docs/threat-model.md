@@ -693,6 +693,13 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `src/domain/streaming.ts`, the hashtag subscription in `src/stream-hub.ts`, migration `0035_streaming_public`;
   `test/streaming/public.test.ts`, `test/streaming-oracle.test.ts`, `test/stream-delete.test.ts`,
   `test/policy-bounds.test.ts`, `test/migrations.test.ts`, `test/cascade-guard.test.ts`.
+  _Enforced (main)_ for announcements (R40): `announcement`, `announcement.reaction` and `announcement.delete` go on
+  `user` only, under `read:statuses` (or `read`), to every listener alike, presented with no viewer (no `read`, no
+  `me`); each write that changes what a listener may be shown journals its own row (nothing is coalesced, so a socket
+  opened while an event is pending is sent every later change), and the unit presents the announcement as it is when
+  sent: published, its entity; otherwise its delete. An expiry by the cron sends nothing,
+  as Mastodon's. `streamAnnouncement` in `src/domain/streaming.ts`, `streamedAnnouncement` and
+  `streamedAnnouncementReaction` in `src/domain/announcements.ts`; `test/streaming/announcements.test.ts`.
 
 - **VIS-27: a quote reveals nothing its quoted status hides.** R35 applies VIS-1/R2 to the quoted status for the
   same viewer, whatever the quoting status's own visibility: `unauthorized` carries no content, and the filter states
@@ -811,6 +818,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   20,000 local follows, and answers 422 beyond it, never an undercount; dimensions and retention answer `[]`.
   `src/domain/admin-domain-blocks.ts`, `src/domain/admin-measures.ts`; `test/admin-domain-blocks.test.ts`,
   `test/admin-measures.test.ts`, `test/admin-domain-blocks-replay.test.ts`.
+  Announcements are the Access admin's (AUTH-5), never the OAuth admin's; each write logs its row in its own transaction
+  (`test/admin-announcements.test.ts`, `test/cli.test.ts`).
 - **VIS-30: an instance-suspended account is shown to nobody and gets no new content.** An account the instance
   suspended (R38) is unavailable (R1) from the suspension's commit: shown to nobody (as any unavailable account), sent
   nothing but retractions, and its inbound activity is not applied but for its `Delete`, `DeleteActor`, `Undo` and
@@ -870,7 +879,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `test/scopes.test.ts`, `test/vectors.test.ts` ("Mastodon's scope hierarchy"), `test/oauth.test.ts` ("scopes on
   routes"). A route may also be `optional`: no token reads as anonymous, and a token sent must be valid; such a route may declare no scope (`GET /api/v1/tags/:id`: any valid token,
   app tokens read as anonymous), and a `token` route may still require a user (`GET /api/v1/announcements`: any user
-  token, whatever its scopes; app tokens 422); `test/tags.test.ts`, `test/placeholders.test.ts`. _Enforced (main):_ the admin API's routes are optional-token routes with admin scopes (Mastodon's
+  token, whatever its scopes; app tokens 422: `tokenUserReadOperation` in `src/domain/auth.ts`, which
+  `announcements.listAnnouncements` declares); `test/tags.test.ts`, `test/announcements.test.ts`. _Enforced (main):_ the admin API's routes are optional-token routes with admin scopes (Mastodon's
   `authorize_if_got_token!`): a token sent must be valid and cover the route's scope, and who may act is decided in
   the Store (VIS-29); `test/mastodon-access.test.ts` compares them with Mastodon's, setting aside only each admin
   route's role policy, and `test/admin-api.test.ts` ("admin routes").
@@ -914,6 +924,11 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   Custom emoji writes (`/admin/emojis`, `kopje-admin emoji`) are Access-only, checked with `accessAdminRefusal` in the
   Store transaction and logged with the Access identity (`CustomEmoji` targets); the import token and import sessions
   never reach them; `test/local-emojis.test.ts` ("is refused for the import token and import sessions").
+  Announcement writes (`/admin/announcements`, `kopje-admin announcement`: create, change, publish, unpublish, delete)
+  are Access-only, checked with `accessAdminRefusal` in the Store transaction and logged with the Access identity
+  (`Announcement` targets, with the text's first 200 code units); the import token and import sessions never reach them;
+  `src/domain/announcements.ts`; `test/admin-announcements.test.ts` ("is refused for the import token and import
+  sessions", "answers announcement-not-found and refuses every authority but Access").
 - **AUTH-6: a user acts only on what that user may touch.** User operations take the acting account from the validated
   viewer, never from the body or path, and check ownership or VIS-1 access to every referenced resource in the same
   transaction. Admin, setup and federation operations use their own named rules (AUTH-5, SETUP-2, ID-6), and the
@@ -1207,6 +1222,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   in the API and as the actor's `PropertyValue` attachments: _Enforced (main):_ `renderFieldValue` in
   `src/domain/status-text.ts`; `test/web-session.test.ts` ("saves the profile"), `test/profile-fields.test.ts`
   ("publishes fields as PropertyValue attachments of the actor").
+  _Enforced (main)_ for announcements: the Access admin's text is stored as plain text and rendered when presented, by
+  the status pipeline (`parseStatusText`, `renderStatusHtml`: escaped, http(s) URLs, mentions of available accounts and
+  hashtags linked), so an import can hold no HTML; `src/domain/announcements.ts`; `test/announcements.test.ts`
+  ("presents a published announcement in Mastodon’s key order").
 - **HTML-3: navigable URLs are http(s) only.** Before a profile URL, avatar, header, attachment URL, field link or app
   website is emitted, it is parsed and must be http or https; anything else becomes absent or the default. This applies
   to fetched and imported data too. _Enforced (main)_ for app websites at registration: `validWebsite` in
@@ -1417,6 +1436,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `test/custom-emojis.test.ts` ("keeps the first valid tag of a name, examines 64 tags only, and stops at the first that does not fit").
   _Enforced (main)_ for a custom emoji upload: a JSON body of at most 1 MiB, an image below 262,144 decoded bytes in
   strict base64, its edges read before any transformation (`src/mastodon/emoji-upload.ts`).
+  _Enforced (main)_ for announcements: an admin body of at most 1 MiB (`JSON_BODY_LIMIT`), a text of at most 10,000
+  UTF-8 bytes (`ANNOUNCEMENT_TEXT_BYTES`), and a reaction name judged within 128 bytes before the emoji pattern runs
+  (`isUnicodeEmoji` in `src/platform/emoji-names.ts`); `test/admin-announcements.test.ts`, `test/emoji-names.test.ts`.
 - **RES-2: parsing work is bounded.** Every regex, parser and normalization over input at the RES-1 cap has an
   adversarial fixture with a time bound. _Enforced (main)_ for status text:
   `test/statuses.test.ts` ("handles the worst case at the bound within a generous time"). _Enforced (main)_ for the image metadata walk: `test/image-bytes.test.ts` ("walks a worst-case file at the upload
@@ -1480,6 +1502,13 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   writer shares `emojiSnapshot` and `emojiHref`, looks up at most 1,024 names and resolves at most 64 tokens, each by
   index (`src/domain/custom-emojis.ts`); `test/local-emojis.test.ts` ("reads each production query through its
   index").
+  _Enforced (main)_ for announcements: the CHECKs and triggers of migration `0056_announcements` (text bytes, NUL and
+  blank; times; the range; publication; reaction names by bytes, controls and form; a custom emoji reaction named by its
+  shortcode; 8 names per announcement), which imports meet too; the writers share their rules (`storedAnnouncementText`,
+  `isUnicodeEmoji`). A text within its bytes is within the parser's raw bound once decoded, and the rendering measures each segment's
+  HTML as it is built (text, escapes and paragraph markup included) and stops at the first that passes the content
+  budget, so what is built past the budget is one segment, at most 310,064 bytes of JSON (a hashtag of 3,333 U+FDFA,
+  NFKC-expanded and URL-encoded) (A7 of the design); `test/migrations.test.ts` ("0056_announcements"), `test/announcement-bounds.test.ts`.
 - **RES-3: lists are bounded.** Pageable lists return at most 80 items; relationships read at most 100 ids; any other
   collection names its count and byte bound. _Enforced (main):_ `src/mastodon/pagination.ts`, `MAX_RELATIONSHIP_IDS` in
   `src/domain/accounts.ts`. _Gap: neither cap is tested._ _Enforced (main)_ for search: at
@@ -1568,6 +1597,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   keeps a read-time projection (uris included) is read outside its helper in `src/domain` or a helper is given another
   column; its header states what it checks, where it fails closed, and its known gaps. It is an architectural aid; the aggregate response tests prove
   the budgets. Maxima of each presented shape: "Maxima of presented units" below (`test/status-bounds.test.ts`).
+  _Enforced (main)_ for announcements: the list holds at most 16 (every live one), each within its measured conservative
+  maximum of 248,997 JSON bytes, derived from its columns' caps ("Maxima of presented units"), admitted within `ARRAY_ANSWER_BYTES` as a backstop that never
+  cuts; the Access admin's page holds at most 50; `test/announcement-bounds.test.ts`.
 - **RES-4: stored derived data is bounded.** Snapshots, the KV cache, the spool and deliveries each have a size cap, a
   count cap or an expiry with a sweeper. _Enforced (main)_ for remote statuses: one
   status stores at most 4 attachments (Mastodon's limit) with 10,000 code points of description each, 100 hashtags
@@ -1604,6 +1636,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   inbound activity sweeps 100 expired rows, and an actor has at most 10,000 live rows. Finished inbound jobs (and
   with them deleted actors' tombstones) expire 30 days after they finish. `test/inbox.test.ts`,
   `test/inbox-regressions.test.ts`.
+  _Enforced (main)_ for announcements: at most 1,000 kept and 16 published or scheduled (triggers and writers), 8
+  reaction names per announcement, so reactions grow at most 8 rows and dismissals one per local account and
+  announcement; `test/migrations.test.ts`,
+  `test/admin-announcements.test.ts`.
 - **RES-5: retries are bounded, but maintenance is not a failure.** Waiting out maintenance consumes no processing
   retry; real processing errors count against `max_retries`. _Enforced (main):_ `src/jobs/queue.ts`; `test/gate.test.ts`
   ("spool consumer"). Deliveries give up after 15 attempts (`min(30s·2^n, 12h)`, n the attempts so far) or at once on a
@@ -1813,6 +1849,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   A custom emoji upload charges two transformations to the instance's monthly budget (429 past it). Disabled emoji
   versions are kept: their storage, a backup copy to every new destination and two rebuild transformations each after
   a restore are paid indefinitely ([backup.md](backup.md)).
+  _Enforced (main)_ for announcements: the cron's round (`announcementRound`) publishes at most the 16 due and takes
+  down at most the 16 ended, in one transaction, so one round does all that is due; `test/admin-announcements.test.ts`
+  ("the cron’s round"). An announcement's delete removes its reactions and dismissals before the row and counts every
+  row it writes with `total_changes()` within `ANNOUNCEMENT_DELETE_ROWS` (4,096), refused before it writes past it;
+  `test/admin-announcements.test.ts` ("an announcement’s delete").
 - **RES-7: query work is bounded, not only the rows returned.** Feeds apply visibility and filters in the query before
   `LIMIT`. Context traversal visits a bounded number of statuses before sorting. A status keeps a bounded number and
   size of edits. _Enforced (main)_ for filtering before `LIMIT`: `src/domain/timelines.ts` (_Gap:
@@ -1961,11 +2002,31 @@ RPC limit.
 | An admin.report notification of that report                      | 2,341,805         | 382,444         | 382,444           | 1,059     | 236   | 4.6%           |
 | ActivityPub Note: a local status at its bounds, 1,000 addressed  | 3,697,315         | 4,235,143       |                   | 1,337     | 3,165 | 50.5%          |
 | Its Create (the Note and its addressing again)                   |                   | 6,291,204       |                   |           |       | 75.0%          |
+| Announcement: each part derived from its caps                    |                   | 121,774         | 248,997           |           |       | 3.0%           |
 
 The most JSON is the emoji-poll fill's, the most SQLite bytes the raw fill's; the escaped fill presents the
 conversation in 6,792,894 bytes. The Note's local emoji snapshot is at its 12,288-byte bound with as many entries as
 fit (61, every url at its shortest), resolved to 14,850 bytes of `Emoji` tags (at most 64 × 44 bytes past the
 snapshot); an actor's at 6,144 bytes resolves to 30 tags of 7,404 bytes (`test/local-emoji-api.test.ts`).
+
+An announcement's maxima are derived from caps, not from fills: each part's conservative JSON is computed by
+`test/announcement-bounds.test.ts` (`derivedAnnouncementMaxima` in `test/announcement-helpers.ts`) from the stored and
+presented caps of its columns, each at its worst JSON escaping. Mentions: 16 entries of an 18-digit id, a 255-byte
+username (twice, also in `acct`), a 2,048-byte profile URL escaped to two bytes a byte, and a looked-up domain of
+2,040 bytes (107,329). Hashtags: 16 names of 256 three-byte code units with their percent-encoded URLs on a 253-byte
+host (53,761). Emoji: the 12,288-byte presented bound. Reactions: 8 custom emoji of 128-byte shortcodes with two
+512-byte images and a count of `Number.MAX_SAFE_INTEGER` (9,801). Content: the 65,536-byte budget. Keys, id, times and
+flags: 282. One announcement is at most 248,997 bytes (3.0% of 8 MiB), the list at most 3,983,969, a stream payload
+double-encoded at most 497,996, under 512 KiB. Fills at the widest reachable values witness that what can be built
+stays within these: 16 mentions of backslash URLs (80,386) and of a domain spelled with 120 `é.` labels, which IDNA
+makes 966 ASCII bytes (89,969); 16 hashtags that NFKC makes 256 units (49,873); and, through the real Store RPC, 16
+announcements of the widest combined text with 8 reactions each, 1,948,401 bytes (121,774 the largest); on the stream,
+112,082 and 100,192 bytes. The rows the list reads are bounded from per-column maxima (`ANNOUNCEMENT_ROW_CAPS` in
+`src/domain/announcements.ts`, which a RowMeter enforces as they are read): 333,440 bytes for the list and its
+dismissals, held throughout, and 5,493,376 for one presentation's mention, emoji and reaction rows (64, 1,024 and 8
+rows at their widest columns); past the cap an announcement is shown escaped with nothing read for it. With the
+derived answer at three times its JSON and one rendering at a time (the budget, the one segment built past it, at
+most 310,064 bytes, and the fallback), the list's heap is at most about 20.1 MB.
 
 Mentions whose url is derived read and present less (the conversation: 5,435,360 and 5,973,694 bytes): a derived url
 within the bound is at most the stored bound, and a longer one presents as ''.
@@ -2520,6 +2581,10 @@ activity specs, cited in test names.
 
 | Risk                                                                                                                                                                                                                                                                                                         | Why accepted                                                                                                                                                                                                                                                               | Revisit when                                                         |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| An announcement whose rendering passes 64 KiB after it was written (a mentioned account's URL grew) is shown with no link | The text is still shown in full, escaped; a write past the budget is refused (MD-4) | announcements need richer rendering |
+| An announcement's mentions follow the accounts as they are when read, as Mastodon's do | Mastodon resolves them live too; unavailable accounts are never linked (R1) | — |
+| Which new emoji a reaction may name is decided by workerd's ICU (`\p{RGI_Emoji}`) | Names already stored are unaffected; every name of Mastodon's emoji map passes | the runtime's ICU lags Mastodon's map |
+| An announcement taken down by its end time sends no `announcement.delete`, and a scheduled one is published up to 5 minutes late | Mastodon's scheduler does the same (MD-4); REST is authoritative | clients rely on the event |
 | Duplicate keys in a JSON OAuth body are not rejected; the last one wins                                                                                                                                                                                                                                      | RFC 6749 defines form bodies only, and Doorkeeper behaves the same                                                                                                                                                                                                         | a client depends on JSON bodies                                      |
 | Fedify 2.4.2 signs draft-cavage `(request-target)` without the query string                                                                                                                                                                                                                                  | Mastodon accepts it; reported upstream                                                                                                                                                                                                                                     | a peer rejects signed GETs to URLs with a query                      |
 | Backups, dumps and cutover exports made before a KEK rewrap hold the local keys under the previous KEK (unprotected when it was empty), so R5 with one of them and that KEK can unwrap the keys                                                                                                              | The rewrap cannot change copies outside the Store; the rotation procedure tells the operator to delete them or accept this (DATA-14); health warns on an empty KEK                                                                                                         | a key leak, or backups are re-encrypted per key                      |

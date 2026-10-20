@@ -1383,6 +1383,9 @@ export const ENTITIES = [
 	'REST::ApplicationSerializer',
 	'REST::CredentialApplicationSerializer',
 	'REST::FilterSerializer',
+	'REST::AnnouncementSerializer',
+	'REST::AnnouncementSerializer::AccountSerializer',
+	'REST::ReactionSerializer',
 ]
 
 const DECLARATIONS = /^(attributes|attribute|has_one|has_many|belongs_to)\b\s*(.*)$/s

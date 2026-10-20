@@ -25,20 +25,6 @@ describe('features without data yet', () => {
 		expect((await h.request(route, bearer(await appToken(h)))).status).toBe(422)
 	})
 
-	it('/api/v1/announcements is an empty list for any user token, whatever its scopes (AUTH-2)', async () => {
-		const h = await apiHarness()
-		const alice = await seedAccount(h.store, { username: 'alice', email: 'alice@example.com' })
-		for (const scope of ['read:accounts read:statuses', 'write', 'push']) {
-			expect(await getJson(h, '/api/v1/announcements', await scopedToken(h, scope))).toEqual({ status: 200, body: [] })
-		}
-		expect((await h.request('/api/v1/announcements')).status).toBe(401)
-		expect((await h.request('/api/v1/announcements', bearer('nope'))).status).toBe(401)
-		expect((await h.request('/api/v1/announcements', bearer(await appToken(h)))).status).toBe(422)
-		const token = await scopedToken(h, 'read')
-		await sql(h.store, 'UPDATE local_accounts SET suspended_at = ? WHERE account_id = ?', '2026-01-01', alice)
-		expect((await h.request('/api/v1/announcements', bearer(token))).status).toBe(403)
-	})
-
 	it('a revoked token gets no empty list', async () => {
 		const h = await community(['alice'])
 		await sql(h.store, "DELETE FROM oauth_tokens WHERE kind = 'access'")
@@ -61,10 +47,6 @@ describe('features without data yet', () => {
 		['GET', '/api/v1/annual_reports', 'read:accounts', 200, { annual_reports: [], accounts: [], statuses: [] }],
 		['GET', '/api/v1/annual_reports/2025', 'write:accounts', 404, recordNotFound],
 		['POST', '/api/v1/annual_reports/2025/read', 'write:accounts', 404, recordNotFound],
-		['POST', '/api/v1/announcements/1/dismiss', 'write:accounts', 404, recordNotFound],
-		['PUT', '/api/v1/announcements/1/reactions/%F0%9F%91%8D', 'write:favourites', 404, recordNotFound],
-		['PATCH', '/api/v1/announcements/1/reactions/%F0%9F%91%8D', 'write:favourites', 404, recordNotFound],
-		['DELETE', '/api/v1/announcements/1/reactions/%F0%9F%91%8D', 'write:favourites', 404, recordNotFound],
 		['GET', '/api/v1/emails/check_confirmation', 'read:accounts', 200, true],
 		['POST', '/api/v1/statuses/123/translate', 'read:statuses', 404, notFound],
 		['GET', '/api/v1_alpha/async_refreshes/abc', 'read', 404, notFound],

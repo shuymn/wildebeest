@@ -3624,6 +3624,43 @@
 				{ "name": "title", "optional": false }
 			],
 			"unresolved": []
+		},
+		"REST::AnnouncementSerializer": {
+			"fields": [
+				{ "name": "all_day", "optional": false },
+				{ "name": "content", "optional": false },
+				{ "name": "emojis", "optional": false },
+				{ "name": "ends_at", "optional": false },
+				{ "name": "id", "optional": false },
+				{ "name": "mentions", "optional": false },
+				{ "name": "published_at", "optional": false },
+				{ "name": "reactions", "optional": false },
+				{ "name": "read", "optional": true },
+				{ "name": "starts_at", "optional": false },
+				{ "name": "statuses", "optional": false },
+				{ "name": "tags", "optional": false },
+				{ "name": "updated_at", "optional": false }
+			],
+			"unresolved": []
+		},
+		"REST::AnnouncementSerializer::AccountSerializer": {
+			"fields": [
+				{ "name": "acct", "optional": false },
+				{ "name": "id", "optional": false },
+				{ "name": "url", "optional": false },
+				{ "name": "username", "optional": false }
+			],
+			"unresolved": []
+		},
+		"REST::ReactionSerializer": {
+			"fields": [
+				{ "name": "count", "optional": false },
+				{ "name": "me", "optional": true },
+				{ "name": "name", "optional": false },
+				{ "name": "static_url", "optional": true },
+				{ "name": "url", "optional": true }
+			],
+			"unresolved": []
 		}
 	}
 }

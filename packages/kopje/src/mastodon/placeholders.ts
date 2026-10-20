@@ -11,10 +11,10 @@ import {
 import { mastodonError } from './errors'
 import { grantsAny } from '../security/scopes'
 
-// Features Kopje has no data for (announcements, trends, annual reports, link timelines, translation, e-mail
-// confirmation, async refreshes), answered as Mastodon answers when the feature has nothing to show or is not
-// configured, because clients call them and a missing route can stop a client. Each is replaced when its feature
-// arrives with its own tables. The writes act on records that never exist, so they change nothing.
+// Features Kopje has no data for (trends, annual reports, link timelines, translation, e-mail confirmation, async
+// refreshes), answered as Mastodon answers when the feature has nothing to show or is not configured, because clients
+// call them and a missing route can stop a client. Each is replaced when its feature arrives with its own tables. The
+// writes act on records that never exist, so they change nothing.
 
 const RECORD_NOT_FOUND = () => mastodonError(404, 'Record not found')
 // Mastodon's not_found (ApplicationController#not_found, Api::BaseController#respond_with_error), as opposed to the
@@ -39,9 +39,6 @@ const forUser =
 		return answer(c)
 	}
 
-// A list of the signed-in user. announcements declares no scope, as Mastodon's (any user token).
-export const emptyUserList = forUser((c) => c.json([]))
-
 // GET /api/v1/annual_reports: Api::V1::AnnualReportsController#index with no pending report
 // (REST::AnnualReportsSerializer). Kopje makes no annual reports; neither does a stock Mastodon 4.5.11 unless its admin
 // generates them by hand: AnnualReport#generate has no automatic trigger (GenerateAnnualReportWorker is enqueued by
@@ -51,11 +48,6 @@ export const annualReports = forUser((c) => c.json({ annual_reports: [], account
 // GET /api/v1/annual_reports/:id and POST /api/v1/annual_reports/:id/read: AnnualReportsController#set_annual_report
 // raises RecordNotFound (find_by!) for a year without a report.
 export const annualReport = forUser(RECORD_NOT_FOUND)
-
-// POST /api/v1/announcements/:id/dismiss (Api::V1::AnnouncementsController#set_announcement) and PUT, PATCH and
-// DELETE /api/v1/announcements/:announcement_id/reactions/:id (Api::V1::Announcements::ReactionsController
-// #set_announcement): Announcement.published.find raises RecordNotFound. Kopje publishes no announcements.
-export const announcement = forUser(RECORD_NOT_FOUND)
 
 // GET /api/v1/timelines/link: Api::V1::Timelines::LinkController#set_preview_card raises RecordNotFound (find_by!) for
 // a URL that is not a trending link, after authorize_if_got_token! (a token sent must be valid and cover

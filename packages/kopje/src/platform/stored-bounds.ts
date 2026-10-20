@@ -673,3 +673,28 @@ export function storedEmojiCategory(raw: string): string | null | undefined {
 export function presentedCategory(stored: string | null): string | null {
 	return stored !== null && isEmojiCategory(stored) ? stored : null
 }
+
+// ---- Announcements: migration 0056_announcements
+
+// announcements.text (RES-1, RES-2): plain text as the Access admin wrote it, 1 to ANNOUNCEMENT_TEXT_BYTES UTF-8 bytes,
+// with no NUL, not blank. A text within the bytes decodes to at most as many UTF-16 code units (a malformed byte
+// becomes one U+FFFD), so it never passes status-text.ts MAX_RAW_LENGTH when presented.
+export const ANNOUNCEMENT_TEXT_BYTES = 10_000
+// Announcements at most, and published or scheduled ones at most (RES-3, RES-4: the list holds every published one).
+export const MAX_ANNOUNCEMENTS = 1000
+export const MAX_LIVE_ANNOUNCEMENTS = 16
+// announcement_reactions.name, in UTF-8 bytes, judged before the emoji pattern runs (RES-2); names per announcement
+// (Mastodon's ReactionValidator::LIMIT).
+export const REACTION_NAME_BYTES = 128
+export const MAX_REACTION_NAMES = 8
+
+// The text an admin write stores, or null when it is refused: made well-formed (a bound lone surrogate would be stored
+// as its three-byte encoding), then refused when blank after JavaScript's trim (which removes every character SQLite's
+// ASCII trim of the CHECK does, and Unicode spaces), when it holds a NUL, or when its UTF-8 passes the bound.
+export function storedAnnouncementText(raw: string): string | null {
+	const text = raw.toWellFormed()
+	if (text.trim() === '' || text.includes('\u0000') || text.length > ANNOUNCEMENT_TEXT_BYTES) {
+		return null
+	}
+	return ENCODER.encode(text).length <= ANNOUNCEMENT_TEXT_BYTES ? text : null
+}

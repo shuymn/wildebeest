@@ -22,5 +22,14 @@ reason and who decided it, and change the exceptions that cite the gap.
   answers a role without the permission. Kopje has no sign-ups, recorded IPs, allowlist mode or trends data. Decided
   by the coordinator, 2026-10-16.
 - **MD-3: Features not built yet answer as Mastodon with the feature off.** Trends (and the admin trends lists), the
-  link timeline, announcements, annual reports, translation, async refreshes and the admin domain allows list answer
-  empty or 404 until the feature is built; the backlog tracks them. Decided by the coordinator, 2026-10-20.
+  link timeline, annual reports, translation, async refreshes and the admin domain allows list answer empty or 404
+  until the feature is built; the backlog tracks them. Decided by the coordinator, 2026-10-20.
+- **MD-4: Announcements differ in what they embed and when they change.** `statuses` is always `[]`: Mastodon embeds
+  the statuses the text links, each up to a whole quote, in a list with no paging; the links stay in `content`. At most
+  16 mentions (of available accounts, among the first 64 references) and 16 hashtags are listed; `content` links every
+  hashtag. A text whose rendering passes 64 KiB of JSON is refused when written, and one that passes it later (a
+  mentioned account's URL grew) is shown escaped with no link. A scheduled announcement is published by the 5-minute
+  cron within 5 minutes after `scheduled_at`, with `published_at` = `scheduled_at`. At most 16 are published or
+  scheduled and 1,000 kept. Reactions are grouped by name (Mastodon groups by name and emoji), and a Unicode reaction is
+  any fully qualified RGI emoji or its unqualified form, a superset of Mastodon's emoji map. Decided by the owner,
+  2026-10-20.

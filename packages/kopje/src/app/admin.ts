@@ -5,9 +5,11 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status'
 import { drainJournal } from './cutover'
 import { healthReport } from './health'
 import { rewrapKeys } from './key-rewrap'
+import type { AnnouncementChanges } from '../domain/announcements'
 import type { LoaderDeps } from '../federation/loader'
 import { uploadEmoji } from '../mastodon/emoji-upload'
 import { rebuildMedia } from '../mastodon/media-rebuild'
+import { parseScheduledAt } from '../mastodon/statuses'
 import { type AccessSettings, adminRefusal, adminUsable, normalizeTeamDomain } from '../platform/access-settings'
 import { readBackupConfig } from '../platform/backup-config'
 import { readBoundedBody } from '../platform/body'
@@ -18,7 +20,7 @@ import { readQueueBacklog } from '../platform/queue-backlog'
 import type { ImportAuthority } from '../platform/store-admin'
 import type { StoreResolver, StoreStub } from '../platform/store-client'
 import { toStoreUnavailable } from '../platform/store-errors'
-import { storedEmojiCategory } from '../platform/stored-bounds'
+import { storedAnnouncementText, storedEmojiCategory } from '../platform/stored-bounds'
 import { type AccessDeps, type AccessIdentity, verifyAccessClaims } from '../security/access-jwt'
 import { constantTimeEqual, randomToken } from '../security/tokens'
 
@@ -109,6 +111,13 @@ const STATUS: Record<string, ContentfulStatusCode> = {
 	'budget-exhausted': 429,
 	'images-unavailable': 503,
 	'image-processing-failed': 500,
+	'invalid-text': 400,
+	'invalid-times': 400,
+	'content-too-large': 422,
+	'announcement-limit': 409,
+	'announcement-published': 409,
+	'announcement-not-found': 404,
+	'announcement-too-large': 409,
 }
 
 function refusal(c: Context, result: Refusal): Response {
@@ -151,6 +160,43 @@ class AdminRequestError extends Error {
 	) {
 		super(message)
 	}
+}
+
+const ANNOUNCEMENT_TEXT_RULE = 'text is a string of 1 to 10,000 UTF-8 bytes, not blank, with no NUL'
+const ANNOUNCEMENT_TIMES_RULE = 'startsAt, endsAt and scheduledAt are ISO 8601 times or null'
+
+// The fields of an announcement's create or change: text made well-formed and judged (storedAnnouncementText), each
+// time parsed as Mastodon parses a scheduled_at (parseScheduledAt) and normalized, or null to clear it; allDay a
+// boolean. A field left out is unchanged. The range and the schedule are judged again by the Store.
+function announcementBody(
+	body: Record<string, unknown>
+): { ok: true; changes: AnnouncementChanges } | { ok: false; code: string; message: string } {
+	const changes: AnnouncementChanges = {}
+	if (body.text !== undefined) {
+		const text = typeof body.text === 'string' ? storedAnnouncementText(body.text) : null
+		if (text === null) {
+			return { ok: false, code: 'invalid-text', message: ANNOUNCEMENT_TEXT_RULE }
+		}
+		changes.text = text
+	}
+	for (const name of ['startsAt', 'endsAt', 'scheduledAt'] as const) {
+		const value = body[name]
+		if (value === undefined) {
+			continue
+		}
+		const time = value === null ? null : typeof value === 'string' ? parseScheduledAt(value) : undefined
+		if (time === undefined || (value !== null && time === null)) {
+			return { ok: false, code: 'invalid-times', message: ANNOUNCEMENT_TIMES_RULE }
+		}
+		changes[name] = time
+	}
+	if (body.allDay !== undefined) {
+		if (typeof body.allDay !== 'boolean') {
+			return { ok: false, code: 'invalid-times', message: 'allDay is a boolean' }
+		}
+		changes.allDay = body.allDay
+	}
+	return { ok: true, changes }
 }
 
 function parseTime(value: string): number | null {
@@ -502,6 +548,71 @@ export function adminRoutes({ build, store, fetch, now, doorbell, jobs, loader, 
 			},
 		})
 		return result.ok ? c.json(result.emoji) : refusal(c, result)
+	})
+
+	// ---- announcements (domain/announcements.ts): create, change, publish, unpublish and delete, each logged, and the
+	// list of every one. Access admin only: the import token and import sessions never reach these paths, and the Store
+	// checks the admin again where it writes. The text and times are judged here first (announcementBody).
+
+	admin.get('/announcements', async (c) => {
+		const before = c.req.query('before')
+		const limit = c.req.query('limit')
+		if ((before !== undefined && !/^\d{18}$/.test(before)) || (limit !== undefined && !/^\d{1,3}$/.test(limit))) {
+			return c.json({ error: 'before must be an announcement id and limit a number' }, 400)
+		}
+		const input = {
+			...(before === undefined ? {} : { before }),
+			...(limit === undefined ? {} : { limit: Number(limit) }),
+		}
+		return c.json(await stub(c).adminAnnouncements(build(c.env), input))
+	})
+
+	admin.post('/announcements', async (c) => {
+		const body = announcementBody(await jsonBody(c))
+		if (!body.ok) {
+			return refusal(c, body)
+		}
+		const { text, startsAt = null, endsAt = null, allDay = false, scheduledAt = null } = body.changes
+		if (text === undefined) {
+			return refusal(c, { ok: false, code: 'invalid-text', message: ANNOUNCEMENT_TEXT_RULE })
+		}
+		const result = await stub(c).createAnnouncement(build(c.env), {
+			authority: c.get('auth'),
+			text,
+			startsAt,
+			endsAt,
+			allDay,
+			scheduledAt,
+		})
+		return result.ok ? c.json(result.announcement) : refusal(c, result)
+	})
+
+	admin.post('/announcements/:id{[0-9]{18}}', async (c) => {
+		const body = announcementBody(await jsonBody(c))
+		if (!body.ok) {
+			return refusal(c, body)
+		}
+		const result = await stub(c).updateAnnouncement(build(c.env), {
+			authority: c.get('auth'),
+			id: c.req.param('id'),
+			changes: body.changes,
+		})
+		return result.ok ? c.json(result.announcement) : refusal(c, result)
+	})
+
+	admin.post('/announcements/:id{[0-9]{18}}/:action{publish|unpublish|delete}', async (c) => {
+		await jsonBody(c)
+		const input = { authority: c.get('auth'), id: c.req.param('id') }
+		const action = c.req.param('action')
+		if (action === 'delete') {
+			const result = await stub(c).deleteAnnouncement(build(c.env), input)
+			return result.ok ? c.json({ deleted: result.deleted }) : refusal(c, result)
+		}
+		const result =
+			action === 'publish'
+				? await stub(c).publishAnnouncement(build(c.env), input)
+				: await stub(c).unpublishAnnouncement(build(c.env), input)
+		return result.ok ? c.json(result.announcement) : refusal(c, result)
 	})
 
 	// ---- the KEK rewrap (app/key-rewrap.ts): one page of local keys moved from USER_KEK_PREVIOUS to USER_KEK; the CLI

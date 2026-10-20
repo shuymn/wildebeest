@@ -103,6 +103,17 @@ The public block list has no count cap; RES-3 bounds its response bytes.
 | -------------------- | -------------------------------------------------------------------------- | ------------ |
 | `publicDomainBlocks` | Budget: whole blocks in domain order, read in chunks of 500 suspend blocks | None         |
 
+## Announcements
+
+| Operation            | Mechanism                                                                                        | Continuation |
+| -------------------- | ------------------------------------------------------------------------------------------------ | ------------ |
+| `listAnnouncements`  | Count: 16 announcements (every live one), admitted within `ARRAY_ANSWER_BYTES` as a backstop     | None         |
+| `adminAnnouncements` | Count: 50 announcements, each its text and times                                                 | Id cursor    |
+| Streaming events     | Unit per event (`announcement`, `announcement.reaction`, `announcement.delete`)                  |              |
+
+Each announcement is within its measured conservative sum (docs/threat-model.md "Maxima of presented units"), so 16
+never reach the budget (`src/domain/announcements.ts`, `test/announcement-bounds.test.ts`).
+
 ## ActivityPub
 
 These build activities and Notes from local statuses (`statusFacts`, `noteOf` in `src/domain/activities.ts`), not

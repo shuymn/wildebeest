@@ -1,3 +1,4 @@
+import { streamedAnnouncement, streamedAnnouncementReaction } from './announcements'
 import { canView, deleteAudience, mentionsFilteredFor } from './audience'
 import { authorize, authorizeStream, listenerContext, type UserContext } from './auth'
 import { streamedConversation } from './conversations'
@@ -36,7 +37,10 @@ import { grantsAny } from '../security/scopes'
 //     - `conversation` on `direct`: the conversation relation, V's row x, presented as the list presents it
 //       (streamedConversation in conversations.ts, R25);
 //     - `notifications_merged` on `user` (with a notification scope) and `user:notification`: V's transition to no
-//       pending accept job (streamMerged, written by notification-requests.ts).
+//       pending accept job (streamMerged, written by notification-requests.ts);
+//     - `announcement`, `announcement.reaction` and `announcement.delete` on `user` (with a status scope): the
+//       announcement x as it is when sent (R40: published, else its delete; announcements.ts streamedAnnouncement and
+//       streamedAnnouncementReaction), the same for every V, presented with no viewer (streamAnnouncement).
 //   Each status is presented as REST presents it to V (presentStatus).
 //
 //   R32 (stream delete): a `delete` of x (a status, or a boost of it) reaches (V, k) only if, in the transaction that
@@ -154,6 +158,9 @@ export function mayCarry(kind: string, grant: StreamGrant, key: string): boolean
 			return timeline ? grant.statuses : key === 'user:notification' && grant.notifications
 		case 'conversation':
 			return key === 'direct' && grant.statuses
+		case 'announcement':
+		case 'announcement_reaction':
+			return key === 'user' && grant.statuses
 		default:
 			return false
 	}
@@ -265,6 +272,7 @@ export const streamEvents = readOperation<
 		}
 		return accounts
 	}
+	let userListeners: string[] | null = null
 	let publicListeners: string[] | null = null
 	// Cache per status within this scan's transaction; see streamEvents for read bounds.
 	const fedByStatus = new Map<string, string[]>()
@@ -315,6 +323,15 @@ export const streamEvents = readOperation<
 				break
 			case 'edit':
 				viewers = merged(listening(['user', 'user:notification']), fed(row.subject))
+				break
+			case 'announcement':
+			case 'announcement_reaction':
+				userListeners ??= db
+					.all<{ account_id: string }>(
+						"SELECT DISTINCT account_id FROM stream_subscriptions WHERE stream_key = 'user' ORDER BY account_id"
+					)
+					.map((r) => r.account_id)
+				viewers = userListeners
 				break
 			default:
 				viewers = []
@@ -508,6 +525,22 @@ export const streamUnit = readOperation<
 						checks: 0,
 					}
 				: none
+		case 'announcement': {
+			const { event, payload } = streamedAnnouncement(db, subject, origin)
+			return { grants, event, payload, streams: [{ stream: 'user', needs: STATUSES }], checks: 1 }
+		}
+		case 'announcement_reaction': {
+			const payload = streamedAnnouncementReaction(db, subject)
+			return payload === null
+				? { ...none, checks: 1 }
+				: {
+						grants,
+						event: 'announcement.reaction',
+						payload,
+						streams: [{ stream: 'user', needs: STATUSES }],
+						checks: 1,
+					}
+		}
 		case 'conversation': {
 			const conversation = streamedConversation(db, context, subject, { origin })
 			return conversation === null
@@ -898,6 +931,27 @@ export function streamMerged(db: Db, accountId: string, now: string): void {
 		return
 	}
 	db.run("INSERT INTO stream_events (kind, subject, created_at) VALUES ('merged', ?, ?)", accountId, now)
+}
+
+// The streaming API's announcement events (announcements.ts calls it on each write that changes what a listener may be
+// shown): an `announcement` event (subject: the id) or an `announcement_reaction` one (subject: ["<id>","<name>"]) in
+// the journal, one per write, while some account listens on `user` (the scope is checked when it is sent) and the
+// journal is not full. Nothing is coalesced: a socket opened after an earlier event is sent each later write's own
+// event (the hub sends an event only to sockets opened before it). The writes are admin- and user-rate, and
+// JOURNAL_SPAN bounds the journal as for every event.
+export function streamAnnouncement(
+	db: Db,
+	kind: 'announcement' | 'announcement_reaction',
+	subject: string,
+	now: string
+): void {
+	if (db.first("SELECT 1 AS x FROM stream_subscriptions WHERE stream_key = 'user'") === undefined) {
+		return
+	}
+	if (journalFull(db, kind)) {
+		return
+	}
+	db.run('INSERT INTO stream_events (kind, subject, created_at) VALUES (?, ?, ?)', kind, subject, now)
 }
 
 // The whole registry rebuilt from the open sockets, by the first turn after the Store starts (sockets closed while it

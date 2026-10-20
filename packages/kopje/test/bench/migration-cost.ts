@@ -3,6 +3,7 @@ import { runInDurableObject } from 'cloudflare:test'
 import { expect, inject, it } from 'vitest'
 
 import { MIGRATIONS } from '../../src/db/migrations'
+import { JOURNAL_SPAN } from '../../src/domain/streaming'
 import { freshStore, testKernel } from '../helpers'
 
 // The migration cost benchmark (design: "Migrations", acceptance criterion): pending migration files applied to a
@@ -68,7 +69,9 @@ import { freshStore, testKernel } from '../helpers'
 // accounts, deliveries), what 0052_favourite_likes indexes (the favourites' Like ids), what 0053_custom_emoji_snapshots
 // alters (accounts, statuses, earlier versions) and what 0054_remote_reports reads and rewrites (reports, their
 // notifications and pushes, the moderation log and both job tables); 0055_local_custom_emojis reads no row (it adds an
-// empty table); a migration that reads another table must add it here before it is measured.
+// empty table); 0056_announcements copies the streaming journal, so from it on the journal is full: 4,097 rows, the
+// largest span its triggers leave (JOURNAL_SPAN, domain/streaming.ts). A migration that reads another table must add it
+// here before it is measured.
 // The measured time is the whole upgrade, from before the bookmark to after the verification: Date.now() in workerd
 // moves only between I/O events, so the clock is read across an await on each side.
 
@@ -475,6 +478,17 @@ it('applies the migration to the benchmark store within the budget', async () =>
 				now
 			)
 		}
+		// A full streaming journal (ids 1 to 4,097, a span of JOURNAL_SPAN), for a range that copies it.
+		const fullJournal = last >= MIGRATIONS.findIndex((m) => m.name === '0056_announcements')
+		if (fullJournal) {
+			run(
+				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+				INSERT INTO stream_events (id, kind, subject, created_at)
+				SELECT i, 'status', CAST(500000000000000000 + i AS TEXT), ?2 FROM n`,
+				JOURNAL_SPAN + 1,
+				now
+			)
+		}
 		// Values past their stored bounds, set while the migration that bounds them is still to apply.
 		const pending = (migration: string) => at <= MIGRATIONS.findIndex((m) => m.name === migration)
 		const filler = (n: number, char: string) => `replace(hex(zeroblob(${n / 2})), '0', ${char})`
@@ -534,6 +548,7 @@ it('applies the migration to the benchmark store within the budget', async () =>
 			media: count('media_attachments'),
 			edits: count('status_edits'),
 			instanceBlocks: hasInstanceBlocks ? count('instance_domain_blocks') : 0,
+			journal: fullJournal ? count('stream_events') : 0,
 		}
 		expect(sql.exec('SELECT count(*) AS n FROM kopje_migrations').one().n).toBe(at)
 
