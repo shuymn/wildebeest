@@ -214,6 +214,41 @@ describe('GET /api/v1/trends/statuses', () => {
 		expect(ids((await getJson(h, '/api/v1/trends/statuses')).body)).toEqual([en, ja])
 	})
 
+	// T3 at saturation: 250 stored statuses (200 approved, 50 higher-scoring unreviewed), each by its own author; the
+	// list is the top 200 allowed now, whatever the page size or offset, before and after the default changes.
+	it('ends at 200 for every traversal when the default changes between rounds', async () => {
+		const h = await apiHarness()
+		const a = await authors(h.store, 250)
+		const ids = await trendStatuses(
+			h.store,
+			a.map((author, i) => ({ author, published: NOW - 1, seq: i, favourites: 1000 - i }))
+		)
+		for (const author of a.slice(50)) {
+			await review(h.store, 'account_trend_reviews', author, true)
+		}
+		await round(h.store, NOW + HOUR)
+		expect(await sql(h.store, 'SELECT count(*) AS n FROM trend_statuses')).toEqual([{ n: 250 }])
+		const walk = async (limit: number, from: number) => {
+			const seen: string[] = []
+			for (let at: string | null = `/api/v1/trends/statuses?limit=${limit}&offset=${from}`; at !== null;) {
+				const page: Awaited<ReturnType<typeof answer<{ id: string }[]>>> = await answer(h, at)
+				seen.push(...ids_(page.body))
+				at = page.next
+			}
+			return seen
+		}
+		const ids_ = (body: { id: string }[]) => body.map((s) => s.id)
+		expect(await walk(20, 0)).toEqual(ids.slice(50))
+		await setTrendSetting(h.store, 'trendable_by_default', true)
+		const all = await walk(20, 0)
+		expect(all).toEqual(ids.slice(0, 200))
+		expect(await walk(7, 3)).toEqual(all.slice(3))
+		expect(await walk(13, 0)).toEqual(all)
+		expect(ids_((await answer<{ id: string }[]>(h, '/api/v1/trends/statuses?limit=7&offset=199')).body)).toEqual([
+			all[199],
+		])
+	}, 120_000)
+
 	// RES-3: 60 statuses of about 1 MB; pages of 20 are cut at 8 MiB and continue after their last status, a cut page
 	// near the end reading fewer than 20; every status is reached once, in order.
 	it('reaches every status once by following next, across cut pages', async () => {
