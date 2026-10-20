@@ -133,7 +133,7 @@ describe('publication days', () => {
 			{ author: a[6]!, published: YESTERDAY + HOUR, id: idAt(TODAY + 2 * HOUR, 10), tags: ['tag'] },
 			// Published today with an id before yesterday 00:00: not in the window (the approximation of MD-5).
 			{ author: a[7]!, published: TODAY + HOUR, id: idAt(YESTERDAY - 1, 0), tags: ['tag'] },
-			// Remote statuses with receipt-time ids published later today, tomorrow, and exactly now (T1).
+			// Remote statuses with receipt-time ids published later today, tomorrow, and exactly now.
 			{ author: a[8]!, published: AT + HOUR, id: idAt(AT - 1, 1), tags: ['tag'] },
 			{ author: a[9]!, published: TODAY + DAY + HOUR, id: idAt(AT - 1, 2), tags: ['tag'] },
 			{ author: a[10]!, published: AT, id: idAt(AT - 1, 3), tags: ['tag'] },
@@ -237,7 +237,7 @@ describe('retention (RES-4)', () => {
 		expect(rows.some((r) => r.status_id === top || r.status_id === lower)).toBe(false)
 	})
 
-	// T2: the review pool is full of 50 higher rows; the author's newer unreviewed tie cannot enter it, and its older
+	// The review pool is full of 50 higher rows; the author's newer unreviewed tie cannot enter it, and its older
 	// approved tie is still the author's maximum, so it is kept (and listed).
 	it('keeps an approved tie at the author’s maximum when the unreviewed tie does not fit', async () => {
 		const store = await migratedStore()

@@ -6,8 +6,7 @@ import { deviationIds } from '../test/mastodon-conformance.js'
 
 // The ids other documents, code comments and tests cite: each threat-model entry (`- **VIS-17: ...**`), each rule of
 // docs/visibility.md's rule table (`| R18 reblog, R19 favourite |`) and each accepted Mastodon departure
-// (docs/mastodon-deviations.md, `- **MD-1: ...**`) is defined once. Branches written in parallel each
-// take the next free id, so a merge can bring two definitions of one id.
+// (docs/mastodon-deviations.md, `- **MD-1: ...**`) is defined once.
 function doc(name: string): string {
 	return readFileSync(new URL(`../docs/${name}`, import.meta.url), 'utf8')
 }

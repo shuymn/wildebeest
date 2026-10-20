@@ -35,11 +35,8 @@ import { streamAnnouncement } from '../src/domain/streaming'
 import { MAX_LIVE_ANNOUNCEMENTS, STATUS_EMOJIS_BYTES } from '../src/platform/stored-bounds'
 import { sha256Hex } from '../src/security/tokens'
 
-// RES-3: an announcement's presented parts at their bounds, each measured at the most a 10,000-byte text can reach
-// (no one text reaches every part's bound at once: 16 mentions of the widest accounts alone need more), the
-// conservative sum of the measured parts, the list of MAX_LIVE_ANNOUNCEMENTS through the Store RPC, the rendering
-// budget (A7 of the design: a text of repeated references never builds its links past the budget), and the query
-// plans at saturation with stale statistics (docs/threat-model.md "Maxima of presented units").
+// RES-3: derive conservative maxima from column and presentation caps; fills witness reachable sizes.
+// Check Store RPC delivery, bounded rendering and query plans with stale statistics.
 
 const ORIGIN = 'https://kopje.test'
 const id = (n: number) => String(200_000_000_000_000_000n + BigInt(n))

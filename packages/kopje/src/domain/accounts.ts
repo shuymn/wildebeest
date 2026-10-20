@@ -63,8 +63,7 @@ export type Account = {
 	locked: boolean
 	bot: boolean
 	discoverable: boolean | null
-	// Account#indexable: whether the account's public posts may be indexed for search. Kopje's status search reads
-	// only the viewer's own library (search.ts), so it changes no result here; it is stored, presented and federated.
+	// Account#indexable is stored, presented and federated. Kopje has no public status-search index.
 	indexable: boolean
 	group: boolean
 	created_at: string

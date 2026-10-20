@@ -243,14 +243,13 @@ export async function storeProfileImages(
 	return ids
 }
 
-// The media pipeline's messages name the attribute `File`; a profile image's name it.
 function profileFailure(kind: ProfileImage, error: string): string {
 	return error.replace('Validation failed: File ', `Validation failed: ${IMAGE_ATTRIBUTE[kind]} `)
 }
 
 // PATCH /api/v1/accounts/update_credentials. A multipart body may carry the avatar and header files, so its token is
 // checked before the body is read (an invalid or under-scoped token reads no 17.9 MB body); text, then images, are
-// validated before anything is reserved, and the Store applies everything in one transaction (D3).
+// validated before anything is reserved, and the Store applies everything in one transaction.
 export const updateCredentials: ApiHandler = async (c, deps) => {
 	const multipart = mediaTypeOf(c.req.header('content-type')) === 'multipart/form-data'
 	if (multipart) {

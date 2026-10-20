@@ -153,7 +153,7 @@ describe('the round’s windows (RES-7)', () => {
 		expect(returned).toEqual(names.slice(0, TREND_TAG_CANDIDATES).map(hex))
 	}, 60_000)
 
-	// M5: 400 keys that are not well-formed UTF-8, each with 6 accounts, do not starve a valid key with 5. M4: a name not
+	// 400 keys that are not well-formed UTF-8, each with 6 accounts, do not starve a valid key with 5. A name not
 	// in its own normalized form (é, which normalizeTag folds to e) never trends; one that is (カフェ) does.
 	it('keeps unrepresentable keys out of the candidates', async () => {
 		const store = await migratedStore()
@@ -214,7 +214,7 @@ describe('the round’s windows (RES-7)', () => {
 })
 
 describe('what the round holds (RES-3)', () => {
-	// T5: 4,000 statuses with 2 distinct one-use names of 1,024 bytes each are 8,000 groups, none of 5 accounts, so the
+	// 4,000 statuses with 2 distinct one-use names of 1,024 bytes each are 8,000 groups, none of 5 accounts, so the
 	// statement returns none of them (it returns at most TREND_TAG_GROUPS).
 	it('returns no group of one-use names when every name is distinct and maximal', async () => {
 		const store = await migratedStore()

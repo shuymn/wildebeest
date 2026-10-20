@@ -43,7 +43,8 @@ describe('the coverage rule', () => {
 	})
 
 	it('takes an object-array read for a member only when a returned record carries it', () => {
-		// A status edit's media_attributes[][thumbnail] is a file part, which the parser drops: objects() returns no record.
+		// A status edit's media_attributes[][thumbnail] is a file part the parser drops:
+		// objects() returns no record.
 		const dropped = { method: 'objects', name: 'media_attributes', fields: [] } as const
 		expect(covers(dropped, 'media_attributes[][thumbnail]')).toBe(false)
 		expect(covers({ method: 'objects', name: 'media_attributes' }, 'media_attributes[][thumbnail]')).toBe(false)

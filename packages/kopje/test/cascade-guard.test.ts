@@ -608,7 +608,7 @@ describe('trend rows within a batch (0057_trends)', () => {
 	// The status's final delete reserves 6 rows: the status, its poll, its trend_statuses and status_trend_reviews rows,
 	// the account's last status (0021_directory moves it back: the status is the account's newest) and the parent's
 	// recount. The mentions the batch deletes first leave exactly those rows, so the batch ends at PURGE_BATCH.
-	// With one row fewer left (5), the delete waits for the next batch: the old reservation of 4 would have gone past.
+	// With one row fewer left (5), the delete waits for the next batch.
 	it.each([
 		[true, 6],
 		[false, 6],

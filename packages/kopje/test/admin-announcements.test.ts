@@ -67,7 +67,7 @@ describe('the Access admin’s writes', () => {
 		// An unpublished row may be scheduled, and unscheduled.
 		expect(await admin.update(later.id, { scheduledAt: FUTURE })).toMatchObject({ scheduled_at: FUTURE })
 		expect(await admin.update(later.id, { scheduledAt: null })).toMatchObject({ scheduled_at: null })
-		// Delete cascades to reactions and dismissals; the log keeps 200 code units of the text.
+		// Delete removes reactions and dismissals before the announcement; the log keeps up to 200 code units.
 		const long = await admin.create({ text: `${'x'.repeat(199)}\u{1F600}yz` })
 		const alice = await seedAccount(store, { username: 'alice', email: 'alice@example.com' })
 		await sql(

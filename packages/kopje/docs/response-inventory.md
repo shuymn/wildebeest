@@ -106,25 +106,26 @@ The public block list has no count cap; RES-3 bounds its response bytes.
 
 ## Announcements
 
-| Operation            | Mechanism                                                                                        | Continuation |
-| -------------------- | ------------------------------------------------------------------------------------------------ | ------------ |
-| `listAnnouncements`  | Count: 16 announcements (every live one), admitted within `ARRAY_ANSWER_BYTES` as a backstop     | None         |
-| `adminAnnouncements` | Count: 50 announcements, each its text and times                                                 | Id cursor    |
-| Streaming events     | Unit per event (`announcement`, `announcement.reaction`, `announcement.delete`)                  |              |
+| Operation            | Mechanism                                                                                         | Continuation |
+| -------------------- | ------------------------------------------------------------------------------------------------- | ------------ |
+| `listAnnouncements`  | Count: 16 announcements (every published one), admitted within `ARRAY_ANSWER_BYTES` as a backstop | None         |
+| `adminAnnouncements` | Count: 50 announcements, each its text and times                                                  | Id cursor    |
+| Streaming events     | Unit per event (`announcement`, `announcement.reaction`, `announcement.delete`)                   |              |
 
-Each announcement is within its measured conservative sum (docs/threat-model.md "Maxima of presented units"), so 16
-never reach the budget (`src/domain/announcements.ts`, `test/announcement-bounds.test.ts`).
+The derived announcement maximum keeps all 16 published announcements within the budget; see
+[Maxima of presented units](threat-model.md#maxima-of-presented-units-res-3).
 
 ## Trends
 
-| Operation            | Mechanism                                                                        | Continuation                     |
-| -------------------- | -------------------------------------------------------------------------------- | -------------------------------- |
-| `trendingTags`       | Count: 20 hashtags, each with its trends history                                 | Offset (`offset + limit`)        |
-| `trendingStatuses`   | Budget: up to 40 statuses within `ARRAY_ANSWER_BYTES`, the first always admitted | Offset (continues at `consumed`) |
-| `adminTrendTags`     | Count: 20 hashtags                                                               | Offset                           |
-| `adminTrendStatuses` | Count: 40 statuses, each field through its bounded projection                    | Offset                           |
+| Operation            | Mechanism                                                                        | Continuation                 |
+| -------------------- | -------------------------------------------------------------------------------- | ---------------------------- |
+| `trendingTags`       | Count: 20 hashtags, each with its trends history                                 | Offset (`offset + limit`)    |
+| `trendingStatuses`   | Budget: up to 40 statuses within `ARRAY_ANSWER_BYTES`, the first always admitted | Offset (`offset + consumed`) |
+| `adminTrendTags`     | Count: 20 hashtags                                                               | Offset                       |
+| `adminTrendStatuses` | Count: 40 statuses, each field through its bounded projection                    | Offset                       |
 
-Each list ends at the top 200 allowed now (MD-5). Each unit is within its derived maximum (docs/threat-model.md
+Public lists end at the top 200 currently allowed trends (MD-5). Access admin lists page through up to 250 stored
+entries per table, allowed or not. Each unit is within its derived maximum (docs/threat-model.md
 "Maxima of presented units"; `src/domain/trends.ts`, `test/trends-maxima.test.ts`).
 
 ## ActivityPub

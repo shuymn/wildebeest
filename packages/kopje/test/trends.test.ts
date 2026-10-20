@@ -99,7 +99,7 @@ describe('GET /api/v1/trends/tags', () => {
 		expect((await page('/tags?limit=5&offset=6')).prev).toBe('/api/v1/trends/tags?limit=5&offset=1')
 	})
 
-	// T3: at saturation the list is the top 200 of what is allowed now, whatever the page size, between rounds.
+	// At saturation the list is the top 200 of what is allowed now, whatever the page size, between rounds.
 	it('ends at 200 for every traversal when approvals and the default change between rounds', async () => {
 		const h = await apiHarness()
 		await listedTags(h.store, 250)
@@ -214,7 +214,7 @@ describe('GET /api/v1/trends/statuses', () => {
 		expect(ids((await getJson(h, '/api/v1/trends/statuses')).body)).toEqual([en, ja])
 	})
 
-	// T3 at saturation: 250 stored statuses (200 approved, 50 higher-scoring unreviewed), each by its own author; the
+	// At saturation: 250 stored statuses (200 approved, 50 higher-scoring unreviewed), each by its own author; the
 	// list is the top 200 allowed now, whatever the page size or offset, before and after the default changes.
 	it('ends at 200 for every traversal when the default changes between rounds', async () => {
 		const h = await apiHarness()

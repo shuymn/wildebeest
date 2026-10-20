@@ -127,7 +127,7 @@ describe('trends maxima (RES-3)', () => {
 		expect(jsonBytes(page.value.items)).toBeLessThanOrEqual(TREND_TAGS_MAX_LIMIT * (TAG_MAX + 1) + 1)
 	})
 
-	// T6: 40 imported trend rows whose parents pass every presented bound: a 1 MiB language, a long domain of control
+	// 40 imported trend rows whose parents pass every presented bound: a 1 MiB language, a long domain of control
 	// characters, an odd published_at, a url of STATUS_URL_LIMIT control characters and content of control characters.
 	it('presents 40 imported admin rows with oversized parents within the maximum, through the Store', async () => {
 		const store = await accessAdminStore()

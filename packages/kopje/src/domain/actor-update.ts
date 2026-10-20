@@ -109,7 +109,6 @@ function documentOf(db: Db, row: ActorRow): Record<string, unknown> {
 						name: field.name,
 						value: renderFieldValue(field.value),
 					})),
-					// The profile's local emoji, as the actor endpoint publishes them (federation.ts).
 					...(emojis.length === 0 ? {} : { tag: emojis }),
 				}),
 		...attributionDomainsOf(row.attribution_domains),
