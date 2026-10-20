@@ -6,12 +6,13 @@ import { bearer, json, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { BUILD } from './helpers'
 import { ALICE, setup } from './inbox-status-helpers'
-import { added, localSnapshotAtCap } from './local-emoji-helpers'
+import { added, localSnapshotAtCap, seedEmojiRow } from './local-emoji-helpers'
 import { ACCESS, setAccess } from './ops-helpers'
 import { community, getJson, outbound, post, remoteAccount, remoteFollows } from './status-helpers'
 import { Db } from '../src/db/sql'
 import { actorDocument } from '../src/domain/actor-update'
 import { jsonBytes } from '../src/domain/answer-budget'
+import { localEmojiTags } from '../src/domain/custom-emojis'
 import { emojiCandidates } from '../src/federation/remote-emoji'
 import { publishScheduled } from '../src/jobs/scheduled'
 import { ACCOUNT_EMOJIS_BYTES, MAX_ENABLED_EMOJIS, presentedEmojiBytes } from '../src/platform/stored-bounds'
@@ -73,6 +74,17 @@ describe('GET /api/v1/custom_emojis', () => {
 		}
 		const admin = await h.store.adminEmojis(BUILD, {})
 		expect(admin.emojis.map((e) => e.category)).toEqual([null, '�'.repeat(3)])
+		// A change of the picker flag alone keeps the stored category as it is, in SQL.
+		const raw = () =>
+			sql<{ hex: string }>(
+				h.store,
+				'SELECT hex(category) AS hex FROM custom_emojis WHERE id IN (?, ?) ORDER BY id',
+				long.id,
+				short.id
+			)
+		expect(await h.set(long.id, { visibleInPicker: false })).toMatchObject({ ok: true })
+		expect(await h.set(short.id, { visibleInPicker: false })).toMatchObject({ ok: true })
+		expect(await raw()).toEqual([{ hex: 'EDA080'.repeat(64) }, { hex: 'EDA080' }])
 	})
 
 	it('answers 1,000 entries at their bounds within 1,489,001 UTF-8 bytes, 1,489 each with its separator', async () => {
@@ -314,5 +326,62 @@ describe('actor Emoji tags at their bound (RES-3)', () => {
 		})
 		expect(measured.bytes).toBeLessThanOrEqual(8_960)
 		expect(measured).toEqual({ tags: 30, bytes: 7_404, document: 9_005 })
+	})
+})
+
+describe('local Emoji tag resolution', () => {
+	it('resolves only served full images on the origin whose row has the same url and name, disabled ones kept', async () => {
+		const t = await setup()
+		await setAccess(t.store, { admin_email: 'alice@mail.example' })
+		const authority = { ...ACCESS, email: 'alice@mail.example' }
+		const on = await added(t.store, 'on', { authority })
+		const off = await added(t.store, 'off', { authority })
+		await t.store.updateEmoji(BUILD, { authority, id: off.id, changes: { disabled: true } })
+		const token = new URL(on.url).pathname.split('/')[2]!
+		const pairs: [string, string][] = [
+			['on', on.url],
+			['off', off.url],
+			// The right url under another name, another origin, a short token, the preview, another extension, no row.
+			['renamed', on.url],
+			['elsewhere', on.url.replace('https://kopje.test', 'https://other.example')],
+			['short', `https://kopje.test/media/${'s'.repeat(31)}/full.png`],
+			['preview', `https://kopje.test/media/${token}/small.png`],
+			['jpeg', `https://kopje.test/media/${token}/full.jpg`],
+			['unknown', `https://kopje.test/media/${'u'.repeat(43)}/full.png`],
+		]
+		const resolve = (stored: string) =>
+			runInDurableObject(t.store, (_instance, state) =>
+				localEmojiTags(new Db(state.storage.sql), stored, 'https://kopje.test', ACCOUNT_EMOJIS_BYTES)
+			)
+		expect((await resolve(JSON.stringify(pairs))).map((tag) => [tag.name, tag.icon.url])).toEqual([
+			[':on:', on.url],
+			[':off:', off.url],
+		])
+		expect(await resolve('not json')).toEqual([])
+	})
+
+	it('serves the actor of a profile naming an imported emoji, and the CHECK refuses an hour Temporal refuses', async () => {
+		const t = await setup()
+		const imported = await seedEmojiRow(t.store, {
+			id: '175000000000000001',
+			shortcode: 'old',
+			owner: ALICE,
+			createdAt: '2026-10-12T23:59:59.999Z',
+		})
+		const url = `https://kopje.test/media/${imported.token}/full.png`
+		await sql(t.store, 'UPDATE accounts SET emojis = ? WHERE id = ?', JSON.stringify([['old', url]]), ALICE)
+		const response = await t.request('/ap/users/alice', AP)
+		expect(response.status).toBe(200)
+		const actor = await response.json<Record<string, unknown>>()
+		const tags = (Array.isArray(actor.tag) ? actor.tag : [actor.tag]) as Record<string, unknown>[]
+		expect(emojiCandidates(tags)).toEqual([{ shortcode: 'old', url }])
+		await expect(
+			seedEmojiRow(t.store, {
+				id: '175000000000000002',
+				shortcode: 'late',
+				owner: ALICE,
+				createdAt: '2026-10-12T24:01:00.000Z',
+			})
+		).rejects.toThrow(/custom_emoji_created_at_iso/)
 	})
 })

@@ -16,7 +16,9 @@ import { Db } from '../src/db/sql'
 import { localEmojiSnapshot, localEmojiTags } from '../src/domain/custom-emojis'
 import { adminEmojis, completeEmoji, customEmojis } from '../src/domain/local-emojis'
 import { expiredMedia, purgeMedia, WRITE_WINDOW_MS } from '../src/domain/media'
-import { rebuildCandidates } from '../src/domain/media-rebuild'
+import { REBUILD_SETTLE_MS, rebuildCandidates } from '../src/domain/media-rebuild'
+import { reconcileMedia, sweepMedia } from '../src/mastodon/media'
+import { rebuildMedia } from '../src/mastodon/media-rebuild'
 import { EMOJI_IMAGE_LIMIT, EMOJI_PREVIEW_LIMIT } from '../src/platform/emoji-image'
 import type { EncodeOptions } from '../src/platform/images'
 import type { StoreStub } from '../src/platform/store-client'
@@ -684,5 +686,102 @@ describe('kopje-admin emoji', () => {
 		]) {
 			expect((await cli(argv)).code, argv.join(' ')).toBe(2)
 		}
+	})
+})
+
+describe('emoji restore and rebuild', () => {
+	it('restores enabled and disabled emoji from a dump and their originals, and their posts resolve again', async () => {
+		const { store, adminId } = await emojiStore()
+		const on = await added(store, 'on')
+		const off = await added(store, 'off')
+		await store.updateEmoji(BUILD, { authority: ACCESS, id: off.id, changes: { disabled: true } })
+		const uri = 'https://kopje.test/ap/o/restored'
+		await sql(
+			store,
+			`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at, emojis)
+			VALUES ('180000000000000001', ?, ?, 'public', '<p>:on: :off:</p>', '2026-10-12T00:00:00.000Z', ?)`,
+			uri,
+			adminId,
+			JSON.stringify([
+				['on', on.url],
+				['off', off.url],
+			])
+		)
+		const { text } = await dumpViaRpc(store)
+		const target = await migratedStore()
+		await copyConfig(store, target)
+		expect((await importViaRpc(target, text)).report).toMatchObject({ ok: true, problems: [] })
+		// A backup holds the originals only: the served files are gone until the rebuild makes them.
+		const tokens = [on, off].map((emoji) => new URL(emoji.url).pathname.split('/')[2]!)
+		await env.MEDIA.delete(tokens.flatMap((token) => [`files/${token}/full`, `files/${token}/small`]))
+		const step = await rebuildMedia(
+			{
+				build: BUILD,
+				store: target,
+				bucket: env.MEDIA,
+				images: new TestCodec(),
+				now: Date.now,
+				authority: ACCESS,
+				monthlyTransforms: 5000,
+			},
+			{ after: null, dryRun: false }
+		)
+		expect(step).toMatchObject({ ok: true, done: true, problems: [], counts: { built: 2 } })
+		expect(await r2Keys(`files/${tokens[0]}/`)).toHaveLength(2)
+		expect(await r2Keys(`files/${tokens[1]}/`)).toHaveLength(2)
+		expect((await target.customEmojis(BUILD)).map((emoji) => emoji.shortcode)).toEqual(['on'])
+		const note = JSON.parse((await target.localNote(BUILD, { uri }))!) as { tag: { type: string; name: string }[] }
+		expect(note.tag.filter((tag) => tag.type === 'Emoji').map((tag) => tag.name)).toEqual([':on:', ':off:'])
+	})
+})
+
+describe('emoji abandon under the rebuild lease', () => {
+	it('keeps the files of an upload that failed while the lease was live, and the sweep cleans them up later', async () => {
+		const { store } = await emojiStore()
+		let release: () => void = () => {}
+		const held = new Promise<void>((resolve) => {
+			release = resolve
+		})
+		let reached: () => void = () => {}
+		const atGate = new Promise<void>((resolve) => {
+			reached = resolve
+		})
+		// The upload holds before its completion, then the Store answers neither completion.
+		const gated = intercept(store, 'completeEmoji', async () => {
+			reached()
+			await held
+			throw new Error('completion lost')
+		})
+		const token = 'f'.repeat(43)
+		const upload = addEmoji(gated, 'leased', { token })
+		await atGate
+		// Meanwhile the Store enters settled maintenance and a rebuild takes its lease.
+		await sql(
+			store,
+			"INSERT OR REPLACE INTO kopje_state (name, value) VALUES ('maintenance', ?)",
+			JSON.stringify({ mode: 'readonly', at: Date.now() - REBUILD_SETTLE_MS - 60_000 })
+		)
+		expect(
+			await store.mediaRebuildLease(BUILD, { authority: ACCESS, holder: 'rebuild', release: false })
+		).toMatchObject({ status: 'ok' })
+		release()
+		await expect(upload).rejects.toThrow('completion lost')
+		// The abandon was refused under the lease: the reservation and its files stay.
+		const [row] = await sql<{ id: string; processed: number }>(
+			store,
+			'SELECT id, processed FROM media_attachments WHERE file_token = ?',
+			token
+		)
+		expect(row?.processed).toBe(0)
+		expect(await r2Keys(`files/${token}/`)).toEqual([`files/${token}/full`, `files/${token}/small`])
+		// Once the lease and maintenance end, the sweep takes the reservation and reconciliation its keys.
+		await store.mediaRebuildLease(BUILD, { authority: ACCESS, holder: 'rebuild', release: true })
+		await store.setMaintenance(BUILD, false)
+		const later = Date.now() + 2 * 60 * 60 * 1000
+		const deps = { build: () => BUILD, store: () => store, now: () => later }
+		expect(await sweepMedia(env, deps)).toBe(1)
+		expect(await reconcileMedia(env, { ...deps, now: () => later + 25 * 60 * 60 * 1000 })).toBe(1)
+		expect(await r2Keys(`files/${token}/`)).toEqual([])
+		expect(await r2Keys(`originals/${row!.id}`)).toEqual([])
 	})
 })
