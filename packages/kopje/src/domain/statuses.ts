@@ -64,7 +64,7 @@ import { addToConversation } from './conversations'
 import { type CustomEmoji, localEmojiSnapshot, presentEmojis } from './custom-emojis'
 import { beginRetraction } from './deliveries'
 import { countFeaturedTags, featuredOfStatus, uncountFeaturedTags } from './featured-tags'
-import { allocateLocalId, requestedId } from './ids'
+import { allocateLocalId, requestedId, storedIdOf } from './ids'
 import { DETACHED_GRACE_MS, DOOMED_AT, liveMediaSql } from './media'
 import { notify } from './notifications'
 import { editPoll, type PollInput, pollOptionsJson, writePoll } from './polls'
@@ -269,18 +269,20 @@ function mediaToAttach(
 	if (mediaIds.length === 0) {
 		return []
 	}
-	const rows = db.all<{ requested: string; id: string | null }>(
-		`SELECT j.value AS requested, m.id FROM json_each(?1) j
+	const requested = mediaIds.map(requestedId)
+	// Each id is looked up by its stored form (storedIdOf), one primary-key probe each.
+	const rows = db.all<{ i: number; id: string | null }>(
+		`SELECT j.key AS i, m.id FROM json_each(?1) j
 		LEFT JOIN media_attachments m ON m.id = j.value AND m.account_id = ?2 AND (m.status_id = ?3
 			OR (m.status_id IS NULL AND m.scheduled_status_id IS ?5 AND ${liveMediaSql('m', '?4')}))
 		ORDER BY j.key`,
-		JSON.stringify(mediaIds.map(requestedId)),
+		JSON.stringify(requested.map(storedIdOf)),
 		accountId,
 		statusId,
 		iso(now),
 		scheduledId
 	)
-	const missing = rows.filter((row) => row.id === null).map((row) => row.requested)
+	const missing = rows.filter((row) => row.id === null).map((row) => requested[row.i] ?? '')
 	if (missing.length > 0) {
 		return { status: 'invalid', error: `Media ${missing.join(', ')} not found or already attached to another post` }
 	}
@@ -443,11 +445,11 @@ export function preparePost(db: Db, accountId: string, input: PostInput, schedul
 		quoted?.visibility === 'private' && (requested === 'public' || requested === 'unlisted') ? 'private' : requested
 	// The accounts the post mentions, as writePost writes them (resolveMentions), each once in the order of the text.
 	const mentioned = mentionedIds(db, text, author)
-	// PostStatusService#safeguard_mentions!: every mentioned account must be listed, ids read as Ruby's to_i reads them
-	// and compared as text.
+	// PostStatusService#safeguard_mentions!: every mentioned account must be listed. Both sides are read as Ruby's to_i
+	// reads them (an imported id keeps leading zeros) and compared as text.
 	if (input.allowedMentions !== undefined) {
 		const allowed = new Set(input.allowedMentions.map(requestedId))
-		const unexpected = mentioned.filter((id) => !allowed.has(id))
+		const unexpected = mentioned.filter((id) => !allowed.has(requestedId(id)))
 		if (unexpected.length > 0) {
 			return { status: 'unexpected_mentions', accountIds: unexpected }
 		}

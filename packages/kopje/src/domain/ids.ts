@@ -108,3 +108,10 @@ export function requestedId(value: string): string {
 	const number = digits.replace(/^0+/, '')
 	return number === '' ? '0' : negative ? `-${number}` : number
 }
+
+// The stored form of an id requestedId read: ids are kept as 18-character TEXT, which an imported id fills with leading
+// zeros (000000000000000123), so a number of at most 18 digits is padded to it. Anything else names no stored row and
+// is returned as it is.
+export function storedIdOf(requested: string): string {
+	return /^\d{1,18}$/.test(requested) ? requested.padStart(18, '0') : requested
+}

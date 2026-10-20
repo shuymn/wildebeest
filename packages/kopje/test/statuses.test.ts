@@ -1091,6 +1091,26 @@ describe('media_ids (PostStatusService#validate_media!, MEDIA-1)', () => {
 		expect((status.media_attachments as { id: string }[]).map((m) => m.id)).toEqual([ID, '100000000000000002'])
 	})
 
+	it('attaches an imported id with leading zeros, by the id as presented or as Ruby reads it', async () => {
+		const h: Pair = await community(['alice', 'bob'])
+		const { alice } = h.users
+		const imported = '000000000000000123'
+		await insertMedia(h, alice.id, imported)
+		await insertMedia(h, alice.id, '000000000000000124')
+		const status = await post(h, alice, { status: 'x', media_ids: [imported] })
+		expect((status.media_attachments as { id: string }[]).map((m) => m.id)).toEqual([imported])
+		const path = `/api/v1/statuses/${status.id}`
+		const edited = await posting(h, alice.token, { status: 'y', media_ids: ['124', imported] }, { method: 'PUT', path })
+		expect(edited).toMatchObject({
+			status: 200,
+			body: { media_attachments: [{ id: '000000000000000124' }, { id: imported }] },
+		})
+		// An id of more than 18 digits names no stored row.
+		expect(await posting(h, alice.token, { status: 'z', media_ids: [`0${'1'.repeat(19)}`] })).toEqual(
+			mediaNotFound('1'.repeat(19))
+		)
+	})
+
 	it('answers an id of any length with a message no longer than the request', async () => {
 		const h: Pair = await community(['alice', 'bob'])
 		const id = `${'0'.repeat(1024 * 1024)}${'9'.repeat(1024 * 1024)}`
@@ -1197,6 +1217,25 @@ describe('allowed_mentions (PostStatusService#safeguard_mentions!)', () => {
 		}
 		expect(await posting(h, alice.token, { status: '@carol', allowed_mentions: [neighbour] })).toEqual(
 			await unexpected(h, carol.id)
+		)
+	})
+
+	it('matches an imported account id with leading zeros, listed as presented or as Ruby reads it', async () => {
+		const h = await trio()
+		const { alice } = h.users
+		const imported = '000000000000000123'
+		await sql(
+			h.store,
+			"INSERT INTO accounts (id, uri, username, domain) VALUES (?, 'https://far.example/users/zero', 'zero', 'far.example')",
+			imported
+		)
+		for (const listed of [imported, '123']) {
+			expect((await posting(h, alice.token, { status: '@zero@far.example', allowed_mentions: [listed] })).status).toBe(
+				200
+			)
+		}
+		expect(await posting(h, alice.token, { status: '@zero@far.example', allowed_mentions: ['124'] })).toEqual(
+			await unexpected(h, imported)
 		)
 	})
 

@@ -10,6 +10,7 @@ import {
 	type RandomInt,
 	remoteId,
 	requestedId,
+	storedIdOf,
 } from '../src/domain/ids'
 import { writeOperation } from '../src/domain/operation'
 
@@ -165,6 +166,14 @@ describe('requestedId', () => {
 
 	it.each(RUBY)('reads %j as Ruby does', (input, expected) => {
 		expect(requestedId(input)).toBe(expected)
+	})
+
+	it('gives the stored form of a normalized id: 18 characters, padded with zeros', () => {
+		expect(storedIdOf('123')).toBe('000000000000000123')
+		expect(storedIdOf('0')).toBe('000000000000000000')
+		expect(storedIdOf('117424993075228525')).toBe('117424993075228525')
+		expect(storedIdOf('1'.repeat(19))).toBe('1'.repeat(19))
+		expect(storedIdOf('-12')).toBe('-12')
 	})
 
 	it('is never longer than its input', () => {

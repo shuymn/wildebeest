@@ -315,6 +315,31 @@ describe('an Idempotency-Key expires an hour after what it made', () => {
 		})
 	})
 
+	it('publishes without the key a row whose stored created_at is not a time, or is exactly an hour old', async () => {
+		const stored: [string, string, number][] = [
+			['now', "'now'", NOW + 10 * MINUTE],
+			['an embedded NUL', "strftime('%Y-%m-%dT%H:%M:%fZ', 'now') || char(0) || 'x'", NOW + 10 * MINUTE],
+			['an hour old', 'created_at', NOW + HOUR],
+			['an hour old less a millisecond', 'created_at', NOW + HOUR - 1],
+		]
+		for (const [name, value, publishedAt] of stored) {
+			const h = await community(['alice'])
+			const { alice } = h.users
+			const created = await scheduled(h, alice, { status: name, scheduled_at: at(NOW + 10 * MINUTE) })
+			// The key is set directly: no repeated request clears it before the publication.
+			await sql(
+				h.store,
+				`UPDATE scheduled_statuses SET client_key = 'direct', created_at = ${value} WHERE id = ?`,
+				created.id
+			)
+			const publication = await runInDurableObject(h.store, (_instance, state) =>
+				publishOne.run(state.storage.sql, { id: created.id, now: publishedAt, objectId: crypto.randomUUID() })
+			)
+			expect(publication, name).toMatchObject({ status: 'published' })
+			expect(await keys(h, 'statuses'), name).toEqual([publishedAt === NOW + HOUR - 1 ? 'direct' : null])
+		}
+	})
+
 	it('counts a restored created_at that is not a time Kopje writes as expired', async () => {
 		for (const stored of ["'now'", "'not a time'", "strftime('%Y-%m-%dT%H:%M:%fZ', 'now') || char(0) || 'x'"]) {
 			const h = await community(['alice'])
@@ -645,6 +670,34 @@ describe('publication', () => {
 		expect(await sql(h.store, 'SELECT status_id, scheduled_status_id, gc_at FROM media_attachments')).toEqual([
 			{ status_id: null, scheduled_status_id: null, gc_at: at(NOW + HOUR + DAY) },
 		])
+	})
+
+	it('keeps numbers in allowed_mentions as strings, and publishes an imported media id with leading zeros', async () => {
+		const h = await community(['alice', 'bob'])
+		const { alice, bob } = h.users
+		const created = await scheduled(h, alice, {
+			status: `@bob numbers`,
+			scheduled_at: at(NOW + HOUR),
+			allowed_mentions: [Number(bob.id.slice(0, 15))],
+		})
+		expect(created.params.allowed_mentions).toEqual([bob.id.slice(0, 15)])
+		const read = await getJson<Scheduled>(h, `/api/v1/scheduled_statuses/${created.id}`, alice.token)
+		expect(read.body.params.allowed_mentions).toEqual([bob.id.slice(0, 15)])
+		const imported = '000000000000000123'
+		await sql(
+			h.store,
+			`INSERT INTO media_attachments (id, account_id, type, url, file_token, processed, gc_at)
+			VALUES (?, ?, 'image', 'https://kopje.test/files/z/full', 'z', 1, ?)`,
+			imported,
+			alice.id,
+			at(NOW + DAY)
+		)
+		const held = await scheduled(h, alice, { status: 'zeros', media_ids: [imported], scheduled_at: at(NOW + HOUR) })
+		expect(held.params.media_ids).toEqual([imported])
+		await round(h, NOW + HOUR)
+		expect(
+			await sql(h.store, 'SELECT status_id IS NOT NULL AS attached FROM media_attachments WHERE id = ?', imported)
+		).toEqual([{ attached: 1 }])
 	})
 
 	it('publishes a restored row without allowed_mentions, and drops one with another shape as params', async () => {
