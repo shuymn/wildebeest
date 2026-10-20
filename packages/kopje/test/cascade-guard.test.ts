@@ -29,6 +29,8 @@ const STATUS_EXEMPT: Record<string, string> = {
 	statuses:
 		'self-references: the replies are detached (in_reply_to_id) and boosts deleted before the status, by its own steps',
 	polls: 'one row per status, deleted with it',
+	trend_statuses: 'one row per status, inside the final delete’s reservation (deleteStatusWithin)',
+	status_trend_reviews: 'one row per status, inside the final delete’s reservation (deleteStatusWithin)',
 	poll_votes: 'below polls: deleted a batch at a time by deletePollVotes, checked by hasPollVotes',
 	push_deliveries: 'below notifications, which go a batch at a time; at most MAX_PUSH_BACKLOG (1,000) wait in all',
 }
@@ -42,6 +44,7 @@ const ACCOUNT_EXEMPT: Record<string, string> = {
 	stream_conversation_marks:
 		"a local account's only (made at its `direct` subscription, one row); a remote account is the only one purged",
 	poll_votes: 'deleted a batch at a time by deleteAccountVotes, checked by hasPollVotes in accountHasRows',
+	account_trend_reviews: 'one row per account, inside the final delete’s reservation (purgeBatch)',
 	push_deliveries:
 		"below notifications: deleted child-first by the purge's sender and report windows (purgeRelationships), so no notification's delete cascades",
 }
@@ -599,4 +602,101 @@ describe("a status's own delete within a batch", () => {
 			expect(await journaled(h.store)).toEqual(before)
 		}
 	)
+})
+
+describe('trend rows within a batch (0057_trends)', () => {
+	// The status's final delete reserves 6 rows: the status, its poll, its trend_statuses and status_trend_reviews rows,
+	// the account's last status (0021_directory moves it back: the status is the account's newest) and the parent's
+	// recount. The mentions the batch deletes first leave exactly those rows, so the batch ends at PURGE_BATCH.
+	// With one row fewer left (5), the delete waits for the next batch: the old reservation of 4 would have gone past.
+	it.each([
+		[true, 6],
+		[false, 6],
+		[true, 5],
+	])('deletes a status with both trend rows within the budget (poll: %s, left: %i)', async (poll, left) => {
+		const h = await community(['alice'])
+		const parent = await seedStatus(h.store, { accountId: h.users.alice.id, visibility: 'public' })
+		const remote = await remoteAccount(h.store, 'carol')
+		const uri = 'https://remote.example/users/carol'
+		const reply = await seedStatus(h.store, { accountId: remote, visibility: 'public', inReplyToId: parent })
+		if (poll) {
+			await sql(h.store, `INSERT INTO polls (status_id, options, tallies) VALUES (?, '["a","b"]', '[0,0]')`, reply)
+		}
+		await sql(h.store, 'INSERT INTO trend_statuses (status_id, account_id, score) VALUES (?, ?, 9)', reply, remote)
+		await sql(
+			h.store,
+			"INSERT INTO status_trend_reviews (status_id, trendable, reviewed_at) VALUES (?, 1, '2026-10-12T00:00:00.000Z')",
+			reply
+		)
+		await sql(
+			h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO accounts (id, uri, username, domain)
+			SELECT printf('6%017d', i), 'https://many.example/users/m' || i, 'm' || i, 'many.example' FROM n`,
+			PURGE_BATCH - left
+		)
+		await sql(
+			h.store,
+			"INSERT INTO status_mentions (status_id, account_id) SELECT ?, id FROM accounts WHERE id GLOB '6*'",
+			reply
+		)
+		const batch = () =>
+			runInDurableObject(h.store, (_instance, state) => {
+				const db = new Db(state.storage.sql)
+				const changes = () => db.first<{ n: number }>('SELECT total_changes() AS n')!.n
+				const before = changes()
+				const more = state.storage.transactionSync(() => purgeBatch(db, uri, NOW))
+				return { wrote: changes() - before, more }
+			})
+		const first = await batch()
+		if (left === 5) {
+			expect(first).toEqual({ wrote: PURGE_BATCH - 5, more: true })
+			expect(await sql(h.store, 'SELECT count(*) AS n FROM trend_statuses')).toEqual([{ n: 1 }])
+			// The six rows, then the account (no job row to complete).
+			expect((await batch()).wrote).toBe(7)
+			return
+		}
+		expect(await sql(h.store, 'SELECT count(*) AS n FROM statuses WHERE id = ?', reply)).toEqual([{ n: 0 }])
+		expect(first.wrote).toBe(PURGE_BATCH - (poll ? 0 : 1))
+		expect(await sql(h.store, 'SELECT count(*) AS n FROM trend_statuses')).toEqual([{ n: 0 }])
+		expect(await sql(h.store, 'SELECT count(*) AS n FROM status_trend_reviews')).toEqual([{ n: 0 }])
+		expect(first.more).toBe(true)
+		expect(await batch()).toMatchObject({ more: false })
+	})
+
+	// The account's final delete reserves 3 rows: the account, its account_trend_reviews row and the job's completion.
+	it.each([3, 2])('purges an account with its trend review when %i rows are left', async (left) => {
+		const h = await community(['alice'])
+		const remote = await remoteAccount(h.store, 'carol')
+		const uri = 'https://remote.example/users/carol'
+		await sql(
+			h.store,
+			"INSERT INTO account_trend_reviews (account_id, trendable, reviewed_at) VALUES (?, 0, '2026-10-12T00:00:00.000Z')",
+			remote
+		)
+		await sql(h.store, "INSERT INTO inbound_jobs (kind, key, actor_uri, created_at) VALUES ('purge', ?1, ?1, 0)", uri)
+		await sql(
+			h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO accounts (id, uri, username, domain)
+			SELECT printf('6%017d', i), 'https://many.example/users/m' || i, 'm' || i, 'many.example' FROM n`,
+			PURGE_BATCH - left
+		)
+		await sql(
+			h.store,
+			"INSERT INTO blocks (account_id, target_account_id) SELECT id, ? FROM accounts WHERE id GLOB '6*'",
+			remote
+		)
+		const wrote = await runInDurableObject(h.store, (_instance, state) => {
+			const db = new Db(state.storage.sql)
+			const changes = () => db.first<{ n: number }>('SELECT total_changes() AS n')!.n
+			const before = changes()
+			state.storage.transactionSync(() => purgeBatch(db, uri, NOW))
+			return changes() - before
+		})
+		const gone = (await sql(h.store, 'SELECT count(*) AS n FROM accounts WHERE id = ?', remote))[0]!.n === 0
+		expect(gone).toBe(left === 3)
+		expect(wrote).toBe(left === 3 ? PURGE_BATCH : PURGE_BATCH - 2)
+		expect(await sql(h.store, 'SELECT count(*) AS n FROM account_trend_reviews')).toEqual([{ n: left === 3 ? 0 : 1 }])
+	})
 })
