@@ -18,6 +18,7 @@ base=${2:-}
 runs=${RUNS:-3}
 summary=${GITHUB_STEP_SUMMARY:-/dev/null}
 logs=$(mktemp -d)
+trap 'rm -rf "$logs"' EXIT
 
 migrations() {
 	git -C "$1" ls-tree --name-only "$2" packages/kopje/migrations/ \

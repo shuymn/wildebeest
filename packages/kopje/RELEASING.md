@@ -62,9 +62,8 @@ On GitHub, in the repository settings:
    `kopje-v*` tag and reports the median of three runs, for every pull request that changes a migration and by hand
    (`gh workflow run kopje-bench.yml --ref <branch>`). It must pass before the branch merges: the upgrade's median
    must be within the budget. It also shows whether the upgrade checked foreign keys over the whole Store and an
-   estimate of a retry's cost (which always checks the whole Store); the estimate warns past the budget but does not
-   fail. A local run measures
-   the same range, but only on an otherwise idle machine:
+   estimate of a marker-bearing retry's cost (which always checks the whole Store); the estimate warns past the
+   budget but does not fail. A local run measures the same range, but only on an otherwise idle machine:
 
     ```sh
     KOPJE_BENCH_SCALE=1 KOPJE_BENCH_MIGRATION= KOPJE_BENCH_FROM=0049_instance_bounds pnpm --filter kopje bench:migration

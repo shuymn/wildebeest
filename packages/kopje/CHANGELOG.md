@@ -18,8 +18,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 ### Changed
 
 - The Store upgrade skips its whole-Store foreign-key check when it started fresh and every migration it applies is
-  declared to change no reference or key (`0058_profile_credentials` is); a resumed or retried upgrade, or one with
-  an undeclared migration, still checks the whole Store. Migrations may not contain `PRAGMA` or `DEFERRABLE`.
+  declared to change no reference or key (`0058_profile_credentials` is); a resumed upgrade, a marker-bearing retry
+  and an upgrade with an undeclared migration still check the whole Store. Migrations may not contain `PRAGMA` or
+  `DEFERRABLE`.
 - Breaking: avatar and header uploads from the settings page take files under 8 MB (JPEG, PNG, GIF or WebP); AVIF
   and files from 8 MB to 16 MB are refused.
 - Breaking: for repeated parts of a file parameter the last one is read, as Rails does: on `POST /api/v{1,2}/media`
