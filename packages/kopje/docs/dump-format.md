@@ -136,6 +136,22 @@ text; `[]` is refused, write NULL. A boost row's value is never read. A file bui
 (legacy has no custom emoji, and `verify-conversion` fails on any other value). A chunk holding any other value fails
 with `<table>: emojis past their stored bound`.
 
+A local custom emoji is a row of `custom_emojis` (migration `0055_local_custom_emojis`) whose `id` is its image's
+`media_attachments` id (an 18-digit snowflake). Its image must be a kept, complete local upload: of a local account,
+`type` `image`, with a file token, `processed` 1, a non-empty `url`, no `status_id`, `scheduled_status_id` or `gc_at`,
+`content_type` `image/png` or `image/webp`, and a `meta` whose `original.width` and `original.height` are JSON
+integers from 1 to 1024 (the recorded size of the served image; the actual files are checked by `kopje-admin
+media-rebuild`, which a restore runs). A `shortcode` is 2 to 128 ASCII characters of `A-Z a-z 0-9 _`, one per enabled
+emoji; `category` is NULL or 1 to 256 bytes with no NUL, no C0 control and no DEL, and at most 64 SQLite characters (a
+stored-bytes bound: a value that is not well-formed UTF-8 is judged again as decoded when it is presented, and left
+out if it does not pass); `visible_in_picker` and `disabled` are 0 or 1; `created_at` is
+`YYYY-MM-DDTHH:MM:SS.sssZ`. At most 1,000 rows have `disabled` 0. The table comes after `media_attachments`. A chunk
+past these fails with the CHECK's name (`custom_emoji_id_is_a_snowflake`, `custom_emoji_shortcode_2_to_128_ascii`,
+`custom_emoji_category_within_256_bytes`, `custom_emoji_flags`, `custom_emoji_created_at_iso`), `custom_emojis: the
+image is not a kept local upload within the emoji limits`, `custom_emojis: more than 1000 enabled` or `UNIQUE
+constraint failed: custom_emojis.shortcode`. A file built from legacy data has no row (`verify-conversion` fails on
+any).
+
 A report (migration `0054_remote_reports`) names any account as its reporter (`account_id`), once per `uri` and
 reported account, with `status_ids` of at most 100 ids within 2,101 UTF-8 bytes (compact JSON of 18-digit ids), a
 `uri` within 4,096 JSON-escaped UTF-8 bytes and a `comment` within 20,000 UTF-8 bytes (and 5,000 code points up to any

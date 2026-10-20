@@ -47,6 +47,13 @@ be complete and still lack originals: `pending` ones are copied by later backups
 The served, re-encoded files (`files/` in R2) are not backed up. A restore puts the originals back, and
 `kopje-admin media-rebuild` re-encodes them into the served files (restore step 6).
 
+Custom emoji are never deleted, disabled ones included (`kopje-admin emoji`), so every version's original (below
+256 KiB) is in every backup's index for good: it is copied once per destination and reused afterwards, and a new
+destination copies them all again. After a restore, the rebuild re-encodes every version, disabled ones included, at
+two Images transformations each, charged to `IMAGES_MONTHLY_TRANSFORMS` (500 versions use 1,000); a run that spends
+the budget stops and resumes. It also holds each emoji's image to the emoji limits and reports one past them
+(`failed`, `emoji-*`), leaving it as it is for the operator.
+
 ## How it runs
 
 The 5-minute cron starts a backup at the first run on or after `BACKUP_HOUR_UTC`, once per UTC day, and only on a day

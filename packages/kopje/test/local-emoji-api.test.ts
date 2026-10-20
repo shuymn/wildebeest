@@ -313,6 +313,6 @@ describe('actor Emoji tags at their bound (RES-3)', () => {
 			return { tags: tags.length, bytes: jsonBytes(tags), document: jsonBytes(document) }
 		})
 		expect(measured.bytes).toBeLessThanOrEqual(8_960)
-		expect(measured).toEqual({ tags: 30, bytes: 7_418, document: expect.any(Number) })
+		expect(measured).toEqual({ tags: 30, bytes: 7_404, document: 9_005 })
 	})
 })

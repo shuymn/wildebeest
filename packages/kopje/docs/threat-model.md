@@ -911,6 +911,9 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   unsuspension as the admin API's, its credential epoch kept, logged with the Access identity;
   `test/admin-suspension.test.ts` ("POST /admin/accounts/unsuspend"), `test/cli.test.ts`). It is how a suspended
   OAuth admin is recovered: no OAuth admin can unsuspend it.
+  Custom emoji writes (`/admin/emojis`, `kopje-admin emoji`) are Access-only, checked with `accessAdminRefusal` in the
+  Store transaction and logged with the Access identity (`CustomEmoji` targets); the import token and import sessions
+  never reach them; `test/local-emojis.test.ts` ("is refused for the import token and import sessions").
 - **AUTH-6: a user acts only on what that user may touch.** User operations take the acting account from the validated
   viewer, never from the body or path, and check ownership or VIS-1 access to every referenced resource in the same
   transaction. Admin, setup and federation operations use their own named rules (AUTH-5, SETUP-2, ID-6), and the
@@ -1132,6 +1135,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   follows a redirect, and retries instead"). Remote media: _Planned (remote media):_ Kopje fetches no remote media
   (remote attachments, avatars, headers and custom emoji images are kept as http(s) URLs, HTML-3); a cache of them
   needs its own sink with a size cap, a time limit and a type allowlist.
+  Kopje fetches nothing for local emoji; peers fetch `/media/…` and `/emojis/:id`.
 - **NET-4: signed fetches stay with their signer.** A document fetched with a signature is cached under a key that
   includes the signing key id and is never served to another key or to the unsigned path. _Enforced (main):_
   `signedLoader` in `src/federation/federation.ts`; `test/signed-fetch.test.ts` ("caches signed documents per signing
@@ -1222,6 +1226,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `src/federation/remote-emoji.ts`); the stored-bound triggers refuse any other scheme (RES-2);
   `test/custom-emojis.test.ts` ("drops what the trigger would refuse and still stores the status", "normalizes stored
   urls again, drops one that does not pass, and cuts at the presented bound"), `test/emoji-bounds.test.ts`.
+  _Enforced (main)_ for local emoji: their URLs pass `emojiHref` when a snapshot is taken
+  (`localEmojiSnapshot`), in the list and in `icon.url`; the category is judged again on every presentation
+  (`presentedCategory`), so an imported value that is not well-formed UTF-8 is left out (`test/local-emoji-api.test.ts`).
   Web UI pages emit only local paths and http(s) URLs (avatars, headers, media, field and app links, the parent of a
   reply); field links carry `rel="me"`: _Enforced (main):_ `src/web/pages.tsx`; `test/web-pages.test.ts`.
 
@@ -1237,6 +1244,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   after its grace period, and a doomed or still-processing upload cannot be attached);
   `test/media.test.ts` ("shows and updates own unattached media only", "deletes own unattached media with its R2
   objects, and nobody else’s").
+  _Enforced (main)_ for custom emoji images (MEDIA-5): an emoji's image is an upload of the OAuth admin, but it is
+  never read, updated, deleted, attached, scheduled or made a profile image through the API: `liveMediaSql` excludes
+  every `custom_emojis` row (`notEmojiSql` in `src/domain/media.ts`); `test/media-reconcile.test.ts` ("keeps both emoji
+  and their files").
 - **MEDIA-2: R2 keys are server-made.** Keys derive from server-generated ids and stored records; no filename, path
   segment or encoded separator from a request selects or overwrites a key. Originals are not publicly readable.
   _Enforced (main):_ `src/platform/media-files.ts` (originals at `originals/<id>`, served
@@ -1281,6 +1292,12 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   period again from a restore"). Accepted residual risk: a Worker terminated in the middle of an R2 write leaves no
   heartbeat and no record, and that one write may land after the lease expired; it is bounded to a put already in
   flight at termination, and its file lands under the capability URL of a row that existed when the rebuild started.
+  A custom emoji upload (`kopje-admin emoji add`, `src/mastodon/emoji-upload.ts`) builds its keys as every upload's,
+  from a reservation the Store records before any write (`reserveEmoji` in `src/domain/local-emojis.ts`); completion
+  and promotion are one transaction (`completeEmoji`: the row is kept, gc_at NULL, with its emoji row), and a failure
+  abandons the reservation (`abandonEmoji`, only that id and token), whose keys go only when the Store does not keep
+  it. The sweep, the purge and `releaseProfileImage` exclude emoji images, and the foreign key of `custom_emojis`
+  refuses deleting one; `test/local-emojis.test.ts` ("emoji completion").
 - **MEDIA-3: served images are re-encoded.** An image is served only as Images output with location metadata removed; if
   transformation fails, the upload is refused and original bytes are never served. _Enforced (main):_ outputs are PNG or WebP only, for which Images discards all metadata (the binding has no
   metadata option, and JPEG output would keep the EXIF copyright tag); `processImage` in `src/platform/images.ts` then
@@ -1294,12 +1311,25 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   never serves an original instead; it refuses an original whose served type differs from the row's (its URLs name that
   type). `test/media-rebuild.test.ts` ("makes both files … and corrects meta", "reports a missing original and a type
   mismatch").
+  Custom emoji (`src/platform/emoji-image.ts`): an input is PNG, GIF or WebP by signature, below 262,144 bytes, with
+  edges of at most 1,024 read by the free `info()` before anything is charged; the published `full` is below 262,144
+  bytes (what Mastodon downloads, `CustomEmoji::LIMIT`) and `small` at most 524,288, judged before any R2 write. The
+  media rebuild applies the same checks before charging and before writing, and checks an emoji's existing files by
+  size and, in a real run, its served image's actual edges and type (`emoji-actual`); each failure is a per-row
+  problem that writes and deletes nothing. An imported emoji's image must record edges of at most 1,024 (the 0055
+  trigger checks the recorded `meta.original` only; the rebuild checks the files). `test/local-emojis.test.ts` ("emoji
+  upload"), `test/media-rebuild.test.ts` ("media rebuild of custom emoji images").
 - **MEDIA-4: media cannot run as instance content.** Uploads are accepted by detected type from an allowlist and served
   with their stored type and `nosniff`; HTML, SVG and other active types are never served from the instance origin.
   _Enforced (main):_ `sniffImageType` (JPEG, PNG, GIF, WebP, AVIF by signature, and Images
   must read the same type); `SERVED_TYPES` and `src/web/media.ts` (JPEG, PNG and WebP only, `nosniff`, `sandbox` CSP);
   video and audio are refused; `test/media.test.ts` ("refuses active and unsupported types by their bytes", "never
   serves a stored object of another type").
+- **MEDIA-5: a custom emoji's image is never deleted, disabled emoji included.** Its media row has the emoji's id,
+  which the foreign key of `custom_emojis` holds (no cascade), the 0055 image trigger requires a kept upload, and every
+  destructive or API selection excludes it (MEDIA-1, MEDIA-2). _Enforced (main):_ `src/domain/media.ts`
+  (`notEmojiSql`), migration `0055_local_custom_emojis`; `test/media-reconcile.test.ts` ("custom emoji images after
+  every grace period", with an expiring upload and a due tombstone as controls), `test/migrations.test.ts` (0055).
 
 ### Web Push and polls (PUSH, POLL)
 
@@ -1385,6 +1415,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   _Enforced (main)_ for custom emoji: at most `MAX_EMOJI_TAGS` (64) `Emoji` tags of an object are examined, each url
   at most `MAX_URL_LENGTH` as received (`emojiCandidates` in `src/federation/remote-emoji.ts`);
   `test/custom-emojis.test.ts` ("keeps the first valid tag of a name, examines 64 tags only, and stops at the first that does not fit").
+  _Enforced (main)_ for a custom emoji upload: a JSON body of at most 1 MiB, an image below 262,144 decoded bytes in
+  strict base64, its edges read before any transformation (`src/mastodon/emoji-upload.ts`).
 - **RES-2: parsing work is bounded.** Every regex, parser and normalization over input at the RES-1 cap has an
   adversarial fixture with a time bound. _Enforced (main)_ for status text:
   `test/statuses.test.ts` ("handles the worst case at the bound within a generous time"). _Enforced (main)_ for the image metadata walk: `test/image-bytes.test.ts` ("walks a worst-case file at the upload
@@ -1442,6 +1474,12 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   code points with a NUL too (`reportComment`, a lone surrogate read as U+FFFD), where other text writers remove NUL
   (accepted: the comment is plain text, never rendered as HTML, and its JSON is at most about 120 KB). A Flag's comment
   that is not a string reads as none (`test/inbox-flag.test.ts` ("Flag: bounds"), `test/migrations.test.ts` (0054)).
+  _Enforced (main)_ for local emoji (migration 0055): the CHECKs bound a shortcode (2 to 128 ASCII bytes), a category
+  (stored bytes only, 1 to 256, no NUL or control; the decoded value is judged again when presented, and API input is
+  made well-formed first), the flags and the time; four triggers hold the image, the cap and immutability. The local
+  writer shares `emojiSnapshot` and `emojiHref`, looks up at most 1,024 names and resolves at most 64 tokens, each by
+  index (`src/domain/custom-emojis.ts`); `test/local-emojis.test.ts` ("reads each production query through its
+  index").
 - **RES-3: lists are bounded.** Pageable lists return at most 80 items; relationships read at most 100 ids; any other
   collection names its count and byte bound. _Enforced (main):_ `src/mastodon/pagination.ts`, `MAX_RELATIONSHIP_IDS` in
   `src/domain/accounts.ts`. _Gap: neither cap is tested._ _Enforced (main)_ for search: at
@@ -1592,6 +1630,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   answers", "keeps the subscription and retries when the push service answers", "sends pushes from the delivery
   doorbell, and not without a VAPID_JWK or in maintenance", "RES-4: a notification fanned out to several
   subscriptions fills the backlog only up to its cap", "records no push beyond the backlog cap").
+  _Enforced (main)_ for local emoji: `GET /api/v1/custom_emojis` holds at most 1,000 entries of at most 1,489 JSON
+  bytes each with its separator, 1,489,001 bytes in all, admitted whole within `ARRAY_ANSWER_BYTES`
+  (`test/local-emoji-api.test.ts` measures it); `GET /admin/emojis` pages hold at most 200.
 - **RES-6: one request cannot trigger unbounded work.** An inbound activity has fixed limits on dereferences,
   recipients, collection expansion and notifications. Delivery backlog and concurrency are bounded. Anonymous app
   registration, inbox spooling and media transformations have rate or storage budgets with a visible refusal. Inbox
@@ -1769,6 +1810,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   no turn; a new event kind joins its table (`KINDS`). `src/stream-hub.ts`, `src/domain/streaming.ts`;
   `test/streaming/streaming.test.ts`. _Gap:_ the budgets count work, not CPU time; a turn at the limits is to be
   measured on a deployed instance, as is how long a hibernated idle socket stays open.
+  A custom emoji upload charges two transformations to the instance's monthly budget (429 past it). Disabled emoji
+  versions are kept: their storage, a backup copy to every new destination and two rebuild transformations each after
+  a restore are paid indefinitely ([backup.md](backup.md)).
 - **RES-7: query work is bounded, not only the rows returned.** Feeds apply visibility and filters in the query before
   `LIMIT`. Context traversal visits a bounded number of statuses before sorting. A status keeps a bounded number and
   size of edits. _Enforced (main)_ for filtering before `LIMIT`: `src/domain/timelines.ts` (_Gap:
@@ -1915,11 +1959,13 @@ RPC limit.
 | Notification group: 8 sample accounts, its status a quote        | 7,786,297         | 6,297,471       | 6,297,841         | 1,943     | 5,298 | 75.1%          |
 | Report: its first status a quote past the 2 MiB allowance        | 7,160,731         | 5,832,254       | 5,832,624         | 1,926     | 5,027 | 69.5%          |
 | An admin.report notification of that report                      | 2,341,805         | 382,444         | 382,444           | 1,059     | 236   | 4.6%           |
-| ActivityPub Note: a local status at its bounds, 1,000 addressed  | 3,685,367         | 4,220,294       |                   | 1,276     | 2,616 | 50.3%          |
-| Its Create (the Note and its addressing again)                   |                   | 6,276,334       |                   |           |       | 74.8%          |
+| ActivityPub Note: a local status at its bounds, 1,000 addressed  | 3,697,315         | 4,235,143       |                   | 1,337     | 3,165 | 50.5%          |
+| Its Create (the Note and its addressing again)                   |                   | 6,291,204       |                   |           |       | 75.0%          |
 
 The most JSON is the emoji-poll fill's, the most SQLite bytes the raw fill's; the escaped fill presents the
-conversation in 6,792,894 bytes. Notes carry no emoji: local rows hold none.
+conversation in 6,792,894 bytes. The Note's local emoji snapshot is at its 12,288-byte bound with as many entries as
+fit (61, every url at its shortest), resolved to 14,850 bytes of `Emoji` tags (at most 64 × 44 bytes past the
+snapshot); an actor's at 6,144 bytes resolves to 30 tags of 7,404 bytes (`test/local-emoji-api.test.ts`).
 
 Mentions whose url is derived read and present less (the conversation: 5,435,360 and 5,973,694 bytes): a derived url
 within the bound is at most the stored bound, and a longer one presents as ''.
@@ -2514,6 +2560,11 @@ activity specs, cited in test names.
 | An emoji snapshot goes stale until its object is delivered again: an emoji the author's server changes or removes keeps its old URL                                                                                                                                                                          | Each object keeps what it tagged; a global (shortcode, domain) registry, as Mastodon keeps, is not stored                                                                                                                                                                  | emoji are kept in a registry                                         |
 | `static_url` is the same as `url`, so an animated emoji stays animated where a client asked for still images                                                                                                                                                                                                 | Mastodon serves a still image it generates; Kopje processes no remote image                                                                                                                                                                                                | remote images are processed                                          |
 | Rows stored before migration `0053_custom_emoji_snapshots`, and converted ones, show no emoji: an account until its next refresh, a status until its next Update                                                                                                                                             | Backfilling from the stored documents would put the upgrade's time budget at risk                                                                                                                                                                                          | a backfill fits the upgrade budget                                   |
+| A disabled local emoji keeps showing in the posts and profiles that used it, and in their Notes and actors; Mastodon hides it (`EntityCache#emoji`) | A snapshot shows what was posted; the image is never deleted (MEDIA-5) | disabling must withdraw an emoji |
+| Replacing an emoji changes the image peers show on earlier posts (they key emoji by shortcode); a delayed Create of an old post, or a peer's first fetch of one, switches that shortcode back to the old image until a newer object arrives. Edits carry the current image; poll-count Updates change nothing | Nothing is re-delivered on disable, enable or replace, as Mastodon | peers key emoji by id or url |
+| Local emoji too have `static_url` equal to `url`, and a status's snapshot shows `visible_in_picker: true` for an unlisted local emoji | Kopje makes no still rendition; the snapshot keeps two elements | clients need still images |
+| Disabled emoji versions' files, backup copies and rebuild transformations are kept and paid indefinitely | Emoji are never deleted (owner decision); the cost is documented in backup.md | the cost matters |
+| An imported emoji whose existing `full` is 256 KiB or more, or whose actual edges pass 1,024 while its recorded ones do not, is served until `kopje-admin media-rebuild` reports it | The Store never sees file bytes; a restore always runs the rebuild | imports come from untrusted dumps |
 
 ## How to use
 
