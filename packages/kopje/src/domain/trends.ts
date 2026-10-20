@@ -5,15 +5,13 @@ import { availableSql, statusReads, trendableStatusSql, visibleSql } from './aud
 import { optionalUserReadOperation } from './auth'
 import { logAction } from './moderation-log'
 import { readOperation, writeOperation } from './operation'
-import { htmlToPlainText } from './plain-text'
-import { usernameSql } from './profile-bounds'
+import { USERNAME_LIMIT, usernameSql } from './profile-bounds'
 import { MAX_STATUS_TAGS, tagNameSql } from './status-bounds'
 import { presentation, presentStatusesWithin, type Status } from './status-presenter'
 import { presentTags, type Tag, type TagHistory, tagId, tagName } from './tags'
 import { type Db, ROW_OBJECT_BYTES, RowMeter, VALUE_BYTES } from '../db/sql'
 import type { ImportAuthority } from '../platform/store-admin'
 import {
-	cutSql,
 	isoTimeSql,
 	MAX_TREND_REVIEWS,
 	MAX_TREND_TAGS,
@@ -27,7 +25,7 @@ import {
 	TREND_TAG_NAME_LENGTH,
 	trendTagNameCheckSql,
 } from '../platform/stored-bounds'
-import { cutCodeUnits } from '../security/html'
+import { cutCodeUnits, remotePlainText } from '../security/html'
 
 // Trends (migration 0057_trends), as Mastodon 4.5 works them out (app/models/trends/{tags,statuses}.rb): the hashtags
 // and statuses that trend, scored every 5 minutes by the cron's round (jobs/scheduled.ts trendsRound) from what the
@@ -551,11 +549,12 @@ export const trendingStatuses = optionalUserReadOperation<
 
 export const ADMIN_TREND_TAGS_LIMIT = 20
 export const ADMIN_TREND_STATUSES_LIMIT = 40
-// An admin status's excerpt: the plain text of its content's first EXCERPT_SOURCE code points, cut at EXCERPT_UNITS
-// code units; a domain shown at most DOMAIN_POINTS code points (a DNS name is at most 253 bytes).
+// An admin status's excerpt: the plain text of its content's first EXCERPT_SOURCE bytes, cut at EXCERPT_UNITS code
+// units; a domain shown at most DOMAIN_BYTES bytes (a DNS name is at most 253) and a username USERNAME_LIMIT bytes,
+// each cut on bytes (byteCut).
 const EXCERPT_SOURCE = 4000
 export const EXCERPT_UNITS = 200
-export const DOMAIN_POINTS = 253
+export const DOMAIN_BYTES = 253
 
 export type AdminTrendTag = {
 	name: string
@@ -648,15 +647,22 @@ type StatusReviewRow = {
 	content: string
 }
 
+// A text value cut to its first `bytes` UTF-8 bytes, counted as bytes: SQLite's length and substr count characters,
+// skipping continuation bytes, so a malformed imported value would pass a character cut whole. Each byte presents as
+// at most six JSON bytes (a control character escaped, or a malformed byte decoded to U+FFFD: three).
+function byteCut(column: string, bytes: number): string {
+	return `CAST(substr(CAST(${column} AS BLOB), 1, ${bytes}) AS TEXT)`
+}
+
 // Every variable field through its bounded projection (RES-3): the stored URL bound, the 24-byte ISO time, a
 // supported language, the username's and the domain's bounds, the content's first EXCERPT_SOURCE code points.
 const ADMIN_STATUS_COLUMNS = `t.status_id AS id, ${statusUrlSql('s.url')} AS url, s.account_id,
-	${usernameSql('a.username')} AS username, ${cutSql('a.domain', DOMAIN_POINTS)} AS domain,
+	${byteCut(usernameSql('a.username'), USERNAME_LIMIT)} AS username, ${byteCut('a.domain', DOMAIN_BYTES)} AS domain,
 	${isoTimeSql('s.published_at')} AS published_at,
 	CASE WHEN s.language IN (SELECT value FROM json_each(?1)) THEN s.language END AS language, t.score,
 	(SELECT v.trendable FROM status_trend_reviews v WHERE v.status_id = t.status_id) AS status_review,
 	(SELECT v.trendable FROM account_trend_reviews v WHERE v.account_id = t.account_id) AS account_review,
-	${cutSql('s.content', EXCERPT_SOURCE)} AS content`
+	${byteCut('s.content', EXCERPT_SOURCE)} AS content`
 
 function adminStatus(row: StatusReviewRow, settings: TrendSettings): AdminTrendStatus {
 	const review = row.status_review ?? row.account_review
@@ -669,7 +675,7 @@ function adminStatus(row: StatusReviewRow, settings: TrendSettings): AdminTrendS
 		score: row.score,
 		trendable: (review ?? (settings.trendable_by_default ? 1 : 0)) === 1,
 		requires_review: review === null,
-		excerpt: cutCodeUnits(htmlToPlainText(row.content), EXCERPT_UNITS),
+		excerpt: cutCodeUnits(remotePlainText(row.content), EXCERPT_UNITS),
 	}
 }
 

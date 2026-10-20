@@ -12,7 +12,7 @@ import { USERNAME_LIMIT } from '../src/domain/profile-bounds'
 import {
 	ADMIN_TREND_STATUSES_LIMIT,
 	ADMIN_TREND_TAGS_LIMIT,
-	DOMAIN_POINTS,
+	DOMAIN_BYTES,
 	EXCERPT_UNITS,
 	TREND_HISTORY_ROWS,
 	TREND_TAGS_MAX_LIMIT,
@@ -63,7 +63,7 @@ export const ADMIN_TAG_MAX = jsonBytes({
 export const ADMIN_STATUS_MAX = jsonBytes({
 	id: DIGITS(18),
 	url: C.repeat(STATUS_URL_LIMIT),
-	account: { id: DIGITS(18), acct: `${'u'.repeat(USERNAME_LIMIT)}@${C.repeat(DOMAIN_POINTS)}` },
+	account: { id: DIGITS(18), acct: `${C.repeat(USERNAME_LIMIT)}@${C.repeat(DOMAIN_BYTES)}` },
 	published_at: DIGITS(24),
 	language: 'mn-Mong',
 	score: SCORE,
@@ -88,7 +88,7 @@ describe('trends maxima (RES-3)', () => {
 		expect({ TAG_MAX, ADMIN_TAG_MAX, ADMIN_STATUS_MAX }).toEqual({
 			TAG_MAX: 4572,
 			ADMIN_TAG_MAX: 4625,
-			ADMIN_STATUS_MAX: 27_785,
+			ADMIN_STATUS_MAX: 29_060,
 		})
 		for (const unit of [TAG_MAX, ADMIN_TAG_MAX, ADMIN_STATUS_MAX]) {
 			expect(unit).toBeLessThanOrEqual(0.85 * ANSWER_BYTES)
@@ -145,22 +145,29 @@ describe('trends maxima (RES-3)', () => {
 				const account = String(500_000_000_000_000_000n + BigInt(i))
 				const status = String(300_000_000_000_000_000n + BigInt(i))
 				s.exec(
-					`INSERT INTO accounts (id, uri, username, domain) VALUES (?, ?, ?, ?)`,
+					// Even rows: control characters; odd rows: malformed bytes (x'C0' and continuation bytes, one character to
+					// SQLite's length), each far past its byte cap.
+					`INSERT INTO accounts (id, uri, username, domain)
+					VALUES (?1, ?2, CASE WHEN ?5 THEN ?3 ELSE CAST(x'C0' || ?4 AS TEXT) END,
+						CASE WHEN ?5 THEN ?3 || ?1 ELSE CAST(x'C0' || ?4 AS TEXT) || ?1 END)`,
 					account,
 					`https://d${i}.example/u`,
-					`${C}${'é'.repeat(4000)}`,
-					`${C.repeat(2000)}${i}`
+					C.repeat(2000),
+					new Uint8Array(100_000).fill(0x80).buffer,
+					i % 2 === 0 ? 1 : 0
 				)
 				s.exec(
 					`INSERT INTO statuses (id, uri, url, account_id, visibility, content, language, published_at)
-					VALUES (?, ?, ?, ?, 'public', ?, ?, ?)`,
+					VALUES (?1, ?2, ?3, ?4, 'public', CASE WHEN ?8 THEN ?5 ELSE CAST(x'C0' || ?9 AS TEXT) END, ?6, ?7)`,
 					status,
 					`https://d${i}.example/s`,
 					C.repeat(STATUS_URL_LIMIT),
 					account,
 					`<p>${C.repeat(10_000)}</p>`,
 					'x'.repeat(1 << 20),
-					`2026-10-20 odd ${'x'.repeat(1000)}`
+					`2026-10-20 odd ${'x'.repeat(1000)}`,
+					i % 2 === 0 ? 1 : 0,
+					new Uint8Array(100_000).fill(0x80).buffer
 				)
 				s.exec(
 					'INSERT INTO trend_statuses (status_id, account_id, score) VALUES (?, ?, ?)',

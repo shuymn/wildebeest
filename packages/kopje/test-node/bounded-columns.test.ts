@@ -325,6 +325,8 @@ const SAFE_INTERPOLATIONS = new Set([
 	'availableLocalSql',
 	'availableSql',
 	'blocksSql',
+	// A value cut to a byte cap (domain/trends.ts), around the column's own helper where it has one.
+	'byteCut',
 	'cutSql',
 	'DISTRIBUTABLE_SQL',
 	'domainBlocksSql',

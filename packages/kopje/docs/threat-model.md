@@ -2048,7 +2048,7 @@ RPC limit.
 | Announcement: each part derived from its caps                    |                   | 121,774         | 248,997           |           |       | 3.0%           |
 | Trending hashtag (Tag with history), derived from its caps       |                   | 4,508           | 4,572             |           |       | 0.1%           |
 | Access admin's trending hashtag, derived from its caps           |                   | 4,551           | 4,625             |           |       | 0.1%           |
-| Access admin's trending status, derived from its caps            |                   | 27,584          | 27,785            |           |       | 0.3%           |
+| Access admin's trending status, derived from its caps            |                   | 27,748          | 29,060            |           |       | 0.3%           |
 
 The most JSON is the emoji-poll fill's, the most SQLite bytes the raw fill's; the escaped fill presents the
 conversation in 6,792,894 bytes. The Note's local emoji snapshot is at its 12,288-byte bound with as many entries as
@@ -2057,10 +2057,11 @@ snapshot); an actor's at 6,144 bytes resolves to 30 tags of 7,404 bytes (`test/l
 
 The trends shapes are derived the same way (`test/trends-maxima.test.ts`): a hashtag of a 1,024-byte name with its
 URL percent-encoded (three bytes a byte) and seven history days at 200 uses; an admin status of a 4,096-byte URL, a
-255-byte username, a domain cut at 253 code points and a 200-unit excerpt, each escaped to six bytes a unit, a
+username and a domain cut on bytes at 255 and 253 (SQLite's character cuts pass malformed bytes whole), each byte
+escaped to six bytes (a malformed one decodes to a three-byte U+FFFD), a 200-unit excerpt escaped the same, a
 supported language and a 24-byte time. Pages: 20 hashtags (91,461 bytes at most; 90,180 filled through the Store
-RPC), 20 admin hashtags, 40 admin statuses (1,111,440 at most; 1,103,401 filled through the Store RPC by imported
-rows whose parents pass every bound).
+RPC), 20 admin hashtags, 40 admin statuses (1,162,440 at most; 1,093,041 filled through the Store RPC by imported
+rows whose parents pass every bound, half of them with malformed bytes in the username, domain and content).
 
 An announcement's maxima are derived from caps, not from fills: each part's conservative JSON is computed by
 `test/announcement-bounds.test.ts` (`derivedAnnouncementMaxima` in `test/announcement-helpers.ts`) from the stored and
