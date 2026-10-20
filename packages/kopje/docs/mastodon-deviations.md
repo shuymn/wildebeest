@@ -99,7 +99,8 @@ Posting (`POST` and `PUT /api/v1/statuses`):
 - `allowed_mentions[]` is compared with the mentions Kopje writes: accounts it already knows (nothing is fetched), not
   blocked by the author and not suspended. `unexpected_accounts` lists the accounts that fit the 8 MiB answer, in
   mention order. A scheduled post's parameters, the list included, must fit 128 KiB of JSON (`Record invalid`); the
-  list is checked when the post is published, and a post it refuses is dropped, as in Mastodon.
+  list is checked when the post is published, and a post it refuses is dropped, as in Mastodon. Numbers sent in a JSON
+  list are kept as strings in `params.allowed_mentions` (Mastodon keeps the JSON types).
 - An `Idempotency-Key` lasts one hour after the status or scheduled status it made; a scheduled post published within
   that hour keeps it until one hour after its publication. A repeated key answers the scheduled status it made
   (Mastodon answers 404 for an immediate repeat), and a key whose status was deleted posts anew (Mastodon answers 404
