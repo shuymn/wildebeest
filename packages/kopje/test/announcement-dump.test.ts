@@ -33,9 +33,11 @@ async function source() {
 	await seedAnnouncement(store, { id: '200000000000000001', text: 'draft', published: 0, published_at: null })
 	const emoji = await seedEmojiRow(store, { id: '300000000000000001', shortcode: 'blob', owner: alice })
 	const first = live[0]!
-	for (const [name, emojiId] of ['1⃣', '2⃣', '3⃣', '4⃣', '5⃣', '6⃣', '7⃣']
-		.map((n) => [n, null] as const)
-		.concat([['blob', emoji.id] as const])) {
+	const names: [string, string | null][] = [
+		...['1⃣', '2⃣', '3⃣', '4⃣', '5⃣', '6⃣', '7⃣'].map((n): [string, null] => [n, null]),
+		['blob', emoji.id],
+	]
+	for (const [name, emojiId] of names) {
 		for (const account of [alice, bob]) {
 			await sql(
 				store,
