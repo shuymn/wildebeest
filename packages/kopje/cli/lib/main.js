@@ -44,6 +44,20 @@ Commands
                                 stop or resume offering an emoji to new posts. Nothing is deleted: a disabled emoji
                                 keeps its files, its place in every backup (each new backup destination copies it,
                                 and a restore rebuilds it) and every post and profile that used it
+  announcement [--before <id>]  list the announcements, published or not, newest first
+  announcement add <file> [--starts <time> --ends <time>] [--all-day] [--at <time>]
+                                publish the text of <file> (UTF-8 plain text, at most 10,000 bytes; links, mentions
+                                and hashtags are linked when shown), now or at <time> (the cron publishes it within 5
+                                minutes after). --starts and --ends give the event's range, both or neither; times are
+                                ISO 8601. At most 16 are published or scheduled, 1,000 kept
+  announcement set <id> [text=<file>] [starts=<time>|starts=] [ends=<time>|ends=] [all-day=on|off] [at=<time>|at=]
+                                change an announcement (an empty value clears a time; at= only while unpublished).
+                                A published one's change reaches clients at once
+  announcement publish <id> | announcement unpublish <id>
+                                publish one now, or take it down (its schedule is cleared)
+  announcement delete <id> --yes
+                                delete one with its reactions and dismissals (the moderation log keeps its first 200
+                                characters)
   keys rewrap                   move every local private key from USER_KEK_PREVIOUS (unset: the empty KEK) to
                                 USER_KEK, the same keys under a new wrapping (docs/setup.md, "Rotating the KEK").
                                 Resumable: keys already under USER_KEK are skipped. Prints counts and the keys it could
@@ -219,6 +233,8 @@ function parseArgs(argv) {
 		'file',
 		'after',
 		'category',
+		'starts',
+		'ends',
 	])
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i] ?? ''
@@ -939,6 +955,85 @@ export async function run({
 				}
 				throw new UsageError(
 					'emoji [--after <id>] | emoji add <shortcode> <file> | emoji set <id> ... | emoji disable|enable <id>'
+				)
+			}
+			case 'announcement': {
+				const [action, ...args] = rest
+				const id = args[0]
+				const announcementId = id !== undefined && /^\d{18}$/.test(id) && args.length === 1
+				/** @param {string} file */
+				const text = async (file) => {
+					const value = await io.readText(file)
+					if (value === null) {
+						throw new Error(`cannot read ${file}`)
+					}
+					return value
+				}
+				if (action === undefined) {
+					const before = flags.before
+					if (before !== undefined && (typeof before !== 'string' || !/^\d{18}$/.test(before))) {
+						throw new UsageError('--before takes an announcement id')
+					}
+					print(await client.get(`/admin/announcements${before === undefined ? '' : `?before=${before}`}`))
+					return 0
+				}
+				if (action === 'add') {
+					const { starts, ends, at } = flags
+					if (
+						args.length !== 1 ||
+						[starts, ends, at].includes(true) ||
+						(starts === undefined) !== (ends === undefined)
+					) {
+						throw new UsageError('announcement add <file> [--starts <time> --ends <time>] [--all-day] [--at <time>]')
+					}
+					print(
+						await client.post('/admin/announcements', {
+							text: await text(args[0] ?? ''),
+							...(starts === undefined ? {} : { startsAt: starts, endsAt: ends }),
+							allDay: flags['all-day'] === true,
+							...(at === undefined ? {} : { scheduledAt: at }),
+						})
+					)
+					return 0
+				}
+				if ((action === 'publish' || action === 'unpublish') && announcementId) {
+					print(await client.post(`/admin/announcements/${id}/${action}`, {}))
+					return 0
+				}
+				if (action === 'delete' && announcementId) {
+					if (flags.yes !== true) {
+						throw new UsageError('announcement delete deletes it with its reactions; pass --yes')
+					}
+					print(await client.post(`/admin/announcements/${id}/delete`, {}))
+					return 0
+				}
+				if (action === 'set' && id !== undefined && /^\d{18}$/.test(id) && args.length > 1) {
+					/** @type {Record<string, string | boolean | null>} */
+					const changes = {}
+					/** @type {Record<string, string>} */
+					const times = { starts: 'startsAt', ends: 'endsAt', at: 'scheduledAt' }
+					for (const pair of args.slice(1)) {
+						const at = pair.indexOf('=')
+						const name = pair.slice(0, at)
+						const value = pair.slice(at + 1)
+						const time = times[name]
+						if (name === 'text' && value !== '' && !('text' in changes)) {
+							changes.text = await text(value)
+						} else if (time !== undefined && !(time in changes)) {
+							changes[time] = value === '' ? null : value
+						} else if (name === 'all-day' && (value === 'on' || value === 'off') && !('allDay' in changes)) {
+							changes.allDay = value === 'on'
+						} else {
+							throw new UsageError(
+								'announcement set <id> [text=<file>] [starts=<time>|starts=] [ends=<time>|ends=] [all-day=on|off] [at=<time>|at=]'
+							)
+						}
+					}
+					print(await client.post(`/admin/announcements/${id}`, changes))
+					return 0
+				}
+				throw new UsageError(
+					'announcement [--before <id>] | announcement add <file> ... | announcement set <id> ... | announcement publish|unpublish <id> | announcement delete <id> --yes'
 				)
 			}
 			case 'keys': {

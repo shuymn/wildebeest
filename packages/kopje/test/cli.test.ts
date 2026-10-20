@@ -379,6 +379,75 @@ describe('kopje-admin', () => {
 		expect((await cli(['moderation-log', '--before', 'x'], { fetch })).code).toBe(2)
 	})
 
+	it('adds, lists, changes, publishes, unpublishes and deletes announcements, each logged', async () => {
+		const store = await sourceStore(0)
+		const { fetch, seen } = edge(store)
+		const io = memoryIO(
+			new Map([
+				['hello.txt', new TextEncoder().encode('Hello #kopje\n')],
+				['changed.txt', new TextEncoder().encode('Changed')],
+			])
+		)
+		const added = await cli(
+			[
+				'announcement',
+				'add',
+				'hello.txt',
+				'--starts',
+				'2026-11-01',
+				'--ends',
+				'2026-11-02',
+				'--all-day',
+				'--at',
+				'2099-01-01',
+			],
+			{ fetch, io }
+		)
+		expect(added.code, added.err).toBe(0)
+		expect(await seen.at(-1)?.json()).toEqual({
+			text: 'Hello #kopje\n',
+			startsAt: '2026-11-01',
+			endsAt: '2026-11-02',
+			allDay: true,
+			scheduledAt: '2099-01-01',
+		})
+		const { id } = JSON.parse(added.out) as { id: string }
+		expect(JSON.parse(added.out)).toMatchObject({ published: false, scheduled_at: '2099-01-01T00:00:00.000Z' })
+		const set = await cli(['announcement', 'set', id, 'text=changed.txt', 'at=', 'all-day=off'], { fetch, io })
+		expect(set.code, set.err).toBe(0)
+		expect(await seen.at(-1)?.json()).toEqual({ text: 'Changed', scheduledAt: null, allDay: false })
+		expect(JSON.parse((await cli(['announcement', 'publish', id], { fetch })).out)).toMatchObject({ published: true })
+		expect(JSON.parse((await cli(['announcement', 'unpublish', id], { fetch })).out)).toMatchObject({
+			published: false,
+		})
+		expect(JSON.parse((await cli(['announcement'], { fetch })).out)).toMatchObject({
+			announcements: [{ id, text: 'Changed' }],
+			next: null,
+		})
+		expect((await cli(['announcement', 'delete', id], { fetch })).code).toBe(2)
+		expect(JSON.parse((await cli(['announcement', 'delete', id, '--yes'], { fetch })).out)).toEqual({ deleted: id })
+		const log = JSON.parse((await cli(['moderation-log'], { fetch })).out) as { entries: { action: string }[] }
+		expect(log.entries.map((entry) => entry.action)).toEqual(['delete', 'unpublish', 'publish', 'update', 'create'])
+		// A refusal exits 1; malformed arguments exit 2 before any request.
+		const blank = memoryIO(new Map([['blank.txt', new TextEncoder().encode(' ')]]))
+		expect((await cli(['announcement', 'add', 'blank.txt'], { fetch, io: blank })).code).toBe(1)
+		const count = seen.length
+		for (const argv of [
+			['announcement', 'add'],
+			['announcement', 'add', 'hello.txt', '--starts', '2026-11-01'],
+			['announcement', 'set', id],
+			['announcement', 'set', id, 'colour=red'],
+			['announcement', 'set', id, 'all-day=yes'],
+			['announcement', 'publish', 'x'],
+			['announcement', 'publish', id, id],
+			['announcement', '--before', 'x'],
+			['announcement', 'pin', id],
+		]) {
+			expect((await cli(argv, { fetch, io })).code, argv.join(' ')).toBe(2)
+		}
+		expect(seen.length).toBe(count)
+	})
+
 	it('checks its arguments', async () => {
 		const { fetch } = edge(await sourceStore(0))
 		expect((await cli([], { fetch })).code).toBe(2)
