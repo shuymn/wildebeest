@@ -11,7 +11,7 @@ import { community, domainBlock, follow, getJson, post, remoteAccount, type User
 import { csrfOf, ORIGIN, signIn } from './web-helpers'
 import { Db } from '../src/db/sql'
 import { suspendLocal, unsuspendLocal } from '../src/domain/suspension'
-import { NEXT_REQUEST, UNLOCK_ACCEPTS_PER_ROUND } from '../src/domain/unlock-accepts'
+import { NEXT_REQUEST, UNLOCK_ACCEPTS_PER_ROUND, unlockAcceptStep } from '../src/domain/unlock-accepts'
 import type { StoreStub } from '../src/platform/store-client'
 
 // Unlocking an account accepts its pending follow requests in rounds (domain/unlock-accepts.ts), each request through
@@ -84,6 +84,19 @@ describe('unlock acceptance', () => {
 		await domainBlock(h.store, alice.id, 'blocked.example')
 		await remoteRequests(h.store, alice.id, ['blocked.example'], 2)
 		expect(await states(h.store, alice.id)).toEqual({ pending: 250 })
+		// The plan at saturation, with no statistics: 10,000 accepted followers of alice besides the requests.
+		await sql(
+			h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 10000)
+			INSERT INTO accounts (id, uri, username, domain)
+			SELECT CAST(120000000000000000 + i AS TEXT), 'https://many.example/users/f' || i, 'f' || i, 'many.example' FROM n`
+		)
+		await sql(
+			h.store,
+			`INSERT INTO follows (account_id, target_account_id, state)
+			SELECT id, ?, 'accepted' FROM accounts WHERE domain = 'many.example'`,
+			alice.id
+		)
 		const plan = await runInDurableObject(h.store, (_instance, state) =>
 			state.storage.sql
 				.exec<{ detail: string }>(`EXPLAIN QUERY PLAN ${NEXT_REQUEST}`, alice.id)
@@ -109,7 +122,7 @@ describe('unlock acceptance', () => {
 		}
 		expect(Math.max(...accepted)).toBeLessThanOrEqual(UNLOCK_ACCEPTS_PER_ROUND)
 		expect(accepted.reduce((a, b) => a + b, 0)).toBe(247)
-		expect(await states(h.store, alice.id)).toEqual({ accepted: 247, pending: 3 })
+		expect(await states(h.store, alice.id)).toEqual({ accepted: 10_247, pending: 3 })
 		expect(await cursor(h.store, alice.id)).toBeNull()
 		// The counters match a recount; each local requester follows one more account.
 		const [counts] = await sql<{ followers_count: number }>(
@@ -117,7 +130,7 @@ describe('unlock acceptance', () => {
 			'SELECT followers_count FROM accounts WHERE id = ?',
 			alice.id
 		)
-		expect(counts?.followers_count).toBe(247)
+		expect(counts?.followers_count).toBe(10_247)
 		expect(await sql(h.store, 'SELECT following_count FROM accounts WHERE id IN (?, ?)', bob.id, carol.id)).toEqual([
 			{ following_count: 1 },
 			{ following_count: 1 },
@@ -169,32 +182,48 @@ describe('unlock acceptance', () => {
 		expect(await states(h.store, alice.id)).toEqual({ accepted: 20, pending: 10 })
 	})
 
-	it('passes a follow id above 2^53 exactly', async () => {
+	it('passes follow ids above 2^53 exactly, one step at a time', async () => {
 		const h = await setup()
 		const { alice } = h.users
-		const big = '9007199254740993'
-		const requester = await remoteAccount(h.store, 'big', 'one.example')
-		await sql(
-			h.store,
-			`INSERT INTO follows (id, account_id, target_account_id, state, uri)
-			VALUES (CAST(? AS INTEGER), ?, ?, 'pending', 'https://one.example/follows/big')`,
-			big,
-			requester,
-			alice.id
-		)
+		// Two ids a JS number cannot tell from their neighbours (2^53 + 1 and 2^53 + 3).
+		const ids = ['9007199254740993', '9007199254740995']
+		const requesters: string[] = []
+		for (const [i, id] of ids.entries()) {
+			const requester = await remoteAccount(h.store, `big${i}`, 'one.example')
+			await sql(
+				h.store,
+				`INSERT INTO follows (id, account_id, target_account_id, state, uri)
+				VALUES (CAST(? AS INTEGER), ?, ?, 'pending', ?)`,
+				id,
+				requester,
+				alice.id,
+				`https://one.example/follows/big${i}`
+			)
+			requesters.push(requester)
+		}
 		await patch(h, alice, { locked: false })
-		// One step: the cursor stands exactly on the id before the job sees nothing past it.
-		await sql(
-			h.store,
-			'UPDATE local_accounts SET accept_requests_after = CAST(? AS INTEGER) - 1 WHERE account_id = ?',
-			big,
-			alice.id
-		)
-		await round(h.store)
-		expect(
-			await sql(h.store, 'SELECT CAST(id AS TEXT) AS id, state FROM follows WHERE account_id = ?', requester)
-		).toEqual([{ id: big, state: 'accepted' }])
+		const step = () =>
+			runInDurableObject(h.store, (_instance, state) => unlockAcceptStep.run(state.storage.sql, { now: NOW }))
+		expect(await step()).toEqual({ done: false, delivers: true })
+		expect(await cursor(h.store, alice.id)).toBe(ids[0])
+		const statesOf = () =>
+			sql(
+				h.store,
+				'SELECT CAST(id AS TEXT) AS id, state FROM follows WHERE target_account_id = ? ORDER BY id',
+				alice.id
+			)
+		expect(await statesOf()).toEqual([
+			{ id: ids[0], state: 'accepted' },
+			{ id: ids[1], state: 'pending' },
+		])
+		await step()
+		expect(await cursor(h.store, alice.id)).toBe(ids[1])
+		await step()
 		expect(await cursor(h.store, alice.id)).toBeNull()
+		expect(await statesOf()).toEqual([
+			{ id: ids[0], state: 'accepted' },
+			{ id: ids[1], state: 'accepted' },
+		])
 	})
 
 	it('starts no job when nothing is pending, and leaves an unlocked account alone', async () => {
