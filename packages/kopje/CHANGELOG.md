@@ -22,12 +22,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
     - `GET /api/v1/instance/domain_blocks` lists the suspend blocks by `show_domain_blocks` and their public comments
       by `show_domain_blocks_rationale` (`disabled`, `users` or `all`; unset is `disabled`), obfuscated where a block
       says so, with the SHA-256 of each domain.
-- `kopje-admin instance` and `GET`/`POST /admin/instance`: the Access admin sets the title, description, contact
-  address, the three documents (HTML; `--file` reads one from a file and sends it with the other values in one
-  request), the effective date and the two block-list settings, each change logged in the moderation log
-  (`update_setting`, `remove_setting`, target `Setting`) without its value. They are data: dumped, imported and reset
-  with the rest, so set them after a cutover import is published ([docs/setup.md](docs/setup.md), "Instance
-  details").
+- Access admins can edit public instance settings with `kopje-admin instance` or `GET`/`POST /admin/instance`.
+  Changes are logged without their values. Set these settings after publishing a cutover import; see
+  [Instance details](docs/setup.md#instance-details).
 - Follow suggestions (`GET /api/v1/suggestions` and `/api/v2/suggestions`, which used to answer `[]`): the accounts
   the people you follow follow, Mastodon's "friends of friends", ranked by how many of them follow each account, then
   by follower count (fewest first), then newest first. Only accounts that chose to be discoverable are suggested, never
@@ -58,9 +55,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   of it that replies to a local account, as Mastodon does. Its reporter is the remote actor, its category `other`; the
   named statuses it may attach and what the admin is shown: R34 and R37 in [docs/visibility.md](docs/visibility.md).
   The OAuth admin is notified (`admin.report`) as for a local report.
-    - Its bounds (101 objects, 4,096-byte ids, a 5,000-character comment, 100 unresolved reports per remote actor)
-      and where it differs from Mastodon (a redelivery or a Flag whose id is not on its actor's server files nothing):
-      ID-6, ID-7, RES-7 and the accepted risks in [docs/threat-model.md](docs/threat-model.md).
+    - Its bounds (101 objects, ids within 4,096 JSON-escaped UTF-8 bytes and a comment of at most 5,000 code points,
+      100 unresolved reports per remote actor) and where it differs from Mastodon (a redelivery or a Flag whose id is
+      not on its actor's server files nothing): ID-6, ID-7, RES-7 and the accepted risks in
+      [docs/threat-model.md](docs/threat-model.md).
 
 ### Changed
 
@@ -84,18 +82,6 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   server whose own retries run out meanwhile needs its user to follow again.
 - A given-up answer to a Follow that a later activity superseded is deleted by the next delivery sweep instead of
   after 30 days, and no longer shows in `kopje-admin deliveries`: nothing could send it again.
-- A remote favourite tracks the id of each of the actor's Likes of the status whose Undo has not arrived, and stays
-  while it tracks one (up to 4). An Undo removes only the Like it names; before, an Undo naming the status removed the
-  favourite whatever Like it named, and a second Like of a favourited status was dropped. A remote favourite stored
-  before the upgrade keeps its stored Like id as one of its outstanding Likes until that id's Undo (typed or not),
-  and is removed only by the Undo of one of its ids. One converted without a Like id is removed by an Undo naming its
-  status. Known limits: if old data holds the same Like id on several of one actor's favourites, its Undo ends only
-  one of them (the others go by an Undo of another of their ids); and a kept id whose Undo was lost stays one of its
-  favourite's 4 outstanding ids for good (the other 3 make room by age).
-- A Like that would be a fifth outstanding one for the same favourite is answered 503 with nothing written; the
-  sending server's retry is taken once an Undo makes room. A tracked Like the Store received 7 days before, by its own
-  clock (longer than the delivery retries of common servers), makes room for it instead and is recorded as undone, so
-  Likes whose Undo was lost do not block the pair and do not come back when delivered again.
 - A Like id is held once in the instance (a Like under an id any favourite already holds is ignored), and a new one
   longer than 4,096 bytes (JSON-escaped UTF-8) is not stored: such a Like is ignored. An id stored before the upgrade
   keeps working whatever its length.
@@ -104,28 +90,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - An Undo of a Like naming a status that is not a local one, and that no stored favourite matches, records nothing:
   servers also send the Undos of reactions to other servers' posts to the reactor's followers, and these took the
   actor's retraction allowance.
-- An answer's single item may now take up to 85% of its 8 MiB (it was 80%): emoji at their bounds would otherwise
-  leave a conversation too little room for 40 emoji per status and 20 per profile. To keep the memory peak of a
-  timeline within its bound, pages, contexts, search, histories and lookups read their statuses in chunks of 768 KiB
-  of row memory instead of 1 MiB (`PAGE_CHUNKS`), which can take a few more queries for a page of large statuses.
-- Stored format: `statuses.emojis`, `status_edits.emojis` and `accounts.emojis` hold the custom emoji snapshots; a dump
-  past their bounds is refused, and `verify-conversion` fails on a converted row holding one, reporting `emojis`
-  counts by table ([docs/dump-format.md](docs/dump-format.md), [docs/cutover.md](docs/cutover.md)).
-- Stored format: a remote favourite's Like ids are rows of the new `favourite_likes` table, and its `favourites.uri`
-  holds only the id it kept from before the upgrade, until that id's Undo. A dump past the new table's bounds is
-  refused ([docs/dump-format.md](docs/dump-format.md)).
 - An instance domain block's `reject_reports` is enforced: a Flag from a server it covers files nothing (it was stored
   but never applied). A nearer block without it, a `noop` included, exempts its subdomains, as on Mastodon.
 - A local suspension's `Update` (and the unsuspension's) also reaches the servers of the accounts that reported the
   suspended account, as Mastodon's reach includes reporters.
-- A remote account's purge deletes the pushes of its notifications before the notifications, and the reports it made
-  with theirs, so a batch never removes more than its 500 rows through a cascade.
-- Stored format (migration `0054_remote_reports`): a report's reporter may be any account; a report id is never given
-  twice and stays within 18 digits; one report per Flag id and reported account; the comment, uri and `status_ids`
-  have stored bounds ([docs/dump-format.md](docs/dump-format.md)), and a dump past them is refused. Every report, its
-  notifications and their pushes keep their ids.
-- The admin's list of reports filtered by both reporter and reported account reads its own index, however many others
-  report that account.
 
 ### Fixed
 
@@ -134,40 +102,38 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   the delivery queue: only the new Follow's answer, or the owner's decision on a request, is sent (NET-2 in
   [docs/threat-model.md](docs/threat-model.md)). An answer a delivery attempt has already taken is still sent, so the
   two sides can disagree until the follower follows again (see the accepted risks there).
-- A server that replaces a reaction by an Undo of the old Like and a new Like, delivered in either order, no longer
-  loses the favourite (an Undo arriving after the new Like removed it) or brings back an undone one.
+- Replacing a reaction with an Undo and a new Like now preserves the correct favourite in either delivery order. A
+  favourite may hold four outstanding Like ids; another Like returns 503 until an Undo or retirement of a tracked id
+  received at least seven days earlier makes room. Converted favourites and retained pre-upgrade ids have the
+  compatibility limits described under ID-7 in [the threat model](docs/threat-model.md).
 - `EmojiReaction` is read as a Like, as `Like` and `EmojiReact` are, and an Undo of one removes it.
 
 ### Instance changes
 
 - Store schema: adds six migrations, applied on the first request after the deploy; a rollback to an earlier
-  version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
+  version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). On the representative
+  store defined in `test/bench/migration-cost.ts`, migrations 0049–0054 together took 8.7–9.0 seconds in three serial
+  runs in workerd's local Durable Object SQLite (0049–0053: 8.2–8.4 seconds), within the 20-second upgrade budget.
     - `0049_instance_bounds`: rewrites instance settings past their bounds (above), adds the triggers that refuse
-      them, and indexes the suspend blocks by domain. On a benchmark store of 1,000,000 accounts, 2,000,000 statuses
-      and 100,000 instance domain blocks, the whole upgrade took 6.2 to 6.7 seconds in four runs in workerd's local
-      Durable Object SQLite, most of it the upgrade's fixed cost on a store that size (runs under heavy outside load
-      took up to 15.6 seconds).
-    - `0050_follow_recommendation_mutes`: the table of dismissed suggestions. It adds an empty table and reads nothing:
-      on the same benchmark store its upgrade took 9.1 seconds (13.7 in a first run), the overhead of an upgrade on a
-      store that size.
+      them, and indexes the suspend blocks by domain.
+    - `0050_follow_recommendation_mutes`: the table of dismissed suggestions; it reads no existing row.
     - `0051_follow_answer_pairs`: records the remote follower of each follow answer and whether a delivery was ever
-      claimed; every existing delivery of a follow answer counts as claimed, so none of them is cancelled. On the
-      benchmark store its [header](migrations/0051_follow_answer_pairs.sql) describes, the whole upgrade took 7.3 and
-      8.0 seconds in two runs in workerd's local Durable Object SQLite.
-    - `0052_favourite_likes`: adds the empty `favourite_likes` table with its indexes and triggers, and an index of
-      the favourites by stored Like id; no existing row is changed. On a benchmark store of 1,000,000 accounts and
-      2,000,000 favourites each holding a Like id, the whole upgrade took 7.6 to 8.0 seconds in four runs in workerd's local Durable
-      Object SQLite, within the 20 seconds an upgrade may take.
-    - `0053_custom_emoji_snapshots`: adds the three emoji columns, which read as none on every existing row, and the
-      triggers that bound them; no row is read or changed. On the benchmark store, this release's five files (0049 to
-      0053) in one upgrade took 8.2 to 8.4 seconds in three serial runs (0049 to 0052 alone: 8.1 to 8.5 seconds),
-      within the 20 seconds an upgrade may take.
-    - `0054_remote_reports`: rebuilds `reports` for remote reporters (above), keeping every report, notification,
-      push and id. It fails before writing anything on the conditions its [header](migrations/0054_remote_reports.sql)
-      names; a stored report past the new bounds (none of Kopje's writers makes one) leaves the Store held until it is
-      fixed and retried (`kopje-admin upgrade retry`, [docs/upgrade.md](docs/upgrade.md)). On the benchmark store,
-      this release's six files (0049 to 0054) in one upgrade took 8.7 to 9.0 seconds in three serial runs (0049 to
-      0053 alone: 8.4 to 8.8 seconds), within the 20 seconds an upgrade may take.
+      claimed; every existing delivery of a follow answer counts as claimed, so none of them is cancelled.
+    - `0052_favourite_likes`: a remote favourite's Like ids are rows of the new `favourite_likes` table, and its
+      `favourites.uri` holds only the id it kept from before the upgrade, until that id's Undo. It adds the empty
+      table with its indexes and triggers, and an index of the favourites by stored Like id; no existing row is
+      changed. A dump past the new table's bounds is refused ([docs/dump-format.md](docs/dump-format.md)).
+    - `0053_custom_emoji_snapshots`: `statuses.emojis`, `status_edits.emojis` and `accounts.emojis` hold the custom
+      emoji snapshots, bounded by triggers; they read as none on every existing row, and no row is read or changed.
+      A dump past their bounds is refused, and `verify-conversion` fails on a converted row holding one, reporting
+      `emojis` counts by table ([docs/dump-format.md](docs/dump-format.md), [docs/cutover.md](docs/cutover.md)).
+    - `0054_remote_reports`: rebuilds `reports` so that a report's reporter may be any account; a report id is never
+      given twice and stays within 18 digits; one report per Flag id and reported account; the comment, uri and
+      `status_ids` have stored bounds ([docs/dump-format.md](docs/dump-format.md)), and a dump past them is refused.
+      Every report, notification, push and id is kept. It fails before writing anything on the conditions its
+      [header](migrations/0054_remote_reports.sql) names; a stored report past the new bounds (none of Kopje's writers
+      makes one) leaves the Store held until it is fixed and retried (`kopje-admin upgrade retry`,
+      [docs/upgrade.md](docs/upgrade.md)).
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.17] - 2026-10-19

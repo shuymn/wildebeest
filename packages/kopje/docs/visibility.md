@@ -318,7 +318,7 @@ ${DISTRIBUTABLE_SQL}`, never the literals.
 | R31 pins, conversation mutes | Pins: `accountStatuses` with `pinned` (R11 over the account's pins), `getFeatured` in `activities.ts` (R4: the Note of a public or unlisted pin, the uri of any other). Conversation mutes: `conversationMutedSql`, read only in `audience.ts`, for the viewer's `muted` (the presenter) and in `notifiedSql`, which `notify` applies (R15 at write time).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | R32 stream delete            | `streamDelete` (`streaming.ts`), at four sites before a status's audience first changes (`test-node/layering.test.ts`): a row per listening account that may view the status (R3, `deleteAudience` in `audience.ts`); for an account on `user` or a list, with the boosts of it the account may view that it or an account it follows made, at most 40, and for the status and each boost the account's subscribed lists whose read positioned at it returned it (`listStatus`); for a public status that is not a boost, a tombstone (local, media, the hashtags some account subscribes to) while an account listens on a feed it reaches. A `delete` goes only where the capture allows, on a list only while it is still the viewer's (`ownList`), on a `public*` or `hashtag*` stream only for the status itself, never a boost, when its tombstone matches the stream (`tombstoneFeeds`).                                                                                                                                                                                                                                                                                                           |
 | R33 stream membership        | `streamUnit` (`streaming.ts`), re-authorizing the token (`authorizeStream`): a `notification` if the notification list positioned at it shows it (`streamedNotification`); `update` if home positioned at it does (`homeStatus`, R9) within the real-time window, on `list:<id>` if the list positioned at it does (`listStatus`, the viewer's list only), and on a `public*` or `hashtag*` stream if the public or the hashtag's timeline positioned at it does (`publicStatus`, `tagStatus`, R8) and it mentions no account the viewer blocks or mutes (`mentionsFilteredFor`); `status.update` if home, a list, such a feed or, with a notification scope, the mention reference does (`mentionedStatus`); `conversation` on `direct` if the conversation is the viewer's row (`streamedConversation`, presented as the list presents it, R25); `notifications_merged` under a notification scope, on the transition to no pending accept job.                                                                                                                                                                                                                                                         |
-| R34 reports                  | `reports` read and written only in `reports.ts` (the reporter's own report by `createReport`, answered once, a remote reporter's by `fileRemoteReports` from an inbound Flag, and the OAuth admin's reads and actions under R37) and deleted by a remote account's purge (`inbox.ts`) when its target or its reporter is purged; a local reporter's status passes `accountStatusIds` in `timelines.ts` (R11 less the reporter's own block of the account, as Mastodon's `AccountStatusesFilter`), a remote reporter's `remoteReportableSql` (`remoteReportStatusIds` in `audience.ts`); the Flag of a forwarded report goes to `reportForwardees` (R23), signed by the instance actor. A report's `status_ids` (the ids admitted when it was filed) are metadata shown only to the admin (R15, R37). A report's `admin.report` (`notifyStaff`) is written in its transaction and deleted before it by the purge.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| R34 reports                  | `reports` read and written only in `reports.ts` (the reporter's own report by `createReport`, answered once, a remote reporter's by `fileRemoteReports` from an inbound Flag, and the OAuth admin's reads and actions under R37) and deleted by a remote account's purge (`inbox.ts`) when its target or its reporter is purged; a local reporter's status passes `accountStatusIds` in `timelines.ts` (R11 less the reporter's own block of the account, as Mastodon's `AccountStatusesFilter`), a remote reporter's `remoteReportableSql` (`remoteReportStatusIds` in `audience.ts`); the Flag of a forwarded report goes to `reportForwardees` (R23), signed by the instance actor. A **remote** report's `status_ids` (the ids admitted when it was filed) are metadata shown only to the admin (R15, R37). A report's `admin.report` (`notifyStaff`) is written in its transaction and deleted before it by the purge.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | R35 quotes                   | `quoteReads` (`audience.ts`): each quote's state and quoted status by `visibleSql`, `domainBlocksSql`, `blocksSql` and `mutesSql` for the viewer, read by the presenter (`status-presenter.ts`) for a response's statuses and originals, then for the quoted statuses it embeds; a `DELETE` response's source reads the quoted status in any state. The quotes list (`statusQuotes` in `statuses.ts`): `viewable` (R3) for the quoted status, then one window of accepted quotes (`acceptedQuoteWindow` in `quotes.ts`) under `listableSql` (R8), or `visibleSql` (R2) for the quoted author.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | R36 quote policies           | `quotePolicySql` (`audience.ts`) answers the policy flags (Mastodon's `Status#quote_policy_for_account`); `mayQuoteSql` checks visibility, ownership, boosts and account/domain blocks, and alone decides an inbound QuoteRequest. `storedQuotePolicy` stores nobody unless public or unlisted; `remoteQuotePolicy` stores a remote Note's; `quote_approval` shows the flags (a boost its original's) and `current_user` by `quoteApprovalReads` (R36 for the viewer). Posting a quote (`preparePost` in `statuses.ts`) applies `mayQuoteSql`. See the policy rules above.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | R37 admin views              | Only the OAuth admin (`adminAccountId`, `admin-authority.ts`: the one local account whose email matches `admin_email`, failing closed), through a token covering the route's admin scope, reads or acts through `/api/v1/admin/*` (`adminReadOperation`, `adminWriteOperation` in `auth.ts`, checked in the operation's transaction, and only for the permissions in `ADMIN_PERMISSIONS`). The admin sees every report and its accounts (`presentAdminAccounts`, local emails included); a report's statuses only while its reporter may still see them (`accountStatusIds` with `viewerOf(admin, reporter)`, or for a remote reporter `remoteReportStatusIds` with its domain), presented with the admin as the viewer. With manage_users, the admin lists and shows every account, local and remote, with each local account's email (`listAdminAccounts`, `getAdminAccount` in `admin-accounts.ts`); an unavailable account (R1) is shown as suspended. It suspends and unsuspends local accounts other than its own (`actOnAccount`, `unsuspendAdminAccount`; `suspension.ts`), which makes them unavailable (R1) and fences their tokens; the Access admin unsuspends too (`unsuspendAccount`). The admin alone is shown a report's `admin.report` notification (R15). |
@@ -392,51 +392,6 @@ id. A page reads the partial index of its order (discoverable accounts only, all
 so it never reads an account that is not discoverable nor one below the window, and when more than half the window is
 hidden from the viewer the page comes back short (a slice of the full directory, since the window is a prefix of it).
 An offset above `MAX_DIRECTORY_OFFSET` (400) answers no accounts.
-
-### Suggestions (R39)
-
-Follow suggestions (`src/domain/suggestions.ts`, `GET /api/v1/suggestions` and `/api/v2/suggestions`, Mastodon's
-`AccountSuggestions`) come from the one source Kopje has data for, friends of friends (`FriendsOfFriendsSource`): the
-accounts the viewer's follows follow. A source is an accepted follow of the viewer's whose following R13 shows them
-(`suggestionSourceSql`: available, not hiding its network, not blocking the viewer; Mastodon asks only the second, so
-Kopje never counts an edge the viewer could not read in that following list, VIS-8). An edge is an accepted follow of a
-source; its target is a candidate when `suggestionCandidateSql` passes (someone else, `accounts.discoverable` 1, no
-follow by the viewer in either state, no dismissal) and R12 lists it (`listedForSql`: available, not blocked, muted
-while the mute applies or domain-blocked by the viewer by stored domain or actor host, not blocking the viewer).
-Mastodon also leaves out silenced, moved and memorial accounts, which Kopje does not record. Candidates rank by how
-many counted edges reach them, then by `accounts.followers_count` (lowest first), then by id (newest first); the first
-`SUGGESTIONS_KEPT` (40) are kept and a request answers `offset` and `limit` of them (`[]` from offset 40 on, where
-Mastodon answers 500). A remote account's follower count is not learned (stored as 0), so at equal frequency remote
-accounts come before local ones. There is no cache: the order is deterministic, so an offset is stable only while the
-follows, blocks, mutes and dismissals stay as they were. v2 wraps each account as
-`{"source": "past_interactions", "sources": ["friends_of_friends"], "account": ...}`.
-
-The ranking is over a bounded graph, by windows of follow ids that the query reads as ranges of `follows_following`
-(`account_id`, `id`), each from the id of its last entry, which a scalar lookup of that index finds, so the access
-does not depend on the planner's statistics:
-
-- sources: the viewer's `SUGGESTION_SOURCES` (1,000) accepted follows with the highest ids; one R13 hides takes its
-  slot and brings nothing;
-- edges: each source's `SUGGESTION_EDGES_PER_SOURCE` (100) accepted follows with the highest ids, each taking a slot
-  whatever its target (the viewer, an account they follow or dismissed, a hidden or undiscoverable one);
-- cutoff: the first `SUGGESTION_EDGES` (10,000) edges, sources by descending follow id and each source's edges by
-  descending follow id, the order the two ranges give, so no sort holds them;
-- candidates: the distinct targets of the kept edges that pass `suggestionCandidateSql`, each judged by R12 before the
-  ranking, so a hidden account takes no place in it and cannot change who else is shown.
-
-So the answer is not a prefix of Mastodon's: an edge outside a window is not counted, which can reorder two candidates
-or bring in one Mastodon ranks lower (`test/suggestions.test.ts`, "ranks over the windowed graph"). What the windows
-still let a viewer infer comes from the raw edge window, kept so: an edge to an account the viewer is not shown takes a
-slot, so whether a candidate behind it is counted can tell the viewer that a source's newest 100 follows hold one more
-account than its following list shows them (`followListedSql` leaves out an account that blocks them or that they block
-or mute). It tells neither which account nor why; R12's judgment of the candidates themselves reveals nothing
-(`test/suggestions.test.ts`, "judges every candidate before the ranking": the same edge to an undiscoverable or a
-discoverable account blocking the viewer leaves the answer unchanged).
-
-A dismissal (`DELETE /api/v1/suggestions/:id`, `dismissSuggestion`) stores a row of `follow_recommendation_mutes`
-(migration `0050_follow_recommendation_mutes`) for an account Kopje knows (a legacy id resolves) and answers `{}`
-whatever the id, as Mastodon does. Only its owner's suggestions read it; a remote account's purge deletes the rows
-naming it in bounded batches.
 
 A scheduled status (`src/domain/scheduled-statuses.ts`, migration `0011_scheduled_statuses`) is not a status: it is
 a row of `scheduled_statuses` with the post's parameters, and its owner's alone (R26, `scheduledOwnSql`). No read,
@@ -543,6 +498,51 @@ Kopje does not. `upsertRemoteActor` never refreshes an unavailable account's pro
 (search resolution, quotes, Announce originals, Move targets), and `storeRemoteStatus` stores nothing of an
 unavailable author.
 
+### Suggestions (R39)
+
+Follow suggestions (`src/domain/suggestions.ts`, `GET /api/v1/suggestions` and `/api/v2/suggestions`, Mastodon's
+`AccountSuggestions`) come from the one source Kopje has data for, friends of friends (`FriendsOfFriendsSource`): the
+accounts the viewer's follows follow. A source is an accepted follow of the viewer's whose following R13 shows them
+(`suggestionSourceSql`: available, not hiding its network, not blocking the viewer; Mastodon asks only the second, so
+Kopje never counts an edge the viewer could not read in that following list, VIS-8). An edge is an accepted follow of a
+source; its target is a candidate when `suggestionCandidateSql` passes (someone else, `accounts.discoverable` 1, no
+follow by the viewer in either state, no dismissal) and R12 lists it (`listedForSql`: available, not blocked, muted
+while the mute applies or domain-blocked by the viewer by stored domain or actor host, not blocking the viewer).
+Mastodon also leaves out silenced, moved and memorial accounts, which Kopje does not record. Candidates rank by how
+many counted edges reach them, then by `accounts.followers_count` (lowest first), then by id (newest first); the first
+`SUGGESTIONS_KEPT` (40) are kept and a request answers `offset` and `limit` of them (`[]` from offset 40 on, where
+Mastodon answers 500). A remote account's follower count is not learned (stored as 0), so at equal frequency remote
+accounts come before local ones. There is no cache: the order is deterministic, so an offset is stable only while the
+follows, blocks, mutes and dismissals stay as they were. v2 wraps each account as
+`{"source": "past_interactions", "sources": ["friends_of_friends"], "account": ...}`.
+
+The ranking is over a bounded graph, by windows of follow ids that the query reads as ranges of `follows_following`
+(`account_id`, `id`), each from the id of its last entry, which a scalar lookup of that index finds, so the access
+does not depend on the planner's statistics:
+
+- sources: the viewer's `SUGGESTION_SOURCES` (1,000) accepted follows with the highest ids; one R13 hides takes its
+  slot and brings nothing;
+- edges: each source's `SUGGESTION_EDGES_PER_SOURCE` (100) accepted follows with the highest ids, each taking a slot
+  whatever its target (the viewer, an account they follow or dismissed, a hidden or undiscoverable one);
+- cutoff: the first `SUGGESTION_EDGES` (10,000) edges, sources by descending follow id and each source's edges by
+  descending follow id, the order the two ranges give, so no sort holds them;
+- candidates: the distinct targets of the kept edges that pass `suggestionCandidateSql`, each judged by R12 before the
+  ranking, so a hidden account takes no place in it and cannot change who else is shown.
+
+So the answer is not a prefix of Mastodon's: an edge outside a window is not counted, which can reorder two candidates
+or bring in one Mastodon ranks lower (`test/suggestions.test.ts`, "ranks over the windowed graph"). What the windows
+still let a viewer infer comes from the raw edge window, kept so: an edge to an account the viewer is not shown takes a
+slot, so whether a candidate behind it is counted can tell the viewer that a source's newest 100 follows hold one more
+account than its following list shows them (`followListedSql` leaves out an account that blocks them or that they block
+or mute). It tells neither which account nor why; R12's judgment of the candidates themselves reveals nothing
+(`test/suggestions.test.ts`, "judges every candidate before the ranking": the same edge to an undiscoverable or a
+discoverable account blocking the viewer leaves the answer unchanged).
+
+A dismissal (`DELETE /api/v1/suggestions/:id`, `dismissSuggestion`) stores a row of `follow_recommendation_mutes`
+(migration `0050_follow_recommendation_mutes`) for an account Kopje knows (a legacy id resolves) and answers `{}`
+whatever the id, as Mastodon does. Only its owner's suggestions read it; a remote account's purge deletes the rows
+naming it in bounded batches.
+
 ## Filters
 
 A viewer's filters (`src/domain/filters.ts`, Mastodon's `CustomFilter`) are applied after the rules above, to what that
@@ -606,8 +606,8 @@ that fetches nothing. A block names a domain, stored as `blockedDomain` returns 
   `MAX_BLOCK_COMMENT` (1,000) characters, which bounds a page of `MAX_DOMAIN_BLOCKS_LIMIT` (500) blocks. The domain is
   validated on create only, since an update never changes it: a raw domain longer than `MAX_DOMAIN_INPUT` is refused
   before it is normalized, a normalized one beyond Mastodon's 255 characters or 63 per label is invalid, and one
-  deeper than `MAX_BLOCK_LABELS` is refused before any ruling block is looked up. `reject_reports` is stored and shown, and changes nothing:
-  Kopje receives no remote reports. `obfuscate` changes only how the public block list shows the domain.
+  deeper than `MAX_BLOCK_LABELS` is refused before any ruling block is looked up. `reject_reports` refuses inbound
+  Flags from domains ruled by that block (R34). `obfuscate` changes only how the public block list shows the domain.
 - **The public block list** (`GET /api/v1/instance/domain_blocks`, `publicDomainBlocks` in
   `src/domain/instance-domain-blocks.ts`; Mastodon's `Api::V1::Instances::DomainBlocksController`). A suspended
   user's token is answered 403 (`Your login is currently disabled`) first, whatever the settings. Then the setting
@@ -928,17 +928,10 @@ per library source), the directory (`DIRECTORY_WINDOW`), the admin lists (their 
 traversal cap), conversations (no rule before `LIMIT`), and the blocks, mutes, domain blocks and follow requests lists
 (no rule before `LIMIT`). The link timeline answers an empty list.
 
-Suggestions read their windows ("Suggestions" above) through `follows_following` as ranges, with fresh statistics and
-with statistics taken before a source grew to 100,001 follows (`test/suggestions-bounds.test.ts` checks the plan in
-workerd: the source and edge ranges, and no sort under the edges). Their rows read grow below each window's bound and
-stay within 10 past it: a source's follows from 100 to 100,000, the viewer's from 1,000 to 2,000 with the newest
-sources the same, and from 100 to 1,000 saturated sources only by the lookup of the source window's bound, one entry
-per source. Every candidate is judged, so the work grows with the distinct candidates up to 10,000, not with the graph:
-75,244 rows with 1,000 sources of 10 distinct candidates each, fewer as the viewer hides more of them (a mute ends R12
-early), and 315,844 at the measured maximum, where every source and candidate is on a domain of eight labels with its
-actor id on another such host and the instance has a suspend block, so each walks every suffix of both keys
-(`availableSql`), each keeps a stale domain mark and the viewer's mute of each candidate has expired, each read and
-passed. The ranking returns at most 40 ids.
+Suggestions seek the R39 source and edge windows through `follows_following`, without sorting edges before the
+cutoff. `test/suggestions-bounds.test.ts` checks fresh and stale statistics, growth below and beyond the windows with a
+10-row allowance, and all R12 terms over 10,000 distinct candidates. The measured maximum is 315,844 rows; ranking
+returns at most 40 ids.
 
 A cursor range is a direct range (`id < coalesce(?2, ':')`, `edgeRangeSql`), never `(?2 IS NULL OR id < ?2)`, which
 no index can seek; `test-node/range-predicates.test.ts` checks every statement in `src`.

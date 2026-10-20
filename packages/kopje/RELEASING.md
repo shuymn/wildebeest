@@ -61,8 +61,10 @@ On GitHub, in the repository settings:
    is not a measure, so check the load first. It must pass before the branch merges:
 
     ```sh
-    KOPJE_BENCH_SCALE=1 KOPJE_BENCH_MIGRATION= KOPJE_BENCH_FROM=<first new migration> pnpm --filter kopje bench:migration
+    KOPJE_BENCH_SCALE=1 KOPJE_BENCH_MIGRATION= KOPJE_BENCH_FROM=0049_instance_bounds pnpm --filter kopje bench:migration
     ```
+
+    Replace `0049_instance_bounds` with the first migration absent from the previous release.
 
     Merge it.
 
