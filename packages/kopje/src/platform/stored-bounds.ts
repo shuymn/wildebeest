@@ -748,3 +748,10 @@ export function settingProjectionSql(name: StoredSettingName, column: string): s
 		? TREND_SETTING_BOUNDS[name as TrendSettingName].projection(column)
 		: INSTANCE_SETTING_BOUNDS[name as InstanceSettingName].projection(column)
 }
+
+// A stored time read as the 24-byte ISO form Kopje writes (hour 00 to 23, read back by strftime as itself), else NULL:
+// the bytes judged before strftime reads the value, so a long imported value costs one length.
+export function isoTimeSql(column: string): string {
+	return `(CASE WHEN length(CAST(${column} AS BLOB)) = 24 AND substr(${column}, 12, 2) < '24'
+	AND strftime('${ISO_TIME_FORMAT}', ${column}) = ${column} THEN ${column} END)`
+}
