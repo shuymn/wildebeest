@@ -463,7 +463,7 @@ export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 	}
 
 	async function readForm(c: WebContext): Promise<Params | null> {
-		const result = await readParams(c.req.raw, 64 * 1024)
+		const result = await readParams(c.req.raw, { limit: 64 * 1024 })
 		return result.ok ? result.params : null
 	}
 

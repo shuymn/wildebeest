@@ -19,7 +19,6 @@ import { type Read, type ReadMethod, type RouteObservation, sameRoute } from './
 import { bytes, mediaForm, TestCodec } from './media-helpers'
 import { newClient, VAPID } from './push-helpers'
 import type { User } from './status-helpers'
-import { formFiles } from '../src/mastodon/media'
 import { Params } from '../src/mastodon/params'
 import type { Route } from '../src/mastodon/routes'
 
@@ -32,14 +31,14 @@ const PARAMS_METHODS = ['get', 'has', 'getAll', 'list', 'objects', 'hasObject'] 
 
 type Spy = MockInstance<(...args: never[]) => unknown>
 
-// Call-through spies on Params' accessors, Hono's c.req.query/queries, and the upload form's file accessor. Cleared
+// Call-through spies on Params' accessors (its file accessor included) and Hono's c.req.query/queries. Cleared
 // before each request (requests run one at a time), restored by restore().
 export function observeReads() {
 	const spies: [ReadMethod, Spy, number][] = [
 		...PARAMS_METHODS.map((m): [ReadMethod, Spy, number] => [m, vi.spyOn(Params.prototype, m) as unknown as Spy, 0]),
 		['query', vi.spyOn(HonoRequest.prototype, 'query') as unknown as Spy, 0],
 		['queries', vi.spyOn(HonoRequest.prototype, 'queries') as unknown as Spy, 0],
-		['file', vi.spyOn(formFiles, 'get') as unknown as Spy, 1],
+		['file', vi.spyOn(Params.prototype, 'file') as unknown as Spy, 0],
 	]
 	return {
 		clear(): void {

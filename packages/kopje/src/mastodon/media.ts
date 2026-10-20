@@ -11,7 +11,7 @@ import {
 	userCredential,
 } from './context'
 import { mastodonError } from './errors'
-import { Params } from './params'
+import { Params, parseBody } from './params'
 import type { UserCredential } from '../domain/auth'
 import { type MediaChanges, type MonthlyTransforms, SWEEP_BATCH } from '../domain/media'
 import type { MediaAttachment } from '../domain/status-presenter'
@@ -108,15 +108,6 @@ async function readWithin(request: Request, ms: number): Promise<Uint8Array | 't
 	}
 }
 
-// The one read of a file part of an upload form. A seam for test/mastodon-params.test.ts, which observes the request
-// parameters a route reads.
-export const formFiles = {
-	// FormData.get is typed as string-only by the runtime types; a file part is a File.
-	get(form: FormData, name: string): unknown {
-		return form.get(name)
-	},
-}
-
 async function readMediaForm(request: Request, ms: number): Promise<MediaForm> {
 	const body = await readWithin(request, ms)
 	if (body === 'expired') {
@@ -129,22 +120,22 @@ async function readMediaForm(request: Request, ms: number): Promise<MediaForm> {
 	if (!contentType.toLowerCase().startsWith('multipart/form-data')) {
 		return { error: "Validation failed: File can't be blank" }
 	}
-	let form: FormData
+	let form: Params
 	try {
-		form = await new Response(body, { headers: { 'content-type': contentType } }).formData()
+		// Rails' last-part rule (params.ts): of repeated `file` parts, text or file, the last is the one read.
+		form = await parseBody(contentType, body, { names: ['file'], maxBytes: IMAGE_SIZE_LIMIT })
 	} catch {
 		return { error: "Validation failed: File can't be blank" }
 	}
-	const file = formFiles.get(form, 'file')
-	if (!(file instanceof File)) {
+	const file = form.file('file')
+	if (file === undefined) {
 		return { error: "Validation failed: File can't be blank" }
 	}
 	if (file.size > IMAGE_SIZE_LIMIT) {
 		return { error: TOO_LARGE }
 	}
-	const fields = [...form.entries()].filter((entry): entry is [string, string] => typeof entry[1] === 'string')
 	// The bounds hold for what is used: body fields and query parameters together.
-	const all = [...fields, ...new URL(request.url).searchParams.entries()]
+	const all = [...form.entries, ...new URL(request.url).searchParams.entries()]
 	if (all.length > MAX_FIELDS || all.some(([, value]) => value.length > MAX_FIELD_LENGTH)) {
 		return { error: 'Validation failed: A form field is too long' }
 	}

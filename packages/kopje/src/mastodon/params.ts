@@ -1,20 +1,49 @@
 import { readBoundedBody } from '../platform/body'
+import { utf8Length } from '../platform/dump-format'
 
 // Request parameters as Mastodon reads them: the query string merged with a JSON, urlencoded or multipart body
 // (clients send all three). JSON is flattened to form names, so `{"source":{"privacy":"public"}}` reads as
 // `source[privacy]` and `{"ids":["1","2"]}` as `ids[]`, the same as the form encodings.
+//
+// Bounds (RES-1), all in force before or while parsing:
+// - the body: `limit` bytes (API_BODY_LIMIT by default); a multipart body on a route with a file rule may also carry
+//   each declared file, so it may be `limit + names.length * (maxBytes + FILE_PART_SLACK)` bytes;
+// - the text: the UTF-8 bytes of every text entry's name and value and of the query, at most `limit`;
+// - JSON paths: at most MAX_PARAM_PATHS generated keys (entries and object prefixes), PARAM_PATH_BUDGET UTF-16 code
+//   units of them, charged before each key is built, and MAX_PARAM_DEPTH levels of nesting.
 
 export const API_BODY_LIMIT = 1024 * 1024
+// The part headers and boundary of one declared file.
+export const FILE_PART_SLACK = 16 * 1024
+// Rack's param_depth_limit (ParamsTooDeepError, answered 400).
+export const MAX_PARAM_DEPTH = 32
+export const MAX_PARAM_PATHS = 10_000
+export const PARAM_PATH_BUDGET = 2 * API_BODY_LIMIT
+
+// The file parameters a route reads, and the most bytes one of them may have.
+export type FileRule = { names: readonly string[]; maxBytes: number }
+export type ReadOptions = { limit?: number; files?: FileRule }
 
 // The tail of an object field key after `name[`: `index][field]` or `][field]`.
 const OBJECT_FIELD = /^(\d*)\]\[([^\]]+)\]$/
 
 export class Params {
-	constructor(private readonly entries: readonly (readonly [string, string])[]) {}
+	constructor(
+		readonly entries: readonly (readonly [string, string])[],
+		readonly files: ReadonlyMap<string, File> = new Map(),
+		// The JSON object prefixes the body sent, empty objects included (sentObject).
+		readonly objectPrefixes: ReadonlySet<string> = new Set()
+	) {}
 
 	// The body's value wins over the query's.
 	get(name: string): string | undefined {
 		return this.entries.find(([key]) => key === name)?.[1]
+	}
+
+	// A declared file parameter whose effective value is a file (readParams' typed selection): then get(name) is
+	// undefined, and the other way round.
+	file(name: string): File | undefined {
+		return this.files.get(name)
 	}
 
 	// Whether `name` or `name[]` was sent at all, even with no value: an explicitly empty list is not an absent one.
@@ -26,6 +55,12 @@ export class Params {
 	// sends nothing, and an array (`name[]`) is not an object.
 	hasObject(name: string): boolean {
 		return this.entries.some(([key]) => key.startsWith(`${name}[`) && !key.startsWith(`${name}[]`))
+	}
+
+	// hasObject, and also a JSON object with no scalar inside (`{"home":{}}`, `{"fields_attributes":{"0":{}}}`), which
+	// Rails reads as a sent, empty hash.
+	sentObject(name: string): boolean {
+		return this.objectPrefixes.has(name) || this.hasObject(name)
 	}
 
 	// The first of `names` sent more than once (query and body together), for parameters that must be single
@@ -78,58 +113,164 @@ export class Params {
 
 export type ParamsResult = { ok: true; params: Params } | { ok: false; status: 400 | 413 }
 
-export async function readParams(request: Request, limit = API_BODY_LIMIT): Promise<ParamsResult> {
+// A refusal while parsing: past a size bound (413) or nested too deep (400).
+export class ParamsRefused extends Error {
+	constructor(readonly status: 400 | 413) {
+		super(status === 413 ? 'parameters past their bound' : 'parameters nested too deep')
+	}
+}
+
+function mediaType(contentType: string): string | undefined {
+	return contentType.split(';')[0]?.trim().toLowerCase()
+}
+
+// The body limit of a request: a file route's multipart body may carry its files besides the text. The rule is
+// chosen from Content-Type before any byte is read.
+export function bodyLimit(contentType: string, options: ReadOptions = {}): number {
+	const limit = options.limit ?? API_BODY_LIMIT
+	const files = options.files
+	return files !== undefined && mediaType(contentType) === 'multipart/form-data'
+		? limit + files.names.length * (files.maxBytes + FILE_PART_SLACK)
+		: limit
+}
+
+export async function readParams(request: Request, options: ReadOptions = {}): Promise<ParamsResult> {
 	const query = [...new URL(request.url).searchParams.entries()]
 	if (request.method === 'GET' || request.method === 'HEAD') {
 		return { ok: true, params: new Params(query) }
 	}
-	const body = await readBoundedBody(request, limit)
+	const contentType = request.headers.get('content-type') ?? ''
+	const body = await readBoundedBody(request, bodyLimit(contentType, options))
 	if (body === 'too-large') {
 		return { ok: false, status: 413 }
 	}
-	const contentType = request.headers.get('content-type') ?? ''
+	const limit = options.limit ?? API_BODY_LIMIT
+	let parsed: Params
 	try {
-		const entries = body.byteLength === 0 ? [] : await bodyEntries(contentType, body)
-		return { ok: true, params: new Params([...entries, ...query]) }
-	} catch {
-		return { ok: false, status: 400 }
+		parsed = await parseBody(contentType, body, options.files)
+	} catch (error) {
+		return { ok: false, status: error instanceof ParamsRefused ? error.status : 400 }
 	}
+	const names = new Set(options.files?.names ?? [])
+	// A declared name's effective value comes from the body when it has one; otherwise the query's last value is it.
+	const sent = (name: string) => parsed.file(name) !== undefined || parsed.get(name) !== undefined
+	const declaredQuery = [...names].flatMap((name): [string, string][] => {
+		const value = sent(name) ? undefined : query.findLast(([key]) => key === name)?.[1]
+		return value === undefined ? [] : [[name, value]]
+	})
+	const entries = [...parsed.entries, ...query.filter(([key]) => !names.has(key)), ...declaredQuery]
+	let text = 0
+	for (const [key, value] of [...parsed.entries, ...query]) {
+		text += utf8Length(key) + utf8Length(value)
+		if (text > limit) {
+			return { ok: false, status: 413 }
+		}
+	}
+	return { ok: true, params: new Params(entries, parsed.files, parsed.objectPrefixes) }
 }
 
-async function bodyEntries(contentType: string, body: Uint8Array): Promise<[string, string][]> {
-	const type = contentType.split(';')[0]?.trim().toLowerCase()
+// The parameters of a body (without the query). For each name of `files`, one effective value is chosen as Rails
+// reads repeated parts: in body order, each part of that name, text or file, replaces the one before (the last wins).
+// That value is either a text entry or a file, never both. Every other file part is ignored. A part with an empty
+// filename is text to workerd's parser (Rack drops it as an empty file field): empty, it reads as absent where the
+// route reads a blank value so; with bytes, as a text value (docs/mastodon-deviations.md).
+export async function parseBody(contentType: string, body: Uint8Array, files?: FileRule): Promise<Params> {
+	const declared = new Set(files?.names ?? [])
+	const type = mediaType(contentType)
+	if (body.byteLength === 0) {
+		return new Params([])
+	}
 	if (type === 'application/json') {
 		const entries: [string, string][] = []
+		const objects = new Set<string>()
 		// JSON.parse keeps the last of duplicate keys, so repeated() sees form and query duplicates only. RFC 6749 defines
 		// form bodies alone, and Doorkeeper (Mastodon) lets the last JSON key win as well.
-		flatten('', JSON.parse(new TextDecoder().decode(body)), entries)
-		return entries
+		flatten(JSON.parse(new TextDecoder().decode(body)), { entries, objects, paths: 0, units: 0 })
+		return selectDeclared(entries, new Map(), objects, declared)
 	}
 	if (type === 'application/x-www-form-urlencoded' || type === 'multipart/form-data') {
 		const form = await new Response(body, { headers: { 'content-type': contentType } }).formData()
-		// Files are not read here; media uploads have their own endpoints.
-		return [...form.entries()].filter((entry): entry is [string, string] => typeof entry[1] === 'string')
+		const entries: [string, string][] = []
+		const chosen = new Map<string, string | File>()
+		// FormData's entries are typed as strings by the runtime types; a file part is a File.
+		for (const [key, value] of form.entries() as Iterable<[string, string | File]>) {
+			if (declared.has(key)) {
+				chosen.set(key, value)
+			} else if (typeof value === 'string') {
+				entries.push([key, value])
+			}
+		}
+		const fileValues = new Map<string, File>()
+		for (const [key, value] of chosen) {
+			if (typeof value === 'string') {
+				entries.push([key, value])
+			} else {
+				fileValues.set(key, value)
+			}
+		}
+		return new Params(entries, fileValues, new Set())
 	}
-	return []
+	return new Params([])
 }
 
-function flatten(prefix: string, value: unknown, out: [string, string][]): void {
+// JSON and form text for a declared name keeps only its last value, so get(name) reads what Rails would assign.
+function selectDeclared(
+	entries: [string, string][],
+	files: Map<string, File>,
+	objects: Set<string>,
+	declared: ReadonlySet<string>
+): Params {
+	if (declared.size === 0) {
+		return new Params(entries, files, objects)
+	}
+	const last = new Map<string, string>()
+	for (const [key, value] of entries) {
+		if (declared.has(key)) {
+			last.set(key, value)
+		}
+	}
+	return new Params([...entries.filter(([key]) => !declared.has(key)), ...last], files, objects)
+}
+
+type Flattening = { entries: [string, string][]; objects: Set<string>; paths: number; units: number }
+
+// Charges one generated key before its string is built: past MAX_PARAM_PATHS keys or PARAM_PATH_BUDGET code units,
+// the body is refused (413).
+function charge(state: Flattening, prefix: string, key: string): void {
+	state.paths += 1
+	state.units += prefix.length + key.length + 2
+	if (state.paths > MAX_PARAM_PATHS || state.units > PARAM_PATH_BUDGET) {
+		throw new ParamsRefused(413)
+	}
+}
+
+function flatten(value: unknown, state: Flattening, prefix = '', depth = 0): void {
+	if (depth > MAX_PARAM_DEPTH) {
+		throw new ParamsRefused(400)
+	}
 	if (Array.isArray(value)) {
 		// An empty array reads as `name[]=` with no value, as a form sends an empty list.
 		if (value.length === 0 && prefix !== '') {
-			out.push([`${prefix}[]`, ''])
+			charge(state, prefix, '')
+			state.entries.push([`${prefix}[]`, ''])
 		}
 		value.forEach((item, index) => {
 			const scalar = item === null || typeof item !== 'object'
-			flatten(scalar ? `${prefix}[]` : `${prefix}[${index}]`, item, out)
+			const key = scalar ? '' : String(index)
+			charge(state, prefix, key)
+			flatten(item, state, `${prefix}[${key}]`, depth + 1)
 		})
 	} else if (typeof value === 'object' && value !== null) {
+		if (prefix !== '') {
+			state.objects.add(prefix)
+		}
 		for (const [key, item] of Object.entries(value)) {
-			flatten(prefix === '' ? key : `${prefix}[${key}]`, item, out)
+			charge(state, prefix, key)
+			flatten(item, state, prefix === '' ? key : `${prefix}[${key}]`, depth + 1)
 		}
 	} else if (prefix !== '') {
 		// Scalars only here: strings as they are, numbers and booleans as JSON writes them, null as blank.
-		out.push([prefix, typeof value === 'string' ? value : value === null ? '' : JSON.stringify(value)])
+		state.entries.push([prefix, typeof value === 'string' ? value : value === null ? '' : JSON.stringify(value)])
 	}
 }
 

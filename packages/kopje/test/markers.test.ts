@@ -21,6 +21,20 @@ async function read(h: ApiHarness, user: User, query: string) {
 }
 
 describe('markers', () => {
+	it('saves a timeline sent as an empty JSON object, at "0" for a new marker', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		expect(await save(h, alice, { home: {} })).toEqual({
+			status: 200,
+			body: { home: { last_read_id: '0', version: 0, updated_at: AT } },
+		})
+		// An existing marker is left as it is.
+		await save(h, alice, { notifications: { last_read_id: '5' } })
+		expect((await save(h, alice, { notifications: {} })).body).toEqual({
+			notifications: { last_read_id: '5', version: 1, updated_at: AT },
+		})
+	})
+
 	it('creates a marker at version 1, counts each change, and shows the timelines asked for', async () => {
 		const h = await community(['alice'])
 		const { alice } = h.users

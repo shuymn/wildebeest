@@ -25,6 +25,15 @@ describe('profile fields over the API', () => {
 		expect((await update({ fields_attributes: five })).status).toBe(422)
 		const cleared = await update({ fields_attributes: [] })
 		expect((await cleared.json<{ fields: unknown[] }>()).fields).toEqual([])
+		// An empty JSON object is a sent, empty hash: it clears the fields too, as does an object of empty members.
+		for (const empty of [{}, { 0: {} }]) {
+			await update({ fields_attributes: [{ name: 'a', value: 'b' }] })
+			const response = await update({ fields_attributes: empty })
+			expect((await response.json<{ fields: unknown[] }>()).fields).toEqual([])
+		}
+		// A body without fields_attributes keeps them.
+		await update({ fields_attributes: [{ name: 'a', value: 'b' }] })
+		expect((await (await update({ note: 'n' })).json<{ fields: unknown[] }>()).fields).toHaveLength(1)
 	})
 
 	it('publishes fields as PropertyValue attachments of the actor', async () => {

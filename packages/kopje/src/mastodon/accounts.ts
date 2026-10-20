@@ -96,8 +96,9 @@ export function credentialChanges(p: Params): { changes: CredentialChanges; prob
 		}
 		changes.language = language === '' ? null : language
 	}
-	// fields_attributes replaces every field; a pair with both parts blank is dropped, as Mastodon does.
-	if (p.has('fields_attributes') || p.objects('fields_attributes').length > 0) {
+	// fields_attributes replaces every field; a pair with both parts blank is dropped, as Mastodon does. An empty JSON
+	// object (`{}`, `{"0":{}}`) is a sent, empty hash, which clears them (Account#fields_attributes=).
+	if (p.has('fields_attributes') || p.sentObject('fields_attributes') || p.objects('fields_attributes').length > 0) {
 		const fields: FieldSource[] = p
 			.objects('fields_attributes')
 			.map((field) => ({ name: (field.name ?? '').trim(), value: (field.value ?? '').trim() }))
