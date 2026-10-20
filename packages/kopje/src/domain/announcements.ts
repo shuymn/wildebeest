@@ -7,7 +7,7 @@ import { type CustomEmoji, emojiHref, localEmojiSnapshot, presentEmojis } from '
 import { allocateLocalId } from './ids'
 import { logAction } from './moderation-log'
 import { readOperation, writeOperation } from './operation'
-import { actorUriSql, usernameSql } from './profile-bounds'
+import { ACTOR_URI_LIMIT, actorUriSql, usernameSql } from './profile-bounds'
 import { instanceOrigin } from './push'
 import { MAX_TAG_LENGTH } from './status-bounds'
 import {
@@ -56,6 +56,10 @@ export const ANNOUNCEMENT_CONTENT_BYTES = 65_536
 // Distinct mention references looked up per announcement, and resolved accounts kept (and linked).
 export const MAX_MENTION_REFS = 64
 export const MAX_ANNOUNCEMENT_MENTIONS = 16
+// Accounts of one handle (domain and lowercased username) a reference judges at most, and the longest domain looked up
+// (an actor id of ACTOR_URI_LIMIT bytes, less "https://").
+export const MENTION_CANDIDATES = 8
+const MENTION_DOMAIN_BYTES = ACTOR_URI_LIMIT - 'https://'.length
 // Hashtags an announcement presents; the content links every one.
 export const MAX_ANNOUNCEMENT_TAGS = 16
 // A hashtag name presented, at most MAX_TAG_LENGTH code units and this many UTF-8 bytes (as status-bounds.ts reads a
@@ -121,24 +125,35 @@ type MentionRow = { i: number; id: string; username: string; domain: string | nu
 
 // The accounts of the first MAX_MENTION_REFS distinct references, each the first available account (R1) of its
 // username and domain (none: the instance's own host, as statuses.ts resolves mentions), in reference order, at most
-// MAX_ANNOUNCEMENT_MENTIONS accounts. One query: each reference a seek of accounts_domain_username, its account read by
-// rowid.
+// MAX_ANNOUNCEMENT_MENTIONS accounts. One query: each reference reads at most MENTION_CANDIDATES rows of
+// accounts_domain_username (the lowest rowids of its handle; the row past them bounds the seek), and only those are
+// judged by R1, so a handle shared by any number of unavailable accounts costs the same; when all of them are
+// unavailable it stays text. Its account is read by rowid. A domain past MENTION_DOMAIN_BYTES names no account (an
+// actor id holds at most ACTOR_URI_LIMIT bytes), so it is not looked up.
 function resolveMentions(db: Db, refs: readonly MentionRef[], origin: string): Map<string, MentionRow> {
 	const host = new URL(origin).host
-	const wanted = refs.slice(0, MAX_MENTION_REFS).map((ref) => ({
-		u: ref.username.toLowerCase(),
-		d: ref.domain === null || ref.domain === host ? null : ref.domain,
-	}))
+	const wanted = refs
+		.slice(0, MAX_MENTION_REFS)
+		.flatMap((ref, i) =>
+			ref.domain !== null && ENCODER.encode(ref.domain).length > MENTION_DOMAIN_BYTES
+				? []
+				: [{ i, u: ref.username.toLowerCase(), d: ref.domain === null || ref.domain === host ? null : ref.domain }]
+		)
 	if (wanted.length === 0) {
 		return new Map()
 	}
+	const handle = (t: string) =>
+		`${t}.domain IS json_extract(j.value, '$.d') AND lower(${t}.username) = json_extract(j.value, '$.u')`
 	const rows = db
 		.all<MentionRow>(
-			`SELECT j.key AS i, a.id, ${usernameSql('a.username')} AS username, a.domain, a.url, ${actorUriSql('a.uri')} AS uri
+			`SELECT json_extract(j.value, '$.i') AS i, a.id, ${usernameSql('a.username')} AS username, a.domain, a.url,
+				${actorUriSql('a.uri')} AS uri
 			FROM json_each(?1) j CROSS JOIN accounts a
 			ON a.rowid = (SELECT b.rowid FROM accounts b INDEXED BY accounts_domain_username
-				WHERE b.domain IS json_extract(j.value, '$.d') AND lower(b.username) = json_extract(j.value, '$.u')
-					AND ${availableSql('b.id')} LIMIT 1)`,
+				WHERE ${handle('b')} AND b.rowid < coalesce((SELECT c.rowid FROM accounts c INDEXED BY accounts_domain_username
+						WHERE ${handle('c')} ORDER BY c.rowid LIMIT 1 OFFSET ${MENTION_CANDIDATES}), 9223372036854775807)
+					AND ${availableSql('b.id')}
+				ORDER BY b.rowid LIMIT 1)`,
 			JSON.stringify(wanted)
 		)
 		.sort((a, b) => a.i - b.i)

@@ -6,7 +6,7 @@ import { announcementHarness, mentionFill, seedAnnouncement } from './announceme
 import { seedAccount, sql } from './api-helpers'
 import { BUILD } from './helpers'
 import { localSnapshotAtCap, seedEmojiRow } from './local-emoji-helpers'
-import { observedSql, type SqlRow } from './read-helpers'
+import { observedSql, rowsRead, type SqlRow } from './read-helpers'
 import { getJson } from './status-helpers'
 import { Db } from '../src/db/sql'
 import {
@@ -143,6 +143,58 @@ describe('an announcement’s mentions and hashtags (MD-4)', () => {
 		await h.admin.update(entity!.id, { text: `${unknown.split(' ').slice(1).join(' ')} @m17@r.example` })
 		expect((await listed(h, h.users.alice.token))[0]!.mentions).toHaveLength(1)
 	})
+
+	it('judges at most 8 accounts of one handle, however many unavailable ones share it (R1, RES-2)', async () => {
+		// `n` remote accounts of @dup@dup.example whose deletion has started, then an available one after them.
+		const measure = async (n: number) => {
+			const h = await announcementHarness(['alice'])
+			await sql(
+				h.store,
+				`WITH RECURSIVE k(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM k WHERE i < ?1)
+				INSERT INTO accounts (id, uri, username, domain, deleted_at)
+				SELECT CAST(130000000000000000 + i AS TEXT), 'https://dup.example/users/' || i, 'dup', 'dup.example', ?2 FROM k`,
+				n,
+				'2026-10-12T00:00:00.000Z'
+			)
+			const late = await seedAccount(h.store, { username: 'Dup', domain: 'dup.example' })
+			await h.admin.create({ text: '@dup@dup.example' })
+			const [entity] = await listed(h, h.users.alice.token)
+			const credential = { tokenHash: await sha256Hex(h.users.alice.token), scope: null, now: Date.now() }
+			const read = await rowsRead(h, listAnnouncements, { credential, origin: ORIGIN })
+			const plan = await runInDurableObject(h.store, (_instance, state) => {
+				let found = ''
+				const capturing = {
+					exec: (query: string, ...params: SqlStorageValue[]) => {
+						if (/accounts_domain_username/.test(query)) {
+							found = state.storage.sql
+								.exec<{ detail: string }>(`EXPLAIN QUERY PLAN ${query}`, ...params)
+								.toArray()
+								.map((row) => row.detail)
+								.join(' | ')
+						}
+						return state.storage.sql.exec(query, ...params)
+					},
+				} as unknown as SqlStorage
+				listAnnouncements.run(capturing, { credential, origin: ORIGIN })
+				return found
+			})
+			return { entity: entity!, read, plan, late }
+		}
+		const few = await measure(3)
+		const many = await measure(20_000)
+		// With 3 unavailable, the available fourth is among the first 8 and is linked; past 8, the handle stays text.
+		expect(few.entity.mentions).toEqual([expect.objectContaining({ id: few.late })])
+		expect(many.entity.mentions).toEqual([])
+		expect(many.entity.content).toBe('<p>@dup@dup.example</p>')
+		console.log(
+			JSON.stringify({ event: 'announcement-mention-probe', few: few.read, many: many.read, plan: many.plan })
+		)
+		expect(many.read - few.read).toBeLessThanOrEqual(16)
+		expect(many.plan).toMatch(/SEARCH a USING INTEGER PRIMARY KEY \(rowid=\?\)/)
+		expect(many.plan).toMatch(/SEARCH b USING INDEX accounts_domain_username \(domain=\? AND <expr>=\? AND rowid<\?\)/)
+		expect(many.plan).toMatch(/SEARCH c USING COVERING INDEX accounts_domain_username \(domain=\? AND <expr>=\?\)/)
+		expect(many.plan).not.toMatch(/SCAN a\b|SCAN b\b|SCAN c\b/)
+	}, 120_000)
 
 	it('keeps 16 hashtags, each within 256 code units, and links every one', async () => {
 		const h = await announcementHarness(['alice'])
@@ -419,6 +471,8 @@ describe('announcement query plans at saturation, with stale statistics', () => 
 				/^SCAN j VIRTUAL TABLE .* \| SEARCH d USING (PRIMARY KEY|COVERING INDEX announcement_dismissals_announcement) \((account_id=\? AND announcement_id=\?|announcement_id=\? AND account_id=\?)\)$/
 			),
 		])
+		expect(seen.reactions?.length).toBeGreaterThan(0)
+		expect(seen.mentions?.length).toBeGreaterThan(0)
 		for (const reactions of seen.reactions ?? []) {
 			expect(reactions).toMatch(
 				/SEARCH announcement_reactions USING COVERING INDEX announcement_reactions_name \(announcement_id=\?\)/
@@ -428,7 +482,7 @@ describe('announcement query plans at saturation, with stale statistics', () => 
 		}
 		for (const mentions of seen.mentions ?? []) {
 			expect(mentions).toMatch(/SEARCH a USING INTEGER PRIMARY KEY \(rowid=\?\)/)
-			expect(mentions).toMatch(/SEARCH b USING (COVERING )?INDEX accounts_domain_username \(domain=\? AND <expr>=\?\)/)
+			expect(mentions).toMatch(/SEARCH b USING INDEX accounts_domain_username \(domain=\? AND <expr>=\? AND rowid<\?\)/)
 			expect(mentions).not.toMatch(/SCAN a\b/)
 		}
 		expect(seen.names!.join()).toMatch(/announcement_reactions_name \(announcement_id=\?/)
