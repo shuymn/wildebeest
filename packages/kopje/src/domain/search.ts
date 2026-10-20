@@ -178,8 +178,9 @@ function searchStatuses(db: Db, input: SearchRequest, viewer: UserContext) {
 			'listable',
 			{
 				with: `WITH candidates(id) AS (${candidates})`,
-				from: 'candidates c JOIN',
-				join: 'ON s.id = c.id',
+				// The candidates outside, each status looked up by id (as searchHashtags' visible statuses below).
+				from: 'candidates c CROSS JOIN',
+				join: 'INDEXED BY sqlite_autoindex_statuses_1 ON s.id = c.id',
 				where: where.join(' AND '),
 				tail: `ORDER BY s.id DESC LIMIT ${p.add(input.limit)} OFFSET ${p.add(input.offset)}`,
 			},

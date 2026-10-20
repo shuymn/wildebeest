@@ -4,8 +4,9 @@ import { describe, expect, it } from 'vitest'
 
 import { bearer, sql } from './api-helpers'
 import { NOW } from './app-helpers'
-import { type PlannedStatement, plannedSql, watchedCursor } from './read-helpers'
+import { type PlannedStatement, plannedSql, scansOf, watchedCursor } from './read-helpers'
 import { act, community, post, seedStatus } from './status-helpers'
+import { ACCOUNT_PREFIX_LIMIT, ACCOUNT_RECENT_LIMIT } from '../src/domain/accounts'
 import {
 	HASHTAG_LIBRARY_LIMIT,
 	HASHTAG_PUBLIC_WINDOW,
@@ -486,6 +487,64 @@ describe('exclude_unreviewed and following at saturation (RES-7)', () => {
 			).toBe(true)
 			expect(plan.filter((detail) => /\bSCAN f\b/.test(detail))).toEqual([])
 			expect(plans[0]?.rows ?? 0).toBeLessThan(20)
+		}
+	}, 60_000)
+})
+
+describe('ranking queries with stale statistics (RES-7)', () => {
+	it("seeks the library's candidates by id, with other accounts' statuses grown after ANALYZE", async () => {
+		const { h } = await fixture()
+		const { alice, bob } = h.users
+		await post(h, alice, { status: 'needle mine' })
+		const boosted = await post(h, bob, { status: 'needle boosted' })
+		await act(h, alice, `/api/v1/statuses/${boosted.id}/reblog`)
+		await sql(h.store, 'ANALYZE')
+		const run = () => planned(h, /^WITH candidates/, { query: 'needle', types: ['statuses'], following: false })
+		await fillerStatuses(h, bob.id, 2000, 300000000000000000n)
+		const before = await run()
+		await fillerStatuses(h, bob.id, 20_000, 400000000000000000n)
+		const after = await run()
+		expect(after.value.statuses.map((s) => s.id)).toEqual(before.value.statuses.map((s) => s.id))
+		expect(after.value.statuses).toHaveLength(2)
+		expect(after.plans).toHaveLength(1)
+		const { query, plan, rows } = after.plans[0]!
+		expect(plan).toContain('SEARCH s USING INDEX sqlite_autoindex_statuses_1 (id=?)')
+		expect(scansOf(query, plan, ['statuses'])).toEqual([])
+		expect(rows).toBe(before.plans[0]!.rows)
+	}, 60_000)
+
+	it('seeks the candidate accounts by id and the username prefix by its index, past the newest window', async () => {
+		const { h } = await fixture()
+		await sql(h.store, 'ANALYZE')
+		// Accounts u<from> to u<from + count - 1>, each on a host of its own.
+		const grow = (from: number, count: number) =>
+			sql(
+				h.store,
+				`WITH RECURSIVE n(i) AS (SELECT CAST(?1 AS INTEGER) UNION ALL SELECT i + 1 FROM n WHERE i < ?1 + ?2 - 1)
+				INSERT INTO accounts (id, uri, username, domain, search_text)
+				SELECT CAST(500000000000000000 + i AS TEXT), 'https://d' || i || '.example/users/u', 'u' || i, 'd' || i || '.example',
+					'u' || i || '@d' || i || '.example'
+				FROM n`,
+				from,
+				count
+			)
+		const run = (query: string) => planned(h, /^WITH candidates/, { query, types: ['accounts'], following: false })
+		// Past the newest-accounts window (ACCOUNT_RECENT_LIMIT) and, for u1 (with u10 to u19 and so on), the prefix
+		// window (ACCOUNT_PREFIX_LIMIT), before the Store grows further; nobody's prefix matches no account.
+		const first = ACCOUNT_RECENT_LIMIT + ACCOUNT_PREFIX_LIMIT * 2
+		await grow(0, first)
+		const before = [await run('u1'), await run('nobody')]
+		await grow(first, 40_000)
+		const after = [await run('u1'), await run('nobody')]
+		expect(after.map((a) => a.value.accounts.length)).toEqual([20, 0])
+		for (const [i, { plans }] of after.entries()) {
+			expect(plans).toHaveLength(1)
+			const { query, plan, rows } = plans[0]!
+			expect(plan).toContain('SEARCH a USING INDEX sqlite_autoindex_accounts_1 (id=?)')
+			expect(plan).toContain('SEARCH accounts USING INDEX accounts_username (<expr>>? AND <expr><?)')
+			// The newest window alone reads accounts in rowid order, up to its LIMIT.
+			expect(scansOf(query, plan, ['accounts'])).toEqual(['SCAN accounts'])
+			expect(rows).toBe(before[i]!.plans[0]!.rows)
 		}
 	}, 60_000)
 })
