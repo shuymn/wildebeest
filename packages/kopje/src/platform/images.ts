@@ -71,6 +71,24 @@ export function imagesCodec(binding: ImagesBinding): ImageCodec {
 export const IMAGE_SIZE_LIMIT = 16 * 1024 * 1024
 export const IMAGE_MATRIX_LIMIT = 16_777_216
 
+// An avatar or header, as Mastodon's Account::Avatar and Account::Header take one (app/models/concerns/account/
+// avatar.rb:6-7, 25, header.rb:6-7, 26, with vips, config/application.rb:97): less than 8 MB (8,388,608 bytes is
+// refused), JPEG, PNG, GIF or WebP by signature (MEDIA-4).
+export const PROFILE_IMAGE_LIMIT = 8 * 1024 * 1024
+export const PROFILE_IMAGE_TYPES: readonly ImageType[] = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']
+
+export const PROFILE_TOO_LARGE = 'file size must be less than 8 MB'
+
+// The leading bytes sniffImageType reads.
+export const SIGNATURE_BYTES = 12
+
+// Paperclip's content type validation of a profile image from its first SIGNATURE_BYTES bytes (its message, without
+// the attribute), or null when it is an accepted type.
+export function profileImageProblem(head: Uint8Array): 'content type is invalid' | null {
+	const type = sniffImageType(head)
+	return type !== null && PROFILE_IMAGE_TYPES.includes(type) ? null : 'content type is invalid'
+}
+
 // The served image keeps at most this long edge (UHD); the preview at most SMALL_EDGE, close to Mastodon's small
 // style (640x360 pixels).
 export const FULL_EDGE = 3840

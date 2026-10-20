@@ -639,9 +639,17 @@ describe('a legacy media URL made a profile image after 0048_stored_bounds (RES-
 			)
 		})
 		const credential = { tokenHash: await sha256Hex(token), scope: 'write', now: NOW } as const
-		expect(await h.store.setProfileImage(BUILD, { credential, id: media, kind: 'avatar', now: NOW })).toEqual({
+		expect(
+			await h.store.updateCredentials(BUILD, {
+				credential,
+				changes: {},
+				images: { avatar: media },
+				present: { origin: 'https://kopje.test' },
+				now: NOW,
+			})
+		).toMatchObject({
 			status: 'ok',
-			value: true,
+			value: { status: 'ok' },
 		})
 		const stored = await runInDurableObject(h.store, (_instance, state) =>
 			state.storage.sql

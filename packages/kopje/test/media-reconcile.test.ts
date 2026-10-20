@@ -369,9 +369,17 @@ describe('custom emoji images after every grace period', () => {
 				{ scheduled_status_id: null },
 			])
 			const credential = { tokenHash: await sha256Hex(admin.token), scope: 'write', now: NOW } as const
-			expect(await h.store.setProfileImage(BUILD, { credential, id, kind: 'avatar', now: NOW })).toEqual({
+			expect(
+				await h.store.updateCredentials(BUILD, {
+					credential,
+					changes: {},
+					images: { avatar: id },
+					present: { origin: 'https://kopje.test' },
+					now: NOW,
+				})
+			).toMatchObject({
 				status: 'ok',
-				value: false,
+				value: { status: 'upload_gone' },
 			})
 		}
 		// A raw delete of an emoji's image fails on the foreign key.
@@ -388,9 +396,17 @@ describe('custom emoji images after every grace period', () => {
 		await sql(h.store, 'UPDATE accounts SET avatar_url = ? WHERE id = ?', emoji.url, h.users.alice.id)
 		const replacement = await uploaded(h, h.users.alice, png())
 		const credential = { tokenHash: await sha256Hex(h.users.alice.token), scope: 'write', now: NOW } as const
-		expect(await h.store.setProfileImage(BUILD, { credential, id: replacement.id, kind: 'avatar', now: NOW })).toEqual({
+		expect(
+			await h.store.updateCredentials(BUILD, {
+				credential,
+				changes: {},
+				images: { avatar: replacement.id },
+				present: { origin: 'https://kopje.test' },
+				now: NOW,
+			})
+		).toMatchObject({
 			status: 'ok',
-			value: true,
+			value: { status: 'ok' },
 		})
 		expect(await sql(h.store, 'SELECT gc_at FROM media_attachments WHERE id = ?', emoji.id)).toEqual([{ gc_at: null }])
 	})

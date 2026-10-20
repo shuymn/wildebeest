@@ -389,9 +389,17 @@ describe('the scheduled_statuses endpoints', () => {
 		const other = await post(h, alice, { status: 'other', media_ids: [media] })
 		expect(other.media_attachments).toEqual([])
 		const credential = { tokenHash: await sha256Hex(alice.token), scope: 'write', now: NOW } as const
-		expect(await h.store.setProfileImage(BUILD, { credential, id: media, kind: 'avatar', now: NOW })).toEqual({
+		expect(
+			await h.store.updateCredentials(BUILD, {
+				credential,
+				changes: {},
+				images: { avatar: media },
+				present: { origin: 'https://kopje.test' },
+				now: NOW,
+			})
+		).toMatchObject({
 			status: 'ok',
-			value: false,
+			value: { status: 'upload_gone' },
 		})
 		expect(await refusal(await send(h, alice, 'DELETE', `/api/v1/media/${media}`))).toEqual({
 			status: 422,

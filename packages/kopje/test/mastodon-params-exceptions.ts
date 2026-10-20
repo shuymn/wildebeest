@@ -14,10 +14,6 @@ const NOT_SERVED = (...names: string[]) => accepted('MD-2', ...names)
 const PLACEHOLDER = (...names: string[]) => accepted('MD-3', ...names)
 
 export const PARAM_EXCEPTIONS: Exceptions = {
-	'PATCH /api/v1/accounts/update_credentials': {
-		...open('multipart files are dropped by params.ts; uploads work on the settings page only', 'avatar', 'header'),
-		...open('not read or stored', 'indexable'),
-	},
 	'GET /api/v1/accounts/relationships': open('suspended accounts are always included', 'with_suspended'),
 	'GET /api/v1/accounts/search': open('unknown remote accounts are not resolved', 'resolve'),
 	'POST /api/v1/accounts': accepted(

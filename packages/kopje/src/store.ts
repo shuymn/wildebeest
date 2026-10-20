@@ -82,6 +82,7 @@ import { runModerationJobs, suspendAccount } from './domain/suspension'
 import * as tags from './domain/tags'
 import * as timelines from './domain/timelines'
 import * as trends from './domain/trends'
+import { UNLOCK_ACCEPTS_PER_ROUND, unlockAcceptStep } from './domain/unlock-accepts'
 import * as webPages from './domain/web-pages'
 import * as webSession from './domain/web-session'
 import {
@@ -526,10 +527,25 @@ export class Store extends DurableObject<Env> {
 		const cleanups = await this.#kernel.execute(callerBuild, blocks.runDomainBlockCleanups, input)
 		const requests = await this.#kernel.execute(callerBuild, notificationRequests.runNotificationRequestJobs, input)
 		const moderation = await this.#kernel.execute(callerBuild, runModerationJobs, input)
+		const unlock = await this.#runUnlockAccepts(callerBuild, input)
 		return {
-			pending: inbound.pending || cleanups.pending || requests.pending || moderation.pending,
-			delivers: inbound.delivers || cleanups.delivers || moderation.delivers,
+			pending: inbound.pending || cleanups.pending || requests.pending || moderation.pending || unlock.pending,
+			delivers: inbound.delivers || cleanups.delivers || moderation.delivers || unlock.delivers,
 		}
+	}
+
+	// A round of the unlock acceptance jobs (domain/unlock-accepts.ts): at most UNLOCK_ACCEPTS_PER_ROUND steps, each in
+	// its own transaction.
+	async #runUnlockAccepts(callerBuild: string, input: { now: number }) {
+		let delivers = false
+		for (let step = 0; step < UNLOCK_ACCEPTS_PER_ROUND; step++) {
+			const result = await this.#kernel.execute(callerBuild, unlockAcceptStep, input)
+			delivers = delivers || result.delivers
+			if (result.done) {
+				return { pending: false, delivers }
+			}
+		}
+		return { pending: true, delivers }
 	}
 
 	// Syncs of remote accounts' collections (domain/remote-collections.ts): claimed and applied by the Worker's job
@@ -1560,10 +1576,6 @@ export class Store extends DurableObject<Env> {
 
 	deleteMedia(callerBuild: string, input: OperationInput<typeof media.deleteMedia>) {
 		return this.#kernel.execute(callerBuild, media.deleteMedia, input)
-	}
-
-	setProfileImage(callerBuild: string, input: OperationInput<typeof media.setProfileImage>) {
-		return this.#kernel.execute(callerBuild, media.setProfileImage, input)
 	}
 
 	removeProfileImage(callerBuild: string, input: OperationInput<typeof media.removeProfileImage>) {

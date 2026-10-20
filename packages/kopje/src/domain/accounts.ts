@@ -16,9 +16,17 @@ import {
 	type QuotePolicyName,
 	REACHES_FOLLOWERS_SQL,
 } from './audience'
-import { localRole, optionalUserReadOperation, type Role, userReadOperation, userWriteOperation } from './auth'
+import {
+	localRole,
+	optionalUserReadOperation,
+	type Role,
+	userMediaDeleteOperation,
+	userReadOperation,
+	userWriteOperation,
+} from './auth'
 import { type CustomEmoji, localEmojiSnapshot, presentEmojis } from './custom-emojis'
 import { retractFollow } from './inbox'
+import { applyProfileImage, PROFILE_IMAGES, type ProfileImage, profileUploadReady } from './media'
 import { notify } from './notifications'
 import { readOperation } from './operation'
 import { htmlToPlainText, plainTextToHtml } from './plain-text'
@@ -32,6 +40,7 @@ import {
 } from './profile-bounds'
 import { accountSearchText, queryTerms } from './search-text'
 import { renderFieldValue } from './status-text'
+import { unlockChanged } from './unlock-accepts'
 import { readWindow, singleWindow, type Window, windowJson, windowPage } from './windows'
 import { type ColumnMap, selectSql } from '../db/columns'
 import type { Db } from '../db/sql'
@@ -666,21 +675,46 @@ export type CredentialChanges = {
 	attributionDomains?: string[]
 }
 
+// The uploads (completed, unattached, media.ts) a credentials update makes the account's avatar or header.
+export type ProfileImages = Partial<Record<ProfileImage, string>>
+
+export type CredentialsUpdated =
+	// accepting: the update unlocked the account, so the unlock job has pending requests to accept (unlock-accepts.ts).
+	| { status: 'ok'; account: CredentialAccount; accepting: boolean }
+	| { status: 'not_found' }
+	// An upload is no longer the viewer's own live upload (swept, deleted or attached since): nothing changed.
+	| { status: 'upload_gone' }
+
 // Lengths and values are validated by the caller. display_name and the note are plain text: display_name is stored
-// as is (JSON consumers escape it), the note is stored as escaped paragraphs.
-export const updateCredentials = userWriteOperation<
-	{ changes: CredentialChanges; present: Present; now: number },
-	CredentialAccount | null
->((db, { changes, present, now }, { accountId }) => {
-	const current = db.first<{ username: string; display_name: string; actor_type: string; hide_collections: number }>(
-		`SELECT a.username, a.display_name, a.actor_type, l.hide_collections
+// as is (JSON consumers escape it), the note is stored as escaped paragraphs. Everything applies in this transaction,
+// images included, with one Update(Person), or nothing does (Mastodon's single update!). A media-delete operation:
+// replacing an image dooms the upload behind it (MEDIA-2).
+export const updateCredentials = userMediaDeleteOperation<
+	{ changes: CredentialChanges; images?: ProfileImages; present: Present; now: number },
+	CredentialsUpdated
+>((db, { changes, images = {}, present, now }, { accountId }) => {
+	const current = db.first<{
+		username: string
+		display_name: string
+		actor_type: string
+		hide_collections: number
+		locked: number
+	}>(
+		`SELECT a.username, a.display_name, a.actor_type, l.hide_collections, a.locked
 		FROM accounts a JOIN local_accounts l ON l.account_id = a.id WHERE a.id = ?`,
 		accountId
 	)
 	if (current === undefined) {
-		return null
+		return { status: 'not_found' }
+	}
+	const kinds = PROFILE_IMAGES.filter((kind) => images[kind] !== undefined)
+	if (kinds.some((kind) => !profileUploadReady(db, accountId, images[kind]!, now))) {
+		return { status: 'upload_gone' }
 	}
 	const before = actorSnapshot(db, accountId)
+	for (const kind of kinds) {
+		applyProfileImage(db, accountId, kind, images[kind]!)
+	}
 	const changedName = changes.displayName === undefined ? null : storedDisplayName(changes.displayName)
 	const displayName = changedName ?? current.display_name
 	const hide = bit(changes.hideCollections)
@@ -743,7 +777,9 @@ export const updateCredentials = userWriteOperation<
 	// collections again and learns it from them, as Mastodon's ProcessAccountService does.
 	const hideChanged = hide !== null && hide !== current.hide_collections
 	recordActorUpdate(db, accountId, hideChanged ? null : before, now)
-	return credentialAccount(db, accountId, present)
+	const accepting = unlockChanged(db, accountId, current.locked === 1, changes.locked)
+	const account = credentialAccount(db, accountId, present)
+	return account === null ? { status: 'not_found' } : { status: 'ok', account, accepting }
 })
 
 function bit(value: boolean | undefined): number | null {
@@ -1413,18 +1449,31 @@ export const answerFollowRequest = userWriteOperation<
 	RelationshipResult
 >((db, { account, decision, now }, { accountId: viewerId }) => {
 	const requesterId = resolveAccountId(db, account)
-	const request =
-		requesterId === null
-			? undefined
-			: db.first<{ id: string; uri: string | null; requester_uri: string; remote: number }>(
-					`SELECT CAST(f.id AS TEXT) AS id, f.uri, a.uri AS requester_uri, a.domain IS NOT NULL AS remote
-					FROM follows f JOIN accounts a ON a.id = f.account_id
-					WHERE f.account_id = ?1 AND f.target_account_id = ?2 AND f.state = 'pending' AND ${availableSql('?1')}`,
-					requesterId,
-					viewerId
-				)
-	if (requesterId === null || request === undefined) {
+	if (requesterId === null) {
 		return { status: 'not_found' }
+	}
+	const answered = answerPendingFollow(db, viewerId, requesterId, decision, now)
+	return answered === 'ok' ? relationshipResult(db, viewerId, requesterId, now) : { status: answered }
+})
+
+// The answer to one pending follow of `viewerId` by `requesterId`, as POST /api/v1/follow_requests/:id/authorize and
+// /reject run it, and as the unlock job (unlock-accepts.ts) authorizes each request.
+export function answerPendingFollow(
+	db: Db,
+	viewerId: string,
+	requesterId: string,
+	decision: 'authorize' | 'reject',
+	now: number
+): 'ok' | 'not_found' | 'unavailable' {
+	const request = db.first<{ id: string; uri: string | null; requester_uri: string; remote: number }>(
+		`SELECT CAST(f.id AS TEXT) AS id, f.uri, a.uri AS requester_uri, a.domain IS NOT NULL AS remote
+		FROM follows f JOIN accounts a ON a.id = f.account_id
+		WHERE f.account_id = ?1 AND f.target_account_id = ?2 AND f.state = 'pending' AND ${availableSql('?1')}`,
+		requesterId,
+		viewerId
+	)
+	if (request === undefined) {
+		return 'not_found'
 	}
 	if (decision === 'authorize') {
 		db.run("UPDATE follows SET state = 'accepted' WHERE id = CAST(? AS INTEGER)", request.id)
@@ -1433,7 +1482,7 @@ export const answerFollowRequest = userWriteOperation<
 		// (ID-7); a Misskey pair id is not recorded, and its redelivery asks again (the pair limit). If it
 		// cannot be recorded (the requester's retraction cap), nothing changes.
 		if (request.remote === 1 && request.uri !== null && !retractFollow(db, request.requester_uri, request.uri, now)) {
-			return { status: 'unavailable' }
+			return 'unavailable'
 		}
 		db.run('DELETE FROM follows WHERE id = CAST(? AS INTEGER)', request.id)
 	}
@@ -1467,5 +1516,5 @@ export const answerFollowRequest = userWriteOperation<
 			viewerId
 		)
 	}
-	return relationshipResult(db, viewerId, requesterId, now)
-})
+	return 'ok'
+}

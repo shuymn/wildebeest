@@ -120,8 +120,8 @@ export class ParamsRefused extends Error {
 	}
 }
 
-function mediaType(contentType: string): string | undefined {
-	return contentType.split(';')[0]?.trim().toLowerCase()
+export function mediaTypeOf(contentType: string | undefined): string | undefined {
+	return contentType?.split(';')[0]?.trim().toLowerCase()
 }
 
 // The body limit of a request: a file route's multipart body may carry its files besides the text. The rule is
@@ -129,7 +129,7 @@ function mediaType(contentType: string): string | undefined {
 export function bodyLimit(contentType: string, options: ReadOptions = {}): number {
 	const limit = options.limit ?? API_BODY_LIMIT
 	const files = options.files
-	return files !== undefined && mediaType(contentType) === 'multipart/form-data'
+	return files !== undefined && mediaTypeOf(contentType) === 'multipart/form-data'
 		? limit + files.names.length * (files.maxBytes + FILE_PART_SLACK)
 		: limit
 }
@@ -176,7 +176,7 @@ export async function readParams(request: Request, options: ReadOptions = {}): P
 // route reads a blank value so; with bytes, as a text value (docs/mastodon-deviations.md).
 export async function parseBody(contentType: string, body: Uint8Array, files?: FileRule): Promise<Params> {
 	const declared = new Set(files?.names ?? [])
-	const type = mediaType(contentType)
+	const type = mediaTypeOf(contentType)
 	if (body.byteLength === 0) {
 		return new Params([])
 	}

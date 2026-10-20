@@ -4,15 +4,16 @@ import { HTTPException } from 'hono/http-exception'
 
 import type { Account, CredentialAccount } from '../domain/accounts'
 import type { Authorized, UserCredential } from '../domain/auth'
-import type { ProfileImage } from '../domain/media'
+import { PROFILE_IMAGES } from '../domain/media'
 import type { Status } from '../domain/status-presenter'
 import { localUsername } from '../domain/web-pages'
 import { SESSION_LIFETIME_MS, WEB_SCOPES } from '../domain/web-session'
 import { requireSetup } from '../federation/setup-gate'
-import { credentialChanges } from '../mastodon/accounts'
-import { type ApiDeps, present, storeCall } from '../mastodon/context'
-import { receiveImageUpload } from '../mastodon/media'
-import { type Params, readParams } from '../mastodon/params'
+import { credentialChanges, profileFiles, storeProfileImages } from '../mastodon/accounts'
+import { type ApiDeps, present, requestJobsSoon, storeCall } from '../mastodon/context'
+import { discard, type ProfileUpload, sweepSoon } from '../mastodon/media'
+import { Params, readParams } from '../mastodon/params'
+import { PROFILE_IMAGE_LIMIT } from '../platform/images'
 import type { Scope } from '../security/scopes'
 import { pkceChallenge, sha256Hex } from '../security/tokens'
 import {
@@ -492,10 +493,18 @@ export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 				now: deps.now(),
 			})
 		)
-		return settled(c, result, () => redirect('/settings?notice=saved'))
+		return settled(c, result, (updated) => {
+			if (updated.status !== 'ok') {
+				return toLogin(c)
+			}
+			if (updated.accepting) {
+				requestJobsSoon(c, deps)
+			}
+			return redirect('/settings?notice=saved')
+		})
 	})
 
-	for (const kind of ['avatar', 'header'] as const satisfies ProfileImage[]) {
+	for (const kind of PROFILE_IMAGES) {
 		app.post(`/settings/${kind}`, setup, async (c) => {
 			if (!sameOrigin(c.req.raw)) {
 				await c.req.raw.body?.cancel()
@@ -506,31 +515,76 @@ export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 				await c.req.raw.body?.cancel()
 				return message(c, 403, STRINGS.forbiddenTitle, STRINGS.forbidden, BACK)
 			}
-			const tokenHash = await sha256Hex(session)
+			// The session is checked before the body is read, so a request without a live session reads no upload.
+			const credential = await credentialOf(session, 'write:accounts')
+			if ((await storeCall(c, deps, (s, b) => s.checkCredential(b, credential))).status !== 'ok') {
+				await c.req.raw.body?.cancel()
+				return toLogin(c)
+			}
+			const read = await readParams(c.req.raw, {
+				limit: 64 * 1024,
+				files: { names: ['file'], maxBytes: PROFILE_IMAGE_LIMIT },
+			})
+			if (!read.ok) {
+				return message(c, 400, STRINGS.invalidFormTitle, STRINGS.invalidForm, BACK)
+			}
+			if (!(await csrfMatches(session, read.params.get('csrf')))) {
+				return message(c, 403, STRINGS.forbiddenTitle, STRINGS.forbidden, BACK)
+			}
+			// The API's checks and pipeline (mastodon/accounts.ts), with the page's one file as the image.
+			const file = read.params.file('file')
+			const files = file === undefined ? 'string' : await profileFiles(new Params([], new Map([[kind, file]])))
+			if (files === 'string' || files.problems.length > 0) {
+				const problem =
+					files === 'string'
+						? "Validation failed: File can't be blank"
+						: `Validation failed: ${files.problems.join(', ')}`
+				return message(c, 422, STRINGS.uploadFailedTitle, problem, BACK)
+			}
+			const owned: ProfileUpload[] = []
+			let committed = false
 			try {
-				// B4b's pipeline: the reservation authorizes and counts the attempt before the body is read, and the
-				// anti-forgery token is checked before any transformation is spent.
-				const outcome = await receiveImageUpload(
+				const stored = await storeProfileImages(
 					c,
 					deps,
-					() => ({ tokenHash, scope: 'write:media', now: deps.now() }),
-					async (params) =>
-						(await csrfMatches(session, params.get('csrf'))) ? null : { status: 403, error: STRINGS.forbidden }
+					() => ({ ...credential, now: deps.now() }),
+					files.images,
+					owned
 				)
-				if (!outcome.ok) {
-					return message(c, outcome.status === 403 ? 403 : 422, STRINGS.uploadFailedTitle, outcome.error, BACK)
+				if ('error' in stored) {
+					return message(c, 422, STRINGS.uploadFailedTitle, stored.error, BACK)
 				}
-				const credential = await credentialOf(session, 'write:accounts')
-				const set = await storeCall(c, deps, (s, b) =>
-					s.setProfileImage(b, { credential, id: outcome.media.id, kind, now: deps.now() })
+				const result = await storeCall(c, deps, (s, b) =>
+					s.updateCredentials(b, {
+						credential: { ...credential, now: deps.now() },
+						changes: {},
+						images: stored,
+						present: present(c),
+						now: deps.now(),
+					})
 				)
-				return settled(c, set, () => redirect(`/settings?notice=${kind}`))
+				if (result.status !== 'ok') {
+					return toLogin(c)
+				}
+				if (result.value.status !== 'ok') {
+					return message(c, 422, STRINGS.uploadFailedTitle, 'Validation failed: The upload expired', BACK)
+				}
+				committed = true
+				sweepSoon(c, deps)
+				return redirect(`/settings?notice=${kind}`)
 			} catch (error) {
 				// The session ended during the upload.
 				if (error instanceof HTTPException && error.status === 401) {
 					return toLogin(c)
 				}
 				throw error
+			} finally {
+				if (!committed && owned.length > 0) {
+					for (const upload of owned) {
+						await discard(c, deps, upload)
+					}
+					sweepSoon(c, deps)
+				}
 			}
 		})
 	}

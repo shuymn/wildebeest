@@ -56,7 +56,7 @@ const MAPPING: Record<string, Mapping> = {
 }
 
 const ACCOUNT: Record<string, Exception> = {
-	...open('missing', 'indexable', 'moved', 'noindex', 'roles', 'uri'),
+	...open('missing', 'moved', 'noindex', 'roles', 'uri'),
 	...open('missing (Mastodon emits it for a limited or memorial account)', 'limited', 'memorial'),
 }
 
@@ -71,11 +71,6 @@ const ENTITY_EXCEPTIONS: Exceptions = {
 	'REST::AccountSerializer': ACCOUNT,
 	'REST::CredentialAccountSerializer': ACCOUNT,
 	'REST::AccountSerializer::FieldSerializer': open('no rel=me verification', 'verified_at'),
-	'REST::CredentialAccountSerializer#source': open(
-		'missing (clients show the toggles off)',
-		'discoverable',
-		'indexable'
-	),
 	'REST::StatusSerializer': {
 		...open('missing', 'application'),
 		...open('no link previews', 'card'),
