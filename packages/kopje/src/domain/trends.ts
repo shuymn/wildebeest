@@ -374,7 +374,8 @@ function roundStatuses(db: Db, now: number, byDefault: boolean): number {
 		.sort((a, b) => b.score - a.score || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0))
 	type Scored = (typeof scored)[number]
 	// Each author's maximum (StatusTrend.allowed lists the author's top-scoring rows that are allowed): the rows tied at
-	// it are its top group, met first. Its witness is the first allowed row of the group, else its first row. Witnesses
+	// it are its top group, met first. Its witness is the first allowed row of the group, else its first unreviewed row,
+	// else its first row. Witnesses
 	// fill the pools first, then the other rows of authors whose witness was kept, so the stored maximum is always the
 	// author's real one and an approved maximum is never pushed out by its unreviewed ties; TREND_STATUSES_PER_AUTHOR
 	// rows at most. Each pool takes allowed rows by score; the review pool takes unreviewed rows before rejected ones,
@@ -386,7 +387,7 @@ function roundStatuses(db: Db, now: number, byDefault: boolean): number {
 	const witnesses = new Set<Scored>()
 	for (const rows of byAuthor.values()) {
 		const top = rows.filter((c) => c.score === rows[0]!.score)
-		witnesses.add(top.find((c) => c.allowed) ?? top[0]!)
+		witnesses.add(top.find((c) => c.allowed) ?? top.find((c) => !c.reviewed) ?? top[0]!)
 	}
 	const order = (a: Scored, b: Scored) =>
 		Number(a.reviewed) - Number(b.reviewed) || b.score - a.score || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0)

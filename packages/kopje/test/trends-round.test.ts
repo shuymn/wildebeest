@@ -274,6 +274,24 @@ describe('status retention (review round 1)', () => {
 		expect(ties.filter((id) => rows.includes(id))).toHaveLength(2)
 	})
 
+	// Round 2: a newer rejected and an older unreviewed tie of one author (180.5), and fifty other authors' unreviewed
+	// statuses (12.5): the unreviewed tie is the author's witness, so it takes a review place ahead of the fifty.
+	it('keeps an unreviewed maximum tied with a rejected one', async () => {
+		const store = await migratedStore()
+		const [x, ...others] = await authors(store, 51)
+		// (20 - 1)² · 0.5 = 180.5 and (6 - 1)² · 0.5 = 12.5, an hour old.
+		const [unreviewed, rejected] = await trendStatuses(store, [
+			{ author: x!, published: AT - HOUR, seq: 0, favourites: 20 },
+			{ author: x!, published: AT - HOUR, seq: 1, favourites: 20 },
+			...others.map((author, i) => ({ author, published: AT - HOUR, seq: 10 + i, favourites: 6 })),
+		])
+		await review(store, 'status_trend_reviews', rejected!, false)
+		await round(store)
+		const rows = await trendRows(store)
+		expect(rows.find((r) => r.status_id === unreviewed)?.score).toBe(180.5)
+		expect(rows).toHaveLength(50)
+	})
+
 	// M3: the review pool takes unreviewed rows before rejected ones, as the hashtags' does.
 	it('reviews a fresh unreviewed status before 50 higher-scoring rejected ones', async () => {
 		const store = await migratedStore()
