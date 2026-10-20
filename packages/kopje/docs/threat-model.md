@@ -1998,8 +1998,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   form, and scores at most 400 + 250 statuses; measured at saturation (100 active suspend blocks, every author on its
   own eight-label domain with its actor id on another eight-label host, 4,000 distinct authors or 40 authors of 100
   statuses, every candidate quoting another, each review table at 10,000, and a status of 10,000 rejected hashtag rows)
-  it reads 237,789 rows with distinct authors and 97,706 with repeated ones, the same with 10,000 or 1,000,000 older
-  statuses and 0 or 100,000 hidden ones in the window (`test/trends-cost.test.ts`, ceiling 240,000). `GET
+  it reads 272,587 rows with distinct authors and 100,435 with repeated ones (its writes' reads included), the same
+  with 10,000 or 1,000,000 older statuses and 0 or 100,000 hidden ones in the window (`test/trends-cost.test.ts`,
+  ceiling 275,000). `GET
   /api/v1/trends/tags` reads 68,062 rows for 20 hashtags with 201 or 10,000 public statuses each, half of them by
   unavailable authors, on the same kind of accounts and full review tables (`test/trends-maxima.test.ts`). Each plan is
   of the production statement as it runs, with statistics taken before the data grew; the review lookups are key

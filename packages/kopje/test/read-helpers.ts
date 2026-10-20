@@ -83,15 +83,21 @@ export function observedSql(real: SqlStorage, observe: (rows: readonly SqlRow[],
 }
 
 // A cursor for a test's SqlStorage wrapper, over `cursor`: toArray, one and row-by-row iteration (Db.iterate), with
-// `done` called after each read (once a stepped statement is done or abandoned) and `seen` given the rows it returned.
+// `done` called once per statement after its read (once a stepped statement is done or abandoned) and `seen` given the
+// rows it returned. A write's statement (Db.run, which reads only rowsWritten: workerd runs it to completion at exec) is
+// done when rowsWritten is read, so its reads (subqueries, triggers) are counted too.
 export function watchedCursor(
 	cursor: SqlStorageCursor<SqlRow>,
 	done: () => void,
 	seen: (rows: SqlRow[]) => void = () => {}
 ) {
+	let counted = false
 	const finished = (rows: SqlRow[]) => {
 		seen(rows)
-		done()
+		if (!counted) {
+			counted = true
+			done()
+		}
 		return rows
 	}
 	return {
@@ -101,7 +107,9 @@ export function watchedCursor(
 			return cursor.rowsRead
 		},
 		get rowsWritten() {
-			return cursor.rowsWritten
+			const written = cursor.rowsWritten
+			finished([])
+			return written
 		},
 		[Symbol.iterator](): IterableIterator<SqlRow> {
 			const rows: SqlRow[] = []

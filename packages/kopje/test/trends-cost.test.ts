@@ -6,6 +6,7 @@ import { sql } from './api-helpers'
 import { BUILD, migratedStore } from './helpers'
 import { watchedCursor } from './read-helpers'
 import { AT, DAY, HOUR, TODAY } from './trend-helpers'
+import { writeOperation } from '../src/domain/operation'
 import { trendsRound } from '../src/domain/trends'
 import type { StoreStub } from '../src/platform/store-client'
 
@@ -13,9 +14,10 @@ import type { StoreStub } from '../src/platform/store-client'
 // outside its windows, and the plan of each of its production queries with statistics taken before the data grew.
 
 // The design's estimate was 215,000; with every candidate's quote judged (the quoted author's availability walked
-// too), both of each author's keys walked under 100 suspend blocks and full review tables, the round measures
-// 237,789 rows, so the asserted ceiling is 240,000 (docs/threat-model.md RES-7 quotes the figure).
-const ROUND_CEILING = 240_000
+// too), both of each author's keys walked under 100 suspend blocks, full review tables, and the reads of the round's
+// own deletes, updates and inserts counted, the round measures 272,587 rows, so the asserted ceiling is 275,000
+// (docs/threat-model.md RES-7 quotes the figure).
+const ROUND_CEILING = 275_000
 const idOf = (ms: number) => BigInt(ms) << 16n
 
 type Saturation = { older: number; hidden: number; repeated: boolean }
@@ -166,6 +168,40 @@ async function timedRound(store: StoreStub): Promise<number> {
 	await store.trendsRound(BUILD, { now: AT })
 	return Date.now() - start
 }
+
+describe('rows-read accounting', () => {
+	// A write's reads (its subqueries and triggers) are counted once, as a read's are: Db.run reads only rowsWritten.
+	it('counts the rows a mutation reads', async () => {
+		const store = await migratedStore()
+		await sql(
+			store,
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 249)
+			INSERT INTO trend_tags (name, score, max_score, max_score_at) SELECT 't' || i, 1, 1, ?1 FROM n`,
+			new Date(AT).toISOString()
+		)
+		const deleteAll = writeOperation<void, number>((db) =>
+			db.run("DELETE FROM trend_tags WHERE hex(name) NOT IN (SELECT value FROM json_each('[]'))")
+		)
+		const read = await runInDurableObject(store, (_instance, state) => {
+			let total = 0
+			let statements = 0
+			const real = state.storage.sql
+			const counting = {
+				exec: (query: string, ...params: SqlStorageValue[]) => {
+					const cursor = real.exec(query, ...params)
+					return watchedCursor(cursor, () => {
+						statements++
+						total += cursor.rowsRead
+					})
+				},
+			} as unknown as SqlStorage
+			expect(deleteAll.run(counting, undefined)).toBe(250)
+			return { total, statements }
+		})
+		expect(read).toEqual({ total: expect.any(Number), statements: 1 })
+		expect(read.total).toBeGreaterThanOrEqual(250)
+	})
+})
 
 describe('the round at saturation (RES-6, RES-7)', () => {
 	it.each([false, true])(
