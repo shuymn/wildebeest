@@ -114,6 +114,18 @@ The public block list has no count cap; RES-3 bounds its response bytes.
 Each announcement is within its measured conservative sum (docs/threat-model.md "Maxima of presented units"), so 16
 never reach the budget (`src/domain/announcements.ts`, `test/announcement-bounds.test.ts`).
 
+## Trends
+
+| Operation            | Mechanism                                                                        | Continuation                     |
+| -------------------- | -------------------------------------------------------------------------------- | -------------------------------- |
+| `trendingTags`       | Count: 20 hashtags, each with its trends history                                 | Offset (`offset + limit`)        |
+| `trendingStatuses`   | Budget: up to 40 statuses within `ARRAY_ANSWER_BYTES`, the first always admitted | Offset (continues at `consumed`) |
+| `adminTrendTags`     | Count: 20 hashtags                                                               | Offset                           |
+| `adminTrendStatuses` | Count: 40 statuses, each field through its bounded projection                    | Offset                           |
+
+Each list ends at the top 200 allowed now (MD-5). Each unit is within its derived maximum (docs/threat-model.md
+"Maxima of presented units"; `src/domain/trends.ts`, `test/trends-maxima.test.ts`).
+
 ## ActivityPub
 
 These build activities and Notes from local statuses (`statusFacts`, `noteOf` in `src/domain/activities.ts`), not

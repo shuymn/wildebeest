@@ -445,6 +445,13 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   ("shows a tag with seven days of history", "leaves out the statuses of a suspended account", "keeps the public
   history whatever hidden statuses the window holds", "counts public statuses only"). The rule is applied in the query
   with no row limit, so hidden statuses cannot change the public counts.
+  The trends lists (R41) are bounded the same way: hashtag trends are counted by the cron's round from public
+  originals of available accounts only, and a trending hashtag's `history` counts the newest 200 entries of its public
+  range of the 7 days before the rule, the same for every viewer; a trending status passes the anonymous public
+  timeline's rule (`trendableStatusSql`) and then R8 for the viewer. _Enforced (main):_ `src/domain/trends.ts`
+  (`trendsRound`, `trendTagHistory`, `trendingStatuses`); `test/trends-round.test.ts`, `test/policy-endpoints.test.ts`
+  ("shows no viewer a status the model does not allow, and lists exactly what it allows": the trends list for every
+  viewer, the anonymous one within the anonymous public timeline).
 - **VIS-13: a block cuts both ways, as Mastodon's does.** A block (local, or a remote `Block` that passes ID-6)
   ends the follows between the two accounts in both directions and in either state; while it lasts neither may
   follow the other (a remote `Follow` is answered with a `Reject`), the blocked account sees nothing of the blocker
@@ -820,6 +827,9 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `test/admin-measures.test.ts`, `test/admin-domain-blocks-replay.test.ts`.
   Announcements are the Access admin's (AUTH-5), never the OAuth admin's; each write logs its row in its own transaction
   (`test/admin-announcements.test.ts`, `test/cli.test.ts`).
+  Trends reviews are the Access admin's too (`/admin/trends`, `kopje-admin trends`: AUTH-5); through the Mastodon admin
+  API the OAuth admin is shown the public trends and its approve and reject answer 403 (MD-2). Each review logs its row
+  in its own transaction (`test/admin-trends.test.ts`, `test/cli.test.ts`, `test/trends.test.ts`).
 - **VIS-30: an instance-suspended account is shown to nobody and gets no new content.** An account the instance
   suspended (R38) is unavailable (R1) from the suspension's commit: shown to nobody (as any unavailable account), sent
   nothing but retractions, and its inbound activity is not applied but for its `Delete`, `DeleteActor`, `Undo` and
@@ -929,6 +939,9 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   (`Announcement` targets, with the text's first 200 code units); the import token and import sessions never reach them;
   `src/domain/announcements.ts`; `test/admin-announcements.test.ts` ("is refused for the import token and import
   sessions", "answers announcement-not-found and refuses every authority but Access").
+  Trends reviews and lists (`/admin/trends`, `kopje-admin trends`) are the same: the import token and import sessions
+  never reach them, and `src/domain/trends.ts` refuses every authority but Access in the transaction
+  (`test/admin-trends.test.ts` ("refuses anyone but the Access admin")).
 - **AUTH-6: a user acts only on what that user may touch.** User operations take the acting account from the validated
   viewer, never from the body or path, and check ownership or VIS-1 access to every referenced resource in the same
   transaction. Admin, setup and federation operations use their own named rules (AUTH-5, SETUP-2, ID-6), and the
@@ -1439,6 +1452,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   _Enforced (main)_ for announcements: an admin body of at most 1 MiB (`JSON_BODY_LIMIT`), a text of at most 10,000
   UTF-8 bytes (`ANNOUNCEMENT_TEXT_BYTES`), and a reaction name judged within 128 bytes before the emoji pattern runs
   (`isUnicodeEmoji` in `src/platform/emoji-names.ts`); `test/admin-announcements.test.ts`, `test/emoji-names.test.ts`.
+  _Enforced (main)_ for trends: `Accept-Language` is read within its first 1,024 code units; a review's hashtag name is
+  a hashtag name normalized within the stored name rule (1,024 bytes, 256 characters); `src/mastodon/trends.ts`,
+  `src/domain/trends.ts`; `test/trends.test.ts`, `test/admin-trends.test.ts`.
 - **RES-2: parsing work is bounded.** Every regex, parser and normalization over input at the RES-1 cap has an
   adversarial fixture with a time bound. _Enforced (main)_ for status text:
   `test/statuses.test.ts` ("handles the worst case at the bound within a generous time"). _Enforced (main)_ for the image metadata walk: `test/image-bytes.test.ts` ("walks a worst-case file at the upload
@@ -1509,6 +1525,12 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   HTML as it is built (text, escapes and paragraph markup included) and stops at the first that passes the content
   budget, so what is built past the budget is one segment, at most 310,064 bytes of JSON (a hashtag of 3,333 U+FDFA,
   NFKC-expanded and URL-encoded) (A7 of the design); `test/migrations.test.ts` ("0056_announcements"), `test/announcement-bounds.test.ts`.
+  _Enforced (main)_ for trends: the CHECKs and triggers of migration `0057_trends` (a hashtag name's bytes, then NUL,
+  then characters, then the ASCII a normalized hashtag holds; scores within 0 and 1e15 and a peak at least the score;
+  24-byte ISO times; 18-digit ids; `trends` and `trendable_by_default` only `'true'` or `'false'`), which imports meet
+  too; the round filters names by the same rule (`trendTagNameCheckSql`) and drops a stored name that is not
+  well-formed UTF-8; `test/migrations.test.ts` ("0057_trends"), `test/trends-round.test.ts` ("imported rows"),
+  `test/trend-dump.test.ts`.
 - **RES-3: lists are bounded.** Pageable lists return at most 80 items; relationships read at most 100 ids; any other
   collection names its count and byte bound. _Enforced (main):_ `src/mastodon/pagination.ts`, `MAX_RELATIONSHIP_IDS` in
   `src/domain/accounts.ts`. _Gap: neither cap is tested._ _Enforced (main)_ for search: at
@@ -1600,6 +1622,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   _Enforced (main)_ for announcements: the list holds at most 16 (every live one), each within its measured conservative
   maximum of 248,997 JSON bytes, derived from its columns' caps ("Maxima of presented units"), admitted within `ARRAY_ANSWER_BYTES` as a backstop that never
   cuts; the Access admin's page holds at most 50; `test/announcement-bounds.test.ts`.
+  _Enforced (main)_ for trends: `GET /api/v1/trends/tags` holds at most 20 hashtags (Count), `/statuses` at most 40
+  statuses within the answer budget, continued at the statuses it consumed (Budget, Offset); the Access admin's pages
+  hold at most 20 hashtags and 40 statuses, each field through its bounded projection; `test/trends-maxima.test.ts`,
+  `test/trends.test.ts` ("reaches every status once").
 - **RES-4: stored derived data is bounded.** Snapshots, the KV cache, the spool and deliveries each have a size cap, a
   count cap or an expiry with a sweeper. _Enforced (main)_ for remote statuses: one
   status stores at most 4 attachments (Mastodon's limit) with 10,000 code points of description each, 100 hashtags
@@ -1640,6 +1666,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   reaction names per announcement, so reactions grow at most 8 rows and dismissals one per local account and
   announcement; `test/migrations.test.ts`,
   `test/admin-announcements.test.ts`.
+  _Enforced (main)_ for trends: at most 250 rows in each trend table (200 allowed and 50 for review, so rows not allowed
+  never push allowed ones out), 3 statuses per author and 10,000 decisions per review table, each cap refusing only a
+  new key; the round orders its writes delete, update, insert; `test/migrations.test.ts` ("0057_trends"),
+  `test/trends-round.test.ts` ("retention", "caps").
 - **RES-5: retries are bounded, but maintenance is not a failure.** Waiting out maintenance consumes no processing
   retry; real processing errors count against `max_retries`. _Enforced (main):_ `src/jobs/queue.ts`; `test/gate.test.ts`
   ("spool consumer"). Deliveries give up after 15 attempts (`min(30s·2^n, 12h)`, n the attempts so far) or at once on a
@@ -1854,6 +1884,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   ("the cron’s round"). An announcement's delete removes its reactions and dismissals before the row and counts every
   row it writes with `total_changes()` within `ANNOUNCEMENT_DELETE_ROWS` (4,096), refused before it writes past it;
   `test/admin-announcements.test.ts` ("an announcement’s delete").
+  _Enforced (main)_ for trends: the cron's round (`trendsRound`) deletes and writes at most 500 rows of each trend table
+  in one transaction, and its reads are metered against `TREND_ROW_CAPS.round` (3,076,600 bytes of row heap, which the
+  widest rows fill exactly); a status's batched delete reserves its trend row and review (6 + after) and an account's
+  final delete its review (3); `test/trends-bounds.test.ts` ("meters the round’s rows"), `test/cascade-guard.test.ts`
+  ("trend rows within a batch").
 - **RES-7: query work is bounded, not only the rows returned.** Feeds apply visibility and filters in the query before
   `LIMIT`. Context traversal visits a bounded number of statuses before sorting. A status keeps a bounded number and
   size of edits. _Enforced (main)_ for filtering before `LIMIT`: `src/domain/timelines.ts` (_Gap:
@@ -1956,6 +1991,14 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   suspension's reach reads the account's reporters a round of `REPORTER_ROUND` (250) at a time, a seek and an account
   read each, resumed by account id (`test/inbox-flag.test.ts`, `test/policy-bounds.test.ts`,
   `test/admin-suspension.test.ts` ("the account's reporters")).
+  _Enforced (main)_ for trends (MD-5): the round reads the newest 4,000 public originals from yesterday 00:00 UTC, at
+  most 100 hashtag rows of each and 8,000 in all, cut raw before any rule (materialized), returns at most 400 hashtag
+  candidates and scores at most 400 + 250 statuses; measured at saturation (an active suspend block over 8-label
+  domains, 4,000 distinct authors or 40 authors of 100 statuses, a status of 10,000 rejected hashtag rows) it reads
+  153,693 rows with distinct authors and 80,716 with repeated ones, the same with 10,000 or 1,000,000 older statuses
+  and 0 or 100,000 hidden ones in the window (`test/trends-cost.test.ts`). `GET /api/v1/trends/tags` reads 51,042 rows
+  for 20 hashtags with 201 or 10,000 public statuses each, half of them by unavailable authors
+  (`test/trends-maxima.test.ts`); both plans seek their indexes, with statistics taken before the data grew.
 
 #### Maxima of presented units (RES-3)
 
@@ -2003,11 +2046,21 @@ RPC limit.
 | ActivityPub Note: a local status at its bounds, 1,000 addressed  | 3,697,315         | 4,235,143       |                   | 1,337     | 3,165 | 50.5%          |
 | Its Create (the Note and its addressing again)                   |                   | 6,291,204       |                   |           |       | 75.0%          |
 | Announcement: each part derived from its caps                    |                   | 121,774         | 248,997           |           |       | 3.0%           |
+| Trending hashtag (Tag with history), derived from its caps       |                   | 4,508           | 4,572             |           |       | 0.1%           |
+| Access admin's trending hashtag, derived from its caps           |                   | 4,551           | 4,625             |           |       | 0.1%           |
+| Access admin's trending status, derived from its caps            |                   | 27,584          | 27,785            |           |       | 0.3%           |
 
 The most JSON is the emoji-poll fill's, the most SQLite bytes the raw fill's; the escaped fill presents the
 conversation in 6,792,894 bytes. The Note's local emoji snapshot is at its 12,288-byte bound with as many entries as
 fit (61, every url at its shortest), resolved to 14,850 bytes of `Emoji` tags (at most 64 × 44 bytes past the
 snapshot); an actor's at 6,144 bytes resolves to 30 tags of 7,404 bytes (`test/local-emoji-api.test.ts`).
+
+The trends shapes are derived the same way (`test/trends-maxima.test.ts`): a hashtag of a 1,024-byte name with its
+URL percent-encoded (three bytes a byte) and seven history days at 200 uses; an admin status of a 4,096-byte URL, a
+255-byte username, a domain cut at 253 code points and a 200-unit excerpt, each escaped to six bytes a unit, a
+supported language and a 24-byte time. Pages: 20 hashtags (91,461 bytes at most; 90,180 filled through the Store
+RPC), 20 admin hashtags, 40 admin statuses (1,111,440 at most; 1,103,401 filled through the Store RPC by imported
+rows whose parents pass every bound).
 
 An announcement's maxima are derived from caps, not from fills: each part's conservative JSON is computed by
 `test/announcement-bounds.test.ts` (`derivedAnnouncementMaxima` in `test/announcement-helpers.ts`) from the stored and
@@ -2584,6 +2637,9 @@ activity specs, cited in test names.
 | An announcement whose rendering passes 64 KiB after it was written (a mentioned account's URL grew) is shown with no link | The text is still shown in full, escaped; a write past the budget is refused (MD-4) | announcements need richer rendering |
 | An announcement's mentions follow the accounts as they are when read, as Mastodon's do | Mastodon resolves them live too; unavailable accounts are never linked (R1) | — |
 | Which new emoji a reaction may name is decided by workerd's ICU (`\p{RGI_Emoji}`) | Names already stored are unaffected; every name of Mastodon's emoji map passes | the runtime's ICU lags Mastodon's map |
+| Trends count only the newest 4,000 public originals of the last two days, so past that the oldest are not counted, which lowers `expected` and raises scores (MD-5)                                                                                                                                                                                                                                                         | The window keeps the round's cost flat; the constants shrink with no schema change                                                                                                                                                                                         | an instance receives more than 4,000 public posts in two days        |
+| Spam can fill the 50-row review pool and hide newer candidates from review                                                                                                                                                                                                                                                                                                                                                  | It cannot push out allowed trends (separate pools)                                                                                                                                                                                                                         | the review pool stays full of spam                                   |
+| A trending hashtag's `history` counts at most its newest 200 public posts of the 7 days (MD-5)                                                                                                                                                                                                                                                                                                                              | It bounds the anonymous list's reads; `GET /api/v1/tags/:id` keeps the full history                                                                                                                                                                                        | a client needs the full counts in the list                           |
 | An announcement taken down by its end time sends no `announcement.delete`, and a scheduled one is published up to 5 minutes late | Mastodon's scheduler does the same (MD-4); REST is authoritative | clients rely on the event |
 | Duplicate keys in a JSON OAuth body are not rejected; the last one wins                                                                                                                                                                                                                                      | RFC 6749 defines form bodies only, and Doorkeeper behaves the same                                                                                                                                                                                                         | a client depends on JSON bodies                                      |
 | Fedify 2.4.2 signs draft-cavage `(request-target)` without the query string                                                                                                                                                                                                                                  | Mastodon accepts it; reported upstream                                                                                                                                                                                                                                     | a peer rejects signed GETs to URLs with a query                      |

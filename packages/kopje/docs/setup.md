@@ -159,6 +159,16 @@ kopje-admin instance show_domain_blocks=users show_domain_blocks_rationale=disab
 kopje-admin instance description=                      # an empty value removes it
 ```
 
+Trends are worked out every 5 minutes from stored posts (docs/mastodon-deviations.md MD-5). Nothing trends until the
+Access admin approves it, unless `trendable_by_default=true`:
+
+```sh
+kopje-admin trends                                     # what trends now, approved or not, with each one's review
+kopje-admin trends approve-tag cats                    # or reject-tag
+kopje-admin trends approve <post id> --author          # or reject; --author decides for the author's posts
+kopje-admin instance trends=false                      # turn trends off (the lists answer [])
+```
+
 | Name                                                 | Bound                              | Shown by                                                 |
 | ---------------------------------------------------- | ---------------------------------- | -------------------------------------------------------- |
 | `title`                                              | 1,024 code points                  | `/api/v1/instance`, `/api/v2/instance`, `/about`         |
@@ -169,6 +179,8 @@ kopje-admin instance description=                      # an empty value removes 
 | `terms_of_service`                                   | HTML, 50,000 UTF-8 bytes           | `/api/v1/instance/terms_of_service`, `/terms-of-service` |
 | `terms_of_service_effective_date`                    | a date, `YYYY-MM-DD`               | the same                                                 |
 | `show_domain_blocks`, `show_domain_blocks_rationale` | `disabled`, `users` or `all`       | `/api/v1/instance/domain_blocks`                         |
+| `trends`                                             | `true` (default) or `false`        | `/api/v1/trends/tags` and `/statuses` (off: `[]`)        |
+| `trendable_by_default`                               | `true` or `false` (default)        | the same: unreviewed hashtags and posts trend when true  |
 
 - Values are trimmed of spaces, tabs, line feeds, vertical tabs, form feeds and carriage returns; a blank value is
   refused (send an empty value to remove one). The whole request is refused if any value is.

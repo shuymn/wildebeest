@@ -92,9 +92,24 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       shown.
     - Scheduled ones are published by the cron within 5 minutes, and ended ones are taken down there, with no event.
     - Where they differ from Mastodon: MD-4 in [docs/mastodon-deviations.md](docs/mastodon-deviations.md).
+- Trends, as Mastodon 4.5 works them out:
+    - `GET /api/v1/trends/tags` (and `/api/v1/trends`) and `GET /api/v1/trends/statuses`, which answered `[]`, list the
+      trending hashtags and posts with Mastodon's scores, thresholds (5 accounts using a hashtag today, more than
+      yesterday; 5 boosts and favourites on a post) and decay. They are worked out every 5 minutes from bounded
+      windows of stored posts.
+    - Nothing shows until the Access admin approves it (`kopje-admin trends`, `GET /admin/trends/tags|statuses`, `POST
+      /admin/trends/tags/approve|reject`, `POST /admin/trends/statuses/:id/approve|reject`, each logged), unless
+      `trendable_by_default=true`; `trends=false` turns trends off. Both are settings of `kopje-admin instance`.
+    - Posts are public, original, without a content warning, in a language Mastodon supports, by discoverable
+      authors, filtered for the viewer, one per author, the request's `Accept-Language` language first.
+    - Link trends and the link timeline are not implemented (MD-5 in
+      [docs/mastodon-deviations.md](docs/mastodon-deviations.md)).
+    - The admin trends lists of the Mastodon admin API answer the public trends; its approve and reject answer 403.
 
 ### Changed
 
+- `GET /api/v1/trends`, `/trends/tags`, `/trends/statuses` and `/trends/links` read the token a request sends, so an
+  invalid one answers 401, as Mastodon's do; without a token they may be cached for 15 seconds.
 - Answers of the instance endpoints Kopje did not serve change shape, as Mastodon's: an unset privacy policy or terms
   of service answers 404 `{"error":"Not Found"}` (a `/terms-of-service/:date` other than the stored date still
   answers `Record not found`), and `GET /api/v1/instance/activity` and a hidden block list answer 404 with an empty
@@ -143,7 +158,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds eight migrations (0049–0056), applied on the first request after the deploy; a rollback to an
+- Store schema: adds nine migrations (0049–0057), applied on the first request after the deploy; a rollback to an
   earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). On the
   representative store defined in `test/bench/migration-cost.ts`, migrations 0049–0056 together took 16.9–17.2
   seconds in three runs of the migration bench workflow on a 4-CPU GitHub-hosted runner, in workerd's local Durable
@@ -176,6 +191,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
       with their indexes and triggers; the streaming journal (`stream_events`) is rebuilt to admit the announcement
       events, with its rows, ids, triggers and index kept. A dump past the new bounds is refused
       ([docs/dump-format.md](docs/dump-format.md)).
+    - `0057_trends`: five empty tables (trend scores and the admin's reviews) with their indexes and triggers, and
+      triggers bounding the `trends` and `trendable_by_default` settings; it reads no existing row. A dump past the
+      new bounds is refused ([docs/dump-format.md](docs/dump-format.md)).
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.17] - 2026-10-19

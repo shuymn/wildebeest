@@ -350,6 +350,8 @@ const SAFE_INTERPOLATIONS = new Set([
 	'selectSql',
 	// As rowHeapSql: the heap of the rows one status reads (status-rows.ts), a number.
 	'statusRowTerms',
+	// statuses.url read through its stored bound (platform/stored-bounds.ts).
+	'statusUrlSql',
 	'suspendedSql',
 	'visibleSql',
 ])
@@ -434,10 +436,12 @@ const COMPARED_SQL = 'a tag name a stream matches in SQL, never returned'
 const WINDOW = "a merged window's stream key, order value or aggregate name, over ids"
 const POLL = "a poll's stored choices, matched against a vote or an update, never presented"
 const SNAPSHOT = "a field of an edit's media snapshot, bounded as an attachment's column (editMediaSql)"
+const SETTINGS = "the instance settings' stored-bound projections (settingProjectionSql), naming no bounded column"
 const NUMBER = 'a number constant (the trends round’s count clamp, TREND_OBSERVED_MAX), naming no column'
 
 const ALLOWED: Record<string, { count: number; reason: string }> = {
 	'src/domain/trends.ts interpolation TREND_OBSERVED_MAX': { count: 2, reason: NUMBER },
+	"src/domain/instance.ts interpolation projected.join(' ')": { count: 1, reason: SETTINGS },
 	// The round's raw cut: a status's first 100 names, matched by membership only (projecting them would change which
 	// rows count against the cut); the names the round returns go through tagNameSql.
 	'src/domain/trends.ts status_tags.name': { count: 1, reason: COMPARED_SQL },
