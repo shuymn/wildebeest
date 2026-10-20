@@ -484,7 +484,10 @@ describe('POST /admin/emojis', () => {
 		await setTeamAccess(store, team)
 		const token = 'import-token-0123456789abcdef0123456789'
 		const { request } = adminHarness(store, team, { IMPORT_TOKEN: token }, undefined, () => new TestCodec())
-		for (const headers of [{ 'Kopje-Import-Token': token }, { 'Kopje-Import-Session': 'a'.repeat(43) }]) {
+		for (const headers of [{ 'Kopje-Import-Token': token }, { 'Kopje-Import-Session': 'a'.repeat(43) }] as Record<
+			string,
+			string
+		>[]) {
 			for (const path of ['/admin/emojis', '/admin/emojis/123456789012345678']) {
 				const response = await request(path, {
 					method: 'POST',

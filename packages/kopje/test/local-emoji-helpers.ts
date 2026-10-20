@@ -7,6 +7,7 @@ import { TestCodec } from './media-helpers'
 import { ACCESS, ADMIN_EMAIL, setAccess } from './ops-helpers'
 import { type EmojiUploadResult, uploadEmoji } from '../src/mastodon/emoji-upload'
 import type { ImageCodec } from '../src/platform/images'
+import type { ImportAuthority } from '../src/platform/store-admin'
 import type { StoreStub } from '../src/platform/store-client'
 import { randomToken } from '../src/security/tokens'
 
@@ -152,6 +153,7 @@ export async function addEmoji(
 		now?: () => number
 		token?: string
 		monthlyTransforms?: number
+		authority?: ImportAuthority
 	} = {}
 ): Promise<EmojiUploadResult> {
 	const image = options.image ?? (await pngOf(16, 16))
@@ -162,7 +164,7 @@ export async function addEmoji(
 			bucket: env.MEDIA,
 			images: options.codec ?? new TestCodec(),
 			now: options.now ?? Date.now,
-			authority: ACCESS,
+			authority: options.authority ?? ACCESS,
 			monthlyTransforms: options.monthlyTransforms ?? MONTHLY_TRANSFORMS,
 			token: options.token ?? randomToken(),
 		},
@@ -218,4 +220,51 @@ export async function seedEmojiRow(
 		)
 	})
 	return { id: options.id, token }
+}
+
+// The most Emoji tags a local status's snapshot resolves to within STATUS_EMOJIS_BYTES (RES-3): every entry's url at
+// its shortest (a file token of 32 characters, as an import may hold) and every name at its shortest, so as many
+// entries as fit, padded to exactly `bytes` presented bytes by lengthening names. Inserted as an import writes them
+// (owner's kept PNG uploads and their emoji rows); the snapshot, as stored.
+export async function localSnapshotAtCap(
+	store: StoreStub,
+	owner: string,
+	bytes: number,
+	options: { origin?: string; base?: bigint } = {}
+): Promise<string> {
+	const origin = options.origin ?? 'https://kopje.test'
+	const base = options.base ?? 170_000_000_000_000_000n
+	const url = (i: number) => `${origin}/media/${`t${i}`.padEnd(32, 'x')}/full.png`
+	const entry = (n: number, u: number) => 67 + n + 2 * u
+	const u = url(0).length
+	const count = Math.min(64, Math.floor((bytes - 1) / entry(2, u)))
+	let spare = bytes - 1 - count * entry(2, u)
+	const pairs: [string, string][] = []
+	for (let i = 0; i < count; i++) {
+		const extra = Math.min(126, Math.ceil(spare / (count - i)))
+		spare -= extra
+		const name = `${i.toString(36).padStart(2, '0')}${'_'.repeat(extra)}`
+		pairs.push([name, url(i)])
+	}
+	await runInDurableObject(store, (_instance, state) => {
+		for (const [i, [name, link]] of pairs.entries()) {
+			const id = String(base + BigInt(i))
+			state.storage.sql.exec(
+				`INSERT INTO media_attachments (id, account_id, type, url, preview_url, file_token, content_type, meta,
+					processed)
+				VALUES (?, ?, 'image', ?, ?, ?, 'image/png', '{"original":{"width":1,"height":1}}', 1)`,
+				id,
+				owner,
+				link,
+				link.replace('/full.png', '/small.png'),
+				`t${i}`.padEnd(32, 'x')
+			)
+			state.storage.sql.exec(
+				"INSERT INTO custom_emojis (id, shortcode, created_at) VALUES (?, ?, '2026-10-12T00:00:00.000Z')",
+				id,
+				name
+			)
+		}
+	})
+	return JSON.stringify(pairs)
 }

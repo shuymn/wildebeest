@@ -28,14 +28,25 @@ import { actOnReport, fileRemoteReports, getAdminReport } from '../src/domain/re
 import { moderationRound } from '../src/domain/suspension'
 import { normalizeTag } from '../src/domain/tag-name'
 import { parseRemoteStatus } from '../src/federation/remote-status'
+import {
+	EMOJI_EDGE_LIMIT,
+	EMOJI_IMAGE_LIMIT,
+	EMOJI_INPUT_TYPES,
+	EMOJI_PREVIEW_LIMIT,
+	EMOJI_SERVED_TYPES,
+} from '../src/platform/emoji-image'
 import { ACTIVITY_ID_LIMIT, withinIdentityBound } from '../src/platform/identity-bounds'
 import { StoreUnavailableError, toStoreUnavailable } from '../src/platform/store-errors'
 import {
+	EMOJI_CATEGORY_BYTES,
+	EMOJI_CATEGORY_LENGTH,
 	emojiBoundsMigrationSql,
 	INSTANCE_SETTING_BOUNDS,
 	INSTANCE_SETTING_NAMES,
 	instanceBoundsMigrationSql,
 	type InstanceSettingName,
+	LOCAL_EMOJI_SHORTCODE,
+	MAX_ENABLED_EMOJIS,
 	storedBoundsMigrationSql,
 	storedInstanceSetting,
 } from '../src/platform/stored-bounds'
@@ -55,6 +66,7 @@ const SCHEMA_TABLES = [
 	'conversation_mutes',
 	'conversation_statuses',
 	'conversations',
+	'custom_emojis',
 	'deliveries',
 	'domain_block_cleanups',
 	'domain_blocks',
@@ -6062,4 +6074,216 @@ describe('0054_remote_reports', () => {
 		const twice = (await measure(2_100, 0)) - base
 		expect(Math.abs(twice - 2 * some)).toBeLessThanOrEqual(0.02 * some)
 	}, 120_000)
+})
+
+describe('0055_local_custom_emojis', () => {
+	const NAME = '0055_local_custom_emojis'
+	const at = NAMES.indexOf(NAME)
+	const ALICE = '100000000000000001'
+	const REMOTE = '100000000000000002'
+	const META = '{"original":{"width":1024,"height":1024},"small":{"width":640,"height":640}}'
+
+	it('repeats the bounds of emoji-image.ts and stored-bounds.ts in its literals', () => {
+		const sql = MIGRATIONS[at]?.sql ?? ''
+		expect([EMOJI_EDGE_LIMIT, MAX_ENABLED_EMOJIS, EMOJI_CATEGORY_LENGTH, EMOJI_CATEGORY_BYTES]).toEqual([
+			1024, 1000, 64, 256,
+		])
+		expect(sql).toContain(`BETWEEN 1 AND ${EMOJI_EDGE_LIMIT}`)
+		expect(sql).toContain(`>= ${MAX_ENABLED_EMOJIS}`)
+		expect(sql).toContain(`length(category) <= ${EMOJI_CATEGORY_LENGTH}`)
+		expect(sql).toContain(`BETWEEN 1 AND ${EMOJI_CATEGORY_BYTES}`)
+		expect(sql).toContain(`m.content_type IN (${EMOJI_SERVED_TYPES.map((t) => `'${t}'`).join(', ')})`)
+		expect(sql).toContain("shortcode NOT GLOB '*[^A-Za-z0-9_]*'")
+		expect(sql).toContain('BETWEEN 2 AND 128')
+		expect(LOCAL_EMOJI_SHORTCODE.source).toBe('^[A-Za-z0-9_]{2,128}$')
+		// Not in the file, but the limits it names: the Worker's checks (platform/emoji-image.ts).
+		expect([EMOJI_IMAGE_LIMIT, EMOJI_PREVIEW_LIMIT, EMOJI_INPUT_TYPES]).toEqual([
+			262_144,
+			524_288,
+			['image/png', 'image/gif', 'image/webp'],
+		])
+	})
+
+	it('keeps every row as it was, then holds every CHECK and trigger at its bound', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+			sql.exec(
+				`INSERT INTO accounts (id, uri, username, domain) VALUES
+					(?, 'https://kopje.test/ap/users/alice', 'alice', NULL), (?, 'https://r.example/u/bob', 'bob', 'r.example')`,
+				ALICE,
+				REMOTE
+			)
+			let n = 0
+			const media = (overrides: Record<string, string | number | null> = {}): string => {
+				const id = String(300_000_000_000_000_000n + BigInt(++n))
+				const row = {
+					id,
+					account_id: ALICE,
+					type: 'image',
+					url: `https://kopje.test/media/tok${String(n).padStart(29, '0')}/full.png`,
+					file_token: `tok${String(n).padStart(29, '0')}`,
+					content_type: 'image/png',
+					meta: META,
+					processed: 1,
+					gc_at: null,
+					status_id: null,
+					...overrides,
+				}
+				const columns = Object.keys(row)
+				sql.exec(
+					`INSERT INTO media_attachments (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`,
+					...Object.values(row)
+				)
+				return id
+			}
+			const kept = media()
+			const before = sql.exec('SELECT * FROM media_attachments ORDER BY rowid').toArray()
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+			expect(sql.exec('SELECT * FROM media_attachments ORDER BY rowid').toArray()).toEqual(before)
+			const insert = (id: string, values: Record<string, string | number | null> = {}) => {
+				const row = { id, shortcode: 'blob', created_at: '2026-10-12T00:00:00.000Z', ...values }
+				const columns = Object.keys(row)
+				sql.exec(
+					`INSERT INTO custom_emojis (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`,
+					...Object.values(row)
+				)
+			}
+			const remove = (id: string) => sql.exec('DELETE FROM custom_emojis WHERE id = ?', id)
+			// Shortcodes: 2 and 128 ASCII characters; 1, 129, '+', '-', non-ASCII and a NUL refused.
+			for (const shortcode of ['ab', 'x'.repeat(128), 'A_9']) {
+				insert(kept, { shortcode })
+				remove(kept)
+			}
+			for (const shortcode of ['a', 'x'.repeat(129), 'a+b', 'a-b', 'aé', 'ab\u0000', '\u0000ab', 'a b']) {
+				expect(() => insert(kept, { shortcode })).toThrow(/custom_emoji_shortcode_2_to_128_ascii/)
+			}
+			expect(() => insert(kept, { shortcode: 12 })).toThrow(/custom_emoji_shortcode/)
+			// Categories: 64 four-byte code points (256 bytes) and 64 three-byte ones; 65 code points, 257 bytes, NUL,
+			// U+0001, U+001F and DEL refused; empty refused (NULL is none).
+			for (const category of ['\u{1F600}'.repeat(64), '日'.repeat(64), 'a', null]) {
+				insert(kept, { category })
+				remove(kept)
+			}
+			for (const category of [
+				'日'.repeat(65),
+				'a'.repeat(257),
+				'a\u0000',
+				'\u0000',
+				'a\u0001',
+				'a\u001f',
+				'a\u007f',
+				'',
+			]) {
+				expect(() => insert(kept, { category })).toThrow(/custom_emoji_category_within_256_bytes/)
+			}
+			// Stored bytes only: lone surrogate bytes are 64 SQLite characters and 192 bytes, so the CHECK passes them.
+			sql.exec(
+				`INSERT INTO custom_emojis (id, shortcode, category, created_at)
+				VALUES (?, 'blob', CAST(X'${'EDA080'.repeat(64)}' AS TEXT), '2026-10-12T00:00:00.000Z')`,
+				kept
+			)
+			remove(kept)
+			// Ids, flags and times.
+			for (const id of ['1', `${kept}0`, kept.replace('3', 'x')]) {
+				expect(() => insert(id)).toThrow(/custom_emoji_id_is_a_snowflake|FOREIGN KEY|kept local upload/)
+			}
+			for (const flags of [{ disabled: 2 }, { visible_in_picker: -1 }, { disabled: null }] as Record<
+				string,
+				number | null
+			>[]) {
+				expect(() => insert(kept, flags)).toThrow(/custom_emoji_flags|NOT NULL/)
+			}
+			for (const created_at of ['2026-10-12T00:00:00Z', '2026-10-12 00:00:00.000Z', '2026-13-12T00:00:00.000Z', 'x']) {
+				expect(() => insert(kept, { created_at })).toThrow(/custom_emoji_created_at_iso/)
+			}
+			// The image: a kept, complete, unattached local upload served as PNG or WebP within the recorded edges.
+			const refused = /custom_emojis: the image is not a kept local upload within the emoji limits/
+			const cases: Record<string, Record<string, string | number | null>> = {
+				remote: { account_id: REMOTE },
+				unprocessed: { processed: 0 },
+				reservation: { url: '' },
+				doomed: { gc_at: '2026-10-12T00:00:00.000Z' },
+				jpeg: { content_type: 'image/jpeg', url: 'https://kopje.test/media/x/full.jpg' },
+				untokened: { file_token: null },
+				'no meta': { meta: null },
+				'no edges': { meta: '{"small":{"width":1,"height":1}}' },
+				'real edges': { meta: '{"original":{"width":64.0,"height":64}}' },
+				'text edges': { meta: '{"original":{"width":"64","height":64}}' },
+				'1025 wide': { meta: '{"original":{"width":1025,"height":1}}' },
+				'1025 tall': { meta: '{"original":{"width":1,"height":1025}}' },
+				'0 wide': { meta: '{"original":{"width":0,"height":1}}' },
+			}
+			for (const [label, overrides] of Object.entries(cases)) {
+				expect(() => insert(media(overrides)), label).toThrow(refused)
+			}
+			const attached = media()
+			sql.exec(
+				`INSERT INTO statuses (id, uri, account_id, visibility, published_at)
+				VALUES ('400000000000000001', 'https://kopje.test/ap/o/1', ?, 'public', 'x')`,
+				ALICE
+			)
+			sql.exec("UPDATE media_attachments SET status_id = '400000000000000001' WHERE id = ?", attached)
+			expect(() => insert(attached)).toThrow(refused)
+			expect(() => insert('399999999999999999')).toThrow(refused)
+			insert(media({ meta: '{"original":{"width":1024,"height":1}}', content_type: 'image/webp' }))
+			// One enabled emoji per shortcode; a disabled one may share it.
+			expect(() => insert(media())).toThrow(/UNIQUE constraint failed: custom_emojis.shortcode/)
+			insert(media(), { disabled: 1 })
+			// The id, shortcode and time never change; the flags and category may.
+			const id = sql.exec<{ id: string }>('SELECT id FROM custom_emojis WHERE disabled = 0').one().id
+			const immutable = /custom_emojis: an emoji's id, shortcode and time never change/
+			expect(() => sql.exec("UPDATE custom_emojis SET shortcode = 'other' WHERE id = ?", id)).toThrow(immutable)
+			expect(() =>
+				sql.exec("UPDATE custom_emojis SET created_at = '2026-10-13T00:00:00.000Z' WHERE id = ?", id)
+			).toThrow(immutable)
+			expect(() => sql.exec('UPDATE custom_emojis SET id = ? WHERE id = ?', kept, id)).toThrow(immutable)
+			sql.exec("UPDATE custom_emojis SET category = 'c', visible_in_picker = 0 WHERE id = ?", id)
+			// The image of an emoji is never deleted: its row's delete fails on the foreign key.
+			expect(() => sql.exec('DELETE FROM media_attachments WHERE id = ?', id)).toThrow(/FOREIGN KEY constraint failed/)
+		})
+	})
+
+	it('holds at most 1,000 enabled emoji, on insert and on enabling, disabled ones uncounted', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username) VALUES (?, 'https://kopje.test/ap/users/alice', 'alice')",
+				ALICE
+			)
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1002)
+				INSERT INTO media_attachments (id, account_id, type, url, file_token, content_type, meta, processed)
+				SELECT CAST(300000000000000000 + i AS TEXT), ?, 'image', 'https://kopje.test/media/t' || i || '/full.png',
+					printf('tok%029d', i), 'image/png', ?, 1 FROM n`,
+				ALICE,
+				META
+			)
+			sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 999)
+				INSERT INTO custom_emojis (id, shortcode, created_at)
+				SELECT CAST(300000000000000000 + i AS TEXT), 'e' || i, '2026-10-12T00:00:00.000Z' FROM n`
+			)
+			const insert = (i: number, disabled: number) =>
+				sql.exec(
+					"INSERT INTO custom_emojis (id, shortcode, disabled, created_at) VALUES (?, ?, ?, '2026-10-12T00:00:00.000Z')",
+					String(300_000_000_000_000_000n + BigInt(i)),
+					`e${i}`,
+					disabled
+				)
+			insert(1000, 0)
+			const over = /custom_emojis: more than 1000 enabled/
+			expect(() => insert(1001, 0)).toThrow(over)
+			insert(1001, 1)
+			expect(() => sql.exec("UPDATE custom_emojis SET disabled = 0 WHERE shortcode = 'e1001'")).toThrow(over)
+			sql.exec("UPDATE custom_emojis SET disabled = 1 WHERE shortcode = 'e1'")
+			sql.exec("UPDATE custom_emojis SET disabled = 0 WHERE shortcode = 'e1001'")
+			// A write that leaves `disabled` as it is, or keeps an enabled emoji enabled, is not judged.
+			sql.exec("UPDATE custom_emojis SET disabled = 0 WHERE shortcode = 'e2'")
+			expect(sql.exec('SELECT count(*) AS n FROM custom_emojis WHERE disabled = 0').one().n).toBe(1000)
+		})
+	})
 })
