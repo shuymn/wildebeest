@@ -9,6 +9,8 @@ import { BUILD, migratedStore } from './helpers'
 import { ACCESS, dumpViaRpc, importViaRpc, setAccess } from './ops-helpers'
 import { community, domainBlock, follow, getJson, post, remoteAccount, type User } from './status-helpers'
 import { csrfOf, ORIGIN, signIn } from './web-helpers'
+import { Db } from '../src/db/sql'
+import { suspendLocal, unsuspendLocal } from '../src/domain/suspension'
 import { NEXT_REQUEST, UNLOCK_ACCEPTS_PER_ROUND } from '../src/domain/unlock-accepts'
 import type { StoreStub } from '../src/platform/store-client'
 
@@ -145,6 +147,25 @@ describe('unlock acceptance', () => {
 		await patch(h, alice, { locked: true })
 		expect(await cursor(h.store, alice.id)).toBeNull()
 		expect(await round(h.store)).toMatchObject({ pending: false })
+		expect(await states(h.store, alice.id)).toEqual({ accepted: 20, pending: 10 })
+	})
+
+	it('ends with a suspension, and an unsuspension before the next round does not resume it', async () => {
+		const h = await setup()
+		const { alice } = h.users
+		await remoteRequests(h.store, alice.id, ['one.example'], 30)
+		await patch(h, alice, { locked: false })
+		await round(h.store)
+		expect(await states(h.store, alice.id)).toEqual({ accepted: 20, pending: 10 })
+		await runInDurableObject(h.store, (_instance, state) =>
+			state.storage.transactionSync(() => {
+				const db = new Db(state.storage.sql)
+				suspendLocal(db, alice.id, null, NOW)
+				unsuspendLocal(db, alice.id, NOW + 1)
+			})
+		)
+		expect(await cursor(h.store, alice.id)).toBeNull()
+		await round(h.store)
 		expect(await states(h.store, alice.id)).toEqual({ accepted: 20, pending: 10 })
 	})
 

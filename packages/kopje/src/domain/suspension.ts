@@ -136,12 +136,13 @@ function localState(db: Db, accountId: string): LocalState | undefined {
 // suspended already (Mastodon's suspend! sets suspended_at again and runs the suspension anew), which ends the jobs of
 // the epoch before. `by` is the admin who suspends: its suspend row in the moderation log is the job's action bound
 // (VIS-29), and the resolved reports name it. Without an admin (null), nothing is logged and the bound is the newest
-// log row. Returns S, or null for an account that is not local (nothing logged).
+// log row. It also ends an unlock acceptance job (unlock-accepts.ts), so an unsuspension does not resume it. Returns S,
+// or null for an account that is not local (nothing logged).
 export function suspendLocal(db: Db, accountId: string, by: Admin | null, now: number): string | null {
 	const at = iso(now)
 	const epoch = db.first<{ epoch: number }>(
-		`UPDATE local_accounts SET suspended_at = ?, credential_epoch = credential_epoch + 1 WHERE account_id = ?
-		RETURNING credential_epoch AS epoch`,
+		`UPDATE local_accounts SET suspended_at = ?, credential_epoch = credential_epoch + 1, accept_requests_after = NULL
+		WHERE account_id = ? RETURNING credential_epoch AS epoch`,
 		at,
 		accountId
 	)?.epoch
