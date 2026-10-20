@@ -172,6 +172,20 @@ describe('readParams: body and text bounds', () => {
 			ok: false,
 			status: 413,
 		})
+		// Every text part counts as sent, also one a later part of its declared name replaces.
+		const big = 'x'.repeat(2 * limit)
+		expect(
+			await readParams(
+				multipart([
+					['avatar', big],
+					['avatar', ''],
+				]),
+				{ limit, files: FILES }
+			)
+		).toEqual({
+			ok: false,
+			status: 413,
+		})
 		// The query counts too.
 		const withQuery = new Request('https://kopje.test/x?q=1', {
 			method: 'POST',

@@ -132,6 +132,16 @@ describe('update_credentials: bounds', () => {
 			formOf([['note', `${note.slice(0, API_BODY_LIMIT - 4)}\u{1F600}`]])
 		)
 		expect(over.status).toBe(413)
+		// A 2 MiB text avatar replaced by an empty one still counts.
+		const replaced = await patch(
+			h,
+			h.users.alice.token,
+			formOf([
+				['avatar', 'x'.repeat(2 * API_BODY_LIMIT)],
+				['avatar', ''],
+			])
+		)
+		expect(replaced.status).toBe(413)
 	}, 60_000)
 })
 

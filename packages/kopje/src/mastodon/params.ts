@@ -147,8 +147,9 @@ export async function readParams(request: Request, options: ReadOptions = {}): P
 	}
 	const limit = options.limit ?? API_BODY_LIMIT
 	let parsed: Params
+	let formText: number | null
 	try {
-		parsed = await parseBody(contentType, body, options.files)
+		;({ params: parsed, formText } = await parseCounted(contentType, body, options.files))
 	} catch (error) {
 		return { ok: false, status: error instanceof ParamsRefused ? error.status : 400 }
 	}
@@ -160,11 +161,14 @@ export async function readParams(request: Request, options: ReadOptions = {}): P
 		return value === undefined ? [] : [[name, value]]
 	})
 	const entries = [...parsed.entries, ...query.filter(([key]) => !names.has(key)), ...declaredQuery]
-	// A JSON body's names are generated, bounded by the path budget, and its values by the body; a form body's text is
-	// bounded here, so the files a multipart body may carry cannot make room for more text.
-	let text = 0
-	for (const [key, value] of mediaTypeOf(contentType) === 'application/json' ? [] : [...parsed.entries, ...query]) {
-		text += utf8Length(key) + utf8Length(value)
+	// A JSON body's names are generated, bounded by the path budget, and its values by the body; a form body's text,
+	// every text part as sent (before the last-part selection) and the query, is bounded here, so the files a
+	// multipart body may carry cannot make room for more text.
+	if (formText !== null) {
+		let text = formText
+		for (const [key, value] of query) {
+			text += utf8Length(key) + utf8Length(value)
+		}
 		if (text > limit) {
 			return { ok: false, status: 413 }
 		}
@@ -178,10 +182,19 @@ export async function readParams(request: Request, options: ReadOptions = {}): P
 // filename is text to workerd's parser (Rack drops it as an empty file field): empty, it reads as absent where the
 // route reads a blank value so; with bytes, as a text value (docs/mastodon-deviations.md).
 export async function parseBody(contentType: string, body: Uint8Array, files?: FileRule): Promise<Params> {
+	return (await parseCounted(contentType, body, files)).params
+}
+
+// parseBody, with the UTF-8 bytes of every text part's name and value of a form body (null for JSON and no body).
+async function parseCounted(
+	contentType: string,
+	body: Uint8Array,
+	files?: FileRule
+): Promise<{ params: Params; formText: number | null }> {
 	const declared = new Set(files?.names ?? [])
 	const type = mediaTypeOf(contentType)
 	if (body.byteLength === 0) {
-		return new Params([])
+		return { params: new Params([]), formText: null }
 	}
 	if (type === 'application/json') {
 		const entries: [string, string][] = []
@@ -189,14 +202,18 @@ export async function parseBody(contentType: string, body: Uint8Array, files?: F
 		// JSON.parse keeps the last of duplicate keys, so repeated() sees form and query duplicates only. RFC 6749 defines
 		// form bodies alone, and Doorkeeper (Mastodon) lets the last JSON key win as well.
 		flatten(JSON.parse(new TextDecoder().decode(body)), { entries, objects, paths: 0, units: 0 })
-		return selectDeclared(entries, new Map(), objects, declared)
+		return { params: selectDeclared(entries, new Map(), objects, declared), formText: null }
 	}
 	if (type === 'application/x-www-form-urlencoded' || type === 'multipart/form-data') {
 		const form = await new Response(body, { headers: { 'content-type': contentType } }).formData()
 		const entries: [string, string][] = []
 		const chosen = new Map<string, string | File>()
+		let formText = 0
 		// FormData's entries are typed as strings by the runtime types; a file part is a File.
 		for (const [key, value] of form.entries() as Iterable<[string, string | File]>) {
+			if (typeof value === 'string') {
+				formText += utf8Length(key) + utf8Length(value)
+			}
 			if (declared.has(key)) {
 				chosen.set(key, value)
 			} else if (typeof value === 'string') {
@@ -211,9 +228,9 @@ export async function parseBody(contentType: string, body: Uint8Array, files?: F
 				fileValues.set(key, value)
 			}
 		}
-		return new Params(entries, fileValues, new Set())
+		return { params: new Params(entries, fileValues, new Set()), formText }
 	}
-	return new Params([])
+	return { params: new Params([]), formText: null }
 }
 
 // JSON and form text for a declared name keeps only its last value, so get(name) reads what Rails would assign.
