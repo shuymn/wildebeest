@@ -33,6 +33,7 @@ import {
 	publicTimeline,
 	tagTimeline,
 } from '../src/domain/timelines'
+import { type TrendStatusPage, trendingStatuses } from '../src/domain/trends'
 import type { StoreStub } from '../src/platform/store-client'
 import type { StoreOperation } from '../src/platform/store-kernel'
 
@@ -239,6 +240,8 @@ describe('the status read endpoints agree with the model of their rules', () => 
 				'statuses by id',
 				'suggestions',
 				'tag',
+				'trends',
+				'trends, anonymous',
 			].sort()
 		)
 	})
@@ -891,6 +894,85 @@ function check(sql: SqlStorage, c: Case): string[] {
 			)
 			if (marked !== null) {
 				problems.push(`conversations ${nameOf(viewer)}: marks another account's conversation ${other.id}`)
+			}
+		}
+	}
+	// R41: the trending statuses, from rows and reviews seeded as an import writes them (every status in English, none
+	// sensitive), against the model's list for every viewer, page by page by the links' rule; the anonymous list is
+	// within the anonymous public timeline. The first trendable status is an approved control at the top score.
+	sql.exec("UPDATE statuses SET language = 'en'")
+	const discoverable = (x: number) => c.discoverable[x] === 1
+	const control = all.find((s) => m.trendable(s, discoverable))
+	const rows: { status: number; score: number }[] = []
+	const perAuthor = new Map<number, number>()
+	for (const s of all) {
+		const author = m.status(s).author
+		if ((s % 3 === 2 && s !== control) || (perAuthor.get(author) ?? 0) >= 3) {
+			continue
+		}
+		perAuthor.set(author, (perAuthor.get(author) ?? 0) + 1)
+		rows.push({ status: s, score: s === control ? 100 : 1 + ((s * 7) % 11) })
+	}
+	const reviews = { status: new Map<number, boolean>(), account: new Map<number, boolean>(), byDefault: false }
+	for (const { status: s } of rows) {
+		if (s % 5 === 0 || s === control) {
+			reviews.status.set(s, true)
+		} else if (s % 5 === 1) {
+			reviews.status.set(s, false)
+		}
+		const author = m.status(s).author
+		if (author % 3 === 0) {
+			reviews.account.set(author, true)
+		}
+	}
+	for (const row of rows) {
+		sql.exec(
+			'INSERT INTO trend_statuses (status_id, account_id, score) VALUES (?, ?, ?)',
+			statusId(row.status),
+			accountId(m.status(row.status).author),
+			row.score
+		)
+	}
+	const at = world.now
+	for (const [s, trendable] of reviews.status) {
+		sql.exec(
+			'INSERT INTO status_trend_reviews (status_id, trendable, reviewed_at) VALUES (?, ?, ?)',
+			statusId(s),
+			trendable ? 1 : 0,
+			at
+		)
+	}
+	for (const [x, trendable] of reviews.account) {
+		sql.exec(
+			'INSERT INTO account_trend_reviews (account_id, trendable, reviewed_at) VALUES (?, ?, ?)',
+			accountId(x),
+			trendable ? 1 : 0,
+			at
+		)
+	}
+	for (const viewer of viewers) {
+		const listed: number[] = []
+		for (let offset = 0, i = 0; i < 64; i++) {
+			const page = ok<TrendStatusPage>(
+				run(trendingStatuses, { ...optional(viewer), offset, limit: 2, language: 'en', present: PRESENT }),
+				'trends'
+			)
+			listed.push(...page.items.map((value) => status('trends', viewer, value, () => true)))
+			if (!page.cut && page.read < 2) {
+				break
+			}
+			offset += page.cut ? page.consumed : 2
+		}
+		const expected = m.trending(rows, reviews, discoverable, viewer)
+		equal('trends', viewer, listed, expected)
+		if (viewer === null) {
+			if (listed.length > 0) {
+				shown.add('trends, anonymous')
+			}
+			for (const s of listed) {
+				if (!(publicFeed(s) && m.listable(s, null))) {
+					problems.push(`trends anonymous: ${statusName(s)} is not on the public timeline`)
+				}
 			}
 		}
 	}

@@ -81,6 +81,7 @@ import * as suggestions from './domain/suggestions'
 import { runModerationJobs, suspendAccount } from './domain/suspension'
 import * as tags from './domain/tags'
 import * as timelines from './domain/timelines'
+import * as trends from './domain/trends'
 import * as webPages from './domain/web-pages'
 import * as webSession from './domain/web-session'
 import {
@@ -1701,6 +1702,38 @@ export class Store extends DurableObject<Env> {
 
 	announcementRound(callerBuild: string, input: OperationInput<typeof announcements.announcementRound>) {
 		return this.#kernel.execute(callerBuild, announcements.announcementRound, input)
+	}
+
+	// Trends (domain/trends.ts): the public lists, and the cron's round.
+
+	trendingTags(callerBuild: string, input: OperationInput<typeof trends.trendingTags>) {
+		return this.#kernel.execute(callerBuild, trends.trendingTags, input)
+	}
+
+	trendingStatuses(callerBuild: string, input: OperationInput<typeof trends.trendingStatuses>) {
+		return this.#kernel.execute(callerBuild, trends.trendingStatuses, input)
+	}
+
+	// The Access admin's lists and reviews from /admin/trends, each at the Store's own time.
+
+	adminTrendTags(callerBuild: string, input: Omit<OperationInput<typeof trends.adminTrendTags>, 'now'>) {
+		return this.#kernel.execute(callerBuild, trends.adminTrendTags, { ...input, now: Date.now() })
+	}
+
+	adminTrendStatuses(callerBuild: string, input: OperationInput<typeof trends.adminTrendStatuses>) {
+		return this.#kernel.execute(callerBuild, trends.adminTrendStatuses, input)
+	}
+
+	reviewTrendTag(callerBuild: string, input: Omit<OperationInput<typeof trends.reviewTrendTag>, 'now'>) {
+		return this.#kernel.execute(callerBuild, trends.reviewTrendTag, { ...input, now: Date.now() })
+	}
+
+	reviewTrendStatus(callerBuild: string, input: Omit<OperationInput<typeof trends.reviewTrendStatus>, 'now'>) {
+		return this.#kernel.execute(callerBuild, trends.reviewTrendStatus, { ...input, now: Date.now() })
+	}
+
+	trendsRound(callerBuild: string, input: OperationInput<typeof trends.trendsRound>) {
+		return this.#kernel.execute(callerBuild, trends.trendsRound, input)
 	}
 
 	// Search (B4b).

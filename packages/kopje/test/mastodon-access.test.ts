@@ -41,28 +41,6 @@ const EXCEPTIONS: Record<string, Exception> = {
 		reason: 'WellKnown::OAuthMetadataController, not an API controller: public, it reads no token',
 	},
 
-	// Answers that do not depend on the caller, so no token is read.
-	'GET /api/v1/trends': {
-		kopje: 'none token, scopes any, no user required',
-		mastodon: 'optional token, scopes any, no user required',
-		reason: 'answered empty to everyone; Mastodon filters trends for the viewer',
-	},
-	'GET /api/v1/trends/tags': {
-		kopje: 'none token, scopes any, no user required',
-		mastodon: 'optional token, scopes any, no user required',
-		reason: 'answered empty to everyone; Mastodon filters trends for the viewer',
-	},
-	'GET /api/v1/trends/statuses': {
-		kopje: 'none token, scopes any, no user required',
-		mastodon: 'optional token, scopes any, no user required',
-		reason: 'answered empty to everyone; Mastodon filters trends for the viewer',
-	},
-	'GET /api/v1/trends/links': {
-		kopje: 'none token, scopes any, no user required',
-		mastodon: 'optional token, scopes any, no user required',
-		reason: 'answered empty to everyone; Mastodon filters trends for the viewer',
-	},
-
 	// Differences RouteAccess cannot express, enforced elsewhere or left open.
 	'GET /api/v1/announcements': {
 		kopje: 'required token, scopes any, no user required',

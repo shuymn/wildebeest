@@ -11,7 +11,9 @@ import {
 	INSTANCE_TITLE_LIMIT,
 	type InstanceDocument,
 	isBlank,
-	storedInstanceSetting,
+	settingProjectionSql,
+	type StoredSettingName,
+	storedSetting,
 	storedText,
 	trimBlank,
 } from '../platform/stored-bounds'
@@ -252,6 +254,8 @@ export const INSTANCE_ADMIN_NAMES = [
 	'terms_of_service_effective_date',
 	'show_domain_blocks',
 	'show_domain_blocks_rationale',
+	'trends',
+	'trendable_by_default',
 ] as const
 
 type AdminName = (typeof INSTANCE_ADMIN_NAMES)[number]
@@ -264,12 +268,17 @@ export type SetInstanceSettingsResult =
 	| { ok: true; values: InstanceAdminValues }
 	| { ok: false; code: 'wrong-authority' | 'invalid-instance-setting'; message: string }
 
+// Each name read through its stored bound's projection (storedSetting's), so a stored value never shows past it.
 function adminValues(db: Db): InstanceAdminValues {
-	const rows = db.all<{ name: string; value: string }>(
-		`SELECT name, value FROM instance_settings WHERE name IN (${SHOWN_NAMES.map(() => '?').join(', ')})`,
+	const projected = SHOWN_NAMES.map(
+		(name) => `WHEN '${name}' THEN ${settingProjectionSql(name as StoredSettingName, 'value')}`
+	)
+	const rows = db.all<{ name: string; value: string | null }>(
+		`SELECT name, CASE name ${projected.join(' ')} END AS value FROM instance_settings
+		WHERE name IN (${SHOWN_NAMES.map(() => '?').join(', ')})`,
 		...SHOWN_NAMES
 	)
-	const values = new Map(rows.map((row) => [row.name, row.value]))
+	const values = new Map(rows.flatMap((row) => (row.value === null ? [] : [[row.name, row.value] as const])))
 	return Object.fromEntries(SHOWN_NAMES.flatMap((name) => (values.has(name) ? [[name, values.get(name)!]] : [])))
 }
 
@@ -318,18 +327,24 @@ function adminValue(name: AdminName, raw: unknown): string | null | { refused: s
 			}
 			break
 		case 'terms_of_service_effective_date':
-			if (storedInstanceSetting(name, value) !== value) {
+			if (storedSetting(name, value) !== value) {
 				return { refused: 'terms_of_service_effective_date must be a date, YYYY-MM-DD' }
 			}
 			break
 		case 'show_domain_blocks':
 		case 'show_domain_blocks_rationale':
-			if (storedInstanceSetting(name, value) !== value) {
+			if (storedSetting(name, value) !== value) {
 				return { refused: `${name} must be disabled, users or all` }
 			}
 			break
+		case 'trends':
+		case 'trendable_by_default':
+			if (storedSetting(name, value) !== value) {
+				return { refused: `${name} must be true or false` }
+			}
+			break
 	}
-	if (storedInstanceSetting(name, value) !== value) {
+	if (storedSetting(name, value) !== value) {
 		throw new Error(`${name}: a value the admin write accepts is past its stored bound`)
 	}
 	return value

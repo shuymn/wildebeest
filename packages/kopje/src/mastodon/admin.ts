@@ -64,10 +64,6 @@ export const notAllowed = afterToken(() => mastodonError(403, NOT_ALLOWED))
 // allows, IP blocks, email domain blocks or canonical email blocks.
 export const recordNotFound = afterToken(() => mastodonError(404, 'Record not found'))
 
-// GET /api/v1/admin/trends/{tags,links,statuses}: without manage_taxonomies, Mastodon answers the public trends
-// (`super`), which are empty in Kopje (placeholders.emptyList).
-export const trends = afterToken((c) => c.json([]))
-
 // ---- Reports (Api::V1::Admin::ReportsController, app/controllers/api/v1/admin/reports_controller.rb;
 // domain/reports.ts). Mastodon's set_report precedes manage_reports policy (404/403 leaks existence). Kopje authorizes
 // the OAuth admin first (R37, VIS-29): others always get 403; an authorized lookup of a missing report returns 404.

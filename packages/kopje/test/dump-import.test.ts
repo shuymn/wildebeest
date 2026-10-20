@@ -267,6 +267,25 @@ describe('dump', () => {
 	// the snapshots verbatim, at their stored caps, and the import's triggers accept them.
 	// A3 of the announcements design: a dump taken before 0056_announcements restores into a Store at its migrations
 	// (an import requires the same migrations), which then upgrades through 0056 with its rows and no announcement.
+	// A dump taken before 0057_trends restores into a Store at its migrations, which then upgrades through 0057 with its
+	// rows and no trend.
+	it('restores a dump taken before 0057_trends, which then upgrades through it', async () => {
+		await restoredBefore(
+			'0057_trends',
+			(sql) => {
+				sql.exec(
+					"INSERT INTO accounts (id, uri, username) VALUES ('100000000000000001', 'https://kopje.test/ap/users/a', 'a')"
+				)
+			},
+			async (sql, upgrade) => {
+				expect(sql.exec("SELECT 1 FROM sqlite_master WHERE name = 'trend_tags'").toArray()).toEqual([])
+				expect(await upgrade()).toMatchObject({ ok: true, applied: ['0057_trends'] })
+				expect(sql.exec('SELECT username FROM accounts').toArray()).toEqual([{ username: 'a' }])
+				expect(sql.exec('SELECT count(*) AS n FROM trend_tags').one().n).toBe(0)
+			}
+		)
+	}, 120_000)
+
 	it('restores a dump taken before 0056_announcements, which then upgrades through it', async () => {
 		await restoredBefore(
 			'0056_announcements',

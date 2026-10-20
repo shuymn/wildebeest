@@ -354,6 +354,61 @@ export class PolicyModel {
 		)
 	}
 
+	// R41 (Trends::Statuses#eligible?, trendableStatusSql), over a world whose statuses carry no content warning, are
+	// not sensitive, are published before its time and are in a supported language (as policy-endpoints seeds them):
+	// a public original that is not a reply (an unresolved one included) by an available, discoverable author, quoting
+	// nothing or, through a quote that is accepted or not legacy, a present public status by an available,
+	// discoverable author.
+	trendable(s: number, discoverable: (x: number) => boolean): boolean {
+		const status = this.status(s)
+		const plain = (x: number) => this.available(x) && discoverable(x)
+		if (
+			status.visibility !== 'public' ||
+			status.reblogOf !== null ||
+			status.replyTo !== null ||
+			status.replyToUnknown ||
+			!plain(status.author)
+		) {
+			return false
+		}
+		const quote = this.world.quotes.find((q) => q.status === s)
+		if (quote === undefined) {
+			return true
+		}
+		if ((quote.state !== 'accepted' && quote.legacy) || quote.quoted === null) {
+			return false
+		}
+		const quoted = this.status(quote.quoted)
+		return quoted.visibility === 'public' && plain(quoted.author)
+	}
+
+	// R41's list (StatusTrend.allowed, trendingStatuses): of the stored trend rows, each author's top-scoring ones (the
+	// maximum over every stored row of the author, taken before allowance), allowed (the status's review, else the
+	// author's, else `byDefault`) and trendable, by score then id (newest first), the first 200; then for `viewer`,
+	// those the list rule passes (R8).
+	trending(
+		rows: readonly { status: number; score: number }[],
+		reviews: { status: ReadonlyMap<number, boolean>; account: ReadonlyMap<number, boolean>; byDefault: boolean },
+		discoverable: (x: number) => boolean,
+		viewer: Viewer
+	): number[] {
+		const top = new Map<number, number>()
+		for (const row of rows) {
+			const author = this.status(row.status).author
+			top.set(author, Math.max(top.get(author) ?? -Infinity, row.score))
+		}
+		return rows
+			.filter((row) => {
+				const author = this.status(row.status).author
+				const allowed = reviews.status.get(row.status) ?? reviews.account.get(author) ?? reviews.byDefault
+				return row.score === top.get(author) && allowed && this.trendable(row.status, discoverable)
+			})
+			.sort((a, b) => b.score - a.score || b.status - a.status)
+			.slice(0, 200)
+			.map((row) => row.status)
+			.filter((s) => this.listable(s, viewer))
+	}
+
 	// Whether the status is a reply, to a stored status or to one never stored.
 	isReply(s: number): boolean {
 		const { replyTo, replyToUnknown } = this.status(s)

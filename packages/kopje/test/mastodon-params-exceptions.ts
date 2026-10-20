@@ -54,15 +54,12 @@ export const PARAM_EXCEPTIONS: Exceptions = {
 	),
 
 	// Features not built yet: answered as Mastodon with the feature off.
-	'GET /api/v1/trends': PLACEHOLDER('limit', 'offset'),
-	'GET /api/v1/trends/tags': PLACEHOLDER('limit', 'offset'),
-	'GET /api/v1/trends/statuses': PLACEHOLDER('limit', 'offset'),
-	'GET /api/v1/trends/links': PLACEHOLDER('limit', 'offset'),
-	'GET /api/v1/timelines/link': PLACEHOLDER(...PAGE, 'local', 'remote', 'url'),
-	'GET /api/v1/admin/trends/links': PLACEHOLDER('limit', 'offset'),
-	'GET /api/v1/admin/trends/statuses': PLACEHOLDER('limit', 'offset'),
-	'GET /api/v1/admin/trends/tags': PLACEHOLDER('limit', 'offset'),
 	'GET /api/v1/admin/domain_allows': PLACEHOLDER(...PAGE),
+
+	// Link trends and the link timeline are not implemented (MD-5).
+	'GET /api/v1/trends/links': accepted('MD-5', 'limit', 'offset'),
+	'GET /api/v1/timelines/link': accepted('MD-5', ...PAGE, 'local', 'remote', 'url'),
+	'GET /api/v1/admin/trends/links': accepted('MD-5', 'limit', 'offset'),
 
 	// Admin features not served.
 	'POST /api/v1/admin/dimensions': NOT_SERVED('end_at', 'keys[]', 'limit', 'start_at'),

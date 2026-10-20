@@ -1358,8 +1358,9 @@ export function purgeBatch(db: Db, uri: string, now: number): boolean {
 		)
 		spend(db, budget, 'DELETE FROM mutes WHERE id IN (SELECT id FROM mutes WHERE target_account_id = ? LIMIT ?)', id)
 	}
-	// The final account delete and the job's completion are two more rows.
-	if (others || budget.left() < 2 || accountHasRows(db, id)) {
+	// The final account delete, its account_trend_reviews row (cascaded, one at most) and the job's completion are three
+	// more rows.
+	if (others || budget.left() < 3 || accountHasRows(db, id)) {
 		return true
 	}
 	db.run('DELETE FROM accounts WHERE id = ? AND domain IS NOT NULL', id)
@@ -1861,10 +1862,11 @@ function deleteStatusWithin(db: Db, statusId: string, budget: Budget, after = 0)
 			OR EXISTS (SELECT 1 FROM statuses WHERE in_reply_to_id = ?1 OR reblog_of_id = ?1)`,
 		statusId
 	)
-	// The status's delete writes at most four rows: the status, its poll (cascaded), the account's last status (moved
-	// back by the trigger of migration 0021_directory when it is the account's newest), and the recount of its parent or
-	// of its original (a status is never both a reply and a boost); `after` is the caller's rows after it.
-	if (children !== undefined || hasPollVotes(db, { statusId }) || budget.left() < 4 + after) {
+	// The status's delete writes at most six rows: the status, its poll, its trend_statuses row and its
+	// status_trend_reviews row (cascaded, one each at most), the account's last status (moved back by the trigger of
+	// migration 0021_directory when it is the account's newest), and the recount of its parent or of its original (a
+	// status is never both a reply and a boost); `after` is the caller's rows after it.
+	if (children !== undefined || hasPollVotes(db, { statusId }) || budget.left() < 6 + after) {
 		return false
 	}
 	db.run('DELETE FROM statuses WHERE id = ?', statusId)

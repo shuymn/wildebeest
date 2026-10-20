@@ -1,6 +1,7 @@
 import type { QuoteState } from './quotes'
 import { fixedColumns, selectSql } from '../db/columns'
 import type { Db } from '../db/sql'
+import { isoTimeSql } from '../platform/stored-bounds'
 
 // Audience and visibility (design §4 "audience and visibility", Mastodon 4.7.3; docs/visibility.md). One module decides
 // who may see a status or an account, for every read path, who is notified, whom an author may address, and how an
@@ -221,7 +222,8 @@ function guardedSql(covered: string): string {
 // domain when it is a suspend. A child noop therefore exempts its subdomain tree from a parent's suspend. Each key's
 // suffixes are walked from the longest, and the walk stops at the first one a block names (the nearest), so the rule
 // is that block's; only suffixes of 2 to MAX_BLOCK_LABELS labels are sought, at most two unique seeks each (the walk's
-// and the match's). The keys and the walk are CTEs, whose expressions do not add to the depth of the expression that
+// and the match's; CROSS JOIN keeps the match a seek by domain for each suffix, whatever the statistics say of the
+// blocks). The keys and the walk are CTEs, whose expressions do not add to the depth of the expression that
 // holds this one (SQLite limits it to 100 in workerd).
 function coveredSql(keys: string): string {
 	const sought = `BETWEEN 1 AND ${MAX_BLOCK_LABELS - 1}`
@@ -229,7 +231,7 @@ function coveredSql(keys: string): string {
 			ps(d, dots) AS (SELECT d, length(d) - length(replace(d, '.', '')) FROM pk
 				UNION ALL SELECT substr(d, instr(d, '.') + 1), dots - 1 FROM ps WHERE dots > 1
 					AND NOT EXISTS (SELECT 1 FROM main.instance_domain_blocks pn WHERE ps.dots ${sought} AND pn.domain = ps.d))
-		SELECT 1 FROM ps JOIN main.instance_domain_blocks pr ON pr.domain = ps.d
+		SELECT 1 FROM ps CROSS JOIN main.instance_domain_blocks pr ON pr.domain = ps.d
 		WHERE ps.dots ${sought} AND pr.severity = 'suspend')`
 }
 
@@ -368,6 +370,28 @@ export function announcementShownSql(a: string): string {
 // with it in a CASE, which skips the lookup when it is false (an AND may evaluate both operands).
 function remoteSql(viewer: string): string {
 	return `EXISTS (SELECT 1 FROM main.accounts pv WHERE pv.id = ${viewer} AND pv.domain IS NOT NULL)`
+}
+
+// R41 (Trends::Statuses#eligible?, app/models/trends/statuses.rb:91-115): whether the status row `s` may trend at
+// `now` (an ISO time), `langs` a JSON array of the languages Mastodon supports (trends.ts TREND_LANGUAGES): a public
+// original that is not a reply (an unresolved reply too), without a content warning (ASCII-trimmed) and not sensitive,
+// in a supported language, published by `now` (its published_at read as the 24-byte ISO form, isoTimeSql), by an
+// available and discoverable author whom anyone may see (R2 with no viewer), and quoting nothing or a status its quote
+// lets through (Quote#acceptable?: accepted, or not legacy) that is present, public, by an available and discoverable
+// author, not sensitive and without a content warning. Every such status is on the anonymous public timeline, so a
+// trend list shows nothing a public read would not. Whether a trend is allowed (reviews) is trends.ts's.
+export function trendableStatusSql(s: string, now: string, langs: string): string {
+	const plain = (r: string) =>
+		`${r}.sensitive = 0 AND trim(${r}.spoiler_text, ' ' || char(9, 10, 11, 12, 13)) = ''
+		AND EXISTS (SELECT 1 FROM main.accounts ${r}_ta WHERE ${r}_ta.id = ${r}.account_id AND ${r}_ta.discoverable = 1)`
+	return `(${s}.visibility = 'public' AND ${s}.reblog_of_id IS NULL AND ${s}.in_reply_to_uri IS NULL AND ${plain(s)}
+		AND ${s}.language IN (SELECT value FROM json_each(${langs}))
+		AND ${isoTimeSql(`${s}.published_at`)} <= ${now}
+		AND ${visibleSql(s, 'NULL')}
+		AND (NOT EXISTS (SELECT 1 FROM main.quotes ${s}_tq WHERE ${s}_tq.status_id = ${s}.id)
+			OR EXISTS (SELECT 1 FROM main.quotes ${s}_tq CROSS JOIN main.statuses ${s}_tqs ON ${s}_tqs.id = ${s}_tq.quoted_status_id
+				WHERE ${s}_tq.status_id = ${s}.id AND (${s}_tq.state = 'accepted' OR ${s}_tq.legacy = 0)
+					AND ${s}_tqs.visibility = 'public' AND ${plain(`${s}_tqs`)} AND ${availableSql(`${s}_tqs.account_id`)})))`
 }
 
 // R2 (StatusPolicy#show?): whether `viewer` may see the row itself.

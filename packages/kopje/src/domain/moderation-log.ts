@@ -22,7 +22,7 @@ export const MODERATION_LOG_PRUNE = 10
 export type ModerationActor = Admin | Extract<ImportAuthority, { kind: 'access' }>
 
 export type ModerationTarget = {
-	type: 'Report' | 'Account' | 'DomainBlock' | 'Setting' | 'CustomEmoji' | 'Announcement'
+	type: 'Report' | 'Account' | 'DomainBlock' | 'Setting' | 'CustomEmoji' | 'Announcement' | 'Tag' | 'Status'
 	id: string
 }
 

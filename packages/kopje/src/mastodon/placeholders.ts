@@ -11,7 +11,7 @@ import {
 import { mastodonError } from './errors'
 import { grantsAny } from '../security/scopes'
 
-// Features Kopje has no data for (trends, annual reports, link timelines, translation, e-mail confirmation, async
+// Features Kopje has no data for (annual reports, link timelines, translation, e-mail confirmation, async
 // refreshes), answered as Mastodon answers when the feature has nothing to show or is not configured, because clients
 // call them and a missing route can stop a client. Each is replaced when its feature arrives with its own tables. The
 // writes act on records that never exist, so they change nothing.
@@ -51,8 +51,8 @@ export const annualReport = forUser(RECORD_NOT_FOUND)
 
 // GET /api/v1/timelines/link: Api::V1::Timelines::LinkController#set_preview_card raises RecordNotFound (find_by!) for
 // a URL that is not a trending link, after authorize_if_got_token! (a token sent must be valid and cover
-// read:statuses; an app token is let through). Kopje has no link trends. require_user! applies only when a topic feed
-// is not public, which is Mastodon's default and Kopje's only setting.
+// read:statuses; an app token is let through). Kopje has no link trends (MD-5: it fetches no link previews).
+// require_user! applies only when a topic feed is not public, which is Mastodon's default and Kopje's only setting.
 export const linkTimeline: ApiHandler = async (c, deps) => {
 	await checkOptionalToken(c, deps)
 	return RECORD_NOT_FOUND()
@@ -83,9 +83,6 @@ export const resendConfirmation: ApiHandler = async (c, deps) => {
 // GET /api/v1/emails/check_confirmation: ConfirmationsController#check renders current_user.confirmed?. Kopje's users
 // have no unconfirmed e-mail.
 export const checkConfirmation = forUser((c) => c.json(true))
-
-// A public list.
-export const emptyList: ApiHandler = (c) => Promise.resolve(c.json([]))
 
 // An empty list, for an account that exists.
 const emptyAccountList: ApiHandler = async (c, deps) => {

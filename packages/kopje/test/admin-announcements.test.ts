@@ -6,8 +6,8 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { adminClaims, adminHarness, adminTeam, setTeamAccess, type AccessTeam } from './access-helpers'
 import { announcementAdmin, seedAnnouncement, T0 } from './announcement-helpers'
 import { seedAccount, sql } from './api-helpers'
-import { BUILD, completeSetup, migratedStore } from './helpers'
-import { ACCESS, setAccess } from './ops-helpers'
+import { BUILD } from './helpers'
+import { ACCESS, accessAdminStore } from './ops-helpers'
 import { ANNOUNCEMENT_DELETE_ROWS, type AnnouncementInput, deleteAnnouncement } from '../src/domain/announcements'
 import { handleScheduled } from '../src/jobs/scheduled'
 import type { StoreStub } from '../src/platform/store-client'
@@ -18,13 +18,6 @@ import type { StoreStub } from '../src/platform/store-client'
 
 const FUTURE = '2099-01-01T00:00:00.000Z'
 const id = (n: number) => String(200_000_000_000_000_000n + BigInt(n))
-
-async function adminStore(): Promise<StoreStub> {
-	const store = await migratedStore()
-	await setAccess(store)
-	await completeSetup(store)
-	return store
-}
 
 const base: AnnouncementInput = { text: 'hello', startsAt: null, endsAt: null, allDay: false, scheduledAt: null }
 
@@ -37,7 +30,7 @@ async function log(store: StoreStub) {
 
 describe('the Access admin’s writes', () => {
 	it('creates, changes, publishes, unpublishes and deletes as Mastodon does, each logged', async () => {
-		const store = await adminStore()
+		const store = await accessAdminStore()
 		const admin = announcementAdmin(store)
 		const before = new Date().toISOString()
 		const now = await admin.create({ text: 'now', scheduledAt: '2020-01-01T00:00:00.000Z' })
@@ -114,7 +107,7 @@ describe('the Access admin’s writes', () => {
 	})
 
 	it('judges the text, the times and the range, the writer as the CHECKs do', async () => {
-		const store = await adminStore()
+		const store = await accessAdminStore()
 		const create = (input: Partial<typeof base>) =>
 			store.createAnnouncement(BUILD, { authority: ACCESS, ...base, ...input })
 		for (const text of ['', ' ', '　', '\t\n', 'a\u0000', 'x'.repeat(10_001), '日'.repeat(3334)]) {
@@ -143,7 +136,7 @@ describe('the Access admin’s writes', () => {
 	})
 
 	it('holds 16 live and 1,000 in all on every write that adds one (writer and trigger agree)', async () => {
-		const store = await adminStore()
+		const store = await accessAdminStore()
 		const admin = announcementAdmin(store)
 		const limit = { ok: false, code: 'announcement-limit' }
 		for (let i = 0; i < 8; i++) {
@@ -184,7 +177,7 @@ describe('the Access admin’s writes', () => {
 	}, 60_000)
 
 	it('answers announcement-not-found and refuses every authority but Access', async () => {
-		const store = await adminStore()
+		const store = await accessAdminStore()
 		const missing = { ok: false, code: 'announcement-not-found' }
 		const input = { authority: ACCESS, id: id(9) }
 		expect(await store.updateAnnouncement(BUILD, { ...input, changes: { text: 'x' } })).toMatchObject(missing)
@@ -213,7 +206,7 @@ describe('the Access admin’s writes', () => {
 describe('an announcement’s delete (RES-6)', () => {
 	// `accounts` local accounts, each with a dismissal and (`reacting` of them) every one of 8 reactions.
 	async function saturated(accounts: number, reacting: number) {
-		const store = await adminStore()
+		const store = await accessAdminStore()
 		await sql(store, "INSERT INTO stream_subscriptions (account_id, stream_key, sockets) VALUES ('1', 'user', 1)")
 		const { id: announcement } = await announcementAdmin(store).create()
 		await sql(
@@ -309,7 +302,7 @@ describe('/admin/announcements', () => {
 	})
 
 	async function harness() {
-		const store = await adminStore()
+		const store = await accessAdminStore()
 		await setTeamAccess(store, team)
 		return { store, ...adminHarness(store, team, { IMPORT_TOKEN: 'import-token-0123456789abcdef0123456789' }) }
 	}
@@ -440,7 +433,7 @@ describe('the cron’s round', () => {
 		})
 
 	it('publishes what is due at scheduled_at, and takes down what ended keeping updated_at, journaling nothing for it', async () => {
-		const store = await adminStore()
+		const store = await accessAdminStore()
 		const admin = announcementAdmin(store)
 		const scheduled = await admin.create({ scheduledAt: FUTURE })
 		const ending = await admin.create({ startsAt: '2026-01-01T00:00:00.000Z', endsAt: '2098-12-31T23:59:59.999Z' })
@@ -476,7 +469,7 @@ describe('the cron’s round', () => {
 	})
 
 	it('publishes a schedule at the live cap, and waits while the Store is in maintenance', async () => {
-		const store = await adminStore()
+		const store = await accessAdminStore()
 		const admin = announcementAdmin(store)
 		for (let i = 0; i < 15; i++) {
 			await admin.create()
@@ -494,7 +487,7 @@ describe('the cron’s round', () => {
 	})
 
 	it('imports past schedules, which the next round publishes', async () => {
-		const store = await adminStore()
+		const store = await accessAdminStore()
 		await seedAnnouncement(store, { id: id(1), text: 'old', published: 0, published_at: null, scheduled_at: T0 })
 		await cron(store, Date.parse(T0) + 1)
 		expect(await sql(store, 'SELECT published, published_at FROM announcements')).toEqual([
