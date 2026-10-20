@@ -53,7 +53,12 @@ export async function rowsRead<I>(
 	})
 }
 
-export async function remoteAccounts(h: ApiHarness, domains: number, perDomain: number, base = 500000000000000000n) {
+export async function remoteAccounts(
+	h: Pick<ApiHarness, 'store'>,
+	domains: number,
+	perDomain: number,
+	base = 500000000000000000n
+) {
 	await sql(
 		h.store,
 		`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ? - 1)

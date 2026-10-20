@@ -2349,9 +2349,10 @@ const announce: Handler<'Announce'> = (db, actor, activity, input) => {
 		}
 	)
 	// The wrapper's own audience: known accounts it addresses are its silent recipients (bounded, local first), so the
-	// audience rule decides who may see the boost, its reblog notification included (notifications.ts).
+	// audience rule decides who may see the boost, its reblog notification included (notifications.ts). Each is sought
+	// through the URI index (RES-7).
 	const addressed = db.all<{ id: string }>(
-		`SELECT a.id FROM accounts a LEFT JOIN local_accounts l ON l.account_id = a.id
+		`SELECT a.id FROM accounts a INDEXED BY sqlite_autoindex_accounts_2 LEFT JOIN local_accounts l ON l.account_id = a.id
 		WHERE a.uri IN (SELECT value FROM json_each(?)) AND a.id <> ?
 		ORDER BY l.account_id IS NULL LIMIT ?`,
 		JSON.stringify([...activity.to, ...activity.cc].slice(0, MAX_STATUS_AUDIENCE)),

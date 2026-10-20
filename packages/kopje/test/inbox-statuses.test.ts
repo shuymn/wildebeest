@@ -1,3 +1,5 @@
+import { runInDurableObject } from 'cloudflare:test'
+
 import { describe, expect, it } from 'vitest'
 
 import { sql } from './api-helpers'
@@ -17,6 +19,7 @@ import {
 	localStatus,
 	mastodonNote,
 	misskeyNote,
+	nextId,
 	notifications,
 	OTHER,
 	PUBLIC,
@@ -27,12 +30,13 @@ import {
 	undo,
 	update,
 } from './inbox-status-helpers'
-import { rowsRead } from './read-helpers'
+import { type PlannedStatement, plannedSql, remoteAccounts, rowsRead, scansOf } from './read-helpers'
 import { block, domainBlock, mute } from './status-helpers'
-import { PURGE_BATCH } from '../src/domain/inbox'
+import { type InboundActivity, PURGE_BATCH, receiveActivity } from '../src/domain/inbox'
 import { MAX_STATUS_MEDIA, MAX_STATUS_TAGS } from '../src/domain/remote-statuses'
 import { getTag } from '../src/domain/tags'
 import { tagTimeline } from '../src/domain/timelines'
+import { parseRemoteStatus } from '../src/federation/remote-status'
 import { handleQueue } from '../src/jobs/queue'
 import { MAX_JSON_DEPTH } from '../src/platform/json-bounds'
 import { REMOTE_HTML_RAW_LIMIT } from '../src/security/html'
@@ -1176,4 +1180,66 @@ describe('WEB-5: responses declare their type', () => {
 		expect(responses[0]?.headers.get('content-type')).toMatch(/^application\/json/)
 		expect(responses[2]?.headers.get('content-type')).toMatch(/^application\/activity\+json/)
 	})
+})
+
+describe('inbound addressing with stale statistics (RES-7)', () => {
+	it("finds the addressed accounts by URI, from the activity's URIs, the accounts grown after ANALYZE", async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		await followed(t, bob)
+		const originals = [await localStatus(t, { status: 'one' }), await localStatus(t, { status: 'two' })]
+		await sql(t.store, 'ANALYZE')
+		const addressed = [PUBLIC, `${bob.uri}/followers`, ALICE_URI, DAVE_URI]
+		const receive = (activity: InboundActivity) =>
+			runInDurableObject(t.store, (_instance, state) => {
+				const plans: PlannedStatement[] = []
+				const result = receiveActivity.run(
+					plannedSql(state.storage.sql, /uri IN \(SELECT value FROM json_each/, plans),
+					{
+						now: NOW,
+						storeNow: NOW,
+						origin: LOCAL,
+						actorUri: bob.uri,
+						actor: null,
+						activity,
+					}
+				)
+				return { result, plans }
+			})
+		const run = async (original: { uri: string }) => {
+			const note = mastodonNote(bob, {
+				to: addressed.slice(0, 1),
+				cc: addressed.slice(1),
+				tag: [{ type: 'Mention', href: ALICE_URI, name: '@alice' }],
+			})
+			return [
+				await receive({ type: 'Create', id: `${note.id}/activity`, object: parseRemoteStatus(note)! }),
+				await receive({
+					type: 'Announce',
+					id: `${bob.uri}/statuses/${nextId()}/activity`,
+					object: original.uri,
+					embedded: null,
+					to: addressed.slice(0, 1),
+					cc: addressed.slice(1),
+					published: null,
+					raw: '{}',
+				}),
+			]
+		}
+		const before = await run(originals[0]!)
+		await remoteAccounts({ store: t.store }, 100, 200)
+		const after = await run(originals[1]!)
+		for (const [i, { result, plans }] of after.entries()) {
+			expect(result).toMatchObject({ applied: true })
+			expect(plans).toHaveLength(1)
+			const { query, plan, rows } = plans[0]!
+			expect(
+				plan.filter((detail) =>
+					/^SEARCH (a|accounts) USING (COVERING )?INDEX sqlite_autoindex_accounts_2 \(uri=\?\)$/.test(detail)
+				)
+			).toHaveLength(1)
+			expect(scansOf(query, plan, ['accounts'])).toEqual([])
+			expect(rows).toBe(before[i]!.plans[0]!.rows)
+		}
+	}, 60_000)
 })

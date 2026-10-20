@@ -240,10 +240,11 @@ export function remoteQuotePolicy(db: Db, author: Author, policy: RemoteQuotePol
 
 type Known = { byUri: Map<string, string>; local: Set<string> }
 
-// Known accounts (local or remote) among uris, by their exact URI (ID-5).
+// Known accounts (local or remote) among uris, by their exact URI (ID-5), each sought through the URI index (RES-7).
 function knownAccounts(db: Db, uris: readonly string[]): Known {
 	const rows = db.all<{ id: string; uri: string; local: number }>(
-		`SELECT id, uri, domain IS NULL AS local FROM accounts WHERE uri IN (SELECT value FROM json_each(?))`,
+		`SELECT id, uri, domain IS NULL AS local FROM accounts INDEXED BY sqlite_autoindex_accounts_2
+		WHERE uri IN (SELECT value FROM json_each(?))`,
 		JSON.stringify([...new Set(uris)])
 	)
 	return {
