@@ -187,6 +187,14 @@ status's author`, `tag_trend_reviews: more than 10000` (and the same for the oth
 these tables: it restores into a Store at its own migrations, which then upgrades. A file built from legacy data has no
 row.
 
+Profile credentials (migration `0058_profile_credentials`): `accounts.indexable` is NULL (a remote account not stored
+again since that migration, presented as false), or the integer 0 or 1; any other stored value, text that does not
+read as 0 or 1 included, fails with `accounts: indexable past its stored bound`. `local_accounts.accept_requests_after`
+is NULL (no unlock acceptance job) or a non-negative integer, the last `follows.id` the job passed; the job continues
+after a restore. Any other value fails with `accept_requests_after_cursor`. A dump taken before 0058 has neither
+column: it restores into a Store at its own migrations, which then upgrades. A file built from legacy data writes NULL
+for both.
+
 A report (migration `0054_remote_reports`) names any account as its reporter (`account_id`), once per `uri` and
 reported account, with `status_ids` of at most 100 ids within 2,101 UTF-8 bytes (compact JSON of 18-digit ids), a
 `uri` within 4,096 JSON-escaped UTF-8 bytes and a `comment` within 20,000 UTF-8 bytes (and 5,000 code points up to any

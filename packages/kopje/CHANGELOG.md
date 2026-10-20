@@ -8,6 +8,40 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+### Added
+
+- `indexable` is stored, federated (`toot:indexable`) and shown: `PATCH /api/v1/accounts/update_credentials` and the
+  settings page set it, remote actors' value is read, and Account `indexable`, CredentialAccount `source.indexable` and
+  `source.discoverable` present it. It changes no search result. A remote account reads false until it is fetched
+  again.
+
+### Changed
+
+- Breaking: avatar and header uploads from the settings page take files under 8 MB (JPEG, PNG, GIF or WebP); AVIF
+  and files from 8 MB to 16 MB are refused.
+- Breaking: for repeated parts of a file parameter the last one is read, as Rails does: on `POST /api/v{1,2}/media`
+  a text part followed by a file now uploads, and a file followed by a text part now answers 422.
+- Breaking: a JSON request body that flattens to more than 10,000 keys answers 413, and one nested more than 32 levels
+  answers 400.
+- Breaking: the Store operation `setProfileImage` is removed; `updateCredentials` takes the images and answers a
+  status (`ok`, `not_found` or `upload_gone`).
+
+### Fixed
+
+- `PATCH /api/v1/accounts/update_credentials` sets `avatar` and `header` from multipart files (under 8 MB each; JPEG,
+  PNG, GIF or WebP), all or nothing with the other fields and with one profile Update to other servers. A file
+  parameter sent as text answers 400.
+- An empty JSON object for `fields_attributes` clears the profile fields, and `POST /api/v1/markers` with
+  `{"home":{}}` saves the marker.
+- Unlocking an account accepts its pending follow requests, in job rounds of at most 20 after the response, and sends
+  the Accepts. Relocking stops it; requests from unavailable or blocked requesters stay pending.
+
+### Instance changes
+
+- Store schema: adds migration `0058_profile_credentials`, applied on the first request after the deploy; a rollback
+  to an earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
+- `wrangler.jsonc`: unchanged.
+
 ## [0.1.0-rc.18] - 2026-10-20
 
 An eighteenth release candidate of the first release, published under the npm dist-tag `next`.

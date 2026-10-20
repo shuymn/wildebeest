@@ -9,6 +9,9 @@ decided. This page lists the decided ones. Each has an id (`MD-n`) that the chec
 `{ status: 'accepted', deviation: 'MD-n' }`; every entry here is cited by at least one exception, and every id cited is
 defined here once (`test-node/docs-ids.test.ts`, `test-node/mastodon-entities.test.ts`).
 
+Behaviour the checks cannot see (how a value is judged, rather than whether a parameter or field is read) is listed
+without ids under [Differences the checks cannot see](#differences-the-checks-cannot-see).
+
 A code comment calling a difference deliberate is not a decision. To accept a departure, add an entry here with the
 reason and who decided it, and change the exceptions that cite the gap.
 
@@ -49,3 +52,36 @@ reason and who decided it, and change the exceptions that cite the gap.
   budget continues after its last post. Link trends, `GET /api/v1/timelines/link` and the admin link lists are not
   implemented: Kopje fetches no link previews, so they answer `[]` or 404 as Mastodon does with no trending link.
   Decided by the owner (delegated), 2026-10-20.
+
+## Differences the checks cannot see
+
+Profile credentials (`PATCH /api/v1/accounts/update_credentials`, the settings page):
+
+- `avatar` and `header` are multipart files only: a data URI or any other non-empty text value answers 400 (Paperclip
+  has no handler for it); an empty value reads as absent. Each file must be under 8 MB (8,388,608 bytes is refused)
+  and JPEG, PNG, GIF or WebP by its signature; AVIF is refused. The multipart body may be 17,858,560 bytes (1 MiB of
+  text plus two files and their part headers), its text at most 1 MiB in UTF-8 bytes.
+- Images are not cropped to 400×400 or capped at 1500×500; an image past 16,777,216 pixels answers 422 (Mastodon keeps
+  the account unchanged and answers 200).
+- `avatar_static` and `header_static` equal `avatar` and `header`, animated images included: no still rendition is
+  made yet.
+- `indexable` is stored, shown and federated, but changes no search result: status search reads the viewer's own posts and
+  interactions, or one account's posts the viewer may see, never a public index.
+- Unlocking accepts the pending follow requests in job rounds after the response, at most 20 per round (the 5-minute
+  cron resumes them); relocking stops it. Requests from an unavailable requester, or one the account or its blocked
+  domains cover, stay pending.
+- While a media rebuild holds its lease, a profile edit answers 503, since replacing an image dooms the upload behind
+  it.
+
+Request parameters:
+
+- Of repeated parts of a declared file parameter (`avatar`, `header`, `file`), text or file, the last is the one read,
+  as Rails assigns them. On `/api/v{1,2}/media` this changes both orders: a string followed by a file now uploads, and a
+  file followed by a string now answers 422 `File can't be blank` (Mastodon answers 400).
+- A query value of a declared file parameter is read only when the body has none (Rails lets the query win).
+- A multipart part with an empty filename is read as a text value, as workerd's parser reads it (Rack drops it as an
+  empty file field): empty, it reads as absent; with bytes, a profile image answers 400.
+- A JSON body that flattens to more than 10,000 keys, or to keys of more than 2,097,152 UTF-16 code units together,
+  answers 413; one nested more than 32 levels answers 400 (Rack's `param_depth_limit`).
+- An empty JSON object counts as sent: `{"fields_attributes":{}}` clears the fields and `{"home":{}}` saves the home
+  marker, as in Mastodon; `{"poll":{}}` is still no poll.
