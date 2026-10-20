@@ -635,19 +635,6 @@ export function postNow(db: Db, viewer: UserContext, input: CreateStatusInput): 
 	return { status: 'ok', value: status }
 }
 
-export const createStatus = userWriteOperation<CreateStatusInput, CreateStatusResult>(
-	(db, input, { accountId }, viewer) => {
-		if (input.idempotencyKey !== undefined) {
-			// The key is the status's natural key: a repeat answers with the status the first request made.
-			const status = ownStatusByKey(db, viewer, input.idempotencyKey, input.present)
-			if (status !== null) {
-				return { status: 'ok', value: status }
-			}
-		}
-		return postNow(db, viewer, input)
-	}
-)
-
 type ReplyParent = {
 	id: string
 	uri: string

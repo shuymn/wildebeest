@@ -23,7 +23,8 @@ import {
 } from '../src/domain/accounts'
 import { ANSWER_BYTES } from '../src/domain/answer-budget'
 import { listAccounts, MAX_LIST_MEMBERS_ANSWERED } from '../src/domain/lists'
-import { createStatus, getStatus } from '../src/domain/statuses'
+import { postStatus } from '../src/domain/scheduled-statuses'
+import { getStatus } from '../src/domain/statuses'
 import { remoteActorInput } from '../src/federation/remote-actor'
 import { utf8Length } from '../src/platform/dump-format'
 import type { StoreOperation } from '../src/platform/store-kernel'
@@ -339,7 +340,7 @@ describe('one account has a known size (RES-2)', () => {
 				return { most, status: answer as unknown as { content: string; mentions: unknown[] } }
 			})
 		// Composed: the 300-character username resolves and is shown cut; the 64 KiB one stays text.
-		const composed = await runLongest(createStatus, {
+		const composed = await runLongest(postStatus, {
 			credential: await credential('write:statuses'),
 			text: `@${named}@remote.example @${huge.slice(0, 100)}@remote.example hi`,
 			spoilerText: '',

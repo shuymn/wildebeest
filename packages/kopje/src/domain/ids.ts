@@ -76,3 +76,35 @@ export function insertWithFreshId<T>(table: string, generate: () => string, inse
 		}
 	}
 }
+
+// Ruby's whitespace (ISSPACE): space, \t, \n, \v, \f and \r. No other character is skipped.
+const RUBY_SPACE = new Set([' ', '\t', '\n', '\v', '\f', '\r'])
+const isDigit = (c: string | undefined) => c !== undefined && c >= '0' && c <= '9'
+
+// An id as Ruby's String#to_i reads it, as decimal text (Mastodon maps media_ids and allowed_mentions with
+// `.map(&:to_i)`): leading Ruby whitespace skipped, an optional sign, an optional 0d or 0D prefix, then digits with
+// single underscores between them; "0" when there is no number, and never "-0". Text only, never a JS number, so ids
+// above 2^53 stay exact; the result is never longer than `value`.
+export function requestedId(value: string): string {
+	let i = 0
+	while (RUBY_SPACE.has(value[i] ?? '')) {
+		i++
+	}
+	const negative = value[i] === '-'
+	if (value[i] === '-' || value[i] === '+') {
+		i++
+	}
+	if (value[i] === '0' && (value[i + 1] === 'd' || value[i + 1] === 'D')) {
+		i += 2
+	}
+	let digits = ''
+	while (isDigit(value[i])) {
+		digits += value[i]
+		i++
+		if (value[i] === '_' && isDigit(value[i + 1])) {
+			i++
+		}
+	}
+	const number = digits.replace(/^0+/, '')
+	return number === '' ? '0' : negative ? `-${number}` : number
+}
