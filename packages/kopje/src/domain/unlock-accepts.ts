@@ -50,6 +50,15 @@ const NEXT_JOB = `SELECT l.account_id, a.locked, l.suspended_at IS NOT NULL AS s
 	FROM local_accounts l JOIN accounts a ON a.id = l.account_id
 	WHERE l.accept_requests_after IS NOT NULL ORDER BY l.account_id LIMIT 1`
 
+// The next pending request of the job of ?1 past its cursor: one seek of follows_target (target_account_id, state,
+// rowid), then key probes of availability and blocks (test/unlock-accepts.test.ts shows the plan).
+export const NEXT_REQUEST = `SELECT CAST(f.id AS TEXT) AS id, f.account_id AS requester,
+		(${availableSql('f.account_id')} AND NOT ${blockedSql('?1', 'f.account_id')}) AS acceptable
+	FROM follows f INDEXED BY follows_target
+	WHERE f.target_account_id = ?1 AND f.state = 'pending'
+		AND f.id > (SELECT accept_requests_after FROM local_accounts WHERE account_id = ?1)
+	ORDER BY f.id LIMIT 1`
+
 export type UnlockStep = { done: boolean; delivers: boolean }
 
 // One step of the first job. done: there is no job left to step.
@@ -65,16 +74,7 @@ export const unlockAcceptStep = writeOperation<{ now: number }, UnlockStep>((db,
 	if (job.locked === 1 || job.suspended === 1) {
 		return end()
 	}
-	// One seek of follows_target (target_account_id, state, rowid) past the cursor.
-	const request = db.first<{ id: string; requester: string; acceptable: number }>(
-		`SELECT CAST(f.id AS TEXT) AS id, f.account_id AS requester,
-			(${availableSql('f.account_id')} AND NOT ${blockedSql('?1', 'f.account_id')}) AS acceptable
-		FROM follows f INDEXED BY follows_target
-		WHERE f.target_account_id = ?1 AND f.state = 'pending'
-			AND f.id > (SELECT accept_requests_after FROM local_accounts WHERE account_id = ?1)
-		ORDER BY f.id LIMIT 1`,
-		job.account_id
-	)
+	const request = db.first<{ id: string; requester: string; acceptable: number }>(NEXT_REQUEST, job.account_id)
 	if (request === undefined) {
 		return end()
 	}

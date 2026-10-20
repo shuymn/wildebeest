@@ -220,6 +220,23 @@ describe('each renewal path sends only its own answer when the stale ones were n
 		expect(answers(await drain(t))).toEqual([['Accept', second.id]])
 	})
 
+	it('an unlock acceptance not yet claimed is cancelled by Undo then Follow, which is accepted at once', async () => {
+		const t = await setup({ locked: true })
+		await outage(t)
+		const first = await followFrom(t)
+		expect(first.result).toMatchObject({ applied: true })
+		const unlocked = await t.w.h.request(
+			'/api/v1/accounts/update_credentials',
+			bearer(t.w.alice.token, { ...json({ locked: false }), method: 'PATCH' })
+		)
+		expect(unlocked.status).toBe(200)
+		await t.store.runInboundJobs(BUILD, { now: NOW })
+		expect((await lane(t)).map((row) => [row.type, row.object])).toContainEqual(['Accept', first.id])
+		expect(await undoFrom(t, first.id)).toMatchObject({ applied: true })
+		const second = await followFrom(t)
+		expect(answers(await drain(t))).toEqual([['Accept', second.id]])
+	})
+
 	it('Undo Follow, then Follow: only the new Accept', async () => {
 		const t = await setup()
 		await outage(t)
