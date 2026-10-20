@@ -297,10 +297,11 @@ export const updateCredentials: ApiHandler = async (c, deps) => {
 		}
 		return c.json(result.account)
 	} finally {
-		if (!committed && owned.length > 0) {
+		if (!committed) {
 			for (const upload of owned) {
 				await discard(c, deps, upload)
 			}
+			// What was discarded, here or by storeProfileImage, goes now rather than at the next cron.
 			sweepSoon(c, deps)
 		}
 	}

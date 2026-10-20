@@ -579,7 +579,7 @@ export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 				}
 				throw error
 			} finally {
-				if (!committed && owned.length > 0) {
+				if (!committed) {
 					for (const upload of owned) {
 						await discard(c, deps, upload)
 					}

@@ -1,0 +1,418 @@
+import { runInDurableObject } from 'cloudflare:test'
+
+import { describe, expect, it } from 'vitest'
+
+import { bearer, json, sql } from './api-helpers'
+import { LEGACY } from './federation-helpers'
+import { GIF, PNG_PLAIN } from './fixtures/images'
+import { bytes, r2Keys, TestCodec } from './media-helpers'
+import { scopedToken } from './read-helpers'
+import { community, outbound, remoteAccount, remoteFollows } from './status-helpers'
+import { ORIGIN } from './web-helpers'
+import { DOOMED_AT } from '../src/domain/media'
+import { API_BODY_LIMIT, FILE_PART_SLACK } from '../src/mastodon/params'
+import { PROFILE_IMAGE_LIMIT } from '../src/platform/images'
+import type { StoreStub } from '../src/platform/store-client'
+
+// PATCH /api/v1/accounts/update_credentials with avatar and header files (multipart): the body and file bounds, the
+// token checked before the body is read, Paperclip's validations, one transaction with one Update(Person), and the
+// ownership of the uploads until it commits (mastodon/accounts.ts, mastodon/media.ts storeProfileImage).
+
+const AVIF = new Uint8Array([0, 0, 0, 0x1c, ...new TextEncoder().encode('ftypavif'), 0, 0, 0, 0])
+
+async function setup(scope = 'read write follow') {
+	const codec = new TestCodec()
+	const h = await community(['alice'], scope, { images: () => codec })
+	await sql(h.store, 'UPDATE local_accounts SET pubkey = ?', LEGACY.pubkey)
+	await remoteFollows(h.store, await remoteAccount(h.store, 'fan', 'fans.example'), h.users.alice.id)
+	return { ...h, codec }
+}
+
+type H = Awaited<ReturnType<typeof setup>>
+
+const png = (name = 'a.png') => new File([bytes(PNG_PLAIN)], name, { type: 'image/png' })
+
+function formOf(parts: [string, string | File][]): FormData {
+	const form = new FormData()
+	for (const [name, value] of parts) {
+		form.append(name, value)
+	}
+	return form
+}
+
+function patch(h: H, token: string, body: BodyInit, headers: Record<string, string> = {}, query = '') {
+	return h.request(`/api/v1/accounts/update_credentials${query}`, {
+		method: 'PATCH',
+		body,
+		headers: { authorization: `Bearer ${token}`, ...headers },
+	})
+}
+
+async function answer(response: Response) {
+	return { status: response.status, body: (await response.json()) as Record<string, unknown> }
+}
+
+async function profile(store: StoreStub) {
+	const [row] = await sql<{ avatar_url: string | null; header_url: string | null; display_name: string }>(
+		store,
+		"SELECT avatar_url, header_url, display_name FROM accounts WHERE username = 'alice'"
+	)
+	return row
+}
+
+async function media(store: StoreStub) {
+	return sql<{ id: string; url: string; gc_at: string | null; processed: number; file_token: string }>(
+		store,
+		'SELECT id, url, gc_at, processed, file_token FROM media_attachments ORDER BY id'
+	)
+}
+
+// The R2 keys a request left behind (the bucket is shared by the file's tests).
+async function keysAfter(request: () => Promise<Response>): Promise<{ response: Response; added: string[] }> {
+	const before = new Set(await r2Keys())
+	const response = await request()
+	return { response, added: (await r2Keys()).filter((key) => !before.has(key)) }
+}
+
+async function updates(store: StoreStub) {
+	return (await outbound(store)).filter((o) => o.activity.type === 'Update')
+}
+
+// A raw multipart body of exactly `size` bytes whose only part is an undeclared file (ignored), so its size is all the
+// body bound sees.
+function paddedMultipart(size: number): { body: Uint8Array; type: string } {
+	const boundary = 'b'
+	const head = `--${boundary}\r\nContent-Disposition: form-data; name="thumbnail"; filename="t.bin"\r\n\r\n`
+	const tail = `\r\n--${boundary}--\r\n`
+	const body = new Uint8Array(size)
+	const encoder = new TextEncoder()
+	body.set(encoder.encode(head))
+	body.set(encoder.encode(tail), size - tail.length)
+	return { body, type: `multipart/form-data; boundary=${boundary}` }
+}
+
+// A stream that fails the test if the handler pulls it.
+function untouchable(): ReadableStream<Uint8Array> {
+	// highWaterMark 0: pull runs only when a reader asks for bytes, not when the stream is made.
+	return new ReadableStream(
+		{
+			pull() {
+				throw new Error('the body was read')
+			},
+		},
+		{ highWaterMark: 0 }
+	)
+}
+
+describe('update_credentials: bounds', () => {
+	it('takes a multipart body up to the text limit plus two files and refuses one byte more', async () => {
+		const h = await setup()
+		const limit = API_BODY_LIMIT + 2 * (PROFILE_IMAGE_LIMIT + FILE_PART_SLACK)
+		expect(limit).toBe(17_858_560)
+		const fits = paddedMultipart(limit)
+		expect((await patch(h, h.users.alice.token, fits.body, { 'content-type': fits.type })).status).toBe(200)
+		const over = paddedMultipart(limit + 1)
+		expect(await answer(await patch(h, h.users.alice.token, over.body, { 'content-type': over.type }))).toEqual({
+			status: 413,
+			body: { error: 'Request body is too large' },
+		})
+	}, 60_000)
+
+	it('keeps 1 MiB for JSON, and for the text of a multipart body', async () => {
+		const h = await setup()
+		const note = 'x'.repeat(API_BODY_LIMIT)
+		const json = JSON.stringify({ note })
+		expect((await patch(h, h.users.alice.token, json, { 'content-type': 'application/json' })).status).toBe(413)
+		// The name's 4 bytes and the value's count: within the bound, the note's own validation answers.
+		const text = await patch(h, h.users.alice.token, formOf([['note', note.slice(0, API_BODY_LIMIT - 4)]]))
+		expect(text.status).toBe(422)
+		const over = await patch(
+			h,
+			h.users.alice.token,
+			formOf([['note', `${note.slice(0, API_BODY_LIMIT - 4)}\u{1F600}`]])
+		)
+		expect(over.status).toBe(413)
+	}, 60_000)
+})
+
+describe('update_credentials: the token before the body', () => {
+	it('answers an invalid or under-scoped token without reading a multipart body', async () => {
+		const h = await setup()
+		const send = (token: string) =>
+			h.request('/api/v1/accounts/update_credentials', {
+				method: 'PATCH',
+				body: untouchable(),
+				headers: { authorization: `Bearer ${token}`, 'content-type': 'multipart/form-data; boundary=b' },
+				duplex: 'half',
+			} as RequestInit)
+		expect((await send('not-a-token')).status).toBe(401)
+		expect((await send(await scopedToken(h, 'read:accounts'))).status).toBe(403)
+	})
+
+	it('uploads both images with a token of write:accounts only', async () => {
+		const h = await setup()
+		const token = await scopedToken(h, 'write:accounts')
+		const response = await patch(
+			h,
+			token,
+			formOf([
+				['avatar', png()],
+				['header', png('h.png')],
+			])
+		)
+		expect(response.status).toBe(200)
+		const account = await response.json<{ avatar: string; header: string; avatar_static: string }>()
+		const row = await profile(h.store)
+		expect([account.avatar, account.header, account.avatar_static]).toEqual([
+			row?.avatar_url,
+			row?.header_url,
+			row?.avatar_url,
+		])
+		expect(row?.avatar_url).toMatch(/^https:\/\/kopje\.test\/media\/[A-Za-z0-9_-]+\/full\.png$/)
+		expect((await media(h.store)).map((m) => m.gc_at)).toEqual([null, null])
+	})
+})
+
+describe('update_credentials: avatar and header', () => {
+	it('applies images and text in one transaction with one Update(Person)', async () => {
+		const h = await setup()
+		const before = (await updates(h.store)).length
+		const response = await patch(
+			h,
+			h.users.alice.token,
+			formOf([
+				['display_name', 'Alice'],
+				['avatar', png()],
+				['header', png('h.png')],
+			])
+		)
+		expect(response.status).toBe(200)
+		const sent = await updates(h.store)
+		expect(sent.length - before).toBe(1)
+		const row = await profile(h.store)
+		expect(sent.at(-1)?.activity.object).toMatchObject({
+			name: 'Alice',
+			icon: { type: 'Image', url: row?.avatar_url },
+			image: { type: 'Image', url: row?.header_url },
+		})
+		// Two transformations each (the full image and the preview).
+		expect(h.codec.encodeCalls).toHaveLength(4)
+	})
+
+	it('takes 8,388,607 bytes and refuses 8,388,608, AVIF and a string, applying nothing', async () => {
+		const h = await setup()
+		const padded = (size: number) => {
+			const file = new Uint8Array(size)
+			file.set(bytes(PNG_PLAIN))
+			return new File([file], 'big.png', { type: 'image/png' })
+		}
+		// The bytes past IEND are not read by the decoder.
+		expect((await patch(h, h.users.alice.token, formOf([['avatar', padded(PROFILE_IMAGE_LIMIT - 1)]]))).status).toBe(
+			200
+		)
+		const avatar = (await profile(h.store))?.avatar_url
+		expect(
+			await answer(await patch(h, h.users.alice.token, formOf([['avatar', padded(PROFILE_IMAGE_LIMIT)]])))
+		).toEqual({
+			status: 422,
+			body: { error: 'Validation failed: Avatar file size must be less than 8 MB' },
+		})
+		const avif = new File([AVIF], 'a.avif', { type: 'image/avif' })
+		expect(
+			await answer(
+				await patch(
+					h,
+					h.users.alice.token,
+					formOf([
+						['display_name', 'Changed'],
+						['header', avif],
+					])
+				)
+			)
+		).toEqual({ status: 422, body: { error: 'Validation failed: Header content type is invalid' } })
+		for (const parts of [
+			[['avatar', 'x']],
+			[
+				['avatar', png()],
+				['avatar', 'x'],
+			],
+		] as [string, string | File][][]) {
+			expect(await answer(await patch(h, h.users.alice.token, formOf(parts)))).toEqual({
+				status: 400,
+				body: { error: 'Bad Request' },
+			})
+		}
+		// A query value with no body part is the effective value too; JSON's as well.
+		expect((await patch(h, h.users.alice.token, formOf([['note', 'n']]), {}, '?header=x')).status).toBe(400)
+		expect(
+			(
+				await h.request(
+					'/api/v1/accounts/update_credentials',
+					bearer(h.users.alice.token, { ...json({ avatar: 'x' }), method: 'PATCH' })
+				)
+			).status
+		).toBe(400)
+		// A string then a file is the file; an empty value is absent.
+		const last = await patch(
+			h,
+			h.users.alice.token,
+			formOf([
+				['header', 'x'],
+				['header', png()],
+				['avatar', ''],
+			])
+		)
+		expect(last.status).toBe(200)
+		const row = await profile(h.store)
+		expect([row?.display_name, row?.avatar_url]).toEqual(['', avatar])
+		expect(row?.header_url).not.toBeNull()
+	}, 60_000)
+
+	it('keeps an animated GIF as its own static (stills are not made)', async () => {
+		const h = await setup()
+		const gif = new File([bytes(GIF)], 'a.gif', { type: 'image/gif' })
+		const account = await (
+			await patch(h, h.users.alice.token, formOf([['avatar', gif]]))
+		).json<{
+			avatar: string
+			avatar_static: string
+		}>()
+		expect(account.avatar_static).toBe(account.avatar)
+	})
+})
+
+describe('update_credentials: upload ownership', () => {
+	it('discards the avatar when the header fails after it, and applies nothing', async () => {
+		const h = await setup()
+		let encodes = 0
+		const encode = h.codec.encode.bind(h.codec)
+		h.codec.encode = (input, options) => (++encodes > 2 ? Promise.reject(new Error('down')) : encode(input, options))
+		const { response, added } = await keysAfter(() =>
+			patch(
+				h,
+				h.users.alice.token,
+				formOf([
+					['display_name', 'Never'],
+					['avatar', png()],
+					['header', png('h.png')],
+				])
+			)
+		)
+		expect(response.status).toBe(500)
+		expect(await profile(h.store)).toEqual({ avatar_url: null, header_url: null, display_name: '' })
+		// Both uploads were discarded and swept with their objects, the completed avatar's included.
+		expect(await media(h.store)).toEqual([])
+		expect(added).toEqual([])
+	})
+
+	it('discards the uploads when the Store answers upload_gone', async () => {
+		const h = await wrapped((store, name, call) =>
+			name === 'updateCredentials' ? sql(store, 'UPDATE media_attachments SET gc_at = ?', DOOMED_AT).then(call) : call()
+		)
+		const { response, added } = await keysAfter(() => patch(h, h.users.alice.token, formOf([['avatar', png()]])))
+		expect(await answer(response)).toEqual({ status: 422, body: { error: 'Validation failed: The upload expired' } })
+		expect(await profile(h.store)).toEqual({ avatar_url: null, header_url: null, display_name: '' })
+		expect(await media(h.store)).toEqual([])
+		expect(added).toEqual([])
+	})
+
+	it('discards an upload whose completion committed but whose answers were lost', async () => {
+		let completions = 0
+		const h = await wrapped((_store, name, call) =>
+			name === 'completeMedia'
+				? call().then(() => {
+						completions++
+						throw new Error('lost answer')
+					})
+				: call()
+		)
+		const { response, added } = await keysAfter(() => patch(h, h.users.alice.token, formOf([['avatar', png()]])))
+		expect(response.status).toBe(500)
+		// The completion and its retry both committed (completion is idempotent); the upload was then doomed and swept.
+		expect(completions).toBe(2)
+		expect(await profile(h.store)).toEqual({ avatar_url: null, header_url: null, display_name: '' })
+		expect(await media(h.store)).toEqual([])
+		expect(added).toEqual([])
+	})
+})
+
+const INTERCEPTED = new Set(['updateCredentials', 'completeMedia'])
+
+// A harness whose app calls the Store through `intercept`, which may act around a named call.
+async function wrapped(
+	intercept: (store: StoreStub, name: string, call: () => Promise<unknown>) => Promise<unknown>
+): Promise<H> {
+	const codec = new TestCodec()
+	const wrapStore = (store: StoreStub) =>
+		new Proxy(store, {
+			get(target, name) {
+				const value = Reflect.get(target, name) as unknown
+				if (typeof name !== 'string' || !INTERCEPTED.has(name)) {
+					return value
+				}
+				// An RPC method is called on the stub as it is: detached from it, it does not reach the Store.
+				return (...args: unknown[]) =>
+					intercept(store, name, () => (value as (...a: unknown[]) => Promise<unknown>)(...args))
+			},
+		})
+	const h = await community(['alice'], 'read write follow', { images: () => codec, wrapStore })
+	return { ...h, codec }
+}
+
+describe('profile image release', () => {
+	it('dooms an imported avatar whose URL is malformed UTF-8, and keeps one the header still names', async () => {
+		const h = await setup()
+		const alice = h.users.alice.id
+		const raw = "CAST(X'68747470733a2f2f6b6f706a652e746573742f6d656469612f78ff2f66756c6c2e706e67' AS TEXT)"
+		await runInDurableObject(h.store, (_instance, state) => {
+			state.storage.sql.exec(
+				`INSERT INTO media_attachments (id, account_id, type, url) VALUES ('900000000000000001', ?1, 'image', ${raw}),
+					('900000000000000002', ?1, 'image', 'https://kopje.test/media/shared/full.png')`,
+				alice
+			)
+			state.storage.sql.exec(
+				`UPDATE accounts SET avatar_url = ${raw}, header_url = 'https://kopje.test/media/shared/full.png' WHERE id = ?`,
+				alice
+			)
+		})
+		const plan = await runInDurableObject(h.store, (_instance, state) =>
+			state.storage.sql
+				.exec<{ detail: string }>(
+					`EXPLAIN QUERY PLAN UPDATE media_attachments SET gc_at = ?2
+					WHERE account_id = ?1 AND status_id IS NULL AND gc_at IS NULL
+						AND url = (SELECT avatar_url FROM accounts WHERE id = ?1)
+						AND NOT EXISTS (SELECT 1 FROM accounts a WHERE a.id = ?1 AND a.header_url = media_attachments.url)
+						AND NOT EXISTS (SELECT 1 FROM custom_emojis media_attachments_e WHERE media_attachments_e.id = media_attachments.id)`,
+					alice,
+					'x'
+				)
+				.toArray()
+				.map((row) => row.detail)
+		)
+		expect(plan.join('\n')).toMatch(/SEARCH media_attachments USING INDEX media_attachments_account \(account_id=\?\)/)
+		expect(plan.join('\n')).not.toMatch(/SCAN/)
+		expect((await patch(h, h.users.alice.token, formOf([['avatar', png()]]))).status).toBe(200)
+		const rows = await sql<{ id: string; doomed: number }>(
+			h.store,
+			"SELECT id, gc_at IS NOT NULL AS doomed FROM media_attachments WHERE id LIKE '9000%' ORDER BY id"
+		)
+		expect(rows).toEqual([{ id: '900000000000000002', doomed: 0 }])
+	})
+})
+
+describe('the settings page', () => {
+	it('refuses an expired session without reading the body', async () => {
+		const h = await setup()
+		const response = await h.request('/settings/avatar', {
+			method: 'POST',
+			body: untouchable(),
+			headers: {
+				origin: ORIGIN,
+				cookie: '__Host-kopje_session=expired',
+				'content-type': 'multipart/form-data; boundary=b',
+			},
+			duplex: 'half',
+		} as RequestInit)
+		expect(response.status).toBe(302)
+	})
+})
