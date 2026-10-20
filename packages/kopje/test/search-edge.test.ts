@@ -547,4 +547,36 @@ describe('ranking queries with stale statistics (RES-7)', () => {
 			expect(rows).toBe(before[i]!.plans[0]!.rows)
 		}
 	}, 60_000)
+
+	it('takes the username-prefix window in username, then rowid order, read from the index without a sort', async () => {
+		const { h } = await fixture()
+		// ACCOUNT_PREFIX_LIMIT + 1 accounts of one username (equal lowered keys): the last stored, the most followed, is
+		// past the window; then accounts that match nothing, so the newest window holds none of them.
+		await sql(
+			h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 + 5000 - 1)
+			INSERT INTO accounts (id, uri, username, domain, search_text, followers_count)
+			SELECT CAST(500000000000000000 + i AS TEXT), 'https://d' || i || '.example/users/u',
+				CASE WHEN i < ?1 THEN 'Tie' ELSE 'other' END, 'd' || i || '.example',
+				CASE WHEN i < ?1 THEN 'tie@d' || i || '.example' ELSE 'other' END,
+				CASE WHEN i = ?1 - 1 THEN 100 WHEN i = 0 THEN 50 ELSE 0 END
+			FROM n`,
+			ACCOUNT_PREFIX_LIMIT + 1
+		)
+		const { value, plans } = await planned(h, /^WITH candidates/, {
+			query: 'ti',
+			types: ['accounts'],
+			following: false,
+			limit: 40,
+		})
+		const ids = value.accounts.map((a) => a.id)
+		expect(ids[0]).toBe('500000000000000000')
+		expect(ids).not.toContain(String(500000000000000000n + BigInt(ACCOUNT_PREFIX_LIMIT)))
+		expect(ids).toHaveLength(40)
+		// The window is read in the index's order, with no sort of its own.
+		const plan = plans[0]!.plan
+		const prefix = plan.indexOf('SEARCH accounts USING INDEX accounts_username (<expr>>? AND <expr><?)')
+		expect(prefix).toBeGreaterThan(-1)
+		expect(plan[prefix + 1]).not.toMatch(/TEMP B-TREE FOR .*ORDER BY/)
+	}, 60_000)
 })

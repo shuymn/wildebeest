@@ -1022,13 +1022,14 @@ export function findAccountIds(db: Db, input: SearchInput, viewerId: string): st
 		: `SELECT account_id AS id FROM local_accounts
 			UNION SELECT id FROM (${exact} LIMIT ${ACCOUNT_PREFIX_LIMIT})
 			UNION SELECT id FROM (SELECT id FROM accounts INDEXED BY accounts_username
-				WHERE lower(username) >= ? AND lower(username) < ? LIMIT ${ACCOUNT_PREFIX_LIMIT})
+				WHERE lower(username) >= ? AND lower(username) < ? ORDER BY lower(username), rowid LIMIT ${ACCOUNT_PREFIX_LIMIT})
 			UNION SELECT id FROM (SELECT id FROM accounts ORDER BY rowid DESC LIMIT ${ACCOUNT_RECENT_LIMIT})`
 	const candidateParams: SqlStorageValue[] = input.following
 		? [viewerId, ...exactParams, viewerId]
 		: [...exactParams, prefix, `${prefix}${PREFIX_END}`]
 	// The candidates outside, each account sought by id, and the prefix through accounts_username: statistics older than
-	// the Store's growth cannot turn either into a scan of accounts (RES-7).
+	// the Store's growth cannot turn either into a scan of accounts (RES-7). The prefix window is the first in the
+	// index's own order (the lowered username, then rowid), so which accounts it holds does not depend on the plan.
 	return db
 		.all<{ id: string }>(
 			`WITH candidates(id) AS (${candidates})
