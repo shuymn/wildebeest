@@ -3,11 +3,11 @@ import { accessAdminRefusal } from './admin-authority'
 import { admit, ARRAY_ANSWER_BYTES, jsonBytes } from './answer-budget'
 import { announcementShownSql, availableSql } from './audience'
 import { tokenUserReadOperation, userWriteOperation } from './auth'
-import { type CustomEmoji, emojiHref, localEmojiSnapshot, presentEmojis } from './custom-emojis'
+import { type CustomEmoji, emojiHref, localEmojiSnapshot, MAX_LOCAL_EMOJI_NAMES, presentEmojis } from './custom-emojis'
 import { allocateLocalId } from './ids'
 import { logAction } from './moderation-log'
 import { readOperation, writeOperation } from './operation'
-import { ACTOR_URI_LIMIT, actorUriSql, usernameSql } from './profile-bounds'
+import { ACTOR_URI_LIMIT, actorUriSql, PROFILE_URL_LIMIT, USERNAME_LIMIT, usernameSql } from './profile-bounds'
 import { instanceOrigin } from './push'
 import { MAX_TAG_LENGTH } from './status-bounds'
 import {
@@ -22,14 +22,18 @@ import {
 	type Segment,
 } from './status-text'
 import { streamAnnouncement } from './streaming'
-import type { Db } from '../db/sql'
+import { type Db, RowCapExceeded, RowMeter } from '../db/sql'
 import { isUnicodeEmoji } from '../platform/emoji-names'
 import type { ImportAuthority } from '../platform/store-admin'
 import {
+	ANNOUNCEMENT_TEXT_BYTES,
+	EMOJI_SHORTCODE_LIMIT,
 	LOCAL_EMOJI_SHORTCODE,
 	MAX_ANNOUNCEMENTS,
 	MAX_LIVE_ANNOUNCEMENTS,
 	MAX_REACTION_NAMES,
+	MEDIA_URL_LIMIT,
+	REACTION_NAME_BYTES,
 	STATUS_EMOJIS_BYTES,
 	storedAnnouncementText,
 } from '../platform/stored-bounds'
@@ -61,6 +65,22 @@ export const MAX_ANNOUNCEMENT_MENTIONS = 16
 // (an actor id of ACTOR_URI_LIMIT bytes, less "https://").
 export const MENTION_CANDIDATES = 8
 const MENTION_DOMAIN_BYTES = ACTOR_URI_LIMIT - 'https://'.length
+// The row heap (db/sql.ts rowHeapBytes: 64 bytes a row, 32 a value, two a code unit of text) the reads take, from each
+// column's maximum (test/announcement-bounds.test.ts builds those rows and measures them): the list's rows (an id, a
+// text of ANNOUNCEMENT_TEXT_BYTES, six times, two flags) and its dismissals; one presentation's mention rows (an id,
+// a username of USERNAME_LIMIT, a domain of MENTION_DOMAIN_BYTES, a url of PROFILE_URL_LIMIT and an actor id of
+// ACTOR_URI_LIMIT, MAX_MENTION_REFS rows), emoji rows (a shortcode of 128 and a media url of MEDIA_URL_LIMIT,
+// MAX_LOCAL_EMOJI_NAMES rows) and reaction rows (a name of REACTION_NAME_BYTES and a media url, MAX_REACTION_NAMES
+// rows), each a statement of its own.
+const ROW = (values: number, units: number) => 64 + 32 * values + 2 * units
+const LIST_ROWS_HEAP =
+	MAX_LIVE_ANNOUNCEMENTS * ROW(10, 18 + ANNOUNCEMENT_TEXT_BYTES + 6 * 24) + MAX_LIVE_ANNOUNCEMENTS * ROW(1, 18)
+const PRESENTATION_ROWS_HEAP =
+	MAX_MENTION_REFS * ROW(6, 18 + USERNAME_LIMIT + MENTION_DOMAIN_BYTES + PROFILE_URL_LIMIT + ACTOR_URI_LIMIT) +
+	MAX_LOCAL_EMOJI_NAMES * ROW(3, EMOJI_SHORTCODE_LIMIT + MEDIA_URL_LIMIT) +
+	MAX_REACTION_NAMES * ROW(4, REACTION_NAME_BYTES + MEDIA_URL_LIMIT)
+// The RowMeter caps of the list's reads and of one presentation's; tests lower them to see the backstop act.
+export const ANNOUNCEMENT_ROW_CAPS = { list: LIST_ROWS_HEAP, presentation: PRESENTATION_ROWS_HEAP }
 // Hashtags an announcement presents; the content links every one.
 export const MAX_ANNOUNCEMENT_TAGS = 16
 // A hashtag name presented, at most MAX_TAG_LENGTH code units and this many UTF-8 bytes (as status-bounds.ts reads a
@@ -334,8 +354,7 @@ function presentAnnouncement(
 	row: AnnouncementRow,
 	options: { origin: string; viewer: string | null; read?: boolean }
 ): Announcement {
-	const { content, mentions, tags } = render(db, row.text, options.origin)
-	return {
+	const entity = (content: string, parts: Pick<Announcement, 'mentions' | 'tags' | 'emojis' | 'reactions'>) => ({
 		id: row.id,
 		content,
 		starts_at: row.starts_at,
@@ -344,11 +363,31 @@ function presentAnnouncement(
 		published_at: row.published_at ?? row.created_at,
 		updated_at: row.updated_at,
 		...(options.viewer === null ? {} : { read: options.read === true }),
-		mentions,
+		mentions: parts.mentions,
 		statuses: [],
-		tags,
-		emojis: presentEmojis(localEmojiSnapshot(db, [row.text], STATUS_EMOJIS_BYTES), STATUS_EMOJIS_BYTES),
-		reactions: reactionRows(db, row.id, options.viewer).map((r) => reactionOf(r, options.viewer)),
+		tags: parts.tags,
+		emojis: parts.emojis,
+		reactions: parts.reactions,
+	})
+	// The reads' runtime backstop: their row heap is at most ANNOUNCEMENT_ROW_CAPS.presentation by the per-column maxima; past it
+	// (only a bound broken elsewhere could), the announcement is shown escaped with nothing read for it.
+	const metered = db.metered(new RowMeter(ANNOUNCEMENT_ROW_CAPS.presentation))
+	try {
+		const { content, mentions, tags } = render(metered, row.text, options.origin)
+		return entity(content, {
+			mentions,
+			tags,
+			emojis: presentEmojis(localEmojiSnapshot(metered, [row.text], STATUS_EMOJIS_BYTES), STATUS_EMOJIS_BYTES),
+			reactions: reactionRows(metered, row.id, options.viewer).map((r) => reactionOf(r, options.viewer)),
+		})
+	} catch (error) {
+		if (!(error instanceof RowCapExceeded)) {
+			throw error
+		}
+		console.warn({ event: 'kopje.announcements.row-cap-exceeded', id: row.id })
+		const text = cutCodeUnits(row.text, MAX_RAW_LENGTH)
+		const escaped = renderStatusHtml([{ kind: 'text', text }], { mention: () => undefined, tagUrl: () => '' })
+		return entity(escaped, { mentions: [], tags: [], emojis: [], reactions: [] })
 	}
 }
 
@@ -374,14 +413,16 @@ function publishedRow(db: Db, id: string): AnnouncementRow | undefined {
 // read, as Mastodon 4.5 reads it no more.
 export const listAnnouncements = tokenUserReadOperation<{ origin: string }, Announcement[]>(
 	(db, { origin }, viewer) => {
-		const rows = db
+		// The runtime backstop of ANNOUNCEMENT_ROW_CAPS.list (it throws past it, which only a broken stored bound could reach).
+		const listing = db.metered(new RowMeter(ANNOUNCEMENT_ROW_CAPS.list))
+		const rows = listing
 			.all<AnnouncementRow>(
 				`SELECT ${COLUMNS} FROM announcements a INDEXED BY announcements_published WHERE ${announcementShownSql('a')}
 				LIMIT ${MAX_LIVE_ANNOUNCEMENTS}`
 			)
 			.sort(chronological)
 		const read = new Set(
-			db
+			listing
 				.all<{ id: string }>(
 					`SELECT d.announcement_id AS id FROM json_each(?1) j CROSS JOIN announcement_dismissals d
 					ON d.account_id = ?2 AND d.announcement_id = j.value`,

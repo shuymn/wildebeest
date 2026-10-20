@@ -84,22 +84,36 @@ export async function seedAnnouncement(
 	return row.id
 }
 
-// The widest mentions a 10,000-byte text reaches (RES-3): 16 remote accounts of 255-character usernames on
-// 367-character domains (625 bytes of text each), each with a 2,048-byte profile URL. Returns the text that mentions
-// them all.
-export async function mentionFill(store: StoreStub): Promise<string> {
+// The widest mentions a 10,000-byte text reaches (RES-3): `count` (16) remote accounts of 255-character usernames on
+// 367-character domains (625 bytes of text each), each with a 2,048-byte profile URL of backslashes in its query, which
+// the URL keeps and JSON escapes to two bytes each. Returns the text that mentions them all.
+export async function mentionFill(store: StoreStub, count = 16, first = 0): Promise<string> {
 	const label = (c: string, n: number) => c.repeat(n)
+	// 367 bytes, and 368 for the first, which the 10,000 bytes leave room for.
 	const domain = (i: number) =>
 		[`${String(i).padStart(2, '0')}${label('d', 60)}`, label('e', 60), label('f', 60), label('g', 60), label('h', 60)]
 			.concat(label('i', 55), 'example')
 			.join('.')
-			.slice(0, 367)
+			.slice(0, i === first ? 368 : 367)
 	const username = (i: number) => `${String(i).padStart(2, '0')}${'u'.repeat(253)}`
 	const refs: string[] = []
-	for (let i = 0; i < 16; i++) {
+	for (let i = first; i < first + count; i++) {
 		const account = await seedAccount(store, { username: username(i), domain: domain(i) })
-		await sql(store, 'UPDATE accounts SET url = ? WHERE id = ?', `https://${'p'.repeat(2028)}.example/${i}`, account)
+		// The shortest host, so the most of the URL is backslashes.
+		const prefix = `https://${(i + 10).toString(36)}/?`
+		await sql(
+			store,
+			'UPDATE accounts SET url = ? WHERE id = ?',
+			`${prefix}${'\\'.repeat(2048 - prefix.length)}`,
+			account
+		)
 		refs.push(`@${username(i)}@${domain(i)}`)
 	}
 	return refs.join(' ')
+}
+
+// The widest hashtags (RES-3): 16 names of a CJK character and 85 U+0F77, which NFKC makes 256 code units of three
+// bytes (U+0F77 is U+0FB2 U+0F71 U+0F80), the most a presented name holds; 260 bytes of text each.
+export function tagFill(count = 16): string {
+	return Array.from({ length: count }, (_, i) => `#${String.fromCharCode(0x4e00 + i)}${'\u0F77'.repeat(85)}`).join(' ')
 }

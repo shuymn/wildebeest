@@ -2000,7 +2000,7 @@ RPC limit.
 | An admin.report notification of that report                      | 2,341,805         | 382,444         | 382,444           | 1,059     | 236   | 4.6%           |
 | ActivityPub Note: a local status at its bounds, 1,000 addressed  | 3,697,315         | 4,235,143       |                   | 1,337     | 3,165 | 50.5%          |
 | Its Create (the Note and its addressing again)                   |                   | 6,291,204       |                   |           |       | 75.0%          |
-| Announcement: each part at its reachable fill                    |                   | 86,204          | 176,011           |           |       | 2.1%           |
+| Announcement: each part at its widest fill                       |                   | 121,774         | 218,118           |           |       | 2.6%           |
 
 The most JSON is the emoji-poll fill's, the most SQLite bytes the raw fill's; the escaped fill presents the
 conversation in 6,792,894 bytes. The Note's local emoji snapshot is at its 12,288-byte bound with as many entries as
@@ -2008,14 +2008,20 @@ fit (61, every url at its shortest), resolved to 14,850 bytes of `Emoji` tags (a
 snapshot); an actor's at 6,144 bytes resolves to 30 tags of 7,404 bytes (`test/local-emoji-api.test.ts`).
 
 An announcement's parts cannot all reach their bounds in one text of 10,000 bytes, so each is measured at its
-reachable fill and the conservative JSON is their sum (`test/announcement-bounds.test.ts` ("measures each part at its
-reachable fill")): the content at its 65,536-byte budget, 16 mentions of 255-character usernames on 367-character
-domains with 2,048-byte URLs (47,767), 16 hashtags of 207 three-byte characters (40,465), the emoji at 12,288, 8
-reactions of 128-character custom emoji with 512-byte images (9,673), and 282 bytes of keys, id, times and flags:
-176,011 bytes. The most JSON one announcement was measured to present is the mention fill's, 86,204 bytes as its
-stream payload. Through the real Store RPC, 16 of them return 1,379,489 bytes (the bound is 16 × 176,011 + 1). The
-rows the list reads at once peak at 329,632 bytes under the heap model below; with the presented answer at three
-times its JSON and one rendering at a time (its linked HTML and fallback, 502,180), the list's heap is about 5.1 MB.
+widest reachable fill, with JSON escapes and NFKC expansion at their worst, and the conservative JSON is their sum
+(`test/announcement-bounds.test.ts` ("measures each part at its widest fill")): the content at its 65,536-byte budget;
+16 mentions of 255-character usernames on 367-character domains, each with a 2,048-byte profile URL of backslashes in
+its query, which the URL keeps and JSON doubles (80,386); 16 hashtags of a CJK character and 85 U+0F77, which NFKC
+makes 256 three-byte code units, the most a presented name holds (49,873); the emoji at 12,288; 8 reactions of
+128-character custom emoji with 512-byte images, counts at 10 digits (9,753); and 282 bytes of keys, id, times and
+flags: 218,118 bytes. Through the real Store RPC, 16 announcements of the widest combined text (the hashtags, the
+emoji and as many mentions as fit, each with 8 reactions) return 1,948,401 bytes, 121,774 the largest (the bound is
+16 × 218,118 + 1); one is sent on the stream as 112,082 bytes. The rows the list reads are bounded from per-column
+maxima (`ANNOUNCEMENT_ROW_CAPS` in `src/domain/announcements.ts`, which a RowMeter enforces as they are read): 333,440
+bytes for the list and its dismissals, held throughout, and 5,493,376 for one presentation's mention, emoji and
+reaction rows (64, 1,024 and 8 rows at their widest columns); past the cap an announcement is shown escaped with
+nothing read for it. With the presented answer at three times its JSON and one rendering at a time (the budget, the
+one segment built past it, at most 310,064 bytes, and the fallback), the list's heap is at most about 18.6 MB.
 
 Mentions whose url is derived read and present less (the conversation: 5,435,360 and 5,973,694 bytes): a derived url
 within the bound is at most the stored bound, and a longer one presents as ''.

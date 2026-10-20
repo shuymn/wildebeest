@@ -1,16 +1,17 @@
 import { runInDurableObject } from 'cloudflare:test'
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
-import { announcementHarness, mentionFill, seedAnnouncement } from './announcement-helpers'
+import { announcementHarness, mentionFill, seedAnnouncement, tagFill } from './announcement-helpers'
 import { seedAccount, sql } from './api-helpers'
 import { BUILD } from './helpers'
 import { localSnapshotAtCap, seedEmojiRow } from './local-emoji-helpers'
-import { observedSql, rowsRead, type SqlRow } from './read-helpers'
+import { rowsRead } from './read-helpers'
 import { getJson } from './status-helpers'
-import { Db } from '../src/db/sql'
+import { Db, rowHeapBytes } from '../src/db/sql'
 import {
 	adminAnnouncements,
+	ANNOUNCEMENT_ROW_CAPS,
 	announcementRound,
 	ANNOUNCEMENT_CONTENT_BYTES,
 	listAnnouncements,
@@ -36,6 +37,11 @@ import { sha256Hex } from '../src/security/tokens'
 const ORIGIN = 'https://kopje.test'
 const id = (n: number) => String(200_000_000_000_000_000n + BigInt(n))
 const bytes = (text: string) => new TextEncoder().encode(text).length
+// The measured parts (pinned by "measures each part at its widest fill") and their sum.
+const MENTIONS_MAX = 80_386
+const TAGS_MAX = 49_873
+const REACTIONS_MAX = 9753
+const CONSERVATIVE = ANNOUNCEMENT_CONTENT_BYTES + MENTIONS_MAX + TAGS_MAX + STATUS_EMOJIS_BYTES + REACTIONS_MAX + 282
 
 type Entity = Record<string, unknown> & {
 	id: string
@@ -266,46 +272,47 @@ describe('an announcement’s mentions and hashtags (MD-4)', () => {
 })
 
 describe('the maxima of an announcement (RES-3)', () => {
-	// Each part at the most one 10,000-byte text reaches, through the Store and the API.
+	// Each part at the widest one 10,000-byte text reaches, JSON escapes and NFKC expansion at their worst, as imported
+	// rows (the admin's content check would refuse some of them; the presenter shows them as stored). The viewer, Alice,
+	// has not reacted (`me` is false, a byte longer than true).
 	async function fills() {
-		const h = await announcementHarness(['alice'])
+		const h = await announcementHarness(['alice', 'bob'])
 		const token = h.users.alice.token
 		const measured: Record<string, number> = {}
+		let n = 0
 		const part = async (key: 'content' | 'mentions' | 'tags' | 'emojis' | 'reactions', text: string) => {
-			const { id: announcement } = await h.admin.create({ text })
+			const announcement = id(++n)
+			await seedAnnouncement(h.store, { id: announcement, text })
 			const entity = (await listed(h, token)).find((a) => a.id === announcement)!
 			measured[key] = Math.max(measured[key] ?? 0, jsonBytes(entity[key]))
-			await h.admin.remove(announcement)
-			return entity
+			return { announcement, entity }
 		}
-		// Content: exactly the budget (the content witness above), and the escaped fallback.
-		const tags = '#a '.repeat(600)
+		// Content: exactly the budget (the content witness above).
+		const pound = '#a '.repeat(600)
 		let pad = 0
-		while (hashtagContentBytes(`${tags}${'x'.repeat(pad + 1)}`) <= ANNOUNCEMENT_CONTENT_BYTES) {
+		while (hashtagContentBytes(`${pound}${'x'.repeat(pad + 1)}`) <= ANNOUNCEMENT_CONTENT_BYTES) {
 			pad++
 		}
-		await part('content', `${tags}${'x'.repeat(pad)}`)
+		await part('content', `${pound}${'x'.repeat(pad)}`)
+		// Mentions: 16 of the widest accounts, their URLs of backslashes.
 		const mentionText = await mentionFill(h.store)
 		expect(bytes(mentionText)).toBeLessThanOrEqual(10_000)
 		const mentioned = await part('mentions', mentionText)
-		expect(mentioned.mentions).toHaveLength(MAX_ANNOUNCEMENT_MENTIONS)
-		// Hashtags: 16 of 207 three-byte characters (623 bytes of text each).
-		const tagged = await part(
-			'tags',
-			Array.from({ length: MAX_ANNOUNCEMENT_TAGS }, (_, i) => `#${String.fromCharCode(0x65e5 + i).repeat(207)}`).join(
-				' '
-			)
-		)
-		expect(tagged.tags).toHaveLength(MAX_ANNOUNCEMENT_TAGS)
+		expect(mentioned.entity.mentions).toHaveLength(MAX_ANNOUNCEMENT_MENTIONS)
+		// Hashtags: 16 names of 256 three-byte code units after NFKC.
+		const tagged = await part('tags', tagFill())
+		expect(tagged.entity.tags.map((t) => t.name.length)).toEqual(Array.from({ length: 16 }, () => 256))
 		// Emoji: the local emoji the text references, at their presented bound.
 		const snapshot = JSON.parse(await localSnapshotAtCap(h.store, h.users.alice.id, STATUS_EMOJIS_BYTES)) as [
 			string,
 			string,
 		][]
-		const emojied = await part('emojis', snapshot.map(([name]) => `:${name}:`).join(' '))
-		expect(jsonBytes(emojied.emojis)).toBe(STATUS_EMOJIS_BYTES)
-		// Reactions: 8 custom emoji of 128-character shortcodes and 512-byte URLs (imported), by the viewer.
-		const { id: reacted } = await h.admin.create({ text: 'reactions' })
+		const emojiText = snapshot.map(([name]) => `:${name}:`).join(' ')
+		const emojied = await part('emojis', emojiText)
+		expect(jsonBytes(emojied.entity.emojis)).toBe(STATUS_EMOJIS_BYTES)
+		// Reactions: 8 custom emoji of 128-character shortcodes and 512-byte URLs (whose alphabet needs no escape), by
+		// Bob. A count is at most the local accounts: measured at 1, so 9 bytes each are added for 10 digits.
+		const shortcodes: string[] = []
 		for (let i = 0; i < 8; i++) {
 			const shortcode = `${i}${'s'.repeat(127)}`
 			const url = `https://kopje.test/media/${i}${'t'.repeat(477)}/full.png`
@@ -316,50 +323,67 @@ describe('the maxima of an announcement (RES-3)', () => {
 				owner: h.users.alice.id,
 				url,
 			})
-			await sql(
-				h.store,
-				'INSERT INTO announcement_reactions (announcement_id, account_id, name, custom_emoji_id) VALUES (?, ?, ?, ?)',
-				reacted,
-				h.users.alice.id,
-				shortcode,
-				String(300_000_000_000_000_000n + BigInt(i))
-			)
+			shortcodes.push(shortcode)
 		}
+		const react = async (announcement: string) => {
+			for (const [i, shortcode] of shortcodes.entries()) {
+				await sql(
+					h.store,
+					'INSERT INTO announcement_reactions (announcement_id, account_id, name, custom_emoji_id) VALUES (?, ?, ?, ?)',
+					announcement,
+					h.users.bob.id,
+					shortcode,
+					String(300_000_000_000_000_000n + BigInt(i))
+				)
+			}
+		}
+		const reacted = id(++n)
+		await seedAnnouncement(h.store, { id: reacted, text: 'reactions' })
+		await react(reacted)
 		const withReactions = (await listed(h, token)).find((a) => a.id === reacted)!
 		expect(withReactions.reactions).toHaveLength(8)
-		measured.reactions = jsonBytes(withReactions.reactions)
-		// The rest: keys, the id, the times at their 24 bytes (a range set), flags, `read` and "statuses":[].
-		await h.admin.update(reacted, {
+		measured.reactions = jsonBytes(withReactions.reactions) + 8 * 9
+		// The rest: keys, the id, the times at their 24 bytes (a range set), flags at `false`, `read` and "statuses":[].
+		const bare = id(++n)
+		await seedAnnouncement(h.store, {
+			id: bare,
 			text: 'x',
-			startsAt: '2026-11-01T00:00:00.000Z',
-			endsAt: '2026-11-02T00:00:00.000Z',
+			starts_at: '2026-11-01T00:00:00.000Z',
+			ends_at: '2026-11-02T00:00:00.000Z',
 		})
-		const bare = (await listed(h, token)).find((a) => a.id === reacted)!
+		const plain = (await listed(h, token)).find((a) => a.id === bare)!
 		measured.rest =
-			jsonBytes({ ...bare, content: '', mentions: [], tags: [], emojis: [], reactions: [] }) -
+			jsonBytes({ ...plain, content: '', mentions: [], tags: [], emojis: [], reactions: [] }) -
 			jsonBytes('') -
 			4 * jsonBytes([])
-		await h.admin.remove(reacted)
-		return { h, measured, mentionText }
+		await sql(h.store, 'DELETE FROM announcements')
+		// The widest of these one text holds together: the hashtags, the emoji, and as many mentions as fit.
+		const tags = tagFill()
+		const room = 10_000 - bytes(tags) - bytes(emojiText) - 2
+		const fitting = Math.floor((room + 1) / (bytes(mentionText.split(' ')[0]!) + 1))
+		const combo = [tags, emojiText, await mentionFill(h.store, fitting, 16)].join(' ')
+		expect(bytes(combo)).toBeLessThanOrEqual(10_000)
+		return { h, measured, combo, react }
 	}
 
-	it('measures each part at its reachable fill and keeps their conservative sum within 85% of an answer', async () => {
-		const { h, measured, mentionText } = await fills()
+	it('measures each part at its widest fill and keeps their conservative sum within 85% of an answer', async () => {
+		const { h, measured, combo, react } = await fills()
 		const sum = Object.values(measured).reduce((a, b) => a + b, 0)
 		console.log(JSON.stringify({ event: 'announcement-maxima', measured, conservative: sum }))
 		expect(measured).toEqual({
 			content: ANNOUNCEMENT_CONTENT_BYTES,
-			mentions: 47_767,
-			tags: 40_465,
+			mentions: MENTIONS_MAX,
+			tags: TAGS_MAX,
 			emojis: STATUS_EMOJIS_BYTES,
-			reactions: 9673,
+			reactions: REACTIONS_MAX,
 			rest: 282,
 		})
-		expect(sum).toBe(176_011)
+		expect(sum).toBe(CONSERVATIVE)
 		expect(sum).toBeLessThanOrEqual(0.85 * ANSWER_BYTES)
-		// The list: 16 announcements at the largest fill (the mentions'), through the real Store RPC.
+		// The list: 16 announcements of the widest combined text, each with 8 reactions, through the real Store RPC.
 		for (let i = 0; i < MAX_LIVE_ANNOUNCEMENTS; i++) {
-			await h.admin.create({ text: mentionText })
+			await seedAnnouncement(h.store, { id: id(100 + i), text: combo })
+			await react(id(100 + i))
 		}
 		const credential = { tokenHash: await sha256Hex(h.users.alice.token), scope: null, now: Date.now() }
 		const started = Date.now()
@@ -369,49 +393,68 @@ describe('the maxima of an announcement (RES-3)', () => {
 		const items = (answer as { value: Entity[] }).value
 		expect(items).toHaveLength(MAX_LIVE_ANNOUNCEMENTS)
 		const listBytes = jsonBytes(items)
-		console.log(
-			JSON.stringify({ event: 'announcement-list', bytes: listBytes, ms, bound: MAX_LIVE_ANNOUNCEMENTS * sum + 1 })
-		)
+		const each = Math.max(...items.map((item) => jsonBytes(item)))
+		console.log(JSON.stringify({ event: 'announcement-list', bytes: listBytes, each, ms, bound: 16 * sum + 1 }))
+		expect(each).toBeLessThanOrEqual(sum)
 		expect(listBytes).toBeLessThanOrEqual(MAX_LIVE_ANNOUNCEMENTS * sum + 1)
 		expect(ms).toBeLessThan(2000)
 	}, 120_000)
 
-	it('reads a bounded heap of rows for the list: per-column maxima over every row it reads', async () => {
-		const { h, mentionText } = await fills()
-		for (let i = 0; i < MAX_LIVE_ANNOUNCEMENTS; i++) {
-			await h.admin.create({ text: mentionText })
+	it('bounds the rows the list reads by per-column maxima, with the RowMeter backstop at that bound', () => {
+		// Each read's widest row, column by column (the bounds ANNOUNCEMENT_ROW_CAPS names), measured as RowMeter does.
+		const text = (units: number) => 'x'.repeat(units)
+		const time = text(24)
+		const listRow = {
+			id: text(18),
+			text: text(10_000),
+			starts_at: time,
+			ends_at: time,
+			all_day: 0,
+			published: 1,
+			published_at: time,
+			scheduled_at: time,
+			created_at: time,
+			updated_at: time,
 		}
-		const credential = { tokenHash: await sha256Hex(h.users.alice.token), scope: null, now: Date.now() }
-		// The heap model's meter (docs/threat-model.md "Heap at 8 MiB"): per row 64 B, per value 32 B and twice its UTF-8
-		// bytes; the most any one statement's rows hold at once, and the presented answer at three times its JSON.
-		const heap = await runInDurableObject(h.store, (_instance, state) => {
-			let statement = 0
-			let peak = 0
-			const meter = (rows: readonly SqlRow[]) => {
-				const held = rows.reduce(
-					(sum, row) =>
-						sum +
-						64 +
-						Object.values(row).reduce<number>(
-							(s, v) => s + 32 + (typeof v === 'string' ? 2 * bytes(v) : v instanceof ArrayBuffer ? v.byteLength : 8),
-							0
-						),
-					0
-				)
-				statement = Math.max(statement, held)
-				peak = Math.max(peak, held)
-			}
-			const answer = listAnnouncements.run(observedSql(state.storage.sql, meter), { credential, origin: ORIGIN })
-			const json = jsonBytes(answer)
-			return { rows: peak, answer: json, statement }
-		})
-		// The rendering of one announcement at a time: its linked HTML and its fallback (at most the budget and 60,009
-		// bytes of JSON), two bytes a code unit; the links are summed one at a time and dropped (A7).
-		const transient = 2 * 2 * (ANNOUNCEMENT_CONTENT_BYTES + 60_009)
-		const total = heap.rows * 1.25 + 3 * heap.answer + transient
-		console.log(JSON.stringify({ event: 'announcement-heap', ...heap, transient, model: Math.round(total) }))
-		expect(total).toBeLessThan(64 * 1024 * 1024)
-	}, 120_000)
+		const dismissal = { id: text(18) }
+		const mention = { i: 63, id: text(18), username: text(255), domain: text(2040), url: text(2048), uri: text(2048) }
+		const emoji = { i: 1023, shortcode: text(128), url: text(2048) }
+		const reaction = { name: text(128), count: 1, me: 1, url: text(2048) }
+		const list = 16 * rowHeapBytes(listRow) + 16 * rowHeapBytes(dismissal)
+		const presentation = 64 * rowHeapBytes(mention) + 1024 * rowHeapBytes(emoji) + 8 * rowHeapBytes(reaction)
+		expect(ANNOUNCEMENT_ROW_CAPS).toEqual({ list, presentation })
+		// The heap model ("Heap at 8 MiB"): rows with 25% headroom (the list's, held throughout, and one presentation's at
+		// a time), the presented answer at three times its JSON, and one rendering: the budget, the one segment built
+		// past it and the fallback, two bytes a code unit.
+		const answer = MAX_LIVE_ANNOUNCEMENTS * CONSERVATIVE + 1
+		const transient = 2 * (ANNOUNCEMENT_CONTENT_BYTES + 310_064 + 60_009)
+		const heap = 1.25 * (list + presentation) + 3 * answer + transient
+		console.log(JSON.stringify({ event: 'announcement-heap', list, presentation, answer, transient, heap }))
+		expect(heap).toBeLessThan(64 * 1024 * 1024)
+	})
+
+	it('shows an announcement escaped, with nothing read for it, once its reads pass the RowMeter cap', async () => {
+		const h = await announcementHarness(['alice', 'bob'])
+		await h.admin.create({ text: 'Hi @bob #tag' })
+		const cap = ANNOUNCEMENT_ROW_CAPS.presentation
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+		ANNOUNCEMENT_ROW_CAPS.presentation = 100
+		try {
+			const [entity] = await listed(h, h.users.alice.token)
+			expect(entity).toMatchObject({
+				content: '<p>Hi @bob #tag</p>',
+				mentions: [],
+				tags: [],
+				emojis: [],
+				reactions: [],
+			})
+			expect(warn).toHaveBeenCalledWith(expect.objectContaining({ event: 'kopje.announcements.row-cap-exceeded' }))
+		} finally {
+			ANNOUNCEMENT_ROW_CAPS.presentation = cap
+			warn.mockRestore()
+		}
+		expect((await listed(h, h.users.alice.token))[0]!.mentions).toHaveLength(1)
+	})
 })
 
 describe('announcement query plans at saturation, with stale statistics', () => {

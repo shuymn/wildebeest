@@ -13,9 +13,17 @@ import {
 import { streamAnnouncement } from '../../src/domain/streaming'
 import { sha256Hex } from '../../src/security/tokens'
 import { STREAM_LIMITS } from '../../src/stream-hub'
-import { announcementHarness, mentionFill, reactionPath, seedAnnouncement, send } from '../announcement-helpers'
+import {
+	announcementHarness,
+	mentionFill,
+	reactionPath,
+	seedAnnouncement,
+	send,
+	tagFill,
+} from '../announcement-helpers'
 import { seedAccount, sql } from '../api-helpers'
 import { BUILD } from '../helpers'
+import { localSnapshotAtCap } from '../local-emoji-helpers'
 import { scopedToken } from '../read-helpers'
 import { getJson } from '../status-helpers'
 import { connect, drained, echo, type Inbox, type StreamMessage, subscribed } from './stream-helpers'
@@ -228,10 +236,19 @@ describe('announcement events on user', () => {
 })
 
 describe('announcement events at their bounds (RES-3)', () => {
-	it('sends the widest mentions and an imported text of repeated references, neither skipped', async () => {
+	it('sends the widest combined text and the review’s and A7’s texts, none skipped', async () => {
 		const h = await announcementHarness(['alice'])
 		const inbox = await subscribed(h, h.users.alice.token, 'user')
-		const widest = await h.admin.create({ text: await mentionFill(h.store) })
+		// The widest combined text (hashtags, emoji and as many mentions as fit, as test/announcement-bounds.test.ts
+		// builds it), imported, then published.
+		const snapshot = JSON.parse(await localSnapshotAtCap(h.store, h.users.alice.id, 12_288)) as [string, string][]
+		const emojiText = snapshot.map(([name]) => `:${name}:`).join(' ')
+		const tags = tagFill()
+		const room = 10_000 - new TextEncoder().encode(`${tags} ${emojiText} `).length
+		const combo = [tags, emojiText, await mentionFill(h.store, Math.floor((room + 1) / 625), 0)].join(' ')
+		expect(new TextEncoder().encode(combo).length).toBeLessThanOrEqual(10_000)
+		await seedAnnouncement(h.store, { id: '200000000000000009', text: combo, published: 0, published_at: null })
+		const widest = await h.admin.publish('200000000000000009')
 		// A7: 3,332 references to one account whose URL is 2,048 bytes of ampersands, imported, then published.
 		const u = await seedAccount(h.store, { username: 'u', email: 'u@example.com' })
 		await sql(h.store, 'UPDATE accounts SET url = ? WHERE id = ?', `https://r.example/?${'&'.repeat(2029)}`, u)
