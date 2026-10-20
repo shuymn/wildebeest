@@ -337,6 +337,8 @@ const SAFE_INTERPOLATIONS = new Set([
 	'hostCoveredSql',
 	// A stored time read as its 24-byte ISO form, or NULL (platform/stored-bounds.ts).
 	'isoTimeSql',
+	// Whether an Idempotency-Key's row is within its hour: a predicate over isoTimeSql (domain/statuses.ts).
+	'keyFreshSql',
 	'mayQuoteSql',
 	'mutesSql',
 	'notificationPolicySql',
