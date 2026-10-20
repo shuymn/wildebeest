@@ -1437,8 +1437,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   route that reads files (`readParams`' file rule: `update_credentials`' avatar and header, the settings page's
   image) takes a multipart body of the limit plus each file and its part headers (17,858,560 bytes for
   `update_credentials`), chosen from `Content-Type` before any byte is read, while its text stays within the limit in
-  UTF-8 bytes; a JSON body is refused past 10,000 generated object keys or 2,097,152 UTF-16 code units of all its
-  keys, charged before each key is built, and past 32 levels of nesting; `update_credentials` checks the token before reading a multipart
+  UTF-8 bytes; a JSON body is refused past 10,000 generated parameter paths (object members, array objects and empty
+  arrays) or 2,097,152 UTF-16 code units of all its keys, charged before each key is built, and past 32 levels of
+  nesting; `update_credentials` checks the token before reading a multipart
   body; `test/params.test.ts`, `test/profile-images.test.ts` ("takes a multipart body up to the text limit plus two
   files and refuses one byte more", "answers an invalid or under-scoped token without reading a multipart body"). _Enforced (main)_ for status text: `test/status-text.test.ts`
   ("raw input bound"). _Enforced (main)_ for search terms (500 characters) and media (16 MB
@@ -1520,23 +1521,21 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   code points with a NUL too (`reportComment`, a lone surrogate read as U+FFFD), where other text writers remove NUL
   (accepted: the comment is plain text, never rendered as HTML, and its JSON is at most about 120 KB). A Flag's comment
   that is not a string reads as none (`test/inbox-flag.test.ts` ("Flag: bounds"), `test/migrations.test.ts` (0054)).
-  _Enforced (main)_ for local emoji (migration 0055): the CHECKs bound a shortcode (2 to 128 ASCII bytes), a category
-  (stored bytes only, 1 to 256, no NUL or control; the decoded value is judged again when presented, and API input is
-  made well-formed first), the flags and the time; four triggers hold the image, the cap and immutability. The local
-  writer shares `emojiSnapshot` and `emojiHref`, looks up at most 1,024 names and resolves at most 64 tokens, each by
+  _Enforced (main)_ for local emoji: local emoji rows, imports included, meet the
+  [stored bounds](dump-format.md#stored-bounds), enforced by migration `0055_local_custom_emojis`. The local writer
+  shares `emojiSnapshot` and `emojiHref`, looks up at most 1,024 names and resolves at most 64 tokens, each by
   index (`src/domain/custom-emojis.ts`); `test/local-emojis.test.ts` ("reads each production query through its
   index").
-  _Enforced (main)_ for announcements: the CHECKs and triggers of migration `0056_announcements` (text bytes, NUL and
-  blank; times; the range; publication; reaction names by bytes, controls and form; a custom emoji reaction named by its
-  shortcode; 8 names per announcement), which imports meet too; the writers share their rules (`storedAnnouncementText`,
-  `isUnicodeEmoji`). A text within its bytes is within the parser's raw bound once decoded, and the rendering measures each segment's
-  HTML as it is built (text, escapes and paragraph markup included) and stops at the first that passes the content
-  budget, so what is built past the budget is one segment, at most 310,064 bytes of JSON (a hashtag of 3,333 U+FDFA,
-  NFKC-expanded and URL-encoded) (A7 of the design); `test/migrations.test.ts` ("0056_announcements"), `test/announcement-bounds.test.ts`.
-  _Enforced (main)_ for trends: the CHECKs and triggers of migration `0057_trends` (a hashtag name's bytes, then NUL,
-  then characters, then the ASCII a normalized hashtag holds; scores within 0 and 1e15 and a peak at least the score;
-  24-byte ISO times; 18-digit ids; `trends` and `trendable_by_default` only `'true'` or `'false'`), which imports meet
-  too; the round filters names by the same rule (`trendTagNameCheckSql`), admits only names that are well-formed UTF-8
+  _Enforced (main)_ for announcements: announcement rows, imports included, meet the
+  [stored bounds](dump-format.md#stored-bounds), enforced by migration `0056_announcements`; writers share
+  `storedAnnouncementText` and `isUnicodeEmoji`. A text within its bytes is within the parser's raw bound once decoded,
+  and the rendering measures each segment's HTML as it is built (text, escapes and paragraph markup included) and stops
+  at the first that passes the content budget, so what is built past the budget is one segment, at most 310,064 bytes of
+  JSON (a hashtag of 3,333 U+FDFA, NFKC-expanded and URL-encoded); `test/migrations.test.ts` ("0056_announcements"),
+  `test/announcement-bounds.test.ts`.
+  _Enforced (main)_ for trends: trend rows, reviews and settings, imports included, meet the
+  [stored bounds](dump-format.md#stored-bounds), enforced by migration `0057_trends`; the round filters names by the
+  stored rule (`trendTagNameCheckSql`), admits only names that are well-formed UTF-8
   and their own normalized form (so a listed name is the one its review and history take), and drops a stored row of
   any other; `test/migrations.test.ts` ("0057_trends"), `test/trends-round.test.ts` ("imported rows"),
   `test/trend-dump.test.ts`.
@@ -1628,9 +1627,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   keeps a read-time projection (uris included) is read outside its helper in `src/domain` or a helper is given another
   column; its header states what it checks, where it fails closed, and its known gaps. It is an architectural aid; the aggregate response tests prove
   the budgets. Maxima of each presented shape: "Maxima of presented units" below (`test/status-bounds.test.ts`).
-  _Enforced (main)_ for announcements: the list holds at most 16 (every live one), each within its measured conservative
-  maximum of 248,997 JSON bytes, derived from its columns' caps ("Maxima of presented units"), admitted within `ARRAY_ANSWER_BYTES` as a backstop that never
-  cuts; the Access admin's page holds at most 50; `test/announcement-bounds.test.ts`.
+  _Enforced (main)_ for announcements: the list holds at most 16 (every published one), each within its derived
+  conservative maximum of 248,997 JSON bytes ("Maxima of presented units"), admitted within `ARRAY_ANSWER_BYTES` as a
+  backstop that never cuts; the Access admin's page holds at most 50; `test/announcement-bounds.test.ts`.
   _Enforced (main)_ for trends: `GET /api/v1/trends/tags` holds at most 20 hashtags (Count), `/statuses` at most 40
   statuses within the answer budget, continued at the statuses it consumed (Budget, Offset); the Access admin's pages
   hold at most 20 hashtags and 40 statuses, each field through its bounded projection; `test/trends-maxima.test.ts`,
@@ -2015,9 +2014,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   10,000 or 1,000,000 older statuses and 0 or 100,000 hidden ones in the window (`test/trends-cost.test.ts`, ceiling
   275,000). `GET /api/v1/trends/tags` reads 68,062 rows for 20 hashtags with 201 or 10,000 public statuses each, half of
   them by unavailable authors, on the same kind of accounts and full review tables (`test/trends-maxima.test.ts`). Each
-  plan is of the production statement as it runs, with statistics taken before the data grew; the review lookups are key
-  seeks, and an instance block's match is a seek by domain (`coveredSql`'s CROSS JOIN: with stale statistics and 100
-  blocks the planner had scanned the blocks for each suffix, 16,376,673 rows).
+  plan is of the production statement as it runs, with statistics taken before the data grew. Review lookups are key
+  seeks; `coveredSql` uses `CROSS JOIN` to keep instance-block matches as domain seeks even with stale statistics.
 
 #### Maxima of presented units (RES-3)
 
@@ -2090,18 +2088,16 @@ username (twice, also in `acct`), a 2,048-byte profile URL escaped to two bytes 
 host (53,761). Emoji: the 12,288-byte presented bound. Reactions: 8 custom emoji of 128-byte shortcodes with two
 512-byte images and a count of `Number.MAX_SAFE_INTEGER` (9,801). Content: the 65,536-byte budget. Keys, id, times and
 flags: 282. One announcement is at most 248,997 bytes (3.0% of 8 MiB), the list at most 3,983,969, a stream payload
-double-encoded at most 497,996, under 512 KiB. Fills at the widest reachable values witness that what can be built
-stays within these: 16 mentions of backslash URLs (80,386) and of a domain spelled with 120 `é.` labels, which IDNA
-makes 966 ASCII bytes (89,969); 16 hashtags that NFKC makes 256 units (49,873); and, through the real Store RPC, 16
-announcements of the widest combined text with 8 reactions each, 1,948,401 bytes (121,774 the largest); on the stream,
-112,082 and 100,192 bytes. The rows the list reads are bounded from per-column maxima (`ANNOUNCEMENT_ROW_CAPS` in
+double-encoded at most 497,996, under 512 KiB. The fills in `test/announcement-bounds.test.ts` and
+`test/streaming/announcements.test.ts` exercise escaping, IDNA, NFKC expansion and Store RPC/stream delivery within
+these bounds. The rows the list reads are bounded from per-column maxima (`ANNOUNCEMENT_ROW_CAPS` in
 `src/domain/announcements.ts`, which a RowMeter enforces as they are read): 333,440 bytes for the list and its
 dismissals, held throughout, and 5,493,376 for one presentation's mention, emoji and reaction rows (64, 1,024 and 8
 rows at their widest columns); past the cap an announcement is shown escaped with nothing read for it. With the
 derived answer at three times its JSON and one rendering at a time (the budget, the one segment built past it, at
 most 310,064 bytes, and the fallback), the list's heap is at most about 20.1 MB.
 
-Mentions whose url is derived read and present less (the conversation: 5,435,360 and 5,973,694 bytes): a derived url
+Mentions whose url is derived read and present less (the conversation: 5,435,480 and 5,973,946 bytes): a derived url
 within the bound is at most the stored bound, and a longer one presents as ''.
 
 A Note shows what the Status entity shows: its hashtags and mentions are read through the same projections and

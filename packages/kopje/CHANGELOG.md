@@ -17,23 +17,17 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Changed
 
-- The Store upgrade skips its whole-Store foreign-key check when it started fresh and every migration it applies is
-  declared to change no reference or key (`0058_profile_credentials` is); a resumed upgrade, a marker-bearing retry
-  and an upgrade with an undeclared migration still check the whole Store. Migrations may not contain `PRAGMA` or
-  `DEFERRABLE`.
+- Newly started Store upgrades can skip the full foreign-key scan when all pending migrations preserve references and
+  referenced keys. Resumed upgrades and retries still scan the Store; see [the upgrade guide](docs/upgrade.md).
 - Breaking: avatar and header uploads from the settings page take files under 8 MB (JPEG, PNG, GIF or WebP); AVIF
   and files from 8 MB to 16 MB are refused.
 - Breaking: for repeated parts of a file parameter the last one is read, as Rails does: on `POST /api/v{1,2}/media`
   a text part followed by a file now uploads, and a file followed by a text part now answers 422.
-- Breaking: a JSON request body that flattens to more than 10,000 object keys answers 413, and one nested more than
-  32 levels answers 400.
-- Breaking: the Store operation `setProfileImage` is removed; `updateCredentials` takes the images and answers a
-  status (`ok`, `not_found` or `upload_gone`).
+- Breaking: JSON requests exceeding 10,000 generated parameter paths or the 2,097,152 UTF-16 code-unit flattening
+  budget answer 413; nesting beyond 32 levels answers 400.
 - Breaking: notifications read `types` and `exclude_types` only as `types[]` and `exclude_types[]`; a value sent
   without `[]` is ignored, as Mastodon ignores it.
-- Breaking: the Store operation `createStatus` is removed (`postStatus` posts with or without `scheduled_at`).
-  `postStatus` answers a new status, `unexpected_mentions`, with the accounts, and a scheduled publication can be
-  dropped for `unexpected_mentions`.
+- Hashtag search avoids repeated status-table scans with stale Store statistics.
 
 ### Fixed
 
@@ -42,8 +36,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   parameter sent as text answers 400.
 - An empty JSON object for `fields_attributes` clears the profile fields, and `POST /api/v1/markers` with
   `{"home":{}}` saves the marker.
-- Unlocking an account accepts its pending follow requests, in job rounds of at most 20 after the response, and sends
-  the Accepts. Relocking stops it; requests from unavailable or blocked requesters stay pending.
+- Unlocking an account accepts pending follow requests asynchronously and sends the Accepts. Relocking stops
+  acceptance; unavailable or blocked requesters remain pending.
 - `POST /api/v1/statuses` and `PUT /api/v1/statuses/:id` answer 422 `Media … not found or already attached to another
   post` for a `media_ids[]` entry that is unknown, another account's, attached to another post or held by a scheduled
   post, instead of leaving it out. A scheduled post whose media is gone when it is due is dropped.
@@ -55,8 +49,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - The public and hashtag timelines with `local=true&remote=true` answer local and remote posts.
 - An `Idempotency-Key` is kept for one hour after the post it made; reused later, it posts anew.
 - `GET /api/v2/search` reads `exclude_unreviewed` (hashtags the admin reviewed, and the exact match). With
-  `resolve=true&following=true`, a resolved account the viewer does not follow is left out. Hashtag search looks each
-  candidate status up by id, so statistics of a small Store no longer make it scan statuses once per candidate.
+  `resolve=true&following=true`, a resolved account the viewer does not follow is left out.
 
 ### Instance changes
 

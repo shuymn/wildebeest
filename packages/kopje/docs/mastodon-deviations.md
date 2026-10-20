@@ -20,7 +20,7 @@ reason and who decided it, and change the exceptions that cite the gap.
 - **MD-1: Registration through the API is closed.** `POST /api/v1/accounts` answers 403, as Mastodon does with
   registrations closed, and `POST /api/v1/emails/confirmations` refuses, since no user signs up through an app. Accounts
   are made by signing in through Cloudflare Access. Decided by the coordinator, 2026-10-15.
-- **MD-2: Admin features with nothing to act on are not served.** Domain allows, IP, email domain and canonical email
+- **MD-2: Admin operations withheld from Mastodon's API.** Domain allows, IP, email domain and canonical email
   blocks, link publishers, admin tags, dimensions and retention answer 403 or 404, as Mastodon answers a role without
   the permission. Kopje has no sign-ups, recorded IPs or allowlist mode. Trends review through the Mastodon admin API
   (approve, reject) answers 403; the Access admin reviews trends (`kopje-admin trends`). Decided by the coordinator,
@@ -42,16 +42,17 @@ reason and who decided it, and change the exceptions that cite the gap.
   (Mastodon counts on receipt); at most 100 hashtags per post and 8,000 in all are read, and the 400 hashtags with the
   most accounts today are scored. Only the 400 posts of that window with the most boosts and favourites (counted up to
   10,000,000) are scored. A post published earlier but given a later id, or the reverse, is counted only within that
-  window. Deleted posts and suspended accounts stop counting at once. At most 200 allowed hashtags and 200 allowed posts
-  are kept, with 50 of each awaiting review, and 3 posts per author; the lists end at the top 200 allowed now, and an
-  offset of 200 or more answers `[]`. A trending hashtag's `history` counts at most its newest 200 public posts of the 7
-  days, and a hashtag whose stored name is not well-formed UTF-8 or not in its own normalized form (an imported one)
-  never trends. Reviews are made by the Access admin, take effect at once and send no e-mail; while trends are off
-  nothing is scored and the admin lists are empty. Posts are ordered by the `Accept-Language` language among ISO 639-1
-  codes (no user locale, chosen languages or `lang`). `limit=0` answers `[]` without a Link, and a page cut by the 8 MiB
-  budget continues after its last post. Link trends, `GET /api/v1/timelines/link` and the admin link lists are not
-  implemented: Kopje fetches no link previews, so they answer `[]` or 404 as Mastodon does with no trending link.
-  Decided by the owner (delegated), 2026-10-20.
+  window. The next scoring round excludes deleted posts and unavailable authors; status lists apply R41 on every read.
+  At most 200 allowed hashtags and 200 allowed posts are kept, with 50 of each awaiting review, and 3 posts per author;
+  the lists end at the top 200 allowed now, and an offset of 200 or more answers `[]`. A trending hashtag's `history`
+  counts at most its newest 200 public posts of the 7 days, and a hashtag whose stored name is not well-formed UTF-8 or
+  not in its own normalized form (an imported one) never trends. Reviews are made by the Access admin, take effect at
+  once and send no e-mail. While trends are off, public lists are empty; the next cron round clears stored trends and
+  leaves the Access admin lists empty too. Posts are ordered by the `Accept-Language` language among ISO 639-1 codes (no
+  user locale, chosen languages or `lang`). `limit=0` answers `[]` without a Link, and a page cut by the 8 MiB budget
+  continues after its last post. Link trends, `GET /api/v1/timelines/link` and the admin link lists are not implemented:
+  Kopje fetches no link previews, so they answer `[]` or 404 as Mastodon does with no trending link. Decided by the
+  owner (delegated), 2026-10-20.
 
 ## Differences the checks cannot see
 
@@ -81,8 +82,9 @@ Request parameters:
 - A query value of a declared file parameter is read only when the body has none (Rails lets the query win).
 - A multipart part with an empty filename is read as a text value, as workerd's parser reads it (Rack drops it as an
   empty file field): empty, it reads as absent; with bytes, a profile image answers 400.
-- A JSON body that flattens to more than 10,000 keys (object members; a list's values are not counted), or to keys of
-  more than 2,097,152 UTF-16 code units together, answers 413; one nested more than 32 levels answers 400 (Rack's `param_depth_limit`).
+- A JSON body exceeding 10,000 generated parameter paths (object members, array objects and empty arrays; scalar
+  array items do not count), or the 2,097,152 UTF-16 code-unit flattening budget, answers 413; nesting beyond 32
+  levels answers 400 (Rack's `param_depth_limit`).
 - An empty JSON object counts as sent: `{"fields_attributes":{}}` clears the fields and `{"home":{}}` saves the home
   marker, as in Mastodon; `{"poll":{}}` is still no poll.
 
