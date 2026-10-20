@@ -4,7 +4,7 @@ import { expect, inject, it } from 'vitest'
 
 import { MIGRATIONS } from '../../src/db/migrations'
 import { JOURNAL_SPAN } from '../../src/domain/streaming'
-import { freshStore, testKernel } from '../helpers'
+import { BUILD, freshStore, testKernel } from '../helpers'
 
 // The migration cost benchmark (design: "Migrations", acceptance criterion): pending migration files applied to a
 // large, representative Store in workerd's local Durable Object SQLite, as an upgrade applies them, timed. The whole
@@ -12,6 +12,12 @@ import { freshStore, testKernel } from '../helpers'
 // pending files) must finish in at most UPGRADE_BUDGET_MS, two thirds of the default 30 seconds of CPU an invocation
 // may use (an alarm's upgrade included; committing each file does not start a new invocation). Local elapsed time
 // stands in for that CPU time.
+// The verification checks every reference in the Store unless each file is declared foreignKeys: 'unchanged'
+// (src/db/migrations.ts); the output's foreignKeyCheck says which ('store' or 'skipped'). A marker-bearing retry of
+// the same files always checks the whole Store. retryEstimateMs estimates it: for a skipped check, the upgrade plus
+// a timed marker-bearing retry run after it (which verifies only, the files being applied); otherwise the upgrade
+// itself. It is reported, not judged: a real retry applies only the files left, so the estimate overstates it. An
+// estimate past the budget is not fixed by dropping a declaration, which adds the same check to the upgrade.
 // Measure each file before its PR merges and the complete pending range before the release branch
 // merges (RELEASING.md). Record file measurements in migration headers and PR descriptions.
 // Upgrade overhead grows with the representative Store and varies with competing machine load;
@@ -554,17 +560,37 @@ it('applies the migration to the benchmark store within the budget', async () =>
 
 		// The files, through the kernel, as an upgrade applies them: the bookmark, each file's transaction and the
 		// verification of the schema.
+		const migrations = MIGRATIONS.slice(0, last + 1)
+		const logs: Record<string, unknown>[] = []
 		await scheduler.wait(1)
 		const started = Date.now()
-		const result = await testKernel(state, MIGRATIONS.slice(0, last + 1)).upgrade()
+		const result = await testKernel(state, migrations, { log: (entry) => logs.push(entry) }).upgrade()
 		await scheduler.wait(1)
-		return { seeded, measured: { result, ms: Date.now() - started - 1 } }
+		const ms = Date.now() - started - 1
+		const foreignKeyCheck = logs.find((entry) => entry.event === 'kopje.store.upgrade.start')?.foreignKeyCheck
+		if (foreignKeyCheck !== 'skipped') {
+			return { seeded, measured: { result, ms, foreignKeyCheck, retryEstimateMs: ms } }
+		}
+		// A marker-bearing upgrade after the files: the marker written as the kernel writes it before its first file, then
+		// the retry on a fresh kernel, which finds nothing pending and verifies the whole Store.
+		sql.exec(
+			"INSERT INTO kopje_state (name, value) VALUES ('upgrade', ?)",
+			JSON.stringify({ build: BUILD, bookmark: result.bookmark, at: 0 })
+		)
+		await scheduler.wait(1)
+		const resumedAt = Date.now()
+		const resumed = await testKernel(state, migrations).retryUpgrade(BUILD)
+		await scheduler.wait(1)
+		const resumedMs = Date.now() - resumedAt - 1
+		expect(resumed).toMatchObject({ ok: true, applied: [] })
+		return { seeded, measured: { result, ms, foreignKeyCheck, retryEstimateMs: ms + resumedMs } }
 	})
 	expect(seeded).toMatchObject({ accounts, local: SHAPE.local, statuses, notifications, reports })
 	expect(measured.result).toMatchObject({ ok: true, applied })
-	console.log(JSON.stringify({ migrations: applied, scale, seeded, ms: measured.ms, budgetMs }))
+	const { ms, foreignKeyCheck, retryEstimateMs } = measured
+	console.log(JSON.stringify({ migrations: applied, scale, seeded, ms, budgetMs, foreignKeyCheck, retryEstimateMs }))
 	// KOPJE_BENCH_REPORT_ONLY: CI judges the median of several runs against the budget (scripts/kopje-bench-range.sh).
 	if (scale >= 1 && !inject('benchReportOnly')) {
-		expect(measured.ms).toBeLessThanOrEqual(budgetMs)
+		expect(ms).toBeLessThanOrEqual(budgetMs)
 	}
 }, 3_600_000)
