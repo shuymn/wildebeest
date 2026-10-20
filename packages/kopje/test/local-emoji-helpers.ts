@@ -193,9 +193,13 @@ export async function seedEmojiRow(
 		category?: string | null
 		disabled?: boolean
 		createdAt?: string
+		// The stored token and full url (default: a fresh token's url on https://kopje.test).
+		token?: string
+		url?: string
 	}
 ): Promise<{ id: string; token: string }> {
-	const token = randomToken()
+	const token = options.token ?? randomToken()
+	const url = options.url ?? `https://kopje.test/media/${token}/full.png`
 	await runInDurableObject(store, (_instance, state) => {
 		state.storage.sql.exec(
 			`INSERT INTO media_attachments (id, account_id, type, url, preview_url, file_token, content_type, meta,
@@ -203,8 +207,8 @@ export async function seedEmojiRow(
 			VALUES (?, ?, 'image', ?, ?, ?, 'image/png', ?, 1, NULL, '2026-10-12T00:00:00.000Z')`,
 			options.id,
 			options.owner,
-			`https://kopje.test/media/${token}/full.png`,
-			`https://kopje.test/media/${token}/small.png`,
+			url,
+			url.replace(/\/full\.(png|jpg)$/, '/small.png'),
 			token,
 			options.meta === undefined
 				? '{"original":{"width":16,"height":16},"small":{"width":16,"height":16}}'

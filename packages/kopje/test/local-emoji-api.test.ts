@@ -12,7 +12,8 @@ import { community, getJson, outbound, post, remoteAccount, remoteFollows } from
 import { Db } from '../src/db/sql'
 import { actorDocument } from '../src/domain/actor-update'
 import { jsonBytes } from '../src/domain/answer-budget'
-import { localEmojiTags } from '../src/domain/custom-emojis'
+import { emojiInstant, localEmojiTags } from '../src/domain/custom-emojis'
+import { localEmojiObject } from '../src/domain/local-emojis'
 import { emojiCandidates } from '../src/federation/remote-emoji'
 import { publishScheduled } from '../src/jobs/scheduled'
 import { ACCOUNT_EMOJIS_BYTES, MAX_ENABLED_EMOJIS, presentedEmojiBytes } from '../src/platform/stored-bounds'
@@ -337,16 +338,30 @@ describe('local Emoji tag resolution', () => {
 		const on = await added(t.store, 'on', { authority })
 		const off = await added(t.store, 'off', { authority })
 		await t.store.updateEmoji(BUILD, { authority, id: off.id, changes: { disabled: true } })
-		const token = new URL(on.url).pathname.split('/')[2]!
+		// Each negative has a stored row with exactly its url and name: only the property named is wrong.
+		let n = 0
+		const seeded = async (shortcode: string, token: string, url: string) => {
+			await seedEmojiRow(t.store, {
+				id: String(176_000_000_000_000_000n + BigInt(++n)),
+				shortcode,
+				owner: ALICE,
+				token,
+				url,
+			})
+			return [shortcode, url] as [string, string]
+		}
+		const valid = (key: string) => key.padEnd(43, 'k')
 		const pairs: [string, string][] = [
 			['on', on.url],
 			['off', off.url],
-			// The right url under another name, another origin, a short token, the preview, another extension, no row.
+			// The url of `on` under another name.
 			['renamed', on.url],
-			['elsewhere', on.url.replace('https://kopje.test', 'https://other.example')],
-			['short', `https://kopje.test/media/${'s'.repeat(31)}/full.png`],
-			['preview', `https://kopje.test/media/${token}/small.png`],
-			['jpeg', `https://kopje.test/media/${token}/full.jpg`],
+			// Another origin, a token too short for FILE_TOKEN, the preview path, another extension.
+			await seeded('elsewhere', valid('a'), `https://other.example/media/${valid('a')}/full.png`),
+			await seeded('short', 's'.repeat(31), `https://kopje.test/media/${'s'.repeat(31)}/full.png`),
+			await seeded('preview', valid('p'), `https://kopje.test/media/${valid('p')}/small.png`),
+			await seeded('jpeg', valid('j'), `https://kopje.test/media/${valid('j')}/full.jpg`),
+			// No row at all.
 			['unknown', `https://kopje.test/media/${'u'.repeat(43)}/full.png`],
 		]
 		const resolve = (stored: string) =>
@@ -357,7 +372,59 @@ describe('local Emoji tag resolution', () => {
 			[':on:', on.url],
 			[':off:', off.url],
 		])
+		// Positive controls of the seeded rows: on their own origin and form they resolve.
+		expect(
+			await runInDurableObject(t.store, (_instance, state) =>
+				localEmojiTags(
+					new Db(state.storage.sql),
+					JSON.stringify([pairs[3]]),
+					'https://other.example',
+					ACCOUNT_EMOJIS_BYTES
+				)
+			)
+		).toHaveLength(1)
 		expect(await resolve('not json')).toEqual([])
+	})
+
+	it('drops a tag whose stored time is not an instant, everywhere a tag is presented, keeping the valid one', async () => {
+		const t = await setup()
+		await setAccess(t.store, { admin_email: 'alice@mail.example' })
+		const authority = { ...ACCESS, email: 'alice@mail.example' }
+		const good = await added(t.store, 'good', { authority })
+		const bad = await added(t.store, 'bad', { authority })
+		const snapshot = JSON.stringify([
+			['good', good.url],
+			['bad', bad.url],
+		])
+		// The 0055 CHECK refuses such a time, so the reads are given one: created_at of `bad` as hour 24.
+		const malformed = (real: SqlStorage) =>
+			({
+				exec: (query: string, ...params: SqlStorageValue[]) => {
+					const rows = real.exec(query, ...params).toArray()
+					const changed = rows.map((row) =>
+						row.id === bad.id && 'created_at' in row ? { ...row, created_at: '2026-10-12T24:01:00.000Z' } : row
+					)
+					return {
+						toArray: () => changed,
+						one: () => changed[0],
+						rowsWritten: 0,
+						[Symbol.iterator]: () => changed[Symbol.iterator](),
+					}
+				},
+			}) as unknown as SqlStorage
+		const presented = await runInDurableObject(t.store, (_instance, state) => {
+			const sql = malformed(state.storage.sql)
+			return {
+				tags: localEmojiTags(new Db(sql), snapshot, 'https://kopje.test', ACCOUNT_EMOJIS_BYTES).map((tag) => tag.name),
+				badObject: localEmojiObject.run(sql, { id: bad.id, origin: 'https://kopje.test' }),
+				goodObject: localEmojiObject.run(sql, { id: good.id, origin: 'https://kopje.test' }) !== null,
+			}
+		})
+		expect(presented).toEqual({ tags: [':good:'], badObject: null, goodObject: true })
+		expect(emojiInstant('2026-10-12T23:59:59.999Z')).toBe(true)
+		for (const time of ['2026-10-12T24:00:00.000Z', '2026-02-30T00:00:00.000Z', '2026-10-12T00:00:00Z', 'x']) {
+			expect(emojiInstant(time), time).toBe(false)
+		}
 	})
 
 	it('serves the actor of a profile naming an imported emoji, and the CHECK refuses an hour Temporal refuses', async () => {

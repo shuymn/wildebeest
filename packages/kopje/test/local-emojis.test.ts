@@ -7,7 +7,7 @@ import { adminClaims, adminHarness, adminTeam, serviceClaims, setTeamAccess, typ
 import { sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { AVIF, GIF, JPEG_WITH_GPS, PNG_PLAIN, WEBP_PLAIN } from './fixtures/images'
-import { BUILD, migratedStore } from './helpers'
+import { BUILD, migratedStore, rejectionOf } from './helpers'
 import { addEmoji, added, base64, emojiStore, pngOf, pngOfBytes } from './local-emoji-helpers'
 import { bytes, r2Keys, TestCodec } from './media-helpers'
 import { ACCESS, copyConfig, dumpViaRpc, importViaRpc, memoryIO } from './ops-helpers'
@@ -22,6 +22,7 @@ import { rebuildMedia } from '../src/mastodon/media-rebuild'
 import { EMOJI_IMAGE_LIMIT, EMOJI_PREVIEW_LIMIT } from '../src/platform/emoji-image'
 import type { EncodeOptions } from '../src/platform/images'
 import type { StoreStub } from '../src/platform/store-client'
+import { toStoreUnavailable } from '../src/platform/store-errors'
 import { MAX_ENABLED_EMOJIS } from '../src/platform/stored-bounds'
 
 // Local custom emoji (migration 0055_local_custom_emojis, domain/local-emojis.ts, mastodon/emoji-upload.ts): the
@@ -328,7 +329,6 @@ describe('emoji completion', () => {
 		expect(await store.abandonEmoji(BUILD, { authority: ACCESS, id: reserved.id, token: 'c'.repeat(43) })).toBe(
 			'abandoned'
 		)
-		const { sweepMedia } = await import('../src/mastodon/media')
 		const swept = await sweepMedia(env, { build: () => BUILD, now: () => Date.now() + 60_000, store: () => store })
 		expect(swept).toBe(1)
 		expect(await sql(store, 'SELECT media_id FROM media_orphans')).toEqual([{ media_id: reserved.id }])
@@ -764,8 +764,18 @@ describe('emoji abandon under the rebuild lease', () => {
 		expect(
 			await store.mediaRebuildLease(BUILD, { authority: ACCESS, holder: 'rebuild', release: false })
 		).toMatchObject({ status: 'ok' })
+		// The maintenance flag gone (as by hand), so only the lease refuses the abandon (as media-rebuild.test.ts's
+		// "refuses leaving maintenance and every media-deleting write while the lease is live").
+		await sql(store, "DELETE FROM kopje_state WHERE name = 'maintenance'")
 		release()
 		await expect(upload).rejects.toThrow('completion lost')
+		const [reservation] = await sql<{ id: string }>(
+			store,
+			'SELECT id FROM media_attachments WHERE file_token = ?',
+			token
+		)
+		const refused = await rejectionOf(store.abandonEmoji(BUILD, { authority: ACCESS, id: reservation!.id, token }))
+		expect(toStoreUnavailable(refused)?.reason).toBe('rebuild-in-progress')
 		// The abandon was refused under the lease: the reservation and its files stay.
 		const [row] = await sql<{ id: string; processed: number }>(
 			store,
@@ -776,7 +786,6 @@ describe('emoji abandon under the rebuild lease', () => {
 		expect(await r2Keys(`files/${token}/`)).toEqual([`files/${token}/full`, `files/${token}/small`])
 		// Once the lease and maintenance end, the sweep takes the reservation and reconciliation its keys.
 		await store.mediaRebuildLease(BUILD, { authority: ACCESS, holder: 'rebuild', release: true })
-		await store.setMaintenance(BUILD, false)
 		const later = Date.now() + 2 * 60 * 60 * 1000
 		const deps = { build: () => BUILD, store: () => store, now: () => later }
 		expect(await sweepMedia(env, deps)).toBe(1)
