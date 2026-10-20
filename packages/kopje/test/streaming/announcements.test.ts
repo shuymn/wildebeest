@@ -190,40 +190,60 @@ describe('announcement events on user', () => {
 		}
 	})
 
-	it('sends a socket opened while an event is pending the changes written after it opened', async () => {
+	it('sends a socket opened while events are pending the changes written after it opened, and only those', async () => {
 		const h = await announcementHarness(['alice', 'bob'])
 		const early = await subscribed(h, h.users.alice.token, 'user')
 		const { id } = await h.admin.create({ text: 'first' })
 		await drained(h, early)
 		await takeAllEvents(early)
-		// An update journaled with no turn run, so its event is pending when the second socket opens.
-		await runInDurableObject(h.store, (_instance, state) => {
-			updateAnnouncement.run(state.storage.sql, {
-				authority: h.authority,
-				id,
-				changes: { text: 'pending' },
-				now: Date.now(),
+		const [alice, bob] = await Promise.all([sha256Hex(h.users.alice.token), sha256Hex(h.users.bob.token)])
+		// The operations run in the Store directly, so no turn is requested, and neither is one by a socket's upgrade
+		// or subscription: the fan-out is held until the drain barrier.
+		const write = (text: string, reactor: string) =>
+			runInDurableObject(h.store, (_instance, state) => {
+				const sql = state.storage.sql
+				updateAnnouncement.run(sql, { authority: h.authority, id, changes: { text }, now: Date.now() })
+				const credential = { tokenHash: reactor, scope: 'write:favourites' as const, now: Date.now() }
+				expect(reactToAnnouncement.run(sql, { credential, id, name: '👍' })).toEqual({ status: 'ok', value: 'ok' })
 			})
-		})
+		const position = () => sql<{ event_id: number }>(h.store, 'SELECT event_id FROM stream_cursor')
+		const held = await position()
+		// An update and a reaction pending, then the second socket opens and subscribes.
+		await write('pending', alice)
 		const late = await connect(h, h.users.bob.token)
 		late.send({ type: 'subscribe', stream: 'user' })
 		await echo(late)
-		// Then a change of each kind, written after it opened.
-		await h.admin.update(id, { text: 'after' })
-		await send(h, 'PUT', reactionPath(id, '👍'), h.users.alice.token)
-		await drained(h, early, late)
+		// Then an update and a reaction written after it subscribed, still with nothing sent.
+		await write('after', bob)
+		expect(await position()).toEqual(held)
 		expect(
-			events(late).map((m) => [
+			(
+				await sql<{ kind: string }>(
+					h.store,
+					'SELECT kind FROM stream_events WHERE id > ? ORDER BY id',
+					held[0]!.event_id
+				)
+			).map((row) => row.kind)
+		).toEqual(['announcement', 'announcement_reaction', 'announcement', 'announcement_reaction'])
+		await drained(h, early, late)
+		const shown = (inbox: Inbox) =>
+			events(inbox).map((m) => [
 				m.event,
 				m.event === 'announcement'
 					? (JSON.parse(m.payload!) as { content: string }).content
 					: (JSON.parse(m.payload!) as { count: number }).count,
 			])
-		).toEqual([
+		// Each presented when sent: the last text and both reactions.
+		expect(shown(late)).toEqual([
 			['announcement', '<p>after</p>'],
-			['announcement.reaction', 1],
+			['announcement.reaction', 2],
 		])
-		expect(events(early).map((m) => m.event)).toEqual(['announcement', 'announcement', 'announcement.reaction'])
+		expect(shown(early)).toEqual([
+			['announcement', '<p>after</p>'],
+			['announcement.reaction', 2],
+			['announcement', '<p>after</p>'],
+			['announcement.reaction', 2],
+		])
 	})
 
 	it('sends nothing to the socket of a revoked token, which is closed', async () => {
