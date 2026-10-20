@@ -1,0 +1,69 @@
+name: Kopje migration bench
+# Times Kopje's release-range upgrade on a GitHub-hosted runner, so the measure never shares a machine with other
+# work (scripts/kopje-bench-range.sh). It runs for a pull request that changes the migrations, the upgrade, the bench
+# or the toolchain, and on dispatch before a release (packages/kopje/RELEASING.md).
+on:
+  pull_request:
+    paths:
+      - "packages/kopje/migrations/**"
+      - "packages/kopje/src/db/migrations.ts"
+      - "packages/kopje/src/platform/store-kernel.ts"
+      - "packages/kopje/package.json"
+      - "packages/kopje/wrangler.jsonc"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".node-version"
+      - "packages/kopje/test/bench/**"
+      - "packages/kopje/vitest.bench.config.ts"
+      - "scripts/kopje-bench-range.sh"
+      - ".github/workflows/kopje-bench.yml"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.ref }}"
+  cancel-in-progress: true
+
+jobs:
+  bench:
+    timeout-minutes: 120
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: head
+          persist-credentials: false
+          fetch-depth: 0
+          fetch-tags: true
+      # A pull request also measures its base, alternating with the head, so a slow runner shows in both.
+      - if: github.event_name == 'pull_request'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: base
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          package_json_file: head/package.json
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: head/.node-version
+          cache: pnpm
+          cache-dependency-path: head/pnpm-lock.yaml
+
+      - name: Install
+        run: |
+          pnpm --dir head install --frozen-lockfile
+          if [ -d base ]; then pnpm --dir base install --frozen-lockfile; fi
+
+      - name: Measure
+        run: |
+          if [ -d base ]; then
+            bash head/scripts/kopje-bench-range.sh "$PWD/head" "$PWD/base"
+          else
+            bash head/scripts/kopje-bench-range.sh "$PWD/head"
+          fi

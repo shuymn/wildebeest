@@ -79,6 +79,7 @@ declare module 'vitest' {
 		benchMigration: string
 		benchFrom: string
 		benchScale: string
+		benchReportOnly: boolean
 	}
 }
 
@@ -547,7 +548,8 @@ it('applies the migration to the benchmark store within the budget', async () =>
 	expect(seeded).toMatchObject({ accounts, local: SHAPE.local, statuses, notifications, reports })
 	expect(measured.result).toMatchObject({ ok: true, applied })
 	console.log(JSON.stringify({ migrations: applied, scale, seeded, ms: measured.ms, budgetMs }))
-	if (scale >= 1) {
+	// KOPJE_BENCH_REPORT_ONLY: CI judges the median of several runs against the budget (scripts/kopje-bench-range.sh).
+	if (scale >= 1 && !inject('benchReportOnly')) {
 		expect(measured.ms).toBeLessThanOrEqual(budgetMs)
 	}
 }, 3_600_000)

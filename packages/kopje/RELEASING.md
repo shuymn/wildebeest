@@ -57,8 +57,11 @@ On GitHub, in the repository settings:
 1. On a branch, move the `[Unreleased]` notes in `CHANGELOG.md` under `## [<version>] - <YYYY-MM-DD>`. Say whether the
    version adds Store migrations and whether instances must change `wrangler.jsonc`. If it adds migrations, measure
    them together in one upgrade, from the first file the previous release did not carry, and record the range and the
-   time in the notes (the budget and the store: `test/bench/migration-cost.ts`); a run under other load on the machine
-   is not a measure, so check the load first. It must pass before the branch merges:
+   time in the notes (the budget and the store: `test/bench/migration-cost.ts`). The measure is the "Kopje migration
+   bench" workflow (`.github/workflows/kopje-bench.yml`): a GitHub-hosted runner takes the range from the newest
+   `kopje-v*` tag and reports the median of three runs, for every pull request that changes a migration and by hand
+   (`gh workflow run kopje-bench.yml --ref <branch>`). It must pass before the branch merges. A local run measures
+   the same range, but only on an otherwise idle machine:
 
     ```sh
     KOPJE_BENCH_SCALE=1 KOPJE_BENCH_MIGRATION= KOPJE_BENCH_FROM=0049_instance_bounds pnpm --filter kopje bench:migration
