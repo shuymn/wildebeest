@@ -3,15 +3,20 @@ import { env } from 'cloudflare:workers'
 
 import { beforeEach, describe, expect, it } from 'vitest'
 
-import { adminClaims, adminHarness, adminTeam, setTeamAccess, type AccessTeam } from './access-helpers'
+import { adminClaims, adminHarness, adminTeam, serviceClaims, setTeamAccess, type AccessTeam } from './access-helpers'
 import { sql } from './api-helpers'
+import { NOW } from './app-helpers'
 import { AVIF, GIF, JPEG_WITH_GPS, PNG_PLAIN, WEBP_PLAIN } from './fixtures/images'
-import { BUILD } from './helpers'
+import { BUILD, migratedStore } from './helpers'
 import { addEmoji, added, base64, emojiStore, pngOf, pngOfBytes } from './local-emoji-helpers'
 import { bytes, r2Keys, TestCodec } from './media-helpers'
-import { ACCESS } from './ops-helpers'
-import { completeEmoji } from '../src/domain/local-emojis'
-import { WRITE_WINDOW_MS } from '../src/domain/media'
+import { ACCESS, copyConfig, dumpViaRpc, importViaRpc, memoryIO } from './ops-helpers'
+import { run } from '../cli/lib/main.js'
+import { Db } from '../src/db/sql'
+import { localEmojiSnapshot, localEmojiTags } from '../src/domain/custom-emojis'
+import { adminEmojis, completeEmoji, customEmojis } from '../src/domain/local-emojis'
+import { expiredMedia, purgeMedia, WRITE_WINDOW_MS } from '../src/domain/media'
+import { rebuildCandidates } from '../src/domain/media-rebuild'
 import { EMOJI_IMAGE_LIMIT, EMOJI_PREVIEW_LIMIT } from '../src/platform/emoji-image'
 import type { EncodeOptions } from '../src/platform/images'
 import type { StoreStub } from '../src/platform/store-client'
@@ -511,5 +516,173 @@ describe('POST /admin/emojis', () => {
 			).toMatchObject({ ok: false, code: 'wrong-authority' })
 		}
 		expect(await sql(store, 'SELECT id FROM media_attachments')).toEqual([])
+	})
+})
+
+describe('emoji query plans at saturation, with stale statistics', () => {
+	it('reads each production query through its index, with no temporary B-tree', async () => {
+		const { store, adminId } = await emojiStore()
+		// Statistics taken while the table was empty, then MAX_ENABLED_EMOJIS enabled rows and as many disabled.
+		await sql(store, 'ANALYZE')
+		await runInDurableObject(store, (_instance, state) => {
+			state.storage.sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 2000)
+				INSERT INTO media_attachments (id, account_id, type, url, file_token, content_type, meta, processed)
+				SELECT CAST(140000000000000000 + i AS TEXT), ?, 'image', 'https://kopje.test/media/' || printf('tok%029d', i)
+					|| '/full.png', printf('tok%029d', i), 'image/png', '{"original":{"width":1,"height":1}}', 1 FROM n`,
+				adminId
+			)
+			state.storage.sql.exec(
+				`INSERT INTO custom_emojis (id, shortcode, disabled, created_at)
+				SELECT id, 'e' || substr(id, 15), CAST(substr(id, 15) AS INTEGER) > 1000, '2026-10-12T00:00:00.000Z'
+				FROM media_attachments`
+			)
+		})
+		const plans = await runInDurableObject(store, (_instance, state) => {
+			const real = state.storage.sql
+			const seen: Record<string, string> = {}
+			const capturing = (label: string, pattern: RegExp) =>
+				({
+					exec: (query: string, ...params: SqlStorageValue[]) => {
+						if (pattern.test(query)) {
+							seen[label] = real
+								.exec<{ detail: string }>(`EXPLAIN QUERY PLAN ${query}`, ...params)
+								.toArray()
+								.map((row) => row.detail)
+								.join(' | ')
+						}
+						return real.exec(query, ...params)
+					},
+				}) as unknown as SqlStorage
+			customEmojis.run(capturing('list', /INDEXED BY custom_emojis_enabled/), undefined)
+			localEmojiSnapshot(new Db(capturing('snapshot', /json_each/)), [':e0001: :e0002:'], 12_288)
+			localEmojiTags(
+				new Db(capturing('tags', /json_each/)),
+				JSON.stringify([['e0001', `https://kopje.test/media/tok${'0'.repeat(28)}1/full.png`]]),
+				'https://kopje.test',
+				12_288
+			)
+			adminEmojis.run(capturing('admin', /FROM custom_emojis e/), { after: '140000000000000500' })
+			expiredMedia.run(capturing('expired', /gc_at <= /), { now: NOW + 10 ** 10, limit: 100 })
+			purgeMedia.run(capturing('purge', /json_each/), { ids: ['140000000000000001'], now: NOW + 10 ** 10 })
+			rebuildCandidates.run(capturing('rebuild', /AS emoji/), { after: null, now: NOW })
+			const plan = (query: string) =>
+				real
+					.exec<{ detail: string }>(`EXPLAIN QUERY PLAN ${query}`)
+					.toArray()
+					.map((row) => row.detail)
+					.join(' | ')
+			seen.cap = plan('SELECT count(*) FROM custom_emojis WHERE disabled = 0')
+			return seen
+		})
+		expect(plans.list).toMatch(/SCAN e USING INDEX custom_emojis_enabled/)
+		expect(plans.list).not.toMatch(/TEMP B-TREE/)
+		expect(plans.snapshot).toMatch(
+			/^SCAN j VIRTUAL TABLE .* SEARCH e USING INDEX custom_emojis_enabled \(shortcode=\?\)/
+		)
+		expect(plans.snapshot).not.toMatch(/TEMP B-TREE/)
+		expect(plans.tags).toMatch(/SEARCH m USING INDEX sqlite_autoindex_media_attachments_\d \(file_token=\?\)/)
+		expect(plans.tags).toMatch(/SEARCH e USING (INTEGER PRIMARY KEY|INDEX sqlite_autoindex_custom_emojis_1)/)
+		expect(plans.admin).toMatch(/SEARCH e USING INDEX sqlite_autoindex_custom_emojis_1 \(id>\?\)/)
+		expect(plans.admin).not.toMatch(/TEMP B-TREE/)
+		expect(plans.expired).toMatch(/media_attachments_gc/)
+		for (const label of ['expired', 'purge', 'rebuild']) {
+			expect(plans[label], label).toMatch(
+				/SEARCH \w+_e USING COVERING INDEX sqlite_autoindex_custom_emojis_1 \(id=\?\)|SEARCH e USING COVERING INDEX sqlite_autoindex_custom_emojis_1 \(id=\?\)/
+			)
+		}
+		expect(plans.cap).toMatch(/SCAN custom_emojis USING COVERING INDEX custom_emojis_enabled/)
+	}, 60_000)
+})
+
+describe('emoji dump and import', () => {
+	it('round-trips emoji, refuses an image past the recorded edge limit, and revalidates an imported category', async () => {
+		const { store } = await emojiStore()
+		const kept = await added(store, 'kept')
+		const off = await added(store, 'off')
+		await store.updateEmoji(BUILD, { authority: ACCESS, id: off.id, changes: { disabled: true } })
+		await sql(
+			store,
+			`UPDATE custom_emojis SET category = CAST(X'${'EDA080'.repeat(64)}' AS TEXT) WHERE id = ?`,
+			kept.id
+		)
+		const { text } = await dumpViaRpc(store)
+		const target = await migratedStore()
+		await copyConfig(store, target)
+		expect((await importViaRpc(target, text)).report).toMatchObject({ ok: true, problems: [] })
+		const listed = await target.adminEmojis(BUILD, {})
+		expect(listed.emojis.map((e) => [e.shortcode, e.disabled, e.category])).toEqual([
+			['kept', false, null],
+			['off', true, null],
+		])
+		expect(await target.customEmojis(BUILD)).toEqual([
+			{ shortcode: 'kept', url: kept.url, static_url: kept.url, visible_in_picker: true },
+		])
+		// The same dump with the image's recorded width past 1,024 fails its chunk with the trigger's message.
+		const wide = text.replace(/"original":\{"width":16,/, '"original":{"width":1025,')
+		expect(wide).not.toBe(text)
+		const other = await migratedStore()
+		await copyConfig(store, other)
+		await expect(importViaRpc(other, wide)).rejects.toThrow(
+			/custom_emojis: the image is not a kept local upload within the emoji limits/
+		)
+	})
+})
+
+describe('kopje-admin emoji', () => {
+	it('adds from a file, lists, sets, disables and enables through the admin API', async () => {
+		const team = await adminTeam()
+		const { store } = await emojiStore()
+		await setTeamAccess(store, team)
+		const h = adminHarness(store, team, {}, undefined, () => new TestCodec())
+		const io = memoryIO(new Map([['blob.png', await pngOf(8, 8)]]))
+		const cli = async (argv: string[]) => {
+			const out: string[] = []
+			const fetch = async (input: string, init?: RequestInit) => {
+				const headers = new Headers(init?.headers)
+				headers.delete('CF-Access-Client-Id')
+				headers.delete('CF-Access-Client-Secret')
+				const url = new URL(input)
+				return h.as(serviceClaims(), `${url.pathname}${url.search}`, { ...init, headers })
+			}
+			const code = await run({
+				argv,
+				env: {
+					KOPJE_ADMIN_URL: 'https://admin.kopje.test',
+					CF_ACCESS_CLIENT_ID: 'id',
+					CF_ACCESS_CLIENT_SECRET: 'secret',
+				},
+				io,
+				stdout: { write: (text: string) => void out.push(text), isTTY: false },
+				stderr: { write: () => {}, isTTY: false },
+				fetch,
+			})
+			return { code, out: out.join('') }
+		}
+		const add = await cli(['emoji', 'add', 'blob', 'blob.png', '--category', 'Blobs', '--unlisted'])
+		expect(add.code).toBe(0)
+		const id = (JSON.parse(add.out) as { id: string }).id
+		expect(await store.adminEmojis(BUILD, {})).toMatchObject({
+			emojis: [{ id, shortcode: 'blob', category: 'Blobs', visible_in_picker: false }],
+		})
+		expect((await cli(['emoji', 'set', id, 'category=', 'picker=on'])).code).toBe(0)
+		expect((await cli(['emoji', 'disable', id])).code).toBe(0)
+		expect((await store.adminEmojis(BUILD, {})).emojis[0]).toMatchObject({
+			category: null,
+			visible_in_picker: true,
+			disabled: true,
+		})
+		expect((await cli(['emoji', 'enable', id])).code).toBe(0)
+		const listed = await cli(['emoji'])
+		expect(JSON.parse(listed.out)).toMatchObject({ emojis: [{ id, disabled: false }], next: null })
+		expect((await cli(['emoji', '--after', id])).out).toContain('"emojis": []')
+		for (const argv of [
+			['emoji', 'add', 'blob'],
+			['emoji', 'set', id, 'size=2'],
+			['emoji', 'disable', 'x'],
+			['emoji', 'drop', id],
+		]) {
+			expect((await cli(argv)).code, argv.join(' ')).toBe(2)
+		}
 	})
 })

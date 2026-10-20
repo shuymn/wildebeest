@@ -144,12 +144,16 @@ export function localEmojiSnapshot(db: Db, texts: readonly string[], bytes: numb
 	if (names.length === 0) {
 		return null
 	}
-	const rows = db.all<{ shortcode: string; url: string }>(
-		`SELECT e.shortcode, m.url FROM json_each(?1) j
-		JOIN custom_emojis e INDEXED BY custom_emojis_enabled ON e.shortcode = j.value AND e.disabled = 0
-		JOIN media_attachments m ON m.id = e.id ORDER BY j.key`,
-		JSON.stringify(names.slice(0, MAX_LOCAL_EMOJI_NAMES))
-	)
+	// json_each drives the join (CROSS JOIN), one index search per name; the rows are put in name order here, so no
+	// sort runs in SQLite.
+	const rows = db
+		.all<{ i: number; shortcode: string; url: string }>(
+			`SELECT j.key AS i, e.shortcode, m.url FROM json_each(?1) j
+			CROSS JOIN custom_emojis e INDEXED BY custom_emojis_enabled ON e.shortcode = j.value AND e.disabled = 0
+			JOIN media_attachments m ON m.id = e.id`,
+			JSON.stringify(names.slice(0, MAX_LOCAL_EMOJI_NAMES))
+		)
+		.sort((a, b) => a.i - b.i)
 	const candidates = rows.flatMap((row) => {
 		const url = emojiHref(row.url)
 		return url === null ? [] : [{ shortcode: row.shortcode, url }]
@@ -184,7 +188,7 @@ export function localEmojiTags(db: Db, stored: string | null, origin: string, by
 	}
 	const rows = db.all<{ url: string; content_type: string; id: string; shortcode: string; created_at: string }>(
 		`SELECT m.url, m.content_type, e.id, e.shortcode, e.created_at FROM json_each(?1) j
-		JOIN media_attachments m ON m.file_token = j.value JOIN custom_emojis e ON e.id = m.id`,
+		CROSS JOIN media_attachments m ON m.file_token = j.value JOIN custom_emojis e ON e.id = m.id`,
 		JSON.stringify(tokens.slice(0, MAX_EMOJIS))
 	)
 	const byUrl = new Map(rows.map((row) => [row.url, row]))
