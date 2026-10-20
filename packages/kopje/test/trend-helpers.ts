@@ -1,6 +1,7 @@
 import { runInDurableObject } from 'cloudflare:test'
 
 import { seedAccount, sql } from './api-helpers'
+import { BUILD } from './helpers'
 import type { StoreStub } from '../src/platform/store-client'
 
 // Trends (migration 0057_trends, domain/trends.ts): authors and statuses written straight into the Store with the
@@ -90,4 +91,59 @@ export async function trendStatuses(store: StoreStub, statuses: readonly TrendSt
 export async function trendStatus(store: StoreStub, status: TrendStatus): Promise<string> {
 	const [id] = await trendStatuses(store, [status])
 	return id!
+}
+
+// `n` discoverable remote accounts, ids from `base` (500000000000000000 by default), on `domains` domains.
+export async function authors(store: StoreStub, n: number, base = 500_000_000_000_000_000n, domains = 1) {
+	await sql(
+		store,
+		`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+		INSERT INTO accounts (id, uri, username, domain, discoverable)
+		SELECT CAST(?2 + i AS TEXT), 'https://d' || (i % ?3) || '.example/users/u' || ?2 || i, 'u' || i,
+			'd' || (i % ?3) || '.example', 1
+		FROM n`,
+		n,
+		String(base),
+		domains
+	)
+	return Array.from({ length: n }, (_, i) => String(base + BigInt(i)))
+}
+
+// The round at `now`, through the Store.
+export async function round(store: StoreStub, now = AT) {
+	return store.trendsRound(BUILD, { now })
+}
+
+export type TagRow = { name: string; score: number; max_score: number; max_score_at: string }
+
+export async function trendTags(store: StoreStub): Promise<TagRow[]> {
+	return sql<TagRow>(store, 'SELECT name, score, max_score, max_score_at FROM trend_tags ORDER BY name')
+}
+
+export async function trendRows(store: StoreStub): Promise<{ status_id: string; account_id: string; score: number }[]> {
+	return sql(store, 'SELECT status_id, account_id, score FROM trend_statuses ORDER BY score DESC, status_id DESC')
+}
+
+// `accounts` statuses carrying `tags`, one by each of `by` (an author each), published at `at` + their index ms.
+export function uses(by: readonly string[], tags: readonly string[], at: number, seqBase = 0): TrendStatus[] {
+	return by.map((a, i) => ({ author: a, published: at + i, seq: seqBase, tags }))
+}
+
+export async function setTrendSetting(store: StoreStub, name: 'trends' | 'trendable_by_default', value: boolean) {
+	await sql(store, 'INSERT OR REPLACE INTO instance_settings (name, value) VALUES (?, ?)', name, String(value))
+}
+
+export async function review(
+	store: StoreStub,
+	table: 'tag_trend_reviews' | 'status_trend_reviews' | 'account_trend_reviews',
+	key: string,
+	trendable: boolean
+) {
+	const column = table === 'tag_trend_reviews' ? 'name' : table === 'status_trend_reviews' ? 'status_id' : 'account_id'
+	await sql(
+		store,
+		`INSERT OR REPLACE INTO ${table} (${column}, trendable, reviewed_at) VALUES (?, ?, '2026-10-20T00:00:00.000Z')`,
+		key,
+		trendable ? 1 : 0
+	)
 }

@@ -18,6 +18,9 @@ import { StoreUnavailableError } from '../platform/store-errors'
 //   - announcements: one round (domain/announcements.ts announcementRound): publishes the scheduled ones that are due
 //     and takes down the published ones that ended, at most the live cap of each. In the Store's maintenance or
 //     readonly state, they wait.
+//   - trends: one round (domain/trends.ts trendsRound): the hashtags and statuses that trend, scored again from the
+//     stored statuses within bounded windows, and kept within their pools. In the Store's maintenance or readonly
+//     state, it waits.
 //   - polls: one round (domain/polls.ts): ends up to POLL_ROUND polls whose time has come (the 'poll' notifications,
 //     once, and a local poll's final Update), and records up to POLL_ROUND Updates of local polls' counts that are due,
 //     then rings the delivery doorbell for what they record. In the Store's maintenance or readonly state, they wait.
@@ -54,6 +57,13 @@ export async function handleScheduled(env: Env, deps: ScheduledDeps): Promise<vo
 	} catch (error) {
 		if (!(error instanceof StoreUnavailableError)) {
 			console.error({ event: 'kopje.scheduled.announcement_round_failed', ...errorFields(error) })
+		}
+	}
+	try {
+		await callStore(() => deps.store(env).trendsRound(deps.build(env), { now: deps.now() }))
+	} catch (error) {
+		if (!(error instanceof StoreUnavailableError)) {
+			console.error({ event: 'kopje.scheduled.trends_round_failed', ...errorFields(error) })
 		}
 	}
 	try {

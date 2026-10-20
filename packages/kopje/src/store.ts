@@ -81,6 +81,7 @@ import * as suggestions from './domain/suggestions'
 import { runModerationJobs, suspendAccount } from './domain/suspension'
 import * as tags from './domain/tags'
 import * as timelines from './domain/timelines'
+import * as trends from './domain/trends'
 import * as webPages from './domain/web-pages'
 import * as webSession from './domain/web-session'
 import {
@@ -1701,6 +1702,12 @@ export class Store extends DurableObject<Env> {
 
 	announcementRound(callerBuild: string, input: OperationInput<typeof announcements.announcementRound>) {
 		return this.#kernel.execute(callerBuild, announcements.announcementRound, input)
+	}
+
+	// Trends (domain/trends.ts): the cron's round.
+
+	trendsRound(callerBuild: string, input: OperationInput<typeof trends.trendsRound>) {
+		return this.#kernel.execute(callerBuild, trends.trendsRound, input)
 	}
 
 	// Search (B4b).
