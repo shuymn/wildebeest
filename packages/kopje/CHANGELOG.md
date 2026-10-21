@@ -90,8 +90,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   `media_attributes[][thumbnail]` on `PUT`/`PATCH /api/v1/statuses/:id`, answer 422 `Validation failed: Thumbnail must
   be blank`, as Mastodon does for images; they were ignored. `PUT`/`PATCH /api/v1/media/:id` takes a multipart body
   of at most 1 MiB plus 16 KiB.
-- `POST /api/v1/admin/accounts/:account_id/action` answers 404 for any `warning_preset_id` (Kopje has no presets) and
-  422 for a `text` past 10,000 UTF-8 bytes or with a NUL, before any change; both were ignored.
+- `POST /api/v1/admin/accounts/:account_id/action` answers 404 for any non-blank `warning_preset_id` (Kopje has no
+  presets) and 422 for a `text` past 10,000 UTF-8 bytes or with a NUL, before any change; both were ignored.
 
 ### Instance changes
 

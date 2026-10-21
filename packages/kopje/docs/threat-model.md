@@ -784,8 +784,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `test/policy-bounds.test.ts`, `test/migrations.test.ts`. Local suspension, self-protection and the credential epoch:
   the OAuth admin's `action` (`none`, which warns a local target (VIS-31) and resolves the report it names, and
   `suspend`) and `unsuspend`; `disable`, `sensitive` and `silence` answer 422, a `text` past 10,000 UTF-8 bytes or with
-  a NUL 422, any `warning_preset_id` (Kopje has no presets) and an unknown report 404, each before any write, and any
-  action on the admin's own account 403 (remote suspension is VIS-30's). Every warning stored is logged
+  a NUL 422, any non-blank `warning_preset_id` (Kopje has no presets) and an unknown report 404, each before any
+  write, and any action on the admin's own account 403 (remote suspension is VIS-30's). Every warning stored is logged
   (`create AccountWarning`) in the action's transaction, before the report's resolution. A
   suspension commits, in one bounded transaction, the account's `suspended_at` (its time S) and a new credential epoch
   (`local_accounts.credential_epoch`, incremented), the frozen report and follow bounds, its jobs and its actor's
@@ -892,17 +892,18 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `0062_account_warnings`) is written by the OAuth admin's account action of type `none` (VIS-29) for a local target
   with `send_email_notification` set, with a `moderation_warning` notification written to the target and sent by the
   target in the same transaction (one per warning: `notifications_account_warning`, and the natural key with the
-  warning, `0063_account_warning_notifications_key`). It is read only through that notification, by its recipient, in v1, v2 and
-  streaming alike: R15 (`shownSql`) shows it only when it is sent by its recipient and names a warning of that
-  recipient, by the warning's key, and the presenter checks both again, so a restored notification linked to another
-  account's warning, or to none, is in no read or count; R15 hides it while the target is unavailable. No other read, the admin API included, exposes a warning, as in Mastodon, where strikes are shown only
-  in its web pages. Its `status_ids` are ids copied from the report the admin named, which may name statuses the target
-  cannot see (an accepted, admin-directed disclosure of ids, no content, as in Mastodon); a copy the stored bound would
-  refuse is dropped to `NULL`. The text is plain text, never rendered as HTML. Clearing or dismissing the notification
-  leaves the warning, which nothing reads afterwards. Bounds: the text at most 10,000 UTF-8 bytes with no NUL, and
-  `status_ids` NULL or at most 100 18-digit ids in 2,101 bytes, held by CHECKs and triggers for imports too (RES-2);
-  the presenter reads one row by key per notification and reuses the presented sender for `target_account` (RES-7).
-  _Enforced (main):_ `src/domain/account-warnings.ts`, `warningOf` in `src/domain/notifications.ts`, the groups in
+  warning, `0063_account_warning_notifications_key`). It is read only through that notification, by its recipient, in
+  v1, v2 and streaming alike: R15 (`shownSql`) shows it only when it is sent by its recipient and names a warning of
+  that recipient, by the warning's key, and the presenter checks both again, so a restored notification linked to
+  another account's warning, or to none, is in no read or count; R15 hides it while the target is unavailable. No other
+  read, the admin API included, exposes a warning, as in Mastodon, where strikes are shown only in its web pages. Its
+  `status_ids` are ids copied from the report the admin named, which may name statuses the target cannot see (an
+  accepted, admin-directed disclosure of ids, no content, as in Mastodon); a copy the stored bound would refuse is
+  dropped to `NULL`. The text is plain text, never rendered as HTML. Clearing or dismissing the notification leaves the
+  warning, which nothing reads afterwards. Bounds: the text at most 10,000 UTF-8 bytes with no NUL, and `status_ids`
+  NULL or at most 100 18-digit ids in 2,101 bytes, held by CHECKs and triggers for imports too (RES-2); the presenter
+  reads one row by key per notification and reuses the presented sender for `target_account` (RES-7). _Enforced (main):_
+  `src/domain/account-warnings.ts`, `warningOf` in `src/domain/notifications.ts`, the groups in
   `src/domain/notification-groups.ts`, `shownSql` in `src/domain/audience.ts`, `storedWarningText` and
   `storedWarningStatusIds` in `src/platform/stored-bounds.ts`, migrations `0062_account_warnings` and
   `0063_account_warning_notifications_key`; `test/moderation-warnings.test.ts`, `test/admin-suspension.test.ts`,

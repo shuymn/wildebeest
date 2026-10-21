@@ -144,21 +144,20 @@ Mastodon does for a last status it can no longer load: so a last status whose au
 is not shown, while the conversation and its participants stay. The participants are presented as accounts are
 elsewhere (an unavailable one redacted); with nobody else in it, the owner's own account.
 
-Notifications: `shownSql(r, type, from, status, now, admin)` is R15, one rule for writing (`notify`), listing and reading
-notifications, and for sending their pushes (`domain/push.ts`, judged again at the time of sending). The sender is not
-the recipient (but for the end of the recipient's own poll and a `moderation_warning`, whose sender is its
-recipient: `NotifyService::DropCondition#drop?` exempts both from its from-self check; a `moderation_warning` must
-also be from its recipient and name a warning of that recipient), is available, is neither blocked (either way), muted with notifications nor domain-blocked by the
-recipient, and the recipient may see the status. A reblog notification also needs the sender's boost to be visible to
-the recipient. A mention is left out when its status mentions or replies to an account the recipient blocks or mutes
-with notifications. A post notification (`status`) is shown only for a status that is not a reply, or is one in the
-author's own conversation (its partner is the author; an unknown partner does not count), and only when
-`homeFilterSql` passes for it, as Mastodon's `FeedInsertWorker` notifies only of what home shows: so a sender the recipient mutes, with or without
-notifications, sends none. A report notification (`admin.report`) is shown only while its recipient is the OAuth admin
-(R37; `shownSql`'s `admin`, `adminAccountIdOnce`), and goes with its report. A moderation warning notification
-(`moderation_warning`) is its target's alone (R42): it is written to the target, sent by the target, so a suspended
-target (unavailable) is never shown it, and it is presented only while its warning's target and its sender are its
-recipient; it goes with its warning.
+Notifications: `shownSql(r, type, from, status, now, admin, warning)` is R15, one rule for writing (`notify`), listing
+and reading notifications, and for sending their pushes (`domain/push.ts`, judged again at the time of sending). The
+sender is not the recipient (but for the end of the recipient's own poll and a `moderation_warning`, whose sender is its
+recipient: `NotifyService::DropCondition#drop?` exempts both from its from-self check; a `moderation_warning` must also
+be from its recipient and name (`warning`) a warning of that recipient), is available, is neither blocked (either way),
+muted with notifications nor domain-blocked by the recipient, and the recipient may see the status. A reblog
+notification also needs the sender's boost to be visible to the recipient. A mention is left out when its status
+mentions or replies to an account the recipient blocks or mutes with notifications. A post notification (`status`) is
+shown only for a status that is not a reply, or is one in the author's own conversation (its partner is the author; an
+unknown partner does not count), and only when `homeFilterSql` passes for it, as Mastodon's `FeedInsertWorker` notifies
+only of what home shows: so a sender the recipient mutes, with or without notifications, sends none. A report
+notification (`admin.report`) is shown only while its recipient is the OAuth admin (R37; `shownSql`'s `admin`,
+`adminAccountIdOnce`), and goes with its report. A `moderation_warning` is its target's alone (R42), so a suspended
+target (unavailable) is never shown it; it goes with its warning.
 
 R15 also has a policy part, the recipient's notification policy (`notificationPolicySql`, Mastodon's
 `NotifyService::DropCondition#drop?` and `FilterCondition#filter?`, migration `0020_notification_policies`), which
