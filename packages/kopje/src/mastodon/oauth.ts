@@ -447,8 +447,7 @@ export const userinfo: ApiHandler = async (c, deps) => {
 
 // GET /.well-known/oauth-authorization-server (RFC 8414; Mastodon's OAuthMetadataSerializer, fields in its order):
 // what Kopje supports of Mastodon's. The authorization endpoint answers in the query only, so the response modes are
-// query alone; Mastodon (Doorkeeper) lists fragment and form_post too. fragment and form_post are accepted, as
-// Mastodon accepts them, and answered in the query, as Mastodon's consent form answers them (app/authorize.tsx).
+// query alone (fragment and form_post are accepted and answered in the query: app/authorize.tsx).
 export const authorizationServerMetadata: ApiHandler = (c) => {
 	const { origin } = present(c)
 	return Promise.resolve(

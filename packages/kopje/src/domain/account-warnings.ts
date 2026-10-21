@@ -18,8 +18,7 @@ import { storedWarningStatusIds, warningStatusIdsOf } from '../platform/stored-b
 // Kopje keeps a warning only where Mastodon notifies it (account_action.rb process_notification!, warnable?): type
 // none, a local target, send_email_notification set, judged in the action's transaction. A strike Mastodon keeps that
 // its API does not show is not kept: a remote target's, one with no notification, and a suspend's, whose notification
-// Mastodon drops when its worker finds the target suspended (it judges that when the worker runs, so a target
-// unsuspended first is notified there; docs/mastodon-deviations.md).
+// Mastodon drops when its worker finds the target suspended (docs/mastodon-deviations.md, "Admin account actions").
 
 // REST::AccountWarningSerializer. appeal is always null: Kopje has no disputes, through which Mastodon files appeals.
 export type AccountWarning = {

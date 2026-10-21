@@ -1091,7 +1091,7 @@ function silencedSql(r: string, a: string, now: string): string {
 // R15: whether the recipient `r` is shown a notification of `type` from `from` about `status` at `now`. One rule
 // decides whether a notification is written, listed and pushed (notifications.ts, push.ts): the sender is not the
 // recipient (but for the end of the recipient's own poll and a moderation_warning, whose sender is its recipient:
-// NotifyService::DropCondition#drop? exempts both from from_self?), is available (so a suspended recipient is never
+// NotifyService::DropCondition#drop? exempts both from from_self?), is available (so a suspended recipient is not
 // shown its moderation_warning), is not blocked (either way), muted with notifications or domain-blocked by the
 // recipient, and the recipient may see the status. A moderation_warning is shown only when its sender is its recipient
 // and `warning` (its account_warning_id) names a warning of that recipient (R42), by the warning's key, so a restored

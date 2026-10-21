@@ -191,7 +191,7 @@ export const checkCredential = readOperation<Credential, Authorized<Viewer>>((db
 // moves forward and an equal or later stamp writes nothing, so an account's row is written at most once per UTC day
 // whichever token or isolate asks, and a delayed request of an earlier day never moves it back. An invalid, expired
 // or stale token, a suspended account and an app token write nothing. Both seeks are by key (the token, then the
-// account). No stream turn follows it (stream-hub.ts written).
+// account). No stream turn follows it (StreamHub#written skips it).
 export const noteActivity = sessionOperation<{ tokenHash: string; now: number }, void>((db, { tokenHash, now }) => {
 	const auth = authorize(db, { tokenHash, scope: null, now })
 	if (auth.status !== 'ok' || auth.viewer.accountId === null) {

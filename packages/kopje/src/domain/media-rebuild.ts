@@ -217,8 +217,8 @@ export type RebuildRecord =
 
 // Records the sizes of the files the rebuild made, before they are written: the row must still be eligible with the
 // same token and type, so files are not written for a row that changed or went. Only meta changes (the animated flag
-// included); no account is touched, so a profile image keeps the static it had. A row doomed after
-// this is caught by rebuildRowLive once the files are written.
+// included); no account is touched, so a profile image keeps the static it had. A row doomed after this is caught
+// by rebuildRowLive once the files are written.
 export const recordRebuild = mediaRebuildOperation<
 	{
 		authority: ImportAuthority

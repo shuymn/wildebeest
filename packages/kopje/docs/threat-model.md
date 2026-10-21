@@ -871,11 +871,11 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   is stricter than Mastodon, whose reach already leaves deleted accounts out. A dropped row writes no receipt. An
   account that moved to an unavailable one shows it redacted in `moved` (`suspended: true`, no name, note, fields or
   emojis, the default images), and an unavailable account shows `moved: null` with its target not read, as
-  REST::AccountSerializer does (`test/account-moved.test.ts`). _Enforced
-  (main)._ Implementation, for accounts: `src/domain/remote-suspension.ts`, `actOnAccount` and `unsuspendAdminAccount`
-  in `src/domain/admin-accounts.ts`, `availableSql` in `src/domain/audience.ts`, the gate in `receive` and
-  `upsertRemoteActor` in `src/domain/inbox.ts`, `storeRemoteStatus` in `src/domain/remote-statuses.ts`, migration
-  `0045_remote_suspension`; `test/remote-suspension.test.ts`, `test/remote-suspension-deliveries.test.ts`,
+  REST::AccountSerializer does (`test/account-moved.test.ts`). _Enforced (main)._ Implementation, for accounts:
+  `src/domain/remote-suspension.ts`, `actOnAccount` and `unsuspendAdminAccount` in `src/domain/admin-accounts.ts`,
+  `availableSql` in `src/domain/audience.ts`, the gate in `receive` and `upsertRemoteActor` in `src/domain/inbox.ts`,
+  `storeRemoteStatus` in `src/domain/remote-statuses.ts`, migration `0045_remote_suspension`;
+  `test/remote-suspension.test.ts`, `test/remote-suspension-deliveries.test.ts`,
   `test/remote-suspension-inbound.test.ts`, `test/policy-oracle.test.ts` and `test/policy-writes.test.ts` (against
   `available` and `sends` in `test/policy-model.ts`). For the delivery part: `targetsOf`, `sendRefused`,
   `claimDeliveries` and `confirmDelivery` in `src/domain/deliveries.ts`, `recipientsFor` in `src/domain/audience.ts`,
@@ -895,20 +895,20 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   warning, `0063_account_warning_notifications_key`). It is read only through that notification, by its recipient, in
   v1, v2 and streaming alike: R15 (`shownSql`) shows it only when it is sent by its recipient and names a warning of
   that recipient, by the warning's key, and the presenter checks both again, so a restored notification linked to
-  another account's warning, or to none, is in no read or count; R15 hides it while the target is unavailable. No other
-  read, the admin API included, exposes a warning, as in Mastodon, where strikes are shown only in its web pages. Its
-  `status_ids` are ids copied from the report the admin named, which may name statuses the target cannot see (an
-  accepted, admin-directed disclosure of ids, no content, as in Mastodon); a copy the stored bound would refuse is
-  dropped to `NULL`. The text is plain text, never rendered as HTML. Clearing or dismissing the notification leaves the
-  warning, which nothing reads afterwards. Bounds: the text at most 10,000 UTF-8 bytes with no NUL, and `status_ids`
-  NULL or at most 100 18-digit ids in 2,101 bytes, held by CHECKs and triggers for imports too (RES-2); the presenter
-  reads one row by key per notification and reuses the presented sender for `target_account` (RES-7). _Enforced (main):_
-  `src/domain/account-warnings.ts`, `warningOf` in `src/domain/notifications.ts`, the groups in
-  `src/domain/notification-groups.ts`, `shownSql` in `src/domain/audience.ts`, `storedWarningText` and
-  `storedWarningStatusIds` in `src/platform/stored-bounds.ts`, migrations `0062_account_warnings` and
-  `0063_account_warning_notifications_key`; `test/moderation-warnings.test.ts`, `test/admin-suspension.test.ts`,
-  `test/migrations.test.ts`, `test/policy-oracle.test.ts` (against `shown` in `test/policy-model.ts`),
-  `test-node/policy-boundary.test.ts`, `test/status-bounds.test.ts` (the table of maxima),
+  another account's warning, or to none, is in no read or count. R15 writes none for a target unavailable at the action
+  (the warning is kept unnotified) and hides it while the target is unavailable. No other read, the admin API included,
+  exposes a warning, as in Mastodon, where strikes are shown only in its web pages. Its `status_ids` are ids copied from
+  the report the admin named, which may name statuses the target cannot see (an accepted, admin-directed disclosure of
+  ids, no content, as in Mastodon); a copy the stored bound would refuse is dropped to `NULL`. The text is plain text,
+  never rendered as HTML. Clearing or dismissing the notification leaves the warning, which nothing reads afterwards.
+  Bounds: the text at most 10,000 UTF-8 bytes with no NUL, and `status_ids` NULL or at most 100 18-digit ids in
+  2,101 bytes, held by CHECKs and triggers for imports too (RES-2); the presenter reads one row by key per notification
+  and reuses the presented sender for `target_account` (RES-7). _Enforced (main):_ `src/domain/account-warnings.ts`,
+  `warningOf` in `src/domain/notifications.ts`, the groups in `src/domain/notification-groups.ts`, `shownSql` in
+  `src/domain/audience.ts`, `storedWarningText` and `storedWarningStatusIds` in `src/platform/stored-bounds.ts`,
+  migrations `0062_account_warnings` and `0063_account_warning_notifications_key`; `test/moderation-warnings.test.ts`,
+  `test/admin-suspension.test.ts`, `test/migrations.test.ts`, `test/policy-oracle.test.ts` (against `shown` in
+  `test/policy-model.ts`), `test-node/policy-boundary.test.ts`, `test/status-bounds.test.ts` (the table of maxima),
   `test/account-warning-dump.test.ts`.
 
 ### Authorization (AUTH)
@@ -962,15 +962,14 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `src/security/tokens.ts` and `sessionMatches` in `src/platform/store-admin.ts`; `test/ops-authority.test.ts`
   ("constantTimeEqual"). - The OAuth admin of the Mastodon admin API (VIS-29) is not an admin here: it never
   holds an `ImportAuthority`, and `/api/v1/admin/*` is outside the Access application's `/admin` path. Its diagnostic
-  state (why there is or is not an OAuth admin, and a suspended match's username) is shown only to
-  Access, as `oauthAdmin` in `GET /admin/health`. _Enforced (main):_
-  `src/app/admin.ts`; `test/admin-api.test.ts` ("GET /admin/health: oauthAdmin"). Which account it is, while it is
-  one, is public, as Mastodon shows it: that account's `roles` holds the Owner's badge (id, name and color, no
-  permissions) wherever it is presented, and every other local account's holds none (`presentAccount` in
-  `src/domain/accounts.ts`, read once per operation through `adminAccountIdOnce`;
-  `test/account-entity-fields.test.ts`). The instance's contact account is configured apart and need not be it. The
-  operations that repair the OAuth admin, setting an account's email and unsuspending an account, are Access-only.
-  _Enforced (main)_ for setting an email (`POST /admin/accounts/email`, `setAccountEmail` in
+  state (why there is or is not an OAuth admin, and a suspended match's username) is shown only to Access, as
+  `oauthAdmin` in `GET /admin/health`. _Enforced (main):_ `src/app/admin.ts`; `test/admin-api.test.ts`
+  ("GET /admin/health: oauthAdmin"). Which account it is, while it is one, is public, as Mastodon shows it: that
+  account's `roles` holds the Owner's badge (id, name and color, no permissions) wherever it is presented, and every
+  other local account's holds none (`presentAccount` in `src/domain/accounts.ts`, read once per operation through
+  `adminAccountIdOnce`; `test/account-entity-fields.test.ts`). The instance's contact account is configured apart and
+  need not be it. The operations that repair the OAuth admin, setting an account's email and unsuspending an account,
+  are Access-only. _Enforced (main)_ for setting an email (`POST /admin/accounts/email`, `setAccountEmail` in
   `src/domain/admin-accounts.ts`, checked with `accessAdminRefusal` in its transaction, refusing an email that another
   local account's matches after normalization;
   `test/admin-reports.test.ts` ("set-email"), `test/cli.test.ts`). _Enforced (main)_ for unsuspending (`POST /admin/accounts/unsuspend` and `kopje-admin account unsuspend <username>`,
@@ -1005,10 +1004,10 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   before publication").
 - **AUTH-7: opaque credentials are unguessable and stored as digests.** Client ids and secrets, codes and access tokens
   are 32 random bytes. Codes and access tokens are stored and looked up only by their full SHA-256, at token info and
-  introspection too, so a lookup reveals no prefix; a hit and a miss do not take the same time, and what keeps a
-  token from being found by trying is its entropy, not the client authentication (app registration is anonymous).
-  _Enforced (main):_
-  `src/security/tokens.ts`, `src/domain/oauth.ts`; `test/oauth.test.ts` ("stores only digests of tokens and codes").
+  introspection too, so a lookup reveals no prefix; a hit and a miss do not take the same time, and what keeps a token
+  from being found by trying is its entropy, not the client authentication (app registration is anonymous).
+  _Enforced (main):_ `src/security/tokens.ts`, `src/domain/oauth.ts`; `test/oauth.test.ts` ("stores only digests of
+  tokens and codes").
   A Web Push subscription also keeps the access token it was made with, for the payload's `access_token` (Mastodon's),
   only sealed: AES-GCM under a key derived from `VAPID_JWK`, which the Store never holds, bound to the token's digest.
   _Enforced (main):_ `sealPushToken` in `src/security/web-push.ts`; `test/web-push-crypto.test.ts` ("opens a sealed
@@ -1225,9 +1224,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   the original of a boost (and its author) is fetched as the request's other fetches are, with the personal inbox
   owner's key or the instance actor's, never from the signed-document cache; search with `resolve=true`
   (`GET /api/v2/search`, and `GET /api/v1/accounts/search` for addresses) fetches as the instance actor only, for a
-  request whose token is valid, has the scope and names a user (401, 403 or 422 otherwise, before anything is
-  fetched), with WebFinger unsigned; the search after the fetch judges the token again at its own time. An account's
-  canonical address is decided as Mastodon 4.7.3's `ActivityPub::ProcessAccountService#check_webfinger!` and
+  request whose token is valid, has the scope and names a user (401, 403 or 422 otherwise, before anything is fetched),
+  with WebFinger unsigned; the search after the fetch judges the token again at its own time. An account's canonical
+  address is decided as Mastodon 4.7.3's `ActivityPub::ProcessAccountService#check_webfinger!` and
   `ResolveAccountService` decide it: the actor's own host
   declares it in the subject of its WebFinger answer for `acct:<preferredUsername>@<host>`; another domain there is a
   candidate, which must answer for that subject with the same actor id; otherwise the address is on the host
@@ -1631,24 +1630,23 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `test/remote-fields-bound.test.ts`). _Enforced (main)_ for each presented account: a remote bio is stored within
   `REMOTE_BIO_BYTES` (64 KiB) as a JSON string, cut by sanitizing a shorter raw prefix so it stays sanitized HTML
   (`sanitizeRemoteBio` in `src/security/html.ts`, which the cutover's converter and verification share); a remote
-  profile URL (`url`, icon, image) over `PROFILE_URL_LIMIT` (2,048) is not stored, and an image (`avatar`, `header`)
-  or its static shows only while its JSON is within `PROFILE_URL_LIMIT` bytes too, both defaults otherwise; the
-  display name is cut at 2,048 code points, and a username over 255 is refused. Converted rows hold the same bounds
-  (RES-2, stored values), so `ACCOUNT_COLUMN_MAP` reads the bio, display name and URLs as stored and cuts the username
-  at 255 code points; mentions read the username through the same projection (`src/domain/profile-bounds.ts`) and derive
-  `acct` and a fallback url from the cut username; the admin account search reads candidates' ids and flags only and
-  tests their text in SQL. The actor URI is
-  bounded as stored (`ACTOR_URI_LIMIT`), read through `actorUriSql`, and refused at the cutover; the account's `uri`
-  shows it only while its JSON is within `ACTOR_URI_LIMIT` bytes too (`withinIdentityBound`), and '' otherwise. An
-  account that moved shows the account it moved to one level deep, read through `MOVED_ACCOUNT_COLUMNS`
-  (`src/domain/accounts.ts`): every text cut in SQL by its raw bytes and in the presenter by its decoded limit (the
-  display name at 100 code points), URLs and actor id within 512 bytes, no note or fields, and the emojis its display
-  name references within 2,048 bytes of JSON; one such row reads at most 11,118 bytes from SQLite (22,876 of heap) and
-  presents at most 11,021 bytes of JSON, a target past every profile bound included (`test/status-bounds.test.ts`
-  ("the moved-to account"), `test/account-moved.test.ts`). The chunk's targets are read in one query, each account
-  presented with its target only when admission reaches it. One account is then at most the account occurrence of
-  "Maxima of presented units" below, so a page of 80 serializes to at most 11.46 MB; realistic bios (Mastodon's 500
-  characters, Misskey's 1,500, Pleroma's and GoToSocial's 5,000 of
+  profile URL (`url`, icon, image) over `PROFILE_URL_LIMIT` (2,048) is not stored, and an image (`avatar`, `header`) or
+  its static shows only while its JSON is within `PROFILE_URL_LIMIT` bytes too, both defaults otherwise; the display
+  name is cut at 2,048 code points, and a username over 255 is refused. Converted rows hold the same bounds (RES-2,
+  stored values), so `ACCOUNT_COLUMN_MAP` reads the bio, display name and URLs as stored and cuts the username at 255
+  code points; mentions read the username through the same projection (`src/domain/profile-bounds.ts`) and derive `acct`
+  and a fallback url from the cut username; the admin account search reads candidates' ids and flags only and tests
+  their text in SQL. The actor URI is bounded as stored (`ACTOR_URI_LIMIT`), read through `actorUriSql`, and refused at
+  the cutover; the account's `uri` shows it only while its JSON is within `ACTOR_URI_LIMIT` bytes too
+  (`withinIdentityBound`), and '' otherwise. An account that moved shows the account it moved to one level deep, read
+  through `MOVED_ACCOUNT_COLUMNS` (`src/domain/accounts.ts`): every text cut in SQL by its raw bytes and in the
+  presenter by its decoded limit (the display name at 100 code points), URLs and actor id within 512 bytes, no note or
+  fields, and the emojis its display name references within 2,048 bytes of JSON; one such row reads at most 11,118 bytes
+  from SQLite (22,876 of heap) and presents at most 11,021 bytes of JSON, a target past every profile bound included
+  (`test/status-bounds.test.ts` ("the moved-to account"), `test/account-moved.test.ts`). The chunk's targets are read in
+  one query, each account presented with its target only when admission reaches it. One account is then at most the
+  account occurrence of "Maxima of presented units" below, so a page of 80 serializes to at most 11.46 MB; realistic
+  bios (Mastodon's 500 characters, Misskey's 1,500, Pleroma's and GoToSocial's 5,000 of
   Japanese with links) render to at most about 28 KB. Windowed account reads (followers, following, follow requests,
   `favourited_by`, `reblogged_by`) select ids for their window and read the profiles of the page only
   (`test/account-answer-bytes.test.ts`, `test/admin-accounts.test.ts`). _Enforced (main)_ for answers of many accounts
@@ -1892,8 +1890,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `src/domain/inbox.ts` (`STATUS_CHILDREN`, `PURGED_ACCOUNT_CHILDREN`; each foreign key naming the account has its own
   check); the references no foreign key holds (`PURGED_ACCOUNT_REFERENCES`: other accounts' moves to it) are cleared
   with its relationships, each row by its key through a partial index, and the completion check keeps the account row
-  while any remains (`test/inbox.test.ts` ("clears the references to a purged account")); and the account's reports
-  (of it and by it) and its other notifications go child-first: each from a window of
+  while any remains (`test/inbox.test.ts` ("clears the references to a purged account")); and the account's reports (of
+  it and by it) and its other notifications go child-first: each from a window of
   their first rows, the pushes of a notification before it and a report's notifications before the report, so no delete
   cascades and the whole batch, the job's completion included, stays within `PURGE_BATCH` (`test/report-notifications.test.ts`
   ("a remote reporter's purge")). `test/cascade-guard.test.ts` checks the lists
@@ -2124,8 +2122,7 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   moves to its account through `accounts_moved_to` (`test/account-moved.test.ts` ("query plans of moves"),
   `test/status-rows.test.ts` ("reads statuses, media, votes and filters by key")). A purge, the stale-vote sweep, the
   domain job's clearing walk and a suspension's report resolution are planned this way (`test/purge-plans.test.ts`,
-  `test/moderation-plans.test.ts`, `test/domain-job.test.ts`); the
-  purge writes the same rows per batch as before, within PURGE_BATCH (RES-6).
+  `test/moderation-plans.test.ts`, `test/domain-job.test.ts`), each purge batch within `PURGE_BATCH` (RES-6).
 
 #### Maxima of presented units (RES-3)
 
@@ -2154,17 +2151,16 @@ one fill holds a status's emoji arrays and its polls' at their bounds at once (t
 displace escaped characters), so the conservative JSON of a shape is the escaped fill's plus 12,286 bytes for each
 poll it shows, at least every fill's (`test/status-bounds.test.ts` ("keeps the conservative JSON of every shape within
 85%, above every fill")); shares are of it. Each remote account of the fills carries its actor id (`uri`) at its bound,
-2,048 bytes as JSON, the most it presents. A local account also shows `noindex` and `roles`, at most the Owner's badge: the
-account occurrence's conservative JSON adds those keys (63 bytes) to the remote one measured, whose 32 KiB of fields
-alone pass a local account's four. Every presented account but the viewer's moved to an account of its own at the
-nested caps (a display name referencing emojis that fill 2,048 bytes, URLs at 512 bytes, a 253-byte domain), and each
-nested account counts at its derived 11,021 bytes in the conservative JSON (14 in the conversation, 10 in the group).
-Through the real Store
-RPC, a public timeline page, a context and a search answer of statuses of about 0.98 MB each, each cut at the budget,
-return 7.82 MB of JSON each (`test/answer-budgets.test.ts` ("the Store RPC returns a maximal answer")), and the boost
-of a quote above, alone or as the one status a lookup of it, the quote and the quoted status admits, returns 5.66 MB
-(escaped fill) and 4.62 MB (raw fill, the largest SQLite read) (`test/status-bounds.test.ts`), well under the 32 MiB
-RPC limit.
+2,048 bytes as JSON, the most it presents. A local account also shows `noindex` and `roles`, at most the Owner's badge:
+the account occurrence's conservative JSON adds those keys (63 bytes) to the remote one measured, whose 32 KiB of fields
+alone pass a local account's four. Every presented account but the viewer's moved to an account of its own at the nested
+caps (a display name referencing emojis that fill 2,048 bytes, URLs at 512 bytes, a 253-byte domain), and each nested
+account counts at its derived 11,021 bytes in the conservative JSON (14 in the conversation, 10 in the group). Through
+the real Store RPC, a public timeline page, a context and a search answer of statuses of about 0.98 MB each, each cut at
+the budget, return 7.82 MB of JSON each (`test/answer-budgets.test.ts` ("the Store RPC returns a maximal answer")), and
+the boost of a quote above, alone or as the one status a lookup of it, the quote and the quoted status admits, returns
+5.66 MB (escaped fill) and 4.62 MB (raw fill, the largest SQLite read) (`test/status-bounds.test.ts`), well under the
+32 MiB RPC limit.
 
 | Shape                                                            | Most SQLite bytes | Most JSON bytes | Conservative JSON | Rows read | Nodes | Share of 8 MiB |
 | ---------------------------------------------------------------- | ----------------- | --------------- | ----------------- | --------- | ----- | -------------- |
@@ -2186,12 +2182,12 @@ RPC limit.
 | Access admin's trending hashtag, derived from its caps           |                   | 4,551           | 4,625             |           |       | 0.1%           |
 | Access admin's trending status, derived from its caps            |                   | 27,748          | 29,060            |           |       | 0.3%           |
 
-A moderation_warning shows its account twice (the sender and the warning's `target_account`, the same local
-account with four local fields at their limits) beside a text at its 10,000-byte bound (U+0001, or malformed bytes
-read back as U+FFFD) and 100 status ids; as a stream payload, encoded again as a string, it is at most 324,414 bytes,
-under the hub's 512 KiB. The most JSON is the emoji-poll fill's, the most SQLite bytes the raw fill's; the escaped fill presents the
-conversation in 6,938,872 bytes. The Note's local emoji snapshot is at its 12,288-byte bound with as many entries as
-fit (61, every url at its shortest), resolved to 14,850 bytes of `Emoji` tags (at most 64 × 44 bytes past the
+A moderation_warning shows its account twice (the sender and the warning's `target_account`, the same local account with
+four local fields at their limits) beside a text at its 10,000-byte bound (U+0001, or malformed bytes read back as
+U+FFFD) and 100 status ids; as a stream payload, encoded again as a string, it is at most 324,414 bytes, under the hub's
+512 KiB. The most JSON is the emoji-poll fill's, the most SQLite bytes the raw fill's; the escaped fill presents the
+conversation in 6,938,872 bytes. The Note's local emoji snapshot is at its 12,288-byte bound with as many entries as fit
+(61, every url at its shortest), resolved to 14,850 bytes of `Emoji` tags (at most 64 × 44 bytes past the
 snapshot); an actor's at 6,144 bytes resolves to 30 tags of 7,404 bytes (`test/local-emoji-api.test.ts`).
 
 The trends shapes are derived the same way (`test/trends-maxima.test.ts`): a hashtag of a 1,024-byte name with its
@@ -2352,15 +2348,14 @@ A chunk of several takes at most its target of heap: 704 KiB (0.72 MB) for timel
 reports. Normal: the rows are the larger of 1.25 × the target and the item's rows, plus the admitted answer, the
 rejected item and, for groups and reports, their state. With the backstop fired, 1.25 × (the target + 1.20 MB) of
 dropped rows more. The 704 KiB timeline cap keeps the fallback below half the isolate's memory even while the dropped
-chunk remains live, with 69,798 bytes to spare: each account row's static images count at their stored bound (1,056
-bytes of heap each, whatever the fills hold), each moved-to account's row at its 22,876-byte heap cap and its JSON at
-11,021 bytes, and its emojis' presentation holds one entry past those it admits at a time (18,060 bytes at
-three times its literals, decoded strings and the larger of its entity and an href normalization makes before
-rejecting it: `referencedEmojis` in `src/domain/custom-emojis.ts`), counted once per answer. Every row term carries
-25% headroom; the peak test rejects growth past that boundary. The backstop-fired figures bound the fallback whenever
-the dropped rows are collected. A boost that showed a quote, attachments, mentions, hashtags or a
-poll of its own (a legacy row may hold them) would make a timeline's largest item pass half at a chunk of one; it shows
-none.
+chunk remains live, with 69,798 bytes to spare: each account row's static images count at their stored bound
+(1,056 bytes of heap each, whatever the fills hold), each moved-to account's row at its 22,876-byte heap cap and its
+JSON at 11,021 bytes, and its emojis' presentation holds one entry past those it admits at a time (18,060 bytes at three
+times its literals, decoded strings and the larger of its entity and an href normalization makes before rejecting it:
+`referencedEmojis` in `src/domain/custom-emojis.ts`), counted once per answer. Every row term carries 25% headroom; the
+peak test rejects growth past that boundary. The backstop-fired figures bound the fallback whenever the dropped rows are
+collected. A boost that showed a quote, attachments, mentions, hashtags or a poll of its own (a legacy row may hold
+them) would make a timeline's largest item pass half at a chunk of one; it shows none.
 
 | Phase                                             | Store isolate | Worker isolate |
 | ------------------------------------------------- | ------------- | -------------- |
