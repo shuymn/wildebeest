@@ -324,7 +324,9 @@ describe('inputs beyond still images', () => {
 		expect(await mediaKeysIn(await rowKeys(h.store))).toEqual([])
 	})
 
-	it('accepts a multi-frame GIF as WebP (that the frames survive is checked on the verification instance, B9)', async () => {
+	// That the frames survive in the served file and the preview is a still is the release check of docs/setup.md
+	// ("Still images of animated uploads").
+	it('accepts a multi-frame GIF as WebP', async () => {
 		const h = await users()
 		const media = await uploaded(h, h.users.alice, mediaForm(bytes(ANIMATED_GIF), {}, 'a.gif', 'image/gif'))
 		expect(media.url).toMatch(/\/full\.webp$/)

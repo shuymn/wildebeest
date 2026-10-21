@@ -595,10 +595,10 @@ describe('the hydrate queries (RES-3)', () => {
 })
 
 // The chunk target's cost depends on the workload: a page whose statuses each take a little more than half the target
-// pairs no two of them. 80 statuses of R between 352 KiB and 384 KiB (a 112 KB post with 200 mentions) pair at
-// 768 KiB, 40 hydrations, and stand alone at PAGE_CHUNKS' 704 KiB, 80 hydrations: the most a 704 KiB target adds,
-// twice the hydrations of 768 KiB. Each hydration's statements run in the same Store operation (no Store RPC more), and
-// R's one query a window is unchanged. The figures, logged, are what docs/threat-model.md quotes.
+// pairs no two of them. 80 statuses of R between 352 KiB and 384 KiB (a 111 KB post with 200 mentions) pair at
+// 768 KiB, 40 hydrations, and stand alone at PAGE_CHUNKS' 704 KiB, 80 hydrations. Each hydration's statements run in
+// the same Store operation (no Store RPC more), and R's one query a window is unchanged; a chunk of one is read without
+// a RowMeter. The figures, logged, are what docs/threat-model.md quotes.
 describe('the chunk target at its threshold workload (RES-3)', () => {
 	const AT_768: ChunkPlan = { target: 768 * 1024, cap: 768 * 1024 }
 	const LOW = 352 * 1024

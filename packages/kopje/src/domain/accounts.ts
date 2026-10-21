@@ -395,7 +395,8 @@ const ACCOUNT_FROM_BY_ID = `accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} LEFT JOIN
 // alone past it). A Mastodon user's account serializes to about 2 KiB, so 1,000 take a quarter of it; one at
 // Misskey's profile limits to about 8 KiB (test/account-answer-bytes.test.ts measures both).
 // Accounts read per query while an answer is filled: what is read past the budget is at most one chunk of accounts
-// at their bound (RES-2) with the accounts they moved to, 6.67 MB (test/status-bounds.test.ts).
+// at their bound (RES-2), their static images and the accounts they moved to included, 6.77 MB
+// (test/status-bounds.test.ts).
 const ANSWER_CHUNK = 50
 
 // The presented accounts of `ids` (accounts' ids), in order, `chunk` at a time, each with its serialized size (and a

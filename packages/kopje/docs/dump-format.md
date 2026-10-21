@@ -210,6 +210,14 @@ fails with `accounts: moved_to_account_id past its stored bound`. No foreign key
 restores as it is and presents no `moved`. A dump taken before 0060 has no such column: it restores into a Store at its
 own migrations, which then upgrades. A file built from legacy data writes NULL.
 
+Static images (migration `0061_account_static_images`): `accounts.avatar_static_url` and `header_static_url` are NULL
+(the static image is the image itself), or text of at most 512 UTF-8 bytes without NUL, only on a local row whose
+`avatar_url` or `header_url` respectively is set; anything else fails with `accounts: static image past its stored
+bound`. Kopje writes the still preview URL of the upload the image names. A local upload's `meta` may carry
+`"animated": true` beside its sizes: its served file is animated, and its preview a still. A dump taken before 0061
+has no such columns: it restores into a Store at its own migrations, which then upgrades. A file built from legacy data
+writes NULL.
+
 A report (migration `0054_remote_reports`) names any account as its reporter (`account_id`), once per `uri` and
 reported account, with `status_ids` of at most 100 ids within 2,101 UTF-8 bytes (compact JSON of 18-digit ids), a
 `uri` within 4,096 JSON-escaped UTF-8 bytes and a `comment` within 20,000 UTF-8 bytes (and 5,000 code points up to any
