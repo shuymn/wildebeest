@@ -10,7 +10,7 @@ import {
 	userCredential,
 } from './context'
 import { mastodonError } from './errors'
-import { descriptionProblem, parseFocus, sweepSoon } from './media'
+import { descriptionProblem, parseFocus, sweepSoon, THUMBNAIL_MUST_BE_BLANK, thumbnailSent } from './media'
 import { pageQuery, pageResponse } from './pagination'
 import { type Params, parseBoolean } from './params'
 import { API_VISIBILITIES, type ApiVisibility, QUOTE_POLICY_NAMES, type QuotePolicyName } from '../domain/audience'
@@ -270,8 +270,11 @@ export const editStatus: ApiHandler = async (c, deps) => {
 	// UpdateStatusService applies description and focus of each entry; an entry with neither changes nothing. Entries
 	// for the same attachment collapse to one, the later value of each field winning, before anything is compared.
 	const merged = new Map<string, MediaAttributes>()
-	for (const a of p.objects('media_attributes')) {
+	// A thumbnail on an entry with an id is refused, as MediaAttachment refuses it on an image (media.ts thumbnailSent).
+	let thumbnail = false
+	for (const a of p.objects('media_attributes', { files: ['thumbnail'] })) {
 		const focus = parseFocus(a.focus)
+		thumbnail ||= a.id !== undefined && thumbnailSent(a.thumbnail)
 		if (a.id === undefined || (a.description === undefined && focus === undefined)) {
 			continue
 		}
@@ -290,7 +293,8 @@ export const editStatus: ApiHandler = async (c, deps) => {
 			? 'Record invalid'
 			: typeof composed === 'string'
 				? composed
-				: mediaAttributes.map((a) => descriptionProblem(a.description)).find((found) => found !== undefined)
+				: (mediaAttributes.map((a) => descriptionProblem(a.description)).find((found) => found !== undefined) ??
+					(thumbnail ? THUMBNAIL_MUST_BE_BLANK : undefined))
 	if (typeof composed === 'string' || quotePolicy === null || problem !== undefined) {
 		return refuseAfterAuth(c, deps, mastodonError(422, problem ?? 'Validation failed'))
 	}

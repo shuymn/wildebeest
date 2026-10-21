@@ -3,7 +3,7 @@ import { HTTPException } from 'hono/http-exception'
 
 import type { ActivityMemo } from './activity'
 import { INVALID_TOKEN, invalidTokenError, mastodonError } from './errors'
-import { type Params, readParams } from './params'
+import { type Params, type ReadOptions, readParams } from './params'
 import type { Present } from '../domain/accounts'
 import type { StoredKey } from '../domain/actors'
 import type { AuthFailure, Authorized, Credential, UserCredential } from '../domain/auth'
@@ -137,8 +137,12 @@ export async function checkOptionalToken(c: ApiContext, deps: ApiDeps): Promise<
 }
 
 // The request's parameters, or the error answer for an unreadable body (after authentication, as Mastodon orders it).
-export async function requestParams(c: ApiContext, deps: ApiDeps): Promise<Params | Response> {
-	const result = await readParams(c.req.raw)
+export async function requestParams(
+	c: ApiContext,
+	deps: ApiDeps,
+	options: ReadOptions = {}
+): Promise<Params | Response> {
+	const result = await readParams(c.req.raw, options)
 	if (!result.ok) {
 		return refuseAfterAuth(
 			c,

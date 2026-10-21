@@ -10,6 +10,7 @@ import {
 	Params,
 	type ReadOptions,
 	readParams,
+	SENT_FILE,
 } from '../src/mastodon/params'
 
 describe('Params#objects', () => {
@@ -121,6 +122,98 @@ describe('readParams: declared files (Rails last-part rule)', () => {
 			{ files: FILES }
 		)
 		expect([p.file('thumbnail'), p.get('thumbnail'), p.get('note')]).toEqual([undefined, undefined, 'a'])
+	})
+})
+
+describe('Params#objects with file fields', () => {
+	const THUMBNAIL = { files: ['thumbnail'] }
+
+	it('places a listed file part among the text as Rack groups it, sequential and indexed', async () => {
+		const p = await read(
+			multipart([
+				['media_attributes[][thumbnail]', png()],
+				['media_attributes[][id]', 'a'],
+				['media_attributes[][id]', 'b'],
+				['media_attributes[][thumbnail]', png()],
+				['media_attributes[][thumbnail]', ''],
+				['media_attributes[1][thumbnail]', png()],
+				['media_attributes[1][id]', 'd'],
+			])
+		)
+		expect(p.objects('media_attributes', THUMBNAIL)).toEqual([
+			{ id: 'd', thumbnail: SENT_FILE },
+			{ thumbnail: SENT_FILE, id: 'a' },
+			{ id: 'b', thumbnail: SENT_FILE },
+			{ thumbnail: '' },
+		])
+	})
+
+	it('lets the last of repeated indexed parts win, file or text', async () => {
+		const p = await read(
+			multipart([
+				['media_attributes[0][id]', 'a'],
+				['media_attributes[0][thumbnail]', png()],
+				['media_attributes[0][thumbnail]', ''],
+				['media_attributes[1][id]', 'b'],
+				['media_attributes[1][thumbnail]', ''],
+				['media_attributes[1][thumbnail]', png()],
+			])
+		)
+		expect(p.objects('media_attributes', THUMBNAIL)).toEqual([
+			{ id: 'a', thumbnail: '' },
+			{ id: 'b', thumbnail: SENT_FILE },
+		])
+	})
+
+	it('reads no file part by default, and groups on unlisted file parts before reading them as absent', async () => {
+		const p = await read(
+			multipart([
+				['media_attributes[][id]', png()],
+				['media_attributes[][description]', png()],
+				['media_attributes[][thumbnail]', png()],
+				['media_attributes[][id]', 'a'],
+			])
+		)
+		expect(p.objects('media_attributes')).toEqual([{ id: 'a' }])
+		expect(p.objects('media_attributes', THUMBNAIL)).toEqual([{ thumbnail: SENT_FILE }, { id: 'a' }])
+		// A repeated file-valued `id` starts the next object as a text one does.
+		const repeated = await read(
+			multipart([
+				['media_attributes[][id]', png()],
+				['media_attributes[][thumbnail]', png()],
+				['media_attributes[][id]', 'A'],
+			])
+		)
+		expect(repeated.objects('media_attributes', THUMBNAIL)).toEqual([{ thumbnail: SENT_FILE }, { id: 'A' }])
+	})
+
+	it('lets a later file part replace an indexed text value, which then reads as absent', async () => {
+		const p = await read(
+			multipart([
+				['media_attributes[0][id]', 'a'],
+				['media_attributes[0][thumbnail]', png()],
+				['media_attributes[0][id]', png()],
+			])
+		)
+		expect(p.objects('media_attributes', THUMBNAIL)).toEqual([{ thumbnail: SENT_FILE }])
+		expect(p.objects('media_attributes')).toEqual([{ id: 'a' }])
+	})
+
+	it('keeps the parts through the query merge, and a JSON or urlencoded body has none', async () => {
+		const merged = await read(multipart([['media_attributes[][thumbnail]', png()]], '?media_attributes[][id]=q'), {
+			files: FILES,
+		})
+		expect(merged.objects('media_attributes', THUMBNAIL)).toEqual([{ thumbnail: SENT_FILE, id: 'q' }])
+		const body = {
+			media_attributes: [
+				{ id: 'a', thumbnail: null },
+				{ id: 'b', thumbnail: { nested: null } },
+			],
+		}
+		const fromJson = await read(post(JSON.stringify(body), 'application/json'))
+		expect(fromJson.objects('media_attributes', THUMBNAIL)).toEqual([{ id: 'a', thumbnail: '' }, { id: 'b' }])
+		const form = await read(post('media_attributes[][thumbnail]=x', 'application/x-www-form-urlencoded'))
+		expect(form.objects('media_attributes', THUMBNAIL)).toEqual([{ thumbnail: 'x' }])
 	})
 })
 
