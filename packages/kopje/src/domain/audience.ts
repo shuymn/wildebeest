@@ -793,7 +793,15 @@ export function statusReads(
 		) {
 			const admin =
 				viewer !== null && viewer.accountId !== null && query.admin === viewer.accountId ? at.viewer : 'NULL'
-			const rule = shownSql(at.viewer, 'n.type', 'n.from_account_id', 'n.status_id', now(), admin)
+			const rule = shownSql(
+				at.viewer,
+				'n.type',
+				'n.from_account_id',
+				'n.status_id',
+				now(),
+				admin,
+				'n.account_warning_id'
+			)
 			const from =
 				query.within === undefined
 					? 'main.notifications n'
@@ -1093,7 +1101,9 @@ function silencedSql(r: string, a: string, now: string): string {
 // recipient (but for the end of the recipient's own poll and a moderation_warning, whose sender is its recipient:
 // NotifyService::DropCondition#drop? exempts both from from_self?), is available (so a suspended recipient is never
 // shown its moderation_warning), is not blocked (either way), muted with notifications or domain-blocked by the
-// recipient, and the recipient may see the status. A reblog notification names the original; the boost itself (the sender's one
+// recipient, and the recipient may see the status. A moderation_warning is shown only when its sender is its
+// recipient and `warning` (its account_warning_id) names a warning of that recipient (R42), by the warning's key, so a
+// restored row linked to another account's warning, or to none, is in no read or count. A reblog notification names the original; the boost itself (the sender's one
 // boost of it) must be visible to the recipient too, so a followers-only or direct boost is not revealed to an author
 // outside its audience. A mention is left out when its status mentions or replies to an account the recipient
 // silences (FeedManager#filter_from_mentions), and a post notification (`status`) when its status is a reply other
@@ -1103,8 +1113,18 @@ function silencedSql(r: string, a: string, now: string): string {
 // may see the quoted status by itself (R35, VIS-27: Mastodon checks neither). An admin.report is shown only while its
 // recipient is `admin`, the OAuth admin's account id (R37; NULL for none), so it leaves every read, push and stream
 // when the admin changes; it goes with its report (notifications.report_id, ON DELETE CASCADE).
-export function shownSql(r: string, type: string, from: string, status: string, now: string, admin: string): string {
+export function shownSql(
+	r: string,
+	type: string,
+	from: string,
+	status: string,
+	now: string,
+	admin: string,
+	warning: string
+): string {
 	return `((${from} <> ${r} OR ${type} IN ('poll', 'moderation_warning'))
+		AND (${type} <> 'moderation_warning' OR (${from} = ${r}
+			AND EXISTS (SELECT 1 FROM main.account_warnings aw WHERE aw.id = ${warning} AND aw.target_account_id = ${r})))
 		AND (${type} <> 'admin.report' OR ${r} IS ${admin})
 		AND ${availableSql(from)}
 		AND NOT ${silencedSql(r, from, now)}
@@ -1134,10 +1154,18 @@ export function conversationMutedSql(owner: string, thread: string): string {
 // conversation the recipient mutes (R31, NotifyService::DropCondition#conversation_muted?: a reblog notification
 // names the original, whose conversation counts). Mastodon drops only the notifications it would create: one written
 // before the mute stays listed and pushed, so listing and pushes apply shownSql alone.
-export function notifiedSql(r: string, type: string, from: string, status: string, now: string, admin: string): string {
+export function notifiedSql(
+	r: string,
+	type: string,
+	from: string,
+	status: string,
+	now: string,
+	admin: string,
+	warning: string
+): string {
 	return `((${status} IS NULL OR NOT EXISTS (SELECT 1 FROM main.statuses nc WHERE nc.id = ${status}
 			AND ${conversationMutedSql(r, 'nc.thread')}))
-		AND ${shownSql(r, type, from, status, now, admin)})`
+		AND ${shownSql(r, type, from, status, now, admin, warning)})`
 }
 
 // ---- Notification policies (R15 as notify writes; Mastodon 4.5's NotifyService::DropCondition and FilterCondition).

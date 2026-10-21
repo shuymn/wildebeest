@@ -230,7 +230,7 @@ function target(db: Db, id: string, now: number): TargetRow | undefined {
 			LEFT JOIN statuses s ON s.id = n.status_id
 		WHERE d.id = CAST(?1 AS INTEGER) AND ${availableLocalSql('l')} AND n.created_at > ?3 AND ${UNFILTERED_SQL}
 			AND ${pushWantedSql('p', 't', 'n', '?2')}
-			AND ${keptSql('n')} AND ${shownSql('n.account_id', 'n.type', 'n.from_account_id', 'n.status_id', '?2', '?4')}`,
+			AND ${keptSql('n')} AND ${shownSql('n.account_id', 'n.type', 'n.from_account_id', 'n.status_id', '?2', '?4', 'n.account_warning_id')}`,
 		id,
 		new Date(now).toISOString(),
 		new Date(now - PUSH_TTL_MS).toISOString(),

@@ -893,9 +893,9 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   with `send_email_notification` set, with a `moderation_warning` notification written to the target and sent by the
   target in the same transaction (one per warning: `notifications_account_warning`, and the natural key with the
   warning, `0063_account_warning_notifications_key`). It is read only through that notification, by its recipient, in v1, v2 and
-  streaming alike, and presented only when the warning's target and the notification's sender are its recipient, so a
-  restored notification linked to another account's warning shows nothing; R15 hides it while the target is
-  unavailable. No other read, the admin API included, exposes a warning, as in Mastodon, where strikes are shown only
+  streaming alike: R15 (`shownSql`) shows it only when it is sent by its recipient and names a warning of that
+  recipient, by the warning's key, and the presenter checks both again, so a restored notification linked to another
+  account's warning, or to none, is in no read or count; R15 hides it while the target is unavailable. No other read, the admin API included, exposes a warning, as in Mastodon, where strikes are shown only
   in its web pages. Its `status_ids` are ids copied from the report the admin named, which may name statuses the target
   cannot see (an accepted, admin-directed disclosure of ids, no content, as in Mastodon); a copy the stored bound would
   refuse is dropped to `NULL`. The text is plain text, never rendered as HTML. Clearing or dismissing the notification

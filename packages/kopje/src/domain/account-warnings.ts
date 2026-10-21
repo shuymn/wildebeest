@@ -5,7 +5,8 @@ import type { Db } from '../db/sql'
 import { storedWarningStatusIds } from '../platform/stored-bounds'
 
 // Account warnings (Mastodon's AccountWarning, the strike Admin::AccountAction#process_strike! writes; migration
-// 0062_account_warnings). This module alone reads or writes account_warnings (test-node/policy-boundary.test.ts).
+// 0062_account_warnings). This module alone reads or writes account_warnings, beside the rule (shownSql in audience.ts,
+// which checks that a moderation_warning names a warning of its recipient; test-node/policy-boundary.test.ts).
 //
 // R42 (VIS-31): a warning is its target's alone. It is read only through the target's own moderation_warning
 // notification (notifications.account_warning_id, read by its recipient), and presented only when the warning's

@@ -227,6 +227,12 @@ describe('moderation_warning: who sees it (R42, VIS-31)', () => {
 				recipient === bob ? [kept!.group_key] : []
 			)
 			expect((await get(h, `/api/v1/notifications/${id}`, recipient.token)).status).toBe(404)
+			// R15 leaves it out of the counts too, so they agree with the lists.
+			for (const version of ['v1', 'v2']) {
+				expect((await get(h, `/api/${version}/notifications/unread_count`, recipient.token)).body).toEqual({
+					count: recipient === bob ? 1 : 0,
+				})
+			}
 			expect(await streamed(h, recipient, id)).toBeNull()
 			await sql(h.store, 'DELETE FROM notifications WHERE id = ?', Number(id))
 		}
@@ -239,6 +245,7 @@ describe('moderation_warning: who sees it (R42, VIS-31)', () => {
 			new Date(NOW).toISOString()
 		)
 		expect((await list(h, bob)).map((n) => n.id)).toEqual([kept!.id])
+		expect((await get(h, '/api/v1/notifications/unread_count', bob.token)).body).toEqual({ count: 1 })
 	})
 
 	it('keeps every other notification from the recipient itself out; a poll and a moderation_warning pass', async () => {
@@ -403,7 +410,7 @@ describe('moderation_warning: plans (RES-7)', () => {
 		})
 		const of = (pattern: RegExp) => after.filter(({ query }) => pattern.test(query))
 		for (const { query, plan } of after) {
-			expect(scansOf(plan, ['notifications', 'account_warnings']), `${query}\n${plan.join('\n')}`).toEqual([])
+			expect(scansOf(plan, ['notifications', 'account_warnings', 'aw']), `${query}\n${plan.join('\n')}`).toEqual([])
 		}
 		const [deleted] = of(/^DELETE FROM notifications WHERE account_id = \?1/)
 		expect(deleted?.plan.join('\n')).toMatch(

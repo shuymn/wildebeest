@@ -95,7 +95,7 @@ export function notify(db: Db, input: NotifyInput): void {
 	const accountWarningId = input.accountWarningId ?? null
 	if (input.type === 'update' || input.type === 'quoted_update') {
 		const eligible = db.first(
-			`SELECT 1 AS ok WHERE ${notifiedSql('?1', '?5', '?2', '?3', '?4', 'NULL')}`,
+			`SELECT 1 AS ok WHERE ${notifiedSql('?1', '?5', '?2', '?3', '?4', 'NULL', 'NULL')}`,
 			input.recipientId,
 			input.fromId,
 			input.statusId,
@@ -148,7 +148,7 @@ export function notify(db: Db, input: NotifyInput): void {
 			created_at, group_key, filtered)
 		SELECT ?1, ?2, ?3, ?4, CAST(?9 AS INTEGER), CAST(?10 AS INTEGER), ?5, ?6, ?7
 		WHERE EXISTS (SELECT 1 FROM local_accounts WHERE account_id = ?1)
-			AND ${notifiedSql('?1', '?2', '?3', '?4', '?5', '?8')}
+			AND ${notifiedSql('?1', '?2', '?3', '?4', '?5', '?8', 'CAST(?10 AS INTEGER)')}
 		ON CONFLICT DO NOTHING RETURNING id`,
 		input.recipientId,
 		input.type,

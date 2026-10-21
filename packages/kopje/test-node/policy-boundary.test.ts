@@ -231,10 +231,12 @@ const RULES: readonly Rule[] = [
 		},
 	},
 	{
-		// R42: a warning is its target's alone, read only through the target's own moderation_warning notification.
+		// R42: a warning is its target's alone, read only through the target's own moderation_warning notification (the
+		// rule, shownSql, checks that the notification names one of its recipient's).
 		name: 'reads or writes account_warnings',
 		pattern: new RegExp(`\\b(?:FROM|JOIN|INTO|UPDATE)\\s+${table(['account_warnings'])}`, 'i'),
 		allowed: {
+			...POLICY_ONLY,
 			'src/domain/account-warnings.ts': 'the admin action’s writes and the presenter of the target’s notification',
 		},
 	},
