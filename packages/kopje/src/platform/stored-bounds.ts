@@ -1095,3 +1095,117 @@ export function accountWarningsMigrationSql(): string {
   WHERE account_warning_id IS NOT NULL;`,
 	].join('\n\n')}\n`
 }
+
+// ---- Status applications: migration 0064_status_applications
+
+// statuses.application_id: NULL, or the client_id of the app a local original was posted through (Mastodon's
+// Status#application_id, AUTH-6: the credential's client), in UTF-8 bytes. Kopje's client ids are 43 base64url
+// characters (security/tokens.ts randomToken) and a converted legacy client's a UUID, so 64 holds both. No foreign key
+// holds it (Mastodon has none, schema.rb): removing an app writes no status row, and an id whose app is gone reads as
+// no app (RES-6). True when `row` holds anything else, judged in order: the storage class, the bytes, NUL, the
+// structure (base64url characters), then the row (a boost, or a remote author: Mastodon records an app on neither).
+export const APP_ID_BYTES = 64
+const APP_ID = new RegExp(`^[A-Za-z0-9_-]{1,${APP_ID_BYTES}}$`)
+
+export function applicationIdPastBoundSql(row: string): string {
+	const column = `${row}.application_id`
+	return `CASE WHEN ${column} IS NULL THEN 0
+	WHEN typeof(${column}) <> 'text' THEN 1
+	WHEN length(CAST(${column} AS BLOB)) NOT BETWEEN 1 AND ${APP_ID_BYTES} THEN 1
+	WHEN instr(CAST(${column} AS BLOB), x'00') > 0 THEN 1
+	WHEN ${column} GLOB '*[^0-9A-Za-z_-]*' THEN 1
+	WHEN ${row}.reblog_of_id IS NOT NULL THEN 1
+	WHEN (SELECT a.domain FROM accounts a WHERE a.id = ${row}.account_id) IS NOT NULL THEN 1
+	ELSE 0 END`
+}
+
+// The application_id a local original stores for the client `value`: it when the bound's value cases accept it, else
+// none (the post is written without an app rather than refused).
+export function storedApplicationId(value: unknown): string | null {
+	return typeof value === 'string' && APP_ID.test(value) ? value : null
+}
+
+// The bounds of an app's name and website as a status presents them (REST::StatusSerializer's application).
+// A name: APP_NAME_LIMIT code points (Mastodon's ApplicationExtension APP_NAME_LIMIT), so at most APP_NAME_BYTES UTF-8
+// bytes and APP_NAME_JSON_BYTES as a JSON string. A website: APP_WEBSITE_LIMIT UTF-8 bytes (isAppWebsite).
+export const APP_NAME_LIMIT = 60
+export const APP_NAME_BYTES = 4 * APP_NAME_LIMIT
+export const APP_NAME_JSON_BYTES = 6 * APP_NAME_LIMIT + 2
+export const APP_WEBSITE_LIMIT = 2000
+export const APP_WEBSITE_JSON_BYTES = 2 * APP_WEBSITE_LIMIT + 2
+
+// The characters no app website may hold, those that end or split an HTML attribute or a URL in common parsers: C0
+// controls, the space, DEL, C1 controls (U+0085 NEL is not in \s), other whitespace (\s), and " ' < > \ ^ ` { | }.
+// None needs escaping in JSON.
+// eslint-disable-next-line no-control-regex
+const WEBSITE_EXCLUDED = /[\u0000-\u0020\u007f-\u009f"'<>\\^`{|}]|\s/u
+
+// Whether `text`, as decoded, is an app website registration accepts and a status presents as stored: well-formed (so
+// its JSON is its UTF-8 bytes and the quotes) with no excluded character, within APP_WEBSITE_LIMIT UTF-8 bytes and
+// APP_WEBSITE_JSON_BYTES as JSON, and an http(s) URL with a host by the WHATWG parser. Mastodon's UrlValidator
+// (Addressable::URI.parse, an http(s) scheme and a host) may accept some of the excluded characters
+// (docs/mastodon-deviations.md, Posting).
+export function isAppWebsite(text: string): boolean {
+	if (text.length > APP_WEBSITE_LIMIT || !text.isWellFormed() || WEBSITE_EXCLUDED.test(text)) {
+		return false
+	}
+	if (
+		ENCODER.encode(text).length > APP_WEBSITE_LIMIT ||
+		ENCODER.encode(JSON.stringify(text)).length > APP_WEBSITE_JSON_BYTES
+	) {
+		return false
+	}
+	try {
+		const url = new URL(text)
+		return (url.protocol === 'http:' || url.protocol === 'https:') && url.hostname !== ''
+	} catch {
+		return false
+	}
+}
+
+// The read projections of oauth_clients.name and website for a status (RES-2): NULL for another storage class (no JSON
+// function sees a BLOB) or past the raw bytes a presented value may hold, so a row reads at most APP_NAME_BYTES and
+// APP_WEBSITE_LIMIT bytes of them whatever was imported. The presenter judges the decoded value again
+// (presentedAppName, isAppWebsite): malformed bytes decode to U+FFFD, three bytes each.
+export function appNameSql(column: string): string {
+	return `CASE WHEN typeof(${column}) = 'text' THEN ${byteBoundSql(column, APP_NAME_BYTES)} END`
+}
+
+export function appWebsiteSql(column: string): string {
+	return `CASE WHEN typeof(${column}) = 'text' THEN ${byteBoundSql(column, APP_WEBSITE_LIMIT)} END`
+}
+
+// A stored app name as a status presents it: the name when, as decoded, it is 1 to APP_NAME_LIMIT code points within
+// APP_NAME_BYTES UTF-8 bytes and APP_NAME_JSON_BYTES as a JSON string, with no U+0000 (which no registration keeps:
+// storedText's rule), else none.
+export function presentedAppName(name: string | null): string | null {
+	if (name === null || name === '' || name.length > APP_NAME_BYTES || name.includes('\u0000')) {
+		return null
+	}
+	let points = 0
+	for (const _ of name) {
+		if (++points > APP_NAME_LIMIT) {
+			return null
+		}
+	}
+	return ENCODER.encode(name).length <= APP_NAME_BYTES &&
+		ENCODER.encode(JSON.stringify(name)).length <= APP_NAME_JSON_BYTES
+		? name
+		: null
+}
+
+// Migration 0064_status_applications after its header (test/migrations.test.ts compares them): the column, added
+// without a default or CHECK so no row is read, and triggers that refuse a write where applicationIdPastBoundSql holds.
+// Every existing row holds NULL, which is within the bound.
+export function statusApplicationsMigrationSql(): string {
+	return `${[
+		'ALTER TABLE statuses ADD COLUMN application_id TEXT;',
+		...boundTriggers(
+			'statuses_application',
+			'statuses',
+			'application_id, reblog_of_id, account_id',
+			applicationIdPastBoundSql('NEW'),
+			'statuses: application_id past its stored bound'
+		),
+	].join('\n\n')}\n`
+}

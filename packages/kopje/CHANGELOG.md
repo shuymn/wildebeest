@@ -13,10 +13,32 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - Notification `filtered`: `true` on a notification the recipient's policy filtered, as `GET /api/v1/notifications`
   (with `include_filtered` or `account_id`) and `GET /api/v1/notifications/:id` show it; absent otherwise. Grouped
   notifications, notification requests and the streaming `notification` event never carry it, as in Mastodon.
+- Status `application`: a local status shows the app it was posted through (`name`, and `website` or null when blank),
+  to every viewer and wherever statuses are shown, streaming included; a scheduled status is published through the
+  app it was scheduled through. A local boost, a status posted before this version and one whose app was removed show
+  `application: null`; a remote status has no key. An edit keeps the status's app, and edit history shows none. A name
+  or website past its bound (an imported app) shows `application: null` or `website: null`
+  ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Posting).
+
+### Changed
+
+- Breaking: `POST /api/v1/apps` refuses a `client_name` longer than 60 characters (counted in code points), Mastodon's
+  limit; it allowed 255 UTF-16 code units. Apps already registered keep their name, and a status posted through one
+  whose name is longer shows `application: null`.
+- Breaking: `POST /api/v1/apps` refuses a `website` holding any of C0 controls (U+0000–U+001F), the space, DEL (U+007F),
+  C1 controls (U+0080–U+009F), the other whitespace JavaScript's `\s` matches (Unicode spaces, line terminators,
+  U+FEFF), and `"` `'` `<` `>` `\` `^` `` ` `` `{` `|` `}`, or longer than 2,000 UTF-8 bytes (`Website is invalid`),
+  after trimming surrounding whitespace; a status does not show such a website of an app registered earlier.
+- A scheduled status's `params.application_id` is the client_id of the app it was scheduled through (it was always
+  null).
 
 ### Instance changes
 
-- Store schema: unchanged.
+- Store schema: adds one migration (0064), applied on the first request after the deploy; a rollback to an earlier
+  version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
+    - `0064_status_applications`: `statuses.application_id`, with the triggers that bound it; it reads no row, and
+      existing statuses read as posted through no app. A dump whose `application_id` is past its bound is refused on
+      import.
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.19] - 2026-10-22

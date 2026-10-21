@@ -170,6 +170,27 @@ describe('status.update', () => {
 		expect(JSON.parse((await inbox.next()).payload!)).toEqual(rest.body)
 	})
 
+	// The streamed status is presented without a viewer of its own (inline_renderer.rb:27, :47-49): its application as
+	// its author's setting shows it, which REST shows too.
+	it("carries the status's application in update and status.update", async () => {
+		const h = await community(['alice', 'bob'])
+		await follow(h, h.users.alice, h.users.bob.id)
+		const inbox = await subscribed(h, h.users.alice.token, 'user')
+		const status = await post(h, h.users.bob, { status: 'before', visibility: 'public' })
+		await edit(h, h.users.bob.token, status.id, 'after')
+		await drained(h, inbox)
+		expect(events(inbox)).toEqual([
+			['user', 'update', status.id],
+			['user', 'status.update', status.id],
+		])
+		for (const message of inbox.rest()) {
+			expect(JSON.parse(message.payload!), message.event).toHaveProperty('application', {
+				name: 'Test Client',
+				website: 'https://client.test',
+			})
+		}
+	})
+
 	it('sends an edit of a direct mention from an unfollowed account through the mention alone', async () => {
 		const h = await community(['alice', 'carol'])
 		// Private mentions from accounts alice does not follow are accepted, so the mention is not filtered.

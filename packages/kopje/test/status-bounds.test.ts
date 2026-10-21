@@ -69,6 +69,9 @@ import { utf8Length } from '../src/platform/dump-format'
 import { DOMAIN_BYTES, MAX_LOCAL_ADDRESSED } from '../src/platform/identity-bounds'
 import type { StoreOperation } from '../src/platform/store-kernel'
 import {
+	APP_NAME_BYTES,
+	APP_NAME_LIMIT,
+	APP_WEBSITE_LIMIT,
 	EMOJI_ENTRY_BYTES,
 	EMOJI_SHORTCODE_LIMIT,
 	EMOJI_URL_LIMIT,
@@ -1041,6 +1044,8 @@ type FillMeasure = {
 	heaps: Record<string, Heaps>
 	// The nested moved-to accounts each shape shows: how many, and what their JSON lacks of MOVED_ACCOUNT_JSON_MAX.
 	moved: Record<string, { count: number; deficit: number }>
+	// The statuses each shape shows: how many, and what their `application` entries lack of APPLICATION_JSON_MAX.
+	applications: Record<string, { count: number; deficit: number }>
 	// The moderation_warning notification as a stream payload: its JSON encoded again as a string (stream-hub.ts).
 	warningPayload: number
 }
@@ -1336,6 +1341,16 @@ async function measureShapes(fill: Fill): Promise<FillMeasure> {
 				return [name, { count: nested.length, deficit }]
 			})
 		),
+		applications: Object.fromEntries(
+			Object.entries(answers).map(([name, answer]) => {
+				const shown = presentedStatuses(answer)
+				const deficit = shown.reduce((sum: number, status) => sum + APPLICATION_JSON_MAX - applicationJson(status), 0)
+				for (const status of shown) {
+					expect(applicationJson(status)).toBeLessThanOrEqual(APPLICATION_JSON_MAX)
+				}
+				return [name, { count: shown.length, deficit }]
+			})
+		),
 		shapes: {
 			account: { sqlite: one.profileBytes, json: jsonBytes(account), rows: 1, nodes: nodes(account) },
 			status: shape(one),
@@ -1364,10 +1379,42 @@ async function measureShapes(fill: Fill): Promise<FillMeasure> {
 const STATIC_COLUMNS = new Set(['avatar_static_url', 'header_static_url'])
 const STATIC_COLUMN_HEAP = VALUE_BYTES + 2 * STATIC_URL_LIMIT
 
+// A status's app (migration 0064_status_applications), each column at its raw projection bound (stored-bounds.ts
+// appNameSql, appWebsiteSql) on every status row whatever the fills hold: their statuses are remote, which show none,
+// and every local original may name one.
+const APPLICATION_COLUMN_HEAP: Readonly<Record<string, number>> = {
+	application_name: VALUE_BYTES + 2 * APP_NAME_BYTES,
+	application_website: VALUE_BYTES + 2 * APP_WEBSITE_LIMIT,
+}
+const APPLICATION_ROW_HEAP = Object.values(APPLICATION_COLUMN_HEAP).reduce((sum, heap) => sum + heap, 0)
+
+// The most JSON a status's `application` entry adds, its separator included: a name of APP_NAME_LIMIT code points
+// each escaped to six bytes, and a website of APP_WEBSITE_LIMIT bytes, which JSON writes as they are (isAppWebsite
+// admits no character JSON escapes, and only well-formed text).
+const APPLICATION_JSON_MAX =
+	jsonBytes({ application: { name: C.repeat(APP_NAME_LIMIT), website: 'u'.repeat(APP_WEBSITE_LIMIT) } }) - 1
+
+// What a presented status's `application` entry takes in its JSON, its separator included (0 when it has none).
+function applicationJson(status: Record<string, unknown>): number {
+	return 'application' in status ? jsonBytes({ application: status.application }) - 1 : 0
+}
+
+// The statuses a presented value shows (each object with a quote_approval, which only a Status has).
+function presentedStatuses(value: unknown): Record<string, unknown>[] {
+	if (Array.isArray(value)) {
+		return value.flatMap(presentedStatuses)
+	}
+	if (typeof value !== 'object' || value === null) {
+		return []
+	}
+	const own = 'quote_approval' in value ? [value as Record<string, unknown>] : []
+	return [...own, ...Object.values(value).flatMap(presentedStatuses)]
+}
+
 // An item's rows at their per-column maxima: for each query and column, the most any fill read (each fill puts a column
 // at the bound in the unit that reads the most heap for it or the most JSON), summed, so a combination of columns no
-// single fill holds is counted; a static image column at STATIC_COLUMN_HEAP on every row. Returns their heap and the
-// largest single row such a combination makes.
+// single fill holds is counted; a static image column at STATIC_COLUMN_HEAP and an app column at its
+// APPLICATION_COLUMN_HEAP on every row. Returns their heap and the largest single row such a combination makes.
 function perColumn(measures: readonly Heaps[]): { heap: number; largestRow: number } {
 	const queries = new Map<string, { rows: number; columns: Map<string, ColumnHeap> }>()
 	for (const heaps of measures) {
@@ -1390,9 +1437,10 @@ function perColumn(measures: readonly Heaps[]): { heap: number; largestRow: numb
 			largestRow = Math.max(largestRow, MOVED_ROW_HEAP_MAX)
 			continue
 		}
-		const values = [...columns].map(([column, c]) =>
-			STATIC_COLUMNS.has(column) ? { total: rows * STATIC_COLUMN_HEAP, largest: STATIC_COLUMN_HEAP } : c
-		)
+		const values = [...columns].map(([column, c]) => {
+			const cap = STATIC_COLUMNS.has(column) ? STATIC_COLUMN_HEAP : APPLICATION_COLUMN_HEAP[column]
+			return cap === undefined ? c : { total: rows * cap, largest: cap }
+		})
 		heap += 64 * rows + values.reduce((sum, c) => sum + c.total, 0)
 		largestRow = Math.max(largestRow, 64 + values.reduce((sum, c) => sum + c.largest, 0))
 	}
@@ -1421,16 +1469,18 @@ const LOCAL_ACCOUNT_KEYS_JSON =
 // plus a poll's emoji array at its bound for each poll shown. No one fill holds both: the references a poll's choices
 // need displace escaped characters (the emoji-poll fill), so this bounds every combination from above. The account
 // occurrence adds a local account's keys, so it bounds a local account as well as the remote one measured. Each
-// nested moved-to account counts at MOVED_ACCOUNT_JSON_MAX, what its caps allow at once.
+// nested moved-to account counts at MOVED_ACCOUNT_JSON_MAX, what its caps allow at once, and each status shown with an
+// `application` at APPLICATION_JSON_MAX, as a local one may show it.
 async function conservativeJson(): Promise<Record<string, number>> {
-	const { shapes, moved } = await measureFill('escaped')
+	const { shapes, moved, applications } = await measureFill('escaped')
 	return Object.fromEntries(
 		Object.entries(shapes).map(([name, shape]) => [
 			name,
 			shape.json +
 				(POLLS_SHOWN[name] ?? 0) * POLL_EMOJIS_JSON +
 				(name === 'account' ? LOCAL_ACCOUNT_KEYS_JSON : 0) +
-				moved[name]!.deficit,
+				moved[name]!.deficit +
+				applications[name]!.deficit,
 		])
 	)
 }
@@ -1550,6 +1600,132 @@ describe('static images (RES-2, RES-3)', () => {
 	)
 })
 
+// A local original and a local quote of it, each posted through an app at the bounds a status reads and presents it
+// within (migration 0064_status_applications): escaped, names of APP_NAME_LIMIT characters JSON escapes to six bytes;
+// raw, the most bytes read (APP_NAME_LIMIT four-byte characters, and APP_NAME_BYTES of ASCII, read whole and shown as
+// null); malformed, imported bytes (0xFF, no UTF-8 lead byte) that decode to U+FFFD, three bytes each. The fills'
+// statuses are remote, which name none, so these are the witnesses of the app columns' caps (APPLICATION_COLUMN_HEAP,
+// in RowMeter's unit: a malformed byte decodes to one code unit) and of APPLICATION_JSON_MAX.
+describe('status applications (RES-2, RES-3)', () => {
+	it('derives their maxima from the caps', () => {
+		expect({ row: APPLICATION_ROW_HEAP, json: APPLICATION_JSON_MAX }).toEqual({ row: 4_544, json: 2_399 })
+	})
+
+	const bytes = (prefix: string, byte: number, length: number) =>
+		new Uint8Array([...new TextEncoder().encode(prefix), ...Array(length - prefix.length).fill(byte)])
+			.buffer as ArrayBuffer
+	const utf8Bytes = (value: string | ArrayBuffer) => (typeof value === 'string' ? utf8Length(value) : value.byteLength)
+	const SITE = 'https://kopje.test/'
+	const ASCII_SITE = SITE.padEnd(APP_WEBSITE_LIMIT, 'u')
+	type App = { name: string | ArrayBuffer; website: string | ArrayBuffer; shown: unknown }
+	const FIXTURES: Record<string, [App, App]> = {
+		escaped: [
+			{
+				name: C.repeat(APP_NAME_LIMIT),
+				website: ASCII_SITE,
+				shown: { name: C.repeat(APP_NAME_LIMIT), website: ASCII_SITE },
+			},
+			{
+				name: `${C.repeat(APP_NAME_LIMIT - 1)}a`,
+				website: ASCII_SITE,
+				shown: { name: `${C.repeat(APP_NAME_LIMIT - 1)}a`, website: ASCII_SITE },
+			},
+		],
+		raw: [
+			{
+				name: W.repeat(APP_NAME_LIMIT),
+				website: ASCII_SITE,
+				shown: { name: W.repeat(APP_NAME_LIMIT), website: ASCII_SITE },
+			},
+			{ name: 'n'.repeat(APP_NAME_BYTES), website: ASCII_SITE, shown: null },
+		],
+		malformed: [
+			{
+				name: bytes('', 0xff, APP_NAME_LIMIT),
+				website: bytes(SITE, 0xff, APP_WEBSITE_LIMIT),
+				shown: { name: '\ufffd'.repeat(APP_NAME_LIMIT), website: null },
+			},
+			{ name: bytes('', 0xff, APP_NAME_BYTES), website: bytes(SITE, 0xff, APP_WEBSITE_LIMIT), shown: null },
+		],
+	}
+
+	it.each(Object.keys(FIXTURES))(
+		'reads and presents them within their caps, %s',
+		async (fill) => {
+			const t = await setup()
+			const [original, quoting] = FIXTURES[fill]!
+			const ids: string[] = []
+			for (const [i, app] of [original, quoting].entries()) {
+				await sql(
+					t.store,
+					`INSERT INTO oauth_clients (id, secret, name, redirect_uris, website)
+					VALUES (?, 's', CAST(? AS TEXT), 'urn:x', CAST(? AS TEXT))`,
+					`app-${i}`,
+					app.name,
+					app.website
+				)
+				const id = nextId()
+				await sql(
+					t.store,
+					`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at, application_id)
+					VALUES (?1, 'https://kopje.test/ap/o/' || ?1, ?2, 'public', '<p>x</p>', ?3, ?4)`,
+					id,
+					ALICE,
+					new Date(NOW - 60_000).toISOString(),
+					`app-${i}`
+				)
+				ids.push(id)
+			}
+			await sql(
+				t.store,
+				`INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, quoted_account_id, state, updated_at)
+				SELECT ?1, uri, id, account_id, 'accepted', ?3 FROM statuses WHERE id = ?2`,
+				ids[1]!,
+				ids[0]!,
+				new Date(NOW).toISOString()
+			)
+			expect(
+				await sql(t.store, 'SELECT max(length(CAST(name AS BLOB))) AS n FROM oauth_clients WHERE id LIKE ?', 'app-%')
+			).toEqual([{ n: Math.max(...[original, quoting].map((app) => utf8Bytes(app.name))) }])
+			// The rows of the statuses query, each app column in RowMeter's unit.
+			const { answer, largest } = await runInDurableObject(t.store, async (_instance, state) => {
+				const most: Record<string, number> = {}
+				const counting = observedSql(state.storage.sql, (rows) => {
+					for (const row of rows) {
+						for (const column of Object.keys(APPLICATION_COLUMN_HEAP)) {
+							if (column in row) {
+								const value = row[column]
+								const heap = VALUE_BYTES + (typeof value === 'string' ? 2 * value.length : 0)
+								most[column] = Math.max(most[column] ?? 0, heap)
+							}
+						}
+					}
+				})
+				const input = { credential: await credential(t), now: NOW, id: ids[1], present: { origin: ORIGIN } }
+				let result = getStatus.run(counting, input as never) as Record<string, unknown>
+				while (result.status === 'ok' && 'value' in result) {
+					result = result.value as Record<string, unknown>
+				}
+				return { answer: result as Record<string, unknown>, largest: most }
+			})
+			for (const [column, heap] of Object.entries(largest)) {
+				expect(heap, column).toBeLessThanOrEqual(APPLICATION_COLUMN_HEAP[column]!)
+			}
+			expect(Object.keys(largest).toSorted()).toEqual(Object.keys(APPLICATION_COLUMN_HEAP).toSorted())
+			const quoted = (answer.quote as { quoted_status: Record<string, unknown> }).quoted_status
+			expect(answer).toHaveProperty('application', quoting.shown)
+			expect(quoted).toHaveProperty('application', original.shown)
+			for (const status of [answer, quoted]) {
+				expect(applicationJson(status)).toBeLessThanOrEqual(APPLICATION_JSON_MAX)
+			}
+			if (fill === 'escaped') {
+				expect(applicationJson(quoted)).toBe(APPLICATION_JSON_MAX)
+			}
+		},
+		60_000
+	)
+})
+
 describe('the table of maxima (RES-3)', () => {
 	// docs/threat-model.md "Maxima of presented units" states these. An answer admits a whole item, so every atomic
 	// shape stays within 85% of ANSWER_BYTES (8 MiB) with filters included, measured and conservative alike.
@@ -1561,16 +1737,16 @@ describe('the table of maxima (RES-3)', () => {
 			'escaped',
 			{
 				account: { sqlite: 103_256, json: 140_447, rows: 1, nodes: 92 },
-				status: { sqlite: 2_763_932, json: 2_626_753, rows: 1485, nodes: 2367 },
-				quote: { sqlite: 4_954_507, json: 5_253_539, rows: 1918, nodes: 4736 },
-				boostOfQuote: { sqlite: 5_100_929, json: 5_662_490, rows: 1975, nodes: 5695 },
-				conversation: { sqlite: 6_308_582, json: 6_938_872, rows: 1944, nodes: 5831 },
-				group: { sqlite: 5_814_013, json: 6_377_539, rows: 1953, nodes: 5484 },
-				report: { sqlite: 5_263_884, json: 5_850_006, rows: 1933, nodes: 5051 },
+				status: { sqlite: 2_763_948, json: 2_626_753, rows: 1485, nodes: 2367 },
+				quote: { sqlite: 4_954_539, json: 5_253_539, rows: 1918, nodes: 4736 },
+				boostOfQuote: { sqlite: 5_100_977, json: 5_662_490, rows: 1975, nodes: 5695 },
+				conversation: { sqlite: 6_308_614, json: 6_938_872, rows: 1944, nodes: 5831 },
+				group: { sqlite: 5_814_045, json: 6_377_539, rows: 1953, nodes: 5484 },
+				report: { sqlite: 5_263_916, json: 5_850_006, rows: 1933, nodes: 5051 },
 				reportNotification: { sqlite: 812_405, json: 403_298, rows: 1061, nodes: 294 },
 				warningNotification: { sqlite: 93_526, json: 281_568, rows: 9, nodes: 215 },
 				warningGroup: { sqlite: 93_526, json: 281_757, rows: 9, nodes: 222 },
-				filteredNotification: { sqlite: 5_063_231, json: 5_394_112, rows: 1941, nodes: 4832 },
+				filteredNotification: { sqlite: 5_063_263, json: 5_394_112, rows: 1941, nodes: 4832 },
 			},
 		],
 		[
@@ -1578,16 +1754,16 @@ describe('the table of maxima (RES-3)', () => {
 			'derived',
 			{
 				account: { sqlite: 103_256, json: 140_447, rows: 1, nodes: 92 },
-				status: { sqlite: 2_355_932, json: 2_217_153, rows: 1485, nodes: 2367 },
-				quote: { sqlite: 4_138_507, json: 4_434_339, rows: 1918, nodes: 4736 },
-				boostOfQuote: { sqlite: 4_284_929, json: 4_843_290, rows: 1975, nodes: 5695 },
-				conversation: { sqlite: 5_492_582, json: 6_119_672, rows: 1944, nodes: 5831 },
-				group: { sqlite: 4_998_013, json: 5_558_339, rows: 1953, nodes: 5484 },
-				report: { sqlite: 4_432_884, json: 4_940_806, rows: 1933, nodes: 5051 },
+				status: { sqlite: 2_355_948, json: 2_217_153, rows: 1485, nodes: 2367 },
+				quote: { sqlite: 4_138_539, json: 4_434_339, rows: 1918, nodes: 4736 },
+				boostOfQuote: { sqlite: 4_284_977, json: 4_843_290, rows: 1975, nodes: 5695 },
+				conversation: { sqlite: 5_492_614, json: 6_119_672, rows: 1944, nodes: 5831 },
+				group: { sqlite: 4_998_045, json: 5_558_339, rows: 1953, nodes: 5484 },
+				report: { sqlite: 4_432_916, json: 4_940_806, rows: 1933, nodes: 5051 },
 				reportNotification: { sqlite: 797_405, json: 313_298, rows: 1061, nodes: 294 },
 				warningNotification: { sqlite: 93_526, json: 281_568, rows: 9, nodes: 215 },
 				warningGroup: { sqlite: 93_526, json: 281_757, rows: 9, nodes: 222 },
-				filteredNotification: { sqlite: 4_247_231, json: 4_574_912, rows: 1941, nodes: 4832 },
+				filteredNotification: { sqlite: 4_247_263, json: 4_574_912, rows: 1941, nodes: 4832 },
 			},
 		],
 		[
@@ -1595,16 +1771,16 @@ describe('the table of maxima (RES-3)', () => {
 			'raw',
 			{
 				account: { sqlite: 123_249, json: 132_819, rows: 1, nodes: 80 },
-				status: { sqlite: 4_444_704, json: 2_185_527, rows: 1485, nodes: 2355 },
-				quote: { sqlite: 6_818_451, json: 4_371_087, rows: 1918, nodes: 4712 },
-				boostOfQuote: { sqlite: 7_113_040, json: 4_618_812, rows: 1975, nodes: 5659 },
-				conversation: { sqlite: 8_495_999, json: 5_964_884, rows: 1944, nodes: 5663 },
-				group: { sqlite: 7_880_277, json: 5_434_063, rows: 1953, nodes: 5364 },
-				report: { sqlite: 7_198_401, json: 4_844_108, rows: 1933, nodes: 5003 },
+				status: { sqlite: 4_444_720, json: 2_185_527, rows: 1485, nodes: 2355 },
+				quote: { sqlite: 6_818_483, json: 4_371_087, rows: 1918, nodes: 4712 },
+				boostOfQuote: { sqlite: 7_113_088, json: 4_618_812, rows: 1975, nodes: 5659 },
+				conversation: { sqlite: 8_496_031, json: 5_964_884, rows: 1944, nodes: 5663 },
+				group: { sqlite: 7_880_309, json: 5_434_063, rows: 1953, nodes: 5364 },
+				report: { sqlite: 7_198_433, json: 4_844_108, rows: 1933, nodes: 5003 },
 				reportNotification: { sqlite: 2_360_585, json: 288_042, rows: 1061, nodes: 270 },
 				warningNotification: { sqlite: 129_439, json: 235_218, rows: 9, nodes: 215 },
 				warningGroup: { sqlite: 129_439, json: 235_407, rows: 9, nodes: 222 },
-				filteredNotification: { sqlite: 6_952_465, json: 4_504_032, rows: 1941, nodes: 4796 },
+				filteredNotification: { sqlite: 6_952_497, json: 4_504_032, rows: 1941, nodes: 4796 },
 			},
 		],
 		[
@@ -1612,16 +1788,16 @@ describe('the table of maxima (RES-3)', () => {
 			'emoji-poll',
 			{
 				account: { sqlite: 103_256, json: 140_447, rows: 1, nodes: 92 },
-				status: { sqlite: 2_763_084, json: 2_638_854, rows: 1485, nodes: 2419 },
-				quote: { sqlite: 4_952_811, json: 5_277_741, rows: 1918, nodes: 4840 },
-				boostOfQuote: { sqlite: 5_099_233, json: 5_686_692, rows: 1975, nodes: 5799 },
-				conversation: { sqlite: 6_306_886, json: 6_963_074, rows: 1944, nodes: 5935 },
-				group: { sqlite: 5_812_317, json: 6_401_741, rows: 1953, nodes: 5588 },
-				report: { sqlite: 5_262_188, json: 5_874_208, rows: 1933, nodes: 5155 },
+				status: { sqlite: 2_763_100, json: 2_638_854, rows: 1485, nodes: 2419 },
+				quote: { sqlite: 4_952_843, json: 5_277_741, rows: 1918, nodes: 4840 },
+				boostOfQuote: { sqlite: 5_099_281, json: 5_686_692, rows: 1975, nodes: 5799 },
+				conversation: { sqlite: 6_306_918, json: 6_963_074, rows: 1944, nodes: 5935 },
+				group: { sqlite: 5_812_349, json: 6_401_741, rows: 1953, nodes: 5588 },
+				report: { sqlite: 5_262_220, json: 5_874_208, rows: 1933, nodes: 5155 },
 				reportNotification: { sqlite: 812_405, json: 403_298, rows: 1061, nodes: 294 },
 				warningNotification: { sqlite: 93_526, json: 281_568, rows: 9, nodes: 215 },
 				warningGroup: { sqlite: 93_526, json: 281_757, rows: 9, nodes: 222 },
-				filteredNotification: { sqlite: 5_061_535, json: 5_418_314, rows: 1941, nodes: 4936 },
+				filteredNotification: { sqlite: 5_061_567, json: 5_418_314, rows: 1941, nodes: 4936 },
 			},
 		],
 	])(
@@ -1669,16 +1845,16 @@ describe('the table of maxima (RES-3)', () => {
 		}
 		expect(conservative).toEqual({
 			account: 143_188,
-			status: 2_641_717,
-			quote: 5_283_467,
-			boostOfQuote: 5_695_096,
-			conversation: 7_000_936,
-			group: 6_428_891,
-			report: 5_885_290,
+			status: 2_644_116,
+			quote: 5_288_265,
+			boostOfQuote: 5_702_293,
+			conversation: 7_005_734,
+			group: 6_433_689,
+			report: 5_890_088,
 			reportNotification: 408_654,
 			warningNotification: 281_568,
 			warningGroup: 281_757,
-			filteredNotification: 5_426_718,
+			filteredNotification: 5_431_516,
 		})
 	}, 600_000)
 

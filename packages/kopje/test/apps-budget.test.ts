@@ -8,6 +8,7 @@ import {
 	authorizationCode,
 	bearer,
 	exchange,
+	form,
 	json,
 	login,
 	registerApp,
@@ -16,7 +17,7 @@ import {
 } from './api-helpers'
 import { NOW } from './app-helpers'
 import { signIn } from './web-helpers'
-import { EVICTION_GRACE_MS, MAX_PENDING_APPS, UNUSED_APP_TTL_MS } from '../src/domain/oauth'
+import { EVICTION_GRACE_MS, MAX_PENDING_APPS, sweepOAuth, UNUSED_APP_TTL_MS } from '../src/domain/oauth'
 import { handleScheduled } from '../src/jobs/scheduled'
 import type { StoreStub } from '../src/platform/store-client'
 
@@ -176,5 +177,41 @@ describe('app registration budget (RES-6)', () => {
 		expect(await count(h.store, "id LIKE 'new-%'")).toBe(2)
 		expect(await count(h.store, `id = '${used.client_id}'`)).toBe(1)
 		expect(await sql(h.store, "SELECT token_hash FROM oauth_tokens WHERE token_hash = 'expired'")).toEqual([])
+	})
+
+	// RES-6: statuses.application_id has no foreign key (migration 0064_status_applications), so removing an app writes
+	// no status row however many it posted; its statuses then present `application: null`.
+	it('removes an app whose token was revoked without writing its statuses, which then show no app', async () => {
+		const h = await apiHarness()
+		await seedAccount(h.store, { username: 'alice', email: 'alice@example.com' })
+		const app = await registerApp(h)
+		const { token } = await login(h, { app, scope: 'read write' })
+		const posted = await h.request('/api/v1/statuses', bearer(token, json({ status: 'hello' })))
+		const { id } = await posted.json<{ id: string }>()
+		const shown = async () =>
+			(await (await h.request(`/api/v1/statuses/${id}`)).json<{ application: unknown }>()).application
+		expect(await shown()).toEqual({ name: 'Test Client', website: 'https://client.test' })
+		const revoked = await h.request(
+			'/oauth/revoke',
+			form({ token, client_id: app.client_id, client_secret: app.client_secret })
+		)
+		expect(revoked.status).toBe(200)
+		await sql(h.store, 'UPDATE oauth_clients SET created_at = ?', new Date(NOW - 2 * UNUSED_APP_TTL_MS).toISOString())
+		// The rows the production sweep changes, counted by SQLite around it: the app alone (its token went with the
+		// revocation), no status row and nothing else.
+		const { swept, changes } = await runInDurableObject(h.store, (_instance, state) => {
+			const total = () => state.storage.sql.exec<{ n: number }>('SELECT total_changes() AS n').one().n
+			const start = total()
+			const result = sweepOAuth.run(state.storage.sql, { now: NOW })
+			return { swept: result, changes: total() - start }
+		})
+		expect(swept).toEqual({ apps: 1, tokens: 0, webState: 0 })
+		expect(changes).toBe(1)
+		expect(await count(h.store, `id = '${app.client_id}'`)).toBe(0)
+		// The status keeps the dangling id.
+		expect(await sql(h.store, 'SELECT id, application_id FROM statuses')).toEqual([
+			{ id, application_id: app.client_id },
+		])
+		expect(await shown()).toBeNull()
 	})
 })

@@ -2,7 +2,7 @@ import { runInDurableObject } from 'cloudflare:test'
 
 import { describe, expect, it } from 'vitest'
 
-import { type ApiHarness, bearer, form, json, sql } from './api-helpers'
+import { type ApiHarness, type App, bearer, form, json, login, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { BUILD } from './helpers'
 import { plannedRun, type PlannedStatement, plannedSql, remoteAccounts, scansOf, staleStatistics } from './read-helpers'
@@ -18,15 +18,18 @@ import {
 	remoteAccount,
 	remoteFollows,
 	seedStatus,
+	WEBSITE_REFUSED,
 	mediaNotFound,
 	posting,
 	type Status,
 	type User,
 } from './status-helpers'
+import { startSignIn } from './web-helpers'
 import { postStatus, type ScheduleInput } from '../src/domain/scheduled-statuses'
 import { MAX_RAW_LENGTH } from '../src/domain/status-text'
 import { getStatuses, MAX_STATUS_EDITS } from '../src/domain/statuses'
 import type { StoreStub } from '../src/platform/store-client'
+import { APP_NAME_LIMIT, APP_WEBSITE_LIMIT } from '../src/platform/stored-bounds'
 import { sha256Hex } from '../src/security/tokens'
 
 const HOUR = 60 * 60 * 1000
@@ -76,6 +79,7 @@ describe('POST /api/v1/statuses', () => {
 			filtered: [],
 			content: '<p>Hello &lt;world&gt;</p>',
 			reblog: null,
+			application: { name: 'Test Client', website: 'https://client.test' },
 			account: expect.objectContaining({ id: alice.id, acct: 'alice', statuses_count: 1 }),
 			media_attachments: [],
 			mentions: [],
@@ -327,6 +331,215 @@ describe('POST /api/v1/statuses', () => {
 		await post(h, h.users.bob, { status: 'quiet', in_reply_to_id: parent.id, visibility: 'private' })
 		const { body } = await getJson<Status>(h, `/api/v1/statuses/${parent.id}`)
 		expect(body.replies_count).toBe(1)
+	})
+})
+
+// An app of `name` and `website` registered as a client registers one, and alice's token through it.
+async function appToken(h: ApiHarness, name: string, website = ''): Promise<{ app: App; token: string }> {
+	const response = await h.request(
+		'/api/v1/apps',
+		json({ client_name: name, redirect_uris: 'https://client.test/callback', scopes: 'read write follow', website })
+	)
+	expect(response.status, await response.clone().text()).toBe(200)
+	const app = await response.json<App>()
+	return login(h, { app, email: 'alice@example.com', scope: 'read write follow' })
+}
+
+// The application each status of `statuses` shows, by id: absent when the key is.
+function applications(statuses: readonly Status[]): Record<string, unknown> {
+	return Object.fromEntries(statuses.map((s) => [s.id, 'application' in s ? s.application : 'absent']))
+}
+
+// REST::StatusSerializer's application (status_serializer.rb:24, :59-61, :183-189, Mastodon 4.5.11): a local status
+// shows the app it was posted through (its author's show_application, true by default, which Kopje has no setting
+// for), null when it names none; a remote status has no key.
+describe('application', () => {
+	const SHOWN = { name: 'Test Client', website: 'https://client.test' }
+
+	it('shows the app to every viewer alike, null on a local boost with its original shown, no key when remote', async () => {
+		const h = await community(['alice', 'bob'])
+		const { alice, bob } = h.users
+		const status = await post(h, alice, { status: 'hello' })
+		for (const token of [alice.token, bob.token, undefined]) {
+			const seen = await getJson<Status>(h, `/api/v1/statuses/${status.id}`, token)
+			expect(seen.body).toHaveProperty('application', SHOWN)
+		}
+		const boost = await (await act(h, bob, `/api/v1/statuses/${status.id}/reblog`)).json<Status>()
+		expect(boost).toHaveProperty('application', null)
+		expect(boost.reblog).toHaveProperty('application', SHOWN)
+		const dave = await remoteAccount(h.store, 'dave')
+		const theirs = await seedStatus(h.store, { accountId: dave, visibility: 'public' })
+		const theirBoost = await seedStatus(h.store, { accountId: dave, visibility: 'public', reblogOfId: status.id })
+		const remote = await getJson<Status>(h, `/api/v1/statuses/${theirs}`, alice.token)
+		expect(remote.body).not.toHaveProperty('application')
+		const remoteBoost = await getJson<Status>(h, `/api/v1/statuses/${theirBoost}`, alice.token)
+		expect(remoteBoost.body).not.toHaveProperty('application')
+		expect(remoteBoost.body.reblog).toHaveProperty('application', SHOWN)
+		// A local status written before 0064_status_applications, or by a path that records no app, names none.
+		await sql(h.store, 'UPDATE statuses SET application_id = NULL WHERE id = ?', status.id)
+		expect((await getJson<Status>(h, `/api/v1/statuses/${status.id}`)).body).toHaveProperty('application', null)
+	})
+
+	it('keeps the app of the post through an edit and an idempotent repeat by another app; history shows none', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const second = await appToken(h, 'Second', 'https://second.test/home')
+		const send = (token: string, text: string) =>
+			h.request('/api/v1/statuses', bearer(token, json({ status: text }, { headers: { 'idempotency-key': 'k' } })))
+		const status = await (await send(alice.token, 'first')).json<Status>()
+		const repeated = await (await send(second.token, 'first')).json<Status>()
+		expect(repeated).toMatchObject({ id: status.id, application: SHOWN })
+		const edited = await h.request(
+			`/api/v1/statuses/${status.id}`,
+			bearer(second.token, json({ status: 'second' }, { method: 'PUT' }))
+		)
+		expect(await edited.json()).toMatchObject({ content: '<p>second</p>', application: SHOWN })
+		const history = await getJson<Record<string, unknown>[]>(h, `/api/v1/statuses/${status.id}/history`)
+		expect(history.body).toHaveLength(2)
+		for (const entry of history.body) {
+			expect(entry).not.toHaveProperty('application')
+		}
+		// A post through the second app shows it, its website as stored.
+		expect(await post(h, { id: alice.id, token: second.token }, { status: 'other' })).toHaveProperty('application', {
+			name: 'Second',
+			website: 'https://second.test/home',
+		})
+	})
+
+	it('ignores an application or application_id the request sends', async () => {
+		const h = await community(['alice'])
+		const other = await appToken(h, 'Other')
+		const status = await post(h, h.users.alice, {
+			status: 'hi',
+			application: { name: 'Forged', website: 'https://forged.test' },
+			application_id: other.app.client_id,
+		})
+		expect(status).toHaveProperty('application', SHOWN)
+	})
+
+	it('writes no app, and posts, through a client whose stored id the bound refuses', async () => {
+		const h = await community(['alice'])
+		// A converted or imported client whose id is past APP_ID_BYTES, or holds a character outside base64url.
+		for (const id of ['c'.repeat(65), 'client*one']) {
+			await sql(
+				h.store,
+				"INSERT INTO oauth_clients (id, secret, name, redirect_uris, website) VALUES (?, 's', 'Imported', 'urn:x', NULL)",
+				id
+			)
+			const token = `imported-${id.length}`
+			await sql(
+				h.store,
+				"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES (?, 'access', ?, ?, 'write')",
+				await sha256Hex(token),
+				id,
+				h.users.alice.id
+			)
+			const status = await post(h, { id: h.users.alice.id, token }, { status: `via ${id}` })
+			expect(status).toHaveProperty('application', null)
+			expect(await sql(h.store, 'SELECT application_id FROM statuses WHERE id = ?', status.id)).toEqual([
+				{ application_id: null },
+			])
+		}
+	})
+
+	it("shows the web UI's client, which has no website", async () => {
+		const h = await community(['alice'])
+		const status = await post(h, h.users.alice, { status: 'hi' })
+		// The web UI's client, as signing in registers it; its sessions cannot post (WEB_SCOPES), so the status names it.
+		const webClient = (await startSignIn(h)).authorize.searchParams.get('client_id')
+		expect(webClient).not.toBeNull()
+		await sql(h.store, 'UPDATE statuses SET application_id = ? WHERE id = ?', webClient, status.id)
+		expect((await getJson<Status>(h, `/api/v1/statuses/${status.id}`)).body).toHaveProperty('application', {
+			name: 'Kopje',
+			website: null,
+		})
+	})
+
+	it('shows the app in a context, a notification, a conversation and a quote', async () => {
+		const h = await community(['alice', 'bob'])
+		const { alice, bob } = h.users
+		const parent = await post(h, bob, { status: 'parent' })
+		const reply = await post(h, alice, { status: `@bob reply`, in_reply_to_id: parent.id })
+		const context = await getJson<{ ancestors: Status[]; descendants: Status[] }>(
+			h,
+			`/api/v1/statuses/${parent.id}/context`,
+			bob.token
+		)
+		expect(applications(context.body.descendants)).toEqual({ [reply.id]: SHOWN })
+		const notifications = await getJson<{ type: string; status: Status }[]>(h, '/api/v1/notifications', bob.token)
+		expect(notifications.body.map((n) => [n.type, n.status.application])).toEqual([['mention', SHOWN]])
+		const direct = await post(h, alice, { status: '@bob psst', visibility: 'direct' })
+		const conversations = await getJson<{ last_status: Status }[]>(h, '/api/v1/conversations', alice.token)
+		expect(conversations.body.map((c) => [c.last_status.id, c.last_status.application])).toEqual([[direct.id, SHOWN]])
+		const quote = await post(h, bob, { status: 'look', quoted_status_id: parent.id })
+		const quoting = await post(h, bob, { status: 'and this', quoted_status_id: reply.id })
+		expect(quote).toHaveProperty('application', SHOWN)
+		const quoted = (quoting.quote as { quoted_status: Status }).quoted_status
+		expect(quoted).toMatchObject({ id: reply.id, application: SHOWN })
+	})
+
+	it('presents the name and the website within their bounds, as decoded, else null', async () => {
+		const h = await community(['alice'])
+		const status = await post(h, h.users.alice, { status: 'hi' })
+		const clientId = h.app.client_id
+		const shown = async (name: SqlStorageValue, website: SqlStorageValue, cast = false) => {
+			const value = cast ? 'CAST(? AS TEXT)' : '?'
+			await sql(
+				h.store,
+				`UPDATE oauth_clients SET name = ${value}, website = ${value} WHERE id = ?`,
+				name,
+				website,
+				clientId
+			)
+			return (await getJson<Status>(h, `/api/v1/statuses/${status.id}`)).body.application
+		}
+		const bytes = (...values: number[]) => new Uint8Array(values).buffer as ArrayBuffer
+		const site = 'https://client.test/'
+		const at = (limit: number) => site.padEnd(limit, 'a')
+		const C = '\u0001'
+		const W = '𠀀'
+		// The name: APP_NAME_LIMIT code points of any width (60 escaped to six bytes each, 60 of four bytes), and no more.
+		expect(await shown(C.repeat(APP_NAME_LIMIT), site)).toEqual({ name: C.repeat(APP_NAME_LIMIT), website: site })
+		expect(await shown(W.repeat(APP_NAME_LIMIT), site)).toEqual({ name: W.repeat(APP_NAME_LIMIT), website: site })
+		for (const name of [C.repeat(APP_NAME_LIMIT + 1), W.repeat(APP_NAME_LIMIT + 1), `a\u0000b`, '']) {
+			expect(await shown(name, site), JSON.stringify(name)).toBeNull()
+		}
+		// Malformed bytes decode to U+FFFD: 60 of them are shown, 61 are past the code points.
+		expect(await shown(bytes(...Array(APP_NAME_LIMIT).fill(0xff)), site, true)).toMatchObject({
+			name: '\ufffd'.repeat(APP_NAME_LIMIT),
+		})
+		expect(await shown(bytes(...Array(APP_NAME_LIMIT + 1).fill(0xff)), site, true)).toBeNull()
+		// A BLOB, which no JSON function reads, is no name; and a BLOB website is no website.
+		expect(await shown(bytes(0x61), site)).toBeNull()
+		expect(await shown('App', bytes(0x61))).toEqual({ name: 'App', website: null })
+		// The website, judged as decoded and shown as stored (isAppWebsite): blank, with a NUL, whitespace, a control,
+		// DEL or a character outside a URL's code points, not http(s), or past APP_WEBSITE_LIMIT bytes is none; exactly
+		// at the bound it is shown.
+		expect(await shown('App', at(APP_WEBSITE_LIMIT))).toEqual({ name: 'App', website: at(APP_WEBSITE_LIMIT) })
+		const refused: [string, SqlStorageValue][] = [
+			...WEBSITE_REFUSED,
+			['an ideographic space', `${site}\u3000`],
+			['a NUL', `${site}a\u0000b`],
+			['controls', `${site}?${'\u0001'.repeat(700)}`],
+			['past the bytes', at(APP_WEBSITE_LIMIT + 1)],
+		]
+		for (const [name, website] of refused) {
+			expect(await shown('App', website), name).toEqual({ name: 'App', website: null })
+		}
+		// 1,026 imported bytes, 1,000 of them malformed, that decode to 3,026: past the bound as decoded, though the URL
+		// parser's serialization drops the malformed segment with the `/../` after it.
+		const malformed = bytes(
+			...new TextEncoder().encode(site),
+			...Array(1000).fill(0xff),
+			...new TextEncoder().encode('/../xy')
+		)
+		expect(malformed.byteLength).toBe(1026)
+		expect(await shown('App', malformed, true)).toEqual({ name: 'App', website: null })
+		// Shown as stored, unnormalized: 980 two-byte characters (1,980 bytes, which serialization would percent-encode
+		// past the bound), and a host's case.
+		for (const website of [`${site}${'é'.repeat(APP_WEBSITE_LIMIT / 2 - site.length)}`, 'https://Client.TEST']) {
+			expect(await shown('App', website), website.slice(0, 40)).toEqual({ name: 'App', website })
+		}
 	})
 })
 
@@ -1291,7 +1504,7 @@ describe('allowed_mentions (PostStatusService#safeguard_mentions!)', () => {
 // The plans and rows read of the statements a postStatus run makes whose SQL matches `pattern`, each as EXPLAIN QUERY
 // PLAN shows the production statement with its parameters.
 async function postPlans(
-	h: Awaited<ReturnType<typeof community>>,
+	h: Pick<ApiHarness, 'store'>,
 	token: string,
 	input: Partial<ScheduleInput>,
 	pattern: RegExp

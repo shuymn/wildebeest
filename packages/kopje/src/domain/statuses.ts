@@ -538,11 +538,12 @@ function emojiTexts(spoilerText: string, source: string, poll: PollInput | undef
 }
 
 // Writes a prepared post: the status, its mentions, tags and media, its notifications and its Create (activities.ts),
-// all in the caller's transaction. The new status's id.
+// all in the caller's transaction. The new status's id. applicationId: the app it is posted through (AUTH-6: the
+// credential's client, or the scheduled status's), as storedApplicationId keeps it; never from the request body.
 export function writePost(
 	db: Db,
 	accountId: string,
-	input: PostInput & { idempotencyKey?: string; objectId: string; origin: string },
+	input: PostInput & { idempotencyKey?: string; objectId: string; origin: string; applicationId: string | null },
 	{ author, parent, media, visibility, quoted }: PreparedPost
 ): string {
 	const origin = new URL(author.uri).origin
@@ -563,8 +564,8 @@ export function writePost(
 	db.run(
 		`INSERT INTO statuses (id, uri, account_id, in_reply_to_uri, in_reply_to_id, visibility, spoiler_text, content,
 			source_text, sensitive, language, published_at, client_key, search_text, in_reply_to_account_id, created_at,
-			quote_policy, emojis)
-		VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?12, ?16, ?17)`,
+			quote_policy, emojis, application_id)
+		VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?12, ?16, ?17, ?18)`,
 		id,
 		`${origin}/ap/o/${input.objectId}`,
 		accountId,
@@ -581,7 +582,8 @@ export function writePost(
 		searchText(composed.source, spoilerText),
 		replyTarget,
 		quotePolicy,
-		localEmojiSnapshot(db, emojiTexts(spoilerText, composed.source, input.poll), STATUS_EMOJIS_BYTES)
+		localEmojiSnapshot(db, emojiTexts(spoilerText, composed.source, input.poll), STATUS_EMOJIS_BYTES),
+		input.applicationId
 	)
 	writeMentions(db, id, composed.mentions, [])
 	if (quoted !== null) {
@@ -696,14 +698,19 @@ export function refusedPost(
 // Mastodon's UnexpectedMentionsError message.
 export const UNEXPECTED_MENTIONS = 'Post would be sent to unexpected accounts'
 
-// Posts at once: the checks, then the write, answered with the new status.
-export function postNow(db: Db, viewer: UserContext, input: CreateStatusInput): CreateStatusResult {
+// Posts at once through the app `applicationId` (writePost): the checks, then the write, answered with the new status.
+export function postNow(
+	db: Db,
+	viewer: UserContext,
+	input: CreateStatusInput,
+	applicationId: string | null
+): CreateStatusResult {
 	const { accountId } = viewer
 	const prepared = preparePost(db, accountId, input, null)
 	if (!isPrepared(prepared)) {
 		return refusedPost(db, prepared, input.present)
 	}
-	const id = writePost(db, accountId, { ...input, origin: input.present.origin }, prepared)
+	const id = writePost(db, accountId, { ...input, origin: input.present.origin, applicationId }, prepared)
 	const status = presentOwn(db, accountId, id, { ...input.present, viewer })
 	if (status === null) {
 		throw new Error('created status cannot be presented')

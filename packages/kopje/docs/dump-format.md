@@ -231,6 +231,14 @@ twice. A chunk past these fails with the CHECK's name (`account_warning_action`,
 `FOREIGN KEY` failure. A dump taken before 0062 has neither: it restores into a Store at its own migrations, which then
 upgrades. A file built from legacy data has no row and writes NULL for the column.
 
+Status applications (migration `0064_status_applications`): `statuses.application_id` is NULL, or the client id of the
+app a local original was posted through: text of 1 to 64 ASCII bytes of base64url characters (`A-Z`, `a-z`, `0-9`, `-`,
+`_`), on a local original only (no boost, no remote author); anything else fails with `statuses: application_id past
+its stored bound`. No foreign key holds it: an id that names no `oauth_clients` row restores as it is and presents
+`application: null`. A scheduled status's `params` keep their `application_id` as written; publication records it
+only when it passes the same rule. A dump taken before 0064 has no such column: it restores into a Store at its own
+migrations, which then upgrades. A file built from legacy data writes NULL.
+
 A report (migration `0054_remote_reports`) names any account as its reporter (`account_id`), once per `uri` and
 reported account, with `status_ids` of at most 100 ids within 2,101 UTF-8 bytes (compact JSON of 18-digit ids), a
 `uri` within 4,096 JSON-escaped UTF-8 bytes and a `comment` within 20,000 UTF-8 bytes (and 5,000 code points up to any

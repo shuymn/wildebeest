@@ -1004,7 +1004,10 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   the media a scheduled status holds is the poster's own, checked as for a post; publication runs as the scheduled
   status's owner and through the checks of a post (`preparePost`), and an account suspended meanwhile publishes nothing;
   `test/scheduled-statuses.test.ts` ("never shows or changes another account's scheduled status", "nothing leaks
-  before publication").
+  before publication"). _Enforced (main)_ for a status's app: the app a post records is the validated credential's
+  client (a scheduled status's, taken when it was scheduled), never a field of the body (`postStatus` in
+  `src/domain/scheduled-statuses.ts`; `test/statuses.test.ts` ("ignores an application or application_id the request
+  sends")).
 - **AUTH-7: opaque credentials are unguessable and stored as digests.** Client ids and secrets, codes and access tokens
   are 32 random bytes. Codes and access tokens are stored and looked up only by their full SHA-256, at token info and
   introspection too, so a lookup reveals no prefix; a hit and a miss do not take the same time, and what keeps a token
@@ -1609,6 +1612,15 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   static only with its image, and each within its URL bound as JSON writes it (`test/migrations.test.ts`
   ("0061_account_static_images"), `test/account-static.test.ts`, `test/dump-import.test.ts` ("round-trips the static
   images")).
+  _Enforced (main)_ for status applications: `statuses.application_id` holds NULL or 1 to 64 bytes of base64url
+  characters, on a local original only; the triggers `statuses_application_insert` and `statuses_application_update`
+  of migration `0064_status_applications` refuse any other value, imports included, judged by storage class, bytes,
+  NUL, the characters, then the row (`applicationIdPastBoundSql` in `src/platform/stored-bounds.ts`). The writers
+  (`writePost`, from the credential's client or a scheduled status's params) keep a value through
+  `storedApplicationId`, which shares the acceptance rule, and write NULL for any other, so the post is never refused
+  for it. No foreign key holds it: an id whose app is gone reads as no app (`test/migrations.test.ts`
+  ("0064_status_applications"), `test/stored-bounds.test.ts` ("status applications"), `test/dump-import.test.ts`
+  ("round-trips status apps")).
 - **RES-3: lists are bounded.** Pageable lists return at most 80 items; relationships read at most 100 ids; any other
   collection names its count and byte bound. _Enforced (main):_ `src/mastodon/pagination.ts`, `MAX_RELATIONSHIP_IDS` in
   `src/domain/accounts.ts`. _Gap: neither cap is tested._ _Enforced (main)_ for search: at
@@ -1691,10 +1703,20 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   edit-history snapshot's first 4 attachments rebuilt through the attachment bounds and '[]' over 288 KiB; a conversation presents its first 12 participants in stored
   order, cut in SQL. Every presented URL stays within its bound as serialized, derived or stored: a profile URL, avatar
   or header within 2,048 (a profile URL falls back from the stored one to the actor's origin and to this instance's
-  `/@acct` page, and to '' when none fits), a media URL within 2,048. Each per-status cap reads at most its own number
-  of rows, each status once, through an index that holds only the rows it shows: media_attachments_status (shown
-  attachments), status_mentions_shown (mentions that are not silent, migration `0047_status_mentions_shown`) and
-  status_tags. A hashtag name over 256 code units or 1 KiB among a status's first names read is left out rather than
+  `/@acct` page, and to '' when none fits), a media URL within 2,048. A local status's `application` reads its app's
+  name and website as stored, within 240 and 2,000 bytes and only as text (`appNameSql` and `appWebsiteSql` in
+  `src/platform/stored-bounds.ts`, by key through `sqlite_autoindex_oauth_clients_1`), and presents them as decoded: a
+  name of at most 60 code points within 240 bytes and 362 JSON bytes, else `application: null`; a website that is
+  well-formed, holds none of C0 controls (U+0000–U+001F), the space, DEL (U+007F), C1 controls (U+0080–U+009F), the
+  other whitespace JavaScript's `\s` matches (Unicode spaces, line terminators, U+FEFF), and `"` `'` `<` `>` `\` `^`
+  `` ` `` `{` `|` `}` (those that end or split an HTML attribute or a URL in common parsers), is within 2,000 bytes and
+  parses as an http(s) URL with a host, shown as stored, else `website: null`; registration refuses the same websites
+  after trimming surrounding whitespace (`isAppWebsite` in `src/platform/stored-bounds.ts`) (`test/statuses.test.ts`
+  ("application"), `test/status-bounds.test.ts` ("status applications")). Each per-status
+  cap reads at most its own number of rows, each status once, through an index that holds only the rows it shows:
+  media_attachments_status (shown attachments), status_mentions_shown (mentions that are not silent, migration
+  `0047_status_mentions_shown`) and status_tags.
+  A hashtag name over 256 code units or 1 KiB among a status's first names read is left out rather than
   replaced by a later one, so such a status shows one fewer: a remote status stores none, and a local post records one
   as Mastodon does (Mastodon 4.5 sets no length), which costs it a presented hashtag only when it sorts before more than
   70 others, a corner case within 500 characters (`test/status-bounds.test.ts`). A remote username is Mastodon's remote
@@ -1808,9 +1830,13 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   Rate Limiting binding before its body is read (429), and the Store keeps at most 500 never-authorized apps (no token or
   code of a user); when full it first removes unused apps (no token of any kind) older than a day, then the oldest
   never-authorized apps older than an hour (app tokens and all), and otherwise refuses with 429. Only a user's token or
-  code protects an app: anyone can get an app token without a user, so app tokens cannot hold a slot for good. The cron removes unused apps after a day,
-  as Mastodon's `ApplicationsVacuum` does, and expired codes and web sessions, 500 of each per run. `registerApp` and
-  `sweepOAuth` in `src/domain/oauth.ts`, `src/mastodon/oauth.ts`; `test/apps-budget.test.ts`. Avatar and header
+  code protects an app: anyone can get an app token without a user, so app tokens cannot hold a slot for good. The cron
+  removes unused apps after a day (Kopje's own removal, which Mastodon 4.5.11 does not make:
+  [mastodon-deviations.md](mastodon-deviations.md), Posting), and expired codes and web sessions, 500 of each per run.
+  Removing an app
+  writes no status row however many it posted (`statuses.application_id` has no foreign key; its statuses then show
+  `application: null`). `registerApp` and `sweepOAuth` in `src/domain/oauth.ts`, `src/mastodon/oauth.ts`;
+  `test/apps-budget.test.ts`. Avatar and header
   uploads, from `update_credentials` and the settings page alike, go through the media budgets below, one reservation
   and two transformations each, at most 8 MB each. Unlocking an account: _Enforced (main):_ the update starts a cursor
   job (`local_accounts.accept_requests_after`) instead of accepting in the request; each job round authorizes at most
@@ -2158,7 +2184,12 @@ poll it shows, at least every fill's (`test/status-bounds.test.ts` ("keeps the c
 the account occurrence's conservative JSON adds those keys (63 bytes) to the remote one measured, whose 32 KiB of fields
 alone pass a local account's four. Every presented account but the viewer's moved to an account of its own at the nested
 caps (a display name referencing emojis that fill 2,048 bytes, URLs at 512 bytes, a 253-byte domain), and each nested
-account counts at its derived 11,021 bytes in the conservative JSON (14 in the conversation, 10 in the group). Through
+account counts at its derived 11,021 bytes in the conservative JSON (14 in the conversation, 10 in the group). The
+fills' statuses are remote, which show no `application`; each status a shape shows counts one at its derived 2,399
+bytes (a name of 60 code points escaped to six bytes each and a website of 2,000 bytes, which JSON writes unescaped,
+with the key), witnessed
+by a local original and a local quote whose apps are at those bounds, escaped, raw and as malformed imported bytes
+(`test/status-bounds.test.ts` ("status applications")). Through
 the real Store RPC, a public timeline page, a context and a search answer of statuses of about 0.98 MB each, each cut at
 the budget, return 7.82 MB of JSON each (`test/answer-budgets.test.ts` ("the Store RPC returns a maximal answer")), and
 the boost of a quote above, alone or as the one status a lookup of it, the quote and the quoted status admits, returns
@@ -2169,16 +2200,16 @@ the boost of a quote above, alone or as the one status a lookup of it, the quote
 | ---------------------------------------------------------------- | ----------------- | --------------- | ----------------- | --------- | ----- | -------------- |
 | Account occurrence, with the account it moved to                 | 123,249           | 140,447         | 143,188           | 1         | 92    | 1.7%           |
 | Moved-to account (nested), derived from its caps                 | 11,118            | 8,343           | 11,021            | 1         |       | 0.1%           |
-| Status                                                           | 4,444,704         | 2,638,854       | 2,641,717         | 1,485     | 2,419 | 31.5%          |
-| Quote (the status and its quoted status)                         | 6,818,451         | 5,277,741       | 5,283,467         | 1,918     | 4,840 | 63.0%          |
-| Boost of a quote                                                 | 7,113,040         | 5,686,692       | 5,695,096         | 1,975     | 5,799 | 67.9%          |
-| Conversation: 12 participants presented, its last status a quote | 8,495,999         | 6,963,074       | 7,000,936         | 1,944     | 5,935 | 83.5%          |
-| Notification group: 8 sample accounts, its status a quote        | 7,880,277         | 6,401,741       | 6,428,891         | 1,953     | 5,588 | 76.6%          |
-| Report: its first status a quote past the 2 MiB allowance        | 7,198,401         | 5,874,208       | 5,885,290         | 1,933     | 5,155 | 70.2%          |
+| Status                                                           | 4,444,720         | 2,638,854       | 2,644,116         | 1,485     | 2,419 | 31.5%          |
+| Quote (the status and its quoted status)                         | 6,818,483         | 5,277,741       | 5,288,265         | 1,918     | 4,840 | 63.0%          |
+| Boost of a quote                                                 | 7,113,088         | 5,686,692       | 5,702,293         | 1,975     | 5,799 | 68.0%          |
+| Conversation: 12 participants presented, its last status a quote | 8,496,031         | 6,963,074       | 7,005,734         | 1,944     | 5,935 | 83.5%          |
+| Notification group: 8 sample accounts, its status a quote        | 7,880,309         | 6,401,741       | 6,433,689         | 1,953     | 5,588 | 76.7%          |
+| Report: its first status a quote past the 2 MiB allowance        | 7,198,433         | 5,874,208       | 5,890,088         | 1,933     | 5,155 | 70.2%          |
 | An admin.report notification of that report                      | 2,360,585         | 403,298         | 408,654           | 1,061     | 294   | 4.9%           |
 | A moderation_warning notification, its local account at bounds   | 129,439           | 281,568         | 281,568           | 9         | 215   | 3.4%           |
 | Its notification group                                           | 129,439           | 281,757         | 281,757           | 9         | 222   | 3.4%           |
-| A filtered favourite of the quote, as include_filtered lists it  | 6,952,465         | 5,418,314       | 5,426,718         | 1,941     | 4,936 | 64.7%          |
+| A filtered favourite of the quote, as include_filtered lists it  | 6,952,497         | 5,418,314       | 5,431,516         | 1,941     | 4,936 | 64.7%          |
 | ActivityPub Note: a local status at its bounds, 1,000 addressed  | 3,697,315         | 4,235,143       |                   | 1,337     | 3,165 | 50.5%          |
 | Its Create (the Note and its addressing again)                   |                   | 6,291,204       |                   |           |       | 75.0%          |
 | Announcement: each part derived from its caps                    |                   | 121,774         | 248,997           |           |       | 3.0%           |
@@ -2331,9 +2362,9 @@ and reports' within the whole.
 
 | Item                                           | Rows, with 25% headroom | Rejected-item objects |
 | ---------------------------------------------- | ----------------------- | --------------------- |
-| Boost of a quote (the largest timeline item)   | 19.25 MB                | 17.09 MB              |
-| Group: its status (a quote), 8 sample accounts | 21.23 MB                | 19.29 MB              |
-| Report: its status and 4 accounts              | 19.47 MB                | 17.66 MB              |
+| Boost of a quote (the largest timeline item)   | 19.27 MB                | 17.11 MB              |
+| Group: its status (a quote), 8 sample accounts | 21.24 MB                | 19.30 MB              |
+| Report: its status and 4 accounts              | 19.48 MB                | 17.67 MB              |
 
 Groups and reports also keep the presentation's state: the compiled filters (50 filters of 20 keywords, about
 0.5 MB) and the filter results cached by status (at most 50 results of about 1.2 KB each, 60 KB a status) for the
@@ -2344,16 +2375,17 @@ pass, and the passes are at most four), 200 for a page of reports (its at most 1
 
 | Answer (Store isolate)                      | Normal   | Backstop fired, the dropped chunk still live | A single item |
 | ------------------------------------------- | -------- | -------------------------------------------- | ------------- |
-| Timelines (largest item a boost of a quote) | 61.52 MB | 63.93 MB (63,930,202 bytes)                  | 61.52 MB      |
-| Groups                                      | 75.80 MB | 78.61 MB                                     | 75.80 MB      |
-| Reports                                     | 74.81 MB | 77.63 MB                                     | 74.81 MB      |
+| Timelines (largest item a boost of a quote) | 61.56 MB | 63.97 MB (63,968,833 bytes)                  | 61.56 MB      |
+| Groups                                      | 75.82 MB | 78.64 MB                                     | 75.82 MB      |
+| Reports                                     | 74.84 MB | 77.65 MB                                     | 74.84 MB      |
 
 A chunk of several takes at most its target of heap: 704 KiB (0.72 MB) for timelines, 1 MiB (1.05 MB) for groups and
 reports. Normal: the rows are the larger of 1.25 × the target and the item's rows, plus the admitted answer, the
 rejected item and, for groups and reports, their state. With the backstop fired, 1.25 × (the target + 1.20 MB) of
 dropped rows more. The 704 KiB timeline cap keeps the fallback below half the isolate's memory even while the dropped
-chunk remains live, with 69,798 bytes to spare: each account row's static images count at their stored bound
-(1,056 bytes of heap each, whatever the fills hold), each moved-to account's row at its 22,876-byte heap cap and its
+chunk remains live, with 31,167 bytes to spare: each account row's static images count at their stored bound
+(1,056 bytes of heap each, whatever the fills hold), each status row's app name and website at their raw bounds
+(4,544 bytes of heap), each moved-to account's row at its 22,876-byte heap cap and its
 JSON at 11,021 bytes, and its emojis' presentation holds one entry past those it admits at a time (18,060 bytes at three
 times its literals, decoded strings and the larger of its entity and an href normalization makes before rejecting it:
 `referencedEmojis` in `src/domain/custom-emojis.ts`), counted once per answer. Every row term carries 25% headroom; the

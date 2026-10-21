@@ -12,7 +12,8 @@ import {
 	tagNameSql,
 } from './status-bounds'
 import { balancedSum, type ColumnMap, fixedColumns, type FixedColumns, rowHeapSql } from '../db/columns'
-import { ACCOUNTS_ID_INDEX, MEDIA_ID_INDEX, STATUSES_ID_INDEX } from '../db/indexes'
+import { ACCOUNTS_ID_INDEX, MEDIA_ID_INDEX, OAUTH_CLIENTS_ID_INDEX, STATUSES_ID_INDEX } from '../db/indexes'
+import { appNameSql, appWebsiteSql } from '../platform/stored-bounds'
 
 // hydrate's queries (status-presenter.ts) and R, statusStream's bound on one status's row heap, share these column maps
 // (src/db/columns.ts), so R cannot drift from what is read (RES-3, "Heap at 8 MiB per answer" in docs/threat-model.md).
@@ -48,18 +49,27 @@ export const STATUS_COLUMN_MAP = {
 	author_uri: actorUriSql('au.uri'),
 	author_username: usernameSql('au.username'),
 	author_domain: 'au.domain',
+	// The app a local status was posted through (statuses.application_id, migration 0064_status_applications), within
+	// its raw bounds (stored-bounds.ts appNameSql, appWebsiteSql); none for a remote author's, whose key is absent.
+	application_name: `CASE WHEN au.domain IS NULL THEN ${appNameSql('ap.name')} END`,
+	application_website: `CASE WHEN au.domain IS NULL THEN ${appWebsiteSql('ap.website')} END`,
 } as const satisfies ColumnMap
 
-// Each status and its author by key (the indexes named, so statistics older than the Store's growth cannot turn either
-// into a scan: RES-7).
+// Each status's app, by key: a status whose id names no app (none, or one removed) reads none.
+const APPLICATION_JOIN = `LEFT JOIN oauth_clients ap INDEXED BY ${OAUTH_CLIENTS_ID_INDEX} ON ap.id = s.application_id`
+
+// Each status, its author and its app by key (the indexes named, so statistics older than the Store's growth cannot
+// turn any into a scan: RES-7).
 export const STATUS_FROM = `statuses s INDEXED BY ${STATUSES_ID_INDEX}
-	CROSS JOIN accounts au INDEXED BY ${ACCOUNTS_ID_INDEX} ON au.id = s.account_id`
+	CROSS JOIN accounts au INDEXED BY ${ACCOUNTS_ID_INDEX} ON au.id = s.account_id
+	${APPLICATION_JOIN}`
 
 // STATUS_FROM over the ids of `keys`, a subquery whose `id` column holds each id once: each status is sought by its
 // key (the index named, so statistics older than the Store's growth cannot turn the read into a scan: RES-7).
 export function statusesOfSql(keys: string): string {
 	return `(${keys}) g CROSS JOIN statuses s INDEXED BY ${STATUSES_ID_INDEX} ON s.id = g.id
-		CROSS JOIN accounts au INDEXED BY ${ACCOUNTS_ID_INDEX} ON au.id = s.account_id`
+		CROSS JOIN accounts au INDEXED BY ${ACCOUNTS_ID_INDEX} ON au.id = s.account_id
+		${APPLICATION_JOIN}`
 }
 
 // The columns presentMedia reads, bounded as stored (platform/stored-bounds.ts), for every query that presents media,

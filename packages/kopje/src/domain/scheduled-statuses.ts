@@ -34,6 +34,7 @@ import {
 import { selectSql } from '../db/columns'
 import { MEDIA_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
+import { storedApplicationId } from '../platform/stored-bounds'
 
 // Scheduled statuses (Mastodon 4.5's ScheduledStatus, PostStatusService#schedule_status!,
 // Api::V1::ScheduledStatusesController and PublishScheduledStatusWorker). A post sent with a future scheduled_at is
@@ -56,11 +57,14 @@ export const MAX_PARAMS_BYTES = 128 * 1024
 // At most this many scheduled statuses are published per cron run (RES-6), each in its own transaction.
 export const PUBLISH_ROUND = 25
 
-// REST::ScheduledStatusSerializer's params: the post's options as PostStatusService#scheduled_options keeps them. Kopje
-// has no applications on statuses, so that is always null. quoted_status_id is the status quoted (a boost's original),
-// which R36 judges again when the post is published. The quote policy is the one the request chose, or the author's
-// default when it chose none, resolved when the post is scheduled (as Mastodon's controller resolves it), by name as
-// the serializer shows it. Ids are strings, and so is a poll's expires_in, as a form sends it.
+// REST::ScheduledStatusSerializer's params: the post's options as PostStatusService#scheduled_options keeps them.
+// application_id is the client_id of the app it was scheduled through (an app's id, docs/mastodon-deviations.md
+// "Instance and apps"), null when storedApplicationId keeps none; the post is published through it, as stored, whether
+// or not the app still exists (a removed app's status presents `application: null`). quoted_status_id is the status
+// quoted (a boost's original), which R36 judges again when the post is published. The quote policy is the one the
+// request chose, or the author's default when it chose none, resolved when the post is scheduled (as Mastodon's
+// controller resolves it), by name as the serializer shows it. Ids are strings, and so is a poll's expires_in, as a
+// form sends it.
 export type ScheduledParams = {
 	text: string
 	poll: ScheduledPoll | null
@@ -71,7 +75,7 @@ export type ScheduledParams = {
 	language: string | null
 	scheduled_at: null
 	in_reply_to_id: string | null
-	application_id: null
+	application_id: string | null
 	idempotency: null
 	with_rate_limit: false
 	allowed_mentions: string[] | null
@@ -176,7 +180,8 @@ function paramsOf(
 	media: readonly string[],
 	inReplyToId: string | null,
 	quotedStatusId: string | null,
-	quotePolicy: QuotePolicyName
+	quotePolicy: QuotePolicyName,
+	applicationId: string | null
 ): ScheduledParams {
 	return {
 		text: input.text,
@@ -188,7 +193,7 @@ function paramsOf(
 		language: input.language ?? null,
 		scheduled_at: null,
 		in_reply_to_id: inReplyToId,
-		application_id: null,
+		application_id: applicationId,
 		idempotency: null,
 		with_rate_limit: false,
 		allowed_mentions: input.allowedMentions ?? null,
@@ -308,7 +313,10 @@ export type ScheduleResult = CreateStatusResult | { status: 'scheduled'; value: 
 // Then no scheduled_at, or a time not in the future, posts at once; otherwise the post is checked as an immediate one
 // (the status replied to, the media, a blank text), then against ScheduledStatus's validations, and kept with its
 // media held.
-export const postStatus = userWriteOperation<ScheduleInput, ScheduleResult>((db, input, { accountId }, viewer) => {
+export const postStatus = userWriteOperation<ScheduleInput, ScheduleResult>((db, input, caller, viewer) => {
+	const { accountId } = caller
+	// AUTH-6: the app of the credential, which the Worker cannot name.
+	const applicationId = storedApplicationId(caller.client.id)
 	if (input.scheduledAt !== undefined && !isTime(input.scheduledAt)) {
 		return { status: 'invalid', error: 'Record invalid' }
 	}
@@ -330,7 +338,7 @@ export const postStatus = userWriteOperation<ScheduleInput, ScheduleResult>((db,
 		releaseKey(db, accountId, input.idempotencyKey)
 	}
 	if (input.scheduledAt === undefined || Date.parse(input.scheduledAt) <= input.now) {
-		return postNow(db, viewer, input)
+		return postNow(db, viewer, input, applicationId)
 	}
 	const scheduledAt = input.scheduledAt
 	// As PostStatusService#schedule_status!: allowed_mentions is kept in the params and checked at publication.
@@ -348,7 +356,8 @@ export const postStatus = userWriteOperation<ScheduleInput, ScheduleResult>((db,
 			prepared.media,
 			prepared.parent?.id ?? null,
 			prepared.quoted?.id ?? null,
-			input.quotePolicy ?? prepared.author.default_quote_policy
+			input.quotePolicy ?? prepared.author.default_quote_policy,
+			applicationId
 		)
 	)
 	if (new TextEncoder().encode(params).length > MAX_PARAMS_BYTES) {
@@ -582,6 +591,8 @@ function publish(db: Db, id: string, row: PublishRow, now: number, objectId: str
 			idempotencyKey: row.client_key === null || keyTaken ? undefined : row.client_key,
 			objectId,
 			origin: new URL(prepared.author.uri).origin,
+			// A restored row's params hold any JSON: an id the bound refuses publishes the post without an app.
+			applicationId: storedApplicationId(params.application_id),
 		},
 		prepared
 	)

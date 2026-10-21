@@ -20,6 +20,7 @@ import {
 import { NOW } from './app-helpers'
 import { appToken, plannedRun, remoteAccounts, scansOf, staleStatistics } from './read-helpers'
 import { storeWith } from './setup-helpers'
+import { WEBSITE_REFUSED } from './status-helpers'
 import { accountForLogin, introspectToken } from '../src/domain/oauth'
 import { callStore, type StoreStub } from '../src/platform/store-client'
 import { pkceChallenge, sha256Hex } from '../src/security/tokens'
@@ -135,6 +136,42 @@ describe('apps', () => {
 			expect(response.status, JSON.stringify(body)).toBe(422)
 			expect(await response.json()).toEqual({ error: expect.stringMatching(/^Validation failed: /) })
 		}
+	})
+
+	// Mastodon's APP_NAME_LIMIT of 60 characters (app/lib/application_extension.rb:6, :15, v4.5.11), counted in code
+	// points: the most a status presents its app's name within (platform/stored-bounds.ts).
+	it('accepts a name of 60 characters, astral ones too, and refuses 61', async () => {
+		const h = await apiHarness()
+		const register = (name: string) =>
+			h.request('/api/v1/apps', json({ client_name: name, redirect_uris: 'https://client.test/cb' }))
+		for (const character of ['a', '𠀀']) {
+			const accepted = await register(character.repeat(60))
+			expect(accepted.status, character).toBe(200)
+			expect(await accepted.json(), character).toMatchObject({ name: character.repeat(60) })
+			const refused = await register(character.repeat(61))
+			expect(refused.status, character).toBe(422)
+			expect(await refused.json(), character).toEqual({
+				error: "Validation failed: Application name can't be blank or longer than 60 characters",
+			})
+		}
+	})
+
+	// isAppWebsite (platform/stored-bounds.ts): the websites a status would not show are refused here too.
+	it('refuses a website with a character outside a URL, not http(s), or without a host', async () => {
+		const h = await apiHarness()
+		for (const [name, website] of WEBSITE_REFUSED.filter(([name]) => name !== 'blank')) {
+			const response = await h.request(
+				'/api/v1/apps',
+				json({ client_name: 'App', redirect_uris: 'https://client.test/cb', website })
+			)
+			expect(response.status, name).toBe(422)
+			expect(await response.json(), name).toEqual({ error: 'Validation failed: Website is invalid' })
+		}
+		const accepted = await h.request(
+			'/api/v1/apps',
+			json({ client_name: 'App', redirect_uris: 'https://client.test/cb', website: 'https://Client.TEST/é' })
+		)
+		expect(await accepted.json()).toMatchObject({ website: 'https://Client.TEST/é' })
 	})
 
 	it('accepts form-encoded registrations with an array of redirect URIs', async () => {
