@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 import { sql } from './api-helpers'
 import { NOW } from './app-helpers'
+import { writtenBy } from './inbox-store-helpers'
 import { plannedRun, type PlannedStatement, scansOf, staleStatistics } from './read-helpers'
 import { community } from './status-helpers'
 import { PURGE_BATCH, purgeBatch } from '../src/domain/inbox'
@@ -267,14 +268,6 @@ describe("a remote account's purge with stale statistics (RES-6, RES-7)", () => 
 })
 
 describe("a remote account's purge by key, batch by batch (RES-6)", () => {
-	// A batch and the rows it changed (total_changes, as the purge's budget counts them).
-	const counted = writeOperation<{ uri: string }, { more: boolean; changes: number }>((db, { uri }) => {
-		const changes = () => db.first<{ n: number }>('SELECT total_changes() AS n')!.n
-		const start = changes()
-		const more = purgeBatch(db, uri, NOW)
-		return { more, changes: changes() - start }
-	})
-
 	it('writes within PURGE_BATCH, the follows of both sides lowest id first, as many rows as the batches write', async () => {
 		const h = await community(['alice'])
 		const alice = h.users.alice.id
@@ -317,6 +310,9 @@ describe("a remote account's purge by key, batch by batch (RES-6)", () => {
 			v,
 			AT
 		)
+		// The counters the purge recounts, stale until it does: the local account's follows and its status's favourites.
+		await sql(h.store, 'UPDATE accounts SET followers_count = 7, following_count = 7 WHERE id = ?', alice)
+		await sql(h.store, 'UPDATE statuses SET favourites_count = 7 WHERE id = ?', id18(0, 12))
 		const followIds = await sql<{ id: number; out: number }>(
 			h.store,
 			'SELECT id, account_id = ?1 AS out FROM follows WHERE account_id = ?1 OR target_account_id = ?1 ORDER BY id',
@@ -326,11 +322,9 @@ describe("a remote account's purge by key, batch by batch (RES-6)", () => {
 		let firstLeft: number[] = []
 		for (let more = true; more;) {
 			expect(batches.length).toBeLessThan(40)
-			const done = await runInDurableObject(h.store, (_instance, state) =>
-				counted.run(state.storage.sql, { uri: uriOf(0) })
-			)
-			batches.push(done)
-			more = done.more
+			const { result, rows } = await writtenBy(h.store, (db) => purgeBatch(db, uriOf(0), NOW))
+			batches.push({ more: result, changes: rows })
+			more = result
 			if (batches.length === 1) {
 				firstLeft = (
 					await sql<{ id: number }>(
@@ -347,6 +341,15 @@ describe("a remote account's purge by key, batch by batch (RES-6)", () => {
 			expect(changes).toBeLessThanOrEqual(PURGE_BATCH)
 		}
 		expect(batches.slice(0, -1).map((b) => b.changes)).toEqual(batches.slice(0, -1).map(() => PURGE_BATCH))
+		// Every row it deletes, recounts and finishes, as the purge wrote them with one statement over each bounded
+		// selection (measured before the per-row writes: 500, 500, 500 and 46).
+		expect(batches.reduce((sum, b) => sum + b.changes, 0)).toBe(1546)
+		expect(await sql(h.store, 'SELECT followers_count, following_count FROM accounts WHERE id = ?', alice)).toEqual([
+			{ followers_count: 0, following_count: 0 },
+		])
+		expect(await sql(h.store, 'SELECT favourites_count FROM statuses WHERE id = ?', id18(0, 12))).toEqual([
+			{ favourites_count: 0 },
+		])
 		// The first batch's follows: the first of both sides by their ids as text, as one read of both in that order takes.
 		const gone = followIds.map((f) => String(f.id)).filter((id) => !firstLeft.includes(Number(id)))
 		expect(gone.length).toBeGreaterThan(0)

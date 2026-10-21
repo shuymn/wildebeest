@@ -314,7 +314,7 @@ describe("a remote account's featured hashtags with stale statistics (RES-7)", (
 			carol
 		)
 		const run = () =>
-			plannedRun(h, /FROM featured_tags f INDEXED BY/, accountFeaturedTags, {
+			plannedRun(h, /FROM featured_tags f\b/, accountFeaturedTags, {
 				id: carol,
 				present: { origin: 'https://kopje.test' },
 			})
