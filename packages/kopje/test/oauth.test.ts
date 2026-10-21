@@ -63,9 +63,6 @@ describe('apps', () => {
 		expect(verified.status).toBe(200)
 		const body = await verified.json<Record<string, unknown>>()
 		expect(body).toEqual(application)
-		for (const key of ['client_id', 'client_secret', 'client_secret_expires_at']) {
-			expect(body).not.toHaveProperty(key)
-		}
 		// An app token has no user.
 		const user = await h.request('/api/v1/accounts/verify_credentials', bearer(access_token))
 		expect(user.status).toBe(422)

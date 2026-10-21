@@ -746,14 +746,20 @@ export const CONTACT_USERNAME_BYTES = CONTACT_USERNAME_LIMIT + 1 + 253
 
 const CONTACT_ALPHABET = /^[-.0-9@A-Z_a-z]+$/
 
+// True when a text `column` (no NUL, within the bytes) breaks the structure: a character outside the alphabet, `@` at
+// either end or more than one, or a username part past CONTACT_USERNAME_LIMIT. CASE-free, for the migration's DELETE.
+function contactStructurePastSql(column: string): string {
+	return `${column} = '' OR ${column} GLOB '*[^-.0-9@A-Z_a-z]*' OR ${column} GLOB '@*' OR ${column} GLOB '*@'
+	OR ${column} GLOB '*@*@*'
+	OR (instr(${column}, '@') = 0 AND length(${column}) > ${CONTACT_USERNAME_LIMIT})
+	OR instr(${column}, '@') - 1 > ${CONTACT_USERNAME_LIMIT}`
+}
+
 function contactUsernameSql(column: string): string {
 	return `CASE WHEN typeof(${column}) <> 'text' THEN NULL
 	WHEN length(CAST(${column} AS BLOB)) > ${CONTACT_USERNAME_BYTES} THEN NULL
 	WHEN instr(CAST(${column} AS BLOB), x'00') > 0 THEN NULL
-	WHEN ${column} = '' OR ${column} GLOB '*[^-.0-9@A-Z_a-z]*' OR ${column} GLOB '@*' OR ${column} GLOB '*@'
-		OR ${column} GLOB '*@*@*' THEN NULL
-	WHEN (CASE instr(${column}, '@') WHEN 0 THEN length(${column}) ELSE instr(${column}, '@') - 1 END)
-		> ${CONTACT_USERNAME_LIMIT} THEN NULL
+	WHEN ${contactStructurePastSql(column)} THEN NULL
 	ELSE ${column} END`
 }
 
@@ -763,10 +769,7 @@ export function contactUsernamePastBoundSql(column: string): string {
 	return `${column} IS NOT NULL AND (typeof(${column}) <> 'text'
 	OR length(CAST(${column} AS BLOB)) > ${CONTACT_USERNAME_BYTES}
 	OR instr(CAST(${column} AS BLOB), x'00') > 0
-	OR ${column} = '' OR ${column} GLOB '*[^-.0-9@A-Z_a-z]*' OR ${column} GLOB '@*' OR ${column} GLOB '*@'
-	OR ${column} GLOB '*@*@*'
-	OR (instr(${column}, '@') = 0 AND length(${column}) > ${CONTACT_USERNAME_LIMIT})
-	OR instr(${column}, '@') - 1 > ${CONTACT_USERNAME_LIMIT})`
+	OR ${contactStructurePastSql(column)})`
 }
 
 // P's JS twin: the value itself, or null where P is NULL.

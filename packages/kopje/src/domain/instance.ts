@@ -119,9 +119,9 @@ export const instanceSettings = readOperation<void, AboutSettings>((db) => ({
 		null,
 }))
 
-// The users count and the active ones in the one scan of local_accounts the count needs: active_on between the window's
-// first day (?1) and today (?2), so an imported later day never counts (active_on is a CHECKed YYYY-MM-DD, so text order
-// is date order).
+// The users count and the active ones in the one scan of local_accounts the count needs: active_on between the
+// window's first day (?1) and today (?2), so an imported later day never counts (active_on is a CHECKed YYYY-MM-DD, so
+// text order is date order).
 export const INSTANCE_COUNTS_SQL = `SELECT u.users, u.active,
 	(SELECT SUM(statuses_count) FROM accounts WHERE domain IS NULL) AS statuses,
 	(SELECT COUNT(DISTINCT domain) FROM accounts WHERE domain IS NOT NULL) AS domains
@@ -146,21 +146,20 @@ export const instanceInfo = readOperation<{ now: number; present: Present }, Ins
 	}
 })
 
-// The stored contact_username split at its first `@` (one at most, as stored), the instance's own domain read as
-// local; a value with no username reads as no contact.
-function contactParts(
-	stored: string,
-	instanceDomain: string | null
-): { username: string; domain: string | null } | null {
-	const at = stored.indexOf('@')
-	const username = at === -1 ? stored : stored.slice(0, at)
-	const domain = at === -1 ? null : stored.slice(at + 1)
-	return username === '' ? null : { username, domain: domain === instanceDomain ? null : domain }
+// A contact_username within its bound (read through its projection, or shaped by adminValue) split at its `@`, the
+// instance's own domain read as local.
+function contactParts(value: string, instanceDomain: string | null): { username: string; domain: string | null } {
+	const at = value.indexOf('@')
+	const domain = at === -1 ? null : value.slice(at + 1)
+	return { username: at === -1 ? value : value.slice(0, at), domain: domain === instanceDomain ? null : domain }
 }
 
 function contactAccount(db: Db, settings: InstanceSettings, present: Present): Account | null {
-	const parts = settings.contactUsername === null ? null : contactParts(settings.contactUsername, settings.domain)
-	return parts === null ? null : accountByAddress(db, parts.username, parts.domain, present)
+	if (settings.contactUsername === null) {
+		return null
+	}
+	const { username, domain } = contactParts(settings.contactUsername, settings.domain)
+	return accountByAddress(db, username, domain, present)
 }
 
 // GET /api/v1/instance/rules: the rules setting alone, one row, whatever the instance holds.
@@ -428,8 +427,8 @@ const CONTACT_SHAPE = 'contact_username must be the address of an account, usern
 function contactAddress(db: Db, value: string): string | { refused: string } {
 	const instanceDomain =
 		db.first<{ value: string }>("SELECT value FROM instance_settings WHERE name = 'domain'")?.value ?? null
-	const parts = contactParts(value, instanceDomain)
-	const address = parts === null ? null : storedAddress(db, parts.username, parts.domain)
+	const { username, domain } = contactParts(value, instanceDomain)
+	const address = storedAddress(db, username, domain)
 	if (address === null) {
 		return { refused: 'contact_username names no account' }
 	}
