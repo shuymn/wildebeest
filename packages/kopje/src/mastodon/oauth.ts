@@ -172,7 +172,8 @@ const EXPIRED_TOKEN = 'The access token expired'
 
 const TOKEN_PARAMS = ['grant_type', 'code', 'redirect_uri', 'code_verifier', 'scope', 'client_id', 'client_secret']
 const REVOKE_PARAMS = ['token', 'token_type_hint', 'client_id', 'client_secret']
-// token_type_hint is read only as a scalar: Kopje has no refresh tokens, so every token is looked up as an access token.
+// token_type_hint is read only as a scalar: Kopje has no refresh tokens, so every token is looked up as an access
+// token.
 const INTROSPECT_PARAMS = REVOKE_PARAMS
 
 // A request error found before anything else: a repeated scalar parameter, or more than one client authentication
