@@ -23,7 +23,9 @@ export const PARAM_PATH_BUDGET = 2 * API_BODY_LIMIT
 
 // The file parameters a route reads, and the most bytes one of them may have.
 export type FileRule = { names: readonly string[]; maxBytes: number }
-export type ReadOptions = { limit?: number; files?: FileRule }
+// bodyOnly: the query string is not read at all, for parameters that carry secrets, which must not come from URLs
+// (the platform's invocation logs record them, as VIS-26 says of tokens).
+export type ReadOptions = { limit?: number; files?: FileRule; bodyOnly?: true }
 
 // The tail of an object field key after `name[`: `index][field]` or `][field]`.
 const OBJECT_FIELD = /^(\d*)\]\[([^\]]+)\]$/
@@ -195,7 +197,7 @@ export function bodyLimit(contentType: string, options: ReadOptions = {}): numbe
 }
 
 export async function readParams(request: Request, options: ReadOptions = {}): Promise<ParamsResult> {
-	const query = [...new URL(request.url).searchParams.entries()]
+	const query = options.bodyOnly === true ? [] : [...new URL(request.url).searchParams.entries()]
 	if (request.method === 'GET' || request.method === 'HEAD') {
 		return { ok: true, params: new Params(query) }
 	}

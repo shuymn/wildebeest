@@ -712,6 +712,14 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, oauth.appOfCredential, input)
 	}
 
+	inspectToken(callerBuild: string, input: OperationInput<typeof oauth.inspectToken>) {
+		return this.#kernel.execute(callerBuild, oauth.inspectToken, input)
+	}
+
+	introspectToken(callerBuild: string, input: OperationInput<typeof oauth.introspectToken>) {
+		return this.#kernel.execute(callerBuild, oauth.introspectToken, input)
+	}
+
 	authorizeContext(callerBuild: string, input: { clientId: string }) {
 		return this.#kernel.execute(callerBuild, oauth.authorizeContext, input)
 	}

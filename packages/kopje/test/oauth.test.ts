@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
 	type AccessTeam,
+	type ApiHarness,
 	type App,
 	apiHarness,
 	authorizationCode,
@@ -17,10 +18,11 @@ import {
 	sql,
 } from './api-helpers'
 import { NOW } from './app-helpers'
-import { plannedRun, remoteAccounts, scansOf, staleStatistics } from './read-helpers'
-import { accountForLogin } from '../src/domain/oauth'
-import { callStore } from '../src/platform/store-client'
-import { pkceChallenge } from '../src/security/tokens'
+import { appToken, plannedRun, remoteAccounts, scansOf, staleStatistics } from './read-helpers'
+import { storeWith } from './setup-helpers'
+import { accountForLogin, introspectToken } from '../src/domain/oauth'
+import { callStore, type StoreStub } from '../src/platform/store-client'
+import { pkceChallenge, sha256Hex } from '../src/security/tokens'
 
 const VERIFIER = 'a'.repeat(20) + '-._~' + 'B'.repeat(30)
 
@@ -650,21 +652,26 @@ describe('token endpoint', () => {
 		expect(await response.json()).toMatchObject({ error: 'invalid_client' })
 		const badBasic = await h.request(
 			'/oauth/token',
-			form(
-				{ grant_type: 'authorization_code', code, redirect_uri: app.redirect_uri },
-				{ headers: { authorization: `Basic ${btoa(`${app.client_id}:wrong`)}` } }
-			)
+			form({ grant_type: 'authorization_code', code, redirect_uri: app.redirect_uri }, { headers: basic(app, 'wrong') })
 		)
 		expect(badBasic.status).toBe(401)
 		expect(badBasic.headers.get('www-authenticate')).toMatch(/^Basic /)
+		// A Basic value without a colon has no secret: no client, at the token and revoke endpoints alike.
+		for (const path of ['/oauth/token', '/oauth/revoke']) {
+			const noSecret = await h.request(
+				path,
+				form(
+					{ grant_type: 'authorization_code', code, redirect_uri: app.redirect_uri, token: code },
+					{ headers: { authorization: `Basic ${btoa(app.client_id)}` } }
+				)
+			)
+			expect(noSecret.status, path).toBe(401)
+			expect(await noSecret.json(), path).toMatchObject({ error: 'invalid_client' })
+		}
 		// HTTP Basic client authentication works as well.
-		const basic = btoa(`${app.client_id}:${app.client_secret}`)
 		const ok = await h.request(
 			'/oauth/token',
-			form(
-				{ grant_type: 'authorization_code', code, redirect_uri: app.redirect_uri },
-				{ headers: { authorization: `Basic ${basic}` } }
-			)
+			form({ grant_type: 'authorization_code', code, redirect_uri: app.redirect_uri }, { headers: basic(app) })
 		)
 		expect(ok.status).toBe(200)
 	})
@@ -742,9 +749,7 @@ describe('duplicate parameters', () => {
 		const mixed = await post(`/oauth/token?code=${encodeURIComponent(code)}`, body([]))
 		expect(mixed.status).toBe(400)
 		// Basic and client_secret in the body are two authentication methods.
-		const both = await post('/oauth/token', body([]), {
-			authorization: `Basic ${btoa(`${app.client_id}:${app.client_secret}`)}`,
-		})
+		const both = await post('/oauth/token', body([]), basic(app))
 		expect(both.status).toBe(400)
 		expect(await both.json()).toMatchObject({ error: 'invalid_request' })
 		// None of these consumed the code.
@@ -778,9 +783,17 @@ describe('duplicate parameters', () => {
 			h.request(`/oauth/authorize?${new URLSearchParams([...base, ...extra]).toString()}`, {
 				headers: { 'cf-access-jwt-assertion': assertion },
 			})
-		const scope = await get([['scope', 'write']])
-		expect(scope.status).toBe(302)
-		expect(new URL(scope.headers.get('location')!).searchParams.get('error')).toBe('invalid_request')
+		for (const extra of [
+			[['scope', 'write']],
+			[
+				['response_mode', 'query'],
+				['response_mode', 'query'],
+			],
+		] as [string, string][][]) {
+			const response = await get(extra)
+			expect(response.status, JSON.stringify(extra)).toBe(302)
+			expect(new URL(response.headers.get('location')!).searchParams.get('error')).toBe('invalid_request')
+		}
 		for (const extra of [[['client_id', app.client_id]], [['redirect_uri', 'https://evil.test/']]] as [
 			string,
 			string,
@@ -997,6 +1010,478 @@ describe('suspension', () => {
 	})
 })
 
+describe('response_mode and lang', () => {
+	// The request with `set` replacing or adding parameters, then `extra` appended.
+	const authorizeUrl = (app: App, extra: [string, string][], set: Record<string, string> = {}) =>
+		`/oauth/authorize?${new URLSearchParams([
+			...Object.entries({
+				response_type: 'code',
+				client_id: app.client_id,
+				redirect_uri: app.redirect_uri,
+				scope: 'read',
+				state: 'st',
+				...set,
+			}),
+			...extra,
+		]).toString()}`
+
+	const callback = (response: Response) => {
+		expect(response.status).toBe(302)
+		const location = response.headers.get('location')!
+		expect(location).not.toContain('#')
+		return new URL(location).searchParams
+	}
+
+	// Mastodon's consent form carries no mode, so its decision answers in the query whatever the mode was.
+	it('accepts the three modes and a blank one, and answers the consent form in the query', async () => {
+		const h = await withAlice()
+		const app = await registerApp(h)
+		const assertion = await h.team.assertion()
+		for (const mode of ['query', 'fragment', 'form_post', '', '  ', '\u0085']) {
+			const consent = await h.request(authorizeUrl(app, [['response_mode', mode]]), {
+				headers: { 'cf-access-jwt-assertion': assertion },
+			})
+			expect(consent.status, mode).toBe(200)
+			expect(await consent.text()).not.toContain('response_mode')
+			const params = callback(await decide(h, app, 'approve', { scope: 'read', state: 'st' }))
+			expect(params.get('code'), mode).not.toBeNull()
+			expect(params.get('state')).toBe('st')
+		}
+	})
+
+	// Doorkeeper would honour fragment or form_post on a decision posted with them; Kopje answers in the query.
+	it('answers a decision posted directly with a mode in the query', async () => {
+		const h = await withAlice()
+		const app = await registerApp(h)
+		const assertion = await h.team.assertion()
+		for (const mode of ['query', 'fragment', 'form_post']) {
+			for (const decision of ['approve', 'deny']) {
+				const response = await h.request(
+					'/oauth/authorize',
+					form(
+						{
+							client_id: app.client_id,
+							redirect_uri: app.redirect_uri,
+							scope: 'read',
+							state: 'st',
+							response_mode: mode,
+							decision,
+						},
+						{ headers: { 'cf-access-jwt-assertion': assertion, origin: 'https://kopje.test' } }
+					)
+				)
+				const params = callback(response)
+				expect(params.get(decision === 'approve' ? 'code' : 'error'), `${mode} ${decision}`).not.toBeNull()
+			}
+		}
+	})
+
+	it('refuses another mode at the callback with the state, or on the page for OOB', async () => {
+		const h = await withAlice()
+		const app = await registerApp(h, { scopes: 'read' })
+		const assertion = await h.team.assertion()
+		const headers = { 'cf-access-jwt-assertion': assertion }
+		const refused = {
+			error: 'unsupported_response_mode',
+			error_description: 'The authorization server does not support this response mode.',
+			state: 'st',
+		}
+		// U+FEFF is not blank to Rails, so it is a mode, and not a supported one.
+		for (const mode of ['bogus', 'QUERY', ' query', 'web_message', '\uFEFF']) {
+			const response = await h.request(authorizeUrl(app, [['response_mode', mode]]), { headers })
+			expect(Object.fromEntries(callback(response)), mode).toEqual(refused)
+		}
+		const posted = await h.request(
+			'/oauth/authorize',
+			form(
+				{
+					client_id: app.client_id,
+					redirect_uri: app.redirect_uri,
+					scope: 'read',
+					state: 'st',
+					response_mode: 'bogus',
+					decision: 'approve',
+				},
+				{ headers: { ...headers, origin: 'https://kopje.test' } }
+			)
+		)
+		expect(Object.fromEntries(callback(posted))).toEqual(refused)
+		expect(await sql(h.store, 'SELECT 1 FROM oauth_tokens')).toEqual([])
+
+		// Doorkeeper's order: response_type, then response_mode, then scope.
+		const type = await h.request(authorizeUrl(app, [['response_mode', 'bogus']], { response_type: 'token' }), {
+			headers,
+		})
+		expect(callback(type).get('error')).toBe('unsupported_response_type')
+		const scope = await h.request(authorizeUrl(app, [['response_mode', 'bogus']], { scope: 'nonsense' }), {
+			headers,
+		})
+		expect(callback(scope).get('error')).toBe('unsupported_response_mode')
+
+		const oobApp = await registerApp(h, { scopes: 'read', redirectUri: 'urn:ietf:wg:oauth:2.0:oob' })
+		const oob = await h.request(authorizeUrl(oobApp, [['response_mode', 'bogus']]), { headers })
+		expect(oob.status).toBe(400)
+		expect(oob.headers.get('location')).toBeNull()
+		expect(await oob.text()).toContain('unsupported_response_mode')
+	})
+
+	it('shows the same consent page whatever lang says, repeated or not', async () => {
+		const h = await withAlice()
+		const app = await registerApp(h)
+		const assertion = await h.team.assertion()
+		const headers = { 'cf-access-jwt-assertion': assertion }
+		const plain = await (await h.request(authorizeUrl(app, []), { headers })).text()
+		for (const extra of [
+			[['lang', 'xx']],
+			[
+				['lang', 'ja'],
+				['lang', 'de'],
+			],
+		] as [string, string][][]) {
+			const response = await h.request(authorizeUrl(app, extra), { headers })
+			expect(response.status, JSON.stringify(extra)).toBe(200)
+			expect(await response.text()).toBe(plain)
+		}
+	})
+})
+
+const challenge = (description: string, error = 'invalid_token') =>
+	`Bearer realm="Doorkeeper", error="${error}", error_description="${description}"`
+
+async function expectInvalidToken(response: Response, label: string, description = 'The access token is invalid') {
+	expect(response.status, label).toBe(401)
+	expect(await response.json(), label).toEqual({
+		error: 'invalid_token',
+		error_description: description,
+		state: 'unauthorized',
+	})
+	expect(response.headers.get('www-authenticate'), label).toBe(challenge(description))
+	expect(response.headers.get('cache-control'), label).toBe('no-store')
+}
+
+const basic = (app: App, secret = app.client_secret) => ({
+	authorization: `Basic ${btoa(`${app.client_id}:${secret}`)}`,
+})
+
+const ago = (ms: number) => new Date(NOW - ms).toISOString()
+
+describe('token info', () => {
+	it("describes a user token in Doorkeeper's shape, with no CORS", async () => {
+		const h = await withAlice()
+		const { app, token } = await login(h)
+		const response = await h.request(
+			'/oauth/token/info',
+			bearer(token, { headers: { origin: 'https://web-client.test' } })
+		)
+		expect(response.status).toBe(200)
+		expect(response.headers.get('cache-control')).toBe('no-store')
+		expect(response.headers.get('pragma')).toBe('no-cache')
+		expect(response.headers.get('access-control-allow-origin')).toBeNull()
+		expect(await response.text()).toBe(
+			JSON.stringify({
+				resource_owner_id: h.aliceId,
+				scope: ['read', 'write', 'follow'],
+				expires_in: null,
+				application: { uid: app.client_id },
+				created_at: Math.floor(NOW / 1000),
+			})
+		)
+	})
+
+	it('answers no owner for an app token and the seconds left for an expiring token', async () => {
+		const h = await withAlice()
+		const app = await appToken(h)
+		expect(await (await h.request('/oauth/token/info', bearer(app))).json()).toMatchObject({
+			resource_owner_id: null,
+			scope: ['read'],
+			expires_in: null,
+		})
+		const { token } = await login(h)
+		await sql(
+			h.store,
+			'UPDATE oauth_tokens SET expires_at = ? WHERE token_hash = ?',
+			new Date(NOW + 3600_500).toISOString(),
+			await sha256Hex(token)
+		)
+		expect(await (await h.request('/oauth/token/info', bearer(token))).json()).toMatchObject({ expires_in: 3601 })
+	})
+
+	it('refuses a missing, URL-borne, unknown, expired, revoked, suspended or stale token', async () => {
+		const h = await withAlice()
+		const { app, token } = await login(h)
+		await expectInvalidToken(await h.request('/oauth/token/info'), 'none')
+		await expectInvalidToken(await h.request(`/oauth/token/info?access_token=${token}&bearer_token=${token}`), 'query')
+		await expectInvalidToken(await h.request('/oauth/token/info', bearer('nope')), 'unknown')
+
+		const expired = (await login(h, { app })).token
+		await sql(h.store, 'UPDATE oauth_tokens SET expires_at = ? WHERE token_hash = ?', ago(0), await sha256Hex(expired))
+		await expectInvalidToken(await h.request('/oauth/token/info', bearer(expired)), 'expired')
+
+		const revoked = (await login(h, { app })).token
+		await h.request(
+			'/oauth/revoke',
+			form({ token: revoked, client_id: app.client_id, client_secret: app.client_secret })
+		)
+		await expectInvalidToken(await h.request('/oauth/token/info', bearer(revoked)), 'revoked')
+
+		await sql(h.store, 'UPDATE local_accounts SET suspended_at = ?', ago(0))
+		await expectInvalidToken(await h.request('/oauth/token/info', bearer(token)), 'suspended')
+		await sql(h.store, 'UPDATE local_accounts SET suspended_at = NULL, credential_epoch = credential_epoch + 1')
+		await expectInvalidToken(await h.request('/oauth/token/info', bearer(token)), 'stale epoch')
+	})
+})
+
+const REQUEST_NOT_AUTHORIZED =
+	'Request need to be authorized. Required parameter for authorizing request is missing or invalid.'
+
+// Doorkeeper's InvalidRequestResponse when introspection names no caller.
+async function unauthorized(response: Response, label: string) {
+	expect(response.status, label).toBe(400)
+	expect(await response.json(), label).toEqual({ error: 'invalid_request', error_description: REQUEST_NOT_AUTHORIZED })
+	expect(response.headers.get('www-authenticate'), label).toBe(challenge(REQUEST_NOT_AUTHORIZED, 'invalid_request'))
+	expect(response.headers.get('cache-control'), label).toBe('no-store')
+}
+
+describe('introspect', () => {
+	const introspect = (h: ApiHarness, body: Record<string, string>, headers: Record<string, string> = {}) =>
+		h.request('/oauth/introspect', form(body, { headers }))
+
+	const inactive = async (response: Response, label: string) => {
+		expect(response.status, label).toBe(200)
+		expect(response.headers.get('cache-control'), label).toBe('no-store')
+		expect(await response.text(), label).toBe('{"active":false}')
+	}
+
+	it("answers a client about its own token in Doorkeeper's shape, by Basic, form or JSON", async () => {
+		const h = await withAlice()
+		const { app, token } = await login(h)
+		const active = JSON.stringify({
+			active: true,
+			scope: 'read write follow',
+			client_id: app.client_id,
+			token_type: 'Bearer',
+			exp: 0,
+			iat: Math.floor(NOW / 1000),
+		})
+		for (const response of [
+			await introspect(h, { token }, basic(app)),
+			await introspect(h, { token, client_id: app.client_id, client_secret: app.client_secret }),
+			await h.request('/oauth/introspect', json({ token, client_id: app.client_id, client_secret: app.client_secret })),
+			// token_type_hint is ignored: there are no refresh tokens to look up instead.
+			await introspect(h, { token, token_type_hint: 'refresh_token' }, basic(app)),
+		]) {
+			expect(response.status).toBe(200)
+			expect(response.headers.get('cache-control')).toBe('no-store')
+			expect(response.headers.get('pragma')).toBe('no-cache')
+			expect(await response.text()).toBe(active)
+		}
+		const expiring = (await login(h, { app })).token
+		await sql(
+			h.store,
+			'UPDATE oauth_tokens SET expires_at = ? WHERE token_hash = ?',
+			new Date(NOW + 60_000).toISOString(),
+			await sha256Hex(expiring)
+		)
+		expect(await (await introspect(h, { token: expiring }, basic(app))).json()).toMatchObject({
+			exp: Math.floor(NOW / 1000) + 60,
+		})
+	})
+
+	it('answers a client inactive for any token it may not see or that is not valid', async () => {
+		const h = await withAlice()
+		const { app, token } = await login(h)
+		const other = await login(h)
+		const code = await authorizationCode(h, app)
+		const check = (body: Record<string, string>, label: string) =>
+			introspect(h, body, basic(app)).then((response) => inactive(response, label))
+		await check({ token: other.token }, 'another client')
+		await check({ token: 'nope' }, 'unknown')
+		await check({}, 'missing')
+		await check({ token: code }, 'a code')
+
+		const expired = (await login(h, { app })).token
+		await sql(h.store, 'UPDATE oauth_tokens SET expires_at = ? WHERE token_hash = ?', ago(0), await sha256Hex(expired))
+		await check({ token: expired }, 'expired')
+		const revoked = (await login(h, { app })).token
+		await h.request(
+			'/oauth/revoke',
+			form({ token: revoked, client_id: app.client_id, client_secret: app.client_secret })
+		)
+		await check({ token: revoked }, 'revoked')
+
+		await sql(h.store, 'UPDATE local_accounts SET suspended_at = ?', ago(0))
+		await check({ token }, 'suspended')
+		await sql(h.store, 'UPDATE local_accounts SET suspended_at = NULL, credential_epoch = credential_epoch + 1')
+		await check({ token }, 'stale epoch')
+	})
+
+	it('refuses client credentials that fail, and reads none from the query', async () => {
+		const h = await withAlice()
+		const { app, token } = await login(h)
+		for (const [label, response] of [
+			['wrong secret', await introspect(h, { token }, basic(app, 'wrong'))],
+			['wrong body secret', await introspect(h, { token, client_id: app.client_id, client_secret: 'wrong' })],
+			['no secret', await introspect(h, { token, client_id: app.client_id })],
+			[
+				'query secret',
+				await h.request(
+					`/oauth/introspect?client_secret=${app.client_secret}`,
+					form({ token, client_id: app.client_id })
+				),
+			],
+		] as const) {
+			expect(response.status, label).toBe(401)
+			expect(await response.json(), label).toMatchObject({ error: 'invalid_client' })
+		}
+		// A Basic header with a blank id, or one that does not decode, names no client; a body client_id still does.
+		for (const authorization of ['Basic Og==', 'Basic !!!']) {
+			await unauthorized(await introspect(h, { token }, { authorization }), authorization)
+		}
+		// Without a colon the whole value is the id, with no secret (Doorkeeper's from_basic): a failed client.
+		const noColon = await introspect(h, { token }, { authorization: `Basic ${btoa(app.client_id)}` })
+		expect(noColon.status).toBe(401)
+		expect(await noColon.json()).toMatchObject({ error: 'invalid_client' })
+		const bodyId = await introspect(h, { token, client_id: app.client_id }, { authorization: 'Basic Og==' })
+		expect(bodyId.status).toBe(401)
+		expect(await bodyId.json()).toMatchObject({ error: 'invalid_client' })
+		// A token in the query is no token: the client's answer is inactive.
+		await inactive(await h.request(`/oauth/introspect?token=${token}`, form({}, { headers: basic(app) })), 'query')
+	})
+
+	it('lets a bearer caller see other tokens of its own client only', async () => {
+		const h = await withAlice()
+		const { app, token: caller } = await login(h)
+		const { token: sibling } = await login(h, { app })
+		const other = await login(h)
+		const active = await introspect(h, { token: sibling }, { authorization: `Bearer ${caller}` })
+		expect(active.status).toBe(200)
+		expect(await active.json()).toMatchObject({ active: true, client_id: app.client_id })
+		// A blank client_id (Rails' blank?, U+0085 included) is no client authentication, so the bearer caller is used.
+		for (const clientId of [' ', '\u0085']) {
+			const blank = await introspect(h, { token: sibling, client_id: clientId }, { authorization: `Bearer ${caller}` })
+			expect(await blank.json(), JSON.stringify(clientId)).toMatchObject({ active: true })
+		}
+		// U+FEFF is not blank: a client without a secret.
+		const feff = await introspect(h, { token: sibling, client_id: '\uFEFF' }, { authorization: `Bearer ${caller}` })
+		expect(feff.status).toBe(401)
+		expect(await feff.json()).toMatchObject({ error: 'invalid_client' })
+
+		for (const [label, body] of [
+			['itself', { token: caller }],
+			['another client', { token: other.token }],
+			['unknown', { token: 'nope' }],
+			['missing', {}],
+		] as const) {
+			await expectInvalidToken(await introspect(h, body, { authorization: `Bearer ${caller}` }), label)
+		}
+
+		await sql(h.store, 'UPDATE oauth_tokens SET expires_at = ? WHERE token_hash = ?', ago(0), await sha256Hex(sibling))
+		await inactive(await introspect(h, { token: sibling }, { authorization: `Bearer ${caller}` }), 'expired sibling')
+		const stale = (await login(h, { app, email: 'alice@example.com' })).token
+		const fresh = await appToken(h, app)
+		await sql(h.store, 'UPDATE local_accounts SET credential_epoch = credential_epoch + 1')
+		await inactive(await introspect(h, { token: stale }, { authorization: `Bearer ${fresh}` }), 'stale sibling')
+	})
+
+	it("answers Doorkeeper's errors for a bearer caller that is missing or not valid", async () => {
+		const h = await withAlice()
+		const { app, token: target } = await login(h)
+		const asCaller = (caller: string) => introspect(h, { token: target }, { authorization: `Bearer ${caller}` })
+		await unauthorized(await introspect(h, { token: target }), 'no authentication')
+		await unauthorized(await asCaller('nope'), 'unknown')
+		await unauthorized(
+			await h.request(`/oauth/introspect?access_token=${target}`, form({ token: target })),
+			'query token'
+		)
+		const deleted = (await login(h, { app })).token
+		await h.request(
+			'/oauth/revoke',
+			form({ token: deleted, client_id: app.client_id, client_secret: app.client_secret })
+		)
+		await unauthorized(await asCaller(deleted), 'deleted')
+
+		const expired = (await login(h, { app })).token
+		await sql(h.store, 'UPDATE oauth_tokens SET expires_at = ? WHERE token_hash = ?', ago(0), await sha256Hex(expired))
+		await expectInvalidToken(await asCaller(expired), 'expired', 'The access token expired')
+		await expectInvalidToken(await asCaller(await authorizationCode(h, app)), 'a code')
+
+		const caller = (await login(h, { app })).token
+		await sql(h.store, 'UPDATE local_accounts SET suspended_at = ?', ago(0))
+		await expectInvalidToken(await asCaller(caller), 'suspended')
+		await sql(h.store, 'UPDATE local_accounts SET suspended_at = NULL, credential_epoch = credential_epoch + 1')
+		await expectInvalidToken(await asCaller(caller), 'stale epoch')
+	})
+
+	it('prefers client credentials over a bearer token, and refuses request errors', async () => {
+		const h = await withAlice()
+		const { app, token } = await login(h)
+		const other = await login(h)
+		// The other client's bearer would be refused for this target; the client credentials decide.
+		const mixed = await introspect(
+			h,
+			{ token, client_id: app.client_id, client_secret: app.client_secret },
+			{ authorization: `Bearer ${other.token}` }
+		)
+		expect(await mixed.json()).toMatchObject({ active: true, client_id: app.client_id })
+
+		const repeated = await h.request('/oauth/introspect', {
+			method: 'POST',
+			headers: { 'content-type': 'application/x-www-form-urlencoded', ...basic(app) },
+			body: new URLSearchParams([
+				['token', token],
+				['token', token],
+			]).toString(),
+		})
+		expect(repeated.status).toBe(400)
+		expect(await repeated.json()).toMatchObject({ error: 'invalid_request' })
+		const both = await introspect(h, { token, client_secret: app.client_secret }, basic(app))
+		expect(both.status).toBe(400)
+		expect(await both.json()).toMatchObject({ error: 'invalid_request' })
+	})
+
+	it('sends no CORS headers', async () => {
+		const h = await withAlice()
+		const { app, token } = await login(h)
+		const origin = { origin: 'https://web-client.test' }
+		const preflight = await h.request('/oauth/introspect', {
+			method: 'OPTIONS',
+			headers: { ...origin, 'access-control-request-method': 'POST' },
+		})
+		expect(preflight.headers.get('access-control-allow-origin')).toBeNull()
+		const response = await introspect(h, { token }, { ...basic(app), ...origin })
+		expect(response.status).toBe(200)
+		expect(response.headers.get('access-control-allow-origin')).toBeNull()
+	})
+
+	it('sends the Store only digests of the tokens', async () => {
+		const inputs: unknown[] = []
+		const wrap = (store: StoreStub): StoreStub =>
+			storeWith(store, {
+				introspectToken: (build, input) => {
+					inputs.push(input)
+					return store.introspectToken(build as string, input as Parameters<StoreStub['introspectToken']>[1])
+				},
+				inspectToken: (build, input) => {
+					inputs.push(input)
+					return store.inspectToken(build as string, input as Parameters<StoreStub['inspectToken']>[1])
+				},
+			})
+		const h = await apiHarness({}, { wrapStore: wrap })
+		await seedAccount(h.store, { username: 'alice', email: 'alice@example.com' })
+		const { app, token: caller } = await login(h)
+		const { token: target } = await login(h, { app })
+		await introspect(h, { token: target }, { authorization: `Bearer ${caller}` })
+		await introspect(h, { token: target, client_id: app.client_id, client_secret: app.client_secret })
+		await h.request('/oauth/token/info', bearer(caller))
+		expect(inputs).toHaveLength(3)
+		const sent = JSON.stringify(inputs)
+		for (const value of [caller, target]) {
+			expect(sent).not.toContain(value)
+		}
+		expect(sent).toContain(await sha256Hex(target))
+	})
+})
+
 describe('login with stale statistics (RES-7)', () => {
 	it('reads the local accounts and seeks the account by id, remote accounts grown after ANALYZE', async () => {
 		const h = await withAlice()
@@ -1013,5 +1498,54 @@ describe('login with stale statistics (RES-7)', () => {
 		expect(plan).toEqual(['SCAN l', 'SEARCH a USING INDEX sqlite_autoindex_accounts_1 (id=?)'])
 		expect(scansOf(plan, ['a'])).toEqual([])
 		expect(rows).toBe(before.plans[0]!.rows)
+	}, 60_000)
+})
+
+describe('token introspection with stale statistics (RES-7)', () => {
+	it('reads every token by its primary key, tokens and clients grown after ANALYZE', async () => {
+		const h = await withAlice()
+		const { app, token: caller } = await login(h)
+		const { token: target } = await login(h, { app })
+		const callerHash = await sha256Hex(caller)
+		const targetHash = await sha256Hex(target)
+		const run = (caller: { kind: 'bearer'; tokenHash: string }) =>
+			plannedRun(h, /oauth_tokens/, introspectToken, { targetHash, now: NOW, caller })
+		const { before, after } = await staleStatistics(h, {
+			capture: async () => [
+				await run({ kind: 'bearer', tokenHash: callerHash }),
+				await run({ kind: 'bearer', tokenHash: await sha256Hex('unknown') }),
+			],
+			grow: async () => {
+				await sql(
+					h.store,
+					`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 300)
+					INSERT INTO oauth_clients (id, secret, name, redirect_uris, website, scopes, created_at)
+					SELECT 'grown-' || i, 's', 'Grown', 'https://client.test/cb', NULL, 'read', '2026-10-01T00:00:00.000Z' FROM n`
+				)
+				await sql(
+					h.store,
+					`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 300)
+					INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes, created_at, epoch)
+					SELECT printf('%064d', i), 'access', 'grown-' || i, ?, 'read', '2026-10-01T00:00:00.000Z', 0 FROM n`,
+					h.aliceId
+				)
+			},
+		})
+		expect(after.map((r) => r.result)).toEqual(before.map((r) => r.result))
+		const [found, unknown] = after
+		expect(found!.result).toMatchObject({ status: 'ok', token: { clientId: app.client_id } })
+		expect(unknown!.result).toEqual({ status: 'unauthorized' })
+		const authorizePlan = [
+			'SEARCH t USING PRIMARY KEY (token_hash=?)',
+			'SEARCH c USING INDEX sqlite_autoindex_oauth_clients_1 (id=?)',
+			'SEARCH l USING INDEX sqlite_autoindex_local_accounts_1 (account_id=?) LEFT-JOIN',
+		]
+		const byKey = ['SEARCH oauth_tokens USING PRIMARY KEY (token_hash=?)']
+		// The caller, the target's owner, the target, its details; then a missing caller and its row.
+		expect(found!.plans.map((p) => p.plan)).toEqual([authorizePlan, byKey, authorizePlan, byKey])
+		expect(unknown!.plans.map((p) => p.plan)).toEqual([authorizePlan, byKey])
+		for (const { plans } of after) {
+			expect(plans.flatMap((p) => scansOf(p.plan, ['t', 'c', 'l', 'oauth_tokens']))).toEqual([])
+		}
 	}, 60_000)
 })

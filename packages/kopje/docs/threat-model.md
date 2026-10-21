@@ -937,6 +937,12 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   a unique `state` of at most 2,000 characters; a repeated or longer `state` is omitted. Out-of-band errors stay on the
   page. - Repeated scalar OAuth parameters (query and body together) are rejected; documented array parameters are not.
     - Client authentication failures answer 401 `invalid_client`; a client can revoke only its own tokens.
+    - Every authorization answer goes in the query, whatever `response_mode` says (`docs/mastodon-deviations.md`,
+      OAuth); `test/oauth.test.ts` ("response_mode and lang").
+    - Token info and introspection (RFC 7662) answer only from `authorize()`, read no parameter from the URL, and
+      never say why a token is inactive. Introspection requires client authentication, which sees only that client's
+      tokens, or a valid bearer token, which sees only other tokens of its own client and never itself; `inspectToken`
+      and `introspectToken` in `src/domain/oauth.ts`; `test/oauth.test.ts` ("token info", "introspect").
 - **AUTH-4: Access JWTs are verified with jose.** RS256 only; issuer, audience and `exp` required; at most 60 s clock
   tolerance; a fetched key set used for at most 7 days. Sign-in requires an email claim. _Enforced (main):_
   `src/security/access-jwt.ts`; `test/oauth.test.ts` ("Access assertion").
@@ -998,7 +1004,10 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `test/scheduled-statuses.test.ts` ("never shows or changes another account's scheduled status", "nothing leaks
   before publication").
 - **AUTH-7: opaque credentials are unguessable and stored as digests.** Client ids and secrets, codes and access tokens
-  are 32 random bytes. Codes and access tokens are stored and looked up only by their full SHA-256. _Enforced (main):_
+  are 32 random bytes. Codes and access tokens are stored and looked up only by their full SHA-256, at token info and
+  introspection too, so a lookup reveals no prefix; a hit and a miss do not take the same time, and what keeps a
+  token from being found by trying is its entropy, not the client authentication (app registration is anonymous).
+  _Enforced (main):_
   `src/security/tokens.ts`, `src/domain/oauth.ts`; `test/oauth.test.ts` ("stores only digests of tokens and codes").
   A Web Push subscription also keeps the access token it was made with, for the payload's `access_token` (Mastodon's),
   only sealed: AES-GCM under a key derived from `VAPID_JWK`, which the Store never holds, bound to the token's digest.

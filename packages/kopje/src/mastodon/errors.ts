@@ -9,11 +9,13 @@ export const INVALID_TOKEN = 'The access token is invalid'
 // Bearer challenge naming the error.
 export function invalidTokenError(): Response {
 	const response = mastodonError(401, INVALID_TOKEN)
-	response.headers.set(
-		'www-authenticate',
-		`Bearer realm="Doorkeeper", error="invalid_token", error_description="${INVALID_TOKEN}"`
-	)
+	response.headers.set('www-authenticate', bearerChallenge(INVALID_TOKEN))
 	return response
+}
+
+// Doorkeeper's RFC 6750 §3 challenge (OAuth::ErrorResponse#authenticate_info) for `error` with `description`.
+export function bearerChallenge(description: string, error = 'invalid_token'): string {
+	return `Bearer realm="Doorkeeper", error="${error}", error_description="${description}"`
 }
 
 // How long a client or peer should wait before asking again during maintenance. A cutover keeps an instance in
