@@ -79,7 +79,8 @@ export const registerApp: ApiHandler = async (c, deps) => {
 	const scopes = parseScopes(p.get('scopes'))
 	const website = (p.get('website') ?? '').trim()
 	const problems: string[] = []
-	if (name === '' || [...name].length > APP_NAME_LIMIT) {
+	// Code points, counted only once the code units allow them (two a code point at most).
+	if (name === '' || name.length > 2 * APP_NAME_LIMIT || [...name].length > APP_NAME_LIMIT) {
 		problems.push(`Application name can't be blank or longer than ${APP_NAME_LIMIT} characters`)
 	}
 	if (redirectUris.length === 0 || redirectUris.length > MAX_REDIRECT_URIS || !redirectUris.every(validRedirectUri)) {
