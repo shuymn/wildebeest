@@ -90,7 +90,7 @@ Accounts (the `Account` and credential account entities):
   available, otherwise `[]`: Kopje has no other role to highlight. A remote account shows none, as in Mastodon.
 - `uri` is `''` for an imported actor id whose JSON passes 2,048 bytes; ingestion stores none.
 - A remote account its `Delete` removes stays stored, unavailable (R1 in `docs/visibility.md`), while its purge runs;
-  Mastodon destroys it at once.
+  Mastodon destroys it after purging its content in the Delete handler (`app/services/delete_account_service.rb`).
 - `moved` is the latest of two writes: every stored actor document sets it from its `movedTo` or clears it, and a
   verified `Move` sets it when Kopje first processes it; a replay of a known `Move` writes nothing. A `movedTo` naming
   an account Kopje does not know reads as none: it is not fetched (Mastodon fetches it,
@@ -127,7 +127,9 @@ OAuth (`/oauth/authorize`, `/oauth/token/info`, `/oauth/introspect`):
   rendered consent form answers them: the form carries no mode. A decision posted directly with `fragment` or
   `form_post` is also answered in the query, where Doorkeeper would honour the mode, as Mastodon does when it skips the
   consent page (Kopje never skips it). A blank mode (Rails' `blank?`) reads as `query`; any other value answers
-  `unsupported_response_mode`. The metadata lists `query` only.
+  `unsupported_response_mode`. The metadata's `response_modes_supported` lists `query` only; Mastodon's lists `query`,
+  `fragment` and `form_post` (`app/presenters/oauth_metadata_presenter.rb`, the modes Doorkeeper 5.8.2 registers in
+  `lib/doorkeeper/grant_flow.rb`).
 - `lang` has no effect: the consent page is English only.
 - Tokens are read from the `Authorization` header only, never from the `access_token` or `bearer_token` parameters.
   Introspection reads its parameters from the body only: a `token`, `client_id` or `client_secret` in the query is
