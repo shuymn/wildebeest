@@ -293,53 +293,57 @@ export const MOVED_LAST_STATUS_AT_LIMIT = 10
 const POINT_BYTES = 4
 
 const movedFlag = (column: string) => `CASE ${column} WHEN 1 THEN 1 WHEN 0 THEN 0 END`
+// byteCut of a NOT NULL column: substr of an empty BLOB is NULL, read as ''.
+const textCut = (column: string, bytes: number) => `coalesce(${byteCut(column, bytes)}, '')`
 
-export const MOVED_ACCOUNT_COLUMNS = fixedColumns(
-	{
-		id: 'm.id',
-		uri: actorUriSql('m.uri', MOVED_URL_LIMIT),
-		username: byteCut(usernameSql('m.username'), POINT_BYTES * USERNAME_LIMIT),
-		domain: 'm.domain',
-		actor_type: "CASE WHEN m.actor_type IN ('Service', 'Application', 'Group') THEN m.actor_type ELSE 'Person' END",
-		display_name: byteCut('m.display_name', POINT_BYTES * MOVED_DISPLAY_NAME_LIMIT),
-		url: byteBoundSql('m.url', MOVED_URL_LIMIT),
-		avatar_url: byteBoundSql('m.avatar_url', MOVED_URL_LIMIT),
-		header_url: byteBoundSql('m.header_url', MOVED_URL_LIMIT),
-		locked: movedFlag('m.locked'),
-		discoverable: movedFlag('m.discoverable'),
-		indexable: movedFlag('m.indexable'),
-		followers_count: 'CAST(m.followers_count AS INTEGER)',
-		following_count: 'CAST(m.following_count AS INTEGER)',
-		statuses_count: 'CAST(m.statuses_count AS INTEGER)',
-		created_at: byteCut('m.created_at', POINT_BYTES * MOVED_CREATED_AT_LIMIT),
-		available: availableJoinedSql('m', 'ml'),
-		last_status_at: byteCut(lastStatusAtSql('m'), POINT_BYTES * MOVED_LAST_STATUS_AT_LIMIT),
-		hide_collections: movedFlag('COALESCE(ml.hide_collections, m.hide_collections)'),
-		emojis: 'm.emojis',
-	},
-	{
-		id: MOVED_TO_ID_BYTES,
-		uri: MOVED_URL_LIMIT,
-		username: POINT_BYTES * USERNAME_LIMIT,
-		domain: DOMAIN_BYTES,
-		actor_type: 'Application'.length,
-		display_name: POINT_BYTES * MOVED_DISPLAY_NAME_LIMIT,
-		url: MOVED_URL_LIMIT,
-		avatar_url: MOVED_URL_LIMIT,
-		header_url: MOVED_URL_LIMIT,
-		locked: 0,
-		discoverable: 0,
-		indexable: 0,
-		followers_count: 0,
-		following_count: 0,
-		statuses_count: 0,
-		created_at: POINT_BYTES * MOVED_CREATED_AT_LIMIT,
-		available: 0,
-		last_status_at: POINT_BYTES * MOVED_LAST_STATUS_AT_LIMIT,
-		hide_collections: 0,
-		emojis: ACCOUNT_EMOJIS_BYTES,
-	}
-)
+const MOVED_COLUMN_MAP = {
+	id: 'm.id',
+	uri: actorUriSql('m.uri', MOVED_URL_LIMIT),
+	username: textCut(usernameSql('m.username'), POINT_BYTES * USERNAME_LIMIT),
+	domain: 'm.domain',
+	actor_type: "CASE WHEN m.actor_type IN ('Service', 'Application', 'Group') THEN m.actor_type ELSE 'Person' END",
+	display_name: textCut('m.display_name', POINT_BYTES * MOVED_DISPLAY_NAME_LIMIT),
+	url: byteBoundSql('m.url', MOVED_URL_LIMIT),
+	avatar_url: byteBoundSql('m.avatar_url', MOVED_URL_LIMIT),
+	header_url: byteBoundSql('m.header_url', MOVED_URL_LIMIT),
+	locked: movedFlag('m.locked'),
+	discoverable: movedFlag('m.discoverable'),
+	indexable: movedFlag('m.indexable'),
+	followers_count: 'CAST(m.followers_count AS INTEGER)',
+	following_count: 'CAST(m.following_count AS INTEGER)',
+	statuses_count: 'CAST(m.statuses_count AS INTEGER)',
+	created_at: textCut('m.created_at', POINT_BYTES * MOVED_CREATED_AT_LIMIT),
+	available: availableJoinedSql('m', 'ml'),
+	last_status_at: byteCut(lastStatusAtSql('m'), POINT_BYTES * MOVED_LAST_STATUS_AT_LIMIT),
+	hide_collections: movedFlag('COALESCE(ml.hide_collections, m.hide_collections)'),
+	emojis: 'm.emojis',
+} as const satisfies ColumnMap
+
+// The most UTF-8 bytes each column of MOVED_COLUMN_MAP reads (0 for a number), which its row heap rests on.
+export const MOVED_ACCOUNT_CAPS: { readonly [K in keyof typeof MOVED_COLUMN_MAP]: number } = {
+	id: MOVED_TO_ID_BYTES,
+	uri: MOVED_URL_LIMIT,
+	username: POINT_BYTES * USERNAME_LIMIT,
+	domain: DOMAIN_BYTES,
+	actor_type: 'Application'.length,
+	display_name: POINT_BYTES * MOVED_DISPLAY_NAME_LIMIT,
+	url: MOVED_URL_LIMIT,
+	avatar_url: MOVED_URL_LIMIT,
+	header_url: MOVED_URL_LIMIT,
+	locked: 0,
+	discoverable: 0,
+	indexable: 0,
+	followers_count: 0,
+	following_count: 0,
+	statuses_count: 0,
+	created_at: POINT_BYTES * MOVED_CREATED_AT_LIMIT,
+	available: 0,
+	last_status_at: POINT_BYTES * MOVED_LAST_STATUS_AT_LIMIT,
+	hide_collections: 0,
+	emojis: ACCOUNT_EMOJIS_BYTES,
+}
+
+export const MOVED_ACCOUNT_COLUMNS = fixedColumns(MOVED_COLUMN_MAP, MOVED_ACCOUNT_CAPS)
 
 type MovedRow = Omit<AccountRow, 'note' | 'local_fields' | 'attachment' | 'moved_to_account_id' | 'locked'> & {
 	locked: number | null
