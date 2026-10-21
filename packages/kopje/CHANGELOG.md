@@ -8,6 +8,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+## [0.1.0-rc.19] - 2026-10-22
+
+A nineteenth release candidate of the first release, published under the npm dist-tag `next`.
+
 ### Added
 
 - `indexable` is stored, federated (`toot:indexable`) and shown: `PATCH /api/v1/accounts/update_credentials` and the
@@ -98,10 +102,25 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds migrations `0058_profile_credentials`, `0059_contact_and_activity`, `0060_account_moves`,
-  `0061_account_static_images`, `0062_account_warnings` and `0063_account_warning_notifications_key`, applied on the
-  first request after the deploy; a rollback to an earlier version needs the point-in-time restore described in
-  [docs/upgrade.md](docs/upgrade.md).
+- Store schema: adds six migrations (0058–0063), applied on the first request after the deploy; a rollback to an
+  earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). On the
+  representative store defined in `test/bench/migration-cost.ts`, migrations 0058–0063 together took 18.3–19.0 seconds (median 18.5)
+  in three runs of the migration bench workflow on a 4-CPU GitHub-hosted runner, in workerd's local Durable Object
+  SQLite with the whole Store's foreign keys verified, within the 20-second upgrade budget.
+    - `0058_profile_credentials`: `accounts.indexable` and the unlock acceptance cursor, with the triggers that bound
+      them; it reads the local accounts once and no other row.
+    - `0059_contact_and_activity`: `local_accounts.active_on` (the day of an account's last authenticated request,
+      counted as `usage.users.active_month`) and the triggers bounding the `contact_username` setting; a stored
+      `contact_username` past that bound is deleted, and none is rewritten.
+    - `0060_account_moves`: `accounts.moved_to_account_id` with its triggers and a partial index; every existing row
+      reads as not moved.
+    - `0061_account_static_images`: `accounts.avatar_static_url` and `accounts.header_static_url` with their
+      triggers; every existing row reads as having its image as its static image, and no row is read.
+    - `0062_account_warnings`: the empty `account_warnings` table with its index and triggers, and
+      `notifications.account_warning_id` with a partial index; no existing row is changed.
+    - `0063_account_warning_notifications_key`: rebuilds `notifications_natural` with the warning, over every
+      notification; no row is changed.
+  A dump past the new bounds is refused ([docs/dump-format.md](docs/dump-format.md)).
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.18] - 2026-10-20
