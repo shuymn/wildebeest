@@ -5,6 +5,7 @@ import { userReadOperation, userWriteOperation } from './auth'
 import { participantsSql } from './conversation-rows'
 import { presentation, type Status, statusStream } from './status-presenter'
 import { statusCursor } from './statuses'
+import { STATUSES_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
 
 // Conversations, the direct-message list (Mastodon 4.5's AccountConversation and Api::V1::ConversationsController). A
@@ -115,7 +116,7 @@ export function leaveConversationsWith(db: Db, ownerId: string, accountId: strin
 
 // The conversations of `rows` in order, for an admission (admit): each one atomic, with its participants and its last
 // status if the owner may see it (R2), presented when the admission reaches it, its accounts and its status read for
-// it alone (one conversation is a chunk).
+// it alone (one conversation is a chunk). Each last status is sought by id (RES-7).
 function* conversationStream(
 	db: Db,
 	rows: readonly ConversationRow[],
@@ -125,7 +126,7 @@ function* conversationStream(
 	const visible = statusReads(viewer, { viewer: '?1' }).select(
 		db,
 		'visible',
-		{ from: 'json_each(?2) j JOIN', join: 'ON s.id = j.value' },
+		{ from: 'json_each(?2) j CROSS JOIN', join: `INDEXED BY ${STATUSES_ID_INDEX} ON s.id = j.value` },
 		viewer.accountId,
 		JSON.stringify(rows.map((row) => row.last_status_id))
 	)
