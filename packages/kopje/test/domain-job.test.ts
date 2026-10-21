@@ -846,7 +846,7 @@ describe('the clearing walk with stale statistics (RES-7)', () => {
 	it('restores each stale account by id, the accounts grown after ANALYZE', async () => {
 		const w = await world()
 		const store = w.h.store
-		const blocks = []
+		const blocks: { id: number }[] = []
 		for (const domain of ['one.example', 'two.example']) {
 			for (const name of ['x', 'y', 'z']) {
 				await remoteAccount(store, name, domain)
@@ -855,7 +855,7 @@ describe('the clearing walk with stale statistics (RES-7)', () => {
 			await drain(store)
 		}
 		// The domain's unblock, then rounds until the job is done: the clearing walk's restores.
-		const lift = async (block: { id: string }, domain: string) => {
+		const lift = async (block: { id: number }, domain: string) => {
 			await unblockDomain(store, block.id)
 			const plans: PlannedStatement[] = []
 			for (let i = 0; i < 50; i++) {
