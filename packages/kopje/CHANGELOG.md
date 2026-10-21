@@ -8,6 +8,17 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+### Added
+
+- Notification `filtered`: `true` on a notification the recipient's policy filtered, as `GET /api/v1/notifications`
+  (with `include_filtered` or `account_id`) and `GET /api/v1/notifications/:id` show it; absent otherwise. Grouped
+  notifications, notification requests and the streaming `notification` event never carry it, as in Mastodon.
+
+### Instance changes
+
+- Store schema: unchanged.
+- `wrangler.jsonc`: unchanged.
+
 ## [0.1.0-rc.19] - 2026-10-22
 
 A nineteenth release candidate of the first release, published under the npm dist-tag `next`.
