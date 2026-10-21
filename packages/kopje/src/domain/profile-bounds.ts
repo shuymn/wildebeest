@@ -24,10 +24,11 @@ export function usernameSql(column: string): string {
 	THEN ${cutSql(column, USERNAME_LIMIT)} ELSE substr(${column}, 1, ${NONCONFORMING_USERNAME_LIMIT}) END`
 }
 
-// A stored actor id as a presenter reads it: '' past ACTOR_URI_LIMIT. Only a converted row can hold a longer one, and
-// the cutover refuses it (docs/cutover.md); it is an identity, so it is never cut into another actor's id. A presenter
-// derives only a profile URL's origin from it (accountUrl), which for '' falls back to this instance's /@acct page.
-// Lookups, deliveries and ActivityPub documents compare or send the whole stored id.
-export function actorUriSql(column: string): string {
-	return `CASE WHEN length(CAST(${column} AS BLOB)) <= ${ACTOR_URI_LIMIT} THEN ${column} ELSE '' END`
+// A stored actor id as a presenter reads it: '' past ACTOR_URI_LIMIT, or past a lower `limit` (UTF-8 bytes) where the
+// presenter shows less (a moved-to account, accounts.ts MOVED_URL_LIMIT). Only a converted row can hold one longer
+// than ACTOR_URI_LIMIT, and the cutover refuses it (docs/cutover.md); it is an identity, so it is never cut into
+// another actor's id. A presenter derives only a profile URL's origin from it (accountUrl), which for '' falls back to
+// this instance's /@acct page. Lookups, deliveries and ActivityPub documents compare or send the whole stored id.
+export function actorUriSql(column: string, limit = ACTOR_URI_LIMIT): string {
+	return `CASE WHEN length(CAST(${column} AS BLOB)) <= ${limit} THEN ${column} ELSE '' END`
 }

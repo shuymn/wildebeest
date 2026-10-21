@@ -160,5 +160,11 @@ export async function remoteActorInput(actor: Actor, document: unknown): Promise
 			typeof document === 'object' && document !== null ? (document as { tag?: unknown }).tag : null
 		),
 		raw: JSON.stringify(document),
+		movedTo: storableActorId(actor.successorId),
 	}
+}
+
+// An actor id the document names (movedTo), when Kopje stores such an id.
+function storableActorId(id: URL | null): string | null {
+	return id !== null && isStorableActorId(id.href) ? id.href : null
 }

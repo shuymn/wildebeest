@@ -840,6 +840,7 @@ describe('ID-6: the authorization table, one negative case per row', () => {
 				keys: [],
 				emojiTags: [],
 				raw: '{}',
+				movedTo: null,
 			},
 			activity: { type: 'UpdateActor', id: `${LOCAL}/u` },
 		})

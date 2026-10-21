@@ -53,8 +53,15 @@ export function jsonBoundSql(column: string, bytes: number, over: string): strin
 	WHEN length(CAST(json_quote(${column}) AS BLOB)) > ${bytes} THEN ${over} ELSE ${column} END`
 }
 
+// A text value cut to its first `bytes` UTF-8 bytes, counted as bytes: SQLite's length and substr count characters,
+// skipping continuation bytes, so a malformed imported value would pass a character cut whole. Each byte presents as
+// at most six JSON bytes (a control character escaped, or a malformed byte decoded to U+FFFD: three).
+export function byteCut(column: string, bytes: number): string {
+	return `CAST(substr(CAST(${column} AS BLOB), 1, ${bytes}) AS TEXT)`
+}
+
 // A NULL past `bytes` UTF-8 bytes.
-function byteBoundSql(column: string, bytes: number): string {
+export function byteBoundSql(column: string, bytes: number): string {
 	return `CASE WHEN length(CAST(${column} AS BLOB)) <= ${bytes} THEN ${column} END`
 }
 
@@ -141,7 +148,7 @@ export function storedText(text: string): string {
 }
 
 // The first `limit` code points of `text`. A string has at least as many code units as code points.
-function cutCodePoints(text: string, limit: number): string {
+export function cutCodePoints(text: string, limit: number): string {
 	if (text.length <= limit) {
 		return text
 	}

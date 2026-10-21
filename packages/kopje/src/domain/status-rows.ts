@@ -1,4 +1,4 @@
-import { ACCOUNT_COLUMN_MAP } from './accounts'
+import { ACCOUNT_COLUMN_MAP, MOVED_ACCOUNT_COLUMNS } from './accounts'
 import { ADMIN_EMAIL_COLUMNS, LOCAL_EMAIL_COLUMNS, OAUTH_ADMIN_HEAP_SQL } from './admin-authority'
 import { QUOTE_APPROVAL_COLUMNS, QUOTE_READ_COLUMNS, quotedStatusIdSql } from './audience'
 import { FILTER_MATCH_COLUMNS } from './filters'
@@ -118,13 +118,15 @@ export const VIEWER_FLAG_COLUMNS = fixedColumns(
 const VIEWER_FLAGS = 5
 
 // Every query the presenter runs for a chunk, by the map its result columns come from (test/status-rows.test.ts
-// fails on a query without one, or a column outside it). Built on first use, as statusRowBoundSql. adminEmail and
-// localEmails: the OAuth admin's lookup for a local author's Owner role (oauthAdmin), once per operation.
+// fails on a query without one, or a column outside it). Built on first use, as statusRowBoundSql. moved: the authors'
+// moved-to accounts (accounts.ts movedOf). adminEmail and localEmails: the OAuth admin's lookup for a local author's,
+// or a local moved-to account's, Owner role (oauthAdmin), once per operation.
 export function hydrateQueries(): Readonly<Record<HydrateQuery, ColumnMap>> {
 	return {
 		statuses: STATUS_COLUMN_MAP,
 		quotes: QUOTE_READ_COLUMNS.columns,
 		accounts: ACCOUNT_COLUMN_MAP,
+		moved: MOVED_ACCOUNT_COLUMNS.columns,
 		media: STATUS_MEDIA_COLUMN_MAP,
 		mentions: MENTION_COLUMN_MAP,
 		tags: TAG_COLUMN_MAP,
@@ -142,6 +144,7 @@ export type HydrateQuery =
 	| 'statuses'
 	| 'quotes'
 	| 'accounts'
+	| 'moved'
 	| 'media'
 	| 'mentions'
 	| 'tags'
@@ -163,7 +166,8 @@ export const PER_ROW_SORTS: readonly { query: HydrateQuery; column: string }[] =
 
 // The heap of every row read for the status `x.id` (one status row of an item), summed: what each query of
 // hydrateQueries() returns for it, each row by its map (rowHeapSql), or a FixedColumns constant times the rows. Its
-// author's account counts once per status row, though a chunk reads it once. A boost's own attachments, mentions,
+// author's account counts once per status row, though a chunk reads it once, and so does the account it moved to
+// (MOVED_ACCOUNT_COLUMNS), whether or not the author is available. A boost's own attachments, mentions,
 // hashtags, poll and votes are not read (hydrate in status-presenter.ts), so they count for another status only.
 function statusRowTerms(viewer: string, filterRows: string): string {
 	const fixed = (columns: FixedColumns, rows: string) => `(${rows}) * ${columns.rowHeap}`
@@ -186,6 +190,12 @@ function statusRowTerms(viewer: string, filterRows: string): string {
 		fixed(QUOTE_READ_COLUMNS, '1'),
 		one(`SELECT ${rowHeapSql(ACCOUNT_COLUMN_MAP)} FROM statuses w INDEXED BY ${STATUSES_ID_INDEX}
 			CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = w.account_id LEFT JOIN local_accounts l ON l.account_id = a.id WHERE w.id = x.id`),
+		fixed(
+			MOVED_ACCOUNT_COLUMNS,
+			`SELECT count(*) FROM statuses w INDEXED BY ${STATUSES_ID_INDEX}
+			CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = w.account_id
+			WHERE w.id = x.id AND a.moved_to_account_id IS NOT NULL`
+		),
 		`CASE WHEN (SELECT o.reblog_of_id FROM statuses o WHERE o.id = x.id) IS NULL THEN ${children} ELSE 0 END`,
 		fixed(FILTER_MATCH_COLUMNS, filterRows),
 		`CASE WHEN ${viewer} IS NULL THEN 0 ELSE ${balancedSum([
@@ -201,10 +211,10 @@ let boundSql: string | undefined
 // whose active filters name statuses: one row per position (`k`, json_each's key) with `bytes`. An item reads at
 // most these status rows: the status, its boosted original, and the quoted status of the status or, for a boost, of
 // its original (a boost has no quote of its own: R35); each counted whether or not the viewer is shown it. Every
-// subquery is a search by key or through the index the presenter's query uses, but M: an item with a local author
-// also counts the OAuth admin's lookup whole (OAUTH_ADMIN_HEAP_SQL, a scan of the operator-sized local_accounts,
-// evaluated once per statement and only when such an item is read), which an operation reads at most once, in
-// whichever chunk first shows an available local author.
+// subquery is a search by key or through the index the presenter's query uses, but M: an item with a local author, or
+// an author moved to a local account, also counts the OAuth admin's lookup whole (OAUTH_ADMIN_HEAP_SQL, a scan of the
+// operator-sized local_accounts, evaluated once per statement and only when such an item is read), which an operation
+// reads at most once, in whichever chunk first shows an available local account.
 export function statusRowBoundSql(): string {
 	// Built on first use: the maps come from modules that import this one's importers.
 	boundSql ??= `WITH t AS (SELECT key AS k, value AS id FROM json_each(?1)),
@@ -214,8 +224,10 @@ export function statusRowBoundSql(): string {
 			UNION ALL SELECT k, id FROM (SELECT t.k, ${quotedStatusIdSql('coalesce(b.reblog_of_id, b.id)')} AS id
 				FROM t CROSS JOIN statuses b INDEXED BY ${STATUSES_ID_INDEX} ON b.id = t.id) WHERE id IS NOT NULL)
 		SELECT x.k, sum(${statusRowTerms('?2', '?3')})
-			+ max(CASE WHEN (SELECT a.domain IS NULL FROM statuses w INDEXED BY ${STATUSES_ID_INDEX}
-				CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = w.account_id WHERE w.id = x.id)
+			+ max(CASE WHEN (SELECT a.domain IS NULL OR coalesce((SELECT m.domain IS NULL
+						FROM accounts m INDEXED BY ${ACCOUNTS_ID_INDEX} WHERE m.id = a.moved_to_account_id), 0)
+					FROM statuses w INDEXED BY ${STATUSES_ID_INDEX}
+					CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = w.account_id WHERE w.id = x.id)
 				THEN ${OAUTH_ADMIN_HEAP_SQL} ELSE 0 END) AS bytes
 		FROM x GROUP BY x.k`
 	return boundSql

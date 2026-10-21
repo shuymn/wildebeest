@@ -7,6 +7,7 @@ import {
 	blockedSql,
 	blocksSql,
 	canView,
+	deletingSql,
 	domainCoveredSql,
 	followableBySql,
 	individuallySuspendedSql,
@@ -80,7 +81,7 @@ import {
 import type { Db } from '../db/sql'
 import { hostDomain } from '../platform/domain-name'
 import { ACTIVITY_ID_LIMIT, withinIdentityBound } from '../platform/identity-bounds'
-import { ACCOUNT_EMOJIS_BYTES } from '../platform/stored-bounds'
+import { ACCOUNT_EMOJIS_BYTES, MOVED_TO_INDEX } from '../platform/stored-bounds'
 
 // Inbound activities about actors and relationships (B1b-1), applied in one Store transaction each. The Worker has
 // already verified the HTTP signature, bound the signer to the actor (ID-1), fetched and sanitized what it needed
@@ -189,6 +190,8 @@ export type RemoteActorInput = {
 	emojiTags: EmojiCandidate[]
 	// The document as received; followers, alsoKnownAs and fields are read from it.
 	raw: string
+	// The actor id the document's movedTo names (Fedify's successorId), when Kopje stores such an id; else null.
+	movedTo: string | null
 	// The canonical domain of the actor's address for this username, set by the search resolver only after the actor's
 	// host declared it and that domain confirmed it (declaredDomain in federation/resolve.ts); the host itself when
 	// the host's own answer names it there. Never set from a document.
@@ -510,6 +513,17 @@ export function upsertRemoteActor(
 	)
 	const row = remoteAccount(db, actor.uri)
 	if (row !== undefined) {
+		// The account's move as its document states it, set or cleared by every store (Mastodon's
+		// ProcessAccountService: process_account_service.rb:166), written once the row is stored, by its id: an account
+		// other than itself, stored and not being purged, by its actor id; one Kopje does not know reads as none, as it is
+		// not fetched (process_account_service.rb:310-314 fetches it).
+		db.run(
+			`UPDATE accounts SET moved_to_account_id = (SELECT m.id FROM accounts m INDEXED BY ${ACCOUNTS_URI_INDEX}
+				WHERE m.uri = ?2 AND m.id <> ?1 AND NOT ${deletingSql('m')})
+			WHERE id = ?1 AND domain IS NOT NULL`,
+			row.id,
+			actor.movedTo
+		)
 		// The document lists the actor's current keys; keys it no longer lists are not trusted any more.
 		db.run('DELETE FROM remote_keys WHERE account_id = ?', row.id)
 		for (const key of actor.keys) {
@@ -1143,6 +1157,13 @@ const move: Handler<'Move'> = (db, actor, activity, input) => {
 		bound,
 		now
 	)
+	// The source shows the move (Mastodon's move.rb:18), set once, when the job is first written: a replay of a known
+	// Move writes nothing, and a later document of the source sets or clears it again (upsertRemoteActor).
+	db.run(
+		'UPDATE accounts SET moved_to_account_id = ?2 WHERE id = ?1 AND domain IS NOT NULL AND ?2 <> ?1',
+		actor.id,
+		targetId
+	)
 	const carried = [new Date(now).toISOString(), MOVE_MAX_CARRIED] as const
 	db.run(
 		`INSERT INTO blocks (account_id, target_account_id, created_at)
@@ -1518,6 +1539,18 @@ function purgeRelationships(db: Db, id: string, budget: Budget): void {
 			AND account_id IN (SELECT account_id FROM follow_recommendation_mutes WHERE target_account_id = ?1 LIMIT ?2)`,
 		id
 	)
+	// The accounts that name it as their move (PURGED_ACCOUNT_REFERENCES), each cleared by its key.
+	for (const reference of PURGED_ACCOUNT_REFERENCES) {
+		spend(
+			db,
+			budget,
+			{
+				ids: `SELECT id FROM ${reference.table} INDEXED BY ${reference.index} WHERE ${reference.column} = ?1 LIMIT ?2`,
+				each: `UPDATE ${reference.table} SET ${reference.column} = NULL WHERE id = ?1`,
+			},
+			id
+		)
+	}
 	// A follow's delete and its local side's recount: two rows each at most.
 	// Its follows of either side, each side through its own index (an OR of the two lets statistics older than the
 	// Store's growth scan the follows: RES-7), the first of both in the order of their ids as text.
@@ -2014,10 +2047,24 @@ export const PURGED_ACCOUNT_CHILDREN: readonly { table: string; check: string; f
 	{ table: 'collection_pins_pending', check: 'account_id = ?1' },
 ]
 
-const ACCOUNT_CHILDREN_EXIST = PURGED_ACCOUNT_CHILDREN.map((child) => {
-	const exists = `EXISTS (SELECT 1 FROM ${child.table} WHERE ${child.check})`
-	return child.filter ? `(?2 AND ${exists})` : exists
-}).join(' OR ')
+// What names a remote account without a foreign key (logical references, which no delete of the account cascades to):
+// the purge clears each (purgeRelationships) through its partial index, before the account row goes, and the
+// completion check (ACCOUNT_CHILDREN_EXIST) keeps the row while any remains. test/cascade-guard.test.ts checks each
+// column has no foreign key and its index exists.
+export const PURGED_ACCOUNT_REFERENCES: readonly { table: string; column: string; index: string }[] = [
+	{ table: 'accounts', column: 'moved_to_account_id', index: MOVED_TO_INDEX },
+]
+
+const ACCOUNT_CHILDREN_EXIST = [
+	...PURGED_ACCOUNT_CHILDREN.map((child) => {
+		const exists = `EXISTS (SELECT 1 FROM ${child.table} WHERE ${child.check})`
+		return child.filter ? `(?2 AND ${exists})` : exists
+	}),
+	...PURGED_ACCOUNT_REFERENCES.map(
+		(reference) => `EXISTS (SELECT 1 FROM ${reference.table} INDEXED BY ${reference.index}
+			WHERE ${reference.column} = ?1)`
+	),
+].join(' OR ')
 
 // Whether rows of the account remain; with filters false, rows other than its blocks and mutes.
 function accountHasRows(db: Db, id: string, filters = true): boolean {

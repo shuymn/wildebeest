@@ -12,13 +12,13 @@ import { USERNAME_LIMIT } from '../src/domain/profile-bounds'
 import {
 	ADMIN_TREND_STATUSES_LIMIT,
 	ADMIN_TREND_TAGS_LIMIT,
-	DOMAIN_BYTES,
 	EXCERPT_UNITS,
 	TREND_HISTORY_ROWS,
 	TREND_TAGS_MAX_LIMIT,
 	trendingStatuses,
 	trendingTags,
 } from '../src/domain/trends'
+import { DOMAIN_BYTES } from '../src/platform/identity-bounds'
 import { STATUS_URL_LIMIT, TREND_TAG_NAME_BYTES, TREND_TAG_NAME_LENGTH } from '../src/platform/stored-bounds'
 
 // RES-3: the presented maxima of the trends shapes, derived from the stored and read bounds at worst JSON escaping
