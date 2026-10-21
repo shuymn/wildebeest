@@ -35,6 +35,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Fixed
 
+- A suspension resolves every report it froze when report ids pass 2^53 (imported ids): its bound and cursor are
+  kept as decimal ids, so none is skipped or left out.
 - `PATCH /api/v1/accounts/update_credentials` sets `avatar` and `header` from multipart files (under 8 MB each; JPEG,
   PNG, GIF or WebP), all or nothing with the other fields and with one profile Update to other servers. A file
   parameter sent as text answers 400.
