@@ -37,6 +37,10 @@ export const SENT_FILE = '(file)'
 // `files`: fields of the objects whose file parts are read, as SENT_FILE, at their place in the body.
 export type ObjectOptions = { files?: readonly string[] }
 
+// A file part's value while objects() groups the parts; no text value equals it.
+const FILE_VALUE: unique symbol = Symbol('file part')
+type Value = string | typeof FILE_VALUE
+
 export class Params {
 	constructor(
 		readonly entries: readonly (readonly [string, string])[],
@@ -53,7 +57,8 @@ export class Params {
 	// otherwise the query's last; other query entries follow the body's.
 	withQuery(query: readonly (readonly [string, string])[], declared: readonly string[]): Params {
 		const names = new Set(declared)
-		const sent = (name: string) => this.file(name) !== undefined || this.get(name) !== undefined
+		// The maps are read directly: the parameter conformance check counts accessor calls as the handler's reads.
+		const sent = (name: string) => this.files.has(name) || this.entries.some(([key]) => key === name)
 		const declaredQuery = [...names].flatMap((name): [string, string][] => {
 			const value = sent(name) ? undefined : query.findLast(([key]) => key === name)?.[1]
 			return value === undefined ? [] : [[name, value]]
@@ -97,22 +102,21 @@ export class Params {
 	}
 
 	// The objects of an array parameter: JSON sends `name[0][field]` (indexed), forms send `name[][field]`, where a field
-	// that repeats starts the next object (as Rack reads it). A file part takes part only for a field of `files`.
+	// that repeats starts the next object (as Rack reads it). Without `files`, file parts are not read. With it, every
+	// file part is grouped at its place in the body, as Rack groups it, and then read as SENT_FILE in a field of
+	// `files` and as absent in any other.
 	objects(name: string, options: ObjectOptions = {}): Record<string, string>[] {
 		const prefix = `${name}[`
-		const files = new Set(options.files)
-		const indexed = new Map<string, Record<string, string>>()
-		const sequential: Record<string, string>[] = []
-		const add = (key: string, value: string, file: boolean) => {
+		const files = options.files === undefined ? null : new Set(options.files)
+		const indexed = new Map<string, Record<string, Value>>()
+		const sequential: Record<string, Value>[] = []
+		const add = (key: string, value: Value) => {
 			// The name is compared as a string; only the `[index][field]` tail is a pattern.
 			const match = key.startsWith(prefix) ? OBJECT_FIELD.exec(key.slice(prefix.length)) : null
 			if (match === null) {
 				return
 			}
 			const [, index = '', field = ''] = match
-			if (file && !files.has(field)) {
-				return
-			}
 			if (index !== '') {
 				const object = indexed.get(index) ?? {}
 				object[field] = value
@@ -126,19 +130,27 @@ export class Params {
 				last[field] = value
 			}
 		}
-		const parts = files.size === 0 ? [] : this.fileParts
+		const parts = files === null ? [] : this.fileParts
 		let next = 0
 		const partsBefore = (at: number) => {
 			for (let part = parts[next]; part !== undefined && part[1] <= at; part = parts[++next]) {
-				add(part[0], SENT_FILE, true)
+				add(part[0], FILE_VALUE)
 			}
 		}
 		this.entries.forEach(([key, value], at) => {
 			partsBefore(at)
-			add(key, value, false)
+			add(key, value)
 		})
 		partsBefore(Infinity)
-		return [...[...indexed].sort(([a], [b]) => Number(a) - Number(b)).map(([, object]) => object), ...sequential]
+		const project = (object: Record<string, Value>): Record<string, string> =>
+			Object.fromEntries(
+				Object.entries(object).flatMap(([field, value]): [string, string][] =>
+					value !== FILE_VALUE ? [[field, value]] : files?.has(field) === true ? [[field, SENT_FILE]] : []
+				)
+			)
+		return [...[...indexed].sort(([a], [b]) => Number(a) - Number(b)).map(([, object]) => object), ...sequential].map(
+			project
+		)
 	}
 
 	// Values of `name[]` only, or undefined when none was sent: an array parameter as Rails' strong parameters permit

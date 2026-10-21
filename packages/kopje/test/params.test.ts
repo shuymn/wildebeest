@@ -165,7 +165,7 @@ describe('Params#objects with file fields', () => {
 		])
 	})
 
-	it('reads no file part by default, nor one of a field it does not list', async () => {
+	it('reads no file part by default, and groups on unlisted file parts before reading them as absent', async () => {
 		const p = await read(
 			multipart([
 				['media_attributes[][id]', png()],
@@ -175,7 +175,28 @@ describe('Params#objects with file fields', () => {
 			])
 		)
 		expect(p.objects('media_attributes')).toEqual([{ id: 'a' }])
-		expect(p.objects('media_attributes', THUMBNAIL)).toEqual([{ thumbnail: SENT_FILE, id: 'a' }])
+		expect(p.objects('media_attributes', THUMBNAIL)).toEqual([{ thumbnail: SENT_FILE }, { id: 'a' }])
+		// A repeated file-valued `id` starts the next object as a text one does.
+		const repeated = await read(
+			multipart([
+				['media_attributes[][id]', png()],
+				['media_attributes[][thumbnail]', png()],
+				['media_attributes[][id]', 'A'],
+			])
+		)
+		expect(repeated.objects('media_attributes', THUMBNAIL)).toEqual([{ thumbnail: SENT_FILE }, { id: 'A' }])
+	})
+
+	it('lets a later file part replace an indexed text value, which then reads as absent', async () => {
+		const p = await read(
+			multipart([
+				['media_attributes[0][id]', 'a'],
+				['media_attributes[0][thumbnail]', png()],
+				['media_attributes[0][id]', png()],
+			])
+		)
+		expect(p.objects('media_attributes', THUMBNAIL)).toEqual([{ thumbnail: SENT_FILE }])
+		expect(p.objects('media_attributes')).toEqual([{ id: 'a' }])
 	})
 
 	it('keeps the parts through the query merge, and a JSON or urlencoded body has none', async () => {

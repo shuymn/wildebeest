@@ -291,6 +291,27 @@ describe('media_attributes[][thumbnail] on a status edit', () => {
 		expect([response.status, await response.json()]).toEqual([422, REFUSED])
 	})
 
+	it('groups on file-valued fields as Rack does, so a thumbnail left without an id is ignored', async () => {
+		const { media, edit } = await withMedia()
+		const sequential = multipartForm([
+			['status', 'edited'],
+			['media_ids[]', media.id],
+			['media_attributes[][id]', png()],
+			['media_attributes[][thumbnail]', png()],
+			['media_attributes[][id]', media.id],
+		])
+		expect((await edit({ body: sequential })).status).toBe(200)
+		// A later file-valued `id` replaces the text one, and reads as absent.
+		const indexed = multipartForm([
+			['status', 'edited again'],
+			['media_ids[]', media.id],
+			['media_attributes[0][id]', media.id],
+			['media_attributes[0][thumbnail]', png()],
+			['media_attributes[0][id]', png()],
+		])
+		expect((await edit({ body: indexed })).status).toBe(200)
+	})
+
 	it('reads empty text and nested nulls as absent, and ignores an entry without an id', async () => {
 		const { media, editJson } = await withMedia()
 		const accepted: unknown[][] = [
