@@ -6,9 +6,10 @@ import { mediaDeleteOperation } from './operation'
 import { type MediaAttachment, type MediaRow, presentMedia } from './status-presenter'
 import { MEDIA_COLUMN_MAP } from './status-rows'
 import { selectSql } from '../db/columns'
+import { MEDIA_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
 import { mediaUrl } from '../platform/media-files'
-import { storedMediaDescription, storedMediaMeta } from '../platform/stored-bounds'
+import { staticUrlPastBoundSql, storedMediaDescription, storedMediaMeta } from '../platform/stored-bounds'
 
 // Local media attachments (B4b). An upload takes four Store calls, because re-encoding and R2 are external I/O the
 // Store does not do:
@@ -344,9 +345,9 @@ export type ProfileImage = 'avatar' | 'header'
 // In the order a request applies them.
 export const PROFILE_IMAGES: readonly ProfileImage[] = ['avatar', 'header']
 
-const PROFILE_COLUMNS: Record<ProfileImage, { own: string; other: string }> = {
-	avatar: { own: 'avatar_url', other: 'header_url' },
-	header: { own: 'header_url', other: 'avatar_url' },
+const PROFILE_COLUMNS: Record<ProfileImage, { own: string; still: string; other: string }> = {
+	avatar: { own: 'avatar_url', still: 'avatar_static_url', other: 'header_url' },
+	header: { own: 'header_url', still: 'header_static_url', other: 'avatar_url' },
 }
 
 // Whether `id` may become a profile image of the viewer: the viewer's own live, completed, unattached upload, not held
@@ -367,19 +368,34 @@ export function profileReleaseSql(kind: ProfileImage): string {
 			AND ${notEmojiSql('media_attachments')}`
 }
 
-// Sets (an upload id) or clears (null) the account's avatar or header. Before the account changes, the upload behind
-// the image it replaces is doomed, so the sweep deletes it and its files, unless the account's other image still names
-// it. The old and new URLs are compared and copied within SQL (RES-2): read into the Worker and bound again, an
-// imported URL of malformed UTF-8 would come back changed and match nothing. The release reads the account's own media
-// through media_attachments_account and probes the account row by key (test/profile-images.test.ts shows the plan).
+// The assignment of upload ?1 as the account ?2's `kind` image, in one UPDATE: the image is the upload's URL, and its
+// static (migration 0061_account_static_images) the upload's still preview when its served file is animated (the
+// meta's "animated", completeMedia), else NULL (the image itself). A preview URL 0061's trigger would refuse is not
+// copied (staticUrlPastBoundSql), so the account shows its image. Both are copied within SQL, byte for byte; meta's
+// json_valid CHECK (0000_initial) keeps json_extract from failing. The upload is read by its key.
+export function profileAssignSql(kind: ProfileImage): string {
+	const { own, still } = PROFILE_COLUMNS[kind]
+	return `UPDATE accounts SET (${own}, ${still}) = (
+		SELECT m.url, CASE WHEN json_extract(m.meta, '$.animated') IS 1
+			AND NOT (${staticUrlPastBoundSql('m.preview_url')}) THEN m.preview_url END
+		FROM media_attachments m INDEXED BY ${MEDIA_ID_INDEX} WHERE m.id = ?1)
+	WHERE id = ?2`
+}
+
+// Sets (an upload id) or clears (null) the account's avatar or header, with its static. Before the account changes,
+// the upload behind the image it replaces is doomed, so the sweep deletes it and its files, unless the account's
+// other image still names it; the static is that upload's own preview, so it goes with it. The old and new URLs are
+// compared and copied within SQL (RES-2): read into the Worker and bound again, an imported URL of malformed UTF-8
+// would come back changed and match nothing. The release reads the account's own media through
+// media_attachments_account and probes the account row by key (test/profile-images.test.ts shows the plan).
 export function applyProfileImage(db: Db, accountId: string, kind: ProfileImage, id: string | null): void {
-	const { own } = PROFILE_COLUMNS[kind]
+	const { own, still } = PROFILE_COLUMNS[kind]
 	db.run(profileReleaseSql(kind), accountId, DOOMED_AT)
 	if (id === null) {
-		db.run(`UPDATE accounts SET ${own} = NULL WHERE id = ?`, accountId)
+		db.run(`UPDATE accounts SET ${own} = NULL, ${still} = NULL WHERE id = ?`, accountId)
 		return
 	}
-	db.run(`UPDATE accounts SET ${own} = (SELECT url FROM media_attachments WHERE id = ?) WHERE id = ?`, id, accountId)
+	db.run(profileAssignSql(kind), id, accountId)
 	db.run('UPDATE media_attachments SET gc_at = NULL WHERE id = ?', id)
 }
 

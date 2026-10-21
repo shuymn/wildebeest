@@ -134,6 +134,15 @@ describe('grouped notifications (API v2)', () => {
 
 	it('answers partial accounts with expand_accounts=partial_avatars, and refuses another value', async () => {
 		const { h, alice, bob, carol, dave } = await scene()
+		// Carol's avatar with its still (migration 0061_account_static_images), as an animated upload leaves them.
+		const [avatar, still] = ['https://kopje.test/media/AAAA/full.webp', 'https://kopje.test/media/AAAA/small.webp']
+		await sql(
+			h.store,
+			'UPDATE accounts SET avatar_url = ?, avatar_static_url = ? WHERE id = ?',
+			avatar,
+			still,
+			carol.id
+		)
 		const { body } = await grouped(h, '/api/v2/notifications?expand_accounts=partial_avatars', alice.token)
 		expect(Object.keys(body)).toEqual(['accounts', 'partial_accounts', 'statuses', 'notification_groups'])
 		expect(body.accounts.map((a) => a.id)).toEqual([dave.id, bob.id])
@@ -144,8 +153,8 @@ describe('grouped notifications (API v2)', () => {
 				locked: false,
 				bot: false,
 				url: expect.stringContaining('carol'),
-				avatar: expect.any(String),
-				avatar_static: expect.any(String),
+				avatar,
+				avatar_static: still,
 			},
 		])
 		const full = await grouped(h, '/api/v2/notifications?expand_accounts=full', alice.token)

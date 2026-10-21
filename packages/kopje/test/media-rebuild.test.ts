@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, inject, it, vi } from 'vitest'
 import { type AccessTeam, adminClaims, adminHarness, adminTeam, serviceClaims, setTeamAccess } from './access-helpers'
 import { sql } from './api-helpers'
 import { NOW } from './app-helpers'
-import { JPEG_ORIENTATION_6, PNG_PLAIN, WIDE_PNG } from './fixtures/images'
+import { ANIMATED_WEBP, JPEG_ORIENTATION_6, PNG_PLAIN, WIDE_PNG } from './fixtures/images'
 import { BUILD, completeSetup, migratedStore, rejectionOf } from './helpers'
 import { pngOf, pngOfBytes } from './local-emoji-helpers'
 import { bytes, TestCodec } from './media-helpers'
@@ -174,6 +174,36 @@ describe('media rebuild (MEDIA-2, MEDIA-3)', () => {
 		expect((await h.request(`/media/${wide.token}/small.png`)).status).toBe(200)
 		// Charged as uploads are: two transformations each.
 		expect(await transforms(h.store)).toBe(4)
+	})
+
+	it('records an animated served file in meta, and leaves the accounts as they were', async () => {
+		const codec = new TestCodec()
+		// Images keeping the frames of the served file (Miniflare's binding decodes one only); the preview is a still.
+		codec.encodeResponder = (options) =>
+			options.format === 'image/webp' && options.still !== true ? bytes(ANIMATED_WEBP) : null
+		const h = await setup({ codec })
+		const animated = await addRow(h.store, { contentType: 'image/webp', original: bytes(ANIMATED_WEBP) })
+		const still = await addRow(h.store)
+		await runInDurableObject(h.store, (_instance, state) => {
+			state.storage.sql.exec(
+				`UPDATE accounts SET avatar_url = (SELECT url FROM media_attachments WHERE id = ?) WHERE id = ?`,
+				animated.id,
+				ACCOUNT
+			)
+		})
+		const step = (await (await h.post(adminClaims(), '/admin/media/rebuild')).json()) as Step
+		expect(step.counts).toMatchObject({ built: 2 })
+		expect(await meta(h.store, animated.id)).toEqual({
+			original: { width: 8, height: 6 },
+			small: { width: 8, height: 6 },
+			animated: true,
+		})
+		expect(await meta(h.store, still.id)).not.toHaveProperty('animated')
+		expect(
+			await runInDurableObject(h.store, (_instance, state) =>
+				state.storage.sql.exec('SELECT avatar_static_url, header_static_url FROM accounts WHERE id = ?', ACCOUNT).one()
+			)
+		).toEqual({ avatar_static_url: null, header_static_url: null })
 	})
 
 	it('skips rows whose files exist, so a second run changes nothing', async () => {

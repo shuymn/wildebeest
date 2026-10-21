@@ -3,7 +3,7 @@ import { runInDurableObject } from 'cloudflare:test'
 import { describe, expect, it } from 'vitest'
 
 import { bearer, json, sql } from './api-helpers'
-import { GIF, PNG_PLAIN } from './fixtures/images'
+import { ANIMATED_GIF, PNG_PLAIN } from './fixtures/images'
 import { bytes, multipartForm, r2Keys, TestCodec } from './media-helpers'
 import { aliceWithFollower } from './profile-fixtures'
 import { scopedToken } from './read-helpers'
@@ -271,9 +271,11 @@ describe('update_credentials: avatar and header', () => {
 		expect(row?.header_url).not.toBeNull()
 	}, 60_000)
 
-	it('keeps an animated GIF as its own static (stills are not made)', async () => {
+	// Miniflare's local binding decodes one frame of a GIF, so its served file is still and the static is the image;
+	// an animated served file's still static: test/account-static.test.ts, and on a real account: docs/setup.md.
+	it('keeps the image as the static of a GIF the local binding serves still', async () => {
 		const h = await setup()
-		const gif = new File([bytes(GIF)], 'a.gif', { type: 'image/gif' })
+		const gif = new File([bytes(ANIMATED_GIF)], 'a.gif', { type: 'image/gif' })
 		const account = await (
 			await patch(h, h.users.alice.token, formOf([['avatar', gif]]))
 		).json<{
@@ -281,6 +283,9 @@ describe('update_credentials: avatar and header', () => {
 			avatar_static: string
 		}>()
 		expect(account.avatar_static).toBe(account.avatar)
+		expect(await sql(h.store, "SELECT avatar_static_url FROM accounts WHERE username = 'alice'")).toEqual([
+			{ avatar_static_url: null },
+		])
 	})
 })
 

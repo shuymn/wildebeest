@@ -56,6 +56,7 @@ import {
 	byteCut,
 	cutCodePoints,
 	MOVED_TO_ID_BYTES,
+	STATIC_URL_LIMIT,
 	storedDisplayName,
 	storedText,
 } from '../platform/stored-bounds'
@@ -180,6 +181,9 @@ export type AccountRow = {
 	url: string | null
 	avatar_url: string | null
 	header_url: string | null
+	// The still of an animated uploaded image (migration 0061_account_static_images), or null: the image itself.
+	avatar_static_url: string | null
+	header_static_url: string | null
 	locked: number
 	discoverable: number | null
 	// NULL for a remote account not stored again since migration 0058.
@@ -252,6 +256,8 @@ export const ACCOUNT_COLUMN_MAP = {
 	url: 'a.url',
 	avatar_url: 'a.avatar_url',
 	header_url: 'a.header_url',
+	avatar_static_url: 'a.avatar_static_url',
+	header_static_url: 'a.header_static_url',
 	locked: 'a.locked',
 	discoverable: 'a.discoverable',
 	indexable: 'a.indexable',
@@ -280,8 +286,9 @@ function lastStatusAtSql(a: string): string {
 // text is cut in SQL by its raw UTF-8 bytes (an imported value may be malformed UTF-8, which SQLite's substr counts
 // as fewer characters), then by its decoded limit in the presenter (presentMovedAccount): display_name at
 // MOVED_DISPLAY_NAME_LIMIT code points (400 bytes read), username at USERNAME_LIMIT (1,020 bytes read), created_at at
-// 24 and last_status_at at 10 (96 and 40 bytes read). The uri and URLs read as unset past MOVED_URL_LIMIT bytes, and
-// are shown only within it as JSON writes them; emojis are the stored snapshot (ACCOUNT_EMOJIS_BYTES, 0053's trigger),
+// 24 and last_status_at at 10 (96 and 40 bytes read). The uri and URLs read as unset past MOVED_URL_LIMIT bytes (the
+// statics past STATIC_URL_LIMIT, their stored bound), and are shown only within MOVED_URL_LIMIT as JSON writes them;
+// emojis are the stored snapshot (ACCOUNT_EMOJIS_BYTES, 0053's trigger),
 // shown within MOVED_EMOJIS_BYTES of JSON. A target whose domain passes DOMAIN_BYTES is not read (no `moved`).
 export const MOVED_DISPLAY_NAME_LIMIT = 100
 export const MOVED_URL_LIMIT = 512
@@ -306,6 +313,8 @@ const MOVED_COLUMN_MAP = {
 	url: byteBoundSql('m.url', MOVED_URL_LIMIT),
 	avatar_url: byteBoundSql('m.avatar_url', MOVED_URL_LIMIT),
 	header_url: byteBoundSql('m.header_url', MOVED_URL_LIMIT),
+	avatar_static_url: byteBoundSql('m.avatar_static_url', STATIC_URL_LIMIT),
+	header_static_url: byteBoundSql('m.header_static_url', STATIC_URL_LIMIT),
 	locked: movedFlag('m.locked'),
 	discoverable: movedFlag('m.discoverable'),
 	indexable: movedFlag('m.indexable'),
@@ -330,6 +339,8 @@ export const MOVED_ACCOUNT_CAPS: { readonly [K in keyof typeof MOVED_COLUMN_MAP]
 	url: MOVED_URL_LIMIT,
 	avatar_url: MOVED_URL_LIMIT,
 	header_url: MOVED_URL_LIMIT,
+	avatar_static_url: STATIC_URL_LIMIT,
+	header_static_url: STATIC_URL_LIMIT,
 	locked: 0,
 	discoverable: 0,
 	indexable: 0,
@@ -448,7 +459,7 @@ export function* accountsOf(
 export type PartialAccount = Pick<Account, 'id' | 'acct' | 'locked' | 'bot' | 'url' | 'avatar' | 'avatar_static'>
 
 type PartialRow = Pick<AccountRow, 'id' | 'uri' | 'username' | 'domain' | 'actor_type' | 'url' | 'avatar_url'> &
-	Pick<AccountRow, 'locked' | 'available'>
+	Pick<AccountRow, 'avatar_static_url' | 'locked' | 'available'>
 
 // The partial accounts of `ids` in order (an id may repeat), as presentAccount shows those fields, reading only their
 // columns, `chunk` at a time as the stream reaches them; undefined for an id with no account.
@@ -464,7 +475,7 @@ export function* partialAccountsOf(
 			db
 				.all<PartialRow>(
 					`SELECT a.id, ${actorUriSql('a.uri')} AS uri, ${usernameSql('a.username')} AS username, a.domain, a.actor_type,
-						a.url, a.avatar_url, a.locked,
+						a.url, a.avatar_url, a.avatar_static_url, a.locked,
 						${availableJoinedSql('a', 'l')} AS available
 					FROM json_each(?1) c CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = c.value
 					LEFT JOIN local_accounts l ON l.account_id = a.id`,
@@ -479,16 +490,20 @@ export function* partialAccountsOf(
 				continue
 			}
 			const suspended = row.available === 0
-			const avatar =
-				(suspended ? null : boundedHref(row.avatar_url, PROFILE_URL_LIMIT)) ?? `${present.origin}${DEFAULT_AVATAR}`
+			const avatar = shownImage(
+				ACCOUNT_BOUNDS,
+				suspended ? null : row.avatar_url,
+				row.avatar_static_url,
+				`${present.origin}${DEFAULT_AVATAR}`
+			)
 			yield {
 				id: row.id,
 				acct: acctOf(row),
 				locked: !suspended && row.locked === 1,
 				bot: !suspended && (row.actor_type === 'Service' || row.actor_type === 'Application'),
 				url: accountUrl(row, present.origin),
-				avatar,
-				avatar_static: avatar,
+				avatar: avatar.image,
+				avatar_static: avatar.still,
 			}
 		}
 	}
@@ -526,18 +541,43 @@ export function accountUrl(
 }
 
 // How a presenter bounds an account's URLs and actor id (RES-2): `href` serializes an http(s) URL within its bound or
-// gives null, and `uri` is the actor id's bound, in UTF-8 bytes as JSON writes it.
-type IdentityBounds = { href: (value: string | null) => string | null; uri: number }
+// gives null, `image` does so for an image or its static within the bound as JSON writes it too, and `uri` is the
+// actor id's bound, in UTF-8 bytes as JSON writes it.
+type IdentityBounds = {
+	href: (value: string | null) => string | null
+	image: (value: string | null) => string | null
+	uri: number
+}
 
-const ACCOUNT_BOUNDS: IdentityBounds = { href: (value) => boundedHref(value, PROFILE_URL_LIMIT), uri: ACTOR_URI_LIMIT }
+// A serialized URL may keep a '\' in its query or fragment, which JSON doubles: within `limit` as JSON too.
+function jsonHref(value: string | null, limit: number): string | null {
+	const href = boundedHref(value, limit)
+	return href !== null && withinIdentityBound(href, limit) ? href : null
+}
 
-// A serialized URL may keep a '\' in its query or fragment, which JSON doubles: within MOVED_URL_LIMIT as JSON too.
+const ACCOUNT_BOUNDS: IdentityBounds = {
+	href: (value) => boundedHref(value, PROFILE_URL_LIMIT),
+	image: (value) => jsonHref(value, PROFILE_URL_LIMIT),
+	uri: ACTOR_URI_LIMIT,
+}
+
 const MOVED_BOUNDS: IdentityBounds = {
-	href: (value) => {
-		const href = boundedHref(value, MOVED_URL_LIMIT)
-		return href !== null && withinIdentityBound(href, MOVED_URL_LIMIT) ? href : null
-	},
+	href: (value) => jsonHref(value, MOVED_URL_LIMIT),
+	image: (value) => jsonHref(value, MOVED_URL_LIMIT),
 	uri: MOVED_URL_LIMIT,
+}
+
+// An image as an account shows it with its static (Mastodon's avatar and avatar_static, header and header_static):
+// both `fallback` unless the image is shown (null: unavailable or unset); then the static when it is shown too, else
+// the image. Each is shown within `bounds.image`.
+function shownImage(
+	bounds: IdentityBounds,
+	image: string | null,
+	still: string | null,
+	fallback: string
+): { image: string; still: string } {
+	const href = bounds.image(image)
+	return href === null ? { image: fallback, still: fallback } : { image: href, still: bounds.image(still) ?? href }
 }
 
 export function acctOf(row: { username: string; domain: string | null }): string {
@@ -600,8 +640,18 @@ function presentIdentity(
 	const suspended = row.available === 0
 	// Stored URLs are shown only when they are http(s) (httpUrl); anything else reads as unset.
 	const url = accountUrl(row, origin, bounds.href)
-	const avatar = (suspended ? null : bounds.href(row.avatar_url)) ?? `${origin}${DEFAULT_AVATAR}`
-	const header = (suspended ? null : bounds.href(row.header_url)) ?? `${origin}${DEFAULT_HEADER}`
+	const avatar = shownImage(
+		bounds,
+		suspended ? null : row.avatar_url,
+		row.avatar_static_url,
+		`${origin}${DEFAULT_AVATAR}`
+	)
+	const header = shownImage(
+		bounds,
+		suspended ? null : row.header_url,
+		row.header_static_url,
+		`${origin}${DEFAULT_HEADER}`
+	)
 	const shown: Profile = suspended ? { display_name: '', note: '', emojis: [], fields: [] } : profile()
 	return {
 		id: row.id,
@@ -618,10 +668,10 @@ function presentIdentity(
 		url,
 		// RES-2: the projection (actorUriSql) bounds the raw bytes, and this the escaped JSON of an imported value.
 		uri: withinIdentityBound(row.uri, bounds.uri) ? row.uri : '',
-		avatar,
-		avatar_static: avatar,
-		header,
-		header_static: header,
+		avatar: avatar.image,
+		avatar_static: avatar.still,
+		header: header.image,
+		header_static: header.still,
 		followers_count: row.followers_count,
 		following_count: row.following_count,
 		statuses_count: row.statuses_count,
