@@ -921,7 +921,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `src/security/tokens.ts` and `sessionMatches` in `src/platform/store-admin.ts`; `test/ops-authority.test.ts`
   ("constantTimeEqual"). - The OAuth admin of the Mastodon admin API (VIS-29) is not an admin here: it never
   holds an `ImportAuthority`, and `/api/v1/admin/*` is outside the Access application's `/admin` path. Its diagnostic
-  state (why there is or is not an OAuth admin, and a suspended or ambiguous match's username) is shown only to
+  state (why there is or is not an OAuth admin, and a suspended match's username) is shown only to
   Access, as `oauthAdmin` in `GET /admin/health`. _Enforced (main):_
   `src/app/admin.ts`; `test/admin-api.test.ts` ("GET /admin/health: oauthAdmin"). Which account it is, while it is
   one, is public, as Mastodon shows it: that account's `roles` holds the Owner's badge (id, name and color, no

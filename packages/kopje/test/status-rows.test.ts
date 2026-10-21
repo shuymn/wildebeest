@@ -41,7 +41,13 @@ import { type VisibleStatusId, visibleSql } from '../src/domain/audience'
 import { listGroupedNotifications } from '../src/domain/notification-groups'
 import { OWN_VOTE_COLUMNS, POLL_COLUMN_MAP } from '../src/domain/polls'
 import { MAX_REMOTE_OPTIONS, MAX_STATUS_MENTION_ROWS } from '../src/domain/status-bounds'
-import { type ChunkPlan, PAGE_CHUNKS, presentation, presentStatusesWithin } from '../src/domain/status-presenter'
+import {
+	type ChunkPlan,
+	PAGE_CHUNKS,
+	presentation,
+	presentStatusesWithin,
+	type Quote,
+} from '../src/domain/status-presenter'
 import { hydrateQueries, PER_ROW_SORTS, STATUS_FROM, statusRowBoundSql } from '../src/domain/status-rows'
 import { statusContext } from '../src/domain/statuses'
 import type { StoreStub } from '../src/platform/store-client'
@@ -53,6 +59,8 @@ import { sha256Hex } from '../src/security/tokens'
 // status at a time.
 // The chunks never change the answer.
 
+const TINY: Item = { kind: 'status', text: 10, wide: false, mentions: 0, tags: 0, media: 0, poll: 0, viewer: false }
+
 const itemArb = fc.record({
 	kind: fc.constantFrom('status', 'quote', 'boost', 'boostOfQuote'),
 	text: fc.integer({ min: 0, max: 40_000 }),
@@ -62,7 +70,10 @@ const itemArb = fc.record({
 	media: fc.integer({ min: 0, max: 5 }),
 	poll: fc.integer({ min: 0, max: MAX_REMOTE_OPTIONS }),
 	viewer: fc.boolean(),
+	// Each status's author drawn apart: a boost's original or a quoted status may be local under a remote top level.
 	local: fc.boolean(),
+	originalLocal: fc.boolean(),
+	quotedLocal: fc.boolean(),
 }) satisfies fc.Arbitrary<Item>
 
 afterEach(() => {
@@ -240,6 +251,8 @@ describe("the OAuth admin's lookup (RES-3)", () => {
 					poll: 0,
 					viewer: false,
 					local: i >= 8,
+					originalLocal: i >= 8,
+					quotedLocal: i >= 8,
 				})
 			)
 			const bounds = boundsOf(state, f.viewer, ids, 1)
@@ -282,6 +295,50 @@ describe("the OAuth admin's lookup (RES-3)", () => {
 		expect(result.roles.some(({ roles }) => roles?.length === 1)).toBe(true)
 		expect(result.roles.some(({ roles }) => roles === undefined)).toBe(true)
 	}, 120_000)
+})
+
+// A local author below a remote top level: a boost's original, a quote's quoted status, a boost's original's quoted
+// status. Each case on a cold Db (its own presentation, so a fresh memo), after one small remote status so that the
+// chunk of the two is metered: its R must count the lookup the nested local author reads.
+describe("the OAuth admin's lookup for a nested local author (RES-3)", () => {
+	const cases: [string, Item][] = [
+		['a remote boost of a local status', { ...TINY, kind: 'boost', originalLocal: true }],
+		['a remote quote of a local status', { ...TINY, kind: 'quote', quotedLocal: true }],
+		['a remote boost of a remote quote of a local status', { ...TINY, kind: 'boostOfQuote', quotedLocal: true }],
+	]
+	it.each(cases)(
+		'counts it for %s',
+		async (_name, item) => {
+			const { h, f } = await fixture({ admin: true })
+			const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+			const result = await runInDurableObject(h.store, (_instance, state) => {
+				const ids = [build(state.storage.sql, f, TINY), build(state.storage.sql, f, item)]
+				const bounds = boundsOf(state, f.viewer, ids, 1)
+				const planned = observedPresentation(state, f.viewer, ids, PAGE_CHUNKS)
+				const [segment] = planned.segments
+				const nested = planned.items[1]!
+				const shown = item.kind === 'quote' ? nested : nested.reblog!
+				const author = item.kind === 'boost' ? shown.account : (shown.quote as Quote).quoted_status!.account
+				return {
+					segments: planned.segments.map((s) => s.ids.length),
+					lookups: segment!.reads.filter((read) => read.query.includes(selectSql(LOCAL_EMAIL_COLUMNS))).length,
+					heap: heap(rowsOf(segment!.reads)),
+					r: ids.reduce((sum, id) => sum + bounds.get(id)!, 0),
+					top: nested.account.roles,
+					author: { id: author.id, roles: author.roles },
+				}
+			})
+			// One metered chunk of both, which reads the lookup.
+			expect(result.segments).toEqual([2])
+			expect(result.lookups).toBe(1)
+			expect(result.heap).toBeLessThanOrEqual(result.r)
+			expect(warn).not.toHaveBeenCalled()
+			expect(result.top).toBeUndefined()
+			expect(f.locals).toContain(result.author.id)
+			expect(result.author.roles).toEqual(result.author.id === f.viewer ? [{ id: '3', name: 'Owner', color: '' }] : [])
+		},
+		120_000
+	)
 })
 
 describe('a page of many small rows (RES-3)', () => {

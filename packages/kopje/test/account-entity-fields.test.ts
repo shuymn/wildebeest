@@ -5,9 +5,10 @@ import { describe, expect, it } from 'vitest'
 import { seedAccount, setSetting, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { community, getJson } from './status-helpers'
+import { selectSql } from '../src/db/columns'
 import { Db, RowMeter } from '../src/db/sql'
-import { type Account, presentAccountById } from '../src/domain/accounts'
-import { adminAccountIdOnce } from '../src/domain/admin-authority'
+import { type Account, credentialAccount, presentAccountById } from '../src/domain/accounts'
+import { adminAccountIdOnce, LOCAL_EMAIL_COLUMNS } from '../src/domain/admin-authority'
 import { suspendLocal, unsuspendLocal } from '../src/domain/suspension'
 import { ACTOR_URI_LIMIT } from '../src/platform/identity-bounds'
 
@@ -112,6 +113,27 @@ describe('roles and noindex', () => {
 // adminAccountIdOnce holds one lookup per operation, across its metered views, until a writer of the match forgets it
 // after its write (A6: the memo warmed first).
 describe('the Owner role within one operation', () => {
+	it("is read once for a credential account's role and roles", async () => {
+		const { h } = await fixture()
+		const { alice } = h.users
+		const result = await runInDurableObject(h.store, (_instance, state) => {
+			const queries: string[] = []
+			const recording = {
+				exec: (query: string, ...params: SqlStorageValue[]) => {
+					queries.push(query)
+					return state.storage.sql.exec(query, ...params)
+				},
+			} as unknown as SqlStorage
+			const account = credentialAccount(new Db(recording), alice.id, { origin: ORIGIN })!
+			return {
+				role: account.role.name,
+				roles: account.roles,
+				scans: queries.filter((query) => query.includes(selectSql(LOCAL_EMAIL_COLUMNS))).length,
+			}
+		})
+		expect(result).toEqual({ role: 'Owner', roles: OWNER, scans: 1 })
+	})
+
 	it('is gone after the admin is suspended, and back after an unsuspension, in the same operation', async () => {
 		const { h } = await fixture()
 		const { alice } = h.users
