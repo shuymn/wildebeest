@@ -1134,10 +1134,11 @@ export const APP_NAME_JSON_BYTES = 6 * APP_NAME_LIMIT + 2
 export const APP_WEBSITE_LIMIT = 2000
 export const APP_WEBSITE_JSON_BYTES = 2 * APP_WEBSITE_LIMIT + 2
 
-// The characters no app website may hold (C0 controls, space and DEL, other whitespace, and the ASCII ones outside a
-// URL's code points that a client's link parser may read differently from WHATWG's): none needs escaping in JSON.
+// The characters no app website may hold, those that end or split an HTML attribute or a URL in common parsers: C0
+// controls, the space, DEL, C1 controls (U+0085 NEL is not in \s), other whitespace (\s), and " ' < > \ ^ ` { | }.
+// None needs escaping in JSON.
 // eslint-disable-next-line no-control-regex
-const WEBSITE_EXCLUDED = /[\u0000-\u0020\u007f"<>\\^`{|}]|\s/u
+const WEBSITE_EXCLUDED = /[\u0000-\u0020\u007f-\u009f"'<>\\^`{|}]|\s/u
 
 // Whether `text`, as decoded, is an app website registration accepts and a status presents as stored: well-formed (so
 // its JSON is its UTF-8 bytes and the quotes) with no excluded character, within APP_WEBSITE_LIMIT UTF-8 bytes and

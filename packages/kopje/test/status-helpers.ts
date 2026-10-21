@@ -233,4 +233,7 @@ export const WEBSITE_REFUSED: readonly [string, string][] = [
 	['<', 'https://client.test/<script>'],
 	['a tab', 'https://client.test/a\tb'],
 	['DEL', 'https://client.test/a\u007fb'],
+	['a single quote', "https://client.test/'onclick='alert(1)"],
+	['NEL (U+0085)', 'https://client.test/a\u0085b'],
+	['a C1 control (U+009F)', 'https://client.test/a\u009fb'],
 ]

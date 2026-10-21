@@ -215,10 +215,12 @@ Posting (`POST` and `PUT /api/v1/statuses`):
   name past 60 code points, 240 UTF-8 bytes or 362 JSON bytes shows `application: null`, and a website past 2,000
   UTF-8 bytes or not an http(s) URL with a host shows `website: null`. These can hide a value registration accepted (a
   website of 2,000 characters that are not ASCII, say).
-- An app website holding a control character, DEL, whitespace or any of `"` `<` `>` `\` `^` `` ` `` `{` `|` `}` is
-  refused at registration (`Website is invalid`) and not shown on a status (`website: null`), so no client reads a
-  link its parser may split differently; Mastodon's UrlValidator (`Addressable::URI.parse`, an http(s) scheme and a
-  host) may accept some of them.
+- An app website holding any of C0 controls (U+0000–U+001F), the space, DEL (U+007F), C1 controls (U+0080–U+009F), the
+  other whitespace JavaScript's `\s` matches (Unicode spaces, line terminators, U+FEFF), and `"` `'` `<` `>` `\` `^`
+  `` ` `` `{` `|` `}` is refused at registration (`Website is invalid`) and not shown on a status (`website: null`):
+  these are the characters that end or split an HTML attribute or a URL in common parsers. Registration trims
+  surrounding whitespace before it validates, so only inner whitespace is refused there. Mastodon's UrlValidator
+  (`Addressable::URI.parse`, an http(s) scheme and a host) may accept some of them.
 - Kopje removes an app itself (an unused app after a day, or one registration evicts): its statuses then show
   `application: null`. Mastodon removes an app only when its owner deletes it. A scheduled status whose app is gone by
   its publication is published, showing `application: null`; Mastodon drops it.

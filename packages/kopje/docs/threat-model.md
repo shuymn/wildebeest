@@ -1705,12 +1705,14 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   or header within 2,048 (a profile URL falls back from the stored one to the actor's origin and to this instance's
   `/@acct` page, and to '' when none fits), a media URL within 2,048. A local status's `application` reads its app's
   name and website as stored, within 240 and 2,000 bytes and only as text (`appNameSql` and `appWebsiteSql` in
-  `src/platform/stored-bounds.ts`, by key through `sqlite_autoindex_oauth_clients_1`), and presents them as decoded:
-  a name of at most 60 code points within 240 bytes and 362 JSON bytes, else `application: null`; a website that is
-  well-formed, holds no control character, DEL, whitespace or any of `"` `<` `>` `\` `^` `` ` `` `{` `|` `}`, is
-  within 2,000 bytes and parses as an http(s) URL with a host, shown as stored, else `website: null`; registration
-  refuses the same websites (`isAppWebsite` in `src/platform/stored-bounds.ts`)
-  (`test/statuses.test.ts` ("application"), `test/status-bounds.test.ts` ("status applications")). Each per-status
+  `src/platform/stored-bounds.ts`, by key through `sqlite_autoindex_oauth_clients_1`), and presents them as decoded: a
+  name of at most 60 code points within 240 bytes and 362 JSON bytes, else `application: null`; a website that is
+  well-formed, holds none of C0 controls (U+0000–U+001F), the space, DEL (U+007F), C1 controls (U+0080–U+009F), the
+  other whitespace JavaScript's `\s` matches (Unicode spaces, line terminators, U+FEFF), and `"` `'` `<` `>` `\` `^`
+  `` ` `` `{` `|` `}` (those that end or split an HTML attribute or a URL in common parsers), is within 2,000 bytes and
+  parses as an http(s) URL with a host, shown as stored, else `website: null`; registration refuses the same websites
+  after trimming surrounding whitespace (`isAppWebsite` in `src/platform/stored-bounds.ts`) (`test/statuses.test.ts`
+  ("application"), `test/status-bounds.test.ts` ("status applications")). Each per-status
   cap reads at most its own number of rows, each status once, through an index that holds only the rows it shows:
   media_attachments_status (shown attachments), status_mentions_shown (mentions that are not silent, migration
   `0047_status_mentions_shown`) and status_tags.
