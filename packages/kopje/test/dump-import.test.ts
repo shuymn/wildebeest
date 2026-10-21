@@ -357,6 +357,37 @@ describe('dump', () => {
 		expect(refused).toMatch(/accounts: emojis past their stored bound/)
 	}, 120_000)
 
+	it('round-trips active_on and contact_username (0059), and refuses either past its bound on import', async () => {
+		const source = await seeded(0)
+		await runInDurableObject(source, (_instance, state) => {
+			state.storage.sql.exec("UPDATE local_accounts SET active_on = '2026-10-21'")
+			state.storage.sql.exec("INSERT INTO instance_settings (name, value) VALUES ('contact_username', 'alice')")
+		})
+		const { text } = await dumpViaRpc(source)
+		const restored = await migratedStore()
+		await copyConfig(source, restored)
+		await importViaRpc(restored, text)
+		await runInDurableObject(restored, (_instance, state) => {
+			const sql = state.storage.sql
+			expect(sql.exec('SELECT active_on FROM local_accounts').toArray()).toEqual([{ active_on: '2026-10-21' }])
+			expect(sql.exec("SELECT value FROM instance_settings WHERE name = 'contact_username'").one().value).toBe('alice')
+		})
+		// A dump from elsewhere, as its text could hold it: a date that is none, a contact_username of the wrong shape and
+		// one of another storage class.
+		const contact = (value: string) => text.replace("'contact_username','alice'", `'contact_username',${value}`)
+		expect(contact("'x'")).not.toBe(text)
+		for (const [dump, refused] of [
+			[text.replace("'2026-10-21'", "'2026-13-01'"), /active_on_date/],
+			[contact("'a@b@c'"), /instance_settings: a value past its stored bound/],
+			[contact("X'61'"), /instance_settings: a value past its stored bound/],
+		] as const) {
+			expect(dump).not.toBe(text)
+			const target = await migratedStore()
+			await copyConfig(source, target)
+			expect(String(await rejectionOf(importViaRpc(target, dump)))).toMatch(refused)
+		}
+	}, 120_000)
+
 	it('writes the documented format and leaves out bookkeeping', async () => {
 		const { text } = await dumpViaRpc(await seeded(0))
 		const lines = text.split('\n')

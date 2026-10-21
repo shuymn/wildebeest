@@ -34,15 +34,23 @@ describe('apps', () => {
 	it('registers an app and verifies its credentials with a client token', async () => {
 		const h = await apiHarness()
 		const app = await registerApp(h, { scopes: 'read write' })
-		expect(app).toMatchObject({
+		const application = {
+			id: app.client_id,
 			name: 'Test Client',
 			website: 'https://client.test',
+			scopes: ['read', 'write'],
+			redirect_uris: ['https://client.test/callback'],
+			vapid_key: '',
 			redirect_uri: 'https://client.test/callback',
+		}
+		expect(app).toEqual({
+			...application,
 			client_id: expect.any(String),
 			client_secret: expect.any(String),
-			vapid_key: '',
+			client_secret_expires_at: 0,
 		})
 
+		// A token narrower than the app: verify_credentials answers the application's scopes, not the token's.
 		const token = await h.request(
 			'/oauth/token',
 			form({ grant_type: 'client_credentials', client_id: app.client_id, client_secret: app.client_secret })
@@ -53,10 +61,46 @@ describe('apps', () => {
 
 		const verified = await h.request('/api/v1/apps/verify_credentials', bearer(access_token))
 		expect(verified.status).toBe(200)
-		expect(await verified.json()).toEqual({ name: 'Test Client', website: 'https://client.test', vapid_key: '' })
+		const body = await verified.json<Record<string, unknown>>()
+		expect(body).toEqual(application)
 		// An app token has no user.
 		const user = await h.request('/api/v1/accounts/verify_credentials', bearer(access_token))
 		expect(user.status).toBe(422)
+	})
+
+	it("verifies a user token's application, with its scopes rather than the token's", async () => {
+		const h = await withAlice()
+		const app = await registerApp(h, { scopes: 'read write follow' })
+		const { access_token } = await (
+			await exchange(h, app, await authorizationCode(h, app, { scope: 'read' }))
+		).json<{ access_token: string }>()
+		const verified = await h.request('/api/v1/apps/verify_credentials', bearer(access_token))
+		expect(verified.status).toBe(200)
+		expect(await verified.json()).toEqual({
+			id: app.client_id,
+			name: 'Test Client',
+			website: 'https://client.test',
+			scopes: ['read', 'write', 'follow'],
+			redirect_uris: ['https://client.test/callback'],
+			vapid_key: '',
+			redirect_uri: 'https://client.test/callback',
+		})
+		expect((await h.request('/api/v1/apps/verify_credentials', bearer('nope'))).status).toBe(401)
+	})
+
+	it('defaults the scopes to read and answers two redirect URIs as a list and joined', async () => {
+		const h = await apiHarness()
+		const response = await h.request(
+			'/api/v1/apps',
+			json({ client_name: 'Two', redirect_uris: ['https://client.test/a', 'app://b'] })
+		)
+		expect(response.status).toBe(200)
+		expect(await response.json()).toMatchObject({
+			website: null,
+			scopes: ['read'],
+			redirect_uris: ['https://client.test/a', 'app://b'],
+			redirect_uri: 'https://client.test/a\napp://b',
+		})
 	})
 
 	it('stores only digests of tokens and codes', async () => {

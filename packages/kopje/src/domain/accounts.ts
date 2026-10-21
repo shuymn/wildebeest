@@ -43,7 +43,7 @@ import { renderFieldValue } from './status-text'
 import { unlockChanged } from './unlock-accepts'
 import { readWindow, singleWindow, type Window, windowJson, windowPage } from './windows'
 import { type ColumnMap, selectSql } from '../db/columns'
-import { ACCOUNTS_ID_INDEX } from '../db/indexes'
+import { ACCOUNTS_ID_INDEX, LOCAL_ACCOUNTS_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
 import { normalizeDomain, parseAddress } from '../platform/domain-name'
 import { boundedHref, httpUrl } from '../platform/http-url'
@@ -543,24 +543,54 @@ export const getAccounts = readOperation<{ ids: string[]; present: Present }, Ac
 	return resolved.flatMap((id) => accounts.get(id) ?? [])
 })
 
+// The account an address names, domain null for a local one, matched case-insensitively as Mastodon's
+// Account.find_remote: by accounts_local_username or accounts_domain_username, named so the seek does not rest on the
+// Store's statistics (RES-7), as is the account's local row. stored_username is the username as stored, not
+// usernameSql's projection: a matching row's username has the bytes of `username` (SQLite's lower changes ASCII
+// letters only), so it is bounded by the caller's. Remote actors of distinct ids may share a username and domain
+// (ingestion keys accounts by actor id): one row is read, the first in the index's order (the oldest row of the key).
+function addressRow(
+	db: Db,
+	username: string,
+	domain: string | null
+): (AccountRow & { stored_username: string }) | undefined {
+	return domain === null
+		? db.first(
+				`SELECT ${selectSql(ACCOUNT_COLUMN_MAP)}, a.username AS stored_username
+				FROM accounts a INDEXED BY accounts_local_username
+				LEFT JOIN local_accounts l INDEXED BY ${LOCAL_ACCOUNTS_ID_INDEX} ON l.account_id = a.id
+				WHERE a.domain IS NULL AND lower(a.username) = lower(?) LIMIT 1`,
+				username
+			)
+		: db.first(
+				`SELECT ${selectSql(ACCOUNT_COLUMN_MAP)}, a.username AS stored_username
+				FROM accounts a INDEXED BY accounts_domain_username
+				LEFT JOIN local_accounts l INDEXED BY ${LOCAL_ACCOUNTS_ID_INDEX} ON l.account_id = a.id
+				WHERE a.domain = ? AND lower(a.username) = lower(?) LIMIT 1`,
+				domain,
+				username
+			)
+}
+
+// The presented account an address names (an unavailable one redacted, VIS-30), or null when none does.
+export function accountByAddress(db: Db, username: string, domain: string | null, present: Present): Account | null {
+	const row = addressRow(db, username, domain)
+	return row === undefined ? null : presentAccount(row, present)
+}
+
+// The address of the account an address names, as stored: `username`, or `username@domain` for a remote one.
+export function storedAddress(db: Db, username: string, domain: string | null): string | null {
+	const row = addressRow(db, username, domain)
+	return row === undefined ? null : row.domain === null ? row.stored_username : `${row.stored_username}@${row.domain}`
+}
+
 // domain null means a local account.
 export const lookupAccount = readOperation<
 	{ username: string; domain: string | null; present: Present },
 	Account | null
->((db, { username, domain, present }) => {
-	const row =
-		domain === null
-			? db.first<AccountRow>(
-					`SELECT ${selectSql(ACCOUNT_COLUMN_MAP)} FROM ${ACCOUNT_FROM} WHERE a.domain IS NULL AND lower(a.username) = lower(?)`,
-					username
-				)
-			: db.first<AccountRow>(
-					`SELECT ${selectSql(ACCOUNT_COLUMN_MAP)} FROM ${ACCOUNT_FROM} WHERE a.domain = ? AND lower(a.username) = lower(?)`,
-					normalizeDomain(domain) ?? domain.toLowerCase(),
-					username
-				)
-	return row === undefined ? null : presentAccount(row, present)
-})
+>((db, { username, domain, present }) =>
+	accountByAddress(db, username, domain === null ? null : (normalizeDomain(domain) ?? domain.toLowerCase()), present)
+)
 
 type CredentialRow = {
 	default_visibility: Visibility
@@ -642,6 +672,7 @@ export type Preferences = {
 	'posting:default:quote_policy': QuotePolicyName
 	'reading:expand:media': 'default'
 	'reading:expand:spoilers': false
+	'reading:autoplay:gifs': false
 }
 
 export const preferences = userReadOperation<object, Preferences | null>((db, _input, { accountId }) => {
@@ -658,6 +689,7 @@ export const preferences = userReadOperation<object, Preferences | null>((db, _i
 				'posting:default:quote_policy': row.default_quote_policy,
 				'reading:expand:media': 'default',
 				'reading:expand:spoilers': false,
+				'reading:autoplay:gifs': false,
 			}
 })
 

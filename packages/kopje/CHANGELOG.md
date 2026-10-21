@@ -14,6 +14,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   settings page set it, remote actors' value is read, and Account `indexable`, CredentialAccount `source.indexable` and
   `source.discoverable` present it. It changes no search result. A remote account reads false until it is fetched
   again.
+- The `contact_username` instance setting (`kopje-admin instance contact_username=…`): the address of an account Kopje
+  knows, shown as `contact_account` on `/api/v1/instance` and `contact.account` on `/api/v2/instance`.
+- `usage.users.active_month` on `/api/v2/instance` counts the available local accounts with an authenticated request
+  in the last 28 UTC days, today included; each account's day is recorded at most once a day.
 
 ### Changed
 
@@ -35,6 +39,12 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Fixed
 
+- `POST /api/v1/apps` includes `scopes`, `redirect_uris` and `client_secret_expires_at`.
+- `GET /api/v1/apps/verify_credentials` includes `id`, `scopes`, `redirect_uris` and `redirect_uri`: the
+  application's, not the token's.
+- The instance thumbnail is served (`/assets/thumbnail.png`), and `thumbnail` on `/api/v1/instance` is its URL.
+- `languages` on `/api/v1/instance` and `/api/v2/instance` is `["en"]`.
+- `GET /api/v1/preferences` includes `reading:autoplay:gifs` (false).
 - A suspension resolves every report it froze when report ids pass 2^53 (imported ids): its bound and cursor are
   kept as decimal ids, so none is skipped or left out.
 - `PATCH /api/v1/accounts/update_credentials` sets `avatar` and `header` from multipart files (under 8 MB each; JPEG,
@@ -59,8 +69,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds migration `0058_profile_credentials`, applied on the first request after the deploy; a rollback
-  to an earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
+- Store schema: adds migrations `0058_profile_credentials` and `0059_contact_and_activity`, applied on the first
+  request after the deploy; a rollback to an earlier version needs the point-in-time restore described in
+  [docs/upgrade.md](docs/upgrade.md).
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.18] - 2026-10-20

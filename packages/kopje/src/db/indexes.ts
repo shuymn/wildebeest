@@ -5,6 +5,8 @@
 
 export const ACCOUNTS_ID_INDEX = 'sqlite_autoindex_accounts_1'
 export const ACCOUNTS_URI_INDEX = 'sqlite_autoindex_accounts_2'
+export const LOCAL_ACCOUNTS_ID_INDEX = 'sqlite_autoindex_local_accounts_1'
+export const OAUTH_CLIENTS_ID_INDEX = 'sqlite_autoindex_oauth_clients_1'
 export const STATUSES_ID_INDEX = 'sqlite_autoindex_statuses_1'
 export const STATUSES_URI_INDEX = 'sqlite_autoindex_statuses_2'
 export const FEATURED_TAGS_ID_INDEX = 'sqlite_autoindex_featured_tags_1'

@@ -446,6 +446,10 @@ const NUMBER = 'a number constant (the trends round’s count clamp, TREND_OBSER
 const ALLOWED: Record<string, { count: number; reason: string }> = {
 	'src/domain/trends.ts interpolation TREND_OBSERVED_MAX': { count: 2, reason: NUMBER },
 	"src/domain/instance.ts interpolation projected.join(' ')": { count: 1, reason: SETTINGS },
+	"src/domain/instance.ts interpolation settingProjectionSql('contact_username', 'value')": {
+		count: 1,
+		reason: SETTINGS,
+	},
 	// The round's raw cut: a status's first 100 names, matched by membership only (projecting them would change which
 	// rows count against the cut); the names the round returns go through tagNameSql.
 	'src/domain/trends.ts status_tags.name': { count: 1, reason: COMPARED_SQL },
@@ -495,7 +499,11 @@ const ALLOWED: Record<string, { count: number; reason: string }> = {
 	'src/domain/status-actions.ts statuses.uri': { count: 1, reason: IDENTITY },
 	'src/domain/statuses.ts accounts.uri': { count: 6, reason: IDENTITY },
 	'src/domain/statuses.ts statuses.uri': { count: 9, reason: IDENTITY },
-	'src/domain/accounts.ts accounts.username': { count: 1, reason: LOCAL },
+	'src/domain/accounts.ts accounts.username': {
+		count: 3,
+		reason: `${LOCAL}; and the username an address names as stored (addressRow), bounded by the address it matched and
+			stored only as contact_username, never presented`,
+	},
 	'src/domain/activities.ts accounts.username': { count: 1, reason: ACTIVITYPUB },
 	'src/domain/actor-update.ts accounts.username': { count: 1, reason: ACTIVITYPUB },
 	'src/domain/actors.ts accounts.username': { count: 7, reason: LOCAL },

@@ -28,6 +28,7 @@ describe('preferences', () => {
 				'posting:default:quote_policy': 'public',
 				'reading:expand:media': 'default',
 				'reading:expand:spoilers': false,
+				'reading:autoplay:gifs': false,
 			},
 		})
 		await h.request(

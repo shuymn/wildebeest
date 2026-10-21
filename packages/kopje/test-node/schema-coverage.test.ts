@@ -146,6 +146,7 @@ const NOT_CONVERTED: Record<string, string> = {
 	'local_accounts.suspended_at': 'legacy has no suspension',
 	'local_accounts.credential_epoch': 'the credential epoch a suspension in Kopje moves; legacy has no suspension',
 	'local_accounts.accept_requests_after': 'the unlock acceptance cursor; legacy has no job running',
+	'local_accounts.active_on': 'legacy keeps no activity record: NULL, never recorded',
 	'local_accounts.default_quote_policy':
 		"legacy has no quote policy setting: a carried account gets Mastodon's default",
 	'media_attachments.focus_x': 'legacy has no focal point',
@@ -212,6 +213,7 @@ const NOT_VERIFIED: Record<string, string> = {
 	'local_accounts.suspended_at': DEFAULT,
 	'local_accounts.credential_epoch': DEFAULT,
 	'local_accounts.accept_requests_after': DEFAULT,
+	'local_accounts.active_on': DEFAULT,
 	'local_accounts.default_quote_policy': DEFAULT,
 	'media_attachments.created_at': TIME,
 	'media_attachments.focus_x': DEFAULT,

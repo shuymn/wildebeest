@@ -1,8 +1,11 @@
+import { type Account, accountByAddress, type Present, storedAddress } from './accounts'
 import { accessAdminRefusal } from './admin-authority'
 import { availableLocalSql } from './audience'
 import { logAction } from './moderation-log'
 import { readOperation, writeOperation } from './operation'
 import type { Db } from '../db/sql'
+import { normalizeDomain } from '../platform/domain-name'
+import { isRemoteUsername } from '../platform/identity-bounds'
 import type { ImportAuthority } from '../platform/store-admin'
 import {
 	CONTACT_EMAIL_BYTES,
@@ -38,6 +41,8 @@ export type InstanceSettings = {
 	title: string | null
 	description: string | null
 	contactEmail: string | null
+	// The stored address of the contact account (contact_username): `username`, or `username@domain`.
+	contactUsername: string | null
 	rules: InstanceRule[]
 	// Whether the privacy policy and the terms of service are available (documentsOf).
 	privacyPolicy: boolean
@@ -46,16 +51,31 @@ export type InstanceSettings = {
 
 export type InstanceInfo = InstanceSettings & {
 	userCount: number
+	// The available local accounts with an authenticated request on one of the last ACTIVE_DAYS UTC days, today
+	// included (local_accounts.active_on, written by auth.ts noteActivity).
+	activeMonth: number
 	statusCount: number
 	domainCount: number
+	// The account contact_username names, presented (an unavailable one redacted, VIS-30); null when none is set or
+	// it names no account.
+	contactAccount: Account | null
 }
+
+// Mastodon's active_month counts the 28 days before today (InstancePresenter#active_user_count); Kopje keeps one day
+// per account, so its 28 days are today and the 27 before it.
+export const ACTIVE_DAYS = 28
+const DAY_MS = 24 * 60 * 60 * 1000
 
 // The about page's settings: the extended description as stored (at most INSTANCE_DOCUMENT_BYTES), which the page
 // sanitizes at its sink (web/safe-html.ts).
 export type AboutSettings = InstanceSettings & { extendedDescription: string | null }
 
-const PUBLIC_SETTINGS = ['domain', 'title', 'description', 'contact_email', 'rules'] as const
-const SETTINGS_QUERY = `SELECT name, value FROM instance_settings WHERE name IN (${PUBLIC_SETTINGS.map(() => '?').join(', ')})`
+const PUBLIC_SETTINGS = ['domain', 'title', 'description', 'contact_email', 'contact_username', 'rules'] as const
+// contact_username is read through its stored bound (0059's projection), so a value that bypassed the triggers (a
+// BLOB, an over-long text) reads as no contact rather than reaching the parser.
+const SETTINGS_QUERY = `SELECT name,
+	CASE name WHEN 'contact_username' THEN ${settingProjectionSql('contact_username', 'value')} ELSE value END AS value
+	FROM instance_settings WHERE name IN (${PUBLIC_SETTINGS.map(() => '?').join(', ')})`
 
 // A document is available exactly when its row exists, the terms of service when its effective date's row exists too
 // (setInstanceSettings writes and removes them together). The writers store no blank document and none that
@@ -76,13 +96,16 @@ function documentsOf(db: Db): Pick<InstanceSettings, 'privacyPolicy' | 'termsOfS
 
 function settingsOf(db: Db): InstanceSettings {
 	const settings = new Map(
-		db.all<{ name: string; value: string }>(SETTINGS_QUERY, ...PUBLIC_SETTINGS).map((row) => [row.name, row.value])
+		db
+			.all<{ name: string; value: string | null }>(SETTINGS_QUERY, ...PUBLIC_SETTINGS)
+			.flatMap((row) => (row.value === null ? [] : [[row.name, row.value] as const]))
 	)
 	return {
 		domain: settings.get('domain') ?? null,
 		title: settings.get('title') ?? null,
 		description: settings.get('description') ?? null,
 		contactEmail: settings.get('contact_email') ?? null,
+		contactUsername: settings.get('contact_username') ?? null,
 		rules: parseRules(settings.get('rules')),
 		...documentsOf(db),
 	}
@@ -96,20 +119,48 @@ export const instanceSettings = readOperation<void, AboutSettings>((db) => ({
 		null,
 }))
 
-export const instanceInfo = readOperation<void, InstanceInfo>((db) => {
-	const counts = db.first<{ users: number; statuses: number | null; domains: number }>(
-		`SELECT
-			(SELECT COUNT(*) FROM local_accounts l WHERE ${availableLocalSql('l')}) AS users,
-			(SELECT SUM(statuses_count) FROM accounts WHERE domain IS NULL) AS statuses,
-			(SELECT COUNT(DISTINCT domain) FROM accounts WHERE domain IS NOT NULL) AS domains`
+// The users count and the active ones in the one scan of local_accounts the count needs: active_on between the
+// window's first day (?1) and today (?2), so an imported later day never counts (active_on is a CHECKed YYYY-MM-DD, so
+// text order is date order).
+export const INSTANCE_COUNTS_SQL = `SELECT u.users, u.active,
+	(SELECT SUM(statuses_count) FROM accounts WHERE domain IS NULL) AS statuses,
+	(SELECT COUNT(DISTINCT domain) FROM accounts WHERE domain IS NOT NULL) AS domains
+FROM (SELECT COUNT(*) AS users, COUNT(CASE WHEN l.active_on BETWEEN ?1 AND ?2 THEN 1 END) AS active
+	FROM local_accounts l WHERE ${availableLocalSql('l')}) u`
+
+export const instanceInfo = readOperation<{ now: number; present: Present }, InstanceInfo>((db, { now, present }) => {
+	const since = new Date(now - (ACTIVE_DAYS - 1) * DAY_MS).toISOString().slice(0, 10)
+	const counts = db.first<{ users: number; active: number; statuses: number | null; domains: number }>(
+		INSTANCE_COUNTS_SQL,
+		since,
+		new Date(now).toISOString().slice(0, 10)
 	)
+	const settings = settingsOf(db)
 	return {
-		...settingsOf(db),
+		...settings,
 		userCount: counts?.users ?? 0,
+		activeMonth: counts?.active ?? 0,
 		statusCount: counts?.statuses ?? 0,
 		domainCount: counts?.domains ?? 0,
+		contactAccount: contactAccount(db, settings, present),
 	}
 })
+
+// A contact_username within its bound (read through its projection, or shaped by adminValue) split at its `@`, the
+// instance's own domain read as local.
+function contactParts(value: string, instanceDomain: string | null): { username: string; domain: string | null } {
+	const at = value.indexOf('@')
+	const domain = at === -1 ? null : value.slice(at + 1)
+	return { username: at === -1 ? value : value.slice(0, at), domain: domain === instanceDomain ? null : domain }
+}
+
+function contactAccount(db: Db, settings: InstanceSettings, present: Present): Account | null {
+	if (settings.contactUsername === null) {
+		return null
+	}
+	const { username, domain } = contactParts(settings.contactUsername, settings.domain)
+	return accountByAddress(db, username, domain, present)
+}
 
 // GET /api/v1/instance/rules: the rules setting alone, one row, whatever the instance holds.
 export const instanceRules = readOperation<void, InstanceRule[]>((db) =>
@@ -248,6 +299,7 @@ export const INSTANCE_ADMIN_NAMES = [
 	'title',
 	'description',
 	'contact_email',
+	'contact_username',
 	'extended_description',
 	'privacy_policy',
 	'terms_of_service',
@@ -316,6 +368,23 @@ function adminValue(name: AdminName, raw: unknown): string | null | { refused: s
 				return { refused: `contact_email must be an email address of at most ${CONTACT_EMAIL_BYTES} bytes` }
 			}
 			break
+		case 'contact_username': {
+			// Mastodon's form: an optional leading @, then user or user@domain (ExistingUsernameValidator); the account is
+			// found by setInstanceSettings.
+			const parts = value.replace(/^@/, '').split('@')
+			const [username = '', domain] = parts
+			const normalized = domain === undefined ? null : normalizeDomain(domain)
+			const address = normalized === null ? username : `${username}@${normalized}`
+			if (
+				parts.length > 2 ||
+				!isRemoteUsername(username) ||
+				(domain !== undefined && normalized === null) ||
+				storedSetting(name, address) !== address
+			) {
+				return { refused: CONTACT_SHAPE }
+			}
+			return address
+		}
 		case 'extended_description':
 		case 'privacy_policy':
 		case 'terms_of_service':
@@ -348,6 +417,24 @@ function adminValue(name: AdminName, raw: unknown): string | null | { refused: s
 		throw new Error(`${name}: a value the admin write accepts is past its stored bound`)
 	}
 	return value
+}
+
+const CONTACT_SHAPE = 'contact_username must be the address of an account, username or username@domain'
+
+// The stored address of the account a shaped contact_username (adminValue's) names, the instance's own domain read
+// as local, or why it is refused. The address is the account's as stored, and must pass the setting's bound unchanged
+// (a converted username may not), so the trigger never refuses what is written.
+function contactAddress(db: Db, value: string): string | { refused: string } {
+	const instanceDomain =
+		db.first<{ value: string }>("SELECT value FROM instance_settings WHERE name = 'domain'")?.value ?? null
+	const { username, domain } = contactParts(value, instanceDomain)
+	const address = storedAddress(db, username, domain)
+	if (address === null) {
+		return { refused: 'contact_username names no account' }
+	}
+	return storedSetting('contact_username', address) === address
+		? address
+		: { refused: 'contact_username names an account whose address cannot be stored' }
 }
 
 const DATE = 'terms_of_service_effective_date'
@@ -406,6 +493,14 @@ export const setInstanceSettings = writeOperation<
 			return invalid(value.refused)
 		}
 		changes.set(name as AdminName, value)
+	}
+	const contact = changes.get('contact_username')
+	if (contact !== undefined && contact !== null) {
+		const address = contactAddress(db, contact)
+		if (typeof address === 'object') {
+			return invalid(address.refused)
+		}
+		changes.set('contact_username', address)
 	}
 	const stored = adminValues(db)
 	const final = new Map(Object.entries(stored))

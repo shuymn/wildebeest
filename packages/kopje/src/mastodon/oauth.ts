@@ -10,7 +10,7 @@ import {
 } from './context'
 import { mastodonError } from './errors'
 import { type Params, readParams } from './params'
-import { OOB_REDIRECT_URI } from '../domain/oauth'
+import { type Client, OOB_REDIRECT_URI } from '../domain/oauth'
 import { DEFAULT_SCOPES, parseScopes, SCOPES } from '../security/scopes'
 import { PKCE_VERIFIER, pkceChallenge, sha256Hex } from '../security/tokens'
 
@@ -28,13 +28,34 @@ const MAX_URI = 2000
 // The application as GET /api/v1/apps/verify_credentials answers it (REST::ApplicationSerializer), and as
 // POST /api/v1/apps answers it (REST::CredentialApplicationSerializer); test-node/mastodon-entities.test.ts compares
 // both with Mastodon's fields.
-export type Application = { name: string; website: string | null; vapid_key: string }
+// id is the client_id, Kopje's only stable key of an application (docs/mastodon-deviations.md, "Instance and apps").
+export type Application = {
+	id: string
+	name: string
+	website: string | null
+	scopes: string[]
+	redirect_uris: string[]
+	vapid_key: string
+	redirect_uri: string
+}
 
 export type CredentialApplication = Application & {
-	id: string
-	redirect_uri: string
 	client_id: string
 	client_secret: string
+	client_secret_expires_at: 0
+}
+
+// The scopes and redirect URIs as registered, in order; redirect_uri joins them with newlines, as Mastodon stores them.
+function presentApplication(client: Client, env: Env): Application {
+	return {
+		id: client.id,
+		name: client.name,
+		website: client.website,
+		scopes: client.scopes,
+		redirect_uris: client.redirectUris,
+		vapid_key: vapidKey(env),
+		redirect_uri: client.redirectUris.join('\n'),
+	}
 }
 
 export const registerApp: ApiHandler = async (c, deps) => {
@@ -84,22 +105,19 @@ export const registerApp: ApiHandler = async (c, deps) => {
 	if (registered.status === 'over_budget') {
 		return mastodonError(429, 'Too many applications are waiting for authorization. Try again later.')
 	}
-	const { client } = registered
 	return c.json({
-		id: client.id,
-		name: client.name,
-		website: client.website,
-		redirect_uri: client.redirectUris.join('\n'),
+		...presentApplication(registered.client, c.env),
 		client_id: clientId,
 		client_secret: secret,
-		vapid_key: vapidKey(c.env),
+		client_secret_expires_at: 0,
 	} satisfies CredentialApplication)
 }
 
+// Any valid token, app tokens included; the application its token was issued to, without its credentials.
 export const verifyApp: ApiHandler = async (c, deps) => {
 	const token = credential(c, deps)
-	const { client } = authorized(await storeCall(c, deps, (s, b) => s.checkCredential(b, token)))
-	return c.json({ name: client.name, website: client.website, vapid_key: vapidKey(c.env) } satisfies Application)
+	const client = authorized(await storeCall(c, deps, (s, b) => s.appOfCredential(b, token)))
+	return c.json(presentApplication(client, c.env) satisfies Application)
 }
 
 // Absolute, no fragment (RFC 6749 §3.1.2), and not a script URL. Custom schemes of native apps are allowed.

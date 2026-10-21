@@ -103,6 +103,7 @@ The public block list has no count cap; RES-3 bounds its response bytes.
 | Operation            | Mechanism                                                                  | Continuation |
 | -------------------- | -------------------------------------------------------------------------- | ------------ |
 | `publicDomainBlocks` | Budget: whole blocks in domain order, read in chunks of 500 suspend blocks | None         |
+| `instanceInfo`       | Unit: the contact account                                                  |              |
 
 ## Announcements
 

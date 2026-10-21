@@ -1,6 +1,7 @@
 import { adminAccountId } from './admin-authority'
 import type { ViewerContext } from './audience'
 import { mediaDeleteOperation, readOperation, sessionOperation, writeOperation } from './operation'
+import { LOCAL_ACCOUNTS_ID_INDEX, OAUTH_CLIENTS_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
 import type { StoreOperation } from '../platform/store-kernel'
 import { grantsAny, type RequiredScope } from '../security/scopes'
@@ -56,8 +57,9 @@ export function currentCredentialSql(t: string): string {
 export const CREDENTIAL_EPOCH_SQL =
 	'coalesce((SELECT credential_epoch FROM main.local_accounts WHERE account_id = ?), 0)'
 
-// One indexed lookup by the token's sha256. A suspended account's tokens are refused even if one survived the
-// suspension, and a token of an earlier epoch is refused as invalid (currentCredentialSql).
+// One indexed lookup by the token's sha256, then its client and account by key, the join order pinned so stale
+// statistics cannot pick a scan of either (RES-7; test/activity.test.ts). A suspended account's tokens are refused even
+// if one survived the suspension, and a token of an earlier epoch is refused as invalid (currentCredentialSql).
 export function authorize(db: Db, credential: Credential): AuthFailure | { status: 'ok'; viewer: Viewer } {
 	const row = db.first<{
 		scopes: string
@@ -72,8 +74,8 @@ export function authorize(db: Db, credential: Credential): AuthFailure | { statu
 		`SELECT t.scopes, t.account_id, t.expires_at, c.id AS client_id, c.name, c.website, l.suspended_at,
 			coalesce(t.epoch <> l.credential_epoch, 0) AS stale
 		FROM oauth_tokens t
-		JOIN oauth_clients c ON c.id = t.client_id
-		LEFT JOIN local_accounts l ON l.account_id = t.account_id
+		CROSS JOIN oauth_clients c INDEXED BY ${OAUTH_CLIENTS_ID_INDEX} ON c.id = t.client_id
+		LEFT JOIN local_accounts l INDEXED BY ${LOCAL_ACCOUNTS_ID_INDEX} ON l.account_id = t.account_id
 		WHERE t.token_hash = ? AND t.kind = 'access'`,
 		credential.tokenHash
 	)
@@ -181,6 +183,25 @@ export function tokenUserReadOperation<I, O>(
 export const checkCredential = readOperation<Credential, Authorized<Viewer>>((db, credential) => {
 	const auth = authorize(db, credential)
 	return auth.status === 'ok' ? { status: 'ok', value: auth.viewer } : auth
+})
+
+// RES-6: records the UTC day of a user's authenticated API or web request (local_accounts.active_on, migration
+// 0059_contact_and_activity), as Mastodon's UserTrackingConcern records a sign-in, for the instance's
+// usage.users.active_month (instance.ts). A session operation, admitted while the Store is readonly. The day only
+// moves forward and an equal or later stamp writes nothing, so an account's row is written at most once per UTC day
+// whichever token or isolate asks, and a delayed request of an earlier day never moves it back. An invalid, expired
+// or stale token, a suspended account and an app token write nothing. Both seeks are by key (the token, then the
+// account). No stream turn follows it (stream-hub.ts written).
+export const noteActivity = sessionOperation<{ tokenHash: string; now: number }, void>((db, { tokenHash, now }) => {
+	const auth = authorize(db, { tokenHash, scope: null, now })
+	if (auth.status !== 'ok' || auth.viewer.accountId === null) {
+		return
+	}
+	db.run(
+		'UPDATE local_accounts SET active_on = ?1 WHERE account_id = ?2 AND (active_on IS NULL OR active_on < ?1)',
+		new Date(now).toISOString().slice(0, 10),
+		auth.viewer.accountId
+	)
 })
 
 // Operations of a route whose token is optional (Mastodon's authorize_if_got_token!): no credential reads as an

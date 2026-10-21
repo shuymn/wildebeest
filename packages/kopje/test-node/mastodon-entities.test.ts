@@ -18,7 +18,9 @@ import { PARAM_EXCEPTIONS } from '../test/mastodon-params-exceptions.js'
 // Every field Mastodon's serializers emit (the fixture's entities, read from Mastodon's source by
 // scripts/mastodon-scopes.mjs) is a property of Kopje's response type for that entity, and no property of those types
 // is typed as a constant placeholder (`null`, `[]`, `never[]`), which a client reads as "always empty". A field whose
-// type is right but whose value is wrong (Instance usage.users.active_month) is out of reach: left to audits.
+// type is right but whose value is wrong is out of reach: Instance and Preferences are not entities of the fixture,
+// so their values (usage.users.active_month, languages, reading:autoplay:gifs) are guarded by their contract tests
+// (test/instance.test.ts, test/account-reads.test.ts) alone.
 // Departures are exceptions of the same shape as the parameter check's (test/mastodon-conformance.ts).
 
 type Target = { file: string; typeName: string; property?: string }
@@ -61,13 +63,6 @@ const ACCOUNT: Record<string, Exception> = {
 }
 
 const ENTITY_EXCEPTIONS: Exceptions = {
-	'REST::ApplicationSerializer': open('verify_credentials lacks them', 'id', 'redirect_uri', 'redirect_uris', 'scopes'),
-	'REST::CredentialApplicationSerializer': open(
-		'app registration lacks them',
-		'client_secret_expires_at',
-		'redirect_uris',
-		'scopes'
-	),
 	'REST::AccountSerializer': ACCOUNT,
 	'REST::CredentialAccountSerializer': ACCOUNT,
 	'REST::AccountSerializer::FieldSerializer': open('no rel=me verification', 'verified_at'),

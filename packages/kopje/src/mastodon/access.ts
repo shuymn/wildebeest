@@ -1,6 +1,7 @@
 import { createMiddleware } from 'hono/factory'
 
-import type { ApiEnv } from './context'
+import { noteActivitySoon } from './activity'
+import type { ApiDeps, ApiEnv } from './context'
 import { invalidTokenError } from './errors'
 import type { RequiredScope } from '../security/scopes'
 import { sha256Hex } from '../security/tokens'
@@ -24,7 +25,8 @@ export type RouteAccess =
 
 // The one middleware that reads the bearer token and declares the route's scope for every API route. It does not
 // validate the token: the Store does, in the transaction of the operation the request performs (domain/auth.ts).
-export function requireAccess(access: RouteAccess) {
+// After a response below 400 to a request with a token, the token's activity is recorded (mastodon/activity.ts).
+export function requireAccess(access: RouteAccess, deps: Pick<ApiDeps, 'build' | 'store' | 'now' | 'activity'>) {
 	return createMiddleware<ApiEnv>(async (c, next) => {
 		if (access === 'public') {
 			c.set('credential', null)
@@ -38,11 +40,12 @@ export function requireAccess(access: RouteAccess) {
 			}
 			return invalidTokenError()
 		}
-		c.set('credential', {
-			tokenHash: await sha256Hex(token),
-			scope: access === 'token' ? null : (access.scope ?? null),
-		})
-		return next()
+		const tokenHash = await sha256Hex(token)
+		c.set('credential', { tokenHash, scope: access === 'token' ? null : (access.scope ?? null) })
+		await next()
+		if (c.res.status < 400) {
+			noteActivitySoon(c, deps, tokenHash)
+		}
 	})
 }
 

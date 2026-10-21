@@ -22,6 +22,7 @@ import { MIGRATIONS } from '../src/db/migrations'
 import { Db } from '../src/db/sql'
 import { DISTRIBUTABLE_SQL, REACHES_FOLLOWERS_SQL, REQUIRES_MENTION_SQL } from '../src/domain/audience'
 import { CONVERSATIONS_BACKFILL } from '../src/domain/conversation-rows'
+import { instanceInfo } from '../src/domain/instance'
 import { MODERATION_LOG_KEEP } from '../src/domain/moderation-log'
 import { readOperation, sessionOperation, writeOperation } from '../src/domain/operation'
 import { storeRemoteStatus } from '../src/domain/remote-statuses'
@@ -40,6 +41,8 @@ import { ACTIVITY_ID_LIMIT, withinIdentityBound } from '../src/platform/identity
 import { StoreUnavailableError, toStoreUnavailable } from '../src/platform/store-errors'
 import {
 	ANNOUNCEMENT_TEXT_BYTES,
+	CONTACT_USERNAME_BYTES,
+	contactActivityMigrationSql,
 	EMOJI_CATEGORY_BYTES,
 	EMOJI_CATEGORY_LENGTH,
 	emojiBoundsMigrationSql,
@@ -7188,6 +7191,117 @@ describe('0058_profile_credentials', () => {
 			for (const value of [-1, 'x', 1.5]) {
 				expect(() => setCursor(value), String(value)).toThrow(/accept_requests_after_cursor/)
 			}
+		})
+	})
+})
+
+describe('0059_contact_and_activity', () => {
+	const NAME = '0059_contact_and_activity'
+	const at = NAMES.indexOf(NAME)
+
+	it("holds contactActivityMigrationSql's output after its header, with the 509-byte bound", () => {
+		expectGenerated(at, contactActivityMigrationSql())
+		expect(CONTACT_USERNAME_BYTES).toBe(509)
+		expect(MIGRATIONS[at]?.sql).toContain('length(CAST(NEW.value AS BLOB)) > 509')
+	})
+
+	it('deletes a contact_username row past its bound that a pre-0059 Store holds, and keeps one within it', async () => {
+		for (const [value, kept] of [
+			[new Uint8Array([97, 108, 105, 99, 101]).buffer, false],
+			['a'.repeat(510), false],
+			[`${'a'.repeat(256)}@remote.test`, false],
+			['a@b@c', false],
+			['alice', true],
+		] as const) {
+			const store = freshStore()
+			await runInDurableObject(store, async (_instance, state) => {
+				const sql = state.storage.sql
+				await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+				sql.exec("INSERT INTO instance_settings (name, value) VALUES ('contact_username', ?), ('title', 'Herd')", value)
+				await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()
+				expect(sql.exec('SELECT name FROM instance_settings ORDER BY name').toArray()).toEqual([
+					...(kept ? [{ name: 'contact_username' }] : []),
+					{ name: 'title' },
+				])
+				// The instance reads without throwing and names no contact (alice has no account here).
+				const info = instanceInfo.run(sql, { now: NOW, present: { origin: 'https://kopje.test' } })
+				expect(info).toMatchObject({ title: 'Herd', contactAccount: null, contactUsername: kept ? 'alice' : null })
+			})
+		}
+	})
+
+	it('keeps rows as they were, then bounds active_on and contact_username as stored', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username) VALUES ('100000000000000001', 'https://kopje.test/ap/users/a', 'a')"
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES ('100000000000000001', 'a@example.com', X'00', X'00', 'k')"
+			)
+			sql.exec("INSERT INTO instance_settings (name, value) VALUES ('title', 'Herd')")
+			await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()
+			expect(sql.exec('SELECT account_id, email, active_on FROM local_accounts').toArray()).toEqual([
+				{ account_id: '100000000000000001', email: 'a@example.com', active_on: null },
+			])
+			expect(sql.exec('SELECT name, value FROM instance_settings').toArray()).toEqual([
+				{ name: 'title', value: 'Herd' },
+			])
+			const setDay = (value: SqlStorageValue) => sql.exec('UPDATE local_accounts SET active_on = ?', value)
+			for (const value of [null, '2026-10-21', '0001-01-01', '9999-12-31']) {
+				setDay(value)
+			}
+			for (const value of [
+				20261021,
+				new Uint8Array([50]).buffer,
+				'2026-13-01',
+				'2026-02-30',
+				'2026-10-211',
+				'2026-10-2',
+				'2026-10-2\u0000',
+				'2026-1-021',
+			]) {
+				expect(() => setDay(value), typeof value === 'string' ? JSON.stringify(value) : typeof value).toThrow(
+					/active_on_date/
+				)
+			}
+			const insert = (value: SqlStorageValue, name = 'contact_username') =>
+				sql.exec('INSERT OR REPLACE INTO instance_settings (name, value) VALUES (?, ?)', name, value)
+			const update = (value: SqlStorageValue) =>
+				sql.exec("UPDATE instance_settings SET value = ? WHERE name = 'contact_username'", value)
+			insert('alice')
+			update('bob@remote.test')
+			for (const value of [
+				'',
+				'a@b@c',
+				'@a',
+				'a@',
+				'a b',
+				'a\u0000',
+				`${'a'.repeat(256)}@remote.test`,
+				`a@${'d'.repeat(508)}`,
+				new Uint8Array([97]).buffer,
+			]) {
+				const shown = typeof value === 'string' ? JSON.stringify(value.slice(0, 20)) : typeof value
+				expect(() => insert(value), shown).toThrow(/instance_settings: a value past its stored bound/)
+				expect(() => update(value), shown).toThrow(/instance_settings: a value past its stored bound/)
+			}
+			// TEXT affinity stores an integer as its text, which is a username.
+			insert(7)
+			expect(sql.exec("SELECT typeof(value) AS t FROM instance_settings WHERE name = 'contact_username'").one().t).toBe(
+				'text'
+			)
+			update('bob@remote.test')
+			// Other names are left alone; renaming one of their rows to contact_username is judged too.
+			insert('a b', 'some_other_name')
+			sql.exec("DELETE FROM instance_settings WHERE name = 'contact_username'")
+			expect(() =>
+				sql.exec("UPDATE instance_settings SET name = 'contact_username' WHERE name = 'some_other_name'")
+			).toThrow(/a value past its stored bound/)
+			sql.exec("UPDATE instance_settings SET name = 'contact_username' WHERE name = 'title'")
+			expect(sql.exec("SELECT value FROM instance_settings WHERE name = 'contact_username'").one().value).toBe('Herd')
 		})
 	})
 })
