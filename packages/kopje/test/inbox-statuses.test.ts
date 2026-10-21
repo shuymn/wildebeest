@@ -30,7 +30,7 @@ import {
 	undo,
 	update,
 } from './inbox-status-helpers'
-import { type PlannedStatement, plannedSql, remoteAccounts, rowsRead, scansOf } from './read-helpers'
+import { plannedRun, remoteAccounts, rowsRead, scansOf, staleStatistics } from './read-helpers'
 import { block, domainBlock, mute } from './status-helpers'
 import { type InboundActivity, PURGE_BATCH, receiveActivity } from '../src/domain/inbox'
 import { MAX_STATUS_MEDIA, MAX_STATUS_TAGS } from '../src/domain/remote-statuses'
@@ -1189,23 +1189,15 @@ describe('inbound addressing with stale statistics (RES-7)', () => {
 		const bob = await mastodonActor(t.web, 'bob')
 		await followed(t, bob)
 		const originals = [await localStatus(t, { status: 'one' }), await localStatus(t, { status: 'two' })]
-		await sql(t.store, 'ANALYZE')
 		const addressed = [PUBLIC, `${bob.uri}/followers`, ALICE_URI, DAVE_URI]
 		const receive = (activity: InboundActivity) =>
-			runInDurableObject(t.store, (_instance, state) => {
-				const plans: PlannedStatement[] = []
-				const result = receiveActivity.run(
-					plannedSql(state.storage.sql, /uri IN \(SELECT value FROM json_each/, plans),
-					{
-						now: NOW,
-						storeNow: NOW,
-						origin: LOCAL,
-						actorUri: bob.uri,
-						actor: null,
-						activity,
-					}
-				)
-				return { result, plans }
+			plannedRun({ store: t.store }, /uri IN \(SELECT value FROM json_each/, receiveActivity, {
+				now: NOW,
+				storeNow: NOW,
+				origin: LOCAL,
+				actorUri: bob.uri,
+				actor: null,
+				activity,
 			})
 		const run = async (original: { uri: string }) => {
 			const note = mastodonNote(bob, {
@@ -1227,9 +1219,15 @@ describe('inbound addressing with stale statistics (RES-7)', () => {
 				}),
 			]
 		}
-		const before = await run(originals[0]!)
-		await remoteAccounts({ store: t.store }, 100, 200)
-		const after = await run(originals[1]!)
+		const { before, after } = await staleStatistics(
+			{ store: t.store },
+			{
+				capture: (phase) => (phase === 'before' ? run(originals[0]!) : run(originals[1]!)),
+				grow: async () => {
+					await remoteAccounts({ store: t.store }, 100, 200)
+				},
+			}
+		)
 		for (const [i, { result, plans }] of after.entries()) {
 			expect(result).toMatchObject({ applied: true })
 			expect(plans).toHaveLength(1)

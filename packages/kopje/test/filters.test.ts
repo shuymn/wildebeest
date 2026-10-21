@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 import { type ApiHarness, bearer, json, sql } from './api-helpers'
 import { NOW } from './app-helpers'
-import { plannedRun } from './read-helpers'
+import { plannedRun, staleStatistics } from './read-helpers'
 import {
 	act,
 	community,
@@ -1093,37 +1093,39 @@ describe('filter rules with stale statistics (RES-7)', () => {
 			})
 			expect((await act(h, alice, `/api/v2/filters/${filter.id}/statuses`, { status_id: status.id })).status).toBe(200)
 		}
-		await sql(h.store, 'ANALYZE')
 		const tokenHash = await sha256Hex(alice.token)
 		const list = () =>
 			plannedRun(h, /FROM json_each\(\?1\) j/, listFilters, {
 				credential: { tokenHash, scope: 'read:filters', now: NOW },
 			})
-		const before = await list()
-		// Bob's filters at their cap, each with keywords and a status of its own.
-		await sql(
-			h.store,
-			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?2 - 1)
-			INSERT INTO filters (id, account_id, title, context) SELECT CAST(600000000000000000 + i AS TEXT), ?1, 'f', '["home"]' FROM n`,
-			bob.id,
-			MAX_FILTERS
-		)
-		await sql(
-			h.store,
-			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?2 - 1)
-			INSERT INTO filter_keywords (id, filter_id, keyword)
-			SELECT CAST(610000000000000000 + f.rowid * 100 + i AS TEXT), f.id, 'k' FROM filters f CROSS JOIN n WHERE f.account_id = ?1`,
-			bob.id,
-			MAX_FILTER_KEYWORDS
-		)
-		await sql(
-			h.store,
-			`INSERT INTO filter_statuses (id, filter_id, status_id)
-			SELECT CAST(620000000000000000 + f.rowid AS TEXT), f.id, ?2 FROM filters f WHERE f.account_id = ?1`,
-			bob.id,
-			status.id
-		)
-		const after = await list()
+		const { before, after } = await staleStatistics(h, {
+			capture: () => list(),
+			grow: async () => {
+				// Bob's filters at their cap, each with keywords and a status of its own.
+				await sql(
+					h.store,
+					`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?2 - 1)
+					INSERT INTO filters (id, account_id, title, context) SELECT CAST(600000000000000000 + i AS TEXT), ?1, 'f', '["home"]' FROM n`,
+					bob.id,
+					MAX_FILTERS
+				)
+				await sql(
+					h.store,
+					`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?2 - 1)
+					INSERT INTO filter_keywords (id, filter_id, keyword)
+					SELECT CAST(610000000000000000 + f.rowid * 100 + i AS TEXT), f.id, 'k' FROM filters f CROSS JOIN n WHERE f.account_id = ?1`,
+					bob.id,
+					MAX_FILTER_KEYWORDS
+				)
+				await sql(
+					h.store,
+					`INSERT INTO filter_statuses (id, filter_id, status_id)
+					SELECT CAST(620000000000000000 + f.rowid AS TEXT), f.id, ?2 FROM filters f WHERE f.account_id = ?1`,
+					bob.id,
+					status.id
+				)
+			},
+		})
 		expect(after.result).toEqual(before.result)
 		expect(after.plans.map((p) => p.plan)).toEqual([
 			[

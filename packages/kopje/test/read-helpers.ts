@@ -218,3 +218,22 @@ export async function plannedRun<I, O>(
 		return { result, plans }
 	})
 }
+
+// A RES-7 witness's statistics older than the Store's growth: ANALYZE the Store as the test built it (small and
+// nonempty), run `settle` (what must follow the statistics but precede the first capture), `capture` the 'before' state,
+// `grow`, and `capture` the 'after' one.
+export async function staleStatistics<T>(
+	h: Pick<ApiHarness, 'store'>,
+	steps: {
+		settle?: () => Promise<unknown>
+		capture: (phase: 'before' | 'after') => Promise<T>
+		grow: () => Promise<unknown>
+	}
+): Promise<{ before: T; after: T }> {
+	await sql(h.store, 'ANALYZE')
+	await steps.settle?.()
+	const before = await steps.capture('before')
+	await steps.grow()
+	const after = await steps.capture('after')
+	return { before, after }
+}

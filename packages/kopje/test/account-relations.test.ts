@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { type ApiHarness, bearer, form, json, registerApp, seedAccount, sql } from './api-helpers'
 import { NOW } from './app-helpers'
-import { appToken, plannedRun, remoteAccounts, scansOf, scopedToken } from './read-helpers'
+import { appToken, plannedRun, remoteAccounts, scansOf, scopedToken, staleStatistics } from './read-helpers'
 import {
 	act,
 	community,
@@ -447,7 +447,6 @@ describe('account batches with stale statistics (RES-7)', () => {
 		const carol = await remoteAccount(h.store, 'carol')
 		await follow(h, alice, bob.id)
 		await act(h, alice, `/api/v1/accounts/${carol}/note`, { comment: 'known' })
-		await sql(h.store, 'ANALYZE')
 		const tokenHash = await sha256Hex(alice.token)
 		const requested = [bob.id, carol, alice.id, '999999999999999999']
 		const run = async () => ({
@@ -460,9 +459,12 @@ describe('account batches with stale statistics (RES-7)', () => {
 				present: { origin: 'https://kopje.test' },
 			}),
 		})
-		const before = await run()
-		await remoteAccounts(h, 100, 200)
-		const after = await run()
+		const { before, after } = await staleStatistics(h, {
+			capture: () => run(),
+			grow: async () => {
+				await remoteAccounts(h, 100, 200)
+			},
+		})
 		expect(after.relationships.result).toEqual(before.relationships.result)
 		expect(after.accounts.result).toEqual(before.accounts.result)
 		expect((after.accounts.result as unknown[]).length).toBe(3)

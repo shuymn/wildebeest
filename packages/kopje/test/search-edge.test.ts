@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 import { bearer, sql } from './api-helpers'
 import { NOW } from './app-helpers'
-import { type PlannedStatement, plannedSql, scansOf, watchedCursor } from './read-helpers'
+import { type PlannedStatement, plannedSql, scansOf, staleStatistics, watchedCursor } from './read-helpers'
 import { act, community, post, seedStatus } from './status-helpers'
 import { ACCOUNT_PREFIX_LIMIT, ACCOUNT_RECENT_LIMIT } from '../src/domain/accounts'
 import {
@@ -498,12 +498,14 @@ describe('ranking queries with stale statistics (RES-7)', () => {
 		await post(h, alice, { status: 'needle mine' })
 		const boosted = await post(h, bob, { status: 'needle boosted' })
 		await act(h, alice, `/api/v1/statuses/${boosted.id}/reblog`)
-		await sql(h.store, 'ANALYZE')
 		const run = () => planned(h, /^WITH candidates/, { query: 'needle', types: ['statuses'], following: false })
-		await fillerStatuses(h, bob.id, 2000, 300000000000000000n)
-		const before = await run()
-		await fillerStatuses(h, bob.id, 20_000, 400000000000000000n)
-		const after = await run()
+		const { before, after } = await staleStatistics(h, {
+			settle: () => fillerStatuses(h, bob.id, 2000, 300000000000000000n),
+			capture: () => run(),
+			grow: async () => {
+				await fillerStatuses(h, bob.id, 20_000, 400000000000000000n)
+			},
+		})
 		expect(after.value.statuses.map((s) => s.id)).toEqual(before.value.statuses.map((s) => s.id))
 		expect(after.value.statuses).toHaveLength(2)
 		expect(after.plans).toHaveLength(1)
@@ -515,7 +517,6 @@ describe('ranking queries with stale statistics (RES-7)', () => {
 
 	it('seeks the candidate accounts by id and the username prefix by its index, past the newest window', async () => {
 		const { h } = await fixture()
-		await sql(h.store, 'ANALYZE')
 		// Accounts u<from> to u<from + count - 1>, each on a host of its own.
 		const grow = (from: number, count: number) =>
 			sql(
@@ -532,10 +533,12 @@ describe('ranking queries with stale statistics (RES-7)', () => {
 		// Past the newest-accounts window (ACCOUNT_RECENT_LIMIT) and, for u1 (with u10 to u19 and so on), the prefix
 		// window (ACCOUNT_PREFIX_LIMIT), before the Store grows further; nobody's prefix matches no account.
 		const first = ACCOUNT_RECENT_LIMIT + ACCOUNT_PREFIX_LIMIT * 2
-		await grow(0, first)
-		const before = [await run('u1'), await run('nobody')]
-		await grow(first, 40_000)
-		const after = [await run('u1'), await run('nobody')]
+		const both = async () => [await run('u1'), await run('nobody')]
+		const { before, after } = await staleStatistics(h, {
+			settle: () => grow(0, first),
+			capture: both,
+			grow: () => grow(first, 40_000),
+		})
 		expect(after.map((a) => a.value.accounts.length)).toEqual([20, 0])
 		for (const [i, { plans }] of after.entries()) {
 			expect(plans).toHaveLength(1)

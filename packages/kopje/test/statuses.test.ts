@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { type ApiHarness, bearer, form, json, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { BUILD } from './helpers'
-import { type PlannedStatement, plannedRun, plannedSql, remoteAccounts, scansOf } from './read-helpers'
+import { plannedRun, type PlannedStatement, plannedSql, remoteAccounts, scansOf, staleStatistics } from './read-helpers'
 import {
 	act,
 	block,
@@ -1406,7 +1406,6 @@ describe('posting and batch reads with stale statistics (RES-7)', () => {
 				String(700000000000000000n + BigInt((next += n) - n))
 			)
 		await uploads(8)
-		await sql(h.store, 'ANALYZE')
 		const media = (from: number) => [0, 1].map((i) => String(700000000000000000n + BigInt(from + i)))
 		const pattern =
 			/^UPDATE media_attachments (INDEXED BY \w+\s+)?SET (status_id|scheduled_status_id)|json_extract\(j.value, '\$.key'\)/
@@ -1423,11 +1422,14 @@ describe('posting and batch reads with stale statistics (RES-7)', () => {
 				pattern
 			),
 		})
-		const before = await run(0)
-		// Other accounts, and many uploads of the author's not in the post.
-		await remoteAccounts(h, 100, 200)
-		await uploads(20_000)
-		const after = await run(4)
+		const { before, after } = await staleStatistics(h, {
+			capture: (phase) => (phase === 'before' ? run(0) : run(4)),
+			grow: async () => {
+				// Other accounts, and many uploads of the author's not in the post.
+				await remoteAccounts(h, 100, 200)
+				await uploads(20_000)
+			},
+		})
 		expect(after.now.result).toMatchObject({ status: 'ok', value: { status: 'ok' } })
 		const posted = (after.now.result as { value: { value: Status } }).value.value
 		expect(posted.mentions.map((m) => m.id).toSorted()).toEqual([h.users.bob.id, carol].toSorted())
@@ -1461,7 +1463,6 @@ describe('posting and batch reads with stale statistics (RES-7)', () => {
 		const { alice, bob } = h.users
 		const mine = await post(h, alice, { status: 'mine' })
 		const theirs = await post(h, bob, { status: 'theirs', visibility: 'private' })
-		await sql(h.store, 'ANALYZE')
 		const tokenHash = await sha256Hex(alice.token)
 		const run = () =>
 			plannedRun(h, /^\s*SELECT s\.id AS id FROM/, getStatuses, {
@@ -1469,16 +1470,19 @@ describe('posting and batch reads with stale statistics (RES-7)', () => {
 				ids: [theirs.id, mine.id, '999999999999999999'],
 				present: { origin: 'https://kopje.test' },
 			} as never)
-		const before = await run()
-		await sql(
-			h.store,
-			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 20000 - 1)
-			INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
-			SELECT CAST(300000000000000000 + i AS TEXT), 'https://kopje.test/ap/o/f' || i, ?1, 'public', '', ?2 FROM n`,
-			bob.id,
-			new Date(NOW).toISOString()
-		)
-		const after = await run()
+		const { before, after } = await staleStatistics(h, {
+			capture: () => run(),
+			grow: async () => {
+				await sql(
+					h.store,
+					`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 20000 - 1)
+					INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+					SELECT CAST(300000000000000000 + i AS TEXT), 'https://kopje.test/ap/o/f' || i, ?1, 'public', '', ?2 FROM n`,
+					bob.id,
+					new Date(NOW).toISOString()
+				)
+			},
+		})
 		expect(after.result).toEqual(before.result)
 		expect((after.result as { value: Status[] }).value.map((s) => s.id)).toEqual([mine.id])
 		expect(after.plans).toHaveLength(1)

@@ -8,7 +8,14 @@ import { NOW } from './app-helpers'
 import { ACCOUNT_EMOJIS_FULL, STATUS_EMOJIS_FULL } from './emoji-fixtures'
 import { freshStore } from './helpers'
 import { runs } from './policy-world'
-import { type PlannedStatement, plannedSql, remoteAccounts, scansOf, watchedCursor } from './read-helpers'
+import {
+	plannedSql,
+	type PlannedStatement,
+	remoteAccounts,
+	scansOf,
+	staleStatistics,
+	watchedCursor,
+} from './read-helpers'
 import { community } from './status-helpers'
 import {
 	boundsOf,
@@ -742,6 +749,7 @@ describe('stale statistics (RES-7)', () => {
 					'fs',
 					'ms',
 					// The visibility rule's account lookups (audience.ts).
+					'pa',
 					'pc',
 					'pda',
 					'pha',
@@ -749,6 +757,20 @@ describe('stale statistics (RES-7)', () => {
 					...(query.includes('media_attachments x') ? ['x'] : []),
 					...(query.includes('statuses t ') ? ['t'] : []),
 				]
+
+	// The visibility rule's account lookups whose aliases are also CTE names in the same statements (ps, pv), or not
+	// (pa), each by its named index: one search at least wherever the statement reads it.
+	function expectVisibilityLookups(query: string, plan: readonly string[]): void {
+		for (const [named, search] of [
+			['main.accounts pa ', 'SEARCH pa USING INDEX accounts_deleted (id=?)'],
+			['main.accounts ps ', 'SEARCH ps USING INDEX accounts_suspended (id=?)'],
+			['main.accounts pv ', 'SEARCH pv USING INDEX sqlite_autoindex_accounts_1 (id=?)'],
+		] as const) {
+			if (query.includes(named)) {
+				expect(plan, `${query}\n${plan.join('\n')}`).toContain(search)
+			}
+		}
+	}
 
 	// Every statement a presentation runs (filters, R, the graph, the hydrate queries), with its plan and rows read.
 	function plannedPresentation(state: DurableObjectState, viewer: string, ids: readonly string[]) {
@@ -872,7 +894,7 @@ describe('stale statistics (RES-7)', () => {
 			f.filter,
 			viewer
 		)
-		// A boost of a quote: the boost, its original and the quoted status, all by the one author.
+		// A boost of a quote: the boost, its original and the quoted status, all by the one author, and one poll.
 		const base: Item = {
 			kind: 'boostOfQuote',
 			text: 10,
@@ -884,22 +906,28 @@ describe('stale statistics (RES-7)', () => {
 			viewer: true,
 		}
 		const ids = await runInDurableObject(h.store, (_instance, state) => [build(state.storage.sql, f, base)])
-		await sql(h.store, 'ANALYZE')
-		const before = await runInDurableObject(h.store, (_instance, state) => plannedPresentation(state, viewer, ids))
-		await remoteAccounts(h, 100, 200)
-		// Other accounts' statuses with polls.
-		await sql(
-			h.store,
-			`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
-			SELECT CAST(CAST(id AS INTEGER) + 100000000000000000 AS TEXT), uri || '/s', id, 'public', '', ?1 FROM accounts
-			WHERE domain LIKE 'd%.example'`,
-			VIEWER_NOW
-		)
-		await sql(
-			h.store,
-			`INSERT INTO polls (status_id, options, tallies) SELECT id, '["a","b"]', '[0,0]' FROM statuses WHERE uri LIKE '%/s'`
-		)
-		const after = await runInDurableObject(h.store, (_instance, state) => plannedPresentation(state, viewer, ids))
+		// The original's poll alone (its votes with it): the quoted status's goes.
+		await sql(h.store, 'DELETE FROM polls WHERE status_id <> (SELECT reblog_of_id FROM statuses WHERE id = ?)', ids[0]!)
+		expect(await sql(h.store, 'SELECT count(*) AS n FROM polls')).toEqual([{ n: 1 }])
+		expect(await sql(h.store, 'SELECT count(*) AS n FROM accounts WHERE id <> ?', viewer)).toEqual([{ n: 1 }])
+		const { before, after } = await staleStatistics(h, {
+			capture: () => runInDurableObject(h.store, (_instance, state) => plannedPresentation(state, viewer, ids)),
+			grow: async () => {
+				await remoteAccounts(h, 100, 200)
+				// Other accounts' statuses with polls.
+				await sql(
+					h.store,
+					`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+					SELECT CAST(CAST(id AS INTEGER) + 100000000000000000 AS TEXT), uri || '/s', id, 'public', '', ?1 FROM accounts
+					WHERE domain LIKE 'd%.example'`,
+					VIEWER_NOW
+				)
+				await sql(
+					h.store,
+					`INSERT INTO polls (status_id, options, tallies) SELECT id, '["a","b"]', '[0,0]' FROM statuses WHERE uri LIKE '%/s'`
+				)
+			},
+		})
 		expect(after.items).toEqual(before.items)
 		const bound = after.plans.find((p) => p.query === statusRowBoundSql())!.plan
 		expect(bound).toContain('SEARCH a USING INDEX sqlite_autoindex_accounts_1 (id=?)')
@@ -915,6 +943,7 @@ describe('stale statistics (RES-7)', () => {
 		}
 		for (const [i, { query, plan, rows }] of after.plans.entries()) {
 			expect(scansOf(plan, presentationAliases(query)), `${query}\n${plan.join('\n')}`).toEqual([])
+			expectVisibilityLookups(query, plan)
 			expect(rows - before.plans[i]!.rows, `${query}\n${plan.join('\n')}`).toBeLessThanOrEqual(1)
 		}
 	}, 60_000)
@@ -929,60 +958,63 @@ describe('stale statistics (RES-7)', () => {
 		)
 		const other = await seedAccount(h.store, { username: 'bob', email: 'bob@example.com' })
 		// Statistics of a small Store, not taken again after it grows.
-		await sql(h.store, 'ANALYZE')
-		const before = await runInDurableObject(h.store, (_instance, state) => plannedPresentation(state, f.viewer, ids))
-		await runInDurableObject(h.store, (_instance, state) => {
-			const real = state.storage.sql
-			// Unrelated statuses of every kind with their accounts, attachments, mentions, hashtags and polls.
-			for (let i = 0; i < 400; i++) {
-				build(real, f, { ...base, viewer: false, kind: kinds[i % 4]! })
-			}
-			// Other voters of the presented polls, and earlier generations of the viewer's own votes.
-			real.exec(
-				`INSERT INTO poll_votes (poll_id, account_id, choice, generation, created_at)
-				SELECT p.status_id, a.id, 0, 0, ?1 FROM polls p CROSS JOIN accounts a
-				WHERE p.status_id IN (SELECT value FROM json_each(?2)) AND a.domain IS NOT NULL AND a.id <> ?3`,
-				VIEWER_NOW,
-				JSON.stringify(ids),
-				f.viewer
-			)
-			real.exec(
-				`UPDATE polls SET generation = 1 WHERE status_id IN (SELECT poll_id FROM poll_votes WHERE account_id = ?1)`,
-				f.viewer
-			)
-			real.exec(
-				`INSERT INTO poll_votes (poll_id, account_id, choice, generation, created_at)
-				SELECT poll_id, account_id, choice, 1, created_at FROM poll_votes WHERE account_id = ?1`,
-				f.viewer
-			)
-			// Another user's filters, with keywords and statuses.
-			for (let i = 0; i < 200; i++) {
-				const filter = nextId()
-				real.exec(
-					"INSERT INTO filters (id, account_id, title, context, action) VALUES (?, ?, 'f', '[\"public\"]', 'warn')",
-					filter,
-					other
-				)
-				for (let k = 0; k < 5; k++) {
+		const { before, after } = await staleStatistics(h, {
+			capture: () => runInDurableObject(h.store, (_instance, state) => plannedPresentation(state, f.viewer, ids)),
+			grow: async () => {
+				await runInDurableObject(h.store, (_instance, state) => {
+					const real = state.storage.sql
+					// Unrelated statuses of every kind with their accounts, attachments, mentions, hashtags and polls.
+					for (let i = 0; i < 400; i++) {
+						build(real, f, { ...base, viewer: false, kind: kinds[i % 4]! })
+					}
+					// Other voters of the presented polls, and earlier generations of the viewer's own votes.
 					real.exec(
-						"INSERT INTO filter_keywords (id, filter_id, keyword, whole_word) VALUES (?, ?, 'other', 0)",
-						nextId(),
-						filter
+						`INSERT INTO poll_votes (poll_id, account_id, choice, generation, created_at)
+						SELECT p.status_id, a.id, 0, 0, ?1 FROM polls p CROSS JOIN accounts a
+						WHERE p.status_id IN (SELECT value FROM json_each(?2)) AND a.domain IS NOT NULL AND a.id <> ?3`,
+						VIEWER_NOW,
+						JSON.stringify(ids),
+						f.viewer
 					)
-				}
-				real.exec(
-					`INSERT INTO filter_statuses (id, filter_id, status_id)
-					SELECT ?1, ?2, id FROM statuses ORDER BY id DESC LIMIT 1`,
-					nextId(),
-					filter
-				)
-			}
+					real.exec(
+						`UPDATE polls SET generation = 1 WHERE status_id IN (SELECT poll_id FROM poll_votes WHERE account_id = ?1)`,
+						f.viewer
+					)
+					real.exec(
+						`INSERT INTO poll_votes (poll_id, account_id, choice, generation, created_at)
+						SELECT poll_id, account_id, choice, 1, created_at FROM poll_votes WHERE account_id = ?1`,
+						f.viewer
+					)
+					// Another user's filters, with keywords and statuses.
+					for (let i = 0; i < 200; i++) {
+						const filter = nextId()
+						real.exec(
+							"INSERT INTO filters (id, account_id, title, context, action) VALUES (?, ?, 'f', '[\"public\"]', 'warn')",
+							filter,
+							other
+						)
+						for (let k = 0; k < 5; k++) {
+							real.exec(
+								"INSERT INTO filter_keywords (id, filter_id, keyword, whole_word) VALUES (?, ?, 'other', 0)",
+								nextId(),
+								filter
+							)
+						}
+						real.exec(
+							`INSERT INTO filter_statuses (id, filter_id, status_id)
+							SELECT ?1, ?2, id FROM statuses ORDER BY id DESC LIMIT 1`,
+							nextId(),
+							filter
+						)
+					}
+				})
+			},
 		})
-		const after = await runInDurableObject(h.store, (_instance, state) => plannedPresentation(state, f.viewer, ids))
 		expect(after.items).toEqual(before.items)
 		expect(after.plans.map((p) => p.query)).toEqual(before.plans.map((p) => p.query))
 		for (const [i, { query, plan, rows }] of after.plans.entries()) {
 			expect(scansOf(plan, presentationAliases(query)), `${query}\n${plan.join('\n')}`).toEqual([])
+			expectVisibilityLookups(query, plan)
 			// Rows read stay flat as the Store grows: at most the entry past a range, where one now follows it.
 			expect(rows - before.plans[i]!.rows, `${query}\n${plan.join('\n')}`).toBeLessThanOrEqual(ids.length)
 		}
