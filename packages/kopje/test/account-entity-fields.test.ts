@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { seedAccount, setSetting, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { community, getJson } from './status-helpers'
+import { recordingSql } from './status-row-fixtures'
 import { selectSql } from '../src/db/columns'
 import { Db, RowMeter } from '../src/db/sql'
 import { type Account, credentialAccount, presentAccountById } from '../src/domain/accounts'
@@ -117,18 +118,12 @@ describe('the Owner role within one operation', () => {
 		const { h } = await fixture()
 		const { alice } = h.users
 		const result = await runInDurableObject(h.store, (_instance, state) => {
-			const queries: string[] = []
-			const recording = {
-				exec: (query: string, ...params: SqlStorageValue[]) => {
-					queries.push(query)
-					return state.storage.sql.exec(query, ...params)
-				},
-			} as unknown as SqlStorage
+			const { sql: recording, reads } = recordingSql(state.storage.sql)
 			const account = credentialAccount(new Db(recording), alice.id, { origin: ORIGIN })!
 			return {
 				role: account.role.name,
 				roles: account.roles,
-				scans: queries.filter((query) => query.includes(selectSql(LOCAL_EMAIL_COLUMNS))).length,
+				scans: reads.filter((query) => query.includes(selectSql(LOCAL_EMAIL_COLUMNS))).length,
 			}
 		})
 		expect(result).toEqual({ role: 'Owner', roles: OWNER, scans: 1 })

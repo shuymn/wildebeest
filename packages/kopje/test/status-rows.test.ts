@@ -134,17 +134,7 @@ describe('R bounds the rows of a status (RES-3)', () => {
 			fc.asyncProperty(fc.array(itemArb, { minLength: 1, maxLength: 12 }), async (items) => {
 				const result = await runInDurableObject(h.store, (_instance, state) => {
 					// Two small statuses first, so each plan reads a chunk of several.
-					const tiny: Item = {
-						kind: 'status',
-						text: 10,
-						wide: false,
-						mentions: 0,
-						tags: 0,
-						media: 0,
-						poll: 0,
-						viewer: false,
-					}
-					const ids = [tiny, tiny, ...items].map((item) => build(state.storage.sql, f, item))
+					const ids = [TINY, TINY, ...items].map((item) => build(state.storage.sql, f, item))
 					const bounds = boundsOf(state, f.viewer, ids, 1)
 					// Each status alone, in a chunk of one.
 					const alone = observedPresentation(state, f.viewer, ids, 1)
@@ -258,17 +248,13 @@ describe("the OAuth admin's lookup (RES-3)", () => {
 			const bounds = boundsOf(state, f.viewer, ids, 1)
 			const planned = observedPresentation(state, f.viewer, ids, small)
 			const whole = observedPresentation(state, f.viewer, ids, ids.length)
-			const lookup = (reads: readonly Read[]) =>
-				reads.flatMap((read, i) =>
-					read.query.includes(selectSql(ADMIN_EMAIL_COLUMNS)) || read.query.includes(selectSql(LOCAL_EMAIL_COLUMNS))
-						? [i]
-						: []
-				)
+			const lookup = (read: Read) =>
+				read.query.includes(selectSql(ADMIN_EMAIL_COLUMNS)) || read.query.includes(selectSql(LOCAL_EMAIL_COLUMNS))
 			return {
 				same: JSON.stringify(planned.items) === JSON.stringify(whole.items),
-				lookups: lookup(planned.reads).length,
+				lookups: planned.reads.filter(lookup).length,
 				// The segment each lookup read falls in.
-				at: planned.segments.flatMap((segment, i) => (lookup(segment.reads).length > 0 ? [i] : [])),
+				at: planned.segments.flatMap((segment, i) => (segment.reads.some(lookup) ? [i] : [])),
 				chunks: planned.segments.map((segment) => ({
 					size: segment.ids.length,
 					heap: heap(rowsOf(segment.reads)),
@@ -1078,10 +1064,9 @@ describe('stale statistics (RES-7)', () => {
 	// local_accounts, each account sought by key, once accounts outgrow the statistics.
 	it("seeks the OAuth admin's accounts by key after the Store grows past its statistics", async () => {
 		const { h, f } = await fixture({ admin: true })
-		const item: Item = { kind: 'status', text: 10, wide: false, mentions: 0, tags: 0, media: 0, poll: 0, viewer: false }
 		const ids = await runInDurableObject(h.store, (_instance, state) => [
-			build(state.storage.sql, f, { ...item, local: true }),
-			build(state.storage.sql, f, item),
+			build(state.storage.sql, f, { ...TINY, local: true }),
+			build(state.storage.sql, f, TINY),
 		])
 		const { before, after } = await staleStatistics(h, {
 			capture: () => runInDurableObject(h.store, (_instance, state) => plannedPresentation(state, f.viewer, ids)),

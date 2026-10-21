@@ -46,9 +46,9 @@ export type Fixture = { viewer: string; token: string; mentioned: string[]; filt
 // The local accounts of an admin fixture: an operator-sized deployment (about 10 accounts, admin-authority.ts).
 const ADMIN_FIXTURE_LOCALS = 10
 
-// alice, MAX_STATUS_MENTION_ROWS remote accounts to mention (on hosts of 60 characters) and one filter of hers that names the statuses
-// built (so each carries a filter result) with a keyword. `admin`: alice is the OAuth admin (admin_email) among
-// ADMIN_FIXTURE_LOCALS local accounts, which items marked local are written by.
+// alice, MAX_STATUS_MENTION_ROWS remote accounts to mention (on hosts of 60 characters) and one filter of hers that
+// names the statuses built (so each carries a filter result) with a keyword. `admin`: alice is the OAuth admin
+// (admin_email) among ADMIN_FIXTURE_LOCALS local accounts, which items marked local are written by.
 export async function fixture({ admin = false }: { admin?: boolean } = {}): Promise<{ h: ApiHarness; f: Fixture }> {
 	const h = await community(['alice'])
 	const viewer = h.users.alice.id
