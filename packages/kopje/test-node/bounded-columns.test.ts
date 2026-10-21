@@ -445,6 +445,10 @@ const NUMBER = 'a number constant (the trends round’s count clamp, TREND_OBSER
 
 const ALLOWED: Record<string, { count: number; reason: string }> = {
 	'src/domain/trends.ts interpolation TREND_OBSERVED_MAX': { count: 2, reason: NUMBER },
+	'src/domain/status-rows.ts interpolation MOVED_ACCOUNT_COLUMNS.rowHeap': {
+		count: 1,
+		reason: 'a number constant (the heap a moved-to account’s row takes at its caps, in R), naming no column',
+	},
 	"src/domain/instance.ts interpolation projected.join(' ')": { count: 1, reason: SETTINGS },
 	"src/domain/instance.ts interpolation settingProjectionSql('contact_username', 'value')": {
 		count: 1,
