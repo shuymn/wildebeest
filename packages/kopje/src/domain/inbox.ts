@@ -67,7 +67,16 @@ import { fileRemoteReports } from './reports'
 import { accountSearchText } from './search-text'
 import { recountStatus, recountStatuses, withdrawLocalBoost } from './statuses'
 import { streamDelete } from './streaming'
-import { ACCOUNTS_URI_INDEX } from '../db/indexes'
+import { type ByIds, writeEach } from '../db/by-ids'
+import {
+	ACCOUNTS_URI_INDEX,
+	FEATURED_TAGS_ACCOUNT_INDEX,
+	FEATURED_TAGS_ID_INDEX,
+	FILTER_STATUSES_ID_INDEX,
+	MEDIA_ID_INDEX,
+	QUOTES_STATUS_INDEX,
+	STATUSES_ID_INDEX,
+} from '../db/indexes'
 import type { Db } from '../db/sql'
 import { hostDomain } from '../platform/domain-name'
 import { ACTIVITY_ID_LIMIT, withinIdentityBound } from '../platform/identity-bounds'
@@ -1339,9 +1348,10 @@ export function purgeBatch(db: Db, uri: string, now: number): boolean {
 	withdrawLocalBoosts(db, { kind: 'purge', key: uri }, 'o.account_id', id, budget, now)
 	while (budget.left() > 0) {
 		const status = db.first<{ id: string }>(
-			`SELECT r.id FROM statuses r JOIN statuses o ON o.id = r.reblog_of_id
+			`SELECT r.id FROM statuses o INDEXED BY statuses_account
+				CROSS JOIN statuses r INDEXED BY statuses_reblog ON r.reblog_of_id = o.id
 				LEFT JOIN local_accounts l ON l.account_id = r.account_id
-			WHERE o.account_id = ?1 AND l.account_id IS NULL
+			WHERE o.account_id = ?1 AND r.reblog_of_id IS NOT NULL AND l.account_id IS NULL
 			UNION ALL SELECT * FROM (SELECT id FROM statuses WHERE account_id = ?1 ORDER BY id)
 			LIMIT 1`,
 			id
@@ -1354,13 +1364,25 @@ export function purgeBatch(db: Db, uri: string, now: number): boolean {
 	// notification of it.
 	const others = accountHasRows(db, id, false)
 	if (!others) {
-		spend(
+		spendEach(
 			db,
 			budget,
-			'DELETE FROM blocks WHERE id IN (SELECT id FROM blocks WHERE account_id = ?1 OR target_account_id = ?1 LIMIT ?2)',
+			{
+				ids: `SELECT CAST(id AS TEXT) AS id FROM (SELECT id FROM blocks INDEXED BY blocks_pair WHERE account_id = ?1
+				UNION ALL SELECT id FROM blocks INDEXED BY blocks_target WHERE target_account_id = ?1) LIMIT ?2`,
+				each: 'DELETE FROM blocks WHERE id = CAST(?1 AS INTEGER)',
+			},
 			id
 		)
-		spend(db, budget, 'DELETE FROM mutes WHERE id IN (SELECT id FROM mutes WHERE target_account_id = ? LIMIT ?)', id)
+		spendEach(
+			db,
+			budget,
+			{
+				ids: 'SELECT CAST(id AS TEXT) AS id FROM mutes INDEXED BY mutes_target WHERE target_account_id = ?1 LIMIT ?2',
+				each: 'DELETE FROM mutes WHERE id = CAST(?1 AS INTEGER)',
+			},
+			id
+		)
 	}
 	// The final account delete, its account_trend_reviews row (cascaded, one at most) and the job's completion are three
 	// more rows.
@@ -1398,6 +1420,13 @@ function spend(db: Db, budget: Budget, sql: string, ...params: SqlStorageValue[]
 	return left === 0 ? 0 : db.run(sql, ...params, left)
 }
 
+// Runs a ByIds write limited to the rows left (the row limit its selection's last parameter); the budget counts its
+// rows as it counts spend's.
+function spendEach(db: Db, budget: Budget, write: ByIds, ...params: SqlStorageValue[]): number {
+	const left = budget.left()
+	return left === 0 ? 0 : writeEach(db, write, ...params, left)
+}
+
 // The first ?2 reports of the account ?1 in the order reports_target_state holds them (resolution state, then id), so
 // the window is one bounded range of the index (purgeRelationships).
 const REPORT_WINDOW = `SELECT id FROM reports INDEXED BY reports_target_state WHERE target_account_id = ?1
@@ -1419,25 +1448,36 @@ const SENDER_WINDOW = `SELECT id FROM notifications INDEXED BY notifications_fro
 // until its pushes are, so every row written is counted and none is read past the window, however many reports the
 // account has or made.
 function purgeReports(db: Db, budget: Budget, id: string, window: string): void {
-	spend(
+	spendEach(
 		db,
 		budget,
-		`DELETE FROM push_deliveries WHERE id IN (SELECT d.id FROM (${window}) w
-			JOIN notifications n ON n.report_id = w.id JOIN push_deliveries d ON d.notification_id = n.id LIMIT ?2)`,
+		{
+			ids: `SELECT CAST(d.id AS TEXT) AS id FROM (${window}) w
+				CROSS JOIN notifications n INDEXED BY notifications_report ON n.report_id = w.id
+				CROSS JOIN push_deliveries d INDEXED BY push_deliveries_notification ON d.notification_id = n.id LIMIT ?2`,
+			each: 'DELETE FROM push_deliveries WHERE id = CAST(?1 AS INTEGER)',
+		},
 		id
 	)
-	spend(
+	spendEach(
 		db,
 		budget,
-		`DELETE FROM notifications WHERE id IN (SELECT n.id FROM (${window}) w JOIN notifications n ON n.report_id = w.id
-			WHERE NOT EXISTS (SELECT 1 FROM push_deliveries d WHERE d.notification_id = n.id) LIMIT ?2)`,
+		{
+			ids: `SELECT CAST(n.id AS TEXT) AS id FROM (${window}) w
+				CROSS JOIN notifications n INDEXED BY notifications_report ON n.report_id = w.id
+			WHERE NOT EXISTS (SELECT 1 FROM push_deliveries d WHERE d.notification_id = n.id) LIMIT ?2`,
+			each: 'DELETE FROM notifications WHERE id = CAST(?1 AS INTEGER)',
+		},
 		id
 	)
-	spend(
+	spendEach(
 		db,
 		budget,
-		`DELETE FROM reports WHERE id IN (SELECT w.id FROM (${window}) w
-			WHERE NOT EXISTS (SELECT 1 FROM notifications n WHERE n.report_id = w.id) LIMIT ?2)`,
+		{
+			ids: `SELECT CAST(w.id AS TEXT) AS id FROM (${window}) w
+			WHERE NOT EXISTS (SELECT 1 FROM notifications n WHERE n.report_id = w.id) LIMIT ?2`,
+			each: 'DELETE FROM reports WHERE id = CAST(?1 AS INTEGER)',
+		},
 		id
 	)
 }
@@ -1482,27 +1522,35 @@ function purgeRelationships(db: Db, id: string, budget: Budget): void {
 		id
 	)
 	// A follow's delete and its local side's recount: two rows each at most.
+	// Its follows of either side, each side through its own index (an OR of the two lets statistics older than the
+	// Store's growth scan the follows: RES-7), the first of both in the order of their ids as text.
 	const follows = db.all<{ id: string; other: string }>(
-		`SELECT CAST(id AS TEXT) AS id, CASE WHEN account_id = ?1 THEN target_account_id ELSE account_id END AS other
-		FROM follows WHERE account_id = ?1 OR target_account_id = ?1 ORDER BY id LIMIT ?2`,
+		`SELECT id, other FROM (
+			SELECT * FROM (SELECT CAST(id AS TEXT) AS id, target_account_id AS other FROM follows INDEXED BY follows_pair
+				WHERE account_id = ?1 ORDER BY 1 LIMIT ?2)
+			UNION ALL SELECT * FROM (SELECT CAST(id AS TEXT), account_id FROM follows INDEXED BY follows_target
+				WHERE target_account_id = ?1 ORDER BY 1 LIMIT ?2))
+		ORDER BY id LIMIT ?2`,
 		id,
 		Math.floor(budget.left() / 2)
 	)
-	db.run(
-		'DELETE FROM follows WHERE id IN (SELECT CAST(value AS INTEGER) FROM json_each(?))',
-		JSON.stringify(follows.map((f) => f.id))
-	)
+	for (const follow of follows) {
+		db.run('DELETE FROM follows WHERE id = CAST(? AS INTEGER)', follow.id)
+	}
 	recountLocal(
 		db,
 		follows.map((f) => f.other)
 	)
 	// The tracked Like ids of its first favourites (FAVOURITE_WINDOW), at most MAX_TRACKED_LIKES each; then each
 	// favourite of the window that tracks none: its delete and its status's recount, two rows, cascading nothing.
-	spend(
+	spendEach(
 		db,
 		budget,
-		`DELETE FROM favourite_likes WHERE id IN
-			(SELECT l.id FROM (${FAVOURITE_WINDOW}) w JOIN favourite_likes l ON l.favourite_id = w.id LIMIT ?2)`,
+		{
+			ids: `SELECT CAST(l.id AS TEXT) AS id FROM (${FAVOURITE_WINDOW}) w
+				CROSS JOIN favourite_likes l INDEXED BY favourite_likes_favourite ON l.favourite_id = w.id LIMIT ?2`,
+			each: 'DELETE FROM favourite_likes WHERE id = CAST(?1 AS INTEGER)',
+		},
 		id
 	)
 	const favourites = db.all<{ id: string; status: string }>(
@@ -1511,10 +1559,9 @@ function purgeRelationships(db: Db, id: string, budget: Budget): void {
 		id,
 		Math.floor(budget.left() / 2)
 	)
-	db.run(
-		'DELETE FROM favourites WHERE id IN (SELECT CAST(value AS INTEGER) FROM json_each(?))',
-		JSON.stringify(favourites.map((f) => f.id))
-	)
+	for (const favourite of favourites) {
+		db.run('DELETE FROM favourites WHERE id = CAST(? AS INTEGER)', favourite.id)
+	}
 	for (const status of new Set(favourites.map((f) => f.status))) {
 		recountStatus(db, status)
 	}
@@ -1524,18 +1571,24 @@ function purgeRelationships(db: Db, id: string, budget: Budget): void {
 	purgeReports(db, budget, id, REPORTER_WINDOW)
 	// Its other notifications, child-first from its first ones by id (SENDER_WINDOW): their pushes (up to
 	// MAX_PUSH_BACKLOG each), then each notification left without one, so no delete cascades.
-	spend(
+	spendEach(
 		db,
 		budget,
-		`DELETE FROM push_deliveries WHERE id IN (SELECT d.id FROM (${SENDER_WINDOW}) w
-			JOIN push_deliveries d ON d.notification_id = w.id LIMIT ?2)`,
+		{
+			ids: `SELECT CAST(d.id AS TEXT) AS id FROM (${SENDER_WINDOW}) w
+				CROSS JOIN push_deliveries d INDEXED BY push_deliveries_notification ON d.notification_id = w.id LIMIT ?2`,
+			each: 'DELETE FROM push_deliveries WHERE id = CAST(?1 AS INTEGER)',
+		},
 		id
 	)
-	spend(
+	spendEach(
 		db,
 		budget,
-		`DELETE FROM notifications WHERE id IN (SELECT w.id FROM (${SENDER_WINDOW}) w
-			WHERE NOT EXISTS (SELECT 1 FROM push_deliveries d WHERE d.notification_id = w.id) LIMIT ?2)`,
+		{
+			ids: `SELECT CAST(w.id AS TEXT) AS id FROM (${SENDER_WINDOW}) w
+			WHERE NOT EXISTS (SELECT 1 FROM push_deliveries d WHERE d.notification_id = w.id) LIMIT ?2`,
+			each: 'DELETE FROM notifications WHERE id = CAST(?1 AS INTEGER)',
+		},
 		id
 	)
 	// The local users' notification permissions for the account, its requests to them and the jobs of those answered
@@ -1547,17 +1600,24 @@ function purgeRelationships(db: Db, id: string, budget: Budget): void {
 			AND account_id IN (SELECT account_id FROM notification_permissions WHERE from_account_id = ?1 LIMIT ?2)`,
 		id
 	)
-	spend(
+	spendEach(
 		db,
 		budget,
-		'DELETE FROM notification_requests WHERE id IN (SELECT id FROM notification_requests WHERE from_account_id = ? LIMIT ?)',
+		{
+			ids: `SELECT CAST(id AS TEXT) AS id FROM notification_requests INDEXED BY notification_requests_from
+				WHERE from_account_id = ?1 LIMIT ?2`,
+			each: 'DELETE FROM notification_requests WHERE id = CAST(?1 AS INTEGER)',
+		},
 		id
 	)
-	spend(
+	spendEach(
 		db,
 		budget,
-		`DELETE FROM notification_request_jobs
-			WHERE id IN (SELECT id FROM notification_request_jobs WHERE from_account_id = ? LIMIT ?)`,
+		{
+			ids: `SELECT CAST(id AS TEXT) AS id FROM notification_request_jobs INDEXED BY notification_request_jobs_from
+				WHERE from_account_id = ?1 LIMIT ?2`,
+			each: 'DELETE FROM notification_request_jobs WHERE id = CAST(?1 AS INTEGER)',
+		},
 		id
 	)
 	// Its pins and featured hashtags, at most MAX_REMOTE_PINS and MAX_FEATURED_TAGS, the sync of them that waits
@@ -1572,7 +1632,8 @@ function purgeRelationships(db: Db, id: string, budget: Budget): void {
 	spend(
 		db,
 		budget,
-		'DELETE FROM featured_tags WHERE id IN (SELECT id FROM featured_tags WHERE account_id = ? LIMIT ?)',
+		`DELETE FROM featured_tags INDEXED BY ${FEATURED_TAGS_ID_INDEX}
+			WHERE id IN (SELECT id FROM featured_tags INDEXED BY ${FEATURED_TAGS_ACCOUNT_INDEX} WHERE account_id = ? LIMIT ?)`,
 		id
 	)
 	spend(
@@ -1600,14 +1661,16 @@ function purgeRelationships(db: Db, id: string, budget: Budget): void {
 	spend(
 		db,
 		budget,
-		`UPDATE statuses SET in_reply_to_account_id = NULL
-		WHERE id IN (SELECT id FROM statuses WHERE in_reply_to_account_id = ?1 AND account_id <> ?1 LIMIT ?2)`,
+		`UPDATE statuses INDEXED BY ${STATUSES_ID_INDEX} SET in_reply_to_account_id = NULL
+		WHERE id IN (SELECT id FROM statuses INDEXED BY statuses_in_reply_to_account
+			WHERE in_reply_to_account_id = ?1 AND account_id <> ?1 LIMIT ?2)`,
 		id
 	)
 	spend(
 		db,
 		budget,
-		'DELETE FROM media_attachments WHERE id IN (SELECT id FROM media_attachments WHERE account_id = ? AND status_id IS NULL AND file_token IS NULL LIMIT ?)',
+		`DELETE FROM media_attachments INDEXED BY ${MEDIA_ID_INDEX} WHERE id IN (SELECT id FROM media_attachments
+			INDEXED BY media_attachments_account WHERE account_id = ? AND status_id IS NULL AND file_token IS NULL LIMIT ?)`,
 		id
 	)
 	spend(
@@ -1629,7 +1692,8 @@ type JobKind = 'purge' | 'move' | 'delete'
 
 // Local boosts of the originals `column` = `id` selects (an account's statuses, or one status), each withdrawn once
 // (the job's cursor holds the boost whose Undo is recorded), then deleted like any status (its receipts a batch at a
-// time), and its booster's statuses_count recounted.
+// time), and its booster's statuses_count recounted. The originals drive, each one's boosts sought through
+// statuses_reblog (RES-7).
 function withdrawLocalBoosts(
 	db: Db,
 	job: { kind: JobKind; key: string },
@@ -1645,9 +1709,11 @@ function withdrawLocalBoosts(
 			job.key
 		)?.cursor
 		const boost = db.first<{ id: string; uri: string; booster: string; withdrawn: number }>(
-			`SELECT r.id, r.uri, r.account_id AS booster, r.withdrawn FROM statuses r JOIN statuses o ON o.id = r.reblog_of_id
-				JOIN local_accounts l ON l.account_id = r.account_id
-			WHERE ${column} = ? ORDER BY r.id = ? DESC, r.id LIMIT 1`,
+			`SELECT r.id, r.uri, r.account_id AS booster, r.withdrawn
+			FROM statuses o INDEXED BY ${column === 'o.id' ? STATUSES_ID_INDEX : 'statuses_account'}
+				CROSS JOIN statuses r INDEXED BY statuses_reblog ON r.reblog_of_id = o.id
+				CROSS JOIN local_accounts l ON l.account_id = r.account_id
+			WHERE ${column} = ? AND r.reblog_of_id IS NOT NULL ORDER BY r.id = ? DESC, r.id LIMIT 1`,
 			id,
 			cursor ?? ''
 		)
@@ -1691,12 +1757,17 @@ export const STATUS_CHILDREN: readonly {
 	column: string
 	parent?: string
 	exists?: string
-	remove: readonly string[]
+	remove: readonly (string | ByIds)[]
 }[] = [
 	{
 		table: 'status_edits',
 		column: 'status_id',
-		remove: ['DELETE FROM status_edits WHERE id IN (SELECT id FROM status_edits WHERE status_id = ? LIMIT ?)'],
+		remove: [
+			{
+				ids: 'SELECT CAST(id AS TEXT) AS id FROM status_edits INDEXED BY status_edits_status WHERE status_id = ?1 LIMIT ?2',
+				each: 'DELETE FROM status_edits WHERE id = CAST(?1 AS INTEGER)',
+			},
+		],
 	},
 	// Local uploads, also those an edit dropped, are detached for the media sweep, which deletes their R2 objects
 	// (gc_at the epoch: due at once; media.ts's DOOMED_AT written out, since media.ts reaches this module through
@@ -1705,9 +1776,13 @@ export const STATUS_CHILDREN: readonly {
 		table: 'media_attachments',
 		column: 'status_id',
 		remove: [
-			`UPDATE media_attachments SET status_id = NULL, position = 0, shown = 1, gc_at = '1970-01-01T00:00:00.000Z'
-			WHERE id IN (SELECT id FROM media_attachments WHERE status_id = ?1 AND file_token IS NOT NULL LIMIT ?2)`,
-			'DELETE FROM media_attachments WHERE id IN (SELECT id FROM media_attachments WHERE status_id = ? AND file_token IS NULL LIMIT ?)',
+			`UPDATE media_attachments INDEXED BY ${MEDIA_ID_INDEX}
+			SET status_id = NULL, position = 0, shown = 1, gc_at = '1970-01-01T00:00:00.000Z'
+			WHERE id IN (SELECT id FROM media_attachments INDEXED BY media_attachments_status
+				WHERE status_id = ?1 AND file_token IS NOT NULL LIMIT ?2)`,
+			`DELETE FROM media_attachments INDEXED BY ${MEDIA_ID_INDEX}
+			WHERE id IN (SELECT id FROM media_attachments INDEXED BY media_attachments_status
+				WHERE status_id = ? AND file_token IS NULL LIMIT ?)`,
 		],
 	},
 	{
@@ -1734,28 +1809,46 @@ export const STATUS_CHILDREN: readonly {
 		exists:
 			'EXISTS (SELECT 1 FROM favourites f JOIN favourite_likes l ON l.favourite_id = f.id WHERE f.status_id = ?1)',
 		remove: [
-			`DELETE FROM favourite_likes WHERE id IN (SELECT l.id FROM
-				(SELECT id FROM favourites WHERE status_id = ?1 ORDER BY id LIMIT ?2) w JOIN favourite_likes l ON l.favourite_id = w.id
-				LIMIT ?2)`,
+			{
+				ids: `SELECT CAST(l.id AS TEXT) AS id FROM
+					(SELECT id FROM favourites INDEXED BY favourites_status WHERE status_id = ?1 ORDER BY id LIMIT ?2) w
+					CROSS JOIN favourite_likes l INDEXED BY favourite_likes_favourite ON l.favourite_id = w.id LIMIT ?2`,
+				each: 'DELETE FROM favourite_likes WHERE id = CAST(?1 AS INTEGER)',
+			},
 		],
 	},
 	{
 		table: 'favourites',
 		column: 'status_id',
 		remove: [
-			`DELETE FROM favourites WHERE id IN (SELECT w.id FROM (SELECT id FROM favourites WHERE status_id = ?1 ORDER BY id LIMIT ?2) w
-				WHERE NOT EXISTS (SELECT 1 FROM favourite_likes l WHERE l.favourite_id = w.id))`,
+			{
+				ids: `SELECT CAST(w.id AS TEXT) AS id
+					FROM (SELECT id FROM favourites INDEXED BY favourites_status WHERE status_id = ?1 ORDER BY id LIMIT ?2) w
+					WHERE NOT EXISTS (SELECT 1 FROM favourite_likes l WHERE l.favourite_id = w.id)`,
+				each: 'DELETE FROM favourites WHERE id = CAST(?1 AS INTEGER)',
+			},
 		],
 	},
 	{
 		table: 'bookmarks',
 		column: 'status_id',
-		remove: ['DELETE FROM bookmarks WHERE id IN (SELECT id FROM bookmarks WHERE status_id = ? LIMIT ?)'],
+		remove: [
+			{
+				ids: 'SELECT CAST(id AS TEXT) AS id FROM bookmarks INDEXED BY bookmarks_pair WHERE status_id = ?1 LIMIT ?2',
+				each: 'DELETE FROM bookmarks WHERE id = CAST(?1 AS INTEGER)',
+			},
+		],
 	},
 	{
 		table: 'notifications',
 		column: 'status_id',
-		remove: ['DELETE FROM notifications WHERE id IN (SELECT id FROM notifications WHERE status_id = ? LIMIT ?)'],
+		remove: [
+			{
+				ids: `SELECT CAST(id AS TEXT) AS id FROM notifications INDEXED BY notifications_status
+					WHERE status_id = ?1 LIMIT ?2`,
+				each: 'DELETE FROM notifications WHERE id = CAST(?1 AS INTEGER)',
+			},
+		],
 	},
 	// Pins of the status (migrations 0018_status_pins_and_conversation_mutes and 0025_remote_collections): only its
 	// author pins it, so one row at most.
@@ -1771,7 +1864,10 @@ export const STATUS_CHILDREN: readonly {
 	{
 		table: 'filter_statuses',
 		column: 'status_id',
-		remove: ['DELETE FROM filter_statuses WHERE id IN (SELECT id FROM filter_statuses WHERE status_id = ? LIMIT ?)'],
+		remove: [
+			`DELETE FROM filter_statuses INDEXED BY ${FILTER_STATUSES_ID_INDEX}
+			WHERE id IN (SELECT id FROM filter_statuses INDEXED BY filter_statuses_status WHERE status_id = ? LIMIT ?)`,
+		],
 	},
 	// Notification requests whose last status it is (migration 0020_notification_policies): one per recipient and
 	// sender, any number of recipients; the request stays, without a last status (ON DELETE SET NULL, as Mastodon's
@@ -1780,8 +1876,11 @@ export const STATUS_CHILDREN: readonly {
 		table: 'notification_requests',
 		column: 'last_status_id',
 		remove: [
-			`UPDATE notification_requests SET last_status_id = NULL
-			WHERE id IN (SELECT id FROM notification_requests WHERE last_status_id = ? LIMIT ?)`,
+			{
+				ids: `SELECT CAST(id AS TEXT) AS id FROM notification_requests INDEXED BY notification_requests_last_status
+					WHERE last_status_id = ?1 LIMIT ?2`,
+				each: 'UPDATE notification_requests SET last_status_id = NULL WHERE id = CAST(?1 AS INTEGER)',
+			},
 		],
 	},
 	// Receipts of a withdrawn local boost are deleted here, a batch at a time, after its Undo has taken them as targets.
@@ -1815,7 +1914,8 @@ export const STATUS_CHILDREN: readonly {
 		table: 'quotes',
 		column: 'quoted_status_id',
 		remove: [
-			`UPDATE quotes SET quoted_status_id = NULL, quoted_account_id = NULL, generation = ${NEW_GENERATION}, lease_until = NULL,
+			`UPDATE quotes INDEXED BY ${QUOTES_STATUS_INDEX}
+			SET quoted_status_id = NULL, quoted_account_id = NULL, generation = ${NEW_GENERATION}, lease_until = NULL,
 				state = CASE state WHEN 'accepted' THEN 'deleted' ELSE state END, verify_after = NULL, authorization_id = NULL
 			WHERE status_id IN (SELECT status_id FROM quotes WHERE quoted_status_id = ?1 LIMIT CAST(?2 / 2 AS INTEGER))`,
 		],
@@ -1829,7 +1929,8 @@ export const STATUS_CHILDREN: readonly {
 		table: 'quotes',
 		column: 'status_id',
 		remove: [
-			`DELETE FROM quotes WHERE status_id IN (SELECT status_id FROM quotes WHERE status_id = ?1 LIMIT CAST(?2 / 3 AS INTEGER))`,
+			`DELETE FROM quotes INDEXED BY ${QUOTES_STATUS_INDEX}
+			WHERE status_id IN (SELECT status_id FROM quotes WHERE status_id = ?1 LIMIT CAST(?2 / 3 AS INTEGER))`,
 		],
 	},
 ]
@@ -1851,19 +1952,25 @@ function deleteStatusWithin(db: Db, statusId: string, budget: Budget, after = 0)
 	// The votes in its poll; the poll itself, one row, goes with the status.
 	deletePollVotes(db, statusId, budget.left())
 	for (const child of STATUS_CHILDREN) {
-		for (const sql of child.remove) {
-			spend(db, budget, sql, statusId)
+		for (const write of child.remove) {
+			if (typeof write === 'string') {
+				spend(db, budget, write, statusId)
+			} else {
+				spendEach(db, budget, write, statusId)
+			}
 		}
 	}
 	spend(
 		db,
 		budget,
-		'UPDATE statuses SET in_reply_to_id = NULL WHERE id IN (SELECT id FROM statuses WHERE in_reply_to_id = ? LIMIT ?)',
+		`UPDATE statuses INDEXED BY ${STATUSES_ID_INDEX} SET in_reply_to_id = NULL
+		WHERE id IN (SELECT id FROM statuses INDEXED BY statuses_in_reply_to WHERE in_reply_to_id = ? LIMIT ?)`,
 		statusId
 	)
 	const children = db.first(
 		`SELECT 1 AS x WHERE ${STATUS_CHILDREN_EXIST}
-			OR EXISTS (SELECT 1 FROM statuses WHERE in_reply_to_id = ?1 OR reblog_of_id = ?1)`,
+			OR EXISTS (SELECT 1 FROM statuses INDEXED BY statuses_in_reply_to WHERE in_reply_to_id = ?1)
+			OR EXISTS (SELECT 1 FROM statuses INDEXED BY statuses_reblog WHERE reblog_of_id = ?1)`,
 		statusId
 	)
 	// The status's delete writes at most six rows: the status, its poll, its trend_statuses row and its
@@ -1888,8 +1995,10 @@ export const PURGED_ACCOUNT_CHILDREN: readonly { table: string; check: string; f
 	{ table: 'statuses', check: 'account_id = ?1' },
 	{ table: 'favourites', check: 'account_id = ?1' },
 	{ table: 'favourite_likes', check: 'favourite_id IN (SELECT id FROM favourites WHERE account_id = ?1)' },
-	{ table: 'follows', check: 'account_id = ?1 OR target_account_id = ?1' },
-	{ table: 'blocks', check: 'account_id = ?1 OR target_account_id = ?1', filter: true },
+	{ table: 'follows', check: 'account_id = ?1' },
+	{ table: 'follows', check: 'target_account_id = ?1' },
+	{ table: 'blocks', check: 'account_id = ?1', filter: true },
+	{ table: 'blocks', check: 'target_account_id = ?1', filter: true },
 	{ table: 'mutes', check: 'target_account_id = ?1', filter: true },
 	{ table: 'list_accounts', check: 'account_id = ?1' },
 	{ table: 'account_pins', check: 'target_account_id = ?1' },
