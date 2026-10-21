@@ -30,7 +30,10 @@ import { sha256Hex } from '../src/security/tokens'
 // The notification policy and notification requests (Mastodon 4.5's NotifyService::DropCondition and
 // FilterCondition, NotificationPolicy, NotificationRequest, NotificationPermission and their controllers).
 
-type Notification = { id: string; type: string; account: { id: string }; status?: Status }
+type Notification = { id: string; type: string; account: { id: string }; status?: Status; filtered?: unknown }
+
+// A notification's `filtered`, or 'absent' when it has no such key (REST::NotificationSerializer#filtered?).
+const flag = (n: { filtered?: unknown }) => (Object.hasOwn(n, 'filtered') ? n.filtered : 'absent')
 type Request = {
 	id: string
 	created_at: string
@@ -544,10 +547,8 @@ describe('filtered notifications in the reads', () => {
 	// REST::NotificationSerializer's `attribute :filtered, if: :filtered?`: true on a filtered notification, else absent.
 	it('presents filtered: true on a filtered notification alone', async () => {
 		const { h, alice, bob, carol } = await scene()
-		type Shown = { id: string; type: string; account: { id: string }; filtered?: unknown }
-		const flag = (n: Shown) => (Object.hasOwn(n, 'filtered') ? n.filtered : 'absent')
 		const shown = async (query: string) =>
-			(await getJson<Shown[]>(h, `/api/v1/notifications${query}`, alice.token)).body.map((n) => [
+			(await getJson<Notification[]>(h, `/api/v1/notifications${query}`, alice.token)).body.map((n) => [
 				n.type,
 				n.account.id,
 				flag(n),
@@ -568,7 +569,8 @@ describe('filtered notifications in the reads', () => {
 			['mention', carol.id, 'absent'],
 			['follow', carol.id, true],
 		])
-		const one = async (id: string) => flag((await getJson<Shown>(h, `/api/v1/notifications/${id}`, alice.token)).body)
+		const one = async (id: string) =>
+			flag((await getJson<Notification>(h, `/api/v1/notifications/${id}`, alice.token)).body)
 		const [filtered] = await ids(h, `/api/v1/notifications?account_id=${bob.id}`, alice.token)
 		const [unfiltered] = await ids(h, '/api/v1/notifications', alice.token)
 		expect([await one(filtered!), await one(unfiltered!)]).toEqual([true, 'absent'])
@@ -606,8 +608,7 @@ describe('filtered notifications in the reads', () => {
 		expect(await one(filtered!)).toBe('absent')
 	})
 
-	// notifications.filtered has INTEGER affinity and no CHECK (migration 0020_notification_policies), so an imported
-	// row may hold any value: only integer 1 is presented as filtered, and no value is read out of SQLite whole.
+	// An imported row may hold any value (NOTIFICATION_COLUMNS, VIS-23).
 	it('presents filtered only for a stored integer 1, reading no imported value out whole', async () => {
 		const h = await community(['alice', 'bob'])
 		const { alice, bob } = h.users
@@ -644,12 +645,12 @@ describe('filtered notifications in the reads', () => {
 		)
 		expect(kept.map((row) => row.type)).toEqual(values.map(([, type]) => type))
 		expect(kept.at(-1)!.size).toBe(LARGE)
-		type Shown = { id: string; filtered?: unknown }
-		const flag = (n: Shown) => (Object.hasOwn(n, 'filtered') ? n.filtered : 'absent')
-		const listed = (await getJson<Shown[]>(h, '/api/v1/notifications?include_filtered=true', alice.token)).body
+		const listed = (await getJson<Notification[]>(h, '/api/v1/notifications?include_filtered=true', alice.token)).body
 		expect(new Map(listed.map((n) => [n.id, flag(n)]))).toEqual(new Map(kept.map((row, i) => [row.id, values[i]![2]])))
 		for (const [i, row] of kept.entries()) {
-			expect(flag((await getJson<Shown>(h, `/api/v1/notifications/${row.id}`, alice.token)).body)).toBe(values[i]![2])
+			expect(flag((await getJson<Notification>(h, `/api/v1/notifications/${row.id}`, alice.token)).body)).toBe(
+				values[i]![2]
+			)
 		}
 		// The list and the show read `filtered` as 0 or 1, and nothing near the large value's size leaves SQLite.
 		const credential = { tokenHash: await sha256Hex(alice.token), scope: 'read' as const, now: NOW }
@@ -923,14 +924,12 @@ describe('notification requests', () => {
 			h.store,
 			'SELECT CAST(id AS TEXT) AS id FROM notifications WHERE filtered = 1 ORDER BY id LIMIT 1'
 		)
-		const flag = async () => {
-			const { body } = await getJson<{ filtered?: unknown }>(h, `/api/v1/notifications/${pending!.id}`, alice.token)
-			return Object.hasOwn(body, 'filtered') ? body.filtered : 'absent'
-		}
-		expect(await flag()).toBe(true)
+		const pendingFlag = async () =>
+			flag((await getJson<Notification>(h, `/api/v1/notifications/${pending!.id}`, alice.token)).body)
+		expect(await pendingFlag()).toBe(true)
 		expect(await h.store.runInboundJobs(BUILD, { now: NOW })).toMatchObject({ pending: false })
 		expect(await filtered()).toBe(0)
-		expect(await flag()).toBe('absent')
+		expect(await pendingFlag()).toBe('absent')
 		expect((await getJson(h, '/api/v1/notifications/requests/merged', alice.token)).body).toEqual({ merged: true })
 		// Each direct mention joined alice's conversations (one per status, each its own thread).
 		expect(await sql(h.store, 'SELECT count(*) AS n FROM conversations WHERE account_id = ?', alice.id)).toEqual([

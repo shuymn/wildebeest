@@ -1043,8 +1043,6 @@ type FillMeasure = {
 	moved: Record<string, { count: number; deficit: number }>
 	// The moderation_warning notification as a stream payload: its JSON encoded again as a string (stream-hub.ts).
 	warningPayload: number
-	// The `filtered` values each notification shape reads, each one integer (VALUE_BYTES in the heap, 8 SQLite bytes).
-	filteredReads: Record<string, number>
 }
 const fills = new Map<Fill, Promise<FillMeasure>>()
 
@@ -1318,18 +1316,16 @@ async function measureShapes(fill: Fill): Promise<FillMeasure> {
 		warningGroup,
 		filteredNotification,
 	}
+	// A notification row's `filtered` is read as one integer (NOTIFICATION_COLUMNS), 8 SQLite bytes for each row a
+	// shape reads: the group's walk reads 10, the filtered favourite's list the 9 favourites of its window.
 	const filteredReads = (m: Measure) =>
 		[...m.heaps.values()].reduce((sum, heap) => sum + (heap.columns.get('filtered')?.total ?? 0) / VALUE_BYTES, 0)
+	expect(
+		[one, grouped, notified, warned, warnedGroup, filteredList].map((m) => filteredReads(m)),
+		fill
+	).toEqual([0, 10, 1, 1, 1, 9])
 	return {
 		warningPayload: utf8Length(JSON.stringify(JSON.stringify(warningNotification))),
-		filteredReads: {
-			status: filteredReads(one),
-			group: filteredReads(grouped),
-			reportNotification: filteredReads(notified),
-			warningNotification: filteredReads(warned),
-			warningGroup: filteredReads(warnedGroup),
-			filteredNotification: filteredReads(filteredList),
-		},
 		moved: Object.fromEntries(
 			Object.entries(answers).map(([name, answer]) => {
 				const nested = movedAccounts(answer)
@@ -1631,18 +1627,8 @@ describe('the table of maxima (RES-3)', () => {
 	])(
 		'measures %s',
 		async (_name, fill, expected) => {
-			const { shapes, filteredReads } = await measureFill(fill)
+			const { shapes } = await measureFill(fill)
 			expect(shapes).toEqual(expected)
-			// A notification row's `filtered` is read as one integer (NOTIFICATION_COLUMNS), 8 SQLite bytes for each row
-			// a shape reads: the group's walk reads 10, the filtered favourite's list the 9 favourites of its window.
-			expect(filteredReads).toEqual({
-				status: 0,
-				group: 10,
-				reportNotification: 1,
-				warningNotification: 1,
-				warningGroup: 1,
-				filteredNotification: 9,
-			})
 			for (const shape of Object.values(shapes)) {
 				expect(shape.json).toBeLessThanOrEqual(LIMIT)
 			}
