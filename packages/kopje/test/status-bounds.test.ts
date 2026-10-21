@@ -1275,6 +1275,32 @@ async function measureShapes(fill: Fill): Promise<FillMeasure> {
 		} as never
 	)
 	const { next: _warnedNext, prev: _warnedPrev, ...warningGroup } = warnedGroup.answer as Record<string, unknown>
+	// A favourite of the quote alice's policy filtered, by an account at its bounds, as include_filtered lists it: the
+	// largest v1 notification of a status, and the only one presented with `filtered`.
+	await sql(
+		t.store,
+		`INSERT INTO notifications (account_id, type, from_account_id, status_id, created_at, filtered)
+		VALUES (?, 'favourite', ?, ?, ?, 1)`,
+		ALICE,
+		await maximalAccount(t, false, fill),
+		quote,
+		new Date(NOW).toISOString()
+	)
+	const filteredList = await measured(
+		t,
+		listNotifications as never,
+		{
+			credential: await credential(t),
+			page: { limit: 1 },
+			types: ['favourite'],
+			excludeTypes: [],
+			accountId: null,
+			includeFiltered: true,
+			present: { origin: ORIGIN },
+		} as never
+	)
+	const [filteredNotification] = (filteredList.answer as { items: { filtered?: true; status: { id: string } }[] }).items
+	expect(filteredNotification).toMatchObject({ filtered: true, status: { id: quote } })
 	const account = (one.answer as Presented).account
 	const two = await read(t, getStatus, quote)
 	const answers: Record<string, unknown> = {
@@ -1288,7 +1314,16 @@ async function measureShapes(fill: Fill): Promise<FillMeasure> {
 		reportNotification: adminReport,
 		warningNotification,
 		warningGroup,
+		filteredNotification,
 	}
+	// A notification row's `filtered` is read as one integer (NOTIFICATION_COLUMNS), 8 SQLite bytes for each row a
+	// shape reads: the group's walk reads 10, the filtered favourite's list the 9 favourites of its window.
+	const filteredReads = (m: Measure) =>
+		[...m.heaps.values()].reduce((sum, heap) => sum + (heap.columns.get('filtered')?.total ?? 0) / VALUE_BYTES, 0)
+	expect(
+		[one, grouped, notified, warned, warnedGroup, filteredList].map((m) => filteredReads(m)),
+		fill
+	).toEqual([0, 10, 1, 1, 1, 9])
 	return {
 		warningPayload: utf8Length(JSON.stringify(JSON.stringify(warningNotification))),
 		moved: Object.fromEntries(
@@ -1312,6 +1347,7 @@ async function measureShapes(fill: Fill): Promise<FillMeasure> {
 			reportNotification: shape({ ...notified, answer: adminReport }),
 			warningNotification: shape({ ...warned, answer: warningNotification }),
 			warningGroup: shape({ ...warnedGroup, answer: warningGroup }),
+			filteredNotification: shape({ ...filteredList, answer: filteredNotification }),
 		},
 		heaps: {
 			status: one.heaps,
@@ -1372,6 +1408,7 @@ const POLLS_SHOWN: Record<string, number> = {
 	conversation: 2,
 	group: 2,
 	report: 2,
+	filteredNotification: 2,
 }
 const POLL_EMOJIS_JSON = STATUS_EMOJIS_BYTES - 2
 
@@ -1528,11 +1565,12 @@ describe('the table of maxima (RES-3)', () => {
 				quote: { sqlite: 4_954_507, json: 5_253_539, rows: 1918, nodes: 4736 },
 				boostOfQuote: { sqlite: 5_100_929, json: 5_662_490, rows: 1975, nodes: 5695 },
 				conversation: { sqlite: 6_308_582, json: 6_938_872, rows: 1944, nodes: 5831 },
-				group: { sqlite: 5_813_933, json: 6_377_539, rows: 1953, nodes: 5484 },
+				group: { sqlite: 5_814_013, json: 6_377_539, rows: 1953, nodes: 5484 },
 				report: { sqlite: 5_263_884, json: 5_850_006, rows: 1933, nodes: 5051 },
-				reportNotification: { sqlite: 812_397, json: 403_298, rows: 1061, nodes: 294 },
-				warningNotification: { sqlite: 93_518, json: 281_568, rows: 9, nodes: 215 },
-				warningGroup: { sqlite: 93_518, json: 281_757, rows: 9, nodes: 222 },
+				reportNotification: { sqlite: 812_405, json: 403_298, rows: 1061, nodes: 294 },
+				warningNotification: { sqlite: 93_526, json: 281_568, rows: 9, nodes: 215 },
+				warningGroup: { sqlite: 93_526, json: 281_757, rows: 9, nodes: 222 },
+				filteredNotification: { sqlite: 5_063_231, json: 5_394_112, rows: 1941, nodes: 4832 },
 			},
 		],
 		[
@@ -1544,11 +1582,12 @@ describe('the table of maxima (RES-3)', () => {
 				quote: { sqlite: 4_138_507, json: 4_434_339, rows: 1918, nodes: 4736 },
 				boostOfQuote: { sqlite: 4_284_929, json: 4_843_290, rows: 1975, nodes: 5695 },
 				conversation: { sqlite: 5_492_582, json: 6_119_672, rows: 1944, nodes: 5831 },
-				group: { sqlite: 4_997_933, json: 5_558_339, rows: 1953, nodes: 5484 },
+				group: { sqlite: 4_998_013, json: 5_558_339, rows: 1953, nodes: 5484 },
 				report: { sqlite: 4_432_884, json: 4_940_806, rows: 1933, nodes: 5051 },
-				reportNotification: { sqlite: 797_397, json: 313_298, rows: 1061, nodes: 294 },
-				warningNotification: { sqlite: 93_518, json: 281_568, rows: 9, nodes: 215 },
-				warningGroup: { sqlite: 93_518, json: 281_757, rows: 9, nodes: 222 },
+				reportNotification: { sqlite: 797_405, json: 313_298, rows: 1061, nodes: 294 },
+				warningNotification: { sqlite: 93_526, json: 281_568, rows: 9, nodes: 215 },
+				warningGroup: { sqlite: 93_526, json: 281_757, rows: 9, nodes: 222 },
+				filteredNotification: { sqlite: 4_247_231, json: 4_574_912, rows: 1941, nodes: 4832 },
 			},
 		],
 		[
@@ -1560,11 +1599,12 @@ describe('the table of maxima (RES-3)', () => {
 				quote: { sqlite: 6_818_451, json: 4_371_087, rows: 1918, nodes: 4712 },
 				boostOfQuote: { sqlite: 7_113_040, json: 4_618_812, rows: 1975, nodes: 5659 },
 				conversation: { sqlite: 8_495_999, json: 5_964_884, rows: 1944, nodes: 5663 },
-				group: { sqlite: 7_880_197, json: 5_434_063, rows: 1953, nodes: 5364 },
+				group: { sqlite: 7_880_277, json: 5_434_063, rows: 1953, nodes: 5364 },
 				report: { sqlite: 7_198_401, json: 4_844_108, rows: 1933, nodes: 5003 },
-				reportNotification: { sqlite: 2_360_577, json: 288_042, rows: 1061, nodes: 270 },
-				warningNotification: { sqlite: 129_431, json: 235_218, rows: 9, nodes: 215 },
-				warningGroup: { sqlite: 129_431, json: 235_407, rows: 9, nodes: 222 },
+				reportNotification: { sqlite: 2_360_585, json: 288_042, rows: 1061, nodes: 270 },
+				warningNotification: { sqlite: 129_439, json: 235_218, rows: 9, nodes: 215 },
+				warningGroup: { sqlite: 129_439, json: 235_407, rows: 9, nodes: 222 },
+				filteredNotification: { sqlite: 6_952_465, json: 4_504_032, rows: 1941, nodes: 4796 },
 			},
 		],
 		[
@@ -1576,11 +1616,12 @@ describe('the table of maxima (RES-3)', () => {
 				quote: { sqlite: 4_952_811, json: 5_277_741, rows: 1918, nodes: 4840 },
 				boostOfQuote: { sqlite: 5_099_233, json: 5_686_692, rows: 1975, nodes: 5799 },
 				conversation: { sqlite: 6_306_886, json: 6_963_074, rows: 1944, nodes: 5935 },
-				group: { sqlite: 5_812_237, json: 6_401_741, rows: 1953, nodes: 5588 },
+				group: { sqlite: 5_812_317, json: 6_401_741, rows: 1953, nodes: 5588 },
 				report: { sqlite: 5_262_188, json: 5_874_208, rows: 1933, nodes: 5155 },
-				reportNotification: { sqlite: 812_397, json: 403_298, rows: 1061, nodes: 294 },
-				warningNotification: { sqlite: 93_518, json: 281_568, rows: 9, nodes: 215 },
-				warningGroup: { sqlite: 93_518, json: 281_757, rows: 9, nodes: 222 },
+				reportNotification: { sqlite: 812_405, json: 403_298, rows: 1061, nodes: 294 },
+				warningNotification: { sqlite: 93_526, json: 281_568, rows: 9, nodes: 215 },
+				warningGroup: { sqlite: 93_526, json: 281_757, rows: 9, nodes: 222 },
+				filteredNotification: { sqlite: 5_061_535, json: 5_418_314, rows: 1941, nodes: 4936 },
 			},
 		],
 	])(
@@ -1612,6 +1653,7 @@ describe('the table of maxima (RES-3)', () => {
 				reportNotification: 2,
 				warningNotification: 0,
 				warningGroup: 0,
+				filteredNotification: 3,
 			})
 		}
 		const [escaped, emojiPoll] = await Promise.all([measureFill('escaped'), measureFill('emoji-poll')])
@@ -1636,6 +1678,7 @@ describe('the table of maxima (RES-3)', () => {
 			reportNotification: 408_654,
 			warningNotification: 281_568,
 			warningGroup: 281_757,
+			filteredNotification: 5_426_718,
 		})
 	}, 600_000)
 

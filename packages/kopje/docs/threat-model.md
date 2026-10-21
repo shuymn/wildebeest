@@ -616,10 +616,13 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   written only if R15 lets it through, it is left out of every list, grouped list and unread count unless its owner
   asks for filtered ones (`include_filtered`, `account_id`), and every read of it still applies R15 at the time of the
   read; it is never pushed (PUSH-3) and a filtered private mention joins no conversation until its request is
-  accepted. A request (`NotificationRequest`) names the sender, how many of its mentions were filtered (at most 100)
-  and the last one's status, shown only if the owner may still see it (R2); it, the policy, its permissions
-  (`NotificationPermission`) and the work an answer leaves are read and answered only by their owner, and anyone
-  else's request is not found. Blocking the sender deletes the pair's request and permission (Mastodon's
+  accepted. A read that shows it (`include_filtered`, `account_id`, or by id) presents it with `filtered: true`
+  (`REST::NotificationSerializer`), and only a row whose stored value is integer 1 reads as filtered; every other
+  notification, the grouped ones, the requests and the streaming `notification` event (VIS-26) carry no `filtered`. A
+  request (`NotificationRequest`) names the sender, how many of its mentions were filtered (at most 100) and the last
+  one's status, shown only if the owner may still see it (R2); it, the policy, its permissions
+  (`NotificationPermission`) and the work an answer leaves are read and answered only by their owner, and anyone else's
+  request is not found. Blocking the sender deletes the pair's request and permission (Mastodon's
   `BlockService` and `AfterBlockService`); a domain block keeps the permissions, which a sender there cannot use while
   the block lasts (R15). Nothing of them is federated: the sender cannot tell a filtered or dropped notification
   from a shown one. Their cost is bounded (RES-6, RES-7): the lists and counts read the partial index of unfiltered
@@ -628,12 +631,12 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   mention walk reads at most 101 statuses; answering a request, or a bulk form of at most 100 ids, walks at most 2,000
   of the senders' notifications in the request and the rest in the inbound job rounds; and a remote sender's purge
   deletes its requests, permissions and jobs within its batches. _Enforced (main):_
-  `notificationPolicySql` and `UNFILTERED_SQL` in `src/domain/audience.ts`, `notify` in
-  `src/domain/notifications.ts`, `src/domain/notification-requests.ts`, `src/domain/notification-groups.ts`,
-  `src/domain/push.ts`, `purgeRelationships` and `STATUS_CHILDREN` in `src/domain/inbox.ts`, migration
-  `0020_notification_policies`; `test/notification-policy.test.ts`, `test/policy-endpoints.test.ts`,
-  `test/policy-writes.test.ts`, `test/policy-bounds.test.ts`, `test/migrations.test.ts`,
-  `test/cascade-guard.test.ts`.
+  `notificationPolicySql` and `UNFILTERED_SQL` in `src/domain/audience.ts`, `notify`, `NOTIFICATION_COLUMNS` and
+  `notificationStream` in `src/domain/notifications.ts`, `src/domain/notification-requests.ts`,
+  `src/domain/notification-groups.ts`, `src/domain/push.ts`, `purgeRelationships` and `STATUS_CHILDREN` in
+  `src/domain/inbox.ts`, migration `0020_notification_policies`; `test/notification-policy.test.ts`,
+  `test/streaming/streaming.test.ts`, `test/policy-endpoints.test.ts`, `test/policy-writes.test.ts`,
+  `test/policy-bounds.test.ts`, `test/migrations.test.ts`, `test/cascade-guard.test.ts`.
 
 - **VIS-25: a report reveals to the servers it is forwarded to only what its reporter may see, and never its reporter.**
   A report (`Report`) is its reporter's: it is read only where it is written and answered once to its reporter (R34,
@@ -2170,11 +2173,12 @@ the boost of a quote above, alone or as the one status a lookup of it, the quote
 | Quote (the status and its quoted status)                         | 6,818,451         | 5,277,741       | 5,283,467         | 1,918     | 4,840 | 63.0%          |
 | Boost of a quote                                                 | 7,113,040         | 5,686,692       | 5,695,096         | 1,975     | 5,799 | 67.9%          |
 | Conversation: 12 participants presented, its last status a quote | 8,495,999         | 6,963,074       | 7,000,936         | 1,944     | 5,935 | 83.5%          |
-| Notification group: 8 sample accounts, its status a quote        | 7,880,197         | 6,401,741       | 6,428,891         | 1,953     | 5,588 | 76.6%          |
+| Notification group: 8 sample accounts, its status a quote        | 7,880,277         | 6,401,741       | 6,428,891         | 1,953     | 5,588 | 76.6%          |
 | Report: its first status a quote past the 2 MiB allowance        | 7,198,401         | 5,874,208       | 5,885,290         | 1,933     | 5,155 | 70.2%          |
-| An admin.report notification of that report                      | 2,360,577         | 403,298         | 408,654           | 1,061     | 294   | 4.9%           |
-| A moderation_warning notification, its local account at bounds   | 129,431           | 281,568         | 281,568           | 9         | 215   | 3.4%           |
-| Its notification group                                           | 129,431           | 281,757         | 281,757           | 9         | 222   | 3.4%           |
+| An admin.report notification of that report                      | 2,360,585         | 403,298         | 408,654           | 1,061     | 294   | 4.9%           |
+| A moderation_warning notification, its local account at bounds   | 129,439           | 281,568         | 281,568           | 9         | 215   | 3.4%           |
+| Its notification group                                           | 129,439           | 281,757         | 281,757           | 9         | 222   | 3.4%           |
+| A filtered favourite of the quote, as include_filtered lists it  | 6,952,465         | 5,418,314       | 5,426,718         | 1,941     | 4,936 | 64.7%          |
 | ActivityPub Note: a local status at its bounds, 1,000 addressed  | 3,697,315         | 4,235,143       |                   | 1,337     | 3,165 | 50.5%          |
 | Its Create (the Note and its addressing again)                   |                   | 6,291,204       |                   |           |       | 75.0%          |
 | Announcement: each part derived from its caps                    |                   | 121,774         | 248,997           |           |       | 3.0%           |

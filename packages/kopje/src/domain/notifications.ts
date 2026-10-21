@@ -56,6 +56,8 @@ export type Notification = {
 	created_at: string
 	// Mastodon 4.5's REST::NotificationSerializer#group_key: the notification's group, or `ungrouped-<id>`.
 	group_key: string
+	// REST::NotificationSerializer#filtered?: true on a notification the recipient's policy filtered, else absent.
+	filtered?: true
 	account: Account
 	status?: Status
 	// An admin.report's report (REST::NotificationSerializer#report_type?).
@@ -285,15 +287,19 @@ type NotificationRow = {
 	account_warning_id: string | null
 	created_at: string
 	group_key: string | null
+	filtered: 0 | 1
 }
 
-// The columns of a notification row besides status_id, which StatusReads.notifications selects first.
+// The columns of a notification row besides status_id, which StatusReads.notifications selects first. `filtered` has
+// INTEGER affinity but no CHECK (migration 0020_notification_policies), so an imported row may hold any value: only
+// integer 1 reads as filtered, as a scalar, so no stored value of another type or size is read out.
 export const NOTIFICATION_COLUMNS = {
 	id: 'CAST(n.id AS TEXT)',
 	type: 'n.type',
 	from_account_id: 'n.from_account_id',
 	created_at: 'n.created_at',
 	group_key: 'n.group_key',
+	filtered: "CASE WHEN typeof(n.filtered) = 'integer' AND n.filtered = 1 THEN 1 ELSE 0 END",
 	report_id: 'CAST(n.report_id AS TEXT)',
 	account_warning_id: 'CAST(n.account_warning_id AS TEXT)',
 }
@@ -336,6 +342,7 @@ export function* notificationStream(
 			type: row.type,
 			created_at: row.created_at,
 			group_key: row.group_key ?? `ungrouped-${row.id}`,
+			...(row.filtered === 1 ? { filtered: true as const } : {}),
 			account,
 			...(status === undefined ? {} : { status }),
 			...(report === undefined ? {} : { report }),
