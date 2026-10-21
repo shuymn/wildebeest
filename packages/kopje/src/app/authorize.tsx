@@ -2,7 +2,7 @@ import { type Context, Hono } from 'hono'
 
 import { type Client, OOB_REDIRECT_URI } from '../domain/oauth'
 import { type ApiDeps, storeCall } from '../mastodon/context'
-import { Params, readParams } from '../mastodon/params'
+import { Params, railsBlank, readParams } from '../mastodon/params'
 import { verifyAccessJwt } from '../security/access-jwt'
 import { parseScopes, withinScopes } from '../security/scopes'
 import { PKCE_CHALLENGE, sha256Hex } from '../security/tokens'
@@ -78,7 +78,7 @@ function validate(
 	// Doorkeeper's response modes of the code flow, checked in its order (after response_type); a blank one is query.
 	// Every answer goes in the query: Mastodon's consent form carries no mode, and Kopje always shows the form.
 	const mode = get('response_mode')
-	if (mode !== undefined && mode.trim() !== '' && !RESPONSE_MODES.includes(mode)) {
+	if (mode !== undefined && !railsBlank(mode) && !RESPONSE_MODES.includes(mode)) {
 		return {
 			error: 'unsupported_response_mode',
 			description: 'The authorization server does not support this response mode.',

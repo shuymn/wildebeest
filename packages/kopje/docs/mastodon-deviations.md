@@ -122,9 +122,9 @@ Instance and apps (`/api/v1/apps`, `/api/v{1,2}/instance`, `/api/v1/preferences`
 OAuth (`/oauth/authorize`, `/oauth/token/info`, `/oauth/introspect`):
 
 - `response_mode` `query`, `fragment` and `form_post` are accepted and every answer goes in the query, as Mastodon's
-  rendered consent form answers them: the form carries no mode, and Mastodon honours the other modes only when it
-  skips the consent page, which Kopje never does. A decision posted directly with `fragment` or `form_post` is also
-  answered in the query, where Doorkeeper would honour the mode. A blank mode reads as `query`; any other value answers
+  rendered consent form answers them: the form carries no mode. A decision posted directly with `fragment` or
+  `form_post` is also answered in the query, where Doorkeeper would honour the mode, as Mastodon does when it skips the
+  consent page (Kopje never skips it). A blank mode (Rails' `blank?`) reads as `query`; any other value answers
   `unsupported_response_mode`. The metadata lists `query` only.
 - `lang` has no effect: the consent page is English only.
 - Tokens are read from the `Authorization` header only, never from the `access_token` or `bearer_token` parameters.

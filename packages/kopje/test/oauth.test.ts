@@ -1034,7 +1034,7 @@ describe('response_mode and lang', () => {
 		const h = await withAlice()
 		const app = await registerApp(h)
 		const assertion = await h.team.assertion()
-		for (const mode of ['query', 'fragment', 'form_post', '', '  ']) {
+		for (const mode of ['query', 'fragment', 'form_post', '', '  ', '\u0085']) {
 			const consent = await h.request(authorizeUrl(app, [['response_mode', mode]]), {
 				headers: { 'cf-access-jwt-assertion': assertion },
 			})
@@ -1083,7 +1083,8 @@ describe('response_mode and lang', () => {
 			error_description: 'The authorization server does not support this response mode.',
 			state: 'st',
 		}
-		for (const mode of ['bogus', 'QUERY', ' query', 'web_message']) {
+		// U+FEFF is not blank to Rails, so it is a mode, and not a supported one.
+		for (const mode of ['bogus', 'QUERY', ' query', 'web_message', '\uFEFF']) {
 			const response = await h.request(authorizeUrl(app, [['response_mode', mode]]), { headers })
 			expect(Object.fromEntries(callback(response)), mode).toEqual(refused)
 		}
@@ -1141,13 +1142,16 @@ describe('response_mode and lang', () => {
 	})
 })
 
-const INVALID_TOKEN = { error: 'invalid_token', error_description: 'The access token is invalid' }
-const challenge = (description: string) =>
-	`Bearer realm="Doorkeeper", error="invalid_token", error_description="${description}"`
+const challenge = (description: string, error = 'invalid_token') =>
+	`Bearer realm="Doorkeeper", error="${error}", error_description="${description}"`
 
 async function expectInvalidToken(response: Response, label: string, description = 'The access token is invalid') {
 	expect(response.status, label).toBe(401)
-	expect(await response.json(), label).toEqual({ error: 'invalid_token', error_description: description })
+	expect(await response.json(), label).toEqual({
+		error: 'invalid_token',
+		error_description: description,
+		state: 'unauthorized',
+	})
 	expect(response.headers.get('www-authenticate'), label).toBe(challenge(description))
 	expect(response.headers.get('cache-control'), label).toBe('no-store')
 }
@@ -1223,6 +1227,17 @@ describe('token info', () => {
 		await expectInvalidToken(await h.request('/oauth/token/info', bearer(token)), 'stale epoch')
 	})
 })
+
+const REQUEST_NOT_AUTHORIZED =
+	'Request need to be authorized. Required parameter for authorizing request is missing or invalid.'
+
+// Doorkeeper's InvalidRequestResponse when introspection names no caller.
+async function unauthorized(response: Response, label: string) {
+	expect(response.status, label).toBe(400)
+	expect(await response.json(), label).toEqual({ error: 'invalid_request', error_description: REQUEST_NOT_AUTHORIZED })
+	expect(response.headers.get('www-authenticate'), label).toBe(challenge(REQUEST_NOT_AUTHORIZED, 'invalid_request'))
+	expect(response.headers.get('cache-control'), label).toBe('no-store')
+}
 
 describe('introspect', () => {
 	const introspect = (h: ApiHarness, body: Record<string, string>, headers: Record<string, string> = {}) =>
@@ -1315,6 +1330,13 @@ describe('introspect', () => {
 			expect(response.status, label).toBe(401)
 			expect(await response.json(), label).toMatchObject({ error: 'invalid_client' })
 		}
+		// A Basic header with a blank id, or one that does not decode, names no client; a body client_id still does.
+		for (const authorization of ['Basic Og==', 'Basic !!!', `Basic ${btoa('no-colon')}`]) {
+			await unauthorized(await introspect(h, { token }, { authorization }), authorization)
+		}
+		const bodyId = await introspect(h, { token, client_id: app.client_id }, { authorization: 'Basic Og==' })
+		expect(bodyId.status).toBe(401)
+		expect(await bodyId.json()).toMatchObject({ error: 'invalid_client' })
 		// A token in the query is no token: the client's answer is inactive.
 		await inactive(await h.request(`/oauth/introspect?token=${token}`, form({}, { headers: basic(app) })), 'query')
 	})
@@ -1327,9 +1349,15 @@ describe('introspect', () => {
 		const active = await introspect(h, { token: sibling }, { authorization: `Bearer ${caller}` })
 		expect(active.status).toBe(200)
 		expect(await active.json()).toMatchObject({ active: true, client_id: app.client_id })
-		// A blank client_id is no client authentication (Doorkeeper's blank uid), so the bearer caller is used.
-		const blank = await introspect(h, { token: sibling, client_id: ' ' }, { authorization: `Bearer ${caller}` })
-		expect(await blank.json()).toMatchObject({ active: true })
+		// A blank client_id (Rails' blank?, U+0085 included) is no client authentication, so the bearer caller is used.
+		for (const clientId of [' ', '\u0085']) {
+			const blank = await introspect(h, { token: sibling, client_id: clientId }, { authorization: `Bearer ${caller}` })
+			expect(await blank.json(), JSON.stringify(clientId)).toMatchObject({ active: true })
+		}
+		// U+FEFF is not blank: a client without a secret.
+		const feff = await introspect(h, { token: sibling, client_id: '\uFEFF' }, { authorization: `Bearer ${caller}` })
+		expect(feff.status).toBe(401)
+		expect(await feff.json()).toMatchObject({ error: 'invalid_client' })
 
 		for (const [label, body] of [
 			['itself', { token: caller }],
@@ -1352,14 +1380,6 @@ describe('introspect', () => {
 		const h = await withAlice()
 		const { app, token: target } = await login(h)
 		const asCaller = (caller: string) => introspect(h, { token: target }, { authorization: `Bearer ${caller}` })
-		const unauthorized = async (response: Response, label: string) => {
-			expect(response.status, label).toBe(400)
-			expect(await response.json(), label).toEqual({
-				error: 'invalid_request',
-				error_description:
-					'Request need to be authorized. Required parameter for authorizing request is missing or invalid.',
-			})
-		}
 		await unauthorized(await introspect(h, { token: target }), 'no authentication')
 		await unauthorized(await asCaller('nope'), 'unknown')
 		await unauthorized(
@@ -1497,15 +1517,21 @@ describe('token introspection with stale statistics (RES-7)', () => {
 				await run({ kind: 'bearer', tokenHash: callerHash }),
 				await run({ kind: 'bearer', tokenHash: await sha256Hex('unknown') }),
 			],
-			grow: () =>
-				sql(
+			grow: async () => {
+				await sql(
+					h.store,
+					`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 300)
+					INSERT INTO oauth_clients (id, secret, name, redirect_uris, website, scopes, created_at)
+					SELECT 'grown-' || i, 's', 'Grown', 'https://client.test/cb', NULL, 'read', '2026-10-01T00:00:00.000Z' FROM n`
+				)
+				await sql(
 					h.store,
 					`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 300)
 					INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes, created_at, epoch)
-					SELECT printf('%064d', i), 'access', ?, ?, 'read', '2026-10-01T00:00:00.000Z', 0 FROM n`,
-					app.client_id,
+					SELECT printf('%064d', i), 'access', 'grown-' || i, ?, 'read', '2026-10-01T00:00:00.000Z', 0 FROM n`,
 					h.aliceId
-				),
+				)
+			},
 		})
 		expect(after.map((r) => r.result)).toEqual(before.map((r) => r.result))
 		const [found, unknown] = after

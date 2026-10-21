@@ -10,7 +10,7 @@ import {
 	vapidKey,
 } from './context'
 import { bearerChallenge, INVALID_TOKEN, mastodonError } from './errors'
-import { type Params, type ReadOptions, readParams } from './params'
+import { type Params, railsBlank, type ReadOptions, readParams } from './params'
 import { type Client, type IntrospectionCaller, OOB_REDIRECT_URI } from '../domain/oauth'
 import { DEFAULT_SCOPES, parseScopes, SCOPES } from '../security/scopes'
 import { PKCE_VERIFIER, pkceChallenge, sha256Hex } from '../security/tokens'
@@ -165,9 +165,18 @@ const INVALID_GRANT = () =>
 	oauthError(400, 'invalid_grant', 'The provided authorization grant is invalid, expired, revoked or was already used.')
 const INVALID_SCOPE = () => oauthError(400, 'invalid_scope', 'The requested scope is invalid, unknown, or malformed.')
 
-// A bearer token Doorkeeper refuses (OAuth::InvalidTokenResponse), with its RFC 6750 §3 challenge.
+// Doorkeeper's OAuth::ErrorResponse, as /oauth/token/info and /oauth/introspect answer it: the body without blank
+// members, and a Bearer challenge naming the error whatever it is.
+function doorkeeperError(status: number, error: string, description: string, state?: string): Response {
+	return Response.json(
+		{ error, error_description: description, ...(state === undefined ? {} : { state }) },
+		{ status, headers: { ...NO_STORE, 'www-authenticate': bearerChallenge(description, error) } }
+	)
+}
+
+// A bearer token Doorkeeper refuses: OAuth::InvalidTokenResponse, whose state is always "unauthorized".
 const INVALID_BEARER = (description = INVALID_TOKEN) =>
-	oauthError(401, 'invalid_token', description, { 'www-authenticate': bearerChallenge(description) })
+	doorkeeperError(401, 'invalid_token', description, 'unauthorized')
 const EXPIRED_TOKEN = 'The access token expired'
 
 const TOKEN_PARAMS = ['grant_type', 'code', 'redirect_uri', 'code_verifier', 'scope', 'client_id', 'client_secret']
@@ -203,23 +212,34 @@ async function oauthParams(
 	return requestError(c, result.params, scalars) ?? result.params
 }
 
-// client_secret_post or client_secret_basic.
-function clientCredentials(c: ApiContext, p: Params): { clientId: string; clientSecret: string } | null {
+type ClientCredentials = { clientId: string; clientSecret: string }
+
+// client_secret_basic: undefined without a Basic header, null for one that does not decode to an id and a secret.
+function basicCredentials(c: ApiContext): ClientCredentials | null | undefined {
 	const basic = /^Basic\s+(\S+)$/i.exec(c.req.header('authorization') ?? '')
-	if (basic?.[1] !== undefined) {
-		try {
-			const decoded = atob(basic[1])
-			const colon = decoded.indexOf(':')
-			if (colon !== -1) {
-				return {
-					clientId: decodeURIComponent(decoded.slice(0, colon)),
-					clientSecret: decodeURIComponent(decoded.slice(colon + 1)),
-				}
+	if (basic?.[1] === undefined) {
+		return undefined
+	}
+	try {
+		const decoded = atob(basic[1])
+		const colon = decoded.indexOf(':')
+		if (colon !== -1) {
+			return {
+				clientId: decodeURIComponent(decoded.slice(0, colon)),
+				clientSecret: decodeURIComponent(decoded.slice(colon + 1)),
 			}
-		} catch {
-			return null
 		}
+	} catch {
 		return null
+	}
+	return null
+}
+
+// client_secret_post or client_secret_basic.
+function clientCredentials(c: ApiContext, p: Params): ClientCredentials | null {
+	const basic = basicCredentials(c)
+	if (basic !== undefined) {
+		return basic
 	}
 	const clientId = p.get('client_id')
 	const clientSecret = p.get('client_secret')
@@ -343,22 +363,29 @@ export const tokenInfo: ApiHandler = async (c, deps) => {
 
 // POST /oauth/introspect (RFC 7662, Doorkeeper's TokensController#introspect). Parameters come from the body only: a
 // token or client secret in the query is absent (secrets never come from URLs, VIS-26). The caller is chosen as
-// Doorkeeper chooses it: client credentials (Basic, or a non-blank client_id) first, else the Authorization bearer
-// token, else 400. An inactive token answers {"active":false} alone (RFC 7662 §2.2); a token without expiry has
-// Doorkeeper's exp 0.
+// Doorkeeper chooses it (Client::Credentials.from_request): client credentials whose id is not blank (Basic, then
+// client_id; a Basic header that does not decode names none) first, else the Authorization bearer token, else 400.
+// An inactive token answers {"active":false} alone (RFC 7662 §2.2); a token without expiry has Doorkeeper's exp 0.
 export const introspect: ApiHandler = async (c, deps) => {
 	const p = await oauthParams(c, INTROSPECT_PARAMS, { bodyOnly: true })
 	if (p instanceof Response) {
 		return p
 	}
 	const authorization = c.req.header('authorization') ?? ''
+	const basic = basicCredentials(c)
+	const clientId = p.get('client_id')
+	const client =
+		basic !== undefined && basic !== null && !railsBlank(basic.clientId)
+			? basic
+			: clientId !== undefined && !railsBlank(clientId)
+				? { clientId, clientSecret: p.get('client_secret') }
+				: null
 	let caller: IntrospectionCaller
-	if (/^Basic\s/i.test(authorization) || (p.get('client_id') ?? '').trim() !== '') {
-		const client = clientCredentials(c, p)
-		if (client === null) {
+	if (client !== null) {
+		if (client.clientSecret === undefined) {
 			return INVALID_CLIENT()
 		}
-		caller = { kind: 'client', ...client }
+		caller = { kind: 'client', clientId: client.clientId, clientSecret: client.clientSecret }
 	} else {
 		const bearer = bearerToken(authorization)
 		if (bearer === undefined) {
@@ -399,7 +426,7 @@ export const introspect: ApiHandler = async (c, deps) => {
 
 // Doorkeeper's answer when introspection names no caller (doorkeeper.en.yml request_not_authorized).
 const UNAUTHORIZED_INTROSPECTION = () =>
-	oauthError(
+	doorkeeperError(
 		400,
 		'invalid_request',
 		'Request need to be authorized. Required parameter for authorizing request is missing or invalid.'
