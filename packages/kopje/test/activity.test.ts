@@ -9,6 +9,7 @@ import { appToken, DAY_MS, plannedRun, remoteAccounts, scansOf, staleStatistics 
 import { storeWith } from './setup-helpers'
 import { community } from './status-helpers'
 import { signIn } from './web-helpers'
+import { lookupAccount } from '../src/domain/accounts'
 import { noteActivity } from '../src/domain/auth'
 import { INSTANCE_COUNTS_SQL, instanceInfo } from '../src/domain/instance'
 import { ACTIVITY_MEMO_LIMIT, ActivityMemo } from '../src/mastodon/activity'
@@ -310,5 +311,54 @@ describe('activity plans with stale statistics (RES-7)', () => {
 				'SEARCH l USING INDEX sqlite_autoindex_local_accounts_1 (account_id=?) LEFT-JOIN',
 			])
 		}
+	}, 60_000)
+
+	it('reads one row of an address many remote actors share, whatever their number', async () => {
+		const h = await community(['alice'])
+		const present = { origin: 'https://kopje.test' }
+		// Distinct actors (ingestion keys accounts by actor id) with one username and domain, inserted in id order.
+		const duplicates = (from: number, count: number) =>
+			sql(
+				h.store,
+				`WITH RECURSIVE n(i) AS (SELECT ?1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 + ?2 - 1)
+				INSERT INTO accounts (id, uri, username, domain)
+				SELECT printf('8%017d', i), 'https://remote.test/actors/' || i, CASE i % 2 WHEN 0 THEN 'dup' ELSE 'Dup' END,
+					'remote.test' FROM n`,
+				from,
+				count
+			)
+		// Each statement on the address index: rows materialized (returned to the Worker) and rows read.
+		const lookup = () =>
+			runInDurableObject(h.store, (_instance, state) => {
+				const real = state.storage.sql
+				const seen: { materialized: number; read: number }[] = []
+				const observed = {
+					exec: (query: string, ...params: SqlStorageValue[]) => {
+						const cursor = real.exec(query, ...params)
+						if (!query.includes('INDEXED BY accounts_domain_username')) {
+							return cursor
+						}
+						return {
+							toArray: () => {
+								const rows = cursor.toArray()
+								seen.push({ materialized: rows.length, read: cursor.rowsRead })
+								return rows
+							},
+						}
+					},
+				} as unknown as SqlStorage
+				const account = lookupAccount.run(observed, { username: 'DUP', domain: 'remote.test', present })
+				const info = instanceInfo.run(observed, { now: NOW, present })
+				return { id: account?.id, contact: info.contactAccount?.id, seen }
+			})
+		await sql(h.store, "INSERT INTO instance_settings (name, value) VALUES ('contact_username', 'dup@remote.test')")
+		await duplicates(1, 1)
+		const one = await lookup()
+		await duplicates(2, 199)
+		const many = await lookup()
+		expect(many).toEqual(one)
+		expect(many.id).toBe('800000000000000001')
+		expect(many.contact).toBe('800000000000000001')
+		expect(many.seen.map((s) => s.materialized)).toEqual([1, 1])
 	}, 60_000)
 })

@@ -234,4 +234,46 @@ describe('instance usage.users.active_month', () => {
 		await h.store.suspendAccount(BUILD, { accountId: h.users.alice.id, now: NOW })
 		expect(await activeMonth(h)).toBe(0)
 	})
+
+	it('counts no later day, an imported one included, and moves the window at UTC midnight', async () => {
+		const h = await community(['bob'])
+		const setBob = (value: string) =>
+			sql(h.store, 'UPDATE local_accounts SET active_on = ? WHERE account_id = ?', value, h.users.bob.id)
+		for (const [value, counted] of [
+			[day(NOW), 1],
+			[day(NOW - 27 * DAY_MS), 1],
+			[day(NOW - 28 * DAY_MS), 0],
+			[day(NOW + DAY_MS), 0],
+			['9999-12-31', 0],
+		] as const) {
+			await setBob(value)
+			expect(await activeMonth(h), value).toBe(counted)
+		}
+		// The last instant of a day still counts its 27th day before; the next midnight drops it and counts the new day.
+		await setBob(day(NOW - 27 * DAY_MS))
+		h.now.mockReturnValue(NOW + DAY_MS - 1)
+		expect(await activeMonth(h)).toBe(1)
+		h.now.mockReturnValue(NOW + DAY_MS)
+		expect(await activeMonth(h)).toBe(0)
+		await setBob(day(NOW + DAY_MS))
+		expect(await activeMonth(h)).toBe(1)
+		h.now.mockReturnValue(NOW + DAY_MS - 1)
+		expect(await activeMonth(h)).toBe(0)
+	})
+})
+
+describe('instance contact read from a value past its bound', () => {
+	it('answers 200 with no contact for a value that bypassed the triggers', async () => {
+		const h = await configured()
+		await sql(h.store, 'DROP TRIGGER instance_settings_contact_insert')
+		for (const value of [new Uint8Array([97, 108, 105, 99, 101]).buffer, `${'a'.repeat(600)}`, 'a@b@c', 'al ice']) {
+			await sql(h.store, "INSERT OR REPLACE INTO instance_settings (name, value) VALUES ('contact_username', ?)", value)
+			const v1 = await h.request('/api/v1/instance')
+			expect(v1.status).toBe(200)
+			expect(await v1.json()).toMatchObject({ contact_account: null })
+			const v2 = await h.request('/api/v2/instance')
+			expect(v2.status).toBe(200)
+			expect(await v2.json()).toMatchObject({ contact: { email: 'admin@kopje.test', account: null } })
+		}
+	})
 })

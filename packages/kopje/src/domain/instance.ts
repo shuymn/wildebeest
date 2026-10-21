@@ -71,7 +71,11 @@ const DAY_MS = 24 * 60 * 60 * 1000
 export type AboutSettings = InstanceSettings & { extendedDescription: string | null }
 
 const PUBLIC_SETTINGS = ['domain', 'title', 'description', 'contact_email', 'contact_username', 'rules'] as const
-const SETTINGS_QUERY = `SELECT name, value FROM instance_settings WHERE name IN (${PUBLIC_SETTINGS.map(() => '?').join(', ')})`
+// contact_username is read through its stored bound (0059's projection), so a value that bypassed the triggers (a
+// BLOB, an over-long text) reads as no contact rather than reaching the parser.
+const SETTINGS_QUERY = `SELECT name,
+	CASE name WHEN 'contact_username' THEN ${settingProjectionSql('contact_username', 'value')} ELSE value END AS value
+	FROM instance_settings WHERE name IN (${PUBLIC_SETTINGS.map(() => '?').join(', ')})`
 
 // A document is available exactly when its row exists, the terms of service when its effective date's row exists too
 // (setInstanceSettings writes and removes them together). The writers store no blank document and none that
@@ -92,7 +96,9 @@ function documentsOf(db: Db): Pick<InstanceSettings, 'privacyPolicy' | 'termsOfS
 
 function settingsOf(db: Db): InstanceSettings {
 	const settings = new Map(
-		db.all<{ name: string; value: string }>(SETTINGS_QUERY, ...PUBLIC_SETTINGS).map((row) => [row.name, row.value])
+		db
+			.all<{ name: string; value: string | null }>(SETTINGS_QUERY, ...PUBLIC_SETTINGS)
+			.flatMap((row) => (row.value === null ? [] : [[row.name, row.value] as const]))
 	)
 	return {
 		domain: settings.get('domain') ?? null,
@@ -113,19 +119,21 @@ export const instanceSettings = readOperation<void, AboutSettings>((db) => ({
 		null,
 }))
 
-// The users count and the active ones in the one scan of local_accounts the count needs (active_on is a CHECKed
-// YYYY-MM-DD, so text order is date order).
+// The users count and the active ones in the one scan of local_accounts the count needs: active_on between the window's
+// first day (?1) and today (?2), so an imported later day never counts (active_on is a CHECKed YYYY-MM-DD, so text order
+// is date order).
 export const INSTANCE_COUNTS_SQL = `SELECT u.users, u.active,
 	(SELECT SUM(statuses_count) FROM accounts WHERE domain IS NULL) AS statuses,
 	(SELECT COUNT(DISTINCT domain) FROM accounts WHERE domain IS NOT NULL) AS domains
-FROM (SELECT COUNT(*) AS users, COUNT(CASE WHEN l.active_on >= ?1 THEN 1 END) AS active
+FROM (SELECT COUNT(*) AS users, COUNT(CASE WHEN l.active_on BETWEEN ?1 AND ?2 THEN 1 END) AS active
 	FROM local_accounts l WHERE ${availableLocalSql('l')}) u`
 
 export const instanceInfo = readOperation<{ now: number; present: Present }, InstanceInfo>((db, { now, present }) => {
 	const since = new Date(now - (ACTIVE_DAYS - 1) * DAY_MS).toISOString().slice(0, 10)
 	const counts = db.first<{ users: number; active: number; statuses: number | null; domains: number }>(
 		INSTANCE_COUNTS_SQL,
-		since
+		since,
+		new Date(now).toISOString().slice(0, 10)
 	)
 	const settings = settingsOf(db)
 	return {

@@ -22,6 +22,7 @@ import { MIGRATIONS } from '../src/db/migrations'
 import { Db } from '../src/db/sql'
 import { DISTRIBUTABLE_SQL, REACHES_FOLLOWERS_SQL, REQUIRES_MENTION_SQL } from '../src/domain/audience'
 import { CONVERSATIONS_BACKFILL } from '../src/domain/conversation-rows'
+import { instanceInfo } from '../src/domain/instance'
 import { MODERATION_LOG_KEEP } from '../src/domain/moderation-log'
 import { readOperation, sessionOperation, writeOperation } from '../src/domain/operation'
 import { storeRemoteStatus } from '../src/domain/remote-statuses'
@@ -7202,6 +7203,31 @@ describe('0059_contact_and_activity', () => {
 		expectGenerated(at, contactActivityMigrationSql())
 		expect(CONTACT_USERNAME_BYTES).toBe(509)
 		expect(MIGRATIONS[at]?.sql).toContain('length(CAST(NEW.value AS BLOB)) > 509')
+	})
+
+	it('deletes a contact_username row past its bound that a pre-0059 Store holds, and keeps one within it', async () => {
+		for (const [value, kept] of [
+			[new Uint8Array([97, 108, 105, 99, 101]).buffer, false],
+			['a'.repeat(510), false],
+			[`${'a'.repeat(256)}@remote.test`, false],
+			['a@b@c', false],
+			['alice', true],
+		] as const) {
+			const store = freshStore()
+			await runInDurableObject(store, async (_instance, state) => {
+				const sql = state.storage.sql
+				await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+				sql.exec("INSERT INTO instance_settings (name, value) VALUES ('contact_username', ?), ('title', 'Herd')", value)
+				await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()
+				expect(sql.exec('SELECT name FROM instance_settings ORDER BY name').toArray()).toEqual([
+					...(kept ? [{ name: 'contact_username' }] : []),
+					{ name: 'title' },
+				])
+				// The instance reads without throwing and names no contact (alice has no account here).
+				const info = instanceInfo.run(sql, { now: NOW, present: { origin: 'https://kopje.test' } })
+				expect(info).toMatchObject({ title: 'Herd', contactAccount: null, contactUsername: kept ? 'alice' : null })
+			})
+		}
 	})
 
 	it('keeps rows as they were, then bounds active_on and contact_username as stored', async () => {

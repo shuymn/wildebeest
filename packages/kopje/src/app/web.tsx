@@ -430,7 +430,10 @@ export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 		if (view.status !== 'ok' || view.value === null) {
 			return toLogin(c)
 		}
-		noteActivitySoon(c, deps, credential.tokenHash)
+		// Activity (mastodon/activity.ts): the page served by GET /settings only, never a refused form's re-render.
+		if (problems.length === 0) {
+			noteActivitySoon(c, deps, credential.tokenHash)
+		}
 		return privatePage(
 			c,
 			problems.length === 0 ? 200 : 422,

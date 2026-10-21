@@ -547,7 +547,8 @@ export const getAccounts = readOperation<{ ids: string[]; present: Present }, Ac
 // Account.find_remote: by accounts_local_username or accounts_domain_username, named so the seek does not rest on the
 // Store's statistics (RES-7), as is the account's local row. stored_username is the username as stored, not
 // usernameSql's projection: a matching row's username has the bytes of `username` (SQLite's lower changes ASCII
-// letters only), so it is bounded by the caller's.
+// letters only), so it is bounded by the caller's. Remote actors of distinct ids may share a username and domain
+// (ingestion keys accounts by actor id): one row is read, the first in the index's order (the oldest row of the key).
 function addressRow(
 	db: Db,
 	username: string,
@@ -558,14 +559,14 @@ function addressRow(
 				`SELECT ${selectSql(ACCOUNT_COLUMN_MAP)}, a.username AS stored_username
 				FROM accounts a INDEXED BY accounts_local_username
 				LEFT JOIN local_accounts l INDEXED BY ${LOCAL_ACCOUNTS_ID_INDEX} ON l.account_id = a.id
-				WHERE a.domain IS NULL AND lower(a.username) = lower(?)`,
+				WHERE a.domain IS NULL AND lower(a.username) = lower(?) LIMIT 1`,
 				username
 			)
 		: db.first(
 				`SELECT ${selectSql(ACCOUNT_COLUMN_MAP)}, a.username AS stored_username
 				FROM accounts a INDEXED BY accounts_domain_username
 				LEFT JOIN local_accounts l INDEXED BY ${LOCAL_ACCOUNTS_ID_INDEX} ON l.account_id = a.id
-				WHERE a.domain = ? AND lower(a.username) = lower(?)`,
+				WHERE a.domain = ? AND lower(a.username) = lower(?) LIMIT 1`,
 				domain,
 				username
 			)

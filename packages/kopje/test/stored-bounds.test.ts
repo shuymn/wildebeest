@@ -25,6 +25,7 @@ import {
 	CONTACT_SETTING_BOUNDS,
 	CONTACT_USERNAME_BYTES,
 	CONTACT_USERNAME_LIMIT,
+	contactUsernamePastBoundSql,
 	CONTENT_JSON_BYTES,
 	contentSql,
 	DISPLAY_NAME_LIMIT,
@@ -800,6 +801,10 @@ describe('contact_username (0059_contact_and_activity)', () => {
 					(input) => {
 						expect(idempotent(sql, projection, input)).toBe(true)
 						expect(writer(input)).toBe(valueOf(sql, projection('?1'), input))
+						// The migration's CASE-free predicate is P(x) IS NOT x.
+						expect(valueOf(sql, `${contactUsernamePastBoundSql('?1')}`, input)).toBe(
+							valueOf(sql, `(${projection('?1')}) IS NOT ?1`, input)
+						)
 						const written = writer(input)
 						if (written !== null) {
 							expect(valueOf(sql, `(${projection('?1')}) IS ?1`, written)).toBe(1)
@@ -817,7 +822,7 @@ describe('contact_username (0059_contact_and_activity)', () => {
 		expect(new TextEncoder().encode(`${username}@${domain}`).length).toBe(CONTACT_USERNAME_BYTES)
 		await runInDurableObject(freshStore(), (_instance, state) => {
 			const sql = state.storage.sql
-			for (const [input, kept] of [
+			const cases = [
 				[`${username}@${domain}`, true],
 				[`${username}@${domain}x`, false],
 				[username, true],
@@ -834,12 +839,17 @@ describe('contact_username (0059_contact_and_activity)', () => {
 				['a b', false],
 				['al\u00e9', false],
 				['\u{1F600}', false],
-			] as const) {
+			] as const
+			for (const [input, kept] of cases) {
 				expect(writer(input), JSON.stringify(input)).toBe(kept ? input : null)
 				expect(valueOf(sql, projection('?1'), input), JSON.stringify(input)).toBe(kept ? input : null)
 			}
-			// A value of another storage class reads as NULL.
+			for (const [input, kept] of cases) {
+				expect(valueOf(sql, contactUsernamePastBoundSql('?1'), input), JSON.stringify(input)).toBe(kept ? 0 : 1)
+			}
+			// A value of another storage class reads as NULL, and is past the bound.
 			expect(sql.exec(`SELECT ${projection('?1')} AS v`, new Uint8Array([97]).buffer).one().v).toBeNull()
+			expect(sql.exec(`SELECT ${contactUsernamePastBoundSql('?1')} AS v`, new Uint8Array([97]).buffer).one().v).toBe(1)
 			expect(sql.exec(`SELECT ${projection('?1')} AS v`, 12).one().v).toBeNull()
 		})
 	})

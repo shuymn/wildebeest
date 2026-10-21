@@ -3,10 +3,11 @@ import { errorFields } from '../platform/error-message'
 import { StoreUnavailableError } from '../platform/store-errors'
 
 // RES-6: the Worker's side of activity recording (domain/auth.ts noteActivity). After the response of an authenticated
-// API request (mastodon/access.ts) or of a signed-in settings page (app/web.tsx), one Store call is sent per isolate,
-// token and UTC day at most. The memo only suppresses repeats, best effort: it is cleared when the UTC day changes or
-// when it holds ACTIVITY_MEMO_LIMIT tokens (about 100 KB of digests), and an isolate restart forgets it. What bounds
-// the writes is the Store's conditional UPDATE, one row write per account and UTC day.
+// API request (mastodon/access.ts) or of GET /settings (app/web.tsx), a Store call is sent unless the memo shows one
+// sent for the token that UTC day. The memo only suppresses repeats, best effort: it is cleared when the UTC day changes
+// or when it holds ACTIVITY_MEMO_LIMIT tokens (about 100 KB of digests), forgets a failed call, and an isolate restart
+// forgets it all, so a token may send again. What bounds the writes is the Store's conditional UPDATE, one row write
+// per account and UTC day.
 export const ACTIVITY_MEMO_LIMIT = 1024
 
 // Per isolate (app/app.ts creates one per app, worker.ts one app per isolate), keyed by token digest. An entry is a

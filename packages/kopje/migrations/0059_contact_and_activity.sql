@@ -6,42 +6,51 @@
 --   instance_settings_contact_insert   BEFORE INSERT and BEFORE UPDATE OF name, value on instance_settings:
 --   instance_settings_contact_update   RAISE(ABORT, 'instance_settings: a value past its stored bound') for a
 --                              contact_username that is not a fixed point of its projection.
+--   instance_settings          an existing contact_username row that is not a fixed point of its projection is
+--                              deleted first (a dump restored before this migration may hold one); none is rewritten.
 --
 -- Bounds and the projection: src/platform/stored-bounds.ts (CONTACT_SETTING_BOUNDS); the statements below are the
 -- output of contactActivityMigrationSql (test/migrations.test.ts compares them); stored form: docs/dump-format.md.
 --
--- Cost: the CHECK reads the local accounts once; the triggers read no row. No row is rewritten: the column is NULL in
--- every row and no contact_username row exists before this migration.
+-- Cost: the CHECK reads the local accounts once; the DELETE seeks one instance_settings row by its key; the triggers
+-- read no row.
 
 ALTER TABLE local_accounts ADD COLUMN active_on TEXT
   CONSTRAINT active_on_date CHECK (active_on IS NULL OR (typeof(active_on) = 'text'
     AND length(CAST(active_on AS BLOB)) = 10 AND instr(CAST(active_on AS BLOB), x'00') = 0
     AND active_on GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' AND date(active_on) IS active_on));
 
+DELETE FROM instance_settings
+WHERE name = 'contact_username' AND (value IS NOT NULL AND (typeof(value) <> 'text'
+	OR length(CAST(value AS BLOB)) > 509
+	OR instr(CAST(value AS BLOB), x'00') > 0
+	OR value = '' OR value GLOB '*[^-.0-9@A-Z_a-z]*' OR value GLOB '@*' OR value GLOB '*@'
+	OR value GLOB '*@*@*'
+	OR (instr(value, '@') = 0 AND length(value) > 255)
+	OR instr(value, '@') - 1 > 255));
+
 -- 0049's triggers end in ELSE 0 and 0057's name only the trends settings; these bound contact_username.
 
 CREATE TRIGGER instance_settings_contact_insert BEFORE INSERT ON instance_settings
-WHEN NEW.name = 'contact_username' AND (CASE WHEN typeof(NEW.value) <> 'text' THEN NULL
-	WHEN length(CAST(NEW.value AS BLOB)) > 509 THEN NULL
-	WHEN instr(CAST(NEW.value AS BLOB), x'00') > 0 THEN NULL
-	WHEN NEW.value = '' OR NEW.value GLOB '*[^-.0-9@A-Z_a-z]*' OR NEW.value GLOB '@*' OR NEW.value GLOB '*@'
-		OR NEW.value GLOB '*@*@*' THEN NULL
-	WHEN (CASE instr(NEW.value, '@') WHEN 0 THEN length(NEW.value) ELSE instr(NEW.value, '@') - 1 END)
-		> 255 THEN NULL
-	ELSE NEW.value END) IS NOT NEW.value
+WHEN NEW.name = 'contact_username' AND (NEW.value IS NOT NULL AND (typeof(NEW.value) <> 'text'
+	OR length(CAST(NEW.value AS BLOB)) > 509
+	OR instr(CAST(NEW.value AS BLOB), x'00') > 0
+	OR NEW.value = '' OR NEW.value GLOB '*[^-.0-9@A-Z_a-z]*' OR NEW.value GLOB '@*' OR NEW.value GLOB '*@'
+	OR NEW.value GLOB '*@*@*'
+	OR (instr(NEW.value, '@') = 0 AND length(NEW.value) > 255)
+	OR instr(NEW.value, '@') - 1 > 255))
 BEGIN
   SELECT RAISE(ABORT, 'instance_settings: a value past its stored bound');
 END;
 
 CREATE TRIGGER instance_settings_contact_update BEFORE UPDATE OF name, value ON instance_settings
-WHEN NEW.name = 'contact_username' AND (CASE WHEN typeof(NEW.value) <> 'text' THEN NULL
-	WHEN length(CAST(NEW.value AS BLOB)) > 509 THEN NULL
-	WHEN instr(CAST(NEW.value AS BLOB), x'00') > 0 THEN NULL
-	WHEN NEW.value = '' OR NEW.value GLOB '*[^-.0-9@A-Z_a-z]*' OR NEW.value GLOB '@*' OR NEW.value GLOB '*@'
-		OR NEW.value GLOB '*@*@*' THEN NULL
-	WHEN (CASE instr(NEW.value, '@') WHEN 0 THEN length(NEW.value) ELSE instr(NEW.value, '@') - 1 END)
-		> 255 THEN NULL
-	ELSE NEW.value END) IS NOT NEW.value
+WHEN NEW.name = 'contact_username' AND (NEW.value IS NOT NULL AND (typeof(NEW.value) <> 'text'
+	OR length(CAST(NEW.value AS BLOB)) > 509
+	OR instr(CAST(NEW.value AS BLOB), x'00') > 0
+	OR NEW.value = '' OR NEW.value GLOB '*[^-.0-9@A-Z_a-z]*' OR NEW.value GLOB '@*' OR NEW.value GLOB '*@'
+	OR NEW.value GLOB '*@*@*'
+	OR (instr(NEW.value, '@') = 0 AND length(NEW.value) > 255)
+	OR instr(NEW.value, '@') - 1 > 255))
 BEGIN
   SELECT RAISE(ABORT, 'instance_settings: a value past its stored bound');
 END;

@@ -757,6 +757,18 @@ function contactUsernameSql(column: string): string {
 	ELSE ${column} END`
 }
 
+// True when `column` is not a fixed point of P (P(x) IS NOT x), written without CASE so a migration's DELETE may use it
+// (test/migration-lint.test.ts); test/stored-bounds.test.ts holds the two equal.
+export function contactUsernamePastBoundSql(column: string): string {
+	return `${column} IS NOT NULL AND (typeof(${column}) <> 'text'
+	OR length(CAST(${column} AS BLOB)) > ${CONTACT_USERNAME_BYTES}
+	OR instr(CAST(${column} AS BLOB), x'00') > 0
+	OR ${column} = '' OR ${column} GLOB '*[^-.0-9@A-Z_a-z]*' OR ${column} GLOB '@*' OR ${column} GLOB '*@'
+	OR ${column} GLOB '*@*@*'
+	OR (instr(${column}, '@') = 0 AND length(${column}) > ${CONTACT_USERNAME_LIMIT})
+	OR instr(${column}, '@') - 1 > ${CONTACT_USERNAME_LIMIT})`
+}
+
 // P's JS twin: the value itself, or null where P is NULL.
 export function storedContactUsername(value: string): string | null {
 	if (ENCODER.encode(value).length > CONTACT_USERNAME_BYTES || !CONTACT_ALPHABET.test(value)) {
@@ -800,14 +812,17 @@ export function settingProjectionSql(name: StoredSettingName, column: string): s
 // NULL or a calendar date YYYY-MM-DD of 10 bytes, held by a CHECK for imports too.
 export const ACTIVE_ON_CHECK = 'active_on_date'
 
-// Migration 0059_contact_and_activity after its header (test/migrations.test.ts compares them).
+// Migration 0059_contact_and_activity after its header (test/migrations.test.ts compares them): the column, an existing
+// contact_username row that is not a fixed point of P deleted (a dump restored before 0059 may carry one), then the
+// triggers.
 export function contactActivityMigrationSql(): string {
-	const when = `NEW.name = 'contact_username' AND (${contactUsernameSql('NEW.value')}) IS NOT NEW.value`
+	const when = `NEW.name = 'contact_username' AND (${contactUsernamePastBoundSql('NEW.value')})`
 	return `${[
 		`ALTER TABLE local_accounts ADD COLUMN active_on TEXT
   CONSTRAINT ${ACTIVE_ON_CHECK} CHECK (active_on IS NULL OR (typeof(active_on) = 'text'
     AND length(CAST(active_on AS BLOB)) = 10 AND instr(CAST(active_on AS BLOB), x'00') = 0
     AND active_on GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' AND date(active_on) IS active_on));`,
+		`DELETE FROM instance_settings\nWHERE name = 'contact_username' AND (${contactUsernamePastBoundSql('value')});`,
 		"-- 0049's triggers end in ELSE 0 and 0057's name only the trends settings; these bound contact_username.",
 		...boundTriggers(
 			'instance_settings_contact',

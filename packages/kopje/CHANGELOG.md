@@ -69,8 +69,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds migrations `0058_profile_credentials` and `0059_contact_and_activity`, applied on the first request after the deploy; a rollback
-  to an earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
+- Store schema: adds migrations `0058_profile_credentials` and `0059_contact_and_activity`, applied on the first
+  request after the deploy; a rollback to an earlier version needs the point-in-time restore described in
+  [docs/upgrade.md](docs/upgrade.md).
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.18] - 2026-10-20
