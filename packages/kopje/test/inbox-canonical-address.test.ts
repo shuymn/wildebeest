@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { sql } from './api-helpers'
-import { AP, mastodonActor, type RemoteWeb, type TestActor } from './inbox-helpers'
+import { mastodonActor, serveWebFinger, type TestActor } from './inbox-helpers'
 import {
 	accountId,
 	ALICE,
@@ -24,15 +24,6 @@ import {
 
 const HOST = 'social.example'
 const CANONICAL = 'nice.example'
-
-function serveWebFinger(web: RemoteWeb, resource: string, subject: string, self: string): void {
-	const host = resource.split('@')[1]!
-	web.serve(
-		`https://${host}/.well-known/webfinger?resource=${encodeURIComponent(resource)}`,
-		{ subject, links: [{ rel: 'self', type: AP, href: self }] },
-		'application/jrd+json'
-	)
-}
 
 // ali lives on social.example and declares ali@nice.example, which nice.example confirms.
 async function splitDomain(t: Setup, extra: Record<string, unknown> = {}): Promise<TestActor> {

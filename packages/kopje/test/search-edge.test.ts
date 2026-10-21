@@ -6,7 +6,8 @@ import { bearer, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { type PlannedStatement, plannedSql, scansOf, staleStatistics, watchedCursor } from './read-helpers'
 import { act, community, post, seedStatus } from './status-helpers'
-import { ACCOUNT_PREFIX_LIMIT, ACCOUNT_RECENT_LIMIT, type SearchInput, searchAccounts } from '../src/domain/accounts'
+import { ACCOUNT_PREFIX_LIMIT, ACCOUNT_RECENT_LIMIT, searchAccounts } from '../src/domain/accounts'
+import type { Authorized } from '../src/domain/auth'
 import {
 	HASHTAG_LIBRARY_LIMIT,
 	HASHTAG_PUBLIC_WINDOW,
@@ -15,6 +16,7 @@ import {
 	type SearchRequest,
 	type SearchType,
 } from '../src/domain/search'
+import type { StoreOperation } from '../src/platform/store-kernel'
 import { MAX_TREND_REVIEWS } from '../src/platform/stored-bounds'
 import { sha256Hex } from '../src/security/tokens'
 
@@ -329,55 +331,45 @@ describe('verification review', () => {
 	}, 60_000)
 })
 
-// The search operation over `h`'s Store with `input`, its results, and the plan and rows read of each statement whose
-// SQL matches `pattern` (EXPLAIN QUERY PLAN of the production statement with its parameters).
-async function planned(
+// `operation` over `h`'s Store with `input` and alice's credential of `scope`, its results, and the plan and rows read
+// of each statement whose SQL matches `pattern` (EXPLAIN QUERY PLAN of the production statement with its parameters).
+async function plannedOperation<I, O>(
 	h: Awaited<ReturnType<typeof fixture>>['h'],
 	pattern: RegExp,
-	input: Omit<SearchRequest, 'present' | 'localDomain' | 'limit' | 'offset'> & { limit?: number; offset?: number }
+	operation: StoreOperation<I, Authorized<O>>,
+	scope: string,
+	input: Omit<I, 'credential' | 'present' | 'localDomain' | 'limit' | 'offset'> & { limit?: number; offset?: number }
 ) {
 	const tokenHash = await sha256Hex(h.users.alice.token)
 	return runInDurableObject(h.store, (_instance, state) => {
 		const plans: PlannedStatement[] = []
 		const capturing = plannedSql(state.storage.sql, pattern, plans, false)
-		const result = search.run(capturing, {
-			credential: { tokenHash, scope: 'read:search', now: NOW },
+		const result = operation.run(capturing, {
+			credential: { tokenHash, scope, now: NOW },
 			limit: 20,
 			offset: 0,
 			localDomain: 'kopje.test',
 			present: { origin: 'https://kopje.test' },
 			...input,
-		})
+		} as I)
 		if (result.status !== 'ok') {
 			throw new Error(`search failed: ${result.status}`)
 		}
-		return { value: result.value as Results, plans }
+		return { value: result.value, plans }
 	})
 }
 
-// The same over GET /api/v1/accounts/search's operation.
-async function plannedAccountSearch(
+// The search operation (GET /api/v2/search).
+async function planned(
 	h: Awaited<ReturnType<typeof fixture>>['h'],
 	pattern: RegExp,
-	input: Omit<SearchInput, 'present' | 'localDomain' | 'limit' | 'offset'>
+	input: Omit<SearchRequest, 'credential' | 'present' | 'localDomain' | 'limit' | 'offset'> & {
+		limit?: number
+		offset?: number
+	}
 ) {
-	const tokenHash = await sha256Hex(h.users.alice.token)
-	return runInDurableObject(h.store, (_instance, state) => {
-		const plans: PlannedStatement[] = []
-		const capturing = plannedSql(state.storage.sql, pattern, plans, false)
-		const result = searchAccounts.run(capturing, {
-			credential: { tokenHash, scope: 'read:accounts', now: NOW },
-			limit: 20,
-			offset: 0,
-			localDomain: 'kopje.test',
-			present: { origin: 'https://kopje.test' },
-			...input,
-		})
-		if (result.status !== 'ok') {
-			throw new Error(`account search failed: ${result.status}`)
-		}
-		return { value: result.value as { id: string }[], plans }
-	})
+	const { value, plans } = await plannedOperation(h, pattern, search, 'read:search', input)
+	return { value: value as Results, plans }
 }
 
 describe('exclude_unreviewed and following at saturation (RES-7)', () => {
@@ -497,7 +489,7 @@ describe('exclude_unreviewed and following at saturation (RES-7)', () => {
 					const { value, plans } = await planned(h, /FROM follows f/, { ...input, types: ['accounts'] })
 					return { ids: value.accounts.map((a) => a.id), plans }
 				}
-				const { value, plans } = await plannedAccountSearch(h, /FROM follows f/, input)
+				const { value, plans } = await plannedOperation(h, /FROM follows f/, searchAccounts, 'read:accounts', input)
 				return { ids: value.map((a) => a.id), plans }
 			}
 			const accepted = await run('500000000000000000', true)

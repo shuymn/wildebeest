@@ -6,9 +6,21 @@ import { seedAccount, sql } from './api-helpers'
 import { harness, inboxDeps, NOW } from './app-helpers'
 import { fixtureKeyGen } from './federation-helpers'
 import { BUILD } from './helpers'
-import { AP, LOCAL, MASTODON, mastodonActor, MISSKEY, MISSKEY_CONTEXT, misskeyActor, signedInit } from './inbox-helpers'
 import {
+	AP,
+	LOCAL,
+	MASTODON,
+	mastodonActor,
+	MISSKEY,
+	MISSKEY_CONTEXT,
+	misskeyActor,
+	serveWebFinger,
+	signedInit,
+} from './inbox-helpers'
+import {
+	ACCOUNT_SEARCHES,
 	accountId,
+	type Acct,
 	ALICE,
 	ALICE_URI,
 	announce,
@@ -1070,31 +1082,6 @@ describe('search with resolve=true (NET-4, VIS-1)', () => {
 	})
 })
 
-// The account search of each endpoint that resolves an address (AccountSearchService, which both reach): its path for
-// the given parameters, and the accounts of its answer.
-type Acct = { id: string; acct: string }
-const ACCOUNT_SEARCHES = [
-	{
-		name: 'v2',
-		path: (params: string) => `/api/v2/search?type=accounts&${params}`,
-		accounts: (body: unknown) => (body as { accounts: Acct[] }).accounts,
-	},
-	{
-		name: 'v1',
-		path: (params: string) => `/api/v1/accounts/search?${params}`,
-		accounts: (body: unknown) => body as Acct[],
-	},
-] as const
-
-function serveWebFinger(t: Setup, resource: string, self: string): void {
-	const host = resource.split('@')[1]!
-	t.web.serve(
-		`https://${host}/.well-known/webfinger?resource=${encodeURIComponent(resource)}`,
-		{ subject: resource, links: [{ rel: 'self', type: AP, href: self }] },
-		'application/jrd+json'
-	)
-}
-
 describe('account search with resolve=true (NET-4, VIS-1)', () => {
 	const accts = async (t: Setup, path: string, as: 'alice' | 'dave' = 'alice') => {
 		const response = await t.api<Acct[]>(path, as)
@@ -1105,7 +1092,7 @@ describe('account search with resolve=true (NET-4, VIS-1)', () => {
 	it('resolves user@domain through WebFinger as the instance actor, and answers it first', async () => {
 		const t = await setup()
 		const bob = await mastodonActor(t.web, 'bob')
-		serveWebFinger(t, 'acct:bob@mastodon.example', bob.uri)
+		serveWebFinger(t.web, 'acct:bob@mastodon.example', 'acct:bob@mastodon.example', bob.uri)
 		for (const q of ['bob@mastodon.example', '@bob@mastodon.example']) {
 			expect(await accts(t, `/api/v1/accounts/search?resolve=true&q=${encodeURIComponent(q)}`)).toEqual([
 				'bob@mastodon.example',
@@ -1125,7 +1112,7 @@ describe('account search with resolve=true (NET-4, VIS-1)', () => {
 	it('fetches nothing without resolve, for a URL, a local address, an offset, a zero limit or a long query', async () => {
 		const t = await setup()
 		const bob = await mastodonActor(t.web, 'bob')
-		serveWebFinger(t, 'acct:bob@mastodon.example', bob.uri)
+		serveWebFinger(t.web, 'acct:bob@mastodon.example', 'acct:bob@mastodon.example', bob.uri)
 		await seedAccount(t.store, { username: 'carol' })
 		const accounts = () => sql(t.store, 'SELECT count(*) AS n FROM accounts')
 		const before = await accounts()
@@ -1160,8 +1147,8 @@ describe('account search with resolve=true (NET-4, VIS-1)', () => {
 		async function handoff() {
 			const t = await setup()
 			const bob = await mastodonActor(t.web, 'bob')
-			serveWebFinger(t, 'acct:alias@alias.example', bob.uri)
-			serveWebFinger(t, 'acct:bob@mastodon.example', bob.uri)
+			serveWebFinger(t.web, 'acct:alias@alias.example', 'acct:alias@alias.example', bob.uri)
+			serveWebFinger(t.web, 'acct:bob@mastodon.example', 'acct:bob@mastodon.example', bob.uri)
 			await seedAccount(t.store, { username: 'fan1', displayName: 'alias@alias.example', followersCount: 2 })
 			await seedAccount(t.store, { username: 'fan2', displayName: 'alias@alias.example', followersCount: 1 })
 			return { t, bob, q: encodeURIComponent('alias@alias.example') }
@@ -1199,7 +1186,7 @@ describe('account search with resolve=true (NET-4, VIS-1)', () => {
 		it(`${endpoint.name}: answers the resolved account once when the search also finds it`, async () => {
 			const t = await setup()
 			const bob = await mastodonActor(t.web, 'bob')
-			serveWebFinger(t, 'acct:bob@mastodon.example', bob.uri)
+			serveWebFinger(t.web, 'acct:bob@mastodon.example', 'acct:bob@mastodon.example', bob.uri)
 			const q = encodeURIComponent('bob@mastodon.example')
 			await search(t, `resolve=true&q=${q}`)
 			expect(await search(t, `q=${q}`)).toEqual(['bob@mastodon.example'])
@@ -1209,7 +1196,7 @@ describe('account search with resolve=true (NET-4, VIS-1)', () => {
 		it(`${endpoint.name}: stores but does not answer an account on a domain the viewer blocks (R14)`, async () => {
 			const t = await setup()
 			const bob = await mastodonActor(t.web, 'bob')
-			serveWebFinger(t, 'acct:bob@mastodon.example', bob.uri)
+			serveWebFinger(t.web, 'acct:bob@mastodon.example', 'acct:bob@mastodon.example', bob.uri)
 			await domainBlock(t.store, ALICE, 'mastodon.example')
 			const q = encodeURIComponent('bob@mastodon.example')
 			expect(await search(t, `resolve=true&q=${q}`)).toEqual([])
@@ -1222,7 +1209,7 @@ describe('account search with resolve=true (NET-4, VIS-1)', () => {
 			const clock = { now: NOW }
 			const t = await setup(clock)
 			const bob = await mastodonActor(t.web, 'bob')
-			serveWebFinger(t, 'acct:bob@mastodon.example', bob.uri)
+			serveWebFinger(t.web, 'acct:bob@mastodon.example', 'acct:bob@mastodon.example', bob.uri)
 			const q = encodeURIComponent('bob@mastodon.example')
 			// The instance actor's key exists, so the resolution fetches in maintenance and only its storing is refused.
 			await search(t, `resolve=true&q=${q}`)
@@ -1246,7 +1233,7 @@ describe('account search with resolve=true (NET-4, VIS-1)', () => {
 	it('resolves nothing while the Worker is in readonly maintenance without a Store flag (v1)', async () => {
 		const t = await setup()
 		const bob = await mastodonActor(t.web, 'bob')
-		serveWebFinger(t, 'acct:bob@mastodon.example', bob.uri)
+		serveWebFinger(t.web, 'acct:bob@mastodon.example', 'acct:bob@mastodon.example', bob.uri)
 		await seedAccount(t.store, { username: 'carol', displayName: 'bob@mastodon.example' })
 		await sql(t.store, "DELETE FROM instance_settings WHERE name = 'instance_actor_key'")
 		const maintenance = harness(t.store, { MAINTENANCE: 'readonly' }, BUILD, {
@@ -1266,7 +1253,7 @@ describe('account search with resolve=true (NET-4, VIS-1)', () => {
 	it('answers from local data when the Store in maintenance cannot store the instance key (v1)', async () => {
 		const t = await setup()
 		const bob = await mastodonActor(t.web, 'bob')
-		serveWebFinger(t, 'acct:bob@mastodon.example', bob.uri)
+		serveWebFinger(t.web, 'acct:bob@mastodon.example', 'acct:bob@mastodon.example', bob.uri)
 		await seedAccount(t.store, { username: 'bob', domain: 'mastodon.example' })
 		// Cold: the key is created on first use, a write the Store in maintenance refuses.
 		await sql(t.store, "DELETE FROM instance_settings WHERE name = 'instance_actor_key'")

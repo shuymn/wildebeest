@@ -20,6 +20,24 @@ export const DAVE = '222222222222222222'
 export const DAVE_URI = `${LOCAL}/ap/users/dave`
 export const OTHER = 'https://other.example'
 
+// The account search of each endpoint that resolves an address (AccountSearchService, which both reach): its path for
+// the given parameters, the accounts of its answer, and its answer when nothing is found.
+export type Acct = { id: string; acct: string }
+export const ACCOUNT_SEARCHES = [
+	{
+		name: 'v2',
+		path: (params: string) => `/api/v2/search?type=accounts&${params}`,
+		accounts: (body: unknown) => (body as { accounts: Acct[] }).accounts,
+		empty: { accounts: [], statuses: [], hashtags: [] },
+	},
+	{
+		name: 'v1',
+		path: (params: string) => `/api/v1/accounts/search?${params}`,
+		accounts: (body: unknown) => body as Acct[],
+		empty: [],
+	},
+] as const
+
 export async function token(store: StoreStub, accountId: string): Promise<string> {
 	await sql(
 		store,

@@ -10,6 +10,16 @@ import { RSA_ALGORITHM } from '../src/security/key-wrap'
 // fetched from a real server.
 
 export const AP = 'application/activity+json'
+
+// A WebFinger answer for `resource` on its domain: `subject`, and the actor `self`.
+export function serveWebFinger(web: RemoteWeb, resource: string, subject: string, self: string): void {
+	const host = resource.split('@')[1]!
+	web.serve(
+		`https://${host}/.well-known/webfinger?resource=${encodeURIComponent(resource)}`,
+		{ subject, links: [{ rel: 'self', type: AP, href: self }] },
+		'application/jrd+json'
+	)
+}
 export const LOCAL = 'https://kopje.test'
 export const MASTODON = 'https://mastodon.example'
 export const MISSKEY = 'https://misskey.example'

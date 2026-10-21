@@ -62,10 +62,9 @@ export const search: ApiHandler = async (c, deps) => {
 	const type = p.get('type')
 	const types = type === undefined || type === '' ? TYPES : TYPES.filter((t) => t === type)
 	const excludeUnreviewed = parseBoolean(p.get('exclude_unreviewed')) === true
-	const credential = userCredential(c, deps)
 	const offset = parsed.offset > MAX_SEARCH_OFFSET ? null : parsed.offset
 	if (offset === null || types.length === 0) {
-		authorized(await storeCall(c, deps, (s, b) => s.checkCredential(b, credential)))
+		authorized(await storeCall(c, deps, (s, b) => s.checkCredential(b, userCredential(c, deps))))
 		return c.json({ accounts: [], statuses: [], hashtags: [] })
 	}
 	const query = parsed.query.trim()

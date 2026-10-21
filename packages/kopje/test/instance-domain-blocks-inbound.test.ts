@@ -5,6 +5,7 @@ import { inboxDeps, NOW } from './app-helpers'
 import { blockDomain } from './domain-block-helpers'
 import { mastodonActor, type TestActor } from './inbox-helpers'
 import {
+	ACCOUNT_SEARCHES,
 	accountId,
 	ALICE,
 	announce,
@@ -224,13 +225,9 @@ describe('fetches outside the inbox after a block (rows 9, 10)', () => {
 		expect(
 			await t.api<{ statuses: unknown[] }>(`/api/v2/search?resolve=true&q=${encodeURIComponent(note.id)}`)
 		).toMatchObject({ status: 200, body: { statuses: [] } })
-		for (const path of ['/api/v2/search?resolve=true&type=accounts&q=', '/api/v1/accounts/search?resolve=true&q=']) {
-			const answer = await t.api<unknown>(`${path}${encodeURIComponent(`bob@${BLOCKED}`)}`)
-			expect([path, answer.status, answer.body]).toEqual([
-				path,
-				200,
-				path.includes('v2') ? { accounts: [], statuses: [], hashtags: [] } : [],
-			])
+		for (const endpoint of ACCOUNT_SEARCHES) {
+			const answer = await t.api<unknown>(endpoint.path(`resolve=true&q=${encodeURIComponent(`bob@${BLOCKED}`)}`))
+			expect([endpoint.name, answer.status, answer.body]).toEqual([endpoint.name, 200, endpoint.empty])
 		}
 		expect(await accountId(t.store, bob.uri)).toBeUndefined()
 		expect(requestsTo(t, BLOCKED, fetched)).toEqual([])
