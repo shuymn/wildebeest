@@ -2175,9 +2175,10 @@ or, for a boost, of its original (a boost has no quote of its own, R35, and its 
 and poll are neither read nor shown, as on Mastodon). One query per window of 80 statuses computes it
 (`statusRowBoundSql` in `src/domain/status-rows.ts`) from the same column maps that generate every hydrate query's
 select list (`src/db/columns.ts`), so it cannot drift from what is read; it counts a row whether or not the viewer is
-shown it. Each item also counts the OAuth admin's lookup whole (the `admin_email` row and the scan of the
-operator-sized `local_accounts`, each account sought by key: `OAUTH_ADMIN_HEAP_SQL` in `src/domain/admin-authority.ts`),
-which a local author's Owner role reads at most once per operation, in whichever chunk first shows one. A chunk holds
+shown it. An item with a local author also counts the OAuth admin's lookup whole (the `admin_email` row and, while it
+is set, the scan of the operator-sized `local_accounts`, each account sought by key: `OAUTH_ADMIN_HEAP_SQL` in
+`src/domain/admin-authority.ts`), which a local author's Owner role reads at most once per operation, in whichever
+chunk first shows one; R reads neither for an answer without one. A chunk holds
 statuses while their R sums to at most its target, at most 80 and at least one: 768 KiB of heap for pages, contexts,
 search, histories and lookups (`PAGE_CHUNKS`), and 1 MiB for grouped notifications and admin reports
 (`LARGE_ITEM_CHUNKS`). A chunk of several is read through a `RowMeter` (`src/db/sql.ts`), which adds each

@@ -49,11 +49,13 @@ export const LOCAL_EMAIL_COLUMNS = {
 } as const satisfies ColumnMap
 const LOCAL_EMAIL_FROM = `local_accounts l CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = l.account_id`
 
-// The row heap (rowHeapSql) oauthAdmin reads at most, as one SQL expression: the setting row and the whole local scan.
+// The row heap (rowHeapSql) oauthAdmin reads at most, as one SQL expression: the setting row, and the whole local scan
+// unless admin_email is missing or '' (a value only JavaScript's trim() blanks counts, so it never undercounts).
 // Presentation reads it at most once per operation (adminAccountIdOnce), which status-rows.ts counts for each item.
 export const OAUTH_ADMIN_HEAP_SQL = `(coalesce((SELECT ${rowHeapSql(ADMIN_EMAIL_COLUMNS)} FROM ${ADMIN_EMAIL_FROM}
 		WHERE i.name = '${ACCESS_SETTINGS.adminEmail}'), 0)
-	+ coalesce((SELECT sum(${rowHeapSql(LOCAL_EMAIL_COLUMNS)}) FROM ${LOCAL_EMAIL_FROM}), 0))`
+	+ CASE WHEN EXISTS (SELECT 1 FROM ${ADMIN_EMAIL_FROM} WHERE i.name = '${ACCESS_SETTINGS.adminEmail}' AND i.value <> '')
+		THEN coalesce((SELECT sum(${rowHeapSql(LOCAL_EMAIL_COLUMNS)}) FROM ${LOCAL_EMAIL_FROM}), 0) ELSE 0 END)`
 
 // OAuth admin for the Mastodon API and post-bootstrap setup; see OAuthAdminStatus for fail-closed outcomes.
 // Match admin_email against every local email, trimming and lowercasing both in JS:

@@ -201,9 +201,10 @@ let boundSql: string | undefined
 // whose active filters name statuses: one row per position (`k`, json_each's key) with `bytes`. An item reads at
 // most these status rows: the status, its boosted original, and the quoted status of the status or, for a boost, of
 // its original (a boost has no quote of its own: R35); each counted whether or not the viewer is shown it. Every
-// subquery is a search by key or through the index the presenter's query uses, but M: each item also counts the
-// OAuth admin's lookup at its whole (OAUTH_ADMIN_HEAP_SQL, a scan of the operator-sized local_accounts, once per
-// statement), which an operation reads at most once, in whichever chunk first shows an available local author.
+// subquery is a search by key or through the index the presenter's query uses, but M: an item with a local author
+// also counts the OAuth admin's lookup whole (OAUTH_ADMIN_HEAP_SQL, a scan of the operator-sized local_accounts,
+// evaluated once per statement and only when such an item is read), which an operation reads at most once, in
+// whichever chunk first shows an available local author.
 export function statusRowBoundSql(): string {
 	// Built on first use: the maps come from modules that import this one's importers.
 	boundSql ??= `WITH t AS (SELECT key AS k, value AS id FROM json_each(?1)),
@@ -212,6 +213,10 @@ export function statusRowBoundSql(): string {
 				WHERE b.reblog_of_id IS NOT NULL
 			UNION ALL SELECT k, id FROM (SELECT t.k, ${quotedStatusIdSql('coalesce(b.reblog_of_id, b.id)')} AS id
 				FROM t CROSS JOIN statuses b INDEXED BY ${STATUSES_ID_INDEX} ON b.id = t.id) WHERE id IS NOT NULL)
-		SELECT x.k, sum(${statusRowTerms('?2', '?3')}) + ${OAUTH_ADMIN_HEAP_SQL} AS bytes FROM x GROUP BY x.k`
+		SELECT x.k, sum(${statusRowTerms('?2', '?3')})
+			+ max(CASE WHEN (SELECT a.domain IS NULL FROM statuses w INDEXED BY ${STATUSES_ID_INDEX}
+				CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = w.account_id WHERE w.id = x.id)
+				THEN ${OAUTH_ADMIN_HEAP_SQL} ELSE 0 END) AS bytes
+		FROM x GROUP BY x.k`
 	return boundSql
 }
