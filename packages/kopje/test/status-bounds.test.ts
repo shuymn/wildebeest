@@ -170,16 +170,16 @@ const MOVED_ROW_HEAP_MAX = MOVED_ACCOUNT_COLUMNS.rowHeap
 
 // What presenting a nested account's emojis holds besides what it admits (custom-emojis.ts referencedEmojis), at
 // three times its bytes: one entry at a time, its two literals as stored (a 128-character name and a 512-byte url,
-// each character escaped to six bytes), their decoded strings, and the entry presented from them. One presentation
-// runs at a time, so an answer holds one.
-const MOVED_EMOJI_SCRATCH =
-	3 *
-	(6 * EMOJI_SHORTCODE_LIMIT +
-		2 +
-		(6 * EMOJI_URL_LIMIT + 2) +
-		EMOJI_SHORTCODE_LIMIT +
-		EMOJI_URL_LIMIT +
-		(EMOJI_ENTRY_BYTES + EMOJI_SHORTCODE_LIMIT + 2 * EMOJI_URL_LIMIT))
+// each character escaped to six bytes), their decoded strings, and the larger of the entry presented from them and a
+// candidate href that normalization makes before rejecting it (each url character percent-encoded to three bytes).
+// One presentation runs at a time, so an answer holds one.
+const MOVED_EMOJI_LITERALS = 6 * EMOJI_SHORTCODE_LIMIT + 2 + (6 * EMOJI_URL_LIMIT + 2)
+const MOVED_EMOJI_DECODED = EMOJI_SHORTCODE_LIMIT + EMOJI_URL_LIMIT
+const MOVED_EMOJI_CANDIDATE = Math.max(
+	EMOJI_ENTRY_BYTES + EMOJI_SHORTCODE_LIMIT + 2 * EMOJI_URL_LIMIT,
+	3 * EMOJI_URL_LIMIT
+)
+const MOVED_EMOJI_SCRATCH = 3 * (MOVED_EMOJI_LITERALS + MOVED_EMOJI_DECODED + MOVED_EMOJI_CANDIDATE)
 
 // The nested moved-to accounts a presented value shows (each `moved` that is an account).
 function movedAccounts(value: unknown): unknown[] {
@@ -1305,7 +1305,7 @@ async function peaks(items: readonly string[], chunks: ChunkPlan, state: number)
 // an unavailable one.
 describe('the moved-to account (RES-3)', () => {
 	it('derives its maxima from its caps', () => {
-		expect(MOVED_EMOJI_SCRATCH).toBe(17_109)
+		expect(MOVED_EMOJI_SCRATCH).toBe(18_060)
 		expect({ json: MOVED_ACCOUNT_JSON_MAX, sqlite: MOVED_ROW_SQLITE_MAX, heap: MOVED_ROW_HEAP_MAX }).toEqual({
 			json: 11_021,
 			sqlite: 10_094,

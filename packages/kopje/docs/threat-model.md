@@ -2278,18 +2278,18 @@ pass, and the passes are at most four), 200 for a page of reports (its at most 1
 
 | Answer (Store isolate)                      | Normal   | Backstop fired, the dropped chunk still live | A single item |
 | ------------------------------------------- | -------- | -------------------------------------------- | ------------- |
-| Timelines (largest item a boost of a quote) | 61.51 MB | 64.00 MB (63,995,331 bytes)                  | 61.51 MB      |
-| Groups                                      | 75.74 MB | 78.56 MB                                     | 75.74 MB      |
+| Timelines (largest item a boost of a quote) | 61.51 MB | 64.00 MB (63,996,282 bytes)                  | 61.51 MB      |
+| Groups                                      | 75.75 MB | 78.56 MB                                     | 75.75 MB      |
 | Reports                                     | 74.79 MB | 77.60 MB                                     | 74.79 MB      |
 
 A chunk of several takes at most its target of heap: 768 KiB (0.79 MB) for timelines, 1 MiB (1.05 MB) for groups and
 reports. Normal: the rows are the larger of 1.25 × the target and the item's rows, plus the admitted answer, the
 rejected item and, for groups and reports, their state. With the backstop fired, 1.25 × (the target + 1.20 MB) of
 dropped rows more. The 768 KiB timeline cap keeps the fallback below half the isolate's memory even while the dropped
-chunk remains live, with 4,669 bytes to spare: each moved-to account's row counts at its 20,764-byte heap cap and its
-JSON at 11,021 bytes, and its emojis' presentation holds one entry past those it admits at a time (17,109 bytes at
-three times its literals, decoded strings and entity: `referencedEmojis` in `src/domain/custom-emojis.ts`), counted
-once per answer. Every row term carries 25% headroom; the peak test rejects growth past that
+chunk remains live, with 3,718 bytes to spare: each moved-to account's row counts at its 20,764-byte heap cap and its
+JSON at 11,021 bytes, and its emojis' presentation holds one entry past those it admits at a time (18,060 bytes at
+three times its literals, decoded strings and the larger of its entity and an href normalization makes before
+rejecting it: `referencedEmojis` in `src/domain/custom-emojis.ts`), counted once per answer. Every row term carries 25% headroom; the peak test rejects growth past that
 boundary. The backstop-fired figures bound the
 fallback whenever the dropped rows are collected. A boost that showed a quote, attachments, mentions, hashtags or a
 poll of its own (a legacy row may hold them) would make a timeline's largest item pass half at a chunk of one; it shows
