@@ -425,6 +425,46 @@ describe('dump', () => {
 		}
 	}, 120_000)
 
+	it('round-trips the static images (0061), and refuses one past its bound on import', async () => {
+		const source = await seeded(0)
+		const still = 'https://kopje.test/media/AAAA/small.webp'
+		const id = await runInDurableObject(source, (_instance, state) => {
+			const sql = state.storage.sql
+			const local = sql
+				.exec<{ id: string }>('SELECT id FROM accounts WHERE domain IS NULL ORDER BY id LIMIT 1')
+				.one().id
+			sql.exec(
+				`UPDATE accounts SET avatar_url = 'https://kopje.test/media/AAAA/full.webp', avatar_static_url = ?1,
+					header_url = 'https://kopje.test/media/BBBB/full.png' WHERE id = ?2`,
+				still,
+				local
+			)
+			return local
+		})
+		const { text } = await dumpViaRpc(source)
+		const restored = await migratedStore()
+		await copyConfig(source, restored)
+		await importViaRpc(restored, text)
+		await runInDurableObject(restored, (_instance, state) => {
+			expect(
+				state.storage.sql
+					.exec('SELECT avatar_static_url AS a, header_static_url AS h FROM accounts WHERE id = ?', id)
+					.one()
+			).toEqual({ a: still, h: null })
+		})
+		// A dump from elsewhere, as its text could hold it: a static of 513 bytes.
+		const quoted = `'${still}'`
+		const line = text.split('\n').find((row) => row.includes(quoted))!
+		expect(line).toBeDefined()
+		const dump = text.replace(line, line.replace(quoted, `'https://x/${'a'.repeat(503)}'`))
+		expect(dump).not.toBe(text)
+		const target = await migratedStore()
+		await copyConfig(source, target)
+		expect(String(await rejectionOf(importViaRpc(target, dump)))).toMatch(
+			/accounts: static image past its stored bound/
+		)
+	}, 120_000)
+
 	it('writes the documented format and leaves out bookkeeping', async () => {
 		const { text } = await dumpViaRpc(await seeded(0))
 		const lines = text.split('\n')

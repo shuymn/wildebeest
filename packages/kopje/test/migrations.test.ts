@@ -41,6 +41,7 @@ import { ACTIVITY_ID_LIMIT, withinIdentityBound } from '../src/platform/identity
 import { StoreUnavailableError, toStoreUnavailable } from '../src/platform/store-errors'
 import {
 	accountMovesMigrationSql,
+	accountStaticImagesMigrationSql,
 	ANNOUNCEMENT_TEXT_BYTES,
 	CONTACT_USERNAME_BYTES,
 	contactActivityMigrationSql,
@@ -7376,6 +7377,94 @@ describe('0060_account_moves', () => {
 			expect(
 				sql.exec("SELECT name FROM sqlite_schema WHERE type = 'index' AND name = 'accounts_moved_to'").toArray()
 			).toEqual([{ name: 'accounts_moved_to' }])
+		})
+	})
+})
+
+describe('0061_account_static_images', () => {
+	const NAME = '0061_account_static_images'
+	const at = NAMES.indexOf(NAME)
+	const LOCAL = '100000000000000001'
+	const REMOTE = '100000000000000002'
+	const IMAGE = 'https://kopje.test/media/AAAA/full.webp'
+	const STILL = 'https://kopje.test/media/AAAA/small.webp'
+	const REFUSED = /accounts: static image past its stored bound/
+
+	it("holds accountStaticImagesMigrationSql's output after its header", () => {
+		expectGenerated(at, accountStaticImagesMigrationSql())
+	})
+
+	it('keeps rows as they were with no static, then bounds both statics as stored', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+			sql.exec(
+				`INSERT INTO accounts (id, uri, username, domain, avatar_url, header_url) VALUES
+					(?1, 'https://kopje.test/ap/users/a', 'a', NULL, ?3, ?3),
+					(?2, 'https://remote.test/users/b', 'b', 'remote.test', 'https://remote.test/b.png', NULL)`,
+				LOCAL,
+				REMOTE,
+				IMAGE
+			)
+			await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()
+			expect(
+				sql.exec('SELECT id, avatar_url, avatar_static_url, header_static_url FROM accounts ORDER BY id').toArray()
+			).toEqual([
+				{ id: LOCAL, avatar_url: IMAGE, avatar_static_url: null, header_static_url: null },
+				{ id: REMOTE, avatar_url: 'https://remote.test/b.png', avatar_static_url: null, header_static_url: null },
+			])
+			// The bytes of `text`, each code unit below 256 one byte: 0xFF is no UTF-8 lead byte, so a value of them is
+			// malformed UTF-8 that length() counts as fewer characters than its bytes.
+			const blob = (text: string) => new Uint8Array([...text].map((c) => c.charCodeAt(0))).buffer
+			const malformed = (bytes: number) => blob(`https://x/${'\u00ff'.repeat(bytes - 10)}`)
+			// In order: the storage class (TEXT affinity stores a number as its text, so a BLOB), 513 ASCII bytes, 513 bytes
+			// of malformed UTF-8, a NUL. A malformed value is bound as TEXT cast from its bytes.
+			const values: [string, SqlStorageValue, string?][] = [
+				['a BLOB', blob(STILL)],
+				['513 bytes', `https://x/${'a'.repeat(503)}`],
+				['513 malformed bytes', malformed(513), 'CAST(? AS TEXT)'],
+				['a NUL', `${STILL}\u0000`],
+			]
+			for (const column of ['avatar_static_url', 'header_static_url']) {
+				const update = (value: SqlStorageValue, id = LOCAL, expression = '?') =>
+					sql.exec(`UPDATE accounts SET ${column} = ${expression} WHERE id = ?`, value, id)
+				for (const [name, value, expression] of values) {
+					expect(() => update(value, LOCAL, expression), `${column}: ${name}`).toThrow(REFUSED)
+				}
+				expect(() => update(STILL, REMOTE), `${column} on a remote row`).toThrow(REFUSED)
+				// 512 bytes, of malformed UTF-8 too, and NULL are accepted.
+				update(`https://x/${'a'.repeat(502)}`)
+				update(malformed(512), LOCAL, 'CAST(? AS TEXT)')
+				expect(sql.exec(`SELECT length(CAST(${column} AS BLOB)) AS n FROM accounts WHERE id = ?`, LOCAL).one().n).toBe(
+					512
+				)
+				update(null)
+				update(STILL)
+			}
+			// The structure: never without its image, so the image is not cleared under a static, and a row holding one never
+			// becomes a remote one.
+			expect(() => sql.exec('UPDATE accounts SET avatar_url = NULL WHERE id = ?', LOCAL)).toThrow(REFUSED)
+			expect(() => sql.exec('UPDATE accounts SET header_url = NULL WHERE id = ?', LOCAL)).toThrow(REFUSED)
+			expect(() => sql.exec("UPDATE accounts SET domain = 'remote.test' WHERE id = ?", LOCAL)).toThrow(REFUSED)
+			sql.exec('UPDATE accounts SET avatar_url = NULL, avatar_static_url = NULL WHERE id = ?', LOCAL)
+			const insert = (domain: string | null, avatar: string | null, still: SqlStorageValue) =>
+				sql.exec(
+					`INSERT INTO accounts (id, uri, username, domain, avatar_url, avatar_static_url)
+					VALUES ('100000000000000003', 'https://kopje.test/ap/users/c', 'c', ?, ?, ?)`,
+					domain,
+					avatar,
+					still
+				)
+			for (const [name, value, expression] of values) {
+				if (expression === undefined) {
+					expect(() => insert(null, IMAGE, value), `insert: ${name}`).toThrow(REFUSED)
+				}
+			}
+			expect(() => insert('remote.test', IMAGE, STILL)).toThrow(REFUSED)
+			expect(() => insert(null, null, STILL)).toThrow(REFUSED)
+			insert(null, IMAGE, STILL)
+			expect(sql.exec('SELECT count(*) AS n FROM accounts WHERE avatar_static_url IS NOT NULL').one().n).toBe(1)
 		})
 	})
 })
