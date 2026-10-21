@@ -388,6 +388,43 @@ describe('dump', () => {
 		}
 	}, 120_000)
 
+	it('round-trips moved_to_account_id (0060), and refuses one past its bound on import', async () => {
+		const source = await seeded(0)
+		const [mover, target] = await runInDurableObject(source, (_instance, state) => {
+			const sql = state.storage.sql
+			sql.exec(
+				`INSERT INTO accounts (id, uri, username, domain) VALUES
+					('880000000000000001', 'https://remote.test/users/m', 'm', 'remote.test'),
+					('880000000000000002', 'https://remote.test/users/t', 't', 'remote.test')`
+			)
+			sql.exec("UPDATE accounts SET moved_to_account_id = '880000000000000002' WHERE id = '880000000000000001'")
+			return ['880000000000000001', '880000000000000002']
+		})
+		const { text } = await dumpViaRpc(source)
+		const restored = await migratedStore()
+		await copyConfig(source, restored)
+		await importViaRpc(restored, text)
+		await runInDurableObject(restored, (_instance, state) => {
+			expect(state.storage.sql.exec('SELECT moved_to_account_id AS m FROM accounts WHERE id = ?', mover).one().m).toBe(
+				target
+			)
+		})
+		// A dump from elsewhere, as its text could hold it: the row's own id, and an id of the wrong length.
+		// The mover's row, as the dump's text holds it, naming the target.
+		const quoted = `'${target}'`
+		const line = text.split('\n').find((row) => row.includes(`'${mover}'`) && row.includes(quoted))!
+		expect(line).toBeDefined()
+		for (const value of [`'${mover}'`, `'${target}0'`]) {
+			const dump = text.replace(line, line.replace(quoted, value))
+			expect(dump).not.toBe(text)
+			const target = await migratedStore()
+			await copyConfig(source, target)
+			expect(String(await rejectionOf(importViaRpc(target, dump)))).toMatch(
+				/accounts: moved_to_account_id past its stored bound/
+			)
+		}
+	}, 120_000)
+
 	it('writes the documented format and leaves out bookkeeping', async () => {
 		const { text } = await dumpViaRpc(await seeded(0))
 		const lines = text.split('\n')
