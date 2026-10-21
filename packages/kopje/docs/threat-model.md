@@ -2289,9 +2289,9 @@ dropped rows more. The 768 KiB timeline cap keeps the fallback below half the is
 chunk remains live, with 3,718 bytes to spare: each moved-to account's row counts at its 20,764-byte heap cap and its
 JSON at 11,021 bytes, and its emojis' presentation holds one entry past those it admits at a time (18,060 bytes at
 three times its literals, decoded strings and the larger of its entity and an href normalization makes before
-rejecting it: `referencedEmojis` in `src/domain/custom-emojis.ts`), counted once per answer. Every row term carries 25% headroom; the peak test rejects growth past that
-boundary. The backstop-fired figures bound the
-fallback whenever the dropped rows are collected. A boost that showed a quote, attachments, mentions, hashtags or a
+rejecting it: `referencedEmojis` in `src/domain/custom-emojis.ts`), counted once per answer. Every row term carries
+25% headroom; the peak test rejects growth past that boundary. The backstop-fired figures bound the fallback whenever
+the dropped rows are collected. A boost that showed a quote, attachments, mentions, hashtags or a
 poll of its own (a legacy row may hold them) would make a timeline's largest item pass half at a chunk of one; it shows
 none.
 

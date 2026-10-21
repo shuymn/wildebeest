@@ -4,6 +4,8 @@ import { describe, expect, it } from 'vitest'
 
 import { setSetting, sql } from './api-helpers'
 import { NOW } from './app-helpers'
+import { customEmoji } from './emoji-fixtures'
+import { actorDefaults } from './inbox-helpers'
 import {
 	observedSql,
 	type PlannedStatement,
@@ -238,8 +240,8 @@ describe('the nested account at its caps (RES-2)', () => {
 	it('shows only the emojis its cut display name references, in order, within MOVED_EMOJIS_BYTES', async () => {
 		const { account, move, shown } = await fixture()
 		// Entries of 67 + 2 + 2 × 300 bytes presented: three fit 2,048, four do not; e0 is not referenced, e5 only past
-		// the cut. Each name, and each URL's scheme, is written in \u escapes (within the stored 6,144 bytes), which the snapshot decodes.
-		// The first `n` characters of `text` as \u escapes.
+		// the cut. Each name, and each URL's scheme, is written in \u escapes (within the stored 6,144 bytes), which the
+		// snapshot decodes. The first `n` characters of `text` as \u escapes.
 		const escaped = (text: string, n: number) =>
 			[...text].map((c, i) => (i < n ? `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}` : c)).join('')
 		const url = (i: number) => `https://remote.example/${String(i).repeat(300 - 'https://remote.example/'.length)}`
@@ -251,7 +253,7 @@ describe('the nested account at its caps (RES-2)', () => {
 		await move(source, target)
 		const nested = (await shown(source)).moved!
 		expect(nested.emojis.map((emoji) => emoji.shortcode)).toEqual(['e1', 'e2', 'e3'])
-		expect(nested.emojis[0]).toEqual({ shortcode: 'e1', url: url(1), static_url: url(1), visible_in_picker: true })
+		expect(nested.emojis[0]).toEqual(customEmoji('e1', url(1)))
 		expect(jsonBytes(nested.emojis)).toBeLessThanOrEqual(MOVED_EMOJIS_BYTES)
 		expect(jsonBytes([...nested.emojis, nested.emojis[0]])).toBeGreaterThan(MOVED_EMOJIS_BYTES)
 		// The full account shows its whole snapshot.
@@ -268,15 +270,14 @@ describe('the nested account at its caps (RES-2)', () => {
 		const target = await account({ display_name: 'moved :keep:', emojis: snapshot })
 		const source = await account()
 		await move(source, target)
-		expect((await shown(source)).moved!.emojis).toEqual([
-			{ shortcode: 'keep', url: keep, static_url: keep, visible_in_picker: true },
-		])
+		expect((await shown(source)).moved!.emojis).toEqual([customEmoji('keep', keep)])
 		// The full account's own admission stops before it, past ACCOUNT_EMOJIS_BYTES.
 		expect((await shown(target)).emojis.map((emoji) => emoji.shortcode)).not.toContain('keep')
 	})
 
 	// Every entry referenced, each url normalized to 512 bytes ('{' percent-encoded): one entry fits MOVED_EMOJIS_BYTES,
-	// and the rest are never presented (the heap model counts one entry past the admitted ones, test/status-bounds.test.ts).
+	// and the rest are never presented (the heap model counts one entry past the admitted ones,
+	// test/status-bounds.test.ts).
 	it('presents a snapshot of fourteen referenced 512-byte entries as the one that fits', async () => {
 		const { account, move, shown } = await fixture()
 		const names = Array.from({ length: 14 }, (_, i) => String.fromCharCode(97 + i))
@@ -293,12 +294,10 @@ describe('the nested account at its caps (RES-2)', () => {
 		const href = `http://a/${'%7B'.repeat(167)}aa`
 		expect(utf8(href)).toBe(512)
 		const nested = (await shown(source)).moved!
-		expect(nested.emojis).toEqual([{ shortcode: 'a', url: href, static_url: href, visible_in_picker: true }])
+		expect(nested.emojis).toEqual([customEmoji('a', href)])
 		expect(jsonBytes(nested.emojis)).toBeLessThanOrEqual(MOVED_EMOJIS_BYTES)
 		// Presented whole, the snapshot would be 15,289 bytes.
-		expect(
-			jsonBytes(names.map((name) => ({ shortcode: name, url: href, static_url: href, visible_in_picker: true })))
-		).toBe(15_289)
+		expect(jsonBytes(names.map((name) => customEmoji(name, href)))).toBe(15_289)
 	})
 
 	// Imported TEXT may be malformed UTF-8: F0 followed by continuation bytes is one character to SQLite's substr.
@@ -407,7 +406,7 @@ describe('the nested account where accounts are presented', () => {
 	})
 })
 
-// MEDIUM 2: an account list presents its accounts lazily, one at a time, so nothing past the first account the budget
+// An account list presents its accounts lazily, one at a time, so nothing past the first account the budget
 // refuses is presented: its moved-to account is read with the chunk, but not presented, so its Owner role is never
 // looked up (the OAuth admin's two reads, oauthAdmin).
 describe('a list cut by its budget', () => {
@@ -458,24 +457,12 @@ describe('query plans of moves (RES-7)', () => {
 		const [target, source] = [await account(), await account()]
 		await move(source, target)
 		const actor = (uri: string, movedTo: string | null): RemoteActorInput => ({
+			...actorDefaults(),
 			uri,
 			username: 'mover',
 			domain: 'remote.example',
-			actorType: 'Person',
 			displayName: 'mover',
-			note: '',
-			url: null,
-			avatarUrl: null,
-			headerUrl: null,
-			locked: false,
-			discoverable: null,
-			indexable: false,
 			inboxUrl: `${uri}/inbox`,
-			sharedInboxUrl: null,
-			published: null,
-			keys: [],
-			emojiTags: [],
-			raw: '{}',
 			movedTo,
 		})
 		const targetUri = `https://remote.example/users/u${target}`

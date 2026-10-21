@@ -9,6 +9,7 @@ import { fixtureKeyGen, LEGACY_EMPTY_KEK, seedLocalAccount } from './federation-
 import { mastodonFlag } from './fixtures/flags'
 import { BUILD, completeSetup, migratedStore } from './helpers'
 import {
+	actorDefaults,
 	AP,
 	LOCAL,
 	MASTODON,
@@ -1404,24 +1405,12 @@ describe('account moves', () => {
 		await t.post(bob, follow(bob, DAVE_URI))
 		await refresh(t, bob, { ...bob.document, movedTo: carol.uri }, 1)
 		const input = (target: string): RemoteActorInput => ({
+			...actorDefaults(),
 			uri: bob.uri,
 			username: 'bob',
 			domain: 'mastodon.example',
-			actorType: 'Person',
 			displayName: 'bob',
-			note: '',
-			url: null,
-			avatarUrl: null,
-			headerUrl: null,
-			locked: false,
-			discoverable: null,
-			indexable: false,
 			inboxUrl: `${bob.uri}/inbox`,
-			sharedInboxUrl: null,
-			published: null,
-			keys: [],
-			emojiTags: [],
-			raw: '{}',
 			movedTo: target,
 		})
 		const store = (target: string) =>
