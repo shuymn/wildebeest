@@ -40,6 +40,7 @@ import {
 import { ACTIVITY_ID_LIMIT, withinIdentityBound } from '../src/platform/identity-bounds'
 import { StoreUnavailableError, toStoreUnavailable } from '../src/platform/store-errors'
 import {
+	accountMovesMigrationSql,
 	ANNOUNCEMENT_TEXT_BYTES,
 	CONTACT_USERNAME_BYTES,
 	contactActivityMigrationSql,
@@ -7302,6 +7303,78 @@ describe('0059_contact_and_activity', () => {
 			).toThrow(/a value past its stored bound/)
 			sql.exec("UPDATE instance_settings SET name = 'contact_username' WHERE name = 'title'")
 			expect(sql.exec("SELECT value FROM instance_settings WHERE name = 'contact_username'").one().value).toBe('Herd')
+		})
+	})
+})
+
+describe('0060_account_moves', () => {
+	const NAME = '0060_account_moves'
+	const at = NAMES.indexOf(NAME)
+	const A = '100000000000000001'
+	const B = '100000000000000002'
+	const LOCAL = '100000000000000003'
+
+	it("holds accountMovesMigrationSql's output after its header", () => {
+		expectGenerated(at, accountMovesMigrationSql())
+	})
+
+	it('keeps rows as they were with no pointer, then bounds the pointer as stored', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+			sql.exec(
+				`INSERT INTO accounts (id, uri, username, domain) VALUES (?1, 'https://remote.test/users/a', 'a', 'remote.test'),
+					(?2, 'https://remote.test/users/b', 'b', 'remote.test'), (?3, 'https://kopje.test/ap/users/c', 'c', NULL)`,
+				A,
+				B,
+				LOCAL
+			)
+			await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()
+			expect(sql.exec('SELECT id, domain, moved_to_account_id FROM accounts ORDER BY id').toArray()).toEqual([
+				{ id: A, domain: 'remote.test', moved_to_account_id: null },
+				{ id: B, domain: 'remote.test', moved_to_account_id: null },
+				{ id: LOCAL, domain: null, moved_to_account_id: null },
+			])
+			const update = (value: SqlStorageValue, id = A) =>
+				sql.exec('UPDATE accounts SET moved_to_account_id = ? WHERE id = ?', value, id)
+			const insert = (value: SqlStorageValue, domain: string | null = 'remote.test') =>
+				sql.exec(
+					"INSERT INTO accounts (id, uri, username, domain, moved_to_account_id) VALUES ('100000000000000004', 'https://remote.test/users/d', 'd', ?, ?)",
+					domain,
+					value
+				)
+			// Another account's id, a local one's too, a dangling one and none.
+			for (const value of [B, LOCAL, '999999999999999999', null]) {
+				update(value)
+			}
+			// In order: the storage class (TEXT affinity stores an integer as its text, so a BLOB), 17 and 19 bytes, a NUL
+			// at 18 bytes, a non-digit, the row's own id, a local row.
+			const refused: [string, SqlStorageValue, string?][] = [
+				['a BLOB', new Uint8Array([...B].map((c) => c.charCodeAt(0))).buffer],
+				['17 bytes', B.slice(1)],
+				['19 bytes', `${B}0`],
+				['a NUL', `${B.slice(0, 17)}\u0000`],
+				['a non-digit', `${B.slice(0, 17)}x`],
+				['its own id', A],
+				['on a local row', B, LOCAL],
+			]
+			for (const [name, value, id] of refused) {
+				expect(() => update(value, id), name).toThrow(/accounts: moved_to_account_id past its stored bound/)
+			}
+			for (const [name, value] of refused.slice(0, 5)) {
+				expect(() => insert(value), name).toThrow(/accounts: moved_to_account_id past its stored bound/)
+			}
+			expect(() => insert(B, null)).toThrow(/accounts: moved_to_account_id past its stored bound/)
+			insert(B)
+			// The row's domain is watched too: a pointing row never becomes a local one.
+			expect(() => sql.exec("UPDATE accounts SET domain = NULL WHERE id = '100000000000000004'")).toThrow(
+				/accounts: moved_to_account_id past its stored bound/
+			)
+			expect(sql.exec('SELECT count(*) AS n FROM accounts WHERE moved_to_account_id IS NOT NULL').one().n).toBe(1)
+			expect(
+				sql.exec("SELECT name FROM sqlite_schema WHERE type = 'index' AND name = 'accounts_moved_to'").toArray()
+			).toEqual([{ name: 'accounts_moved_to' }])
 		})
 	})
 })

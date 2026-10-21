@@ -204,6 +204,12 @@ taken before 0059 has no `active_on`: it restores into a Store at its own migrat
 upgrade deletes a `contact_username` row it carries outside that bound. A file built from legacy data writes NULL for
 `active_on` and no `contact_username` row.
 
+Account moves (migration `0060_account_moves`): `accounts.moved_to_account_id` is NULL, or the 18-digit id (text of
+18 ASCII digits) of another account, on a remote row only; anything else, the row's own id and a local row included,
+fails with `accounts: moved_to_account_id past its stored bound`. No foreign key holds it: an id that names no account
+restores as it is and presents no `moved`. A dump taken before 0060 has no such column: it restores into a Store at its
+own migrations, which then upgrades. A file built from legacy data writes NULL.
+
 A report (migration `0054_remote_reports`) names any account as its reporter (`account_id`), once per `uri` and
 reported account, with `status_ids` of at most 100 ids within 2,101 UTF-8 bytes (compact JSON of 18-digit ids), a
 `uri` within 4,096 JSON-escaped UTF-8 bytes and a `comment` within 20,000 UTF-8 bytes (and 5,000 code points up to any
