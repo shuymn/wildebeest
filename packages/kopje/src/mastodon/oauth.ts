@@ -1,3 +1,4 @@
+import { bearerToken } from './access'
 import {
 	type ApiContext,
 	type ApiHandler,
@@ -8,14 +9,14 @@ import {
 	userCredential,
 	vapidKey,
 } from './context'
-import { mastodonError } from './errors'
-import { type Params, readParams } from './params'
-import { type Client, OOB_REDIRECT_URI } from '../domain/oauth'
+import { bearerChallenge, INVALID_TOKEN, mastodonError } from './errors'
+import { type Params, type ReadOptions, readParams } from './params'
+import { type Client, type IntrospectionCaller, OOB_REDIRECT_URI } from '../domain/oauth'
 import { DEFAULT_SCOPES, parseScopes, SCOPES } from '../security/scopes'
 import { PKCE_VERIFIER, pkceChallenge, sha256Hex } from '../security/tokens'
 
-// App registration, the OAuth token and userinfo endpoints, and the authorization server metadata. /oauth/authorize
-// (behind Access) lives in app/authorize.ts.
+// App registration, the OAuth token, revocation, token info, introspection and userinfo endpoints, and the
+// authorization server metadata. /oauth/authorize (behind Access) lives in app/authorize.tsx.
 
 const MAX_NAME = 255
 const MAX_REDIRECT_URIS = 10
@@ -142,6 +143,8 @@ function parseUrl(uri: string): URL | null {
 	}
 }
 
+const NO_STORE = { 'cache-control': 'no-store', pragma: 'no-cache' }
+
 // RFC 6749 §5.2 error responses.
 function oauthError(
 	status: number,
@@ -149,10 +152,7 @@ function oauthError(
 	description: string,
 	headers: Record<string, string> = {}
 ): Response {
-	return Response.json(
-		{ error, error_description: description },
-		{ status, headers: { 'cache-control': 'no-store', pragma: 'no-cache', ...headers } }
-	)
+	return Response.json({ error, error_description: description }, { status, headers: { ...NO_STORE, ...headers } })
 }
 
 // A failed client authentication, at /oauth/token and (RFC 7009 §2.2.1) at /oauth/revoke: 401 with the
@@ -165,8 +165,15 @@ const INVALID_GRANT = () =>
 	oauthError(400, 'invalid_grant', 'The provided authorization grant is invalid, expired, revoked or was already used.')
 const INVALID_SCOPE = () => oauthError(400, 'invalid_scope', 'The requested scope is invalid, unknown, or malformed.')
 
+// A bearer token Doorkeeper refuses (OAuth::InvalidTokenResponse), with its RFC 6750 §3 challenge.
+const INVALID_BEARER = (description = INVALID_TOKEN) =>
+	oauthError(401, 'invalid_token', description, { 'www-authenticate': bearerChallenge(description) })
+const EXPIRED_TOKEN = 'The access token expired'
+
 const TOKEN_PARAMS = ['grant_type', 'code', 'redirect_uri', 'code_verifier', 'scope', 'client_id', 'client_secret']
 const REVOKE_PARAMS = ['token', 'token_type_hint', 'client_id', 'client_secret']
+// token_type_hint is read only as a scalar: Kopje has no refresh tokens, so every token is looked up as an access token.
+const INTROSPECT_PARAMS = REVOKE_PARAMS
 
 // A request error found before anything else: a repeated scalar parameter, or more than one client authentication
 // method (RFC 6749 §2.3: Basic and client_secret in the body).
@@ -181,10 +188,14 @@ function requestError(c: ApiContext, p: Params, scalars: readonly string[]): Res
 	return null
 }
 
-// The parameters of /oauth/token or /oauth/revoke, or the error answer to a body that cannot be read or to a request
-// error found by requestError.
-async function oauthParams(c: ApiContext, scalars: readonly string[]): Promise<Params | Response> {
-	const result = await readParams(c.req.raw)
+// The parameters of /oauth/token, /oauth/revoke or /oauth/introspect, or the error answer to a body that cannot be
+// read or to a request error found by requestError.
+async function oauthParams(
+	c: ApiContext,
+	scalars: readonly string[],
+	options: ReadOptions = {}
+): Promise<Params | Response> {
+	const result = await readParams(c.req.raw, options)
 	if (!result.ok) {
 		return oauthError(result.status, 'invalid_request', 'The request body could not be read.')
 	}
@@ -299,6 +310,100 @@ export const revokeHandler: ApiHandler = async (c, deps) => {
 	return c.json({})
 }
 
+// GET /oauth/token/info (Doorkeeper's TokenInfoController): the token the Authorization header presents, never one
+// of the access_token or bearer_token parameters (tokens never come from URLs, VIS-26). A token that is not valid,
+// a suspended account's included (AUTH-1), is Doorkeeper's invalid_token. resource_owner_id is the account id, a
+// string: Kopje has no separate user id, and ids do not fit a JS number (domain/ids.ts).
+export const tokenInfo: ApiHandler = async (c, deps) => {
+	const token = bearerToken(c.req.header('authorization'))
+	if (token === undefined) {
+		return INVALID_BEARER()
+	}
+	const tokenHash = await sha256Hex(token)
+	const now = deps.now()
+	const details = await storeCall(c, deps, (s, b) => s.inspectToken(b, { tokenHash, now }))
+	if (details === null) {
+		return INVALID_BEARER()
+	}
+	return c.json(
+		{
+			resource_owner_id: details.accountId,
+			scope: details.scopes,
+			// Doorkeeper's expires_in: null for a token without expiry, else the seconds left, rounded, at least 0.
+			expires_in:
+				details.expiresAt === null ? null : Math.max(0, Math.round((Date.parse(details.expiresAt) - now) / 1000)),
+			application: { uid: details.clientId },
+			created_at: Math.floor(Date.parse(details.createdAt) / 1000),
+		},
+		200,
+		NO_STORE
+	)
+}
+
+// POST /oauth/introspect (RFC 7662, Doorkeeper's TokensController#introspect). Parameters come from the body only: a
+// token or client secret in the query is absent (secrets never come from URLs, VIS-26). The caller is chosen as
+// Doorkeeper chooses it: client credentials (Basic, or a non-blank client_id) first, else the Authorization bearer
+// token, else 400. An inactive token answers {"active":false} alone (RFC 7662 §2.2); a token without expiry has
+// Doorkeeper's exp 0.
+export const introspect: ApiHandler = async (c, deps) => {
+	const p = await oauthParams(c, INTROSPECT_PARAMS, { bodyOnly: true })
+	if (p instanceof Response) {
+		return p
+	}
+	const authorization = c.req.header('authorization') ?? ''
+	let caller: IntrospectionCaller
+	if (/^Basic\s/i.test(authorization) || (p.get('client_id') ?? '').trim() !== '') {
+		const client = clientCredentials(c, p)
+		if (client === null) {
+			return INVALID_CLIENT()
+		}
+		caller = { kind: 'client', ...client }
+	} else {
+		const bearer = bearerToken(authorization)
+		if (bearer === undefined) {
+			return UNAUTHORIZED_INTROSPECTION()
+		}
+		caller = { kind: 'bearer', tokenHash: await sha256Hex(bearer) }
+	}
+	const token = p.get('token')
+	const targetHash = token === undefined ? null : await sha256Hex(token)
+	const outcome = await storeCall(c, deps, (s, b) => s.introspectToken(b, { targetHash, now: deps.now(), caller }))
+	switch (outcome.status) {
+		case 'invalid_client':
+			return INVALID_CLIENT()
+		case 'unauthorized':
+			return UNAUTHORIZED_INTROSPECTION()
+		case 'invalid_token':
+			return INVALID_BEARER(outcome.expired ? EXPIRED_TOKEN : INVALID_TOKEN)
+		case 'ok': {
+			const details = outcome.token
+			if (details === null) {
+				return c.json({ active: false }, 200, NO_STORE)
+			}
+			return c.json(
+				{
+					active: true,
+					scope: details.scopes.join(' '),
+					client_id: details.clientId,
+					token_type: 'Bearer',
+					exp: details.expiresAt === null ? 0 : Math.floor(Date.parse(details.expiresAt) / 1000),
+					iat: Math.floor(Date.parse(details.createdAt) / 1000),
+				},
+				200,
+				NO_STORE
+			)
+		}
+	}
+}
+
+// Doorkeeper's answer when introspection names no caller (doorkeeper.en.yml request_not_authorized).
+const UNAUTHORIZED_INTROSPECTION = () =>
+	oauthError(
+		400,
+		'invalid_request',
+		'Request need to be authorized. Required parameter for authorizing request is missing or invalid.'
+	)
+
 // GET and POST /oauth/userinfo (Mastodon's OAuth::UserinfoController; OpenID Connect Core §5.3 asks for both): the
 // claims of the token's account, for a token with the profile scope. The token's account always exists while the
 // token does; without it, the answer is Mastodon's for a token whose user is gone.
@@ -312,7 +417,8 @@ export const userinfo: ApiHandler = async (c, deps) => {
 
 // GET /.well-known/oauth-authorization-server (RFC 8414; Mastodon's OAuthMetadataSerializer, fields in its order):
 // what Kopje supports of Mastodon's. The authorization endpoint answers in the query only, so the response modes are
-// query alone; Mastodon (Doorkeeper) lists fragment and form_post too.
+// query alone; Mastodon (Doorkeeper) lists fragment and form_post too. fragment and form_post are accepted, as
+// Mastodon accepts them, and answered in the query, as Mastodon's consent form answers them (app/authorize.tsx).
 export const authorizationServerMetadata: ApiHandler = (c) => {
 	const { origin } = present(c)
 	return Promise.resolve(

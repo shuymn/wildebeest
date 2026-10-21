@@ -26,6 +26,8 @@ describe('request classification', () => {
 		['OPTIONS', '/ap/users/alice', 'read'],
 		['POST', '/oauth/token', 'session'],
 		['POST', '/oauth/revoke', 'session'],
+		['GET', '/oauth/token/info', 'read'],
+		['POST', '/oauth/introspect', 'session'],
 		['POST', '/oauth/authorize', 'session'],
 		['POST', '/api/v1/apps', 'session'],
 		['GET', '/api/v1/apps/verify_credentials', 'read'],

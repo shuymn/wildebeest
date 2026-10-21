@@ -35,6 +35,17 @@ const EXCEPTIONS: Record<string, Exception> = {
 		mastodon: 'absent',
 		reason: "Doorkeeper's revocation endpoint, outside /api",
 	},
+	'GET /oauth/token/info': {
+		kopje: 'none token, scopes any, no user required',
+		mastodon: 'absent',
+		reason:
+			"Doorkeeper's TokenInfoController, outside /api: the handler reads the bearer token itself (Doorkeeper's invalid_token answer)",
+	},
+	'POST /oauth/introspect': {
+		kopje: 'none token, scopes any, no user required',
+		mastodon: 'absent',
+		reason: "Doorkeeper's introspection endpoint, outside /api: client or bearer authentication in the handler",
+	},
 	'GET /.well-known/oauth-authorization-server': {
 		kopje: 'none token, scopes any, no user required',
 		mastodon: 'absent',

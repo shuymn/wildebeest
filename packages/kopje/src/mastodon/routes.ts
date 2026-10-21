@@ -47,6 +47,9 @@ export const ROUTES: readonly Route[] = [
 	{ method: 'GET', path: '/api/v1/apps/verify_credentials', access: 'token', handler: oauth.verifyApp },
 	{ method: 'POST', path: '/oauth/token', access: 'public', handler: oauth.tokenHandler },
 	{ method: 'POST', path: '/oauth/revoke', access: 'public', handler: oauth.revokeHandler },
+	// Doorkeeper's error answers, not the API's: each handler reads its own credentials.
+	{ method: 'GET', path: '/oauth/token/info', access: 'public', handler: oauth.tokenInfo },
+	{ method: 'POST', path: '/oauth/introspect', access: 'public', handler: oauth.introspect },
 	{ method: 'GET', path: '/oauth/userinfo', access: { scope: 'profile' }, handler: oauth.userinfo },
 	{ method: 'POST', path: '/oauth/userinfo', access: { scope: 'profile' }, handler: oauth.userinfo },
 	{

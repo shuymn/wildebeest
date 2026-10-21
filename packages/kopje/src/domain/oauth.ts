@@ -138,6 +138,93 @@ export const appOfCredential = readOperation<Credential, Authorized<Client>>((db
 	return auth.status === 'ok' ? { status: 'ok', value: toClient(clientRow(db, auth.viewer.client.id)!) } : auth
 })
 
+// An access token as /oauth/token/info and /oauth/introspect describe it.
+export type TokenDetails = {
+	clientId: string
+	accountId: string | null
+	scopes: string[]
+	createdAt: string
+	expiresAt: string | null
+}
+
+// The details of a valid access token (AUTH-1: authorize() alone decides validity), or null. Both reads are by the
+// token's full sha256, the primary key.
+function inspect(db: Db, tokenHash: string, now: number): TokenDetails | null {
+	const auth = authorize(db, { tokenHash, scope: null, now })
+	if (auth.status !== 'ok') {
+		return null
+	}
+	const row = db.first<{ created_at: string; expires_at: string | null }>(
+		"SELECT created_at, expires_at FROM oauth_tokens WHERE token_hash = ? AND kind = 'access'",
+		tokenHash
+	)!
+	return {
+		clientId: auth.viewer.client.id,
+		accountId: auth.viewer.accountId,
+		scopes: auth.viewer.scopes,
+		createdAt: row.created_at,
+		expiresAt: row.expires_at,
+	}
+}
+
+// GET /oauth/token/info: the token the request presents, or null when it is not valid.
+export const inspectToken = readOperation<{ tokenHash: string; now: number }, TokenDetails | null>(
+	(db, { tokenHash, now }) => inspect(db, tokenHash, now)
+)
+
+export type IntrospectionCaller =
+	{ kind: 'client'; clientId: string; clientSecret: string } | { kind: 'bearer'; tokenHash: string }
+
+// unauthorized: the bearer caller's token has no row, so Doorkeeper finds no caller (400). invalid_token: a caller
+// row that is not valid (expired: an access token past its expiry), the caller's own token, or a missing target or
+// one of another client.
+export type Introspection =
+	| { status: 'invalid_client' }
+	| { status: 'unauthorized' }
+	| { status: 'invalid_token'; expired: boolean }
+	| { status: 'ok'; token: TokenDetails | null }
+
+// POST /oauth/introspect (RFC 7662) under Doorkeeper's default allow_token_introspection: a client learns only of
+// its own tokens; a bearer caller only of other tokens of its own client, never of the token it presents
+// (RFC 7662 §2.1). A target that is not valid is inactive (token null). Every read is by a full sha256 or a client id.
+export const introspectToken = readOperation<
+	{ targetHash: string | null; now: number; caller: IntrospectionCaller },
+	Introspection
+>((db, { targetHash, now, caller }) => {
+	if (caller.kind === 'client') {
+		if (authenticateClient(db, caller.clientId, caller.clientSecret) === undefined) {
+			return { status: 'invalid_client' }
+		}
+		const token = targetHash === null ? null : inspect(db, targetHash, now)
+		return { status: 'ok', token: token?.clientId === caller.clientId ? token : null }
+	}
+	const auth = authorize(db, { tokenHash: caller.tokenHash, scope: null, now })
+	if (auth.status !== 'ok') {
+		const row = db.first<{ kind: string; expires_at: string | null }>(
+			'SELECT kind, expires_at FROM oauth_tokens WHERE token_hash = ?',
+			caller.tokenHash
+		)
+		if (row === undefined) {
+			return { status: 'unauthorized' }
+		}
+		return {
+			status: 'invalid_token',
+			expired: row.kind === 'access' && row.expires_at !== null && row.expires_at <= iso(now),
+		}
+	}
+	if (targetHash === null || targetHash === caller.tokenHash) {
+		return { status: 'invalid_token', expired: false }
+	}
+	const owner = db.first<{ client_id: string }>(
+		"SELECT client_id FROM oauth_tokens WHERE token_hash = ? AND kind = 'access'",
+		targetHash
+	)
+	if (owner?.client_id !== auth.viewer.client.id) {
+		return { status: 'invalid_token', expired: false }
+	}
+	return { status: 'ok', token: inspect(db, targetHash, now) }
+})
+
 // At most this many rows of each kind are removed per cron run.
 export const OAUTH_SWEEP_BATCH = 500
 
