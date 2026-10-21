@@ -74,6 +74,14 @@ Profile credentials (`PATCH /api/v1/accounts/update_credentials`, the settings p
 - While a media rebuild holds its lease, a profile edit answers 503, since replacing an image dooms the upload behind
   it.
 
+Accounts (the `Account` and credential account entities):
+
+- `noindex` is `false` for every local account, Mastodon's default: no setting stores it, and the profile and status
+  pages do not ask search engines to skip them. A remote account shows none, as in Mastodon.
+- `roles` of a local account is the OAuth admin's Owner role (`id`, `name` and `color`) while that account is
+  available, otherwise `[]`: Kopje has no other role to highlight. A remote account shows none, as in Mastodon.
+- `uri` is `''` for an imported actor id whose JSON passes 2,048 bytes; ingestion stores none.
+
 Instance and apps (`/api/v1/apps`, `/api/v{1,2}/instance`, `/api/v1/preferences`):
 
 - An application's `id` is its `client_id`, Kopje's only stable key of an application; the `client_id` is a public

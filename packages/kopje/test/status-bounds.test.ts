@@ -17,6 +17,7 @@ import { Db } from '../src/db/sql'
 import { createActivity, getFeatured, noteOf, OUTBOX_BYTES, PIN_LIMIT, statusFacts } from '../src/domain/activities'
 import { ANSWER_BYTES } from '../src/domain/answer-budget'
 import { type VisibleStatusId } from '../src/domain/audience'
+import { OWNER_ROLE } from '../src/domain/auth'
 import { listConversations, MAX_PRESENTED_PARTICIPANTS } from '../src/domain/conversations'
 import { MAX_FILTER_KEYWORD, MAX_FILTER_KEYWORDS, MAX_FILTER_TITLE, MAX_FILTERS } from '../src/domain/filters'
 import { listGroupedNotifications } from '../src/domain/notification-groups'
@@ -1088,13 +1089,22 @@ const POLLS_SHOWN: Record<string, number> = {
 }
 const POLL_EMOJIS_JSON = STATUS_EMOJIS_BYTES - 2
 
+// What a local account adds that the fills' remote account occurrence does not carry: noindex and roles with the
+// Owner's badge (the largest role list a local account shows), each with its separator.
+const LOCAL_ACCOUNT_KEYS_JSON =
+	jsonBytes({ noindex: false, roles: [{ id: OWNER_ROLE.id, name: OWNER_ROLE.name, color: OWNER_ROLE.color }] }) - 1
+
 // The conservative JSON of each shape: the escaped fill's, whose status and account emoji arrays are at their bounds,
 // plus a poll's emoji array at its bound for each poll shown. No one fill holds both: the references a poll's choices
-// need displace escaped characters (the emoji-poll fill), so this bounds every combination from above.
+// need displace escaped characters (the emoji-poll fill), so this bounds every combination from above. The account
+// occurrence adds a local account's keys, so it bounds a local account as well as the remote one measured.
 async function conservativeJson(): Promise<Record<string, number>> {
 	const { shapes } = await measureFill('escaped')
 	return Object.fromEntries(
-		Object.entries(shapes).map(([name, shape]) => [name, shape.json + (POLLS_SHOWN[name] ?? 0) * POLL_EMOJIS_JSON])
+		Object.entries(shapes).map(([name, shape]) => [
+			name,
+			shape.json + (POLLS_SHOWN[name] ?? 0) * POLL_EMOJIS_JSON + (name === 'account' ? LOCAL_ACCOUNT_KEYS_JSON : 0),
+		])
 	)
 }
 
@@ -1128,56 +1138,56 @@ describe('the table of maxima (RES-3)', () => {
 			'the escaped worst case: the most JSON',
 			'escaped',
 			{
-				account: { sqlite: 103_222, json: 130_038, rows: 1, nodes: 63 },
-				status: { sqlite: 2_759_855, json: 2_616_344, rows: 1_484, nodes: 2_338 },
-				quote: { sqlite: 4_946_353, json: 5_232_721, rows: 1_916, nodes: 4_678 },
-				boostOfQuote: { sqlite: 5_088_698, json: 5_631_263, rows: 1_972, nodes: 5_608 },
-				conversation: { sqlite: 6_251_480, json: 6_793_146, rows: 1_930, nodes: 5_425 },
-				group: { sqlite: 5_773_083, json: 6_273_449, rows: 1_943, nodes: 5_194 },
-				report: { sqlite: 5_247_442, json: 5_808_160, rows: 1_926, nodes: 4_923 },
-				reportNotification: { sqlite: 804_235, json: 382_480, rows: 1_059, nodes: 236 },
+				account: { sqlite: 103_222, json: 132_095, rows: 1, nodes: 64 },
+				status: { sqlite: 2_759_855, json: 2_618_401, rows: 1_484, nodes: 2_339 },
+				quote: { sqlite: 4_946_353, json: 5_236_835, rows: 1_916, nodes: 4_680 },
+				boostOfQuote: { sqlite: 5_088_698, json: 5_637_434, rows: 1_972, nodes: 5_611 },
+				conversation: { sqlite: 6_251_480, json: 6_821_944, rows: 1_930, nodes: 5_439 },
+				group: { sqlite: 5_773_083, json: 6_294_019, rows: 1_943, nodes: 5_204 },
+				report: { sqlite: 5_247_552, json: 5_816_598, rows: 1_929, nodes: 4_939 },
+				reportNotification: { sqlite: 804_235, json: 386_594, rows: 1_059, nodes: 238 },
 			},
 		],
 		[
 			'mentions whose url is derived',
 			'derived',
 			{
-				account: { sqlite: 103_222, json: 130_038, rows: 1, nodes: 63 },
-				status: { sqlite: 2_351_855, json: 2_206_744, rows: 1_484, nodes: 2_338 },
-				quote: { sqlite: 4_130_353, json: 4_413_521, rows: 1_916, nodes: 4_678 },
-				boostOfQuote: { sqlite: 4_272_698, json: 4_812_063, rows: 1_972, nodes: 5_608 },
-				conversation: { sqlite: 5_435_480, json: 5_973_946, rows: 1_930, nodes: 5_425 },
-				group: { sqlite: 4_957_083, json: 5_454_249, rows: 1_943, nodes: 5_194 },
-				report: { sqlite: 4_416_442, json: 4_898_960, rows: 1_926, nodes: 4_923 },
-				reportNotification: { sqlite: 789_235, json: 292_480, rows: 1_059, nodes: 236 },
+				account: { sqlite: 103_222, json: 132_095, rows: 1, nodes: 64 },
+				status: { sqlite: 2_351_855, json: 2_208_801, rows: 1_484, nodes: 2_339 },
+				quote: { sqlite: 4_130_353, json: 4_417_635, rows: 1_916, nodes: 4_680 },
+				boostOfQuote: { sqlite: 4_272_698, json: 4_818_234, rows: 1_972, nodes: 5_611 },
+				conversation: { sqlite: 5_435_480, json: 6_002_744, rows: 1_930, nodes: 5_439 },
+				group: { sqlite: 4_957_083, json: 5_474_819, rows: 1_943, nodes: 5_204 },
+				report: { sqlite: 4_416_552, json: 4_907_398, rows: 1_929, nodes: 4_939 },
+				reportNotification: { sqlite: 789_235, json: 296_594, rows: 1_059, nodes: 238 },
 			},
 		],
 		[
 			'the raw worst case: the most bytes read from SQLite',
 			'raw',
 			{
-				account: { sqlite: 123_215, json: 125_943, rows: 1, nodes: 63 },
-				status: { sqlite: 4_435_330, json: 2_178_651, rows: 1_484, nodes: 2_338 },
-				quote: { sqlite: 6_799_703, json: 4_357_335, rows: 1_916, nodes: 4_678 },
-				boostOfQuote: { sqlite: 7_084_918, json: 4_598_184, rows: 1_972, nodes: 5_608 },
-				conversation: { sqlite: 8_364_739, json: 5_868_620, rows: 1_930, nodes: 5_425 },
-				group: { sqlite: 7_786_377, json: 5_365_303, rows: 1_943, nodes: 5_194 },
-				report: { sqlite: 7_160_771, json: 4_816_394, rows: 1_926, nodes: 4_923 },
-				reportNotification: { sqlite: 2_341_821, json: 274_290, rows: 1_059, nodes: 236 },
+				account: { sqlite: 123_215, json: 128_000, rows: 1, nodes: 64 },
+				status: { sqlite: 4_435_330, json: 2_180_708, rows: 1_484, nodes: 2_339 },
+				quote: { sqlite: 6_799_703, json: 4_361_449, rows: 1_916, nodes: 4_680 },
+				boostOfQuote: { sqlite: 7_084_918, json: 4_604_355, rows: 1_972, nodes: 5_611 },
+				conversation: { sqlite: 8_364_739, json: 5_897_418, rows: 1_930, nodes: 5_439 },
+				group: { sqlite: 7_786_377, json: 5_385_873, rows: 1_943, nodes: 5_204 },
+				report: { sqlite: 7_160_881, json: 4_824_832, rows: 1_929, nodes: 4_939 },
+				reportNotification: { sqlite: 2_341_821, json: 278_404, rows: 1_059, nodes: 238 },
 			},
 		],
 		[
 			'short emoji references in every poll: the most poll emojis',
 			'emoji-poll',
 			{
-				account: { sqlite: 103_222, json: 130_038, rows: 1, nodes: 63 },
-				status: { sqlite: 2_759_007, json: 2_628_445, rows: 1_484, nodes: 2_390 },
-				quote: { sqlite: 4_944_657, json: 5_256_923, rows: 1_916, nodes: 4_782 },
-				boostOfQuote: { sqlite: 5_087_002, json: 5_655_465, rows: 1_972, nodes: 5_712 },
-				conversation: { sqlite: 6_249_784, json: 6_817_348, rows: 1_930, nodes: 5_529 },
-				group: { sqlite: 5_771_387, json: 6_297_651, rows: 1_943, nodes: 5_298 },
-				report: { sqlite: 5_245_746, json: 5_832_362, rows: 1_926, nodes: 5_027 },
-				reportNotification: { sqlite: 804_235, json: 382_480, rows: 1_059, nodes: 236 },
+				account: { sqlite: 103_222, json: 132_095, rows: 1, nodes: 64 },
+				status: { sqlite: 2_759_007, json: 2_630_502, rows: 1_484, nodes: 2_391 },
+				quote: { sqlite: 4_944_657, json: 5_261_037, rows: 1_916, nodes: 4_784 },
+				boostOfQuote: { sqlite: 5_087_002, json: 5_661_636, rows: 1_972, nodes: 5_715 },
+				conversation: { sqlite: 6_249_784, json: 6_846_146, rows: 1_930, nodes: 5_543 },
+				group: { sqlite: 5_771_387, json: 6_318_221, rows: 1_943, nodes: 5_308 },
+				report: { sqlite: 5_245_856, json: 5_840_800, rows: 1_929, nodes: 5_043 },
+				reportNotification: { sqlite: 804_235, json: 386_594, rows: 1_059, nodes: 238 },
 			},
 		],
 	])(
@@ -1208,14 +1218,14 @@ describe('the table of maxima (RES-3)', () => {
 			)
 		}
 		expect(conservative).toEqual({
-			account: 130_038,
-			status: 2_628_630,
-			quote: 5_257_293,
-			boostOfQuote: 5_655_835,
-			conversation: 6_817_718,
-			group: 6_298_021,
-			report: 5_832_732,
-			reportNotification: 382_480,
+			account: 132_158,
+			status: 2_630_687,
+			quote: 5_261_407,
+			boostOfQuote: 5_662_006,
+			conversation: 6_846_516,
+			group: 6_318_591,
+			report: 5_841_170,
+			reportNotification: 386_594,
 		})
 	}, 600_000)
 

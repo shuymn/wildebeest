@@ -31,6 +31,7 @@ describe('credentials', () => {
 			created_at: new Date(NOW).toISOString(),
 			note: '',
 			url: 'https://kopje.test/@alice',
+			uri: 'https://kopje.test/ap/users/alice',
 			avatar: 'https://kopje.test/assets/avatar.png',
 			avatar_static: 'https://kopje.test/assets/avatar.png',
 			header: 'https://kopje.test/assets/header.png',
@@ -42,6 +43,8 @@ describe('credentials', () => {
 			hide_collections: false,
 			emojis: [],
 			fields: [],
+			noindex: false,
+			roles: [],
 			source: {
 				privacy: 'public',
 				sensitive: false,

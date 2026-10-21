@@ -508,7 +508,7 @@ const ALLOWED: Record<string, { count: number; reason: string }> = {
 	'src/domain/actor-update.ts accounts.username': { count: 1, reason: ACTIVITYPUB },
 	'src/domain/actors.ts accounts.username': { count: 7, reason: LOCAL },
 	'src/domain/admin-accounts.ts accounts.username': { count: 2, reason: LOCAL },
-	'src/domain/admin-authority.ts accounts.username': { count: 1, reason: LOCAL },
+	'src/domain/admin-authority.ts column a.username': { count: 1, reason: LOCAL },
 	'src/domain/deliveries.ts accounts.username': {
 		count: 1,
 		reason: `the local sender of a delivery the operator lists (${LOCAL})`,

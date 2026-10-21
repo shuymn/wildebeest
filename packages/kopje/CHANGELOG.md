@@ -18,6 +18,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   knows, shown as `contact_account` on `/api/v1/instance` and `contact.account` on `/api/v2/instance`.
 - `usage.users.active_month` on `/api/v2/instance` counts the available local accounts with an authenticated request
   in the last 28 UTC days, today included; each account's day is recorded at most once a day.
+- Account and CredentialAccount `uri` (the actor id), and for local accounts `roles` (the OAuth admin's Owner role) and
+  `noindex` (always false).
 
 ### Changed
 

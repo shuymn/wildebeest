@@ -58,7 +58,7 @@ const MAPPING: Record<string, Mapping> = {
 }
 
 const ACCOUNT: Record<string, Exception> = {
-	...open('missing', 'moved', 'noindex', 'roles', 'uri'),
+	...open('missing', 'moved'),
 	...open('missing (Mastodon emits it for a limited or memorial account)', 'limited', 'memorial'),
 }
 

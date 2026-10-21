@@ -2,10 +2,17 @@ type Row = Record<string, SqlStorageValue>
 
 // Thin typed access to the Store's SQLite. Only used inside a Store transaction.
 export class Db {
+	// The operation's own Db: each operation runs on one (operation.ts), and every metered view of it shares its root,
+	// so a memo of the operation (admin-authority.ts) keys on it.
+	readonly root: Db
+
 	constructor(
 		private readonly sql: SqlStorage,
-		private readonly meter?: RowMeter
-	) {}
+		private readonly meter?: RowMeter,
+		root?: Db
+	) {
+		this.root = root ?? this
+	}
 
 	all<T extends Row>(query: string, ...params: SqlStorageValue[]): T[] {
 		return this.meter === undefined
@@ -31,7 +38,7 @@ export class Db {
 	}
 
 	metered(meter: RowMeter): Db {
-		return new Db(this.sql, meter)
+		return new Db(this.sql, meter, this.root)
 	}
 }
 

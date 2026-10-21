@@ -1,5 +1,5 @@
 import { type Account, accountsOf, type Page, type PageQuery, type Present } from './accounts'
-import { accessAdminRefusal, normalizedEmail } from './admin-authority'
+import { accessAdminRefusal, forgetAdminAccountId, normalizedEmail } from './admin-authority'
 import { admit, ARRAY_ANSWER_BYTES } from './answer-budget'
 import { activeSql, availableJoinedSql, availableLocalSql, deletingSql, suspendedSql } from './audience'
 import {
@@ -154,6 +154,7 @@ export const setAccountEmail = writeOperation<
 		return { ok: false, code: 'email-taken', message: 'another local account has this email' }
 	}
 	db.run('UPDATE local_accounts SET email = ? WHERE account_id = ?', value, account.id)
+	forgetAdminAccountId(db)
 	logAction(db, authority, 'change_email', { type: 'Account', id: account.id }, { username: account.username }, now)
 	return { ok: true, username: account.username, email: value }
 })

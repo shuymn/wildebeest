@@ -1,4 +1,6 @@
 import { readOperation } from './operation'
+import { type ColumnMap, rowHeapSql, selectSql } from '../db/columns'
+import { ACCOUNTS_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
 import { ACCESS_SETTINGS, accessRefusal, settingsFromRows, type SettingRow } from '../platform/access-settings'
 import type { ImportAuthority } from '../platform/store-admin'
@@ -34,13 +36,36 @@ export type OAuthAdmin = {
 	accountId: string | null
 }
 
+// oauthAdmin's two reads by the maps their columns come from, which also give their row heap (OAUTH_ADMIN_HEAP_SQL):
+// admin_email's setting row, and every local account with its email and username. Each account is sought by its key
+// from the local scan, so statistics older than the Store's growth cannot make the read a scan of accounts (RES-7).
+export const ADMIN_EMAIL_COLUMNS = { value: 'i.value' } as const satisfies ColumnMap
+const ADMIN_EMAIL_FROM = 'instance_settings i'
+export const LOCAL_EMAIL_COLUMNS = {
+	account_id: 'l.account_id',
+	email: 'l.email',
+	username: 'a.username',
+	suspended_at: 'l.suspended_at',
+} as const satisfies ColumnMap
+const LOCAL_EMAIL_FROM = `local_accounts l CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = l.account_id`
+
+// The row heap (rowHeapSql) oauthAdmin reads at most, as one SQL expression: the setting row, and the whole local scan
+// unless admin_email is missing or '' (a value only JavaScript's trim() blanks counts, so it never undercounts).
+// Presentation reads it at most once per operation (adminAccountIdOnce), which status-rows.ts counts for each item
+// containing a local author.
+export const OAUTH_ADMIN_HEAP_SQL = `(coalesce((SELECT ${rowHeapSql(ADMIN_EMAIL_COLUMNS)} FROM ${ADMIN_EMAIL_FROM}
+		WHERE i.name = '${ACCESS_SETTINGS.adminEmail}'), 0)
+	+ CASE WHEN EXISTS (SELECT 1 FROM ${ADMIN_EMAIL_FROM}
+			WHERE i.name = '${ACCESS_SETTINGS.adminEmail}' AND i.value <> '')
+		THEN coalesce((SELECT sum(${rowHeapSql(LOCAL_EMAIL_COLUMNS)}) FROM ${LOCAL_EMAIL_FROM}), 0) ELSE 0 END)`
+
 // OAuth admin for the Mastodon API and post-bootstrap setup; see OAuthAdminStatus for fail-closed outcomes.
 // Match admin_email against every local email, trimming and lowercasing both in JS:
 // SQL trim()/lower() cover only spaces/ASCII. Re-read in each operation's transaction so tokens follow changes.
 // Full local_accounts scan assumes an operator-sized deployment (about 10 accounts).
 export function oauthAdmin(db: Db): OAuthAdmin {
 	const email = db.first<{ value: string }>(
-		'SELECT value FROM instance_settings WHERE name = ?',
+		`SELECT ${selectSql(ADMIN_EMAIL_COLUMNS)} FROM ${ADMIN_EMAIL_FROM} WHERE i.name = ?`,
 		ACCESS_SETTINGS.adminEmail
 	)?.value
 	if (email === undefined || email.trim() === '') {
@@ -49,7 +74,7 @@ export function oauthAdmin(db: Db): OAuthAdmin {
 	const wanted = normalizedEmail(email)
 	const rows = db
 		.all<{ account_id: string; email: string; username: string; suspended_at: string | null }>(
-			'SELECT l.account_id, l.email, a.username, l.suspended_at FROM local_accounts l JOIN accounts a ON a.id = l.account_id'
+			`SELECT ${selectSql(LOCAL_EMAIL_COLUMNS)} FROM ${LOCAL_EMAIL_FROM}`
 		)
 		.filter((candidate) => normalizedEmail(candidate.email) === wanted)
 	const [row] = rows
@@ -76,14 +101,22 @@ export function adminAccountId(db: Db): string | null {
 
 const onceByDb = new WeakMap<Db, string | null>()
 
-// adminAccountId read once per operation (each runs on its own Db, in one transaction), for the notification reads and
-// pushes that apply R37 to admin.report (shownSql) many times in one operation. Only operations that never change
-// admin_email, a local account's email or a suspension call it.
+// adminAccountId read once per operation until forgotten, null included: each operation runs on its own Db in one
+// transaction (operation.ts), and its metered views share its root (sql.ts), so one lookup serves the whole operation
+// (R37's admin.report reads, pushes, the Owner role of presented accounts). A writer of what the match reads
+// (admin_email, a local account's email or suspension) forgets it right after its write in the same operation:
+// setAccountEmail, suspendLocal, unsuspendLocal and bootstrapInstance. StoreAdmin.setConfig, import and reset,
+// migrations and the cutover write with no operation Db that outlives the write, so they need not.
 export function adminAccountIdOnce(db: Db): string | null {
-	if (!onceByDb.has(db)) {
-		onceByDb.set(db, adminAccountId(db))
+	if (!onceByDb.has(db.root)) {
+		onceByDb.set(db.root, adminAccountId(db))
 	}
-	return onceByDb.get(db) ?? null
+	return onceByDb.get(db.root) ?? null
+}
+
+// After a write that may change the OAuth admin, so the operation's next adminAccountIdOnce reads it again.
+export function forgetAdminAccountId(db: Db): void {
+	onceByDb.delete(db.root)
 }
 
 // The OAuth admin's state for GET /admin/health (Access only), so the operator sees why there is no admin.

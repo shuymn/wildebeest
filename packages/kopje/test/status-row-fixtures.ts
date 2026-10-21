@@ -1,6 +1,6 @@
 import { runInDurableObject } from 'cloudflare:test'
 
-import { type ApiHarness } from './api-helpers'
+import { type ApiHarness, seedAccount, setSetting } from './api-helpers'
 import { NOW } from './app-helpers'
 import { type SqlRow, watchedCursor } from './read-helpers'
 import { community } from './status-helpers'
@@ -31,17 +31,35 @@ export type Item = {
 	media: number
 	poll: number
 	viewer: boolean
+	// Which of its statuses a local account of the fixture's writes (alice first, the OAuth admin of an admin fixture),
+	// each drawn apart; the others share one remote author of the item's. `local`: the top-level status (a boost's own
+	// row), `originalLocal`: a boost's original, `quotedLocal`: the quoted status of a quote or of a boost's original.
+	local?: boolean
+	originalLocal?: boolean
+	quotedLocal?: boolean
 	// The stored emoji snapshots of its statuses and of its author, if any.
 	emojis?: { status: string | null; author: string | null }
 }
 
-export type Fixture = { viewer: string; token: string; mentioned: string[]; filter: string }
+export type Fixture = { viewer: string; token: string; mentioned: string[]; filter: string; locals: string[] }
 
-// alice, MAX_STATUS_MENTION_ROWS remote accounts to mention (on hosts of 60 characters) and one filter of hers that names the statuses
-// built (so each carries a filter result) with a keyword.
-export async function fixture(): Promise<{ h: ApiHarness; f: Fixture }> {
+// The local accounts of an admin fixture: an operator-sized deployment (about 10 accounts, admin-authority.ts).
+const ADMIN_FIXTURE_LOCALS = 10
+
+// alice, MAX_STATUS_MENTION_ROWS remote accounts to mention (on hosts of 60 characters) and one filter of hers that
+// names the statuses built (so each carries a filter result) with a keyword. `admin`: alice is the OAuth admin
+// (admin_email) among ADMIN_FIXTURE_LOCALS local accounts, which items marked local are written by.
+export async function fixture({ admin = false }: { admin?: boolean } = {}): Promise<{ h: ApiHarness; f: Fixture }> {
 	const h = await community(['alice'])
 	const viewer = h.users.alice.id
+	const locals = [viewer]
+	if (admin) {
+		await setSetting(h.store, 'admin_email', 'alice@example.com')
+		// Long emails, so the admin lookup's scan (M in R) outweighs the slack of R's constant terms.
+		for (let i = 1; i < ADMIN_FIXTURE_LOCALS; i++) {
+			locals.push(await seedAccount(h.store, { username: `local${i}`, email: `${'e'.repeat(230)}${i}@example.com` }))
+		}
+	}
 	const filter = nextId()
 	const mentioned = await runInDurableObject(h.store, (_instance, state) => {
 		const sql = state.storage.sql
@@ -71,7 +89,7 @@ export async function fixture(): Promise<{ h: ApiHarness; f: Fixture }> {
 		)
 		return ids
 	})
-	return { h, f: { viewer, token: h.users.alice.token, mentioned, filter } }
+	return { h, f: { viewer, token: h.users.alice.token, mentioned, filter, locals } }
 }
 
 // Wide text of `points` code points whose content (`<p>needle …</p>`) stays within its stored bound
@@ -84,19 +102,35 @@ function wideText(points: number): string {
 	return `${'𠀀'.repeat(astral)}${'名'.repeat(points - astral)}`
 }
 
+// The next local account each fixture writes with, in turn from alice: kept per fixture, so which local account an item
+// gets depends only on the items built with that fixture, never on the tests that ran before in the worker.
+const localTurns = new WeakMap<Fixture, number>()
+
 // Writes the status rows of `item` (its original, quoted status and boost too) and returns its top-level id.
 export function build(sql: SqlStorage, f: Fixture, item: Item): string {
-	const author = nextId()
-	sql.exec(
-		`INSERT INTO accounts (id, uri, username, domain, display_name, raw, emojis)
-		VALUES (?, ?, 'author', 'remote.example', ?, ?, ?)`,
-		author,
-		`https://remote.example/users/${author}`,
-		(item.wide ? '名' : 'n').repeat(item.text % 300),
-		JSON.stringify({ attachment: [{ type: 'PropertyValue', name: 'k', value: 'v'.repeat(item.text % 500) }] }),
-		item.emojis?.author ?? null
-	)
-	const status = (parts: Item): string => {
+	let remote: string | undefined
+	const authorOf = (local: boolean | undefined): string => {
+		if (local === true) {
+			const turn = localTurns.get(f) ?? 0
+			localTurns.set(f, turn + 1)
+			return f.locals[turn % f.locals.length]!
+		}
+		if (remote === undefined) {
+			remote = nextId()
+			sql.exec(
+				`INSERT INTO accounts (id, uri, username, domain, display_name, raw, emojis)
+				VALUES (?, ?, 'author', 'remote.example', ?, ?, ?)`,
+				remote,
+				`https://remote.example/users/${remote}`,
+				(item.wide ? '名' : 'n').repeat(item.text % 300),
+				JSON.stringify({ attachment: [{ type: 'PropertyValue', name: 'k', value: 'v'.repeat(item.text % 500) }] }),
+				item.emojis?.author ?? null
+			)
+		}
+		return remote
+	}
+	const top = authorOf(item.local)
+	const status = (parts: Item, author: string): string => {
 		const id = nextId()
 		sql.exec(
 			`INSERT INTO statuses (id, uri, account_id, visibility, content, spoiler_text, published_at, emojis)
@@ -160,9 +194,9 @@ export function build(sql: SqlStorage, f: Fixture, item: Item): string {
 		}
 		return id
 	}
-	const quote = (parts: Item): string => {
-		const quoted = status({ ...parts, text: Math.floor(parts.text / 2) })
-		const id = status(parts)
+	const quote = (parts: Item, author: string): string => {
+		const quoted = status({ ...parts, text: Math.floor(parts.text / 2) }, authorOf(item.quotedLocal))
+		const id = status(parts, author)
 		sql.exec(
 			`INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, quoted_account_id, state, updated_at)
 			SELECT ?1, uri, id, account_id, 'accepted', ?3 FROM statuses WHERE id = ?2`,
@@ -178,7 +212,7 @@ export function build(sql: SqlStorage, f: Fixture, item: Item): string {
 			"INSERT INTO statuses (id, uri, account_id, reblog_of_id, visibility, published_at) VALUES (?, ?, ?, ?, 'public', ?)",
 			id,
 			`https://remote.example/announces/${id}`,
-			author,
+			top,
 			original,
 			VIEWER_NOW
 		)
@@ -186,13 +220,13 @@ export function build(sql: SqlStorage, f: Fixture, item: Item): string {
 	}
 	switch (item.kind) {
 		case 'status':
-			return status(item)
+			return status(item, top)
 		case 'quote':
-			return quote(item)
+			return quote(item, top)
 		case 'boost':
-			return boost(status(item))
+			return boost(status(item, authorOf(item.originalLocal)))
 		case 'boostOfQuote':
-			return boost(quote(item))
+			return boost(quote(item, authorOf(item.originalLocal)))
 	}
 }
 

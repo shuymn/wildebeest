@@ -1,4 +1,4 @@
-import { adminAccountId } from './admin-authority'
+import { adminAccountId, adminAccountIdOnce } from './admin-authority'
 import type { ViewerContext } from './audience'
 import { mediaDeleteOperation, readOperation, sessionOperation, writeOperation } from './operation'
 import { LOCAL_ACCOUNTS_ID_INDEX, OAUTH_CLIENTS_ID_INDEX } from '../db/indexes'
@@ -266,10 +266,11 @@ export const OWNER_ROLE: Role = {
 // Every other local account's role: Mastodon's default (everyone) role, id -99.
 export const EVERYONE_ROLE: Role = { id: '-99', name: '', permissions: '0', color: '', highlighted: false }
 
-// The role a local account presents (its credential account, its admin entity): Owner for the OAuth admin, read in the
-// transaction that presents it, and the everyone role for every other one.
+// The role a local account's credential account presents: Owner for the OAuth admin, read in the transaction that
+// presents it through the operation's one lookup (adminAccountIdOnce, which its `roles` shares), and the everyone role
+// for every other one.
 export function localRole(db: Db, accountId: string): Role {
-	return accountId === adminAccountId(db) ? OWNER_ROLE : EVERYONE_ROLE
+	return accountId === adminAccountIdOnce(db) ? OWNER_ROLE : EVERYONE_ROLE
 }
 
 // The OAuth admin acting through an admin route: its account, the client it acts through, the request time, and the
