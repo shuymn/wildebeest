@@ -119,6 +119,26 @@ Instance and apps (`/api/v1/apps`, `/api/v{1,2}/instance`, `/api/v1/preferences`
 - The reading preferences, `reading:autoplay:gifs` included, are Mastodon's defaults; no setting stores them.
 - `contact_username` and `contact_email` can each be removed alone (Mastodon's admin form requires both).
 
+OAuth (`/oauth/authorize`, `/oauth/token/info`, `/oauth/introspect`):
+
+- `response_mode` `query`, `fragment` and `form_post` are accepted and every answer goes in the query, as Mastodon's
+  rendered consent form answers them: the form carries no mode, and Mastodon honours the other modes only when it
+  skips the consent page, which Kopje never does. A decision posted directly with `fragment` or `form_post` is also
+  answered in the query, where Doorkeeper would honour the mode. A blank mode reads as `query`; any other value answers
+  `unsupported_response_mode`. The metadata lists `query` only.
+- `lang` has no effect: the consent page is English only.
+- Tokens are read from the `Authorization` header only, never from the `access_token` or `bearer_token` parameters.
+  Introspection reads its parameters from the body only: a `token`, `client_id` or `client_secret` in the query is
+  absent.
+- `token/info` `resource_owner_id` is the account id, a string (Mastodon: the integer user id).
+- A suspended account's token is invalid at `token/info` and inactive at introspection; Mastodon shows it.
+- Introspection ignores `token_type_hint`: Kopje has no refresh tokens, and every token is looked up as an access
+  token. Doorkeeper with `token_type_hint=refresh_token` looks up refresh tokens and answers an access token inactive.
+- Introspection with a bearer token: a revoked target of the same client answers 401 `invalid_token`, because Kopje
+  deletes revoked tokens (Mastodon: `active: false`). A suspended or stale-epoch caller is refused with
+  `invalid_token`, and an authorization code presented as the caller is `invalid_token` where Doorkeeper finds no
+  caller (400). `invalid_client` carries Kopje's Basic challenge and text, as at `/oauth/token`.
+
 Search (`/api/v2/search`, `/api/v1/accounts/search`):
 
 - With `resolve=true`, an `acct:user@domain` query is resolved as `user@domain` is; Mastodon's `MENTION_RE` gate

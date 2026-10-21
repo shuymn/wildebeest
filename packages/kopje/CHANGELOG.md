@@ -23,8 +23,13 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - Account `moved`: the account a remote account moved to, set by its actor document's `movedTo` naming an account
   Kopje knows and by a verified `Move`, and cleared by a document without one. It is shown one level deep, with the
   target's identity, counts and images but no note or fields, and `null` while the account is unavailable.
+- `GET /oauth/token/info` and `POST /oauth/introspect` (RFC 7662), with Doorkeeper's answers. Both read tokens from
+  the `Authorization` header only, and introspection reads its parameters from the body only.
 
 ### Changed
+
+- Breaking: `/oauth/authorize` answers a `response_mode` other than `query`, `fragment` or `form_post` with
+  `unsupported_response_mode`. The accepted modes are answered in the query.
 
 - Newly started Store upgrades can skip the full foreign-key scan when all pending migrations preserve references and
   referenced keys. Resumed upgrades and retries still scan the Store; see [the upgrade guide](docs/upgrade.md).
