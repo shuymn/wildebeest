@@ -53,7 +53,12 @@ export async function rowsRead<I>(
 	})
 }
 
-export async function remoteAccounts(h: ApiHarness, domains: number, perDomain: number, base = 500000000000000000n) {
+export async function remoteAccounts(
+	h: Pick<ApiHarness, 'store'>,
+	domains: number,
+	perDomain: number,
+	base = 500000000000000000n
+) {
 	await sql(
 		h.store,
 		`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ? - 1)
@@ -188,4 +193,47 @@ export function plannedSql(
 			return watchedCursor(cursor, () => (entry.rows += cursor.rowsRead))
 		},
 	} as unknown as SqlStorage
+}
+
+// The scans in `plan` (EXPLAIN QUERY PLAN details) of the tables the statement names `aliases` (the caller's list:
+// a plan names a CTE and a table alike, in any scope): a search by key is not one; a scan through an index, covering or
+// not, is (RES-7).
+export function scansOf(plan: readonly string[], aliases: readonly string[]): string[] {
+	return plan.filter((detail) => {
+		const scanned = /^SCAN (?:main\.)?(\S+)/.exec(detail)?.[1]
+		return scanned !== undefined && aliases.includes(scanned) && !detail.includes('VIRTUAL TABLE')
+	})
+}
+
+// Runs `operation` over plannedSql: its result and the statements matching `pattern`, each with its plan and rows read.
+export async function plannedRun<I, O>(
+	h: Pick<ApiHarness, 'store'>,
+	pattern: RegExp,
+	operation: StoreOperation<I, O>,
+	input: I
+): Promise<{ result: O; plans: PlannedStatement[] }> {
+	return runInDurableObject(h.store, (_instance, state) => {
+		const plans: PlannedStatement[] = []
+		const result = operation.run(plannedSql(state.storage.sql, pattern, plans), input)
+		return { result, plans }
+	})
+}
+
+// A RES-7 witness's statistics older than the Store's growth: ANALYZE the Store as the test built it (small and
+// nonempty), run `settle` (what must follow the statistics but precede the first capture), `capture` the 'before' state,
+// `grow`, and `capture` the 'after' one.
+export async function staleStatistics<T>(
+	h: Pick<ApiHarness, 'store'>,
+	steps: {
+		settle?: () => Promise<unknown>
+		capture: (phase: 'before' | 'after') => Promise<T>
+		grow: () => Promise<unknown>
+	}
+): Promise<{ before: T; after: T }> {
+	await sql(h.store, 'ANALYZE')
+	await steps.settle?.()
+	const before = await steps.capture('before')
+	await steps.grow()
+	const after = await steps.capture('after')
+	return { before, after }
 }

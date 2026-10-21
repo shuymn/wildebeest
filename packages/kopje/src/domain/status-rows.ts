@@ -11,6 +11,7 @@ import {
 	tagNameSql,
 } from './status-bounds'
 import { balancedSum, type ColumnMap, fixedColumns, type FixedColumns, rowHeapSql } from '../db/columns'
+import { ACCOUNTS_ID_INDEX, MEDIA_ID_INDEX, STATUSES_ID_INDEX } from '../db/indexes'
 
 // hydrate's queries (status-presenter.ts) and R, statusStream's bound on one status's row heap, share these column maps
 // (src/db/columns.ts), so R cannot drift from what is read (RES-3, "Heap at 8 MiB per answer" in docs/threat-model.md).
@@ -48,7 +49,17 @@ export const STATUS_COLUMN_MAP = {
 	author_domain: 'au.domain',
 } as const satisfies ColumnMap
 
-export const STATUS_FROM = 'statuses s JOIN accounts au ON au.id = s.account_id'
+// Each status and its author by key (the indexes named, so statistics older than the Store's growth cannot turn either
+// into a scan: RES-7).
+export const STATUS_FROM = `statuses s INDEXED BY ${STATUSES_ID_INDEX}
+	CROSS JOIN accounts au INDEXED BY ${ACCOUNTS_ID_INDEX} ON au.id = s.account_id`
+
+// STATUS_FROM over the ids of `keys`, a subquery whose `id` column holds each id once: each status is sought by its
+// key (the index named, so statistics older than the Store's growth cannot turn the read into a scan: RES-7).
+export function statusesOfSql(keys: string): string {
+	return `(${keys}) g CROSS JOIN statuses s INDEXED BY ${STATUSES_ID_INDEX} ON s.id = g.id
+		CROSS JOIN accounts au INDEXED BY ${ACCOUNTS_ID_INDEX} ON au.id = s.account_id`
+}
 
 // The columns presentMedia reads, bounded as stored (platform/stored-bounds.ts), for every query that presents media,
 // over media_attachments as `m`.
@@ -153,9 +164,11 @@ function statusRowTerms(viewer: string, filterRows: string): string {
 	const one = (sql: string) => `coalesce((${sql}), 0)`
 	const children = balancedSum([
 		one(
-			`SELECT sum(${rowHeapSql(STATUS_MEDIA_COLUMN_MAP)}) FROM media_attachments m WHERE m.id IN (${shownMediaSql('x.id')})`
+			`SELECT sum(${rowHeapSql(STATUS_MEDIA_COLUMN_MAP)}) FROM media_attachments m INDEXED BY ${MEDIA_ID_INDEX}
+				WHERE m.id IN (${shownMediaSql('x.id')})`
 		),
-		one(`SELECT sum(${rowHeapSql(MENTION_COLUMN_MAP)}) FROM (SELECT x.id AS value) j CROSS JOIN accounts a
+		one(`SELECT sum(${rowHeapSql(MENTION_COLUMN_MAP)}) FROM (SELECT x.id AS value) j
+			CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX}
 			WHERE a.id IN (${SHOWN_MENTIONS_SQL})`),
 		one(`SELECT sum(${rowHeapSql(TAG_COLUMN_MAP)}) FROM (SELECT x.id AS value) j CROSS JOIN status_tags t
 			WHERE ${SHOWN_TAGS_SQL}`),
@@ -165,8 +178,8 @@ function statusRowTerms(viewer: string, filterRows: string): string {
 	return balancedSum([
 		one(`SELECT ${rowHeapSql(STATUS_COLUMN_MAP)} FROM ${STATUS_FROM} WHERE s.id = x.id`),
 		fixed(QUOTE_READ_COLUMNS, '1'),
-		one(`SELECT ${rowHeapSql(ACCOUNT_COLUMN_MAP)} FROM statuses w JOIN accounts a ON a.id = w.account_id
-			LEFT JOIN local_accounts l ON l.account_id = a.id WHERE w.id = x.id`),
+		one(`SELECT ${rowHeapSql(ACCOUNT_COLUMN_MAP)} FROM statuses w INDEXED BY ${STATUSES_ID_INDEX}
+			CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = w.account_id LEFT JOIN local_accounts l ON l.account_id = a.id WHERE w.id = x.id`),
 		`CASE WHEN (SELECT o.reblog_of_id FROM statuses o WHERE o.id = x.id) IS NULL THEN ${children} ELSE 0 END`,
 		fixed(FILTER_MATCH_COLUMNS, filterRows),
 		`CASE WHEN ${viewer} IS NULL THEN 0 ELSE ${balancedSum([
@@ -187,9 +200,10 @@ export function statusRowBoundSql(): string {
 	// Built on first use: the maps come from modules that import this one's importers.
 	boundSql ??= `WITH t AS (SELECT key AS k, value AS id FROM json_each(?1)),
 		x(k, id) AS (SELECT k, id FROM t
-			UNION ALL SELECT t.k, b.reblog_of_id FROM t JOIN statuses b ON b.id = t.id WHERE b.reblog_of_id IS NOT NULL
+			UNION ALL SELECT t.k, b.reblog_of_id FROM t CROSS JOIN statuses b INDEXED BY ${STATUSES_ID_INDEX} ON b.id = t.id
+				WHERE b.reblog_of_id IS NOT NULL
 			UNION ALL SELECT k, id FROM (SELECT t.k, ${quotedStatusIdSql('coalesce(b.reblog_of_id, b.id)')} AS id
-				FROM t JOIN statuses b ON b.id = t.id) WHERE id IS NOT NULL)
+				FROM t CROSS JOIN statuses b INDEXED BY ${STATUSES_ID_INDEX} ON b.id = t.id) WHERE id IS NOT NULL)
 		SELECT x.k, sum(${statusRowTerms('?2', '?3')}) AS bytes FROM x GROUP BY x.k`
 	return boundSql
 }

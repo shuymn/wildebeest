@@ -1,3 +1,5 @@
+import { runInDurableObject } from 'cloudflare:test'
+
 import { describe, expect, it } from 'vitest'
 
 import { sql } from './api-helpers'
@@ -17,6 +19,7 @@ import {
 	localStatus,
 	mastodonNote,
 	misskeyNote,
+	nextId,
 	notifications,
 	OTHER,
 	PUBLIC,
@@ -27,12 +30,14 @@ import {
 	undo,
 	update,
 } from './inbox-status-helpers'
-import { rowsRead } from './read-helpers'
+import { plannedRun, remoteAccounts, rowsRead, scansOf, staleStatistics } from './read-helpers'
 import { block, domainBlock, mute } from './status-helpers'
-import { PURGE_BATCH } from '../src/domain/inbox'
+import { type InboundActivity, PURGE_BATCH, receiveActivity } from '../src/domain/inbox'
 import { MAX_STATUS_MEDIA, MAX_STATUS_TAGS } from '../src/domain/remote-statuses'
+import { MAX_STATUS_MENTION_ROWS } from '../src/domain/status-bounds'
 import { getTag } from '../src/domain/tags'
 import { tagTimeline } from '../src/domain/timelines'
+import { parseRemoteStatus } from '../src/federation/remote-status'
 import { handleQueue } from '../src/jobs/queue'
 import { MAX_JSON_DEPTH } from '../src/platform/json-bounds'
 import { REMOTE_HTML_RAW_LIMIT } from '../src/security/html'
@@ -1176,4 +1181,112 @@ describe('WEB-5: responses declare their type', () => {
 		expect(responses[0]?.headers.get('content-type')).toMatch(/^application\/json/)
 		expect(responses[2]?.headers.get('content-type')).toMatch(/^application\/activity\+json/)
 	})
+})
+
+describe('inbound addressing with stale statistics (RES-7)', () => {
+	it("finds the addressed accounts by URI, from the activity's URIs, the accounts grown after ANALYZE", async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		await followed(t, bob)
+		const originals = [await localStatus(t, { status: 'one' }), await localStatus(t, { status: 'two' })]
+		const addressed = [PUBLIC, `${bob.uri}/followers`, ALICE_URI, DAVE_URI]
+		const receive = (activity: InboundActivity) =>
+			plannedRun({ store: t.store }, /uri IN \(SELECT value FROM json_each/, receiveActivity, {
+				now: NOW,
+				storeNow: NOW,
+				origin: LOCAL,
+				actorUri: bob.uri,
+				actor: null,
+				activity,
+			})
+		const run = async (original: { uri: string }) => {
+			const note = mastodonNote(bob, {
+				to: addressed.slice(0, 1),
+				cc: addressed.slice(1),
+				tag: [{ type: 'Mention', href: ALICE_URI, name: '@alice' }],
+			})
+			return [
+				await receive({ type: 'Create', id: `${note.id}/activity`, object: parseRemoteStatus(note)! }),
+				await receive({
+					type: 'Announce',
+					id: `${bob.uri}/statuses/${nextId()}/activity`,
+					object: original.uri,
+					embedded: null,
+					to: addressed.slice(0, 1),
+					cc: addressed.slice(1),
+					published: null,
+					raw: '{}',
+				}),
+			]
+		}
+		const { before, after } = await staleStatistics(
+			{ store: t.store },
+			{
+				capture: (phase) => (phase === 'before' ? run(originals[0]!) : run(originals[1]!)),
+				grow: async () => {
+					await remoteAccounts({ store: t.store }, 100, 200)
+				},
+			}
+		)
+		for (const [i, { result, plans }] of after.entries()) {
+			expect(result).toMatchObject({ applied: true })
+			expect(plans).toHaveLength(1)
+			const { plan, rows } = plans[0]!
+			expect(
+				plan.filter((detail) =>
+					/^SEARCH (a|accounts) USING (COVERING )?INDEX sqlite_autoindex_accounts_2 \(uri=\?\)$/.test(detail)
+				)
+			).toHaveLength(1)
+			expect(scansOf(plan, ['a', 'accounts'])).toEqual([])
+			expect(rows).toBe(before[i]!.plans[0]!.rows)
+		}
+	}, 60_000)
+
+	it('keeps the local addressees, then the lowest ids, as silent mentions of a boost past the cap', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		await followed(t, bob)
+		const original = await localStatus(t, { status: 'boost me' })
+		const base = 500000000000000000n
+		await remoteAccounts({ store: t.store }, 1, MAX_STATUS_MENTION_ROWS + 50, base)
+		const remotes = (
+			await sql<{ uri: string }>(t.store, 'SELECT uri FROM accounts WHERE id >= ? ORDER BY id', String(base))
+		).map((row) => row.uri)
+		expect(remotes).toHaveLength(MAX_STATUS_MENTION_ROWS + 50)
+		const boost = `${bob.uri}/statuses/${nextId()}/activity`
+		const result = await runInDurableObject(t.store, (_instance, state) =>
+			receiveActivity.run(state.storage.sql, {
+				now: NOW,
+				storeNow: NOW,
+				origin: LOCAL,
+				actorUri: bob.uri,
+				actor: null,
+				// Remote accounts first and newest first, the local ones last.
+				activity: {
+					type: 'Announce',
+					id: boost,
+					object: original.uri,
+					embedded: null,
+					to: [PUBLIC],
+					cc: [...remotes.toReversed(), ALICE_URI, DAVE_URI],
+					published: null,
+					raw: '{}',
+				},
+			})
+		)
+		expect(result).toMatchObject({ applied: true })
+		const mentioned = await sql<{ account_id: string }>(
+			t.store,
+			`SELECT m.account_id FROM status_mentions m JOIN statuses s ON s.id = m.status_id WHERE s.uri = ? AND m.silent = 1
+			ORDER BY m.account_id`,
+			boost
+		)
+		expect(mentioned.map((m) => m.account_id)).toEqual(
+			[
+				ALICE,
+				DAVE,
+				...Array.from({ length: MAX_STATUS_MENTION_ROWS - 2 }, (_, i) => String(base + BigInt(i))),
+			].toSorted()
+		)
+	}, 60_000)
 })

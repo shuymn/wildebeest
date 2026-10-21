@@ -3,11 +3,20 @@ import { runInDurableObject } from 'cloudflare:test'
 import fc from 'fast-check'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { type ApiHarness, sql } from './api-helpers'
+import { type ApiHarness, seedAccount, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { ACCOUNT_EMOJIS_FULL, STATUS_EMOJIS_FULL } from './emoji-fixtures'
 import { freshStore } from './helpers'
 import { runs } from './policy-world'
+import {
+	plannedSql,
+	type PlannedStatement,
+	remoteAccounts,
+	scansOf,
+	staleStatistics,
+	watchedCursor,
+} from './read-helpers'
+import { community } from './status-helpers'
 import {
 	boundsOf,
 	build,
@@ -17,6 +26,7 @@ import {
 	nextId,
 	observedPresentation,
 	planCounts,
+	type Read,
 	recordingSql,
 	ORIGIN,
 	heap,
@@ -26,11 +36,12 @@ import {
 import { selectSql } from '../src/db/columns'
 import { Db, rowHeapBytes, RowMeter } from '../src/db/sql'
 import { ACCOUNT_COLUMN_MAP } from '../src/domain/accounts'
+import { type VisibleStatusId, visibleSql } from '../src/domain/audience'
 import { listGroupedNotifications } from '../src/domain/notification-groups'
 import { OWN_VOTE_COLUMNS, POLL_COLUMN_MAP } from '../src/domain/polls'
 import { MAX_REMOTE_OPTIONS, MAX_STATUS_MENTION_ROWS } from '../src/domain/status-bounds'
-import { type ChunkPlan, PAGE_CHUNKS } from '../src/domain/status-presenter'
-import { hydrateQueries, PER_ROW_SORTS, statusRowBoundSql } from '../src/domain/status-rows'
+import { type ChunkPlan, PAGE_CHUNKS, presentation, presentStatusesWithin } from '../src/domain/status-presenter'
+import { hydrateQueries, PER_ROW_SORTS, STATUS_FROM, statusRowBoundSql } from '../src/domain/status-rows'
 import { statusContext } from '../src/domain/statuses'
 import type { StoreStub } from '../src/platform/store-client'
 import { sha256Hex } from '../src/security/tokens'
@@ -717,3 +728,309 @@ async function countedContext(store: StoreStub, f: Fixture, tokenHash: string) {
 		return { queries: reads.length, ...planCounts(reads) }
 	})
 }
+
+describe('stale statistics (RES-7)', () => {
+	// The aliases a presentation's statements give the tables that grow (statuses, accounts, media, polls, votes, filter
+	// rules): R names its CTEs t, x and k, which no scan of a table may hide behind, so each list is the statement's own.
+	const presentationAliases = (query: string): string[] =>
+		query.includes('filter_keywords k')
+			? ['k']
+			: [
+					's',
+					'b',
+					'w',
+					'o',
+					'a',
+					'au',
+					'm',
+					'y',
+					'v',
+					'p',
+					'fs',
+					'ms',
+					// The visibility rule's account lookups (audience.ts).
+					'pa',
+					'pc',
+					'pda',
+					'pha',
+					'pn',
+					...(query.includes('media_attachments x') ? ['x'] : []),
+					...(query.includes('statuses t ') ? ['t'] : []),
+				]
+
+	// The visibility rule's account lookups whose aliases are also CTE names in the same statements (ps, pv), or not
+	// (pa), each by its named index: one search at least wherever the statement reads it.
+	function expectVisibilityLookups(query: string, plan: readonly string[]): void {
+		for (const [named, search] of [
+			['main.accounts pa ', 'SEARCH pa USING INDEX accounts_deleted (id=?)'],
+			['main.accounts ps ', 'SEARCH ps USING INDEX accounts_suspended (id=?)'],
+			['main.accounts pv ', 'SEARCH pv USING INDEX sqlite_autoindex_accounts_1 (id=?)'],
+		] as const) {
+			if (query.includes(named)) {
+				expect(plan, `${query}\n${plan.join('\n')}`).toContain(search)
+			}
+		}
+	}
+
+	// Every statement a presentation runs (filters, R, the graph, the hydrate queries), with its plan and rows read.
+	function plannedPresentation(state: DurableObjectState, viewer: string, ids: readonly string[]) {
+		const plans: PlannedStatement[] = []
+		const db = new Db(plannedSql(state.storage.sql, /./, plans))
+		const options = { origin: ORIGIN, viewer: { accountId: viewer, now: VIEWER_NOW } }
+		const visible = ids as VisibleStatusId[]
+		const { items } = presentStatusesWithin(
+			db,
+			presentation(db, visible, options),
+			visible,
+			Infinity,
+			true,
+			PAGE_CHUNKS
+		)
+		return { items, plans }
+	}
+
+	// The graph's two arms, read by key, against the one statement they replace (an OR that the planner may only scan):
+	// the same rows for any answer, its ids repeated, boosts of one original, originals among the ids, and originals the
+	// viewer may not see (from an author they do not follow, or by direct message to someone else).
+	it('reads the rows the OR of the statuses and their visible originals read', async () => {
+		const h = await community(['alice'])
+		const viewer = h.users.alice.id
+		const pool = await runInDurableObject(h.store, (_instance, state) => {
+			const real = state.storage.sql
+			const authors = [nextId(), nextId()]
+			for (const [i, author] of authors.entries()) {
+				real.exec(
+					"INSERT INTO accounts (id, uri, username, domain) VALUES (?, ?, ?, 'remote.example')",
+					author,
+					`https://remote.example/users/a${i}`,
+					`a${i}`
+				)
+			}
+			real.exec(
+				"INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'accepted')",
+				viewer,
+				authors[0]!
+			)
+			const ids: string[] = []
+			for (const [i, visibility] of ['public', 'private', 'direct', 'unlisted'].entries()) {
+				for (const author of authors) {
+					const original = nextId()
+					real.exec(
+						`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+						VALUES (?, ?, ?, ?, '<p>o</p>', ?)`,
+						original,
+						`https://remote.example/objects/${original}`,
+						author,
+						visibility,
+						VIEWER_NOW
+					)
+					ids.push(original)
+					for (let boost = 0; boost <= i % 2; boost++) {
+						const id = nextId()
+						real.exec(
+							`INSERT INTO statuses (id, uri, account_id, reblog_of_id, visibility, published_at)
+							VALUES (?, ?, ?, ?, 'public', ?)`,
+							id,
+							`https://remote.example/announces/${id}`,
+							authors[(boost + 1) % 2]!,
+							original,
+							VIEWER_NOW
+						)
+						ids.push(id)
+					}
+				}
+			}
+			return ids
+		})
+		const oracle = `SELECT s.id FROM ${STATUS_FROM}
+			WHERE s.id IN (SELECT value FROM json_each(?1))
+			OR (s.id IN (SELECT reblog_of_id FROM statuses WHERE id IN (SELECT value FROM json_each(?1)) AND reblog_of_id IS NOT NULL)
+				AND ${visibleSql('s', '?2')})`
+		await fc.assert(
+			fc.asyncProperty(fc.array(fc.constantFrom(...pool), { minLength: 1, maxLength: 24 }), async (ids) => {
+				const { read, expected } = await runInDurableObject(h.store, (_instance, state) => {
+					const reads: Read[] = []
+					const observed = {
+						exec: (query: string, ...params: SqlStorageValue[]) => {
+							const read: Read = { query, params, rows: [] }
+							reads.push(read)
+							return watchedCursor(
+								state.storage.sql.exec(query, ...params),
+								() => {},
+								(rows) => read.rows.push(...rows)
+							)
+						},
+					} as unknown as SqlStorage
+					const db = new Db(observed)
+					const options = { origin: ORIGIN, viewer: { accountId: viewer, now: VIEWER_NOW } }
+					const visible = ids as VisibleStatusId[]
+					presentStatusesWithin(db, presentation(db, visible, options), visible, Infinity, true, ids.length)
+					const graph = reads.filter((r) => r.query.includes('b.reblog_of_id AS value'))
+					expect(graph).toHaveLength(1)
+					const [json, account] = graph[0]!.params
+					return {
+						read: graph[0]!.rows.map((row) => row.id as string),
+						expected: state.storage.sql
+							.exec<{ id: string }>(oracle, json!, account!)
+							.toArray()
+							.map((row) => row.id),
+					}
+				})
+				expect(read.toSorted()).toEqual(expected.toSorted())
+			}),
+			runs(50)
+		)
+	}, 120_000)
+
+	// Statistics taken while the Store holds one account besides the viewer's and one poll: the author and poll lookups
+	// of the presentation and of R still seek by key once thousands of others arrive.
+	it('seeks authors and polls by key, statistics taken with one author and one poll', async () => {
+		const h = await community(['alice'])
+		const viewer = h.users.alice.id
+		const f: Fixture = { viewer, token: h.users.alice.token, mentioned: [], filter: nextId() }
+		await sql(
+			h.store,
+			"INSERT INTO filters (id, account_id, title, context, action) VALUES (?, ?, 'f', '[\"public\"]', 'warn')",
+			f.filter,
+			viewer
+		)
+		// A boost of a quote: the boost, its original and the quoted status, all by the one author, and one poll.
+		const base: Item = {
+			kind: 'boostOfQuote',
+			text: 10,
+			wide: false,
+			mentions: 0,
+			tags: 0,
+			media: 0,
+			poll: 2,
+			viewer: true,
+		}
+		const ids = await runInDurableObject(h.store, (_instance, state) => [build(state.storage.sql, f, base)])
+		// The original's poll alone (its votes with it): the quoted status's goes.
+		await sql(h.store, 'DELETE FROM polls WHERE status_id <> (SELECT reblog_of_id FROM statuses WHERE id = ?)', ids[0]!)
+		expect(await sql(h.store, 'SELECT count(*) AS n FROM polls')).toEqual([{ n: 1 }])
+		expect(await sql(h.store, 'SELECT count(*) AS n FROM accounts WHERE id <> ?', viewer)).toEqual([{ n: 1 }])
+		const { before, after } = await staleStatistics(h, {
+			capture: () => runInDurableObject(h.store, (_instance, state) => plannedPresentation(state, viewer, ids)),
+			grow: async () => {
+				await remoteAccounts(h, 100, 200)
+				// Other accounts' statuses with polls.
+				await sql(
+					h.store,
+					`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+					SELECT CAST(CAST(id AS INTEGER) + 100000000000000000 AS TEXT), uri || '/s', id, 'public', '', ?1 FROM accounts
+					WHERE domain LIKE 'd%.example'`,
+					VIEWER_NOW
+				)
+				await sql(
+					h.store,
+					`INSERT INTO polls (status_id, options, tallies) SELECT id, '["a","b"]', '[0,0]' FROM statuses WHERE uri LIKE '%/s'`
+				)
+			},
+		})
+		expect(after.items).toEqual(before.items)
+		const bound = after.plans.find((p) => p.query === statusRowBoundSql())!.plan
+		expect(bound).toContain('SEARCH a USING INDEX sqlite_autoindex_accounts_1 (id=?)')
+		expect(
+			bound.filter((detail) => /^SEARCH p USING INDEX sqlite_autoindex_polls_1 \(status_id=\?\)$/.test(detail))
+		).not.toHaveLength(0)
+		for (const p of after.plans.filter((p) => p.query.includes('b.reblog_of_id AS value'))) {
+			expect(
+				p.plan.filter((detail) =>
+					/^SEARCH au USING (COVERING )?INDEX sqlite_autoindex_accounts_1 \(id=\?\)$/.test(detail)
+				)
+			).toHaveLength(1)
+		}
+		for (const [i, { query, plan, rows }] of after.plans.entries()) {
+			expect(scansOf(plan, presentationAliases(query)), `${query}\n${plan.join('\n')}`).toEqual([])
+			expectVisibilityLookups(query, plan)
+			expect(rows - before.plans[i]!.rows, `${query}\n${plan.join('\n')}`).toBeLessThanOrEqual(1)
+		}
+	}, 60_000)
+
+	it('reads statuses, media, votes and filters by key after the Store grows past its statistics', async () => {
+		const { h, f } = await fixture()
+		const base: Item = { kind: 'status', text: 300, wide: true, mentions: 3, tags: 5, media: 2, poll: 3, viewer: true }
+		// Every kind four times: 16 statuses, past the filter text level's allowance, so its preparation pass runs too.
+		const kinds = ['status', 'quote', 'boost', 'boostOfQuote'] as const
+		const ids = await runInDurableObject(h.store, (_instance, state) =>
+			kinds.flatMap((kind) => [0, 1, 2, 3].map(() => build(state.storage.sql, f, { ...base, kind })))
+		)
+		const other = await seedAccount(h.store, { username: 'bob', email: 'bob@example.com' })
+		// Statistics of a small Store, not taken again after it grows.
+		const { before, after } = await staleStatistics(h, {
+			capture: () => runInDurableObject(h.store, (_instance, state) => plannedPresentation(state, f.viewer, ids)),
+			grow: async () => {
+				await runInDurableObject(h.store, (_instance, state) => {
+					const real = state.storage.sql
+					// Unrelated statuses of every kind with their accounts, attachments, mentions, hashtags and polls.
+					for (let i = 0; i < 400; i++) {
+						build(real, f, { ...base, viewer: false, kind: kinds[i % 4]! })
+					}
+					// Other voters of the presented polls, and earlier generations of the viewer's own votes.
+					real.exec(
+						`INSERT INTO poll_votes (poll_id, account_id, choice, generation, created_at)
+						SELECT p.status_id, a.id, 0, 0, ?1 FROM polls p CROSS JOIN accounts a
+						WHERE p.status_id IN (SELECT value FROM json_each(?2)) AND a.domain IS NOT NULL AND a.id <> ?3`,
+						VIEWER_NOW,
+						JSON.stringify(ids),
+						f.viewer
+					)
+					real.exec(
+						`UPDATE polls SET generation = 1 WHERE status_id IN (SELECT poll_id FROM poll_votes WHERE account_id = ?1)`,
+						f.viewer
+					)
+					real.exec(
+						`INSERT INTO poll_votes (poll_id, account_id, choice, generation, created_at)
+						SELECT poll_id, account_id, choice, 1, created_at FROM poll_votes WHERE account_id = ?1`,
+						f.viewer
+					)
+					// Another user's filters, with keywords and statuses.
+					for (let i = 0; i < 200; i++) {
+						const filter = nextId()
+						real.exec(
+							"INSERT INTO filters (id, account_id, title, context, action) VALUES (?, ?, 'f', '[\"public\"]', 'warn')",
+							filter,
+							other
+						)
+						for (let k = 0; k < 5; k++) {
+							real.exec(
+								"INSERT INTO filter_keywords (id, filter_id, keyword, whole_word) VALUES (?, ?, 'other', 0)",
+								nextId(),
+								filter
+							)
+						}
+						real.exec(
+							`INSERT INTO filter_statuses (id, filter_id, status_id)
+							SELECT ?1, ?2, id FROM statuses ORDER BY id DESC LIMIT 1`,
+							nextId(),
+							filter
+						)
+					}
+				})
+			},
+		})
+		expect(after.items).toEqual(before.items)
+		expect(after.plans.map((p) => p.query)).toEqual(before.plans.map((p) => p.query))
+		for (const [i, { query, plan, rows }] of after.plans.entries()) {
+			expect(scansOf(plan, presentationAliases(query)), `${query}\n${plan.join('\n')}`).toEqual([])
+			expectVisibilityLookups(query, plan)
+			// Rows read stay flat as the Store grows: at most the entry past a range, where one now follows it.
+			expect(rows - before.plans[i]!.rows, `${query}\n${plan.join('\n')}`).toBeLessThanOrEqual(ids.length)
+		}
+		const graph = after.plans.filter((p) => p.query.includes('b.reblog_of_id AS value'))
+		// The presentation's graph and the filter text level's preparation pass.
+		expect(graph).toHaveLength(2)
+		for (const { plan } of graph) {
+			expect(plan).toContain('SEARCH b USING INDEX sqlite_autoindex_statuses_1 (id=?)')
+			expect(plan).toContain('SEARCH s USING INDEX sqlite_autoindex_statuses_1 (id=?)')
+		}
+		const bound = after.plans.find((p) => p.query === statusRowBoundSql())!.plan
+		expect(bound).toContain('SEARCH b USING INDEX sqlite_autoindex_statuses_1 (id=?)')
+		expect(bound).toContain('SEARCH w USING INDEX sqlite_autoindex_statuses_1 (id=?)')
+		expect(bound).toContain('SEARCH m USING INDEX sqlite_autoindex_media_attachments_1 (id=?)')
+		expect(bound).toContain(
+			'SEARCH v USING COVERING INDEX sqlite_autoindex_poll_votes_1 (poll_id=? AND generation=? AND account_id=?)'
+		)
+	}, 120_000)
+})

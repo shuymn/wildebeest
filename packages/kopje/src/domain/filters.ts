@@ -106,9 +106,12 @@ function ownKeyword(db: Db, ownerId: string, id: string): { filter: FilterRow; k
 	return keyword === undefined || filter === undefined ? undefined : { filter, keyword }
 }
 
+// The rules of each filter of filterIds, in their order, each filter's in id order: sought through the filter's
+// index from the ids, never scanned with the other accounts' rules (RES-7).
 function keywordsOf(db: Db, filterIds: readonly string[]): KeywordRow[] {
 	return db.all<KeywordRow>(
-		`SELECT ${KEYWORD_COLUMNS} FROM json_each(?1) j JOIN filter_keywords k ON k.filter_id = j.value
+		`SELECT ${KEYWORD_COLUMNS} FROM json_each(?1) j
+		CROSS JOIN filter_keywords k INDEXED BY filter_keywords_filter ON k.filter_id = j.value
 		ORDER BY j.key, k.id`,
 		JSON.stringify(filterIds)
 	)
@@ -116,7 +119,8 @@ function keywordsOf(db: Db, filterIds: readonly string[]): KeywordRow[] {
 
 function statusesOf(db: Db, filterIds: readonly string[]): StatusRow[] {
 	return db.all<StatusRow>(
-		`SELECT fs.id, fs.filter_id, fs.status_id FROM json_each(?1) j JOIN filter_statuses fs ON fs.filter_id = j.value
+		`SELECT fs.id, fs.filter_id, fs.status_id FROM json_each(?1) j
+		CROSS JOIN filter_statuses fs INDEXED BY filter_statuses_pair ON fs.filter_id = j.value
 		ORDER BY j.key, fs.id`,
 		JSON.stringify(filterIds)
 	)

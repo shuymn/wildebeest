@@ -228,7 +228,7 @@ export function observedPresentation(
 		if (read.query === statusRowBoundSql()) {
 			continue
 		}
-		if (read.query.includes('SELECT reblog_of_id FROM statuses WHERE id IN')) {
+		if (read.query.includes('b.reblog_of_id AS value')) {
 			segments.push({ ids: JSON.parse(read.params[0] as string) as string[], reads: [] })
 		}
 		segments.at(-1)!.reads.push(read)
@@ -252,7 +252,7 @@ export function recordingSql(real: SqlStorage): { sql: SqlStorage; reads: string
 export function planCounts(reads: readonly string[]): { windows: number; chunks: number } {
 	return {
 		windows: reads.filter((query) => query === statusRowBoundSql()).length,
-		chunks: reads.filter((query) => query.includes('SELECT reblog_of_id FROM statuses WHERE id IN')).length,
+		chunks: reads.filter((query) => query.includes('b.reblog_of_id AS value')).length,
 	}
 }
 

@@ -43,6 +43,7 @@ import { renderFieldValue } from './status-text'
 import { unlockChanged } from './unlock-accepts'
 import { readWindow, singleWindow, type Window, windowJson, windowPage } from './windows'
 import { type ColumnMap, selectSql } from '../db/columns'
+import { ACCOUNTS_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
 import { normalizeDomain, parseAddress } from '../platform/domain-name'
 import { boundedHref, httpUrl } from '../platform/http-url'
@@ -242,6 +243,8 @@ export const ACCOUNT_COLUMN_MAP = {
 export { DISPLAY_NAME_LIMIT, PROFILE_URL_LIMIT, USERNAME_LIMIT, usernameSql }
 
 export const ACCOUNT_FROM = 'accounts a LEFT JOIN local_accounts l ON l.account_id = a.id'
+// ACCOUNT_FROM for a membership of ids: each account sought by its key (RES-7).
+const ACCOUNT_FROM_BY_ID = `accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} LEFT JOIN local_accounts l ON l.account_id = a.id`
 
 // An answer of many accounts (a list's members and endorsements with limit=0, familiar followers) is within
 // ANSWER_BYTES, the JSON around the accounts reserved first (only its first account, bounded by RES-2, may stand
@@ -327,7 +330,8 @@ export function* partialAccountsOf(
 					`SELECT a.id, ${actorUriSql('a.uri')} AS uri, ${usernameSql('a.username')} AS username, a.domain, a.actor_type,
 						a.url, a.avatar_url, a.locked,
 						${availableJoinedSql('a', 'l')} AS available
-					FROM json_each(?1) c CROSS JOIN accounts a ON a.id = c.value LEFT JOIN local_accounts l ON l.account_id = a.id`,
+					FROM json_each(?1) c CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = c.value
+					LEFT JOIN local_accounts l ON l.account_id = a.id`,
 					JSON.stringify([...new Set(slice)])
 				)
 				.map((row) => [row.id, row])
@@ -505,7 +509,7 @@ function presentAccountsById(db: Db, ids: readonly string[], present: Present): 
 	return new Map(
 		db
 			.all<AccountRow>(
-				`SELECT ${selectSql(ACCOUNT_COLUMN_MAP)} FROM ${ACCOUNT_FROM} WHERE a.id IN (SELECT value FROM json_each(?1))`,
+				`SELECT ${selectSql(ACCOUNT_COLUMN_MAP)} FROM ${ACCOUNT_FROM_BY_ID} WHERE a.id IN (SELECT value FROM json_each(?1))`,
 				JSON.stringify([...new Set(ids)])
 			)
 			.map((row) => [row.id, presentAccount(row, present)])
@@ -805,7 +809,7 @@ type RelationshipRow = {
 
 // The viewer's relationships with each account, as they stand at `now` (an expired mute no longer counts), with the
 // viewer's endorsement of it and the viewer's own private note on it (Account.endorsed_map and account_note_map), each
-// read through its pair key.
+// read through its pair key, each account sought by id from the requested ids (RES-7).
 export function relationshipsOf(db: Db, viewerId: string, accountIds: string[], now: number): Relationship[] {
 	const rows = db.all<RelationshipRow>(
 		`SELECT a.id,
@@ -817,7 +821,7 @@ export function relationshipsOf(db: Db, viewerId: string, accountIds: string[], 
 			${domainBlocksSql('?1', 'a.id')} AS domain_blocking,
 			p.account_id IS NOT NULL AS endorsed, n.comment AS note
 		FROM json_each(?2) j
-		JOIN accounts a ON a.id = j.value
+		CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = j.value
 		LEFT JOIN follows fo ON fo.account_id = ?1 AND fo.target_account_id = a.id
 		LEFT JOIN follows fb ON fb.account_id = a.id AND fb.target_account_id = ?1
 		LEFT JOIN account_pins p ON p.account_id = ?1 AND p.target_account_id = a.id
@@ -1017,16 +1021,19 @@ export function findAccountIds(db: Db, input: SearchInput, viewerId: string): st
 				JOIN follows f ON f.account_id = ? AND f.target_account_id = e.id AND f.state = 'accepted'`
 		: `SELECT account_id AS id FROM local_accounts
 			UNION SELECT id FROM (${exact} LIMIT ${ACCOUNT_PREFIX_LIMIT})
-			UNION SELECT id FROM (SELECT id FROM accounts WHERE lower(username) >= ? AND lower(username) < ?
-				LIMIT ${ACCOUNT_PREFIX_LIMIT})
+			UNION SELECT id FROM (SELECT id FROM accounts INDEXED BY accounts_username
+				WHERE lower(username) >= ? AND lower(username) < ? ORDER BY lower(username), rowid LIMIT ${ACCOUNT_PREFIX_LIMIT})
 			UNION SELECT id FROM (SELECT id FROM accounts ORDER BY rowid DESC LIMIT ${ACCOUNT_RECENT_LIMIT})`
 	const candidateParams: SqlStorageValue[] = input.following
 		? [viewerId, ...exactParams, viewerId]
 		: [...exactParams, prefix, `${prefix}${PREFIX_END}`]
+	// The candidates outside, each account sought by id, and the prefix through accounts_username: statistics older than
+	// the Store's growth cannot turn either into a scan of accounts (RES-7). The prefix window is the first in the
+	// index's own order (the lowered username, then rowid), so which accounts it holds does not depend on the plan.
 	return db
 		.all<{ id: string }>(
 			`WITH candidates(id) AS (${candidates})
-			SELECT a.id FROM candidates c JOIN accounts a ON a.id = c.id
+			SELECT a.id FROM candidates c CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = c.id
 			WHERE ${findableBySql('a.id', '?')} AND ${where.join(' AND ')}
 			ORDER BY lower(a.username) = ? DESC, a.domain IS NULL DESC, a.followers_count DESC, a.id
 			LIMIT ? OFFSET ?`,
@@ -1323,7 +1330,7 @@ export function accountRowsOf(db: Db, ids: readonly string[]): AccountRow[] {
 	const rows = new Map(
 		db
 			.all<AccountRow>(
-				`SELECT ${selectSql(ACCOUNT_COLUMN_MAP)} FROM json_each(?1) c CROSS JOIN accounts a ON a.id = c.value
+				`SELECT ${selectSql(ACCOUNT_COLUMN_MAP)} FROM json_each(?1) c CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = c.value
 					LEFT JOIN local_accounts l ON l.account_id = a.id`,
 				JSON.stringify(ids)
 			)

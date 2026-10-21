@@ -67,6 +67,7 @@ import { fileRemoteReports } from './reports'
 import { accountSearchText } from './search-text'
 import { recountStatus, recountStatuses, withdrawLocalBoost } from './statuses'
 import { streamDelete } from './streaming'
+import { ACCOUNTS_URI_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
 import { hostDomain } from '../platform/domain-name'
 import { ACTIVITY_ID_LIMIT, withinIdentityBound } from '../platform/identity-bounds'
@@ -2349,11 +2350,12 @@ const announce: Handler<'Announce'> = (db, actor, activity, input) => {
 		}
 	)
 	// The wrapper's own audience: known accounts it addresses are its silent recipients (bounded, local first), so the
-	// audience rule decides who may see the boost, its reblog notification included (notifications.ts).
+	// audience rule decides who may see the boost, its reblog notification included (notifications.ts). Each is sought
+	// through the URI index (RES-7); past the cap, local accounts first, then by id.
 	const addressed = db.all<{ id: string }>(
-		`SELECT a.id FROM accounts a LEFT JOIN local_accounts l ON l.account_id = a.id
+		`SELECT a.id FROM accounts a INDEXED BY ${ACCOUNTS_URI_INDEX} LEFT JOIN local_accounts l ON l.account_id = a.id
 		WHERE a.uri IN (SELECT value FROM json_each(?)) AND a.id <> ?
-		ORDER BY l.account_id IS NULL LIMIT ?`,
+		ORDER BY l.account_id IS NULL, a.id LIMIT ?`,
 		JSON.stringify([...activity.to, ...activity.cc].slice(0, MAX_STATUS_AUDIENCE)),
 		actor.id,
 		MAX_STATUS_MENTION_ROWS

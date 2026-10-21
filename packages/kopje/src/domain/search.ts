@@ -9,6 +9,7 @@ import { statusCursor } from './statuses'
 import { normalizeTag } from './tag-name'
 import { presentTags, type Tag } from './tags'
 import { tagReviewedSql } from './trends'
+import { STATUSES_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
 
 // GET /api/v2/search (design §6, "search"): local data only, matched with instr on search_text (NFKC); no virtual
@@ -178,8 +179,9 @@ function searchStatuses(db: Db, input: SearchRequest, viewer: UserContext) {
 			'listable',
 			{
 				with: `WITH candidates(id) AS (${candidates})`,
-				from: 'candidates c JOIN',
-				join: 'ON s.id = c.id',
+				// The candidates outside, each status looked up by id (as searchHashtags' visible statuses below).
+				from: 'candidates c CROSS JOIN',
+				join: `INDEXED BY ${STATUSES_ID_INDEX} ON s.id = c.id`,
 				where: where.join(' AND '),
 				tail: `ORDER BY s.id DESC LIMIT ${p.add(input.limit)} OFFSET ${p.add(input.offset)}`,
 			},
@@ -209,7 +211,7 @@ function searchHashtags(db: Db, input: SearchRequest, { accountId: viewerId, now
 		public(id) AS (SELECT id FROM statuses WHERE visibility = 'public' AND reblog_of_id IS NULL ORDER BY id DESC LIMIT ?5),
 		candidates(id) AS (SELECT id FROM library UNION SELECT id FROM public),
 		visible(id) AS (SELECT s.id FROM candidates c
-			CROSS JOIN statuses s INDEXED BY sqlite_autoindex_statuses_1 ON s.id = c.id WHERE ${listableSql('s', '?1', '?8')})
+			CROSS JOIN statuses s INDEXED BY ${STATUSES_ID_INDEX} ON s.id = c.id WHERE ${listableSql('s', '?1', '?8')})
 		SELECT DISTINCT ${tagNameSql('t.name')} AS name FROM visible v
 			CROSS JOIN status_tags t ON t.status_id = v.id AND t.name >= ?2 AND t.name < ?3
 		WHERE ${tagNameSql('t.name')} IS NOT NULL AND (?9 = 0 OR t.name = ?2 OR ${tagReviewedSql('t.name')})
