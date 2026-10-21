@@ -17,11 +17,14 @@ import { MAX_SPOILER_LENGTH } from '../src/domain/remote-statuses'
 import { MAX_RAW_LENGTH, parseStatusText, renderFieldValue, renderStatusHtml } from '../src/domain/status-text'
 import { remoteActorInput } from '../src/federation/remote-actor'
 import { parseRemoteStatus } from '../src/federation/remote-status'
-import { STATUS_URI_LIMIT } from '../src/platform/identity-bounds'
+import { REMOTE_USERNAME_LIMIT, STATUS_URI_LIMIT } from '../src/platform/identity-bounds'
 import { mediaUrl, SERVED_TYPES } from '../src/platform/media-files'
 import {
 	BIO_JSON_BYTES,
 	CONTACT_EMAIL_BYTES,
+	CONTACT_SETTING_BOUNDS,
+	CONTACT_USERNAME_BYTES,
+	CONTACT_USERNAME_LIMIT,
 	CONTENT_JSON_BYTES,
 	contentSql,
 	DISPLAY_NAME_LIMIT,
@@ -775,6 +778,69 @@ describe('instance setting bounds (RES-2)', () => {
 				expect(storedInstanceSetting('privacy_policy', value)).toBe(blankValue ? null : value)
 			}
 			expect(trimBlank('\v\u3000 x \t\r')).toBe('\u3000 x')
+		})
+	})
+})
+
+describe('contact_username (0059_contact_and_activity)', () => {
+	const { projection, writer } = CONTACT_SETTING_BOUNDS.contact_username
+	const ADDRESS = fc.stringMatching(/^[-.0-9@A-Z_a-z]{0,12}$/)
+
+	it('repeats REMOTE_USERNAME_LIMIT, and is a username, @ and a domain name of 253 bytes', () => {
+		expect(CONTACT_USERNAME_LIMIT).toBe(REMOTE_USERNAME_LIMIT)
+		expect(CONTACT_USERNAME_BYTES).toBe(REMOTE_USERNAME_LIMIT + 1 + 253)
+	})
+
+	it("P is idempotent and the writer's output its fixed point; they agree on every input", async () => {
+		await runInDurableObject(freshStore(), (_instance, state) => {
+			const sql = state.storage.sql
+			fc.assert(
+				fc.property(
+					fc.oneof(ADDRESS, fc.string({ unit: 'binary', maxLength: 40 }), fc.constantFrom('a@b', '@a', 'a@', 'a@@b')),
+					(input) => {
+						expect(idempotent(sql, projection, input)).toBe(true)
+						expect(writer(input)).toBe(valueOf(sql, projection('?1'), input))
+						const written = writer(input)
+						if (written !== null) {
+							expect(valueOf(sql, `(${projection('?1')}) IS ?1`, written)).toBe(1)
+						}
+					}
+				),
+				{ numRuns: 500 }
+			)
+		})
+	}, 60_000)
+
+	it('drops NUL, a value past its bytes or its username part, and a value of more or misplaced @', async () => {
+		const username = 'a'.repeat(REMOTE_USERNAME_LIMIT)
+		const domain = `${'d'.repeat(249)}.com`
+		expect(new TextEncoder().encode(`${username}@${domain}`).length).toBe(CONTACT_USERNAME_BYTES)
+		await runInDurableObject(freshStore(), (_instance, state) => {
+			const sql = state.storage.sql
+			for (const [input, kept] of [
+				[`${username}@${domain}`, true],
+				[`${username}@${domain}x`, false],
+				[username, true],
+				[`${username}a`, false],
+				[`${username}a@remote.test`, false],
+				['alice', true],
+				['Bob@remote.test', true],
+				['alice\u0000', false],
+				['al\u0000ice@remote.test', false],
+				['', false],
+				['@alice', false],
+				['alice@', false],
+				['a@b@c', false],
+				['a b', false],
+				['al\u00e9', false],
+				['\u{1F600}', false],
+			] as const) {
+				expect(writer(input), JSON.stringify(input)).toBe(kept ? input : null)
+				expect(valueOf(sql, projection('?1'), input), JSON.stringify(input)).toBe(kept ? input : null)
+			}
+			// A value of another storage class reads as NULL.
+			expect(sql.exec(`SELECT ${projection('?1')} AS v`, new Uint8Array([97]).buffer).one().v).toBeNull()
+			expect(sql.exec(`SELECT ${projection('?1')} AS v`, 12).one().v).toBeNull()
 		})
 	})
 })

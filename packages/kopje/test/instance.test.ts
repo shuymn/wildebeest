@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
-import { apiHarness, seedAccount, setSetting, sql } from './api-helpers'
+import { type ApiHarness, apiHarness, bearer, seedAccount, setSetting, sql } from './api-helpers'
+import { NOW } from './app-helpers'
+import { BUILD } from './helpers'
+import { DAY_MS } from './read-helpers'
+import { community } from './status-helpers'
 
 // A fixed P-256 key; only its public half appears in responses.
 const VAPID_JWK = JSON.stringify({
@@ -170,5 +174,64 @@ describe('instance contract', () => {
 		const unknown = await h.request('/api/v1/accounts/1/statuses/nope')
 		expect(unknown.status).toBe(404)
 		expect(await unknown.json()).toEqual({ error: 'Record not found' })
+	})
+})
+
+describe('instance contact account (contact_username)', () => {
+	const v1 = async (h: ApiHarness) => (await h.request('/api/v1/instance')).json<{ contact_account: unknown }>()
+	const v2 = async (h: ApiHarness) => (await h.request('/api/v2/instance')).json<{ contact: unknown }>()
+	const shown = async (h: ApiHarness, id: string) => (await h.request(`/api/v1/accounts/${id}`)).json()
+	const idOf = async (h: ApiHarness, username: string) =>
+		(await sql<{ id: string }>(h.store, 'SELECT id FROM accounts WHERE username = ?', username))[0]!.id
+
+	it('presents the account it names on v1 and v2, and null without one', async () => {
+		const h = await configured()
+		expect((await v1(h)).contact_account).toBeNull()
+		await setSetting(h.store, 'contact_username', 'alice')
+		const alice = await shown(h, await idOf(h, 'alice'))
+		expect(alice).toMatchObject({ username: 'alice', acct: 'alice' })
+		expect((await v1(h)).contact_account).toEqual(alice)
+		expect((await v2(h)).contact).toEqual({ email: 'admin@kopje.test', account: alice })
+		await setSetting(h.store, 'contact_username', 'bob@remote.test')
+		const bob = await shown(h, await idOf(h, 'bob'))
+		expect(bob).toMatchObject({ acct: 'bob@remote.test' })
+		expect((await v1(h)).contact_account).toEqual(bob)
+		expect((await v2(h)).contact).toEqual({ email: 'admin@kopje.test', account: bob })
+	})
+
+	it('shows a suspended contact redacted (VIS-30), and a deleted one as null', async () => {
+		const h = await configured()
+		const aliceId = await idOf(h, 'alice')
+		await setSetting(h.store, 'contact_username', 'alice')
+		await h.store.suspendAccount(BUILD, { accountId: aliceId, now: NOW })
+		expect((await v1(h)).contact_account).toMatchObject({ id: aliceId, suspended: true, display_name: '' })
+		expect((await v1(h)).contact_account).toEqual(await shown(h, aliceId))
+		await setSetting(h.store, 'contact_username', 'bob@remote.test')
+		await sql(h.store, 'DELETE FROM accounts WHERE id = ?', await idOf(h, 'bob'))
+		expect((await v1(h)).contact_account).toBeNull()
+		expect((await v2(h)).contact).toEqual({ email: 'admin@kopje.test', account: null })
+	})
+})
+
+describe('instance usage.users.active_month', () => {
+	const activeMonth = async (h: ApiHarness) =>
+		(await (await h.request('/api/v2/instance')).json<{ usage: { users: { active_month: number } } }>()).usage.users
+			.active_month
+	const day = (ms: number) => new Date(ms).toISOString().slice(0, 10)
+
+	it('counts the available local accounts active today or on the 27 UTC days before', async () => {
+		const h = await community(['alice', 'bob'])
+		expect(await activeMonth(h)).toBe(0)
+		// The harness waits for the work the response leaves running (waitUntil), so the day is recorded on return.
+		expect((await h.request('/api/v1/preferences', bearer(h.users.alice.token))).status).toBe(200)
+		expect(await activeMonth(h)).toBe(1)
+		const setBob = (ms: number) =>
+			sql(h.store, 'UPDATE local_accounts SET active_on = ? WHERE account_id = ?', day(ms), h.users.bob.id)
+		await setBob(NOW - 27 * DAY_MS)
+		expect(await activeMonth(h)).toBe(2)
+		await setBob(NOW - 28 * DAY_MS)
+		expect(await activeMonth(h)).toBe(1)
+		await h.store.suspendAccount(BUILD, { accountId: h.users.alice.id, now: NOW })
+		expect(await activeMonth(h)).toBe(0)
 	})
 })

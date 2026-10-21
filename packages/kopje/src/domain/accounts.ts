@@ -43,7 +43,7 @@ import { renderFieldValue } from './status-text'
 import { unlockChanged } from './unlock-accepts'
 import { readWindow, singleWindow, type Window, windowJson, windowPage } from './windows'
 import { type ColumnMap, selectSql } from '../db/columns'
-import { ACCOUNTS_ID_INDEX } from '../db/indexes'
+import { ACCOUNTS_ID_INDEX, LOCAL_ACCOUNTS_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
 import { normalizeDomain, parseAddress } from '../platform/domain-name'
 import { boundedHref, httpUrl } from '../platform/http-url'
@@ -545,7 +545,7 @@ export const getAccounts = readOperation<{ ids: string[]; present: Present }, Ac
 
 // The account an address names, domain null for a local one, matched case-insensitively as Mastodon's
 // Account.find_remote: by accounts_local_username or accounts_domain_username, named so the seek does not rest on the
-// Store's statistics (RES-7). stored_username is the username as stored, not usernameSql's projection: a matching row's
+// Store's statistics (RES-7), as is the account's local row. stored_username is the username as stored, not usernameSql's projection: a matching row's
 // username has the bytes of `username` (SQLite's lower changes ASCII letters only), so it is bounded by the caller's.
 function addressRow(
 	db: Db,
@@ -555,12 +555,14 @@ function addressRow(
 	const select = `SELECT ${selectSql(ACCOUNT_COLUMN_MAP)}, a.username AS stored_username`
 	return domain === null
 		? db.first(
-				`${select} FROM accounts a INDEXED BY accounts_local_username LEFT JOIN local_accounts l ON l.account_id = a.id
+				`${select} FROM accounts a INDEXED BY accounts_local_username
+				LEFT JOIN local_accounts l INDEXED BY ${LOCAL_ACCOUNTS_ID_INDEX} ON l.account_id = a.id
 				WHERE a.domain IS NULL AND lower(a.username) = lower(?)`,
 				username
 			)
 		: db.first(
-				`${select} FROM accounts a INDEXED BY accounts_domain_username LEFT JOIN local_accounts l ON l.account_id = a.id
+				`${select} FROM accounts a INDEXED BY accounts_domain_username
+				LEFT JOIN local_accounts l INDEXED BY ${LOCAL_ACCOUNTS_ID_INDEX} ON l.account_id = a.id
 				WHERE a.domain = ? AND lower(a.username) = lower(?)`,
 				domain,
 				username

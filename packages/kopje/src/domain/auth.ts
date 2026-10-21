@@ -1,6 +1,7 @@
 import { adminAccountId } from './admin-authority'
 import type { ViewerContext } from './audience'
 import { mediaDeleteOperation, readOperation, sessionOperation, writeOperation } from './operation'
+import { LOCAL_ACCOUNTS_ID_INDEX, OAUTH_CLIENTS_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
 import type { StoreOperation } from '../platform/store-kernel'
 import { grantsAny, type RequiredScope } from '../security/scopes'
@@ -56,7 +57,8 @@ export function currentCredentialSql(t: string): string {
 export const CREDENTIAL_EPOCH_SQL =
 	'coalesce((SELECT credential_epoch FROM main.local_accounts WHERE account_id = ?), 0)'
 
-// One indexed lookup by the token's sha256. A suspended account's tokens are refused even if one survived the
+// One indexed lookup by the token's sha256, then its client and account by key, the join order pinned so stale
+// statistics cannot pick a scan of either (RES-7; test/activity.test.ts). A suspended account's tokens are refused even if one survived the
 // suspension, and a token of an earlier epoch is refused as invalid (currentCredentialSql).
 export function authorize(db: Db, credential: Credential): AuthFailure | { status: 'ok'; viewer: Viewer } {
 	const row = db.first<{
@@ -72,8 +74,8 @@ export function authorize(db: Db, credential: Credential): AuthFailure | { statu
 		`SELECT t.scopes, t.account_id, t.expires_at, c.id AS client_id, c.name, c.website, l.suspended_at,
 			coalesce(t.epoch <> l.credential_epoch, 0) AS stale
 		FROM oauth_tokens t
-		JOIN oauth_clients c ON c.id = t.client_id
-		LEFT JOIN local_accounts l ON l.account_id = t.account_id
+		CROSS JOIN oauth_clients c INDEXED BY ${OAUTH_CLIENTS_ID_INDEX} ON c.id = t.client_id
+		LEFT JOIN local_accounts l INDEXED BY ${LOCAL_ACCOUNTS_ID_INDEX} ON l.account_id = t.account_id
 		WHERE t.token_hash = ? AND t.kind = 'access'`,
 		credential.tokenHash
 	)
