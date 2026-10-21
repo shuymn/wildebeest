@@ -10,8 +10,9 @@ import {
 	vapidKey,
 } from './context'
 import { bearerChallenge, INVALID_TOKEN, mastodonError } from './errors'
-import { type Params, railsBlank, type ReadOptions, readParams } from './params'
+import { type Params, type ReadOptions, readParams } from './params'
 import { type Client, type IntrospectionCaller, OOB_REDIRECT_URI } from '../domain/oauth'
+import { railsBlank } from '../platform/rails-blank'
 import { DEFAULT_SCOPES, parseScopes, SCOPES } from '../security/scopes'
 import { PKCE_VERIFIER, pkceChallenge, sha256Hex } from '../security/tokens'
 
@@ -299,7 +300,7 @@ export const tokenHandler: ApiHandler = async (c, deps) => {
 					created_at: Math.floor(now / 1000),
 				},
 				200,
-				{ 'cache-control': 'no-store', pragma: 'no-cache' }
+				NO_STORE
 			)
 		case 'invalid_client':
 			return INVALID_CLIENT()

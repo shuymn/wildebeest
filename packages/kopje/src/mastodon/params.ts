@@ -364,11 +364,6 @@ function flatten(value: unknown, state: Flattening, prefix = '', depth = 0): voi
 	}
 }
 
-// Rails' String#blank? (/\A[[:space:]]*\z/, Onigmo's [[:space:]] being White_Space): U+0085 is blank, U+FEFF is not.
-export function railsBlank(value: string): boolean {
-	return /^\p{White_Space}*$/u.test(value)
-}
-
 // `offset` as Mastodon's offset endpoints read it (params[:offset].to_i): a negative or unreadable one is 0.
 export function offsetParam(p: Params): number {
 	return Math.max(Number.parseInt(p.get('offset') ?? '0', 10) || 0, 0)

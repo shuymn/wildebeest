@@ -33,6 +33,7 @@ import {
 import { streamAnnouncement } from './streaming'
 import { type Db, ROW_OBJECT_BYTES, RowCapExceeded, RowMeter, VALUE_BYTES } from '../db/sql'
 import { isUnicodeEmoji } from '../platform/emoji-names'
+import { railsBlank } from '../platform/rails-blank'
 import type { ImportAuthority } from '../platform/store-admin'
 import {
 	ANNOUNCEMENT_TEXT_BYTES,
@@ -433,9 +434,6 @@ export const dismissAnnouncement = userWriteOperation<{ id: string }, 'ok' | 'no
 
 export type Reacted = 'ok' | 'not-found' | 'duplicate' | { status: 'invalid'; errors: string[] }
 
-// Rails' String#blank? (/\A[[:space:]]*\z/, Onigmo's [[:space:]] being White_Space): U+0085 is blank, U+FEFF is not.
-const BLANK = /^\p{White_Space}*$/u
-
 // PUT /api/v1/announcements/:announcement_id/reactions/:name, in Mastodon's order: the published announcement (404),
 // presence (a blank name stops there: AnnouncementReaction's presence validation, and ReactionValidator returns early),
 // the emoji (an enabled local custom emoji of that shortcode, else a Unicode emoji: isUnicodeEmoji) and the limit of
@@ -446,7 +444,7 @@ export const reactToAnnouncement = userWriteOperation<{ id: string; name: string
 		if (publishedRow(db, id) === undefined) {
 			return 'not-found'
 		}
-		if (BLANK.test(name)) {
+		if (railsBlank(name)) {
 			return { status: 'invalid', errors: ["Name can't be blank"] }
 		}
 		const emoji = LOCAL_EMOJI_SHORTCODE.test(name)

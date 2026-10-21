@@ -652,10 +652,7 @@ describe('token endpoint', () => {
 		expect(await response.json()).toMatchObject({ error: 'invalid_client' })
 		const badBasic = await h.request(
 			'/oauth/token',
-			form(
-				{ grant_type: 'authorization_code', code, redirect_uri: app.redirect_uri },
-				{ headers: { authorization: `Basic ${btoa(`${app.client_id}:wrong`)}` } }
-			)
+			form({ grant_type: 'authorization_code', code, redirect_uri: app.redirect_uri }, { headers: basic(app, 'wrong') })
 		)
 		expect(badBasic.status).toBe(401)
 		expect(badBasic.headers.get('www-authenticate')).toMatch(/^Basic /)
@@ -672,13 +669,9 @@ describe('token endpoint', () => {
 			expect(await noSecret.json(), path).toMatchObject({ error: 'invalid_client' })
 		}
 		// HTTP Basic client authentication works as well.
-		const basic = btoa(`${app.client_id}:${app.client_secret}`)
 		const ok = await h.request(
 			'/oauth/token',
-			form(
-				{ grant_type: 'authorization_code', code, redirect_uri: app.redirect_uri },
-				{ headers: { authorization: `Basic ${basic}` } }
-			)
+			form({ grant_type: 'authorization_code', code, redirect_uri: app.redirect_uri }, { headers: basic(app) })
 		)
 		expect(ok.status).toBe(200)
 	})
@@ -756,9 +749,7 @@ describe('duplicate parameters', () => {
 		const mixed = await post(`/oauth/token?code=${encodeURIComponent(code)}`, body([]))
 		expect(mixed.status).toBe(400)
 		// Basic and client_secret in the body are two authentication methods.
-		const both = await post('/oauth/token', body([]), {
-			authorization: `Basic ${btoa(`${app.client_id}:${app.client_secret}`)}`,
-		})
+		const both = await post('/oauth/token', body([]), basic(app))
 		expect(both.status).toBe(400)
 		expect(await both.json()).toMatchObject({ error: 'invalid_request' })
 		// None of these consumed the code.
@@ -1387,7 +1378,7 @@ describe('introspect', () => {
 		await sql(h.store, 'UPDATE oauth_tokens SET expires_at = ? WHERE token_hash = ?', ago(0), await sha256Hex(sibling))
 		await inactive(await introspect(h, { token: sibling }, { authorization: `Bearer ${caller}` }), 'expired sibling')
 		const stale = (await login(h, { app, email: 'alice@example.com' })).token
-		const fresh = await appTokenOf(h, app)
+		const fresh = await appToken(h, app)
 		await sql(h.store, 'UPDATE local_accounts SET credential_epoch = credential_epoch + 1')
 		await inactive(await introspect(h, { token: stale }, { authorization: `Bearer ${fresh}` }), 'stale sibling')
 	})
@@ -1490,15 +1481,6 @@ describe('introspect', () => {
 		expect(sent).toContain(await sha256Hex(target))
 	})
 })
-
-// An app token of `app` (client_credentials).
-async function appTokenOf(h: ApiHarness, app: App): Promise<string> {
-	const response = await h.request(
-		'/oauth/token',
-		form({ grant_type: 'client_credentials', client_id: app.client_id, client_secret: app.client_secret })
-	)
-	return (await response.json<{ access_token: string }>()).access_token
-}
 
 describe('login with stale statistics (RES-7)', () => {
 	it('reads the local accounts and seeks the account by id, remote accounts grown after ANALYZE', async () => {

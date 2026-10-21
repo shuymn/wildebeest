@@ -38,8 +38,7 @@ const EXCEPTIONS: Record<string, Exception> = {
 	'GET /oauth/token/info': {
 		kopje: 'none token, scopes any, no user required',
 		mastodon: 'absent',
-		reason:
-			"Doorkeeper's TokenInfoController, outside /api: the handler reads the bearer token itself (Doorkeeper's invalid_token answer)",
+		reason: "Doorkeeper's TokenInfoController, outside /api: bearer authentication and errors handled locally",
 	},
 	'POST /oauth/introspect': {
 		kopje: 'none token, scopes any, no user required',

@@ -937,8 +937,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   a unique `state` of at most 2,000 characters; a repeated or longer `state` is omitted. Out-of-band errors stay on the
   page. - Repeated scalar OAuth parameters (query and body together) are rejected; documented array parameters are not.
     - Client authentication failures answer 401 `invalid_client`; a client can revoke only its own tokens.
-    - `response_mode` is validated (Mastodon's three values; blank reads as `query`) and every answer goes in the
-      query; `test/oauth.test.ts` ("response_mode and lang").
+    - Every authorization answer goes in the query, whatever `response_mode` says (`docs/mastodon-deviations.md`,
+      OAuth); `test/oauth.test.ts` ("response_mode and lang").
     - Token info and introspection (RFC 7662) answer only from `authorize()`, read no parameter from the URL, and
       never say why a token is inactive. Introspection requires client authentication, which sees only that client's
       tokens, or a valid bearer token, which sees only other tokens of its own client and never itself; `inspectToken`

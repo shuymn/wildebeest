@@ -1,6 +1,6 @@
 import { runInDurableObject } from 'cloudflare:test'
 
-import { type ApiHarness, form, login, registerApp, sql } from './api-helpers'
+import { type ApiHarness, type App, form, login, registerApp, sql } from './api-helpers'
 import type { StoreOperation } from '../src/platform/store-kernel'
 
 // Fixtures for the read endpoints clients call at startup: tokens of limited reach, rows-read measurement (RES-7) and
@@ -8,8 +8,9 @@ import type { StoreOperation } from '../src/platform/store-kernel'
 
 export const DAY_MS = 86_400_000
 
-export async function appToken(h: ApiHarness): Promise<string> {
-	const app = await registerApp(h)
+// An app token (client_credentials) of `app`, or of an app registered for it.
+export async function appToken(h: ApiHarness, given?: App): Promise<string> {
+	const app = given ?? (await registerApp(h))
 	const response = await h.request(
 		'/oauth/token',
 		form({ grant_type: 'client_credentials', client_id: app.client_id, client_secret: app.client_secret })
