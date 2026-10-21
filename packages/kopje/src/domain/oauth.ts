@@ -1,4 +1,4 @@
-import { CREDENTIAL_EPOCH_SQL } from './auth'
+import { type Authorized, authorize, type Credential, CREDENTIAL_EPOCH_SQL } from './auth'
 import { readOperation, sessionOperation, writeOperation } from './operation'
 import { sweepWebState } from './web-session'
 import { ACCOUNTS_ID_INDEX } from '../db/indexes'
@@ -131,6 +131,12 @@ export const registerApp = sessionOperation<RegisterAppInput, Registered>((db, i
 function iso(ms: number): string {
 	return new Date(ms).toISOString()
 }
+
+// GET /api/v1/apps/verify_credentials: the client a valid credential (AUTH-1) was issued to, read by its key.
+export const appOfCredential = readOperation<Credential, Authorized<Client>>((db, credential) => {
+	const auth = authorize(db, credential)
+	return auth.status === 'ok' ? { status: 'ok', value: toClient(clientRow(db, auth.viewer.client.id)!) } : auth
+})
 
 // At most this many rows of each kind are removed per cron run.
 export const OAUTH_SWEEP_BATCH = 500
