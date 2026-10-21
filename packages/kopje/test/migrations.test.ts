@@ -42,6 +42,7 @@ import { StoreUnavailableError, toStoreUnavailable } from '../src/platform/store
 import {
 	accountMovesMigrationSql,
 	accountStaticImagesMigrationSql,
+	accountWarningsMigrationSql,
 	ANNOUNCEMENT_TEXT_BYTES,
 	CONTACT_USERNAME_BYTES,
 	contactActivityMigrationSql,
@@ -71,6 +72,10 @@ import {
 	TREND_SETTING_BOUNDS,
 	TREND_STATUSES_PER_AUTHOR,
 	trendTagNameCheckSql,
+	storedWarningStatusIds,
+	WARNING_STATUS_IDS,
+	WARNING_STATUS_IDS_BYTES,
+	WARNING_TEXT_BYTES,
 } from '../src/platform/stored-bounds'
 
 // The shipped migrations, in order; test-only files are named after them (9999_*).
@@ -93,6 +98,7 @@ const LATEST = NAMES.at(-1)
 const SCHEMA_TABLES = [
 	'account_notes',
 	'account_pins',
+	'account_warnings',
 	'accounts',
 	'admin_actions',
 	'announcement_dismissals',
@@ -7465,6 +7471,305 @@ describe('0061_account_static_images', () => {
 			expect(() => insert(null, null, STILL)).toThrow(REFUSED)
 			insert(null, IMAGE, STILL)
 			expect(sql.exec('SELECT count(*) AS n FROM accounts WHERE avatar_static_url IS NOT NULL').one().n).toBe(1)
+		})
+	})
+})
+
+describe('0062_account_warnings', () => {
+	const NAME = '0062_account_warnings'
+	const at = NAMES.indexOf(NAME)
+	const LOCAL = '100000000000000001'
+	const REMOTE = '100000000000000002'
+	const ID = '300000000000000001'
+	const STAMP = '2026-10-12T00:00:00.000Z'
+
+	// A local account and a remote one, and a notification of the local one, before the file.
+	const seed = (sql: SqlStorage) => {
+		sql.exec(
+			`INSERT INTO accounts (id, uri, username, domain) VALUES
+				(?1, 'https://kopje.test/ap/users/a', 'a', NULL), (?2, 'https://remote.test/users/b', 'b', 'remote.test')`,
+			LOCAL,
+			REMOTE
+		)
+		sql.exec(
+			"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'a@example.com', X'00', X'00', 'k')",
+			LOCAL
+		)
+		sql.exec("INSERT INTO notifications (account_id, type, from_account_id) VALUES (?, 'follow', ?)", LOCAL, REMOTE)
+	}
+
+	// The bytes of `text`, each code unit below 256 one byte.
+	const blob = (text: string) => new Uint8Array([...text].map((c) => c.charCodeAt(0))).buffer
+
+	it("holds accountWarningsMigrationSql's output after its header", () => {
+		expectGenerated(at, accountWarningsMigrationSql())
+	})
+
+	it('keeps notifications as they were, then bounds each column as stored, in order, on INSERT and UPDATE', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+			seed(sql)
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+			expect(sql.exec('SELECT type, account_warning_id FROM notifications').toArray()).toEqual([
+				{ type: 'follow', account_warning_id: null },
+			])
+			// A row within the bounds, then `column` updated to the value; or a row inserted with it.
+			const update = (column: string, value: SqlStorageValue, expression = '?') => {
+				sql.exec('DELETE FROM account_warnings')
+				sql.exec(
+					"INSERT INTO account_warnings (id, target_account_id, action, created_at) VALUES (7, ?, 'none', ?)",
+					LOCAL,
+					STAMP
+				)
+				sql.exec(`UPDATE account_warnings SET ${column} = ${expression} WHERE id = 7`, value)
+			}
+			const insert = (column: string, value: SqlStorageValue, expression = '?') => {
+				sql.exec('DELETE FROM account_warnings')
+				const columns = { target_account_id: `'${LOCAL}'`, action: "'none'", text: "''", created_at: `'${STAMP}'` }
+				const names = [...Object.keys(columns).filter((name) => name !== column), column]
+				const values = [...Object.entries(columns).flatMap(([name, v]) => (name === column ? [] : [v])), expression]
+				sql.exec(`INSERT INTO account_warnings (${names.join(', ')}) VALUES (${values.join(', ')})`, value)
+			}
+			const ids = (n: number) => JSON.stringify(Array.from({ length: n }, (_, i) => String(BigInt(ID) + BigInt(i))))
+			const malformed = (bytes: number) => blob('ÿ'.repeat(bytes))
+			// In order: the storage class, the raw bytes (malformed UTF-8 counted as bytes), NUL; then the structure.
+			const refused: [string, string, SqlStorageValue, RegExp, string?][] = [
+				['action', 'another action', 'suspend', /account_warning_action/],
+				['text', 'a BLOB', blob('stop'), /account_warning_text_within_10000_bytes/],
+				['text', '10,001 bytes', 'a'.repeat(WARNING_TEXT_BYTES + 1), /account_warning_text_within_10000_bytes/],
+				[
+					'text',
+					'10,001 malformed bytes',
+					malformed(WARNING_TEXT_BYTES + 1),
+					/account_warning_text_within_10000_bytes/,
+					'CAST(? AS TEXT)',
+				],
+				['text', 'a NUL', 'a\u0000b', /account_warning_text_within_10000_bytes/],
+				['created_at', 'hour 24', '2026-10-12T24:00:00.000Z', /account_warning_created_at_iso/],
+				['created_at', 'another form', '2026-10-12 00:00:00', /account_warning_created_at_iso/],
+				['status_ids', 'a BLOB', blob('[]'), /status_ids past its stored bound/],
+				[
+					'status_ids',
+					`${WARNING_STATUS_IDS_BYTES + 1} bytes`,
+					`[${' '.repeat(WARNING_STATUS_IDS_BYTES - 1)}]`,
+					/status_ids past its stored bound/,
+				],
+				['status_ids', '[] and a NUL', '[]\u0000', /status_ids past its stored bound/],
+				['status_ids', '[] and trailing bytes', '[] x', /status_ids past its stored bound/],
+				['status_ids', 'malformed JSON', '["1"', /status_ids past its stored bound/],
+				['status_ids', 'an object', '{}', /status_ids past its stored bound/],
+				['status_ids', 'a number', 5, /status_ids past its stored bound/],
+				[
+					'status_ids',
+					`${WARNING_STATUS_IDS + 1} ids`,
+					ids(WARNING_STATUS_IDS + 1).replaceAll('"', ''),
+					/status_ids past its stored bound/,
+				],
+				[
+					'status_ids',
+					`${WARNING_STATUS_IDS + 1} ids as text`,
+					ids(WARNING_STATUS_IDS + 1),
+					/status_ids past its stored bound/,
+				],
+				['status_ids', 'a number element', `[${ID}]`, /status_ids past its stored bound/],
+				['status_ids', 'a short id', '["1"]', /status_ids past its stored bound/],
+				['status_ids', 'a non-digit', `["${ID.slice(0, -1)}x"]`, /status_ids past its stored bound/],
+				['status_ids', 'a nested array', `[["${ID}"]]`, /status_ids past its stored bound/],
+			]
+			for (const [column, name, value, error, expression] of refused) {
+				expect(() => update(column, value, expression), `UPDATE ${column}: ${name}`).toThrow(error)
+				expect(() => insert(column, value, expression), `INSERT ${column}: ${name}`).toThrow(error)
+			}
+			// The bounds themselves, of malformed UTF-8 too, are accepted.
+			for (const [column, value, expression] of [
+				['text', 'é'.repeat(WARNING_TEXT_BYTES / 2)],
+				['text', malformed(WARNING_TEXT_BYTES), 'CAST(? AS TEXT)'],
+				['status_ids', ids(WARNING_STATUS_IDS)],
+				['status_ids', '[]'],
+				['status_ids', null],
+			] as [string, SqlStorageValue, string?][]) {
+				update(column, value, expression)
+				insert(column, value, expression)
+			}
+			expect(JSON.stringify(JSON.parse(ids(WARNING_STATUS_IDS))).length).toBe(WARNING_STATUS_IDS_BYTES)
+			// The target is a local account.
+			expect(() =>
+				sql.exec(
+					"INSERT INTO account_warnings (target_account_id, action, created_at) VALUES (?, 'none', ?)",
+					REMOTE,
+					STAMP
+				)
+			).toThrow(/FOREIGN KEY constraint failed/)
+		})
+	})
+
+	// The writer's twin (storedWarningStatusIds, which judges a report's stored status_ids before a warning copies them)
+	// accepts exactly what the triggers accept, and what it writes back is accepted.
+	it('agrees with storedWarningStatusIds on what status_ids may be stored', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()
+			seed(sql)
+			const full = JSON.stringify(Array.from({ length: WARNING_STATUS_IDS }, (_, i) => String(BigInt(ID) + BigInt(i))))
+			const candidates = [
+				'[]',
+				` [ "${ID}" ] `,
+				`["${ID}"]`,
+				full,
+				`[${full.slice(1, -1)},"${ID}"]`,
+				`["\\u0033${ID.slice(1)}"]`,
+				`[${ID}]`,
+				'["1"]',
+				`["${ID}", null]`,
+				`["${ID}"`,
+				'{}',
+				'"x"',
+				'[] x',
+				'[]\u0000',
+				`[${' '.repeat(WARNING_STATUS_IDS_BYTES)}]`,
+			]
+			for (const raw of candidates) {
+				const stored = storedWarningStatusIds(raw)
+				let accepted = true
+				try {
+					sql.exec(
+						"INSERT INTO account_warnings (target_account_id, action, status_ids, created_at) VALUES (?, 'none', ?, ?)",
+						LOCAL,
+						raw,
+						STAMP
+					)
+				} catch {
+					accepted = false
+				}
+				expect(stored !== null, raw.slice(0, 40)).toBe(accepted)
+				if (stored !== null) {
+					sql.exec(
+						"INSERT INTO account_warnings (target_account_id, action, status_ids, created_at) VALUES (?, 'none', ?, ?)",
+						LOCAL,
+						stored,
+						STAMP
+					)
+					expect(new TextEncoder().encode(stored).length).toBeLessThanOrEqual(WARNING_STATUS_IDS_BYTES)
+				}
+			}
+			expect(storedWarningStatusIds(null)).toBeNull()
+		})
+	})
+
+	it('cascades from the local account to its warnings and from a warning to its notification, through indexes', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()
+			seed(sql)
+			expect(
+				sql
+					.exec('SELECT "table", "from", "to", on_delete FROM pragma_foreign_key_list(?)', 'account_warnings')
+					.toArray()
+			).toEqual([{ table: 'local_accounts', from: 'target_account_id', to: 'account_id', on_delete: 'CASCADE' }])
+			expect(
+				sql
+					.exec(
+						`SELECT "table", "from", "to", on_delete FROM pragma_foreign_key_list(?) WHERE "from" = 'account_warning_id'`,
+						'notifications'
+					)
+					.toArray()
+			).toEqual([{ table: 'account_warnings', from: 'account_warning_id', to: 'id', on_delete: 'CASCADE' }])
+			const warning = () =>
+				sql
+					.exec<{ id: number }>(
+						"INSERT INTO account_warnings (target_account_id, action, created_at) VALUES (?, 'none', ?) RETURNING id",
+						LOCAL,
+						STAMP
+					)
+					.one().id
+			// Before 0063 the natural key holds one per sender, so `from` varies the sender.
+			const notified = (id: number, from = LOCAL) =>
+				sql.exec(
+					"INSERT INTO notifications (account_id, type, from_account_id, account_warning_id) VALUES (?, 'moderation_warning', ?, ?)",
+					LOCAL,
+					from,
+					id
+				)
+			const [first, second] = [warning(), warning()]
+			notified(first)
+			expect(() => notified(first, REMOTE)).toThrow(/UNIQUE constraint failed: notifications.account_warning_id/)
+			expect(() => notified(99, REMOTE)).toThrow(/FOREIGN KEY constraint failed/)
+			const plan = (query: string) =>
+				sql
+					.exec<{ detail: string }>(`EXPLAIN QUERY PLAN ${query}`)
+					.toArray()
+					.map((row) => row.detail)
+					.join('\n')
+			expect(plan('SELECT id FROM notifications WHERE account_warning_id = 7')).toContain(
+				'notifications_account_warning'
+			)
+			expect(plan(`SELECT id FROM account_warnings WHERE target_account_id = '${LOCAL}'`)).toContain(
+				'account_warnings_target'
+			)
+			sql.exec('DELETE FROM account_warnings WHERE id = ?', first)
+			expect(sql.exec("SELECT count(*) AS n FROM notifications WHERE type = 'moderation_warning'").one().n).toBe(0)
+			notified(second)
+			sql.exec('DELETE FROM local_accounts WHERE account_id = ?', LOCAL)
+			expect(sql.exec('SELECT count(*) AS n FROM account_warnings').one().n).toBe(0)
+			expect(sql.exec("SELECT count(*) AS n FROM notifications WHERE type = 'moderation_warning'").one().n).toBe(0)
+		})
+	})
+})
+
+describe('0063_account_warning_notifications_key', () => {
+	const NAME = '0063_account_warning_notifications_key'
+	const at = NAMES.indexOf(NAME)
+	const LOCAL = '100000000000000001'
+	const REMOTE = '100000000000000002'
+
+	it('keys a moderation_warning by its warning, and every other notification as before', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+			sql.exec(
+				`INSERT INTO accounts (id, uri, username, domain) VALUES
+					(?1, 'https://kopje.test/ap/users/a', 'a', NULL), (?2, 'https://remote.test/users/b', 'b', 'remote.test')`,
+				LOCAL,
+				REMOTE
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'a@example.com', X'00', X'00', 'k')",
+				LOCAL
+			)
+			for (let i = 0; i < 2; i++) {
+				sql.exec(
+					"INSERT INTO account_warnings (target_account_id, action, created_at) VALUES (?, 'none', '2026-10-12T00:00:00.000Z')",
+					LOCAL
+				)
+			}
+			const warned = (id: number) =>
+				sql.exec(
+					"INSERT INTO notifications (account_id, type, from_account_id, account_warning_id) VALUES (?1, 'moderation_warning', ?1, ?2)",
+					LOCAL,
+					id
+				)
+			warned(1)
+			// Before the file, a second warning of the account collides on the natural key.
+			expect(() => warned(2)).toThrow(/UNIQUE constraint failed: index 'notifications_natural'/)
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+			warned(2)
+			expect(() => warned(2)).toThrow(/UNIQUE constraint failed/)
+			const follow = "INSERT INTO notifications (account_id, type, from_account_id) VALUES (?, 'follow', ?)"
+			sql.exec(follow, LOCAL, REMOTE)
+			expect(() => sql.exec(follow, LOCAL, REMOTE)).toThrow(/UNIQUE constraint failed: index 'notifications_natural'/)
+			const plan = sql
+				.exec<{ detail: string }>(
+					`EXPLAIN QUERY PLAN SELECT id FROM notifications WHERE account_id = '1' AND type = 'mention'
+					AND from_account_id = '2' AND IFNULL(status_id, '') = '3'`
+				)
+				.toArray()
+				.map((row) => row.detail)
+			expect(plan.join('\n')).toContain('notifications_natural')
 		})
 	})
 })

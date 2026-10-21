@@ -77,7 +77,8 @@ import { BUILD, freshStore, testKernel } from '../helpers'
 // notifications and pushes, the moderation log and both job tables); 0055_local_custom_emojis reads no row (it adds an
 // empty table); 0056_announcements copies the streaming journal, so from it on the journal is full: 4,097 rows, the
 // largest span its triggers leave (JOURNAL_SPAN, domain/streaming.ts); 0057_trends reads no row (it adds five empty
-// tables and two triggers). A migration that reads another table must add it here before it is measured.
+// tables and two triggers); 0062_account_warnings and 0063_account_warning_notifications_key each index the
+// notifications (the table 0062 adds is empty). A migration that reads another table must add it here before it is measured.
 // The measured time is the whole upgrade, from before the bookmark to after the verification: Date.now() in workerd
 // moves only between I/O events, so the clock is read across an await on each side.
 

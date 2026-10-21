@@ -247,7 +247,9 @@ describe('the account action types (Admin::AccountAction)', () => {
 			{ id: first, by: h.users.owner.id },
 			{ id: second, by: null },
 		])
+		// The warning it gives alice is logged before the resolution (account warnings, below).
 		expect((await logRows(h.store)).map((row) => [row.action, row.target_type, row.target_id])).toEqual([
+			['create', 'AccountWarning', expect.any(String)],
 			['resolve', 'Report', first],
 		])
 		expect(bob).toBeDefined()

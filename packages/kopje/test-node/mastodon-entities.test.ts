@@ -77,13 +77,12 @@ const ENTITY_EXCEPTIONS: Exceptions = {
 	),
 	'REST::NotificationSerializer': {
 		...open('never present', 'filtered'),
-		...open('the notification types that carry them are not sent', 'event', 'moderation_warning'),
+		...open('the notification types that carry them are not sent', 'event'),
 	},
 	'REST::NotificationGroupSerializer': open(
 		'the notification types that carry them are not sent',
 		'annual_report',
-		'event',
-		'moderation_warning'
+		'event'
 	),
 	'REST::AnnouncementSerializer': { statuses: { status: 'accepted', deviation: 'MD-4' } },
 }
