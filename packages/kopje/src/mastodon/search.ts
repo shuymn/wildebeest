@@ -22,8 +22,9 @@ import { StoreUnavailableError } from '../platform/store-errors'
 // (federation/resolve.ts, signed by the instance actor) and stored by the Store with inbound validation. A URL query
 // answers with what it resolved to alone, if the viewer may see it; an address query answers the account search with
 // the resolved account first, which the Store's search puts there (resolvedAccountId), so the answer budget (RES-3)
-// covers it. Unauthenticated requests are refused before anything is fetched (401, the route's
-// scope).
+// covers it. Unauthenticated requests are refused before anything is fetched (401, the route's scope). The final
+// search takes a fresh credential, so a token that expired while resolving is refused. GET /api/v1/accounts/search
+// resolves addresses only, through the same resolveQuery (mastodon/accounts.ts).
 
 // The raw bound of q before it is normalized and split (RES-1). Terms beyond the eighth are ignored (search-text.ts).
 export const MAX_QUERY_LENGTH = 500
@@ -71,7 +72,7 @@ export const search: ApiHandler = async (c, deps) => {
 	const resolving = (parseBoolean(p.get('resolve')) ?? false) && offset === 0
 	let resolved: Found | null = null
 	if (resolving && (isUrlQuery(query) || parseAddress(query) !== null)) {
-		resolved = await resolve(c, deps, query)
+		resolved = await resolveQuery(c, deps, query)
 		if (isUrlQuery(query)) {
 			return c.json({
 				accounts: types.includes('accounts') ? resolved.accounts : [],
@@ -83,7 +84,7 @@ export const search: ApiHandler = async (c, deps) => {
 	const accountId = p.get('account_id')
 	const results = await storeCall(c, deps, (s, b) =>
 		s.search(b, {
-			credential,
+			credential: userCredential(c, deps),
 			query: parsed.query,
 			types,
 			limit,
@@ -106,7 +107,11 @@ type Found = { accounts: { id: string }[]; statuses: unknown[] }
 
 // Fetches and stores the query's target. Nothing is fetched until the token has passed. A Store in maintenance cannot
 // store it: the search then answers from local data as it is.
-async function resolve(c: Parameters<ApiHandler>[0], deps: Parameters<ApiHandler>[1], query: string): Promise<Found> {
+export async function resolveQuery(
+	c: Parameters<ApiHandler>[0],
+	deps: Parameters<ApiHandler>[1],
+	query: string
+): Promise<Found> {
 	authorized(await storeCall(c, deps, (s, b) => s.checkCredential(b, userCredential(c, deps))))
 	const none: Found = { accounts: [], statuses: [] }
 	if (deps.resolve === undefined) {

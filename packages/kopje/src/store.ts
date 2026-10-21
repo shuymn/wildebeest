@@ -840,7 +840,7 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, accounts.preferences, input)
 	}
 
-	relationships(callerBuild: string, input: { credential: UserCredential; ids: string[] }) {
+	relationships(callerBuild: string, input: { credential: UserCredential; ids: string[]; withSuspended?: boolean }) {
 		return this.#kernel.execute(callerBuild, accounts.relationships, input)
 	}
 
