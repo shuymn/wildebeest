@@ -8,6 +8,7 @@ import { blockDomain, setSeverity, unblockDomain } from './domain-block-helpers'
 import { BUILD } from './helpers'
 import { QueueSim } from './queue-sim'
 import { deferred } from './quote-helpers'
+import { plannedRun, type PlannedStatement, remoteAccounts, scansOf, staleStatistics } from './read-helpers'
 import {
 	act,
 	adminEntity,
@@ -25,6 +26,7 @@ import {
 import { follow, remoteAccount, remoteFollows } from './status-helpers'
 import { Db } from '../src/db/sql'
 import { upsertRemoteActor } from '../src/domain/inbox'
+import { writeOperation } from '../src/domain/operation'
 import {
 	CLEAR_ROUND,
 	MARK_ACCOUNTS,
@@ -836,4 +838,44 @@ describe('bounds of the rounds (growth: reads others control)', () => {
 		expect(large.rounds).toBeGreaterThan(small.rounds)
 		expect(large.maxRead).toBeLessThanOrEqual(small.maxRead * 1.1)
 	})
+})
+
+describe('the clearing walk with stale statistics (RES-7)', () => {
+	const moderationRound = writeOperation<undefined, unknown>((db) => remoteModerationRound(db, NOW))
+
+	it('restores each stale account by id, the accounts grown after ANALYZE', async () => {
+		const w = await world()
+		const store = w.h.store
+		const blocks = []
+		for (const domain of ['one.example', 'two.example']) {
+			for (const name of ['x', 'y', 'z']) {
+				await remoteAccount(store, name, domain)
+			}
+			blocks.push(await blockDomain(store, domain))
+			await drain(store)
+		}
+		// The domain's unblock, then rounds until the job is done: the clearing walk's restores.
+		const lift = async (block: { id: string }, domain: string) => {
+			await unblockDomain(store, block.id)
+			const plans: PlannedStatement[] = []
+			for (let i = 0; i < 50; i++) {
+				const ran = await plannedRun(w.h, /^\s*UPDATE accounts INDEXED BY/, moderationRound, undefined)
+				plans.push(...ran.plans)
+				if (ran.result === null) {
+					break
+				}
+			}
+			expect(await marked(store, domain)).toBe(0)
+			return plans
+		}
+		const { before, after } = await staleStatistics(w.h, {
+			capture: (phase) => (phase === 'before' ? lift(blocks[0]!, 'one.example') : lift(blocks[1]!, 'two.example')),
+			grow: () => remoteAccounts(w.h, 100, 200),
+		})
+		expect(after).toHaveLength(1)
+		const { plan, rows } = after[0]!
+		expect(plan).toContain('SEARCH accounts USING INDEX sqlite_autoindex_accounts_1 (id=?)')
+		expect(scansOf(plan, ['accounts'])).toEqual([])
+		expect(rows).toBe(before[0]!.rows)
+	}, 60_000)
 })

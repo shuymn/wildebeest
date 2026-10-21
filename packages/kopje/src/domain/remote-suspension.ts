@@ -12,6 +12,7 @@ import { EXPANSION_STEP, supersedeEarlier } from './deliveries'
 import { logAction } from './moderation-log'
 import { actionBound, reportBound, resolveSuspensionReports } from './reports'
 import { MODERATION_ROUND_ROWS, REPORT_ROUND } from './suspension'
+import { ACCOUNTS_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
 
 // The instance suspension of remote accounts (R38, VIS-30), migration 0045_remote_suspension: of one account
@@ -398,8 +399,9 @@ function clearRound(db: Db, job: RemoteJob): void {
 	)
 	const stale = rows.filter((row) => row.stale === 1).map((row) => row.id)
 	if (stale.length > 0) {
+		// Each account sought by id (RES-7).
 		db.run(
-			`UPDATE accounts SET suspended_at = NULL, suspension_source = NULL
+			`UPDATE accounts INDEXED BY ${ACCOUNTS_ID_INDEX} SET suspended_at = NULL, suspension_source = NULL
 			WHERE id IN (SELECT value FROM json_each(?)) AND suspension_source = 'domain'`,
 			JSON.stringify(stale)
 		)

@@ -788,8 +788,8 @@ export function resolveSuspensionReports(
 	limit: number,
 	now: string
 ): { last: number | null; read: number; resolved: number } {
-	const rows = db.all<{ id: number; action: number }>(
-		`SELECT id, coalesce(last_action_id, 0) AS action
+	const rows = db.all<{ id: number; key: string; action: number }>(
+		`SELECT id, CAST(id AS TEXT) AS key, coalesce(last_action_id, 0) AS action
 		FROM reports INDEXED BY reports_target_state
 		WHERE target_account_id = ?1 AND (action_taken_at IS NULL) = 1 AND id > ?2 AND id <= ?3
 		ORDER BY id LIMIT ?4`,
@@ -798,14 +798,15 @@ export function resolveSuspensionReports(
 		bound,
 		limit
 	)
-	const frozen = fence === null ? [] : rows.filter((row) => row.action <= fence).map((row) => row.id)
-	if (frozen.length > 0) {
+	const frozen = fence === null ? [] : rows.filter((row) => row.action <= fence).map((row) => row.key)
+	// Each report by its key: an IN over the ids lets statistics older than the Store's growth scan reports (RES-7).
+	for (const key of frozen) {
 		db.run(
 			`UPDATE reports SET action_taken_at = ?1, action_taken_by_account_id = ?2, updated_at = ?1, last_action_id = ?4
-			WHERE id IN (SELECT value FROM json_each(?3))`,
+			WHERE id = CAST(?3 AS INTEGER)`,
 			now,
 			by,
-			JSON.stringify(frozen),
+			key,
 			fence
 		)
 	}
