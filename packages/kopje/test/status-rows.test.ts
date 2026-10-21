@@ -36,6 +36,7 @@ import {
 import { selectSql } from '../src/db/columns'
 import { Db, rowHeapBytes, RowMeter } from '../src/db/sql'
 import { ACCOUNT_COLUMN_MAP } from '../src/domain/accounts'
+import { ADMIN_EMAIL_COLUMNS, LOCAL_EMAIL_COLUMNS } from '../src/domain/admin-authority'
 import { type VisibleStatusId, visibleSql } from '../src/domain/audience'
 import { listGroupedNotifications } from '../src/domain/notification-groups'
 import { OWN_VOTE_COLUMNS, POLL_COLUMN_MAP } from '../src/domain/polls'
@@ -61,6 +62,7 @@ const itemArb = fc.record({
 	media: fc.integer({ min: 0, max: 5 }),
 	poll: fc.integer({ min: 0, max: MAX_REMOTE_OPTIONS }),
 	viewer: fc.boolean(),
+	local: fc.boolean(),
 }) satisfies fc.Arbitrary<Item>
 
 afterEach(() => {
@@ -113,7 +115,8 @@ describe('the cursor (RES-3)', () => {
 
 describe('R bounds the rows of a status (RES-3)', () => {
 	it("is at least the meter's count of each status alone and of each chunk, for mixed sizes", async () => {
-		const { h, f } = await fixture()
+		// Local authors too, among them the OAuth admin, whose lookup (the Owner role) one chunk of each answer reads.
+		const { h, f } = await fixture({ admin: true })
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 		const small: ChunkPlan = { target: 256 * 1024, cap: 256 * 1024 }
 		await fc.assert(
@@ -216,6 +219,71 @@ describe('R bounds the rows of a status (RES-3)', () => {
 	})
 })
 
+describe("the OAuth admin's lookup (RES-3)", () => {
+	// A local author's Owner role reads the OAuth admin once per answer (adminAccountIdOnce, keyed on the operation's
+	// root Db), in whichever metered chunk first shows an available local author; R counts that read for each item.
+	it('is read once per answer, in a later metered chunk, within R and without the backstop', async () => {
+		const { h, f } = await fixture({ admin: true })
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+		const small: ChunkPlan = { target: 64 * 1024, cap: 64 * 1024 }
+		const kinds = ['status', 'quote', 'boost', 'boostOfQuote'] as const
+		const result = await runInDurableObject(h.store, (_instance, state) => {
+			// Remote authors first, so the first chunks read no lookup; then local ones, the admin among them.
+			const ids = Array.from({ length: 24 }, (_, i) =>
+				build(state.storage.sql, f, {
+					kind: kinds[i % 4]!,
+					text: 4000,
+					wide: false,
+					mentions: 0,
+					tags: 0,
+					media: 0,
+					poll: 0,
+					viewer: false,
+					local: i >= 8,
+				})
+			)
+			const bounds = boundsOf(state, f.viewer, ids, 1)
+			const planned = observedPresentation(state, f.viewer, ids, small)
+			const whole = observedPresentation(state, f.viewer, ids, ids.length)
+			const lookup = (reads: readonly Read[]) =>
+				reads.flatMap((read, i) =>
+					read.query.includes(selectSql(ADMIN_EMAIL_COLUMNS)) || read.query.includes(selectSql(LOCAL_EMAIL_COLUMNS))
+						? [i]
+						: []
+				)
+			return {
+				same: JSON.stringify(planned.items) === JSON.stringify(whole.items),
+				lookups: lookup(planned.reads).length,
+				// The segment each lookup read falls in.
+				at: planned.segments.flatMap((segment, i) => (lookup(segment.reads).length > 0 ? [i] : [])),
+				chunks: planned.segments.map((segment) => ({
+					size: segment.ids.length,
+					heap: heap(rowsOf(segment.reads)),
+					r: segment.ids.reduce((sum, id) => sum + bounds.get(id)!, 0),
+				})),
+				roles: planned.items.map((status) => ({ id: status.account.id, roles: status.account.roles })),
+			}
+		})
+		expect(result.same).toBe(true)
+		// The setting row and the local scan, once.
+		expect(result.lookups).toBe(2)
+		expect(result.at).toHaveLength(1)
+		expect(result.at[0]).toBeGreaterThan(0)
+		expect(result.chunks.filter((chunk) => chunk.size > 1).length).toBeGreaterThan(1)
+		for (const chunk of result.chunks) {
+			expect(chunk.heap).toBeLessThanOrEqual(chunk.r)
+		}
+		expect(warn).not.toHaveBeenCalled()
+		for (const { id, roles } of result.roles) {
+			expect(roles).toEqual(
+				id === f.viewer ? [{ id: '3', name: 'Owner', color: '' }] : f.locals.includes(id) ? [] : undefined
+			)
+		}
+		expect(result.roles.some(({ roles }) => roles?.length === 1)).toBe(true)
+		expect(result.roles.some(({ roles }) => roles === undefined)).toBe(true)
+	}, 120_000)
+})
+
 describe('a page of many small rows (RES-3)', () => {
 	it('plans 40 boosts of statuses with 200 mentions and 70 hashtags without the backstop', async () => {
 		const { h, f } = await fixture()
@@ -257,15 +325,16 @@ describe('a page of many small rows (RES-3)', () => {
 
 describe('the hydrate queries (RES-3)', () => {
 	// Every kind of row the presenter reads: quotes, boosts, polls with the viewer's votes, filter matches, mentions,
-	// hashtags, media and the viewer's flags.
+	// hashtags, media, the viewer's flags and the OAuth admin's lookup for a local author.
 	async function rich(): Promise<{ h: ApiHarness; f: Fixture; ids: string[] }> {
-		const { h, f } = await fixture()
+		const { h, f } = await fixture({ admin: true })
 		const base: Item = { kind: 'status', text: 300, wide: true, mentions: 3, tags: 5, media: 2, poll: 3, viewer: true }
-		const ids = await runInDurableObject(h.store, (_instance, state) =>
-			(['status', 'quote', 'boost', 'boostOfQuote'] as const).map((kind) =>
+		const ids = await runInDurableObject(h.store, (_instance, state) => [
+			...(['status', 'quote', 'boost', 'boostOfQuote'] as const).map((kind) =>
 				build(state.storage.sql, f, { ...base, kind })
-			)
-		)
+			),
+			build(state.storage.sql, f, { ...base, local: true }),
+		])
 		return { h, f, ids }
 	}
 
@@ -887,7 +956,7 @@ describe('stale statistics (RES-7)', () => {
 	it('seeks authors and polls by key, statistics taken with one author and one poll', async () => {
 		const h = await community(['alice'])
 		const viewer = h.users.alice.id
-		const f: Fixture = { viewer, token: h.users.alice.token, mentioned: [], filter: nextId() }
+		const f: Fixture = { viewer, token: h.users.alice.token, mentioned: [], filter: nextId(), locals: [viewer] }
 		await sql(
 			h.store,
 			"INSERT INTO filters (id, account_id, title, context, action) VALUES (?, ?, 'f', '[\"public\"]', 'warn')",
@@ -947,6 +1016,33 @@ describe('stale statistics (RES-7)', () => {
 			expect(rows - before.plans[i]!.rows, `${query}\n${plan.join('\n')}`).toBeLessThanOrEqual(1)
 		}
 	}, 60_000)
+
+	// The OAuth admin's lookup for a local author (oauthAdmin) and its term in R scan only the operator-sized
+	// local_accounts, each account sought by key, once accounts outgrow the statistics.
+	it("seeks the OAuth admin's accounts by key after the Store grows past its statistics", async () => {
+		const { h, f } = await fixture({ admin: true })
+		const item: Item = { kind: 'status', text: 10, wide: false, mentions: 0, tags: 0, media: 0, poll: 0, viewer: false }
+		const ids = await runInDurableObject(h.store, (_instance, state) => [
+			build(state.storage.sql, f, { ...item, local: true }),
+			build(state.storage.sql, f, item),
+		])
+		const { before, after } = await staleStatistics(h, {
+			capture: () => runInDurableObject(h.store, (_instance, state) => plannedPresentation(state, f.viewer, ids)),
+			grow: () => remoteAccounts(h, 100, 200),
+		})
+		expect(after.items).toEqual(before.items)
+		const lookups = after.plans.filter((p) => p.query.includes(selectSql(LOCAL_EMAIL_COLUMNS)))
+		expect(lookups).toHaveLength(1)
+		const bound = after.plans.find((p) => p.query === statusRowBoundSql())!
+		for (const { query, plan } of [...lookups, bound]) {
+			expect(plan, `${query}\n${plan.join('\n')}`).toContain('SCAN l')
+			expect(plan, `${query}\n${plan.join('\n')}`).toContain('SEARCH a USING INDEX sqlite_autoindex_accounts_1 (id=?)')
+			expect(scansOf(plan, ['a', 'i']), `${query}\n${plan.join('\n')}`).toEqual([])
+		}
+		for (const [i, { query, plan, rows }] of after.plans.entries()) {
+			expect(rows - before.plans[i]!.rows, `${query}\n${plan.join('\n')}`).toBeLessThanOrEqual(ids.length)
+		}
+	}, 120_000)
 
 	it('reads statuses, media, votes and filters by key after the Store grows past its statistics', async () => {
 		const { h, f } = await fixture()

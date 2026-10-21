@@ -1,5 +1,6 @@
 import { followActivity, followAnswerActivity, followUri, recordOutbound, undoFollowActivity } from './activities'
 import { actorSnapshot, recordActorUpdate } from './actor-update'
+import { adminAccountIdOnce } from './admin-authority'
 import { admit, type Admitted, admittedPage, ANSWER_BYTES, ARRAY_ANSWER_BYTES, jsonBytes } from './answer-budget'
 import {
 	activeMuteJoinSql,
@@ -19,6 +20,7 @@ import {
 import {
 	localRole,
 	optionalUserReadOperation,
+	OWNER_ROLE,
 	type Role,
 	userMediaDeleteOperation,
 	userReadOperation,
@@ -47,6 +49,7 @@ import { ACCOUNTS_ID_INDEX, LOCAL_ACCOUNTS_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
 import { normalizeDomain, parseAddress } from '../platform/domain-name'
 import { boundedHref, httpUrl } from '../platform/http-url'
+import { ACTOR_URI_LIMIT, withinIdentityBound } from '../platform/identity-bounds'
 import { ACCOUNT_EMOJIS_BYTES, storedDisplayName, storedText } from '../platform/stored-bounds'
 import { sanitizeRemoteHtml } from '../security/html'
 
@@ -70,6 +73,8 @@ export type Account = {
 	created_at: string
 	note: string
 	url: string
+	// The actor id (ActivityPub::TagManager#uri_for), also of an unavailable account; '' past ACTOR_URI_LIMIT.
+	uri: string
 	avatar: string
 	avatar_static: string
 	header: string
@@ -83,8 +88,18 @@ export type Account = {
 	hide_collections: boolean | null
 	emojis: CustomEmoji[]
 	fields: Field[]
+	// A local account's only, as Mastodon's `if: :local?`: false, Mastodon's default, as Kopje has no such setting.
+	noindex?: boolean
+	// A local account's only: its highlighted role, the OAuth admin's Owner while it is available; [] otherwise.
+	roles?: AccountRole[]
 	suspended?: true
 }
+
+// A role as REST::AccountSerializer::RoleSerializer presents it.
+export type AccountRole = Pick<Role, 'id' | 'name' | 'color'>
+
+// Mastodon shows only a highlighted role (UserRole#highlighted?): OWNER_ROLE is, EVERYONE_ROLE is not.
+const OWNER_BADGE: AccountRole = { id: OWNER_ROLE.id, name: OWNER_ROLE.name, color: OWNER_ROLE.color }
 
 // A profile field (Mastodon's Account::Field): the name as plain text, the value as HTML. Local fields come from
 // local_accounts.fields, remote ones from the actor's attachments.
@@ -303,7 +318,7 @@ export function* accountsOf(
 		const rows = new Map(accountRowsOf(db, [...new Set(slice)]).map((row) => [row.id, row]))
 		for (const id of slice) {
 			const row = rows.get(id)
-			yield row === undefined ? undefined : presentAccount(row, present)
+			yield row === undefined ? undefined : presentAccount(db, row, present)
 		}
 	}
 }
@@ -394,8 +409,8 @@ export function acctOf(row: { username: string; domain: string | null }): string
 // An unavailable account (R1: suspended, or a remote account whose deletion has started, as the row's query read it
 // live) is shown redacted, as Mastodon's REST::AccountSerializer shows an unavailable one: no display name, note,
 // fields or emojis, the default avatar and header, locked, bot, discoverable and indexable false, and
-// `suspended: true`.
-function presentAccount(row: AccountRow, { origin }: Present): Account {
+// `suspended: true`. The uri and noindex are shown as for an available one, as Mastodon shows them.
+function presentAccount(db: Db, row: AccountRow, { origin }: Present): Account {
 	const suspended = row.available === 0
 	// Stored URLs are shown only when they are http(s) (httpUrl); anything else reads as unset.
 	const url = accountUrl(row, origin)
@@ -414,6 +429,8 @@ function presentAccount(row: AccountRow, { origin }: Present): Account {
 		created_at: row.created_at,
 		note: suspended ? '' : row.note,
 		url,
+		// RES-2: the projection (actorUriSql) bounds the raw bytes, and this the escaped JSON of an imported value.
+		uri: withinIdentityBound(row.uri, ACTOR_URI_LIMIT) ? row.uri : '',
 		avatar,
 		avatar_static: avatar,
 		header,
@@ -429,6 +446,10 @@ function presentAccount(row: AccountRow, { origin }: Present): Account {
 			: row.domain === null
 				? fieldSources(row.local_fields).map(presentField)
 				: remoteFields(row.attachment),
+		// The admin is looked up only for an available local account, once per operation (adminAccountIdOnce).
+		...(row.domain === null
+			? { noindex: false, roles: !suspended && adminAccountIdOnce(db) === row.id ? [OWNER_BADGE] : [] }
+			: {}),
 		...(suspended ? { suspended: true as const } : {}),
 	}
 }
@@ -512,14 +533,14 @@ function presentAccountsById(db: Db, ids: readonly string[], present: Present): 
 				`SELECT ${selectSql(ACCOUNT_COLUMN_MAP)} FROM ${ACCOUNT_FROM_BY_ID} WHERE a.id IN (SELECT value FROM json_each(?1))`,
 				JSON.stringify([...new Set(ids)])
 			)
-			.map((row) => [row.id, presentAccount(row, present)])
+			.map((row) => [row.id, presentAccount(db, row, present)])
 	)
 }
 
 // One presented account by id, bounded as a unit (RES-2); undefined for an id with no account.
 export function presentAccountById(db: Db, id: string, present: Present): Account | undefined {
 	const row = accountRow(db, id)
-	return row === undefined ? undefined : presentAccount(row, present)
+	return row === undefined ? undefined : presentAccount(db, row, present)
 }
 
 function accountRow(db: Db, id: string): AccountRow | undefined {
@@ -529,7 +550,7 @@ function accountRow(db: Db, id: string): AccountRow | undefined {
 export const getAccount = readOperation<{ id: string; present: Present }, Account | null>((db, { id, present }) => {
 	const resolved = resolveAccountId(db, id)
 	const row = resolved === null ? undefined : accountRow(db, resolved)
-	return row === undefined ? null : presentAccount(row, present)
+	return row === undefined ? null : presentAccount(db, row, present)
 })
 
 // GET /api/v1/accounts?id[]= (AccountsController#index): the accounts getAccount shows one by one, read in one query,
@@ -575,7 +596,7 @@ function addressRow(
 // The presented account an address names (an unavailable one redacted, VIS-30), or null when none does.
 export function accountByAddress(db: Db, username: string, domain: string | null, present: Present): Account | null {
 	const row = addressRow(db, username, domain)
-	return row === undefined ? null : presentAccount(row, present)
+	return row === undefined ? null : presentAccount(db, row, present)
 }
 
 // The address of the account an address names, as stored: `username`, or `username@domain` for a remote one.
@@ -613,7 +634,7 @@ export function credentialAccount(db: Db, accountId: string, present: Present): 
 		return null
 	}
 	return {
-		...presentAccount(row, present),
+		...presentAccount(db, row, present),
 		source: {
 			privacy: local.default_visibility,
 			sensitive: local.default_sensitive === 1,
@@ -652,7 +673,7 @@ export const userinfo = userReadOperation<{ present: Present }, Userinfo | null>
 	if (row === undefined) {
 		return null
 	}
-	const account = presentAccount(row, present)
+	const account = presentAccount(db, row, present)
 	return {
 		iss: `${present.origin}/`,
 		sub: row.uri,

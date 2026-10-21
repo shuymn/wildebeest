@@ -1,6 +1,6 @@
 import { runInDurableObject } from 'cloudflare:test'
 
-import { type ApiHarness } from './api-helpers'
+import { type ApiHarness, seedAccount, setSetting } from './api-helpers'
 import { NOW } from './app-helpers'
 import { type SqlRow, watchedCursor } from './read-helpers'
 import { community } from './status-helpers'
@@ -31,17 +31,31 @@ export type Item = {
 	media: number
 	poll: number
 	viewer: boolean
+	// Written by a local account of the fixture's (alice first, the OAuth admin of an admin fixture), not by a remote
+	// one of its own.
+	local?: boolean
 	// The stored emoji snapshots of its statuses and of its author, if any.
 	emojis?: { status: string | null; author: string | null }
 }
 
-export type Fixture = { viewer: string; token: string; mentioned: string[]; filter: string }
+export type Fixture = { viewer: string; token: string; mentioned: string[]; filter: string; locals: string[] }
+
+// The local accounts of an admin fixture: an operator-sized deployment (about 10 accounts, admin-authority.ts).
+const ADMIN_FIXTURE_LOCALS = 10
 
 // alice, MAX_STATUS_MENTION_ROWS remote accounts to mention (on hosts of 60 characters) and one filter of hers that names the statuses
-// built (so each carries a filter result) with a keyword.
-export async function fixture(): Promise<{ h: ApiHarness; f: Fixture }> {
+// built (so each carries a filter result) with a keyword. `admin`: alice is the OAuth admin (admin_email) among
+// ADMIN_FIXTURE_LOCALS local accounts, which items marked local are written by.
+export async function fixture({ admin = false }: { admin?: boolean } = {}): Promise<{ h: ApiHarness; f: Fixture }> {
 	const h = await community(['alice'])
 	const viewer = h.users.alice.id
+	const locals = [viewer]
+	if (admin) {
+		await setSetting(h.store, 'admin_email', 'alice@example.com')
+		for (let i = 1; i < ADMIN_FIXTURE_LOCALS; i++) {
+			locals.push(await seedAccount(h.store, { username: `local${i}`, email: `local${i}@example.com` }))
+		}
+	}
 	const filter = nextId()
 	const mentioned = await runInDurableObject(h.store, (_instance, state) => {
 		const sql = state.storage.sql
@@ -71,7 +85,7 @@ export async function fixture(): Promise<{ h: ApiHarness; f: Fixture }> {
 		)
 		return ids
 	})
-	return { h, f: { viewer, token: h.users.alice.token, mentioned, filter } }
+	return { h, f: { viewer, token: h.users.alice.token, mentioned, filter, locals } }
 }
 
 // Wide text of `points` code points whose content (`<p>needle …</p>`) stays within its stored bound
@@ -84,18 +98,22 @@ function wideText(points: number): string {
 	return `${'𠀀'.repeat(astral)}${'名'.repeat(points - astral)}`
 }
 
+let localTurn = 0
+
 // Writes the status rows of `item` (its original, quoted status and boost too) and returns its top-level id.
 export function build(sql: SqlStorage, f: Fixture, item: Item): string {
-	const author = nextId()
-	sql.exec(
-		`INSERT INTO accounts (id, uri, username, domain, display_name, raw, emojis)
-		VALUES (?, ?, 'author', 'remote.example', ?, ?, ?)`,
-		author,
-		`https://remote.example/users/${author}`,
-		(item.wide ? '名' : 'n').repeat(item.text % 300),
-		JSON.stringify({ attachment: [{ type: 'PropertyValue', name: 'k', value: 'v'.repeat(item.text % 500) }] }),
-		item.emojis?.author ?? null
-	)
+	const author = item.local === true ? f.locals[localTurn++ % f.locals.length]! : nextId()
+	if (item.local !== true) {
+		sql.exec(
+			`INSERT INTO accounts (id, uri, username, domain, display_name, raw, emojis)
+			VALUES (?, ?, 'author', 'remote.example', ?, ?, ?)`,
+			author,
+			`https://remote.example/users/${author}`,
+			(item.wide ? '名' : 'n').repeat(item.text % 300),
+			JSON.stringify({ attachment: [{ type: 'PropertyValue', name: 'k', value: 'v'.repeat(item.text % 500) }] }),
+			item.emojis?.author ?? null
+		)
+	}
 	const status = (parts: Item): string => {
 		const id = nextId()
 		sql.exec(

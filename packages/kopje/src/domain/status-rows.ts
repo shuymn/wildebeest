@@ -1,4 +1,5 @@
 import { ACCOUNT_COLUMN_MAP } from './accounts'
+import { ADMIN_EMAIL_COLUMNS, LOCAL_EMAIL_COLUMNS, OAUTH_ADMIN_HEAP_SQL } from './admin-authority'
 import { QUOTE_APPROVAL_COLUMNS, QUOTE_READ_COLUMNS, quotedStatusIdSql } from './audience'
 import { FILTER_MATCH_COLUMNS } from './filters'
 import { OWN_VOTE_COLUMNS, ownVoteCountSql, POLL_COLUMN_MAP, POLL_FROM } from './polls'
@@ -117,7 +118,8 @@ export const VIEWER_FLAG_COLUMNS = fixedColumns(
 const VIEWER_FLAGS = 5
 
 // Every query the presenter runs for a chunk, by the map its result columns come from (test/status-rows.test.ts
-// fails on a query without one, or a column outside it). Built on first use, as statusRowBoundSql.
+// fails on a query without one, or a column outside it). Built on first use, as statusRowBoundSql. adminEmail and
+// localEmails: the OAuth admin's lookup for a local author's Owner role (oauthAdmin), once per operation.
 export function hydrateQueries(): Readonly<Record<HydrateQuery, ColumnMap>> {
 	return {
 		statuses: STATUS_COLUMN_MAP,
@@ -131,6 +133,8 @@ export function hydrateQueries(): Readonly<Record<HydrateQuery, ColumnMap>> {
 		polls: POLL_COLUMN_MAP,
 		votes: OWN_VOTE_COLUMNS.columns,
 		filters: FILTER_MATCH_COLUMNS.columns,
+		adminEmail: ADMIN_EMAIL_COLUMNS,
+		localEmails: LOCAL_EMAIL_COLUMNS,
 	}
 }
 
@@ -146,6 +150,8 @@ export type HydrateQuery =
 	| 'polls'
 	| 'votes'
 	| 'filters'
+	| 'adminEmail'
+	| 'localEmails'
 
 // Per-row aggregates a hydrate query may sort in a temporary B-tree, by map and column: each sorts within one stored
 // value, at most one row at a time (an actor document's attachment entries, at most 2 MiB fetched and
@@ -195,7 +201,9 @@ let boundSql: string | undefined
 // whose active filters name statuses: one row per position (`k`, json_each's key) with `bytes`. An item reads at
 // most these status rows: the status, its boosted original, and the quoted status of the status or, for a boost, of
 // its original (a boost has no quote of its own: R35); each counted whether or not the viewer is shown it. Every
-// subquery is a search by key or through the index the presenter's query uses.
+// subquery is a search by key or through the index the presenter's query uses, but M: each item also counts the
+// OAuth admin's lookup at its whole (OAUTH_ADMIN_HEAP_SQL, a scan of the operator-sized local_accounts, once per
+// statement), which an operation reads at most once, in whichever chunk first shows an available local author.
 export function statusRowBoundSql(): string {
 	// Built on first use: the maps come from modules that import this one's importers.
 	boundSql ??= `WITH t AS (SELECT key AS k, value AS id FROM json_each(?1)),
@@ -204,6 +212,6 @@ export function statusRowBoundSql(): string {
 				WHERE b.reblog_of_id IS NOT NULL
 			UNION ALL SELECT k, id FROM (SELECT t.k, ${quotedStatusIdSql('coalesce(b.reblog_of_id, b.id)')} AS id
 				FROM t CROSS JOIN statuses b INDEXED BY ${STATUSES_ID_INDEX} ON b.id = t.id) WHERE id IS NOT NULL)
-		SELECT x.k, sum(${statusRowTerms('?2', '?3')}) AS bytes FROM x GROUP BY x.k`
+		SELECT x.k, sum(${statusRowTerms('?2', '?3')}) + ${OAUTH_ADMIN_HEAP_SQL} AS bytes FROM x GROUP BY x.k`
 	return boundSql
 }

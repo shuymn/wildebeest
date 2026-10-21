@@ -1,4 +1,4 @@
-import { oauthAdmin } from './admin-authority'
+import { forgetAdminAccountId, oauthAdmin } from './admin-authority'
 import { authorize, type UserCredential } from './auth'
 import { allocateLocalId } from './ids'
 import { chargeInstanceTransforms } from './media'
@@ -579,6 +579,7 @@ export const bootstrapInstance = writeOperation<BootstrapInput, BootstrapResult>
 		input.key.pubkey,
 		createdAt
 	)
+	forgetAdminAccountId(db)
 	db.run('DELETE FROM kopje_state WHERE substr(name, 1, ?1) = ?2', SESSION.length, SESSION)
 	return 'ok'
 })

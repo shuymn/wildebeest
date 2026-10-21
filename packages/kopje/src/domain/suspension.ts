@@ -1,4 +1,5 @@
 import { moderationUpdate } from './actor-update'
+import { forgetAdminAccountId } from './admin-authority'
 import { type ReachedAccount, reachFollowers, reachFollowing, reachMentioned } from './audience'
 import type { Admin } from './auth'
 import { beginStagedUpdate, endStaging, isDeliverableInbox, stageTargets } from './deliveries'
@@ -149,6 +150,7 @@ export function suspendLocal(db: Db, accountId: string, by: Admin | null, now: n
 	if (epoch === undefined) {
 		return null
 	}
+	forgetAdminAccountId(db)
 	const job = {
 		account_id: accountId,
 		generation: epoch,
@@ -196,6 +198,7 @@ export function unsuspendLocal(db: Db, accountId: string, now: number): boolean 
 		RETURNING credential_epoch AS epoch`,
 		accountId
 	)!.epoch
+	forgetAdminAccountId(db)
 	const update = moderationUpdate(db, accountId, now)!
 	insertJob(db, {
 		kind: 'reach',
