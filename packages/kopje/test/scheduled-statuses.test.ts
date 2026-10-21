@@ -97,16 +97,6 @@ function publishDirectly(h: ApiHarness, id: string, now: number) {
 	)
 }
 
-// The client_id of the app the user's token was issued to.
-async function clientOf(h: ApiHarness, user: User): Promise<string> {
-	const [row] = await sql<{ client_id: string }>(
-		h.store,
-		'SELECT client_id FROM oauth_tokens WHERE token_hash = ?',
-		await sha256Hex(user.token)
-	)
-	return row!.client_id
-}
-
 async function count(h: ApiHarness, table: string): Promise<number> {
 	return (await sql<{ n: number }>(h.store, `SELECT count(*) AS n FROM ${table}`))[0]?.n ?? 0
 }
@@ -140,7 +130,7 @@ describe('scheduling a status', () => {
 				scheduled_at: null,
 				in_reply_to_id: parent.id,
 				// The client_id of the app it was scheduled through.
-				application_id: await clientOf(h, alice),
+				application_id: h.app.client_id,
 				idempotency: null,
 				with_rate_limit: false,
 				allowed_mentions: null,
@@ -735,7 +725,7 @@ describe('publication', () => {
 	it('publishes through the app it was scheduled through, kept as stored when the app is gone', async () => {
 		const h = await community(['alice'])
 		const { alice } = h.users
-		const client = await clientOf(h, alice)
+		const client = h.app.client_id
 		const second = await login(h, { email: 'alice@example.com', scope: 'read write follow' })
 		const viaSecond = { id: alice.id, token: second.token }
 		const kept = await scheduled(h, alice, { status: 'kept', scheduled_at: at(NOW + HOUR) })
