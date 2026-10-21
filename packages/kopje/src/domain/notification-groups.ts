@@ -1,3 +1,4 @@
+import type { AccountWarning } from './account-warnings'
 import {
 	type Account,
 	accountsOf,
@@ -20,6 +21,7 @@ import {
 	type Scope,
 	type ShownColumns,
 	shownWindow,
+	warningOf,
 } from './notifications'
 import { presentReport, type Report } from './reports'
 import { LARGE_ITEM_CHUNKS, presentation, type Status, statusStream } from './status-presenter'
@@ -87,6 +89,8 @@ export type NotificationGroup = {
 	status_id?: string | null
 	// An admin.report's report (REST::NotificationGroupSerializer#report_type?).
 	report?: Report
+	// A moderation_warning's warning (REST::NotificationGroupSerializer#moderation_warning_event?).
+	moderation_warning?: AccountWarning
 }
 
 // REST::DedupNotificationGroupSerializer: partial_accounts only with expand_accounts=partial_avatars.
@@ -345,11 +349,15 @@ function admitGroups(
 		const samples = partialMode ? sampled : sampleIds.filter((id) => admitted.accounts.has(id) || whole.has(id))
 		const status = first.status_id === null ? undefined : statusOf(first.status_id)
 		const report = first.report_id === null ? undefined : presentReport(db, first.report_id, options.present)
+		// An ungrouped notification's one sample is whole in either mode, and its warning reuses it.
+		const sample = samples[0] === undefined ? undefined : (whole.get(samples[0]) ?? admitted.accounts.get(samples[0]))
+		const warning = warningOf(db, first, viewer.accountId, sample)
 		if (
 			newest === undefined ||
 			samples.length === 0 ||
 			(first.status_id !== null && status === undefined) ||
-			(first.report_id !== null && report === undefined)
+			(first.report_id !== null && report === undefined) ||
+			warning === null
 		) {
 			admitted.consumed++
 			continue
@@ -369,6 +377,7 @@ function admitGroups(
 			sample_account_ids: samples,
 			...(STATUS_TYPES.has(first.type) ? { status_id: status?.id ?? null } : {}),
 			...(report === undefined ? {} : { report }),
+			...(warning === undefined ? {} : { moderation_warning: warning }),
 		}
 		// What the group adds, each with a separator.
 		let size = jsonBytes(group) + 1

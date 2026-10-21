@@ -1,3 +1,4 @@
+import { writeAccountWarning } from './account-warnings'
 import { type Account, accountsOf, type Page, type PageQuery, type Present } from './accounts'
 import { accessAdminRefusal, forgetAdminAccountId, normalizedEmail } from './admin-authority'
 import { admit, ARRAY_ANSWER_BYTES } from './answer-budget'
@@ -12,13 +13,15 @@ import {
 	type Role,
 } from './auth'
 import { logAction } from './moderation-log'
+import { notify } from './notifications'
 import { writeOperation } from './operation'
 import { domainJobRunning, suspendRemote, unsuspendRemote } from './remote-suspension'
-import { reportExists, resolveReport } from './reports'
+import { reportStatusIds, resolveReport } from './reports'
 import { suspendLocal, unsuspendLocal } from './suspension'
 import { ACCOUNTS_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
 import type { ImportAuthority } from '../platform/store-admin'
+import { storedWarningText, WARNING_TEXT_BYTES } from '../platform/stored-bounds'
 
 // Accounts as the Mastodon admin API shows them to the OAuth admin (R37): their entity, the list and its filters, an
 // account by id and the actions that change nothing; and the Access admin's repair of the OAuth admin's match.
@@ -560,51 +563,81 @@ export function adminAccountOperations(read: AdminDeclare, write: AdminDeclare) 
 	)
 
 	// POST /api/v1/admin/accounts/:account_id/action (Admin::AccountAction#save!), in its order: the account (404), the
-	// type (422), the policy (403: no action targets the OAuth admin's own account, as Mastodon's role.overrides? refuses
-	// the Owner acting on the Owner), then the report named (404).
-	//   - none resolves the report named, if any (process_reports!); nothing else.
+	// type (422), the text (422: Kopje's bound, WARNING_TEXT_BYTES), the policy (403: no action targets the OAuth
+	// admin's own account, as Mastodon's role.overrides? refuses the Owner acting on the Owner), the warning preset (404:
+	// Kopje has none, so any is unknown, as AccountWarningPreset.find raises), then the report named (404); each before
+	// any write, as Mastodon's transaction rolls back.
+	//   - none warns a local target when `notify` (send_email_notification) is set: a warning (account-warnings.ts,
+	//     logged) and its moderation_warning notification, sent by the target itself, which R15 drops for a suspended
+	//     target (DropCondition#drop?, unavailable) while the warning stays, as the strike does. Eligibility is judged in
+	//     this transaction, where Mastodon judges it when LocalNotificationWorker runs. Then it resolves the report
+	//     named, if any (process_reports!).
 	//   - suspend on a local account suspends it (domain/suspension.ts): its reports, frozen at the suspension, are
 	//     resolved by the suspension job, as process_reports! resolves every unresolved report on the target.
 	//   - suspend on a remote account suspends it (remote-suspension.ts, R38): its reports, frozen at the suspension, are
 	//     resolved by its job, which then ends its follows of local accounts.
 	//   - disable, sensitive and silence answer 422 as a type outside the list would, so the client sees a failed action
 	//     rather than a silent no-op: Kopje has no disabling, sensitizing or silencing.
-	//   - text and warning_preset_id are accepted and dropped: Kopje keeps no strikes and sends no warning, as Mastodon
-	//     sends none to a remote target (warnable? is local only).
-	const actOnAccount = write<{ id: string; type: string | null; reportId: string | null }, AccountActionResult>(
-		ADMIN_PERMISSION.manageUsers,
-		(db, { id, type, reportId }, admin) => {
-			const account = db.first<{ id: string; domain: string | null }>(
-				'SELECT id, domain FROM accounts WHERE id = ?',
-				id
-			)
-			if (account === undefined) {
-				return { status: 'not_found' }
+	//   - suspend and a remote target keep no warning: Mastodon's strike for them is shown by no API (account-warnings.ts).
+	const actOnAccount = write<
+		{
+			id: string
+			type: string | null
+			reportId: string | null
+			warningPresetId: string | null
+			text: string
+			notify: boolean
+		},
+		AccountActionResult
+	>(ADMIN_PERMISSION.manageUsers, (db, { id, type, reportId, warningPresetId, text: sent, notify: warn }, admin) => {
+		const account = db.first<{ id: string; domain: string | null }>('SELECT id, domain FROM accounts WHERE id = ?', id)
+		if (account === undefined) {
+			return { status: 'not_found' }
+		}
+		if (type === null) {
+			return { status: 'invalid', error: "Validation failed: Type can't be blank, Type is not included in the list" }
+		}
+		if (type !== 'none' && type !== 'suspend') {
+			return { status: 'invalid', error: 'Validation failed: Type is not included in the list' }
+		}
+		const text = storedWarningText(sent)
+		if (text === null) {
+			return {
+				status: 'invalid',
+				error: `Validation failed: Text must be at most ${WARNING_TEXT_BYTES.toLocaleString('en-US')} UTF-8 bytes with no NUL`,
 			}
-			if (type === null) {
-				return { status: 'invalid', error: "Validation failed: Type can't be blank, Type is not included in the list" }
+		}
+		if (account.id === admin.accountId) {
+			return { status: 'not_allowed' }
+		}
+		const statusIds = reportId === null ? null : reportStatusIds(db, reportId)
+		if (warningPresetId !== null || statusIds === undefined) {
+			return { status: 'not_found' }
+		}
+		if (type === 'none') {
+			if (account.domain === null && warn) {
+				const accountWarningId = writeAccountWarning(db, admin, account.id, text, statusIds)
+				notify(db, {
+					recipientId: account.id,
+					type: 'moderation_warning',
+					fromId: account.id,
+					statusId: null,
+					accountWarningId,
+					now: admin.now,
+				})
 			}
-			if (type !== 'none' && type !== 'suspend') {
-				return { status: 'invalid', error: 'Validation failed: Type is not included in the list' }
-			}
-			if (account.id === admin.accountId) {
-				return { status: 'not_allowed' }
-			}
-			if (type === 'none') {
-				// resolveReport writes nothing when the report is missing.
-				return reportId === null || resolveReport(db, reportId, admin) ? { status: 'ok' } : { status: 'not_found' }
-			}
-			if (reportId !== null && !reportExists(db, reportId)) {
-				return { status: 'not_found' }
-			}
-			if (account.domain === null) {
-				suspendLocal(db, account.id, admin, admin.now)
-			} else {
-				suspendRemote(db, account.id, admin, admin.now)
+			if (reportId !== null) {
+				resolveReport(db, reportId, admin)
 			}
 			return { status: 'ok' }
 		}
-	)
+		if (account.domain === null) {
+			suspendLocal(db, account.id, admin, admin.now)
+		} else {
+			suspendRemote(db, account.id, admin, admin.now)
+		}
+		return { status: 'ok' }
+	})
 
 	// POST /api/v1/admin/accounts/:id/unsuspend (AccountPolicy#unsuspend?: a suspension of this instance's only): an
 	// account that is not suspended, or a remote one unavailable for another reason (its deletion has started), is

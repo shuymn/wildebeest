@@ -1090,8 +1090,10 @@ function silencedSql(r: string, a: string, now: string): string {
 
 // R15: whether the recipient `r` is shown a notification of `type` from `from` about `status` at `now`. One rule
 // decides whether a notification is written, listed and pushed (notifications.ts, push.ts): the sender is not the
-// recipient (but for the end of the recipient's own poll, NotifyService's from_self? exception), is available, is not blocked (either way), muted with notifications or domain-blocked by the recipient,
-// and the recipient may see the status. A reblog notification names the original; the boost itself (the sender's one
+// recipient (but for the end of the recipient's own poll and a moderation_warning, whose sender is its recipient:
+// NotifyService::DropCondition#drop? exempts both from from_self?), is available (so a suspended recipient is never
+// shown its moderation_warning), is not blocked (either way), muted with notifications or domain-blocked by the
+// recipient, and the recipient may see the status. A reblog notification names the original; the boost itself (the sender's one
 // boost of it) must be visible to the recipient too, so a followers-only or direct boost is not revealed to an author
 // outside its audience. A mention is left out when its status mentions or replies to an account the recipient
 // silences (FeedManager#filter_from_mentions), and a post notification (`status`) when its status is a reply other
@@ -1102,7 +1104,7 @@ function silencedSql(r: string, a: string, now: string): string {
 // recipient is `admin`, the OAuth admin's account id (R37; NULL for none), so it leaves every read, push and stream
 // when the admin changes; it goes with its report (notifications.report_id, ON DELETE CASCADE).
 export function shownSql(r: string, type: string, from: string, status: string, now: string, admin: string): string {
-	return `((${from} <> ${r} OR ${type} = 'poll')
+	return `((${from} <> ${r} OR ${type} IN ('poll', 'moderation_warning'))
 		AND (${type} <> 'admin.report' OR ${r} IS ${admin})
 		AND ${availableSql(from)}
 		AND NOT ${silencedSql(r, from, now)}
