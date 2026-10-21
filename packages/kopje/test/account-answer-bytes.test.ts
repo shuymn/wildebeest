@@ -7,9 +7,10 @@ import { describe, expect, it } from 'vitest'
 import { bearer, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { ALICE, setup, type Setup } from './inbox-status-helpers'
-import { field, MAX_BIO, maxFields } from './profile-fixtures'
+import { field, MAX_BIO, maxFields, movedAtCaps, MOVED_ROW_SQLITE_MAX } from './profile-fixtures'
 import { longestString, observedSql } from './read-helpers'
 import { community, post, remoteAccount, seedStatus } from './status-helpers'
+import { selectSql } from '../src/db/columns'
 import { Db } from '../src/db/sql'
 import {
 	DISPLAY_NAME_LIMIT,
@@ -17,6 +18,7 @@ import {
 	listFollows,
 	MAX_FAMILIAR_FOLLOWERS,
 	MAX_REMOTE_FIELDS,
+	MOVED_ACCOUNT_COLUMNS,
 	presentAccountsWithin,
 	PROFILE_URL_LIMIT,
 	USERNAME_LIMIT,
@@ -98,8 +100,10 @@ const maximal = (i: number): Profile => ({
 	header: atLimit(`https://max.example/h${i}/`),
 	attachment: maxFields(),
 })
-// What one such account is at most as read from SQLite and as serialized (ACCOUNT_COLUMN_MAP's comment).
+// What one such account is at most as read from SQLite and as serialized (ACCOUNT_COLUMN_MAP's comment); read with
+// the account it moved to (movedAtCaps), MOVED_ROW_SQLITE_MAX more.
 const READ_MAX = 115_000
+const MOVED_READ_MAX = READ_MAX + MOVED_ROW_SQLITE_MAX
 const SHOWN_MAX = 125_000
 
 // `count` remote accounts from `base` with the profile of each, oldest id first.
@@ -162,7 +166,14 @@ async function measured<I>(t: Setup, operation: StoreOperation<I, unknown>, inpu
 		let profiles = 0
 		let bytes = 0
 		const real = state.storage.sql
-		const counting = observedSql(real, (rows) => {
+		// The profiles' rows, and their moved-to accounts' (the query of MOVED_ACCOUNT_COLUMNS).
+		const counting = observedSql(real, (rows, query) => {
+			const moved = query.includes(selectSql(MOVED_ACCOUNT_COLUMNS.columns))
+			for (const row of moved ? rows : []) {
+				for (const value of Object.values(row)) {
+					bytes += typeof value === 'string' ? utf8Length(value) : 8
+				}
+			}
 			for (const row of rows.filter((r) => 'note' in r && 'display_name' in r)) {
 				profiles++
 				for (const value of Object.values(row)) {
@@ -211,6 +222,8 @@ const listInput = async (t: Setup) => ({
 })
 
 const BASE = 600_000_000_000_000_000n
+// The ids of the accounts they moved to.
+const MOVED_BASE = 610_000_000_000_000_000n
 
 async function follows(t: Setup, followers: readonly string[], followed: readonly string[], state = 'accepted') {
 	await sql(
@@ -375,6 +388,7 @@ describe('one account has a known size (RES-2)', () => {
 	it('reads a page of 80 followers at every bound from a window of 240, and answers those within the budget', async () => {
 		const t = await setup()
 		const ids = await accounts(t, 240, BASE, maximal)
+		await movedAtCaps(t.store, ids, MOVED_BASE)
 		await follows(t, ids, [ALICE])
 		const read = await measured(t, listFollows, {
 			credential: await credential(t, 'read:accounts'),
@@ -385,7 +399,7 @@ describe('one account has a known size (RES-2)', () => {
 			now: NOW,
 		})
 		expect(read.profiles).toBe(80)
-		expect(read.bytes).toBeLessThanOrEqual(80 * READ_MAX)
+		expect(read.bytes).toBeLessThanOrEqual(80 * MOVED_READ_MAX)
 		// 80 accounts near their bound pass ANSWER_BYTES (RES-3): the page answers those that fit, cut by bytes.
 		const { body, bytes } = await shownBytes(t, `/api/v1/accounts/${ALICE}/followers?limit=80`)
 		const shown = (body as unknown[]).length
@@ -428,11 +442,12 @@ describe('answers of many accounts are bounded in bytes (RES-3)', () => {
 		for (const count of [100, 400]) {
 			const t = await setup()
 			const ids = await accounts(t, count, BASE, maximal)
+			await movedAtCaps(t.store, ids, MOVED_BASE)
 			await listOf(t, ids)
 			const first = await measured(t, listAccounts, await listInput(t))
 			read.push(first)
-			// The budget, and at most one chunk of 50 read past it.
-			expect(first.bytes).toBeLessThanOrEqual(ANSWER_BYTES + 50 * READ_MAX)
+			// The budget, and at most one chunk of 50 read past it, each with its moved-to account.
+			expect(first.bytes).toBeLessThanOrEqual(ANSWER_BYTES + 50 * MOVED_READ_MAX)
 			const answers = await walk(t, `/api/v1/lists/${LIST}/accounts?limit=0`)
 			for (const answer of answers) {
 				expect(answer.bytes).toBeLessThanOrEqual(ANSWER_BYTES)

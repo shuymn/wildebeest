@@ -1,7 +1,16 @@
 import { sql } from './api-helpers'
+import { ACCOUNT_EMOJIS_FULL } from './emoji-fixtures'
 import { LEGACY } from './federation-helpers'
 import { community, remoteAccount, remoteFollows } from './status-helpers'
-import { MAX_REMOTE_FIELDS, REMOTE_FIELDS_BYTES } from '../src/domain/accounts'
+import {
+	MAX_REMOTE_FIELDS,
+	MOVED_ACCOUNT_CAPS,
+	MOVED_URL_LIMIT,
+	REMOTE_FIELDS_BYTES,
+	USERNAME_LIMIT,
+} from '../src/domain/accounts'
+import { DOMAIN_BYTES } from '../src/platform/identity-bounds'
+import type { StoreStub } from '../src/platform/store-client'
 import { sanitizeRemoteBio } from '../src/security/html'
 
 // Remote profile parts at their bounds (RES-2), shared by the answer-size tests, and a local profile with a remote
@@ -35,4 +44,37 @@ export function fullestFields() {
 		...Array.from({ length: 7 }, () => field('n'.repeat(255), 'v'.repeat(4096))),
 		field('n'.repeat(255), 'v'.repeat(last)),
 	]
+}
+
+// What a moved-to account's row reads from SQLite at most (MOVED_ACCOUNT_CAPS), eight bytes for a number, as the
+// answer-size tests count values.
+export const MOVED_ROW_SQLITE_MAX = Object.values(MOVED_ACCOUNT_CAPS).reduce(
+	(sum, bytes) => sum + (bytes === 0 ? 8 : bytes),
+	0
+)
+
+// Moves each of `sources` to an account of its own (ids from `base`) that reads at every cap of a moved-to account:
+// URLs and actor id at MOVED_URL_LIMIT, a username of USERNAME_LIMIT, a domain of DOMAIN_BYTES, four-byte characters
+// past the display name's and created_at's caps, and an emoji snapshot at its stored bound.
+export async function movedAtCaps(store: StoreStub, sources: readonly string[], base: bigint): Promise<void> {
+	const at = (prefix: string, bytes: number) => `${prefix}${'u'.repeat(bytes)}`.slice(0, bytes)
+	for (const [i, source] of sources.entries()) {
+		const id = String(base + BigInt(i))
+		await sql(
+			store,
+			`INSERT INTO accounts (id, uri, username, domain, display_name, url, avatar_url, header_url, emojis, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			id,
+			at(`https://moved.example/users/${id}/`, MOVED_URL_LIMIT),
+			`${'u'.repeat(USERNAME_LIMIT - id.length)}${id}`,
+			`${'d'.repeat(DOMAIN_BYTES - 4)}.com`,
+			'𠀀'.repeat(2048),
+			at(`https://moved.example/@${id}/`, MOVED_URL_LIMIT),
+			at(`https://moved.example/a/${id}/`, MOVED_URL_LIMIT),
+			at(`https://moved.example/h/${id}/`, MOVED_URL_LIMIT),
+			ACCOUNT_EMOJIS_FULL,
+			'𠀀'.repeat(24)
+		)
+		await sql(store, 'UPDATE accounts SET moved_to_account_id = ? WHERE id = ?', id, source)
+	}
 }

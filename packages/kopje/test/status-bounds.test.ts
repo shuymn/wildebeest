@@ -16,7 +16,7 @@ import {
 import { BUILD } from './helpers'
 import { ALICE, setup, type Setup } from './inbox-status-helpers'
 import { localSnapshotAtCap } from './local-emoji-helpers'
-import { fullestFields, MAX_BIO } from './profile-fixtures'
+import { fullestFields, MAX_BIO, MOVED_ROW_SQLITE_MAX } from './profile-fixtures'
 import { observedSql, rowsRead } from './read-helpers'
 import { community, post, remoteAccount } from './status-helpers'
 import { heap } from './status-row-fixtures'
@@ -24,7 +24,6 @@ import { selectSql } from '../src/db/columns'
 import { Db } from '../src/db/sql'
 import {
 	getAccount,
-	MOVED_ACCOUNT_CAPS,
 	MOVED_ACCOUNT_COLUMNS,
 	MOVED_CREATED_AT_LIMIT,
 	MOVED_DISPLAY_NAME_LIMIT,
@@ -160,11 +159,7 @@ const MOVED_ACCOUNT_JSON_MAX = utf8Length(
 		suspended: true,
 	})
 )
-// What a moved-to account's row reads at most: SQLite bytes (8 for a number, as `measured` counts them) and heap.
-const MOVED_ROW_SQLITE_MAX = Object.values(MOVED_ACCOUNT_CAPS).reduce(
-	(sum, bytes) => sum + (bytes === 0 ? 8 : bytes),
-	0
-)
+// What a moved-to account's row reads at most: SQLite bytes (profile-fixtures.ts MOVED_ROW_SQLITE_MAX) and heap.
 const MOVED_ROW_HEAP_MAX = MOVED_ACCOUNT_COLUMNS.rowHeap
 
 // The nested moved-to accounts a presented value shows (each `moved` that is an account).
@@ -1444,6 +1439,17 @@ describe('the table of maxima (RES-3)', () => {
 			report: 5_885_290,
 			reportNotification: 408_654,
 		})
+	}, 600_000)
+
+	// What an answer of many accounts reads past its budget (one chunk of accounts.ts ANSWER_CHUNK, 50, each with its
+	// moved-to account) and what a page of 80 accounts serializes to at most, from the account occurrence.
+	it('bounds a chunk of accounts read past an answer and a page of 80, from the account occurrence', async () => {
+		const { shapes } = await measureFill('raw')
+		const conservative = await conservativeJson()
+		expect({
+			chunk: 50 * (shapes.account!.sqlite + MOVED_ROW_SQLITE_MAX),
+			page: 80 * conservative.account!,
+		}).toEqual({ chunk: 6_666_350, page: 11_455_040 })
 	}, 600_000)
 
 	// Half of the Store isolate's 128 MB. A timeline's largest item is a status, a quote or a boost of a quote; groups
