@@ -17,6 +17,8 @@ import {
 	sql,
 } from './api-helpers'
 import { NOW } from './app-helpers'
+import { plannedRun, remoteAccounts, scansOf, staleStatistics } from './read-helpers'
+import { accountForLogin } from '../src/domain/oauth'
 import { callStore } from '../src/platform/store-client'
 import { pkceChallenge } from '../src/security/tokens'
 
@@ -949,4 +951,23 @@ describe('suspension', () => {
 		expect(response.status).toBe(403)
 		expect(await response.json()).toEqual({ error: 'Your login is currently disabled' })
 	})
+})
+
+describe('login with stale statistics (RES-7)', () => {
+	it('reads the local accounts and seeks the account by id, remote accounts grown after ANALYZE', async () => {
+		const h = await withAlice()
+		await seedAccount(h.store, { username: 'bob', email: 'bob@example.com' })
+		const run = () => plannedRun(h, /FROM local_accounts l/, accountForLogin, { email: 'Alice@Example.com' })
+		const { before, after } = await staleStatistics(h, {
+			capture: () => run(),
+			grow: () => remoteAccounts(h, 100, 200),
+		})
+		expect(after.result).toEqual(before.result)
+		expect(after.result).toEqual({ status: 'ok', accountId: h.aliceId, username: 'alice' })
+		expect(after.plans).toHaveLength(1)
+		const { plan, rows } = after.plans[0]!
+		expect(plan).toEqual(['SCAN l', 'SEARCH a USING INDEX sqlite_autoindex_accounts_1 (id=?)'])
+		expect(scansOf(plan, ['a'])).toEqual([])
+		expect(rows).toBe(before.plans[0]!.rows)
+	}, 60_000)
 })

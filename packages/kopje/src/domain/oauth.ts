@@ -1,6 +1,7 @@
 import { CREDENTIAL_EPOCH_SQL } from './auth'
 import { readOperation, sessionOperation, writeOperation } from './operation'
 import { sweepWebState } from './web-session'
+import { ACCOUNTS_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
 import { withinScopes } from '../security/scopes'
 import { constantTimeEqual } from '../security/tokens'
@@ -185,10 +186,12 @@ export const authorizeContext = readOperation<
 export type LoginAccount =
 	{ status: 'ok'; accountId: string; username: string } | { status: 'no_account' } | { status: 'suspended' }
 
+// The local accounts (no index serves lower(email)), each account then sought by id, never a scan of the remote ones
+// (RES-7).
 function loginAccount(db: Db, email: string): LoginAccount {
 	const row = db.first<{ account_id: string; username: string; suspended_at: string | null }>(
 		`SELECT l.account_id, a.username, l.suspended_at
-		FROM local_accounts l JOIN accounts a ON a.id = l.account_id
+		FROM local_accounts l CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = l.account_id
 		WHERE lower(l.email) = lower(?)`,
 		email
 	)
