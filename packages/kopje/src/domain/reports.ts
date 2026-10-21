@@ -845,9 +845,10 @@ export const reportTargetPage = readOperation<
 		: { ok: true, page: accountUrl(row, origin) }
 })
 
-// Whether `id` is a report's (Admin::AccountAction#report: Report.find, RecordNotFound otherwise).
-export function reportExists(db: Db, id: string): boolean {
-	return reportRow(db, id) !== undefined
+// Report `id`'s stored status_ids (Admin::AccountAction#status_ids, include_statuses being always true there), by its
+// key; undefined when `id` is no report's.
+export function reportStatusIds(db: Db, id: string): string | undefined {
+	return reportRow(db, id)?.status_ids
 }
 
 // Admin::AccountAction with type none and a report_id (process_reports!): resolves that report, logged as Mastodon logs

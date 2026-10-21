@@ -218,6 +218,19 @@ bound`. Kopje writes the still preview URL of the upload the image names. A loca
 has no such columns: it restores into a Store at its own migrations, which then upgrades. A file built from legacy data
 writes NULL.
 
+Account warnings (migration `0062_account_warnings`): an `account_warnings` row names a local account
+(`target_account_id`, a `local_accounts` row) and holds `action` `none`; `text` of at most 10,000 UTF-8 bytes with no
+NUL (empty for none); `status_ids` NULL or a JSON array of at most 100 ids, each a string of 18 ASCII digits, within
+2,101 bytes and with no NUL; and `created_at` as `YYYY-MM-DDTHH:MM:SS.sssZ` with an hour of 00 to 23.
+`notifications.account_warning_id` is NULL, or the warning of a `moderation_warning` notification, one notification per
+warning; it is shown only to the warning's target, sent by that target. The table comes after `local_accounts` and
+before `notifications`, and `sqlite_sequence` carries its id counter, so a restored Store never gives a warning id
+twice. A chunk past these fails with the CHECK's name (`account_warning_action`,
+`account_warning_text_within_10000_bytes`, `account_warning_status_ids_within_100_ids_and_2101_bytes`,
+`account_warning_created_at_iso`), `account_warnings: status_ids past its stored bound`, or a `UNIQUE` or
+`FOREIGN KEY` failure. A dump taken before 0062 has neither: it restores into a Store at its own migrations, which then
+upgrades. A file built from legacy data has no row and writes NULL for the column.
+
 A report (migration `0054_remote_reports`) names any account as its reporter (`account_id`), once per `uri` and
 reported account, with `status_ids` of at most 100 ids within 2,101 UTF-8 bytes (compact JSON of 18-digit ids), a
 `uri` within 4,096 JSON-escaped UTF-8 bytes and a `comment` within 20,000 UTF-8 bytes (and 5,000 code points up to any

@@ -36,6 +36,7 @@ import {
 	TOKEN_ROUND_ROWS,
 } from '../src/domain/suspension'
 import type { StoreStub } from '../src/platform/store-client'
+import { WARNING_TEXT_BYTES } from '../src/platform/stored-bounds'
 import { sha256Hex } from '../src/security/tokens'
 
 // Local suspension through the Mastodon admin API (R1, R37, VIS-29; Admin::AccountAction, SuspendAccountService,
@@ -65,10 +66,10 @@ async function act(
 	h: ApiHarness,
 	token: string | null,
 	id: string,
-	body: Record<string, string>,
+	body: Record<string, unknown>,
 	as: 'form' | 'json' = 'form'
 ): Promise<Answer> {
-	const init = as === 'form' ? form(body) : json(body)
+	const init = as === 'form' ? form(body as Record<string, string>) : json(body)
 	return answer(await h.request(`/api/v1/admin/accounts/${id}/action`, token === null ? init : bearer(token, init)))
 }
 
@@ -197,10 +198,14 @@ describe('the account action and unsuspend: who is answered (R37, VIS-29)', () =
 describe('the account action types (Admin::AccountAction)', () => {
 	it("answers Fedilab's request shapes: a suspend, a none with its text, and the types Kopje does not serve", async () => {
 		const { h, admin, alice, bob } = await world()
-		// AccountReportActivity: none with the comment and the email flag; text is dropped (no strikes).
+		// AccountReportActivity: none with the comment and the email flag warns bob (account warnings, below).
 		expect(await act(h, admin, bob.id, { type: 'none', text: 'please stop', send_email_notification: 'true' })).toEqual(
 			{ status: 200, body: {} }
 		)
+		expect(await warnings(h.store)).toMatchObject([{ target_account_id: bob.id, text: 'please stop' }])
+		expect(await warningNotifications(h.store)).toEqual([{ account_id: bob.id, from_account_id: bob.id }])
+		const warned = (await logRows(h.store)).map((row) => [row.action, row.target_type])
+		expect(warned).toEqual([['create', 'AccountWarning']])
 		// AdminAccountActivity sends "disable " with a trailing space, and silence; Kopje serves neither.
 		const outside = { status: 422, body: { error: 'Validation failed: Type is not included in the list' } }
 		for (const type of ['disable ', 'disable', 'sensitive', 'silence', 'warn']) {
@@ -213,18 +218,16 @@ describe('the account action types (Admin::AccountAction)', () => {
 		expect(await act(h, admin, bob.id, { type: '' })).toMatchObject({ status: 422 })
 		// None of these changed anything or logged.
 		expect(await suspendedAt(h.store, bob.id)).toMatchObject({ suspended_at: null })
-		expect(await logRows(h.store)).toEqual([])
+		expect((await logRows(h.store)).map((row) => [row.action, row.target_type])).toEqual(warned)
 		// An id that is no account's, or a report that does not exist, is not found.
 		expect(await act(h, admin, '999999999999999999', { type: 'suspend' })).toMatchObject({ status: 404 })
 		expect(await act(h, admin, alice.id, { type: 'suspend', report_id: '424242' })).toMatchObject({ status: 404 })
 		expect(await suspendedAt(h.store, alice.id)).toMatchObject({ suspended_at: null })
 		// AdminAccountActivity's suspend: the type alone, as a form; JSON reads alike.
 		expect(await act(h, admin, alice.id, { type: 'suspend' })).toEqual({ status: 200, body: {} })
-		expect(await act(h, admin, alice.id, { type: 'suspend', warning_preset_id: '1' }, 'json')).toEqual({
-			status: 200,
-			body: {},
-		})
-		expect((await logRows(h.store)).map((row) => row.action)).toEqual(['suspend', 'suspend'])
+		expect(await act(h, admin, alice.id, { type: 'suspend' }, 'json')).toEqual({ status: 200, body: {} })
+		expect((await logRows(h.store)).map((row) => row.action)).toEqual(['create', 'suspend', 'suspend'])
+		expect(await warnings(h.store)).toHaveLength(1)
 	})
 
 	it('none with a report_id resolves that report only', async () => {
@@ -244,9 +247,161 @@ describe('the account action types (Admin::AccountAction)', () => {
 			{ id: first, by: h.users.owner.id },
 			{ id: second, by: null },
 		])
+		// The warning it gives alice is logged before the resolution (account warnings, below).
 		expect((await logRows(h.store)).map((row) => [row.action, row.target_type, row.target_id])).toEqual([
+			['create', 'AccountWarning', expect.any(String)],
 			['resolve', 'Report', first],
 		])
+		expect(bob).toBeDefined()
+	})
+})
+
+const warnings = (store: StoreStub) =>
+	sql<{ id: string; target_account_id: string; action: string; text: string; status_ids: string | null }>(
+		store,
+		'SELECT CAST(id AS TEXT) AS id, target_account_id, action, text, status_ids FROM account_warnings ORDER BY id'
+	)
+
+const warningNotifications = (store: StoreStub) =>
+	sql<{ account_id: string; from_account_id: string }>(
+		store,
+		"SELECT account_id, from_account_id FROM notifications WHERE type = 'moderation_warning' ORDER BY id"
+	)
+
+// A report of `target` by bob naming `statuses` (none: an empty status_ids).
+async function fileReport(h: ApiHarness, target: string, statuses: string[] = []): Promise<string> {
+	const response = await h.request(
+		'/api/v1/reports',
+		bearer(await userToken(h, 'bob@example.com', 'write:reports'), json({ account_id: target, status_ids: statuses }))
+	)
+	expect(response.status).toBe(200)
+	return (await response.json<{ id: string }>()).id
+}
+
+describe('account warnings (Admin::AccountAction#process_strike! and #process_notification!)', () => {
+	it('refuses any warning_preset_id (no presets: AccountWarningPreset.find raises) before any write', async () => {
+		const { h, admin, alice, bob } = await world()
+		const report = await fileReport(h, alice.id)
+		const notFound = { status: 404, body: { error: 'Record not found' } }
+		for (const type of ['none', 'suspend']) {
+			expect(await act(h, admin, alice.id, { type, report_id: report, warning_preset_id: '1' })).toEqual(notFound)
+			expect(await act(h, admin, alice.id, { type, report_id: report, warning_preset_id: 1 }, 'json')).toEqual(notFound)
+		}
+		expect(await suspendedAt(h.store, alice.id)).toMatchObject({ suspended_at: null })
+		expect(await sql(h.store, 'SELECT action_taken_at FROM reports')).toEqual([{ action_taken_at: null }])
+		expect(await warnings(h.store)).toEqual([])
+		expect(await logRows(h.store)).toEqual([])
+		// A blank one is not sent (present?).
+		expect(await act(h, admin, bob.id, { type: 'none', warning_preset_id: ' ' })).toEqual({ status: 200, body: {} })
+		expect(await warnings(h.store)).toHaveLength(1)
+	})
+
+	it('bounds the text: 10,000 UTF-8 bytes are kept as sent, more or a NUL answer 422 with no effect', async () => {
+		const { h, admin, alice } = await world()
+		const refused = {
+			status: 422,
+			body: { error: 'Validation failed: Text must be at most 10,000 UTF-8 bytes with no NUL' },
+		}
+		const atBound = '\u00e9'.repeat(WARNING_TEXT_BYTES / 2)
+		// 10,001 bytes; a NUL; a lone surrogate past the bound once made well-formed (U+FFFD, three bytes).
+		for (const text of [`a${atBound}`, 'a\u0000b', `${'a'.repeat(WARNING_TEXT_BYTES - 2)}\ud800`]) {
+			for (const type of ['none', 'suspend']) {
+				expect(await act(h, admin, alice.id, { type, text }, 'json')).toEqual(refused)
+			}
+		}
+		expect(await suspendedAt(h.store, alice.id)).toMatchObject({ suspended_at: null })
+		expect(await logRows(h.store)).toEqual([])
+		expect(await act(h, admin, alice.id, { type: 'none', text: atBound }, 'json')).toEqual({ status: 200, body: {} })
+		// Whitespace is kept, a number arrives as its JSON text, and absent or null is empty.
+		expect(await act(h, admin, alice.id, { type: 'none', text: '  two\n' })).toMatchObject({ status: 200 })
+		expect(await act(h, admin, alice.id, { type: 'none', text: 42 }, 'json')).toMatchObject({ status: 200 })
+		expect(await act(h, admin, alice.id, { type: 'none' })).toMatchObject({ status: 200 })
+		expect(await act(h, admin, alice.id, { type: 'none', text: null }, 'json')).toMatchObject({ status: 200 })
+		expect((await warnings(h.store)).map((row) => row.text)).toEqual([atBound, '  two\n', '42', '', ''])
+	})
+
+	it('reads send_email_notification as Rails casts a boolean, in its own case', async () => {
+		const { h, admin, alice } = await world()
+		const sent: [unknown, boolean][] = [
+			[undefined, true],
+			['true', true],
+			['yes', true],
+			['False', true],
+			['Off', true],
+			[' ', true],
+			[true, true],
+			['false', false],
+			['FALSE', false],
+			['f', false],
+			['F', false],
+			['0', false],
+			['off', false],
+			['OFF', false],
+			['', false],
+			[false, false],
+			[null, false],
+			[0, false],
+		]
+		for (const [value, warned] of sent) {
+			const before = (await warnings(h.store)).length
+			const body = value === undefined ? { type: 'none' } : { type: 'none', send_email_notification: value }
+			expect(await act(h, admin, alice.id, body, 'json')).toEqual({ status: 200, body: {} })
+			expect((await warnings(h.store)).length - before, JSON.stringify(value)).toBe(warned ? 1 : 0)
+		}
+		// The same as a form.
+		expect(await act(h, admin, alice.id, { type: 'none', send_email_notification: 'off' })).toMatchObject({
+			status: 200,
+		})
+		expect(await act(h, admin, alice.id, { type: 'none', send_email_notification: '' })).toMatchObject({ status: 200 })
+		const expected = sent.filter(([, warned]) => warned).length
+		expect(await warnings(h.store)).toHaveLength(expected)
+		expect(await warningNotifications(h.store)).toHaveLength(expected)
+		// Every stored warning is logged, empty text included; nothing is logged for one not stored.
+		expect((await logRows(h.store)).map((row) => [row.action, row.target_type])).toEqual(
+			Array.from({ length: expected }, () => ['create', 'AccountWarning'])
+		)
+	})
+
+	it('warns no remote account and no suspended one by suspend; a suspended target keeps its warning unnotified', async () => {
+		const { h, admin, alice, bob } = await world()
+		const carol = await remoteAccount(h.store, 'carol')
+		expect(await act(h, admin, carol, { type: 'none', text: 'remote' })).toMatchObject({ status: 200 })
+		expect(await act(h, admin, alice.id, { type: 'suspend', text: 'gone' })).toMatchObject({ status: 200 })
+		expect(await warnings(h.store)).toEqual([])
+		// alice is suspended: none still stores (and logs) the warning, which R15 drops as unavailable.
+		expect(await act(h, admin, alice.id, { type: 'none', text: 'still' })).toMatchObject({ status: 200 })
+		expect(await warnings(h.store)).toMatchObject([{ target_account_id: alice.id, text: 'still' }])
+		expect(await warningNotifications(h.store)).toEqual([])
+		expect((await logRows(h.store)).map((row) => row.action)).toEqual(['suspend', 'create'])
+		expect(bob).toBeDefined()
+	})
+
+	it("copies the named report's status_ids, logs the warning before the resolution, and drops a refused copy", async () => {
+		const { h, admin, alice, bob } = await world()
+		const status = (await post(h, alice, { status: 'reported' })).id
+		const report = await fileReport(h, alice.id, [status])
+		expect(await act(h, admin, alice.id, { type: 'none', report_id: report, text: 'see' })).toMatchObject({
+			status: 200,
+		})
+		expect(await act(h, admin, alice.id, { type: 'none', text: 'no report' })).toMatchObject({ status: 200 })
+		expect((await warnings(h.store)).map((row) => row.status_ids)).toEqual([JSON.stringify([status]), null])
+		const [first] = await warnings(h.store)
+		expect((await logRows(h.store)).map((row) => [row.action, row.target_type, row.target_id])).toEqual([
+			['create', 'AccountWarning', first!.id],
+			['resolve', 'Report', report],
+			['create', 'AccountWarning', expect.any(String)],
+		])
+		// A restored report may hold elements the warning's bound refuses (its CHECK judges none): the action succeeds
+		// and the warning keeps no status_ids. An empty list is copied as it is.
+		for (const [ids, copied] of [
+			['[1]', null],
+			['["bad"]', null],
+			['[]', '[]'],
+		] as const) {
+			await sql(h.store, 'UPDATE reports SET status_ids = ?, action_taken_at = NULL WHERE id = ?', ids, report)
+			expect(await act(h, admin, alice.id, { type: 'none', report_id: report })).toEqual({ status: 200, body: {} })
+			expect((await warnings(h.store)).at(-1)?.status_ids, ids).toBe(copied)
+		}
 		expect(bob).toBeDefined()
 	})
 })

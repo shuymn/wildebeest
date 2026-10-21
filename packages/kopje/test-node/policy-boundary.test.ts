@@ -230,6 +230,16 @@ const RULES: readonly Rule[] = [
 				'the round, the lists (allowance, the per-author maximum, the 200-row bound) and the Access admin’s reviews',
 		},
 	},
+	{
+		// R42: a warning is its target's alone, read only through the target's own moderation_warning notification (the
+		// rule, shownSql, checks that the notification names one of its recipient's).
+		name: 'reads or writes account_warnings',
+		pattern: new RegExp(`\\b(?:FROM|JOIN|INTO|UPDATE)\\s+${table(['account_warnings'])}`, 'i'),
+		allowed: {
+			...POLICY_ONLY,
+			'src/domain/account-warnings.ts': 'the admin action’s writes and the presenter of the target’s notification',
+		},
+	},
 ]
 
 const files = (texts: Record<string, string>): Source[] => Object.entries(texts).map(([path, text]) => ({ path, text }))
@@ -333,6 +343,11 @@ const RULE_FIXTURES: readonly [name: string, flagged: string, passed: string][] 
 		'reads or writes trends',
 		"db.run('DELETE FROM status_trend_reviews WHERE status_id = ?')",
 		"db.all('SELECT trend_tags_listed FROM x')",
+	],
+	[
+		'reads or writes account_warnings',
+		"db.all('SELECT text FROM account_warnings w')",
+		"db.all('SELECT account_warning_id FROM notifications')",
 	],
 ]
 

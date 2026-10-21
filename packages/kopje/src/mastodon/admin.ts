@@ -387,9 +387,16 @@ export function actOnAccount(action: AdminAccountAction): ApiHandler {
 	}
 }
 
+// send_email_notification as Admin::AccountAction's boolean attribute casts it (default true): absent is true, blank
+// (JSON null reads as blank) is nil, which is false, and ActiveModel::Type::Boolean::FALSE_VALUES are false, each in
+// its own case only (parseBoolean folds case, so 'False' would be false there; Rails casts it to true).
+const ACTION_NOTIFICATION_OFF: readonly string[] = ['', '0', 'f', 'F', 'false', 'FALSE', 'off', 'OFF']
+
 // POST /api/v1/admin/accounts/:account_id/action (Api::V1::Admin::AccountActionsController#create): type, report_id,
-// warning_preset_id, text and send_email_notification, as form fields (Fedilab) or JSON. A type or report_id sent blank
-// is not sent (`present?`). Answers an empty object (render_empty) once the action is done.
+// warning_preset_id, text and send_email_notification, as form fields (Fedilab) or JSON. A type, report_id or
+// warning_preset_id sent blank is not sent (`present?`); text is as sent, empty when absent (text_for_warning's
+// compact.join). No email is sent: send_email_notification decides whether a local target is warned
+// (domain/admin-accounts.ts). Answers an empty object (render_empty) once the action is done.
 export const accountAction: ApiHandler = async (c, deps) => {
 	const p = await requestParams(c, deps)
 	if (p instanceof Response) {
@@ -404,6 +411,9 @@ export const accountAction: ApiHandler = async (c, deps) => {
 		id: c.req.param('account_id') ?? '',
 		type: sent('type'),
 		reportId: sent('report_id'),
+		warningPresetId: sent('warning_preset_id'),
+		text: p.get('text') ?? '',
+		notify: !ACTION_NOTIFICATION_OFF.includes(p.get('send_email_notification') ?? 'true'),
 	}
 	const result: AccountActionResult = authorized(await storeCall(c, deps, (s, b) => s.adminAccountAction(b, input)))
 	switch (result.status) {

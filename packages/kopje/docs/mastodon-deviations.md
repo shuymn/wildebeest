@@ -144,6 +144,28 @@ Search (`/api/v2/search`, `/api/v1/accounts/search`):
 - With `resolve=true`, an `acct:user@domain` query is resolved as `user@domain` is; Mastodon's `MENTION_RE` gate
   (`account_search_service.rb`, `username_complete?`) does not take the `acct:` form.
 
+Admin account actions (`POST /api/v1/admin/accounts/:account_id/action`):
+
+- No email is sent: Kopje has no mailer. `send_email_notification` decides only whether a local target is warned (a
+  `moderation_warning` notification), read as Rails casts it: absent is true; empty, JSON `null` and `0`, `f`, `F`,
+  `false`, `FALSE`, `off`, `OFF` are false; anything else (`False` and `Off` included) is true.
+- `text` is at most 10,000 UTF-8 bytes with no NUL (422 `Validation failed: Text must be at most 10,000 UTF-8 bytes
+with no NUL`, before any write); Mastodon has no bound, and a NUL is its 500.
+- Kopje has no warning presets, so any non-blank `warning_preset_id` answers 404 `Record not found` with no effect, as
+  an unknown one does in Mastodon.
+- Whether the target is notified is judged in the action's own transaction; Mastodon judges it when its
+  `LocalNotificationWorker` runs. A target suspended between the action and that worker gets no notification in
+  Mastodon, while Kopje's is hidden only while the suspension lasts; a target unsuspended in that window is notified
+  in Mastodon of a warning given while suspended, which Kopje did not notify.
+- A warning's `appeal` is always `null`: there are no disputes, through which Mastodon files appeals.
+- A warning's `status_ids` is `null` when the named report's stored `status_ids` are not a list of at most 100 18-digit
+  ids (only a restored report can hold that); the action still succeeds.
+- Mastodon keeps a strike for `suspend`, for a remote target and with the notification off; Kopje keeps none of them.
+  Its API shows none of the last two, and a suspension's only when the target is unsuspended before Mastodon's
+  `LocalNotificationWorker` runs (it then notifies the warning); Kopje judges the target in the action's transaction,
+  where a `suspend` warns nobody.
+- The push title of a `moderation_warning` is the account's name; Mastodon's English locale has no subject for it.
+
 Request parameters:
 
 - Of repeated parts of a declared file parameter (`avatar`, `header`, `file`, `thumbnail`), text or file, the last is

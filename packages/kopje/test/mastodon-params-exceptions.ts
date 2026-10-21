@@ -27,12 +27,6 @@ export const PARAM_EXCEPTIONS: Exceptions = {
 		'username'
 	),
 	'POST /api/v1/emails/confirmations': accepted('MD-1', 'email'),
-	'POST /api/v1/admin/accounts/:account_id/action': open(
-		'no warning or notification reaches a local target',
-		'send_email_notification',
-		'text',
-		'warning_preset_id'
-	),
 	'POST /api/v1/admin/measures': open(
 		'only instance_follows is answered; the period is not read',
 		'end_at',

@@ -24,6 +24,9 @@ import { selectSql } from '../src/db/columns'
 import { Db, VALUE_BYTES } from '../src/db/sql'
 import {
 	getAccount,
+	MAX_FIELD_NAME,
+	MAX_FIELD_VALUE,
+	MAX_FIELDS,
 	MOVED_ACCOUNT_COLUMNS,
 	MOVED_CREATED_AT_LIMIT,
 	MOVED_DISPLAY_NAME_LIMIT,
@@ -72,6 +75,9 @@ import {
 	presentedEmojiBytes,
 	STATIC_URL_LIMIT,
 	STATUS_EMOJIS_BYTES,
+	WARNING_STATUS_IDS,
+	WARNING_STATUS_IDS_BYTES,
+	WARNING_TEXT_BYTES,
 } from '../src/platform/stored-bounds'
 import {
 	jsonStringBytes,
@@ -82,6 +88,7 @@ import {
 	STATUS_CONTENT_BYTES,
 } from '../src/security/html'
 import { sha256Hex } from '../src/security/tokens'
+import { STREAM_LIMITS } from '../src/stream-hub'
 
 // RES-2: one presented status has a known size. Each column a remote server controls is bounded where it is stored
 // (the stored-bound triggers of 0048_stored_bounds), and identities, hashtag names and poll choices again as they are
@@ -127,6 +134,16 @@ const REPORT_COMMENTS: Record<Fill, string> = {
 	derived: '\u0001'.repeat(5_000),
 	raw: '𠀀'.repeat(5_000),
 	'emoji-poll': '\u0000' + '\u0001'.repeat(19_999),
+}
+// A warning's text at its stored bound for each fill (migration 0062_account_warnings, CHECK
+// account_warning_text_within_10000_bytes, which allows no NUL): 10,000 bytes of U+0001, each 6 JSON-escaped bytes,
+// which Kopje's writer makes too (escaped, derived, emoji-poll); and 10,000 malformed bytes (raw: 0xFF, no UTF-8 lead
+// byte), which an import may store and which read back as 10,000 three-byte U+FFFD.
+const WARNING_TEXTS: Record<Fill, string | ArrayBuffer> = {
+	escaped: '\u0001'.repeat(WARNING_TEXT_BYTES),
+	derived: '\u0001'.repeat(WARNING_TEXT_BYTES),
+	raw: new Uint8Array(WARNING_TEXT_BYTES).fill(0xff).buffer,
+	'emoji-poll': '\u0001'.repeat(WARNING_TEXT_BYTES),
 }
 const W = '𠀀'
 const RAW_BIO = `<p>${'x'.repeat(REMOTE_BIO_BYTES - 9)}</p>`
@@ -1024,6 +1041,8 @@ type FillMeasure = {
 	heaps: Record<string, Heaps>
 	// The nested moved-to accounts each shape shows: how many, and what their JSON lacks of MOVED_ACCOUNT_JSON_MAX.
 	moved: Record<string, { count: number; deficit: number }>
+	// The moderation_warning notification as a stream payload: its JSON encoded again as a string (stream-hub.ts).
+	warningPayload: number
 }
 const fills = new Map<Fill, Promise<FillMeasure>>()
 
@@ -1171,6 +1190,91 @@ async function measureShapes(fill: Fill): Promise<FillMeasure> {
 	)
 	const shownReport = (reported.answer as { report: { statuses: { id: string }[] } }).report
 	expect(shownReport.statuses.map((status) => status.id)).toEqual([quote])
+	// A moderation_warning of a local account at its bounds (the fill's maximal account made local: without the moved-to
+	// account, actor document and fetch a local row may not hold, and with MAX_FIELDS local fields at their limits in the
+	// fill's character), its text at its stored bound for the fill (WARNING_TEXTS) and status_ids of 100 ids, read by
+	// the target in v1 and v2: the account twice, as the sender and as the warning's target_account.
+	const target = await maximalAccount(t, false, fill)
+	await sql(
+		t.store,
+		'UPDATE accounts SET moved_to_account_id = NULL, domain = NULL, raw = NULL, fetched_at = NULL WHERE id = ?',
+		target
+	)
+	const fieldChar = fill === 'raw' ? W : C
+	await sql(
+		t.store,
+		`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey, fields)
+		VALUES (?, ?, X'00', X'00', 'k', ?)`,
+		target,
+		`${target}@kopje.test`,
+		JSON.stringify(
+			Array.from({ length: MAX_FIELDS }, () => ({
+				name: fieldChar.repeat(MAX_FIELD_NAME),
+				value: fieldChar.repeat(MAX_FIELD_VALUE),
+			}))
+		)
+	)
+	const targetToken = 'warned-token'
+	await sql(
+		t.store,
+		"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES (?, 'access', 'test', ?, 'read')",
+		await sha256Hex(targetToken),
+		target
+	)
+	const warningIds = Array.from({ length: WARNING_STATUS_IDS }, (_, i) => String(980000000000000000 + i))
+	const [warningRow] = await sql<{ id: number }>(
+		t.store,
+		`INSERT INTO account_warnings (target_account_id, action, text, status_ids, created_at)
+		VALUES (?, 'none', CAST(? AS TEXT), ?, ?) RETURNING id`,
+		target,
+		WARNING_TEXTS[fill],
+		JSON.stringify(warningIds),
+		new Date(NOW).toISOString()
+	)
+	await sql(
+		t.store,
+		`INSERT INTO notifications (account_id, type, from_account_id, account_warning_id, created_at)
+		VALUES (?1, 'moderation_warning', ?1, ?2, ?3)`,
+		target,
+		warningRow!.id,
+		new Date(NOW).toISOString()
+	)
+	const targetCredential = { tokenHash: await sha256Hex(targetToken), scope: 'read', now: NOW }
+	const warned = await measured(
+		t,
+		listNotifications as never,
+		{
+			credential: targetCredential,
+			page: { limit: 1 },
+			types: ['moderation_warning'],
+			excludeTypes: [],
+			accountId: null,
+			includeFiltered: false,
+			present: { origin: ORIGIN },
+		} as never
+	)
+	const [warningNotification] = (
+		warned.answer as { items: { account: unknown; moderation_warning: { text: string; status_ids: string[] } }[] }
+	).items
+	const { text: warningText, status_ids: warningStatusIds } = warningNotification!.moderation_warning
+	expect(jsonBytes(warningText)).toBe(fill === 'raw' ? 3 * WARNING_TEXT_BYTES + 2 : 6 * WARNING_TEXT_BYTES + 2)
+	expect(jsonBytes(warningStatusIds)).toBe(WARNING_STATUS_IDS_BYTES)
+	expect(warningNotification!.moderation_warning).toMatchObject({ target_account: warningNotification!.account })
+	const warnedGroup = await measured(
+		t,
+		listGroupedNotifications as never,
+		{
+			credential: targetCredential,
+			page: { limit: 1 },
+			types: ['moderation_warning'],
+			excludeTypes: [],
+			groupedTypes: null,
+			includeFiltered: false,
+			expandAccounts: 'full',
+			present: { origin: ORIGIN },
+		} as never
+	)
+	const { next: _warnedNext, prev: _warnedPrev, ...warningGroup } = warnedGroup.answer as Record<string, unknown>
 	const account = (one.answer as Presented).account
 	const two = await read(t, getStatus, quote)
 	const answers: Record<string, unknown> = {
@@ -1182,8 +1286,11 @@ async function measureShapes(fill: Fill): Promise<FillMeasure> {
 		group,
 		report: shownReport,
 		reportNotification: adminReport,
+		warningNotification,
+		warningGroup,
 	}
 	return {
+		warningPayload: utf8Length(JSON.stringify(JSON.stringify(warningNotification))),
 		moved: Object.fromEntries(
 			Object.entries(answers).map(([name, answer]) => {
 				const nested = movedAccounts(answer)
@@ -1203,6 +1310,8 @@ async function measureShapes(fill: Fill): Promise<FillMeasure> {
 			group: shape({ ...grouped, answer: group }),
 			report: shape({ ...reported, answer: shownReport }),
 			reportNotification: shape({ ...notified, answer: adminReport }),
+			warningNotification: shape({ ...warned, answer: warningNotification }),
+			warningGroup: shape({ ...warnedGroup, answer: warningGroup }),
 		},
 		heaps: {
 			status: one.heaps,
@@ -1419,9 +1528,11 @@ describe('the table of maxima (RES-3)', () => {
 				quote: { sqlite: 4_954_507, json: 5_253_539, rows: 1918, nodes: 4736 },
 				boostOfQuote: { sqlite: 5_100_929, json: 5_662_490, rows: 1975, nodes: 5695 },
 				conversation: { sqlite: 6_308_582, json: 6_938_872, rows: 1944, nodes: 5831 },
-				group: { sqlite: 5_813_853, json: 6_377_539, rows: 1953, nodes: 5484 },
+				group: { sqlite: 5_813_933, json: 6_377_539, rows: 1953, nodes: 5484 },
 				report: { sqlite: 5_263_884, json: 5_850_006, rows: 1933, nodes: 5051 },
-				reportNotification: { sqlite: 812_389, json: 403_298, rows: 1061, nodes: 294 },
+				reportNotification: { sqlite: 812_397, json: 403_298, rows: 1061, nodes: 294 },
+				warningNotification: { sqlite: 93_518, json: 281_568, rows: 9, nodes: 215 },
+				warningGroup: { sqlite: 93_518, json: 281_757, rows: 9, nodes: 222 },
 			},
 		],
 		[
@@ -1433,9 +1544,11 @@ describe('the table of maxima (RES-3)', () => {
 				quote: { sqlite: 4_138_507, json: 4_434_339, rows: 1918, nodes: 4736 },
 				boostOfQuote: { sqlite: 4_284_929, json: 4_843_290, rows: 1975, nodes: 5695 },
 				conversation: { sqlite: 5_492_582, json: 6_119_672, rows: 1944, nodes: 5831 },
-				group: { sqlite: 4_997_853, json: 5_558_339, rows: 1953, nodes: 5484 },
+				group: { sqlite: 4_997_933, json: 5_558_339, rows: 1953, nodes: 5484 },
 				report: { sqlite: 4_432_884, json: 4_940_806, rows: 1933, nodes: 5051 },
-				reportNotification: { sqlite: 797_389, json: 313_298, rows: 1061, nodes: 294 },
+				reportNotification: { sqlite: 797_397, json: 313_298, rows: 1061, nodes: 294 },
+				warningNotification: { sqlite: 93_518, json: 281_568, rows: 9, nodes: 215 },
+				warningGroup: { sqlite: 93_518, json: 281_757, rows: 9, nodes: 222 },
 			},
 		],
 		[
@@ -1447,9 +1560,11 @@ describe('the table of maxima (RES-3)', () => {
 				quote: { sqlite: 6_818_451, json: 4_371_087, rows: 1918, nodes: 4712 },
 				boostOfQuote: { sqlite: 7_113_040, json: 4_618_812, rows: 1975, nodes: 5659 },
 				conversation: { sqlite: 8_495_999, json: 5_964_884, rows: 1944, nodes: 5663 },
-				group: { sqlite: 7_880_117, json: 5_434_063, rows: 1953, nodes: 5364 },
+				group: { sqlite: 7_880_197, json: 5_434_063, rows: 1953, nodes: 5364 },
 				report: { sqlite: 7_198_401, json: 4_844_108, rows: 1933, nodes: 5003 },
-				reportNotification: { sqlite: 2_360_569, json: 288_042, rows: 1061, nodes: 270 },
+				reportNotification: { sqlite: 2_360_577, json: 288_042, rows: 1061, nodes: 270 },
+				warningNotification: { sqlite: 129_431, json: 235_218, rows: 9, nodes: 215 },
+				warningGroup: { sqlite: 129_431, json: 235_407, rows: 9, nodes: 222 },
 			},
 		],
 		[
@@ -1461,9 +1576,11 @@ describe('the table of maxima (RES-3)', () => {
 				quote: { sqlite: 4_952_811, json: 5_277_741, rows: 1918, nodes: 4840 },
 				boostOfQuote: { sqlite: 5_099_233, json: 5_686_692, rows: 1975, nodes: 5799 },
 				conversation: { sqlite: 6_306_886, json: 6_963_074, rows: 1944, nodes: 5935 },
-				group: { sqlite: 5_812_157, json: 6_401_741, rows: 1953, nodes: 5588 },
+				group: { sqlite: 5_812_237, json: 6_401_741, rows: 1953, nodes: 5588 },
 				report: { sqlite: 5_262_188, json: 5_874_208, rows: 1933, nodes: 5155 },
-				reportNotification: { sqlite: 812_389, json: 403_298, rows: 1061, nodes: 294 },
+				reportNotification: { sqlite: 812_397, json: 403_298, rows: 1061, nodes: 294 },
+				warningNotification: { sqlite: 93_518, json: 281_568, rows: 9, nodes: 215 },
+				warningGroup: { sqlite: 93_518, json: 281_757, rows: 9, nodes: 222 },
 			},
 		],
 	])(
@@ -1493,6 +1610,8 @@ describe('the table of maxima (RES-3)', () => {
 				group: 10,
 				report: 4,
 				reportNotification: 2,
+				warningNotification: 0,
+				warningGroup: 0,
 			})
 		}
 		const [escaped, emojiPoll] = await Promise.all([measureFill('escaped'), measureFill('emoji-poll')])
@@ -1515,7 +1634,17 @@ describe('the table of maxima (RES-3)', () => {
 			group: 6_428_891,
 			report: 5_885_290,
 			reportNotification: 408_654,
+			warningNotification: 281_568,
+			warningGroup: 281_757,
 		})
+	}, 600_000)
+
+	// A moderation_warning is streamed as its notification's JSON encoded again as a string (stream-hub.ts), which
+	// escapes each backslash and quote once more: the most of every fill stays within the hub's payload limit.
+	it('keeps the moderation_warning stream payload within the hub’s limit', async () => {
+		const payloads = (await Promise.all(FILLS.map(measureFill))).map((fill) => fill.warningPayload)
+		expect(Math.max(...payloads)).toBe(324_414)
+		expect(Math.max(...payloads)).toBeLessThan(STREAM_LIMITS.payloadBytes)
 	}, 600_000)
 
 	// What an answer of many accounts reads past its budget (one chunk of accounts.ts ANSWER_CHUNK, 50, each with its
