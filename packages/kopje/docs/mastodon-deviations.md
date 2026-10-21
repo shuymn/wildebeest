@@ -126,10 +126,18 @@ Search (`/api/v2/search`, `/api/v1/accounts/search`):
 
 Request parameters:
 
-- Of repeated parts of a declared file parameter (`avatar`, `header`, `file`), text or file, the last is the one read,
-  as Rails assigns them; on `/api/v{1,2}/media` a file followed by a string answers 422 `File can't be blank`, where
-  Mastodon answers 400.
+- Of repeated parts of a declared file parameter (`avatar`, `header`, `file`, `thumbnail`), text or file, the last is
+  the one read, as Rails assigns them; on `/api/v{1,2}/media` a file followed by a string answers 422 `File can't be
+  blank`, where Mastodon answers 400.
 - A query value of a declared file parameter is read only when the body has none (Rails lets the query win).
+- Kopje media are images, so `thumbnail` (on `/api/v{1,2}/media` and `/api/v1/media/:id`) and
+  `media_attributes[][thumbnail]` (on a status edit) answer 422 `Validation failed: Thumbnail must be blank`, as
+  Mastodon validates an image's thumbnail. Any file part or non-empty text is a thumbnail; empty text or JSON `null`
+  is none. Text that is not a data URI answers 422, where Mastodon answers 500. The check runs before the file is
+  processed on an upload, before the media lookup on `/api/v1/media/:id`, and on an edit before the status and
+  `media_ids` are looked up, for any entry with an `id` (Mastodon reads only entries for the post's media). Mastodon
+  may report other validation errors first or alongside it. On `/api/v1/media/:id`, a multipart body larger than
+  1 MiB plus 16 KiB answers 413.
 - A multipart part with an empty filename is read as a text value, as workerd's parser reads it (Rack drops it as an
   empty file field): empty, it reads as absent; with bytes, a profile image answers 400.
 - A JSON body exceeding 10,000 generated parameter paths (object members, array objects and empty arrays; scalar

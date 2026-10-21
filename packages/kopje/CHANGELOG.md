@@ -82,6 +82,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   answers an empty list.
 - `GET /api/v2/search` with `resolve=true` and a `user@domain` query checks the token again after the lookup, so a
   token that expired during it answers 401.
+- `thumbnail` on `POST /api/v1/media`, `POST /api/v2/media` and `PUT`/`PATCH /api/v1/media/:id`, and
+  `media_attributes[][thumbnail]` on `PUT`/`PATCH /api/v1/statuses/:id`, answer 422 `Validation failed: Thumbnail must
+  be blank`, as Mastodon does for images; they were ignored. `PUT`/`PATCH /api/v1/media/:id` takes a multipart body
+  of at most 1 MiB plus 16 KiB.
 
 ### Instance changes
 
