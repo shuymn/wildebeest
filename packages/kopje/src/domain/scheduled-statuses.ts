@@ -61,9 +61,10 @@ export const PUBLISH_ROUND = 25
 // application_id is the client_id of the app it was scheduled through (an app's id, docs/mastodon-deviations.md
 // "Instance and apps"), null when storedApplicationId keeps none; the post is published through it, as stored, whether
 // or not the app still exists (a removed app's status presents `application: null`). quoted_status_id is the status
-// quoted (a boost's original), which R36 judges again when the post is published. The quote policy is the one the request chose, or the author's
-// default when it chose none, resolved when the post is scheduled (as Mastodon's controller resolves it), by name as
-// the serializer shows it. Ids are strings, and so is a poll's expires_in, as a form sends it.
+// quoted (a boost's original), which R36 judges again when the post is published. The quote policy is the one the
+// request chose, or the author's default when it chose none, resolved when the post is scheduled (as Mastodon's
+// controller resolves it), by name as the serializer shows it. Ids are strings, and so is a poll's expires_in, as a
+// form sends it.
 export type ScheduledParams = {
 	text: string
 	poll: ScheduledPoll | null
