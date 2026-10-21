@@ -56,6 +56,7 @@ export const NOTIFICATION_TYPES = [
 	'quote',
 	'quoted_update',
 	'admin.report',
+	'moderation_warning',
 ] as const satisfies readonly NotificationType[]
 const EVERY_TYPE: Exclude<NotificationType, (typeof NOTIFICATION_TYPES)[number]> extends never ? true : false = true
 void EVERY_TYPE
@@ -603,8 +604,8 @@ export class PolicyModel {
 	}
 
 	// R15 as notify writes a notification: shown, and its status (if any) not in a conversation the recipient mutes.
-	notified(r: number, type: NotificationType, from: number, s: number | null): boolean {
-		return (s === null || !this.conversationMuted(r, s)) && this.shown(r, type, from, s)
+	notified(r: number, type: NotificationType, from: number, s: number | null, warned: number | null = null): boolean {
+		return (s === null || !this.conversationMuted(r, s)) && this.shown(r, type, from, s, warned)
 	}
 
 	// R15's policy part (NotifyService::FilterCondition) for a recipient with Mastodon's default policy and no
@@ -671,16 +672,18 @@ export class PolicyModel {
 	}
 
 	// R15: whether the recipient is shown a notification of `type` from `from` about `s` (null: none). The sender is not
-	// the recipient (but for the end of their own poll), is available, is neither blocked (either way), muted with notifications nor domain-blocked by the
-	// recipient, and the recipient may see the status. A reblog needs the sender's boost of it to be visible to the
+	// the recipient (but for the end of their own poll and a moderation_warning, whose sender is its recipient), is
+	// available, is neither blocked (either way), muted with notifications nor domain-blocked by the recipient, and the
+	// recipient may see the status. A reblog needs the sender's boost of it to be visible to the
 	// recipient. A mention is left out when its status mentions (not silently) or replies to an account the recipient
 	// blocks or mutes with notifications. A post notification is shown only for a status that is not a reply, or is one
 	// in the author's own conversation (a known partner that is the author), and that home's filter passes. A
 	// quoted_update is shown while its status's quote is accepted and the recipient may see the quoted status. An
-	// admin.report is shown to the OAuth admin alone (R37).
-	shown(r: number, type: NotificationType, from: number, s: number | null): boolean {
+	// admin.report is shown to the OAuth admin alone (R37). A moderation_warning is shown only from the recipient itself,
+	// naming a warning of the recipient (`warned`: the target of the warning it names, null for none; R42).
+	shown(r: number, type: NotificationType, from: number, s: number | null, warned: number | null = null): boolean {
 		if (
-			(from === r && type !== 'poll') ||
+			(from === r && type !== 'poll' && type !== 'moderation_warning') ||
 			!this.available(from) ||
 			this.silences(r, from) ||
 			this.blocks(from, r) ||
@@ -718,6 +721,8 @@ export class PolicyModel {
 			}
 			case 'admin.report':
 				return r === this.admin
+			case 'moderation_warning':
+				return from === r && warned === r
 			default:
 				return true
 		}

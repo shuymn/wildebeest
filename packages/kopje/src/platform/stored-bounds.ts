@@ -695,15 +695,22 @@ export const MAX_LIVE_ANNOUNCEMENTS = 16
 export const REACTION_NAME_BYTES = 128
 export const MAX_REACTION_NAMES = 8
 
-// The text an admin write stores, or null when it is refused: made well-formed (a bound lone surrogate would be stored
-// as its three-byte encoding), then refused when blank after JavaScript's trim (which removes every character SQLite's
-// ASCII trim of the CHECK does, and Unicode spaces), when it holds a NUL, or when its UTF-8 passes the bound.
-export function storedAnnouncementText(raw: string): string | null {
+// Plain text an admin write stores, or null when it is refused: made well-formed (a bound lone surrogate would be
+// stored as its three-byte encoding), then refused when it holds a NUL or its UTF-8 passes `bytes` (a string of more
+// code units than `bytes` passes them without being encoded).
+function adminPlainText(raw: string, bytes: number): string | null {
 	const text = raw.toWellFormed()
-	if (text.trim() === '' || text.includes('\u0000') || text.length > ANNOUNCEMENT_TEXT_BYTES) {
+	if (text.includes('\u0000') || text.length > bytes) {
 		return null
 	}
-	return ENCODER.encode(text).length <= ANNOUNCEMENT_TEXT_BYTES ? text : null
+	return ENCODER.encode(text).length <= bytes ? text : null
+}
+
+// The text an announcement stores, or null when it is refused: adminPlainText's, also refused when blank after
+// JavaScript's trim (which removes every character SQLite's ASCII trim of the CHECK does, and Unicode spaces).
+export function storedAnnouncementText(raw: string): string | null {
+	const text = adminPlainText(raw, ANNOUNCEMENT_TEXT_BYTES)
+	return text === null || text.trim() === '' ? null : text
 }
 
 // ---- Trends: migration 0057_trends
@@ -972,5 +979,119 @@ export function accountStaticImagesMigrationSql(): string {
 			staticImagesPastBoundSql('NEW'),
 			'accounts: static image past its stored bound'
 		),
+	].join('\n\n')}\n`
+}
+
+// ---- Account warnings: migrations 0062_account_warnings and 0063_account_warning_notifications_key
+
+// account_warnings.text (RES-1, RES-2): the admin's plain text as sent, at most WARNING_TEXT_BYTES UTF-8 bytes with no
+// NUL; empty when none was sent. Mastodon sets no bound (and a NUL is its 500). Within the bytes it decodes to at most
+// as many UTF-16 code units, a malformed byte becoming one U+FFFD.
+export const WARNING_TEXT_BYTES = 10_000
+// account_warnings.status_ids: NULL, or a JSON array of at most WARNING_STATUS_IDS 18-digit status ids (the report's
+// own bound, MAX_REPORT_STATUSES in domain/reports.ts), so at most WARNING_STATUS_IDS_BYTES of '[', ']', the quoted ids
+// and their commas.
+export const WARNING_STATUS_IDS = 100
+export const WARNING_STATUS_ID_BYTES = 18
+export const WARNING_STATUS_IDS_BYTES = 2 + WARNING_STATUS_IDS * (WARNING_STATUS_ID_BYTES + 3) - 1
+
+// The text an admin action stores (adminPlainText at WARNING_TEXT_BYTES), or null when it is refused (422).
+export function storedWarningText(raw: string): string | null {
+	return adminPlainText(raw, WARNING_TEXT_BYTES)
+}
+
+const WARNING_STATUS_ID = /^[0-9]{18}$/
+
+// The writer twin of warningStatusIdsPastBoundSql: the ids of stored status_ids, or null for none or when the rule
+// refuses them (a restored report is bound only by its own CHECK, which does not judge the elements; a warning's own
+// are held by its triggers, so the presenter never throws on one). Judged in the trigger's order: bytes, NUL, JSON,
+// array, length, elements.
+export function warningStatusIdsOf(raw: string | null): string[] | null {
+	if (raw === null || raw.length > WARNING_STATUS_IDS_BYTES || raw.includes('\u0000')) {
+		return null
+	}
+	if (ENCODER.encode(raw).length > WARNING_STATUS_IDS_BYTES) {
+		return null
+	}
+	let ids: unknown
+	try {
+		ids = JSON.parse(raw)
+	} catch {
+		return null
+	}
+	if (!Array.isArray(ids) || ids.length > WARNING_STATUS_IDS) {
+		return null
+	}
+	return ids.every((id): id is string => typeof id === 'string' && WARNING_STATUS_ID.test(id)) ? ids : null
+}
+
+// The status_ids a warning stores for a report's stored status_ids, as JSON.stringify writes the ids warningStatusIdsOf
+// accepts (within the bytes when they pass), or null.
+export function storedWarningStatusIds(raw: string | null): string | null {
+	const ids = warningStatusIdsOf(raw)
+	return ids === null ? null : JSON.stringify(ids)
+}
+
+// The scalar parts of the status_ids bound, held by a CHECK for imports too: the storage class, the raw bytes (an
+// imported value may be malformed UTF-8, which length counts as fewer characters), NUL, then the JSON structure.
+// json_type and json_array_length run only on valid JSON (AND stops at the first false operand).
+export function warningStatusIdsCheckSql(column: string): string {
+	return `${column} IS NULL OR (typeof(${column}) = 'text'
+      AND length(CAST(${column} AS BLOB)) <= ${WARNING_STATUS_IDS_BYTES} AND instr(CAST(${column} AS BLOB), x'00') = 0
+      AND json_valid(${column}) AND json_type(${column}) = 'array'
+      AND json_array_length(${column}) <= ${WARNING_STATUS_IDS})`
+}
+
+// True when `column` holds status_ids past the bound, judged in order: the CHECK's scalar parts, then every element an
+// 18-digit decimal id as TEXT, judged on its decoded bytes, then NUL (a JSON escape decodes to a NUL that GLOB stops
+// at), then digits (a CHECK may not read json_each, so triggers judge the elements, as 0053 does).
+export function warningStatusIdsPastBoundSql(column: string): string {
+	return `CASE WHEN ${column} IS NULL THEN 0
+	WHEN typeof(${column}) <> 'text' THEN 1
+	WHEN length(CAST(${column} AS BLOB)) > ${WARNING_STATUS_IDS_BYTES} THEN 1
+	WHEN instr(CAST(${column} AS BLOB), x'00') > 0 THEN 1
+	WHEN NOT json_valid(${column}) THEN 1
+	WHEN json_type(${column}) <> 'array' THEN 1
+	WHEN json_array_length(${column}) > ${WARNING_STATUS_IDS} THEN 1
+	WHEN EXISTS (SELECT 1 FROM json_each(${column}) e WHERE e.type <> 'text'
+		OR length(CAST(e.value AS BLOB)) <> ${WARNING_STATUS_ID_BYTES} OR instr(CAST(e.value AS BLOB), x'00') > 0
+		OR e.value GLOB '*[^0-9]*') THEN 1
+	ELSE 0 END`
+}
+
+// The partial unique index of the notification of each warning (LocalNotificationWorker keys it by its activity, the
+// warning); its `account_warning_id = ?` serves the foreign key.
+export const NOTIFICATIONS_WARNING_INDEX = 'notifications_account_warning'
+
+// Migration 0062_account_warnings after its header (test/migrations.test.ts compares them): the table with its CHECKs
+// and cascade index, triggers that refuse a write where warningStatusIdsPastBoundSql holds, then the notification's
+// column, added without a default or CHECK so no row is read, and its partial unique index.
+export function accountWarningsMigrationSql(): string {
+	return `${[
+		`CREATE TABLE account_warnings (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  target_account_id TEXT NOT NULL REFERENCES local_accounts (account_id) ON DELETE CASCADE,
+  action TEXT NOT NULL CONSTRAINT account_warning_action CHECK (action = 'none'),
+  text TEXT NOT NULL DEFAULT '' CONSTRAINT account_warning_text_within_${WARNING_TEXT_BYTES}_bytes
+    CHECK (typeof(text) = 'text' AND length(CAST(text AS BLOB)) <= ${WARNING_TEXT_BYTES}
+      AND instr(CAST(text AS BLOB), x'00') = 0),
+  status_ids TEXT
+    CONSTRAINT account_warning_status_ids_within_${WARNING_STATUS_IDS}_ids_and_${WARNING_STATUS_IDS_BYTES}_bytes
+    CHECK (${warningStatusIdsCheckSql('status_ids')}),
+  created_at TEXT NOT NULL CONSTRAINT account_warning_created_at_iso
+    CHECK (typeof(created_at) = 'text' AND length(CAST(created_at AS BLOB)) = 24
+      AND strftime('%Y-%m-%dT%H:%M:%fZ', created_at) IS created_at AND substr(created_at, 12, 2) BETWEEN '00' AND '23')
+);`,
+		'CREATE INDEX account_warnings_target ON account_warnings (target_account_id);',
+		...boundTriggers(
+			'account_warnings_status_ids',
+			'account_warnings',
+			'status_ids',
+			warningStatusIdsPastBoundSql('NEW.status_ids'),
+			'account_warnings: status_ids past its stored bound'
+		),
+		'ALTER TABLE notifications ADD COLUMN account_warning_id INTEGER REFERENCES account_warnings (id) ON DELETE CASCADE;',
+		`CREATE UNIQUE INDEX ${NOTIFICATIONS_WARNING_INDEX} ON notifications (account_warning_id)
+  WHERE account_warning_id IS NOT NULL;`,
 	].join('\n\n')}\n`
 }

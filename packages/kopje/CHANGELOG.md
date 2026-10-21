@@ -23,6 +23,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - Account `moved`: the account a remote account moved to, set by its actor document's `movedTo` naming an account
   Kopje knows and by a verified `Move`, and cleared by a document without one. It is shown one level deep, with the
   target's identity, counts and images but no note or fields, and `null` while the account is unavailable.
+- `POST /api/v1/admin/accounts/:account_id/action` with type `none` warns a local account: it stores the warning, with
+  `text` and the named report's `status_ids`, logs it, and writes the account a `moderation_warning` notification
+  (Notification and NotificationGroup `moderation_warning`) unless `send_email_notification` is false. No email is
+  sent.
 
 ### Changed
 
@@ -86,12 +90,15 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   `media_attributes[][thumbnail]` on `PUT`/`PATCH /api/v1/statuses/:id`, answer 422 `Validation failed: Thumbnail must
   be blank`, as Mastodon does for images; they were ignored. `PUT`/`PATCH /api/v1/media/:id` takes a multipart body
   of at most 1 MiB plus 16 KiB.
+- `POST /api/v1/admin/accounts/:account_id/action` answers 404 for any non-blank `warning_preset_id` (Kopje has no
+  presets) and 422 for a `text` past 10,000 UTF-8 bytes or with a NUL, before any change; both were ignored.
 
 ### Instance changes
 
-- Store schema: adds migrations `0058_profile_credentials`, `0059_contact_and_activity`, `0060_account_moves` and
-  `0061_account_static_images`, applied on the first request after the deploy; a rollback to an earlier version needs
-  the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
+- Store schema: adds migrations `0058_profile_credentials`, `0059_contact_and_activity`, `0060_account_moves`,
+  `0061_account_static_images`, `0062_account_warnings` and `0063_account_warning_notifications_key`, applied on the
+  first request after the deploy; a rollback to an earlier version needs the point-in-time restore described in
+  [docs/upgrade.md](docs/upgrade.md).
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.18] - 2026-10-20

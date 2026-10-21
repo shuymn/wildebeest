@@ -40,6 +40,7 @@ const NOT_CARRIED: Record<string, string> = {
 	announcement_reactions: 'reactions to announcements, which legacy Wildebeest does not have',
 	announcements: 'announcements of the Access admin; legacy Wildebeest has none',
 	account_trend_reviews: 'the Access admin’s trends reviews of accounts; legacy Wildebeest has no trends review',
+	account_warnings: 'warnings of an admin account action; legacy Wildebeest has no moderation warnings',
 	backup_media: 'the backup media index of one bucket; a converted Store starts a fresh baseline',
 	collection_syncs: "work Kopje asks for when it stores a remote account's document; legacy has none",
 	collection_pins_pending: 'pinned statuses a sync of Kopje has yet to fetch; legacy has none',
@@ -162,6 +163,8 @@ const NOT_CONVERTED: Record<string, string> = {
 	'notifications.group_key':
 		'legacy never grouped notifications: carried ones stay ungrouped, as stored ones do in 0017',
 	'notifications.report_id': 'legacy never notified of a report: carried ones name none, as stored ones do in 0040',
+	'notifications.account_warning_id':
+		'legacy never warned an account: carried ones name no warning, as stored ones do in 0062',
 	'status_edits.id': ASSIGNED,
 	'status_edits.emojis': 'legacy has no custom emoji',
 	'status_edits.poll_options': 'legacy has no polls',
@@ -236,6 +239,7 @@ const NOT_VERIFIED: Record<string, string> = {
 	'notifications.filtered': DEFAULT,
 	'notifications.group_key': DEFAULT,
 	'notifications.report_id': DEFAULT,
+	'notifications.account_warning_id': DEFAULT,
 	'oauth_clients.created_at': TIME,
 	'status_edits.created_at': TIME,
 	'status_edits.id': DEFAULT,

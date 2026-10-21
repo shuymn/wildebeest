@@ -340,9 +340,9 @@ describe('the policy fragments agree with the model of their rules', () => {
 				)
 		))
 
-	// Every (recipient, type, sender, status or none) a local recipient is shown, at the world's time; and, as notify
-	// writes them, without those about a status of a conversation the recipient mutes. The first local account is the
-	// OAuth admin (R37).
+	// Every (recipient, type, sender, status or none, warning or none) a local recipient is shown, at the world's time;
+	// and, as notify writes them, without those about a status of a conversation the recipient mutes. The first local
+	// account is the OAuth admin (R37). Each local account has a warning (R42), named by its target.
 	const adminOf = (world: World) => {
 		const index = world.accounts.findIndex((account) => account.local)
 		return index < 0 ? null : index
@@ -359,19 +359,25 @@ describe('the policy fragments agree with the model of their rules', () => {
 			agree(
 				(db, world) => {
 					const named = namer(world)
+					db.run(
+						`INSERT INTO account_warnings (target_account_id, action, created_at)
+						SELECT account_id, 'none', ? FROM local_accounts ORDER BY account_id`,
+						world.now
+					)
 					return db
-						.all<{ r: string; type: string; sender: string; status: string | null }>(
-							`SELECT nr0.account_id AS r, nt.value AS type, nf.id AS sender, ns.id AS status
+						.all<{ r: string; type: string; sender: string; status: string | null; warned: string | null }>(
+							`SELECT nr0.account_id AS r, nt.value AS type, nf.id AS sender, ns.id AS status, nw.target AS warned
 							FROM local_accounts nr0 CROSS JOIN json_each(?1) nt CROSS JOIN accounts nf
 							CROSS JOIN (SELECT id FROM statuses UNION ALL SELECT NULL) ns
-							WHERE ${fragment('nr0.account_id', 'nt.value', 'nf.id', 'ns.id', '?2', '?3')}`,
+							CROSS JOIN (SELECT id, target_account_id AS target FROM account_warnings UNION ALL SELECT NULL, NULL) nw
+							WHERE ${fragment('nr0.account_id', 'nt.value', 'nf.id', 'ns.id', '?2', '?3', 'nw.id')}`,
 							JSON.stringify(NOTIFICATION_TYPES),
 							world.now,
 							adminIdOf(world)
 						)
 						.map(
 							(row) =>
-								`${named(row.r)} ${row.type} ${named(row.sender)} ${row.status === null ? '-' : named(row.status)}`
+								`${named(row.r)} ${row.type} ${named(row.sender)} ${row.status === null ? '-' : named(row.status)} ${row.warned === null ? '-' : named(row.warned)}`
 						)
 				},
 				({ world }) => {
@@ -382,9 +388,13 @@ describe('the policy fragments agree with the model of their rules', () => {
 							NOTIFICATION_TYPES.flatMap((type) =>
 								accounts(m.world).flatMap((from) =>
 									[null, ...statuses(m.world)].flatMap((s) =>
-										m[rule](r, type, from, s)
-											? [`${name(m.world, r)} ${type} ${name(m.world, from)} ${s === null ? '-' : m.status(s).name}`]
-											: []
+										[null, ...accounts(m.world).filter((x) => m.world.accounts[x]?.local === true)].flatMap((warned) =>
+											m[rule](r, type, from, s, warned)
+												? [
+														`${name(m.world, r)} ${type} ${name(m.world, from)} ${s === null ? '-' : m.status(s).name} ${warned === null ? '-' : name(m.world, warned)}`,
+													]
+												: []
+										)
 									)
 								)
 							)

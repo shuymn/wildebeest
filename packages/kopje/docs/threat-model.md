@@ -782,8 +782,11 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `getAdminAccount` and `actOnAdminAccount` in `src/domain/admin-accounts.ts`, `src/mastodon/admin.ts`, migrations
   `0030_admin_accounts` and `0031_admin_accounts_available`; `test/admin-accounts.test.ts`,
   `test/policy-bounds.test.ts`, `test/migrations.test.ts`. Local suspension, self-protection and the credential epoch:
-  the OAuth admin's `action` (`none`, which resolves the report it names, and `suspend`) and `unsuspend`; `disable`,
-  `sensitive` and `silence` answer 422, and any action on the admin's own account 403 (remote suspension is VIS-30's). A
+  the OAuth admin's `action` (`none`, which warns a local target (VIS-31) and resolves the report it names, and
+  `suspend`) and `unsuspend`; `disable`, `sensitive` and `silence` answer 422, a `text` past 10,000 UTF-8 bytes or with
+  a NUL 422, any non-blank `warning_preset_id` (Kopje has no presets) and an unknown report 404, each before any
+  write, and any action on the admin's own account 403 (remote suspension is VIS-30's). Every warning stored is logged
+  (`create AccountWarning`) in the action's transaction, before the report's resolution. A
   suspension commits, in one bounded transaction, the account's `suspended_at` (its time S) and a new credential epoch
   (`local_accounts.credential_epoch`, incremented), the frozen report and follow bounds, its jobs and its actor's
   `Update` with no targets. Every token, code and web session is stamped with its account's epoch in the transaction
@@ -823,7 +826,10 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   the request's authentication refuses it. `notifyStaff` and `reportTargetPage` in `src/domain/reports.ts`, `shownSql`
   in `src/domain/audience.ts`, `adminAccountIdOnce` in `src/domain/admin-authority.ts`, migration
   `0040_report_notifications` and `0041_report_notifications_key` (one notification per report and recipient);
-  `test/report-notifications.test.ts`, `test/policy-oracle.test.ts`, `test/migrations.test.ts`. Domain blocks and allows
+  `test/report-notifications.test.ts`, `test/policy-oracle.test.ts`, `test/migrations.test.ts`. The account action's
+  parameters, refusals and log rows: `actOnAccount` in `src/domain/admin-accounts.ts`, `accountAction` in
+  `src/mastodon/admin.ts`, `writeAccountWarning` in `src/domain/account-warnings.ts`; `test/admin-suspension.test.ts`
+  ("account warnings"). Domain blocks and allows
   (manage_federation): the block API of VIS-30; domain allows list none, and their create answers 403 to everyone. The
   measure `instance_follows` (view_dashboard) counts accepted follows of the domain's accounts by a walk of at most
   20,000 local follows, and answers 422 beyond it, never an undercount; dimensions and retention answer `[]`.
@@ -882,6 +888,28 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `test/domain-job.test.ts`, `test/admin-domain-blocks-replay.test.ts`, `test/instance-domain-blocks-inbound.test.ts`,
   `test/read-windows.test.ts`, `test/policy-oracle.test.ts` (against `available` and `covered` in
   `test/policy-model.ts`).
+- **VIS-31: an account warning is its target's alone.** A warning (R42, `account_warnings`, migration
+  `0062_account_warnings`) is written by the OAuth admin's account action of type `none` (VIS-29) for a local target
+  with `send_email_notification` set, with a `moderation_warning` notification written to the target and sent by the
+  target in the same transaction (one per warning: `notifications_account_warning`, and the natural key with the
+  warning, `0063_account_warning_notifications_key`). It is read only through that notification, by its recipient, in
+  v1, v2 and streaming alike: R15 (`shownSql`) shows it only when it is sent by its recipient and names a warning of
+  that recipient, by the warning's key, and the presenter checks both again, so a restored notification linked to
+  another account's warning, or to none, is in no read or count; R15 hides it while the target is unavailable. No other
+  read, the admin API included, exposes a warning, as in Mastodon, where strikes are shown only in its web pages. Its
+  `status_ids` are ids copied from the report the admin named, which may name statuses the target cannot see (an
+  accepted, admin-directed disclosure of ids, no content, as in Mastodon); a copy the stored bound would refuse is
+  dropped to `NULL`. The text is plain text, never rendered as HTML. Clearing or dismissing the notification leaves the
+  warning, which nothing reads afterwards. Bounds: the text at most 10,000 UTF-8 bytes with no NUL, and `status_ids`
+  NULL or at most 100 18-digit ids in 2,101 bytes, held by CHECKs and triggers for imports too (RES-2); the presenter
+  reads one row by key per notification and reuses the presented sender for `target_account` (RES-7). _Enforced (main):_
+  `src/domain/account-warnings.ts`, `warningOf` in `src/domain/notifications.ts`, the groups in
+  `src/domain/notification-groups.ts`, `shownSql` in `src/domain/audience.ts`, `storedWarningText` and
+  `storedWarningStatusIds` in `src/platform/stored-bounds.ts`, migrations `0062_account_warnings` and
+  `0063_account_warning_notifications_key`; `test/moderation-warnings.test.ts`, `test/admin-suspension.test.ts`,
+  `test/migrations.test.ts`, `test/policy-oracle.test.ts` (against `shown` in `test/policy-model.ts`),
+  `test-node/policy-boundary.test.ts`, `test/status-bounds.test.ts` (the table of maxima),
+  `test/account-warning-dump.test.ts`.
 
 ### Authorization (AUTH)
 
@@ -2137,9 +2165,11 @@ RPC limit.
 | Quote (the status and its quoted status)                         | 6,818,451         | 5,277,741       | 5,283,467         | 1,918     | 4,840 | 63.0%          |
 | Boost of a quote                                                 | 7,113,040         | 5,686,692       | 5,695,096         | 1,975     | 5,799 | 67.9%          |
 | Conversation: 12 participants presented, its last status a quote | 8,495,999         | 6,963,074       | 7,000,936         | 1,944     | 5,935 | 83.5%          |
-| Notification group: 8 sample accounts, its status a quote        | 7,880,117         | 6,401,741       | 6,428,891         | 1,953     | 5,588 | 76.6%          |
+| Notification group: 8 sample accounts, its status a quote        | 7,880,197         | 6,401,741       | 6,428,891         | 1,953     | 5,588 | 76.6%          |
 | Report: its first status a quote past the 2 MiB allowance        | 7,198,401         | 5,874,208       | 5,885,290         | 1,933     | 5,155 | 70.2%          |
-| An admin.report notification of that report                      | 2,360,569         | 403,298         | 408,654           | 1,061     | 294   | 4.9%           |
+| An admin.report notification of that report                      | 2,360,577         | 403,298         | 408,654           | 1,061     | 294   | 4.9%           |
+| A moderation_warning notification, its local account at bounds   | 129,431           | 281,568         | 281,568           | 9         | 215   | 3.4%           |
+| Its notification group                                           | 129,431           | 281,757         | 281,757           | 9         | 222   | 3.4%           |
 | ActivityPub Note: a local status at its bounds, 1,000 addressed  | 3,697,315         | 4,235,143       |                   | 1,337     | 3,165 | 50.5%          |
 | Its Create (the Note and its addressing again)                   |                   | 6,291,204       |                   |           |       | 75.0%          |
 | Announcement: each part derived from its caps                    |                   | 121,774         | 248,997           |           |       | 3.0%           |
@@ -2147,7 +2177,10 @@ RPC limit.
 | Access admin's trending hashtag, derived from its caps           |                   | 4,551           | 4,625             |           |       | 0.1%           |
 | Access admin's trending status, derived from its caps            |                   | 27,748          | 29,060            |           |       | 0.3%           |
 
-The most JSON is the emoji-poll fill's, the most SQLite bytes the raw fill's; the escaped fill presents the
+A moderation_warning shows its account twice (the sender and the warning's `target_account`, the same local
+account with four local fields at their limits) beside a text at its 10,000-byte bound (U+0001, or malformed bytes
+read back as U+FFFD) and 100 status ids; as a stream payload, encoded again as a string, it is at most 324,414 bytes,
+under the hub's 512 KiB. The most JSON is the emoji-poll fill's, the most SQLite bytes the raw fill's; the escaped fill presents the
 conversation in 6,938,872 bytes. The Note's local emoji snapshot is at its 12,288-byte bound with as many entries as
 fit (61, every url at its shortest), resolved to 14,850 bytes of `Emoji` tags (at most 64 × 44 bytes past the
 snapshot); an actor's at 6,144 bytes resolves to 30 tags of 7,404 bytes (`test/local-emoji-api.test.ts`).
