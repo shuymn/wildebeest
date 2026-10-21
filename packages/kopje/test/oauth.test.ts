@@ -659,6 +659,18 @@ describe('token endpoint', () => {
 		)
 		expect(badBasic.status).toBe(401)
 		expect(badBasic.headers.get('www-authenticate')).toMatch(/^Basic /)
+		// A Basic value without a colon has no secret: no client, at the token and revoke endpoints alike.
+		for (const path of ['/oauth/token', '/oauth/revoke']) {
+			const noSecret = await h.request(
+				path,
+				form(
+					{ grant_type: 'authorization_code', code, redirect_uri: app.redirect_uri, token: code },
+					{ headers: { authorization: `Basic ${btoa(app.client_id)}` } }
+				)
+			)
+			expect(noSecret.status, path).toBe(401)
+			expect(await noSecret.json(), path).toMatchObject({ error: 'invalid_client' })
+		}
 		// HTTP Basic client authentication works as well.
 		const basic = btoa(`${app.client_id}:${app.client_secret}`)
 		const ok = await h.request(
@@ -1331,9 +1343,13 @@ describe('introspect', () => {
 			expect(await response.json(), label).toMatchObject({ error: 'invalid_client' })
 		}
 		// A Basic header with a blank id, or one that does not decode, names no client; a body client_id still does.
-		for (const authorization of ['Basic Og==', 'Basic !!!', `Basic ${btoa('no-colon')}`]) {
+		for (const authorization of ['Basic Og==', 'Basic !!!']) {
 			await unauthorized(await introspect(h, { token }, { authorization }), authorization)
 		}
+		// Without a colon the whole value is the id, with no secret (Doorkeeper's from_basic): a failed client.
+		const noColon = await introspect(h, { token }, { authorization: `Basic ${btoa(app.client_id)}` })
+		expect(noColon.status).toBe(401)
+		expect(await noColon.json()).toMatchObject({ error: 'invalid_client' })
 		const bodyId = await introspect(h, { token, client_id: app.client_id }, { authorization: 'Basic Og==' })
 		expect(bodyId.status).toBe(401)
 		expect(await bodyId.json()).toMatchObject({ error: 'invalid_client' })

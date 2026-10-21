@@ -214,8 +214,9 @@ async function oauthParams(
 
 type ClientCredentials = { clientId: string; clientSecret: string }
 
-// client_secret_basic: undefined without a Basic header, null for one that does not decode to an id and a secret.
-function basicCredentials(c: ApiContext): ClientCredentials | null | undefined {
+// client_secret_basic: undefined without a Basic header, null for one that does not decode. Without a colon the
+// whole value is the id and the secret is absent (Doorkeeper's Credentials.from_basic, split(/:/, 2)).
+function basicCredentials(c: ApiContext): { clientId: string; clientSecret: string | undefined } | null | undefined {
 	const basic = /^Basic\s+(\S+)$/i.exec(c.req.header('authorization') ?? '')
 	if (basic?.[1] === undefined) {
 		return undefined
@@ -223,23 +224,23 @@ function basicCredentials(c: ApiContext): ClientCredentials | null | undefined {
 	try {
 		const decoded = atob(basic[1])
 		const colon = decoded.indexOf(':')
-		if (colon !== -1) {
-			return {
-				clientId: decodeURIComponent(decoded.slice(0, colon)),
-				clientSecret: decodeURIComponent(decoded.slice(colon + 1)),
-			}
-		}
+		return colon === -1
+			? { clientId: decodeURIComponent(decoded), clientSecret: undefined }
+			: {
+					clientId: decodeURIComponent(decoded.slice(0, colon)),
+					clientSecret: decodeURIComponent(decoded.slice(colon + 1)),
+				}
 	} catch {
 		return null
 	}
-	return null
 }
 
 // client_secret_post or client_secret_basic.
 function clientCredentials(c: ApiContext, p: Params): ClientCredentials | null {
 	const basic = basicCredentials(c)
 	if (basic !== undefined) {
-		return basic
+		// /oauth/token and /oauth/revoke need both halves: a Basic value without a secret authenticates no client.
+		return basic?.clientSecret === undefined ? null : { clientId: basic.clientId, clientSecret: basic.clientSecret }
 	}
 	const clientId = p.get('client_id')
 	const clientSecret = p.get('client_secret')
