@@ -28,8 +28,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - Breaking: notifications read `types` and `exclude_types` only as `types[]` and `exclude_types[]`; a value sent
   without `[]` is ignored, as Mastodon ignores it.
 - Hashtag search avoids repeated status-table scans with stale Store statistics.
-- Request reads stay index-driven when the Store's statistics are stale: status presentation, status and account
-  search, filters, relationships, mentions, media attachment, inbound addressing and delivery lane promotion.
+- Request reads and background and moderation work stay index-driven when the Store's statistics are stale: status
+  presentation, context, conversations, search, tags, filters, relationships, mentions, media, login, outbound reach,
+  delivery checks and receipts, inbound Flags, follow answers, purges, poll sweeps, domain restoration and report
+  resolution.
 
 ### Fixed
 
