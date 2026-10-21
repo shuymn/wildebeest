@@ -11,6 +11,7 @@ import { CodePage, ConsentPage, type ConsentFields, MessagePage } from '../web/c
 // GET /oauth/authorize shows the consent page; POST /oauth/authorize records the decision. This is the only route
 // behind Cloudflare Access: both methods verify the Access assertion against the team domain and AUD in
 // instance_settings, then resolve its email to a local account. The decision POST must also come from this origin.
+// `lang` (Mastodon's page locale) has no effect: the page is English only.
 
 export type AuthorizeDeps = ApiDeps & { fetch: typeof fetch }
 
@@ -51,6 +52,8 @@ type AuthorizationRequest = {
 
 type AuthorizationError = { error: string; description: string }
 
+const RESPONSE_MODES = ['query', 'fragment', 'form_post']
+
 // Validates the request against the registered client in two steps (RFC 6749 §4.1.2.1). The client and its redirect
 // URI come first, and their errors are shown on the page, never sent to a redirect URI that has not been verified.
 // Every later error goes back to the verified redirect URI with the original state (shown on the page for OOB).
@@ -71,6 +74,15 @@ function validate(
 		return responseType === undefined
 			? { error: 'invalid_request', description: 'The response type is missing.' }
 			: { error: 'unsupported_response_type', description: 'The response type is not supported.' }
+	}
+	// Doorkeeper's response modes of the code flow, checked in its order (after response_type); a blank one is query.
+	// Every answer goes in the query: Mastodon's consent form carries no mode, and Kopje always shows the form.
+	const mode = get('response_mode')
+	if (mode !== undefined && mode.trim() !== '' && !RESPONSE_MODES.includes(mode)) {
+		return {
+			error: 'unsupported_response_mode',
+			description: 'The authorization server does not support this response mode.',
+		}
 	}
 	const scopes = parseScopes(get('scope'))
 	if (scopes === null || !withinScopes(scopes, client.scopes)) {
@@ -99,7 +111,15 @@ function authorizationError(
 }
 
 // RFC 6749 §3.1: each parameter at most once.
-const AUTHORIZE_PARAMS = ['response_type', 'scope', 'state', 'code_challenge', 'code_challenge_method', 'decision']
+const AUTHORIZE_PARAMS = [
+	'response_type',
+	'response_mode',
+	'scope',
+	'state',
+	'code_challenge',
+	'code_challenge_method',
+	'decision',
+]
 
 type Checked =
 	{ request: AuthorizationRequest; email: string; firstParty: boolean } | { response: Response | Promise<Response> }
