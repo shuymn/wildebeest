@@ -16,6 +16,15 @@ import { sanitizeRemoteBio } from '../src/security/html'
 // Remote profile parts at their bounds (RES-2), shared by the answer-size tests, and a local profile with a remote
 // follower, shared by the profile credential tests.
 
+// The bytes of `text`, each code unit below 256 one byte (0xFF: no UTF-8 lead byte, so malformed UTF-8), for a value
+// bound as raw bytes (CAST(? AS TEXT) stores them as they are).
+export const rawBytes = (text: string) => new Uint8Array([...text].map((c) => c.charCodeAt(0))).buffer
+
+// A static image URL that migration 0061_account_static_images stores (exactly 512 bytes: 11, then 192 malformed
+// bytes, then 309 backslashes) and that serializes within PROFILE_URL_LIMIT (each 0xFF becomes %EF%BF%BD), but whose
+// JSON doubles the backslashes past it.
+export const ESCAPED_STATIC_WITNESS = rawBytes(`https://x/?${'\u00ff'.repeat(192)}${'\\'.repeat(309)}`)
+
 // alice with the legacy public key and a remote follower (fan@fans.example), so her profile Updates are recorded.
 export async function aliceWithFollower(deps: Parameters<typeof community>[2] = {}, scope = 'read write follow') {
 	const h = await community(['alice'], scope, deps)

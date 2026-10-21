@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { bearer, json, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { ANIMATED_GIF, ANIMATED_WEBP, AVIF, JPEG_ORIENTATION_6, PNG_PLAIN, WEBP_PLAIN } from './fixtures/images'
-import { bytes, mediaForm, pngWithChunk, TestCodec, upload, uploaded } from './media-helpers'
+import { bytes, framesKeepingCodec, mediaForm, pngWithChunk, TestCodec, upload, uploaded } from './media-helpers'
 import { community, getJson, post } from './status-helpers'
 import { isAnimated, retainedMetadata } from '../src/platform/image-bytes'
 import type { StoreStub } from '../src/platform/store-client'
@@ -263,15 +263,6 @@ describe('container strictness (MEDIA-3)', () => {
 })
 
 describe('inputs beyond still images', () => {
-	// The served file as Images keeping the frames would make it (Miniflare's binding decodes one frame only); the
-	// preview through the local binding, as a still.
-	const keepsFrames = () => {
-		const codec = new TestCodec()
-		codec.encodeResponder = (options) =>
-			options.format === 'image/webp' && options.still !== true ? bytes(ANIMATED_WEBP) : null
-		return codec
-	}
-
 	it('records an animated upload, serves its still preview, and keeps the record when completion is retried', async () => {
 		let lost = 0
 		const wrapStore = (store: StoreStub) =>
@@ -289,7 +280,7 @@ describe('inputs beyond still images', () => {
 					return Reflect.get(target, property) as unknown
 				},
 			})
-		const h = await users({ codec: keepsFrames(), wrapStore })
+		const h = await users({ codec: framesKeepingCodec(), wrapStore })
 		const media = await uploaded(h, h.users.alice, mediaForm(bytes(ANIMATED_WEBP), {}, 'a.webp', 'image/webp'))
 		expect(lost).toBe(2)
 		expect(media.preview_url).not.toBe(media.url)

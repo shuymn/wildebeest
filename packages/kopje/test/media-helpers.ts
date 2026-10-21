@@ -1,6 +1,7 @@
 import { env } from 'cloudflare:workers'
 
 import { bearer, type ApiHarness } from './api-helpers'
+import { ANIMATED_WEBP } from './fixtures/images'
 import type { User } from './status-helpers'
 import {
 	type EncodeOptions,
@@ -122,6 +123,16 @@ export class TestCodec implements ImageCodec {
 	get calls(): number {
 		return this.infoCalls + this.encodeCalls.length
 	}
+}
+
+// A TestCodec standing in for Images keeping an animated input's frames: Miniflare's binding decodes one frame only and
+// ignores anim (docs/setup.md checks the real one), so every WebP served file (an encode without `still`) is
+// ANIMATED_WEBP, and previews and other formats go through the local binding.
+export function framesKeepingCodec(): TestCodec {
+	const codec = new TestCodec()
+	codec.encodeResponder = (options) =>
+		options.format === 'image/webp' && options.still !== true ? bytes(ANIMATED_WEBP) : null
+	return codec
 }
 
 const ascii = (value: string) => new TextEncoder().encode(value)

@@ -16,7 +16,7 @@ import {
 import { BUILD } from './helpers'
 import { ALICE, setup, type Setup } from './inbox-status-helpers'
 import { localSnapshotAtCap } from './local-emoji-helpers'
-import { fullestFields, MAX_BIO, MOVED_ROW_SQLITE_MAX } from './profile-fixtures'
+import { ESCAPED_STATIC_WITNESS, fullestFields, MAX_BIO, MOVED_ROW_SQLITE_MAX } from './profile-fixtures'
 import { observedSql, rowsRead } from './read-helpers'
 import { community, post, remoteAccount } from './status-helpers'
 import { heap } from './status-row-fixtures'
@@ -1361,9 +1361,8 @@ describe('the moved-to account (RES-3)', () => {
 // %EF%BF%BD, and 309 backslashes, which JSON doubles). Each reads and presents within the nested account's caps, and
 // the full account shows each within PROFILE_URL_LIMIT as JSON.
 describe('static images (RES-2, RES-3)', () => {
-	const raw = (text: string) => new Uint8Array([...text].map((c) => c.charCodeAt(0))).buffer
 	const PLAIN = `https://kopje.test/media/${'s'.repeat(STATIC_URL_LIMIT - 'https://kopje.test/media/'.length)}`
-	const WITNESS = raw(`https://x/?${'\u00ff'.repeat(192)}${'\\'.repeat(309)}`)
+	const WITNESS = ESCAPED_STATIC_WITNESS
 
 	it.each<[string, string | ArrayBuffer]>([
 		['plain', PLAIN],

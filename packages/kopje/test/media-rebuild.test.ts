@@ -9,7 +9,7 @@ import { NOW } from './app-helpers'
 import { ANIMATED_WEBP, JPEG_ORIENTATION_6, PNG_PLAIN, WIDE_PNG } from './fixtures/images'
 import { BUILD, completeSetup, migratedStore, rejectionOf } from './helpers'
 import { pngOf, pngOfBytes } from './local-emoji-helpers'
-import { bytes, TestCodec } from './media-helpers'
+import { bytes, framesKeepingCodec, TestCodec } from './media-helpers'
 import {
 	ACCESS,
 	ADMIN_AUD,
@@ -177,11 +177,7 @@ describe('media rebuild (MEDIA-2, MEDIA-3)', () => {
 	})
 
 	it('records an animated served file in meta, and leaves the accounts as they were', async () => {
-		const codec = new TestCodec()
-		// Images keeping the frames of the served file (Miniflare's binding decodes one only); the preview is a still.
-		codec.encodeResponder = (options) =>
-			options.format === 'image/webp' && options.still !== true ? bytes(ANIMATED_WEBP) : null
-		const h = await setup({ codec })
+		const h = await setup({ codec: framesKeepingCodec() })
 		const animated = await addRow(h.store, { contentType: 'image/webp', original: bytes(ANIMATED_WEBP) })
 		const still = await addRow(h.store)
 		await runInDurableObject(h.store, (_instance, state) => {

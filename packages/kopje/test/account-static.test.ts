@@ -4,8 +4,8 @@ import { describe, expect, it } from 'vitest'
 
 import { bearer, sql } from './api-helpers'
 import { ANIMATED_WEBP, PNG_PLAIN } from './fixtures/images'
-import { bytes, multipartForm, TestCodec } from './media-helpers'
-import { aliceWithFollower } from './profile-fixtures'
+import { bytes, framesKeepingCodec, multipartForm } from './media-helpers'
+import { aliceWithFollower, ESCAPED_STATIC_WITNESS, rawBytes as raw } from './profile-fixtures'
 import { scansOf, staleStatistics } from './read-helpers'
 import { getJson, post } from './status-helpers'
 import { csrfOf, ORIGIN, signIn } from './web-helpers'
@@ -23,16 +23,10 @@ import { STATIC_URL_LIMIT } from '../src/platform/stored-bounds'
 const DEFAULT_AVATAR = `${ORIGIN}/assets/avatar.png`
 const DEFAULT_HEADER = `${ORIGIN}/assets/header.png`
 const utf8 = (value: string) => new TextEncoder().encode(value).length
-// The bytes of `text`, each code unit below 256 one byte (0xFF: no UTF-8 lead byte, so malformed UTF-8).
-const raw = (text: string) => new Uint8Array([...text].map((c) => c.charCodeAt(0))).buffer
 
-// Alice and a remote follower over a codec whose WebP served files are ANIMATED_WEBP: Miniflare's binding decodes one
-// frame only (docs/setup.md checks the real one), so Images keeping the frames is stood in for. Previews (still) and
-// PNG uploads go through the local binding.
+// Alice and a remote follower over a codec whose WebP served files are animated (framesKeepingCodec).
 async function setup() {
-	const codec = new TestCodec()
-	codec.encodeResponder = (options) =>
-		options.format === 'image/webp' && options.still !== true ? bytes(ANIMATED_WEBP) : null
+	const codec = framesKeepingCodec()
 	const h = await aliceWithFollower({ images: () => codec })
 	const patch = (parts: [string, File][]) =>
 		h.request('/api/v1/accounts/update_credentials', {
@@ -197,20 +191,32 @@ describe('profileAssignSql', () => {
 	const UPLOAD = '900000000000000001'
 	const IMAGE = 'https://kopje.test/media/AAAA/full.webp'
 
-	// Assigns an upload of `preview` (raw bytes for an ArrayBuffer) and `meta` as alice's avatar; her stored static.
-	async function assigned(h: H, preview: SqlStorageValue, meta = '{"animated":true}') {
+	// Assigns an upload of `preview` and `meta` as alice's avatar; her stored static. An ArrayBuffer is stored as TEXT
+	// of its raw bytes, or with `storage` 'blob' as a BLOB.
+	async function assigned(
+		h: H,
+		preview: SqlStorageValue,
+		meta = '{"animated":true}',
+		storage: 'text' | 'blob' = 'text'
+	) {
 		return runInDurableObject(h.store, (_instance, state) => {
 			const db = state.storage.sql
 			db.exec('DELETE FROM media_attachments WHERE id = ?', UPLOAD)
+			const cast = preview instanceof ArrayBuffer && storage === 'text'
 			db.exec(
 				`INSERT INTO media_attachments (id, account_id, type, url, preview_url, meta)
-				VALUES (?, ?, 'image', ?, ${preview instanceof ArrayBuffer ? 'CAST(? AS TEXT)' : '?'}, ?)`,
+				VALUES (?, ?, 'image', ?, ${cast ? 'CAST(? AS TEXT)' : '?'}, ?)`,
 				UPLOAD,
 				h.users.alice.id,
 				IMAGE,
 				preview,
 				meta
 			)
+			if (storage === 'blob') {
+				expect(db.exec('SELECT typeof(preview_url) AS t FROM media_attachments WHERE id = ?', UPLOAD).one().t).toBe(
+					'blob'
+				)
+			}
 			db.exec(profileAssignSql('avatar'), UPLOAD, h.users.alice.id)
 			return db
 				.exec<{ avatar_url: string; still: ArrayBuffer | null; preview: ArrayBuffer | null }>(
@@ -240,27 +246,7 @@ describe('profileAssignSql', () => {
 			['animated false', 'https://x/small.webp', '{"animated":false}'],
 		] as const) {
 			const result =
-				name === 'a BLOB'
-					? await runInDurableObject(h.store, (_instance, state) => {
-							const db = state.storage.sql
-							db.exec('DELETE FROM media_attachments WHERE id = ?', UPLOAD)
-							db.exec(
-								`INSERT INTO media_attachments (id, account_id, type, url, preview_url, meta)
-								VALUES (?, ?, 'image', ?, ?, '{"animated":true}')`,
-								UPLOAD,
-								h.users.alice.id,
-								IMAGE,
-								preview
-							)
-							expect(
-								db.exec('SELECT typeof(preview_url) AS t FROM media_attachments WHERE id = ?', UPLOAD).one().t
-							).toBe('blob')
-							db.exec(profileAssignSql('avatar'), UPLOAD, h.users.alice.id)
-							return db
-								.exec('SELECT avatar_url, avatar_static_url AS still FROM accounts WHERE id = ?', h.users.alice.id)
-								.one()
-						})
-					: await assigned(h, preview, meta)
+				name === 'a BLOB' ? await assigned(h, preview, '{"animated":true}', 'blob') : await assigned(h, preview, meta)
 			expect([result.avatar_url, result.still], name).toEqual([IMAGE, null])
 		}
 	})
@@ -303,7 +289,7 @@ describe('presented statics within their bounds (RES-2)', () => {
 	// The stored witnesses: 512 bytes that the trigger takes (11 + 192 malformed bytes + 309 backslashes), which
 	// serialize within PROFILE_URL_LIMIT (each 0xFF becomes %EF%BF%BD) but whose JSON doubles the backslashes past it;
 	// and an image of 2,048 stored bytes, within its stored bound, whose JSON is past it.
-	const STATIC_WITNESS = raw(`https://x/?${'ÿ'.repeat(192)}${'\\'.repeat(309)}`)
+	const STATIC_WITNESS = ESCAPED_STATIC_WITNESS
 	const IMAGE_WITNESS = `https://x/?${'\\'.repeat(2037)}`
 	const VALID_STATIC = 'https://kopje.test/media/AAAA/small.webp'
 	const VALID_IMAGE = 'https://kopje.test/media/AAAA/full.webp'
