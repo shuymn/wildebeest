@@ -75,10 +75,7 @@ const ENTITY_EXCEPTIONS: Exceptions = {
 		'preview_remote_url',
 		'text_url'
 	),
-	'REST::NotificationSerializer': {
-		...open('never present', 'filtered'),
-		...open('the notification types that carry them are not sent', 'event'),
-	},
+	'REST::NotificationSerializer': open('the notification types that carry them are not sent', 'event'),
 	'REST::NotificationGroupSerializer': open(
 		'the notification types that carry them are not sent',
 		'annual_report',

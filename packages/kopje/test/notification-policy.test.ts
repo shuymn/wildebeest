@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { type ApiHarness, bearer, form, json, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { BUILD } from './helpers'
+import { observedSql } from './read-helpers'
 import {
 	act,
 	community,
@@ -21,8 +22,9 @@ import { Db } from '../src/db/sql'
 import { PRIVATE_MENTION_WALK } from '../src/domain/audience'
 import { deleteStatusBatch, purgeBatch } from '../src/domain/inbox'
 import { MAX_BULK_REQUESTS, REQUEST_JOB_BATCHES, REQUEST_JOB_WINDOW } from '../src/domain/notification-requests'
-import { type NotificationType, notify } from '../src/domain/notifications'
+import { getNotification, listNotifications, type NotificationType, notify } from '../src/domain/notifications'
 import { writeOperation } from '../src/domain/operation'
+import { sha256Hex } from '../src/security/tokens'
 
 // The notification policy and notification requests (Mastodon 4.5's NotifyService::DropCondition and
 // FilterCondition, NotificationPolicy, NotificationRequest, NotificationPermission and their controllers).
@@ -538,6 +540,149 @@ describe('filtered notifications in the reads', () => {
 		expect(accounts.map((a) => a.id)).toEqual([carol.id])
 	})
 
+	// REST::NotificationSerializer's `attribute :filtered, if: :filtered?`: true on a filtered notification, else absent.
+	it('presents filtered: true on a filtered notification alone', async () => {
+		const { h, alice, bob, carol } = await scene()
+		type Shown = { id: string; type: string; account: { id: string }; filtered?: unknown }
+		const flag = (n: Shown) => (Object.hasOwn(n, 'filtered') ? n.filtered : 'absent')
+		const shown = async (query: string) =>
+			(await getJson<Shown[]>(h, `/api/v1/notifications${query}`, alice.token)).body.map((n) => [
+				n.type,
+				n.account.id,
+				flag(n),
+			])
+		expect(await shown('?include_filtered=true')).toEqual([
+			['favourite', carol.id, 'absent'],
+			['favourite', bob.id, true],
+			['mention', bob.id, true],
+			['mention', carol.id, 'absent'],
+			['follow', carol.id, true],
+		])
+		expect(await shown(`?account_id=${bob.id}`)).toEqual([
+			['favourite', bob.id, true],
+			['mention', bob.id, true],
+		])
+		expect(await shown(`?account_id=${carol.id}`)).toEqual([
+			['favourite', carol.id, 'absent'],
+			['mention', carol.id, 'absent'],
+			['follow', carol.id, true],
+		])
+		const one = async (id: string) => flag((await getJson<Shown>(h, `/api/v1/notifications/${id}`, alice.token)).body)
+		const [filtered] = await ids(h, `/api/v1/notifications?account_id=${bob.id}`, alice.token)
+		const [unfiltered] = await ids(h, '/api/v1/notifications', alice.token)
+		expect([await one(filtered!), await one(unfiltered!)]).toEqual([true, 'absent'])
+		// Grouped notifications and requests never carry it (REST::NotificationGroupSerializer,
+		// REST::NotificationRequestSerializer).
+		const { body: grouped } = await getJson<{ notification_groups: Record<string, unknown>[] }>(
+			h,
+			'/api/v2/notifications?include_filtered=true',
+			alice.token
+		)
+		expect(grouped.notification_groups).toHaveLength(5)
+		expect(grouped.notification_groups.some((g) => Object.hasOwn(g, 'filtered'))).toBe(false)
+		const { body: ungrouped } = await getJson<{ notification_groups: Record<string, unknown>[] }>(
+			h,
+			`/api/v2/notifications/ungrouped-${filtered}`,
+			alice.token
+		)
+		expect(ungrouped.notification_groups.map((g) => [g.group_key, Object.hasOwn(g, 'filtered')])).toEqual([
+			[`ungrouped-${filtered}`, false],
+		])
+		const [request] = await requests(h, alice)
+		const { body: shownRequest } = await getJson<Record<string, unknown>>(
+			h,
+			`/api/v1/notifications/requests/${request!.id}`,
+			alice.token
+		)
+		expect(Object.hasOwn(shownRequest, 'filtered')).toBe(false)
+		expect(JSON.stringify(shownRequest)).not.toContain('"filtered":true')
+		// Accepting the request unfilters the sender's notifications, which no longer carry it.
+		await h.request(`/api/v1/notifications/requests/${request!.id}/accept`, bearer(alice.token, form({})))
+		expect(await shown(`?account_id=${bob.id}`)).toEqual([
+			['favourite', bob.id, 'absent'],
+			['mention', bob.id, 'absent'],
+		])
+		expect(await one(filtered!)).toBe('absent')
+	})
+
+	// notifications.filtered has INTEGER affinity and no CHECK (migration 0020_notification_policies), so an imported
+	// row may hold any value: only integer 1 is presented as filtered, and no value is read out of SQLite whole.
+	it('presents filtered only for a stored integer 1, reading no imported value out whole', async () => {
+		const h = await community(['alice', 'bob'])
+		const { alice, bob } = h.users
+		const LARGE = 1_000_000
+		// Each stored value, as SQL, and what INTEGER affinity keeps of it.
+		const values: [string, string, true | 'absent'][] = [
+			['1', 'integer', true],
+			['1.0', 'integer', true],
+			["'1'", 'integer', true],
+			['2', 'integer', 'absent'],
+			['1.5', 'real', 'absent'],
+			["'1x'", 'text', 'absent'],
+			["X'01'", 'blob', 'absent'],
+			[`zeroblob(${LARGE})`, 'blob', 'absent'],
+		]
+		for (const [value] of values) {
+			// A favourite of a status of its own each (notifications_natural).
+			const status = await post(h, alice, { status: 'hello' })
+			await sql(
+				h.store,
+				`INSERT INTO notifications (account_id, type, from_account_id, status_id, created_at, filtered)
+				VALUES (?, 'favourite', ?, ?, ?, ${value})`,
+				alice.id,
+				bob.id,
+				status.id,
+				iso(NOW)
+			)
+		}
+		const kept = await sql<{ id: string; type: string; size: number }>(
+			h.store,
+			`SELECT CAST(id AS TEXT) AS id, typeof(filtered) AS type, length(CAST(filtered AS BLOB)) AS size
+			FROM notifications WHERE account_id = ? ORDER BY id`,
+			alice.id
+		)
+		expect(kept.map((row) => row.type)).toEqual(values.map(([, type]) => type))
+		expect(kept.at(-1)!.size).toBe(LARGE)
+		type Shown = { id: string; filtered?: unknown }
+		const flag = (n: Shown) => (Object.hasOwn(n, 'filtered') ? n.filtered : 'absent')
+		const listed = (await getJson<Shown[]>(h, '/api/v1/notifications?include_filtered=true', alice.token)).body
+		expect(new Map(listed.map((n) => [n.id, flag(n)]))).toEqual(new Map(kept.map((row, i) => [row.id, values[i]![2]])))
+		for (const [i, row] of kept.entries()) {
+			expect(flag((await getJson<Shown>(h, `/api/v1/notifications/${row.id}`, alice.token)).body)).toBe(values[i]![2])
+		}
+		// The list and the show read `filtered` as 0 or 1, and nothing near the large value's size leaves SQLite.
+		const credential = { tokenHash: await sha256Hex(alice.token), scope: 'read' as const, now: NOW }
+		const materialized = await runInDurableObject(h.store, (_instance, state) => {
+			const flags: SqlStorageValue[] = []
+			let bytes = 0
+			const counting = observedSql(state.storage.sql, (read) => {
+				for (const row of read) {
+					for (const [column, value] of Object.entries(row)) {
+						if (column === 'filtered') {
+							flags.push(value)
+						}
+						bytes += value instanceof ArrayBuffer ? value.byteLength : String(value).length
+					}
+				}
+			})
+			const present = { origin: 'https://kopje.test' }
+			listNotifications.run(counting, {
+				credential,
+				page: { limit: 40 },
+				types: [],
+				excludeTypes: [],
+				accountId: null,
+				includeFiltered: true,
+				present,
+			})
+			getNotification.run(counting, { credential, id: kept.at(-1)!.id, present })
+			return { flags, bytes }
+		})
+		expect(materialized.flags.length).toBeGreaterThan(kept.length)
+		expect(new Set(materialized.flags)).toEqual(new Set([0, 1]))
+		expect(materialized.bytes).toBeLessThan(LARGE / 10)
+	})
+
 	it('queues no push for them and adds no conversation', async () => {
 		const h = await community(['alice', 'bob'])
 		const { alice, bob } = h.users
@@ -771,8 +916,19 @@ describe('notification requests', () => {
 			(await sql<{ n: number }>(h.store, 'SELECT count(*) AS n FROM notifications WHERE filtered = 1'))[0]!.n
 		expect(await filtered()).toBe(10)
 		expect((await getJson(h, '/api/v1/notifications/requests/merged', alice.token)).body).toEqual({ merged: false })
+		// A row the request's batches did not reach is still filtered and presented so, until a round unfilters it.
+		const [pending] = await sql<{ id: string }>(
+			h.store,
+			'SELECT CAST(id AS TEXT) AS id FROM notifications WHERE filtered = 1 ORDER BY id LIMIT 1'
+		)
+		const flag = async () => {
+			const { body } = await getJson<{ filtered?: unknown }>(h, `/api/v1/notifications/${pending!.id}`, alice.token)
+			return Object.hasOwn(body, 'filtered') ? body.filtered : 'absent'
+		}
+		expect(await flag()).toBe(true)
 		expect(await h.store.runInboundJobs(BUILD, { now: NOW })).toMatchObject({ pending: false })
 		expect(await filtered()).toBe(0)
+		expect(await flag()).toBe('absent')
 		expect((await getJson(h, '/api/v1/notifications/requests/merged', alice.token)).body).toEqual({ merged: true })
 		// Each direct mention joined alice's conversations (one per status, each its own thread).
 		expect(await sql(h.store, 'SELECT count(*) AS n FROM conversations WHERE account_id = ?', alice.id)).toEqual([
