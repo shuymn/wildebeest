@@ -102,14 +102,18 @@ function wideText(points: number): string {
 	return `${'𠀀'.repeat(astral)}${'名'.repeat(points - astral)}`
 }
 
-let localTurn = 0
+// The next local account each fixture writes with, in turn from alice: kept per fixture, so which local account an item
+// gets depends only on the items built with that fixture, never on the tests that ran before in the worker.
+const localTurns = new WeakMap<Fixture, number>()
 
 // Writes the status rows of `item` (its original, quoted status and boost too) and returns its top-level id.
 export function build(sql: SqlStorage, f: Fixture, item: Item): string {
 	let remote: string | undefined
 	const authorOf = (local: boolean | undefined): string => {
 		if (local === true) {
-			return f.locals[localTurn++ % f.locals.length]!
+			const turn = localTurns.get(f) ?? 0
+			localTurns.set(f, turn + 1)
+			return f.locals[turn % f.locals.length]!
 		}
 		if (remote === undefined) {
 			remote = nextId()
