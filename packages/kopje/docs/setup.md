@@ -290,9 +290,8 @@ Still to confirm:
   (WebP: the `ANMF` chunks, or 1 without the `VP8X` animation flag; PNG: `acTL`'s frame count, or 1 without it):
   - GIF and animated WebP: `avatar` has at least 2 frames, `avatar_static` exactly 1, and the URLs differ (`/full.` and
     `/small.`).
-  - Still PNG: `avatar_static` equals `avatar`.
-  - APNG: record whether `full` keeps `acTL`; either is accepted, and `docs/mastodon-deviations.md` states which.
+  - Still PNG and APNG: the upload answers 200, `avatar` has exactly 1 frame, and `avatar_static` equals `avatar`.
   - A GIF attached to a status: its `preview_url` has exactly 1 frame.
 
-  An animated upload that answers 500 with `kopje.media.transform_failed` and the detail `output is animated` in the
-  log blocks the release.
+  An upload that answers 500 with `kopje.media.transform_failed` in the log blocks the release: the detail `output is
+  animated` for an animated upload, or `images 9401` for a PNG.

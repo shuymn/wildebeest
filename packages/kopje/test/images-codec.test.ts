@@ -87,19 +87,21 @@ function recordingBinding(answer: Uint8Array, fail?: { code: number; message: st
 }
 
 describe('imagesCodec', () => {
-	it('asks for anim: false with `still`, and anim: true without it', async () => {
+	it('asks for anim: true only for a WebP output without `still`', async () => {
 		const { binding, recorded } = recordingBinding(bytes(WEBP_PLAIN))
 		const codec = imagesCodec(binding)
 		expect(await codec.encode(bytes(PNG_PLAIN), { width: 4, height: 3, format: 'image/webp', still: true })).toEqual(
 			bytes(WEBP_PLAIN)
 		)
+		await codec.encode(bytes(PNG_PLAIN), { format: 'image/webp' })
 		await codec.encode(bytes(PNG_PLAIN), { format: 'image/png' })
 		expect(recorded).toEqual({
-			input: 2,
+			input: 3,
 			transforms: [{ width: 4, height: 3, fit: 'scale-down' }],
 			output: [
 				{ format: 'image/webp', anim: false },
-				{ format: 'image/png', anim: true },
+				{ format: 'image/webp', anim: true },
+				{ format: 'image/png', anim: false },
 			],
 		})
 		expect(await codec.info(bytes(WEBP_PLAIN))).toMatchObject({ format: 'image/webp', width: 3, height: 2 })

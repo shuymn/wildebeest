@@ -67,8 +67,8 @@ Profile credentials (`PATCH /api/v1/accounts/update_credentials`, the settings p
 - For an uploaded image whose served file is animated, `avatar_static` and `header_static` are a still of at most
   640 px on the long edge (the upload's preview); Mastodon's is 400×400 or the header's own size, and only for a GIF.
   Otherwise they equal `avatar` and `header`.
-- A local animated WebP stays animated in `avatar` and `header`, where Mastodon flattens it to one frame. An APNG stays
-  animated only as far as Images keeps its frames, which the release check records (`docs/setup.md`).
+- A local animated WebP stays animated in `avatar` and `header`, where Mastodon flattens it to one frame. An APNG is
+  served as a still PNG, as Images makes animated output only as GIF or WebP.
 - A remote account's `avatar_static` and `header_static` equal its linked image; Mastodon makes a still for a GIF or an
   image it converts.
 - Images uploaded before still renditions were made keep `avatar_static` and `header_static` equal to the image until
