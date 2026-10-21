@@ -20,6 +20,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   in the last 28 UTC days, today included; each account's day is recorded at most once a day.
 - Account and CredentialAccount `uri` (the actor id), and for local accounts `roles` (the OAuth admin's Owner role) and
   `noindex` (always false).
+- Account `moved`: the account a remote account moved to, set by its actor document's `movedTo` naming an account
+  Kopje knows and by a verified `Move`, and cleared by a document without one. It is shown one level deep, with the
+  target's identity, counts and images but no note or fields, and `null` while the account is unavailable.
 
 ### Changed
 
@@ -71,9 +74,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds migrations `0058_profile_credentials` and `0059_contact_and_activity`, applied on the first
-  request after the deploy; a rollback to an earlier version needs the point-in-time restore described in
-  [docs/upgrade.md](docs/upgrade.md).
+- Store schema: adds migrations `0058_profile_credentials`, `0059_contact_and_activity` and `0060_account_moves`,
+  applied on the first request after the deploy; a rollback to an earlier version needs the point-in-time restore
+  described in [docs/upgrade.md](docs/upgrade.md).
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.18] - 2026-10-20

@@ -1,11 +1,15 @@
+import { runInDurableObject } from 'cloudflare:test'
+
 import { describe, expect, it } from 'vitest'
 
 import { seedFollows, sql } from './api-helpers'
 import { harness, inboxDeps, NOW } from './app-helpers'
+import { blockDomain } from './domain-block-helpers'
 import { fixtureKeyGen, LEGACY_EMPTY_KEK, seedLocalAccount } from './federation-helpers'
 import { mastodonFlag } from './fixtures/flags'
 import { BUILD, completeSetup, migratedStore } from './helpers'
 import {
+	actorDefaults,
 	AP,
 	LOCAL,
 	MASTODON,
@@ -18,7 +22,17 @@ import {
 	signedInit,
 	type TestActor,
 } from './inbox-helpers'
-import { MAX_RETRACTIONS_PER_ACTOR, PURGE_BATCH, RETRACTION_TTL_MS, SWEEP_BATCH } from '../src/domain/inbox'
+import { Db } from '../src/db/sql'
+import {
+	KEY_REFRESH_MS,
+	MAX_RETRACTIONS_PER_ACTOR,
+	PURGE_BATCH,
+	purgeBatch,
+	RETRACTION_TTL_MS,
+	SWEEP_BATCH,
+	type RemoteActorInput,
+	upsertRemoteActor,
+} from '../src/domain/inbox'
 import { handleQueue } from '../src/jobs/queue'
 import { sha256Hex } from '../src/platform/sha256'
 import type { StoreStub } from '../src/platform/store-client'
@@ -840,6 +854,7 @@ describe('ID-6: the authorization table, one negative case per row', () => {
 				keys: [],
 				emojiTags: [],
 				raw: '{}',
+				movedTo: null,
 			},
 			activity: { type: 'UpdateActor', id: `${LOCAL}/u` },
 		})
@@ -1313,5 +1328,239 @@ describe('the follow limit and inbound activities', () => {
 			(f) => f.account_id === ALICE && (f.target_account_id === bobId || f.target_account_id === bob2Id)
 		)
 		expect(moved).toMatchObject([{ target_account_id: bob2Id, state: 'pending' }])
+	})
+})
+
+// Account#moved_to_account (migration 0060_account_moves), as the latest of two writes leaves it: every stored actor
+// document sets or clears it from its movedTo (W2, process_account_service.rb:166), and a verified Move sets it when it
+// is first processed (W1, move.rb:18). A replay of a known Move writes nothing.
+describe('account moves', () => {
+	const movedTo = (store: StoreStub, uri: string) =>
+		sql<{ moved: string | null }>(
+			store,
+			'SELECT m.uri AS moved FROM accounts a LEFT JOIN accounts m ON m.id = a.moved_to_account_id WHERE a.uri = ?',
+			uri
+		).then((rows) => rows[0]?.moved)
+	// A fresh document of `actor` stored through an Update, as any refresh stores it.
+	const refresh = async (t: Setup, actor: TestActor, document: Record<string, unknown>, n: number) => {
+		t.web.serve(actor.uri, document)
+		const update = {
+			'@context': AS,
+			id: `${actor.uri}#updates/${n}`,
+			type: 'Update',
+			actor: actor.uri,
+			object: document,
+		}
+		expect(await t.post(actor, update)).toBe(202)
+	}
+	const moveOf = (actor: TestActor, target: TestActor, n: number) => ({
+		'@context': AS,
+		id: `${actor.uri}#moves/${n}`,
+		type: 'Move',
+		actor: actor.uri,
+		object: actor.uri,
+		target: target.uri,
+	})
+	const ageKeys = (t: Setup) => sql(t.store, 'UPDATE remote_keys SET fetched_at = ?', NOW - KEY_REFRESH_MS - 1)
+
+	it("sets it from the document's movedTo naming a stored account, and clears it from one naming none (W2)", async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const carol = await mastodonActor(t.web, 'carol', { key: 2 })
+		await t.post(carol, follow(carol, DAVE_URI))
+		await t.post(bob, follow(bob, DAVE_URI))
+		await refresh(t, bob, { ...bob.document, movedTo: carol.uri }, 1)
+		expect(await movedTo(t.store, bob.uri)).toBe(carol.uri)
+		// Kopje does not fetch an unknown account to resolve it (process_account_service.rb:310-314 does).
+		await refresh(t, bob, { ...bob.document, movedTo: `${MASTODON}/users/unknown` }, 2)
+		expect(await movedTo(t.store, bob.uri)).toBeNull()
+		await refresh(t, bob, { ...bob.document, movedTo: bob.uri }, 3)
+		expect(await movedTo(t.store, bob.uri)).toBeNull()
+		// Named as an array, an object with an id, or the expanded property: Fedify reads each as the successor.
+		for (const [n, document] of [
+			[4, { ...bob.document, movedTo: [carol.uri] }],
+			[5, { ...bob.document, movedTo: { id: carol.uri } }],
+			[6, { ...bob.document, 'https://www.w3.org/ns/activitystreams#movedTo': { '@id': carol.uri } }],
+		] as const) {
+			await refresh(t, bob, { ...bob.document, movedTo: null }, 10 + n)
+			expect(await movedTo(t.store, bob.uri)).toBeNull()
+			await refresh(t, bob, document, n)
+			expect(await movedTo(t.store, bob.uri), String(n)).toBe(carol.uri)
+		}
+		await refresh(t, bob, bob.document, 7)
+		expect(await movedTo(t.store, bob.uri)).toBeNull()
+		// An account being purged is not named.
+		await sql(t.store, "UPDATE accounts SET deleted_at = '2026-01-01T00:00:00.000Z' WHERE uri = ?", carol.uri)
+		await refresh(t, bob, { ...bob.document, movedTo: carol.uri }, 8)
+		expect(await movedTo(t.store, bob.uri)).toBeNull()
+	})
+
+	it('leaves it as it was on a frozen refresh and under a domain block', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const carol = await mastodonActor(t.web, 'carol', { key: 2, origin: 'https://other.example' })
+		const erin = await mastodonActor(t.web, 'erin', { key: 3, origin: 'https://other.example' })
+		await t.post(carol, follow(carol, DAVE_URI))
+		await t.post(erin, follow(erin, DAVE_URI))
+		await t.post(bob, follow(bob, DAVE_URI))
+		await refresh(t, bob, { ...bob.document, movedTo: carol.uri }, 1)
+		const input = (target: string): RemoteActorInput => ({
+			...actorDefaults(),
+			uri: bob.uri,
+			username: 'bob',
+			domain: 'mastodon.example',
+			displayName: 'bob',
+			inboxUrl: `${bob.uri}/inbox`,
+			movedTo: target,
+		})
+		const store = (target: string) =>
+			runInDurableObject(t.store, (_instance, state) =>
+				state.storage.transactionSync(() => upsertRemoteActor(new Db(state.storage.sql), input(target), LOCAL, NOW))
+			)
+		await sql(
+			t.store,
+			"UPDATE accounts SET suspended_at = '2026-01-01', suspension_source = 'account' WHERE uri = ?",
+			bob.uri
+		)
+		expect(await store(erin.uri)).toMatchObject({ frozen: true })
+		expect(await movedTo(t.store, bob.uri)).toBe(carol.uri)
+		await sql(t.store, 'UPDATE accounts SET suspended_at = NULL, suspension_source = NULL WHERE uri = ?', bob.uri)
+		await blockDomain(t.store, 'mastodon.example')
+		expect(await store(erin.uri)).toMatchObject({ frozen: true })
+		expect(await movedTo(t.store, bob.uri)).toBe(carol.uri)
+	})
+
+	it('sets it on a verified Move, and a replay with a cached key writes nothing (W1)', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const bob2 = await mastodonActor(t.web, 'bob2', { origin: 'https://new.example', key: 2, extra: {} })
+		t.web.serve(bob2.uri, { ...bob2.document, alsoKnownAs: [bob.uri] })
+		await t.post(bob, follow(bob, DAVE_URI))
+		const move = moveOf(bob, bob2, 1)
+		expect(await t.post(bob, move)).toBe(202)
+		expect(await movedTo(t.store, bob.uri)).toBe(bob2.uri)
+		// Its document now names none, but the key is cached, so it is not fetched: the replay is the known Move.
+		t.web.serve(bob.uri, bob.document)
+		expect(await t.post(bob, move)).toBe(202)
+		expect(await movedTo(t.store, bob.uri)).toBe(bob2.uri)
+	})
+
+	it('takes a fresh document on a replay past the key refresh, and a later Move over an earlier one', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const bob2 = await mastodonActor(t.web, 'bob2', { origin: 'https://new.example', key: 2, extra: {} })
+		const bob3 = await mastodonActor(t.web, 'bob3', { origin: 'https://third.example', key: 3, extra: {} })
+		t.web.serve(bob2.uri, { ...bob2.document, alsoKnownAs: [bob.uri] })
+		t.web.serve(bob3.uri, { ...bob3.document, alsoKnownAs: [bob.uri] })
+		await t.post(bob, follow(bob, DAVE_URI))
+		const toBob2 = moveOf(bob, bob2, 1)
+		expect(await t.post(bob, toBob2)).toBe(202)
+		// A replay with a fresh document that names no move clears it; the known Move does not restore it.
+		t.web.serve(bob.uri, bob.document)
+		await ageKeys(t)
+		expect(await t.post(bob, toBob2)).toBe(202)
+		expect(await movedTo(t.store, bob.uri)).toBeNull()
+		// A fresh document naming bob2 sets it again.
+		t.web.serve(bob.uri, { ...bob.document, movedTo: bob2.uri })
+		await ageKeys(t)
+		expect(await t.post(bob, toBob2)).toBe(202)
+		expect(await movedTo(t.store, bob.uri)).toBe(bob2.uri)
+		// A later Move to bob3, then the earlier one replayed with a cached key: bob3 stays.
+		expect(await t.post(bob, moveOf(bob, bob3, 2))).toBe(202)
+		expect(await movedTo(t.store, bob.uri)).toBe(bob3.uri)
+		expect(await t.post(bob, toBob2)).toBe(202)
+		expect(await movedTo(t.store, bob.uri)).toBe(bob3.uri)
+	})
+
+	it('clears the references to a purged account over its batches, and keeps the row while one remains', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		await t.post(bob, follow(bob, DAVE_URI))
+		const bobId = (await accountId(t.store, bob.uri))!
+		const sources = PURGE_BATCH + 10
+		await sql(
+			t.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+			INSERT INTO accounts (id, uri, username, domain, moved_to_account_id)
+			SELECT printf('5%017d', i), 'https://s.example/users/s' || i, 's' || i, 's.example', ?2 FROM n`,
+			sources,
+			bobId
+		)
+		// One more reference, written while the first batch deletes the account's keys, after its clearing step.
+		await sql(
+			t.store,
+			`CREATE TRIGGER test_late_reference AFTER DELETE ON remote_keys BEGIN
+				UPDATE accounts SET moved_to_account_id = OLD.account_id WHERE id = '599999999999999999';
+			END`
+		)
+		await sql(
+			t.store,
+			"INSERT INTO accounts (id, uri, username, domain) VALUES ('599999999999999999', 'https://s.example/late', 'late', 's.example')"
+		)
+		t.web.fail(bob.uri, 410)
+		const deletion = { '@context': AS, id: `${bob.uri}#delete`, type: 'Delete', actor: bob.uri, object: bob.uri }
+		expect(await t.post(bob, deletion)).toBe(202)
+		// Each later batch as the job runs it: the references left after it, and whether the account row remains.
+		const batches: { left: number; kept: boolean; more: boolean }[] = []
+		for (let more = true; more;) {
+			const state = await runInDurableObject(t.store, (_instance, state) =>
+				state.storage.transactionSync(() => {
+					const db = new Db(state.storage.sql)
+					const before = { left: references(db), kept: true, more: true }
+					return { before, more: purgeBatch(db, bob.uri, NOW), left: references(db), kept: exists(db) }
+				})
+			)
+			if (batches.length === 0) {
+				batches.push(state.before)
+			}
+			more = state.more
+			batches.push({ left: state.left, kept: state.kept, more })
+		}
+		// After the Delete's own batch, more than PURGE_BATCH were cleared in all only over several batches; the
+		// reference written after the clearing step (in the batch that deletes the keys) kept the row one more batch.
+		expect(batches[0]!.left).toBe(sources - PURGE_BATCH)
+		expect(batches.at(-1)).toEqual({ left: 0, kept: false, more: false })
+		expect(batches.slice(0, -1).every((batch) => batch.kept)).toBe(true)
+		expect(batches.some((batch) => batch.left === 1 && batch.kept)).toBe(true)
+		await sql(t.store, 'DROP TRIGGER test_late_reference')
+		expect(
+			await sql(
+				t.store,
+				"SELECT count(*) AS n FROM accounts WHERE domain = 's.example' AND moved_to_account_id IS NULL"
+			)
+		).toEqual([{ n: sources + 1 }])
+		function references(db: Db): number {
+			return db.first<{ n: number }>('SELECT count(*) AS n FROM accounts WHERE moved_to_account_id = ?', bobId)!.n
+		}
+		function exists(db: Db): boolean {
+			return db.first('SELECT 1 AS x FROM accounts WHERE id = ?', bobId) !== undefined
+		}
+	})
+
+	it('names no account being purged, by a document or by a Move', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const bob2 = await mastodonActor(t.web, 'bob2', { origin: 'https://new.example', key: 2, extra: {} })
+		t.web.serve(bob2.uri, { ...bob2.document, alsoKnownAs: [bob.uri] })
+		await t.post(bob2, follow(bob2, DAVE_URI))
+		await t.post(bob, follow(bob, DAVE_URI))
+		// bob2's purge has started, with more left than one batch removes.
+		const bob2Id = (await accountId(t.store, bob2.uri))!
+		await sql(
+			t.store,
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
+			INSERT INTO statuses (id, uri, account_id, visibility, published_at)
+			SELECT printf('3%017d', i), ? || '/statuses/' || i, ?, 'public', '2026-10-01T00:00:00.000Z' FROM n`,
+			PURGE_BATCH * 2 + 1,
+			bob2.uri,
+			bob2Id
+		)
+		t.web.fail(bob2.uri, 410)
+		const deletion = { '@context': AS, id: `${bob2.uri}#delete`, type: 'Delete', actor: bob2.uri, object: bob2.uri }
+		expect(await t.post(bob2, deletion)).toBe(202)
+		expect(await accountId(t.store, bob2.uri)).toBe(bob2Id)
+		await refresh(t, bob, { ...bob.document, movedTo: bob2.uri }, 1)
+		expect(await t.post(bob, moveOf(bob, bob2, 1))).toBe(202)
+		expect(await movedTo(t.store, bob.uri)).toBeNull()
 	})
 })

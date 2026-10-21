@@ -63,6 +63,7 @@ const ACTOR = {
 	keys: [],
 	emojiTags: [],
 	raw: '{}',
+	movedTo: null,
 }
 const BASE = 600_000_000_000_000_000
 

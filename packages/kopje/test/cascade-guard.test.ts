@@ -13,6 +13,7 @@ import {
 	PURGE_BATCH,
 	purgeBatch,
 	PURGED_ACCOUNT_CHILDREN,
+	PURGED_ACCOUNT_REFERENCES,
 	STATUS_CHILDREN,
 } from '../src/domain/inbox'
 import { TOKEN_CHILDREN } from '../src/domain/suspension'
@@ -236,6 +237,33 @@ describe('cascade guard (RES-6)', () => {
 			).toEqual([])
 			expect(Object.keys(ACCOUNT_EXEMPT).filter((table) => !found.includes(table))).toEqual([])
 			expect(PURGED_ACCOUNT_CHILDREN.filter((child) => !found.includes(child.table))).toEqual([])
+		})
+	})
+
+	// A logical reference (an account id no foreign key holds) is cleared by the purge through its own index: it is not a
+	// foreign key, so no delete of the account reaches it, and its partial index holds exactly the rows that name one.
+	it('clears each logical reference through a partial index of its column', async () => {
+		await runInDurableObject(await migratedStore(), (_instance, state) => {
+			const sql = state.storage.sql
+			const keys = foreignKeys(sql)
+			expect(PURGED_ACCOUNT_REFERENCES.length).toBeGreaterThan(0)
+			for (const reference of PURGED_ACCOUNT_REFERENCES) {
+				expect(keys.filter((key) => key.from === reference.table && key.column === reference.column)).toEqual([])
+				const index = sql
+					.exec<{ tbl_name: string; sql: string }>(
+						"SELECT tbl_name, sql FROM sqlite_schema WHERE type = 'index' AND name = ?",
+						reference.index
+					)
+					.toArray()
+				expect(index).toEqual([{ tbl_name: reference.table, sql: expect.any(String) }])
+				expect(
+					sql
+						.exec<{ name: string }>(`PRAGMA index_info("${reference.index}")`)
+						.toArray()
+						.map((row) => row.name)
+				).toEqual([reference.column])
+				expect(index[0]!.sql).toContain(`WHERE ${reference.column} IS NOT NULL`)
+			}
 		})
 	})
 

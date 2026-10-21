@@ -2,6 +2,7 @@ import { exportSpki, signRequest } from '@fedify/fedify'
 import { Temporal } from 'temporal-polyfill'
 
 import { NOW } from './app-helpers'
+import type { RemoteActorInput } from '../src/domain/inbox'
 import { RSA_ALGORITHM } from '../src/security/key-wrap'
 
 // Remote servers for inbox tests: synthetic, real-shaped actor documents (Mastodon 4.x and Misskey 2024+) served by
@@ -302,4 +303,27 @@ export async function signedInit(
 		}
 	)
 	return { method: 'POST', headers: signed.headers, body }
+}
+
+// What a test's RemoteActorInput leaves at its defaults: a Person with no profile text or images, flags off, no shared
+// inbox, keys or emoji, and an empty document. A fresh object each call.
+export function actorDefaults(): Omit<
+	RemoteActorInput,
+	'uri' | 'username' | 'domain' | 'displayName' | 'inboxUrl' | 'movedTo'
+> {
+	return {
+		actorType: 'Person',
+		note: '',
+		url: null,
+		avatarUrl: null,
+		headerUrl: null,
+		locked: false,
+		discoverable: null,
+		indexable: false,
+		sharedInboxUrl: null,
+		published: null,
+		keys: [],
+		emojiTags: [],
+		raw: '{}',
+	}
 }

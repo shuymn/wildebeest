@@ -5,15 +5,32 @@ import { describe, expect, it } from 'vitest'
 
 import { setSetting, sql } from './api-helpers'
 import { NOW } from './app-helpers'
-import { ACCOUNT_EMOJIS_FULL, accountAtCap, STATUS_EMOJIS_FULL, statusAtCap, statusShortNames } from './emoji-fixtures'
+import {
+	ACCOUNT_EMOJIS_FULL,
+	accountAtCap,
+	emojiUrl,
+	STATUS_EMOJIS_FULL,
+	statusAtCap,
+	statusShortNames,
+} from './emoji-fixtures'
 import { BUILD } from './helpers'
 import { ALICE, setup, type Setup } from './inbox-status-helpers'
 import { localSnapshotAtCap } from './local-emoji-helpers'
-import { fullestFields, MAX_BIO } from './profile-fixtures'
+import { fullestFields, MAX_BIO, MOVED_ROW_SQLITE_MAX } from './profile-fixtures'
 import { observedSql, rowsRead } from './read-helpers'
 import { community, post, remoteAccount } from './status-helpers'
 import { heap } from './status-row-fixtures'
+import { selectSql } from '../src/db/columns'
 import { Db } from '../src/db/sql'
+import {
+	getAccount,
+	MOVED_ACCOUNT_COLUMNS,
+	MOVED_CREATED_AT_LIMIT,
+	MOVED_DISPLAY_NAME_LIMIT,
+	MOVED_EMOJIS_BYTES,
+	MOVED_LAST_STATUS_AT_LIMIT,
+	MOVED_URL_LIMIT,
+} from '../src/domain/accounts'
 import { createActivity, getFeatured, noteOf, OUTBOX_BYTES, PIN_LIMIT, statusFacts } from '../src/domain/activities'
 import { ANSWER_BYTES } from '../src/domain/answer-budget'
 import { type VisibleStatusId } from '../src/domain/audience'
@@ -46,9 +63,15 @@ import { statusRowBoundSql } from '../src/domain/status-rows'
 import { getStatus, getStatuses, statusHistory } from '../src/domain/statuses'
 import { parseRemoteStatus } from '../src/federation/remote-status'
 import { utf8Length } from '../src/platform/dump-format'
-import { MAX_LOCAL_ADDRESSED } from '../src/platform/identity-bounds'
+import { DOMAIN_BYTES, MAX_LOCAL_ADDRESSED } from '../src/platform/identity-bounds'
 import type { StoreOperation } from '../src/platform/store-kernel'
-import { presentedEmojiBytes, STATUS_EMOJIS_BYTES } from '../src/platform/stored-bounds'
+import {
+	EMOJI_ENTRY_BYTES,
+	EMOJI_SHORTCODE_LIMIT,
+	EMOJI_URL_LIMIT,
+	presentedEmojiBytes,
+	STATUS_EMOJIS_BYTES,
+} from '../src/platform/stored-bounds'
 import {
 	jsonStringBytes,
 	REMOTE_BIO_BYTES,
@@ -107,7 +130,118 @@ const REPORT_COMMENTS: Record<Fill, string> = {
 const W = '𠀀'
 const RAW_BIO = `<p>${'x'.repeat(REMOTE_BIO_BYTES - 9)}</p>`
 
-// A remote account with every profile column at its bound; `light`: only what a mention reads is at its bound.
+// The most JSON a nested moved-to account presents (accounts.ts presentMovedAccount), from its decoded limits at worst
+// escaping: characters of six JSON bytes at each text limit, URLs and uri at MOVED_URL_LIMIT (JSON-measured), counts
+// of 20 characters, emojis of MOVED_EMOJIS_BYTES (a string of that many JSON bytes stands for them), and every key at
+// once, a local account's (noindex, roles) and an unavailable one's (suspended) included.
+const MOVED_ACCOUNT_JSON_MAX = utf8Length(
+	JSON.stringify({
+		id: '9'.repeat(18),
+		username: C.repeat(USERNAME_LIMIT),
+		acct: `${C.repeat(USERNAME_LIMIT)}@${C.repeat(DOMAIN_BYTES)}`,
+		display_name: C.repeat(MOVED_DISPLAY_NAME_LIMIT),
+		locked: false,
+		bot: false,
+		discoverable: false,
+		indexable: false,
+		group: false,
+		created_at: C.repeat(MOVED_CREATED_AT_LIMIT),
+		note: '',
+		url: 'u'.repeat(MOVED_URL_LIMIT),
+		uri: 'u'.repeat(MOVED_URL_LIMIT),
+		avatar: 'u'.repeat(MOVED_URL_LIMIT),
+		avatar_static: 'u'.repeat(MOVED_URL_LIMIT),
+		header: 'u'.repeat(MOVED_URL_LIMIT),
+		header_static: 'u'.repeat(MOVED_URL_LIMIT),
+		followers_count: -(2 ** 63),
+		following_count: -(2 ** 63),
+		statuses_count: -(2 ** 63),
+		last_status_at: C.repeat(MOVED_LAST_STATUS_AT_LIMIT),
+		hide_collections: false,
+		emojis: 'x'.repeat(MOVED_EMOJIS_BYTES - 2),
+		fields: [],
+		noindex: false,
+		roles: [{ id: OWNER_ROLE.id, name: OWNER_ROLE.name, color: OWNER_ROLE.color }],
+		suspended: true,
+	})
+)
+// What a moved-to account's row reads at most: SQLite bytes (profile-fixtures.ts MOVED_ROW_SQLITE_MAX) and heap.
+const MOVED_ROW_HEAP_MAX = MOVED_ACCOUNT_COLUMNS.rowHeap
+
+// What presenting a nested account's emojis holds besides what it admits (custom-emojis.ts referencedEmojis), at
+// three times its bytes: one entry at a time, its two literals as stored (a 128-character name and a 512-byte url,
+// each character escaped to six bytes), their decoded strings, and the larger of the entry presented from them and a
+// candidate href that normalization makes before rejecting it (each url character percent-encoded to three bytes).
+// One presentation runs at a time, so an answer holds one.
+const MOVED_EMOJI_LITERALS = 6 * EMOJI_SHORTCODE_LIMIT + 2 + (6 * EMOJI_URL_LIMIT + 2)
+const MOVED_EMOJI_DECODED = EMOJI_SHORTCODE_LIMIT + EMOJI_URL_LIMIT
+const MOVED_EMOJI_CANDIDATE = Math.max(
+	EMOJI_ENTRY_BYTES + EMOJI_SHORTCODE_LIMIT + 2 * EMOJI_URL_LIMIT,
+	3 * EMOJI_URL_LIMIT
+)
+const MOVED_EMOJI_SCRATCH = 3 * (MOVED_EMOJI_LITERALS + MOVED_EMOJI_DECODED + MOVED_EMOJI_CANDIDATE)
+
+// The nested moved-to accounts a presented value shows (each `moved` that is an account).
+function movedAccounts(value: unknown): unknown[] {
+	if (Array.isArray(value)) {
+		return value.flatMap(movedAccounts)
+	}
+	if (typeof value !== 'object' || value === null) {
+		return []
+	}
+	return Object.entries(value).flatMap(([key, item]: [string, unknown]) =>
+		key === 'moved' && typeof item === 'object' && item !== null ? [item] : movedAccounts(item)
+	)
+}
+
+// The account a fill's presented account moved to (Account#moved, MOVED_ACCOUNT_COLUMNS), each column at its nested
+// cap: escaped (and derived, emoji-poll), characters JSON escapes to six bytes at each decoded limit, URLs at
+// MOVED_URL_LIMIT, counts of 20 characters and a display name that references emojis whose JSON fills
+// MOVED_EMOJIS_BYTES; raw, four-byte characters where a limit is in characters and every column at its byte cap, the
+// emoji snapshot at its stored bound. Its last status gives last_status_at.
+const MOVED_REFERENCED = 3
+// The longest url of MOVED_REFERENCED one-character entries whose presented JSON fits MOVED_EMOJIS_BYTES.
+const MOVED_EMOJI_URL = Math.floor(((MOVED_EMOJIS_BYTES - 1) / MOVED_REFERENCED - EMOJI_ENTRY_BYTES - 1) / 2)
+const MOVED_EMOJIS = Array.from({ length: MOVED_REFERENCED }, (_, i) => [
+	String.fromCharCode(97 + i),
+	emojiUrl(MOVED_EMOJI_URL, String(i)),
+])
+const MOVED_REFERENCES = MOVED_EMOJIS.map(([name]) => `:${name}:`).join('')
+
+async function movedTarget(t: Setup, fill: Fill): Promise<string> {
+	const id = nextId()
+	const raw = fill === 'raw'
+	const domain = raw ? `${'d'.repeat(DOMAIN_BYTES - 4)}.com` : C.repeat(DOMAIN_BYTES)
+	const counted = raw ? W : C
+	await sql(
+		t.store,
+		`INSERT INTO accounts (id, uri, username, domain, display_name, url, avatar_url, header_url, emojis, created_at,
+			followers_count, following_count, statuses_count)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, -9223372036854775808, -9223372036854775808, -9223372036854775808)`,
+		id,
+		atLimit(`https://moved.example/users/${id}/`, MOVED_URL_LIMIT),
+		`${'u'.repeat(USERNAME_LIMIT - 18)}${id}`,
+		domain,
+		raw ? W.repeat(2048) : `${MOVED_REFERENCES}${C.repeat(2048 - MOVED_REFERENCES.length)}`,
+		atLimit(`https://moved.example/@${id}/`, MOVED_URL_LIMIT),
+		atLimit(`https://moved.example/a/${id}/`, MOVED_URL_LIMIT),
+		atLimit(`https://moved.example/h/${id}/`, MOVED_URL_LIMIT),
+		raw ? ACCOUNT_EMOJIS_FULL : JSON.stringify(MOVED_EMOJIS),
+		counted.repeat(MOVED_CREATED_AT_LIMIT)
+	)
+	await sql(
+		t.store,
+		"INSERT INTO statuses (id, uri, account_id, visibility, published_at) VALUES (?, ?, ?, 'public', ?)",
+		nextId(),
+		`https://moved.example/statuses/${id}`,
+		id,
+		counted.repeat(MOVED_LAST_STATUS_AT_LIMIT)
+	)
+	return id
+}
+
+// A remote account with every profile column at its bound; `light`: only what a mention reads is at its bound. One
+// that is not light moved to an account of its own at the nested caps (movedTarget).
 async function maximalAccount(t: Setup, light = false, fill: Fill = 'escaped'): Promise<string> {
 	const id = nextId()
 	const username = `${'u'.repeat(USERNAME_LIMIT - 18)}${id}`
@@ -127,6 +261,9 @@ async function maximalAccount(t: Setup, light = false, fill: Fill = 'escaped'): 
 		light ? null : JSON.stringify({ type: 'Person', attachment: fullestFields() }),
 		light ? null : accountEmojis(fill)
 	)
+	if (!light) {
+		await sql(t.store, 'UPDATE accounts SET moved_to_account_id = ? WHERE id = ?', await movedTarget(t, fill), id)
+	}
 	return id
 }
 
@@ -881,7 +1018,12 @@ async function maximalStatuses(fill: Fill) {
 
 // What each fill measures: the table of maxima, and for each item of the heap model its rows by query and column (its
 // JSON is the table's). Measured once per fill, by whichever test asks first.
-type FillMeasure = { shapes: Record<string, Shape>; heaps: Record<string, Heaps> }
+type FillMeasure = {
+	shapes: Record<string, Shape>
+	heaps: Record<string, Heaps>
+	// The nested moved-to accounts each shape shows: how many, and what their JSON lacks of MOVED_ACCOUNT_JSON_MAX.
+	moved: Record<string, { count: number; deficit: number }>
+}
 const fills = new Map<Fill, Promise<FillMeasure>>()
 
 function measureFill(fill: Fill): Promise<FillMeasure> {
@@ -1030,7 +1172,27 @@ async function measureShapes(fill: Fill): Promise<FillMeasure> {
 	expect(shownReport.statuses.map((status) => status.id)).toEqual([quote])
 	const account = (one.answer as Presented).account
 	const two = await read(t, getStatus, quote)
+	const answers: Record<string, unknown> = {
+		account,
+		status: one.answer,
+		quote: two.answer,
+		boostOfQuote: pair.answer,
+		conversation: talk,
+		group,
+		report: shownReport,
+		reportNotification: adminReport,
+	}
 	return {
+		moved: Object.fromEntries(
+			Object.entries(answers).map(([name, answer]) => {
+				const nested = movedAccounts(answer)
+				const deficit = nested.reduce((sum: number, value) => sum + MOVED_ACCOUNT_JSON_MAX - jsonBytes(value), 0)
+				for (const value of nested) {
+					expect(jsonBytes(value)).toBeLessThanOrEqual(MOVED_ACCOUNT_JSON_MAX)
+				}
+				return [name, { count: nested.length, deficit }]
+			})
+		),
 		shapes: {
 			account: { sqlite: one.profileBytes, json: jsonBytes(account), rows: 1, nodes: nodes(account) },
 			status: shape(one),
@@ -1069,7 +1231,13 @@ function perColumn(measures: readonly Heaps[]): { heap: number; largestRow: numb
 	}
 	let heap = 0
 	let largestRow = 0
-	for (const { rows, columns } of queries.values()) {
+	for (const [query, { rows, columns }] of queries) {
+		// The moved-to accounts' rows at their caps, whatever the fills hold (MOVED_ROW_HEAP_MAX).
+		if (query.includes(selectSql(MOVED_ACCOUNT_COLUMNS.columns))) {
+			heap += rows * MOVED_ROW_HEAP_MAX
+			largestRow = Math.max(largestRow, MOVED_ROW_HEAP_MAX)
+			continue
+		}
 		const values = [...columns.values()]
 		heap += 64 * rows + values.reduce((sum, c) => sum + c.total, 0)
 		largestRow = Math.max(largestRow, 64 + values.reduce((sum, c) => sum + c.largest, 0))
@@ -1097,13 +1265,17 @@ const LOCAL_ACCOUNT_KEYS_JSON =
 // The conservative JSON of each shape: the escaped fill's, whose status and account emoji arrays are at their bounds,
 // plus a poll's emoji array at its bound for each poll shown. No one fill holds both: the references a poll's choices
 // need displace escaped characters (the emoji-poll fill), so this bounds every combination from above. The account
-// occurrence adds a local account's keys, so it bounds a local account as well as the remote one measured.
+// occurrence adds a local account's keys, so it bounds a local account as well as the remote one measured. Each
+// nested moved-to account counts at MOVED_ACCOUNT_JSON_MAX, what its caps allow at once.
 async function conservativeJson(): Promise<Record<string, number>> {
-	const { shapes } = await measureFill('escaped')
+	const { shapes, moved } = await measureFill('escaped')
 	return Object.fromEntries(
 		Object.entries(shapes).map(([name, shape]) => [
 			name,
-			shape.json + (POLLS_SHOWN[name] ?? 0) * POLL_EMOJIS_JSON + (name === 'account' ? LOCAL_ACCOUNT_KEYS_JSON : 0),
+			shape.json +
+				(POLLS_SHOWN[name] ?? 0) * POLL_EMOJIS_JSON +
+				(name === 'account' ? LOCAL_ACCOUNT_KEYS_JSON : 0) +
+				moved[name]!.deficit,
 		])
 	)
 }
@@ -1118,7 +1290,7 @@ async function peaks(items: readonly string[], chunks: ChunkPlan, state: number)
 	const largestRow = Math.max(...each.map((e) => e.largestRow))
 	const conservative = await conservativeJson()
 	const json = Math.max(...items.map((item) => conservative[item]!))
-	const rest = 3 * ANSWER_BYTES + 3 * json + state
+	const rest = 3 * ANSWER_BYTES + 3 * json + MOVED_EMOJI_SCRATCH + state
 	return {
 		rows,
 		largestRow,
@@ -1127,6 +1299,53 @@ async function peaks(items: readonly string[], chunks: ChunkPlan, state: number)
 		backstop: 1.25 * (chunks.cap + largestRow) + rows + rest,
 	}
 }
+
+// The nested moved-to account (Account#moved): its row and JSON maxima follow from its caps (MOVED_ACCOUNT_COLUMNS), so
+// any target reads and presents within them: one at the caps (movedTarget), a full account at every profile bound, or
+// an unavailable one.
+describe('the moved-to account (RES-3)', () => {
+	it('derives its maxima from its caps', () => {
+		expect(MOVED_EMOJI_SCRATCH).toBe(18_060)
+		expect({ json: MOVED_ACCOUNT_JSON_MAX, sqlite: MOVED_ROW_SQLITE_MAX, heap: MOVED_ROW_HEAP_MAX }).toEqual({
+			json: 11_021,
+			sqlite: 10_094,
+			heap: 20_764,
+		})
+	})
+
+	it.each<[string, Fill]>([
+		['escaped', 'escaped'],
+		['raw', 'raw'],
+	])(
+		'reads a full account at its bounds, available or not, as a target within them, %s',
+		async (_name, fill) => {
+			const t = await setup()
+			const target = await maximalAccount(t, false, fill)
+			// A domain a target is read with (DOMAIN_BYTES), the rest at every profile bound.
+			await sql(t.store, 'UPDATE accounts SET domain = ? WHERE id = ?', `${'d'.repeat(DOMAIN_BYTES - 4)}.com`, target)
+			const source = await maximalAccount(t, true, fill)
+			await sql(t.store, 'UPDATE accounts SET moved_to_account_id = ? WHERE id = ?', target, source)
+			for (const unavailable of [false, true]) {
+				if (unavailable) {
+					await sql(
+						t.store,
+						"UPDATE accounts SET suspended_at = '2026-01-01', suspension_source = 'account' WHERE id = ?",
+						target
+					)
+				}
+				const m = await measured(t, getAccount as never, { id: source, present: { origin: ORIGIN } } as never)
+				const [rows] = [...m.heaps].filter(([query]) => query.includes(selectSql(MOVED_ACCOUNT_COLUMNS.columns)))
+				expect(rows![1].rows).toBe(1)
+				const heap = 64 + [...rows![1].columns.values()].reduce((sum, column) => sum + column.total, 0)
+				expect(heap).toBeLessThanOrEqual(MOVED_ROW_HEAP_MAX)
+				const moved = (m.answer as { moved: Record<string, unknown> }).moved
+				expect(moved).toMatchObject({ id: target, ...(unavailable ? { suspended: true } : {}) })
+				expect(jsonBytes(moved)).toBeLessThanOrEqual(MOVED_ACCOUNT_JSON_MAX)
+			}
+		},
+		120_000
+	)
+})
 
 describe('the table of maxima (RES-3)', () => {
 	// docs/threat-model.md "Maxima of presented units" states these. An answer admits a whole item, so every atomic
@@ -1138,56 +1357,56 @@ describe('the table of maxima (RES-3)', () => {
 			'the escaped worst case: the most JSON',
 			'escaped',
 			{
-				account: { sqlite: 103_222, json: 132_095, rows: 1, nodes: 64 },
-				status: { sqlite: 2_759_855, json: 2_618_401, rows: 1_484, nodes: 2_339 },
-				quote: { sqlite: 4_946_353, json: 5_236_835, rows: 1_916, nodes: 4_680 },
-				boostOfQuote: { sqlite: 5_088_698, json: 5_637_434, rows: 1_972, nodes: 5_611 },
-				conversation: { sqlite: 6_251_480, json: 6_821_944, rows: 1_930, nodes: 5_439 },
-				group: { sqlite: 5_773_083, json: 6_294_019, rows: 1_943, nodes: 5_204 },
-				report: { sqlite: 5_247_552, json: 5_816_598, rows: 1_929, nodes: 4_939 },
-				reportNotification: { sqlite: 804_235, json: 386_594, rows: 1_059, nodes: 238 },
+				account: { sqlite: 103_240, json: 140_447, rows: 1, nodes: 92 },
+				status: { sqlite: 2_763_900, json: 2_626_753, rows: 1485, nodes: 2367 },
+				quote: { sqlite: 4_954_443, json: 5_253_539, rows: 1918, nodes: 4736 },
+				boostOfQuote: { sqlite: 5_100_833, json: 5_662_490, rows: 1975, nodes: 5695 },
+				conversation: { sqlite: 6_308_118, json: 6_938_872, rows: 1944, nodes: 5831 },
+				group: { sqlite: 5_813_533, json: 6_377_539, rows: 1953, nodes: 5484 },
+				report: { sqlite: 5_263_740, json: 5_850_006, rows: 1933, nodes: 5051 },
+				reportNotification: { sqlite: 812_325, json: 403_298, rows: 1061, nodes: 294 },
 			},
 		],
 		[
 			'mentions whose url is derived',
 			'derived',
 			{
-				account: { sqlite: 103_222, json: 132_095, rows: 1, nodes: 64 },
-				status: { sqlite: 2_351_855, json: 2_208_801, rows: 1_484, nodes: 2_339 },
-				quote: { sqlite: 4_130_353, json: 4_417_635, rows: 1_916, nodes: 4_680 },
-				boostOfQuote: { sqlite: 4_272_698, json: 4_818_234, rows: 1_972, nodes: 5_611 },
-				conversation: { sqlite: 5_435_480, json: 6_002_744, rows: 1_930, nodes: 5_439 },
-				group: { sqlite: 4_957_083, json: 5_474_819, rows: 1_943, nodes: 5_204 },
-				report: { sqlite: 4_416_552, json: 4_907_398, rows: 1_929, nodes: 4_939 },
-				reportNotification: { sqlite: 789_235, json: 296_594, rows: 1_059, nodes: 238 },
+				account: { sqlite: 103_240, json: 140_447, rows: 1, nodes: 92 },
+				status: { sqlite: 2_355_900, json: 2_217_153, rows: 1485, nodes: 2367 },
+				quote: { sqlite: 4_138_443, json: 4_434_339, rows: 1918, nodes: 4736 },
+				boostOfQuote: { sqlite: 4_284_833, json: 4_843_290, rows: 1975, nodes: 5695 },
+				conversation: { sqlite: 5_492_118, json: 6_119_672, rows: 1944, nodes: 5831 },
+				group: { sqlite: 4_997_533, json: 5_558_339, rows: 1953, nodes: 5484 },
+				report: { sqlite: 4_432_740, json: 4_940_806, rows: 1933, nodes: 5051 },
+				reportNotification: { sqlite: 797_325, json: 313_298, rows: 1061, nodes: 294 },
 			},
 		],
 		[
 			'the raw worst case: the most bytes read from SQLite',
 			'raw',
 			{
-				account: { sqlite: 123_215, json: 128_000, rows: 1, nodes: 64 },
-				status: { sqlite: 4_435_330, json: 2_180_708, rows: 1_484, nodes: 2_339 },
-				quote: { sqlite: 6_799_703, json: 4_361_449, rows: 1_916, nodes: 4_680 },
-				boostOfQuote: { sqlite: 7_084_918, json: 4_604_355, rows: 1_972, nodes: 5_611 },
-				conversation: { sqlite: 8_364_739, json: 5_897_418, rows: 1_930, nodes: 5_439 },
-				group: { sqlite: 7_786_377, json: 5_385_873, rows: 1_943, nodes: 5_204 },
-				report: { sqlite: 7_160_881, json: 4_824_832, rows: 1_929, nodes: 4_939 },
-				reportNotification: { sqlite: 2_341_821, json: 278_404, rows: 1_059, nodes: 238 },
+				account: { sqlite: 123_233, json: 132_819, rows: 1, nodes: 80 },
+				status: { sqlite: 4_444_672, json: 2_185_527, rows: 1485, nodes: 2355 },
+				quote: { sqlite: 6_818_387, json: 4_371_087, rows: 1918, nodes: 4712 },
+				boostOfQuote: { sqlite: 7_112_944, json: 4_618_812, rows: 1975, nodes: 5659 },
+				conversation: { sqlite: 8_495_535, json: 5_964_884, rows: 1944, nodes: 5663 },
+				group: { sqlite: 7_879_797, json: 5_434_063, rows: 1953, nodes: 5364 },
+				report: { sqlite: 7_198_257, json: 4_844_108, rows: 1933, nodes: 5003 },
+				reportNotification: { sqlite: 2_360_505, json: 288_042, rows: 1061, nodes: 270 },
 			},
 		],
 		[
 			'short emoji references in every poll: the most poll emojis',
 			'emoji-poll',
 			{
-				account: { sqlite: 103_222, json: 132_095, rows: 1, nodes: 64 },
-				status: { sqlite: 2_759_007, json: 2_630_502, rows: 1_484, nodes: 2_391 },
-				quote: { sqlite: 4_944_657, json: 5_261_037, rows: 1_916, nodes: 4_784 },
-				boostOfQuote: { sqlite: 5_087_002, json: 5_661_636, rows: 1_972, nodes: 5_715 },
-				conversation: { sqlite: 6_249_784, json: 6_846_146, rows: 1_930, nodes: 5_543 },
-				group: { sqlite: 5_771_387, json: 6_318_221, rows: 1_943, nodes: 5_308 },
-				report: { sqlite: 5_245_856, json: 5_840_800, rows: 1_929, nodes: 5_043 },
-				reportNotification: { sqlite: 804_235, json: 386_594, rows: 1_059, nodes: 238 },
+				account: { sqlite: 103_240, json: 140_447, rows: 1, nodes: 92 },
+				status: { sqlite: 2_763_052, json: 2_638_854, rows: 1485, nodes: 2419 },
+				quote: { sqlite: 4_952_747, json: 5_277_741, rows: 1918, nodes: 4840 },
+				boostOfQuote: { sqlite: 5_099_137, json: 5_686_692, rows: 1975, nodes: 5799 },
+				conversation: { sqlite: 6_306_422, json: 6_963_074, rows: 1944, nodes: 5935 },
+				group: { sqlite: 5_811_837, json: 6_401_741, rows: 1953, nodes: 5588 },
+				report: { sqlite: 5_262_044, json: 5_874_208, rows: 1933, nodes: 5155 },
+				reportNotification: { sqlite: 812_325, json: 403_298, rows: 1061, nodes: 294 },
 			},
 		],
 	])(
@@ -1206,6 +1425,19 @@ describe('the table of maxima (RES-3)', () => {
 	// show the most emoji JSON less what their references displace (37 escaped characters: 185 bytes).
 	it('keeps the conservative JSON of every shape within 85%, above every fill', async () => {
 		const conservative = await conservativeJson()
+		// Every presented account but the viewer's own shows a moved-to account, counted at MOVED_ACCOUNT_JSON_MAX.
+		for (const fill of await Promise.all(FILLS.map(measureFill))) {
+			expect(Object.fromEntries(Object.entries(fill.moved).map(([name, { count }]) => [name, count]))).toEqual({
+				account: 1,
+				status: 1,
+				quote: 2,
+				boostOfQuote: 3,
+				conversation: 14,
+				group: 10,
+				report: 4,
+				reportNotification: 2,
+			})
+		}
 		const [escaped, emojiPoll] = await Promise.all([measureFill('escaped'), measureFill('emoji-poll')])
 		const displaced = SHORT_REFERENCES.length * 5
 		for (const [name, json] of Object.entries(conservative)) {
@@ -1218,15 +1450,26 @@ describe('the table of maxima (RES-3)', () => {
 			)
 		}
 		expect(conservative).toEqual({
-			account: 132_158,
-			status: 2_630_687,
-			quote: 5_261_407,
-			boostOfQuote: 5_662_006,
-			conversation: 6_846_516,
-			group: 6_318_591,
-			report: 5_841_170,
-			reportNotification: 386_594,
+			account: 143_188,
+			status: 2_641_717,
+			quote: 5_283_467,
+			boostOfQuote: 5_695_096,
+			conversation: 7_000_936,
+			group: 6_428_891,
+			report: 5_885_290,
+			reportNotification: 408_654,
 		})
+	}, 600_000)
+
+	// What an answer of many accounts reads past its budget (one chunk of accounts.ts ANSWER_CHUNK, 50, each with its
+	// moved-to account) and what a page of 80 accounts serializes to at most, from the account occurrence.
+	it('bounds a chunk of accounts read past an answer and a page of 80, from the account occurrence', async () => {
+		const { shapes } = await measureFill('raw')
+		const conservative = await conservativeJson()
+		expect({
+			chunk: 50 * (shapes.account!.sqlite + MOVED_ROW_SQLITE_MAX),
+			page: 80 * conservative.account!,
+		}).toEqual({ chunk: 6_666_350, page: 11_455_040 })
 	}, 600_000)
 
 	// Half of the Store isolate's 128 MB. A timeline's largest item is a status, a quote or a boost of a quote; groups

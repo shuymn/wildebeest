@@ -39,7 +39,14 @@ export type Item = {
 	quotedLocal?: boolean
 	// The stored emoji snapshots of its statuses and of its author, if any.
 	emojis?: { status: string | null; author: string | null }
+	// Where its remote author moved (Account#moved): to another remote account, to the fixture's first local account
+	// (the OAuth admin of an admin fixture), to an unavailable account, or to an id that names none; `unavailableSource`
+	// moves it to a remote account and suspends the author itself.
+	moved?: MovedKind
 }
+
+export type MovedKind = 'remote' | 'local' | 'unavailable' | 'unavailableSource' | 'dangling'
+export const MOVED_KINDS: readonly MovedKind[] = ['remote', 'local', 'unavailable', 'unavailableSource', 'dangling']
 
 export type Fixture = { viewer: string; token: string; mentioned: string[]; filter: string; locals: string[] }
 
@@ -126,6 +133,12 @@ export function build(sql: SqlStorage, f: Fixture, item: Item): string {
 				JSON.stringify({ attachment: [{ type: 'PropertyValue', name: 'k', value: 'v'.repeat(item.text % 500) }] }),
 				item.emojis?.author ?? null
 			)
+			if (item.moved !== undefined) {
+				sql.exec('UPDATE accounts SET moved_to_account_id = ? WHERE id = ?', movedTarget(sql, f, item), remote)
+			}
+			if (item.moved === 'unavailableSource') {
+				sql.exec("UPDATE accounts SET suspended_at = ?, suspension_source = 'account' WHERE id = ?", VIEWER_NOW, remote)
+			}
 		}
 		return remote
 	}
@@ -227,6 +240,32 @@ export function build(sql: SqlStorage, f: Fixture, item: Item): string {
 			return boost(status(item, authorOf(item.originalLocal)))
 		case 'boostOfQuote':
 			return boost(quote(item, authorOf(item.originalLocal)))
+	}
+}
+
+// The account an item's remote author moved to (Item.moved), written for it.
+function movedTarget(sql: SqlStorage, f: Fixture, item: Item): string {
+	switch (item.moved) {
+		case 'local':
+			return f.locals[0]!
+		case 'dangling':
+			return '999999999999999999'
+		default: {
+			const id = nextId()
+			sql.exec(
+				`INSERT INTO accounts (id, uri, username, domain, display_name, url, emojis)
+				VALUES (?, ?, 'target', 'new.example', ?, ?, ?)`,
+				id,
+				`https://new.example/users/${id}`,
+				(item.wide ? '名' : 'n').repeat(item.text % 150),
+				`https://new.example/@target${'p'.repeat(item.text % 400)}`,
+				item.emojis?.author ?? null
+			)
+			if (item.moved === 'unavailable') {
+				sql.exec("UPDATE accounts SET suspended_at = ?, suspension_source = 'account' WHERE id = ?", VIEWER_NOW, id)
+			}
+			return id
+		}
 	}
 }
 

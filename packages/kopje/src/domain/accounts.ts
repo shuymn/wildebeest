@@ -26,7 +26,7 @@ import {
 	userReadOperation,
 	userWriteOperation,
 } from './auth'
-import { type CustomEmoji, localEmojiSnapshot, presentEmojis } from './custom-emojis'
+import { type CustomEmoji, localEmojiSnapshot, presentEmojis, referencedEmojis } from './custom-emojis'
 import { retractFollow } from './inbox'
 import { applyProfileImage, PROFILE_IMAGES, type ProfileImage, profileUploadReady } from './media'
 import { notify } from './notifications'
@@ -44,13 +44,21 @@ import { accountSearchText, queryTerms } from './search-text'
 import { renderFieldValue } from './status-text'
 import { unlockChanged } from './unlock-accepts'
 import { readWindow, singleWindow, type Window, windowJson, windowPage } from './windows'
-import { type ColumnMap, selectSql } from '../db/columns'
+import { type ColumnMap, fixedColumns, selectSql } from '../db/columns'
 import { ACCOUNTS_ID_INDEX, LOCAL_ACCOUNTS_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
 import { normalizeDomain, parseAddress } from '../platform/domain-name'
 import { boundedHref, httpUrl } from '../platform/http-url'
-import { ACTOR_URI_LIMIT, withinIdentityBound } from '../platform/identity-bounds'
-import { ACCOUNT_EMOJIS_BYTES, storedDisplayName, storedText } from '../platform/stored-bounds'
+import { ACTOR_URI_LIMIT, DOMAIN_BYTES, withinIdentityBound } from '../platform/identity-bounds'
+import {
+	ACCOUNT_EMOJIS_BYTES,
+	byteBoundSql,
+	byteCut,
+	cutCodePoints,
+	MOVED_TO_ID_BYTES,
+	storedDisplayName,
+	storedText,
+} from '../platform/stored-bounds'
 import { sanitizeRemoteHtml } from '../security/html'
 
 // Accounts as the Mastodon API (4.0.2) shows them: one presenter, and the account and relationship operations of B3.
@@ -93,6 +101,9 @@ export type Account = {
 	// A local account's only: its highlighted role, the OAuth admin's Owner while it is available; [] otherwise.
 	roles?: AccountRole[]
 	suspended?: true
+	// The account it moved to (Account#moved_to_account), one level deep (MOVED_ACCOUNT_COLUMNS), when it has one
+	// stored; null while it is unavailable (REST::AccountSerializer#moved_to_account).
+	moved?: Account | null
 }
 
 // A role as REST::AccountSerializer::RoleSerializer presents it.
@@ -188,6 +199,8 @@ export type AccountRow = {
 	attachment: string | null
 	// The account's emoji snapshot (custom-emojis.ts); null for none.
 	emojis: string | null
+	// The id of the account it moved to (migration 0060_account_moves), or null.
+	moved_to_account_id: string | null
 }
 
 // Fields a remote profile shows: its PropertyValue attachments (ProcessAccountService#property_values), the name as
@@ -247,13 +260,118 @@ export const ACCOUNT_COLUMN_MAP = {
 	statuses_count: 'a.statuses_count',
 	created_at: 'a.created_at',
 	available: availableJoinedSql('a', 'l'),
-	last_status_at: `(SELECT substr(s.published_at, 1, 10) FROM statuses s
-		WHERE s.account_id = a.id AND s.visibility IN ${REACHES_FOLLOWERS_SQL} ORDER BY s.id DESC LIMIT 1)`,
+	last_status_at: lastStatusAtSql('a'),
 	local_fields: 'l.fields',
 	hide_collections: 'COALESCE(l.hide_collections, a.hide_collections)',
 	attachment: REMOTE_ATTACHMENT_SQL,
 	emojis: 'a.emojis',
+	moved_to_account_id: 'a.moved_to_account_id',
 } as const satisfies ColumnMap
+
+// The date of the account `a`'s newest status its followers reach.
+function lastStatusAtSql(a: string): string {
+	return `(SELECT substr(s.published_at, 1, 10) FROM statuses s
+		WHERE s.account_id = ${a}.id AND s.visibility IN ${REACHES_FOLLOWERS_SQL} ORDER BY s.id DESC LIMIT 1)`
+}
+
+// The account an account moved to, as it presents nested in Account#moved (D2 in docs/mastodon-deviations.md): its
+// identity and counts, no note or fields, and of its emojis only those its cut display name references. Mastodon
+// nests the full account; Kopje bounds the nested one so that no target is read past what it shows (RES-3). Every
+// text is cut in SQL by its raw UTF-8 bytes (an imported value may be malformed UTF-8, which SQLite's substr counts
+// as fewer characters), then by its decoded limit in the presenter (presentMovedAccount): display_name at
+// MOVED_DISPLAY_NAME_LIMIT code points (400 bytes read), username at USERNAME_LIMIT (1,020 bytes read), created_at at
+// 24 and last_status_at at 10 (96 and 40 bytes read). The uri and URLs read as unset past MOVED_URL_LIMIT bytes, and
+// are shown only within it as JSON writes them; emojis are the stored snapshot (ACCOUNT_EMOJIS_BYTES, 0053's trigger),
+// shown within MOVED_EMOJIS_BYTES of JSON. A target whose domain passes DOMAIN_BYTES is not read (no `moved`).
+export const MOVED_DISPLAY_NAME_LIMIT = 100
+export const MOVED_URL_LIMIT = 512
+export const MOVED_EMOJIS_BYTES = 2048
+// The decoded limits of created_at and last_status_at, in code points (an ISO time, a date).
+export const MOVED_CREATED_AT_LIMIT = 24
+export const MOVED_LAST_STATUS_AT_LIMIT = 10
+// A code point is at most four UTF-8 bytes.
+const POINT_BYTES = 4
+
+const movedFlag = (column: string) => `CASE ${column} WHEN 1 THEN 1 WHEN 0 THEN 0 END`
+// byteCut of a NOT NULL column: substr of an empty BLOB is NULL, read as ''.
+const textCut = (column: string, bytes: number) => `coalesce(${byteCut(column, bytes)}, '')`
+
+const MOVED_COLUMN_MAP = {
+	id: 'm.id',
+	uri: actorUriSql('m.uri', MOVED_URL_LIMIT),
+	username: textCut(usernameSql('m.username'), POINT_BYTES * USERNAME_LIMIT),
+	domain: 'm.domain',
+	actor_type: "CASE WHEN m.actor_type IN ('Service', 'Application', 'Group') THEN m.actor_type ELSE 'Person' END",
+	display_name: textCut('m.display_name', POINT_BYTES * MOVED_DISPLAY_NAME_LIMIT),
+	url: byteBoundSql('m.url', MOVED_URL_LIMIT),
+	avatar_url: byteBoundSql('m.avatar_url', MOVED_URL_LIMIT),
+	header_url: byteBoundSql('m.header_url', MOVED_URL_LIMIT),
+	locked: movedFlag('m.locked'),
+	discoverable: movedFlag('m.discoverable'),
+	indexable: movedFlag('m.indexable'),
+	followers_count: 'CAST(m.followers_count AS INTEGER)',
+	following_count: 'CAST(m.following_count AS INTEGER)',
+	statuses_count: 'CAST(m.statuses_count AS INTEGER)',
+	created_at: textCut('m.created_at', POINT_BYTES * MOVED_CREATED_AT_LIMIT),
+	available: availableJoinedSql('m', 'ml'),
+	last_status_at: byteCut(lastStatusAtSql('m'), POINT_BYTES * MOVED_LAST_STATUS_AT_LIMIT),
+	hide_collections: movedFlag('COALESCE(ml.hide_collections, m.hide_collections)'),
+	emojis: 'm.emojis',
+} as const satisfies ColumnMap
+
+// The most UTF-8 bytes each column of MOVED_COLUMN_MAP reads (0 for a number), which its row heap rests on.
+export const MOVED_ACCOUNT_CAPS: { readonly [K in keyof typeof MOVED_COLUMN_MAP]: number } = {
+	id: MOVED_TO_ID_BYTES,
+	uri: MOVED_URL_LIMIT,
+	username: POINT_BYTES * USERNAME_LIMIT,
+	domain: DOMAIN_BYTES,
+	actor_type: 'Application'.length,
+	display_name: POINT_BYTES * MOVED_DISPLAY_NAME_LIMIT,
+	url: MOVED_URL_LIMIT,
+	avatar_url: MOVED_URL_LIMIT,
+	header_url: MOVED_URL_LIMIT,
+	locked: 0,
+	discoverable: 0,
+	indexable: 0,
+	followers_count: 0,
+	following_count: 0,
+	statuses_count: 0,
+	created_at: POINT_BYTES * MOVED_CREATED_AT_LIMIT,
+	available: 0,
+	last_status_at: POINT_BYTES * MOVED_LAST_STATUS_AT_LIMIT,
+	hide_collections: 0,
+	emojis: ACCOUNT_EMOJIS_BYTES,
+}
+
+export const MOVED_ACCOUNT_COLUMNS = fixedColumns(MOVED_COLUMN_MAP, MOVED_ACCOUNT_CAPS)
+
+type MovedRow = Omit<AccountRow, 'note' | 'local_fields' | 'attachment' | 'moved_to_account_id' | 'locked'> & {
+	locked: number | null
+}
+
+// The moved-to accounts of `rows` that are available (an unavailable one shows `moved: null`, its target not read),
+// each target read once by its key; a target that is not stored, or whose domain passes DOMAIN_BYTES, is not returned.
+function movedOf(db: Db, rows: readonly AccountRow[]): ReadonlyMap<string, MovedRow> {
+	const targets = [
+		...new Set(
+			rows.flatMap((row) => (row.available === 1 && row.moved_to_account_id !== null ? [row.moved_to_account_id] : []))
+		),
+	]
+	if (targets.length === 0) {
+		return new Map()
+	}
+	return new Map(
+		db
+			.all<MovedRow>(
+				`SELECT ${selectSql(MOVED_ACCOUNT_COLUMNS.columns)} FROM json_each(?1) c
+				CROSS JOIN accounts m INDEXED BY ${ACCOUNTS_ID_INDEX} ON m.id = c.value
+				LEFT JOIN local_accounts ml INDEXED BY ${LOCAL_ACCOUNTS_ID_INDEX} ON ml.account_id = m.id
+				WHERE m.domain IS NULL OR length(CAST(m.domain AS BLOB)) <= ${DOMAIN_BYTES}`,
+				JSON.stringify(targets)
+			)
+			.map((row) => [row.id, row])
+	)
+}
 
 export { DISPLAY_NAME_LIMIT, PROFILE_URL_LIMIT, USERNAME_LIMIT, usernameSql }
 
@@ -266,7 +384,7 @@ const ACCOUNT_FROM_BY_ID = `accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} LEFT JOIN
 // alone past it). A Mastodon user's account serializes to about 2 KiB, so 1,000 take a quarter of it; one at
 // Misskey's profile limits to about 8 KiB (test/account-answer-bytes.test.ts measures both).
 // Accounts read per query while an answer is filled: what is read past the budget is at most one chunk of accounts
-// at their bound (RES-2), about 6 MB.
+// at their bound (RES-2) with the accounts they moved to, 6.67 MB (test/status-bounds.test.ts).
 const ANSWER_CHUNK = 50
 
 // The presented accounts of `ids` (accounts' ids), in order, `chunk` at a time, each with its serialized size (and a
@@ -315,10 +433,13 @@ export function* accountsOf(
 ): Generator<Account | undefined, undefined> {
 	for (let next = 0; next < ids.length; next += chunk) {
 		const slice = ids.slice(next, next + chunk)
-		const rows = new Map(accountRowsOf(db, [...new Set(slice)]).map((row) => [row.id, row]))
+		const read = accountRowsOf(db, [...new Set(slice)])
+		// The chunk's moved-to accounts in one read; each is presented only with its source.
+		const moved = movedOf(db, read)
+		const rows = new Map(read.map((row) => [row.id, row]))
 		for (const id of slice) {
 			const row = rows.get(id)
-			yield row === undefined ? undefined : presentAccount(db, row, present)
+			yield row === undefined ? undefined : presentAccount(db, row, present, moved)
 		}
 	}
 }
@@ -389,17 +510,34 @@ export function admitAccounts(
 // actor URI, which carries the account's origin (a local account's carries the instance origin), or from this
 // instance's origin when the URI is not http(s) either. Each is used only within PROFILE_URL_LIMIT as serialized
 // (RES-2): a longer one falls back to the next, and to '' when none fits (a converted row of a long host and name).
+// `href` bounds each: a nested moved-to account's are MOVED_BOUNDS'.
 export function accountUrl(
 	row: { url: string | null; uri: string; username: string; domain: string | null },
-	origin: string
+	origin: string,
+	href = ACCOUNT_BOUNDS.href
 ): string {
 	const actor = httpUrl(row.uri)
 	return (
-		boundedHref(row.url, PROFILE_URL_LIMIT) ??
-		(actor === null ? null : boundedHref(`${actor.origin}/@${row.username}`, PROFILE_URL_LIMIT)) ??
-		boundedHref(`${origin}/@${acctOf(row)}`, PROFILE_URL_LIMIT) ??
+		href(row.url) ??
+		(actor === null ? null : href(`${actor.origin}/@${row.username}`)) ??
+		href(`${origin}/@${acctOf(row)}`) ??
 		''
 	)
+}
+
+// How a presenter bounds an account's URLs and actor id (RES-2): `href` serializes an http(s) URL within its bound or
+// gives null, and `uri` is the actor id's bound, in UTF-8 bytes as JSON writes it.
+type IdentityBounds = { href: (value: string | null) => string | null; uri: number }
+
+const ACCOUNT_BOUNDS: IdentityBounds = { href: (value) => boundedHref(value, PROFILE_URL_LIMIT), uri: ACTOR_URI_LIMIT }
+
+// A serialized URL may keep a '\' in its query or fragment, which JSON doubles: within MOVED_URL_LIMIT as JSON too.
+const MOVED_BOUNDS: IdentityBounds = {
+	href: (value) => {
+		const href = boundedHref(value, MOVED_URL_LIMIT)
+		return href !== null && withinIdentityBound(href, MOVED_URL_LIMIT) ? href : null
+	},
+	uri: MOVED_URL_LIMIT,
 }
 
 export function acctOf(row: { username: string; domain: string | null }): string {
@@ -409,28 +547,77 @@ export function acctOf(row: { username: string; domain: string | null }): string
 // An unavailable account (R1: suspended, or a remote account whose deletion has started, as the row's query read it
 // live) is shown redacted, as Mastodon's REST::AccountSerializer shows an unavailable one: no display name, note,
 // fields or emojis, the default avatar and header, locked, bot, discoverable and indexable false, and
-// `suspended: true`. The uri and noindex are shown as for an available one, as Mastodon shows them.
-function presentAccount(db: Db, row: AccountRow, { origin }: Present): Account {
+// `suspended: true`. The uri and noindex are shown as for an available one, as Mastodon shows them. `moved`: the
+// account it moved to, from `moved` (movedOf), absent when it names none Kopje reads, null while it is unavailable.
+function presentAccount(db: Db, row: AccountRow, { origin }: Present, moved: ReadonlyMap<string, MovedRow>): Account {
+	const target = row.moved_to_account_id === null ? undefined : moved.get(row.moved_to_account_id)
+	return {
+		...presentIdentity(db, row, origin, ACCOUNT_BOUNDS, () => ({
+			display_name: row.display_name,
+			note: row.note,
+			emojis: presentEmojis(row.emojis, ACCOUNT_EMOJIS_BYTES),
+			fields: row.domain === null ? fieldSources(row.local_fields).map(presentField) : remoteFields(row.attachment),
+		})),
+		...(row.moved_to_account_id === null
+			? {}
+			: row.available === 0
+				? { moved: null }
+				: target === undefined
+					? {}
+					: { moved: presentMovedAccount(db, target, origin) }),
+	}
+}
+
+// A moved-to account nested in Account#moved (MOVED_ACCOUNT_COLUMNS): every text within its decoded limit, no note
+// or fields, and the emojis its display name references while their JSON fits MOVED_EMOJIS_BYTES. It never shows a
+// `moved` of its own (Mastodon's AccountDecorator#moved? is false).
+function presentMovedAccount(db: Db, row: MovedRow, origin: string): Account {
+	const displayName = cutCodePoints(row.display_name, MOVED_DISPLAY_NAME_LIMIT)
+	const cut = {
+		...row,
+		username: cutCodePoints(row.username, USERNAME_LIMIT),
+		created_at: cutCodePoints(row.created_at, MOVED_CREATED_AT_LIMIT),
+		last_status_at: row.last_status_at === null ? null : cutCodePoints(row.last_status_at, MOVED_LAST_STATUS_AT_LIMIT),
+	}
+	return presentIdentity(db, cut, origin, MOVED_BOUNDS, () => ({
+		display_name: displayName,
+		note: '',
+		emojis: referencedEmojis(row.emojis, [displayName], MOVED_EMOJIS_BYTES),
+		fields: [],
+	}))
+}
+
+type Profile = Pick<Account, 'display_name' | 'note' | 'emojis' | 'fields'>
+
+// The keys an account shows, its URLs and actor id within `bounds`; `profile`, of an available account only.
+function presentIdentity(
+	db: Db,
+	row: MovedRow,
+	origin: string,
+	bounds: IdentityBounds,
+	profile: () => Profile
+): Account {
 	const suspended = row.available === 0
 	// Stored URLs are shown only when they are http(s) (httpUrl); anything else reads as unset.
-	const url = accountUrl(row, origin)
-	const avatar = (suspended ? null : boundedHref(row.avatar_url, PROFILE_URL_LIMIT)) ?? `${origin}${DEFAULT_AVATAR}`
-	const header = (suspended ? null : boundedHref(row.header_url, PROFILE_URL_LIMIT)) ?? `${origin}${DEFAULT_HEADER}`
+	const url = accountUrl(row, origin, bounds.href)
+	const avatar = (suspended ? null : bounds.href(row.avatar_url)) ?? `${origin}${DEFAULT_AVATAR}`
+	const header = (suspended ? null : bounds.href(row.header_url)) ?? `${origin}${DEFAULT_HEADER}`
+	const shown: Profile = suspended ? { display_name: '', note: '', emojis: [], fields: [] } : profile()
 	return {
 		id: row.id,
 		username: row.username,
 		acct: acctOf(row),
-		display_name: suspended ? '' : row.display_name,
+		display_name: shown.display_name,
 		locked: !suspended && row.locked === 1,
 		bot: !suspended && (row.actor_type === 'Service' || row.actor_type === 'Application'),
 		discoverable: suspended ? false : row.discoverable === null ? null : row.discoverable === 1,
 		indexable: !suspended && row.indexable === 1,
 		group: row.actor_type === 'Group',
 		created_at: row.created_at,
-		note: suspended ? '' : row.note,
+		note: shown.note,
 		url,
 		// RES-2: the projection (actorUriSql) bounds the raw bytes, and this the escaped JSON of an imported value.
-		uri: withinIdentityBound(row.uri, ACTOR_URI_LIMIT) ? row.uri : '',
+		uri: withinIdentityBound(row.uri, bounds.uri) ? row.uri : '',
 		avatar,
 		avatar_static: avatar,
 		header,
@@ -440,18 +627,19 @@ function presentAccount(db: Db, row: AccountRow, { origin }: Present): Account {
 		statuses_count: row.statuses_count,
 		last_status_at: row.last_status_at,
 		hide_collections: row.hide_collections === null ? null : row.hide_collections === 1,
-		emojis: suspended ? [] : presentEmojis(row.emojis, ACCOUNT_EMOJIS_BYTES),
-		fields: suspended
-			? []
-			: row.domain === null
-				? fieldSources(row.local_fields).map(presentField)
-				: remoteFields(row.attachment),
+		emojis: shown.emojis,
+		fields: shown.fields,
 		// The admin is looked up only for an available local account, once per operation (adminAccountIdOnce).
 		...(row.domain === null
 			? { noindex: false, roles: !suspended && adminAccountIdOnce(db) === row.id ? [OWNER_BADGE] : [] }
 			: {}),
 		...(suspended ? { suspended: true as const } : {}),
 	}
+}
+
+// One account with its moved-to account, read for it alone.
+function presentOne(db: Db, row: AccountRow, present: Present): Account {
+	return presentAccount(db, row, present, movedOf(db, [row]))
 }
 
 // Stored local fields; anything that is not a name and value pair of strings is skipped.
@@ -527,20 +715,18 @@ export function resolveAccountId(db: Db, id: string): string | null {
 
 // Presented accounts by id, read in one query: for getAccounts' MAX_ACCOUNTS_BY_ID only.
 function presentAccountsById(db: Db, ids: readonly string[], present: Present): Map<string, Account> {
-	return new Map(
-		db
-			.all<AccountRow>(
-				`SELECT ${selectSql(ACCOUNT_COLUMN_MAP)} FROM ${ACCOUNT_FROM_BY_ID} WHERE a.id IN (SELECT value FROM json_each(?1))`,
-				JSON.stringify([...new Set(ids)])
-			)
-			.map((row) => [row.id, presentAccount(db, row, present)])
+	const rows = db.all<AccountRow>(
+		`SELECT ${selectSql(ACCOUNT_COLUMN_MAP)} FROM ${ACCOUNT_FROM_BY_ID} WHERE a.id IN (SELECT value FROM json_each(?1))`,
+		JSON.stringify([...new Set(ids)])
 	)
+	const moved = movedOf(db, rows)
+	return new Map(rows.map((row) => [row.id, presentAccount(db, row, present, moved)]))
 }
 
 // One presented account by id, bounded as a unit (RES-2); undefined for an id with no account.
 export function presentAccountById(db: Db, id: string, present: Present): Account | undefined {
 	const row = accountRow(db, id)
-	return row === undefined ? undefined : presentAccount(db, row, present)
+	return row === undefined ? undefined : presentOne(db, row, present)
 }
 
 function accountRow(db: Db, id: string): AccountRow | undefined {
@@ -550,7 +736,7 @@ function accountRow(db: Db, id: string): AccountRow | undefined {
 export const getAccount = readOperation<{ id: string; present: Present }, Account | null>((db, { id, present }) => {
 	const resolved = resolveAccountId(db, id)
 	const row = resolved === null ? undefined : accountRow(db, resolved)
-	return row === undefined ? null : presentAccount(db, row, present)
+	return row === undefined ? null : presentOne(db, row, present)
 })
 
 // GET /api/v1/accounts?id[]= (AccountsController#index): the accounts getAccount shows one by one, read in one query,
@@ -596,7 +782,7 @@ function addressRow(
 // The presented account an address names (an unavailable one redacted, VIS-30), or null when none does.
 export function accountByAddress(db: Db, username: string, domain: string | null, present: Present): Account | null {
 	const row = addressRow(db, username, domain)
-	return row === undefined ? null : presentAccount(db, row, present)
+	return row === undefined ? null : presentOne(db, row, present)
 }
 
 // The address of the account an address names, as stored: `username`, or `username@domain` for a remote one.
@@ -634,7 +820,7 @@ export function credentialAccount(db: Db, accountId: string, present: Present): 
 		return null
 	}
 	return {
-		...presentAccount(db, row, present),
+		...presentOne(db, row, present),
 		source: {
 			privacy: local.default_visibility,
 			sensitive: local.default_sensitive === 1,
@@ -673,7 +859,7 @@ export const userinfo = userReadOperation<{ present: Present }, Userinfo | null>
 	if (row === undefined) {
 		return null
 	}
-	const account = presentAccount(db, row, present)
+	const account = presentOne(db, row, present)
 	return {
 		iss: `${present.origin}/`,
 		sub: row.uri,

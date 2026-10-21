@@ -23,6 +23,9 @@ const ENCODER = new TextEncoder()
 // same language as USERNAME_RE), ASCII, capped at REMOTE_USERNAME_LIMIT (RES-1); Mastodon sets no remote cap.
 // Without the m flag, JavaScript's `$` matches only the string end, unlike Ruby's, so a trailing newline fails.
 export const REMOTE_USERNAME_LIMIT = 255
+
+// A domain name as an address shows it, in UTF-8 bytes: a DNS name is at most 253.
+export const DOMAIN_BYTES = 253
 const REMOTE_USERNAME = /^[a-z0-9_]+([a-z0-9_.-]+[a-z0-9_]+)?$/i
 
 export function isRemoteUsername(value: string): boolean {

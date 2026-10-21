@@ -21,7 +21,11 @@ describe('migration lint', () => {
 	})
 
 	it('accepts every file declared foreignKeys: unchanged', () => {
-		expect(DECLARED.map((m) => m.name)).toEqual(['0058_profile_credentials', '0059_contact_and_activity'])
+		expect(DECLARED.map((m) => m.name)).toEqual([
+			'0058_profile_credentials',
+			'0059_contact_and_activity',
+			'0060_account_moves',
+		])
 		for (const m of DECLARED) {
 			expect(unchangedProblem(m.sql), m.name).toBeNull()
 		}

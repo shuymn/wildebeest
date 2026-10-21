@@ -53,8 +53,15 @@ export function jsonBoundSql(column: string, bytes: number, over: string): strin
 	WHEN length(CAST(json_quote(${column}) AS BLOB)) > ${bytes} THEN ${over} ELSE ${column} END`
 }
 
+// A text value cut to its first `bytes` UTF-8 bytes, counted as bytes: SQLite's length and substr count characters,
+// skipping continuation bytes, so a malformed imported value would pass a character cut whole. Each byte presents as
+// at most six JSON bytes (a control character escaped, or a malformed byte decoded to U+FFFD: three).
+export function byteCut(column: string, bytes: number): string {
+	return `CAST(substr(CAST(${column} AS BLOB), 1, ${bytes}) AS TEXT)`
+}
+
 // A NULL past `bytes` UTF-8 bytes.
-function byteBoundSql(column: string, bytes: number): string {
+export function byteBoundSql(column: string, bytes: number): string {
 	return `CASE WHEN length(CAST(${column} AS BLOB)) <= ${bytes} THEN ${column} END`
 }
 
@@ -141,7 +148,7 @@ export function storedText(text: string): string {
 }
 
 // The first `limit` code points of `text`. A string has at least as many code units as code points.
-function cutCodePoints(text: string, limit: number): string {
+export function cutCodePoints(text: string, limit: number): string {
 	if (text.length <= limit) {
 		return text
 	}
@@ -869,6 +876,47 @@ export function profileBoundsMigrationSql(): string {
 			'indexable',
 			indexablePastBoundSql('NEW.indexable'),
 			'accounts: indexable past its stored bound'
+		),
+	].join('\n\n')}\n`
+}
+
+// ---- Account moves: migration 0060_account_moves
+
+// accounts.moved_to_account_id: NULL, or the 18-digit id of another account, on a remote row only (Mastodon's
+// Account#moved_to_account_id, set from the actor document's movedTo and by a verified Move: domain/inbox.ts). No
+// foreign key holds it: the purge of a remote account clears the references to it first (PURGED_ACCOUNT_REFERENCES in
+// domain/inbox.ts). True when `NEW` holds anything else, judged in order: the storage class, the bytes, NUL, the
+// structure (digits only), then the row (another account's id, and a remote row).
+export const MOVED_TO_ID_BYTES = 18
+
+export function movedToPastBoundSql(row: string): string {
+	const column = `${row}.moved_to_account_id`
+	return `CASE WHEN ${column} IS NULL THEN 0
+	WHEN typeof(${column}) <> 'text' THEN 1
+	WHEN length(CAST(${column} AS BLOB)) <> ${MOVED_TO_ID_BYTES} THEN 1
+	WHEN instr(CAST(${column} AS BLOB), x'00') > 0 THEN 1
+	WHEN ${column} GLOB '*[^0-9]*' THEN 1
+	WHEN ${column} = ${row}.id THEN 1
+	WHEN ${row}.domain IS NULL THEN 1
+	ELSE 0 END`
+}
+
+// The partial index the purge's clearing step and completion check seek references through.
+export const MOVED_TO_INDEX = 'accounts_moved_to'
+
+// Migration 0060_account_moves after its header (test/migrations.test.ts compares them): the column, added without a
+// default or CHECK so no row is read; its partial index; and triggers that refuse a write where movedToPastBoundSql
+// holds.
+export function accountMovesMigrationSql(): string {
+	return `${[
+		'ALTER TABLE accounts ADD COLUMN moved_to_account_id TEXT;',
+		`CREATE INDEX ${MOVED_TO_INDEX} ON accounts (moved_to_account_id) WHERE moved_to_account_id IS NOT NULL;`,
+		...boundTriggers(
+			'accounts_moved_to',
+			'accounts',
+			'moved_to_account_id, domain',
+			movedToPastBoundSql('NEW'),
+			'accounts: moved_to_account_id past its stored bound'
 		),
 	].join('\n\n')}\n`
 }

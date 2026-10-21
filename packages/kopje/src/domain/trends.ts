@@ -11,8 +11,10 @@ import { presentation, presentStatusesWithin, type Status } from './status-prese
 import { HISTORY_DAYS, historyDays, presentTags, type Tag, type TagHistory, tagId, tagName } from './tags'
 import { type Db, ROW_OBJECT_BYTES, RowMeter, VALUE_BYTES } from '../db/sql'
 import { fromHex } from '../platform/dump-literals'
+import { DOMAIN_BYTES } from '../platform/identity-bounds'
 import type { ImportAuthority } from '../platform/store-admin'
 import {
+	byteCut,
 	isoTimeSql,
 	MAX_TREND_REVIEWS,
 	MAX_TREND_TAGS,
@@ -566,7 +568,6 @@ export const ADMIN_TREND_STATUSES_LIMIT = 40
 // each cut on bytes (byteCut).
 const EXCERPT_SOURCE = 4000
 export const EXCERPT_UNITS = 200
-export const DOMAIN_BYTES = 253
 
 export type AdminTrendTag = {
 	name: string
@@ -657,13 +658,6 @@ type StatusReviewRow = {
 	status_review: number | null
 	account_review: number | null
 	content: string
-}
-
-// A text value cut to its first `bytes` UTF-8 bytes, counted as bytes: SQLite's length and substr count characters,
-// skipping continuation bytes, so a malformed imported value would pass a character cut whole. Each byte presents as
-// at most six JSON bytes (a control character escaped, or a malformed byte decoded to U+FFFD: three).
-function byteCut(column: string, bytes: number): string {
-	return `CAST(substr(CAST(${column} AS BLOB), 1, ${bytes}) AS TEXT)`
 }
 
 // Every variable field through its bounded projection (RES-3): the stored URL bound, the 24-byte ISO time, a
