@@ -243,6 +243,10 @@ describe('what a notification stream does not carry', () => {
 		await drained(h, inbox)
 		expect(inbox.rest().map((m) => m.stream)).toEqual([['user'], ['user:notification']])
 		expect(notifications(inbox.rest(), 'user')).toMatchObject([{ type: 'mention' }])
+		// A streamed notification is never a filtered one, so it carries no `filtered` (REST::NotificationSerializer).
+		for (const stream of ['user', 'user:notification']) {
+			expect(notifications(inbox.rest(), stream).map((n) => Object.hasOwn(n, 'filtered'))).toEqual([false])
+		}
 	})
 
 	it('leaves out a notification dismissed before its turn', async () => {
