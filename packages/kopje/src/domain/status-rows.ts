@@ -188,14 +188,11 @@ function statusRowTerms(viewer: string, filterRows: string): string {
 	return balancedSum([
 		one(`SELECT ${rowHeapSql(STATUS_COLUMN_MAP)} FROM ${STATUS_FROM} WHERE s.id = x.id`),
 		fixed(QUOTE_READ_COLUMNS, '1'),
-		one(`SELECT ${rowHeapSql(ACCOUNT_COLUMN_MAP)} FROM statuses w INDEXED BY ${STATUSES_ID_INDEX}
+		// The author's row, and its moved-to account's at its caps, read with it.
+		one(`SELECT ${rowHeapSql(ACCOUNT_COLUMN_MAP)}
+				+ CASE WHEN a.moved_to_account_id IS NULL THEN 0 ELSE ${MOVED_ACCOUNT_COLUMNS.rowHeap} END
+			FROM statuses w INDEXED BY ${STATUSES_ID_INDEX}
 			CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = w.account_id LEFT JOIN local_accounts l ON l.account_id = a.id WHERE w.id = x.id`),
-		fixed(
-			MOVED_ACCOUNT_COLUMNS,
-			`SELECT count(*) FROM statuses w INDEXED BY ${STATUSES_ID_INDEX}
-			CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = w.account_id
-			WHERE w.id = x.id AND a.moved_to_account_id IS NOT NULL`
-		),
 		`CASE WHEN (SELECT o.reblog_of_id FROM statuses o WHERE o.id = x.id) IS NULL THEN ${children} ELSE 0 END`,
 		fixed(FILTER_MATCH_COLUMNS, filterRows),
 		`CASE WHEN ${viewer} IS NULL THEN 0 ELSE ${balancedSum([
