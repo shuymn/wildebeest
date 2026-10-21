@@ -60,8 +60,8 @@ export const PUBLISH_ROUND = 25
 // REST::ScheduledStatusSerializer's params: the post's options as PostStatusService#scheduled_options keeps them.
 // application_id is the client_id of the app it was scheduled through (an app's id, docs/mastodon-deviations.md
 // "Instance and apps"), null when storedApplicationId keeps none; the post is published through it, as stored, whether
-// or not the app still exists (a removed app's status presents `application: null`). quoted_status_id is the status quoted (a boost's original),
-// which R36 judges again when the post is published. The quote policy is the one the request chose, or the author's
+// or not the app still exists (a removed app's status presents `application: null`). quoted_status_id is the status
+// quoted (a boost's original), which R36 judges again when the post is published. The quote policy is the one the request chose, or the author's
 // default when it chose none, resolved when the post is scheduled (as Mastodon's controller resolves it), by name as
 // the serializer shows it. Ids are strings, and so is a poll's expires_in, as a form sends it.
 export type ScheduledParams = {
@@ -312,79 +312,79 @@ export type ScheduleResult = CreateStatusResult | { status: 'scheduled'; value: 
 // Then no scheduled_at, or a time not in the future, posts at once; otherwise the post is checked as an immediate one
 // (the status replied to, the media, a blank text), then against ScheduledStatus's validations, and kept with its
 // media held.
-export const postStatus = userWriteOperation<ScheduleInput, ScheduleResult>(
-	(db, input, { accountId, client }, viewer) => {
-		const applicationId = storedApplicationId(client.id)
-		if (input.scheduledAt !== undefined && !isTime(input.scheduledAt)) {
-			return { status: 'invalid', error: 'Record invalid' }
+export const postStatus = userWriteOperation<ScheduleInput, ScheduleResult>((db, input, caller, viewer) => {
+	const { accountId } = caller
+	// AUTH-6: the app of the credential, which the Worker cannot name.
+	const applicationId = storedApplicationId(caller.client.id)
+	if (input.scheduledAt !== undefined && !isTime(input.scheduledAt)) {
+		return { status: 'invalid', error: 'Record invalid' }
+	}
+	if (input.idempotencyKey !== undefined) {
+		const status: Status | null = ownStatusByKey(db, viewer, input.idempotencyKey, input.present, input.now)
+		if (status !== null) {
+			return { status: 'ok', value: status }
 		}
-		if (input.idempotencyKey !== undefined) {
-			const status: Status | null = ownStatusByKey(db, viewer, input.idempotencyKey, input.present, input.now)
-			if (status !== null) {
-				return { status: 'ok', value: status }
-			}
-			const scheduled = db.first<ScheduledRow>(
-				`SELECT ${COLUMNS} FROM scheduled_statuses ss WHERE ${scheduledOwnSql('ss', '?1')} AND ss.client_key = ?2
+		const scheduled = db.first<ScheduledRow>(
+			`SELECT ${COLUMNS} FROM scheduled_statuses ss WHERE ${scheduledOwnSql('ss', '?1')} AND ss.client_key = ?2
 				AND ${keyFreshSql('ss.created_at', '?3')}`,
-				accountId,
-				input.idempotencyKey,
-				keyCutoff(input.now)
-			)
-			if (scheduled !== undefined) {
-				return { status: 'scheduled', value: presentScheduled(db, scheduled) }
-			}
-			releaseKey(db, accountId, input.idempotencyKey)
-		}
-		if (input.scheduledAt === undefined || Date.parse(input.scheduledAt) <= input.now) {
-			return postNow(db, viewer, input, applicationId)
-		}
-		const scheduledAt = input.scheduledAt
-		// As PostStatusService#schedule_status!: allowed_mentions is kept in the params and checked at publication.
-		const prepared = preparePost(db, accountId, { ...input, allowedMentions: undefined }, null)
-		if (!isPrepared(prepared)) {
-			return refusedPost(db, prepared, input.present)
-		}
-		const errors = scheduleErrors(db, accountId, scheduledAt, input.now, null)
-		if (errors.length > 0) {
-			return invalid(errors)
-		}
-		const params = JSON.stringify(
-			paramsOf(
-				input,
-				prepared.media,
-				prepared.parent?.id ?? null,
-				prepared.quoted?.id ?? null,
-				input.quotePolicy ?? prepared.author.default_quote_policy,
-				applicationId
-			)
-		)
-		if (new TextEncoder().encode(params).length > MAX_PARAMS_BYTES) {
-			return { status: 'invalid', error: 'Record invalid' }
-		}
-		const row = db.first<ScheduledRow>(
-			`INSERT INTO scheduled_statuses (id, account_id, scheduled_at, params, client_key, created_at)
-		VALUES (?, ?, ?, ?, ?, ?) RETURNING id, scheduled_at, params`,
-			allocateLocalId(db, input.now),
 			accountId,
-			scheduledAt,
-			params,
-			input.idempotencyKey ?? null,
-			iso(input.now)
+			input.idempotencyKey,
+			keyCutoff(input.now)
 		)
-		if (row === undefined) {
-			throw new Error('the scheduled status was not written')
+		if (scheduled !== undefined) {
+			return { status: 'scheduled', value: presentScheduled(db, scheduled) }
 		}
-		db.run(
-			`UPDATE media_attachments INDEXED BY ${MEDIA_ID_INDEX}
+		releaseKey(db, accountId, input.idempotencyKey)
+	}
+	if (input.scheduledAt === undefined || Date.parse(input.scheduledAt) <= input.now) {
+		return postNow(db, viewer, input, applicationId)
+	}
+	const scheduledAt = input.scheduledAt
+	// As PostStatusService#schedule_status!: allowed_mentions is kept in the params and checked at publication.
+	const prepared = preparePost(db, accountId, { ...input, allowedMentions: undefined }, null)
+	if (!isPrepared(prepared)) {
+		return refusedPost(db, prepared, input.present)
+	}
+	const errors = scheduleErrors(db, accountId, scheduledAt, input.now, null)
+	if (errors.length > 0) {
+		return invalid(errors)
+	}
+	const params = JSON.stringify(
+		paramsOf(
+			input,
+			prepared.media,
+			prepared.parent?.id ?? null,
+			prepared.quoted?.id ?? null,
+			input.quotePolicy ?? prepared.author.default_quote_policy,
+			applicationId
+		)
+	)
+	if (new TextEncoder().encode(params).length > MAX_PARAMS_BYTES) {
+		return { status: 'invalid', error: 'Record invalid' }
+	}
+	const row = db.first<ScheduledRow>(
+		`INSERT INTO scheduled_statuses (id, account_id, scheduled_at, params, client_key, created_at)
+		VALUES (?, ?, ?, ?, ?, ?) RETURNING id, scheduled_at, params`,
+		allocateLocalId(db, input.now),
+		accountId,
+		scheduledAt,
+		params,
+		input.idempotencyKey ?? null,
+		iso(input.now)
+	)
+	if (row === undefined) {
+		throw new Error('the scheduled status was not written')
+	}
+	db.run(
+		`UPDATE media_attachments INDEXED BY ${MEDIA_ID_INDEX}
 		SET scheduled_status_id = ?1, gc_at = NULL,
 			position = (SELECT j.key FROM json_each(?2) j WHERE j.value = media_attachments.id)
 		WHERE id IN (SELECT value FROM json_each(?2))`,
-			row.id,
-			JSON.stringify(prepared.media)
-		)
-		return { status: 'scheduled', value: presentScheduled(db, row) }
-	}
-)
+		row.id,
+		JSON.stringify(prepared.media)
+	)
+	return { status: 'scheduled', value: presentScheduled(db, row) }
+})
 
 // The default and largest page of GET /api/v1/scheduled_statuses (DEFAULT_STATUSES_LIMIT, and limit_param's cap at
 // twice it).

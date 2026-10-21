@@ -137,6 +137,24 @@ describe('apps', () => {
 		}
 	})
 
+	// Mastodon's APP_NAME_LIMIT of 60 characters (app/lib/application_extension.rb:6, :15, v4.5.11), counted in code
+	// points: the most a status presents its app's name within (platform/stored-bounds.ts).
+	it('accepts a name of 60 characters, astral ones too, and refuses 61', async () => {
+		const h = await apiHarness()
+		const register = (name: string) =>
+			h.request('/api/v1/apps', json({ client_name: name, redirect_uris: 'https://client.test/cb' }))
+		for (const character of ['a', '𠀀']) {
+			const accepted = await register(character.repeat(60))
+			expect(accepted.status, character).toBe(200)
+			expect(await accepted.json(), character).toMatchObject({ name: character.repeat(60) })
+			const refused = await register(character.repeat(61))
+			expect(refused.status, character).toBe(422)
+			expect(await refused.json(), character).toEqual({
+				error: "Validation failed: Application name can't be blank or longer than 60 characters",
+			})
+		}
+	})
+
 	it('accepts form-encoded registrations with an array of redirect URIs', async () => {
 		const h = await apiHarness()
 		const body = new URLSearchParams([

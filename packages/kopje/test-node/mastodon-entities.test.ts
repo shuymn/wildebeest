@@ -65,10 +65,7 @@ const ENTITY_EXCEPTIONS: Exceptions = {
 	'REST::AccountSerializer': ACCOUNT,
 	'REST::CredentialAccountSerializer': ACCOUNT,
 	'REST::AccountSerializer::FieldSerializer': open('no rel=me verification', 'verified_at'),
-	'REST::StatusSerializer': {
-		...open('missing', 'application'),
-		...open('no link previews', 'card'),
-	},
+	'REST::StatusSerializer': open('no link previews', 'card'),
 	'REST::MediaAttachmentSerializer': open(
 		'always null, also for remote media',
 		'blurhash',
