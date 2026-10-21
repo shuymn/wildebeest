@@ -1,6 +1,7 @@
 import type { Context } from 'hono'
 import { HTTPException } from 'hono/http-exception'
 
+import type { ActivityMemo } from './activity'
 import { INVALID_TOKEN, invalidTokenError, mastodonError } from './errors'
 import { type Params, readParams } from './params'
 import type { Present } from '../domain/accounts'
@@ -29,6 +30,8 @@ export type ApiDeps = {
 	// LD-signs an activity as a local author with their wrapped key (a revoke's stamp Delete, federation/ld-sign.ts);
 	// none: revokes that need a signature answer 503.
 	signAsAuthor?: (env: Env, sign: AuthorSignature) => Promise<Record<string, unknown>>
+	// The isolate's memo of recorded activity (mastodon/activity.ts); none: no activity is recorded.
+	activity?: ActivityMemo
 }
 
 export type AuthorSignature = { activity: Record<string, unknown>; keyId: string; key: StoredKey }

@@ -1,3 +1,4 @@
+import { noteActivity } from './domain/auth'
 import {
 	CONVERSATIONS_PER_TURN,
 	hashtagKey,
@@ -164,9 +165,10 @@ export class StreamHub {
 		return Promise.resolve(new Response(null, { status: 404 }))
 	}
 
-	// After a write commits: a turn, if a socket is open and the write was not the hub's own.
+	// After a write commits: a turn, if a socket is open and the write was not the hub's own or an activity stamp
+	// (auth.ts noteActivity), which no stream shows.
 	written(operation: StoreOperation<never, unknown>): void {
-		if (!STREAM_OPERATIONS.has(operation) && this.#ctx.getWebSockets().length > 0) {
+		if (!STREAM_OPERATIONS.has(operation) && operation !== noteActivity && this.#ctx.getWebSockets().length > 0) {
 			this.#request()
 		}
 	}

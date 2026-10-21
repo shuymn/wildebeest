@@ -4,6 +4,7 @@ import {
 	type ApiHandler,
 	authorized,
 	optionalTokenCredential,
+	present,
 	storeCall,
 	vapidKey,
 } from './context'
@@ -34,8 +35,12 @@ export const API_VERSIONS = { mastodon: 7 }
 
 const SOURCE_URL = 'https://github.com/shuymn/wildebeest'
 
-// Placeholder until the web UI ships instance assets.
-const THUMBNAIL_PATH = '/assets/thumbnail.png'
+// The plain default shipped as a static asset (public/assets); Kopje has no thumbnail upload.
+const DEFAULT_THUMBNAIL = '/assets/thumbnail.png'
+
+// The web UI's only language (src/web/strings.ts, `<html lang="en">`), as Mastodon lists its default locale
+// (InstancePresenter#languages).
+const UI_LANGUAGES = ['en']
 
 const CONFIGURATION = {
 	accounts: { max_featured_tags: 10 },
@@ -54,14 +59,14 @@ const CONFIGURATION = {
 }
 
 async function load(c: ApiContext, deps: ApiDeps): Promise<{ info: InstanceInfo; domain: string; origin: string }> {
-	const info = await storeCall(c, deps, (s, b) => s.instanceInfo(b))
+	const info = await storeCall(c, deps, (s, b) => s.instanceInfo(b, { now: deps.now(), present: present(c) }))
 	const url = new URL(c.req.url)
 	// Before /setup fixes the domain, the request's host stands in.
 	return { info, domain: info.domain ?? url.host, origin: url.origin }
 }
 
 export const instanceV1: ApiHandler = async (c, deps) => {
-	const { info, domain } = await load(c, deps)
+	const { info, domain, origin } = await load(c, deps)
 	return c.json({
 		uri: domain,
 		title: info.title ?? domain,
@@ -71,13 +76,13 @@ export const instanceV1: ApiHandler = async (c, deps) => {
 		version: MASTODON_VERSION,
 		urls: { streaming_api: `wss://${domain}` },
 		stats: { user_count: info.userCount, status_count: info.statusCount, domain_count: info.domainCount },
-		thumbnail: null,
-		languages: [],
+		thumbnail: `${origin}${DEFAULT_THUMBNAIL}`,
+		languages: UI_LANGUAGES,
 		registrations: false,
 		approval_required: false,
 		invites_enabled: false,
 		configuration: CONFIGURATION,
-		contact_account: null,
+		contact_account: info.contactAccount,
 		rules: info.rules,
 	})
 }
@@ -90,9 +95,9 @@ export const instanceV2: ApiHandler = async (c, deps) => {
 		version: MASTODON_VERSION,
 		source_url: SOURCE_URL,
 		description: info.description ?? '',
-		usage: { users: { active_month: info.userCount } },
-		thumbnail: { url: `${origin}${THUMBNAIL_PATH}` },
-		languages: [],
+		usage: { users: { active_month: info.activeMonth } },
+		thumbnail: { url: `${origin}${DEFAULT_THUMBNAIL}` },
+		languages: UI_LANGUAGES,
 		// Kopje ships no app icons (Mastodon lists its own defaults).
 		icon: [],
 		configuration: {
@@ -128,7 +133,7 @@ export const instanceV2: ApiHandler = async (c, deps) => {
 			url: null,
 		},
 		api_versions: API_VERSIONS,
-		contact: { email: info.contactEmail ?? '', account: null },
+		contact: { email: info.contactEmail ?? '', account: info.contactAccount },
 		rules: info.rules,
 	})
 }
@@ -219,9 +224,9 @@ export const domainBlocks: ApiHandler = async (c, deps) => {
 }
 
 // GET /api/v1/instance/activity: Mastodon's head 404 with the API off
-// (app/controllers/api/v1/instances/activity_controller.rb:50-52). Its weekly logins count users with an authenticated
-// request, which Kopje does not record (tokens are deleted on logout, revoke and expiry), and its statuses a counter
-// Mastodon never decrements; no truthful history can be served.
+// (app/controllers/api/v1/instances/activity_controller.rb:50-52). Its weekly logins need a history of activity, and
+// Kopje keeps only each account's last active day (local_accounts.active_on); its statuses are a counter Mastodon never
+// decrements. No truthful weekly history can be served.
 export const activity: ApiHandler = () => Promise.resolve(new Response(null, { status: 404 }))
 
 // GET /api/v1/instance/translation_languages: {} when no translation service is configured, as Mastodon's

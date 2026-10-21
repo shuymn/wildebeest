@@ -1264,7 +1264,7 @@ export const ROUTES: readonly Route[] = [
 export function mastodonApi(deps: ApiDeps, routes: readonly Route[] = ROUTES): Hono<ApiEnv> {
 	const api = new Hono<ApiEnv>()
 	for (const route of routes) {
-		api.on(route.method, route.path, requireAccess(route.access), (c) => route.handler(c, deps))
+		api.on(route.method, route.path, requireAccess(route.access, deps), (c) => route.handler(c, deps))
 	}
 	return api
 }

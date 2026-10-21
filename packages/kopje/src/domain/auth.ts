@@ -183,6 +183,25 @@ export const checkCredential = readOperation<Credential, Authorized<Viewer>>((db
 	return auth.status === 'ok' ? { status: 'ok', value: auth.viewer } : auth
 })
 
+// RES-6: records the UTC day of a user's authenticated API or web request (local_accounts.active_on, migration
+// 0059_contact_and_activity), as Mastodon's UserTrackingConcern records a sign-in, for the instance's
+// usage.users.active_month (instance.ts). A session operation, admitted while the Store is readonly. The day only
+// moves forward and an equal or later stamp writes nothing, so an account's row is written at most once per UTC day
+// whichever token or isolate asks, and a delayed request of an earlier day never moves it back. An invalid, expired
+// or stale token, a suspended account and an app token write nothing. Both seeks are by key (the token, then the
+// account). No stream turn follows it (stream-hub.ts written).
+export const noteActivity = sessionOperation<{ tokenHash: string; now: number }, void>((db, { tokenHash, now }) => {
+	const auth = authorize(db, { tokenHash, scope: null, now })
+	if (auth.status !== 'ok' || auth.viewer.accountId === null) {
+		return
+	}
+	db.run(
+		'UPDATE local_accounts SET active_on = ?1 WHERE account_id = ?2 AND (active_on IS NULL OR active_on < ?1)',
+		new Date(now).toISOString().slice(0, 10),
+		auth.viewer.accountId
+	)
+})
+
 // Operations of a route whose token is optional (Mastodon's authorize_if_got_token!): no credential reads as an
 // anonymous viewer; a credential must be valid and cover the route's scope (if it declares one), and an app token (no
 // user) is anonymous. The context's time is the credential's request time, or the request time the input carries

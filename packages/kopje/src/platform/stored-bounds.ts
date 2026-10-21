@@ -733,20 +733,90 @@ export const TREND_SETTING_BOUNDS = {
 
 export type TrendSettingName = keyof typeof TREND_SETTING_BOUNDS
 
-export type StoredSettingName = InstanceSettingName | TrendSettingName
+// ---- The contact account and activity: migration 0059_contact_and_activity
 
-// The value `name` stores for `value` (null: no row), through 0049's bounds or 0057's.
-export function storedSetting(name: StoredSettingName, value: string): string | null {
-	return name in TREND_SETTING_BOUNDS
-		? TREND_SETTING_BOUNDS[name as TrendSettingName].writer(value)
-		: INSTANCE_SETTING_BOUNDS[name as InstanceSettingName].writer(value)
+// contact_username (Mastodon's site_contact_username, config/settings.yml): the address of an account Kopje knows,
+// `username` for a local one or `username@domain`, as the admin write stores it (domain/instance.ts). In UTF-8 bytes:
+// a username of at most REMOTE_USERNAME_LIMIT (identity-bounds.ts, repeated here; test/stored-bounds.test.ts pins
+// them equal), `@` and a domain name of at most 253. P checks the storage class, then the bytes, then NUL, then the
+// structure: only ASCII letters, digits and `-._@`, one `@` at most and at neither end, and a username part of at most
+// REMOTE_USERNAME_LIMIT bytes. Each GLOB pattern is at most 19 bytes (workerd refuses one over 50).
+export const CONTACT_USERNAME_LIMIT = 255
+export const CONTACT_USERNAME_BYTES = CONTACT_USERNAME_LIMIT + 1 + 253
+
+const CONTACT_ALPHABET = /^[-.0-9@A-Z_a-z]+$/
+
+function contactUsernameSql(column: string): string {
+	return `CASE WHEN typeof(${column}) <> 'text' THEN NULL
+	WHEN length(CAST(${column} AS BLOB)) > ${CONTACT_USERNAME_BYTES} THEN NULL
+	WHEN instr(CAST(${column} AS BLOB), x'00') > 0 THEN NULL
+	WHEN ${column} = '' OR ${column} GLOB '*[^-.0-9@A-Z_a-z]*' OR ${column} GLOB '@*' OR ${column} GLOB '*@'
+		OR ${column} GLOB '*@*@*' THEN NULL
+	WHEN (CASE instr(${column}, '@') WHEN 0 THEN length(${column}) ELSE instr(${column}, '@') - 1 END)
+		> ${CONTACT_USERNAME_LIMIT} THEN NULL
+	ELSE ${column} END`
 }
 
-// The projection of a stored setting `name` over `column`, through 0049's bounds or 0057's.
+// P's JS twin: the value itself, or null where P is NULL.
+export function storedContactUsername(value: string): string | null {
+	if (ENCODER.encode(value).length > CONTACT_USERNAME_BYTES || !CONTACT_ALPHABET.test(value)) {
+		return null
+	}
+	const parts = value.split('@')
+	return parts.length > 2 || parts.some((part) => part === '') || parts[0]!.length > CONTACT_USERNAME_LIMIT
+		? null
+		: value
+}
+
+// Bound by the triggers of 0059 rather than 0049's or 0057's.
+export const CONTACT_SETTING_BOUNDS = {
+	contact_username: { projection: contactUsernameSql, writer: storedContactUsername },
+} as const satisfies Record<string, InstanceSettingBound>
+
+export type ContactSettingName = keyof typeof CONTACT_SETTING_BOUNDS
+
+export type StoredSettingName = InstanceSettingName | TrendSettingName | ContactSettingName
+
+function settingBound(name: StoredSettingName): InstanceSettingBound {
+	if (name in TREND_SETTING_BOUNDS) {
+		return TREND_SETTING_BOUNDS[name as TrendSettingName]
+	}
+	return name in CONTACT_SETTING_BOUNDS
+		? CONTACT_SETTING_BOUNDS[name as ContactSettingName]
+		: INSTANCE_SETTING_BOUNDS[name as InstanceSettingName]
+}
+
+// The value `name` stores for `value` (null: no row), through 0049's bounds, 0057's or 0059's.
+export function storedSetting(name: StoredSettingName, value: string): string | null {
+	return settingBound(name).writer(value)
+}
+
+// The projection of a stored setting `name` over `column`, through 0049's bounds, 0057's or 0059's.
 export function settingProjectionSql(name: StoredSettingName, column: string): string {
-	return name in TREND_SETTING_BOUNDS
-		? TREND_SETTING_BOUNDS[name as TrendSettingName].projection(column)
-		: INSTANCE_SETTING_BOUNDS[name as InstanceSettingName].projection(column)
+	return settingBound(name).projection(column)
+}
+
+// local_accounts.active_on: the UTC day of the account's last authenticated request (domain/auth.ts noteActivity),
+// NULL or a calendar date YYYY-MM-DD of 10 bytes, held by a CHECK for imports too.
+export const ACTIVE_ON_CHECK = 'active_on_date'
+
+// Migration 0059_contact_and_activity after its header (test/migrations.test.ts compares them).
+export function contactActivityMigrationSql(): string {
+	const when = `NEW.name = 'contact_username' AND (${contactUsernameSql('NEW.value')}) IS NOT NEW.value`
+	return `${[
+		`ALTER TABLE local_accounts ADD COLUMN active_on TEXT
+  CONSTRAINT ${ACTIVE_ON_CHECK} CHECK (active_on IS NULL OR (typeof(active_on) = 'text'
+    AND length(CAST(active_on AS BLOB)) = 10 AND instr(CAST(active_on AS BLOB), x'00') = 0
+    AND active_on GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' AND date(active_on) IS active_on));`,
+		"-- 0049's triggers end in ELSE 0 and 0057's name only the trends settings; these bound contact_username.",
+		...boundTriggers(
+			'instance_settings_contact',
+			'instance_settings',
+			'name, value',
+			when,
+			'instance_settings: a value past its stored bound'
+		),
+	].join('\n\n')}\n`
 }
 
 // A stored time read as the 24-byte ISO form Kopje writes (hour 00 to 23, read back by strftime as itself), else NULL:

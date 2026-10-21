@@ -33,7 +33,7 @@ import { oauthAdminStatus } from './domain/admin-authority'
 import * as adminDomainBlocks from './domain/admin-domain-blocks'
 import { instanceFollowsMeasure } from './domain/admin-measures'
 import * as announcements from './domain/announcements'
-import { checkCredential, type Credential, type UserCredential } from './domain/auth'
+import { checkCredential, type Credential, noteActivity, type UserCredential } from './domain/auth'
 import * as blocks from './domain/blocks'
 import * as conversations from './domain/conversations'
 import * as deliveries from './domain/deliveries'
@@ -703,6 +703,11 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, checkCredential, input)
 	}
 
+	// After an authenticated request's response (mastodon/activity.ts): its account's active day.
+	noteActivity(callerBuild: string, input: OperationInput<typeof noteActivity>) {
+		return this.#kernel.execute(callerBuild, noteActivity, input)
+	}
+
 	appOfCredential(callerBuild: string, input: Credential) {
 		return this.#kernel.execute(callerBuild, oauth.appOfCredential, input)
 	}
@@ -776,8 +781,8 @@ export class Store extends DurableObject<Env> {
 		return this.#kernel.execute(callerBuild, suspendAccount, input)
 	}
 
-	instanceInfo(callerBuild: string) {
-		return this.#kernel.execute(callerBuild, instanceInfo, undefined)
+	instanceInfo(callerBuild: string, input: OperationInput<typeof instanceInfo>) {
+		return this.#kernel.execute(callerBuild, instanceInfo, input)
 	}
 
 	instanceSettings(callerBuild: string) {

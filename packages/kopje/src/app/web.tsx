@@ -10,6 +10,7 @@ import { localUsername } from '../domain/web-pages'
 import { SESSION_LIFETIME_MS, WEB_SCOPES } from '../domain/web-session'
 import { requireSetup } from '../federation/setup-gate'
 import { credentialChanges, profileFiles, storeProfileImages } from '../mastodon/accounts'
+import { noteActivitySoon } from '../mastodon/activity'
 import { type ApiDeps, present, requestJobsSoon, storeCall } from '../mastodon/context'
 import { discardProfileUploads, type ProfileUpload, sweepSoon } from '../mastodon/media'
 import { Params, readParams } from '../mastodon/params'
@@ -429,6 +430,7 @@ export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 		if (view.status !== 'ok' || view.value === null) {
 			return toLogin(c)
 		}
+		noteActivitySoon(c, deps, credential.tokenHash)
 		return privatePage(
 			c,
 			problems.length === 0 ? 200 : 422,

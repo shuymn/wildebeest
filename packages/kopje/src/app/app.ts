@@ -17,6 +17,7 @@ import { FEDERATION_GET_ROUTES, federationHandler, type FederationRouteDeps } fr
 import { FEDERATION_PATHS, requireSetup } from '../federation/setup-gate'
 import { rescueFromSnapshot } from '../federation/snapshot'
 import { createAdmission, INBOX_BODY_LIMIT, spoolInbox } from '../federation/spool'
+import { ActivityMemo } from '../mastodon/activity'
 import type { AuthorSignature } from '../mastodon/context'
 import { maintenanceError, mastodonError } from '../mastodon/errors'
 import { mastodonApi } from '../mastodon/routes'
@@ -48,6 +49,8 @@ export type AppDeps = {
 	// Asks for a round of the Store's jobs (default: a message on env.QUEUE): after an admin suspension or unsuspension,
 	// an unlock that leaves follow requests to accept, and a resolved status's quote to verify.
 	jobs?: (env: Env) => Promise<unknown>
+	// The memo of recorded activity (mastodon/activity.ts): one per app, so one per isolate in worker.ts.
+	activity?: ActivityMemo
 }
 
 // The admin API writes that leave moderation jobs (domain/suspension.ts): the action and the unsuspension of an
@@ -73,6 +76,7 @@ export function createApp({
 	federation = {},
 	doorbell = (env) => ringDoorbell(env.QUEUE),
 	jobs = (env) => requestInboundJobs(env.QUEUE),
+	activity = new ActivityMemo(),
 	...seams
 }: AppDeps) {
 	const app = new Hono<AppEnv>()
@@ -198,6 +202,7 @@ export function createApp({
 		images,
 		resolve: createResolver({ build, store, now, keygen, loader }),
 		requestJobs: jobs,
+		activity,
 		signAsAuthor: (env: Env, sign: AuthorSignature) => {
 			const config = readConfig(env)
 			return signAsAuthor(config.ok ? userKek(config.config) : '', sign)
