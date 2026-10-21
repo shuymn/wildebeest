@@ -7576,6 +7576,8 @@ describe('0062_account_warnings', () => {
 				['status_ids', 'a number element', `[${ID}]`, /status_ids past its stored bound/],
 				['status_ids', 'a short id', '["1"]', /status_ids past its stored bound/],
 				['status_ids', 'a non-digit', `["${ID.slice(0, -1)}x"]`, /status_ids past its stored bound/],
+				// An escaped NUL decodes to 18 bytes that GLOB stops at: judged on the decoded bytes.
+				['status_ids', 'an escaped NUL', '["30000000000000000\\u0000"]', /status_ids past its stored bound/],
 				['status_ids', 'a nested array', `[["${ID}"]]`, /status_ids past its stored bound/],
 			]
 			for (const [column, name, value, error, expression] of refused) {
@@ -7629,6 +7631,7 @@ describe('0062_account_warnings', () => {
 				'"x"',
 				'[] x',
 				'[]\u0000',
+				'["30000000000000000\\u0000"]',
 				`[${' '.repeat(WARNING_STATUS_IDS_BYTES)}]`,
 			]
 			for (const raw of candidates) {

@@ -85,6 +85,7 @@ describe('account warnings in dumps', () => {
 			[ids, "CAST(X'5B5D00' AS TEXT)", refusedIds],
 			[ids, "'[] x'", refusedIds],
 			[ids, "'[1]'", refusedIds],
+			[ids, `'["30000000000000000\\u0000"]'`, refusedIds],
 			[ids, `'["${STATUS}", 2]'`, refusedIds],
 			[ids, `'${JSON.stringify(Array.from({ length: 101 }, () => STATUS))}'`, refusedIds],
 		]

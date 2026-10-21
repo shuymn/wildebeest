@@ -1034,7 +1034,8 @@ export function warningStatusIdsCheckSql(column: string): string {
 }
 
 // True when `column` holds status_ids past the bound, judged in order: the CHECK's scalar parts, then every element an
-// 18-digit decimal id as TEXT (a CHECK may not read json_each, so triggers judge the elements, as 0053 does).
+// 18-digit decimal id as TEXT, judged on its decoded bytes, then NUL (a JSON escape decodes to a NUL that GLOB stops
+// at), then digits (a CHECK may not read json_each, so triggers judge the elements, as 0053 does).
 export function warningStatusIdsPastBoundSql(column: string): string {
 	return `CASE WHEN ${column} IS NULL THEN 0
 	WHEN typeof(${column}) <> 'text' THEN 1
@@ -1044,7 +1045,8 @@ export function warningStatusIdsPastBoundSql(column: string): string {
 	WHEN json_type(${column}) <> 'array' THEN 1
 	WHEN json_array_length(${column}) > ${WARNING_STATUS_IDS} THEN 1
 	WHEN EXISTS (SELECT 1 FROM json_each(${column}) e WHERE e.type <> 'text'
-		OR length(CAST(e.value AS BLOB)) <> ${WARNING_STATUS_ID_BYTES} OR e.value GLOB '*[^0-9]*') THEN 1
+		OR length(CAST(e.value AS BLOB)) <> ${WARNING_STATUS_ID_BYTES} OR instr(CAST(e.value AS BLOB), x'00') > 0
+		OR e.value GLOB '*[^0-9]*') THEN 1
 	ELSE 0 END`
 }
 

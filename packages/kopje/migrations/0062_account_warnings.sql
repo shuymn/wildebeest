@@ -54,7 +54,8 @@ WHEN CASE WHEN NEW.status_ids IS NULL THEN 0
 	WHEN json_type(NEW.status_ids) <> 'array' THEN 1
 	WHEN json_array_length(NEW.status_ids) > 100 THEN 1
 	WHEN EXISTS (SELECT 1 FROM json_each(NEW.status_ids) e WHERE e.type <> 'text'
-		OR length(CAST(e.value AS BLOB)) <> 18 OR e.value GLOB '*[^0-9]*') THEN 1
+		OR length(CAST(e.value AS BLOB)) <> 18 OR instr(CAST(e.value AS BLOB), x'00') > 0
+		OR e.value GLOB '*[^0-9]*') THEN 1
 	ELSE 0 END
 BEGIN
   SELECT RAISE(ABORT, 'account_warnings: status_ids past its stored bound');
@@ -69,7 +70,8 @@ WHEN CASE WHEN NEW.status_ids IS NULL THEN 0
 	WHEN json_type(NEW.status_ids) <> 'array' THEN 1
 	WHEN json_array_length(NEW.status_ids) > 100 THEN 1
 	WHEN EXISTS (SELECT 1 FROM json_each(NEW.status_ids) e WHERE e.type <> 'text'
-		OR length(CAST(e.value AS BLOB)) <> 18 OR e.value GLOB '*[^0-9]*') THEN 1
+		OR length(CAST(e.value AS BLOB)) <> 18 OR instr(CAST(e.value AS BLOB), x'00') > 0
+		OR e.value GLOB '*[^0-9]*') THEN 1
 	ELSE 0 END
 BEGIN
   SELECT RAISE(ABORT, 'account_warnings: status_ids past its stored bound');

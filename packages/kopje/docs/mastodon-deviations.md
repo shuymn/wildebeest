@@ -140,8 +140,10 @@ with no NUL`, before any write); Mastodon has no bound, and a NUL is its 500.
 - A warning's `appeal` is always `null`: there are no disputes, through which Mastodon files appeals.
 - A warning's `status_ids` is `null` when the named report's stored `status_ids` are not a list of at most 100 18-digit
   ids (only a restored report can hold that); the action still succeeds.
-- Mastodon keeps a strike that no API shows for `suspend`, for a remote target and with the notification off; Kopje
-  keeps none of them.
+- Mastodon keeps a strike for `suspend`, for a remote target and with the notification off; Kopje keeps none of them.
+  Its API shows none of the last two, and a suspension's only when the target is unsuspended before Mastodon's
+  `LocalNotificationWorker` runs (it then notifies the warning); Kopje judges the target in the action's transaction,
+  where a `suspend` warns nobody.
 - The push title of a `moderation_warning` is the account's name; Mastodon's English locale has no subject for it.
 
 Request parameters:
