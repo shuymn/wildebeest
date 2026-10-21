@@ -28,6 +28,15 @@ export type ReadOptions = { limit?: number; files?: FileRule }
 // The tail of an object field key after `name[`: `index][field]` or `][field]`.
 const OBJECT_FIELD = /^(\d*)\]\[([^\]]+)\]$/
 
+// A file part of a name the route declares no file rule for, and how many text entries the body had before it.
+type FilePart = readonly [name: string, at: number]
+
+// The value objects(name, { files }) reads for a listed field sent as a file part: presence only, never the file.
+export const SENT_FILE = '(file)'
+
+// `files`: fields of the objects whose file parts are read, as SENT_FILE, at their place in the body.
+export type ObjectOptions = { files?: readonly string[] }
+
 export class Params {
 	constructor(
 		readonly entries: readonly (readonly [string, string])[],
@@ -35,8 +44,23 @@ export class Params {
 		// The JSON object prefixes the body sent, empty objects included (sentObject).
 		readonly objectPrefixes: ReadonlySet<string> = new Set(),
 		// The names a JSON body sent as an empty array (list).
-		readonly emptyLists: ReadonlySet<string> = new Set()
+		readonly emptyLists: ReadonlySet<string> = new Set(),
+		// Undeclared file parts of a multipart body in body order; `at` indexes the body's prefix of `entries`.
+		private readonly fileParts: readonly FilePart[] = []
 	) {}
+
+	// These body parameters with the query's merged in: the body wins for a declared name, whose effective value is
+	// otherwise the query's last; other query entries follow the body's.
+	withQuery(query: readonly (readonly [string, string])[], declared: readonly string[]): Params {
+		const names = new Set(declared)
+		const sent = (name: string) => this.file(name) !== undefined || this.get(name) !== undefined
+		const declaredQuery = [...names].flatMap((name): [string, string][] => {
+			const value = sent(name) ? undefined : query.findLast(([key]) => key === name)?.[1]
+			return value === undefined ? [] : [[name, value]]
+		})
+		const entries = [...this.entries, ...query.filter(([key]) => !names.has(key)), ...declaredQuery]
+		return new Params(entries, this.files, this.objectPrefixes, this.emptyLists, this.fileParts)
+	}
 
 	// The body's value wins over the query's.
 	get(name: string): string | undefined {
@@ -73,23 +97,27 @@ export class Params {
 	}
 
 	// The objects of an array parameter: JSON sends `name[0][field]` (indexed), forms send `name[][field]`, where a field
-	// that repeats starts the next object (as Rack reads it).
-	objects(name: string): Record<string, string>[] {
+	// that repeats starts the next object (as Rack reads it). A file part takes part only for a field of `files`.
+	objects(name: string, options: ObjectOptions = {}): Record<string, string>[] {
 		const prefix = `${name}[`
+		const files = new Set(options.files)
 		const indexed = new Map<string, Record<string, string>>()
 		const sequential: Record<string, string>[] = []
-		for (const [key, value] of this.entries) {
+		const add = (key: string, value: string, file: boolean) => {
 			// The name is compared as a string; only the `[index][field]` tail is a pattern.
 			const match = key.startsWith(prefix) ? OBJECT_FIELD.exec(key.slice(prefix.length)) : null
 			if (match === null) {
-				continue
+				return
 			}
 			const [, index = '', field = ''] = match
+			if (file && !files.has(field)) {
+				return
+			}
 			if (index !== '') {
 				const object = indexed.get(index) ?? {}
 				object[field] = value
 				indexed.set(index, object)
-				continue
+				return
 			}
 			const last = sequential.at(-1)
 			if (last === undefined || field in last) {
@@ -98,6 +126,18 @@ export class Params {
 				last[field] = value
 			}
 		}
+		const parts = files.size === 0 ? [] : this.fileParts
+		let next = 0
+		const partsBefore = (at: number) => {
+			for (let part = parts[next]; part !== undefined && part[1] <= at; part = parts[++next]) {
+				add(part[0], SENT_FILE, true)
+			}
+		}
+		this.entries.forEach(([key, value], at) => {
+			partsBefore(at)
+			add(key, value, false)
+		})
+		partsBefore(Infinity)
 		return [...[...indexed].sort(([a], [b]) => Number(a) - Number(b)).map(([, object]) => object), ...sequential]
 	}
 
@@ -160,14 +200,7 @@ export async function readParams(request: Request, options: ReadOptions = {}): P
 	} catch (error) {
 		return { ok: false, status: error instanceof ParamsRefused ? error.status : 400 }
 	}
-	const names = new Set(options.files?.names ?? [])
-	// A declared name's effective value comes from the body when it has one; otherwise the query's last value is it.
-	const sent = (name: string) => parsed.file(name) !== undefined || parsed.get(name) !== undefined
-	const declaredQuery = [...names].flatMap((name): [string, string][] => {
-		const value = sent(name) ? undefined : query.findLast(([key]) => key === name)?.[1]
-		return value === undefined ? [] : [[name, value]]
-	})
-	const entries = [...parsed.entries, ...query.filter(([key]) => !names.has(key)), ...declaredQuery]
+	const params = parsed.withQuery(query, options.files?.names ?? [])
 	// A JSON body's names are generated, bounded by the path budget, and its values by the body; a form body's text,
 	// every text part as sent (before the last-part selection) and the query, is bounded here, so the files a
 	// multipart body may carry cannot make room for more text.
@@ -180,14 +213,15 @@ export async function readParams(request: Request, options: ReadOptions = {}): P
 			return { ok: false, status: 413 }
 		}
 	}
-	return { ok: true, params: new Params(entries, parsed.files, parsed.objectPrefixes, parsed.emptyLists) }
+	return { ok: true, params }
 }
 
 // The parameters of a body (without the query). For each name of `files`, one effective value is chosen as Rails
 // reads repeated parts: in body order, each part of that name, text or file, replaces the one before (the last wins).
-// That value is either a text entry or a file, never both. Every other file part is ignored. A part with an empty
-// filename is text to workerd's parser (Rack drops it as an empty file field): empty, it reads as absent where the
-// route reads a blank value so; with bytes, as a text value (docs/mastodon-deviations.md).
+// That value is either a text entry or a file, never both. Of every other file part only its name and place are kept
+// (objects with `files`), never its bytes. A part with an empty filename is text to workerd's parser (Rack drops it
+// as an empty file field): empty, it reads as absent where the route reads a blank value so; with bytes, as a text
+// value (docs/mastodon-deviations.md).
 export async function parseBody(contentType: string, body: Uint8Array, files?: FileRule): Promise<Params> {
 	return (await parseCounted(contentType, body, files)).params
 }
@@ -217,6 +251,7 @@ async function parseCounted(
 		const form = await new Response(body, { headers: { 'content-type': contentType } }).formData()
 		const entries: [string, string][] = []
 		const chosen = new Map<string, string | File>()
+		const fileParts: FilePart[] = []
 		let formText = 0
 		// FormData's entries are typed as strings by the runtime types; a file part is a File.
 		for (const [key, value] of form.entries() as Iterable<[string, string | File]>) {
@@ -227,6 +262,8 @@ async function parseCounted(
 				chosen.set(key, value)
 			} else if (typeof value === 'string') {
 				entries.push([key, value])
+			} else {
+				fileParts.push([key, entries.length])
 			}
 		}
 		const fileValues = new Map<string, File>()
@@ -237,7 +274,7 @@ async function parseCounted(
 				fileValues.set(key, value)
 			}
 		}
-		return { params: new Params(entries, fileValues, new Set()), formText }
+		return { params: new Params(entries, fileValues, new Set(), new Set(), fileParts), formText }
 	}
 	return { params: new Params([]), formText: null }
 }

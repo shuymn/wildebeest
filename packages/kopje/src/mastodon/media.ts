@@ -13,7 +13,7 @@ import {
 	userCredential,
 } from './context'
 import { mastodonError } from './errors'
-import { Params, parseBody } from './params'
+import { type FileRule, type Params, parseBody } from './params'
 import type { UserCredential } from '../domain/auth'
 import { type MediaChanges, type MonthlyTransforms, SWEEP_BATCH } from '../domain/media'
 import type { MediaAttachment } from '../domain/status-presenter'
@@ -43,8 +43,22 @@ const NOT_FOUND = () => mastodonError(404, 'Record not found')
 // MediaAttachment::MAX_DESCRIPTION_LENGTH.
 export const MAX_DESCRIPTION = 1500
 
-// The file plus the form's other fields (description, focus, an ignored thumbnail is not read past this bound).
+// The file plus the form's other fields (description, focus, and a thumbnail, which counts toward this bound and is
+// refused).
 const MEDIA_BODY_LIMIT = IMAGE_SIZE_LIMIT + 64 * 1024
+
+export const THUMBNAIL_MUST_BE_BLANK = 'Validation failed: Thumbnail must be blank'
+
+// MediaAttachment validates `thumbnail, absence: true` unless the media is audio or video (Mastodon v4.5.11
+// app/models/media_attachment.rb:207); every local upload Kopje accepts is an image, so any thumbnail is refused.
+// Sent: any file part, or non-empty text (a data URI is assigned through Paperclip's DataUriAdapter; other text has
+// no handler and answers 500 there, 422 here). Empty text or JSON null is absent. Only presence is read.
+export function thumbnailSent(value: string | File | undefined): boolean {
+	return value !== undefined && value !== ''
+}
+
+// PUT /api/v1/media/:id reads a thumbnail only to refuse it: no allowance beyond its part's headers (RES-1).
+const THUMBNAIL_FILE: FileRule = { names: ['thumbnail'], maxBytes: 0 }
 
 const TOO_LARGE = 'Validation failed: File file size must be less than 16 MB'
 const INVALID_TYPE = 'Validation failed: File content type is invalid'
@@ -93,7 +107,10 @@ const MAX_FIELDS = 16
 
 type MediaForm = { file: Uint8Array; params: Params } | { error: string }
 
-// The multipart body, bounded before it is parsed (RES-1). Only `file` is read as a file.
+// The file parameters of an upload form, with readParams' query merge (a declared name's body value wins).
+const UPLOAD_FILES = ['file', 'thumbnail']
+
+// The multipart body, bounded before it is parsed (RES-1). Only `file` and `thumbnail` are read as files.
 // Reads the body within `ms` of wall time (the reservation's deadline): a client that sends its body slowly cannot
 // keep a reservation open past it.
 async function readWithin(request: Request, ms: number): Promise<Uint8Array | 'too-large' | 'expired'> {
@@ -124,8 +141,8 @@ async function readMediaForm(request: Request, ms: number): Promise<MediaForm> {
 	}
 	let form: Params
 	try {
-		// Rails' last-part rule (params.ts): of repeated `file` parts, text or file, the last is the one read.
-		form = await parseBody(contentType, body, { names: ['file'], maxBytes: IMAGE_SIZE_LIMIT })
+		// Rails' last-part rule (params.ts): of repeated `file` or `thumbnail` parts, text or file, the last is read.
+		form = await parseBody(contentType, body, { names: UPLOAD_FILES, maxBytes: IMAGE_SIZE_LIMIT })
 	} catch {
 		return { error: "Validation failed: File can't be blank" }
 	}
@@ -136,12 +153,14 @@ async function readMediaForm(request: Request, ms: number): Promise<MediaForm> {
 	if (file.size > IMAGE_SIZE_LIMIT) {
 		return { error: TOO_LARGE }
 	}
-	// The bounds hold for what is used: body fields and query parameters together.
-	const all = [...form.entries, ...new URL(request.url).searchParams.entries()]
-	if (all.length > MAX_FIELDS || all.some(([, value]) => value.length > MAX_FIELD_LENGTH)) {
+	// The bounds hold for what is used: body fields and query parameters together. A thumbnail is only checked for
+	// presence and refused, so its length is not bounded here (the body's is).
+	const params = form.withQuery([...new URL(request.url).searchParams.entries()], UPLOAD_FILES)
+	const long = ([key, value]: readonly [string, string]) => key !== 'thumbnail' && value.length > MAX_FIELD_LENGTH
+	if (params.entries.length > MAX_FIELDS || params.entries.some(long)) {
 		return { error: 'Validation failed: A form field is too long' }
 	}
-	return { file: new Uint8Array(await file.arrayBuffer()), params: new Params(all) }
+	return { file: new Uint8Array(await file.arrayBuffer()), params }
 }
 
 export type Failure = { status: number; error: string }
@@ -241,7 +260,12 @@ export const uploadMedia: ApiHandler = async (c, deps) => {
 		() => userCredential(c, deps),
 		(params) => {
 			const problem = descriptionProblem(params.get('description'))
-			return problem === undefined ? null : { status: 422, error: problem }
+			if (problem !== undefined) {
+				return { status: 422, error: problem }
+			}
+			return thumbnailSent(params.file('thumbnail') ?? params.get('thumbnail'))
+				? { status: 422, error: THUMBNAIL_MUST_BE_BLANK }
+				: null
 		}
 	)
 	return outcome.ok ? c.json(outcome.media) : mastodonError(outcome.status, outcome.error)
@@ -453,12 +477,14 @@ export const getMedia: ApiHandler = async (c, deps) => {
 // PUT and PATCH /api/v1/media/:id: description and focus of own unattached media. Attached media is described through
 // media_attributes[] of a status edit, as in Mastodon.
 export const updateMedia: ApiHandler = async (c, deps) => {
-	const p = await requestParams(c, deps)
+	const p = await requestParams(c, deps, { files: THUMBNAIL_FILE })
 	if (p instanceof Response) {
 		return p
 	}
 	const description = p.get('description')
-	const problem = descriptionProblem(description)
+	const problem =
+		descriptionProblem(description) ??
+		(thumbnailSent(p.file('thumbnail') ?? p.get('thumbnail')) ? THUMBNAIL_MUST_BE_BLANK : undefined)
 	if (problem !== undefined) {
 		return refuseAfterAuth(c, deps, mastodonError(422, problem))
 	}

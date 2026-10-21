@@ -26,8 +26,8 @@ export function sameRoute<R extends { method: string; path: string }>(
 // One read of a request parameter, as the spies of the parameter test record it: an accessor of Params, Hono's
 // c.req.query/queries; `file` is Params#file, a declared file part (mastodon/params.ts).
 export type ReadMethod = 'get' | 'has' | 'getAll' | 'list' | 'objects' | 'hasObject' | 'query' | 'queries' | 'file'
-// `fields`: for objects(), the members the returned records carry (a member the request sent but the parser dropped,
-// such as a file part, is not among them).
+// `fields`: for objects(), the members the returned records carry (a file part is among them only for a field the
+// call lists in `files`).
 export type Read = { method: ReadMethod; name: string; fields?: readonly string[] }
 
 // Whether a read returns `name` (a fixture name in Params form). get/query/queries/file return their name; has and
