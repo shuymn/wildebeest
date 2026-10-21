@@ -1558,6 +1558,15 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   row (`movedToPastBoundSql` in `src/platform/stored-bounds.ts`). Both writers store an account's id or NULL; the
   nested account is read through `MOVED_ACCOUNT_COLUMNS` (RES-3), so no value past its caps leaves SQLite
   (`test/migrations.test.ts` ("0060_account_moves"), `test/dump-import.test.ts` ("round-trips moved_to_account_id")).
+  _Enforced (main)_ for static images: `accounts.avatar_static_url` and `header_static_url` hold NULL or text of at
+  most 512 bytes without NUL, on a local row whose image is set; the triggers `accounts_static_images_insert` and
+  `accounts_static_images_update` of migration `0061_account_static_images` refuse any other value, imports included,
+  judged by storage class, bytes, NUL, then the structure (`staticImagesPastBoundSql` in
+  `src/platform/stored-bounds.ts`). The only writer (`profileAssignSql` in `src/domain/media.ts`) copies an animated
+  upload's preview URL in SQL, byte for byte, only where `staticUrlPastBoundSql` accepts it; each presenter shows a
+  static only with its image, and each within its URL bound as JSON writes it (`test/migrations.test.ts`
+  ("0061_account_static_images"), `test/account-static.test.ts`, `test/dump-import.test.ts` ("round-trips the static
+  images")).
 - **RES-3: lists are bounded.** Pageable lists return at most 80 items; relationships read at most 100 ids; any other
   collection names its count and byte bound. _Enforced (main):_ `src/mastodon/pagination.ts`, `MAX_RELATIONSHIP_IDS` in
   `src/domain/accounts.ts`. _Gap: neither cap is tested._ _Enforced (main)_ for search: at
@@ -1582,17 +1591,19 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `test/remote-fields-bound.test.ts`). _Enforced (main)_ for each presented account: a remote bio is stored within
   `REMOTE_BIO_BYTES` (64 KiB) as a JSON string, cut by sanitizing a shorter raw prefix so it stays sanitized HTML
   (`sanitizeRemoteBio` in `src/security/html.ts`, which the cutover's converter and verification share); a remote
-  profile URL (`url`, icon, image) over `PROFILE_URL_LIMIT` (2,048) is not stored; the display name is cut at 2,048 code
-  points, and a username over 255 is refused. Converted rows hold the same bounds (RES-2, stored values), so
-  `ACCOUNT_COLUMN_MAP` reads the bio, display name and URLs as stored and cuts the username at 255 code points; mentions
-  read the username through the same projection (`src/domain/profile-bounds.ts`) and derive `acct` and a fallback url
-  from the cut username; the admin account search reads candidates' ids and flags only and tests their text in SQL. The actor URI is
+  profile URL (`url`, icon, image) over `PROFILE_URL_LIMIT` (2,048) is not stored, and an image (`avatar`, `header`)
+  or its static shows only while its JSON is within `PROFILE_URL_LIMIT` bytes too, both defaults otherwise; the
+  display name is cut at 2,048 code points, and a username over 255 is refused. Converted rows hold the same bounds
+  (RES-2, stored values), so `ACCOUNT_COLUMN_MAP` reads the bio, display name and URLs as stored and cuts the username
+  at 255 code points; mentions read the username through the same projection (`src/domain/profile-bounds.ts`) and derive
+  `acct` and a fallback url from the cut username; the admin account search reads candidates' ids and flags only and
+  tests their text in SQL. The actor URI is
   bounded as stored (`ACTOR_URI_LIMIT`), read through `actorUriSql`, and refused at the cutover; the account's `uri`
   shows it only while its JSON is within `ACTOR_URI_LIMIT` bytes too (`withinIdentityBound`), and '' otherwise. An
   account that moved shows the account it moved to one level deep, read through `MOVED_ACCOUNT_COLUMNS`
   (`src/domain/accounts.ts`): every text cut in SQL by its raw bytes and in the presenter by its decoded limit (the
   display name at 100 code points), URLs and actor id within 512 bytes, no note or fields, and the emojis its display
-  name references within 2,048 bytes of JSON; one such row reads at most 10,094 bytes from SQLite (20,764 of heap) and
+  name references within 2,048 bytes of JSON; one such row reads at most 11,118 bytes from SQLite (22,876 of heap) and
   presents at most 11,021 bytes of JSON, a target past every profile bound included (`test/status-bounds.test.ts`
   ("the moved-to account"), `test/account-moved.test.ts`). The chunk's targets are read in one query, each account
   presented with its target only when admission reaches it. One account is then at most the account occurrence of
@@ -1603,8 +1614,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   (`test/account-answer-bytes.test.ts`, `test/admin-accounts.test.ts`). _Enforced (main)_ for answers of many accounts
   (a list's members and endorsements with `limit=0`, familiar followers): the whole response body is at most
   `ANSWER_BYTES` (8 MiB, `src/domain/answer-budget.ts`), its own JSON reserved first, only an answer's first account
-  standing alone past it; accounts are read in chunks of 50 that stop once it is reached, so at most one chunk (6.67 MB
-  with the accounts they moved to) is read past it. A
+  standing alone past it; accounts are read in chunks of 50 that stop once it is reached, so at most one chunk (6.77 MB
+  with their static images and the accounts they moved to) is read past it. A
   `limit=0` answer cut there links `next` to the rest with `max_id`, a deliberate deviation (Mastodon ignores `max_id`
   with `limit=0`). Familiar followers share the bytes among the requested accounts with followers to show, in rounds
   that pass what one leaves unused to the others, so the answer does not depend on their order (`presentAccountsWithin`
@@ -2117,15 +2128,15 @@ RPC limit.
 
 | Shape                                                            | Most SQLite bytes | Most JSON bytes | Conservative JSON | Rows read | Nodes | Share of 8 MiB |
 | ---------------------------------------------------------------- | ----------------- | --------------- | ----------------- | --------- | ----- | -------------- |
-| Account occurrence, with the account it moved to                 | 123,233           | 140,447         | 143,188           | 1         | 92    | 1.7%           |
-| Moved-to account (nested), derived from its caps                 | 10,094            | 8,343           | 11,021            | 1         |       | 0.1%           |
-| Status                                                           | 4,444,672         | 2,638,854       | 2,641,717         | 1,485     | 2,419 | 31.5%          |
-| Quote (the status and its quoted status)                         | 6,818,387         | 5,277,741       | 5,283,467         | 1,918     | 4,840 | 63.0%          |
-| Boost of a quote                                                 | 7,112,944         | 5,686,692       | 5,695,096         | 1,975     | 5,799 | 67.9%          |
-| Conversation: 12 participants presented, its last status a quote | 8,495,535         | 6,963,074       | 7,000,936         | 1,944     | 5,935 | 83.5%          |
-| Notification group: 8 sample accounts, its status a quote        | 7,879,797         | 6,401,741       | 6,428,891         | 1,953     | 5,588 | 76.6%          |
-| Report: its first status a quote past the 2 MiB allowance        | 7,198,257         | 5,874,208       | 5,885,290         | 1,933     | 5,155 | 70.2%          |
-| An admin.report notification of that report                      | 2,360,505         | 403,298         | 408,654           | 1,061     | 294   | 4.9%           |
+| Account occurrence, with the account it moved to                 | 123,249           | 140,447         | 143,188           | 1         | 92    | 1.7%           |
+| Moved-to account (nested), derived from its caps                 | 11,118            | 8,343           | 11,021            | 1         |       | 0.1%           |
+| Status                                                           | 4,444,704         | 2,638,854       | 2,641,717         | 1,485     | 2,419 | 31.5%          |
+| Quote (the status and its quoted status)                         | 6,818,451         | 5,277,741       | 5,283,467         | 1,918     | 4,840 | 63.0%          |
+| Boost of a quote                                                 | 7,113,040         | 5,686,692       | 5,695,096         | 1,975     | 5,799 | 67.9%          |
+| Conversation: 12 participants presented, its last status a quote | 8,495,999         | 6,963,074       | 7,000,936         | 1,944     | 5,935 | 83.5%          |
+| Notification group: 8 sample accounts, its status a quote        | 7,880,117         | 6,401,741       | 6,428,891         | 1,953     | 5,588 | 76.6%          |
+| Report: its first status a quote past the 2 MiB allowance        | 7,198,401         | 5,874,208       | 5,885,290         | 1,933     | 5,155 | 70.2%          |
+| An admin.report notification of that report                      | 2,360,569         | 403,298         | 408,654           | 1,061     | 294   | 4.9%           |
 | ActivityPub Note: a local status at its bounds, 1,000 addressed  | 3,697,315         | 4,235,143       |                   | 1,337     | 3,165 | 50.5%          |
 | Its Create (the Note and its addressing again)                   |                   | 6,291,204       |                   |           |       | 75.0%          |
 | Announcement: each part derived from its caps                    |                   | 121,774         | 248,997           |           |       | 3.0%           |
@@ -2212,7 +2223,7 @@ a local account, also counts the OAuth admin's lookup whole (the `admin_email` r
 the operator-sized `local_accounts`, each account sought by key: `OAUTH_ADMIN_HEAP_SQL` in
 `src/domain/admin-authority.ts`), which a local account's Owner role reads at most once per operation, in whichever
 chunk first shows one; R reads neither for an answer without one. A chunk holds
-statuses while their R sums to at most its target, at most 80 and at least one: 768 KiB of heap for pages, contexts,
+statuses while their R sums to at most its target, at most 80 and at least one: 704 KiB of heap for pages, contexts,
 search, histories and lookups (`PAGE_CHUNKS`), and 1 MiB for grouped notifications and admin reports
 (`LARGE_ITEM_CHUNKS`). A chunk of several is read through a `RowMeter` (`src/db/sql.ts`), which adds each
 row's heap under the model as the cursor returns it (workerd's cursor runs the statement lazily, one row ahead of the
@@ -2234,7 +2245,8 @@ where the meter counts its UTF-16 code units twice, so it overstates text that i
 and plans such chunks smaller than the cap; it never understates.
 
 A page of 40 statuses, each with 3 Misskey-shaped emoji and its author with 2, presented through `presentation` and
-`presentStatusesWithin`, mean of two sets of 20 runs at a load average of 6 (planned at 768 KiB);
+`presentStatusesWithin`, mean of two sets of 20 runs at a load average of 6 (measured at a 768 KiB target; the
+ordinary page plans the same one chunk at 704 KiB, and the realistic page was not timed again);
 `test/status-rows.test.ts`
 ("read an ordinary page of 40 statuses in one chunk of at most 13 queries", "a context of 200 statuses reads its
 statuses in planned chunks", "a page of 80 groups reads its statuses in planned chunks") holds the planned queries to
@@ -2245,10 +2257,19 @@ their ceilings:
 | Ordinary: short posts with a hashtag and a mention, every other a quote | 220 queries, 9.1 ms  | 12 queries, 6.8 ms  | 11 queries, 5.6 ms |
 | Realistic: 5,000 Japanese characters, a poll of 4, 4 described media    | 200 queries, 11.3 ms | 41 queries, 10.1 ms | 10 queries, 8.6 ms |
 
-The ordinary page's R is 410,480 bytes (349,640 without emoji), one chunk. With every status and author at the
-stored emoji caps it is 2,561,480 (at most 85,316 a status, far below the target), planned in 4 chunks of at most
-768,444 bytes, as few as the target allows, with the backstop never fired ("read a saturated page of 40 statuses in
-planned chunks").
+The ordinary page's R is 418,160 bytes (357,320 without emoji), one chunk. With every status and author at the
+stored emoji caps it is 2,569,160 (at most 85,572 a status, far below the target), planned in 4 chunks of 642,290
+bytes, as few as the target allows, with the backstop never fired ("read a saturated page of 40 statuses in planned
+chunks"); the packing bound allows 5.
+
+How many chunks the 704 KiB target adds depends on the workload: statuses that each take a little more than half the
+target pair no two of them. 80 statuses of R 376,828 bytes each (a 111,154-character post with 200 mentions) plan 80
+chunks of one and 721 statements at 704 KiB, where 768 KiB planned 40 pairs and 361 statements; every chunk's
+statements run in the same Store operation, so no Store RPC is added, and R is still one query a window. Presented
+unobserved, alternating the two targets, the mean of 10 runs each took 133 to 139 ms at 704 KiB and 135 to 141 ms at
+768 KiB over four test runs at load averages of 2 to 3: the rows (the same at both targets) dominate, and a chunk of
+one is read without a meter (`test/status-rows.test.ts`, "hydrates 80 statuses just past half of 704 KiB one at a
+time, and in pairs at 768 KiB").
 
 R takes about 0.7 ms a window of 40 statuses. It is 1.2 to 1.5 times the meter's count for an ordinary status (its
 constant terms count rows that may not exist), 2.4 for the realistic one (Japanese text), 1.02 for a status with 200
@@ -2265,9 +2286,9 @@ and reports' within the whole.
 
 | Item                                           | Rows, with 25% headroom | Rejected-item objects |
 | ---------------------------------------------- | ----------------------- | --------------------- |
-| Boost of a quote (the largest timeline item)   | 19.24 MB                | 17.09 MB              |
-| Group: its status (a quote), 8 sample accounts | 21.18 MB                | 19.29 MB              |
-| Report: its status and 4 accounts              | 19.45 MB                | 17.66 MB              |
+| Boost of a quote (the largest timeline item)   | 19.25 MB                | 17.09 MB              |
+| Group: its status (a quote), 8 sample accounts | 21.23 MB                | 19.29 MB              |
+| Report: its status and 4 accounts              | 19.47 MB                | 17.66 MB              |
 
 Groups and reports also keep the presentation's state: the compiled filters (50 filters of 20 keywords, about
 0.5 MB) and the filter results cached by status (at most 50 results of about 1.2 KB each, 60 KB a status) for the
@@ -2278,16 +2299,17 @@ pass, and the passes are at most four), 200 for a page of reports (its at most 1
 
 | Answer (Store isolate)                      | Normal   | Backstop fired, the dropped chunk still live | A single item |
 | ------------------------------------------- | -------- | -------------------------------------------- | ------------- |
-| Timelines (largest item a boost of a quote) | 61.51 MB | 64.00 MB (63,996,282 bytes)                  | 61.51 MB      |
-| Groups                                      | 75.75 MB | 78.56 MB                                     | 75.75 MB      |
-| Reports                                     | 74.79 MB | 77.60 MB                                     | 74.79 MB      |
+| Timelines (largest item a boost of a quote) | 61.52 MB | 63.93 MB (63,930,202 bytes)                  | 61.52 MB      |
+| Groups                                      | 75.80 MB | 78.61 MB                                     | 75.80 MB      |
+| Reports                                     | 74.81 MB | 77.63 MB                                     | 74.81 MB      |
 
-A chunk of several takes at most its target of heap: 768 KiB (0.79 MB) for timelines, 1 MiB (1.05 MB) for groups and
+A chunk of several takes at most its target of heap: 704 KiB (0.72 MB) for timelines, 1 MiB (1.05 MB) for groups and
 reports. Normal: the rows are the larger of 1.25 × the target and the item's rows, plus the admitted answer, the
 rejected item and, for groups and reports, their state. With the backstop fired, 1.25 × (the target + 1.20 MB) of
-dropped rows more. The 768 KiB timeline cap keeps the fallback below half the isolate's memory even while the dropped
-chunk remains live, with 3,718 bytes to spare: each moved-to account's row counts at its 20,764-byte heap cap and its
-JSON at 11,021 bytes, and its emojis' presentation holds one entry past those it admits at a time (18,060 bytes at
+dropped rows more. The 704 KiB timeline cap keeps the fallback below half the isolate's memory even while the dropped
+chunk remains live, with 69,798 bytes to spare: each account row's static images count at their stored bound (1,056
+bytes of heap each, whatever the fills hold), each moved-to account's row at its 22,876-byte heap cap and its JSON at
+11,021 bytes, and its emojis' presentation holds one entry past those it admits at a time (18,060 bytes at
 three times its literals, decoded strings and the larger of its entity and an href normalization makes before
 rejecting it: `referencedEmojis` in `src/domain/custom-emojis.ts`), counted once per answer. Every row term carries
 25% headroom; the peak test rejects growth past that boundary. The backstop-fired figures bound the fallback whenever
@@ -2778,7 +2800,7 @@ activity specs, cited in test names.
 | Local emoji too have `static_url` equal to `url`, and a status's snapshot shows `visible_in_picker: true` for an unlisted local emoji | Kopje makes no still rendition; the snapshot keeps two elements | clients need still images |
 | Disabled emoji versions' files, backup copies and rebuild transformations are kept and paid indefinitely | Emoji are never deleted (owner decision); the cost is documented in backup.md | the cost matters |
 | An imported emoji whose existing `full` is 256 KiB or more, or whose actual edges pass 1,024 while its recorded ones do not, is served until `kopje-admin media-rebuild` reports it | The Store never sees file bytes; a restore always runs the rebuild | imports come from untrusted dumps |
-| An account's `avatar_static` and `header_static` equal `avatar` and `header`, so an animated profile image stays animated where a client asked for a still one | Kopje makes no still rendition of profile images, local or remote | still renditions are built |
+| A remote account's `avatar_static` and `header_static` equal `avatar` and `header`, and so do a local one's for images uploaded before still renditions were made, so such an animated image stays animated where a client asked for a still one | Kopje fetches no remote image, and a rebuild never changes an account | a media proxy makes remote stills, or legacy images need them |
 | After an unlock, a request from an unavailable requester, or from one the account blocks or whose domain it blocks, stays pending | Accepting it would make a follower R1 or R21 refuses; the account can still reject it | Mastodon's handling of such requests is matched |
 
 ## How to use

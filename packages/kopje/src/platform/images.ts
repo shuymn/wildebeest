@@ -1,4 +1,4 @@
-import { type ImageType, retainedMetadata, sniffImageType } from './image-bytes'
+import { type ImageType, isAnimated, retainedMetadata, sniffImageType } from './image-bytes'
 
 // Re-encoding of uploaded images (MEDIA-3). The Images binding is reached only through ImageCodec, a narrow
 // interface, so tests can substitute a codec that keeps EXIF or fails; production uses imagesCodec(env.IMAGES).
@@ -9,7 +9,8 @@ import { type ImageType, retainedMetadata, sniffImageType } from './image-bytes'
 
 export type ImageInfo = { format: string; width?: number; height?: number }
 
-export type EncodeOptions = { width?: number; height?: number; format: OutputType }
+// `still`: the output keeps one frame of an animated input (Images' anim: false); otherwise it keeps every frame.
+export type EncodeOptions = { width?: number; height?: number; format: OutputType; still?: true }
 
 export type ImageCodec = {
 	info(bytes: Uint8Array): Promise<ImageInfo>
@@ -50,13 +51,14 @@ export function imagesCodec(binding: ImagesBinding): ImageCodec {
 				throw codecError(error)
 			}
 		},
-		async encode(bytes, { width, height, format }) {
+		async encode(bytes, { width, height, format, still }) {
 			try {
 				let transformer = binding.input(stream(bytes))
 				if (width !== undefined && height !== undefined) {
 					transformer = transformer.transform({ width, height, fit: 'scale-down' })
 				}
-				const result = await transformer.output({ format })
+				// anim is passed both ways: the binding's default (true) is not relied on.
+				const result = await transformer.output({ format, anim: still !== true })
 				return new Uint8Array(await new Response(result.image()).arrayBuffer())
 			} catch (error) {
 				throw codecError(error)
@@ -118,7 +120,8 @@ export function servedTypeOf(type: ImageType): OutputType {
 
 export type Size = { width: number; height: number }
 
-export type EncodedImage = { bytes: Uint8Array; contentType: OutputType } & Size
+// `animated`: the output holds several frames, or may (isAnimated fails closed).
+export type EncodedImage = { bytes: Uint8Array; contentType: OutputType; animated: boolean } & Size
 
 export type ProcessedImage = { original: Size & { type: ImageType }; full: EncodedImage; small: EncodedImage }
 
@@ -154,8 +157,8 @@ function failure(error: unknown): { ok: false; reason: ImageFailure; detail?: st
 	throw error
 }
 
-// Re-encodes one output and checks it: the declared type, real dimensions from info(), and no location or identity
-// metadata. Original bytes are never returned in place of an output.
+// Re-encodes one output and checks it: the declared type, real dimensions from info(), no location or identity
+// metadata, and one frame when `still` asks for it. Original bytes are never returned in place of an output.
 async function encodeChecked(codec: ImageCodec, bytes: Uint8Array, options: EncodeOptions): Promise<EncodedImage> {
 	const output = await codec.encode(bytes, options)
 	if (sniffImageType(output) !== options.format) {
@@ -165,11 +168,15 @@ async function encodeChecked(codec: ImageCodec, bytes: Uint8Array, options: Enco
 	if (kept !== null) {
 		throw new ImageCodecError(null, `output keeps metadata: ${kept}`)
 	}
+	const animated = isAnimated(output, options.format)
+	if (animated && options.still === true) {
+		throw new ImageCodecError(null, 'output is animated')
+	}
 	const info = await codec.info(output)
 	if (info.width === undefined || info.height === undefined) {
 		throw new ImageCodecError(null, 'output has no dimensions')
 	}
-	return { bytes: output, contentType: options.format, width: info.width, height: info.height }
+	return { bytes: output, contentType: options.format, animated, width: info.width, height: info.height }
 }
 
 // The free info() of `bytes`, its codec errors classified as processImage classifies them: a preflight before any
@@ -208,8 +215,9 @@ export async function processImage(codec: ImageCodec, bytes: Uint8Array): Promis
 		const target = fit(original, FULL_EDGE)
 		const resize = target.width === original.width && target.height === original.height ? {} : target
 		const full = await encodeChecked(codec, bytes, { ...resize, format })
-		// The preview is made from the re-encoded image, so it starts without metadata and in the served orientation.
-		const small = await encodeChecked(codec, full.bytes, { ...fit(full, SMALL_EDGE), format })
+		// The preview is made from the re-encoded image, so it starts without metadata and in the served orientation. It
+		// is a still, so an animated image's preview serves as its account's avatar_static or header_static (media.ts).
+		const small = await encodeChecked(codec, full.bytes, { ...fit(full, SMALL_EDGE), format, still: true })
 		return { ok: true, image: { original, full, small } }
 	} catch (error) {
 		if (error instanceof ImageCodecError && error.code === null) {

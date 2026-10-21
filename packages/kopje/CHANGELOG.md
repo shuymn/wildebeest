@@ -36,6 +36,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   budget answer 413; nesting beyond 32 levels answers 400.
 - Breaking: notifications read `types` and `exclude_types` only as `types[]` and `exclude_types[]`; a value sent
   without `[]` is ignored, as Mastodon ignores it.
+- Account `avatar_static` and `header_static` are a still image for an uploaded avatar or header whose served file is
+  animated; images uploaded before this change, and remote accounts' images, keep the image as their static.
+- The `preview_url` of a newly uploaded or rebuilt animated image, status media included, is a still image.
 - Hashtag search avoids repeated status-table scans with stale Store statistics.
 - Request reads and background and moderation work stay index-driven when the Store's statistics are stale: status
   presentation, context, conversations, search, tags, filters, relationships, mentions, media, login, outbound reach,
@@ -74,9 +77,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Instance changes
 
-- Store schema: adds migrations `0058_profile_credentials`, `0059_contact_and_activity` and `0060_account_moves`,
-  applied on the first request after the deploy; a rollback to an earlier version needs the point-in-time restore
-  described in [docs/upgrade.md](docs/upgrade.md).
+- Store schema: adds migrations `0058_profile_credentials`, `0059_contact_and_activity`, `0060_account_moves` and
+  `0061_account_static_images`, applied on the first request after the deploy; a rollback to an earlier version needs
+  the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md).
 - `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.18] - 2026-10-20
