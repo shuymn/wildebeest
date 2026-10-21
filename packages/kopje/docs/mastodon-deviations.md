@@ -81,6 +81,22 @@ Accounts (the `Account` and credential account entities):
 - `roles` of a local account is the OAuth admin's Owner role (`id`, `name` and `color`) while that account is
   available, otherwise `[]`: Kopje has no other role to highlight. A remote account shows none, as in Mastodon.
 - `uri` is `''` for an imported actor id whose JSON passes 2,048 bytes; ingestion stores none.
+- `moved` is the latest of two writes: every stored actor document sets it from its `movedTo` or clears it, and a
+  verified `Move` sets it when Kopje first processes it; a replay of a known `Move` writes nothing. A `movedTo` naming
+  an account Kopje does not know reads as none: it is not fetched (Mastodon fetches it,
+  `process_account_service.rb:310-314`). Mastodon processes a `Move` once per source account for 7 days
+  (`move.rb:38`), Kopje once per activity id while its job is kept (30 days). Mastodon refreshes a profile on a
+  signature only when the stored key fails (`signature_verification.rb:59`), and that refresh may fetch the key alone,
+  which leaves `movedTo` as it was (`process_account_service.rb:103`); Kopje stores every fresh document it fetches,
+  its `movedTo` included. A local account never has one: Kopje sends no `Move`. Followers move as before, only on a
+  verified `Move` whose target lists the source.
+- The account `moved` nests is a bounded projection, not the full account: its identity, counts, flags and images,
+  `note` `''` and `fields` `[]`, the display name cut at 100 code points, URLs and `uri` read as unset past 512 bytes,
+  and only the emojis its display name references within 2,048 bytes of JSON; it never shows a `moved` of its own,
+  as in Mastodon. A target whose domain passes 253 bytes, or an id that names no account, shows no `moved`. Mastodon's
+  web client stores a nested account as the target's own entity (`actions/importer/index.js:39-40`, which
+  `reducers/accounts.ts` replaces), so it shows the target with an empty bio and no fields until it fetches the target
+  again, and each later import of the source does so again.
 
 Instance and apps (`/api/v1/apps`, `/api/v{1,2}/instance`, `/api/v1/preferences`):
 
