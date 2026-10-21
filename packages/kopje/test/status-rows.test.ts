@@ -135,8 +135,9 @@ describe('the cursor (RES-3)', () => {
 describe('R bounds the rows of a status (RES-3)', () => {
 	it("is at least the meter's count of each status alone and of each chunk, for mixed sizes", async () => {
 		// Local authors too, among them the OAuth admin, whose lookup (the Owner role) one chunk of each answer reads, each
-		// with its images and statics at their bounds, which authors moved to the first read too.
-		const { h, f } = await fixture({ admin: true, statics: true })
+		// with its images and statics at their bounds, which authors moved to the first read too, and each local original
+		// with its app's name and website at their raw bounds.
+		const { h, f } = await fixture({ admin: true, statics: true, apps: true })
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 		const small: ChunkPlan = { target: 256 * 1024, cap: 256 * 1024 }
 		await fc.assert(
@@ -1015,6 +1016,8 @@ describe('stale statistics (RES-7)', () => {
 					'a',
 					'au',
 					'm',
+					// Each status's app (status-rows.ts STATUS_FROM, statusesOfSql).
+					'ap',
 					'y',
 					'v',
 					'p',
@@ -1219,6 +1222,45 @@ describe('stale statistics (RES-7)', () => {
 			expect(scansOf(plan, presentationAliases(query)), `${query}\n${plan.join('\n')}`).toEqual([])
 			expectVisibilityLookups(query, plan)
 			expect(rows - before.plans[i]!.rows, `${query}\n${plan.join('\n')}`).toBeLessThanOrEqual(1)
+		}
+	}, 60_000)
+
+	// Each status's app (statuses.application_id, migration 0064_status_applications) is sought by key in the presenter's
+	// status reads and in R alike, statistics taken with one app, once thousands of apps arrive.
+	it("seeks each status's app by key after the apps outgrow the statistics", async () => {
+		const { h, f } = await fixture({ apps: true })
+		const local = { ...TINY, local: true, originalLocal: true, quotedLocal: true }
+		const kinds = ['status', 'quote', 'boost', 'boostOfQuote'] as const
+		const ids = await runInDurableObject(h.store, (_instance, state) =>
+			kinds.map((kind) => build(state.storage.sql, f, { ...local, kind }))
+		)
+		expect(await sql(h.store, 'SELECT count(*) AS n FROM oauth_clients')).toEqual([{ n: 2 }])
+		const { before, after } = await staleStatistics(h, {
+			capture: () => runInDurableObject(h.store, (_instance, state) => plannedPresentation(state, f.viewer, ids)),
+			grow: () =>
+				sql(
+					h.store,
+					`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 5000)
+					INSERT INTO oauth_clients (id, secret, name, redirect_uris) SELECT 'grown-' || i, 's', 'g', 'urn:x' FROM n`
+				),
+		})
+		expect(after.items).toEqual(before.items)
+		expect(after.items.map((item) => (item.reblog ?? item).application)).toEqual(kinds.map(() => null))
+		const reading = after.plans.filter((p) => p.query.includes('oauth_clients ap'))
+		// The presentation's status rows (its graph, the quoted statuses) and R.
+		expect(reading.map((p) => p.query === statusRowBoundSql())).toContain(true)
+		expect(reading.length).toBeGreaterThan(1)
+		for (const { query, plan } of reading) {
+			// Every occurrence of the join in the statement is a key lookup.
+			const occurrences = query.split('oauth_clients ap').length - 1
+			const lookups = plan.filter((detail) =>
+				/^SEARCH ap USING INDEX sqlite_autoindex_oauth_clients_1 \(id=\?\)( LEFT-JOIN)?$/.test(detail)
+			)
+			expect(lookups, `${query}\n${plan.join('\n')}`).toHaveLength(occurrences)
+			expect(scansOf(plan, ['ap']), `${query}\n${plan.join('\n')}`).toEqual([])
+		}
+		for (const [i, { query, plan, rows }] of after.plans.entries()) {
+			expect(rows - before.plans[i]!.rows, `${query}\n${plan.join('\n')}`).toBeLessThanOrEqual(0)
 		}
 	}, 60_000)
 

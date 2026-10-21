@@ -9,7 +9,13 @@ import { type VisibleStatusId } from '../src/domain/audience'
 import { MAX_STATUS_MENTION_ROWS } from '../src/domain/status-bounds'
 import { type ChunkPlan, presentation, presentStatusesWithin, type Status } from '../src/domain/status-presenter'
 import { statusRowBoundSql } from '../src/domain/status-rows'
-import { CONTENT_JSON_BYTES, PROFILE_URL_LIMIT, STATIC_URL_LIMIT } from '../src/platform/stored-bounds'
+import {
+	APP_NAME_BYTES,
+	APP_WEBSITE_LIMIT,
+	CONTENT_JSON_BYTES,
+	PROFILE_URL_LIMIT,
+	STATIC_URL_LIMIT,
+} from '../src/platform/stored-bounds'
 
 // Fixtures of the chunk planning tests (test/status-rows.test.ts): answers of statuses of mixed shapes and sizes, built
 // in SQL, and what a presentation of them reads.
@@ -48,7 +54,19 @@ export type Item = {
 export type MovedKind = 'remote' | 'local' | 'unavailable' | 'unavailableSource' | 'dangling'
 export const MOVED_KINDS: readonly MovedKind[] = ['remote', 'local', 'unavailable', 'unavailableSource', 'dangling']
 
-export type Fixture = { viewer: string; token: string; mentioned: string[]; filter: string; locals: string[] }
+// app: the app every local original of the fixture's is posted through, if any (statuses.application_id).
+export type Fixture = {
+	viewer: string
+	token: string
+	mentioned: string[]
+	filter: string
+	locals: string[]
+	app?: string
+}
+
+// The app of a fixture with `apps`: its name and website at the raw bounds a status row reads them within
+// (stored-bounds.ts appNameSql, appWebsiteSql), as a converted legacy client may hold them.
+export const FIXTURE_APP = 'fixture-app'
 
 // The local accounts of an admin fixture: an operator-sized deployment (about 10 accounts, admin-authority.ts).
 const ADMIN_FIXTURE_LOCALS = 10
@@ -58,11 +76,12 @@ const ADMIN_FIXTURE_LOCALS = 10
 // (admin_email) among ADMIN_FIXTURE_LOCALS local accounts, which items marked local are written by. `statics`: every
 // local account has both images and their statics at the stored bounds (PROFILE_URL_LIMIT, STATIC_URL_LIMIT; migration
 // 0061_account_static_images), as animated uploads leave them, which an item a local account writes reads, and so does
-// a remote author's move to the first.
+// a remote author's move to the first. `apps`: every local original is posted through FIXTURE_APP.
 export async function fixture({
 	admin = false,
 	statics = false,
-}: { admin?: boolean; statics?: boolean } = {}): Promise<{
+	apps = false,
+}: { admin?: boolean; statics?: boolean; apps?: boolean } = {}): Promise<{
 	h: ApiHarness
 	f: Fixture
 }> {
@@ -79,6 +98,14 @@ export async function fixture({
 	const filter = nextId()
 	const mentioned = await runInDurableObject(h.store, (_instance, state) => {
 		const sql = state.storage.sql
+		if (apps) {
+			sql.exec(
+				"INSERT INTO oauth_clients (id, secret, name, redirect_uris, website) VALUES (?, 's', ?, 'urn:x', ?)",
+				FIXTURE_APP,
+				'n'.repeat(APP_NAME_BYTES),
+				`${ORIGIN}/`.padEnd(APP_WEBSITE_LIMIT, 'w')
+			)
+		}
 		if (statics) {
 			sql.exec(
 				`UPDATE accounts SET avatar_url = ?1, header_url = ?1, avatar_static_url = ?2, header_static_url = ?2
@@ -113,7 +140,10 @@ export async function fixture({
 		)
 		return ids
 	})
-	return { h, f: { viewer, token: h.users.alice.token, mentioned, filter, locals } }
+	return {
+		h,
+		f: { viewer, token: h.users.alice.token, mentioned, filter, locals, ...(apps ? { app: FIXTURE_APP } : {}) },
+	}
 }
 
 // Wide text of `points` code points whose content (`<p>needle …</p>`) stays within its stored bound
@@ -163,15 +193,17 @@ export function build(sql: SqlStorage, f: Fixture, item: Item): string {
 	const status = (parts: Item, author: string): string => {
 		const id = nextId()
 		sql.exec(
-			`INSERT INTO statuses (id, uri, account_id, visibility, content, spoiler_text, published_at, emojis)
-			VALUES (?, ?, ?, 'public', ?, ?, ?, ?)`,
+			`INSERT INTO statuses (id, uri, account_id, visibility, content, spoiler_text, published_at, emojis,
+				application_id)
+			VALUES (?, ?, ?, 'public', ?, ?, ?, ?, ?)`,
 			id,
 			`https://remote.example/objects/${id}`,
 			author,
 			`<p>needle ${parts.wide ? wideText(parts.text) : 'x'.repeat(parts.text)}</p>`,
 			'w'.repeat(parts.text % 100),
 			VIEWER_NOW,
-			parts.emojis?.status ?? null
+			parts.emojis?.status ?? null,
+			f.locals.includes(author) ? (f.app ?? null) : null
 		)
 		for (const account of f.mentioned.slice(0, parts.mentions)) {
 			sql.exec(
