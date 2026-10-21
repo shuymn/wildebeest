@@ -98,7 +98,7 @@ type RemoteJob = {
 	mode: 'account' | 'domain'
 	actor_account_id: string | null
 	follow_bound: number
-	report_bound: number | null
+	report_bound: string | null
 	action_bound: number | null
 	phase: string
 	cursor: string
@@ -117,7 +117,7 @@ function resetAccountJob(
 		mode: 'account' | 'domain'
 		phase: string
 		actor: string | null
-		reportBound: number | null
+		reportBound: string | null
 		actionBound: number | null
 	}
 ): void {
@@ -484,7 +484,8 @@ function markRound(db: Db, job: RemoteJob, now: number): boolean {
 	return stop({ after: end })
 }
 
-const JOB_COLUMNS = `id, kind, subject, mode, actor_account_id, follow_bound, report_bound, action_bound, phase, cursor`
+const JOB_COLUMNS = `id, kind, subject, mode, actor_account_id, follow_bound, CAST(report_bound AS TEXT) AS report_bound,
+	action_bound, phase, cursor`
 
 // One round of the remote job after id `after`, else of the oldest, so a call's jobs take turns, of both kinds. Null
 // when there is no job; else the job's id and whether the round recorded an activity to deliver.
@@ -510,17 +511,17 @@ export function remoteModerationRound(db: Db, now: number, after = 0): { id: num
 		const round = resolveSuspensionReports(
 			db,
 			job.subject,
-			job.report_bound ?? 0,
+			job.report_bound ?? '0',
 			job.action_bound,
 			job.actor_account_id,
-			Number(job.cursor === '' ? 0 : job.cursor),
+			job.cursor === '' ? '0' : job.cursor,
 			REPORT_ROUND,
 			iso(now)
 		)
 		if (round.read < REPORT_ROUND) {
 			save(db, job, 'follows', '')
 		} else {
-			save(db, job, 'reports', String(round.last ?? 0))
+			save(db, job, 'reports', round.last ?? '0')
 		}
 		return { id: job.id, delivers: false }
 	}

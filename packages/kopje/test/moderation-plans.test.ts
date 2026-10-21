@@ -1,12 +1,18 @@
+import { runInDurableObject } from 'cloudflare:test'
+
 import { describe, expect, it } from 'vitest'
 
 import { sql } from './api-helpers'
 import { NOW } from './app-helpers'
-import { plannedRun, scansOf, staleStatistics } from './read-helpers'
+import { observedSql, plannedRun, scansOf, staleStatistics } from './read-helpers'
+import { act, world, type World } from './remote-suspension-helpers'
 import { community, remoteAccount } from './status-helpers'
+import { Db } from '../src/db/sql'
 import { writeOperation } from '../src/domain/operation'
 import { sweepStaleVotes } from '../src/domain/polls'
+import { remoteModerationRound } from '../src/domain/remote-suspension'
 import { resolveSuspensionReports } from '../src/domain/reports'
+import { moderationRound, REPORT_ROUND } from '../src/domain/suspension'
 
 // RES-7: the cron's and the moderation jobs' bounded writes seek what they write by key, with statistics taken before
 // the Store grew: the stale-vote sweep (polls.ts) and a suspension's report resolution (reports.ts).
@@ -96,7 +102,7 @@ describe('the stale-vote sweep with stale statistics (RES-7)', () => {
 
 describe("a suspension's report resolution with stale statistics (RES-7)", () => {
 	const resolve = writeOperation<{ target: string }, unknown>((db, { target }) =>
-		resolveSuspensionReports(db, target, Number.MAX_SAFE_INTEGER, 0, null, 0, 100, AT)
+		resolveSuspensionReports(db, target, '999999999999999999', 0, null, '0', 100, AT)
 	)
 
 	it("stamps each frozen report by key, other accounts' reports grown after ANALYZE", async () => {
@@ -138,5 +144,77 @@ describe("a suspension's report resolution with stale statistics (RES-7)", () =>
 			expect(plan).toEqual(['SEARCH reports USING INTEGER PRIMARY KEY (rowid=?)'])
 			expect(rows).toBe(before.plans[i]!.rows)
 		}
+	}, 60_000)
+})
+
+describe('report ids past 2^53 through both suspension jobs (VIS-29)', () => {
+	// 2 * REPORT_ROUND + 6 reports of `target` with ids from below 2^53 up, so each round's last report and the bound are
+	// past it and odd: as JS numbers 9007199254740995 and 9007199254741095 round up (the next report skipped) and the
+	// bound 9007199254741101 rounds down (the newest left out). Every seventh is last stamped after the suspension
+	// (fence-excluded).
+	const BASE = 9007199254740896n
+	const COUNT = 2 * REPORT_ROUND + 6
+	async function reportsOf(w: World, target: string) {
+		await sql(
+			w.h.store,
+			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?4 - 1)
+			INSERT INTO reports (id, account_id, target_account_id, uri, created_at, last_action_id)
+			SELECT CAST(?3 AS INTEGER) + i, ?1, ?2, 'https://r.example/big/' || i, ?5, CASE WHEN i % 7 = 3 THEN 999999999 END
+			FROM n`,
+			w.bob.id,
+			target,
+			String(BASE),
+			COUNT,
+			AT
+		)
+	}
+	// Each report as [id, resolved], in id order, by its decimal id.
+	const resolved = (w: World, target: string) =>
+		sql<{ id: string; resolved: number }>(
+			w.h.store,
+			`SELECT CAST(id AS TEXT) AS id, action_taken_at IS NOT NULL AS resolved FROM reports
+			WHERE target_account_id = ? ORDER BY reports.id`,
+			target
+		)
+	const expected = Array.from({ length: COUNT }, (_, i) => ({
+		id: String(BASE + BigInt(i)),
+		resolved: i % 7 === 3 ? 0 : 1,
+	}))
+
+	// The jobs a round at a time, each in its own transaction, to their end: the report ids each round read.
+	async function run(w: World, round: (db: Db, after: number) => { id: number } | null): Promise<string[]> {
+		const read: string[] = []
+		for (let after = 0, i = 0; ; i++) {
+			expect(i).toBeLessThan(1_000)
+			const ran = await runInDurableObject(w.h.store, (_instance, state) => {
+				const sql = observedSql(state.storage.sql, (rows, query) => {
+					if (query.includes('FROM reports INDEXED BY reports_target_state')) {
+						read.push(...rows.map((row) => row.id as string))
+					}
+				})
+				return state.storage.transactionSync(() => round(new Db(sql), after))
+			})
+			if (ran === null) {
+				return read
+			}
+			after = ran.id
+		}
+	}
+
+	it("resolves a local account's frozen reports, each read once", async () => {
+		const w = await world()
+		await reportsOf(w, w.alice.id)
+		expect((await act(w, w.alice.id, { type: 'suspend' })).status).toBe(200)
+		expect(await run(w, (db, after) => moderationRound(db, NOW, after))).toEqual(expected.map((r) => r.id))
+		expect(await resolved(w, w.alice.id)).toEqual(expected)
+	}, 60_000)
+
+	it("resolves a remote account's frozen reports, each read once", async () => {
+		const w = await world()
+		const carol = await remoteAccount(w.h.store, 'carol')
+		await reportsOf(w, carol)
+		expect((await act(w, carol, { type: 'suspend' })).status).toBe(200)
+		expect(await run(w, (db, after) => remoteModerationRound(db, NOW, after))).toEqual(expected.map((r) => r.id))
+		expect(await resolved(w, carol)).toEqual(expected)
 	}, 60_000)
 })

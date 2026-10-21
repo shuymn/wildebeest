@@ -731,9 +731,10 @@ export const updateAdminReport = adminWriteOperation<
 	return presented(db, updated, admin, present)
 })
 
-// The newest report, which bounds the reports a local suspension resolves (domain/suspension.ts).
-export function reportBound(db: Db): number {
-	return db.first<{ id: number | null }>('SELECT max(id) AS id FROM reports')?.id ?? 0
+// The newest report, which bounds the reports a suspension resolves (domain/suspension.ts, remote-suspension.ts), in
+// decimal: a report id may pass 2^53 (0054_remote_reports allows 18 digits), so it never becomes a JS number.
+export function reportBound(db: Db): string {
+	return db.first<{ id: string }>('SELECT CAST(coalesce(max(id), 0) AS TEXT) AS id FROM reports')!.id
 }
 
 // The reporters of the account `target` after the account id `after`, in account id order, at most `limit`, each with
@@ -776,29 +777,31 @@ export function actionBound(db: Db): number {
 // reports_target_state in id order. Resolve only reports frozen at suspension (the report fence, VIS-29 and
 // 0042_report_action_fence): filed up to `bound`, still unresolved, and last stamped at or below `fence`, which also
 // stamps the reports resolved here. A null `fence` (unknown) resolves none. `by` names the suspending admin (null:
-// none). Returns the last report read (null if none) and the resolved count; fewer than `limit` read means the range
-// is done.
+// none). `bound`, `cursor` and the last report returned are report ids in decimal (reportBound). Returns the last
+// report read (null if none) and the resolved count; fewer than `limit` read means the range is done.
 export function resolveSuspensionReports(
 	db: Db,
 	target: string,
-	bound: number,
+	bound: string,
 	fence: number | null,
 	by: string | null,
-	cursor: number,
+	cursor: string,
 	limit: number,
 	now: string
-): { last: number | null; read: number; resolved: number } {
-	const rows = db.all<{ id: number; key: string; action: number }>(
-		`SELECT id, CAST(id AS TEXT) AS key, coalesce(last_action_id, 0) AS action
+): { last: string | null; read: number; resolved: number } {
+	const rows = db.all<{ id: string; frozen: number }>(
+		`SELECT CAST(id AS TEXT) AS id, (?5 IS NOT NULL AND coalesce(last_action_id, 0) <= ?5) AS frozen
 		FROM reports INDEXED BY reports_target_state
-		WHERE target_account_id = ?1 AND (action_taken_at IS NULL) = 1 AND id > ?2 AND id <= ?3
-		ORDER BY id LIMIT ?4`,
+		WHERE target_account_id = ?1 AND (action_taken_at IS NULL) = 1 AND id > CAST(?2 AS INTEGER)
+			AND id <= CAST(?3 AS INTEGER)
+		ORDER BY reports.id LIMIT ?4`,
 		target,
 		cursor,
 		bound,
-		limit
+		limit,
+		fence
 	)
-	const frozen = fence === null ? [] : rows.filter((row) => row.action <= fence).map((row) => row.key)
+	const frozen = rows.filter((row) => row.frozen === 1).map((row) => row.id)
 	// Each report by its key: an IN over the ids lets statistics older than the Store's growth scan reports (RES-7).
 	for (const key of frozen) {
 		db.run(
