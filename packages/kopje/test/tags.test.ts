@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { type ApiHarness, apiHarness, bearer, seedAccount, sql } from './api-helpers'
 import { NOW } from './app-helpers'
-import { appToken, DAY_MS, rowsRead, scopedToken } from './read-helpers'
+import { appToken, DAY_MS, plannedRun, rowsRead, scansOf, scopedToken, staleStatistics } from './read-helpers'
 import { community, getJson, seedStatus, type User } from './status-helpers'
 import { getTag, tagId } from '../src/domain/tags'
 
@@ -220,4 +220,42 @@ describe('tags', () => {
 		const large = await measure(8000)
 		expect(large).toBeLessThan(small * 1.5)
 	}, 120_000)
+
+	it("seeks each of the window's statuses by id, the Store grown after ANALYZE (RES-7)", async () => {
+		const h = await community(['alice'])
+		await tagged(h, 3, NOW + 3_600_000)
+		const run = () =>
+			plannedRun(h, /FROM status_tags t/, getTag, {
+				credential: null,
+				name: 'cats',
+				now: NOW + DAY_MS / 2,
+				present: { origin: 'https://kopje.test' },
+			})
+		const { before, after } = await staleStatistics(h, {
+			capture: () => run(),
+			grow: async () => {
+				// Older uses of the hashtag, and newer statuses without it.
+				await tagged(h, 5000, NOW - 30 * DAY_MS)
+				await sql(
+					h.store,
+					`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 20000 - 1)
+					INSERT INTO statuses (id, uri, account_id, visibility, published_at)
+					SELECT CAST(?2 + i AS TEXT), 'https://kopje.test/ap/o/u' || i, ?1, 'public', ?3 FROM n`,
+					h.users.alice.id,
+					String(BigInt(NOW + 7_200_000) << 16n),
+					new Date(NOW + 7_200_000).toISOString()
+				)
+			},
+		})
+		expect(after.result).toEqual(before.result)
+		expect((after.result as { value: Tag }).value.history[0]).toMatchObject({ uses: '3', accounts: '1' })
+		expect(after.plans).toHaveLength(1)
+		const { plan, rows } = after.plans[0]!
+		expect(plan.slice(0, 2)).toEqual([
+			'SEARCH t USING COVERING INDEX status_tags_public (name=? AND status_id>?)',
+			'SEARCH s USING INDEX sqlite_autoindex_statuses_1 (id=?)',
+		])
+		expect(scansOf(plan, ['t', 's'])).toEqual([])
+		expect(rows).toBe(before.plans[0]!.rows)
+	}, 60_000)
 })
