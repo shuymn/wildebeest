@@ -1,16 +1,22 @@
 import { describe, expect, it } from 'vitest'
 
 import { setSetting, sql } from './api-helpers'
+import { NOW } from './app-helpers'
 import { mastodonFlag, mastodonInstanceActor, misskeyFlag, misskeySystemActor } from './fixtures/flags'
 import { LOCAL, MASTODON, mastodonActor, type TestActor } from './inbox-helpers'
 import { accountId, ALICE, ALICE_URI, DAVE, DAVE_URI, type Setup, setup } from './inbox-status-helpers'
 import { storeReceive } from './inbox-store-helpers'
-import { rowsRead } from './read-helpers'
+import { plannedRun, remoteAccounts, rowsRead, scansOf, staleStatistics } from './read-helpers'
 import { seedStatus } from './status-helpers'
 import { FOLLOWER_PROBE, remoteReportStatusIds } from '../src/domain/audience'
 import type { InboundActivity } from '../src/domain/inbox'
-import { readOperation } from '../src/domain/operation'
-import { MAX_REMOTE_REPORT_COMMENT, MAX_REPORT_STATUSES, MAX_UNRESOLVED_REMOTE_REPORTS } from '../src/domain/reports'
+import { readOperation, writeOperation } from '../src/domain/operation'
+import {
+	fileRemoteReports,
+	MAX_REMOTE_REPORT_COMMENT,
+	MAX_REPORT_STATUSES,
+	MAX_UNRESOLVED_REMOTE_REPORTS,
+} from '../src/domain/reports'
 import { ACTIVITY_ID_LIMIT, withinIdentityBound } from '../src/platform/identity-bounds'
 import { sha256Hex } from '../src/security/tokens'
 
@@ -416,6 +422,49 @@ describe('Flag: the per-actor cap of unresolved reports (RES-7)', () => {
 			expect(await storeReceive(t.store, actor.uri, past)).toMatchObject({ reason: 'report-limit' })
 		}
 	})
+})
+
+describe('Flag: resolution with stale statistics (RES-7)', () => {
+	const file = writeOperation<{ actor: string; id: string; objects: string[] }, unknown>((db, { actor, id, objects }) =>
+		fileRemoteReports(db, { id: actor, domain: 'mastodon.example' }, { id, objects, content: 'x' }, NOW)
+	)
+
+	it("seeks the Flag's accounts and statuses by uri, the accounts and statuses grown after ANALYZE", async () => {
+		const t = await world()
+		const actor = await stored(t, await mastodonInstanceActor(t.web))
+		const status = await statusOf(t, 'public')
+		const objects = [DAVE_URI, status.uri, `${LOCAL}/ap/users/nobody`]
+		const run = (id: string) => plannedRun({ store: t.store }, /FROM json_each\(\?1\) j/, file, { actor, id, objects })
+		const { before, after } = await staleStatistics(
+			{ store: t.store },
+			{
+				capture: (phase) => run(`${MASTODON}/flags/${phase}`),
+				grow: async () => {
+					await remoteAccounts({ store: t.store }, 100, 200)
+					await sql(
+						t.store,
+						`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+						SELECT CAST(id - 100000000000000000 AS TEXT), uri || '/s', id, 'public', '', '2026-01-01T00:00:00.000Z'
+						FROM accounts WHERE domain LIKE 'd%'`
+					)
+				},
+			}
+		)
+		expect(after.result).toEqual(before.result)
+		expect(after.result).toEqual({ filed: true, reason: 'reported' })
+		expect((await reports(t)).map((r) => [r.target_account_id, r.status_ids])).toEqual([
+			[DAVE, JSON.stringify([status.id])],
+			[DAVE, JSON.stringify([status.id])],
+		])
+		expect(after.plans).toHaveLength(2)
+		const [accounts, statuses] = after.plans
+		expect(accounts!.plan).toContain('SEARCH a USING INDEX sqlite_autoindex_accounts_2 (uri=?)')
+		expect(statuses!.plan).toContain('SEARCH s USING INDEX sqlite_autoindex_statuses_2 (uri=?)')
+		for (const [i, { query, plan, rows }] of after.plans.entries()) {
+			expect(scansOf(plan, ['a', 's']), query).toEqual([])
+			expect(rows, query).toBe(before.plans[i]!.rows)
+		}
+	}, 60_000)
 })
 
 describe('Flag: bounds (RES-2, RES-7)', () => {

@@ -9,15 +9,25 @@ import { blockDomain, blockDomainIn } from './domain-block-helpers'
 import { LEGACY } from './federation-helpers'
 import { BUILD, freshStore, testKernel } from './helpers'
 import { deferred, deliveryDeps, gatedHost } from './quote-helpers'
+import { plannedRun, remoteAccounts, scansOf, staleStatistics } from './read-helpers'
 import { community, post, remoteAccount, remoteFollows, type User } from './status-helpers'
 import { MIGRATIONS } from '../src/db/migrations'
 import { Db } from '../src/db/sql'
 import { recipientsFor } from '../src/domain/audience'
-import { type Claim, claimDeliveries, enqueueActivity, LEASE_MS, PROVENANCE_MAX } from '../src/domain/deliveries'
+import {
+	type Claim,
+	claimDeliveries,
+	completeDelivery,
+	enqueueActivity,
+	LEASE_MS,
+	PROVENANCE_MAX,
+} from '../src/domain/deliveries'
+import { deleteStatus, editStatus } from '../src/domain/statuses'
 import { moderationRound, REACH_ROUND, suspendLocal, unsuspendLocal } from '../src/domain/suspension'
 import { deliveryRound } from '../src/jobs/deliver'
 import { endPolls } from '../src/jobs/scheduled'
 import type { StoreStub } from '../src/platform/store-client'
+import { sha256Hex } from '../src/security/tokens'
 
 // VIS-30's delivery plumbing (deliveries.ts): the provenance each staged target carries (the recipients behind it,
 // merged across followers, addressed accounts and poll voters), the send-time check at the claim and at confirmation
@@ -750,4 +760,133 @@ describe('confirmDelivery in the round (VIS-30)', () => {
 			expect(JSON.parse(body)).toMatchObject({ type: 'Update', object: { name: 'Alice again' } })
 		}
 	})
+})
+
+describe('delivery reads with stale statistics (RES-7)', () => {
+	const PRESENT = { origin: 'https://kopje.test' }
+	const RECIPIENTS =
+		/json_each\(\?\) r CROSS JOIN|json_each\(o\.body, '\$\.audience\.accounts'\) r|FROM statuses s INDEXED BY/
+
+	it('checks each recipient by id at the claim and at the fallback, the accounts grown after ANALYZE', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const a = await remoteAccount(h.store, 'a', 'shared.example')
+		const b = await remoteAccount(h.store, 'b', 'shared.example')
+		let n = 0
+		// A Flag naming both (no to), queued to their shared inbox, claimed, and its shared inbox missing (404).
+		const round = async () => {
+			await runInDurableObject(h.store, (_instance, state) =>
+				state.storage.transactionSync(() =>
+					enqueueActivity(
+						new Db(state.storage.sql),
+						alice.id,
+						{
+							activity: {
+								type: 'Flag',
+								id: `https://kopje.test/ap/flags/${n++}`,
+								actor: 'https://kopje.test/actor',
+								object: ['https://shared.example/users/a', 'https://shared.example/users/b'],
+							},
+							audience: { followers: false, accounts: [a, b] },
+						},
+						NOW
+					)
+				)
+			)
+			const leaseToken = `stale-${n}`
+			const claimed = await plannedRun(h, RECIPIENTS, claimDeliveries, { now: NOW, leaseToken })
+			expect(claimed.result.deliveries).toHaveLength(1)
+			const completed = await plannedRun(h, RECIPIENTS, completeDelivery, {
+				id: claimed.result.deliveries[0]!.id,
+				leaseToken,
+				now: NOW,
+				outcome: { kind: 'failed', status: 404, error: 'HTTP 404', permanent: true },
+			})
+			// The moved row, sent to drain the lane.
+			await drain(h.store)
+			return { claim: claimed.plans, complete: completed.plans, result: completed.result }
+		}
+		const { before, after } = await staleStatistics(h, {
+			capture: () => round(),
+			grow: () => remoteAccounts(h, 100, 200),
+		})
+		expect(after.result).toEqual(before.result)
+		expect(after.result).toMatchObject({ status: 'retry' })
+		for (const name of ['claim', 'complete'] as const) {
+			expect(after[name], name).toHaveLength(1)
+			const { plan, rows } = after[name][0]!
+			expect(
+				plan.filter((d) => /^SEARCH a USING (COVERING )?INDEX sqlite_autoindex_accounts_1 \(id=\?\)$/.test(d)),
+				name
+			).toHaveLength(1)
+			expect(scansOf(plan, ['a', 'd', 'o']), name).toEqual([])
+			expect(rows, name).toBe(before[name][0]!.rows)
+		}
+	}, 60_000)
+
+	it("reads a status's receipts from its uri, the signer's other receipts grown after ANALYZE", async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const far = await remoteAccount(h.store, 'far', 'far.example')
+		await remoteFollows(h.store, far, alice.id)
+		const statuses = [await post(h, alice, { status: 'one' }), await post(h, alice, { status: 'two' })]
+		expect(await drain(h.store)).toEqual([
+			['Create', 'https://far.example/inbox'],
+			['Create', 'https://far.example/inbox'],
+		])
+		const credential = { tokenHash: await sha256Hex(alice.token), scope: 'write:statuses' as const, now: NOW }
+		// An edit (an Update, where servers holding the status are told apart) and the deletion (a Delete to every
+		// receiver).
+		const retract = async (id: string) => ({
+			edit: await plannedRun(h, RECIPIENTS, editStatus, {
+				credential,
+				id,
+				text: 'edited',
+				spoilerText: '',
+				mediaIds: [],
+				mediaAttributes: [],
+				now: NOW,
+				present: PRESENT,
+			}),
+			delete: await plannedRun(h, RECIPIENTS, deleteStatus, {
+				credential,
+				id,
+				deleteMedia: false,
+				now: NOW,
+				present: PRESENT,
+			}),
+		})
+		const { before, after } = await staleStatistics(h, {
+			capture: (phase) => retract(statuses[phase === 'before' ? 0 : 1]!.id),
+			grow: async () => {
+				// Many other statuses of alice's, each received by its own inbox.
+				await sql(
+					h.store,
+					`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 20000 - 1)
+					INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+					SELECT CAST(300000000000000000 + i AS TEXT), 'https://kopje.test/ap/o/r' || i, ?1, 'public', '', ?2 FROM n`,
+					alice.id,
+					new Date(NOW).toISOString()
+				)
+				await sql(
+					h.store,
+					`INSERT INTO outbound_receipts (status_id, inbox_url, account_id, delivered_at)
+					SELECT id, 'https://s' || id || '.example/inbox', account_id, ?1 FROM statuses WHERE uri LIKE 'https://kopje.test/ap/o/r%'`,
+					NOW
+				)
+			},
+		})
+		for (const name of ['edit', 'delete'] as const) {
+			expect(after[name].result, name).toMatchObject({ status: 'ok' })
+			const plans = after[name].plans
+			expect(plans.length, name).toBeGreaterThan(0)
+			for (const [i, { plan, rows }] of plans.entries()) {
+				expect(plan, name).toEqual([
+					'SEARCH s USING INDEX sqlite_autoindex_statuses_2 (uri=?)',
+					'SEARCH r USING COVERING INDEX outbound_receipts_account (account_id=? AND status_id=?)',
+				])
+				expect(rows, name).toBe(before[name].plans[i]!.rows)
+			}
+		}
+	}, 60_000)
 })

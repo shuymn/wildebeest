@@ -3,6 +3,7 @@ import { runInDurableObject } from 'cloudflare:test'
 import { describe, expect, it } from 'vitest'
 
 import { type ApiHarness, bearer, json, sql } from './api-helpers'
+import { NOW } from './app-helpers'
 import { mastodonActor, type TestActor } from './inbox-helpers'
 import {
 	accountId,
@@ -16,6 +17,7 @@ import {
 	setup as baseSetup,
 	statusRow,
 } from './inbox-status-helpers'
+import { plannedRun, scansOf, staleStatistics } from './read-helpers'
 import {
 	act,
 	community as baseCommunity,
@@ -27,9 +29,10 @@ import {
 	type Status,
 	type User,
 } from './status-helpers'
-import { addToConversation } from '../src/domain/conversations'
+import { addToConversation, listConversations } from '../src/domain/conversations'
 import { writeOperation } from '../src/domain/operation'
 import { parseRemoteStatus } from '../src/federation/remote-status'
+import { sha256Hex } from '../src/security/tokens'
 
 // Conversations through the API (domain/conversations.ts, mastodon/conversations.ts), as Mastodon 4.5 has them: the
 // rows the write paths make (AccountConversation.add_status), what deletes and blocks take away
@@ -528,4 +531,47 @@ describe('dismissing a long conversation', () => {
 		expect(measured.read).toBeLessThanOrEqual(5 * 5000 + 10)
 		expect(measured.written).toBeLessThanOrEqual(5000 + 10)
 	})
+})
+
+describe('conversations with stale statistics (RES-7)', () => {
+	it("seeks each conversation's last status by id, the statuses grown after ANALYZE", async () => {
+		const h = await community(['alice', 'bob'])
+		const { alice, bob } = h.users
+		const first = await direct(h, alice, '@bob hello')
+		const reply = await direct(h, bob, '@alice hi', first.id)
+		const carol = await remoteAccount(h.store, 'carol')
+		const tokenHash = await sha256Hex(alice.token)
+		const run = () =>
+			plannedRun(
+				h,
+				/FROM json_each\(\?2\) j CROSS JOIN main\.statuses|FROM json_each\(\?2\) j JOIN/,
+				listConversations,
+				{
+					credential: { tokenHash, scope: 'read:statuses', now: NOW },
+					page: { limit: 20 },
+					present: { origin: 'https://kopje.test' },
+				} as never
+			)
+		const { before, after } = await staleStatistics(h, {
+			capture: () => run(),
+			grow: () =>
+				sql(
+					h.store,
+					`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 20000 - 1)
+					INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+					SELECT CAST(300000000000000000 + i AS TEXT), 'https://remote.example/o/f' || i, ?1, 'public', '', ?2 FROM n`,
+					carol,
+					new Date(NOW).toISOString()
+				),
+		})
+		expect(after.result).toEqual(before.result)
+		expect((after.result as { value: { items: Conversation[] } }).value.items.map((c) => c.last_status?.id)).toEqual([
+			reply.id,
+		])
+		expect(after.plans).toHaveLength(1)
+		const { plan, rows } = after.plans[0]!
+		expect(plan).toContain('SEARCH s USING INDEX sqlite_autoindex_statuses_1 (id=?)')
+		expect(scansOf(plan, ['s'])).toEqual([])
+		expect(rows).toBe(before.plans[0]!.rows)
+	}, 60_000)
 })

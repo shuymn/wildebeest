@@ -254,10 +254,11 @@ function knownAccounts(db: Db, uris: readonly string[]): Known {
 	}
 }
 
+// The account's accepted followers through follows_target, each looked up among the local accounts (RES-7).
 export function hasLocalFollowers(db: Db, accountId: string): boolean {
 	return (
 		db.first(
-			`SELECT 1 AS x FROM follows f JOIN local_accounts l ON l.account_id = f.account_id
+			`SELECT 1 AS x FROM follows f INDEXED BY follows_target CROSS JOIN local_accounts l ON l.account_id = f.account_id
 			WHERE f.target_account_id = ? AND f.state = 'accepted' LIMIT 1`,
 			accountId
 		) !== undefined

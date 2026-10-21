@@ -9,6 +9,7 @@ import {
 } from './audience'
 import { hostCovered } from './instance-domain-blocks'
 import { readOperation, writeOperation } from './operation'
+import { ACCOUNTS_ID_INDEX, STATUSES_URI_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
 import { hostDomain } from '../platform/domain-name'
 
@@ -362,12 +363,15 @@ function targetsOf(
 	}
 }
 
+// Seek the status by unique URI, then its receipts by (signer, status) (RES-7).
+const RECEIPTS_OF = `statuses s INDEXED BY ${STATUSES_URI_INDEX}
+	CROSS JOIN outbound_receipts r INDEXED BY outbound_receipts_account ON r.status_id = s.id`
+
 // Every inbox that received an object of this signer, or may: its receipts, the rows of earlier activities about it
 // in any state (a leased one may have been POSTed already), and their targets not yet expanded.
 function receiversOf(db: Db, signerId: string, object: string): string[] {
 	const receipts = db.all<{ inbox: string }>(
-		`SELECT r.inbox_url AS inbox FROM outbound_receipts r JOIN statuses s ON s.id = r.status_id
-		WHERE s.uri = ? AND r.account_id = ?`,
+		`SELECT r.inbox_url AS inbox FROM ${RECEIPTS_OF} WHERE s.uri = ? AND r.account_id = ?`,
 		object,
 		signerId
 	)
@@ -749,8 +753,7 @@ function insertIntent(
 // the unit: an Update at a personal inbox applies after a Create at the shared inbox; another Create is ignored.
 function serversWithObject(db: Db, signerId: string, object: string): Set<string> {
 	const receipts = db.all<{ inbox_url: string }>(
-		`SELECT r.inbox_url FROM outbound_receipts r JOIN statuses s ON s.id = r.status_id
-		WHERE s.uri = ? AND r.account_id = ?`,
+		`SELECT r.inbox_url FROM ${RECEIPTS_OF} WHERE s.uri = ? AND r.account_id = ?`,
 		object,
 		signerId
 	)
@@ -970,12 +973,13 @@ export type FollowAnswers = {
 
 // The discovery's statements (exported for their plan and rows-read tests). Each LIMIT stops an index seek: the
 // intents are ordered by the numeric column (`ORDER BY id` would name the text alias and sort the whole backlog), and
-// the rows and chunks need no order.
+// the rows and chunks need no order. The rows name deliveries_activity: statistics older than the Store's growth would
+// scan the deliveries (RES-7).
 export const FOLLOW_ANSWER_INTENTS_SQL = `SELECT CAST(o.id AS TEXT) AS id
 	FROM outbound_activities o INDEXED BY outbound_activities_follow_pair
 	WHERE o.account_id = ? AND o.follow_pair = ? ORDER BY o.id LIMIT ?`
-export const FOLLOW_ANSWER_ROWS_SQL = `SELECT CAST(id AS TEXT) AS id, account_id, lane, state, exposed FROM deliveries
-	WHERE activity_id IN (SELECT CAST(value AS INTEGER) FROM json_each(?)) LIMIT ?`
+export const FOLLOW_ANSWER_ROWS_SQL = `SELECT CAST(id AS TEXT) AS id, account_id, lane, state, exposed
+	FROM deliveries INDEXED BY deliveries_activity WHERE activity_id IN (SELECT CAST(value AS INTEGER) FROM json_each(?)) LIMIT ?`
 export const FOLLOW_ANSWER_CHUNKS_SQL = `SELECT CAST(id AS TEXT) AS id FROM outbound_targets
 	WHERE activity_id IN (SELECT CAST(value AS INTEGER) FROM json_each(?)) LIMIT ?`
 
@@ -1155,7 +1159,8 @@ function hostOf(inbox: string): string | null {
 
 // VIS-30's send-time check, at the claim and again at confirmation (the rules: docs/visibility.md, "The send-time
 // check"). The exemption reads the persisted retracts flag, never the activity's kind worked out again. The accounts
-// rule joins accounts, because availableSql reads a missing id as available and a purged recipient must count as gone.
+// rule joins accounts, because availableSql reads a missing id as available and a purged recipient must count as gone,
+// each recipient sought by id (RES-7).
 // An Announce distributes its original, so it is sent only while the original exists and its author is available (R1),
 // read live by the original's uri (statuses' unique key): an original deleted since (its author's Delete applies even
 // while the author is suspended) or never stored refuses it. No other content activity carries a remote author's
@@ -1174,7 +1179,7 @@ function sendRefused(db: Db, row: DueRow): boolean {
 	if (
 		row.recipient_accounts !== null &&
 		db.first(
-			`SELECT 1 AS yes FROM json_each(?) r JOIN main.accounts a ON a.id = r.value
+			`SELECT 1 AS yes FROM json_each(?) r CROSS JOIN main.accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = r.value
 			WHERE ${availableSql('a.id')} LIMIT 1`,
 			row.recipient_accounts
 		) === undefined
@@ -1383,11 +1388,11 @@ function personalFallback(db: Db, row: LaneRow, now: number, status: number | nu
 	// The audience's accounts at this shared inbox, in id order (as many as the activity addresses). For content, the
 	// first one the send-time check would still send to (sendRefused): one it would refuse would lose the delivery at
 	// the next claim, though another recipient there may be available. A retraction takes the first, as it is never
-	// refused.
+	// refused. Each account is sought by id from the audience (RES-7).
 	const candidates = db.all<{ inbox: string; id: string; uri: string; retracts: number; available: number }>(
 		`SELECT a.inbox_url AS inbox, a.id, a.uri, o.retracts, ${availableSql('a.id')} AS available
-		FROM deliveries d JOIN outbound_activities o ON o.id = d.activity_id,
-			json_each(o.body, '$.audience.accounts') r JOIN accounts a ON a.id = r.value
+		FROM deliveries d CROSS JOIN outbound_activities o ON o.id = d.activity_id
+			CROSS JOIN json_each(o.body, '$.audience.accounts') r CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = r.value
 		WHERE d.id = CAST(?1 AS INTEGER) AND d.addressee IS NULL AND json_type(o.body, '$.activity.to') IS NOT 'array'
 			AND a.domain IS NOT NULL AND a.shared_inbox_url = d.inbox_url AND a.inbox_url <> d.inbox_url
 			AND NOT EXISTS (SELECT 1 FROM deliveries e WHERE e.activity_id = o.id AND e.inbox_url = a.inbox_url)

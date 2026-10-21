@@ -2023,7 +2023,16 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   with one account and one poll, cannot turn them into scans. Each witness plans the production statement on a Store
   grown after `ANALYZE` and checks the seek and flat rows read (`test/status-rows.test.ts`,
   `test/filters.test.ts`, `test/search-edge.test.ts`, `test/account-relations.test.ts`, `test/statuses.test.ts`,
-  `test/inbox-statuses.test.ts`, `test/deliveries.test.ts`).
+  `test/inbox-statuses.test.ts`, `test/deliveries.test.ts`). So do context and conversation reads, remote featured-tag
+  counts, tag history, login, outbound reach (the status, its parent, quoters and followers), the send-time check, the
+  personal-inbox fallback, receipts, inbound Flag objects and follow-answer discovery (`test/context-work.test.ts`,
+  `test/conversations.test.ts`, `test/featured-tags.test.ts`, `test/tags.test.ts`, `test/oauth.test.ts`,
+  `test/delivery-send-check.test.ts`, `test/inbox-flag.test.ts`, `test/follow-answers.test.ts`). Bounded writes seek
+  their targets too: a write of an INTEGER PRIMARY KEY table runs one statement per row its bounded selection returns
+  (`src/db/by-ids.ts`), a text-keyed target names its key index, and an OR of two columns is two probes, each through
+  its own index. A purge, the stale-vote sweep, the domain job's clearing walk and a suspension's report resolution
+  are planned this way (`test/purge-plans.test.ts`, `test/moderation-plans.test.ts`, `test/domain-job.test.ts`); the
+  purge writes the same rows per batch as before, within PURGE_BATCH (RES-6).
 
 #### Maxima of presented units (RES-3)
 

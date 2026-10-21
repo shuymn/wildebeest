@@ -6,6 +6,7 @@ import { type CustomEmoji, pollEmojis, presentEmojis } from './custom-emojis'
 import { notify } from './notifications'
 import { writeOperation } from './operation'
 import { MAX_REMOTE_OPTION_LENGTH, MAX_REMOTE_OPTIONS, pollOptionsSql } from './status-bounds'
+import { writeEach } from '../db/by-ids'
 import { type ColumnMap, fixedColumns, selectSql } from '../db/columns'
 import { POLL_VOTES_KEY_INDEX, POLLS_STATUS_INDEX, STATUSES_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
@@ -238,15 +239,20 @@ export function sweepStaleVotes(db: Db, limit: number): number {
 		if (left <= 0) {
 			break
 		}
-		left -= db.run(
-			`DELETE FROM poll_votes WHERE id IN (SELECT id FROM poll_votes WHERE poll_id = ?1 AND generation < ?2 LIMIT ?3)`,
+		left -= writeEach(
+			db,
+			{
+				ids: `SELECT CAST(id AS TEXT) AS id FROM poll_votes INDEXED BY ${POLL_VOTES_KEY_INDEX}
+					WHERE poll_id = ?1 AND generation < ?2 LIMIT ?3`,
+				each: 'DELETE FROM poll_votes WHERE id = CAST(?1 AS INTEGER)',
+			},
 			poll.status_id,
 			poll.generation,
 			left
 		)
 		if (
 			db.first(
-				'SELECT 1 AS x FROM poll_votes WHERE poll_id = ? AND generation < ? LIMIT 1',
+				`SELECT 1 AS x FROM poll_votes INDEXED BY ${POLL_VOTES_KEY_INDEX} WHERE poll_id = ? AND generation < ? LIMIT 1`,
 				poll.status_id,
 				poll.generation
 			) === undefined
@@ -756,8 +762,12 @@ export function storeRemotePoll(
 export function deletePollVotes(db: Db, statusId: string, limit: number): number {
 	return limit <= 0
 		? 0
-		: db.run(
-				'DELETE FROM poll_votes WHERE id IN (SELECT id FROM poll_votes WHERE poll_id = ? LIMIT ?)',
+		: writeEach(
+				db,
+				{
+					ids: `SELECT CAST(id AS TEXT) AS id FROM poll_votes INDEXED BY ${POLL_VOTES_KEY_INDEX} WHERE poll_id = ?1 LIMIT ?2`,
+					each: 'DELETE FROM poll_votes WHERE id = CAST(?1 AS INTEGER)',
+				},
 				statusId,
 				limit
 			)
@@ -767,8 +777,12 @@ export function deletePollVotes(db: Db, statusId: string, limit: number): number
 export function deleteAccountVotes(db: Db, accountId: string, limit: number): number {
 	return limit <= 0
 		? 0
-		: db.run(
-				'DELETE FROM poll_votes WHERE id IN (SELECT id FROM poll_votes WHERE account_id = ? LIMIT ?)',
+		: writeEach(
+				db,
+				{
+					ids: 'SELECT CAST(id AS TEXT) AS id FROM poll_votes INDEXED BY poll_votes_account WHERE account_id = ?1 LIMIT ?2',
+					each: 'DELETE FROM poll_votes WHERE id = CAST(?1 AS INTEGER)',
+				},
 				accountId,
 				limit
 			)
@@ -777,7 +791,8 @@ export function deleteAccountVotes(db: Db, accountId: string, limit: number): nu
 export function hasPollVotes(db: Db, by: { statusId?: string; accountId?: string }): boolean {
 	return (
 		db.first(
-			'SELECT 1 AS x FROM poll_votes WHERE (?1 IS NOT NULL AND poll_id = ?1) OR (?2 IS NOT NULL AND account_id = ?2) LIMIT 1',
+			`SELECT 1 AS x WHERE EXISTS (SELECT 1 FROM poll_votes INDEXED BY ${POLL_VOTES_KEY_INDEX} WHERE poll_id = ?1)
+				OR EXISTS (SELECT 1 FROM poll_votes INDEXED BY poll_votes_account WHERE account_id = ?2)`,
 			by.statusId ?? null,
 			by.accountId ?? null
 		) !== undefined

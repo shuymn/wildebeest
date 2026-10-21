@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { seedAccount } from './api-helpers'
 import { NOW } from './app-helpers'
 import { migratedStore } from './helpers'
-import { watchedCursor } from './read-helpers'
+import { plannedRun, scansOf, staleStatistics, watchedCursor } from './read-helpers'
 import { statusContext } from '../src/domain/statuses'
 import type { StoreStub } from '../src/platform/store-client'
 
@@ -98,4 +98,69 @@ describe('context work is bounded', () => {
 			expect(deeper.read).toBeLessThan(deep.read * 1.5)
 		})
 	}
+})
+
+describe('context reads with stale statistics (RES-7)', () => {
+	it('seeks each ancestor and descendant by id, the statuses grown after ANALYZE', async () => {
+		const store = await migratedStore()
+		const author = await tree(store, { deep: 4 })
+		const h = { store }
+		const run = () =>
+			plannedRun(h, /WITH RECURSIVE up|FROM json_each\(\?[12]\) [jf] (CROSS )?JOIN/, statusContext, {
+				credential: { tokenHash: 't', scope: 'read:statuses', now: NOW },
+				id: '200000000000000002',
+				now: NOW,
+				present: { origin: 'https://kopje.test' },
+			})
+		const { before, after } = await staleStatistics(h, {
+			capture: () => run(),
+			grow: () =>
+				runInDurableObject(store, (_instance, state) => {
+					// Other threads: roots and replies to them, each below and above the thread's ids.
+					state.storage.sql.exec(
+						`WITH RECURSIVE n (i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 20000 - 1)
+						INSERT INTO statuses (id, uri, account_id, in_reply_to_uri, in_reply_to_id, visibility, content, published_at)
+						SELECT printf('%d', CASE WHEN i % 2 = 0 THEN 150000000000000000 ELSE 300000000000000000 END + i),
+							'https://kopje.test/ap/o/x' || i, ?1, CASE WHEN i % 4 >= 2 THEN 'https://kopje.test/ap/o/p' END,
+							CASE WHEN i % 4 >= 2 THEN printf('%d', CASE WHEN i % 2 = 0 THEN 150000000000000000 ELSE 300000000000000000 END + i - 2) END,
+							'public', '<p>x</p>', '2026-01-01T00:00:00.000Z'
+						FROM n`,
+						author
+					)
+				}),
+		})
+		expect(after.result).toEqual(before.result)
+		const context = (
+			after.result as { value: { value: { ancestors: { id: string }[]; descendants: { id: string }[] } } }
+		).value.value
+		expect([context.ancestors.map((s) => s.id), context.descendants.map((s) => s.id)]).toEqual([
+			[ROOT, '200000000000000001'],
+			['200000000000000003', '200000000000000004'],
+		])
+		// The ancestors, the descendants' levels (the frontier's children through statuses_in_reply_to), then their
+		// admission.
+		expect(after.plans.map((p) => p.query.trim().slice(0, 14))).toEqual([
+			'WITH RECURSIVE',
+			'SELECT s.id, s',
+			'SELECT s.id, s',
+			'SELECT s.id, s',
+			'SELECT s.id AS',
+		])
+		for (const [i, { query, plan, rows }] of after.plans.entries()) {
+			const name = query.trim().slice(0, 40)
+			expect(scansOf(plan, ['s', 'statuses']), name).toEqual([])
+			if (i === 0 || i === 4) {
+				// The anchor, the recursive step and the admission: each by id.
+				expect(
+					plan.filter((d) => d === 'SEARCH s USING INDEX sqlite_autoindex_statuses_1 (id=?)'),
+					name
+				).toHaveLength(i === 0 ? 2 : 1)
+				expect(rows, name).toBe(before.plans[i]!.rows)
+			} else {
+				expect(plan, name).toContain('SEARCH s USING INDEX statuses_in_reply_to (in_reply_to_id=?)')
+				// One more index entry at most, past the frontier's children.
+				expect(rows - before.plans[i]!.rows, name).toBeLessThanOrEqual(1)
+			}
+		}
+	}, 60_000)
 })

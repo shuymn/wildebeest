@@ -8,6 +8,7 @@ import { readOperation } from './operation'
 import { usernameSql } from './profile-bounds'
 import { isHashtagName } from './status-text'
 import { normalizeTag } from './tag-name'
+import { ACCOUNTS_ID_INDEX, FEATURED_TAGS_ACCOUNT_INDEX, STATUSES_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
 
 // Featured hashtags (Mastodon 4.5's FeaturedTag, CreateFeaturedTagService and RemoveFeaturedTagService,
@@ -48,7 +49,7 @@ type FeaturedRow = {
 // A remote account's statuses within its window that count for the featured hashtag `f`: its newest
 // FEATURED_COUNT_WINDOW (by statuses_account) that are public or unlisted originals with the hashtag, each a key lookup.
 // A read shows at most MAX_FEATURED_TAGS of an account, so it reads at most that many windows.
-const REMOTE_COUNTED = `FROM statuses s
+const REMOTE_COUNTED = `FROM statuses s INDEXED BY ${STATUSES_ID_INDEX}
 	WHERE s.id IN (SELECT id FROM statuses WHERE account_id = f.account_id ORDER BY id DESC LIMIT ${FEATURED_COUNT_WINDOW})
 		AND s.reblog_of_id IS NULL AND s.visibility IN ${DISTRIBUTABLE_SQL}
 		AND EXISTS (SELECT 1 FROM status_tags t WHERE t.status_id = s.id AND t.name = f.name)`
@@ -59,7 +60,9 @@ const FEATURED_COLUMNS = `f.id, f.name, f.display_name,
 	CASE WHEN a.domain IS NULL THEN f.last_status_at
 		ELSE (SELECT s.published_at ${REMOTE_COUNTED} ORDER BY s.id DESC LIMIT 1) END AS last_status_at,
 	${usernameSql('a.username')} AS username, a.domain`
-const FEATURED_FROM = 'FROM featured_tags f JOIN accounts a ON a.id = f.account_id'
+// The account's featured hashtags through their (account_id, name) key, then the account by id (RES-7).
+const FEATURED_FROM = `FROM featured_tags f INDEXED BY ${FEATURED_TAGS_ACCOUNT_INDEX}
+	CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = f.account_id`
 
 // The URL of the account's statuses with the hashtag (Mastodon's short_account_tag_url): its profile, tagged. A remote
 // account's is named by its address (/@username@domain/tagged/:tag, Mastodon's account_with_domain route), which the

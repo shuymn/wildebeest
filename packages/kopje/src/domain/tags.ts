@@ -6,6 +6,7 @@ import { featureTag, unfeatureTag } from './featured-tags'
 import { tagNameSql } from './status-bounds'
 import { isHashtagName } from './status-text'
 import { normalizeTag } from './tag-name'
+import { STATUSES_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
 
 // A hashtag as Mastodon 4.5's REST::TagSerializer shows it. Kopje has no tags table: any valid name is a tag, used or
@@ -59,13 +60,14 @@ const TOO_MANY_FOLLOWED = 'You have reached the maximum number of followed hasht
 // from published_at. The work is a range of the (name, status_id) index of public hashtags (status_tags_public) cut by
 // status id (RES-7): ids carry the publication time of statuses Kopje created or received (domain/ids.ts), and the
 // receipt time of ids a cutover kept, so the range holds the tag's public statuses the instance received in the last
-// seven days, and the work follows the instance's own receive volume.
+// seven days, and the work follows the instance's own receive volume. The range drives, each status sought by id
+// (RES-7).
 function tagHistory(db: Db, tag: string, now: number): TagHistory[] {
 	const today = Math.floor(now / DAY_MS) * DAY_MS
 	const since = today - (HISTORY_DAYS - 1) * DAY_MS
 	const rows = db.all<{ day: string; uses: number; accounts: number }>(
 		`SELECT substr(s.published_at, 1, 10) AS day, COUNT(*) AS uses, COUNT(DISTINCT s.account_id) AS accounts
-		FROM status_tags t JOIN statuses s ON s.id = t.status_id
+		FROM status_tags t INDEXED BY status_tags_public CROSS JOIN statuses s INDEXED BY ${STATUSES_ID_INDEX} ON s.id = t.status_id
 		WHERE t.name = ?1 AND t.public = 1 AND t.status_id >= ?2 AND s.visibility = 'public' AND s.reblog_of_id IS NULL
 			AND ${visibleSql('s', 'NULL')}
 		GROUP BY day`,

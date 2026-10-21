@@ -76,7 +76,7 @@ type Job = {
 	generation: number
 	actor_account_id: string | null
 	intent_id: string | null
-	report_bound: number | null
+	report_bound: string | null
 	// A suspension job's report fence (VIS-29): its suspend row in the moderation log, or without an admin the newest
 	// row at the suspension. Null: unknown (0042_report_action_fence), which resolves none.
 	action_bound: number | null
@@ -330,17 +330,17 @@ function reachRound(db: Db, job: Job, state: JobState, now: number): boolean {
 			const round = resolveSuspensionReports(
 				db,
 				job.account_id,
-				job.report_bound ?? 0,
+				job.report_bound ?? '0',
 				job.action_bound,
 				job.actor_account_id,
-				Number(state.cursor ?? 0),
+				String(state.cursor ?? '0'),
 				REPORT_ROUND,
 				iso(now)
 			)
 			if (round.read < REPORT_ROUND) {
 				save(db, job, 'followers', {})
 			} else {
-				save(db, job, 'reports', { cursor: round.last ?? 0 })
+				save(db, job, 'reports', { cursor: round.last ?? '0' })
 			}
 			return false
 		}
@@ -523,7 +523,7 @@ function mentionsRound(db: Db, job: Job, state: JobState): void {
 }
 
 const JOB_COLUMNS = `id, kind, account_id, generation, actor_account_id, CAST(intent_id AS TEXT) AS intent_id,
-	report_bound, action_bound, follow_bound, cutoff, phase, state`
+	CAST(report_bound AS TEXT) AS report_bound, action_bound, follow_bound, cutoff, phase, state`
 
 // One round of the job after id `after`, else of the oldest, so a call's jobs take turns and a long token history
 // cannot hold back another's Update. Null when there is no job; else the job's id and whether the round wrote Update

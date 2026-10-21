@@ -1198,6 +1198,7 @@ const CONTEXT_FRAME_BYTES = jsonBytes({ ancestors: [], descendants: [] } satisfi
 // that do not. One answer within ANSWER_BYTES (RES-3), under one presentation: the ancestors take half of it, nearest
 // first, and the descendants the rest with what the ancestors left, in their order; each list keeps its order, and
 // the farthest ancestors and the last descendants past it are left out (no paging, as Mastodon's context has none).
+// Each member is sought by id from the traversal (RES-7).
 export const statusContext = optionalUserReadOperation<{ id: string; present: Present }, Viewed<Context>>(
 	(db, { id, present }, viewer) => {
 		const { accountId: viewerId, now } = viewer
@@ -1214,11 +1215,11 @@ export const statusContext = optionalUserReadOperation<{ id: string; present: Pr
 				with: `WITH RECURSIVE up (id, depth) AS (
 					SELECT in_reply_to_id, 1 FROM statuses WHERE id = ?2 AND in_reply_to_id IS NOT NULL
 					UNION ALL
-					SELECT s.in_reply_to_id, up.depth + 1 FROM statuses s JOIN up ON s.id = up.id
+					SELECT s.in_reply_to_id, up.depth + 1 FROM up CROSS JOIN statuses s INDEXED BY ${STATUSES_ID_INDEX} ON s.id = up.id
 					WHERE s.in_reply_to_id IS NOT NULL AND up.depth < ?3
 				)`,
-				from: 'up JOIN',
-				join: 'ON s.id = up.id',
+				from: 'up CROSS JOIN',
+				join: `INDEXED BY ${STATUSES_ID_INDEX} ON s.id = up.id`,
 				tail: 'ORDER BY up.depth DESC',
 			},
 			viewerId,
@@ -1230,7 +1231,11 @@ export const statusContext = optionalUserReadOperation<{ id: string; present: Pr
 		const descendants = read.select(
 			db,
 			'listable',
-			{ from: 'json_each(?2) j JOIN', join: 'ON s.id = j.value', tail: 'ORDER BY j.key LIMIT ?3' },
+			{
+				from: 'json_each(?2) j CROSS JOIN',
+				join: `INDEXED BY ${STATUSES_ID_INDEX} ON s.id = j.value`,
+				tail: 'ORDER BY j.key LIMIT ?3',
+			},
 			viewerId,
 			JSON.stringify(tree),
 			limits.descendants,

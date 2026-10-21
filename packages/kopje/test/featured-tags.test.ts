@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { type ApiHarness, bearer, json, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { BUILD } from './helpers'
-import { appToken, rowsRead, scopedToken } from './read-helpers'
+import { appToken, plannedRun, remoteAccounts, rowsRead, scansOf, scopedToken, staleStatistics } from './read-helpers'
 import { act, community, getJson, outbound, post, remoteAccount, remoteFollows, type User } from './status-helpers'
 import { accountFeaturedTags, MAX_FEATURED_TAGS } from '../src/domain/featured-tags'
 
@@ -281,6 +281,69 @@ describe('featured hashtags', () => {
 		const few = await measure(20)
 		const many = await measure(2000)
 		expect(many).toBeLessThanOrEqual(few + 10)
+	}, 60_000)
+})
+
+describe("a remote account's featured hashtags with stale statistics (RES-7)", () => {
+	it('counts its window by status id, the statuses grown after ANALYZE', async () => {
+		const h = await community(['alice'])
+		const carol = await remoteAccount(h.store, 'carol')
+		const dave = await remoteAccount(h.store, 'dave')
+		// Statuses of `account` from `base`, each tagged #cats.
+		const statuses = async (account: string, base: bigint, n: number) => {
+			await sql(
+				h.store,
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?3 - 1)
+				INSERT INTO statuses (id, uri, account_id, visibility, published_at)
+				SELECT CAST(?2 + i AS TEXT), 'https://remote.example/o/' || (?2 + i), ?1, 'public', '2026-01-01T00:00:00.000Z' FROM n`,
+				account,
+				String(base),
+				n
+			)
+			await sql(
+				h.store,
+				"INSERT INTO status_tags (status_id, name) SELECT id, 'cats' FROM statuses WHERE account_id = ?1 AND id >= ?2",
+				account,
+				String(base)
+			)
+		}
+		await statuses(carol, 300000000000000000n, 3)
+		await sql(
+			h.store,
+			"INSERT INTO featured_tags (id, account_id, name, display_name) VALUES ('400000000000000000', ?1, 'cats', 'Cats')",
+			carol
+		)
+		const run = () =>
+			plannedRun(h, /FROM featured_tags f\b/, accountFeaturedTags, {
+				id: carol,
+				present: { origin: 'https://kopje.test' },
+			})
+		const { before, after } = await staleStatistics(h, {
+			capture: () => run(),
+			grow: async () => {
+				await statuses(dave, 500000000000000000n, 20_000)
+				// Other remote accounts' featured hashtags.
+				await remoteAccounts(h, 10, 100)
+				await sql(
+					h.store,
+					`INSERT INTO featured_tags (id, account_id, name, display_name)
+					SELECT CAST(410000000000000000 + rowid AS TEXT), id, 'cats', 'Cats' FROM accounts WHERE domain LIKE 'd%'`
+				)
+			},
+		})
+		expect(after.result).toEqual(before.result)
+		expect(after.result).toMatchObject([{ name: 'Cats', statuses_count: '3', last_status_at: '2026-01-01' }])
+		expect(after.plans).toHaveLength(1)
+		const { plan, rows } = after.plans[0]!
+		// The count and the newest: each window through statuses_account, each status of it by id.
+		expect(plan.filter((d) => d === 'SEARCH s USING INDEX sqlite_autoindex_statuses_1 (id=?)')).toHaveLength(2)
+		expect(
+			plan.filter((d) => /^SEARCH statuses USING (COVERING )?INDEX statuses_account \(account_id=\?\)$/.test(d))
+		).toHaveLength(2)
+		expect(plan[0]).toBe('SEARCH f USING INDEX sqlite_autoindex_featured_tags_2 (account_id=?)')
+		expect(scansOf(plan, ['f', 'a', 's', 'statuses'])).toEqual([])
+		// One entry past the account's own in each index at most.
+		expect(rows - before.plans[0]!.rows).toBeLessThanOrEqual(1)
 	}, 60_000)
 })
 
