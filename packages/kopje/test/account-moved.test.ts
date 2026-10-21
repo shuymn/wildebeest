@@ -3,7 +3,15 @@ import { runInDurableObject } from 'cloudflare:test'
 import { describe, expect, it } from 'vitest'
 
 import { setSetting, sql } from './api-helpers'
-import { observedSql } from './read-helpers'
+import { NOW } from './app-helpers'
+import {
+	observedSql,
+	type PlannedStatement,
+	plannedSql,
+	remoteAccounts,
+	scansOf,
+	staleStatistics,
+} from './read-helpers'
 import { community, getJson } from './status-helpers'
 import { recordingSql } from './status-row-fixtures'
 import { selectSql } from '../src/db/columns'
@@ -22,6 +30,7 @@ import {
 } from '../src/domain/accounts'
 import { ADMIN_EMAIL_COLUMNS, LOCAL_EMAIL_COLUMNS } from '../src/domain/admin-authority'
 import { jsonBytes } from '../src/domain/answer-budget'
+import { purgeBatch, receiveActivity, type RemoteActorInput } from '../src/domain/inbox'
 import { DOMAIN_BYTES } from '../src/platform/identity-bounds'
 
 // Account#moved as REST::AccountSerializer shows it (Mastodon v4.5.11, account_serializer.rb:13, 119-121, 157-159):
@@ -395,4 +404,112 @@ describe('a list cut by its budget', () => {
 		expect(cut.moved).toBe(1)
 		expect(cut.lookups).toBe(0)
 	})
+})
+
+// RES-7: each read and write of a move seeks by key once accounts and moves outgrow the statistics: the chunk's
+// moved-to accounts (movedOf), the document's movedTo resolved by actor id (W2), the Move's own write (W1), and the
+// purge's clearing step and completion check through accounts_moved_to.
+describe('query plans of moves (RES-7)', () => {
+	it('seek by key after the Store grows past its statistics', async () => {
+		const { h, account, move } = await fixture()
+		const [target, source] = [await account(), await account()]
+		await move(source, target)
+		const actor = (uri: string, movedTo: string | null): RemoteActorInput => ({
+			uri,
+			username: 'mover',
+			domain: 'remote.example',
+			actorType: 'Person',
+			displayName: 'mover',
+			note: '',
+			url: null,
+			avatarUrl: null,
+			headerUrl: null,
+			locked: false,
+			discoverable: null,
+			indexable: false,
+			inboxUrl: `${uri}/inbox`,
+			sharedInboxUrl: null,
+			published: null,
+			keys: [],
+			emojiTags: [],
+			raw: '{}',
+			movedTo,
+		})
+		const targetUri = `https://remote.example/users/u${target}`
+		// One purging account referenced by others per phase.
+		const purged = { before: await account(), after: await account() }
+		for (const id of Object.values(purged)) {
+			for (let i = 0; i < 3; i++) {
+				await move(await account(), id)
+			}
+			await sql(h.store, "UPDATE accounts SET deleted_at = '2026-01-01T00:00:00.000Z' WHERE id = ?", id)
+		}
+		const capture = (phase: 'before' | 'after') =>
+			runInDurableObject(h.store, (_instance, state) => {
+				const plans: PlannedStatement[] = []
+				const real = state.storage.sql
+				const planned = new Db(plannedSql(real, /moved_to_account_id|accounts_moved_to|m INDEXED BY/, plans))
+				presentAccountsWithin(planned, [source], { origin: ORIGIN }, Infinity, true)
+				const mover = `https://remote.example/users/mover-${phase}`
+				receiveActivity.run(plannedSql(real, /moved_to_account_id/, plans), {
+					now: NOW,
+					storeNow: NOW,
+					origin: ORIGIN,
+					actorUri: mover,
+					actor: actor(mover, targetUri),
+					activity: { type: 'Move', id: `${mover}#moves/1`, target: actor(targetUri, null) },
+				})
+				state.storage.transactionSync(() => purgeBatch(planned, `https://remote.example/users/u${purged[phase]}`, NOW))
+				return plans.map(({ query, plan }) => ({ query, plan }))
+			})
+		const { after } = await staleStatistics(h, {
+			capture,
+			grow: async () => {
+				await remoteAccounts(h, 100, 200)
+				// Moves among them, so accounts_moved_to holds many rows.
+				await sql(
+					h.store,
+					`UPDATE accounts SET moved_to_account_id = CAST(CAST(id AS INTEGER) + 1 AS TEXT)
+					WHERE domain LIKE 'd%.example' AND CAST(id AS INTEGER) % 2 = 0`
+				)
+			},
+		})
+		const of = (pattern: RegExp | string) =>
+			after.filter(({ query }) => (typeof pattern === 'string' ? query.includes(pattern) : pattern.test(query)))
+		const expectSeeks = (pattern: RegExp | string, searches: readonly RegExp[]) => {
+			const found = of(pattern)
+			expect(found.length, String(pattern).slice(0, 80)).toBeGreaterThan(0)
+			for (const { query, plan } of found) {
+				expect(scansOf(plan, ['a', 'm', 'ml', 'accounts']), `${query}\n${plan.join('\n')}`).toEqual([])
+				for (const search of searches) {
+					expect(
+						plan.some((detail) => search.test(detail)),
+						`${String(search)}\n${query}\n${plan.join('\n')}`
+					).toBe(true)
+				}
+			}
+		}
+		expectSeeks(selectSql(MOVED_ACCOUNT_COLUMNS.columns), [
+			/^SEARCH m USING INDEX sqlite_autoindex_accounts_1 \(id=\?\)$/,
+			/^SEARCH ml USING INDEX sqlite_autoindex_local_accounts_1 \(account_id=\?\)( LEFT-JOIN)?$/,
+		])
+		// W2 resolves the movedTo by actor id, and writes the source by its key; W1 writes it by its key.
+		expectSeeks(/moved_to_account_id = \(SELECT/, [
+			/^SEARCH m USING (COVERING )?INDEX sqlite_autoindex_accounts_2 \(uri=\?\)$/,
+			/^SEARCH accounts USING INDEX sqlite_autoindex_accounts_1 \(id=\?\)$/,
+		])
+		expectSeeks(/SET moved_to_account_id = \?2/, [
+			/^SEARCH accounts USING INDEX sqlite_autoindex_accounts_1 \(id=\?\)$/,
+		])
+		// The purge's clearing step and its completion check.
+		expectSeeks(/SELECT id FROM accounts INDEXED BY accounts_moved_to/, [
+			/^SEARCH accounts USING (COVERING )?INDEX accounts_moved_to \(moved_to_account_id=\?\)$/,
+		])
+		expectSeeks(/WHERE EXISTS/, [
+			/^SEARCH accounts USING (COVERING )?INDEX accounts_moved_to \(moved_to_account_id=\?\)$/,
+		])
+		expect(
+			await sql(h.store, 'SELECT count(*) AS n FROM accounts WHERE moved_to_account_id = ?', purged.after)
+		).toEqual([{ n: 0 }])
+	}, 60_000)
 })

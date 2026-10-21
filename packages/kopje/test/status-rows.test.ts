@@ -23,6 +23,7 @@ import {
 	type Fixture,
 	fixture,
 	type Item,
+	MOVED_KINDS,
 	nextId,
 	observedPresentation,
 	planCounts,
@@ -35,7 +36,12 @@ import {
 } from './status-row-fixtures'
 import { selectSql } from '../src/db/columns'
 import { Db, rowHeapBytes, RowMeter } from '../src/db/sql'
-import { ACCOUNT_COLUMN_MAP } from '../src/domain/accounts'
+import {
+	ACCOUNT_COLUMN_MAP,
+	MOVED_ACCOUNT_CAPS,
+	MOVED_ACCOUNT_COLUMNS,
+	PROFILE_URL_LIMIT,
+} from '../src/domain/accounts'
 import { ADMIN_EMAIL_COLUMNS, LOCAL_EMAIL_COLUMNS } from '../src/domain/admin-authority'
 import { type VisibleStatusId, visibleSql } from '../src/domain/audience'
 import { listGroupedNotifications } from '../src/domain/notification-groups'
@@ -74,6 +80,8 @@ const itemArb = fc.record({
 	local: fc.boolean(),
 	originalLocal: fc.boolean(),
 	quotedLocal: fc.boolean(),
+	// Where the item's remote author moved, if anywhere.
+	moved: fc.constantFrom(undefined, ...MOVED_KINDS),
 }) satisfies fc.Arbitrary<Item>
 
 afterEach(() => {
@@ -377,6 +385,7 @@ describe('the hydrate queries (RES-3)', () => {
 				build(state.storage.sql, f, { ...base, kind })
 			),
 			build(state.storage.sql, f, { ...base, local: true }),
+			...MOVED_KINDS.map((moved) => build(state.storage.sql, f, { ...base, moved })),
 		])
 		return { h, f, ids }
 	}
@@ -400,6 +409,57 @@ describe('the hydrate queries (RES-3)', () => {
 			expect(columns.filter((column) => !(column in entry![1]))).toEqual([])
 		}
 		expect([...used].toSorted()).toEqual(Object.keys(hydrateQueries()).toSorted())
+	})
+
+	// The moved-to account of an author, each of its columns past every stored bound (an imported row): what leaves
+	// SQLite is within the caps its row heap rests on (MOVED_ACCOUNT_CAPS), in UTF-16 code units as RowMeter counts them.
+	it('read a moved-to account within its declared caps, whatever the row stores', async () => {
+		const { h, f } = await fixture()
+		const measured = await runInDurableObject(h.store, (_instance, state) => {
+			const sql = state.storage.sql
+			const id = build(sql, f, { ...TINY, moved: 'remote' })
+			const target = sql
+				.exec<{ t: string }>(
+					'SELECT a.moved_to_account_id AS t FROM statuses s JOIN accounts a ON a.id = s.account_id WHERE s.id = ?',
+					id
+				)
+				.one().t
+			// The largest each column stores: 64 KiB of malformed UTF-8 (F0, then continuation bytes: one character to
+			// SQLite's length and substr, so the display name's stored cut keeps it whole), an actor id and username of 64
+			// KiB (read-time projections only), URLs at their stored bound and a full emoji snapshot.
+			const malformed = new Uint8Array([0xf0, ...new Array<number>(64 * 1024).fill(0x80)]).buffer
+			const url = `https://new.example/${'x'.repeat(PROFILE_URL_LIMIT - 'https://new.example/'.length)}`
+			sql.exec(
+				`UPDATE accounts SET uri = ?2, username = CAST(?3 AS TEXT), display_name = CAST(?3 AS TEXT), url = ?4,
+					avatar_url = ?4, header_url = ?4, created_at = CAST(?3 AS TEXT), actor_type = ?5,
+					followers_count = 9223372036854775807, emojis = ?6 WHERE id = ?1`,
+				target,
+				`https://new.example/${'u'.repeat(64 * 1024)}`,
+				malformed,
+				url,
+				'T'.repeat(64 * 1024),
+				ACCOUNT_EMOJIS_FULL
+			)
+			sql.exec(
+				`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+				VALUES (?, ?, ?, 'public', '', CAST(? AS TEXT))`,
+				nextId(),
+				`https://new.example/s/${target}`,
+				target,
+				malformed
+			)
+			const read = observedPresentation(state, f.viewer, [id], PAGE_CHUNKS).reads.filter((r) =>
+				r.query.includes(selectSql(MOVED_ACCOUNT_COLUMNS.columns))
+			)
+			return read.flatMap((r) => r.rows)
+		})
+		expect(measured).toHaveLength(1)
+		const [row] = measured
+		for (const [column, value] of Object.entries(row!)) {
+			const units = typeof value === 'string' ? value.length : 0
+			expect(units, column).toBeLessThanOrEqual(MOVED_ACCOUNT_CAPS[column as keyof typeof MOVED_ACCOUNT_CAPS])
+		}
+		expect(heap(measured)).toBeLessThanOrEqual(MOVED_ACCOUNT_COLUMNS.rowHeap)
 	})
 
 	it('sort no chunk-wide payload: a temporary B-tree only for ids or one row (plan)', async () => {
@@ -860,6 +920,8 @@ describe('stale statistics (RES-7)', () => {
 					'p',
 					'fs',
 					'ms',
+					// The moved-to accounts' local rows (accounts.ts movedOf).
+					'ml',
 					// The visibility rule's account lookups (audience.ts).
 					'pa',
 					'pc',
@@ -1089,10 +1151,12 @@ describe('stale statistics (RES-7)', () => {
 	it('reads statuses, media, votes and filters by key after the Store grows past its statistics', async () => {
 		const { h, f } = await fixture()
 		const base: Item = { kind: 'status', text: 300, wide: true, mentions: 3, tags: 5, media: 2, poll: 3, viewer: true }
-		// Every kind four times: 16 statuses, past the filter text level's allowance, so its preparation pass runs too.
+		// Every kind four times: 16 statuses, past the filter text level's allowance, so its preparation pass runs too;
+		// of each kind one by an author moved to a remote account and one moved to a local one.
 		const kinds = ['status', 'quote', 'boost', 'boostOfQuote'] as const
+		const moves = [{ moved: 'remote' }, { moved: 'local' }, {}, {}] as const
 		const ids = await runInDurableObject(h.store, (_instance, state) =>
-			kinds.flatMap((kind) => [0, 1, 2, 3].map(() => build(state.storage.sql, f, { ...base, kind })))
+			kinds.flatMap((kind) => moves.map((moved) => build(state.storage.sql, f, { ...base, kind, ...moved })))
 		)
 		const other = await seedAccount(h.store, { username: 'bob', email: 'bob@example.com' })
 		// Statistics of a small Store, not taken again after it grows.
@@ -1166,6 +1230,11 @@ describe('stale statistics (RES-7)', () => {
 		const bound = after.plans.find((p) => p.query === statusRowBoundSql())!.plan
 		expect(bound).toContain('SEARCH b USING INDEX sqlite_autoindex_statuses_1 (id=?)')
 		expect(bound).toContain('SEARCH w USING INDEX sqlite_autoindex_statuses_1 (id=?)')
+		// M's moved-to account, sought by its key.
+		expect(bound).toContain('SEARCH m USING INDEX sqlite_autoindex_accounts_1 (id=?)')
+		const moved = after.plans.filter((p) => p.query.includes(selectSql(MOVED_ACCOUNT_COLUMNS.columns)))
+		expect(moved).toHaveLength(1)
+		expect(moved[0]!.plan).toContain('SEARCH m USING INDEX sqlite_autoindex_accounts_1 (id=?)')
 		expect(bound).toContain('SEARCH m USING INDEX sqlite_autoindex_media_attachments_1 (id=?)')
 		expect(bound).toContain(
 			'SEARCH v USING COVERING INDEX sqlite_autoindex_poll_votes_1 (poll_id=? AND generation=? AND account_id=?)'
