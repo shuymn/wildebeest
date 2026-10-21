@@ -24,6 +24,7 @@ import { deleteStatusBatch, purgeBatch } from '../src/domain/inbox'
 import { MAX_BULK_REQUESTS, REQUEST_JOB_BATCHES, REQUEST_JOB_WINDOW } from '../src/domain/notification-requests'
 import { getNotification, listNotifications, type NotificationType, notify } from '../src/domain/notifications'
 import { writeOperation } from '../src/domain/operation'
+import { utf8Length } from '../src/platform/dump-format'
 import { sha256Hex } from '../src/security/tokens'
 
 // The notification policy and notification requests (Mastodon 4.5's NotifyService::DropCondition and
@@ -661,7 +662,8 @@ describe('filtered notifications in the reads', () => {
 						if (column === 'filtered') {
 							flags.push(value)
 						}
-						bytes += value instanceof ArrayBuffer ? value.byteLength : String(value).length
+						// UTF-8 bytes of a string, a buffer's bytes, 8 per number (as test/status-bounds.test.ts counts).
+						bytes += typeof value === 'string' ? utf8Length(value) : value instanceof ArrayBuffer ? value.byteLength : 8
 					}
 				}
 			})
