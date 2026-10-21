@@ -1,7 +1,10 @@
+import { runInDurableObject } from 'cloudflare:test'
+
 import { describe, expect, it } from 'vitest'
 
 import { type ApiHarness, bearer, form, json, registerApp, seedAccount, sql } from './api-helpers'
 import { NOW } from './app-helpers'
+import { blockDomainIn } from './domain-block-helpers'
 import { appToken, plannedRun, remoteAccounts, scansOf, scopedToken, staleStatistics } from './read-helpers'
 import {
 	act,
@@ -18,13 +21,17 @@ import {
 	getAccounts,
 	MAX_ACCOUNTS_BY_ID,
 	MAX_NOTE_COMMENT,
+	MAX_RELATIONSHIP_IDS,
 	relationships as relationshipsOperation,
 } from '../src/domain/accounts'
+import { MAX_BLOCK_LABELS } from '../src/domain/audience'
 import { MAX_ENDORSEMENTS_ANSWERED, NOT_FOLLOWING } from '../src/domain/endorsements'
 import { sha256Hex } from '../src/security/tokens'
 
 // The account endpoints of Mastodon 4.5 that complete /api/v1/accounts: private notes, endorsements, removing a
 // follower, accounts by id, identity proofs and registration (closed), through the API.
+
+const NOW_ISO = new Date(NOW).toISOString()
 
 type Relationship = Record<string, unknown> & { id: string; endorsed: boolean; note: string; followed_by: boolean }
 
@@ -453,6 +460,7 @@ describe('account batches with stale statistics (RES-7)', () => {
 			relationships: await plannedRun(h, /FROM json_each\(\?2\) j/, relationshipsOperation, {
 				credential: { tokenHash, scope: 'read:follows', now: NOW },
 				ids: requested,
+				withSuspended: true,
 			}),
 			accounts: await plannedRun(h, /^SELECT .* FROM accounts a/s, getAccounts, {
 				ids: requested,
@@ -481,4 +489,117 @@ describe('account batches with stale statistics (RES-7)', () => {
 			expect(rows, name).toBe(before[name as keyof typeof before].plans[0]!.rows)
 		}
 	}, 60_000)
+
+	it(`judges ${MAX_RELATIONSHIP_IDS} requested accounts' availability by key seeks, under 100 suspend blocks`, async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const tokenHash = await sha256Hex(alice.token)
+		const LOCALS = 10
+		const REMOTES = MAX_RELATIONSHIP_IDS - LOCALS
+		// Eight labels (MAX_BLOCK_LABELS), the deepest a block's walk seeks; the actor id on another such host.
+		const deep = (i: number, name: string) => `l1.l2.l3.l4.l5.l6.${name}${i}.example`
+		const remote = (i: number) => String(400000000000000000n + BigInt(i))
+		const requested: string[] = []
+		// Left out: domain-covered by either key (0-2, 3), instance-suspended (10-12), being deleted (13-15), and
+		// suspended local accounts (the first three).
+		const unavailable = new Set<string>()
+		const settle = async () => {
+			for (let i = 0; i < LOCALS; i++) {
+				const id = await seedAccount(h.store, { username: `local${i}` })
+				requested.push(id)
+				if (i < 3) {
+					await sql(
+						h.store,
+						'UPDATE local_accounts SET suspended_at = ? WHERE account_id = ?',
+						new Date(NOW).toISOString(),
+						id
+					)
+					unavailable.add(id)
+				}
+			}
+			await runInDurableObject(h.store, (_instance, state) => {
+				const db = state.storage.sql
+				for (let i = 0; i < REMOTES; i++) {
+					db.exec(
+						'INSERT INTO accounts (id, uri, username, domain, suspended_at, suspension_source, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+						remote(i),
+						`https://${deep(i, 'h')}/users/u${i}`,
+						`u${i}`,
+						deep(i, 'r'),
+						i >= 10 && i < 13 ? NOW_ISO : null,
+						i >= 10 && i < 13 ? 'account' : null,
+						i >= 13 && i < 16 ? NOW_ISO : null
+					)
+					db.exec(
+						"INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'accepted')",
+						alice.id,
+						remote(i)
+					)
+					requested.push(remote(i))
+				}
+				for (const i of [0, 1, 2]) {
+					blockDomainIn(db, `r${i}.example`)
+				}
+				blockDomainIn(db, 'h3.example')
+				for (let k = 0; k < 96; k++) {
+					blockDomainIn(db, `elsewhere${k}.example`)
+				}
+			})
+			for (let i = 0; i < 16; i++) {
+				if (i <= 3 || i >= 10) {
+					unavailable.add(remote(i))
+				}
+			}
+		}
+		const run = () =>
+			plannedRun(h, /FROM json_each\(\?2\) j/, relationshipsOperation, {
+				credential: { tokenHash, scope: 'read:follows', now: NOW },
+				ids: requested,
+				withSuspended: false,
+			})
+		const { before, after } = await staleStatistics(h, {
+			settle,
+			capture: () => run(),
+			grow: async () => {
+				await remoteAccounts(h, 100, 200)
+				await sql(
+					h.store,
+					`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 1999)
+					INSERT INTO accounts (id, uri, username) SELECT CAST(600000000000000000 + i AS TEXT),
+						'https://kopje.test/ap/users/g' || i, 'g' || i FROM n`
+				)
+				await sql(
+					h.store,
+					`INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey)
+					SELECT id, username || '@example.com', X'00', X'00', 'test' FROM accounts WHERE id GLOB '6*'`
+				)
+			},
+		})
+		const shown = (after.result as { value: { id: string }[] }).value.map((entry) => entry.id)
+		expect(shown).toEqual(requested.filter((id) => !unavailable.has(id)))
+		expect(shown).toHaveLength(MAX_RELATIONSHIP_IDS - unavailable.size)
+		expect(after.result).toEqual(before.result)
+		expect(after.plans).toHaveLength(1)
+		const { plan, rows } = after.plans[0]!
+		expect(
+			plan.filter((detail) => /^SEARCH a USING (COVERING )?INDEX sqlite_autoindex_accounts_1 \(id=\?\)$/.test(detail))
+		).toHaveLength(1)
+		expect(plan).toContainEqual(
+			expect.stringMatching(
+				/^SEARCH l USING (COVERING )?INDEX sqlite_autoindex_local_accounts_1 \(account_id=\?\)( LEFT-JOIN)?$/
+			)
+		)
+		expect(scansOf(plan, ['a', 'l', 'pn', 'pr', 'fo', 'fb', 'p', 'n', 'm'])).toEqual([])
+		const matches = plan.filter((detail) => /^(SEARCH|SCAN) pr\b/.test(detail))
+		expect(matches.length).toBeGreaterThan(0)
+		for (const detail of matches) {
+			expect(detail).toMatch(/^SEARCH pr USING .*\(domain=\?\)$/)
+		}
+		expect(rows).toBe(before.plans[0]!.rows)
+		// Per requested account, each probe reading at most one row: its accounts row and its local_accounts row (2);
+		// domain coverage, for each of its two keys, the walk's and the match's seek of each suffix of 2 to 8 labels
+		// (2 x 7 x 2 = 28); and the relationship's edges: fo, fb, p, n, m, both blocks and the account row and two
+		// domain_blocks seeks of domain_blocking (10). Then the statement's one seek of the suspend blocks' index.
+		expect(rows).toBeLessThanOrEqual(MAX_RELATIONSHIP_IDS * (2 + 2 * (MAX_BLOCK_LABELS - 1) * 2 + 10) + 1)
+	}, 120_000)
 })

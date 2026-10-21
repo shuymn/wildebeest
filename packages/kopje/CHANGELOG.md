@@ -74,6 +74,14 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - An `Idempotency-Key` is kept for one hour after the post it made; reused later, it posts anew.
 - `GET /api/v2/search` reads `exclude_unreviewed` (hashtags the admin reviewed, and the exact match). With
   `resolve=true&following=true`, a resolved account the viewer does not follow is left out.
+- `GET /api/v1/accounts/relationships` reads `with_suspended`: unavailable accounts (suspended, being deleted, or on a
+  suspended domain) are left out unless it is true.
+- `GET /api/v1/accounts/search` reads `resolve`: a `user@domain` query at offset 0 is looked up through WebFinger and
+  the account found is shown first, as on `/api/v2/search`; with `following=true`, only when followed. When the lookup
+  fails or cannot be stored, or the Worker is in readonly maintenance, the answer comes from local data. `limit=0`
+  answers an empty list.
+- `GET /api/v2/search` with `resolve=true` and a `user@domain` query checks the token again after the lookup, so a
+  token that expired during it answers 401.
 
 ### Instance changes
 

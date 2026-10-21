@@ -593,9 +593,8 @@ describe('the Store asks for documents at most three times per activity', () => 
 })
 
 describe('NET-4: search resolution fetches nothing without a valid token', () => {
-	it('answers an invalid, revoked or wrong-scope token without fetching', async () => {
+	it('answers an invalid, revoked, wrong-scope or app token without fetching, on either search', async () => {
 		const t = await setup()
-		const q = encodeURIComponent(`${MASTODON}/users/bob`)
 		const revoked = t.tokens.dave
 		await sql(t.store, 'DELETE FROM oauth_tokens WHERE account_id = ?', DAVE)
 		const writeOnly = 'token-write-only'
@@ -605,14 +604,24 @@ describe('NET-4: search resolution fetches nothing without a valid token', () =>
 			await sha256Hex(writeOnly),
 			ALICE
 		)
-		const statusesOf = []
-		for (const value of ['not-a-token', revoked, writeOnly]) {
-			const response = await t.request(`/api/v2/search?resolve=true&q=${q}`, {
-				headers: { authorization: `Bearer ${value}` },
-			})
-			statusesOf.push(response.status)
+		const appOnly = 'token-app-only'
+		await sql(
+			t.store,
+			"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES (?, 'access', 'test', NULL, 'read')",
+			await sha256Hex(appOnly)
+		)
+		const searches = [
+			`/api/v2/search?resolve=true&q=${encodeURIComponent(`${MASTODON}/users/bob`)}`,
+			`/api/v1/accounts/search?resolve=true&q=${encodeURIComponent('bob@mastodon.example')}`,
+		]
+		for (const path of searches) {
+			const statusesOf = []
+			for (const value of ['not-a-token', revoked, writeOnly, appOnly]) {
+				const response = await t.request(path, { headers: { authorization: `Bearer ${value}` } })
+				statusesOf.push(response.status)
+			}
+			expect([path, statusesOf]).toEqual([path, [401, 401, 403, 422]])
 		}
-		expect(statusesOf).toEqual([401, 401, 403])
 		expect(t.web.fetched).toEqual([])
 	})
 })

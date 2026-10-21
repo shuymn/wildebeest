@@ -13,11 +13,12 @@ import { hostDomain, normalizeDomain, parseAddress } from '../platform/domain-na
 import { withinJsonBounds } from '../platform/json-bounds'
 import { callStore, type StoreResolver } from '../platform/store-client'
 
-// Search resolution (GET /api/v2/search?resolve=true, design: インスタンス actor): a URL or a user@domain address is
-// fetched through the safe loader (NET-1), signed by the instance actor and never served from the signed-document
-// cache (NET-4), within one request's fetch budget (RES-6), and parsed as inbound documents are (ID-2, ID-8, RES-2).
-// The Store then stores it with inbound validation and answers only what the viewer may see (resolveSearch). Only
-// authenticated requests get here (mastodon/search.ts checks the token first).
+// Search resolution (GET /api/v2/search?resolve=true, and GET /api/v1/accounts/search?resolve=true for addresses;
+// design: インスタンス actor): a URL or a user@domain address is fetched through the safe loader (NET-1), signed by
+// the instance actor and never served from the signed-document cache (NET-4), within one request's fetch budget
+// (RES-6), and parsed as inbound documents are (ID-2, ID-8, RES-2). The Store then stores it with inbound validation
+// and answers only what the viewer may see (resolveSearch). Only authenticated requests get here (resolveQuery in
+// mastodon/search.ts checks the token first).
 //
 // As Mastodon's ResolveURLService and ResolveAccountService, with these differences: a URL must answer with an
 // ActivityPub document itself (an HTML page's alternate link is not followed), and an address is stored under the

@@ -6,7 +6,8 @@ import { bearer, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { type PlannedStatement, plannedSql, scansOf, staleStatistics, watchedCursor } from './read-helpers'
 import { act, community, post, seedStatus } from './status-helpers'
-import { ACCOUNT_PREFIX_LIMIT, ACCOUNT_RECENT_LIMIT } from '../src/domain/accounts'
+import { ACCOUNT_PREFIX_LIMIT, ACCOUNT_RECENT_LIMIT, searchAccounts } from '../src/domain/accounts'
+import type { Authorized } from '../src/domain/auth'
 import {
 	HASHTAG_LIBRARY_LIMIT,
 	HASHTAG_PUBLIC_WINDOW,
@@ -15,6 +16,7 @@ import {
 	type SearchRequest,
 	type SearchType,
 } from '../src/domain/search'
+import type { StoreOperation } from '../src/platform/store-kernel'
 import { MAX_TREND_REVIEWS } from '../src/platform/stored-bounds'
 import { sha256Hex } from '../src/security/tokens'
 
@@ -329,30 +331,45 @@ describe('verification review', () => {
 	}, 60_000)
 })
 
-// The search operation over `h`'s Store with `input`, its results, and the plan and rows read of each statement whose
-// SQL matches `pattern` (EXPLAIN QUERY PLAN of the production statement with its parameters).
-async function planned(
+// `operation` over `h`'s Store with `input` and alice's credential of `scope`, its results, and the plan and rows read
+// of each statement whose SQL matches `pattern` (EXPLAIN QUERY PLAN of the production statement with its parameters).
+async function plannedOperation<I, O>(
 	h: Awaited<ReturnType<typeof fixture>>['h'],
 	pattern: RegExp,
-	input: Omit<SearchRequest, 'present' | 'localDomain' | 'limit' | 'offset'> & { limit?: number; offset?: number }
+	operation: StoreOperation<I, Authorized<O>>,
+	scope: string,
+	input: Omit<I, 'credential' | 'present' | 'localDomain' | 'limit' | 'offset'> & { limit?: number; offset?: number }
 ) {
 	const tokenHash = await sha256Hex(h.users.alice.token)
 	return runInDurableObject(h.store, (_instance, state) => {
 		const plans: PlannedStatement[] = []
 		const capturing = plannedSql(state.storage.sql, pattern, plans, false)
-		const result = search.run(capturing, {
-			credential: { tokenHash, scope: 'read:search', now: NOW },
+		const result = operation.run(capturing, {
+			credential: { tokenHash, scope, now: NOW },
 			limit: 20,
 			offset: 0,
 			localDomain: 'kopje.test',
 			present: { origin: 'https://kopje.test' },
 			...input,
-		})
+		} as I)
 		if (result.status !== 'ok') {
 			throw new Error(`search failed: ${result.status}`)
 		}
-		return { value: result.value as Results, plans }
+		return { value: result.value, plans }
 	})
+}
+
+// The search operation (GET /api/v2/search).
+async function planned(
+	h: Awaited<ReturnType<typeof fixture>>['h'],
+	pattern: RegExp,
+	input: Omit<SearchRequest, 'credential' | 'present' | 'localDomain' | 'limit' | 'offset'> & {
+		limit?: number
+		offset?: number
+	}
+) {
+	const { value, plans } = await plannedOperation(h, pattern, search, 'read:search', input)
+	return { value: value as Results, plans }
 }
 
 describe('exclude_unreviewed and following at saturation (RES-7)', () => {
@@ -445,50 +462,55 @@ describe('exclude_unreviewed and following at saturation (RES-7)', () => {
 		expect(reviewed.plans[0]?.rows ?? Infinity).toBeLessThan(10 * candidates)
 	}, 120_000)
 
-	it('probes the follow of a resolved account through its index, accepted and pending follows present', async () => {
-		const { h } = await fixture()
-		const { alice } = h.users
-		await sql(h.store, 'ANALYZE')
-		await sql(
-			h.store,
-			`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 4000 - 1)
-			INSERT INTO accounts (id, uri, username, domain, search_text)
-			SELECT CAST(500000000000000000 + i AS TEXT), 'https://d' || i || '.example/users/u', 'u', 'd' || i || '.example',
-				'u@d' || i || '.example'
-			FROM n`
-		)
-		await sql(
-			h.store,
-			`INSERT INTO follows (account_id, target_account_id, state)
-			SELECT ?, id, CASE WHEN CAST(id AS INTEGER) % 2 = 0 THEN 'accepted' ELSE 'pending' END FROM accounts
-			WHERE domain IS NOT NULL`,
-			alice.id
-		)
-		const run = (resolvedAccountId: string, following: boolean) =>
-			planned(h, /FROM follows f/, {
-				query: 'zzz-nobody',
-				types: ['accounts'],
-				following,
-				resolvedAccountId,
-			})
-		const accepted = await run('500000000000000000', true)
-		const pending = await run('500000000000000001', true)
-		const unfollowed = await run('500000000000000001', false)
-		expect(accepted.value.accounts.map((a) => a.id)).toEqual(['500000000000000000'])
-		expect(pending.value.accounts).toEqual([])
-		expect(unfollowed.value.accounts.map((a) => a.id)).toEqual(['500000000000000001'])
-		for (const { plans } of [accepted, pending]) {
-			expect(plans).toHaveLength(1)
-			const plan = plans[0]?.plan ?? []
-			expect(
-				plan.some((detail) =>
-					/^SEARCH f USING (COVERING )?INDEX follows_\w+ \(account_id=\? AND target_account_id=\?\)$/.test(detail)
-				)
-			).toBe(true)
-			expect(plan.filter((detail) => /\bSCAN f\b/.test(detail))).toEqual([])
-			expect(plans[0]?.rows ?? 0).toBeLessThan(20)
-		}
-	}, 60_000)
+	// The statement is searchAccountIds', which both account searches run.
+	for (const operation of ['search', 'searchAccounts'] as const) {
+		it(`${operation}: probes the follow of a resolved account through its index, accepted and pending follows present`, async () => {
+			const { h } = await fixture()
+			const { alice } = h.users
+			await sql(h.store, 'ANALYZE')
+			await sql(
+				h.store,
+				`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 4000 - 1)
+				INSERT INTO accounts (id, uri, username, domain, search_text)
+				SELECT CAST(500000000000000000 + i AS TEXT), 'https://d' || i || '.example/users/u', 'u', 'd' || i || '.example',
+					'u@d' || i || '.example'
+				FROM n`
+			)
+			await sql(
+				h.store,
+				`INSERT INTO follows (account_id, target_account_id, state)
+				SELECT ?, id, CASE WHEN CAST(id AS INTEGER) % 2 = 0 THEN 'accepted' ELSE 'pending' END FROM accounts
+				WHERE domain IS NOT NULL`,
+				alice.id
+			)
+			const run = async (resolvedAccountId: string, following: boolean) => {
+				const input = { query: 'zzz-nobody', following, resolvedAccountId }
+				if (operation === 'search') {
+					const { value, plans } = await planned(h, /FROM follows f/, { ...input, types: ['accounts'] })
+					return { ids: value.accounts.map((a) => a.id), plans }
+				}
+				const { value, plans } = await plannedOperation(h, /FROM follows f/, searchAccounts, 'read:accounts', input)
+				return { ids: value.map((a) => a.id), plans }
+			}
+			const accepted = await run('500000000000000000', true)
+			const pending = await run('500000000000000001', true)
+			const unfollowed = await run('500000000000000001', false)
+			expect(accepted.ids).toEqual(['500000000000000000'])
+			expect(pending.ids).toEqual([])
+			expect(unfollowed.ids).toEqual(['500000000000000001'])
+			for (const { plans } of [accepted, pending]) {
+				expect(plans).toHaveLength(1)
+				const plan = plans[0]?.plan ?? []
+				expect(
+					plan.some((detail) =>
+						/^SEARCH f USING (COVERING )?INDEX follows_\w+ \(account_id=\? AND target_account_id=\?\)$/.test(detail)
+					)
+				).toBe(true)
+				expect(plan.filter((detail) => /\bSCAN f\b/.test(detail))).toEqual([])
+				expect(plans[0]?.rows ?? 0).toBeLessThan(20)
+			}
+		}, 60_000)
+	}
 })
 
 describe('ranking queries with stale statistics (RES-7)', () => {

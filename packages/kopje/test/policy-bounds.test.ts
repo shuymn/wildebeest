@@ -739,6 +739,11 @@ const ENDPOINTS: [string, StoreOperation<never, unknown>, unknown, Paging?][] = 
 	['reblogged_by', interactors, { ...target, kind: 'reblogged_by', page: PAGE }, 'interactors'],
 	['relationships', relationships, { credential, ids: WORLD.accounts.map((_, x) => accountId(x)) }],
 	[
+		'relationships with_suspended',
+		relationships,
+		{ credential, ids: WORLD.accounts.map((_, x) => accountId(x)), withSuspended: true },
+	],
+	[
 		'followers',
 		listFollows,
 		{ credential, now: NOW, account: accountId(LISTED), direction: 'followers', page: PAGE, present: PRESENT },
@@ -1883,6 +1888,11 @@ describe('endorsements and notes read a page, however many an account has (RES-7
 				],
 			]),
 			['relationships', relationships, { credential, ids: Array.from({ length: 20 }, (_, i) => target(i)) }],
+			[
+				'relationships with_suspended',
+				relationships,
+				{ credential, ids: Array.from({ length: 20 }, (_, i) => target(i)), withSuspended: true },
+			],
 		]
 		for (const [name, operation, input] of reads) {
 			const shownBy = async (store: StoreStub) =>

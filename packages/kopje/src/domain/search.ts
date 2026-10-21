@@ -1,6 +1,6 @@
-import { type Account, findAccountIds, type Present, presentAccountsWithin, resolveAccountId } from './accounts'
+import { type Account, presentAccountsWithin, resolveAccountId, type SearchInput, searchAccountIds } from './accounts'
 import { admit, ANSWER_BYTES, jsonBytes } from './answer-budget'
-import { findableBySql, listableSql, statusReads } from './audience'
+import { listableSql, statusReads } from './audience'
 import { type UserContext, userReadOperation } from './auth'
 import { statusQueryTerms } from './search-text'
 import { tagNameSql } from './status-bounds'
@@ -44,23 +44,14 @@ export type Hashtag = Tag
 
 export type SearchType = 'accounts' | 'statuses' | 'hashtags'
 
-export type SearchRequest = {
-	query: string
+export type SearchRequest = SearchInput & {
 	types: readonly SearchType[]
-	limit: number
-	offset: number
-	following: boolean
 	// exclude_unreviewed (Tag.search_for): only hashtags the admin reviewed (trends.ts tagReviewedSql), and the exact
 	// match.
 	excludeUnreviewed?: boolean
 	accountId?: string
 	maxId?: string
 	minId?: string
-	localDomain: string
-	present: Present
-	// The account resolve=true found (remote-statuses.ts resolveSearch), shown first among the accounts, as Mastodon's
-	// AccountSearchService puts the exact match first, when the viewer may find it and, with `following`, follows it.
-	resolvedAccountId?: string
 }
 
 export type SearchResults = { accounts: Account[]; statuses: Status[]; hashtags: Hashtag[] }
@@ -72,7 +63,7 @@ export const search = userReadOperation<SearchRequest, SearchResults>((db, input
 	let left = ANSWER_BYTES - SEARCH_FRAME_BYTES
 	let leading = true
 	const accounts = input.types.includes('accounts')
-		? presentAccountsWithin(db, accountIds(db, input, context), input.present, left, leading)
+		? presentAccountsWithin(db, searchAccountIds(db, input, context.accountId), input.present, left, leading)
 		: { items: [], bytes: 0 }
 	left -= accounts.bytes
 	leading &&= accounts.items.length === 0
@@ -84,26 +75,6 @@ export const search = userReadOperation<SearchRequest, SearchResults>((db, input
 	const hashtags = input.types.includes('hashtags') ? searchHashtags(db, input, context) : []
 	return { accounts: accounts.items, statuses: statuses.items, hashtags: admit(hashtags, left, leading).items }
 })
-
-// The accounts' ids: the account resolve=true found, when the viewer may find it (findableBySql, R14) and, with
-// `following`, follows it (accepted; AccountSearchService#exact_match), then the search's own, within the limit.
-function accountIds(db: Db, input: SearchRequest, viewer: UserContext): string[] {
-	const found = findAccountIds(db, input, viewer.accountId)
-	const resolved = input.resolvedAccountId
-	if (
-		resolved === undefined ||
-		db.first(
-			`SELECT 1 AS found WHERE ${findableBySql('?2', '?1')} AND (?3 = 0 OR EXISTS (SELECT 1 FROM follows f
-				WHERE f.account_id = ?1 AND f.target_account_id = ?2 AND f.state = 'accepted'))`,
-			viewer.accountId,
-			resolved,
-			input.following ? 1 : 0
-		) === undefined
-	) {
-		return found
-	}
-	return [resolved, ...found.filter((id) => id !== resolved)].slice(0, input.limit)
-}
 
 // Numbered parameters, so fragments that use ?1 (the viewer) can be combined with any number of terms.
 class Params {

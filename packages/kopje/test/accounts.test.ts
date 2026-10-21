@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { type ApiHarness, apiHarness, bearer, form, json, login, seedAccount, sql } from './api-helpers'
 import { NOW } from './app-helpers'
+import { blockDomain } from './domain-block-helpers'
 import { appToken, scopedToken } from './read-helpers'
 import { block, community, domainBlock, follow, getJson, ids as listIds, mute, remoteFollows } from './status-helpers'
 
@@ -510,6 +511,84 @@ describe('follow and relationships', () => {
 			}),
 			expect.objectContaining({ id: carol, following: false, followed_by: true }),
 		])
+	})
+})
+
+describe('relationships of unavailable accounts (R1, with_suspended)', () => {
+	// A suspended local account, an account the instance suspended, one being deleted and one on a suspended domain,
+	// each followed and noted by alice: Mastodon's Account.without_suspended leaves them out unless with_suspended.
+	async function unavailableWorld() {
+		const h = await aliceSession()
+		const available = await seedAccount(h.store, { username: 'bob' })
+		const local = await seedAccount(h.store, { username: 'carol' })
+		const suspended = await seedAccount(h.store, { username: 'dave', domain: 'remote.test' })
+		const deleting = await seedAccount(h.store, { username: 'erin', domain: 'remote.test' })
+		const covered = await seedAccount(h.store, { username: 'frank', domain: 'covered.test' })
+		const unavailable = [local, suspended, deleting, covered]
+		for (const id of [available, ...unavailable]) {
+			await sql(
+				h.store,
+				"INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'accepted')",
+				h.aliceId,
+				id
+			)
+			await sql(
+				h.store,
+				"INSERT INTO account_notes (account_id, target_account_id, comment) VALUES (?, ?, 'n')",
+				h.aliceId,
+				id
+			)
+		}
+		await sql(
+			h.store,
+			'UPDATE local_accounts SET suspended_at = ? WHERE account_id = ?',
+			new Date(NOW).toISOString(),
+			local
+		)
+		await sql(
+			h.store,
+			"UPDATE accounts SET suspended_at = ?, suspension_source = 'account' WHERE id = ?",
+			new Date(NOW).toISOString(),
+			suspended
+		)
+		await sql(h.store, 'UPDATE accounts SET deleted_at = ? WHERE id = ?', new Date(NOW).toISOString(), deleting)
+		await blockDomain(h.store, 'covered.test')
+		return { ...h, available, unavailable }
+	}
+
+	const relationshipsOf = async (h: ApiHarness & { token: string }, ids: string[], suffix = '') => {
+		const query = ids.map((id) => `id[]=${id}`).join('&')
+		const response = await h.request(`/api/v1/accounts/relationships?${query}${suffix}`, bearer(h.token))
+		expect(response.status).toBe(200)
+		return response.json<{ id: string; following: boolean; note: string }[]>()
+	}
+
+	it('leaves unavailable accounts out by default and with a false with_suspended', async () => {
+		const h = await unavailableWorld()
+		for (const suffix of ['', '&with_suspended=false', '&with_suspended=0']) {
+			const entries = await relationshipsOf(h, [...h.unavailable, h.available], suffix)
+			expect(entries.map((entry) => entry.id)).toEqual([h.available])
+		}
+		expect(await relationshipsOf(h, h.unavailable)).toEqual([])
+	})
+
+	it('includes them, in request order and once each, with a true with_suspended', async () => {
+		const h = await unavailableWorld()
+		const requested = [h.unavailable[2]!, h.available, ...h.unavailable, h.unavailable[0]!]
+		for (const suffix of ['&with_suspended=true', '&with_suspended=1']) {
+			const entries = await relationshipsOf(h, requested, suffix)
+			expect(entries.map((entry) => entry.id)).toEqual([...new Set(requested)])
+			for (const entry of entries) {
+				expect(entry).toMatchObject({ following: true, note: 'n' })
+			}
+		}
+	})
+
+	it("includes an account on a domain the viewer blocks, which only marks it (Mastodon's domain_blocking)", async () => {
+		const h = await aliceSession()
+		const remote = await seedAccount(h.store, { username: 'dave', domain: 'blocked.test' })
+		await domainBlock(h.store, h.aliceId, 'blocked.test')
+		expect(await relationshipsOf(h, [remote])).toEqual([expect.objectContaining({ id: remote, domain_blocking: true })])
 	})
 })
 

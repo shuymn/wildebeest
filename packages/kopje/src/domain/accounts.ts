@@ -1099,8 +1099,20 @@ type RelationshipRow = {
 
 // The viewer's relationships with each account, as they stand at `now` (an expired mute no longer counts), with the
 // viewer's endorsement of it and the viewer's own private note on it (Account.endorsed_map and account_note_map), each
-// read through its pair key, each account sought by id from the requested ids (RES-7).
-export function relationshipsOf(db: Db, viewerId: string, accountIds: string[], now: number): Relationship[] {
+// read through its pair key, each account sought by id from the requested ids (RES-7). With `availableOnly`, an
+// unavailable account (R1) has no entry, read from the account's row and its local_accounts row by key
+// (availableJoinedSql).
+export function relationshipsOf(
+	db: Db,
+	viewerId: string,
+	accountIds: string[],
+	now: number,
+	availableOnly = false
+): Relationship[] {
+	const available = availableOnly
+		? `LEFT JOIN local_accounts l INDEXED BY ${LOCAL_ACCOUNTS_ID_INDEX} ON l.account_id = a.id
+		WHERE ${availableJoinedSql('a', 'l')}`
+		: ''
 	const rows = db.all<RelationshipRow>(
 		`SELECT a.id,
 			fo.state AS following, fo.show_reblogs, fo.notify, fo.languages,
@@ -1117,6 +1129,7 @@ export function relationshipsOf(db: Db, viewerId: string, accountIds: string[], 
 		LEFT JOIN account_pins p ON p.account_id = ?1 AND p.target_account_id = a.id
 		LEFT JOIN account_notes n ON n.account_id = ?1 AND n.target_account_id = a.id
 		${activeMuteJoinSql('m', '?1', 'a.id', '?3')}
+		${available}
 		ORDER BY j.key`,
 		viewerId,
 		JSON.stringify(accountIds),
@@ -1144,13 +1157,15 @@ export function relationshipsOf(db: Db, viewerId: string, accountIds: string[], 
 
 export const MAX_RELATIONSHIP_IDS = 100
 
-export const relationships = userReadOperation<{ ids: string[] }, Relationship[]>(
-	(db, { ids }, { accountId: viewerId, now }) => {
+// `withSuspended` (Mastodon's with_suspended): absent or false leaves unavailable accounts out (R1; Mastodon's
+// Account.without_suspended), true includes them with the same entry.
+export const relationships = userReadOperation<{ ids: string[]; withSuspended?: boolean }, Relationship[]>(
+	(db, { ids, withSuspended }, { accountId: viewerId, now }) => {
 		const resolved = ids
 			.slice(0, MAX_RELATIONSHIP_IDS)
 			.map((id) => resolveAccountId(db, id))
 			.filter((id) => id !== null)
-		return relationshipsOf(db, viewerId, [...new Set(resolved)], now)
+		return relationshipsOf(db, viewerId, [...new Set(resolved)], now, withSuspended !== true)
 	}
 )
 
@@ -1257,6 +1272,9 @@ export type SearchInput = {
 	// The instance's own host: "alice@<host>" searches for the local alice.
 	localDomain: string
 	present: Present
+	// The account resolve=true found (remote-statuses.ts resolveSearch), shown first, as Mastodon's
+	// AccountSearchService puts the exact match first, when the viewer may find it and, with `following`, follows it.
+	resolvedAccountId?: string
 }
 
 // Local and known remote accounts whose search_text contains every term (in any of its variants). An exact username
@@ -1265,9 +1283,29 @@ export type SearchInput = {
 // holds fewer accounts and a client advancing by the number received continues after them.
 export const searchAccounts = userReadOperation<SearchInput, Account[]>(
 	(db, input, viewer) =>
-		presentAccountsWithin(db, findAccountIds(db, input, viewer.accountId), input.present, ARRAY_ANSWER_BYTES, true)
+		presentAccountsWithin(db, searchAccountIds(db, input, viewer.accountId), input.present, ARRAY_ANSWER_BYTES, true)
 			.items
 )
+
+// The accounts' ids: the account resolve=true found, when the viewer may find it (findableBySql, R14) and, with
+// `following`, follows it (accepted; AccountSearchService#exact_match), then the search's own, within the limit.
+export function searchAccountIds(db: Db, input: SearchInput, viewerId: string): string[] {
+	const found = findAccountIds(db, input, viewerId)
+	const resolved = input.resolvedAccountId
+	if (
+		resolved === undefined ||
+		db.first(
+			`SELECT 1 AS found WHERE ${findableBySql('?2', '?1')} AND (?3 = 0 OR EXISTS (SELECT 1 FROM follows f
+				WHERE f.account_id = ?1 AND f.target_account_id = ?2 AND f.state = 'accepted'))`,
+			viewerId,
+			resolved,
+			input.following ? 1 : 0
+		) === undefined
+	) {
+		return found
+	}
+	return [resolved, ...found.filter((id) => id !== resolved)].slice(0, input.limit)
+}
 
 // The work of an account search is bounded (RES-7): it matches only candidates from indexed sources, never the whole
 // table: every local account, the accounts whose address is exactly the query (username, or username@domain), up to

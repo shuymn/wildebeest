@@ -14,8 +14,6 @@ const NOT_SERVED = (...names: string[]) => accepted('MD-2', ...names)
 const PLACEHOLDER = (...names: string[]) => accepted('MD-3', ...names)
 
 export const PARAM_EXCEPTIONS: Exceptions = {
-	'GET /api/v1/accounts/relationships': open('suspended accounts are always included', 'with_suspended'),
-	'GET /api/v1/accounts/search': open('unknown remote accounts are not resolved', 'resolve'),
 	'POST /api/v1/accounts': accepted(
 		'MD-1',
 		'agreement',

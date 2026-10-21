@@ -25,7 +25,7 @@ import {
 } from './media'
 import { pageQuery, pageResponse, unlimitedResponse } from './pagination'
 import { limitParam, mediaTypeOf, offsetParam, type Params, parseBoolean, readParams } from './params'
-import { MAX_SEARCH_OFFSET, searchParams } from './search'
+import { MAX_SEARCH_OFFSET, resolveQuery, searchParams } from './search'
 import {
 	type CredentialChanges,
 	type ProfileImages,
@@ -42,7 +42,10 @@ import { QUOTE_POLICY_NAMES, type QuotePolicyName } from '../domain/audience'
 import type { UserCredential } from '../domain/auth'
 import { DIRECTORY_DEFAULT_LIMIT, DIRECTORY_MAX_LIMIT } from '../domain/directory'
 import { PROFILE_IMAGES, type ProfileImage } from '../domain/media'
+import { readConfig } from '../platform/config'
+import { parseAddress } from '../platform/domain-name'
 import { PROFILE_IMAGE_LIMIT, PROFILE_TOO_LARGE, profileImageProblem, SIGNATURE_BYTES } from '../platform/images'
+import { StoreUnavailableError } from '../platform/store-errors'
 import { grantsAny } from '../security/scopes'
 
 // /api/v1/accounts (B3): credentials, lookup, search, relationships, follow, follower lists, notes and endorsements.
@@ -385,10 +388,15 @@ export const relationships: ApiHandler = async (c, deps) => {
 		return p
 	}
 	const ids = p.getAll('id')
+	const withSuspended = parseBoolean(p.get('with_suspended')) === true
 	const credential = userCredential(c, deps)
-	return c.json(authorized(await storeCall(c, deps, (s, b) => s.relationships(b, { credential, ids }))))
+	return c.json(authorized(await storeCall(c, deps, (s, b) => s.relationships(b, { credential, ids, withSuspended }))))
 }
 
+// resolve=true (AccountSearchService#exact_match): at offset 0, a user@domain query is resolved as /api/v2/search
+// resolves it (resolveQuery), after the token is verified; a URL query is not. The resolution failing, a Store in
+// maintenance included, leaves the answer to local data (Mastodon's suppress_errors). The final search takes a fresh
+// credential, so a token that expired while resolving is refused.
 export const searchAccounts: ApiHandler = async (c, deps) => {
 	const p = await requestParams(c, deps)
 	if (p instanceof Response) {
@@ -399,20 +407,39 @@ export const searchAccounts: ApiHandler = async (c, deps) => {
 		return refuseAfterAuth(c, deps, parsed.error)
 	}
 	const { limit } = pageQuery(p)
-	const credential = userCredential(c, deps)
-	if (parsed.offset > MAX_SEARCH_OFFSET) {
-		authorized(await storeCall(c, deps, (s, b) => s.checkCredential(b, credential)))
+	const following = parseBoolean(p.get('following')) ?? false
+	const resolving = parseBoolean(p.get('resolve')) === true && parsed.offset === 0
+	// Mastodon's limit_param(40) can be 0 (`limit=0`, a non-number), which answers [] before resolving
+	// (account_search_service.rb:196); pageQuery serves at least one.
+	if (parsed.offset > MAX_SEARCH_OFFSET || limitParam(p, 40, 80) === 0) {
+		authorized(await storeCall(c, deps, (s, b) => s.checkCredential(b, userCredential(c, deps))))
 		return c.json([])
+	}
+	const query = parsed.query.trim()
+	let resolvedAccountId: string | undefined
+	// MAINTENANCE in the environment (KEK rotation runs readonly with no Store flag, so the Store does not refuse):
+	// resolution writes, so the answer comes from local data and nothing is fetched.
+	const config = readConfig(c.env)
+	const writable = config.ok && config.config.MAINTENANCE === 'off'
+	if (resolving && writable && parseAddress(query) !== null) {
+		try {
+			resolvedAccountId = (await resolveQuery(c, deps, query)).accounts[0]?.id
+		} catch (error) {
+			if (!(error instanceof StoreUnavailableError)) {
+				throw error
+			}
+		}
 	}
 	const accounts = await storeCall(c, deps, (s, b) =>
 		s.searchAccounts(b, {
-			credential,
+			credential: userCredential(c, deps),
 			query: parsed.query,
 			limit,
 			offset: parsed.offset,
-			following: parseBoolean(p.get('following')) ?? false,
+			following,
 			localDomain: new URL(c.req.url).host,
 			present: present(c),
+			resolvedAccountId,
 		})
 	)
 	return c.json(authorized(accounts))

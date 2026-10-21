@@ -359,7 +359,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   evade a block on it"). Account search finds an account that is available and not on a domain the viewer blocks
   (`findableBySql`). Search resolution answers an account only when account search would find it, and a status by the
   rule of a single status (VIS-1, `canView`, as Mastodon's `ResolveURLService` authorizes `show?`) unless the viewer
-  blocks its author's domain. _Enforced (main):_ `findAccounts` in
+  blocks its author's domain. _Enforced (main):_ `findAccountIds` and `searchAccountIds` in
   `src/domain/accounts.ts`, `resolveSearch` in `src/domain/remote-statuses.ts`; `test/inbox-statuses.test.ts`
   ("answers a status by the single-status rule"), `test/policy-endpoints.test.ts`.
 - **VIS-6: a wrapper reveals nothing its target hides.** A boost is visible only if its original is; boosting is limited
@@ -1186,10 +1186,12 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   default. A sweep of expired rows: _Planned (KV sweep):_ nothing deletes expired `fedify_kv` rows yet.
   _Enforced (main)_ for the fetches of inbound processing and search:
   the original of a boost (and its author) is fetched as the request's other fetches are, with the personal inbox
-  owner's key or the instance actor's, never from the signed-document cache; search with `resolve=true` fetches as
-  the instance actor only, for a request whose token is valid and has the scope (401 or 403 otherwise, before
-  anything is fetched), with WebFinger unsigned. An account's canonical address is decided as Mastodon 4.7.3's
-  `ActivityPub::ProcessAccountService#check_webfinger!` and `ResolveAccountService` decide it: the actor's own host
+  owner's key or the instance actor's, never from the signed-document cache; search with `resolve=true`
+  (`GET /api/v2/search`, and `GET /api/v1/accounts/search` for addresses) fetches as the instance actor only, for a
+  request whose token is valid, has the scope and names a user (401, 403 or 422 otherwise, before anything is
+  fetched), with WebFinger unsigned; the search after the fetch judges the token again at its own time. An account's
+  canonical address is decided as Mastodon 4.7.3's `ActivityPub::ProcessAccountService#check_webfinger!` and
+  `ResolveAccountService` decide it: the actor's own host
   declares it in the subject of its WebFinger answer for `acct:<preferredUsername>@<host>`; another domain there is a
   candidate, which must answer for that subject with the same actor id; otherwise the address is on the host
   (`declaredDomain` in `src/federation/resolve.ts`). Every domain from an address or a subject goes through one strict
@@ -1210,8 +1212,9 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   actor keeps its host until it is resolved again. `test/inbox-canonical-address.test.ts` ("the canonical address of a
   remote account", "the domains of WebFinger subjects and addresses, parsed one way"). `createRemoteLoaders` in
   `src/federation/federation.ts`, `src/federation/resolve.ts`; `test/inbox-statuses.test.ts` ("signed by the instance
-  actor (NET-4)", "resolves a status URL as the instance actor", "answers 401 without a token and fetches nothing"),
-  `test/inbox-statuses-edge.test.ts` ("NET-4: search resolution fetches nothing without a valid token").
+  actor (NET-4)", "resolves a status URL as the instance actor", "answers 401 without a token and fetches nothing",
+  "account search with resolve=true (NET-4, VIS-1)"), `test/inbox-statuses-edge.test.ts` ("NET-4: search resolution
+  fetches nothing without a valid token").
 - **NET-5: snapshots come only from authoritative local data.** A rescue snapshot holds only a canonical actor,
   WebFinger or NodeInfo document rendered on the fixed domain from Store columns, and is kept only if its source still
   matches the Store when saved. Request hosts, arbitrary queries and remote documents never create or change one.

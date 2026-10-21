@@ -2,11 +2,25 @@ import { runInDurableObject } from 'cloudflare:test'
 
 import { describe, expect, it } from 'vitest'
 
-import { sql } from './api-helpers'
-import { inboxDeps, NOW } from './app-helpers'
-import { AP, LOCAL, MASTODON, mastodonActor, MISSKEY, MISSKEY_CONTEXT, misskeyActor, signedInit } from './inbox-helpers'
+import { seedAccount, sql } from './api-helpers'
+import { harness, inboxDeps, NOW } from './app-helpers'
+import { fixtureKeyGen } from './federation-helpers'
+import { BUILD } from './helpers'
 import {
+	AP,
+	LOCAL,
+	MASTODON,
+	mastodonActor,
+	MISSKEY,
+	MISSKEY_CONTEXT,
+	misskeyActor,
+	serveWebFinger,
+	signedInit,
+} from './inbox-helpers'
+import {
+	ACCOUNT_SEARCHES,
 	accountId,
+	type Acct,
 	ALICE,
 	ALICE_URI,
 	announce,
@@ -24,6 +38,7 @@ import {
 	OTHER,
 	PUBLIC,
 	remove,
+	type Setup,
 	setup,
 	statuses,
 	statusRow,
@@ -1057,37 +1072,197 @@ describe('search with resolve=true (NET-4, VIS-1)', () => {
 		expect(t.web.fetched).toEqual([])
 	})
 
-	it('leaves out a resolved address the viewer does not follow with following=true (exact_match)', async () => {
+	it('a URL query has no following filter (SearchService#perform_accounts_search! is not reached)', async () => {
 		const t = await setup()
 		const bob = await mastodonActor(t.web, 'bob')
-		t.web.serve(
-			`${MASTODON}/.well-known/webfinger?resource=${encodeURIComponent('acct:bob@mastodon.example')}`,
-			{
-				subject: 'acct:bob@mastodon.example',
-				links: [{ rel: 'self', type: AP, href: bob.uri }],
-			},
-			'application/jrd+json'
+		const found = await t.api<{ accounts: { acct: string }[] }>(
+			`/api/v2/search?resolve=true&following=true&type=accounts&q=${encodeURIComponent(bob.uri)}`
 		)
-		const accts = async (q: string) =>
-			(
-				await t.api<{ accounts: { acct: string }[] }>(
-					`/api/v2/search?resolve=true&following=true&type=accounts&q=${encodeURIComponent(q)}`
-				)
-			).body.accounts.map((a) => a.acct)
-		expect(await accts('bob@mastodon.example')).toEqual([])
-		const bobId = (await accountId(t.store, bob.uri))!
-		await sql(
-			t.store,
-			"INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'pending')",
-			ALICE,
-			bobId
+		expect(found.body.accounts.map((a) => a.acct)).toEqual(['bob@mastodon.example'])
+	})
+})
+
+describe('account search with resolve=true (NET-4, VIS-1)', () => {
+	const accts = async (t: Setup, path: string, as: 'alice' | 'dave' = 'alice') => {
+		const response = await t.api<Acct[]>(path, as)
+		expect([path, response.status]).toEqual([path, 200])
+		return response.body.map((a) => a.acct)
+	}
+
+	it('resolves user@domain through WebFinger as the instance actor, and answers it first', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		serveWebFinger(t.web, 'acct:bob@mastodon.example', 'acct:bob@mastodon.example', bob.uri)
+		for (const q of ['bob@mastodon.example', '@bob@mastodon.example']) {
+			expect(await accts(t, `/api/v1/accounts/search?resolve=true&q=${encodeURIComponent(q)}`)).toEqual([
+				'bob@mastodon.example',
+			])
+		}
+		const signers = t.web.fetched.map((url, i) => [url.includes('/.well-known/webfinger'), t.web.signers[i]])
+		expect(new Set(signers.map(([webfinger, signer]) => `${String(webfinger)} ${signer}`))).toEqual(
+			new Set(['true unsigned', `false ${LOCAL}/actor#main-key`])
 		)
-		expect(await accts('bob@mastodon.example')).toEqual([])
-		await sql(t.store, "UPDATE follows SET state = 'accepted'")
-		expect(await accts('bob@mastodon.example')).toEqual(['bob@mastodon.example'])
-		// A URL query has no following filter (SearchService#perform_accounts_search! is not reached).
-		await sql(t.store, 'DELETE FROM follows')
-		expect(await accts(bob.uri)).toEqual(['bob@mastodon.example'])
+		expect(await sql(t.store, 'SELECT count(*) AS n FROM accounts WHERE uri = ?', bob.uri)).toEqual([{ n: 1 }])
+		// Stored: the search without resolve finds it.
+		t.web.fetched.length = 0
+		expect(await accts(t, '/api/v1/accounts/search?q=bob%40mastodon.example')).toEqual(['bob@mastodon.example'])
+		expect(t.web.fetched).toEqual([])
+	})
+
+	it('fetches nothing without resolve, for a URL, a local address, an offset, a zero limit or a long query', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		serveWebFinger(t.web, 'acct:bob@mastodon.example', 'acct:bob@mastodon.example', bob.uri)
+		await seedAccount(t.store, { username: 'carol' })
+		const accounts = () => sql(t.store, 'SELECT count(*) AS n FROM accounts')
+		const before = await accounts()
+		const bobQ = encodeURIComponent('bob@mastodon.example')
+		for (const params of [`q=${bobQ}`, `resolve=false&q=${bobQ}`, `resolve=0&q=${bobQ}`]) {
+			expect(await accts(t, `/api/v1/accounts/search?${params}`)).toEqual([])
+		}
+		// Mastodon's v1 search resolves addresses only (username_complete?).
+		expect(await accts(t, `/api/v1/accounts/search?resolve=true&q=${encodeURIComponent(bob.uri)}`)).toEqual([])
+		// The instance's own domain: the local account, found without a fetch.
+		expect(await accts(t, '/api/v1/accounts/search?resolve=true&q=carol%40kopje.test')).toEqual(['carol'])
+		// No exact match past offset 0; nothing at all past MAX_SEARCH_OFFSET or with limit_param 0.
+		for (const params of ['offset=1', 'offset=10001', 'limit=0', 'limit=none']) {
+			expect(await accts(t, `/api/v1/accounts/search?resolve=true&${params}&q=${bobQ}`)).toEqual([])
+		}
+		const long = await t.api(`/api/v1/accounts/search?resolve=true&q=${'a'.repeat(500)}${bobQ}`)
+		expect(long.status).toBe(400)
+		expect(t.web.fetched).toEqual([])
+		expect(await accounts()).toEqual(before)
+	})
+
+	for (const endpoint of ACCOUNT_SEARCHES) {
+		const search = async (t: Setup, params: string, as: 'alice' | 'dave' = 'alice') => {
+			const path = endpoint.path(params)
+			const response = await t.api(path, as)
+			expect([path, response.status]).toEqual([path, 200])
+			return endpoint.accounts(response.body).map((a) => a.acct)
+		}
+
+		// alias@alias.example answers with bob's actor, whose stored search text does not hold the alias; two local
+		// accounts' display names do, and they rank by their followers.
+		async function handoff() {
+			const t = await setup()
+			const bob = await mastodonActor(t.web, 'bob')
+			serveWebFinger(t.web, 'acct:alias@alias.example', 'acct:alias@alias.example', bob.uri)
+			serveWebFinger(t.web, 'acct:bob@mastodon.example', 'acct:bob@mastodon.example', bob.uri)
+			await seedAccount(t.store, { username: 'fan1', displayName: 'alias@alias.example', followersCount: 2 })
+			await seedAccount(t.store, { username: 'fan2', displayName: 'alias@alias.example', followersCount: 1 })
+			return { t, bob, q: encodeURIComponent('alias@alias.example') }
+		}
+
+		it(`${endpoint.name}: answers the account an address hands off to first, within the limit`, async () => {
+			const { t, q } = await handoff()
+			expect(await search(t, `q=${q}`)).toEqual(['fan1', 'fan2'])
+			expect(t.web.fetched).toEqual([])
+			expect(await search(t, `resolve=true&q=${q}`)).toEqual(['bob@mastodon.example', 'fan1', 'fan2'])
+			expect(await search(t, `resolve=true&limit=2&q=${q}`)).toEqual(['bob@mastodon.example', 'fan1'])
+			expect(await search(t, `resolve=true&limit=1&q=${q}`)).toEqual(['bob@mastodon.example'])
+			// No exact match past offset 0: the search's own results.
+			expect(await search(t, `resolve=true&offset=1&q=${q}`)).toEqual(['fan2'])
+		})
+
+		it(`${endpoint.name}: with following=true, answers the resolved account only when followed (exact_match)`, async () => {
+			const { t, bob, q } = await handoff()
+			const canonical = encodeURIComponent('bob@mastodon.example')
+			expect(await search(t, `resolve=true&following=true&q=${q}`)).toEqual([])
+			expect(await search(t, `resolve=true&following=true&q=${canonical}`)).toEqual([])
+			const bobId = (await accountId(t.store, bob.uri))!
+			await sql(
+				t.store,
+				"INSERT INTO follows (account_id, target_account_id, state) VALUES (?, ?, 'pending')",
+				ALICE,
+				bobId
+			)
+			expect(await search(t, `resolve=true&following=true&q=${q}`)).toEqual([])
+			await sql(t.store, "UPDATE follows SET state = 'accepted'")
+			expect(await search(t, `resolve=true&following=true&q=${q}`)).toEqual(['bob@mastodon.example'])
+			expect(await search(t, `resolve=true&following=true&q=${canonical}`)).toEqual(['bob@mastodon.example'])
+		})
+
+		it(`${endpoint.name}: answers the resolved account once when the search also finds it`, async () => {
+			const t = await setup()
+			const bob = await mastodonActor(t.web, 'bob')
+			serveWebFinger(t.web, 'acct:bob@mastodon.example', 'acct:bob@mastodon.example', bob.uri)
+			const q = encodeURIComponent('bob@mastodon.example')
+			await search(t, `resolve=true&q=${q}`)
+			expect(await search(t, `q=${q}`)).toEqual(['bob@mastodon.example'])
+			expect(await search(t, `resolve=true&q=${q}`)).toEqual(['bob@mastodon.example'])
+		})
+
+		it(`${endpoint.name}: stores but does not answer an account on a domain the viewer blocks (R14)`, async () => {
+			const t = await setup()
+			const bob = await mastodonActor(t.web, 'bob')
+			serveWebFinger(t.web, 'acct:bob@mastodon.example', 'acct:bob@mastodon.example', bob.uri)
+			await domainBlock(t.store, ALICE, 'mastodon.example')
+			const q = encodeURIComponent('bob@mastodon.example')
+			expect(await search(t, `resolve=true&q=${q}`)).toEqual([])
+			expect(await accountId(t.store, bob.uri)).toBeDefined()
+			expect(await search(t, `resolve=true&q=${q}`, 'dave')).toEqual(['bob@mastodon.example'])
+		})
+
+		// AUTH-1: the final search judges the token at its own time, after the resolution.
+		it(`${endpoint.name}: refuses a token that expired while resolving, the Store in maintenance`, async () => {
+			const clock = { now: NOW }
+			const t = await setup(clock)
+			const bob = await mastodonActor(t.web, 'bob')
+			serveWebFinger(t.web, 'acct:bob@mastodon.example', 'acct:bob@mastodon.example', bob.uri)
+			const q = encodeURIComponent('bob@mastodon.example')
+			// The instance actor's key exists, so the resolution fetches in maintenance and only its storing is refused.
+			await search(t, `resolve=true&q=${q}`)
+			await sql(
+				t.store,
+				'UPDATE oauth_tokens SET expires_at = ? WHERE account_id = ?',
+				new Date(NOW + 60_000).toISOString(),
+				ALICE
+			)
+			await t.store.setMaintenance(BUILD, true)
+			const held = t.web.hold(bob.uri)
+			const response = t.api(endpoint.path(`resolve=true&q=${q}`))
+			await held.reached
+			clock.now = NOW + 120_000
+			held.release()
+			expect((await response).status).toBe(401)
+			expect(t.web.fetched).toContain(bob.uri)
+		})
+	}
+
+	it('resolves nothing while the Worker is in readonly maintenance without a Store flag (v1)', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		serveWebFinger(t.web, 'acct:bob@mastodon.example', 'acct:bob@mastodon.example', bob.uri)
+		await seedAccount(t.store, { username: 'carol', displayName: 'bob@mastodon.example' })
+		await sql(t.store, "DELETE FROM instance_settings WHERE name = 'instance_actor_key'")
+		const maintenance = harness(t.store, { MAINTENANCE: 'readonly' }, BUILD, {
+			keygen: fixtureKeyGen,
+			loader: t.web.loader,
+		})
+		const response = await maintenance.request('/api/v1/accounts/search?resolve=true&q=bob%40mastodon.example', {
+			headers: { authorization: `Bearer ${t.tokens.alice}` },
+		})
+		expect(response.status).toBe(200)
+		expect((await response.json<Acct[]>()).map((a) => a.acct)).toEqual(['carol'])
+		expect(t.web.fetched).toEqual([])
+		expect(await sql(t.store, 'SELECT id FROM accounts WHERE domain IS NOT NULL')).toEqual([])
+		expect(await sql(t.store, "SELECT name FROM instance_settings WHERE name = 'instance_actor_key'")).toEqual([])
+	})
+
+	it('answers from local data when the Store in maintenance cannot store the instance key (v1)', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		serveWebFinger(t.web, 'acct:bob@mastodon.example', 'acct:bob@mastodon.example', bob.uri)
+		await seedAccount(t.store, { username: 'bob', domain: 'mastodon.example' })
+		// Cold: the key is created on first use, a write the Store in maintenance refuses.
+		await sql(t.store, "DELETE FROM instance_settings WHERE name = 'instance_actor_key'")
+		await t.store.setMaintenance(BUILD, true)
+		expect(await accts(t, '/api/v1/accounts/search?resolve=true&q=bob%40mastodon.example')).toEqual([
+			'bob@mastodon.example',
+		])
+		expect(t.web.fetched.length).toBeGreaterThan(0)
+		expect(await sql(t.store, "SELECT name FROM instance_settings WHERE name = 'instance_actor_key'")).toEqual([])
 	})
 })
 
