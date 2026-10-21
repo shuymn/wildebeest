@@ -465,6 +465,58 @@ describe('dump', () => {
 		)
 	}, 120_000)
 
+	it('round-trips status apps (0064), a dangling one too, and refuses one past its bound on import', async () => {
+		const source = await seeded(0)
+		const client = 'A'.repeat(43)
+		const ids = await runInDurableObject(source, (_instance, state) => {
+			const sql = state.storage.sql
+			const local = sql
+				.exec<{ id: string }>('SELECT id FROM accounts WHERE domain IS NULL ORDER BY id LIMIT 1')
+				.one().id
+			sql.exec(
+				"INSERT INTO oauth_clients (id, secret, name, redirect_uris, website) VALUES (?, 's', 'Dumped', 'urn:x', NULL)",
+				client
+			)
+			const insert = (id: string, app: string) =>
+				sql.exec(
+					`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at, application_id)
+					VALUES (?1, 'https://kopje.test/ap/o/' || ?1, ?2, 'public', '<p>x</p>', '2026-10-22T00:00:00.000Z', ?3)`,
+					id,
+					local,
+					app
+				)
+			// One through an app the dump holds, one through an app since removed.
+			insert('990000000000000001', client)
+			insert('990000000000000002', 'gone-app')
+			return ['990000000000000001', '990000000000000002']
+		})
+		const { text } = await dumpViaRpc(source)
+		const restored = await migratedStore()
+		await copyConfig(source, restored)
+		await importViaRpc(restored, text)
+		await runInDurableObject(restored, (_instance, state) => {
+			expect(
+				state.storage.sql
+					.exec('SELECT id, application_id FROM statuses WHERE id IN (?, ?) ORDER BY id', ...ids)
+					.toArray()
+			).toEqual([
+				{ id: ids[0], application_id: client },
+				{ id: ids[1], application_id: 'gone-app' },
+			])
+		})
+		// A dump from elsewhere, as its text could hold it: an id of 65 bytes.
+		const quoted = "'gone-app'"
+		const line = text.split('\n').find((row) => row.includes(quoted))!
+		expect(line).toBeDefined()
+		const dump = text.replace(line, line.replace(quoted, `'${'a'.repeat(65)}'`))
+		expect(dump).not.toBe(text)
+		const target = await migratedStore()
+		await copyConfig(source, target)
+		expect(String(await rejectionOf(importViaRpc(target, dump)))).toMatch(
+			/statuses: application_id past its stored bound/
+		)
+	}, 120_000)
+
 	it('writes the documented format and leaves out bookkeeping', async () => {
 		const { text } = await dumpViaRpc(await seeded(0))
 		const lines = text.split('\n')

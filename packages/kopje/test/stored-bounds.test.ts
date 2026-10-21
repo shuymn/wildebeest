@@ -20,6 +20,12 @@ import { parseRemoteStatus } from '../src/federation/remote-status'
 import { REMOTE_USERNAME_LIMIT, STATUS_URI_LIMIT } from '../src/platform/identity-bounds'
 import { mediaUrl, SERVED_TYPES } from '../src/platform/media-files'
 import {
+	APP_ID_BYTES,
+	APP_NAME_BYTES,
+	APP_NAME_JSON_BYTES,
+	APP_NAME_LIMIT,
+	appNameSql,
+	applicationIdPastBoundSql,
 	BIO_JSON_BYTES,
 	CONTACT_EMAIL_BYTES,
 	CONTACT_SETTING_BOUNDS,
@@ -57,6 +63,8 @@ import {
 	spoilerSql,
 	STATUS_URL_LIMIT,
 	statusUrlSql,
+	presentedAppName,
+	storedApplicationId,
 	storedDisplayName,
 	storedInstanceSetting,
 	storedMediaDescription,
@@ -853,4 +861,70 @@ describe('contact_username (0059_contact_and_activity)', () => {
 			expect(sql.exec(`SELECT ${projection('?1')} AS v`, 12).one().v).toBeNull()
 		})
 	})
+})
+
+describe('status applications (0064_status_applications)', () => {
+	// The bound's value cases for `input` on a local original (no boost, no author row to read).
+	const pastBound = (sql: Sql, input: string) =>
+		sql
+			.exec<{ v: number }>(
+				`SELECT ${applicationIdPastBoundSql('r')} AS v
+				FROM (SELECT ?1 AS application_id, NULL AS reblog_of_id, NULL AS account_id) r`,
+				input
+			)
+			.one().v
+
+	it('derives the name bounds from its code points', () => {
+		expect({ bytes: APP_NAME_BYTES, json: APP_NAME_JSON_BYTES }).toEqual({
+			bytes: 4 * APP_NAME_LIMIT,
+			json: 6 * APP_NAME_LIMIT + 2,
+		})
+	})
+
+	it("keeps an application id exactly when the trigger accepts it: the writer's output is its fixed point", async () => {
+		await runInDurableObject(await migratedStore(), (_instance, state) => {
+			const sql = state.storage.sql
+			fc.assert(
+				fc.property(
+					fc.oneof(
+						fc.stringMatching(/^[-0-9A-Za-z_]{0,70}$/),
+						fc.string({ unit: 'binary', maxLength: 70 }),
+						fc.constantFrom('a'.repeat(APP_ID_BYTES), 'a'.repeat(APP_ID_BYTES + 1), 'a\u0000', 'a*', '[a]', 'é')
+					),
+					(input) => {
+						const written = storedApplicationId(input)
+						expect(written === null ? 1 : 0, JSON.stringify(input)).toBe(pastBound(sql, input))
+						if (written !== null) {
+							expect(written).toBe(input)
+						}
+					}
+				),
+				{ numRuns: 500 }
+			)
+		})
+	}, 60_000)
+
+	it('reads every name the presenter shows whole from SQLite', async () => {
+		await runInDurableObject(freshStore(), (_instance, state) => {
+			const sql = state.storage.sql
+			fc.assert(
+				fc.property(
+					fc.oneof(
+						fc.string({ unit: 'binary', maxLength: 70 }),
+						fc.constantFrom(
+							'\u0001'.repeat(APP_NAME_LIMIT),
+							'𠀀'.repeat(APP_NAME_LIMIT),
+							'x'.repeat(APP_NAME_BYTES + 1)
+						)
+					),
+					(input) => {
+						if (presentedAppName(input) !== null) {
+							expect(valueOf(sql, appNameSql('?1'), input)).toBe(input)
+						}
+					}
+				),
+				{ numRuns: 500 }
+			)
+		})
+	}, 60_000)
 })
