@@ -189,6 +189,22 @@ describe('sending a push', () => {
 		expect(payload.notification_id).toBe(row?.id)
 	})
 
+	it("shows the sender's avatar_static as the icon, the still of an animated avatar", async () => {
+		const { h, client } = await pushing()
+		const still = 'https://kopje.test/media/AAAA/small.webp'
+		await sql(
+			h.store,
+			'UPDATE accounts SET avatar_url = ?, avatar_static_url = ? WHERE id = ?',
+			'https://kopje.test/media/AAAA/full.webp',
+			still,
+			h.users.bob.id
+		)
+		await post(h, h.users.bob, { status: '@alice look' })
+		const { fetch, sent } = recordingFetch()
+		await round(h, fetch)
+		expect((await readPush(client, sent[0]?.request as Request)).icon).toBe(still)
+	})
+
 	it('uses aes128gcm and the vapid scheme for a standard subscription', async () => {
 		const { h, client } = await pushing(['alice', 'bob'], { standard: true })
 		await post(h, h.users.bob, { status: '@alice hi' })

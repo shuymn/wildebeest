@@ -1,10 +1,9 @@
 import { accessAdminRefusal } from './admin-authority'
-import { chargeInstanceTransforms, TRANSFORMS_PER_UPLOAD } from './media'
+import { chargeInstanceTransforms, TRANSFORMS_PER_UPLOAD, uploadMediaMeta } from './media'
 import { mediaRebuildOperation, readOperation } from './operation'
 import type { Db } from '../db/sql'
 import type { ImportAuthority } from '../platform/store-admin'
 import { PITR_RESTORING, PITR_RESTORING_MS, REBUILD_LEASE } from '../platform/store-flags'
-import { storedMediaMeta } from '../platform/stored-bounds'
 
 // The media rebuild (mastodon/media-rebuild.ts): local media whose row is complete but whose served files are not in R2
 // get them made again from their original. That is media restored from a backup (which holds only the originals) and
@@ -217,7 +216,8 @@ export type RebuildRecord =
 	{ status: 'ok' } | { status: 'gone' } | { status: 'lease-lost' } | { status: 'denied'; reason: string }
 
 // Records the sizes of the files the rebuild made, before they are written: the row must still be eligible with the
-// same token and type, so files are not written for a row that changed or went. Only meta changes. A row doomed after
+// same token and type, so files are not written for a row that changed or went. Only meta changes (the animated flag
+// included); no account is touched, so a profile image keeps the static it had. A row doomed after
 // this is caught by rebuildRowLive once the files are written.
 export const recordRebuild = mediaRebuildOperation<
 	{
@@ -228,10 +228,11 @@ export const recordRebuild = mediaRebuildOperation<
 		contentType: string
 		original: Size
 		small: Size
+		animated: boolean
 		now: number
 	},
 	RebuildRecord
->((db, { authority, holder, id, token, contentType, original, small, now }) => {
+>((db, { authority, holder, id, token, contentType, original, small, animated, now }) => {
 	const refused = adminRefused(db, authority)
 	if (refused !== null) {
 		return { status: 'denied', reason: refused }
@@ -241,7 +242,7 @@ export const recordRebuild = mediaRebuildOperation<
 	}
 	const changed = db.run(
 		`UPDATE media_attachments SET meta = ? WHERE id = ? AND file_token = ? AND content_type = ? AND ${ELIGIBLE}`,
-		storedMediaMeta(JSON.stringify({ original, small })),
+		uploadMediaMeta(original, small, animated),
 		id,
 		token,
 		contentType,

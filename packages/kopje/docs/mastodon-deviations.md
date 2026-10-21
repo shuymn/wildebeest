@@ -64,8 +64,16 @@ Profile credentials (`PATCH /api/v1/accounts/update_credentials`, the settings p
   text plus two files and their part headers), its text at most 1 MiB in UTF-8 bytes.
 - Images are not cropped to 400×400 or capped at 1500×500; an image past 16,777,216 pixels answers 422 (Mastodon keeps
   the account unchanged and answers 200).
-- `avatar_static` and `header_static` equal `avatar` and `header`, animated images included: no still rendition is
-  made yet.
+- For an uploaded image whose served file is animated, `avatar_static` and `header_static` are a still of at most
+  640 px on the long edge (the upload's preview); Mastodon's is 400×400 or the header's own size, and only for a GIF.
+  Otherwise they equal `avatar` and `header`.
+- A local animated WebP stays animated in `avatar` and `header`, where Mastodon flattens it to one frame. An APNG stays
+  animated only as far as Images keeps its frames, which the release check records (`docs/setup.md`).
+- A remote account's `avatar_static` and `header_static` equal its linked image; Mastodon makes a still for a GIF or an
+  image it converts.
+- Images uploaded before still renditions were made keep `avatar_static` and `header_static` equal to the image until
+  they are replaced.
+- The `preview_url` of an animated upload (status media included) is a still.
 - `indexable` is stored, shown and federated, but changes no search result: status search reads the viewer's own posts and
   interactions, or one account's posts the viewer may see, never a public index.
 - Unlocking accepts the pending follow requests in job rounds after the response, at most 20 per round (the 5-minute

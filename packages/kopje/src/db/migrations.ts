@@ -58,6 +58,7 @@ import m0057 from '../../migrations/0057_trends.sql'
 import m0058 from '../../migrations/0058_profile_credentials.sql'
 import m0059 from '../../migrations/0059_contact_and_activity.sql'
 import m0060 from '../../migrations/0060_account_moves.sql'
+import m0061 from '../../migrations/0061_account_static_images.sql'
 
 // Store migrations in apply order. Append only: an applied file is recorded by name and checksum and must
 // never change. Each file runs in its own transaction, must finish well under 30 seconds, and must be pure SQL with no
@@ -124,4 +125,5 @@ export const MIGRATIONS: readonly { name: string; sql: string; foreignKeys?: 'un
 	{ name: '0058_profile_credentials', sql: m0058, foreignKeys: 'unchanged' },
 	{ name: '0059_contact_and_activity', sql: m0059, foreignKeys: 'unchanged' },
 	{ name: '0060_account_moves', sql: m0060, foreignKeys: 'unchanged' },
+	{ name: '0061_account_static_images', sql: m0061, foreignKeys: 'unchanged' },
 ]

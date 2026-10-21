@@ -129,7 +129,7 @@ describe('POST /api/v2/media', () => {
 		expect(wide.url).toMatch(/\/full\.png$/)
 		expect(h.codec.encodeCalls).toEqual([
 			{ width: 3840, height: 960, format: 'image/png' },
-			{ width: 640, height: 160, format: 'image/png' },
+			{ width: 640, height: 160, format: 'image/png', still: true },
 		])
 		const gif = await uploaded(h, h.users.alice, mediaForm(bytes(GIF), {}, 'a.gif', 'image/gif'))
 		expect(gif.url).toMatch(/\/full\.webp$/)

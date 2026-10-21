@@ -426,6 +426,7 @@ async function pass(
 						contentType: built.contentType,
 						original: { width: built.width, height: built.height },
 						small: { width: preview.width, height: preview.height },
+						animated: built.animated,
 					})
 			)
 			if (recorded.status === 'denied') {

@@ -134,8 +134,9 @@ describe('the cursor (RES-3)', () => {
 
 describe('R bounds the rows of a status (RES-3)', () => {
 	it("is at least the meter's count of each status alone and of each chunk, for mixed sizes", async () => {
-		// Local authors too, among them the OAuth admin, whose lookup (the Owner role) one chunk of each answer reads.
-		const { h, f } = await fixture({ admin: true })
+		// Local authors too, among them the OAuth admin, whose lookup (the Owner role) one chunk of each answer reads, each
+		// with its images and statics at their bounds, which authors moved to the first read too.
+		const { h, f } = await fixture({ admin: true, statics: true })
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 		const small: ChunkPlan = { target: 256 * 1024, cap: 256 * 1024 }
 		await fc.assert(
@@ -591,6 +592,105 @@ describe('the hydrate queries (RES-3)', () => {
 		expect(result.queries).toBeLessThanOrEqual(result.windows + result.chunks.length * (result.oneChunk.queries - 1))
 		expect(warn).not.toHaveBeenCalledWith(expect.objectContaining({ event: 'kopje.presenter.row-cap-exceeded' }))
 	}, 120_000)
+})
+
+// The chunk target's cost depends on the workload: a page whose statuses each take a little more than half the target
+// pairs no two of them. 80 statuses of R between 352 KiB and 384 KiB (a 111 KB post with 200 mentions) pair at
+// 768 KiB, 40 hydrations, and stand alone at PAGE_CHUNKS' 704 KiB, 80 hydrations. Each hydration's statements run in
+// the same Store operation (no Store RPC more), and R's one query a window is unchanged; a chunk of one is read without
+// a RowMeter. The figures, logged, are what docs/threat-model.md quotes.
+describe('the chunk target at its threshold workload (RES-3)', () => {
+	const AT_768: ChunkPlan = { target: 768 * 1024, cap: 768 * 1024 }
+	const LOW = 352 * 1024
+	const HIGH = 384 * 1024
+
+	it('hydrates 80 statuses just past half of 704 KiB one at a time, and in pairs at 768 KiB', async () => {
+		const { h, f } = await fixture()
+		const warn = vi.spyOn(console, 'warn')
+		const result = await runInDurableObject(h.store, (_instance, state) => {
+			const item = (text: number): Item => ({
+				kind: 'status',
+				text,
+				wide: false,
+				mentions: MAX_STATUS_MENTION_ROWS,
+				tags: 0,
+				media: 0,
+				poll: 0,
+				viewer: false,
+			})
+			const r = (text: number) => {
+				const id = build(state.storage.sql, f, item(text))
+				return boundsOf(state, f.viewer, [id], 1).get(id)!
+			}
+			// The longest text whose R is at most the window's middle (R grows with the text).
+			const middle = (LOW + HIGH) / 2
+			let [low, high] = [0, 120_000]
+			while (low < high) {
+				const text = Math.ceil((low + high) / 2)
+				if (r(text) <= middle) {
+					low = text
+				} else {
+					high = text - 1
+				}
+			}
+			const ids = Array.from({ length: 80 }, () => build(state.storage.sql, f, item(low)))
+			const bounds = [...boundsOf(state, f.viewer, ids, 1).values()]
+			const visible = ids as VisibleStatusId[]
+			const options = { origin: ORIGIN, viewer: { accountId: f.viewer, now: VIEWER_NOW } }
+			// The page as an answer presents it, unobserved: its presentation, then its statuses.
+			const present = (plan: ChunkPlan) => {
+				const db = new Db(state.storage.sql)
+				return presentStatusesWithin(db, presentation(db, visible, options), visible, Infinity, true, plan).items
+			}
+			const counted = (plan: ChunkPlan) => {
+				const observed = observedPresentation(state, f.viewer, ids, plan)
+				return {
+					chunks: observed.segments.length,
+					queries: observed.reads.length,
+					windows: observed.reads.filter((read) => read.query === statusRowBoundSql()).length,
+					items: observed.items.length,
+				}
+			}
+			// Alternate runs, so neither plan gains from the other's warm cache; the mean of each.
+			const ms = { at704: 0, at768: 0 }
+			const RUNS = 10
+			for (let i = 0; i < RUNS; i++) {
+				for (const [name, plan] of [
+					['at704', PAGE_CHUNKS],
+					['at768', AT_768],
+				] as const) {
+					const start = performance.now()
+					expect(present(plan)).toHaveLength(80)
+					ms[name] += (performance.now() - start) / RUNS
+				}
+			}
+			return {
+				text: low,
+				bounds,
+				at704: { ...counted(PAGE_CHUNKS), ms: ms.at704 },
+				at768: { ...counted(AT_768), ms: ms.at768 },
+			}
+		})
+		for (const bound of result.bounds) {
+			expect(bound).toBeGreaterThan(LOW)
+			expect(bound).toBeLessThanOrEqual(HIGH)
+		}
+		expect(PAGE_CHUNKS).toEqual({ target: 704 * 1024, cap: 704 * 1024 })
+		expect([result.at704.chunks, result.at768.chunks]).toEqual([80, 40])
+		expect([result.at704.items, result.at768.items]).toEqual([80, 80])
+		expect([result.at704.windows, result.at768.windows]).toEqual([1, 1])
+		// Each hydration runs the same statements: twice the chunks, about twice the statements.
+		const perChunk = (r: typeof result.at704) => (r.queries - r.windows) / r.chunks
+		expect(perChunk(result.at704)).toBeLessThanOrEqual(perChunk(result.at768))
+		expect(result.at704.ms).toBeGreaterThan(0)
+		expect(result.at768.ms).toBeGreaterThan(0)
+		console.info(
+			`Threshold workload: 80 statuses of R ${Math.min(...result.bounds)} to ${Math.max(...result.bounds)} (text ${result.text}); ` +
+				`704 KiB: ${result.at704.chunks} chunks, ${result.at704.queries} statements, ${result.at704.ms.toFixed(1)} ms; ` +
+				`768 KiB: ${result.at768.chunks} chunks, ${result.at768.queries} statements, ${result.at768.ms.toFixed(1)} ms`
+		)
+		expect(warn).not.toHaveBeenCalledWith(expect.objectContaining({ event: 'kopje.presenter.row-cap-exceeded' }))
+	}, 300_000)
 })
 
 describe('the order of the rows of a status (RES-3)', () => {

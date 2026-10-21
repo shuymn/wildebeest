@@ -9,7 +9,7 @@ import { type VisibleStatusId } from '../src/domain/audience'
 import { MAX_STATUS_MENTION_ROWS } from '../src/domain/status-bounds'
 import { type ChunkPlan, presentation, presentStatusesWithin, type Status } from '../src/domain/status-presenter'
 import { statusRowBoundSql } from '../src/domain/status-rows'
-import { CONTENT_JSON_BYTES } from '../src/platform/stored-bounds'
+import { CONTENT_JSON_BYTES, PROFILE_URL_LIMIT, STATIC_URL_LIMIT } from '../src/platform/stored-bounds'
 
 // Fixtures of the chunk planning tests (test/status-rows.test.ts): answers of statuses of mixed shapes and sizes, built
 // in SQL, and what a presentation of them reads.
@@ -55,8 +55,17 @@ const ADMIN_FIXTURE_LOCALS = 10
 
 // alice, MAX_STATUS_MENTION_ROWS remote accounts to mention (on hosts of 60 characters) and one filter of hers that
 // names the statuses built (so each carries a filter result) with a keyword. `admin`: alice is the OAuth admin
-// (admin_email) among ADMIN_FIXTURE_LOCALS local accounts, which items marked local are written by.
-export async function fixture({ admin = false }: { admin?: boolean } = {}): Promise<{ h: ApiHarness; f: Fixture }> {
+// (admin_email) among ADMIN_FIXTURE_LOCALS local accounts, which items marked local are written by. `statics`: every
+// local account has both images and their statics at the stored bounds (PROFILE_URL_LIMIT, STATIC_URL_LIMIT; migration
+// 0061_account_static_images), as animated uploads leave them, which an item a local account writes reads, and so does
+// a remote author's move to the first.
+export async function fixture({
+	admin = false,
+	statics = false,
+}: { admin?: boolean; statics?: boolean } = {}): Promise<{
+	h: ApiHarness
+	f: Fixture
+}> {
 	const h = await community(['alice'])
 	const viewer = h.users.alice.id
 	const locals = [viewer]
@@ -70,6 +79,14 @@ export async function fixture({ admin = false }: { admin?: boolean } = {}): Prom
 	const filter = nextId()
 	const mentioned = await runInDurableObject(h.store, (_instance, state) => {
 		const sql = state.storage.sql
+		if (statics) {
+			sql.exec(
+				`UPDATE accounts SET avatar_url = ?1, header_url = ?1, avatar_static_url = ?2, header_static_url = ?2
+				WHERE domain IS NULL`,
+				`${ORIGIN}/media/`.padEnd(PROFILE_URL_LIMIT, 'f'),
+				`${ORIGIN}/media/`.padEnd(STATIC_URL_LIMIT, 's')
+			)
+		}
 		const ids: string[] = []
 		for (let i = 0; i < MAX_STATUS_MENTION_ROWS; i++) {
 			const id = nextId()

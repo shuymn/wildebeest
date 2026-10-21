@@ -4,10 +4,10 @@ import { describe, expect, it } from 'vitest'
 
 import { bearer, json, sql } from './api-helpers'
 import { NOW } from './app-helpers'
-import { ANIMATED_GIF, AVIF, JPEG_ORIENTATION_6, PNG_PLAIN, WEBP_PLAIN } from './fixtures/images'
-import { bytes, mediaForm, pngWithChunk, TestCodec, upload, uploaded } from './media-helpers'
+import { ANIMATED_GIF, ANIMATED_WEBP, AVIF, JPEG_ORIENTATION_6, PNG_PLAIN, WEBP_PLAIN } from './fixtures/images'
+import { bytes, framesKeepingCodec, mediaForm, pngWithChunk, TestCodec, upload, uploaded } from './media-helpers'
 import { community, getJson, post } from './status-helpers'
-import { retainedMetadata } from '../src/platform/image-bytes'
+import { isAnimated, retainedMetadata } from '../src/platform/image-bytes'
 import type { StoreStub } from '../src/platform/store-client'
 
 // Failure and boundary cases of media (B4b review): R2 writes that settle late, a lost completion response, the
@@ -263,7 +263,61 @@ describe('container strictness (MEDIA-3)', () => {
 })
 
 describe('inputs beyond still images', () => {
-	it('accepts a multi-frame GIF as WebP (that the frames survive is checked on the verification instance, B9)', async () => {
+	it('records an animated upload, serves its still preview, and keeps the record when completion is retried', async () => {
+		let lost = 0
+		const wrapStore = (store: StoreStub) =>
+			new Proxy(store, {
+				get(target, property) {
+					if (property === 'completeMedia') {
+						return async (...args: Parameters<StoreStub['completeMedia']>) => {
+							const result = await target.completeMedia(...args)
+							if (lost++ === 0) {
+								throw new Error('response lost')
+							}
+							return result
+						}
+					}
+					return Reflect.get(target, property) as unknown
+				},
+			})
+		const h = await users({ codec: framesKeepingCodec(), wrapStore })
+		const media = await uploaded(h, h.users.alice, mediaForm(bytes(ANIMATED_WEBP), {}, 'a.webp', 'image/webp'))
+		expect(lost).toBe(2)
+		expect(media.preview_url).not.toBe(media.url)
+		expect(media.meta).not.toHaveProperty('animated')
+		const servedBytes = async (url: string | null) =>
+			new Uint8Array(await (await h.request(new URL(url ?? '').pathname)).arrayBuffer())
+		expect(isAnimated(await servedBytes(media.url), 'image/webp')).toBe(true)
+		expect(isAnimated(await servedBytes(media.preview_url), 'image/webp')).toBe(false)
+		expect(
+			await sql(
+				h.store,
+				"SELECT json_extract(meta, '$.animated') AS animated FROM media_attachments WHERE id = ?",
+				media.id
+			)
+		).toEqual([{ animated: 1 }])
+		const still = await uploaded(h, h.users.alice, png())
+		expect(
+			await sql(
+				h.store,
+				"SELECT json_type(meta, '$.animated') AS animated FROM media_attachments WHERE id = ?",
+				still.id
+			)
+		).toEqual([{ animated: null }])
+	})
+
+	it('fails an upload whose preview comes back animated, keeping no file', async () => {
+		const codec = new TestCodec()
+		codec.encodeResponder = () => bytes(ANIMATED_WEBP)
+		const h = await users({ codec })
+		const response = await upload(h, h.users.alice, mediaForm(bytes(ANIMATED_WEBP), {}, 'a.webp', 'image/webp'))
+		expect(response.status).toBe(500)
+		expect(await mediaKeysIn(await rowKeys(h.store))).toEqual([])
+	})
+
+	// That the frames survive in the served file and the preview is a still is the release check of docs/setup.md
+	// ("Still images of animated uploads").
+	it('accepts a multi-frame GIF as WebP', async () => {
 		const h = await users()
 		const media = await uploaded(h, h.users.alice, mediaForm(bytes(ANIMATED_GIF), {}, 'a.gif', 'image/gif'))
 		expect(media.url).toMatch(/\/full\.webp$/)

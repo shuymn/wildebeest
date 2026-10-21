@@ -16,12 +16,12 @@ import {
 import { BUILD } from './helpers'
 import { ALICE, setup, type Setup } from './inbox-status-helpers'
 import { localSnapshotAtCap } from './local-emoji-helpers'
-import { fullestFields, MAX_BIO, MOVED_ROW_SQLITE_MAX } from './profile-fixtures'
+import { ESCAPED_STATIC_WITNESS, fullestFields, MAX_BIO, MOVED_ROW_SQLITE_MAX } from './profile-fixtures'
 import { observedSql, rowsRead } from './read-helpers'
 import { community, post, remoteAccount } from './status-helpers'
 import { heap } from './status-row-fixtures'
 import { selectSql } from '../src/db/columns'
-import { Db } from '../src/db/sql'
+import { Db, VALUE_BYTES } from '../src/db/sql'
 import {
 	getAccount,
 	MOVED_ACCOUNT_COLUMNS,
@@ -70,6 +70,7 @@ import {
 	EMOJI_SHORTCODE_LIMIT,
 	EMOJI_URL_LIMIT,
 	presentedEmojiBytes,
+	STATIC_URL_LIMIT,
 	STATUS_EMOJIS_BYTES,
 } from '../src/platform/stored-bounds'
 import {
@@ -1213,9 +1214,15 @@ async function measureShapes(fill: Fill): Promise<FillMeasure> {
 	}
 }
 
+// An account's static images (migration 0061_account_static_images), each at its stored bound whatever the fills hold:
+// the fills' accounts are remote, which hold none, and a local account's may hold both.
+const STATIC_COLUMNS = new Set(['avatar_static_url', 'header_static_url'])
+const STATIC_COLUMN_HEAP = VALUE_BYTES + 2 * STATIC_URL_LIMIT
+
 // An item's rows at their per-column maxima: for each query and column, the most any fill read (each fill puts a column
 // at the bound in the unit that reads the most heap for it or the most JSON), summed, so a combination of columns no
-// single fill holds is counted. Returns their heap and the largest single row such a combination makes.
+// single fill holds is counted; a static image column at STATIC_COLUMN_HEAP on every row. Returns their heap and the
+// largest single row such a combination makes.
 function perColumn(measures: readonly Heaps[]): { heap: number; largestRow: number } {
 	const queries = new Map<string, { rows: number; columns: Map<string, ColumnHeap> }>()
 	for (const heaps of measures) {
@@ -1238,7 +1245,9 @@ function perColumn(measures: readonly Heaps[]): { heap: number; largestRow: numb
 			largestRow = Math.max(largestRow, MOVED_ROW_HEAP_MAX)
 			continue
 		}
-		const values = [...columns.values()]
+		const values = [...columns].map(([column, c]) =>
+			STATIC_COLUMNS.has(column) ? { total: rows * STATIC_COLUMN_HEAP, largest: STATIC_COLUMN_HEAP } : c
+		)
 		heap += 64 * rows + values.reduce((sum, c) => sum + c.total, 0)
 		largestRow = Math.max(largestRow, 64 + values.reduce((sum, c) => sum + c.largest, 0))
 	}
@@ -1308,8 +1317,8 @@ describe('the moved-to account (RES-3)', () => {
 		expect(MOVED_EMOJI_SCRATCH).toBe(18_060)
 		expect({ json: MOVED_ACCOUNT_JSON_MAX, sqlite: MOVED_ROW_SQLITE_MAX, heap: MOVED_ROW_HEAP_MAX }).toEqual({
 			json: 11_021,
-			sqlite: 10_094,
-			heap: 20_764,
+			sqlite: 11_118,
+			heap: 22_876,
 		})
 	})
 
@@ -1347,6 +1356,54 @@ describe('the moved-to account (RES-3)', () => {
 	)
 })
 
+// A local target's static images at their stored bound (migration 0061_account_static_images, STATIC_URL_LIMIT): a
+// plain one, and one that serializes within PROFILE_URL_LIMIT but whose JSON passes it (192 malformed bytes, each
+// %EF%BF%BD, and 309 backslashes, which JSON doubles). Each reads and presents within the nested account's caps, and
+// the full account shows each within PROFILE_URL_LIMIT as JSON.
+describe('static images (RES-2, RES-3)', () => {
+	const PLAIN = `https://kopje.test/media/${'s'.repeat(STATIC_URL_LIMIT - 'https://kopje.test/media/'.length)}`
+	const WITNESS = ESCAPED_STATIC_WITNESS
+
+	it.each<[string, string | ArrayBuffer]>([
+		['plain', PLAIN],
+		['escaping', WITNESS],
+	])(
+		'of a local target at their bound stay within the nested caps and the full bounds, %s',
+		async (_name, still) => {
+			const t = await setup()
+			const image = `https://kopje.test/media/${'i'.repeat(MOVED_URL_LIMIT - 'https://kopje.test/media/'.length)}`
+			await sql(
+				t.store,
+				`UPDATE accounts SET avatar_url = ?1, header_url = ?1, avatar_static_url = CAST(?2 AS TEXT),
+					header_static_url = CAST(?2 AS TEXT) WHERE id = ?3`,
+				image,
+				still,
+				ALICE
+			)
+			expect(
+				await sql(t.store, 'SELECT length(CAST(avatar_static_url AS BLOB)) AS n FROM accounts WHERE id = ?', ALICE)
+			).toEqual([{ n: STATIC_URL_LIMIT }])
+			const source = await maximalAccount(t, true)
+			await sql(t.store, 'UPDATE accounts SET moved_to_account_id = ? WHERE id = ?', ALICE, source)
+			const m = await measured(t, getAccount as never, { id: source, present: { origin: ORIGIN } } as never)
+			const [rows] = [...m.heaps].filter(([query]) => query.includes(selectSql(MOVED_ACCOUNT_COLUMNS.columns)))
+			expect(64 + [...rows![1].columns.values()].reduce((sum, column) => sum + column.total, 0)).toBeLessThanOrEqual(
+				MOVED_ROW_HEAP_MAX
+			)
+			const moved = (m.answer as { moved: Record<string, string> }).moved
+			expect(jsonBytes(moved)).toBeLessThanOrEqual(MOVED_ACCOUNT_JSON_MAX)
+			expect(moved.avatar_static).toBe(typeof still === 'string' ? still : image)
+			const full = (await measured(t, getAccount as never, { id: ALICE, present: { origin: ORIGIN } } as never))
+				.answer as Record<string, string>
+			for (const key of ['avatar', 'avatar_static', 'header', 'header_static']) {
+				expect(utf8Length(JSON.stringify(full[key])), key).toBeLessThanOrEqual(PROFILE_URL_LIMIT + 2)
+			}
+			expect(full.avatar_static).toBe(typeof still === 'string' ? still : image)
+		},
+		120_000
+	)
+})
+
 describe('the table of maxima (RES-3)', () => {
 	// docs/threat-model.md "Maxima of presented units" states these. An answer admits a whole item, so every atomic
 	// shape stays within 85% of ANSWER_BYTES (8 MiB) with filters included, measured and conservative alike.
@@ -1357,56 +1414,56 @@ describe('the table of maxima (RES-3)', () => {
 			'the escaped worst case: the most JSON',
 			'escaped',
 			{
-				account: { sqlite: 103_240, json: 140_447, rows: 1, nodes: 92 },
-				status: { sqlite: 2_763_900, json: 2_626_753, rows: 1485, nodes: 2367 },
-				quote: { sqlite: 4_954_443, json: 5_253_539, rows: 1918, nodes: 4736 },
-				boostOfQuote: { sqlite: 5_100_833, json: 5_662_490, rows: 1975, nodes: 5695 },
-				conversation: { sqlite: 6_308_118, json: 6_938_872, rows: 1944, nodes: 5831 },
-				group: { sqlite: 5_813_533, json: 6_377_539, rows: 1953, nodes: 5484 },
-				report: { sqlite: 5_263_740, json: 5_850_006, rows: 1933, nodes: 5051 },
-				reportNotification: { sqlite: 812_325, json: 403_298, rows: 1061, nodes: 294 },
+				account: { sqlite: 103_256, json: 140_447, rows: 1, nodes: 92 },
+				status: { sqlite: 2_763_932, json: 2_626_753, rows: 1485, nodes: 2367 },
+				quote: { sqlite: 4_954_507, json: 5_253_539, rows: 1918, nodes: 4736 },
+				boostOfQuote: { sqlite: 5_100_929, json: 5_662_490, rows: 1975, nodes: 5695 },
+				conversation: { sqlite: 6_308_582, json: 6_938_872, rows: 1944, nodes: 5831 },
+				group: { sqlite: 5_813_853, json: 6_377_539, rows: 1953, nodes: 5484 },
+				report: { sqlite: 5_263_884, json: 5_850_006, rows: 1933, nodes: 5051 },
+				reportNotification: { sqlite: 812_389, json: 403_298, rows: 1061, nodes: 294 },
 			},
 		],
 		[
 			'mentions whose url is derived',
 			'derived',
 			{
-				account: { sqlite: 103_240, json: 140_447, rows: 1, nodes: 92 },
-				status: { sqlite: 2_355_900, json: 2_217_153, rows: 1485, nodes: 2367 },
-				quote: { sqlite: 4_138_443, json: 4_434_339, rows: 1918, nodes: 4736 },
-				boostOfQuote: { sqlite: 4_284_833, json: 4_843_290, rows: 1975, nodes: 5695 },
-				conversation: { sqlite: 5_492_118, json: 6_119_672, rows: 1944, nodes: 5831 },
-				group: { sqlite: 4_997_533, json: 5_558_339, rows: 1953, nodes: 5484 },
-				report: { sqlite: 4_432_740, json: 4_940_806, rows: 1933, nodes: 5051 },
-				reportNotification: { sqlite: 797_325, json: 313_298, rows: 1061, nodes: 294 },
+				account: { sqlite: 103_256, json: 140_447, rows: 1, nodes: 92 },
+				status: { sqlite: 2_355_932, json: 2_217_153, rows: 1485, nodes: 2367 },
+				quote: { sqlite: 4_138_507, json: 4_434_339, rows: 1918, nodes: 4736 },
+				boostOfQuote: { sqlite: 4_284_929, json: 4_843_290, rows: 1975, nodes: 5695 },
+				conversation: { sqlite: 5_492_582, json: 6_119_672, rows: 1944, nodes: 5831 },
+				group: { sqlite: 4_997_853, json: 5_558_339, rows: 1953, nodes: 5484 },
+				report: { sqlite: 4_432_884, json: 4_940_806, rows: 1933, nodes: 5051 },
+				reportNotification: { sqlite: 797_389, json: 313_298, rows: 1061, nodes: 294 },
 			},
 		],
 		[
 			'the raw worst case: the most bytes read from SQLite',
 			'raw',
 			{
-				account: { sqlite: 123_233, json: 132_819, rows: 1, nodes: 80 },
-				status: { sqlite: 4_444_672, json: 2_185_527, rows: 1485, nodes: 2355 },
-				quote: { sqlite: 6_818_387, json: 4_371_087, rows: 1918, nodes: 4712 },
-				boostOfQuote: { sqlite: 7_112_944, json: 4_618_812, rows: 1975, nodes: 5659 },
-				conversation: { sqlite: 8_495_535, json: 5_964_884, rows: 1944, nodes: 5663 },
-				group: { sqlite: 7_879_797, json: 5_434_063, rows: 1953, nodes: 5364 },
-				report: { sqlite: 7_198_257, json: 4_844_108, rows: 1933, nodes: 5003 },
-				reportNotification: { sqlite: 2_360_505, json: 288_042, rows: 1061, nodes: 270 },
+				account: { sqlite: 123_249, json: 132_819, rows: 1, nodes: 80 },
+				status: { sqlite: 4_444_704, json: 2_185_527, rows: 1485, nodes: 2355 },
+				quote: { sqlite: 6_818_451, json: 4_371_087, rows: 1918, nodes: 4712 },
+				boostOfQuote: { sqlite: 7_113_040, json: 4_618_812, rows: 1975, nodes: 5659 },
+				conversation: { sqlite: 8_495_999, json: 5_964_884, rows: 1944, nodes: 5663 },
+				group: { sqlite: 7_880_117, json: 5_434_063, rows: 1953, nodes: 5364 },
+				report: { sqlite: 7_198_401, json: 4_844_108, rows: 1933, nodes: 5003 },
+				reportNotification: { sqlite: 2_360_569, json: 288_042, rows: 1061, nodes: 270 },
 			},
 		],
 		[
 			'short emoji references in every poll: the most poll emojis',
 			'emoji-poll',
 			{
-				account: { sqlite: 103_240, json: 140_447, rows: 1, nodes: 92 },
-				status: { sqlite: 2_763_052, json: 2_638_854, rows: 1485, nodes: 2419 },
-				quote: { sqlite: 4_952_747, json: 5_277_741, rows: 1918, nodes: 4840 },
-				boostOfQuote: { sqlite: 5_099_137, json: 5_686_692, rows: 1975, nodes: 5799 },
-				conversation: { sqlite: 6_306_422, json: 6_963_074, rows: 1944, nodes: 5935 },
-				group: { sqlite: 5_811_837, json: 6_401_741, rows: 1953, nodes: 5588 },
-				report: { sqlite: 5_262_044, json: 5_874_208, rows: 1933, nodes: 5155 },
-				reportNotification: { sqlite: 812_325, json: 403_298, rows: 1061, nodes: 294 },
+				account: { sqlite: 103_256, json: 140_447, rows: 1, nodes: 92 },
+				status: { sqlite: 2_763_084, json: 2_638_854, rows: 1485, nodes: 2419 },
+				quote: { sqlite: 4_952_811, json: 5_277_741, rows: 1918, nodes: 4840 },
+				boostOfQuote: { sqlite: 5_099_233, json: 5_686_692, rows: 1975, nodes: 5799 },
+				conversation: { sqlite: 6_306_886, json: 6_963_074, rows: 1944, nodes: 5935 },
+				group: { sqlite: 5_812_157, json: 6_401_741, rows: 1953, nodes: 5588 },
+				report: { sqlite: 5_262_188, json: 5_874_208, rows: 1933, nodes: 5155 },
+				reportNotification: { sqlite: 812_389, json: 403_298, rows: 1061, nodes: 294 },
 			},
 		],
 	])(
@@ -1462,14 +1519,15 @@ describe('the table of maxima (RES-3)', () => {
 	}, 600_000)
 
 	// What an answer of many accounts reads past its budget (one chunk of accounts.ts ANSWER_CHUNK, 50, each with its
-	// moved-to account) and what a page of 80 accounts serializes to at most, from the account occurrence.
+	// static images at their stored bound and its moved-to account) and what a page of 80 accounts serializes to at
+	// most, from the account occurrence.
 	it('bounds a chunk of accounts read past an answer and a page of 80, from the account occurrence', async () => {
 		const { shapes } = await measureFill('raw')
 		const conservative = await conservativeJson()
 		expect({
-			chunk: 50 * (shapes.account!.sqlite + MOVED_ROW_SQLITE_MAX),
+			chunk: 50 * (shapes.account!.sqlite + 2 * STATIC_URL_LIMIT + MOVED_ROW_SQLITE_MAX),
 			page: 80 * conservative.account!,
-		}).toEqual({ chunk: 6_666_350, page: 11_455_040 })
+		}).toEqual({ chunk: 6_769_550, page: 11_455_040 })
 	}, 600_000)
 
 	// Half of the Store isolate's 128 MB. A timeline's largest item is a status, a quote or a boost of a quote; groups
@@ -1486,6 +1544,7 @@ describe('the table of maxima (RES-3)', () => {
 				`Peak, ${name}: rows ${mb(p.rows)}, largest row ${mb(p.largestRow)}, rejected ${mb(p.rejected)}, normal ${mb(p.normal)}, backstop fired ${mb(p.backstop)} MB`
 			)
 		}
+		console.info(`Timeline backstop fired: ${timelines.backstop} bytes, ${HALF - timelines.backstop} spare of ${HALF}`)
 		expect(timelines.normal).toBeLessThanOrEqual(HALF)
 		expect(timelines.backstop).toBeLessThanOrEqual(HALF)
 		for (const p of [groups, reports]) {

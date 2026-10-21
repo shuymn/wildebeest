@@ -251,7 +251,10 @@ function entryPointStatuses(document: string): string[] {
 		.map((line) => (line.split(' | ').at(-1) ?? '').replace(/\s*\|\s*$/, '').trim())
 }
 
-function citationProblems(where: string, part: string, files: Files): string[] {
+/** The titles a test file declares, by path: each file is read and parsed once however often it is cited. */
+type Titles = (path: string) => string[]
+
+function citationProblems(where: string, part: string, files: Files, declaredIn: Titles): string[] {
 	const problems: string[] = []
 	const cited = citations(part)
 	if (cited.length === 0) problems.push(`${where}: an enforced part cites no file: "${part.trim().slice(0, 60)}"`)
@@ -261,7 +264,7 @@ function citationProblems(where: string, part: string, files: Files): string[] {
 			continue
 		}
 		if (loose) problems.push(`${where}: ${path} has a name outside parentheses`)
-		const declared = names.length > 0 ? titles(path, files.read(path) ?? '') : []
+		const declared = names.length > 0 ? declaredIn(path) : []
 		for (const name of names) {
 			const parts = fragments(name)
 			if (parts.length === 0) problems.push(`${where}: ${path} has an empty name "${name}"`)
@@ -274,20 +277,29 @@ function citationProblems(where: string, part: string, files: Files): string[] {
 /** Every disagreement between the document and the files. */
 function problems(document: string, files: Files): string[] {
 	const found: string[] = []
+	const parsed = new Map<string, string[]>()
+	const declaredIn: Titles = (path) => {
+		let declared = parsed.get(path)
+		if (declared === undefined) {
+			declared = titles(path, files.read(path) ?? '')
+			parsed.set(path, declared)
+		}
+		return declared
+	}
 	const flat = flatten(document)
 	for (const mark of marks(flat)) {
 		if (mark.kind === 'unknown') found.push(`unknown mark _${mark.text}_`)
 	}
 	for (const match of flat.matchAll(BRANCH)) found.push(`a branch: "${match[0]}"`)
 	for (const { id, text } of invariants(document)) {
-		const parsed = marks(text)
-		if (!parsed.some(isStatus)) found.push(`${id}: no status`)
-		for (const part of enforcedParts(text, parsed)) found.push(...citationProblems(id, part, files))
+		const statuses = marks(text)
+		if (!statuses.some(isStatus)) found.push(`${id}: no status`)
+		for (const part of enforcedParts(text, statuses)) found.push(...citationProblems(id, part, files, declaredIn))
 	}
 	for (const status of entryPointStatuses(document)) {
 		for (const part of status.split('; ')) {
 			if (/^main: `[^`]+`(?:, `[^`]+`)*(?: \([^()]*\))?$/.test(part)) {
-				found.push(...citationProblems('entry points', part, files))
+				found.push(...citationProblems('entry points', part, files, declaredIn))
 			} else if (!/^Planned \([^()]+\)$/.test(part)) {
 				found.push(`entry points: unknown status "${part}"`)
 			}
@@ -320,9 +332,10 @@ describe("the threat model's statuses", () => {
 		])
 	})
 
+	// Reads and parses every cited test file of the package, so its time grows with the document and those files.
 	it('marks every part with a known status, and cites what exists', () => {
 		expect(problems(document, disk)).toEqual([])
-	})
+	}, 60_000)
 
 	it('reads only declared titles', () => {
 		const source = [

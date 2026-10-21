@@ -920,3 +920,57 @@ export function accountMovesMigrationSql(): string {
 		),
 	].join('\n\n')}\n`
 }
+
+// ---- Account static images: migration 0061_account_static_images
+
+// accounts.avatar_static_url and header_static_url: NULL ("the same as the image"), or the still preview URL of the
+// upload the image names (domain/media.ts profileAssignSql), in UTF-8 bytes. Kopje's preview URLs are mediaUrl's
+// (platform/media-files.ts): 'https://', a host of at most 253 bytes, ':65535', '/media/', a token of at most 64 bytes
+// and '/small.webp' make at most 349, so a longer one is not copied and the account shows its image.
+export const STATIC_URL_LIMIT = 512
+
+// The WHEN lines that judge one stored static value, in order: the storage class (TEXT affinity stores a number as
+// its text, so only a BLOB is refused), the raw bytes (an imported value may be malformed UTF-8, which length counts
+// as fewer characters), then NUL.
+function staticValueCases(value: string): string {
+	return `WHEN ${value} IS NULL THEN 0
+	WHEN typeof(${value}) <> 'text' THEN 1
+	WHEN length(CAST(${value} AS BLOB)) > ${STATIC_URL_LIMIT} THEN 1
+	WHEN instr(CAST(${value} AS BLOB), x'00') > 0 THEN 1`
+}
+
+// True when `value` is no static value accounts may store: what the writer judges before it copies a preview URL.
+export function staticUrlPastBoundSql(value: string): string {
+	return `CASE ${staticValueCases(value)}
+	ELSE 0 END`
+}
+
+// True when `row` holds a static past its stored bound, or one where the structure allows none: on a remote row (a
+// remote document never sets one, ID-3), or without its image.
+export function staticImagesPastBoundSql(row: string): string {
+	return (['avatar', 'header'] as const)
+		.map(
+			(image) => `CASE ${staticValueCases(`${row}.${image}_static_url`)}
+	WHEN ${row}.domain IS NOT NULL THEN 1
+	WHEN ${row}.${image}_url IS NULL THEN 1
+	ELSE 0 END`
+		)
+		.join('\n\tOR ')
+}
+
+// Migration 0061_account_static_images after its header (test/migrations.test.ts compares them): the two columns,
+// added without a default or CHECK so no row is read, and triggers that refuse a write where staticImagesPastBoundSql
+// holds. Every existing row holds NULL in both, which is within the bound.
+export function accountStaticImagesMigrationSql(): string {
+	return `${[
+		'ALTER TABLE accounts ADD COLUMN avatar_static_url TEXT;',
+		'ALTER TABLE accounts ADD COLUMN header_static_url TEXT;',
+		...boundTriggers(
+			'accounts_static_images',
+			'accounts',
+			'avatar_url, header_url, avatar_static_url, header_static_url, domain',
+			staticImagesPastBoundSql('NEW'),
+			'accounts: static image past its stored bound'
+		),
+	].join('\n\n')}\n`
+}
