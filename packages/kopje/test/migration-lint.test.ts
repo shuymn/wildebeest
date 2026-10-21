@@ -26,6 +26,7 @@ describe('migration lint', () => {
 			'0059_contact_and_activity',
 			'0060_account_moves',
 			'0061_account_static_images',
+			'0064_status_applications',
 		])
 		for (const m of DECLARED) {
 			expect(unchangedProblem(m.sql), m.name).toBeNull()

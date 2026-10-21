@@ -44,6 +44,7 @@ import {
 	accountStaticImagesMigrationSql,
 	accountWarningsMigrationSql,
 	ANNOUNCEMENT_TEXT_BYTES,
+	APP_ID_BYTES,
 	CONTACT_USERNAME_BYTES,
 	contactActivityMigrationSql,
 	EMOJI_CATEGORY_BYTES,
@@ -63,8 +64,10 @@ import {
 	MAX_TREND_TAGS,
 	profileBoundsMigrationSql,
 	REACTION_NAME_BYTES,
+	statusApplicationsMigrationSql,
 	storedBoundsMigrationSql,
 	storedInstanceSetting,
+	storedApplicationId,
 	storedSetting,
 	TREND_ALLOWED_ROWS,
 	TREND_REVIEW_POOL,
@@ -7773,5 +7776,108 @@ describe('0063_account_warning_notifications_key', () => {
 				.map((row) => row.detail)
 			expect(plan.join('\n')).toContain('notifications_natural')
 		})
+	})
+})
+
+describe('0064_status_applications', () => {
+	const NAME = '0064_status_applications'
+	const at = NAMES.indexOf(NAME)
+	const LOCAL = '100000000000000001'
+	const REMOTE = '100000000000000002'
+	const OWN = '100000000000000011'
+	const BOOST = '100000000000000012'
+	const THEIRS = '100000000000000013'
+	// A Kopje client id (43 base64url characters) and a converted legacy client's (a UUID).
+	const CLIENT = 'A'.repeat(42) + '_'
+	const LEGACY = '0b8c4a2e-6f1d-4e3a-9c7b-5d2e8f1a3b4c'
+	const REFUSED = /statuses: application_id past its stored bound/
+
+	it("holds statusApplicationsMigrationSql's output after its header", () => {
+		expect(at).toBeGreaterThan(-1)
+		expectGenerated(at, statusApplicationsMigrationSql())
+	})
+
+	it('keeps rows as they were with no app, then bounds the app as stored', async () => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+			sql.exec(
+				`INSERT INTO accounts (id, uri, username, domain) VALUES (?1, 'https://kopje.test/ap/users/a', 'a', NULL),
+					(?2, 'https://remote.test/users/b', 'b', 'remote.test')`,
+				LOCAL,
+				REMOTE
+			)
+			const status = (id: string, account: string, reblogOf: string | null = null) =>
+				sql.exec(
+					`INSERT INTO statuses (id, uri, account_id, reblog_of_id, visibility, content, published_at)
+					VALUES (?1, 'https://kopje.test/ap/o/' || ?1, ?2, ?3, 'public', '', '2026-10-22T00:00:00.000Z')`,
+					id,
+					account,
+					reblogOf
+				)
+			status(OWN, LOCAL)
+			status(BOOST, LOCAL, OWN)
+			status(THEIRS, REMOTE)
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+			expect(sql.exec('SELECT id, application_id FROM statuses ORDER BY id').toArray()).toEqual([
+				{ id: OWN, application_id: null },
+				{ id: BOOST, application_id: null },
+				{ id: THEIRS, application_id: null },
+			])
+			const blob = (text: string) => new TextEncoder().encode(text).buffer as ArrayBuffer
+			const update = (value: SqlStorageValue, id = OWN) =>
+				sql.exec('UPDATE statuses SET application_id = ? WHERE id = ?', value, id)
+			// In order: the storage class (TEXT affinity stores a number as its text, so a BLOB), 65 bytes, a NUL, a
+			// character outside base64url, the row (a boost, a remote author), and the empty string.
+			const refused: [string, SqlStorageValue, string?][] = [
+				['a BLOB', blob(CLIENT)],
+				['65 bytes', 'a'.repeat(APP_ID_BYTES + 1)],
+				['a NUL', `${CLIENT}\u0000`],
+				["a '*'", `${CLIENT.slice(1)}*`],
+				['on a boost', CLIENT, BOOST],
+				['by a remote author', CLIENT, THEIRS],
+				['empty', ''],
+				['a space', `${CLIENT.slice(1)} `],
+				['a non-ASCII letter', `${CLIENT.slice(1)}\u00e9`],
+			]
+			for (const [name, value, id] of refused) {
+				expect(() => update(value, id), name).toThrow(REFUSED)
+			}
+			for (const accepted of [CLIENT, LEGACY, 'a'.repeat(APP_ID_BYTES), '-', null]) {
+				update(accepted)
+				expect(sql.exec('SELECT application_id FROM statuses WHERE id = ?', OWN).one().application_id).toBe(accepted)
+			}
+			// The watched columns: a status holding an app never becomes a boost or a remote author's, and a deferred boost
+			// link of a row without one passes.
+			update(CLIENT)
+			expect(() => sql.exec('UPDATE statuses SET reblog_of_id = ? WHERE id = ?', THEIRS, OWN)).toThrow(REFUSED)
+			expect(() => sql.exec('UPDATE statuses SET account_id = ? WHERE id = ?', REMOTE, OWN)).toThrow(REFUSED)
+			sql.exec('UPDATE statuses SET reblog_of_id = NULL WHERE id = ?', BOOST)
+			sql.exec('UPDATE statuses SET reblog_of_id = ? WHERE id = ?', OWN, BOOST)
+			const insert = (id: string, account: string, value: SqlStorageValue, reblogOf: string | null = null) =>
+				sql.exec(
+					`INSERT INTO statuses (id, uri, account_id, reblog_of_id, visibility, content, published_at, application_id)
+					VALUES (?1, 'https://kopje.test/ap/o/' || ?1, ?2, ?3, 'public', '', '2026-10-22T00:00:00.000Z', ?4)`,
+					id,
+					account,
+					reblogOf,
+					value
+				)
+			expect(() => insert('100000000000000014', LOCAL, blob(CLIENT))).toThrow(REFUSED)
+			expect(() => insert('100000000000000014', LOCAL, CLIENT, OWN)).toThrow(REFUSED)
+			expect(() => insert('100000000000000014', REMOTE, CLIENT)).toThrow(REFUSED)
+			insert('100000000000000014', LOCAL, LEGACY)
+			expect(sql.exec('SELECT count(*) AS n FROM statuses WHERE application_id IS NOT NULL').one().n).toBe(2)
+		})
+	})
+
+	it('accepts exactly what storedApplicationId keeps', () => {
+		for (const value of [CLIENT, LEGACY, 'a'.repeat(APP_ID_BYTES), '-', '_']) {
+			expect(storedApplicationId(value)).toBe(value)
+		}
+		for (const value of ['', 'a'.repeat(APP_ID_BYTES + 1), `${CLIENT}\u0000`, `${CLIENT}*`, 'é', 42, null, undefined]) {
+			expect(storedApplicationId(value)).toBeNull()
+		}
 	})
 })

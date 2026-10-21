@@ -168,6 +168,7 @@ const NOT_CONVERTED: Record<string, string> = {
 	'status_edits.id': ASSIGNED,
 	'status_edits.emojis': 'legacy has no custom emoji',
 	'status_edits.poll_options': 'legacy has no polls',
+	'statuses.application_id': 'legacy records no app on a status: NULL, posted through no app',
 	'statuses.emojis': 'legacy has no custom emoji',
 	'statuses.quotes_count': 'counts accepted quotes, which legacy has none of',
 	'statuses.quote_policy':
@@ -244,6 +245,7 @@ const NOT_VERIFIED: Record<string, string> = {
 	'status_edits.created_at': TIME,
 	'status_edits.id': DEFAULT,
 	'status_edits.poll_options': DEFAULT,
+	'statuses.application_id': DEFAULT,
 	'statuses.client_key': "Idempotency-Key, read only to answer a client's retried post with the status it made",
 	'statuses.created_at': TIME,
 	'statuses.favourites_count': COUNTER,
