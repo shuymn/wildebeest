@@ -9,7 +9,7 @@ import { BUILD, claimAndSettle } from './helpers'
 import { mastodonActor } from './inbox-helpers'
 import { ALICE, ALICE_URI, AS, DAVE_URI, setup as inboxSetup } from './inbox-status-helpers'
 import { deliveryDeps, gatedHost } from './quote-helpers'
-import { rowsRead } from './read-helpers'
+import { plannedRun, rowsRead, scansOf, staleStatistics } from './read-helpers'
 import { act, receive, toFollows, unsuspend, uriOf, world } from './remote-suspension-helpers'
 import { post, remoteAccount, remoteFollows } from './status-helpers'
 import {
@@ -649,6 +649,60 @@ describe('bounds and refusals (RES-6)', () => {
 			expect(detail.join('\n')).not.toContain('TEMP B-TREE')
 		}
 	})
+
+	it("keeps those seeks with statistics taken before other activities' rows grew (RES-7)", async () => {
+		const t = await setup()
+		await outage(t)
+		await followFrom(t)
+		const discovery = readOperation<{ signer: string; follower: string }, unknown>((db, { signer, follower }) =>
+			followAnswersOf(db, signer, follower)
+		)
+		const run = () =>
+			plannedRun(t.w.h, /FROM (deliveries|outbound_targets)\b/, discovery, { signer: t.w.alice.id, follower: t.r })
+		const { before, after } = await staleStatistics(t.w.h, {
+			capture: () => run(),
+			grow: async () => {
+				// Other activities of alice's, each with rows and unexpanded targets.
+				await sql(
+					t.store,
+					`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 10000)
+					INSERT INTO outbound_activities (id, account_id, body, object_uri, superseded, created_at)
+					SELECT 1000000 + i, ?1, '{"activity":{"type":"Like"},"audience":{"followers":false,"accounts":[]}}', 'x', 0, 0
+					FROM n`,
+					t.w.alice.id
+				)
+				await sql(
+					t.store,
+					`INSERT INTO deliveries (activity_id, account_id, inbox_url, lane, state, next_attempt_at, updated_at)
+					SELECT id, account_id, 'https://o' || id || '.example/inbox', 'https://o' || id || '.example', 'gave_up', 0, 0
+					FROM outbound_activities WHERE id > 1000000`
+				)
+				await sql(
+					t.store,
+					`INSERT INTO outbound_targets (activity_id, targets) SELECT id, '[]' FROM outbound_activities WHERE id > 1000000`
+				)
+			},
+		})
+		expect(after.result).toEqual(before.result)
+		expect(after.result).toMatchObject({ intents: [expect.any(String)], rows: [{ state: 'queued' }] })
+		expect(after.plans.map((p) => p.plan)).toEqual([
+			[
+				'SEARCH deliveries USING INDEX deliveries_activity (activity_id=?)',
+				'LIST SUBQUERY 1',
+				'SCAN json_each VIRTUAL TABLE INDEX 1:',
+			],
+			[
+				'SEARCH outbound_targets USING COVERING INDEX outbound_targets_activity (activity_id=?)',
+				'LIST SUBQUERY 1',
+				'SCAN json_each VIRTUAL TABLE INDEX 1:',
+			],
+		])
+		for (const [i, { plan, rows }] of after.plans.entries()) {
+			expect(scansOf(plan, ['deliveries', 'outbound_targets'])).toEqual([])
+			// One entry past the activities' own in each index at most.
+			expect(rows - before.plans[i]!.rows).toBeLessThanOrEqual(1)
+		}
+	}, 60_000)
 
 	// An imported pair history far past the bound: the discovery reads the same rows as at the bound, then refuses.
 	it('reads a bounded number of rows however long the pair’s history is, before its 503', async () => {

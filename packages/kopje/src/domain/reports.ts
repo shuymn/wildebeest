@@ -29,6 +29,7 @@ import { readOperation } from './operation'
 import { actorUriSql, usernameSql } from './profile-bounds'
 import { LARGE_ITEM_CHUNKS, presentation, type Status, statusStream } from './status-presenter'
 import { accountStatusIds } from './timelines'
+import { ACCOUNTS_URI_INDEX, STATUSES_URI_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
 import { blockedDomain } from '../platform/domain-name'
 import { ACTIVITY_ID_LIMIT, withinIdentityBound } from '../platform/identity-bounds'
@@ -234,15 +235,17 @@ export function fileRemoteReports(
 		return { filed: false, reason: 'reports-rejected' }
 	}
 	const objects = JSON.stringify(flagObjects(flag.objects))
+	// Each object sought by uri among the accounts and the statuses (RES-7).
 	const accounts = db.all<{ id: string; local: number; available: number }>(
 		`SELECT a.id, a.domain IS NULL AS local, ${availableSql('a.id')} AS available
-		FROM json_each(?1) j JOIN accounts a ON a.uri = j.value ORDER BY j.key`,
+		FROM json_each(?1) j CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_URI_INDEX} ON a.uri = j.value ORDER BY j.key`,
 		objects
 	)
 	const statuses = db.all<{ id: string; account_id: string; replies_to_local: number }>(
 		`SELECT s.id, s.account_id,
 			EXISTS (SELECT 1 FROM local_accounts l WHERE l.account_id = s.in_reply_to_account_id) AS replies_to_local
-		FROM json_each(?1) j JOIN statuses s ON s.uri = j.value WHERE s.reblog_of_id IS NULL ORDER BY j.key`,
+		FROM json_each(?1) j CROSS JOIN statuses s INDEXED BY ${STATUSES_URI_INDEX} ON s.uri = j.value
+		WHERE s.reblog_of_id IS NULL ORDER BY j.key`,
 		objects
 	)
 	const repliesToLocal = (target: string) =>

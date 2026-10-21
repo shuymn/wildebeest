@@ -974,12 +974,13 @@ export type FollowAnswers = {
 
 // The discovery's statements (exported for their plan and rows-read tests). Each LIMIT stops an index seek: the
 // intents are ordered by the numeric column (`ORDER BY id` would name the text alias and sort the whole backlog), and
-// the rows and chunks need no order.
+// the rows and chunks need no order. The rows name deliveries_activity: statistics older than the Store's growth would
+// scan the deliveries (RES-7).
 export const FOLLOW_ANSWER_INTENTS_SQL = `SELECT CAST(o.id AS TEXT) AS id
 	FROM outbound_activities o INDEXED BY outbound_activities_follow_pair
 	WHERE o.account_id = ? AND o.follow_pair = ? ORDER BY o.id LIMIT ?`
-export const FOLLOW_ANSWER_ROWS_SQL = `SELECT CAST(id AS TEXT) AS id, account_id, lane, state, exposed FROM deliveries
-	WHERE activity_id IN (SELECT CAST(value AS INTEGER) FROM json_each(?)) LIMIT ?`
+export const FOLLOW_ANSWER_ROWS_SQL = `SELECT CAST(id AS TEXT) AS id, account_id, lane, state, exposed
+	FROM deliveries INDEXED BY deliveries_activity WHERE activity_id IN (SELECT CAST(value AS INTEGER) FROM json_each(?)) LIMIT ?`
 export const FOLLOW_ANSWER_CHUNKS_SQL = `SELECT CAST(id AS TEXT) AS id FROM outbound_targets
 	WHERE activity_id IN (SELECT CAST(value AS INTEGER) FROM json_each(?)) LIMIT ?`
 
