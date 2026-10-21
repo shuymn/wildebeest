@@ -111,6 +111,11 @@ Instance and apps (`/api/v1/apps`, `/api/v{1,2}/instance`, `/api/v1/preferences`
 - The reading preferences, `reading:autoplay:gifs` included, are Mastodon's defaults; no setting stores them.
 - `contact_username` and `contact_email` can each be removed alone (Mastodon's admin form requires both).
 
+Search (`/api/v2/search`, `/api/v1/accounts/search`):
+
+- With `resolve=true`, an `acct:user@domain` query is resolved as `user@domain` is; Mastodon's `MENTION_RE` gate
+  (`account_search_service.rb`, `username_complete?`) does not take the `acct:` form.
+
 Request parameters:
 
 - Of repeated parts of a declared file parameter (`avatar`, `header`, `file`), text or file, the last is the one read,

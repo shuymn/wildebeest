@@ -84,7 +84,7 @@ below the cursor. Unread counts and markers are not read by admission.
 
 | Operation                                                                 | Mechanism                                | Continuation         |
 | ------------------------------------------------------------------------- | ---------------------------------------- | -------------------- |
-| `searchAccounts`                                                          | Budget                                   | Offset               |
+| `searchAccounts`                                                          | Budget (the resolved account first)      | Offset               |
 | `listAccounts` and `listEndorsements` with `limit=0`, `familiarFollowers` | Budget                                   | Id cursor (`max_id`) |
 | `getAccounts`                                                             | Count (40 accounts)                      |                      |
 | `getAccount`, `lookupAccount`, `verifyCredentials`, `updateCredentials`   | Unit                                     |                      |
