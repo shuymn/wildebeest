@@ -1,3 +1,5 @@
+import { withinIdentityBound } from './identity-bounds'
+
 // A stored URL as it may be emitted to clients and peers (HTML-3): parsed, absolute, and http: or https:, else null.
 // Applied at the presenters, so imported and federated values are covered whatever was stored.
 export function httpUrl(value: string | null): URL | null {
@@ -41,4 +43,11 @@ export function publicShapeRefusal(url: URL): string | null {
 export function boundedHref(value: string | null, limit: number): string | null {
 	const href = httpUrl(value)?.href ?? null
 	return href !== null && href.length <= limit ? href : null
+}
+
+// boundedHref within `limit` as JSON writes it too (escapes, without the quotes): a serialized URL may keep a '\' in
+// its query or fragment, which JSON doubles.
+export function jsonHref(value: string | null, limit: number): string | null {
+	const href = boundedHref(value, limit)
+	return href !== null && withinIdentityBound(href, limit) ? href : null
 }

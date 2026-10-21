@@ -46,8 +46,9 @@ import {
 import { selectSql } from '../db/columns'
 import { ACCOUNTS_ID_INDEX, MEDIA_ID_INDEX, STATUSES_ID_INDEX } from '../db/indexes'
 import { type Db, RowCapExceeded, RowMeter } from '../db/sql'
-import { boundedHref } from '../platform/http-url'
-import { STATUS_EMOJIS_BYTES } from '../platform/stored-bounds'
+import { boundedHref, jsonHref } from '../platform/http-url'
+import { railsBlank } from '../platform/rails-blank'
+import { APP_WEBSITE_LIMIT, presentedAppName, STATUS_EMOJIS_BYTES } from '../platform/stored-bounds'
 import { remotePlainText } from '../security/html'
 
 // The Status entity as Mastodon 4.0.2's REST::StatusSerializer shows it. One presenter for every read path: it takes
@@ -104,6 +105,9 @@ export type QuoteApproval = {
 	current_user: 'automatic' | 'manual' | 'unknown' | 'denied'
 }
 
+// Mastodon's REST::StatusSerializer application (ApplicationSerializer): the app a local status was posted through.
+export type StatusApplication = { name: string; website: string | null }
+
 export type Status = {
 	id: string
 	created_at: string
@@ -129,6 +133,7 @@ export type Status = {
 	content?: string
 	text?: string
 	reblog: Status | null
+	application?: StatusApplication | null
 	account: Account
 	media_attachments: MediaAttachment[]
 	mentions: Mention[]
@@ -165,6 +170,8 @@ export type StatusRow = {
 	author_uri: string
 	author_username: string
 	author_domain: string | null
+	application_name: string | null
+	application_website: string | null
 }
 
 // viewer: the viewer (accountId null: anonymous) and the request time, which a poll's expiry is judged at.
@@ -658,6 +665,7 @@ function hydrate(
 			...viewer,
 			...body,
 			reblog,
+			...(row.author_domain === null ? { application: presentApplication(row) } : {}),
 			account,
 			media_attachments: (media.get(row.id) ?? []).map(presentMedia),
 			mentions: (mentions.get(row.id) ?? []).map((m) => ({
@@ -694,6 +702,22 @@ function hydrate(
 	return (id) => {
 		const row = byId.get(id)
 		return row === undefined ? undefined : presentRow(row, 'top')
+	}
+}
+
+// A local status's application, as Mastodon shows it for an author at its default show_application (Kopje has no such
+// setting, docs/mastodon-deviations.md): null when its id names no app Kopje keeps (a boost, a status posted before
+// 0064_status_applications or through a removed app) or the app's name does not pass presentedAppName; the website
+// when it is not blank (Rails' presence) and passes jsonHref, else null. Viewer-independent.
+function presentApplication(row: StatusRow): StatusApplication | null {
+	const name = presentedAppName(row.application_name)
+	if (name === null) {
+		return null
+	}
+	const website = row.application_website
+	return {
+		name,
+		website: website === null || railsBlank(website) ? null : jsonHref(website, APP_WEBSITE_LIMIT),
 	}
 }
 

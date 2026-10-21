@@ -3,7 +3,7 @@ import { runInDurableObject } from 'cloudflare:test'
 import fc from 'fast-check'
 import { describe, expect, it, vi } from 'vitest'
 
-import { type ApiHarness, bearer, json, sql } from './api-helpers'
+import { type ApiHarness, bearer, json, login, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { BUILD } from './helpers'
 import {
@@ -97,6 +97,16 @@ function publishDirectly(h: ApiHarness, id: string, now: number) {
 	)
 }
 
+// The client_id of the app the user's token was issued to.
+async function clientOf(h: ApiHarness, user: User): Promise<string> {
+	const [row] = await sql<{ client_id: string }>(
+		h.store,
+		'SELECT client_id FROM oauth_tokens WHERE token_hash = ?',
+		await sha256Hex(user.token)
+	)
+	return row!.client_id
+}
+
 async function count(h: ApiHarness, table: string): Promise<number> {
 	return (await sql<{ n: number }>(h.store, `SELECT count(*) AS n FROM ${table}`))[0]?.n ?? 0
 }
@@ -129,7 +139,8 @@ describe('scheduling a status', () => {
 				language: 'en',
 				scheduled_at: null,
 				in_reply_to_id: parent.id,
-				application_id: null,
+				// The client_id of the app it was scheduled through.
+				application_id: await clientOf(h, alice),
 				idempotency: null,
 				with_rate_limit: false,
 				allowed_mentions: null,
@@ -718,6 +729,56 @@ describe('publication', () => {
 			expect(publication, name).toMatchObject(
 				outcome === 'published' ? { status: 'published' } : { status: 'dropped', reason: 'params' }
 			)
+		}
+	})
+
+	it('publishes through the app it was scheduled through, kept as stored when the app is gone', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const client = await clientOf(h, alice)
+		const second = await login(h, { email: 'alice@example.com', scope: 'read write follow' })
+		const viaSecond = { id: alice.id, token: second.token }
+		const kept = await scheduled(h, alice, { status: 'kept', scheduled_at: at(NOW + HOUR) })
+		const orphaned = await scheduled(h, viaSecond, { status: 'orphaned', scheduled_at: at(NOW + HOUR) })
+		expect(orphaned.params.application_id).toBe(second.app.client_id)
+		// The second app is removed before the publication (its tokens go with it).
+		await sql(h.store, 'DELETE FROM oauth_clients WHERE id = ?', second.app.client_id)
+		const publish = async (id: string) => {
+			const publication = await publishDirectly(h, id, NOW + HOUR)
+			expect(publication).toMatchObject({ status: 'published' })
+			return (publication as { statusId: string }).statusId
+		}
+		const keptId = await publish(kept.id)
+		const orphanedId = await publish(orphaned.id)
+		// The dangling id is stored as the params held it, and presents no app.
+		const stored = async (id: string) =>
+			(await sql<{ application_id: string | null }>(h.store, 'SELECT application_id FROM statuses WHERE id = ?', id))[0]
+		expect(await stored(keptId)).toEqual({ application_id: client })
+		expect(await stored(orphanedId)).toEqual({ application_id: second.app.client_id })
+		const shown = async (id: string) => (await getJson<Status>(h, `/api/v1/statuses/${id}`)).body
+		expect(await shown(keptId)).toHaveProperty('application', { name: 'Test Client', website: 'https://client.test/' })
+		expect(await shown(orphanedId)).toHaveProperty('application', null)
+	})
+
+	it('publishes a restored row whose application_id the bound refuses without an app', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const restored: [string, unknown][] = [
+			['a number', 42],
+			['65 characters', 'a'.repeat(65)],
+			['outside base64url', 'client*one'],
+			['absent', undefined],
+		]
+		for (const [name, value] of restored) {
+			const created = await scheduled(h, alice, { status: name, scheduled_at: at(NOW + HOUR) })
+			const params = { ...created.params, application_id: value }
+			await sql(h.store, 'UPDATE scheduled_statuses SET params = ? WHERE id = ?', JSON.stringify(params), created.id)
+			const publication = await publishDirectly(h, created.id, NOW + HOUR)
+			expect(publication, name).toMatchObject({ status: 'published' })
+			const statusId = (publication as { statusId: string }).statusId
+			expect(await sql(h.store, 'SELECT application_id FROM statuses WHERE id = ?', statusId), name).toEqual([
+				{ application_id: null },
+			])
 		}
 	})
 

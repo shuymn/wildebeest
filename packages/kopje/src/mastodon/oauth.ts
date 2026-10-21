@@ -13,13 +13,16 @@ import { bearerChallenge, INVALID_TOKEN, mastodonError } from './errors'
 import { type Params, type ReadOptions, readParams } from './params'
 import { type Client, type IntrospectionCaller, OOB_REDIRECT_URI } from '../domain/oauth'
 import { railsBlank } from '../platform/rails-blank'
+import { APP_NAME_LIMIT, APP_WEBSITE_LIMIT } from '../platform/stored-bounds'
 import { DEFAULT_SCOPES, parseScopes, SCOPES } from '../security/scopes'
 import { PKCE_VERIFIER, pkceChallenge, sha256Hex } from '../security/tokens'
 
 // App registration, the OAuth token, revocation, token info, introspection and userinfo endpoints, and the
 // authorization server metadata. /oauth/authorize (behind Access) lives in app/authorize.tsx.
 
-const MAX_NAME = 255
+// The name, in code points, and the website, in characters, as Mastodon's ApplicationExtension validates them
+// (APP_NAME_LIMIT and APP_WEBSITE_LIMIT, app/lib/application_extension.rb:6, :8, :15, :17, v4.5.11): the bounds a
+// status presents its app within (platform/stored-bounds.ts).
 const MAX_REDIRECT_URIS = 10
 const MAX_URI = 2000
 
@@ -76,8 +79,8 @@ export const registerApp: ApiHandler = async (c, deps) => {
 	const scopes = parseScopes(p.get('scopes'))
 	const website = (p.get('website') ?? '').trim()
 	const problems: string[] = []
-	if (name === '' || name.length > MAX_NAME) {
-		problems.push("Application name can't be blank or longer than 255 characters")
+	if (name === '' || [...name].length > APP_NAME_LIMIT) {
+		problems.push(`Application name can't be blank or longer than ${APP_NAME_LIMIT} characters`)
 	}
 	if (redirectUris.length === 0 || redirectUris.length > MAX_REDIRECT_URIS || !redirectUris.every(validRedirectUri)) {
 		problems.push('Redirect URI must be an absolute URI.')
@@ -132,7 +135,7 @@ export function validRedirectUri(uri: string): boolean {
 }
 
 function validWebsite(uri: string): boolean {
-	const url = uri.length > MAX_URI ? null : parseUrl(uri)
+	const url = uri.length > APP_WEBSITE_LIMIT ? null : parseUrl(uri)
 	return url !== null && ['http:', 'https:'].includes(url.protocol)
 }
 
