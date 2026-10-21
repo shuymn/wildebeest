@@ -153,6 +153,7 @@ refused: after a cutover, set them once the import is published. Only the Access
 ```sh
 kopje-admin instance                                   # show them, with the documents' stamps
 kopje-admin instance title='Our herd' description='A small server' contact_email=admin@example.com
+kopje-admin instance contact_username=alice            # or bob@example.com: an account Kopje knows
 kopje-admin instance privacy_policy --file privacy.html
 kopje-admin instance terms_of_service --file terms.html terms_of_service_effective_date=2026-11-01
 kopje-admin instance show_domain_blocks=users show_domain_blocks_rationale=disabled
@@ -169,21 +170,25 @@ kopje-admin trends approve <post id> --author          # or reject; --author dec
 kopje-admin instance trends=false                      # turn trends off (the lists answer [])
 ```
 
-| Name                                                 | Bound                              | Shown by                                                 |
-| ---------------------------------------------------- | ---------------------------------- | -------------------------------------------------------- |
-| `title`                                              | 1,024 code points                  | `/api/v1/instance`, `/api/v2/instance`, `/about`         |
-| `description`                                        | 200 code points (Mastodon's limit) | the same                                                 |
-| `contact_email`                                      | an email address, 254 UTF-8 bytes  | the same                                                 |
-| `extended_description`                               | HTML, 50,000 UTF-8 bytes           | `/api/v1/instance/extended_description`, `/about`        |
-| `privacy_policy`                                     | HTML, 50,000 UTF-8 bytes           | `/api/v1/instance/privacy_policy`, `/privacy-policy`     |
-| `terms_of_service`                                   | HTML, 50,000 UTF-8 bytes           | `/api/v1/instance/terms_of_service`, `/terms-of-service` |
-| `terms_of_service_effective_date`                    | a date, `YYYY-MM-DD`               | the same                                                 |
-| `show_domain_blocks`, `show_domain_blocks_rationale` | `disabled`, `users` or `all`       | `/api/v1/instance/domain_blocks`                         |
-| `trends`                                             | `true` (default) or `false`        | `/api/v1/trends/tags` and `/statuses` (off: `[]`)        |
-| `trendable_by_default`                               | `true` or `false` (default)        | the same: unreviewed hashtags and posts trend when true  |
+| Name                                                 | Bound                                 | Shown by                                                 |
+| ---------------------------------------------------- | ------------------------------------- | -------------------------------------------------------- |
+| `title`                                              | 1,024 code points                     | `/api/v1/instance`, `/api/v2/instance`, `/about`         |
+| `description`                                        | 200 code points (Mastodon's limit)    | the same                                                 |
+| `contact_email`                                      | an email address, 254 UTF-8 bytes     | the same                                                 |
+| `contact_username`                                   | an account's address, 509 UTF-8 bytes | `contact_account` (v1), `contact.account` (v2)           |
+| `extended_description`                               | HTML, 50,000 UTF-8 bytes              | `/api/v1/instance/extended_description`, `/about`        |
+| `privacy_policy`                                     | HTML, 50,000 UTF-8 bytes              | `/api/v1/instance/privacy_policy`, `/privacy-policy`     |
+| `terms_of_service`                                   | HTML, 50,000 UTF-8 bytes              | `/api/v1/instance/terms_of_service`, `/terms-of-service` |
+| `terms_of_service_effective_date`                    | a date, `YYYY-MM-DD`                  | the same                                                 |
+| `show_domain_blocks`, `show_domain_blocks_rationale` | `disabled`, `users` or `all`          | `/api/v1/instance/domain_blocks`                         |
+| `trends`                                             | `true` (default) or `false`           | `/api/v1/trends/tags` and `/statuses` (off: `[]`)        |
+| `trendable_by_default`                               | `true` or `false` (default)           | the same: unreviewed hashtags and posts trend when true  |
 
 - Values are trimmed of spaces, tabs, line feeds, vertical tabs, form feeds and carriage returns; a blank value is
   refused (send an empty value to remove one). The whole request is refused if any value is.
+- `contact_username` takes `user` or `user@domain`, with an optional leading `@`; the instance's own domain names a
+  local account. The account must exist: Kopje stores its address as the account holds it (`Alice` for `alice`), and
+  shows the account presented as `GET /api/v1/accounts/:id` shows it (redacted while unavailable, none once deleted).
 - Documents are HTML, sanitized when served: convert Markdown to HTML first. A document that sanitizes to no text is
   refused. `--file` sends the file's text and the other values in one request.
 - The terms of service and their effective date are set together: a first `terms_of_service` needs

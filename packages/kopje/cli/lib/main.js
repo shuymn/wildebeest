@@ -98,7 +98,8 @@ Commands
   instance                      show the instance's public settings and the documents' stamps
   instance <name>=<value>|<name>= ...
                                 set (or with an empty value, remove) them in one request; names: title,
-                                description, contact_email, extended_description, privacy_policy, terms_of_service,
+                                description, contact_email, contact_username (user or user@domain),
+                                extended_description, privacy_policy, terms_of_service,
                                 terms_of_service_effective_date (YYYY-MM-DD), show_domain_blocks and
                                 show_domain_blocks_rationale (disabled, users or all), trends and
                                 trendable_by_default (true or false). They are data: set them after a

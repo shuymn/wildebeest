@@ -58,8 +58,8 @@ export const CREDENTIAL_EPOCH_SQL =
 	'coalesce((SELECT credential_epoch FROM main.local_accounts WHERE account_id = ?), 0)'
 
 // One indexed lookup by the token's sha256, then its client and account by key, the join order pinned so stale
-// statistics cannot pick a scan of either (RES-7; test/activity.test.ts). A suspended account's tokens are refused even if one survived the
-// suspension, and a token of an earlier epoch is refused as invalid (currentCredentialSql).
+// statistics cannot pick a scan of either (RES-7; test/activity.test.ts). A suspended account's tokens are refused even
+// if one survived the suspension, and a token of an earlier epoch is refused as invalid (currentCredentialSql).
 export function authorize(db: Db, credential: Credential): AuthFailure | { status: 'ok'; viewer: Viewer } {
 	const row = db.first<{
 		scopes: string

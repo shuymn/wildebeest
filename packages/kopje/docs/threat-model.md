@@ -1738,6 +1738,13 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   20 requests, each in its own transaction through the single authorize path (its delivery admission and recount
   included), and every step advances or clears the cursor (`src/domain/unlock-accepts.ts`;
   `test/unlock-accepts.test.ts`: 250 requests in rounds of at most 20).
+  Activity: _Enforced (main):_ after the response of an authenticated request (below 400) or a signed-in settings
+  page, the Worker sends at most one `noteActivity` per isolate, token and UTC day, a best-effort memo of at most 1,024
+  tokens cleared at the day change; the Store's conditional UPDATE writes an account's `active_on` at most once per UTC
+  day and never backwards, by key only (the token, its client and the account, the join order pinned), and starts no
+  stream turn (`src/domain/auth.ts`, `src/mastodon/activity.ts`; `test/activity.test.ts` ("sends no call until the next
+  day", "writes one row per account and day whichever token asks", "seeks the token, its client and the account by
+  key"), `test/streaming/activity.test.ts` ("asks for no turn")).
   _Enforced (main)_ for scheduled statuses: an account holds at most 300, at most 25 on one UTC day, each at least 5
   minutes ahead (Mastodon's limits, 422 with its messages); the cron publishes at most 25 a run, the earliest due first,
   each in its own transaction that deletes the row as it writes the status, so overlapping runs and retries publish it

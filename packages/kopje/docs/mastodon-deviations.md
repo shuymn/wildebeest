@@ -74,6 +74,19 @@ Profile credentials (`PATCH /api/v1/accounts/update_credentials`, the settings p
 - While a media rebuild holds its lease, a profile edit answers 503, since replacing an image dooms the upload behind
   it.
 
+Instance and apps (`/api/v1/apps`, `/api/v{1,2}/instance`, `/api/v1/preferences`):
+
+- An application's `id` is its `client_id`, Kopje's only stable key of an application; the `client_id` is a public
+  identifier (RFC 6749 §2.2).
+- `usage.users.active_month` counts the available local accounts with an authenticated API or web request on one of the
+  last 28 UTC days, today included. Each account's day is recorded at most once a day, after the response, and a
+  request made while a dump holds the Store may go unrecorded. Mastodon counts logins over the 28 days before today,
+  suspended users included.
+- `thumbnail` is always Kopje's default image; there is no upload.
+- `languages` is `["en"]`, the web UI's language.
+- The reading preferences, `reading:autoplay:gifs` included, are Mastodon's defaults; no setting stores them.
+- `contact_username` and `contact_email` can each be removed alone (Mastodon's admin form requires both).
+
 Request parameters:
 
 - Of repeated parts of a declared file parameter (`avatar`, `header`, `file`), text or file, the last is the one read,

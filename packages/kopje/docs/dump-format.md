@@ -195,6 +195,14 @@ after a restore. Any other value fails with `accept_requests_after_cursor`. A du
 column: it restores into a Store at its own migrations, which then upgrades. A file built from legacy data writes NULL
 for both.
 
+The contact account and activity (migration `0059_contact_and_activity`): `local_accounts.active_on` is NULL (never
+recorded) or a UTC date `YYYY-MM-DD` of 10 bytes, the account's last day with an authenticated request; anything else
+fails with `active_on_date`. An `instance_settings` row named `contact_username` holds an account's address, `user` or
+`user@domain` (ASCII letters, digits and `-._`, one `@` at most and at neither end, a username of at most 255 bytes,
+509 UTF-8 bytes in all, text only); anything else fails with `instance_settings: a value past its stored bound`. A dump
+taken before 0059 has neither: it restores into a Store at its own migrations, which then upgrades. A file built from
+legacy data writes NULL for `active_on` and no `contact_username` row.
+
 A report (migration `0054_remote_reports`) names any account as its reporter (`account_id`), once per `uri` and
 reported account, with `status_ids` of at most 100 ids within 2,101 UTF-8 bytes (compact JSON of 18-digit ids), a
 `uri` within 4,096 JSON-escaped UTF-8 bytes and a `comment` within 20,000 UTF-8 bytes (and 5,000 code points up to any

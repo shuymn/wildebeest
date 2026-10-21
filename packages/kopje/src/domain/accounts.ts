@@ -545,8 +545,9 @@ export const getAccounts = readOperation<{ ids: string[]; present: Present }, Ac
 
 // The account an address names, domain null for a local one, matched case-insensitively as Mastodon's
 // Account.find_remote: by accounts_local_username or accounts_domain_username, named so the seek does not rest on the
-// Store's statistics (RES-7), as is the account's local row. stored_username is the username as stored, not usernameSql's projection: a matching row's
-// username has the bytes of `username` (SQLite's lower changes ASCII letters only), so it is bounded by the caller's.
+// Store's statistics (RES-7), as is the account's local row. stored_username is the username as stored, not
+// usernameSql's projection: a matching row's username has the bytes of `username` (SQLite's lower changes ASCII
+// letters only), so it is bounded by the caller's.
 function addressRow(
 	db: Db,
 	username: string,

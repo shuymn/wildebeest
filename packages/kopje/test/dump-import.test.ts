@@ -372,8 +372,8 @@ describe('dump', () => {
 			expect(sql.exec('SELECT active_on FROM local_accounts').toArray()).toEqual([{ active_on: '2026-10-21' }])
 			expect(sql.exec("SELECT value FROM instance_settings WHERE name = 'contact_username'").one().value).toBe('alice')
 		})
-		// A dump from elsewhere, as its text could hold it: a date that is none, a contact_username of the wrong shape and one
-		// of another storage class.
+		// A dump from elsewhere, as its text could hold it: a date that is none, a contact_username of the wrong shape and
+		// one of another storage class.
 		const contact = (value: string) => text.replace("'contact_username','alice'", `'contact_username',${value}`)
 		expect(contact("'x'")).not.toBe(text)
 		for (const [dump, refused] of [
