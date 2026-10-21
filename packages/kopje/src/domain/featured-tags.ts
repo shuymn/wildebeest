@@ -48,8 +48,7 @@ type FeaturedRow = {
 
 // A remote account's statuses within its window that count for the featured hashtag `f`: its newest
 // FEATURED_COUNT_WINDOW (by statuses_account) that are public or unlisted originals with the hashtag, each a key lookup.
-// A read shows at most MAX_FEATURED_TAGS of an account, so it reads at most that many windows. Each status of the
-// window is sought by id (RES-7).
+// A read shows at most MAX_FEATURED_TAGS of an account, so it reads at most that many windows.
 const REMOTE_COUNTED = `FROM statuses s INDEXED BY ${STATUSES_ID_INDEX}
 	WHERE s.id IN (SELECT id FROM statuses WHERE account_id = f.account_id ORDER BY id DESC LIMIT ${FEATURED_COUNT_WINDOW})
 		AND s.reblog_of_id IS NULL AND s.visibility IN ${DISTRIBUTABLE_SQL}

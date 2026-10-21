@@ -363,8 +363,7 @@ function targetsOf(
 	}
 }
 
-// The receipts of a status read from its uri: the status by its unique uri, then its receipts by (signer, status), never
-// the signer's other receipts (RES-7).
+// Seek the status by unique URI, then its receipts by (signer, status) (RES-7).
 const RECEIPTS_OF = `statuses s INDEXED BY ${STATUSES_URI_INDEX}
 	CROSS JOIN outbound_receipts r INDEXED BY outbound_receipts_account ON r.status_id = s.id`
 

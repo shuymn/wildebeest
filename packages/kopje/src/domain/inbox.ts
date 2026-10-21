@@ -1364,7 +1364,7 @@ export function purgeBatch(db: Db, uri: string, now: number): boolean {
 	// notification of it.
 	const others = accountHasRows(db, id, false)
 	if (!others) {
-		spendEach(
+		spend(
 			db,
 			budget,
 			{
@@ -1374,7 +1374,7 @@ export function purgeBatch(db: Db, uri: string, now: number): boolean {
 			},
 			id
 		)
-		spendEach(
+		spend(
 			db,
 			budget,
 			{
@@ -1414,17 +1414,14 @@ function changes(db: Db): number {
 	return db.first<{ n: number }>('SELECT total_changes() AS n')?.n ?? 0
 }
 
-// Runs a write limited to the rows left: `sql` takes the row limit as its last parameter.
-function spend(db: Db, budget: Budget, sql: string, ...params: SqlStorageValue[]): number {
+// Runs a write limited to the rows left: `write` (a statement, or a ByIds write's selection) takes the row limit as its
+// last parameter.
+function spend(db: Db, budget: Budget, write: string | ByIds, ...params: SqlStorageValue[]): number {
 	const left = budget.left()
-	return left === 0 ? 0 : db.run(sql, ...params, left)
-}
-
-// Runs a ByIds write limited to the rows left (the row limit its selection's last parameter); the budget counts its
-// rows as it counts spend's.
-function spendEach(db: Db, budget: Budget, write: ByIds, ...params: SqlStorageValue[]): number {
-	const left = budget.left()
-	return left === 0 ? 0 : writeEach(db, write, ...params, left)
+	if (left === 0) {
+		return 0
+	}
+	return typeof write === 'string' ? db.run(write, ...params, left) : writeEach(db, write, ...params, left)
 }
 
 // The first ?2 reports of the account ?1 in the order reports_target_state holds them (resolution state, then id), so
@@ -1448,7 +1445,7 @@ const SENDER_WINDOW = `SELECT id FROM notifications INDEXED BY notifications_fro
 // until its pushes are, so every row written is counted and none is read past the window, however many reports the
 // account has or made.
 function purgeReports(db: Db, budget: Budget, id: string, window: string): void {
-	spendEach(
+	spend(
 		db,
 		budget,
 		{
@@ -1459,7 +1456,7 @@ function purgeReports(db: Db, budget: Budget, id: string, window: string): void 
 		},
 		id
 	)
-	spendEach(
+	spend(
 		db,
 		budget,
 		{
@@ -1470,7 +1467,7 @@ function purgeReports(db: Db, budget: Budget, id: string, window: string): void 
 		},
 		id
 	)
-	spendEach(
+	spend(
 		db,
 		budget,
 		{
@@ -1543,7 +1540,7 @@ function purgeRelationships(db: Db, id: string, budget: Budget): void {
 	)
 	// The tracked Like ids of its first favourites (FAVOURITE_WINDOW), at most MAX_TRACKED_LIKES each; then each
 	// favourite of the window that tracks none: its delete and its status's recount, two rows, cascading nothing.
-	spendEach(
+	spend(
 		db,
 		budget,
 		{
@@ -1571,7 +1568,7 @@ function purgeRelationships(db: Db, id: string, budget: Budget): void {
 	purgeReports(db, budget, id, REPORTER_WINDOW)
 	// Its other notifications, child-first from its first ones by id (SENDER_WINDOW): their pushes (up to
 	// MAX_PUSH_BACKLOG each), then each notification left without one, so no delete cascades.
-	spendEach(
+	spend(
 		db,
 		budget,
 		{
@@ -1581,7 +1578,7 @@ function purgeRelationships(db: Db, id: string, budget: Budget): void {
 		},
 		id
 	)
-	spendEach(
+	spend(
 		db,
 		budget,
 		{
@@ -1600,7 +1597,7 @@ function purgeRelationships(db: Db, id: string, budget: Budget): void {
 			AND account_id IN (SELECT account_id FROM notification_permissions WHERE from_account_id = ?1 LIMIT ?2)`,
 		id
 	)
-	spendEach(
+	spend(
 		db,
 		budget,
 		{
@@ -1610,7 +1607,7 @@ function purgeRelationships(db: Db, id: string, budget: Budget): void {
 		},
 		id
 	)
-	spendEach(
+	spend(
 		db,
 		budget,
 		{
@@ -1953,11 +1950,7 @@ function deleteStatusWithin(db: Db, statusId: string, budget: Budget, after = 0)
 	deletePollVotes(db, statusId, budget.left())
 	for (const child of STATUS_CHILDREN) {
 		for (const write of child.remove) {
-			if (typeof write === 'string') {
-				spend(db, budget, write, statusId)
-			} else {
-				spendEach(db, budget, write, statusId)
-			}
+			spend(db, budget, write, statusId)
 		}
 	}
 	spend(
