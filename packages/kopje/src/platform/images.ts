@@ -9,7 +9,8 @@ import { type ImageType, isAnimated, retainedMetadata, sniffImageType } from './
 
 export type ImageInfo = { format: string; width?: number; height?: number }
 
-// `still`: the output keeps one frame of an animated input (Images' anim: false); otherwise it keeps every frame.
+// `still`: the output keeps one frame of an animated input (Images' anim: false); otherwise a WebP output keeps every
+// frame. A PNG output always keeps one (imagesCodec).
 export type EncodeOptions = { width?: number; height?: number; format: OutputType; still?: true }
 
 export type ImageCodec = {
@@ -57,8 +58,10 @@ export function imagesCodec(binding: ImagesBinding): ImageCodec {
 				if (width !== undefined && height !== undefined) {
 					transformer = transformer.transform({ width, height, fit: 'scale-down' })
 				}
-				// anim is passed both ways: the binding's default (true) is not relied on.
-				const result = await transformer.output({ format, anim: still !== true })
+				// anim is passed both ways: the binding's default (true) is not relied on. Images makes animated output only
+				// as GIF or WebP, and refuses PNG output with anim: true (9401, "Animated output is only supported for GIF or
+				// WebP", on the verification instance), so a PNG output is always a still: an APNG upload serves one frame.
+				const result = await transformer.output({ format, anim: format === 'image/webp' && still !== true })
 				return new Uint8Array(await new Response(result.image()).arrayBuffer())
 			} catch (error) {
 				throw codecError(error)
