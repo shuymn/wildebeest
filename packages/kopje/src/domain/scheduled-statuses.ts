@@ -32,6 +32,7 @@ import {
 	writePost,
 } from './statuses'
 import { selectSql } from '../db/columns'
+import { MEDIA_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
 
 // Scheduled statuses (Mastodon 4.5's ScheduledStatus, PostStatusService#schedule_status!,
@@ -367,7 +368,7 @@ export const postStatus = userWriteOperation<ScheduleInput, ScheduleResult>((db,
 		throw new Error('the scheduled status was not written')
 	}
 	db.run(
-		`UPDATE media_attachments INDEXED BY sqlite_autoindex_media_attachments_1
+		`UPDATE media_attachments INDEXED BY ${MEDIA_ID_INDEX}
 		SET scheduled_status_id = ?1, gc_at = NULL,
 			position = (SELECT j.key FROM json_each(?2) j WHERE j.value = media_attachments.id)
 		WHERE id IN (SELECT value FROM json_each(?2))`,

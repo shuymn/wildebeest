@@ -108,6 +108,7 @@ import {
 import { streamDelete } from './streaming'
 import { readWindow, singleWindow, windowJson, windowPage } from './windows'
 import { selectSql } from '../db/columns'
+import { MEDIA_ID_INDEX, STATUSES_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
 import { isoTimeSql, STATUS_EMOJIS_BYTES, storedMediaDescription, storedText } from '../platform/stored-bounds'
 import { jsonStringBytes, SPOILER_BYTES, STATUS_CONTENT_BYTES } from '../security/html'
@@ -303,7 +304,7 @@ function attachMedia(db: Db, statusId: string, mediaIds: readonly string[]): voi
 		JSON.stringify(mediaIds)
 	)
 	db.run(
-		`UPDATE media_attachments INDEXED BY sqlite_autoindex_media_attachments_1
+		`UPDATE media_attachments INDEXED BY ${MEDIA_ID_INDEX}
 		SET status_id = ?1, scheduled_status_id = NULL, gc_at = NULL, shown = 1,
 			position = (SELECT j.key FROM json_each(?2) j WHERE j.value = media_attachments.id)
 		WHERE id IN (SELECT value FROM json_each(?2))`,
@@ -1169,7 +1170,7 @@ export const getStatuses = optionalUserReadOperation<{ ids: readonly string[]; p
 		const rows = statusReads(viewer, { viewer: '?1', now: '?3' }).select(
 			db,
 			'listable',
-			{ from: 'json_each(?2) c CROSS JOIN', join: 'INDEXED BY sqlite_autoindex_statuses_1 ON s.id = c.value' },
+			{ from: 'json_each(?2) c CROSS JOIN', join: `INDEXED BY ${STATUSES_ID_INDEX} ON s.id = c.value` },
 			viewer.accountId,
 			JSON.stringify(resolved),
 			viewer.now

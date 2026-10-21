@@ -30,6 +30,7 @@ import {
 } from './status-bounds'
 import { presentStatus, type Status } from './status-presenter'
 import { MAX_STATUS_EDITS, notifyQuotedUpdate, recordEdit, recountStatus, writeTags } from './statuses'
+import { ACCOUNTS_URI_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
 import { STATUS_EMOJIS_BYTES, storedMediaMeta } from '../platform/stored-bounds'
 
@@ -243,7 +244,7 @@ type Known = { byUri: Map<string, string>; local: Set<string> }
 // Known accounts (local or remote) among uris, by their exact URI (ID-5), each sought through the URI index (RES-7).
 function knownAccounts(db: Db, uris: readonly string[]): Known {
 	const rows = db.all<{ id: string; uri: string; local: number }>(
-		`SELECT id, uri, domain IS NULL AS local FROM accounts INDEXED BY sqlite_autoindex_accounts_2
+		`SELECT id, uri, domain IS NULL AS local FROM accounts INDEXED BY ${ACCOUNTS_URI_INDEX}
 		WHERE uri IN (SELECT value FROM json_each(?))`,
 		JSON.stringify([...new Set(uris)])
 	)

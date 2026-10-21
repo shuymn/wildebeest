@@ -16,6 +16,7 @@ import { writeOperation } from './operation'
 import { domainJobRunning, suspendRemote, unsuspendRemote } from './remote-suspension'
 import { reportExists, resolveReport } from './reports'
 import { suspendLocal, unsuspendLocal } from './suspension'
+import { ACCOUNTS_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
 import type { ImportAuthority } from '../platform/store-admin'
 
@@ -446,7 +447,7 @@ function readMatches(
 		active ? `${activeSql('a')} AND ${availableJoinedSql('a', 'l')}` : '1',
 	].join(' AND ')
 	return db.all<Candidate>(
-		`SELECT ${CANDIDATE_COLUMNS} FROM accounts a INDEXED BY ${active ? 'accounts_active' : 'sqlite_autoindex_accounts_1'}
+		`SELECT ${CANDIDATE_COLUMNS} FROM accounts a INDEXED BY ${active ? 'accounts_active' : ACCOUNTS_ID_INDEX}
 		LEFT JOIN local_accounts l ON l.account_id = a.id
 		WHERE ${ID_RANGE} AND ${residual} ORDER BY a.id ${order} LIMIT ?3`,
 		bounds.max,

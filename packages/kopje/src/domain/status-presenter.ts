@@ -44,6 +44,7 @@ import {
 	VIEWER_FLAG_COLUMNS,
 } from './status-rows'
 import { selectSql } from '../db/columns'
+import { ACCOUNTS_ID_INDEX, MEDIA_ID_INDEX, STATUSES_ID_INDEX } from '../db/indexes'
 import { type Db, RowCapExceeded, RowMeter } from '../db/sql'
 import { boundedHref } from '../platform/http-url'
 import { STATUS_EMOJIS_BYTES } from '../platform/stored-bounds'
@@ -303,7 +304,7 @@ function statusGraph<R extends GraphRow>(
 			db,
 			`SELECT DISTINCT value AS id, 1 AS own FROM json_each(?1)
 			UNION ALL SELECT DISTINCT value, 0 FROM (SELECT b.reblog_of_id AS value FROM json_each(?1) j
-				CROSS JOIN statuses b INDEXED BY sqlite_autoindex_statuses_1 ON b.id = j.value WHERE b.reblog_of_id IS NOT NULL)
+				CROSS JOIN statuses b INDEXED BY ${STATUSES_ID_INDEX} ON b.id = j.value WHERE b.reblog_of_id IS NOT NULL)
 			WHERE value NOT IN (SELECT value FROM json_each(?1))`,
 			`g.own = 1 OR ${visibleSql('s', '?2')}`,
 			JSON.stringify(ids),
@@ -446,7 +447,7 @@ const STATUS_IDS = 'SELECT DISTINCT value FROM json_each(?1)'
 // media_attachments_status (see present()), each status's by position, then each read by its key (RES-7).
 function mediaOf(db: Db, ids: string): Map<string, MediaRow[]> {
 	const rows = db.all<MediaRow & { status_id: string; position: number }>(
-		`SELECT ${selectSql(STATUS_MEDIA_COLUMN_MAP)} FROM media_attachments m INDEXED BY sqlite_autoindex_media_attachments_1
+		`SELECT ${selectSql(STATUS_MEDIA_COLUMN_MAP)} FROM media_attachments m INDEXED BY ${MEDIA_ID_INDEX}
 		WHERE m.id IN (SELECT x.id FROM (${STATUS_IDS}) j CROSS JOIN media_attachments x ON x.id IN (${shownMediaSql('j.value')}))`,
 		ids
 	)
@@ -518,7 +519,7 @@ function hydrate(
 		db
 			.all<MentionRow>(
 				`SELECT ${selectSql(MENTION_COLUMN_MAP)} FROM (${STATUS_IDS}) j
-				CROSS JOIN accounts a INDEXED BY sqlite_autoindex_accounts_1 WHERE a.id IN (${SHOWN_MENTIONS_SQL})`,
+				CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} WHERE a.id IN (${SHOWN_MENTIONS_SQL})`,
 				notBoostsJson
 			)
 			.sort((a, b) => byCodePoints(a.id, b.id))
@@ -762,7 +763,7 @@ function viewerFlags(db: Db, viewerId: string | null, ids: string): ViewerFlags 
 			SELECT 'p', value FROM json_each(?2)
 			WHERE EXISTS (SELECT 1 FROM status_pins WHERE account_id = ?1 AND status_id = value)
 			UNION ALL
-			SELECT 'm', ms.id FROM statuses ms INDEXED BY sqlite_autoindex_statuses_1
+			SELECT 'm', ms.id FROM statuses ms INDEXED BY ${STATUSES_ID_INDEX}
 			WHERE ms.id IN (SELECT value FROM json_each(?2)) AND ${conversationMutedSql('?1', 'ms.thread')}) f`,
 		viewerId,
 		ids
