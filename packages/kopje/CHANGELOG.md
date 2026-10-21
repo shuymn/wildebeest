@@ -75,9 +75,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   suspended domain) are left out unless it is true.
 - `GET /api/v1/accounts/search` reads `resolve`: a `user@domain` query at offset 0 is looked up through WebFinger and
   the account found is shown first, as on `/api/v2/search`; with `following=true`, only when followed. When the lookup
-  fails or cannot be stored, the answer comes from local data. `limit=0` answers an empty list.
-- `GET /api/v2/search` with `resolve=true` checks the token again after the lookup, so a token that expired during it
-  answers 401.
+  fails or cannot be stored, or the Worker is in maintenance, the answer comes from local data. `limit=0` answers an
+  empty list.
+- `GET /api/v2/search` with `resolve=true` and a `user@domain` query checks the token again after the lookup, so a
+  token that expired during it answers 401.
 
 ### Instance changes
 

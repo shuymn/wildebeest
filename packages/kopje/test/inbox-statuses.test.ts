@@ -3,7 +3,8 @@ import { runInDurableObject } from 'cloudflare:test'
 import { describe, expect, it } from 'vitest'
 
 import { seedAccount, sql } from './api-helpers'
-import { inboxDeps, NOW } from './app-helpers'
+import { harness, inboxDeps, NOW } from './app-helpers'
+import { fixtureKeyGen } from './federation-helpers'
 import { BUILD } from './helpers'
 import { AP, LOCAL, MASTODON, mastodonActor, MISSKEY, MISSKEY_CONTEXT, misskeyActor, signedInit } from './inbox-helpers'
 import {
@@ -1241,6 +1242,26 @@ describe('account search with resolve=true (NET-4, VIS-1)', () => {
 			expect(t.web.fetched).toContain(bob.uri)
 		})
 	}
+
+	it('resolves nothing while the Worker is in readonly maintenance without a Store flag (v1)', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		serveWebFinger(t, 'acct:bob@mastodon.example', bob.uri)
+		await seedAccount(t.store, { username: 'carol', displayName: 'bob@mastodon.example' })
+		await sql(t.store, "DELETE FROM instance_settings WHERE name = 'instance_actor_key'")
+		const maintenance = harness(t.store, { MAINTENANCE: 'readonly' }, BUILD, {
+			keygen: fixtureKeyGen,
+			loader: t.web.loader,
+		})
+		const response = await maintenance.request('/api/v1/accounts/search?resolve=true&q=bob%40mastodon.example', {
+			headers: { authorization: `Bearer ${t.tokens.alice}` },
+		})
+		expect(response.status).toBe(200)
+		expect((await response.json<Acct[]>()).map((a) => a.acct)).toEqual(['carol'])
+		expect(t.web.fetched).toEqual([])
+		expect(await sql(t.store, 'SELECT id FROM accounts WHERE domain IS NOT NULL')).toEqual([])
+		expect(await sql(t.store, "SELECT name FROM instance_settings WHERE name = 'instance_actor_key'")).toEqual([])
+	})
 
 	it('answers from local data when the Store in maintenance cannot store the instance key (v1)', async () => {
 		const t = await setup()

@@ -42,6 +42,7 @@ import { QUOTE_POLICY_NAMES, type QuotePolicyName } from '../domain/audience'
 import type { UserCredential } from '../domain/auth'
 import { DIRECTORY_DEFAULT_LIMIT, DIRECTORY_MAX_LIMIT } from '../domain/directory'
 import { PROFILE_IMAGES, type ProfileImage } from '../domain/media'
+import { readConfig } from '../platform/config'
 import { parseAddress } from '../platform/domain-name'
 import { PROFILE_IMAGE_LIMIT, PROFILE_TOO_LARGE, profileImageProblem, SIGNATURE_BYTES } from '../platform/images'
 import { StoreUnavailableError } from '../platform/store-errors'
@@ -416,7 +417,11 @@ export const searchAccounts: ApiHandler = async (c, deps) => {
 	}
 	const query = parsed.query.trim()
 	let resolvedAccountId: string | undefined
-	if (resolving && parseAddress(query) !== null) {
+	// MAINTENANCE in the environment (KEK rotation runs readonly with no Store flag, so the Store does not refuse):
+	// resolution writes, so the answer comes from local data and nothing is fetched.
+	const config = readConfig(c.env)
+	const writable = config.ok && config.config.MAINTENANCE === 'off'
+	if (resolving && writable && parseAddress(query) !== null) {
 		try {
 			resolvedAccountId = (await resolveQuery(c, deps, query)).accounts[0]?.id
 		} catch (error) {
