@@ -2,10 +2,18 @@ import { describe, expect, it } from 'vitest'
 
 import { bearer, json, sql } from './api-helpers'
 import { NOW } from './app-helpers'
+import { acceptQuote } from './budget-helpers'
 import { BUILD, claimSent, type SentClaim } from './helpers'
-import { plannedRun, scansOf, staleStatistics } from './read-helpers'
+import { plannedRun, remoteAccounts, scansOf, staleStatistics } from './read-helpers'
 import { act, community, post, remoteAccount, remoteFollows, seedStatus } from './status-helpers'
-import { followAnswerActivity, followActivity, followUri, undoFollowActivity } from '../src/domain/activities'
+import {
+	followAnswerActivity,
+	followActivity,
+	followUri,
+	statusReach,
+	undoFollowActivity,
+} from '../src/domain/activities'
+import { reachQuoters, recipientsFor } from '../src/domain/audience'
 import {
 	completeDelivery,
 	type DeliveryOutcome,
@@ -14,6 +22,8 @@ import {
 	MAX_ATTEMPTS,
 	retryDelay,
 } from '../src/domain/deliveries'
+import { readOperation } from '../src/domain/operation'
+import { hasLocalFollowers } from '../src/domain/remote-statuses'
 import { sha256Hex } from '../src/platform/sha256'
 import type { StoreStub } from '../src/platform/store-client'
 
@@ -677,4 +687,94 @@ describe('lane promotion with stale statistics (RES-7)', () => {
 				.map((r) => r.inbox_url)
 		).toEqual(['https://fans.example/inbox', 'https://other.example/inbox'])
 	})
+})
+
+describe('outbound reach with stale statistics (RES-7)', () => {
+	// A status's reach as its activity is recorded, its followers' and quoters' inboxes, and whether a remote account
+	// has local followers (inbound).
+	const reach = readOperation<{ statusId: string; signer: string; remote: string }, unknown>(
+		(db, { statusId, signer, remote }) => {
+			const of = statusReach(db, statusId)
+			return {
+				reach: of,
+				recipients: of === null ? null : recipientsFor(db, signer, { type: 'Create' }, of.audience),
+				quoters: reachQuoters(db, statusId),
+				localFollowers: hasLocalFollowers(db, remote),
+			}
+		}
+	)
+
+	it("seeks the status, its parent, its quoters and the signer's followers by key, the Store grown after ANALYZE", async () => {
+		const { h, alice, other, followed } = await audience()
+		const parent = await seedStatus(h.store, {
+			accountId: other,
+			visibility: 'public',
+			uri: 'https://other.example/o/1',
+		})
+		const status = await post(h, alice, { status: 'reply', in_reply_to_id: parent })
+		const quoter = await remoteAccount(h.store, 'quoter', 'quoter.example')
+		const quote = await seedStatus(h.store, {
+			accountId: quoter,
+			visibility: 'public',
+			uri: 'https://quoter.example/o/1',
+		})
+		await acceptQuote(h, quote, status.id)
+		const run = () =>
+			plannedRun(h, /./, reach, {
+				statusId: status.id,
+				signer: alice.id,
+				remote: followed,
+			})
+		const { before, after } = await staleStatistics(h, {
+			capture: () => run(),
+			grow: async () => {
+				// Other accounts following each other, their statuses and accepted quotes of them.
+				await remoteAccounts(h, 100, 200)
+				await sql(
+					h.store,
+					`INSERT INTO follows (account_id, target_account_id, state, created_at)
+					SELECT a.id, b.id, 'accepted', ?1 FROM accounts a CROSS JOIN accounts b ON b.id = CAST(a.id + 1 AS TEXT)
+					WHERE a.domain LIKE 'd%'`,
+					new Date(NOW).toISOString()
+				)
+				await sql(
+					h.store,
+					`INSERT INTO statuses (id, uri, account_id, visibility, content, published_at)
+					SELECT CAST(a.id - 100000000000000000 AS TEXT), a.uri || '/s', a.id, 'public', '', ?1 FROM accounts a
+					WHERE a.domain LIKE 'd%'`,
+					new Date(NOW).toISOString()
+				)
+				await sql(
+					h.store,
+					`INSERT INTO quotes (status_id, quoted_uri, quoted_status_id, quoted_account_id, state, updated_at)
+					SELECT s.id, t.uri, t.id, t.account_id, 'accepted', ?1 FROM statuses s
+					CROSS JOIN statuses t ON t.id = CAST(s.id + 1 AS TEXT) WHERE s.uri LIKE 'https://d%'`,
+					new Date(NOW).toISOString()
+				)
+			},
+		})
+		expect(after.result).toEqual(before.result)
+		expect(after.result).toMatchObject({
+			reach: { owner: alice.id, audience: { followers: true } },
+			quoters: [quoter],
+			localFollowers: true,
+		})
+		const plans = after.plans.map(({ query, plan, rows }, i) => ({ query, plan, rows, was: before.plans[i]!.rows }))
+		const seeks = (detail: string) => plans.filter(({ plan }) => plan.includes(detail)).length
+		// The status's owner and its parent; its quoters, read for the facts and for the reach; its followers; the remote
+		// account's local followers.
+		expect(seeks('SEARCH s USING INDEX sqlite_autoindex_statuses_1 (id=?)')).toBeGreaterThanOrEqual(4)
+		expect(seeks('SEARCH p USING INDEX sqlite_autoindex_statuses_1 (id=?)')).toBe(1)
+		expect(seeks('SEARCH f USING INDEX follows_target (target_account_id=? AND state=?)')).toBe(2)
+		expect(seeks('SEARCH q USING INDEX sqlite_autoindex_quotes_1 (status_id=?)')).toBe(1)
+		for (const { query, plan, rows, was } of plans) {
+			const name = query.replace(/\s+/g, ' ').slice(0, 80)
+			expect(
+				scansOf(plan, ['s', 'p', 'r', 'f', 'q', 'a', 'l', 'm', 'statuses', 'media_attachments', 'polls']),
+				name
+			).toEqual([])
+			// One index entry past a range at most.
+			expect(rows - was, name).toBeLessThanOrEqual(1)
+		}
+	}, 60_000)
 })

@@ -27,6 +27,7 @@ import {
 	tagNameSql,
 } from './status-bounds'
 import { readWindow, singleWindow, windowJson } from './windows'
+import { ACCOUNTS_ID_INDEX, STATUSES_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
 import { utf8Length } from '../platform/dump-format'
 import { httpUrl } from '../platform/http-url'
@@ -223,7 +224,8 @@ export function statusFacts(db: Db, statusId: string, options: { reached?: boole
 							`SELECT r.account_id AS id FROM statuses r JOIN accounts a ON a.id = r.account_id
 							WHERE r.reblog_of_id = ?1 AND a.domain IS NOT NULL
 							UNION
-							SELECT p.account_id FROM statuses p JOIN accounts a ON a.id = p.account_id
+							SELECT p.account_id FROM statuses p INDEXED BY ${STATUSES_ID_INDEX}
+								CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = p.account_id
 							WHERE p.id = ?2 AND a.domain IS NOT NULL`,
 							statusId,
 							row.in_reply_to_id
@@ -371,10 +373,11 @@ function statusAudience(facts: StatusFacts): Audience {
 }
 
 // The reach of the local status `statusId` for another activity's reachOf (deliveries.ts): its owner, its uri and its
-// current audience. Null when it is gone or not local.
+// current audience. Null when it is gone or not local. The status is sought by id (RES-7).
 export function statusReach(db: Db, statusId: string): ReachOf | null {
 	const owner = db.first<{ account_id: string }>(
-		'SELECT s.account_id FROM statuses s JOIN local_accounts l ON l.account_id = s.account_id WHERE s.id = ?',
+		`SELECT s.account_id FROM statuses s INDEXED BY ${STATUSES_ID_INDEX}
+			CROSS JOIN local_accounts l ON l.account_id = s.account_id WHERE s.id = ?`,
 		statusId
 	)
 	const facts = owner === undefined ? null : statusFacts(db, statusId)

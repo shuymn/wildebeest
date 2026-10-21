@@ -1604,7 +1604,8 @@ function byInbox(query: string): string {
 }
 
 // R23: whom an activity by `signerId` for `audience` reaches, by its kind (outboundKind). Local accounts are not
-// among them: they read the Store. withdraws: a Reject that ends a follow already accepted.
+// among them: they read the Store. withdraws: a Reject that ends a follow already accepted. The followers are read
+// through follows_target, each account by id (RES-7).
 export function recipientsFor(
 	db: Db,
 	signerId: string,
@@ -1616,7 +1617,7 @@ export function recipientsFor(
 	const followers = audience.followers
 		? db.all<ReachedInbox>(
 				byInbox(`SELECT ${RECIPIENT_COLUMNS}, COALESCE(NULLIF(a.shared_inbox_url, ''), a.inbox_url) AS inbox
-				FROM main.follows f JOIN main.accounts a ON a.id = f.account_id
+				FROM main.follows f INDEXED BY follows_target CROSS JOIN main.accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = f.account_id
 				WHERE f.target_account_id = ?1 AND f.state = 'accepted' AND a.domain IS NOT NULL
 					AND NOT ${leavesOutSql(kind, 'follower', '?1', 'a.id')}`),
 				signerId
@@ -1726,12 +1727,14 @@ export function reachAccount(db: Db, accountId: string): ReachedAccount | undefi
 // Quoters' reach (StatusReachFinder#quotes_account_ids, design §5.5): the remote authors of the accepted quotes of the
 // status `statusId`, so its Update or Delete reaches a quoter that neither follows its author, is mentioned, boosted it
 // nor received it. Read when the activity is recorded (activities.ts statusFacts), in the transaction that serializes
-// it with acceptances: a quoter is either reached, or accepted later (having fetched the status to quote it).
+// it with acceptances: a quoter is either reached, or accepted later (having fetched the status to quote it). The
+// accepted quotes drive, each quoting status and its author sought by id (RES-7).
 export function reachQuoters(db: Db, statusId: string): string[] {
 	return db
 		.all<{ id: string }>(
 			`SELECT DISTINCT s.account_id AS id FROM main.quotes q INDEXED BY quotes_accepted
-				JOIN main.statuses s ON s.id = q.status_id JOIN main.accounts a ON a.id = s.account_id
+				CROSS JOIN main.statuses s INDEXED BY ${STATUSES_ID_INDEX} ON s.id = q.status_id
+				CROSS JOIN main.accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = s.account_id
 			WHERE q.quoted_status_id = ? AND q.state = 'accepted' AND a.domain IS NOT NULL`,
 			statusId
 		)

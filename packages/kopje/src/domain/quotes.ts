@@ -40,6 +40,7 @@ import {
 	visibilityOf,
 } from './remote-statuses'
 import { iso } from './statuses'
+import { QUOTES_STATUS_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
 
 // Quote posts received from remote servers (Mastodon 4.5's Quote, ActivityPub::Parser::StatusParser's quote
@@ -1290,7 +1291,8 @@ export function recordLocalQuote(
 }
 
 // Note quote fields (activities.ts noteOf): quotedUri is null for a deleted target (Tombstone); only accepted quotes
-// carry a stamp, Kopje's for another local author's status or approval_uri for a remote status.
+// carry a stamp, Kopje's for another local author's status or approval_uri for a remote status. The quote is sought by
+// its status (RES-7).
 export type NoteQuote = { quotedUri: string | null; stamp: string | null }
 
 export function noteQuote(db: Db, statusId: string): NoteQuote | null {
@@ -1304,7 +1306,7 @@ export function noteQuote(db: Db, statusId: string): NoteQuote | null {
 	}>(
 		`SELECT q.quoted_uri, q.quoted_status_id IS NOT NULL AS present, q.state, q.authorization_id, q.approval_uri,
 			a.uri AS author_uri
-		FROM quotes q LEFT JOIN accounts a ON a.id = q.quoted_account_id
+		FROM quotes q INDEXED BY ${QUOTES_STATUS_INDEX} LEFT JOIN accounts a ON a.id = q.quoted_account_id
 		WHERE q.status_id = ? AND q.local = 1`,
 		statusId
 	)
