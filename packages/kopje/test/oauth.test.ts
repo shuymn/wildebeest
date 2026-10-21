@@ -20,6 +20,7 @@ import {
 import { NOW } from './app-helpers'
 import { appToken, plannedRun, remoteAccounts, scansOf, staleStatistics } from './read-helpers'
 import { storeWith } from './setup-helpers'
+import { WEBSITE_REFUSED } from './status-helpers'
 import { accountForLogin, introspectToken } from '../src/domain/oauth'
 import { callStore, type StoreStub } from '../src/platform/store-client'
 import { pkceChallenge, sha256Hex } from '../src/security/tokens'
@@ -153,6 +154,24 @@ describe('apps', () => {
 				error: "Validation failed: Application name can't be blank or longer than 60 characters",
 			})
 		}
+	})
+
+	// isAppWebsite (platform/stored-bounds.ts): the websites a status would not show are refused here too.
+	it('refuses a website with a character outside a URL, not http(s), or without a host', async () => {
+		const h = await apiHarness()
+		for (const [name, website] of WEBSITE_REFUSED.filter(([name]) => name !== 'blank')) {
+			const response = await h.request(
+				'/api/v1/apps',
+				json({ client_name: 'App', redirect_uris: 'https://client.test/cb', website })
+			)
+			expect(response.status, name).toBe(422)
+			expect(await response.json(), name).toEqual({ error: 'Validation failed: Website is invalid' })
+		}
+		const accepted = await h.request(
+			'/api/v1/apps',
+			json({ client_name: 'App', redirect_uris: 'https://client.test/cb', website: 'https://Client.TEST/é' })
+		)
+		expect(await accepted.json()).toMatchObject({ website: 'https://Client.TEST/é' })
 	})
 
 	it('accepts form-encoded registrations with an array of redirect URIs', async () => {

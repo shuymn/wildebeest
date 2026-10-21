@@ -46,14 +46,8 @@ import {
 import { selectSql } from '../db/columns'
 import { ACCOUNTS_ID_INDEX, MEDIA_ID_INDEX, STATUSES_ID_INDEX } from '../db/indexes'
 import { type Db, RowCapExceeded, RowMeter } from '../db/sql'
-import { boundedHref, httpUrl } from '../platform/http-url'
-import { railsBlank } from '../platform/rails-blank'
-import {
-	APP_WEBSITE_JSON_BYTES,
-	APP_WEBSITE_LIMIT,
-	presentedAppName,
-	STATUS_EMOJIS_BYTES,
-} from '../platform/stored-bounds'
+import { boundedHref } from '../platform/http-url'
+import { isAppWebsite, presentedAppName, STATUS_EMOJIS_BYTES } from '../platform/stored-bounds'
 import { remotePlainText } from '../security/html'
 
 // The Status entity as Mastodon 4.0.2's REST::StatusSerializer shows it. One presenter for every read path: it takes
@@ -713,26 +707,11 @@ function hydrate(
 // A local status's application, as Mastodon shows it for an author at its default show_application (Kopje has no such
 // setting, docs/mastodon-deviations.md): null when its id names no app Kopje keeps (a boost, a status posted before
 // 0064_status_applications or through a removed app) or the app's name does not pass presentedAppName; the website
-// as presentedAppWebsite shows it. Viewer-independent.
+// as stored when isAppWebsite accepts it as decoded, else null. Viewer-independent.
 function presentApplication(row: StatusRow): StatusApplication | null {
 	const name = presentedAppName(row.application_name)
-	return name === null ? null : { name, website: presentedAppWebsite(row.application_website) }
-}
-
-const ENCODER = new TextEncoder()
-
-// A stored app website as a status presents it, judged as decoded (malformed bytes read as U+FFFD, three bytes each):
-// none when blank (Rails' presence), holding a NUL, past APP_WEBSITE_LIMIT UTF-8 bytes or APP_WEBSITE_JSON_BYTES as a
-// JSON string, or not an http(s) URL (httpUrl); else the stored spelling, unchanged, as Mastodon shows it.
-export function presentedAppWebsite(website: string | null): string | null {
-	if (website === null || website.length > APP_WEBSITE_LIMIT || railsBlank(website) || website.includes('\u0000')) {
-		return null
-	}
-	return ENCODER.encode(website).length <= APP_WEBSITE_LIMIT &&
-		ENCODER.encode(JSON.stringify(website)).length <= APP_WEBSITE_JSON_BYTES &&
-		httpUrl(website) !== null
-		? website
-		: null
+	const website = row.application_website
+	return name === null ? null : { name, website: website !== null && isAppWebsite(website) ? website : null }
 }
 
 // The key of a quoted status's matched text, apart from the same status's as a status of the response.

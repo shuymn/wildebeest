@@ -1,6 +1,16 @@
 import { runInDurableObject } from 'cloudflare:test'
 
-import { type ApiHarness, apiHarness, bearer, json, login, registerApp, seedAccount, sql } from './api-helpers'
+import {
+	type ApiHarness,
+	apiHarness,
+	type App,
+	bearer,
+	json,
+	login,
+	registerApp,
+	seedAccount,
+	sql,
+} from './api-helpers'
 import { NOW } from './app-helpers'
 import type { Visibility } from '../src/domain/audience'
 import { allocateLocalId } from '../src/domain/ids'
@@ -31,7 +41,7 @@ export async function community<const N extends string>(
 	scope = 'read write follow',
 	deps: Parameters<typeof apiHarness>[1] = {},
 	overrides: Record<string, unknown> = {}
-): Promise<ApiHarness & { users: Record<N, User> }> {
+): Promise<ApiHarness & { app: App; users: Record<N, User> }> {
 	const h = await apiHarness(overrides, deps)
 	const app = await registerApp(h)
 	const users = {} as Record<N, User>
@@ -40,7 +50,7 @@ export async function community<const N extends string>(
 		const { token } = await login(h, { app, email: `${name}@example.com`, scope })
 		users[name] = { id, token }
 	}
-	return { ...h, users }
+	return { ...h, app, users }
 }
 
 export async function remoteAccount(store: StoreStub, username: string, domain = 'remote.example'): Promise<string> {
@@ -209,3 +219,18 @@ export async function outbound(store: StoreStub): Promise<(Outbound & { signer: 
 	)
 	return rows.map((row) => ({ signer: row.account_id, ...(JSON.parse(row.body) as Outbound) }))
 }
+
+// App websites isAppWebsite refuses, which registration answers 422 for and a status shows as `website: null`.
+export const WEBSITE_REFUSED: readonly [string, string][] = [
+	['blank', '  '],
+	['javascript:', 'javascript:alert(1)'],
+	['data:', 'data:text/html,x'],
+	['no URL', 'not a url'],
+	['no host', 'https://'],
+	['a backslash in the query', `https://client.test/?${'\\'.repeat(1100)}`],
+	['a space', 'https://client.test/a b'],
+	['a quote', 'https://client.test/a"b'],
+	['<', 'https://client.test/<script>'],
+	['a tab', 'https://client.test/a\tb'],
+	['DEL', 'https://client.test/a\u007fb'],
+]

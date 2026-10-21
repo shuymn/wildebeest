@@ -18,11 +18,13 @@ import {
 	remoteAccount,
 	remoteFollows,
 	seedStatus,
+	WEBSITE_REFUSED,
 	mediaNotFound,
 	posting,
 	type Status,
 	type User,
 } from './status-helpers'
+import { startSignIn } from './web-helpers'
 import { postStatus, type ScheduleInput } from '../src/domain/scheduled-statuses'
 import { MAX_RAW_LENGTH } from '../src/domain/status-text'
 import { getStatuses, MAX_STATUS_EDITS } from '../src/domain/statuses'
@@ -397,7 +399,7 @@ describe('application', () => {
 		for (const entry of history.body) {
 			expect(entry).not.toHaveProperty('application')
 		}
-		// A post through the second app shows it, its website as serialized.
+		// A post through the second app shows it, its website as stored.
 		expect(await post(h, { id: alice.id, token: second.token }, { status: 'other' })).toHaveProperty('application', {
 			name: 'Second',
 			website: 'https://second.test/home',
@@ -443,13 +445,10 @@ describe('application', () => {
 	it("shows the web UI's client, which has no website", async () => {
 		const h = await community(['alice'])
 		const status = await post(h, h.users.alice, { status: 'hi' })
-		// The web UI's client as web-session.ts registers it; its sessions cannot post (WEB_SCOPES), so it is named
-		// directly.
-		await sql(
-			h.store,
-			"INSERT INTO oauth_clients (id, secret, name, redirect_uris, website) VALUES ('web-client', 's', 'Kopje', 'https://kopje.test/auth/callback', NULL)"
-		)
-		await sql(h.store, "UPDATE statuses SET application_id = 'web-client' WHERE id = ?", status.id)
+		// The web UI's client, as signing in registers it; its sessions cannot post (WEB_SCOPES), so the status names it.
+		const webClient = (await startSignIn(h)).authorize.searchParams.get('client_id')
+		expect(webClient).not.toBeNull()
+		await sql(h.store, 'UPDATE statuses SET application_id = ? WHERE id = ?', webClient, status.id)
 		expect((await getJson<Status>(h, `/api/v1/statuses/${status.id}`)).body).toHaveProperty('application', {
 			name: 'Kopje',
 			website: null,
@@ -482,11 +481,7 @@ describe('application', () => {
 	it('presents the name and the website within their bounds, as decoded, else null', async () => {
 		const h = await community(['alice'])
 		const status = await post(h, h.users.alice, { status: 'hi' })
-		const [{ client_id: clientId }] = (await sql<{ client_id: string }>(
-			h.store,
-			'SELECT client_id FROM oauth_tokens WHERE token_hash = ?',
-			await sha256Hex(h.users.alice.token)
-		)) as [{ client_id: string }]
+		const clientId = h.app.client_id
 		const shown = async (name: SqlStorageValue, website: SqlStorageValue, cast = false) => {
 			const value = cast ? 'CAST(? AS TEXT)' : '?'
 			await sql(
@@ -517,19 +512,16 @@ describe('application', () => {
 		// A BLOB, which no JSON function reads, is no name; and a BLOB website is no website.
 		expect(await shown(bytes(0x61), site)).toBeNull()
 		expect(await shown('App', bytes(0x61))).toEqual({ name: 'App', website: null })
-		// The website, judged as decoded and shown as stored: blank (Rails' presence), with a NUL, not http(s), past
-		// APP_WEBSITE_LIMIT bytes or APP_WEBSITE_JSON_BYTES as JSON is none; exactly at the bound it is shown.
+		// The website, judged as decoded and shown as stored (isAppWebsite): blank, with a NUL, whitespace, a control,
+		// DEL or a character outside a URL's code points, not http(s), or past APP_WEBSITE_LIMIT bytes is none; exactly
+		// at the bound it is shown.
 		expect(await shown('App', at(APP_WEBSITE_LIMIT))).toEqual({ name: 'App', website: at(APP_WEBSITE_LIMIT) })
 		const refused: [string, SqlStorageValue][] = [
-			['blank', '  '],
-			['an ideographic space', '\u3000'],
+			...WEBSITE_REFUSED,
+			['an ideographic space', `${site}\u3000`],
 			['a NUL', `${site}a\u0000b`],
-			['javascript:', 'javascript:alert(1)'],
-			['data:', 'data:text/html,x'],
-			['no URL', 'not a url'],
+			['controls', `${site}?${'\u0001'.repeat(700)}`],
 			['past the bytes', at(APP_WEBSITE_LIMIT + 1)],
-			// 700 control characters, each escaped to six JSON bytes: 721 bytes, 4,223 as JSON.
-			['past the JSON bytes', `${site}?${'\u0001'.repeat(700)}`],
 		]
 		for (const [name, website] of refused) {
 			expect(await shown('App', website), name).toEqual({ name: 'App', website: null })
@@ -543,13 +535,9 @@ describe('application', () => {
 		)
 		expect(malformed.byteLength).toBe(1026)
 		expect(await shown('App', malformed, true)).toEqual({ name: 'App', website: null })
-		// Shown as stored, unnormalized: a valid query of 1,100 backslashes (1,121 bytes, 2,223 as JSON), 980 two-byte
-		// characters (1,980 bytes, which serialization would percent-encode past the bound), and a host's case.
-		for (const website of [
-			`${site}?${'\\'.repeat(1100)}`,
-			`${site}${'é'.repeat(APP_WEBSITE_LIMIT / 2 - site.length)}`,
-			'https://Client.TEST',
-		]) {
+		// Shown as stored, unnormalized: 980 two-byte characters (1,980 bytes, which serialization would percent-encode
+		// past the bound), and a host's case.
+		for (const website of [`${site}${'é'.repeat(APP_WEBSITE_LIMIT / 2 - site.length)}`, 'https://Client.TEST']) {
 			expect(await shown('App', website), website.slice(0, 40)).toEqual({ name: 'App', website })
 		}
 	})
@@ -1516,7 +1504,7 @@ describe('allowed_mentions (PostStatusService#safeguard_mentions!)', () => {
 // The plans and rows read of the statements a postStatus run makes whose SQL matches `pattern`, each as EXPLAIN QUERY
 // PLAN shows the production statement with its parameters.
 async function postPlans(
-	h: Awaited<ReturnType<typeof community>>,
+	h: Pick<ApiHarness, 'store'>,
 	token: string,
 	input: Partial<ScheduleInput>,
 	pattern: RegExp

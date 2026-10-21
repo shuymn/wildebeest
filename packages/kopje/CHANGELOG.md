@@ -25,6 +25,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - Breaking: `POST /api/v1/apps` refuses a `client_name` longer than 60 characters (counted in code points), Mastodon's
   limit; it allowed 255 UTF-16 code units. Apps already registered keep their name, and a status posted through one
   whose name is longer shows `application: null`.
+- Breaking: `POST /api/v1/apps` refuses a `website` holding a control character, DEL, whitespace or any of `"` `<`
+  `>` `\` `^` `` ` `` `{` `|` `}`, or longer than 2,000 UTF-8 bytes (`Website is invalid`); a status does not show such
+  a website of an app registered earlier.
 - A scheduled status's `params.application_id` is the client_id of the app it was scheduled through (it was always
   null).
 

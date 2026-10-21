@@ -13,16 +13,13 @@ import { bearerChallenge, INVALID_TOKEN, mastodonError } from './errors'
 import { type Params, type ReadOptions, readParams } from './params'
 import { type Client, type IntrospectionCaller, OOB_REDIRECT_URI } from '../domain/oauth'
 import { railsBlank } from '../platform/rails-blank'
-import { APP_NAME_LIMIT, APP_WEBSITE_LIMIT } from '../platform/stored-bounds'
+import { APP_NAME_LIMIT, isAppWebsite } from '../platform/stored-bounds'
 import { DEFAULT_SCOPES, parseScopes, SCOPES } from '../security/scopes'
 import { PKCE_VERIFIER, pkceChallenge, sha256Hex } from '../security/tokens'
 
 // App registration, the OAuth token, revocation, token info, introspection and userinfo endpoints, and the
 // authorization server metadata. /oauth/authorize (behind Access) lives in app/authorize.tsx.
 
-// The name, in code points, and the website, in characters, as Mastodon's ApplicationExtension validates them
-// (APP_NAME_LIMIT and APP_WEBSITE_LIMIT, app/lib/application_extension.rb:6, :8, :15, :17, v4.5.11): the bounds a
-// status presents its app within (platform/stored-bounds.ts).
 const MAX_REDIRECT_URIS = 10
 const MAX_URI = 2000
 
@@ -79,7 +76,8 @@ export const registerApp: ApiHandler = async (c, deps) => {
 	const scopes = parseScopes(p.get('scopes'))
 	const website = (p.get('website') ?? '').trim()
 	const problems: string[] = []
-	// Code points, counted only once the code units allow them (two a code point at most).
+	// Mastodon's APP_NAME_LIMIT in code points (app/lib/application_extension.rb:6, :15, v4.5.11), counted only once
+	// the code units allow them (two a code point at most).
 	if (name === '' || name.length > 2 * APP_NAME_LIMIT || [...name].length > APP_NAME_LIMIT) {
 		problems.push(`Application name can't be blank or longer than ${APP_NAME_LIMIT} characters`)
 	}
@@ -89,7 +87,7 @@ export const registerApp: ApiHandler = async (c, deps) => {
 	if (scopes === null) {
 		problems.push('Scopes are invalid')
 	}
-	if (website !== '' && !validWebsite(website)) {
+	if (website !== '' && !isAppWebsite(website)) {
 		problems.push('Website is invalid')
 	}
 	if (problems.length > 0 || scopes === null) {
@@ -133,11 +131,6 @@ export function validRedirectUri(uri: string): boolean {
 	}
 	const url = uri.length > MAX_URI ? null : parseUrl(uri)
 	return url !== null && url.hash === '' && !['javascript:', 'data:', 'vbscript:', 'file:'].includes(url.protocol)
-}
-
-function validWebsite(uri: string): boolean {
-	const url = uri.length > APP_WEBSITE_LIMIT ? null : parseUrl(uri)
-	return url !== null && ['http:', 'https:'].includes(url.protocol)
 }
 
 function parseUrl(uri: string): URL | null {
