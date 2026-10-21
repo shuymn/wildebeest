@@ -258,6 +258,23 @@ describe('the nested account at its caps (RES-2)', () => {
 		expect((await shown(target)).emojis).toHaveLength(6)
 	})
 
+	// An accepted imported snapshot: eight unreferenced entries whose URLs hold 150 '{' each (allowed as stored, and
+	// percent-encoded, three bytes each, when normalized), then the one the display name references.
+	it('keeps a referenced emoji behind unreferenced ones that grow past the snapshot bound when normalized', async () => {
+		const { account, move, shown } = await fixture()
+		const braces = (i: number) => `https://remote.example/${i}/${'{'.repeat(150)}`
+		const keep = 'https://remote.example/keep.png'
+		const snapshot = JSON.stringify([...Array.from({ length: 8 }, (_, i) => [`skip${i}`, braces(i)]), ['keep', keep]])
+		const target = await account({ display_name: 'moved :keep:', emojis: snapshot })
+		const source = await account()
+		await move(source, target)
+		expect((await shown(source)).moved!.emojis).toEqual([
+			{ shortcode: 'keep', url: keep, static_url: keep, visible_in_picker: true },
+		])
+		// The full account's own admission stops before it, past ACCOUNT_EMOJIS_BYTES.
+		expect((await shown(target)).emojis.map((emoji) => emoji.shortcode)).not.toContain('keep')
+	})
+
 	// Imported TEXT may be malformed UTF-8: F0 followed by continuation bytes is one character to SQLite's substr.
 	it('reads malformed imported text within its byte caps and presents it within its decoded limits', async () => {
 		const { h, account, move, shown } = await fixture()

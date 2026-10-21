@@ -582,12 +582,10 @@ function presentMovedAccount(db: Db, row: MovedRow, origin: string): Account {
 	return presentIdentity(db, cut, origin, MOVED_BOUNDS, () => ({
 		display_name: displayName,
 		note: '',
-		// Admitted as an answer's items are: each entry's JSON and a separator, within the array less its brackets.
-		emojis: admit(
-			pollEmojis(presentEmojis(row.emojis, ACCOUNT_EMOJIS_BYTES), [displayName]),
-			MOVED_EMOJIS_BYTES - 1,
-			false
-		).items,
+		// The referenced entries of the whole snapshot (at most MAX_EMOJIS, 0053's trigger), then admitted as an answer's
+		// items are, each entry's JSON and a separator, within the array less its brackets: unreferenced entries whose
+		// URLs grow when normalized never crowd out a referenced one.
+		emojis: admit(pollEmojis(presentEmojis(row.emojis, Infinity), [displayName]), MOVED_EMOJIS_BYTES - 1, false).items,
 		fields: [],
 	}))
 }
