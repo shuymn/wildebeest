@@ -21,18 +21,18 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - Account and CredentialAccount `uri` (the actor id), and for local accounts `roles` (the OAuth admin's Owner role) and
   `noindex` (always false).
 - Account `moved`: the account a remote account moved to, set by its actor document's `movedTo` naming an account
-  Kopje knows and by a verified `Move`, and cleared by a document without one. It is shown one level deep, with the
-  target's identity, counts and images but no note or fields, and `null` while the account is unavailable.
-- `GET /oauth/token/info` and `POST /oauth/introspect` (RFC 7662), as Doorkeeper answers them.
+  Kopje knows and by a verified `Move`, and cleared by a document without one. It is shown one level deep, without
+  note or fields ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Accounts).
+- `GET /oauth/token/info` and `POST /oauth/introspect` (RFC 7662), as Doorkeeper answers them
+  ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), OAuth).
 - `POST /api/v1/admin/accounts/:account_id/action` with type `none` warns a local account: it stores the warning, with
   `text` and the named report's `status_ids`, logs it, and writes the account a `moderation_warning` notification
   (Notification and NotificationGroup `moderation_warning`) unless `send_email_notification` is false. No email is
-  sent.
+  sent ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Admin account actions).
 
 ### Changed
 
 - Breaking: `/oauth/authorize` refuses an unsupported `response_mode` with `unsupported_response_mode`.
-
 - Newly started Store upgrades can skip the full foreign-key scan when all pending migrations preserve references and
   referenced keys. Resumed upgrades and retries still scan the Store; see [the upgrade guide](docs/upgrade.md).
 - Breaking: avatar and header uploads from the settings page take files under 8 MB (JPEG, PNG, GIF or WebP); AVIF
@@ -90,11 +90,11 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - `GET /api/v2/search` with `resolve=true` and a `user@domain` query checks the token again after the lookup, so a
   token that expired during it answers 401.
 - `thumbnail` on `POST /api/v1/media`, `POST /api/v2/media` and `PUT`/`PATCH /api/v1/media/:id`, and
-  `media_attributes[][thumbnail]` on `PUT`/`PATCH /api/v1/statuses/:id`, answer 422 `Validation failed: Thumbnail must
-  be blank`, as Mastodon does for images; they were ignored. `PUT`/`PATCH /api/v1/media/:id` takes a multipart body
-  of at most 1 MiB plus 16 KiB.
+  `media_attributes[][thumbnail]` on `PUT`/`PATCH /api/v1/statuses/:id`, answer 422
+  `Validation failed: Thumbnail must be blank`, as Mastodon does for images. `PUT`/`PATCH /api/v1/media/:id` takes a
+  multipart body of at most 1 MiB plus 16 KiB.
 - `POST /api/v1/admin/accounts/:account_id/action` answers 404 for any non-blank `warning_preset_id` (Kopje has no
-  presets) and 422 for a `text` past 10,000 UTF-8 bytes or with a NUL, before any change; both were ignored.
+  presets) and 422 for a `text` past 10,000 UTF-8 bytes or with a NUL, before any change.
 
 ### Instance changes
 

@@ -89,6 +89,8 @@ Accounts (the `Account` and credential account entities):
 - `roles` of a local account is the OAuth admin's Owner role (`id`, `name` and `color`) while that account is
   available, otherwise `[]`: Kopje has no other role to highlight. A remote account shows none, as in Mastodon.
 - `uri` is `''` for an imported actor id whose JSON passes 2,048 bytes; ingestion stores none.
+- A remote account its `Delete` removes stays stored, unavailable (R1 in `docs/visibility.md`), while its purge runs;
+  Mastodon destroys it after purging its content in the Delete handler (`app/services/delete_account_service.rb`).
 - `moved` is the latest of two writes: every stored actor document sets it from its `movedTo` or clears it, and a
   verified `Move` sets it when Kopje first processes it; a replay of a known `Move` writes nothing. A `movedTo` naming
   an account Kopje does not know reads as none: it is not fetched (Mastodon fetches it,
@@ -96,8 +98,8 @@ Accounts (the `Account` and credential account entities):
   (`move.rb:38`), Kopje once per activity id while its job is kept (30 days). Mastodon refreshes a profile on a
   signature only when the stored key fails (`signature_verification.rb:59`), and that refresh may fetch the key alone,
   which leaves `movedTo` as it was (`process_account_service.rb:103`); Kopje stores every fresh document it fetches,
-  its `movedTo` included. A local account never has one: Kopje sends no `Move`. Followers move as before, only on a
-  verified `Move` whose target lists the source.
+  its `movedTo` included. A local account never has one: Kopje sends no `Move`. Followers move only on a verified
+  `Move` whose target lists the source.
 - The account `moved` nests is a bounded projection, not the full account: its identity, counts, flags and images,
   `note` `''` and `fields` `[]`, the display name cut at 100 code points, URLs and `uri` read as unset past 512 bytes,
   and only the emojis its display name references within 2,048 bytes of JSON; it never shows a `moved` of its own,
@@ -125,7 +127,9 @@ OAuth (`/oauth/authorize`, `/oauth/token/info`, `/oauth/introspect`):
   rendered consent form answers them: the form carries no mode. A decision posted directly with `fragment` or
   `form_post` is also answered in the query, where Doorkeeper would honour the mode, as Mastodon does when it skips the
   consent page (Kopje never skips it). A blank mode (Rails' `blank?`) reads as `query`; any other value answers
-  `unsupported_response_mode`. The metadata lists `query` only.
+  `unsupported_response_mode`. The metadata's `response_modes_supported` lists `query` only; Mastodon's lists `query`,
+  `fragment` and `form_post` (`app/presenters/oauth_metadata_presenter.rb`, the modes Doorkeeper 5.8.2 registers in
+  `lib/doorkeeper/grant_flow.rb`).
 - `lang` has no effect: the consent page is English only.
 - Tokens are read from the `Authorization` header only, never from the `access_token` or `bearer_token` parameters.
   Introspection reads its parameters from the body only: a `token`, `client_id` or `client_secret` in the query is
@@ -150,20 +154,19 @@ Admin account actions (`POST /api/v1/admin/accounts/:account_id/action`):
   `moderation_warning` notification), read as Rails casts it: absent is true; empty, JSON `null` and `0`, `f`, `F`,
   `false`, `FALSE`, `off`, `OFF` are false; anything else (`False` and `Off` included) is true.
 - `text` is at most 10,000 UTF-8 bytes with no NUL (422 `Validation failed: Text must be at most 10,000 UTF-8 bytes
-with no NUL`, before any write); Mastodon has no bound, and a NUL is its 500.
+  with no NUL`, before any write); Mastodon has no bound, and a NUL is its 500.
 - Kopje has no warning presets, so any non-blank `warning_preset_id` answers 404 `Record not found` with no effect, as
   an unknown one does in Mastodon.
 - Whether the target is notified is judged in the action's own transaction; Mastodon judges it when its
   `LocalNotificationWorker` runs. A target suspended between the action and that worker gets no notification in
-  Mastodon, while Kopje's is hidden only while the suspension lasts; a target unsuspended in that window is notified
-  in Mastodon of a warning given while suspended, which Kopje did not notify.
+  Mastodon, while Kopje's is hidden only while the suspension lasts; a target suspended at the action and unsuspended
+  before that worker runs is notified in Mastodon, never in Kopje.
 - A warning's `appeal` is always `null`: there are no disputes, through which Mastodon files appeals.
 - A warning's `status_ids` is `null` when the named report's stored `status_ids` are not a list of at most 100 18-digit
   ids (only a restored report can hold that); the action still succeeds.
 - Mastodon keeps a strike for `suspend`, for a remote target and with the notification off; Kopje keeps none of them.
-  Its API shows none of the last two, and a suspension's only when the target is unsuspended before Mastodon's
-  `LocalNotificationWorker` runs (it then notifies the warning); Kopje judges the target in the action's transaction,
-  where a `suspend` warns nobody.
+  Mastodon's API never shows the last two, and a suspension's only when the target is unsuspended before
+  `LocalNotificationWorker` runs.
 - The push title of a `moderation_warning` is the account's name; Mastodon's English locale has no subject for it.
 
 Request parameters:

@@ -280,16 +280,16 @@ function lastStatusAtSql(a: string): string {
 		WHERE s.account_id = ${a}.id AND s.visibility IN ${REACHES_FOLLOWERS_SQL} ORDER BY s.id DESC LIMIT 1)`
 }
 
-// The account an account moved to, as it presents nested in Account#moved (D2 in docs/mastodon-deviations.md): its
-// identity and counts, no note or fields, and of its emojis only those its cut display name references. Mastodon
-// nests the full account; Kopje bounds the nested one so that no target is read past what it shows (RES-3). Every
-// text is cut in SQL by its raw UTF-8 bytes (an imported value may be malformed UTF-8, which SQLite's substr counts
-// as fewer characters), then by its decoded limit in the presenter (presentMovedAccount): display_name at
-// MOVED_DISPLAY_NAME_LIMIT code points (400 bytes read), username at USERNAME_LIMIT (1,020 bytes read), created_at at
-// 24 and last_status_at at 10 (96 and 40 bytes read). The uri and URLs read as unset past MOVED_URL_LIMIT bytes (the
-// statics past STATIC_URL_LIMIT, their stored bound), and are shown only within MOVED_URL_LIMIT as JSON writes them;
-// emojis are the stored snapshot (ACCOUNT_EMOJIS_BYTES, 0053's trigger),
-// shown within MOVED_EMOJIS_BYTES of JSON. A target whose domain passes DOMAIN_BYTES is not read (no `moved`).
+// The account an account moved to, as it presents nested in Account#moved (docs/mastodon-deviations.md, "Accounts"):
+// its identity and counts, no note or fields, and of its emojis only those its cut display name references, so that
+// no target is read past what it shows (RES-3). Every text is cut in SQL by its raw UTF-8 bytes (an imported value
+// may be malformed UTF-8, which SQLite's substr counts as fewer characters), then by its decoded limit in the
+// presenter (presentMovedAccount): display_name at MOVED_DISPLAY_NAME_LIMIT code points (400 bytes read), username at
+// USERNAME_LIMIT (1,020 bytes read), created_at at 24 and last_status_at at 10 (96 and 40 bytes read). The uri and
+// URLs read as unset past MOVED_URL_LIMIT bytes (the statics past STATIC_URL_LIMIT, their stored bound), and are shown
+// only within MOVED_URL_LIMIT as JSON writes them; emojis are the stored snapshot (ACCOUNT_EMOJIS_BYTES, 0053's
+// trigger), shown within MOVED_EMOJIS_BYTES of JSON. A target whose domain passes DOMAIN_BYTES is not read (no
+// `moved`).
 export const MOVED_DISPLAY_NAME_LIMIT = 100
 export const MOVED_URL_LIMIT = 512
 export const MOVED_EMOJIS_BYTES = 2048
