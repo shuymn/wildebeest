@@ -495,7 +495,11 @@ const ALLOWED: Record<string, { count: number; reason: string }> = {
 	'src/domain/status-actions.ts statuses.uri': { count: 1, reason: IDENTITY },
 	'src/domain/statuses.ts accounts.uri': { count: 6, reason: IDENTITY },
 	'src/domain/statuses.ts statuses.uri': { count: 9, reason: IDENTITY },
-	'src/domain/accounts.ts accounts.username': { count: 1, reason: LOCAL },
+	'src/domain/accounts.ts accounts.username': {
+		count: 3,
+		reason: `${LOCAL}; and the username an address names as stored (addressRow), bounded by the address it matched and
+			stored only as contact_username, never presented`,
+	},
 	'src/domain/activities.ts accounts.username': { count: 1, reason: ACTIVITYPUB },
 	'src/domain/actor-update.ts accounts.username': { count: 1, reason: ACTIVITYPUB },
 	'src/domain/actors.ts accounts.username': { count: 7, reason: LOCAL },

@@ -553,16 +553,17 @@ function addressRow(
 	username: string,
 	domain: string | null
 ): (AccountRow & { stored_username: string }) | undefined {
-	const select = `SELECT ${selectSql(ACCOUNT_COLUMN_MAP)}, a.username AS stored_username`
 	return domain === null
 		? db.first(
-				`${select} FROM accounts a INDEXED BY accounts_local_username
+				`SELECT ${selectSql(ACCOUNT_COLUMN_MAP)}, a.username AS stored_username
+				FROM accounts a INDEXED BY accounts_local_username
 				LEFT JOIN local_accounts l INDEXED BY ${LOCAL_ACCOUNTS_ID_INDEX} ON l.account_id = a.id
 				WHERE a.domain IS NULL AND lower(a.username) = lower(?)`,
 				username
 			)
 		: db.first(
-				`${select} FROM accounts a INDEXED BY accounts_domain_username
+				`SELECT ${selectSql(ACCOUNT_COLUMN_MAP)}, a.username AS stored_username
+				FROM accounts a INDEXED BY accounts_domain_username
 				LEFT JOIN local_accounts l INDEXED BY ${LOCAL_ACCOUNTS_ID_INDEX} ON l.account_id = a.id
 				WHERE a.domain = ? AND lower(a.username) = lower(?)`,
 				domain,
