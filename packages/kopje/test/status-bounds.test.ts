@@ -71,6 +71,7 @@ import type { StoreOperation } from '../src/platform/store-kernel'
 import {
 	APP_NAME_BYTES,
 	APP_NAME_LIMIT,
+	APP_WEBSITE_JSON_BYTES,
 	APP_WEBSITE_LIMIT,
 	EMOJI_ENTRY_BYTES,
 	EMOJI_SHORTCODE_LIMIT,
@@ -1389,9 +1390,9 @@ const APPLICATION_COLUMN_HEAP: Readonly<Record<string, number>> = {
 const APPLICATION_ROW_HEAP = Object.values(APPLICATION_COLUMN_HEAP).reduce((sum, heap) => sum + heap, 0)
 
 // The most JSON a status's `application` entry adds, its separator included: a name of APP_NAME_LIMIT code points
-// each escaped to six bytes, and a website within APP_WEBSITE_LIMIT as JSON (http-url.ts jsonHref).
+// each escaped to six bytes, and a website at APP_WEBSITE_JSON_BYTES (status-presenter.ts presentedAppWebsite).
 const APPLICATION_JSON_MAX =
-	jsonBytes({ application: { name: C.repeat(APP_NAME_LIMIT), website: 'u'.repeat(APP_WEBSITE_LIMIT) } }) - 1
+	jsonBytes({ application: { name: C.repeat(APP_NAME_LIMIT), website: 'x'.repeat(APP_WEBSITE_JSON_BYTES - 2) } }) - 1
 
 // What a presented status's `application` entry takes in its JSON, its separator included (0 when it has none).
 function applicationJson(status: Record<string, unknown>): number {
@@ -1607,7 +1608,7 @@ describe('static images (RES-2, RES-3)', () => {
 // in RowMeter's unit: a malformed byte decodes to one code unit) and of APPLICATION_JSON_MAX.
 describe('status applications (RES-2, RES-3)', () => {
 	it('derives their maxima from the caps', () => {
-		expect({ row: APPLICATION_ROW_HEAP, json: APPLICATION_JSON_MAX }).toEqual({ row: 4_544, json: 2_399 })
+		expect({ row: APPLICATION_ROW_HEAP, json: APPLICATION_JSON_MAX }).toEqual({ row: 4_544, json: 4_399 })
 	})
 
 	const bytes = (prefix: string, byte: number, length: number) =>
@@ -1616,18 +1617,21 @@ describe('status applications (RES-2, RES-3)', () => {
 	const utf8Bytes = (value: string | ArrayBuffer) => (typeof value === 'string' ? utf8Length(value) : value.byteLength)
 	const SITE = 'https://kopje.test/'
 	const ASCII_SITE = SITE.padEnd(APP_WEBSITE_LIMIT, 'u')
+	// APP_WEBSITE_LIMIT bytes that escape to APP_WEBSITE_JSON_BYTES: 5 control characters (six JSON bytes each) and
+	// backslashes (two each) in a query.
+	const ESCAPED_SITE = `${SITE}?${C.repeat(5)}`.padEnd(APP_WEBSITE_LIMIT, '\\')
 	type App = { name: string | ArrayBuffer; website: string | ArrayBuffer; shown: unknown }
 	const FIXTURES: Record<string, [App, App]> = {
 		escaped: [
 			{
 				name: C.repeat(APP_NAME_LIMIT),
-				website: ASCII_SITE,
-				shown: { name: C.repeat(APP_NAME_LIMIT), website: ASCII_SITE },
+				website: ESCAPED_SITE,
+				shown: { name: C.repeat(APP_NAME_LIMIT), website: ESCAPED_SITE },
 			},
 			{
 				name: `${C.repeat(APP_NAME_LIMIT - 1)}a`,
-				website: ASCII_SITE,
-				shown: { name: `${C.repeat(APP_NAME_LIMIT - 1)}a`, website: ASCII_SITE },
+				website: ESCAPED_SITE,
+				shown: { name: `${C.repeat(APP_NAME_LIMIT - 1)}a`, website: ESCAPED_SITE },
 			},
 		],
 		raw: [
@@ -1718,6 +1722,7 @@ describe('status applications (RES-2, RES-3)', () => {
 				expect(applicationJson(status)).toBeLessThanOrEqual(APPLICATION_JSON_MAX)
 			}
 			if (fill === 'escaped') {
+				expect(utf8Length(ESCAPED_SITE)).toBe(APP_WEBSITE_LIMIT)
 				expect(applicationJson(quoted)).toBe(APPLICATION_JSON_MAX)
 			}
 		},
@@ -1844,16 +1849,16 @@ describe('the table of maxima (RES-3)', () => {
 		}
 		expect(conservative).toEqual({
 			account: 143_188,
-			status: 2_644_116,
-			quote: 5_288_265,
-			boostOfQuote: 5_702_293,
-			conversation: 7_005_734,
-			group: 6_433_689,
-			report: 5_890_088,
+			status: 2_646_116,
+			quote: 5_292_265,
+			boostOfQuote: 5_708_293,
+			conversation: 7_009_734,
+			group: 6_437_689,
+			report: 5_894_088,
 			reportNotification: 408_654,
 			warningNotification: 281_568,
 			warningGroup: 281_757,
-			filteredNotification: 5_431_516,
+			filteredNotification: 5_435_516,
 		})
 	}, 600_000)
 

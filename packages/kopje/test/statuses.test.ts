@@ -77,7 +77,7 @@ describe('POST /api/v1/statuses', () => {
 			filtered: [],
 			content: '<p>Hello &lt;world&gt;</p>',
 			reblog: null,
-			application: { name: 'Test Client', website: 'https://client.test/' },
+			application: { name: 'Test Client', website: 'https://client.test' },
 			account: expect.objectContaining({ id: alice.id, acct: 'alice', statuses_count: 1 }),
 			media_attachments: [],
 			mentions: [],
@@ -352,7 +352,7 @@ function applications(statuses: readonly Status[]): Record<string, unknown> {
 // shows the app it was posted through (its author's show_application, true by default, which Kopje has no setting
 // for), null when it names none; a remote status has no key.
 describe('application', () => {
-	const SHOWN = { name: 'Test Client', website: 'https://client.test/' }
+	const SHOWN = { name: 'Test Client', website: 'https://client.test' }
 
 	it('shows the app to every viewer alike, null on a local boost with its original shown, no key when remote', async () => {
 		const h = await community(['alice', 'bob'])
@@ -517,25 +517,41 @@ describe('application', () => {
 		// A BLOB, which no JSON function reads, is no name; and a BLOB website is no website.
 		expect(await shown(bytes(0x61), site)).toBeNull()
 		expect(await shown('App', bytes(0x61))).toEqual({ name: 'App', website: null })
-		// The website: blank (Rails' presence), not http(s), past APP_WEBSITE_LIMIT as stored or as serialized, or with a
-		// backslash JSON doubles past it; exactly at the bound it is shown.
+		// The website, judged as decoded and shown as stored: blank (Rails' presence), with a NUL, not http(s), past
+		// APP_WEBSITE_LIMIT bytes or APP_WEBSITE_JSON_BYTES as JSON is none; exactly at the bound it is shown.
 		expect(await shown('App', at(APP_WEBSITE_LIMIT))).toEqual({ name: 'App', website: at(APP_WEBSITE_LIMIT) })
-		const refused = [
-			'  ',
-			'\u3000',
-			'javascript:alert(1)',
-			'data:text/html,x',
-			'not a url',
-			at(APP_WEBSITE_LIMIT + 1),
-			// 980 two-byte characters, within the raw bound, that serialize to 5,880 bytes (percent-encoded), and a query of
-			// 1,978 backslashes, which serialization keeps and JSON doubles.
-			`${site}${'é'.repeat(APP_WEBSITE_LIMIT / 2 - site.length)}`,
-			`${site}?${'\\'.repeat(APP_WEBSITE_LIMIT - site.length - 2)}`,
+		const refused: [string, SqlStorageValue][] = [
+			['blank', '  '],
+			['an ideographic space', '\u3000'],
+			['a NUL', `${site}a\u0000b`],
+			['javascript:', 'javascript:alert(1)'],
+			['data:', 'data:text/html,x'],
+			['no URL', 'not a url'],
+			['past the bytes', at(APP_WEBSITE_LIMIT + 1)],
+			// 700 control characters, each escaped to six JSON bytes: 721 bytes, 4,223 as JSON.
+			['past the JSON bytes', `${site}?${'\u0001'.repeat(700)}`],
 		]
-		for (const website of refused) {
-			expect(await shown('App', website), website).toEqual({ name: 'App', website: null })
+		for (const [name, website] of refused) {
+			expect(await shown('App', website), name).toEqual({ name: 'App', website: null })
 		}
-		expect(await shown('App', 'https://Client.TEST')).toEqual({ name: 'App', website: site })
+		// 1,026 imported bytes, 1,000 of them malformed, that decode to 3,026: past the bound as decoded, though the URL
+		// parser's serialization drops the malformed segment with the `/../` after it.
+		const malformed = bytes(
+			...new TextEncoder().encode(site),
+			...Array(1000).fill(0xff),
+			...new TextEncoder().encode('/../xy')
+		)
+		expect(malformed.byteLength).toBe(1026)
+		expect(await shown('App', malformed, true)).toEqual({ name: 'App', website: null })
+		// Shown as stored, unnormalized: a valid query of 1,100 backslashes (1,121 bytes, 2,223 as JSON), 980 two-byte
+		// characters (1,980 bytes, which serialization would percent-encode past the bound), and a host's case.
+		for (const website of [
+			`${site}?${'\\'.repeat(1100)}`,
+			`${site}${'é'.repeat(APP_WEBSITE_LIMIT / 2 - site.length)}`,
+			'https://Client.TEST',
+		]) {
+			expect(await shown('App', website), website.slice(0, 40)).toEqual({ name: 'App', website })
+		}
 	})
 })
 

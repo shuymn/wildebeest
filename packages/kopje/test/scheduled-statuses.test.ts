@@ -756,7 +756,7 @@ describe('publication', () => {
 		expect(await stored(keptId)).toEqual({ application_id: client })
 		expect(await stored(orphanedId)).toEqual({ application_id: second.app.client_id })
 		const shown = async (id: string) => (await getJson<Status>(h, `/api/v1/statuses/${id}`)).body
-		expect(await shown(keptId)).toHaveProperty('application', { name: 'Test Client', website: 'https://client.test/' })
+		expect(await shown(keptId)).toHaveProperty('application', { name: 'Test Client', website: 'https://client.test' })
 		expect(await shown(orphanedId)).toHaveProperty('application', null)
 	})
 

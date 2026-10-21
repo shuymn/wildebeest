@@ -186,7 +186,7 @@ describe('status.update', () => {
 		for (const message of inbox.rest()) {
 			expect(JSON.parse(message.payload!), message.event).toHaveProperty('application', {
 				name: 'Test Client',
-				website: 'https://client.test/',
+				website: 'https://client.test',
 			})
 		}
 	})

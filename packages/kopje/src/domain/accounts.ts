@@ -48,7 +48,7 @@ import { type ColumnMap, fixedColumns, selectSql } from '../db/columns'
 import { ACCOUNTS_ID_INDEX, LOCAL_ACCOUNTS_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
 import { normalizeDomain, parseAddress } from '../platform/domain-name'
-import { boundedHref, httpUrl, jsonHref } from '../platform/http-url'
+import { boundedHref, httpUrl } from '../platform/http-url'
 import { ACTOR_URI_LIMIT, DOMAIN_BYTES, withinIdentityBound } from '../platform/identity-bounds'
 import {
 	ACCOUNT_EMOJIS_BYTES,
@@ -548,6 +548,12 @@ type IdentityBounds = {
 	href: (value: string | null) => string | null
 	image: (value: string | null) => string | null
 	uri: number
+}
+
+// A serialized URL may keep a '\' in its query or fragment, which JSON doubles: within `limit` as JSON too.
+function jsonHref(value: string | null, limit: number): string | null {
+	const href = boundedHref(value, limit)
+	return href !== null && withinIdentityBound(href, limit) ? href : null
 }
 
 const ACCOUNT_BOUNDS: IdentityBounds = {

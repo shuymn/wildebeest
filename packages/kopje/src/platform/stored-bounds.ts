@@ -1130,17 +1130,19 @@ export function storedApplicationId(value: unknown): string | null {
 // The name: at most APP_NAME_LIMIT code points (Mastodon's ApplicationExtension APP_NAME_LIMIT, validated on the
 // name), so at most APP_NAME_BYTES UTF-8 bytes and APP_NAME_JSON_BYTES as a JSON string (six bytes a code point at
 // most, and the quotes); past any of them the status shows `application: null`. The website: an http(s) URL of at most
-// APP_WEBSITE_LIMIT characters (Mastodon's APP_WEBSITE_LIMIT), presented serialized within it as JSON too
-// (http-url.ts jsonHref), else `website: null`.
+// APP_WEBSITE_LIMIT UTF-8 bytes (Mastodon's APP_WEBSITE_LIMIT is in characters) and APP_WEBSITE_JSON_BYTES as a JSON
+// string (twice its bytes, and the quotes), presented as stored
+// (status-presenter.ts presentedAppWebsite), else `website: null`.
 export const APP_NAME_LIMIT = 60
 export const APP_NAME_BYTES = 4 * APP_NAME_LIMIT
 export const APP_NAME_JSON_BYTES = 6 * APP_NAME_LIMIT + 2
 export const APP_WEBSITE_LIMIT = 2000
+export const APP_WEBSITE_JSON_BYTES = 2 * APP_WEBSITE_LIMIT + 2
 
 // The read projections of oauth_clients.name and website for a status (RES-2): NULL for another storage class (no JSON
 // function sees a BLOB) or past the raw bytes a presented value may hold, so a row reads at most APP_NAME_BYTES and
 // APP_WEBSITE_LIMIT bytes of them whatever was imported. The presenter judges the decoded value again
-// (presentedAppName, jsonHref): malformed bytes decode to U+FFFD, three bytes each.
+// (presentedAppName, presentedAppWebsite): malformed bytes decode to U+FFFD, three bytes each.
 export function appNameSql(column: string): string {
 	return `CASE WHEN typeof(${column}) = 'text' THEN ${byteBoundSql(column, APP_NAME_BYTES)} END`
 }
