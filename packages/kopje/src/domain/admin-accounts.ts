@@ -578,7 +578,8 @@ export function adminAccountOperations(read: AdminDeclare, write: AdminDeclare) 
 	//     resolved by its job, which then ends its follows of local accounts.
 	//   - disable, sensitive and silence answer 422 as a type outside the list would, so the client sees a failed action
 	//     rather than a silent no-op: Kopje has no disabling, sensitizing or silencing.
-	//   - suspend and a remote target keep no warning: Mastodon's strike for them is shown by no API (account-warnings.ts).
+	//   - suspend and a remote target keep no warning (account-warnings.ts). Mastodon's API never shows a remote
+	//     target's strike, and a suspension's only when the target is unsuspended before its worker judges it.
 	const actOnAccount = write<
 		{
 			id: string

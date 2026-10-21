@@ -695,15 +695,22 @@ export const MAX_LIVE_ANNOUNCEMENTS = 16
 export const REACTION_NAME_BYTES = 128
 export const MAX_REACTION_NAMES = 8
 
-// The text an admin write stores, or null when it is refused: made well-formed (a bound lone surrogate would be stored
-// as its three-byte encoding), then refused when blank after JavaScript's trim (which removes every character SQLite's
-// ASCII trim of the CHECK does, and Unicode spaces), when it holds a NUL, or when its UTF-8 passes the bound.
-export function storedAnnouncementText(raw: string): string | null {
+// Plain text an admin write stores, or null when it is refused: made well-formed (a bound lone surrogate would be
+// stored as its three-byte encoding), then refused when it holds a NUL or its UTF-8 passes `bytes` (a string of more
+// code units than `bytes` passes them without being encoded).
+function adminPlainText(raw: string, bytes: number): string | null {
 	const text = raw.toWellFormed()
-	if (text.trim() === '' || text.includes('\u0000') || text.length > ANNOUNCEMENT_TEXT_BYTES) {
+	if (text.includes('\u0000') || text.length > bytes) {
 		return null
 	}
-	return ENCODER.encode(text).length <= ANNOUNCEMENT_TEXT_BYTES ? text : null
+	return ENCODER.encode(text).length <= bytes ? text : null
+}
+
+// The text an announcement stores, or null when it is refused: adminPlainText's, also refused when blank after
+// JavaScript's trim (which removes every character SQLite's ASCII trim of the CHECK does, and Unicode spaces).
+export function storedAnnouncementText(raw: string): string | null {
+	const text = adminPlainText(raw, ANNOUNCEMENT_TEXT_BYTES)
+	return text === null || text.trim() === '' ? null : text
 }
 
 // ---- Trends: migration 0057_trends
@@ -988,23 +995,18 @@ export const WARNING_STATUS_IDS = 100
 export const WARNING_STATUS_ID_BYTES = 18
 export const WARNING_STATUS_IDS_BYTES = 2 + WARNING_STATUS_IDS * (WARNING_STATUS_ID_BYTES + 3) - 1
 
-// The text an admin action stores, or null when it is refused (422): made well-formed (a lone surrogate would be
-// stored as its three-byte encoding), then refused when it holds a NUL or its UTF-8 passes the bound.
+// The text an admin action stores (adminPlainText at WARNING_TEXT_BYTES), or null when it is refused (422).
 export function storedWarningText(raw: string): string | null {
-	const text = raw.toWellFormed()
-	if (text.includes('\u0000') || text.length > WARNING_TEXT_BYTES) {
-		return null
-	}
-	return ENCODER.encode(text).length <= WARNING_TEXT_BYTES ? text : null
+	return adminPlainText(raw, WARNING_TEXT_BYTES)
 }
 
 const WARNING_STATUS_ID = /^[0-9]{18}$/
 
-// The writer twin of warningStatusIdsPastBoundSql: the status_ids a warning stores for a report's stored status_ids,
-// as their JSON text, or null when the report holds none or the rule refuses them (a restored report is bound only by
-// its own CHECK, which does not judge the elements). Judged in the trigger's order: bytes, NUL, JSON, array, length,
-// elements; the ids are written back as JSON.stringify writes them, which is within the bytes when they pass.
-export function storedWarningStatusIds(raw: string | null): string | null {
+// The writer twin of warningStatusIdsPastBoundSql: the ids of stored status_ids, or null for none or when the rule
+// refuses them (a restored report is bound only by its own CHECK, which does not judge the elements; a warning's own
+// are held by its triggers, so the presenter never throws on one). Judged in the trigger's order: bytes, NUL, JSON,
+// array, length, elements.
+export function warningStatusIdsOf(raw: string | null): string[] | null {
 	if (raw === null || raw.length > WARNING_STATUS_IDS_BYTES || raw.includes('\u0000')) {
 		return null
 	}
@@ -1020,7 +1022,14 @@ export function storedWarningStatusIds(raw: string | null): string | null {
 	if (!Array.isArray(ids) || ids.length > WARNING_STATUS_IDS) {
 		return null
 	}
-	return ids.every((id) => typeof id === 'string' && WARNING_STATUS_ID.test(id)) ? JSON.stringify(ids) : null
+	return ids.every((id): id is string => typeof id === 'string' && WARNING_STATUS_ID.test(id)) ? ids : null
+}
+
+// The status_ids a warning stores for a report's stored status_ids, as JSON.stringify writes the ids warningStatusIdsOf
+// accepts (within the bytes when they pass), or null.
+export function storedWarningStatusIds(raw: string | null): string | null {
+	const ids = warningStatusIdsOf(raw)
+	return ids === null ? null : JSON.stringify(ids)
 }
 
 // The scalar parts of the status_ids bound, held by a CHECK for imports too: the storage class, the raw bytes (an

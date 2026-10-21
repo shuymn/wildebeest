@@ -7475,26 +7475,34 @@ describe('0061_account_static_images', () => {
 	})
 })
 
+// The accounts of the account warning migrations' tests: WARNED_LOCAL, a local account, and WARNED_REMOTE.
+const WARNED_LOCAL = '100000000000000001'
+const WARNED_REMOTE = '100000000000000002'
+
+function seedWarnedAccounts(sql: SqlStorage): void {
+	sql.exec(
+		`INSERT INTO accounts (id, uri, username, domain) VALUES
+			(?1, 'https://kopje.test/ap/users/a', 'a', NULL), (?2, 'https://remote.test/users/b', 'b', 'remote.test')`,
+		WARNED_LOCAL,
+		WARNED_REMOTE
+	)
+	sql.exec(
+		"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'a@example.com', X'00', X'00', 'k')",
+		WARNED_LOCAL
+	)
+}
+
 describe('0062_account_warnings', () => {
 	const NAME = '0062_account_warnings'
 	const at = NAMES.indexOf(NAME)
-	const LOCAL = '100000000000000001'
-	const REMOTE = '100000000000000002'
+	const LOCAL = WARNED_LOCAL
+	const REMOTE = WARNED_REMOTE
 	const ID = '300000000000000001'
 	const STAMP = '2026-10-12T00:00:00.000Z'
 
-	// A local account and a remote one, and a notification of the local one, before the file.
+	// The accounts, and a notification of the local one, before the file.
 	const seed = (sql: SqlStorage) => {
-		sql.exec(
-			`INSERT INTO accounts (id, uri, username, domain) VALUES
-				(?1, 'https://kopje.test/ap/users/a', 'a', NULL), (?2, 'https://remote.test/users/b', 'b', 'remote.test')`,
-			LOCAL,
-			REMOTE
-		)
-		sql.exec(
-			"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'a@example.com', X'00', X'00', 'k')",
-			LOCAL
-		)
+		seedWarnedAccounts(sql)
 		sql.exec("INSERT INTO notifications (account_id, type, from_account_id) VALUES (?, 'follow', ?)", LOCAL, REMOTE)
 	}
 
@@ -7726,24 +7734,15 @@ describe('0062_account_warnings', () => {
 describe('0063_account_warning_notifications_key', () => {
 	const NAME = '0063_account_warning_notifications_key'
 	const at = NAMES.indexOf(NAME)
-	const LOCAL = '100000000000000001'
-	const REMOTE = '100000000000000002'
+	const LOCAL = WARNED_LOCAL
+	const REMOTE = WARNED_REMOTE
 
 	it('keys a moderation_warning by its warning, and every other notification as before', async () => {
 		const store = freshStore()
 		await runInDurableObject(store, async (_instance, state) => {
 			const sql = state.storage.sql
 			await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
-			sql.exec(
-				`INSERT INTO accounts (id, uri, username, domain) VALUES
-					(?1, 'https://kopje.test/ap/users/a', 'a', NULL), (?2, 'https://remote.test/users/b', 'b', 'remote.test')`,
-				LOCAL,
-				REMOTE
-			)
-			sql.exec(
-				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'a@example.com', X'00', X'00', 'k')",
-				LOCAL
-			)
+			seedWarnedAccounts(sql)
 			for (let i = 0; i < 2; i++) {
 				sql.exec(
 					"INSERT INTO account_warnings (target_account_id, action, created_at) VALUES (?, 'none', '2026-10-12T00:00:00.000Z')",

@@ -845,7 +845,6 @@ export const reportTargetPage = readOperation<
 		: { ok: true, page: accountUrl(row, origin) }
 })
 
-// Whether `id` is a report's (Admin::AccountAction#report: Report.find, RecordNotFound otherwise).
 // Report `id`'s stored status_ids (Admin::AccountAction#status_ids, include_statuses being always true there), by its
 // key; undefined when `id` is no report's.
 export function reportStatusIds(db: Db, id: string): string | undefined {

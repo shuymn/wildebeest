@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
 import { seedAccount, sql } from './api-helpers'
-import { completeSetup, migratedStore } from './helpers'
-import { copyConfig, dumpViaRpc, importViaRpc, setAccess } from './ops-helpers'
+import { migratedStore } from './helpers'
+import { accessAdminStore, copyConfig, dumpViaRpc, importViaRpc } from './ops-helpers'
 import type { StoreStub } from '../src/platform/store-client'
 
 // Account warnings in dumps (docs/dump-format.md "Stored bounds"): a warning and its moderation_warning notification
@@ -14,9 +14,7 @@ const NOTIFIED = '2026-10-12T05:06:07.008Z'
 const STATUS = '300000000000000001'
 
 async function source() {
-	const store = await migratedStore()
-	await setAccess(store)
-	await completeSetup(store)
+	const store = await accessAdminStore()
 	const alice = await seedAccount(store, { username: 'alice', email: 'alice@example.com' })
 	for (const [text, statusIds] of [
 		['warned text', JSON.stringify([STATUS])],

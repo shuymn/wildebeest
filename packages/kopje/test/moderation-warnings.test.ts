@@ -6,7 +6,7 @@ import { type ApiHarness, bearer, json, setSetting, sql, userToken } from './api
 import { NOW } from './app-helpers'
 import { newClient, VAPID } from './push-helpers'
 import { type PlannedStatement, plannedSql, scansOf, staleStatistics } from './read-helpers'
-import { community, remoteAccount, type User } from './status-helpers'
+import { community, getJson, remoteAccount, type User } from './status-helpers'
 import { Db } from '../src/db/sql'
 import { presentAccountWarning, writeAccountWarning } from '../src/domain/account-warnings'
 import { presentAccountById } from '../src/domain/accounts'
@@ -51,16 +51,11 @@ async function warn(h: ApiHarness, admin: string, target: string, body: Record<s
 	expect(response.status).toBe(200)
 }
 
-async function get<T>(h: ApiHarness, path: string, token: string): Promise<{ status: number; body: T }> {
-	const response = await h.request(path, bearer(token))
-	return { status: response.status, body: await response.json<T>() }
-}
-
 const list = async (h: ApiHarness, user: User, query = '') =>
-	(await get<NotificationBody[]>(h, `/api/v1/notifications${query}`, user.token)).body
+	(await getJson<NotificationBody[]>(h, `/api/v1/notifications${query}`, user.token)).body
 
 const groups = async (h: ApiHarness, user: User, query = '') =>
-	(await get<GroupedBody>(h, `/api/v2/notifications${query}`, user.token)).body
+	(await getJson<GroupedBody>(h, `/api/v2/notifications${query}`, user.token)).body
 
 const streamed = (h: ApiHarness, user: User, id: string) =>
 	runInDurableObject(h.store, (_instance, state) =>
@@ -119,7 +114,7 @@ describe('moderation_warning: the entity (REST::AccountWarningSerializer)', () =
 			target_account: notification!.account,
 			appeal: null,
 		})
-		expect((await get(h, `/api/v1/notifications/${notification!.id}`, bob.token)).body).toEqual(notification)
+		expect((await getJson(h, `/api/v1/notifications/${notification!.id}`, bob.token)).body).toEqual(notification)
 		// types[] and exclude_types[] name it.
 		expect((await list(h, bob, '?types[]=moderation_warning')).map((n) => n.id)).toEqual([notification!.id])
 		expect(await list(h, bob, '?exclude_types[]=moderation_warning')).toEqual([])
@@ -173,10 +168,10 @@ describe('moderation_warning: the entity (REST::AccountWarningSerializer)', () =
 			{ group_key: `ungrouped-${notification!.id}`, moderation_warning: notification!.moderation_warning },
 		])
 		expect(grouped.accounts.map((account) => account.id)).toEqual([bob.id])
-		const one = await get<GroupedBody>(h, `/api/v2/notifications/ungrouped-${notification!.id}`, bob.token)
+		const one = await getJson<GroupedBody>(h, `/api/v2/notifications/ungrouped-${notification!.id}`, bob.token)
 		expect(one.body.notification_groups).toMatchObject([{ moderation_warning: notification!.moderation_warning }])
 		for (const version of ['v1', 'v2']) {
-			expect((await get(h, `/api/${version}/notifications/unread_count`, bob.token)).body).toEqual({ count: 1 })
+			expect((await getJson(h, `/api/${version}/notifications/unread_count`, bob.token)).body).toEqual({ count: 1 })
 		}
 	})
 })
@@ -188,8 +183,8 @@ describe('moderation_warning: who sees it (R42, VIS-31)', () => {
 		const [notification] = await list(h, bob)
 		expect(await list(h, alice)).toEqual([])
 		expect((await groups(h, alice)).notification_groups).toEqual([])
-		expect((await get(h, `/api/v1/notifications/${notification!.id}`, alice.token)).status).toBe(404)
-		expect((await get(h, `/api/v2/notifications/ungrouped-${notification!.id}`, alice.token)).status).toBe(404)
+		expect((await getJson(h, `/api/v1/notifications/${notification!.id}`, alice.token)).status).toBe(404)
+		expect((await getJson(h, `/api/v2/notifications/ungrouped-${notification!.id}`, alice.token)).status).toBe(404)
 		expect(await streamed(h, alice, notification!.id)).toBeNull()
 		// The owner (the admin who acted) sees none of it either.
 		const owner = h.users.owner
@@ -226,10 +221,10 @@ describe('moderation_warning: who sees it (R42, VIS-31)', () => {
 			expect((await groups(h, recipient)).notification_groups.map((g) => g.group_key)).toEqual(
 				recipient === bob ? [kept!.group_key] : []
 			)
-			expect((await get(h, `/api/v1/notifications/${id}`, recipient.token)).status).toBe(404)
+			expect((await getJson(h, `/api/v1/notifications/${id}`, recipient.token)).status).toBe(404)
 			// R15 leaves it out of the counts too, so they agree with the lists.
 			for (const version of ['v1', 'v2']) {
-				expect((await get(h, `/api/${version}/notifications/unread_count`, recipient.token)).body).toEqual({
+				expect((await getJson(h, `/api/${version}/notifications/unread_count`, recipient.token)).body).toEqual({
 					count: recipient === bob ? 1 : 0,
 				})
 			}
@@ -245,7 +240,7 @@ describe('moderation_warning: who sees it (R42, VIS-31)', () => {
 			new Date(NOW).toISOString()
 		)
 		expect((await list(h, bob)).map((n) => n.id)).toEqual([kept!.id])
-		expect((await get(h, '/api/v1/notifications/unread_count', bob.token)).body).toEqual({ count: 1 })
+		expect((await getJson(h, '/api/v1/notifications/unread_count', bob.token)).body).toEqual({ count: 1 })
 	})
 
 	it('keeps every other notification from the recipient itself out; a poll and a moderation_warning pass', async () => {

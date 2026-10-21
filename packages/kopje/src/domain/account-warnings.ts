@@ -2,7 +2,7 @@ import type { Account } from './accounts'
 import type { Admin } from './auth'
 import { logAction } from './moderation-log'
 import type { Db } from '../db/sql'
-import { storedWarningStatusIds } from '../platform/stored-bounds'
+import { storedWarningStatusIds, warningStatusIdsOf } from '../platform/stored-bounds'
 
 // Account warnings (Mastodon's AccountWarning, the strike Admin::AccountAction#process_strike! writes; migration
 // 0062_account_warnings). This module alone reads or writes account_warnings, beside the rule (shownSql in audience.ts,
@@ -71,12 +71,11 @@ export function presentAccountWarning(db: Db, id: string, recipient: Account): A
 	if (row === undefined) {
 		return undefined
 	}
-	const statusIds = storedWarningStatusIds(row.status_ids)
 	return {
 		id: row.id,
 		action: row.action,
 		text: row.text,
-		status_ids: statusIds === null ? null : (JSON.parse(statusIds) as string[]),
+		status_ids: warningStatusIdsOf(row.status_ids),
 		created_at: row.created_at,
 		target_account: recipient,
 		appeal: null,

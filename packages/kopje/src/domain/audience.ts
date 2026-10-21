@@ -793,15 +793,7 @@ export function statusReads(
 		) {
 			const admin =
 				viewer !== null && viewer.accountId !== null && query.admin === viewer.accountId ? at.viewer : 'NULL'
-			const rule = shownSql(
-				at.viewer,
-				'n.type',
-				'n.from_account_id',
-				'n.status_id',
-				now(),
-				admin,
-				'n.account_warning_id'
-			)
+			const rule = shownNotificationSql('n', at.viewer, now(), admin)
 			const from =
 				query.within === undefined
 					? 'main.notifications n'
@@ -1101,18 +1093,19 @@ function silencedSql(r: string, a: string, now: string): string {
 // recipient (but for the end of the recipient's own poll and a moderation_warning, whose sender is its recipient:
 // NotifyService::DropCondition#drop? exempts both from from_self?), is available (so a suspended recipient is never
 // shown its moderation_warning), is not blocked (either way), muted with notifications or domain-blocked by the
-// recipient, and the recipient may see the status. A moderation_warning is shown only when its sender is its
-// recipient and `warning` (its account_warning_id) names a warning of that recipient (R42), by the warning's key, so a
-// restored row linked to another account's warning, or to none, is in no read or count. A reblog notification names the original; the boost itself (the sender's one
-// boost of it) must be visible to the recipient too, so a followers-only or direct boost is not revealed to an author
-// outside its audience. A mention is left out when its status mentions or replies to an account the recipient
-// silences (FeedManager#filter_from_mentions), and a post notification (`status`) when its status is a reply other
-// than in the author's own conversation (a partner that is someone else or unknown, as FeedInsertWorker#notify?) or
-// when home would leave it out (homeFilterSql, which also hides a sender the recipient mutes without notifications).
-// A quoted_update (about the recipient's own quoting status) is shown while its quote is accepted and the recipient
-// may see the quoted status by itself (R35, VIS-27: Mastodon checks neither). An admin.report is shown only while its
-// recipient is `admin`, the OAuth admin's account id (R37; NULL for none), so it leaves every read, push and stream
-// when the admin changes; it goes with its report (notifications.report_id, ON DELETE CASCADE).
+// recipient, and the recipient may see the status. A moderation_warning is shown only when its sender is its recipient
+// and `warning` (its account_warning_id) names a warning of that recipient (R42), by the warning's key, so a restored
+// row linked to another account's warning, or to none, is in no read or count. A reblog notification names the
+// original; the boost itself (the sender's one boost of it) must be visible to the recipient too, so a followers-only
+// or direct boost is not revealed to an author outside its audience. A mention is left out when its status mentions or
+// replies to an account the recipient silences (FeedManager#filter_from_mentions), and a post notification (`status`)
+// when its status is a reply other than in the author's own conversation (a partner that is someone else or unknown, as
+// FeedInsertWorker#notify?) or when home would leave it out (homeFilterSql, which also hides a sender the recipient
+// mutes without notifications). A quoted_update (about the recipient's own quoting status) is shown while its quote is
+// accepted and the recipient may see the quoted status by itself (R35, VIS-27: Mastodon checks neither). An
+// admin.report is shown only while its recipient is `admin`, the OAuth admin's account id (R37; NULL for none), so it
+// leaves every read, push and stream when the admin changes; it goes with its report (notifications.report_id, ON
+// DELETE CASCADE).
 export function shownSql(
 	r: string,
 	type: string,
@@ -1141,6 +1134,12 @@ export function shownSql(
 			AND ${NOT_A_REPLY_TO_OTHERS} AND ${homeFilterSql('s', r, now)}))
 		AND (${type} <> 'quoted_update' OR EXISTS (SELECT 1 FROM main.quotes nq JOIN main.statuses nt ON nt.id = nq.quoted_status_id
 			WHERE nq.status_id = ${status} AND nq.state = 'accepted' AND ${viewableSql('nt', r)})))`
+}
+
+// R15 for the stored notification row `n` (an alias) of recipient `r`: shownSql over its own columns, as the reads
+// and the pushes of stored notifications judge them.
+export function shownNotificationSql(n: string, r: string, now: string, admin: string): string {
+	return shownSql(r, `${n}.type`, `${n}.from_account_id`, `${n}.status_id`, now, admin, `${n}.account_warning_id`)
 }
 
 // R31 (Account#muting_conversation?): whether `owner` mutes the conversation `thread`, an expression for a status's
