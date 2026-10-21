@@ -57,6 +57,15 @@ export function thumbnailSent(value: string | File | undefined): boolean {
 	return value !== undefined && value !== ''
 }
 
+// The validation error of an upload or update form: the description first, then the thumbnail (read only when the
+// description passes).
+function mediaProblem(params: Params, description: string | undefined): string | undefined {
+	return (
+		descriptionProblem(description) ??
+		(thumbnailSent(params.file('thumbnail') ?? params.get('thumbnail')) ? THUMBNAIL_MUST_BE_BLANK : undefined)
+	)
+}
+
 // PUT /api/v1/media/:id reads a thumbnail only to refuse it: no allowance beyond its part's headers (RES-1).
 const THUMBNAIL_FILE: FileRule = { names: ['thumbnail'], maxBytes: 0 }
 
@@ -259,13 +268,8 @@ export const uploadMedia: ApiHandler = async (c, deps) => {
 		deps,
 		() => userCredential(c, deps),
 		(params) => {
-			const problem = descriptionProblem(params.get('description'))
-			if (problem !== undefined) {
-				return { status: 422, error: problem }
-			}
-			return thumbnailSent(params.file('thumbnail') ?? params.get('thumbnail'))
-				? { status: 422, error: THUMBNAIL_MUST_BE_BLANK }
-				: null
+			const problem = mediaProblem(params, params.get('description'))
+			return problem === undefined ? null : { status: 422, error: problem }
 		}
 	)
 	return outcome.ok ? c.json(outcome.media) : mastodonError(outcome.status, outcome.error)
@@ -482,9 +486,7 @@ export const updateMedia: ApiHandler = async (c, deps) => {
 		return p
 	}
 	const description = p.get('description')
-	const problem =
-		descriptionProblem(description) ??
-		(thumbnailSent(p.file('thumbnail') ?? p.get('thumbnail')) ? THUMBNAIL_MUST_BE_BLANK : undefined)
+	const problem = mediaProblem(p, description)
 	if (problem !== undefined) {
 		return refuseAfterAuth(c, deps, mastodonError(422, problem))
 	}
