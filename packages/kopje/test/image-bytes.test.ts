@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+	ANIMATED_WEBP,
+	APNG,
 	GIF,
 	JPEG_COPYRIGHT_ONLY,
 	JPEG_ICC,
@@ -18,7 +20,7 @@ import {
 	WIDE_PNG,
 } from './fixtures/images'
 import { bytes, exifWithTag, jpegWithSegment, pngWithChunk } from './media-helpers'
-import { retainedMetadata, sniffImageType } from '../src/platform/image-bytes'
+import { isAnimated, retainedMetadata, sniffImageType } from '../src/platform/image-bytes'
 import { keyOfPath, mediaKeys, originalKey } from '../src/platform/media-files'
 
 const text = (value: string) => new TextEncoder().encode(value)
@@ -95,6 +97,82 @@ describe('retainedMetadata (MEDIA-3)', () => {
 		const start = performance.now()
 		expect(retainedMetadata(worst, 'image/jpeg')).toBe('unreadable')
 		expect(performance.now() - start).toBeLessThan(2000)
+	})
+})
+
+describe('isAnimated (MEDIA-3)', () => {
+	// A WebP of `body` (its chunks after 'WEBP') with an exact RIFF extent.
+	const riff = (body: Uint8Array) => {
+		const out = new Uint8Array(12 + body.length)
+		out.set(text('RIFF'))
+		new DataView(out.buffer).setUint32(4, 4 + body.length, true)
+		out.set(text('WEBP'), 8)
+		out.set(body, 12)
+		return out
+	}
+	const chunk = (type: string, payload: Uint8Array) => {
+		const out = new Uint8Array(8 + payload.length + (payload.length % 2))
+		out.set(text(type))
+		new DataView(out.buffer).setUint32(4, payload.length, true)
+		out.set(payload, 8)
+		return out
+	}
+	const webpPlain = bytes(WEBP_PLAIN)
+	const webpIcc = bytes(WEBP_ICC)
+	const png = bytes(PNG_PLAIN)
+	// PNG_PLAIN with one more chunk right before IEND (after IDAT); CRC left zero.
+	const beforeIend = (type: string, payload: Uint8Array) => {
+		const header = new Uint8Array(8)
+		new DataView(header.buffer).setUint32(0, payload.length)
+		header.set(text(type), 4)
+		const iend = png.length - 12
+		return new Uint8Array([...png.subarray(0, iend), ...header, ...payload, 0, 0, 0, 0, ...png.subarray(iend)])
+	}
+
+	it('finds the frames of an animated WebP and an APNG, wherever their marks are', () => {
+		expect(isAnimated(bytes(ANIMATED_WEBP), 'image/webp')).toBe(true)
+		expect(isAnimated(bytes(APNG), 'image/png')).toBe(true)
+		// The VP8X animation flag alone (WEBP_ICC's VP8X with 0x02 set).
+		const flagged = webpIcc.slice()
+		flagged[20] = (flagged[20] ?? 0) | 0x02
+		expect(isAnimated(flagged, 'image/webp')).toBe(true)
+		// ANIM without the flag.
+		expect(
+			isAnimated(riff(new Uint8Array([...webpPlain.subarray(12), ...chunk('ANIM', new Uint8Array(6))])), 'image/webp')
+		).toBe(true)
+		expect(isAnimated(beforeIend('acTL', new Uint8Array(8)), 'image/png')).toBe(true)
+	})
+
+	it('finds none in still images, colour profiles included', () => {
+		expect(isAnimated(webpPlain, 'image/webp')).toBe(false)
+		expect(isAnimated(webpIcc, 'image/webp')).toBe(false)
+		expect(isAnimated(png, 'image/png')).toBe(false)
+		expect(isAnimated(bytes(PNG_ICC), 'image/png')).toBe(false)
+	})
+
+	it('counts a file it cannot walk, a short VP8X or an unknown type as animated (fail closed)', () => {
+		const huge = webpPlain.slice()
+		new DataView(huge.buffer).setUint32(16, 0xffffffff, true)
+		const hugePng = png.slice()
+		new DataView(hugePng.buffer).setUint32(8, 0xffffffff)
+		for (const [name, file, type] of [
+			['a truncated WebP', webpPlain.subarray(0, 40), 'image/webp'],
+			['a truncated PNG', png.subarray(0, 30), 'image/png'],
+			['a WebP chunk of 0xFFFFFFFF bytes', huge, 'image/webp'],
+			['a PNG chunk of 0xFFFFFFFF bytes', hugePng, 'image/png'],
+			['a RIFF extent past the file', webpPlain.subarray(0, webpPlain.length - 2), 'image/webp'],
+			['bytes past the RIFF extent', new Uint8Array([...webpPlain, 0, 0]), 'image/webp'],
+			[
+				'a VP8X of 9 bytes',
+				riff(new Uint8Array([...chunk('VP8X', new Uint8Array(9)), ...webpPlain.subarray(12)])),
+				'image/webp',
+			],
+			['a PNG without IEND', png.subarray(0, png.length - 12), 'image/png'],
+			['a GIF', bytes(GIF), 'image/gif'],
+			['a JPEG', bytes(JPEG_ICC), 'image/jpeg'],
+		] as const) {
+			expect(isAnimated(file, type), name).toBe(true)
+		}
 	})
 })
 

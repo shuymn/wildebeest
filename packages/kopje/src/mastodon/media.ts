@@ -322,6 +322,7 @@ async function transformReserved(
 					contentType: full.contentType,
 					original: { width: full.width, height: full.height },
 					small: { width: small.width, height: small.height },
+					animated: full.animated,
 					description: fields.description,
 					focus: fields.focus,
 					now: deps.now(),

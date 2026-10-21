@@ -4,6 +4,7 @@
 //   - retainedMetadata: whether a re-encoded file still carries any metadata but a colour profile, as a check on the
 //     transformation's output (MEDIA-3). It walks the container's chunks and only reads lengths and tags, so its
 //     work is linear in the input and bounded by it (RES-2).
+//   - isAnimated: whether a re-encoded file holds several frames, through the same chunk walks.
 
 export type ImageType = 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' | 'image/avif'
 
@@ -129,9 +130,15 @@ const PNG_CHUNKS = new Set([
 	'fdAT',
 ])
 
-function pngMetadata(bytes: Uint8Array): RetainedMetadata | null {
+// A container walk that met a malformed file.
+const MALFORMED = Symbol('malformed')
+
+// Walks a PNG's chunks after its signature, calling `visit` with each chunk's type, data offset and data length, and
+// stops with the first value it returns. MALFORMED when a chunk passes the file's end, when anything follows IEND, or
+// when IEND is missing; undefined when it reached IEND and `visit` returned nothing. Only lengths and tags are read.
+function walkPng<T>(bytes: Uint8Array, visit: (type: string, start: number, length: number) => T | undefined) {
 	if (sniffImageType(bytes) !== 'image/png') {
-		return 'unreadable'
+		return MALFORMED
 	}
 	const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
 	let i = 8
@@ -140,38 +147,48 @@ function pngMetadata(bytes: Uint8Array): RetainedMetadata | null {
 		const type = ascii(bytes, i + 4, 4)
 		const end = i + 12 + length
 		if (end > bytes.length) {
-			return 'unreadable'
+			return MALFORMED
 		}
+		const found = visit(type, i + 8, length)
+		if (found !== undefined) {
+			return found
+		}
+		if (type === 'IEND') {
+			// Nothing may follow the end of the image.
+			return end === bytes.length ? undefined : MALFORMED
+		}
+		i = end
+	}
+	return MALFORMED
+}
+
+function pngMetadata(bytes: Uint8Array): RetainedMetadata | null {
+	const found = walkPng<RetainedMetadata>(bytes, (type) => {
 		if (type === 'eXIf') {
 			return 'exif'
 		}
 		if (type === 'tEXt' || type === 'zTXt' || type === 'iTXt') {
 			return 'text'
 		}
-		if (!PNG_CHUNKS.has(type)) {
-			return 'segment'
-		}
-		if (type === 'IEND') {
-			// Nothing may follow the end of the image.
-			return end === bytes.length ? null : 'unreadable'
-		}
-		i = end
-	}
-	return 'unreadable'
+		return PNG_CHUNKS.has(type) ? undefined : 'segment'
+	})
+	return found === MALFORMED ? 'unreadable' : (found ?? null)
 }
 
 // WebP chunks a re-encoded image may keep: image data, alpha, the extended header, the colour profile and animation.
 const WEBP_CHUNKS = new Set(['VP8 ', 'VP8L', 'VP8X', 'ALPH', 'ICCP', 'ANIM', 'ANMF'])
 
-function webpMetadata(bytes: Uint8Array): RetainedMetadata | null {
+// Walks a WebP's chunks as walkPng walks a PNG's. MALFORMED unless the RIFF extent covers the file exactly and every
+// chunk, with its padding to an even length, ends within it.
+function walkWebp<T>(bytes: Uint8Array, visit: (type: string, start: number, length: number) => T | undefined) {
 	if (sniffImageType(bytes) !== 'image/webp') {
-		return 'unreadable'
+		return MALFORMED
 	}
 	const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
 	// The RIFF extent must cover the file exactly: nothing outside it, and no chunk past it.
 	const end = 8 + view.getUint32(4, true)
 	if (end !== bytes.length) {
-		return 'unreadable'
+		return MALFORMED
 	}
 	let i = 12
 	while (i + 8 <= end) {
@@ -179,18 +196,55 @@ function webpMetadata(bytes: Uint8Array): RetainedMetadata | null {
 		const length = view.getUint32(i + 4, true)
 		const next = i + 8 + length + (length % 2)
 		if (next > end) {
-			return 'unreadable'
+			return MALFORMED
 		}
+		const found = visit(type, i + 8, length)
+		if (found !== undefined) {
+			return found
+		}
+		i = next
+	}
+	return i === end ? undefined : MALFORMED
+}
+
+function webpMetadata(bytes: Uint8Array): RetainedMetadata | null {
+	const found = walkWebp<RetainedMetadata>(bytes, (type) => {
 		if (type === 'EXIF') {
 			return 'exif'
 		}
 		if (type === 'XMP ') {
 			return 'xmp'
 		}
-		if (!WEBP_CHUNKS.has(type)) {
-			return 'segment'
-		}
-		i = next
+		return WEBP_CHUNKS.has(type) ? undefined : 'segment'
+	})
+	return found === MALFORMED ? 'unreadable' : (found ?? null)
+}
+
+// VP8X's flags byte (the first of its 10 data bytes) marks an animation with 0x02 (RFC 9649 section 2.7).
+const VP8X_BYTES = 10
+const VP8X_ANIMATION = 0x02
+
+// Whether a re-encoded file holds more than one frame, or may: a WebP with the VP8X animation flag or an ANIM or ANMF
+// chunk (RFC 9649 section 2.7), a PNG with an acTL chunk anywhere (APNG). A file the walkers cannot walk, a short
+// VP8X, and any other type count as animated (fail closed: a preview is refused, and a served image only gets its
+// preview as a still). The walk reads only lengths and tags, so its work is linear in the output (RES-2).
+export function isAnimated(bytes: Uint8Array, type: string): boolean {
+	switch (type) {
+		case 'image/png':
+			return walkPng(bytes, (chunk) => (chunk === 'acTL' ? true : undefined)) !== undefined
+		case 'image/webp':
+			return (
+				walkWebp(bytes, (chunk, start, length) => {
+					if (chunk === 'ANIM' || chunk === 'ANMF') {
+						return true
+					}
+					if (chunk === 'VP8X') {
+						return length < VP8X_BYTES || ((bytes[start] ?? 0) & VP8X_ANIMATION) !== 0 ? true : undefined
+					}
+					return undefined
+				}) !== undefined
+			)
+		default:
+			return true
 	}
-	return i === end ? null : 'unreadable'
 }

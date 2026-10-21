@@ -79,7 +79,10 @@ export function pathOf(url: string | null): string {
 }
 
 // A codec over the local Images binding (Miniflare's, backed by sharp) that records calls and can be told to
-// misbehave: fail with an Images error code, or return given bytes instead of a re-encoding (to inject EXIF).
+// misbehave: fail with an Images error code, or return given bytes instead of a re-encoding (to inject EXIF), for
+// every call (encodeResult) or per call (encodeResponder, given the call's options and its 0-based index; null falls
+// through to the real binding). Miniflare's binding decodes only the first frame and ignores anim, so an animated
+// output is stood in for through these.
 export class TestCodec implements ImageCodec {
 	readonly real = imagesCodec(env.IMAGES)
 	infoCalls = 0
@@ -87,6 +90,7 @@ export class TestCodec implements ImageCodec {
 	failInfo: number | null = null
 	failEncode: number | null = null
 	encodeResult: Uint8Array | null = null
+	encodeResponder: ((options: EncodeOptions, index: number) => Uint8Array | null) | null = null
 	infoResult: ImageInfo | null = null
 
 	info(bytes: Uint8Array): Promise<ImageInfo> {
@@ -107,6 +111,10 @@ export class TestCodec implements ImageCodec {
 		}
 		if (this.encodeResult !== null) {
 			return Promise.resolve(this.encodeResult)
+		}
+		const given = this.encodeResponder?.(options, this.encodeCalls.length - 1) ?? null
+		if (given !== null) {
+			return Promise.resolve(given)
 		}
 		return this.real.encode(bytes, options)
 	}

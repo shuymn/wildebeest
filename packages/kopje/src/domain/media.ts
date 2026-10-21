@@ -247,11 +247,21 @@ export const startTransforms = userWriteOperation<
 	return { status: 'ok' }
 })
 
+type Size = { width: number; height: number }
+
+// The meta of a local upload's row: its served sizes, and `"animated": true` when its served file is animated
+// (platform/images.ts isAnimated), which makes its still preview the account's static image (profileAssignSql).
+// presentMedia ignores the flag. About 100 bytes, within MEDIA_META_BYTES.
+export function uploadMediaMeta(original: Size, small: Size, animated: boolean): string | null {
+	return storedMediaMeta(JSON.stringify({ original, small, ...(animated ? { animated: true } : {}) }))
+}
+
 export type CompleteMediaInput = {
 	id: string
 	contentType: string
-	original: { width: number; height: number }
-	small: { width: number; height: number }
+	original: Size
+	small: Size
+	animated: boolean
 	description: string
 	focus: { x: number; y: number }
 	now: number
@@ -286,7 +296,7 @@ export const completeMedia = userWriteOperation<CompleteMediaInput, MediaAttachm
 			mediaUrl(origin, row.token, 'full', input.contentType),
 			mediaUrl(origin, row.token, 'small', input.contentType),
 			input.contentType,
-			storedMediaMeta(JSON.stringify({ original: input.original, small: input.small })),
+			uploadMediaMeta(input.original, input.small, input.animated),
 			storedMediaDescription(input.description),
 			input.focus.x,
 			input.focus.y,
