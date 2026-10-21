@@ -275,6 +275,32 @@ describe('the nested account at its caps (RES-2)', () => {
 		expect((await shown(target)).emojis.map((emoji) => emoji.shortcode)).not.toContain('keep')
 	})
 
+	// Every entry referenced, each url normalized to 512 bytes ('{' percent-encoded): one entry fits MOVED_EMOJIS_BYTES,
+	// and the rest are never presented (the heap model counts one entry past the admitted ones, test/status-bounds.test.ts).
+	it('presents a snapshot of fourteen referenced 512-byte entries as the one that fits', async () => {
+		const { account, move, shown } = await fixture()
+		const names = Array.from({ length: 14 }, (_, i) => String.fromCharCode(97 + i))
+		const url = `http://a/${'{'.repeat(167)}aa`
+		const pairs = names.map((name) => [name, url])
+		const snapshot = JSON.stringify(pairs)
+		expect(utf8(snapshot)).toBe(2_619)
+		const target = await account({
+			display_name: names.map((name) => `:${name}:`).join(''),
+			emojis: snapshot.padEnd(6_144, ' '),
+		})
+		const source = await account()
+		await move(source, target)
+		const href = `http://a/${'%7B'.repeat(167)}aa`
+		expect(utf8(href)).toBe(512)
+		const nested = (await shown(source)).moved!
+		expect(nested.emojis).toEqual([{ shortcode: 'a', url: href, static_url: href, visible_in_picker: true }])
+		expect(jsonBytes(nested.emojis)).toBeLessThanOrEqual(MOVED_EMOJIS_BYTES)
+		// Presented whole, the snapshot would be 15,289 bytes.
+		expect(
+			jsonBytes(names.map((name) => ({ shortcode: name, url: href, static_url: href, visible_in_picker: true })))
+		).toBe(15_289)
+	})
+
 	// Imported TEXT may be malformed UTF-8: F0 followed by continuation bytes is one character to SQLite's substr.
 	it('reads malformed imported text within its byte caps and presents it within its decoded limits', async () => {
 		const { h, account, move, shown } = await fixture()

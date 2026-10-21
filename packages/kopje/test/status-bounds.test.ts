@@ -65,7 +65,13 @@ import { parseRemoteStatus } from '../src/federation/remote-status'
 import { utf8Length } from '../src/platform/dump-format'
 import { DOMAIN_BYTES, MAX_LOCAL_ADDRESSED } from '../src/platform/identity-bounds'
 import type { StoreOperation } from '../src/platform/store-kernel'
-import { EMOJI_ENTRY_BYTES, presentedEmojiBytes, STATUS_EMOJIS_BYTES } from '../src/platform/stored-bounds'
+import {
+	EMOJI_ENTRY_BYTES,
+	EMOJI_SHORTCODE_LIMIT,
+	EMOJI_URL_LIMIT,
+	presentedEmojiBytes,
+	STATUS_EMOJIS_BYTES,
+} from '../src/platform/stored-bounds'
 import {
 	jsonStringBytes,
 	REMOTE_BIO_BYTES,
@@ -161,6 +167,19 @@ const MOVED_ACCOUNT_JSON_MAX = utf8Length(
 )
 // What a moved-to account's row reads at most: SQLite bytes (profile-fixtures.ts MOVED_ROW_SQLITE_MAX) and heap.
 const MOVED_ROW_HEAP_MAX = MOVED_ACCOUNT_COLUMNS.rowHeap
+
+// What presenting a nested account's emojis holds besides what it admits (custom-emojis.ts referencedEmojis), at
+// three times its bytes: one entry at a time, its two literals as stored (a 128-character name and a 512-byte url,
+// each character escaped to six bytes), their decoded strings, and the entry presented from them. One presentation
+// runs at a time, so an answer holds one.
+const MOVED_EMOJI_SCRATCH =
+	3 *
+	(6 * EMOJI_SHORTCODE_LIMIT +
+		2 +
+		(6 * EMOJI_URL_LIMIT + 2) +
+		EMOJI_SHORTCODE_LIMIT +
+		EMOJI_URL_LIMIT +
+		(EMOJI_ENTRY_BYTES + EMOJI_SHORTCODE_LIMIT + 2 * EMOJI_URL_LIMIT))
 
 // The nested moved-to accounts a presented value shows (each `moved` that is an account).
 function movedAccounts(value: unknown): unknown[] {
@@ -1271,7 +1290,7 @@ async function peaks(items: readonly string[], chunks: ChunkPlan, state: number)
 	const largestRow = Math.max(...each.map((e) => e.largestRow))
 	const conservative = await conservativeJson()
 	const json = Math.max(...items.map((item) => conservative[item]!))
-	const rest = 3 * ANSWER_BYTES + 3 * json + state
+	const rest = 3 * ANSWER_BYTES + 3 * json + MOVED_EMOJI_SCRATCH + state
 	return {
 		rows,
 		largestRow,
@@ -1286,6 +1305,7 @@ async function peaks(items: readonly string[], chunks: ChunkPlan, state: number)
 // an unavailable one.
 describe('the moved-to account (RES-3)', () => {
 	it('derives its maxima from its caps', () => {
+		expect(MOVED_EMOJI_SCRATCH).toBe(17_109)
 		expect({ json: MOVED_ACCOUNT_JSON_MAX, sqlite: MOVED_ROW_SQLITE_MAX, heap: MOVED_ROW_HEAP_MAX }).toEqual({
 			json: 11_021,
 			sqlite: 10_094,

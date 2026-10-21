@@ -122,6 +122,54 @@ export function presentEmojis(stored: string | null, bytes: number): CustomEmoji
 	return emojis
 }
 
+// A JSON string literal of a stored snapshot: its names and urls, in order. The triggers keep a snapshot an array of
+// [name, url] pairs of strings (emojisPastBoundSql), so the literals come in pairs; matchAll copies the pattern.
+const STRING_LITERAL = /"(?:[^"\\]|\\.)*"/g
+
+// The entities of a stored snapshot whose shortcodes `texts` reference (shortcodesIn), in snapshot order, admitted as
+// presentEmojis admits them while 1 + Σ(67 + n + 2·url) stays within `bytes`, stopping at the first that does not
+// fit. The snapshot is read one literal at a time, never parsed whole: an unreferenced entry is skipped by its decoded
+// name, and only a referenced one is normalized and measured, so at most one entry past the admitted ones is held.
+// A literal that is not a JSON string (none the triggers accept) is skipped, so a row never fails its request.
+export function referencedEmojis(stored: string | null, texts: readonly string[], bytes: number): CustomEmoji[] {
+	if (stored === null) {
+		return []
+	}
+	const referenced = shortcodesIn(texts)
+	const literals = stored.matchAll(STRING_LITERAL)
+	const emojis: CustomEmoji[] = []
+	let size = 1
+	for (let name = literals.next(); name.done !== true; name = literals.next()) {
+		const url = literals.next()
+		if (url.done === true) {
+			break
+		}
+		const shortcode = decodedString(name.value[0])
+		if (shortcode === null || !referenced.has(shortcode) || !isShortcode(shortcode)) {
+			continue
+		}
+		const href = emojiHref(decodedString(url.value[0]))
+		if (href === null) {
+			continue
+		}
+		size += entryBytes(shortcode, href)
+		if (emojis.length === MAX_EMOJIS || size > bytes) {
+			break
+		}
+		emojis.push({ shortcode, url: href, static_url: href, visible_in_picker: true })
+	}
+	return emojis
+}
+
+function decodedString(literal: string): string | null {
+	try {
+		const value = JSON.parse(literal) as unknown
+		return typeof value === 'string' ? value : null
+	} catch {
+		return null
+	}
+}
+
 // Poll#emojis (app/models/poll.rb:69-71): the status's emojis its choices reference, a subset of the status's.
 export function pollEmojis(emojis: readonly CustomEmoji[], titles: readonly string[]): CustomEmoji[] {
 	const referenced = shortcodesIn(titles)
