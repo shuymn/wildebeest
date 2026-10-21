@@ -211,9 +211,10 @@ Posting (`POST` and `PUT /api/v1/statuses`):
   (Mastodon answers 404 for an immediate repeat), and a key whose status was deleted posts anew (Mastodon answers 404
   within the hour).
 - Every local status shows the app it was posted through, as Mastodon does at its default `show_application`; Kopje
-  has no such setting. The app's `website` is shown serialized as a URL (`https://example.com/` for a stored
-  `https://example.com`), and a name or website Mastodon's validations would refuse (an imported one) is shown as
-  `application: null` or `website: null`.
+  has no such setting. The app is shown within Kopje's presentation bounds, judged on the stored value as decoded: a
+  name past 60 code points, 240 UTF-8 bytes or 362 JSON bytes shows `application: null`, and a website past 2,000
+  UTF-8 bytes or 4,002 JSON bytes, holding a NUL or not an http(s) URL shows `website: null`. These can hide a value
+  registration accepted (a website of 2,000 characters that are not ASCII, say).
 - Kopje removes an app itself (an unused app after a day, or one registration evicts): its statuses then show
   `application: null`. Mastodon removes an app only when its owner deletes it. A scheduled status whose app is gone by
   its publication is published, showing `application: null`; Mastodon drops it.

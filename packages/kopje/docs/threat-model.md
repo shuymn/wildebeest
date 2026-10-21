@@ -1707,7 +1707,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   name and website as stored, within 240 and 2,000 bytes and only as text (`appNameSql` and `appWebsiteSql` in
   `src/platform/stored-bounds.ts`, by key through `sqlite_autoindex_oauth_clients_1`), and presents them as decoded:
   a name of at most 60 code points within 240 bytes and 362 JSON bytes, else `application: null`; a website that is
-  not blank and serializes as an http(s) URL within 2,000 bytes as JSON too (`jsonHref`), else `website: null`
+  not blank, holds no NUL, is within 2,000 bytes and 4,002 JSON bytes and parses as an http(s) URL, shown as stored
+  (`presentedAppWebsite` in `src/domain/status-presenter.ts`), else `website: null`
   (`test/statuses.test.ts` ("application"), `test/status-bounds.test.ts` ("status applications")). Each per-status
   cap reads at most its own number of rows, each status once, through an index that holds only the rows it shows:
   media_attachments_status (shown attachments), status_mentions_shown (mentions that are not silent, migration
@@ -1826,8 +1827,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   Rate Limiting binding before its body is read (429), and the Store keeps at most 500 never-authorized apps (no token or
   code of a user); when full it first removes unused apps (no token of any kind) older than a day, then the oldest
   never-authorized apps older than an hour (app tokens and all), and otherwise refuses with 429. Only a user's token or
-  code protects an app: anyone can get an app token without a user, so app tokens cannot hold a slot for good. The cron removes unused apps after a day,
-  as Mastodon's `ApplicationsVacuum` does, and expired codes and web sessions, 500 of each per run. Removing an app
+  code protects an app: anyone can get an app token without a user, so app tokens cannot hold a slot for good. The cron
+  removes unused apps after a day (Kopje's own removal, which Mastodon 4.5.11 does not make:
+  [mastodon-deviations.md](mastodon-deviations.md), Posting), and expired codes and web sessions, 500 of each per run.
+  Removing an app
   writes no status row however many it posted (`statuses.application_id` has no foreign key; its statuses then show
   `application: null`). `registerApp` and `sweepOAuth` in `src/domain/oauth.ts`, `src/mastodon/oauth.ts`;
   `test/apps-budget.test.ts`. Avatar and header
@@ -2179,8 +2182,8 @@ the account occurrence's conservative JSON adds those keys (63 bytes) to the rem
 alone pass a local account's four. Every presented account but the viewer's moved to an account of its own at the nested
 caps (a display name referencing emojis that fill 2,048 bytes, URLs at 512 bytes, a 253-byte domain), and each nested
 account counts at its derived 11,021 bytes in the conservative JSON (14 in the conversation, 10 in the group). The
-fills' statuses are remote, which show no `application`; each status a shape shows counts one at its derived 2,399
-bytes (a name of 60 code points escaped to six bytes each and a website of 2,002 JSON bytes, with the key), witnessed
+fills' statuses are remote, which show no `application`; each status a shape shows counts one at its derived 4,399
+bytes (a name of 60 code points escaped to six bytes each and a website of 4,002 JSON bytes, with the key), witnessed
 by a local original and a local quote whose apps are at those bounds, escaped, raw and as malformed imported bytes
 (`test/status-bounds.test.ts` ("status applications")). Through
 the real Store RPC, a public timeline page, a context and a search answer of statuses of about 0.98 MB each, each cut at
@@ -2193,16 +2196,16 @@ the boost of a quote above, alone or as the one status a lookup of it, the quote
 | ---------------------------------------------------------------- | ----------------- | --------------- | ----------------- | --------- | ----- | -------------- |
 | Account occurrence, with the account it moved to                 | 123,249           | 140,447         | 143,188           | 1         | 92    | 1.7%           |
 | Moved-to account (nested), derived from its caps                 | 11,118            | 8,343           | 11,021            | 1         |       | 0.1%           |
-| Status                                                           | 4,444,720         | 2,638,854       | 2,644,116         | 1,485     | 2,419 | 31.5%          |
-| Quote (the status and its quoted status)                         | 6,818,483         | 5,277,741       | 5,288,265         | 1,918     | 4,840 | 63.0%          |
-| Boost of a quote                                                 | 7,113,088         | 5,686,692       | 5,702,293         | 1,975     | 5,799 | 68.0%          |
-| Conversation: 12 participants presented, its last status a quote | 8,496,031         | 6,963,074       | 7,005,734         | 1,944     | 5,935 | 83.5%          |
-| Notification group: 8 sample accounts, its status a quote        | 7,880,309         | 6,401,741       | 6,433,689         | 1,953     | 5,588 | 76.7%          |
-| Report: its first status a quote past the 2 MiB allowance        | 7,198,433         | 5,874,208       | 5,890,088         | 1,933     | 5,155 | 70.2%          |
+| Status                                                           | 4,444,720         | 2,638,854       | 2,646,116         | 1,485     | 2,419 | 31.5%          |
+| Quote (the status and its quoted status)                         | 6,818,483         | 5,277,741       | 5,292,265         | 1,918     | 4,840 | 63.1%          |
+| Boost of a quote                                                 | 7,113,088         | 5,686,692       | 5,708,293         | 1,975     | 5,799 | 68.0%          |
+| Conversation: 12 participants presented, its last status a quote | 8,496,031         | 6,963,074       | 7,009,734         | 1,944     | 5,935 | 83.6%          |
+| Notification group: 8 sample accounts, its status a quote        | 7,880,309         | 6,401,741       | 6,437,689         | 1,953     | 5,588 | 76.7%          |
+| Report: its first status a quote past the 2 MiB allowance        | 7,198,433         | 5,874,208       | 5,894,088         | 1,933     | 5,155 | 70.3%          |
 | An admin.report notification of that report                      | 2,360,585         | 403,298         | 408,654           | 1,061     | 294   | 4.9%           |
 | A moderation_warning notification, its local account at bounds   | 129,439           | 281,568         | 281,568           | 9         | 215   | 3.4%           |
 | Its notification group                                           | 129,439           | 281,757         | 281,757           | 9         | 222   | 3.4%           |
-| A filtered favourite of the quote, as include_filtered lists it  | 6,952,497         | 5,418,314       | 5,431,516         | 1,941     | 4,936 | 64.7%          |
+| A filtered favourite of the quote, as include_filtered lists it  | 6,952,497         | 5,418,314       | 5,435,516         | 1,941     | 4,936 | 64.8%          |
 | ActivityPub Note: a local status at its bounds, 1,000 addressed  | 3,697,315         | 4,235,143       |                   | 1,337     | 3,165 | 50.5%          |
 | Its Create (the Note and its addressing again)                   |                   | 6,291,204       |                   |           |       | 75.0%          |
 | Announcement: each part derived from its caps                    |                   | 121,774         | 248,997           |           |       | 3.0%           |
@@ -2355,9 +2358,9 @@ and reports' within the whole.
 
 | Item                                           | Rows, with 25% headroom | Rejected-item objects |
 | ---------------------------------------------- | ----------------------- | --------------------- |
-| Boost of a quote (the largest timeline item)   | 19.27 MB                | 17.11 MB              |
-| Group: its status (a quote), 8 sample accounts | 21.24 MB                | 19.30 MB              |
-| Report: its status and 4 accounts              | 19.48 MB                | 17.67 MB              |
+| Boost of a quote (the largest timeline item)   | 19.27 MB                | 17.12 MB              |
+| Group: its status (a quote), 8 sample accounts | 21.24 MB                | 19.31 MB              |
+| Report: its status and 4 accounts              | 19.48 MB                | 17.68 MB              |
 
 Groups and reports also keep the presentation's state: the compiled filters (50 filters of 20 keywords, about
 0.5 MB) and the filter results cached by status (at most 50 results of about 1.2 KB each, 60 KB a status) for the
@@ -2368,15 +2371,15 @@ pass, and the passes are at most four), 200 for a page of reports (its at most 1
 
 | Answer (Store isolate)                      | Normal   | Backstop fired, the dropped chunk still live | A single item |
 | ------------------------------------------- | -------- | -------------------------------------------- | ------------- |
-| Timelines (largest item a boost of a quote) | 61.56 MB | 63.97 MB (63,968,833 bytes)                  | 61.56 MB      |
-| Groups                                      | 75.82 MB | 78.64 MB                                     | 75.82 MB      |
-| Reports                                     | 74.84 MB | 77.65 MB                                     | 74.84 MB      |
+| Timelines (largest item a boost of a quote) | 61.58 MB | 63.99 MB (63,986,833 bytes)                  | 61.58 MB      |
+| Groups                                      | 75.84 MB | 78.65 MB                                     | 75.84 MB      |
+| Reports                                     | 74.85 MB | 77.67 MB                                     | 74.85 MB      |
 
 A chunk of several takes at most its target of heap: 704 KiB (0.72 MB) for timelines, 1 MiB (1.05 MB) for groups and
 reports. Normal: the rows are the larger of 1.25 × the target and the item's rows, plus the admitted answer, the
 rejected item and, for groups and reports, their state. With the backstop fired, 1.25 × (the target + 1.20 MB) of
 dropped rows more. The 704 KiB timeline cap keeps the fallback below half the isolate's memory even while the dropped
-chunk remains live, with 31,167 bytes to spare: each account row's static images count at their stored bound
+chunk remains live, with 13,167 bytes to spare: each account row's static images count at their stored bound
 (1,056 bytes of heap each, whatever the fills hold), each status row's app name and website at their raw bounds
 (4,544 bytes of heap), each moved-to account's row at its 22,876-byte heap cap and its
 JSON at 11,021 bytes, and its emojis' presentation holds one entry past those it admits at a time (18,060 bytes at three
