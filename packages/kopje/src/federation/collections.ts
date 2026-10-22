@@ -28,11 +28,11 @@ import { storedCount } from '../platform/stored-bounds'
 
 // The Worker's part of a sync of a remote account's collections (domain/remote-collections.ts): what Mastodon's
 // FetchFeaturedCollectionService, FetchFeaturedTagsCollectionService and ProcessAccountService#collection_info fetch
-// (the following, followers and outbox collections, for hide_collections and the counts),
-// read through the safe loader (NET-1) within one request's fetch budget per round (RES-6), signed by a local
-// follower of the account or else by the instance actor (as Mastodon signs with local_follower), and never from the
-// signed-document cache (NET-4). The jobs/queue.ts rounds run it after the Store's inbound jobs: a round runs one phase
-// of a sync, reading the collections or fetching the pinned statuses that reading left pending.
+// (the following, followers and outbox collections, for hide_collections and the counts), read through the safe
+// loader (NET-1) within one request's fetch budget per round (RES-6), signed by a local follower of the account or
+// else by the instance actor (as Mastodon signs with local_follower), and never from the signed-document cache
+// (NET-4). The jobs/queue.ts rounds run it after the Store's inbound jobs: a round runs one phase of a sync, reading
+// the collections or fetching the pinned statuses that reading left pending.
 //
 // Differences from Mastodon: a collection is read only on the actor's own origin (Mastodon checks the host for the
 // featured collections only); the featured collection's first MAX_REMOTE_PINS items are read; a collection that may be
