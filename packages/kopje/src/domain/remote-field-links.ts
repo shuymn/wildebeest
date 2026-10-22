@@ -128,8 +128,10 @@ export const REMOTE_LINK_CLAIM_WALK = 64
 const OPEN_HOLD = 'attempts > 0 AND hold_until IS NOT NULL AND hold_until > ?2'
 
 // Expires at most REMOTE_LINK_EXPIRE_BATCH rows armed before `now` - REMOTE_LINK_EXPIRE_MS (AM8: on every claim call,
-// before and whatever the local walk finds), taken by the expiry index before the open-hold filter (as link-cards.ts
-// claimCards), so a held row never shields a later one beyond the batch. Returns the rows disarmed.
+// before and whatever the local walk finds): at most REMOTE_LINK_EXPIRE_BATCH candidates read by the expiry index
+// (oldest armed first), then the open-hold filter (as link-cards.ts claimCards), so a held candidate takes a slot of
+// the batch and is kept; a later expired row waits for a call whose batch reaches it, and the walk checks the age of
+// every row it reads again. Returns the rows disarmed.
 export function expireRemoteFieldLinks(db: Db, now: number): number {
 	return db.run(
 		`UPDATE remote_field_links SET due_at = NULL, armed_at = NULL, attempts = 0

@@ -2061,9 +2061,10 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   finished")).
   Remote accounts' fields share that round, its budgets and its own Store calls: a store of a remote actor's document
   arms its row in its transaction with at most 2 statements and 1 row written (4 and 2 for a Move or an Announce, which
-  store two actors); every claim first expires at most 500 checks armed a day ago by `remote_field_links_expiry`
-  (taken before the open-hold filter, so held rows never shield later ones), then walks the local accounts, and only
-  when that walk found no work and did not read its whole 64 rows walks at most 64 due remote rows by
+  store two actors); every claim first expires checks armed a day ago, reading at most 500 candidates by
+  `remote_field_links_expiry` before the open-hold filter (a held candidate takes a slot and is kept, so a later expired
+  row waits for a batch that reaches it, and the walk checks every row's age again), then walks the local accounts,
+  and only when that walk found no work and did not read its whole 64 rows walks at most 64 due remote rows by
   `remote_field_links_due`, each row read disarmed, rescheduled to its hold, given up after 2 claims, deleted (a token
   past 2^53 − 1) or claimed: a claim writes at most 628 rows, after `ANALYZE` and growth alike
   (`test/remote-field-link-rounds.test.ts` ("expires the oldest REMOTE_LINK_EXPIRE_BATCH rows a call, and the walk the

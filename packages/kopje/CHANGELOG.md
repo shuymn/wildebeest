@@ -37,7 +37,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   rollback to an earlier version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). It
   adds an empty `remote_field_links` table (one row per remote account with a link to check) with two indexes and the
   triggers that bound it; it reads no row, and since it creates a table the upgrade checks every reference of the
-  Store. A dump whose rows are past these bounds is refused on import.
+  Store. On the representative store defined in `test/bench/migration-cost.ts`, migration 0068 alone took 6,608 ms
+  in one local run of the migration bench, in workerd's local Durable Object SQLite, the Store-wide foreign-key check
+  included; the release's range of migrations is measured at the release. A dump whose rows are past these bounds is
+  refused on import.
 - The cron makes outbound requests to the sites remote accounts' profile fields link to (at most 4 values a tick,
   shared with local accounts' links), through the same sink as local profile link verification.
 
