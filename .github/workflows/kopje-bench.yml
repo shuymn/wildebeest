@@ -1,19 +1,13 @@
 name: Kopje migration bench
 # Times Kopje's release-range upgrade on a GitHub-hosted runner, so the measure never shares a machine with other
-# work (scripts/kopje-bench-range.sh). It runs for a pull request that changes the migrations, the upgrade, the bench
-# or the toolchain, and on dispatch before a release (packages/kopje/RELEASING.md).
+# work (scripts/kopje-bench-range.sh). It runs for a pull request that changes the migrations, their registry or the
+# bench itself. Changes to the upgrade code (store-kernel.ts) or the toolchain are measured by the dispatch every
+# release needs before it merges (packages/kopje/RELEASING.md).
 on:
   pull_request:
     paths:
       - "packages/kopje/migrations/**"
       - "packages/kopje/src/db/migrations.ts"
-      - "packages/kopje/src/platform/store-kernel.ts"
-      - "packages/kopje/package.json"
-      - "packages/kopje/wrangler.jsonc"
-      - "package.json"
-      - "pnpm-lock.yaml"
-      - "pnpm-workspace.yaml"
-      - ".node-version"
       - "packages/kopje/test/bench/**"
       - "packages/kopje/vitest.bench.config.ts"
       - "scripts/kopje-bench-range.sh"
