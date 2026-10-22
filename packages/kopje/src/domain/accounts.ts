@@ -127,9 +127,10 @@ export type AccountRole = Pick<Role, 'id' | 'name' | 'color'>
 const OWNER_BADGE: AccountRole = { id: OWNER_ROLE.id, name: OWNER_ROLE.name, color: OWNER_ROLE.color }
 
 // A profile field (Mastodon's Account::Field): the name as plain text, the value as HTML. Local fields come from
-// local_accounts.fields, remote ones from the actor's attachments. verified_at: when a local field's value was
-// verified by rel=me (domain/field-links.ts), as Mastodon's DateTime#xmlschema(3) writes it
-// ("2026-10-22T12:34:56.789+00:00", VERIFIED_AT_JSON_BYTES as JSON); null for every other field.
+// local_accounts.fields, remote ones from the actor's attachments. verified_at: when a local field's value, or a remote
+// field's link (domain/remote-field-links.ts), was verified by rel=me (domain/field-links.ts), as Mastodon's
+// DateTime#xmlschema(3) writes it ("2026-10-22T12:34:56.789+00:00", VERIFIED_AT_JSON_BYTES as JSON); null for every
+// other field.
 export type Field = { name: string; value: string; verified_at: string | null }
 
 // A local field as the owner wrote it (plain text), stored in local_accounts.fields.
