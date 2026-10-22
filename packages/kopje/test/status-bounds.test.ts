@@ -82,6 +82,7 @@ import {
 	EMOJI_ENTRY_BYTES,
 	EMOJI_SHORTCODE_LIMIT,
 	EMOJI_URL_LIMIT,
+	MAX_ACCOUNT_COUNT,
 	presentedEmojiBytes,
 	STATIC_URL_LIMIT,
 	STATUS_EMOJIS_BYTES,
@@ -160,7 +161,7 @@ const RAW_BIO = `<p>${'x'.repeat(REMOTE_BIO_BYTES - 9)}</p>`
 
 // The most JSON a nested moved-to account presents (accounts.ts presentMovedAccount), from its decoded limits at worst
 // escaping: characters of six JSON bytes at each text limit, URLs and uri at MOVED_URL_LIMIT (JSON-measured), counts
-// of 20 characters, emojis of MOVED_EMOJIS_BYTES (a string of that many JSON bytes stands for them), and every key at
+// of 20 characters (any int64; presentedCountSql shows at most MAX_ACCOUNT_COUNT, 16), emojis of MOVED_EMOJIS_BYTES (a string of that many JSON bytes stands for them), and every key at
 // once, a local account's (noindex, roles) and an unavailable one's (suspended) included.
 const MOVED_ACCOUNT_JSON_MAX = utf8Length(
 	JSON.stringify({
@@ -224,7 +225,7 @@ function movedAccounts(value: unknown): unknown[] {
 
 // The account a fill's presented account moved to (Account#moved, MOVED_ACCOUNT_COLUMNS), each column at its nested
 // cap: escaped (and derived, emoji-poll), characters JSON escapes to six bytes at each decoded limit, URLs at
-// MOVED_URL_LIMIT, counts of 20 characters and a display name that references emojis whose JSON fills
+// MOVED_URL_LIMIT, counts at MAX_ACCOUNT_COUNT (the most presentedCountSql shows) and a display name that references emojis whose JSON fills
 // MOVED_EMOJIS_BYTES; raw, four-byte characters where a limit is in characters and every column at its byte cap, the
 // emoji snapshot at its stored bound. Its last status gives last_status_at.
 const MOVED_REFERENCED = 3
@@ -245,7 +246,7 @@ async function movedTarget(t: Setup, fill: Fill): Promise<string> {
 		t.store,
 		`INSERT INTO accounts (id, uri, username, domain, display_name, url, avatar_url, header_url, emojis, created_at,
 			followers_count, following_count, statuses_count)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, -9223372036854775808, -9223372036854775808, -9223372036854775808)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?11, ?11, ?11)`,
 		id,
 		atLimit(`https://moved.example/users/${id}/`, MOVED_URL_LIMIT),
 		`${'u'.repeat(USERNAME_LIMIT - 18)}${id}`,
@@ -255,7 +256,8 @@ async function movedTarget(t: Setup, fill: Fill): Promise<string> {
 		atLimit(`https://moved.example/a/${id}/`, MOVED_URL_LIMIT),
 		atLimit(`https://moved.example/h/${id}/`, MOVED_URL_LIMIT),
 		raw ? ACCOUNT_EMOJIS_FULL : JSON.stringify(MOVED_EMOJIS),
-		counted.repeat(MOVED_CREATED_AT_LIMIT)
+		counted.repeat(MOVED_CREATED_AT_LIMIT),
+		MAX_ACCOUNT_COUNT
 	)
 	await sql(
 		t.store,
@@ -268,15 +270,17 @@ async function movedTarget(t: Setup, fill: Fill): Promise<string> {
 	return id
 }
 
-// A remote account with every profile column at its bound; `light`: only what a mention reads is at its bound. One
-// that is not light moved to an account of its own at the nested caps (movedTarget).
+// A remote account with every profile column at its bound; `light`: only what a mention reads is at its bound. Its
+// counts, light or not, at MAX_ACCOUNT_COUNT, the most a remote account learns. One that is not light moved to an
+// account of its own at the nested caps (movedTarget).
 async function maximalAccount(t: Setup, light = false, fill: Fill = 'escaped'): Promise<string> {
 	const id = nextId()
 	const username = `${'u'.repeat(USERNAME_LIMIT - 18)}${id}`
 	await sql(
 		t.store,
-		`INSERT INTO accounts (id, uri, username, domain, display_name, note, url, avatar_url, header_url, raw, emojis)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO accounts (id, uri, username, domain, display_name, note, url, avatar_url, header_url, raw, emojis,
+			followers_count, following_count, statuses_count)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?12, ?12, ?12)`,
 		id,
 		atLimit(`https://${HOST}/users/${id}/`, ACTOR_URI_LIMIT),
 		username,
@@ -287,7 +291,8 @@ async function maximalAccount(t: Setup, light = false, fill: Fill = 'escaped'): 
 		light ? null : atLimit(`https://${HOST}/a/${id}/`, PROFILE_URL_LIMIT),
 		light ? null : atLimit(`https://${HOST}/h/${id}/`, PROFILE_URL_LIMIT),
 		light ? null : JSON.stringify({ type: 'Person', attachment: fullestFields() }),
-		light ? null : accountEmojis(fill)
+		light ? null : accountEmojis(fill),
+		MAX_ACCOUNT_COUNT
 	)
 	if (!light) {
 		await sql(t.store, 'UPDATE accounts SET moved_to_account_id = ? WHERE id = ?', await movedTarget(t, fill), id)
@@ -1982,68 +1987,68 @@ describe('the table of maxima (RES-3)', () => {
 			'the escaped worst case: the most JSON',
 			'escaped',
 			{
-				account: { sqlite: 103_256, json: 140_447, rows: 1, nodes: 92 },
-				status: { sqlite: 2_764_196, json: 2_675_761, rows: 1485, nodes: 2379 },
-				quote: { sqlite: 4_955_035, json: 5_351_555, rows: 1918, nodes: 4760 },
-				boostOfQuote: { sqlite: 5_101_473, json: 5_760_506, rows: 1975, nodes: 5719 },
-				conversation: { sqlite: 6_309_110, json: 7_036_888, rows: 1944, nodes: 5855 },
-				group: { sqlite: 5_814_541, json: 6_475_555, rows: 1953, nodes: 5508 },
-				report: { sqlite: 5_264_412, json: 5_948_022, rows: 1933, nodes: 5075 },
-				reportNotification: { sqlite: 812_405, json: 403_298, rows: 1061, nodes: 294 },
-				warningNotification: { sqlite: 93_526, json: 281_568, rows: 9, nodes: 215 },
-				warningGroup: { sqlite: 93_526, json: 281_757, rows: 9, nodes: 222 },
-				filteredNotification: { sqlite: 5_063_759, json: 5_492_128, rows: 1941, nodes: 4856 },
+				account: { sqlite: 103_256, json: 140_480, rows: 1, nodes: 92 },
+				status: { sqlite: 2_764_196, json: 2_675_794, rows: 1485, nodes: 2379 },
+				quote: { sqlite: 4_955_035, json: 5_351_621, rows: 1918, nodes: 4760 },
+				boostOfQuote: { sqlite: 5_101_473, json: 5_760_605, rows: 1975, nodes: 5719 },
+				conversation: { sqlite: 6_309_110, json: 7_037_350, rows: 1944, nodes: 5855 },
+				group: { sqlite: 5_814_541, json: 6_475_885, rows: 1953, nodes: 5508 },
+				report: { sqlite: 5_264_412, json: 5_948_154, rows: 1933, nodes: 5075 },
+				reportNotification: { sqlite: 812_405, json: 403_364, rows: 1061, nodes: 294 },
+				warningNotification: { sqlite: 93_526, json: 281_658, rows: 9, nodes: 215 },
+				warningGroup: { sqlite: 93_526, json: 281_847, rows: 9, nodes: 222 },
+				filteredNotification: { sqlite: 5_063_759, json: 5_492_227, rows: 1941, nodes: 4856 },
 			},
 		],
 		[
 			'mentions whose url is derived',
 			'derived',
 			{
-				account: { sqlite: 103_256, json: 140_447, rows: 1, nodes: 92 },
-				status: { sqlite: 2_356_196, json: 2_266_161, rows: 1485, nodes: 2379 },
-				quote: { sqlite: 4_139_035, json: 4_532_355, rows: 1918, nodes: 4760 },
-				boostOfQuote: { sqlite: 4_285_473, json: 4_941_306, rows: 1975, nodes: 5719 },
-				conversation: { sqlite: 5_493_110, json: 6_217_688, rows: 1944, nodes: 5855 },
-				group: { sqlite: 4_998_541, json: 5_656_355, rows: 1953, nodes: 5508 },
-				report: { sqlite: 4_433_412, json: 5_038_822, rows: 1933, nodes: 5075 },
-				reportNotification: { sqlite: 797_405, json: 313_298, rows: 1061, nodes: 294 },
-				warningNotification: { sqlite: 93_526, json: 281_568, rows: 9, nodes: 215 },
-				warningGroup: { sqlite: 93_526, json: 281_757, rows: 9, nodes: 222 },
-				filteredNotification: { sqlite: 4_247_759, json: 4_672_928, rows: 1941, nodes: 4856 },
+				account: { sqlite: 103_256, json: 140_480, rows: 1, nodes: 92 },
+				status: { sqlite: 2_356_196, json: 2_266_194, rows: 1485, nodes: 2379 },
+				quote: { sqlite: 4_139_035, json: 4_532_421, rows: 1918, nodes: 4760 },
+				boostOfQuote: { sqlite: 4_285_473, json: 4_941_405, rows: 1975, nodes: 5719 },
+				conversation: { sqlite: 5_493_110, json: 6_218_150, rows: 1944, nodes: 5855 },
+				group: { sqlite: 4_998_541, json: 5_656_685, rows: 1953, nodes: 5508 },
+				report: { sqlite: 4_433_412, json: 5_038_954, rows: 1933, nodes: 5075 },
+				reportNotification: { sqlite: 797_405, json: 313_364, rows: 1061, nodes: 294 },
+				warningNotification: { sqlite: 93_526, json: 281_658, rows: 9, nodes: 215 },
+				warningGroup: { sqlite: 93_526, json: 281_847, rows: 9, nodes: 222 },
+				filteredNotification: { sqlite: 4_247_759, json: 4_673_027, rows: 1941, nodes: 4856 },
 			},
 		],
 		[
 			'the raw worst case: the most bytes read from SQLite',
 			'raw',
 			{
-				account: { sqlite: 123_249, json: 132_819, rows: 1, nodes: 80 },
-				status: { sqlite: 4_444_968, json: 2_202_103, rows: 1485, nodes: 2367 },
-				quote: { sqlite: 6_818_979, json: 4_404_239, rows: 1918, nodes: 4736 },
-				boostOfQuote: { sqlite: 7_113_584, json: 4_651_964, rows: 1975, nodes: 5683 },
-				conversation: { sqlite: 8_496_527, json: 5_998_036, rows: 1944, nodes: 5687 },
-				group: { sqlite: 7_880_805, json: 5_467_215, rows: 1953, nodes: 5388 },
-				report: { sqlite: 7_198_929, json: 4_877_260, rows: 1933, nodes: 5027 },
-				reportNotification: { sqlite: 2_360_585, json: 288_042, rows: 1061, nodes: 270 },
-				warningNotification: { sqlite: 129_439, json: 235_218, rows: 9, nodes: 215 },
-				warningGroup: { sqlite: 129_439, json: 235_407, rows: 9, nodes: 222 },
-				filteredNotification: { sqlite: 6_952_993, json: 4_537_184, rows: 1941, nodes: 4820 },
+				account: { sqlite: 123_249, json: 132_852, rows: 1, nodes: 80 },
+				status: { sqlite: 4_444_968, json: 2_202_136, rows: 1485, nodes: 2367 },
+				quote: { sqlite: 6_818_979, json: 4_404_305, rows: 1918, nodes: 4736 },
+				boostOfQuote: { sqlite: 7_113_584, json: 4_652_063, rows: 1975, nodes: 5683 },
+				conversation: { sqlite: 8_496_527, json: 5_998_498, rows: 1944, nodes: 5687 },
+				group: { sqlite: 7_880_805, json: 5_467_545, rows: 1953, nodes: 5388 },
+				report: { sqlite: 7_198_929, json: 4_877_392, rows: 1933, nodes: 5027 },
+				reportNotification: { sqlite: 2_360_585, json: 288_108, rows: 1061, nodes: 270 },
+				warningNotification: { sqlite: 129_439, json: 235_308, rows: 9, nodes: 215 },
+				warningGroup: { sqlite: 129_439, json: 235_497, rows: 9, nodes: 222 },
+				filteredNotification: { sqlite: 6_952_993, json: 4_537_283, rows: 1941, nodes: 4820 },
 			},
 		],
 		[
 			'short emoji references in every poll: the most poll emojis',
 			'emoji-poll',
 			{
-				account: { sqlite: 103_256, json: 140_447, rows: 1, nodes: 92 },
-				status: { sqlite: 2_763_348, json: 2_687_862, rows: 1485, nodes: 2431 },
-				quote: { sqlite: 4_953_339, json: 5_375_757, rows: 1918, nodes: 4864 },
-				boostOfQuote: { sqlite: 5_099_777, json: 5_784_708, rows: 1975, nodes: 5823 },
-				conversation: { sqlite: 6_307_414, json: 7_061_090, rows: 1944, nodes: 5959 },
-				group: { sqlite: 5_812_845, json: 6_499_757, rows: 1953, nodes: 5612 },
-				report: { sqlite: 5_262_716, json: 5_972_224, rows: 1933, nodes: 5179 },
-				reportNotification: { sqlite: 812_405, json: 403_298, rows: 1061, nodes: 294 },
-				warningNotification: { sqlite: 93_526, json: 281_568, rows: 9, nodes: 215 },
-				warningGroup: { sqlite: 93_526, json: 281_757, rows: 9, nodes: 222 },
-				filteredNotification: { sqlite: 5_062_063, json: 5_516_330, rows: 1941, nodes: 4960 },
+				account: { sqlite: 103_256, json: 140_480, rows: 1, nodes: 92 },
+				status: { sqlite: 2_763_348, json: 2_687_895, rows: 1485, nodes: 2431 },
+				quote: { sqlite: 4_953_339, json: 5_375_823, rows: 1918, nodes: 4864 },
+				boostOfQuote: { sqlite: 5_099_777, json: 5_784_807, rows: 1975, nodes: 5823 },
+				conversation: { sqlite: 6_307_414, json: 7_061_552, rows: 1944, nodes: 5959 },
+				group: { sqlite: 5_812_845, json: 6_500_087, rows: 1953, nodes: 5612 },
+				report: { sqlite: 5_262_716, json: 5_972_356, rows: 1933, nodes: 5179 },
+				reportNotification: { sqlite: 812_405, json: 403_364, rows: 1061, nodes: 294 },
+				warningNotification: { sqlite: 93_526, json: 281_658, rows: 9, nodes: 215 },
+				warningGroup: { sqlite: 93_526, json: 281_847, rows: 9, nodes: 222 },
+				filteredNotification: { sqlite: 5_062_063, json: 5_516_429, rows: 1941, nodes: 4960 },
 			},
 		],
 	])(
@@ -2097,17 +2102,17 @@ describe('the table of maxima (RES-3)', () => {
 			)
 		}
 		expect(conservative).toEqual({
-			account: 143_188,
-			status: 2_693_460,
-			quote: 5_386_953,
-			boostOfQuote: 5_800_981,
-			conversation: 7_104_422,
-			group: 6_532_377,
-			report: 5_988_776,
-			reportNotification: 408_654,
-			warningNotification: 281_568,
-			warningGroup: 281_757,
-			filteredNotification: 5_530_204,
+			account: 143_233,
+			status: 2_693_505,
+			quote: 5_387_043,
+			boostOfQuote: 5_801_116,
+			conversation: 7_105_052,
+			group: 6_532_827,
+			report: 5_988_956,
+			reportNotification: 408_744,
+			warningNotification: 281_658,
+			warningGroup: 281_847,
+			filteredNotification: 5_530_339,
 		})
 	}, 600_000)
 
@@ -2115,7 +2120,7 @@ describe('the table of maxima (RES-3)', () => {
 	// escapes each backslash and quote once more: the most of every fill stays within the hub's payload limit.
 	it('keeps the moderation_warning stream payload within the hub’s limit', async () => {
 		const payloads = (await Promise.all(FILLS.map(measureFill))).map((fill) => fill.warningPayload)
-		expect(Math.max(...payloads)).toBe(324_414)
+		expect(Math.max(...payloads)).toBe(324_504)
 		expect(Math.max(...payloads)).toBeLessThan(STREAM_LIMITS.payloadBytes)
 	}, 600_000)
 
@@ -2128,7 +2133,7 @@ describe('the table of maxima (RES-3)', () => {
 		expect({
 			chunk: 50 * (shapes.account!.sqlite + 2 * STATIC_URL_LIMIT + MOVED_ROW_SQLITE_MAX),
 			page: 80 * conservative.account!,
-		}).toEqual({ chunk: 6_769_550, page: 11_455_040 })
+		}).toEqual({ chunk: 6_769_550, page: 11_458_640 })
 	}, 600_000)
 
 	// Half of the Store isolate's 128 MB. A timeline's largest item is a status, a quote or a boost of a quote; groups
