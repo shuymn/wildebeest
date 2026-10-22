@@ -10,8 +10,9 @@
 	"name": "my-kopje",
 	"main": "src/index.ts",
 	// Keep these two equal to the kopje version's own wrangler.jsonc. Its release notes say when they change.
+	// global_fetch_strictly_public gives every outbound fetch public routing, a host in this zone included.
 	"compatibility_date": "2026-10-11",
-	"compatibility_flags": ["nodejs_compat"],
+	"compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
 	"minify": true,
 	// The kopje bundle already keeps its function names; keeping them again would wrap every function a second time.
 	"keep_names": false,

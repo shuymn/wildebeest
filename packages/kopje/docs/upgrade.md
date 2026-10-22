@@ -7,8 +7,13 @@ schema the first time the new code runs.
 
 Kopje follows [semver](https://semver.org). Each version has release notes in
 [CHANGELOG.md](../CHANGELOG.md) and on the GitHub release. They say when a version changes the Store's schema, and when
-the template's `wrangler.jsonc` must change (a new binding, a new compatibility date). Before 1.0, a minor version may
-break things; read the notes of every version you skip.
+the template's `wrangler.jsonc` must change (a new binding, a new compatibility date or flag). Before 1.0, a minor
+version may break things; read the notes of every version you skip.
+
+The instance's `wrangler.jsonc` is its own file: a version that changes the template's does not change it. Make the
+same change on the pull request that updates `kopje`, before you merge it (step 3 below). In particular,
+`compatibility_flags` must hold `global_fetch_strictly_public` as well as `nodejs_compat`, so that every outbound fetch
+uses public routing, a host in the instance's own zone included (NET-1 in [threat-model.md](threat-model.md)).
 
 ## How an update arrives
 
