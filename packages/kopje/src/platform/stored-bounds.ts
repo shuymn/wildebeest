@@ -1266,3 +1266,26 @@ export function mediaBlurhashMigrationSql(): string {
 		),
 	].join('\n\n')}\n`
 }
+
+// ---- Account counts (accounts.followers_count, following_count, statuses_count)
+//
+// INTEGER NOT NULL DEFAULT 0 with no CHECK or trigger (0000_initial): an imported row may hold TEXT, REAL or a BLOB of
+// any size there, and adding a bound would rewrite every account. The bound is kept at both ends instead: every writer
+// stores storedCount's values only (a local recount, or a remote account's learned count, remote-collections.ts
+// completeCollectionRead), and every read that presents, ranks or sums a count takes presentedCountSql, so no stored
+// value past it reaches the Worker or an aggregate.
+
+// The largest count kept, a JavaScript safe integer: 16 decimal digits, presented as at most 16 JSON bytes.
+export const MAX_ACCOUNT_COUNT = Number.MAX_SAFE_INTEGER
+
+// A count as stored (an account's, and a remote poll's tallies and voters): a safe integer from 0 to MAX_ACCOUNT_COUNT,
+// else none (the stored count is left as it is).
+export function storedCount(value: unknown): number | null {
+	return Number.isSafeInteger(value) && (value as number) >= 0 ? (value as number) : null
+}
+
+// A stored count as read: the integer within storedCount's range, else 0 (an imported TEXT, REAL or BLOB never leaves
+// SQLite, whatever its size).
+export function presentedCountSql(column: string): string {
+	return `CASE WHEN typeof(${column}) = 'integer' AND ${column} BETWEEN 0 AND ${MAX_ACCOUNT_COUNT} THEN ${column} ELSE 0 END`
+}

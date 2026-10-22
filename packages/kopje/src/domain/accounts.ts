@@ -56,6 +56,7 @@ import {
 	byteCut,
 	cutCodePoints,
 	MOVED_TO_ID_BYTES,
+	presentedCountSql,
 	STATIC_URL_LIMIT,
 	storedDisplayName,
 	storedText,
@@ -261,9 +262,9 @@ export const ACCOUNT_COLUMN_MAP = {
 	locked: 'a.locked',
 	discoverable: 'a.discoverable',
 	indexable: 'a.indexable',
-	followers_count: 'a.followers_count',
-	following_count: 'a.following_count',
-	statuses_count: 'a.statuses_count',
+	followers_count: presentedCountSql('a.followers_count'),
+	following_count: presentedCountSql('a.following_count'),
+	statuses_count: presentedCountSql('a.statuses_count'),
 	created_at: 'a.created_at',
 	available: availableJoinedSql('a', 'l'),
 	last_status_at: lastStatusAtSql('a'),
@@ -318,9 +319,9 @@ const MOVED_COLUMN_MAP = {
 	locked: movedFlag('m.locked'),
 	discoverable: movedFlag('m.discoverable'),
 	indexable: movedFlag('m.indexable'),
-	followers_count: 'CAST(m.followers_count AS INTEGER)',
-	following_count: 'CAST(m.following_count AS INTEGER)',
-	statuses_count: 'CAST(m.statuses_count AS INTEGER)',
+	followers_count: presentedCountSql('m.followers_count'),
+	following_count: presentedCountSql('m.following_count'),
+	statuses_count: presentedCountSql('m.statuses_count'),
 	created_at: textCut('m.created_at', POINT_BYTES * MOVED_CREATED_AT_LIMIT),
 	available: availableJoinedSql('m', 'ml'),
 	last_status_at: byteCut(lastStatusAtSql('m'), POINT_BYTES * MOVED_LAST_STATUS_AT_LIMIT),
@@ -1363,7 +1364,8 @@ export function findAccountIds(db: Db, input: SearchInput, viewerId: string): st
 			`WITH candidates(id) AS (${candidates})
 			SELECT a.id FROM candidates c CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} ON a.id = c.id
 			WHERE ${findableBySql('a.id', '?')} AND ${where.join(' AND ')}
-			ORDER BY lower(a.username) = ? DESC, a.domain IS NULL DESC, a.followers_count DESC, a.id
+			ORDER BY lower(a.username) = ? DESC, a.domain IS NULL DESC,
+				${presentedCountSql('a.followers_count')} DESC, a.id
 			LIMIT ? OFFSET ?`,
 			...candidateParams,
 			viewerId,
@@ -1416,7 +1418,7 @@ export function followLimit(counts: { following_count: number; followers_count: 
 function followLimitError(db: Db, accountId: string): string | null {
 	const counts = db.first<{ following_count: number; followers_count: number }>(
 		`SELECT (SELECT COUNT(*) FROM follows WHERE account_id = ?1 AND state = 'accepted') AS following_count,
-			followers_count
+			${presentedCountSql('followers_count')} AS followers_count
 		FROM accounts WHERE id = ?1`,
 		accountId
 	)
