@@ -11,8 +11,9 @@
 	"upload_source_maps": true,
 	// Keep dashboard-set vars (MAINTENANCE) across deploys. Routes are attached in the dashboard, never here.
 	"keep_vars": true,
-	// Workers Logs with query strings removed from request URLs; traces stay off unless an instance opts in. What they
-	// record, cost and how to sample them: docs/observability.md (test-node/wrangler-configs.test.ts pins the block).
+	// Workers Logs, with removal of query strings from request URLs requested (redact_query_string); traces stay off
+	// unless an instance opts in. What they record, cost and how to sample them: docs/observability.md
+	// (test-node/wrangler-configs.test.ts pins the block).
 	"observability": {
 		"enabled": true,
 		"redact_query_string": true,
