@@ -1,6 +1,7 @@
-import type { Child, FC } from 'hono/jsx'
+import type { FC } from 'hono/jsx'
 
 import { STYLESHEET } from './asset-versions'
+import { type Chrome, Layout } from './components/layout'
 import { type SafeHtml, plainText, sanitized, sanitizedField } from './safe-html'
 import { type Notice, STRINGS } from './strings'
 import type { Account, CredentialAccount, Visibility } from '../domain/accounts'
@@ -22,29 +23,13 @@ function href(url: string | null | undefined): string | undefined {
 	return httpUrl(url ?? null)?.href
 }
 
-export const Layout: FC<{ title: string; head?: Child; children: Child }> = ({ title, head, children }) => (
-	<html lang="en">
-		<head>
-			<meta charset="utf-8" />
-			<meta name="viewport" content="width=device-width, initial-scale=1" />
-			<meta name="color-scheme" content="light dark" />
-			<title>{title}</title>
-			<link rel="stylesheet" href={STYLESHEET} />
-			{head}
-		</head>
-		<body>
-			<header class="site">{STRINGS.site.product}</header>
-			<main>{children}</main>
-		</body>
-	</html>
-)
-
-export const MessagePage: FC<{ title: string; message: string; link?: { href: string; text: string } }> = ({
-	title,
-	message,
-	link,
-}) => (
-	<Layout title={title}>
+export const MessagePage: FC<{
+	chrome: Chrome
+	title: string
+	message: string
+	link?: { href: string; text: string }
+}> = ({ chrome, title, message, link }) => (
+	<Layout title={title} chrome={chrome}>
 		<h1>{title}</h1>
 		<p>{message}</p>
 		{link === undefined ? null : (
@@ -82,6 +67,8 @@ export const AboutPage: FC<AboutView> = ({
 }) => (
 	<Layout
 		title={title}
+		chrome={{ domain, documents: { privacyPolicy, termsOfService } }}
+		current="about"
 		head={
 			<>
 				<meta name="description" content={description} />
@@ -141,7 +128,11 @@ export type DocumentView = {
 // /privacy-policy, /terms-of-service and /terms-of-service/:date (Mastodon's paths, config/routes.rb:230-232): the
 // document an instance endpoint serves, with its effective date or the time it was last changed.
 export const DocumentPage: FC<DocumentView> = ({ title, domain, path, html, updatedAt, effectiveDate }) => (
-	<Layout title={title} head={<link rel="canonical" href={`https://${domain}${path}`} />}>
+	<Layout
+		title={title}
+		chrome={{ domain, documents: null }}
+		head={<link rel="canonical" href={`https://${domain}${path}`} />}
+	>
 		<h1>{title}</h1>
 		{effectiveDate === null ? null : (
 			<p class="document-date">
@@ -265,6 +256,7 @@ export const ProfilePage: FC<ProfileView> = ({ account, statuses, next, domain, 
 	return (
 		<Layout
 			title={title}
+			chrome={{ domain, documents: null }}
 			head={
 				<>
 					<meta name="description" content={description} />
@@ -341,6 +333,7 @@ export const StatusPage: FC<StatusView> = ({ status, parent, domain }) => {
 	return (
 		<Layout
 			title={title}
+			chrome={{ domain, documents: null }}
 			head={
 				<>
 					<meta name="description" content={description} />
@@ -374,6 +367,7 @@ export const StatusPage: FC<StatusView> = ({ status, parent, domain }) => {
 }
 
 export type SettingsView = {
+	chrome: Chrome
 	account: CredentialAccount
 	authorizations: Authorizations
 	csrf: string
@@ -407,13 +401,13 @@ const ImageForm: FC<{ kind: 'avatar' | 'header'; current: string; csrf: string }
 	</form>
 )
 
-export const SettingsPage: FC<SettingsView> = ({ account, authorizations, csrf, notice, problems }) => {
+export const SettingsPage: FC<SettingsView> = ({ chrome, account, authorizations, csrf, notice, problems }) => {
 	const fields = [...account.source.fields]
 	while (fields.length < FIELD_ROWS) {
 		fields.push({ name: '', value: '', verified_at: null })
 	}
 	return (
-		<Layout title={STRINGS.settings.title}>
+		<Layout title={STRINGS.settings.title} chrome={chrome}>
 			<h1>{STRINGS.settings.title}</h1>
 			{notice === null ? null : (
 				<p class="notice" role="status">

@@ -17,6 +17,7 @@ import { Params, readParams } from '../mastodon/params'
 import { PROFILE_IMAGE_LIMIT } from '../platform/images'
 import type { Scope } from '../security/scopes'
 import { pkceChallenge, sha256Hex } from '../security/tokens'
+import type { Chrome } from '../web/components/layout'
 import {
 	AboutPage,
 	DocumentPage,
@@ -99,6 +100,12 @@ function privatePage(c: WebContext, status: PageStatus, body: Parameters<WebCont
 	return c.html(body, status, PRIVATE_HEADERS)
 }
 
+// The header and footer of a page whose read loaded no document flags (design §17: until the merged page reads, only
+// /about links the documents).
+function chromeOf(c: WebContext): Chrome {
+	return { domain: c.get('domain'), documents: null }
+}
+
 function message(
 	c: WebContext,
 	status: PageStatus,
@@ -106,11 +113,15 @@ function message(
 	text: string,
 	link?: { href: string; text: string }
 ) {
-	return privatePage(c, status, <MessagePage title={title} message={text} link={link} />)
+	return privatePage(c, status, <MessagePage chrome={chromeOf(c)} title={title} message={text} link={link} />)
 }
 
 function notFound(c: WebContext) {
-	return publicPage(c, 404, <MessagePage title={STRINGS.errors.notFoundTitle} message={STRINGS.errors.notFound} />)
+	return publicPage(
+		c,
+		404,
+		<MessagePage chrome={chromeOf(c)} title={STRINGS.errors.notFoundTitle} message={STRINGS.errors.notFound} />
+	)
 }
 
 // A redirect to a local path (never a URL from the request).
@@ -165,7 +176,11 @@ export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 		}
 		// Mastodon answers a suspended account's profile with 410 Gone.
 		if (page.status === 'suspended') {
-			return publicPage(c, 410, <MessagePage title={STRINGS.errors.goneTitle} message={STRINGS.errors.gone} />)
+			return publicPage(
+				c,
+				410,
+				<MessagePage chrome={chromeOf(c)} title={STRINGS.errors.goneTitle} message={STRINGS.errors.gone} />
+			)
 		}
 		const domain = c.get('domain')
 		const actorUri = `https://${domain}/ap/users/${page.account.username}`
@@ -444,6 +459,7 @@ export function webRoutes(deps: WebDeps): Hono<WebEnv> {
 			c,
 			problems.length === 0 ? 200 : 422,
 			<SettingsPage
+				chrome={chromeOf(c)}
 				account={view.value.account as CredentialAccount}
 				authorizations={view.value.authorizations}
 				csrf={await csrfToken(session)}

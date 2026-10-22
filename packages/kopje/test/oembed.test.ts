@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { bearer, json, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { community, post, remoteAccount, seedStatus } from './status-helpers'
+import { attr, parseHtml, query } from './web-dom'
 import { ORIGIN } from './web-helpers'
 
 // oEmbed (Mastodon 4.5's Api::OEmbedController and OEmbedSerializer) and the embed page it names
@@ -180,7 +181,11 @@ describe('the embed page (WEB-2)', () => {
 		expect(html).toContain('<base target="_blank"/>')
 		expect(html).toContain('<meta name="robots" content="noindex"/>')
 		expect(html).toContain(`<a href="${pathOf(status)}">View on kopje.test</a>`)
-		expect(html).not.toContain('<header class="site">')
+		// The status alone: no header, footer or link to /about.
+		const doc = parseHtml(html)
+		expect(query(doc, 'header')).toEqual([])
+		expect(query(doc, 'footer')).toEqual([])
+		expect(query(doc, 'a').filter((a) => attr(a, 'href') === '/about')).toEqual([])
 	})
 
 	it('answers the unframable 404 for a hidden status, and leaves every other page unframable', async () => {

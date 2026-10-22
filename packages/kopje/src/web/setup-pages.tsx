@@ -1,6 +1,6 @@
 import type { FC } from 'hono/jsx'
 
-import { Layout } from './pages'
+import { Layout } from './components/layout'
 import type { SetupView } from '../domain/setup'
 
 // The /setup wizard's pages (B5b), in the web UI's style: server-rendered, no script, every value escaped by hono/jsx.
@@ -33,7 +33,7 @@ const Checklist: FC = () => (
 )
 
 export const SetupLoginPage: FC<{ problem: string | null }> = ({ problem }) => (
-	<Layout title="Set up Kopje">
+	<Layout title="Set up Kopje" chrome={null}>
 		<h1>Set up Kopje</h1>
 		<p>Enter the setup token (the SETUP_TOKEN secret of this Worker) to start.</p>
 		{problem === null ? null : (
@@ -54,7 +54,7 @@ export const SetupLoginPage: FC<{ problem: string | null }> = ({ problem }) => (
 
 // After bootstrap, for anyone who is not the signed-in admin (SETUP-2): SETUP_TOKEN no longer opens anything.
 export const SetupDonePage: FC = () => (
-	<Layout title="Setup complete">
+	<Layout title="Setup complete" chrome={null}>
 		<h1>Setup complete</h1>
 		<p>
 			This server is set up. The setup token no longer changes anything; you can remove the SETUP_TOKEN secret. The
@@ -117,7 +117,7 @@ export const SetupPage: FC<SetupPageProps> = ({
 	const teamDomain = admin ? (view.config?.teamDomain ?? null) : (access?.teamDomain ?? null)
 	const adminEmail = admin ? (view.config?.adminEmail ?? '') : (access?.adminEmail ?? '')
 	return (
-		<Layout title={admin ? 'Instance status' : 'Set up Kopje'}>
+		<Layout title={admin ? 'Instance status' : 'Set up Kopje'} chrome={null}>
 			<h1>{admin ? 'Instance status' : 'Set up Kopje'}</h1>
 			{admin ? (
 				<p>
@@ -307,7 +307,7 @@ export const SetupPage: FC<SetupPageProps> = ({
 }
 
 export const ChecklistPage: FC = () => (
-	<Layout title="Setup checklist">
+	<Layout title="Setup checklist" chrome={null}>
 		<h1>Manual steps</h1>
 		<p>These steps cannot be automated. Do them in the Cloudflare dashboard before or during setup.</p>
 		<ol class="steps">
