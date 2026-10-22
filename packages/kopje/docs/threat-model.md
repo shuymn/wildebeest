@@ -1271,10 +1271,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   DNS rebinding rests on production
   `deps.fetch` being the Worker's global fetch, never a service binding, which NET-1 makes strictly public. Each caller
   records its differences from Mastodon's parser in its own PR. The first caller, local profile link verification
-  (`src/federation/field-links.ts`), runs only from the cron, one claimed account a round: its values share one budget
-  of 60 subrequests (each value's GET and HEAD at their ceilings) and 20 domain-policy reads within 50 seconds, and the
-  whole round, its own Store calls and finish included, ends within 60 seconds (a Store call is not started past its
-  deadline, and a result that arrives past it is not used); its scan collects rel=me hrefs, the title and lang only (67,648 UTF-16 code units at most), and its logs carry the failure kind
+  (`src/federation/field-links.ts`), runs only from the cron, one claimed account a round, within the budgets and
+  deadlines RES-6 states; its scan collects rel=me hrefs, the title and lang only, and its logs carry the failure kind
   and the hostname only. Its records and finish are writes fenced by the claim token, the credential epoch and
   availability, so a suspension or the Store's maintenance during a round lets nothing be stamped; a request already
   under way for the claimed account may still be sent (Mastodon does not fence it either). `test/field-links.test.ts`
@@ -1940,14 +1938,17 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   `test/unlock-accepts.test.ts`: 250 requests in rounds of at most 20).
   Profile link verification: _Enforced (main):_ a save only arms a check (`local_accounts.links_due_at`); the cron runs
   one round per tick, which claims one account (at most one claim per account per 5 minutes, the claim's hold, which a
-  save during it waits out), reads at most 64 due rows to find it (no index: local accounts are operator-sized), and
-  checks its at most 4 values within 60 subrequests, 20 domain-policy reads and 50 seconds, with one claim, at most 4
-  records and one finish of its own, the whole round within 60 seconds ("ends the whole round within 60 seconds, its
-  finish included"); a value checked and not verified is not retried until the next save, and a claim
-  that never finishes is given up after 2 (`src/domain/field-links.ts`, `src/federation/field-links.ts`;
-  `test/field-links.test.ts` ("coalesces saves into one claim, at most one per account per hold", "runs a maximum round
-  within its budget and deadline", "reads at most FIELD_LINK_CLAIM_WALK due rows a claim, each making progress", "gives
-  up after two claims that never finished")).
+  save during it waits out) and reads at most 64 due rows to find it (no index: local accounts are operator-sized). Its
+  at most 4 values share one budget of 60 subrequests (each value's GET and HEAD through the web-page sink at their
+  ceilings, NET-3) and 20 domain-policy reads within 50 seconds, and its scan output is at most 67,648 UTF-16 code
+  units; its own Store calls are one claim, at most 4 records and one finish, and the whole round ends within 60
+  seconds (a Store call is not started past its deadline, and a result that arrives past it is not used). A value
+  checked and not verified is not retried until the next save, and a claim that never finishes is given up after 2
+  (`src/domain/field-links.ts`, `src/federation/field-links.ts`; `test/field-links.test.ts` ("coalesces saves into one
+  claim, at most one per account per hold", "runs a maximum round within its budget and deadline, %s bodies", "ends
+  the whole round within 60 seconds, its finish included", "derives the scan output and the budgets of a round",
+  "reads at most FIELD_LINK_CLAIM_WALK due rows a claim, each making progress", "gives up after two claims that never
+  finished")).
   Activity: _Enforced (main):_ after the response of an authenticated request (below 400) or of `GET /settings`, the
   Worker sends `noteActivity` unless its memo shows the token already sent one that UTC day. The memo is best-effort
   suppression only: it holds at most 1,024 tokens, is cleared at the day change and at that cap, forgets a failed call

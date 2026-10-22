@@ -21,9 +21,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Changed
 
-- A local account's fields, wherever they are shown (account entities, `source.fields`, the actor document), are the
-  first 4 stored entries whose name and value are strings of at most 255 code points; a stored value past 16 KiB of
-  JSON, or one that does not parse, shows no fields instead of failing the request. Only converted or imported rows
+- A local account's fields, wherever they are shown (account entities, `source.fields`, the actor document), are,
+  among its first 4 stored entries, those whose name and value are strings of at most 255 code points; a stored value
+  past 16 KiB of JSON, or one that does not parse, shows no fields instead of failing the request. Only converted or imported rows
   can hold anything else ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Accounts).
 
 ### Instance changes

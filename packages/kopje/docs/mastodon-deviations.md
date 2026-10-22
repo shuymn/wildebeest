@@ -111,9 +111,9 @@ Profile credentials (`PATCH /api/v1/accounts/update_credentials`, the settings p
 
 Accounts (the `Account` and credential account entities):
 
-- A local account's fields (in the `Account`, `source.fields` and the actor's attachments) are the first 4 stored
-  entries that are a name and a value of strings within 255 code points each, in their order; a stored value past
-  16 KiB of JSON, or one that is not a JSON array, shows none. Mastodon presents every stored field. Kopje's own
+- A local account's fields (in the `Account`, `source.fields` and the actor's attachments) are, among its first 4
+  stored entries, those that are a name and a value of strings within 255 code points each, in their order; a stored
+  value past 16 KiB of JSON, or one that is not a JSON array, shows none. Mastodon presents every stored field. Kopje's own
   writer stores at most 4 within those limits, so only a converted or imported row can differ.
 - `noindex` is `false` for every local account, Mastodon's default: no setting stores it, and the profile and status
   pages do not ask search engines to skip them. A remote account shows none, as in Mastodon.
