@@ -531,7 +531,7 @@ const ALLOWED: Record<string, { count: number; reason: string }> = {
 	'src/domain/polls.ts statuses.uri': { count: 1, reason: IDENTITY },
 	'src/domain/polls.ts accounts.uri': { count: 2, reason: IDENTITY },
 	'src/domain/quotes.ts statuses.uri': { count: 6, reason: IDENTITY },
-	'src/domain/quotes.ts accounts.uri': { count: 7, reason: IDENTITY },
+	'src/domain/quotes.ts accounts.uri': { count: 6, reason: IDENTITY },
 	'src/domain/remote-collections.ts accounts.uri': { count: 3, reason: IDENTITY },
 	'src/domain/remote-collections.ts statuses.uri': { count: 1, reason: IDENTITY },
 	'src/domain/remote-statuses.ts accounts.uri': { count: 1, reason: IDENTITY },

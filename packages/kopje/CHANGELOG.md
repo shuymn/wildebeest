@@ -21,6 +21,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Changed
 
+- A boost or quote of a status by a remote account Kopje stored more than a day ago now refetches that account first,
+  as Mastodon does, so its avatar, header, name and audience are current. What a failed refetch stores is in
+  [docs/mastodon-deviations.md](docs/mastodon-deviations.md), Accounts.
 - Profile link verification admits every hop's domain policy as a Store write, before and after its DNS check (as
   link cards do), so no redirect, DNS check or request starts once the Store enters maintenance; a value whose policy
   read fails is checked again after the claim's hold instead of counting as not verified.
