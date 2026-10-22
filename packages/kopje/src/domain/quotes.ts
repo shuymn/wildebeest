@@ -20,11 +20,13 @@ import {
 } from './audience'
 import { NEW_GENERATION } from './ids'
 import {
+	applyRefresh,
 	isDeleted,
 	isDeletedActor,
 	type RemoteActorInput,
 	RETRACTION_TTL_MS,
 	RetryLater,
+	staleAccount,
 	SWEEP_BATCH,
 	upsertRemoteActor,
 } from './inbox'
@@ -311,7 +313,7 @@ export type StampInput = {
 
 // The stage a quote's verification is at, each one fetch of the Worker's within a fetch budget of its own (redirects
 // included): the quoted status (not stored yet), its author (the address a fetch of the status recorded in need_author,
-// the author unknown), the stamp; decide: nothing left to fetch.
+// the author unknown or stale: staleAccount), the stamp; decide: nothing left to fetch.
 export type QuoteStage = 'quoted' | 'author' | 'stamp' | 'decide'
 
 export type QuoteWork = {
@@ -366,14 +368,26 @@ function stampStage(db: Db, row: QuoteRow, quoted: Linked): boolean {
 	)
 }
 
+// Whether the author a quoted status names is fetched before the status is stored: one with no row, or a stored remote
+// one that is stale (staleAccount, Mastodon's account_from_uri).
+function authorDue(db: Db, uri: string, now: number): boolean {
+	const account = db.first<{ id: string }>('SELECT id FROM accounts WHERE uri = ?', uri)
+	return account === undefined || staleAccount(db, account.id, now)
+}
+
 // The stage a quote's work is at now, and the document it fetches. Derived from the row and from what the Store has
-// (the quoted status, its author), so it can move without the row changing: an outcome is checked against it too.
-function stageOf(db: Db, row: QuoteRow, quoted = quotedOf(db, row)): { stage: QuoteStage; fetch: string | null } {
+// (the quoted status, its author and that author's age), so it can move without the row changing: an outcome is
+// checked against it too.
+function stageOf(
+	db: Db,
+	row: QuoteRow,
+	now: number,
+	quoted = quotedOf(db, row)
+): { stage: QuoteStage; fetch: string | null } {
 	if (quoted !== undefined) {
 		return stampStage(db, row, quoted) ? { stage: 'stamp', fetch: row.approval_uri } : { stage: 'decide', fetch: null }
 	}
-	return row.need_author !== null &&
-		db.first('SELECT 1 AS x FROM accounts WHERE uri = ?', row.need_author) === undefined
+	return row.need_author !== null && authorDue(db, row.need_author, now)
 		? { stage: 'author', fetch: row.need_author }
 		: { stage: 'quoted', fetch: row.quoted_uri }
 }
@@ -383,14 +397,14 @@ function stageOf(db: Db, row: QuoteRow, quoted = quotedOf(db, row)): { stage: Qu
 function current(
 	db: Db,
 	row: QuoteRow,
-	expected: { generation: number; stage: QuoteStage; fetch: string | null },
+	expected: { generation: number; stage: QuoteStage; fetch: string | null; now: number },
 	quoted = quotedOf(db, row)
 ) {
 	if (row.generation !== expected.generation) {
 		return false
 	}
-	const now = stageOf(db, row, quoted)
-	return now.stage === expected.stage && now.fetch === expected.fetch
+	const at = stageOf(db, row, expected.now, quoted)
+	return at.stage === expected.stage && at.fetch === expected.fetch
 }
 
 // An outcome for a stage the work has left: discarded, and the current stage left due (a renewal: a new generation).
@@ -403,12 +417,12 @@ function moved(db: Db, row: QuoteRow, now: number): QuoteVerified {
 // at. fetch_as is rechecked here: it signs only while it is an available local account that is still a recipient of the
 // quoting status (status_mentions, silent included) or an accepted follower of its author; otherwise the instance
 // actor fetches.
-export const quoteWork = readOperation<{ statusId: string }, QuoteWork | null>((db, { statusId }) => {
+export const quoteWork = readOperation<{ statusId: string; now: number }, QuoteWork | null>((db, { statusId, now }) => {
 	const row = quoteRow(db, statusId)
 	if (row === undefined || row.quoted_uri === null || (row.state !== 'pending' && row.state !== 'accepted')) {
 		return null
 	}
-	const { stage, fetch } = stageOf(db, row)
+	const { stage, fetch } = stageOf(db, row, now)
 	const signer =
 		row.fetch_as === null
 			? undefined
@@ -519,12 +533,51 @@ function stampValid(stamp: StampInput, row: QuoteRow, quoted: Linked): boolean {
 	)
 }
 
+function remoteAuthor(db: Db, uri: string): { id: string; uri: string; domain: string } | undefined {
+	return db.first<{ id: string; uri: string; domain: string }>(
+		'SELECT id, uri, domain FROM accounts WHERE uri = ? AND domain IS NOT NULL',
+		uri
+	)
+}
+
+// The author stage of a stale stored author (applyRefresh): a document stored, or any failure other than 404 or 410
+// stamped, moves on to the quoted stage, which stores the status under that row; no attempt is charged for the
+// fallback. Gone ends the work as for an unknown author (no stamp: the next fetch of a status by them tries again). A
+// row refreshed or stamped meanwhile is a stage the work left (current() sees it first).
+function refreshQuoted(
+	db: Db,
+	row: QuoteRow,
+	input: QuoteVerification,
+	keep: QuoteState,
+	stored: { id: string; uri: string; domain: string }
+): QuoteVerified {
+	const { now, origin } = input
+	const fetched = input.author!
+	if (isDeletedActor(db, stored.uri, now)) {
+		return finish(db, row, keep, 'done', now)
+	}
+	const document = fetched.kind === 'ok' ? fetched.value : fetched.kind === 'gone' ? 'gone' : null
+	const refreshed = applyRefresh(db, stored, document, origin, now)
+	if (refreshed.kind === 'current') {
+		return moved(db, row, now)
+	}
+	if (refreshed.kind === 'refused' || refreshed.frozen) {
+		return finish(db, row, keep, 'done', now)
+	}
+	db.run(`UPDATE quotes SET generation = ${NEW_GENERATION} WHERE status_id = ?`, row.status_id)
+	return { done: false, due: true, state: keep, next: true }
+}
+
 // The quoted-status stages: a stage fetching the author it named stores that account and ends; one fetching the quoted
 // status stores it, from that fresh fetch, once its author is known, and otherwise records only the author's address
 // (need_author) for the next stage. Nothing fetched is kept between stages. Returns the linked status, or a stage's
 // end.
 function storeQuoted(db: Db, row: QuoteRow, input: QuoteVerification, keep: QuoteState): Linked | QuoteVerified {
 	const { now, origin } = input
+	const stored = row.need_author === null ? undefined : remoteAuthor(db, row.need_author)
+	if (input.author !== undefined && stored !== undefined) {
+		return refreshQuoted(db, row, input, keep, stored)
+	}
 	if (input.author !== undefined) {
 		const document = input.author
 		if (document.kind !== 'ok') {
@@ -561,11 +614,10 @@ function storeQuoted(db: Db, row: QuoteRow, input: QuoteVerification, keep: Quot
 	) {
 		return finish(db, row, keep, 'done', now)
 	}
-	const author = db.first<{ id: string; uri: string }>(
-		'SELECT id, uri FROM accounts WHERE uri = ? AND domain IS NOT NULL',
-		authorUri
-	)
-	if (author === undefined) {
+	const author = remoteAuthor(db, authorUri)
+	// A stale author is refetched by the author stage first, as an unknown one is fetched (the stage before refreshed or
+	// stamped it, so the same author is never stale here again).
+	if (author === undefined || (row.need_author !== authorUri && staleAccount(db, author.id, now))) {
 		// A second fetch of the same unknown author ends the work: the stage before stored nobody under that address.
 		if (row.need_author === authorUri) {
 			return finish(db, row, keep, 'done', now)

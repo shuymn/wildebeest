@@ -43,16 +43,18 @@ export class RemoteWeb {
 	// URLs answered only to a fetch signed with the given keyId (403 otherwise), as a followers-only object is.
 	readonly signedOnly = new Map<string, string>()
 	// URLs whose next fetch waits at a gate (hold): a deterministic interleaving point, never a timer.
-	readonly #held = new Map<string, { reached: () => void; gate: Promise<void> }[]>()
+	readonly #held = new Map<string, { reached: () => void; gate: Promise<void>; snapshot: boolean }[]>()
 
 	// The next fetch of `url` not held yet stops before it is answered: `reached` resolves when it arrives, and it is
-	// answered as served when `release` is called. Each call holds one more fetch, in order.
-	hold(url: string): { reached: Promise<void>; release: () => void } {
+	// answered when `release` is called, as served then, or with snapshot as served when the fetch arrived (a document
+	// the remote sent before it changed, delivered late). Each call holds one more fetch, in order.
+	hold(url: string, options: { snapshot?: boolean } = {}): { reached: Promise<void>; release: () => void } {
 		let reached!: () => void
 		let release!: () => void
 		const arrived = new Promise<void>((resolve) => (reached = resolve))
 		const gate = new Promise<void>((resolve) => (release = resolve))
-		this.#held.set(url, [...(this.#held.get(url) ?? []), { reached, gate }])
+		const snapshot = options.snapshot === true
+		this.#held.set(url, [...(this.#held.get(url) ?? []), { reached, gate, snapshot }])
 		return { reached: arrived, release }
 	}
 
@@ -61,14 +63,15 @@ export class RemoteWeb {
 		const url = new URL(request.url)
 		url.hash = ''
 		const held = this.#held.get(url.href)?.shift()
+		const snapshot = held?.snapshot === true ? { served: this.served.get(url.href) } : undefined
 		if (held !== undefined) {
 			held.reached()
 			await held.gate
 		}
-		return this.answer(request, url)
+		return this.answer(request, url, snapshot)
 	}) as typeof fetch
 
-	private answer(request: Request, url: URL): Promise<Response> {
+	private answer(request: Request, url: URL, snapshot?: { served: Served | undefined }): Promise<Response> {
 		this.fetched.push(url.href)
 		const signer = /keyId="([^"]+)"/.exec(request.headers.get('signature') ?? '')?.[1] ?? 'unsigned'
 		this.signers.push(signer)
@@ -76,7 +79,7 @@ export class RemoteWeb {
 		if (only !== undefined && only !== signer) {
 			return Promise.resolve(new Response('Forbidden', { status: 403 }))
 		}
-		const served = this.served.get(url.href)
+		const served = snapshot === undefined ? this.served.get(url.href) : snapshot.served
 		if (served === undefined) {
 			return Promise.resolve(new Response('Not Found', { status: 404 }))
 		}

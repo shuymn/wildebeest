@@ -15,10 +15,26 @@ import {
 	signedInit,
 	type TestActor,
 } from './inbox-helpers'
+import {
+	announce,
+	followed,
+	mastodonNote,
+	OTHER,
+	type Setup as StatusSetup,
+	setup as statusSetup,
+	statuses,
+} from './inbox-status-helpers'
 import { community } from './status-helpers'
 import { Db } from '../src/db/sql'
-import { MAX_RETRACTIONS_PER_ACTOR, PURGE_BATCH, purgeBatch, SWEEP_BATCH } from '../src/domain/inbox'
-import { BudgetExceededError, createSafeLoader, isTransientLoadError } from '../src/federation/loader'
+import { ACCOUNT_STALE_MS, MAX_RETRACTIONS_PER_ACTOR, PURGE_BATCH, purgeBatch, SWEEP_BATCH } from '../src/domain/inbox'
+import {
+	BudgetExceededError,
+	createSafeLoader,
+	DOCUMENT_BODY_LIMIT,
+	isTransientLoadError,
+	REQUEST_MAX_BYTES,
+	REQUEST_MAX_FETCHES,
+} from '../src/federation/loader'
 import { handleQueue, runScheduledJobs } from '../src/jobs/queue'
 import { sha256Hex } from '../src/platform/sha256'
 import type { StoreStub } from '../src/platform/store-client'
@@ -586,6 +602,121 @@ describe('remote fetches: transient contexts and the request budget (RES-6)', ()
 		expect(await t.post(bob, follow(bob))).toBe(503)
 		expect(t.web.fetched.length).toBeLessThanOrEqual(8)
 		expect(await edges(t.store)).toEqual([])
+	})
+
+	// erin's original boosted by bob (followed by alice), with erin stored by a first boost and aged a day: her refetch
+	// is optional, so whatever exhausts its share of the budget falls back to the stored row.
+	describe('the optional refetch of a stale author (VIS-6, NET-4)', () => {
+		async function staleWorld() {
+			const t = await statusSetup()
+			const bob = await mastodonActor(t.web, 'bob')
+			await followed(t, bob)
+			const erin = await mastodonActor(t.web, 'erin', { origin: OTHER, key: 3 })
+			const first = mastodonNote(erin)
+			t.web.serve(first.id, { '@context': AS, ...first })
+			expect(await t.post(bob, announce(bob, first.id))).toBe(202)
+			await sql(
+				t.store,
+				'UPDATE accounts SET fetched_at = ? WHERE uri = ?',
+				new Date(NOW - ACCOUNT_STALE_MS).toISOString(),
+				erin.uri
+			)
+			t.web.fetched.length = 0
+			return { t, bob, erin }
+		}
+		// The refetched document renames the actor, so a refresh that was stored shows.
+		const withContexts = (actor: TestActor, contexts: string[]) => ({
+			...actor.document,
+			name: 'Renamed',
+			'@context': [...(actor.document['@context'] as unknown[]), ...contexts],
+		})
+		const stamp = async (t: StatusSetup, uri: string) =>
+			(
+				await sql<{ fetched_at: string; display_name: string }>(
+					t.store,
+					'SELECT fetched_at, display_name FROM accounts WHERE uri = ?',
+					uri
+				)
+			)[0]
+
+		type Exhaustion = [string, (t: StatusSetup, erin: TestActor) => string[]]
+		const exhaustions: Exhaustion[] = [
+			[
+				'the fetch count, on 20 uncached contexts',
+				(t, erin) => {
+					const contexts = Array.from({ length: 20 }, (_, i) => `https://ctx.example/s${i}`)
+					for (const url of contexts) {
+						t.web.serve(url, { '@context': { [`s${url.at(-1)}`]: `${url}#s` } }, 'application/ld+json')
+					}
+					t.web.serve(erin.uri, withContexts(erin, contexts))
+					return contexts
+				},
+			],
+			[
+				'a context that answers 503',
+				(t, erin) => {
+					const context = 'https://ctx.example/flaky'
+					t.web.fail(context, 503)
+					t.web.serve(erin.uri, withContexts(erin, [context]))
+					return [context]
+				},
+			],
+			[
+				'the bytes, on contexts each under the document cap and together over the request’s',
+				(t, erin) => {
+					const each = Math.floor(DOCUMENT_BODY_LIMIT * 0.8)
+					const contexts = Array.from({ length: 3 }, (_, i) => `https://ctx.example/b${i}`)
+					for (const url of contexts) {
+						t.web.serve(
+							url,
+							{ '@context': { [`b${url.at(-1)}`]: `${url}#b` }, pad: 'x'.repeat(each) },
+							'application/ld+json'
+						)
+					}
+					expect(contexts.length * each).toBeGreaterThan(REQUEST_MAX_BYTES)
+					t.web.serve(erin.uri, withContexts(erin, contexts))
+					return contexts
+				},
+			],
+		]
+
+		it.each(exhaustions)('falls back to the stored author when the refetch runs out of %s', async (_name, exhaust) => {
+			const { t, bob, erin } = await staleWorld()
+			const contexts = exhaust(t, erin)
+			const note = mastodonNote(erin)
+			t.web.serve(note.id, { '@context': AS, ...note })
+			expect(await t.post(bob, announce(bob, note.id))).toBe(202)
+			expect(t.web.fetched.length).toBeLessThanOrEqual(REQUEST_MAX_FETCHES)
+			expect(t.web.fetched.slice(0, 3)).toEqual([note.id, erin.uri, contexts[0]])
+			expect((await statuses(t.store)).map((s) => s.uri)).toContain(note.id)
+			const row = await stamp(t, erin.uri)
+			expect(row?.fetched_at).toBe(new Date(NOW).toISOString())
+			expect(row?.display_name).not.toBe('Renamed')
+		})
+
+		it('the bytes case runs out of bytes, not fetches', async () => {
+			const { t, bob, erin } = await staleWorld()
+			const contexts = exhaustions[2]![1](t, erin)
+			const note = mastodonNote(erin)
+			t.web.serve(note.id, { '@context': AS, ...note })
+			expect(await t.post(bob, announce(bob, note.id))).toBe(202)
+			// Every context was requested, the last one past the request's bytes, within the fetch count.
+			expect(t.web.fetched).toEqual([note.id, erin.uri, ...contexts])
+			expect(t.web.fetched.length).toBeLessThan(REQUEST_MAX_FETCHES)
+		})
+
+		it('an unknown author that runs out of the budget still answers 503 and stores nothing', async () => {
+			const { t, bob } = await staleWorld()
+			const frank = await mastodonActor(t.web, 'frank', { origin: OTHER, key: 4 })
+			exhaustions[0]![1](t, frank)
+			const before = await statuses(t.store)
+			const note = mastodonNote(frank)
+			t.web.serve(note.id, { '@context': AS, ...note })
+			expect(await t.post(bob, announce(bob, note.id))).toBe(503)
+			expect(t.web.fetched.length).toBeLessThanOrEqual(REQUEST_MAX_FETCHES)
+			expect(await statuses(t.store)).toEqual(before)
+			expect(await sql(t.store, 'SELECT 1 AS x FROM accounts WHERE uri = ?', frank.uri)).toEqual([])
+		})
 	})
 
 	it('answers 503 to a Move whose target exceeds the budget: no job, and the spooled copy is retried', async () => {

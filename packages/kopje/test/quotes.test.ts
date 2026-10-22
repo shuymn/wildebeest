@@ -8,6 +8,7 @@ import { sql } from './api-helpers'
 import { inboxDeps, NOW } from './app-helpers'
 import { BUILD } from './helpers'
 import {
+	actorDefaults,
 	LOCAL,
 	MASTODON,
 	mastodonActor,
@@ -37,7 +38,7 @@ import {
 } from './inbox-status-helpers'
 import { contexts, deferred, QUOTE_CONTEXT, quoting, serveStamp } from './quote-helpers'
 import { Db } from '../src/db/sql'
-import { PURGE_BATCH, receiveActivity, RETRACTION_TTL_MS, runInboundJobs } from '../src/domain/inbox'
+import { ACCOUNT_STALE_MS, PURGE_BATCH, receiveActivity, RETRACTION_TTL_MS, runInboundJobs } from '../src/domain/inbox'
 import {
 	MAX_LINKED_QUOTES,
 	QUOTE_BACKOFF_MS,
@@ -1186,7 +1187,7 @@ describe('review round 1 regressions', () => {
 			activity: { type: 'Create', id: `${quote.id}/activity`, object: parseRemoteStatus(quote)! },
 		})
 		const id = (await statusRow(t.store, quote.id))!.id
-		const work = async () => (await t.store.quoteWork(BUILD, { statusId: id }))!
+		const work = async () => (await t.store.quoteWork(BUILD, { statusId: id, now: NOW }))!
 		const complete = async (read: QuoteWork, outcome: Partial<QuoteVerification>) =>
 			t.store.completeQuote(BUILD, {
 				statusId: id,
@@ -1215,8 +1216,10 @@ describe('review round 1 regressions', () => {
 		// While that verifier fetches erin, another request stores her: the stage is now the quoted status again.
 		await sql(
 			t.store,
-			"INSERT INTO accounts (id, uri, username, domain) VALUES ('977000000000000001', ?, 'erin', 'other.example')",
-			erin.uri
+			`INSERT INTO accounts (id, uri, username, domain, fetched_at)
+			VALUES ('977000000000000001', ?, 'erin', 'other.example', ?)`,
+			erin.uri,
+			new Date(NOW).toISOString()
 		)
 		expect(await work()).toMatchObject({ stage: 'quoted', generation: fetching.generation })
 		// Its late 404 for erin is an outcome of a stage the work left: discarded, the work due.
@@ -1232,7 +1235,7 @@ describe('review round 1 regressions', () => {
 		expect(await t.post(bob, create(bob, pair.quote))).toBe(202)
 		const id = (await statusRow(t.store, pair.quote.id))!.id
 		// A verifier reads the accepted quote's stamp stage (an earlier check), and its fetch is still on its way.
-		const old = (await t.store.quoteWork(BUILD, { statusId: id }))!
+		const old = (await t.store.quoteWork(BUILD, { statusId: id, now: NOW }))!
 		expect(old.stage).toBe('stamp')
 		// An unproven relay of carol's Delete renews the check; the stamp is gone now.
 		await t.store.receiveActivity(BUILD, {
@@ -1698,6 +1701,209 @@ describe('review round 1 regressions', () => {
 		expect(await t.postOnly(dan, relay)).toBe(202)
 		expect(await quoteOf(t, pair.quote.id)).toMatchObject({ state: 'accepted', verify_after: NOW })
 		expect(await quoteOf(t, self.id)).toMatchObject({ verify_after: null })
+	})
+
+	// erin, a quoted author on another server stored by an accepted quote of hers, aged a day; her document served again
+	// with a new avatar.
+	async function staleQuoted(t: Setup, bob: TestActor) {
+		const erin = await mastodonActor(t.web, 'erin', { origin: OTHER, key: 7 })
+		const first = quotedPair(t, bob, erin)
+		expect(await t.post(bob, create(bob, first.quote))).toBe(202)
+		expect(await quoteOf(t, first.quote.id)).toMatchObject({ state: 'accepted' })
+		await sql(
+			t.store,
+			'UPDATE accounts SET fetched_at = ? WHERE uri = ?',
+			new Date(NOW - ACCOUNT_STALE_MS).toISOString(),
+			erin.uri
+		)
+		const avatar = `${OTHER}/system/avatars/erin-2.png`
+		await mastodonActor(t.web, 'erin', {
+			origin: OTHER,
+			key: 7,
+			extra: { icon: { type: 'Image', mediaType: 'image/png', url: avatar } },
+		})
+		t.web.fetched.length = 0
+		return { erin, avatar }
+	}
+	const erinRow = async (t: Setup, uri: string) =>
+		(
+			await sql<{ avatar_url: string | null; fetched_at: string | null }>(
+				t.store,
+				'SELECT avatar_url, fetched_at FROM accounts WHERE uri = ?',
+				uri
+			)
+		)[0]!
+
+	// One job round whose quoteWork reads are recorded as stage:fetch.
+	async function recordedRound(t: Setup, now = NOW): Promise<string[]> {
+		const stages: string[] = []
+		const store = t.store
+		const spy = new Proxy(store, {
+			get(target, property) {
+				if (property === 'quoteWork') {
+					return async (build: string, input: { statusId: string; now: number }) => {
+						const work = await target.quoteWork(build, input)
+						stages.push(work === null ? 'none' : `${work.stage}:${work.fetch}`)
+						return work
+					}
+				}
+				// The stub's RPC methods are called on the stub itself.
+				return (...args: unknown[]) =>
+					(target as unknown as Record<PropertyKey, (...args: unknown[]) => unknown>)[property]!(...args)
+			},
+		})
+		await verifyQuotes(t.env, { ...inboxDeps(() => spy, t.web.loader), now: () => now })
+		return stages
+	}
+
+	it('refreshes a stale quoted author before storing the quoted status', async () => {
+		const { t, bob } = await world()
+		const { erin, avatar } = await staleQuoted(t, bob)
+		const pair = quotedPair(t, bob, erin)
+		await stored(t, pair.quote)
+		expect(await recordedRound(t)).toEqual([
+			`quoted:${pair.target.id}`,
+			`author:${erin.uri}`,
+			`quoted:${pair.target.id}`,
+			`stamp:${pair.stamp}`,
+		])
+		expect(t.web.fetched).toEqual([pair.target.id, erin.uri, pair.target.id, pair.stamp])
+		expect(await erinRow(t, erin.uri)).toEqual({ avatar_url: avatar, fetched_at: new Date(NOW).toISOString() })
+		expect(await quoteOf(t, pair.quote.id)).toMatchObject({ state: 'accepted', attempts: 0 })
+		const quote = (await statusRow(t.store, pair.quote.id))!
+		const shown = await t.api<{ quote: { quoted_status: { account: { avatar: string } } } }>(
+			`/api/v1/statuses/${quote.id}`
+		)
+		expect(shown.body.quote.quoted_status.account.avatar).toBe(avatar)
+	})
+
+	it.each([
+		['a 500', (web: RemoteWeb, uri: string) => web.fail(uri, 500)],
+		['unusable', (web: RemoteWeb, uri: string) => web.serve(uri, { id: `${uri}/other`, type: 'Person' })],
+	])(
+		'a stale quoted author’s refresh that is %s stores the status under the stored profile, uncharged',
+		async (_name, failure) => {
+			const { t, bob } = await world()
+			const { erin } = await staleQuoted(t, bob)
+			const profile = await erinRow(t, erin.uri)
+			failure(t.web, erin.uri)
+			const pair = quotedPair(t, bob, erin)
+			await stored(t, pair.quote)
+			expect(await recordedRound(t)).toContain(`author:${erin.uri}`)
+			expect(await erinRow(t, erin.uri)).toEqual({ ...profile, fetched_at: new Date(NOW).toISOString() })
+			expect(await statusRow(t.store, pair.target.id)).toBeDefined()
+			expect(await quoteOf(t, pair.quote.id)).toMatchObject({ state: 'accepted', attempts: 0 })
+		}
+	)
+
+	it.each([404, 410])(
+		'a stale quoted author’s refresh answering %i leaves the quote pending, its work done, and stamps nothing',
+		async (status) => {
+			const { t, bob } = await world()
+			const { erin } = await staleQuoted(t, bob)
+			const profile = await erinRow(t, erin.uri)
+			t.web.fail(erin.uri, status)
+			const pair = quotedPair(t, bob, erin)
+			await stored(t, pair.quote)
+			expect(await recordedRound(t)).toEqual([`quoted:${pair.target.id}`, `author:${erin.uri}`])
+			expect(await erinRow(t, erin.uri)).toEqual(profile)
+			expect(await statusRow(t.store, pair.target.id)).toBeUndefined()
+			expect(await quoteOf(t, pair.quote.id)).toMatchObject({ state: 'pending', attempts: 0, verify_after: null })
+		}
+	)
+
+	it('an outcome of a stale-author stage whose generation was replaced stamps and upserts nothing', async () => {
+		const { t, bob } = await world()
+		const { erin } = await staleQuoted(t, bob)
+		const profile = await erinRow(t, erin.uri)
+		const pair = quotedPair(t, bob, erin)
+		const { work, complete } = await stored(t, pair.quote)
+		await complete(await work(), {
+			quoted: { kind: 'ok', value: parseRemoteStatus({ '@context': AS, ...pair.target })! },
+		})
+		const fetching = await work()
+		expect(fetching).toMatchObject({ stage: 'author', fetch: erin.uri })
+		// A round claims the work meanwhile: a new generation.
+		await t.store.claimQuotes(BUILD, { now: NOW, limit: QUOTE_ROUND })
+		expect((await work()).generation).not.toBe(fetching.generation)
+		await complete(fetching, { author: { kind: 'transient' } })
+		const document = {
+			...actorDefaults(),
+			uri: erin.uri,
+			username: 'erin',
+			domain: 'other.example',
+			displayName: 'erin 2',
+			inboxUrl: `${erin.uri}/inbox`,
+			movedTo: null,
+			avatarUrl: `${OTHER}/system/avatars/erin-3.png`,
+		}
+		await complete(fetching, { author: { kind: 'ok', value: document } })
+		expect(await erinRow(t, erin.uri)).toEqual(profile)
+	})
+
+	it('an inbound refresh during the stale-author stage moves the work on', async () => {
+		const { t, bob } = await world()
+		const { erin, avatar } = await staleQuoted(t, bob)
+		const pair = quotedPair(t, bob, erin)
+		const { work, complete } = await stored(t, pair.quote)
+		await complete(await work(), {
+			quoted: { kind: 'ok', value: parseRemoteStatus({ '@context': AS, ...pair.target })! },
+		})
+		const fetching = await work()
+		expect(fetching).toMatchObject({ stage: 'author', fetch: erin.uri })
+		// While that verifier fetches erin, a boost of another note of hers refreshes her.
+		const other = mastodonNote(erin)
+		t.web.serve(other.id, { '@context': AS, ...other })
+		expect(await t.postOnly(bob, announce(bob, other.id))).toBe(202)
+		expect(await erinRow(t, erin.uri)).toEqual({ avatar_url: avatar, fetched_at: new Date(NOW).toISOString() })
+		expect(await work()).toMatchObject({ stage: 'quoted', generation: fetching.generation })
+		// The late outcome belongs to a stage the work left: discarded, the work due, nothing charged.
+		await complete(fetching, { author: { kind: 'gone' } })
+		expect(await quoteOf(t, pair.quote.id)).toMatchObject({ state: 'pending', verify_after: NOW, attempts: 0 })
+		await rounds(t, NOW)
+		expect(await quoteOf(t, pair.quote.id)).toMatchObject({ state: 'accepted' })
+	})
+
+	// A documented limitation (docs/mastodon-deviations.md, Accounts): a 404 that arrives after another request's failed
+	// refetch of the same author finds her stamped, and the quoted status is stored under the stored row.
+	it('a 404 for a stale-author stage that a failure stamp moved on is not applied', async () => {
+		const { t, bob } = await world()
+		const { erin } = await staleQuoted(t, bob)
+		const profile = await erinRow(t, erin.uri)
+		const pair = quotedPair(t, bob, erin)
+		const { work, complete } = await stored(t, pair.quote)
+		await complete(await work(), {
+			quoted: { kind: 'ok', value: parseRemoteStatus({ '@context': AS, ...pair.target })! },
+		})
+		const fetching = await work()
+		expect(fetching).toMatchObject({ stage: 'author', fetch: erin.uri })
+		// A boost's refetch of erin fails meanwhile and stamps her.
+		t.web.fail(erin.uri, 500)
+		const other = mastodonNote(erin)
+		t.web.serve(other.id, { '@context': AS, ...other })
+		expect(await t.postOnly(bob, announce(bob, other.id))).toBe(202)
+		expect(await erinRow(t, erin.uri)).toEqual({ ...profile, fetched_at: new Date(NOW).toISOString() })
+		t.web.fail(erin.uri, 404)
+		await complete(fetching, { author: { kind: 'gone' } })
+		await rounds(t, NOW)
+		expect(await statusRow(t.store, pair.target.id)).toBeDefined()
+		expect(await quoteOf(t, pair.quote.id)).toMatchObject({ state: 'accepted' })
+	})
+
+	it('a quoted author fetched within a day takes no author stage', async () => {
+		const { t, bob } = await world()
+		const { erin } = await staleQuoted(t, bob)
+		await sql(
+			t.store,
+			'UPDATE accounts SET fetched_at = ? WHERE uri = ?',
+			new Date(NOW - ACCOUNT_STALE_MS + 1).toISOString(),
+			erin.uri
+		)
+		const pair = quotedPair(t, bob, erin)
+		await stored(t, pair.quote)
+		expect(await recordedRound(t)).toEqual([`quoted:${pair.target.id}`, `stamp:${pair.stamp}`])
+		expect(t.web.fetched).not.toContain(erin.uri)
+		expect(await quoteOf(t, pair.quote.id)).toMatchObject({ state: 'accepted' })
 	})
 
 	it('leases a claim for longer than a round can run', () => {

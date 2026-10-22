@@ -147,7 +147,7 @@ async function verifyQuote(
 ): Promise<boolean> {
 	// The quoted status, its author, the status again (now storable), the stamp, and the decision.
 	for (let stage = 0; stage < QUOTE_STAGES; stage++) {
-		const work = await rpc((s) => s.quoteWork(build, { statusId }))
+		const work = await rpc((s) => s.quoteWork(build, { statusId, now: now() }))
 		if (work === null) {
 			return false
 		}

@@ -81,7 +81,7 @@ import {
 import type { Db } from '../db/sql'
 import { hostDomain } from '../platform/domain-name'
 import { ACTIVITY_ID_LIMIT, withinIdentityBound } from '../platform/identity-bounds'
-import { ACCOUNT_EMOJIS_BYTES, MOVED_TO_INDEX } from '../platform/stored-bounds'
+import { ACCOUNT_EMOJIS_BYTES, isoTimeSql, MOVED_TO_INDEX } from '../platform/stored-bounds'
 
 // Inbound activities about actors and relationships (B1b-1), applied in one Store transaction each. The Worker has
 // already verified the HTTP signature, bound the signer to the actor (ID-1), fetched and sanitized what it needed
@@ -143,6 +143,10 @@ export const SWEEP_BATCH = 100
 // A stored key is trusted this long after its actor document was fetched; after that the Worker fetches it again.
 // A deleted actor's own Delete is the one exception (federation/inbound.ts).
 export const KEY_REFRESH_MS = 24 * 60 * 60 * 1000
+// A stored remote account whose document was stored this long ago (accounts.fetched_at, inclusive) is fetched again
+// before a status Kopje fetched by it is stored (staleAccount): Mastodon's Account::STALE_THRESHOLD and
+// possibly_stale? (account.rb:71,254-256), a policy separate from KEY_REFRESH_MS.
+export const ACCOUNT_STALE_MS = 24 * 60 * 60 * 1000
 // A finished job, and with it a deleted actor's tombstone, is kept this long after it is done.
 export const JOB_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
 // Bounds of one batch of a Move (RES-6): local followers moved, and local blocks and mutes carried over to the target.
@@ -253,10 +257,11 @@ export type InboundActivity =
 export type CollectionItem = { status: string } | { hashtag: string }
 
 // Documents the Worker fetched because the Store asked for them (ReceiveResult.need), by the uri asked for: a parsed
-// status or actor, or null when it could not be fetched or used.
+// status or actor, or null when it could not be fetched or used; 'gone': the actor's document answered 404 or 410.
+// A refresh need's failure that may pass is null too (applyRefresh).
 export type Prefetched = {
 	statuses: Record<string, RemoteStatusInput | null>
-	actors: Record<string, RemoteActorInput | null>
+	actors: Record<string, RemoteActorInput | null | 'gone'>
 }
 
 export type ReceiveInput = {
@@ -285,7 +290,14 @@ export type ReceiveResult = {
 	// is available (a QuoteRequest's instrument, fetched as the quoted author: federation.ts localSigner), or
 	// 'instance' for the instance actor; absent, the inbox's own (the recipient's for a personal inbox).
 	// kind 'proof': verify the Delete's author proof before forwarding (quotes.ts revokeStamp); uri is the actor's.
-	need?: { kind: 'status' | 'actor' | 'proof'; uri: string; signer?: FollowerSigner | { local: string } | 'instance' }
+	// refresh (kind 'actor' only): the stale stored row is usable without this document, so a fetch that may pass does
+	// not fail the request (staleAccount, applyRefresh).
+	need?: {
+		kind: 'status' | 'actor' | 'proof'
+		uri: string
+		signer?: FollowerSigner | { local: string } | 'instance'
+		refresh?: true
+	}
 	// Nothing changed, and the activity may apply later (its retraction could not be recorded): answered 503.
 	retry?: boolean
 }
@@ -547,6 +559,57 @@ export function upsertRemoteActor(
 	const collections = actorCollections(actor.raw)
 	const named = Object.values(collections).some((url) => url !== null)
 	return { ...row, syncWaiting: named && requestCollectionSync(db, row.id, now), frozen: false }
+}
+
+// Whether the remote account `id` is fetched again before a status Kopje fetched by it is stored (ACCOUNT_STALE_MS,
+// Mastodon's possibly_stale?): a remote row that is available (R38, VIS-30: never refetched) and whose fetched_at is
+// ACCOUNT_STALE_MS old or older, or not a stored time (NULL, or an imported value isoTimeSql does not read).
+export function staleAccount(db: Db, id: string, now: number): boolean {
+	return (
+		db.first(
+			`SELECT 1 AS x FROM accounts a
+			WHERE a.id = ?1 AND a.domain IS NOT NULL AND ${availableSql('a.id')}
+				AND (${isoTimeSql('a.fetched_at')} IS NULL OR ${isoTimeSql('a.fetched_at')} <= ?2)`,
+			id,
+			new Date(now - ACCOUNT_STALE_MS).toISOString()
+		) !== undefined
+	)
+}
+
+// The outcome of refetching a stale stored author (staleAccount), applied in the transaction that stores its status.
+// Applied only while the row is still stale, so the first outcome to commit wins and a delayed older document never
+// replaces a newer one: a row refreshed, stamped or made unavailable meanwhile is kept as it is ('current').
+// While it is stale:
+//   - a usable document of this actor (ok) is stored (upsertRemoteActor): 'refreshed', frozen if it stored nothing;
+//   - 'gone' (404 or 410) writes nothing, and nothing is stored under the account ('refused'), as for an author that
+//     cannot be fetched;
+//   - any other failure (null: unusable, another id, or one that may pass, budget and deadline included) stamps
+//     fetched_at only ('stamped'): the stored row is used, and refetched a day later. remote_keys are not touched,
+//     so key trust (ID-1) is not extended.
+// Limitation: a 'gone' that commits after another request's stamp finds the row fresh and is not applied.
+export function applyRefresh(
+	db: Db,
+	author: RemoteRow,
+	document: RemoteActorInput | null | 'gone',
+	origin: string,
+	now: number
+): { kind: 'current' | 'refreshed' | 'stamped'; author: RemoteRow; frozen: boolean } | { kind: 'refused' } {
+	if (!staleAccount(db, author.id, now)) {
+		return { kind: 'current', author: remoteAccount(db, author.uri) ?? author, frozen: false }
+	}
+	if (document === 'gone') {
+		return { kind: 'refused' }
+	}
+	if (document === null || document.uri !== author.uri) {
+		db.run(
+			'UPDATE accounts SET fetched_at = ?2 WHERE id = ?1 AND domain IS NOT NULL',
+			author.id,
+			new Date(now).toISOString()
+		)
+		return { kind: 'stamped', author, frozen: false }
+	}
+	const stored = upsertRemoteActor(db, document, origin, now)
+	return stored === undefined ? { kind: 'refused' } : { kind: 'refreshed', author: stored, frozen: stored.frozen }
 }
 
 export type StoredRemoteKey = { owner: string; pem: string; fresh: boolean }
@@ -2406,21 +2469,34 @@ function newOriginal(
 		return known
 	}
 	let author = remoteAccount(db, authorUri)
-	let followers = author === undefined ? null : followersUri(db, author.id)
-	const document = author === undefined ? input.prefetched?.actors[authorUri] : undefined
+	const document = input.prefetched?.actors[authorUri]
+	let followers: string | null
 	if (author === undefined) {
 		if (document === undefined) {
 			return { ...ignored('need-author'), need: { kind: 'actor', uri: authorUri } }
 		}
-		if (document === null || document.uri !== authorUri) {
+		if (document === null || document === 'gone' || document.uri !== authorUri) {
 			return ignored('unfetchable')
 		}
 		followers = followersOf(document.raw)
+	} else {
+		// A stale stored author is refetched first (Mastodon's account_from_uri), before VIS-6, which then reads the
+		// refreshed followers: a refresh is not content, so one VIS-6 refuses still stands.
+		if (document !== undefined) {
+			const refreshed = applyRefresh(db, author, document, origin, now)
+			if (refreshed.kind === 'refused') {
+				return ignored('unfetchable')
+			}
+			author = refreshed.author
+		} else if (staleAccount(db, author.id, now)) {
+			return { ...ignored('need-author-refresh'), need: { kind: 'actor', uri: authorUri, refresh: true } }
+		}
+		followers = followersUri(db, author.id)
 	}
 	if (authorUri !== actor.uri && !isDistributable(visibilityOf(fetched, followers))) {
 		return ignored('not-announceable')
 	}
-	if (author === undefined && document !== undefined && document !== null) {
+	if (author === undefined && document !== undefined && document !== null && document !== 'gone') {
 		author = upsertRemoteActor(db, document, origin, now)
 	}
 	if (author === undefined) {
