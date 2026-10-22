@@ -1736,6 +1736,13 @@ describe('review round 1 regressions', () => {
 
 	// One job round whose quoteWork reads are recorded as stage:fetch.
 	async function recordedRound(t: Setup, now = NOW): Promise<string[]> {
+		const { stages, round } = recording(t, now)
+		await round
+		return stages
+	}
+
+	// One job round started (not awaited), its quoteWork reads recorded as stage:fetch; round: whether more is due.
+	function recording(t: Setup, now = NOW): { stages: string[]; round: Promise<boolean> } {
 		const stages: string[] = []
 		const store = t.store
 		const spy = new Proxy(store, {
@@ -1752,8 +1759,7 @@ describe('review round 1 regressions', () => {
 					(target as unknown as Record<PropertyKey, (...args: unknown[]) => unknown>)[property]!(...args)
 			},
 		})
-		await verifyQuotes(t.env, { ...inboxDeps(() => spy, t.web.loader), now: () => now })
-		return stages
+		return { stages, round: verifyQuotes(t.env, { ...inboxDeps(() => spy, t.web.loader), now: () => now }) }
 	}
 
 	it('refreshes a stale quoted author before storing the quoted status', async () => {
@@ -1888,6 +1894,34 @@ describe('review round 1 regressions', () => {
 		await rounds(t, NOW)
 		expect(await statusRow(t.store, pair.target.id)).toBeDefined()
 		expect(await quoteOf(t, pair.quote.id)).toMatchObject({ state: 'accepted' })
+	})
+
+	it('a round whose stale-author fetch is overtaken by an inbound refresh still completes, uncharged', async () => {
+		const { t, bob } = await world()
+		const { erin, avatar } = await staleQuoted(t, bob)
+		const pair = quotedPair(t, bob, erin)
+		await stored(t, pair.quote)
+		// The round reaches its fetch of erin and waits there.
+		const gate = t.web.hold(erin.uri)
+		const { stages, round } = recording(t)
+		await gate.reached
+		expect(stages).toEqual([`quoted:${pair.target.id}`, `author:${erin.uri}`])
+		// Meanwhile a boost of another note of hers refreshes her.
+		const other = mastodonNote(erin)
+		t.web.serve(other.id, { '@context': AS, ...other })
+		expect(await t.postOnly(bob, announce(bob, other.id))).toBe(202)
+		gate.release()
+		expect(await round).toBe(false)
+		// The late author outcome moved the work on within the round's stages.
+		expect(stages).toEqual([
+			`quoted:${pair.target.id}`,
+			`author:${erin.uri}`,
+			`quoted:${pair.target.id}`,
+			`stamp:${pair.stamp}`,
+		])
+		expect(stages.length).toBeLessThanOrEqual(QUOTE_STAGES)
+		expect(await erinRow(t, erin.uri)).toEqual({ avatar_url: avatar, fetched_at: new Date(NOW).toISOString() })
+		expect(await quoteOf(t, pair.quote.id)).toMatchObject({ state: 'accepted', attempts: 0, verify_after: null })
 	})
 
 	it('a quoted author fetched within a day takes no author stage', async () => {

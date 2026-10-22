@@ -80,7 +80,16 @@ async function world() {
 	return { t, bob, erin, clock }
 }
 
-const boosted = async (t: Setup, uri: string) => (await statuses(t.store)).some((s) => s.uri === uri)
+// Whether the original `uri` is stored and wrapped by a boost row (reblog_of_id naming it).
+const boosted = async (t: Setup, uri: string) =>
+	(
+		await sql<{ n: number }>(
+			t.store,
+			`SELECT count(*) AS n FROM statuses b JOIN statuses o ON o.id = b.reblog_of_id
+			WHERE o.uri = ? AND o.reblog_of_id IS NULL`,
+			uri
+		)
+	)[0]!.n === 1
 
 describe('a stale author of a fetched original (VIS-6, NET-4; Mastodon possibly_stale?)', () => {
 	it('refetches a stored author whose document is a day old before storing a boosted original', async () => {
@@ -344,6 +353,56 @@ describe('refreshes of one stale author by two requests (hold)', () => {
 		expect(await author(t, erin.uri)).toEqual({ ...profile!, fetched_at: iso(NOW + 1) })
 		expect(await boosted(t, noteA.id)).toBe(true)
 		expect(await boosted(t, noteB.id)).toBe(true)
+	})
+
+	// B's outcome commits first, A's after it. A stamp or a refresh makes the row fresh, so a later outcome is discarded;
+	// gone writes nothing (B's status refused), so a later outcome still applies.
+	it('a success that commits after a failure stamp is discarded: both statuses under the stored row', async () => {
+		let profile: AuthorRow | undefined
+		const { t, erin, noteA, noteB } = await race((t, erin) => reserve(t, erin, 2), {
+			beforeB: async (t, erin) => {
+				profile = await author(t, erin.uri)
+				t.web.fail(erin.uri, 500)
+			},
+		})
+		expect(await author(t, erin.uri)).toEqual({ ...profile!, fetched_at: iso(NOW + 1) })
+		expect(await boosted(t, noteA.id)).toBe(true)
+		expect(await boosted(t, noteB.id)).toBe(true)
+	})
+
+	it('a success that commits after a 404 applies: only the later status is stored, under the refreshed row', async () => {
+		const { t, erin, noteA, noteB } = await race((t, erin) => reserve(t, erin, 2), {
+			beforeB: (t, erin) => t.web.fail(erin.uri, 404),
+		})
+		expect(await author(t, erin.uri)).toMatchObject({ avatar_url: avatar(erin, 2), fetched_at: iso(NOW + 2) })
+		expect(await boosted(t, noteA.id)).toBe(true)
+		expect(await boosted(t, noteB.id)).toBe(false)
+	})
+
+	it('a failure that commits after a 404 stamps: only the later status is stored, under the stored row', async () => {
+		let profile: AuthorRow | undefined
+		const { t, erin, noteA, noteB } = await race((t, erin) => Promise.resolve(t.web.fail(erin.uri, 500)), {
+			beforeB: async (t, erin) => {
+				profile = await author(t, erin.uri)
+				t.web.fail(erin.uri, 404)
+			},
+		})
+		expect(await author(t, erin.uri)).toEqual({ ...profile!, fetched_at: iso(NOW + 2) })
+		expect(await boosted(t, noteA.id)).toBe(true)
+		expect(await boosted(t, noteB.id)).toBe(false)
+	})
+
+	it('two 404s store neither status and stamp nothing', async () => {
+		let profile: AuthorRow | undefined
+		const { t, erin, noteA, noteB } = await race(() => Promise.resolve(), {
+			beforeB: async (t, erin) => {
+				profile = await author(t, erin.uri)
+				t.web.fail(erin.uri, 404)
+			},
+		})
+		expect(await author(t, erin.uri)).toEqual(profile)
+		expect(await boosted(t, noteA.id)).toBe(false)
+		expect(await boosted(t, noteB.id)).toBe(false)
 	})
 })
 
