@@ -1260,9 +1260,13 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   workerd's fetch path and cancels them at the cap"), `test/html-scan.test.ts` ("never finds a rel=me the
   scripting-off parser does not", "refuses the counterexample", "collects no rel=me after a noscript start tag",
   "collects no rel=me after a select start tag", "collects no rel=me after an svg or math start tag"),
-  `test/html-rewriter-facts.test.ts` (the HTMLRewriter facts the scan rests on). A rel=me candidate is the exact,
-  case-sensitive token "me", as Mastodon's XPath matches it; `links[].rel` is lowercased for card extraction. The DNS
-  check does not pin the address the request connects to: protection against DNS rebinding rests on production
+  `test/html-rewriter-facts.test.ts` (the HTMLRewriter facts the scan rests on). A rel=me candidate has the token
+  "me" among all its rel tokens, ASCII case-insensitively, as Mastodon's `NokogiriHandler.link_rel_include` downcases
+  both; a rel past 2,048 decoded characters is not tokenized and no rel=me at or after it is collected, so a later
+  anchor never stands first where Mastodon finds an earlier one (`test/html-scan.test.ts`, "finds the token me past
+  the first relTokens tokens of a rel", "collects no rel=me at or after a rel past REL_CHARS"); `links[].rel` is
+  lowercased for card extraction. The DNS check does not pin the address the request connects to: protection against
+  DNS rebinding rests on production
   `deps.fetch` being the Worker's global fetch, never a service binding, which NET-1 makes strictly public. Each caller
   records its differences from Mastodon's parser in its own PR. Remote media: _Planned (remote media):_ Kopje fetches no
   remote media (remote attachments, avatars, headers and custom emoji images are kept as http(s) URLs, HTML-3); a cache

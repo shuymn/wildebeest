@@ -26,6 +26,8 @@ import { decodeHTML, decodeHTMLAttribute } from 'entities/decode'
 //     <foreignObject>, a MathML <mi>) as XHTML, so no <title> after the first <svg> or <math> start tag is taken.
 //   - lol-html keeps a stack of open elements within its 3 MiB: some 50,000 unclosed elements fail the scan (memory).
 //   - a capture (title, JSON-LD) cut by the end of the input is dropped; a start tag cut by it is never emitted.
+//   - a rel attribute past REL_CHARS decoded units is not tokenized: no rel=me at or after it is collected
+//     (relMeAfterLongRel), so a later anchor never stands first where Mastodon would find an earlier one.
 
 export type ScanLimits = {
 	relMe: number
@@ -60,6 +62,9 @@ export const SCAN_LIMITS: Readonly<ScanLimits> = Object.freeze({
 // Raw UTF-16 code units of an attribute value or the title text read before decoding; past it the value is dropped
 // whole. A character reference never decodes to more code units than it spans, so this bounds decoding work only.
 export const RAW_VALUE_CHARS = 8192
+// Decoded UTF-16 code units of a rel attribute tokenized whole for the token "me"; links[].rel keeps the first
+// relTokens tokens of at most relTokenChars each.
+export const REL_CHARS = 2048
 
 // The most UTF-16 code units a scan returns in its strings, from SCAN_LIMITS (test/html-scan.test.ts recomputes it):
 // relMe 32 × 2,048 + links 64 × (2,048 + 128 + 16 × 64) + metas 128 × (128 + 128 + 2,048) + title 2,048 + lang 64 +
@@ -84,13 +89,16 @@ export type PageScan = {
 	lang: string | null
 	// The first HTML <title> whose end tag was seen, before any <svg> or <math>, decoded and untrimmed.
 	title: string | null
-	// The href of each <a> or <link> whose rel has the token "me" (exact and case-sensitive, as Mastodon's XPath matches
-	// it), in document order; null when it is missing or past its cap, the slot kept.
+	// The href of each <a> or <link> whose rel has the token "me" among all its tokens, ASCII case-insensitively (as
+	// Mastodon's NokogiriHandler.link_rel_include downcases both), in document order; null when it is missing or past its
+	// cap, the slot kept.
 	relMe: (string | null)[]
-	// Whether a rel=me candidate was skipped for following a <noscript>, a <select>, or an <svg> or <math> start tag.
+	// Whether a rel=me candidate was skipped for following a <noscript>, a <select>, or an <svg> or <math> start tag,
+	// or for being or following an <a> or <link> whose rel is past REL_CHARS.
 	relMeAfterNoscript: boolean
 	relMeAfterSelect: boolean
 	relMeAfterForeign: boolean
+	relMeAfterLongRel: boolean
 	// Whether the page has the bytes of a <frameset> start tag anywhere (a <noscript> included), which can replace the
 	// body: then no rel=me is returned.
 	relMeWithFrameset: boolean
@@ -226,6 +234,7 @@ async function scanPaced(
 		relMeAfterNoscript: false,
 		relMeAfterSelect: false,
 		relMeAfterForeign: false,
+		relMeAfterLongRel: false,
 		relMeWithFrameset: false,
 		links: [],
 		metas: [],
@@ -237,6 +246,7 @@ async function scanPaced(
 	let afterNoscript = false
 	let afterSelect = false
 	let afterForeign = false
+	let afterLongRel = false
 	let langSeen = false
 	// The first HTML title: its raw text while open, then done.
 	let title: { raw: string; overflow: boolean } | null = null
@@ -259,27 +269,35 @@ async function scanPaced(
 		}
 		return result
 	}
-	// The first relTokens tokens of the decoded rel, as written: "me" is matched exactly on these, and links[].rel
-	// takes them lowercased.
-	const relTokens = (element: Element): string[] => {
-		const rel = value(element.getAttribute('rel'), RAW_VALUE_CHARS)
+	// The decoded rel's tokens: whether one is "me" (ASCII case-insensitive), and the first relTokens of at most
+	// relTokenChars lowercased, for links[].rel. A rel past REL_CHARS is not tokenized: it refuses rel=me from here on.
+	const relOf = (element: Element): { me: boolean; tokens: string[] } => {
+		const raw = element.getAttribute('rel')
+		const rel = value(raw, REL_CHARS)
+		if (raw !== null && rel === null) {
+			afterLongRel = true
+			scan.relMeAfterLongRel = true
+			scan.dropped.relMe++
+			return { me: false, tokens: [] }
+		}
+		let me = false
 		const tokens: string[] = []
 		for (const token of rel?.split(REL_SEPARATOR) ?? []) {
-			if (tokens.length >= caps.relTokens) {
-				break
-			}
-			if (token !== '' && token.length <= caps.relTokenChars) {
-				tokens.push(token)
+			const lower = asciiLower(token)
+			me ||= lower === 'me'
+			if (token !== '' && token.length <= caps.relTokenChars && tokens.length < caps.relTokens) {
+				tokens.push(lower)
 			}
 		}
-		return tokens
+		return { me, tokens }
 	}
 	// Whether a rel=me candidate here is refused for its context, noted when it is.
 	const refusedContext = (): boolean => {
 		scan.relMeAfterNoscript ||= afterNoscript
 		scan.relMeAfterSelect ||= afterSelect
 		scan.relMeAfterForeign ||= afterForeign
-		return afterNoscript || afterSelect || afterForeign
+		scan.relMeAfterLongRel ||= afterLongRel
+		return afterNoscript || afterSelect || afterForeign || afterLongRel
 	}
 	const addRelMe = (href: string | null) => {
 		if (refusedContext() || scan.relMe.length >= caps.relMe) {
@@ -336,7 +354,7 @@ async function scanPaced(
 					scan.dropped.relMe++
 					return
 				}
-				if (relTokens(element).includes('me')) {
+				if (relOf(element).me) {
 					addRelMe(value(element.getAttribute('href'), caps.valueChars))
 				}
 			}),
@@ -351,12 +369,11 @@ async function scanPaced(
 				if (linksFull && relMeFull) {
 					return
 				}
-				const tokens = relTokens(element)
+				const { me, tokens: rel } = relOf(element)
 				const href = value(element.getAttribute('href'), caps.valueChars)
-				if (tokens.includes('me')) {
+				if (me) {
 					addRelMe(href)
 				}
-				const rel = tokens.map(asciiLower)
 				if (linksFull) {
 					return
 				}
