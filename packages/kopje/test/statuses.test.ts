@@ -289,6 +289,7 @@ describe('POST /api/v1/statuses', () => {
 			status: '',
 			media_ids: ['100000000000000002', '100000000000000001'],
 		})
+		// A local account's media, here without a file token (as the cutover may keep it): no remote URLs, no blurhash.
 		expect(status.media_attachments).toEqual([
 			{
 				id: '100000000000000002',

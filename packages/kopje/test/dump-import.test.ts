@@ -517,6 +517,42 @@ describe('dump', () => {
 		)
 	}, 120_000)
 
+	it('round-trips media blurhash (0065) and refuses one past its bound on import', async () => {
+		const source = await seeded(0)
+		const blurhash = `e${'~'.repeat(53)}`
+		const id = await runInDurableObject(source, (_instance, state) => {
+			const sql = state.storage.sql
+			const remote = sql
+				.exec<{ id: string }>('SELECT id FROM accounts WHERE domain IS NOT NULL ORDER BY id LIMIT 1')
+				.one().id
+			sql.exec(
+				`INSERT INTO media_attachments (id, account_id, type, url, blurhash)
+				VALUES ('990000000000000011', ?, 'image', 'https://remote.test/m/1', ?)`,
+				remote,
+				blurhash
+			)
+			return '990000000000000011'
+		})
+		const { text } = await dumpViaRpc(source)
+		const restored = await migratedStore()
+		await copyConfig(source, restored)
+		await importViaRpc(restored, text)
+		await runInDurableObject(restored, (_instance, state) => {
+			expect(state.storage.sql.exec('SELECT blurhash FROM media_attachments WHERE id = ?', id).toArray()).toEqual([
+				{ blurhash },
+			])
+		})
+		// A dump from elsewhere, as its text could hold it: a blurhash of 55 bytes.
+		const quoted = `'${blurhash}'`
+		expect(text).toContain(quoted)
+		const dump = text.replace(quoted, `'${blurhash}~'`)
+		const target = await migratedStore()
+		await copyConfig(source, target)
+		expect(String(await rejectionOf(importViaRpc(target, dump)))).toMatch(
+			/media_attachments: blurhash past its stored bound/
+		)
+	}, 120_000)
+
 	it('writes the documented format and leaves out bookkeeping', async () => {
 		const { text } = await dumpViaRpc(await seeded(0))
 		const lines = text.split('\n')
