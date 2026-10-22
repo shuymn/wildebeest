@@ -27,7 +27,7 @@ import { isActivityPubMediaType, type MediaType, parseMediaType } from '../platf
 //   - a host the instance's domain policy covers (refusesHost, decision 6, R38) is not requested at all
 export const DOCUMENT_BODY_LIMIT = 1024 * 1024
 export const DOCUMENT_TIMEOUT_MS = 5000
-const MAX_REDIRECTS = 5
+export const MAX_REDIRECTS = 5
 
 type Kind = {
 	accept: string
@@ -66,6 +66,10 @@ const WEBFINGER: Kind = {
 // A document refused by policy (scheme, host, redirect, type, size, id, root) or unusable as served. Fetching
 // it again would not help.
 export class RefusedFetchError extends FetchError {}
+
+// A document refused only by a caller's tighter caps (DocumentCaps): what it holds is unknown, not refused by the rules
+// above, and fetching it again under the same caps would not help.
+export class CappedFetchError extends RefusedFetchError {}
 
 // A timeout or a network failure: fetching again may succeed.
 export class TransientFetchError extends FetchError {}
@@ -122,7 +126,13 @@ export type LoaderDeps = {
 	// The instance's domain policy (instance-domain-blocks.ts fetchRefused), read before each load: true refuses the
 	// host (a normalized domain) before any request. Advisory: the Store's writes decide what is stored.
 	refusesHost?: (host: string) => Promise<boolean>
-}
+} & DocumentCaps
+
+// Tighter per-document caps than the loader's own, for a caller whose documents must fit a round's budget together
+// (federation/collections.ts NETWORK_CAPS): a body past `documentBytes` (UTF-8 bytes as served, checked before it is
+// parsed), or a redirect past `maxRedirects`, is refused with CappedFetchError. None means DOCUMENT_BODY_LIMIT and
+// MAX_REDIRECTS.
+export type DocumentCaps = { documentBytes?: number; maxRedirects?: number }
 
 export type RequestSigner = (request: Request) => Promise<Request>
 
@@ -229,13 +239,17 @@ async function load(deps: LoaderDeps, kind: Kind, sign: RequestSigner | undefine
 			if (next.origin !== target.origin) {
 				throw new RefusedFetchError(current, `Refused cross-origin redirect to ${next.origin}`)
 			}
-			if (redirects >= MAX_REDIRECTS) {
-				throw new RefusedFetchError(current, `Too many redirects (${redirects + 1})`)
+			const maxRedirects = deps.maxRedirects ?? MAX_REDIRECTS
+			if (redirects >= maxRedirects) {
+				throw maxRedirects < MAX_REDIRECTS
+					? new CappedFetchError(current, `Redirects past the caller's cap (${redirects + 1})`)
+					: new RefusedFetchError(current, `Too many redirects (${redirects + 1})`)
 			}
 			current = next
 			continue
 		}
-		return readDocument(response, kind, response.url === '' ? current : new URL(response.url), target, deps.budget)
+		const final = response.url === '' ? current : new URL(response.url)
+		return readDocument(response, kind, final, target, deps.budget, deps.documentBytes ?? DOCUMENT_BODY_LIMIT)
 	}
 }
 
@@ -244,7 +258,8 @@ async function readDocument(
 	kind: Kind,
 	final: URL,
 	target: URL,
-	budget: FetchBudget | undefined
+	budget: FetchBudget | undefined,
+	cap: number
 ): Promise<RemoteDocument> {
 	if (final.origin !== target.origin) {
 		await response.body?.cancel()
@@ -267,12 +282,15 @@ async function readDocument(
 		await response.body?.cancel()
 		throw new RefusedFetchError(final, `${kind.refusal}: ${response.headers.get('content-type')}`)
 	}
-	const limit = Math.min(DOCUMENT_BODY_LIMIT, budget?.bytes ?? DOCUMENT_BODY_LIMIT)
+	// Overflow is judged against the effective cap: below it, the request's bytes ran out.
+	const limit = Math.min(cap, budget?.bytes ?? cap)
 	const body = await readBoundedBody(response, limit)
 	if (body === 'too-large') {
-		throw limit < DOCUMENT_BODY_LIMIT
+		throw limit < cap
 			? new BudgetExceededError(final, `Request byte budget exhausted (${limit} bytes left)`)
-			: new RefusedFetchError(final, `Document exceeds ${limit} bytes`)
+			: cap < DOCUMENT_BODY_LIMIT
+				? new CappedFetchError(final, `Document exceeds the caller's cap of ${cap} bytes`)
+				: new RefusedFetchError(final, `Document exceeds ${limit} bytes`)
 	}
 	if (budget !== undefined) {
 		budget.bytes -= body.byteLength
