@@ -125,16 +125,16 @@ export function tagRelationships(
 	return { following: of('tag_follows'), featuring: of('featured_tags') }
 }
 
-// A listed hashtag's name as the list presents it (RES-3): within its read bound (tagNameSql) after UTF-8 decoding, so
-// a stored name of malformed bytes (each decoded to U+FFFD, which no hashtag holds) or with a NUL is left out; then
-// no name escapes past TAG_NAME_JSON_BYTES nor percent-encodes in the url past 3 × TAG_NAME_BYTES.
+// A listed hashtag's name as the list presents it (RES-3): within its read bound (tagNameSql) again after UTF-8
+// decoding (a malformed byte decodes to the three bytes of U+FFFD) and free of NUL, so no name escapes past
+// TAG_NAME_JSON_BYTES nor percent-encodes in the url past 3 × TAG_NAME_BYTES.
 export const TAG_NAME_JSON_BYTES = 6 * MAX_TAG_LENGTH
 
 export function listedTagName(name: string): boolean {
 	return (
 		new TextEncoder().encode(name).length <= TAG_NAME_BYTES &&
 		[...name].length <= MAX_TAG_LENGTH &&
-		!/[\0\uFFFD]/.test(name) &&
+		!name.includes('\0') &&
 		jsonBytes(name) - 2 <= TAG_NAME_JSON_BYTES
 	)
 }

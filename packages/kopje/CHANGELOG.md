@@ -45,7 +45,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   every remote account).
 - `GET /api/v1/followed_tags` leaves out a followed hashtag whose stored name is past 256 code points or 1,024 UTF-8
   bytes (a follow still accepts one, up to Mastodon's 1,000 characters, and `/api/v1/tags/:id` still shows it), or
-  holds a NUL or bytes that are not UTF-8 (an imported one); it presented every stored name whole.
+  holds a NUL or malformed bytes that decode past those bounds (an imported one); it presented every stored name
+  whole.
 
 ### Fixed
 

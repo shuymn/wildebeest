@@ -182,7 +182,7 @@ Hashtags (the `Tag` entity):
   unavailable authors take those places, so a list can count fewer than the single hashtag does.
 - `followed_tags` leaves out a followed hashtag whose stored name is past 256 code points or 1,024 UTF-8 bytes (the
   bound a status's hashtags and search use; a follow accepts a name of up to 1,000 characters, as Mastodon does), or
-  holds a NUL or bytes that are not UTF-8 (an import's); the page's cursors still pass it.
+  holds a NUL or malformed bytes that decode past those bounds (an import's); the page's cursors still pass it.
 
 Admin account actions (`POST /api/v1/admin/accounts/:account_id/action`):
 
