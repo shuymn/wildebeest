@@ -1477,6 +1477,51 @@ export function statusCardPastBoundSql(row: string): string {
 	ELSE 0 END`
 }
 
+// A stored card text as presented (AM3): the value when, as decoded, it is a string of at most `jsonBytes` code units,
+// well-formed, with no U+0000, within `jsonBytes` - 2 UTF-8 bytes and `jsonBytes` as a JSON string, else ''. An
+// imported value of malformed UTF-8 can pass the triggers and decode to more (U+FFFD, three bytes each).
+export function presentedCardText(value: unknown, jsonBytes: number): string {
+	if (typeof value !== 'string' || value.length > jsonBytes || !value.isWellFormed() || value.includes('\u0000')) {
+		return ''
+	}
+	return ENCODER.encode(value).length <= jsonBytes - 2 && ENCODER.encode(JSON.stringify(value)).length <= jsonBytes
+		? value
+		: ''
+}
+
+// What no presented card URL holds as decoded: C0 controls, the space, DEL, C1 controls, U+FFFD (a stored value that
+// is not well-formed UTF-8 decodes to it), other whitespace, and the characters of CARD_URL_EXCLUDED_GLOB.
+// eslint-disable-next-line no-control-regex
+const CARD_URL_REFUSED = /[\u0000-\u0020\u007f-\u009f\ufffd"<>\\^`{|}]|\s/u
+
+// A stored card URL as presented (AM3, HTML-3): judged as decoded (a string of at most CARD_URL_LIMIT code units,
+// well-formed, no refused character, within CARD_URL_LIMIT UTF-8 bytes), then normalized (an http(s) URL by the
+// WHATWG parser, its href within CARD_URL_LIMIT bytes and CARD_URL_LIMIT + 2 as a JSON string). Else null.
+export function presentedCardUrl(value: unknown): string | null {
+	if (
+		typeof value !== 'string' ||
+		value.length > CARD_URL_LIMIT ||
+		!value.isWellFormed() ||
+		CARD_URL_REFUSED.test(value) ||
+		ENCODER.encode(value).length > CARD_URL_LIMIT
+	) {
+		return null
+	}
+	let href: string
+	try {
+		const url = new URL(value)
+		if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+			return null
+		}
+		href = url.href
+	} catch {
+		return null
+	}
+	return href.length <= CARD_URL_LIMIT && ENCODER.encode(JSON.stringify(href)).length <= CARD_URL_LIMIT + 2
+		? href
+		: null
+}
+
 // The partial indexes of status_cards (domain/link-cards.ts names them in INDEXED BY).
 export const CARD_DUE_INDEX = 'status_cards_due'
 export const CARD_EXPIRY_INDEX = 'status_cards_expiry'

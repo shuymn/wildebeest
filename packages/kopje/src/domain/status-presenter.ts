@@ -32,7 +32,9 @@ import { htmlToPlainText } from './plain-text'
 import { type Poll, presentPolls, withStatusEmojis } from './polls'
 import { MEDIA_URL_JSON_BYTES, MEDIA_URL_LIMIT } from './status-bounds'
 import {
+	CARD_COLUMN_MAP,
 	MENTION_COLUMN_MAP,
+	SHOWN_CARD_SQL,
 	SHOWN_MENTIONS_SQL,
 	SHOWN_TAGS_SQL,
 	shownMediaSql,
@@ -43,11 +45,22 @@ import {
 	TAG_COLUMN_MAP,
 	VIEWER_FLAG_COLUMNS,
 } from './status-rows'
+import { TREND_LANGUAGES } from './trends'
 import { selectSql } from '../db/columns'
 import { ACCOUNTS_ID_INDEX, MEDIA_ID_INDEX, STATUSES_ID_INDEX } from '../db/indexes'
 import { type Db, RowCapExceeded, RowMeter } from '../db/sql'
 import { boundedHref } from '../platform/http-url'
-import { isAppWebsite, presentedAppName, STATUS_EMOJIS_BYTES, storedBlurhash } from '../platform/stored-bounds'
+import { railsBlank } from '../platform/rails-blank'
+import {
+	CARD_TEXTS,
+	isAppWebsite,
+	isIsoTime,
+	presentedAppName,
+	presentedCardText,
+	presentedCardUrl,
+	STATUS_EMOJIS_BYTES,
+	storedBlurhash,
+} from '../platform/stored-bounds'
 import { remotePlainText } from '../security/html'
 
 // The Status entity as Mastodon 4.0.2's REST::StatusSerializer shows it. One presenter for every read path: it takes
@@ -104,6 +117,36 @@ export type QuoteApproval = {
 	current_user: 'automatic' | 'manual' | 'unknown' | 'denied'
 }
 
+// Mastodon's REST::PreviewCardSerializer (v4.5.11) of a card without an image (domain/link-cards.ts): type link, no
+// image, html, embed or dimensions, and its authors (PreviewCard#authors: one when the name or the URL is not blank)
+// without an account.
+export type PreviewCard = {
+	url: string
+	title: string
+	description: string
+	language: string | null
+	type: 'link'
+	author_name: string
+	author_url: string
+	provider_name: string
+	provider_url: string
+	html: ''
+	width: 0
+	height: 0
+	image: null
+	image_description: ''
+	embed_url: ''
+	blurhash: null
+	published_at: string | null
+	authors: { name: string; url: string; account: null }[]
+}
+
+// The most JSON a presented card takes (RES-3), from the bounds of stored-bounds.ts at the worst escaping: every text at
+// its JSON bound, the URLs at CARD_URL_LIMIT (the author's twice, in authors), mn-Mong and a time
+// (test/link-cards.test.ts derives it). A status shows at most two (its own, or its boost's original's, and its quoted
+// status's), each in place of null.
+export const CARD_JSON_MAX = 17_729
+
 // Mastodon's REST::StatusSerializer application (ApplicationSerializer): the app a local status was posted through.
 export type StatusApplication = { name: string; website: string | null }
 
@@ -140,7 +183,7 @@ export type Status = {
 	emojis: CustomEmoji[]
 	quote: Quote | ShallowQuote | null
 	quote_approval: QuoteApproval
-	card: null
+	card: PreviewCard | null
 	poll: Poll | null
 }
 
@@ -534,6 +577,15 @@ function hydrate(
 			)
 			.sort((a, b) => byCodePoints(a.id, b.id))
 	)
+	// The attached card of each status but a boost (one row at most, by its key).
+	const cards = new Map(
+		db
+			.all<CardRow>(
+				`SELECT ${selectSql(CARD_COLUMN_MAP)} FROM (${STATUS_IDS}) j CROSS JOIN status_cards c WHERE ${SHOWN_CARD_SQL}`,
+				notBoostsJson
+			)
+			.map((card) => [card.status_id, card])
+	)
 	const tags = groupBy(
 		db
 			.all<{ status_id: string; name: string }>(
@@ -687,7 +739,7 @@ function hydrate(
 				manual: quotePolicyFlags(policy, 'manual'),
 				current_user: approvals.get(proper.id) ?? 'denied',
 			},
-			card: null,
+			card: row.reblog_of_id === null ? presentCard(row, cards.get(row.id)) : null,
 			poll: poll === undefined ? null : withStatusEmojis(poll, emojis),
 		}
 	}
@@ -715,6 +767,45 @@ function presentApplication(row: StatusRow): StatusApplication | null {
 	const name = presentedAppName(row.application_name)
 	const website = row.application_website
 	return name === null ? null : { name, website: website !== null && isAppWebsite(website) ? website : null }
+}
+
+export type CardRow = { [K in keyof typeof CARD_COLUMN_MAP]: string | null } & { status_id: string }
+
+// A status's card as presented: none on a status that is not public or unlisted (AM8), without a URL, or whose title
+// is blank; each text and URL judged as decoded (presentedCardText, presentedCardUrl), an optional URL refused shown
+// as '' (AM21), a language outside Mastodon's locales and a time not in the ISO form as null. Viewer-independent.
+export function presentCard(row: Pick<StatusRow, 'visibility'>, card: CardRow | undefined): PreviewCard | null {
+	if (card === undefined || (row.visibility !== 'public' && row.visibility !== 'unlisted')) {
+		return null
+	}
+	const url = presentedCardUrl(card.url)
+	const title = presentedCardText(card.title, CARD_TEXTS.title)
+	if (url === null || railsBlank(title)) {
+		return null
+	}
+	const authorName = presentedCardText(card.author_name, CARD_TEXTS.author_name)
+	const authorUrl = presentedCardUrl(card.author_url) ?? ''
+	return {
+		url,
+		title,
+		description: presentedCardText(card.description, CARD_TEXTS.description),
+		language: card.language !== null && TREND_LANGUAGES.has(card.language) ? card.language : null,
+		type: 'link',
+		author_name: authorName,
+		author_url: authorUrl,
+		provider_name: presentedCardText(card.provider_name, CARD_TEXTS.provider_name),
+		provider_url: presentedCardUrl(card.provider_url) ?? '',
+		html: '',
+		width: 0,
+		height: 0,
+		image: null,
+		image_description: '',
+		embed_url: '',
+		blurhash: null,
+		published_at: card.published_at !== null && isIsoTime(card.published_at) ? card.published_at : null,
+		authors:
+			railsBlank(authorName) && railsBlank(authorUrl) ? [] : [{ name: authorName, url: authorUrl, account: null }],
+	}
 }
 
 // The key of a quoted status's matched text, apart from the same status's as a status of the response.

@@ -6,12 +6,26 @@ import { bearer, json, sql } from './api-helpers'
 import { NOW } from './app-helpers'
 import { BUILD } from './helpers'
 import { community, post, remoteAccount } from './status-helpers'
+import { selectSql } from '../src/db/columns'
 import { Db } from '../src/db/sql'
+import { jsonBytes } from '../src/domain/answer-budget'
 import { deleteStatusBatch, PURGE_BATCH } from '../src/domain/inbox'
 import { CARD_CANDIDATES, localCardLink } from '../src/domain/link-cards'
+import { CARD_JSON_MAX, type CardRow, presentCard } from '../src/domain/status-presenter'
+import { CARD_COLUMN_MAP } from '../src/domain/status-rows'
 import { parseRemoteStatus } from '../src/federation/remote-status'
 import { WEB_PAGE_URL_LIMIT } from '../src/federation/web-page'
-import { CARD_URL_LIMIT } from '../src/platform/stored-bounds'
+import type { StoreStub } from '../src/platform/store-client'
+import {
+	CARD_LANGUAGE_BYTES,
+	CARD_TEXTS,
+	CARD_URL_LIMIT,
+	presentedCardText,
+	presentedCardUrl,
+} from '../src/platform/stored-bounds'
+
+const presentFor = (card: Omit<CardRow, 'status_id'>) =>
+	presentCard({ visibility: 'public' }, { status_id: '1', ...card })
 
 // Status cards (domain/link-cards.ts, federation/link-cards.ts): Mastodon's FetchLinkCardService (v4.5.11) as one
 // copy per status, fetched by the cron's round through the web-page sink (NET-3).
@@ -332,5 +346,240 @@ describe('the hide step of a remote delete', () => {
 		expect(hidden).toEqual([{ visibility: left === 3 ? 'direct' : 'public' }])
 		expect(await sql(h.store, 'SELECT count(*) AS n FROM status_cards')).toEqual([{ n: left === 3 ? 0 : 1 }])
 		expect(wrote).toBe(left === 3 ? PURGE_BATCH : PURGE_BATCH - 2)
+	})
+})
+
+// A card at its stored bounds, each text filled with `fill` to its JSON bound (escaped: six JSON bytes a character, the
+// rest of the bound in ASCII; astral: four UTF-8 bytes; ascii: one), its URLs printable ASCII of CARD_URL_LIMIT bytes.
+function boundCard(fill: 'escaped' | 'astral' | 'ascii') {
+	const text = (bytes: number) =>
+		fill === 'escaped'
+			? '\u0001'.repeat(Math.floor((bytes - 2) / 6)) + 'a'.repeat((bytes - 2) % 6)
+			: fill === 'astral'
+				? '\u{1f600}'.repeat(Math.floor((bytes - 2) / 4))
+				: 'a'.repeat(bytes - 2)
+	const url = (prefix: string) => prefix.padEnd(CARD_URL_LIMIT, 'u')
+	return {
+		url: url('https://card.example/'),
+		title: text(CARD_TEXTS.title),
+		description: text(CARD_TEXTS.description),
+		author_name: text(CARD_TEXTS.author_name),
+		author_url: url('https://author.example/'),
+		provider_name: text(CARD_TEXTS.provider_name),
+		provider_url: url('http://provider.example/'),
+		language: 'mn-Mong',
+		published_at: '2026-10-12T00:00:00.000Z',
+	}
+}
+
+async function attach(store: StoreStub, statusId: string, card: Record<string, string | null>): Promise<void> {
+	await sql(
+		store,
+		`INSERT INTO status_cards (status_id, url, enqueued_at, generation, title, description, author_name, author_url,
+			provider_name, provider_url, language, published_at, fetched_at)
+		VALUES (?1, ?2, 0, 0, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1)
+		ON CONFLICT (status_id) DO UPDATE SET url = ?2, due_at = NULL, title = ?3, description = ?4, author_name = ?5,
+			author_url = ?6, provider_name = ?7, provider_url = ?8, language = ?9, published_at = ?10, fetched_at = 1`,
+		statusId,
+		card.url ?? null,
+		card.title ?? null,
+		card.description ?? '',
+		card.author_name ?? '',
+		card.author_url ?? '',
+		card.provider_name ?? '',
+		card.provider_url ?? '',
+		card.language ?? null,
+		card.published_at ?? null
+	)
+}
+
+describe('presentation', () => {
+	const SHAPE = {
+		url: 'https://e.example/a',
+		title: 'T',
+		description: 'D',
+		language: 'ja',
+		type: 'link',
+		author_name: 'Ann',
+		author_url: 'https://e.example/ann',
+		provider_name: 'P',
+		provider_url: 'https://e.example/',
+		html: '',
+		width: 0,
+		height: 0,
+		image: null,
+		image_description: '',
+		embed_url: '',
+		blurhash: null,
+		published_at: '2026-10-11T00:00:00.000Z',
+		authors: [{ name: 'Ann', url: 'https://e.example/ann', account: null }],
+	}
+	const stored = {
+		url: SHAPE.url,
+		title: 'T',
+		description: 'D',
+		author_name: 'Ann',
+		author_url: SHAPE.author_url,
+		provider_name: 'P',
+		provider_url: SHAPE.provider_url,
+		language: 'ja',
+		published_at: SHAPE.published_at,
+	}
+
+	it("shows a card as Mastodon's PreviewCardSerializer, on the status, its boost's original and its quote", async () => {
+		const h = await community(['alice', 'bob'])
+		const { alice, bob } = h.users
+		const status = await post(h, alice, { status: 'card https://e.example/a' })
+		await attach(h.store, status.id, stored)
+		const get = async (id: string, token = alice.token) =>
+			(await h.request(`/api/v1/statuses/${id}`, bearer(token))).json<Record<string, unknown>>()
+		expect((await get(status.id)).card).toEqual(SHAPE)
+		const boost = await (
+			await h.request(`/api/v1/statuses/${status.id}/reblog`, bearer(bob.token, { method: 'POST' }))
+		).json<{ id: string }>()
+		const boosted = await get(boost.id, bob.token)
+		expect(boosted.card).toBeNull()
+		expect((boosted.reblog as { card: unknown }).card).toEqual(SHAPE)
+		const quoting = await post(h, bob, { status: 'quoting', quoted_status_id: status.id })
+		const shown = await get(quoting.id, bob.token)
+		expect(shown.card).toBeNull()
+		expect((shown.quote as { quoted_status: { card: unknown } }).quoted_status.card).toEqual(SHAPE)
+		// The timeline shows the same.
+		const home = await (
+			await h.request('/api/v1/timelines/home', bearer(alice.token))
+		).json<{ id: string; card: unknown }[]>()
+		expect(home.find((s) => s.id === status.id)?.card).toEqual(SHAPE)
+	})
+
+	it('shows no card on a status that is not public or unlisted, even from an imported row (AM8)', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		for (const visibility of ['private', 'direct']) {
+			const status = await post(h, alice, { status: `x https://e.example/${visibility}`, visibility })
+			await attach(h.store, status.id, stored)
+			const shown = await (
+				await h.request(`/api/v1/statuses/${status.id}`, bearer(alice.token))
+			).json<{ card: unknown }>()
+			expect(shown.card, visibility).toBeNull()
+		}
+		const unlisted = await post(h, alice, { status: 'x', visibility: 'unlisted' })
+		await attach(h.store, unlisted.id, stored)
+		const shown = await (
+			await h.request(`/api/v1/statuses/${unlisted.id}`, bearer(alice.token))
+		).json<{ card: unknown }>()
+		expect(shown.card).toEqual(SHAPE)
+	})
+
+	it('builds authors from the presented values: a name alone, or a URL alone (AM21)', async () => {
+		const h = await community(['alice'])
+		const { alice } = h.users
+		const status = await post(h, alice, { status: 'x' })
+		const card = async () =>
+			(
+				await (
+					await h.request(`/api/v1/statuses/${status.id}`, bearer(alice.token))
+				).json<{ card: Record<string, unknown> | null }>()
+			).card
+		await attach(h.store, status.id, { ...stored, author_url: '', provider_url: '' })
+		expect(await card()).toMatchObject({
+			author_url: '',
+			provider_url: '',
+			authors: [{ name: 'Ann', url: '', account: null }],
+		})
+		await attach(h.store, status.id, { ...stored, author_name: ' 　', author_url: '' })
+		expect(await card()).toMatchObject({ author_name: ' 　', authors: [] })
+		await attach(h.store, status.id, { ...stored, author_name: '' })
+		expect(await card()).toMatchObject({ authors: [{ name: '', url: SHAPE.author_url, account: null }] })
+		// A blank title is no card.
+		await attach(h.store, status.id, { ...stored, title: '　' })
+		expect(await card()).toBeNull()
+	})
+
+	it('judges every presented text and URL as decoded, then as normalized', () => {
+		const bytes = (b: number[]) => new TextDecoder().decode(new Uint8Array(b))
+		const title = CARD_TEXTS.title
+		expect(presentedCardText('a'.repeat(title - 2), title)).toBe('a'.repeat(title - 2))
+		expect(presentedCardText('a'.repeat(title - 1), title)).toBe('')
+		expect(presentedCardText('\u0001'.repeat(341), title)).toHaveLength(341)
+		expect(presentedCardText('\u0001'.repeat(342), title)).toBe('')
+		expect(presentedCardText('\u{1f600}'.repeat(511), title)).toHaveLength(1022)
+		expect(presentedCardText('\u{1f600}'.repeat(512), title)).toBe('')
+		// Malformed UTF-8 within the raw bytes decodes to U+FFFD, three bytes each: past the bound once decoded.
+		expect(presentedCardText(bytes(Array(1000).fill(0x80)), title)).toBe('')
+		expect(presentedCardText('a\u0000', title)).toBe('')
+		expect(presentedCardText('\ud800', title)).toBe('')
+		expect(presentedCardText(7, title)).toBe('')
+		const url = 'https://e.example/'.padEnd(CARD_URL_LIMIT, 'u')
+		expect(presentedCardUrl(url)).toBe(url)
+		expect(presentedCardUrl(`${url}u`)).toBeNull()
+		for (const refused of ['\u0000', '\u0085', ' ', ' ', '�', ' ', '"', '<', '\\', '^', '`', '{', '|', '}']) {
+			expect(presentedCardUrl(`https://e.example/${refused}`), JSON.stringify(refused)).toBeNull()
+		}
+		expect(presentedCardUrl('ftp://e.example/')).toBeNull()
+		expect(presentedCardUrl(`https://e.example/${bytes([0xe2, 0x82])}`)).toBeNull()
+		// Normalization may shorten a URL (dot segments, the default port) or lengthen it (percent-encoding).
+		expect(presentedCardUrl('HTTPS://E.EXAMPLE:443/a/./b')).toBe('https://e.example/a/b')
+		expect(
+			presentedCardUrl(`https://e.example/${"'".repeat(CARD_URL_LIMIT - 'https://e.example/'.length)}`)
+		).toHaveLength(CARD_URL_LIMIT)
+		// Non-ASCII is not refused as decoded (the triggers refuse it as stored); the normalized form is ASCII.
+		expect(presentedCardUrl('https://e.example/?\u00e9')).toBe('https://e.example/?%C3%A9')
+	})
+
+	it('reads only text within its raw bounds out of SQLite, whatever the row stores', async () => {
+		const h = await community(['alice'])
+		const rows = await runInDurableObject(h.store, (_instance, state) =>
+			[
+				[new TextEncoder().encode('https://e.example/').buffer as ArrayBuffer, 7],
+				['x'.repeat(CARD_URL_LIMIT + 1), 'y'.repeat(CARD_TEXTS.title - 1)],
+			].map(([url, title]) =>
+				state.storage.sql
+					.exec(
+						`SELECT ${selectSql(CARD_COLUMN_MAP)} FROM (SELECT '1' AS value) j,
+							(SELECT ?1 AS url, ?2 AS title, ?2 AS description, ?2 AS author_name, ?1 AS author_url,
+								?2 AS provider_name, ?1 AS provider_url, ?2 AS language, ?2 AS published_at) c`,
+						url!,
+						title!
+					)
+					.one()
+			)
+		)
+		expect(rows[0]).toMatchObject({ url: null, title: null, author_url: null, language: null, published_at: null })
+		expect(rows[1]).toMatchObject({
+			url: null,
+			title: null,
+			description: 'y'.repeat(CARD_TEXTS.title - 1),
+			language: null,
+		})
+	})
+
+	it('derives CARD_JSON_MAX from the bounds, at or above every fill', () => {
+		const full = presentFor(boundCard('ascii'))!
+		const skeleton = jsonBytes(
+			JSON.parse(
+				JSON.stringify(full, (_key, value: unknown) => (typeof value === 'string' && value !== 'link' ? '' : value))
+			)
+		)
+		const max =
+			skeleton +
+			3 * CARD_URL_LIMIT +
+			CARD_URL_LIMIT +
+			(CARD_TEXTS.title - 2) +
+			(CARD_TEXTS.description - 2) +
+			2 * (CARD_TEXTS.author_name - 2) +
+			(CARD_TEXTS.provider_name - 2) +
+			CARD_LANGUAGE_BYTES +
+			24
+		expect({ skeleton, max, perStatus: 2 * (max - jsonBytes(null)) }).toEqual({
+			skeleton: 300,
+			max: CARD_JSON_MAX,
+			perStatus: 35_450,
+		})
+		expect(CARD_JSON_MAX).toBe(17_729)
+		const measured = (['escaped', 'astral', 'ascii'] as const).map((fill) => jsonBytes(presentFor(boundCard(fill))))
+		expect(measured[0]).toBe(CARD_JSON_MAX)
+		for (const bytes of measured) {
+			expect(bytes).toBeLessThanOrEqual(CARD_JSON_MAX)
+		}
 	})
 })

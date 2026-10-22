@@ -13,7 +13,15 @@ import {
 } from './status-bounds'
 import { balancedSum, type ColumnMap, fixedColumns, type FixedColumns, rowHeapSql } from '../db/columns'
 import { ACCOUNTS_ID_INDEX, MEDIA_ID_INDEX, OAUTH_CLIENTS_ID_INDEX, STATUSES_ID_INDEX } from '../db/indexes'
-import { appNameSql, appWebsiteSql } from '../platform/stored-bounds'
+import {
+	appNameSql,
+	appWebsiteSql,
+	byteBoundSql,
+	CARD_LANGUAGE_BYTES,
+	CARD_TEXTS,
+	CARD_URL_LIMIT,
+	isoTimeSql,
+} from '../platform/stored-bounds'
 
 // hydrate's queries (status-presenter.ts) and R, statusStream's bound on one status's row heap, share these column maps
 // (src/db/columns.ts), so R cannot drift from what is read (RES-3, "Heap at 8 MiB per answer" in docs/threat-model.md).
@@ -122,6 +130,27 @@ export const SHOWN_TAGS_SQL = `t.status_id = j.value AND t.name IN (SELECT n.nam
 	FROM status_tags WHERE status_id = j.value ORDER BY status_tags.name LIMIT ${MAX_PRESENTED_TAGS}) n
 	WHERE n.name IS NOT NULL)`
 
+// A status's attached card (status_cards, migration 0067_status_cards), each column as read: text only (no JSON
+// function sees a BLOB) within its raw bound, so a row reads at most its bounds whatever was imported; the presenter
+// judges each value again as decoded (stored-bounds.ts presentedCardText, presentedCardUrl).
+const cardText = (column: string, bytes: number) =>
+	`CASE WHEN typeof(${column}) = 'text' THEN ${byteBoundSql(column, bytes)} END`
+export const CARD_COLUMN_MAP = {
+	status_id: 'j.value',
+	url: cardText('c.url', CARD_URL_LIMIT),
+	title: cardText('c.title', CARD_TEXTS.title - 2),
+	description: cardText('c.description', CARD_TEXTS.description - 2),
+	author_name: cardText('c.author_name', CARD_TEXTS.author_name - 2),
+	author_url: cardText('c.author_url', CARD_URL_LIMIT),
+	provider_name: cardText('c.provider_name', CARD_TEXTS.provider_name - 2),
+	provider_url: cardText('c.provider_url', CARD_URL_LIMIT),
+	language: cardText('c.language', CARD_LANGUAGE_BYTES),
+	published_at: isoTimeSql('c.published_at'),
+} as const satisfies ColumnMap
+
+// The attached card of the status `j.value`, by its key: one row at most.
+export const SHOWN_CARD_SQL = 'c.status_id = j.value AND c.fetched_at IS NOT NULL'
+
 // A viewer flag: its kind (one letter) and the status's id. A status has at most one of each of the five kinds (a
 // viewer boosts an original once: the unique index statuses_reblog).
 export const VIEWER_FLAG_COLUMNS = fixedColumns(
@@ -141,6 +170,7 @@ export function hydrateQueries(): Readonly<Record<HydrateQuery, ColumnMap>> {
 		accounts: ACCOUNT_COLUMN_MAP,
 		moved: MOVED_ACCOUNT_COLUMNS.columns,
 		media: STATUS_MEDIA_COLUMN_MAP,
+		cards: CARD_COLUMN_MAP,
 		mentions: MENTION_COLUMN_MAP,
 		tags: TAG_COLUMN_MAP,
 		flags: VIEWER_FLAG_COLUMNS.columns,
@@ -159,6 +189,7 @@ export type HydrateQuery =
 	| 'accounts'
 	| 'moved'
 	| 'media'
+	| 'cards'
 	| 'mentions'
 	| 'tags'
 	| 'flags'
@@ -181,7 +212,7 @@ export const PER_ROW_SORTS: readonly { query: HydrateQuery; column: string }[] =
 // hydrateQueries() returns for it, each row by its map (rowHeapSql), or a FixedColumns constant times the rows. Its
 // author's account counts once per status row, though a chunk reads it once, and so does the account it moved to
 // (MOVED_ACCOUNT_COLUMNS), whether or not the author is available. A boost's own attachments, mentions,
-// hashtags, poll and votes are not read (hydrate in status-presenter.ts), so they count for another status only.
+// hashtags, poll, votes and card are not read (hydrate in status-presenter.ts), so they count for another status only.
 function statusRowTerms(viewer: string, filterRows: string): string {
 	const fixed = (columns: FixedColumns, rows: string) => `(${rows}) * ${columns.rowHeap}`
 	const one = (sql: string) => `coalesce((${sql}), 0)`
@@ -196,6 +227,8 @@ function statusRowTerms(viewer: string, filterRows: string): string {
 		one(`SELECT sum(${rowHeapSql(TAG_COLUMN_MAP)}) FROM (SELECT x.id AS value) j CROSS JOIN status_tags t
 			WHERE ${SHOWN_TAGS_SQL}`),
 		one(`SELECT ${rowHeapSql(POLL_COLUMN_MAP)} FROM ${POLL_FROM} WHERE p.status_id = x.id AND p.removed = 0`),
+		one(`SELECT ${rowHeapSql(CARD_COLUMN_MAP)} FROM (SELECT x.id AS value) j CROSS JOIN status_cards c
+			WHERE ${SHOWN_CARD_SQL}`),
 		`CASE WHEN ${viewer} IS NULL THEN 0 ELSE ${fixed(OWN_VOTE_COLUMNS, ownVoteCountSql('x.id', viewer))} END`,
 	])
 	return balancedSum([
