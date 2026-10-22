@@ -1,10 +1,9 @@
-import { availableSql } from './audience'
+import { cardEligibleSql } from './audience'
 import { NEW_GENERATION } from './ids'
 import { hostCovered } from './instance-domain-blocks'
 import { writeOperation } from './operation'
-import { shownMediaSql } from './status-rows'
 import { parseStatusText } from './status-text'
-import { ACCOUNTS_ID_INDEX, QUOTES_STATUS_INDEX, STATUSES_ID_INDEX } from '../db/indexes'
+import { ACCOUNTS_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
 import {
 	CARD_CLAIMED_INDEX,
@@ -29,7 +28,7 @@ import { cutJsonString } from '../security/html'
 // round that fetches the links through the web-page sink, is federation/link-cards.ts. A row holds one status's card,
 // a copy (Mastodon shares one PreviewCard per URL; docs/mastodon-deviations.md, "Link previews"):
 //
-// - Eligible (eligibleSql, judged at enqueue, at claim and at record): an original, public or unlisted (AM8: Mastodon
+// - Eligible (audience.ts cardEligibleSql, R43, judged at enqueue, at claim and at record): an original, public or unlisted (AM8: Mastodon
 //   fetches every visibility), by an available author (R1), with no shown attachment and no quote row (Mastodon's
 //   with_media? and quote.present?).
 // - A write picks the link and enqueues it in its own transaction (enqueueCard): a local post's or a text edit's first
@@ -69,14 +68,6 @@ const CARD_HOST_LIMIT = 253 + ':65535'.length
 export type CardCandidate = {
 	raw: string | null
 	url: 'invalid' | 'skip' | { href: string | null; host: string }
-}
-
-// The status ?1 may hold a card now (see above).
-export function eligibleSql(id: string): string {
-	return `EXISTS (SELECT 1 FROM statuses es INDEXED BY ${STATUSES_ID_INDEX} WHERE es.id = ${id}
-		AND es.reblog_of_id IS NULL AND es.visibility IN ('public', 'unlisted') AND ${availableSql('es.account_id')}
-		AND NOT EXISTS (${shownMediaSql('es.id')})
-		AND NOT EXISTS (SELECT 1 FROM quotes eq INDEXED BY ${QUOTES_STATUS_INDEX} WHERE eq.status_id = es.id))`
 }
 
 // A captured anchor as an input names it, bounded and type-checked again (the Worker's capture is not trusted to have
@@ -174,7 +165,7 @@ export function enqueueCard(db: Db, statusId: string, link: string | null, now: 
 		link !== null &&
 		db.run(
 			`INSERT INTO status_cards (status_id, url, due_at, enqueued_at, generation)
-			SELECT ?1, ?2, ?3, ?3, ${NEW_GENERATION} WHERE ${eligibleSql('?1')} AND NOT (${cardUrlPastSql('?2', false)})
+			SELECT ?1, ?2, ?3, ?3, ${NEW_GENERATION} WHERE ${cardEligibleSql('?1')} AND NOT (${cardUrlPastSql('?2', false)})
 			ON CONFLICT (status_id) DO UPDATE SET url = excluded.url, due_at = excluded.due_at,
 				enqueued_at = excluded.enqueued_at, attempts = 0, generation = excluded.generation, title = '',
 				description = '', author_name = '', author_url = '', provider_name = '', provider_url = '', language = NULL,
@@ -306,7 +297,7 @@ export const claimCards = writeOperation<{ now: number }, CardClaims>((db, { now
 		if (
 			enqueued < cutoff ||
 			claim + 1 > SAFE_INTEGER_MAX ||
-			db.first(`SELECT ${eligibleSql('?1')} AS e`, id)?.e !== 1
+			db.first(`SELECT ${cardEligibleSql('?1')} AS e`, id)?.e !== 1
 		) {
 			deleteCard(db, id)
 			continue
@@ -372,7 +363,7 @@ export type CardFence = { statusId: string; token: number; generation: number }
 
 // Whether the claim `fence` names is still open on a pending row of an eligible status (see the module's head).
 const FENCE = `status_id = ?1 AND claim = ?2 AND generation = ?3 AND attempts > 0 AND fetched_at IS NULL
-	AND ${eligibleSql('?1')}`
+	AND ${cardEligibleSql('?1')}`
 
 // A text as stored: storedText's output cut to its JSON bound (security/html.ts cutJsonString), never refused; '' for
 // a value that is not a string.

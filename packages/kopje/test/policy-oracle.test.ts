@@ -19,6 +19,7 @@ import { Db } from '../src/db/sql'
 import {
 	availableLocalSql,
 	availableSql,
+	cardEligibleSql,
 	blockedSql,
 	blocksSql,
 	canView,
@@ -278,6 +279,11 @@ describe('the policy fragments agree with the model of their rules', () => {
 	}
 
 	it('visibleSql (R2)', () => viewerStatusPairs(visibleSql, (m, s, viewer) => m.visible(s, viewer)))
+
+	it('cardEligibleSql (R43, status cards)', () =>
+		agree(pairs(`SELECT st.id AS x FROM statuses st WHERE ${cardEligibleSql('st.id')}`), (m) =>
+			statuses(m.world).flatMap((s) => (m.cardEligible(s) ? [m.status(s).name] : []))
+		))
 
 	it('listableSql (R8)', () => viewerStatusPairs(listableSql, (m, s, viewer) => m.listable(s, viewer), true))
 

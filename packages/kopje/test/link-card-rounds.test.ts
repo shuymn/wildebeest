@@ -654,7 +654,7 @@ describe('the bounds of a round', () => {
 			for (const plans of [before, after]) {
 				for (const { query, plan } of plans) {
 					expect(
-						scansOf(plan, ['status_cards', 't', 'f', 'h', 'statuses', 'es']),
+						scansOf(plan, ['status_cards', 't', 'f', 'h', 'ce', 'cm', 'cq', 'pl', 'pa', 'ps']),
 						`${query}\n${plan.join('\n')}`
 					).toEqual([])
 				}
