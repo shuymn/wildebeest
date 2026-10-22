@@ -48,15 +48,15 @@ export function webPageFixtures(req: IncomingMessage, res: ServerResponse): void
 		case '/corrupt-br':
 			return send(res, 'br', CORRUPT_BR)
 		case '/stall': {
-			// Zeros compressed and flushed without end: the body never finishes, so only a client that cancels it closes
-			// the connection.
+			// The page and `zeros` zero bytes (4 MiB by default) compressed and flushed without end: the body never
+			// finishes, so only a client that cancels it closes the connection.
 			const id = url.searchParams.get('id') ?? ''
 			res.on('close', () => closed.add(id))
 			res.writeHead(200, { 'content-type': 'text/html', 'content-encoding': 'gzip' })
 			const gzip = createGzip({ flush: constants.Z_SYNC_FLUSH })
 			gzip.pipe(res)
 			gzip.write(PAGE)
-			gzip.write(Buffer.alloc(4 * 1024 * 1024))
+			gzip.write(Buffer.alloc(Number(url.searchParams.get('zeros') ?? 4 * 1024 * 1024)))
 			return
 		}
 		case '/closed':

@@ -30,7 +30,6 @@ function scanOrFailure(page: string): Promise<PageScan | ScanFailure> {
 }
 
 type Node = DefaultTreeAdapterMap['node']
-type ParentNode = DefaultTreeAdapterMap['parentNode']
 
 // The oracle: the rel=me hrefs a spec parser with scripting off (as Mastodon's Nokogiri HTML5 parse) finds, in
 // document order, template contents included; HTML namespace only.
@@ -393,6 +392,18 @@ describe('scanHtml failures', () => {
 
 	it('fails on a label the rewriter cannot decode natively', async () => {
 		expect(await scanHtml(encode('<a>'), { label: 'no-such-label', bomLength: 0 })).toEqual({ failed: 'parser' })
+	})
+
+	it('stops a scan that is still pumping when aborted, and returns nothing', { timeout: 60_000 }, async () => {
+		const page = encode('<a rel=me href=x></a>'.repeat(50_000))
+		const started = Date.now()
+		await scanHtml(page, UTF8)
+		const whole = Date.now() - started
+		const controller = new AbortController()
+		const running = scanHtml(page, UTF8, undefined, controller.signal)
+		setTimeout(() => controller.abort(new Error('deadline')), 0)
+		await expect(running).rejects.toThrow('deadline')
+		expect(Date.now() - started - whole).toBeLessThan(whole + 1000)
 	})
 
 	it('rejects with the abort reason and returns nothing once aborted', async () => {

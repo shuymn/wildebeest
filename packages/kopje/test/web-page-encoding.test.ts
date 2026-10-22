@@ -2,6 +2,8 @@ import { env } from 'cloudflare:workers'
 
 import { describe, expect, it } from 'vitest'
 
+import { fetchWebPage, WEB_PAGE_BODY_LIMIT, type WebPageDeps } from '../src/federation/web-page'
+
 // Compressed web pages through workerd's fetch path, served with exact bytes from Node (test-node/web-page-fixtures.ts).
 
 const fixtures = (env as unknown as { WEB_PAGE_FIXTURES: Fetcher }).WEB_PAGE_FIXTURES
@@ -63,5 +65,85 @@ describe('workerd Content-Encoding facts', () => {
 			closed = (await (await fixture(`/closed?id=${id}`)).json()) === true
 		}
 		expect(closed).toBe(true)
+	})
+})
+
+const deps: WebPageDeps = {
+	// For the suite only: production deps.fetch is the global fetch (federation/web-page.ts).
+	fetch: (input: RequestInfo | URL, init?: RequestInit) => fixtures.fetch(new Request(input, init)),
+	checkHost: () => Promise.resolve(),
+	refusesHost: () => Promise.resolve(false),
+	userAgent: 'Kopje/test',
+	now: () => Date.now(),
+}
+
+async function closedUpstream(id: string): Promise<boolean> {
+	for (let i = 0; i < 100; i++) {
+		if ((await (await fixture(`/closed?id=${id}`)).json()) === true) {
+			return true
+		}
+		await new Promise((resolve) => setTimeout(resolve, 20))
+	}
+	return false
+}
+
+describe('web page sink over compressed bodies', () => {
+	it("NET-3: decodes compressed bodies through workerd's fetch path and cancels them at the cap", async () => {
+		for (const path of ['/gzip', '/br']) {
+			const result = await fetchWebPage(`https://fixtures.example${path}`, deps)
+			expect(result).toMatchObject({
+				ok: true,
+				limitReached: false,
+				scan: { title: 'compressed', relMe: ['https://actor.example/u/a'] },
+			})
+		}
+		// 16 MiB of zeros in about 16 KiB of gzip: read up to the cap and one byte, decoded.
+		expect(await fetchWebPage('https://fixtures.example/bomb', deps)).toMatchObject({
+			ok: true,
+			limitReached: true,
+			cost: { bytes: WEB_PAGE_BODY_LIMIT + 1 },
+			scan: { relMe: ['https://actor.example/u/a'] },
+		})
+		// A body that never ends: cancelled at the cap, which closes the upstream connection.
+		const id = crypto.randomUUID()
+		expect(await fetchWebPage(`https://fixtures.example/stall?id=${id}`, deps, { maxBytes: 4096 })).toMatchObject({
+			ok: true,
+			limitReached: true,
+			cost: { bytes: 4097 },
+		})
+		expect(await closedUpstream(id)).toBe(true)
+	})
+
+	it('fails a corrupt gzip or br body as a network failure, with no scan', async () => {
+		for (const path of ['/corrupt-gzip', '/corrupt-br']) {
+			expect(await fetchWebPage(`https://fixtures.example${path}`, deps)).toMatchObject({
+				ok: false,
+				kind: 'network',
+				transient: true,
+			})
+		}
+	})
+
+	it.each([
+		'/deflate',
+		'/zstd',
+		'/gzip-gzip',
+		`/gzip?encoding=GZIP`,
+		`/gzip?encoding=${encodeURIComponent('gzip,')}`,
+		`/gzip-gzip?encoding=${encodeURIComponent('gzip,gzip')}`,
+		`/gzip?encoding=x-gzip`,
+	])('refuses %s, which workerd passes through undecoded', async (path) => {
+		expect(await fetchWebPage(`https://fixtures.example${path}`, deps)).toMatchObject({
+			ok: false,
+			kind: 'encoding',
+			reason: 'unsupported-encoding',
+		})
+	})
+
+	it('cancels a stalled body at the deadline, closing the upstream connection', async () => {
+		const id = crypto.randomUUID()
+		const result = await fetchWebPage(`https://fixtures.example/stall?id=${id}&zeros=0`, deps, { timeoutMs: 300 })
+		expect(result).toMatchObject({ ok: false, kind: 'timeout' })
+		expect(await closedUpstream(id)).toBe(true)
 	})
 })

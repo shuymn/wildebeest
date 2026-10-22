@@ -156,6 +156,28 @@ function hasFrameset(bytes: Uint8Array): boolean {
 	return false
 }
 
+// The rewriter's input in SCAN_CHUNK pieces, each after a turn of the event loop, so a deadline timer can abort a scan
+// between them: given whole, the input is scanned in one native step that nothing interrupts.
+const SCAN_CHUNK = 64 * 1024
+
+function chunks(bytes: Uint8Array, signal: AbortSignal | undefined): ReadableStream<Uint8Array> {
+	let offset = 0
+	return new ReadableStream<Uint8Array>({
+		async pull(controller) {
+			if (offset > 0 && offset < bytes.byteLength) {
+				await new Promise((resolve) => setTimeout(resolve, 0))
+			}
+			// Past an abort the drain has rejected already; the rest of the input is not read.
+			if (signal?.aborted === true || offset >= bytes.byteLength) {
+				controller.close()
+				return
+			}
+			controller.enqueue(bytes.subarray(offset, offset + SCAN_CHUNK))
+			offset += SCAN_CHUNK
+		},
+	})
+}
+
 function failureOf(error: unknown): ScanFailure {
 	const message = error instanceof Error ? error.message : String(error)
 	if (/ambigu/i.test(message)) {
@@ -466,7 +488,9 @@ export async function scanHtml(
 	try {
 		// An unsupported label fails here, synchronously, before any pumping.
 		transformed = rewriter.transform(
-			new Response(bytes, { headers: { 'content-type': `text/html; charset=${native ? charset.label : 'utf-8'}` } })
+			new Response(chunks(bytes, signal), {
+				headers: { 'content-type': `text/html; charset=${native ? charset.label : 'utf-8'}` },
+			})
 		)
 	} catch {
 		return { failed: 'parser' }
