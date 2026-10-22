@@ -8,6 +8,17 @@ import type { StoreOperation } from '../src/platform/store-kernel'
 
 export const DAY_MS = 86_400_000
 
+// A Tag's history written out (Mastodon's TagSerializer#history): the seven UTC days from the day of `now` back, each
+// with its [uses, accounts] in `counts` by days ago, or zeros.
+export function tagHistoryOf(now: number, counts: Readonly<Record<number, readonly [number, number]>> = {}) {
+	const today = now - (now % DAY_MS)
+	return Array.from({ length: 7 }, (_, ago) => ({
+		day: String((today - ago * DAY_MS) / 1000),
+		uses: String(counts[ago]?.[0] ?? 0),
+		accounts: String(counts[ago]?.[1] ?? 0),
+	}))
+}
+
 // An app token (client_credentials) of `app`, or of an app registered for it.
 export async function appToken(h: ApiHarness, given?: App): Promise<string> {
 	const app = given ?? (await registerApp(h))

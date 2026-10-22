@@ -26,7 +26,9 @@ import {
 } from './ops-helpers'
 import { blurhashOf, columnsSql, movedCountSql, seedBounded, storedSql, TABLES } from './stored-bounds-fixtures'
 import { MIGRATIONS } from '../src/db/migrations'
+import { accountFeaturedTags } from '../src/domain/featured-tags'
 import { readOperation, sessionOperation, writeOperation } from '../src/domain/operation'
+import { followedTags } from '../src/domain/tags'
 import { MAX_PROFILE_UPDATES } from '../src/platform/dump-catalog'
 import type { DumpTrailer, TableSpec } from '../src/platform/dump-format'
 import { Sha256 } from '../src/platform/sha256'
@@ -516,6 +518,55 @@ describe('dump', () => {
 			/statuses: application_id past its stored bound/
 		)
 	}, 120_000)
+
+	it('restores followed and featured hashtags past the list bound as they are, which the lists leave out', async () => {
+		const source = await seeded(0)
+		const long = 'a'.repeat(300)
+		const local = await runInDurableObject(source, (_instance, state) => {
+			const sql = state.storage.sql
+			const id = sql.exec<{ id: string }>('SELECT id FROM accounts WHERE domain IS NULL ORDER BY id LIMIT 1').one().id
+			for (const name of [long, 'kept']) {
+				sql.exec('INSERT INTO tag_follows (account_id, name) VALUES (?, ?)', id, name)
+			}
+			sql.exec(
+				`INSERT INTO featured_tags (id, account_id, name, display_name)
+				VALUES ('990000000000000001', ?1, ?2, ?2), ('990000000000000002', ?1, 'kept', 'Kept')`,
+				id,
+				long
+			)
+			return id
+		})
+		const { text } = await dumpViaRpc(source)
+		const restored = await migratedStore()
+		await copyConfig(source, restored)
+		await importViaRpc(restored, text)
+		await runInDurableObject(restored, (_instance, state) => {
+			const sql = state.storage.sql
+			expect(sql.exec('SELECT length(name) AS n FROM tag_follows ORDER BY id').toArray()).toEqual([
+				{ n: 300 },
+				{ n: 4 },
+			])
+			expect(sql.exec('SELECT length(display_name) AS n FROM featured_tags ORDER BY id').toArray()).toEqual([
+				{ n: 300 },
+				{ n: 4 },
+			])
+			sql.exec(
+				"INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes) VALUES ('restored', 's', 'r', 'urn:ietf:wg:oauth:2.0:oob', 'read')"
+			)
+			sql.exec(
+				"INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes) VALUES ('restored-token', 'access', 'restored', ?, 'read')",
+				local
+			)
+			const followed = followedTags.run(sql, {
+				credential: { tokenHash: 'restored-token', scope: 'read', now: Date.parse('2026-10-22T00:00:00.000Z') },
+				page: { limit: 40 },
+				present: { origin: 'https://kopje.test' },
+			})
+			expect(followed.status === 'ok' && followed.value.items.map((tag) => tag.name)).toEqual(['kept'])
+			const featured = accountFeaturedTags.run(sql, { id: local, present: { origin: 'https://kopje.test' } })
+			expect(featured?.map((tag) => tag.name)).toEqual(['Kept'])
+		})
+	}, 60_000)
 
 	it('round-trips media blurhash (0065) and refuses one past its bound on import', async () => {
 		const source = await seeded(0)

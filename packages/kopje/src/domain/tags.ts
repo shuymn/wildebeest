@@ -5,9 +5,11 @@ import { optionalUserReadOperation, userReadOperation, userWriteOperation } from
 import { featureTag, unfeatureTag } from './featured-tags'
 import { tagNameSql } from './status-bounds'
 import { isHashtagName } from './status-text'
+import { listedTagName, listedTagNameSql, TAG_NAME_TOO_LONG, withinTagNameBound } from './tag-bounds'
 import { normalizeTag } from './tag-name'
 import { STATUSES_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
+import { fromHex } from '../platform/dump-literals'
 
 // A hashtag as Mastodon 4.5's REST::TagSerializer shows it. Kopje has no tags table: any valid name is a tag, used or
 // not, as Mastodon builds an unsaved Tag for a name it has never seen (Api::V1::TagsController#set_or_create_tag). The
@@ -37,14 +39,33 @@ const MASK_64 = (1n << 64n) - 1n
 const MASK_63 = (1n << 63n) - 1n
 
 export function tagId(name: string): string {
+	return idOfBytes(new TextEncoder().encode(name))
+}
+
+function idOfBytes(bytes: Uint8Array): string {
 	let hash = FNV_OFFSET
-	for (const byte of new TextEncoder().encode(name)) {
+	for (const byte of bytes) {
 		hash = ((hash ^ BigInt(byte)) * FNV_PRIME) & MASK_64
 	}
 	return (hash & MASK_63).toString()
 }
 
-export const HISTORY_DAYS = 7
+// A hashtag as presented, `name`, and as stored, `key`: the hex of its stored bytes (SQLite's hex()). The key is the
+// identity its id, history and relationships are read by, so a stored name whose bytes are not UTF-8 (an import's,
+// which v2 search shows decoded, as it did) never takes another row's identity.
+export type TagKey = { name: string; key: string }
+
+export function tagKey(name: string): TagKey {
+	return { name, key: hexOf(new TextEncoder().encode(name)) }
+}
+
+function hexOf(bytes: Uint8Array): string {
+	return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0'))
+		.join('')
+		.toUpperCase()
+}
+
+const HISTORY_DAYS = 7
 const DAY_MS = 86_400_000
 
 // Kopje's cap on the hashtags an account follows, where Mastodon has none: home reads a window of each followed
@@ -53,36 +74,47 @@ const DAY_MS = 86_400_000
 export const MAX_FOLLOWED_TAGS = 100
 const TOO_MANY_FOLLOWED = 'You have reached the maximum number of followed hashtags'
 
-// Seven days of uses and distinct authors, today (UTC) first, as Mastodon's TagSerializer#history. It counts public
-// originals only (Mastodon's Trends::Tags registers public statuses only) that anyone may see (visibleSql with no
-// viewer: never a status of a suspended account), so it is the same for every viewer and reveals nothing a status's
-// audience hides (VIS-12): the rule is applied in the query, with no limit for hidden statuses to take up. Days come
-// from published_at. The work is a range of the (name, status_id) index of public hashtags (status_tags_public) cut by
-// status id (RES-7): ids carry the publication time of statuses Kopje created or received (domain/ids.ts), and the
-// receipt time of ids a cutover kept, so the range holds the tag's public statuses the instance received in the last
-// seven days, and the work follows the instance's own receive volume. The range drives, each status sought by id
-// (RES-7).
-function tagHistory(db: Db, tag: string, now: number): TagHistory[] {
+// Seven days of uses and distinct authors, today (UTC) first, as Mastodon's TagSerializer#history: an anonymous public
+// aggregate (VIS-12). It counts public originals (Mastodon's Trends::Tags registers public statuses only) of available
+// authors (visibleSql with no viewer), so it is the same for every viewer, whatever they block or mute, and reveals
+// nothing a status's audience hides. Days come from published_at. The work is a range of the (name, status_id) index
+// of public hashtags (status_tags_public) cut by status id (RES-7): ids carry the publication time of statuses Kopje
+// created or received (domain/ids.ts), and the receipt time of ids a cutover kept, so the range holds the tag's public
+// statuses the instance received in the last seven days. The range drives, each status sought by id.
+// `rows` 'full' (one hashtag: GET /api/v1/tags/:id and the writes on it) applies the rule to the whole range, so the
+// work follows the instance's receive volume. A number (a list, MD-5) takes the newest that many entries of the range
+// raw, before the rule: a boost or an unavailable author's public entry takes a slot, so a list may undercount. The
+// cap is per hashtag, never shared by a page, so a hashtag's counts do not depend on the list it is in.
+export type HistoryRows = 'full' | number
+// The trends lists' cap, and every other list's (v2 search, followed_tags, featured_tags/suggestions): those page up
+// to 200 hashtags, which LISTED_HISTORY_ROWS keeps within RES-7 (docs/threat-model.md).
+export const TREND_HISTORY_ROWS = 200
+export const LISTED_HISTORY_ROWS = 20
+
+export function tagHistory(db: Db, tag: TagKey, now: number, rows: HistoryRows): TagHistory[] {
 	const today = Math.floor(now / DAY_MS) * DAY_MS
-	const since = today - (HISTORY_DAYS - 1) * DAY_MS
-	const rows = db.all<{ day: string; uses: number; accounts: number }>(
-		`SELECT substr(s.published_at, 1, 10) AS day, COUNT(*) AS uses, COUNT(DISTINCT s.account_id) AS accounts
-		FROM status_tags t INDEXED BY status_tags_public CROSS JOIN statuses s INDEXED BY ${STATUSES_ID_INDEX} ON s.id = t.status_id
-		WHERE t.name = ?1 AND t.public = 1 AND t.status_id >= ?2 AND s.visibility = 'public' AND s.reblog_of_id IS NULL
-			AND ${visibleSql('s', 'NULL')}
-		GROUP BY day`,
-		tag,
-		(BigInt(since) << 16n).toString()
+	const since = (BigInt(today - (HISTORY_DAYS - 1) * DAY_MS) << 16n).toString()
+	const rule = `s.visibility = 'public' AND s.reblog_of_id IS NULL AND ${visibleSql('s', 'NULL')}`
+	const from =
+		rows === 'full'
+			? `status_tags t INDEXED BY status_tags_public
+				CROSS JOIN statuses s INDEXED BY ${STATUSES_ID_INDEX} ON s.id = t.status_id
+				WHERE t.name = CAST(unhex(?1) AS TEXT) AND t.public = 1 AND t.status_id >= ?2 AND ${rule}`
+			: `(SELECT t.status_id FROM status_tags t INDEXED BY status_tags_public
+					WHERE t.name = CAST(unhex(?1) AS TEXT) AND t.public = 1 AND t.status_id >= ?2
+					ORDER BY t.status_id DESC LIMIT ?3) c
+				CROSS JOIN statuses s INDEXED BY ${STATUSES_ID_INDEX} ON s.id = c.status_id WHERE ${rule}`
+	const days = db.all<{ day: string; uses: number; accounts: number }>(
+		`SELECT substr(s.published_at, 1, 10) AS day, count(*) AS uses, count(DISTINCT s.account_id) AS accounts
+		FROM ${from} GROUP BY day`,
+		...(rows === 'full' ? [tag.key, since] : [tag.key, since, rows])
 	)
-	return historyDays(rows, today)
+	return historyDays(days, today)
 }
 
 // The seven days from `today` (a UTC midnight) back, each with its row of `rows` (by YYYY-MM-DD) or zeros, as
 // Mastodon's TagSerializer#history writes them.
-export function historyDays(
-	rows: readonly { day: string; uses: number; accounts: number }[],
-	today: number
-): TagHistory[] {
+function historyDays(rows: readonly { day: string; uses: number; accounts: number }[], today: number): TagHistory[] {
 	const byDay = new Map(rows.map((row) => [row.day, row]))
 	return Array.from({ length: HISTORY_DAYS }, (_, index) => {
 		const start = today - index * DAY_MS
@@ -91,49 +123,53 @@ export function historyDays(
 	})
 }
 
-// The viewer's relationship to each of the hashtags `names` (TagRelationshipsPresenter): the ones they follow and the
-// ones they feature, two seeks of the (account_id, name) indexes per name.
-export function tagRelationships(
+// The viewer's relationship to each of the hashtags `tags` (TagRelationshipsPresenter): the keys of the ones they
+// follow and the ones they feature, two seeks of the (account_id, name) indexes per name, by its stored bytes.
+function tagRelationships(
 	db: Db,
 	viewerId: string,
-	names: readonly string[]
+	tags: readonly TagKey[]
 ): { following: Set<string>; featuring: Set<string> } {
 	const of = (table: 'tag_follows' | 'featured_tags') =>
 		new Set(
 			db
-				.all<{ name: string }>(
-					`SELECT name FROM ${table} WHERE account_id = ?1 AND name IN (SELECT value FROM json_each(?2))`,
+				.all<{ key: string }>(
+					`SELECT hex(name) AS key FROM ${table}
+					WHERE account_id = ?1 AND name IN (SELECT CAST(unhex(value) AS TEXT) FROM json_each(?2))`,
 					viewerId,
-					JSON.stringify([...new Set(names)])
+					JSON.stringify([...new Set(tags.map((tag) => tag.key))])
 				)
-				.map((row) => row.name)
+				.map((row) => row.key)
 		)
 	return { following: of('tag_follows'), featuring: of('featured_tags') }
 }
 
-// Hashtags as the viewer sees them: with `following` and `featuring` for a signed-in viewer. history is computed for a
-// single hashtag (`now` given); lists answer it empty, as search's hashtags do, so a list reads no statuses.
+// Hashtags as the viewer sees them: with `following` and `featuring` for a signed-in viewer, and their history
+// (tagHistory with `rows`), each identified by its key (a name given as text, by its UTF-8 bytes). A list's names are
+// read through listedTagNameSql and listedTagName, v2 search's through searchedTagKey (tag-bounds.ts).
 export function presentTags(
 	db: Db,
-	names: readonly string[],
+	names: readonly (string | TagKey)[],
 	viewerId: string | null,
 	present: Present,
-	now: number | null
+	now: number,
+	rows: HistoryRows
 ): Tag[] {
-	const relationships = viewerId === null ? null : tagRelationships(db, viewerId, names)
-	return names.map((name) => ({
-		id: tagId(name),
-		name,
-		url: `${present.origin}/tags/${encodeURIComponent(name)}`,
-		history: now === null ? [] : tagHistory(db, name, now),
+	const tags = names.map((name) => (typeof name === 'string' ? tagKey(name) : name))
+	const relationships = viewerId === null ? null : tagRelationships(db, viewerId, tags)
+	return tags.map((tag) => ({
+		id: idOfBytes(new Uint8Array(fromHex(tag.key))),
+		name: tag.name,
+		url: `${present.origin}/tags/${encodeURIComponent(tag.name)}`,
+		history: tagHistory(db, tag, now, rows),
 		...(relationships === null
 			? {}
-			: { following: relationships.following.has(name), featuring: relationships.featuring.has(name) }),
+			: { following: relationships.following.has(tag.key), featuring: relationships.featuring.has(tag.key) }),
 	}))
 }
 
 function presentTag(db: Db, name: string, viewerId: string | null, present: Present, now: number): Tag {
-	const [tag] = presentTags(db, [name], viewerId, present, now)
+	const [tag] = presentTags(db, [name], viewerId, present, now, 'full')
 	if (tag === undefined) {
 		throw new Error('a tag was not presented')
 	}
@@ -180,9 +216,12 @@ function tagWrite(
 	})
 }
 
-// POST /api/v1/tags/:id/follow (TagFollow.find_or_create_by!): nothing more when already followed. Refused at
-// MAX_FOLLOWED_TAGS, Kopje's own cap.
+// POST /api/v1/tags/:id/follow (TagFollow.find_or_create_by!): nothing more when already followed. Refused for a name
+// past the list bound (tag-bounds.ts), even one an import already follows, and at MAX_FOLLOWED_TAGS, Kopje's own caps.
 export const followTag = tagWrite((db, accountId, { tag, now }) => {
+	if (!withinTagNameBound(tag)) {
+		return { status: 'invalid', errors: [TAG_NAME_TOO_LONG] }
+	}
 	if (db.first('SELECT 1 AS x FROM tag_follows WHERE account_id = ? AND name = ?', accountId, tag) !== undefined) {
 		return { status: 'ok' }
 	}
@@ -220,10 +259,12 @@ export const unfeatureTagOperation = tagWrite((db, accountId, { tag, now, presen
 // GET /api/v1/followed_tags (Api::V1::FollowedTagsController): the viewer's followed hashtags, newest follow first,
 // paged by the follow's id through tag_follows_account.
 export const followedTags = userReadOperation<{ page: PageQuery; present: Present }, Page<Tag>>(
-	(db, { page, present }, { accountId }) => {
+	(db, { page, present }, { accountId, now }) => {
 		const ascending = page.minId !== undefined
-		const rows = db.all<{ id: string; name: string }>(
-			`SELECT CAST(f.id AS TEXT) AS id, f.name FROM tag_follows f
+		// A name the list bound refuses (an import's: tag_follows bounds no name) is left out; the page still reads
+		// toward its limit by its rows (Page.cut), so the Link header passes it.
+		const rows = db.all<{ id: string; key: string | null }>(
+			`SELECT CAST(f.id AS TEXT) AS id, ${listedTagNameSql('f.name')} AS key FROM tag_follows f
 			WHERE f.account_id = ?1 AND ${edgeRangeSql('f.id', '?2', '?3')}
 			ORDER BY f.id ${ascending ? 'ASC' : 'DESC'} LIMIT ?4`,
 			accountId,
@@ -237,13 +278,15 @@ export const followedTags = userReadOperation<{ page: PageQuery; present: Presen
 		return {
 			items: presentTags(
 				db,
-				rows.map((row) => row.name),
+				rows.flatMap((row) => listedTagName(row.key) ?? []),
 				accountId,
 				present,
-				null
+				now,
+				LISTED_HISTORY_ROWS
 			),
 			newest: rows[0]?.id ?? null,
 			oldest: rows.at(-1)?.id ?? null,
+			cut: rows.length >= page.limit,
 		}
 	}
 )
@@ -256,9 +299,9 @@ const SUGGESTIONS = 10
 // statuses that they do not feature yet, the most used first (ties by name), at most 10. A window of the viewer's own
 // statuses through statuses_account, whatever their history.
 export const featuredTagSuggestions = userReadOperation<{ present: Present }, Tag[]>(
-	(db, { present }, { accountId }) => {
-		const rows = db.all<{ name: string }>(
-			`SELECT ${tagNameSql('t.name')} AS name FROM (SELECT id FROM statuses WHERE account_id = ?1 ORDER BY id DESC LIMIT ?2) r
+	(db, { present }, { accountId, now }) => {
+		const rows = db.all<{ key: string }>(
+			`SELECT ${listedTagNameSql('t.name')} AS key FROM (SELECT id FROM statuses WHERE account_id = ?1 ORDER BY id DESC LIMIT ?2) r
 			CROSS JOIN status_tags t ON t.status_id = r.id
 			WHERE ${tagNameSql('t.name')} IS NOT NULL AND NOT EXISTS (SELECT 1 FROM featured_tags f WHERE f.account_id = ?1 AND f.name = t.name)
 			GROUP BY t.name ORDER BY count(*) DESC, t.name LIMIT ?3`,
@@ -268,10 +311,11 @@ export const featuredTagSuggestions = userReadOperation<{ present: Present }, Ta
 		)
 		return presentTags(
 			db,
-			rows.map((row) => row.name),
+			rows.flatMap((row) => listedTagName(row.key) ?? []),
 			accountId,
 			present,
-			null
+			now,
+			LISTED_HISTORY_ROWS
 		)
 	}
 )

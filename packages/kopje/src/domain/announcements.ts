@@ -18,7 +18,7 @@ import { logAction, MODERATION_LOG_PRUNE } from './moderation-log'
 import { readOperation, writeOperation } from './operation'
 import { ACTOR_URI_LIMIT, actorUriSql, PROFILE_URL_LIMIT, USERNAME_LIMIT, usernameSql } from './profile-bounds'
 import { instanceOrigin } from './push'
-import { MAX_TAG_LENGTH } from './status-bounds'
+import { MAX_TAG_LENGTH, TAG_NAME_BYTES } from './status-bounds'
 import {
 	isHashtagName,
 	MAX_RAW_LENGTH,
@@ -75,9 +75,8 @@ const PRESENTATION_ROWS_HEAP =
 export const ANNOUNCEMENT_ROW_CAPS = { list: LIST_ROWS_HEAP, presentation: PRESENTATION_ROWS_HEAP }
 // Hashtags an announcement presents; the content links every one.
 export const MAX_ANNOUNCEMENT_TAGS = 16
-// A hashtag name presented, at most MAX_TAG_LENGTH code units and this many UTF-8 bytes (as status-bounds.ts reads a
-// status's).
-export const TAG_NAME_BYTES = 1024
+// A hashtag name presented: at most MAX_TAG_LENGTH code units and TAG_NAME_BYTES UTF-8 bytes (as status-bounds.ts
+// reads a status's).
 const ENCODER = new TextEncoder()
 
 export type AnnouncementMention = { id: string; username: string; url: string; acct: string }

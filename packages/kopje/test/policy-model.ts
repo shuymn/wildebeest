@@ -71,6 +71,35 @@ export type ModelConversation = {
 	unread: boolean
 }
 
+// VIS-12, a hashtag's history (Mastodon's TagSerializer#history), from its uses in the order the instance received them
+// (oldest first): the seven UTC days from the day of `now` back, today first, each [uses, distinct authors]. The range
+// is the public uses (boosts included) received since the first of the seven days; `rows` 'full' (one hashtag) counts
+// all of it, a number (a list) only its newest that many uses, taken before the rule. The rule: an original (not a
+// boost) whose author is available. A use counts on the UTC day it was published, if that is one of the seven.
+export type HistoryUse = {
+	received: number
+	published: number
+	public: boolean
+	original: boolean
+	available: boolean
+	author: number | string
+}
+
+const DAY_MS = 86_400_000
+
+export function historyModel(uses: readonly HistoryUse[], now: number, rows: 'full' | number): [number, number][] {
+	const today = now - (now % DAY_MS)
+	const range = uses.filter((use) => use.public && use.received >= today - 6 * DAY_MS)
+	const counted = (rows === 'full' ? range : range.slice(Math.max(range.length - rows, 0))).filter(
+		(use) => use.original && use.available
+	)
+	return Array.from({ length: 7 }, (_, ago) => {
+		const start = today - ago * DAY_MS
+		const day = counted.filter((use) => use.published >= start && use.published < start + DAY_MS)
+		return [day.length, new Set(day.map((use) => use.author)).size]
+	})
+}
+
 export class PolicyModel {
 	// `admin` is the OAuth admin (R37), the only recipient shown an admin.report; null for none.
 	constructor(
@@ -457,6 +486,29 @@ export class PolicyModel {
 					!this.blocks(author, viewer) &&
 					!mentions.some((m) => !m.silent && (this.blocks(viewer, m.account) || this.mutes(viewer, m.account)))))
 		)
+	}
+
+	// VIS-12, the history of the world's hashtag (historyModel): its uses are the tagged statuses, received in index
+	// order, at the times `times` gives each.
+	tagHistory(
+		times: (s: number) => { received: number; published: number },
+		now: number,
+		rows: 'full' | number
+	): [number, number][] {
+		const uses = this.world.statuses.flatMap((status, s) =>
+			status.tagged
+				? [
+						{
+							...times(s),
+							public: status.visibility === 'public',
+							original: status.reblogOf === null,
+							available: this.available(status.author),
+							author: status.author,
+						},
+					]
+				: []
+		)
+		return historyModel(uses, now, rows)
 	}
 
 	// R9, home as a whole: the viewer's own statuses; public, unlisted and private statuses of accounts the viewer

@@ -531,7 +531,7 @@ original by an available author with no viewer; so the anonymous trending list i
 timeline (`publicConditions`), and a signed-in viewer's is that list less what R8 filters for them. Reviews, the
 per-author maximum and the 200-row bound are the same for every viewer, so no viewer learns of a status the public
 timeline would not show them. Hashtag names and counts come only from public originals of available accounts (the
-round, `trendTagHistory`: VIS-12). Reviews are the Access admin's (AUTH-5). `test/policy-endpoints.test.ts` compares
+round, `tagHistory`: VIS-12). Reviews are the Access admin's (AUTH-5). `test/policy-endpoints.test.ts` compares
 every page of the list with the model's `trending`, for every viewer, and the anonymous list with the public timeline.
 
 ### Suggestions (R39)
@@ -1108,6 +1108,7 @@ boost must come with its own original (never `reblog: null` on a read), which th
 | conversations                                              | exactly the viewer's conversations the model makes of the direct statuses and the mentions seeded (R25), newest last status first, both ways over pages; each last status only if the viewer may see it (R2), else null; another account's is not found |
 | pinned statuses (of every account)                         | exactly the account statuses the model allows that the account pins, newest pin first (R11, R31)                                                                                                                                                        |
 | statuses by id (every status, 20 at a time)                | exactly the listable statuses (R8), in the order asked                                                                                                                                                                                                  |
+| hashtag history (single, followed, search, suggestions)    | the model's `tagHistory` (VIS-12) for every viewer: the whole range for the single hashtag, the newest 20 uses for a list                                                                                                                               |
 | search resolution (of every stored account and status)     | an account exactly when account search finds it (R14); a status exactly when the single-status read shows it (R3), unless the viewer blocks its author's domain                                                                                         |
 
 Home and each list are read page by page: by `max_id` in pages of 3 and by `min_id` from the oldest in pages of 2, each

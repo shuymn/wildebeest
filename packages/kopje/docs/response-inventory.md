@@ -117,11 +117,23 @@ The public block list has no count cap; RES-3 bounds its response bytes.
 The derived announcement maximum keeps all 16 published announcements within the budget; see
 [Maxima of presented units](threat-model.md#maxima-of-presented-units-res-3).
 
+## Hashtags
+
+| Operation                                                                            | Mechanism                                                        | Continuation |
+| ------------------------------------------------------------------------------------ | ---------------------------------------------------------------- | ------------ |
+| `followedTags`                                                                       | Count: 200 hashtags (100 by default), each with a list's history | Id cursor    |
+| `featuredTagSuggestions`                                                             | Count: 10 hashtags, each with a list's history                   | None         |
+| `getTag`, `followTag`, `unfollowTag`, `featureTagOperation`, `unfeatureTagOperation` | Unit: one hashtag with its full history                          |              |
+
+A list's history counts at most the newest 20 public entries per hashtag (`LISTED_HISTORY_ROWS`, MD-5 and the
+Hashtags notes in docs/mastodon-deviations.md); v2 search's hashtags carry the same. A listed hashtag is within its
+derived maximum, so a full page of 200 is within the budget (`test/tag-history-bounds.test.ts`).
+
 ## Trends
 
 | Operation            | Mechanism                                                                        | Continuation                 |
 | -------------------- | -------------------------------------------------------------------------------- | ---------------------------- |
-| `trendingTags`       | Count: 20 hashtags, each with its trends history                                 | Offset (`offset + limit`)    |
+| `trendingTags`       | Count: 20 hashtags, each with its trends history (200 entries)                   | Offset (`offset + limit`)    |
 | `trendingStatuses`   | Budget: up to 40 statuses within `ARRAY_ANSWER_BYTES`, the first always admitted | Offset (`offset + consumed`) |
 | `adminTrendTags`     | Count: 20 hashtags                                                               | Offset                       |
 | `adminTrendStatuses` | Count: 40 statuses, each field through its bounded projection                    | Offset                       |

@@ -1,5 +1,12 @@
 import { availableLocalSql, availableSql, requiresMention, type Visibility } from './audience'
-import { displayName, featuredTagNamed, featuresMost, MAX_FEATURED_TAGS, writeFeatured } from './featured-tags'
+import {
+	displayName,
+	featurableName,
+	featuredTagNamed,
+	featuresMost,
+	MAX_FEATURED_TAGS,
+	writeFeatured,
+} from './featured-tags'
 import { writeOperation } from './operation'
 import { promoteQuote, type QuoteArrival, quoteArrival } from './quotes'
 import { type RemoteStatusInput, statusByUri, storeRemoteStatus } from './remote-statuses'
@@ -195,10 +202,13 @@ export function unpinRemote(db: Db, accountId: string, statusUri: string): boole
 }
 
 // FeaturedTag's normalization of a received name (a leading # dropped, surrounding whitespace too), or null when it is
-// not a valid hashtag name (FeaturedTag validates the name against Tag::HASHTAG_NAME_RE).
+// not a valid hashtag name (FeaturedTag validates the name against Tag::HASHTAG_NAME_RE) or is past the list bound
+// (featurableName), which ingestion skips without an error.
 function featuredName(name: string): string | null {
 	const display = displayName(name)
-	return display !== '' && isHashtagName(display) && normalizeTag(display) !== '' ? display : null
+	return display !== '' && isHashtagName(display) && normalizeTag(display) !== '' && featurableName(display)
+		? display
+		: null
 }
 
 // Add#add_featured_tags: the account features the hashtag, unless it does already or features MAX_FEATURED_TAGS.
@@ -211,8 +221,7 @@ export function featureRemote(db: Db, accountId: string, name: string, now: numb
 	) {
 		return false
 	}
-	writeFeatured(db, accountId, display, now)
-	return true
+	return writeFeatured(db, accountId, display, now) !== null
 }
 
 // Remove#remove_featured_tags: the account's featured hashtag of that name (FeaturedTag.by_name), if any.

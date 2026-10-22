@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { migratedStore } from './helpers'
 import { NOTIFICATION_TYPES, PolicyModel, type Viewer } from './policy-model'
-import { accountId, listId, runs, statusId, type World, worldArb, writeWorld } from './policy-world'
+import { accountId, listId, runs, statusId, statusPublished, type World, worldArb, writeWorld } from './policy-world'
 import { type Account, listFollows, type Page, type PageQuery } from '../src/domain/accounts'
 import { backfillConversations } from '../src/domain/conversation-rows'
 import { type Conversation, listConversations, markConversation } from '../src/domain/conversations'
@@ -24,6 +24,7 @@ import {
 	suggestions,
 	SUGGESTIONS_KEPT,
 } from '../src/domain/suggestions'
+import { featuredTagSuggestions, followedTags, getTag, LISTED_HISTORY_ROWS, type Tag } from '../src/domain/tags'
 import {
 	accountStatuses,
 	bookmarks,
@@ -222,9 +223,12 @@ describe('the status read endpoints agree with the model of their rules', () => 
 				'conversations',
 				'directory',
 				'favourited_by',
+				'featured tag suggestion history',
+				'followed tag history',
 				'favourites',
 				'followers',
 				'grouped notifications',
+				'hashtag search history',
 				'following',
 				'home',
 				'home through a followed hashtag only',
@@ -240,6 +244,7 @@ describe('the status read endpoints agree with the model of their rules', () => 
 				'statuses by id',
 				'suggestions',
 				'tag',
+				'tag history',
 				'trends',
 				'trends, anonymous',
 			].sort()
@@ -600,6 +605,51 @@ function check(sql: SqlStorage, c: Case): string[] {
 			}
 			paged('list', `list ${l}`, viewer, read, newestFirst(all.filter((s) => m.listTimeline(l, s))))
 		})
+
+		// The hashtag's history (VIS-12): the same for every viewer, whatever they block or mute; a single hashtag counts
+		// its whole range, a list (followed hashtags, hashtag search, featured hashtag suggestions) its newest
+		// LISTED_HISTORY_ROWS uses.
+		const times = (s: number) => ({
+			received: Number(BigInt(statusId(s)) >> 16n),
+			published: statusPublished(world, s),
+		})
+		const history = (endpoint: string, tag: Tag | undefined, rows: 'full' | number) => {
+			if (tag === undefined) {
+				return
+			}
+			shown.add(endpoint)
+			const actual = tag.history.map((day) => [Number(day.uses), Number(day.accounts)])
+			const expected = m.tagHistory(times, now, rows)
+			if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+				problems.push(`${endpoint} ${nameOf(viewer)}: ${JSON.stringify(actual)}, the model ${JSON.stringify(expected)}`)
+			}
+		}
+		history(
+			'tag history',
+			ok<Tag | null>(run(getTag, { ...optional(viewer), name: 'cats', present: PRESENT }), 'tag') ?? undefined,
+			'full'
+		)
+		if (user !== null) {
+			const named = (tags: Tag[]) => tags.find((tag) => tag.name === 'cats')
+			const followed = ok<Page<Tag>>(run(followedTags, { ...user, page: { limit: 200 }, present: PRESENT }), 'followed')
+			history('followed tag history', named(followed.items), LISTED_HISTORY_ROWS)
+			const hashtags = ok<{ hashtags: Tag[] }>(
+				run(search, {
+					...user,
+					query: 'cats',
+					types: ['hashtags'],
+					limit: 40,
+					offset: 0,
+					following: false,
+					localDomain: 'kopje.test',
+					present: PRESENT,
+				}),
+				'hashtag search'
+			).hashtags
+			history('hashtag search history', named(hashtags), LISTED_HISTORY_ROWS)
+			const suggested = ok<Tag[]>(run(featuredTagSuggestions, { ...user, present: PRESENT }), 'tag suggestions')
+			history('featured tag suggestion history', named(suggested), LISTED_HISTORY_ROWS)
+		}
 
 		// Status search over the viewer's library: only what the list rule allows.
 		const results = ok<{ statuses: Status[] }>(

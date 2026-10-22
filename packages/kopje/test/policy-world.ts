@@ -168,6 +168,11 @@ export function listId(index: number): string {
 	return String(LIST_BASE + BigInt(index))
 }
 
+// The publication time writeWorld gives a status (ms): a minute apart, in index order, up to the first of TIMES.
+export function statusPublished(world: World, index: number): number {
+	return Date.parse(TIMES[0]) - (world.statuses.length - index) * 60_000
+}
+
 // The uri writeWorld gives a status, and the uri of the status never stored that a reply to one names.
 export function statusUri(index: number): string {
 	return `https://${INSTANCE_DOMAIN}/ap/o/${index}`
@@ -545,7 +550,7 @@ export function writeWorld(sql: SqlStorage, world: World): void {
 			status.visibility,
 			status.reblogOf === null ? `<p>status ${i}</p>` : '',
 			status.reblogOf === null ? `status ${i}` : null,
-			new Date(Date.parse(TIMES[0]) - (world.statuses.length - i) * 60_000).toISOString(),
+			new Date(statusPublished(world, i)).toISOString(),
 			status.quotePolicy ?? 0
 		)
 		for (const mention of status.mentions) {

@@ -1,14 +1,14 @@
 import { acctOf, type Present } from './accounts'
 import { accessAdminRefusal } from './admin-authority'
 import { ARRAY_ANSWER_BYTES } from './answer-budget'
-import { availableSql, statusReads, trendableStatusSql, visibleSql } from './audience'
+import { availableSql, statusReads, trendableStatusSql } from './audience'
 import { optionalUserReadOperation } from './auth'
 import { logAction } from './moderation-log'
 import { readOperation, writeOperation } from './operation'
 import { USERNAME_LIMIT, usernameSql } from './profile-bounds'
 import { MAX_STATUS_TAGS, tagNameSql } from './status-bounds'
 import { presentation, presentStatusesWithin, type Status } from './status-presenter'
-import { HISTORY_DAYS, historyDays, presentTags, type Tag, type TagHistory, tagId, tagName } from './tags'
+import { presentTags, type Tag, type TagHistory, tagHistory, tagId, tagKey, tagName, TREND_HISTORY_ROWS } from './tags'
 import { type Db, ROW_OBJECT_BYTES, RowMeter, VALUE_BYTES } from '../db/sql'
 import { fromHex } from '../platform/dump-literals'
 import { DOMAIN_BYTES } from '../platform/identity-bounds'
@@ -91,7 +91,6 @@ export const TREND_TAG_ROWS = 8000
 export const TREND_TAG_CANDIDATES = 400
 export const TREND_TAG_GROUPS = TREND_TAG_ROWS / TAG_THRESHOLD
 export const TREND_STATUS_CANDIDATES = 400
-export const TREND_HISTORY_ROWS = 200
 export const TREND_OBSERVED_MAX = 10_000_000
 
 // The id of a time (domain/ids.ts: the milliseconds in the high bits), as TEXT; never a JavaScript number.
@@ -444,25 +443,6 @@ export const trendsRound = writeOperation<{ now: number }, { tags: number; statu
 
 // ---- The lists (GET /api/v1/trends/tags and /statuses, mastodon/trends.ts)
 
-// A hashtag's history as Mastodon's TagSerializer gives it (tags.ts tagHistory), for the trends lists: the newest
-// TREND_HISTORY_ROWS entries of its public range of the seven days (status_tags_public; `public = 1` is the index's
-// own condition, so the entries are raw), then the rule (public originals anyone may see, VIS-12), then the days.
-export function trendTagHistory(db: Db, name: string, now: number): TagHistory[] {
-	const today = now - (now % DAY_MS)
-	const since = today - (HISTORY_DAYS - 1) * DAY_MS
-	const rows = db.all<{ day: string; uses: number; accounts: number }>(
-		`SELECT substr(s.published_at, 1, 10) AS day, count(*) AS uses, count(DISTINCT s.account_id) AS accounts
-		FROM (SELECT t.status_id FROM status_tags t INDEXED BY status_tags_public
-			WHERE t.name = ?1 AND t.public = 1 AND t.status_id >= ?2 ORDER BY t.status_id DESC LIMIT ${TREND_HISTORY_ROWS}) c
-		CROSS JOIN statuses s ON s.id = c.status_id
-		WHERE s.visibility = 'public' AND s.reblog_of_id IS NULL AND ${visibleSql('s', 'NULL')}
-		GROUP BY day`,
-		name,
-		idOf(since)
-	)
-	return historyDays(rows, today)
-}
-
 // The text of a stored name, or null when it is not representable: its bytes are not well-formed UTF-8, or it is not
 // its own normalized form within the name rule (reviewName), so a review or a history by the presented name would name
 // another key. The round never admits such a name and drops a stored row of one (an import's).
@@ -501,11 +481,7 @@ export const trendingTags = optionalUserReadOperation<
 		offset
 	)
 	const names = rows.flatMap((row) => nameOf(row.key) ?? [])
-	const tags = presentTags(db, names, viewer.accountId, present, null).map((tag) => ({
-		...tag,
-		history: trendTagHistory(db, tag.name, now),
-	}))
-	return { items: tags, read: rows.length }
+	return { items: presentTags(db, names, viewer.accountId, present, now, TREND_HISTORY_ROWS), read: rows.length }
 })
 
 // The allowed trending statuses: each author's top-scoring rows (StatusTrend.allowed, the maximum taken before
@@ -616,7 +592,7 @@ function adminTag(db: Db, row: TagReviewRow, name: string, settings: TrendSettin
 		trendable: (row.trendable ?? (settings.trendable_by_default ? 1 : 0)) === 1,
 		requires_review: row.trendable === null,
 		reviewed_at: row.reviewed_at,
-		history: trendTagHistory(db, name, now),
+		history: tagHistory(db, tagKey(name), now, TREND_HISTORY_ROWS),
 	} satisfies AdminTrendTag
 }
 

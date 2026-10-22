@@ -45,10 +45,10 @@ reason and who decided it, and change the exceptions that cite the gap.
   window. The next scoring round excludes deleted posts and unavailable authors; status lists apply R41 on every read.
   At most 200 allowed hashtags and 200 allowed posts are kept, with 50 of each awaiting review, and 3 posts per author;
   the lists end at the top 200 allowed now, and an offset of 200 or more answers `[]`. A trending hashtag's `history`
-  counts at most its newest 200 public posts of the 7 days, and a hashtag whose stored name is not well-formed UTF-8 or
-  not in its own normalized form (an imported one) never trends. Reviews are made by the Access admin, take effect at
-  once and send no e-mail. While trends are off, public lists are empty; the next cron round clears stored trends and
-  leaves the Access admin lists empty too. Posts are ordered by the `Accept-Language` language among ISO 639-1 codes (no
+  follows the Hashtags rules below (the trends lists' cap is 200), and a hashtag whose stored name is not in its own
+  normalized form (an imported one) never trends.
+  Reviews are made by the Access admin, take effect at once and send no e-mail. While trends are off, public lists are
+  empty; the next cron round clears stored trends and leaves the Access admin lists empty too. Posts are ordered by the `Accept-Language` language among ISO 639-1 codes (no
   user locale, chosen languages or `lang`). `limit=0` answers `[]` without a Link, and a page cut by the 8 MiB budget
   continues after its last post. Link trends, `GET /api/v1/timelines/link` and the admin link lists are not implemented:
   Kopje fetches no link previews, so they answer `[]` or 404 as Mastodon does with no trending link. Decided by the
@@ -167,6 +167,28 @@ Search (`/api/v2/search`, `/api/v1/accounts/search`):
 
 - With `resolve=true`, an `acct:user@domain` query is resolved as `user@domain` is; Mastodon's `MENTION_RE` gate
   (`account_search_service.rb`, `username_complete?`) does not take the `acct:` form.
+
+Hashtags (the `Tag` entity):
+
+- `history` is counted again on every read from the stored statuses: public originals, by the UTC day of their
+  publication (Mastodon counts a status on the day it receives it), with `accounts` exact (Mastodon's is a HyperLogLog
+  estimate). A deleted status and the statuses of an unavailable author leave the counts (Mastodon never decrements
+  them, and leaves out silenced accounts; Kopje has no silencing); an edit counts under its current hashtags (Mastodon
+  counts a status at posting only); there is no `usable` flag, so every hashtag is counted. The counts are the same
+  for every viewer, whatever they block or mute.
+- `GET /api/v1/tags/:id` and the writes on one hashtag count every public status of the 7 days. The lists count at
+  most the hashtag's newest public entries of the 7 days, taken before the rule above: 20 in v2 search hashtags,
+  `followed_tags` and `featured_tags/suggestions`, 200 in the trends lists (MD-5). Newer public boosts and statuses of
+  unavailable authors take those places, so a list can count fewer than the single hashtag does.
+- A hashtag name, normalized, is at most 256 code points and 1,024 UTF-8 bytes to be followed or featured (and a
+  featured hashtag's spelling too), the bound a status's hashtags are read by; past it the write answers 422 `Name is
+  too long (maximum is 256 characters)`, even for a name the account already holds (an import's), and a remote
+  account's featured hashtag past it is not learned. Mastodon validates only the name's format (`Tag`'s
+  `HASHTAG_NAME_RE`). Every hashtag list (followed, suggestions, featured, the actor's `featuredTags`, trends) leaves
+  out a stored name past the bound, with a NUL, or whose bytes are not well-formed UTF-8; a page of followed hashtags
+  still pages by the follows it read. v2 search leaves out only names past the bound, before its page, and shows a
+  malformed name decoded (U+FFFD for a stray byte), identified by its stored bytes, so it pages by offset with no
+  repeat or gap.
 
 Admin account actions (`POST /api/v1/admin/accounts/:account_id/action`):
 

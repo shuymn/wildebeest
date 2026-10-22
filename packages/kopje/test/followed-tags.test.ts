@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
 import { type ApiHarness, bearer, sql } from './api-helpers'
-import { appToken, scopedToken } from './read-helpers'
+import { NOW } from './app-helpers'
+import { appToken, scopedToken, tagHistoryOf } from './read-helpers'
 import {
 	act,
 	block,
@@ -176,7 +177,7 @@ describe('followed hashtags', () => {
 				id: '3848435355615332284',
 				name: 'cats',
 				url: 'https://kopje.test/tags/cats',
-				history: [],
+				history: tagHistoryOf(NOW, { 0: [1, 1] }),
 				following: true,
 				featuring: false,
 			},

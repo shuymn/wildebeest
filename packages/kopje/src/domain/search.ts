@@ -6,8 +6,9 @@ import { statusQueryTerms } from './search-text'
 import { tagNameSql } from './status-bounds'
 import { presentation, presentStatusesWithin, type Status } from './status-presenter'
 import { statusCursor } from './statuses'
+import { searchedTagKey } from './tag-bounds'
 import { normalizeTag } from './tag-name'
-import { presentTags, type Tag } from './tags'
+import { LISTED_HISTORY_ROWS, presentTags, type Tag } from './tags'
 import { tagReviewedSql } from './trends'
 import { STATUSES_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
@@ -39,7 +40,7 @@ export const LIBRARY_SOURCE_LIMIT = 2500
 export const HASHTAG_LIBRARY_LIMIT = 500
 export const HASHTAG_PUBLIC_WINDOW = 2000
 
-// A Tag entity (tags.ts), with no history, and the viewer's following and featuring.
+// A Tag entity (tags.ts), with a list's history (LISTED_HISTORY_ROWS) and the viewer's following and featuring.
 export type Hashtag = Tag
 
 export type SearchType = 'accounts' | 'statuses' | 'hashtags'
@@ -59,7 +60,7 @@ export type SearchResults = { accounts: Account[]; statuses: Status[]; hashtags:
 // The JSON of an empty answer: each list's items are counted with a separator, one more than they take.
 const SEARCH_FRAME_BYTES = jsonBytes({ accounts: [], statuses: [], hashtags: [] } satisfies SearchResults)
 
-export const search = userReadOperation<SearchRequest, SearchResults>((db, input, _viewer, context) => {
+export const search = userReadOperation<SearchRequest, SearchResults>((db, input, viewer, context) => {
 	let left = ANSWER_BYTES - SEARCH_FRAME_BYTES
 	let leading = true
 	const accounts = input.types.includes('accounts')
@@ -72,7 +73,7 @@ export const search = userReadOperation<SearchRequest, SearchResults>((db, input
 	const statuses = presentStatusesWithin(db, presentation(db, statusIds, options), statusIds, left, leading)
 	left -= statuses.bytes
 	leading &&= statuses.items.length === 0
-	const hashtags = input.types.includes('hashtags') ? searchHashtags(db, input, context) : []
+	const hashtags = input.types.includes('hashtags') ? searchHashtags(db, input, context, viewer.now) : []
 	return { accounts: accounts.items, statuses: statuses.items, hashtags: admit(hashtags, left, leading).items }
 })
 
@@ -167,14 +168,19 @@ const PREFIX_END = '\u{10FFFF}'
 // Tags whose name starts with the query, from the statuses in the two windows that the viewer may see (see above), exact
 // match first, then shorter names. With excludeUnreviewed, only reviewed tags and the exact match, filtered before the
 // page (Tag.search_for: `matching_name(term).or(reviewed)`).
-function searchHashtags(db: Db, input: SearchRequest, { accountId: viewerId, now }: UserContext): Hashtag[] {
+function searchHashtags(
+	db: Db,
+	input: SearchRequest,
+	{ accountId: viewerId, now }: UserContext,
+	at: number
+): Hashtag[] {
 	// Tag.matches_name: the query normalized as a hashtag name, so spaces and other characters a hashtag cannot hold
 	// are dropped from it.
 	const prefix = normalizeTag(input.query.trim().replace(/^#/, ''))
 	if (prefix === '') {
 		return []
 	}
-	const rows = db.all<{ name: string }>(
+	const rows = db.all<{ key: string }>(
 		// The Store's SQLite allows five terms per compound SELECT, so the windows are two CTEs. CROSS JOIN keeps the
 		// windows on the outside: statuses are looked up by id per candidate (the index named, so statistics of a small
 		// Store cannot turn it into a scan per candidate), and tags per visible status, never scanned by name.
@@ -183,7 +189,7 @@ function searchHashtags(db: Db, input: SearchRequest, { accountId: viewerId, now
 		candidates(id) AS (SELECT id FROM library UNION SELECT id FROM public),
 		visible(id) AS (SELECT s.id FROM candidates c
 			CROSS JOIN statuses s INDEXED BY ${STATUSES_ID_INDEX} ON s.id = c.id WHERE ${listableSql('s', '?1', '?8')})
-		SELECT DISTINCT ${tagNameSql('t.name')} AS name FROM visible v
+		SELECT DISTINCT hex(${tagNameSql('t.name')}) AS key FROM visible v
 			CROSS JOIN status_tags t ON t.status_id = v.id AND t.name >= ?2 AND t.name < ?3
 		WHERE ${tagNameSql('t.name')} IS NOT NULL AND (?9 = 0 OR t.name = ?2 OR ${tagReviewedSql('t.name')})
 		ORDER BY t.name = ?2 DESC, length(t.name), t.name LIMIT ?6 OFFSET ?7`,
@@ -199,9 +205,10 @@ function searchHashtags(db: Db, input: SearchRequest, { accountId: viewerId, now
 	)
 	return presentTags(
 		db,
-		rows.map(({ name }) => name),
+		rows.map(({ key }) => searchedTagKey(key)),
 		viewerId,
 		input.present,
-		null
+		at,
+		LISTED_HISTORY_ROWS
 	)
 }

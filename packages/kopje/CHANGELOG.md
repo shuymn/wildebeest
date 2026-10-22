@@ -43,6 +43,15 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   account's network, like any other collection that cannot be read (one past 1 MiB already did). The sync runs in the background, within the existing per-round budget.
 - Follow suggestions and account search rank remote accounts by the follower count their server reports (it was 0 for
   every remote account).
+- Breaking: following or featuring a hashtag whose name, normalized, is past 256 code points or 1,024 UTF-8 bytes
+  answers 422 (`Name is too long (maximum is 256 characters)`), and so does featuring one whose spelling is; Mastodon
+  sets no such bound. `POST /api/v1/tags/:id/follow` and `/feature` and `POST /api/v1/featured_tags` refuse it even
+  when the account already holds the name (an import's), and a remote account's featured hashtag past it is not
+  learned. Unfollowing, unfeaturing and deleting such a row still work, and a restored dump keeps it.
+- Breaking: the hashtag lists (`GET /api/v1/followed_tags`, `featured_tags/suggestions`, the featured hashtags of
+  `GET /api/v1/featured_tags` and `/api/v1/accounts/:id/featured_tags`, and the actor's `featuredTags` collection)
+  leave out a stored name past that bound, with a NUL, or whose bytes are not well-formed UTF-8 (an import's). A page
+  of followed hashtags that leaves names out still links the next page by the follows it read.
 
 ### Fixed
 
@@ -67,6 +76,13 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Accounts).
 - A stored count that is not an integer from 0 to 2^53−1 (an imported row) shows as 0 wherever accounts are shown,
   ranked or counted (the outbox's `totalItems`, the instance's status count).
+- Tag `history` in v2 search hashtags, `GET /api/v1/followed_tags` and `GET /api/v1/featured_tags/suggestions`
+  shows seven days, today (UTC) first, as `GET /api/v1/tags/:id` does; it was `[]`, on which Mastodon's web client
+  fails: it reads the first day unguarded (v4.5.11 `components/hashtag.tsx:91` for search,
+  `features/followed_tags/index.tsx:45` for followed hashtags). It counts public originals of available authors, the same for every viewer whatever they block
+  or mute (authors they block included). These lists count at most the hashtag's newest 20 public posts of the seven
+  days and the trends lists 200, taken before that rule, so newer boosts and posts of unavailable authors can make a
+  list count fewer; `GET /api/v1/tags/:id` counts all ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Hashtags).
 
 ### Instance changes
 

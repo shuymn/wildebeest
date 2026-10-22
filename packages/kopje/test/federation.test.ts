@@ -507,6 +507,13 @@ describe('featured collections', () => {
 					('700000000000000001', ?1, 'cats', 'Cats'), ('700000000000000002', ?1, '猫', '猫')`,
 				ALICE
 			)
+			// Imported rows the list bound refuses (tag-bounds.ts), left out: a name past it, malformed bytes.
+			state.storage.sql.exec(
+				`INSERT INTO featured_tags (id, account_id, name, display_name) VALUES
+					('700000000000000003', ?1, ?2, ?2), ('700000000000000004', ?1, CAST(x'63617480' AS TEXT), 'Cat')`,
+				ALICE,
+				'a'.repeat(300)
+			)
 		})
 		const tags = await json('/ap/users/Alice/collections/tags')
 		expect(tags.status).toBe(200)
