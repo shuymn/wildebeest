@@ -121,8 +121,8 @@ Accounts (the `Account` and credential account entities):
   another origin than the actor's is not read. A count is taken from a JSON number only, its integer part, a negative
   one as 0 (`AccountStat` shows `max(value, 0)`); one past 2^53−1 is not taken, where Mastodon's `bigint` column takes
   up to 2^63−1 (and a larger value raises, unverified). Each of the three documents is read with at most one redirect
-  and 512 KiB, so the three fit one round's fetch budget; a document past either tells nothing, neither a count nor
-  `hide_collections`. Mastodon also refreshes a remote account in the background a week after its last fetch, up to six
+  and 512 KiB, so the three fit one round's fetch budget; a document past either is unreadable, as Mastodon reads a
+  collection it cannot fetch: no count, and a following or followers collection past them hides the network. Mastodon also refreshes a remote account in the background a week after its last fetch, up to six
   hours later, when a `Create` or `Update` of it arrives (`account.rb:69-70`, `:258-261`; `create.rb:5`); Kopje
   refreshes only when it stores the actor's document. Mastodon signs the count fetches as `Account.representative`
   (`json_ld_helper.rb:232-235`); Kopje signs them as its other collection fetches (DATA-7: a local follower's key,

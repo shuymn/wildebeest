@@ -402,8 +402,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   it (its followers or following collection shows no first page) and hides its lists the same way; one Kopje has not
   learned yet hides nothing, and a collection that cannot be read for now leaves what was learned unless the other
   one is known to hide its items. Both collections are fetched in every sync, the followers even once the following
-  hides (for their counts, as Mastodon fetches them); one past the network part's caps (one redirect, 512 KiB) decides
-  nothing and leaves what was learned (`src/federation/collections.ts`, `accounts.hide_collections`;
+  hides (for their counts, as Mastodon fetches them); one past the network part's caps (one redirect, 512 KiB) is
+  unreadable and hides, as any collection that cannot be read does (`src/federation/collections.ts`, `accounts.hide_collections`;
   `test/remote-collections.test.ts`). _Enforced (main):_ `followListsShownSql` and
   `followListedSql` in
   `src/domain/audience.ts`, `listFollows` and `familiarFollowers` in `src/domain/accounts.ts`, `getCollection` in
@@ -2508,10 +2508,11 @@ heap).
   without a specific recipient are signed by the instance actor; fetches for a personal inbox by the recipient's key;
   fetches on a remote account's behalf (a sync of its featured, featuredTags, following, followers and outbox
   collections in the background job rounds, and the pinned status an `Add` names) by the key of a local account that
-  follows it, as Mastodon signs them with `local_follower`, else by the instance actor, never by a personal inbox's
-  recipient. The follower is named by
-  its account id and the remote account's, and its key is loaded only while it is available and still follows the
-  remote account, which is checked again then; otherwise the instance actor signs (`localFollower` in
+  follows it, else by the instance actor, never by a personal inbox's recipient. Mastodon signs the featured and pin
+  fetches with `local_follower` as Kopje does, and the following, followers and outbox fetches as
+  `Account.representative` (`json_ld_helper.rb:232-235`; [mastodon-deviations.md](mastodon-deviations.md), Accounts).
+  The follower is named by its account id and the remote account's, and its key is loaded only while it is available
+  and still follows the remote account, which is checked again then; otherwise the instance actor signs (`localFollower` in
   `src/domain/remote-collections.ts`, `getFollowerKey` in `src/domain/actors.ts`, `src/federation/collections.ts`,
   `receiveInbound` in `src/federation/inbound.ts`; `test/remote-collections.test.ts`);
   activities by their author's key. The instance key never signs an activity attributed to a user: the one activity it

@@ -30,15 +30,16 @@ import { storedCount } from '../platform/stored-bounds'
 // FetchFeaturedCollectionService, FetchFeaturedTagsCollectionService and ProcessAccountService#collection_info fetch
 // (the following, followers and outbox collections, for hide_collections and the counts), read through the safe
 // loader (NET-1) within one request's fetch budget per round (RES-6), signed by a local follower of the account or
-// else by the instance actor (as Mastodon signs with local_follower), and never from the signed-document cache
-// (NET-4). The jobs/queue.ts rounds run it after the Store's inbound jobs: a round runs one phase of a sync, reading
+// else by the instance actor, and never from the signed-document cache (NET-4). Mastodon signs the featured and pin
+// fetches with local_follower, as Kopje does, but the network collections as Account.representative
+// (json_ld_helper.rb:232-235): Kopje signs them as the others (docs/mastodon-deviations.md, Accounts). The jobs/queue.ts rounds run it after the Store's inbound jobs: a round runs one phase of a sync, reading
 // the collections or fetching the pinned statuses that reading left pending.
 //
 // Differences from Mastodon: a collection is read only on the actor's own origin (Mastodon checks the host for the
 // featured collections only); the featured collection's first MAX_REMOTE_PINS items are read; a collection that may be
 // read later (a timeout, a 5xx, the budget) leaves that part as it was and is read again in a later round, where
 // Mastodon retries the job or, for hide_collections, reads the failure as a hidden collection (and keeps the count);
-// a network document past NETWORK_CAPS tells nothing.
+// a network document past NETWORK_CAPS reads as unreadable: a hidden collection and no count.
 
 // Syncs one round runs, each with its own fetch budget.
 export const COLLECTION_SYNCS_PER_ROUND = 2
@@ -58,7 +59,8 @@ if (Math.max(...Object.values(PART_DOCUMENTS)) * 2 > REQUEST_MAX_FETCHES) {
 // The network part's documents are read under tighter caps, so that its three fit one round's fetches and bytes
 // together whatever the documents are (RES-6): one redirect each (PART_DOCUMENTS.network × 2 fetches) and 512 KiB of
 // body each (UTF-8 bytes as served; three take 1.5 MiB of REQUEST_MAX_BYTES). A document past them is settled as
-// telling nothing: no count, and no say in hide_collections. The other parts keep the loader's own caps.
+// unreadable: it gives no count, and a following or followers collection past them hides the network, as any
+// collection that cannot be read does. The other parts keep the loader's own caps.
 export const NETWORK_CAPS = { documentBytes: 512 * 1024, maxRedirects: 1 } as const satisfies DocumentCaps
 if (
 	PART_DOCUMENTS.network * (1 + NETWORK_CAPS.maxRedirects) > REQUEST_MAX_FETCHES ||
@@ -143,13 +145,13 @@ function hashtagNames(items: readonly unknown[], names: string[] = []): string[]
 }
 
 // ProcessAccountService#collection_info: whether the collection shows its items (a first page). An actor without the
-// collection, or whose collection is not a readable object, hides it, as Mastodon reads it; undefined when the fetch
-// may pass or the document was past NETWORK_CAPS.
+// collection, or whose collection is not a readable object, hides it, as Mastodon reads it; one past NETWORK_CAPS is
+// unreadable too, so it hides it as well. undefined when the fetch may pass.
 function showsItems(collection: Json | 'transient' | 'capped' | null): boolean | undefined {
-	if (collection === 'transient' || collection === 'capped') {
+	if (collection === 'transient') {
 		return undefined
 	}
-	return collection !== null && collection.first !== undefined && collection.first !== null
+	return isObject(collection) && collection.first !== undefined && collection.first !== null
 }
 
 // collection_info's total_items: a JSON number only (Mastodon's is_a?(Numeric)), its integer part, a negative one read

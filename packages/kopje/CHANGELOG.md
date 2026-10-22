@@ -38,8 +38,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   shown.
 - A remote account's collection sync also fetches its outbox, and fetches its followers collection even when its
   following collection hides its items, as Mastodon does for the counts; the following, followers and outbox
-  documents are read with at most one redirect and 512 KiB each, so the three fit one round's fetch budget (a document
-  past either is read as telling nothing). The sync runs in the background, within the existing per-round budget.
+  documents are read with at most one redirect and 512 KiB each, so the three fit one round's fetch budget. A document
+  past either reads as unreadable: it gives no count, and a following or followers collection past them hides the
+  account's network, like any other collection that cannot be read (one past 1 MiB already did). The sync runs in the background, within the existing per-round budget.
 - Follow suggestions and account search rank remote accounts by the follower count their server reports (it was 0 for
   every remote account).
 
