@@ -106,12 +106,12 @@ export function releasedStylesheet(root = ROOT, current = currentStylesheet(root
 	}
 }
 
-// The bytes of the released stylesheet: from public/assets, or from the release's tree when the file is missing.
+// The bytes of the released stylesheet: always the release's own, from its tag, so an edited or lost working copy is
+// a drift that the build repairs. Only without tags (--check's fallback) are they the working copy's.
 function releasedBytes(root, released) {
 	const name = basename(released.stylesheet)
-	const path = join(root, ASSETS, name)
-	if (existsSync(path) || released.tag === null) {
-		return readFileSync(path)
+	if (released.tag === null) {
+		return readFileSync(join(root, ASSETS, name))
 	}
 	return git(root, ['show', `${released.tag}:${released.prefix}${ASSETS}/${name}`], 'buffer')
 }

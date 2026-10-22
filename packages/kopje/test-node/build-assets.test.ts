@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSyn
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 
 import {
 	build,
@@ -18,8 +18,30 @@ import {
 // the current stylesheet and the one the latest completed release linked, and nothing else. Each case drives a real
 // repository with kopje-v* tags, laid out as packages/kopje is.
 
-// A git that reads no user or system configuration (no signing, no hooks).
-const GIT_ENV = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' }
+// A hermetic git for every call of a case, the fixture's and build-assets.mjs's (which inherits process.env): no
+// inherited GIT_* override (GIT_DIR, GIT_INDEX_FILE, GIT_WORK_TREE, object, template and config variables, as a
+// calling hook may set them) and no user or system configuration (no signing, no hooks). The global configuration is
+// an empty file inside the case's temporary directory.
+let home = ''
+let saved: NodeJS.ProcessEnv = {}
+
+beforeAll(() => {
+	home = mkdtempSync(join(tmpdir(), 'kopje-assets-home-'))
+	writeFileSync(join(home, 'gitconfig'), '')
+})
+
+afterAll(() => {
+	rmSync(home, { recursive: true, force: true })
+})
+
+beforeEach(() => {
+	saved = { ...process.env }
+	for (const name of Object.keys(process.env).filter((n) => n.startsWith('GIT_'))) {
+		delete process.env[name]
+	}
+	process.env.GIT_CONFIG_NOSYSTEM = '1'
+	process.env.GIT_CONFIG_GLOBAL = join(home, 'gitconfig')
+})
 
 const repos: string[] = []
 
@@ -27,6 +49,10 @@ afterEach(() => {
 	for (const repo of repos.splice(0)) {
 		rmSync(repo, { recursive: true, force: true })
 	}
+	for (const name of Object.keys(process.env).filter((n) => n.startsWith('GIT_'))) {
+		delete process.env[name]
+	}
+	Object.assign(process.env, saved)
 })
 
 function repository() {
@@ -37,7 +63,7 @@ function repository() {
 	mkdirSync(join(root, 'public', 'assets'), { recursive: true })
 	const git = (...args: string[]) =>
 		execFileSync('git', ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], {
-			env: GIT_ENV,
+			env: process.env,
 			stdio: ['ignore', 'pipe', 'pipe'],
 		})
 	git('init', '-q', '-b', 'main')
@@ -133,6 +159,32 @@ describe('build-assets (amendment A1)', () => {
 		build(root)
 		expect(files()).toEqual([a, b].sort())
 		expect(readFileSync(join(root, 'public', 'assets', a), 'utf8')).toBe('a {}\n')
+	})
+
+	it('takes the retained stylesheet’s bytes from its release: an edited copy fails the check and the build repairs it', () => {
+		const { root, css, files, release } = repository()
+		const a = css('a {}\n')
+		release('0.1.0-rc.2')
+		const b = css('b {}\n')
+		writeFileSync(join(root, 'public', 'assets', a), 'edited {}\n')
+		expect(drift(root, releaseForCheck(root).released)).toEqual([
+			`public/assets/${a} does not hold the bytes it is named for`,
+		])
+		build(root)
+		expect(files()).toEqual([a, b].sort())
+		expect(readFileSync(join(root, 'public', 'assets', a), 'utf8')).toBe('a {}\n')
+		expect(drift(root, releaseForCheck(root).released)).toEqual([])
+	})
+
+	it('runs every git call without the caller’s GIT_* overrides', () => {
+		expect(
+			Object.keys(process.env)
+				.filter((n) => n.startsWith('GIT_'))
+				.sort()
+		).toEqual(['GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM'])
+		const { root, css } = repository()
+		css('a {}\n')
+		expect(releasedStylesheet(root)?.tag).toBe('kopje-v0.1.0-rc.1')
 	})
 
 	it('flags a stray stylesheet and a stale versions module', () => {
