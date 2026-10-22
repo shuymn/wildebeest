@@ -425,10 +425,10 @@ export type CollectionCounts = { statuses: number | null; following: number | nu
 // applied, and the parts read are recorded for the generation the round claimed (not for a newer request, whose parts
 // start over); once every part is, the request is read through. The round progressed when it read a part not read
 // before. Returns whether a sync is due.
-// The counts are written only while the round's generation is the sync's (`before`): a round that read an older
-// document never overwrites what a newer one learns. The pins, hashtags and hide_collections are applied whatever the
-// generation: a stale round may still write them, and the newer generation's round, due at once (endRound), writes
-// them again.
+// hide_collections and the counts are written only while the round's generation is the sync's (`before`): a round
+// that read an older document never overwrites what a newer one learns. The pins and hashtags are applied whatever
+// the generation: a stale round may still write them, and the newer generation's round, due at once (endRound),
+// writes them again.
 export const completeCollectionRead = writeOperation<CollectionReadInput, boolean>((db, input) => {
 	const account = roundAccount(db, input)
 	if (account === null) {
@@ -440,9 +440,6 @@ export const completeCollectionRead = writeOperation<CollectionReadInput, boolea
 	if (input.tags !== null) {
 		replaceFeaturedTags(db, account.id, input.tags, input.now)
 	}
-	if (input.hideCollections !== null) {
-		db.run('UPDATE accounts SET hide_collections = ? WHERE id = ?', input.hideCollections ? 1 : 0, account.id)
-	}
 	const before = db.first<{ parts_read: number }>(
 		'SELECT parts_read FROM collection_syncs WHERE account_id = ? AND generation = ?',
 		account.id,
@@ -450,6 +447,9 @@ export const completeCollectionRead = writeOperation<CollectionReadInput, boolea
 	)
 	const parts = (before?.parts_read ?? 0) | (input.parts & ALL_PARTS)
 	if (before !== undefined) {
+		if (input.hideCollections !== null) {
+			db.run('UPDATE accounts SET hide_collections = ? WHERE id = ?', input.hideCollections ? 1 : 0, account.id)
+		}
 		writeCounts(db, account.id, input.counts)
 		db.run(
 			`UPDATE collection_syncs SET parts_read = CASE WHEN ?1 = ?3 THEN 0 ELSE ?1 END,
