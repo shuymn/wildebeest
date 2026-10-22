@@ -360,7 +360,10 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `/tags/:name` lists local public statuses only. The followers and following pages list accepted follows (VIS-8) by
   R13, and only their counts when the account hides its network. A status page's thread and its favourite and boost
   lists show only what an anonymous viewer may see, the boost list public and unlisted boosts only (VIS-12); its quote
-  list shows only accepted quotes whose two statuses an anonymous viewer may see (VIS-27, VIS-28).
+  list shows only accepted quotes whose two statuses an anonymous viewer may see (VIS-27, VIS-28). Its edit history
+  shows the versions of the status the page itself shows, newest first, each with its own content warning and
+  sensitive flag and sanitized at the sink; the versions share a byte bound with the rest of the page, and the page
+  says when older versions are left out.
 - **VIS-5: lists also apply the viewer's filters**, Mastodon's `StatusFilter`. Feeds, context, notifications, bookmarks,
   favourites, `favourited_by` and `reblogged_by` drop authors the viewer blocks, mutes or domain-blocks. A single status
   by id is not filtered. A mute counts only until it expires (VIS-14), and home also drops a status or boosted
@@ -1109,8 +1112,14 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   Origin check refuses; `same-origin` still sends no referrer to other origins; `src/app/setup.tsx`; `test/setup.test.ts` ("WEB-2, WEB-3, WEB-5: is never cached, framed, scripted
   or opened to other origins").
   Remote interaction: _Planned (public pages):_ `/authorize_interaction` uses the web UI's script-free CSP and sends
-  `Cache-Control: no-store` on its guidance, confirmation and POST responses, signed in or not. Public pages stay
-  script-free; only the embed page keeps its one script.
+  `Cache-Control: no-store` on its guidance, confirmation and POST responses, signed in or not. Public pages:
+  _Planned (public pages):_ every public page reads, links and submits its forms without script. A public page loads
+  script only for what HTML and CSS cannot do (copying an account's address), and shows that control only once the
+  script runs. Its CSP names each such file exactly, as the embed page's does (`script-src` with the file's URL; never
+  `'self'`, never inline). The file is one standalone bundle under `/assets`, served directly (no redirect) as
+  JavaScript with `nosniff`, and its URL in the page and in the CSP come from the same build value. The consent, code,
+  sign-in, settings, `/setup` and `/authorize_interaction` pages stay script-free, and the CSP of private pages does
+  not change.
 - **WEB-3: CORS is open only where no ambient credential exists.** Wildcard CORS without credentials applies to
   `/api/*`, `/oauth/token`, `/oauth/revoke`, `/oauth/userinfo` (bearer tokens), and for GET to the public documents
   `/.well-known/*`, `/nodeinfo/*` and local actor documents (`/ap/users/:username`), as Mastodon opens them, only.
@@ -1146,6 +1155,13 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   status it shows must be one an anonymous viewer may see. The target is kept across sign-in without loosening the return-path check, and every
   redirect stays local. Following goes through the follow service and tells apart a follow that took effect, a pending
   request, one already requested, one refused and a target not found; replies, favourites and boosts stay in clients.
+  Following from the viewer's server: _Planned (public pages):_ the form on a profile or status page is a same-origin
+  GET answered with 200 and `Cache-Control: no-store`: a page that names the destination host and links to
+  `https://<host>/authorize_interaction?uri=<target>`, never a redirect to that host. The host must be a bounded,
+  canonical DNS name with no credentials, port, path, query or fragment. The target comes from the resource the page
+  shows, which an anonymous viewer may see: the account's ActivityPub actor URI for following, the status's URI for
+  interaction, percent-encoded as the `uri` value. The answer fetches, stores and signs in nothing, `form-action 'self'`
+  stays, and the page still shows the address to search for, for servers without that path.
 - **WEB-5: responses declare their type.** API and federation responses carry their exact JSON media type and
   `X-Content-Type-Options: nosniff`. _Enforced (main):_ one middleware sets `nosniff`
   on every response (API, federation, inbox, media, errors and maintenance answers), and API and federation bodies
