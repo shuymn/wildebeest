@@ -804,7 +804,13 @@ describe('reading a remote account’s collections', () => {
 
 describe('a round’s claim of a sync', () => {
 	const ORIGIN = 'https://kopje.test'
-	const read = (tags: string[]) => ({ parts: ALL_PARTS, pins: null, tags, hideCollections: null })
+	const read = (tags: string[]) => ({
+		parts: ALL_PARTS,
+		pins: null,
+		tags,
+		hideCollections: null,
+		counts: { statuses: null, following: null, followers: null },
+	})
 	const claim = async (t: Setup, now: number) => {
 		const sync = await t.store.claimCollectionSync(BUILD, { now })
 		if (sync === null || sync === 'more') {
