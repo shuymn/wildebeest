@@ -24,7 +24,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 - Breaking: Kopje's Worker config enables the compatibility flag `global_fetch_strictly_public`, so every outbound
   fetch uses public routing (NET-1 in [docs/threat-model.md](docs/threat-model.md)); an instance must add it to its
-  `wrangler.jsonc` (Instance changes).
+  `wrangler.jsonc` (Instance changes). The health report (`kopje-admin health`, `GET /admin/health`) gains a `runtime`
+  check that fails, with the fix, while the running Worker lacks the flag, and the public `/health` then answers 503.
 - Breaking: `POST /api/v1/apps` refuses a `client_name` longer than 60 characters (counted in code points), Mastodon's
   limit; it allowed 255 UTF-16 code units. Apps already registered keep their name, and a status posted through one
   whose name is longer shows `application: null`.

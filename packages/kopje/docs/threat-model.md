@@ -1196,7 +1196,8 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   directly, a routing the host and DNS checks cannot see (Cloudflare docs, Compatibility flags, "Global fetch()
   strictly public"). Durable Object stub and in-process `app.fetch` calls are not global fetches. _Enforced (main):_
   the flag in `wrangler.jsonc` and `/deploy/wrangler.jsonc`; `test-node/wrangler-configs.test.ts` ("shipped Kopje
-  Worker configs").
+  Worker configs"). A running Worker without the flag fails the health report's `runtime` check (`src/app/health.ts`);
+  `test/health-runtime.test.ts` ("runtime check in healthReport").
 - **NET-2: deliveries reach only the audience's inboxes.** Inboxes come from the stored audience and are deduplicated by
   shared inbox; an activity without `to` (a Like, Follow, Accept, Reject, Block or their Undo, each naming its recipient
   through its object) goes to the recipient's shared inbox when it has one, and moves to its distinct personal inbox on

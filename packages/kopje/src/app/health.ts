@@ -13,7 +13,8 @@ export type HealthStore = Pick<StoreStub, 'health' | 'localKeys' | 'backupState'
 
 export type HealthReport = { ok: boolean; build: string; checks: Record<string, Check> }
 
-// The detailed report: env validity and issues, Store reachability and build, schema version, DB size, and the keys.
+// The detailed report: env validity and issues, the runtime's compatibility flags, Store reachability and build, schema
+// version, DB size, and the keys.
 // It is for the admin side only (a later /admin route behind Access); the public /health answers with publicHealth,
 // which skips the key check (an unwrap and an RSA signature per key is too much work for an unauthenticated GET).
 export async function healthReport(
@@ -24,10 +25,17 @@ export async function healthReport(
 		checkKeys = true,
 		backup,
 		now = Date.now(),
-	}: { checkKeys?: boolean; backup?: BackupConfigResult; now?: number } = {}
+		compatibilityFlags = Cloudflare.compatibilityFlags,
+	}: {
+		checkKeys?: boolean
+		backup?: BackupConfigResult
+		now?: number
+		compatibilityFlags?: Readonly<Record<string, boolean>>
+	} = {}
 ): Promise<HealthReport> {
 	const checks: Record<string, Check> = {
 		env: config.ok ? { ok: true } : { ok: false, issues: config.issues },
+		runtime: runtimeCheck(compatibilityFlags),
 	}
 	if (config.ok) {
 		try {
@@ -52,6 +60,21 @@ export async function healthReport(
 		}
 	}
 	return { ok: Object.values(checks).every((check) => check.ok), build, checks }
+}
+
+// The compatibility flags the code relies on, as the running Worker has them: an instance's own wrangler.jsonc may lack
+// one the template has. NET-1: global_fetch_strictly_public gives every outbound fetch public routing.
+const REQUIRED_FLAGS = ['global_fetch_strictly_public'] as const
+
+function runtimeCheck(flags: Readonly<Record<string, boolean>>): Check {
+	const missing = REQUIRED_FLAGS.filter((flag) => flags[flag] !== true)
+	return missing.length === 0
+		? { ok: true }
+		: {
+				ok: false,
+				missing,
+				fix: `add ${missing.join(', ')} to compatibility_flags in wrangler.jsonc and redeploy (docs/upgrade.md)`,
+			}
 }
 
 // Every local key (users and the instance actor) must unwrap with the configured KEK, and a signature made with it must
