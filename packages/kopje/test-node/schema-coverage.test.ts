@@ -86,6 +86,8 @@ const NOT_CARRIED: Record<string, string> = {
 	quote_requests: 'quote requests Kopje answered; legacy has no quotes',
 	quote_revocations: 'stamps revoked while Kopje stored quotes; legacy has no quotes',
 	quotes: "quotes Kopje received; legacy has no quotes, and a carried status's quote properties stay in raw",
+	remote_field_links:
+		"remote profile link checks Kopje's round makes; legacy Wildebeest has none, and a carried account is armed at its next store",
 	remote_keys: 'fetched again on demand',
 	reports: 'reports made in Kopje; legacy Wildebeest has no reports',
 	scheduled_statuses: 'posts scheduled in Kopje; legacy Wildebeest has no scheduled statuses',

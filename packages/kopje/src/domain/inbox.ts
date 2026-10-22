@@ -1697,6 +1697,14 @@ function purgeRelationships(db: Db, id: string, budget: Budget): void {
 		'DELETE FROM collection_syncs WHERE account_id IN (SELECT account_id FROM collection_syncs WHERE account_id = ? LIMIT ?)',
 		id
 	)
+	// Its profile link verification (domain/remote-field-links.ts): one row at most.
+	spend(
+		db,
+		budget,
+		`DELETE FROM remote_field_links
+			WHERE account_id IN (SELECT account_id FROM remote_field_links WHERE account_id = ? LIMIT ?)`,
+		id
+	)
 	// Its votes (the polls keep their counts).
 	deleteAccountVotes(db, id, budget.left())
 	spend(
@@ -2062,6 +2070,7 @@ export const PURGED_ACCOUNT_CHILDREN: readonly { table: string; check: string; f
 	{ table: 'status_pins', check: 'account_id = ?1' },
 	{ table: 'featured_tags', check: 'account_id = ?1' },
 	{ table: 'collection_syncs', check: 'account_id = ?1' },
+	{ table: 'remote_field_links', check: 'account_id = ?1' },
 	{ table: 'collection_pins_pending', check: 'account_id = ?1' },
 ]
 
