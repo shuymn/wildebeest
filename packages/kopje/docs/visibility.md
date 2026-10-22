@@ -545,11 +545,11 @@ source; its target is a candidate when `suggestionCandidateSql` passes (someone 
 follow by the viewer in either state, no dismissal) and R12 lists it (`listedForSql`: available, not blocked, muted
 while the mute applies or domain-blocked by the viewer by stored domain or actor host, not blocking the viewer).
 Mastodon also leaves out silenced, moved and memorial accounts, which Kopje does not record. Candidates rank by how
-many counted edges reach them, then by `accounts.followers_count` (lowest first), then by id (newest first); the first
-`SUGGESTIONS_KEPT` (40) are kept and a request answers `offset` and `limit` of them (`[]` from offset 40 on, where
-Mastodon answers 500). A remote account's follower count is not learned (stored as 0), so at equal frequency remote
-accounts come before local ones. There is no cache: the order is deterministic, so an offset is stable only while the
-follows, blocks, mutes and dismissals stay as they were. v2 wraps each account as
+many counted edges reach them, then by `accounts.followers_count` (lowest first, as `presentedCountSql` reads it), then
+by id (newest first); the first `SUGGESTIONS_KEPT` (40) are kept and a request answers `offset` and `limit` of them
+(`[]` from offset 40 on, where Mastodon answers 500). A remote account's follower count is the one its followers
+collection reports, learned by its collection sync (0 until then). There is no cache: the order is deterministic, so
+an offset is stable only while the follows, blocks, mutes and dismissals stay as they were. v2 wraps each account as
 `{"source": "past_interactions", "sources": ["friends_of_friends"], "account": ...}`.
 
 The ranking is over a bounded graph, by windows of follow ids that the query reads as ranges of `follows_following`

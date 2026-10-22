@@ -1,9 +1,12 @@
+import { runInDurableObject } from 'cloudflare:test'
+
 import { describe, expect, it } from 'vitest'
 
 import { sql } from './api-helpers'
 import { inboxDeps, NOW } from './app-helpers'
+import { blockDomain } from './domain-block-helpers'
 import { BUILD } from './helpers'
-import { MASTODON, mastodonActor, type TestActor } from './inbox-helpers'
+import { LOCAL, MASTODON, mastodonActor, type TestActor } from './inbox-helpers'
 import {
 	ALICE,
 	ALICE_URI,
@@ -20,21 +23,27 @@ import {
 	setup,
 	update,
 } from './inbox-status-helpers'
+import { Db } from '../src/db/sql'
 import { FEATURED_COUNT_WINDOW, MAX_FEATURED_TAGS } from '../src/domain/featured-tags'
 import {
 	ALL_PARTS,
+	type CollectionCounts,
 	MAX_REMOTE_PINS,
 	MAX_SYNC_ATTEMPTS,
+	PART_NETWORK,
 	SYNC_LEASE_MS,
 	SYNC_RETRY_MS,
 } from '../src/domain/remote-collections'
+import { suspendRemote } from '../src/domain/remote-suspension'
 import {
 	COLLECTION_SYNCS_PER_ROUND,
 	MAX_FEATURED_TAG_PAGES,
+	NETWORK_CAPS,
 	PART_DOCUMENTS,
 	syncCollections,
 } from '../src/federation/collections'
-import { REQUEST_MAX_FETCHES } from '../src/federation/loader'
+import { DOCUMENT_BODY_LIMIT, MAX_REDIRECTS, REQUEST_MAX_BYTES, REQUEST_MAX_FETCHES } from '../src/federation/loader'
+import { MAX_ACCOUNT_COUNT } from '../src/platform/stored-bounds'
 
 // A remote account's pinned statuses, featured hashtags and hide_collections (Mastodon 4.5's ActivityPub::Activity::Add
 // and Remove, FetchFeaturedCollectionService, FetchFeaturedTagsCollectionService and
@@ -394,11 +403,6 @@ describe('reading a remote account’s collections', () => {
 		})
 	}
 
-	function followCollection(actor: TestActor, kind: 'followers' | 'following', shown: boolean) {
-		const id = `${actor.uri}/${kind}`
-		return { '@context': AS, id, type: 'OrderedCollection', totalItems: 1, ...(shown ? { first: `${id}?page=1` } : {}) }
-	}
-
 	it('learns pins, featured hashtags and hide_collections when it stores the account, and applies them', async () => {
 		const t = await setup()
 		const bob = await mastodonActor(t.web, 'bob')
@@ -414,8 +418,8 @@ describe('reading a remote account’s collections', () => {
 			[stored.id, fetched, mallorys.id, `${OTHER}/users/bob/statuses/1`, { type: 'Hashtag', name: '#x' }],
 			[hashtag('Cats'), hashtag('Dogs'), { type: 'Note', name: '#Birds' }, hashtag('not valid!')]
 		)
-		t.web.serve(`${bob.uri}/followers`, followCollection(bob, 'followers', false))
-		t.web.serve(`${bob.uri}/following`, followCollection(bob, 'following', true))
+		t.web.serve(`${bob.uri}/followers`, counted(bob, 'followers', 1, false))
+		t.web.serve(`${bob.uri}/following`, counted(bob, 'following', 1, true))
 
 		// Storing bob's document (his Follow of dave) asks for a sync, and the inbox asks the Queue for a round.
 		const bobId = await followed(t, bob)
@@ -439,7 +443,7 @@ describe('reading a remote account’s collections', () => {
 		expect((await t.api<Account[]>(`/api/v1/accounts/${bobId}/followers`, null)).body).toEqual([])
 
 		// He shows it again, unpins, and features other hashtags: the next sync follows.
-		t.web.serve(`${bob.uri}/followers`, followCollection(bob, 'followers', true))
+		t.web.serve(`${bob.uri}/followers`, counted(bob, 'followers', 1, true))
 		await servedCollections(t, bob, [fetched.id], [hashtag('dogs'), hashtag('Birds')])
 		const updated = { '@context': AS, id: `${bob.uri}#updates/${nextId()}`, type: 'Update', actor: bob.uri }
 		expect(await t.post(bob, { ...updated, object: bob.document })).toBe(202)
@@ -496,8 +500,8 @@ describe('reading a remote account’s collections', () => {
 			notes.map((note) => note.id),
 			[hashtag('Cats')]
 		)
-		t.web.serve(`${bob.uri}/followers`, followCollection(bob, 'followers', true))
-		t.web.serve(`${bob.uri}/following`, followCollection(bob, 'following', true))
+		t.web.serve(`${bob.uri}/followers`, counted(bob, 'followers', 1, true))
+		t.web.serve(`${bob.uri}/following`, counted(bob, 'following', 1, true))
 		const bobId = await followed(t, bob)
 		// A call's rounds fetch what their budgets allow and say another is due.
 		expect(await syncCollections(t.env, deps(t))).toBe(true)
@@ -635,8 +639,8 @@ describe('reading a remote account’s collections', () => {
 				orderedItems: [hashtag(`page${n}`)],
 			})
 		}
-		serve(`${bob.uri}/followers`, followCollection(bob, 'followers', true))
-		serve(`${bob.uri}/following`, followCollection(bob, 'following', true))
+		serve(`${bob.uri}/followers`, counted(bob, 'followers', 1, true))
+		serve(`${bob.uri}/following`, counted(bob, 'following', 1, true))
 		return { note, tags }
 	}
 
@@ -773,8 +777,8 @@ describe('reading a remote account’s collections', () => {
 		const bob = await mastodonActor(t.web, 'bob')
 		const note = mastodonNote(bob)
 		await servedCollections(t, bob, [note.id], [hashtag('Cats')])
-		t.web.serve(`${bob.uri}/followers`, followCollection(bob, 'followers', true))
-		t.web.serve(`${bob.uri}/following`, followCollection(bob, 'following', true))
+		t.web.serve(`${bob.uri}/followers`, counted(bob, 'followers', 1, true))
+		t.web.serve(`${bob.uri}/following`, counted(bob, 'following', 1, true))
 		const bobId = await followed(t, bob)
 		expect(await t.post(bob, create(bob, note))).toBe(202)
 		await sync(t)
@@ -794,7 +798,7 @@ describe('reading a remote account’s collections', () => {
 		])
 
 		// The following collection still times out, but the followers collection now hides its items: hidden.
-		t.web.serve(`${bob.uri}/followers`, followCollection(bob, 'followers', false))
+		t.web.serve(`${bob.uri}/followers`, counted(bob, 'followers', 1, false))
 		await sql(t.store, 'UPDATE collection_syncs SET due_at = 0')
 		await syncCollections(t.env, deps(t))
 		expect((await t.api<Account>(`/api/v1/accounts/${bobId}`, null)).body.hide_collections).toBe(true)
@@ -803,8 +807,13 @@ describe('reading a remote account’s collections', () => {
 })
 
 describe('a round’s claim of a sync', () => {
-	const ORIGIN = 'https://kopje.test'
-	const read = (tags: string[]) => ({ parts: ALL_PARTS, pins: null, tags, hideCollections: null })
+	const read = (tags: string[]) => ({
+		parts: ALL_PARTS,
+		pins: null,
+		tags,
+		hideCollections: null,
+		counts: { statuses: null, following: null, followers: null },
+	})
 	const claim = async (t: Setup, now: number) => {
 		const sync = await t.store.claimCollectionSync(BUILD, { now })
 		if (sync === null || sync === 'more') {
@@ -815,7 +824,7 @@ describe('a round’s claim of a sync', () => {
 	const complete = (t: Setup, sync: Awaited<ReturnType<typeof claim>>, now: number, tags: string[]) =>
 		t.store.completeCollectionRead(BUILD, {
 			now,
-			origin: ORIGIN,
+			origin: LOCAL,
 			accountUri: sync.accountUri,
 			generation: sync.generation,
 			token: sync.token,
@@ -898,5 +907,588 @@ describe('a round’s claim of a sync', () => {
 		expect(await sql(t.store, 'SELECT generation, read_through FROM collection_syncs')).toEqual([
 			{ generation: 1, read_through: 0 },
 		])
+	})
+})
+
+// A remote account's counts (ProcessAccountService#set_fetchable_attributes!): the totalItems of its outbox, following
+// and followers collections, read by the network part of a sync (federation/collections.ts readNetwork) and stored by
+// completeCollectionRead.
+type Counts = { statuses_count: number; following_count: number; followers_count: number }
+type CountedAccount = Counts & Account
+
+// A Mastodon-shaped collection of `actor` with `totalItems` (left out when undefined) and, when shown, a first page.
+function counted(actor: TestActor, kind: 'outbox' | 'following' | 'followers', totalItems: unknown, shown = true) {
+	const id = `${actor.uri}/${kind}`
+	return {
+		'@context': AS,
+		id,
+		type: 'OrderedCollection',
+		...(totalItems === undefined ? {} : { totalItems }),
+		...(shown ? { first: `${id}?page=1` } : {}),
+	}
+}
+
+// The three collections, each with its totalItems; following and followers show their items.
+function serveCounts(t: Setup, actor: TestActor, outbox: unknown, following: unknown, followers: unknown) {
+	t.web.serve(`${actor.uri}/outbox`, counted(actor, 'outbox', outbox))
+	t.web.serve(`${actor.uri}/following`, counted(actor, 'following', following))
+	t.web.serve(`${actor.uri}/followers`, counted(actor, 'followers', followers))
+}
+
+// The account's counts as presented: [statuses, following, followers].
+async function presentedCounts(t: Setup, accountId: string): Promise<number[]> {
+	const { body } = await t.api<CountedAccount>(`/api/v1/accounts/${accountId}`, null)
+	return [body.statuses_count, body.following_count, body.followers_count]
+}
+
+async function hidden(t: Setup, accountId: string): Promise<boolean | null> {
+	return (await t.api<CountedAccount>(`/api/v1/accounts/${accountId}`, null)).body.hide_collections
+}
+
+// The account's counts as stored: [statuses, following, followers].
+async function storedCounts(t: Setup, accountId: string): Promise<unknown[]> {
+	const [row] = await sql<{ s: number; g: number; f: number }>(
+		t.store,
+		'SELECT statuses_count AS s, following_count AS g, followers_count AS f FROM accounts WHERE id = ?',
+		accountId
+	)
+	return [row?.s, row?.g, row?.f]
+}
+
+// The actor's Update of its own document, which stores it again and asks for a sync (a new generation).
+async function updated(t: Setup, actor: TestActor, document: Record<string, unknown> = actor.document) {
+	t.web.serve(actor.uri, document)
+	const update = { '@context': AS, id: `${actor.uri}#updates/${nextId()}`, type: 'Update', actor: actor.uri }
+	expect(await t.post(actor, { ...update, object: document })).toBe(202)
+}
+
+const syncRows = (t: Setup) =>
+	sql<{ parts_read: number; generation: number; read_through: number }>(
+		t.store,
+		'SELECT parts_read, generation, read_through FROM collection_syncs'
+	)
+
+describe('learning a remote account’s counts from its collections', () => {
+	it('takes the outbox, following and followers totalItems, reading the followers even when the following hides', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		t.web.serve(`${bob.uri}/outbox`, counted(bob, 'outbox', 42))
+		t.web.serve(`${bob.uri}/following`, counted(bob, 'following', 7))
+		t.web.serve(`${bob.uri}/followers`, counted(bob, 'followers', 1_234, false))
+		const bobId = await followed(t, bob)
+		// Never learned: 0, as an account_stats row Mastodon has not filled.
+		expect(await presentedCounts(t, bobId)).toEqual([0, 0, 0])
+		await sync(t)
+		expect(await presentedCounts(t, bobId)).toEqual([42, 7, 1_234])
+		// hide_collections does not zero them (REST::AccountSerializer shows both).
+		expect(await hidden(t, bobId)).toBe(true)
+
+		// The following hides its items now: the followers collection is still fetched, for its count.
+		t.web.serve(`${bob.uri}/outbox`, counted(bob, 'outbox', 43))
+		t.web.serve(`${bob.uri}/following`, counted(bob, 'following', 8, false))
+		t.web.serve(`${bob.uri}/followers`, counted(bob, 'followers', 1_235))
+		const before = t.web.fetched.length
+		await updated(t, bob)
+		await sync(t)
+		expect(t.web.fetched.slice(before)).toContain(`${bob.uri}/followers`)
+		expect(await presentedCounts(t, bobId)).toEqual([43, 8, 1_235])
+		expect(await hidden(t, bobId)).toBe(true)
+
+		// A collection without totalItems, and an outbox that is gone, keep their counts; the followers' changes.
+		t.web.serve(`${bob.uri}/following`, counted(bob, 'following', undefined))
+		t.web.serve(`${bob.uri}/followers`, counted(bob, 'followers', 99))
+		t.web.fail(`${bob.uri}/outbox`, 404)
+		await updated(t, bob)
+		await sync(t)
+		expect(await presentedCounts(t, bobId)).toEqual([43, 8, 99])
+		expect(await hidden(t, bobId)).toBe(false)
+	})
+
+	it('reads a count only from a collection on the actor’s own origin, fetched by its id', async () => {
+		const t = await setup()
+		const elsewhere = `${OTHER}/users/bob/outbox`
+		// The outbox on another origin; the following given as an object, which names its id (fetched, not taken).
+		const bob = await mastodonActor(t.web, 'bob', {
+			extra: { outbox: elsewhere, following: { id: `${MASTODON}/users/bob/following`, totalItems: 1_000 } },
+		})
+		t.web.serve(elsewhere, { '@context': AS, id: elsewhere, type: 'OrderedCollection', totalItems: 5 })
+		t.web.serve(`${bob.uri}/following`, counted(bob, 'following', 7))
+		t.web.serve(`${bob.uri}/followers`, counted(bob, 'followers', 9))
+		const bobId = await followed(t, bob)
+		await sync(t)
+		expect(await presentedCounts(t, bobId)).toEqual([0, 7, 9])
+		expect(t.web.fetched).not.toContain(elsewhere)
+		expect(t.web.fetched).toContain(`${bob.uri}/following`)
+	})
+
+	it('takes a JSON number’s integer part, a negative as 0, and keeps the count past MAX_ACCOUNT_COUNT or for a non-number', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const learn = async (outbox: unknown, following: unknown, followers: unknown) => {
+			serveCounts(t, bob, outbox, following, followers)
+			await updated(t, bob)
+			await sync(t)
+			return presentedCounts(t, bobId)
+		}
+		serveCounts(t, bob, 11, 22, 33)
+		const bobId = await followed(t, bob)
+		await sync(t)
+		expect(await presentedCounts(t, bobId)).toEqual([11, 22, 33])
+		// A fraction is cut, MAX_ACCOUNT_COUNT is stored, a negative is 0 (and 0 replaces a count).
+		expect(MAX_ACCOUNT_COUNT).toBe(2 ** 53 - 1)
+		expect(await learn(1.9, MAX_ACCOUNT_COUNT, -3)).toEqual([1, MAX_ACCOUNT_COUNT, 0])
+		expect(await learn(11, 22, 33)).toEqual([11, 22, 33])
+		// Past MAX_ACCOUNT_COUNT, not finite (1e400 parses as Infinity), a string: each keeps its count.
+		serveCounts(t, bob, 2 ** 53, 0, '5')
+		const following = JSON.stringify(counted(bob, 'following', 0)).replace('"totalItems":0', '"totalItems":1e400')
+		t.web.serveRaw(`${bob.uri}/following`, following)
+		await updated(t, bob)
+		await sync(t)
+		expect(await presentedCounts(t, bobId)).toEqual([11, 22, 33])
+		expect(await learn(true, null, 0)).toEqual([11, 22, 0])
+		expect(await storedCounts(t, bobId)).toEqual([11, 22, 0])
+	})
+
+	it('applies what the network part learned while the outbox may be read later, and reads it again', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		t.web.serve(`${bob.uri}/following`, counted(bob, 'following', 7))
+		t.web.serve(`${bob.uri}/followers`, counted(bob, 'followers', 9))
+		t.web.fail(`${bob.uri}/outbox`, 503)
+		const bobId = await followed(t, bob)
+		// Both rounds of the call (COLLECTION_SYNCS_PER_ROUND) claim bob's sync, and both find the outbox failing.
+		expect(COLLECTION_SYNCS_PER_ROUND).toBe(2)
+		await syncCollections(t.env, deps(t))
+		expect(await presentedCounts(t, bobId)).toEqual([0, 7, 9])
+		expect(await hidden(t, bobId)).toBe(false)
+		const [row] = await syncRows(t)
+		expect(row!.parts_read & PART_NETWORK).toBe(0)
+		// It answers later: the part is read again and the statuses count learned.
+		t.web.serve(`${bob.uri}/outbox`, counted(bob, 'outbox', 42))
+		await sql(t.store, 'UPDATE collection_syncs SET due_at = ?', NOW)
+		await sync(t)
+		expect(await presentedCounts(t, bobId)).toEqual([42, 7, 9])
+	})
+
+	it('reads the healthy parts and the pending pins beside an outbox that never answers', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const note = mastodonNote(bob)
+		t.web.serve(note.id, { '@context': AS, ...note })
+		const featured = featuredOf(bob)
+		t.web.serve(featured, { '@context': AS, id: featured, type: 'OrderedCollection', orderedItems: [note.id] })
+		const tags = `${bob.uri}/collections/tags`
+		t.web.serve(tags, { '@context': AS, id: tags, type: 'Collection', items: [hashtag('Cats')] })
+		t.web.serve(`${bob.uri}/following`, counted(bob, 'following', 7))
+		t.web.serve(`${bob.uri}/followers`, counted(bob, 'followers', 9))
+		t.web.fail(`${bob.uri}/outbox`, 503)
+		const bobId = await followed(t, bob)
+		// The read runs out of attempts with the pin pending, and gives way to it.
+		for (let round = 0; round <= MAX_SYNC_ATTEMPTS + 1; round++) {
+			await sql(t.store, 'UPDATE collection_syncs SET due_at = ?', NOW)
+			await syncCollections(t.env, deps(t))
+		}
+		expect(await pinned(t, bobId, null)).toEqual([note.id])
+		expect((await featuredTags(t, bobId)).map((tag) => tag.name)).toEqual(['Cats'])
+		expect(await presentedCounts(t, bobId)).toEqual([0, 7, 9])
+		expect(await rows(t, 'collection_syncs')).toEqual([{ n: 0 }])
+	})
+
+	it('shows a learned count wherever the account is presented, and keeps it as Kopje stores its statuses and follows', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		serveCounts(t, bob, 42, 7, 1_234)
+		const bobId = await followed(t, bob)
+		await sync(t)
+		const learned = { statuses_count: 42, following_count: 7, followers_count: 1_234 }
+		// Kopje's own recounts are local accounts' only: a stored status, a new local follower and bob's own Follow of
+		// alice leave his counts as his server gave them.
+		const note = mastodonNote(bob)
+		expect(await t.post(bob, create(bob, note))).toBe(202)
+		const follow = await t.request(`/api/v1/accounts/${bobId}/follow`, {
+			method: 'POST',
+			headers: { authorization: `Bearer ${t.tokens.dave}` },
+		})
+		expect(follow.status).toBe(200)
+		const followOfAlice = { '@context': AS, id: `${bob.uri}#follows/${nextId()}`, type: 'Follow', actor: bob.uri }
+		expect(await t.post(bob, { ...followOfAlice, object: ALICE_URI })).toBe(202)
+		expect(await storedCounts(t, bobId)).toEqual([42, 7, 1_234])
+
+		// As a status's author, and as the author of the status a boost shows.
+		const [status] = await sql<{ id: string }>(t.store, 'SELECT id FROM statuses WHERE uri = ?', note.id)
+		const shown = await t.api<{ account: Counts }>(`/api/v1/statuses/${status!.id}`, 'alice')
+		expect(shown.body.account).toMatchObject(learned)
+		const boost = await t.request(`/api/v1/statuses/${status!.id}/reblog`, {
+			method: 'POST',
+			headers: { authorization: `Bearer ${t.tokens.alice}` },
+		})
+		expect(boost.status).toBe(200)
+		expect(((await boost.json()) as { reblog: { account: Counts } }).reblog.account).toMatchObject(learned)
+		// In a notification, and in an account list.
+		const notifications = await t.api<{ type: string; account: Counts }[]>('/api/v1/notifications', 'alice')
+		expect(notifications.body.find((n) => n.type === 'follow')?.account).toMatchObject(learned)
+		const following = await t.api<CountedAccount[]>(`/api/v1/accounts/${ALICE}/following`, 'alice')
+		expect(following.body.find((account) => account.id === bobId)).toMatchObject(learned)
+		// As the account another moved to (Account#moved).
+		await sql(
+			t.store,
+			`INSERT INTO accounts (id, uri, username, domain, moved_to_account_id)
+			VALUES ('933000000000000001', 'https://moved.example/users/carol', 'carol', 'moved.example', ?)`,
+			bobId
+		)
+		const carol = await t.api<{ moved: Counts }>('/api/v1/accounts/933000000000000001', null)
+		expect(carol.body.moved).toMatchObject(learned)
+	})
+
+	// A cutover-converted remote account has the counts the conversion leaves it (0: it recounts local ones only),
+	// and learns its own the next time its document is stored.
+	it('learns the counts of a converted remote account when its document is stored again', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		await sql(
+			t.store,
+			`INSERT INTO accounts (id, uri, username, domain, raw) VALUES ('933000000000000002', ?, 'bob', ?, NULL)`,
+			bob.uri,
+			new URL(MASTODON).host
+		)
+		serveCounts(t, bob, 42, 7, 9)
+		await updated(t, bob)
+		await sync(t)
+		expect(await presentedCounts(t, '933000000000000002')).toEqual([42, 7, 9])
+	})
+})
+
+describe('a round’s end with counts (completeCollectionRead)', () => {
+	const none = { statuses: null, following: null, followers: null }
+	// A claimed round of bob's sync, ended as `accountUri`'s with these counts.
+	async function ended(t: Setup, bobId: string, accountUri: string, counts: CollectionCounts) {
+		await sql(t.store, 'DELETE FROM collection_syncs')
+		await sql(t.store, 'INSERT INTO collection_syncs (account_id, due_at) VALUES (?, ?)', bobId, NOW)
+		const sync = await t.store.claimCollectionSync(BUILD, { now: NOW })
+		if (sync === null || sync === 'more') {
+			throw new Error('no sync claimed')
+		}
+		const { generation, token } = sync
+		const read = { parts: ALL_PARTS, pins: null, tags: null, hideCollections: null }
+		await t.store.completeCollectionRead(BUILD, {
+			now: NOW,
+			origin: LOCAL,
+			accountUri,
+			generation,
+			token,
+			...read,
+			counts,
+		})
+	}
+
+	it('stores only counts storedCount keeps, and only on the remote account the round claimed', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const bobId = await followed(t, bob)
+		await sql(
+			t.store,
+			'UPDATE accounts SET statuses_count = 11, following_count = 22, followers_count = 33 WHERE id = ?',
+			bobId
+		)
+		for (const refused of [-1, 1.5, 2 ** 60, Number.NaN, Number.POSITIVE_INFINITY, '7', null]) {
+			const counts = { statuses: refused, following: refused, followers: refused } as unknown as CollectionCounts
+			await ended(t, bobId, bob.uri, counts)
+			expect([refused, await storedCounts(t, bobId)]).toEqual([refused, [11, 22, 33]])
+		}
+		await ended(t, bobId, bob.uri, { ...none, followers: 5 })
+		expect(await storedCounts(t, bobId)).toEqual([11, 22, 5])
+		await ended(t, bobId, bob.uri, { statuses: 0, following: MAX_ACCOUNT_COUNT, followers: 6 })
+		expect(await storedCounts(t, bobId)).toEqual([0, MAX_ACCOUNT_COUNT, 6])
+		// A round naming a local account (alice's uri with bob's claim) ends nothing and writes no count.
+		const alice = await storedCounts(t, ALICE)
+		await ended(t, bobId, ALICE_URI, { statuses: 5, following: 6, followers: 7 })
+		expect(await storedCounts(t, ALICE)).toEqual(alice)
+		expect(await storedCounts(t, bobId)).toEqual([0, MAX_ACCOUNT_COUNT, 6])
+	})
+})
+
+// A round held at its outbox fetch (RemoteWeb.hold) while something commits, then released: what its end writes.
+describe('learned counts and what commits while a round fetches', () => {
+	async function heldRound(t: Setup, bob: TestActor, now = NOW) {
+		const fetch = t.web.hold(`${bob.uri}/outbox`)
+		// The counts as stored right after each completion of the call (the first is the held round's).
+		const ends: unknown[][] = []
+		const bobId = (await sql<{ id: string }>(t.store, 'SELECT id FROM accounts WHERE uri = ?', bob.uri))[0]!.id
+		const store = storeWithHook(t, 'completeCollectionRead', async () => {
+			ends.push(await storedCounts(t, bobId))
+		})
+		const round = syncCollections(t.env, { ...deps(t), now: () => now, store: () => store })
+		await fetch.reached
+		return { release: fetch.release, round, ends, bobId }
+	}
+
+	it('changes neither counts nor hide_collections from a stale round’s end, and the new generation writes its own', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		// The document the held round reads hides the network (its following shows no items).
+		t.web.serve(`${bob.uri}/outbox`, counted(bob, 'outbox', 1))
+		t.web.serve(`${bob.uri}/following`, counted(bob, 'following', 7, false))
+		t.web.serve(`${bob.uri}/followers`, counted(bob, 'followers', 9))
+		const bobId = await followed(t, bob)
+		const fetch = t.web.hold(`${bob.uri}/outbox`)
+		const ends: unknown[] = []
+		const store = storeWithHook(t, 'completeCollectionRead', async () => {
+			const [row] = await sql<{ hidden: number | null }>(
+				t.store,
+				'SELECT hide_collections AS hidden FROM accounts WHERE id = ?',
+				bobId
+			)
+			ends.push([...(await storedCounts(t, bobId)), row?.hidden])
+		})
+		const round = syncCollections(t.env, { ...deps(t), store: () => store })
+		await fetch.reached
+		// Bob's Update while the round fetches: a new generation, which shows the network.
+		serveCounts(t, bob, 2, 8, 10)
+		await updated(t, bob)
+		fetch.release()
+		await round
+		// The held round's end wrote neither; the call's next round read the new generation and wrote both.
+		expect(ends).toEqual([
+			[0, 0, 0, null],
+			[2, 8, 10, 0],
+		])
+		expect(await hidden(t, bobId)).toBe(false)
+		expect(await rows(t, 'collection_syncs')).toEqual([{ n: 0 }])
+	})
+
+	it('writes no count from a round whose lease ended and which another round took over, nor from its late end', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		serveCounts(t, bob, 1, 7, 9)
+		const bobId = await followed(t, bob)
+		const held = await heldRound(t, bob)
+		// Past the lease, another round claims the sync and ends it with the counts it reads.
+		serveCounts(t, bob, 2, 8, 10)
+		await syncCollections(t.env, { ...deps(t), now: () => NOW + SYNC_LEASE_MS })
+		expect(await storedCounts(t, bobId)).toEqual([2, 8, 10])
+		expect(await rows(t, 'collection_syncs')).toEqual([{ n: 0 }])
+		// The first round's end comes after: its claim is gone, and it writes nothing.
+		serveCounts(t, bob, 3, 11, 12)
+		held.release()
+		await held.round
+		expect(held.ends).toEqual([[2, 8, 10]])
+		expect(await storedCounts(t, bobId)).toEqual([2, 8, 10])
+	})
+
+	it('writes no count once the account is suspended, or its domain blocked, while the round fetches', async () => {
+		for (const commit of ['suspension', 'domain block'] as const) {
+			const t = await setup()
+			const bob = await mastodonActor(t.web, 'bob')
+			serveCounts(t, bob, 1, 7, 9)
+			const bobId = await followed(t, bob)
+			const held = await heldRound(t, bob)
+			if (commit === 'suspension') {
+				await runInDurableObject(t.store, (_instance, state) =>
+					state.storage.transactionSync(() => suspendRemote(new Db(state.storage.sql), bobId, null, NOW))
+				)
+			} else {
+				await blockDomain(t.store, new URL(MASTODON).host)
+			}
+			held.release()
+			await held.round
+			expect([commit, held.ends]).toEqual([commit, [[0, 0, 0]]])
+			expect([commit, await rows(t, 'collection_syncs')]).toEqual([commit, [{ n: 0 }]])
+		}
+	})
+})
+
+// The network part's documents under NETWORK_CAPS (RES-6): its three fit one round's fetches and bytes together.
+describe('the network part within one round', () => {
+	// The collections padded to `bytes` of JSON each, with their counts.
+	function padded(actor: TestActor, kind: 'outbox' | 'following' | 'followers', total: number, bytes: number) {
+		const body = counted(actor, kind, total)
+		const length = new TextEncoder().encode(JSON.stringify({ ...body, pad: '' })).length
+		return { ...body, pad: 'x'.repeat(bytes - length) }
+	}
+
+	// Whether the first round of a call read every part through (the sync is gone, or holds no pending part).
+	async function firstRound(t: Setup) {
+		const after: unknown[] = []
+		const store = storeWithHook(t, 'completeCollectionRead', async () => {
+			after.push(await syncRows(t))
+		})
+		await syncCollections(t.env, { ...deps(t), store: () => store })
+		return after[0]
+	}
+
+	it('settles three documents past their cap in one round as unreadable, though the loader’s own cap admits each', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		const bytes = 700 * 1024
+		expect(bytes).toBeGreaterThan(NETWORK_CAPS.documentBytes)
+		expect(bytes).toBeLessThanOrEqual(DOCUMENT_BODY_LIMIT)
+		// At the loader's own cap, the three would take more than the round's bytes: the outbox would starve.
+		expect(3 * bytes).toBeGreaterThan(REQUEST_MAX_BYTES)
+		t.web.serve(`${bob.uri}/outbox`, padded(bob, 'outbox', 42, bytes))
+		t.web.serve(`${bob.uri}/following`, padded(bob, 'following', 7, bytes))
+		t.web.serve(`${bob.uri}/followers`, padded(bob, 'followers', 9, bytes))
+		const bobId = await followed(t, bob)
+		expect(await firstRound(t)).toEqual([])
+		expect(await presentedCounts(t, bobId)).toEqual([0, 0, 0])
+		// Unreadable, as a permanent failure is: the network is hidden.
+		expect(await hidden(t, bobId)).toBe(true)
+	})
+
+	it('learns from documents just within the cap, and settles an outbox past it with no count', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		t.web.serve(`${bob.uri}/outbox`, padded(bob, 'outbox', 42, NETWORK_CAPS.documentBytes + 1))
+		t.web.serve(`${bob.uri}/following`, padded(bob, 'following', 7, NETWORK_CAPS.documentBytes))
+		t.web.serve(`${bob.uri}/followers`, padded(bob, 'followers', 9, NETWORK_CAPS.documentBytes))
+		const bobId = await followed(t, bob)
+		expect(await firstRound(t)).toEqual([])
+		expect(await presentedCounts(t, bobId)).toEqual([0, 7, 9])
+		expect(await hidden(t, bobId)).toBe(false)
+	})
+
+	// RemoteLoaders capped: its memo is its own, so a document the round's ordinary loader read within its 1 MiB is
+	// fetched again under NETWORK_CAPS, with the same signer and from the same round.
+	it('fetches a document the featured part read again for the network part, and refuses it under the cap', async () => {
+		const t = await setup()
+		const shared = `${MASTODON}/users/bob/outbox`
+		const bob = await mastodonActor(t.web, 'bob', { extra: { featured: shared } })
+		const body = { '@context': AS, id: shared, type: 'OrderedCollection', totalItems: 42, orderedItems: [] }
+		const length = new TextEncoder().encode(JSON.stringify({ ...body, pad: '' })).length
+		t.web.serve(shared, { ...body, pad: 'x'.repeat(700 * 1024 - length) })
+		t.web.serve(`${bob.uri}/following`, counted(bob, 'following', 7))
+		t.web.serve(`${bob.uri}/followers`, counted(bob, 'followers', 9))
+		const bobId = await followed(t, bob)
+		const before = t.web.fetched.length
+		expect(await firstRound(t)).toEqual([])
+		const fetches = t.web.fetched.slice(before).flatMap((url, i) => (url === shared ? [t.web.signers[before + i]] : []))
+		// Read twice in the one round, signed alike: once for the featured part, once (refused) for the outbox's count.
+		expect(fetches).toHaveLength(2)
+		expect(fetches[1]).toBe(fetches[0])
+		expect(await presentedCounts(t, bobId)).toEqual([0, 7, 9])
+		expect(await pinned(t, bobId, null)).toEqual([])
+	})
+
+	it('draws the network part’s fetches from the round’s one budget, after the featured part’s', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		// The featured collection redirects MAX_REDIRECTS times (six fetches), so the network part has two left.
+		const featured = featuredOf(bob)
+		for (let hop = 0; hop < MAX_REDIRECTS; hop++) {
+			t.web.redirect(hop === 0 ? featured : `${featured}?hop=${hop}`, `${featured}?hop=${hop + 1}`)
+		}
+		const last = `${featured}?hop=${MAX_REDIRECTS}`
+		t.web.serve(last, { '@context': AS, id: last, type: 'OrderedCollection', orderedItems: [] })
+		serveCounts(t, bob, 42, 7, 9)
+		const bobId = await followed(t, bob)
+		const after: unknown[] = []
+		const store = storeWithHook(t, 'completeCollectionRead', async () => {
+			after.push(await syncRows(t))
+		})
+		await syncCollections(t.env, { ...deps(t), store: () => store })
+		// The first round's outbox fetch found the budget spent: the part waits, its two counts applied.
+		const [first] = after[0] as { parts_read: number }[]
+		expect(MAX_REDIRECTS + 1 + 2).toBe(REQUEST_MAX_FETCHES)
+		expect(first!.parts_read & PART_NETWORK).toBe(0)
+		await sql(t.store, 'UPDATE collection_syncs SET due_at = ?', NOW)
+		await sync(t)
+		expect(await presentedCounts(t, bobId)).toEqual([42, 7, 9])
+	})
+
+	it('hides the network for oversized following and followers, as unreadable, and reaches the pins in the generation', async () => {
+		const t = await setup()
+		const bob = await mastodonActor(t.web, 'bob')
+		serveCounts(t, bob, 1, 7, 9)
+		const bobId = await followed(t, bob)
+		await sync(t)
+		expect(await hidden(t, bobId)).toBe(false)
+		// Both now past the cap, read as an ordinary refusal is (hidden); a pin Kopje does not have.
+		const note = mastodonNote(bob)
+		t.web.serve(note.id, { '@context': AS, ...note })
+		const featured = featuredOf(bob)
+		t.web.serve(featured, { '@context': AS, id: featured, type: 'OrderedCollection', orderedItems: [note.id] })
+		t.web.serve(`${bob.uri}/outbox`, counted(bob, 'outbox', 42))
+		t.web.serve(`${bob.uri}/following`, padded(bob, 'following', 8, NETWORK_CAPS.documentBytes + 1))
+		t.web.serve(`${bob.uri}/followers`, padded(bob, 'followers', 10, NETWORK_CAPS.documentBytes + 1))
+		await updated(t, bob)
+		const before = t.web.fetched.length
+		// One call: its first round reads every part through, its second fetches the pin.
+		const after: unknown[] = []
+		const store = storeWithHook(t, 'completeCollectionRead', async () => {
+			after.push(await syncRows(t))
+		})
+		expect(await syncCollections(t.env, { ...deps(t), store: () => store })).toBe(false)
+		expect(after).toEqual([[{ parts_read: 0, generation: 1, read_through: 1 }]])
+		expect(await rows(t, 'collection_syncs')).toEqual([{ n: 0 }])
+		expect(await pinned(t, bobId, null)).toEqual([note.id])
+		expect(await presentedCounts(t, bobId)).toEqual([42, 7, 9])
+		expect(await hidden(t, bobId)).toBe(true)
+		const fetched = t.web.fetched.slice(before)
+		for (const url of [`${bob.uri}/outbox`, `${bob.uri}/following`, `${bob.uri}/followers`, note.id]) {
+			expect([url, fetched.filter((u) => u === url).length]).toEqual([url, 1])
+		}
+	})
+
+	it('follows one redirect per document: two each settle in one round as unreadable, one each are learned', async () => {
+		for (const hops of [2, 1]) {
+			const t = await setup()
+			const bob = await mastodonActor(t.web, 'bob')
+			for (const [kind, total] of [
+				['outbox', 42],
+				['following', 7],
+				['followers', 9],
+			] as const) {
+				const url = `${bob.uri}/${kind}`
+				for (let hop = 0; hop < hops; hop++) {
+					t.web.redirect(hop === 0 ? url : `${url}?hop=${hop}`, `${url}?hop=${hop + 1}`)
+				}
+				t.web.serve(`${url}?hop=${hops}`, counted(bob, kind, total))
+			}
+			const bobId = await followed(t, bob)
+			const before = t.web.fetched.length
+			expect([hops, await firstRound(t)]).toEqual([hops, []])
+			// Each document cost two requests at most: three of them fit the round's REQUEST_MAX_FETCHES.
+			const network = t.web.fetched.slice(before).filter((url) => /\/(outbox|following|followers)/.test(url))
+			expect([hops, network.length]).toEqual([hops, 3 * 2])
+			expect([hops, await presentedCounts(t, bobId)]).toEqual([hops, hops === 1 ? [42, 7, 9] : [0, 0, 0]])
+			expect([hops, await hidden(t, bobId)]).toEqual([hops, hops === 2])
+		}
+	})
+})
+
+// RES-6: the most HTTP requests one generation of a sync makes, computed from the constants. Every read claim reads
+// every unread part with each document redirected as far as its loader allows, cut by the round's REQUEST_MAX_FETCHES;
+// a part is read through at the last of its MAX_SYNC_ATTEMPTS claims; then MAX_REMOTE_PINS pending statuses are
+// fetched one per MAX_SYNC_ATTEMPTS claims, each round its whole budget. A call (COLLECTION_SYNCS_PER_ROUND claims)
+// may run two rounds of one generation.
+describe('the requests of one generation', () => {
+	function worstCase(network: { documents: number; redirects: number }) {
+		const parts = [
+			PART_DOCUMENTS.featured * (1 + MAX_REDIRECTS),
+			network.documents * (1 + network.redirects),
+			PART_DOCUMENTS.tags * (1 + MAX_REDIRECTS),
+		]
+		const readClaims = parts.length * MAX_SYNC_ATTEMPTS
+		const readRound = Math.min(
+			REQUEST_MAX_FETCHES,
+			parts.reduce((sum, n) => sum + n, 0)
+		)
+		const pinClaims = MAX_REMOTE_PINS * MAX_SYNC_ATTEMPTS
+		return {
+			networkPerRound: Math.min(REQUEST_MAX_FETCHES, parts[1]!),
+			networkPerGeneration: readClaims * Math.min(REQUEST_MAX_FETCHES, parts[1]!),
+			networkHealthy: network.documents,
+			perCall: COLLECTION_SYNCS_PER_ROUND * REQUEST_MAX_FETCHES,
+			perGeneration: readClaims * readRound + pinClaims * REQUEST_MAX_FETCHES,
+		}
+	}
+
+	it('bounds them before and after the network part reads the outbox', () => {
+		const before = worstCase({ documents: 2, redirects: MAX_REDIRECTS })
+		const after = worstCase({ documents: PART_DOCUMENTS.network, redirects: NETWORK_CAPS.maxRedirects })
+		console.info(`Requests of one generation: before ${JSON.stringify(before)}, after ${JSON.stringify(after)}`)
+		expect({ before, after }).toEqual({
+			before: { networkPerRound: 8, networkPerGeneration: 72, networkHealthy: 2, perCall: 16, perGeneration: 552 },
+			after: { networkPerRound: 6, networkPerGeneration: 54, networkHealthy: 3, perCall: 16, perGeneration: 552 },
+		})
 	})
 })

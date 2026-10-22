@@ -2,6 +2,7 @@ import { type Account, accountsOf, admitAccounts, type Present, resolveAccountId
 import { admit, ARRAY_ANSWER_BYTES } from './answer-budget'
 import { listedForSql, suggestionCandidateSql, suggestionSourceSql } from './audience'
 import { userReadOperation, userWriteOperation } from './auth'
+import { presentedCountSql } from '../platform/stored-bounds'
 
 // R39: friends-of-friends suggestions; ranking and windows: docs/visibility.md, "Suggestions".
 // RES-7: seek both follows_following windows independently of planner statistics; do not sort edges
@@ -41,7 +42,7 @@ const KEPT_SQL = `WITH
 		ORDER BY f.id DESC, e.id DESC
 		LIMIT ${SUGGESTION_EDGES}),
 	grouped(x, frequency, followers_count) AS (
-		SELECT a.id, count(*), a.followers_count
+		SELECT a.id, count(*), ${presentedCountSql('a.followers_count')}
 		FROM edges g CROSS JOIN accounts a ON a.id = g.x
 		WHERE ${suggestionCandidateSql('a.id', 'a', '?1')}
 		GROUP BY a.id)

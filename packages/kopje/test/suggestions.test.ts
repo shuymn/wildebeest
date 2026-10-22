@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { type ApiHarness, bearer, sql } from './api-helpers'
-import { harness } from './app-helpers'
+import { harness, inboxDeps } from './app-helpers'
 import { fixtureKeyGen } from './federation-helpers'
 import { BUILD } from './helpers'
 import { mastodonActor, RemoteWeb, signedInit } from './inbox-helpers'
@@ -9,6 +9,7 @@ import { appToken, appTokenWith, scopedToken } from './read-helpers'
 import { block, community, domainBlock, follow, getJson, mute, type User } from './status-helpers'
 import { remoteAccountsSql, suggestionAccount } from './suggestion-fixtures'
 import { SUGGESTION_EDGES, SUGGESTION_EDGES_PER_SOURCE, SUGGESTION_SOURCES } from '../src/domain/suggestions'
+import { syncCollections } from '../src/federation/collections'
 import type { StoreStub } from '../src/platform/store-client'
 
 // Follow suggestions (Mastodon 4.5's friends-of-friends source; R39, docs/visibility.md "Suggestions"): the shapes,
@@ -308,22 +309,26 @@ describe('suggestions', () => {
 		expect((await h.request('/api/v1/suggestions', bearer(token))).status).toBe(403)
 	})
 
-	it('ranks remote accounts Kopje stored from their actors as having no followers', async () => {
+	it('ranks remote accounts by the follower counts their collections report, once a sync learned them', async () => {
 		const h = await community(['alice', 'bob', 'carol'])
 		const { alice, bob, carol } = h.users
 		const web = new RemoteWeb()
 		const inbox = harness(h.store, {}, BUILD, { keygen: fixtureKeyGen, loader: web.loader })
 		const AS = 'https://www.w3.org/ns/activitystreams'
 		const stored: string[] = []
-		// Two Mastodon accounts follow bob, each publishing a large followers collection; Kopje stores the accounts and
-		// not their totals.
-		for (const [n, name] of ['erin', 'frank'].entries()) {
+		// Two Mastodon accounts follow bob, each publishing a large followers collection: 0 until a sync reads it.
+		for (const [n, [name, total]] of (
+			[
+				['erin', 50_000],
+				['frank', 40_000],
+			] as const
+		).entries()) {
 			const actor = await mastodonActor(web, name, { extra: { discoverable: true } })
 			web.serve(`${actor.uri}/followers`, {
 				'@context': AS,
 				id: `${actor.uri}/followers`,
 				type: 'OrderedCollection',
-				totalItems: 50_000,
+				totalItems: total,
 			})
 			const activity = {
 				'@context': AS,
@@ -341,12 +346,22 @@ describe('suggestions', () => {
 			expect(row?.followers_count).toBe(0)
 			stored.push(row?.id ?? '')
 		}
-		// bob follows both and carol, who has a follower; alice follows bob.
+		const deps = inboxDeps(() => h.store, web.loader)
+		for (let round = 0; round < 5 && (await syncCollections(h.env, deps)); round++) {
+			// Until no sync is due.
+		}
+		const learned = async (id: string) =>
+			(await sql<{ n: number }>(h.store, 'SELECT followers_count AS n FROM accounts WHERE id = ?', id))[0]?.n
+		expect([await learned(stored[0]!), await learned(stored[1]!)]).toEqual([50_000, 40_000])
+		// An imported account whose count is not an integer ranks as having none (presentedCountSql).
+		const [imported = ''] = await remotes(h.store, 0, 1)
+		await sql(h.store, "UPDATE accounts SET followers_count = 'x' WHERE id = ?", imported)
+		// bob follows all three and carol, who has a follower; alice follows bob. Fewest followers first.
 		await sql(h.store, 'UPDATE accounts SET discoverable = 1 WHERE id = ?', carol.id)
 		await follow(h, bob, carol.id)
-		await fan(h.store, bob.id, stored)
+		await fan(h.store, bob.id, [...stored, imported])
 		await follow(h, alice, bob.id)
-		expect(await suggested(h, alice)).toEqual([...newestFirst(stored), carol.id])
+		expect(await suggested(h, alice)).toEqual([imported, carol.id, stored[1], stored[0]])
 	})
 })
 

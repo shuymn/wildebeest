@@ -31,6 +31,7 @@ import {
 	createContextLoader,
 	createSafeLoader,
 	createWebFingerLoader,
+	type DocumentCaps,
 	type FetchBudget,
 	type LoaderDeps,
 	RefusedFetchError,
@@ -211,7 +212,14 @@ function federationParts(deps: FederationDeps, state: FederationState) {
 // material is judged on them (ID-1); within one request a URL is fetched once. Every fetch, contexts included, draws
 // on the request's budget (RES-6); cached contexts cost nothing. Every document must stay within the JSON bounds
 // (RES-2) before Fedify's JSON-LD processing or Kopje's own reading sees it. webfinger is unsigned, as WebFinger is.
-export type RemoteLoaders = { document: DocumentLoader; context: DocumentLoader; webfinger: DocumentLoader }
+// capped: a document loader as `document` under tighter caps (DocumentCaps), on the same signer and budget, with a
+// memo of its own, so a document `document` loaded within the looser caps is never handed to it.
+export type RemoteLoaders = {
+	document: DocumentLoader
+	context: DocumentLoader
+	webfinger: DocumentLoader
+	capped: (caps: DocumentCaps) => DocumentLoader
+}
 
 export function createRemoteLoaders(
 	deps: FederationDeps,
@@ -230,16 +238,20 @@ export function createRemoteLoaders(
 				: typeof recipient === 'string'
 					? await parts.localSigner(recipient)
 					: await parts.followerSigner(recipient)) ?? parts.instanceSigner())())
-	const fetched = new Map<string, ReturnType<DocumentLoader>>()
-	const fresh = requireObjectRoot(async (url, options) => {
-		return withinBounds(await createSafeLoader(loaderDeps, (await signer()).sign)(url, options))
-	})
+	// Keyed without the fragment: HTTP never sends it, so `actor#main-key` and `actor` are one fetch. Key ids are still
+	// compared whole by Fedify and by receiveInbound.
+	const memoized = (caps: DocumentCaps): DocumentLoader => {
+		const fetched = new Map<string, ReturnType<DocumentLoader>>()
+		const fresh = requireObjectRoot(async (url, options) => {
+			return withinBounds(await createSafeLoader({ ...loaderDeps, ...caps }, (await signer()).sign)(url, options))
+		})
+		return (url, options) => memo(fetched, withoutFragment(url), () => fresh(url, options))
+	}
 	return {
-		// Keyed without the fragment: HTTP never sends it, so `actor#main-key` and `actor` are one fetch. Key ids are
-		// still compared whole by Fedify and by receiveInbound.
-		document: (url, options) => memo(fetched, withoutFragment(url), () => fresh(url, options)),
+		document: memoized({}),
 		context: boundedContexts(loaderDeps, parts.kv),
 		webfinger: createWebFingerLoader(loaderDeps),
+		capped: memoized,
 	}
 }
 

@@ -519,7 +519,7 @@ async function domainBlocked(
 	if (!DOMAIN_BLOCKED_ADMITS.has(activity.type)) {
 		return { status: 202, reason: 'domain-blocked' }
 	}
-	const none = { document: NO_FETCH, context: NO_FETCH, webfinger: NO_FETCH }
+	const none = { document: NO_FETCH, context: NO_FETCH, webfinger: NO_FETCH, capped: () => NO_FETCH }
 	const served = new Map<string, ServedKey>()
 	const verified = await verify(deps, request, headers, none, served, true)
 	if ('status' in verified) {

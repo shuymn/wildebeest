@@ -7,14 +7,16 @@ import { isHashtagName } from './status-text'
 import { normalizeTag } from './tag-name'
 import type { Db } from '../db/sql'
 import { httpUrl } from '../platform/http-url'
+import { storedCount } from '../platform/stored-bounds'
 
 // What Kopje learns of a remote account's collections (Mastodon 4.5's ActivityPub::ProcessAccountService,
 // SynchronizeFeaturedCollectionWorker and SynchronizeFeaturedTagsCollectionWorker with their Fetch*Service, and
 // ActivityPub::Activity::Add and Remove): its pinned statuses (the featured collection), its featured hashtags (the
-// featuredTags collection) and whether it hides its network (hide_collections). They go in the rows a local account's
-// go in (status_pins, featured_tags, migration 0025_remote_collections) and accounts.hide_collections, so the profile
-// reads (timelines.ts accountStatuses with pinned, featured-tags.ts accountFeaturedTags, and R13 in audience.ts) serve
-// a remote account through the same rules.
+// featuredTags collection), whether it hides its network (hide_collections), and its counts (the totalItems of its
+// followers, following and outbox collections, ProcessAccountService#set_fetchable_attributes!). They go in the rows a
+// local account's go in (status_pins, featured_tags, migration 0025_remote_collections) and accounts.hide_collections
+// and *_count, so the profile reads (timelines.ts accountStatuses with pinned, featured-tags.ts accountFeaturedTags,
+// R13 in audience.ts, and the presented counts) serve a remote account through the same rules.
 //
 // When the account's document is stored (inbox.ts upsertRemoteActor, every path that stores one), a sync is
 // requested (collection_syncs, one row per account): the Worker's inbound job rounds (jobs/queue.ts) claim a few, read
@@ -39,8 +41,8 @@ export const SYNC_RETRY_MS = 15 * 60 * 1000
 
 // The parts of a read (phase 1), each read and applied on its own and recorded in collection_syncs.parts_read once it
 // is, so a round that reads one part makes progress whatever the others cost, and a later round reads only the rest:
-// the featured collection (pins), the followers and following collections (hide_collections), and the featuredTags
-// collection (featured hashtags; read with the featured collection for an actor without one).
+// the featured collection (pins), the followers, following and outbox collections (hide_collections and the counts),
+// and the featuredTags collection (featured hashtags; read with the featured collection for an actor without one).
 export const PART_FEATURED = 1
 export const PART_NETWORK = 2
 export const PART_TAGS = 4
@@ -71,6 +73,7 @@ export type ActorCollections = {
 	featuredTags: string | null
 	followers: string | null
 	following: string | null
+	outbox: string | null
 }
 
 function idOf(value: unknown): string | null {
@@ -98,6 +101,7 @@ export function actorCollections(raw: string | null): ActorCollections {
 		featuredTags: idOf(document.featuredTags),
 		followers: idOf(document.followers),
 		following: idOf(document.following),
+		outbox: idOf(document.outbox),
 	}
 }
 
@@ -223,9 +227,10 @@ export function unfeatureRemote(db: Db, accountId: string, name: string): boolea
 // ---- Syncs
 //
 // A sync has two phases, each run in rounds with their own fetch budgets, and durable state between them:
-//   1. read: three parts (PART_*), the featured collection's first MAX_REMOTE_PINS items (its pins), the followers and
-//      following collections (hide_collections) and the featuredTags collection (the featured hashtags), each applied
-//      as soon as a round has read it through and recorded in parts_read, so a later round reads only the parts left.
+//   1. read: three parts (PART_*), the featured collection's first MAX_REMOTE_PINS items (its pins), the followers,
+//      following and outbox collections (hide_collections and the counts) and the featuredTags collection (the
+//      featured hashtags), each applied as soon as a round has read it through and recorded in parts_read, so a later
+//      round reads only the parts left.
 //      The listed statuses Kopje stores are pinned at once; those it does not go in collection_pins_pending.
 //   2. pins: later rounds fetch the pending statuses within their budgets; one fetched is stored and pinned, one that
 //      cannot be used is dropped, and one that may be fetched later stays. The metadata is never read again for them.
@@ -404,18 +409,26 @@ function roundAccount(db: Db, input: RoundInput): { id: string; uri: string } | 
 //   tags: the names of the Hashtags the featuredTags collection lists (or, for an actor without one, the featured
 //         collection: FetchFeaturedCollectionService with hashtag).
 //   hideCollections: whether its followers or following collection hides its items (no first page).
+//   counts: the totalItems of its outbox, following and followers collections, each null when not learned.
 export type CollectionReadInput = RoundInput & {
 	parts: number
 	pins: { uris: string[] } | null
 	tags: string[] | null
 	hideCollections: boolean | null
+	counts: CollectionCounts
 }
+
+export type CollectionCounts = { statuses: number | null; following: number | null; followers: number | null }
 
 // Phase 1's end (FetchFeaturedCollectionService#process_note_items and #process_hashtag_items,
 // FetchFeaturedTagsCollectionService#process_items, ProcessAccountService#set_fetchable_attributes!): what was read is
 // applied, and the parts read are recorded for the generation the round claimed (not for a newer request, whose parts
 // start over); once every part is, the request is read through. The round progressed when it read a part not read
 // before. Returns whether a sync is due.
+// hide_collections and the counts are written only while the round's generation is the sync's (`before`): a round
+// that read an older document never overwrites what a newer one learns. The pins and hashtags are applied whatever
+// the generation: a stale round may still write them, and the newer generation's round, due at once (endRound),
+// writes them again.
 export const completeCollectionRead = writeOperation<CollectionReadInput, boolean>((db, input) => {
 	const account = roundAccount(db, input)
 	if (account === null) {
@@ -427,9 +440,6 @@ export const completeCollectionRead = writeOperation<CollectionReadInput, boolea
 	if (input.tags !== null) {
 		replaceFeaturedTags(db, account.id, input.tags, input.now)
 	}
-	if (input.hideCollections !== null) {
-		db.run('UPDATE accounts SET hide_collections = ? WHERE id = ?', input.hideCollections ? 1 : 0, account.id)
-	}
 	const before = db.first<{ parts_read: number }>(
 		'SELECT parts_read FROM collection_syncs WHERE account_id = ? AND generation = ?',
 		account.id,
@@ -437,6 +447,10 @@ export const completeCollectionRead = writeOperation<CollectionReadInput, boolea
 	)
 	const parts = (before?.parts_read ?? 0) | (input.parts & ALL_PARTS)
 	if (before !== undefined) {
+		if (input.hideCollections !== null) {
+			db.run('UPDATE accounts SET hide_collections = ? WHERE id = ?', input.hideCollections ? 1 : 0, account.id)
+		}
+		writeCounts(db, account.id, input.counts)
 		db.run(
 			`UPDATE collection_syncs SET parts_read = CASE WHEN ?1 = ?3 THEN 0 ELSE ?1 END,
 				read_through = CASE WHEN ?1 = ?3 THEN max(read_through, generation) ELSE read_through END
@@ -449,6 +463,27 @@ export const completeCollectionRead = writeOperation<CollectionReadInput, boolea
 	const progressed = before !== undefined && parts !== before.parts_read
 	return endRound(db, account.id, input.generation, progressed, input.now)
 })
+
+// ProcessAccountService#set_fetchable_attributes!: a remote account's counts become the totalItems learned, each that
+// storedCount keeps (the others, and those not learned, stay as stored; Mastodon keeps a count it is not given). Local
+// accounts' counts are Kopje's own recounts and are never written here.
+function writeCounts(db: Db, accountId: string, counts: CollectionCounts): void {
+	const statuses = storedCount(counts.statuses)
+	const following = storedCount(counts.following)
+	const followers = storedCount(counts.followers)
+	if (statuses === null && following === null && followers === null) {
+		return
+	}
+	db.run(
+		`UPDATE accounts SET statuses_count = coalesce(?2, statuses_count), following_count = coalesce(?3, following_count),
+			followers_count = coalesce(?4, followers_count)
+		WHERE id = ?1 AND domain IS NOT NULL`,
+		accountId,
+		statuses,
+		following,
+		followers
+	)
+}
 
 // What phase 2 fetched of the pending statuses: a usable status, or null for one that is not (refused, gone, not a
 // status). One that may be fetched later is left out.

@@ -24,7 +24,13 @@ import { hashtagObjectName } from '../domain/tag-name'
 import { httpUrl } from '../platform/http-url'
 import { STATUS_URI_LIMIT, withinIdentityBound } from '../platform/identity-bounds'
 import { withinJsonBounds } from '../platform/json-bounds'
-import { storedBlurhash, storedMediaDescription, storedMediaLink, storedText } from '../platform/stored-bounds'
+import {
+	storedBlurhash,
+	storedCount,
+	storedMediaDescription,
+	storedMediaLink,
+	storedText,
+} from '../platform/stored-bounds'
 import { cutCodeUnits, cutJsonString, remoteHtmlText, sanitizeRemoteContent, SPOILER_BYTES } from '../security/html'
 
 // Remote statuses as Mastodon 4.5.11 reads them (ActivityPub::Parser::StatusParser and MediaAttachmentParser):
@@ -205,10 +211,6 @@ function tagsOf(object: Json): { mentions: string[]; tags: string[] } {
 	return { mentions: [...mentions], tags: [...tags] }
 }
 
-function count(value: unknown): number | null {
-	return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null
-}
-
 function isoOf(value: unknown): string | null {
 	const parsed = typeof value === 'string' ? Date.parse(value) : NaN
 	return Number.isNaN(parsed) ? null : new Date(parsed).toISOString()
@@ -240,7 +242,7 @@ function pollOf(object: Json): RemotePollInput | null {
 			cut.push(options.length)
 		}
 		options.push(kept)
-		tallies.push((isObject(item.replies) ? count(item.replies.totalItems) : null) ?? 0)
+		tallies.push((isObject(item.replies) ? storedCount(item.replies.totalItems) : null) ?? 0)
 	}
 	if (options.length === 0) {
 		return null
@@ -253,7 +255,7 @@ function pollOf(object: Json): RemotePollInput | null {
 		multiple: Array.isArray(object.anyOf),
 		expiresAt: typeof closed === 'string' ? isoOf(closed) : closedNow ? null : isoOf(object.endTime),
 		closedNow,
-		votersCount: count(object.votersCount),
+		votersCount: storedCount(object.votersCount),
 		cut,
 	}
 }

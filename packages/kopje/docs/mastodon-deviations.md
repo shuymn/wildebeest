@@ -110,6 +110,23 @@ Accounts (the `Account` and credential account entities):
   web client stores a nested account as the target's own entity (`actions/importer/index.js:39-40`, which
   `reducers/accounts.ts` replaces), so it shows the target with an empty bio and no fields until it fetches the target
   again, and each later import of the source does so again.
+- A remote account's `followers_count`, `following_count` and `statuses_count` are the `totalItems` of its followers,
+  following and outbox collections, as `ProcessAccountService#set_fetchable_attributes!` sets them
+  (`process_account_service.rb:162-164`), but read by the background collection sync that each stored actor document
+  asks for (`src/federation/collections.ts`), not while the document is stored: an account shows 0 until its first
+  sync, and an account stored before this was learned shows 0 until its document is stored again. Mastodon also moves
+  the counts by its own deliveries between refreshes (`status.rb:480-493`, `follow.rb:62-70`); Kopje recounts local
+  accounts only, so a remote account keeps the reported counts until the next refresh. A collection that may be read
+  later (a timeout, a 5xx, the round's budget) is read again in a later round, where Mastodon keeps the count; one on
+  another origin than the actor's is not read. A count is taken from a JSON number only, its integer part, a negative
+  one as 0 (`AccountStat` shows `max(value, 0)`); one past 2^53−1 is not taken, where Mastodon's `bigint` column takes
+  up to 2^63−1 (and a larger value raises, unverified). Each of the three documents is read with at most one redirect
+  and 512 KiB, so the three fit one round's fetch budget; a document past either is unreadable, as Mastodon reads a
+  collection it cannot fetch: no count, and a following or followers collection past them hides the network. Mastodon also refreshes a remote account in the background a week after its last fetch, up to six
+  hours later, when a `Create` or `Update` of it arrives (`account.rb:69-70`, `:258-261`; `create.rb:5`); Kopje
+  refreshes only when it stores the actor's document. Mastodon signs the count fetches as `Account.representative`
+  (`json_ld_helper.rb:232-235`); Kopje signs them as its other collection fetches (DATA-7: a local follower's key,
+  else the instance actor's).
 
 Instance and apps (`/api/v1/apps`, `/api/v{1,2}/instance`, `/api/v1/preferences`):
 

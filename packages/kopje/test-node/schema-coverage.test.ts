@@ -181,6 +181,7 @@ const NOT_CONVERTED: Record<string, string> = {
 const ID = 'assigned by the converter; records are keyed by AP URIs, never by assigned ids'
 const TIME = 'row time (legacy cdate or the base time); only published_at is compared'
 const COUNTER = 'recomputed from carried rows, which are compared'
+const ACCOUNT_COUNTER = `local: ${COUNTER}; remote: 0 until its collection sync learns it (the totalItems it reports)`
 const SEARCH = 'search text derived from compared columns'
 const FROM_RAW = 'remote: read from raw, which is compared byte for byte; local: NULL'
 
@@ -190,8 +191,8 @@ const NOT_VERIFIED: Record<string, string> = {
 	'accounts.created_at': TIME,
 	'accounts.deleted_at': DEFAULT,
 	'accounts.fetched_at': TIME,
-	'accounts.followers_count': COUNTER,
-	'accounts.following_count': COUNTER,
+	'accounts.followers_count': ACCOUNT_COUNTER,
+	'accounts.following_count': ACCOUNT_COUNTER,
 	'accounts.hide_collections': DEFAULT,
 	'accounts.indexable': DEFAULT,
 	'accounts.moved_to_account_id': DEFAULT,
@@ -203,7 +204,7 @@ const NOT_VERIFIED: Record<string, string> = {
 	'accounts.last_status_id': 'derived by triggers from the statuses, which are compared',
 	'accounts.search_text': SEARCH,
 	'accounts.shared_inbox_url': FROM_RAW,
-	'accounts.statuses_count': COUNTER,
+	'accounts.statuses_count': ACCOUNT_COUNTER,
 	'blocks.created_at': TIME,
 	'conversations.stream_seq': 'the streaming change sequence, 0 until the owner subscribes to `direct`',
 	'blocks.id': DEFAULT,

@@ -14,6 +14,7 @@ import {
 	INSTANCE_TITLE_LIMIT,
 	type InstanceDocument,
 	isBlank,
+	presentedCountSql,
 	settingProjectionSql,
 	type StoredSettingName,
 	storedSetting,
@@ -123,7 +124,7 @@ export const instanceSettings = readOperation<void, AboutSettings>((db) => ({
 // window's first day (?1) and today (?2), so an imported later day never counts (active_on is a CHECKed YYYY-MM-DD, so
 // text order is date order).
 export const INSTANCE_COUNTS_SQL = `SELECT u.users, u.active,
-	(SELECT SUM(statuses_count) FROM accounts WHERE domain IS NULL) AS statuses,
+	(SELECT SUM(${presentedCountSql('statuses_count')}) FROM accounts WHERE domain IS NULL) AS statuses,
 	(SELECT COUNT(DISTINCT domain) FROM accounts WHERE domain IS NOT NULL) AS domains
 FROM (SELECT COUNT(*) AS users, COUNT(CASE WHEN l.active_on BETWEEN ?1 AND ?2 THEN 1 END) AS active
 	FROM local_accounts l WHERE ${availableLocalSql('l')}) u`
