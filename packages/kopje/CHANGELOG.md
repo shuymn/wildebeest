@@ -8,6 +8,12 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+### Changed
+
+- A boost or quote of a status by a remote account Kopje stored more than a day ago now refetches that account first,
+  as Mastodon does, so its avatar, header, name and audience are current. What a failed refetch stores is in
+  [docs/mastodon-deviations.md](docs/mastodon-deviations.md), Accounts.
+
 ## [0.1.0-rc.21] - 2026-10-23
 
 A twenty-first release candidate of the first release, published under the npm dist-tag `next`.
