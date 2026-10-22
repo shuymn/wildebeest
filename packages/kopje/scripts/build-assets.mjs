@@ -2,13 +2,19 @@
 // public/assets/kopje.<hash>.css, where <hash> is the first 10 hex characters of the SHA-256 of its bytes, and
 // src/web/asset-versions.ts names that path for the pages. public/_headers serves /assets/kopje.*.css as immutable.
 //
-// The previous release's file stays for one release, so a page cached before a deploy, or a rollback, still finds its
-// stylesheet; older files are deleted. A release is a version heading of CHANGELOG.md: a stylesheet written since the
-// latest release is unreleased, so changing it again replaces its file and keeps the previous release's.
+// public/assets keeps exactly two stylesheets: the current one and the one the latest completed release linked, so a
+// page cached before a deploy, or a rollback, still finds its stylesheet. That release is the nearest kopje-v* tag
+// reachable from HEAD, leaving out the release being built (releasedStylesheet); its stylesheet is STYLESHEET in its
+// tree's asset-versions.ts, or /assets/kopje.css for a release before A1. Every other stylesheet file is deleted.
 //
 //   node scripts/build-assets.mjs          writes the files (pnpm build runs it first)
 //   node scripts/build-assets.mjs --check  writes nothing and fails when the files differ from what it would write
-//                                          (prepack, and test-node/stylesheet.test.ts in CI)
+//                                          (prepack, and test-node/stylesheet.test.ts)
+//
+// Without git history or release tags (a shallow clone), the release cannot be read: the build refuses, and --check
+// trusts PREVIOUS_STYLESHEET as recorded, with a warning, unless KOPJE_ASSETS_REQUIRE_TAGS=1 makes it refuse too (the
+// CI job that packs the package and the release workflow check out the whole history).
+import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -18,21 +24,14 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url))
 export const SOURCE = 'src/web/kopje.css'
 export const ASSETS = 'public/assets'
 export const VERSIONS = 'src/web/asset-versions.ts'
+export const LEGACY_STYLESHEET = '/assets/kopje.css'
+const TAGS = 'kopje-v*'
 
 // Every file name the build owns: the unversioned name of releases before A1, and the fingerprinted ones.
 const OWNED = /^kopje(?:\.[0-9a-f]{10})?\.css$/
 
 export function fingerprint(bytes) {
 	return createHash('sha256').update(bytes).digest('hex').slice(0, 10)
-}
-
-// The latest released version: the first version heading of the changelog that is not [Unreleased].
-export function latestRelease(changelog) {
-	const match = /^## \[(\d[^\]]*)\]/m.exec(changelog)
-	if (match === null) {
-		throw new Error('CHANGELOG.md has no released version')
-	}
-	return match[1]
 }
 
 const FIELD = (name) => new RegExp(`^export const ${name} = '([^']*)'$`, 'm')
@@ -45,61 +44,104 @@ export function readVersions(text) {
 		}
 		return match[1]
 	}
-	return { stylesheet: read('STYLESHEET'), previous: read('PREVIOUS_STYLESHEET'), since: read('ASSETS_SINCE') }
+	return { stylesheet: read('STYLESHEET'), previous: read('PREVIOUS_STYLESHEET') }
 }
 
-export function renderVersions({ stylesheet, previous, since }) {
+export function renderVersions({ stylesheet, previous }) {
 	return [
 		'// Written by scripts/build-assets.mjs from src/web/kopje.css; never edited by hand (design amendment A1).',
 		'',
 		'// The stylesheet the pages link: its fingerprinted path, immutable (public/_headers).',
 		`export const STYLESHEET = '${stylesheet}'`,
 		'',
-		"// The previous release's stylesheet, kept in public/assets for one release.",
+		"// The latest completed release's stylesheet, kept in public/assets for one release.",
 		`export const PREVIOUS_STYLESHEET = '${previous}'`,
-		'',
-		'// The latest release when STYLESHEET was written.',
-		`export const ASSETS_SINCE = '${since}'`,
 		'',
 	].join('\n')
 }
 
 const basename = (path) => path.slice(path.lastIndexOf('/') + 1)
 
-// What the build would leave on disk: the versions module's text and the stylesheet files by name.
-export function plan(root = ROOT) {
-	const bytes = readFileSync(join(root, SOURCE))
-	const stylesheet = `/assets/kopje.${fingerprint(bytes)}.css`
-	const current = readVersions(readFileSync(join(root, VERSIONS), 'utf8'))
-	const release = latestRelease(readFileSync(join(root, 'CHANGELOG.md'), 'utf8'))
-	let next = current
-	if (current.stylesheet !== stylesheet) {
-		// The current file was released when a release has been made since it was written; otherwise it is replaced.
-		const previous = current.since === release ? current.previous : current.stylesheet
-		next = { stylesheet, previous, since: release }
+function git(root, args, encoding = 'utf8') {
+	return execFileSync('git', ['-C', root, ...args], { encoding, stdio: ['ignore', 'pipe', 'ignore'] })
+}
+
+// The stylesheet a release linked: STYLESHEET in its tree's versions module, or the unversioned stylesheet for a release
+// before A1, which has none.
+function stylesheetAt(root, prefix, tag) {
+	let text
+	try {
+		text = git(root, ['show', `${tag}:${prefix}${VERSIONS}`])
+	} catch {
+		return LEGACY_STYLESHEET
 	}
-	const files = new Map([[basename(next.stylesheet), bytes]])
-	if (next.previous !== next.stylesheet) {
-		const kept = join(root, ASSETS, basename(next.previous))
-		if (!existsSync(kept)) {
-			throw new Error(`the previous release's stylesheet ${next.previous} is missing`)
+	return readVersions(text).stylesheet
+}
+
+// The latest completed release and its stylesheet, or null when git or the tags cannot tell (no repository, a
+// shallow clone, no tag reachable). `current` is the stylesheet being built: a tag on HEAD whose release links it is
+// the release being built, and the one before it is the latest completed; a tag on HEAD with other CSS on top is
+// complete.
+export function releasedStylesheet(root = ROOT, current = currentStylesheet(root)) {
+	try {
+		const prefix = git(root, ['rev-parse', '--show-prefix']).trim()
+		const describe = (exclude) =>
+			git(root, [
+				'describe',
+				'--tags',
+				'--abbrev=0',
+				'--match',
+				TAGS,
+				...exclude.flatMap((t) => ['--exclude', t]),
+				'HEAD',
+			]).trim()
+		let tag = describe([])
+		const building = git(root, ['tag', '--points-at', 'HEAD', '--list', TAGS]).split('\n').filter(Boolean)
+		if (building.includes(tag) && stylesheetAt(root, prefix, tag) === current) {
+			tag = describe(building)
 		}
-		files.set(basename(next.previous), readFileSync(kept))
+		return { tag, prefix, stylesheet: stylesheetAt(root, prefix, tag) }
+	} catch {
+		return null
 	}
-	return { versions: renderVersions(next), files }
+}
+
+// The bytes of the released stylesheet: from public/assets, or from the release's tree when the file is missing.
+function releasedBytes(root, released) {
+	const name = basename(released.stylesheet)
+	const path = join(root, ASSETS, name)
+	if (existsSync(path) || released.tag === null) {
+		return readFileSync(path)
+	}
+	return git(root, ['show', `${released.tag}:${released.prefix}${ASSETS}/${name}`], 'buffer')
+}
+
+export function currentStylesheet(root = ROOT) {
+	return `/assets/kopje.${fingerprint(readFileSync(join(root, SOURCE)))}.css`
+}
+
+// What the build leaves on disk: the versions module's text and the stylesheet files by name. `released` is
+// releasedStylesheet()'s answer, or { tag: null, stylesheet } as recorded when the tags are not available.
+export function plan(root, released) {
+	const bytes = readFileSync(join(root, SOURCE))
+	const stylesheet = currentStylesheet(root)
+	const files = new Map([[basename(stylesheet), bytes]])
+	if (released.stylesheet !== stylesheet) {
+		files.set(basename(released.stylesheet), releasedBytes(root, released))
+	}
+	return { versions: renderVersions({ stylesheet, previous: released.stylesheet }), files }
 }
 
 // The differences between the disk and the plan, as messages; empty when the build would change nothing.
-export function drift(root = ROOT) {
-	const { versions, files } = plan(root)
+export function drift(root, released) {
+	const { versions, files } = plan(root, released)
 	const problems = []
 	if (readFileSync(join(root, VERSIONS), 'utf8') !== versions) {
 		problems.push(`${VERSIONS} is not what the build writes`)
 	}
-	const owned = readdirSync(join(root, ASSETS)).filter((name) => OWNED.test(name))
-	for (const name of owned) {
+	for (const name of readdirSync(join(root, ASSETS)).filter((n) => OWNED.test(n))) {
 		if (!files.has(name)) {
-			problems.push(`${ASSETS}/${name} is neither the stylesheet nor the previous release's`)
+			problems.push(`${ASSETS}/${name} is neither the stylesheet nor the latest release's`)
 		}
 	}
 	for (const [name, bytes] of files) {
@@ -111,8 +153,28 @@ export function drift(root = ROOT) {
 	return problems
 }
 
-function build(root = ROOT) {
-	const { versions, files } = plan(root)
+// The release --check compares with: from the tags, or as recorded when they are unavailable and not required.
+export function releaseForCheck(root = ROOT, env = process.env) {
+	const released = releasedStylesheet(root)
+	if (released !== null) {
+		return { released, warning: null }
+	}
+	if (env.KOPJE_ASSETS_REQUIRE_TAGS === '1') {
+		throw new Error('build-assets: no release tag is reachable from HEAD (a shallow clone?)')
+	}
+	const recorded = readVersions(readFileSync(join(root, VERSIONS), 'utf8')).previous
+	return {
+		released: { tag: null, prefix: '', stylesheet: recorded },
+		warning: `build-assets: no release tag is reachable from HEAD; trusting PREVIOUS_STYLESHEET ${recorded}`,
+	}
+}
+
+export function build(root = ROOT) {
+	const released = releasedStylesheet(root)
+	if (released === null) {
+		throw new Error('build-assets: no release tag is reachable from HEAD; fetch the history and the tags')
+	}
+	const { versions, files } = plan(root, released)
 	for (const name of readdirSync(join(root, ASSETS))) {
 		if (OWNED.test(name) && !files.has(name)) {
 			rmSync(join(root, ASSETS, name))
@@ -125,17 +187,27 @@ function build(root = ROOT) {
 		}
 	}
 	writeFileSync(join(root, VERSIONS), versions)
+	return readVersions(versions)
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-	if (process.argv.includes('--check')) {
-		const problems = drift()
-		if (problems.length > 0) {
-			console.error(`build-assets: ${problems.join('; ')}. Run node scripts/build-assets.mjs.`)
-			process.exit(1)
+	try {
+		if (process.argv.includes('--check')) {
+			const { released, warning } = releaseForCheck()
+			if (warning !== null) {
+				console.warn(warning)
+			}
+			const problems = drift(ROOT, released)
+			if (problems.length > 0) {
+				console.error(`build-assets: ${problems.join('; ')}. Run node scripts/build-assets.mjs.`)
+				process.exit(1)
+			}
+		} else {
+			const { stylesheet, previous } = build()
+			console.log(`build-assets: ${stylesheet}, keeping ${previous}`)
 		}
-	} else {
-		build()
-		console.log(`build-assets: ${readVersions(readFileSync(join(ROOT, VERSIONS), 'utf8')).stylesheet}`)
+	} catch (error) {
+		console.error(error instanceof Error ? error.message : error)
+		process.exit(1)
 	}
 }

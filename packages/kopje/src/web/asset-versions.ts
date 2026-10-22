@@ -3,8 +3,5 @@
 // The stylesheet the pages link: its fingerprinted path, immutable (public/_headers).
 export const STYLESHEET = '/assets/kopje.0e6a94e5f3.css'
 
-// The previous release's stylesheet, kept in public/assets for one release.
+// The latest completed release's stylesheet, kept in public/assets for one release.
 export const PREVIOUS_STYLESHEET = '/assets/kopje.css'
-
-// The latest release when STYLESHEET was written.
-export const ASSETS_SINCE = '0.1.0-rc.21'

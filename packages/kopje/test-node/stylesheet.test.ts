@@ -1,10 +1,11 @@
 import { createHash } from 'node:crypto'
 import { readdirSync, readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { gzipSync } from 'node:zlib'
 
 import { describe, expect, it } from 'vitest'
 
-import { drift } from '../scripts/build-assets.mjs'
+import { drift, releaseForCheck } from '../scripts/build-assets.mjs'
 
 // The web stylesheet (design §6, §10.7, §14.10) and its publication (amendment A1). The Workers suites call app.fetch
 // directly and never reach Static Assets, so the asset rules are checked here, on the files.
@@ -154,7 +155,10 @@ describe('the stylesheet’s publication (amendment A1)', () => {
 	})
 
 	it('is what scripts/build-assets.mjs writes', () => {
-		expect(drift()).toEqual([])
+		// Against the latest release tag when the history has it; a shallow clone falls back to the recorded file
+		// (scripts/build-assets.mjs), and the packing job, with the whole history, requires the tags.
+		const root = fileURLToPath(PACKAGE)
+		expect(drift(root, releaseForCheck(root).released)).toEqual([])
 	})
 
 	it('serves the fingerprinted assets as immutable, and nothing else', () => {
