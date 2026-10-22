@@ -74,13 +74,10 @@ export async function processInbox(
 	const build = deps.build(env)
 	const store = () => deps.store(env)
 	const recipient = inboxRecipient(new URL(request.url).pathname)
+	const headers = new Headers(request.headers)
 	const parsed = parseActivity(request.body)
 	const actor = parsed.actor ?? null
-	const gate = await readInboxGate(store, build, {
-		username: recipient,
-		actor,
-		keyId: signatureKeyId(new Headers(request.headers)),
-	})
+	const gate = await readInboxGate(store, build, { username: recipient, actor, keyId: signatureKeyId(headers) })
 	// Before any loader or fetch: a Store that refuses writes (an unpublished import, maintenance) holds the request as
 	// in maintenance, so nothing is signed with a local key for it (OPS-8). receiveActivity is admitted again in its own
 	// transaction. The precedence differs by mode, as the live endpoint answered before this gate: live, an unknown
@@ -120,7 +117,7 @@ export async function processInbox(
 			recipient,
 		},
 		request,
-		{ parsed, domainBlocked: gate.domainBlocked === true, key: gate.key }
+		{ headers, parsed, domainBlocked: gate.domainBlocked === true, key: gate.key }
 	)
 	if (outcome.status !== 202) {
 		// Our own reason codes only: nothing the request supplied (DATA-5).

@@ -7,6 +7,7 @@ import { fixtureKeyGen, LEGACY_EMPTY_KEK, seedLocalAccount } from './federation-
 import { BUILD, completeSetup, migratedStore, rejectionOf } from './helpers'
 import { mastodonActor, RemoteWeb, signedInit } from './inbox-helpers'
 import { MAX_RETRIES, QueueSim } from './queue-sim'
+import { storeWith } from './setup-helpers'
 import { classifyRequest, decide, type RequestClass } from '../src/app/gate'
 import { processInbox } from '../src/federation/inbox'
 import { type SpoolMessage, spoolInbox } from '../src/federation/spool'
@@ -418,22 +419,6 @@ describe('inbox gate', () => {
 		expect(queue.pending).toEqual([])
 		expect(queue.retries).toBe(0)
 	})
-
-	// The Store with some methods replaced (a missing method, a failure).
-	function storeWith(store: StoreStub, replaced: Record<string, (...args: unknown[]) => Promise<unknown>>): StoreStub {
-		return new Proxy(store, {
-			get: (target, name) => {
-				if (typeof name === 'string' && name in replaced) {
-					return replaced[name]
-				}
-				const value = Reflect.get(target, name) as unknown
-				return typeof value === 'function'
-					? (...args: unknown[]) =>
-							(target as unknown as Record<string, (...a: unknown[]) => unknown>)[name as string]!(...args)
-					: value
-			},
-		})
-	}
 
 	// What the runtime answers for a method the Store's class does not have, as a Store of an older build lacks
 	// inboxGate.

@@ -85,9 +85,10 @@ export type Parsed =
 	// actor: the envelope's single actor, when the envelope is usable but its activity is not one Kopje reads.
 	| { ok: false; reason: string; deleteOfSelf?: boolean; actor?: string }
 
-// What processInbox read before the request reaches receiveInbound (federation/inbox.ts): the parsed body, whether the
-// Store's instance domain blocks cover its actor, and the stored key for the signature's key id.
-export type InboundGate = { parsed: Parsed; domainBlocked: boolean; key: InboxGate['key'] }
+// What processInbox read before the request reaches receiveInbound (federation/inbox.ts): the request's headers (read
+// only), the parsed body, whether the Store's instance domain blocks cover its actor, and the stored key for the
+// signature's key id.
+export type InboundGate = { headers: Headers; parsed: Parsed; domainBlocked: boolean; key: InboxGate['key'] }
 
 // Store calls one activity may take: the activity, its boosted original, and that original's author.
 const MAX_STORE_ROUNDS = 3
@@ -429,7 +430,7 @@ export async function receiveInbound(
 	request: InboundRequest,
 	gate: InboundGate
 ): Promise<InboxOutcome> {
-	const headers = new Headers(request.headers)
+	const { headers } = gate
 	const media = parseMediaType(headers.get('content-type') ?? '')
 	if (media === null || !isActivityPubMediaType(media)) {
 		return { status: 415, reason: 'not-activitystreams' }
