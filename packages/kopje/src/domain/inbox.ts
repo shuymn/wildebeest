@@ -21,6 +21,7 @@ import { type EmojiCandidate, emojiSnapshot } from './custom-emojis'
 import { cancelFollowAnswers, followAnswersOf, stageRetraction } from './deliveries'
 import { insertWithFreshId, NEW_GENERATION, remoteId } from './ids'
 import { actorDomainBlocked, hostCovered } from './instance-domain-blocks'
+import { deleteCard } from './link-cards'
 import { listsHolding } from './lists'
 import { notify } from './notifications'
 import { readOperation, writeOperation } from './operation'
@@ -2188,13 +2189,15 @@ export function deleteStatusBatch(db: Db, statusId: string, now: number): boolea
 			AND account_id IN (SELECT account_id FROM status_mentions WHERE status_id = ?1 LIMIT ?2)`,
 		statusId
 	)
-	// Hiding writes the status and the account's last status, which the trigger of migration 0021_directory moves back.
-	if (budget.left() >= 2) {
+	// Hiding writes the status, the account's last status, which the trigger of migration 0021_directory moves back, and
+	// deletes the status's card (link-cards.ts: a direct status holds none).
+	if (budget.left() >= 3) {
 		db.run(
 			`UPDATE statuses SET visibility = 'direct', content = '', spoiler_text = '', search_text = NULL
 			WHERE id = ? AND (visibility <> 'direct' OR content <> '' OR spoiler_text <> '' OR search_text IS NOT NULL)`,
 			statusId
 		)
+		deleteCard(db, statusId)
 		// No longer public, so its hashtags leave the index tag reads walk (status_tags.public), in the same write. A
 		// remote status holds at most MAX_STATUS_TAGS of them, and they are cleared once (later batches find none), so
 		// a batch exceeds PURGE_BATCH by that many rows at most; the budget counts them, so the rest of this batch does

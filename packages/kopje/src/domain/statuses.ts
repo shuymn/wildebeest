@@ -65,6 +65,7 @@ import { type CustomEmoji, localEmojiSnapshot, presentEmojis } from './custom-em
 import { beginRetraction } from './deliveries'
 import { countFeaturedTags, featuredOfStatus, uncountFeaturedTags } from './featured-tags'
 import { allocateLocalId, requestedId, storedIdOf } from './ids'
+import { enqueueCard, localCardLink } from './link-cards'
 import { DETACHED_GRACE_MS, DOOMED_AT, liveMediaSql } from './media'
 import { notify } from './notifications'
 import { editPoll, type PollInput, pollOptionsJson, writePoll } from './polls'
@@ -601,6 +602,8 @@ export function writePost(
 	if (input.poll !== undefined) {
 		writePoll(db, id, input.poll, input.now)
 	}
+	// PostStatusService#postprocess_status!'s LinkCrawlWorker.
+	enqueueCard(db, id, localCardLink(composed.source, new URL(author.uri).host), input.now)
 	recountStatuses(db, accountId)
 	recountStatus(db, parent?.id ?? null)
 	for (const mention of composed.mentions) {
@@ -1017,6 +1020,10 @@ export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db
 			accountId,
 			current.id
 		)
+	}
+	// UpdateStatusService#reset_preview_card!: only when the text changed.
+	if (text !== (current.source_text ?? '')) {
+		enqueueCard(db, current.id, localCardLink(composed.source, new URL(author.uri).host), input.now)
 	}
 	const editId = recordEdit(db, current.id, editedAt)
 	for (const mentioned of added) {
