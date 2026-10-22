@@ -86,15 +86,22 @@ export function a11yProblems(html: string, { embed = false }: { embed?: boolean 
 		}
 	}
 
-	for (const e of inBody) {
-		const name = () => accessibleName(e, doc)
-		const role = attr(e, 'role')
+	// The inline-style ban (§6.8) covers the whole document: the head, html and body included.
+	for (const e of all) {
 		if (attr(e, 'style') !== null) {
 			problems.push(`${describe(e)} has a style attribute`)
 		}
 		if (e.tagName === 'style') {
 			problems.push('a style element')
 		}
+	}
+
+	for (const e of inBody) {
+		const name = () => accessibleName(e, doc)
+		if (/^h[1-6]$/.test(e.tagName) && name() === '') {
+			problems.push(`${describe(e)} has no name`)
+		}
+		const role = attr(e, 'role')
 		if (attr(e, 'title') !== null) {
 			problems.push(`${describe(e)} is named by title`)
 		}
@@ -279,6 +286,20 @@ describe('accessibility contracts (design §14)', () => {
 		expect(controls('setup wizard').length).toBeGreaterThan(5)
 		for (const page of pages) {
 			expect(a11yProblems(page.html, { embed: page.embed }), page.name).toEqual([])
+			const doc = parseHtml(page.html)
+			// Styled lists keep their list semantics (list-style: none drops them in WebKit), and main takes the skip
+			// link's focus (amendment A7).
+			for (const list of elements(doc).filter((e) => ['ul', 'ol'].includes(e.tagName))) {
+				const styled = (attr(list, 'class') ?? '')
+					.split(' ')
+					.some((c) => ['feed', 'stats', 'rules', 'apps'].includes(c))
+				if (styled) {
+					expect(attr(list, 'role'), `${page.name} ${attr(list, 'class')}`).toBe('list')
+				}
+			}
+			if (page.embed !== true) {
+				expect(attr(query(doc, 'main')[0]!, 'tabindex'), page.name).toBe('-1')
+			}
 		}
 	}, 60_000)
 
@@ -307,6 +328,9 @@ describe('accessibility contracts (design §14)', () => {
 			['<input type="text" name="q">', '<input> q has no label'],
 			['<input type="file" name="file">', '<input> file has no label'],
 			['<p style="color:red">x</p>', '<p> has a style attribute'],
+			['<h2> </h2>', '<h2> has no name'],
+			['<h2><span aria-hidden="true">x</span></h2>', '<h2> has no name'],
+			['<a href="/"><span hidden>Name</span></a>', 'a link to / has no name'],
 			['<span title="x">x</span>', '<span> is named by title'],
 			['<svg></svg>', 'an svg that is neither a labelled image nor decorative'],
 			['<img src="x">', 'an img without alt: x'],
@@ -331,5 +355,15 @@ describe('accessibility contracts (design §14)', () => {
 			a11yProblems('<html lang="en"><body><article><h1>x</h1></article></body></html>', { embed: true })
 		).toContain('the embed has a h1')
 		expect(a11yProblems('<html><body><a href="/">x</a></body></html>')).toContain('html has no lang')
+		// The style ban reaches the head and the html and body elements themselves.
+		expect(a11yProblems(page('').replace('<title>t</title>', '<title>t</title><style>p{}</style>'))).toContain(
+			'a style element'
+		)
+		expect(a11yProblems(page('').replace('<body>', '<body style="margin:0">'))).toContain(
+			'<body> has a style attribute'
+		)
+		expect(a11yProblems(page('').replace('<html lang="en">', '<html lang="en" style="color:red">'))).toContain(
+			'<html> has a style attribute'
+		)
 	})
 })

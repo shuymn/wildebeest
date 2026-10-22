@@ -89,6 +89,18 @@ describe('HTML weight (design §13)', () => {
 			expect(sizes[page].gzip, `${page} gzip`).toBeLessThanOrEqual(BOUNDS[page].gzip)
 		}
 		// The profile fixture is the page the bound is about: 20 posts, each a card.
-		expect((await (await h.request('/@alice')).text()).match(/<article /g)).toHaveLength(20)
+		const profile = await (await h.request('/@alice')).text()
+		expect(profile.match(/<article /g)).toHaveLength(20)
+		// The inline icons' share of the gzip size (§13, "HTML weight"), measured as the page's gzip size with and
+		// without its SVG markup: 61 icons, 1,693 against 1,337 bytes, 21%. That is past the 15% sprite trigger, but a
+		// per-page <symbol> sprite measured worse: 1,758 bytes gzip (27,165 raw against 30,429), since each icon keeps
+		// its <svg> wrapper and gzip already shares the repeated paths. The icons stay inline; this bound (the measured
+		// share plus 25%) catches their growth.
+		const encode = (text: string) => new TextEncoder().encode(text)
+		const icons = profile.match(/<svg[\s\S]*?<\/svg>/g) ?? []
+		const whole = await gzipBytes(encode(profile))
+		const without = await gzipBytes(encode(profile.replace(/<svg[\s\S]*?<\/svg>/g, '')))
+		expect(icons.length).toBe(61)
+		expect((whole - without) / whole).toBeLessThanOrEqual(0.27)
 	})
 })

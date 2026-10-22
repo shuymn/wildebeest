@@ -74,6 +74,15 @@ export function closest(element: Element, test: (e: Element) => boolean): Elemen
 
 const squash = (text: string) => text.replace(/\s+/g, ' ').trim()
 
+// Content no reader gets (accname 1.2, step 2A): aria-hidden, the hidden attribute, and what is never rendered.
+function hiddenFromReaders(element: Element): boolean {
+	return (
+		attr(element, 'aria-hidden') === 'true' ||
+		attr(element, 'hidden') !== null ||
+		['script', 'style', 'template'].includes(element.tagName)
+	)
+}
+
 // The text a reader gets: aria-hidden subtrees, scripts and styles left out, whitespace collapsed.
 export function text(node: Node): string {
 	const parts: string[] = []
@@ -82,7 +91,7 @@ export function text(node: Node): string {
 			if (child.nodeName === '#text') {
 				parts.push((child as DefaultTreeAdapterMap['textNode']).value)
 			} else if (isElement(child)) {
-				if (attr(child, 'aria-hidden') === 'true' || ['script', 'style', 'template'].includes(child.tagName)) {
+				if (hiddenFromReaders(child)) {
 					continue
 				}
 				visit(child)
@@ -100,11 +109,7 @@ function nameFromContent(node: Node, document: Document): string {
 		if (child.nodeName === '#text') {
 			parts.push((child as DefaultTreeAdapterMap['textNode']).value)
 		} else if (isElement(child)) {
-			if (
-				attr(child, 'aria-hidden') === 'true' ||
-				['script', 'style', 'template'].includes(child.tagName) ||
-				CONTROLS.has(child.tagName)
-			) {
+			if (hiddenFromReaders(child) || CONTROLS.has(child.tagName)) {
 				continue
 			}
 			const label = attr(child, 'aria-label')

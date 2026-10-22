@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { type App, bearer, json, login } from './api-helpers'
+import { type App, bearer, json, login, setSetting } from './api-helpers'
 import { PNG_PLAIN } from './fixtures/images'
 import { bytes, mediaForm, TestCodec, uploaded } from './media-helpers'
 import { community, post, remoteAccount, seedStatus } from './status-helpers'
@@ -122,8 +122,12 @@ describe('images (design §13)', () => {
 					box || (attr(img, 'width') !== null && attr(img, 'height') !== null),
 					`${name} ${attr(img, 'src')}`
 				).toBe(true)
-				// The likely LCP image and the profile's avatar (amendment A5) are the only eager images.
-				const eager = first.includes(img) || (name === 'profile' && classes(img).includes('av88'))
+				// The only eager images: the likely LCP image, the profile's avatar (amendment A5) and the focal post's
+				// author avatar (amendment A7).
+				const eager =
+					first.includes(img) ||
+					(name === 'profile' && classes(img).includes('av88')) ||
+					(name === 'status' && classes(img).includes('av48'))
 				expect(attr(img, 'loading'), `${name} ${attr(img, 'src')}`).toBe(eager ? null : 'lazy')
 			}
 		}
@@ -153,5 +157,50 @@ describe('the reply-to line (design §17, PR 1)', () => {
 		expect(link && text(link)).toBe('@carol@remote.example')
 		const icon = link && one(link, 'svg')
 		expect(icon && [attr(icon, 'role'), attr(icon, 'aria-label')]).toEqual(['img', 'Open on remote.example'])
+	})
+})
+
+describe('display names (design §14.6)', () => {
+	it('fall back to the username when only whitespace, wherever the name labels a link or a heading', async () => {
+		const h = await community(['alice'])
+		await h.request(
+			'/api/v1/accounts/update_credentials',
+			bearer(h.users.alice.token, { ...json({ display_name: ' \u3000 ' }), method: 'PATCH' })
+		)
+		const status = await post(h, h.users.alice, { status: 'named' })
+		const profile = parseHtml(await html(h, '/@alice'))
+		expect(text(one(profile, 'h1'))).toBe('alice')
+		expect(text(one(one(profile, 'article'), 'a', 'name'))).toBe('alice')
+		const page = parseHtml(await html(h, pathOf(status)))
+		expect(text(one(page, 'h1'))).toBe('alice')
+		expect(text(one(page, 'title'))).toBe('alice (@alice@kopje.test)')
+		const embed = parseHtml(await html(h, `${pathOf(status)}/embed`))
+		expect(text(one(embed, 'a', 'name'))).toBe('alice')
+	})
+})
+
+describe('rich content (design §6)', () => {
+	it('keeps text and links of one paragraph in one paragraph, and the disclosures show their state', async () => {
+		const h = await community(['alice'])
+		await setSetting(
+			h.store,
+			'terms_of_service',
+			'<p>Read <a href="https://example.com/">these terms</a> carefully.</p>'
+		)
+		await setSetting(h.store, 'terms_of_service_effective_date', '2026-11-01')
+		const doc = parseHtml(await html(h, '/terms-of-service'))
+		const body = one(doc, 'div', 'body')
+		// One paragraph holding the text, the link and the text after it; the stylesheet spaces block children only
+		// (a visual check of the line is the browser job's).
+		const paragraphs = query(body, 'p')
+		expect(paragraphs.map(text)).toEqual(['Read these terms carefully.'])
+		expect(query(paragraphs[0]!, 'a').map(text)).toEqual(['these terms'])
+		const status = await post(h, h.users.alice, { status: 'hidden text', spoiler_text: 'careful' })
+		const summary = query(one(parseHtml(await html(h, pathOf(status))), 'details', 'cw'), 'summary')[0]!
+		expect(
+			query(summary, 'span')
+				.filter((s) => ['show', 'hide'].includes(attr(s, 'class') ?? ''))
+				.map(text)
+		).toEqual(['Show', 'Hide'])
 	})
 })
