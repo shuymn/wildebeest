@@ -31,10 +31,11 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   after trimming surrounding whitespace; a status does not show such a website of an app registered earlier.
 - A scheduled status's `params.application_id` is the client_id of the app it was scheduled through (it was always
   null).
-
-- A page of statuses (timelines, contexts, search, histories and lookups) is read in chunks of at most 448 KiB of row
-  heap (was 704 KiB), so an answer of very large statuses may hold fewer of them; the next page continues after the
-  last one shown.
+- The statuses of a page (timelines, contexts, search, histories and lookups) are hydrated in chunks planned to at most
+  448 KiB of row heap (was 704 KiB); chunking does not change the answer, and a single status is read whole whatever
+  its size. Each attachment's added `remote_url`, `preview_remote_url` and `blurhash` take part of the existing answer
+  budget, so an answer of very large statuses may admit fewer of them; the next page continues after the last one
+  shown.
 
 ### Fixed
 
@@ -42,10 +43,13 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   one); a local one shows null, as in Mastodon. A status's edit history shows them as recorded with each version.
 - MediaAttachment `blurhash`: a remote attachment shows the BlurHash it was sent with when it has at most 5 by 5
   components and the length they give (Mastodon's rule), else null; one stored before this version shows null until
-  its next `Update`, and a local upload shows null
+  its next accepted explicit `Update`, and a local upload shows null
   ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Media). `text_url` stays null (MD-6).
-- Edit history judges each recorded attachment URL as live media are: one that is not an http(s) URL within 2,048
-  bytes as serialized shows null.
+- An attachment URL, live or in edit history, shows null unless, as stored and decoded, it is within 2,048 UTF-8 bytes,
+  well-formed and free of NUL, other C0 controls and DEL, and, normalized, an http(s) URL within 2,048 bytes; edit
+  history showed recorded URLs unchecked, and a control in a path or query was shown percent-encoded.
+- An attachment whose stored meta is not an object of dimensions (an imported `null`, say) is shown without its sizes;
+  the status read failed before.
 - A remote `Update` that changes only an attachment's icon records an edit, as Mastodon does; one that changes only its
   BlurHash records none.
 

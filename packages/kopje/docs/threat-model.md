@@ -1307,9 +1307,11 @@ no-store`, and render every value escaped. _Enforced (main):_ `src/app/authorize
   in the API and in Note attachments: `presentMedia` in `src/domain/status-presenter.ts`, `noteOf` in
   `src/domain/activities.ts` (_Gap: no test with a non-http stored attachment URL_); a remote attachment's
   `remote_url` and `preview_remote_url` are the same values as its `url` and its icon. _Enforced (main)_ for edit
-  history: every URL of a recorded attachment passes `presentedMediaUrl` (the same rule as live media) as decoded
-  (`snapshotMedia` in `src/domain/statuses.ts`; `test/status-bounds.test.ts` ("judges an imported snapshot's URLs and
-  blurhash as live media")). _Enforced (main)_ for remote actors at ingest (profile URL, avatar, header, inboxes) and links in remote
+  history: every URL of a recorded attachment passes `presentedMediaUrl`, the rule live media pass too: as decoded,
+  within 2,048 UTF-8 bytes, well-formed and without NUL, other C0 controls, DEL or U+FFFD, then normalized within
+  2,048 bytes and 4,098 JSON bytes (`snapshotMedia` in `src/domain/statuses.ts`; `test/status-bounds.test.ts`
+  ("judges a media URL as decoded, then as normalized", "judges an imported snapshot's URLs and blurhash as live
+  media")). _Enforced (main)_ for remote actors at ingest (profile URL, avatar, header, inboxes) and links in remote
   HTML: `src/federation/remote-actor.ts`, `src/security/html.ts`; `test/inbox.test.ts` ("stores the remote actor"),
   `test/html.test.ts`. _Enforced (main)_ for field links and remote statuses at ingest
   (the status url and attachment and preview URLs, which are dropped unless http(s)); `src/federation/remote-status.ts`;
@@ -2419,12 +2421,14 @@ them) would make a timeline's largest item pass half at a chunk of one; it shows
 | ------------------------------------------------- | ------------- | -------------- |
 | RPC copy (serialized; deserialized in the Worker) | 8.4 MB        | 25.2 MB        |
 | The Worker's JSON string and the body             |               | 25.2 MB        |
-| Peak                                              | 61.3 MB       | 50 MB          |
+| Peak, normal                                      | 61.86 MB      | 50 MB          |
+| Peak, the backstop fired                          | 63.94 MB      | 50 MB          |
 
-The Store's peak is the timelines' (above), while an item is admitted; the RPC copy comes after it. The Worker's JSON
+The Store's peak is the timelines' (above), while an item is admitted: 61.86 MB normally, and at most 63,938,937 bytes
+with the backstop fired and the dropped chunk still live; the RPC copy comes after it. The Worker's JSON
 string is counted at two bytes a character (16.8 MB) and the body at its UTF-8 bytes. Timelines stay within half of
 the Store isolate's 128 MB, and the Worker within half of its own. One isolate holding both sides at
-once, the Store's objects alive while the Worker's are built, would reach about 107 MB; it stays within half (61.3 MB)
+once, the Store's objects alive while the Worker's are built, would reach about 107 MB; it stays within half (at most 63.94 MB)
 when the Store drops its objects once they are serialized. Groups and reports pass half of the Store isolate (RES-3,
 the Gap note on their heap).
 
